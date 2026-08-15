@@ -15,18 +15,34 @@ const base = {
     acceptanceSignals: ['OAuth callback test passes'],
     predictedFiles: ['src/auth/callback.ts'],
   },
-  causalLinks: [{ interventionIndex: 0, mechanism: 'Inspection locates the invalid state check.', ruleRefs: ['rule:asset-a:1'], assumptions: ['Source is readable'] }],
+  causalLinks: [{
+    interventionIndex: 0,
+    mechanism: 'Inspection locates the invalid state check.',
+    ruleRefs: ['rule:asset-a:1'],
+    assumptions: ['Source is readable'],
+  }],
   assumptions: ['Tests are available'],
   riskRuleRefs: ['rule:asset-a:1'],
-  score: { goalFit: 0.8, feasibility: 0.8, observability: 0.8, causalSupport: 0.8, riskPenalty: 0.2, total: 1 },
+  score: {
+    goalFit: 0.8,
+    feasibility: 0.8,
+    observability: 0.8,
+    causalSupport: 0.8,
+    riskPenalty: 0.2,
+    total: 1,
+  },
 };
 
 const context = {
   allowedTools: new Set(['read_file', 'exec_command']),
   allowedRuleRefs: new Set(['rule:asset-a:1']),
   predictedRisks: [{
-    ruleId: 'rule:asset-a:1', cause: 'Missing state validation', effect: 'Invalid callback',
-    mitigation: 'Validate state', severity: 'high' as const, deltaR: -0.8,
+    ruleId: 'rule:asset-a:1',
+    cause: 'Missing state validation',
+    effect: 'Invalid callback',
+    mitigation: 'Validate state',
+    severity: 'high' as const,
+    deltaR: -0.8,
   }],
 };
 
@@ -43,8 +59,10 @@ describe('world-model candidate scoring', () => {
   });
 
   it('rejects unknown rule refs and unavailable tools', () => {
-    expect(() => validateWorldModelCandidate({ ...base, expectedTools: ['delete_everything'] }, context, 0))
-      .toThrow(/unavailable_tool/);
+    expect(() => validateWorldModelCandidate({
+      ...base,
+      expectedTools: ['delete_everything'],
+    }, context, 0)).toThrow(/unavailable_tool/);
     expect(() => validateWorldModelCandidate({
       ...base,
       causalLinks: [{ ...base.causalLinks[0], ruleRefs: ['rule:unknown:1'] }],
@@ -59,5 +77,36 @@ describe('world-model candidate scoring', () => {
       score: { ...base.score, goalFit: 0.9, riskPenalty: 0.1 },
     }, context, 1);
     expect(selectWorldModelCandidate([first, second]).id).toBe('path-b');
+  });
+
+  it('accepts a candidate whose expectedTools array is empty', () => {
+    expect(validateWorldModelCandidate({
+      ...base,
+      expectedTools: [],
+    }, context, 0).aHat.expectedTools).toEqual([]);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['not an array', 'read_file'],
+    ['malformed item', [42]],
+  ])('rejects expectedTools when %s', (_label, expectedTools) => {
+    const candidate: Record<string, unknown> = { ...base };
+    if (expectedTools === undefined) delete candidate.expectedTools;
+    else candidate.expectedTools = expectedTools;
+
+    expect(() => validateWorldModelCandidate(candidate, context, 0))
+      .toThrow('invalid_candidate_expected_tools');
+  });
+
+  it('keeps plan, expectedActors, and acceptanceSignals non-empty', () => {
+    expect(() => validateWorldModelCandidate({ ...base, plan: [] }, context, 0))
+      .toThrow('invalid_candidate_plan');
+    expect(() => validateWorldModelCandidate({ ...base, expectedActors: [] }, context, 0))
+      .toThrow('invalid_candidate_expected_actors');
+    expect(() => validateWorldModelCandidate({
+      ...base,
+      predictedResult: { ...base.predictedResult, acceptanceSignals: [] },
+    }, context, 0)).toThrow('invalid_candidate_acceptance_signals');
   });
 });

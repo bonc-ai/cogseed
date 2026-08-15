@@ -305,7 +305,7 @@ export interface BuildRunnerParams {
    *  row reflects the candidate that actually owned the visible outcome,
    *  not the rotating-provider's primary label. Fires at most once per
    *  call; not invoked when rotation rolls past a candidate. */
-  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string }) => void;
+  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string; entryId?: string }) => void;
 }
 
 export interface NativeSearchInjectedInfo {
@@ -1341,7 +1341,7 @@ async function buildRotatingProvider(
   providerId: string,
   group: ChatEntryChoice[],
   onNativeSearchInjected?: (info: NativeSearchInjectedInfo) => void,
-  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string }) => void,
+  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string; entryId?: string }) => void,
   firstEventTimeoutMs?: number,
 ): Promise<LLMProvider> {
   const candidates: RotatingCandidate[] = group.map((choice) => {
@@ -1383,7 +1383,15 @@ async function buildRotatingProvider(
       if (winner) bumpEntryLastUsed(winner.entryId);
       clearCooldown(profileId);
     },
-    ...(onCandidateChosen ? { onCandidateChosen } : {}),
+    ...(onCandidateChosen ? {
+      onCandidateChosen: (info) => {
+        const winner = group.find((choice) => choice.profileId === info.profileId);
+        onCandidateChosen({
+          ...info,
+          ...(winner?.entryId ? { entryId: winner.entryId } : {}),
+        });
+      },
+    } : {}),
     ...(Number.isFinite(firstEventTimeoutMs) ? { firstEventTimeoutMs } : {}),
   });
 }

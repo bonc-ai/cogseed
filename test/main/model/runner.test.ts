@@ -199,7 +199,7 @@ describe('runner › buildRunner auth gate', () => {
       expect.objectContaining({ id: receipts[0].id, status: 'active', scope: 'project' }),
     ]);
     await expect(candidates.listRecallCandidates('runner-teaching')).resolves.toEqual([
-      expect.objectContaining({ status: 'pending', captureKey: `teaching-${receipts[0].id}` }),
+      expect.objectContaining({ status: 'pending_review', captureKey: `teaching-${receipts[0].id}` }),
     ]);
   });
 

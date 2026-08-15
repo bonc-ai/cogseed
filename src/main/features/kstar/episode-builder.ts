@@ -17,6 +17,15 @@ export interface RuntimeKstarEpisodeInput {
   createdAt?: string;
 }
 
+export interface GroupKstarEpisodeInputRefs {
+  /** Execution-evaluation cognition sources consulted during the run. */
+  executionEvaluationRefs?: CognitionSourceRef[];
+  /** Active user teaching signals bound to this run. */
+  userTeachingSignalRefs?: CognitionSourceRef[];
+  /** Authorized external-system (connector) sources consulted. */
+  authorizedExternalSystemRefs?: CognitionSourceRef[];
+}
+
 export interface GroupKstarMessageInput {
   id: string;
   ts: string;
@@ -44,7 +53,7 @@ export interface GroupKstarMessageInput {
   }>;
 }
 
-export interface GroupKstarEpisodeInput {
+export interface GroupKstarEpisodeInput extends GroupKstarEpisodeInputRefs {
   userId: string;
   runId: string;
   conversationId: string;
@@ -286,11 +295,22 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
   const finalMessage = [...resultMessages].reverse().find((message) => compactText(message.text)) || [...actionMessages].reverse().find((message) => compactText(message.text));
   const userGoal = compactText(userMessages[0]?.text, MAX_TEXT) || `Conversation ${input.conversationId}`;
   const producedFiles = [...new Set(messages.flatMap((message) => message.produced || []).filter((value) => typeof value === 'string').map((file) => path.basename(file)))];
+  // Five-source evidence context (PRD v2 taxonomy): the delta-r/delta-a
+  // reasoning evolves FROM all five cognition sources, not just the
+  // conversation transcript.
   const evidenceRefs = normalizeCognitionSourceRefs([
+    // 1. conversation — the session + every message
     { kind: 'conversation', id: input.conversationId, title: 'Group chat conversation' },
     ...messages.slice(0, 100).map((message) => ({ kind: 'conversation' as const, id: message.id, excerpt: message.text })),
-    ...producedFiles.slice(0, 50).map((file, index) => ({ kind: 'artifact' as const, id: `artifact-${index}`, title: path.basename(file) })),
-    ...messages.flatMap((message) => (message.artifacts || []).slice(0, 10).map((artifact) => ({ kind: 'artifact' as const, id: artifact.id, title: artifact.title }))),
+    // 2. artifact_file — produced files + attached artifacts (PRD v2 kind)
+    ...producedFiles.slice(0, 50).map((file) => ({ kind: 'artifact_file' as const, id: `artifact-${file}`, title: path.basename(file) })),
+    ...messages.flatMap((message) => (message.artifacts || []).slice(0, 10).map((artifact) => ({ kind: 'artifact_file' as const, id: artifact.id, title: artifact.title }))),
+    // 3. execution_evaluation — the executed tool/intervention chain
+    ...(input.executionEvaluationRefs || []),
+    // 4. user_teaching_signal — active teaching signals bound to this run
+    ...(input.userTeachingSignalRefs || []),
+    // 5. authorized_external_system — connector/authorized data consulted
+    ...(input.authorizedExternalSystemRefs || []),
   ]);
   const toolCalls = toolCallsFromGroupMessages(actionMessages);
   const abilityAssetRefs = abilityAssetRefsFromCitations(input, actionMessages);

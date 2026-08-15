@@ -21,6 +21,7 @@
  */
 
 import type { AgentTool, HistoryResource } from "#core-agent";
+import type { ChatResolvedRuntime } from "../../model/client";
 
 import { createLogger } from "../../logger";
 import { logErrorRef, logPathRef, maskId } from "../../util/log-redact";
@@ -201,9 +202,11 @@ import { authoritativeSessionSource } from "../p3394/session-source";
 import { EpochStore } from "../p3394/epoch-store";
 import { SenderEpochStore } from "../p3394/sender-epoch-store";
 import {
+  buildDispatchedAssetsPromptBlock,
   buildRecallTurnPromptContext,
   type RecallPromptCitation,
 } from "../recall/prompt-injection";
+import { readAbilityAsset } from "../recall/asset-service";
 import { recordRecallUsage } from "../recall/usage-service";
 
 const log = createLogger("group_chat.bus");
@@ -1147,6 +1150,10 @@ interface QueueItem {
   outputDelivery?: "final" | "process";
   /** Commander-selected first-stage KSTAR gate for this delegated turn. */
   kstarDecision?: KStarDecisionRecord;
+  /** Ability assets the Commander explicitly granted to this delegated
+   *  Agent/Worker turn via the dispatch tools' `ability_assets` field. The
+   *  host renders them as the ONLY asset context for non-commander turns. */
+  dispatchedAssetIds?: string[];
   workflow_step_id?: string;
   /** Sender-assigned epoch persisted on the source GroupMessage. */
   incomingEpoch?: number;
@@ -1487,6 +1494,7 @@ function _emitTaskRunTerminalIfQuiescent(
         const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
         if (!event.logical_run_id && lifecycle.task?.id) event.logical_run_id = lifecycle.task.id;
         if (!event.projection_id && lifecycle.projection?.id) event.projection_id = lifecycle.projection.id;
+        if (!event.forecast_id && lifecycle.requirement?.forecastId) event.forecast_id = lifecycle.requirement.forecastId;
         if (!event.wake_request_id && lifecycle.wakeRequest?.id) event.wake_request_id = lifecycle.wakeRequest.id;
       } catch (err) {
         log.warn(`task terminal provenance lookup failed cid=${state.cid}: ${(err as Error).message}`);
@@ -1841,7 +1849,6 @@ export interface EnqueueParams {
   /** Skip KSTAR requirement routing + Recall projection gating for this
    *  enqueue. Used by the resume path so confirming a projection does not
    *  create a second projection and re-gate the same user message. */
-  skipKstarRouting?: boolean;
   /** Exact committed Recall projection used by the pre-execution Forecast. */
   committedProjectionId?: string;
   /** Forecast frozen before this Commander turn was admitted. */
@@ -2396,31 +2403,6 @@ async function _enqueueBody(
     }
   }
 
-  // Route KSTAR synchronously for user messages so a Recall projection
-  // preview can gate the Commander dispatch BEFORE the turn starts. When a
-  // preview is created, the user message is routed to the human-only sink
-  // and the Commander turn is resumed only after the user confirms the card.
-  let projectionPreviewCreated: { projectionId: string; requirementId: string; taskRunId: string } | undefined;
-  if (fromActorId === USER_ID && !params.skipKstarRouting) {
-    try {
-      const { routeKstarUserMessage } = await import('../kstar/requirement-state');
-      const routed = await routeKstarUserMessage(uid, {
-        conversationId: cid,
-        messageId: msgId,
-        text: String(text || ''),
-        ...(conversationProjectId ? { workspaceId: conversationProjectId } : {}),
-      });
-      if (routed.projectionPreviewCreated?.projectionId) {
-        projectionPreviewCreated = routed.projectionPreviewCreated;
-        to = [USER_ID];
-      }
-      const { drainKstarTaskState } = await import('../kstar/task-aggregate');
-      await drainKstarTaskState(uid, cid);
-    } catch (err) {
-      log.warn(`KSTAR requirement routing failed cid=${cid}: ${(err as Error).message}`);
-    }
-  }
-
   const msg: GroupMessage = {
     id: msgId,
     ts,
@@ -2539,51 +2521,10 @@ async function _enqueueBody(
     `enqueue user=${uid} cid=${cid} msg=${msgId} from=${fromActorId} to=${to.join(",")} len=${rewrittenText.length}${params.turn_end ? " turn_end=1" : ""}${unknown.length ? ` unknown=${unknown.join(",")}` : ""}`,
   );
 
-  // When a Recall projection preview gates this user message, persist the
-  // pending dispatch so the user's confirm action can resume the Commander
-  // turn, then post the visible preload-candidate card.
-  if (projectionPreviewCreated) {
-    try {
-      const { setPendingProjectionDispatch } = await import('./state');
-      await setPendingProjectionDispatch(uid, cid, {
-        projectionId: projectionPreviewCreated.projectionId,
-        requirementId: projectionPreviewCreated.requirementId,
-        taskRunId: projectionPreviewCreated.taskRunId,
-        userMessageId: msgId,
-        userMessageText: String(text || ''),
-        status: 'waiting_confirmation',
-        createdAt: ts,
-        updatedAt: ts,
-      });
-    } catch (err) {
-      log.warn(`pending projection dispatch persist failed cid=${cid}: ${(err as Error).message}`);
-    }
-    try {
-      const { postProjectionCardMessage } = await import('../recall/projection-message');
-      await postProjectionCardMessage(uid, {
-        cid,
-        projectionId: projectionPreviewCreated.projectionId,
-      }, {
-        send: async (payload) => {
-          const posted = await enqueue({
-            uid,
-            cid: payload.cid,
-            fromActorId: COMMANDER_ID,
-            forceTo: [USER_ID],
-            text: String(payload.text || ''),
-            recall_projection_card: { projectionId: payload.card.projectionId },
-          });
-          return { id: posted.id };
-        },
-      });
-    } catch (err) {
-      log.warn(`projection card post failed cid=${cid}: ${(err as Error).message}`);
-    }
-  }
-
-  // Dispatch to non-user recipients. When the projection gate above routed
-  // `to` to the human-only sink, this loop is naturally a no-op for the user
-  // message; the Commander turn starts only after `resumePendingProjectionDispatch`.
+  // Dispatch to non-user recipients. User routing remains the ordinary
+  // group-chat rule (user -> Commander unless an explicit floor/mention
+  // chooses another actor). KStar bookkeeping happens only through
+  // Commander-owned kstar_control calls and cannot gate this turn.
 
   let backendFollowupHandled = false;
   if (backendFollowupAgentId) {
@@ -3705,6 +3646,7 @@ async function runActorTurnBody(
   let systemPrompt: string;
   let extraTools: AgentTool[] = [];
   let skillList: string[] | undefined;
+  let commanderResolvedRuntime: ChatResolvedRuntime | null = null;
   const selectedSkillRefs = _selectedSkillRefs(item.useSelections);
   const forceOpenSkillRefs: string[] = selectedSkillRefs;
   // CLI-backed agents fetch the spec but skip systemPrompt / skillList /
@@ -3736,6 +3678,18 @@ async function runActorTurnBody(
     // 空间模式会话（kind=space_builder）：用户↔构建师的一对一引导对话。
     // 构建师不派活不写文件——零额外工具，数据全部走 Runtime injection 快照。
     const convKind = await getConversationKindSafe(uid, cid);
+    // Deterministic host routing: a task-shaped USER message opens the
+    // governed KStar task + auto-confirmed projection HERE, before the model
+    // turn — the Commander no longer has to emit kstar_control correctly
+    // (live runs failed that twice). Space-builder and non-task turns are
+    // untouched (zero KStar writes).
+    if (
+      convKind !== "space_builder"
+      && item.fromActorId === USER_ID
+      && process.env.ORKAS_KSTAR_HOST_ROUTING !== '0'
+    ) {
+      await hostRouteTaskTurn(uid, cid, item.sourceMessageText, item.msgId, turnProjectId);
+    }
     if (convKind === "space_builder") {
       systemPrompt = await buildSpaceBuilderSystemPrompt(uid);
       extraTools = [];
@@ -3752,6 +3706,9 @@ async function runActorTurnBody(
         item.fromActorId,
         item.attachments,
         turnProjectId,
+        item.msgId,
+        () => commanderResolvedRuntime,
+        item.sourceMessageText,
         () => segState.flush(),
         () => {
           terminalHandoffCompleted = true;
@@ -3863,25 +3820,57 @@ async function runActorTurnBody(
     }
   }
 
-  // Recall is host-owned model context. CLI agents do not consume this system
-  // prompt path, so they must not receive or later claim Recall citations.
+  // Recall is host-owned model context. The Commander is the cognitive-asset
+  // center: ONLY the Commander receives automatic Recall injection. Delegated
+  // Agent/Worker turns receive NO automatic asset context — the Commander
+  // explicitly grants assets per dispatch via the tools' `ability_assets`
+  // field, and only those render here. CLI agents never consume this path.
   let recallCitations: RecallPromptCitation[] = [];
+  // Commander-granted assets actually injected into a delegated turn, kept for
+  // the same usage ledger the Commander injection uses (outcome 'dispatched').
+  let dispatchedUsage: Array<{ assetId: string; assetVersion: string }> = [];
   if (!cliAgent) {
-    try {
-      const recallContext = await buildRecallTurnPromptContext(uid, {
-        cid,
-        taskRunId: item.turnId,
-        taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
-        ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
-        ...(item.committedProjectionId ? { committedProjectionId: item.committedProjectionId } : {}),
-        ...(item.forecastId ? { forecastId: item.forecastId } : {}),
-      });
-      if (recallContext.promptBlock) {
-        systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
-        recallCitations = recallContext.citations;
+    if (isCommander) {
+      try {
+        const recallContext = await buildRecallTurnPromptContext(uid, {
+          cid,
+          taskRunId: item.turnId,
+          taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
+          ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+          ...(item.committedProjectionId ? { committedProjectionId: item.committedProjectionId } : {}),
+          ...(item.forecastId ? { forecastId: item.forecastId } : {}),
+        });
+        if (recallContext.promptBlock) {
+          systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
+          recallCitations = recallContext.citations;
+        }
+      } catch (error) {
+        log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
       }
-    } catch (error) {
-      log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
+      // Layer 1 routing uplift: deterministic task-intent detection adds an
+      // advisory hint so an ordinary user request is not silently skipped by
+      // the Commander's default kstar:skip. Advisory only — no state writes.
+      if (item.fromActorId === USER_ID) {
+        const { taskIntentHint } = await import('../kstar/task-intent');
+        const hint = taskIntentHint(item.sourceMessageText);
+        if (hint) systemPrompt = `${systemPrompt}\n\n${hint}`;
+      }
+    } else if (item.dispatchedAssetIds?.length) {
+      // Commander-granted assets only — no host-side Recall selection.
+      try {
+        const dispatched = await buildDispatchedAssetsPromptBlock(uid, item.dispatchedAssetIds);
+        if (dispatched.promptBlock) {
+          systemPrompt = `${systemPrompt}\n\n${dispatched.promptBlock}`;
+        }
+        if (dispatched.assets.length) {
+          dispatchedUsage = dispatched.assets.map((asset) => ({
+            assetId: asset.id,
+            assetVersion: asset.version,
+          }));
+        }
+      } catch (error) {
+        log.warn(`Commander-dispatched asset injection failed cid=${cid}: ${(error as Error).message}`);
+      }
     }
 
     // 出生继承的认知。和上面的 Recall 投影是两条来源：投影是这次会话里确认过的
@@ -4318,6 +4307,11 @@ async function runActorTurnBody(
             candidate_ids: receipt.candidateIds,
           });
         },
+        ...(isCommander ? {
+          onResolvedRuntime: (runtime: ChatResolvedRuntime) => {
+            commanderResolvedRuntime = runtime;
+          },
+        } : {}),
         ...(item.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
         onFileWritten,
@@ -5232,10 +5226,30 @@ async function runActorTurnBody(
         ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
         boundary: 'real',
         outcome: 'injected',
+        ...(typeof citation.match_score === 'number' && Number.isFinite(citation.match_score)
+          ? { matchScore: citation.match_score }
+          : {}),
       })));
       const failedUsageWrites = usageWrites.filter((result) => result.status === 'rejected');
       if (failedUsageWrites.length) {
         log.warn(`Recall usage persistence partially failed cid=${cid} failed=${failedUsageWrites.length}`);
+      }
+    }
+    if (dispatchedUsage.length) {
+      // Commander-dispatched grants ride the same usage ledger so the asset
+      // line stays complete: injected (Commander) vs dispatched (Agent).
+      const dispatchedWrites = await Promise.allSettled(dispatchedUsage.map((grant) => recordRecallUsage(uid, {
+        assetId: grant.assetId,
+        assetVersion: grant.assetVersion,
+        taskRunId: item.turnId,
+        messageId: persistedMsg.id,
+        ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+        boundary: 'real',
+        outcome: 'dispatched',
+      })));
+      const failedDispatchedWrites = dispatchedWrites.filter((result) => result.status === 'rejected');
+      if (failedDispatchedWrites.length) {
+        log.warn(`Recall dispatched usage persistence partially failed cid=${cid} failed=${failedDispatchedWrites.length}`);
       }
     }
     await registerFinalOutputResources(outcome.produced || []);
@@ -5673,7 +5687,13 @@ async function buildCommanderSystemPrompt(
     },
     true,
   );
-  return appendLanguageDirective(main);
+  const { readCommanderKstarContext, renderCommanderKstarContextBlock } = await import('../kstar/commander-context');
+  const kstarContext = await readCommanderKstarContext(uid, cid);
+  return appendLanguageDirective(`${main}
+
+---
+
+${renderCommanderKstarContextBlock(kstarContext)}`);
 }
 
 type SharedPromptTemplate =
@@ -6198,6 +6218,58 @@ function coordinatorDispatchContract(
       writeScopes,
     ),
   };
+}
+
+
+function kstarApprovalBlockedToolResult(code: string, message: string): { content: string; isError: true } {
+  return {
+    content: JSON.stringify({ ok: false, error_code: code, error: message }),
+    isError: true as const,
+  };
+}
+
+/** Host-side approval guard for privileged agent dispatch. When the active
+ *  KStar requirement carries a Projection (the Commander requested one through
+ *  kstar_control), execution is paused until the Projection is confirmed AND a
+ *  Forecast is committed. Returns verified provenance IDs — never model
+ *  claims — and stamps them onto the current taskRun so the terminal event
+ *  carries them. Ordinary chat and tools without an active Projection are
+ *  unaffected. */
+async function guardKstarPrivilegedDispatch(
+  state: CidState,
+  options: { allowHostAutoTracked?: boolean } = {},
+): Promise<{ content: string; isError: true } | { provenance: { logicalRunId?: string; projectionId?: string; forecastId?: string } }> {
+  const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+  const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
+  if (!lifecycle.requirement?.projectionId) return { provenance: {} };
+  if (lifecycle.projection?.status !== 'confirmed') {
+    return kstarApprovalBlockedToolResult(
+      'kstar_projection_not_confirmed',
+      'KStar Projection is not confirmed.',
+    );
+  }
+  if (!lifecycle.requirement.forecastId) {
+    // Host auto-tracked tasks (layer 2) skip the forecast requirement ONCE so
+    // the dispatch proceeds; the Commander is expected to commit_forecast
+    // afterwards. Commander-initiated tasks still require a committed forecast
+    // before execution.
+    if (options.allowHostAutoTracked) return { provenance: {} };
+    return kstarApprovalBlockedToolResult(
+      'kstar_projection_not_confirmed',
+      'KStar Forecast is not committed.',
+    );
+  }
+  const provenance = {
+    ...(lifecycle.task?.id ? { logicalRunId: lifecycle.task.id } : {}),
+    projectionId: lifecycle.projection.id,
+    forecastId: lifecycle.requirement.forecastId,
+  };
+  if (state.taskRun) {
+    if (provenance.logicalRunId) state.taskRun.logicalRunId = provenance.logicalRunId;
+    state.taskRun.projectionId = provenance.projectionId;
+    state.taskRun.forecastId = provenance.forecastId;
+  }
+  return { provenance };
 }
 
 async function prepareNestedDispatchForTool(
@@ -6847,6 +6919,7 @@ async function runNestedDispatch(
   outputDelivery: "final" | "process" = "process",
   kstarDecision?: KStarDecisionRecord,
   workflowStepId?: string,
+  dispatchedAssetIds?: string[],
 ): Promise<NestedDispatchOutcome> {
   // A named agent must be a roster member so its handed-back bubble renders with
   // proper attribution. The old async dispatch path seeded this via enqueue's
@@ -6947,6 +7020,7 @@ async function runNestedDispatch(
     ...(kstarDecision?.required ? { kstarDecision } : {}),
     ...(workflowStepId ? { workflow_step_id: workflowStepId } : {}),
     ...(attachments && attachments.length ? { attachments } : {}),
+    ...(dispatchedAssetIds && dispatchedAssetIds.length ? { dispatchedAssetIds } : {}),
   };
   // Bound concurrent nested dispatches: when the commander fans out several
   // run_worker/dispatch_to calls in one turn (G4 runs them concurrently),
@@ -7599,6 +7673,7 @@ interface CoordinatedNestedDispatchInput {
   kstarDecision?: KStarDecisionRecord;
   prepared: PreparedNestedDispatchStep;
   requiredCapabilities: string[];
+  dispatchedAssetIds?: string[];
 }
 
 async function runCoordinatedNestedDispatch(
@@ -7752,6 +7827,7 @@ async function runCoordinatedNestedDispatchAdmitted(
           input.outputDelivery,
           input.kstarDecision,
           input.prepared.step.id,
+          input.dispatchedAssetIds,
         ),
     });
     const { outcome, finishedStep } = lifecycle;
@@ -7893,6 +7969,180 @@ const WORKER_WORKFLOW = [
 
 function _toolError(error: string): { content: string; isError: true } {
   return { content: JSON.stringify({ ok: false, error }), isError: true };
+}
+
+/**
+ * Deterministic host routing (the fix for model-dependent routing): when a
+ * USER message is detected as a task, the HOST opens the governed KStar task
+ * and auto-confirms the projection BEFORE the Commander even starts — no
+ * reliance on the model emitting kstar_control with correct args (which
+ * failed live twice with empty payloads). The Commander's only remaining
+ * KStar responsibility is commit_forecast (the prediction itself), enforced
+ * by the guard + next_step contract.
+ *
+ * Zero-write guarantee preserved: greetings/status/trivia are not tasks, and
+ * an already-open task is never duplicated.
+ */
+async function hostRouteTaskTurn(
+  uid: string,
+  cid: string,
+  messageText: string | undefined,
+  sourceMessageId: string | undefined,
+  workspaceId?: string,
+): Promise<void> {
+  const { detectTaskIntent } = await import('../kstar/task-intent');
+  if (!detectTaskIntent(messageText).isTask) return;
+  try {
+    const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+    const lifecycle = await readKstarTaskLifecycle(uid, cid);
+    if (lifecycle.task || lifecycle.requirement) return;
+    const { executeKstarControl } = await import('../kstar/control-service');
+    const goal = String(messageText || '').replace(/\s+/g, ' ').trim().slice(0, 4_000);
+    if (!goal) return;
+    const created = await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['kstar_control']),
+      },
+      {
+        operation: 'upsert_state',
+        idempotencyKey: `host-route-${cid}-${sourceMessageId || Date.now()}`,
+        task: { operation: 'create', title: goal.slice(0, 200) },
+        requirement: { operation: 'create', goalText: goal },
+      },
+    );
+    if (!created.ok || created.status !== 'state_committed') return;
+    await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['kstar_control']),
+      },
+      {
+        operation: 'request_projection',
+        idempotencyKey: `host-route-proj-${cid}-${sourceMessageId || Date.now()}`,
+        projection: {
+          requirementId: created.requirementId,
+          purpose: 'review',
+          taskText: goal,
+        },
+      },
+    );
+  } catch (error) {
+    log.warn(`kstar host routing degraded cid=${cid}: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Layer 2 routing uplift: dispatch IS a task. When the Commander dispatches a
+ * NAMED agent (dispatch_to / hand_off_to / named run_worker) and no KStar
+ * task is open, the host auto-creates the task + auto-confirmed projection
+ * (workspace_policy line, no user confirmation) so the dispatch is governed
+ * like the formal task it is. The Commander is then expected to commit a
+ * forecast; the guard still enforces it before execution continues.
+ *
+ * Advisory shaping, never a rejection: if auto-creation fails the dispatch
+ * still proceeds ungoverned (same as today) and the failure is logged.
+ */
+async function ensureKstarTaskForDispatch(
+  uid: string,
+  cid: string,
+  taskText: string,
+  sourceMessageId?: string,
+  workspaceId?: string,
+): Promise<{ created: boolean; hint?: string }> {
+  try {
+    const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+    const lifecycle = await readKstarTaskLifecycle(uid, cid);
+    if (lifecycle.task || lifecycle.requirement) return { created: false };
+    const { executeKstarControl } = await import('../kstar/control-service');
+    const result = await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['dispatch_to', 'hand_off_to', 'run_worker']),
+      },
+      {
+        operation: 'upsert_state',
+        idempotencyKey: `host-dispatch-${cid}-${Date.now()}`,
+        task: { operation: 'create', title: taskText.slice(0, 200) },
+        requirement: { operation: 'create', goalText: taskText },
+      },
+    );
+    if (!result.ok || result.status !== 'state_committed') return { created: false };
+    // Auto-confirm a projection for the newly created task (workspace_policy
+    // line — no user confirmation card).
+    const state2 = await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['dispatch_to', 'hand_off_to', 'run_worker']),
+      },
+      {
+        operation: 'request_projection',
+        idempotencyKey: `host-dispatch-proj-${cid}-${Date.now()}`,
+        projection: {
+          requirementId: result.requirementId,
+          purpose: 'review',
+          taskText,
+        },
+      },
+    );
+    if (!state2.ok || state2.status !== 'projection_confirmed') return { created: true };
+    return {
+      created: true,
+      hint: `The host auto-tracked this dispatch as a KStar task (projection confirmed). Submit kstar_control commit_forecast with 2-4 candidates before execution continues.`,
+    };
+  } catch (error) {
+    log.warn(`kstar auto-task for dispatch degraded cid=${cid}: ${(error as Error).message}`);
+    return { created: false };
+  }
+}
+
+/**
+ * Host-side validation of Commander-granted ability assets. The Commander
+ * picks assets by id; the host verifies each is a real, active asset so a
+ * hallucinated or stale id can never leak into a delegated turn. Returns
+ * the granted ids (deduped, order-preserving) or a tool-error result.
+ */
+async function resolveDispatchedAbilityAssets(
+  uid: string,
+  value: unknown,
+): Promise<{ ok: true; assetIds: string[] } | { ok: false; error: string }> {
+  if (value === undefined) return { ok: true, assetIds: [] };
+  if (!Array.isArray(value)) {
+    return { ok: false, error: "`ability_assets` must be an array of asset ids" };
+  }
+  const rawIds = value.map((entry) => String(entry || "").trim()).filter(Boolean);
+  if (rawIds.length > 24) {
+    return { ok: false, error: "`ability_assets` supports at most 24 assets per dispatch" };
+  }
+  const granted: string[] = [];
+  const seen = new Set<string>();
+  for (const rawId of rawIds) {
+    if (seen.has(rawId)) continue;
+    seen.add(rawId);
+    let asset: Awaited<ReturnType<typeof readAbilityAsset>> | null = null;
+    try {
+      asset = await readAbilityAsset(uid, rawId);
+    } catch {
+      return { ok: false, error: `unknown ability asset: ${rawId}` };
+    }
+    if (!asset || asset.status !== "active") {
+      return { ok: false, error: `ability asset is not active: ${rawId}` };
+    }
+    granted.push(asset.id);
+  }
+  return { ok: true, assetIds: granted };
 }
 
 const HANDOFF_FINAL_ACTOR_ERROR =
@@ -8164,6 +8414,9 @@ async function buildCommanderExtraTools(
   // but persisted because plan steps live across worker turn boundaries.
   currentTurnAttachments?: string[],
   currentProjectId?: string,
+  currentSourceMessageId?: string,
+  resolvedRuntime: () => ChatResolvedRuntime | null = () => null,
+  currentSourceMessageText?: string,
   // Called right before a VISIBLE agent dispatch runs (dispatch_to / named
   // run_worker), so the commander's accumulated reasoning so far is flushed as
   // its own bubble and the post-handback synthesis starts a fresh one. Not
@@ -8178,6 +8431,21 @@ async function buildCommanderExtraTools(
   const { getConversationWorkspacePath } = await import("./conv_workspace");
   const coordinatorWorkingDir = await getConversationWorkspacePath(uid, cid);
   const tools: AgentTool[] = [];
+  const kstarTool = await import('../kstar/control-tool');
+  if (kstarTool.isCommanderCentricKstarEnabled()) {
+    tools.push(kstarTool.createKstarControlTool({
+      userId: uid,
+      conversationId: cid,
+      ...(currentSourceActorId === USER_ID && currentSourceMessageId
+        ? { sourceMessageId: currentSourceMessageId }
+        : {}),
+      ...(currentSourceActorId === USER_ID && currentSourceMessageText?.trim()
+        ? { sourceMessageText: currentSourceMessageText }
+        : {}),
+      ...(currentProjectId ? { workspaceId: currentProjectId } : {}),
+      resolvedRuntime,
+    }));
+  }
   tools.push({
     name: "auto_tasks_list",
     description: [
@@ -8635,6 +8903,12 @@ async function buildCommanderExtraTools(
         write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
+        ability_assets: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Ability asset ids (from the confirmed projection / your injected asset list) you explicitly grant to the target for THIS task. The target sees ONLY these assets — never a host-side selection. Omit to send no asset context.",
+        },
         kstar: {
           type: "string",
           enum: ["required", "skip"],
@@ -8685,6 +8959,8 @@ async function buildCommanderExtraTools(
       } catch (error) {
         return _toolError((error as Error).message);
       }
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets);
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       if (!toRaw) {
         return {
           content: JSON.stringify({ ok: false, error: "`to` is required" }),
@@ -8728,6 +9004,9 @@ async function buildCommanderExtraTools(
         name: dispatchAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      // Layer 2 routing uplift: dispatch IS a task — auto-track + auto-project
+      // when no KStar task is open (advisory; never blocks the dispatch).
+      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(
         state,
         dispatchActor,
@@ -8743,6 +9022,8 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
+      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: autoTask.created });
+      if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
         dispatchActor,
@@ -8773,6 +9054,7 @@ async function buildCommanderExtraTools(
             kstarDecision: kstarDecisionRecord(kstar),
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
+            dispatchedAssetIds: grantedAssets.assetIds,
           });
         },
       });
@@ -8847,6 +9129,12 @@ async function buildCommanderExtraTools(
         write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
+        ability_assets: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Ability asset ids (from the confirmed projection / your injected asset list) you explicitly grant to the target for THIS task. The target sees ONLY these assets — never a host-side selection. Omit to send no asset context.",
+        },
         kstar: {
           type: "string",
           enum: ["required", "skip"],
@@ -8897,6 +9185,8 @@ async function buildCommanderExtraTools(
       } catch (error) {
         return _toolError((error as Error).message);
       }
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets);
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       if (!toRaw) return _toolError("`to` is required");
       if (!message) return _toolError("`message` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
@@ -8916,6 +9206,10 @@ async function buildCommanderExtraTools(
         name: handoffAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      // Layer 2 routing uplift: named hand-off is a formal task. The
+      // auto-track flag is captured so the forecast gate is waived ONLY for
+      // the dispatch that actually created the task (ONCE semantics).
+      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(
         state,
         handoffActor,
@@ -8931,6 +9225,8 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
+      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: autoTask.created });
+      if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
         handoffActor,
@@ -8960,6 +9256,7 @@ async function buildCommanderExtraTools(
             kstarDecision: kstarDecisionRecord(kstar),
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
+            dispatchedAssetIds: grantedAssets.assetIds,
           });
           if (!outcome.ok) return { content: outcome.payload };
 
@@ -9178,6 +9475,12 @@ async function buildCommanderExtraTools(
         write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
+        ability_assets: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Ability asset ids (from the confirmed projection / your injected asset list) you explicitly grant to the worker for THIS sub-task. The worker sees ONLY these assets — never a host-side selection. Omit to send no asset context.",
+        },
         kstar: {
           type: "string",
           enum: ["required", "skip"],
@@ -9228,6 +9531,8 @@ async function buildCommanderExtraTools(
       } catch (error) {
         return _toolError((error as Error).message);
       }
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets);
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       if (!task) return _toolError("`task` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
       if (blocked) return blocked;
@@ -9260,6 +9565,8 @@ async function buildCommanderExtraTools(
           resumeToken,
         );
         if (prepared.blocked) return blockedNestedDispatchToolResult(prepared);
+        const kstarGuard = await guardKstarPrivilegedDispatch(state);
+        if ('content' in kstarGuard) return kstarGuard;
         const workerExecution = await withPreparedNestedDispatchAccess({
           state,
           prepared,
@@ -9281,6 +9588,7 @@ async function buildCommanderExtraTools(
                   "process",
                   kstarDecisionRecord(kstar),
                   prepared.step.id,
+                  grantedAssets.assetIds,
                 ),
             }),
         });
@@ -9311,6 +9619,8 @@ async function buildCommanderExtraTools(
         name: namedAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      // Layer 2 routing uplift: named worker is a formal task.
+      const autoTask = await ensureKstarTaskForDispatch(uid, cid, task, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(
         state,
         namedActor,
@@ -9326,6 +9636,8 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
+      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: autoTask.created });
+      if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
         namedActor,
@@ -9355,6 +9667,7 @@ async function buildCommanderExtraTools(
             kstarDecision: kstarDecisionRecord(kstar),
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
+            dispatchedAssetIds: grantedAssets.assetIds,
           });
         },
       });
@@ -10356,36 +10669,37 @@ function _hasPriorVisibleCliHistory(
   );
 }
 
-/** Resume a user-message dispatch that was gated behind a Recall projection
- *  preview. Clears the pending marker and re-enqueues the original text as an
- *  internal dispatch record targeting the Commander (hidden from user history,
- *  same pattern as the P3394 wake dispatcher). Returns true if a pending
- *  dispatch was found and resumed. */
-export async function resumePendingProjectionDispatch(
-  userId: string,
-  cid: string,
-): Promise<boolean> {
-  if (!safeId(userId) || !safeId(cid)) throw new Error('invalid projection dispatch resume');
-  const { readState, clearPendingProjectionDispatch } = await import('./state');
-  const stateFile = await readState(userId, cid);
-  const pending = stateFile.pending_projection_dispatch;
-  if (!pending || pending.status !== 'ready_to_dispatch' || !pending.forecastId) return false;
-  await clearPendingProjectionDispatch(userId, cid);
+export interface EnqueueCommanderControlInput {
+  userId: string;
+  cid: string;
+  displayText: string;
+  control: {
+    type: 'kstar_projection_decision';
+    projectionId: string;
+    decision: 'approved' | 'rejected';
+    confirmedSnapshot?: { assetIds: string[]; ruleRefs: string[] };
+    legacy?: { requirementId?: string; taskRunId?: string; forecastId?: string; originalText?: string };
+  };
+}
+
+/** Resume the SAME Commander session with a bounded internal control message
+ *  after a Projection decision (approved/rejected) or a legacy pending-state
+ *  recovery. The control JSON contains no paths, prompts, credentials, or raw
+ *  errors; the Commander decides the next lifecycle step, and the host still
+ *  gates privileged execution. */
+export async function enqueueCommanderControlMessage(input: EnqueueCommanderControlInput): Promise<void> {
   await enqueue({
-    uid: userId,
-    cid,
+    uid: input.userId,
+    cid: input.cid,
     fromActorId: USER_ID,
-    text: pending.userMessageText,
+    text: input.displayText,
+    model_text: [
+      '<kstar-control>',
+      JSON.stringify(input.control),
+      'Continue in this same Commander session. Do not reclassify the original message. Do not perform privileged execution unless decision is approved.',
+      '</kstar-control>',
+    ].join('\n'),
     forceTo: [COMMANDER_ID],
     dispatch: true,
-    skipKstarRouting: true,
-    committedProjectionId: pending.projectionId,
-    forecastId: pending.forecastId,
-    kstarTerminalProvenance: {
-      logicalRunId: pending.taskRunId,
-      projectionId: pending.projectionId,
-      forecastId: pending.forecastId,
-    },
   });
-  return true;
 }
