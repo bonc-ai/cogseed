@@ -73,16 +73,32 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
 
   const proposals: KstarCandidateProposal[] = [];
   const goal = requirement.goalText || requirement.title;
-  if (verifiedWorkflow && strongest) {
-    proposals.push({
-      judgment: `For tasks like "${goal}", use the verified workflow: ${toolChain.join(' → ')}.`,
-      summary: 'Verified multi-tool workflow (requirement-level)',
-      uncertainty: 'Generated from a closed multi-episode requirement; confirm before treating it as durable.',
-      suggestedType: 'skill_method',
-      suggestedScope: scopeForTask(goal),
-      sourceRefs: mergedRefs,
-      learningSignal: learningSignal(strongest),
-    });
+  if (strongest) {
+    if (verifiedWorkflow && !strongest.lesson?.trim()) {
+      // Verified workflow without a reasoned lesson → skill_method.
+      proposals.push({
+        judgment: `For tasks like "${goal}", use the verified workflow: ${toolChain.join(' → ')}.`,
+        summary: 'Verified multi-tool workflow (requirement-level)',
+        uncertainty: 'Generated from a closed multi-episode requirement; confirm before treating it as durable.',
+        suggestedType: 'skill_method',
+        suggestedScope: scopeForTask(goal),
+        sourceRefs: mergedRefs,
+        learningSignal: learningSignal(strongest),
+      });
+    } else if (strongest.lesson?.trim()) {
+      // Process-experience lesson (even on met_expected tasks): the reasoned
+      // reusable pattern/pitfall is the asset body. Type rule by default —
+      // it is a judgment lesson, not a workflow.
+      proposals.push({
+        judgment: strongest.lesson,
+        summary: 'Reusable experience lesson (requirement-level)',
+        uncertainty: 'Model-reasoned from execution experience; confirm before treating it as durable.',
+        suggestedType: 'rule',
+        suggestedScope: scopeForTask(goal),
+        sourceRefs: mergedRefs,
+        learningSignal: learningSignal(strongest),
+      });
+    }
   }
 
   // Highest-confidence gap across all episodes, only when evidence-gated.

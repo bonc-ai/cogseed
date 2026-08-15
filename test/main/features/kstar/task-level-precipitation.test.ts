@@ -242,6 +242,53 @@ describe('KStar task-level precipitation (B5)', () => {
     expect(result.createdAssetIds).toHaveLength(1);
   });
 
+  it('precipitates a process-experience lesson even when the task met expectations (met_expected + lesson)', async () => {
+    const epA = episode('kse-b5-proc', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
+    await seedEpisode(epA);
+    await seedReview(epA, {
+      expectedResult: 'A report is built.',
+      actualResult: 'The report was built.',
+      deltaR: 0,
+      deltaA: 0,
+      outcome: 'met_expected',
+      attribution: 'unclear',
+      reason: '审查发现合并冲突的类型断言（as X）会掩盖运行时错误，应改为显式判别。',
+      confidence: 0.9,
+      lesson: '合并冲突的类型断言（as X）会掩盖运行时错误，应改为显式判别联合。',
+    });
+    const requirement = await seedRequirement(['kse-b5-proc']);
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
+
+    expect(result.proposals).toHaveLength(1);
+    expect(result.proposals[0].judgment).toContain('类型断言');
+    expect(result.createdAssetIds).toHaveLength(1);
+  });
+
+  it('does not precipitate a routine met_expected without a lesson (process-experience noise gate)', async () => {
+    const epA = episode('kse-b5-routine', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
+    await seedEpisode(epA);
+    await seedReview(epA, {
+      expectedResult: 'A report is built.',
+      actualResult: 'The report was built.',
+      deltaR: 0,
+      deltaA: 0,
+      outcome: 'met_expected',
+      attribution: 'unclear',
+      reason: '任务按预期完成。',
+      confidence: 0.95,
+      // No lesson: routine success carries nothing forward.
+    });
+    const requirement = await seedRequirement(['kse-b5-routine']);
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
+
+    expect(result.proposals).toHaveLength(0);
+    expect(result.createdAssetIds).toHaveLength(0);
+  });
+
   it('tolerates missing episodes/reviews without throwing', async () => {
     const requirement = await seedRequirement(['kse-b5-missing']);
     const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
