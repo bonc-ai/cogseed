@@ -268,8 +268,14 @@
   }
 
   async function _pocEnsureProjectNames() {
-    // 空间化后项目层已删：项目名映射不可再解析，保留空 map（@project 显示原始值）。
-    if (!_pocProjectNames) _pocProjectNames = new Map();
+    if (_pocProjectNames) return _pocProjectNames;
+    try {
+      const res = await (window.cogseed || window.orkas).invoke('projects.list');
+      const projects = (res && Array.isArray(res.projects)) ? res.projects : [];
+      _pocProjectNames = new Map(projects.map((p) => [p.project_id, p.name || p.project_id]));
+    } catch (_) {
+      _pocProjectNames = new Map();
+    }
     return _pocProjectNames;
   }
 
@@ -799,148 +805,6 @@
         await _pocRunOnce(`group-action:${action}:${groupId}:${item}`, el, run);
       });
     });
-  }
-
-  // ── 确认 / 驳回 / 批量 ────────────────────────────────────────────────────
-  // 复合 id（groupId::分节）→ 可读标签（模板名.分节名 / 组名）
-  function _pocRefLabel(ref) {
-    const parts = String(ref || '').split('::');
-    const gid = parts[0];
-    const sec = parts[1];
-    const group = _pocGroups.find((g) => g.group_id === gid);
-    if (group) return sec ? `${group.title}.${sec}` : group.title;
-    return ref;
-  }
-
-  function _destPayloadFor(candidateId) {
-    const state = _pocDestFor(candidateId);
-    // 全局记忆恒写（确认 = 必进全局记忆）；去向 = 高级分节（精确）或角色模板组（AI 归位）
-    let toGroupIds = Array.from(state.groupIds);
-    if (!toGroupIds.length && state.roleGroupId) toGroupIds = [state.roleGroupId];
-    const payload = { toGlobalMemory: true, toGroupIds };
-    if (state.field && state.field !== 'flow') payload.targetField = state.field;
-    return payload;
-  }
-
-  function _destResultToWarnings(res) {
-    const warnings = [];
-    if (res && res.globalMemory && res.globalMemory.ok === false) {
-      warnings.push(_tv('personalOntology.dest_global_failed', { error: res.globalMemory.error || '' },
-        `全局记忆写入失败: ${res.globalMemory.error || ''}`));
-    }
-    if (res && Array.isArray(res.groups)) {
-      res.groups.forEach((g) => {
-        if (g.ok === false) {
-          warnings.push(_tv('personalOntology.dest_group_failed', { group: _pocRefLabel(g.groupId), error: g.error || '' },
-            `分组「${_pocRefLabel(g.groupId)}」写入失败: ${g.error || ''}`));
-        }
-      });
-    }
-    return warnings;
-  }
-
-  async function confirmCandidate(candidateId) {
-    if (!candidateId) return;
-    try {
-      // routeWithLlm: true —— 确认时经 LLM 对号入座（用户指定字段时 LLM 不覆盖）
-      const res = await window.cogseed.invoke('personalOntology.candidates.confirm', {
-        candidateId,
-        ...(_destPayloadFor(candidateId)),
-        routeWithLlm: true,
-      });
-      const warnings = _destResultToWarnings(res);
-      if (res && res.ok === false) {
-        _notifyFail(_t('personalOntology.confirm_error', '确认失败'), new Error((res.error || warnings.join('; ')) || ''));
-        return;
-      }
-      try {
-        if (typeof uiToast === 'function') {
-          if (res.fieldWrites && res.fieldWrites.some((fw) => fw.ok)) {
-            const fw = res.fieldWrites.find((x) => x.ok);
-            uiToast(_tv('personalOntology.confirm_field_ok', { group: _pocRefLabel(fw.groupId), field: fw.fieldName },
-              `已填入 ${_pocRefLabel(fw.groupId)}.${fw.fieldName}`), { variant: 'success' });
-          } else if (res.groups && res.groups.some((g) => g.ok)) {
-            // 未命中字段 → 进流水区（C-1：单条确认也要有反馈，否则用户以为候选被吞）
-            const g = res.groups.find((x) => x.ok);
-            uiToast(_tv('personalOntology.confirm_flow_ok', { group: _pocRefLabel(g.groupId) },
-              `已进入 ${_pocRefLabel(g.groupId)} 流水区（未匹配到字段）`), { variant: 'info' });
-          }
-          warnings.forEach((w) => uiToast(w, { variant: 'warning' }));
-        }
-      } catch (_) {}
-      _pocDestState.delete(candidateId);
-      renderPersonalOntology();
-    } catch (err) {
-      _notifyFail(_t('personalOntology.confirm_error', '确认失败'), err);
-    }
-  }
-
-  async function rejectCandidate(candidateId) {
-    if (!candidateId) return;
-    const reason = await showRejectReasonModal();
-    if (reason === null) return;
-    const res = await _pocInvoke('personalOntology.candidates.reject', { candidateId, reason: reason || '' });
-    if (!res || res.ok === false) {
-      _notifyFail(_t('personalOntology.reject_error', '驳回失败'), new Error((res && res.error) || ''));
-      return;
-    }
-    _pocDestState.delete(candidateId);
-    renderPersonalOntology();
-  }
-
-  async function confirmAll(pending) {
-    if (!pending || !pending.length) return;
-    if (!confirm(_t('personalOntology.confirm_all_prompt', `确认全部 ${pending.length} 个候选？`))) return;
-    try {
-      const failedIds = [];
-      const fieldCounts = {};
-      let toEntries = 0;
-      let okCount = 0;
-      for (const c of pending) {
-        // 每条候选用各自的选择（角色/分节），不共享第一条的
-        const dest = _destPayloadFor(c.candidate_id);
-        const state = _pocDestState.get(c.candidate_id);
-        const field = state && state.field ? state.field : (c.target_field || 'flow');
-        if (field && field !== 'flow') dest.targetField = field;
-        const res = await window.cogseed.invoke('personalOntology.candidates.confirm', { candidateId: c.candidate_id, ...dest, routeWithLlm: true });
-        if (res && res.ok) {
-          okCount++;
-          for (const fw of (res.fieldWrites || [])) if (fw.ok) fieldCounts[fw.fieldName] = (fieldCounts[fw.fieldName] || 0) + 1;
-          for (const g of (res.groups || [])) {
-            const hadFieldWrite = (res.fieldWrites || []).some((fw) => fw.ok && fw.groupId === g.groupId);
-            if (g.ok && !hadFieldWrite) toEntries++;
-          }
-        } else {
-          failedIds.push(c.candidate_id);
-        }
-      }
-      try {
-        if (typeof uiToast === 'function') {
-          if (failedIds.length) uiToast(_tv('personalOntology.confirm_all_partial', { n: failedIds.length }, `${failedIds.length} 条确认失败`), { variant: 'warning' });
-          const fieldsLabel = Object.keys(fieldCounts).map((f) => `${f}×${fieldCounts[f]}`).join('、') || '-';
-          uiToast(_tv('personalOntology.batch_summary', { n: okCount, fields: fieldsLabel, m: toEntries },
-            `${okCount} 条已确认：${fieldsLabel}；流水区 ${toEntries} 条`), { variant: 'success' });
-        }
-      } catch (_) {}
-      pending.forEach((c) => _pocDestState.delete(c.candidate_id));
-      renderPersonalOntology();
-    } catch (err) {
-      _notifyFail(_t('personalOntology.confirm_all_error', '批量确认失败'), err);
-    }
-  }
-
-  async function rejectAll(pending) {
-    if (!pending || !pending.length) return;
-    const reason = await showRejectReasonModal();
-    if (reason === null) return;
-    const candidateIds = pending.map((c) => c.candidate_id);
-    const res = await _pocInvoke('personalOntology.candidates.rejectBatch', { candidateIds, reason: reason || '' });
-    if (!res || res.ok === false) {
-      _notifyFail(_t('personalOntology.reject_all_error', '批量驳回失败'), new Error((res && res.error) || ''));
-      return;
-    }
-    candidateIds.forEach((id) => _pocDestState.delete(id));
-    renderPersonalOntology();
     root.querySelectorAll('.memory-group-field-input').forEach((input) => {
       input.addEventListener('keydown', (e) => {
         if (e.isComposing || e.keyCode === 229 || e.key !== 'Enter') return;

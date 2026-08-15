@@ -1221,6 +1221,7 @@ export async function promoteRecallCandidate(
         ...semantics,
         scope: candidate.suggestedScope,
         ...(scopePolicy ? { scopePolicy } : {}),
+        ...(candidate.spaceId ? { spaceId: candidate.spaceId } : {}),
         status: 'active',
         lifecycleStatus: handoffActor === 'system'
           ? 'automatically_extracted_unverified'
