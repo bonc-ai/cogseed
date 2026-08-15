@@ -98,12 +98,14 @@ function reconcileActions(forecast: WorldModelForecast, episode: KstarEpisodeRec
     return { deltaA: 'unknown', detail };
   }
   const predictedCount = Math.max(1, predictedTools.length + predictedActors.length + forecast.aHat.plan.length);
+  // P2-1: deltaA measures DEVIATION only — extra actions and unexpected
+  // actors are not penalized (they can be innovation/superior execution);
+  // they stay visible in the detail record but do not count as gaps.
   const gapCount = missingTools.length
     + missingActors.length
     + missingPlanSteps.length
     + failedActions.length
-    + (orderMismatch ? 1 : 0)
-    + Math.min(1, unexpectedActors.length);
+    + (orderMismatch ? 1 : 0);
   return {
     deltaA: gapCount === 0 ? 0 : Number((-Math.min(1, gapCount / predictedCount)).toFixed(4)),
     detail,

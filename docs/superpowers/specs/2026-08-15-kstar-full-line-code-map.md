@@ -1,7 +1,7 @@
 # KStar 认知资产闭环：完整代码链路地图
 
 > 日期：2026-08-15
-> 分支：codex/commander-centric-kstar（HEAD `540e5899`）
+> 分支：codex/commander-centric-kstar（HEAD `56e36e0b`，含 develop 合并 + 审计修复）
 > 说明：这条线 = "我们的线"（KStar Commander-Centric 沉淀线）。按链路环节列出每个文件的路径、核心函数、职责。全部代码在仓库本地，用编辑器打开对应文件即可查看。
 
 ---
@@ -104,6 +104,12 @@ cloud/recall/records/projections/       投影
 cloud/recall/records/world-model-forecasts/  预测记录
 cloud/recall/jsonl/usage-records/       使用记录（matchScore）
 ```
+
+## 实机验证结果摘要（截至 2026-08-15）
+
+1. **完整闭环跑通**（00:22）：任务→宿主建任务+投影（确定性）→模型提交 3 候选（forecasts 0→1）→执行→自动复盘（model+inferred，零确认）→2 个旧资产成熟度升 transfer_validated。
+2. **过程经验 lesson 上线**（10:23，`540e5899`）：成功任务也能沉淀（met_expected + lesson + confidence≥0.7）。实机场景（custom_providers 审查）Agent 发现真实问题（as 断言掩盖错误、并发幂等脆弱），但当时 lesson 语义未上线故未沉淀——下次同场景应沉淀。
+3. **审计修复**（10:47，`56e36e0b`）：P0-2 诚实 lifecycleStatus；P1-1 权重常量+待校准标注；P1-3 结果信号不因执行偏差丢失；P1-4 归因降级诚实 unclear。
 
 ## 设计文档
 
