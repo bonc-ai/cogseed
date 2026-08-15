@@ -32,7 +32,7 @@
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">Auto</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">Cognitive assets</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
-        <button class="sidebar-btn" id="spaces-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.spaces">工作空间</span></button>
+        <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-section sidebar-conversations-section">
@@ -1002,45 +1002,9 @@
         </div>
       </section>
 
-      <!-- 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制） -->
-      <section class="panel" id="panel-spaces">
-        <div class="spaces-view" id="spaces-view"></div>
-        <!-- 新建空间弹窗 -->
-        <div class="spaces-modal-overlay" id="spaces-modal" style="display:none">
-          <div class="spaces-modal">
-            <div class="spaces-modal-header">
-              <span data-i18n="spaces.create_title">新建空间</span>
-            </div>
-            <div class="spaces-modal-body">
-              <div class="spaces-form-row">
-                <label data-i18n="spaces.name_label">空间名称</label>
-                <input type="text" id="spaces-modal-name" placeholder="例如：毕业论文" maxlength="60" autocomplete="off" spellcheck="false" />
-              </div>
-              <div class="spaces-form-row">
-                <label data-i18n="spaces.template_label">角色模板（可选）</label>
-                <div class="spaces-template-grid" id="spaces-modal-templates"></div>
-              </div>
-            </div>
-            <div class="spaces-modal-footer">
-              <button class="btn btn-sm" id="spaces-modal-cancel" data-i18n="common.cancel">取消</button>
-              <button class="btn btn-sm btn-primary" id="spaces-modal-create" data-i18n="spaces.create_btn">创建</button>
-            </div>
-          </div>
-        </div>
-        <!-- 主技能选择弹窗 -->
-        <div class="spaces-modal-overlay" id="spaces-main-skill-modal" style="display:none">
-          <div class="spaces-modal">
-            <div class="spaces-modal-header">
-              <span data-i18n="spaces.main_skill_pick_title">选择主技能</span>
-            </div>
-            <div class="spaces-modal-body">
-              <div class="spaces-skill-pick-list" id="spaces-main-skill-list"></div>
-            </div>
-            <div class="spaces-modal-footer">
-              <button class="btn btn-sm" id="spaces-main-skill-cancel" data-i18n="common.cancel">取消</button>
-            </div>
-          </div>
-        </div>
+      <!-- Workspace Center (空间中心：任务/产物/资产三 tab，由 workspace.js 渲染) -->
+      <section class="panel" id="panel-workspace">
+        <div class="ws-view" id="ws-view"></div>
       </section>
 
       <!-- Settings -->

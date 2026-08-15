@@ -288,8 +288,7 @@ function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
     : view === 'skills' ? 'panel-skills'
     : view === 'recall' ? 'panel-recall'
-    : view === 'spaces' ? 'panel-spaces'
-    : view === 'workspace' ? 'panel-workspace'
+    : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
     : view === 'auto' ? 'panel-auto'
@@ -380,8 +379,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'skills' || view === 'personal-ontology' ? 'panel-recall'
                 : view === 'recall' ? 'panel-recall'
                 : view === 'connections' || view === 'connectors' ? 'panel-connections'
-                : view === 'spaces' ? 'panel-spaces'
-                : view === 'workspace' ? 'panel-workspace'
+                : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
@@ -563,14 +561,7 @@ function setView(view, cid, opts = {}) {
         if (typeof loadAutoList === 'function') loadAutoList(true);
       });
     });
-  } else if (view === 'spaces') {
-    currentCid = null;
-    _deferSidebarNavWork('spaces-tab-load', () => {
-      _loadViewFeature('spaces', 'spaces', () => {
-        if (typeof renderSpaces === 'function') renderSpaces();
-      });
-    });
-  } else if (view === 'workspace') {
+  } else if (view === 'spaces' || view === 'workspace') {
     currentCid = null;
     _deferSidebarNavWork('workspace-tab-load', () => {
       _loadViewFeature('workspace', 'workspace', () => {
