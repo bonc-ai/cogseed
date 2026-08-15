@@ -34,7 +34,6 @@
         <button class="sidebar-btn" id="skills-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.skills">Skills</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">Cognitive assets</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
-        <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">我的认知</span></button>
         <button class="sidebar-btn" id="spaces-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.spaces">工作空间</span></button>
       </div>
       <div class="sidebar-conversation-nav">
@@ -426,13 +425,13 @@
         </div>
       </section>
 
-      <!-- Recall -->
+      <!-- Cognitive assets -->
       <section class="panel" id="panel-recall">
         <div class="skills-cognition-console">
           <div class="skills-cognition-surface">
           <header class="skills-cognition-header">
             <div>
-              <h1 data-i18n="cognition.title">Recall</h1>
+              <h1 data-i18n="cognition.title">认知资产</h1>
               <p data-i18n="cognition.subtitle">查看会话沉淀进度与认知资产</p>
             </div>
             <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
@@ -440,7 +439,7 @@
             </button>
           </header>
           <div class="skills-cognition-workspace">
-          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="Recall 导航">
+          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产导航">
             <div class="skills-cognition-tab-group">
               <button type="button" id="skills-cognition-tab-overview" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-overview" data-cognition-page="overview"><span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span></button>
               <button type="button" id="skills-cognition-tab-captures" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-captures" tabindex="-1" data-cognition-page="captures"><span data-ui-icon="clock"></span><span data-i18n="cognition.capture_tasks">沉淀任务</span></button>
@@ -460,7 +459,50 @@
             <div id="skills-cognition-capture-review-body"></div>
           </section>
           <section class="skills-cognition-page" id="skills-cognition-assets" role="tabpanel" aria-labelledby="skills-cognition-tab-assets" data-cognition-page-body="assets" hidden>
-            <div id="skills-cognition-assets-body"></div>
+            <div id="skills-cognition-assets-summary"></div>
+            <section class="recall-personal-ontology-section" id="skills-cognition-personal-ontology" hidden>
+              <div class="recall-asset-section-head">
+                <div>
+                  <h2 data-i18n="cognition.personal_ontology_section">个人本体</h2>
+                  <p data-i18n="cognition.personal_ontology_section_hint">管理身份、角色、偏好与关系等结构化个人信息</p>
+                </div>
+              </div>
+              <div class="recall-personal-ontology-frame">
+                <div class="personal-onto-layout">
+                  <div class="personal-onto-sidebar" id="personal-onto-sidebar">
+                    <div class="personal-onto-nav" id="personal-onto-nav"></div>
+                  </div>
+                  <div class="personal-onto-main">
+                    <div class="personal-onto-main-header" id="personal-onto-main-header"></div>
+                    <div class="personal-onto-main-body" id="personal-onto-main-body"></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section class="recall-formal-assets-section" id="skills-cognition-formal-assets">
+              <div class="recall-asset-section-head recall-personal-memory-head" hidden>
+                <div>
+                  <h2 data-i18n="cognition.personal_memories_section">已沉淀信息</h2>
+                  <p data-i18n="cognition.personal_memories_section_hint">从会话中确认并保存的“关于我”认知资产</p>
+                </div>
+              </div>
+              <div id="skills-cognition-assets-body"></div>
+            </section>
+            <div class="personal-onto-modal-overlay" id="personal-onto-template-library-modal" style="display:none" aria-hidden="true">
+              <div class="personal-onto-modal personal-onto-library-modal" role="dialog" aria-modal="true" aria-labelledby="personal-onto-template-library-title" tabindex="-1">
+                <div class="personal-onto-modal-header">
+                  <span id="personal-onto-template-library-title" data-i18n="personalOntology.template_library">角色模板库</span>
+                  <button type="button" class="modal-close-btn" id="personal-onto-template-library-close" data-i18n-title="common.close" data-i18n-aria-label="common.close" title="关闭" aria-label="关闭"><span data-ui-icon="x"></span></button>
+                </div>
+                <div class="personal-onto-modal-body">
+                  <div class="personal-onto-library-sub muted" data-i18n="personalOntology.template_library_sub">未安装的角色模板，安装后显示在左侧「角色模板」区（最多 3 个）</div>
+                  <div class="personal-onto-library-list" id="personal-onto-template-library-list"></div>
+                </div>
+                <div class="personal-onto-modal-footer">
+                  <button class="btn btn-sm" id="personal-onto-template-library-cancel" data-i18n="common.close">关闭</button>
+                </div>
+              </div>
+            </div>
           </section>
           </main>
           </div>
@@ -1089,57 +1131,6 @@
         </div>
       </section>
 
-
-      <!-- Personal Ontology Candidates -->
-      <section class="panel" id="panel-personal-ontology">
-        <div class="personal-onto-layout">
-          <!-- 左栏：文件列表（候选 / 角色模板 / 记忆分组）资料库风格 -->
-          <div class="personal-onto-sidebar" id="personal-onto-sidebar">
-            <div class="personal-onto-sidebar-header">
-              <span class="personal-onto-sidebar-title" data-i18n="personalOntology.title">个人本体</span>
-              <span class="personal-onto-sidebar-actions" id="personal-onto-sidebar-actions"></span>
-            </div>
-            <div class="personal-onto-nav" id="personal-onto-nav"></div>
-          </div>
-          <!-- 右栏：内容（候选详情 / 分组 md 内容） -->
-          <div class="personal-onto-main">
-            <div class="personal-onto-main-header" id="personal-onto-main-header"></div>
-            <div class="personal-onto-main-body" id="personal-onto-main-body"></div>
-          </div>
-        </div>
-        <!-- Reject reason modal -->
-        <div class="personal-onto-modal-overlay" id="personal-onto-modal" style="display:none">
-          <div class="personal-onto-modal">
-            <div class="personal-onto-modal-header">
-              <span data-i18n="personalOntology.reject_reason_title">驳回原因</span>
-            </div>
-            <div class="personal-onto-modal-body">
-              <textarea id="personal-onto-modal-reason" rows="3" placeholder="可选，填写驳回原因..." data-i18n-placeholder="personalOntology.reject_reason_placeholder"></textarea>
-            </div>
-            <div class="personal-onto-modal-footer">
-              <button class="btn btn-sm" id="personal-onto-modal-cancel" data-i18n="common.cancel">取消</button>
-              <button class="btn btn-sm btn-primary" id="personal-onto-modal-ok" data-i18n="personalOntology.reject_btn">驳回</button>
-            </div>
-          </div>
-        </div>
-        <!-- 角色模板库弹窗：未安装模板列表 -->
-        <div class="personal-onto-modal-overlay" id="personal-onto-template-library-modal" style="display:none">
-          <div class="personal-onto-modal personal-onto-library-modal">
-            <div class="personal-onto-modal-header">
-              <span data-i18n="personalOntology.template_library">角色模板库</span>
-              <button type="button" class="modal-close-btn" id="personal-onto-template-library-close" aria-label="Close">×</button>
-            </div>
-            <div class="personal-onto-modal-body">
-              <div class="personal-onto-library-sub muted" data-i18n="personalOntology.template_library_sub">未安装的角色模板，安装后显示在左侧「角色模板」区（最多 3 个）</div>
-              <div class="personal-onto-library-list" id="personal-onto-template-library-list"></div>
-            </div>
-            <div class="personal-onto-modal-footer">
-              <button class="btn btn-sm" id="personal-onto-template-library-cancel" data-i18n="common.close">关闭</button>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <!-- 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制） -->
       <section class="panel" id="panel-spaces">
         <div class="spaces-view" id="spaces-view"></div>
@@ -1725,19 +1716,6 @@
       <div class="modal-body settings-ccswitch-body" id="settings-ccswitch-preview-modal-body"></div>
       <div class="form-msg" id="settings-ccswitch-preview-modal-status"></div>
       <div class="modal-actions" id="settings-ccswitch-preview-modal-actions"></div>
-    </div>
-  </div>
-
-  <div class="modal-overlay" id="personal-onto-modal" hidden>
-    <div class="modal modal-standard" role="dialog" aria-modal="true" aria-labelledby="personal-onto-modal-title">
-      <h3 class="modal-title" id="personal-onto-modal-title" data-i18n="personalOntology.reject_title">Reject candidate</h3>
-      <div class="modal-body">
-        <textarea class="form-input" id="personal-onto-modal-reason" rows="4" data-i18n-placeholder="personalOntology.reject_placeholder"></textarea>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" id="personal-onto-modal-cancel" data-i18n="common.cancel">Cancel</button>
-        <button class="btn btn-danger" id="personal-onto-modal-ok" data-i18n="common.confirm">Confirm</button>
-      </div>
     </div>
   </div>
 
