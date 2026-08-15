@@ -293,7 +293,14 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
   const actionMessages = messages.filter((message) => message.from !== 'user' && !message.system_kind);
   const resultMessages = actionMessages.filter((message) => !message.dispatch && !message.plan_announcement && !message.kstar_dispatch_narration);
   const finalMessage = [...resultMessages].reverse().find((message) => compactText(message.text)) || [...actionMessages].reverse().find((message) => compactText(message.text));
-  const userGoal = compactText(userMessages[0]?.text, MAX_TEXT) || `Conversation ${input.conversationId}`;
+  // Host control messages (kstar_review_request etc.) arrive as from=user
+  // with EMPTY text and must never become the episode's user goal — that
+  // fallback produced "Conversation <cid>" episodes during the closure
+  // deadloop. Take the first user message with real text instead.
+  const userGoal = compactText(
+    userMessages.find((message) => compactText(message.text))?.text,
+    MAX_TEXT,
+  ) || `Conversation ${input.conversationId}`;
   const producedFiles = [...new Set(messages.flatMap((message) => message.produced || []).filter((value) => typeof value === 'string').map((file) => path.basename(file)))];
   // Five-source evidence context (PRD v2 taxonomy): the delta-r/delta-a
   // reasoning evolves FROM all five cognition sources, not just the

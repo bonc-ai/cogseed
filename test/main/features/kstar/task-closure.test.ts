@@ -228,6 +228,28 @@ describe('KSTAR task closure', () => {
     expect(episode.s.conversationSummary).not.toContain('授权已确认');
   });
 
+  it('uses the first REAL user message as the group episode goal, ignoring empty host-control messages', async () => {
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const episode = builder.buildGroupKstarEpisode({
+      userId: 'closure-user',
+      runId: 'run-empty-control',
+      conversationId: 'cid-empty-control',
+      status: 'completed',
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        // Host control message (kstar_review_request) — from=user but empty
+        // text; must not become the episode goal.
+        { id: 'msg-control', from: 'user', text: '', ts: '2026-08-05T00:00:01.000Z' },
+        { id: 'msg-user', from: 'user', text: 'Review OAuth callback handling', ts: '2026-08-05T00:00:02.000Z' },
+        { id: 'msg-commander', from: 'commander', text: 'Reviewed.', ts: '2026-08-05T00:00:40.000Z' },
+      ],
+    });
+
+    expect(episode.t.userGoal).toBe('Review OAuth callback handling');
+    expect(episode.t.userGoal).not.toContain('Conversation');
+  });
+
   it('persists episode and an empty extraction run when no learning signal exists', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const first = await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-closure', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
