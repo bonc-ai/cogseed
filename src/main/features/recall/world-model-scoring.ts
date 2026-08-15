@@ -170,8 +170,11 @@ export function validateWorldModelCandidate(
   // from the committed projection knowledge instead of the model's guesses.
   let links: WorldModelCausalLink[] = [];
   try { links = causalLinks(raw.causalLinks, aHat.plan.length, context); } catch { links = []; }
-  const riskRuleRefs = texts(raw.riskRuleRefs, 'risk_rule_refs', 20, 240, true)
-    .filter((ref) => context.allowedRuleRefs.has(ref));
+  // riskRuleRefs from the model are guesses (live: it emitted asset ids).
+  // Drop non-string items and unknown refs instead of rejecting.
+  let riskRuleRefs: string[] = [];
+  try { riskRuleRefs = texts(raw.riskRuleRefs, 'risk_rule_refs', 20, 240, true); } catch { riskRuleRefs = []; }
+  riskRuleRefs = riskRuleRefs.filter((ref) => context.allowedRuleRefs.has(ref));
   const risksById = new Map(context.predictedRisks.map((risk) => [risk.ruleId, risk]));
   return {
     id,
