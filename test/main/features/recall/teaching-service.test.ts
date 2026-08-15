@@ -91,12 +91,41 @@ describe('User teaching signals', () => {
     await teaching.revokeUserTeachingSignal('user-a', signal!.id);
 
     await expect(assets.readAbilityAsset('user-a', asset.id)).resolves.toMatchObject({
-      status: 'active',
+      status: 'paused',
       maturity: 'bud',
     });
-    expect(await assets.listAbilityAssetAudit('user-a', asset.id)).toContainEqual(expect.objectContaining({
+    const audit = await assets.listAbilityAssetAudit('user-a', asset.id);
+    expect(audit).toContainEqual(expect.objectContaining({
       action: 'maturity_downgraded',
       note: `evidence_revoked:user_teaching_signal:${signal!.id}`,
     }));
+    expect(audit).toContainEqual(expect.objectContaining({
+      action: 'paused',
+      note: `evidence_revoked:user_teaching_signal:${signal!.id}`,
+    }));
+    // Paused assets no longer enter injection (injection only reads active).
+    expect(assets.readAbilityAsset).toBeDefined();
+  });
+
+  it('keeps the system pause idempotent across repeated revocations', async () => {
+    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const signal = await teaching.recordTeachingSignalAfterMemoryWrite('user-a', {
+      conversationId: 'conv-a',
+      messageId: 'message-a',
+      userMessage: '请记住：所有结论都附来源。',
+      memoryContent: '所有结论都附来源。',
+      memoryScope: 'project',
+    });
+    const candidate = await candidates.readRecallCandidate('user-a', signal!.candidateIds[0]);
+    await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+
+    await teaching.revokeUserTeachingSignal('user-a', signal!.id);
+    // The teaching candidate itself is promoted: the asset stays paused once
+    // (idempotent second revoke changes nothing).
+    await teaching.revokeUserTeachingSignal('user-a', signal!.id);
+    const asset = (await assets.listAbilityAssets('user-a'))[0];
+    expect(asset.status).toBe('paused');
   });
 });

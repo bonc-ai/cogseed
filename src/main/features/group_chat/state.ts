@@ -1162,20 +1162,6 @@ export async function setPendingProjectionDispatch(
   });
 }
 
-export async function updatePendingProjectionDispatch(
-  uid: string,
-  cid: string,
-  update: (current: NonNullable<StateFile['pending_projection_dispatch']>) => NonNullable<StateFile['pending_projection_dispatch']>,
-): Promise<StateFile> {
-  return _stateLock(uid, cid).runExclusive(async () => {
-    const s = await readState(uid, cid);
-    if (!s.pending_projection_dispatch) throw new Error('pending projection dispatch not found');
-    s.pending_projection_dispatch = update(s.pending_projection_dispatch);
-    await writeStateRaw(uid, cid, s);
-    return s;
-  });
-}
-
 export async function clearPendingProjectionDispatch(uid: string, cid: string): Promise<StateFile> {
   return _stateLock(uid, cid).runExclusive(async () => {
     const s = await readState(uid, cid);

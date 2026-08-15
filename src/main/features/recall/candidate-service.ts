@@ -934,7 +934,16 @@ export async function promoteRecallCandidate(
         reviewDecisionId: decision.decision_id,
         type: candidate.suggestedType,
         title: candidate.summary || candidate.judgment.slice(0, 120),
-        statement: candidate.judgment,
+        // Substantive statement: judgment (what to retain) + value (why it
+        // matters / future value) when present — the value clause is the
+        // reusable insight, and a bare conclusion sentence alone is too thin
+        // to stand as a method/template asset body.
+        statement: [
+          candidate.judgment,
+          ...(candidate.value?.trim() && candidate.value !== candidate.judgment
+            ? [candidate.value.trim()]
+            : []),
+        ].join('\n').slice(0, 4_000),
         evidenceRefs: candidate.evidenceRefs,
         ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
         ...(candidate.learningProvenance ? { learningProvenance: candidate.learningProvenance } : {}),

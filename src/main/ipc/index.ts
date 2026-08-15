@@ -40,8 +40,7 @@ import * as recallProjection from '../features/recall/context-projection';
 import * as recallProjectionCard from '../features/recall/projection-card';
 import * as recallProjectionMessage from '../features/recall/projection-message';
 import * as recallTimeline from '../features/recall/timeline-service';
-import * as kstarKnowledgeRoute from '../features/kstar/knowledge-route-service';
-import * as kstarPreExecution from '../features/kstar/pre-execution-service';
+import * as kstarProjectionDecision from '../features/kstar/projection-decision-service';
 import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
@@ -2310,13 +2309,33 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       }),
     };
   },
-  'recall.projections.confirm': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection confirm'); return { ok: true, ...(await kstarPreExecution.confirmProjectionAndPrepareDispatch(ctx.userId, { projectionId, cid })) }; },
-  'recall.projections.retryForecast': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection retry'); return { ok: true, ...(await kstarPreExecution.retryProjectionForecast(ctx.userId, { projectionId, cid })) }; },
+  'recall.projections.confirm': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection confirm'); return { ok: true, ...(await kstarProjectionDecision.confirmProjectionAndResumeCommander(ctx.userId, { projectionId, cid })) }; },
+  'recall.projections.retryForecast': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection retry'); return { ok: true, ...(await kstarProjectionDecision.retryProjectionInCommander(ctx.userId, { projectionId, cid })) }; },
   'recall.projections.revise': async ({ projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection revision'); return { ok: true, projection: await recallProjection.reviseContextProjection(ctx.userId, projectionId, { ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }) }; },
   'recall.projections.availableAssets': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, assets: await recallProjection.listAvailableProjectionAssets(ctx.userId, projectionId) }; },
   'recall.projections.confirmAndApproveWake': async ({ cid, projectionId, wakeRequestId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || !safeId(wakeRequestId)) throw new Error('invalid projection wake confirmation'); return recallProjection.confirmAndApproveWake(ctx.userId, { cid, projectionId, wakeRequestId }); },
   'recall.projections.defer': async ({ projectionId, note } = {}, ctx) => { if (!safeId(projectionId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.deferContextProjection(ctx.userId, projectionId, note) }; },
-  'recall.projections.reject': async ({ projectionId, note } = {}, ctx) => { if (!safeId(projectionId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.rejectContextProjection(ctx.userId, projectionId, note) }; },
+  'recall.projections.reject': async ({ projectionId, cid, note } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, ...(await kstarProjectionDecision.rejectProjectionAndResumeCommander(ctx.userId, { projectionId, cid, note })) }; },
+  'kstar.review.confirm': async ({ episodeId, verdict } = {}, ctx) => {
+    if (!safeId(episodeId) || !['met', 'partial', 'not_met', 'skip'].includes(String(verdict))) {
+      return { ok: false, error: 'invalid kstar review input' };
+    }
+    try {
+      await kstarTaskClosure.confirmKstarReview(ctx.userId, episodeId, { verdict });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.review.read': async ({ episodeId } = {}, ctx) => {
+    if (!safeId(episodeId)) return { ok: false, error: 'invalid kstar review episode id' };
+    try {
+      const review = await kstarReviewService.readKstarReview(ctx.userId, episodeId);
+      return { ok: true, review: review ? { reviewState: review.reviewState } : null };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
   'recall.projections.card': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, card: await recallProjectionCard.buildProjectionCard(ctx.userId, projectionId) }; },
   'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId } } : {}) })).msg?.id || '' }) })) }; },
   'recall.projections.previewAndPostCard': async ({ cid, taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || !safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCard(ctx.userId, { cid, taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })) }; },
@@ -4106,6 +4125,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       shell.showItemInFolder(norm);
     }
     return { path: norm };
+  },
+
+  // Open one validated output with the OS default application. This is the
+  // fallback for files that exist but cannot be previewed safely in-app.
+  'workspace.openFileExternal': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { throw new Error('file not found'); }
+    if (!st.isFile()) throw new Error('path is not a file');
+    const openErr = await shell.openPath(norm);
+    if (openErr) throw new Error(openErr);
+    return { ok: true, path: norm };
   },
 
   // Lightweight existence check for renderer previews. Same scope as

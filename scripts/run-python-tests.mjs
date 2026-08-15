@@ -20,9 +20,13 @@ if (!resolution.selected) {
 
 const args = process.argv.slice(2);
 if (args.length === 0) args.push('resources/builtin');
-const result = spawnSync(resolution.selected, ['-m', 'pytest', ...args], {
+const result = spawnSync(resolution.selected, ['-B', '-m', 'pytest', ...args], {
   cwd: appRoot,
   stdio: 'inherit',
+  env: {
+    ...process.env,
+    PYTHONDONTWRITEBYTECODE: '1',
+  },
 });
 if (result.error) {
   console.error(`[run-python-tests] failed to start pytest: ${result.error.message}`);

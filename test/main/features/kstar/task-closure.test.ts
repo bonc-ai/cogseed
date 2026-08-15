@@ -52,15 +52,78 @@ async function seedLearningReview(
   });
 }
 
+describe('KSTAR completion evidence merge', () => {
+  it('merges Commander-submitted completion evidence into a text-less group episode', async () => {
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-evidence', title: 'Evidence task' });
+    const requirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id,
+      conversationId: 'cid-evidence',
+      userMessageIds: ['msg-evidence'],
+      title: 'Evidence task',
+      goalText: 'Produce the report',
+      rHat: { summary: 'A report is produced', acceptanceSignals: ['report exists'], source: 'user_message', confidence: 1 },
+    });
+    requirement.completionEvidence = {
+      finalStatus: 'completed',
+      finalText: 'Report written to disk.',
+      producedFiles: ['report.md'],
+      acceptanceEvidence: ['report exists'],
+    };
+    await store.replaceKstarTask('closure-user', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id });
+    await store.replaceKstarRequirement('closure-user', requirement);
+    await store.writeConversationTaskState('closure-user', {
+      ...store.createInitialConversationTaskState('closure-user', 'cid-evidence'),
+      currentTaskId: task.id,
+      currentRequirementId: requirement.id,
+      taskComplete: false,
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-evidence', conversationId: 'cid-evidence', status: 'completed',
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-evidence', from: 'user', text: 'Produce the report', ts: '2026-08-05T00:00:01.000Z' },
+        { id: 'msg-agent-a', from: 'commander', text: 'finished', ts: '2026-08-05T00:00:30.000Z' },
+      ],
+      createdAt: '2026-08-05T00:02:00.000Z',
+    });
+
+    const episodes = await import('../../../../src/main/features/kstar/episode-store');
+    const records = await episodes.listKstarJsonRecords('closure-user', 'episodes');
+    expect(records).toHaveLength(1);
+    expect(records[0].r).toMatchObject({
+      finalText: 'Report written to disk.',
+      producedFiles: ['report.md'],
+    });
+    const reviews = await import('../../../../src/main/features/kstar/review-service');
+    const review = await reviews.readKstarReview('closure-user', records[0].id as string);
+    expect(review?.actualResult).toContain('Report written to disk.');
+  });
+});
+
 describe('KSTAR task closure', () => {
 
 
   it('attaches group terminal episodes to the open requirement without completing the task', async () => {
-    const state = await import('../../../../src/main/features/kstar/requirement-state');
     const store = await import('../../../../src/main/features/kstar/requirement-store');
-    await state.routeKstarUserMessage('closure-user', {
-      conversationId: 'cid-phase2', messageId: 'msg-user-a', text: 'Review OAuth callback handling',
-    }, { routerOptions: { classify: async () => ({ intent: 'new', confidence: 0.95, reason: 'new task', requirementText: 'Review OAuth callback handling' }) } });
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-phase2', title: 'Review OAuth callback handling' });
+    const requirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id,
+      conversationId: 'cid-phase2',
+      userMessageIds: ['msg-user-a'],
+      title: 'Review OAuth callback handling',
+      goalText: 'Review OAuth callback handling',
+    });
+    await store.replaceKstarTask('closure-user', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id });
+    await store.replaceKstarRequirement('closure-user', requirement);
+    await store.writeConversationTaskState('closure-user', {
+      ...store.createInitialConversationTaskState('closure-user', 'cid-phase2'),
+      currentTaskId: task.id,
+      currentRequirementId: requirement.id,
+      taskComplete: false,
+    });
     const before = await store.readConversationTaskState('closure-user', 'cid-phase2');
     expect(before?.currentRequirementId).toBeTruthy();
 
@@ -184,11 +247,13 @@ describe('KSTAR task closure', () => {
       review: {
         expectedResult: builtEpisode.t.userGoal,
         actualResult: 'Report created and verification passed.',
-        deltaR: 0 as const,
-        deltaA: 0 as const,
-        outcome: 'met_expected' as const,
-        attribution: 'unclear' as const,
-        reason: 'Recorded verification passed.',
+        // A real deviation: met_expected with ~0 delta is NOT a lesson
+        // (noise gate), so the fixture carries a measurable delta.
+        deltaR: 0.3 as const,
+        deltaA: 0.1 as const,
+        outcome: 'better_than_expected' as const,
+        attribution: 'execution_gap' as const,
+        reason: 'The verified workflow is worth reusing for report tasks.',
         confidence: 0.95,
         evidenceRefs: builtEpisode.evidenceRefs,
       },
@@ -204,10 +269,123 @@ describe('KSTAR task closure', () => {
 
     expect(result.review).toMatchObject({
       reviewState: 'inferred', inferenceMethod: 'deterministic', needsConfirmation: false,
-      outcome: 'met_expected', deltaR: 0,
+      outcome: 'better_than_expected', deltaR: 0.3,
     });
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({ status: 'pending_review', learningSignal: { outcome: 'met_expected', deltaR: 0 } });
+    expect(result.candidates[0]).toMatchObject({ status: 'pending_review', learningSignal: { outcome: 'better_than_expected', deltaR: 0.3 } });
+  });
+
+  it('evolves delta reasoning from all five cognition sources in the episode evidence', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+    // Seed an active teaching signal bound to this conversation (a "记住"
+    // intent message produces a user_teaching_signal source).
+    await teaching.recordTeachingSignalAfterMemoryWrite('closure-user', {
+      conversationId: 'cid-evidence',
+      messageId: 'msg-teach-five',
+      userMessage: '记住：Always validate OAuth state before exchanging the code.',
+      memoryContent: 'Always validate OAuth state before exchanging the code.',
+      memoryScope: 'personal',
+    });
+
+    const inferred = async (_userId: string, builtEpisode: any) => ({
+      review: {
+        expectedResult: builtEpisode.t.userGoal,
+        actualResult: 'Report created.',
+        deltaR: 0.3 as const,
+        deltaA: 0.1 as const,
+        outcome: 'better_than_expected' as const,
+        attribution: 'execution_gap' as const,
+        reason: 'Reusable workflow.',
+        confidence: 0.9,
+        evidenceRefs: builtEpisode.evidenceRefs,
+      },
+      reviewState: 'inferred' as const,
+      inferenceMethod: 'deterministic' as const,
+      needsConfirmation: false,
+    });
+
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-five',
+      conversationId: 'cid-evidence',
+      status: 'completed',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [{
+        id: 'msg-five', ts: new Date().toISOString(), from: 'user', text: 'Produce the report',
+      }, {
+        id: 'msg-five-result', ts: new Date().toISOString(), from: 'writer', text: 'Done.',
+        produced: ['report.md'],
+        artifacts: [{ id: 'art-five', title: 'report.md' }],
+      }],
+      inferReview: inferred,
+    });
+
+    const kinds = result.episode.evidenceRefs.map((ref) => ref.kind);
+    expect(kinds).toContain('conversation');
+    expect(kinds).toContain('user_teaching_signal');
+    // artifact_file replaces the legacy artifact kind in the v2 taxonomy.
+    expect(kinds).toContain('artifact_file');
+  });
+
+  it('precipitated assets carry the full five-source evidence context', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+    await teaching.recordTeachingSignalAfterMemoryWrite('closure-user', {
+      conversationId: 'cid-five-evidence',
+      messageId: 'msg-five-evi',
+      userMessage: '记住：OAuth 回调必须先校验 state。',
+      memoryContent: 'OAuth 回调必须先校验 state。',
+      memoryScope: 'personal',
+    });
+    const inferred = async (_userId: string, builtEpisode: any) => ({
+      review: {
+        expectedResult: builtEpisode.t.userGoal,
+        actualResult: 'Report produced.',
+        deltaR: -0.4 as const,
+        deltaA: 'unknown' as const,
+        outcome: 'worse_than_expected' as const,
+        attribution: 'rule_gap' as const,
+        reason: 'State check was missing.',
+        confidence: 0.9,
+        lesson: 'OAuth 回调必须先校验 state 再交换 code。',
+        evidenceRefs: builtEpisode.evidenceRefs,
+      },
+      reviewState: 'inferred' as const,
+      inferenceMethod: 'model' as const,
+      needsConfirmation: false,
+    });
+
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-five-evi',
+      conversationId: 'cid-five-evidence',
+      status: 'completed',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [{
+        id: 'msg-five-evi-user', ts: new Date().toISOString(), from: 'user', text: 'Fix OAuth state handling',
+      }, {
+        id: 'msg-five-evi-result', ts: new Date().toISOString(), from: 'writer', text: 'Done.',
+        produced: ['report.md'],
+        artifacts: [{ id: 'art-five-evi', title: 'report.md' }],
+      }],
+      inferReview: inferred,
+    });
+
+    // The lesson-driven proposal precipitates with the full evidence context.
+    expect(result.candidates.length).toBeGreaterThanOrEqual(1);
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const all = await assets.listAbilityAssets('closure-user');
+    const fresh = all.find((a) => a.candidateId?.startsWith('direct-'));
+    expect(fresh).toBeTruthy();
+    const kinds = (fresh?.evidenceRefs || []).map((ref) => ref.kind);
+    expect(kinds).toContain('conversation');
+    expect(kinds).toContain('user_teaching_signal');
+    expect(kinds).toContain('artifact_file');
+    // The reasoned lesson is the asset body (not a template sentence).
+    expect(fresh?.statement).toContain('OAuth 回调必须先校验 state');
   });
 
   it('confirms a lightweight user verdict and reconciles candidate extraction idempotently', async () => {
@@ -274,6 +452,55 @@ describe('KSTAR task closure', () => {
   });
 });
 
+describe('KSTAR direct experience asset line', () => {
+  it('precipitates verified workflow experience directly as an ability asset without review', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+    await seedLearningReview('closure-user', seededEpisode);
+
+    const result = await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+
+    expect(result.episode.id).toBe('kse-run-direct');
+    const all = await assets.listAbilityAssets('closure-user');
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({
+      status: 'active',
+      maturity: 'seed',
+      type: 'skill_method',
+      version: '1',
+    });
+    expect(all[0].statement).toContain('verified workflow');
+    expect(all[0].evidenceRefs.some((ref) => ref.kind === 'execution' && ref.id === 'kse-run-direct')).toBe(true);
+    // The existing review line stays intact: the same experience is still a pending candidate.
+    const pending = await candidates.listRecallCandidates('closure-user');
+    expect(pending.some((candidate) => candidate.status === 'pending_review' && candidate.suggestedType === 'skill_method')).toBe(true);
+  });
+
+  it('does not duplicate the direct asset across repeated closure delivery', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+    await seedLearningReview('closure-user', seededEpisode);
+
+    await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+    await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+
+    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(1);
+  });
+
+  it('precipitates nothing when no learning signal exists', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-no-signal-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+
+    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(0);
+  });
+});
+
 describe('KSTAR group terminal subscriber', () => {
   it('captures one bounded group terminal event and ignores duplicate delivery', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
@@ -299,7 +526,7 @@ describe('KSTAR group terminal subscriber', () => {
 
 
 
-  it('publishes one lightweight confirmation card when inferred review needs user confirmation', async () => {
+  it('never posts a review confirmation card — self-evolution is agent-implemented', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     let listener: ((event: any) => void) | undefined;
     const published: any[] = [];
@@ -317,10 +544,9 @@ describe('KSTAR group terminal subscriber', () => {
     listener?.({ run_id: 'run-review-card', user_id: 'group-user', conversation_id: 'cid-review', status: 'completed', started_at_ms: 0, finished_at_ms: 1 });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(published).toEqual([expect.objectContaining({
-      userId: 'group-user', conversationId: 'cid-review',
-      review: expect.objectContaining({ id: 'ksr-kse-run-review-card', needsConfirmation: true }),
-    })]);
+    // The user cannot verify the expected-vs-actual comparison (they made no
+    // prediction and do not observe execution internals) — no card is posted.
+    expect(published).toEqual([]);
     stop();
   });
 

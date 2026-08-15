@@ -149,6 +149,48 @@ describe('KSTAR has one semantic core', () => {
     }
   });
 
+  it('keeps the Commander-centric KStar path free of pre-routing and independent runners', () => {
+    const rootDir = path.resolve(import.meta.dirname, '../..');
+    const kstarDir = path.join(rootDir, 'src/main/features/kstar');
+    const groupChatFile = path.join(rootDir, 'src/main/features/group_chat/bus.ts');
+    const busSource = fs.readFileSync(groupChatFile, 'utf8');
+    const requirementRouterPath = path.join(kstarDir, 'requirement-router.ts');
+
+    const kstarSources = readProductionFiles(kstarDir).map((file) => file.content);
+
+    expect(busSource, 'bus must not call the removed pre-Commander router').not.toContain('routeKstarUserMessage');
+    expect(fs.existsSync(requirementRouterPath), 'requirement-router.ts must be deleted').toBe(false);
+    expect(
+      fs.existsSync(path.join(kstarDir, 'world-model-bridge.ts')),
+      'world-model-bridge.ts must be deleted',
+    ).toBe(false);
+    // No independent model runner may be constructed by the remaining routing
+    // / Forecast host modules (the deleted bridge file is skipped when absent).
+    const forbiddenRunnerFiles = [
+      'src/main/features/kstar/requirement-router.ts',
+      'src/main/features/recall/world-model.ts',
+      'src/main/features/kstar/world-model-bridge.ts',
+    ];
+    for (const relative of forbiddenRunnerFiles) {
+      const file = path.join(rootDir, relative);
+      if (!fs.existsSync(file)) continue;
+      const source = fs.readFileSync(file, 'utf8');
+      expect(source, `${relative} must not build a runner`).not.toMatch(/\bbuildRunner\s*\(/);
+      expect(source, `${relative} must not call chatWithModel`).not.toMatch(/\bchatWithModel\s*\(/);
+      expect(source, `${relative} must not call streamChatWithModel`).not.toMatch(/\bstreamChatWithModel\s*\(/);
+    }
+    // Independent turn-routing / Forecast runners are removed; the post-execution
+    // Review inference service (review-inference.ts) is intentionally excluded
+    // from the runner assertion and stays covered by its own tests.
+    for (const file of readProductionFiles(kstarDir)) {
+      expect(file.content, 'kstar production must not call the removed intent router')
+        .not.toMatch(/routeRequirementIntent\s*\(/);
+      if (path.basename(file.path) === 'review-inference.ts') continue;
+      expect(file.content, 'kstar production must not build an independent runner')
+        .not.toMatch(/buildRunner\s*\(/);
+    }
+  });
+
   it('does not expose legacy KStarRun production entrypoint names', () => {
     const files = [
       path.join(root, 'src/main/ipc/index.ts'),

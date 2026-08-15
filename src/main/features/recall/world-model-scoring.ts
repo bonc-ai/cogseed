@@ -65,7 +65,7 @@ export function recomputeCandidateScore(value: unknown): WorldModelCandidateScor
 }
 
 function intervention(raw: Record<string, unknown>, context: WorldModelCandidateValidationContext): WorldModelIntervention {
-  const expectedTools = texts(raw.expectedTools, 'expected_tools', MAX_TOOLS, 120);
+  const expectedTools = texts(raw.expectedTools, 'expected_tools', MAX_TOOLS, 120, true);
   if (context.allowedTools) {
     for (const tool of expectedTools) {
       if (!context.allowedTools.has(tool)) throw new Error(`unavailable_tool:${tool}`);
