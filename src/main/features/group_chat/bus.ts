@@ -3709,7 +3709,7 @@ async function runActorTurnBody(
       // 之后 hostRouteTaskTurn 的 judge 判定 continuation 决定任务去留。
       const { cancelAutoClose } = await import('../kstar/task-closure');
       await cancelAutoClose(uid, cid);
-      const routing = await hostRouteTaskTurn(uid, cid, item.sourceMessageText, item.msgId, turnProjectId);
+      const routing = await hostRouteTaskTurn(uid, cid, item.sourceMessageText, item.msgId, turnSpaceId ?? turnProjectId);
       // The hint must reflect what the host ACTUALLY did. The old hint
       // unconditionally claimed "the host has already tracked this task"
       // while the routing judgement could silently no-op (parser/prompt
@@ -3734,7 +3734,7 @@ async function runActorTurnBody(
         item.llmPayload,
         item.fromActorId,
         item.attachments,
-        turnProjectId,
+        turnSpaceId ?? turnProjectId,
         item.msgId,
         () => commanderResolvedRuntime,
         item.sourceMessageText,
@@ -3865,7 +3865,7 @@ async function runActorTurnBody(
           cid,
           taskRunId: item.turnId,
           taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
-          ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+          ...((turnSpaceId ?? turnProjectId) ? { workspaceId: turnSpaceId ?? turnProjectId } : {}),
           ...(item.committedProjectionId ? { committedProjectionId: item.committedProjectionId } : {}),
           ...(item.forecastId ? { forecastId: item.forecastId } : {}),
         });
