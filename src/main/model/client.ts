@@ -199,6 +199,11 @@ export interface ChatOptions {
    *  resolution picks up the project-scoped selection. Caller (group_chat
    *  or skill/agent edit) resolves it once before invoking. */
   projectId?: string;
+  /** 空间化重构：会话绑定的空间 id（会话直接挂空间）。Threaded through to
+   *  the core-agent runner（params.spaceId），gate 空间指令 / 角色画像 /
+   *  context-policy 系统提示词块注入 + 空间 memory 层级与 instructions 工具。
+   *  由 group_chat 每 turn 从 conversation.space_id 解析一次传入。 */
+  spaceId?: string;
   /** Extra absolute directory roots whitelisted for file-tools on top of
    *  workspace + attachment. Read AND write are permitted under these roots.
    *  Per-skill edit chats pass the skill dir so the LLM can read / search /

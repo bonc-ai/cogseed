@@ -30,11 +30,11 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-async function setupProject(name: string) {
-  const projects = await import('../../../src/main/features/projects');
-  const result = await projects.createProject(UID, name);
-  if (!result.ok) throw new Error(`create project failed: ${result.error}`);
-  return result.project.project_id;
+async function setupSpace(name: string) {
+  const spaces = await import('../../../src/main/features/spaces');
+  const result = await spaces.createSpace(UID, { name });
+  if (!result.ok) throw new Error(`create space failed: ${result.error}`);
+  return result.space.space_id;
 }
 
 async function call(
@@ -46,10 +46,10 @@ async function call(
   return invokeHandlers[channel](payload, { userId });
 }
 
-describe('ipc/memory project scope', () => {
-  it('round-trips add, list, replace, and remove within the authorized project', async () => {
-    const pid = await setupProject('Alpha');
-    const scope = { target: 'project', projectId: pid };
+describe('ipc/memory space scope', () => {
+  it('round-trips add, list, replace, and remove within the authorized space', async () => {
+    const sid = await setupSpace('Alpha');
+    const scope = { target: 'space', spaceId: sid };
 
     expect(await call('memory.add', { ...scope, content: 'Checkout uses Stripe.' })).toMatchObject({
       ok: true,
@@ -67,30 +67,30 @@ describe('ipc/memory project scope', () => {
     });
   });
 
-  it('keeps project memories isolated from other projects and users', async () => {
-    const first = await setupProject('First');
-    const second = await setupProject('Second');
-    await call('memory.add', { target: 'project', projectId: first, content: 'first-only' });
+  it('keeps space memories isolated from other spaces and users', async () => {
+    const first = await setupSpace('First');
+    const second = await setupSpace('Second');
+    await call('memory.add', { target: 'space', spaceId: first, content: 'first-only' });
 
-    expect(await call('memory.list', { target: 'project', projectId: second })).toMatchObject({ entries: [] });
-    await expect(call('memory.list', { target: 'project', projectId: first }, 'another-user'))
-      .rejects.toThrow('project_not_found');
+    expect(await call('memory.list', { target: 'space', spaceId: second })).toMatchObject({ entries: [] });
+    await expect(call('memory.list', { target: 'space', spaceId: first }, 'another-user'))
+      .rejects.toThrow('space_not_found');
   });
 
-  it('rejects missing, unknown, and traversal project ids without creating orphan storage', async () => {
-    await expect(call('memory.list', { target: 'project' })).rejects.toThrow(/projectId is required/);
+  it('rejects missing, unknown, and traversal space ids without creating orphan storage', async () => {
+    await expect(call('memory.list', { target: 'space' })).rejects.toThrow(/spaceId is required/);
     await expect(call('memory.add', {
-      target: 'project',
-      projectId: 'p_ffffffffffff',
+      target: 'space',
+      spaceId: 'sp_ffffffffffff',
       content: 'must not persist',
-    })).rejects.toThrow('project_not_found');
+    })).rejects.toThrow('space_not_found');
     await expect(call('memory.reveal', {
-      target: 'project',
-      projectId: 'p_ffffffffffff',
-    })).rejects.toThrow('project_not_found');
-    expect(fs.existsSync(path.join(tmpDir, UID, 'cloud', 'projects', 'p_ffffffffffff'))).toBe(false);
-    await expect(call('memory.list', { target: 'project', projectId: '../escape' }))
-      .rejects.toThrow(/invalid project id/);
+      target: 'space',
+      spaceId: 'sp_ffffffffffff',
+    })).rejects.toThrow('space_not_found');
+    expect(fs.existsSync(path.join(tmpDir, UID, 'cloud', 'spaces', 'sp_ffffffffffff', 'MEMORY.md'))).toBe(false);
+    await expect(call('memory.list', { target: 'space', spaceId: '../escape' }))
+      .rejects.toThrow(/invalid space id/);
   });
 });
 

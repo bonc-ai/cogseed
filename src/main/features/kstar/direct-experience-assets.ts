@@ -41,7 +41,7 @@ function proposalToCandidateInput(
   source: DirectExperienceSource,
   proposal: KstarCandidateProposal,
   index: number,
-) {
+): import('../recall/candidate-service').SaveRecallCandidateInput {
   const evidenceRefs = normalizeCognitionSourceRefs(proposal.sourceRefs);
   return {
     judgment: String(proposal.judgment || '').replace(/\s+/g, ' ').trim().slice(0, 4_000),

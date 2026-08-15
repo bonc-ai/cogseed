@@ -140,6 +140,8 @@ export interface GroupMessage {
   /** Structured snapshots quoted from this or another conversation. Kept
    * outside `text` so mentions in historical content never affect routing. */
   references?: ChatMessageReference[];
+  /** 空间任务引用（@ 资产）落可见字段：UI 在 user 气泡里显示「引用资产」chips。 */
+  space_asset_refs?: Array<{ name: string; asset_type?: string }>;
   /** Absolute paths produced by local-exec tools during this turn (only on
    * commander/agent messages). */
   produced?: string[];

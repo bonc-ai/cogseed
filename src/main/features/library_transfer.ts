@@ -11,14 +11,14 @@
 import * as path from 'node:path';
 
 import * as contexts from './contexts';
-import * as projectFiles from './project_files';
+import * as spaceFiles from './project_files';
 
-export type LibraryScope = 'global' | 'project';
+export type LibraryScope = 'global' | 'space';
 export type TransferMode = 'copy' | 'move';
 
 export interface LibraryRef {
   scope: LibraryScope;
-  projectId?: string;
+  spaceId?: string;
 }
 
 export interface TransferRequest {
@@ -66,17 +66,17 @@ function normalizeRel(input: unknown, allowEmpty = false): string {
 }
 
 function normalizeRef(input: unknown): LibraryRef {
-  const raw = input as { scope?: unknown; projectId?: unknown } | null;
-  if (!raw || (raw.scope !== 'global' && raw.scope !== 'project')) throw new Error('invalid_scope');
+  const raw = input as { scope?: unknown; spaceId?: unknown } | null;
+  if (!raw || (raw.scope !== 'global' && raw.scope !== 'space')) throw new Error('invalid_scope');
   if (raw.scope === 'global') return { scope: 'global' };
-  if (typeof raw.projectId !== 'string' || !raw.projectId || /[\\/\x00]/.test(raw.projectId)) {
-    throw new Error('invalid_project');
+  if (typeof raw.spaceId !== 'string' || !raw.spaceId || /[\\/\x00]/.test(raw.spaceId)) {
+    throw new Error('invalid_space');
   }
-  return { scope: 'project', projectId: raw.projectId };
+  return { scope: 'space', spaceId: raw.spaceId };
 }
 
 function libraryKey(ref: LibraryRef): string {
-  return ref.scope === 'global' ? 'global' : `project:${ref.projectId}`;
+  return ref.scope === 'global' ? 'global' : `project:${ref.spaceId}`;
 }
 
 function dedupeNested(paths: string[]): { paths: string[]; skipped: number } {
@@ -99,7 +99,7 @@ async function resolveSourceAbs(userId: string, ref: LibraryRef, rel: string): P
     try { return { ok: true, absPath: contexts.resolveContextEntryAbsPath(rel) }; }
     catch { return { ok: false, error: 'not_found' }; }
   }
-  const resolved = await projectFiles.resolveProjectEntryAbsPath(userId, ref.projectId!, rel);
+  const resolved = await spaceFiles.resolveSpaceEntryAbsPath(userId, ref.spaceId!, rel);
   if (resolved.ok === false) return { ok: false, error: resolved.error };
   return { ok: true, absPath: resolved.absPath };
 }
@@ -115,9 +115,9 @@ async function copyInto(
     if (copied.ok === false) return { ok: false, error: copied.error };
     return { ok: true, fileCount: copied.fileCount, bytes: copied.bytes };
   }
-  const copied = await projectFiles.copyProjectEntryFromPath(
+  const copied = await spaceFiles.copySpaceEntryFromPath(
     userId,
-    destination.projectId!,
+    destination.spaceId!,
     sourceAbs,
     targetRel,
   );
@@ -127,7 +127,7 @@ async function copyInto(
 
 async function deleteFrom(userId: string, ref: LibraryRef, rel: string): Promise<{ ok: boolean; error?: string }> {
   if (ref.scope === 'global') return contexts.deleteContextTarget(rel);
-  return projectFiles.deleteProjectEntry(userId, ref.projectId!, rel);
+  return spaceFiles.deleteSpaceEntry(userId, ref.spaceId!, rel);
 }
 
 async function moveWithin(
@@ -137,7 +137,7 @@ async function moveWithin(
   targetRel: string,
 ): Promise<{ ok: boolean; error?: string }> {
   if (ref.scope === 'global') return contexts.renameContextEntry(sourceRel, targetRel);
-  return projectFiles.renameProjectFile(userId, ref.projectId!, sourceRel, targetRel);
+  return spaceFiles.renameSpaceFile(userId, ref.spaceId!, sourceRel, targetRel);
 }
 
 function normalizeError(error: string | undefined): string {

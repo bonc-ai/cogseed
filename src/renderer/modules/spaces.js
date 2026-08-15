@@ -1,7 +1,7 @@
 // 情境空间面板 — classic script (window.renderSpaces)
 // 空间 = 主界面 + 资源作用域限制（本体/skill/task agent）。
 // 广场视图：标题 + 新建按钮 + 分类 chips + 卡片网格（照 AI 团队页骨架）。
-// 详情视图：项目列表 tab（+ 新建项目自动绑定）+ 资源 tab（空间级扩充/失效清理）+ 本体 tab（模板字段静态展示）。
+// 详情视图：资源 tab（空间级扩充/失效清理）+ 本体 tab（模板字段静态展示）。
 (function () {
   function escapeHtml(s) {
     return String(s == null ? '' : s)
@@ -54,7 +54,6 @@
   let _agentNames = new Map(); // agent id → { name, desc }
   let _filter = 'scenarios';   // chips 筛选：'scenarios' | 'mine' | scenario_id
   let _detail = null;          // 当前详情 space_id | null（null = 广场）
-  let _projects = [];          // 项目列表（详情页用）
   let _detailRenderSeq = 0;    // 详情页异步渲染并发防护
   let _loaded = false;
 
@@ -72,11 +71,6 @@
     _skillNames = new Map((resourcesRes.skills || []).map((s) => [s.id, { name: s.name || s.id, desc: (s.description_zh || s.description_en || '').trim(), version: s.version }]));
     _agentNames = new Map((resourcesRes.agents || []).map((a) => [a.agent_id, { name: a.name || a.agent_id, desc: (a.description_zh || a.description_en || '').trim() }]));
     _loaded = true;
-  }
-
-  async function _loadProjects() {
-    const res = await _invoke('projects.list');
-    _projects = Array.isArray(res.projects) ? res.projects : [];
   }
 
   // ── render: 广场 ─────────────────────────────────────────────────────────
@@ -398,21 +392,6 @@
     );
   }
 
-  function _renderDetailProjects(space) {
-    const owned = _projects.filter((p) => p.space_id === space.space_id);
-    const rows = owned.map((p) => `<div class="agents-detail-list-item spaces-proj-row" data-pid="${escapeHtml(p.project_id)}">
-      <span class="agents-detail-list-text">${escapeHtml(p.name)}</span>
-      <span class="agents-detail-list-meta">${p.conv_count || 0} ${_t('spaces.convs_unit', '会话')}</span>
-    </div>`).join('');
-    return _detailSection(
-      `${_t('spaces.projects_label', '空间内项目')}`,
-      `${rows || `<div class="agents-detail-desc is-empty">${_t('spaces.projects_empty', '还没有项目，新建一个开始干活')}</div>`}
-      <div class="spaces-proj-add-row">
-        <button class="btn btn-sm" id="spaces-proj-new">${_icon('plus', 'ui-icon')} ${_t('spaces.new_project_btn', '新建项目')}</button>
-      </div>`,
-    );
-  }
-
   function _renderDetailResources(space) {
     const extraSkills = (space.extra_skills || []).map((id) => { const info = _skillNames.get(id) || {}; return `<span class="spaces-res-chip" data-kind="skill" data-id="${escapeHtml(id)}">${escapeHtml(info.name || id)} <b title="${_t('spaces.remove_tip', '移除')}">${_icon('x', 'ui-icon spaces-res-chip-x')}</b></span>`; }).join('');
     const extraAgents = (space.extra_agents || []).map((id) => { const info = _agentNames.get(id) || {}; return `<span class="spaces-res-chip" data-kind="agent" data-id="${escapeHtml(id)}">${escapeHtml(info.name || id)} <b title="${_t('spaces.remove_tip', '移除')}">${_icon('x', 'ui-icon spaces-res-chip-x')}</b></span>`; }).join('');
@@ -525,7 +504,6 @@
           ${_renderDetailSkills(tpl)}
           ${_renderDetailAgents(tpl)}
           ${_renderDetailResources(space)}
-          ${_renderDetailProjects(space)}
         </div>
       </div>`;
 
@@ -545,13 +523,6 @@
       if (res.error) { _notifyFail(_t('spaces.update_fail', '保存失败'), res.error); return; }
       await _loadData();
       _renderDetail();
-    });
-    // 项目区块
-    document.getElementById('spaces-proj-new')?.addEventListener('click', () => _createProjectInSpace(space));
-    document.querySelectorAll('.spaces-proj-row').forEach((el) => {
-      el.addEventListener('click', () => {
-        try { if (typeof setView === 'function') setView('project', el.dataset.pid); } catch (_) {}
-      });
     });
     // 资源扩充区块
     const kindSel = document.getElementById('spaces-add-kind');
@@ -601,33 +572,16 @@
 
   async function _refreshDetail() {
     await _loadData();
-    await _loadProjects();
     await _renderDetail();
-  }
-
-  async function _createProjectInSpace(space) {
-    let name = `${space.name} ${_t('spaces.project_suffix', '项目')}`;
-    for (let i = 2; i <= 50; i++) {
-      const res = await _invoke('projects.create', { name });
-      if (!res.error && res.project) {
-        const bind = await _invoke('projects.bindSpace', { projectId: res.project.project_id, spaceId: space.space_id });
-        if (bind.error) _notifyFail(_t('spaces.bind_fail', '绑定空间失败'), bind.error);
-        try { if (typeof setView === 'function') setView('project', res.project.project_id); } catch (_) {}
-        return;
-      }
-      if (res.error === 'name_dup') { name = `${space.name} ${_t('spaces.project_suffix', '项目')} ${i}`; continue; }
-      _notifyFail(_t('spaces.create_project_fail', '新建项目失败'), res.error);
-      return;
-    }
   }
 
   function _openDetail(spaceId) {
     _detail = spaceId;
-    _loadProjects().then(() => _renderDetail());
+    _renderDetail();
   }
 
   async function _deleteSpace(space) {
-    const msg = `${_t('spaces.delete_confirm', '删除情境空间？')}\n${_t('spaces.delete_confirm2', '将解绑引用它的项目（项目退回全资源），空间内会话不受影响（会话属于项目）。')}`;
+    const msg = `${_t('spaces.delete_confirm', '删除情境空间？')}\n${_t('spaces.delete_confirm2', '空间配置将被删除，空间内会话不受影响。')}`;
     let ok = false;
     try { ok = typeof confirm === 'function' && confirm(msg); } catch (_) { ok = false; }
     if (!ok) return;

@@ -7,7 +7,7 @@ import { createBurstMerger, FEISHU_BURST_DEFAULTS, type BurstBatch, type BurstMe
 import { isCardAdapter } from './stream-card';
 import { safeId } from '../../storage';
 import * as groupChat from '../group_chat';
-import * as projects from '../projects';
+import * as spaces from '../spaces';
 import * as wakeController from '../p3394/wake-controller';
 import * as wakeService from '../p3394/wake-service';
 import * as ontologyCandidates from '../personal_ontology_candidates';
@@ -1006,13 +1006,13 @@ export async function stopInstance(uid: string, instanceId: string): Promise<voi
 }
 
 function sameWorkspace(left: WorkspaceScope, right: WorkspaceScope): boolean {
-  return left.type === right.type && left.projectId === right.projectId;
+  return left.type === right.type && left.spaceId === right.spaceId;
 }
 
 async function assertWorkspaceAvailable(uid: string, workspace: WorkspaceScope | undefined): Promise<void> {
   if (!workspace || workspace.type === 'default') return;
-  if (!workspace.projectId || !safeId(workspace.projectId) || !await projects.projectExists(uid, workspace.projectId)) {
-    throw new Error('messaging workspace project not found');
+  if (!workspace.spaceId || !safeId(workspace.spaceId) || !await spaces.spaceExists(uid, workspace.spaceId)) {
+    throw new Error('messaging workspace space not found');
   }
 }
 

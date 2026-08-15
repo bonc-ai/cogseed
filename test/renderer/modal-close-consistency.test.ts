@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 const root = path.join(__dirname, '../..');
 const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 
-const indexSource = read('src/renderer/index.html');
 const styleSource = read('src/renderer/style.css');
 const backdropDismissSources = [
   read('src/renderer/modules/library-transfer.js'),
@@ -15,7 +14,6 @@ const backdropDismissSources = [
 const dialogSources = [
   read('src/renderer/modules/library-transfer.js'),
   read('src/renderer/modules/memory.js'),
-  read('src/renderer/modules/project-detail.js'),
   read('src/renderer/modules/conversation.js'),
   read('src/renderer/modules/chat-file-viewer.js'),
   read('src/renderer/modules/chat-lightbox.js'),
@@ -37,7 +35,6 @@ describe('modal close control consistency', () => {
   });
 
   it('uses the shared control in static and dynamically mounted dialogs', () => {
-    expect(indexSource).toContain('class="modal-close-btn project-library-modal-close"');
     for (const source of dialogSources) {
       expect(source).toContain('modal-close-btn');
       expect(source).toContain('modal-close-icon');

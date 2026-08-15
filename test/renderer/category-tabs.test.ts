@@ -607,9 +607,10 @@ describe('agent and skill category tabs', () => {
       setChatSkill = (target, id, name) => { pickedSkillCalls.push([target, id, name]); };
     `, context);
 
-    // Commander: all picker tabs; global open-tier skill selectable.
+    // Commander: no space selected → only agents/skills tabs (connectors /
+    // library / ontology removed); global open-tier skill selectable.
     expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
-      .toEqual(['agents', 'skills', 'connectors', 'library', 'ontology']);
+      .toEqual(['agents', 'skills']);
     await context._triggerPickerItem('skill', 'global-helper', 'Global Helper', 'new-chat-recipient-chip');
     expect(context.pickedSkillCalls).toEqual([['new-chat', 'global-helper', 'Global Helper']]);
 
@@ -618,9 +619,24 @@ describe('agent and skill category tabs', () => {
     context.pickedSkillCalls = [];
     context.getChatRecipient = () => ({ kind: 'agent', id: 'agent-1', name: 'Agent One' });
     expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
-      .toEqual(['agents', 'skills', 'connectors', 'library', 'ontology']);
+      .toEqual(['agents', 'skills']);
     await context._triggerPickerItem('skill', 'trusted', 'Trusted Skill', 'new-chat-recipient-chip');
     expect(context.pickedSkillCalls).toEqual([['new-chat', 'trusted', 'Trusted Skill']]);
+  });
+
+  it('shows artifacts/assets tabs for a space-scoped picker anchor', () => {
+    const { context } = loadCategoryRenderers();
+    // new-chat chip 选中空间 → 空间会话 tab 集合（智能体/技能/产物/资产）
+    context.window.getNewChatSpaceId = () => 'spc-test-1';
+    expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
+      .toEqual(['agents', 'skills', 'artifacts', 'assets']);
+    // 无空间 → 仅智能体/技能
+    context.window.getNewChatSpaceId = () => '';
+    expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
+      .toEqual(['agents', 'skills']);
+    // Auto 恒为智能体/技能
+    expect(vm.runInContext('_agentPickerVisibleTabs("auto-recipient-chip")', context))
+      .toEqual(['agents', 'skills']);
   });
 
   it('routes Library picker selections from the auto task composer into auto attachments', async () => {
@@ -629,14 +645,15 @@ describe('agent and skill category tabs', () => {
     context.window._autoAttachLibraryFile = async (ref: any) => { calls.push(ref); };
 
     expect(vm.runInContext('_agentPickerVisibleTabs("auto-recipient-chip")', context))
-      .toEqual(['agents', 'skills', 'connectors', 'library', 'ontology']);
+      .toEqual(['agents', 'skills']);
 
     await context._triggerPickerItem('library', 'library:global:brief.md', 'brief.md', 'auto-recipient-chip', {
       libraryScope: 'global',
       libraryRel: 'brief.md',
     });
 
-    expect(calls).toEqual([{ scope: 'global', rel: 'brief.md', projectId: '' }]);
+    // 空间化后仅全局资料库可挂草稿：不再携带 projectId。
+    expect(calls).toEqual([{ scope: 'global', rel: 'brief.md' }]);
   });
 
   it('routes auto task skill and connector picks through the shared inline chip path', async () => {
@@ -656,7 +673,7 @@ describe('agent and skill category tabs', () => {
     ]);
   });
 
-  it('renders project and global Library groups for the auto task picker when a project is active', async () => {
+  it('renders only the global Library group for the auto task picker (space refactor)', async () => {
     const { context, el } = loadCategoryRenderers();
     context._projectsCache = [{ project_id: 'p1', name: 'Alpha' }];
     context.apiFetch = async () => ({
@@ -665,15 +682,12 @@ describe('agent and skill category tabs', () => {
         tree: [{ type: 'file', relPath: 'global.md', name: 'global.md' }],
       }),
     });
-    context.window.cogseed.invoke = async (channel: string, payload: any) => {
-      if (channel === 'projects.files.tree') {
-        expect(payload).toEqual({ projectId: 'p1' });
-        return { ok: true, tree: [{ type: 'file', relPath: 'project.md', name: 'project.md' }] };
-      }
+    context.window.cogseed.invoke = async (channel: string) => {
+      if (channel.startsWith('projects.')) throw new Error(`unexpected project IPC: ${channel}`);
       return { ok: true, bindings: { agents: [] } };
     };
 
-    context.__rows = await context._loadLibraryPickerRows('p1');
+    context.__rows = await context._loadLibraryPickerRows();
     vm.runInContext(`
       _pickerLibraryRows = __rows;
       _pickerLibraryLoading = null;
@@ -681,15 +695,15 @@ describe('agent and skill category tabs', () => {
     `, context);
 
     const html = el('agent-picker-list').innerHTML;
-    expect(html).toContain('项目资料库');
-    expect(html).toContain('project.md');
     expect(html).toContain('全局资料库');
     expect(html).toContain('global.md');
+    expect(html).not.toContain('项目资料库');
+    expect(html).not.toContain('project.md');
   });
 
-  it('falls back to global Library rows when the auto task project was removed', async () => {
+  it('loads only global Library rows for the auto task picker (project library removed)', async () => {
     const { context } = loadCategoryRenderers();
-    let projectTreeCalls = 0;
+    let projectIpcCalls = 0;
     context._projectsCache = [];
     context.apiFetch = async () => ({
       json: async () => ({
@@ -698,20 +712,15 @@ describe('agent and skill category tabs', () => {
       }),
     });
     context.window.cogseed.invoke = async (channel: string) => {
-      if (channel === 'projects.files.tree') projectTreeCalls += 1;
+      if (channel.startsWith('projects.')) projectIpcCalls += 1;
       return { ok: false, error: 'not_found' };
     };
     context.window._autoGetProjectId = () => 'p-deleted';
 
-    const rows = await context._loadLibraryPickerRows('p-deleted');
+    const rows = await context._loadLibraryPickerRows();
 
-    // 工作空间一期修复后语义：_agentPickerProjectExists 不再用可能过期的
-    // _projectsCache 判死（新建项目不在缓存 → 作用域静默丢失 bug），改为放行
-    // 交主进程/调用侧裁决——已删除项目仍回退全局：
-    //   - _resolveActiveProjectId 保留 pid（不再渲染层清空）
-    //   - files.tree 返回 not_found → _loadLibraryPickerRows 降级，rows 只有 global
-    expect(vm.runInContext('_resolveActiveProjectId("auto-recipient-chip")', context)).toBe('p-deleted');
-    expect(projectTreeCalls).toBe(1); // 调用一次后降级（not_found → 回退全局）
+    // 空间化后 picker 恒为全局作用域：不触发任何 projects.* IPC。
+    expect(projectIpcCalls).toBe(0);
     expect(rows.map((row: any) => [row.scope, row.rel])).toEqual([['global', 'global.md']]);
   });
 

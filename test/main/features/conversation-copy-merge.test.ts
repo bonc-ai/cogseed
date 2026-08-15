@@ -50,6 +50,22 @@ afterEach(async () => {
 });
 
 describe('conversation copy and merge primitives', () => {
+
+// T4.5 空间化：projects 模块已删，测试直接手工建项目壳目录（数据层仍在）。
+function makeProject(name: string): { ok: true; project: { project_id: string; name: string } } {
+  const pid = `p${Math.random().toString(16).slice(2, 10)}`;
+  const projectDir = path.join(tmpDir, TEST_UID, 'cloud', 'projects', pid);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'project.json'), JSON.stringify({
+    project_id: pid,
+    name,
+    owner_uid: TEST_UID,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  }));
+  return { ok: true, project: { project_id: pid, name } };
+}
+
   it('copies a conversation to a new cid and remaps commander/member session ids', async () => {
     const chats = await import('../../../src/main/features/chats');
     const state = await import('../../../src/main/features/group_chat/state');
@@ -153,11 +169,10 @@ describe('conversation copy and merge primitives', () => {
 
   it('rejects mixed-project merges without an explicit destination project', async () => {
     const chats = await import('../../../src/main/features/chats');
-    const projects = await import('../../../src/main/features/projects');
     const feature = await import('../../../src/main/features/conversation_copy_merge');
 
-    const projectA = await projects.createProject(TEST_UID, 'Project A');
-    const projectB = await projects.createProject(TEST_UID, 'Project B');
+    const projectA = makeProject('Project A');
+    const projectB = makeProject('Project B');
     if (!projectA.ok || !projectB.ok) throw new Error('project setup failed');
     const first = await chats.createConversation(TEST_UID, { title: 'Project A', projectId: projectA.project.project_id });
     const second = await chats.createConversation(TEST_UID, { title: 'Project B', projectId: projectB.project.project_id });
@@ -169,11 +184,10 @@ describe('conversation copy and merge primitives', () => {
 
   it('respects an explicit global destination for a mixed-project merge', async () => {
     const chats = await import('../../../src/main/features/chats');
-    const projects = await import('../../../src/main/features/projects');
     const state = await import('../../../src/main/features/group_chat/state');
     const feature = await import('../../../src/main/features/conversation_copy_merge');
 
-    const projectA = await projects.createProject(TEST_UID, 'Project A');
+    const projectA = makeProject('Project A');
     if (!projectA.ok) throw new Error('project setup failed');
     const first = await chats.createConversation(TEST_UID, { title: 'Project A', projectId: projectA.project.project_id });
     const second = await chats.createConversation(TEST_UID, { title: 'Global source' });

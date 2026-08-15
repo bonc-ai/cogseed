@@ -102,8 +102,8 @@ if [ "$(uname -s)" = "Darwin" ]; then
     fi
     # macOS ships bash 3.2, where expanding an EMPTY array as
     # "${OPEN_ENV_ARGS[@]}" under `set -u` fails with "unbound variable".
-    # The ${arr[@]+...} guard makes the empty case expand to nothing.
-    if [ "${#OPEN_ENV_ARGS[@]}" -gt 0 ]; then
+    # Guard the empty case so the launcher works without hub env vars.
+    if (( ${#OPEN_ENV_ARGS[@]} > 0 )); then
       exec open -W -n "${OPEN_ENV_ARGS[@]}" "$APP_BUNDLE" --args "${ARGS[@]}"
     else
       exec open -W -n "$APP_BUNDLE" --args "${ARGS[@]}"

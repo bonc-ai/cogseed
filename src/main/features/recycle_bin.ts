@@ -53,7 +53,7 @@ export type RecycleKind =
   | 'auto_task'
   | 'attachment'
   | 'context'
-  | 'project_file'
+  | 'space_file'
   | 'saved_app'
   | 'agent'
   | 'skill'
@@ -64,7 +64,7 @@ export type RecycleDisplayCategory =
   | 'edit_conversation'
   | 'auto_task'
   | 'project'
-  | 'project_file'
+  | 'space_file'
   | 'attachment'
   | 'artifact'
   | 'context'
@@ -716,7 +716,7 @@ function normalizeDisplayItems(raw: any): RecycleDisplayItem[] {
   if (!Array.isArray(raw)) return [];
   const categories = new Set<RecycleDisplayCategory>([
     'conversation', 'edit_conversation', 'auto_task', 'project',
-    'project_file', 'attachment', 'artifact', 'context', 'saved_app',
+    'space_file', 'attachment', 'artifact', 'context', 'saved_app',
     'agent', 'skill', 'memory', 'settings', 'marketplace', 'file', 'other',
   ]);
   const out: RecycleDisplayItem[] = [];
@@ -1072,7 +1072,7 @@ async function buildRecycleDisplayItems(
         });
       } else if (parts[2] === 'contexts' || parts[2] === 'files') {
         add({
-          category: 'project_file',
+          category: 'space_file',
           id: relPath,
           path: relPath,
           title: parts.slice(3).join('/') || fallback,
@@ -1163,7 +1163,7 @@ async function buildRecycleDisplayItems(
     add({
       category: kind === 'auto_task' ? 'auto_task'
         : kind === 'conversation' || kind === 'conversations' ? 'conversation'
-        : kind === 'project_file' ? 'project_file'
+        : kind === 'space_file' ? 'space_file'
         : kind === 'saved_app' ? 'saved_app'
         : kind === 'context' ? 'context'
         : kind === 'attachment' ? 'attachment'

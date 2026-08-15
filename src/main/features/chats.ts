@@ -22,7 +22,7 @@ import * as readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
 
 import {
-  userChatsDir, userLocalConfigDir, projectChatsDir, projectChatIndexFile, WS_ROOT,
+  userChatsDir, userLocalConfigDir, projectChatsDir, projectChatIndexFile, spaceChatIndexFile, WS_ROOT,
 } from '../paths';
 import {
   conversationLayout,
@@ -109,6 +109,9 @@ export interface Conversation {
    *  `<cid>.jsonl`, `groupChatDir`, `chat_attachments`, and `session_id`
    *  paths stay verbatim, so cid uniqueness + §5 isolation are unaffected. */
   project_id?: string;
+  /** 空间化重构（删项目层）：会话直接挂空间。缺失/空 = orphan 会话，不算任何
+   *  空间（任务/产物列表不纳入）。阶段 0 与 project_id 双字段兼容并存。 */
+  space_id?: string;
   /** Set when this conversation was created by an auto-task fire (sidebar
    *  "Automation" tab). Used by the renderer to render the clock icon next
    *  to the title and to group the conv under its originating task in the
@@ -166,6 +169,26 @@ export interface Conversation {
    *  summarizes extracted cognitions and offers to continue the work. Reset to
    *  false after the welcome message is inserted. */
   needs_welcome?: boolean;
+  /** 任务级引用（空间任务 = 空间会话）：开新任务/已有任务时引用的空间产物与资产。
+   *  产物 → 发送时并入消息 references（LLM 可读文件）；资产 → 发送时并入模型上下文块。 */
+  task_references?: TaskReference[];
+}
+
+/** 空间任务引用项（持久化在会话记录上，任务级作用域）。 */
+export interface TaskReference {
+  kind: 'artifact' | 'asset';
+  /** 展示名（产物 = 文件名；资产 = 标题）。 */
+  name: string;
+  /** 产物：源会话 + 附件名（走现成跨任务引用链路，LLM 可读文件内容）。 */
+  source_cid?: string;
+  source_title?: string;
+  source_msg_id?: string;
+  source_ts?: string;
+  file_name?: string;
+  /** 资产：资产 id + 类型 + 摘要（上下文块注入）。 */
+  asset_id?: string;
+  asset_type?: string;
+  summary?: string;
 }
 
 /** Persisted record on `<cid>.jsonl`. Aliased for legacy callers; the new
@@ -267,6 +290,7 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
     updated_at: updatedAt,
   };
   if (typeof raw.project_id === 'string' && raw.project_id) out.project_id = raw.project_id;
+  if (typeof raw.space_id === 'string' && raw.space_id) out.space_id = raw.space_id;
   if (typeof raw.origin_auto_task_id === 'string' && raw.origin_auto_task_id) out.origin_auto_task_id = raw.origin_auto_task_id;
   if (typeof raw.pinned_at === 'string' && raw.pinned_at) out.pinned_at = raw.pinned_at;
   if (typeof raw.pin_state_updated_at === 'string' && raw.pin_state_updated_at) out.pin_state_updated_at = raw.pin_state_updated_at;
@@ -282,6 +306,24 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
   }
   if (raw.imported === true) out.imported = true;
   if (raw.needs_welcome === true) out.needs_welcome = true;
+  if (Array.isArray(raw.task_references)) {
+    const refs = raw.task_references
+      .filter((r: any) => r && typeof r === 'object' && (r.kind === 'artifact' || r.kind === 'asset') && typeof r.name === 'string' && r.name)
+      .map((r: any) => ({
+        kind: r.kind,
+        name: String(r.name).slice(0, 200),
+        ...(typeof r.source_cid === 'string' && r.source_cid ? { source_cid: r.source_cid } : {}),
+        ...(typeof r.source_title === 'string' && r.source_title ? { source_title: r.source_title.slice(0, 200) } : {}),
+        ...(typeof r.source_msg_id === 'string' && r.source_msg_id ? { source_msg_id: r.source_msg_id } : {}),
+        ...(typeof r.source_ts === 'string' && r.source_ts ? { source_ts: r.source_ts } : {}),
+        ...(typeof r.file_name === 'string' && r.file_name ? { file_name: r.file_name.slice(0, 200) } : {}),
+        ...(typeof r.asset_id === 'string' && r.asset_id ? { asset_id: r.asset_id } : {}),
+        ...(typeof r.asset_type === 'string' && r.asset_type ? { asset_type: r.asset_type.slice(0, 60) } : {}),
+        ...(typeof r.summary === 'string' && r.summary ? { summary: r.summary.slice(0, 400) } : {}),
+      }))
+      .slice(0, 20);
+    if (refs.length) out.task_references = refs;
+  }
   const syncRev = Number(raw[RECORD_SYNC_REV_FIELD]) || 0;
   if (Number.isFinite(syncRev) && syncRev > 0) out._sync_rev = Math.floor(syncRev);
   if (typeof raw[RECORD_SYNC_DEVICE_FIELD] === 'string' && raw[RECORD_SYNC_DEVICE_FIELD]) {
@@ -342,6 +384,7 @@ function _stampConversationSync(userId: string, c: Conversation): Conversation {
 
 const CLEARABLE_CONVERSATION_FIELDS = [
   'project_id',
+  'space_id',
   'origin_auto_task_id',
   'pinned_at',
   'pin_state_updated_at',
@@ -489,6 +532,7 @@ export interface ConversationDisplayRow {
   conversation_id: string;
   title: string;
   project_id: string;
+  space_id: string;
 }
 
 /** Compact search/display catalog. Reuses the central parsed index snapshot
@@ -501,6 +545,7 @@ export async function listConversationDisplayRows(userId: string): Promise<Conve
       conversation_id: row.conversation_id,
       title: row.title || '',
       project_id: typeof row.project_id === 'string' ? row.project_id : '',
+      space_id: typeof row.space_id === 'string' ? row.space_id : '',
     }));
 }
 
@@ -1205,6 +1250,34 @@ export async function listConversations(userId: string): Promise<Conversation[]>
   }
 }
 
+/** 空间化重构（删项目层）：查某空间下的会话（空间「任务」tab 数据源）。
+ *  直接按 conversation.space_id 匹配——先读空间自有索引（v5 迁移后 / 空间根落点），
+ *  再扫全局+项目根兜底双字段兼容期带 space_id 的会话，按 conversation_id 去重
+ *  （空间索引优先），过滤墓碑，活动倒序。 */
+export async function listSpaceConversations(userId: string, spaceId: string): Promise<Conversation[]> {
+  if (!safeId(spaceId)) return [];
+  const byCid = new Map<string, Conversation>();
+
+  const spaceRaw: any = await readJson(spaceChatIndexFile(userId, spaceId));
+  const spaceItems = Array.isArray(spaceRaw)
+    ? spaceRaw : (spaceRaw && Array.isArray(spaceRaw.items) ? spaceRaw.items : []);
+  for (const raw of spaceItems) {
+    const row = _normaliseConversation(raw);
+    if (!row) continue;
+    if (!row.space_id) row.space_id = spaceId;
+    byCid.set(row.conversation_id, row);
+  }
+
+  for (const c of await _readIndexConversations(userId)) {
+    if (c.space_id !== spaceId) continue;
+    if (!byCid.has(c.conversation_id)) byCid.set(c.conversation_id, c);
+  }
+
+  return Array.from(byCid.values())
+    .filter((c) => !isDeletedConversation(c))
+    .sort(_compareConversationIndexRows);
+}
+
 export interface StartupConversationList {
   conversations: Conversation[];
   deferred_unprojected: { last30: number; older: number };
@@ -1318,13 +1391,15 @@ export async function listStartupConversations(
     }
     if (active?.project_id) selectedProjectCids.add(active.conversation_id);
     for (const c of all) {
-      if (c.project_id || c.pinned_at) continue;
+      // 空间化语义统一：space_id 非空 = 空间会话（归侧栏空间组，不 lazy）；
+      // 纯 project_id（无 space_id）旧孤儿按 unprojected 放行（F2-A 可见）。
+      if (c.space_id || c.pinned_at) continue;
       const bucket = _startupOldBucket(c);
       if (bucket) deferred[bucket] += 1;
     }
     return all.filter((c) => {
       if (c.conversation_id === activeCid) return true;
-      if (c.project_id) return selectedProjectCids.has(c.conversation_id);
+      if (c.space_id) return true; // 空间会话始终返回（侧栏空间组展示，不分页懒加载）
       if (c.pinned_at) return true;
       return _startupOldBucket(c) === null;
     });
@@ -1404,7 +1479,7 @@ export async function listOldUnprojectedConversationPage(
     return { conversations: [], total: 0, next_offset: null };
   }
   const rows = (await _readScopedRawConversations(userId))
-    .filter((c) => !c.project_id && _startupOldBucket(c) === bucket);
+    .filter((c) => !c.space_id && _startupOldBucket(c) === bucket);
   return _enrichConversationPage(userId, rows, offset);
 }
 
@@ -1419,12 +1494,14 @@ export async function listProjectConversations(userId: string, projectId: string
   );
 }
 
-/** Load the two collapsed age buckets for the unprojected sidebar only. */
+/** Load the two collapsed age buckets for the unprojected sidebar only.
+ *  语义与 Page 版统一（bug 4）：space_id 非空 = 空间会话（归空间组），
+ *  纯 project_id 旧孤儿（无 space_id）按 unprojected 放行（F2-A）。 */
 export async function listOldUnprojectedConversations(userId: string): Promise<Conversation[]> {
   return _listConversationsUncached(
     userId,
     () => false,
-    (all) => all.filter((c) => !c.project_id && _startupOldBucket(c) !== null),
+    (all) => all.filter((c) => !c.space_id && !c.pinned_at && _startupOldBucket(c) !== null),
     () => _readScopedRawConversations(userId),
   );
 }
@@ -1740,6 +1817,9 @@ export interface CreateConversationOptions {
    *  validating the projectId exists for this user — chats.ts persists it
    *  verbatim. */
   projectId?: string;
+  /** 空间化重构：会话直接挂空间。语义同 projectId——IPC 层负责校验存在性，
+   *  chats.ts 原样持久化。缺失 = orphan 会话。 */
+  spaceId?: string;
   /** Optional explicit conversation id. Used when an external source already
    *  minted the id. Must be a `safeId`; if it collides with an existing conv,
    *  that conv is returned unchanged. Defaults to a fresh generated id. */
@@ -1766,7 +1846,7 @@ function normaliseConversationTitle(raw: unknown): string {
 }
 
 export async function createConversation(userId: string, {
-  kind = 'normal', agentId = '', skillId = '', title = '', projectId = '', conversationId = '', originAutoTaskId = '',
+  kind = 'normal', agentId = '', skillId = '', title = '', projectId = '', spaceId = '', conversationId = '', originAutoTaskId = '',
   imported = false, needs_welcome = false,
 }: CreateConversationOptions = {}): Promise<Conversation> {
   const explicitCid = conversationId && safeId(conversationId) ? conversationId : '';
@@ -1790,6 +1870,7 @@ export async function createConversation(userId: string, {
           skill_id: skillId || current.skill_id || '',
           session_id: current.session_id || buildConversationSessionId(explicitCid),
           ...(projectId ? { project_id: projectId } : {}),
+          ...(spaceId ? { space_id: spaceId } : {}),
           ...(originAutoTaskId ? { origin_auto_task_id: originAutoTaskId } : {}),
           updated_at: now,
         });
@@ -1820,6 +1901,7 @@ export async function createConversation(userId: string, {
       skill_id: skillId || '',
       session_id: buildConversationSessionId(cid),
       ...(projectId ? { project_id: projectId } : {}),
+      ...(spaceId ? { space_id: spaceId } : {}),
       ...(originAutoTaskId ? { origin_auto_task_id: originAutoTaskId } : {}),
       ...(imported ? { imported: true } : {}),
       ...(needs_welcome ? { needs_welcome: true } : {}),
@@ -1912,6 +1994,50 @@ export async function batchUpdateConversationProject(
 
   log.info(`batch updated conversations to project user=${userId} project=${projectId} updated=${updated}/${conversationIds.length}`);
   return { ok: true, updated };
+}
+
+/** 空间化重构（删项目层）：把已有会话绑定到空间（问题 A 缺口补齐）。
+ *
+ *  * `spaceId` = 合法空间 id → 绑定；`null`/`''` → 解绑（移出空间，回到普通列表）。
+ *  * 只写 `conversation.space_id`（与 `conversations.create({spaceId})` 语义一致），
+ *    不动 `project_id`（已废弃字段，F2 侧栏可见性判定用 `project_id && space_id`，
+ *    新建空间会话同样只有 space_id，保持行为一致——绑定后仍留在侧栏，同时进空间任务列表）。
+ *  * 绑定后即被 `listSpaceConversations`（按 space_id 匹配全局索引兜底）纳入
+ *    空间「任务」tab；解绑则从空间任务列表消失。
+ *  * **工作区随归属迁移（方案 Y）**：space_id 变更时，把会话工作区从旧位置
+ *    （旧空间目录 / userWorkSpace）搬到新位置，解绑/换空间/删空间都不丢产出文件。
+ *  * 返回 null = 会话不存在/已删除（与 updateConversation 语义对齐）。 */
+export async function setConversationSpace(
+  userId: string,
+  cid: string,
+  spaceId: string | null,
+  projectIdHint?: string | null,
+): Promise<Conversation | null> {
+  if (!safeId(cid)) return null;
+  if (spaceId !== null && !safeId(spaceId)) return null;
+  return _withConversationIndexStore(userId, async (store) => {
+    const target = await store.findTarget(cid, projectIdHint);
+    if (!target || isDeletedConversation(target.conversation)) return null;
+    const next = { ...target.conversation };
+    const normalized = spaceId || null;
+    if (normalized) next.space_id = normalized;
+    else delete next.space_id;
+    if (next.space_id !== target.conversation.space_id) {
+      const prevSid = target.conversation.space_id || null;
+      next.updated_at = nowIso();
+      _stampConversationSync(userId, next);
+      await store.persistTarget(target, next);
+      // 工作区随归属迁移（尽力而为；失败由 getConversationWorkspacePath 惰性兜底）
+      try {
+        const { migrateConversationWorkspace } = await import('./group_chat/conv_workspace');
+        const r = await migrateConversationWorkspace(userId, cid, prevSid, normalized);
+        if (r.moved) log.info(`workspace moved with space change user=${userId} cid=${cid} ${prevSid ?? 'user'}->${normalized ?? 'user'}`);
+      } catch (err) {
+        log.warn(`migrate workspace on space change user=${userId} cid=${cid}: ${(err as Error).message}`);
+      }
+    }
+    return next;
+  });
 }
 
 export async function setConversationPinned(
