@@ -1,9 +1,9 @@
 /**
- * Project-scoped files.
+ * Space-scoped files.
  *
- * Storage: `<uid>/cloud/projects/<pid>/contexts/<relative/path>`.
- * These files belong to the project, not a single conversation, so every
- * conversation inside the project receives a lightweight file-list prompt and
+ * Storage: `<uid>/cloud/spaces/<sid>/contexts/<relative/path>`.
+ * These files belong to the space, not a single conversation, so every
+ * conversation inside the space receives a lightweight file-list prompt and
  * file tools get read-only access to this directory.
  */
 
@@ -12,12 +12,12 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { Semaphore } from 'async-mutex';
 
-import { projectFilesDir } from '../paths';
+import { spaceFilesDir } from '../paths';
 import { createLogger } from '../logger';
 import { t } from '../i18n';
 import { invalidateFileCache } from './file_indexer';
-import { projectExists } from './projects';
-import * as projectLibraryIndexer from './project_library_indexer';
+import { spaceExists } from './spaces';
+import * as spaceLibraryIndexer from './project_library_indexer';
 import { officeBufferToPreviewHtml, officePreviewKindForExt } from '../util/office-preview';
 import {
   assertLocalImportTarget,
@@ -27,7 +27,7 @@ import {
 } from '../util/file-import';
 import { logErrorSummary, logPathRef, maskId } from '../util/log-redact';
 
-const log = createLogger('project_files');
+const log = createLogger('space_files');
 
 const TEXT_EXTS: ReadonlySet<string> = new Set([
   '.md', '.markdown', '.txt', '.csv', '.tsv',
@@ -66,40 +66,40 @@ const MAX_BYTES_VIDEO = 200 * 1024 * 1024;
 const MAX_FILENAME_LEN = 200;
 const PROJECT_TREE_CACHE_TTL_MS = 30_000;
 
-export type ProjectFileKind = 'text' | 'pdf' | 'docx' | 'spreadsheet' | 'presentation' | 'image' | 'video';
+export type SpaceFileKind = 'text' | 'pdf' | 'docx' | 'spreadsheet' | 'presentation' | 'image' | 'video';
 
-export interface ProjectFileInfo {
+export interface SpaceFileInfo {
   name: string;
   relPath: string;
   type: 'file';
   path: string;
   bytes: number;
-  kind: ProjectFileKind;
+  kind: SpaceFileKind;
   mtime: number;
 }
 
-export interface ProjectDirInfo {
+export interface SpaceDirInfo {
   name: string;
   relPath: string;
   type: 'dir';
   path: string;
   mtime: number;
-  children: ProjectLibraryNode[];
+  children: SpaceLibraryNode[];
 }
 
-export type ProjectLibraryNode = ProjectFileInfo | ProjectDirInfo;
+export type SpaceLibraryNode = SpaceFileInfo | SpaceDirInfo;
 
 export type Result<T = {}> = ({ ok: true } & T) | { ok: false; error: string };
 
-function safeProjectId(projectId: unknown): string {
-  if (typeof projectId !== 'string' || !projectId) throw new Error('projectId required');
-  if (projectId.includes('/') || projectId.includes('\\') || projectId.includes('\x00') || projectId === '.' || projectId === '..') {
-    throw new Error('invalid projectId');
+function safeSpaceId(spaceId: unknown): string {
+  if (typeof spaceId !== 'string' || !spaceId) throw new Error('spaceId required');
+  if (spaceId.includes('/') || spaceId.includes('\\') || spaceId.includes('\x00') || spaceId === '.' || spaceId === '..') {
+    throw new Error('invalid spaceId');
   }
-  return projectId;
+  return spaceId;
 }
 
-function normaliseProjectRelPath(input: unknown, kind: 'file' | 'dir', allowEmpty = false): string {
+function normaliseSpaceRelPath(input: unknown, kind: 'file' | 'dir', allowEmpty = false): string {
   if (typeof input !== 'string') throw new Error(kind === 'file' ? 'filename required' : 'folder required');
   const raw = input.trim().replace(/\\/g, '/');
   if (!raw) {
@@ -127,11 +127,11 @@ function normaliseProjectRelPath(input: unknown, kind: 'file' | 'dir', allowEmpt
 }
 
 function safeFileName(name: unknown): string {
-  return normaliseProjectRelPath(name, 'file');
+  return normaliseSpaceRelPath(name, 'file');
 }
 
 function safeDirPath(name: unknown, allowEmpty = false): string {
-  return normaliseProjectRelPath(name, 'dir', allowEmpty);
+  return normaliseSpaceRelPath(name, 'dir', allowEmpty);
 }
 
 function relPathFor(root: string, absPath: string): string {
@@ -146,7 +146,7 @@ function resolveUnder(root: string, relPath: string): string {
   return abs;
 }
 
-function kindOfName(name: string): ProjectFileKind {
+function kindOfName(name: string): SpaceFileKind {
   const ext = path.extname(name).toLowerCase();
   if (ext === PDF_EXT) return 'pdf';
   if (DOCX_EXTS.has(ext)) return 'docx';
@@ -183,24 +183,24 @@ function uniqueTarget(dir: string, name: string): string {
   return path.join(dir, `${stem}-${stamp}-${Date.now()}${ext}`);
 }
 
-async function ensureProjectFilesDir(userId: string, projectId: string): Promise<string> {
-  const pid = safeProjectId(projectId);
-  if (!await projectExists(userId, pid)) throw new Error('not_found');
-  const dir = projectFilesDir(userId, pid);
+async function ensureSpaceFilesDir(userId: string, spaceId: string): Promise<string> {
+  const sid = safeSpaceId(spaceId);
+  if (!await spaceExists(userId, sid)) throw new Error('not_found');
+  const dir = spaceFilesDir(userId, sid);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-function _notifyDirty(userId: string, projectId: string): void {
-  invalidateProjectFileTree(userId, projectId);
+function _notifyDirty(userId: string, spaceId: string): void {
+  invalidateSpaceFileTree(userId, spaceId);
 }
 
-function _notifyDeleted(projectId: string, relPath: string): void {
-  void projectId;
+function _notifyDeleted(spaceId: string, relPath: string): void {
+  void spaceId;
   void relPath;
 }
 
-function infoFor(absPath: string, root?: string): ProjectFileInfo | null {
+function infoFor(absPath: string, root?: string): SpaceFileInfo | null {
   let st: fs.Stats;
   try { st = fs.statSync(absPath); }
   catch { return null; }
@@ -229,29 +229,29 @@ function sortDirents(items: fs.Dirent[]): fs.Dirent[] {
 // never run a recursive synchronous stat walk on Electron's main event loop.
 // Limit individual filesystem operations globally while allowing independent
 // branches to make progress.
-const _projectTreeIo = new Semaphore(8);
+const _spaceTreeIo = new Semaphore(8);
 
 async function _treeReadDir(absDir: string): Promise<fs.Dirent[]> {
   try {
-    return await _projectTreeIo.runExclusive(() => fsp.readdir(absDir, { withFileTypes: true }));
+    return await _spaceTreeIo.runExclusive(() => fsp.readdir(absDir, { withFileTypes: true }));
   } catch {
     return [];
   }
 }
 
 async function _treeStat(absPath: string): Promise<fs.Stats | null> {
-  try { return await _projectTreeIo.runExclusive(() => fsp.stat(absPath)); }
+  try { return await _spaceTreeIo.runExclusive(() => fsp.stat(absPath)); }
   catch { return null; }
 }
 
-async function walkProjectTreeAsync(absDir: string, root: string): Promise<ProjectLibraryNode[]> {
+async function walkSpaceTreeAsync(absDir: string, root: string): Promise<SpaceLibraryNode[]> {
   const items = sortDirents(await _treeReadDir(absDir));
-  const nodes = await Promise.all(items.map(async (entry): Promise<ProjectLibraryNode | null> => {
+  const nodes = await Promise.all(items.map(async (entry): Promise<SpaceLibraryNode | null> => {
     if (entry.name.startsWith('.')) return null;
     const abs = path.join(absDir, entry.name);
     if (entry.isDirectory()) {
       const [children, st] = await Promise.all([
-        walkProjectTreeAsync(abs, root),
+        walkSpaceTreeAsync(abs, root),
         _treeStat(abs),
       ]);
       if (!st?.isDirectory()) return null;
@@ -279,11 +279,11 @@ async function walkProjectTreeAsync(absDir: string, root: string): Promise<Proje
       mtime: Math.floor(st.mtimeMs / 1000),
     };
   }));
-  return nodes.filter((node): node is ProjectLibraryNode => node !== null);
+  return nodes.filter((node): node is SpaceLibraryNode => node !== null);
 }
 
-function flattenFiles(nodes: ProjectLibraryNode[]): ProjectFileInfo[] {
-  const out: ProjectFileInfo[] = [];
+function flattenFiles(nodes: SpaceLibraryNode[]): SpaceFileInfo[] {
+  const out: SpaceFileInfo[] = [];
   for (const node of nodes) {
     if (node.type === 'file') out.push(node);
     else out.push(...flattenFiles(node.children || []));
@@ -291,69 +291,69 @@ function flattenFiles(nodes: ProjectLibraryNode[]): ProjectFileInfo[] {
   return out;
 }
 
-async function filesUnderEntry(absPath: string, root: string): Promise<ProjectFileInfo[]> {
+async function filesUnderEntry(absPath: string, root: string): Promise<SpaceFileInfo[]> {
   const st = await _treeStat(absPath);
   if (!st) return [];
   if (st.isFile()) {
     const info = infoFor(absPath, root);
     return info ? [info] : [];
   }
-  if (st.isDirectory()) return flattenFiles(await walkProjectTreeAsync(absPath, root));
+  if (st.isDirectory()) return flattenFiles(await walkSpaceTreeAsync(absPath, root));
   return [];
 }
 
-interface ProjectTreeCacheEntry {
+interface SpaceTreeCacheEntry {
   generation: number;
   expiresAt: number;
-  tree: ProjectLibraryNode[];
+  tree: SpaceLibraryNode[];
 }
 
-const _projectTreeCache = new Map<string, ProjectTreeCacheEntry>();
-const _projectTreeInFlight = new Map<string, Promise<ProjectLibraryNode[]>>();
-const _projectTreeGeneration = new Map<string, number>();
+const _spaceTreeCache = new Map<string, SpaceTreeCacheEntry>();
+const _spaceTreeInFlight = new Map<string, Promise<SpaceLibraryNode[]>>();
+const _spaceTreeGeneration = new Map<string, number>();
 
-function _projectTreeKey(userId: string, projectId: string): string {
-  return `${userId}\x00${projectId}`;
+function _spaceTreeKey(userId: string, spaceId: string): string {
+  return `${userId}\x00${spaceId}`;
 }
 
 /** Invalidate one project's derived tree after a supported write, or every
  * tree for a user after a project-domain sync pull. The TTL is a correctness
  * fallback for direct filesystem edits that bypass both paths. */
-export function invalidateProjectFileTree(userId: string, projectId?: string): void {
+export function invalidateSpaceFileTree(userId: string, spaceId?: string): void {
   const prefix = `${userId}\x00`;
-  const keys = projectId
-    ? [_projectTreeKey(userId, projectId)]
+  const keys = spaceId
+    ? [_spaceTreeKey(userId, spaceId)]
     : Array.from(new Set([
-      ..._projectTreeCache.keys(),
-      ..._projectTreeInFlight.keys(),
-      ..._projectTreeGeneration.keys(),
+      ..._spaceTreeCache.keys(),
+      ..._spaceTreeInFlight.keys(),
+      ..._spaceTreeGeneration.keys(),
     ])).filter((key) => key.startsWith(prefix));
   for (const key of keys) {
-    _projectTreeCache.delete(key);
-    _projectTreeInFlight.delete(key);
-    _projectTreeGeneration.set(key, (_projectTreeGeneration.get(key) || 0) + 1);
+    _spaceTreeCache.delete(key);
+    _spaceTreeInFlight.delete(key);
+    _spaceTreeGeneration.set(key, (_spaceTreeGeneration.get(key) || 0) + 1);
   }
 }
 
-export async function listProjectFileTree(userId: string, projectId: string): Promise<ProjectLibraryNode[]> {
+export async function listSpaceFileTree(userId: string, spaceId: string): Promise<SpaceLibraryNode[]> {
   let dir: string;
-  let pid: string;
+  let sid: string;
   try {
-    pid = safeProjectId(projectId);
-    if (!await projectExists(userId, pid)) return [];
-    dir = projectFilesDir(userId, pid);
+    sid = safeSpaceId(spaceId);
+    if (!await spaceExists(userId, sid)) return [];
+    dir = spaceFilesDir(userId, sid);
   } catch { return []; }
-  const key = _projectTreeKey(userId, pid);
-  const generation = _projectTreeGeneration.get(key) || 0;
-  const cached = _projectTreeCache.get(key);
+  const key = _spaceTreeKey(userId, sid);
+  const generation = _spaceTreeGeneration.get(key) || 0;
+  const cached = _spaceTreeCache.get(key);
   if (cached && cached.generation === generation && cached.expiresAt > Date.now()) {
     return cached.tree;
   }
-  const existing = _projectTreeInFlight.get(key);
+  const existing = _spaceTreeInFlight.get(key);
   if (existing) return existing;
-  const run = walkProjectTreeAsync(dir, dir).then((tree) => {
-    if ((_projectTreeGeneration.get(key) || 0) === generation) {
-      _projectTreeCache.set(key, {
+  const run = walkSpaceTreeAsync(dir, dir).then((tree) => {
+    if ((_spaceTreeGeneration.get(key) || 0) === generation) {
+      _spaceTreeCache.set(key, {
         generation,
         expiresAt: Date.now() + PROJECT_TREE_CACHE_TTL_MS,
         tree,
@@ -361,30 +361,30 @@ export async function listProjectFileTree(userId: string, projectId: string): Pr
     }
     return tree;
   });
-  _projectTreeInFlight.set(key, run);
+  _spaceTreeInFlight.set(key, run);
   try { return await run; }
   finally {
-    if (_projectTreeInFlight.get(key) === run) _projectTreeInFlight.delete(key);
+    if (_spaceTreeInFlight.get(key) === run) _spaceTreeInFlight.delete(key);
   }
 }
 
-export async function listProjectFiles(userId: string, projectId: string): Promise<ProjectFileInfo[]> {
-  return flattenFiles(await listProjectFileTree(userId, projectId));
+export async function listSpaceFiles(userId: string, spaceId: string): Promise<SpaceFileInfo[]> {
+  return flattenFiles(await listSpaceFileTree(userId, spaceId));
 }
 
-export async function uploadProjectFile(
+export async function uploadSpaceFile(
   userId: string,
-  projectId: string,
+  spaceId: string,
   name: string,
   raw: Buffer | Uint8Array | null | undefined,
-): Promise<Result<{ info: ProjectFileInfo }>> {
+): Promise<Result<{ info: SpaceFileInfo }>> {
   let safeName: string;
-  let pid: string;
+  let sid: string;
   let dir: string;
   try {
     safeName = safeFileName(name);
-    pid = safeProjectId(projectId);
-    dir = await ensureProjectFilesDir(userId, pid);
+    sid = safeSpaceId(spaceId);
+    dir = await ensureSpaceFilesDir(userId, sid);
   } catch (err) { return { ok: false, error: (err as Error).message }; }
 
   const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw || []);
@@ -409,27 +409,27 @@ export async function uploadProjectFile(
 
   const info = infoFor(target, dir);
   if (!info) return { ok: false, error: 'write failed' };
-  projectLibraryIndexer.enqueue(userId, pid, info.relPath, 'upsert');
-  _notifyDirty(userId, pid);
-  log.info(`upload user=${userId} pid=${pid} name=${info.relPath} kind=${info.kind} bytes=${info.bytes}`);
+  spaceLibraryIndexer.enqueue(userId, sid, info.relPath, 'upsert');
+  _notifyDirty(userId, sid);
+  log.info(`upload user=${userId} sid=${sid} name=${info.relPath} kind=${info.kind} bytes=${info.bytes}`);
   return { ok: true, info };
 }
 
 /** Import a user-selected local file via async filesystem copy, not base64 IPC. */
-export async function importProjectFileFromPath(
+export async function importSpaceFileFromPath(
   userId: string,
-  projectId: string,
+  spaceId: string,
   name: string,
   sourceAbs: string,
-): Promise<Result<{ info: ProjectFileInfo }>> {
+): Promise<Result<{ info: SpaceFileInfo }>> {
   const startedAt = Date.now();
   let safeName: string;
-  let pid: string;
+  let sid: string;
   let dir: string;
   try {
     safeName = safeFileName(name);
-    pid = safeProjectId(projectId);
-    dir = await ensureProjectFilesDir(userId, pid);
+    sid = safeSpaceId(spaceId);
+    dir = await ensureSpaceFilesDir(userId, sid);
   } catch (err) { return { ok: false, error: (err as Error).message }; }
 
   try {
@@ -442,7 +442,7 @@ export async function importProjectFileFromPath(
         return { ok: false, error: t('errors.not_utf8') };
       }
     }
-    const info = await withLocalImportLock(`project:${userId}:${pid}`, async () => {
+    const info = await withLocalImportLock(`space:${userId}:${sid}`, async () => {
       const parent = path.dirname(safeName);
       const targetDir = parent === '.' ? dir : resolveUnder(dir, parent);
       const target = uniqueTarget(targetDir, path.basename(safeName));
@@ -451,13 +451,13 @@ export async function importProjectFileFromPath(
       await copyLocalFileAtomic(source.absPath, target, source);
       const imported = infoFor(target, dir);
       if (!imported) throw Object.assign(new Error('write failed'), { code: 'E_IMPORT_PUBLISH' });
-      projectLibraryIndexer.enqueue(userId, pid, imported.relPath, 'upsert');
-      _notifyDirty(userId, pid);
+      spaceLibraryIndexer.enqueue(userId, sid, imported.relPath, 'upsert');
+      _notifyDirty(userId, sid);
       return imported;
     });
     log.info('imported local project library file', {
       user_id: maskId(userId),
-      project_id: maskId(pid),
+      space_id: maskId(sid),
       path: logPathRef(info.relPath),
       kind: info.kind,
       bytes: info.bytes,
@@ -467,7 +467,7 @@ export async function importProjectFileFromPath(
   } catch (err) {
     log.warn('local project library file import failed', {
       user_id: maskId(userId),
-      project_id: maskId(pid),
+      space_id: maskId(sid),
       path: logPathRef(safeName),
       duration_ms: Date.now() - startedAt,
       error: logErrorSummary(err),
@@ -476,18 +476,18 @@ export async function importProjectFileFromPath(
   }
 }
 
-export async function createProjectDir(
+export async function createSpaceDir(
   userId: string,
-  projectId: string,
+  spaceId: string,
   relPath: string,
 ): Promise<Result<{ path: string }>> {
   let safePath: string;
-  let pid: string;
+  let sid: string;
   let root: string;
   try {
     safePath = safeDirPath(relPath);
-    pid = safeProjectId(projectId);
-    root = await ensureProjectFilesDir(userId, pid);
+    sid = safeSpaceId(spaceId);
+    root = await ensureSpaceFilesDir(userId, sid);
   } catch (err) { return { ok: false, error: (err as Error).message }; }
 
   let abs: string;
@@ -501,20 +501,20 @@ export async function createProjectDir(
   }
   try { fs.mkdirSync(abs, { recursive: false }); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
-  _notifyDirty(userId, pid);
+  _notifyDirty(userId, sid);
   return { ok: true, path: safePath };
 }
 
-export async function deleteProjectFile(userId: string, projectId: string, name: string): Promise<Result> {
+export async function deleteSpaceFile(userId: string, spaceId: string, name: string): Promise<Result> {
   let safeName: string;
-  let pid: string;
+  let sid: string;
   try {
     safeName = safeFileName(name);
-    pid = safeProjectId(projectId);
-    if (!await projectExists(userId, pid)) return { ok: false, error: 'not_found' };
+    sid = safeSpaceId(spaceId);
+    if (!await spaceExists(userId, sid)) return { ok: false, error: 'not_found' };
   } catch (err) { return { ok: false, error: (err as Error).message }; }
 
-  const dir = projectFilesDir(userId, pid);
+  const dir = spaceFilesDir(userId, sid);
   let abs: string;
   try { abs = resolveUnder(dir, safeName); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
@@ -524,27 +524,27 @@ export async function deleteProjectFile(userId: string, projectId: string, name:
   } catch { return { ok: false, error: 'not_found' }; }
   try { fs.unlinkSync(abs); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
-  projectLibraryIndexer.enqueue(userId, pid, safeName, 'delete');
-  _notifyDeleted(pid, safeName);
+  spaceLibraryIndexer.enqueue(userId, sid, safeName, 'delete');
+  _notifyDeleted(sid, safeName);
   try { invalidateFileCache(userId, abs); }
   catch (err) { log.warn(`invalidate cache ${abs}: ${(err as Error).message}`); }
   try {
     if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
   } catch { /* best-effort */ }
-  _notifyDirty(userId, pid);
+  _notifyDirty(userId, sid);
   return { ok: true };
 }
 
-export async function deleteProjectEntry(userId: string, projectId: string, name: string): Promise<Result> {
+export async function deleteSpaceEntry(userId: string, spaceId: string, name: string): Promise<Result> {
   let safeName: string;
-  let pid: string;
+  let sid: string;
   try {
     safeName = safeDirPath(name);
-    pid = safeProjectId(projectId);
-    if (!await projectExists(userId, pid)) return { ok: false, error: 'not_found' };
+    sid = safeSpaceId(spaceId);
+    if (!await spaceExists(userId, sid)) return { ok: false, error: 'not_found' };
   } catch (err) { return { ok: false, error: (err as Error).message }; }
 
-  const root = path.resolve(projectFilesDir(userId, pid));
+  const root = path.resolve(spaceFilesDir(userId, sid));
   let abs: string;
   try { abs = resolveUnder(root, safeName); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
@@ -560,20 +560,20 @@ export async function deleteProjectEntry(userId: string, projectId: string, name
   } catch (err) { return { ok: false, error: (err as Error).message }; }
 
   for (const file of files) {
-    projectLibraryIndexer.enqueue(userId, pid, file.relPath, 'delete');
-    _notifyDeleted(pid, file.relPath);
+    spaceLibraryIndexer.enqueue(userId, sid, file.relPath, 'delete');
+    _notifyDeleted(sid, file.relPath);
     try { invalidateFileCache(userId, file.path); }
     catch (err) { log.warn(`invalidate cache ${file.path}: ${(err as Error).message}`); }
   }
-  _notifyDirty(userId, pid);
+  _notifyDirty(userId, sid);
   return { ok: true };
 }
 
-export async function createProjectTextFile(
+export async function createSpaceTextFile(
   userId: string,
-  projectId: string,
+  spaceId: string,
   name: string,
-): Promise<Result<{ info: ProjectFileInfo }>> {
+): Promise<Result<{ info: SpaceFileInfo }>> {
   let safeName: string;
   try {
     safeName = safeFileName(name);
@@ -581,23 +581,23 @@ export async function createProjectTextFile(
       return { ok: false, error: 'not a text file' };
     }
   } catch (err) { return { ok: false, error: (err as Error).message }; }
-  return uploadProjectFile(userId, projectId, safeName, Buffer.from('', 'utf8'));
+  return uploadSpaceFile(userId, spaceId, safeName, Buffer.from('', 'utf8'));
 }
 
-export async function resolveProjectFileAbsPath(
+export async function resolveSpaceFileAbsPath(
   userId: string,
-  projectId: string,
+  spaceId: string,
   name: string,
-): Promise<Result<{ absPath: string; kind: ProjectFileKind }>> {
+): Promise<Result<{ absPath: string; kind: SpaceFileKind }>> {
   let safeName: string;
-  let pid: string;
+  let sid: string;
   try {
     safeName = safeFileName(name);
-    pid = safeProjectId(projectId);
-    if (!await projectExists(userId, pid)) return { ok: false, error: 'not_found' };
+    sid = safeSpaceId(spaceId);
+    if (!await spaceExists(userId, sid)) return { ok: false, error: 'not_found' };
   } catch (err) { return { ok: false, error: (err as Error).message }; }
 
-  const root = path.resolve(projectFilesDir(userId, pid));
+  const root = path.resolve(spaceFilesDir(userId, sid));
   let abs: string;
   try { abs = resolveUnder(root, safeName); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
@@ -609,19 +609,19 @@ export async function resolveProjectFileAbsPath(
 }
 
 /** Resolve a project Library file or folder for internal transfer workflows. */
-export async function resolveProjectEntryAbsPath(
+export async function resolveSpaceEntryAbsPath(
   userId: string,
-  projectId: string,
+  spaceId: string,
   name: string,
 ): Promise<Result<{ absPath: string; type: 'file' | 'dir' }>> {
   let safeName: string;
-  let pid: string;
+  let sid: string;
   try {
     safeName = safeDirPath(name);
-    pid = safeProjectId(projectId);
-    if (!await projectExists(userId, pid)) return { ok: false, error: 'not_found' };
+    sid = safeSpaceId(spaceId);
+    if (!await spaceExists(userId, sid)) return { ok: false, error: 'not_found' };
   } catch (err) { return { ok: false, error: (err as Error).message }; }
-  const root = path.resolve(projectFilesDir(userId, pid));
+  const root = path.resolve(spaceFilesDir(userId, sid));
   let absPath: string;
   try { absPath = resolveUnder(root, safeName); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
@@ -634,7 +634,7 @@ export async function resolveProjectEntryAbsPath(
   return { ok: false, error: 'not_found' };
 }
 
-function validateProjectCopySource(sourceAbs: string): Result<{ fileCount: number; bytes: number }> {
+function validateSpaceCopySource(sourceAbs: string): Result<{ fileCount: number; bytes: number }> {
   const stack = [sourceAbs];
   let fileCount = 0;
   let bytes = 0;
@@ -667,18 +667,18 @@ function validateProjectCopySource(sourceAbs: string): Result<{ fileCount: numbe
 
 /** Copy a trusted internal entry into a project Library and refresh the
  * project tree/index state. Existing targets are never overwritten. */
-export async function copyProjectEntryFromPath(
+export async function copySpaceEntryFromPath(
   userId: string,
-  projectId: string,
+  spaceId: string,
   sourceAbs: string,
   targetName: string,
 ): Promise<Result<{ name: string; fileCount: number; bytes: number }>> {
-  let pid: string;
+  let sid: string;
   let root: string;
   let sourceStat: fs.Stats;
   try {
-    pid = safeProjectId(projectId);
-    root = await ensureProjectFilesDir(userId, pid);
+    sid = safeSpaceId(spaceId);
+    root = await ensureSpaceFilesDir(userId, sid);
     sourceStat = fs.lstatSync(sourceAbs);
   } catch (err) { return { ok: false, error: (err as Error).message }; }
   if (sourceStat.isSymbolicLink() || (!sourceStat.isFile() && !sourceStat.isDirectory())) {
@@ -693,7 +693,7 @@ export async function copyProjectEntryFromPath(
   try {
     if (!fs.statSync(path.dirname(targetAbs)).isDirectory()) return { ok: false, error: 'not_found' };
   } catch { return { ok: false, error: 'not_found' }; }
-  const checked = validateProjectCopySource(sourceAbs);
+  const checked = validateSpaceCopySource(sourceAbs);
   if (checked.ok === false) return { ok: false, error: checked.error };
 
   try {
@@ -710,19 +710,19 @@ export async function copyProjectEntryFromPath(
 
   const copiedFiles = await filesUnderEntry(targetAbs, root);
   for (const file of copiedFiles) {
-    projectLibraryIndexer.enqueue(userId, pid, file.relPath, 'upsert');
+    spaceLibraryIndexer.enqueue(userId, sid, file.relPath, 'upsert');
     try { invalidateFileCache(userId, file.path); } catch { /* new path; best effort */ }
   }
-  _notifyDirty(userId, pid);
+  _notifyDirty(userId, sid);
   return { ok: true, name: safeTarget, fileCount: checked.fileCount, bytes: checked.bytes };
 }
 
-export async function readProjectTextFile(
+export async function readSpaceTextFile(
   userId: string,
-  projectId: string,
+  spaceId: string,
   name: string,
 ): Promise<Result<{ content: string; name: string }>> {
-  const r = await resolveProjectFileAbsPath(userId, projectId, name);
+  const r = await resolveSpaceFileAbsPath(userId, spaceId, name);
   if (!r.ok) return { ok: false, error: (r as { error?: string }).error || 'not_found' };
   if (r.kind !== 'text') return { ok: false, error: 'binary file cannot be read as text' };
   let st: fs.Stats;
@@ -738,13 +738,13 @@ export async function readProjectTextFile(
   } catch (err) { return { ok: false, error: (err as Error).message }; }
 }
 
-export async function updateProjectTextFile(
+export async function updateSpaceTextFile(
   userId: string,
-  projectId: string,
+  spaceId: string,
   name: string,
   content: string,
 ): Promise<Result<{ name: string }>> {
-  const r = await resolveProjectFileAbsPath(userId, projectId, name);
+  const r = await resolveSpaceFileAbsPath(userId, spaceId, name);
   if (!r.ok) return { ok: false, error: (r as { error?: string }).error || 'not_found' };
   if (r.kind !== 'text') return { ok: false, error: 'binary file cannot be edited as text' };
   const body = typeof content === 'string' ? content : '';
@@ -756,25 +756,25 @@ export async function updateProjectTextFile(
   catch (err) { return { ok: false, error: (err as Error).message }; }
   try { invalidateFileCache(userId, r.absPath); }
   catch (err) { log.warn(`invalidate cache ${r.absPath}: ${(err as Error).message}`); }
-  projectLibraryIndexer.enqueue(userId, projectId, name, 'upsert');
-  _notifyDirty(userId, projectId);
+  spaceLibraryIndexer.enqueue(userId, spaceId, name, 'upsert');
+  _notifyDirty(userId, spaceId);
   return { ok: true, name };
 }
 
-export async function renameProjectFile(
+export async function renameSpaceFile(
   userId: string,
-  projectId: string,
+  spaceId: string,
   oldName: string,
   nextName: string,
-): Promise<Result<{ oldName: string; name: string; type: 'file' | 'dir'; info?: ProjectFileInfo }>> {
+): Promise<Result<{ oldName: string; name: string; type: 'file' | 'dir'; info?: SpaceFileInfo }>> {
   let safeOld: string;
-  let pid: string;
+  let sid: string;
   try {
     safeOld = safeDirPath(oldName);
-    pid = safeProjectId(projectId);
-    if (!await projectExists(userId, pid)) return { ok: false, error: 'not_found' };
+    sid = safeSpaceId(spaceId);
+    if (!await spaceExists(userId, sid)) return { ok: false, error: 'not_found' };
   } catch (err) { return { ok: false, error: (err as Error).message }; }
-  const root = path.resolve(projectFilesDir(userId, pid));
+  const root = path.resolve(spaceFilesDir(userId, sid));
   let src: string;
   try { src = resolveUnder(root, safeOld); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
@@ -811,23 +811,23 @@ export async function renameProjectFile(
     const nextAbs = resolveUnder(root, nextRel);
     try { invalidateFileCache(userId, file.path); invalidateFileCache(userId, nextAbs); }
     catch (err) { log.warn(`invalidate cache rename ${file.relPath}: ${(err as Error).message}`); }
-    projectLibraryIndexer.enqueue(userId, pid, file.relPath, 'delete');
-    projectLibraryIndexer.enqueue(userId, pid, nextRel, 'upsert');
-    _notifyDeleted(pid, file.relPath);
+    spaceLibraryIndexer.enqueue(userId, sid, file.relPath, 'delete');
+    spaceLibraryIndexer.enqueue(userId, sid, nextRel, 'upsert');
+    _notifyDeleted(sid, file.relPath);
   }
-  _notifyDirty(userId, pid);
+  _notifyDirty(userId, sid);
   if (type === 'dir') return { ok: true, oldName: safeOld, name: safeNext, type };
   const info = infoFor(dst, root);
   if (!info) return { ok: false, error: 'rename failed' };
   return { ok: true, oldName: safeOld, name: info.relPath, type, info };
 }
 
-export async function readProjectImage(
+export async function readSpaceImage(
   userId: string,
-  projectId: string,
+  spaceId: string,
   name: string,
 ): Promise<Result<{ base64: string; mediaType: string; bytes: number }>> {
-  const r = await resolveProjectFileAbsPath(userId, projectId, name);
+  const r = await resolveSpaceFileAbsPath(userId, spaceId, name);
   if (!r.ok) return { ok: false, error: (r as { error?: string }).error || 'not_found' };
   if (r.kind !== 'image') return { ok: false, error: 'not an image' };
   const mediaType = IMAGE_MEDIA_TYPE[path.extname(r.absPath).toLowerCase()];
@@ -838,12 +838,12 @@ export async function readProjectImage(
   } catch (err) { return { ok: false, error: (err as Error).message }; }
 }
 
-export async function readProjectDocxHtml(
+export async function readSpaceDocxHtml(
   userId: string,
-  projectId: string,
+  spaceId: string,
   name: string,
 ): Promise<Result<{ html: string }>> {
-  const r = await resolveProjectFileAbsPath(userId, projectId, name);
+  const r = await resolveSpaceFileAbsPath(userId, spaceId, name);
   if (!r.ok) return { ok: false, error: (r as { error?: string }).error || 'not_found' };
   if (r.kind !== 'docx') return { ok: false, error: 'not a docx file' };
   try {
@@ -852,17 +852,17 @@ export async function readProjectDocxHtml(
     const html = await docxBufferToHtml(buf);
     return { ok: true, html };
   } catch (err) {
-    log.warn(`project docx→html ${projectId}/${name}: ${(err as Error).message}`);
+    log.warn(`project docx→html ${spaceId}/${name}: ${(err as Error).message}`);
     return { ok: false, error: (err as Error).message };
   }
 }
 
-export async function readProjectOfficeHtml(
+export async function readSpaceOfficeHtml(
   userId: string,
-  projectId: string,
+  spaceId: string,
   name: string,
 ): Promise<Result<{ html: string; kind: 'word' | 'spreadsheet' | 'presentation'; previewHeight?: number }>> {
-  const r = await resolveProjectFileAbsPath(userId, projectId, name);
+  const r = await resolveSpaceFileAbsPath(userId, spaceId, name);
   if (!r.ok) return { ok: false, error: (r as { error?: string }).error || 'not_found' };
   const kind = officePreviewKindForExt(path.extname(r.absPath).toLowerCase());
   if (!kind) return { ok: false, error: 'not a supported office file' };
@@ -871,21 +871,21 @@ export async function readProjectOfficeHtml(
     const preview = await officeBufferToPreviewHtml(kind, path.basename(r.absPath), buf);
     return { ok: true, ...preview };
   } catch (err) {
-    log.warn(`project office→html ${projectId}/${name}: ${(err as Error).message}`);
+    log.warn(`project office→html ${spaceId}/${name}: ${(err as Error).message}`);
     return { ok: false, error: (err as Error).message };
   }
 }
 
-export async function getProjectFilesRoot(userId: string, projectId: string): Promise<string | null> {
+export async function getSpaceFilesRoot(userId: string, spaceId: string): Promise<string | null> {
   try {
-    const pid = safeProjectId(projectId);
-    if (!await projectExists(userId, pid)) return null;
-    return projectFilesDir(userId, pid);
+    const sid = safeSpaceId(spaceId);
+    if (!await spaceExists(userId, sid)) return null;
+    return spaceFilesDir(userId, sid);
   } catch { return null; }
 }
 
-export async function isProjectFilePath(userId: string, projectId: string, absPath: string): Promise<boolean> {
-  const root = await getProjectFilesRoot(userId, projectId);
+export async function isSpaceFilePath(userId: string, spaceId: string, absPath: string): Promise<boolean> {
+  const root = await getSpaceFilesRoot(userId, spaceId);
   if (!root) return false;
   const rel = path.relative(path.resolve(root), path.resolve(absPath));
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));

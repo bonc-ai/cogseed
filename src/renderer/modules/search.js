@@ -378,18 +378,8 @@ async function _gotoSearchResult(r) {
   if (!r) return;
   closeGlobalSearch();
   if (r.kind === 'context') {
-    if (r.library_scope === 'project' && r.project_id) {
-      setView('project', r.project_id);
-      setTimeout(async () => {
-        try {
-          const res = await window.cogseed.invoke('projects.files.absPath', { projectId: r.project_id, name: r.path });
-          if (res && res.ok && typeof openChatFileViewer === 'function') {
-            openChatFileViewer(res.path, r.title || r.path, { projectId: r.project_id });
-          }
-        } catch (_) { /* navigation best-effort */ }
-      }, 120);
-      return;
-    }
+    // 空间化后项目作用域搜索结果无对应视图（项目层已删），静默忽略。
+    if (r.library_scope === 'project') return;
     setView('contexts');
     const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
     if (typeof loader === 'function') await loader('contexts');

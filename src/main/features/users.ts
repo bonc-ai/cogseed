@@ -44,6 +44,7 @@ import { migrateChatsGhostCleanup } from '../util/migrate-chats-ghost-cleanup';
 import { migrateAgentLayout } from '../util/migrate-agent-layout';
 import { migrateKbToLocalContexts } from '../util/migrate-kb-to-local';
 import { migrateProjectLayoutV4 } from '../util/migrate-project-layout-v4';
+import { migrateProjectLayoutV5 } from '../util/migrate-project-layout-v5';
 import { rekeyUserLocalSecretsAfterLocalIdChange } from '../util/rekey-user-local-secrets';
 import { maskId } from '../util/log-redact';
 
@@ -325,6 +326,15 @@ export function activateUser(uid: string): void {
   // files under projects/<pid>/... before feature modules start using paths.
   try { migrateProjectLayoutV4(uid); }
   catch (err) { log.warn('migrateProjectLayoutV4 failed', { uid: maskId(uid), error: (err as Error).message }); }
+
+  // v5 space-scoped layout (删项目层，空间化重构阶段 0)：把有 space_id 的项目的
+  // 会话/会话状态/附件/产物搬到 cloud/spaces/<sid>/... 并把会话索引 space_id 落地。
+  // 幂等（marker + 加锁）。🔴 注意：本迁移搬完文件后，执行路径（conversationLayout /
+  // resolveProjectScope）仍在读 projects/，需阶段 4（T4.1）改空间根后才能对外——
+  // 中间态（阶段 0~3）若对真实数据启动，已绑定空间的会话会暂时不可见。开发期勿对
+  // 真实数据跑完整 app，或用全新 uid 验证。
+  try { migrateProjectLayoutV5(uid); }
+  catch (err) { log.warn('migrateProjectLayoutV5 failed', { uid: maskId(uid), error: (err as Error).message }); }
 
   // Convert old sync ghosts (index row exists, jsonl already gone) into
   // record-level tombstones so the new merge logic can propagate the delete.

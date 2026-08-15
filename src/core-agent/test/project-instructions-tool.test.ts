@@ -27,7 +27,6 @@ describe('project_instructions tool', () => {
     expect(def.description).toContain('cross_session_memory');
     expect(def.description).toContain('target "user"');
     expect(def.description).toContain('target "project"');
-    expect(def.description).toContain('project_tasks');
   });
 
   it('dispatches to handler.set with the full content', async () => {

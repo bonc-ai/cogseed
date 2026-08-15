@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { trustedIpcSender } from '../../helpers/trusted-ipc-sender';
 
 // The "@ Library" picker attaches a global/project Library file into a
-// composer draft pool via `contexts.attachToDraft` / `projects.files.attachToDraft`.
+// composer draft pool via `contexts.attachToDraft` / `spaces.files.attachToDraft`.
 // Both channels used to be unregistered (renderer called them, main threw
 // "unknown channel") — this covers the fix.
 
@@ -91,21 +91,21 @@ describe('contexts.attachToDraft', () => {
   });
 });
 
-describe('projects.files.attachToDraft', () => {
+describe('spaces.files.attachToDraft', () => {
   it('imports a project Library file into that project draft pool', async () => {
-    const projects = await import('../../../src/main/features/projects');
+    const spaces = await import('../../../src/main/features/spaces');
     const chatAttachments = await import('../../../src/main/features/chat_attachments');
-    const { projectFilesDir } = await import('../../../src/main/paths');
+    const { spaceFilesDir } = await import('../../../src/main/paths');
 
-    const project = await projects.createProject(TEST_UID, 'Attach Draft Project');
-    if (!project.ok) throw new Error('project precondition failed');
-    const projectId = project.project.project_id;
-    const dir = projectFilesDir(TEST_UID, projectId);
+    const space = await spaces.createSpace(TEST_UID, { name: 'Attach Draft Project' });
+    if (!space.ok) throw new Error('space precondition failed');
+    const spaceId = space.space.space_id;
+    const dir = spaceFilesDir(TEST_UID, spaceId);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'brief.md'), '# Brief', 'utf8');
 
-    const draftCid = `projchat-${projectId}`;
-    const res = await invoke('projects.files.attachToDraft', { projectId, name: 'brief.md', cid: draftCid });
+    const draftCid = `projchat-${spaceId}`;
+    const res = await invoke('spaces.files.attachToDraft', { spaceId, name: 'brief.md', cid: draftCid });
 
     expect(res.ok).toBe(true);
     expect(res.info).toMatchObject({ name: 'brief.md' });
@@ -114,8 +114,8 @@ describe('projects.files.attachToDraft', () => {
   });
 
   it('rejects a project id that does not exist', async () => {
-    const res = await invoke('projects.files.attachToDraft', {
-      projectId: 'not-a-real-project',
+    const res = await invoke('spaces.files.attachToDraft', {
+      spaceId: 'not-a-real-project',
       name: 'brief.md',
       cid: 'projchat-not-a-real-project',
     });

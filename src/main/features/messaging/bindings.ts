@@ -3,7 +3,7 @@ import { Mutex } from 'async-mutex';
 import { nowIso, readJson, safeId, writeJson } from '../../storage';
 import { userMessagingBindingsFile } from '../../paths';
 import * as chats from '../chats';
-import * as projects from '../projects';
+import * as spaces from '../spaces';
 import type { InboundEnvelope, MessagingBinding, MessagingBindingsFile, MessagingInstance } from './types';
 
 const EMPTY: MessagingBindingsFile = { version: 1, bindings: {} };
@@ -91,6 +91,7 @@ function normalizeBinding(key: string, value: unknown): MessagingBinding | null 
     ...(externalUserId ? { externalUserId } : {}),
     ...(boundedOptionalText(item.externalChatTitle, 240) ? { externalChatTitle: boundedOptionalText(item.externalChatTitle, 240) } : {}),
     cid: item.cid,
+    ...(typeof item.spaceId === 'string' && safeId(item.spaceId) ? { spaceId: item.spaceId } : {}),
     ...(typeof item.projectId === 'string' && safeId(item.projectId) ? { projectId: item.projectId } : {}),
     ...(boundedOptionalText(item.replyToMessageId, 512) ? { replyToMessageId: boundedOptionalText(item.replyToMessageId, 512) } : {}),
     ...(boundedOptionalText(item.threadId, 512) ? { threadId: boundedOptionalText(item.threadId, 512) } : {}),
@@ -146,17 +147,20 @@ function refreshBinding(binding: MessagingBinding, envelope: InboundEnvelope): M
   return next;
 }
 
-async function projectForWorkspace(uid: string, instance: MessagingInstance): Promise<string | undefined> {
-  if (instance.workspace.type !== 'project') return undefined;
-  const configuredProjectId = instance.workspace.projectId;
-  if (!configuredProjectId || !safeId(configuredProjectId) || !await projects.projectExists(uid, configuredProjectId)) {
-    throw new Error('messaging workspace project not found');
+async function spaceForWorkspace(uid: string, instance: MessagingInstance): Promise<string | undefined> {
+  if (instance.workspace.type !== 'space') return undefined;
+  const configuredSpaceId = instance.workspace.spaceId;
+  if (!configuredSpaceId || !safeId(configuredSpaceId) || !await spaces.spaceExists(uid, configuredSpaceId)) {
+    throw new Error('messaging workspace space not found');
   }
-  return configuredProjectId;
+  return configuredSpaceId;
 }
 
-function sameProject(binding: MessagingBinding, projectId: string | undefined): boolean {
-  return binding.projectId === projectId;
+function sameWorkspaceId(binding: MessagingBinding, spaceId: string | undefined): boolean {
+  // 兼容期：旧 binding 记录的是 projectId（T4.5 空间化前），按同一空间语义比较。
+  // 新记录统一写 spaceId。
+  if (spaceId) return binding.spaceId === spaceId || binding.projectId === spaceId;
+  return !binding.spaceId && !binding.projectId;
 }
 
 export async function getBinding(
@@ -192,11 +196,11 @@ export async function resolveOrCreateBinding(
   const key = keyForEnvelope(instance.id, envelope);
   return lockFor(uid).runExclusive(async () => {
     const data = await readBindings(uid);
-    const projectId = await projectForWorkspace(uid, instance);
+    const spaceId = await spaceForWorkspace(uid, instance);
     const existing = data.bindings[key];
     // forceNew rotates the bound conversation (e.g. `/new`): the historical
     // cid keeps its message file, but new inbound goes to a fresh cid.
-    if (existing && !opts.forceNew && sameProject(existing, projectId)) {
+    if (existing && !opts.forceNew && sameWorkspaceId(existing, spaceId)) {
       const refreshed = refreshBinding(existing, envelope);
       data.bindings[key] = refreshed;
       await writeBindings(uid, data);
@@ -210,7 +214,7 @@ export async function resolveOrCreateBinding(
     if (conversationScope === 'direct') {
       const oldKey = legacyBindingKey(instance.id, envelope.externalChatId);
       const legacy = data.bindings[oldKey];
-      if (legacy && legacy.conversationScope === 'legacy' && sameProject(legacy, projectId)) {
+      if (legacy && legacy.conversationScope === 'legacy' && sameWorkspaceId(legacy, spaceId)) {
         const migrated: MessagingBinding = {
           ...refreshBinding(legacy, envelope),
           key,
@@ -231,7 +235,7 @@ export async function resolveOrCreateBinding(
     const title = [instance.displayName, chatLabel, senderLabel].filter(Boolean).join(' · ').slice(0, 120);
     const conversation = await chats.createConversation(uid, {
       title,
-      ...(projectId ? { projectId } : {}),
+      ...(spaceId ? { spaceId } : {}),
     });
     const now = nowIso();
     const binding: MessagingBinding = {
@@ -242,7 +246,7 @@ export async function resolveOrCreateBinding(
       ...(envelope.externalUserId ? { externalUserId: envelope.externalUserId } : {}),
       ...(envelope.externalChatTitle ? { externalChatTitle: envelope.externalChatTitle.slice(0, 240) } : {}),
       cid: conversation.conversation_id,
-      ...(projectId ? { projectId } : {}),
+      ...(spaceId ? { spaceId } : {}),
       ...replyContextFromEnvelope(envelope),
       createdAt: now,
       updatedAt: now,

@@ -30,19 +30,6 @@ export {
 } from './main-skill-baseline';
 
 export {
-  startTaskRun,
-  readRunIds,
-  readLatestRunId,
-  listTaskRuns,
-  decodeRunRefs,
-  type TaskRunRole,
-  type StartTaskRunInput,
-  type StartTaskRunResult,
-  type StartedTaskRun,
-  type StartTaskRunRefusal,
-} from './task-run';
-
-export {
   evaluateWorkspaceGate,
   isWorkspaceViewable,
   type WorkspaceGateDecision,
@@ -50,10 +37,3 @@ export {
   type WorkspaceGateStatus,
   type EvaluateWorkspaceGateInput,
 } from './gate';
-
-export {
-  projectActionPlan,
-  type ActionPlan,
-  type ActionPlanStep,
-  type ActionPlanStepState,
-} from './action-plan';

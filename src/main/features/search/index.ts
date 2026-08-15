@@ -63,7 +63,8 @@ const SNIPPET_RADIUS = 60;
 interface ChatDisplayCatalog {
   titles: Map<string, string>;
   cidToPid: Map<string, string>;
-  pidToName: Map<string, string>;
+  cidToSid: Map<string, string>;
+  sidToName: Map<string, string>;
 }
 
 const _chatDisplayCatalogCache = new Map<string, ChatDisplayCatalog>();
@@ -86,22 +87,24 @@ async function _getChatDisplayCatalog(userId: string): Promise<ChatDisplayCatalo
   if (existing) return existing;
   const generation = _chatDisplayCatalogGeneration.get(userId) || 0;
   const run = (async () => {
-    const [chats, projects] = await Promise.all([
+    const [chats, spaces] = await Promise.all([
       import('../chats'),
-      import('../projects'),
+      import('../spaces'),
     ]);
-    const [conversationRows, projectRows] = await Promise.all([
+    const [conversationRows, spaceRows] = await Promise.all([
       chats.listConversationDisplayRows(userId),
-      projects.listProjectNameRows(userId),
+      spaces.listSpaces(userId).catch(() => []),
     ]);
     const catalog: ChatDisplayCatalog = {
       titles: new Map(),
       cidToPid: new Map(),
-      pidToName: new Map(projectRows.map((row) => [row.project_id, row.name])),
+      cidToSid: new Map(),
+      sidToName: new Map<string, string>((spaceRows as Array<{ space_id: string; name: string }>).map((row) => [row.space_id, row.name])),
     };
     for (const row of conversationRows) {
       catalog.titles.set(row.conversation_id, row.title);
       if (row.project_id) catalog.cidToPid.set(row.conversation_id, row.project_id);
+      if (row.space_id) catalog.cidToSid.set(row.conversation_id, row.space_id);
     }
     if ((_chatDisplayCatalogGeneration.get(userId) || 0) === generation) {
       _chatDisplayCatalogCache.set(userId, catalog);
@@ -336,20 +339,20 @@ export async function searchContexts(query: string, userId?: string): Promise<Se
   });
 }
 
-export async function searchProjectContexts(userId: string, projectId: string, query: string): Promise<SearchResult[]> {
+export async function searchSpaceContexts(userId: string, spaceId: string, query: string): Promise<SearchResult[]> {
   const q = (query || '').trim();
-  const pid = (projectId || '').trim();
-  if (!q || !pid) return [];
+  const sid = (spaceId || '').trim();
+  if (!q || !sid) return [];
   const qLower = q.toLowerCase();
   const tokens = tokenize(q).filter((t) => t.length > 1 || !isCJK(t));
   try {
-    const [projectFiles, projects] = await Promise.all([
+    const [spaceFiles, spaces] = await Promise.all([
       import('../project_files'),
-      import('../projects'),
+      import('../spaces'),
     ]);
-    const [files, project] = await Promise.all([
-      projectFiles.listProjectFiles(userId, pid),
-      projects.getProject(userId, pid).catch(() => null),
+    const [files, space] = await Promise.all([
+      spaceFiles.listSpaceFiles(userId, sid),
+      spaces.getSpace(userId, sid).catch(() => null),
     ]);
     const scored: SearchResult[] = [];
     for (const f of files) {
@@ -367,24 +370,24 @@ export async function searchProjectContexts(userId: string, projectId: string, q
         title: name,
         snippet: name,
         score,
-        library_scope: 'project',
-        project_id: pid,
-        project_name: project?.name || '',
+        library_scope: 'space',
+        space_id: sid,
+        space_name: space?.name || '',
       });
     }
     scored.sort((a, b) => b.score - a.score || String(a.path || '').localeCompare(String(b.path || '')));
     return scored.slice(0, MAX_PER_KIND);
   } catch (err) {
-    log.warn(`project contexts search failed user=${userId} pid=${pid}: ${(err as Error).message}`);
+    log.warn(`space contexts search failed user=${userId} sid=${sid}: ${(err as Error).message}`);
     return [];
   }
 }
 
 export interface SearchChatsOptions {
-  /** Restrict candidates to this project only. Ignored unless scope=project. */
-  projectId?: string;
-  /** Project scope is opt-in at this feature layer; model tools choose it by default in projects. */
-  scope?: 'project' | 'all';
+  /** Restrict candidates to this space only. Ignored unless scope=space. */
+  spaceId?: string;
+  /** Space scope is opt-in at this feature layer; model tools choose it by default in spaces. */
+  scope?: 'space' | 'all';
   /** Exclude a conversation whose history is already present in the caller's context. */
   excludeCid?: string;
 }
@@ -422,12 +425,14 @@ export async function searchChats(
     const cid = String(doc.cid);
     const msgIndex = Number(doc.msg_index);
     if (!cid || !Number.isInteger(msgIndex) || msgIndex < 0) return null;
-    const pid = displayCatalog.cidToPid.get(cid) || '';
+    const sid = displayCatalog.cidToSid.get(cid) || '';
     if (options.excludeCid && cid === options.excludeCid) return null;
-    if (options.scope === 'project' && (!options.projectId || pid !== options.projectId)) return null;
-    // The catalog above already resolved project membership. Supplying it
-    // avoids `conversationMessageReadFile` re-scanning every project index
-    // once per search result.
+    if (options.scope === 'space' && (!options.spaceId || sid !== options.spaceId)) return null;
+    // The catalog above already resolved space membership. Supplying the
+    // legacy project id avoids `conversationMessageReadFile` re-scanning
+    // every project index once per search result (physical layout still
+    // keys chats by project directory for legacy rows).
+    const pid = displayCatalog.cidToPid.get(cid) || '';
     const file = conversationMessageReadFile(userId, cid, pid || undefined);
     const result: ChatCandidate = {
       kind: 'chat',
@@ -441,10 +446,10 @@ export async function searchChats(
       sourceFile: file,
       sourceIndex: msgIndex,
     };
-    if (pid) {
-      (result as any).project_id = pid;
-      const name = displayCatalog.pidToName.get(pid);
-      if (name) (result as any).project_name = name;
+    if (sid) {
+      (result as any).space_id = sid;
+      const name = displayCatalog.sidToName.get(sid);
+      if (name) (result as any).space_name = name;
     }
     return result;
   });
@@ -669,7 +674,7 @@ export async function searchAll(
   const tasks: Array<Promise<void>> = [];
   if (scope === 'all' || scope === 'context') {
     tasks.push(searchContexts(q).then((r) => { buckets.push(...r); }));
-    if (projectId) tasks.push(searchProjectContexts(userId, projectId, q).then((r) => { buckets.push(...r); }));
+    if (projectId) tasks.push(searchSpaceContexts(userId, projectId, q).then((r) => { buckets.push(...r); }));
   }
   if (scope === 'all' || scope === 'chat')    tasks.push(searchChats(userId, q).then((r) => { buckets.push(...r); }));
   if (scope === 'all' || scope === 'agent')   tasks.push(searchAgents(userId, q).then((r) => { buckets.push(...r); }));

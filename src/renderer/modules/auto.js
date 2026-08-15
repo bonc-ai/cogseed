@@ -1028,21 +1028,6 @@ function _autoRefreshProjectOptions(removedProjectId = '') {
   _autoRefreshProjectScopedPicker();
 }
 
-async function _autoClearRecipientIfOutsideProject() {
-  const rec = _autoCurrentRecipient;
-  if (!rec || rec.kind !== 'agent' || !rec.id) return;
-  const pid = _autoSelectedProjectId();
-  if (!pid) return;
-  try {
-    const res = await window.cogseed.invoke('projects.bindings.list', { projectId: pid });
-    const allowed = new Set((res && res.bindings && res.bindings.agents) || []);
-    if (!allowed.has(rec.id)) {
-      _autoCurrentRecipient = { kind: 'commander' };
-      _repaintAutoRecipientChip();
-    }
-  } catch (_) { /* backend validation still guards save */ }
-}
-
 function _autoHourOptions() {
   const opts = [];
   for (let h = 0; h < 24; h++) opts.push({ value: String(h), label: String(h).padStart(2, '0') });
@@ -1193,7 +1178,6 @@ function _mountAutoForm() {
       value: '',
       onChange: () => {
         _autoRefreshProjectScopedPicker();
-        _autoClearRecipientIfOutsideProject().catch(() => {});
       },
     });
     const runDeviceMount = document.getElementById('auto-run-device-select');
