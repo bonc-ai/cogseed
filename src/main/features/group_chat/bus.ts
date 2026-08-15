@@ -1847,6 +1847,11 @@ export interface EnqueueParams {
   cid: string;
   fromActorId: string;
   text: string;
+  /** Host-internal control message (Commander-only, e.g. review request /
+   *  continuation judge): must NOT open a new taskRun (fromActorId is USER_ID
+   *  for routing but this is not a user action) — otherwise each control
+   *  message creates a run, terminal event, and closure loop. */
+  internalControl?: boolean;
   /** Structured source for a user-visible failure. This controls analytics
    * taxonomy only; the rendered text still controls failure actions/UI. */
   failure_kind?: GroupMessageFailureKind;
@@ -1966,7 +1971,7 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       code: "E_CONVERSATION_TERMINATING",
     });
   }
-  if (!state.taskRun && (fromActorId === USER_ID || params.kstarTerminalProvenance)) {
+  if (!params.internalControl && !state.taskRun && (fromActorId === USER_ID || params.kstarTerminalProvenance)) {
     const provenance = params.kstarTerminalProvenance;
     state.taskRun = {
       runId: genId12(),
@@ -8069,8 +8074,16 @@ async function judgeModelRouting(
       }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), CONTINUATION_JUDGE_TIMEOUT_MS)),
     ]);
-    if (!task || task.meta.aborted || task.meta.error) return null;
-    return parseContinuationJudgement(task.text);
+    if (!task || task.meta.aborted || task.meta.error) {
+      log.warn('kstar model routing runner failed', { cid: maskId(cid), aborted: task?.meta.aborted, error: task?.meta.error });
+      return null;
+    }
+    const verdict = parseContinuationJudgement(task.text);
+    if (!verdict) {
+      log.warn('kstar model routing judge output unparsable', { cid: maskId(cid), text: String(task.text || '').slice(0, 200) });
+      return null;
+    }
+    return verdict;
   } catch (error) {
     log.warn(`kstar model routing degraded cid=${cid}: ${(error as Error).message}`);
     return null;
@@ -10849,6 +10862,9 @@ export async function enqueueCommanderControlMessage(input: EnqueueCommanderCont
     uid: input.userId,
     cid: input.cid,
     fromActorId: USER_ID,
+    // Internal control: never opens a taskRun (fixes the closure deadloop
+    // where each review request created a new run → terminal → review …).
+    internalControl: true,
     text: input.displayText,
     model_text: [
       '<kstar-control>',
