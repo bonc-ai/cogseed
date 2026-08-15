@@ -1109,6 +1109,68 @@ const ConversationInfo = (() => {
     return `<div class="conversation-info-protocol">${header}${_renderProtocolSummary(events)}${_renderProtocolFilters(events)}${list}</div>`;
   }
 
+  // 9.1 会话区域统一框架 · 右侧「本次携带」：
+  // 本次最小 Context、来源与边界、运行证明。全部复用现有 snapshot
+  // （protocolEvents / collaboration / conversation），不新增 IPC。
+  function _latestCollaborationRef(events) {
+    if (!Array.isArray(events)) return null;
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const data = _protocolEventData(events[i]);
+      const collab = data && data.collaboration && typeof data.collaboration === 'object'
+        ? data.collaboration
+        : null;
+      if (collab) return collab;
+    }
+    return null;
+  }
+
+  function _renderCarried() {
+    const events = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents : [];
+    const collab = _latestCollaborationRef(events);
+    const latestData = events.length ? _protocolEventData(events[events.length - 1]) : {};
+    const title = _currentConversationTitle();
+
+    // 本次 Context：来自最新 P3394 协作引用（context / workflow / step）。
+    const contextRows = [];
+    if (collab) {
+      if (collab.context_id) contextRows.push([_label('conversation_info.carried.context_id', 'Context ID'), String(collab.context_id)]);
+      if (collab.context_revision !== undefined && collab.context_revision !== null) {
+        contextRows.push([_label('conversation_info.carried.revision', '版本'), String(collab.context_revision)]);
+      }
+      if (collab.workflow_run_id) contextRows.push([_label('conversation_info.carried.run', '运行'), String(collab.workflow_run_id)]);
+      if (collab.step_id) contextRows.push([_label('conversation_info.carried.step', '步骤'), String(collab.step_id)]);
+    }
+    const contextHtml = contextRows.length
+      ? `<dl class="conversation-info-carried-rows">${contextRows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.context_empty', '本会话暂无 Context 投影记录；接续不会凭空生成正式资产。'))}</div>`;
+
+    // 来源与边界：会话来源 + 最新协议事件的关系/角色 + 权限承诺。
+    const boundaryRows = [[_label('conversation_info.carried.source', '来源'), title]];
+    if (latestData.relationship) boundaryRows.push([_label('conversation_info.carried.relationship', '关系'), String(latestData.relationship)]);
+    if (latestData.session_role) boundaryRows.push([_label('conversation_info.carried.session_role', '会话角色'), String(latestData.session_role)]);
+    const boundaryHtml = `<dl class="conversation-info-carried-rows">${boundaryRows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`;
+    const permissionNote = _label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、扩权或正式资产变更会单独确认。');
+
+    // 运行证明：协议调用统计 + 最近事件（复用既有渲染）。
+    let proofHtml;
+    if (!events.length) {
+      proofHtml = `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.proof_empty', '暂无运行证明记录。'))}</div>`;
+    } else {
+      const recent = events.slice(-5);
+      proofHtml = `${_renderProtocolSummary(events)}<div class="conversation-info-carried-recent"><div class="conversation-info-carried-recent-label">${escapeHtml(_label('conversation_info.carried.recent', '最近协议事件'))}</div>${_renderProtocolEvents(recent)}</div>`;
+    }
+
+    return `<div class="conversation-info-carried">
+      <div class="conversation-info-carried-header">
+        <div class="conversation-info-carried-heading">${escapeHtml(_label('conversation_info.carried.title', '本次携带'))}</div>
+        <div class="conversation-info-carried-subtitle">${escapeHtml(_label('conversation_info.carried.subtitle', '本次最小 Context、来源边界与运行证明'))}</div>
+      </div>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.context', '本次 Context'))}</div>${contextHtml}</section>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.boundary', '来源与边界'))}</div>${boundaryHtml}<div class="conversation-info-carried-permission">${_uiIcon('shield-check', 'conversation-info-carried-permission-icon')}<span>${escapeHtml(permissionNote)}</span></div></section>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.proof', '运行证明'))}</div>${proofHtml}</section>
+    </div>`;
+  }
+
   function _renderBody() {
     _closeFileMenu();
     const body = document.getElementById('conversation-info-body');
@@ -1131,6 +1193,7 @@ const ConversationInfo = (() => {
     if (_activeTab === 'attachments') body.innerHTML = _renderAttachments();
     else if (_activeTab === 'collaboration') body.innerHTML = _renderCollaborationOverview();
     else if (_activeTab === 'protocol') body.innerHTML = _renderProtocolInspector();
+    else if (_activeTab === 'carried') body.innerHTML = _renderCarried();
     else body.innerHTML = _renderFiles();
     // Hydrate any data-ui-icon placeholders that the renderers emitted.
     if (typeof window !== 'undefined' && typeof window.hydrateUiIcons === 'function') {
