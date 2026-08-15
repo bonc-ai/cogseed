@@ -10679,6 +10679,15 @@ export interface EnqueueCommanderControlInput {
     decision: 'approved' | 'rejected';
     confirmedSnapshot?: { assetIds: string[]; ruleRefs: string[] };
     legacy?: { requirementId?: string; taskRunId?: string; forecastId?: string; originalText?: string };
+  } | {
+    /** Commander-in-context review (self-evolution): the closure loop asks the
+     *  Commander — with its FULL conversation context — to produce the
+     *  expected-vs-actual review for a finished episode, instead of a
+     *  context-free host-side inference call. The reply must contain a
+     *  <kstar-review>{...}</kstar-review> JSON block. */
+    type: 'kstar_review_request';
+    episodeId: string;
+    evidence: Record<string, unknown>;
   };
 }
 

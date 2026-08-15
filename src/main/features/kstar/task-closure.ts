@@ -1,4 +1,5 @@
 import { createLogger } from '../../logger';
+import { nowIso } from '../../storage';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from '../recall/source-service';
 import { subscribeTaskTerminals, type TaskTerminalEvent, type TaskTerminalListener } from '../group_chat/bus';
 import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../cogseed_runtime/protocol';
@@ -14,6 +15,7 @@ import { proposeKstarCandidates } from './extraction-service';
 import { saveKstarCandidateProposals } from './recall-bridge';
 import { createInitialKstarReview, readKstarReview, saveKstarReview, saveKstarReviewRecord } from './review-service';
 import { inferKstarReview, type KstarReviewInferenceResult } from './review-inference';
+import { parseKstarReviewInference } from './review-inference';
 import { postKstarReviewCard } from './review-card';
 import type { KstarEpisodeRecord, KstarExtractionRunRecord, KstarReviewRecord } from './types';
 import { readConversationTaskState, readKstarRequirement } from './requirement-store';
@@ -138,6 +140,76 @@ async function reconcileKstarExtraction(
   };
   await replaceKstarJsonRecord(userId, 'extraction-runs', extractionRun);
   return { episode, review, candidates, extractionRun };
+}
+
+/** Extract a Commander-authored review from a `<kstar-review>{...}</kstar-review>`
+ *  block inside a message stream (the Commander replies in-context). Returns
+ *  the parsed review fields or null when absent/malformed. */
+export function parseCommanderReviewFromMessages(messages: GroupKstarMessageInput[]): ParsedReviewFromCommander | null {
+  for (const message of messages) {
+    const text = String(message.text || '');
+    const match = text.match(/<kstar-review>([\s\S]*?)<\/kstar-review>/);
+    if (!match) continue;
+    try {
+      const parsed = parseKstarReviewInference(match[1].trim());
+      return {
+        deltaR: parsed.deltaR,
+        deltaA: parsed.deltaA,
+        outcome: parsed.outcome,
+        attribution: parsed.attribution,
+        reason: parsed.reason,
+        confidence: parsed.confidence,
+        ...(parsed.lesson ? { lesson: parsed.lesson } : {}),
+      };
+    } catch (error) {
+      log.warn('kstar commander review block malformed', {
+        episodeId: message.id,
+        error: (error as Error).message,
+      });
+    }
+  }
+  return null;
+}
+
+export interface ParsedReviewFromCommander {
+  deltaR: number | 'unknown';
+  deltaA: number | 'unknown';
+  outcome: KstarReviewRecord['outcome'];
+  attribution: KstarReviewRecord['attribution'];
+  reason: string;
+  confidence: number;
+  lesson?: string;
+}
+
+/** Ask the Commander — in its own conversation, with FULL context — to
+ *  produce the expected-vs-actual review for a finished episode. The reply
+ *  must carry a <kstar-review> JSON block. Host-side independent inference
+ *  remains the fallback when the Commander never replies. */
+export async function enqueueCommanderReviewRequest(
+  userId: string,
+  conversationId: string,
+  episode: KstarEpisodeRecord,
+  evidence: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const bus = await import('../group_chat/bus');
+    await bus.enqueueCommanderControlMessage({
+      userId,
+      cid: conversationId,
+      displayText: '',
+      control: {
+        type: 'kstar_review_request',
+        episodeId: episode.id,
+        evidence,
+      },
+    });
+  } catch (error) {
+    log.warn('kstar commander review request enqueue degraded', {
+      userId,
+      episodeId: episode.id,
+      error: (error as Error).message,
+    });
+  }
 }
 
 async function finishClosure(
@@ -316,7 +388,57 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
     ...(executionRefs.length ? { executionEvaluationRefs: executionRefs } : {}),
   });
   const episode = await enrichEpisodeFromRequirementEvidence(input.userId, input.conversationId, built);
-  const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.bridge, input.inferReview));
+  // Commander-in-context review (self-evolution): ask the Commander — with its
+  // full conversation context — to produce the expected-vs-actual review. The
+  // reply (a <kstar-review> block) is picked up by a later closure pass; until
+  // then finishClosure falls back to host-side inference so precipitation is
+  // never blocked. Request enqueue is best-effort.
+  if (input.conversationId) {
+    await enqueueCommanderReviewRequest(input.userId, input.conversationId, episode, {
+      episode: {
+        id: episode.id,
+        status: episode.r.status,
+        task: episode.t.userGoal,
+        toolCalls: episode.a.toolCalls.map((call) => ({ name: call.name, status: call.status })),
+        producedFiles: (episode.r.producedFiles || []).slice(0, 20),
+        finalText: episode.r.finalText,
+        verification: episode.r.verification,
+      },
+      evidenceKinds: [...new Set(episode.evidenceRefs.map((ref) => ref.kind))],
+    });
+  }
+  const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, async () => {
+    // Prefer a Commander-authored in-context review when one is already in the
+    // message stream (it carries full conversation context); otherwise the
+    // host-side inference fallback runs and precipitation is never blocked.
+    const commanderReview = parseCommanderReviewFromMessages(input.messages || []);
+    if (commanderReview) {
+      const existing = await readKstarReview(input.userId, episode.id).catch(() => null);
+      if (!existing || existing.inferenceMethod !== 'commander') {
+        const now = nowIso();
+        await saveKstarReviewRecord(input.userId, {
+          schemaVersion: 1,
+          ownerId: input.userId,
+          id: `ksr-${episode.id}`,
+          episodeId: episode.id,
+          deltaR: commanderReview.deltaR,
+          deltaA: commanderReview.deltaA,
+          outcome: commanderReview.outcome,
+          attribution: commanderReview.attribution,
+          reason: commanderReview.reason,
+          confidence: commanderReview.confidence,
+          ...(commanderReview.lesson ? { lesson: commanderReview.lesson } : {}),
+          reviewState: 'inferred',
+          inferenceMethod: 'commander',
+          needsConfirmation: false,
+          evidenceRefs: episode.evidenceRefs,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+    return finishClosure(input.userId, episode, input.bridge, input.inferReview);
+  });
   try {
     const { attachKstarEpisodeToCurrentRequirement } = await import('./requirement-state');
     await attachKstarEpisodeToCurrentRequirement(input.userId, {

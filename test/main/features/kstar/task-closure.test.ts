@@ -434,6 +434,37 @@ describe('KSTAR task closure', () => {
     }
   });
 
+  it('parses a Commander in-context review and persists it with inferenceMethod commander', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const parsed = closure.parseCommanderReviewFromMessages([
+      { id: 'm1', ts: '2026-08-15T00:00:00.000Z', from: 'commander', text: 'Done with the audit.' },
+      { id: 'm2', ts: '2026-08-15T00:00:01.000Z', from: 'commander', text: '<kstar-review>{"outcome":"worse_than_expected","attribution":"rule_gap","deltaR":-0.4,"deltaA":"unknown","reason":"State was not checked before exchange.","confidence":0.85,"needsConfirmation":false,"lesson":"OAuth 回调必须先校验 state。"}</kstar-review>' },
+    ]);
+    expect(parsed).toMatchObject({
+      outcome: 'worse_than_expected',
+      attribution: 'rule_gap',
+      deltaR: -0.4,
+      lesson: 'OAuth 回调必须先校验 state。',
+    });
+
+    // Full closure run with the commander-authored review already in the
+    // message stream: it should be persisted as inferenceMethod commander.
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-commander-review',
+      conversationId: 'cid-cmd-review',
+      status: 'completed',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [
+        { id: 'm0', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: 'Fix the state handling' },
+        { id: 'm1', ts: '2026-08-15T00:00:01.000Z', from: 'commander', text: '<kstar-review>{"outcome":"worse_than_expected","attribution":"rule_gap","deltaR":-0.4,"deltaA":"unknown","reason":"State was not checked before exchange.","confidence":0.85,"needsConfirmation":false,"lesson":"OAuth 回调必须先校验 state。"}</kstar-review>' },
+      ],
+    });
+    expect(result.review.inferenceMethod).toBe('commander');
+    expect(result.review.lesson).toContain('校验 state');
+  });
+
   it('confirms a lightweight user verdict and reconciles candidate extraction idempotently', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const recallBridge = await import('../../../../src/main/features/kstar/recall-bridge');
