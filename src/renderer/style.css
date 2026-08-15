@@ -2666,6 +2666,17 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.35) inset;
 }
 
+/* 9.1 统一框架 · 左侧「任务与 Session」：在途执行方（Agent 运行中）状态，
+   绿色圆点 + 「运行中」文字，与流式/排队徽标同一槽位。 */
+.conv-status-badge.is-running {
+  color: var(--success);
+  background: rgba(16, 185, 129, 0.12);
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.35) inset;
+}
+.conv-status-badge.is-running .conv-status-dot {
+  background: var(--success);
+}
+
 .conv-status-dot {
   width: 6px;
   height: 6px;
@@ -6716,6 +6727,40 @@ body.model-not-configured .main-content { flex-direction: column; }
   margin-left: auto;
 }
 
+/* 9.1 统一框架 · 底部「继续」按钮——位于发送按钮左侧，同排右对齐；
+   运行中隐藏（此时发送按钮已是「停止」）。 */
+.chat-continue-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.chat-continue-btn:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+}
+.chat-continue-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.chat-continue-btn[hidden] { display: none; }
+.chat-continue-icon {
+  width: 13px;
+  height: 13px;
+}
+
 /* Attachments inside message bubbles (history + optimistic append) */
 .chat-msg-attachments {
   display: flex;
@@ -9255,6 +9300,88 @@ body.model-not-configured .main-content { flex-direction: column; }
   word-break: break-all;
   max-height: 320px;
   overflow: auto;
+}
+
+/* ── 9.1 统一框架 · 中间区「紧凑结果块」──────────────────────────────
+   Artifact / Evidence / Receipt 与交互卡统一收进的紧凑可折叠容器：
+   小标题行（图标 + 类型 + 数量）+ 正文。默认折叠，不再以连续大卡片
+   打断消息流；需要人工确认的块（is-open）默认展开。 */
+.chat-result-block {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.chat-result-block.is-open {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+}
+.chat-result-block + .chat-result-block { margin-top: 6px; }
+.chat-result-block-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.chat-result-block-head::-webkit-details-marker { display: none; }
+.chat-result-block-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.chat-result-block-icon .ui-icon,
+.chat-result-block-icon-svg {
+  width: 14px;
+  height: 14px;
+}
+.chat-result-block-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-result-block-count {
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: center;
+}
+.chat-result-block-caret {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.chat-result-block-caret .ui-icon,
+.chat-result-block-caret-svg {
+  width: 13px;
+  height: 13px;
+}
+.chat-result-block[open] .chat-result-block-caret { transform: rotate(90deg); }
+.chat-result-block-body {
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border);
+}
+.chat-result-block-body .marketplace-card,
+.chat-result-block-body .chat-kstar-review,
+.chat-result-block-body .expense-agent-card,
+.chat-result-block-body .chat-recall-projection-card {
+  border: none;
+  box-shadow: none;
+  padding: 0;
 }
 
 .stream-final {
@@ -18515,6 +18642,23 @@ body.model-not-configured .main-content { flex-direction: column; }
   gap: 6px;
   margin: 0 auto 8px;
   width: min(80%, 820px);
+}
+
+/* 9.1 统一框架 · 底部「风险操作」区域标题 */
+.chat-wake-pending-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #b45309;
+  padding: 0 2px;
+}
+.chat-wake-pending-title .ui-icon,
+.chat-wake-pending-title-icon {
+  width: 13px;
+  height: 13px;
 }
 
 /* P3394 Agent Wake Gate — ChatGPT-style compact access request strip. */

@@ -7269,13 +7269,23 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (role === 'assistant' && message.expense_setup && typeof window.mountExpenseSetupCard === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.expense-agent-setup-card')) {
-      window.mountExpenseSetupCard(bubble, message.expense_setup);
+      const body = _mountCompactResultBlock(bubble, {
+        label: t('chat.result_block.expense_setup'),
+        icon: 'file-text',
+        open: true,
+      });
+      if (body) window.mountExpenseSetupCard(body, message.expense_setup);
     }
   }
   if (role === 'assistant' && message.expense_submit && typeof window.mountExpenseSubmitCard === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.expense-agent-submit-card')) {
-      window.mountExpenseSubmitCard(bubble, message.expense_submit, opts.cid || currentCid);
+      const body = _mountCompactResultBlock(bubble, {
+        label: t('chat.result_block.expense_submit'),
+        icon: 'file-text',
+        open: true,
+      });
+      if (body) window.mountExpenseSubmitCard(body, message.expense_submit, opts.cid || currentCid);
     }
   }
   // P3394 Wake Gate approval cards are rendered in the current composer
@@ -7291,15 +7301,26 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   }
   if (role === 'assistant' && message.kstar_review_card) {
     const bubble = msgDiv.querySelector('.chat-bubble');
-    if (bubble) _mountKstarResultReviewCard(bubble, message.kstar_review_card);
+    if (bubble) {
+      const body = _mountCompactResultBlock(bubble, {
+        label: t('chat.result_block.kstar_review'),
+        icon: 'shield-check',
+        open: String(message.kstar_review_card.status || 'pending') === 'pending',
+      });
+      if (body) _mountKstarResultReviewCard(body, message.kstar_review_card);
+    }
   }
 
   if (message.recall_projection_card && typeof window.mountRecallProjectionCard === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
-      const recallProjectionHost = document.createElement('div');
+      const body = _mountCompactResultBlock(bubble, {
+        label: t('chat.result_block.recall_projection'),
+        icon: 'git-branch',
+      });
+      const recallProjectionHost = body || document.createElement('div');
+      if (!body) bubble.appendChild(recallProjectionHost);
       const recallProjectionFallback = bubble.querySelector('.markdown-body');
-      bubble.appendChild(recallProjectionHost);
       Promise.resolve(window.mountRecallProjectionCard(
         recallProjectionHost,
         message.recall_projection_card,
@@ -7315,12 +7336,20 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   }
 
   // Interactive web-app artifacts (assistant messages only) — sandboxed
-  // `<iframe>` over the `chat-app://` protocol, appended after the form so it
-  // reads as "reply text → embedded app". See chat-artifact.js.
+  // `<iframe>` over the `chat-app://` protocol, mounted inside a compact
+  // collapsible result block so the reply text stays the primary content.
+  // See chat-artifact.js.
   if (role === 'assistant' && Array.isArray(message.artifacts) && message.artifacts.length
       && typeof window.mountMessageArtifacts === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
-    if (bubble) window.mountMessageArtifacts(bubble, message.artifacts, opts.cid || currentCid);
+    if (bubble) {
+      const body = _mountCompactResultBlock(bubble, {
+        label: t('chat.result_block.artifact'),
+        icon: 'box',
+        count: message.artifacts.length,
+      });
+      if (body) window.mountMessageArtifacts(body, message.artifacts, opts.cid || currentCid);
+    }
   }
   if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths, {
     status: _producedStatusFromReviewStatus(message.kstar_review?.status),
@@ -7659,6 +7688,10 @@ function _wakeRequestHost(cid, options = {}) {
     host.className = 'chat-wake-pending-host';
     host.setAttribute('role', 'region');
     host.setAttribute('aria-live', 'polite');
+    // 9.1 统一框架 · 底部「风险操作」：待人工确认的风险卡统一挂在这里，
+    // 带一个明确的区域标题，与输入/附件/执行方/继续同属底部区。
+    host.innerHTML = `<div class="chat-wake-pending-title">${_uiIconHtml('shield-check', 'chat-wake-pending-title-icon') || ''}<span>${escapeHtml(t('chat.risk_zone'))}</span></div>`;
+    if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(host);
     const anchor = wrap.querySelector('.chat-input-area');
     wrap.insertBefore(host, anchor || wrap.firstChild);
     try { _updateChatInputReserve(); } catch (_) {}
@@ -7816,18 +7849,64 @@ async function _resolveWakeRequest(card, request, cid, decision) {
   }
 }
 
+// ── 9.1 统一框架 · 中间区「紧凑结果块」────────────────────────────────
+// 把 Artifact / Evidence / Receipt 和交互卡（市场安装 / KSTAR 评审 / 报销
+// 表单 / 认知投影）统一收进一个紧凑的可折叠容器：小标题行（图标 + 类型 +
+// 数量）+ 正文。默认折叠，不再以连续大卡片打断消息流；需要人工确认的块
+// （待安装 / 待评审 / 表单）默认展开。返回正文容器供调用方挂载内容。
+function _mountCompactResultBlock(host, opts = {}) {
+  if (!host) return null;
+  const details = document.createElement('details');
+  details.className = 'chat-result-block';
+  if (opts.open) {
+    details.open = true;
+    details.classList.add('is-open');
+  }
+  const icon = _uiIconHtml(opts.icon || 'box', 'chat-result-block-icon-svg');
+  const countHtml = opts.count ? `<span class="chat-result-block-count">${escapeHtml(String(opts.count))}</span>` : '';
+  details.innerHTML = `
+    <summary class="chat-result-block-head">
+      <span class="chat-result-block-icon">${icon || ''}</span>
+      <span class="chat-result-block-label">${escapeHtml(opts.label || '')}</span>
+      ${countHtml}
+      <span class="chat-result-block-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'chat-result-block-caret-svg') || ''}</span>
+    </summary>
+    <div class="chat-result-block-body"></div>
+  `;
+  host.appendChild(details);
+  // 图标占位统一由 icons.js 水合机制填充。
+  if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(details);
+  return details.querySelector('.chat-result-block-body');
+}
+
 function _mountMarketplaceInstallRequests(host, msgDiv, message, opts) {
   const cid = opts.cid || currentCid;
   if (!cid || !host || !message) return;
   const msgId = msgDiv.dataset.msgId || message._msg_id || '';
   if (!msgId) return;
   const requests = Array.isArray(message.marketplace_requests) ? message.marketplace_requests : [];
+  const pending = requests.filter((req) => req && String(req.status || 'pending') === 'pending');
+  // 9.1 统一框架 · 中间区：安装确认卡收进统一的「待安装」紧凑结果块，
+  // 需要人工确认的默认展开，其余折叠。
+  const blockHost = pending.length
+    ? _mountCompactResultBlock(host, {
+        label: t('chat.result_block.marketplace'),
+        icon: 'plus',
+        count: requests.length,
+        open: true,
+      })
+    : _mountCompactResultBlock(host, {
+        label: t('chat.result_block.marketplace'),
+        icon: 'plus',
+        count: requests.length,
+      });
+  const cardHost = blockHost || host;
   for (const req of requests) {
     if (!req || !req.request_id) continue;
     const selector = `.chat-marketplace-request[data-marketplace-request-id="${CSS.escape(String(req.request_id))}"]`;
     if (host.querySelector(selector)) continue;
     const card = document.createElement('div');
-    host.appendChild(card);
+    cardHost.appendChild(card);
     _renderMarketplaceInstallCard(card, req, cid, msgId);
   }
 }
@@ -11832,6 +11911,21 @@ function createChatController(config) {
         else _submitFromInput();
       });
     }
+    // 9.1 统一框架 · 底部「继续」：以「请继续」作为一条普通用户消息发送给
+    // 当前执行方（与正常发送走同一路径，含模型配置门与队列）。按钮只在
+    // 主会话面板存在（其它场景 getElementById 返回 null，自动跳过）。
+    const continueBtn = document.getElementById('chat-continue-btn');
+    if (continueBtn && !continueBtn.dataset.ctrlBound) {
+      continueBtn.dataset.ctrlBound = '1';
+      continueBtn.addEventListener('click', () => {
+        if (pending) return;
+        const id = config.getCurrentId();
+        if (!id) return;
+        if (typeof ensureModelConfigured === 'function' && !ensureModelConfigured()) return;
+        const content = t('chat.continue_prompt');
+        send(content, undefined);
+      });
+    }
     if (inputEl && !inputEl.dataset.ctrlBound) {
       inputEl.dataset.ctrlBound = '1';
       inputEl.addEventListener('keydown', (e) => {
@@ -12269,13 +12363,23 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   if (gm.expense_setup && typeof window.mountExpenseSetupCard === 'function') {
     const bubble = ph.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.expense-agent-setup-card')) {
-      window.mountExpenseSetupCard(bubble, gm.expense_setup);
+      const body = _mountCompactResultBlock(bubble, {
+        label: t('chat.result_block.expense_setup'),
+        icon: 'file-text',
+        open: true,
+      });
+      if (body) window.mountExpenseSetupCard(body, gm.expense_setup);
     }
   }
   if (gm.expense_submit && typeof window.mountExpenseSubmitCard === 'function') {
     const bubble = ph.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.expense-agent-submit-card')) {
-      window.mountExpenseSubmitCard(bubble, gm.expense_submit, cid);
+      const body = _mountCompactResultBlock(bubble, {
+        label: t('chat.result_block.expense_submit'),
+        icon: 'file-text',
+        open: true,
+      });
+      if (body) window.mountExpenseSubmitCard(body, gm.expense_submit, cid);
     }
   }
 
@@ -12302,14 +12406,28 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
 
   if (gm.kstar_review_card) {
     const bubble = ph.querySelector('.chat-bubble');
-    if (bubble) _mountKstarResultReviewCard(bubble, gm.kstar_review_card);
+    if (bubble) {
+      const body = _mountCompactResultBlock(bubble, {
+        label: t('chat.result_block.kstar_review'),
+        icon: 'shield-check',
+        open: String(gm.kstar_review_card.status || 'pending') === 'pending',
+      });
+      if (body) _mountKstarResultReviewCard(body, gm.kstar_review_card);
+    }
   }
 
   // Interactive web-app artifacts (chat-app:// iframe). Idempotent — skips
   // ids already mounted in this bubble.
   if (Array.isArray(gm.artifacts) && gm.artifacts.length && typeof window.mountMessageArtifacts === 'function') {
     const bubble = ph.querySelector('.chat-bubble');
-    if (bubble) window.mountMessageArtifacts(bubble, gm.artifacts, cid);
+    if (bubble) {
+      const body = _mountCompactResultBlock(bubble, {
+        label: t('chat.result_block.artifact'),
+        icon: 'box',
+        count: gm.artifacts.length,
+      });
+      if (body) window.mountMessageArtifacts(body, gm.artifacts, cid);
+    }
   }
   if (Array.isArray(gm.produced) && gm.produced.length) {
     _mountMessageProducedFooter(ph, gm.produced, {
@@ -13481,6 +13599,7 @@ function _updateConvSendUI(cid) {
   if (cid !== currentCid) return;
   const sendBtn = document.getElementById('chat-send-btn');
   const input = document.getElementById('chat-input');
+  const continueBtn = document.getElementById('chat-continue-btn');
   if (!sendBtn) return;
   const pending = isConvPending(cid);
   _ensureConvCreateAgentInline();
@@ -13502,6 +13621,10 @@ function _updateConvSendUI(cid) {
       input.disabled = true;
       input.placeholder = t('component.send_blocked_disabled');
     }
+    if (continueBtn) {
+      continueBtn.hidden = true;
+      continueBtn.disabled = true;
+    }
     return;
   }
   if (input) input.disabled = false;
@@ -13510,6 +13633,12 @@ function _updateConvSendUI(cid) {
   sendBtn.title = pending ? t('chat.stop_reply') : t('chat.send_title');
   if (input) {
     input.placeholder = pending ? t('chat.input_placeholder_queue') : t('chat.input_placeholder');
+  }
+  // 9.1 统一框架 · 底部「继续」：非运行态且执行方可用时显示；运行中隐藏
+  // （此时发送按钮已是「停止」，继续与停止并存会误导）。
+  if (continueBtn) {
+    continueBtn.hidden = pending;
+    continueBtn.disabled = pending;
   }
   if (!pending) input?.focus();
 }
@@ -13620,17 +13749,25 @@ function _updateConvSidebarBadge(cid, _unused) {
   // Use _getQueue so a queue persisted in localStorage is picked up even if
   // the conversation hasn't been opened in this session yet.
   const queued = _getQueue(cid).length;
-  if (!pending && !queued) return;
+  // 9.1 统一框架 · 左侧「任务与 Session」：来自 state_changed 的在途执行方
+  // 也算运行中（群聊里 Agent 已在跑但当前消息未处于流式渲染时同样显示）。
+  const inFlight = (_latestInFlight.get(cid) || []).length;
+  if (!pending && !queued && !inFlight) return;
 
   const badge = document.createElement('span');
   badge.className = 'conv-status-badge';
   if (pending) badge.classList.add('is-streaming');
+  else if (inFlight) badge.classList.add('is-running');
   else badge.classList.add('is-queued');
 
   let html = '';
   if (pending) {
     html += '<span class="conv-status-dot"></span>';
     if (queued > 0) html += `<span class="conv-status-count">+${queued}</span>`;
+  } else if (inFlight) {
+    html += '<span class="conv-status-dot"></span>';
+    html += `<span class="conv-status-text">${escapeHtml(t('chat.status.running'))}</span>`;
+    if (inFlight > 1) html += `<span class="conv-status-count">${inFlight}</span>`;
   } else {
     html += `<span class="conv-status-text">${escapeHtml(t('chat.status.pending_short'))}</span>`;
     html += `<span class="conv-status-count">${queued}</span>`;
