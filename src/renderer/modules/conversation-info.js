@@ -30,6 +30,9 @@ const ConversationInfo = (() => {
     files: [],
     fileRoot: '',
     fileRootExists: false,
+    // 接续准备依据（导入会话欢迎面板「查看依据」）：复述 / 准备携带明细 / 边界。
+    // 由 showResumeEvidence 设置，carried tab 顶部渲染。
+    resumeEvidence: null,
     filesTruncated: false,
     filesCount: 0,
     filesScanSkipped: false,
@@ -1225,6 +1228,17 @@ const ConversationInfo = (() => {
   }
 
   function _renderCarried() {
+    // 接续准备依据（导入会话接续欢迎面板的「查看依据」）：顶部区块，展示
+    // 复述 / 准备携带明细（各自来源）/ 边界。由 showResumeEvidence 设置。
+    const resumeEvidence = _snapshot.resumeEvidence;
+    const resumeHtml = resumeEvidence
+      ? `<section class="conversation-info-resume">
+          <div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.resume_title', '接续准备'))}</div>
+          ${resumeEvidence.restatement ? `<div class="conversation-info-resume-restatement">${escapeHtml(resumeEvidence.restatement)}</div>` : ''}
+          ${_renderResumeCarry(resumeEvidence.carry)}
+          ${resumeEvidence.boundary ? `<div class="conversation-info-resume-boundary">${escapeHtml(resumeEvidence.boundary)}</div>` : ''}
+        </section>`
+      : '';
     const events = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents : [];
     const executions = Array.isArray(_snapshot.executions) ? _snapshot.executions : [];
     const collab = _latestCollaborationRef(events);
@@ -1270,6 +1284,7 @@ const ConversationInfo = (() => {
       : _label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、扩权或正式资产变更会单独确认。');
 
     return `<div class="conversation-info-carried">
+      ${resumeHtml}
       <div class="conversation-info-carried-header">
         <div class="conversation-info-carried-heading">${escapeHtml(_label('conversation_info.carried.title', '本次携带'))}</div>
         <div class="conversation-info-carried-subtitle">${escapeHtml(_label('conversation_info.carried.subtitle', '本次最小 Context、来源边界与运行证明'))}</div>
@@ -1278,6 +1293,21 @@ const ConversationInfo = (() => {
       <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.context', '本次 Context'))}</div>${contextHtml}</section>
       <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.boundary', '来源与边界'))}</div>${boundaryHtml}<div class="conversation-info-carried-permission">${_uiIcon('shield-check', 'conversation-info-carried-permission-icon')}<span>${escapeHtml(permissionNote)}</span></div></section>
     </div>`;
+  }
+
+  /** 接续准备「准备携带」明细：每类能力的数量 + 真实来源。 */
+  function _renderResumeCarry(carry) {
+    const items = Array.isArray(carry) ? carry : [];
+    if (!items.length) return '';
+    const rows = items.map((c) => {
+      const sources = (Array.isArray(c.sources) ? c.sources : [])
+        .map((s) => `<li>${escapeHtml(String(s))}</li>`).join('');
+      return `<div class="conversation-info-resume-carry-row">
+        <b>${escapeHtml(c.label || '')}</b><span>${Number(c.count) || 0} 项</span>
+        ${sources ? `<ul class="conversation-info-resume-carry-sources">${sources}</ul>` : ''}
+      </div>`;
+    }).join('');
+    return `<div class="conversation-info-resume-carry">${rows}</div>`;
   }
 
   function _renderBody() {
@@ -1979,6 +2009,13 @@ const ConversationInfo = (() => {
     _syncChrome();
     _renderBody();
   }
+  /** 展示导入会话接续准备的依据（「查看依据」）：设置 resumeEvidence 并打开
+   *  carried tab，右栏顶部渲染复述 / 准备携带明细 / 边界。 */
+  function showResumeEvidence(data, cid) {
+    if (cid) _cid = cid;
+    _snapshot = { ..._snapshot, resumeEvidence: data || null };
+    openAndSetTab('carried');
+  }
   function openFileMenu(anchorBtn, absPath, displayName, options = {}) {
     return _openFileMenu(anchorBtn, absPath, displayName, 'file', options);
   }
@@ -1998,6 +2035,7 @@ const ConversationInfo = (() => {
     openProtocol,
     openAndSetTab,
     setProtocolFilters,
+    showResumeEvidence,
     openFileMenu,
   };
 })();

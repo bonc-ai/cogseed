@@ -113,6 +113,27 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
     needs_welcome: true,
   });
 
+  // Re-importing a conversation that was previously deleted leaves its Recall
+  // source marked `removed`, which silently disables terminal capture (the
+  // no-model CLI fallback conversation never produces recall candidates).
+  // Restore the source to `active` so the capture pipeline picks it up again.
+  try {
+    const { resumeCognitionSource } = await import('../recall/source-control');
+    await resumeCognitionSource(input.userId, {
+      kind: 'conversation',
+      id: conv.conversation_id,
+      subtype: 'session',
+      scope: 'conversation',
+      taxonomyVersion: 2,
+      title: conv.title,
+    } as import('../recall/source-service').CognitionSourceRef);
+  } catch (sourceErr) {
+    log.warn('failed to restore recall source for re-imported conversation', {
+      conversationId: conv.conversation_id,
+      error: (sourceErr as Error)?.message || String(sourceErr),
+    });
+  }
+
   // If the conversation already had content (a prior import), don't re-seed.
   const msgFile = conversationMessageFile(input.userId, conv.conversation_id, conv.project_id ?? null);
   let alreadySeeded = false;
@@ -142,8 +163,31 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
     to: [USER_ID],
     text,
     model_text: modelText,
+    // Seed 消息是导入会话的上下文占位：给模型读（model_text），但对用户隐藏
+    // 显示（接续准备面板替代）。前端据此跳过气泡渲染。
+    imported_seed: true,
   };
   await appendJsonlAtomic<GroupMessage>(msgFile, seed);
+
+  // Build a TaskContinuationSnapshot so the imported session can be resumed
+  // without re-explaining: goal / stage / next are derived from the real
+  // extracted summary (never fabricated). Best-effort — failure must not
+  // block the import itself.
+  try {
+    const { buildContinuationSnapshot } = await import('../task_continuation');
+    await buildContinuationSnapshot({
+      userId: input.userId,
+      conversationId: conv.conversation_id,
+      projectId: conv.project_id ?? null,
+      sessionSummary: input.extraction.sessionSummary,
+      title: conv.title,
+    });
+  } catch (snapErr) {
+    log.warn('failed to build continuation snapshot', {
+      conversationId: conv.conversation_id,
+      error: (snapErr as Error)?.message || String(snapErr),
+    });
+  }
 
   // Touch updated_at so the conversation sorts to the top of the sidebar list.
   await updateConversation(input.userId, conv.conversation_id, { updated_at: nowIso() }, conv.project_id ?? null);

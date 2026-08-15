@@ -4531,6 +4531,84 @@ body.model-not-configured .main-content { flex-direction: column; }
   padding: 6px 2px;
 }
 
+/* ─── Imported-session resume welcome (准备携带 strip) ─── */
+.welcome-carry {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--primary) 5%, var(--surface));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.welcome-carry-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.welcome-carry-head b { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.welcome-carry-head > span { font-size: 12px; color: var(--text-2); }
+.welcome-carry-toggle {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+.welcome-carry-toggle:hover { text-decoration: underline; }
+.welcome-carry-scope {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ─── Imported-session resume welcome panel (顶部准备面板) ─── */
+.welcome-panel {
+  margin: 10px 12px 4px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 6%, var(--surface)), var(--surface));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.welcome-panel-restatement {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text);
+}
+.welcome-panel .welcome-carry { margin-top: 0; }
+.welcome-panel-plan-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.welcome-panel-plan-block b { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.welcome-panel-plan {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.welcome-panel-boundary {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.welcome-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .new-chat-external-agent-btn {
   position: absolute;
   top: 28px;
@@ -5493,6 +5571,47 @@ body.model-not-configured .main-content { flex-direction: column; }
   margin-top: 1px;
   color: var(--primary);
 }
+
+/* 接续准备依据（导入会话欢迎「查看依据」→ 右栏 carried 顶部）。 */
+.conversation-info-resume {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
+  border-radius: 10px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 5%, var(--surface-1, #fff)), var(--surface-1, #fff));
+}
+.conversation-info-resume-restatement {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text);
+}
+.conversation-info-resume-carry {
+  display: grid;
+  gap: 8px;
+}
+.conversation-info-resume-carry-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.conversation-info-resume-carry-row b { font-weight: 600; color: var(--text); }
+.conversation-info-resume-carry-row > span { color: var(--muted); }
+.conversation-info-resume-carry-sources {
+  margin: 0;
+  padding-left: 18px;
+  width: 100%;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.conversation-info-resume-boundary {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .conversation-info-carried-recent {
   display: grid;
   gap: 8px;

@@ -1,4 +1,4 @@
-/* ═══════════════ CogSeed 首次启动 · 四步引导 ═══════════════
+/* ═══════════════ CogSeed 首次启动 · 三步引导 ═══════════════
  * Ported from the static prototype (60秒用户旅程.html). Scoped under
  * #cs-onboarding so it never collides with the app's style.css. The
  * overlay covers the whole window and hides the app shell while active.
@@ -11,6 +11,7 @@
   --cs-forest:#0E9F6E; --cs-forest-deep:#0A7A55; --cs-forest-weak:#E2F5EC;
   --cs-bud:#E09B2D; --cs-bud-weak:#FBF1DC;
   --cs-clay:#DE5B45; --cs-clay-weak:#FBE9E5;
+  --cs-paper:#ffffff; --cs-paper-lift:#F3FAF6; --cs-forest-ghost:rgba(14,159,110,.18);
   --cs-grad:linear-gradient(135deg,#0E9F6E,#0A7A55);
   --cs-mono:'SF Mono',ui-monospace,'Menlo',monospace;
   --cs-radius:6px;
@@ -36,49 +37,16 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
 #cs-onboarding h1,#cs-onboarding h2,#cs-onboarding h3,#cs-onboarding h4,#cs-onboarding p{margin:0}
 
-/* ── top bar ── */
-#cs-onboarding .cs-topbar{display:grid;grid-template-columns:270px minmax(0,1fr) auto;align-items:center;
-  border-bottom:1px solid var(--cs-line);background:rgba(255,255,255,.96)}
-#cs-onboarding .cs-brand{height:54px;display:flex;align-items:center;gap:11px;padding:0 22px}
-#cs-onboarding .cs-brand .logo{width:30px;height:30px;border-radius:8px;background:var(--cs-grad);display:grid;place-items:center;
-  box-shadow:0 4px 12px rgba(14,159,110,.35)}
-#cs-onboarding .cs-brand .logo svg{width:16px;height:16px;color:#fff}
-#cs-onboarding .cs-brand b{font-size:16px;letter-spacing:.14em;color:var(--cs-ink)}
-#cs-onboarding .cs-title{justify-self:center;color:var(--cs-muted);font-weight:650;font-size:13px}
-
 /* ── persistent top-left brand (icon first, then wordmark) ── */
 #cs-onboarding .cs-ob-brand{position:absolute;top:16px;left:22px;z-index:10;
   display:flex;align-items:center;gap:8px;pointer-events:none}
 #cs-onboarding .cs-ob-brand img{width:28px;height:28px;border-radius:8px}
 #cs-onboarding .cs-ob-brand b{font-size:14px;letter-spacing:-0.01em;color:var(--cs-ink);font-weight:600}
 
-/* ── two-column body ── */
-#cs-onboarding .cs-main{min-height:0;display:grid;grid-template-columns:262px minmax(0,1fr)}
-/* No topbar in the first-run shell: the single fullwidth child must span
+/* ── body: single fullwidth column (no left rail in the three-step flow) ──
+ * No topbar in the first-run shell: the single fullwidth child must span
  * both grid rows so .cs-content fills the whole viewport height. */
 #cs-onboarding .cs-main-fullwidth{grid-row:1 / -1;min-height:0;display:grid;grid-template-rows:minmax(0,1fr)}
-#cs-onboarding .cs-rail{min-height:0;display:flex;flex-direction:column;padding:36px 22px 24px;border-right:1px solid var(--cs-line);
-  background:rgba(236,247,241,.6)}
-#cs-onboarding .cs-rail h2{margin:0 0 6px;font-size:16px;color:var(--cs-ink)}
-#cs-onboarding .cs-rail>p{margin:0 0 26px;color:var(--cs-muted);font-size:12px;line-height:1.55}
-#cs-onboarding .cs-steps{display:grid;gap:8px}
-#cs-onboarding .cs-step{min-height:64px;display:grid;grid-template-columns:30px minmax(0,1fr);gap:11px;align-items:center;
-  padding:10px 12px;border-radius:11px;color:var(--cs-muted);text-align:left;cursor:pointer;
-  transition:background .2s,box-shadow .2s,border-color .2s,color .2s;border:1px solid transparent;background:none}
-#cs-onboarding .cs-step:not(.active):not(:disabled):hover{background:rgba(255,255,255,.7);color:var(--cs-ink-soft)}
-#cs-onboarding .cs-step>span:first-child{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--cs-line-strong);
-  border-radius:50%;color:var(--cs-muted);background:#fff;font-size:12px;font-weight:700;transition:all .2s}
-#cs-onboarding .cs-step strong,#cs-onboarding .cs-step small{display:block}
-#cs-onboarding .cs-step strong{font-size:13px;letter-spacing:-.01em}
-#cs-onboarding .cs-step small{margin-top:3px;font-size:11px;line-height:1.45}
-#cs-onboarding .cs-step.active{color:var(--cs-ink);background:#fff;box-shadow:0 8px 22px rgba(16,65,46,.1);border-color:var(--cs-line)}
-#cs-onboarding .cs-step.active>span:first-child{border-color:var(--cs-forest);color:#fff;background:var(--cs-forest);box-shadow:0 3px 10px rgba(14,159,110,.35)}
-#cs-onboarding .cs-step.done{color:var(--cs-forest)}
-#cs-onboarding .cs-step.done>span:first-child{border-color:var(--cs-forest);background:var(--cs-forest-weak);color:var(--cs-forest-deep)}
-#cs-onboarding .cs-step:disabled{opacity:.5;cursor:not-allowed}
-#cs-onboarding .cs-privacy{margin-top:auto;display:flex;gap:9px;align-items:flex-start;padding-top:18px;border-top:1px solid var(--cs-line);
-  color:var(--cs-muted);font-size:11px;line-height:1.55}
-#cs-onboarding .cs-privacy svg{width:14px;height:14px;flex-shrink:0;color:var(--cs-forest);margin-top:1px}
 
 /* ── content panels ── */
 #cs-onboarding .cs-content{min-width:0;min-height:0;height:100%;overflow:auto;padding:52px clamp(28px,6vw,96px) 80px}
@@ -92,14 +60,6 @@ body.cs-onboarding-active .app-container{display:none !important}
   padding:5px 11px;border-radius:999px;background:var(--cs-forest-weak)}
 #cs-onboarding .cs-panel h1{max-width:780px;margin:16px 0 14px;font-size:38px;font-weight:750;line-height:1.14;letter-spacing:-.032em}
 #cs-onboarding .cs-lead{max-width:720px;margin:0 0 30px;color:var(--cs-ink-soft);font-size:15px;line-height:1.78}
-#cs-onboarding .cs-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--cs-line);
-  border-radius:14px;background:rgba(255,255,255,.9);overflow:hidden;box-shadow:0 8px 26px rgba(16,65,46,.06)}
-#cs-onboarding .cs-fact{padding:22px 20px;border-right:1px solid var(--cs-line);transition:background .16s}
-#cs-onboarding .cs-fact:last-child{border-right:0}
-#cs-onboarding .cs-fact:hover{background:var(--cs-line-soft)}
-#cs-onboarding .cs-fact svg{width:20px;height:20px;color:var(--cs-forest)}
-#cs-onboarding .cs-fact strong{display:block;margin:12px 0 5px;font-size:13.5px;letter-spacing:-.01em}
-#cs-onboarding .cs-fact span{color:var(--cs-muted);font-size:12px;line-height:1.6;display:block}
 
 /* ── step 1: v1.6 first-run two-column layout (story + action card) ──
  * Ported verbatim from CogSeed_..._v1.6.html. v1.6 vars mapped to local:
@@ -148,13 +108,13 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .first-scan-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:9px;align-items:center;padding:10px 0;border-bottom:1px solid #edf2ef}
 #cs-onboarding .first-scan-row>i{width:27px;height:27px;border-radius:6px;background:#eef3f0;color:#60736a;display:grid;place-items:center}
 #cs-onboarding .first-scan-row strong{display:block;font-size:10px}
-#cs-onboarding .first-scan-row p{font-size:8px;color:var(--cs-muted);margin:3px 0 0;line-height:1.45}
+#cs-onboarding .first-scan-row p{font-size:9px;color:var(--cs-muted);margin:3px 0 0;line-height:1.45}
 #cs-onboarding .first-run-route{display:none;margin-top:14px;padding:13px;border:1px solid #bcdccb;background:var(--cs-forest-weak);border-radius:7px}
 #cs-onboarding .first-run-route.show{display:block}
 #cs-onboarding .first-run-route strong{display:block;font-size:10px}
-#cs-onboarding .first-run-route p{font-size:9px;color:#456657;line-height:1.5;margin:4px 0 0}
+#cs-onboarding .first-run-route p{font-size:10px;color:#456657;line-height:1.55;margin:4px 0 0}
 #cs-onboarding .first-run-route .btn{width:100%;justify-content:center;margin-top:11px}
-#cs-onboarding .first-run-trust{display:flex;align-items:center;gap:7px;color:var(--cs-muted);font-size:8px;line-height:1.45;margin-top:14px}
+#cs-onboarding .first-run-trust{display:flex;align-items:center;gap:7px;color:var(--cs-muted);font-size:9.5px;line-height:1.5;margin-top:14px}
 #cs-onboarding .first-run-trust svg{width:14px;height:14px;color:var(--cs-forest-deep);flex:none}
 #cs-onboarding .first-run-card.scanning .first-run-primary{opacity:.68;pointer-events:none}
 #cs-onboarding .first-run-card.scanning .first-run-primary svg{animation:cs-spin 1s linear infinite}
@@ -185,7 +145,7 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-auth-main{max-width:760px;margin:0 auto}
 #cs-onboarding .cs-auth-main h1{font-size:28px;font-weight:750;line-height:1.22;margin:0;letter-spacing:-.02em;max-width:none}
 #cs-onboarding .cs-auth-lead{font-size:11px;color:var(--cs-muted);line-height:1.65;margin:9px 0 20px;max-width:none}
-#cs-onboarding .cs-privacy-line{display:flex;gap:10px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--cs-line);border-bottom:1px solid var(--cs-line);font-size:9px;color:#52675c;line-height:1.55}
+#cs-onboarding .cs-privacy-line{display:flex;gap:10px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--cs-line);border-bottom:1px solid var(--cs-line);font-size:10px;color:#52675c;line-height:1.6}
 #cs-onboarding .cs-privacy-line svg{width:15px;height:15px;color:var(--cs-forest-deep);margin-top:1px;flex:none}
 #cs-onboarding .cs-privacy-line strong{font-size:10px}
 #cs-onboarding .cs-route-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px 0;border-bottom:1px solid var(--cs-line)}
@@ -195,7 +155,7 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-quota-meter{height:5px;margin-top:7px;background:#e2eae6;border-radius:4px;overflow:hidden}
 #cs-onboarding .cs-quota-meter i{display:block;height:100%;width:100%;background:var(--cs-forest)}
 #cs-onboarding .cs-auth-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}
-#cs-onboarding .cs-auth-actions small{font-size:8px;color:var(--cs-muted);line-height:1.45;max-width:470px}
+#cs-onboarding .cs-auth-actions small{font-size:9.5px;color:var(--cs-muted);line-height:1.5;max-width:470px}
 #cs-onboarding .cs-auth-btns{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 /* This page's agent list is a plain v1.6 "agent-list" (no card frame). */
 #cs-onboarding .cs-panel[data-cspanel="1"] .cs-list{border:0;border-radius:0;background:none;margin-top:12px}
@@ -208,7 +168,7 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-panel[data-cspanel="1"] .cs-state{padding:12px 0;background:none;border-bottom:1px solid #e6ede9;font-size:11px}
 
 /* ── step 2: LEFT-RIGHT layout (Agent sidebar + Asset content) ── */
-#cs-onboarding .cs-list{border:1px solid var(--cs-line);border-radius:12px;background:rgba(255,255,255,.92);overflow:hidden}
+#cs-onboarding .cs-list{border:1px solid var(--cs-line);border-radius:12px;background:rgba(255,255,255,.92);overflow:hidden;box-shadow:0 2px 10px rgba(20,40,30,.05)}
 
 /* Compact hint bar with inline import button */
 #cs-onboarding .cs-import-hint{display:flex;align-items:center;justify-content:space-between;gap:12px;
@@ -219,6 +179,7 @@ body.cs-onboarding-active .app-container{display:none !important}
   background:var(--cs-forest);color:#fff;border:none;border-radius:999px;font-size:13px;font-weight:600;
   cursor:pointer;transition:all .15s}
 #cs-onboarding .cs-btn-inline:hover{background:var(--cs-forest-deep);transform:translateY(-1px)}
+#cs-onboarding .cs-btn-inline:focus-visible{outline:2px solid var(--cs-forest);outline-offset:2px}
 #cs-onboarding .cs-btn-inline svg{width:14px;height:14px}
 
 /* Give the Agent list a fixed max-height so it scrolls internally when tall,
@@ -227,9 +188,6 @@ body.cs-onboarding-active .app-container{display:none !important}
 
 /* Collapse the asset panes (session list area) shorter so import button stays visible */
 #cs-onboarding .cs-panel[data-cspanel="2"] .cs-asset-panes{max-height:280px}
-
-/* Remove sticky from action bar — now the whole panel fits in one screen. */
-#cs-onboarding .cs-panel[data-cspanel="2"] .cs-actions{margin-top:20px}
 
 /* Remove sticky from action bar — now the whole panel fits in one screen. */
 #cs-onboarding .cs-panel[data-cspanel="2"] .cs-actions{margin-top:20px}
@@ -266,6 +224,7 @@ body.cs-onboarding-active .app-container{display:none !important}
   background:#FAFDFB;border:1px solid var(--cs-line);border-radius:10px;cursor:pointer;
   text-align:left;transition:background .15s,border-color .15s,box-shadow .15s}
 #cs-onboarding .cs-asset-tab:hover{background:#F3FAF6}
+#cs-onboarding .cs-asset-tab:focus-visible{outline:2px solid var(--cs-forest);outline-offset:2px}
 #cs-onboarding .cs-asset-tab.active{background:var(--cs-forest-weak);border-color:var(--cs-forest);
   box-shadow:inset 3px 0 0 var(--cs-forest)}
 #cs-onboarding .cs-asset-tab .ash-icon{font-size:17px;line-height:1}
@@ -310,6 +269,7 @@ body.cs-onboarding-active .app-container{display:none !important}
   width:100%;padding:18px 20px;background:#fff;border:1px solid var(--cs-line);border-radius:12px;
   cursor:pointer;transition:transform .16s,border-color .16s,box-shadow .16s;text-align:left}
 #cs-onboarding .cs-fork-card:hover{border-color:var(--cs-forest);box-shadow:0 6px 20px rgba(14,159,110,.12);transform:translateY(-1px)}
+#cs-onboarding .cs-fork-card:focus-visible{outline:2px solid var(--cs-forest);outline-offset:2px;border-color:var(--cs-forest)}
 #cs-onboarding .cs-fork-card[disabled]{opacity:.6;cursor:default}
 #cs-onboarding .cs-fork-card[disabled]:hover{border-color:var(--cs-line);box-shadow:none;transform:none}
 /* 卡片① is the recommended one — a soft green frame like the mockup. */
@@ -328,7 +288,7 @@ body.cs-onboarding-active .app-container{display:none !important}
   white-space:nowrap;padding:4px 10px;border-radius:999px;background:var(--cs-forest-weak)}
 #cs-onboarding .cs-fork-card .f-tag.muted{color:var(--cs-muted);background:var(--cs-line-soft)}
 /* Right panel: 这次会用什么 */
-#cs-onboarding .cs-fork-side{border:1px solid var(--cs-line);border-radius:12px;background:#fafcfb;padding:20px 18px}
+#cs-onboarding .cs-fork-side{border:1px solid var(--cs-line);border-radius:12px;background:#fafcfb;padding:20px 18px;box-shadow:0 2px 10px rgba(20,40,30,.04)}
 #cs-onboarding .cs-fork-side-title{font-size:14px;font-weight:700;color:var(--cs-ink);margin:0 0 6px}
 #cs-onboarding .cs-fork-side-note{font-size:10.5px;color:var(--cs-muted);line-height:1.6;margin:0 0 14px}
 #cs-onboarding .cs-fork-side-item{display:grid;grid-template-columns:18px minmax(0,1fr);gap:11px;align-items:start;
@@ -359,16 +319,6 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-sessions-container{transition:max-height .25s ease,opacity .2s ease}
 #cs-onboarding .cs-sessions-container.collapsed{max-height:0;opacity:0;overflow:hidden}
 /* Step 2: per-agent asset sub-sections (会话/技能/记忆/定时任务) */
-#cs-onboarding .cs-asset{border-top:1px solid var(--cs-line-soft)}
-#cs-onboarding .cs-asset:first-child{border-top:none}
-#cs-onboarding .cs-asset-head{display:flex;align-items:center;gap:8px;padding:10px 16px;cursor:pointer;
-  user-select:none;background:#FAFDFB;font-size:12.5px;font-weight:650;color:var(--cs-ink-soft)}
-#cs-onboarding .cs-asset-head:hover{background:#F3FAF6}
-#cs-onboarding .cs-asset-head .a-title{flex:1}
-#cs-onboarding .cs-asset-head .a-toggle{width:15px;height:15px;color:var(--cs-muted);transition:transform .2s}
-#cs-onboarding .cs-asset-head.collapsed .a-toggle{transform:rotate(-90deg)}
-#cs-onboarding .cs-asset-body{transition:max-height .25s ease,opacity .2s ease}
-#cs-onboarding .cs-asset-body.collapsed{max-height:0;opacity:0;overflow:hidden}
 #cs-onboarding .cs-src{display:grid;grid-template-columns:22px 42px minmax(0,1fr) auto;gap:12px;align-items:center;
   padding:11px 16px;border-bottom:1px solid var(--cs-line);cursor:pointer;transition:background .15s}
 #cs-onboarding .cs-src:last-child{border-bottom:0}
@@ -395,8 +345,6 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-state:last-child{border-bottom:0}
 #cs-onboarding .cs-state.err{color:#8A3A2C;background:var(--cs-clay-weak)}
 #cs-onboarding .cs-state.loading{color:var(--cs-forest-deep)}
-#cs-onboarding .cs-mode{margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:14px;
-  padding:12px 16px;border:1px solid var(--cs-line);border-radius:10px;background:#fff;font-size:12.5px;color:var(--cs-ink-soft)}
 
 /* ── step 3: 隐形匹配中过渡页 ── */
 #cs-onboarding .cs-matching{max-width:460px;margin:40px auto;text-align:center;padding:20px 0}
@@ -411,22 +359,7 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-matching .cs-lead{color:var(--cs-muted);font-size:13.5px;line-height:1.7;margin:0 auto;max-width:360px}
 #cs-onboarding .cs-matching-detail{margin-top:18px;font-size:12px;color:var(--cs-forest-deep);font-weight:600}
 
-/* ── step 4: candidate cognitions ── */
-#cs-onboarding .cs-cands{display:grid;gap:10px}
-#cs-onboarding .cs-cand{display:grid;grid-template-columns:22px minmax(0,1fr);gap:12px;padding:16px 17px;
-  border:1px solid var(--cs-line);border-radius:12px;background:#fff;cursor:pointer;
-  transition:transform .15s,border-color .15s,box-shadow .15s,background .15s}
-#cs-onboarding .cs-cand:hover{border-color:#B9E3C8;box-shadow:0 6px 18px rgba(14,159,110,.1);transform:translateY(-1px)}
-#cs-onboarding .cs-cand.selected{border-color:var(--cs-forest);box-shadow:0 0 0 1px var(--cs-forest),0 6px 18px rgba(14,159,110,.12);background:#F6FBF8}
-#cs-onboarding .cs-cand input{width:17px;height:17px;margin-top:2px;accent-color:var(--cs-forest)}
-#cs-onboarding .cs-cand-body{min-width:0}
-#cs-onboarding .cs-cand-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-#cs-onboarding .cs-cand-head b{font-size:13.5px}
-#cs-onboarding .cs-cand .cs-type{font-family:var(--cs-mono);font-size:9.5px;font-weight:700;letter-spacing:.08em;color:var(--cs-forest-deep);
-  background:var(--cs-forest-weak);border-radius:5px;padding:2px 8px}
-#cs-onboarding .cs-cand .cs-meta{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;
-  overflow:hidden;margin-top:5px;color:var(--cs-muted);font-size:11.5px;line-height:1.5}
-#cs-onboarding .cs-cand .cs-src-line{margin-top:6px;font-family:var(--cs-mono);font-size:10px;color:var(--cs-faint)}
+/* Session import progress line (技能/记忆/配置/会话导入时显示) */
 #cs-onboarding .cs-extract-progress{padding:16px;text-align:center;color:var(--cs-forest-deep);font-size:12.5px}
 
 /* ── toast ── */
@@ -451,6 +384,7 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-import-btn{align-self:flex-start;display:inline-flex;align-items:center;gap:7px;
   padding:9px 18px;border-radius:var(--cs-radius);background:var(--cs-grad);color:#fff;font-weight:650;font-size:12.5px}
 #cs-onboarding .cs-import-btn:hover{background:var(--cs-forest-deep)}
+#cs-onboarding .cs-import-btn:focus-visible{outline:2px solid var(--cs-forest);outline-offset:2px}
 #cs-onboarding .cs-import-btn:disabled{opacity:.5;cursor:not-allowed}
 #cs-onboarding .cs-import-result{font-size:12px;color:var(--cs-muted);line-height:1.6;margin-top:6px}
 #cs-onboarding .cs-import-lines{margin-top:8px;display:flex;flex-direction:column;gap:4px}
@@ -470,6 +404,7 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-toggle-more{margin:8px 16px 0;padding:6px 12px;background:var(--cs-line-soft);border:1px solid var(--cs-line);
   border-radius:var(--cs-radius);font-size:11.5px;color:var(--cs-ink-soft);cursor:pointer;transition:all .15s}
 #cs-onboarding .cs-toggle-more:hover{background:var(--cs-line);color:var(--cs-ink)}
+#cs-onboarding .cs-toggle-more:focus-visible{outline:2px solid var(--cs-forest);outline-offset:2px}
 
 /* Step 1a: AI team connect — provider tags */
 /* Step 1: connect AI team — one row per agent */
@@ -488,38 +423,5 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-team-connect{padding:7px 16px;font-size:12px}
 #cs-onboarding .cs-team-connect.done{background:var(--cs-forest-weak);color:var(--cs-forest-deep);cursor:default}
 #cs-onboarding .cs-team-connect.done:hover{background:var(--cs-forest-weak)}
-
-/* ── New layout: group by ASSET TYPE (not by agent) ── */
-#cs-onboarding .cs-detected-summary{display:flex;align-items:center;gap:12px;padding:14px 16px;background:#F6FBF8;
-  border-bottom:1px solid var(--cs-line);flex-wrap:wrap}
-#cs-onboarding .cs-summary-label{font-size:12.5px;font-weight:650;color:var(--cs-ink-soft)}
-#cs-onboarding .cs-summary-agents{display:flex;gap:10px;flex-wrap:wrap}
-#cs-onboarding .cs-detected-agent{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;
-  border-radius:20px;background:#fff;border:1px solid var(--cs-line);font-size:12px;color:var(--cs-ink);font-weight:600}
-#cs-onboarding .cs-detected-agent svg{width:14px;height:14px;color:var(--cs-forest)}
-
-/* Asset group (会话/技能/记忆/定时任务) */
-#cs-onboarding .cs-asset-group{border-top:1px solid var(--cs-line)}
-#cs-onboarding .cs-asset-group:first-of-type{border-top:none}
-#cs-onboarding .cs-asset-group-head{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:12px;
-  align-items:center;padding:14px 16px;background:#FAFDFB;cursor:pointer;user-select:none;transition:background .15s}
-#cs-onboarding .cs-asset-group-head:hover{background:#F3FAF6}
-#cs-onboarding .cs-asset-group-head .ag-icon{font-size:20px;line-height:1}
-#cs-onboarding .cs-asset-group-head .ag-title{font-size:14px;font-weight:700;color:var(--cs-ink)}
-#cs-onboarding .cs-asset-group-head .ag-desc{font-size:12px;color:var(--cs-muted);margin-top:2px}
-#cs-onboarding .cs-asset-group-head .ag-toggle{width:16px;height:16px;color:var(--cs-muted);transition:transform .2s}
-#cs-onboarding .cs-asset-group-head.collapsed .ag-toggle{transform:rotate(-90deg)}
-#cs-onboarding .cs-asset-group-body{background:#fff;transition:max-height .25s ease,opacity .2s ease}
-#cs-onboarding .cs-asset-group-body.collapsed{max-height:0;opacity:0;overflow:hidden}
-
-/* Agent section under each asset group */
-#cs-onboarding .cs-agent-section{border-top:1px solid var(--cs-line-soft)}
-#cs-onboarding .cs-agent-section:first-child{border-top:none}
-#cs-onboarding .cs-agent-section-head{display:flex;align-items:center;gap:10px;padding:10px 16px;
-  background:#F9FCFA;border-bottom:1px solid var(--cs-line-soft)}
-#cs-onboarding .cs-agent-section-head .as-label{font-size:12.5px;font-weight:650;color:var(--cs-ink)}
-#cs-onboarding .cs-agent-section-head .as-path{font-family:var(--cs-mono);font-size:10px;color:var(--cs-faint);
-  margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px}
-#cs-onboarding .cs-agent-section-body{background:#fff}
 
 @media (prefers-reduced-motion:reduce){#cs-onboarding *,#cs-ob-toast{animation:none !important;transition:none !important}}

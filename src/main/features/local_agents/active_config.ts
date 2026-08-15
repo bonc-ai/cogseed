@@ -39,17 +39,29 @@ export interface ActiveCliConfig {
  * Priority: API key (settings.json or env var) > OAuth (credentials.json or keychain)
  */
 function readClaudeActiveConfig(home: string): ActiveCliConfig | null {
-  // Try 1: API key from settings.json
+  // Try 1: API key from settings.json. 支持两种布局：
+  //   - 顶层字段: settings.apiKey / settings.anthropicApiKey
+  //   - env 注入: settings.env.ANTHROPIC_AUTH_TOKEN / settings.env.ANTHROPIC_API_KEY
+  //     （Claude Code 常用 env 方式，例如指向 DeepSeek 等兼容网关）
   const settingsPath = path.join(home, '.claude', 'settings.json');
   try {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    if (settings.apiKey || settings.anthropicApiKey) {
-      const apiKey = settings.apiKey || settings.anthropicApiKey;
-      const baseUrl = settings.baseUrl || settings.anthropicBaseUrl || '';
+    const env = settings && typeof settings.env === 'object' ? settings.env : {};
+    const apiKey = settings.apiKey
+      || settings.anthropicApiKey
+      || env.ANTHROPIC_AUTH_TOKEN
+      || env.ANTHROPIC_API_KEY
+      || '';
+    if (apiKey) {
+      const baseUrl = settings.baseUrl
+        || settings.anthropicBaseUrl
+        || env.ANTHROPIC_BASE_URL
+        || env.ANTHROPIC_API_URL
+        || '';
       return {
         cli: 'claude',
         baseUrl,
-        apiKey,
+        apiKey: String(apiKey),
         mode: 'api',
         sourcePath: settingsPath,
       };

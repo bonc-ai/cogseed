@@ -1229,13 +1229,11 @@ if (!gotLock) {
     // actually use it (pickChatEntry walks entries only). Cheap and idempotent.
     registerDeferred('auth:ccswitch-bind-entries', async () => {
       const uid = users.getActiveUserId();
-      if (!uid) return;
-      const { ensureCcSwitchBoundEntries } = await import('./features/custom_providers');
-      const bound = await ensureCcSwitchBoundEntries(uid);
-      if (bound > 0) {
-        const log = (await import('./logger')).createLogger('boot');
-        log.info('cc-switch auto-bound entries on boot', { bound });
-      }
+      // CC Switch providers are user-controlled: never auto-bind them back on
+      // boot. Doing so resurrects deleted model entries and defeats the
+      // no-model → CLI fallback. The user enables CC Switch providers
+      // explicitly in settings; entries are bound at that point.
+      void uid;
     });
 
     // 修正 33a16ad 之前 promote 出来的资产：lifecycleStatus 说「用户已确认」，

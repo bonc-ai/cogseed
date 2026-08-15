@@ -110,6 +110,56 @@ describe('commander CLI fallback', () => {
     expect(recipientByCid['cid-2']).toMatchObject({ kind: 'agent', id: 'agent-codex-new' });
   });
 
+  it('routes to WorkBuddy when it is the signed-in CLI and no preference is set', async () => {
+    const created: unknown[] = [];
+    const { sandbox, recipientByCid, toasts } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: '' },
+      'localAgents.list': {
+        entries: [{ type: 'workbuddy', available: true, auth: { loggedIn: true } }],
+      },
+      'agents.list': { agents: [] }, // no CLI agent yet → auto-create
+      'agents.create': (payload: unknown) => {
+        created.push(payload);
+        return { agent: { agent_id: 'agent-wb-new', name: 'WorkBuddy', runtime: { kind: 'cli', cli: 'workbuddy' } } };
+      },
+    });
+
+    const applied = await sandbox._maybeApplyCliFallback('cid-wb');
+
+    expect(applied).toBe(true);
+    expect(created).toHaveLength(1);
+    // The on-the-fly agent is created with the WorkBuddy brand, not mislabeled OpenCode.
+    expect((created[0] as any).name).toBe('WorkBuddy');
+    expect((created[0] as any).runtime).toEqual({ kind: 'cli', cli: 'workbuddy' });
+    expect(recipientByCid['cid-wb']).toMatchObject({ kind: 'agent', id: 'agent-wb-new' });
+    expect(toasts[0].message).toContain('WorkBuddy');
+  });
+
+  it('honours an explicit fallback preference over auto-pick', async () => {
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: 'workbuddy' },
+      'localAgents.list': {
+        entries: [
+          { type: 'claude', available: true, auth: { loggedIn: true } },
+          { type: 'workbuddy', available: true, auth: { loggedIn: true } },
+        ],
+      },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-wb-1', name: 'WorkBuddy', runtime: { kind: 'cli', cli: 'workbuddy' } },
+        ],
+      },
+    });
+
+    const applied = await sandbox._maybeApplyCliFallback('cid-pref');
+
+    // Preference wins even though claude appears first in the detection list.
+    expect(applied).toBe(true);
+    expect(recipientByCid['cid-pref']).toMatchObject({ kind: 'agent', id: 'agent-wb-1' });
+  });
+
   it('skips fallback entirely when an API-key model IS configured', async () => {
     const { sandbox, invokeLog, toasts } = buildSandbox({
       'model.hasConfigured': { configured: true },

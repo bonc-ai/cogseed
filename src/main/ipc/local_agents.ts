@@ -561,6 +561,57 @@ export const invokeHandlers = {
   },
 
   /**
+   * Read the resume welcome panel for an imported conversation (v1.6 three-part
+   * template). Does not append a message and does not consume `needs_welcome`;
+   * the renderer shows the panel and only sends the guide sentence on confirm.
+   */
+  'chats.getWelcomePanel': async (
+    { conversationId }: { conversationId?: unknown } = {},
+  ) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getWelcomePanel } = await import('../features/chats');
+    return getWelcomePanel(userId, conversationId);
+  },
+
+  /**
+   * Mark an imported conversation's welcome as seen (clears `needs_welcome`)
+   * without appending any message. Called after「带着这些继续」is confirmed.
+   */
+  'chats.markWelcomeSeen': async (
+    { conversationId }: { conversationId?: unknown } = {},
+  ) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { markWelcomeSeen } = await import('../features/chats');
+    return markWelcomeSeen(userId, conversationId);
+  },
+
+  /**
+   * Template-based handoff reply for an imported conversation. When the user
+   * sends a handoff/continue prompt ("继续这项工作", "现在做到哪里…"), we answer
+   * directly from real CogSeed data — instant, no CLI turn. Appends the
+   * three-part template as a commander reply and returns the text.
+   */
+  'chats.handoffWelcomeReply': async (
+    { conversationId, text }: { conversationId?: unknown; text?: unknown } = {},
+  ) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { handoffWelcomeReply } = await import('../features/chats');
+    return handoffWelcomeReply(userId, conversationId, typeof text === 'string' ? text : undefined);
+  },
+
+  /**
    * Read a spilled CLI tool_result file. The renderer's click-to-expand
    * UI calls this with the `outputPath` it received on a `tool-event
    * phase:'result'` event.

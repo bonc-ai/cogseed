@@ -388,16 +388,7 @@ function _csGoStep(n) {
   shell.querySelectorAll('.cs-panel').forEach((p) => {
     p.classList.toggle('active', Number(p.dataset.cspanel) === step);
   });
-  shell.querySelectorAll('.cs-step').forEach((b) => {
-    const i = Number(b.dataset.csstep);
-    b.classList.toggle('active', i === step);
-    b.classList.toggle('done', i < step);
-    b.disabled = i > step;
-  });
   shell.querySelector('.cs-content')?.scrollTo?.(0, 0);
-  // Top-bar step indicator ("第 n 步 / 共 3 步"), kept in sync with the rail.
-  const stepNow = document.getElementById('cs-step-now');
-  if (stepNow) stepNow.textContent = ` · 第 ${step + 1} 步 / 共 3 步`;
   console.log('[ONBOARDING DEBUG] _csGoStep: loading data for step', step);
   if (step === 1) _csLoadTeam(false);
   if (step === 2) _csShowForkView();
@@ -826,7 +817,7 @@ function _csRenderAgents(entries) {
       '<div class="cs-import-result" id="cs-demo-result"></div>' +
       '</div>';
     const demoBtn = document.getElementById('cs-demo-start');
-    if (demoBtn) demoBtn.addEventListener('click', () => void _csStartDemoMode(agentType));
+    if (demoBtn) demoBtn.addEventListener('click', () => void _csStartDemoMode());
     return;
   }
 
@@ -843,7 +834,7 @@ function _csRenderAgents(entries) {
 // IPC is ever called, so nothing can leak into real storage.
 let _csDemoMode = false;
 
-async function _csStartDemoMode(agentType) {
+async function _csStartDemoMode() {
   _csDemoMode = true;
   const box = document.getElementById('cs-agent-list');
   if (!box) return;
@@ -1441,10 +1432,12 @@ async function _csConnectTeam(box, appType, shouldStoreApi = false) {
   if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
 
   try {
-    // 1) Sync CC Switch model providers (if any) into "AI 团队".
+    // 1) Sync CC Switch model providers (if any) into "AI 团队" — 仅当用户
+    //    明确选择「连接并存储 API」时才执行。绝不自动拿走用户的 API Key；
+    //    只连接（connect-only）不同步任何模型凭据。
     let added = 0;
     let updated = 0;
-    if (externalIds.length) {
+    if (externalIds.length && shouldStoreApi) {
       const res = await window.cogseed.invoke('customProviders.ccswitch.sync', { externalIds });
       if (!res || res.ok !== true) {
         const reason = (res && res.reason) || '未知原因';
@@ -1469,6 +1462,22 @@ async function _csConnectTeam(box, appType, shouldStoreApi = false) {
         _obLog.warn('team connect: agents.list failed', { error: (err && err.message) || String(err) });
       }
       cliResult = await _csEnsureCliAgent(cli, existing);
+
+      // 2b) Make this CLI the commander's no-API fallback preference — but only
+      // when the user has not already picked one (first connected agent wins;
+      // a manual choice in settings always overrides). This is what makes the
+      // walkthrough promise real: "指挥官默认调用你连接的第一个 Agent 降级".
+      if (cliResult === 'created' || cliResult === 'exists') {
+        try {
+          const fb = await window.cogseed.invoke('prefs.getCliFallback');
+          if (!fb || !fb.cli) {
+            const saved = await window.cogseed.invoke('prefs.setCliFallback', { cli });
+            _obLog.info('team connect: set cli fallback preference', { cli, saved: saved && saved.cli });
+          }
+        } catch (err) {
+          _obLog.warn('team connect: set cli fallback failed', { cli, error: (err && err.message) || String(err) });
+        }
+      }
     }
 
     // 3) If user selected "connect and store", store the currently-in-use API.
@@ -3025,6 +3034,15 @@ async function _csFinish() {
   // when a role workspace was chosen, re-render the projects section that
   // hosts the bound conversations).
   await _csRefreshConversationList();
+
+  // 有导入会话（推荐/选择其他会话路线）→ 默认进入第一个导入会话的对话页，
+  // 用户直接看到接续模板并继续对话。从零开始无导入 → 留在首页。
+  const firstImported = _csImportedConversationIds.length ? _csImportedConversationIds[0] : '';
+  if (firstImported && typeof setView === 'function') {
+    _obLog.info('opening first imported conversation after onboarding', { conversationId: firstImported });
+    // 会话列表已刷新，切到对话视图（打开时会触发 needs_welcome → 接续模板）。
+    setView('conversation', firstImported);
+  }
 }
 
 function _csBuild() {
@@ -3053,14 +3071,7 @@ function _csBuild() {
   toast.innerHTML = '<span class="t-msg"></span><span class="t-bar"><i></i></span>';
   document.body.appendChild(toast);
 
-  // Step navigation (rail buttons + inline next/back buttons).
-  shell.querySelectorAll('.cs-step').forEach((b) => {
-    b.addEventListener('click', () => {
-      const i = Number(b.dataset.csstep);
-      const cur = Number(shell.querySelector('.cs-step.active')?.dataset.csstep || 0);
-      if (i >= 0 && i <= cur + 1) _csGoStep(i);
-    });
-  });
+  // Inline next/back navigation (`data-csnext` buttons).
   shell.querySelectorAll('[data-csnext]').forEach((b) => {
     b.addEventListener('click', () => _csGoStep(Number(b.dataset.csnext)));
   });

@@ -5,6 +5,7 @@ import * as vm from 'node:vm';
 
 function loadOnboardingRenderer() {
   const calls: any[] = [];
+  const setViewCalls: string[] = [];
   const loadProjectsCalls: Array<boolean | undefined> = [];
   const loadConversationProjectCalls: string[] = [];
   const context: any = {
@@ -24,6 +25,9 @@ function loadOnboardingRenderer() {
     encodeURIComponent,
     URLSearchParams,
     createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} }),
+    setView(view: string, cid?: string) {
+      setViewCalls.push(cid ? `${view}:${cid}` : view);
+    },
     localStorage: {
       getItem: () => null,
       setItem() {},
@@ -69,7 +73,7 @@ function loadOnboardingRenderer() {
     'utf8',
   );
   vm.runInContext(source, context);
-  return { context, calls, loadProjectsCalls, loadConversationProjectCalls };
+  return { context, calls, setViewCalls, loadProjectsCalls, loadConversationProjectCalls };
 }
 
 describe('onboarding invisible workspace matching', () => {
@@ -129,5 +133,23 @@ describe('onboarding invisible workspace matching', () => {
     expect(calls.some(([c]) => c === 'spaces.create')).toBe(false);
     const bindCall = calls.find(([channel]) => channel === 'projects.bindSpace');
     expect(bindCall[1]).toEqual({ projectId: 'project1', spaceId: 'scenario-space' });
+  });
+
+  it('auto-opens the first imported conversation after finishing onboarding', async () => {
+    const { context, calls, setViewCalls } = loadOnboardingRenderer();
+    vm.runInContext('_csImportedConversationIds = ["c1"];', context);
+
+    await vm.runInContext('_csFinish()', context);
+
+    // 有导入会话 → 引导结束后自动跳转到第一个导入会话的对话页.
+    expect(setViewCalls).toContain('conversation:c1');
+    // 完成状态已持久化.
+    expect(calls.some(([channel]) => channel === 'prefs.setOnboarding')).toBe(true);
+  });
+
+  it('does not auto-open when no session was imported (blank start)', async () => {
+    const { context, setViewCalls } = loadOnboardingRenderer();
+    await vm.runInContext('_csFinish()', context);
+    expect(setViewCalls).not.toContain('conversation:');
   });
 });
