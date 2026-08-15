@@ -2226,9 +2226,19 @@ export interface ChatEntryChoice {
   maxOutputTokens?: number;
 }
 
-/** Resolve one API-key chat entry for an explicit user. This is intentionally
- * independent from active-user state, OAuth refresh, and Core Agent rotation. */
-export function pickApiKeyChatEntryForUser(
+/** Resolve one usable OpenAI-compatible chat entry for an explicit user.
+ *
+ * Accepts entries backed by an `openai-compatible` API-key profile or an
+ * OpenAI-protocol custom provider (`cp:*` with `protocol: 'openai'`). Entries
+ * backed by OAuth profiles or by non-OpenAI dialects (anthropic / gemini
+ * custom providers, native API-key providers) are skipped — the CogSeed
+ * backend's OpenAI-compatible provider cannot talk to those surfaces, so
+ * surfacing them as candidates would just fail downstream.
+ *
+ * This is intentionally independent from active-user state, OAuth refresh,
+ * and Core Agent rotation (same contract as the former api-key-only picker,
+ * generalized to OpenAI-protocol custom providers). */
+export function pickOpenAICompatibleChatEntryForUser(
   userId: string,
   profileId?: string,
 ): ChatEntryChoice | null {
@@ -2240,8 +2250,24 @@ export function pickApiKeyChatEntryForUser(
   for (const entry of store.entries) {
     if (wantedProfileId && entry.profileId !== wantedProfileId) continue;
     if (!isEntryAllowed(store, entry)) continue;
+
+    // Custom provider entries carry their own OpenAI-compatible endpoint.
+    const custom = customProviderForId(store, entry.provider);
+    if (custom) {
+      if (custom.protocol !== 'openai') continue;
+      return {
+        entryId: entry.entryId,
+        profileId: entry.profileId,
+        provider: entry.provider,
+        model: entry.model,
+        apiKey: custom.apiKey,
+        ...(custom.baseUrl ? { baseUrl: custom.baseUrl } : {}),
+      };
+    }
+
     const profile = store.profiles[entry.profileId];
     if (!profile || profile.type !== 'api_key') continue;
+    if (!isOpenAICompatibleProvider(entry.provider)) continue;
     return {
       entryId: entry.entryId,
       profileId: entry.profileId,
@@ -2249,9 +2275,10 @@ export function pickApiKeyChatEntryForUser(
       model: entry.model,
       apiKey: profile.key,
       ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
-      ...(isOpenAICompatibleProvider(entry.provider)
-        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, profile.maxOutputTokens) }
-        : {}),
+      // openai-compatible is guaranteed here; the normalizer falls back to
+      // the default cap (32768) when the profile has no explicit cap, matching
+      // pickChatEntryGroup's behavior.
+      ...{ maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, profile.maxOutputTokens) },
     };
   }
   return null;
