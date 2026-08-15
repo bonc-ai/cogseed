@@ -46,6 +46,25 @@ function texts(value: unknown, field: string, maxItems: number, maxLength: numbe
   return out;
 }
 
+/**
+ * Candidate scoring weights (P1-1): currently hand-picked starting values,
+ * NOT calibrated against historical data. Calibration requires a
+ * prediction-vs-actual regression loop (forecast score vs realized ΔR),
+ * which is not built yet — until then these weights are honest about being
+ * guesses. They are named constants so calibration can swap them in one
+ * place.
+ */
+export const SCORE_WEIGHTS = Object.freeze({
+  goalFit: 0.35,
+  feasibility: 0.25,
+  observability: 0.20,
+  causalSupport: 0.20,
+  /** Risk penalty is a discount term (subtracted), not a positive signal —
+   *  semantically distinct from the four quality dimensions on purpose:
+   *  a risky candidate must beat a safe one by a real margin. */
+  riskPenalty: 0.25,
+} as const);
+
 export function recomputeCandidateScore(value: unknown): WorldModelCandidateScore {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_candidate_score');
   const score = value as Record<string, unknown>;
@@ -55,11 +74,11 @@ export function recomputeCandidateScore(value: unknown): WorldModelCandidateScor
   const causalSupport = dimension(score.causalSupport, 'causal_support');
   const riskPenalty = dimension(score.riskPenalty, 'risk_penalty');
   const total = Number(clamp01(
-    goalFit * 0.35
-    + feasibility * 0.25
-    + observability * 0.20
-    + causalSupport * 0.20
-    - riskPenalty * 0.25,
+    goalFit * SCORE_WEIGHTS.goalFit
+    + feasibility * SCORE_WEIGHTS.feasibility
+    + observability * SCORE_WEIGHTS.observability
+    + causalSupport * SCORE_WEIGHTS.causalSupport
+    - riskPenalty * SCORE_WEIGHTS.riskPenalty,
   ).toFixed(4));
   return { goalFit, feasibility, observability, causalSupport, riskPenalty, total };
 }

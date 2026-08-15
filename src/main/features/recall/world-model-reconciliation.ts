@@ -185,11 +185,13 @@ function attributionFor(
   options: WorldModelReconciliationOptions,
 ): WorldModelReconciliation['attribution'] {
   if (deltaR === 'unknown' || deltaR === 0) return 'unclear';
-  const types = options.selectedAssetTypes || [];
-  if (types.includes('rule')) return 'rule_gap';
-  if (types.includes('template')) return 'template_gap';
-  if (types.includes('skill_method')) return 'skill_gap';
-  return 'knowledge_gap';
+  // P1-4: the deterministic fallback must NOT pretend to know the cause.
+  // Guessing "we selected a rule asset, therefore it's a rule_gap" produces
+  // wrong attributions that misclassify precipitated assets. The honest
+  // fallback is 'unclear' (measurement yes, cause NOT reasoned); the model
+  // reasoning path (when available) is the only source of real attribution.
+  void options;
+  return 'unclear';
 }
 
 export function reconcileWorldModel(
@@ -198,24 +200,21 @@ export function reconcileWorldModel(
   options: WorldModelReconciliationOptions = {},
 ): WorldModelReconciliation {
   const action = reconcileActions(forecast, episode);
-  const emptyResult: ResultDeltaDetail = {
-    acceptanceSignals: forecast.rHat.acceptanceSignals.map((signal) => ({
-      signal, status: 'unknown', evidence: 'result delta gated by execution gap',
-    })),
-    missingPredictedFiles: [],
-    unexpectedProducedFiles: [],
-    terminalStatus: episode.r.status,
-  };
+  const result = reconcileResults(forecast, episode);
   if (action.deltaA !== 0 && action.deltaA !== 'unknown') {
+    // P1-3: an execution deviation must NOT veto the result signal. The
+    // outcome may still be excellent (or terrible) regardless of plan drift;
+    // recording deltaR: 'unknown' threw that information away. We keep the
+    // full result measurement AND mark the attribution as execution-gap
+    // (the deviation explains WHY, but does not erase WHAT happened).
     return {
       deltaA: action.deltaA,
-      deltaR: 'unknown',
+      deltaR: result.deltaR,
       attribution: 'execution_gap',
       actionDelta: action.detail,
-      resultDelta: emptyResult,
+      resultDelta: result.detail,
     };
   }
-  const result = reconcileResults(forecast, episode);
   return {
     deltaA: action.deltaA,
     deltaR: result.deltaR,

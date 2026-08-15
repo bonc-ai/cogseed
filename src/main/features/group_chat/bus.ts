@@ -6256,7 +6256,7 @@ async function guardKstarPrivilegedDispatch(
     if (options.allowHostAutoTracked) return { provenance: {} };
     return kstarApprovalBlockedToolResult(
       'kstar_projection_not_confirmed',
-      'KStar Forecast is not committed.',
+      'KStar Forecast is not committed. Either call kstar_control commit_forecast with 2-4 candidates first, or abandon this task (kstar_control abandon) to proceed ungoverned.',
     );
   }
   const provenance = {
