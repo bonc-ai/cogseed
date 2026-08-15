@@ -1,5 +1,13 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
+}));
+
+vi.mock('../../../src/main/logger', () => ({
+  createLogger: () => loggerMocks,
+}));
+
 async function loadBootInit() {
   vi.resetModules();
   const boot = await import('../../../src/main/util/boot_init');
@@ -9,6 +17,10 @@ async function loadBootInit() {
 
 afterEach(() => {
   vi.useRealTimers();
+  loggerMocks.debug.mockClear();
+  loggerMocks.info.mockClear();
+  loggerMocks.warn.mockClear();
+  loggerMocks.error.mockClear();
 });
 
 describe('util/boot_init', () => {
@@ -217,5 +229,50 @@ describe('util/boot_init', () => {
     await vi.advanceTimersByTimeAsync(20);
     await scheduled.promise;
     expect(aborted).toBe(true);
+  });
+});
+
+describe('util/boot_init task logging', () => {
+  it('logs slow only for completed tasks', async () => {
+    vi.useFakeTimers();
+    const boot = await loadBootInit();
+    const { SLOW_WARN_MS } = await import('../../../src/main/util/boot_init');
+    vi.setSystemTime(0);
+
+    await boot.runBootTaskForTest('completed', async () => {
+      vi.setSystemTime(SLOW_WARN_MS + 1);
+    });
+    expect(loggerMocks.warn).toHaveBeenCalledWith(expect.stringContaining('task slow'));
+
+    loggerMocks.warn.mockClear();
+    const controller = new AbortController();
+    await boot.runBootTaskForTest('aborted', async () => {
+      controller.abort();
+      vi.setSystemTime(SLOW_WARN_MS + 1);
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    }, { signal: controller.signal });
+    expect(loggerMocks.warn).not.toHaveBeenCalledWith(expect.stringContaining('task slow'));
+    expect(loggerMocks.warn).not.toHaveBeenCalledWith(expect.stringContaining('task threw'));
+  });
+
+  it('uses slice exceeded as the single warning for a slice abort', async () => {
+    vi.useFakeTimers();
+    const boot = await loadBootInit();
+    const { SLOW_WARN_MS } = await import('../../../src/main/util/boot_init');
+    vi.setSystemTime(0);
+
+    const pending = boot.runBootTaskForTest('slice', (signal) => new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => {
+        vi.setSystemTime(SLOW_WARN_MS + 1);
+        reject(Object.assign(new Error('slice aborted'), { name: 'AbortError' }));
+      }, { once: true });
+    }), { maxSliceMs: 10 });
+    await vi.runAllTimersAsync();
+    await pending;
+
+    const warnings = loggerMocks.warn.mock.calls.map((call) => String(call[0]));
+    expect(warnings.filter((message) => message.includes('task slice exceeded'))).toHaveLength(1);
+    expect(warnings.some((message) => message.includes('task slow'))).toBe(false);
+    expect(warnings.some((message) => message.includes('task threw'))).toBe(false);
   });
 });

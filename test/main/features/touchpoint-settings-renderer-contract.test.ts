@@ -83,10 +83,11 @@ describe('touchpoint settings renderer contract', () => {
     const source = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/touchpoint-settings.js'), 'utf8');
     expect(source).toContain("touchpoints.config.get");
     expect(source).toContain("touchpoints.config.save");
-    expect(source).toContain('data-touchpoint-config-default');
+    expect(source).not.toContain('data-touchpoint-config-default');
     expect(source).toContain('data-touchpoint-config-route');
     expect(source).toContain('data-touchpoint-config-button="approve"');
     expect(source).toContain('instanceId: state.touchpointConfig');
+    expect(source).toContain('defaultInstanceId: state.touchpointConfig?.defaultInstanceId || null');
   });
 
   it('keeps approval-card configuration behind a dedicated simplified management view', () => {

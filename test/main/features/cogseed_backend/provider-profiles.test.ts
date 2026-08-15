@@ -31,7 +31,7 @@ async function activateAndAddApiKey(userId: string, provider: string, key: strin
   await auth.addEntry({ provider, model: 'mate-test-model', profileId });
 }
 
-describe('Mate Agent provider profiles', () => {
+describe('CogSeed provider profiles', () => {
   it('resolves an explicit user API-key profile without reading the active user profile', async () => {
     await activateAndAddApiKey(USER_A, 'openai-compatible', 'sk-user-a-only-key', 'https://provider-a.test/v1');
     await activateAndAddApiKey(USER_B, 'openai-compatible', 'sk-user-b-only-key', 'https://provider-b.test/v1');

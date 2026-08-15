@@ -7,18 +7,20 @@ const indexHtml = readFileSync(resolve(root, 'src/renderer/index.html'), 'utf8')
 const lazyFeatures = readFileSync(resolve(root, 'src/renderer/modules/lazy-features.js'), 'utf8');
 
 describe('settings model authorization add account entrypoint', () => {
-  it('routes users through the unified add authorization button instead of the legacy provider/model picker', () => {
-    expect(indexHtml).toContain('id="settings-model-authorization-add-btn"');
-    expect(indexHtml).toContain('id="model-authorization-modal"');
-    expect(indexHtml).not.toContain('id="settings-picker-provider"');
-    expect(indexHtml).not.toContain('id="settings-picker-model"');
-    expect(indexHtml).not.toContain('id="settings-add-entry-btn"');
+  it('renders the direct provider/model picker and priority list from the approved reference', () => {
+    expect(indexHtml).toContain('data-i18n="settings.add_auth_title"');
+    expect(indexHtml).toContain('id="settings-picker-provider"');
+    expect(indexHtml).toContain('id="settings-picker-model"');
+    expect(indexHtml).toContain('id="settings-add-entry-btn"');
+    expect(indexHtml).toContain('data-i18n="settings.configured_title"');
+    expect(indexHtml).toContain('id="settings-entries"');
   });
 
-  it('loads pure authorization flow before settings so the Settings controller can bind the unified modal', () => {
+  it('loads settings after the authorization helpers used by credential flows', () => {
     const flowIndex = lazyFeatures.indexOf("./modules/model-authorization.js");
     const settingsIndex = lazyFeatures.indexOf("./modules/settings.js");
     expect(flowIndex).toBeGreaterThan(-1);
     expect(settingsIndex).toBeGreaterThan(flowIndex);
   });
+
 });

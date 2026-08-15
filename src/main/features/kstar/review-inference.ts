@@ -2,6 +2,9 @@ import { createLogger } from '../../logger';
 import { buildRunner } from '../../model/core-agent/runner';
 import { hasConfiguredModel } from '../auth';
 import type { SaveKstarReviewInput } from './review-service';
+import { reconcileWorldModel } from '../recall/world-model-reconciliation';
+import type { WorldModelForecast } from '../recall/world-model-types';
+import type { AbilityAssetType } from '../recall/candidate-service';
 import type { KstarAttribution, KstarEpisodeRecord, KstarOutcome, KstarReviewInferenceMethod, KstarReviewState } from './types';
 
 const log = createLogger('kstar.review-inference');
@@ -20,6 +23,11 @@ export interface KstarReviewInferenceOptions {
   runModel?: (input: { systemPrompt: string; message: string }) => Promise<string>;
   /** Allow closure flows to keep a provisional signal when actual output exists but model review is unavailable. */
   allowProvisionalEvidenceFallback?: boolean;
+  /** World-model forecast (A_hat, R_hat) produced at task boundary. When
+   *  present, its R_hat replaces the user-goal text as the expected result and
+   *  drives the deltaR/deltaA reconciliation. */
+  forecast?: WorldModelForecast;
+  selectedAssetTypes?: AbilityAssetType[];
 }
 
 interface ParsedModelReview {
@@ -30,6 +38,10 @@ interface ParsedModelReview {
   reason: string;
   confidence: number;
   needsConfirmation: boolean;
+  /** Optional reusable lesson derived from the attributed cause + context:
+   *  "why the gap happened" + "what is worth reusing". When present it
+   *  becomes the precipitation judgment instead of a fixed template. */
+  lesson?: string;
 }
 
 function compactText(value: unknown, max: number): string | undefined {
@@ -71,9 +83,14 @@ export function buildDeterministicReviewEvidence(episode: KstarEpisodeRecord): {
   };
 }
 
-function reviewBase(episode: KstarEpisodeRecord): Pick<SaveKstarReviewInput, 'expectedResult' | 'actualResult' | 'evidenceRefs'> {
+function reviewBase(episode: KstarEpisodeRecord, forecast?: WorldModelForecast): Pick<SaveKstarReviewInput, 'expectedResult' | 'actualResult' | 'evidenceRefs'> {
   const evidence = buildDeterministicReviewEvidence(episode);
-  return { ...evidence, evidenceRefs: episode.evidenceRefs };
+  // Prefer the world-model predicted result when available; otherwise fall
+  // back to the task text (graceful degradation without a forecast).
+  const expectedResult = forecast?.rHat.summary?.trim()
+    ? forecast.rHat.summary
+    : evidence.expectedResult;
+  return { ...evidence, expectedResult, evidenceRefs: episode.evidenceRefs };
 }
 
 function unknownInference(episode: KstarEpisodeRecord): KstarReviewInferenceResult {
@@ -87,9 +104,12 @@ function unknownInference(episode: KstarEpisodeRecord): KstarReviewInferenceResu
       reason: 'The recorded evidence is insufficient to compare the expected and actual result.',
       confidence: 0,
     },
-    reviewState: 'needs_confirmation',
+    // Self-evolution: evidence-insufficient reviews are still recorded (the
+    // audit trail matters), but they never pause for user confirmation and
+    // never precipitate (confidence 0 fails every precipitation gate).
+    reviewState: 'inferred',
     inferenceMethod: 'unknown',
-    needsConfirmation: true,
+    needsConfirmation: false,
   };
 }
 
@@ -107,7 +127,7 @@ export function parseKstarReviewInference(text: string): ParsedModelReview {
   const value = JSON.parse(trimmed) as unknown;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('model output must be an object');
   const record = value as Record<string, unknown>;
-  const allowed = new Set(['outcome', 'attribution', 'deltaR', 'deltaA', 'reason', 'confidence', 'needsConfirmation']);
+  const allowed = new Set(['outcome', 'attribution', 'deltaR', 'deltaA', 'reason', 'confidence', 'needsConfirmation', 'lesson']);
   if (Object.keys(record).some((key) => !allowed.has(key))) throw new Error('model output contains unknown fields');
   const outcomes: KstarOutcome[] = ['better_than_expected', 'met_expected', 'worse_than_expected', 'unclear'];
   const attributions: KstarAttribution[] = ['knowledge_gap', 'rule_gap', 'template_gap', 'skill_gap', 'execution_gap', 'unclear'];
@@ -127,6 +147,9 @@ export function parseKstarReviewInference(text: string): ParsedModelReview {
     reason,
     confidence: record.confidence,
     needsConfirmation: record.needsConfirmation,
+    ...(typeof record.lesson === 'string' && record.lesson.trim()
+      ? { lesson: compactText(record.lesson, MAX_REASON_TEXT)! }
+      : {}),
   };
 }
 
@@ -140,23 +163,22 @@ function inferenceSystemPrompt(): string {
   ].join('\n');
 }
 
-async function defaultRunModel(userId: string, episode: KstarEpisodeRecord): Promise<string> {
+async function defaultRunModel(
+  userId: string,
+  episode: KstarEpisodeRecord,
+  input: { systemPrompt: string; message: string },
+): Promise<string> {
   if (!hasConfiguredModel().configured) throw new Error('review model is not configured');
   const { runner } = await buildRunner({
     sessionId: `kstar-review-${episode.id}`,
     userId,
-    systemPrompt: inferenceSystemPrompt(),
+    systemPrompt: input.systemPrompt || inferenceSystemPrompt(),
     disableTools: true,
     ephemeralSession: true,
     skillList: [],
   });
   const result = await runner.run({
-    message: JSON.stringify({ evidence: buildDeterministicReviewEvidence(episode), episode: {
-      status: episode.r.status,
-      toolCalls: episode.a.toolCalls.map((call) => ({ name: call.name, status: call.status })),
-      producedFiles: episode.r.producedFiles.slice(0, 20),
-      verification: episode.r.verification,
-    } }),
+    message: input.message,
     thinkingLevel: 'off',
     cacheRetention: 'none',
   });
@@ -170,7 +192,98 @@ export async function inferKstarReview(
   options: KstarReviewInferenceOptions = {},
 ): Promise<KstarReviewInferenceResult> {
   if (episode.ownerId !== userId) throw new Error('kstar episode owner mismatch');
-  const base = reviewBase(episode);
+  const forecast = options.forecast;
+  const base = reviewBase(episode, forecast);
+  if (forecast && episode.r.status === 'completed') {
+    // World-model reconciliation MEASURES the deltas deterministically
+    // (deltaA gates deltaR; forecast R_hat replaces the goal text). The
+    // measurement feeds a model REASONING pass that attributes the gap
+    // ("why did this difference happen") and derives a reusable lesson —
+    // the precipitation judgment — instead of the old mechanical
+    // attribution (selected asset type) and fixed template sentences.
+    const reconciled = reconcileWorldModel(forecast, episode, { selectedAssetTypes: options.selectedAssetTypes });
+    const runModel = options.runModel !== undefined
+      ? options.runModel
+      : (hasConfiguredModel().configured
+          ? ({ systemPrompt, message }: { systemPrompt: string; message: string }) => defaultRunModel(userId, episode, { systemPrompt, message })
+          : null);
+    if (runModel) {
+      try {
+        const message = JSON.stringify({
+          forecast: {
+            predictedResult: forecast.rHat,
+            predictedPlan: forecast.aHat.plan,
+            expectedTools: forecast.aHat.expectedTools,
+            expectedActors: forecast.aHat.expectedActors,
+          },
+          delta: {
+            deltaA: reconciled.deltaA,
+            deltaR: reconciled.deltaR,
+            actionDelta: reconciled.actionDelta,
+            resultDelta: reconciled.resultDelta,
+          },
+          evidence: buildDeterministicReviewEvidence(episode),
+          selectedAssetTypes: options.selectedAssetTypes || [],
+        });
+        const text = await runModel({ systemPrompt: inferenceSystemPrompt(), message });
+        const parsed = parseKstarReviewInference(text);
+        // Self-evolution: the review is Agent-implemented and auto-precipitated.
+        // Low confidence does NOT pause for user confirmation — it stays
+        // 'inferred' and the confidence value feeds the precipitation gates
+        // (clearsPrecipitationGate requires confidence >= 0.7 for gap lessons),
+        // so a low-confidence review simply produces no durable asset.
+        return {
+          review: {
+            ...base,
+            deltaR: reconciled.deltaR, // measurements stay authoritative
+            deltaA: reconciled.deltaA,
+            outcome: parsed.outcome,
+            attribution: parsed.attribution,
+            actionDelta: reconciled.actionDelta,
+            resultDelta: reconciled.resultDelta,
+            reason: parsed.reason,
+            ...(parsed.lesson ? { lesson: parsed.lesson } : {}),
+            confidence: parsed.confidence,
+            evidenceRefs: episode.evidenceRefs,
+          },
+          reviewState: 'inferred',
+          inferenceMethod: 'model',
+          needsConfirmation: false,
+        };
+      } catch (error) {
+        log.warn('kstar model review attribution degraded; falling back to deterministic', {
+          userId,
+          episodeId: episode.id,
+          error: (error as Error).message,
+        });
+      }
+    }
+    // Deterministic fallback: measurement + mechanical attribution. Kept as
+    // the degradation path — the numbers are honest, the cause label is not
+    // reasoned.
+    return {
+      review: {
+        ...base,
+        deltaR: reconciled.deltaR,
+        deltaA: reconciled.deltaA,
+        outcome: reconciled.attribution === 'execution_gap'
+          ? 'worse_than_expected'
+          : reconciled.deltaR === 0 ? 'met_expected' : reconciled.deltaR === 'unknown' ? 'unclear' : 'worse_than_expected',
+        attribution: reconciled.attribution,
+        actionDelta: reconciled.actionDelta,
+        resultDelta: reconciled.resultDelta,
+        reason: reconciled.attribution === 'execution_gap'
+          ? 'The realized intervention differs from the forecast; result delta is polluted by an execution gap.'
+          : reconciled.deltaR === 0
+            ? 'The forecast result matched the realized result.'
+            : 'The forecast result differed from the realized result.',
+        confidence: reconciled.deltaA === 'unknown' && reconciled.deltaR === 'unknown' ? 0.5 : 0.9,
+      },
+      reviewState: 'inferred',
+      inferenceMethod: 'deterministic',
+      needsConfirmation: false,
+    };
+  }
   if (episode.r.status === 'failed' || episode.r.status === 'cancelled') {
     return {
       review: {
@@ -205,17 +318,29 @@ export async function inferKstarReview(
   }
   if (episode.r.status !== 'completed') return unknownInference(episode);
 
+  // No model configured: report an honest 'unknown' review instead of
+  // fabricating a provisional met_expected learning signal.
+  if (!options.runModel && !hasConfiguredModel().configured) {
+    return unknownInference(episode);
+  }
+
   try {
+    const message = JSON.stringify({ evidence: buildDeterministicReviewEvidence(episode), episode: {
+      status: episode.r.status,
+      toolCalls: episode.a.toolCalls.map((call) => ({ name: call.name, status: call.status })),
+      producedFiles: episode.r.producedFiles.slice(0, 20),
+      verification: episode.r.verification,
+    } });
     const text = options.runModel
-      ? await options.runModel({ systemPrompt: inferenceSystemPrompt(), message: JSON.stringify(buildDeterministicReviewEvidence(episode)) })
-      : await defaultRunModel(userId, episode);
+      ? await options.runModel({ systemPrompt: inferenceSystemPrompt(), message })
+      : await defaultRunModel(userId, episode, { systemPrompt: inferenceSystemPrompt(), message });
     const parsed = parseKstarReviewInference(text);
-    const needsConfirmation = parsed.needsConfirmation || parsed.confidence < 0.7;
+    // Same self-evolution semantics as the forecast path: no user pause.
     return {
       review: { ...base, ...parsed, evidenceRefs: episode.evidenceRefs },
-      reviewState: needsConfirmation ? 'needs_confirmation' : 'inferred',
+      reviewState: 'inferred',
       inferenceMethod: 'model',
-      needsConfirmation,
+      needsConfirmation: false,
     };
   } catch (error) {
     log.warn('kstar review inference degraded', { userId, episodeId: episode.id, errorCode: 'review_inference_unavailable' });

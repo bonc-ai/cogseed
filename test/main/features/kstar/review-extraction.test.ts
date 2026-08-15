@@ -173,13 +173,23 @@ describe('KSTAR review and Recall bridge', () => {
       confidence: 0.9,
       evidenceRefs: current.evidenceRefs,
     });
-    const proposals = proposeKstarCandidates(current, review);
+    const proposals = proposeKstarCandidates(current, review).map((proposal) => ({
+      ...proposal,
+      learningProvenance: {
+        projectionId: 'proj-review', forecastId: 'wf-review', episodeId: current.id,
+        ruleRefs: ['rule:asset-review:1'], attribution: review.attribution,
+      },
+    }));
     const candidates = await saveKstarCandidateProposals('review-user', proposals);
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
       status: 'pending_review',
       suggestedType: 'rule',
+      learningProvenance: {
+        projectionId: 'proj-review', forecastId: 'wf-review', episodeId: current.id,
+        ruleRefs: ['rule:asset-review:1'], attribution: 'rule_gap',
+      },
       learningSignal: {
         deltaR: -0.8,
         deltaA: 0.2,
@@ -190,6 +200,11 @@ describe('KSTAR review and Recall bridge', () => {
     });
     const promoted = await (await import('../../../../src/main/features/recall/candidate-service'))
       .promoteRecallCandidate('review-user', candidates[0].id, { actor: 'user' });
+    expect(promoted.asset.learningProvenance).toMatchObject({
+      projectionId: 'proj-review', forecastId: 'wf-review', episodeId: current.id,
+      ruleRefs: ['rule:asset-review:1'], attribution: 'rule_gap',
+    });
+    expect(promoted.asset.causalRule).toBeUndefined();
     expect(promoted.asset.learningSignal).toMatchObject({
       deltaR: -0.8,
       deltaA: 0.2,
@@ -197,5 +212,12 @@ describe('KSTAR review and Recall bridge', () => {
       confidence: 0.9,
       source: 'review',
     });
+  });
+  it('maps CJK task goals to short scope tags (scopeForTask)', async () => {
+    const { scopeForTask } = await import('../../../../src/main/features/kstar/extraction-service');
+    expect(scopeForTask('审查 Group Chat 消息路由')).toBe('review');
+    expect(scopeForTask('修复 OAuth 回调函数缺陷')).toBe('code');
+    expect(scopeForTask('生成一份架构审查报告')).toBe('report');
+    expect(scopeForTask('随便聊聊')).toBe('general');
   });
 });

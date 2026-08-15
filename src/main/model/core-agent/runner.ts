@@ -119,7 +119,7 @@ function isNativeSearchEnabled(): boolean {
 function buildExternalProviderModel(userId: string | null, providerId: string, modelId: string, maxOutputTokens?: number): { contextWindow?: number; maxTokens?: number } | null {
   if (isCustomProviderId(providerId)) {
     const provider = userId ? findCustomProvider(userId, providerId) : undefined;
-    return provider ? buildCustomProviderModelMeta(provider) : null;
+    return provider ? buildCustomProviderModelMeta(provider, modelId) : null;
   }
   switch (providerId) {
     case 'moonshot':
@@ -231,6 +231,8 @@ export interface BuildRunnerParams {
    * loop budget and the full tool set.
    */
   disableTools?: boolean;
+  /** Restrict tools to a read/search allowlist only. */
+  toolAccess?: 'read-only';
   /** Provider stream deadline before its first usable text/tool event. This
    * boundary is safe for fallback because no visible output has committed. */
   providerFirstEventTimeoutMs?: number;
@@ -303,7 +305,7 @@ export interface BuildRunnerParams {
    *  row reflects the candidate that actually owned the visible outcome,
    *  not the rotating-provider's primary label. Fires at most once per
    *  call; not invoked when rotation rolls past a candidate. */
-  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string }) => void;
+  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string; entryId?: string }) => void;
 }
 
 export interface NativeSearchInjectedInfo {
@@ -939,11 +941,25 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // never reach another actor's tools[] regardless of which injection path
   // produced it. Caller-supplied extraTools / core-agent builtins aren't in the
   // catalog, so `isToolVisibleToAgent` returns true for them (unaffected).
-  const visibleTools = params.disableTools
+  let visibleTools = params.disableTools
     ? []
     : allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
+  if (!params.disableTools && params.toolAccess === 'read-only') {
+    const readOnlyAllowlist = new Set([
+      'read_file', 'stat_file', 'search_files', 'grep_files', 'list_files',
+      'web_search', 'web_fetch', 'kb_list', 'kb_search', 'kb_read',
+      'tool_result_search', 'tool_result_read_chunk',
+    ]);
+    visibleTools = visibleTools.filter((tool) => readOnlyAllowlist.has(tool.name));
+  }
   const visibleToolNameSet = new Set(visibleTools.map((tool) => tool.name));
-  const builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
+  let builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
+  if (!params.disableTools && params.toolAccess === 'read-only') {
+    const readOnlyBuiltinAllowlist = new Set([
+      'read_file', 'list_files', 'web_fetch', 'web_search',
+    ]);
+    builtinTools = builtinTools.filter((t) => readOnlyBuiltinAllowlist.has(t.name));
+  }
 
   // Apply one simple 8K per-result policy at AgentRunner's FINAL result
   // boundary. Keeping this as a result transformer (instead of pre-wrapping
@@ -1325,7 +1341,7 @@ async function buildRotatingProvider(
   providerId: string,
   group: ChatEntryChoice[],
   onNativeSearchInjected?: (info: NativeSearchInjectedInfo) => void,
-  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string }) => void,
+  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string; entryId?: string }) => void,
   firstEventTimeoutMs?: number,
 ): Promise<LLMProvider> {
   const candidates: RotatingCandidate[] = group.map((choice) => {
@@ -1367,7 +1383,15 @@ async function buildRotatingProvider(
       if (winner) bumpEntryLastUsed(winner.entryId);
       clearCooldown(profileId);
     },
-    ...(onCandidateChosen ? { onCandidateChosen } : {}),
+    ...(onCandidateChosen ? {
+      onCandidateChosen: (info) => {
+        const winner = group.find((choice) => choice.profileId === info.profileId);
+        onCandidateChosen({
+          ...info,
+          ...(winner?.entryId ? { entryId: winner.entryId } : {}),
+        });
+      },
+    } : {}),
     ...(Number.isFinite(firstEventTimeoutMs) ? { firstEventTimeoutMs } : {}),
   });
 }

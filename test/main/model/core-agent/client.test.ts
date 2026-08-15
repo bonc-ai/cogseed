@@ -3,6 +3,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
+}));
+
+vi.mock('../../../../src/main/logger', () => ({
+  createLogger: () => loggerMocks,
+}));
+
 vi.mock('electron', () => ({
   app: { isPackaged: false },
   BrowserWindow: vi.fn(),
@@ -26,6 +34,10 @@ beforeEach(() => {
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
+  loggerMocks.debug.mockClear();
+  loggerMocks.info.mockClear();
+  loggerMocks.warn.mockClear();
+  loggerMocks.error.mockClear();
 });
 
 afterEach(() => {
@@ -284,5 +296,112 @@ describe('core-agent client skill sandbox env', () => {
       compactionFailureCount: 1,
     });
     expect(JSON.stringify(summary)).not.toContain('private provider body');
+  });
+
+  it('publishes the initial and winning runtime with the final tool catalog', async () => {
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const onResolvedRuntime = vi.fn();
+    const publisher = client.createResolvedRuntimePublisher(onResolvedRuntime);
+
+    publisher.setToolNames(['read_file', 'kstar_control']);
+    publisher.publish({
+      providerId: 'openai',
+      modelId: 'gpt-primary',
+      profileId: 'profile-primary',
+      entryId: 'entry-primary',
+    });
+    publisher.publish({
+      providerId: 'anthropic',
+      modelId: 'claude-winner',
+      profileId: 'profile-winner',
+      entryId: 'entry-winner',
+    });
+
+    expect(onResolvedRuntime).toHaveBeenNthCalledWith(1, {
+      providerId: 'openai',
+      modelId: 'gpt-primary',
+      profileId: 'profile-primary',
+      entryId: 'entry-primary',
+      toolNames: ['read_file', 'kstar_control'],
+    });
+    expect(onResolvedRuntime).toHaveBeenNthCalledWith(2, {
+      providerId: 'anthropic',
+      modelId: 'claude-winner',
+      profileId: 'profile-winner',
+      entryId: 'entry-winner',
+      toolNames: ['read_file', 'kstar_control'],
+    });
+  });
+
+  it('contains resolved-runtime callback failures', async () => {
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const publisher = client.createResolvedRuntimePublisher(() => {
+      throw new Error('host observer failed');
+    });
+    publisher.setToolNames(['read_file']);
+
+    expect(() => publisher.publish({ providerId: 'openai', modelId: 'gpt-test' })).not.toThrow();
+  });
+
+});
+
+describe('core-agent client stopStreamOnAbort logging', () => {
+  /** An iterable whose next() blocks forever and whose return() rejects
+   *  immediately with the given error — the shape of an upstream stream that
+   *  is closed while a consumer cancels. */
+  function blockingIterable(returnError?: Error): AsyncIterable<string> {
+    return {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => new Promise<IteratorResult<string>>(() => undefined),
+          return: async () => {
+            if (returnError) throw returnError;
+            return { done: true, value: undefined };
+          },
+        };
+      },
+    };
+  }
+
+  async function collect(stream: AsyncGenerator<string>): Promise<string[]> {
+    const out: string[] = [];
+    for await (const value of stream) out.push(value);
+    return out;
+  }
+
+  async function flushPromises(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it('does not warn for expected abort cleanup after an AbortError return', async () => {
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const controller = new AbortController();
+    const stream = client.stopStreamOnAbort(
+      blockingIterable(Object.assign(new Error('closed'), { name: 'AbortError' })),
+      controller.signal,
+      'test',
+    );
+    const pending = collect(stream);
+    controller.abort();
+    await pending;
+    await flushPromises();
+
+    expect(loggerMocks.warn).not.toHaveBeenCalledWith('abortable stream return failed', expect.anything());
+  });
+
+  it('warns for an unexpected active-stream return failure', async () => {
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const controller = new AbortController();
+    const stream = client.stopStreamOnAbort(
+      blockingIterable(new Error('cleanup broke')),
+      controller.signal,
+      'test',
+    );
+    const pending = collect(stream);
+    controller.abort();
+    await pending;
+    await flushPromises();
+
+    expect(loggerMocks.warn).toHaveBeenCalledWith('abortable stream return failed', expect.objectContaining({ label: 'test' }));
   });
 });

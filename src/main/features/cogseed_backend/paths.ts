@@ -40,6 +40,14 @@ export function assertMateRequestId(requestId: string): string {
   return assertSegment(requestId, 'request id', 'req-');
 }
 
+export function assertMateConversationId(conversationId: string): string {
+  return assertSegment(conversationId, 'conversation id');
+}
+
+export function assertMateAgentId(agentId: string): string {
+  return assertSegment(agentId, 'agent id');
+}
+
 export function mateBackendCloudRoot(userId: string): string {
   assertMateUserId(userId);
   return path.dirname(mateAgentTasksDir(userId));
@@ -62,6 +70,10 @@ export function mateTaskEventsFile(userId: string, taskId: string): string {
   return path.join(mateAgentTaskEventsDir(assertMateUserId(userId)), `${assertMateTaskId(taskId)}.jsonl`);
 }
 
+export function mateTaskProjectionFile(userId: string, taskId: string): string {
+  return path.join(mateAgentTaskEventsDir(assertMateUserId(userId)), '_projections', `${assertMateTaskId(taskId)}.json`);
+}
+
 export function mateSessionsDirectory(userId: string): string {
   return mateAgentSessionsDir(assertMateUserId(userId));
 }
@@ -70,12 +82,24 @@ export function mateSessionFile(userId: string, sessionId: string): string {
   return path.join(mateAgentSessionsDir(assertMateUserId(userId)), `${assertMateSessionId(sessionId)}.json`);
 }
 
+export function mateAgentSessionMappingsDirectory(userId: string): string {
+  return path.join(mateAgentSessionsDir(assertMateUserId(userId)), '_agent_map');
+}
+
+export function mateAgentSessionMappingFile(userId: string, conversationId: string, agentId: string): string {
+  const key = Buffer.from(JSON.stringify([
+    assertMateConversationId(conversationId),
+    assertMateAgentId(agentId),
+  ]), 'utf8').toString('base64url');
+  return path.join(mateAgentSessionMappingsDirectory(userId), `${key}.json`);
+}
+
 export function mateRequestClaimFile(userId: string, requestId: string): string {
   return path.join(mateAgentRequestClaimsDir(assertMateUserId(userId)), `${assertMateRequestId(requestId)}.json`);
 }
 
 export function assertMateKbSourceId(id: string): string {
-  if (!safeId(id) || !id.startsWith('mate-source-')) throw new Error('invalid Mate KB source id');
+  if (!safeId(id) || !id.startsWith('mate-source-')) throw new Error('invalid CogSeed KB source id');
   return id;
 }
 
@@ -94,7 +118,7 @@ export function mateKbVectorDir(userId: string): string {
 }
 
 export function assertMateConnectorId(id: string): string {
-  if (!safeId(id) || !id.startsWith('mate-connector-')) throw new Error('invalid Mate connector id');
+  if (!safeId(id) || !id.startsWith('mate-connector-')) throw new Error('invalid CogSeed connector id');
   return id;
 }
 
@@ -113,7 +137,7 @@ export function mateConnectorSecretFile(userId: string, id: string): string {
 
 export function mateExecutionDir(userId: string, executionId: string): string {
   assertMateUserId(userId);
-  if (!safeId(executionId) || !executionId.startsWith('mate-exec-')) throw new Error('invalid Mate execution id');
+  if (!safeId(executionId) || !executionId.startsWith('mate-exec-')) throw new Error('invalid CogSeed execution id');
   return path.join(mateAgentExecutionRecordsDir(userId), executionId);
 }
 
@@ -136,7 +160,7 @@ export function mateWorkerStateRoot(userId: string): string {
 
 
 export function assertMateCoordinationId(id: string): string {
-  if (!safeId(id) || !id.startsWith('mate-coord-')) throw new Error('invalid Mate coordination id');
+  if (!safeId(id) || !id.startsWith('mate-coord-')) throw new Error('invalid CogSeed coordination id');
   return id;
 }
 

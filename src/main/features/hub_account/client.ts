@@ -1,33 +1,39 @@
 /**
  * Minimal HTTP client for the CogSeed Hub account service.
  *
- * The Hub service is a separate backend (own domain / base URL), not the
- * marketplace API base. Development defaults to `http://localhost:3000`
- * (the Hub service dev server); production URL comes from the
- * `ORKAS_HUB_API_BASE` env override until the platform owner assigns a
- * public domain (then it can also be moved to remote config).
+ * Hub routing uses the canonical account/marketplace Server base helper.
+ * This module removes the helper's `/api` suffix before composing the
+ * versioned Hub account paths under `/api/v1`.
  *
  * Every endpoint returns the Hub envelope `{ ok: true, data }`; failures
  * throw `HubApiError` carrying the service error code (e.g.
  * `AUTH_INVALID_TOKEN`, `BINDING_ALREADY_EXISTS`) so callers can branch.
  */
 import { createLogger } from '../../logger';
+import { logErrorRef } from '../../util/log-redact';
+import { withCommonHeaders } from '../api_common';
+import { accountApiBase } from '../connectors/_server_bridge';
 import type {
   HubAccountMe,
   HubBindResult,
   HubCallbackResult,
   HubConsent,
   HubDevice,
+  HubDeviceMetadata,
   HubRefreshResult,
 } from './types';
 
 const log = createLogger('hub_account:client');
 
-export const DEFAULT_HUB_API_BASE = 'http://localhost:3000';
-
-/** Resolve the Hub service base URL (env override wins; tests inject directly). */
+/**
+ * Resolve Hub through the canonical account/marketplace Server helper.
+ * `COGSEED_HUB_API_BASE` overrides it for local joint debugging against a
+ * development Hub service (e.g. `http://localhost:3000`).
+ */
 export function hubApiBase(): string {
-  return process.env.ORKAS_HUB_API_BASE?.trim() || DEFAULT_HUB_API_BASE;
+  const override = (process.env.COGSEED_HUB_API_BASE ?? '').trim().replace(/\/+$/, '');
+  const configured = (override || accountApiBase()).trim().replace(/\/+$/, '');
+  return configured.endsWith('/api') ? configured.slice(0, -4) : configured;
 }
 
 export class HubApiError extends Error {
@@ -60,7 +66,7 @@ export interface HubClient {
   me(accessToken: string): Promise<HubAccountMe>;
   bind(
     accessToken: string,
-    body: { local_identity_id: string; device_name: string; device_os: string },
+    body: { local_identity_id: string; installation_id: string; device_name: string; device_os: string },
   ): Promise<HubBindResult>;
   listDevices(accessToken: string, page?: number, pageSize?: number): Promise<{ data: HubDevice[]; total: number }>;
   revokeDevice(accessToken: string, deviceId: string): Promise<{ device_id: string; revoked_sessions: number }>;
@@ -75,7 +81,7 @@ export interface HubClient {
 /** Create a Hub client bound to a concrete base URL (production: `hubApiBase()`). */
 export function createHubClient(baseUrl: string): HubClient {
   async function request<T>(pathname: string, opts: RequestOptions = {}): Promise<T> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    const headers = withCommonHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' });
     if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
 
     let res: Response;
@@ -84,10 +90,11 @@ export function createHubClient(baseUrl: string): HubClient {
         method: opts.method || 'GET',
         headers,
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+        redirect: 'error',
       });
     } catch (err) {
-      log.warn('hub request network failure', { pathname, error: (err as Error).message });
-      throw new HubApiError('HUB_NETWORK_ERROR', `无法连接 Hub 服务（${baseUrl}）`, 0);
+      log.warn('hub request network failure', { pathname, error: logErrorRef(err) });
+      throw new HubApiError('HUB_NETWORK_ERROR', '无法连接 Hub 服务', 0);
     }
 
     let json: unknown = null;
@@ -114,6 +121,9 @@ export function createHubClient(baseUrl: string): HubClient {
       const qs = new URLSearchParams({ provider, redirect_uri: redirectUri });
       return request<{ authorize_url: string; state: string }>(`/api/v1/auth/login?${qs.toString()}`);
     },
+    // Contract v1.3: callback body is exactly { code, state } — device
+    // registration happens server-side during callback; the desktop only
+    // binds LocalIdentity afterwards when `is_new_account` is true.
     callback: (code, state) =>
       request('/api/v1/auth/callback', { method: 'POST', body: { code, state } }),
     refresh: (refreshToken) =>

@@ -125,7 +125,7 @@ async function bootApp() {
   // to Stage C with the other warmup-only work.
   await _bootStage('stageA', () => Promise.all([
     _stampSettingsVersion(),
-    (async () => { await initUser(); await initUserWorkspace(); })(),
+    (async () => { await initUser(); await initUserWorkspace(); if (typeof initModelChip === 'function') initModelChip(); })(),
     initAvatarCatalog(),
     loadProjects(),
   ]));

@@ -11,10 +11,16 @@ const postJsonMock = vi.hoisted(() => vi.fn());
 const extractBundleSafelyMock = vi.hoisted(() => vi.fn());
 const devtoolsMock = vi.hoisted(() => ({ isDev: false }));
 const electronMock = vi.hoisted(() => ({ appVersion: '1.5.1' }));
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
+}));
 
 vi.mock('../../../src/main/features/marketplace', () => ({
   postJson: postJsonMock,
   extractBundleSafely: extractBundleSafelyMock,
+}));
+vi.mock('../../../src/main/logger', () => ({
+  createLogger: () => loggerMocks,
 }));
 vi.mock('../../../src/main/features/devtools', () => ({
   isDevEnv: () => devtoolsMock.isDev,
@@ -46,6 +52,10 @@ beforeEach(() => {
   vi.resetModules();
   postJsonMock.mockReset();
   extractBundleSafelyMock.mockReset();
+  loggerMocks.debug.mockClear();
+  loggerMocks.info.mockClear();
+  loggerMocks.warn.mockClear();
+  loggerMocks.error.mockClear();
   extractBundleSafelyMock.mockImplementation((zip: AdmZip, dst: string) => {
     fs.mkdirSync(dst, { recursive: true });
     for (const entry of zip.getEntries()) {
@@ -720,5 +730,100 @@ describe('marketplace reconcile', () => {
       total_skills: 1,
     }));
     expect(statuses.at(-1)).toMatchObject({ state: 'idle' });
+  });
+});
+
+describe('marketplace content update monotonicity', () => {
+  function catalog(list: Array<Record<string, unknown>>, kind: 'agents' | 'skills') {
+    postJsonMock.mockImplementation(async (p: string) => {
+      if (p === `/marketplace/${kind === 'agents' ? 'agents' : 'skills'}/list`) return { list, total: list.length };
+      if (p === `/marketplace/${kind === 'agents' ? 'skills' : 'agents'}/list`) return { list: [], total: 0 };
+      throw new Error(`unexpected path ${p}`);
+    });
+  }
+
+  it.each(['agent', 'skill'] as const)('does not downgrade %s content', async (kind) => {
+    const installs = await import('../../../src/main/features/marketplace_installs');
+    if (kind === 'agent') {
+      await installs.addAgentInstall('u1', {
+        id: 'mono-agent', version: '1.0.4', published_at: 100, updated_at: 100,
+        agent_json_url: 'https://example.test/agent.json', create_uid: '0', status: 'approved',
+      });
+      catalog([{ id: 'mono-agent', version: '1.0.3', published_at: 1, updated_at: 999, status: 'approved' }], 'agents');
+    } else {
+      await installs.addSkillInstall('u1', {
+        id: 'mono-skill', version: '1.0.4', published_at: 100, updated_at: 100,
+        bundle_url: 'https://example.test/skill.zip', create_uid: '0', status: 'approved',
+      });
+      catalog([{ id: 'mono-skill', version: '1.0.3', published_at: 1, updated_at: 999, status: 'approved' }], 'skills');
+    }
+
+    const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+    const result = await reconcile.checkServerUpdatesForInstalls('u1');
+
+    expect(result).toEqual(kind === 'agent' ? { updated_agents: 0, updated_skills: 0 } : { updated_agents: 0, updated_skills: 0 });
+    const manifest = await installs.readInstalls('u1');
+    const row = kind === 'agent' ? manifest.agents[0] : manifest.skills[0];
+    expect(row).toMatchObject({ id: kind === 'agent' ? 'mono-agent' : 'mono-skill', version: '1.0.4' });
+    expect(loggerMocks.info).toHaveBeenCalledWith('marketplace content update skipped', expect.objectContaining({
+      kind, reason: 'older_version',
+    }));
+  });
+
+  it('applies metadata-only changes while preserving content fields', async () => {
+    const installs = await import('../../../src/main/features/marketplace_installs');
+    await installs.addAgentInstall('u1', {
+      id: 'meta-agent', version: '1.0.4', published_at: 100, updated_at: 100,
+      agent_json_url: 'https://example.test/agent.json', create_uid: '0', status: 'draft',
+    });
+    catalog([{
+      id: 'meta-agent', version: '1.0.3', published_at: 1, updated_at: 999,
+      status: 'approved', default_install: true, min_app_version: '1.4.0',
+    }], 'agents');
+
+    const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+    await reconcile.checkServerUpdatesForInstalls('u1');
+
+    const manifest = await installs.readInstalls('u1');
+    expect(manifest.agents[0]).toMatchObject({
+      version: '1.0.4',
+      status: 'approved',
+      default_install: true,
+      min_app_version: '1.4.0',
+    });
+  });
+
+  it('pulls a same-version newer republish exactly once', async () => {
+    const installs = await import('../../../src/main/features/marketplace_installs');
+    await installs.addSkillInstall('u1', {
+      id: 'republish-skill', version: '1.0.4', published_at: 100, updated_at: 100,
+      bundle_url: 'https://example.test/skill.zip', create_uid: '0',
+    });
+    catalog([{ id: 'republish-skill', version: '1.0.4', published_at: 1, updated_at: 101 }], 'skills');
+
+    const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+    const result = await reconcile.checkServerUpdatesForInstalls('u1');
+
+    expect(result).toEqual({ updated_agents: 0, updated_skills: 1 });
+    const manifest = await installs.readInstalls('u1');
+    expect(manifest.skills[0]).toMatchObject({ version: '1.0.4', published_at: 1, updated_at: 101 });
+  });
+
+  it('skips unparsable unequal versions with a bounded log', async () => {
+    const installs = await import('../../../src/main/features/marketplace_installs');
+    await installs.addSkillInstall('u1', {
+      id: 'custom-skill', version: 'custom-a', published_at: 100, updated_at: 100,
+      bundle_url: 'https://example.test/skill.zip', create_uid: '0',
+    });
+    catalog([{ id: 'custom-skill', version: 'custom-b', published_at: 1, updated_at: 200 }], 'skills');
+
+    const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+    const result = await reconcile.checkServerUpdatesForInstalls('u1');
+
+    expect(result).toEqual({ updated_agents: 0, updated_skills: 0 });
+    expect(loggerMocks.info).toHaveBeenCalledWith('marketplace content update skipped', expect.objectContaining({
+      kind: 'skill', reason: 'unparsable_version',
+    }));
+    expect(JSON.stringify(loggerMocks.info.mock.calls)).not.toContain(tmpDir);
   });
 });

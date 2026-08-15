@@ -66,6 +66,32 @@ describe('recall projection card renderer', () => {
     ]);
   });
 
+  it('shows a retryable Forecast failure without claiming execution started', async () => {
+    const calls: Array<[string, unknown]> = [];
+    let failConfirm = true;
+    const { context, host } = loadModule(async (channel, payload) => {
+      calls.push([channel, payload]);
+      if (channel === 'recall.projections.card') return { ok: true, card: { ...previewCard, status: 'preview' } };
+      if (channel === 'recall.projections.availableAssets') return { ok: true, assets: [] };
+      if (channel === 'recall.projections.confirm' && failConfirm) {
+        failConfirm = false;
+        throw Object.assign(new Error('model configuration is required'), { code: 'model_not_configured' });
+      }
+      if (channel === 'recall.projections.retryForecast') return { ok: true, forecast: { id: 'wf-a' }, resumed: true };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
+    await host.handler({ target: { closest: (selector: string) => selector === '[data-recall-projection-confirm]' ? { disabled: false } : null } });
+
+    expect(host.textContent || host.innerHTML).toContain('Forecast failed; task has not started.');
+    expect(host.innerHTML).toContain('Retry forecast');
+    expect(calls.some(([channel]) => channel === 'group_chat.resume')).toBe(false);
+
+    await host.handler({ target: { closest: (selector: string) => selector === '[data-recall-projection-retry]' ? { disabled: false } : null } });
+    expect(calls).toContainEqual(['recall.projections.retryForecast', { projectionId: 'proj-a', cid: 'cid-a' }]);
+  });
+
   it('sends add and remove edits only to projection revision IPC', async () => {
     const calls: Array<[string, unknown]> = [];
     const { context, host } = loadModule(async (channel, payload) => {
@@ -135,7 +161,7 @@ describe('recall projection card renderer', () => {
     expect(host.innerHTML).toContain('Confirm candidates');
     await host.handler({ target: { closest: (selector: string) => selector === '[data-recall-projection-confirm]' ? { dataset: { recallProjectionConfirm: '1' }, disabled: false } : null } });
 
-    expect(calls).toContainEqual(['recall.projections.confirm', { projectionId: 'proj-a' }]);
+    expect(calls).toContainEqual(['recall.projections.confirm', { projectionId: 'proj-a', cid: 'cid-a' }]);
     expect(calls.some(([channel]) => channel.includes('prediction'))).toBe(false);
   });
 

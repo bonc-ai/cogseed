@@ -41,12 +41,12 @@ function isMissing(error: unknown) { return Boolean(error && typeof error === 'o
 export async function readMateCoordination(userId: string, id: string): Promise<MateCoordinationRecord | null> {
   try {
     const value = JSON.parse(await fs.readFile(mateCoordinationFile(userId, id), 'utf8')) as MateCoordinationRecord;
-    if (value.ownerId !== userId || value.coordinationId !== id) throw new Error('malformed Mate coordination');
+    if (value.ownerId !== userId || value.coordinationId !== id) throw new Error('malformed CogSeed coordination');
     assertMateCoordinationId(value.coordinationId); assertMateTaskId(value.parentTaskId);
     return value;
   } catch (error) {
     if (isMissing(error)) return null;
-    if (error instanceof SyntaxError) throw new Error('malformed Mate coordination');
+    if (error instanceof SyntaxError) throw new Error('malformed CogSeed coordination');
     throw error;
   }
 }
@@ -62,14 +62,14 @@ export function createMateCoordinator(deps: MateCoordinatorDeps = {}): MateCoord
     });
     return task.task;
   });
-  const cancelTask = deps.cancelTask ?? (async () => { throw new Error('Mate coordinator cancel controller unavailable'); });
+  const cancelTask = deps.cancelTask ?? (async () => { throw new Error('CogSeed coordinator cancel controller unavailable'); });
   const controlStore = createMateCollaborationStore();
   const controlDispatcher = createMateCollaborationDispatcher({ startTask, cancelTask });
   const controlEngine = createCollaborationEngine({ store: controlStore, dispatcher: controlDispatcher, id: (prefix = 'id') => `${prefix}-${genId12()}` });
 
   async function parent(userId: string, requestId: string): Promise<MateTaskRecord> {
     const task = await readMateTaskByRequestId(userId, requestId);
-    if (!task) throw new Error('Mate coordinator parent task not found');
+    if (!task) throw new Error('CogSeed coordinator parent task not found');
     return task;
   }
 
@@ -78,7 +78,7 @@ export function createMateCoordinator(deps: MateCoordinatorDeps = {}): MateCoord
       assertMateUserId(userId); assertMateTaskId((await parent(userId, parentRequestId)).taskId);
       const parentTask = await parent(userId, parentRequestId);
       const id = coordinationId(parentTask.taskId);
-      if (parentTask.coordinationDepth && parentTask.coordinationDepth >= MAX_DEPTH) throw new Error('Mate coordinator depth budget exceeded');
+      if (parentTask.coordinationDepth && parentTask.coordinationDepth >= MAX_DEPTH) throw new Error('CogSeed coordinator depth budget exceeded');
       const requestId = input.requestId;
       const file = mateCoordinationFile(userId, id);
       return fileEditLock(file).runExclusive(async () => {
@@ -87,12 +87,12 @@ export function createMateCoordinator(deps: MateCoordinatorDeps = {}): MateCoord
         if (!record) {
           record = { schemaVersion: 1, coordinationId: id, ownerId: userId, parentTaskId: parentTask.taskId, parentRuntimeSessionId: parentTask.runtimeSessionId, status: 'running', childTaskIds: [], maxChildren: MAX_CHILDREN, maxDepth: MAX_DEPTH, createdAt: now, updatedAt: now };
         }
-        if (record.status !== 'running') throw new Error('Mate coordination is not running');
+        if (record.status !== 'running') throw new Error('CogSeed coordination is not running');
         const existing = await readMateTaskByRequestId(userId, requestId);
         if (existing?.coordinationId === id && existing.parentTaskId === parentTask.taskId) return existing;
-        if (record.childTaskIds.length >= record.maxChildren) throw new Error('Mate coordinator child budget exceeded');
+        if (record.childTaskIds.length >= record.maxChildren) throw new Error('CogSeed coordinator child budget exceeded');
         const taskText = `${typeof input.role === 'string' && input.role.trim() ? `[Role: ${input.role.trim().slice(0, 120)}]\n` : ''}${String(input.task || '').trim()}`;
-        if (!taskText.trim() || taskText.length > 20_000) throw new Error('Mate delegate task is invalid');
+        if (!taskText.trim() || taskText.length > 20_000) throw new Error('CogSeed delegate task is invalid');
         const scope = { ownerId: userId, domain: 'mate' as const, scopeId: id };
         if (!record.workflowRunId) {
           const controlRun = await controlEngine.createRun(scope, { objective: parentTask.task, kind: 'custom', createdBy: parentTask.taskId });
@@ -102,7 +102,7 @@ export function createMateCoordinator(deps: MateCoordinatorDeps = {}): MateCoord
         const step = await controlEngine.planStep(scope, record.workflowRunId, { title: taskText, actorId: typeof input.role === 'string' ? input.role.slice(0, 120) : null, type: 'dispatch', resumeToken: requestId, objective: taskText });
         const startedStep = await controlEngine.startStep(scope, record.workflowRunId, step.id);
         const child = startedStep.result_ref ? await readMateTask(userId, startedStep.result_ref) : null;
-        if (!child) throw new Error('Mate delegated task was not persisted');
+        if (!child) throw new Error('CogSeed delegated task was not persisted');
         record.childTaskIds.push(child.taskId); record.updatedAt = nowIso();
         await writeJson(file, record);
         return child;
@@ -122,7 +122,7 @@ export function createMateCoordinator(deps: MateCoordinatorDeps = {}): MateCoord
     },
     async cancel(userId, parentRequestId, taskId) {
       const parentTask = await parent(userId, parentRequestId); const record = await readMateCoordination(userId, coordinationId(parentTask.taskId));
-      if (!record?.childTaskIds.includes(assertMateTaskId(taskId))) throw new Error('Mate task is not linked to this coordination');
+      if (!record?.childTaskIds.includes(assertMateTaskId(taskId))) throw new Error('CogSeed task is not linked to this coordination');
       return cancelTask(userId, taskId);
     },
     async cancelChildrenForParent(userId, parentTaskId) {
@@ -134,7 +134,7 @@ export function createMateCoordinator(deps: MateCoordinatorDeps = {}): MateCoord
           const child = await readMateTask(userId, childId);
           if (!child || ['completed', 'cancelled', 'failed'].includes(child.status)) continue;
           try { await cancelTask(userId, childId); }
-          catch (error) { log.warn('Mate coordination child cancel failed', { error: logErrorRef(error) }); }
+          catch (error) { log.warn('CogSeed coordination child cancel failed', { error: logErrorRef(error) }); }
         }
         await writeJson(file, { ...record, status: 'cancelled', updatedAt: nowIso() });
       });

@@ -31,6 +31,16 @@ export type MateTaskStatus =
   | 'cancelled'
   | 'recoverable';
 
+export type MateTaskExecutionKind = 'cogseed-native' | 'local-cli';
+
+export interface MateLocalCliConfig {
+  cli: string;
+  agentName?: string;
+  model?: string;
+  customArgs?: string[];
+  cliProviderId?: string;
+}
+
 export interface MateTaskRecord {
   schemaVersion: typeof MATE_AGENT_BACKEND_SCHEMA_VERSION;
   taskId: string;
@@ -43,6 +53,11 @@ export interface MateTaskRecord {
   ownerId: string;
   status: MateTaskStatus;
   task: string;
+  conversationId?: string;
+  agentId?: string;
+  executionKind?: MateTaskExecutionKind;
+  allowedSkillIds?: string[];
+  localCli?: MateLocalCliConfig;
   profileId?: string;
   retryOfTaskId?: string;
   lastResumeRequestId?: string;
@@ -62,12 +77,14 @@ export interface MateSessionRecord {
   ownerId: string;
   createdAt: string;
   updatedAt: string;
-  /** Canonical Mate session classification. Legacy records are hydrated as generic/commander. */
+  /** Canonical CogSeed session classification. Legacy records are hydrated as generic/commander. */
   sessionKind: MateSessionKind;
   actorRole: MateActorRole;
   actorId?: string;
   conversationId?: string;
-  /** Public Orkas-compatible id, retained only as an alias; storage remains Mate-owned. */
+  /** Formal product Agent identity. Member sessions hydrate this from actorId. */
+  agentId?: string;
+  /** Public Orkas-compatible id, retained only as an alias; storage remains CogSeed-owned. */
   compatibilitySessionId?: string;
   commanderSessionId?: string;
   displayName?: string;
@@ -76,6 +93,7 @@ export interface MateSessionRecord {
   leftAt?: string;
   roster?: MateActorRecord[];
   lineage?: MateSessionLineage;
+  activeTaskId?: string;
 }
 
 export interface MateCommanderSession extends MateSessionRecord {

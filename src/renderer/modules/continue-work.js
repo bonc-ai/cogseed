@@ -86,6 +86,7 @@ function open() {
     imported: [],
     failed: [],
     cognitions: 0,
+    degradedCount: 0,
     busy: false,
     cancel: false,
     done: false,
@@ -484,6 +485,7 @@ async function _cwRunImport() {
   _cw.imported = [];
   _cw.failed = [];
   _cw.cognitions = 0;
+  _cw.degradedCount = 0;
   _cwRenderFoot();
 
   items.forEach((item) => { item.status = 'waiting'; });
@@ -521,15 +523,30 @@ async function _cwRunImport() {
         });
       }
       if (res && res.conversationId) {
-        item.status = 'ok';
         item.cid = res.conversationId;
         _cw.imported.push(item);
         if (item.source === 'claude' && res.cognitions) {
           _cw.cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
         }
-        if (row) {
-          row.outerHTML = _cwRowHtml(item, 'is-ok', res.truncated ? '已完成 · 对话过长，已截断' : '已完成');
-          row = list.querySelectorAll('[data-cw-import-row]')[i];
+        // `degraded` means the distillation model call did not run (no usable
+        // model provider configured, or the call failed), so the conversation
+        // was seeded with the raw opening instead of a distilled brief and no
+        // cognitions were extracted. Surface that honestly rather than calling
+        // it "已完成", which previously masked a silent no-op.
+        if (res.degraded) {
+          item.status = 'degraded';
+          item.degraded = true;
+          _cw.degradedCount += 1;
+          if (row) {
+            row.outerHTML = _cwRowHtml(item, 'is-degraded', '已导入 · 未提炼');
+            row = list.querySelectorAll('[data-cw-import-row]')[i];
+          }
+        } else {
+          item.status = 'ok';
+          if (row) {
+            row.outerHTML = _cwRowHtml(item, 'is-ok', res.truncated ? '已完成 · 对话过长，已截断' : '已完成');
+            row = list.querySelectorAll('[data-cw-import-row]')[i];
+          }
         }
       } else {
         item.status = 'fail';
@@ -563,11 +580,23 @@ function _cwRenderDone() {
   if (!body) return;
   const okCount = _cw.imported.length;
   const failCount = _cw.failed.length;
-  const meta = `成功 ${okCount}${failCount ? ` · 失败 ${failCount}` : ''}${_cw.cognitions ? ` · 提取 ${_cw.cognitions} 条候选认知` : ''}`;
+  const degradedCount = _cw.degradedCount || 0;
+  const metaParts = [`成功 ${okCount}`];
+  if (failCount) metaParts.push(`失败 ${failCount}`);
+  if (degradedCount) metaParts.push(`其中 ${degradedCount} 个未提炼`);
+  if (_cw.cognitions) metaParts.push(`提取 ${_cw.cognitions} 条候选认知`);
+  const meta = metaParts.join(' · ');
+  // When some imports fell back to raw (no distillation), tell the user why and
+  // how to fix it. This is the honest surfacing of the previously-silent
+  // degrade: an import that "succeeded" but only saved the raw opening.
+  const degradedHint = degradedCount
+    ? `<div class="cw-done-hint">${_cwIcon('clock')}<span>有 ${degradedCount} 个会话仅保存了原始开头，未能自动提炼简报与认知。通常是因为还没有配置可用的模型（提炼需要调用模型）。在设置里配置一个可用模型后重新导入即可获得提炼简报。</span></div>`
+    : '';
   const listHtml = okCount
     ? `<div class="cw-done-list">${_cw.imported.map((item) => `
-        <div class="cw-done-row">
+        <div class="cw-done-row${item.degraded ? ' is-degraded' : ''}">
           <span class="cw-done-title">${_cwEsc(item.title)}</span>
+          ${item.degraded ? '<span class="cw-done-tag">未提炼</span>' : ''}
           <button type="button" class="cw-btn small" data-cw-open-cid="${_cwEsc(item.cid)}">打开</button>
         </div>`).join('')}</div>`
     : '<div class="cw-empty">没有成功导入的会话，可以返回重新选择。</div>';
@@ -578,6 +607,7 @@ function _cwRenderDone() {
       <div class="cw-done-title">${okCount ? `已导入 ${okCount} 个会话` : '导入未完成'}</div>
       <div class="cw-done-meta">${_cwEsc(meta)}</div>
     </div>
+    ${degradedHint}
     ${listHtml}`;
 
   body.querySelectorAll('[data-cw-open-cid]').forEach((el) => {

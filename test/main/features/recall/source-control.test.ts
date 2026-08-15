@@ -56,6 +56,7 @@ describe('Recall source controls', () => {
 
     const removed = await reloaded.removeCognitionSource('user-a', conversationSource as any, false);
     expect(removed.control.availability).toBe('removed');
+    expect(removed.downgradedAssetIds).toEqual([]);
     expect(removed.revokedAssetIds).toEqual([]);
     expect(await reloaded.isCognitionSourceEnabled('user-a', conversationSource)).toBe(false);
 
@@ -87,9 +88,53 @@ describe('Recall source controls', () => {
 
     const result = await controls.removeCognitionSource('user-a', conversationSource as any, true);
     expect(result.affectedAssetIds).toEqual([matchingAsset.id]);
+    expect(result.downgradedAssetIds).toEqual([]);
     expect(result.revokedAssetIds).toEqual([matchingAsset.id]);
     expect(result.failedAssetIds).toEqual([]);
     await expect(assets.readAbilityAsset('user-a', matchingAsset.id)).resolves.toMatchObject({ status: 'revoked' });
     await expect(assets.readAbilityAsset('user-a', otherAsset.id)).resolves.toMatchObject({ status: 'active' });
+  });
+
+  it('downgrades and pauses verified assets when their Evidence is removed without revoking the asset', async () => {
+    const { candidates, assets, controls } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Record architecture decisions.',
+      suggestedType: 'rule',
+      suggestedScope: 'architecture',
+      sourceRefs: [
+        conversationSource,
+        { kind: 'conversation', subtype: 'session', id: 'conv-b' },
+      ],
+    });
+    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' })).asset;
+    await assets.setAbilityAssetMaturity('user-a', asset.id, 'effectiveness_validated');
+
+    const result = await controls.removeCognitionSource('user-a', conversationSource as any, false);
+
+    expect(result).toMatchObject({
+      affectedAssetIds: [asset.id],
+      downgradedAssetIds: [asset.id],
+      pausedAssetIds: [asset.id],
+      revokedAssetIds: [],
+      failedAssetIds: [],
+    });
+    await expect(assets.readAbilityAsset('user-a', asset.id)).resolves.toMatchObject({
+      status: 'paused',
+      maturity: 'bud',
+      evidenceRefs: expect.arrayContaining([expect.objectContaining({ id: 'conv-b' })]),
+    });
+    expect(await assets.listAbilityAssetAudit('user-a', asset.id)).toContainEqual(expect.objectContaining({
+      action: 'maturity_downgraded',
+      note: 'evidence_revoked:conversation:conv-a',
+    }));
+
+    await controls.reconnectCognitionSource('user-a', conversationSource as any);
+    await expect(assets.readAbilityAsset('user-a', asset.id)).resolves.toMatchObject({ maturity: 'bud' });
+
+    const repeated = await controls.removeCognitionSource('user-a', conversationSource as any, false);
+    expect(repeated.downgradedAssetIds).toEqual([]);
+    expect(repeated.pausedAssetIds).toEqual([]);
+    expect((await assets.listAbilityAssetAudit('user-a', asset.id))
+      .filter((entry) => entry.action === 'maturity_downgraded')).toHaveLength(1);
   });
 });

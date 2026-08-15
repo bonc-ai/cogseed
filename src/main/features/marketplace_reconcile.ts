@@ -48,6 +48,7 @@ import {
   satisfiesMinAppVersion,
   type MinAppVersionSource,
 } from '../util/app-version-compat';
+import { decideMarketplaceContentUpdate } from './marketplace-update-policy';
 
 const log = createLogger('marketplace_reconcile');
 const MARKETPLACE_AGENT_JSON_DOWNLOAD_TIMEOUT_MS = 60_000;
@@ -249,7 +250,8 @@ export async function checkServerUpdatesForInstalls(
     if (!_isInstallRowAppCompatible({ id: a.id, min_app_version: server.min_app_version }, 'agent')) {
       continue;
     }
-    const contentChanged = server.version !== a.version || _freshnessAt(server) !== _freshnessAt(a);
+    const contentDecision = decideMarketplaceContentUpdate(a, server);
+    const contentChanged = contentDecision.action === 'replace_content';
     const defaultInstallChanged = typeof server.default_install === 'boolean'
       && a.default_install !== server.default_install;
     const currentStatus = a.status || a.state;
@@ -258,15 +260,25 @@ export async function checkServerUpdatesForInstalls(
       && a.agent_skills_bundle_url !== server.agent_skills_bundle_url;
     const minAppVersionChanged = typeof server.min_app_version === 'string'
       && a.min_app_version !== server.min_app_version;
+    if (!contentChanged && (contentDecision.reason === 'older_version' || contentDecision.reason === 'unparsable_version')) {
+      log.info('marketplace content update skipped', { kind: 'agent', id: a.id, reason: contentDecision.reason });
+    }
     if (contentChanged || defaultInstallChanged || statusChanged || privateSkillsUrlChanged || minAppVersionChanged) {
-      log.info(`server-update agent ${a.id}: v${a.version} → v${server.version} (freshness ${_freshnessAt(a)} → ${_freshnessAt(server)})`);
+      if (contentChanged) {
+        log.info(`server-update agent ${a.id}: v${a.version} → v${server.version} (freshness ${_freshnessAt(a)} → ${_freshnessAt(server)})`);
+      }
       try { _assertContinue(opts); } catch { return { updated_agents, updated_skills }; }
       // Replace the row in the manifest; reconcile will detect the version/freshness
-      // mismatch against `_install.json` and re-pull. agent_json_url is reused (server
-      // overwrites the same COS key on republish — see Server `api/marketplace.py::upload_agent`).
+      // mismatch against `_install.json` and re-pull. On preserve decisions the local
+      // version/freshness is kept — the server version never downgrades content.
+      // agent_json_url is reused (server overwrites the same COS key on republish —
+      // see Server `api/marketplace.py::upload_agent`).
       await addAgentInstall(uid, {
-        id: a.id, version: server.version, published_at: server.published_at,
-        updated_at: server.updated_at, agent_json_url: a.agent_json_url, create_uid: a.create_uid,
+        id: a.id,
+        version: contentChanged ? server.version : a.version,
+        published_at: contentChanged ? server.published_at : a.published_at,
+        updated_at: contentChanged ? server.updated_at : a.updated_at,
+        agent_json_url: a.agent_json_url, create_uid: a.create_uid,
         ...(typeof server.agent_skills_bundle_url === 'string'
           ? { agent_skills_bundle_url: server.agent_skills_bundle_url }
           : (typeof a.agent_skills_bundle_url === 'string' ? { agent_skills_bundle_url: a.agent_skills_bundle_url } : {})),
@@ -298,19 +310,28 @@ export async function checkServerUpdatesForInstalls(
     if (!_isInstallRowAppCompatible({ id: s.id, min_app_version: server.min_app_version }, 'skill')) {
       continue;
     }
-    const contentChanged = server.version !== s.version || _freshnessAt(server) !== _freshnessAt(s);
+    const contentDecision = decideMarketplaceContentUpdate(s, server);
+    const contentChanged = contentDecision.action === 'replace_content';
     const defaultInstallChanged = typeof server.default_install === 'boolean'
       && s.default_install !== server.default_install;
     const currentStatus = s.status || s.state;
     const statusChanged = typeof server.status === 'string' && currentStatus !== server.status;
     const minAppVersionChanged = typeof server.min_app_version === 'string'
       && s.min_app_version !== server.min_app_version;
+    if (!contentChanged && (contentDecision.reason === 'older_version' || contentDecision.reason === 'unparsable_version')) {
+      log.info('marketplace content update skipped', { kind: 'skill', id: s.id, reason: contentDecision.reason });
+    }
     if (contentChanged || defaultInstallChanged || statusChanged || minAppVersionChanged) {
-      log.info(`server-update skill ${s.id}: v${s.version} → v${server.version} (freshness ${_freshnessAt(s)} → ${_freshnessAt(server)})`);
+      if (contentChanged) {
+        log.info(`server-update skill ${s.id}: v${s.version} → v${server.version} (freshness ${_freshnessAt(s)} → ${_freshnessAt(server)})`);
+      }
       try { _assertContinue(opts); } catch { return { updated_agents, updated_skills }; }
       await addSkillInstall(uid, {
-        id: s.id, version: server.version, published_at: server.published_at,
-        updated_at: server.updated_at, bundle_url: s.bundle_url, create_uid: s.create_uid,
+        id: s.id,
+        version: contentChanged ? server.version : s.version,
+        published_at: contentChanged ? server.published_at : s.published_at,
+        updated_at: contentChanged ? server.updated_at : s.updated_at,
+        bundle_url: s.bundle_url, create_uid: s.create_uid,
         ...(typeof server.default_install === 'boolean' ? { default_install: server.default_install } : {}),
         ...(typeof server.status === 'string' ? { status: server.status } : {}),
         ...(typeof server.min_app_version === 'string' ? { min_app_version: server.min_app_version } : {}),
@@ -768,7 +789,7 @@ function _agentNeedsPull(uid: string, row: AgentInstall): boolean {
       return false;
     }
   }
-  return meta.version !== row.version || _freshnessAt(meta) !== _freshnessAt(row);
+  return decideMarketplaceContentUpdate(meta, row).action === 'replace_content';
 }
 
 function _agentPrivateSkillsExist(uid: string, id: string): boolean {
@@ -801,7 +822,7 @@ function _skillNeedsPull(uid: string, row: SkillInstall): boolean {
       return false;
     }
   }
-  return meta.version !== row.version || _freshnessAt(meta) !== _freshnessAt(row);
+  return decideMarketplaceContentUpdate(meta, row).action === 'replace_content';
 }
 
 function _agentContentExists(uid: string, id: string): boolean {

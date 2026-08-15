@@ -1,7 +1,7 @@
 /**
- * Main-process capability derivation for Mate Runtime runs.
+ * Main-process capability derivation for CogSeed Runtime runs.
  *
- * Capabilities are derived exclusively from persisted Mate records — the
+ * Capabilities are derived exclusively from persisted CogSeed records — the
  * request claim → task → session chain — never from worker-supplied input or
  * model parameters. Today only `messaging.proactive` exists; it is granted
  * only to a live top-level Commander session whose owner, runtime session and

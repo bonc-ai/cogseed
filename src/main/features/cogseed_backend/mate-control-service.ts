@@ -2,7 +2,7 @@ import { createCollaborationEngine } from '../collaboration_control/engine';
 import { createMateCollaborationStore } from './collaboration-store-adapter';
 import { createMateCollaborationDispatcher } from './collaboration-dispatcher';
 import { readMateCoordination } from './coordinator';
-import { mateRuntimeController, type ResumeMateTaskInput, type StartMateTaskInput } from './runtime-controller';
+import type { ResumeMateTaskInput, StartMateTaskInput } from './runtime-controller';
 import {
   getOrCreateMateCommanderSession,
   getOrCreateMateMemberSession,
@@ -15,10 +15,11 @@ import {
 import type { MateActorRole } from './types';
 import { readMateTaskByRequestId } from './task-store';
 
-function engine() { return createCollaborationEngine({ store: createMateCollaborationStore(), dispatcher: createMateCollaborationDispatcher({ startTask: (uid, input) => mateRuntimeController.startMateTask(uid, input), cancelTask: (uid, taskId) => mateRuntimeController.cancelMateTask(uid, taskId) }) }); }
+async function runtimeController() { return (await import('./runtime-controller')).mateRuntimeController; }
+function engine() { return createCollaborationEngine({ store: createMateCollaborationStore(), dispatcher: createMateCollaborationDispatcher({ startTask: async (uid, input) => (await runtimeController()).startMateTask(uid, input), cancelTask: async (uid, taskId) => (await runtimeController()).cancelMateTask(uid, taskId) }) }); }
 async function scopeFor(userId: string, parentRequestId: string) {
-  const parent = await readMateTaskByRequestId(userId, parentRequestId); if (!parent) throw new Error('Mate control parent task not found');
-  const coordinationId = `mate-coord-${parent.taskId.slice('mate-task-'.length)}`; const record = await readMateCoordination(userId, coordinationId); if (!record?.workflowRunId) throw new Error('Mate workflow not found');
+  const parent = await readMateTaskByRequestId(userId, parentRequestId); if (!parent) throw new Error('CogSeed control parent task not found');
+  const coordinationId = `mate-coord-${parent.taskId.slice('mate-task-'.length)}`; const record = await readMateCoordination(userId, coordinationId); if (!record?.workflowRunId) throw new Error('CogSeed workflow not found');
   return { scope: { ownerId: userId, domain: 'mate' as const, scopeId: coordinationId }, runId: record.workflowRunId };
 }
 
@@ -82,7 +83,7 @@ export const mateControlService = {
   async startCommanderTask(userId: string, input: StartMateCommanderTaskInput) {
     const session = await getOrCreateMateCommanderSession(userId, input.conversationId);
     const { conversationId: _conversationId, ...taskInput } = input;
-    return mateRuntimeController.startMateTask(userId, { ...taskInput, sessionId: session.sessionId });
+    return (await runtimeController()).startMateTask(userId, { ...taskInput, sessionId: session.sessionId });
   },
 
   async startMemberTask(userId: string, input: StartMateMemberTaskInput) {
@@ -94,14 +95,14 @@ export const mateControlService = {
       input.actorRole,
     );
     const { conversationId: _conversationId, actorId: _actorId, displayName: _displayName, actorRole: _actorRole, ...taskInput } = input;
-    return mateRuntimeController.startMateTask(userId, { ...taskInput, sessionId: session.sessionId });
+    return (await runtimeController()).startMateTask(userId, { ...taskInput, sessionId: session.sessionId });
   },
 
   async resumeTask(userId: string, taskId: string, input: ResumeMateTaskInput) {
-    return mateRuntimeController.resumeMateTask(userId, taskId, input);
+    return (await runtimeController()).resumeMateTask(userId, taskId, input);
   },
 
   async abortTask(userId: string, taskId: string) {
-    return mateRuntimeController.cancelMateTask(userId, taskId);
+    return (await runtimeController()).cancelMateTask(userId, taskId);
   },
 };

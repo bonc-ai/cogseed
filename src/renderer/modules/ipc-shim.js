@@ -132,6 +132,7 @@ const _IPC_ROUTES = [
   ['GET',    /^\/api\/agents\/([^/]+)$/,                   'agents.get',                 ['agent_id']],
   ['DELETE', /^\/api\/agents\/([^/]+)$/,                   'agents.delete',              ['agent_id']],
   ['PUT',    /^\/api\/agents\/([^/]+)\/update$/,           'agents.update',              ['agent_id'], { wrapAsUpdates: true }],
+  ['GET',    /^\/api\/agents\/([^/]+)\/inheritance$/,      'agents.inheritance',         ['agent_id']],
   ['GET',    /^\/api\/agents\/([^/]+)\/chat$/,             'agents.chat.history',        ['agent_id']],
   ['DELETE', /^\/api\/agents\/([^/]+)\/chat$/,             'agents.chat.clear',          ['agent_id']],
   ['POST',   /^\/api\/agents\/([^/]+)\/chat\/send$/,       'agents.chat.send',           ['agent_id']],

@@ -22,7 +22,7 @@ function claimNext(state: SchedulerQueueState, input: Parameters<typeof claimNex
   return result;
 }
 
-describe('Mate scheduler queue primitives', () => {
+describe('CogSeed scheduler queue primitives', () => {
   it('claims ready items by priority, then stable FIFO insertion order', () => {
     let state = createSchedulerQueueState();
     state = enqueue(state, { userId: 'user-a', itemId: 'sched-item-low', scopeId: 'scope-a', priority: 0, enqueuedAt: 10 });

@@ -28,6 +28,11 @@ const assetMock = vi.hoisted(() => ({
   pauseAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'paused', ...input as object })),
   resumeAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'active', ...input as object })),
   revokeAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'revoked', ...input as object })),
+  archiveAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'archived', ...input as object })),
+  deleteAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'deleted', ...input as object })),
+  purgeAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'purged', ...input as object })),
+  restoreAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'active', ...input as object })),
+  rollbackAbilityAsset: vi.fn(async (_uid: string, id: string, version: string, input: unknown) => ({ id, version, ...input as object })),
   recommendAbilityAssetAction: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, ...input as object })),
   listAbilityAssetVersions: vi.fn(async (_uid: string, id: string) => [{ assetId: id, version: '1' }]),
   listAbilityAssetAudit: vi.fn(async (_uid: string, id: string) => [{ assetId: id, action: 'created' }]),
@@ -43,6 +48,7 @@ const sourceMock = vi.hoisted(() => ({
   removeCognitionSource: vi.fn(async (_uid: string, kind: string, sourceId: string, revokeAssets: boolean) => ({
     control: { kind, sourceId, availability: 'removed' },
     affectedAssetIds: ['aa-a', 'aa-b'],
+    downgradedAssetIds: revokeAssets ? [] : ['aa-a'],
     revokedAssetIds: revokeAssets ? ['aa-a'] : [],
     failedAssetIds: [],
   })),
@@ -112,6 +118,35 @@ const projectionMock = vi.hoisted(() => ({
   confirmContextProjection: vi.fn(async (_uid: string, id: string) => ({ id, status: 'confirmed' })),
   readContextProjection: vi.fn(async (_uid: string, id: string) => ({ id })),
 }));
+const kstarClosureMock = vi.hoisted(() => ({
+  confirmKstarReview: vi.fn(async () => ({ episode: {}, review: {} })),
+}));
+const kstarReviewServiceMock = vi.hoisted(() => ({
+  readKstarReview: vi.fn(async () => ({
+    reviewState: 'needs_confirmation',
+    expectedResult: 'Expected',
+    actualResult: 'Actual',
+  })),
+}));
+
+const projectionDecisionMock = vi.hoisted(() => ({
+  confirmProjectionAndResumeCommander: vi.fn(async (_uid: string, input: unknown) => ({
+    projection: { id: 'proj-a', status: 'confirmed' },
+    resumed: true,
+    ...input as object,
+  })),
+  retryProjectionInCommander: vi.fn(async (_uid: string, input: unknown) => ({
+    projection: { id: 'proj-a', status: 'confirmed' },
+    resumed: true,
+    ...input as object,
+  })),
+  rejectProjectionAndResumeCommander: vi.fn(async (_uid: string, input: unknown) => ({
+    projection: { id: 'proj-a', status: 'rejected' },
+    resumed: true,
+    ...input as object,
+  })),
+  recoverLegacyPendingProjectionDispatch: vi.fn(async () => 'none' as const),
+}));
 const usageFeedbackMock = vi.hoisted(() => ({
   recordRecallMessageFeedback: vi.fn(async (_uid: string, input: unknown) => ({
     ...input as object,
@@ -150,6 +185,15 @@ vi.mock('../../../src/main/features/recall/capture-settings', () => captureSetti
 vi.mock('../../../src/main/features/recall/recall-view-service', () => viewMock);
 vi.mock('../../../src/main/features/recall/teaching-service', () => teachingMock);
 vi.mock('../../../src/main/features/recall/context-projection', () => projectionMock);
+vi.mock('../../../src/main/features/kstar/projection-decision-service', () => projectionDecisionMock);
+vi.mock('../../../src/main/features/kstar/task-closure', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/features/kstar/task-closure')>()),
+  confirmKstarReview: kstarClosureMock.confirmKstarReview,
+}));
+vi.mock('../../../src/main/features/kstar/review-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/features/kstar/review-service')>()),
+  readKstarReview: kstarReviewServiceMock.readKstarReview,
+}));
 vi.mock('../../../src/main/features/recall/usage-feedback-service', () => usageFeedbackMock);
 vi.mock('../../../src/main/features/recall/skill-draft-service', () => skillDraftMock);
 
@@ -228,6 +272,25 @@ describe('ipc › recall candidate governance', () => {
     });
   });
 
+  it('routes archive, restore, delete, purge, and rollback with user governance metadata', async () => {
+    await expect(call('recall.assets.archive', { assetId: 'aa-method' }))
+      .resolves.toMatchObject({ ok: true, asset: { status: 'archived' } });
+    await expect(call('recall.assets.restore', { assetId: 'aa-method', note: 'Bring it back.' }))
+      .resolves.toMatchObject({ ok: true, asset: { status: 'active' } });
+    await expect(call('recall.assets.delete', { assetId: 'aa-method' }))
+      .resolves.toMatchObject({ ok: true, asset: { status: 'deleted' } });
+    await expect(call('recall.assets.purge', { assetId: 'aa-method', note: 'Erase it.' }))
+      .resolves.toMatchObject({ ok: true, asset: { status: 'purged' } });
+    await expect(call('recall.assets.rollback', { assetId: 'aa-method', version: '2' }))
+      .resolves.toMatchObject({ ok: true, asset: { version: '2' } });
+
+    expect(assetMock.archiveAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', { actor: 'user', reason: 'user archive' });
+    expect(assetMock.restoreAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', { actor: 'user', reason: 'Bring it back.' });
+    expect(assetMock.deleteAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', { actor: 'user', reason: 'user delete' });
+    expect(assetMock.purgeAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', { actor: 'user', reason: 'Erase it.' });
+    expect(assetMock.rollbackAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', '2', { actor: 'user', reason: 'user rollback to v2' });
+  });
+
   it('routes the two-step Recall skill draft flow and validates the confirmation hash', async () => {
     await expect(call('recall.skills.prepare', { assetId: 'aa-method' }))
       .resolves.toMatchObject({ ok: true, draft: { assetId: 'aa-method' } });
@@ -289,7 +352,7 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('recall.sources.removeImpact', { kind: 'conversation', sourceId: 'conv-a' }))
       .resolves.toMatchObject({ ok: true, impact: { affectedAssetCount: 2, revocableAssetCount: 1 } });
     await expect(call('recall.sources.remove', { kind: 'conversation', sourceId: 'conv-a', revokeAssets: false }))
-      .resolves.toMatchObject({ ok: true, result: { revokedAssetIds: [] } });
+      .resolves.toMatchObject({ ok: true, result: { downgradedAssetIds: ['aa-a'], revokedAssetIds: [] } });
     expect(sourceMock.removeCognitionSource).toHaveBeenCalledWith(UID, 'conversation', 'conv-a', false);
 
     await expect(call('recall.captures.list', { limit: 5 }))
@@ -363,6 +426,40 @@ describe('ipc › recall candidate governance', () => {
       id: 'conv-delete',
       title: 'Deleted conversation',
     }), false);
+  });
+
+  it('routes KStar projection decisions into the same Commander session', async () => {
+    await expect(call('recall.projections.confirm', { projectionId: 'proj-a', cid: 'cid-a' }))
+      .resolves.toMatchObject({ ok: true, projection: { id: 'proj-a', status: 'confirmed' }, resumed: true });
+    expect(projectionDecisionMock.confirmProjectionAndResumeCommander).toHaveBeenCalledWith(UID, {
+      projectionId: 'proj-a', cid: 'cid-a',
+    });
+
+    await expect(call('recall.projections.retryForecast', { projectionId: 'proj-a', cid: 'cid-a' }))
+      .resolves.toMatchObject({ ok: true, projection: { id: 'proj-a', status: 'confirmed' }, resumed: true });
+    expect(projectionDecisionMock.retryProjectionInCommander).toHaveBeenCalledWith(UID, {
+      projectionId: 'proj-a', cid: 'cid-a',
+    });
+
+    await expect(call('recall.projections.reject', { projectionId: 'proj-a', cid: 'cid-a', note: 'not now' }))
+      .resolves.toMatchObject({ ok: true, projection: { id: 'proj-a', status: 'rejected' }, resumed: true });
+    expect(projectionDecisionMock.rejectProjectionAndResumeCommander).toHaveBeenCalledWith(UID, {
+      projectionId: 'proj-a', cid: 'cid-a', note: 'not now',
+    });
+  });
+
+  it('routes KStar review confirmation and read through the closure services', async () => {
+    await expect(call('kstar.review.confirm', { episodeId: 'kse-episode-a', verdict: 'met' }))
+      .resolves.toMatchObject({ ok: true });
+    expect(kstarClosureMock.confirmKstarReview).toHaveBeenCalledWith(UID, 'kse-episode-a', { verdict: 'met' });
+
+    await expect(call('kstar.review.confirm', { episodeId: 'kse-episode-a', verdict: 'bogus' }))
+      .resolves.toMatchObject({ ok: false });
+    expect(kstarClosureMock.confirmKstarReview).toHaveBeenCalledTimes(1);
+
+    await expect(call('kstar.review.read', { episodeId: 'kse-episode-a' }))
+      .resolves.toMatchObject({ ok: true, review: { reviewState: 'needs_confirmation' } });
+    expect(kstarReviewServiceMock.readKstarReview).toHaveBeenCalledWith(UID, 'kse-episode-a');
   });
 
   it('rejects malformed source and capture inputs before feature calls', async () => {

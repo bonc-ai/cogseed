@@ -29,8 +29,8 @@ async function backendPaths() {
   return import('../../../../src/main/features/cogseed_backend/paths');
 }
 
-describe('Mate Agent task and session store', () => {
-  it('creates a Mate-owned cloud task/session mapping and reads it from the owner root', async () => {
+describe('CogSeed task and session store', () => {
+  it('creates a CogSeed-owned cloud task/session mapping and reads it from the owner root', async () => {
     const store = await backend();
     const paths = await backendPaths();
 
@@ -74,6 +74,28 @@ describe('Mate Agent task and session store', () => {
     expect(first.task.task).toBe(second.task.task);
   });
 
+  it('persists formal Agent identity and maps a commander conversation alias to the durable member session', async () => {
+    const store = await backend();
+    const created = await store.createMateTask(USER_A, {
+      requestId: 'req-formal-agent',
+      task: 'Run the formal Agent.',
+      sessionId: 'gconv-cid-formal',
+      agentId: 'agent-formal',
+    });
+
+    expect(created.task).toMatchObject({
+      sessionId: expect.stringMatching(/^mate-session-/),
+      conversationId: 'cid-formal',
+      agentId: 'agent-formal',
+    });
+    await expect(store.readMateSession(USER_A, created.task.sessionId)).resolves.toMatchObject({
+      sessionKind: 'member',
+      actorId: 'agent-formal',
+      agentId: 'agent-formal',
+      conversationId: 'cid-formal',
+    });
+  });
+
   it('reuses only a valid owner session mapping and rejects unsafe IDs before constructing paths', async () => {
     const store = await backend();
     const paths = await backendPaths();
@@ -86,7 +108,7 @@ describe('Mate Agent task and session store', () => {
     expect(() => paths.mateTaskFile('../escape', 'mate-task-a')).toThrow(/user/i);
     expect(() => paths.mateTaskFile(USER_A, '../escape')).toThrow(/task/i);
   });
-  it('lists only Mate sessions in the owner scope in stable order', async () => {
+  it('lists only CogSeed sessions in the owner scope in stable order', async () => {
     const store = await backend();
     const first = await store.getOrCreateMateSession(USER_A);
     const second = await store.getOrCreateMateSession(USER_A);

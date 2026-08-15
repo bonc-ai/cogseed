@@ -20,20 +20,33 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe('Mate worker recovery', () => {
-  it('marks queued/running Mate tasks recoverable without replaying their original prompts', async () => {
+describe('CogSeed worker recovery', () => {
+  it('marks queued/running CogSeed tasks recoverable without replaying their original prompts', async () => {
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
     const recovery = await import('../../../../src/main/features/cogseed_backend/recovery');
     const events = await import('../../../../src/main/features/cogseed_backend/event-store');
 
-    const queued = (await tasks.createMateTask(USER, { requestId: 'req-recovery-queued', task: 'Must not auto replay queued.' })).task;
+    const queued = (await tasks.createMateTask(USER, {
+      requestId: 'req-recovery-queued',
+      task: 'Must not auto replay queued.',
+      conversationId: 'cid-recovery',
+      agentId: 'agent-recovery',
+    })).task;
     await lifecycle.transitionMateTask(USER, queued.taskId, 'queued');
-    const running = (await tasks.createMateTask(USER, { requestId: 'req-recovery-running', task: 'Must not auto replay running.' })).task;
+    const running = (await tasks.createMateTask(USER, {
+      requestId: 'req-recovery-running',
+      task: 'Must not auto replay running.',
+      conversationId: 'cid-recovery',
+      agentId: 'agent-recovery',
+    })).task;
     await lifecycle.transitionMateTask(USER, running.taskId, 'queued');
     await lifecycle.transitionMateTask(USER, running.taskId, 'running');
 
-    const report = await recovery.recoverMateTasks(USER);
+    const projected: any[] = [];
+    const report = await recovery.recoverMateTasks(USER, {
+      projectTaskEvent: vi.fn(async (input) => { projected.push(input); }),
+    } as any);
 
     expect(report).toMatchObject({ recoveredCount: 2, dispatchedCount: 0 });
     await expect(tasks.readMateTask(USER, queued.taskId)).resolves.toMatchObject({ status: 'recoverable' });
@@ -41,5 +54,7 @@ describe('Mate worker recovery', () => {
     await expect(events.readMateTaskEvents(USER, running.taskId, 0, 20)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'task.recoverable', payload: { errorCode: 'worker_restart' } }),
     ]));
+    expect(projected.map((input) => input.event.type)).toEqual(['task.recoverable', 'task.recoverable']);
+    expect(projected.every((input) => input.event.payload.errorCode === 'worker_restart')).toBe(true);
   });
 });

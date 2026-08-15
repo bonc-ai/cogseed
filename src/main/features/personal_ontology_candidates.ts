@@ -18,6 +18,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as crypto from 'node:crypto';
 import * as path from 'node:path';
 import { userLocalRoot, userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
@@ -375,6 +376,67 @@ export async function listCandidates(uid: string): Promise<CandidatesData> {
     candidate_updates: readCandidates(uid),
     blocked_items: readBlockedItems(uid),
   };
+}
+
+export interface AddCandidateInput extends Partial<CandidateUpdate> {
+  summary: string;
+}
+
+/**
+ * Append a single candidate produced by an expert-team member.
+ *
+ * A caller-supplied candidate_id is an idempotency key: the latest payload
+ * replaces the existing row instead of creating a duplicate.
+ */
+export async function addCandidate(
+  uid: string,
+  input: AddCandidateInput,
+): Promise<{ ok: true; candidate: CandidateUpdate; candidates: CandidateUpdate[] }> {
+  if (!safeId(uid)) throw new Error('invalid uid');
+  const summary = typeof input?.summary === 'string' ? input.summary.trim() : '';
+  const memoryText = typeof input?.memory_text === 'string' ? input.memory_text.trim() : '';
+  if (!summary && !memoryText) throw new Error('candidate has no text');
+
+  const candidateId = typeof input?.candidate_id === 'string' && input.candidate_id
+    ? input.candidate_id
+    : `c_${crypto.randomBytes(8).toString('hex')}`;
+  if (!safeId(candidateId)) throw new Error('invalid candidate id');
+
+  const candidate: CandidateUpdate = {
+    candidate_id: candidateId,
+    kind: coerceKind(input.kind),
+    confidence: input.confidence === undefined ? 'medium' : coerceConfidence(input.confidence),
+    summary: summary || memoryText,
+    memory_scope: coerceMemoryScope(input.memory_scope),
+    ...(memoryText ? { memory_text: memoryText } : {}),
+    ...(typeof input.registry_like_path === 'string' && input.registry_like_path.trim()
+      ? { registry_like_path: input.registry_like_path.trim() }
+      : {}),
+    ...(typeof input.diff_summary === 'string' && input.diff_summary.trim()
+      ? { diff_summary: input.diff_summary.trim() }
+      : {}),
+    ...(typeof input.target_field === 'string' && input.target_field.trim()
+      ? { target_field: input.target_field.trim() }
+      : {}),
+    source_memory_refs: Array.isArray(input.source_memory_refs)
+      ? input.source_memory_refs.filter((ref): ref is string => typeof ref === 'string' && !!ref)
+      : [],
+    ...(typeof input.project_id === 'string' && input.project_id.trim()
+      ? { project_id: input.project_id.trim() }
+      : {}),
+    sensitivity: input.sensitivity === undefined ? 'standard' : coerceSensitivity(input.sensitivity),
+    write_actor: input.write_actor === undefined ? 'llm' : coerceWriteActor(input.write_actor),
+    recorded_time: typeof input.recorded_time === 'string' && input.recorded_time.trim()
+      ? input.recorded_time.trim()
+      : nowIso(),
+  };
+
+  const candidates = readCandidates(uid);
+  const index = candidates.findIndex((item) => item.candidate_id === candidateId);
+  if (index >= 0) candidates[index] = candidate;
+  else candidates.push(candidate);
+  writeCandidates(uid, candidates);
+  return { ok: true, candidate, candidates };
 }
 
 /** onboarding 抽取产物 → 候选池的最小映射。抽取层用的是 `ExtractionCandidate`

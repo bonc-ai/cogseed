@@ -146,7 +146,9 @@ describe('Recall candidate governance', () => {
     expect(first.asset.type).toBe('rule');
     expect(first.asset.status).toBe('active');
     expect(first.asset.lifecycleStatus).toBe('user_confirmed_unverified');
-    expect(first.asset.maturity).toBe('seed');
+    // 用户确认过内容 = bud，不是 seed（seed 是候选档，而候选是另一种记录）。
+    // 归成 seed 会让它在 10.2 矩阵里一律 never，永远进不了任何 Agent。
+    expect(first.asset.maturity).toBe('bud');
     expect(first.asset.version).toBe('1');
     expect(first.receipt).toEqual({
       assetId: first.asset.id,
@@ -309,6 +311,51 @@ describe('Recall candidate governance', () => {
     ]);
     await expect((await import('../../../../src/main/features/recall/asset-service')).listAbilityAssets('user-a'))
       .resolves.toEqual([]);
+  });
+
+  it('preserves validated learning provenance on the candidate and promoted asset without auto-creating a causal rule', async () => {
+    const candidates = await service();
+    const learningProvenance = {
+      projectionId: 'proj-a',
+      forecastId: 'wf-a',
+      episodeId: 'kse-a',
+      ruleRefs: ['rule:asset-a:1'],
+      attribution: 'rule_gap' as const,
+      actionDelta: {
+        missingTools: ['verify'], unexpectedTools: [], missingActors: [], unexpectedActors: [],
+        missingPlanSteps: [], extraActions: [], failedActions: [], orderMismatch: false,
+      },
+      resultDelta: {
+        acceptanceSignals: [{ signal: 'Tests pass', status: 'not_met' as const, evidence: 'Test failed.' }],
+        missingPredictedFiles: [], unexpectedProducedFiles: [], terminalStatus: 'failed' as const,
+      },
+    };
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Verify the acceptance criteria before finalizing.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'execution', id: 'kse-a' }],
+      learningProvenance,
+    });
+
+    expect(candidate.learningProvenance).toEqual(learningProvenance);
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    expect(promoted.asset.learningProvenance).toEqual(learningProvenance);
+    expect(promoted.asset.causalRule).toBeUndefined();
+  });
+
+  it('rejects malformed learning provenance before persisting a candidate', async () => {
+    const candidates = await service();
+    await expect(candidates.saveRecallCandidate('user-a', {
+      judgment: 'Do not trust incomplete lineage.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'execution', id: 'kse-a' }],
+      learningProvenance: {
+        projectionId: '../proj-a', forecastId: 'wf-a', episodeId: 'kse-a',
+        ruleRefs: [], attribution: 'rule_gap',
+      },
+    } as any)).rejects.toThrow(/learning provenance/i);
   });
 
   it('preserves legacy evidence identity when returning an already-promoted asset', async () => {
@@ -706,7 +753,7 @@ describe('Recall candidate governance', () => {
     await expect(candidates.promoteRecallCandidate('user-a', risky.id, { actor: 'user' })).rejects.toThrow(/risk gate/i);
     expect(await candidates.readRecallCandidate('user-a', risky.id)).toMatchObject({ status: 'pending_review' });
     await expect(candidates.promoteRecallCandidate('user-a', risky.id, { actor: 'user', riskAcknowledged: true }))
-      .resolves.toMatchObject({ asset: { type: 'skill_method', maturity: 'seed', lifecycleStatus: 'user_confirmed_unverified' } });
+      .resolves.toMatchObject({ asset: { type: 'skill_method', maturity: 'bud', lifecycleStatus: 'user_confirmed_unverified' } });
   });
 
   it('blocks promotion when v2 evidence is revoked even if the candidate source remains active', async () => {

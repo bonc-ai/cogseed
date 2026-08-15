@@ -15,6 +15,8 @@ import { t } from '../../i18n';
 import * as manager from './manager';
 import * as registry from './registry';
 import type { MessagingInstanceClient } from './types';
+import type { TouchpointRouteScene } from '../touchpoints/types';
+import { resolveTouchpointInstanceId } from '../touchpoints/config';
 import {
   requestSendConfirm,
 } from './proactive-confirm';
@@ -142,13 +144,15 @@ function error(code: ProactiveErrorCode, message: string, candidates?: string[])
 async function resolveSelfTarget(
   uid: string,
   instanceId: string | undefined,
+  scene: TouchpointRouteScene,
 ): Promise<
   | { ok: true; chosen: ProactiveTargetView; ownerExternalUserId: string }
   | { ok: false; result: ProactiveSendResult }
 > {
   const { targets, available_instance_ids: availableIds } = await listTargets(uid);
-  let chosen = targets.find((target) => target.instance_id === instanceId);
-  if (instanceId !== undefined) {
+  const configuredInstanceId = await resolveTouchpointInstanceId(uid, scene, instanceId);
+  let chosen = targets.find((target) => target.instance_id === configuredInstanceId);
+  if (configuredInstanceId !== undefined) {
     if (!chosen) {
       return { ok: false, result: error('E_MESSAGING_INSTANCE_UNAVAILABLE', 'unknown messaging instance') };
     }
@@ -188,7 +192,7 @@ async function resolveSelfTarget(
  * instance. */
 export async function sendToSelf(
   uid: string,
-  input: { instance_id?: string; target: string; text: string },
+  input: { instance_id?: string; target: string; text: string; scene?: TouchpointRouteScene },
   opts: { cid: string; sourceKey: string; signal?: AbortSignal | null },
 ): Promise<ProactiveSendResult> {
   if (input.target !== 'self') {
@@ -199,7 +203,7 @@ export async function sendToSelf(
     return error('E_MESSAGING_INVALID_INPUT', `text is required and at most ${MAX_PROACTIVE_TEXT_LENGTH} characters`);
   }
 
-  const resolved = await resolveSelfTarget(uid, input.instance_id);
+  const resolved = await resolveSelfTarget(uid, input.instance_id, input.scene || 'external_send');
   if (resolved.ok === false) return resolved.result;
   const { chosen, ownerExternalUserId } = resolved;
 
@@ -253,7 +257,7 @@ export async function sendToSelf(
  * message text. */
 export async function sendFileToSelf(
   uid: string,
-  input: { instance_id?: string; file_path: string; file_name?: string },
+  input: { instance_id?: string; file_path: string; file_name?: string; scene?: TouchpointRouteScene },
   opts: { cid: string; sourceKey: string; signal?: AbortSignal | null },
 ): Promise<ProactiveSendResult> {
   const filePath = typeof input.file_path === 'string' && input.file_path.trim() ? input.file_path.trim() : '';
@@ -264,7 +268,7 @@ export async function sendFileToSelf(
     ? input.file_name.trim().slice(0, 240)
     : filePath.split('/').pop() || 'file';
 
-  const resolved = await resolveSelfTarget(uid, input.instance_id);
+  const resolved = await resolveSelfTarget(uid, input.instance_id, input.scene || 'external_send');
   if (resolved.ok === false) return resolved.result;
   const { chosen, ownerExternalUserId } = resolved;
 

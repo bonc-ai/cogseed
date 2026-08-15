@@ -81,4 +81,26 @@ describe('CogSeed residual identifiers', () => {
     fs.writeFileSync(canonical, JSON.stringify({ schema: 1, platformKey: 'darwin-x64', version: '1', model: 'x', capability: { status: 'ready' }, files: {} }));
     expect(fs.existsSync(canonical)).toBe(true);
   });
+
+  it('does not expose legacy Mate product labels from CogSeed backend or runtime source', () => {
+    const roots = [
+      path.join(process.cwd(), 'src', 'main', 'features', 'cogseed_backend'),
+      path.join(process.cwd(), 'src', 'main', 'features', 'cogseed_runtime'),
+    ];
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile() && entry.name.endsWith('.ts')) {
+          fs.readFileSync(full, 'utf8').split('\n').forEach((line, index) => {
+            if (/\bMate[ -][A-Za-z]/.test(line)) offenders.push(`${path.relative(process.cwd(), full)}:${index + 1}`);
+          });
+        }
+      }
+    };
+    roots.forEach(walk);
+    expect(offenders).toEqual([]);
+  });
+
 });
