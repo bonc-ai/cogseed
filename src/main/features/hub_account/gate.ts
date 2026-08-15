@@ -3,7 +3,7 @@ import { HubApiError } from './client';
 
 export const HUB_ACCOUNT_RELEASE_CONFIG_KEY = 'hub_account.release_enabled';
 
-clientConfig.registerDefault<boolean>(HUB_ACCOUNT_RELEASE_CONFIG_KEY, false, { effect: 'immediate' });
+clientConfig.registerDefault<boolean>(HUB_ACCOUNT_RELEASE_CONFIG_KEY, true, { effect: 'immediate' });
 
 export function isHubAccountReleaseEnabled(): boolean {
   return clientConfig.get<boolean>(HUB_ACCOUNT_RELEASE_CONFIG_KEY, false) === true;
