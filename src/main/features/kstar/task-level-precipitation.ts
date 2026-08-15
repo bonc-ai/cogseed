@@ -5,7 +5,6 @@ import { precipitateDirectExperienceFromSource } from './direct-experience-asset
 import { readKstarEpisode } from './episode-store';
 import { clearsPrecipitationGate, gapType, learningSignal, scopeForTask } from './extraction-service';
 import { readKstarReview } from './review-service';
-import { saveKstarCandidateProposals } from './recall-bridge';
 import type { KstarRequirementRecord } from './requirement-types';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
 
@@ -38,6 +37,8 @@ export interface RequirementLevelPrecipitationResult {
   proposals: KstarCandidateProposal[];
   createdAssetIds: string[];
   candidateIds: string[];
+  mergedIntoIds: string[];
+  updateCandidateIds: string[];
 }
 
 export function aggregateRequirementProposals(input: AggregateRequirementProposalsInput): KstarCandidateProposal[] {
@@ -73,16 +74,32 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
 
   const proposals: KstarCandidateProposal[] = [];
   const goal = requirement.goalText || requirement.title;
-  if (verifiedWorkflow && strongest) {
-    proposals.push({
-      judgment: `For tasks like "${goal}", use the verified workflow: ${toolChain.join(' → ')}.`,
-      summary: 'Verified multi-tool workflow (requirement-level)',
-      uncertainty: 'Generated from a closed multi-episode requirement; confirm before treating it as durable.',
-      suggestedType: 'skill_method',
-      suggestedScope: scopeForTask(goal),
-      sourceRefs: mergedRefs,
-      learningSignal: learningSignal(strongest),
-    });
+  if (strongest) {
+    if (verifiedWorkflow && !strongest.lesson?.trim()) {
+      // Verified workflow without a reasoned lesson → skill_method.
+      proposals.push({
+        judgment: `For tasks like "${goal}", use the verified workflow: ${toolChain.join(' → ')}.`,
+        summary: 'Verified multi-tool workflow (requirement-level)',
+        uncertainty: 'Generated from a closed multi-episode requirement; confirm before treating it as durable.',
+        suggestedType: 'skill_method',
+        suggestedScope: scopeForTask(goal),
+        sourceRefs: mergedRefs,
+        learningSignal: learningSignal(strongest),
+      });
+    } else if (strongest.lesson?.trim()) {
+      // Process-experience lesson (even on met_expected tasks): the reasoned
+      // reusable pattern/pitfall is the asset body. Type rule by default —
+      // it is a judgment lesson, not a workflow.
+      proposals.push({
+        judgment: strongest.lesson,
+        summary: 'Reusable experience lesson (requirement-level)',
+        uncertainty: 'Model-reasoned from execution experience; confirm before treating it as durable.',
+        suggestedType: 'rule',
+        suggestedScope: scopeForTask(goal),
+        sourceRefs: mergedRefs,
+        learningSignal: learningSignal(strongest),
+      });
+    }
   }
 
   // Highest-confidence gap across all episodes, only when evidence-gated.
@@ -105,20 +122,15 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   return proposals.slice(0, 3);
 }
 
-export interface RequirementLevelPrecipitationOptions {
-  /** Overridable bridge for the candidate review line; defaults to the shared bridge. */
-  candidateBridge?: (userId: string, proposals: KstarCandidateProposal[]) => Promise<Array<{ id: string }>>;
-}
-
 /**
- * Precipitate requirement-level ability assets: aggregated proposals go BOTH
- * to the direct-experience asset line (evidence-gated, no user confirmation)
- * and to the candidate review line for optional promotion.
+ * Precipitate requirement-level ability assets: aggregated proposals go
+ * DIRECTLY into ability assets. The KStar line skips the cognitive-
+ * precipitation candidate line (no pending_review) — self-evolution
+ * precipitates straight to the asset store.
  */
 export async function precipitateRequirementLevel(
   userId: string,
   requirement: KstarRequirementRecord,
-  options: RequirementLevelPrecipitationOptions = {},
 ): Promise<RequirementLevelPrecipitationResult> {
   if (!safeId(userId) || !safeId(requirement.id)) throw new Error('invalid requirement precipitation reference');
   const episodes = (
@@ -129,36 +141,32 @@ export async function precipitateRequirementLevel(
   ).filter((review): review is KstarReviewRecord => Boolean(review));
 
   const proposals = aggregateRequirementProposals({ requirement, episodes, reviews });
-  if (proposals.length === 0) return { proposals: [], createdAssetIds: [], candidateIds: [] };
+  if (proposals.length === 0) {
+    return { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [] };
+  }
 
   const workspaceId = episodes.map((episode) => episode.s?.workspaceId).find((id) => id && safeId(id));
-  const bridge = options.candidateBridge || saveKstarCandidateProposals;
 
   let createdAssetIds: string[] = [];
   let candidateIds: string[] = [];
+  let mergedIntoIds: string[] = [];
+  let updateCandidateIds: string[] = [];
   try {
     const direct = await precipitateDirectExperienceFromSource(userId, {
       id: requirement.id,
       ...(workspaceId ? { workspaceId } : {}),
     }, proposals);
     createdAssetIds = direct.createdAssetIds;
+    candidateIds = direct.candidateIds;
+    mergedIntoIds = direct.mergedIntoIds;
+    updateCandidateIds = direct.updateCandidateIds;
   } catch (error) {
-    // Best-effort: never break task closure or the review line.
+    // Best-effort: never break task closure.
     log.warn('requirement-level direct precipitation degraded', {
       userId,
       requirementId: requirement.id,
       error: (error as Error).message,
     });
   }
-  try {
-    const candidates = await bridge(userId, proposals);
-    candidateIds = candidates.map((candidate) => candidate.id);
-  } catch (error) {
-    log.warn('requirement-level candidate bridge degraded', {
-      userId,
-      requirementId: requirement.id,
-      error: (error as Error).message,
-    });
-  }
-  return { proposals, createdAssetIds, candidateIds };
+  return { proposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds };
 }

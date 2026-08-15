@@ -19,16 +19,6 @@ vi.mock('../../../../src/main/model/client', () => ({
       entryId: 'test-entry',
       toolNames: ['read_file', ...toolNames],
     });
-    if (String(opts.message).includes('帮我修复登录问题')) {
-      const tool = (opts.extraTools || []).find((candidate: any) => candidate.name === 'kstar_control');
-      if (!tool) throw new Error('kstar_control not available');
-      await tool.execute({
-        operation: 'upsert_state',
-        idempotencyKey: 'mixed-task-create',
-        task: { operation: 'create', title: '修复登录问题' },
-        requirement: { operation: 'create', goalText: '修复登录问题并验证' },
-      }, {});
-    }
     yield { type: 'final', text: 'Commander 正常回复' };
     yield { type: 'done' };
   },
@@ -40,6 +30,7 @@ vi.mock('../../../../src/main/model/client', () => ({
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 let previousFlag: string | undefined;
+let previousHostRouting: string | undefined;
 const cids: string[] = [];
 
 beforeEach(async () => {
@@ -48,10 +39,25 @@ beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-kstar-commander-centric-'));
   previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
   previousFlag = process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
+  previousHostRouting = process.env.ORKAS_KSTAR_HOST_ROUTING;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
   process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = '1';
+  process.env.ORKAS_KSTAR_HOST_ROUTING = '1';
   const users = await import('../../../../src/main/features/users');
   users.activateUser('user-a');
+  // Host-routing judge: task-shaped messages are tasks (never continuations);
+  // greetings are filtered by the deterministic trivial filter before this.
+  const busModule = await import('../../../../src/main/features/group_chat/bus');
+  busModule._setHostRoutingJudgeForTest(async () => ({
+    isTask: true,
+    continuation: false,
+  }));
+  // Auto-forecast generator must never hit the real model runner in tests.
+  const autoForecast = await import('../../../../src/main/features/kstar/auto-forecast');
+  autoForecast._setAutoForecastGeneratorForTest(async () => JSON.stringify([
+    { id: 'c1', plan: ['Inspect', 'Verify'], expectedTools: ['read_file'], expectedActors: ['commander'], predictedResult: { summary: 'done' } },
+    { id: 'c2', plan: ['Draft', 'Deliver'], expectedTools: ['write_file'], expectedActors: ['commander'], predictedResult: { summary: 'done too' } },
+  ]));
 });
 
 afterEach(async () => {
@@ -61,6 +67,8 @@ afterEach(async () => {
   else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
   if (previousFlag === undefined) delete process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
   else process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = previousFlag;
+  if (previousHostRouting === undefined) delete process.env.ORKAS_KSTAR_HOST_ROUTING;
+  else process.env.ORKAS_KSTAR_HOST_ROUTING = previousHostRouting;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.resetModules();
 });
@@ -85,12 +93,17 @@ function recordFiles(collection: 'tasks' | 'requirements'): string[] {
   try { return fs.readdirSync(dir).filter((name) => name.endsWith('.json')); } catch { return []; }
 }
 
-function projectionFiles(): string[] {
-  const dir = path.join(tmpDir, 'user-a', 'cloud', 'recall', 'records', 'context-projections');
+function forecastFiles(): string[] {
+  const dir = path.join(tmpDir, 'user-a', 'cloud', 'recall', 'records', 'world-model-forecasts');
   try { return fs.readdirSync(dir).filter((name) => name.endsWith('.json')); } catch { return []; }
 }
 
-describe('Commander-centric KStar routing', () => {
+function projectionFiles(): string[] {
+  const dir = path.join(tmpDir, 'user-a', 'cloud', 'recall', 'records', 'projections');
+  try { return fs.readdirSync(dir).filter((name) => name.endsWith('.json')); } catch { return []; }
+}
+
+describe('World-model-centric KStar (Commander tool surface removed)', () => {
   it.each(['你好', '谢谢', '好的', '？！', '👍'])(
     '%s reaches Commander and writes no KStar records',
     async (text) => {
@@ -113,10 +126,46 @@ describe('Commander-centric KStar routing', () => {
       expect(recordFiles('tasks')).toEqual([]);
       expect(recordFiles('requirements')).toEqual([]);
       expect(projectionFiles()).toEqual([]);
-      expect((await import('../../../../src/main/features/group_chat/state')).readState('user-a', cid))
-        .resolves.not.toHaveProperty('pending_projection_dispatch');
+      expect(forecastFiles()).toEqual([]);
     },
   );
+
+  it('does not expose kstar_control to the Commander tool surface', async () => {
+    const cid = newCid();
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    bus.subscribe('user-a', cid, () => undefined);
+
+    await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '你好，帮我修复登录问题' });
+    await waitForQuiescent(bus, cid);
+
+    expect(modelCalls).toHaveLength(1);
+    expect(modelCalls[0].toolNames).not.toContain('kstar_control');
+  });
+
+  it('host routing opens task + projection + auto-forecast for a task-shaped message', async () => {
+    const cid = newCid();
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    bus.subscribe('user-a', cid, () => undefined);
+
+    await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '帮我修复登录问题' });
+    await waitForQuiescent(bus, cid);
+
+    expect(modelCalls).toHaveLength(1);
+    // The Commander sees NO KStar tool — governance is host-side.
+    expect(modelCalls[0].toolNames).not.toContain('kstar_control');
+    const taskState = await store.readConversationTaskState('user-a', cid);
+    expect(taskState?.currentTaskId).toMatch(/^kst-/);
+    expect(taskState?.currentRequirementId).toMatch(/^ksreq-/);
+    const requirement = await store.readKstarRequirement('user-a', taskState!.currentRequirementId!);
+    // Projection + world-model forecast are generated automatically.
+    expect(requirement?.projectionId).toBeTruthy();
+    expect(requirement?.forecastId).toBeTruthy();
+    expect(recordFiles('tasks')).toHaveLength(1);
+    expect(recordFiles('requirements')).toHaveLength(1);
+    expect(projectionFiles()).toHaveLength(1);
+    expect(forecastFiles()).toHaveLength(1);
+  });
 
   it('does not mutate an existing Task when Commander makes no control call', async () => {
     const cid = newCid();
@@ -143,6 +192,9 @@ describe('Commander-centric KStar routing', () => {
     const beforeRequirement = fs.readFileSync(path.join(tmpDir, 'user-a', 'cloud', 'kstar', 'requirements', `${requirement.id}.json`), 'utf8');
 
     bus.subscribe('user-a', cid, () => undefined);
+    // A greeting must NOT switch the open task (continuation judge returns
+    // continuation=false per default test judge, but greetings are trivial
+    // and never route).
     await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '谢谢' });
     await waitForQuiescent(bus, cid);
 
@@ -151,24 +203,26 @@ describe('Commander-centric KStar routing', () => {
     expect(fs.readFileSync(path.join(tmpDir, 'user-a', 'cloud', 'kstar', 'requirements', `${requirement.id}.json`), 'utf8')).toBe(beforeRequirement);
   });
 
-  it('tracks a mixed greeting and task only when Commander calls kstar_control', async () => {
+  it('tags Commander review replies as host-internal (system_kind kstar_review) so the UI hides them', async () => {
     const cid = newCid();
     const bus = await import('../../../../src/main/features/group_chat/bus');
-    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const groupChat = await import('../../../../src/main/features/group_chat');
     bus.subscribe('user-a', cid, () => undefined);
 
-    await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '你好，帮我修复登录问题' });
+    // The closure flow enqueues a commander-authored <kstar-review> reply;
+    // it must be persisted (closure parses it) but tagged as internal so the
+    // renderer never shows it as a user-facing bubble.
+    await bus.enqueue({
+      uid: 'user-a',
+      cid,
+      fromActorId: 'commander',
+      text: '<kstar-review>{"outcome":"met_expected","attribution":"unclear","deltaR":0,"deltaA":0,"reason":"done","confidence":0.9}</kstar-review>',
+    });
     await waitForQuiescent(bus, cid);
 
-    expect(modelCalls).toHaveLength(1);
-    expect(modelCalls[0].toolNames).toContain('kstar_control');
-    expect(await store.readConversationTaskState('user-a', cid)).toMatchObject({
-      currentTaskId: expect.stringMatching(/^kst-/),
-      currentRequirementId: expect.stringMatching(/^ksreq-/),
-      controlReceipts: [expect.objectContaining({ idempotencyKey: 'mixed-task-create' })],
-    });
-    expect(recordFiles('tasks')).toHaveLength(1);
-    expect(recordFiles('requirements')).toHaveLength(1);
-    expect(projectionFiles()).toEqual([]);
+    const messages = await groupChat.readMessages('user-a', cid);
+    const review = messages.find((m) => String(m.text).includes('<kstar-review>'));
+    expect(review).toBeTruthy();
+    expect(review!.system_kind).toBe('kstar_review');
   });
 });

@@ -30,7 +30,17 @@ export function hasLearningSignal(review: KstarReviewRecord): boolean {
     || review.deltaA !== 'unknown'
     || review.outcome === 'better_than_expected'
     || review.outcome === 'worse_than_expected'
-    || (review.confidence >= 0.7 && review.attribution !== 'unclear' && !!review.reason.trim());
+    || (review.confidence >= 0.7 && review.attribution !== 'unclear' && !!review.reason.trim())
+    // A concrete, reasoned lesson IS a learning signal even when the
+    // Commander could not name an attribution bucket (attribution defaults
+    // to 'unclear' for met_expected tasks). The lesson text itself carries
+    // the reusable experience; clearsPrecipitationGate still requires
+    // confidence + reason so routine successes do not pollute.
+    || Boolean(
+      review.lesson?.trim()
+      && review.confidence >= 0.7
+      && !!review.reason.trim(),
+    );
 }
 
 /** Evidence gate for precipitation (learning-reflex): a review precipitates
@@ -41,9 +51,13 @@ export function hasLearningSignal(review: KstarReviewRecord): boolean {
  *      definition, numeric delta may be unknown), or
  *   3. a high-confidence review that names a concrete gap (knowledge/rule/
  *      template/skill gap with a reason) — a gap lesson is a signal even
- *      when the numeric delta is tiny.
- *  "Met expected" with a ~0 delta is NO lesson (the world behaved as
- *  predicted) and does not precipitate — that is the noise gate. */
+ *      when the numeric delta is tiny, or
+ *   4. a model-reasoned PROCESS EXPERIENCE lesson on a successful task
+ *      (met_expected, ~0 delta): the executor discovered a reusable
+ *      pattern/pitfall/method DURING execution (e.g. "merge-conflict type
+ *      assertions hide runtime errors"). Gate: lesson present + confidence
+ *      >= 0.7 + reason non-empty, so routine successes do not pollute.
+ *  "Met expected" with ~0 delta and NO lesson stays un-precipitated. */
 export function clearsPrecipitationGate(review: KstarReviewRecord): boolean {
   if (!hasLearningSignal(review)) return false;
   const numericDeltaR = typeof review.deltaR === 'number' && Number.isFinite(review.deltaR) ? review.deltaR : 0;
@@ -52,9 +66,14 @@ export function clearsPrecipitationGate(review: KstarReviewRecord): boolean {
     return true;
   }
   if (review.outcome === 'better_than_expected' || review.outcome === 'worse_than_expected') return true;
-  // Numeric deltas are in the noise band — a lesson survives only if it
-  // names a concrete gap with a reason.
-  return gapType(review) !== null && review.reason.trim().length > 0;
+  if (gapType(review) !== null && review.reason.trim().length > 0) return true;
+  // Process-experience line: a successful task can still carry a reusable
+  // lesson discovered during execution.
+  return Boolean(
+    review.lesson?.trim()
+    && review.confidence >= 0.7
+    && review.reason.trim().length > 0,
+  );
 }
 
 export function learningSignal(review: KstarReviewRecord): KstarCandidateProposal['learningSignal'] {
@@ -93,7 +112,12 @@ export function proposeKstarCandidates(
         : `For tasks like "${episode.t.userGoal}", use the verified workflow: ${distinctTools.join(' → ')}.`,
       summary: review.lesson?.trim() ? 'Reusable workflow lesson' : 'Verified multi-tool workflow',
       uncertainty: 'Generated from a verified workflow with an explicit learning signal; confirm before treating it as durable.',
-      suggestedType: 'skill_method',
+      // A lesson is judgment experience, not a workflow recipe: tag it
+      // 'rule' (or the named gap) so downstream use treats it as guidance
+      // instead of replaying a tool chain.
+      suggestedType: review.lesson?.trim()
+        ? (gapType(review) ?? 'rule')
+        : 'skill_method',
       suggestedScope: scopeForTask(episode.t.userGoal),
       sourceRefs,
       learningSignal: learningSignal(review),

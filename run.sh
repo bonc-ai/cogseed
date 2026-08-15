@@ -100,6 +100,9 @@ if [ "$(uname -s)" = "Darwin" ]; then
       ARGS+=("--orkas-kstar-engine-cwd=$ORKAS_KSTAR_ENGINE_CWD")
       ARGS+=("--orkas-kstar-engine-ontology-dir=$ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR")
     fi
+    # macOS ships bash 3.2, where expanding an EMPTY array as
+    # "${OPEN_ENV_ARGS[@]}" under `set -u` fails with "unbound variable".
+    # Guard the empty case so the launcher works without hub env vars.
     if (( ${#OPEN_ENV_ARGS[@]} > 0 )); then
       exec open -W -n "${OPEN_ENV_ARGS[@]}" "$APP_BUNDLE" --args "${ARGS[@]}"
     else
