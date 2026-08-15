@@ -481,18 +481,37 @@ export interface SpaceDraft {
   extra_agent_ids?: string[];
 }
 
-/** 空间构建师产出的草稿 → 创建空间。与 createSpace 的区别：引用资产
- *  （模板/技能/智能体）必须真实存在且可用，非法引用逐个报告而不是静默丢弃
- *  ——LLM 推荐的 id 可能幻觉，后端是最后一道闸。 */
+/** 草稿资源引用解析：先按 id 精确匹配，再按显示名模糊匹配（忽略大小写/空白/常见分隔符）。
+ *  返回真实 id；解析不到返回 undefined（调用方丢弃该引用并记一条 correction，不阻断创建）。
+ *  这是「LLM 幻觉 id / 用显示名当 id」的最后一道防线——宁可自动纠正，不让用户卡在 invalid_draft。 */
+function resolveDraftResourceId(
+  rows: Array<{ id: string; name?: string }>,
+  raw: string,
+): string | undefined {
+  const v = String(raw || '').trim();
+  if (!v) return undefined;
+  const byId = rows.find((r) => r.id === v);
+  if (byId) return byId.id;
+  const norm = (s: string) => String(s || '').toLowerCase().replace(/[\s_\-./()（）]+/g, '');
+  const target = norm(v);
+  const byName = rows.find((r) => norm(r.name) === target);
+  return byName ? byName.id : undefined;
+}
+
+/** 空间构建师产出的草稿 → 创建空间。结构错误（空名/重名/非法类型/超长）仍拒绝；
+ *  资源引用（模板/技能/智能体）改为**容错自动纠正**：id 精确 → 名字模糊解析，
+ *  解析不到就忽略该项并在 `corrections` 里说明——LLM 推荐的 id 可能幻觉，后端是
+ *  最后一道闸，但要让空间能建出来而不是卡死用户。 */
 export async function createSpaceFromDraft(
   uid: string,
   draft: SpaceDraft,
 ): Promise<
-  | { ok: true; space: Space }
+  | { ok: true; space: Space; corrections?: string[] }
   | { ok: false; error: SpaceError | 'invalid_draft'; details?: string[] }
 > {
   const details: string[] = [];
-  // 1. 基础字段（复用 createSpace 语义）
+  const corrections: string[] = [];
+  // 1. 基础字段（复用 createSpace 语义；结构错误仍拒绝）
   const name = normName(draft.name);
   if (!name) return { ok: false, error: 'name_empty' };
   if (await _isDuplicateName(uid, name)) return { ok: false, error: 'name_dup' };
@@ -503,44 +522,56 @@ export async function createSpaceFromDraft(
   if (draft.sustained_outcome !== undefined && draft.sustained_outcome.length > 200) {
     details.push('sustained_outcome 超过 200 字上限');
   }
-  // 2. 模板存在性（主 + 副 ≤2，去重排除主模板；bundle 并入去重集合——与新管线
-  //    resolveSpaceResources 的「主+副 bundle ∪ extra」语义一致）
+  // 2. 模板（主 + 副 ≤2，去重排除主模板；bundle 并入去重集合——与新管线
+  //    resolveSpaceResources 的「主+副 bundle ∪ extra」语义一致）。id 精确 → 名字模糊，
+  //    找不到 → 忽略 + correction（不阻断）。
   let templateId: string | undefined;
   const secondaryTemplateIds: string[] = [];
   let bundleSkillIds = new Set<string>();
   let bundleAgentIds = new Set<string>();
   const tpls = await import('./role_templates').then((m) => m.listRoleTemplates());
+  const resolveTpl = (raw: string): string | undefined =>
+    resolveDraftResourceId(tpls.map((t) => ({ id: t.template_id, name: t.name })), raw);
   if (draft.primary_template_id) {
-    const tpl = tpls.find((t) => t.template_id === draft.primary_template_id);
-    if (tpl) {
-      templateId = tpl.template_id;
+    const resolved = resolveTpl(draft.primary_template_id);
+    if (resolved) {
+      templateId = resolved;
+      const tpl = tpls.find((t) => t.template_id === resolved)!;
       (tpl.bundle?.skill_ids || []).forEach((id) => bundleSkillIds.add(id));
       (tpl.bundle?.agent_ids || []).forEach((id) => bundleAgentIds.add(id));
+      if (resolved !== draft.primary_template_id) corrections.push(`角色模板「${draft.primary_template_id}」已按名称解析为「${tpl.name}」`);
     } else {
-      details.push(`角色模板不存在: ${draft.primary_template_id}`);
+      corrections.push(`角色模板「${draft.primary_template_id}」不存在，已忽略（空间将不套模板，可在空间设置里改）`);
     }
   }
   for (const sid of draft.secondary_template_ids || []) {
     if (!sid || sid === templateId || secondaryTemplateIds.includes(sid)) continue;
-    if (secondaryTemplateIds.length >= 2) { details.push('副模板最多 2 个'); break; }
-    const st = tpls.find((t) => t.template_id === sid);
-    if (st) {
-      secondaryTemplateIds.push(sid);
+    if (secondaryTemplateIds.length >= 2) { corrections.push('副模板超过 2 个，仅保留前 2 个'); break; }
+    const resolved = resolveTpl(sid);
+    if (resolved) {
+      secondaryTemplateIds.push(resolved);
+      const st = tpls.find((t) => t.template_id === resolved)!;
       (st.bundle?.skill_ids || []).forEach((id) => bundleSkillIds.add(id));
       (st.bundle?.agent_ids || []).forEach((id) => bundleAgentIds.add(id));
+      if (resolved !== sid) corrections.push(`副模板「${sid}」已按名称解析为「${st.name}」`);
     } else {
-      details.push(`角色模板不存在: ${sid}`);
+      corrections.push(`副模板「${sid}」不存在，已忽略`);
     }
   }
-  // 3. 主技能存在性 + 可用
+  // 3. 主技能（id 精确 → 名字模糊；找不到/禁用 → 忽略 + correction）
   let mainSkillRef: SpaceAssetRef | undefined;
   const skillsList = await import('./skills').then((m) => m.listSkillCatalog()).catch(() => []);
   if (draft.main_skill_ref && draft.main_skill_ref.asset_id) {
-    const hit = skillsList.find((s) => s.id === draft.main_skill_ref.asset_id);
+    const rawId = draft.main_skill_ref.asset_id;
+    const resolvedId = resolveDraftResourceId(skillsList, rawId);
+    const hit = resolvedId ? skillsList.find((s) => s.id === resolvedId) : undefined;
     if (hit && hit.enabled !== false) {
-      mainSkillRef = normaliseAssetRef(draft.main_skill_ref) || undefined;
+      mainSkillRef = resolvedId === rawId
+        ? (normaliseAssetRef(draft.main_skill_ref) || undefined)
+        : { asset_id: hit.id, version: String(hit.version || '1.0.0') };
+      if (resolvedId !== rawId) corrections.push(`主技能「${rawId}」已按名称解析为「${hit.name || hit.id}」`);
     } else {
-      details.push(`主技能不存在或已禁用: ${draft.main_skill_ref.asset_id}`);
+      corrections.push(`主技能「${rawId}」不存在或已禁用，已忽略`);
     }
   }
   // 4. extra 技能：存在 + 可用 + 去重（内部 + 模板内置——模板内置属冗余，自动剔除不算错误）
@@ -549,10 +580,12 @@ export async function createSpaceFromDraft(
   for (const id of draft.extra_skill_ids || []) {
     if (!id || seenSkills.has(id)) continue;
     seenSkills.add(id);
-    const hit = skillsList.find((s) => s.id === id);
-    if (!hit || hit.enabled === false) { details.push(`技能不存在或已禁用: ${id}`); continue; }
-    if (bundleSkillIds.has(id)) continue; // 模板已内置：冗余引用，静默去重
-    extraSkills.push(id);
+    const resolvedId = resolveDraftResourceId(skillsList, id);
+    const hit = resolvedId ? skillsList.find((s) => s.id === resolvedId) : undefined;
+    if (!hit || hit.enabled === false) { corrections.push(`技能「${id}」不存在或已禁用，已忽略`); continue; }
+    if (resolvedId !== id) corrections.push(`技能「${id}」已按名称解析为「${hit.name || hit.id}」`);
+    if (bundleSkillIds.has(resolvedId)) continue; // 模板已内置：冗余引用，静默去重
+    extraSkills.push(resolvedId);
   }
   // 5. extra 智能体：存在 + 去重（内部 + 模板内置——模板内置属冗余，自动剔除不算错误）
   const agentsList = await import('./agents').then((m) => m.listAgents()).catch(() => []);
@@ -561,12 +594,14 @@ export async function createSpaceFromDraft(
   for (const id of draft.extra_agent_ids || []) {
     if (!id || seenAgents.has(id)) continue;
     seenAgents.add(id);
-    const hit = agentsList.find((a) => a.agent_id === id);
-    if (!hit) { details.push(`智能体不存在: ${id}`); continue; }
-    if (bundleAgentIds.has(id)) continue; // 模板已内置：冗余引用，静默去重
-    extraAgents.push(id);
+    const resolvedId = resolveDraftResourceId(agentsList.map((a) => ({ id: a.agent_id, name: a.name })), id);
+    const hit = resolvedId ? agentsList.find((a) => a.agent_id === resolvedId) : undefined;
+    if (!hit) { corrections.push(`智能体「${id}」不存在，已忽略`); continue; }
+    if (resolvedId !== id) corrections.push(`帮手「${id}」已按名称解析为「${hit.name || hit.id}」`);
+    if (bundleAgentIds.has(resolvedId)) continue; // 模板已内置：冗余引用，静默去重
+    extraAgents.push(resolvedId);
   }
-  // 6. 存在任何非法引用 → 拒绝创建（严谨：宁可报错，不可静默残缺）
+  // 6. 仅结构错误拒绝创建；资源引用问题已自动纠正/忽略（corrections 随成功返回）
   if (details.length) return { ok: false, error: 'invalid_draft', details };
 
   const space = await createSpace(uid, {
@@ -588,8 +623,8 @@ export async function createSpaceFromDraft(
       log.warn(`draft extra agent attach failed uid=${uid} sid=${space.space.space_id} id=${id}: ${(err as Error).message}`);
     }
   }
-  log.info(`created space from draft user=${uid} sid=${space.space.space_id} name=${name} extras=${extraSkills.length}/${extraAgents.length}`);
-  return { ok: true, space: space.space };
+  log.info(`created space from draft user=${uid} sid=${space.space.space_id} name=${name} extras=${extraSkills.length}/${extraAgents.length} corrections=${corrections.length}`);
+  return { ok: true, space: space.space, ...(corrections.length ? { corrections } : {}) };
 }
 
 export async function updateSpace(

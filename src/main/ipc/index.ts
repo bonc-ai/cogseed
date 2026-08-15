@@ -1251,7 +1251,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       const err = result as { error: string; details?: string[] };
       throw new Error(err.details && err.details.length ? `invalid_draft: ${err.details.join('；')}` : err.error);
     }
-    return { space: result.space };
+    // corrections：资源引用（模板/技能/智能体）自动纠正/忽略说明（LLM 幻觉 id 的后端兜底）
+    return { space: result.space, ...(result.corrections && result.corrections.length ? { corrections: result.corrections } : {}) };
   },
 
   'spaces.get': async ({ spaceId }, ctx) => {

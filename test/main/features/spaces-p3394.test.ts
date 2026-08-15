@@ -215,41 +215,58 @@ describe('spaces › createSpaceFromDraft（构建师草稿校验）', () => {
     expect(r.space.extra_agents).toEqual([]);
   });
 
-  it('拒绝：模板不存在 → invalid_draft + 具体 details', async () => {
-    const { createSpaceFromDraft } = await loadSpaces();
+  it('模板不存在 → 忽略 + correction，空间照建（不卡 invalid_draft）', async () => {
+    const { createSpaceFromDraft, listSpaces } = await loadSpaces();
     const r = await createSpaceFromDraft(TEST_UID, {
       name: '坏模板空间',
       primary_template_id: 'tpl_not_exist',
     });
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error).toBe('invalid_draft');
-    expect(r.details?.some((d) => d.includes('tpl_not_exist'))).toBe(true);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.space.primary_template_id).toBeUndefined();
+    expect((r as any).corrections?.some((c: string) => c.includes('tpl_not_exist'))).toBe(true);
+    expect((await listSpaces(TEST_UID)).length).toBe(1); // 空间已创建
   });
 
-  it('拒绝：主技能不存在 → invalid_draft', async () => {
-    const { createSpaceFromDraft } = await loadSpaces();
+  it('主技能不存在 → 忽略 + correction，空间照建', async () => {
+    const { createSpaceFromDraft, getSpace } = await loadSpaces();
     const r = await createSpaceFromDraft(TEST_UID, {
       name: '坏技能空间',
       main_skill_ref: { asset_id: 'sk_not_exist', version: '1.0.0' },
     });
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error).toBe('invalid_draft');
-    expect(r.details?.some((d) => d.includes('sk_not_exist'))).toBe(true);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.space.main_skill_ref).toBeUndefined();
+    expect((r as any).corrections?.some((c: string) => c.includes('sk_not_exist'))).toBe(true);
+    const loaded = await getSpace(TEST_UID, r.space.space_id);
+    expect(loaded?.main_skill_ref).toBeUndefined();
   });
 
-  it('拒绝：extra 技能不存在 → invalid_draft，不创建空间', async () => {
+  it('extra 技能不存在 → 忽略 + correction，空间照建', async () => {
     const { createSpaceFromDraft, listSpaces } = await loadSpaces();
     const r = await createSpaceFromDraft(TEST_UID, {
       name: '坏额外空间',
       extra_skill_ids: ['sk_not_exist'],
     });
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error).toBe('invalid_draft');
-    // 拒绝创建 → 没有空间落盘
-    expect((await listSpaces(TEST_UID)).length).toBe(0);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.space.extra_skills).toEqual([]);
+    expect((r as any).corrections?.some((c: string) => c.includes('sk_not_exist'))).toBe(true);
+    expect((await listSpaces(TEST_UID)).length).toBe(1); // 空间已创建
+  });
+
+  it('模板按显示名解析（LLM 用名当 id 兜底）→ 解析为真实 id', async () => {
+    const { createSpaceFromDraft } = await loadSpaces();
+    const r = await createSpaceFromDraft(TEST_UID, {
+      name: '名称解析空间',
+      primary_template_id: 'FDE 交付', // 显示名 → 真实 id 'fde'
+      secondary_template_ids: ['软件工程师'], // 显示名 → 真实 id 'software_engineer'
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.space.primary_template_id).toBe('fde');
+    expect(r.space.secondary_template_ids).toEqual(['software_engineer']);
+    expect((r as any).corrections?.length).toBe(2);
   });
 
   it('拒绝：space_type 非法 / 目标超长', async () => {
@@ -289,27 +306,26 @@ describe('spaces › createSpaceFromDraft（构建师草稿校验）', () => {
     expect(loaded?.secondary_template_ids).toEqual(['project_manager', 'fde']);
   });
 
-  it('副模板不存在 / 超 2 个 → invalid_draft，不创建', async () => {
-    const { createSpaceFromDraft, listSpaces } = await loadSpaces();
+  it('副模板不存在 → 忽略 + correction；超 2 个 → 仅取前 2 + correction，空间照建', async () => {
+    const { createSpaceFromDraft } = await loadSpaces();
     const r1 = await createSpaceFromDraft(TEST_UID, {
       name: '坏副模板空间',
       primary_template_id: 'product_manager',
       secondary_template_ids: ['tpl_not_exist'],
     });
-    expect(r1.ok).toBe(false);
-    if (r1.ok) return;
-    expect(r1.error).toBe('invalid_draft');
-    expect(r1.details?.some((d) => d.includes('tpl_not_exist'))).toBe(true);
+    expect(r1.ok).toBe(true);
+    if (!r1.ok) return;
+    expect(r1.space.secondary_template_ids).toEqual([]);
+    expect((r1 as any).corrections?.some((c: string) => c.includes('tpl_not_exist'))).toBe(true);
 
     const r2 = await createSpaceFromDraft(TEST_UID, {
       name: '副模板超限空间',
       primary_template_id: 'product_manager',
       secondary_template_ids: ['fde', 'student', 'scholar'],
     });
-    expect(r2.ok).toBe(false);
-    if (r2.ok) return;
-    expect(r2.details?.some((d) => d.includes('最多 2 个'))).toBe(true);
-    // 两次失败都不落盘
-    expect((await listSpaces(TEST_UID)).length).toBe(0);
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    expect(r2.space.secondary_template_ids).toEqual(['fde', 'student']);
+    expect((r2 as any).corrections?.some((c: string) => c.includes('前 2 个'))).toBe(true);
   });
 });

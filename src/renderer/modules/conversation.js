@@ -1634,7 +1634,8 @@ async function _createSpaceFromDraft(draft) {
   try {
     const res = await (window.cogseed || window.orkas).invoke('spaces.createFromDraft', { draft: payload });
     if (!res || res.error || !res.space) throw new Error((res && res.error) || 'create failed');
-    return res.space;
+    // corrections：后端自动纠正/忽略的非法引用说明（LLM 幻觉 id → 按名称解析或丢弃）
+    return { space: res.space, corrections: Array.isArray(res.corrections) ? res.corrections : [] };
   } catch (e) {
     const reason = (e && e.message) || String(e || '');
     if (typeof uiAlert === 'function') {
@@ -1654,9 +1655,11 @@ document.addEventListener('click', async (e) => {
   let draft = null;
   try { draft = card.dataset.draft ? JSON.parse(card.dataset.draft) : null; } catch (_) { draft = null; }
   if (!draft) { btn.disabled = false; return; }
-  const space = await _createSpaceFromDraft(draft);
+  const created = await _createSpaceFromDraft(draft);
   btn.disabled = false;
-  if (!space) return;
+  if (!created || !created.space) return;
+  const space = created.space;
+  const corrections = created.corrections || [];
   // 空间已建成：标记当前 space_builder 会话完成，下次点「空间模式」不再复用
   // 这个会话，而是新建引导会话（僵尸会话陷阱：旧会话无产出也会一直吸附点击）。
   if (typeof currentCid === 'string' && currentCid) {
@@ -1672,10 +1675,15 @@ document.addEventListener('click', async (e) => {
       }
     } catch (_) { /* 标记失败不阻断——空间已创建成功 */ }
   }
+  const createdText = t('new_chat.space_draft_created', { name: space.name || space.space_id });
+  // 自动纠正提示（LLM 幻觉 id 已被后端按名称解析/忽略）：随成功 toast 展示，用户知道被修正了什么
+  const correctionsText = corrections.length
+    ? `（${corrections.join('；')}）`
+    : '';
   if (typeof uiToast === 'function') {
-    uiToast(t('new_chat.space_draft_created', { name: space.name || space.space_id }), { variant: 'success' });
+    uiToast(correctionsText ? `${createdText}${correctionsText}` : createdText, { variant: 'success', timeoutMs: corrections.length ? 6000 : 3000 });
   }
-  card.innerHTML = `<div class="space-draft-done">${escapeHtml(t('new_chat.space_draft_created', { name: space.name || space.space_id }))} ${escapeHtml(t('new_chat.space_draft_go'))}</div>`;
+  card.innerHTML = `<div class="space-draft-done">${escapeHtml(createdText)} ${escapeHtml(t('new_chat.space_draft_go'))}</div>`;
 });
 
 async function _startSpaceBuilderConversation() {
@@ -4006,6 +4014,100 @@ function _renderTeachingReceiptsHtml(receipts) {
 
 
 
+
+// ── Recall 引用反馈（「提供给本次回答的记忆」+ 有帮助/需改进）───────────────
+// 合并时曾被远端 conversation.js 覆盖丢失，已按原实现恢复。
+
+function _recallCitationTypeLabel(type) {
+  const normalized = String(type || '').trim().toLowerCase();
+  const key = normalized === 'personal' ? 'chat.recall.type_personal'
+    : normalized === 'rule' ? 'chat.recall.type_rule'
+    : normalized === 'template' ? 'chat.recall.type_template'
+    : normalized === 'skill_method' ? 'chat.recall.type_skill_method'
+    : '';
+  if (!key) return String(type || '').trim();
+  const fallback = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  const value = typeof t === 'function' ? t(key) : key;
+  return value && value !== key ? value : fallback;
+}
+
+function _recallCitationScopeLabel(scope) {
+  const normalized = String(scope || '').trim().toLowerCase();
+  const key = normalized === 'global'
+    ? 'chat.recall.scope_global'
+    : normalized === 'project'
+      ? 'chat.recall.scope_project'
+      : normalized === 'agent'
+        ? 'chat.recall.scope_agent'
+        : normalized === 'personal'
+          ? 'chat.recall.scope_personal'
+          : '';
+  if (!key) return String(scope || '').trim();
+  const fallback = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  const value = typeof t === 'function' ? t(key) : key;
+  return value && value !== key ? value : fallback;
+}
+
+function _renderRecallCitationsHtml(citations) {
+  if (!Array.isArray(citations) || !citations.length) return '';
+  const items = citations
+    .filter((citation) => citation && citation.asset_id && citation.title)
+    .slice(0, 12);
+  if (!items.length) return '';
+  const titleKey = 'chat.recall.citations_title';
+  const titleValue = typeof t === 'function' ? t(titleKey) : titleKey;
+  const title = titleValue && titleValue !== titleKey ? titleValue : 'Memories provided to this answer';
+  const helpfulKey = 'chat.recall.feedback_helpful';
+  const helpfulValue = typeof t === 'function' ? t(helpfulKey) : helpfulKey;
+  const helpful = helpfulValue && helpfulValue !== helpfulKey ? helpfulValue : 'Helpful';
+  const improveKey = 'chat.recall.feedback_improve';
+  const improveValue = typeof t === 'function' ? t(improveKey) : improveKey;
+  const improve = improveValue && improveValue !== improveKey ? improveValue : 'Needs improvement';
+  return `<section class="chat-recall-citations"><div class="chat-recall-citations-head"><span>${_uiIconHtml('brain-circuit', 'ui-icon')}<strong>${escapeHtml(title)}</strong></span><span class="chat-recall-feedback-status" data-recall-feedback-status aria-live="polite"></span></div><div class="chat-recall-citation-list">${items.map((citation) => {
+    const type = _recallCitationTypeLabel(citation.type);
+    const scope = _recallCitationScopeLabel(citation.scope);
+    const meta = [type, scope].filter(Boolean).join(' · ');
+    return `<div class="chat-recall-citation" data-recall-asset-id="${escapeHtml(citation.asset_id)}"><strong>${escapeHtml(citation.title)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</div>`;
+  }).join('')}</div><div class="chat-recall-feedback-actions"><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="positive" title="${escapeHtml(helpful)}">${_uiIconHtml('thumbs-up', 'ui-icon')}<span>${escapeHtml(helpful)}</span></button><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="negative" title="${escapeHtml(improve)}">${_uiIconHtml('thumbs-down', 'ui-icon')}<span>${escapeHtml(improve)}</span></button></div></section>`;
+}
+
+function _hydrateRecallCitations(messageEl, cid, messageId) {
+  const host = messageEl?.querySelector('.chat-recall-citations');
+  if (!host) return;
+  const resolvedMessageId = String(messageId || messageEl?.dataset?.msgId || '');
+  const buttons = Array.from(host.querySelectorAll('[data-recall-feedback]'));
+  for (const button of buttons) {
+    if (button.dataset.bound === '1') continue;
+    button.dataset.bound = '1';
+    button.addEventListener('click', async () => {
+      const feedback = button.dataset.recallFeedback;
+      if (!cid || !resolvedMessageId || (feedback !== 'positive' && feedback !== 'negative')) return;
+      if (host.dataset.feedbackBusy === '1' || host.dataset.feedbackSent === '1') return;
+      host.dataset.feedbackBusy = '1';
+      buttons.forEach((item) => { item.disabled = true; });
+      try {
+        const result = await window.cogseed.invoke('recall.usage.feedback', {
+          cid,
+          messageId: resolvedMessageId,
+          feedback,
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Recall feedback failed');
+        host.dataset.feedbackSent = '1';
+        host.dataset.feedback = feedback;
+        host.classList.add('is-feedback-sent');
+        const status = host.querySelector('[data-recall-feedback-status]');
+        const key = 'chat.recall.feedback_thanks';
+        const value = typeof t === 'function' ? t(key) : key;
+        if (status) status.textContent = value && value !== key ? value : 'Thanks for the feedback';
+      } catch (error) {
+        buttons.forEach((item) => { item.disabled = false; });
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        host.dataset.feedbackBusy = '0';
+      }
+    });
+  }
+}
 
 function _hydrateTeachingReceipts(messageEl) {
   messageEl?.querySelectorAll('[data-chat-teaching-revoke]').forEach((button) => {
@@ -7567,6 +7669,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const teachingReceiptsHtml = role === 'assistant'
     ? _renderTeachingReceiptsHtml(message.teaching_receipts)
     : '';
+  const recallCitationsHtml = role === 'assistant'
+    ? _renderRecallCitationsHtml(message.recall_citations)
+    : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
   // timestamp on one row. Same DOM strip for historical (loaded via
   // getMessages) and live-streamed messages so users always see "who said
@@ -7647,6 +7752,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (createdAgentHtml) _hydrateMessageCreatedAgentChip(msgDiv);
   if (createdSkillHtml) _hydrateMessageCreatedSkillChip(msgDiv);
   if (teachingReceiptsHtml) _hydrateTeachingReceipts(msgDiv);
+  if (recallCitationsHtml) _hydrateRecallCitations(msgDiv, attachmentCid, message._msg_id);
   // Interactive input-form widget (assistant messages only). Appended inside
   // the bubble after markdown + chips so it reads as "reply text → confirm
   // this form". See chat-input-form.js for the widget implementation.
@@ -12667,6 +12773,17 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   const gmSkills = _normalizeCreatedSkills(gm);
   if (gmSkills) {
     for (const payload of gmSkills) _mountCreatedSkillChip(ph, payload);
+  }
+
+  // 空间构建师 space-draft 块 → 实时流式 finalize 也渲染「空间配置草稿」卡。
+  // 之前只在历史重载 appendChatMessage 里渲染 → 对话中看不到、切页回来才显示。
+  const bubble = ph.querySelector('.chat-bubble');
+  const spaceDraftCard = bubble && !bubble.querySelector('.space-draft-card') ? _extractSpaceDraft(text) : null;
+  if (bubble && spaceDraftCard && !bubble.querySelector('.space-draft-card')) {
+    const host = document.createElement('div');
+    host.innerHTML = _renderSpaceDraftButtonHtml(spaceDraftCard);
+    const cardNode = host.firstElementChild;
+    if (cardNode) bubble.appendChild(cardNode);
   }
 
   // Form widget (agent → user input form).
