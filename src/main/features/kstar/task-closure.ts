@@ -543,6 +543,11 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
   const listener: TaskTerminalListener = (event: TaskTerminalEvent) => {
     const key = `${event.user_id}:${event.run_id}`;
     if (seen.has(key) || inFlight.has(key)) return;
+    // 静默窗口自动闭环（设计 §5）：completed 终态立即安排窗口，不等待
+    // capture（Commander review 可能耗时）——窗口计时从任务终态起算。
+    if (event.status === 'completed') {
+      void scheduleAutoClose(event.user_id, event.conversation_id);
+    }
     const runCapture = async (attempt: number): Promise<void> => {
       inFlight.add(key);
       try {
@@ -565,10 +570,6 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
         // confirm the expected-vs-actual comparison — the user neither made
         // the prediction nor observes the execution internals, so they cannot
         // verify it. No review card is posted.
-        // 静默窗口自动闭环（设计 §5）：completed 终态 → 安排自动闭环窗口。
-        if (event.status === 'completed') {
-          void scheduleAutoClose(event.user_id, event.conversation_id);
-        }
         inFlight.delete(key);
         seen.add(key);
       } catch {
@@ -677,9 +678,9 @@ export async function runAutoClose(
     if (!state?.pendingAutoCloseAt) return { ok: false, reason: 'no pending auto-close' };
     if (state.taskComplete) return { ok: false, reason: 'already closed' };
     // 到期校验：窗口必须真的过了（重启恢复的定时器按剩余时间，仍可能早触发）。
-    if (Date.parse(state.pendingAutoCloseAt) > Date.now()) {
+    if (Date.parse(state.pendingAutoCloseAt) <= Date.now()) {
       const { executeKstarControl } = await import('./control-service');
-      void executeKstarControl({ userId, conversationId, allowedToolNames: new Set(['kstar_control']) }, {
+      await executeKstarControl({ userId, conversationId, allowedToolNames: new Set(['kstar_control']) }, {
         operation: 'finish',
         idempotencyKey: `auto-close-${conversationId}-${state.currentRequirementId}`,
         result: {
@@ -692,6 +693,9 @@ export async function runAutoClose(
       }).catch(() => undefined);
       return { ok: true };
     }
+    // 窗口未到期（恢复定时器早触发）：按剩余时间重建。
+    const { scheduleAutoClose: reschedule } = await import('./task-closure');
+    await reschedule(userId, conversationId);
     return { ok: false, reason: 'window not expired yet' };
   } catch (error) {
     log.warn('kstar auto-close run degraded', {
