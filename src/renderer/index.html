@@ -41,7 +41,7 @@
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-section sidebar-conversations-section">
-          <div class="sidebar-section-title" data-i18n="sidebar.conversations">Conversations</div>
+          <!-- 三段结构（置顶/空间/最近）由 renderConversationList 在 #conversation-list 内渲染 -->
           <div class="conversation-list" id="conversation-list">
             <div class="conv-empty" data-i18n="sidebar.conv_empty">No conversations yet</div>
           </div>
@@ -86,6 +86,7 @@
                    carries attachments now. -->
               <div class="chat-input-overlay">
                 <div class="chat-attachments" id="new-chat-attachments" style="display:none"></div>
+                <div class="chat-taskrefs" id="new-chat-taskrefs" style="display:none"></div>
               </div>
               <div class="chat-quote-preview" id="new-chat-quote-preview" style="display:none"></div>
               <textarea id="new-chat-input" data-i18n-placeholder="new_chat.input_placeholder" placeholder="Type @ to choose agents, skills, connectors, Library files." rows="2"></textarea>
@@ -257,6 +258,7 @@
                      attachments preview. -->
                 <div class="chat-input-overlay">
                   <div class="chat-attachments" id="chat-attachments" style="display:none"></div>
+                  <div class="chat-taskrefs" id="chat-taskrefs" style="display:none"></div>
                 </div>
                 <div class="chat-quote-preview" id="chat-quote-preview" style="display:none"></div>
                 <textarea id="chat-input" data-i18n-placeholder="chat.input_placeholder" placeholder="Type @ to choose agents, skills, connectors." rows="2"></textarea>
@@ -1432,9 +1434,8 @@
     <div class="skill-picker-tabs" role="tablist" aria-label="Picker type">
       <button type="button" class="skill-picker-tab active" data-agent-picker-tab="agents" data-i18n="agent_picker.tab_agents">Agents</button>
       <button type="button" class="skill-picker-tab" data-agent-picker-tab="skills" data-i18n="agent_picker.tab_skills">Skills</button>
-      <button type="button" class="skill-picker-tab" data-agent-picker-tab="connectors" data-i18n="agent_picker.tab_connectors">Connectors</button>
-      <button type="button" class="skill-picker-tab" data-agent-picker-tab="library" data-i18n="agent_picker.tab_library" style="display:none">Library</button>
-      <button type="button" class="skill-picker-tab" data-agent-picker-tab="ontology" data-i18n="agent_picker.tab_ontology" style="display:none">本体</button>
+      <button type="button" class="skill-picker-tab" data-agent-picker-tab="artifacts" data-i18n="agent_picker.tab_artifacts" style="display:none">Artifacts</button>
+      <button type="button" class="skill-picker-tab" data-agent-picker-tab="assets" data-i18n="agent_picker.tab_assets" style="display:none">Assets</button>
     </div>
     <div class="skill-picker-header">
       <input type="text" id="agent-picker-search" data-i18n-placeholder="agent_picker.search_placeholder" placeholder="Search agents..." autocomplete="off" />

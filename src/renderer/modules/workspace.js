@@ -114,14 +114,21 @@
 
   /** 产物 → 产物卡。 */
   function _mapArtifact(a) {
+    const cid = a.sourceSessionId || '';
     return {
       id: a.artifactId || a.name || '',
       name: a.name || '',
-      desc: a.sourceSessionId ? `来源任务：${a.sourceSessionId}` : '',
-      source: a.sourceSessionId || '',
+      // 来源显示任务标题（不再是一串 cid 乱码）；跳转仍用 cid
+      source: cid,
+      sourceTitle: _sessionTitleById(cid) || cid,
+      desc: cid ? `来源任务：${_sessionTitleById(cid) || cid}` : '',
       type: _artifactCategory(a.ext, a.type),
       ext: a.ext || '',
       isArtifact: a.type === 'artifact',
+      // 确认流程：附件/网页直接正式；AI 产出需用户确认（候选）
+      confirmed: a.confirmed !== false,
+      sourceKind: a.source || 'attachment',
+      path: a.path || '',
     };
   }
 
@@ -143,17 +150,36 @@
     };
   }
 
-  /** 加载某空间的三 tab 数据（真实 IPC；切空间才重载）。 */
+  /** recall 沉淀资产 → 资产卡（空间资产 tab：显示本空间产生的、已确认沉淀的认知资产）。 */
+  function _mapRecallAsset(a) {
+    const name = a.title || a.id || '未命名资产';
+    const statusLabel = ({ active: '已沉淀', paused: '已暂停', revoked: '已撤销' })[a.status] || a.status || '';
+    return {
+      id: a.id || '',
+      name,
+      desc: `${_assetTypeLabel(a.type)}${statusLabel ? ` · ${statusLabel}` : ''}${a.maturity ? ` · ${a.maturity}` : ''}`,
+      type: _assetTypeLabel(a.type),
+      mark: (name || '资').charAt(0),
+      reuse: 0,
+      statement: a.statement || '',
+      revoked: a.status === 'revoked',
+    };
+  }
+
+  /** 加载某空间的三 tab 数据（真实 IPC；切空间才重载）。切空间重置筛选，避免残留困惑。 */
   async function _loadSpaceDetail(spaceId) {
     if (!spaceId || _detailLoadedFor === spaceId) return;
+    _artifactFilter = '全部';
+    _assetFilter = '全部';
     const [convRes, artRes, assetRes] = await Promise.all([
       _invoke('spaces.conversations.list', { spaceId }),
       _invoke('spaces.artifacts.list', { spaceId }),
-      _invoke('spaces.assets.list', { spaceId }),
+      _invoke('recall.assets.listForSpace', { spaceId }),
     ]);
     _sessions = (Array.isArray(convRes.conversations) ? convRes.conversations : []).map(_mapConversation);
     _artifacts = (Array.isArray(artRes.artifacts) ? artRes.artifacts : []).map(_mapArtifact);
-    _assets = (Array.isArray(assetRes.bindings) ? assetRes.bindings : []).map(_mapAsset);
+    // 资产 tab = 本空间沉淀的认知资产（recall 按 spaceId 过滤；空间可读全局但显示只显示本空间）
+    _assets = (Array.isArray(assetRes.assets) ? assetRes.assets : []).map(_mapRecallAsset);
     _detailLoadedFor = spaceId;
   }
 
@@ -161,6 +187,7 @@
 
   let _spaces = [];        // SpaceWithMeta[]
   let _templates = [];     // RoleTemplate[]
+  let _scenarios = [];     // Scenario[]（教育/写作/职场/自定义，从模板创建区的场景入口）
   let _loaded = false;     // 是否已成功加载过（区分「加载中」与「加载失败」）
   let _loadError = '';     // 加载失败原因
 
@@ -191,9 +218,10 @@
   }
 
   async function _loadData() {
-    const [spacesRes, templatesRes, skillsRes, agentsRes] = await Promise.all([
+    const [spacesRes, templatesRes, scenariosRes, skillsRes, agentsRes] = await Promise.all([
       _invoke('spaces.list'),
       _invoke('spaces.templates.list'),
+      _invoke('spaces.scenarios.list'),
       _invoke('skills.list'),
       _invoke('agents.list'),
     ]);
@@ -204,6 +232,7 @@
     }
     _spaces = Array.isArray(spacesRes.spaces) ? spacesRes.spaces : [];
     _templates = Array.isArray(templatesRes.templates) ? templatesRes.templates : [];
+    _scenarios = Array.isArray(scenariosRes.scenarios) ? scenariosRes.scenarios : [];
     _skillCatalog = Array.isArray(skillsRes.skills)
       ? skillsRes.skills.map((s) => ({ id: s.id, name: s.name || s.id, desc: (s.description_zh || s.description_en || '').trim() }))
       : [];
@@ -230,6 +259,7 @@
   let _createName = '';            // 弹窗内已填空间名称（_reRender 时保留）
   let _createInstruction = '';     // 弹窗内已填默认目标/指令（_reRender 时保留）
   let _createTemplate = null;      // 弹窗套用的模板 template_id
+  let _createBaseAgent = 'Codex';   // 弹窗选中的基础 Agent（扩展点：后续接入其他 coding agent）
   let _abilityKind = 'role';       // 能力弹窗当前 tab：role | task | skill
   let _abilityOpen = false;
   // ── 任务引用选择器（@ 引用空间产物与资产）──────────────────────────────────
@@ -242,6 +272,13 @@
   let _assetCatalog = [];          // 空间资产（spaces.assets.list）
   let _pendingRefs = [];           // 待提交/编辑的引用（TaskReference 形状）
   let _refBeforeRefs = [];         // 打开选择器时的已存引用（用于对比增删）
+  // ── 空间设置抽屉（可编辑：指令 / 能力调整 / 主技能 / 失效清理）─────────────
+  let _configInstructionsDraft = null;  // 指令编辑草稿（null = 未编辑，显示空间原值）
+  let _editAbilityOpen = false;    // 详情页「调整」能力弹窗
+  let _editAbilityKind = 'skill';  // 'task' | 'skill'
+  let _editAbilityPicks = [];      // 调整中已选 raw ids（含模板 bundle 固定项）
+  let _editAbilityBefore = [];     // 打开时的 extra（用于 diff 增删）
+  let _mainSkillOpen = false;      // 主技能选择弹窗
 
   function _space() {
     return _spaces.find((s) => s.space_id === _detailSpaceId) || _spaces[0] || null;
@@ -284,7 +321,6 @@
   function _render() {
     if (!_loaded) return _renderLoadError();
     if (_view === 'space') return _renderSpace();
-    if (_view === 'task') return _renderTask();
     return _renderCenter();
   }
 
@@ -339,11 +375,16 @@
 
       <section class="ws-section ws-template-section">
         <div class="ws-section-head">
-          <div class="ws-section-title"><h2>${_t('ws.from_template', '从模板创建')}</h2><span class="ws-count">${_templates.length}</span></div>
+          <div class="ws-section-title"><h2>${_t('ws.from_template', '从模板创建')}</h2><span class="ws-count">${_scenarios.length + _templates.length}</span></div>
         </div>
+        ${_scenarios.length
+          ? `<div class="ws-create-group-label">${_t('ws.scenes_group', '场景')}</div>
+             <div class="ws-template-grid ws-scene-grid">${_scenarios.map(_sceneCardHtml).join('')}</div>`
+          : ''}
         ${_templates.length
-          ? `<div class="ws-template-grid">${_templates.map(_templateCardHtml).join('')}</div>`
-          : `<div class="ws-empty">${_t('ws.no_templates', '暂无可用空间模板。')}</div>`}
+          ? `<div class="ws-create-group-label">${_t('ws.templates_group', '角色模板')}</div>
+             <div class="ws-template-grid">${_templates.map(_templateCardHtml).join('')}</div>`
+          : (!_scenarios.length ? `<div class="ws-empty">${_t('ws.no_templates', '暂无可用空间模板。')}</div>` : '')}
       </section>
     </div>`;
   }
@@ -370,6 +411,10 @@
         <button class="ws-more" data-ws="space-more" data-space="${escapeHtml(s.space_id)}" aria-label="${escapeHtml(s.name)} 更多操作">${_icon('more-horizontal', 'ui-icon')}</button>
         <div class="ws-more-menu" hidden>
           ${metaRows.map((r) => `<div class="ws-more-row"><span>${escapeHtml(r.k)}</span><strong>${escapeHtml(r.v)}</strong></div>`).join('')}
+          <div class="ws-more-actions">
+            <button class="ws-more-action" data-ws="rename-space" data-space="${escapeHtml(s.space_id)}">${_t('ws.rename_space', '重命名')}</button>
+            <button class="ws-more-danger" data-ws="delete-space" data-space="${escapeHtml(s.space_id)}">${_t('ws.delete_space', '删除空间')}</button>
+          </div>
         </div>
       </div>
       ${desc ? `<p class="ws-desc">${escapeHtml(desc)}</p>` : ''}
@@ -395,6 +440,35 @@
     </article>`;
   }
 
+  /** 场景建议角色组合标签（如「学生 + 学者」）。 */
+  function _sceneTplLabel(sc) {
+    const names = [];
+    if (sc.suggested_primary_template_id) {
+      const tpl = _templates.find((t) => t.template_id === sc.suggested_primary_template_id);
+      if (tpl) names.push(tpl.name);
+    }
+    for (const sid of sc.suggested_secondary_template_ids || []) {
+      const tpl = _templates.find((t) => t.template_id === sid);
+      if (tpl) names.push(tpl.name);
+    }
+    return names.join(' + ');
+  }
+
+  /** 场景卡（教育/写作/职场/自定义）：点卡 → 预填主+副角色模板进新建弹窗。 */
+  function _sceneCardHtml(sc) {
+    const tplLabel = _sceneTplLabel(sc);
+    return `
+    <article class="ws-template-card ws-scene-card" data-ws="create-from-scene" data-scene="${escapeHtml(sc.scenario_id)}">
+      <div class="ws-template-mark">${escapeHtml(sc.icon || '场')}</div>
+      <h3>${escapeHtml(sc.name)}</h3>
+      <p>${escapeHtml(sc.description || '')}</p>
+      <div class="ws-template-bottom">
+        <span>${tplLabel ? `${escapeHtml(tplLabel)} · ` : ''}${_t('ws.scene_tag', '场景')}</span>
+        <button data-ws="use-scene" data-scene="${escapeHtml(sc.scenario_id)}">${_t('ws.use_scene', '用此场景创建')}</button>
+      </div>
+    </article>`;
+  }
+
   // ── 空间详情 ──────────────────────────────────────────────────────────────
 
   function _renderSpace() {
@@ -408,6 +482,9 @@
     <div class="ws-view ws-space-page ${_configOpen ? 'ws-config-open' : ''}">
       <div class="ws-space-main">
         <header class="ws-space-head">
+          <div class="ws-space-back-row">
+            <button class="ws-back" data-ws="back-to-center" title="${_t('ws.back_to_center', '返回空间中心')}">${_icon('chevron-left', 'ui-icon')}${_t('ws.back_to_center', '返回空间中心')}</button>
+          </div>
           <div class="ws-space-head-row">
             <div class="ws-space-heading">
               <div class="ws-space-icon ${_spaceTone(sp.space_type)}">${escapeHtml(sp.icon || (sp.name || '空').charAt(0))}</div>
@@ -439,31 +516,6 @@
     return _renderTasksPane();
   }
 
-  /** 任务 tab 底部内联「开新任务」输入条（对齐高保真原型：在当前空间中开启一项新任务）。 */
-  function _newTaskComposerHtml() {
-    const chips = _pendingRefs.length
-      ? `<div class="ws-ref-chips">${_pendingRefs.map((r, i) => `
-          <span class="ws-ref-chip ${r.kind}"><em>${r.kind === 'asset' ? '资产' : '产物'}</em>${escapeHtml(r.name)}<button data-ws="pending-ref-remove" data-index="${i}" aria-label="移除引用">×</button></span>`).join('')}
-          <button class="ws-ref-chip-clear" data-ws="pending-ref-clear">清空</button></div>`
-      : '';
-    return `
-    <div class="ws-new-task-composer">
-      <div class="ws-attach-host" id="ws-attach-host"></div>
-      ${chips}
-      <div class="ws-new-task-bar">
-        <button class="ws-new-task-add" data-ws="space-attach" title="${_t('ws.add_content', '添加内容')}" aria-label="${_t('ws.add_content', '添加内容')}">${_icon('plus', 'ui-icon')}</button>
-        <input data-ws="new-task-input" placeholder="${_t('ws.new_task_inline_ph', '在当前空间中开启一项新任务…')}" autocomplete="off" spellcheck="false" maxlength="500" />
-        <button class="ws-new-task-mention" data-ws="ref-picker-open" title="${_t('ws.mention_assets', '引用空间产物与资产')}">@ ${_t('ws.mention_assets', '引用空间产物与资产')}</button>
-        <button class="ws-new-task-send" data-ws="new-task-send" title="${_t('ws.start_task', '开始新任务')}" aria-label="${_t('ws.start_task', '开始新任务')}">${_icon('send', 'ui-icon')}</button>
-      </div>
-    </div>`;
-  }
-
-  /** 空间任务 composer 的附件草稿 cid（复用主对话附件管线；开任务时 adopt 进真实会话）。 */
-  function _spaceDraftCid() {
-    return _detailSpaceId ? `spacetask-${_detailSpaceId}` : '';
-  }
-
   function _renderTasksPane() {
     const list = _sessions.length
       ? `
@@ -476,40 +528,50 @@
           ${s.refCount ? `<em class="ws-row-ref-badge">引用 ${s.refCount}</em>` : '<em></em>'}
           <time>${escapeHtml(s.time)}</time>
           <span class="ws-row-ref-btn" data-ws="task-ref" data-cid="${escapeHtml(s.id)}" role="button" title="${_t('ws.add_ref', '引用空间产物与资产')}">＋引用</span>
-          <b>${_icon('more-horizontal', 'ui-icon')}</b>
+          <span class="ws-row-more-btn" data-ws="task-more" data-cid="${escapeHtml(s.id)}" role="button" title="${_t('ws.task_more', '更多操作')}">${_icon('more-horizontal', 'ui-icon')}</span>
         </button>`).join('')}
     </div>`
-      : `<div class="ws-empty">${_t('ws.tasks_empty', '该空间暂无任务。')}</div>`;
-    return `${list}${_newTaskComposerHtml()}`;
+      : `<div class="ws-empty">${_t('ws.tasks_empty', '该空间暂无任务。')}<small>${_t('ws.tasks_empty_hint', '点右上角「新建任务」在标准对话框里开始第一项任务。')}</small></div>`;
+    return list;
   }
 
-  /** 开新任务 = 在空间创建新会话并打开（复用 conversations.create + setView）。 */
+  /** 开新任务 = 右上角「新建任务」：在当前空间建一个新会话并跳到标准会话对话框
+   *  （与主对话同一个 composer：+ 附件 / To / 工作空间 / @ 引用产物资产 / 发送）。 */
   async function _startNewTask(spaceId) {
-    const root = document.getElementById('ws-view');
-    if (!root) return;
-    const input = root.querySelector('[data-ws="new-task-input"]');
-    const title = input ? input.value.trim() : '';
-    if (!title) { if (input) input.focus(); return; }
     if (!spaceId) return;
-    const res = await _invoke('conversations.create', { spaceId, title });
+    const res = await _invoke('conversations.create', { spaceId });
     if (res.error || !res.conversation) { _stub('开新任务失败：' + (res.error || '未知错误')); return; }
     const cid = res.conversation.conversation_id;
-    // 提交任务引用（产物/资产）
-    const refs = _pendingRefs || [];
-    for (const r of refs.slice(0, 20)) {
-      await _invoke('conversations.taskRefs.add', { cid, reference: r });
+    // 新任务同步进侧栏 conversations 缓存（否则空间组/最近区缺这条，直到下次刷新）
+    if (typeof conversations !== 'undefined' && Array.isArray(conversations)
+      && !conversations.some((c) => c && c.conversation_id === cid)) {
+      const conv = { ...res.conversation, last_active_at: new Date().toISOString() };
+      if (res.conversation.space_id) conversations.unshift(conv);
     }
-    _pendingRefs = [];
-    // 附件草稿 → adopt 进新会话（复用主对话管线）
-    const draftCid = _spaceDraftCid();
-    if (draftCid && window.chatAttach && window.chatAttach.list(draftCid).length) {
-      await _invoke('conversations.attachments.adopt', { from_cid: draftCid, to_cid: cid });
-      window.chatAttach.clear(draftCid); // adopt 已搬文件，只清本地列表
-      window.chatAttach.releaseHost(draftCid);
-    }
-    // 刷新空间任务列表（回来时任务数/最近任务更新）
+    if (typeof renderConversationList === 'function') renderConversationList();
+    // 刷新空间任务列表（回来时任务数/最近任务更新），然后跳到标准会话页
     _detailLoadedFor = null;
     _loadSpaceDetail(spaceId).then(() => { if (typeof setView === 'function') setView('conversation', cid, { skipLoad: true }); });
+  }
+
+  /** 任务行「移出空间」= 解绑会话（conversations.setSpace 传空 spaceId）。 */
+  async function _unbindTaskFromSpace(cid, spaceId) {
+    const res = await _invoke('conversations.setSpace', { cid, spaceId: '', project_id: null });
+    if (res.error || !res.conversation) { _stub('移出空间失败：' + (res.error || '未知错误')); return; }
+    // 同步侧栏：本地 conversations 里该会话 space_id 清掉（回「最近任务」，空间组消失）
+    if (typeof conversations !== 'undefined' && Array.isArray(conversations)) {
+      const idx = conversations.findIndex((c) => c && c.conversation_id === cid);
+      if (idx >= 0) {
+        const updated = { ...conversations[idx], ...res.conversation };
+        delete updated.space_id;
+        conversations[idx] = updated;
+      }
+    }
+    if (typeof renderConversationList === 'function') renderConversationList();
+    _detailLoadedFor = null; // 强制重载三 tab 数据（任务数/最近任务更新）
+    await _loadSpaceDetail(spaceId);
+    _reRender();
+    if (typeof uiToast === 'function') uiToast(_t('ws.task_unbound', '已移出空间'), { variant: 'success' });
   }
 
   // ── 任务引用选择器（@ 引用空间产物与资产）──────────────────────────────────
@@ -534,10 +596,13 @@
     if (!targetCid) _pendingRefs = _pendingRefs || []; // 新建任务：保留已选
     const [artRes, assetRes] = await Promise.all([
       _invoke('spaces.artifacts.list', { spaceId }),
-      _invoke('spaces.assets.list', { spaceId }),
+      _invoke('recall.assets.listForSpace', { spaceId }),
     ]);
     _artifactCatalog = Array.isArray(artRes.artifacts) ? artRes.artifacts : [];
-    _assetCatalog = Array.isArray(assetRes.bindings) ? assetRes.bindings : [];
+    // 引用资产 = 本空间沉淀资产（recall.assets.listForSpace，与空间资产 tab / @ 选择器同源）
+    _assetCatalog = Array.isArray(assetRes.assets)
+      ? assetRes.assets.map((a) => ({ asset_id: a.id, title: a.title, asset_type: a.type }))
+      : [];
     if (targetCid) {
       const tRes = await _invoke('conversations.taskRefs.list', { cid: targetCid });
       _pendingRefs = Array.isArray(tRes.references) ? tRes.references : [];
@@ -639,34 +704,56 @@
   }
 
   function _renderArtifactsPane() {
-    if (!_artifacts.length) {
-      return `<div class="ws-empty">${_t('ws.artifacts_empty', '该空间暂无产物。')}</div>`;
-    }
     const items = _artifacts.filter((a) => _artifactFilter === '全部' || a.type === _artifactFilter);
-    return `
-    <div class="ws-info-note"><span>i</span><div><strong>这里只展示已确认的正式产物。</strong> 候选产物仍保留在产生它的任务过程中，用户确认后才进入本页。</div></div>
+    const pendingCount = items.filter((a) => !a.confirmed).length;
+    const noteHtml = pendingCount
+      ? `<div class="ws-info-note"><span>i</span><div><strong>${pendingCount} ${_t('ws.candidate_pending', '个候选产物待确认。</strong>')} ${_t('ws.candidate_hint', 'AI 产出的文件需确认后计入正式产物；附件直接计入。')}</div></div>`
+      : `<div class="ws-info-note"><span>i</span><div><strong>${_t('ws.formal_artifacts', '这里展示正式产物。')}</strong> ${_t('ws.candidate_hint', 'AI 产出的文件需确认后计入正式产物；附件直接计入。')}</div></div>`;
+    // 筛选工具栏常驻（空态也要能切回「全部」，否则用户被筛选"卡住"）
+    const toolbarHtml = `
     <div class="ws-toolbar">
       <div class="ws-filters ws-filters-compact">
         ${['全部', '文档', '表格', '演示文稿', '网页'].map((t) => `<button class="${_artifactFilter === t ? 'active' : ''}" data-ws="artifact-filter" data-type="${escapeHtml(t)}">${escapeHtml(t)}</button>`).join('')}
       </div>
-    </div>
+    </div>`;
+    if (!_artifacts.length) {
+      return `${noteHtml}${toolbarHtml}<div class="ws-empty">${_t('ws.artifacts_empty', '该空间暂无产物。')}</div>`;
+    }
+    if (!items.length) {
+      // 有产物但被筛选过滤：提示切回「全部」，避免「暂无产物」误导
+      return `${noteHtml}${toolbarHtml}<div class="ws-empty">${_t('ws.artifacts_filtered', '没有符合「{filter}」筛选的产物，切回「全部」查看。', { filter: _artifactFilter })}</div>`;
+    }
+    return `
+    ${noteHtml}
+    ${toolbarHtml}
     <div class="ws-artifact-grid">
-      ${items.map((a) => `
-        <article class="ws-artifact-card">
+      ${items.map((a) => {
+        const candidate = !a.confirmed;
+        return `
+        <article class="ws-artifact-card${candidate ? ' is-candidate' : ''}">
           <div class="ws-file-icon ${a.ext.toLowerCase()}">${escapeHtml(a.ext)}</div>
           <div>
             <h3>${escapeHtml(a.name)}</h3>
             <p>${escapeHtml(a.desc)}</p>
-            <footer><span>${_t('ws.from', '来自')}：${escapeHtml(a.source)}</span><button data-ws="open-artifact" data-id="${a.id}">${_t('ws.open', '打开')}</button></footer>
+            <footer>
+              <button data-ws="open-source" data-cid="${escapeHtml(a.source)}" title="${_t('ws.open_source_task', '打开来源任务')}">${_t('ws.from', '来自')}：${escapeHtml(a.sourceTitle)}</button>
+              ${candidate
+                ? `<span class="ws-candidate-actions">
+                    <button class="ws-confirm-artifact" data-ws="confirm-artifact" data-cid="${escapeHtml(a.source)}" data-name="${escapeHtml(a.name)}">${_t('ws.confirm', '确认')}</button>
+                    <button class="ws-reject-artifact" data-ws="reject-artifact" data-cid="${escapeHtml(a.source)}" data-name="${escapeHtml(a.name)}">${_t('ws.reject', '驳回')}</button>
+                  </span>`
+                : `<button data-ws="open-artifact" data-path="${escapeHtml(a.path)}" data-cid="${escapeHtml(a.source)}">${_t('ws.open', '打开')}</button>`}
+            </footer>
           </div>
-          <em>${escapeHtml(a.type)}</em>
-        </article>`).join('')}
+          <em>${candidate ? _t('ws.candidate', '待确认') : escapeHtml(a.type)}</em>
+        </article>`;
+      }).join('')}
     </div>`;
   }
 
   function _renderAssetsPane() {
     if (!_assets.length) {
-      return `<div class="ws-empty">${_t('ws.assets_empty', '该空间暂无资产。')}</div>`;
+      return `<div class="ws-empty">${_t('ws.assets_empty', '该空间暂无沉淀资产。空间内任务产出的认知确认后会沉淀到这里。')}</div>`;
     }
     const items = _assets.filter((a) => _assetFilter === '全部' || a.type === _assetFilter);
     return `
@@ -676,14 +763,14 @@
     </div>
     <div class="ws-asset-grid">
       ${items.map((a) => `
-        <article class="ws-asset-card">
+        <article class="ws-asset-card${a.revoked ? ' is-revoked' : ''}">
           <div class="ws-asset-mark mark-${escapeHtml(a.type)}">${escapeHtml(a.mark)}</div>
           <div>
             <h3>${escapeHtml(a.name)}</h3>
             <p>${escapeHtml(a.desc)}</p>
-            <footer>${escapeHtml(a.type)} · 已复用 ${a.reuse} 次</footer>
+            <footer>${escapeHtml(a.type)}${a.revoked ? ` · ${_t('ws.revoked', '已撤销')}` : ''}</footer>
           </div>
-          <button class="ws-unbind" data-ws="unbind-asset" data-asset="${escapeHtml(a.id)}" aria-label="${_t('ws.unbind_asset', '解绑资产')}">${_icon('x', 'ui-icon')}</button>
+          ${a.revoked ? '' : `<button class="ws-unbind" data-ws="revoke-asset" data-asset="${escapeHtml(a.id)}" aria-label="${_t('ws.revoke_asset', '撤销资产')}">${_icon('x', 'ui-icon')}</button>`}
         </article>`).join('')}
     </div>`;
   }
@@ -700,15 +787,20 @@
       task: _resolveCatalog('task', [...bundleAgents, ...(sp.extra_agents || [])]).map((o) => o.name),
       skill: _resolveCatalog('skill', [...bundleSkills, ...(sp.extra_skills || [])]).map((o) => o.name),
     };
+    const invalidCount = sp.invalid_count || 0;
+    // 主技能（main_skill_ref → 名字）
+    const mainSkill = sp.main_skill_ref ? _resolveCatalog('skill', [sp.main_skill_ref.asset_id])[0] : null;
+    const instructionsValue = _configInstructionsDraft !== null ? _configInstructionsDraft : (sp.instructions || '');
     return `
     <aside class="ws-config-panel">
       <header><h2>${_t('ws.space_settings', '空间设置')}</h2><button class="ws-drawer-close" data-ws="config-close" aria-label="关闭">${_icon('x', 'ui-icon')}</button></header>
       <div class="ws-config-body">
         <section><label>${_t('ws.default_goal', '默认目标/指令')}</label>
-          <p>${escapeHtml(sp.instructions || sp.sustained_outcome || _t('ws.no_goal', '未设置持续目标。'))}</p>
+          <textarea data-ws="config-instructions" maxlength="4000" rows="4" placeholder="${_t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等')}">${escapeHtml(instructionsValue)}</textarea>
+          <div class="ws-config-actions"><button class="ws-secondary" data-ws="save-instructions">${_t('ws.save', '保存')}</button><span class="ws-config-hint">${_t('ws.config_footer', '配置更新后，从下一次交互开始生效。')}</span></div>
         </section>
         <section><label>${_t('ws.base_agent', '当前对话 Agent')}</label>
-          <div class="ws-agent-row"><span>CX</span><div><strong>Codex</strong><small>${_t('ws.base_agent_hint', '承接空间内任务')}</small></div></div>
+          <div class="ws-agent-row"><span>CX</span><div><strong>${escapeHtml(sp.base_agent || 'Codex')}</strong><small>${_t('ws.base_agent_hint', '承接空间内任务')}</small></div></div>
         </section>
         <section class="ws-config-ability">
           <label>${_t('ws.ability_config', '能力配置')}</label>
@@ -719,61 +811,23 @@
                 <div class="ws-config-ability-title"><strong>${cap[k].label}</strong><span>${pick[k].length}</span></div>
                 <div class="ws-config-ability-chips">${pick[k].length ? pick[k].map((n) => `<span>${escapeHtml(n)}</span>`).join('') : '<em>未配置</em>'}</div>
               </div>
+              ${k === 'role' ? '' : `<button class="ws-secondary ws-ability-edit" data-ws="edit-ability" data-kind="${k}">${_t('ws.adjust', '调整')}</button>`}
             </div>`).join('')}
         </section>
+        <section><label>${_t('ws.main_skill', '主技能')}</label>
+          <div class="ws-config-row">
+            <span class="ws-config-value">${mainSkill ? escapeHtml(mainSkill.name) : _t('ws.no_main_skill', '未设置')}</span>
+            <button class="ws-secondary" data-ws="pick-main-skill">${_t('ws.choose', '选择')}</button>
+          </div>
+        </section>
+        <section><label>${_t('ws.invalid_refs', '失效引用')}</label>
+          <div class="ws-config-row">
+            <span class="ws-config-value">${invalidCount ? `${invalidCount} ${_t('ws.invalid_items', '项')}` : _t('ws.no_invalid', '无失效引用')}</span>
+            ${invalidCount ? `<button class="ws-secondary" data-ws="prune-invalid">${_t('ws.prune', '清理')}</button>` : ''}
+          </div>
+        </section>
       </div>
-      <footer>${_t('ws.config_footer', '配置更新后，从下一次交互开始生效。')}</footer>
     </aside>`;
-  }
-
-  // ── 任务页 ────────────────────────────────────────────────────────────────
-
-  function _renderTask() {
-    const sp = _space();
-    if (!sp) return `<div class="ws-view ws-center"><div class="ws-empty">${_t('ws.no_spaces', '还没有工作空间。')}</div></div>`;
-    return `
-    <div class="ws-view ws-task-page">
-      <section class="ws-task-area">
-        <header class="ws-task-header">
-          <button class="ws-breadcrumb" data-ws="back-space"><span>${escapeHtml(sp.name)}</span>${_icon('chevron-right', 'ui-icon')}<strong>${_t('ws.new_task_title', '新建任务')}</strong></button>
-          <div class="ws-header-actions">
-            <button aria-label="${_t('ws.search', '搜索')}" data-ws="stub-search">${_icon('search', 'ui-icon')}</button>
-            <button aria-label="${_t('ws.rerun', '重新执行')}" data-ws="stub-rerun">${_icon('redo', 'ui-icon')}</button>
-            <button aria-label="${_t('ws.more_actions', '更多操作')}" data-ws="stub-more">${_icon('more-horizontal', 'ui-icon')}</button>
-          </div>
-        </header>
-        <div class="ws-conversation">
-          <div class="ws-new-task-welcome">
-            <div>${_icon('sparkles', 'ui-icon')}</div>
-            <h1>${_t('ws.new_task_welcome', '在「')}${escapeHtml(sp.name)}${_t('ws.new_task_welcome2', '」中开启新任务')}</h1>
-            <p>${_t('ws.new_task_welcome_hint', '任务输入与多 Agent 协作待接入；UI 壳已就位。')}</p>
-          </div>
-        </div>
-        <div class="ws-composer-wrap">
-          <div class="ws-composer">
-            <textarea aria-label="${_t('ws.task_input', '任务输入')}" placeholder="${_t('ws.task_placeholder', '描述任务，或使用 + / @ 添加能力与上下文…')}"></textarea>
-            <div class="ws-composer-actions">
-              <button class="ws-round" data-ws="stub-add" aria-label="${_t('ws.add_content', '添加内容')}">${_icon('plus', 'ui-icon')}</button>
-              <button class="ws-round at" data-ws="stub-mention" aria-label="${_t('ws.call_expert', '调用专家或技能')}">@</button>
-              <span class="ws-composer-spacer"></span>
-              <button class="ws-model-btn">CogSeed Agent ${_icon('chevron-down', 'ui-icon')}</button>
-              <button class="ws-send" data-ws="stub-send" aria-label="${_t('ws.send', '发送')}">${_icon('send', 'ui-icon')}</button>
-            </div>
-          </div>
-          <p>${_t('ws.disclaimer', 'CogSeed 可能会犯错，请检查重要信息')}</p>
-        </div>
-      </section>
-      <aside class="ws-context-panel">
-        <header><div><strong>${_t('ws.task_content', '任务内容')}</strong><small>${_t('ws.task_content_hint', '随任务实时更新')}</small></div><button aria-label="面板设置" data-ws="stub-panel-settings">${_icon('settings', 'ui-icon')}</button></header>
-        <nav>
-          <button class="active" data-ws="ctx-tab" data-tab="artifacts">${_t('ws.artifacts', '产物')}<span>0</span></button>
-          <button data-ws="ctx-tab" data-tab="assets">${_t('ws.assets', '资产')}<span>0</span></button>
-        </nav>
-        <div class="ws-context-content">
-          <div class="ws-empty-current"><span>${_icon('file-text', 'ui-icon')}</span><strong>${_t('ws.no_artifacts', '暂无产物')}</strong><p>${_t('ws.no_artifacts_hint', '产物与资产面板待接入。')}</p></div>
-        </div>
-      </aside>
-    </div>`;
   }
 
   // ── 弹窗：新建空间 ────────────────────────────────────────────────────────
@@ -797,7 +851,7 @@
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
               <input data-ws="create-name" value="${escapeHtml(_createName)}" placeholder="${_t('ws.space_name_ph', '请输入空间名称')}" maxlength="60" autocomplete="off" spellcheck="false" /></label>
             <label><span>${_t('ws.base_agent', '基础 Agent')} <em>${_t('ws.base_agent_hint', '负责承接任务')}</em></span>
-              <select data-ws="create-agent">${_baseAgents.map((a) => `<option>${escapeHtml(a)}</option>`).join('')}</select></label>
+              <select data-ws="create-agent">${_baseAgents.map((a) => `<option${_createBaseAgent === a ? ' selected' : ''}>${escapeHtml(a)}</option>`).join('')}</select></label>
             <label class="full instruction"><span>${_t('ws.default_goal', '默认目标/指令')} <em>0 / 500</em></span>
               <textarea data-ws="create-instruction" maxlength="500" placeholder="${_t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等')}">${escapeHtml(_createInstruction)}</textarea></label>
           </div>
@@ -852,6 +906,7 @@
             ${Object.keys(kindLabels).map((k) => `<button class="${_abilityKind === k ? 'active' : ''}" data-ws="ability-tab" data-kind="${k}">${kindLabels[k]}<span>${_abilityCatalog(k).length}</span></button>`).join('')}
           </nav>
           <div class="ws-ability-pane">
+            ${kind === 'role' ? `<div class="ws-ability-limit-hint">${_t('ws.role_limit_hint', '最多选择 3 个角色模板（1 主 + 2 副），首个作为主角色。')}</div>` : ''}
             <div class="ws-option-grid">
               ${list.map((o) => {
                 const selected = picked.includes(o.id);
@@ -871,6 +926,189 @@
         </footer>
       </section>
     </div>`;
+  }
+
+  // ── 空间设置抽屉配套：能力调整 / 主技能 / 失效清理 / 重命名 ─────────────
+
+  /** 详情页「调整」能力弹窗（task/skill；角色只读，新建时定）。模板 bundle 固定，extra 可勾选。 */
+  function _renderEditAbilityModal() {
+    const kind = _editAbilityKind;
+    const list = _abilityCatalog(kind) || [];
+    const sp = _space();
+    const tmpls = _templates.filter((t) => t && sp && (t.template_id === sp.primary_template_id || t.template_id === sp.template_id
+      || (sp.secondary_template_ids || []).includes(t.template_id)));
+    const bundleIds = new Set(tmpls.flatMap((t) => (t.bundle
+      ? (kind === 'task' ? t.bundle.agent_ids : t.bundle.skill_ids) : [])));
+    const picked = _editAbilityPicks || [];
+    const kindLabel = kind === 'task' ? 'Task Agent' : 'Skill';
+    return `
+    <div class="ws-scrim ws-ability-scrim" data-ws="close-edit-ability">
+      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ws-ability-head">
+          <div><h2>${_t('ws.adjust_ability', '调整空间能力')}</h2><p>${kindLabel}：模板内置项固定开启，额外勾选的写入空间扩充配置。</p></div>
+          <button data-ws="close-edit-ability">${_icon('x', 'ui-icon')}</button>
+        </header>
+        <div class="ws-ability-main ws-ability-main-solo">
+          <div class="ws-ability-pane">
+            <div class="ws-option-grid">
+              ${list.map((o) => {
+                const selected = picked.includes(o.id);
+                const bundled = bundleIds.has(o.id);
+                return `
+                <button class="ws-option-card ${selected ? 'selected' : ''}" data-ws="toggle-edit-ability" data-id="${escapeHtml(o.id)}" ${bundled ? 'data-bundled="1"' : ''}>
+                  <span class="ws-check">${selected ? '✓' : ''}</span>
+                  <div><strong>${escapeHtml(o.name)}</strong>${bundled ? '<em>模板内置</em>' : ''}<p>${escapeHtml(o.desc)}</p></div>
+                </button>`;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+        <footer class="ws-ability-foot">
+          <div></div>
+          <div><button class="ws-secondary" data-ws="close-edit-ability">${_t('ws.cancel', '取消')}</button><button class="ws-primary" data-ws="save-edit-ability">${_t('ws.save_choice', '保存选择')}</button></div>
+        </footer>
+      </section>
+    </div>`;
+  }
+
+  /** 主技能选择弹窗（skills.list；单选，支持清除）。 */
+  function _renderMainSkillModal() {
+    const sp = _space();
+    const current = (sp && sp.main_skill_ref) ? sp.main_skill_ref.asset_id : '';
+    const list = (_skillCatalog || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'));
+    return `
+    <div class="ws-scrim ws-ability-scrim" data-ws="close-main-skill">
+      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ws-ability-head">
+          <div><h2>${_t('ws.pick_main_skill', '选择主技能')}</h2><p>${_t('ws.pick_main_skill_hint', '主技能作为空间的核心能力入口（可选）。')}</p></div>
+          <button data-ws="close-main-skill">${_icon('x', 'ui-icon')}</button>
+        </header>
+        <div class="ws-ability-main ws-ability-main-solo">
+          <div class="ws-ability-pane">
+            <div class="ws-option-grid">
+              ${list.map((o) => {
+                const selected = o.id === current;
+                return `
+                <button class="ws-option-card ${selected ? 'selected' : ''}" data-ws="pick-skill" data-id="${escapeHtml(o.id)}" data-name="${escapeHtml(o.name || o.id)}">
+                  <span class="ws-check">${selected ? '✓' : ''}</span>
+                  <div><strong>${escapeHtml(o.name || o.id)}</strong><p>${escapeHtml(o.desc || '')}</p></div>
+                </button>`;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+        <footer class="ws-ability-foot">
+          <div></div>
+          <div>${current ? `<button class="ws-secondary" data-ws="clear-main-skill">${_t('ws.clear', '清除')}</button>` : ''}<button class="ws-secondary" data-ws="close-main-skill">${_t('ws.cancel', '取消')}</button></div>
+        </footer>
+      </section>
+    </div>`;
+  }
+
+  /** 打开详情页能力调整：预选 = 模板 bundle ∪ extra。 */
+  function _openEditAbility(kind) {
+    const sp = _space();
+    if (!sp) return;
+    _editAbilityKind = kind;
+    const tmpls = _templates.filter((t) => t && (t.template_id === sp.primary_template_id || t.template_id === sp.template_id
+      || (sp.secondary_template_ids || []).includes(t.template_id)));
+    const bundleIds = new Set(tmpls.flatMap((t) => (t.bundle
+      ? (kind === 'task' ? t.bundle.agent_ids : t.bundle.skill_ids) : [])));
+    const extras = kind === 'task' ? (sp.extra_agents || []) : (sp.extra_skills || []);
+    _editAbilityPicks = [...new Set([...bundleIds, ...extras])];
+    _editAbilityBefore = extras.slice();
+    _editAbilityOpen = true;
+    _reRender();
+  }
+
+  /** 保存能力调整：diff extra → spaces.resources.add/remove。 */
+  async function _saveEditAbility() {
+    const sp = _space();
+    if (!sp) return;
+    const kind = _editAbilityKind;
+    const tmpls = _templates.filter((t) => t && (t.template_id === sp.primary_template_id || t.template_id === sp.template_id
+      || (sp.secondary_template_ids || []).includes(t.template_id)));
+    const bundleIds = new Set(tmpls.flatMap((t) => (t.bundle
+      ? (kind === 'task' ? t.bundle.agent_ids : t.bundle.skill_ids) : [])));
+    const nextExtras = (_editAbilityPicks || []).filter((id) => !bundleIds.has(id));
+    const beforeSet = new Set(_editAbilityBefore || []);
+    const nextSet = new Set(nextExtras);
+    // 移除
+    for (const id of _editAbilityBefore || []) {
+      if (!nextSet.has(id)) await _invoke('spaces.resources.remove', { spaceId: sp.space_id, kind, id });
+    }
+    // 新增
+    for (const id of nextExtras) {
+      if (!beforeSet.has(id)) await _invoke('spaces.resources.add', { spaceId: sp.space_id, kind, id });
+    }
+    _editAbilityOpen = false;
+    await _loadData();
+    if (_detailSpaceId) await _loadSpaceDetail(_detailSpaceId);
+    _reRender();
+  }
+
+  /** 保存指令（spaces.instructions.set）。 */
+  async function _saveConfigInstructions() {
+    const sp = _space();
+    if (!sp) return;
+    const content = String(_configInstructionsDraft !== null ? _configInstructionsDraft : (sp.instructions || '')).trim();
+    const res = await _invoke('spaces.instructions.set', { spaceId: sp.space_id, content });
+    if (res.error) { _stub('保存失败：' + res.error); return; }
+    _configInstructionsDraft = null;
+    await _loadData();
+    _reRender();
+    if (typeof uiToast === 'function') uiToast(_t('ws.saved', '已保存'), { variant: 'success' });
+  }
+
+  /** 选择主技能 → spaces.update main_skill_ref。 */
+  async function _saveMainSkill(skillId, name) {
+    const sp = _space();
+    if (!sp) return;
+    const skill = (_skillCatalog || []).find((s) => s.id === skillId);
+    const ref = skill
+      ? { asset_id: skillId, version: String(skill.version || '1.0.0') }
+      : { asset_id: skillId, version: '1.0.0' };
+    const res = await _invoke('spaces.update', { spaceId: sp.space_id, main_skill_ref: ref });
+    if (res.error) { _stub('保存失败：' + res.error); return; }
+    _mainSkillOpen = false;
+    await _loadData();
+    _reRender();
+    void name;
+  }
+
+  /** 清除主技能。 */
+  async function _clearMainSkill() {
+    const sp = _space();
+    if (!sp) return;
+    await _invoke('spaces.update', { spaceId: sp.space_id, main_skill_ref: null });
+    _mainSkillOpen = false;
+    await _loadData();
+    _reRender();
+  }
+
+  /** 清理失效引用。 */
+  async function _pruneInvalidRefs() {
+    const sp = _space();
+    if (!sp) return;
+    const res = await _invoke('spaces.resources.pruneInvalid', { spaceId: sp.space_id });
+    if (res.error) { _stub('清理失败：' + res.error); return; }
+    await _loadData();
+    _reRender();
+    if (typeof uiToast === 'function') uiToast(_t('ws.pruned', '已清理失效引用'), { variant: 'success' });
+  }
+
+  /** 重命名空间。 */
+  async function _renameSpace() {
+    const sp = _space();
+    if (!sp) return;
+    const next = prompt(_t('ws.rename_prompt', '新的空间名称：'), sp.name);
+    if (next === null) return;
+    const name = String(next || '').trim();
+    if (!name || name === sp.name) return;
+    const res = await _invoke('spaces.update', { spaceId: sp.space_id, name });
+    if (res.error) { _stub('重命名失败：' + (res.error === 'name_dup' ? '名称已存在' : res.error)); return; }
+    await _loadData();
+    _reRender();
   }
 
   // ── 事件绑定 ──────────────────────────────────────────────────────────────
@@ -900,6 +1138,9 @@
     root.querySelectorAll('[data-ws="open-space"]').forEach((el) => el.addEventListener('click', () => _go('space', { spaceId: el.dataset.space })));
     root.querySelectorAll('[data-ws="continue"]').forEach((el) => el.addEventListener('click', () => _go('space', { spaceId: el.dataset.space })));
     root.querySelectorAll('[data-ws="create-from-tpl"], [data-ws="use-tpl"]').forEach((el) => el.addEventListener('click', () => _openCreate(el.dataset.tpl)));
+    root.querySelectorAll('[data-ws="create-from-scene"], [data-ws="use-scene"]').forEach((el) => el.addEventListener('click', () => {
+      _openCreateFromScene(_scenarios.find((s) => s.scenario_id === el.dataset.scene));
+    }));
     root.querySelectorAll('[data-ws="space-more"]').forEach((el) => el.addEventListener('click', (e) => {
       e.stopPropagation();
       const menu = el.parentElement && el.parentElement.querySelector('.ws-more-menu');
@@ -908,47 +1149,112 @@
       root.querySelectorAll('.ws-more-menu').forEach((m) => { m.hidden = true; });
       if (menu && !wasOpen) menu.hidden = false;
     }));
+    // 空间卡「⋯」→ 重命名
+    root.querySelectorAll('[data-ws="rename-space"]').forEach((el) => el.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const sid = el.dataset.space;
+      if (!sid) return;
+      const sp = _spaces.find((s) => s.space_id === sid);
+      const next = prompt(_t('ws.rename_prompt', '新的空间名称：'), (sp && sp.name) || '');
+      if (next === null) return;
+      const name = String(next || '').trim();
+      if (!name || (sp && name === sp.name)) return;
+      const res = await _invoke('spaces.update', { spaceId: sid, name });
+      if (res.error) { _stub('重命名失败：' + (res.error === 'name_dup' ? '名称已存在' : res.error)); return; }
+      await _loadData();
+      _reRender();
+      if (typeof window.invalidateSidebarSpaces === 'function') window.invalidateSidebarSpaces();
+    }));
+    // 空间卡「⋯」→ 删除空间（空间内任务移到「最近任务」，会话不删）
+    root.querySelectorAll('[data-ws="delete-space"]').forEach((el) => el.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const sid = el.dataset.space;
+      if (!sid) return;
+      const sp = _spaces.find((s) => s.space_id === sid);
+      const name = (sp && sp.name) || sid;
+      // 任务数：查该空间会话（删除后落到最近任务）
+      const listRes = await _invoke('spaces.conversations.list', { spaceId: sid });
+      const count = Array.isArray(listRes.conversations) ? listRes.conversations.length : 0;
+      if (!confirm(_t('ws.delete_space_confirm', '删除空间「{name}」？空间内 {count} 个任务将移到「最近任务」，会话本身不会被删除。', { name, count }))) return;
+      const delRes = await _invoke('spaces.delete', { spaceId: sid });
+      if (delRes.error) { _stub('删除空间失败：' + delRes.error); return; }
+      // 刷新空间列表；若详情正指向被删空间则重置
+      if (_detailSpaceId === sid) _detailSpaceId = null;
+      await _loadData();
+      _view = 'center';
+      _reRender();
+      // 侧栏同步：本地 conversations 数组里该空间会话的 space_id 清掉（后端已清，
+      // 不更新本地会残留「已删空间组」），并失效侧栏空间缓存
+      if (typeof conversations !== 'undefined' && Array.isArray(conversations)) {
+        for (const c of conversations) {
+          if (c && c.space_id === sid) delete c.space_id;
+        }
+      }
+      if (typeof renderConversationList === 'function') renderConversationList();
+      if (typeof window.invalidateSidebarSpaces === 'function') window.invalidateSidebarSpaces();
+      if (typeof uiToast === 'function') uiToast(_t('ws.delete_space_done', '空间已删除，任务已移到「最近任务」'), { variant: 'success' });
+    }));
     const cs = root.querySelector('[data-ws="center-search"]');
     if (cs) cs.addEventListener('input', () => { _centerSearch = cs.value; _reRender(); });
     const sortSel = root.querySelector('[data-ws="center-sort"]');
     if (sortSel) sortSel.addEventListener('change', () => { _centerSort = sortSel.value; _reRender(); });
 
     // 空间详情
-    root.querySelectorAll('[data-ws="space-tab"]').forEach((el) => el.addEventListener('click', () => { _spaceTab = el.dataset.tab; _reRender(); }));
+    root.querySelectorAll('[data-ws="space-tab"]').forEach((el) => el.addEventListener('click', () => {
+      _spaceTab = el.dataset.tab;
+      // 产物/资产 tab：切到时强制重载（对话里新产出/新确认立即可见，避免缓存旧数据）
+      if ((el.dataset.tab === 'artifacts' || el.dataset.tab === 'assets') && _detailSpaceId) {
+        _detailLoadedFor = null;
+        _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
+      } else {
+        _reRender();
+      }
+    }));
+    // 空间详情「返回空间中心」（返回上级）
+    root.querySelectorAll('[data-ws="back-to-center"]').forEach((el) => el.addEventListener('click', () => _go('center')));
     root.querySelectorAll('[data-ws="space-settings"]').forEach((el) => el.addEventListener('click', () => { _configOpen = !_configOpen; _reRender(); }));
     root.querySelectorAll('[data-ws="config-close"]').forEach((el) => el.addEventListener('click', () => { _configOpen = false; _reRender(); }));
-    // 「新建任务」→ 聚焦任务 tab 内联开新任务输入条
-    root.querySelectorAll('[data-ws="new-task"]').forEach((el) => el.addEventListener('click', () => {
-      const input = root.querySelector('[data-ws="new-task-input"]');
-      if (input) { input.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => input.focus(), 150); }
+    // ── 空间设置抽屉（可编辑）──
+    const ci = root.querySelector('[data-ws="config-instructions"]');
+    if (ci) ci.addEventListener('input', () => { _configInstructionsDraft = ci.value; });
+    root.querySelectorAll('[data-ws="save-instructions"]').forEach((el) => el.addEventListener('click', () => _saveConfigInstructions()));
+    root.querySelectorAll('[data-ws="edit-ability"]').forEach((el) => el.addEventListener('click', () => _openEditAbility(el.dataset.kind)));
+    root.querySelectorAll('[data-ws="pick-main-skill"]').forEach((el) => el.addEventListener('click', () => { _mainSkillOpen = true; _reRender(); }));
+    root.querySelectorAll('[data-ws="prune-invalid"]').forEach((el) => el.addEventListener('click', () => _pruneInvalidRefs()));
+    // ── 详情页能力调整弹窗 ──
+    root.querySelectorAll('[data-ws="close-edit-ability"]').forEach((el) => el.addEventListener('click', () => { _editAbilityOpen = false; _reRender(); }));
+    root.querySelectorAll('[data-ws="toggle-edit-ability"]').forEach((el) => el.addEventListener('click', () => {
+      if (el.dataset.bundled) return; // 模板内置固定开启
+      const id = el.dataset.id;
+      const picks = _editAbilityPicks || [];
+      _editAbilityPicks = picks.includes(id) ? picks.filter((x) => x !== id) : [...picks, id];
+      _reRender();
     }));
+    root.querySelectorAll('[data-ws="save-edit-ability"]').forEach((el) => el.addEventListener('click', () => _saveEditAbility()));
+    // ── 主技能弹窗 ──
+    root.querySelectorAll('[data-ws="close-main-skill"]').forEach((el) => el.addEventListener('click', () => { _mainSkillOpen = false; _reRender(); }));
+    root.querySelectorAll('[data-ws="pick-skill"]').forEach((el) => el.addEventListener('click', () => _saveMainSkill(el.dataset.id, el.dataset.name)));
+    root.querySelectorAll('[data-ws="clear-main-skill"]').forEach((el) => el.addEventListener('click', () => _clearMainSkill()));
+    // 「新建任务」→ 在该空间建新会话并跳到标准会话对话框（与主对话同一 composer）
+    root.querySelectorAll('[data-ws="new-task"]').forEach((el) => el.addEventListener('click', () => _startNewTask(_detailSpaceId)));
     // 任务行 → 打开真实会话
     root.querySelectorAll('[data-ws="open-task"]').forEach((el) => el.addEventListener('click', () => {
       const cid = el.dataset.session;
       if (cid && typeof setView === 'function') setView('conversation', cid);
     }));
-    root.querySelectorAll('[data-ws="new-task-send"]').forEach((el) => el.addEventListener('click', () => _startNewTask(_detailSpaceId)));
-    const nti = root.querySelector('[data-ws="new-task-input"]');
-    if (nti) nti.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _startNewTask(_detailSpaceId); }
-    });
 
-    // ── 空间任务 composer 附件（复用主对话「＋」管线）──
-    root.querySelectorAll('[data-ws="space-attach"]').forEach((el) => el.addEventListener('click', () => {
-      const draftCid = _spaceDraftCid();
-      if (!draftCid || !window.chatAttach) return;
-      window.chatAttach.pickAndUpload(draftCid, 'ws-attach-host');
-    }));
-    // 重渲染后把草稿 chips 重新画进宿主
-    if (_detailSpaceId && window.chatAttach && document.getElementById('ws-attach-host')) {
-      window.chatAttach.render(_spaceDraftCid(), 'ws-attach-host');
-    }
-
-    // ── 任务引用选择器（@ 引用空间产物与资产）──
-    root.querySelectorAll('[data-ws="ref-picker-open"]').forEach((el) => el.addEventListener('click', () => _openRefPicker(_detailSpaceId, null)));
+    // ── 任务引用选择器（任务行「＋引用」给已有任务补引用；新任务引用走标准对话 @）──
     root.querySelectorAll('[data-ws="task-ref"]').forEach((el) => el.addEventListener('click', (e) => {
       e.stopPropagation(); // 行本身是 open-task 按钮，避免触发打开会话
       _openRefPicker(_detailSpaceId, el.dataset.cid);
+    }));
+    // 任务行「更多」→ 移出空间（解绑会话，回普通列表）
+    root.querySelectorAll('[data-ws="task-more"]').forEach((el) => el.addEventListener('click', (e) => {
+      e.stopPropagation(); // 行本身是 open-task 按钮，避免触发打开会话
+      const cid = el.dataset.cid;
+      if (!cid || !_detailSpaceId) return;
+      if (!confirm(_t('ws.task_unbind_confirm', '把该任务移出当前空间？会话保留，但不再计入该空间的任务列表。'))) return;
+      _unbindTaskFromSpace(cid, _detailSpaceId);
     }));
     root.querySelectorAll('[data-ws="ref-tab"]').forEach((el) => el.addEventListener('click', () => { _refPickerKind = el.dataset.kind; _reRender(); }));
     root.querySelectorAll('[data-ws="close-ref"]').forEach((el) => el.addEventListener('click', () => { _refPickerOpen = false; _reRender(); }));
@@ -956,24 +1262,53 @@
     root.querySelectorAll('[data-ws="save-ref"]').forEach((el) => el.addEventListener('click', () => _saveRefPicker()));
     const refSearch = root.querySelector('[data-ws="ref-search"]');
     if (refSearch) refSearch.addEventListener('input', () => { _refSearch = refSearch.value; _reRender(); });
-    root.querySelectorAll('[data-ws="pending-ref-remove"]').forEach((el) => el.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const i = Number(el.dataset.index);
-      if (Number.isInteger(i) && i >= 0 && i < _pendingRefs.length) _pendingRefs.splice(i, 1);
-      _reRender();
-    }));
-    root.querySelectorAll('[data-ws="pending-ref-clear"]').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); _pendingRefs = []; _reRender(); }));
     root.querySelectorAll('[data-ws="artifact-filter"]').forEach((el) => el.addEventListener('click', () => { _artifactFilter = el.dataset.type; _reRender(); }));
     root.querySelectorAll('[data-ws="asset-filter"]').forEach((el) => el.addEventListener('click', () => { _assetFilter = el.dataset.type; _reRender(); }));
-    root.querySelectorAll('[data-ws="unbind-asset"]').forEach((el) => el.addEventListener('click', async () => {
+    // 资产卡 × → 撤销（弹确认 → 撤销；撤销后资产从空间列表消失——listAbilityAssetsForSpace 过滤 revoked）
+    root.querySelectorAll('[data-ws="revoke-asset"]').forEach((el) => el.addEventListener('click', async () => {
       const assetId = el.dataset.asset;
-      if (!assetId || !_detailSpaceId) return;
-      const res = await _invoke('spaces.assets.unbind', { spaceId: _detailSpaceId, assetId });
-      if (res && res.error) { _stub('解绑资产失败：' + res.error); return; }
-      _detailLoadedFor = null; // 强制重载三 tab 数据
+      if (!assetId) return;
+      if (!confirm(_t('ws.revoke_asset_confirm', '撤销该资产？撤销后将从本空间资产列表移除。'))) return;
+      const res = await _invoke('recall.assets.revoke', { assetId, note: 'user revoke' });
+      if (res && res.error) { _stub('撤销失败：' + res.error); return; }
+      _detailLoadedFor = null;
       _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
+      if (typeof uiToast === 'function') uiToast(_t('ws.revoked', '已撤销'), { variant: 'warning' });
     }));
-    root.querySelectorAll('[data-ws="open-artifact"]').forEach((el) => el.addEventListener('click', () => _stub('打开产物')));
+    // 产物：确认候选 / 打开文件（系统默认应用）/ 跳来源任务
+    root.querySelectorAll('[data-ws="confirm-artifact"]').forEach((el) => el.addEventListener('click', async () => {
+      const cid = el.dataset.cid;
+      const name = el.dataset.name;
+      if (!_detailSpaceId || !cid || !name) return;
+      const res = await _invoke('spaces.artifacts.confirm', { spaceId: _detailSpaceId, cid, name });
+      if (res.error) { _stub('确认失败：' + res.error); return; }
+      _detailLoadedFor = null;
+      _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
+      if (typeof uiToast === 'function') uiToast(_t('ws.artifact_confirmed', '已确认'), { variant: 'success' });
+    }));
+    // 驳回候选产物（不再作为候选展示）
+    root.querySelectorAll('[data-ws="reject-artifact"]').forEach((el) => el.addEventListener('click', async () => {
+      const cid = el.dataset.cid;
+      const name = el.dataset.name;
+      if (!_detailSpaceId || !cid || !name) return;
+      if (!confirm(_t('ws.reject_confirm', '驳回该候选产物？将不再作为候选展示。'))) return;
+      const res = await _invoke('spaces.artifacts.reject', { spaceId: _detailSpaceId, cid, name });
+      if (res.error) { _stub('驳回失败：' + res.error); return; }
+      _detailLoadedFor = null;
+      _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
+      if (typeof uiToast === 'function') uiToast(_t('ws.artifact_rejected', '已驳回'), { variant: 'warning' });
+    }));
+    root.querySelectorAll('[data-ws="open-artifact"]').forEach((el) => el.addEventListener('click', async () => {
+      const p = el.dataset.path;
+      const cid = el.dataset.cid;
+      if (!p) { _stub('打开产物'); return; }
+      const res = await _invoke('workspace.openFile', { path: p, cid: cid || '' });
+      if (res.error) _stub('打开失败：' + res.error);
+    }));
+    root.querySelectorAll('[data-ws="open-source"]').forEach((el) => el.addEventListener('click', () => {
+      const cid = el.dataset.cid;
+      if (cid && typeof setView === 'function') setView('conversation', cid);
+    }));
 
     // 任务页
     root.querySelectorAll('[data-ws="back-space"]').forEach((el) => el.addEventListener('click', () => _go('space')));
@@ -992,6 +1327,8 @@
     if (cnInput) cnInput.addEventListener('input', () => { _createName = cnInput.value; });
     const ciInput = root.querySelector('[data-ws="create-instruction"]');
     if (ciInput) ciInput.addEventListener('input', () => { _createInstruction = ciInput.value; });
+    const caSel = root.querySelector('[data-ws="create-agent"]');
+    if (caSel) caSel.addEventListener('change', () => { _createBaseAgent = caSel.value; });
 
     // 所有「功能待接入」桩（创建/能力选择已接真，走 confirm-create/toggle-ability/save-ability）
     root.querySelectorAll('[data-ws^="stub-"]').forEach((el) => el.addEventListener('click', () => _stub(_stubLabel(el))));
@@ -1004,7 +1341,21 @@
     if (!kind || !id) return;
     if (btn.dataset.bundled) return; // 模板内置：固定开启
     const picks = _abilityPicks[kind] || [];
-    _abilityPicks[kind] = picks.includes(id) ? picks.filter((x) => x !== id) : [...picks, id];
+    if (picks.includes(id)) {
+      _abilityPicks[kind] = picks.filter((x) => x !== id);
+      _reRender();
+      return;
+    }
+    // 角色模板最多 3 个（1 主 + 2 副）：已选模板计 1 个角色，其余可再勾 2 个。
+    if (kind === 'role') {
+      const tpl = _templates.find((t) => t.template_id === _createTemplate) || null;
+      const roleCount = (tpl ? 1 : 0) + picks.length;
+      if (roleCount >= 3) {
+        if (typeof uiToast === 'function') uiToast(_t('ws.role_limit', '角色最多选择 3 个（1 主 + 2 副）'), { variant: 'warning', timeoutMs: 3200 });
+        return;
+      }
+    }
+    _abilityPicks[kind] = [...picks, id];
     _reRender();
   }
 
@@ -1033,6 +1384,7 @@
         ...(primary ? { primary_template_id: primary } : {}),
         ...(secondary.length ? { secondary_template_ids: secondary } : {}),
         ...(instructions ? { instructions } : {}),
+        ...(_createBaseAgent ? { base_agent: _createBaseAgent } : {}),
       });
       if (!res.error && res.space) { space = res.space; break; }
       if (res.error === 'name_dup') { name0 = `${name} ${i + 2}`; continue; }
@@ -1046,6 +1398,8 @@
     _createOpen = false;
     _abilityOpen = false;
     await _loadData();
+    // 新空间进侧栏缓存（否则该空间建了会话后侧栏组名显示不了）
+    if (typeof window.invalidateSidebarSpaces === 'function') window.invalidateSidebarSpaces();
     _go('space', { spaceId: space.space_id });
   }
 
@@ -1077,17 +1431,43 @@
     _reRender();
   }
 
+  /** 从场景入口打开新建弹窗：预填主+副角色模板（≤3），名称 = 场景名。 */
+  function _openCreateFromScene(sc) {
+    if (!sc) return;
+    _createTemplate = null; // 场景是组合，不是单一模板（不套 bundle 预选）
+    _createName = sc.name || '';
+    _createInstruction = '';
+    const roles = [];
+    if (sc.suggested_primary_template_id) roles.push(sc.suggested_primary_template_id);
+    for (const sid of sc.suggested_secondary_template_ids || []) {
+      if (roles.length >= 3) break;
+      if (!roles.includes(sid)) roles.push(sid);
+    }
+    _abilityPicks = { role: roles.slice(0, 3), task: [], skill: [] };
+    _createOpen = true;
+    _abilityOpen = false;
+    _reRender();
+  }
+
   function _reRender() {
     const root = document.getElementById('ws-view');
     if (!root) return;
     let html = _render();
     if (_createOpen) html += _renderCreateModal();
     if (_abilityOpen) html += _renderAbilityModal();
+    if (_editAbilityOpen) html += _renderEditAbilityModal();
+    if (_mainSkillOpen) html += _renderMainSkillModal();
     if (_refPickerOpen) html += _renderRefPicker();
     root.innerHTML = html;
     _bind(root);
   }
 
+  /** 侧栏「空间」＋ 入口：加载空间中心并打开新建空间弹窗（先渲染再弹窗）。 */
+  async function openWorkspaceCreate() {
+    try { await renderWorkspace(); } catch (_) {}
+    _openCreate(null);
+  }
   window.renderWorkspace = renderWorkspace;
+  window.openWorkspaceCreate = openWorkspaceCreate;
   console.log('[workspace] UI 壳模块已加载，renderWorkspace 可用');
 })();

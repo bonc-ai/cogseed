@@ -109,6 +109,18 @@
 .ws-more-row:hover { background: var(--ws-soft); }
 .ws-more-row span { color: #8a938e; font-size: 10px; white-space: nowrap; }
 .ws-more-row strong { color: #46534b; font-size: 11px; font-weight: 600; max-width: 150px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* 更多菜单操作区（删除空间） */
+.ws-more-actions { margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--ws-line); }
+.ws-more-danger {
+  width: 100%; padding: 7px 8px; border: 0; border-radius: 7px; background: transparent;
+  color: #d9534f; font-size: 11px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.ws-more-danger:hover { background: #fdf0ef; }
+.ws-more-action {
+  width: 100%; padding: 7px 8px; border: 0; border-radius: 7px; background: transparent;
+  color: #46534b; font-size: 11px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.ws-more-action:hover { background: var(--ws-soft); }
 
 /* 标语 + 中心工具行（搜索 + 排序） */
 .ws-tagline { margin: 6px 0 0; color: var(--ws-muted); font-size: 13px; line-height: 1.7; max-width: 620px; }
@@ -146,6 +158,12 @@
 .ws-template-bottom { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: auto; padding-top: 12px; border-top: 1px solid #edf1ef; }
 .ws-template-bottom span { color: #929b96; font-size: 10px; }
 .ws-template-bottom button { color: #178451; font-size: 11px; font-weight: 600; }
+/* 从模板创建区：场景组 + 角色模板组（旧「场景」入口迁入新面板） */
+.ws-create-group-label { margin: 4px 0 10px; color: #8a938e; font-size: 11px; font-weight: 600; }
+.ws-scene-card { background: #fbfbf7; }
+.ws-scene-card .ws-template-mark { color: #8a6a36; background: #f7f1e8; }
+.ws-scene-card .ws-template-bottom button { color: #8a6a36; }
+.ws-scene-card .ws-template-bottom button:hover { color: #6e5323; }
 
 /* ── 空间详情 ── */
 .ws-space-page { display: grid; grid-template-columns: minmax(0,1fr); position: relative; min-height: 100%; }
@@ -153,6 +171,15 @@
 .ws-space-head { position: sticky; top: 0; z-index: 4; padding: 20px 28px 0; border-bottom: 1px solid var(--ws-line); background: #fff; }
 .ws-space-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .ws-space-head-row > div:last-child { display: flex; gap: 7px; }
+/* 空间详情「返回空间中心」（返回上级） */
+.ws-space-back-row { margin-bottom: 10px; }
+.ws-back {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 9px 4px 5px;
+  border-radius: 7px; color: #7a867f; font-size: 11px;
+}
+.ws-back:hover { color: #176f45; background: var(--ws-soft); }
+.ws-back .ui-icon { width: 13px; height: 13px; }
 .ws-space-heading { display: flex; align-items: center; gap: 13px; }
 .ws-space-heading .ws-space-icon { width: 39px; height: 39px; border-radius: 11px; }
 .ws-space-heading h1 { font-size: 20px; font-weight: 720; color: #1f2b24; }
@@ -181,6 +208,9 @@
 .ws-session-row time { color: #9da59f; font-size: 10px; }
 .ws-session-row b { color: #8d9199; display: grid; place-items: center; }
 .ws-session-row b .ui-icon { width: 14px; height: 14px; }
+.ws-row-more-btn { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: #8d9199; cursor: pointer; }
+.ws-row-more-btn:hover { background: #eef3f0; color: #3c5548; }
+.ws-row-more-btn .ui-icon { width: 14px; height: 14px; }
 
 .ws-info-note { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 14px; padding: 10px 12px; border: 1px solid #dce8e1; border-radius: 9px; color: #6f7a74; background: #f5faf7; font-size: 11px; line-height: 1.55; }
 .ws-info-note > span { display: grid; place-items: center; flex: none; width: 17px; height: 17px; border-radius: 50%; color: #177f4d; background: #e3f3e9; font-size: 11px; }
@@ -197,6 +227,12 @@
 .ws-artifact-card > em { position: absolute; top: 12px; right: 12px; padding: 3px 6px; border-radius: 5px; color: #547264; background: #edf4f0; font-size: 9px; font-style: normal; }
 .ws-artifact-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 11px; padding-top: 8px; border-top: 1px solid #edf1ef; color: #7f8a83; font-size: 9px; }
 .ws-artifact-card footer button { color: #177d4d; font-size: 10px; }
+/* 候选产物（AI 产出待确认）：灰显 + 强调确认按钮 */
+.ws-artifact-card.is-candidate { opacity: .72; background: #fbfcfb; }
+.ws-artifact-card.is-candidate:hover { opacity: 1; }
+.ws-artifact-card.is-candidate > em { color: #b45309; background: #fdf3e3; }
+.ws-artifact-card.is-candidate .ws-file-icon { background: #f1f4f2; color: #9aa49d; }
+.ws-confirm-artifact { color: #b45309 !important; font-weight: 650; }
 
 .ws-asset-filters { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px; padding: 3px; border-radius: 9px; background: #edf3ef; }
 .ws-asset-filters button { display: inline-flex; align-items: center; gap: 6px; min-height: 27px; padding: 0 9px; border-radius: 6px; color: #758179; font-size: 10px; }
@@ -233,6 +269,18 @@
 .ws-config-body section { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #e8e9ec; }
 .ws-config-body label { display: block; margin-bottom: 7px; color: #738078; font-size: 10px; font-weight: 600; }
 .ws-config-body p { margin: 0; color: #56635b; font-size: 11px; line-height: 1.7; }
+/* 设置抽屉可编辑：指令 textarea + 保存行 + 主技能/失效引用行 */
+.ws-config-body textarea[data-ws="config-instructions"] {
+  width: 100%; min-height: 76px; padding: 8px 9px; border: 1px solid var(--ws-line-strong);
+  border-radius: 8px; background: #fff; color: #33413a; font-size: 11px; line-height: 1.6;
+  resize: vertical; outline: none; box-sizing: border-box; font-family: inherit;
+}
+.ws-config-body textarea[data-ws="config-instructions"]:focus { border-color: #9fc8b1; box-shadow: 0 0 0 2px rgba(33,120,77,.08); }
+.ws-config-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.ws-config-hint { color: #9aa49d; font-size: 10px; }
+.ws-config-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ws-config-value { color: #56635b; font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-ability-edit { margin-top: 8px; }
 .ws-agent-row { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 0 9px; border: 1px solid var(--ws-line); border-radius: 8px; background: #fff; }
 .ws-agent-row > span { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 7px; color: #fff; background: #1f9d62; font-size: 9px; font-weight: 700; }
 .ws-agent-row strong { display: block; font-size: 11px; color: #465249; }
@@ -325,39 +373,8 @@
 .ws-send .ui-icon { width: 16px; height: 16px; }
 .ws-composer-wrap > p { margin: 6px auto 0; width: fit-content; color: #a4aca7; font-size: 9px; text-align: center; }
 
-/* 任务 tab 内联「开新任务」输入条（对齐高保真原型：＋ 在当前空间中开启一项新任务… ＋ @ 引用空间产物与资产） */
-.ws-new-task-bar {
-  display: flex; align-items: center; gap: 8px; margin-top: 18px; padding: 8px 10px;
-  border: 1px solid #cfd9d3; border-radius: 14px; background: #fff;
-  box-shadow: 0 6px 18px rgba(25,43,33,.06);
-}
-.ws-new-task-bar:focus-within { border-color: #8fceb0; box-shadow: 0 8px 24px rgba(25,43,33,.09), 0 0 0 3px rgba(31,173,105,.08); }
-.ws-new-task-bar input { flex: 1; min-width: 0; height: 34px; border: 0; outline: none; background: transparent; color: #29362e; font-size: 12px; }
-.ws-new-task-bar input::placeholder { color: #a2aaa5; }
-.ws-new-task-add, .ws-new-task-mention, .ws-new-task-send {
-  display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 9px;
-  border-radius: 8px; color: #617068; font-size: 11px; white-space: nowrap;
-}
-.ws-new-task-add .ui-icon, .ws-new-task-mention .ui-icon, .ws-new-task-send .ui-icon { width: 15px; height: 15px; }
-.ws-new-task-add:hover, .ws-new-task-mention:hover { color: #168551; background: #eaf7f0; }
-.ws-new-task-send { color: #fff; background: #1f9d62; box-shadow: 0 5px 12px rgba(31,166,100,.22); }
-.ws-new-task-send:hover { background: #178b54; }
-
-/* 新建任务引用 chips（输入条上方） */
-.ws-new-task-composer { }
-/* 附件 chips 宿主（复用主对话 chat-attach-chip 样式，主对话管线渲染） */
-.ws-attach-host { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-.ws-ref-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
-.ws-ref-chip {
-  display: inline-flex; align-items: center; gap: 6px; max-width: 260px; padding: 4px 8px;
-  border: 1px solid var(--ws-line); border-radius: 99px; background: #f3f9f6; color: #33413a; font-size: 11px;
-}
-.ws-ref-chip em { font-style: normal; font-size: 9px; color: #1f9d62; background: #e5f4ec; border-radius: 4px; padding: 1px 5px; }
-.ws-ref-chip.asset em { color: #477394; background: #eaf2f7; }
-.ws-ref-chip button { color: #9aa39e; font-size: 12px; line-height: 1; }
-.ws-ref-chip button:hover { color: #c0392b; }
-.ws-ref-chip-clear { color: #8a938e; font-size: 10px; padding: 2px 6px; border-radius: 6px; }
-.ws-ref-chip-clear:hover { background: var(--ws-soft); color: #c0392b; }
+/* 任务 tab：不再内联开新任务输入条——右上角「新建任务」跳标准会话对话框，
+   新任务引用/附件都在标准 composer 里完成（与主对话一致）。 */
 
 /* 任务行：引用按钮 + 徽标 */
 .ws-row-ref-btn {
@@ -487,12 +504,16 @@
 .ws-ability-head > button { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; color: #839088; font-size: 18px; }
 .ws-ability-head > button:hover { color: #287a53; background: #edf5f0; }
 .ws-ability-main { display: grid; grid-template-columns: 176px minmax(0,1fr); flex: 1; min-height: 0; }
+/* 无侧栏单列布局：详情页「调整能力 / 主技能」弹窗没有 nav，复用 ws-ability-main
+   但去掉 176px 左列，内容占满整行（否则左侧空列、内容被挤右）。 */
+.ws-ability-main.ws-ability-main-solo { grid-template-columns: minmax(0, 1fr); }
 .ws-ability-main > nav { padding: 13px 10px; border-right: 1px solid var(--ws-line); background: #f6f9f7; }
 .ws-ability-main > nav button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 38px; padding: 0 10px; border-radius: 8px; color: #657169; font-size: 11px; }
 .ws-ability-main > nav button.active { color: #157c4b; background: #e5f4eb; font-weight: 650; }
 .ws-ability-main > nav span { color: #7d8982; font-size: 9px; }
 .ws-ability-pane { min-width: 0; padding: 18px 20px; overflow-y: auto; }
 .ws-option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.ws-ability-limit-hint { margin-bottom: 10px; padding: 8px 11px; border-radius: 8px; color: #7a5b22; background: #fbf3e2; font-size: 11px; line-height: 1.6; }
 .ws-option-card { display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 9px; min-height: 80px; padding: 11px; border: 1px solid var(--ws-line); border-radius: 10px; background: #fff; text-align: left; }
 .ws-option-card:hover { border-color: #afd2bf; background: #fbfdfc; }
 .ws-option-card.selected { border-color: #79c49e; background: #f3fbf7; }
@@ -506,6 +527,7 @@
 /* ── 加载 / 空态 / 错误态 ── */
 .ws-loading { display: grid; place-items: center; min-height: 60vh; color: #7b857f; font-size: 13px; }
 .ws-empty { padding: 40px 20px; border: 1px dashed var(--ws-line-strong); border-radius: 12px; color: #87918b; background: #fafcfb; text-align: center; font-size: 12px; line-height: 1.6; }
+.ws-empty small { display: block; margin-top: 6px; color: #a4aca7; font-size: 11px; }
 .ws-load-error { display: grid; place-items: center; gap: 14px; min-height: 60vh; text-align: center; }
 .ws-load-error p { margin: 0; color: #8a6a36; font-size: 12px; }
 

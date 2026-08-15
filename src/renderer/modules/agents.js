@@ -3187,43 +3187,79 @@ let _agentPickerLoadedTabs = new Set();
 const _agentPickerTabLoads = new Map();
 let _pickerProjectContextLoading = false;
 let _pickerProjectContextSeq = 0;
-const _AGENT_PICKER_TAB_ORDER = ['agents', 'skills', 'connectors', 'library', 'ontology'];
+// 产物/资产 tab（空间会话 @ 引用）：懒加载缓存（每 picker 会话重置一次）
+let _pickerArtifactRows = null;        // 空间产物（spaces.artifacts.list）
+let _pickerArtifactTitles = new Map(); // cid → 会话标题（引用 source_title）
+let _pickerArtifactLoading = null;
+let _pickerArtifactRenderSeq = 0;
+let _pickerAssetRows = null;           // 全局沉淀资产（recall.assets.list）
+let _pickerAssetLoading = null;
+let _pickerAssetRenderSeq = 0;
+// 任务引用 chips（composer 引用条）：conversation = 已持久化 task_references；
+// new-chat = 待提交 pending（会话创建后写入 task_references）
+let _pendingNewChatRefs = [];          // TaskReference[]
+const _AGENT_PICKER_TAB_ORDER = ['agents', 'skills', 'artifacts', 'assets'];
 const _AGENT_PICKER_TABS = new Set(_AGENT_PICKER_TAB_ORDER);
 
 function _normalizeAgentPickerTab(tab) {
   return _AGENT_PICKER_TABS.has(tab) ? tab : 'agents';
 }
 
-function _agentPickerAllowsLibrary(anchorId) {
-  return anchorId === 'chat-recipient-chip'
-    || anchorId === 'new-chat-recipient-chip'
-    || anchorId === 'auto-recipient-chip';
-}
-
-// "本体" tab reuses the exact same anchor gate as library — see requirements
-// doc §3.7: no independent anchor scenario identified for ontology groups
-// yet, so default to matching library's visibility rather than showing it
-// everywhere.
-function _agentPickerAllowsOntology(anchorId) {
-  return _agentPickerAllowsLibrary(anchorId);
+/**
+ * @ 选择器作用域：锚点所在会话是否绑空间。
+ *   - chat-recipient-chip：当前会话（currentCid → conversations 缓存）space_id；
+ *   - new-chat-recipient-chip：工作空间 chip 选中的空间（getNewChatSpaceId）；
+ *   - auto-recipient-chip / 其余：无空间。
+ */
+function _agentPickerSpaceId(anchorId) {
+  if (anchorId === 'chat-recipient-chip') {
+    const cid = (typeof currentCid === 'string') ? currentCid : '';
+    if (cid && typeof conversations !== 'undefined' && Array.isArray(conversations)) {
+      const conv = conversations.find((c) => c && c.conversation_id === cid);
+      return (conv && conv.space_id) || '';
+    }
+    return '';
+  }
+  if (anchorId === 'new-chat-recipient-chip' && typeof window.getNewChatSpaceId === 'function') {
+    return window.getNewChatSpaceId() || '';
+  }
+  return '';
 }
 
 function _agentPickerVisibleTabs(anchorId) {
-  // Skills and connectors use the same visible picker surface for commander
-  // and agent recipients; runtime capability gates live in the main process.
-  return _AGENT_PICKER_TAB_ORDER.filter((tab) => {
-    if (tab === 'library') return _agentPickerAllowsLibrary(anchorId);
-    if (tab === 'ontology') return _agentPickerAllowsOntology(anchorId);
-    return true;
-  });
+  // 空间会话（聊天绑空间 / new-chat 选中空间）→ 智能体/技能/产物/资产；
+  // 无空间（主对话默认工作区 / Auto）→ 仅智能体/技能。
+  // 连接器/资料库/本体 tab 已删（两处都不再出现）。
+  const spaceId = _agentPickerSpaceId(anchorId);
+  return spaceId ? _AGENT_PICKER_TAB_ORDER : ['agents', 'skills'];
 }
 
 function _agentPickerSearchPlaceholder() {
   if (_agentPickerTab === 'skills') return t('agent_picker.search_skills_placeholder');
-  if (_agentPickerTab === 'connectors') return t('agent_picker.search_connectors_placeholder');
-  if (_agentPickerTab === 'library') return t('agent_picker.search_library_placeholder');
-  if (_agentPickerTab === 'ontology') return t('agent_picker.search_ontology_placeholder');
+  if (_agentPickerTab === 'artifacts') return t('agent_picker.search_artifacts_placeholder');
+  if (_agentPickerTab === 'assets') return t('agent_picker.search_assets_placeholder');
   return t('agent_picker.search_placeholder');
+}
+
+/** composer 占位符随会话空间状态更新：空间会话提示「产物/资产」可选，非空间只说智能体/技能。
+ *  同时同步富文本编辑器（contenteditable 镜像 data-placeholder，见 _initMentionMirror）与
+ *  attribute（i18n 重应用/镜像 sync 读的是 getAttribute）。 */
+function updateAgentPickerPlaceholders() {
+  const spacePh = t('agent_picker.input_placeholder_space', '输入 @ 选择智能体、技能、产物、资产');
+  const plainPh = t('chat.input_placeholder', '输入 @ 选择智能体、技能');
+  const apply = (input, ph) => {
+    if (!input) return;
+    input.placeholder = ph;
+    input.setAttribute('placeholder', ph);
+    try {
+      if (typeof getChatRichComposerEditor === 'function') {
+        const ed = getChatRichComposerEditor(input.id);
+        if (ed) ed.dataset.placeholder = ph;
+      }
+    } catch (_) {}
+  };
+  apply(document.getElementById('chat-input'), _agentPickerSpaceId('chat-recipient-chip') ? spacePh : plainPh);
+  apply(document.getElementById('new-chat-input'), _agentPickerSpaceId('new-chat-recipient-chip') ? spacePh : plainPh);
 }
 
 function _updateAgentPickerChrome() {
@@ -3259,10 +3295,10 @@ function _setAgentPickerTab(tab, opts = {}) {
 
 function _ensureAgentPickerTabData(tab, openSeq) {
   const normalized = _normalizeAgentPickerTab(tab);
-  // library and ontology own their own lazy-load + cache inside their render
-  // functions (_renderLibraryPickerList / _renderOntologyPickerList) — same
-  // pattern, skip the generic loadedTabs bookkeeping here.
-  if (normalized === 'library' || normalized === 'ontology' || _agentPickerLoadedTabs.has(normalized)) {
+  // artifacts/assets own their own lazy-load + cache inside their render
+  // functions (_renderArtifactsPickerList / _renderAssetsPickerList) — same
+  // pattern as the removed library/ontology tabs, skip generic bookkeeping.
+  if (normalized === 'artifacts' || normalized === 'assets' || _agentPickerLoadedTabs.has(normalized)) {
     return Promise.resolve();
   }
   const existing = _agentPickerTabLoads.get(normalized);
@@ -3287,8 +3323,6 @@ function _ensureAgentPickerTabData(tab, openSeq) {
         await loader('skills');
       }
       if (typeof loadSkills === 'function') await loadSkills(false);
-    } else if (normalized === 'connectors') {
-      if (typeof loadConnectors === 'function') await loadConnectors();
     } else {
       // A summary catalog is enough for the first frame. `loadAgents(false)`
       // upgrades it once and then reuses the validated full cache.
@@ -3326,21 +3360,69 @@ function _moveAgentPickerTab(delta) {
 }
 
 async function _refreshAgentPickerProjectContext(anchorId) {
-  // 空间化后项目作用域已删：picker 恒为全局作用域（不再按 project 过滤）。
-  _pickerBoundAgentIds = null;
-  _pickerBoundSkillIds = null;
+  // 空间化重构：picker 作用域 = 当前会话所属空间的「能力配置」。
+  //   - 会话绑空间（conv.space_id 非空）→ 折叠到该空间 agents ∪ skills
+  //     （模板 bundle ∪ extra，与 runner 执行作用域同源 spaces.scope.resolve）；
+  //   - 未绑空间 / 空间空配置（S1：resolve 返回 null）→ 全局不过滤。
+  // 旧项目作用域已删（不再按 project 过滤）。
+  // 主对话：当前会话 → 空间；新聊天：chip 选中的空间（创建后对话归该空间，@ 同步过滤）
+  // （同步判定，无空间直接走全局路径，不闪 loading）
+  const spaceId = _agentPickerSpaceId(anchorId);
+  if (!spaceId) {
+    _pickerBoundAgentIds = null;
+    _pickerBoundSkillIds = null;
+    _pickerScopeSpace = null;
+    _pickerProjectId = '';
+    _pickerProjectContextLoading = false;
+    _pickerLibraryRows = null;
+    _pickerLibraryLoading = null;
+    _pickerLibraryRenderSeq += 1;
+    _pickerOntologyGroups = null;
+    _pickerOntologyTemplates = null;
+    _pickerOntologyLoading = null;
+    _pickerOntologyRenderSeq += 1;
+    _pickerArtifactRows = null;
+    _pickerArtifactTitles = new Map();
+    _pickerArtifactLoading = null;
+    _pickerAssetRows = null;
+    _pickerAssetLoading = null;
+    return;
+  }
+  // 有空间 → 异步解析作用域（loading 壳防旧列表可点）
+  _pickerProjectContextLoading = true;
+  let boundAgentIds = null;
+  let boundSkillIds = null;
+  let scopeSpace = null;
+  try {
+    const res = await (window.cogseed || window.orkas).invoke('spaces.scope.resolve', { spaceId });
+    const scope = res && res.scope;
+    if (scope && Array.isArray(scope.agents) && Array.isArray(scope.skills)) {
+      boundAgentIds = new Set(scope.agents);
+      boundSkillIds = new Set(scope.skills);
+      scopeSpace = { space_id: spaceId };
+    }
+    // scope === null（空间缺失/空配置/全失效）→ 保持 null = 全局可见
+  } catch (err) {
+    _agentsLog.warn('resolve space scope for picker failed', err);
+  } finally {
+    _pickerProjectContextLoading = false;
+  }
+  _pickerBoundAgentIds = boundAgentIds;
+  _pickerBoundSkillIds = boundSkillIds;
+  _pickerScopeSpace = scopeSpace;
   _pickerProjectId = '';
-  _pickerProjectContextLoading = false;
   _pickerLibraryRows = null;
   _pickerLibraryLoading = null;
   _pickerLibraryRenderSeq += 1;
-  // Ontology groups aren't project-scoped, but re-fetch every picker open so
-  // a group created/deleted via the management page since the last open is
-  // reflected without requiring a manual refresh.
   _pickerOntologyGroups = null;
   _pickerOntologyTemplates = null;
   _pickerOntologyLoading = null;
   _pickerOntologyRenderSeq += 1;
+  _pickerArtifactRows = null;
+  _pickerArtifactTitles = new Map();
+  _pickerArtifactLoading = null;
+  _pickerAssetRows = null;
+  _pickerAssetLoading = null;
 }
 
 async function refreshAgentPickerContext(anchorId) {
@@ -3359,6 +3441,12 @@ async function _openAgentPicker(anchorBtn) {
   picker.dataset.anchorId = anchorBtn.id;
   const openSeq = ++_agentPickerOpenSeq;
   _agentPickerLoadedTabs = new Set();
+  // 产物/资产目录按 picker 会话重置（防上次会话残留旧空间行可点）
+  _pickerArtifactRows = null;
+  _pickerArtifactTitles = new Map();
+  _pickerArtifactLoading = null;
+  _pickerAssetRows = null;
+  _pickerAssetLoading = null;
   // Reset project scope synchronously before painting. For project-bound
   // composers this flips the list to a loading shell immediately, so stale
   // unrestricted rows from the previous picker session are never clickable
@@ -3405,16 +3493,12 @@ function _renderAgentPickerList(filterText) {
     _renderSkillPickerList(listEl, filterText, anchorId);
     return;
   }
-  if (_agentPickerTab === 'connectors') {
-    _renderConnectorPickerList(listEl, filterText, anchorId);
+  if (_agentPickerTab === 'artifacts') {
+    _renderArtifactsPickerList(listEl, filterText, anchorId);
     return;
   }
-  if (_agentPickerTab === 'library') {
-    _renderLibraryPickerList(listEl, filterText, anchorId);
-    return;
-  }
-  if (_agentPickerTab === 'ontology') {
-    _renderOntologyPickerList(listEl, filterText, anchorId);
+  if (_agentPickerTab === 'assets') {
+    _renderAssetsPickerList(listEl, filterText, anchorId);
     return;
   }
   // Disabled agents are filtered out — picker is a "what can I dispatch right
@@ -3920,6 +4004,303 @@ function _targetFromPickerAnchor(anchorId) {
   return 'conversation';
 }
 
+// ── 产物 / 资产 tab（空间会话 @ 引用：复用任务引用 task_references）─────────────
+
+function _sameTaskRefKey(r) {
+  return r && r.kind === 'asset'
+    ? `asset:${r.asset_id || ''}`
+    : `artifact:${r.source_cid || ''}:${r.file_name || ''}`;
+}
+
+async function _loadArtifactPickerRows(spaceId) {
+  const [artRes, convRes] = await Promise.all([
+    (window.cogseed || window.orkas).invoke('spaces.artifacts.list', { spaceId }).catch(() => ({})),
+    (window.cogseed || window.orkas).invoke('spaces.conversations.list', { spaceId }).catch(() => ({})),
+  ]);
+  const titles = new Map();
+  for (const c of (convRes && convRes.conversations) || []) {
+    if (c && c.conversation_id) titles.set(c.conversation_id, c.title || '');
+  }
+  _pickerArtifactTitles = titles;
+  return Array.isArray(artRes && artRes.artifacts) ? artRes.artifacts : [];
+}
+
+async function _loadAssetPickerRows(spaceId) {
+  // @ 资产 = 本空间沉淀资产（recall.assets.listForSpace，与空间资产 tab 同源；
+  // 不再用全局 recall.assets.list——用户明确要求空间资产）。
+  if (!spaceId) return [];
+  try {
+    const res = await (window.cogseed || window.orkas).invoke('recall.assets.listForSpace', { spaceId });
+    return Array.isArray(res && res.assets)
+      ? res.assets.map((a) => ({ asset_id: a.id, title: a.title, asset_type: a.type }))
+      : [];
+  } catch (err) {
+    _agentsLog.warn('asset picker load failed', err);
+    return [];
+  }
+}
+
+function _renderArtifactsPickerList(listEl, filterText, anchorId) {
+  const q = (filterText || '').toLowerCase();
+  const renderSeq = ++_pickerArtifactRenderSeq;
+  const spaceId = _agentPickerSpaceId(anchorId);
+  if (!spaceId) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('agent_picker.artifacts_empty'))}</div>`;
+    return;
+  }
+  if (!_pickerArtifactRows) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
+    const openSeq = _agentPickerOpenSeq;
+    if (!_pickerArtifactLoading) {
+      _pickerArtifactLoading = _loadArtifactPickerRows(spaceId)
+        .then((rows) => {
+          // 会话守卫：picker 已关闭/重开则丢弃过期结果
+          if (openSeq !== _agentPickerOpenSeq) return;
+          _pickerArtifactRows = rows || [];
+          _pickerArtifactLoading = null;
+        })
+        .catch((err) => {
+          if (openSeq !== _agentPickerOpenSeq) return;
+          _agentsLog.warn('artifact picker load failed', err);
+          _pickerArtifactRows = [];
+          _pickerArtifactLoading = null;
+        });
+    }
+    _pickerArtifactLoading.then(() => {
+      if (openSeq !== _agentPickerOpenSeq) return;
+      if (renderSeq !== _pickerArtifactRenderSeq) return;
+      const picker = document.getElementById('agent-picker');
+      if (!picker || picker.style.display === 'none' || _agentPickerTab !== 'artifacts') return;
+      const search = document.getElementById('agent-picker-search');
+      _renderArtifactsPickerList(listEl, search ? search.value : filterText, anchorId);
+    });
+    return;
+  }
+  const rows = _pickerArtifactRows || [];
+  const filtered = q ? rows.filter((a) => _matchPickerItem(q, a.name, a.sourceSessionId || '', a.ext || '')) : rows;
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(q ? t('agent_picker.artifacts_no_match') : t('agent_picker.artifacts_empty'))}</div>`;
+    return;
+  }
+  listEl.innerHTML = `<div class="skill-picker-group-label">${escapeHtml(t('agent_picker.artifacts_group'))}</div>` +
+    filtered.map((a) => {
+      const sub = `${a.type === 'artifact' ? escapeHtml(t('agent_picker.artifact_confirmed')) : escapeHtml(t('agent_picker.artifact_attachment'))}${a.ext ? ` · ${escapeHtml(a.ext)}` : ''}`;
+      return `
+      <div class="skill-picker-item" data-kind="artifact"
+           data-id="${escapeHtml(a.name)}" data-name="${escapeHtml(a.name)}"
+           data-source-cid="${escapeHtml(a.sourceSessionId || '')}"
+           data-source-title="${escapeHtml(_pickerArtifactTitles.get(a.sourceSessionId) || '')}"
+           data-file-name="${escapeHtml(a.name)}">
+        <div class="skill-picker-item-name">${escapeHtml(a.name)}</div>
+        <div class="skill-picker-item-desc">${sub}</div>
+      </div>`;
+    }).join('');
+  _bindAgentPickerListItems(listEl, anchorId);
+}
+
+function _renderAssetsPickerList(listEl, filterText, anchorId) {
+  const q = (filterText || '').toLowerCase();
+  const renderSeq = ++_pickerAssetRenderSeq;
+  const spaceId = _agentPickerSpaceId(anchorId);
+  if (!spaceId) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('agent_picker.assets_empty'))}</div>`;
+    return;
+  }
+  if (!_pickerAssetRows) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
+    const openSeq = _agentPickerOpenSeq;
+    if (!_pickerAssetLoading) {
+      _pickerAssetLoading = _loadAssetPickerRows(spaceId)
+        .then((rows) => {
+          // 会话守卫：picker 已关闭/重开则丢弃过期结果
+          if (openSeq !== _agentPickerOpenSeq) return;
+          _pickerAssetRows = rows || [];
+          _pickerAssetLoading = null;
+        })
+        .catch(() => {
+          if (openSeq !== _agentPickerOpenSeq) return;
+          _pickerAssetRows = [];
+          _pickerAssetLoading = null;
+        });
+    }
+    _pickerAssetLoading.then(() => {
+      if (openSeq !== _agentPickerOpenSeq) return;
+      if (renderSeq !== _pickerAssetRenderSeq) return;
+      const picker = document.getElementById('agent-picker');
+      if (!picker || picker.style.display === 'none' || _agentPickerTab !== 'assets') return;
+      const search = document.getElementById('agent-picker-search');
+      _renderAssetsPickerList(listEl, search ? search.value : filterText, anchorId);
+    });
+    return;
+  }
+  const rows = _pickerAssetRows || [];
+  const filtered = q ? rows.filter((a) => _matchPickerItem(q, a.title || '', a.asset_id || '', a.asset_type || '')) : rows;
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(q ? t('agent_picker.assets_no_match') : t('agent_picker.assets_empty'))}</div>`;
+    return;
+  }
+  listEl.innerHTML = `<div class="skill-picker-group-label">${escapeHtml(t('agent_picker.assets_group'))}</div>` +
+    filtered.map((a) => {
+      const typeLabel = a.asset_type ? ` · ${escapeHtml(a.asset_type)}` : '';
+      return `
+      <div class="skill-picker-item" data-kind="asset"
+           data-id="${escapeHtml(a.asset_id)}" data-name="${escapeHtml(a.title || a.asset_id)}"
+           data-asset-id="${escapeHtml(a.asset_id)}" data-asset-type="${escapeHtml(a.asset_type || '')}">
+        <div class="skill-picker-item-name">${escapeHtml(a.title || a.asset_id)}</div>
+        <div class="skill-picker-item-desc">${escapeHtml(t('agent_picker.asset_type'))}${typeLabel}</div>
+      </div>`;
+    }).join('');
+  _bindAgentPickerListItems(listEl, anchorId);
+}
+
+// ── 任务引用 chips（composer 引用条）───────────────────────────────────────
+
+function _renderTaskRefChips(el, refs, cid) {
+  if (!el) return;
+  if (!refs || !refs.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  el.innerHTML = refs.map((r, i) => `
+    <span class="chat-taskref-chip ${r.kind === 'asset' ? 'is-asset' : 'is-artifact'}">
+      <em>${r.kind === 'asset' ? escapeHtml(t('agent_picker.ref_asset')) : escapeHtml(t('agent_picker.ref_artifact'))}</em>
+      <span title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</span>
+      <button type="button" class="chat-taskref-remove" data-cid="${escapeHtml(cid || '')}" data-index="${i}"
+        data-kind="${escapeHtml(r.kind || '')}" data-key="${escapeHtml(_sameTaskRefKey(r))}" aria-label="${escapeHtml(t('agent_picker.ref_remove'))}">×</button>
+    </span>`).join('');
+  el.querySelectorAll('.chat-taskref-remove').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const c = btn.dataset.cid;
+      const idx = Number(btn.dataset.index);
+      try {
+        if (c) {
+          await (window.cogseed || window.orkas).invoke('conversations.taskRefs.remove', { cid: c, index: idx });
+        } else {
+          _pendingNewChatRefs = (_pendingNewChatRefs || []).filter((_, i) => i !== idx);
+        }
+      } catch (err) {
+        _agentsLog.warn('task ref remove failed', err);
+      }
+      renderChatTaskRefChips();
+    });
+  });
+}
+
+/** 渲染两个 composer 的引用条：conversation = 当前会话 task_references；new-chat = pending。 */
+function renderChatTaskRefChips() {
+  const cid = (typeof currentCid === 'string') ? currentCid : '';
+  const convEl = document.getElementById('chat-taskrefs');
+  if (convEl) {
+    if (!cid) { convEl.style.display = 'none'; convEl.innerHTML = ''; }
+    else {
+      (async () => {
+        try {
+          const res = await (window.cogseed || window.orkas).invoke('conversations.taskRefs.list', { cid });
+          const refs = Array.isArray(res && res.references) ? res.references : [];
+          _renderTaskRefChips(convEl, refs, cid);
+        } catch (_) { convEl.style.display = 'none'; }
+      })();
+    }
+  }
+  const ncEl = document.getElementById('new-chat-taskrefs');
+  if (ncEl) _renderTaskRefChips(ncEl, _pendingNewChatRefs || [], '');
+}
+
+/** 发送后清空 composer 引用条（视觉反馈：引用已随消息发出；服务端 task_references 保留）。 */
+function clearChatTaskRefChips() {
+  const convEl = document.getElementById('chat-taskrefs');
+  if (convEl) { convEl.style.display = 'none'; convEl.innerHTML = ''; }
+  const ncEl = document.getElementById('new-chat-taskrefs');
+  if (ncEl) { ncEl.style.display = 'none'; ncEl.innerHTML = ''; }
+}
+
+/** new-chat 提交：把 @ 选的 pending 引用写入新建会话的 task_references（发送前调用）。 */
+async function commitNewChatTaskRefs(convId) {
+  const refs = _pendingNewChatRefs || [];
+  _pendingNewChatRefs = [];
+  renderChatTaskRefChips();
+  if (!convId || !refs.length) return;
+  for (const r of refs.slice(0, 20)) {
+    try {
+      await (window.cogseed || window.orkas).invoke('conversations.taskRefs.add', { cid: convId, reference: r });
+    } catch (err) {
+      _agentsLog.warn('taskRefs.add for new chat failed', err);
+    }
+  }
+}
+
+async function _commitTaskRef(reference, anchorId) {
+  const target = _targetFromPickerAnchor(anchorId);
+  if (target === 'conversation') {
+    const cid = (typeof currentCid === 'string') ? currentCid : '';
+    if (!cid) return false;
+    try {
+      const res = await (window.cogseed || window.orkas).invoke('conversations.taskRefs.add', { cid, reference });
+      if (res && res.error) throw new Error(res.error);
+    } catch (err) {
+      _agentsLog.warn('taskRefs.add failed', err);
+      if (typeof uiToast === 'function') uiToast(t('agent_picker.ref_add_failed', '添加引用失败'), { variant: 'warning' });
+      return false;
+    }
+    renderChatTaskRefChips();
+    return true;
+  }
+  if (target === 'new-chat') {
+    const pending = _pendingNewChatRefs || [];
+    const dup = pending.some((r) => _sameTaskRefKey(r) === _sameTaskRefKey(reference));
+    if (!dup) {
+      if (pending.length >= 20) {
+        if (typeof uiToast === 'function') uiToast(t('agent_picker.ref_too_many', '引用数量已达上限'), { variant: 'warning' });
+        return false;
+      }
+      pending.push(reference);
+      _pendingNewChatRefs = pending;
+    }
+    renderChatTaskRefChips();
+    return true;
+  }
+  return false;
+}
+
+async function _triggerArtifactRef(itemName, dataset, anchorId) {
+  const target = _targetFromPickerAnchor(anchorId);
+  const name = dataset.fileName || dataset.name || itemName || '';
+  if (!name) return;
+  _agentsTrackClick(target === 'auto' ? 'auto_artifact_select' : 'chat_artifact_select', { target, name });
+  _consumeAtKeyChar();
+  const reference = {
+    kind: 'artifact',
+    name,
+    ...(dataset.sourceCid ? { source_cid: dataset.sourceCid } : {}),
+    ...(dataset.sourceTitle ? { source_title: dataset.sourceTitle } : {}),
+    file_name: dataset.fileName || name,
+  };
+  const ok = await _commitTaskRef(reference, anchorId);
+  const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
+  _focusInput(document.getElementById(inputId));
+  if (ok && typeof uiToast === 'function') {
+    uiToast(t('agent_picker.ref_added', '已添加引用'), { variant: 'success', timeoutMs: 1500 });
+  }
+}
+
+async function _triggerAssetRef(itemName, dataset, anchorId) {
+  const target = _targetFromPickerAnchor(anchorId);
+  const name = dataset.name || itemName || '';
+  if (!name) return;
+  _consumeAtKeyChar();
+  const reference = {
+    kind: 'asset',
+    name,
+    ...(dataset.assetId ? { asset_id: dataset.assetId } : {}),
+    ...(dataset.assetType ? { asset_type: dataset.assetType } : {}),
+  };
+  const ok = await _commitTaskRef(reference, anchorId);
+  const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
+  _focusInput(document.getElementById(inputId));
+  if (ok && typeof uiToast === 'function') {
+    uiToast(t('agent_picker.ref_added', '已添加引用'), { variant: 'success', timeoutMs: 1500 });
+  }
+}
+
 async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
   const target = _targetFromPickerAnchor(anchorId);
   if (kind === 'skill') {
@@ -3951,6 +4332,14 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
   }
   if (kind === 'ontology_group') {
     _triggerOntologyGroup(itemId, itemName, anchorId);
+    return;
+  }
+  if (kind === 'artifact') {
+    await _triggerArtifactRef(itemName, dataset || {}, anchorId);
+    return;
+  }
+  if (kind === 'asset') {
+    await _triggerAssetRef(itemName, dataset || {}, anchorId);
     return;
   }
   await _triggerAgent(itemId, itemName, anchorId);
@@ -4233,6 +4622,10 @@ function bindRecipientAnchor(chipId, inputId) {
 if (typeof window !== 'undefined') {
   window.bindRecipientAnchor = bindRecipientAnchor;
   window.refreshAgentPickerContext = refreshAgentPickerContext;
+  window.renderChatTaskRefChips = renderChatTaskRefChips;
+  window.commitNewChatTaskRefs = commitNewChatTaskRefs;
+  window.clearChatTaskRefChips = clearChatTaskRefChips;
+  window.updateAgentPickerPlaceholders = updateAgentPickerPlaceholders;
 }
 
 function bindAgentPickers() {
