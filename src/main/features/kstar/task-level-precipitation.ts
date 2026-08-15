@@ -3,7 +3,7 @@ import { safeId } from '../../storage';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { precipitateDirectExperienceFromSource } from './direct-experience-assets';
 import { readKstarEpisode } from './episode-store';
-import { clearsPrecipitationGate, gapType, learningSignal, scopeForTask } from './extraction-service';
+import { clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
 import { readKstarReview } from './review-service';
 import type { KstarRequirementRecord } from './requirement-types';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
@@ -23,12 +23,17 @@ export function userScopeLabel(scope: string): string {
 }
 
 /** 用户可读的经验标题（替代英文技术标题，交互规范附录 A 风格）。 */
-export function userFacingSummary(kind: 'lesson' | 'workflow' | 'gap', scope: string): string {
+export function userFacingSummary(
+  kind: 'lesson' | 'workflow' | 'gap',
+  scope: string,
+  content?: string,
+): string {
   const scopeLabel = userScopeLabel(scope);
+  const core = content ? lessonTitleCore(content) : '';
   switch (kind) {
-    case 'lesson': return `可复用经验（${scopeLabel}）`;
-    case 'workflow': return `已验证的工作流程（${scopeLabel}）`;
-    case 'gap': return `待修正的经验（${scopeLabel}）`;
+    case 'lesson': return core ? `可复用经验：${core}（${scopeLabel}）` : `可复用经验（${scopeLabel}）`;
+    case 'workflow': return core ? `已验证的工作流程：${core}（${scopeLabel}）` : `已验证的工作流程（${scopeLabel}）`;
+    case 'gap': return core ? `待修正经验：${core}（${scopeLabel}）` : `待修正的经验（${scopeLabel}）`;
   }
 }
 
@@ -104,7 +109,7 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
       // Verified workflow without a reasoned lesson → skill_method.
       proposals.push({
         judgment: `处理类似「${goal}」的任务时，可使用已验证的工作流程：${toolChain.join(' → ')}。`,
-        summary: userFacingSummary('workflow', scope),
+        summary: userFacingSummary('workflow', scope, goal),
         uncertainty: '基于已闭环任务的执行经验生成，使用前可复核。',
         suggestedType: 'skill_method',
         suggestedScope: scope,
@@ -117,7 +122,7 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
       // it is a judgment lesson, not a workflow.
       proposals.push({
         judgment: strongest.lesson,
-        summary: userFacingSummary('lesson', scope),
+        summary: userFacingSummary('lesson', scope, strongest.lesson),
         uncertainty: '基于任务执行经验提炼，使用前可复核。',
         suggestedType: 'rule',
         suggestedScope: scope,
@@ -135,7 +140,7 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   if (gapAssetType && gapReview) {
     proposals.push({
       judgment: `遇到同类情况时，应注意修正：${gapReview.reason}`,
-      summary: userFacingSummary('gap', scope),
+      summary: userFacingSummary('gap', scope, gapReview.reason),
       uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: gapAssetType,
       suggestedScope: scope,
