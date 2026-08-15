@@ -138,7 +138,15 @@ export async function autoForecastForRequirement(
         }),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), options.timeoutMs || AUTO_FORECAST_TIMEOUT_MS)),
       ]);
-      if (!task || task.meta.aborted || task.meta.error) return null;
+      if (!task || task.meta.aborted || task.meta.error) {
+        log.warn('kstar auto-forecast runner failed', {
+          userId,
+          conversationId,
+          aborted: task?.meta.aborted,
+          error: task?.meta.error,
+        });
+        return null;
+      }
       return task.text || null;
     });
 
