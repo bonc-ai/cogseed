@@ -258,7 +258,10 @@ describe('confirmed Recall projection prompt injection', () => {
         matchMethod: 'manual',
       }),
     ]);
-    expect(result.promptBlock).toContain(selected.asset.statement);
+    // Prompt blocks are JSON-escaped: the enriched statement (judgment +
+    // value, newline-joined) appears with an escaped backslash-n. The
+    // unrelated asset must never leak in.
+    expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.\\nOAuth review workflow');
     expect(result.promptBlock).not.toContain(unrelated.asset.statement);
   });
 

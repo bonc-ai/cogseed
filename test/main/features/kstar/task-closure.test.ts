@@ -329,6 +329,65 @@ describe('KSTAR task closure', () => {
     expect(kinds).toContain('artifact_file');
   });
 
+  it('precipitated assets carry the full five-source evidence context', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+    await teaching.recordTeachingSignalAfterMemoryWrite('closure-user', {
+      conversationId: 'cid-five-evidence',
+      messageId: 'msg-five-evi',
+      userMessage: '记住：OAuth 回调必须先校验 state。',
+      memoryContent: 'OAuth 回调必须先校验 state。',
+      memoryScope: 'personal',
+    });
+    const inferred = async (_userId: string, builtEpisode: any) => ({
+      review: {
+        expectedResult: builtEpisode.t.userGoal,
+        actualResult: 'Report produced.',
+        deltaR: -0.4 as const,
+        deltaA: 'unknown' as const,
+        outcome: 'worse_than_expected' as const,
+        attribution: 'rule_gap' as const,
+        reason: 'State check was missing.',
+        confidence: 0.9,
+        lesson: 'OAuth 回调必须先校验 state 再交换 code。',
+        evidenceRefs: builtEpisode.evidenceRefs,
+      },
+      reviewState: 'inferred' as const,
+      inferenceMethod: 'model' as const,
+      needsConfirmation: false,
+    });
+
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-five-evi',
+      conversationId: 'cid-five-evidence',
+      status: 'completed',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [{
+        id: 'msg-five-evi-user', ts: new Date().toISOString(), from: 'user', text: 'Fix OAuth state handling',
+      }, {
+        id: 'msg-five-evi-result', ts: new Date().toISOString(), from: 'writer', text: 'Done.',
+        produced: ['report.md'],
+        artifacts: [{ id: 'art-five-evi', title: 'report.md' }],
+      }],
+      inferReview: inferred,
+    });
+
+    // The lesson-driven proposal precipitates with the full evidence context.
+    expect(result.candidates.length).toBeGreaterThanOrEqual(1);
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const all = await assets.listAbilityAssets('closure-user');
+    const fresh = all.find((a) => a.candidateId?.startsWith('direct-'));
+    expect(fresh).toBeTruthy();
+    const kinds = (fresh?.evidenceRefs || []).map((ref) => ref.kind);
+    expect(kinds).toContain('conversation');
+    expect(kinds).toContain('user_teaching_signal');
+    expect(kinds).toContain('artifact_file');
+    // The reasoned lesson is the asset body (not a template sentence).
+    expect(fresh?.statement).toContain('OAuth 回调必须先校验 state');
+  });
+
   it('confirms a lightweight user verdict and reconciles candidate extraction idempotently', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const recallBridge = await import('../../../../src/main/features/kstar/recall-bridge');

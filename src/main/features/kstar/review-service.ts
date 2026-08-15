@@ -24,6 +24,9 @@ export interface SaveKstarReviewInput {
   inferenceMethod?: KstarReviewRecord['inferenceMethod'];
   needsConfirmation?: boolean;
   confirmedAt?: string;
+  /** Model-reasoned reusable lesson; persisted and used as the precipitation
+   *  judgment instead of a fixed template sentence. */
+  lesson?: string;
   evidenceRefs: unknown[];
 }
 
@@ -113,6 +116,7 @@ export async function saveKstarReview(
     ...(input.inferenceMethod ? { inferenceMethod: input.inferenceMethod } : {}),
     ...(input.needsConfirmation !== undefined ? { needsConfirmation: input.needsConfirmation } : {}),
     ...(input.confirmedAt ? { confirmedAt: input.confirmedAt } : {}),
+    ...(input.lesson?.trim() ? { lesson: boundedReason(input.lesson) } : {}),
     evidenceRefs: normalizeCognitionSourceRefs(input.evidenceRefs),
     createdAt: now,
     updatedAt: now,
