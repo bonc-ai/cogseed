@@ -19,10 +19,15 @@
  */
 import * as hubAccount from '../features/hub_account';
 import { HubApiError } from '../features/hub_account';
+import { assertHubAccountReleaseEnabled } from '../features/hub_account/gate';
 
 function assertString(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`invalid ${name}`);
   return value.trim();
+}
+
+function requireReleaseGate(): void {
+  assertHubAccountReleaseEnabled();
 }
 
 export const invokeHandlers = {
@@ -31,45 +36,54 @@ export const invokeHandlers = {
   }),
 
   'hub-account.start_login': async (_payload: unknown, ctx: { userId: string }) => {
+    requireReleaseGate();
     const { authorize_url } = await hubAccount.startLogin(ctx.userId);
     await hubAccount.openAuthorizeUrl(authorize_url);
     return { started: true };
   },
 
   'hub-account.logout': async (_payload: unknown, ctx: { userId: string }) => {
+    requireReleaseGate();
     await hubAccount.logout(ctx.userId);
     return { signed_out: true };
   },
 
-  'hub-account.me': async (_payload: unknown, ctx: { userId: string }) => ({
-    me: await hubAccount.getAccountMe(ctx.userId),
-  }),
+  'hub-account.me': async (_payload: unknown, ctx: { userId: string }) => {
+    requireReleaseGate();
+    return { me: await hubAccount.getAccountMe(ctx.userId) };
+  },
 
-  'hub-account.devices': async (_payload: unknown, ctx: { userId: string }) => ({
-    devices: await hubAccount.listDevices(ctx.userId),
-  }),
+  'hub-account.devices': async (_payload: unknown, ctx: { userId: string }) => {
+    requireReleaseGate();
+    return { devices: await hubAccount.listDevices(ctx.userId) };
+  },
 
   'hub-account.revoke_device': async (payload: { device_id?: unknown }, ctx: { userId: string }) => {
+    requireReleaseGate();
     const deviceId = assertString(payload?.device_id, 'device_id');
     const result = await hubAccount.revokeDevice(ctx.userId, deviceId);
     return { revoked_sessions: result.revoked_sessions };
   },
 
-  'hub-account.consents': async (_payload: unknown, ctx: { userId: string }) => ({
-    consents: await hubAccount.listConsents(ctx.userId),
-  }),
+  'hub-account.consents': async (_payload: unknown, ctx: { userId: string }) => {
+    requireReleaseGate();
+    return { consents: await hubAccount.listConsents(ctx.userId) };
+  },
 
   'hub-account.set_consent': async (payload: { scope?: unknown }, ctx: { userId: string }) => {
+    requireReleaseGate();
     const scope = assertString(payload?.scope, 'scope');
     return { consent: await hubAccount.setConsent(ctx.userId, scope) };
   },
 
   'hub-account.revoke_consent': async (payload: { scope?: unknown }, ctx: { userId: string }) => {
+    requireReleaseGate();
     const scope = assertString(payload?.scope, 'scope');
     return { consent: await hubAccount.revokeConsent(ctx.userId, scope) };
   },
 
   'hub-account.delete_account': async (payload: { confirmation?: unknown }, ctx: { userId: string }) => {
+    requireReleaseGate();
     const confirmation = assertString(payload?.confirmation, 'confirmation');
     return { deletion: await hubAccount.deleteHubAccount(ctx.userId, confirmation) };
   },

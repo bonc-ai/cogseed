@@ -48,7 +48,7 @@ afterEach(() => {
   fs.rmSync(paths.userRoot(UID), { recursive: true, force: true });
 });
 
-describe('Mate Agent Runtime native execution loop', () => {
+describe('CogSeed Runtime native execution loop', () => {
   it('runs fake model → fake tool → fake model final and records session history', async () => {
     const model = adapterFromRuns([
       [

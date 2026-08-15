@@ -21,7 +21,8 @@ afterEach(async () => {
     const auth = await import('../../../src/main/features/auth');
     auth.__setAuthorizationStoreSaveForTests(undefined);
   } catch { /* module may not have loaded */ }
-  process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
+  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -211,27 +212,52 @@ describe('model authorizations', () => {
       expect.objectContaining({ code: 'orphan_entry', entryId: 'entry-orphan' }),
       expect.objectContaining({ code: 'missing_custom_provider', entryId: 'entry-missing-custom' }),
     ]));
+    expect((await auth.listEntries()).entries.map((entry) => entry.entryId)).toEqual(['entry-ok']);
+    expect((await auth.listEntries({ includeUnavailable: true })).entries).toEqual([
+      expect.objectContaining({ entryId: 'entry-ok' }),
+      expect.objectContaining({ entryId: 'entry-orphan', modelAvailable: false }),
+      expect.objectContaining({ entryId: 'entry-missing-custom', modelAvailable: false }),
+    ]);
   });
 
   it('reuses an existing CC Switch custom authorization only after explicit completion', async () => {
     const auth = await import('../../../src/main/features/auth');
+    const providers = await import('../../../src/main/features/custom_providers');
     const first = await auth.completeAuthorization(UID, {
       requestId: 'req-cc-first', authType: 'api_key', source: 'ccswitch', providerKind: 'custom',
       customProvider: { name: 'Claude Desktop', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: 'first-secret', externalId: 'claude:desktop' },
       selectedModels: ['claude-opus-4-8'], defaultModel: 'claude-opus-4-8',
     });
+    const providerId = first.authorization.authorizationId.slice('custom:'.length);
+    expect(providers.updateCustomProviderModel(UID, providerId, 'claude-opus-4-8', {
+      id: 'claude-opus-4-8', contextWindow: 524288, maxTokens: 32768,
+    })).toEqual({
+      ok: true,
+      model: { id: 'claude-opus-4-8', contextWindow: 524288, maxTokens: 32768 },
+    });
+    expect(providers.setCustomProviderEnabled(UID, providerId, false)).toEqual({ ok: true, enabled: false });
 
     expect(auth.listAuthorizationSummaries(UID).authorizations.find((row) => row.authorizationId === first.authorization.authorizationId)?.enabledModels).toEqual(['claude-opus-4-8']);
 
     const second = await auth.completeAuthorization(UID, {
       requestId: 'req-cc-second', authType: 'api_key', source: 'ccswitch', providerKind: 'custom',
       customProvider: { name: 'Claude Desktop Updated', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: 'second-secret', externalId: 'claude:desktop' },
-      selectedModels: ['claude-sonnet-4-6'], defaultModel: 'claude-sonnet-4-6',
+      selectedModels: ['claude-sonnet-4-6', 'claude-opus-4-8'], defaultModel: 'claude-sonnet-4-6',
     });
 
     expect(second.authorization.authorizationId).toBe(first.authorization.authorizationId);
-    expect(second.authorization.enabledModels).toEqual(['claude-sonnet-4-6']);
+    expect(second.authorization.enabledModels).toEqual(['claude-sonnet-4-6', 'claude-opus-4-8']);
     expect(auth.listAuthorizationSummaries(UID).authorizations.filter((row) => row.source === 'ccswitch')).toHaveLength(1);
+    expect(providers.listCustomProviders(UID)).toEqual([
+      expect.objectContaining({
+        id: providerId,
+        enabled: false,
+        models: [
+          { id: 'claude-sonnet-4-6', contextWindow: 131072, maxTokens: 8192 },
+          { id: 'claude-opus-4-8', contextWindow: 524288, maxTokens: 32768 },
+        ],
+      }),
+    ]);
   });
 
 });

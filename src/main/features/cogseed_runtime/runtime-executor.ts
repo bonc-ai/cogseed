@@ -1,5 +1,5 @@
 import { PC_ROOT } from '../../paths';
-import { createMateOpenAICompatibleProvider } from '../cogseed_backend/model-provider';
+import { createMateRuntimeProvider } from '../cogseed_backend/model-provider';
 import { mateConnectorManager } from '../cogseed_backend/connector-manager';
 import { mateKbManager } from '../cogseed_backend/mate-kb-store';
 import { DEFAULT_RUNTIME_KERNEL_CONFIG, MATE_RUNTIME_TOOL_POLICY } from './kernel/config';
@@ -26,6 +26,7 @@ export interface NativeRuntimeExecutorDeps {
 }
 
 export function runtimeKernelRequestFromProtocol(request: RuntimeRunRequest): RuntimeKernelRequest {
+  const allowedSkillIds = request.allowed_skill_ids ?? [];
   return {
     userId: request.user_id,
     requestId: request.request_id,
@@ -35,8 +36,12 @@ export function runtimeKernelRequestFromProtocol(request: RuntimeRunRequest): Ru
     attachments: request.attachments,
     readOnlyRoots: request.read_only_roots ?? [],
     writableRoots: request.writable_roots ?? [],
-    toolPolicy: MATE_RUNTIME_TOOL_POLICY,
+    toolPolicy: allowedSkillIds.length
+      ? { ...MATE_RUNTIME_TOOL_POLICY, skillRun: 'allowlisted_skills' }
+      : MATE_RUNTIME_TOOL_POLICY,
     capabilities: request.capabilities ?? [],
+    executionKind: 'cogseed-native',
+    allowedSkillIds,
     ...(request.agent_id ? { agentId: request.agent_id } : {}),
     ...(request.model_profile ? { modelProfile: request.model_profile } : {}),
     ...(request.working_dir ? { workingDir: request.working_dir } : {}),
@@ -92,7 +97,7 @@ export function createDefaultNativeRuntimeExecutor(
   deps: Pick<NativeRuntimeExecutorDeps, 'modelAdapter' | 'provider' | 'kernelFactory' | 'hostToolClient'> = {},
 ): RuntimeExecutor {
   const modelAdapter = deps.modelAdapter ?? createRuntimeModelAdapter({
-    provider: deps.provider ?? createMateOpenAICompatibleProvider(),
+    provider: deps.provider ?? createMateRuntimeProvider(),
   });
   return createNativeRuntimeExecutor({
     modelAdapter,
@@ -106,6 +111,7 @@ export function createDefaultNativeRuntimeExecutor(
       pcDir: PC_ROOT,
       toolPolicy: request.toolPolicy,
       capabilities: request.capabilities,
+      allowedSkillIds: request.allowedSkillIds,
       connectorManager: mateConnectorManager,
       kbManager: mateKbManager,
       ...(deps.hostToolClient ? { hostToolClient: deps.hostToolClient } : {}),

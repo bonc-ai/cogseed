@@ -15,6 +15,7 @@ import { createLogger } from '../../logger';
 import type {
   HubAccountMe,
   HubBindResult,
+  HubCallbackDeviceInfo,
   HubCallbackResult,
   HubConsent,
   HubDevice,
@@ -25,9 +26,15 @@ const log = createLogger('hub_account:client');
 
 export const DEFAULT_HUB_API_BASE = 'http://localhost:3000';
 
-/** Resolve the Hub service base URL (env override wins; tests inject directly). */
+/** Resolve the Hub service base URL. `COGSEED_HUB_API_BASE` is preferred for
+ * 联调，`ORKAS_HUB_API_BASE` is kept as the legacy override, and localhost is
+ * the fallback for local development. */
 export function hubApiBase(): string {
-  return process.env.ORKAS_HUB_API_BASE?.trim() || DEFAULT_HUB_API_BASE;
+  return (
+    process.env.COGSEED_HUB_API_BASE?.trim() ||
+    process.env.ORKAS_HUB_API_BASE?.trim() ||
+    DEFAULT_HUB_API_BASE
+  );
 }
 
 export class HubApiError extends Error {
@@ -54,13 +61,13 @@ interface RequestOptions {
 
 export interface HubClient {
   login(provider: string, redirectUri: string): Promise<{ authorize_url: string; state: string }>;
-  callback(code: string, state: string): Promise<HubCallbackResult>;
+  callback(code: string, state: string, device: HubCallbackDeviceInfo): Promise<HubCallbackResult>;
   refresh(refreshToken: string): Promise<HubRefreshResult>;
   logout(accessToken: string): Promise<{ message: string }>;
   me(accessToken: string): Promise<HubAccountMe>;
   bind(
     accessToken: string,
-    body: { local_identity_id: string; device_name: string; device_os: string },
+    body: { local_identity_id: string; installation_id: string; device_name: string; device_os: string },
   ): Promise<HubBindResult>;
   listDevices(accessToken: string, page?: number, pageSize?: number): Promise<{ data: HubDevice[]; total: number }>;
   revokeDevice(accessToken: string, deviceId: string): Promise<{ device_id: string; revoked_sessions: number }>;
@@ -114,8 +121,8 @@ export function createHubClient(baseUrl: string): HubClient {
       const qs = new URLSearchParams({ provider, redirect_uri: redirectUri });
       return request<{ authorize_url: string; state: string }>(`/api/v1/auth/login?${qs.toString()}`);
     },
-    callback: (code, state) =>
-      request('/api/v1/auth/callback', { method: 'POST', body: { code, state } }),
+    callback: (code, state, device) =>
+      request('/api/v1/auth/callback', { method: 'POST', body: { code, state, ...device } }),
     refresh: (refreshToken) =>
       request('/api/v1/auth/refresh', { method: 'POST', body: { refresh_token: refreshToken } }),
     logout: (accessToken) =>

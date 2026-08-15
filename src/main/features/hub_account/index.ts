@@ -32,6 +32,7 @@ import {
 } from './auth-flow';
 import { readHubAccountState } from './state';
 import { loadHubSession } from './tokens';
+import { broadcastHubLoginOutcome } from './account-events';
 
 const log = createLogger('hub_account');
 const ACCOUNT_CALLBACK_HOST = 'account';
@@ -58,6 +59,10 @@ export function accountCallbackUrl(rawUrl: string): string | null {
 /**
  * Consume a `cogseed://account/callback` deep link: extract `code` + `state`
  * and complete the login flow for the active local identity.
+ *
+ * Always notifies the renderer of the outcome: nothing on the renderer side
+ * awaits this call, so the broadcast is the only way the account pane learns
+ * that the login finished.
  */
 export async function handleAccountCallbackUrl(rawUrl: string): Promise<{ ok: boolean; error?: string; account_id?: string; is_new_account?: boolean }> {
   const url = accountCallbackUrl(rawUrl);
@@ -66,17 +71,26 @@ export async function handleAccountCallbackUrl(rawUrl: string): Promise<{ ok: bo
   const parsed = new URL(url);
   const code = parsed.searchParams.get('code');
   const state = parsed.searchParams.get('state');
-  if (!code) return { ok: false, error: 'missing_code' };
-  if (!state) return { ok: false, error: 'missing_state' };
+  if (!code) {
+    broadcastHubLoginOutcome({ result: 'failure', code: 'missing_code' });
+    return { ok: false, error: 'missing_code' };
+  }
+  if (!state) {
+    broadcastHubLoginOutcome({ result: 'failure', code: 'missing_state' });
+    return { ok: false, error: 'missing_state' };
+  }
 
   // Login is always bound to the active local identity.
   const userId = getActiveUserId();
   try {
     const { account_id, is_new_account } = await completeLogin(userId, code, state);
+    broadcastHubLoginOutcome({ result: 'success', account_id, is_new_account });
     return { ok: true, account_id, is_new_account };
   } catch (err) {
     log.warn('account deep-link login failed', { error: (err as Error).message });
-    return { ok: false, error: err instanceof HubApiError ? err.code : 'login_failed' };
+    const failureCode = err instanceof HubApiError ? err.code : 'login_failed';
+    broadcastHubLoginOutcome({ result: 'failure', code: failureCode, error: (err as Error).message });
+    return { ok: false, error: failureCode };
   }
 }
 

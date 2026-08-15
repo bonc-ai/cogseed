@@ -14,6 +14,7 @@
  * local identity or its data — only the Hub session and binding metadata.
  */
 import * as os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { shell } from 'electron';
 
 import { getActiveUserId } from '../users';
@@ -42,6 +43,14 @@ function _deviceName(): string {
 
 function _deviceOs(): string {
   return `${os.platform()} ${os.release()}`;
+}
+
+function getOrCreateInstallationId(userId: string): string {
+  const state = readHubAccountState(userId);
+  if (state.installation_id) return state.installation_id;
+  const installation_id = randomUUID();
+  writeHubAccountState(userId, { installation_id });
+  return installation_id;
 }
 
 function _isExpiringSoon(session: HubSession, withinMs: number): boolean {
@@ -94,11 +103,18 @@ export async function completeLogin(
   client: HubClient = hubClient(),
 ): Promise<{ account_id: string; is_new_account: boolean }> {
   const expected = currentLoginState(userId);
-  if (expected && expected !== state) {
+  if (!expected) {
+    throw new HubApiError('AUTH_NO_PENDING_LOGIN', '没有进行中的登录，请重新发起登录', 400);
+  }
+  if (expected !== state) {
     throw new HubApiError('AUTH_INVALID_STATE', 'OAuth state 不匹配，请重新登录', 400);
   }
 
-  const result = await client.callback(code, state);
+  const result = await client.callback(code, state, {
+    installation_id: getOrCreateInstallationId(userId),
+    device_name: _deviceName(),
+    device_os: _deviceOs(),
+  });
   saveHubSession(userId, result.session);
   writeHubAccountState(userId, {
     account_id: result.account.account_id,
@@ -106,12 +122,22 @@ export async function completeLogin(
     account_status: result.account.status,
     pending_login: undefined,
   });
+  // The session is persisted from here on, so the login has succeeded — clear
+  // the pending state before the optional bind. Letting a bind failure throw
+  // past this point would report a failed login while the user is in fact
+  // signed in, and would leave the consumed state pending.
+  _pendingState = null;
 
   let bind: HubBindResult | null = null;
   if (result.is_new_account) {
-    bind = await bindLocalIdentity(userId, result.session.access_token, client);
+    try {
+      bind = await bindLocalIdentity(userId, result.session.access_token, client);
+    } catch (err) {
+      // Binding is device metadata, not an auth step; it is retried on the next
+      // authenticated call. Surfacing it as a login failure would be wrong.
+      log.warn('hub local identity bind failed after login', { error: (err as Error).message });
+    }
   }
-  _pendingState = null;
   log.info('hub login completed', { accountId: mask(result.account.account_id), isNew: result.is_new_account, bound: !!bind });
   return { account_id: result.account.account_id, is_new_account: result.is_new_account };
 }
@@ -129,6 +155,7 @@ export async function bindLocalIdentity(
 ): Promise<HubBindResult> {
   const result = await client.bind(accessToken, {
     local_identity_id: getActiveUserId(),
+    installation_id: getOrCreateInstallationId(userId),
     device_name: _deviceName(),
     device_os: _deviceOs(),
   });

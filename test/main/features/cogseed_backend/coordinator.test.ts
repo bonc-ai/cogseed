@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as paths from '../../../../src/main/paths';
 import { createMateCoordinator, readMateCoordination } from '../../../../src/main/features/cogseed_backend/coordinator';
 import { createMateTask, readMateTask } from '../../../../src/main/features/cogseed_backend/task-store';
+import { transitionMateTask } from '../../../../src/main/features/cogseed_backend/lifecycle';
 
 const UID = 'mate-coordinator-user';
 afterEach(() => fs.rmSync(paths.userRoot(UID), { recursive: true, force: true }));
@@ -14,11 +15,11 @@ async function parent() {
 
 function setup() {
   const startTask = vi.fn(async (userId: string, input: any) => (await createMateTask(userId, input)).task);
-  const cancelTask = vi.fn(async (userId: string, taskId: string) => (await readMateTask(userId, taskId))!);
+  const cancelTask = vi.fn(async (userId: string, taskId: string) => transitionMateTask(userId, taskId, 'cancelled'));
   return { coordinator: createMateCoordinator({ startTask, cancelTask }), startTask, cancelTask };
 }
 
-describe('Mate coordinator', () => {
+describe('CogSeed coordinator', () => {
   it('delegates a linked depth-one child idempotently', async () => {
     const p = await parent(); const h = setup();
     const first = await h.coordinator.delegate(UID, p.requestId, { requestId: 'req-child-1', task: 'Research A', role: 'researcher' });
@@ -46,4 +47,40 @@ describe('Mate coordinator', () => {
     await h.coordinator.cancel(UID, p.requestId, child.taskId);
     expect(h.cancelTask).toHaveBeenCalledWith(UID, child.taskId);
   });
+
+
+  it('summarizes child status by task id and keeps results scoped to the owning user', async () => {
+    const p = await parent(); const h = setup();
+    const child = await h.coordinator.delegate(UID, p.requestId, { requestId: 'req-child-sum', task: 'Summarize me' });
+    await h.coordinator.cancel(UID, p.requestId, child.taskId);
+
+    const otherUser = 'mate-coordinator-other';
+    const otherParent = (await createMateTask(otherUser, { requestId: 'req-parent', task: 'Coordinate work' })).task;
+    const other = setup();
+    await other.coordinator.delegate(otherUser, otherParent.requestId, { requestId: 'req-child-other', task: 'Elsewhere' });
+
+    await expect(h.coordinator.tasks(UID, p.requestId, [child.taskId, 'mate-task-missing'])).resolves.toMatchObject({
+      coordinationId: expect.stringMatching(/^mate-coord-/),
+      children: [{ taskId: child.taskId, status: 'cancelled' }],
+    });
+    await expect(h.coordinator.tasks(otherUser, otherParent.requestId, [])).resolves.toMatchObject({
+      children: [{ taskId: expect.stringMatching(/^mate-task-/), status: 'created' }],
+    });
+  });
+
+  it('cancels active children and keeps terminal children untouched', async () => {
+    const p = await parent(); const h = setup();
+    const active = await h.coordinator.delegate(UID, p.requestId, { requestId: 'req-child-active', task: 'Active child' });
+    const terminal = await h.coordinator.delegate(UID, p.requestId, { requestId: 'req-child-terminal', task: 'Terminal child' });
+    await h.coordinator.cancel(UID, p.requestId, terminal.taskId);
+    h.cancelTask.mockClear();
+
+    await h.coordinator.cancelChildrenForParent(UID, p.taskId);
+
+    expect(h.cancelTask).toHaveBeenCalledTimes(1);
+    expect(h.cancelTask).toHaveBeenCalledWith(UID, active.taskId);
+    await expect(readMateTask(UID, active.taskId)).resolves.toMatchObject({ status: 'cancelled' });
+    await expect(readMateTask(UID, terminal.taskId)).resolves.toMatchObject({ status: 'cancelled' });
+  });
+
 });

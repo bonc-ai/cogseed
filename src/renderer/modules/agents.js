@@ -1673,6 +1673,123 @@ function _renderAgentDetailKnowhow(agent, editing = false) {
   _renderEditableTagList(host, agent, 'knowhow', tags, editing);
 }
 
+/** 一条资产没被继承的原因，翻成用户能懂的话。
+ *
+ *  `user_excluded` 单独一档：那是人做的决定，其余五档是系统按资产状态判的。
+ *  两者混在一起显示，用户就没法回答「是我当初勾掉的，还是它自己失效了」。 */
+function _inheritanceExclusionLabel(reason) {
+  switch (reason) {
+    case 'user_excluded':
+      return _agentLabel('agents.inheritance_excluded_user', '你在创建时勾掉了', 'You unchecked it at creation', '作成時にあなたが外しました');
+    case 'paused':
+      return _agentLabel('agents.inheritance_excluded_paused', '当时已暂停', 'Paused at the time', '当時は一時停止中');
+    case 'archived':
+      return _agentLabel('agents.inheritance_excluded_archived', '当时已归档', 'Archived at the time', '当時はアーカイブ済み');
+    case 'revoked':
+      return _agentLabel('agents.inheritance_excluded_revoked', '当时已撤销', 'Revoked at the time', '当時は取り消し済み');
+    case 'deleted':
+      return _agentLabel('agents.inheritance_excluded_deleted', '当时已删除', 'Deleted at the time', '当時は削除済み');
+    case 'purged':
+      return _agentLabel('agents.inheritance_excluded_purged', '当时已彻底清除', 'Purged at the time', '当時は完全消去済み');
+    default:
+      return reason;
+  }
+}
+
+function _inheritanceItemHtml(title, meta, { excludedByUser = false } = {}) {
+  return `
+    <div class="agents-detail-list-item">
+      <div class="agents-detail-list-main">
+        <span class="agents-detail-list-text">${escapeHtml(title)}</span>
+        <span class="agents-detail-list-meta${excludedByUser ? ' is-user-choice' : ''}">${escapeHtml(meta)}</span>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * 「出生时继承了什么」。
+ *
+ * **两种空必须分开说。** `inheritance === null` 表示这个 Agent 生成的时候还没有
+ * 继承机制——它不是「没继承到东西」，是这个问题当时根本不存在。把两者都渲染成
+ * 一句「没有继承任何认知」，用户会以为自己教过的东西丢了。
+ */
+async function _renderAgentDetailInheritance(agent) {
+  const section = document.getElementById('agents-detail-inheritance-section');
+  const host = document.getElementById('agents-detail-inheritance');
+  if (!section || !host) return;
+  const agentId = String(agent?.agent_id || '');
+  if (!agentId || _isCommanderAgent(agent)) {
+    section.style.display = 'none';
+    host.innerHTML = '';
+    return;
+  }
+
+  let inheritance = null;
+  let assetTitles = new Map();
+  try {
+    const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/inheritance`);
+    const data = await res.json();
+    if (!data.ok) throw new Error('inheritance unavailable');
+    inheritance = data.inheritance;
+    if (inheritance) {
+      // 继承记录只存引用，标题要另取——取不到就退回显示 id，而不是空着。
+      // recall 频道在渲染层一律直接 invoke（与 skills.js 一致），不走 apiFetch。
+      const list = await window.cogseed.invoke('recall.assets.list').catch(() => null);
+      assetTitles = new Map((list?.assets || []).map((a) => [a.id, a.title]));
+    }
+  } catch {
+    section.style.display = 'none';
+    host.innerHTML = '';
+    return;
+  }
+
+  // 异步返回期间用户可能已经切走了，别把结果画到别人的详情页上。
+  if (!_selectedAgent || _selectedAgent.id !== agentId) return;
+
+  section.style.display = '';
+
+  if (!inheritance) {
+    host.innerHTML = `<p class="agents-detail-placeholder">${escapeHtml(_agentLabel(
+      'agents.inheritance_none_recorded',
+      '这个智能体创建时还没有继承机制，所以没有出生记录——不是它没继承到东西。',
+      'This agent was created before inheritance was recorded, so there is no record of its creation — that is not the same as inheriting nothing.',
+      'このエージェントは継承の記録が始まる前に作成されたため、作成時の記録がありません（何も継承しなかったという意味ではありません）。',
+    ))}</p>`;
+    return;
+  }
+
+  const inherited = Array.isArray(inheritance.inheritedAssets) ? inheritance.inheritedAssets : [];
+  const excluded = Array.isArray(inheritance.excludedAssets) ? inheritance.excludedAssets : [];
+
+  const inheritedHtml = inherited.map((ref) => _inheritanceItemHtml(
+    assetTitles.get(ref.asset_id) || ref.asset_id,
+    `v${ref.version}`,
+  )).join('');
+
+  const excludedHtml = excluded.map((entry) => _inheritanceItemHtml(
+    assetTitles.get(entry.assetId) || entry.assetId,
+    _inheritanceExclusionLabel(entry.reason),
+    { excludedByUser: entry.reason === 'user_excluded' },
+  )).join('');
+
+  const emptyHtml = inherited.length ? '' : `<p class="agents-detail-placeholder">${escapeHtml(_agentLabel(
+    'agents.inheritance_empty',
+    '创建时没有可继承的认知资产。',
+    'There was no cognition available to inherit when this agent was created.',
+    '作成時に継承できる認知資産がありませんでした。',
+  ))}</p>`;
+
+  const excludedTitle = excluded.length ? `<div class="agents-detail-label is-sub">${escapeHtml(_agentLabel(
+    'agents.inheritance_excluded_label',
+    '没有带走的',
+    'Not carried over',
+    '引き継がなかったもの',
+  ))}</div>` : '';
+
+  host.innerHTML = `${emptyHtml}${inheritedHtml}${excludedTitle}${excludedHtml}`;
+}
+
 function _renderAgentDetail(agent, editing) {
   agent = { ...agent, source: _agentSource(agent.source) };
   const isCommander = _isCommanderAgent(agent);
@@ -1707,6 +1824,8 @@ function _renderAgentDetail(agent, editing) {
   _renderAgentDetailStats(agent, editing);
   _renderAgentDetailMemory(agent, editing);
   _renderAgentDetailKnowhow(agent, editing);
+  // 异步：要读出生快照与资产标题。失败就把整段藏起来，不占位。
+  void _renderAgentDetailInheritance(agent);
 
   // CLI-backed agents have no authored workflow / skill_list — the
   // external CLI brings its own behavior. Hide the entire workflow

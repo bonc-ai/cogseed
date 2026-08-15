@@ -82,12 +82,14 @@ env_key = "OPENAI_API_KEY"` }),
       }),
       expect.objectContaining({ externalId: 'codex:codex-relay', protocol: 'openai', apiKey: 'ok' }),
       expect.objectContaining({ externalId: 'gemini:gemini-relay', protocol: 'gemini', apiKey: 'gk' }),
+      // Env-key-only rows are importable with needsKey so the user can fill
+      // the key after the preview instead of losing the endpoint entirely.
+      expect.objectContaining({ externalId: 'codex:codex-env-key', protocol: 'openai', apiKey: '', needsKey: true }),
     ]));
-    expect(result.items).toHaveLength(3);
+    expect(result.items).toHaveLength(4);
     expect(result.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ externalId: 'claude:official', reason: 'official' }),
       expect.objectContaining({ externalId: 'hermes:unsupported-hermes', reason: 'unsupported_protocol' }),
-      expect.objectContaining({ externalId: 'codex:codex-env-key', reason: 'missing_api_key' }),
     ]));
   });
 
@@ -125,5 +127,28 @@ env_key = "OPENAI_API_KEY"` }),
     const { entries } = await auth.listEntries();
     const providerId = `cp:${providers.listCustomProviders(UID)[0].id}`;
     expect(entries.some((e) => e.provider === providerId && e.model === 'gpt-5')).toBe(true);
+  });
+
+  it('preserves configured model limits when re-syncing the same model id', async () => {
+    createDb([{
+      id: 'limits', app_type: 'codex', name: 'Limits',
+      settings_config: JSON.stringify({
+        auth: { OPENAI_API_KEY: 'key-limits' },
+        env: { OPENAI_BASE_URL: 'https://limits.example/v1' },
+        model: 'model-a',
+      }),
+    }]);
+    const providers = await import('../../../src/main/features/custom_providers');
+    await providers.syncFromCcSwitch(UID, ['codex:limits'], home);
+    const provider = providers.listCustomProviders(UID)[0];
+    expect(providers.updateCustomProviderModel(UID, provider.id, 'model-a', {
+      id: 'model-a', contextWindow: 524288, maxTokens: 32768,
+    })).toMatchObject({ ok: true });
+
+    await providers.syncFromCcSwitch(UID, ['codex:limits'], home);
+
+    expect(providers.listCustomProviders(UID)[0].models).toEqual([
+      { id: 'model-a', contextWindow: 524288, maxTokens: 32768 },
+    ]);
   });
 });

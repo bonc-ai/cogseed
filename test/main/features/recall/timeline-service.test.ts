@@ -108,4 +108,23 @@ describe('Recall asset proof timeline', () => {
     expect(items.map((item) => item.kind)).toEqual(['asset_created', 'asset_version']);
     expect(items.some((item) => item.refs?.projectionId === confirmed.id)).toBe(false);
   });
+
+  it('reports Evidence-driven maturity downgrade without presenting it as asset revocation', async () => {
+    const { assets, timeline } = await modules();
+    const asset = await promoteAsset('user-a', 'Keep source-backed guidance.', 'review');
+    await assets.setAbilityAssetMaturity('user-a', asset.id, 'transfer_validated');
+
+    await assets.downgradeAbilityAssetMaturityForRevokedEvidence('user-a', asset.id, {
+      kind: 'memory',
+      id: 'mem-review',
+    });
+
+    const items = await timeline.listAbilityAssetTimeline('user-a', asset.id);
+    expect(items).toContainEqual(expect.objectContaining({
+      kind: 'asset_maturity_downgraded',
+      title: 'Asset maturity downgraded',
+      summary: 'evidence_revoked:memory:mem-review',
+    }));
+    expect(items.filter((item) => item.kind === 'asset_revoked')).toEqual([]);
+  });
 });

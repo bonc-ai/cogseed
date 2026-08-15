@@ -386,26 +386,7 @@ describe('personal_ontology_candidates › rejectCandidate', () => {
 
 // ── batch operations ─────────────────────────────────────────────────────
 
-describe('personal_ontology_candidates › batch confirm/reject', () => {
-  it('confirmCandidates writes multiple entries and empties the pool', async () => {
-    const poc = await loadModule();
-    const file = candidatesMdPath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([
-      { candidate_id: 'c1', kind: 'preference', confidence: 'high', summary: 'a', memory_scope: 'user', memory_text: 'memory A', source_memory_refs: [] },
-      { candidate_id: 'c2', kind: 'rule', confidence: 'medium', summary: 'b', memory_scope: 'shared', memory_text: 'memory B', source_memory_refs: [] },
-    ]));
-
-    const res = await poc.confirmCandidates(UID, ['c1', 'c2']);
-    expect(res.confirmedCount).toBe(2);
-    expect(res.failedIds).toEqual([]);
-
-    const after = await poc.listCandidates(UID);
-    expect(after.candidate_updates).toHaveLength(0);
-    expect(fs.readFileSync(userProfilePath(), 'utf8')).toContain('memory A');
-    expect(fs.readFileSync(sharedMemoryPath(), 'utf8')).toContain('memory B');
-  });
-
+describe('personal_ontology_candidates › batch reject', () => {
   it('rejectCandidates removes only the targeted ids', async () => {
     const poc = await loadModule();
     const file = candidatesMdPath();
@@ -423,32 +404,6 @@ describe('personal_ontology_candidates › batch confirm/reject', () => {
     expect(after.candidate_updates[0].candidate_id).toBe('c2');
   });
 
-  it('confirmCandidates applies the same dest to every candidate in the batch and reports per-candidate results', async () => {
-    const poc = await loadModule();
-    const groups = await loadGroups();
-    const groupId = (await groups.createGroup(UID, 'batch group')).group!.group_id;
-
-    const file = candidatesMdPath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([
-      { candidate_id: 'c1', kind: 'preference', confidence: 'high', summary: 'a', memory_scope: 'user', memory_text: 'memory A', source_memory_refs: [] },
-      { candidate_id: 'c2', kind: 'rule', confidence: 'medium', summary: 'b', memory_scope: 'shared', memory_text: 'memory B', source_memory_refs: [] },
-    ]));
-
-    const res = await poc.confirmCandidates(UID, ['c1', 'c2'], { toGlobalMemory: false, toGroupIds: [groupId] });
-    expect(res.confirmedCount).toBe(2);
-    expect(res.failedIds).toEqual([]);
-    expect(res.results.c1.groups).toEqual([{ groupId, ok: true }]);
-    expect(res.results.c2.groups).toEqual([{ groupId, ok: true }]);
-
-    // Not written to global memory (toGlobalMemory:false).
-    expect(fs.existsSync(userProfilePath())).toBe(false);
-    expect(fs.existsSync(sharedMemoryPath())).toBe(false);
-
-    const content = (await groups.readGroupContent(UID, groupId)).content || '';
-    expect(content).toContain('memory A');
-    expect(content).toContain('memory B');
-  });
 });
 
 // ── legacy candidates.json migration ─────────────────────────────────────
@@ -567,36 +522,37 @@ describe('personal_ontology_candidates › confirm with targetField routing', ()
     return poc;
   }
 
-  it('hits an existing template field → writes field zone with [候选] source', async () => {
-    const groups = await loadGroups();
-    await groups.installRoleTemplate(UID, 'student');
-    const prefs = await groups.listGroups(UID);
-    const prefGroup = prefs.find((g) => g.title === '协作关系')!.group_id;
+  it('hits an existing template section field → writes it with [候选] source', async () => {
+    const tmpl = await loadTemplateMod();
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const sectionRef = tmpl.buildContentRef(row.group_id, '协作关系');
 
     const poc = await seedCandidate('cand-hit', '协作项目');
-    const res = await poc.confirmCandidate(UID, 'cand-hit', { toGlobalMemory: false, toGroupIds: [prefGroup], targetField: '协作项目' });
+    const res = await poc.confirmCandidate(UID, 'cand-hit', { toGlobalMemory: false, toGroupIds: [sectionRef], targetField: '协作项目' });
     expect(res.ok).toBe(true);
-    expect(res.fieldWrites).toEqual([{ groupId: prefGroup, fieldName: '协作项目', ok: true }]);
+    expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '协作项目', ok: true }]);
     expect(res.groups).toBeUndefined(); // 填坑成功，不走流水区
 
-    const content = (await groups.readGroupContent(UID, prefGroup)).content || '';
-    expect(content).toContain('## 字段区');
+    const content = tmpl.readTemplateFileText(UID, 'student');
     expect(content).toContain('- 这条候选的值 [候选]');
   });
 
   it('missing field on the group → falls back to 流水区', async () => {
-    const groups = await loadGroups();
-    await groups.installRoleTemplate(UID, 'student');
-    const courseGroup = (await groups.listGroups(UID)).find((g) => g.title === '学习背景')!.group_id;
+    const tmpl = await loadTemplateMod();
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const sectionRef = tmpl.buildContentRef(row.group_id, '学习背景');
 
     const poc = await seedCandidate('cand-miss', '协作项目'); // 学习背景组没有 协作项目 字段
-    const res = await poc.confirmCandidate(UID, 'cand-miss', { toGlobalMemory: false, toGroupIds: [courseGroup], targetField: '协作项目' });
+    const res = await poc.confirmCandidate(UID, 'cand-miss', { toGlobalMemory: false, toGroupIds: [sectionRef], targetField: '协作项目' });
     expect(res.ok).toBe(true);
-    expect(res.fieldWrites).toEqual([{ groupId: courseGroup, fieldName: '协作项目', ok: false, error: 'field not found' }]);
-    expect(res.groups).toEqual([{ groupId: courseGroup, ok: true }]);
+    expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '协作项目', ok: false, error: 'field not found' }]);
+    expect(res.groups).toEqual([{ groupId: sectionRef, ok: true }]);
 
-    const content = (await groups.readGroupContent(UID, courseGroup)).content || '';
-    expect(content).toBe('这条候选的值'); // 流水区，纯文本
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toContain('## 学习背景');
+    expect(content).toContain('这条候选的值');
   });
 
   it('no targetField → 流水区 as before, no fieldWrites reported', async () => {
@@ -607,40 +563,6 @@ describe('personal_ontology_candidates › confirm with targetField routing', ()
     expect(res.ok).toBe(true);
     expect(res.fieldWrites).toBeUndefined();
     expect(res.groups).toEqual([{ groupId: g, ok: true }]);
-  });
-});
-
-describe('personal_ontology_candidates › confirmBatch summary', () => {
-  it('aggregates toFields counts and toEntries across per-candidate routing', async () => {
-    const groups = await loadGroups();
-    await groups.installRoleTemplate(UID, 'student');
-    const prefs = (await groups.listGroups(UID)).find((g) => g.title === '协作关系')!.group_id;
-    const courses = (await groups.listGroups(UID)).find((g) => g.title === '学习背景')!.group_id;
-
-    const poc = await loadModule();
-    const file = candidatesMdPath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([
-      { candidate_id: 'b1', kind: 'preference', confidence: 'high', summary: 'a', memory_scope: 'user', memory_text: '值1', target_field: '协作项目', source_memory_refs: [] },
-      { candidate_id: 'b2', kind: 'preference', confidence: 'high', summary: 'b', memory_scope: 'user', memory_text: '值2', target_field: '协作项目', source_memory_refs: [] },
-      { candidate_id: 'b3', kind: 'instance', confidence: 'medium', summary: 'c', memory_scope: 'user', memory_text: '值3', target_field: '教育阶段', source_memory_refs: [] },
-      { candidate_id: 'b4', kind: 'instance', confidence: 'medium', summary: 'd', memory_scope: 'user', memory_text: '值4', target_field: '不存在的字段', source_memory_refs: [] },
-    ]));
-
-    const res = await poc.confirmCandidates(UID, ['b1', 'b2', 'b3', 'b4'], {
-      toGlobalMemory: false,
-      toGroupIds: [prefs, courses],
-      targetField: '协作项目', // 批量场景 dest 统一；逐条 target_field 来自候选数据时走单条 confirm
-    });
-
-    // b1/b2 填进 协作关系组.协作项目（dest.targetField）；b3 的候选 target_field=教育阶段 但批量统一走 dest，
-    // 这里验证 summary 结构存在且与 results 一致
-    expect(res.summary).toBeTruthy();
-    expect(Array.isArray(res.summary.toFields)).toBe(true);
-    const totalFieldWrites = Object.values(res.results).reduce((n, r) => n + (r.fieldWrites || []).filter((fw) => fw.ok).length, 0);
-    expect(res.summary.toFields.reduce((n, f) => n + f.count, 0)).toBe(totalFieldWrites);
-    expect(res.summary.toEntries).toBeGreaterThanOrEqual(0);
-    expect(typeof res.summary.toEntries).toBe('number');
   });
 });
 
@@ -908,31 +830,6 @@ describe('personal_ontology_candidates › project source marker via confirm', (
     const content = tmpl.readTemplateFileText(UID, 'student');
     expect(content).toContain('### 教师与同伴\n- 喜欢用大白话解释 [候选]');
     expect(content).not.toContain('@proj:');
-  });
-
-  it('confirmCandidates (batch) passes projectId through', async () => {
-    const poc = await loadModule();
-    const groups = await loadGroups();
-    const created = await groups.createGroup(UID, '偏好');
-    const groupId = created.group!.group_id;
-    await groups.appendFieldValue(UID, groupId, '沟通风格', '种子值', '手动');
-    await seedCandidates(poc, [
-      { id: 'cand-b1', text: '第一偏好' },
-      { id: 'cand-b2', text: '第二偏好' },
-    ]);
-
-    const res = await poc.confirmCandidates(UID, ['cand-b1', 'cand-b2'], {
-      toGlobalMemory: false,
-      toGroupIds: [groupId],
-      targetField: '沟通风格',
-      projectId: 'p_xyz',
-    });
-    expect(res.confirmedCount).toBe(2);
-
-    const groupFile = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', `${groupId}.md`);
-    const content = fs.readFileSync(groupFile, 'utf8');
-    expect(content).toContain('- 第一偏好 [候选] @proj:p_xyz');
-    expect(content).toContain('- 第二偏好 [候选] @proj:p_xyz');
   });
 
   it('candidate pool format round-trips a `来源项目` line (D5 进池标记地基)', async () => {

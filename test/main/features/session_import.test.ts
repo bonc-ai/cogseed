@@ -338,6 +338,90 @@ describe('session_import › full pipeline (importClaudeSession)', () => {
   });
 });
 
+describe('session_import › prefetch (read+extract cache)', () => {
+  // Stage a real Claude transcript the reader will read; returns its path.
+  function stageClaudeSession(dir: string, name: string): string {
+    const projectsRoot = path.join(os.homedir(), '.claude', 'projects', dir);
+    fs.mkdirSync(projectsRoot, { recursive: true });
+    const filePath = path.join(projectsRoot, name);
+    fs.writeFileSync(filePath, [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: '帮我修 CI' }, cwd: '/proj', timestamp: '2026-01-01T00:00:00Z' }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '已修复缓存 key' }] } }),
+    ].join('\n'));
+    return filePath;
+  }
+
+  it('a warm prefetch makes the later import skip the extract model call', async () => {
+    const filePath = stageClaudeSession('enc-prefetch', 'warm.jsonl');
+
+    // Count the (slow) extraction model calls. This is the whole point of the
+    // feature: prefetch pays the cost ahead of the click; import reuses it.
+    let extractCalls = 0;
+    __nextChat = () => {
+      extractCalls += 1;
+      return {
+        ok: true,
+        text: JSON.stringify({ summary: 'S', personal: [], rules: [{ text: 'CI 必须绿灯才能合' }], templates: [] }),
+      };
+    };
+
+    const mod = await import('../../../src/main/features/session_import/asset-router');
+
+    // Warm the cache (the read+extract half, run ahead of the click).
+    const pf = await mod.prefetchImportSession({ userId: TEST_UID, source: 'claude', filePath });
+    expect(pf.ok).toBe(true);
+    expect(extractCalls).toBe(1);
+
+    // The click: import must reuse the cached extraction, NOT call the model again.
+    const res = await mod.importClaudeSession({ userId: TEST_UID, filePath });
+    expect(res.ok).toBe(true);
+    expect(res.cognitions.rule).toBe(1);
+    expect(extractCalls).toBe(1); // still 1 — the slow half was skipped.
+
+    fs.rmSync(filePath, { force: true });
+  });
+
+  it('without prefetch, import runs extract inline — identical result', async () => {
+    const filePath = stageClaudeSession('enc-cold', 'cold.jsonl');
+    let extractCalls = 0;
+    __nextChat = () => {
+      extractCalls += 1;
+      return { ok: true, text: JSON.stringify({ summary: 'S', personal: [], rules: [], templates: [] }) };
+    };
+
+    const mod = await import('../../../src/main/features/session_import/asset-router');
+    const res = await mod.importClaudeSession({ userId: TEST_UID, filePath });
+    expect(res.ok).toBe(true);
+    expect(extractCalls).toBe(1); // cold path pays for the extract inline — same outcome, not sped up.
+
+    fs.rmSync(filePath, { force: true });
+  });
+
+  it('a failed prefetch is evicted so a later import retries instead of reusing the failure', async () => {
+    const projectsRoot = path.join(os.homedir(), '.claude', 'projects', 'enc-retry');
+    fs.mkdirSync(projectsRoot, { recursive: true });
+    const filePath = path.join(projectsRoot, 'retry.jsonl');
+    // File does NOT exist yet — prefetch fires before the transcript is flushed.
+
+    __nextChat = () => ({ ok: true, text: JSON.stringify({ summary: 'S', personal: [], rules: [], templates: [] }) });
+
+    const mod = await import('../../../src/main/features/session_import/asset-router');
+
+    const pf = await mod.prefetchImportSession({ userId: TEST_UID, source: 'claude', filePath });
+    expect(pf.ok).toBe(false); // unreadable — nothing usable cached.
+
+    // The transcript appears (the race resolves). Because the failed prefetch was
+    // evicted rather than cached, the import re-reads and succeeds.
+    fs.writeFileSync(filePath,
+      JSON.stringify({ type: 'user', message: { role: 'user', content: '现在能读到了' }, timestamp: '2026-01-01T00:00:00Z' }));
+
+    const res = await mod.importClaudeSession({ userId: TEST_UID, filePath });
+    expect(res.ok).toBe(true);
+
+    fs.rmSync(filePath, { force: true });
+  });
+});
+
 describe('session_import › materialize', () => {
   it('creates a continuable conversation seeded with the summary', async () => {
     const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
@@ -408,6 +492,27 @@ describe('session_import › materialize', () => {
     });
     const msgs = await chats.getMessages(TEST_UID, res.conversationId);
     expect(msgs[0].text).toContain('未能自动提炼');
+  });
+
+  it('falls back from an injected plugin block to a usable picker title', async () => {
+    const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
+    const chats = await import('../../../src/main/features/chats');
+
+    const res = await materializeSession({
+      userId: TEST_UID,
+      source: 'codex',
+      sourceId: 'plugin-title-fallback',
+      titleHint: '修复自动沉淀流程',
+      extraction: {
+        ok: true,
+        sessionSummary: '<recommended_plugins> Here is a list of plugins that are available but not installed.',
+        personal: [], rules: [], templates: [],
+      },
+    });
+
+    const list = await chats.listConversations(TEST_UID);
+    const found = list.find((c: any) => c.conversation_id === res.conversationId);
+    expect(found.title).toBe('⤴ 修复自动沉淀流程');
   });
 });
 
@@ -618,6 +723,7 @@ describe('session_import › Codex import', () => {
   it('titles sessions from input_text content, skipping synthetic preamble turns', async () => {
     writeCodexSession('2026-08-09', [
       JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/test/dir' } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '<recommended_plugins>\nHere is a list of plugins that are available but not installed.\n</recommended_plugins>' }] } }),
       JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '<environment_context>\ncwd: /test/dir\n</environment_context>' }] } }),
       JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '# AGENTS.md instructions for /test/dir\n\nbe concise' }] } }),
       JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '真正的第一个问题' }] } }),
@@ -627,6 +733,18 @@ describe('session_import › Codex import', () => {
     const [session] = await listCodexSessions(homeDir);
 
     expect(session.title).toBe('真正的第一个问题');
+  });
+
+  it('keeps a real prompt that merely mentions the plugin tag', async () => {
+    writeCodexSession('2026-08-09', [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/test/dir' } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '<recommended_plugins> 标签应该如何解析？' }] } }),
+    ].join('\n'));
+
+    const { listCodexSessions } = await import('../../../src/main/features/session_import/codex-import');
+    const [session] = await listCodexSessions(homeDir);
+
+    expect(session.title).toBe('<recommended_plugins> 标签应该如何解析？');
   });
 
   it('unwraps resumed-replay and file-mention envelopes in titles', async () => {

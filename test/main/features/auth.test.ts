@@ -338,6 +338,7 @@ describe('auth › listProviders grouping', () => {
 
     // anthropic — both API-key and OAuth work against the same endpoint.
     const anth = providers.find((p) => p.id === 'anthropic')!;
+    expect(anth.providerKind).toBe('builtin');
     expect(anth.supportsApiKey).toBe(true);
     expect(anth.supportsOAuth).toBe(true);
     expect(anth.oauthProvider).toBe('anthropic');
@@ -360,6 +361,16 @@ describe('auth › listProviders grouping', () => {
     expect(custom!.supportsApiKey).toBe(true);
     expect(custom!.supportsOAuth).toBe(false);
     expect(custom!.manualModel).toBe(true);
+
+    // MiniMax OAuth surfaces are oauthOnly via the catalog mark, not a
+    // hard-coded list (minimax-cn stays API-key capable through the alias).
+    const minimaxOAuth = providers.find((p) => p.id === 'minimax-portal');
+    expect(minimaxOAuth).toBeTruthy();
+    expect(minimaxOAuth!.supportsApiKey).toBe(false);
+    expect(minimaxOAuth!.supportsOAuth).toBe(true);
+    const minimaxCn = providers.find((p) => p.id === 'minimax-cn');
+    expect(minimaxCn).toBeTruthy();
+    expect(minimaxCn!.supportsApiKey).toBe(true);
   });
 });
 
@@ -517,9 +528,12 @@ describe('auth › entries (priority list)', () => {
     expect(pick).not.toBeNull();
     expect(pick!.entryId).toBe(e2.entryId);
     expect(pick!.provider).toBe('openai');
-    // Sanity: e1 is still in the list (we didn't remove the entry, only the credential)
-    const { entries } = await a.listEntries();
-    expect(entries.map((e) => e.entryId)).toContain(e1.entryId);
+    // The dangling entry remains available for settings diagnostics, but is
+    // excluded from the default runnable list.
+    expect((await a.listEntries()).entries.map((entry) => entry.entryId)).not.toContain(e1.entryId);
+    expect((await a.listEntries({ includeUnavailable: true })).entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entryId: e1.entryId, modelAvailable: false }),
+    ]));
   });
 
 });
@@ -641,6 +655,67 @@ describe('auth › hasConfiguredModel', () => {
   });
 });
 
+describe('auth › getConfiguredModelOAuthExpiredMessage', () => {
+  async function saveStoreWithOAuthProfile(profileId: string, expiresInMs: number, withEntry: boolean): Promise<void> {
+    const a = await import('../../../src/main/features/auth');
+    a.saveProfilesForUser(TEST_UID, {
+      version: 6,
+      profiles: {
+        [profileId]: {
+          type: 'oauth',
+          provider: 'anthropic',
+          label: 'default',
+          access: 'access-token',
+          refresh: 'refresh-token',
+          expires: Date.now() + expiresInMs,
+          createdAt: Date.now(),
+          lastUsed: 0,
+        },
+      },
+      entries: withEntry ? [{
+        entryId: 'e-oauth-expired',
+        provider: 'anthropic',
+        model: 'claude-opus-4-8',
+        profileId,
+        lastUsed: 0,
+        createdAt: Date.now(),
+      }] : [],
+      searchProfiles: [],
+      imageProfiles: [],
+      videoProfiles: [],
+      ttsProfiles: [],
+      customProviders: [],
+      authorizationRequests: [],
+    });
+  }
+
+  it('returns null when no chat entry is OAuth-backed', async () => {
+    const a = await import('../../../src/main/features/auth');
+    expect(a.getConfiguredModelOAuthExpiredMessage()).toBeNull();
+  });
+
+  it('returns null while the OAuth access token is still valid', async () => {
+    await saveStoreWithOAuthProfile('anthropic:default', 60_000, true);
+    const a = await import('../../../src/main/features/auth');
+    expect(a.getConfiguredModelOAuthExpiredMessage()).toBeNull();
+  });
+
+  it('reports the provider once the configured OAuth token has expired', async () => {
+    await saveStoreWithOAuthProfile('anthropic:default', -1, true);
+    const a = await import('../../../src/main/features/auth');
+    const message = a.getConfiguredModelOAuthExpiredMessage();
+    expect(message).not.toBeNull();
+    expect(message).toContain('Anthropic');
+    expect(message).toMatch(/expired|授权/i);
+  });
+
+  it('ignores expired OAuth profiles that are not wired into a chat entry', async () => {
+    await saveStoreWithOAuthProfile('anthropic:default', -1, false);
+    const a = await import('../../../src/main/features/auth');
+    expect(a.getConfiguredModelOAuthExpiredMessage()).toBeNull();
+  });
+});
+
 describe('auth › listModels', () => {
   it('returns the hand-curated list for a known provider', async () => {
     const a = await import('../../../src/main/features/auth');
@@ -687,6 +762,7 @@ describe('auth › custom providers', () => {
     expect(listed.providers).toContainEqual(expect.objectContaining({
       id: providerId,
       label: 'Custom Relay',
+      providerKind: 'custom',
       supportsApiKey: true,
       supportsOAuth: false,
       manualModel: false,

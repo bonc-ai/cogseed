@@ -41,28 +41,28 @@ function secretContext(userId: string, id: string): localSecrets.LocalSecretCont
 }
 
 function validateTransport(value: unknown): Transport {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid Mate connector transport');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid CogSeed connector transport');
   const row = value as Record<string, unknown>;
   if (row.kind === 'streamable-http') {
-    if (typeof row.url !== 'string' || !/^https?:\/\//.test(row.url)) throw new Error('invalid Mate connector URL');
+    if (typeof row.url !== 'string' || !/^https?:\/\//.test(row.url)) throw new Error('invalid CogSeed connector URL');
     return { kind: 'streamable-http', url: row.url, ...(row.headers && typeof row.headers === 'object' ? { headers: row.headers as Record<string, string> } : {}) };
   }
   if (row.kind === 'stdio') {
-    if (typeof row.command !== 'string' || !row.command.trim() || !Array.isArray(row.args)) throw new Error('invalid Mate connector stdio transport');
+    if (typeof row.command !== 'string' || !row.command.trim() || !Array.isArray(row.args)) throw new Error('invalid CogSeed connector stdio transport');
     return { kind: 'stdio', command: row.command, args: row.args.map(String), ...(row.env && typeof row.env === 'object' ? { env: row.env as Record<string, string> } : {}), ...(typeof row.cwd === 'string' ? { cwd: row.cwd } : {}), ...(typeof row.proxyTargetUrl === 'string' ? { proxyTargetUrl: row.proxyTargetUrl } : {}) };
   }
-  throw new Error('unsupported Mate connector transport');
+  throw new Error('unsupported CogSeed connector transport');
 }
 
 function validateMetadata(userId: string, value: unknown, expectedId: string): MateConnectorMetadata {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed Mate connector metadata');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed CogSeed connector metadata');
   const row = value as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_CONNECTOR_SCHEMA_VERSION || row.id !== expectedId || typeof row.displayName !== 'string') throw new Error('malformed Mate connector metadata');
+  if (row.schemaVersion !== MATE_CONNECTOR_SCHEMA_VERSION || row.id !== expectedId || typeof row.displayName !== 'string') throw new Error('malformed CogSeed connector metadata');
   assertMateConnectorId(expectedId);
-  if (row.transportKind !== 'stdio' && row.transportKind !== 'streamable-http') throw new Error('malformed Mate connector metadata');
-  if (!Array.isArray(row.toolsCache) || (row.enabledSubtools !== null && !Array.isArray(row.enabledSubtools))) throw new Error('malformed Mate connector metadata');
-  if (typeof row.status !== 'string' || !['disconnected', 'connected', 'error'].includes(row.status)) throw new Error('malformed Mate connector metadata');
-  if (typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') throw new Error('malformed Mate connector metadata');
+  if (row.transportKind !== 'stdio' && row.transportKind !== 'streamable-http') throw new Error('malformed CogSeed connector metadata');
+  if (!Array.isArray(row.toolsCache) || (row.enabledSubtools !== null && !Array.isArray(row.enabledSubtools))) throw new Error('malformed CogSeed connector metadata');
+  if (typeof row.status !== 'string' || !['disconnected', 'connected', 'error'].includes(row.status)) throw new Error('malformed CogSeed connector metadata');
+  if (typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') throw new Error('malformed CogSeed connector metadata');
   void userId;
   return row as unknown as MateConnectorMetadata;
 }
@@ -70,8 +70,8 @@ function validateMetadata(userId: string, value: unknown, expectedId: string): M
 async function readMetadata(userId: string, id: string): Promise<MateConnectorMetadata> {
   try { return validateMetadata(userId, JSON.parse(await fs.readFile(mateConnectorFile(userId, id), 'utf8')), id); }
   catch (error) {
-    if (isEnoent(error)) throw new Error('Mate connector not found');
-    if (error instanceof SyntaxError) throw new Error('malformed Mate connector metadata');
+    if (isEnoent(error)) throw new Error('CogSeed connector not found');
+    if (error instanceof SyntaxError) throw new Error('malformed CogSeed connector metadata');
     throw error;
   }
 }
@@ -80,7 +80,7 @@ export async function createMateConnector(userId: string, input: { id: string; d
   assertMateUserId(userId);
   const id = assertMateConnectorId(input.id);
   const displayName = String(input.displayName || '').trim();
-  if (!displayName || displayName.length > 200) throw new Error('invalid Mate connector display name');
+  if (!displayName || displayName.length > 200) throw new Error('invalid CogSeed connector display name');
   const transport = validateTransport(input.transport);
   const now = nowIso();
   const metadata: MateConnectorMetadata = { schemaVersion: MATE_CONNECTOR_SCHEMA_VERSION, id, displayName, transportKind: transport.kind, enabledSubtools: input.enabledSubtools === undefined ? null : (input.enabledSubtools === null ? null : Array.from(new Set((input.enabledSubtools || []).map(String)))), toolsCache: [], toolsCachedAt: 0, status: 'disconnected', createdAt: now, updatedAt: now };
@@ -98,8 +98,8 @@ export async function readMateConnector(userId: string, id: string): Promise<Mat
   const metadata = await readMetadata(userId, connectorId);
   let secret: { encryptedTransport?: unknown };
   try { secret = JSON.parse(await fs.readFile(mateConnectorSecretFile(userId, connectorId), 'utf8')); }
-  catch (error) { if (isEnoent(error)) throw new Error('Mate connector transport secret not found'); throw error; }
-  if (typeof secret.encryptedTransport !== 'string') throw new Error('malformed Mate connector transport secret');
+  catch (error) { if (isEnoent(error)) throw new Error('CogSeed connector transport secret not found'); throw error; }
+  if (typeof secret.encryptedTransport !== 'string') throw new Error('malformed CogSeed connector transport secret');
   const transport = validateTransport(JSON.parse(localSecrets.decryptLocalSecret(secretContext(userId, connectorId), secret.encryptedTransport)));
   return { ...metadata, transport };
 }

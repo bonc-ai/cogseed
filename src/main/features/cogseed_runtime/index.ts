@@ -65,6 +65,8 @@ export interface MateAgentRuntimeInput {
   context?: unknown[];
   attachments?: unknown[];
   agent_id?: string;
+  execution_kind?: 'cogseed-native' | 'local-cli';
+  allowed_skill_ids?: string[];
   model_profile?: string;
   working_dir?: string;
   /** Main-process-derived capability grants (Commander-only tools). */

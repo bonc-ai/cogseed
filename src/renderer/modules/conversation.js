@@ -3759,30 +3759,75 @@ function _producedPathSpecificity(p) {
 // with the same basename, keep the more specific path so the chip opens the
 // real deliverable instead of a root-level scratch name.
 // Stable: original order is preserved within each rank.
-function _orderProducedPaths(absPaths) {
+function _orderProducedPaths(absPaths, results = []) {
+  const resultsByPath = new Map((Array.isArray(results) ? results : [])
+    .filter((item) => item && item.path)
+    .map((item) => [String(item.path), item]));
   const byBase = new Map();
   for (const [i, p] of absPaths.entries()) {
     const base = (p.split(/[\\/]/).pop() || p);
     const next = { path: p, base, i };
-    const prev = byBase.get(base);
+    const validationStatus = String(resultsByPath.get(p)?.status || '');
+    // Failed results must remain visible even when a later usable file has the
+    // same basename; otherwise the user loses the failure reason and fallback.
+    const key = validationStatus && validationStatus !== 'ready'
+      ? `${base}\u0000${p}`
+      : base;
+    const prev = byBase.get(key);
     if (!prev) {
-      byBase.set(base, next);
+      byBase.set(key, next);
       continue;
     }
     const nextScore = _producedPathSpecificity(next.path);
     const prevScore = _producedPathSpecificity(prev.path);
     if (nextScore > prevScore || (nextScore === prevScore && next.i > prev.i)) {
-      byBase.set(base, { ...next, i: prev.i });
+      byBase.set(key, { ...next, i: prev.i });
     }
   }
   return Array.from(byBase.values())
     .sort((a, b) => _producedDeliverableRank(a.base) - _producedDeliverableRank(b.base) || a.i - b.i);
 }
 
+function _producedStatusFromReviewStatus(reviewStatus) {
+  const status = String(reviewStatus || '').trim();
+  if (status === 'needs_review') return 'draft';
+  if (status === 'failed') return 'failed';
+  return 'final';
+}
+
 function _producedStatusLabel(status) {
   if (status === 'draft') return t('chat.produced_status.draft');
   if (status === 'failed') return t('chat.produced_status.failed');
   return t('chat.produced_status.final');
+}
+
+function _formatProducedBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return '';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function _producedValidationLine(result) {
+  if (!result || typeof result !== 'object') return '';
+  if (result.status === 'invalid') {
+    const code = String(result.failure_code || 'stat_failed');
+    const key = `chat.produced_validation.reason.${code}`;
+    const reason = t(key);
+    return t('chat.produced_validation.failed', { reason: reason === key ? code : reason });
+  }
+  if (result.status === 'preview_failed') {
+    return t('chat.produced_validation.preview_failed');
+  }
+  const size = _formatProducedBytes(result.bytes);
+  const capability = result.preview === 'available'
+    ? t('chat.produced_validation.preview_available')
+    : t('chat.produced_validation.local_only');
+  const tool = String(result.evidence?.producer_tool || '').trim();
+  return tool
+    ? t('chat.produced_validation.ready_with_tool', { size, capability, tool })
+    : t('chat.produced_validation.ready', { size, capability });
 }
 
 function _renderMessageProducedHtml(absPaths, opts = {}) {
@@ -3794,14 +3839,22 @@ function _renderMessageProducedHtml(absPaths, opts = {}) {
   const moreHint = t('contexts.menu.more_actions');
   const outputStatus = opts.status || 'final';
   const statusLabel = _producedStatusLabel(outputStatus);
-  const ordered = _orderProducedPaths(absPaths);
+  const resultsByPath = new Map((Array.isArray(opts.results) ? opts.results : [])
+    .filter((item) => item && item.path)
+    .map((item) => [String(item.path), item]));
+  const ordered = _orderProducedPaths(absPaths, opts.results);
   const items = ordered.map((e) => {
+    const validation = resultsByPath.get(e.path);
+    const validationStatus = String(validation?.status || '');
+    const fallbacks = Array.isArray(validation?.fallbacks) ? validation.fallbacks : [];
+    const validationLine = _producedValidationLine(validation);
     const icon = _iconForProduced(e.base);
     // Mark files the side pane can actually render, so the user knows which
     // ones show a result rather than just opening a text/binary view. The
     // judgement is delegated to the viewer's own classifier — a second
     // extension table here would drift from what the pane really supports.
-    const previewable = typeof isSidePreviewableKind === 'function'
+    const previewable = validationStatus !== 'invalid'
+      && typeof isSidePreviewableKind === 'function'
       && typeof previewKindOf === 'function'
       && isSidePreviewableKind(previewKindOf(e.base));
     const previewBadge = previewable
@@ -3809,16 +3862,21 @@ function _renderMessageProducedHtml(absPaths, opts = {}) {
       : '';
     const openLabel = previewable ? t('sideBrowser.open_side') : t('chat.produced_open');
     const openTitle = previewable ? t('sideBrowser.open_side_title') : hint;
-    return `<div class="chat-msg-produced-item" data-produced-path="${escapeHtml(e.path)}"${previewable ? ' data-previewable="1"' : ''}>
-      <button type="button" class="chat-msg-produced-main" title="${escapeHtml(hint)}">
+    const invalid = validationStatus === 'invalid';
+    const canOpen = !invalid || fallbacks.includes('open');
+    const canReveal = !invalid || fallbacks.includes('reveal');
+    const openExternal = fallbacks.includes('open') && validation?.preview && validation.preview !== 'available';
+    const resolvedOpenLabel = openExternal ? t('chat.produced_open_local') : openLabel;
+    return `<div class="chat-msg-produced-item${invalid ? ' is-invalid' : ''}" data-produced-path="${escapeHtml(e.path)}"${validationStatus ? ` data-result-status="${escapeHtml(validationStatus)}"` : ''}${fallbacks.length ? ` data-result-fallbacks="${escapeHtml(fallbacks.join(','))}"` : ''}${openExternal ? ' data-open-external="1"' : ''}${previewable ? ' data-previewable="1"' : ''}>
+      <button type="button" class="chat-msg-produced-main" title="${escapeHtml(hint)}"${invalid ? ' disabled' : ''}>
         <span class="chat-msg-produced-icon">${icon}</span>
         <span class="chat-msg-produced-main-text">
           <span class="chat-msg-produced-label-row"><span class="chat-msg-produced-label">${escapeHtml(e.base)}</span>${previewBadge}<span class="chat-msg-produced-badge is-${escapeHtml(outputStatus)}">${escapeHtml(statusLabel)}</span></span>
-          <span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>
+          ${validationLine ? `<span class="chat-msg-produced-validation is-${escapeHtml(validationStatus)}">${escapeHtml(validationLine)}</span>` : `<span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>`}
         </span>
       </button>
-      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(openTitle)}">${escapeHtml(openLabel)}</button>
-      <button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>
+      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(openTitle)}"${canOpen ? '' : ' disabled'}>${escapeHtml(resolvedOpenLabel)}</button>
+      ${canReveal ? `<button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>` : ''}
     </div>`;
   });
   return `<div class="chat-msg-produced is-${escapeHtml(outputStatus)}" data-produced-status="${escapeHtml(outputStatus)}">${items.join('')}</div>`;
@@ -3843,7 +3901,10 @@ function _mountMessageProducedFooter(msgDiv, absPaths, opts = {}) {
   const bubble = msgDiv.querySelector('.chat-bubble');
   if (!bubble || bubble.querySelector('.chat-msg-produced')) return;
   const wrap = document.createElement('div');
-  wrap.innerHTML = _renderMessageProducedHtml(absPaths, { status: opts.status || 'final' });
+  wrap.innerHTML = _renderMessageProducedHtml(absPaths, {
+    status: opts.status || 'final',
+    results: opts.results,
+  });
   const node = wrap.firstElementChild;
   if (!node) return;
   bubble.appendChild(node);
@@ -3938,102 +3999,13 @@ function _renderTeachingReceiptsHtml(receipts) {
   }).join('')}</div>`;
 }
 
-function _recallCitationTypeLabel(type) {
-  const key = type === 'personal'
-    ? 'chat.recall.type_personal'
-    : type === 'template'
-      ? 'chat.recall.type_template'
-      : type === 'skill_method'
-        ? 'chat.recall.type_skill_method'
-        : 'chat.recall.type_rule';
-  const fallback = type === 'personal'
-    ? 'Facts and preferences'
-    : type === 'template'
-      ? 'Template'
-      : type === 'skill_method'
-        ? 'Experience method'
-        : 'Rule';
-  const value = typeof t === 'function' ? t(key) : key;
-  return value && value !== key ? value : fallback;
-}
 
-function _recallCitationScopeLabel(scope) {
-  const normalized = String(scope || '').trim().toLowerCase();
-  const key = normalized === 'global'
-    ? 'chat.recall.scope_global'
-    : normalized === 'project'
-      ? 'chat.recall.scope_project'
-      : normalized === 'agent'
-        ? 'chat.recall.scope_agent'
-        : normalized === 'personal'
-          ? 'chat.recall.scope_personal'
-          : '';
-  if (!key) return String(scope || '').trim();
-  const fallback = normalized.charAt(0).toUpperCase() + normalized.slice(1);
-  const value = typeof t === 'function' ? t(key) : key;
-  return value && value !== key ? value : fallback;
-}
 
-function _renderRecallCitationsHtml(citations) {
-  if (!Array.isArray(citations) || !citations.length) return '';
-  const items = citations
-    .filter((citation) => citation && citation.asset_id && citation.title)
-    .slice(0, 12);
-  if (!items.length) return '';
-  const titleKey = 'chat.recall.citations_title';
-  const titleValue = typeof t === 'function' ? t(titleKey) : titleKey;
-  const title = titleValue && titleValue !== titleKey ? titleValue : 'Memories provided to this answer';
-  const helpfulKey = 'chat.recall.feedback_helpful';
-  const helpfulValue = typeof t === 'function' ? t(helpfulKey) : helpfulKey;
-  const helpful = helpfulValue && helpfulValue !== helpfulKey ? helpfulValue : 'Helpful';
-  const improveKey = 'chat.recall.feedback_improve';
-  const improveValue = typeof t === 'function' ? t(improveKey) : improveKey;
-  const improve = improveValue && improveValue !== improveKey ? improveValue : 'Needs improvement';
-  return `<section class="chat-recall-citations"><div class="chat-recall-citations-head"><span>${_uiIconHtml('brain-circuit', 'ui-icon')}<strong>${escapeHtml(title)}</strong></span><span class="chat-recall-feedback-status" data-recall-feedback-status aria-live="polite"></span></div><div class="chat-recall-citation-list">${items.map((citation) => {
-    const type = _recallCitationTypeLabel(citation.type);
-    const scope = _recallCitationScopeLabel(citation.scope);
-    const meta = [type, scope].filter(Boolean).join(' · ');
-    return `<div class="chat-recall-citation" data-recall-asset-id="${escapeHtml(citation.asset_id)}"><strong>${escapeHtml(citation.title)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</div>`;
-  }).join('')}</div><div class="chat-recall-feedback-actions"><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="positive" title="${escapeHtml(helpful)}">${_uiIconHtml('thumbs-up', 'ui-icon')}<span>${escapeHtml(helpful)}</span></button><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="negative" title="${escapeHtml(improve)}">${_uiIconHtml('thumbs-down', 'ui-icon')}<span>${escapeHtml(improve)}</span></button></div></section>`;
-}
 
-function _hydrateRecallCitations(messageEl, cid, messageId) {
-  const host = messageEl?.querySelector('.chat-recall-citations');
-  if (!host) return;
-  const resolvedMessageId = String(messageId || messageEl?.dataset?.msgId || '');
-  const buttons = Array.from(host.querySelectorAll('[data-recall-feedback]'));
-  for (const button of buttons) {
-    if (button.dataset.bound === '1') continue;
-    button.dataset.bound = '1';
-    button.addEventListener('click', async () => {
-      const feedback = button.dataset.recallFeedback;
-      if (!cid || !resolvedMessageId || (feedback !== 'positive' && feedback !== 'negative')) return;
-      if (host.dataset.feedbackBusy === '1' || host.dataset.feedbackSent === '1') return;
-      host.dataset.feedbackBusy = '1';
-      buttons.forEach((item) => { item.disabled = true; });
-      try {
-        const result = await window.cogseed.invoke('recall.usage.feedback', {
-          cid,
-          messageId: resolvedMessageId,
-          feedback,
-        });
-        if (!result?.ok) throw new Error(result?.error || 'Recall feedback failed');
-        host.dataset.feedbackSent = '1';
-        host.dataset.feedback = feedback;
-        host.classList.add('is-feedback-sent');
-        const status = host.querySelector('[data-recall-feedback-status]');
-        const key = 'chat.recall.feedback_thanks';
-        const value = typeof t === 'function' ? t(key) : key;
-        if (status) status.textContent = value && value !== key ? value : 'Thanks for the feedback';
-      } catch (error) {
-        buttons.forEach((item) => { item.disabled = false; });
-        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
-      } finally {
-        host.dataset.feedbackBusy = '0';
-      }
-    });
-  }
-}
+
+
+
+
 
 function _hydrateTeachingReceipts(messageEl) {
   messageEl?.querySelectorAll('[data-chat-teaching-revoke]').forEach((button) => {
@@ -4112,17 +4084,36 @@ function _openProducedFile(absPath) {
   if (typeof openChatFileViewer === 'function') openChatFileViewer(absPath, base, opts);
 }
 
+async function _openProducedFileLocally(absPath) {
+  if (!absPath || !window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+  try {
+    const result = await window.cogseed.invoke('workspace.openFileExternal', {
+      path: absPath,
+      ...(currentCid ? { cid: currentCid } : {}),
+    });
+    if (!result?.ok) throw new Error(result?.error || 'failed');
+  } catch (error) {
+    const reason = (error && error.message) || String(error);
+    const message = t('chat.produced_open_local_failed', { reason });
+    if (typeof uiAlert === 'function') await uiAlert(message);
+  }
+}
+
 function _hydrateMessageProducedChips(msgDiv) {
   const rows = msgDiv.querySelectorAll('.chat-msg-produced-item[data-produced-path]');
   rows.forEach((row) => {
     const main = row.querySelector('.chat-msg-produced-main');
     const openBtn = row.querySelector('.chat-msg-produced-open-btn');
     const menuBtn = row.querySelector('.chat-msg-produced-menu-btn');
+    const invalid = row.dataset.resultStatus === 'invalid';
+    const fallbacks = String(row.dataset.resultFallbacks || '').split(',').filter(Boolean);
+    const openExternal = row.dataset.openExternal === '1';
     if (main && main.dataset.bound !== '1') {
       main.dataset.bound = '1';
       main.addEventListener('click', (e) => {
         e.stopPropagation();
-        _openProducedFile(row.dataset.producedPath);
+        if (openExternal) void _openProducedFileLocally(row.dataset.producedPath);
+        else _openProducedFile(row.dataset.producedPath);
       });
     }
     if (openBtn && openBtn.dataset.bound !== '1') {
@@ -4130,7 +4121,11 @@ function _hydrateMessageProducedChips(msgDiv) {
       openBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        _openProducedFile(row.dataset.producedPath);
+        if (openExternal) {
+          void _openProducedFileLocally(row.dataset.producedPath);
+        } else {
+          _openProducedFile(row.dataset.producedPath);
+        }
       });
     }
     if (menuBtn && menuBtn.dataset.bound !== '1') {
@@ -4143,6 +4138,7 @@ function _hydrateMessageProducedChips(msgDiv) {
         const base = p.split(/[\\/]/).pop() || p;
         window.ConversationInfo.openFileMenu(menuBtn, p, base, {
           cid: currentCid || '',
+          ...(invalid ? { allowedActions: fallbacks.includes('reveal') ? ['reveal'] : [] } : {}),
           onDeleted: () => {
             row.remove();
             const footer = msgDiv.querySelector('.chat-msg-produced');
@@ -6563,6 +6559,11 @@ async function loadConversationHistory(cid, opts = {}) {
   const perfStartedAt = performance.now();
   const container = document.getElementById('chat-history');
   _cancelActiveUserMessageEdit({ focus: false });
+  // 9.1 会话区域统一框架：切换会话时复位顶部执行计划轨道（plan-rail.js）。
+  // 无该会话的 plan 时轨道自隐藏；历史恢复由 _renderPersistedProcess 喂入。
+  if (typeof window.planRail !== 'undefined' && typeof window.planRail.setCid === 'function') {
+    window.planRail.setCid(cid);
+  }
   const preserveScroll = opts && opts.preserveScroll === true;
   const scrollSnapshot = preserveScroll ? _captureHistoryReloadScroll(container) : null;
   container.classList.remove('has-scroll-offset');
@@ -6855,7 +6856,6 @@ function _messageRecordHasMountedSidecars(gm, el, opts = {}) {
   if ((_normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)) && !el.querySelector('.chat-msg-created-agent-chip')) return false;
   if (Array.isArray(gm.artifacts) && gm.artifacts.length && !el.querySelector('.chat-artifact-host')) return false;
   if (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length && !el.querySelector('.chat-teaching-receipts')) return false;
-  if (Array.isArray(gm.recall_citations) && gm.recall_citations.length && !el.querySelector('.chat-recall-citations')) return false;
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length && !el.querySelector('.chat-marketplace-request')) return false;
   if (gm.kstar_review_card && !el.querySelector('.chat-kstar-result-review')) return false;
   if (gm.recall_projection_card && !el.querySelector('.chat-recall-projection-card')) return false;
@@ -7567,9 +7567,6 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const teachingReceiptsHtml = role === 'assistant'
     ? _renderTeachingReceiptsHtml(message.teaching_receipts)
     : '';
-  const recallCitationsHtml = role === 'assistant'
-    ? _renderRecallCitationsHtml(message.recall_citations)
-    : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
   // timestamp on one row. Same DOM strip for historical (loaded via
   // getMessages) and live-streamed messages so users always see "who said
@@ -7650,7 +7647,6 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (createdAgentHtml) _hydrateMessageCreatedAgentChip(msgDiv);
   if (createdSkillHtml) _hydrateMessageCreatedSkillChip(msgDiv);
   if (teachingReceiptsHtml) _hydrateTeachingReceipts(msgDiv);
-  if (recallCitationsHtml) _hydrateRecallCitations(msgDiv, opts.cid || currentCid, message._msg_id);
   // Interactive input-form widget (assistant messages only). Appended inside
   // the bubble after markdown + chips so it reads as "reply text → confirm
   // this form". See chat-input-form.js for the widget implementation.
@@ -7718,7 +7714,10 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) window.mountMessageArtifacts(bubble, message.artifacts, opts.cid || currentCid);
   }
-  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths);
+  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths, {
+    status: _producedStatusFromReviewStatus(message.kstar_review?.status),
+    results: message.produced_results,
+  });
   // Every assistant reply gets actions. Archive remains limited to final
   // raw-markdown replies; sanitized HTML status stubs are not archivable.
   if (role === 'assistant' && failedAssistant) {
@@ -8288,6 +8287,12 @@ function _renderPersistedProcess(msgDiv, items, { expanded = false } = {}) {
     const itemEvent = item && item.type === 'event'
       ? item.event
       : (item && item.type === 'progress' ? item.event : null);
+    // 9.1 会话区域统一框架：历史消息中的 plan 事件喂给顶部执行计划轨道
+    // （plan-rail.js，按当前会话幂等合并，重放不重复）。
+    if (itemEvent && itemEvent.stream === 'plan' && typeof window.planRail !== 'undefined'
+        && typeof window.planRail.restorePlanEvent === 'function') {
+      window.planRail.restorePlanEvent(itemEvent);
+    }
     if (item && item.type === 'progress') {
       const preferEventText = itemEvent && ['context', 'compaction', 'runtime'].includes(itemEvent.stream);
       text = (preferEventText ? _formatEventLine(itemEvent) : '')
@@ -10171,14 +10176,26 @@ async function _maybeApplyCliFallback(cid) {
   if (!cli) {
     try {
       const listRes = await window.orkas.invoke('localAgents.list', { force: false });
-      const entry = (listRes && listRes.entries || []).find(
+      const entries = (listRes && listRes.entries) || [];
+      // Prefer a SIGNED-IN CLI (official account); fall back to the first
+      // available one — the credential check is file-based and can miss
+      // keychain-stored sessions, so an available CLI is still a valid
+      // fallback backend (it will surface its own login error if not logged in).
+      const signedIn = entries.find(
         (e) => e && e.available && e.auth && e.auth.loggedIn
           && ['claude', 'codex', 'opencode'].includes(e.type),
       );
+      const anyAvailable = entries.find(
+        (e) => e && e.available && ['claude', 'codex', 'opencode'].includes(e.type),
+      );
+      const entry = signedIn || anyAvailable;
       cli = entry ? entry.type : '';
     } catch (_) { /* no auth state available */ }
   }
-  if (!cli) return false;
+  if (!cli) {
+    _cliFallbackGuideUser();
+    return false;
+  }
 
   let agent = null;
   try {
@@ -10187,6 +10204,25 @@ async function _maybeApplyCliFallback(cid) {
       (a) => a && a.runtime && a.runtime.kind === 'cli' && a.runtime.cli === cli,
     );
   } catch (_) { /* agents list unavailable */ }
+
+  // No CLI agent exists yet (user never ran the connect step): create one
+  // on the fly so the fallback actually has a backend to route to.
+  if (!agent) {
+    try {
+      const name = cli === 'claude' ? 'Claude' : (cli === 'codex' ? 'Codex' : 'OpenCode');
+      const res = await window.orkas.invoke('agents.create', {
+        name,
+        description: `本机 ${name} 命令行，作为 AI 团队成员执行任务`,
+        icon: 'code',
+        color: 'sage',
+        runtime: { kind: 'cli', cli },
+        category: 'general',
+      });
+      if (res && res.agent) agent = res.agent;
+    } catch (err) {
+      _convLog.warn('cli fallback: auto-create agent failed', err);
+    }
+  }
   if (!agent) return false;
 
   _recipientByCid[cid] = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
@@ -10198,6 +10234,30 @@ async function _maybeApplyCliFallback(cid) {
     uiToast(`指挥官当前没有可用的 API Key，消息已自动交给 ${label} 执行（可在设置中更改）`, { variant: 'warning', timeoutMs: 6000 });
   }
   return true;
+}
+
+// No usable local CLI backend: guide the user instead of failing with a bare
+// "no model" error. Desktop apps are detected honestly — they exist but have
+// no local execution interface (Anthropic's product boundary).
+async function _cliFallbackGuideUser() {
+  if (typeof uiToast !== 'function') return;
+  let desktopApps = [];
+  try {
+    const res = await window.orkas.invoke('localAgents.detectDesktopApps');
+    desktopApps = (res && Array.isArray(res.apps)) ? res.apps : [];
+  } catch (_) { /* detection is best-effort */ }
+
+  if (desktopApps.includes('Claude')) {
+    uiToast(
+      '检测到 Claude 桌面版，但它无法作为执行后端（Anthropic 限制）。要让对话跑起来：安装 Claude Code CLI 并登录（npm install -g @anthropic-ai/claude-code，然后运行 claude 授权，同一官方账号）。或在设置里配置 API Key。',
+      { variant: 'warning', timeoutMs: 10000 },
+    );
+    return;
+  }
+  uiToast(
+    '指挥官没有可用的 API Key，也没有检测到本机 CLI Agent（Claude Code / Codex / OpenCode）。请安装其中一个并登录，或在设置里配置 API Key。',
+    { variant: 'warning', timeoutMs: 10000 },
+  );
 }
 
 async function sendInConversation(cid, content, extra, options = {}) {
@@ -11249,7 +11309,6 @@ function _isRedundantRoutingOnlyCommanderRecord(gm) {
       || _normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)
       || (Array.isArray(gm.artifacts) && gm.artifacts.length)
       || (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length)
-      || (Array.isArray(gm.recall_citations) && gm.recall_citations.length)
       || (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length)) {
     return false;
   }
@@ -12657,13 +12716,6 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     }
   }
 
-  if (Array.isArray(gm.recall_citations) && gm.recall_citations.length) {
-    const bubble = ph.querySelector('.chat-bubble');
-    if (bubble && !bubble.querySelector('.chat-recall-citations')) {
-      bubble.insertAdjacentHTML('beforeend', _renderRecallCitationsHtml(gm.recall_citations));
-      _hydrateRecallCitations(ph, cid, gm.id);
-    }
-  }
 
   if (gm.kstar_review_card) {
     const bubble = ph.querySelector('.chat-bubble');
@@ -12677,7 +12729,10 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     if (bubble) window.mountMessageArtifacts(bubble, gm.artifacts, cid);
   }
   if (Array.isArray(gm.produced) && gm.produced.length) {
-    _mountMessageProducedFooter(ph, gm.produced);
+    _mountMessageProducedFooter(ph, gm.produced, {
+      status: _producedStatusFromReviewStatus(gm.kstar_review?.status),
+      results: gm.produced_results,
+    });
   }
   _scheduleConversationInfoFileRefresh(cid);
 }
@@ -12900,6 +12955,12 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
         const before = _processLineCount(target);
         _renderAgentEvent(target, data.event);
         const evt = data.event || {};
+        // 9.1 会话区域统一框架：把 plan 事件实时转发给顶部执行计划轨道
+        // （plan-rail.js）。消息流内的 plan-announce 标签保持不变。
+        if (evt.stream === 'plan' && typeof window.planRail !== 'undefined'
+            && typeof window.planRail.onPlanEvent === 'function') {
+          window.planRail.onPlanEvent(cid, evt);
+        }
         const line = evt.stream === 'tool' ? _formatEventLine(evt) : null;
         if (line && _processLineCount(target) <= before) {
           _streamingAppendProgress(target, line, _eventProcessKind(evt, line), _processEventName(evt));

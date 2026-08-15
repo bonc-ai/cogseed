@@ -86,6 +86,7 @@ function open() {
     imported: [],
     failed: [],
     cognitions: 0,
+    degradedCount: 0,
     busy: false,
     cancel: false,
     done: false,
@@ -97,6 +98,7 @@ function open() {
   backdrop.innerHTML = `
     <div class="cw-modal" role="dialog" aria-modal="true">
       <div class="cw-head">
+        <span class="cw-head-icon">${_cwIcon('clock')}</span>
         <div class="cw-head-copy">
           <div class="cw-kicker">继续之前的工作</div>
           <div class="cw-title">导入历史会话并续接</div>
@@ -134,7 +136,7 @@ function _cwRenderSteps() {
   if (!host) return;
   host.innerHTML = _CW_STEPS.map((s) => {
     const isActive = s.n === _cw.step;
-    const isDone = _cw.done && s.n === 4;
+    const isDone = s.n < _cw.step || (_cw.done && s.n === 4);
     const clickable = s.n === 1 || s.n === 2 || (s.n === 4 && _cw.done);
     return `
       <button type="button" class="cw-step${isActive ? ' is-active' : ''}${isDone ? ' is-done' : ''}"
@@ -314,14 +316,18 @@ async function _cwLoadSources() {
 
     const allCard = available.length > 1
       ? `
-        <button type="button" class="cw-source-card${_cw.source === 'all' ? ' is-active' : ''}" data-cw-source="all">
-          <span class="cw-source-icon">${_cwIcon('folder')}</span>
+        <button type="button" class="cw-source-card is-all${_cw.source === 'all' ? ' is-active' : ''}" data-cw-source="all">
+          <span class="cw-source-icon">${_cwIcon('check')}</span>
           <span class="cw-source-name">全部来源</span>
-          <span class="cw-source-meta">${available.length} 个 Agent</span>
+          <span class="cw-source-meta">包含 ${available.length} 个 Agent</span>
         </button>`
       : '';
 
-    grid.innerHTML = allCard + available.map(sourceCard).join('');
+    const divider = available.length > 1
+      ? `<div class="cw-source-divider"><span>或按来源单独选择</span></div>`
+      : '';
+
+    grid.innerHTML = allCard + divider + available.map(sourceCard).join('');
     grid.querySelectorAll('[data-cw-source]').forEach((el) => {
       el.addEventListener('click', () => {
         _cw.source = el.dataset.cwSource;
@@ -459,6 +465,15 @@ function _cwRenderSessionList() {
   _cwRenderFoot();
 }
 
+function _cwRowHtml(item, cls, status) {
+  return `
+    <div class="cw-import-row ${cls}" data-cw-import-row>
+      <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
+      <span class="cw-import-title">${_cwEsc(item.title)}</span>
+      <span class="cw-import-status">${status}</span>
+    </div>`;
+}
+
 async function _cwRunImport() {
   if (!_cw) return;
   const items = _cw.sessions.filter((s) => _cw.selected.has(s.id));
@@ -470,15 +485,11 @@ async function _cwRunImport() {
   _cw.imported = [];
   _cw.failed = [];
   _cw.cognitions = 0;
+  _cw.degradedCount = 0;
   _cwRenderFoot();
 
   items.forEach((item) => { item.status = 'waiting'; });
-  list.innerHTML = items.map((item) => `
-    <div class="cw-import-row is-waiting" data-cw-import-row>
-      <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
-      <span class="cw-import-title">${_cwEsc(item.title)}</span>
-      <span class="cw-import-status">等待中</span>
-    </div>`).join('');
+  list.innerHTML = items.map((item) => _cwRowHtml(item, 'is-waiting', '等待中')).join('');
 
   let doneCount = 0;
   const updateProgress = () => {
@@ -490,14 +501,12 @@ async function _cwRunImport() {
   for (let i = 0; i < items.length; i += 1) {
     if (!_cw || _cw.cancel) break;
     const item = items[i];
-    const row = list.querySelectorAll('[data-cw-import-row]')[i];
+    let row = list.querySelectorAll('[data-cw-import-row]')[i];
     item.status = 'running';
-    if (row) row.outerHTML = `
-      <div class="cw-import-row is-running" data-cw-import-row>
-        <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
-        <span class="cw-import-title">${_cwEsc(item.title)}</span>
-        <span class="cw-import-status">导入中</span>
-      </div>`;
+    if (row) {
+      row.outerHTML = _cwRowHtml(item, 'is-running', '导入中');
+      row = list.querySelectorAll('[data-cw-import-row]')[i];
+    }
 
     try {
       let res;
@@ -514,37 +523,46 @@ async function _cwRunImport() {
         });
       }
       if (res && res.conversationId) {
-        item.status = 'ok';
         item.cid = res.conversationId;
         _cw.imported.push(item);
         if (item.source === 'claude' && res.cognitions) {
           _cw.cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
         }
-        if (row) row.outerHTML = `
-          <div class="cw-import-row is-ok" data-cw-import-row>
-            <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
-            <span class="cw-import-title">${_cwEsc(item.title)}</span>
-            <span class="cw-import-status">${res.truncated ? '已完成 · 对话过长，已截断' : '已完成'}</span>
-          </div>`;
+        // `degraded` means the distillation model call did not run (no usable
+        // model provider configured, or the call failed), so the conversation
+        // was seeded with the raw opening instead of a distilled brief and no
+        // cognitions were extracted. Surface that honestly rather than calling
+        // it "已完成", which previously masked a silent no-op.
+        if (res.degraded) {
+          item.status = 'degraded';
+          item.degraded = true;
+          _cw.degradedCount += 1;
+          if (row) {
+            row.outerHTML = _cwRowHtml(item, 'is-degraded', '已导入 · 未提炼');
+            row = list.querySelectorAll('[data-cw-import-row]')[i];
+          }
+        } else {
+          item.status = 'ok';
+          if (row) {
+            row.outerHTML = _cwRowHtml(item, 'is-ok', res.truncated ? '已完成 · 对话过长，已截断' : '已完成');
+            row = list.querySelectorAll('[data-cw-import-row]')[i];
+          }
+        }
       } else {
         item.status = 'fail';
         _cw.failed.push(item);
-        if (row) row.outerHTML = `
-          <div class="cw-import-row is-fail" data-cw-import-row>
-            <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
-            <span class="cw-import-title">${_cwEsc(item.title)}</span>
-            <span class="cw-import-status">失败</span>
-          </div>`;
+        if (row) {
+          row.outerHTML = _cwRowHtml(item, 'is-fail', '失败');
+          row = list.querySelectorAll('[data-cw-import-row]')[i];
+        }
       }
     } catch (err) {
       item.status = 'fail';
       _cw.failed.push(item);
-      if (row) row.outerHTML = `
-        <div class="cw-import-row is-fail" data-cw-import-row>
-          <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
-          <span class="cw-import-title">${_cwEsc(item.title)}</span>
-          <span class="cw-import-status">失败</span>
-        </div>`;
+      if (row) {
+        row.outerHTML = _cwRowHtml(item, 'is-fail', '失败');
+        row = list.querySelectorAll('[data-cw-import-row]')[i];
+      }
     }
     doneCount += 1;
     updateProgress();
@@ -562,11 +580,23 @@ function _cwRenderDone() {
   if (!body) return;
   const okCount = _cw.imported.length;
   const failCount = _cw.failed.length;
-  const meta = `成功 ${okCount}${failCount ? ` · 失败 ${failCount}` : ''}${_cw.cognitions ? ` · 提取 ${_cw.cognitions} 条候选认知` : ''}`;
+  const degradedCount = _cw.degradedCount || 0;
+  const metaParts = [`成功 ${okCount}`];
+  if (failCount) metaParts.push(`失败 ${failCount}`);
+  if (degradedCount) metaParts.push(`其中 ${degradedCount} 个未提炼`);
+  if (_cw.cognitions) metaParts.push(`提取 ${_cw.cognitions} 条候选认知`);
+  const meta = metaParts.join(' · ');
+  // When some imports fell back to raw (no distillation), tell the user why and
+  // how to fix it. This is the honest surfacing of the previously-silent
+  // degrade: an import that "succeeded" but only saved the raw opening.
+  const degradedHint = degradedCount
+    ? `<div class="cw-done-hint">${_cwIcon('clock')}<span>有 ${degradedCount} 个会话仅保存了原始开头，未能自动提炼简报与认知。通常是因为还没有配置可用的模型（提炼需要调用模型）。在设置里配置一个可用模型后重新导入即可获得提炼简报。</span></div>`
+    : '';
   const listHtml = okCount
     ? `<div class="cw-done-list">${_cw.imported.map((item) => `
-        <div class="cw-done-row">
+        <div class="cw-done-row${item.degraded ? ' is-degraded' : ''}">
           <span class="cw-done-title">${_cwEsc(item.title)}</span>
+          ${item.degraded ? '<span class="cw-done-tag">未提炼</span>' : ''}
           <button type="button" class="cw-btn small" data-cw-open-cid="${_cwEsc(item.cid)}">打开</button>
         </div>`).join('')}</div>`
     : '<div class="cw-empty">没有成功导入的会话，可以返回重新选择。</div>';
@@ -577,6 +607,7 @@ function _cwRenderDone() {
       <div class="cw-done-title">${okCount ? `已导入 ${okCount} 个会话` : '导入未完成'}</div>
       <div class="cw-done-meta">${_cwEsc(meta)}</div>
     </div>
+    ${degradedHint}
     ${listHtml}`;
 
   body.querySelectorAll('[data-cw-open-cid]').forEach((el) => {

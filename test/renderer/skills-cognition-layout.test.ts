@@ -90,40 +90,43 @@ describe('Recall cognition workspace layout', () => {
     }
   });
 
-  it('keeps the original skill library as a sibling panel to Recall', () => {
+  it('embeds the skill library inside Recall\'s 我的能力 tab (no sibling panel)', () => {
     expect(html).toContain('id="recall-btn"');
     expect(html).toContain('id="panel-recall"');
-    const skillsSectionStart = html.indexOf('id="panel-skills"');
-    expect(skillsSectionStart).toBeGreaterThan(0);
-    const skillsSectionEnd = html.indexOf('<!-- Agents -->');
-    expect(skillsSectionEnd).toBeGreaterThan(skillsSectionStart);
-    const skillsTabHtml = html.slice(skillsSectionStart, skillsSectionEnd);
-    expect(skillsTabHtml).toContain('id="skills-grid-view"');
-    expect(skillsTabHtml).toContain('id="create-skill-btn"');
-    expect(skillsTabHtml).toContain('id="skills-more-btn"');
-    expect(skillsTabHtml).toContain('id="skills-categories"');
-    expect(skillsTabHtml).toContain('id="skills-grid"');
-    expect(skillsTabHtml).toContain('id="skills-detail-view"');
-    expect(skillsTabHtml).toContain('id="skills-chat-input"');
-    expect(skillsTabHtml).not.toContain('data-cognition-page-body');
+    const paneStart = html.indexOf('id="skills-cognition-my-abilities"');
+    expect(paneStart).toBeGreaterThan(0);
+    const paneEnd = html.indexOf('</main>', paneStart);
+    expect(paneEnd).toBeGreaterThan(paneStart);
+    const paneHtml = html.slice(paneStart, paneEnd);
+    expect(paneHtml).toContain('id="panel-skills"');
+    expect(paneHtml).toContain('id="skills-grid-view"');
+    expect(paneHtml).toContain('id="create-skill-btn"');
+    expect(paneHtml).toContain('id="skills-more-btn"');
+    expect(paneHtml).toContain('id="skills-categories"');
+    expect(paneHtml).toContain('id="skills-grid"');
+    expect(paneHtml).toContain('id="skills-detail-view"');
+    expect(paneHtml).toContain('id="skills-chat-input"');
   });
 
-  it('routes and lazy-loads Skills and Recall as separate primary views', () => {
+  it('routes and lazy-loads Skills through Recall', () => {
     const boot = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/boot.js'), 'utf-8');
     const state = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/state.js'), 'utf-8');
     const lazy = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/lazy-features.js'), 'utf-8');
-    expect(state).toContain("_setViewFromSidebar('skills')");
+    // Skills no longer has a sidebar button and its panel lives inside Recall's
+    // "我的能力" tab; deep links route to Recall and switch the tab.
+    expect(state).not.toContain("_setViewFromSidebar('skills')");
     expect(state).toContain("_setViewFromSidebar('recall')");
-    expect(boot).toContain("view === 'skills' ? 'panel-skills'");
+    expect(boot).toContain("view === 'skills' || view === 'personal-ontology' ? 'panel-recall'");
     expect(boot).toContain("view === 'recall' ? 'panel-recall'");
     expect(boot).toContain("_loadViewFeature('recall', 'recall'");
+    expect(boot).toContain("switchSkillsCognitionPage('my-abilities')");
     expect(lazy).toMatch(/recall:\s*\[[\s\S]*?\{ src: '\.\/modules\/skills\.js' \}/);
   });
 
   it('wraps the top navigation and pages in one integrated workspace', () => {
     expect(html).toContain('class="skills-cognition-surface"');
     const surfaceStart = html.indexOf('class="skills-cognition-surface"');
-    const surfaceEnd = html.indexOf('<!-- Skills -->');
+    const surfaceEnd = html.indexOf('</main>', surfaceStart);
     expect(surfaceStart).toBeGreaterThan(0);
     expect(surfaceEnd).toBeGreaterThan(surfaceStart);
     const surfaceHtml = html.slice(surfaceStart, surfaceEnd);
@@ -132,6 +135,8 @@ describe('Recall cognition workspace layout', () => {
     expect(surfaceHtml).toContain('class="skills-cognition-main"');
     expect(surfaceHtml).toContain('id="skills-cognition-tabs"');
     expect(surfaceHtml).toContain('id="skills-cognition-assets"');
+    expect(surfaceHtml).toContain('id="skills-cognition-my-abilities"');
+    expect(surfaceHtml).toContain('id="skills-cognition-about-me"');
   });
 
   it('places Recall navigation in a horizontal top bar', () => {
@@ -155,7 +160,7 @@ describe('Recall cognition workspace layout', () => {
 
   it('keeps review inside capture tasks and exposes memory content as one page', () => {
     expect(html).not.toContain('data-i18n="cognition.candidate_review"');
-    expect(html).toContain('data-i18n="cognition.memory_content"');
+    expect(html).toContain('data-i18n="cognition.ability_assets"');
     expect(html).not.toContain('data-ability-assets-view');
     expect(html).not.toContain('data-ability-assets-view-panel');
     expect(html).not.toContain('cognition.cognition_tree');
@@ -169,15 +174,29 @@ describe('Recall cognition workspace layout', () => {
     expect(css).toContain('height: fit-content');
   });
 
-  it('scrolls only the memory list while keeping the detail pane fixed on desktop', () => {
+  it('scrolls the combined page while keeping the formal memory list independently scrollable on desktop', () => {
     const css = recallCss;
     const desktopStart = css.indexOf('@media (min-width: 901px)');
     const desktopEnd = css.indexOf('@media (max-width: 900px)', desktopStart);
     const desktopRules = css.slice(desktopStart, desktopEnd);
-    expect(desktopRules).toContain('#skills-cognition-assets { overflow: hidden; }');
+    expect(desktopRules).toContain('#skills-cognition-assets { overflow-x: hidden; overflow-y: auto; }');
+    expect(desktopRules).toContain('#skills-cognition-assets-body { height: min(620px, calc(100vh - 184px)); min-height: 520px; }');
     expect(desktopRules).toMatch(/\.ability-asset-list-body\s*\{[\s\S]*overflow-y:\s*auto;/);
     expect(desktopRules).toMatch(/\.ability-asset-detail\s*\{[\s\S]*height:\s*100%;/);
     expect(desktopRules).toContain('overscroll-behavior: contain');
+  });
+
+  it('keeps the cognition asset header compact and removes the personal tag surface', () => {
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
+    const zh = JSON.parse(fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/zh.json'), 'utf-8'));
+    expect(html).toContain('<h1 data-i18n="cognition.title">认知资产</h1>');
+    expect(zh['cognition.title']).toBe('认知资产');
+    expect(recallCss).toMatch(/\.skills-cognition-header\s*\{[^}]*min-height:\s*48px;[^}]*padding:\s*6px 20px;/s);
+    expect(recallCss).toMatch(/\.skills-cognition-header h1\s*\{[^}]*font-size:\s*16px;/s);
+    expect(recallCss).not.toContain('.ability-profile-');
+    expect(recallCss).not.toContain('.ability-personal-memory-');
+    expect(skills).not.toContain("window.cogseed.invoke('personalOntology.profile.summary'");
+    expect(skills).not.toContain('data-personal-ontology-manage');
   });
 
   it('shows source health and conversation capture next actions in the existing overview', () => {
@@ -270,6 +289,11 @@ describe('Recall cognition workspace layout', () => {
         'cognition.capture_review_hint',
         'cognition.capture_review_empty',
         'cognition.memory_content',
+        'cognition.personal_ontology_section',
+        'cognition.personal_ontology_section_hint',
+        'cognition.personal_memories_section',
+        'cognition.personal_memories_section_hint',
+        'cognition.ability_assets',
         'cognition.generate_skill',
         'cognition.add_to_skill_library',
         'cognition.skill_draft_title',

@@ -7,6 +7,24 @@
 
 const _hubLog = createLogger('hub-account:settings');
 
+/** Render a UI icon by name (single source: modules/icons.js — no emoji). */
+function _icon(name, className) {
+  const html = window.uiIconHtml ? window.uiIconHtml(name, className) : '';
+  return html || `<span class="${className || 'ui-icon'}"></span>`;
+}
+
+/** Friendly device name: strip hostname noise and unknown placeholders. */
+function _friendlyDeviceName(dev) {
+  const raw = dev.device_name || dev.device_id || '';
+  if (!raw || /unknown/i.test(raw)) return '';
+  // MacBook-Pro-6.local -> MacBook Pro
+  return raw
+    .replace(/\.local$/, '')
+    .replace(/-/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function _escapeHtml(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -59,6 +77,14 @@ async function _renderHubAccount() {
     return;
   }
 
+  if (status.release_enabled === false) {
+    card.innerHTML = `
+      <div class="settings-section-head">${_escapeHtml(t('hub.account.title'))}</div>
+      <div class="settings-empty">${_escapeHtml(t('hub.account.release_gate_closed'))}</div>
+    `;
+    return;
+  }
+
   if (!status.signed_in) {
     card.innerHTML = _signedOutCard(status);
     _bindSignIn(card);
@@ -88,69 +114,102 @@ async function _renderHubAccount() {
 
 function _signedOutCard(status) {
   const unreachable = status.hub_reachable === false
-    ? `<div class="settings-row"><span class="settings-hint" role="status">${_escapeHtml(t('hub.account.hub_unreachable'))}</span></div>`
+    ? `<div class="hub-alert" role="status">${_icon('info', 'hub-alert-icon')}${_escapeHtml(t('hub.account.hub_unreachable'))}</div>`
     : '';
+  const features = [
+    ['cloud_sync', 'cloud'],
+    ['publish', 'globe'],
+    ['backup', 'shield-check'],
+    ['devices', 'monitor'],
+  ].map(([key, iconName]) => `
+    <div class="hub-feature-card">
+      <span class="hub-feature-icon">${_icon(iconName)}</span>
+      <span class="hub-feature-title">${_escapeHtml(t(`hub.account.feature_${key}`))}</span>
+      <span class="hub-feature-desc">${_escapeHtml(t(`hub.account.feature_${key}_desc`))}</span>
+    </div>`).join('');
+
   return `
-    <div class="settings-section-head">${_escapeHtml(t('hub.account.title'))}</div>
-    <div class="settings-group-head">
-      <div class="settings-group-title">${_escapeHtml(t('hub.account.signed_out_title'))}</div>
-      <div class="settings-group-sub">${_escapeHtml(t('hub.account.signed_out_desc'))}</div>
+    <div class="hub-hero">
+      <div class="hub-hero-badge">${_escapeHtml(t('hub.account.title'))}</div>
+      <h3 class="hub-hero-title">${_escapeHtml(t('hub.account.signed_out_title'))}</h3>
+      <p class="hub-hero-desc">${_escapeHtml(t('hub.account.signed_out_desc'))}</p>
+      ${unreachable}
+      <button type="button" class="btn btn-primary hub-hero-cta" id="hub-account-sign-in" data-i18n="hub.account.sign_in">${_escapeHtml(t('hub.account.sign_in'))}</button>
     </div>
-    ${unreachable}
-    <div class="settings-row">
-      <button type="button" class="btn btn-primary" id="hub-account-sign-in" data-i18n="hub.account.sign_in">${_escapeHtml(t('hub.account.sign_in'))}</button>
+
+    <div class="settings-section-head">${_escapeHtml(t('hub.account.local_section'))}</div>
+    <div class="hub-card hub-card-row">
+      <span class="hub-card-icon">${_icon('hard-drive')}</span>
+      <div class="hub-card-body">
+        <span class="hub-card-title">${_escapeHtml(t('hub.account.local_mode'))}</span>
+        <span class="hub-card-desc">${_escapeHtml(t('hub.account.local_mode_desc'))}</span>
+      </div>
     </div>
+
+    <div class="settings-section-head">${_escapeHtml(t('hub.account.features_section'))}</div>
+    <div class="hub-feature-grid">${features}</div>
   `;
 }
 
 function _signedInCard(status, devices, consents) {
   const deviceRows = devices.map((dev) => {
-    const current = dev.is_current ? ` <span class="settings-chip">${_escapeHtml(t('hub.account.device_current'))}</span>` : '';
+    const current = dev.is_current
+      ? `<span class="hub-chip hub-chip-current">${_escapeHtml(t('hub.account.device_current'))}</span>`
+      : '';
     const revoke = dev.is_current
       ? ''
-      : `<button type="button" class="btn btn-sm" data-hub-revoke-device="${_escapeHtml(dev.device_id)}">${_escapeHtml(t('hub.account.revoke'))}</button>`;
+      : `<button type="button" class="hub-btn-mini" data-hub-revoke-device="${_escapeHtml(dev.device_id)}">${_icon('trash-2', 'hub-btn-icon')}${_escapeHtml(t('hub.account.revoke'))}</button>`;
+    const name = _friendlyDeviceName(dev) || _maskId(dev.device_id || '');
+    const os = (dev.device_os || '').replace(/\bunknown\b/gi, '').trim();
+    const meta = [os, _formatTime(dev.last_seen_at)].filter(Boolean).join(' · ');
     return `
-      <div class="settings-row">
-        <span>${_escapeHtml(dev.device_name || dev.device_id)}${current}</span>
-        <span class="settings-hint">${_escapeHtml(dev.device_os || '')} · ${_escapeHtml(_formatTime(dev.last_seen_at))}</span>
+      <div class="hub-device-row">
+        <span class="hub-device-icon">${_icon('monitor')}</span>
+        <div class="hub-device-body">
+          <span class="hub-device-name">${_escapeHtml(name)}${current}</span>
+          ${meta ? `<span class="hub-device-meta">${_escapeHtml(meta)}</span>` : ''}
+        </div>
         ${revoke}
       </div>
     `;
-  }).join('');
+  }).join('') || `<div class="hub-card-empty">${_icon('monitor', 'hub-empty-icon')}${_escapeHtml(t('hub.account.devices_empty'))}</div>`;
 
   const consentRows = consents.map((c) => {
     const action = c.granted
-      ? `<button type="button" class="btn btn-sm" data-hub-consent="${_escapeHtml(c.scope)}" data-hub-consent-action="revoke">${_escapeHtml(t('hub.account.consent_revoke'))}</button>`
-      : `<button type="button" class="btn btn-sm" data-hub-consent="${_escapeHtml(c.scope)}" data-hub-consent-action="grant">${_escapeHtml(t('hub.account.consent_grant'))}</button>`;
+      ? `<button type="button" class="hub-btn-mini" data-hub-consent="${_escapeHtml(c.scope)}" data-hub-consent-action="revoke">${_icon('x-circle', 'hub-btn-icon')}${_escapeHtml(t('hub.account.consent_revoke'))}</button>`
+      : `<button type="button" class="hub-btn-mini hub-btn-mini-ghost" data-hub-consent="${_escapeHtml(c.scope)}" data-hub-consent-action="grant">${_icon('check-circle', 'hub-btn-icon')}${_escapeHtml(t('hub.account.consent_grant'))}</button>`;
+    const state = c.granted ? `<span class="hub-chip hub-chip-on">${_icon('check-circle', 'hub-chip-icon')}${_escapeHtml(t('hub.account.consent_granted'))}</span>` : `<span class="hub-chip hub-chip-off">${_escapeHtml(t('hub.account.consent_revoked'))}</span>`;
     return `
-      <div class="settings-row">
-        <span>${_escapeHtml(c.scope)}</span>
-        <span class="settings-hint">${c.granted ? _escapeHtml(t('hub.account.consent_granted')) : _escapeHtml(t('hub.account.consent_revoked'))}</span>
+      <div class="hub-consent-row">
+        <span class="hub-consent-scope">${_escapeHtml(c.scope)}</span>
+        ${state}
         ${action}
       </div>
     `;
-  }).join('') || `<div class="settings-row"><span class="settings-hint">${_escapeHtml(t('hub.account.consents_empty'))}</span></div>`;
+  }).join('') || `<div class="hub-card-empty">${_icon('shield', 'hub-empty-icon')}${_escapeHtml(t('hub.account.consents_empty'))}</div>`;
 
   return `
-    <div class="settings-section-head">${_escapeHtml(t('hub.account.title'))}</div>
-    <div class="settings-group-head">
-      <div class="settings-group-title">${_escapeHtml(t('hub.account.signed_in_title'))}</div>
-      <div class="settings-group-sub">${_escapeHtml(t('hub.account.signed_in_desc'))}</div>
-    </div>
-    <div class="settings-row">
-      <span>${_escapeHtml(t('hub.account.account_id'))} ${_escapeHtml(_maskId(status.account_id || ''))}</span>
-      <span class="settings-hint">${status.bound ? _escapeHtml(t('hub.account.bound_local')) : _escapeHtml(t('hub.account.not_bound'))}</span>
+    <div class="hub-hero hub-hero-compact">
+      <div class="hub-hero-badge hub-hero-badge-on">${_icon('check-circle', 'hub-hero-badge-icon')}${_escapeHtml(t('hub.account.signed_in_title'))}</div>
+      <div class="hub-account-line">
+        <span class="hub-account-avatar">${_icon('user')}</span>
+        <div class="hub-account-id">
+          <span class="hub-account-id-value">${_escapeHtml(_maskId(status.account_id || ''))}</span>
+          <span class="hub-account-id-sub">${status.bound ? _icon('shield-check', 'hub-id-sub-icon') : ''}${status.bound ? _escapeHtml(t('hub.account.bound_local')) : _escapeHtml(t('hub.account.not_bound'))}</span>
+        </div>
+      </div>
+      <p class="hub-hero-desc">${_escapeHtml(t('hub.account.signed_in_desc'))}</p>
     </div>
 
     <div class="settings-section-head">${_escapeHtml(t('hub.account.devices'))}</div>
-    ${deviceRows || `<div class="settings-row"><span class="settings-hint">${_escapeHtml(t('hub.account.devices_empty'))}</span></div>`}
+    <div class="hub-card hub-card-list">${deviceRows}</div>
 
     <div class="settings-section-head">${_escapeHtml(t('hub.account.consents'))}</div>
-    ${consentRows}
+    <div class="hub-card hub-card-list">${consentRows}</div>
 
-    <div class="settings-row settings-actions">
-      <button type="button" class="btn btn-sm" id="hub-account-sign-out">${_escapeHtml(t('hub.account.sign_out'))}</button>
-      <button type="button" class="btn btn-sm btn-danger" id="hub-account-delete">${_escapeHtml(t('hub.account.delete_account'))}</button>
+    <div class="hub-actions">
+      <button type="button" class="btn btn-sm" id="hub-account-sign-out">${_icon('log-out', 'hub-btn-icon')}${_escapeHtml(t('hub.account.sign_out'))}</button>
+      <button type="button" class="btn btn-sm btn-danger" id="hub-account-delete">${_icon('trash-2', 'hub-btn-icon')}${_escapeHtml(t('hub.account.delete_account'))}</button>
     </div>
   `;
 }
@@ -253,5 +312,28 @@ window.addEventListener('i18n-change', () => {
   const pane = document.querySelector('.settings-tab-pane[data-settings-pane="account"]');
   if (pane && !pane.hidden) void _renderHubAccount();
 });
+
+// deep link 登录完成的推送事件。`start_login` 在打开浏览器时就已返回，登录真正
+// 完成是在主进程收到 cogseed://account/callback 之后，渲染端不 await 那一步，
+// 所以只能靠这个事件刷新。
+//
+// 这里刻意不判断面板是否可见：上面的 focus 处理器不足以覆盖两种情况——
+//   1. 主进程会先 _focusMainWindow() 再 await completeLogin，focus 那次刷新
+//      读到的仍是旧状态，之后不会有第二次刷新；
+//   2. 用户当时不在账号面板（甚至没打开设置），focus 分支直接跳过。
+// _renderHubAccount 自身在找不到卡片时会立即返回，因此无条件调用是安全的。
+if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
+  try {
+    window.cogseed.onPushEvent('hub-account:login-result', (outcome) => {
+      _hubLog.info('hub login result received', {
+        result: (outcome && outcome.result) || 'unknown',
+        code: (outcome && outcome.code) || undefined,
+      });
+      void _renderHubAccount();
+    });
+  } catch (err) {
+    _hubLog.warn('hub login result subscription failed', { error: (err && err.message) || String(err) });
+  }
+}
 
 window.initHubAccountSettings = _renderHubAccount;

@@ -1,7 +1,7 @@
 import { readMateTaskEvents } from './event-store';
 import { retryMateTask } from './lifecycle';
 import { recoverMateTasks } from './recovery';
-import { mateRuntimeController, type MateRuntimeController, type ResumeMateTaskInput, type StartMateTaskInput } from './runtime-controller';
+import type { MateRuntimeController, ResumeMateTaskInput, StartMateTaskInput } from './runtime-controller';
 import { assertMateConnectorId, assertMateKbSourceId, assertMateRequestId, assertMateSessionId, assertMateTaskId, assertMateUserId } from './paths';
 import { listMateConnectors } from './connector-store';
 import { mateConnectorManager } from './connector-manager';
@@ -20,6 +20,10 @@ const MAX_CONTEXT_ITEMS = 100;
 const MAX_ATTACHMENT_ITEMS = 100;
 
 interface MateIpcController extends Pick<MateRuntimeController, 'startMateTask' | 'cancelMateTask' | 'retryMateTask' | 'resumeMateTask' | 'runtimeStatus' | 'restartRuntime'> {}
+
+async function resolveMateRuntimeController(deps: MateIpcServiceDeps): Promise<MateIpcController> {
+  return deps.controller ?? (await import('./runtime-controller')).mateRuntimeController;
+}
 
 export interface MateIpcServiceDeps {
   controller?: MateIpcController;
@@ -273,7 +277,7 @@ function rendererSafeEventSummary(event: MateTaskEvent): string {
     case 'task.failed': return 'Task failed.';
     case 'task.cancelled': return 'Task cancelled.';
     case 'task.recoverable': return 'Task requires recovery.';
-    default: return redactRendererText(event.type, 120) || 'Mate task event.';
+    default: return redactRendererText(event.type, 120) || 'CogSeed task event.';
   }
 }
 
@@ -301,7 +305,7 @@ function normalizeProjectionInput(payload: unknown): { sessionId?: string; taskI
 function normalizeActionInput(payload: unknown): { action: MateRendererTaskAction; taskId?: string; requestId?: string; reason?: string } {
   const raw = asObject(payload);
   const action = boundedString(raw.action, 'action', 20) as MateRendererTaskAction;
-  if (!['retry', 'skip', 'resume', 'abort'].includes(action)) throw new Error('invalid Mate task action');
+  if (!['retry', 'skip', 'resume', 'abort'].includes(action)) throw new Error('invalid CogSeed task action');
   const taskId = raw.taskId === undefined ? undefined : assertMateTaskId(boundedString(raw.taskId, 'taskId', 120) ?? '');
   const requestId = raw.requestId === undefined ? undefined : assertMateRequestId(boundedString(raw.requestId, 'requestId', 120) ?? '');
   const reason = boundedString(raw.reason, 'reason', 500, false);
@@ -309,7 +313,6 @@ function normalizeActionInput(payload: unknown): { action: MateRendererTaskActio
 }
 
 export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
-  const controller = deps.controller ?? mateRuntimeController;
   const readTask = deps.readTask ?? readMateTask;
   const retryTask = deps.retryTask ?? retryMateTask;
   const readEvents = deps.readEvents ?? readMateTaskEvents;
@@ -322,6 +325,7 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
   return {
     async start(userId: string, payload: unknown): Promise<MateRendererTaskSummary> {
       assertMateUserId(userId);
+      const controller = await resolveMateRuntimeController(deps);
       return taskSummary(await controller.startMateTask(userId, normalizeStartInput(payload)));
     },
 
@@ -329,12 +333,13 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
       assertMateUserId(userId);
       const taskId = normalizeTaskId(payload);
       const task = await readTask(userId, taskId);
-      if (!task) throw new Error('Mate task not found');
+      if (!task) throw new Error('CogSeed task not found');
       return taskSummary(task);
     },
 
     async cancel(userId: string, payload: unknown): Promise<MateRendererTaskSummary> {
       assertMateUserId(userId);
+      const controller = await resolveMateRuntimeController(deps);
       return taskSummary(await controller.cancelMateTask(userId, normalizeTaskId(payload)));
     },
 
@@ -345,6 +350,7 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
     async retry(userId: string, payload: unknown): Promise<MateRendererTaskSummary> {
       assertMateUserId(userId);
       const input = normalizeRetryInput(payload);
+      const controller = await resolveMateRuntimeController(deps);
       const task = deps.retryTask ? await retryTask(userId, input.taskId, input.requestId) : await controller.retryMateTask(userId, input.taskId, input.requestId);
       return taskSummary(task);
     },
@@ -365,6 +371,7 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
         ...(attachments ? { attachments } : {}),
         ...(workingDir ? { workingDir } : {}),
       };
+      const controller = await resolveMateRuntimeController(deps);
       const task = await controller.resumeMateTask(userId, assertMateTaskId(boundedString(raw.taskId, 'taskId', 120) ?? ''), input);
       return taskSummary(task);
     },
@@ -445,9 +452,9 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
       if (!selected && input.sessionId) {
         selected = [...allTasks].filter((task) => task.sessionId === input.sessionId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
       }
-      if (!selected) throw new Error('Mate collaboration task not found');
+      if (!selected) throw new Error('CogSeed collaboration task not found');
       const session = await readSession(userId, selected.sessionId);
-      if (!session) throw new Error('Mate session not found');
+      if (!session) throw new Error('CogSeed session not found');
 
       const related: MateTaskRecord[] = [];
       const visit = (task: MateTaskRecord) => {
@@ -517,7 +524,8 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
       assertMateUserId(userId);
       const input = normalizeActionInput(payload);
       if (!input.taskId) throw new Error('taskId required');
-      if (input.action === 'skip') throw new Error('Mate workflow skip requires a workflow step scope');
+      if (input.action === 'skip') throw new Error('CogSeed workflow skip requires a workflow step scope');
+      const controller = await resolveMateRuntimeController(deps);
       if (input.action === 'abort') await controller.cancelMateTask(userId, input.taskId);
       else if (!input.requestId) throw new Error('requestId required');
       else if (input.action === 'retry') await controller.retryMateTask(userId, input.taskId, input.requestId);
@@ -527,11 +535,13 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
 
     async runtimeStatus(userId: string) {
       assertMateUserId(userId);
+      const controller = await resolveMateRuntimeController(deps);
       return controller.runtimeStatus();
     },
 
     async restartRuntime(userId: string) {
       assertMateUserId(userId);
+      const controller = await resolveMateRuntimeController(deps);
       const restarted = await controller.restartRuntime();
       const recovery = await recoverMateTasks(userId);
       return { ...restarted, recovery };

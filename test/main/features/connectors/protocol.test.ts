@@ -27,27 +27,12 @@ const connectorMock = vi.hoisted(() => ({
   handleDcrCallbackUrl: vi.fn(async () => undefined),
 }));
 
-const hubAccountMock = vi.hoisted(() => ({
-  handleAccountCallbackUrl: vi.fn(async () => ({ ok: true })),
-  accountCallbackUrl: vi.fn((rawUrl: string) => {
-    try {
-      const parsed = new URL(rawUrl);
-      if (parsed.host.toLowerCase() !== 'account') return null;
-      if ((parsed.pathname.replace(/\/+$/, '') || '/') !== '/callback') return null;
-      return parsed.href;
-    } catch {
-      return null;
-    }
-  }),
-}));
-
 vi.mock('electron', () => ({
   app: electronMock.app,
   BrowserWindow: { getAllWindows: () => [electronMock.window] },
 }));
 
 vi.mock('../../../../src/main/features/connectors/index', () => connectorMock);
-vi.mock('../../../../src/main/features/hub_account', () => hubAccountMock);
 
 describe('connector callback protocol', () => {
   beforeEach(() => {
@@ -103,32 +88,6 @@ describe('connector callback protocol', () => {
     expect(preventDefault).not.toHaveBeenCalled();
     expect(connectorMock.handleCallbackUrl).not.toHaveBeenCalled();
     expect(connectorMock.handleDcrCallbackUrl).not.toHaveBeenCalled();
-    expect(hubAccountMock.handleAccountCallbackUrl).not.toHaveBeenCalled();
-  });
-
-  it('dispatches the Hub account callback deep link to the hub account handler', async () => {
-    const protocol = await import('../../../../src/main/features/connectors/protocol');
-    protocol.registerConnectorProtocol({ owner: true });
-    const openUrl = electronMock.listeners.get('open-url');
-    const preventDefault = vi.fn();
-
-    await openUrl?.({ preventDefault }, 'cogseed://account/callback?code=abc&state=def');
-
-    expect(preventDefault).toHaveBeenCalled();
-    expect(hubAccountMock.handleAccountCallbackUrl).toHaveBeenCalledTimes(1);
-    expect(hubAccountMock.handleAccountCallbackUrl).toHaveBeenCalledWith('cogseed://account/callback?code=abc&state=def');
-    expect(connectorMock.handleCallbackUrl).not.toHaveBeenCalled();
-    expect(electronMock.window.focus).toHaveBeenCalled();
-  });
-
-  it('extracts an account callback from argv for cold launch', async () => {
-    const protocol = await import('../../../../src/main/features/connectors/protocol');
-    protocol.registerConnectorProtocol({ owner: true });
-    // second-instance argv carrying the account deep link must be picked up
-    const secondInstance = electronMock.listeners.get('second-instance');
-    await secondInstance?.({}, ['--', 'cogseed://account/callback?code=xyz&state=sts']);
-    await vi.waitFor(() => expect(hubAccountMock.handleAccountCallbackUrl).toHaveBeenCalledTimes(1));
-    expect(hubAccountMock.handleAccountCallbackUrl).toHaveBeenCalledWith('cogseed://account/callback?code=xyz&state=sts');
   });
 
   it('focuses the existing window without registering or dispatching protocols when not the owner', async () => {

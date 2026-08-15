@@ -19,7 +19,7 @@ function setup() {
   return { adapter: createMateOfficeAdapter({ officeCliAvailable: () => true, runOfficeCli, closeOfficeFile }), runOfficeCli, closeOfficeFile };
 }
 
-describe('Mate Office adapter', () => {
+describe('CogSeed Office adapter', () => {
   it('reads only scoped Office files and always closes the resident', async () => {
     const dir = root(); const file = path.join(dir, 'a.docx'); fs.writeFileSync(file, 'x');
     const h = setup();

@@ -1,15 +1,14 @@
-// ─── First-run onboarding (CogSeed four-step walkthrough) ──────────────────
+// ─── First-run onboarding (CogSeed three-step walkthrough) ──────────────────
 //
 // Ported from the static prototype (60秒用户旅程.html), rebuilt on top of the
-// live CogSeed renderer. Four steps:
+// live CogSeed renderer. Three steps:
 //   1. 认识 CogSeed        — product intro (static)
 //   2. 导入会话 / 检测本地 agent — REAL detection via `localAgents.list`;
 //                            session history reading is NOT wired to a real
 //                            backend yet, so sessions show an honest
 //                            "unavailable / failed" state — never fake data.
-//   3. 选择角色起点         — optional role template (local pick)
-//   4. 确认候选认知         — candidate cognition extraction is NOT wired to a
-//                            real backend yet → honest empty state, no fakes.
+//   3. 隐形匹配工作空间      — 不再让用户手动选角色；根据会话建议的模板自动创建/
+//                           复用工作空间并把导入会话绑定进去，无建议则落「临时空间」。
 //
 // Fires once per machine: `prefs.getOnboarding` gates the lift, the last step
 // calls `prefs.setOnboarding {completed:true}`. `boot.js` invokes
@@ -28,6 +27,7 @@ const CS_AGENT_LABELS = {
   openclaw: 'OpenClaw',
   opencode: 'OpenCode',
   hermes: 'Hermes',
+  workbuddy: 'WorkBuddy',
 };
 
 // One neutral terminal glyph for every CLI — we don't ship per-agent brand
@@ -114,6 +114,8 @@ window._csDoImport = async function() {
     await _csImportClaudeSessions(agentType);
   } else if (agentType === 'codex') {
     await _csImportCodexSessions(agentType);
+  } else if (agentType === 'workbuddy') {
+    await _csImportWorkbuddySessions(agentType);
   }
 };
 
@@ -124,7 +126,6 @@ function _csEsc(s) {
 }
 
 let _csObBuilt = false;
-let _csRolePicked = null;
 let _csToastTimer = 0;
 // 本轮导入的所有会话 ID（Claude + Codex），用于完成时批量绑定到角色工作空间。
 let _csImportedConversationIds = [];
@@ -134,107 +135,239 @@ let _csStandaloneMode = false;
 function _csToast(msg) {
   const t = document.getElementById('cs-ob-toast');
   if (!t) return;
-  t.textContent = msg;
+  const m = t.querySelector('.t-msg');
+  if (m) m.textContent = msg; else t.textContent = msg;
+  t.classList.remove('busy'); // ordinary toast: hide the progress bar
   t.classList.add('show');
   clearTimeout(_csToastTimer);
   _csToastTimer = setTimeout(() => t.classList.remove('show'), 2400);
 }
 
+// Sticky toast with an INDETERMINATE progress bar for a long atomic op we can't
+// measure (e.g. a single-call session import). No auto-dismiss and no fake
+// percentage — the animated bar just conveys "still working". Pair every call
+// with _csToastDone() (or a plain _csToast) once the op resolves.
+function _csToastBusy(msg) {
+  const t = document.getElementById('cs-ob-toast');
+  if (!t) return;
+  const m = t.querySelector('.t-msg');
+  if (m) m.textContent = msg;
+  t.classList.add('busy', 'show');
+  clearTimeout(_csToastTimer); // sticky: cancel any pending auto-hide
+}
+
+// Resolve a busy toast into a final message that auto-dismisses normally.
+function _csToastDone(msg) {
+  _csToast(msg); // clears .busy, restores the 2.4s auto-hide
+}
+
 function _csObShellHtml() {
   return `
-  <header class="cs-topbar">
-    <div class="cs-brand">
-      <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v10"/><path d="M12 13a4 4 0 0 1-4-4 6 6 0 0 1 8 0 4 4 0 0 1-4 4Z"/><path d="M9.5 16.5 12 13l2.5 3.5"/><path d="M12 17v4"/></svg></span>
-      <b>COGSEED</b>
-    </div>
-    <div class="cs-title">首次启动 · 4 步开始</div>
-    <div></div>
-  </header>
-  <div class="cs-main">
-    <aside class="cs-rail">
-      <h2>让认知先落地</h2>
-      <p>完成必要设置后进入首页；以后可在设置中调整。</p>
-      <div class="cs-steps">
-        <button class="cs-step active" data-csstep="0"><span>1</span><span><strong>认识 CogSeed</strong><small>它不是又一个 Agent</small></span></button>
-        <button class="cs-step" data-csstep="1"><span>2</span><span><strong>连接 AI 团队</strong><small>接入你的 Agent 模型</small></span></button>
-        <button class="cs-step" data-csstep="2"><span>3</span><span><strong>导入最近会话</strong><small>检测本地 Agent</small></span></button>
-        <button class="cs-step" data-csstep="3"><span>4</span><span><strong>选择角色起点</strong><small>可选 · 可跳过</small></span></button>
-      </div>
-      <div class="cs-privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>认知资产与模型 Key 都留在本机。导入 AI 团队的 Key 是你自己的凭证，仅在本机使用，不上传。</span></div>
-    </aside>
+  <div class="cs-ob-brand" aria-hidden="true"><img src="../resources/icons/logo.png" alt=""><b>CogSeed</b></div>
+  <div class="cs-main-fullwidth">
     <main class="cs-content">
 
       <section class="cs-panel active" data-cspanel="0">
-        <div class="cs-kicker">模型是大家的 · 认知是你的</div>
-        <h1>认知，<br>是你唯一带得走的东西。</h1>
-        <p class="cs-lead">CogSeed 不是另一个通用 Agent，也不替你写代码。它在你已有的 Agent 工作流之上，发现、确认并保管属于你的能力资产——换模型、换 Agent，认知都跟着你。</p>
-        <div class="cs-facts">
-          <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="12" r="4"/></svg><strong>无需注册账号</strong><span>创建本机个人空间，不需要手机号、邮箱或企业身份。</span></div>
-          <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 13v5M12 9v9M17 5v13"/></svg><strong>认知留在本机</strong><span>项目、会话与认知资产不会因为启动应用而自动上传。</span></div>
-          <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><strong>Key 是你自己的</strong><span>可一键把已有 Agent 的模型 Key 导入 AI 团队，仅在本机使用；也可跳过，之后手动配置。</span></div>
-        </div>
-        <div class="cs-actions">
-          <button class="cs-btn" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>继续 · 连接 AI 团队</button>
-          <small>继续不代表同意上传任何内容。</small>
+        <div class="first-run-shell">
+          <section class="first-run-story">
+            <div class="first-run-brand"><img src="../resources/icons/logo.png" alt=""><span>CogSeed · 跨Agent的个人能力资产层</span></div>
+            <h1>先让一次真实工作<br>被准确接上</h1>
+            <p>CogSeed不替代你正在使用的Agent。它把你确认过的能力和当前任务状态，带到新的Session或Agent，让工作不用从头解释。</p>
+            <div class="first-run-promise">
+              <div>
+                <i>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>
+                    <path d="M12 11h.01"/><path d="M16 11h.01"/><path d="M8 11h.01"/>
+                  </svg>
+                </i>
+                <p><strong>从真实任务开始</strong><span>不要求先创建Agent、选择角色或配置认知资产。</span></p>
+              </div>
+              <div>
+                <i>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>
+                    <path d="m9 12 2 2 4-4"/>
+                  </svg>
+                </i>
+                <p><strong>先授权，再读取</strong><span>检测只看可用状态；Session内容必须由你逐项授权。</span></p>
+              </div>
+              <div>
+                <i>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="6" cy="19" r="3"/>
+                    <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/>
+                    <circle cx="18" cy="5" r="3"/>
+                  </svg>
+                </i>
+                <p><strong>60秒看到接续</strong><span>计时从"带着这些继续"开始，不包含安装、登录和授权。</span></p>
+              </div>
+            </div>
+            <div class="first-run-footnote">模型是大家的，认知是你的。</div>
+          </section>
+
+          <aside class="first-run-start">
+            <div class="first-run-card" id="first-run-card">
+              <div class="eyebrow">Start with real work</div>
+              <h2>开始一次真实工作</h2>
+              <p>CogSeed会先检查这台Mac上可用的Agent、最近任务和真实执行方式。此时不会读取任何Session正文。</p>
+              <button class="btn primary first-run-primary" id="first-begin" data-csnext="1"><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg><span>开始一次真实工作</span></button>
+              <button class="btn ghost first-run-secondary" id="first-known-user">我已经使用过CogSeed</button>
+              <div class="first-run-scan" id="first-run-scan">
+                <div class="first-scan-row"><i><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"></path><path d="M20.054 15.987H3.946"></path></svg></i><div><strong>本机Agent</strong><p id="first-agent-copy">正在检查可用状态</p></div><span class="status" id="first-agent-status">检测中</span></div>
+                <div class="first-scan-row"><i><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></i><div><strong>最近工作</strong><p id="first-history-copy">尚未读取任何内容</p></div><span class="status" id="first-history-status">未读取</span></div>
+                <div class="first-scan-row"><i><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.744 17.736a6 6 0 1 1-7.48-7.48"></path><path d="M15 6h1v4"></path><path d="m6.134 14.768.866-.5 2 3.464"></path><circle cx="16" cy="8" r="6"></circle></svg></i><div><strong>真实执行方式</strong><p id="first-execution-copy">正在确认可用Agent或体验额度</p></div><span class="status" id="first-execution-status">检查中</span></div>
+              </div>
+              <div class="first-run-route" id="first-run-route"><strong id="first-route-title">推荐：继续最近一项工作</strong><p id="first-route-copy">下一步只确认授权范围；授权前不会读取Session内容。</p><button class="btn primary" id="first-route-primary"><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg><span>继续</span></button></div>
+              <div class="first-run-trust"><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="16" r="1"></circle><rect x="3" y="10" width="18" height="12" rx="2"></rect><path d="M7 10V7a5 5 0 0 1 10 0v3"></path></svg><span>无需CogSeed账号即可开始。本地身份默认创建；登录Hub只用于额度、同步或社区能力。</span></div>
+            </div>
+          </aside>
         </div>
       </section>
 
       <section class="cs-panel" data-cspanel="1">
-        <div class="cs-kicker">连接 AI 团队 · 你的 Agent 能力</div>
-        <h1>把你已有的 Agent 接进 AI 团队</h1>
-        <p class="cs-lead">检测到你本机已安装的 Agent（Claude Code、Codex 等）即可一键接入：<b>配置过 API Key 的模型直接加入 AI 团队</b>，会话提取与对话直接用；<b>官方订阅登录的 Agent 无需 Key，可作为执行 Agent 接入</b>——任务会派发给本机 Agent 用它的登录态执行。凭证都是你自己的、只留本机。</p>
+        <div class="cs-auth-main">
+          <div class="eyebrow">Permission first</div>
+          <h1>连接你正在使用的Agent</h1>
+          <p class="cs-auth-lead">授权后，CogSeed才能从你选择的Session中恢复当前目标、确认过的能力和任务状态。未授权时只显示Agent名称与可用状态。</p>
 
-        <div class="cs-list" id="cs-team-list">
-          <div class="cs-state loading">正在检测可连接的 Agent…</div>
-        </div>
-        <div class="cs-mode"><span>一键连接即可，无需粘贴任何密钥。模型直连（调用模型做提取/对话）需要 API Key——这是 Anthropic / OpenAI 的平台规则，订阅凭证不能当 Key 用；但官方登录的 Agent 本机就能干活，接入为执行 Agent 不受影响。</span></div>
+          <div class="cs-privacy-line">
+            <svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+            <div><strong>不会读取全部历史，也不会接收登录凭证。</strong><br>默认只读、仅本次、可随时撤销；正式资产仍由你拥有。</div>
+          </div>
 
-        <div class="cs-actions">
-          <button class="cs-btn ghost" data-csnext="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
-          <button class="cs-btn ghost" id="cs-team-refresh">重新检测</button>
-          <button class="cs-btn" data-csnext="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 导入会话</button>
+          <div class="cs-route-summary">
+            <div class="cs-route-chip"><span>身份</span><strong>本地身份 · 免登录可开始</strong></div>
+            <div class="cs-route-chip"><span>本次执行</span><strong>本机 Agent 账号</strong></div>
+            <div class="cs-route-chip"><span>CogSeed体验额度</span><strong>不消耗</strong><div class="cs-quota-meter"><i></i></div></div>
+          </div>
+
+          <div class="cs-list" id="cs-team-list">
+            <div class="cs-state loading">正在检测可连接的 Agent…</div>
+          </div>
+
+          <div class="cs-auth-actions">
+            <small>点击「执行」只会把该 Agent 接入本机，授权前不会读取任何 Session 内容。</small>
+            <div class="cs-auth-btns">
+              <button class="cs-btn ghost" data-csnext="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
+              <button class="cs-btn ghost" id="cs-team-refresh">重新检测</button>
+              <button class="cs-btn ghost" data-csnext="2">跳过 · 稍后再连</button>
+              <button class="cs-btn" data-csnext="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 选择起点</button>
+            </div>
+          </div>
         </div>
       </section>
 
       <section class="cs-panel" data-cspanel="2">
-        <div class="cs-kicker">来源检测 · 跨 Agent · 只读</div>
-        <h1>从你在其他 Agent 里的对话继续</h1>
-        <p class="cs-lead">点击左侧 Agent，勾选想导入的会话，再点"导入所选会话"</p>
 
-        <div class="cs-import-hint">
-          <span>已导入 <span id="cs-import-count">0</span> 条会话</span>
-          <button type="button" class="cs-btn-inline" id="cs-do-import" style="display:none" onclick="_csDoImport()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>
-            导入所选会话
-          </button>
+        <!-- 子视图 A：三选一分流（默认） -->
+        <div class="cs-fork" id="cs-fork-view">
+          <div class="eyebrow">Continue where you left off</div>
+          <h1>先让一次真实工作被准确接上</h1>
+          <p class="cs-fork-lead">不用先认识资产、本体或角色。选择一个最近任务，CogSeed 只带入当前任务所需的已确认能力和接续状态。</p>
+
+          <div class="cs-fork-layout">
+            <!-- 左：从哪里继续（三选一横条） -->
+            <div class="cs-fork-main">
+              <h4 class="cs-fork-subhead">从哪里继续？</h4>
+              <p class="cs-fork-subnote">推荐选择一项已有目标和产物的任务，最容易看出 CogSeed 与普通新对话的差异。</p>
+
+              <div class="cs-fork-cards" id="cs-fork-cards">
+                <!-- 卡片①（复杂项目）由 _csLoadRecommendation 动态填充 -->
+                <button type="button" class="cs-fork-card" id="cs-fork-continue" data-fork="continue" disabled>
+                  <span class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>
+                  <span class="f-body">
+                    <h3 id="cs-fork-continue-title">正在读取你最近的项目…</h3>
+                    <p id="cs-fork-continue-desc" class="f-desc">自动找出你投入最多、最近还在做的项目。</p>
+                    <span class="f-meta" id="cs-fork-continue-meta"></span>
+                  </span>
+                  <span class="f-tag">推荐</span>
+                </button>
+
+                <button type="button" class="cs-fork-card" data-fork="other">
+                  <span class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22z"/></svg></span>
+                  <span class="f-body">
+                    <h3>选择其他会话</h3>
+                    <p class="f-desc">按 Agent、空间和时间选择一个已授权来源。</p>
+                  </span>
+                  <span class="f-tag muted">更换</span>
+                </button>
+
+                <button type="button" class="cs-fork-card" data-fork="blank">
+                  <span class="f-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>
+                  <span class="f-body">
+                    <h3>从空白任务开始</h3>
+                    <p class="f-desc">可以直接使用，但本次不会验证已有任务的接续效果。</p>
+                  </span>
+                  <span class="f-tag muted">跳过</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- 右：这次会用什么（真实数据，与左侧卡片①同源，由 _csLoadRecommendation 填充） -->
+            <aside class="cs-fork-side" id="cs-fork-side">
+              <h4 class="cs-fork-side-title">这次会用什么</h4>
+              <p class="cs-fork-side-note">以下来自这台 Mac 上的真实检测；授权前不会读取任何 Session 正文。</p>
+              <div class="cs-fork-side-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>
+                <div><strong>来源 Agent</strong><span id="cs-side-source">正在检测…</span></div>
+              </div>
+              <div class="cs-fork-side-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <div><strong>来源项目</strong><span id="cs-side-project">正在读取…</span></div>
+              </div>
+              <div class="cs-fork-side-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+                <div><strong>对话规模</strong><span id="cs-side-scale">正在读取…</span></div>
+              </div>
+              <div class="cs-fork-side-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>
+                <div><strong>最小只读范围</strong><span>不复制完整会话，不读取其他空间，不接收 Agent 密码</span></div>
+              </div>
+            </aside>
+          </div>
+
+          <div class="cs-actions">
+            <button class="cs-btn ghost" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
+          </div>
         </div>
 
-        <div class="cs-list" id="cs-agent-list">
-          <div class="cs-state loading">正在检测本机 Agent…</div>
-        </div>
+        <!-- 子视图 B：按 Agent 导入会话（点“选择其他会话”后显示，也用于确认推荐会话后的其他导入） -->
+        <div class="cs-import-sub" id="cs-import-view" style="display:none">
+          <div class="cs-kicker">只读导入 · 不写回任何 Agent</div>
+          <h1>从你在其他 Agent 里的对话继续</h1>
+          <p class="cs-lead">点左侧 Agent，勾选想导入的会话，再点「导入所选会话」</p>
 
-        <div class="cs-actions">
-          <button class="cs-btn ghost cs-step2-back" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
-          <button class="cs-btn ghost" id="cs-agent-refresh">重新检测 Agent</button>
-          <button class="cs-btn cs-step2-next" data-csnext="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 选择角色</button>
-          <button class="cs-btn cs-step2-finish" id="cs-step2-finish" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>完成导入</button>
+          <div class="cs-import-hint">
+            <span>已导入 <span id="cs-import-count">0</span> 条会话</span>
+            <button type="button" class="cs-btn-inline" id="cs-do-import" style="display:none" onclick="_csDoImport()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>
+              导入所选会话
+            </button>
+          </div>
+
+          <div class="cs-list" id="cs-agent-list">
+            <div class="cs-state loading">正在检测本机 Agent…</div>
+          </div>
+
+          <div class="cs-actions">
+            <button class="cs-btn ghost" id="cs-import-back-fork"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回起点选择</button>
+            <button class="cs-btn ghost" id="cs-agent-refresh">重新检测 Agent</button>
+            <button class="cs-btn cs-step2-next" data-csnext="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>开始整理</button>
+            <button class="cs-btn cs-step2-finish" id="cs-step2-finish" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>完成导入</button>
+          </div>
         </div>
       </section>
 
       <section class="cs-panel" data-cspanel="3">
-        <div class="cs-kicker">可选 · 非阻断 · 可跳过</div>
-        <h1>你主要在做哪类工作？</h1>
-        <p class="cs-lead">角色模板提供结构建议（本体字段、技能、智能体），<b>不会自动生成关于你的任何事实</b>。选择后会创建工作空间，之后随时可更换、叠加。</p>
-        <div class="cs-role-cards" id="cs-role-cards">
-          <div class="cs-state loading">正在加载角色模板...</div>
-        </div>
-        <div class="cs-role-result" id="cs-role-result" style="max-width:560px">
-          <h4>角色模板已应用 · 不自动生成个人事实</h4>
-        </div>
-        <div class="cs-actions">
-          <button class="cs-btn ghost" data-csnext="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
-          <button class="cs-btn ghost" id="cs-role-skip">跳过角色</button>
-          <button class="cs-btn" id="cs-ob-finish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"/></svg>完成设置</button>
+        <div class="cs-matching" id="cs-matching-view">
+          <div class="cs-matching-spinner" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+          </div>
+          <div class="cs-kicker" id="cs-matching-kicker">正在为你整理</div>
+          <h1 id="cs-matching-title">正在准备你接下来要用到的东西…</h1>
+          <p class="cs-lead" id="cs-matching-lead">会根据你选择的会话内容，自动为你准备好接下来要用的东西。</p>
+          <div class="cs-matching-detail" id="cs-matching-detail"></div>
         </div>
       </section>
 
@@ -262,11 +395,352 @@ function _csGoStep(n) {
     b.disabled = i > step;
   });
   shell.querySelector('.cs-content')?.scrollTo?.(0, 0);
+  // Top-bar step indicator ("第 n 步 / 共 3 步"), kept in sync with the rail.
+  const stepNow = document.getElementById('cs-step-now');
+  if (stepNow) stepNow.textContent = ` · 第 ${step + 1} 步 / 共 3 步`;
   console.log('[ONBOARDING DEBUG] _csGoStep: loading data for step', step);
   if (step === 1) _csLoadTeam(false);
-  if (step === 2) _csLoadAgents(false);
-  if (step === 3) _csLoadRoleTemplates();
+  if (step === 2) _csShowForkView();
+  if (step === 3) _csShowMatchingView();
   console.log('[ONBOARDING DEBUG] _csGoStep complete');
+}
+
+function _csShowMatchingView() {
+  const matching = document.getElementById('cs-matching-view');
+  if (matching) matching.style.display = '';
+  const lead = document.getElementById('cs-matching-lead');
+  if (lead) lead.textContent = '会根据你选择的会话内容，自动为你准备好接下来要用的东西。';
+  _csRunInvisibleMatching();
+}
+
+// 隐形匹配：根据后端建议的场景建/复用工作空间并把导入会话绑定进去；
+// 无建议或建议不可用时落入「临时空间」。完成后直接进入主界面（不展示确认页）。
+async function _csRunInvisibleMatching() {
+  const lead = document.getElementById('cs-matching-lead');
+
+  // 有建议场景（「继续项目」来自 recommendStartingPoint.suggestedTemplate，
+  // 后端现在返回场景建议：scenarioId + 该场景建议主模板 templateId）。
+  const suggestion = (_csRecommendation && _csRecommendation.suggestedTemplate)
+    || null;
+  const scenarioId = suggestion && suggestion.scenarioId;
+  const primaryTemplateId = suggestion && suggestion.templateId;
+
+  // 查场景定义（名字/图标/建议主副模板），用于建空间。
+  let spaceName = '临时空间';
+  let matchedScenario = null;
+  if (scenarioId) {
+    try {
+      const scRes = await window.cogseed.invoke('spaces.scenarios.list', {});
+      const scenarios = (scRes && scRes.scenarios) || [];
+      const sc = scenarios.find((s) => s && s.scenario_id === scenarioId);
+      if (sc) {
+        matchedScenario = sc;
+        spaceName = sc.name || '临时空间';
+        if (lead) lead.textContent = '正在根据你的会话内容整理接下来要用的东西…';
+      }
+    } catch (scErr) {
+      _obLog.warn('scenario list failed during matching', { error: (scErr && scErr.message) || String(scErr) });
+    }
+  } else {
+    if (lead) lead.textContent = '正在整理你的内容…';
+  }
+
+  try {
+    await _csEnsureWorkspaceFromScenario(matchedScenario, primaryTemplateId, spaceName);
+  } catch (wsErr) {
+    _obLog.warn('workspace ensure failed during matching', { error: (wsErr && wsErr.message) || String(wsErr) });
+  }
+
+  _csMatchResult = {
+    spaceName,
+    scenarioId,
+    matchedTemplateId: primaryTemplateId,
+    matchedName: matchedScenario && matchedScenario.name || '',
+  };
+
+  // 匹配完成 → 直接结束引导进入主界面，不展示确认页、不要求用户手动点击。
+  await _csFinish();
+}
+
+let _csMatchResult = null;
+
+// 创建/复用工作空间并把导入会话绑定进去（隐形匹配的核心落地）。
+// 有场景：按场景名建空间（场景名 + 主/副模板 + 图标），复用同名空间。
+// 无场景：复用/新建「临时空间」，会话同样绑定到其下项目。
+async function _csEnsureWorkspaceFromScenario(scenario, primaryTemplateId, spaceName) {
+  let spaceId = '';
+  try {
+    // 场景空间以场景名为标识（与前端「工作空间」面板一致）。按名称匹配复用，
+    // 避免误命中历史遗留的同 primary_template 角色空间（如旧「产品经理」）。
+    const listRes = await window.cogseed.invoke('spaces.list', {});
+    const existing = (listRes && listRes.spaces || []).find((s) => s && s.name === spaceName);
+    if (existing && existing.space_id) {
+      spaceId = existing.space_id;
+      _obLog.info('reusing existing workspace', { primaryTemplateId, spaceId, name: spaceName });
+    }
+  } catch (listErr) {
+    _obLog.warn('spaces.list failed before create', { error: (listErr && listErr.message) || String(listErr) });
+  }
+
+  if (!spaceId) {
+    try {
+      const createRes = await window.cogseed.invoke('spaces.create', {
+        name: spaceName,
+        primary_template_id: primaryTemplateId || undefined,
+        secondary_template_ids: (scenario && scenario.suggested_secondary_template_ids) || [],
+        icon: (scenario && scenario.icon) || undefined,
+      });
+      if (createRes && createRes.space && createRes.space.space_id) {
+        spaceId = createRes.space.space_id;
+        _obLog.info('created workspace', { primaryTemplateId, spaceId, name: spaceName });
+      }
+    } catch (createErr) {
+      _obLog.warn('spaces.create failed', { error: (createErr && createErr.message) || String(createErr) });
+    }
+  }
+
+  if (!spaceId) return;
+
+  // 无导入会话（「从零开始」）：空间就绪即可，不建项目分组。
+  if (_csImportedConversationIds.length === 0) {
+    _obLog.info('workspace ready without imported sessions', { primaryTemplateId, spaceId });
+    return;
+  }
+
+  // 空间化语义：导入会话直接绑定到空间（不再经手已废弃的项目层）。
+  // 逐个 conversations.setSpace（cid → spaceId），无项目建/绑/批操作。
+  let boundCount = 0;
+  for (const cid of _csImportedConversationIds) {
+    try {
+      const setRes = await window.cogseed.invoke('conversations.setSpace', { cid, spaceId });
+      if (setRes && setRes.conversation) {
+        boundCount += 1;
+        _obLog.info('bound imported session to workspace', { cid, spaceId });
+      }
+    } catch (setErr) {
+      _obLog.warn('conversations.setSpace failed', { cid, spaceId, error: (setErr && setErr.message) || String(setErr) });
+    }
+  }
+
+  // 刷新侧边栏空间分组，让匹配出的空间对用户可见（替代原 loadProjects 展开）。
+  try {
+    if (typeof window.invalidateSidebarSpaces === 'function') window.invalidateSidebarSpaces();
+    if (typeof renderConversationList === 'function') await renderConversationList();
+  } catch (revealErr) {
+    _obLog.warn('failed to reveal workspace in sidebar', { spaceId, error: (revealErr && revealErr.message) || String(revealErr) });
+  }
+
+  if (boundCount > 0) {
+    _obLog.info('bound imported sessions to workspace', { primaryTemplateId, spaceId, bound: boundCount, total: _csImportedConversationIds.length });
+    _csToast(`已将 ${boundCount} 个导入的会话整理好`);
+  }
+}
+
+// ─── Step 2 fork view (从哪里开始) ─────────────────────────────────────────
+// The recommended session + its suggested template, captured when the user
+// picks card ①. Consumed by step 3 to pre-select the role template and by
+// _csFinish (the session is imported the moment the user confirms card ①).
+let _csRecommendation = null;      // full RecommendStartResult from backend
+let _csForkChoice = null;          // 'continue' | 'other' | 'blank'
+
+// Show the three-way fork (default sub-view of step 2); kick off the real
+// recommendation load in the background so card ① fills in with the user's
+// actual most-invested session.
+function _csShowForkView() {
+  const fork = document.getElementById('cs-fork-view');
+  const imp = document.getElementById('cs-import-view');
+  if (fork) fork.style.display = '';
+  if (imp) imp.style.display = 'none';
+  _csLoadRecommendation();
+}
+
+// Reveal the by-Agent import sub-view (card ② → current import UI).
+function _csShowImportView() {
+  const fork = document.getElementById('cs-fork-view');
+  const imp = document.getElementById('cs-import-view');
+  if (fork) fork.style.display = 'none';
+  if (imp) imp.style.display = '';
+  _csLoadAgents(false);
+}
+
+// Fill the right-hand "这次会用什么" panel from the SAME RecommendStartResult
+// that paints card ①. Every value here is cheap to obtain (source label,
+// decoded project path, line-count proxy, keyword-matched template) so it
+// lands in the same tick as the left card — no extra IPC, no session-body read.
+function _csFillForkSide(res) {
+  const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+  const top = res && res.top;
+
+  if (!top) {
+    // Honest empty state mirrors card ①: nothing readable on this machine.
+    set('cs-side-source', '未检测到可读的历史会话');
+    set('cs-side-project', '可「选择其他会话」手动浏览，或从空白开始');
+    set('cs-side-scale', '—');
+    return;
+  }
+
+  // 1) Source Agent — friendly label + honest per-source total when >1 candidate.
+  const agentLabel = CS_AGENT_LABELS[top.source] || top.source;
+  const total = Number(res.candidateCount) || 0;
+  set('cs-side-source', total > 1 ? `${agentLabel} · 本机共 ${total} 个可继续会话` : agentLabel);
+
+  // 2) Source project — the real decoded working dir (last segment), never invented.
+  set('cs-side-project', _csProjectDisplayName(top.projectPath, top.firstMessage));
+
+  // 3) Conversation scale — real line/turn proxy + coarse recency.
+  const when = _csRelativeTime(top.timestamp);
+  const scale = `约 ${top.contextLength} 轮对话${when ? ` · ${when}` : ''}`;
+  set('cs-side-scale', scale);
+}
+
+// Load the REAL "where to begin" recommendation and paint card ①. Never
+// blocks the fork view; on empty/failure the card degrades to an honest
+// "no prior sessions" state that routes into the import sub-view instead.
+async function _csLoadRecommendation() {
+  const card = document.getElementById('cs-fork-continue');
+  const titleEl = document.getElementById('cs-fork-continue-title');
+  const descEl = document.getElementById('cs-fork-continue-desc');
+  const metaEl = document.getElementById('cs-fork-continue-meta');
+  if (!card || !titleEl) return;
+  // Avoid re-fetching if we already have a recommendation this session, but
+  // still (re)paint the right panel — the user may have toggled sub-views and
+  // the fresh DOM would otherwise stay stuck on the "正在检测…" placeholders.
+  if (_csRecommendation) { _csFillForkSide(_csRecommendation); return; }
+
+  try {
+    const res = await window.cogseed.invoke('sessionImport.recommendStartingPoint');
+    _csRecommendation = res || { top: null };
+
+    const top = res && res.top;
+    if (!top) {
+      // Honest empty state: no readable prior sessions anywhere.
+      titleEl.textContent = '还没有可继续的项目';
+      if (descEl) descEl.textContent = '没检测到本机可读的历史会话。你可以直接“选择其他会话”查看，或从空白开始。';
+      if (metaEl) metaEl.textContent = '';
+      card.classList.add('is-empty');
+      card.removeAttribute('disabled');
+      _csFillForkSide(res); // right panel mirrors the same empty state
+      return;
+    }
+
+    // Fire-and-forget: warm the slow read+extract half in the background the
+    // moment the card resolves, so a later "继续项目" click only pays for the
+    // fast write half. Read-only, best-effort — never awaited, never blocks the
+    // UI, and only claude/workbuddy have a slow extract worth prefetching.
+    if ((top.source === 'claude' || top.source === 'workbuddy') && top.filePath) {
+      window.cogseed
+        .invoke('sessionImport.prefetchRecommended', { source: top.source, filePath: top.filePath })
+        .catch(() => { /* best-effort; import falls back to inline extract */ });
+    }
+
+    // Real project name = last segment of the real project path, else a
+    // trimmed first-message snippet. Never invented.
+    const proj = _csProjectDisplayName(top.projectPath, top.firstMessage);
+    titleEl.textContent = `继续「${proj}」`;
+    if (descEl) {
+      const snippet = String(top.firstMessage || '').replace(/\s+/g, ' ').slice(0, 64);
+      descEl.textContent = snippet ? `最近的话题：${snippet}${snippet.length >= 64 ? '…' : ''}` : '继续这个项目，并顺带提取其中的四类资产。';
+    }
+    if (metaEl) {
+      const agentLabel = CS_AGENT_LABELS[top.source] || top.source;
+      const when = _csRelativeTime(top.timestamp);
+      // contextLength is a real turn/message proxy — label it plainly.
+      metaEl.textContent = `${agentLabel} · 约 ${top.contextLength} 轮对话 · ${when}`;
+    }
+    // _csRecommendation carries the suggested scenario (may be null → 临时空间).
+    card.classList.remove('is-empty');
+    card.removeAttribute('disabled');
+    _csFillForkSide(res); // right panel, same data, same tick as card ①
+  } catch (err) {
+    _obLog.warn('recommendStartingPoint failed', { error: (err && err.message) || String(err) });
+    titleEl.textContent = '读取推荐失败';
+    if (descEl) descEl.textContent = '无法读取历史会话推荐，你可以“选择其他会话”手动浏览。';
+    card.classList.add('is-empty');
+    card.removeAttribute('disabled');
+    // Degrade the right panel honestly too, instead of leaving "正在检测…".
+    _csFillForkSide({ top: null });
+    const srcEl = document.getElementById('cs-side-source');
+    if (srcEl) srcEl.textContent = '读取推荐失败';
+  }
+}
+
+// Last path segment as the human project name; fall back to a first-message
+// snippet, then a neutral label. Pure formatting of REAL values.
+function _csProjectDisplayName(projectPath, firstMessage) {
+  const p = String(projectPath || '').replace(/[/\\]+$/, '');
+  if (p) {
+    const seg = p.split(/[/\\]/).filter(Boolean).pop();
+    if (seg) return seg;
+  }
+  const snip = String(firstMessage || '').replace(/\s+/g, ' ').trim();
+  if (snip) return snip.length > 24 ? `${snip.slice(0, 24)}…` : snip;
+  return '最近的会话';
+}
+
+// Coarse relative time from an ISO string — real timestamp, friendly text.
+function _csRelativeTime(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const diff = Date.now() - t;
+  const day = 86400000;
+  if (diff < 3600000) return '刚刚活跃';
+  if (diff < day) return '今天';
+  const days = Math.round(diff / day);
+  if (days <= 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  if (days < 30) return `${Math.round(days / 7)} 周前`;
+  if (days < 365) return `${Math.round(days / 30)} 个月前`;
+  return `${Math.round(days / 365)} 年前`;
+}
+
+// Card ① confirmed: import the recommended session for real (so its four
+// asset types get extracted into the candidate pool), then advance to the
+// role step where the suggested template is pre-selected.
+async function _csForkContinue() {
+  const top = _csRecommendation && _csRecommendation.top;
+  _csForkChoice = 'continue';
+  if (!top) {
+    // Empty/failed recommendation → nowhere to continue; go browse instead.
+    _csShowImportView();
+    return;
+  }
+  // Sticky indeterminate bar while the (unmeasurable, single-call) import runs.
+  // Copy names the REAL pipeline stages so the wait reads as progress, not a
+  // hang — but the bar itself claims no percentage.
+  _csToastBusy('正在导入并整理你的会话…');
+  try {
+    const convId = await _csImportOneSession(top);
+    if (convId) {
+      _csToastDone('已导入推荐会话，正在整理');
+    } else {
+      _csToastDone('会话已处理，正在整理');
+    }
+  } catch (err) {
+    _obLog.warn('fork continue import failed', { error: (err && err.message) || String(err) });
+    _csToastDone('导入推荐会话失败');
+  }
+  _csGoStep(3);
+}
+
+// Import a single ranked candidate through the right per-agent IPC. Returns
+// the new conversationId (also pushed into _csImportedConversationIds so the
+// role step binds it to the created workspace). Real pipeline, no stubs.
+async function _csImportOneSession(cand) {
+  let res = null;
+  if (cand.source === 'claude') {
+    res = await window.cogseed.invoke('sessionImport.importClaudeSession', { filePath: cand.filePath });
+  } else if (cand.source === 'workbuddy') {
+    res = await window.cogseed.invoke('sessionImport.importWorkbuddySession', { filePath: cand.filePath, projectPath: cand.projectPath });
+  } else if (cand.source === 'codex') {
+    res = await window.cogseed.invoke('sessionImport.importCodexSession', { filePath: cand.filePath });
+  }
+  // OpenCode intentionally omitted: it has no per-session transcript import,
+  // so the backend never ranks it as a continuable `top` (see recommend-start.ts).
+  const convId = res && (res.conversationId || (res.materialize && res.materialize.conversationId));
+  if (convId && !_csImportedConversationIds.includes(convId)) {
+    _csImportedConversationIds.push(convId);
+  }
+  return convId || '';
 }
 
 // Renders the REAL detection result, LEFT-RIGHT layout:
@@ -279,12 +753,91 @@ function _csRenderAgents(entries) {
   const available = list.filter((e) => e && e.available);
 
   if (!available.length) {
-    box.innerHTML = '<div class="cs-state">未检测到任何已安装的 Agent 命令行工具（如 Claude Code、Codex）。安装后点「重新检测」即可。</div>';
+    box.innerHTML =
+      '<div class="cs-state">未检测到任何已安装的 Agent 命令行工具（如 Claude Code、Codex）。安装后点「重新检测」即可。</div>' +
+      '<div class="cs-import-bar">' +
+      '<button type="button" class="cs-import-btn cs-demo-btn" id="cs-demo-start">预览演示（合成数据 · 不计入资产）</button>' +
+      '<div class="cs-import-result" id="cs-demo-result"></div>' +
+      '</div>';
+    const demoBtn = document.getElementById('cs-demo-start');
+    if (demoBtn) demoBtn.addEventListener('click', () => void _csStartDemoMode(agentType));
     return;
   }
 
   // Store detected agents for later use
   window._csDetectedAgents = available;
+
+// ── L4 cold-start: anonymous demo mode ────────────────────────────────────
+// No agent, no material, or user just wants a preview: run the walkthrough
+// with SYNTHETIC sample data. Hard rules from the P3394 spec (§4.3 L4):
+//   - demo data NEVER becomes formal assets;
+//   - demo runs never count as real Aha success;
+//   - every demo row is explicitly labeled "演示数据".
+// This mode is purely front-end simulation — no materialize/import/candidate
+// IPC is ever called, so nothing can leak into real storage.
+let _csDemoMode = false;
+
+async function _csStartDemoMode(agentType) {
+  _csDemoMode = true;
+  const box = document.getElementById('cs-agent-list');
+  if (!box) return;
+
+  const demoSession = (idx, title, summary, kind) => `
+    <div class="cs-src cs-collapsible-item" data-demo-idx="${idx}">
+      <input type="checkbox" />
+      <div class="s-ico">${CS_TERMINAL_SVG}</div>
+      <div>
+        <strong>${_csEsc(title)}</strong>
+        <small>${_csEsc(summary)}</small>
+      </div>
+      <small style="color:var(--cs-bud);white-space:nowrap;font-weight:700">演示数据</small>
+    </div>`;
+
+  const demoSessions = [
+    demoSession(0, 'P3394 产品讨论（示例）', '产品边界与决策规则 · 含 2 条可复用判断', 'rule'),
+    demoSession(1, 'PRD 结构整理（示例）', '评审场景的 PRD 固定 9 段结构 · 含 1 条模板', 'template'),
+    demoSession(2, '项目接续记录（示例）', '跨 Agent 接续的验收方法 · 含 1 条技能方法', 'skill'),
+  ];
+
+  box.innerHTML =
+    '<div class="cs-state">演示模式：以下是<strong>合成样例数据</strong>，仅用于预览产品流程。' +
+    '不会写入任何正式资产，不计入真实使用指标。</div>' +
+    demoSessions.join('') +
+    `<div class="cs-import-bar">
+       <button type="button" class="cs-import-btn" id="cs-demo-import">演示导入所选会话</button>
+       <div class="cs-import-result" id="cs-demo-import-result"></div>
+     </div>`;
+
+  box.querySelectorAll('.cs-src input[type="checkbox"]').forEach((cb) => {
+    const row = cb.closest('.cs-src');
+    cb.addEventListener('change', () => row.classList.toggle('selected', cb.checked));
+    row.addEventListener('click', (ev) => {
+      if (ev.target === cb) return;
+      cb.checked = !cb.checked;
+      row.classList.toggle('selected', cb.checked);
+    });
+  });
+
+  const btn = document.getElementById('cs-demo-import');
+  const result = document.getElementById('cs-demo-import-result');
+  if (btn) btn.addEventListener('click', async () => {
+    const selected = box.querySelectorAll('.cs-src input[type="checkbox"]:checked').length;
+    if (!selected) {
+      if (result) result.innerHTML = '<div class="cs-state">请先勾选要演示的会话。</div>';
+      return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = '演示导入中…'; }
+    if (result) result.innerHTML = '<div class="cs-state loading">正在演示导入并提取候选…</div>';
+    await new Promise((r) => setTimeout(r, 1200));
+    if (result) {
+      result.innerHTML =
+        '<div class="cs-state" style="color:var(--cs-forest-deep)">✓ 演示完成：提取到 3 条候选认知（1 规则 / 1 模板 / 1 技能方法）。' +
+        '<br><b>以上均为合成演示数据，不会写入你的资产，不计入任何真实指标。</b></div>';
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '演示导入所选会话'; }
+    _csDemoMode = true;
+  });
+}
 
   // Build LEFT-RIGHT layout
   const leftAgents = available.map((e, idx) => {
@@ -354,6 +907,7 @@ window._csSelectAgent = function(agentType) {
 // Expose import functions to global scope for onclick handlers
 window._csImportClaudeSessions = _csImportClaudeSessions;
 window._csImportCodexSessions = _csImportCodexSessions;
+window._csImportWorkbuddySessions = _csImportWorkbuddySessions;
 window._csImportCodexTasks = _csImportCodexTasks;
 // Kept global so other flows can reuse the walkthrough's asset-panel loader.
 window._csLoadAgents = _csLoadAgents;
@@ -371,6 +925,9 @@ function _csLoadAgentAssets(agentType) {
   // Build asset panel: left vertical tabs + right content pane.
   // The first tab (sessions) is active by default.
   const ag = _csEsc(agentType);
+  // OpenCode has no scheduler — its `todo` table is an in-session checklist,
+  // so its fourth tab is honestly labeled 待办 (todos), not 定时任务.
+  const tasksTabTitle = agentType === 'opencode' ? '待办' : '定时任务';
   contentArea.innerHTML = `
     <div class="cs-asset-panel" data-agent="${ag}">
       <div class="cs-asset-tabs">
@@ -391,7 +948,7 @@ function _csLoadAgentAssets(agentType) {
         </button>
         <button type="button" class="cs-asset-tab" data-asset="tasks" data-agent="${ag}" onclick="_csSelectAssetTab(this)">
           <span class="ash-icon">⏰</span>
-          <span class="ash-title">定时任务</span>
+          <span class="ash-title">${tasksTabTitle}</span>
           <span class="ash-count" id="cs-count-${ag}-tasks"></span>
         </button>
       </div>
@@ -428,6 +985,11 @@ function _csLoadAgentAssets(agentType) {
     _csFillAssetSection(agentType, 'skills', `<div class="cs-state">${_csEsc(label)} 的技能读取暂未接入。</div>`);
     void _csLoadOpencodeMemory(agentType);
     void _csLoadOpencodeTasks(agentType);
+  } else if (agentType === 'workbuddy') {
+    void _csLoadWorkbuddySessions(agentType);
+    _csFillAssetSection(agentType, 'skills', `<div class="cs-state">${_csEsc(label)} 的技能读取暂未接入。</div>`);
+    _csFillAssetSection(agentType, 'memory', `<div class="cs-state">${_csEsc(label)} 的记忆读取暂未接入。</div>`);
+    _csRenderNoTasks(agentType);
   } else {
     _csFillAssetSection(agentType, 'sessions', `<div class="cs-state">${_csEsc(label)} 的会话读取暂未接入。</div>`);
     _csFillAssetSection(agentType, 'skills', `<div class="cs-state">${_csEsc(label)} 的技能读取暂未接入。</div>`);
@@ -565,6 +1127,8 @@ let _csCliByAgent = {};
 function _csCodingCliForAppType(appType) {
   if (appType === 'claude' || appType === 'claude-desktop') return 'claude';
   if (appType === 'codex') return 'codex';
+  if (appType === 'opencode') return 'opencode';
+  if (appType === 'workbuddy') return 'workbuddy';
   return '';
 }
 
@@ -573,6 +1137,8 @@ function _csCodingCliForAppType(appType) {
 function _csAgentNameForCli(cli) {
   if (cli === 'claude') return 'Claude';
   if (cli === 'codex') return 'Codex';
+  if (cli === 'opencode') return 'OpenCode';
+  if (cli === 'workbuddy') return 'WorkBuddy';
   return cli;
 }
 
@@ -615,7 +1181,9 @@ async function _csEnsureCliAgent(cli, existingAgents) {
       name: _csAgentNameForCli(cli),
       description: cli === 'claude'
         ? '本机 Claude Code 命令行，作为 AI 团队成员执行编码任务'
-        : '本机 Codex 命令行，作为 AI 团队成员执行编码任务',
+        : (cli === 'codex'
+          ? '本机 Codex 命令行，作为 AI 团队成员执行编码任务'
+          : `本机 ${_csAgentNameForCli(cli)} 命令行，作为 AI 团队成员执行任务`),
       icon: 'code',
       color: 'sage',
       runtime: { kind: 'cli', cli },
@@ -695,6 +1263,24 @@ function _csRenderTeam(items, unsupported, localClis) {
   const rows = appTypes.map((appType) => {
     const g = groups.get(appType);
     const label = _csAgentLabel(appType);
+
+    // Claude Desktop is a read-only session source, NOT an executable team
+    // runtime: it is not a local CLI agent (absent from LOCAL_CLI_TYPES) and
+    // can never be dispatched tasks. Presenting it as 可连接/已连接 here would
+    // falsely imply it joins the AI team as a working member. Show it as
+    // unsupported instead — its sessions remain importable via 「继续项目」.
+    if (appType === 'claude-desktop') {
+      return `
+      <div class="cs-src cs-team-row" data-app-type="${_csEsc(appType)}">
+        <div class="s-ico">${CS_TERMINAL_SVG}</div>
+        <div>
+          <strong>${_csEsc(label)}</strong>
+          <small>桌面版无法作为团队成员执行任务，可在「继续项目」里导入其会话</small>
+        </div>
+        <div class="cs-team-right"><span class="g-status off">不支持桌面版</span></div>
+      </div>`;
+    }
+
     // Connectable if there are models to sync OR a local CLI to add as an agent.
     const connectable = g.ids.length > 0 || g.hasCli;
 
@@ -739,7 +1325,13 @@ function _csRenderTeam(items, unsupported, localClis) {
     const hintHtml = hints.length ? `<small>${_csEsc(hints.join(' · '))}</small>` : '';
 
     const action = connectable
-      ? `<button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">连接</button>`
+      ? `<div class="cs-team-actions">
+          <select class="cs-team-action-select" data-app-type="${_csEsc(appType)}">
+            <option value="connect-only">只连接</option>
+            <option value="connect-store">连接并存储 API</option>
+          </select>
+          <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
+        </div>`
       : '';
 
     return `
@@ -756,14 +1348,19 @@ function _csRenderTeam(items, unsupported, localClis) {
   box.innerHTML = rows;
 
   box.querySelectorAll('.cs-team-connect').forEach((btn) => {
-    btn.addEventListener('click', () => void _csConnectTeam(box, btn.dataset.appType));
+    btn.addEventListener('click', () => {
+      const appType = btn.dataset.appType;
+      const select = box.querySelector(`.cs-team-action-select[data-app-type="${appType}"]`);
+      const shouldStore = select && select.value === 'connect-store';
+      void _csConnectTeam(box, appType, shouldStore);
+    });
   });
 }
 
 // Connect ONE agent's models into custom providers ("AI 团队"): sync all of
 // that agent's importable externalIds at once. Honest result — added/updated
 // counts, and a note when some still need a key.
-async function _csConnectTeam(box, appType) {
+async function _csConnectTeam(box, appType, shouldStoreApi = false) {
   const row = box.querySelector(`.cs-team-row[data-app-type="${appType}"]`);
   const btn = row ? row.querySelector('.cs-team-connect') : null;
   const externalIds = (_csTeamByAgent[appType] || []).slice();
@@ -786,7 +1383,7 @@ async function _csConnectTeam(box, appType) {
       if (!res || res.ok !== true) {
         const reason = (res && res.reason) || '未知原因';
         _csToast(`连接「${label}」失败：${reason}`);
-        if (btn) { btn.disabled = false; btn.textContent = '连接'; }
+        if (btn) { btn.disabled = false; btn.textContent = '执行'; }
         return;
       }
       added = res.added || 0;
@@ -808,6 +1405,22 @@ async function _csConnectTeam(box, appType) {
       cliResult = await _csEnsureCliAgent(cli, existing);
     }
 
+    // 3) If user selected "connect and store", store the currently-in-use API.
+    let storedApi = false;
+    if (shouldStoreApi && cli) {
+      try {
+        const storeRes = await window.cogseed.invoke('customProviders.storeActiveCliConfig', { cli });
+        if (storeRes && storeRes.ok) {
+          storedApi = true;
+          _obLog.info('active CLI config stored', { cli, providerId: storeRes.providerId });
+        } else {
+          _obLog.warn('active CLI config store failed', { cli, error: storeRes?.error || 'unknown' });
+        }
+      } catch (err) {
+        _obLog.warn('active CLI config store error', { cli, error: (err && err.message) || String(err) });
+      }
+    }
+
     // Reflect the connected state on the row itself; keep it non-technical.
     if (row) {
       const statusEl = row.querySelector('.g-status');
@@ -821,21 +1434,24 @@ async function _csConnectTeam(box, appType) {
     if (models) parts.push(`${models} 个模型`);
     if (cliResult === 'created') parts.push('新增 1 位 CLI 成员');
     else if (cliResult === 'exists') parts.push('CLI 成员已在团队');
+    if (storedApi) parts.push('已存储当前正在使用的 API');
     if (cliResult === 'error') {
       _csToast(`「${label}」模型已连接，但加入 CLI 成员失败，可稍后在「AI 团队」里手动新建`);
     } else {
       _csToast(parts.length ? `已把「${label}」连接到 AI 团队（${parts.join('，')}）` : `已连接「${label}」`);
     }
-    _obLog.info('team connect finished', { appType, added, updated, cli, cliResult });
+    _obLog.info('team connect finished', { appType, added, updated, cli, cliResult, storedApi });
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('team connect failed', { appType, error: msg });
     _csToast(`连接「${label}」失败：${msg}`);
-    if (btn) { btn.disabled = false; btn.textContent = '连接'; }
+    if (btn) { btn.disabled = false; btn.textContent = '执行'; }
   }
 }
 
 async function _csLoadAgents(force) {
+  // Re-detection exits demo mode: real agents beat synthetic preview data.
+  _csDemoMode = false;
   const box = document.getElementById('cs-agent-list');
   if (!box) return;
   box.innerHTML = '<div class="cs-state loading">正在检测本机 Agent…</div>';
@@ -1120,7 +1736,7 @@ async function _csImportClaudeSessions(agentType) {
   paint();
   selected.forEach((r) => r.classList.add('importing'));
   await _csMapWithConcurrency(selected, CS_IMPORT_CONCURRENCY, async (row) => {
-    const filePath = row.dataset.sessionId;
+    const filePath = row.dataset.sessionPath;
     try {
       const res = await window.cogseed.invoke('sessionImport.importClaudeSession', { filePath });
       // Success = conversation was materialized, even if cognition extraction degraded
@@ -1160,8 +1776,150 @@ async function _csImportClaudeSessions(agentType) {
   if (ok > 0) {
     _csUpdateImportCount(ok);
     await _csRefreshConversationList();
+    // 导入成功后重新分析会话内容并推荐模板
+    try {
+      const rec = await window.cogseed.invoke('sessionImport.recommendStartingPoint');
+      if (rec && rec.suggestedTemplate) {
+        _csRecommendation = rec;
+        _obLog.info('scenario recommended after import', { scenarioId: rec.suggestedTemplate.scenarioId });
+      }
+    } catch (err) {
+      _obLog.warn('failed to recommend template after import', { error: (err && err.message) || String(err) });
+    }
   }
   _obLog.info('claude sessions import finished', { ok, failed, cognitions });
+}
+
+// ── WorkBuddy (Tencent) sessions: scan ~/.workbuddy/projects and import ──
+// Mirrors the Claude flow. WorkBuddy runs the SAME extract → materialize →
+// route pipeline, so imported WorkBuddy sessions become owned cognitive
+// assets (candidate cognitions) exactly like Claude sessions do.
+async function _csLoadWorkbuddySessions(agentType) {
+  const container = _csFillAssetSection(agentType, 'sessions', '<div class="cs-state loading">正在扫描 WorkBuddy 会话…</div>');
+  if (!container) return;
+
+  try {
+    const res = await window.cogseed.invoke('sessionImport.listWorkbuddySessions');
+    const recentSessions = (res && res.sessions) || [];
+
+    if (!recentSessions.length) {
+      container.innerHTML = '<div class="cs-state">未找到 WorkBuddy 历史会话。如果你使用过 WorkBuddy，会话文件应在 ~/.workbuddy/projects/ 目录下。</div>';
+      _csUpdateAssetCount(agentType, 'sessions', 0);
+      return;
+    }
+
+    _csUpdateAssetCount(agentType, 'sessions', recentSessions.length);
+
+    const sessionRows = recentSessions.map((s) => {
+      const time = s.timestamp ? new Date(s.timestamp).toLocaleString('zh-CN', {
+        month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      }) : '';
+      const projectLabel = s.projectPath ? `<small>${_csEsc(s.projectPath)}</small>` : '';
+      return `
+        <div class="cs-src" data-session-id="${_csEsc(s.sessionId)}" data-session-path="${_csEsc(s.filePath)}" data-session-project="${_csEsc(s.projectPath || '')}" data-session-title="${_csEsc(s.firstMessage || '')}">
+          <input type="checkbox" />
+          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div>
+            <strong>${_csEsc(s.firstMessage)}</strong>
+            ${projectLabel}
+          </div>
+          <small style="color:var(--cs-muted);white-space:nowrap;">${_csEsc(time)}</small>
+        </div>`;
+    }).join('');
+
+    container.innerHTML = `<div class="cs-session-scroll">${sessionRows}</div>` +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-import-btn" onclick="_csImportWorkbuddySessions('${_csEsc(agentType)}')">导入所选会话（最多 3 条）</button>
+         <div class="cs-import-result" id="cs-import-result-${_csEsc(agentType)}-sessions"></div>
+       </div>`;
+
+    container.querySelectorAll('.cs-src').forEach((row) => {
+      const checkbox = row.querySelector('input[type="checkbox"]');
+      row.addEventListener('click', (ev) => {
+        if (ev.target === checkbox) return;
+        checkbox.checked = !checkbox.checked;
+        row.classList.toggle('selected', checkbox.checked);
+        _csUpdateImportButtonVisibility();
+      });
+      checkbox.addEventListener('change', () => {
+        row.classList.toggle('selected', checkbox.checked);
+        _csUpdateImportButtonVisibility();
+      });
+    });
+
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to list WorkBuddy sessions', { error: msg });
+    container.innerHTML = `<div class="cs-state err">读取 WorkBuddy 会话失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+// Import the user-selected WorkBuddy sessions into real conversations,
+// running the full cognition-extraction pipeline (same as Claude). Unlike the
+// Claude handler, we pass the real filePath (data-session-path) and the
+// picker-supplied projectPath, since WorkBuddy jsonl carries no per-line cwd.
+async function _csImportWorkbuddySessions(agentType) {
+  const container = _csFillAssetSection(agentType, 'sessions');
+  if (!container) return;
+  const rows = [...container.querySelectorAll('.cs-src[data-session-id]')];
+  const selected = rows.filter((r) => r.querySelector('input[type="checkbox"]')?.checked);
+  const bar = container.querySelector('.cs-import-bar');
+  const btn = bar ? bar.querySelector('.cs-import-btn') : null;
+  const result = bar ? bar.querySelector('.cs-import-result') : null;
+  if (!selected.length) {
+    if (result) result.textContent = '请先勾选要导入的会话';
+    return;
+  }
+  if (selected.length > 3) {
+    if (result) result.textContent = '一次最多只能导入 3 条会话，请减少勾选数量';
+    return;
+  }
+  if (btn) { btn.disabled = true; }
+  const total = selected.length;
+  let ok = 0, failed = 0, cognitions = 0, done = 0;
+  const paint = () => {
+    if (btn) btn.textContent = `导入中… ${done}/${total}`;
+    if (result) result.textContent = `正在导入并提炼认知（${done}/${total} 完成）· 大会话需要一点时间，请稍候…`;
+  };
+  paint();
+  selected.forEach((r) => r.classList.add('importing'));
+  await _csMapWithConcurrency(selected, CS_IMPORT_CONCURRENCY, async (row) => {
+    const filePath = row.dataset.sessionPath;
+    const projectPath = row.dataset.sessionProject || undefined;
+    try {
+      const res = await window.cogseed.invoke('sessionImport.importWorkbuddySession', { filePath, projectPath });
+      if (res && res.conversationId) {
+        ok++;
+        _csImportedConversationIds.push(res.conversationId);
+        if (res.cognitions) {
+          cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
+        }
+        const cb = row.querySelector('input[type="checkbox"]');
+        if (cb) cb.checked = false;
+        row.classList.remove('importing');
+        row.classList.add('done');
+      } else {
+        failed++;
+        row.classList.remove('importing');
+      }
+    } catch (err) {
+      failed++;
+      row.classList.remove('importing');
+      _obLog.warn('import workbuddy session failed', { filePath, error: (err && err.message) || String(err) });
+    } finally {
+      done++;
+      paint();
+    }
+  });
+  if (btn) { btn.disabled = false; btn.textContent = '导入所选会话（最多 3 条）'; }
+  if (result) {
+    result.textContent = `导入完成：成功 ${ok} 个${failed ? `，失败 ${failed} 个` : ''}${cognitions ? `，提取 ${cognitions} 条候选认知` : ''}`;
+  }
+  if (ok > 0) {
+    _csUpdateImportCount(ok);
+    await _csRefreshConversationList();
+  }
+  _obLog.info('workbuddy sessions import finished', { ok, failed, cognitions });
 }
 
 // Refresh the sidebar conversation list after imported sessions land.
@@ -1248,6 +2006,16 @@ async function _csImportCodexSessions(agentType) {
   if (ok > 0) {
     _csUpdateImportCount(ok);
     await _csRefreshConversationList();
+    // 导入成功后重新分析会话内容并推荐模板
+    try {
+      const rec = await window.cogseed.invoke('sessionImport.recommendStartingPoint');
+      if (rec && rec.suggestedTemplate) {
+        _csRecommendation = rec;
+        _obLog.info('scenario recommended after import', { scenarioId: rec.suggestedTemplate.scenarioId });
+      }
+    } catch (err) {
+      _obLog.warn('failed to recommend template after import', { error: (err && err.message) || String(err) });
+    }
   }
   _obLog.info('codex sessions import finished', { ok, failed });
 }
@@ -2154,174 +2922,17 @@ async function _csLoadAcpSessions() {
   }
 }
 
-// Load role templates from backend (张浩的角色模板系统)
-async function _csLoadRoleTemplates() {
-  const box = document.getElementById('cs-role-cards');
-  if (!box) return;
-
-  box.innerHTML = '<div class="cs-state loading">正在加载角色模板...</div>';
-
-  try {
-    const res = await window.cogseed.invoke('spaces.templates.list');
-    if (!res || !res.templates || !Array.isArray(res.templates)) {
-      box.innerHTML = '<div class="cs-state">角色模板加载失败</div>';
-      return;
-    }
-
-    const templates = res.templates;
-    if (templates.length === 0) {
-      box.innerHTML = '<div class="cs-state">没有可用的角色模板</div>';
-      return;
-    }
-
-    // 按优先级筛选主要角色（产品、工程、研究、学习方向）
-    const priority = ['product_manager', 'software_engineer', 'scholar', 'student', 'fde', 'project_manager', 'technical_writer', 'recruiter'];
-    const prioritySet = new Set(priority);
-    const priorityTemplates = templates.filter(t => prioritySet.has(t.template_id));
-    const otherTemplates = templates.filter(t => !prioritySet.has(t.template_id));
-
-    // 优先级排序
-    priorityTemplates.sort((a, b) => priority.indexOf(a.template_id) - priority.indexOf(b.template_id));
-
-    // 全部展示：优先角色在前，其余模板（空白空间等）跟在后面
-    const display = [...priorityTemplates, ...otherTemplates];
-
-    // 图标映射
-    const icons = {
-      'product_manager': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
-      'software_engineer': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>',
-      'scholar': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20Z"/></svg>',
-      'student': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
-      'fde': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
-      'project_manager': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 9h18M3 15h18"/></svg>',
-      'technical_writer': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>',
-      'recruiter': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-    };
-
-    const html = display.map(t => {
-      const icon = icons[t.template_id] || icons['product_manager'];
-      const bundleInfo = [];
-      if (t.bundle) {
-        const skillCount = (t.bundle.skill_ids || []).length;
-        const agentCount = (t.bundle.agent_ids || []).length;
-        if (skillCount > 0) bundleInfo.push(`${skillCount} 个技能`);
-        if (agentCount > 0) bundleInfo.push(`${agentCount} 个智能体`);
-      }
-      const tags = bundleInfo.length > 0
-        ? `<span class="r-tags">${bundleInfo.map(info => `<span class="r-tag">${_csEsc(info)}</span>`).join('')}</span>`
-        : '';
-
-      // 描述截断：模板原文可能很长，只展示一句核心说明，避免把
-      // 底部「完成设置」按钮挤出首屏。
-      const desc = String(t.description || '').trim();
-      const shortDesc = desc.length > 56 ? `${desc.slice(0, 56)}…` : desc;
-
-      return `
-        <button class="cs-role-card" data-template-id="${_csEsc(t.template_id)}">
-          <span class="r-ico">${icon}</span>
-          <h3>${_csEsc(t.name)}</h3>
-          <p>${_csEsc(shortDesc)}</p>
-          ${tags}
-        </button>
-      `;
-    }).join('');
-
-    // 全部角色放在一个可滑动区域里（滚动浏览），底部操作按钮
-    // （跳过 / 完成设置）固定可见，不被卡片数量挤下去。
-    box.innerHTML = `<div class="cs-role-scroll">${html}</div>`;
-    const scrollBox = box.querySelector('.cs-role-scroll');
-    if (scrollBox && scrollBox.scrollHeight > scrollBox.clientHeight) {
-      scrollBox.classList.add('has-overflow');
-    }
-  } catch (err) {
-    const msg = (err && err.message) || String(err);
-    _obLog.warn('failed to load role templates', { error: msg });
-    box.innerHTML = '<div class="cs-state">角色模板加载失败</div>';
-  }
-}
-
-function _csPickRole(templateId) {
-  const shell = document.getElementById('cs-onboarding');
-  if (!shell) return;
-  shell.querySelectorAll('.cs-role-card').forEach((c) => {
-    c.classList.toggle('selected', c.dataset.templateId === templateId);
-  });
-  _csRolePicked = templateId;
-
-  // 获取选中模板的名称
-  const selectedCard = shell.querySelector(`.cs-role-card[data-template-id="${templateId}"]`);
-  const name = selectedCard ? selectedCard.querySelector('h3').textContent : templateId;
-
-  const result = document.getElementById('cs-role-result');
-  if (result) {
-    result.querySelector('h4').textContent = `角色模板已应用：「${name}」 · 不自动生成个人事实`;
-    result.classList.add('show');
-  }
-  _csToast(`已选择「${name}」角色模板，之后可更换或叠加`);
-}
-
 async function _csFinish() {
-  const btn = document.getElementById('cs-ob-finish');
-  if (btn) btn.disabled = true;
-
   _obLog.info('_csFinish called', {
-    rolePicked: _csRolePicked,
     importedCount: _csImportedConversationIds.length,
-    importedIds: _csImportedConversationIds
+    importedIds: _csImportedConversationIds,
+    matchResult: _csMatchResult,
   });
 
   // 候选认知已在导入时后台提取并存入候选池，留待用户首次打开导入会话时由
   // agent 主动呈现和确认，此处不再处理候选认知的 UI 确认和 reject/keep 逻辑。
-
-  // 如果用户选择了角色模板，创建工作空间并应用模板，然后将所有导入的会话绑定到该工作空间
-  if (_csRolePicked && _csImportedConversationIds.length > 0) {
-    // 获取模板信息
-    const shell = document.getElementById('cs-onboarding');
-    const selectedCard = shell ? shell.querySelector(`.cs-role-card[data-template-id="${_csRolePicked}"]`) : null;
-    const spaceName = selectedCard ? selectedCard.querySelector('h3').textContent : _csRolePicked;
-
-    try {
-      // Reuse an existing space for this template instead of stacking up empty
-      // duplicates. Re-running onboarding (or picking the same role twice)
-      // should land in the SAME workspace, not create "学生"/"学生"/"学生".
-      let spaceId = '';
-      try {
-        const listRes = await window.cogseed.invoke('spaces.list', {});
-        const existing = (listRes && listRes.spaces || []).find((s) => s && s.template_id === _csRolePicked);
-        if (existing && existing.space_id) {
-          spaceId = existing.space_id;
-          _obLog.info('reusing existing role workspace', { templateId: _csRolePicked, spaceId });
-        }
-      } catch (listErr) {
-        _obLog.warn('spaces.list failed before create', { error: (listErr && listErr.message) || String(listErr) });
-      }
-
-      // Only create when no space for this template exists yet.
-      if (!spaceId) {
-        const createRes = await window.cogseed.invoke('spaces.create', {
-          name: spaceName,
-          template_id: _csRolePicked,
-        });
-        if (createRes && createRes.space && createRes.space.space_id) {
-          spaceId = createRes.space.space_id;
-          _obLog.info('created role workspace', { templateId: _csRolePicked, spaceId, name: spaceName });
-        }
-      }
-
-      if (spaceId) {
-        // 空间化后项目层已删：导入的会话保留在普通对话列表（不再绑定项目/空间）。
-        _obLog.info('role workspace ready, imported sessions remain ungrouped', {
-          spaceId,
-          conversationCount: _csImportedConversationIds.length,
-        });
-        _csToast(`已创建「${spaceName}」工作空间，导入的会话已添加到普通对话列表`);
-      }
-    } catch (err) {
-      const msg = (err && err.message) || String(err);
-      _obLog.warn('failed to create role workspace or bind sessions', { error: msg });
-      _csToast('创建角色工作空间失败，导入的会话已添加到普通对话列表');
-    }
-  }
+  // 工作空间已在隐形匹配阶段（_csRunInvisibleMatching → _csEnsureWorkspaceFromScenario）
+  // 创建/复用并把导入会话绑定进去。
 
   try {
     await window.cogseed.invoke('prefs.setOnboarding', { completed: true });
@@ -2348,16 +2959,6 @@ async function _csFinish() {
   // when a role workspace was chosen, re-render the projects section that
   // hosts the bound conversations).
   await _csRefreshConversationList();
-
-  // After onboarding completes, start the interactive tour
-  // (for now, triggers on every launch; later will be gated per account)
-  if (typeof window.interactiveTour !== 'undefined' && window.interactiveTour.start) {
-    _obLog.info('starting interactive tour after onboarding');
-    // Small delay to let the conversation list render
-    setTimeout(() => {
-      window.interactiveTour.start();
-    }, 500);
-  }
 }
 
 function _csBuild() {
@@ -2379,6 +2980,11 @@ function _csBuild() {
 
   const toast = document.createElement('div');
   toast.id = 'cs-ob-toast';
+  // Message row + an (initially hidden) indeterminate progress bar. The bar is
+  // only shown for long-running atomic ops (session import) where we can't
+  // report a real percentage — it signals "working, duration unknown" honestly
+  // rather than faking a 0→90% climb.
+  toast.innerHTML = '<span class="t-msg"></span><span class="t-bar"><i></i></span>';
   document.body.appendChild(toast);
 
   // Step navigation (rail buttons + inline next/back buttons).
@@ -2396,19 +3002,26 @@ function _csBuild() {
   shell.querySelector('#cs-team-refresh')?.addEventListener('click', () => _csLoadTeam(true));
   shell.querySelector('#cs-agent-refresh')?.addEventListener('click', () => _csLoadAgents(true));
 
-  // 使用事件委托处理角色卡片点击（因为卡片是动态加载的）
-  shell.querySelector('#cs-role-cards')?.addEventListener('click', (e) => {
-    const card = e.target.closest('.cs-role-card');
-    if (card && card.dataset.templateId) {
-      _csPickRole(card.dataset.templateId);
+  // Step 2 fork cards: ① continue recommended project, ② browse other
+  // sessions (reveals the by-Agent import UI), ③ start blank — all three end
+  // in the invisible workspace matching step (no manual role selection).
+  shell.querySelector('#cs-fork-cards')?.addEventListener('click', (e) => {
+    const card = e.target.closest('.cs-fork-card');
+    if (!card || card.hasAttribute('disabled')) return;
+    const choice = card.dataset.fork;
+    _csForkChoice = choice;
+    if (choice === 'continue') {
+      void _csForkContinue();
+    } else if (choice === 'other') {
+      _csShowImportView();
+    } else if (choice === 'blank') {
+      // No import; matching creates a fresh/临时 workspace with no sessions.
+      _csRecommendation = null;
+      _csGoStep(3);
     }
   });
-  shell.querySelector('#cs-role-skip')?.addEventListener('click', () => {
-    _csRolePicked = null;
-    void _csFinish();
-  });
-
-  shell.querySelector('#cs-ob-finish')?.addEventListener('click', () => { void _csFinish(); });
+  // Return from the import sub-view back to the fork cards.
+  shell.querySelector('#cs-import-back-fork')?.addEventListener('click', () => _csShowForkView());
 
   // Standalone mode: close import flow after importing sessions
   shell.querySelector('#cs-step2-finish')?.addEventListener('click', () => {

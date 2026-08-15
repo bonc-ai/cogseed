@@ -93,7 +93,7 @@ describe('workspace gate — ready', () => {
     const validation = await import(VALIDATION);
     const input = await gateInput();
 
-    await validation.validateSkillPatchContent(uid, ASSET_ID, '---\nname: continuity\n---\nbody\n');
+    await validation.validatePatchCandidateContent(uid, ASSET_ID, '---\nname: continuity\n---\nbody\n');
 
     const decision = await mod.evaluateWorkspaceGate(uid, input);
     expect(decision.reasons).not.toContain('validation_blocked');
@@ -205,7 +205,7 @@ describe('workspace gate — each condition blocks on its own', () => {
     const input = await gateInput();
 
     // An EXTREME violation yields a `blocked` verdict.
-    await validation.validateSkillPatchContent(
+    await validation.validatePatchCandidateContent(
       uid, ASSET_ID, 'no frontmatter at all, which the validator rejects outright',
     );
     const latest = await validation.findLatestSkillValidation(uid, ASSET_ID);

@@ -6,13 +6,13 @@
 //   2. View Agents (AI Team)
 //   3. View Skills
 //   4. Open Recall
-//   5. Reach the candidate list and decide one cognition
+//   5. Reach the capture-task candidate list and decide one cognition
 //   6. Open the ability-assets page
 //   7. Inspect one asset's detail
 //
 // Steps 4 and 5 are split because Recall opens on its overview page while
-// candidates live under deposition/candidates — one step asking for both left
-// the navigation hop unmentioned and unreachable.
+// candidates live under capture tasks — one step asking for both left the
+// navigation hop unmentioned and unreachable.
 //
 // Steps 6 and 7 continue inside Recall on purpose: deciding a candidate only
 // shows the intake side of the loop, so the tour then walks to where confirmed
@@ -53,8 +53,8 @@ const TOUR_STEPS = [
   {
     id: 'agents',
     title: '查看 AI 团队',
-    description: '这是你连接的 AI Agent 团队。点击 Agents 按钮查看已连接的模型。',
-    target: '#agents-btn',
+    description: '这些是你接入的模型和本机 Agent，任务由它们执行。点「连接」，再从「Agent」查看。',
+    target: '#connectors-btn',
     position: 'right',
     checkComplete: () => {
       return _tourState && _tourState.agentsViewed;
@@ -62,9 +62,9 @@ const TOUR_STEPS = [
   },
   {
     id: 'skills',
-    title: '查看技能库',
-    description: '这里是你的技能库，包含各种可以调用的技能。点击 Skills 按钮查看。',
-    target: '#skills-btn',
+    title: '查看你的能力',
+    description: 'CogSeed 为你保留的正式能力都放在「认知资产」里。点「认知资产」，再从「我的能力」进入技能库。',
+    target: '#recall-btn',
     position: 'right',
     checkComplete: () => {
       return _tourState && _tourState.skillsViewed;
@@ -72,8 +72,8 @@ const TOUR_STEPS = [
   },
   {
     id: 'recall',
-    title: '打开认知资产',
-    description: '从导入的会话中提取了候选认知。点击「认知资产」，看看沉淀出了什么。',
+    title: '你的认知资产',
+    description: 'CogSeed 从你的会话里发现了值得留下的认知。点「认知资产」，看它们放在了哪。',
     target: '#recall-btn',
     position: 'right',
     checkComplete: () => {
@@ -81,20 +81,16 @@ const TOUR_STEPS = [
     },
   },
   {
-    // Recall opens on the `overview` page, but candidate cards live under
-    // deposition/candidates — so "click Recall then review a candidate" had an
-    // unmentioned navigation hop in the middle and could never complete.
-    // Overview already renders a link to the candidate list whenever candidates
-    // are pending, so anchor to that instead of inventing a new entry point.
+    // Recall opens on the overview page, while candidate actions live under
+    // capture tasks. Anchor to a real formal-candidate action after the user
+    // navigates, and fall back to the existing captures link on the overview.
     id: 'recall-review',
-    title: '审核候选认知',
-    description: '候选认知在「认知沉淀」页，概览页看不到。从这里进入候选列表，然后确认或拒绝任意一条。',
+    title: '候选认知，你说了算',
+    description: '候选只是建议，不是结论。进入候选列表，确认或拒绝任意一条——只有你点头的才会留下。',
     resolveTarget: () => (
-      // Once the user has navigated, the overview link is gone and the decision
-      // buttons are on screen — follow them so the card stops pointing at a
-      // stale rect.
-      document.querySelector('#panel-recall [data-cognition-candidate-action]')
-      || document.querySelector('#panel-recall [data-cognition-page-link="deposition"][data-cognition-deposition-target="candidates"]')
+      document.querySelector('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')
+      || document.querySelector('#panel-recall [data-cognition-page-link="captures"]')
+      || document.querySelector('#panel-recall .skills-cognition-tab[data-cognition-page="captures"]')
     ),
     position: 'bottom',
     checkComplete: () => {
@@ -103,8 +99,8 @@ const TOUR_STEPS = [
   },
   {
     id: 'recall-assets',
-    title: '查看沉淀出的资产',
-    description: '确认过的认知会沉淀成「能力资产」。点开这一页，看看已经攒下了什么。',
+    title: '确认后，认知归你',
+    description: '你刚确认的认知，已经沉淀为正式资产。点开这页，看看攒下了什么。',
     // The Recall nav tab is the stable entry point; the overview page also
     // renders a link to the same place, so fall back to it when the user is
     // still on overview and the tab is off-screen.
@@ -124,8 +120,8 @@ const TOUR_STEPS = [
   },
   {
     id: 'recall-asset-detail',
-    title: '查看一条资产详情',
-    description: '点击列表里的任意一条资产，右侧会显示它的版本、来源和下一次任务的注入预览。',
+    title: '一条资产里有什么',
+    description: '点开任意一条：能看到它的版本、来源，以及下次任务时会怎样用上它。',
     // Prefer a row the user hasn't got open: the assets page auto-selects the
     // first record, so pointing at that one asks for a click that changes
     // nothing on screen.
@@ -257,6 +253,11 @@ function _setupTourListeners() {
     if (!_tourState || _tourState.completed) return;
     const node = event.target;
     if (!node || typeof node.closest !== 'function') return;
+    if (node.closest('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')) {
+      _tourState.recallReviewed = true;
+      _checkStepComplete();
+      return;
+    }
     if (node.closest('#panel-recall .skills-cognition-tab[data-cognition-page="assets"], #panel-recall [data-cognition-page-link="assets"]')) {
       _tourState.assetsOpened = true;
       _checkStepComplete();
@@ -369,11 +370,12 @@ function _showTourStep(stepIndex) {
   const tooltipHTML = `
     <div class="tour-tooltip-content">
       <div class="tour-tooltip-header">
-        <span class="tour-tooltip-badge">${stepIndex + 1} / ${TOUR_STEPS.length}</span>
+        <span class="tour-tooltip-badge">第 ${stepIndex + 1} 步 / 共 ${TOUR_STEPS.length} 步</span>
         <h3 class="tour-tooltip-title">${_tourEsc(step.title)}</h3>
       </div>
+      <div class="tour-tooltip-progress"><i style="width:${Math.round(((stepIndex + 1) / TOUR_STEPS.length) * 100)}%"></i></div>
       <p class="tour-tooltip-desc">${_tourEsc(step.description)}</p>
-      <div class="tour-tooltip-hint">👆 完成高亮处的操作后自动继续</div>
+      <div class="tour-tooltip-hint">👆 按提示完成高亮处的操作，自动进入下一步</div>
       <div class="tour-tooltip-actions">
         <button type="button" class="tour-tooltip-btn" data-tour-action="skip">跳过引导</button>
         <button type="button" class="tour-tooltip-btn primary" data-tour-action="next">${
@@ -502,7 +504,7 @@ function _showTourFinishCard() {
       <div class="tour-tooltip-header">
         <h3 class="tour-tooltip-title">引导完成</h3>
       </div>
-      <p class="tour-tooltip-desc">四个主要入口都走过一遍了：会话、Agents、Skills、认知资产。认知的完整链路也走通了：候选 → 审核 → 沉淀成能力资产。以后随时可以从左侧边栏回到它们。</p>
+      <p class="tour-tooltip-desc">你刚走通了完整链路：会话 → 提取候选 → 你确认 → 沉淀为正式认知。下次开工时，这些认知会自动跟上——换哪个 AI 都能接着干。随时可从左侧边栏回来。</p>
       <div class="tour-tooltip-actions">
         <button type="button" class="tour-tooltip-btn primary" data-tour-action="done">知道了</button>
       </div>

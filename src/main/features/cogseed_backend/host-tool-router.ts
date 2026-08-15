@@ -4,10 +4,8 @@ import type { RuntimeHostToolHandlerContext } from '../cogseed_runtime/worker-pr
 import { mateOfficeAdapter, type MateHostToolResult, type MateHostToolScope } from './office-adapter';
 import { mateBrowserAdapter } from './browser-adapter';
 import { createMateCoordinator, type MateCoordinator } from './coordinator';
-import { mateRuntimeController } from './runtime-controller';
 import { mateControlService } from './mate-control-service';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
-import { runMessagingHostTool } from './messaging-host-adapter';
 
 interface HostAdapter { run(name: any, input: Record<string, unknown>, scope: MateHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<MateHostToolResult> }
 export interface MateHostToolRouterDeps { office?: HostAdapter; browser?: HostAdapter; coordinator?: MateCoordinator }
@@ -16,8 +14,8 @@ export function createMateHostToolRouter(deps: MateHostToolRouterDeps = {}) {
   const office = deps.office ?? mateOfficeAdapter;
   const browser = deps.browser ?? mateBrowserAdapter;
   const coordinator = deps.coordinator ?? createMateCoordinator({
-    startTask: (userId, input) => mateRuntimeController.startMateTask(userId, input),
-    cancelTask: (userId, taskId) => mateRuntimeController.cancelMateTask(userId, taskId),
+    startTask: async (userId, input) => (await import('./runtime-controller')).mateRuntimeController.startMateTask(userId, input),
+    cancelTask: async (userId, taskId) => (await import('./runtime-controller')).mateRuntimeController.cancelMateTask(userId, taskId),
   });
 
   function cap(result: MateHostToolResult): MateHostToolResult {
@@ -32,7 +30,7 @@ export function createMateHostToolRouter(deps: MateHostToolRouterDeps = {}) {
         return { content: '[E_RUNTIME_HOST_TOOL_SCOPE] host tool request scope mismatch', isError: true };
       }
       if (!isRuntimeHostToolName(String(call.name))) {
-        return { content: `[E_RUNTIME_HOST_TOOL_UNKNOWN] unknown Mate host tool: ${String(call.name)}`, isError: true };
+        return { content: `[E_RUNTIME_HOST_TOOL_UNKNOWN] unknown CogSeed host tool: ${String(call.name)}`, isError: true };
       }
       const scope: MateHostToolScope = {
         userId: request.user_id, requestId: request.request_id, runtimeSessionId: request.runtime_session_id,
@@ -50,6 +48,7 @@ export function createMateHostToolRouter(deps: MateHostToolRouterDeps = {}) {
         if (!capabilities.includes('messaging.proactive')) {
           return { content: '[E_RUNTIME_HOST_TOOL_FORBIDDEN] messaging tools require a Commander runtime scope', isError: true };
         }
+        const { runMessagingHostTool } = await import('./messaging-host-adapter');
         return cap(await runMessagingHostTool(call.name, call.input, {
           userId: request.user_id,
           sourceKey: `${request.request_id}:${call.call_id}`,
@@ -83,7 +82,7 @@ export function createMateHostToolRouter(deps: MateHostToolRouterDeps = {}) {
       } catch (error) {
         return { content: error instanceof Error ? error.message : String(error), isError: true };
       }
-      return { content: `[E_RUNTIME_HOST_TOOL_UNKNOWN] unknown Mate host tool: ${String(call.name)}`, isError: true };
+      return { content: `[E_RUNTIME_HOST_TOOL_UNKNOWN] unknown CogSeed host tool: ${String(call.name)}`, isError: true };
     },
   };
 }

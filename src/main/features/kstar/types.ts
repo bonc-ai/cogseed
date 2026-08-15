@@ -1,5 +1,6 @@
 import type { AbilityAssetType } from '../recall/candidate-service';
 import type { CognitionSourceRef } from '../recall/source-service';
+import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model-types';
 
 export const KSTAR_SCHEMA_VERSION = 1;
 
@@ -16,15 +17,19 @@ export interface KstarJsonRecord {
 
 export interface KstarToolCall {
   id?: string;
+  sequence?: number;
+  actor?: string;
   name: string;
   argumentsSummary?: string;
   status?: 'ok' | 'error' | 'cancelled' | 'unknown';
 }
 
 export interface KstarAgentAction {
+  sequence?: number;
   actor?: string;
   action: string;
   summary?: string;
+  status?: 'ok' | 'error' | 'cancelled' | 'unknown';
 }
 
 export interface KstarEpisodeRecord extends KstarJsonRecord {
@@ -38,6 +43,7 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
   logicalRunId?: string;
   executionId?: string;
   projectionId?: string;
+  forecastId?: string;
   wakeRequestId?: string;
   k: {
     memoryRefs: string[];
@@ -89,10 +95,16 @@ export interface KstarReviewRecord extends KstarJsonRecord {
   attribution: KstarAttribution;
   reason: string;
   confidence: number;
+  actionDelta?: ActionDeltaDetail;
+  resultDelta?: ResultDeltaDetail;
   reviewState?: KstarReviewState;
   inferenceMethod?: KstarReviewInferenceMethod;
   needsConfirmation?: boolean;
   confirmedAt?: string;
+  /** Model-reasoned reusable lesson ("why the gap happened + what is worth
+   *  reusing"). When present it becomes the precipitation judgment instead
+   *  of a fixed template sentence. */
+  lesson?: string;
   evidenceRefs: CognitionSourceRef[];
   createdAt: string;
   updatedAt: string;
@@ -108,6 +120,16 @@ export interface KstarLearningSignal {
   source: 'review';
 }
 
+export interface KstarLearningProvenance {
+  projectionId: string;
+  forecastId: string;
+  episodeId: string;
+  ruleRefs: string[];
+  attribution: KstarAttribution;
+  actionDelta?: ActionDeltaDetail;
+  resultDelta?: ResultDeltaDetail;
+}
+
 export interface KstarCandidateProposal {
   judgment: string;
   summary?: string;
@@ -116,6 +138,7 @@ export interface KstarCandidateProposal {
   suggestedScope: string;
   sourceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
+  learningProvenance?: KstarLearningProvenance;
 }
 
 export interface KstarExtractionRunRecord extends KstarJsonRecord {

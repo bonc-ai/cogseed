@@ -15,8 +15,8 @@ afterEach(() => {
   fs.rmSync(paths.userRoot('runtime-facade-user'), { recursive: true, force: true });
 });
 
-describe('Mate Agent Runtime facade', () => {
-  it('normalizes requests, omits Mate Agent cid, persists events, and projects only final text', async () => {
+describe('CogSeed Runtime facade', () => {
+  it('normalizes requests, omits CogSeed cid, persists events, and projects only final text', async () => {
     const seen: RuntimeRunRequest[] = [];
     const projected: Array<{ text: string; runtime_session_id: string; request_id: string }> = [];
     const runtime = createMateAgentRuntime({
@@ -104,7 +104,7 @@ describe('Mate Agent Runtime facade', () => {
 
 });
 
-describe('Mate Agent Runtime KSTAR capture', () => {
+describe('CogSeed Runtime KSTAR capture', () => {
   it('captures terminal Runtime facts after persisting completion and keeps capture failures non-fatal', async () => {
     const captured: Array<{ runId: string; eventTypes: string[] }> = [];
     const runtime = createMateAgentRuntime({
@@ -129,7 +129,7 @@ describe('Mate Agent Runtime KSTAR capture', () => {
   });
 });
 
-describe('Mate Agent Runtime KSTAR terminal behavior', () => {
+describe('CogSeed Runtime KSTAR terminal behavior', () => {
   it('closes and captures a non-completed terminal result without projecting it as success', async () => {
     const captured: string[] = [];
     const runtime = createMateAgentRuntime({

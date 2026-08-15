@@ -33,6 +33,8 @@ describe('CogSeed Runtime protocol normalization', () => {
       context: [{ type: 'text', content: 'Only this context.' }],
       attachments: [{ type: 'file', path: allowedFile, name: 'notes.txt' }],
       agent_id: 'agent_runtime',
+      execution_kind: 'cogseed-native',
+      allowed_skill_ids: ['skill-alpha', 'skill-beta', 'skill-alpha'],
     }, { allowedRoots: [root] });
 
     expect(result.ok).toBe(true);
@@ -40,10 +42,58 @@ describe('CogSeed Runtime protocol normalization', () => {
     expect(result.request.protocol_version).toBe(MATE_AGENT_RUNTIME_PROTOCOL_VERSION);
     expect(result.request.request_id).toMatch(/^req-/);
     expect(result.request.runtime_session_id).toMatch(/^mruntime-/);
+    expect(result.request.execution_kind).toBe('cogseed-native');
+    expect(result.request.allowed_skill_ids).toEqual(['skill-alpha', 'skill-beta']);
     expect(result.request.task).toBe('Summarize this explicit input.');
     expect(result.request.context).toEqual([{ type: 'text', content: 'Only this context.' }]);
     expect(result.request.attachments?.[0].path).toBe(allowedFile);
     expect(result.request).not.toHaveProperty('cid');
+  });
+
+  it('rejects Backend-owned local CLI execution at the native Runtime boundary', () => {
+    const result = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Run through a local CLI.',
+      execution_kind: 'local-cli',
+    }, { allowedRoots: [] });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected local CLI rejection');
+    expect(result.error).toMatch(/backend|local CLI/i);
+  });
+
+  it('accepts model_profile ids with the provider:label separator and rejects unsafe ones', () => {
+    const root = tmpRoot();
+    const ok = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Use the selected chat model.',
+      model_profile: 'openai-compatible:default',
+    }, { allowedRoots: [root] });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) throw new Error(ok.error);
+    expect(ok.request.model_profile).toBe('openai-compatible:default');
+
+    const custom = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Use the custom provider model.',
+      model_profile: 'cp:cp-abc123-1',
+    }, { allowedRoots: [root] });
+    expect(custom.ok).toBe(true);
+    if (!custom.ok) throw new Error(custom.error);
+    expect(custom.request.model_profile).toBe('cp:cp-abc123-1');
+
+    const bad = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Smuggle a profile id.',
+      model_profile: '../openai-compatible:default',
+    }, { allowedRoots: [root] });
+    expect(bad.ok).toBe(false);
+    if (bad.ok) throw new Error('expected rejection');
+    expect(bad.code).toBe('E_RUNTIME_INVALID_ID');
+
+    const blank = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Blank profile id.',
+      model_profile: '',
+    }, { allowedRoots: [root] });
+    expect(blank.ok).toBe(false);
+    if (blank.ok) throw new Error('expected rejection');
+    expect(blank.code).toBe('E_RUNTIME_INVALID_ID');
   });
 
   it('rejects caller supplied CogSeed conversation identity fields', () => {
@@ -111,7 +161,7 @@ describe('CogSeed Runtime protocol normalization', () => {
     expect(session.code).toBe('E_RUNTIME_TRANSCRIPT_PATH');
   });
 
-  it('rejects local Mate Runtime session transcript paths even when the caller passes a broad root', () => {
+  it('rejects local CogSeed Runtime session transcript paths even when the caller passes a broad root', () => {
     const uid = 'runtime-protocol-local-runtime-transcript';
     const runtimeSessionFile = paths.mateRuntimeSessionFile(uid, 'mruntime-secret');
     fs.mkdirSync(path.dirname(runtimeSessionFile), { recursive: true });

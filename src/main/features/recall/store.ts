@@ -145,6 +145,28 @@ export async function appendRecallJsonlRecord(
   return validated;
 }
 
+/**
+ * 删除整条 JSONL 流。
+ *
+ * 只为「彻底清除」而存在：规范 22.1 要求删掉内容与版本，而版本快照里同样有正文，
+ * 留着就不算清除干净。除此之外没有理由调用它——普通删除走状态位，不动历史。
+ *
+ * 流不存在视为已达成目标，不报错：清除要可重入，半路失败后重试不该被绊住。
+ */
+export async function removeRecallJsonlStream(
+  userId: string,
+  collection: string,
+  stream: string,
+): Promise<void> {
+  const streamPath = recallJsonlPath(userId, collection, stream);
+  try {
+    await fs.rm(streamPath);
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+}
+
 export async function listRecallJsonlRecords(
   userId: string,
   collection: string,

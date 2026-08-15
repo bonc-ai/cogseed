@@ -5,6 +5,13 @@ import * as path from 'node:path';
 
 import { drainMainRuntimeForTest } from '../../helpers/drain-main-runtime';
 
+// Blocking projection gate: this test exercises copy/merge + group send,
+// not Recall projection. Fail the preview so the Commander dispatch is not
+// gated and the turn can reply normally.
+vi.mock('../../../src/main/features/recall/context-projection', () => ({
+  previewContextProjection: vi.fn(async () => { throw new Error('no projection in copy-merge tests'); }),
+}));
+
 vi.mock('../../../src/main/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));

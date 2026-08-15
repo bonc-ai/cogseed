@@ -2,10 +2,9 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-const roots = [
-  path.resolve(process.cwd(), 'src/main/features/cogseed_backend'),
-  path.resolve(process.cwd(), 'src/main/features/cogseed_runtime'),
-];
+const backendRoot = path.resolve(process.cwd(), 'src/main/features/cogseed_backend');
+const runtimeRoot = path.resolve(process.cwd(), 'src/main/features/cogseed_runtime');
+const roots = [backendRoot, runtimeRoot];
 
 function tsFiles(dir: string): string[] {
   const files: string[] = [];
@@ -24,43 +23,59 @@ function importSpecifiers(source: string): string[] {
   return out;
 }
 
-describe('Mate Agent complete backend separation boundary', () => {
-  it('does not import Orkas Agent backend, Core runtime, shared execution-records, or Group Chat', () => {
-    const banned = [
+describe('CogSeed complete backend separation boundary', () => {
+  it('does not call Core/model execution or create child-process paths outside approved adapters', () => {
+    const bannedEverywhere = [
       'features/execution-records',
       '/execution-records',
-      'group_chat',
       '#core-agent',
       'model/client',
       'model/core-agent',
-      'features/agents',
-      'features/skills',
-      'connectors/manager',
-      'connectors/index',
-      'connectors/oauth',
-      'connectors/registry',
-      'connectors/tools-adapter',
     ];
     const offenders: string[] = [];
     for (const root of roots) {
       for (const file of tsFiles(root)) {
         const source = fs.readFileSync(file, 'utf8');
         for (const specifier of importSpecifiers(source)) {
-          if (banned.some((needle) => specifier.includes(needle))) offenders.push(`${path.relative(process.cwd(), file)} imports ${specifier}`);
+          if (bannedEverywhere.some((needle) => specifier.includes(needle))) {
+            offenders.push(`${path.relative(process.cwd(), file)} imports ${specifier}`);
+          }
+          if (file.startsWith(backendRoot)
+            && (specifier.includes('node:child_process') || specifier.includes('child_process'))) {
+            offenders.push(`${path.relative(process.cwd(), file)} imports ${specifier}`);
+          }
         }
       }
     }
     expect(offenders).toEqual([]);
   });
 
-  it('keeps Mate task, execution, session, and worker state paths under mate_agent', () => {
+  it('allows Local CLI execution only through the dedicated Backend adapter and local_agents/runner choke point', () => {
+    const imports: string[] = [];
+    for (const file of tsFiles(backendRoot)) {
+      const source = fs.readFileSync(file, 'utf8');
+      for (const specifier of importSpecifiers(source)) {
+        if (specifier.includes('local_agents')) imports.push(`${path.basename(file)}:${specifier}`);
+      }
+    }
+    expect(imports).toEqual([
+      'local-cli-execution-adapter.ts:../local_agents/backends/base',
+      'local-cli-execution-adapter.ts:../local_agents/runner',
+      'local-cli-execution-adapter.ts:../local_agents/sessions',
+    ]);
+    const adapter = fs.readFileSync(path.join(backendRoot, 'local-cli-execution-adapter.ts'), 'utf8');
+    expect(adapter).toContain("run as runLocalAgent");
+    expect(adapter).not.toMatch(/\bspawn\s*\(|execFile\s*\(|fork\s*\(/);
+  });
+
+  it('keeps CogSeed task, execution, session, and worker state paths under mate_agent', () => {
     const paths = fs.readFileSync(path.resolve(process.cwd(), 'src/main/paths.ts'), 'utf8');
     expect(paths).toContain("path.join(userCloudRoot(uid), 'mate_agent')");
     expect(paths).toContain("path.join(userLocalRoot(uid), 'mate_agent')");
     expect(paths).toContain('mateAgentExecutionRecordsDir');
   });
 
-  it('does not expose a LegacyOrkasBackend or fallback selector in Mate production files', () => {
+  it('does not expose a LegacyOrkasBackend or fallback selector in CogSeed production files', () => {
     const source = roots.flatMap(tsFiles).map((file) => fs.readFileSync(file, 'utf8')).join('\n');
     expect(source).not.toMatch(/LegacyOrkasBackend|native\s*\|\s*core\s*\|\s*shadow/);
   });

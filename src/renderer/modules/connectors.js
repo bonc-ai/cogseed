@@ -851,7 +851,7 @@ function _handleOAuthConnectResult(info) {
     // failures need an explicit alert now that the initiating IPC has already returned.
     if (!cancelled && errLike.code !== 'mcp_connect_failed') uiAlert(_formatConnectError(errLike));
   }
-  if (currentView === 'connectors') loadConnectors();
+  if (_connectorsViewActive()) loadConnectors();
 }
 
 /** Re-run connect + token refresh for an installed instance (`connectors.refresh`), never OAuth.
@@ -1104,8 +1104,12 @@ function escapeHtml(s) {
   })[c]);
 }
 
+function _connectorsViewActive() {
+  return currentView === 'connectors' || currentView === 'connections';
+}
+
 window.addEventListener('i18n-change', () => {
-  if (currentView === 'connectors') _renderConnectorsGrid();
+  if (_connectorsViewActive()) _renderConnectorsGrid();
 });
 
 // Refresh the grid when a connector or client-config push arrives. Right now the
@@ -1114,11 +1118,11 @@ window.addEventListener('i18n-change', () => {
 if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
   try {
     window.cogseed.onPushEvent('connectors:changed', () => {
-      if (currentView === 'connectors') loadConnectors();
+      if (_connectorsViewActive()) loadConnectors();
     });
     window.cogseed.onPushEvent('connectors:oauth-result', _handleOAuthConnectResult);
     window.cogseed.onPushEvent('client-config:changed', () => {
-      if (currentView === 'connectors') loadConnectors();
+      if (_connectorsViewActive()) loadConnectors();
     });
     // Commander-driven custom MCP install: the agent calls add_custom_connector,
     // main pushes the confirm request, the user must approve here before it
@@ -1156,7 +1160,7 @@ async function _drainConnectorInstallQueue() {
           request_id: info.request_id,
           approved: !!ok,
         });
-        if (ok && currentView === 'connectors') loadConnectors();
+        if (ok && _connectorsViewActive()) loadConnectors();
       } catch (err) {
         _connectorsLog.warn('install confirm response failed', { error: err && err.message });
       }

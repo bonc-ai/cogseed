@@ -143,6 +143,41 @@ export interface SecurityReceipt {
     segments: Array<{ file: string; line: number; text: string; signal: string }>;
   };
   /**
+   * NSEAP security-declaration check, from the security-core engine.
+   *
+   * ADVISORY ONLY — this never changes `decision`.
+   *
+   * What the engine actually checks is narrower than its name suggests, and the
+   * difference matters: it validates the *declaration's internal consistency* —
+   * whether the manifest's own fields contradict each other, and whether required
+   * entries are present and non-placeholder. It does NOT read the skill's code.
+   *
+   * Measured, so it is not mistaken for a stronger guarantee later: a manifest
+   * declaring `network.enabled: false` alongside a bundled script that calls
+   * `requests.post` returns PASS. `SEC-NETWORK-003` — the rule that sounds like it
+   * would catch this — tests `actions.allowed[].external_network`, another
+   * declared field. Code behaviour is the deep scanner's job and stays that way;
+   * a `pass` here means "the paperwork is coherent", never "the code was checked".
+   *
+   * So a mismatch is an authoring gap, and a skill can be perfectly safe with no
+   * declaration at all — which is why this never touches the verdict.
+   *
+   * `absent` is the common case and is deliberately distinct from `pass`: no
+   * shipped skill carries a security manifest today, and reporting "checked and
+   * clean" for a file that does not exist would be a false claim. `unavailable`
+   * means the engine itself could not run — infrastructure failure, never
+   * evidence about the content.
+   *
+   * Findings are capped and carry rule ids plus messages so a panel can explain
+   * the gap; the engine's own verdict string is kept for diagnosis.
+   */
+  nseapDeclaration?: {
+    status: 'pass' | 'pass_with_warnings' | 'needs_input' | 'mismatch' | 'absent' | 'unavailable';
+    /** The engine's own result string, when it produced a parseable report. */
+    engineResult?: string;
+    findings?: Array<{ ruleId: string; severity: string; message: string }>;
+  };
+  /**
    * The install happened because the user accepted a risk the gate had refused.
    *
    * Persisted so the skill panel can keep saying so. Without it an override
@@ -263,6 +298,49 @@ function _readInstructionRisk(raw: unknown): { instructionRisk?: SecurityReceipt
 }
 
 /**
+ * Validate a persisted NSEAP declaration record.
+ *
+ * Status is whitelisted for the same reason as `instructionRisk`: the panel keys
+ * its wording off this value, and an unrecognised status would render as neither
+ * a warning nor a clean result. Findings are rebuilt field by field and capped —
+ * their messages quote the skill's own manifest, i.e. untrusted input that is
+ * echoed to the UI, and an engine run on a pathological tree could otherwise
+ * produce an unbounded list.
+ */
+const _NSEAP_STATUSES = new Set([
+  'pass', 'pass_with_warnings', 'needs_input', 'mismatch', 'absent', 'unavailable',
+]);
+const _NSEAP_FINDING_CAP = 20;
+
+function _readNseapDeclaration(raw: unknown): { nseapDeclaration?: SecurityReceipt['nseapDeclaration'] } {
+  if (!raw || typeof raw !== 'object') return {};
+  const r = raw as Record<string, unknown>;
+  if (typeof r.status !== 'string' || !_NSEAP_STATUSES.has(r.status)) return {};
+  const status = r.status as NonNullable<SecurityReceipt['nseapDeclaration']>['status'];
+  const findings = Array.isArray(r.findings)
+    ? r.findings.slice(0, _NSEAP_FINDING_CAP).flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const e = entry as Record<string, unknown>;
+      if (typeof e.ruleId !== 'string' || !e.ruleId) return [];
+      return [{
+        ruleId: e.ruleId.slice(0, 64),
+        severity: typeof e.severity === 'string' ? e.severity.slice(0, 32) : 'unknown',
+        message: typeof e.message === 'string' ? e.message.slice(0, 400) : '',
+      }];
+    })
+    : [];
+  return {
+    nseapDeclaration: {
+      status,
+      ...(typeof r.engineResult === 'string' && r.engineResult
+        ? { engineResult: r.engineResult.slice(0, 64) }
+        : {}),
+      ...(findings.length ? { findings } : {}),
+    },
+  };
+}
+
+/**
  * Validate a persisted override record.
  *
  * Dropped entirely when malformed rather than partially reconstructed: a record
@@ -321,6 +399,7 @@ export function readReceipt(uid: string, skillId: string): SecurityReceipt | nul
     // which reads as a stronger result than "unknown".
     ...(_readAttackSurface(raw.attackSurface)),
     ...(_readInstructionRisk(raw.instructionRisk)),
+    ...(_readNseapDeclaration(raw.nseapDeclaration)),
     ...(_readUserOverride(raw.userOverride)),
     scannedAt: String(raw.scannedAt || ''),
   };
@@ -362,6 +441,7 @@ export function writeReceipt(
     rulesDegraded?: boolean;
     attackSurface?: SecurityReceipt['attackSurface'];
     instructionRisk?: SecurityReceipt['instructionRisk'];
+    nseapDeclaration?: SecurityReceipt['nseapDeclaration'];
     userOverride?: SecurityReceipt['userOverride'];
   },
 ): SecurityReceipt {
@@ -383,6 +463,7 @@ export function writeReceipt(
     ...(input.rulesDegraded ? { rulesDegraded: true } : {}),
     ...(input.attackSurface ? { attackSurface: { ...input.attackSurface } } : {}),
     ...(input.instructionRisk ? { instructionRisk: input.instructionRisk } : {}),
+    ...(input.nseapDeclaration ? { nseapDeclaration: input.nseapDeclaration } : {}),
     ...(input.userOverride ? { userOverride: input.userOverride } : {}),
     scannedAt: nowIso(),
   };
