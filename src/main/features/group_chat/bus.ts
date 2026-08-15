@@ -5272,6 +5272,18 @@ async function runActorTurnBody(
     });
   }
 
+  // Commander closure signal (model-judged continuation): after the
+  // Commander's reply is persisted, check whether it judged the user message
+  // as a NEW task. If so, close the old tracked task (drain → requirement
+  // precipitation) — best-effort, never breaks the turn.
+  if (actor.kind === "commander" && persistedMsg && outcome.kind === "persist" && !errText && !aborted) {
+    try {
+      await handleCommanderClosureSignal(uid, cid, persistedMsg.text);
+    } catch (error) {
+      log.warn(`kstar closure signal post-turn degraded cid=${cid}: ${(error as Error).message}`);
+    }
+  }
+
   // Ephemeral worker (anonymous run_worker, run via runNestedDispatch) is
   // one-shot: purge its throwaway session so it doesn't accumulate on disk.
   // It was never a roster member nor in the worker map (synthetic WorkerState),
@@ -7969,6 +7981,75 @@ const WORKER_WORKFLOW = [
 
 function _toolError(error: string): { content: string; isError: true } {
   return { content: JSON.stringify({ ok: false, error }), isError: true };
+}
+
+/** Extract the Commander's closure signal from a reply: the Commander emits
+ *  `<kstar-closure>{"new_task":true|false,...}</kstar-closure>` when it judges
+ *  that a user message started a NEW task rather than continuing the tracked
+ *  one (model-judged continuation, per product decision). */
+export function parseCommanderClosureSignal(text: string | undefined): { newTask: boolean; reason?: string } | null {
+  const match = String(text || '').match(/<kstar-closure>([\s\S]*?)<\/kstar-closure>/);
+  if (!match) return null;
+  try {
+    const value = JSON.parse(match[1].trim()) as { new_task?: unknown; reason?: unknown };
+    if (typeof value.new_task !== 'boolean') return null;
+    return {
+      newTask: value.new_task,
+      ...(typeof value.reason === 'string' && value.reason.trim() ? { reason: value.reason.trim() } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Handle the Commander's closure signal after a turn: when it judged the
+ * user message as a NEW task while a tracked task was open, close the old
+ * task (drain → requirement-level precipitation) and let the next user
+ * message open the fresh task. Best-effort — failures never break the turn.
+ */
+async function handleCommanderClosureSignal(
+  uid: string,
+  cid: string,
+  replyText: string | undefined,
+): Promise<void> {
+  const signal = parseCommanderClosureSignal(replyText);
+  if (!signal || !signal.newTask) return;
+  try {
+    const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+    const lifecycle = await readKstarTaskLifecycle(uid, cid);
+    if (!lifecycle.task || !lifecycle.requirement) return;
+    if (lifecycle.requirement.status !== 'open') return;
+    // Close the old task exactly like kstar_control finish: requirement →
+    // waiting_review, task → closing, taskComplete → true, then the
+    // requirement-level precipitation runs (aggregated lesson → asset).
+    const { executeKstarControl } = await import('../kstar/control-service');
+    const result = await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        allowedToolNames: new Set(['kstar_control']),
+      },
+      {
+        operation: 'finish',
+        idempotencyKey: `host-closure-${cid}-${Date.now()}`,
+        result: {
+          finalStatus: 'completed',
+          finalText: String(replyText || '').slice(0, 4_000),
+          producedFiles: [],
+          acceptanceEvidence: [],
+          closeReason: 'user moved to a new task',
+        },
+      },
+    );
+    log.info('kstar closure signal closed the old task', {
+      cid: maskId(cid),
+      ok: result.ok,
+      reason: signal.reason,
+    });
+  } catch (error) {
+    log.warn(`kstar closure signal handling degraded cid=${cid}: ${(error as Error).message}`);
+  }
 }
 
 /**
