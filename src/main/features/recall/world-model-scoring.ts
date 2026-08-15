@@ -40,8 +40,13 @@ function text(value: unknown, field: string, max: number): string {
 }
 
 function texts(value: unknown, field: string, maxItems: number, maxLength: number, allowEmpty = false): string[] {
-  if (!Array.isArray(value) || value.length > maxItems) throw new Error(`invalid_candidate_${field}`);
-  const out = value.map((item) => text(item, field, maxLength));
+  // Tolerant normalization: deepseek-v4-flash frequently flattens nested
+  // arrays into a single string (live-observed: plan and expectedTools
+  // arrived as one prose sentence). A single string is treated as a
+  // one-item array; malformed arrays are still rejected.
+  const items = typeof value === 'string' ? [value] : value;
+  if (!Array.isArray(items) || items.length > maxItems) throw new Error(`invalid_candidate_${field}`);
+  const out = items.map((item) => text(item, field, maxLength));
   if (!allowEmpty && !out.length) throw new Error(`invalid_candidate_${field}`);
   return out;
 }
@@ -98,6 +103,15 @@ function intervention(raw: Record<string, unknown>, context: WorldModelCandidate
 }
 
 function predictedResult(raw: unknown): WorldModelPredictedResult {
+  // Tolerant normalization: the model may flatten predictedResult to a plain
+  // string (live-observed). A string becomes { summary }.
+  if (typeof raw === 'string') {
+    return {
+      summary: text(raw, 'result_summary', 4_000),
+      acceptanceSignals: [],
+      predictedFiles: [],
+    };
+  }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('invalid_candidate_predicted_result');
   const result = raw as Record<string, unknown>;
   return {
@@ -135,7 +149,11 @@ export function validateWorldModelCandidate(
 ): WorldModelCandidateForecast {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_world_model_candidate');
   const raw = value as Record<string, unknown>;
-  const id = text(raw.id, 'id', 120);
+  // Tolerant id: the model may omit candidate ids (live-observed). Fall back
+  // to a stable generated id so selectedCandidateId is never empty.
+  let id = '';
+  try { id = text(raw.id, 'id', 120); } catch { id = ''; }
+  id = id || `candidate-${modelOrder + 1}`;
   const aHat = intervention(raw, context);
   const links = causalLinks(raw.causalLinks, aHat.plan.length, context);
   const riskRuleRefs = texts(raw.riskRuleRefs, 'risk_rule_refs', 20, 240, true);

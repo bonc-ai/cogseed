@@ -400,6 +400,39 @@ describe('KStar Commander control service', () => {
     expect(result).toMatchObject({ ok: false, code: 'kstar_control_invalid_input' });
   });
 
+  it('accepts forecast constraints/acceptanceCriteria flattened to single strings', async () => {
+    const seeded = await seedOpenControlState();
+    const service = await import('../../../../src/main/features/kstar/control-service');
+    await seeded.store.replaceKstarRequirement('user-a', {
+      ...seeded.requirement,
+      projectionId: 'proj-a',
+      projectionIds: ['proj-a'],
+    });
+    forecastMock.commitCommanderForecast.mockResolvedValue({
+      id: 'wf-constraints',
+      forecast: { selectedCandidateId: 'path-a' },
+    });
+
+    const result = await service.executeKstarControl(hostContext(), {
+      operation: 'commit_forecast',
+      idempotencyKey: 'turn-a:forecast-constraints',
+      forecast: JSON.stringify({
+        candidates: [
+          { id: 'path-a', plan: 'do the work', expectedTools: [], expectedActors: ['commander'], predictedResult: { summary: 'done' } },
+          { id: 'path-b', plan: 'do it differently', expectedTools: [], expectedActors: ['commander'], predictedResult: { summary: 'done too' } },
+        ],
+        constraints: 'No public API change',
+        acceptanceCriteria: 'Tests pass',
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, status: 'forecast_committed' });
+    expect(forecastMock.commitCommanderForecast).toHaveBeenCalledWith('user-a', expect.objectContaining({
+      constraints: ['No public API change'],
+      acceptanceCriteria: ['Tests pass'],
+    }));
+  });
+
   it('switches to a new Task on task:create, closes the old one, and precipitates requirement-level assets (B2)', async () => {
     const seeded = await seedOpenControlState();
     // Seed one episode + learning review so precipitation has evidence.

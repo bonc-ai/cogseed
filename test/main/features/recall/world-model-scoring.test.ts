@@ -88,7 +88,6 @@ describe('world-model candidate scoring', () => {
 
   it.each([
     ['missing', undefined],
-    ['not an array', 'read_file'],
     ['malformed item', [42]],
   ])('rejects expectedTools when %s', (_label, expectedTools) => {
     const candidate: Record<string, unknown> = { ...base };
@@ -108,5 +107,31 @@ describe('world-model candidate scoring', () => {
       ...base,
       predictedResult: { ...base.predictedResult, acceptanceSignals: [] },
     }, context, 0)).toThrow('invalid_candidate_acceptance_signals');
+  });
+
+  it('accepts flattened string shapes (deepseek flattens nested arrays/objects)', () => {
+    // plan/expectedTools/expectedActors as single strings.
+    const flattened = validateWorldModelCandidate({
+      ...base,
+      plan: 'Inspect callback then run tests',
+      expectedTools: 'read_file',
+      expectedActors: 'commander',
+    }, context, 0);
+    expect(flattened.aHat.plan).toEqual(['Inspect callback then run tests']);
+    expect(flattened.aHat.expectedTools).toEqual(['read_file']);
+    expect(flattened.aHat.expectedActors).toEqual(['commander']);
+
+    // predictedResult as a plain string → { summary }.
+    const stringResult = validateWorldModelCandidate({
+      ...base,
+      predictedResult: 'Callback is fixed and verified.',
+    }, context, 0);
+    expect(stringResult.rHat.summary).toBe('Callback is fixed and verified.');
+    expect(stringResult.rHat.acceptanceSignals).toEqual([]);
+
+    // missing id → stable generated id, never empty.
+    const noId: Record<string, unknown> = { ...base };
+    delete noId.id;
+    expect(validateWorldModelCandidate(noId, context, 2).id).toBe('candidate-3');
   });
 });

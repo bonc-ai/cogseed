@@ -83,8 +83,12 @@ function id(value: unknown, field: string, required = false): string | undefined
 
 function stringList(value: unknown, field: string, maxItems: number, maxLength: number): string[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length > maxItems) throw new ControlInputError(`${field} is invalid`);
-  return value.map((item) => {
+  // Tolerant normalization: deepseek-v4-flash may flatten a list into a
+  // single string (live-observed: forecast.constraints). Treat a plain
+  // string as a one-item list.
+  const items = typeof value === 'string' ? [value] : value;
+  if (!Array.isArray(items) || items.length > maxItems) throw new ControlInputError(`${field} is invalid`);
+  return items.map((item) => {
     const normalized = text(item, field, maxLength, true);
     if (!normalized) throw new ControlInputError(`${field} is invalid`);
     return normalized;
