@@ -4282,5 +4282,8 @@
   "touchpoint_settings.template.preview.approve": "Approve",
   "touchpoint_settings.template.preview.reject": "Reject",
   "touchpoint_settings.template.preview.note": "The approver can add a note in Feishu",
-  "touchpoint_settings.template.saved": "Touchpoint template and instance routing saved."
+  "touchpoint_settings.template.saved": "Touchpoint template and instance routing saved.",
+  "settings.custom_providers.api_format_openai_responses": "OpenAI Responses (/responses)",
+  "settings.custom_providers.protocol_openai_responses": "OpenAI Responses",
+  "settings.model_authorization.protocol_openai_responses": "OpenAI Responses (/responses)"
 }

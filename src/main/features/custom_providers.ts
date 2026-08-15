@@ -37,7 +37,7 @@ const log = createLogger('custom-providers');
 
 export type CustomProviderProtocol = CustomProvider['protocol'];
 
-const PROTOCOLS: readonly CustomProviderProtocol[] = ['anthropic', 'openai', 'gemini'];
+const PROTOCOLS: readonly CustomProviderProtocol[] = ['anthropic', 'openai', 'openai-responses', 'gemini'];
 
 let _idCounter = 0;
 function nextCustomProviderId(existing: readonly CustomProvider[]): string {

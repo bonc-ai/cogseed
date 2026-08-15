@@ -4261,7 +4261,7 @@
   "touchpoint_settings.template.approve_label": "批准按钮",
   "touchpoint_settings.template.reject_label": "拒绝按钮",
   "touchpoint_settings.template.scene_override": "当前场景覆盖",
-  "touchpoint_settings.template.follow_default": "跟随全局默认实例",
+  "touchpoint_settings.template.follow_default": "跟随默认发送机器人",
   "touchpoint_settings.template.variables": "可用变量：",
   "touchpoint_settings.template.actions_fixed": "按钮动作仍固定为 approve / reject。",
   "touchpoint_settings.template.loading": "正在加载审批卡片设置…",
@@ -4271,7 +4271,6 @@
   "touchpoint_settings.template.variables_detail": "卡片发送时会自动替换",
   "touchpoint_settings.template.advanced": "高级设置",
   "touchpoint_settings.template.advanced_detail": "指定由哪个飞书机器人发送",
-  "touchpoint_settings.template.follow_default": "跟随默认发送机器人",
   "touchpoint_settings.template.routing_help": "通常无需修改。只有配置了多个机器人时，才需要为当前场景单独指定。",
   "touchpoint_settings.template.preview.title": "卡片预览",
   "touchpoint_settings.template.preview.actor": "Mate",
@@ -4283,5 +4282,8 @@
   "touchpoint_settings.template.preview.approve": "同意",
   "touchpoint_settings.template.preview.reject": "拒绝",
   "touchpoint_settings.template.preview.note": "审批人可在飞书中补充意见",
-  "touchpoint_settings.template.saved": "触达模板和实例路由已保存。"
+  "touchpoint_settings.template.saved": "触达模板和实例路由已保存。",
+  "settings.custom_providers.api_format_openai_responses": "OpenAI Responses (/responses)",
+  "settings.custom_providers.protocol_openai_responses": "OpenAI Responses",
+  "settings.model_authorization.protocol_openai_responses": "OpenAI Responses (/responses)"
 }
