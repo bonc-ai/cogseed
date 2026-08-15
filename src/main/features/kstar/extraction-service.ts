@@ -103,22 +103,23 @@ export function proposeKstarCandidates(
     episode.a.toolCalls.every((call) => call.status === 'ok');
 
   const signalAvailable = clearsPrecipitationGate(review);
+  const scope = scopeForTask(episode.t.userGoal);
   if (verifiedWorkflow && signalAvailable) {
     proposals.push({
       // A model-reasoned lesson (cause + reusable guidance) wins over the
       // fixed workflow template — the difference IS the lesson.
       judgment: review.lesson?.trim()
         ? review.lesson
-        : `For tasks like "${episode.t.userGoal}", use the verified workflow: ${distinctTools.join(' → ')}.`,
-      summary: review.lesson?.trim() ? 'Reusable workflow lesson' : 'Verified multi-tool workflow',
-      uncertainty: 'Generated from a verified workflow with an explicit learning signal; confirm before treating it as durable.',
+        : `处理类似「${episode.t.userGoal}」的任务时，可使用已验证的工作流程：${distinctTools.join(' → ')}。`,
+      summary: review.lesson?.trim() ? '可复用经验' : '已验证的工作流程',
+      uncertainty: '基于任务执行经验提炼，使用前可复核。',
       // A lesson is judgment experience, not a workflow recipe: tag it
       // 'rule' (or the named gap) so downstream use treats it as guidance
       // instead of replaying a tool chain.
       suggestedType: review.lesson?.trim()
         ? (gapType(review) ?? 'rule')
         : 'skill_method',
-      suggestedScope: scopeForTask(episode.t.userGoal),
+      suggestedScope: scope,
       sourceRefs,
       learningSignal: learningSignal(review),
     });
@@ -130,11 +131,11 @@ export function proposeKstarCandidates(
       // Same for gap lessons: the reasoned judgment replaces the template.
       judgment: review.lesson?.trim()
         ? review.lesson
-        : `For similar tasks, address this ${review.attribution.replace('_', ' ')}: ${review.reason}`,
-      summary: review.lesson?.trim() ? `Reusable ${review.attribution.replace('_', ' ')} lesson` : `KSTAR ${review.attribution.replace('_', ' ')} candidate`,
-      uncertainty: 'This proposal is based on an explicit review and still requires user confirmation.',
+        : `遇到同类情况时，应注意修正：${review.reason}`,
+      summary: '待修正的经验',
+      uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: type,
-      suggestedScope: scopeForTask(episode.t.userGoal),
+      suggestedScope: scope,
       sourceRefs,
       learningSignal: learningSignal(review),
     });
