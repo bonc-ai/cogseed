@@ -17,12 +17,17 @@ afterEach(() => {
 });
 
 describe('Commander continuation judgement (user-behavior closure)', () => {
-  it('parses the continuation judgement block', async () => {
+  it('parses the routing judgement block (is_task + continuation)', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
-    expect(bus.parseContinuationJudgement('x<kstar-judge>{"continuation":true}</kstar-judge>')).toBe(true);
-    expect(bus.parseContinuationJudgement('x<kstar-judge>{"continuation":false}</kstar-judge>')).toBe(false);
+    expect(bus.parseContinuationJudgement('x<kstar-judge>{"is_task":true,"continuation":true}</kstar-judge>'))
+      .toEqual({ isTask: true, continuation: true });
+    expect(bus.parseContinuationJudgement('x<kstar-judge>{"is_task":true,"continuation":false}</kstar-judge>'))
+      .toEqual({ isTask: true, continuation: false });
+    expect(bus.parseContinuationJudgement('x<kstar-judge>{"is_task":false,"continuation":false}</kstar-judge>'))
+      .toEqual({ isTask: false, continuation: false });
     expect(bus.parseContinuationJudgement('no marker')).toBeNull();
     expect(bus.parseContinuationJudgement('x<kstar-judge>bad</kstar-judge>')).toBeNull();
+    expect(bus.parseContinuationJudgement('x<kstar-judge>{"is_task":"yes"}</kstar-judge>')).toBeNull();
   });
 
   it('judge=false closes the old open task (user moved to a new request)', async () => {
@@ -49,8 +54,8 @@ describe('Commander continuation judgement (user-behavior closure)', () => {
     // via the exported continuation judge flow is wired. We assert the
     // parse + the control type shape here; the full integration (bus enqueue
     // with a scripted judge reply) is covered by live verification.
-    const parsed = bus.parseContinuationJudgement('<kstar-judge>{"continuation":false}</kstar-judge>');
-    expect(parsed).toBe(false);
+    const parsed = bus.parseContinuationJudgement('<kstar-judge>{"is_task":true,"continuation":false}</kstar-judge>');
+    expect(parsed).toEqual({ isTask: true, continuation: false });
     // Requirement stays open until the judge path closes it.
     const stillOpen = await store.readKstarRequirement('closure-user', requirement.id);
     expect(stillOpen?.status).toBe('open');

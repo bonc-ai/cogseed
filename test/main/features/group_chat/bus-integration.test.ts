@@ -320,6 +320,14 @@ beforeEach(async () => {
   modelSessionActiveMock.mockReturnValue(true);
   cidsToDrop.clear();
   vi.resetModules();
+  // Default host-routing judge: non-trivial messages are tasks; a new task
+  // never continues an open one (each task-shaped message opens/closes
+  // cleanly). Individual tests may override via _setHostRoutingJudgeForTest.
+  const busModule = await import("../../../../src/main/features/group_chat/bus");
+  busModule._setHostRoutingJudgeForTest(async (message) => ({
+    isTask: true,
+    continuation: false,
+  }));
   const users = await import("../../../../src/main/features/users");
   users.activateUser(TEST_UID);
 
@@ -5296,7 +5304,10 @@ describe("group_chat bus integration › deterministic host routing (task turn)"
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
 
+    // The host asks the Commander for a routing judgement first; the script
+    // answers is_task:true (a governed task should open), then the real turn.
     _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: '<kstar-judge>{"is_task":true,"continuation":false}</kstar-judge>' },
       { type: "final", text: "I will review it." },
     ]);
     await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "审查一下 bus.ts 的守卫实现" });

@@ -17,8 +17,9 @@ const log = createLogger('kstar.task-intent');
 
 /** Message shapes that are NOT tasks (inverse detection). */
 const TRIVIAL_PATTERNS = [
-  // Greetings / politeness
-  /^(你好|您好|嗨|哈喽|hello|hi|hey|早上好|下午好|晚上好|谢谢|感谢|辛苦了|ok|好的|收到|明白|嗯|好|行|可以|再见|拜拜)[\s。！!？?,.，]*$/i,
+  // Greetings / politeness — word sequences with optional separators
+  // ("谢谢，辛苦了", "好的收到", "嗯 好的" all trivial).
+  /^(你好|您好|嗨|哈喽|hello|hi|hey|早上好|下午好|晚上好|谢谢|感谢|辛苦了|ok|好的|收到|明白|嗯|好|行|可以|再见|拜拜|谢谢[，,、]辛苦了)([\s。！!？?,.，、]*|$)/i,
   // Pure acknowledgements / single-word confirmations
   /^(嗯+|哦+|对|是|不是|对的对的|没问题|可以的?|就这样|继续|好的继续|接着来)[\s。！!？?,.，]*$/i,
   // Status queries ("where are we", "done?")
@@ -43,7 +44,21 @@ export interface TaskIntentResult {
   reason?: string;
 }
 
-/** Detect whether a user message is a task-shaped request. Advisory only. */
+/** Fast deterministic filter: is this message OBVIOUSLY trivial (greeting,
+ *  politeness, pure confirmation, status query, punctuation/emoji)? Only
+ *  these are filtered without a model call — everything else goes to the
+ *  model judgement so boundary task-shaped requests are never missed.
+ *  Zero KStar writes either way (a trivial message simply never routes). */
+export function isObviouslyTrivial(text: string | undefined): boolean {
+  const trimmed = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!trimmed) return true;
+  return TRIVIAL_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+/** Detect whether a user message is a task-shaped request. Kept for
+ *  compatibility: the host routing line now uses isObviouslyTrivial +
+ *  the model judgement; this keyword-based detector remains as a fast
+ *  pre-check helper (and for tests / non-model contexts). */
 export function detectTaskIntent(text: string | undefined): TaskIntentResult {
   const trimmed = String(text || '').replace(/\s+/g, ' ').trim();
   if (!trimmed) return { isTask: false };

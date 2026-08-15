@@ -1326,6 +1326,9 @@ function cidKey(uid: string, cid: string): string {
   return `${uid}:${cid}`;
 }
 let _enqueueAdmissionGateForTest: (() => Promise<void>) | null = null;
+let _hostRoutingJudgeForTest:
+  ((message: string, openRequirement?: { requirementId: string; goalText: string }) => Promise<ModelRoutingVerdict | null>) | null =
+  null;
 let _actorTurnPreBodyHookForTest:
   ((state: CidState, actor: Actor, item: QueueItem) => Promise<void>) | null =
   null;
@@ -1348,6 +1351,12 @@ export function _setEnqueueAdmissionGateForTest(
   gate: (() => Promise<void>) | null,
 ): void {
   _enqueueAdmissionGateForTest = gate;
+}
+
+export function _setHostRoutingJudgeForTest(
+  judge: ((message: string, openRequirement?: { requirementId: string; goalText: string }) => Promise<ModelRoutingVerdict | null>) | null,
+): void {
+  _hostRoutingJudgeForTest = judge;
 }
 
 export function _setActorTurnPreBodyHookForTest(
@@ -7985,74 +7994,85 @@ function _toolError(error: string): { content: string; isError: true } {
  * Zero-write guarantee preserved: greetings/status/trivia are not tasks, and
  * an already-open task is never duplicated.
  */
-/** Parse the Commander's continuation judgement:
- *  `<kstar-judge>{"continuation":true|false}</kstar-judge>`. */
-export function parseContinuationJudgement(text: string | undefined): boolean | null {
+/** Parse the Commander's routing judgement:
+ *  `<kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge>`.
+ *  Returns null when absent/malformed. */
+export function parseContinuationJudgement(text: string | undefined): { isTask: boolean; continuation: boolean } | null {
   const match = String(text || '').match(/<kstar-judge>([\s\S]*?)<\/kstar-judge>/);
   if (!match) return null;
   try {
-    const value = JSON.parse(match[1].trim()) as { continuation?: unknown };
-    return typeof value.continuation === 'boolean' ? value.continuation : null;
+    const value = JSON.parse(match[1].trim()) as { is_task?: unknown; continuation?: unknown };
+    if (typeof value.is_task !== 'boolean') return null;
+    return {
+      isTask: value.is_task,
+      continuation: value.continuation === true,
+    };
   } catch {
     return null;
   }
 }
 
-/** Default ceiling for the model-judged continuation question. */
-export const CONTINUATION_JUDGE_TIMEOUT_MS = 30_000;
+/** Default ceiling for the model-judged routing question. */
+export const CONTINUATION_JUDGE_TIMEOUT_MS = 20_000;
+
+export interface ModelRoutingVerdict {
+  isTask: boolean;
+  continuation: boolean;
+}
+
+const ROUTING_JUDGE_PROMPT = [
+  'You are the routing judge for a single user message.',
+  'Decide whether the message is a real task, and (when a tracked task is open) whether it CONTINUES that task or starts a NEW one.',
+  'Return exactly one JSON object and no markdown: {"is_task":true|false,"continuation":true|false}.',
+  'is_task=false for greetings, thanks, acknowledgements, status questions, and small talk.',
+  'continuation=true when the message refines/follows-up/corrects the open task ("这个报告再加一节"); continuation=false when it is a different request while an older task exists ("帮我写个 Python 脚本" while a report task is open).',
+  'A task does not need a strong verb: "帮我看看这个文件哪里不对" is a task.',
+].join('\n');
 
 /**
- * Model-judged continuation (user-behavior closure): when a task-shaped user
- * message arrives while a tracked task is open, ask the Commander (with full
- * context) whether this message CONTINUES the tracked task or starts a NEW
- * one. Returns true=continue, false=new-task, null=timeout (caller decides
- * the safe default). Bounded wait; never blocks the turn forever.
+ * Model-judged routing (mixed deterministic + model): for any non-trivial
+ * user message, a dedicated runner (NOT the busy commander turn — a bus
+ * enqueue would deadlock because the current turn holds the queue) judges
+ * whether the message is a task and, when one is open, whether it continues
+ * it. Returns the verdict, or null on model failure (caller applies the safe
+ * default). Bounded by CONTINUATION_JUDGE_TIMEOUT_MS.
  */
-async function judgeTaskContinuation(
+async function judgeModelRouting(
   uid: string,
   cid: string,
-  requirementId: string,
-  currentGoal: string,
   newMessage: string,
-  timeoutMs: number = CONTINUATION_JUDGE_TIMEOUT_MS,
-): Promise<boolean | null> {
+  openRequirement?: { requirementId: string; goalText: string },
+): Promise<ModelRoutingVerdict | null> {
+  if (_hostRoutingJudgeForTest) {
+    return _hostRoutingJudgeForTest(newMessage, openRequirement);
+  }
   try {
-    const bus = await import('../group_chat/bus');
-    const unsubscribe = bus.subscribe(uid, cid, (event) => {
-      if (event.type !== 'message') return;
-      const parsed = parseContinuationJudgement(String(event.msg?.text || ''));
-      if (parsed !== null) resolve(parsed);
+    const { hasConfiguredModel } = await import('../auth');
+    if (!hasConfiguredModel().configured) return null;
+    const { buildRunner } = await import('../../model/core-agent/runner');
+    const { runner } = await buildRunner({
+      sessionId: `kstar-routing-${cid}`,
+      userId: uid,
+      systemPrompt: ROUTING_JUDGE_PROMPT,
+      disableTools: true,
+      ephemeralSession: true,
+      skillList: [],
     });
-    let resolve: (value: boolean | null) => void;
-    let settled = false;
-    const done = new Promise<boolean | null>((res) => { resolve = res; });
-    const timer = setTimeout(() => {
-      if (!settled) { settled = true; resolve(null); }
-    }, Math.max(1, Number(timeoutMs) || CONTINUATION_JUDGE_TIMEOUT_MS));
-    try {
-      await bus.enqueueCommanderControlMessage({
-        userId: uid,
-        cid,
-        displayText: '',
-        control: {
-          type: 'kstar_continuation_judge',
-          requirementId,
-          currentGoal: String(currentGoal || '').slice(0, 1_000),
-          newMessage: String(newMessage || '').slice(0, 1_000),
-        },
-      });
-    } catch (error) {
-      log.warn(`kstar continuation judge enqueue degraded cid=${cid}: ${(error as Error).message}`);
-      clearTimeout(timer);
-      unsubscribe();
-      return null;
-    }
-    const verdict = await done;
-    clearTimeout(timer);
-    unsubscribe();
-    return verdict;
+    const task = await Promise.race([
+      runner.run({
+        message: JSON.stringify({
+          newMessage: String(newMessage || '').slice(0, 2_000),
+          ...(openRequirement ? { openTaskGoal: String(openRequirement.goalText).slice(0, 1_000) } : {}),
+        }),
+        thinkingLevel: 'off',
+        cacheRetention: 'none',
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), CONTINUATION_JUDGE_TIMEOUT_MS)),
+    ]);
+    if (!task || task.meta.aborted || task.meta.error) return null;
+    return parseContinuationJudgement(task.text);
   } catch (error) {
-    log.warn(`kstar continuation judge degraded cid=${cid}: ${(error as Error).message}`);
+    log.warn(`kstar model routing degraded cid=${cid}: ${(error as Error).message}`);
     return null;
   }
 }
@@ -8064,58 +8084,53 @@ async function hostRouteTaskTurn(
   sourceMessageId: string | undefined,
   workspaceId?: string,
 ): Promise<void> {
-  const { detectTaskIntent } = await import('../kstar/task-intent');
-  if (!detectTaskIntent(messageText).isTask) return;
+  // Mixed routing: fast deterministic filter skips OBVIOUS trivial messages
+  // (greetings/status/emoji) with zero model calls and zero KStar writes;
+  // everything else goes to the model judgement which decides is_task AND
+  // continuation in one call with full conversation context.
+  const { isObviouslyTrivial } = await import('../kstar/task-intent');
+  if (isObviouslyTrivial(messageText)) return;
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
     const lifecycle = await readKstarTaskLifecycle(uid, cid);
-    if (lifecycle.task && lifecycle.requirement) {
-      // Model-judged continuation: ask the Commander whether this message
-      // CONTINUES the open task or starts a NEW one. new-task → close the
-      // old task (finish path → requirement precipitation) and let this
-      // message open a fresh task below. continue → do nothing (the episode
-      // attaches to the current requirement via closure). Timeout → safe
-      // default CONTINUE (never close a task on uncertainty).
-      if (lifecycle.requirement.status === 'open') {
-        const judge = await judgeTaskContinuation(
-          uid,
-          cid,
-          lifecycle.requirement.id,
-          lifecycle.requirement.goalText,
-          messageText,
-        );
-        if (judge === false) {
-          const { executeKstarControl } = await import('../kstar/control-service');
-          await executeKstarControl(
-            {
-              userId: uid,
-              conversationId: cid,
-              ...(sourceMessageId ? { sourceMessageId } : {}),
-              ...(workspaceId ? { workspaceId } : {}),
-              allowedToolNames: new Set(['kstar_control']),
-            },
-            {
-              operation: 'finish',
-              idempotencyKey: `host-continuation-${cid}-${sourceMessageId || Date.now()}`,
-              result: {
-                finalStatus: 'completed',
-                finalText: String(messageText || '').slice(0, 4_000),
-                producedFiles: [],
-                acceptanceEvidence: [],
-                closeReason: 'user moved to a new task',
-              },
-            },
-          );
-          log.info('kstar continuation judged NEW task; old task closed', {
-            cid: maskId(cid),
-            requirementId: lifecycle.requirement.id,
-          });
-        } else {
-          return; // continue or timeout → keep the open task
-        }
-      } else {
-        return;
-      }
+    const openRequirement = lifecycle.requirement && lifecycle.requirement.status === 'open'
+      ? { requirementId: lifecycle.requirement.id, goalText: lifecycle.requirement.goalText }
+      : undefined;
+    const verdict = await judgeModelRouting(uid, cid, messageText, openRequirement);
+    if (!verdict) return; // timeout/enqueue failure → no routing decision (safe no-op)
+    if (!verdict.isTask) return; // model says not a task → zero KStar writes
+
+    if (openRequirement && verdict.continuation === false) {
+      // Model judged: user moved to a NEW task while one was open. Close the
+      // old task via the finish path (requirement precipitation runs) and
+      // let this message open a fresh task below.
+      const { executeKstarControl } = await import('../kstar/control-service');
+      await executeKstarControl(
+        {
+          userId: uid,
+          conversationId: cid,
+          ...(sourceMessageId ? { sourceMessageId } : {}),
+          ...(workspaceId ? { workspaceId } : {}),
+          allowedToolNames: new Set(['kstar_control']),
+        },
+        {
+          operation: 'finish',
+          idempotencyKey: `host-continuation-${cid}-${sourceMessageId || Date.now()}`,
+          result: {
+            finalStatus: 'completed',
+            finalText: String(messageText || '').slice(0, 4_000),
+            producedFiles: [],
+            acceptanceEvidence: [],
+            closeReason: 'user moved to a new task',
+          },
+        },
+      );
+      log.info('kstar model routing judged NEW task; old task closed', {
+        cid: maskId(cid),
+        requirementId: openRequirement.requirementId,
+      });
+    } else if (openRequirement && verdict.continuation === true) {
+      return; // continues the open task → keep it
     }
     const { executeKstarControl } = await import('../kstar/control-service');
     const goal = String(messageText || '').replace(/\s+/g, ' ').trim().slice(0, 4_000);
@@ -10810,15 +10825,16 @@ export interface EnqueueCommanderControlInput {
     episodeId: string;
     evidence: Record<string, unknown>;
   } | {
-    /** Model-judged continuation (user-behavior closure): when a task-shaped
-     *  user message arrives while a tracked task is open, the host asks the
-     *  Commander whether this message CONTINUES the tracked task or starts a
-     *  NEW one. Reply: <kstar-judge>{"continuation":true|false}</kstar-judge>.
-     *  continuation=false closes the old task (precipitation) and the message
-     *  opens a fresh task. */
+    /** Model-judged routing (mixed deterministic+model): for any non-trivial
+     *  user message, the host asks the Commander to judge BOTH whether the
+     *  message is a task AND (when a task is open) whether it continues it.
+     *  Reply: <kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge>.
+     *  is_task=false → zero KStar writes (trivial/boundary chat);
+     *  continuation=false closes the old task (precipitation) and the
+     *  message opens a fresh task. */
     type: 'kstar_continuation_judge';
-    requirementId: string;
-    currentGoal: string;
+    requirementId?: string;
+    currentGoal?: string;
     newMessage: string;
   };
 }

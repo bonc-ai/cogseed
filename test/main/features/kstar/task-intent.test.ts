@@ -26,4 +26,17 @@ describe('KStar host task-intent detection (layer 1)', () => {
     expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).toContain('Host routing note');
     expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).toContain('kstar_control');
   });
+
+  it('isObviouslyTrivial filters greetings/status/emoji deterministically', () => {
+    const { isObviouslyTrivial } = require('../../../../src/main/features/kstar/task-intent');
+    expect(isObviouslyTrivial('你好')).toBe(true);
+    expect(isObviouslyTrivial('谢谢，辛苦了')).toBe(true);
+    expect(isObviouslyTrivial('到哪一步了？')).toBe(true);
+    expect(isObviouslyTrivial('👍')).toBe(true);
+    expect(isObviouslyTrivial('')).toBe(true);
+    expect(isObviouslyTrivial(undefined)).toBe(true);
+    // Boundary task-shaped messages are NOT filtered by the fast path.
+    expect(isObviouslyTrivial('帮我看看这个文件哪里不对')).toBe(false);
+    expect(isObviouslyTrivial('审查一下 bus.ts 的守卫实现')).toBe(false);
+  });
 });
