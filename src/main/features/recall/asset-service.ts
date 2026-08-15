@@ -587,6 +587,59 @@ export async function correctMisfiledSeedMaturity(userId: string): Promise<numbe
   return corrected;
 }
 
+/** 作用域中文标签（与 renderer _abilityAssetScopeLabel 一致；展示层另有映射，
+ *  这里仅用于迁移时生成中文标题）。 */
+export function userScopeLabel(scope: string): string {
+  const map: Record<string, string> = {
+    report: '报告类任务', code: '代码类任务', review: '审查类任务',
+    product: '产品类任务', general: '通用',
+  };
+  return map[scope] || scope;
+}
+
+/** 一次性幂等迁移（2026-08-15 UI 优化）：旧 KStar 线资产带英文技术标题
+ *  （'Reusable experience lesson (requirement-level)' 等），用户看不懂。
+ *  只改写匹配的 title / statement 前缀，内容/证据/版本不动。可重复运行。 */
+export async function migrateLegacyUserFacingTitles(userId: string): Promise<number> {
+  let migrated = 0;
+  const titleRules: Array<[RegExp, (scope: string) => string]> = [
+    [/^Reusable experience lesson \(requirement-level\)$/, (s) => `可复用经验（${userScopeLabel(s)}）`],
+    [/^KSTAR rule gap candidate \(requirement-level\)$/, (s) => `待修正的经验（${userScopeLabel(s)}）`],
+    [/^Reusable workflow lesson$/, () => '可复用经验'],
+    [/^Verified multi-tool workflow$/, () => '已验证的工作流程'],
+  ];
+  for (const asset of await listAbilityAssets(userId)) {
+    if (asset.status === 'revoked' || asset.status === 'purged') continue;
+    const scope = String(asset.scope || '');
+    let nextTitle: string | undefined;
+    for (const [pattern, build] of titleRules) {
+      if (pattern.test(String(asset.title || ''))) { nextTitle = build(scope); break; }
+    }
+    const gap = String(asset.statement || '').match(/^For similar tasks, address this [a-z_ ]+: ([\s\S]*)$/);
+    const nextStatement = gap ? `遇到同类情况时，应注意修正：${gap[1].trim()}` : undefined;
+    if (!nextTitle && !nextStatement) continue;
+    try {
+      await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
+        if (!raw) throw new Error('recall ability asset not found');
+        const current = asAsset(raw);
+        if (nextTitle) current.title = nextTitle;
+        if (nextStatement) current.statement = nextStatement;
+        current.updatedAt = new Date().toISOString();
+        return current;
+      });
+      await appendAudit(userId, asset.id, 'updated', {
+        actor: 'system',
+        note: 'legacy English title → user-facing Chinese (2026-08-15)',
+      });
+      migrated += 1;
+    } catch (err) {
+      log.warn(`ability asset title migration skipped id=${asset.id}: ${(err as Error).message}`);
+    }
+  }
+  if (migrated) log.info(`ability asset legacy titles migrated count=${migrated}`);
+  return migrated;
+}
+
 export async function setAbilityAssetCrossScopeConfirmation(
   userId: string,
   assetId: string,
