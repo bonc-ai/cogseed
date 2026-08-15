@@ -1,6 +1,6 @@
 # KStar 沉淀统一候选池 + 语义去重设计（v2 整合版）
 
-- 日期：2026-08-15（v1 管线统一；v2 语义去重；v3 自动闭环 + 晋升前查重）
+- 日期：2026-08-15（v1 管线统一；v2 语义去重；v3 自动闭环 + 晋升前查重；v3.1 质量融合）
 - 分支：`codex/commander-centric-kstar`（已合并 develop 39 提交）
 - 状态：Design Review（已确认：统一候选池、语义去重、自动闭环、晋升前资产查重）
 - 关联：P3394 认知资产全生命周期规范 doc-v0.1（§3.1 统一链路、§8 候选资格、§9 轻量确认、§15 重复/补充/冲突）
@@ -221,12 +221,12 @@ capture 静默窗口结束 → 提取同内容 → 入池查重 → 候选池有
 
 1. 新增共享函数 `promoteWithSemanticDedup(userId, candidateId, opts)`：
    - 晋升前对**资产库**做语义查重（`findSemanticDuplicate`，阈值 ≥0.85）
-   - 命中已有资产 → 不新建，`sourceRefs`/`evidenceRefs` 并入已有资产，候选标记 `mergedIntoAssetId`，返回已有资产
+   - 命中已有资产 → 不新建，按 §4.9 质量融合策略合并，候选标记 `mergedIntoAssetId`，返回已有/融合资产
    - 未命中 → 走原 `promoteRecallCandidate`
 2. **两条线的晋升都走该出口**：
    - KStar：`precipitateKstarCandidatesAsAssets` 内部
    - capture：`automaticallyApplyReviewableCandidates` 中 `autoApplyRecallCandidate` 替换为 `promoteWithSemanticDedup`（或注入选项，改动 capture 调用点）
-3. 效果：无论哪条线先晋升、措辞如何不同，**同一语义最多一份资产**；后到者合并证据。
+3. 效果：无论哪条线先晋升、措辞如何不同，**同一语义最多一份资产**；后到者按质量融合。
 
 ### 4.8 时序与一致性保证
 
@@ -234,8 +234,55 @@ capture 静默窗口结束 → 提取同内容 → 入池查重 → 候选池有
 |---|---|---|---|
 | capture 先晋升，KStar 后入池 | 命中资产 → 并入 | — | 一份资产 ✅ |
 | KStar 先晋升，capture 后晋升 | 命中资产 → 并入 | — | 一份资产 ✅ |
-| 两候选措辞不同语义相同，先后晋升 | 各不命中（措辞差异） | **晋升时命中资产 → 并入** | 一份资产 ✅ |
+| 两候选措辞不同语义相同，先后晋升 | 各不命中（措辞差异） | **晋升时命中资产 → 融合** | 一份资产 ✅ |
 | 同 run 内多条相似候选 | saveRecallCandidate 指纹/语义合并 | — | 一份候选 ✅ |
+
+### 4.9 基于质量的融合策略（重复时总结成一条更好的）
+
+**问题**：简单"证据并入已有资产"假设已有资产一定更好。实际上后到的候选可能：
+- 内容更完整（judgment 更长、含具体步骤/例外/触发条件）
+- 证据更强（更多 evidenceRefs、含用户教学信号、五类来源覆盖更全）
+- 更新（来自最近任务，可能覆盖旧表述）
+- 已有资产可能成熟度更高（transfer_validated）但内容旧
+
+**质量评分**（`assetQualityScore(record)`，无现成分数，新增共享函数）：
+
+| 维度 | 权重 | 打分 |
+|---|---|---|
+| 成熟度 maturity | 0.30 | seed=1, bud=2, transfer_validated=3, effectiveness_validated=4, stable=5 |
+| 内容完整度 | 0.25 | 归一化后 statement/judgment 长度；含"何时适用/例外/步骤"等结构加分 |
+| 证据强度 | 0.25 | evidenceRefs 数量 + 来源种类覆盖（conversation/artifact/execution/teaching/external 五类） |
+| 时效性 | 0.10 | 更新时间距今越近越高（线性衰减） |
+| 风险 | 0.10 | low=1.0, medium=0.6, high=0（高不参与自动合并） |
+
+阈值权重均为**未校准常量**（命名集中定义，与投影/语义阈值同批校准）。
+
+**融合规则（语义命中 ≥0.85 时）**：
+
+```
+score(新候选) vs score(已有资产/候选)
+
+A. 新候选质量更高（score 差 ≥ 0.10）
+   → 以新候选内容为主体，合并已有资产的 evidenceRefs/sourceRefs
+   → 若命中资产：生成 update 候选（targetAssetId）走 §15.2 补充流程
+     （不静默覆盖已生效资产——规范：新版本不覆盖旧版本）
+   → 若命中候选：更新候选内容，状态升级（weak → pending_review）
+
+B. 已有资产/候选质量更高或相当
+   → 保留主体，新候选的 evidenceRefs/sourceRefs 并入
+   → 候选标记 mergedInto（资产）/ mergedIntoAssetId（资产）
+
+C. 两者互补（各自含对方没有的关键内容，如 A 有触发条件、B 有例外）
+   → 融合生成一条：judgment = 主体 + 对方独有细节（追加），证据全并
+   → 标记 mergedFrom: [id1, id2]，可审计回滚
+```
+
+**"总结成一条"的产物形态**：
+- 命中候选 → 更新候选（内容+证据合并），无新对象
+- 命中资产 → **不直接改已生效资产**（规范 10.4 版本冻结）；生成"融合 update 候选"（携带合并后内容 + 双证据 + 原资产 targetAssetId），用户确认后形成**新版本**——新旧版本并存，旧 TaskRun 继续引用旧版
+- 极端情况（两候选互不成熟、均 weak_observation）→ 合并为一条 weak_observation，等待更多证据
+
+**与弱观察升级的联动**：重复出现本身是证据——语义命中 ≥0.85 时，无论质量如何，都计入该经验的"出现次数"；≥2 次 → weak_observation 升级 pending_review（§4.4 弱观察升级不变）。
 
 ---
 
@@ -318,6 +365,10 @@ KStar lesson / capture 提取
 | **语义去重：措辞不同同规则** | "只要 3 条要点" vs "用 N 条要点说明 X" → 同候选，证据合并，仅一条 |
 | **语义去重：候选 vs 资产（入池时）** | 新 lesson 与既有资产相似 ≥0.85 → 不新建候选，证据并入资产 |
 | **晋升前语义查重（时序竞争）** | 候选 A 已晋升为资产 X；候选 B（措辞不同同语义）晋升 → 命中 X → 不新建，证据并入，仅一份资产 |
+| **质量融合：新候选质量更高** | 新候选 statement 更长/证据更多 vs 已有资产 → 生成 update 候选（targetAssetId），不静默覆盖；内容+证据合并为新版本 |
+| **质量融合：已有资产质量更高** | 新候选并入已有资产证据，候选标记 mergedIntoAssetId，资产不新增 |
+| **质量融合：互补内容** | A 有触发条件、B 有例外 → 融合 judgment（主体+对方独有细节），证据全并，标记 mergedFrom |
+| **版本冻结** | 融合生成新版本后，旧版本保留，旧 TaskRun 仍引用旧版 |
 | **弱观察升级** | 同规则多次出现（≥2 次语义命中）→ weak_observation → pending_review |
 | 高风险留待确认 | risk=high → 候选 review_ready，资产不写，UI 可见 |
 | 证据不足弱观察 | forceWeakObservation → weak_observation，不打扰 |
@@ -357,3 +408,6 @@ KStar lesson / capture 提取
 | OQ-7 | 静默窗口时长默认值（30min）是否合适 | 命名常量 `AUTO_CLOSE_QUIET_MS`，可校准；任务级闭环不宜过短 |
 | OQ-8 | 自动闭环与用户显式 finish 的幂等 | 走同一 `finish` 控制路径，idempotencyKey 区分来源；已闭环任务不重复沉淀 |
 | OQ-9 | 自动闭环后用户回来继续（continuation）的接续体验 | 开新任务 + 投影接续；原任务保持已沉淀（规范 §12.1 快照语义） |
+| OQ-10 | 质量评分各维度权重（0.30/0.25/0.25/0.10/0.10）未校准 | 命名常量集中定义，与语义阈值同批校准 |
+| OQ-11 | 融合生成的 update 候选是否需要用户确认 | 走规范 §15.2 补充流程：内容变化 → 用户确认形成新版本（默认）；同语义纯证据合并 → 自动（§4.9 B） |
+| OQ-12 | 融合 judgment 的追加规则（主体+独有细节）是否会引入噪音 | 长度上限 + 结构提示（触发条件/例外/步骤）；超限截断并记录 mergedFrom 可回滚 |
