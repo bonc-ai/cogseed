@@ -228,14 +228,12 @@ Reply with EXACTLY one `<kstar-review>{...}</kstar-review>` block (strict JSON, 
 - `lesson` is optional but valuable: a reusable pattern/pitfall/method discovered DURING execution, even on a fully successful task (met_expected). Omit for routine work.
 - Never invent tests, files, feedback, or outcomes. Use your actual context of the conversation.
 
-### Task continuation vs new task (closure signal)
+### Task continuation vs new task (judgement)
 
-After you finish handling a task-shaped user message, decide whether it CONTINUED the currently tracked task (refinement, follow-up, correction, extra detail on the same goal) or started a NEW task (a different goal).
-
-- If it is a NEW task (the user moved on to a different request while an older tracked task exists), append EXACTLY one marker to your reply, after the answer:
-  `<kstar-closure>{"new_task":true,"reason":"<one line why this is a new task>"}</kstar-closure>`
-- If it continues the current task, do NOT emit the marker (or emit `<kstar-closure>{"new_task":false}</kstar-closure>`).
-- Use your full conversation context: "这个报告再加一节" continues; "帮我写个 Python 脚本处理 CSV" while a report task is open is a new task.
+When the host sends a `<kstar-control>` message with `"type":"kstar_continuation_judge"`, decide whether the incoming user message CONTINUES the currently tracked task (refinement, follow-up, correction, extra detail on the same goal) or starts a NEW task (a different goal). Reply with EXACTLY one `<kstar-judge>{"continuation":true|false}</kstar-judge>` block and nothing else around it:
+- `true` = the message continues the tracked task (keep it open);
+- `false` = the user moved on to a different request while an older tracked task exists (the host will close the old task and open a new one).
+Use your full conversation context: "这个报告再加一节" continues; "帮我写个 Python 脚本处理 CSV" while a report task is open is a new task.
 
 ### kstar_control call shapes (exact fields)
 

@@ -5272,18 +5272,6 @@ async function runActorTurnBody(
     });
   }
 
-  // Commander closure signal (model-judged continuation): after the
-  // Commander's reply is persisted, check whether it judged the user message
-  // as a NEW task. If so, close the old tracked task (drain → requirement
-  // precipitation) — best-effort, never breaks the turn.
-  if (actor.kind === "commander" && persistedMsg && outcome.kind === "persist" && !errText && !aborted) {
-    try {
-      await handleCommanderClosureSignal(uid, cid, persistedMsg.text);
-    } catch (error) {
-      log.warn(`kstar closure signal post-turn degraded cid=${cid}: ${(error as Error).message}`);
-    }
-  }
-
   // Ephemeral worker (anonymous run_worker, run via runNestedDispatch) is
   // one-shot: purge its throwaway session so it doesn't accumulate on disk.
   // It was never a roster member nor in the worker map (synthetic WorkerState),
@@ -7983,74 +7971,7 @@ function _toolError(error: string): { content: string; isError: true } {
   return { content: JSON.stringify({ ok: false, error }), isError: true };
 }
 
-/** Extract the Commander's closure signal from a reply: the Commander emits
- *  `<kstar-closure>{"new_task":true|false,...}</kstar-closure>` when it judges
- *  that a user message started a NEW task rather than continuing the tracked
- *  one (model-judged continuation, per product decision). */
-export function parseCommanderClosureSignal(text: string | undefined): { newTask: boolean; reason?: string } | null {
-  const match = String(text || '').match(/<kstar-closure>([\s\S]*?)<\/kstar-closure>/);
-  if (!match) return null;
-  try {
-    const value = JSON.parse(match[1].trim()) as { new_task?: unknown; reason?: unknown };
-    if (typeof value.new_task !== 'boolean') return null;
-    return {
-      newTask: value.new_task,
-      ...(typeof value.reason === 'string' && value.reason.trim() ? { reason: value.reason.trim() } : {}),
-    };
-  } catch {
-    return null;
-  }
-}
 
-/**
- * Handle the Commander's closure signal after a turn: when it judged the
- * user message as a NEW task while a tracked task was open, close the old
- * task (drain → requirement-level precipitation) and let the next user
- * message open the fresh task. Best-effort — failures never break the turn.
- */
-async function handleCommanderClosureSignal(
-  uid: string,
-  cid: string,
-  replyText: string | undefined,
-): Promise<void> {
-  const signal = parseCommanderClosureSignal(replyText);
-  if (!signal || !signal.newTask) return;
-  try {
-    const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
-    const lifecycle = await readKstarTaskLifecycle(uid, cid);
-    if (!lifecycle.task || !lifecycle.requirement) return;
-    if (lifecycle.requirement.status !== 'open') return;
-    // Close the old task exactly like kstar_control finish: requirement →
-    // waiting_review, task → closing, taskComplete → true, then the
-    // requirement-level precipitation runs (aggregated lesson → asset).
-    const { executeKstarControl } = await import('../kstar/control-service');
-    const result = await executeKstarControl(
-      {
-        userId: uid,
-        conversationId: cid,
-        allowedToolNames: new Set(['kstar_control']),
-      },
-      {
-        operation: 'finish',
-        idempotencyKey: `host-closure-${cid}-${Date.now()}`,
-        result: {
-          finalStatus: 'completed',
-          finalText: String(replyText || '').slice(0, 4_000),
-          producedFiles: [],
-          acceptanceEvidence: [],
-          closeReason: 'user moved to a new task',
-        },
-      },
-    );
-    log.info('kstar closure signal closed the old task', {
-      cid: maskId(cid),
-      ok: result.ok,
-      reason: signal.reason,
-    });
-  } catch (error) {
-    log.warn(`kstar closure signal handling degraded cid=${cid}: ${(error as Error).message}`);
-  }
-}
 
 /**
  * Deterministic host routing (the fix for model-dependent routing): when a
@@ -8064,6 +7985,78 @@ async function handleCommanderClosureSignal(
  * Zero-write guarantee preserved: greetings/status/trivia are not tasks, and
  * an already-open task is never duplicated.
  */
+/** Parse the Commander's continuation judgement:
+ *  `<kstar-judge>{"continuation":true|false}</kstar-judge>`. */
+export function parseContinuationJudgement(text: string | undefined): boolean | null {
+  const match = String(text || '').match(/<kstar-judge>([\s\S]*?)<\/kstar-judge>/);
+  if (!match) return null;
+  try {
+    const value = JSON.parse(match[1].trim()) as { continuation?: unknown };
+    return typeof value.continuation === 'boolean' ? value.continuation : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Default ceiling for the model-judged continuation question. */
+export const CONTINUATION_JUDGE_TIMEOUT_MS = 30_000;
+
+/**
+ * Model-judged continuation (user-behavior closure): when a task-shaped user
+ * message arrives while a tracked task is open, ask the Commander (with full
+ * context) whether this message CONTINUES the tracked task or starts a NEW
+ * one. Returns true=continue, false=new-task, null=timeout (caller decides
+ * the safe default). Bounded wait; never blocks the turn forever.
+ */
+async function judgeTaskContinuation(
+  uid: string,
+  cid: string,
+  requirementId: string,
+  currentGoal: string,
+  newMessage: string,
+  timeoutMs: number = CONTINUATION_JUDGE_TIMEOUT_MS,
+): Promise<boolean | null> {
+  try {
+    const bus = await import('../group_chat/bus');
+    const unsubscribe = bus.subscribe(uid, cid, (event) => {
+      if (event.type !== 'message') return;
+      const parsed = parseContinuationJudgement(String(event.msg?.text || ''));
+      if (parsed !== null) resolve(parsed);
+    });
+    let resolve: (value: boolean | null) => void;
+    let settled = false;
+    const done = new Promise<boolean | null>((res) => { resolve = res; });
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; resolve(null); }
+    }, Math.max(1, Number(timeoutMs) || CONTINUATION_JUDGE_TIMEOUT_MS));
+    try {
+      await bus.enqueueCommanderControlMessage({
+        userId: uid,
+        cid,
+        displayText: '',
+        control: {
+          type: 'kstar_continuation_judge',
+          requirementId,
+          currentGoal: String(currentGoal || '').slice(0, 1_000),
+          newMessage: String(newMessage || '').slice(0, 1_000),
+        },
+      });
+    } catch (error) {
+      log.warn(`kstar continuation judge enqueue degraded cid=${cid}: ${(error as Error).message}`);
+      clearTimeout(timer);
+      unsubscribe();
+      return null;
+    }
+    const verdict = await done;
+    clearTimeout(timer);
+    unsubscribe();
+    return verdict;
+  } catch (error) {
+    log.warn(`kstar continuation judge degraded cid=${cid}: ${(error as Error).message}`);
+    return null;
+  }
+}
+
 async function hostRouteTaskTurn(
   uid: string,
   cid: string,
@@ -8076,7 +8069,54 @@ async function hostRouteTaskTurn(
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
     const lifecycle = await readKstarTaskLifecycle(uid, cid);
-    if (lifecycle.task || lifecycle.requirement) return;
+    if (lifecycle.task && lifecycle.requirement) {
+      // Model-judged continuation: ask the Commander whether this message
+      // CONTINUES the open task or starts a NEW one. new-task → close the
+      // old task (finish path → requirement precipitation) and let this
+      // message open a fresh task below. continue → do nothing (the episode
+      // attaches to the current requirement via closure). Timeout → safe
+      // default CONTINUE (never close a task on uncertainty).
+      if (lifecycle.requirement.status === 'open') {
+        const judge = await judgeTaskContinuation(
+          uid,
+          cid,
+          lifecycle.requirement.id,
+          lifecycle.requirement.goalText,
+          messageText,
+        );
+        if (judge === false) {
+          const { executeKstarControl } = await import('../kstar/control-service');
+          await executeKstarControl(
+            {
+              userId: uid,
+              conversationId: cid,
+              ...(sourceMessageId ? { sourceMessageId } : {}),
+              ...(workspaceId ? { workspaceId } : {}),
+              allowedToolNames: new Set(['kstar_control']),
+            },
+            {
+              operation: 'finish',
+              idempotencyKey: `host-continuation-${cid}-${sourceMessageId || Date.now()}`,
+              result: {
+                finalStatus: 'completed',
+                finalText: String(messageText || '').slice(0, 4_000),
+                producedFiles: [],
+                acceptanceEvidence: [],
+                closeReason: 'user moved to a new task',
+              },
+            },
+          );
+          log.info('kstar continuation judged NEW task; old task closed', {
+            cid: maskId(cid),
+            requirementId: lifecycle.requirement.id,
+          });
+        } else {
+          return; // continue or timeout → keep the open task
+        }
+      } else {
+        return;
+      }
+    }
     const { executeKstarControl } = await import('../kstar/control-service');
     const goal = String(messageText || '').replace(/\s+/g, ' ').trim().slice(0, 4_000);
     if (!goal) return;
@@ -10769,6 +10809,17 @@ export interface EnqueueCommanderControlInput {
     type: 'kstar_review_request';
     episodeId: string;
     evidence: Record<string, unknown>;
+  } | {
+    /** Model-judged continuation (user-behavior closure): when a task-shaped
+     *  user message arrives while a tracked task is open, the host asks the
+     *  Commander whether this message CONTINUES the tracked task or starts a
+     *  NEW one. Reply: <kstar-judge>{"continuation":true|false}</kstar-judge>.
+     *  continuation=false closes the old task (precipitation) and the message
+     *  opens a fresh task. */
+    type: 'kstar_continuation_judge';
+    requirementId: string;
+    currentGoal: string;
+    newMessage: string;
   };
 }
 
