@@ -341,6 +341,65 @@ describe('KStar Commander control service', () => {
     }));
   });
 
+  it('accepts a STRINGIFIED forecast payload (deepseek emits nested objects as JSON strings) and resolves real ids from state', async () => {
+    const seeded = await seedOpenControlState();
+    const service = await import('../../../../src/main/features/kstar/control-service');
+    await seeded.store.replaceKstarRequirement('user-a', {
+      ...seeded.requirement,
+      projectionId: 'proj-a',
+      projectionIds: ['proj-a'],
+    });
+    forecastMock.commitCommanderForecast.mockResolvedValue({
+      id: 'wf-string',
+      forecast: { selectedCandidateId: 'path-a' },
+    });
+
+    // Live-observed shape: forecast arrives as a quoted JSON string, and the
+    // model GUESSED ids it cannot know (taskRunId filled with the projection
+    // id). The host must parse the string and resolve real ids from state.
+    const result = await service.executeKstarControl(hostContext(), {
+      operation: 'commit_forecast',
+      idempotencyKey: 'turn-a:forecast-string',
+      forecast: JSON.stringify({
+        taskRunId: 'proj-a', // model-guessed, wrong
+        requirementId: 'ksreq-guessed',
+        projectionId: 'proj-a',
+        taskText: 'Review obsidian code',
+        candidates: [
+          { id: 'path-a', plan: ['explore'], expectedTools: ['list_files'], expectedActors: ['commander'], predictedResult: 'report' },
+          { id: 'path-b', plan: ['read'], expectedTools: ['read_file'], expectedActors: ['commander'], predictedResult: 'report' },
+        ],
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, status: 'forecast_committed', forecastId: 'wf-string' });
+    // The host resolved REAL ids from state, not the model's guesses.
+    expect(forecastMock.commitCommanderForecast).toHaveBeenCalledWith('user-a', expect.objectContaining({
+      taskRunId: seeded.task.id,
+      requirementId: seeded.requirement.id,
+      projectionId: 'proj-a',
+      taskText: seeded.requirement.goalText,
+    }));
+  });
+
+  it('rejects a stringified forecast whose payload is not valid JSON', async () => {
+    const seeded = await seedOpenControlState();
+    const service = await import('../../../../src/main/features/kstar/control-service');
+    await seeded.store.replaceKstarRequirement('user-a', {
+      ...seeded.requirement,
+      projectionId: 'proj-a',
+      projectionIds: ['proj-a'],
+    });
+
+    const result = await service.executeKstarControl(hostContext(), {
+      operation: 'commit_forecast',
+      idempotencyKey: 'turn-a:forecast-bad-string',
+      forecast: 'not json at all',
+    });
+
+    expect(result).toMatchObject({ ok: false, code: 'kstar_control_invalid_input' });
+  });
+
   it('switches to a new Task on task:create, closes the old one, and precipitates requirement-level assets (B2)', async () => {
     const seeded = await seedOpenControlState();
     // Seed one episode + learning review so precipitation has evidence.

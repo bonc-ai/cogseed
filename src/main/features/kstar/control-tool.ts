@@ -32,8 +32,8 @@ const INPUT_SCHEMA: Record<string, unknown> = {
       description: [
         'Explicit KStar lifecycle operation.',
         'upsert_state: create/open a tracked task — requires task.operation ("create" for a new task) and requirement.operation + goalText.',
-        'request_projection: preload assets for the current requirement — requires projection { requirementId, purpose, taskText }.',
-        'commit_forecast: after the projection is confirmed, submit 2-4 candidates — requires forecast { taskRunId, requirementId, projectionId, candidates, taskText }.',
+        'request_projection: preload assets for the current requirement — requires projection { purpose, taskText } (requirementId optional; the host resolves it from current state).',
+        'commit_forecast: after the projection is confirmed, submit 2-4 candidates — requires forecast { candidates (2-4 objects with id/plan/expectedTools/expectedActors/predictedResult), constraints?, acceptanceCriteria? }. Do NOT supply taskRunId/requirementId/projectionId — the host resolves them from current state and ignores guessed values.',
         'finish: close the loop with terminal evidence — requires result { finalStatus, finalText, producedFiles, acceptanceEvidence }.',
         'abandon: drop the task — requires result { closeReason }.',
       ].join(' '),
@@ -79,24 +79,24 @@ const INPUT_SCHEMA: Record<string, unknown> = {
     projection: {
       type: 'object',
       properties: {
-        requirementId: { type: 'string' },
+        requirementId: { type: 'string', description: 'Optional — the host resolves the current requirement from state when absent.' },
         purpose: { type: 'string', maxLength: 120 },
         taskText: { type: 'string', maxLength: 4000 },
       },
-      required: ['requirementId', 'purpose'],
+      required: ['purpose'],
       additionalProperties: false,
     },
     forecast: {
       type: 'object',
       properties: {
-        taskRunId: { type: 'string' },
-        requirementId: { type: 'string' },
-        projectionId: { type: 'string' },
+        taskRunId: { type: 'string', description: 'Deprecated — host resolves from state; guessed values ignored.' },
+        requirementId: { type: 'string', description: 'Deprecated — host resolves from state; guessed values ignored.' },
+        projectionId: { type: 'string', description: 'Deprecated — host resolves from state; guessed values ignored.' },
         candidates: { type: 'array', minItems: 2, maxItems: 4, items: { type: 'object' } },
         constraints: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 1000 } },
         acceptanceCriteria: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 1000 } },
       },
-      required: ['taskRunId', 'requirementId', 'projectionId', 'candidates'],
+      required: ['candidates'],
       additionalProperties: false,
     },
     result: {

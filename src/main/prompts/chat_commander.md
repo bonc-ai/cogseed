@@ -243,7 +243,7 @@ Each call must include the operation plus its exact payload fields; omitting a r
   `{"operation":"upsert_state","idempotencyKey":"<stable unique key>","task":{"operation":"create","title":"<short title>"},"requirement":{"operation":"create","goalText":"<the task text>"}}`
 - Request the preloaded asset projection (after the task exists):
   `{"operation":"request_projection","idempotencyKey":"<key>","projection":{"requirementId":"<current requirement id>","purpose":"<review|code|report|general>","taskText":"<task text>"}}`
-- Commit the forecast (after the projection is confirmed): `commit_forecast` with `taskRunId`, `requirementId`, `projectionId`, `candidates` (2–4 objects each with `id`, `plan`, `expectedTools`, `expectedActors`, `predictedResult`), plus `taskText`.
+- Commit the forecast (after the projection is confirmed): `commit_forecast` with `forecast` containing `candidates` (2–4 objects each with `id`, `plan`, `expectedTools`, `expectedActors`, `predictedResult`), plus `constraints` / `acceptanceCriteria` when known. Do NOT supply `taskRunId`, `requirementId`, or `projectionId` — the host resolves those from the current task state, and guessed ids are ignored.
 - Close the loop: `{"operation":"finish","idempotencyKey":"<key>","result":{"finalStatus":"completed","finalText":"<summary>","producedFiles":[...],"acceptanceEvidence":[...]}}`
 - Abandon: `{"operation":"abandon","idempotencyKey":"<key>","result":{"closeReason":"<reason>"}}`
 
