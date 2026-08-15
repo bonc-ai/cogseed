@@ -24,6 +24,33 @@ describe('KStar host task-intent detection (layer 1)', () => {
   it('renders an advisory hint only for task-shaped messages', () => {
     expect(taskIntentHint('你好')).toBe('');
     expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).toContain('Host routing note');
-    expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).toContain('kstar_control');
+    // The hint never instructs a kstar_control call (world model owns the
+    // lifecycle; the tool is no longer in the Commander's surface).
+    expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).not.toContain('kstar_control');
+  });
+
+  it('never claims tracked state the host did not actually open', () => {
+    // Default (no fact): the note must NOT say "already tracked".
+    const defaultHint = taskIntentHint('审查一下 bus.ts 的守卫实现');
+    expect(defaultHint).not.toContain('already tracked');
+    expect(defaultHint).toContain('did not open');
+    // Only when the host really opened the task may the note say so.
+    const openedHint = taskIntentHint('审查一下 bus.ts 的守卫实现', { hostOpenedTask: true });
+    expect(openedHint).toContain('already tracked');
+    expect(openedHint).toContain('Governance is handled automatically');
+    expect(openedHint).not.toContain('did not open');
+  });
+
+  it('isObviouslyTrivial filters greetings/status/emoji deterministically', () => {
+    const { isObviouslyTrivial } = require('../../../../src/main/features/kstar/task-intent');
+    expect(isObviouslyTrivial('你好')).toBe(true);
+    expect(isObviouslyTrivial('谢谢，辛苦了')).toBe(true);
+    expect(isObviouslyTrivial('到哪一步了？')).toBe(true);
+    expect(isObviouslyTrivial('👍')).toBe(true);
+    expect(isObviouslyTrivial('')).toBe(true);
+    expect(isObviouslyTrivial(undefined)).toBe(true);
+    // Boundary task-shaped messages are NOT filtered by the fast path.
+    expect(isObviouslyTrivial('帮我看看这个文件哪里不对')).toBe(false);
+    expect(isObviouslyTrivial('审查一下 bus.ts 的守卫实现')).toBe(false);
   });
 });

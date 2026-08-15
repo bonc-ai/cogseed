@@ -157,9 +157,11 @@ function inferenceSystemPrompt(): string {
   return [
     'Compare one task expectation with recorded execution evidence.',
     'Return exactly one JSON object and no markdown.',
-    'Schema: {"outcome":"better_than_expected|met_expected|worse_than_expected|unclear","attribution":"knowledge_gap|rule_gap|template_gap|skill_gap|execution_gap|unclear","deltaR":number_or_unknown,"deltaA":number_or_unknown,"reason":"evidence-grounded summary","confidence":0_to_1,"needsConfirmation":boolean}.',
+    'Schema: {"outcome":"better_than_expected|met_expected|worse_than_expected|unclear","attribution":"knowledge_gap|rule_gap|template_gap|skill_gap|execution_gap|unclear","deltaR":number_or_unknown,"deltaA":number_or_unknown,"reason":"evidence-grounded summary","confidence":0_to_1,"needsConfirmation":boolean,"lesson":"optional reusable experience string"}.',
     'Numbers must be between -1 and 1. Use "unknown" when the evidence cannot support a value.',
     'Do not invent tests, files, feedback, or external outcomes. Mark needsConfirmation=true for subjective or ambiguous success.',
+    'lesson is OPTIONAL but valuable: it captures a REUSABLE experience discovered DURING execution — a pattern, pitfall, or method the executor would apply differently next time. This is separate from deltaR: even a fully successful task (met_expected, deltaR 0) can yield a lesson, e.g. "merge-conflict type assertions (as X) hide runtime errors — prefer explicit discriminant checks".',
+    'Only write a lesson when it is genuinely reusable and non-trivial (a specific pattern/pitfall/method, not "the task was completed"). Omit lesson when the execution was routine with nothing to carry forward.',
   ].join('\n');
 }
 

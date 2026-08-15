@@ -162,12 +162,19 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   const appliedReviewDecisionIds = Array.isArray(value.appliedReviewDecisionIds)
     ? [...new Set(value.appliedReviewDecisionIds.filter((id): id is string => typeof id === 'string' && /^rd_[A-Za-z0-9_-]{8,64}$/.test(id)))]
     : [];
-  const lifecycleStatus: RecallAbilityAssetLifecycleStatus = value.lifecycleStatus === 'automatically_extracted_unverified'
-    ? 'automatically_extracted_unverified'
-    : 'user_confirmed_unverified';
+  const lifecycleStatus: RecallAbilityAssetLifecycleStatus =
+    value.lifecycleStatus === 'automatically_extracted_unverified'
+      || value.lifecycleStatus === 'system_precipitated_unverified'
+      ? value.lifecycleStatus
+      : 'user_confirmed_unverified';
   return {
     ...value,
     reviewDecisionId: typeof value.reviewDecisionId === 'string' ? value.reviewDecisionId : 'legacy-untracked',
+    // Preserve the written confirmation semantics instead of force-rewriting
+    // to user_confirmed_unverified (P0-2): both automatic lines
+    // (automatically_extracted_unverified / system_precipitated_unverified)
+    // must survive reads — the asset stays honest about NOT being
+    // user-confirmed.
     lifecycleStatus,
     sourceCandidateIds,
     appliedReviewDecisionIds,
@@ -298,7 +305,9 @@ export async function createAbilityAsset(
     throw new Error('invalid ability asset handoff identity');
   }
   const expectedLifecycle: RecallAbilityAssetLifecycleStatus = metadata.actor === 'system'
-    ? 'automatically_extracted_unverified'
+    ? (validated.lifecycleStatus === 'automatically_extracted_unverified' || validated.lifecycleStatus === 'system_precipitated_unverified'
+        ? validated.lifecycleStatus
+        : 'automatically_extracted_unverified')
     : 'user_confirmed_unverified';
   const expectedMaturity = metadata.actor === 'system' ? 'seed' : 'bud';
   if (validated.lifecycleStatus !== expectedLifecycle || validated.maturity !== expectedMaturity || validated.version !== '1') {

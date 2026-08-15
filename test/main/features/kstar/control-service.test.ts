@@ -341,6 +341,98 @@ describe('KStar Commander control service', () => {
     }));
   });
 
+  it('accepts a STRINGIFIED forecast payload (deepseek emits nested objects as JSON strings) and resolves real ids from state', async () => {
+    const seeded = await seedOpenControlState();
+    const service = await import('../../../../src/main/features/kstar/control-service');
+    await seeded.store.replaceKstarRequirement('user-a', {
+      ...seeded.requirement,
+      projectionId: 'proj-a',
+      projectionIds: ['proj-a'],
+    });
+    forecastMock.commitCommanderForecast.mockResolvedValue({
+      id: 'wf-string',
+      forecast: { selectedCandidateId: 'path-a' },
+    });
+
+    // Live-observed shape: forecast arrives as a quoted JSON string, and the
+    // model GUESSED ids it cannot know (taskRunId filled with the projection
+    // id). The host must parse the string and resolve real ids from state.
+    const result = await service.executeKstarControl(hostContext(), {
+      operation: 'commit_forecast',
+      idempotencyKey: 'turn-a:forecast-string',
+      forecast: JSON.stringify({
+        taskRunId: 'proj-a', // model-guessed, wrong
+        requirementId: 'ksreq-guessed',
+        projectionId: 'proj-a',
+        taskText: 'Review obsidian code',
+        candidates: [
+          { id: 'path-a', plan: ['explore'], expectedTools: ['list_files'], expectedActors: ['commander'], predictedResult: 'report' },
+          { id: 'path-b', plan: ['read'], expectedTools: ['read_file'], expectedActors: ['commander'], predictedResult: 'report' },
+        ],
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, status: 'forecast_committed', forecastId: 'wf-string' });
+    // The host resolved REAL ids from state, not the model's guesses.
+    expect(forecastMock.commitCommanderForecast).toHaveBeenCalledWith('user-a', expect.objectContaining({
+      taskRunId: seeded.task.id,
+      requirementId: seeded.requirement.id,
+      projectionId: 'proj-a',
+      taskText: seeded.requirement.goalText,
+    }));
+  });
+
+  it('rejects a stringified forecast whose payload is not valid JSON', async () => {
+    const seeded = await seedOpenControlState();
+    const service = await import('../../../../src/main/features/kstar/control-service');
+    await seeded.store.replaceKstarRequirement('user-a', {
+      ...seeded.requirement,
+      projectionId: 'proj-a',
+      projectionIds: ['proj-a'],
+    });
+
+    const result = await service.executeKstarControl(hostContext(), {
+      operation: 'commit_forecast',
+      idempotencyKey: 'turn-a:forecast-bad-string',
+      forecast: 'not json at all',
+    });
+
+    expect(result).toMatchObject({ ok: false, code: 'kstar_control_invalid_input' });
+  });
+
+  it('accepts forecast constraints/acceptanceCriteria flattened to single strings', async () => {
+    const seeded = await seedOpenControlState();
+    const service = await import('../../../../src/main/features/kstar/control-service');
+    await seeded.store.replaceKstarRequirement('user-a', {
+      ...seeded.requirement,
+      projectionId: 'proj-a',
+      projectionIds: ['proj-a'],
+    });
+    forecastMock.commitCommanderForecast.mockResolvedValue({
+      id: 'wf-constraints',
+      forecast: { selectedCandidateId: 'path-a' },
+    });
+
+    const result = await service.executeKstarControl(hostContext(), {
+      operation: 'commit_forecast',
+      idempotencyKey: 'turn-a:forecast-constraints',
+      forecast: JSON.stringify({
+        candidates: [
+          { id: 'path-a', plan: 'do the work', expectedTools: [], expectedActors: ['commander'], predictedResult: { summary: 'done' } },
+          { id: 'path-b', plan: 'do it differently', expectedTools: [], expectedActors: ['commander'], predictedResult: { summary: 'done too' } },
+        ],
+        constraints: 'No public API change',
+        acceptanceCriteria: 'Tests pass',
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, status: 'forecast_committed' });
+    expect(forecastMock.commitCommanderForecast).toHaveBeenCalledWith('user-a', expect.objectContaining({
+      constraints: ['No public API change'],
+      acceptanceCriteria: ['Tests pass'],
+    }));
+  });
+
   it('switches to a new Task on task:create, closes the old one, and precipitates requirement-level assets (B2)', async () => {
     const seeded = await seedOpenControlState();
     // Seed one episode + learning review so precipitation has evidence.
@@ -409,14 +501,17 @@ describe('KStar Commander control service', () => {
     expect(newTask).toMatchObject({ title: 'New task after switch', status: 'open' });
     const newRequirement = await seeded.store.readKstarRequirement('user-a', state!.currentRequirementId!);
     expect(newRequirement).toMatchObject({ goalText: 'Fresh goal after the switch' });
-    // Requirement-level precipitation ran: one skill_method asset + candidate.
+    // Requirement-level precipitation ran: one skill_method asset promoted
+    // from the unified candidate pool (设计 §3.2.1).
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const abilityAssets = await assets.listAbilityAssets('user-a');
-    const precipitated = abilityAssets.filter((asset) => asset.candidateId?.startsWith('direct-'));
+    const precipitated = abilityAssets.filter((asset) => asset.type === 'skill_method');
     expect(precipitated).toHaveLength(1);
     expect(precipitated[0]).toMatchObject({ type: 'skill_method', status: 'active' });
+    // The unified pool has the confirmed candidate behind the asset.
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    expect(await candidates.listRecallCandidates('user-a')).toHaveLength(1);
+    const pending = await candidates.listRecallCandidates('user-a');
+    expect(pending.some((c) => c.status === 'confirmed')).toBe(true);
     expect(await recordCounts()).toEqual({ tasks: 2, requirements: 2 });
   });
 
@@ -472,6 +567,6 @@ describe('KStar Commander control service', () => {
 
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const abilityAssets = await assets.listAbilityAssets('user-a');
-    expect(abilityAssets.filter((asset) => asset.candidateId?.startsWith('direct-'))).toHaveLength(1);
+    expect(abilityAssets.filter((asset) => asset.type === 'skill_method')).toHaveLength(1);
   });
 });

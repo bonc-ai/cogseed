@@ -22,15 +22,20 @@ export interface KstarRequirementMutation {
 }
 
 export interface KstarProjectionProposal {
-  requirementId: string;
+  /** Optional — the host resolves the current requirement from state when
+   *  the model cannot know the host-generated id. */
+  requirementId?: string;
   purpose: string;
   taskText?: string;
 }
 
 export interface KstarForecastProposal {
-  taskRunId: string;
-  requirementId: string;
-  projectionId: string;
+  /** Advisory only — the host resolves the REAL ids from the current task
+   *  state in commitForecast, because the Commander cannot know these
+   *  host-generated values (live model output guessed or omitted them). */
+  taskRunId?: string;
+  requirementId?: string;
+  projectionId?: string;
   candidates: unknown[];
   constraints?: string[];
   acceptanceCriteria?: string[];
