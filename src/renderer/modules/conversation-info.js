@@ -12,6 +12,9 @@ const ConversationInfo = (() => {
 
   let _cid = null;
   let _open = false;
+  // 9.1 统一框架：进入会话时「运行上下文」五段面板默认展开（右侧区常驻）；
+  // 用户手动关闭后本次会话内不再强制展开，尊重用户偏好。
+  let _userClosed = false;
   let _activeTab = 'context';
   let _seq = 0;
   let _activitySeq = 0;
@@ -1649,7 +1652,9 @@ const ConversationInfo = (() => {
 
   function bind(cid) {
     _cid = cid || null;
-    _open = false;
+    // 9.1 统一框架：进入会话时右侧「运行上下文」默认展开（用户手动关闭后
+    // 保持关闭）；离开会话（bind(null)）时收起。
+    _open = !!_cid && !_userClosed;
     _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '' };
     _protocolFilters.agent = '';
     _protocolFilters.role = '';
@@ -1980,11 +1985,18 @@ const ConversationInfo = (() => {
     const body = document.getElementById('conversation-info-body');
     if (toggle && toggle.dataset.bound !== '1') {
       toggle.dataset.bound = '1';
-      toggle.addEventListener('click', () => _setOpen(!_open));
+      toggle.addEventListener('click', () => {
+        // 手动开合面板记录用户偏好：关闭后切换会话不再自动展开。
+        _userClosed = _open;
+        _setOpen(!_open);
+      });
     }
     if (close && close.dataset.bound !== '1') {
       close.dataset.bound = '1';
-      close.addEventListener('click', () => _setOpen(false));
+      close.addEventListener('click', () => {
+        _userClosed = true;
+        _setOpen(false);
+      });
     }
     document.querySelectorAll('.conversation-info-tab').forEach((tab) => {
       if (tab.dataset.bound === '1') return;

@@ -32,6 +32,7 @@ function renderFilesResult(snapshot: {
   conversationTitle?: string;
   syncEnabled?: boolean;
   activeTab?: 'files' | 'attachments' | 'collaboration' | 'protocol' | 'carried';
+  panelClosed?: boolean;
 }, afterMount?: (context: any) => Promise<void> | void): Promise<RenderFilesResult> {
   const elements = new Map<string, any>();
   const getEl = (id: string) => {
@@ -134,7 +135,12 @@ function renderFilesResult(snapshot: {
   context.window.ConversationInfo.bind('c1');
   const tabIndex = snapshot.activeTab === 'attachments' ? 1 : snapshot.activeTab === 'collaboration' ? 2 : snapshot.activeTab === 'protocol' ? 3 : snapshot.activeTab === 'carried' ? 4 : 0;
   (tabs[tabIndex] as any).onclick();
-  getEl('conversation-info-toggle').onclick();
+  // 9.1 统一框架：进入会话时「运行上下文」面板默认展开（bind 已保证打开）。
+  // toggle 点击现在表示「关闭」，因此不再模拟打开动作；需要面板关闭的用例
+  // 在 afterMount 中显式调用 close()。
+  if (snapshot.panelClosed === true) {
+    getEl('conversation-info-toggle').onclick();
+  }
   return new Promise((resolve, reject) => setTimeout(async () => {
     try {
       if (afterMount) await afterMount(context);
