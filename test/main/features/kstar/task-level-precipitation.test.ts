@@ -125,11 +125,12 @@ describe('KStar task-level precipitation (B5)', () => {
     const created = abilityAssets.filter((asset) => asset.id === result.createdAssetIds[0]);
     expect(created).toHaveLength(1);
     expect(created[0]).toMatchObject({ type: 'skill_method', status: 'active', maturity: 'seed' });
-    // Candidate review line also received the proposal.
+    // Direct-only line: the cognitive-precipitation candidate line is
+    // skipped, so no pending candidate exists.
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const saved = await candidates.listRecallCandidates('user-b5');
-    expect(saved).toHaveLength(1);
-    expect(result.candidateIds).toHaveLength(1);
+    expect(saved).toHaveLength(0);
+    expect(result.candidateIds).toHaveLength(0);
   });
 
   it('is idempotent: re-running precipitation does not duplicate assets', async () => {

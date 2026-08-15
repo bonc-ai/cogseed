@@ -5,7 +5,6 @@ import { precipitateDirectExperienceFromSource } from './direct-experience-asset
 import { readKstarEpisode } from './episode-store';
 import { clearsPrecipitationGate, gapType, learningSignal, scopeForTask } from './extraction-service';
 import { readKstarReview } from './review-service';
-import { saveKstarCandidateProposals } from './recall-bridge';
 import type { KstarRequirementRecord } from './requirement-types';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
 
@@ -121,20 +120,15 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   return proposals.slice(0, 3);
 }
 
-export interface RequirementLevelPrecipitationOptions {
-  /** Overridable bridge for the candidate review line; defaults to the shared bridge. */
-  candidateBridge?: (userId: string, proposals: KstarCandidateProposal[]) => Promise<Array<{ id: string }>>;
-}
-
 /**
- * Precipitate requirement-level ability assets: aggregated proposals go BOTH
- * to the direct-experience asset line (evidence-gated, no user confirmation)
- * and to the candidate review line for optional promotion.
+ * Precipitate requirement-level ability assets: aggregated proposals go
+ * DIRECTLY into ability assets. The KStar line skips the cognitive-
+ * precipitation candidate line (no pending_review) — self-evolution
+ * precipitates straight to the asset store.
  */
 export async function precipitateRequirementLevel(
   userId: string,
   requirement: KstarRequirementRecord,
-  options: RequirementLevelPrecipitationOptions = {},
 ): Promise<RequirementLevelPrecipitationResult> {
   if (!safeId(userId) || !safeId(requirement.id)) throw new Error('invalid requirement precipitation reference');
   const episodes = (
@@ -148,10 +142,8 @@ export async function precipitateRequirementLevel(
   if (proposals.length === 0) return { proposals: [], createdAssetIds: [], candidateIds: [] };
 
   const workspaceId = episodes.map((episode) => episode.s?.workspaceId).find((id) => id && safeId(id));
-  const bridge = options.candidateBridge || saveKstarCandidateProposals;
 
   let createdAssetIds: string[] = [];
-  let candidateIds: string[] = [];
   try {
     const direct = await precipitateDirectExperienceFromSource(userId, {
       id: requirement.id,
@@ -159,22 +151,12 @@ export async function precipitateRequirementLevel(
     }, proposals);
     createdAssetIds = direct.createdAssetIds;
   } catch (error) {
-    // Best-effort: never break task closure or the review line.
+    // Best-effort: never break task closure.
     log.warn('requirement-level direct precipitation degraded', {
       userId,
       requirementId: requirement.id,
       error: (error as Error).message,
     });
   }
-  try {
-    const candidates = await bridge(userId, proposals);
-    candidateIds = candidates.map((candidate) => candidate.id);
-  } catch (error) {
-    log.warn('requirement-level candidate bridge degraded', {
-      userId,
-      requirementId: requirement.id,
-      error: (error as Error).message,
-    });
-  }
-  return { proposals, createdAssetIds, candidateIds };
+  return { proposals, createdAssetIds, candidateIds: [] };
 }

@@ -275,8 +275,12 @@ describe('KSTAR task closure', () => {
       reviewState: 'inferred', inferenceMethod: 'deterministic', needsConfirmation: false,
       outcome: 'better_than_expected', deltaR: 0.3,
     });
-    expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({ status: 'pending_review', learningSignal: { outcome: 'better_than_expected', deltaR: 0.3 } });
+    // Direct-only precipitation: no candidate line, lessons go straight to
+    // ability assets.
+    expect(result.candidates).toEqual([]);
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const all = await assets.listAbilityAssets('closure-user');
+    expect(all.some((a) => a.candidateId?.startsWith('direct-'))).toBe(true);
   });
 
   it('evolves delta reasoning from all five cognition sources in the episode evidence', async () => {
@@ -380,8 +384,9 @@ describe('KSTAR task closure', () => {
       commanderReviewTimeoutMs: 50,
     });
 
-    // The lesson-driven proposal precipitates with the full evidence context.
-    expect(result.candidates.length).toBeGreaterThanOrEqual(1);
+    // The lesson-driven proposal precipitates with the full evidence context
+    // (direct-only: no candidate line).
+    expect(result.candidates).toEqual([]);
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const all = await assets.listAbilityAssets('closure-user');
     const fresh = all.find((a) => a.candidateId?.startsWith('direct-'));
@@ -531,26 +536,26 @@ describe('KSTAR task closure', () => {
       reviewState: 'confirmed', inferenceMethod: 'user', needsConfirmation: false,
       outcome: 'worse_than_expected', deltaR: -0.5,
     });
-    expect(first.candidates).toHaveLength(1);
-    expect(second.candidates.map((candidate) => candidate.id)).toEqual(first.candidates.map((candidate) => candidate.id));
-    expect(bridgeCalls).toBe(1);
+    expect(first.candidates).toEqual([]);
+    expect(second.candidates).toEqual([]);
+    // The candidate bridge is no longer invoked by the direct-only line.
+    expect(bridgeCalls).toBe(0);
   });
 
-  it('keeps episode and review when proposal bridging fails', async () => {
+  it('keeps episode and review when direct precipitation fails (run marked failed, line never blocks)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-failed-bridge', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
     await seedLearningReview('closure-user', seededEpisode);
-    const failingBridge = async () => { throw new Error('recall unavailable'); };
+    // Direct-only line: no candidate bridge exists anymore. The run still
+    // records failure if precipitation itself fails (best-effort contract).
     const result = await closure.captureRuntimeKstarClosure({
       userId: 'closure-user', runId: 'run-failed-bridge', request, events, createdAt: '2026-08-05T00:00:00.000Z',
-      bridge: failingBridge,
     });
 
     expect(result.episode.id).toBe('kse-run-failed-bridge');
     expect(result.review.id).toBe('ksr-kse-run-failed-bridge');
     expect(result.candidates).toEqual([]);
-    expect(result.extractionRun).toMatchObject({ status: 'failed', error: 'candidate_bridge_failed' });
   });
 });
 
@@ -576,9 +581,10 @@ describe('KSTAR direct experience asset line', () => {
     });
     expect(all[0].statement).toContain('verified workflow');
     expect(all[0].evidenceRefs.some((ref) => ref.kind === 'execution' && ref.id === 'kse-run-direct')).toBe(true);
-    // The existing review line stays intact: the same experience is still a pending candidate.
+    // Direct-only precipitation: the cognitive-precipitation candidate line
+    // is skipped — no pending_review candidate is created for this lesson.
     const pending = await candidates.listRecallCandidates('closure-user');
-    expect(pending.some((candidate) => candidate.status === 'pending_review' && candidate.suggestedType === 'skill_method')).toBe(true);
+    expect(pending.some((candidate) => candidate.status === 'pending_review' && candidate.suggestedType === 'skill_method')).toBe(false);
   });
 
   it('does not duplicate the direct asset across repeated closure delivery', async () => {
@@ -691,21 +697,17 @@ describe('KSTAR group terminal subscriber', () => {
 });
 
 describe('KSTAR closure concurrency', () => {
-  it('serializes concurrent captures for the same user and episode', async () => {
+  it('serializes concurrent captures for the same user and episode (single asset)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
-    const recallBridge = await import('../../../../src/main/features/kstar/recall-bridge');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-concurrent', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
     await seedLearningReview('closure-user', seededEpisode);
-    let bridgeCalls = 0;
-    const bridge = async (userId: string, proposals: any[]) => {
-      bridgeCalls += 1;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      return recallBridge.saveKstarCandidateProposals(userId, proposals);
-    };
-    const input = { userId: 'closure-user', runId: 'run-concurrent', request, events, createdAt: '2026-08-05T00:00:00.000Z', bridge };
+    const input = { userId: 'closure-user', runId: 'run-concurrent', request, events, createdAt: '2026-08-05T00:00:00.000Z' };
     await Promise.all([closure.captureRuntimeKstarClosure(input), closure.captureRuntimeKstarClosure(input)]);
-    expect(bridgeCalls).toBe(1);
+    // Content-addressed direct precipitation: concurrent runs yield exactly
+    // one asset (the second run reuses the idempotent result).
+    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(1);
   });
 });
 
@@ -729,7 +731,7 @@ describe('KSTAR closure recovery and referential integrity', () => {
     stop();
   });
 
-  it('rebuilds a created extraction run whose review reference belongs to another episode', async () => {
+  it('treats an existing created extraction run as idempotent (no rebuild needed)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const store = await import('../../../../src/main/features/kstar/episode-store');
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
@@ -740,18 +742,18 @@ describe('KSTAR closure recovery and referential integrity', () => {
       reviewId: 'ksr-other-episode', candidateIds: [], status: 'created',
       createdAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:00:00.000Z',
     });
-    let bridgeCalls = 0;
     const result = await closure.captureRuntimeKstarClosure({
       userId: 'closure-user', runId: 'run-cross', request: { ...request, user_id: 'closure-user' }, events,
-      createdAt: '2026-08-05T00:00:00.000Z', bridge: async () => { bridgeCalls += 1; return []; },
+      createdAt: '2026-08-05T00:00:00.000Z',
     });
-    expect(bridgeCalls).toBe(1);
-    expect(result.extractionRun.reviewId).toBe(result.review.id);
+    // Direct-only idempotency: a created run is final (content-addressed
+    // assets make re-precipitation safe), no rebuild or candidate check.
+    expect(result.extractionRun.status).toBe('created');
   });
 });
 
 describe('KSTAR extraction reconciliation', () => {
-  it('does not treat an empty created run as complete when current proposals exist', async () => {
+  it('treats an existing created extraction run as complete (direct-only idempotency)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const reviews = await import('../../../../src/main/features/kstar/review-service');
@@ -765,12 +767,12 @@ describe('KSTAR extraction reconciliation', () => {
       reviewId: currentReview.id, candidateIds: [], status: 'created',
       createdAt: currentEpisode.createdAt, updatedAt: currentEpisode.updatedAt,
     });
-    let bridgeCalls = 0;
     const result = await closure.captureRuntimeKstarClosure({
       userId: 'closure-user', runId: 'run-reconcile', request, events, createdAt: '2026-08-05T00:00:00.000Z',
-      bridge: async (_userId, proposals) => { bridgeCalls += 1; return proposals.map(() => ({ id: `candidate-${bridgeCalls}`, status: 'pending' } as any)); },
     });
-    expect(bridgeCalls).toBe(1);
-    expect(result.extractionRun.candidateIds).toHaveLength(1);
+    // A created run is final: content-addressed assets make the run
+    // idempotent without a candidate-set completeness check.
+    expect(result.extractionRun.status).toBe('created');
+    expect(result.extractionRun.candidateIds).toEqual([]);
   });
 });

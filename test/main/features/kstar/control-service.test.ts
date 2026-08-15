@@ -415,8 +415,9 @@ describe('KStar Commander control service', () => {
     const precipitated = abilityAssets.filter((asset) => asset.candidateId?.startsWith('direct-'));
     expect(precipitated).toHaveLength(1);
     expect(precipitated[0]).toMatchObject({ type: 'skill_method', status: 'active' });
+    // Direct-only line: no cognitive-precipitation candidates are created.
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    expect(await candidates.listRecallCandidates('user-a')).toHaveLength(1);
+    expect(await candidates.listRecallCandidates('user-a')).toHaveLength(0);
     expect(await recordCounts()).toEqual({ tasks: 2, requirements: 2 });
   });
 

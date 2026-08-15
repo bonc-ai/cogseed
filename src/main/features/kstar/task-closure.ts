@@ -81,7 +81,6 @@ async function reconcileKstarExtraction(
   userId: string,
   episode: KstarEpisodeRecord,
   review: KstarReviewRecord,
-  bridge: KstarCandidateBridge = saveKstarCandidateProposals,
 ): Promise<KstarClosureResult> {
   const proposals = proposeKstarCandidates(episode, review);
   const extractionRunId = `ksx-${episode.id}`;
@@ -92,30 +91,28 @@ async function reconcileKstarExtraction(
   } catch {
     // A malformed/future synced run is rebuilt below with the current schema.
   }
+  // Direct-only precipitation (self-evolution): the KStar line SKIPS the
+  // cognitive-precipitation candidate line (saveRecallCandidate →
+  // pending_review) entirely — lessons go straight into ability assets.
+  // Idempotency is content-addressed (same judgment + evidence → same
+  // asset id), so repeated closure runs never duplicate.
   if (existingRun?.status === 'created') {
-    const existingCandidates = await (await import('../recall/candidate-service')).listRecallCandidates(userId);
-    const candidatesBelongToEpisode = existingRun.candidateIds.every((id) => existingCandidates.some((candidate) =>
-      candidate.id === id && candidate.sourceRefs.some((ref) => ref.kind === 'execution' && ref.id === episode.id)));
-    const candidateSetComplete = proposals.length === existingRun.candidateIds.length;
-    if (candidateSetComplete && candidatesBelongToEpisode) {
-      return {
-        episode,
-        review,
-        candidates: existingCandidates.filter((candidate) => existingRun!.candidateIds.includes(candidate.id)),
-        extractionRun: existingRun,
-      };
-    }
+    return {
+      episode,
+      review,
+      candidates: [],
+      extractionRun: existingRun,
+    };
   }
-
-  let candidates: RecallCandidateRecord[] = [];
+  let precipitatedAssetIds: string[] = [];
   let status: KstarExtractionRunRecord['status'] = 'created';
   let errorCode: string | undefined;
   try {
-    candidates = proposals.length ? await bridge(userId, proposals) : [];
     if (proposals.length) {
       try {
         const { precipitateDirectExperienceAssets } = await import('./direct-experience-assets');
-        await precipitateDirectExperienceAssets(userId, episode, proposals);
+        const result = await precipitateDirectExperienceAssets(userId, episode, proposals);
+        precipitatedAssetIds = result.createdAssetIds;
       } catch (error) {
         log.warn('kstar direct experience precipitation failed', {
           userId,
@@ -126,8 +123,8 @@ async function reconcileKstarExtraction(
     }
   } catch {
     status = 'failed';
-    errorCode = 'candidate_bridge_failed';
-    log.warn('kstar candidate extraction degraded', { userId, episodeId: episode.id, errorCode });
+    errorCode = 'precipitation_failed';
+    log.warn('kstar precipitation degraded', { userId, episodeId: episode.id, errorCode });
   }
   const extractionRun: KstarExtractionRunRecord = {
     schemaVersion: 1,
@@ -135,14 +132,14 @@ async function reconcileKstarExtraction(
     id: extractionRunId,
     episodeId: episode.id,
     reviewId: review.id,
-    candidateIds: candidates.map((candidate) => candidate.id),
+    candidateIds: precipitatedAssetIds,
     status,
     createdAt: episode.createdAt,
     updatedAt: episode.updatedAt,
     ...(errorCode ? { error: errorCode } : {}),
   };
   await replaceKstarJsonRecord(userId, 'extraction-runs', extractionRun);
-  return { episode, review, candidates, extractionRun };
+  return { episode, review, candidates: [], extractionRun };
 }
 
 /** Extract a Commander-authored review from a `<kstar-review>{...}</kstar-review>`
@@ -270,7 +267,7 @@ async function finishClosure(
       review = await saveKstarReviewRecord(userId, createInitialKstarReview(episode));
     }
   }
-  return reconcileKstarExtraction(userId, episode, review, bridge);
+  return reconcileKstarExtraction(userId, episode, review);
 }
 
 export type KstarReviewVerdict = 'met' | 'partial' | 'not_met' | 'skip';
@@ -335,7 +332,7 @@ export async function confirmKstarReview(
     const current = await readKstarReview(userId, episodeId);
     if (!current) throw new Error('kstar review not found');
     const review = await saveKstarReview(userId, episode, confirmationReviewInput(episode, current, input));
-    return reconcileKstarExtraction(userId, episode, review, bridge);
+    return reconcileKstarExtraction(userId, episode, review);
   });
 }
 
