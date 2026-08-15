@@ -501,15 +501,17 @@ describe('KStar Commander control service', () => {
     expect(newTask).toMatchObject({ title: 'New task after switch', status: 'open' });
     const newRequirement = await seeded.store.readKstarRequirement('user-a', state!.currentRequirementId!);
     expect(newRequirement).toMatchObject({ goalText: 'Fresh goal after the switch' });
-    // Requirement-level precipitation ran: one skill_method asset + candidate.
+    // Requirement-level precipitation ran: one skill_method asset promoted
+    // from the unified candidate pool (设计 §3.2.1).
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const abilityAssets = await assets.listAbilityAssets('user-a');
-    const precipitated = abilityAssets.filter((asset) => asset.candidateId?.startsWith('direct-'));
+    const precipitated = abilityAssets.filter((asset) => asset.type === 'skill_method');
     expect(precipitated).toHaveLength(1);
     expect(precipitated[0]).toMatchObject({ type: 'skill_method', status: 'active' });
-    // Direct-only line: no cognitive-precipitation candidates are created.
+    // The unified pool has the confirmed candidate behind the asset.
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
-    expect(await candidates.listRecallCandidates('user-a')).toHaveLength(0);
+    const pending = await candidates.listRecallCandidates('user-a');
+    expect(pending.some((c) => c.status === 'confirmed')).toBe(true);
     expect(await recordCounts()).toEqual({ tasks: 2, requirements: 2 });
   });
 
@@ -565,6 +567,6 @@ describe('KStar Commander control service', () => {
 
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const abilityAssets = await assets.listAbilityAssets('user-a');
-    expect(abilityAssets.filter((asset) => asset.candidateId?.startsWith('direct-'))).toHaveLength(1);
+    expect(abilityAssets.filter((asset) => asset.type === 'skill_method')).toHaveLength(1);
   });
 });

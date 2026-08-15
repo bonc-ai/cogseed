@@ -37,6 +37,8 @@ export interface RequirementLevelPrecipitationResult {
   proposals: KstarCandidateProposal[];
   createdAssetIds: string[];
   candidateIds: string[];
+  mergedIntoIds: string[];
+  updateCandidateIds: string[];
 }
 
 export function aggregateRequirementProposals(input: AggregateRequirementProposalsInput): KstarCandidateProposal[] {
@@ -139,17 +141,25 @@ export async function precipitateRequirementLevel(
   ).filter((review): review is KstarReviewRecord => Boolean(review));
 
   const proposals = aggregateRequirementProposals({ requirement, episodes, reviews });
-  if (proposals.length === 0) return { proposals: [], createdAssetIds: [], candidateIds: [] };
+  if (proposals.length === 0) {
+    return { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [] };
+  }
 
   const workspaceId = episodes.map((episode) => episode.s?.workspaceId).find((id) => id && safeId(id));
 
   let createdAssetIds: string[] = [];
+  let candidateIds: string[] = [];
+  let mergedIntoIds: string[] = [];
+  let updateCandidateIds: string[] = [];
   try {
     const direct = await precipitateDirectExperienceFromSource(userId, {
       id: requirement.id,
       ...(workspaceId ? { workspaceId } : {}),
     }, proposals);
     createdAssetIds = direct.createdAssetIds;
+    candidateIds = direct.candidateIds;
+    mergedIntoIds = direct.mergedIntoIds;
+    updateCandidateIds = direct.updateCandidateIds;
   } catch (error) {
     // Best-effort: never break task closure.
     log.warn('requirement-level direct precipitation degraded', {
@@ -158,5 +168,5 @@ export async function precipitateRequirementLevel(
       error: (error as Error).message,
     });
   }
-  return { proposals, createdAssetIds, candidateIds: [] };
+  return { proposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds };
 }

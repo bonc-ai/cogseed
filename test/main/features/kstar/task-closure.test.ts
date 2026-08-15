@@ -572,7 +572,7 @@ describe('KSTAR task closure', () => {
 });
 
 describe('KSTAR direct experience asset line', () => {
-  it('precipitates verified workflow experience directly as an ability asset (direct line)', async () => {
+  it('precipitates verified workflow experience as an ability asset via the unified candidate pool (direct line)', async () => {
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
     const assets = await import('../../../../src/main/features/recall/asset-service');
@@ -586,7 +586,9 @@ describe('KSTAR direct experience asset line', () => {
       sourceRefs: [{ kind: 'execution', id: 'kse-run-direct' }],
     }]);
 
+    // 设计 §3.2.1：落点改为统一候选池，随后晋升为资产。
     expect(result.createdAssetIds).toHaveLength(1);
+    expect(result.candidateIds).toHaveLength(1);
     const all = await assets.listAbilityAssets('closure-user');
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({
@@ -594,13 +596,13 @@ describe('KSTAR direct experience asset line', () => {
       maturity: 'seed',
       type: 'skill_method',
       version: '1',
-      lifecycleStatus: 'system_precipitated_unverified',
     });
     expect(all[0].statement).toContain('verified workflow');
     expect(all[0].evidenceRefs.some((ref) => ref.kind === 'execution' && ref.id === 'kse-run-direct')).toBe(true);
-    // The cognitive-precipitation candidate line is skipped — no candidates.
+    // 候选池有记录（晋升后 confirmed）。
     const pending = await candidates.listRecallCandidates('closure-user');
-    expect(pending).toHaveLength(0);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].status).toBe('confirmed');
   });
 
   it('does not duplicate the direct asset across repeated precipitation (content-addressed)', async () => {

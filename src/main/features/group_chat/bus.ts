@@ -3713,6 +3713,10 @@ async function runActorTurnBody(
       && item.fromActorId === USER_ID
       && process.env.ORKAS_KSTAR_HOST_ROUTING !== '0'
     ) {
+      // 用户新消息到达：清除该会话的 pending 自动闭环（设计 §5）。
+      // 之后 hostRouteTaskTurn 的 judge 判定 continuation 决定任务去留。
+      const { cancelAutoClose } = await import('../kstar/task-closure');
+      await cancelAutoClose(uid, cid);
       const routing = await hostRouteTaskTurn(uid, cid, item.sourceMessageText, item.msgId, turnProjectId);
       // The hint must reflect what the host ACTUALLY did. The old hint
       // unconditionally claimed "the host has already tracked this task"

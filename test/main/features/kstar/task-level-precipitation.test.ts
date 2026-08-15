@@ -128,16 +128,15 @@ describe('KStar task-level precipitation (B5)', () => {
       type: 'skill_method',
       status: 'active',
       maturity: 'seed',
-      // Honest confirmation semantics: self-evolution never claims user
-      // confirmation (P0-2).
-      lifecycleStatus: 'system_precipitated_unverified',
+      // Honest confirmation semantics: promoted by the system actor via the
+      // unified candidate pool — never claims user confirmation (P0-2).
+      lifecycleStatus: 'automatically_extracted_unverified',
     });
-    // Direct-only line: the cognitive-precipitation candidate line is
-    // skipped, so no pending candidate exists.
+    // Unified pool: the promoted candidate exists (confirmed) behind the asset.
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const saved = await candidates.listRecallCandidates('user-b5');
-    expect(saved).toHaveLength(0);
-    expect(result.candidateIds).toHaveLength(0);
+    expect(saved.some((c) => c.status === 'confirmed')).toBe(true);
+    expect(result.candidateIds).toHaveLength(1);
   });
 
   it('is idempotent: re-running precipitation does not duplicate assets', async () => {

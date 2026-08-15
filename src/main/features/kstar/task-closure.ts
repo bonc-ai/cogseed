@@ -565,6 +565,10 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
         // confirm the expected-vs-actual comparison — the user neither made
         // the prediction nor observes the execution internals, so they cannot
         // verify it. No review card is posted.
+        // 静默窗口自动闭环（设计 §5）：completed 终态 → 安排自动闭环窗口。
+        if (event.status === 'completed') {
+          void scheduleAutoClose(event.user_id, event.conversation_id);
+        }
         inFlight.delete(key);
         seen.add(key);
       } catch {
@@ -588,5 +592,150 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
     unsubscribe();
     seen.clear();
     inFlight.clear();
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 静默窗口自动闭环（设计 §5）：任务终态后启动窗口，窗口内无新用户消息 →
+// 自动 finish（沉淀）。用户消息到达 → 清除（见 bus.ts 的 cancel 钩子）。
+// 重启恢复：recoverPendingAutoClosures 扫描 task-state 中未过期且仍 open 的
+// pendingAutoCloseAt，重建定时器（剩余时间）。
+// ──────────────────────────────────────────────────────────────────────────
+
+/** 静默窗口默认时长：30 分钟（任务级闭环，不宜过短——OQ-7 可校准）。 */
+export const AUTO_CLOSE_QUIET_MS = 30 * 60 * 1_000;
+
+/** 测试注入：缩短窗口。 */
+let _autoCloseQuietMsOverride: number | undefined;
+export function _setAutoCloseQuietMsForTest(ms: number | undefined): void {
+  _autoCloseQuietMsOverride = ms;
+}
+
+function autoCloseQuietMs(): number {
+  return _autoCloseQuietMsOverride ?? AUTO_CLOSE_QUIET_MS;
+}
+
+/** 在任务终态（completed run）后安排自动闭环。幂等：已有 pending 不重复。 */
+export async function scheduleAutoClose(
+  userId: string,
+  conversationId: string,
+): Promise<{ scheduled: boolean; at?: string }> {
+  try {
+    const { readConversationTaskState, replaceConversationTaskState } = await import('./requirement-store');
+    const state = await readConversationTaskState(userId, conversationId);
+    if (!state?.currentTaskId || !state.currentRequirementId) return { scheduled: false };
+    if (state.taskComplete) return { scheduled: false }; // already closed
+    if (state.pendingAutoCloseAt) return { scheduled: true, at: state.pendingAutoCloseAt }; // idempotent
+    const at = new Date(Date.now() + autoCloseQuietMs()).toISOString();
+    await replaceConversationTaskState(userId, {
+      ...state,
+      pendingAutoCloseAt: at,
+      updatedAt: new Date().toISOString(),
+    });
+    return { scheduled: true, at };
+  } catch (error) {
+    log.warn('kstar auto-close schedule degraded', {
+      userId,
+      conversationId,
+      error: (error as Error).message,
+    });
+    return { scheduled: false };
+  }
+}
+
+/** 用户新消息到达时清除 pending 自动闭环（由 bus enqueue 调用）。 */
+export async function cancelAutoClose(
+  userId: string,
+  conversationId: string,
+): Promise<void> {
+  try {
+    const { readConversationTaskState, replaceConversationTaskState } = await import('./requirement-store');
+    const state = await readConversationTaskState(userId, conversationId);
+    if (!state?.pendingAutoCloseAt) return;
+    await replaceConversationTaskState(userId, {
+      ...state,
+      pendingAutoCloseAt: undefined,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    log.warn('kstar auto-close cancel degraded', {
+      userId,
+      conversationId,
+      error: (error as Error).message,
+    });
+  }
+}
+
+/** 执行自动闭环：走 finish 控制路径（沉淀在 finish 内）。幂等。 */
+export async function runAutoClose(
+  userId: string,
+  conversationId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const { readConversationTaskState } = await import('./requirement-store');
+    const state = await readConversationTaskState(userId, conversationId);
+    if (!state?.pendingAutoCloseAt) return { ok: false, reason: 'no pending auto-close' };
+    if (state.taskComplete) return { ok: false, reason: 'already closed' };
+    // 到期校验：窗口必须真的过了（重启恢复的定时器按剩余时间，仍可能早触发）。
+    if (Date.parse(state.pendingAutoCloseAt) > Date.now()) {
+      const { executeKstarControl } = await import('./control-service');
+      void executeKstarControl({ userId, conversationId, allowedToolNames: new Set(['kstar_control']) }, {
+        operation: 'finish',
+        idempotencyKey: `auto-close-${conversationId}-${state.currentRequirementId}`,
+        result: {
+          finalStatus: 'completed',
+          finalText: 'Auto-closed after a quiet period (no further user input).',
+          producedFiles: [],
+          acceptanceEvidence: [],
+          closeReason: 'auto_close_quiet',
+        },
+      }).catch(() => undefined);
+      return { ok: true };
+    }
+    return { ok: false, reason: 'window not expired yet' };
+  } catch (error) {
+    log.warn('kstar auto-close run degraded', {
+      userId,
+      conversationId,
+      error: (error as Error).message,
+    });
+    return { ok: false, reason: (error as Error).message };
+  }
+}
+
+/** 启动时恢复：扫描当前激活用户的 task-states，重建未过期的自动闭环定时器。
+ *  返回恢复的数量。由 bus 启动路径调用。 */
+export function startAutoCloseRecovery(
+  runtime: { scan?: () => Promise<Array<{ userId: string; conversationId: string }>> } = {},
+): () => void {
+  const timers = new Set<NodeJS.Timeout>();
+  const scheduleOne = (userId: string, conversationId: string): void => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      void runAutoClose(userId, conversationId);
+    }, 0);
+    timers.add(timer);
+  };
+  const scan = runtime.scan || (async () => {
+    try {
+      const { listKstarJsonRecords } = await import('./episode-store');
+      const { getActiveUserId } = await import('../users');
+      const userId = getActiveUserId();
+      const records = await listKstarJsonRecords(userId, 'task-states');
+      return records.map((r) => ({ userId, conversationId: r.id }));
+    } catch {
+      return [];
+    }
+  });
+  void scan().then((entries) => {
+    for (const entry of entries) {
+      scheduleOne(entry.userId, entry.conversationId);
+    }
+  }).catch((error) => {
+    log.warn('kstar auto-close recovery scan degraded', { error: (error as Error).message });
+  });
+  return () => {
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
   };
 }
