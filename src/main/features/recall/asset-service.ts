@@ -165,7 +165,12 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   return {
     ...value,
     reviewDecisionId: typeof value.reviewDecisionId === 'string' ? value.reviewDecisionId : 'legacy-untracked',
-    lifecycleStatus: 'user_confirmed_unverified',
+    // Preserve the written confirmation semantics instead of force-rewriting
+    // to user_confirmed_unverified (P0-2): the self-evolution line writes
+    // system_precipitated_unverified and that must survive reads.
+    lifecycleStatus: value.lifecycleStatus === 'system_precipitated_unverified'
+      ? 'system_precipitated_unverified'
+      : 'user_confirmed_unverified',
     sourceCandidateIds,
     appliedReviewDecisionIds,
     evidenceRefs,

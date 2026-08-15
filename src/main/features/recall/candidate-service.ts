@@ -131,7 +131,13 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   recommendationReason?: string;
   recommendationAt?: string;
   status: 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked';
-  lifecycleStatus: 'user_confirmed_unverified';
+  /** Confirmation semantics (never fake "user confirmed"):
+   *   - user_confirmed_unverified: a real user review/acceptance happened
+   *     (candidate promote line) but effectiveness is unproven;
+   *   - system_precipitated_unverified: precipitated by the KStar
+   *     self-evolution line (system actor, no user confirmation) — the
+   *     asset is honest about NOT being user-confirmed. */
+  lifecycleStatus: 'user_confirmed_unverified' | 'system_precipitated_unverified';
   maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable';
   deletedAt?: string;
   purgedAt?: string;
@@ -165,7 +171,7 @@ export interface RecallAssetHandoffReceipt {
   assetId: string;
   assetType: AbilityAssetType;
   version: string;
-  lifecycleStatus: 'user_confirmed_unverified';
+  lifecycleStatus: 'user_confirmed_unverified' | 'system_precipitated_unverified';
   scope: string;
   sourceRefs: CognitionSourceRef[];
   reviewDecisionId: string;

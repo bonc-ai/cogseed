@@ -83,7 +83,10 @@ export async function precipitateDirectExperienceFromSource(
         scope: bounded(proposal.suggestedScope, 'suggestedScope', MAX_SCOPE),
         evidenceRefs,
         reviewDecisionId: 'legacy-untracked',
-        lifecycleStatus: 'user_confirmed_unverified',
+        // Honest confirmation semantics: this asset was precipitated by the
+        // self-evolution line (system actor). The user never confirmed it, so
+        // the status MUST NOT claim user confirmation (P0-2).
+        lifecycleStatus: 'system_precipitated_unverified',
         ...(proposal.learningSignal ? { learningSignal: proposal.learningSignal } : {}),
         status: 'active',
         maturity: 'seed',

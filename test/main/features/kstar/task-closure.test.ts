@@ -388,6 +388,52 @@ describe('KSTAR task closure', () => {
     expect(fresh?.statement).toContain('OAuth 回调必须先校验 state');
   });
 
+  it('precipitated assets carry an honest lifecycleStatus (system, not fake user confirmation)', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const inferred = async (_userId: string, builtEpisode: any) => ({
+      review: {
+        expectedResult: builtEpisode.t.userGoal,
+        actualResult: 'Fixed.',
+        deltaR: -0.5 as const,
+        deltaA: 'unknown' as const,
+        outcome: 'worse_than_expected' as const,
+        attribution: 'rule_gap' as const,
+        reason: 'State check missing.',
+        confidence: 0.9,
+        lesson: 'State must be checked before exchange.',
+        evidenceRefs: builtEpisode.evidenceRefs,
+      },
+      reviewState: 'inferred' as const,
+      inferenceMethod: 'model' as const,
+      needsConfirmation: false,
+    });
+
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-honest-status',
+      conversationId: 'cid-honest',
+      status: 'completed',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [{
+        id: 'msg-honest', ts: new Date().toISOString(), from: 'user', text: 'Fix state handling',
+      }],
+      inferReview: inferred,
+    });
+
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const all = await assets.listAbilityAssets('closure-user');
+    // Every asset carrying the direct-precipitation candidate marker uses the
+    // honest system status — the self-evolution line never claims user
+    // confirmation (P0-2). (Older fixtures may predate the fix; the current
+    // line always writes system_precipitated_unverified.)
+    const precipitated = all.filter((a) => a.candidateId?.startsWith('direct-'));
+    expect(precipitated.length).toBeGreaterThanOrEqual(1);
+    for (const asset of precipitated) {
+      expect(asset.lifecycleStatus).toBe('system_precipitated_unverified');
+    }
+  });
+
   it('confirms a lightweight user verdict and reconciles candidate extraction idempotently', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const recallBridge = await import('../../../../src/main/features/kstar/recall-bridge');
