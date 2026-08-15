@@ -93,27 +93,33 @@ describe('world-model candidate scoring', () => {
     }, context, 0).aHat.expectedTools).toEqual([]);
   });
 
+  it('accepts a candidate with expectedTools omitted entirely (auto-forecast shape)', () => {
+    const candidate: Record<string, unknown> = { ...base };
+    delete candidate.expectedTools;
+    expect(validateWorldModelCandidate(candidate, context, 0).aHat.expectedTools).toEqual([]);
+  });
+
   it.each([
-    ['missing', undefined],
     ['malformed item', [42]],
   ])('rejects expectedTools when %s', (_label, expectedTools) => {
     const candidate: Record<string, unknown> = { ...base };
-    if (expectedTools === undefined) delete candidate.expectedTools;
-    else candidate.expectedTools = expectedTools;
+    candidate.expectedTools = expectedTools;
 
     expect(() => validateWorldModelCandidate(candidate, context, 0))
       .toThrow('invalid_candidate_expected_tools');
   });
 
-  it('keeps plan, expectedActors, and acceptanceSignals non-empty', () => {
+  it('keeps plan and expectedActors non-empty; acceptanceSignals may be empty', () => {
     expect(() => validateWorldModelCandidate({ ...base, plan: [] }, context, 0))
       .toThrow('invalid_candidate_plan');
     expect(() => validateWorldModelCandidate({ ...base, expectedActors: [] }, context, 0))
       .toThrow('invalid_candidate_expected_actors');
-    expect(() => validateWorldModelCandidate({
+    // acceptanceSignals are optional (auto-forecast candidates may omit them).
+    const noSignals = validateWorldModelCandidate({
       ...base,
       predictedResult: { ...base.predictedResult, acceptanceSignals: [] },
-    }, context, 0)).toThrow('invalid_candidate_acceptance_signals');
+    }, context, 0);
+    expect(noSignals.rHat.acceptanceSignals).toEqual([]);
   });
 
   it('accepts flattened string shapes (deepseek flattens nested arrays/objects)', () => {

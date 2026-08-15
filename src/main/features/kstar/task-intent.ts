@@ -73,13 +73,12 @@ export function detectTaskIntent(text: string | undefined): TaskIntentResult {
 
 /** Render the routing note appended to the Commander system prompt.
  *  `hostOpenedTask` must reflect what host routing ACTUALLY did for this
- *  turn's user message: only when the host really created the task +
- *  confirmed the projection may the note claim that and narrow the
- *  Commander's duty to commit_forecast. When the host did NOT open a task
- *  (judgement said not a task, or judgement failed), the note must not
- *  claim tracked state that doesn't exist — the old unconditional claim
- *  made the Commander skip upsert_state on a nonexistent task and then
- *  fail commit_forecast with "forecast proposal is required". */
+ *  turn's user message. The world model owns the whole governed lifecycle:
+ *  task, projection, and forecast are all host-side (auto-forecast), so the
+ *  note only informs the Commander — it never instructs a kstar_control
+ *  call (that tool is no longer in the Commander's surface). When the host
+ *  did NOT open a task, the note must not claim tracked state that doesn't
+ *  exist. */
 export function taskIntentHint(
   text: string | undefined,
   opts?: { hostOpenedTask?: boolean },
@@ -92,8 +91,8 @@ export function taskIntentHint(
       '',
       '## Host routing note',
       hostOpened
-        ? 'The host has already tracked this task (KStar task + confirmed projection). Your remaining KStar duty: call `kstar_control` with operation `commit_forecast` (2–4 candidates with plan/expectedTools/expectedActors/predictedResult) BEFORE executing any work. Do not call upsert_state or request_projection again — they are already done.'
-        : 'This message looks task-shaped. The host did not open a governed KStar task for it (routing judged it non-task or the judgement was unavailable), so if you do intend to track it, open it yourself with `kstar_control` upsert_state before executing (task + requirement with operation "create"), then request_projection, then commit_forecast — or simply execute without governance if it is truly lightweight.',
+        ? 'The host has already tracked this task (KStar task + confirmed projection + world-model forecast). Governance is handled automatically — just execute the work.'
+        : 'This message looks task-shaped. The host did not open a governed KStar task for it (routing judged it non-task or the judgement was unavailable), so this turn runs ungoverned.',
       '',
     ].join('\n');
   } catch (error) {

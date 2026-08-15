@@ -328,6 +328,14 @@ beforeEach(async () => {
     isTask: true,
     continuation: false,
   }));
+  // Default auto-forecast generator: two plausible candidates so host
+  // routing + dispatch tests never hit the real model runner. Individual
+  // tests may override via _setAutoForecastGeneratorForTest.
+  const autoForecast = await import("../../../../src/main/features/kstar/auto-forecast");
+  autoForecast._setAutoForecastGeneratorForTest(async () => JSON.stringify([
+    { id: 'c1', plan: ['Inspect', 'Verify'], expectedTools: ['read_file'], expectedActors: ['commander'], predictedResult: { summary: 'done' } },
+    { id: 'c2', plan: ['Draft', 'Deliver'], expectedTools: ['write_file'], expectedActors: ['commander'], predictedResult: { summary: 'done too' } },
+  ]));
   const users = await import("../../../../src/main/features/users");
   users.activateUser(TEST_UID);
 
@@ -1001,7 +1009,7 @@ describe("group_chat state logging privacy", () => {
 });
 
 describe("group_chat bus integration › G8d in-process dispatch (run_worker / dispatch_to)", () => {
-  it('exposes kstar_control to the formal Commander when the rollout flag is enabled', async () => {
+  it('does NOT expose kstar_control to the Commander (world model owns the lifecycle)', async () => {
     const cid = newCid();
     const state = await import('../../../../src/main/features/group_chat/state');
     const bus = await import('../../../../src/main/features/group_chat/bus');
@@ -1019,7 +1027,9 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
         text: 'inspect KStar tools',
       });
       await waitForQuiescent(TEST_UID, cid, 4000);
-      expect(_recordedToolDefinitions.filter((tool) => tool.name === 'kstar_control')).toHaveLength(1);
+      // The Commander must never see kstar_control: task/projection/forecast
+      // are all host-side now (routing + auto-forecast).
+      expect(_recordedToolDefinitions.filter((tool) => tool.name === 'kstar_control')).toHaveLength(0);
     } finally {
       if (previous === undefined) delete process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
       else process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = previous;
@@ -5441,12 +5451,14 @@ describe("group_chat bus integration › KStar privileged dispatch approval", ()
     unsubscribe();
   }, 10_000);
 
-  it("still blocks a hand_off_to without a committed forecast when the task was NOT auto-created (once-only semantics)", async () => {
+  it("proceeds with a hand_off_to when no forecast exists (world model owns prediction; missing forecast is advisory, not a gate)", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
-    // Pre-existing task with confirmed projection but NO forecast: this was
-    // not host-auto-created by THIS dispatch, so the forecast gate must hold.
+    // Pre-existing task with confirmed projection but NO forecast: the world
+    // model generates forecasts automatically; when it could not (no model /
+    // no candidates), execution proceeds rather than demanding a kstar_control
+    // call the Commander no longer has.
     await seedKstarControlledConversation(cid, { projectionStatus: "confirmed" });
 
     _setScript(state.buildGconvSessionId(cid), [
@@ -5454,17 +5466,16 @@ describe("group_chat bus integration › KStar privileged dispatch approval", ()
       { type: "final", text: "handed off" },
     ]);
     _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
-      { type: "final", text: "MUST NOT RUN" },
+      { type: "final", text: "delivered" },
     ]);
 
     await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "deliver the report" });
     await waitForQuiescent(TEST_UID, cid, 6000);
 
     const toolResult = _recordedToolResults.find((r) => r.name === "hand_off_to");
-    expect(toolResult?.isError).toBe(true);
-    expect(JSON.parse(toolResult!.content).error).toMatch(/Forecast is not committed/);
-    // The agent never started.
-    expect(_recordedCalls.filter((c) => c.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
+    expect(toolResult?.isError).toBeFalsy();
+    // The agent DID run.
+    expect(_recordedCalls.filter((c) => c.sid === state.buildGmemberSessionId(cid, AGENT_ID)).length).toBeGreaterThan(0);
   }, 10_000);
 });
 

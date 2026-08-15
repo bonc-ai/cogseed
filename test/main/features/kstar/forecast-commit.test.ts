@@ -212,6 +212,9 @@ describe('Commander Forecast host commit', () => {
 
     await expect(forecast.commitCommanderForecast('user-a', {
       ...seeded.input,
+      // A NON-empty allowlist still rejects unavailable tools; an empty
+      // allowlist (auto-forecast) means no tool constraint.
+      allowedToolNames: new Set(['read_file', 'write_file']),
       candidates: [invalidCandidate, candidate({ id: 'path-b' })],
     })).rejects.toMatchObject({ code });
     expect(forecastFiles()).toEqual([]);

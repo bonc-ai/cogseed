@@ -43,7 +43,9 @@ function texts(value: unknown, field: string, maxItems: number, maxLength: numbe
   // Tolerant normalization: deepseek-v4-flash frequently flattens nested
   // arrays into a single string (live-observed: plan and expectedTools
   // arrived as one prose sentence). A single string is treated as a
-  // one-item array; malformed arrays are still rejected.
+  // one-item array; missing/undefined values are only legal for optional
+  // fields (allowEmpty); malformed arrays are still rejected.
+  if (value === undefined && allowEmpty) return [];
   const items = typeof value === 'string' ? [value] : value;
   if (!Array.isArray(items) || items.length > maxItems) throw new Error(`invalid_candidate_${field}`);
   const out = items.map((item) => text(item, field, maxLength));
@@ -98,7 +100,10 @@ export function recomputeCandidateScore(value: unknown): WorldModelCandidateScor
 
 function intervention(raw: Record<string, unknown>, context: WorldModelCandidateValidationContext): WorldModelIntervention {
   const expectedTools = texts(raw.expectedTools, 'expected_tools', MAX_TOOLS, 120, true);
-  if (context.allowedTools) {
+  // Empty set = no tool availability constraint (auto-forecast: the
+  // generator cannot know the live tool set at prediction time). Only a
+  // NON-empty allowlist rejects unavailable tools.
+  if (context.allowedTools && context.allowedTools.size > 0) {
     for (const tool of expectedTools) {
       if (!context.allowedTools.has(tool)) throw new Error(`unavailable_tool:${tool}`);
     }
@@ -112,7 +117,10 @@ function intervention(raw: Record<string, unknown>, context: WorldModelCandidate
 
 function predictedResult(raw: unknown): WorldModelPredictedResult {
   // Tolerant normalization: the model may flatten predictedResult to a plain
-  // string (live-observed). A string becomes { summary }.
+  // string (live-observed). A string becomes { summary }. acceptanceSignals
+  // are optional (auto-forecast candidates may omit them) → missing/empty is
+  // an empty list, NOT a validation error; the old non-empty requirement
+  // rejected every auto-generated candidate.
   if (typeof raw === 'string') {
     return {
       summary: text(raw, 'result_summary', 4_000),
@@ -124,7 +132,7 @@ function predictedResult(raw: unknown): WorldModelPredictedResult {
   const result = raw as Record<string, unknown>;
   return {
     summary: text(result.summary, 'result_summary', 4_000),
-    acceptanceSignals: texts(result.acceptanceSignals, 'acceptance_signals', MAX_SIGNALS, 1_000),
+    acceptanceSignals: texts(result.acceptanceSignals, 'acceptance_signals', MAX_SIGNALS, 1_000, true),
     predictedFiles: texts(result.predictedFiles, 'predicted_files', MAX_FILES, 1_000, true),
   };
 }

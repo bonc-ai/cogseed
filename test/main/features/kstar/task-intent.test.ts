@@ -24,21 +24,20 @@ describe('KStar host task-intent detection (layer 1)', () => {
   it('renders an advisory hint only for task-shaped messages', () => {
     expect(taskIntentHint('你好')).toBe('');
     expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).toContain('Host routing note');
-    expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).toContain('kstar_control');
+    // The hint never instructs a kstar_control call (world model owns the
+    // lifecycle; the tool is no longer in the Commander's surface).
+    expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).not.toContain('kstar_control');
   });
 
   it('never claims tracked state the host did not actually open', () => {
-    // Default (no fact): the note must NOT say "already tracked" — the old
-    // unconditional claim lied to the Commander whenever the model judgement
-    // failed, making it skip upsert_state on a nonexistent task.
+    // Default (no fact): the note must NOT say "already tracked".
     const defaultHint = taskIntentHint('审查一下 bus.ts 的守卫实现');
     expect(defaultHint).not.toContain('already tracked');
     expect(defaultHint).toContain('did not open');
-    expect(defaultHint).toContain('upsert_state');
     // Only when the host really opened the task may the note say so.
     const openedHint = taskIntentHint('审查一下 bus.ts 的守卫实现', { hostOpenedTask: true });
     expect(openedHint).toContain('already tracked');
-    expect(openedHint).toContain('commit_forecast');
+    expect(openedHint).toContain('Governance is handled automatically');
     expect(openedHint).not.toContain('did not open');
   });
 
