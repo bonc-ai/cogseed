@@ -312,6 +312,28 @@ export async function createAbilityAsset(
   return stored;
 }
 
+/** System-authored formal asset boundary (KStar direct experience line).
+ *  Content-addressed and idempotent: the same asset id is never duplicated.
+ *  Validation happens through asAsset before the record is persisted. */
+export async function createSystemAbilityAsset(
+  userId: string,
+  input: RecallAbilityAssetRecord,
+  reason: string,
+): Promise<RecallAbilityAssetRecord> {
+  if (!safeId(userId) || !safeId(input.id) || !safeId(input.candidateId || '')) throw new Error('invalid system ability asset identity');
+  if (typeof reason !== 'string' || !reason.trim() || reason.length > 1_000) throw new Error('invalid system ability asset reason');
+  const validated = asAsset(input);
+  if (validated.ownerId !== userId) throw new Error('ability asset owner mismatch');
+  const stored = asAsset(await updateRecallJsonRecord(
+    userId,
+    'ability-assets',
+    validated.id,
+    (current) => current || validated,
+  ));
+  await initializeAbilityAsset(userId, stored, { reason: reason.trim(), actor: 'system' });
+  return stored;
+}
+
 export async function readAbilityAsset(userId: string, assetId: string): Promise<RecallAbilityAssetRecord> {
   const raw = await readRecallJsonRecord(userId, 'ability-assets', assetId);
   if (!raw) throw new Error('recall ability asset not found');
@@ -710,6 +732,22 @@ export async function listAbilityAssetVersions(userId: string, assetId: string):
   return (await listRecallJsonlRecords(userId, 'ability-asset-versions', assetId, 0)).map(asVersion);
 }
 
+/** Read the immutable content snapshot of a specific asset version, or null
+ *  when no such version record exists. Used by prompt injection so confirmed
+ *  Projections keep injecting exactly the knowledge the user approved. */
+export async function readAbilityAssetVersionSnapshot(
+  userId: string,
+  assetId: string,
+  version: string,
+): Promise<AbilityAssetVersionRecord['snapshot'] | null> {
+  if (!safeId(userId) || !safeId(assetId) || typeof version !== 'string' || !version.trim()) {
+    throw new Error('invalid ability asset version reference');
+  }
+  const records = await listAbilityAssetVersions(userId, assetId);
+  const match = records.find((record) => record.version === version);
+  return match?.snapshot ?? null;
+}
+
 export async function listAbilityAssetAudit(userId: string, assetId: string): Promise<AbilityAssetAuditRecord[]> {
   return (await listRecallJsonlRecords(userId, 'ability-asset-audit', assetId, 0)) as AbilityAssetAuditRecord[];
 }
@@ -731,6 +769,41 @@ export async function setAbilityAssetMaturity(userId: string, assetId: string, m
  * User Confirmed / Unverified 档，正好表达「资产仍在、效果待重新验证」。来源随后
  * 恢复也不会自动升回去，新的 proof 才能升阶。
  */
+/**
+ * 证据撤销后暂停由它支撑的正式资产（系统发起，幂等）。
+ *
+ * 资产仍是用户确认过的正式资产，不删除、不撤销；但来源链已失效，暂停后不再进入
+ * 新 Projection、不再注入 Prompt，直到用户显式恢复（resume 仍要求 user actor）。
+ */
+export async function pauseAbilityAssetForRevokedEvidence(
+  userId: string,
+  assetId: string,
+  source: Pick<CognitionSourceRef, 'kind' | 'id'>,
+): Promise<{ asset: RecallAbilityAssetRecord; paused: boolean }> {
+  if (typeof source.kind !== 'string' || !safeId(source.id)) throw new Error('invalid revoked evidence source');
+  let paused = false;
+  const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    if (
+      current.status === 'purged'
+      || current.status === 'revoked'
+      || current.status === 'paused'
+      || !current.evidenceRefs.some((ref) => ref.kind === source.kind && ref.id === source.id)
+    ) return current;
+    paused = true;
+    return { ...current, status: 'paused', updatedAt: new Date().toISOString() };
+  });
+  const asset = asAsset(updated);
+  if (paused) {
+    await appendAudit(userId, asset.id, 'paused', {
+      note: `evidence_revoked:${source.kind}:${source.id}`,
+      actor: 'system',
+    });
+  }
+  return { asset, paused };
+}
+
 export async function downgradeAbilityAssetMaturityForRevokedEvidence(
   userId: string,
   assetId: string,

@@ -178,6 +178,63 @@ export interface WorldModelKnowledge {
   assetVersions?: Record<string, string>;
   /** Legacy records store bare rules; new records store versioned rule refs. */
   rules: Array<CausalRule | WorldModelCausalRuleRef>;
+  /**
+   * Ontology assets — the user's durable personal facts/preferences held in
+   * memory (USER.md / MEMORY.md), modeled as `personal` ability assets.
+   * Unlike abilityAssets they are NOT projection-selected: they are loaded
+   * unconditionally so the world model reasons over the user's identity.
+   */
+  ontologyAssets?: WorldModelAbilityAsset[];
+  /**
+   * R-Box (ontology) — the user's durable business rules / mappings derived
+   * from relation fields (isRelation: true, `A → B` values) across the
+   * Personal Ontology. Persistent and slow-changing; joins the world-model
+   * R-Box alongside asset CausalRules (which are the ΔR lessons).
+   */
+  ontologyRules?: Array<{
+    id: string;
+    groupId: string;
+    groupTitle: string;
+    field: string;
+    subject: string;
+    relation: string;
+    object: string;
+  }>;
+  /**
+   * Rules whose trigger fired for THIS task (rule-engine output): the
+   * ontology/asset rules that actually apply, so the Commander reasons over
+   * the relevant subset instead of the whole library.
+   */
+  matchedRules?: Array<{
+    source: 'ontology' | 'asset';
+    ruleId: string;
+    trigger: string;
+    subject?: string;
+    object?: string;
+    cause?: string;
+    effect?: string;
+    mitigation?: string;
+    severity?: 'high' | 'medium' | 'low';
+    deltaR?: number | 'unknown';
+  }>;
+  /**
+   * T-Box — the ontology concept definitions (group ledger + field
+   * vocabulary) assets point at via ontologyRefs. Loaded fresh at forecast
+   * time; carries vocabulary, not field values.
+   */
+  ontologyTaxonomy?: {
+    groups: Array<{
+      groupId: string;
+      title: string;
+      templateId?: string;
+      templateVersion?: string;
+      fields: Array<{
+        name: string;
+        isRelation?: boolean;
+        description?: string;
+      }>;
+    }>;
+  };
 }
 
 export interface WorldModelSituation {

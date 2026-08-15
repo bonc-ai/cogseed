@@ -95,7 +95,7 @@ describe('Recall source controls', () => {
     await expect(assets.readAbilityAsset('user-a', otherAsset.id)).resolves.toMatchObject({ status: 'active' });
   });
 
-  it('downgrades verified assets when their Evidence is removed without revoking the asset', async () => {
+  it('downgrades and pauses verified assets when their Evidence is removed without revoking the asset', async () => {
     const { candidates, assets, controls } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Record architecture decisions.',
@@ -114,11 +114,12 @@ describe('Recall source controls', () => {
     expect(result).toMatchObject({
       affectedAssetIds: [asset.id],
       downgradedAssetIds: [asset.id],
+      pausedAssetIds: [asset.id],
       revokedAssetIds: [],
       failedAssetIds: [],
     });
     await expect(assets.readAbilityAsset('user-a', asset.id)).resolves.toMatchObject({
-      status: 'active',
+      status: 'paused',
       maturity: 'bud',
       evidenceRefs: expect.arrayContaining([expect.objectContaining({ id: 'conv-b' })]),
     });
@@ -132,6 +133,7 @@ describe('Recall source controls', () => {
 
     const repeated = await controls.removeCognitionSource('user-a', conversationSource as any, false);
     expect(repeated.downgradedAssetIds).toEqual([]);
+    expect(repeated.pausedAssetIds).toEqual([]);
     expect((await assets.listAbilityAssetAudit('user-a', asset.id))
       .filter((entry) => entry.action === 'maturity_downgraded')).toHaveLength(1);
   });
