@@ -17,7 +17,7 @@ const DRAFT_TTL_MS = 10 * 60_000;
 const MAX_DRAFTS_PER_USER = 20;
 const DISCOVERY_TIMEOUT_MS = 20_000;
 
-type Protocol = 'openai' | 'anthropic' | 'gemini';
+type Protocol = 'openai' | 'openai-responses' | 'anthropic' | 'gemini';
 
 interface CcSwitchDraft {
   userId: string;
@@ -76,7 +76,7 @@ function normalizeBaseUrl(raw: unknown): string {
 
 function appendModelsPath(baseUrl: string, protocol: Protocol): string {
   const base = normalizeBaseUrl(baseUrl);
-  if (protocol === 'openai') return /\/v1(?:\/)?$/i.test(base) ? `${base}/models` : `${base}/v1/models`;
+  if (protocol === 'openai' || protocol === 'openai-responses') return /\/v1(?:\/)?$/i.test(base) ? `${base}/models` : `${base}/v1/models`;
   if (protocol === 'anthropic') return /\/v1$/i.test(base) ? `${base}/models` : `${base}/v1/models`;
   return /\/v\d+(?:beta\d*)?$/i.test(base) ? `${base}/models` : `${base}/v1beta/models`;
 }
@@ -186,7 +186,7 @@ async function discoverLiveModels(
   catch { return { ok: false, errorCode: 'invalid_request', retryable: false, manualAllowed: false }; }
 
   const headers: Record<string, string> = { accept: 'application/json' };
-  if (protocol === 'openai') headers.authorization = `Bearer ${key}`;
+  if (protocol === 'openai' || protocol === 'openai-responses') headers.authorization = `Bearer ${key}`;
   else if (protocol === 'anthropic') {
     headers['x-api-key'] = key;
     headers['anthropic-version'] = '2023-06-01';

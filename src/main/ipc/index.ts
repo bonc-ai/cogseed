@@ -3619,7 +3619,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     if (kind === 'custom_api_key') {
       const protocol = boundedText(args.protocol, 'protocol', 20);
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
       return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
         kind,
         protocol,
@@ -3658,7 +3658,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     if (kind === 'custom_api_key') {
       const protocol = boundedText(args.protocol, 'protocol', 20);
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
       return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
         kind,
         protocol,
@@ -3698,7 +3698,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     if (args?.providerKind === 'custom' && args?.authType === 'api_key') {
       const protocol = boundedText(args?.customProvider?.protocol, 'protocol', 20);
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
       return auth.completeAuthorization(ctx.userId, {
         requestId, selectedModels, defaultModel,
         authType: 'api_key', source: 'manual', providerKind: 'custom',
