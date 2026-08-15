@@ -6173,6 +6173,11 @@ async function loadConversationHistory(cid, opts = {}) {
   const perfStartedAt = performance.now();
   const container = document.getElementById('chat-history');
   _cancelActiveUserMessageEdit({ focus: false });
+  // 9.1 会话区域统一框架：切换会话时复位顶部执行计划轨道（plan-rail.js）。
+  // 无该会话的 plan 时轨道自隐藏；历史恢复由 _renderPersistedProcess 喂入。
+  if (typeof window.planRail !== 'undefined' && typeof window.planRail.setCid === 'function') {
+    window.planRail.setCid(cid);
+  }
   const preserveScroll = opts && opts.preserveScroll === true;
   const scrollSnapshot = preserveScroll ? _captureHistoryReloadScroll(container) : null;
   container.classList.remove('has-scroll-offset');
@@ -7890,6 +7895,12 @@ function _renderPersistedProcess(msgDiv, items, { expanded = false } = {}) {
     const itemEvent = item && item.type === 'event'
       ? item.event
       : (item && item.type === 'progress' ? item.event : null);
+    // 9.1 会话区域统一框架：历史消息中的 plan 事件喂给顶部执行计划轨道
+    // （plan-rail.js，按当前会话幂等合并，重放不重复）。
+    if (itemEvent && itemEvent.stream === 'plan' && typeof window.planRail !== 'undefined'
+        && typeof window.planRail.restorePlanEvent === 'function') {
+      window.planRail.restorePlanEvent(itemEvent);
+    }
     if (item && item.type === 'progress') {
       const preferEventText = itemEvent && ['context', 'compaction', 'runtime'].includes(itemEvent.stream);
       text = (preferEventText ? _formatEventLine(itemEvent) : '')
@@ -12509,6 +12520,12 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
         const before = _processLineCount(target);
         _renderAgentEvent(target, data.event);
         const evt = data.event || {};
+        // 9.1 会话区域统一框架：把 plan 事件实时转发给顶部执行计划轨道
+        // （plan-rail.js）。消息流内的 plan-announce 标签保持不变。
+        if (evt.stream === 'plan' && typeof window.planRail !== 'undefined'
+            && typeof window.planRail.onPlanEvent === 'function') {
+          window.planRail.onPlanEvent(cid, evt);
+        }
         const line = evt.stream === 'tool' ? _formatEventLine(evt) : null;
         if (line && _processLineCount(target) <= before) {
           _streamingAppendProgress(target, line, _eventProcessKind(evt, line), _processEventName(evt));

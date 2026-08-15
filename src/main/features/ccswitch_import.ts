@@ -320,7 +320,11 @@ export function readCcSwitchImportItems(
     const skipped: CcSwitchSkippedItem[] = [];
     for (const r of rows) {
       const item = mapRow(r.app_type, r.id, r.name, r.category, r.settings_config, r.website_url, r.notes);
-      if (item && String(item.apiKey || '').trim() && !item.needsKey) {
+      // Needs-key rows (mapRow set needsKey because CC Switch stores the key
+      // elsewhere, e.g. env_key / the CLI's own auth store) are still imported:
+      // the user fills in the key after the preview. See syncFromCcSwitch's
+      // needsKey handling and model_authorization_discovery's missing_key gate.
+      if (item && (String(item.apiKey || '').trim() || item.needsKey)) {
         items.push(item);
         continue;
       }

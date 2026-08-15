@@ -361,6 +361,16 @@ describe('auth › listProviders grouping', () => {
     expect(custom!.supportsApiKey).toBe(true);
     expect(custom!.supportsOAuth).toBe(false);
     expect(custom!.manualModel).toBe(true);
+
+    // MiniMax OAuth surfaces are oauthOnly via the catalog mark, not a
+    // hard-coded list (minimax-cn stays API-key capable through the alias).
+    const minimaxOAuth = providers.find((p) => p.id === 'minimax-portal');
+    expect(minimaxOAuth).toBeTruthy();
+    expect(minimaxOAuth!.supportsApiKey).toBe(false);
+    expect(minimaxOAuth!.supportsOAuth).toBe(true);
+    const minimaxCn = providers.find((p) => p.id === 'minimax-cn');
+    expect(minimaxCn).toBeTruthy();
+    expect(minimaxCn!.supportsApiKey).toBe(true);
   });
 });
 
@@ -642,6 +652,67 @@ describe('auth › hasConfiguredModel', () => {
       if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
       else process.env.ANTHROPIC_API_KEY = prev;
     }
+  });
+});
+
+describe('auth › getConfiguredModelOAuthExpiredMessage', () => {
+  async function saveStoreWithOAuthProfile(profileId: string, expiresInMs: number, withEntry: boolean): Promise<void> {
+    const a = await import('../../../src/main/features/auth');
+    a.saveProfilesForUser(TEST_UID, {
+      version: 6,
+      profiles: {
+        [profileId]: {
+          type: 'oauth',
+          provider: 'anthropic',
+          label: 'default',
+          access: 'access-token',
+          refresh: 'refresh-token',
+          expires: Date.now() + expiresInMs,
+          createdAt: Date.now(),
+          lastUsed: 0,
+        },
+      },
+      entries: withEntry ? [{
+        entryId: 'e-oauth-expired',
+        provider: 'anthropic',
+        model: 'claude-opus-4-8',
+        profileId,
+        lastUsed: 0,
+        createdAt: Date.now(),
+      }] : [],
+      searchProfiles: [],
+      imageProfiles: [],
+      videoProfiles: [],
+      ttsProfiles: [],
+      customProviders: [],
+      authorizationRequests: [],
+    });
+  }
+
+  it('returns null when no chat entry is OAuth-backed', async () => {
+    const a = await import('../../../src/main/features/auth');
+    expect(a.getConfiguredModelOAuthExpiredMessage()).toBeNull();
+  });
+
+  it('returns null while the OAuth access token is still valid', async () => {
+    await saveStoreWithOAuthProfile('anthropic:default', 60_000, true);
+    const a = await import('../../../src/main/features/auth');
+    expect(a.getConfiguredModelOAuthExpiredMessage()).toBeNull();
+  });
+
+  it('reports the provider once the configured OAuth token has expired', async () => {
+    await saveStoreWithOAuthProfile('anthropic:default', -1, true);
+    const a = await import('../../../src/main/features/auth');
+    const message = a.getConfiguredModelOAuthExpiredMessage();
+    expect(message).not.toBeNull();
+    expect(message).toContain('Anthropic');
+    expect(message).toMatch(/expired|授权/i);
+  });
+
+  it('ignores expired OAuth profiles that are not wired into a chat entry', async () => {
+    await saveStoreWithOAuthProfile('anthropic:default', -1, false);
+    const a = await import('../../../src/main/features/auth');
+    expect(a.getConfiguredModelOAuthExpiredMessage()).toBeNull();
   });
 });
 

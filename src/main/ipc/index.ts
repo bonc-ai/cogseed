@@ -3558,9 +3558,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ── Auth / model config (settings page) ──
   'auth.listProviders': async () => auth.listProviders(),
   'auth.listModels': async ({ provider }) => auth.listModels(provider),
-  'auth.addApiKey': async ({ provider, apiKey, label, baseUrl }) => auth.addApiKey(provider, apiKey, label, { baseUrl }),
+  'auth.addApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }) => auth.addApiKey(provider, apiKey, label, {
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(maxOutputTokens !== undefined && maxOutputTokens !== null ? { maxOutputTokens } : {}),
+  }),
   // Legacy alias; renderer migrated to auth.addApiKey.
-  'auth.saveApiKey': async ({ provider, apiKey, label, baseUrl }) => auth.saveApiKey(provider, apiKey, label, { baseUrl }),
+  'auth.saveApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }) => auth.saveApiKey(provider, apiKey, label, {
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(maxOutputTokens !== undefined && maxOutputTokens !== null ? { maxOutputTokens } : {}),
+  }),
   'auth.renameProfile': async ({ profileId, label }) => auth.renameProfile(profileId, label),
   'auth.removeCredential': async ({ profileId }) => auth.removeCredential(profileId),
   'auth.testConnection': async ({ provider, model, profileId }) => auth.testConnection(provider, model, profileId),
