@@ -288,7 +288,7 @@ export interface CustomProviderModel {
 export interface CustomProvider {
   id: string;
   name: string;
-  protocol: 'anthropic' | 'openai' | 'gemini';
+  protocol: 'anthropic' | 'openai' | 'openai-responses' | 'gemini';
   baseUrl: string;
   apiKey: string;
   enabled: boolean;
@@ -680,7 +680,7 @@ function migrateCustomProviderModelsFromEntries(
 
 function parseCustomProvidersArray(arr: unknown, entries: readonly Entry[] = []): CustomProvider[] {
   if (!Array.isArray(arr)) return [];
-  const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'gemini']);
+  const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'openai-responses', 'gemini']);
   const out: CustomProvider[] = [];
   for (const raw of arr) {
     const p = raw as any;
@@ -1871,7 +1871,7 @@ export async function completeAuthorization(
       const protocol = draft?.protocol;
       if (!name) throw new Error('custom provider name required');
       if (!apiKey) throw new Error('apiKey required');
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') {
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') {
         throw new Error('unsupported custom provider protocol');
       }
       const baseUrl = normalizeAuthorizationBaseUrl(draft.baseUrl);
@@ -2263,6 +2263,7 @@ function runtimeProtocolForEntry(store: ProfilesFile, entry: Entry): RuntimeChat
   const custom = customProviderForId(store, entry.provider);
   if (custom) {
     if (custom.protocol === 'openai') return 'openai-completions';
+    if (custom.protocol === 'openai-responses') return 'openai-responses';
     if (custom.protocol === 'anthropic') return 'anthropic';
     if (custom.protocol === 'gemini') return 'gemini';
     return null;

@@ -33,7 +33,7 @@ async function activateAndAddApiKey(userId: string, provider: string, key: strin
 
 async function activateAndAddCustomProvider(
   userId: string,
-  input: { name: string; protocol: 'openai' | 'anthropic'; baseUrl: string; apiKey: string; model: string },
+  input: { name: string; protocol: 'openai' | 'openai-responses' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; model: string },
 ): Promise<{ providerId: string }> {
   const users = await import('../../../../src/main/features/users');
   users.activateUser(userId);
@@ -280,6 +280,30 @@ describe('CogSeed provider profiles', () => {
       model: 'mate-test-model',
       apiKey: 'sk-openai-responses-key',
       baseUrl: 'https://api.openai.com/v1',
+      maxOutputTokens: 8192,
+    });
+  });
+
+  it('resolves an openai-responses custom provider to the Responses wire protocol', async () => {
+    const { providerId } = await activateAndAddCustomProvider(USER_A, {
+      name: 'OpenAI Relay',
+      protocol: 'openai-responses',
+      baseUrl: 'https://openai-relay.example/v1',
+      apiKey: 'responses-relay-key',
+      model: 'gpt-5.6-sol',
+    });
+
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(USER_B);
+    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+
+    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+      profileId: providerId,
+      provider: providerId,
+      protocol: 'openai-responses',
+      model: 'gpt-5.6-sol',
+      apiKey: 'responses-relay-key',
+      baseUrl: 'https://openai-relay.example/v1',
       maxOutputTokens: 8192,
     });
   });

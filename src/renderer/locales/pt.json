@@ -3931,5 +3931,8 @@
   "touchpoint_settings.template.preview.approve": "Aprovar",
   "touchpoint_settings.template.preview.reject": "Rejeitar",
   "touchpoint_settings.template.preview.note": "O aprovador pode adicionar uma observação no Feishu",
-  "touchpoint_settings.template.saved": "Modelo e roteamento da instância salvos."
+  "touchpoint_settings.template.saved": "Modelo e roteamento da instância salvos.",
+  "settings.custom_providers.api_format_openai_responses": "OpenAI Responses (/responses)",
+  "settings.custom_providers.protocol_openai_responses": "OpenAI Responses",
+  "settings.model_authorization.protocol_openai_responses": "OpenAI Responses (/responses)"
 }
