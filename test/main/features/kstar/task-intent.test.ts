@@ -27,6 +27,21 @@ describe('KStar host task-intent detection (layer 1)', () => {
     expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).toContain('kstar_control');
   });
 
+  it('never claims tracked state the host did not actually open', () => {
+    // Default (no fact): the note must NOT say "already tracked" — the old
+    // unconditional claim lied to the Commander whenever the model judgement
+    // failed, making it skip upsert_state on a nonexistent task.
+    const defaultHint = taskIntentHint('审查一下 bus.ts 的守卫实现');
+    expect(defaultHint).not.toContain('already tracked');
+    expect(defaultHint).toContain('did not open');
+    expect(defaultHint).toContain('upsert_state');
+    // Only when the host really opened the task may the note say so.
+    const openedHint = taskIntentHint('审查一下 bus.ts 的守卫实现', { hostOpenedTask: true });
+    expect(openedHint).toContain('already tracked');
+    expect(openedHint).toContain('commit_forecast');
+    expect(openedHint).not.toContain('did not open');
+  });
+
   it('isObviouslyTrivial filters greetings/status/emoji deterministically', () => {
     const { isObviouslyTrivial } = require('../../../../src/main/features/kstar/task-intent');
     expect(isObviouslyTrivial('你好')).toBe(true);

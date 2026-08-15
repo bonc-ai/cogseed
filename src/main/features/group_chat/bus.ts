@@ -3688,6 +3688,10 @@ async function runActorTurnBody(
   // process trail: prep/control-plane tools may precede hand_off_to, and that
   // brittle classification is what repeatedly recreated empty tail bubbles.
   let terminalHandoffCompleted = false;
+  // True only when the host's model-judged routing ACTUALLY opened a KStar
+  // task + projection for this turn's user message. The Commander hint must
+  // not claim tracked state that doesn't exist (see call site below).
+  let hostOpenedTaskThisTurn = false;
   if (isCommander) {
     // 空间模式会话（kind=space_builder）：用户↔构建师的一对一引导对话。
     // 构建师不派活不写文件——零额外工具，数据全部走 Runtime injection 快照。
@@ -3702,7 +3706,15 @@ async function runActorTurnBody(
       && item.fromActorId === USER_ID
       && process.env.ORKAS_KSTAR_HOST_ROUTING !== '0'
     ) {
-      await hostRouteTaskTurn(uid, cid, item.sourceMessageText, item.msgId, turnProjectId);
+      const routing = await hostRouteTaskTurn(uid, cid, item.sourceMessageText, item.msgId, turnProjectId);
+      // The hint must reflect what the host ACTUALLY did. The old hint
+      // unconditionally claimed "the host has already tracked this task"
+      // while the routing judgement could silently no-op (parser/prompt
+      // contract mismatch) — so the Commander was told to skip
+      // upsert_state on a task that never existed, then its commit_forecast
+      // failed with "forecast proposal is required". Only advertise the
+      // tracked state when it is true.
+      hostOpenedTaskThisTurn = routing.openedTask;
     }
     if (convKind === "space_builder") {
       systemPrompt = await buildSpaceBuilderSystemPrompt(uid);
@@ -3864,9 +3876,11 @@ async function runActorTurnBody(
       // Layer 1 routing uplift: deterministic task-intent detection adds an
       // advisory hint so an ordinary user request is not silently skipped by
       // the Commander's default kstar:skip. Advisory only — no state writes.
+      // The hint text reflects hostOpenedTaskThisTurn so it never claims a
+      // tracked task the host did not actually create.
       if (item.fromActorId === USER_ID) {
         const { taskIntentHint } = await import('../kstar/task-intent');
-        const hint = taskIntentHint(item.sourceMessageText);
+        const hint = taskIntentHint(item.sourceMessageText, { hostOpenedTask: hostOpenedTaskThisTurn });
         if (hint) systemPrompt = `${systemPrompt}\n\n${hint}`;
       }
     } else if (item.dispatchedAssetIds?.length) {
@@ -8001,20 +8015,33 @@ function _toolError(error: string): { content: string; isError: true } {
  */
 /** Parse the Commander's routing judgement:
  *  `<kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge>`.
- *  Returns null when absent/malformed. */
+ *  Returns null when absent/malformed. Tolerant of bare JSON output too —
+ *  the historical prompt said "no markdown / plain JSON" while the parser
+ *  only accepted the tagged form, so EVERY live routing judgement silently
+ *  failed and no task was ever opened. Accept both shapes. */
 export function parseContinuationJudgement(text: string | undefined): { isTask: boolean; continuation: boolean } | null {
-  const match = String(text || '').match(/<kstar-judge>([\s\S]*?)<\/kstar-judge>/);
-  if (!match) return null;
-  try {
-    const value = JSON.parse(match[1].trim()) as { is_task?: unknown; continuation?: unknown };
-    if (typeof value.is_task !== 'boolean') return null;
-    return {
-      isTask: value.is_task,
-      continuation: value.continuation === true,
-    };
-  } catch {
-    return null;
+  const raw = String(text || '').trim();
+  const tagged = raw.match(/<kstar-judge>\s*([\s\S]*?)\s*<\/kstar-judge>/);
+  const payload = (tagged ? tagged[1] : raw).trim();
+  const jsonStart = payload.search(/[{[]/);
+  if (jsonStart < 0) return null;
+  const candidate = payload.slice(jsonStart);
+  // Trim trailing prose (e.g. "Sure: {...} here.") by progressively cutting
+  // the suffix until the prefix parses as JSON; the first successful parse
+  // is authoritative.
+  for (let end = candidate.length; end > 0; end -= 1) {
+    try {
+      const value = JSON.parse(candidate.slice(0, end)) as { is_task?: unknown; continuation?: unknown };
+      if (typeof value.is_task !== 'boolean') return null;
+      return {
+        isTask: value.is_task,
+        continuation: value.continuation === true,
+      };
+    } catch {
+      /* keep trimming */
+    }
   }
+  return null;
 }
 
 /** Default ceiling for the model-judged routing question. */
@@ -8028,7 +8055,7 @@ export interface ModelRoutingVerdict {
 const ROUTING_JUDGE_PROMPT = [
   'You are the routing judge for a single user message.',
   'Decide whether the message is a real task, and (when a tracked task is open) whether it CONTINUES that task or starts a NEW one.',
-  'Return exactly one JSON object and no markdown: {"is_task":true|false,"continuation":true|false}.',
+  'Reply with EXACTLY one <kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge> block and nothing else around it.',
   'is_task=false for greetings, thanks, acknowledgements, status questions, and small talk.',
   'continuation=true when the message refines/follows-up/corrects the open task ("这个报告再加一节"); continuation=false when it is a different request while an older task exists ("帮我写个 Python 脚本" while a report task is open).',
   'A task does not need a strong verb: "帮我看看这个文件哪里不对" is a task.',
@@ -8053,7 +8080,10 @@ async function judgeModelRouting(
   }
   try {
     const { hasConfiguredModel } = await import('../auth');
-    if (!hasConfiguredModel().configured) return null;
+    if (!hasConfiguredModel().configured) {
+      log.warn('kstar model routing skipped: no configured model', { cid: maskId(cid) });
+      return null;
+    }
     const { buildRunner } = await import('../../model/core-agent/runner');
     const { runner } = await buildRunner({
       sessionId: `kstar-routing-${cid}`,
@@ -8083,6 +8113,13 @@ async function judgeModelRouting(
       log.warn('kstar model routing judge output unparsable', { cid: maskId(cid), text: String(task.text || '').slice(0, 200) });
       return null;
     }
+    log.info('kstar model routing verdict', {
+      cid: maskId(cid),
+      isTask: verdict.isTask,
+      continuation: verdict.continuation,
+      hasOpenRequirement: !!openRequirement,
+      messagePreview: String(newMessage || '').replace(/\s+/g, ' ').slice(0, 80),
+    });
     return verdict;
   } catch (error) {
     log.warn(`kstar model routing degraded cid=${cid}: ${(error as Error).message}`);
@@ -8096,13 +8133,13 @@ async function hostRouteTaskTurn(
   messageText: string | undefined,
   sourceMessageId: string | undefined,
   workspaceId?: string,
-): Promise<void> {
+): Promise<{ openedTask: boolean }> {
   // Mixed routing: fast deterministic filter skips OBVIOUS trivial messages
   // (greetings/status/emoji) with zero model calls and zero KStar writes;
   // everything else goes to the model judgement which decides is_task AND
   // continuation in one call with full conversation context.
   const { isObviouslyTrivial } = await import('../kstar/task-intent');
-  if (isObviouslyTrivial(messageText)) return;
+  if (isObviouslyTrivial(messageText)) return { openedTask: false };
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
     const lifecycle = await readKstarTaskLifecycle(uid, cid);
@@ -8110,8 +8147,8 @@ async function hostRouteTaskTurn(
       ? { requirementId: lifecycle.requirement.id, goalText: lifecycle.requirement.goalText }
       : undefined;
     const verdict = await judgeModelRouting(uid, cid, messageText, openRequirement);
-    if (!verdict) return; // timeout/enqueue failure → no routing decision (safe no-op)
-    if (!verdict.isTask) return; // model says not a task → zero KStar writes
+    if (!verdict) return { openedTask: false }; // timeout/enqueue failure → no routing decision (safe no-op)
+    if (!verdict.isTask) return { openedTask: false }; // model says not a task → zero KStar writes
 
     if (openRequirement && verdict.continuation === false) {
       // Model judged: user moved to a NEW task while one was open. Close the
@@ -8143,11 +8180,11 @@ async function hostRouteTaskTurn(
         requirementId: openRequirement.requirementId,
       });
     } else if (openRequirement && verdict.continuation === true) {
-      return; // continues the open task → keep it
+      return { openedTask: false }; // continues the open task → keep it
     }
     const { executeKstarControl } = await import('../kstar/control-service');
     const goal = String(messageText || '').replace(/\s+/g, ' ').trim().slice(0, 4_000);
-    if (!goal) return;
+    if (!goal) return { openedTask: false };
     const created = await executeKstarControl(
       {
         userId: uid,
@@ -8163,7 +8200,7 @@ async function hostRouteTaskTurn(
         requirement: { operation: 'create', goalText: goal },
       },
     );
-    if (!created.ok || created.status !== 'state_committed') return;
+    if (!created.ok || created.status !== 'state_committed') return { openedTask: false };
     await executeKstarControl(
       {
         userId: uid,
@@ -8182,8 +8219,15 @@ async function hostRouteTaskTurn(
         },
       },
     );
+    log.info('kstar host routing opened task', {
+      cid: maskId(cid),
+      requirementId: created.requirementId,
+      sourceMessageId: sourceMessageId ? maskId(sourceMessageId) : undefined,
+    });
+    return { openedTask: true };
   } catch (error) {
     log.warn(`kstar host routing degraded cid=${cid}: ${(error as Error).message}`);
+    return { openedTask: false };
   }
 }
 

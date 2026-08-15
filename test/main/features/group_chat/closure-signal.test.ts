@@ -30,6 +30,20 @@ describe('Commander continuation judgement (user-behavior closure)', () => {
     expect(bus.parseContinuationJudgement('x<kstar-judge>{"is_task":"yes"}</kstar-judge>')).toBeNull();
   });
 
+  it('tolerates bare JSON and prose-wrapped judgements (historical prompt mismatch)', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    // The old judge prompt demanded bare JSON while the parser only accepted
+    // the tagged form → every live routing verdict silently failed. Both
+    // shapes must now parse.
+    expect(bus.parseContinuationJudgement('{"is_task":true,"continuation":false}'))
+      .toEqual({ isTask: true, continuation: false });
+    expect(bus.parseContinuationJudgement('```json\n{"is_task":false,"continuation":true}\n```'))
+      .toEqual({ isTask: false, continuation: true });
+    expect(bus.parseContinuationJudgement('Sure: {"is_task":true,"continuation":true} here.'))
+      .toEqual({ isTask: true, continuation: true });
+    expect(bus.parseContinuationJudgement('no json at all')).toBeNull();
+  });
+
   it('judge=false closes the old open task (user moved to a new request)', async () => {
     const store = await import('../../../../src/main/features/kstar/requirement-store');
     const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-judge', title: 'Report task' });
