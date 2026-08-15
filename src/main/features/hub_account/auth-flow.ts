@@ -14,6 +14,7 @@
  * local identity or its data — only the Hub session and binding metadata.
  */
 import * as os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { shell } from 'electron';
 
 import { getActiveUserId } from '../users';
@@ -42,6 +43,14 @@ function _deviceName(): string {
 
 function _deviceOs(): string {
   return `${os.platform()} ${os.release()}`;
+}
+
+function getOrCreateInstallationId(userId: string): string {
+  const state = readHubAccountState(userId);
+  if (state.installation_id) return state.installation_id;
+  const installation_id = randomUUID();
+  writeHubAccountState(userId, { installation_id });
+  return installation_id;
 }
 
 function _isExpiringSoon(session: HubSession, withinMs: number): boolean {
@@ -101,7 +110,11 @@ export async function completeLogin(
     throw new HubApiError('AUTH_INVALID_STATE', 'OAuth state 不匹配，请重新登录', 400);
   }
 
-  const result = await client.callback(code, state);
+  const result = await client.callback(code, state, {
+    installation_id: getOrCreateInstallationId(userId),
+    device_name: _deviceName(),
+    device_os: _deviceOs(),
+  });
   saveHubSession(userId, result.session);
   writeHubAccountState(userId, {
     account_id: result.account.account_id,
@@ -142,6 +155,7 @@ export async function bindLocalIdentity(
 ): Promise<HubBindResult> {
   const result = await client.bind(accessToken, {
     local_identity_id: getActiveUserId(),
+    installation_id: getOrCreateInstallationId(userId),
     device_name: _deviceName(),
     device_os: _deviceOs(),
   });

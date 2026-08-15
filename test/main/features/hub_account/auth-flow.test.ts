@@ -134,6 +134,16 @@ describe('hub account auth-flow', () => {
     expect(state.bound).toBe(true);
     expect(state.device_id).toBe('dev_1');
     expect(state.account_id).toBe('cogseed_acc_1');
+    expect(state.installation_id).toBeTypeOf('string');
+    expect(fakeClient.callback).toHaveBeenCalledWith(
+      'code1',
+      'state_abc',
+      expect.objectContaining({
+        installation_id: state.installation_id,
+        device_name: expect.any(String),
+        device_os: expect.any(String),
+      }),
+    );
   });
 
   it('completeLogin skips binding for an existing account', async () => {
@@ -173,6 +183,23 @@ describe('hub account auth-flow', () => {
     expect(authFlow.currentLoginState('88492103')).toBe('state_abc');
     await authFlow.completeLogin('88492103', 'code1', 'state_abc');
     expect(authFlow.currentLoginState('88492103')).toBeNull();
+  });
+
+  it('reuses the same installation_id across later logins', async () => {
+    await loginForTest();
+    const firstInstallationId = readHubAccountState('88492103').installation_id;
+    expect(firstInstallationId).toBeTypeOf('string');
+
+    await authFlow.startLogin('88492103');
+    await authFlow.completeLogin('88492103', 'code2', 'state_abc');
+
+    expect(fakeClient.callback).toHaveBeenNthCalledWith(
+      2,
+      'code2',
+      'state_abc',
+      expect.objectContaining({ installation_id: firstInstallationId }),
+    );
+    expect(readHubAccountState('88492103').installation_id).toBe(firstInstallationId);
   });
 
   it('refreshSession rotates the credentials', async () => {

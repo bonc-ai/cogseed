@@ -42,13 +42,23 @@ describe('hub account client', () => {
       },
     });
     const client = createHubClient(BASE);
-    const res = await client.callback('code1', 'state1');
+    const res = await client.callback('code1', 'state1', {
+      installation_id: 'install_1',
+      device_name: 'MacBook',
+      device_os: 'macOS 15.0',
+    });
     expect(res.is_new_account).toBe(true);
     expect(res.session.access_token).toBe('at');
     const [url, init] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/api/v1/auth/callback');
     expect(init.method).toBe('POST');
-    expect(JSON.parse(String(init.body))).toEqual({ code: 'code1', state: 'state1' });
+    expect(JSON.parse(String(init.body))).toEqual({
+      code: 'code1',
+      state: 'state1',
+      installation_id: 'install_1',
+      device_name: 'MacBook',
+      device_os: 'macOS 15.0',
+    });
   });
 
   it('authenticated endpoints attach the Bearer header', async () => {

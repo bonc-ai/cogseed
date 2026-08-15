@@ -15,6 +15,7 @@ import { createLogger } from '../../logger';
 import type {
   HubAccountMe,
   HubBindResult,
+  HubCallbackDeviceInfo,
   HubCallbackResult,
   HubConsent,
   HubDevice,
@@ -60,13 +61,13 @@ interface RequestOptions {
 
 export interface HubClient {
   login(provider: string, redirectUri: string): Promise<{ authorize_url: string; state: string }>;
-  callback(code: string, state: string): Promise<HubCallbackResult>;
+  callback(code: string, state: string, device: HubCallbackDeviceInfo): Promise<HubCallbackResult>;
   refresh(refreshToken: string): Promise<HubRefreshResult>;
   logout(accessToken: string): Promise<{ message: string }>;
   me(accessToken: string): Promise<HubAccountMe>;
   bind(
     accessToken: string,
-    body: { local_identity_id: string; device_name: string; device_os: string },
+    body: { local_identity_id: string; installation_id: string; device_name: string; device_os: string },
   ): Promise<HubBindResult>;
   listDevices(accessToken: string, page?: number, pageSize?: number): Promise<{ data: HubDevice[]; total: number }>;
   revokeDevice(accessToken: string, deviceId: string): Promise<{ device_id: string; revoked_sessions: number }>;
@@ -120,8 +121,8 @@ export function createHubClient(baseUrl: string): HubClient {
       const qs = new URLSearchParams({ provider, redirect_uri: redirectUri });
       return request<{ authorize_url: string; state: string }>(`/api/v1/auth/login?${qs.toString()}`);
     },
-    callback: (code, state) =>
-      request('/api/v1/auth/callback', { method: 'POST', body: { code, state } }),
+    callback: (code, state, device) =>
+      request('/api/v1/auth/callback', { method: 'POST', body: { code, state, ...device } }),
     refresh: (refreshToken) =>
       request('/api/v1/auth/refresh', { method: 'POST', body: { refresh_token: refreshToken } }),
     logout: (accessToken) =>
