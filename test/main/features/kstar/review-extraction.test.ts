@@ -71,6 +71,37 @@ describe('KSTAR review and Recall bridge', () => {
     expect(proposals).toEqual([]);
   });
 
+  it('precipitates a reasoned process-experience lesson even when attribution is unclear', async () => {
+    const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
+      import('../../../../src/main/features/kstar/review-service'),
+      import('../../../../src/main/features/kstar/extraction-service'),
+    ]);
+    const current = episode([
+      { name: 'read_file', status: 'ok' },
+      { name: 'write_file', status: 'ok' },
+    ]);
+    // Live-observed shape (北京资料 task): met_expected, delta unknown,
+    // attribution defaults to 'unclear' — but a concrete reusable lesson +
+    // confidence + reason IS the learning signal (the lesson text is the
+    // attribution). The old hasLearningSignal gate killed it.
+    const review = await saveKstarReview('review-user', current, {
+      deltaR: 'unknown',
+      deltaA: 'unknown',
+      outcome: 'met_expected',
+      attribution: 'unclear',
+      reason: 'The task was completed successfully and the lesson below is reusable.',
+      confidence: 0.9,
+      lesson: 'For "N 字资料" requests, state the actual character count (with punctuation) and organize by 概况—历史—现状—亮点 sections so the user can add/remove blocks.',
+      evidenceRefs: current.evidenceRefs,
+    });
+    const proposals = proposeKstarCandidates(current, review);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      suggestedType: 'rule',
+      judgment: expect.stringContaining('N 字资料'),
+    });
+  });
+
   it('extracts a skill-method proposal only when review evidence compares expected and actual results', async () => {
     const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
       import('../../../../src/main/features/kstar/review-service'),

@@ -30,7 +30,17 @@ export function hasLearningSignal(review: KstarReviewRecord): boolean {
     || review.deltaA !== 'unknown'
     || review.outcome === 'better_than_expected'
     || review.outcome === 'worse_than_expected'
-    || (review.confidence >= 0.7 && review.attribution !== 'unclear' && !!review.reason.trim());
+    || (review.confidence >= 0.7 && review.attribution !== 'unclear' && !!review.reason.trim())
+    // A concrete, reasoned lesson IS a learning signal even when the
+    // Commander could not name an attribution bucket (attribution defaults
+    // to 'unclear' for met_expected tasks). The lesson text itself carries
+    // the reusable experience; clearsPrecipitationGate still requires
+    // confidence + reason so routine successes do not pollute.
+    || Boolean(
+      review.lesson?.trim()
+      && review.confidence >= 0.7
+      && !!review.reason.trim(),
+    );
 }
 
 /** Evidence gate for precipitation (learning-reflex): a review precipitates
@@ -102,7 +112,12 @@ export function proposeKstarCandidates(
         : `For tasks like "${episode.t.userGoal}", use the verified workflow: ${distinctTools.join(' → ')}.`,
       summary: review.lesson?.trim() ? 'Reusable workflow lesson' : 'Verified multi-tool workflow',
       uncertainty: 'Generated from a verified workflow with an explicit learning signal; confirm before treating it as durable.',
-      suggestedType: 'skill_method',
+      // A lesson is judgment experience, not a workflow recipe: tag it
+      // 'rule' (or the named gap) so downstream use treats it as guidance
+      // instead of replaying a tool chain.
+      suggestedType: review.lesson?.trim()
+        ? (gapType(review) ?? 'rule')
+        : 'skill_method',
       suggestedScope: scopeForTask(episode.t.userGoal),
       sourceRefs,
       learningSignal: learningSignal(review),
