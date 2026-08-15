@@ -3857,9 +3857,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         baseUrl,
         apiKey: config.apiKey,
       });
-      if (!updateResult.ok) {
-        return { ok: false, error: (updateResult as { error: string }).error };
-      }
+      if (!updateResult.ok) return updateResult;
       providerId = existingProvider.id;
       log.info('active CLI config updated', { cli, providerId, mode: config.mode });
     } else {
@@ -3872,10 +3870,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         source: 'manual', // Use 'manual' as source since custom_providers doesn't recognize 'active_cli'
         externalId,
       });
-      if (!addResult.ok) {
-        return { ok: false, error: (addResult as { error: string }).error };
-      }
-      providerId = (addResult as { id: string }).id;
+      if (!addResult.ok) return addResult;
+      providerId = addResult.id;
       log.info('active CLI config stored', { cli, providerId, mode: config.mode });
     }
 
