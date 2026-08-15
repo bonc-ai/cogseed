@@ -1,8 +1,8 @@
 # KStar 沉淀统一候选池 + 语义去重设计（v2 整合版）
 
-- 日期：2026-08-15（v1 管线统一；v2 整合语义去重）
+- 日期：2026-08-15（v1 管线统一；v2 语义去重；v3 自动闭环 + 晋升前查重）
 - 分支：`codex/commander-centric-kstar`（已合并 develop 39 提交）
-- 状态：Design Review
+- 状态：Design Review（已确认：统一候选池、语义去重、自动闭环、晋升前资产查重）
 - 关联：P3394 认知资产全生命周期规范 doc-v0.1（§3.1 统一链路、§8 候选资格、§9 轻量确认、§15 重复/补充/冲突）
 - 目标读者：PO、Tech Lead、产品设计、QA
 
@@ -188,16 +188,111 @@ capture 已走 `saveRecallCandidate`，指纹去重自动与我们的候选合�
 - embedding 结果缓存（`judgment → vector` 的 LRU，按 userId），避免重复计算
 - 超过池上限（如 500 条）时降级为"仅精确指纹 + 抽样语义比对"
 
-### 4.6 与既有资产的去重
+### 4.6 与既有资产的去重（入池时）
 
 语义比对对象**同时包含候选池与已沉淀资产**：
 - 与资产相似 ≥0.85 → 不新建候选，证据并入资产（`sourceRefs` 追加，资产 version 不变——补充证据不进版本）
 - 与资产相似 0.7-0.85 → 候选标记 `targetAssetId`（潜在 update 候选，走规范 §15.2 补充流程）
 - 与资产 <0.7 → 正常新建候选
 
+### 4.7 晋升前资产语义查重（统一出口，防时序竞争重复）
+
+**问题（用户确认的时序竞争）**：capture 线在**每 run 终态后 ~10 分钟**（quietMinutes）实时提取并自动晋升为资产；KStar 线在**任务闭环后**（自动闭环 30min 或用户触发）才聚合沉淀。因此同一经验存在时序竞争：
+
+```
+run 1 终态
+  ├─ capture：~10min 后提取候选 → 自动晋升 → 资产 X（已写入！）
+  └─ KStar：等闭环（可能 30min+）→ 聚合 lesson → 入池查重
+       ├─ 对候选池查：capture 的候选已晋升 → 池内无重复 → 通过
+       └─ 对资产库查：发现资产 X 语义重复 → 挡住 ✅（4.6 入池时查）
+```
+
+但 **4.6 只覆盖"入池时"**。若入池时资产 X 尚未写入（capture 还在静默窗口）、或候选先于资产（我们闭环先入池、capture 后晋升），仍可能双写：
+
+```
+KStar 闭环 → 入池（资产库尚无 X）→ 候选通过 → 晋升 → 资产 X₁
+capture 静默窗口结束 → 提取同内容 → 入池查重 → 候选池有、资产库有 X₁
+  → 4.6 命中资产 X₁ → 合并 ✅（这个方向 OK）
+```
+
+**真正的缺口**：capture 的 `autoApplyRecallCandidate` → `promoteRecallCandidate` 只按 `candidateId+decisionId` / `targetAssetId` 精确查重，**晋升前不做资产库语义查重**。若 capture 先晋升（资产 X），KStar 后入池——4.6 能挡；但若**两个候选都从不同 run 提取、措辞不同但语义相同**，各自通过入池查重后都晋升，资产 X₁ 与 X₂ 并存（措辞不同 → 精确指纹不命中）。
+
+**方案：统一晋升出口 + 晋升前语义查重（双向锁）**
+
+1. 新增共享函数 `promoteWithSemanticDedup(userId, candidateId, opts)`：
+   - 晋升前对**资产库**做语义查重（`findSemanticDuplicate`，阈值 ≥0.85）
+   - 命中已有资产 → 不新建，`sourceRefs`/`evidenceRefs` 并入已有资产，候选标记 `mergedIntoAssetId`，返回已有资产
+   - 未命中 → 走原 `promoteRecallCandidate`
+2. **两条线的晋升都走该出口**：
+   - KStar：`precipitateKstarCandidatesAsAssets` 内部
+   - capture：`automaticallyApplyReviewableCandidates` 中 `autoApplyRecallCandidate` 替换为 `promoteWithSemanticDedup`（或注入选项，改动 capture 调用点）
+3. 效果：无论哪条线先晋升、措辞如何不同，**同一语义最多一份资产**；后到者合并证据。
+
+### 4.8 时序与一致性保证
+
+| 场景 | 入池查重（4.5/4.6） | 晋升查重（4.7） | 结果 |
+|---|---|---|---|
+| capture 先晋升，KStar 后入池 | 命中资产 → 并入 | — | 一份资产 ✅ |
+| KStar 先晋升，capture 后晋升 | 命中资产 → 并入 | — | 一份资产 ✅ |
+| 两候选措辞不同语义相同，先后晋升 | 各不命中（措辞差异） | **晋升时命中资产 → 并入** | 一份资产 ✅ |
+| 同 run 内多条相似候选 | saveRecallCandidate 指纹/语义合并 | — | 一份候选 ✅ |
+
 ---
 
-## 5. 状态流转（候选生命周期，含语义合并）
+## 5. 静默窗口自动闭环（KStar 线不再依赖用户触发）
+
+### 5.1 问题
+
+当前闭环只有 3 个入口，**全部依赖用户行为**：
+1. **B2 任务切换**——用户发新任务（continuation=false）才触发
+2. **finish**——用户显式"完成"
+3. **abandon**——用户显式放弃
+
+**死区**：任务做完 → 用户不说话了（去忙别的/关窗口）→ 任务永远 open → lesson 永远不沉淀（review 已存档但聚合不触发）。live 实例：孙悟空任务 review 带 lesson（confidence 0.95），但任务 open，沉淀卡住。
+
+### 5.2 方案：静默窗口自动闭环
+
+借鉴 capture 的 `waiting_quiet`（quietMinutes 静默后提取）模式：
+
+```
+任务终态（Commander 交付完成，turn_end）
+  → 启动静默窗口定时器（默认 30 分钟，可配置 AUTO_CLOSE_QUIET_MS）
+  → 窗口内无新用户消息
+      → 自动执行 finish（走现有 precipitateRequirementLevel 沉淀）
+  → 窗口内有新用户消息
+      → 取消定时器
+      → judge 判定 continuation=true → 继续原任务（不闭环）
+      → judge 判定 continuation=false → B2 正常切换（沉淀旧任务）
+```
+
+### 5.3 关键设计点
+
+| 问题 | 方案 |
+|---|---|
+| 误关风险（用户思考后回来继续） | 窗口够长（默认 30min）；**用户发消息即取消**；judge 判 continuation 决定去留 |
+| 重启丢失定时器 | 终态时在 task-state 写 `pendingAutoCloseAt`（持久化），启动时扫描恢复（`recoverPendingAutoClosures`，对齐 capture 的 `recoverRecallCaptures`） |
+| 自动闭环后用户又回来继续 | 任务已沉淀 → 新消息 judge 判定：continuation 语义则**开新任务**（上下文经投影接续），原任务保持已沉淀状态 |
+| 与 capture 线协调 | capture quietMinutes=10min 已在其线内实时提取；我们的窗口 **≥30min**（任务级闭环比提取更重，不宜过短） |
+| 触发点 | `startGroupKstarClosure` 的 terminal 订阅里，run 终态后启动窗口（与 capture orchestrator 并行，互不干扰） |
+| 沉淀内容 | 走现有 `finish` → `precipitateRequirementLevel`（闭环聚合，多 run lesson 合并沉淀） |
+| 高风险/待确认 | 自动闭环不改变确认策略：沉淀产物先进候选池（§3），高风险留"待我处理" |
+| 取消语义 | 任何用户消息到达即取消 pending；后续按 judge 判定走 continuation 或 B2 |
+
+### 5.4 状态机
+
+```
+open（活动）
+  ├─ run 终态 → 启动静默窗口（pendingAutoCloseAt = now + 30min）
+  │     ├─ 窗口内用户消息 → 取消 → 回到 open（continuation 判定）
+  │     └─ 窗口到期 → finish（沉淀）→ waiting_review（已沉淀）
+  └─ 用户显式 finish / B2 切换 / abandon → 取消窗口 → 正常闭环
+重启恢复：扫描 task-state 中 pendingAutoCloseAt 未过期且任务仍 open
+  → 重建定时器（剩余时间）
+```
+
+---
+
+## 6. 状态流转（候选生命周期，含语义合并）
 
 ```
 KStar lesson / capture 提取
@@ -214,35 +309,42 @@ KStar lesson / capture 提取
 
 ---
 
-## 6. 测试计划
+## 7. 测试计划
 
 | 用例 | 断言 |
 |---|---|
 | KStar lesson → 候选入库 | candidates/ 新增记录，captureKey `kstar-...`，fingerprint 正确 |
 | 质量合格自动晋升 | 候选 confirmed → 资产存在，lifecycle `automatically_extracted_unverified` |
 | **语义去重：措辞不同同规则** | "只要 3 条要点" vs "用 N 条要点说明 X" → 同候选，证据合并，仅一条 |
-| **语义去重：候选 vs 资产** | 新 lesson 与既有资产相似 ≥0.85 → 不新建候选，证据并入资产 |
+| **语义去重：候选 vs 资产（入池时）** | 新 lesson 与既有资产相似 ≥0.85 → 不新建候选，证据并入资产 |
+| **晋升前语义查重（时序竞争）** | 候选 A 已晋升为资产 X；候选 B（措辞不同同语义）晋升 → 命中 X → 不新建，证据并入，仅一份资产 |
 | **弱观察升级** | 同规则多次出现（≥2 次语义命中）→ weak_observation → pending_review |
 | 高风险留待确认 | risk=high → 候选 review_ready，资产不写，UI 可见 |
 | 证据不足弱观察 | forceWeakObservation → weak_observation，不打扰 |
 | 投影不受影响 | 资产晋升后才进投影；候选不进 |
+| **静默窗口自动闭环** | run 终态 → 窗口（测试注入短时长）到期无用户消息 → 任务 finish + 沉淀 |
+| **窗口取消** | 窗口内用户消息 → 不闭环；continuation=true → 任务保持 open |
+| **重启恢复** | task-state 有 pendingAutoCloseAt 未过期 → 启动重建定时器 → 到期闭环 |
 | 回归 | 现有 1169 项全过（沉淀断言改为候选+晋升+合并断言） |
 
 ---
 
-## 7. 分步实施
+## 8. 分步实施
 
 1. **共享工具**：`cosineScore` 从 context-projection 提取为 `recall/similarity.ts`（或 util）；embedding 缓存 LRU
 2. **语义查重函数**：`findSemanticDuplicate(userId, { judgment, sourceRefs })` → 返回 `{ match: candidate|asset, score }`
-3. **封装层**：`precipitateKstarCandidatesAsAssets`（语义查重 → saveRecallCandidate → autoApply → 汇总）
-4. **替换**：`direct-experience-assets.ts` / `task-level-precipitation.ts` 落点切换
-5. **合并逻辑**：主候选保留 + mergeSourceRefs + mergedInto 标记 + 弱观察升级
-6. **测试**：§6 用例 + 回归
-7. **联调**：真实任务 → 候选入库 → 自动晋升 → 资产投影；"待我处理"UI 确认高风险/0.7-0.85 候选
+3. **统一晋升出口**：`promoteWithSemanticDedup(userId, candidateId)`（晋升前资产语义查重 → 命中并入 / 未命中原 promote）——**capture 与 KStar 共用**
+4. **封装层**：`precipitateKstarCandidatesAsAssets`（语义查重 → saveRecallCandidate → promoteWithSemanticDedup → 汇总）
+5. **替换**：`direct-experience-assets.ts` / `task-level-precipitation.ts` 落点切换
+6. **capture 接入**：`automaticallyApplyReviewableCandidates` 的 `autoApplyRecallCandidate` → `promoteWithSemanticDedup`（注入选项）
+7. **自动闭环**：`task-closure.ts` 静默窗口调度 + task-state `pendingAutoCloseAt` 持久化 + bus 启动 `recoverPendingAutoClosures`
+8. **合并逻辑**：主候选保留 + mergeSourceRefs + mergedInto/mergedIntoAssetId 标记 + 弱观察升级
+9. **测试**：§7 用例 + 回归
+10. **联调**：真实任务 → 自动闭环 → 候选入库 → 自动晋升（语义去重）→ 资产投影；"待我处理"UI 确认高风险/0.7-0.85 候选
 
 ---
 
-## 8. 开放问题
+## 9. 开放问题
 
 | ID | 问题 | 默认处理 |
 |---|---|---|
@@ -252,3 +354,6 @@ KStar lesson / capture 提取
 | OQ-4 | 旧 9 个资产 + 46 个候选是否做一次初始语义去重清理 | 实施后跑一次性清理任务，报告合并建议 |
 | OQ-5 | 弱观察升级阈值（几次语义命中转 pending_review） | 暂定 2 次，可校准 |
 | OQ-6 | 语义比对的性能上限（池 >500 条） | 降级抽样比对，保持精确指纹兜底 |
+| OQ-7 | 静默窗口时长默认值（30min）是否合适 | 命名常量 `AUTO_CLOSE_QUIET_MS`，可校准；任务级闭环不宜过短 |
+| OQ-8 | 自动闭环与用户显式 finish 的幂等 | 走同一 `finish` 控制路径，idempotencyKey 区分来源；已闭环任务不重复沉淀 |
+| OQ-9 | 自动闭环后用户回来继续（continuation）的接续体验 | 开新任务 + 投影接续；原任务保持已沉淀（规范 §12.1 快照语义） |
