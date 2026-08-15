@@ -61,6 +61,41 @@ describe('CogSeed Runtime protocol normalization', () => {
     expect(result.error).toMatch(/backend|local CLI/i);
   });
 
+  it('accepts model_profile ids with the provider:label separator and rejects unsafe ones', () => {
+    const root = tmpRoot();
+    const ok = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Use the selected chat model.',
+      model_profile: 'openai-compatible:default',
+    }, { allowedRoots: [root] });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) throw new Error(ok.error);
+    expect(ok.request.model_profile).toBe('openai-compatible:default');
+
+    const custom = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Use the custom provider model.',
+      model_profile: 'cp:cp-abc123-1',
+    }, { allowedRoots: [root] });
+    expect(custom.ok).toBe(true);
+    if (!custom.ok) throw new Error(custom.error);
+    expect(custom.request.model_profile).toBe('cp:cp-abc123-1');
+
+    const bad = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Smuggle a profile id.',
+      model_profile: '../openai-compatible:default',
+    }, { allowedRoots: [root] });
+    expect(bad.ok).toBe(false);
+    if (bad.ok) throw new Error('expected rejection');
+    expect(bad.code).toBe('E_RUNTIME_INVALID_ID');
+
+    const blank = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Blank profile id.',
+      model_profile: '',
+    }, { allowedRoots: [root] });
+    expect(blank.ok).toBe(false);
+    if (blank.ok) throw new Error('expected rejection');
+    expect(blank.code).toBe('E_RUNTIME_INVALID_ID');
+  });
+
   it('rejects caller supplied CogSeed conversation identity fields', () => {
     const root = tmpRoot();
     const result = normalizeRuntimeRunRequest('runtime-protocol-user', {
