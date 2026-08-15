@@ -46,6 +46,9 @@ export interface RuntimeKstarClosureInput extends RuntimeKstarEpisodeInput {
 export interface GroupKstarClosureInput extends GroupKstarEpisodeInput {
   bridge?: KstarCandidateBridge;
   inferReview?: KstarReviewInfer;
+  /** Bounded wait for the Commander's in-context review reply. Tests inject
+   *  a small value; production defaults to COMMANDER_REVIEW_TIMEOUT_MS. */
+  commanderReviewTimeoutMs?: number;
 }
 
 function validExtractionRun(userId: string, episodeId: string, reviewId: string, runId: string, raw: Record<string, unknown>): KstarExtractionRunRecord {
@@ -181,34 +184,62 @@ export interface ParsedReviewFromCommander {
   lesson?: string;
 }
 
+/** Default ceiling for waiting on the Commander's in-context review reply.
+ *  The reply is one extra LLM round in the SAME conversation; 120s covers
+ *  a normal round plus scheduling slack. Tests inject a tiny timeout. */
+export const COMMANDER_REVIEW_TIMEOUT_MS = 120_000;
+
 /** Ask the Commander — in its own conversation, with FULL context — to
- *  produce the expected-vs-actual review for a finished episode. The reply
- *  must carry a <kstar-review> JSON block. Host-side independent inference
- *  remains the fallback when the Commander never replies. */
-export async function enqueueCommanderReviewRequest(
+ *  produce the expected-vs-actual review for a finished episode, and wait
+ *  (bounded) for the `<kstar-review>` reply. Returns the parsed review, or
+ *  null on timeout / enqueue failure — the caller then falls back to
+ *  host-side inference so precipitation is never blocked forever. */
+export async function awaitCommanderReview(
   userId: string,
   conversationId: string,
   episode: KstarEpisodeRecord,
   evidence: Record<string, unknown>,
-): Promise<void> {
+  timeoutMs: number = COMMANDER_REVIEW_TIMEOUT_MS,
+): Promise<ParsedReviewFromCommander | null> {
   try {
     const bus = await import('../group_chat/bus');
-    await bus.enqueueCommanderControlMessage({
-      userId,
-      cid: conversationId,
-      displayText: '',
-      control: {
-        type: 'kstar_review_request',
-        episodeId: episode.id,
-        evidence,
-      },
+    const unsubscribe = bus.subscribe(userId, conversationId, (event) => {
+      if (event.type !== 'message') return;
+      const text = String(event.msg?.text || '');
+      if (!text.includes('<kstar-review>')) return;
+      const parsed = parseCommanderReviewFromMessages([{ id: event.msg.id, ts: event.msg.ts, from: event.msg.from, text }]);
+      if (parsed) resolve(parsed);
     });
+    let resolve: (value: ParsedReviewFromCommander | null) => void;
+    let settled = false;
+    const done = new Promise<ParsedReviewFromCommander | null>((res) => { resolve = res; });
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; resolve(null); }
+    }, Math.max(1, Number(timeoutMs) || COMMANDER_REVIEW_TIMEOUT_MS));
+    try {
+      await bus.enqueueCommanderControlMessage({
+        userId,
+        cid: conversationId,
+        displayText: '',
+        control: { type: 'kstar_review_request', episodeId: episode.id, evidence },
+      });
+    } catch (error) {
+      log.warn('kstar commander review request enqueue degraded', {
+        userId, episodeId: episode.id, error: (error as Error).message,
+      });
+      clearTimeout(timer);
+      unsubscribe();
+      return null;
+    }
+    const parsed = await done;
+    clearTimeout(timer);
+    unsubscribe();
+    return parsed;
   } catch (error) {
-    log.warn('kstar commander review request enqueue degraded', {
-      userId,
-      episodeId: episode.id,
-      error: (error as Error).message,
+    log.warn('kstar commander review wait degraded', {
+      userId, episodeId: episode.id, error: (error as Error).message,
     });
+    return null;
   }
 }
 
@@ -393,49 +424,48 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
   // reply (a <kstar-review> block) is picked up by a later closure pass; until
   // then finishClosure falls back to host-side inference so precipitation is
   // never blocked. Request enqueue is best-effort.
-  if (input.conversationId) {
-    await enqueueCommanderReviewRequest(input.userId, input.conversationId, episode, {
-      episode: {
-        id: episode.id,
-        status: episode.r.status,
-        task: episode.t.userGoal,
-        toolCalls: episode.a.toolCalls.map((call) => ({ name: call.name, status: call.status })),
-        producedFiles: (episode.r.producedFiles || []).slice(0, 20),
-        finalText: episode.r.finalText,
-        verification: episode.r.verification,
-      },
-      evidenceKinds: [...new Set(episode.evidenceRefs.map((ref) => ref.kind))],
-    });
-  }
+  // Commander-in-context review (self-evolution, SYNCHRONOUS): ask the
+  // Commander — with its full conversation context — to produce the
+  // expected-vs-actual review and WAIT (bounded) for the <kstar-review>
+  // reply. The Commander-authored review drives precipitation; host-side
+  // inference is the timeout fallback so a silent Commander never blocks
+  // the line forever.
+  const commanderReview = input.conversationId
+    ? await awaitCommanderReview(input.userId, input.conversationId, episode, {
+        episode: {
+          id: episode.id,
+          status: episode.r.status,
+          task: episode.t.userGoal,
+          toolCalls: episode.a.toolCalls.map((call) => ({ name: call.name, status: call.status })),
+          producedFiles: (episode.r.producedFiles || []).slice(0, 20),
+          finalText: episode.r.finalText,
+          verification: episode.r.verification,
+        },
+        evidenceKinds: [...new Set(episode.evidenceRefs.map((ref) => ref.kind))],
+      }, input.commanderReviewTimeoutMs)
+    : null;
   const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, async () => {
-    // Prefer a Commander-authored in-context review when one is already in the
-    // message stream (it carries full conversation context); otherwise the
-    // host-side inference fallback runs and precipitation is never blocked.
-    const commanderReview = parseCommanderReviewFromMessages(input.messages || []);
     if (commanderReview) {
-      const existing = await readKstarReview(input.userId, episode.id).catch(() => null);
-      if (!existing || existing.inferenceMethod !== 'commander') {
-        const now = nowIso();
-        await saveKstarReviewRecord(input.userId, {
-          schemaVersion: 1,
-          ownerId: input.userId,
-          id: `ksr-${episode.id}`,
-          episodeId: episode.id,
-          deltaR: commanderReview.deltaR,
-          deltaA: commanderReview.deltaA,
-          outcome: commanderReview.outcome,
-          attribution: commanderReview.attribution,
-          reason: commanderReview.reason,
-          confidence: commanderReview.confidence,
-          ...(commanderReview.lesson ? { lesson: commanderReview.lesson } : {}),
-          reviewState: 'inferred',
-          inferenceMethod: 'commander',
-          needsConfirmation: false,
-          evidenceRefs: episode.evidenceRefs,
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
+      const now = nowIso();
+      await saveKstarReviewRecord(input.userId, {
+        schemaVersion: 1,
+        ownerId: input.userId,
+        id: `ksr-${episode.id}`,
+        episodeId: episode.id,
+        deltaR: commanderReview.deltaR,
+        deltaA: commanderReview.deltaA,
+        outcome: commanderReview.outcome,
+        attribution: commanderReview.attribution,
+        reason: commanderReview.reason,
+        confidence: commanderReview.confidence,
+        ...(commanderReview.lesson ? { lesson: commanderReview.lesson } : {}),
+        reviewState: 'inferred',
+        inferenceMethod: 'commander',
+        needsConfirmation: false,
+        evidenceRefs: episode.evidenceRefs,
+        createdAt: now,
+        updatedAt: now,
+      });
     }
     return finishClosure(input.userId, episode, input.bridge, input.inferReview);
   });

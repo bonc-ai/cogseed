@@ -82,6 +82,7 @@ describe('KSTAR completion evidence merge', () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     await closure.captureGroupKstarClosure({
       userId: 'closure-user', runId: 'run-evidence', conversationId: 'cid-evidence', status: 'completed',
+      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
       messages: [
         { id: 'msg-evidence', from: 'user', text: 'Produce the report', ts: '2026-08-05T00:00:01.000Z' },
@@ -130,6 +131,7 @@ describe('KSTAR task closure', () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     await closure.captureGroupKstarClosure({
       userId: 'closure-user', runId: 'run-group-attach', conversationId: 'cid-phase2', status: 'completed',
+      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
       messages: [
         { id: 'msg-user-a', from: 'user', text: 'Review OAuth callback handling', ts: '2026-08-05T00:00:01.000Z' },
@@ -182,6 +184,7 @@ describe('KSTAR task closure', () => {
       runId: 'run-provenance-attach',
       conversationId: 'cid-provenance',
       status: 'completed',
+      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'),
       finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
       projectionId: 'proj-match',
@@ -265,6 +268,7 @@ describe('KSTAR task closure', () => {
     const result = await closure.captureRuntimeKstarClosure({
       userId: 'closure-user', runId: 'run-inferred', request, events,
       createdAt: '2026-08-05T00:00:00.000Z', inferReview: inferred,
+      commanderReviewTimeoutMs: 50,
     });
 
     expect(result.review).toMatchObject({
@@ -320,6 +324,7 @@ describe('KSTAR task closure', () => {
         artifacts: [{ id: 'art-five', title: 'report.md' }],
       }],
       inferReview: inferred,
+      commanderReviewTimeoutMs: 50,
     });
 
     const kinds = result.episode.evidenceRefs.map((ref) => ref.kind);
@@ -372,6 +377,7 @@ describe('KSTAR task closure', () => {
         artifacts: [{ id: 'art-five-evi', title: 'report.md' }],
       }],
       inferReview: inferred,
+      commanderReviewTimeoutMs: 50,
     });
 
     // The lesson-driven proposal precipitates with the full evidence context.
@@ -419,6 +425,7 @@ describe('KSTAR task closure', () => {
         id: 'msg-honest', ts: new Date().toISOString(), from: 'user', text: 'Fix state handling',
       }],
       inferReview: inferred,
+      commanderReviewTimeoutMs: 50,
     });
 
     const assets = await import('../../../../src/main/features/recall/asset-service');
@@ -447,22 +454,40 @@ describe('KSTAR task closure', () => {
       lesson: 'OAuth 回调必须先校验 state。',
     });
 
-    // Full closure run with the commander-authored review already in the
-    // message stream: it should be persisted as inferenceMethod commander.
+    // Full closure run: the Commander never replies in this environment, so
+    // the bounded wait times out and the host-side inference fallback runs —
+    // precipitation is never blocked by a silent Commander.
+    const fallbackInfer = async (_userId: string, builtEpisode: any) => ({
+      review: {
+        expectedResult: builtEpisode.t.userGoal,
+        actualResult: 'Fixed.',
+        deltaR: -0.4 as const,
+        deltaA: 'unknown' as const,
+        outcome: 'worse_than_expected' as const,
+        attribution: 'rule_gap' as const,
+        reason: 'State was not checked before exchange.',
+        confidence: 0.85,
+        evidenceRefs: builtEpisode.evidenceRefs,
+      },
+      reviewState: 'inferred' as const,
+      inferenceMethod: 'deterministic' as const,
+      needsConfirmation: false,
+    });
     const result = await closure.captureGroupKstarClosure({
       userId: 'closure-user',
       runId: 'run-commander-review',
       conversationId: 'cid-cmd-review',
       status: 'completed',
+      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.now() - 60_000,
       finishedAtMs: Date.now(),
       messages: [
         { id: 'm0', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: 'Fix the state handling' },
-        { id: 'm1', ts: '2026-08-15T00:00:01.000Z', from: 'commander', text: '<kstar-review>{"outcome":"worse_than_expected","attribution":"rule_gap","deltaR":-0.4,"deltaA":"unknown","reason":"State was not checked before exchange.","confidence":0.85,"needsConfirmation":false,"lesson":"OAuth 回调必须先校验 state。"}</kstar-review>' },
       ],
+      inferReview: fallbackInfer,
     });
-    expect(result.review.inferenceMethod).toBe('commander');
-    expect(result.review.lesson).toContain('校验 state');
+    expect(result.review.inferenceMethod).toBe('deterministic');
+    expect(result.review.deltaR).toBe(-0.4);
   });
 
   it('confirms a lightweight user verdict and reconciles candidate extraction idempotently', async () => {
