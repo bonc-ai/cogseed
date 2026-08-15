@@ -67,13 +67,69 @@ describe('CogSeed provider profiles', () => {
     });
   });
 
-  it('rejects a missing profile and an OAuth-only/non-OpenAI-compatible profile', async () => {
+  it('rejects a missing profile', async () => {
     const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
     await expect(resolveMateApiKeyProfile(USER_A)).rejects.toThrow(/profile/i);
+  });
 
-    await activateAndAddApiKey(USER_C, 'anthropic', 'sk-anthropic-only-key');
-    await expect(resolveMateApiKeyProfile(USER_C)).rejects.toThrow(/openai-compatible/i);
+  it('resolves an anthropic API-key profile to the anthropic wire protocol with the default endpoint', async () => {
+    await activateAndAddApiKey(USER_A, 'anthropic', 'sk-ant-api03-anthropic-key');
+
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(USER_B);
+    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+
+    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+      profileId: 'anthropic:default',
+      provider: 'anthropic',
+      protocol: 'anthropic',
+      model: 'mate-test-model',
+      apiKey: 'sk-ant-api03-anthropic-key',
+      baseUrl: 'https://api.anthropic.com',
+      maxOutputTokens: 8192,
+    });
+  });
+
+  it('resolves a google API-key profile to the gemini wire protocol', async () => {
+    await activateAndAddApiKey(USER_A, 'google', 'google-api-key');
+
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(USER_B);
+    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+
+    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+      provider: 'google',
+      protocol: 'gemini',
+      apiKey: 'google-api-key',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      maxOutputTokens: 8192,
+    });
+  });
+
+  it('resolves a moonshot API-key profile as an openai-completions entry with its default endpoint', async () => {
+    await activateAndAddApiKey(USER_A, 'moonshot', 'sk-moonshot-key');
+
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(USER_B);
+    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+
+    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+      provider: 'moonshot',
+      protocol: 'openai-completions',
+      apiKey: 'sk-moonshot-key',
+      baseUrl: 'https://api.moonshot.cn/v1',
+    });
+  });
+
+  it('skips native-only profiles (zai) the runtime cannot reach', async () => {
+    await activateAndAddApiKey(USER_A, 'zai', 'zai-key');
+
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(USER_B);
+    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+
+    await expect(resolveMateApiKeyProfile(USER_A)).rejects.toThrow(/profile/i);
   });
 
   it('reuses an OpenAI-protocol custom provider as the OpenAI-compatible profile', async () => {
@@ -91,15 +147,16 @@ describe('CogSeed provider profiles', () => {
 
     await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
       profileId: providerId,
-      provider: 'openai-compatible',
+      provider: providerId,
+      protocol: 'openai-completions',
       model: 'relay-model-1',
       apiKey: 'cp-secret-key',
       baseUrl: 'https://relay.example/v1',
     });
   });
 
-  it('skips non-OpenAI custom providers and rejects with an OpenAI-compatible error', async () => {
-    await activateAndAddCustomProvider(USER_A, {
+  it('resolves an anthropic-protocol custom provider to the anthropic wire protocol', async () => {
+    const { providerId } = await activateAndAddCustomProvider(USER_A, {
       name: 'Claude Relay',
       protocol: 'anthropic',
       baseUrl: 'https://anthropic-relay.example',
@@ -111,10 +168,42 @@ describe('CogSeed provider profiles', () => {
     users.activateUser(USER_B);
     const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).rejects.toThrow(/openai-compatible/i);
+    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+      profileId: providerId,
+      provider: providerId,
+      protocol: 'anthropic',
+      model: 'claude-relay-1',
+      apiKey: 'anthropic-relay-key',
+      baseUrl: 'https://anthropic-relay.example',
+      maxOutputTokens: 8192,
+    });
   });
 
-  it('skips OAuth-backed entries, which expose no OpenAI-compatible endpoint to reuse', async () => {
+  it('resolves a gemini-protocol custom provider to the gemini wire protocol', async () => {
+    const { providerId } = await activateAndAddCustomProvider(USER_A, {
+      name: 'Gemini Relay',
+      protocol: 'gemini',
+      baseUrl: 'https://gemini-relay.example/v1beta',
+      apiKey: 'gemini-relay-key',
+      model: 'gemini-relay-1',
+    });
+
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(USER_B);
+    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+
+    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+      profileId: providerId,
+      provider: providerId,
+      protocol: 'gemini',
+      model: 'gemini-relay-1',
+      apiKey: 'gemini-relay-key',
+      baseUrl: 'https://gemini-relay.example/v1beta',
+      maxOutputTokens: 8192,
+    });
+  });
+
+  it('reuses an unexpired anthropic OAuth profile with its access token', async () => {
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_A);
     const auth = await import('../../../../src/main/features/auth');
@@ -125,7 +214,7 @@ describe('CogSeed provider profiles', () => {
           type: 'oauth',
           provider: 'anthropic',
           label: 'default',
-          access: 'access-token',
+          access: 'sk-ant-oat-access-token',
           refresh: 'refresh-token',
           expires: Date.now() + 60_000,
           createdAt: Date.now(),
@@ -150,14 +239,20 @@ describe('CogSeed provider profiles', () => {
     users.activateUser(USER_B);
 
     const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
-    await expect(resolveMateApiKeyProfile(USER_A)).rejects.toThrow(/profile/i);
+    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+      profileId: 'anthropic:default',
+      provider: 'anthropic',
+      protocol: 'anthropic',
+      apiKey: 'sk-ant-oat-access-token',
+      baseUrl: 'https://api.anthropic.com',
+    });
   });
 
-  it('falls back past non-OpenAI-compatible entries to a later usable API-key entry', async () => {
-    // Add the OpenAI-compatible entry first, then the anthropic one, so the
-    // anthropic entry ends up first in the priority list and must be skipped.
+  it('falls back past native-only entries to a later usable entry', async () => {
+    // Add the OpenAI-compatible entry first, then the zai one, so the
+    // zai entry ends up first in the priority list and must be skipped.
     await activateAndAddApiKey(USER_A, 'openai-compatible', 'sk-openai-fallback-key', 'https://fallback.test/v1');
-    await activateAndAddApiKey(USER_A, 'anthropic', 'sk-anthropic-only-key');
+    await activateAndAddApiKey(USER_A, 'zai', 'zai-key');
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
@@ -167,6 +262,7 @@ describe('CogSeed provider profiles', () => {
       apiKey: 'sk-openai-fallback-key',
       baseUrl: 'https://fallback.test/v1',
       model: 'mate-test-model',
+      protocol: 'openai-completions',
     });
   });
 });

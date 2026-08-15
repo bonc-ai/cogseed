@@ -2238,6 +2238,9 @@ export function cancelOAuthFlow(flowId: string): { ok: boolean } {
 
 // ── Chat entry picker (runner integration) ───────────────────────────────
 
+/** Wire protocols the CogSeed runtime model providers can speak natively. */
+export type RuntimeChatProtocol = 'openai-completions' | 'anthropic' | 'gemini';
+
 export interface ChatEntryChoice {
   entryId: string;
   profileId: string;
@@ -2246,24 +2249,65 @@ export interface ChatEntryChoice {
   apiKey: string;
   baseUrl?: string;
   maxOutputTokens?: number;
+  /** Wire protocol this entry speaks; undefined = native pi-ai surface the
+   *  CogSeed runtime cannot reach (OpenAI Responses, OpenRouter, zai, ...). */
+  protocol?: RuntimeChatProtocol;
 }
 
-/** Resolve one usable OpenAI-compatible chat entry for an explicit user.
- *
- * Accepts entries backed by an `openai-compatible` API-key profile or an
- * OpenAI-protocol custom provider (`cp:*` with `protocol: 'openai'`). Entries
- * backed by OAuth profiles or by non-OpenAI dialects (anthropic / gemini
- * custom providers, native API-key providers) are skipped — the CogSeed
- * backend's OpenAI-compatible provider cannot talk to those surfaces, so
- * surfacing them as candidates would just fail downstream.
- *
- * This is intentionally independent from active-user state, OAuth refresh,
- * and Core Agent rotation (same contract as the former api-key-only picker,
- * generalized to OpenAI-protocol custom providers). */
-export function pickOpenAICompatibleChatEntryForUser(
+/**
+ * Map an entry to the wire protocol the CogSeed runtime can speak, or null
+ * when the entry only exists on a native pi-ai surface (OpenAI Responses,
+ * OpenRouter aggregates, zai, minimax portal, Codex/Copilot OAuth, ...).
+ */
+function runtimeProtocolForEntry(store: ProfilesFile, entry: Entry): RuntimeChatProtocol | null {
+  const custom = customProviderForId(store, entry.provider);
+  if (custom) {
+    if (custom.protocol === 'openai') return 'openai-completions';
+    if (custom.protocol === 'anthropic') return 'anthropic';
+    if (custom.protocol === 'gemini') return 'gemini';
+    return null;
+  }
+  const profile = store.profiles[entry.profileId];
+  if (!profile) return null;
+  if (profile.type === 'api_key') {
+    switch (profile.provider) {
+      case 'openai-compatible':
+      case 'moonshot':
+      case 'deepseek':
+      case 'doubao':
+        return 'openai-completions';
+      case 'anthropic':
+      case 'kimi-coding':
+        return 'anthropic';
+      case 'google':
+        return 'gemini';
+      default:
+        // openai (Responses API), zai, minimax-cn, openrouter, ... are
+        // native pi-ai surfaces the runtime cannot reach.
+        return null;
+    }
+  }
+  // OAuth-backed entries: only the Anthropic surface is reachable with a raw
+  // Messages-API request (Claude Pro/Max access tokens). Codex / Gemini CLI /
+  // Copilot / MiniMax portal tokens are native-protocol only.
+  return profile.provider === 'anthropic' ? 'anthropic' : null;
+}
+
+/**
+ * Resolve one usable chat entry for an explicit user that the CogSeed runtime
+ * can actually call, walking the priority list like pickChatEntryGroup does.
+ * Accepts entries backed by api_key profiles, OAuth profiles (with refresh)
+ * and custom providers, as long as the entry maps to one of the wire
+ * protocols the runtime implements (openai-completions / anthropic / gemini).
+ * Native-only surfaces (OpenAI Responses, OpenRouter, zai, minimax portal,
+ * Codex / Copilot OAuth) are skipped so the runtime never gets a candidate it
+ * cannot talk to. OAuth refresh runs inside resolveEntryApiKey; when it fails
+ * the expired entry is skipped and the user gets the OAuth-expired hint.
+ */
+export async function pickRuntimeChatEntryForUser(
   userId: string,
   profileId?: string,
-): ChatEntryChoice | null {
+): Promise<ChatEntryChoice | null> {
   const uid = assertAuthUserId(userId);
   const wantedProfileId = profileId === undefined ? undefined : String(profileId).trim();
   if (profileId !== undefined && !wantedProfileId) throw new Error('invalid profile id');
@@ -2272,35 +2316,25 @@ export function pickOpenAICompatibleChatEntryForUser(
   for (const entry of store.entries) {
     if (wantedProfileId && entry.profileId !== wantedProfileId) continue;
     if (!isEntryAllowed(store, entry)) continue;
-
-    // Custom provider entries carry their own OpenAI-compatible endpoint.
-    const custom = customProviderForId(store, entry.provider);
-    if (custom) {
-      if (custom.protocol !== 'openai') continue;
-      return {
-        entryId: entry.entryId,
-        profileId: entry.profileId,
-        provider: entry.provider,
-        model: entry.model,
-        apiKey: custom.apiKey,
-        ...(custom.baseUrl ? { baseUrl: custom.baseUrl } : {}),
-      };
-    }
-
+    const protocol = runtimeProtocolForEntry(store, entry);
+    if (!protocol) continue;
+    const apiKey = await resolveEntryApiKey(store, entry);
+    if (!apiKey) continue;
     const profile = store.profiles[entry.profileId];
-    if (!profile || profile.type !== 'api_key') continue;
-    if (!isOpenAICompatibleProvider(entry.provider)) continue;
+    const apiProfile = profile?.type === 'api_key' ? profile as ApiKeyProfile : undefined;
+    const custom = customProviderForId(store, entry.provider);
     return {
       entryId: entry.entryId,
       profileId: entry.profileId,
       provider: entry.provider,
       model: entry.model,
-      apiKey: profile.key,
-      ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
-      // openai-compatible is guaranteed here; the normalizer falls back to
-      // the default cap (32768) when the profile has no explicit cap, matching
-      // pickChatEntryGroup's behavior.
-      ...{ maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, profile.maxOutputTokens) },
+      apiKey,
+      protocol,
+      ...(custom?.baseUrl ? { baseUrl: custom.baseUrl } : {}),
+      ...(apiProfile?.baseUrl ? { baseUrl: apiProfile.baseUrl } : {}),
+      ...(apiProfile && isOpenAICompatibleProvider(entry.provider)
+        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, apiProfile.maxOutputTokens) }
+        : {}),
     };
   }
   return null;

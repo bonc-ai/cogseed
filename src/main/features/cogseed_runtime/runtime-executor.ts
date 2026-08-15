@@ -1,5 +1,5 @@
 import { PC_ROOT } from '../../paths';
-import { createMateOpenAICompatibleProvider } from '../cogseed_backend/model-provider';
+import { createMateRuntimeProvider } from '../cogseed_backend/model-provider';
 import { mateConnectorManager } from '../cogseed_backend/connector-manager';
 import { mateKbManager } from '../cogseed_backend/mate-kb-store';
 import { DEFAULT_RUNTIME_KERNEL_CONFIG, MATE_RUNTIME_TOOL_POLICY } from './kernel/config';
@@ -97,7 +97,7 @@ export function createDefaultNativeRuntimeExecutor(
   deps: Pick<NativeRuntimeExecutorDeps, 'modelAdapter' | 'provider' | 'kernelFactory' | 'hostToolClient'> = {},
 ): RuntimeExecutor {
   const modelAdapter = deps.modelAdapter ?? createRuntimeModelAdapter({
-    provider: deps.provider ?? createMateOpenAICompatibleProvider(),
+    provider: deps.provider ?? createMateRuntimeProvider(),
   });
   return createNativeRuntimeExecutor({
     modelAdapter,
