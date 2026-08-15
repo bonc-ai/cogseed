@@ -25,9 +25,15 @@ const log = createLogger('hub_account:client');
 
 export const DEFAULT_HUB_API_BASE = 'http://localhost:3000';
 
-/** Resolve the Hub service base URL (env override wins; tests inject directly). */
+/** Resolve the Hub service base URL. `COGSEED_HUB_API_BASE` is preferred for
+ * 联调，`ORKAS_HUB_API_BASE` is kept as the legacy override, and localhost is
+ * the fallback for local development. */
 export function hubApiBase(): string {
-  return process.env.ORKAS_HUB_API_BASE?.trim() || DEFAULT_HUB_API_BASE;
+  return (
+    process.env.COGSEED_HUB_API_BASE?.trim() ||
+    process.env.ORKAS_HUB_API_BASE?.trim() ||
+    DEFAULT_HUB_API_BASE
+  );
 }
 
 export class HubApiError extends Error {

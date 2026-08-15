@@ -61,6 +61,11 @@ const SESSION = {
   refresh_expires_at: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
 };
 
+async function loginForTest(code = 'code1', state = 'state_abc') {
+  await authFlow.startLogin('88492103');
+  return authFlow.completeLogin('88492103', code, state);
+}
+
 describe('hub account auth-flow', () => {
   beforeEach(() => {
     mocks.tmpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-account-test-'));
@@ -142,8 +147,36 @@ describe('hub account auth-flow', () => {
     expect(fakeClient.bind).not.toHaveBeenCalled();
   });
 
-  it('refreshSession rotates the credentials', async () => {
+  // 回归：bind 是设备元数据，不是认证步骤。它一旦抛出就会让"已经保存 session"的
+  // 登录被报告为失败（界面显示未登录，但本地其实已登录），且 pending state 不被清除。
+  it('completeLogin succeeds even when binding the local identity fails', async () => {
+    fakeClient.bind.mockRejectedValue(new Error('bind endpoint unreachable'));
+    await authFlow.startLogin('88492103');
+
+    const res = await authFlow.completeLogin('88492103', 'code1', 'state_abc');
+    expect(res.account_id).toBe('cogseed_acc_1');
+    expect(res.is_new_account).toBe(true);
+
+    // session 已落盘，登录视为成功
+    expect(loadHubSession('88492103')?.access_token).toBe('at1');
+    expect((await authFlow.getHubStatus('88492103')).signed_in).toBe(true);
+
+    // 一次性 state 已消费，不应残留
+    expect(authFlow.currentLoginState('88492103')).toBeNull();
+
+    // 未绑定成功时不应谎报 bound
+    expect(readHubAccountState('88492103').bound).not.toBe(true);
+  });
+
+  it('completeLogin clears the pending state after a successful login', async () => {
+    await authFlow.startLogin('88492103');
+    expect(authFlow.currentLoginState('88492103')).toBe('state_abc');
     await authFlow.completeLogin('88492103', 'code1', 'state_abc');
+    expect(authFlow.currentLoginState('88492103')).toBeNull();
+  });
+
+  it('refreshSession rotates the credentials', async () => {
+    await loginForTest();
     const next = await authFlow.refreshSession('88492103');
     expect(next.access_token).toBe('at2');
     expect(fakeClient.refresh).toHaveBeenCalledWith('rt1');
@@ -151,7 +184,7 @@ describe('hub account auth-flow', () => {
   });
 
   it('refreshes before expiry only when the access token is close to expiring', async () => {
-    await authFlow.completeLogin('88492103', 'code1', 'state_abc');
+    await loginForTest();
     // fresh session → no refresh
     await authFlow.ensureFreshSession('88492103');
     expect(fakeClient.refresh).not.toHaveBeenCalled();
@@ -174,7 +207,7 @@ describe('hub account auth-flow', () => {
 
   it('retries an authenticated call once after an access-token 401', async () => {
     const { HubApiError } = await import('../../../../src/main/features/hub_account/client');
-    await authFlow.completeLogin('88492103', 'code1', 'state_abc');
+    await loginForTest();
     fakeClient.me
       .mockRejectedValueOnce(new HubApiError('AUTH_INVALID_TOKEN', 'access_token 已过期或无效', 401))
       .mockResolvedValueOnce({
@@ -190,7 +223,7 @@ describe('hub account auth-flow', () => {
   });
 
   it('listDevices surfaces the device list through the auth retry path', async () => {
-    await authFlow.completeLogin('88492103', 'code1', 'state_abc');
+    await loginForTest();
     fakeClient.listDevices.mockResolvedValue({
       data: [{ device_id: 'dev_1', device_name: 'MacBook', device_os: 'macOS 15.0', is_current: true, first_seen_at: 'a', last_seen_at: 'b', active_sessions: 1, status: 'active' }],
       total: 1,
@@ -202,7 +235,7 @@ describe('hub account auth-flow', () => {
   });
 
   it('logout revokes server-side and clears local credentials while preserving state file semantics', async () => {
-    await authFlow.completeLogin('88492103', 'code1', 'state_abc');
+    await loginForTest();
     await authFlow.logout('88492103');
     expect(fakeClient.logout).toHaveBeenCalledWith('at1');
     expect(loadHubSession('88492103')).toBeNull();
@@ -212,7 +245,7 @@ describe('hub account auth-flow', () => {
   });
 
   it('logout still clears local credentials when the server is unreachable', async () => {
-    await authFlow.completeLogin('88492103', 'code1', 'state_abc');
+    await loginForTest();
     fakeClient.logout.mockRejectedValueOnce(new Error('network down'));
     await authFlow.logout('88492103');
     expect(loadHubSession('88492103')).toBeNull();
@@ -225,7 +258,7 @@ describe('hub account auth-flow', () => {
   });
 
   it('getHubStatus reports signed-in without exposing tokens', async () => {
-    await authFlow.completeLogin('88492103', 'code1', 'state_abc');
+    await loginForTest();
     const status = await authFlow.getHubStatus('88492103');
     expect(status.signed_in).toBe(true);
     expect(status.account_id).toBe('cogseed_acc_1');

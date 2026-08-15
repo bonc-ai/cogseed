@@ -94,7 +94,10 @@ export async function completeLogin(
   client: HubClient = hubClient(),
 ): Promise<{ account_id: string; is_new_account: boolean }> {
   const expected = currentLoginState(userId);
-  if (expected && expected !== state) {
+  if (!expected) {
+    throw new HubApiError('AUTH_NO_PENDING_LOGIN', '没有进行中的登录，请重新发起登录', 400);
+  }
+  if (expected !== state) {
     throw new HubApiError('AUTH_INVALID_STATE', 'OAuth state 不匹配，请重新登录', 400);
   }
 
@@ -106,12 +109,22 @@ export async function completeLogin(
     account_status: result.account.status,
     pending_login: undefined,
   });
+  // The session is persisted from here on, so the login has succeeded — clear
+  // the pending state before the optional bind. Letting a bind failure throw
+  // past this point would report a failed login while the user is in fact
+  // signed in, and would leave the consumed state pending.
+  _pendingState = null;
 
   let bind: HubBindResult | null = null;
   if (result.is_new_account) {
-    bind = await bindLocalIdentity(userId, result.session.access_token, client);
+    try {
+      bind = await bindLocalIdentity(userId, result.session.access_token, client);
+    } catch (err) {
+      // Binding is device metadata, not an auth step; it is retried on the next
+      // authenticated call. Surfacing it as a login failure would be wrong.
+      log.warn('hub local identity bind failed after login', { error: (err as Error).message });
+    }
   }
-  _pendingState = null;
   log.info('hub login completed', { accountId: mask(result.account.account_id), isNew: result.is_new_account, bound: !!bind });
   return { account_id: result.account.account_id, is_new_account: result.is_new_account };
 }
