@@ -205,9 +205,6 @@ describe('Commander Forecast host commit', () => {
 
   it.each([
     ['unavailable tool', candidate({ expectedTools: ['made_up_tool'] }), 'kstar_unavailable_tool'],
-    ['invalid rule ref', candidate({
-      causalLinks: [{ interventionIndex: 0, mechanism: 'Unsupported rule', ruleRefs: ['rule:not-frozen'], assumptions: [] }],
-    }), 'kstar_invalid_rule_ref'],
   ])('maps %s to a stable code without persisting', async (_label, invalidCandidate, code) => {
     const seeded = await seedForecastBoundary({ confirmed: true });
     const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
@@ -220,6 +217,34 @@ describe('Commander Forecast host commit', () => {
     expect(forecastFiles()).toEqual([]);
     expect(await requirementStore.readKstarRequirement('user-a', seeded.requirement.id))
       .not.toHaveProperty('forecastId');
+  });
+
+  it('tolerates unknown rule refs in candidate causal/risk fields (model cannot know host rule ids)', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+
+    const result = await forecast.commitCommanderForecast('user-a', {
+      ...seeded.input,
+      candidates: [
+        candidate({
+          causalLinks: [{ interventionIndex: 0, mechanism: 'Unsupported rule', ruleRefs: ['rule:not-frozen'], assumptions: [] }],
+          riskRuleRefs: ['rule:not-frozen'],
+        }),
+        candidate({ id: 'path-b' }),
+      ],
+    });
+
+    expect(result.id).toBeTruthy();
+    const file = forecastFiles()[0];
+    expect(file).toBeTruthy();
+    const record = JSON.parse(fs.readFileSync(path.join(
+      tmpDir, 'user-a', 'cloud', 'recall', 'records', 'world-model-forecasts', file,
+    ), 'utf-8'));
+    // The unknown refs are dropped, not fatal: candidate-1 keeps its plan but
+    // gains no causal links / predicted risks from the model's guesses.
+    expect(record.forecast.candidates[0].causalLinks).toEqual([]);
+    expect(record.forecast.candidates[0].predictedRisks).toEqual([]);
+    expect(record.forecast.candidates[0].aHat.plan.length).toBeGreaterThan(0);
   });
 
   it('uses stable model order to break equal scores', async () => {

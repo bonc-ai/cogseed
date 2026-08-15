@@ -58,15 +58,22 @@ describe('world-model candidate scoring', () => {
     });
   });
 
-  it('rejects unknown rule refs and unavailable tools', () => {
+  it('rejects unavailable tools but tolerates model-supplied causal/risk guesses', () => {
     expect(() => validateWorldModelCandidate({
       ...base,
       expectedTools: ['delete_everything'],
     }, context, 0)).toThrow(/unavailable_tool/);
-    expect(() => validateWorldModelCandidate({
+    // causalLinks/riskRuleRefs are host-internal structures the model cannot
+    // know (live: it emitted string arrays of projection ids). Any malformed
+    // or unknown-ref shape is dropped to empty instead of rejecting the
+    // candidate; host derives causal support from projection knowledge.
+    const withUnknownRefs = validateWorldModelCandidate({
       ...base,
       causalLinks: [{ ...base.causalLinks[0], ruleRefs: ['rule:unknown:1'] }],
-    }, context, 0)).toThrow(/invalid_rule_ref/);
+      riskRuleRefs: ['rule:unknown:1'],
+    }, context, 0);
+    expect(withUnknownRefs.causalLinks).toEqual([]);
+    expect(withUnknownRefs.predictedRisks).toEqual([]);
   });
 
   it('selects highest score then lower risk then higher observability', () => {
