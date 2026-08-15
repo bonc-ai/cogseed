@@ -70,8 +70,8 @@ const TOUR_STEPS = [
   {
     id: 'agents',
     title: '查看 AI 团队',
-    description: '这些是你接入的模型和本机 Agent，任务由它们执行。点左侧「AI 团队」看看都有谁。',
-    target: '#agents-btn',
+    description: '这些是你接入的模型和本机 Agent，任务由它们执行。点「连接」，再从「Agent」查看。',
+    target: '#connectors-btn',
     position: 'right',
     checkComplete: () => {
       return _tourState && _tourState.agentsViewed;
@@ -79,9 +79,9 @@ const TOUR_STEPS = [
   },
   {
     id: 'skills',
-    title: '查看技能库',
-    description: '这里放着你能调用的技能，干活时按需取用。点左侧「技能库」看看。',
-    target: '#skills-btn',
+    title: '查看你的能力',
+    description: 'CogSeed 为你保留的正式能力都放在「认知资产」里。点「认知资产」，再从「我的能力」进入技能库。',
+    target: '#recall-btn',
     position: 'right',
     checkComplete: () => {
       return _tourState && _tourState.skillsViewed;

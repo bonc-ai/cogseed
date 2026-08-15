@@ -376,12 +376,10 @@ function setView(view, cid, opts = {}) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panelId = view === 'new-chat' ? 'panel-new-chat'
                 : view === 'auto' ? 'panel-auto'
-                : view === 'agents' ? 'panel-agents'
-                : view === 'skills' ? 'panel-skills'
+                : view === 'agents' || view === 'contexts' ? 'panel-connections'
+                : view === 'skills' || view === 'personal-ontology' ? 'panel-recall'
                 : view === 'recall' ? 'panel-recall'
-                : view === 'connectors' ? 'panel-connectors'
-                : view === 'contexts' ? 'panel-contexts'
-                            : view === 'personal-ontology' ? 'panel-personal-ontology'
+                : view === 'connections' || view === 'connectors' ? 'panel-connections'
                 : view === 'spaces' ? 'panel-spaces'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
@@ -393,11 +391,8 @@ function setView(view, cid, opts = {}) {
 
   document.getElementById('new-chat-btn').classList.toggle('active', view === 'new-chat');
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
-  document.getElementById('agents-btn').classList.toggle('active', view === 'agents');
-  document.getElementById('skills-btn').classList.toggle('active', view === 'skills');
-  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall');
-  document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
-  document.getElementById('personal-ontology-btn')?.classList.toggle('active', view === 'personal-ontology');
+  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'skills' || view === 'personal-ontology');
+  document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts');
   document.getElementById('spaces-btn')?.classList.toggle('active', view === 'spaces');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
@@ -475,29 +470,37 @@ function setView(view, cid, opts = {}) {
     setTimeout(() => document.getElementById('new-chat-input')?.focus(), 50);
   } else if (view === 'agents') {
     currentCid = null;
-    _loadViewFeature('agents', 'agents', () => {
-      if (typeof _agentsCache !== 'undefined' && _agentsCache && !_agentsCacheIsSummary) renderAgentsList(_agentsCache);
-      // Boot owns a summary-only list. Upgrade it once when the grid first needs
-      // descriptions/counts; subsequent visits reuse the full renderer cache.
-      const needsFullListing = !(typeof _agentsCache !== 'undefined' && _agentsCache && !_agentsCacheIsSummary);
-      if (needsFullListing) {
-        _deferSidebarNavWork('agents-tab-refresh', () => {
-          if (currentView !== 'agents') return;
-          Promise.resolve(loadAgents(false))
-            .then(() => {
-              if (currentView === 'agents' && typeof refreshSelectedAgentDetail === 'function') {
-                return refreshSelectedAgentDetail();
-              }
-              return null;
-            })
-            .catch((e) => _bootLog.warn('agents refresh on tab entry failed', { error: (e && e.message) || String(e) }));
-        }, 0);
-      }
+    _deferSidebarNavWork('agents-tab-load', () => {
+      // AI 团队已内嵌进「连接」：深链先切到 Agent tab。
+      if (typeof initConnections === 'function') initConnections();
+      else if (typeof window.initConnections === 'function') window.initConnections();
+      if (typeof activateConnectionsTab === 'function') activateConnectionsTab('agents');
+      _loadViewFeature('agents', 'agents', () => {
+        if (typeof _agentsCache !== 'undefined' && _agentsCache && !_agentsCacheIsSummary) renderAgentsList(_agentsCache);
+        // Boot owns a summary-only list. Upgrade it once when the grid first needs
+        // descriptions/counts; subsequent visits reuse the full renderer cache.
+        const needsFullListing = !(typeof _agentsCache !== 'undefined' && _agentsCache && !_agentsCacheIsSummary);
+        if (needsFullListing) {
+          _deferSidebarNavWork('agents-tab-refresh', () => {
+            if (currentView !== 'agents') return;
+            Promise.resolve(loadAgents(false))
+              .then(() => {
+                if (currentView === 'agents' && typeof refreshSelectedAgentDetail === 'function') {
+                  return refreshSelectedAgentDetail();
+                }
+                return null;
+              })
+              .catch((e) => _bootLog.warn('agents refresh on tab entry failed', { error: (e && e.message) || String(e) }));
+          }, 0);
+        }
+      });
     });
   } else if (view === 'skills') {
     currentCid = null;
     _deferSidebarNavWork('skills-tab-refresh', () => {
       _loadViewFeature('skills', 'skills', () => {
+        // Skills 已内嵌进认知资产：深链先切到「我的能力」tab，再渲染技能库。
+        if (typeof switchSkillsCognitionPage === 'function') switchSkillsCognitionPage('my-abilities');
         if (typeof _skillsCache !== 'undefined' && _skillsCache) renderSkillsList(_skillsCache);
         const forceRefresh = !!(typeof _skillsCache !== 'undefined' && _skillsCache);
         Promise.resolve(loadSkills(forceRefresh))
@@ -521,22 +524,26 @@ function setView(view, cid, opts = {}) {
         }
       });
     });
-  } else if (view === 'connectors') {
+  } else if (view === 'connections' || view === 'connectors') {
     currentCid = null;
-    if (typeof loadConnectors === 'function') {
-      _deferSidebarNavWork('connectors-tab-load', () => {
-        if (currentView !== 'connectors') return;
-        Promise.resolve(loadConnectors())
-          .then(() => {
-            if (currentView === 'connectors' && typeof verifyConnectors === 'function') return verifyConnectors();
-            return undefined;
-          })
-          .catch((e) => _bootLog.warn('connectors tab load failed', { error: (e && e.message) || String(e) }));
-      });
-    }
+    _deferSidebarNavWork('connections-tab-load', () => {
+      // The connections panel is eager-bundled with connectors.js; just make
+      // sure tab chrome + entry cards are initialized, then open the MCP pane
+      // when arriving via the legacy 'connectors' view.
+      if (currentView !== 'connections' && currentView !== 'connectors') return;
+      if (typeof initConnections === 'function') initConnections();
+      else if (typeof window.initConnections === 'function') window.initConnections();
+      if (view === 'connectors' && typeof activateConnectionsTab === 'function') {
+        activateConnectionsTab('mcp');
+      }
+    });
   } else if (view === 'contexts') {
     currentCid = null;
     _deferSidebarNavWork('contexts-tab-load', () => {
+      // 资料库已内嵌进「连接」：深链先切到数据源 tab。
+      if (typeof initConnections === 'function') initConnections();
+      else if (typeof window.initConnections === 'function') window.initConnections();
+      if (typeof activateConnectionsTab === 'function') activateConnectionsTab('sources');
       _loadViewFeature('contexts', 'contexts', () => {
         if (typeof loadContexts === 'function') loadContexts();
       });
@@ -553,8 +560,12 @@ function setView(view, cid, opts = {}) {
   } else if (view === 'personal-ontology') {
     currentCid = null;
     _deferSidebarNavWork('personal-ontology-tab-load', () => {
-      _loadViewFeature('personal-ontology', 'personal-ontology', () => {
-        if (typeof renderPersonalOntology === 'function') renderPersonalOntology();
+      // 个人本体已内嵌进认知资产：深链先切到「关于我」tab，再渲染。
+      _loadViewFeature('recall', 'personal-ontology', () => {
+        if (typeof switchSkillsCognitionPage === 'function') switchSkillsCognitionPage('about-me');
+        _loadViewFeature('personal-ontology', 'personal-ontology', () => {
+          if (typeof renderPersonalOntology === 'function') renderPersonalOntology();
+        });
       });
     });
   } else if (view === 'spaces') {

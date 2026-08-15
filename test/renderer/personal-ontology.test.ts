@@ -36,15 +36,24 @@ describe('personal ontology renderer integration', () => {
     expect(invoke).toHaveBeenCalledWith('personalOntology.candidates.list', {});
   });
 
-  it('contains the panel, sidebar entry, rejection modal, and lazy view wiring', () => {
+  it('contains the embedded panel, about-me tab, rejection modal, and lazy view wiring', () => {
     for (const id of [
-      'personal-ontology-btn', 'panel-personal-ontology', 'personal-onto-sidebar',
+      'panel-personal-ontology', 'personal-onto-sidebar',
       'personal-onto-nav', 'personal-onto-main-header', 'personal-onto-main-body',
       'personal-onto-modal', 'personal-onto-modal-reason', 'personal-onto-modal-ok', 'personal-onto-modal-cancel',
     ]) expect(html).toContain(`id="${id}"`);
-    expect(boot).toContain("view === 'personal-ontology' ? 'panel-personal-ontology'");
+    expect(html).toContain('id="skills-cognition-tab-about-me"');
+    // Personal ontology is embedded inside Recall's "关于我" pane.
+    const paneStart = html.indexOf('id="skills-cognition-about-me"');
+    expect(paneStart).toBeGreaterThan(0);
+    const paneHtml = html.slice(paneStart, html.indexOf('</main>', paneStart));
+    expect(paneHtml).toContain('id="panel-personal-ontology"');
+    expect(boot).toContain("view === 'skills' || view === 'personal-ontology' ? 'panel-recall'");
+    expect(boot).toContain("switchSkillsCognitionPage('about-me')");
     expect(boot).toContain("_loadViewFeature('personal-ontology', 'personal-ontology'");
-    expect(state).toContain("document.getElementById('personal-ontology-btn')?.addEventListener('click', () => _setViewFromSidebar('personal-ontology'));");
+    // The sidebar button is gone; personal ontology is reached from Recall's
+    // "关于我" tab instead of a fixed primary entry.
+    expect(state).not.toContain("document.getElementById('personal-ontology-btn')");
     expect(lazy).toContain("'personal-ontology'");
     expect(lazy).toContain("./modules/personal-ontology.js");
   });

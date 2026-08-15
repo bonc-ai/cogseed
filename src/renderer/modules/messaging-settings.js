@@ -1908,7 +1908,10 @@
     if (state.bound) return;
     state.bound = true;
     window.addEventListener('i18n-change', () => {
-      if (document.getElementById('panel-settings')?.classList.contains('is-active')) renderCurrent();
+      // 触点界面已迁至「连接」面板的 touchpoints tab。
+      const connectionsPanel = document.getElementById('panel-connections');
+      const touchpointsPane = document.getElementById('connections-pane-touchpoints');
+      if (connectionsPanel?.classList.contains('active') && touchpointsPane && !touchpointsPane.hidden) renderCurrent();
     });
     // 实例状态实时推送：主进程在状态 kind 变化时广播（心跳重复 connected
     // 不推送）。收到后更新本地实例并重渲染，让"连接中→已连接"即时可见。
