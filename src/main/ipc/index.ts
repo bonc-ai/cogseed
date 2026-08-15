@@ -95,7 +95,7 @@ import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
 import * as cliFallback from '../features/cli_fallback';
 import * as cognitionExtraction from '../features/cognition_extraction';
-import { detectAll } from '../features/local_agents/registry';
+import { detectAll, type LocalCliType } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
 import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
@@ -3823,9 +3823,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         baseUrl,
         apiKey: config.apiKey,
       });
-      if (!updateResult.ok) {
-        return { ok: false, error: updateResult.error };
-      }
+      if (!updateResult.ok) return updateResult;
       providerId = existingProvider.id;
       log.info('active CLI config updated', { cli, providerId, mode: config.mode });
     } else {
@@ -3838,9 +3836,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         source: 'manual', // Use 'manual' as source since custom_providers doesn't recognize 'active_cli'
         externalId,
       });
-      if (!addResult.ok) {
-        return { ok: false, error: addResult.error };
-      }
+      if (!addResult.ok) return addResult;
       providerId = addResult.id;
       log.info('active CLI config stored', { cli, providerId, mode: config.mode });
     }
