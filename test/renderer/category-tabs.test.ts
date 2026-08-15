@@ -607,9 +607,10 @@ describe('agent and skill category tabs', () => {
       setChatSkill = (target, id, name) => { pickedSkillCalls.push([target, id, name]); };
     `, context);
 
-    // Commander: all picker tabs; global open-tier skill selectable.
+    // Commander: no space selected → only agents/skills tabs (connectors /
+    // library / ontology removed); global open-tier skill selectable.
     expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
-      .toEqual(['agents', 'skills', 'connectors', 'library', 'ontology']);
+      .toEqual(['agents', 'skills']);
     await context._triggerPickerItem('skill', 'global-helper', 'Global Helper', 'new-chat-recipient-chip');
     expect(context.pickedSkillCalls).toEqual([['new-chat', 'global-helper', 'Global Helper']]);
 
@@ -618,9 +619,24 @@ describe('agent and skill category tabs', () => {
     context.pickedSkillCalls = [];
     context.getChatRecipient = () => ({ kind: 'agent', id: 'agent-1', name: 'Agent One' });
     expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
-      .toEqual(['agents', 'skills', 'connectors', 'library', 'ontology']);
+      .toEqual(['agents', 'skills']);
     await context._triggerPickerItem('skill', 'trusted', 'Trusted Skill', 'new-chat-recipient-chip');
     expect(context.pickedSkillCalls).toEqual([['new-chat', 'trusted', 'Trusted Skill']]);
+  });
+
+  it('shows artifacts/assets tabs for a space-scoped picker anchor', () => {
+    const { context } = loadCategoryRenderers();
+    // new-chat chip 选中空间 → 空间会话 tab 集合（智能体/技能/产物/资产）
+    context.window.getNewChatSpaceId = () => 'spc-test-1';
+    expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
+      .toEqual(['agents', 'skills', 'artifacts', 'assets']);
+    // 无空间 → 仅智能体/技能
+    context.window.getNewChatSpaceId = () => '';
+    expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
+      .toEqual(['agents', 'skills']);
+    // Auto 恒为智能体/技能
+    expect(vm.runInContext('_agentPickerVisibleTabs("auto-recipient-chip")', context))
+      .toEqual(['agents', 'skills']);
   });
 
   it('routes Library picker selections from the auto task composer into auto attachments', async () => {
@@ -629,7 +645,7 @@ describe('agent and skill category tabs', () => {
     context.window._autoAttachLibraryFile = async (ref: any) => { calls.push(ref); };
 
     expect(vm.runInContext('_agentPickerVisibleTabs("auto-recipient-chip")', context))
-      .toEqual(['agents', 'skills', 'connectors', 'library', 'ontology']);
+      .toEqual(['agents', 'skills']);
 
     await context._triggerPickerItem('library', 'library:global:brief.md', 'brief.md', 'auto-recipient-chip', {
       libraryScope: 'global',

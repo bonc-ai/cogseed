@@ -359,6 +359,28 @@ describe('spaces › CRUD', () => {
     expect((await spaces.listSpaces(TEST_UID)).some((s) => s.space_id === space.space.space_id)).toBe(false);
   });
 
+  it('deleteSpace 清空该空间会话的 space_id（会话落到最近任务，不残留）', async () => {
+    const spaces = await loadSpaces();
+    const chats = await import('../../../src/main/features/chats');
+    const created = await spaces.createSpace(TEST_UID, { name: '待删空间' });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    // 两条会话绑定到该空间
+    const c1 = await chats.createConversation(TEST_UID, { title: 'a', spaceId: sid });
+    const c2 = await chats.createConversation(TEST_UID, { title: 'b', spaceId: sid });
+    expect((await chats.listSpaceConversations(TEST_UID, sid)).length).toBe(2);
+
+    const del = await spaces.deleteSpace(TEST_UID, sid);
+    expect(del.ok).toBe(true);
+
+    // 会话 space_id 已清空（落到最近任务），不再归属已删空间
+    const back1 = await chats.getConversation(TEST_UID, c1.conversation_id);
+    const back2 = await chats.getConversation(TEST_UID, c2.conversation_id);
+    expect(back1?.space_id).toBeUndefined();
+    expect(back2?.space_id).toBeUndefined();
+    expect((await chats.listSpaceConversations(TEST_UID, sid)).length).toBe(0);
+  });
+
   it('pruneInvalidSpaceResources 清理失效引用', async () => {
     const spaces = await loadSpaces();
     const created = await spaces.createSpace(TEST_UID, { name: 'P' });

@@ -150,7 +150,9 @@ describe('renderer lazy feature loader', () => {
     expect(tabLoader).toContain("normalized === 'skills'");
     expect(tabLoader).toContain("await loader('skills')");
     expect(tabLoader).toContain('await loadSkills(false)');
-    expect(tabLoader).toContain("normalized === 'connectors'");
+    // 连接器 tab 已删：tab loader 不再加载 connectors 目录；产物/资产走渲染函数内懒加载
+    expect(tabLoader).not.toContain("normalized === 'connectors'");
+    expect(tabLoader).toContain("normalized === 'artifacts' || normalized === 'assets'");
     expect(tabLoader).toContain('const joined = existing.then');
     // 空间化后项目作用域已删：picker 恒为全局作用域，不应再引用 projects.scope。
     expect(source).not.toContain('projects.scope.resolve');

@@ -272,4 +272,44 @@ describe('spaces › createSpaceFromDraft（构建师草稿校验）', () => {
     if (r.ok) return;
     expect(r.error).toBe('name_dup');
   });
+
+  it('主+副模板草稿 → 空间落盘 secondary_template_ids，bundle 并入去重（对接新管线）', async () => {
+    const { createSpaceFromDraft, getSpace } = await loadSpaces();
+    const r = await createSpaceFromDraft(TEST_UID, {
+      name: '主副模板空间',
+      primary_template_id: 'product_manager',
+      secondary_template_ids: ['project_manager', 'fde'],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.space.primary_template_id).toBe('product_manager');
+    expect(r.space.secondary_template_ids).toEqual(['project_manager', 'fde']);
+    // 落盘可读
+    const loaded = await getSpace(TEST_UID, r.space.space_id);
+    expect(loaded?.secondary_template_ids).toEqual(['project_manager', 'fde']);
+  });
+
+  it('副模板不存在 / 超 2 个 → invalid_draft，不创建', async () => {
+    const { createSpaceFromDraft, listSpaces } = await loadSpaces();
+    const r1 = await createSpaceFromDraft(TEST_UID, {
+      name: '坏副模板空间',
+      primary_template_id: 'product_manager',
+      secondary_template_ids: ['tpl_not_exist'],
+    });
+    expect(r1.ok).toBe(false);
+    if (r1.ok) return;
+    expect(r1.error).toBe('invalid_draft');
+    expect(r1.details?.some((d) => d.includes('tpl_not_exist'))).toBe(true);
+
+    const r2 = await createSpaceFromDraft(TEST_UID, {
+      name: '副模板超限空间',
+      primary_template_id: 'product_manager',
+      secondary_template_ids: ['fde', 'student', 'scholar'],
+    });
+    expect(r2.ok).toBe(false);
+    if (r2.ok) return;
+    expect(r2.details?.some((d) => d.includes('最多 2 个'))).toBe(true);
+    // 两次失败都不落盘
+    expect((await listSpaces(TEST_UID)).length).toBe(0);
+  });
 });

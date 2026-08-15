@@ -330,6 +330,62 @@ describe('chats › setConversationPinned', () => {
   });
 });
 
+describe('chats › setConversationSpace (把已有会话绑定到空间)', () => {
+  it('binds an existing conversation to a space and includes it in listSpaceConversations', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { title: '待绑定' });
+    expect(conv.space_id).toBeUndefined();
+
+    const bound = await chats.setConversationSpace(TEST_UID, conv.conversation_id, 'sp_abc123');
+    expect(bound?.space_id).toBe('sp_abc123');
+
+    // 索引与 meta 双落盘
+    const idx = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, TEST_UID, 'cloud', 'chats', '_index.json'), 'utf-8'));
+    expect(idx[0].space_id).toBe('sp_abc123');
+    const meta = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, TEST_UID, 'cloud', 'chats', conv.conversation_id, 'meta.json'), 'utf-8'));
+    expect(meta.space_id).toBe('sp_abc123');
+
+    // 空间「任务」列表纳入（listSpaceConversations 按 space_id 匹配全局索引兜底）
+    const inSpace = await chats.listSpaceConversations(TEST_UID, 'sp_abc123');
+    expect(inSpace.map((c) => c.conversation_id)).toContain(conv.conversation_id);
+    // 其它空间不含
+    const other = await chats.listSpaceConversations(TEST_UID, 'sp_other');
+    expect(other.map((c) => c.conversation_id)).not.toContain(conv.conversation_id);
+  });
+
+  it('unbinds (null) a conversation and removes space_id from index + meta', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { title: '移出', spaceId: 'sp_abc123' });
+    expect(conv.space_id).toBe('sp_abc123');
+
+    const unbound = await chats.setConversationSpace(TEST_UID, conv.conversation_id, null);
+    expect(unbound?.space_id).toBeUndefined();
+
+    const idx = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, TEST_UID, 'cloud', 'chats', '_index.json'), 'utf-8'));
+    expect(idx[0].space_id).toBeUndefined();
+    const meta = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, TEST_UID, 'cloud', 'chats', conv.conversation_id, 'meta.json'), 'utf-8'));
+    expect(meta.space_id).toBeUndefined();
+
+    const inSpace = await chats.listSpaceConversations(TEST_UID, 'sp_abc123');
+    expect(inSpace.map((c) => c.conversation_id)).not.toContain(conv.conversation_id);
+  });
+
+  it('rejects invalid space ids and missing conversations', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { title: 'x' });
+    // 非法 spaceId（非 safeId）→ 拒绝，不写
+    expect(await chats.setConversationSpace(TEST_UID, conv.conversation_id, '../../evil')).toBeNull();
+    const after = await chats.getConversation(TEST_UID, conv.conversation_id);
+    expect(after?.space_id).toBeUndefined();
+    // 不存在的会话 → null
+    expect(await chats.setConversationSpace(TEST_UID, 'deadbeefcafe', 'sp_abc123')).toBeNull();
+  });
+});
+
 describe('chats › targeted conversation lookup', () => {
   it('uses a validated project/global hint without opening unrelated indexes', async () => {
     const chats = await loadChats();
@@ -590,7 +646,9 @@ describe('chats › index repair', () => {
     // 空间化后旧孤儿项目会话（纯 project_id）在普通列表可见（F2-A）。
     expect(startupIds).toContain(orphanProjConv.conversation_id);
     expect(startupIds).not.toContain(old.conversation_id);
-    expect(startupIds).not.toContain(collapsedConv.conversation_id);
+    // 语义统一（bug 4 修复）：space_id 非空 = 空间会话，侧栏空间组需要全量显示，
+    // 不再走项目分页懒加载 → collapsed project 的空间会话也始终返回。
+    expect(startupIds).toContain(collapsedConv.conversation_id);
     expect(startup.deferred_unprojected.older).toBe(1);
     expect(startup.loaded_project_ids).toEqual([expanded.project.project_id]);
 
@@ -654,7 +712,8 @@ describe('chats › index repair', () => {
     const startup = await chats.listStartupConversations(TEST_UID, {
       expandedProjectIds: [pid],
     });
-    expect(startup.conversations.filter((c) => c.project_id === pid)).toHaveLength(10);
+    // 语义统一（bug 4 修复）：space 会话始终返回（侧栏空间组全量展示），不再受项目分页 10 条限制。
+    expect(startup.conversations.filter((c) => c.project_id === pid)).toHaveLength(15);
     expect(startup.project_pagination[pid]).toEqual({ total: 15, next_offset: 10 });
     expect(startup.deferred_unprojected).toEqual({ last30: 12, older: 13 });
 
@@ -662,7 +721,7 @@ describe('chats › index repair', () => {
       activeConversationId: projectRows[14].conversation_id,
       expandedProjectIds: [pid],
     });
-    expect(restored.conversations.filter((c) => c.project_id === pid)).toHaveLength(11);
+    expect(restored.conversations.filter((c) => c.project_id === pid)).toHaveLength(15);
     expect(restored.conversations.some((c) => c.conversation_id === projectRows[14].conversation_id)).toBe(true);
 
     const projectFirst = await chats.listProjectConversationPage(TEST_UID, pid, 0);

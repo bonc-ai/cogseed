@@ -250,3 +250,47 @@ describe('Recall candidate governance', () => {
     expect(edited.promotionFailedAt).toBeUndefined();
   });
 });
+
+describe('Recall candidate/asset › 空间归属（spaceId）管线', () => {
+  it('saveRecallCandidate 带 spaceId → promote → 资产继承 spaceId → listAbilityAssetsForSpace 过滤', async () => {
+    const candidates = await service();
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+
+    const input = {
+      judgment: '空间内绘画沉淀：配色规范应遵循品牌色。',
+      summary: '品牌配色规范',
+      suggestedType: 'rule' as const,
+      suggestedScope: 'space',
+      spaceId: 'sp_space_a',
+      sourceRefs: [{ kind: 'memory' as const, id: 'mem-space-a' }],
+    };
+    const candidate = await candidates.saveRecallCandidate('user-a', input);
+    expect(candidate.spaceId).toBe('sp_space_a');
+
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    expect(promoted.asset.spaceId).toBe('sp_space_a');
+
+    // 按空间过滤：A 空间能看到，B 空间看不到
+    const forA = await assets.listAbilityAssetsForSpace('user-a', 'sp_space_a');
+    expect(forA.some((a) => a.id === promoted.asset.id)).toBe(true);
+    const forB = await assets.listAbilityAssetsForSpace('user-a', 'sp_space_b');
+    expect(forB.some((a) => a.id === promoted.asset.id)).toBe(false);
+    // 全局可读（空间能读到全局资产）
+    const all = await assets.listAbilityAssets('user-a');
+    expect(all.some((a) => a.id === promoted.asset.id)).toBe(true);
+  });
+
+  it('不带 spaceId 的候选 → 资产无空间归属（不进任何空间资产列表）', async () => {
+    const candidates = await service();
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: '全局认知：番茄工作法有效。',
+      suggestedType: 'rule' as const,
+      suggestedScope: 'personal',
+      sourceRefs: [{ kind: 'memory' as const, id: 'mem-g' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    expect(promoted.asset.spaceId).toBeUndefined();
+    expect((await assets.listAbilityAssetsForSpace('user-a', 'sp_any')).some((a) => a.id === promoted.asset.id)).toBe(false);
+  });
+});
