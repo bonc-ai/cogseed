@@ -2431,6 +2431,13 @@ async function _enqueueBody(
       ? { p3394: { recipient_epochs: recipientEpochs } }
       : {}),
     text: rewrittenText,
+    // The Commander's in-context KStar review (<kstar-review>…</kstar-review>)
+    // is a host-internal self-evolution signal, not user-facing content. Tag
+    // it so the renderer never shows it as a chat bubble while the record
+    // stays in the message stream for closure parsing.
+    ...(rewrittenText.includes('<kstar-review>')
+      ? { system_kind: 'kstar_review' as const }
+      : {}),
     ...(params.failure_kind ? { failure_kind: params.failure_kind } : {}),
     ...(params.failure_code ? { failure_code: params.failure_code } : {}),
     ...(params.model_text && params.model_text.trim()

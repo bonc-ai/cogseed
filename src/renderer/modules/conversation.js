@@ -2899,6 +2899,12 @@ function _groupMessageSystemKind(gm) {
   if (modelText.startsWith('The previous assistant run was interrupted by an application exit or crash')) {
     return 'reply_interrupted';
   }
+  // Compatibility for review replies persisted before the system_kind tag:
+  // a commander message whose body is exactly a <kstar-review> block is a
+  // host-internal self-evolution signal and must not render as a bubble.
+  if (String(gm?.text || '').trim().startsWith('<kstar-review>')) {
+    return 'kstar_review';
+  }
   return '';
 }
 
@@ -2913,6 +2919,10 @@ function _collapseSupersededInterruptionRecords(records) {
   const pendingByActor = new Map();
   for (const gm of records) {
     if (!gm) continue;
+    // Host-internal KStar review replies are self-evolution signals, not
+    // user-facing content. Keep them in the persisted stream (closure and
+    // agent visibility still read them) but never render them as bubbles.
+    if (_groupMessageSystemKind(gm) === 'kstar_review') continue;
     const actor = String(gm.from || gm._from || '');
     const isUser = actor === 'user' || gm.role === 'user';
     if (isUser) {
@@ -12374,6 +12384,17 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
   if (evData.type === 'message') {
     const gm = evData.msg;
     if (!gm) return;
+    // Host-internal KStar review replies (self-evolution signal) are never
+    // rendered as bubbles. Consume the actor placeholder so the turn still
+    // settles cleanly, then skip the visible message entirely.
+    if (_groupMessageSystemKind(gm) === 'kstar_review') {
+      const ph = _consumeActorPlaceholder(cid, gm.from, _eventTurnId(evData));
+      if (ph && ph.parentElement) {
+        _finalizeActorPlaceholder(ph, gm, cid, archive);
+      }
+      if (evData.turn_end) _evaluateAutoRecipient(cid);
+      return;
+    }
     // The user's own send is already rendered optimistically by the input
     // handler. Still stamp it with the persisted message id once the bus echoes
     // the write, so history reconciliation can prove the DOM matches jsonl

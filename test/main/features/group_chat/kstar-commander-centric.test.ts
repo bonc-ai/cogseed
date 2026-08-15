@@ -202,4 +202,27 @@ describe('World-model-centric KStar (Commander tool surface removed)', () => {
     expect(fs.readFileSync(path.join(tmpDir, 'user-a', 'cloud', 'kstar', 'tasks', `${task.id}.json`), 'utf8')).toBe(beforeTask);
     expect(fs.readFileSync(path.join(tmpDir, 'user-a', 'cloud', 'kstar', 'requirements', `${requirement.id}.json`), 'utf8')).toBe(beforeRequirement);
   });
+
+  it('tags Commander review replies as host-internal (system_kind kstar_review) so the UI hides them', async () => {
+    const cid = newCid();
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    bus.subscribe('user-a', cid, () => undefined);
+
+    // The closure flow enqueues a commander-authored <kstar-review> reply;
+    // it must be persisted (closure parses it) but tagged as internal so the
+    // renderer never shows it as a user-facing bubble.
+    await bus.enqueue({
+      uid: 'user-a',
+      cid,
+      fromActorId: 'commander',
+      text: '<kstar-review>{"outcome":"met_expected","attribution":"unclear","deltaR":0,"deltaA":0,"reason":"done","confidence":0.9}</kstar-review>',
+    });
+    await waitForQuiescent(bus, cid);
+
+    const messages = await groupChat.readMessages('user-a', cid);
+    const review = messages.find((m) => String(m.text).includes('<kstar-review>'));
+    expect(review).toBeTruthy();
+    expect(review!.system_kind).toBe('kstar_review');
+  });
 });
