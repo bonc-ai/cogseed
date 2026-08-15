@@ -40,6 +40,9 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   captureKey?: string;
   promotedAssetId?: string;
   decisionNote?: string;
+  /** 空间归属：候选来自哪个空间（空间绘画/任务产出的认知）。资产随 recall 全局存储，
+   *  空间资产 tab 按此字段过滤显示；空间可读全局资产但显示只显示本空间产生的。 */
+  spaceId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -61,6 +64,8 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   status: 'active' | 'paused' | 'revoked';
   maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
   version: string;
+  /** 空间归属：资产由某空间的候选确认而来（随 recall 全局存储，不随空间删）。 */
+  spaceId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -74,6 +79,8 @@ export interface SaveRecallCandidateInput {
   sourceRefs: unknown[];
   learningSignal?: KstarLearningSignal;
   captureKey?: string;
+  /** 空间归属（可选）：来源会话/任务的 space_id。 */
+  spaceId?: string;
 }
 
 function boundedText(value: unknown, field: string, max: number, required = false): string | undefined {
@@ -224,6 +231,7 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
     sourceRefs,
     ...(learningSignal ? { learningSignal } : {}),
     ...(captureKey ? { captureKey } : {}),
+    ...(input.spaceId && safeId(input.spaceId) ? { spaceId: input.spaceId } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -321,6 +329,7 @@ export async function promoteRecallCandidate(
       ...(ontologyRefs?.length ? { ontologyRefs } : {}),
       scope: candidate.suggestedScope,
       ...(scopePolicy ? { scopePolicy } : {}),
+      ...(candidate.spaceId ? { spaceId: candidate.spaceId } : {}),
       status: 'active',
       maturity: 'seed',
       version: '1',

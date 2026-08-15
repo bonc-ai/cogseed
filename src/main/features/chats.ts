@@ -1391,15 +1391,15 @@ export async function listStartupConversations(
     }
     if (active?.project_id) selectedProjectCids.add(active.conversation_id);
     for (const c of all) {
-      // 空间化后仅 space_id 视为"项目分组"归属；纯 project_id（无 space_id）
-      // 的旧项目会话按 unprojected 放行，保证存量孤儿会话可见。
-      if ((c.project_id && c.space_id) || c.pinned_at) continue;
+      // 空间化语义统一：space_id 非空 = 空间会话（归侧栏空间组，不 lazy）；
+      // 纯 project_id（无 space_id）旧孤儿按 unprojected 放行（F2-A 可见）。
+      if (c.space_id || c.pinned_at) continue;
       const bucket = _startupOldBucket(c);
       if (bucket) deferred[bucket] += 1;
     }
     return all.filter((c) => {
       if (c.conversation_id === activeCid) return true;
-      if (c.project_id && c.space_id) return selectedProjectCids.has(c.conversation_id);
+      if (c.space_id) return true; // 空间会话始终返回（侧栏空间组展示，不分页懒加载）
       if (c.pinned_at) return true;
       return _startupOldBucket(c) === null;
     });
@@ -1479,7 +1479,7 @@ export async function listOldUnprojectedConversationPage(
     return { conversations: [], total: 0, next_offset: null };
   }
   const rows = (await _readScopedRawConversations(userId))
-    .filter((c) => !(c.project_id && c.space_id) && _startupOldBucket(c) === bucket);
+    .filter((c) => !c.space_id && _startupOldBucket(c) === bucket);
   return _enrichConversationPage(userId, rows, offset);
 }
 
@@ -1494,12 +1494,14 @@ export async function listProjectConversations(userId: string, projectId: string
   );
 }
 
-/** Load the two collapsed age buckets for the unprojected sidebar only. */
+/** Load the two collapsed age buckets for the unprojected sidebar only.
+ *  语义与 Page 版统一（bug 4）：space_id 非空 = 空间会话（归空间组），
+ *  纯 project_id 旧孤儿（无 space_id）按 unprojected 放行（F2-A）。 */
 export async function listOldUnprojectedConversations(userId: string): Promise<Conversation[]> {
   return _listConversationsUncached(
     userId,
     () => false,
-    (all) => all.filter((c) => !c.project_id && _startupOldBucket(c) !== null),
+    (all) => all.filter((c) => !c.space_id && !c.pinned_at && _startupOldBucket(c) !== null),
     () => _readScopedRawConversations(userId),
   );
 }
@@ -1992,6 +1994,50 @@ export async function batchUpdateConversationProject(
 
   log.info(`batch updated conversations to project user=${userId} project=${projectId} updated=${updated}/${conversationIds.length}`);
   return { ok: true, updated };
+}
+
+/** 空间化重构（删项目层）：把已有会话绑定到空间（问题 A 缺口补齐）。
+ *
+ *  * `spaceId` = 合法空间 id → 绑定；`null`/`''` → 解绑（移出空间，回到普通列表）。
+ *  * 只写 `conversation.space_id`（与 `conversations.create({spaceId})` 语义一致），
+ *    不动 `project_id`（已废弃字段，F2 侧栏可见性判定用 `project_id && space_id`，
+ *    新建空间会话同样只有 space_id，保持行为一致——绑定后仍留在侧栏，同时进空间任务列表）。
+ *  * 绑定后即被 `listSpaceConversations`（按 space_id 匹配全局索引兜底）纳入
+ *    空间「任务」tab；解绑则从空间任务列表消失。
+ *  * **工作区随归属迁移（方案 Y）**：space_id 变更时，把会话工作区从旧位置
+ *    （旧空间目录 / userWorkSpace）搬到新位置，解绑/换空间/删空间都不丢产出文件。
+ *  * 返回 null = 会话不存在/已删除（与 updateConversation 语义对齐）。 */
+export async function setConversationSpace(
+  userId: string,
+  cid: string,
+  spaceId: string | null,
+  projectIdHint?: string | null,
+): Promise<Conversation | null> {
+  if (!safeId(cid)) return null;
+  if (spaceId !== null && !safeId(spaceId)) return null;
+  return _withConversationIndexStore(userId, async (store) => {
+    const target = await store.findTarget(cid, projectIdHint);
+    if (!target || isDeletedConversation(target.conversation)) return null;
+    const next = { ...target.conversation };
+    const normalized = spaceId || null;
+    if (normalized) next.space_id = normalized;
+    else delete next.space_id;
+    if (next.space_id !== target.conversation.space_id) {
+      const prevSid = target.conversation.space_id || null;
+      next.updated_at = nowIso();
+      _stampConversationSync(userId, next);
+      await store.persistTarget(target, next);
+      // 工作区随归属迁移（尽力而为；失败由 getConversationWorkspacePath 惰性兜底）
+      try {
+        const { migrateConversationWorkspace } = await import('./group_chat/conv_workspace');
+        const r = await migrateConversationWorkspace(userId, cid, prevSid, normalized);
+        if (r.moved) log.info(`workspace moved with space change user=${userId} cid=${cid} ${prevSid ?? 'user'}->${normalized ?? 'user'}`);
+      } catch (err) {
+        log.warn(`migrate workspace on space change user=${userId} cid=${cid}: ${(err as Error).message}`);
+      }
+    }
+    return next;
+  });
 }
 
 export async function setConversationPinned(

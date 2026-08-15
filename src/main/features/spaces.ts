@@ -20,7 +20,7 @@ import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { userSpacesDir, spaceMetaFile } from '../paths';
+import { userSpacesDir, spaceMetaFile, spaceContentDir } from '../paths';
 import { nowIso, readJson, writeJson } from '../storage';
 import { createLogger } from '../logger';
 import { limitNameDisplayText } from '../util/name-limit';
@@ -55,6 +55,8 @@ export interface Space {
   sustained_outcome?: string;
   /** 空间「目标+规则」说明书（承接原项目 ORKAS.md；commander 写、空间内 agent 读）。 */
   instructions?: string;
+  /** 基础 Agent（承接空间内任务的默认执行体；扩展点：后续接入其他 coding agent）。 */
+  base_agent?: string;
   /** 上架 Gate 状态缓存（'passed' = 最近一次评估通过；实时判断走 evaluateWorkspaceGate）。 */
   gate_status?: SpaceGateStatus;
   /** 空间绑定的 Main Skill（引用不复制；AssetRef 契约与 main-skill-baseline 对齐）。 */
@@ -285,6 +287,7 @@ function _normaliseSpace(raw: any): Space | null {
     sustained_outcome: typeof raw.sustained_outcome === 'string' && raw.sustained_outcome ? raw.sustained_outcome : undefined,
     instructions: typeof raw.instructions === 'string' && raw.instructions ? raw.instructions : undefined,
     gate_status: isGateStatus(raw.gate_status) ? raw.gate_status : 'not_checked',
+    base_agent: typeof raw.base_agent === 'string' && raw.base_agent ? raw.base_agent : undefined,
     main_skill_ref: normaliseAssetRef(raw.main_skill_ref),
     asset_reference_bindings: normaliseBindings(raw.asset_reference_bindings),
     created_at: typeof raw.created_at === 'string' ? raw.created_at : '',
@@ -424,6 +427,7 @@ export async function createSpace(
     space_type?: SpaceType;
     sustained_outcome?: string;
     instructions?: string;
+    base_agent?: string;
     main_skill_ref?: SpaceAssetRef;
     asset_reference_bindings?: SpaceAssetReferenceBinding[];
   },
@@ -452,6 +456,7 @@ export async function createSpace(
     space_type: opts.space_type ?? 'complex_project',
     sustained_outcome: opts.sustained_outcome || undefined,
     instructions: opts.instructions || undefined,
+    base_agent: typeof opts.base_agent === 'string' && opts.base_agent ? opts.base_agent : undefined,
     gate_status: 'not_checked',
     main_skill_ref: normaliseAssetRef(opts.main_skill_ref),
     asset_reference_bindings: normaliseBindings(opts.asset_reference_bindings),
@@ -470,6 +475,7 @@ export interface SpaceDraft {
   space_type?: string;
   sustained_outcome?: string;
   primary_template_id?: string;
+  secondary_template_ids?: string[];
   main_skill_ref?: SpaceAssetRef;
   extra_skill_ids?: string[];
   extra_agent_ids?: string[];
@@ -497,12 +503,14 @@ export async function createSpaceFromDraft(
   if (draft.sustained_outcome !== undefined && draft.sustained_outcome.length > 200) {
     details.push('sustained_outcome 超过 200 字上限');
   }
-  // 2. 模板存在性
+  // 2. 模板存在性（主 + 副 ≤2，去重排除主模板；bundle 并入去重集合——与新管线
+  //    resolveSpaceResources 的「主+副 bundle ∪ extra」语义一致）
   let templateId: string | undefined;
+  const secondaryTemplateIds: string[] = [];
   let bundleSkillIds = new Set<string>();
   let bundleAgentIds = new Set<string>();
+  const tpls = await import('./role_templates').then((m) => m.listRoleTemplates());
   if (draft.primary_template_id) {
-    const tpls = await import('./role_templates').then((m) => m.listRoleTemplates());
     const tpl = tpls.find((t) => t.template_id === draft.primary_template_id);
     if (tpl) {
       templateId = tpl.template_id;
@@ -510,6 +518,18 @@ export async function createSpaceFromDraft(
       (tpl.bundle?.agent_ids || []).forEach((id) => bundleAgentIds.add(id));
     } else {
       details.push(`角色模板不存在: ${draft.primary_template_id}`);
+    }
+  }
+  for (const sid of draft.secondary_template_ids || []) {
+    if (!sid || sid === templateId || secondaryTemplateIds.includes(sid)) continue;
+    if (secondaryTemplateIds.length >= 2) { details.push('副模板最多 2 个'); break; }
+    const st = tpls.find((t) => t.template_id === sid);
+    if (st) {
+      secondaryTemplateIds.push(sid);
+      (st.bundle?.skill_ids || []).forEach((id) => bundleSkillIds.add(id));
+      (st.bundle?.agent_ids || []).forEach((id) => bundleAgentIds.add(id));
+    } else {
+      details.push(`角色模板不存在: ${sid}`);
     }
   }
   // 3. 主技能存在性 + 可用
@@ -554,6 +574,7 @@ export async function createSpaceFromDraft(
     space_type: spaceType,
     sustained_outcome: draft.sustained_outcome || undefined,
     primary_template_id: templateId,
+    ...(secondaryTemplateIds.length ? { secondary_template_ids: secondaryTemplateIds } : {}),
     main_skill_ref: mainSkillRef,
   });
   if (!space.ok) return space;
@@ -583,6 +604,7 @@ export async function updateSpace(
     space_type?: SpaceType | null;
     sustained_outcome?: string | null;
     instructions?: string | null;
+    base_agent?: string | null;
     gate_status?: SpaceGateStatus | null;
     main_skill_ref?: SpaceAssetRef | null;
     asset_reference_bindings?: SpaceAssetReferenceBinding[] | null;
@@ -619,6 +641,9 @@ export async function updateSpace(
     if (opts.instructions === null) cur.instructions = undefined;
     else if (opts.instructions.length > SPACE_INSTRUCTIONS_CHAR_LIMIT) return { ok: false, error: 'too_long' };
     else cur.instructions = opts.instructions || undefined;
+  }
+  if (opts.base_agent !== undefined) {
+    cur.base_agent = opts.base_agent === null || !opts.base_agent ? undefined : opts.base_agent;
   }
   if (opts.gate_status !== undefined) {
     if (opts.gate_status === null) cur.gate_status = 'not_checked';
@@ -699,6 +724,8 @@ export function formatSpaceContextPolicyForSystemPrompt(): string {
 }
 
 /** 删除空间 = 删空间元数据（能力包）。空间下会话不删除（数据归用户）。
+ *  删除时**清空该空间所有会话的 space_id**——会话落到「最近任务」，
+ *  不残留空间编号（否则既不在空间组、也不在最近任务 = 会话"消失"）。
  *  项目壳已废弃（T4.5），不再有项目解绑逻辑。 */
 export async function deleteSpace(
   uid: string,
@@ -706,11 +733,31 @@ export async function deleteSpace(
 ): Promise<{ ok: true } | { ok: false; error: SpaceError }> {
   const cur = await _readSpace(uid, spaceId);
   if (!cur) return { ok: false, error: 'not_found' };
+  // 1. 解绑该空间下所有会话（尽力而为；任一失败只告警不阻断删除）
+  try {
+    const chats = await import('./chats');
+    const convs = await chats.listSpaceConversations(uid, spaceId);
+    for (const c of convs) {
+      try {
+        await chats.setConversationSpace(uid, c.conversation_id, null);
+      } catch (err) {
+        log.warn(`clear space membership on delete user=${uid} sid=${spaceId} cid=${c.conversation_id}: ${(err as Error).message}`);
+      }
+    }
+  } catch (err) {
+    log.warn(`clear space conversations user=${uid} sid=${spaceId}: ${(err as Error).message}`);
+  }
+  // 2. 删空间元数据 + 空间内容目录（chats index/jsonl 等残留，避免孤儿文件）
   try {
     const f = spaceMetaFile(uid, spaceId);
     if (fs.existsSync(f)) await fsp.rm(f, { force: true });
   } catch (err) {
     log.warn(`drop space file user=${uid} sid=${spaceId}: ${(err as Error).message}`);
+  }
+  try {
+    await fsp.rm(spaceContentDir(uid, spaceId), { recursive: true, force: true });
+  } catch (err) {
+    log.warn(`drop space content dir user=${uid} sid=${spaceId}: ${(err as Error).message}`);
   }
   log.info(`deleted space user=${uid} sid=${spaceId}`);
   return { ok: true };

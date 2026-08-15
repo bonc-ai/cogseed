@@ -182,6 +182,15 @@ export async function listAbilityAssets(userId: string): Promise<RecallAbilityAs
   return records.filter((record): record is RecallJsonRecord => Boolean(record)).map(asAsset).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+/** 某空间沉淀的资产（按 spaceId 过滤；资产随 recall 全局存储，不随空间删）。
+ *  空间能读到全局资产（引用/检索走 listAbilityAssets），但空间资产 tab 只显示本空间的。
+ *  **已撤销（revoked）的资产不显示**（用户撤销后从空间资产列表消失；全局认知资产页仍可见）。 */
+export async function listAbilityAssetsForSpace(userId: string, spaceId: string): Promise<RecallAbilityAssetRecord[]> {
+  if (!safeId(spaceId)) return [];
+  const all = await listAbilityAssets(userId);
+  return all.filter((asset) => asset.spaceId === spaceId && asset.status !== 'revoked');
+}
+
 export async function updateAbilityAsset(userId: string, assetId: string, input: UpdateAbilityAssetInput): Promise<RecallAbilityAssetRecord> {
   if ('id' in input || 'ownerId' in input) throw new Error('ability asset identity is immutable');
   const action = requireUserAction(input);

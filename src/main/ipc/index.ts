@@ -587,7 +587,21 @@ async function _isConversationRecordedFile(userId: string, cid: string, absPath:
 async function _isAllowedFileActionPath(userId: string, payload: any, absPath: string): Promise<boolean> {
   if (isPathAllowed(absPath, await _ipcFileSandboxAllowedRoots(userId, payload))) return true;
   const cid = payload?.cid;
-  return typeof cid === 'string' && !!cid && await _isConversationRecordedFile(userId, cid, absPath);
+  if (typeof cid !== 'string' || !cid) return false;
+  // 1) 会话记录过的产物文件（消息 produced[]）
+  if (await _isConversationRecordedFile(userId, cid, absPath)) return true;
+  // 2) 空间会话工作区目录内的文件（工作区兜底扫到的产物——部分工具直接写文件、
+  //    未登记 produced，打开/定位产物时也应放行）
+  try {
+    const conv = await chats.getConversation(userId, cid);
+    if (conv?.space_id) {
+      const { getConversationWorkspacePath } = await import('../features/group_chat/conv_workspace');
+      const wsDir = path.resolve(await getConversationWorkspacePath(userId, cid));
+      const target = path.resolve(absPath);
+      if (target === wsDir || target.startsWith(wsDir + path.sep)) return true;
+    }
+  } catch { /* fall through to false */ }
+  return false;
 }
 
 // Scan an HTML file with constant memory and return only the authored
@@ -844,43 +858,6 @@ async function ensureKstarWakeProjectionConfirmed(
   return null;
 }
 
-/** 定位持有某附件文件的源消息（跨任务引用需要 source_msg_id + 非空源文本）。
- *  在源会话 JSONL 里从新到旧找 attachments/produced 含该文件名的消息。 */
-async function _resolveArtifactSourceMessage(
-  userId: string,
-  sourceCid: string,
-  fileName: string,
-): Promise<{ source_msg_id: string; source_ts: string; source_text: string } | null> {
-  if (!safeId(sourceCid) || !fileName) return null;
-  try {
-    const rows = await readJsonl<{ id?: string; ts?: string; text?: string; attachments?: unknown; produced?: unknown }>(
-      conversationMessageReadFile(userId, sourceCid),
-      100_000,
-    );
-    const base = fileName.toLowerCase();
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const m = rows[i];
-      if (!m || typeof m.id !== 'string' || !m.id) continue;
-      const attNames: string[] = Array.isArray(m.attachments)
-        ? m.attachments.map((a: any) => (typeof a === 'string' ? a : (a && a.name) || ''))
-        : [];
-      const producedNames: string[] = Array.isArray(m.produced)
-        ? m.produced.map((p: any) => (p && typeof p.path === 'string' ? path.basename(p.path) : ''))
-        : [];
-      if ([...attNames, ...producedNames].some((n) => n && n.toLowerCase() === base)) {
-        return {
-          source_msg_id: m.id,
-          source_ts: typeof m.ts === 'string' ? m.ts : '',
-          source_text: typeof m.text === 'string' ? m.text : '',
-        };
-      }
-    }
-  } catch (err) {
-    log.warn('resolve artifact source message failed', { sourceCid, error: (err as Error).message });
-  }
-  return null;
-}
-
 const invokeHandlers: Record<string, InvokeHandler> = {
   'mate_agent.task.start': async (payload, ctx) => mateAgentBackend.mateIpcService.start(ctx.userId, payload),
   'mate_agent.task.read': async (payload, ctx) => mateAgentBackend.mateIpcService.read(ctx.userId, payload),
@@ -1084,6 +1061,22 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { conversation: conv };
   },
 
+  // ── 把已有会话绑定到空间（问题 A：只有新建时能绑，这里补「移入/移出」）──
+  // spaceId 合法且属于该用户 → 绑定；空/缺失 → 解绑（移出空间回到普通列表）。
+  'conversations.setSpace': async (args, ctx) => {
+    const { cid, spaceId } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    let validSpaceId: string | null = null;
+    if (spaceId && typeof spaceId === 'string' && safeId(spaceId)) {
+      if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('invalid spaceId');
+      validSpaceId = spaceId;
+    }
+    const conv = await chats.setConversationSpace(
+      ctx.userId, cid, validSpaceId, conversationProjectHint(args));
+    if (!conv) throw new Error('conversation not found');
+    return { conversation: conv };
+  },
+
   // ── 空间任务引用（任务级：产物 → references / 资产 → 上下文块）──────────
   'conversations.taskRefs.list': async ({ cid } = {}, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
@@ -1185,8 +1178,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
-  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, main_skill_ref, asset_reference_bindings });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1208,9 +1201,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { space };
   },
 
-  'spaces.update': async ({ spaceId, name, icon, template_id } = {}, ctx) => {
+  'spaces.update': async (args, ctx) => {
+    const { spaceId, name, icon, template_id, base_agent, main_skill_ref } = args || {};
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id });
+    const result = await spaces.updateSpace(ctx.userId, spaceId, {
+      name, icon, template_id,
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'base_agent') ? { base_agent } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'main_skill_ref') ? { main_skill_ref } : {}),
+    });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1277,6 +1275,22 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { artifacts: await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId) };
   },
 
+  'spaces.artifacts.confirm': async ({ spaceId, cid, name } = {}, ctx) => {
+    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    const result = await spacesArtifacts.confirmSpaceArtifact(ctx.userId, spaceId, cid, name);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { confirmed: result.confirmed };
+  },
+
+  'spaces.artifacts.reject': async ({ spaceId, cid, name } = {}, ctx) => {
+    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    const result = await spacesArtifacts.rejectSpaceArtifact(ctx.userId, spaceId, cid, name);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { rejected: result.rejected };
+  },
+
   'spaces.assets.list': async ({ spaceId } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     return { bindings: await spaces.listSpaceAssetBindings(ctx.userId, spaceId) };
@@ -1287,6 +1301,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const result = await spaces.bindSpaceAsset(ctx.userId, spaceId, ref || {});
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { bindings: result.bindings };
+  },
+
+  // ── 空间作用域（@ 选择器按空间能力过滤：agents ∪ skills = 模板 bundle ∪ extra）──
+  // 语义与 runner 一致（S1）：空间缺失/空配置/全失效 → scope=null（全局可见不过滤）。
+  'spaces.scope.resolve': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('invalid spaceId');
+    const scope = await spaces.resolveSpaceScope(ctx.userId, spaceId);
+    return { scope }; // null = 全局；否则 { skills: string[]; agents: string[] }
   },
 
   'spaces.assets.unbind': async ({ spaceId, assetId } = {}, ctx) => {
@@ -1632,6 +1655,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // ── Group chat (replaces legacy conversations.send / .stream / .markFormSubmitted) ──
+  // 任务级引用合并（@ 产物/资产 → task_references）已下沉到 groupChat.send() 核心——
+  // conversations.sendStream（标准 composer 实际走的流式路径）与 groupChat.send 都汇聚
+  // 到那里，引用才能随消息发出。这里只做参数透传。
   'groupChat.send': async ({ cid, content, attachments, use_selections, references }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     const text = (content || '').trim();
@@ -1639,61 +1665,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string') : [];
     const useSelections = Array.isArray(use_selections) ? use_selections : [];
     const refs = Array.isArray(references) ? references : [];
-    // 任务级引用合并：产物 → references（LLM 可读文件），资产 → 模型上下文块（不污染可见文本）
-    let modelText: string | undefined;
-    let mergedRefs = refs;
-    try {
-      const conv = await chats.getConversation(ctx.userId, cid);
-      const taskRefs = conv?.task_references || [];
-      const artifactRefs = taskRefs.filter((r) => r.kind === 'artifact');
-      const assetRefs = taskRefs.filter((r) => r.kind === 'asset');
-      if (artifactRefs.length) {
-        // 产物引用需指向「持有该附件的源消息」才能过跨任务引用解析（_resolveMessageReferences
-        // 要求合法 source_msg_id + 非空源文本）。逐条在源会话里定位持有该文件的最新消息。
-        const artifactRefsResolved: Array<{ source_cid: string; source_title: string; source_msg_id: string; source_ts: string; text: string; file_name: string }> = [];
-        for (const r of artifactRefs.slice(0, 20)) {
-          const src = await _resolveArtifactSourceMessage(ctx.userId, r.source_cid, r.file_name);
-          if (!src) continue;
-          artifactRefsResolved.push({
-            source_cid: r.source_cid || '',
-            source_title: r.source_title || r.name || '空间任务引用',
-            source_msg_id: src.source_msg_id,
-            source_ts: r.source_ts || src.source_ts || (conv && (conv.updated_at || conv.created_at)) || new Date().toISOString(),
-            text: src.source_text,
-            file_name: r.file_name || '',
-          });
-        }
-        if (artifactRefsResolved.length) {
-          mergedRefs = [
-            ...refs,
-            ...artifactRefsResolved.map((r) => ({
-              source_cid: r.source_cid,
-              source_title: r.source_title,
-              source_msg_id: r.source_msg_id,
-              from_actor: 'space_task',
-              from_name: '空间任务引用',
-              source_ts: r.source_ts,
-              text: r.text,
-              ...(r.file_name ? { attachments: [{ name: r.file_name }] } : {}),
-            })),
-          ];
-        }
-      }
-      if (assetRefs.length) {
-        const block = assetRefs
-          .map((r) => `- ${r.name}（${r.asset_type || '空间资产'}）${r.summary ? `：${r.summary}` : ''}`)
-          .join('\n');
-        if (block) modelText = `${text}\n\n【本任务引用的空间资产】\n${block}`;
-      }
-    } catch (err) {
-      log.warn('task references merge failed', { cid, error: (err as Error).message });
-    }
     return groupChat.send({
       userId: ctx.userId, cid, text,
-      ...(modelText ? { model_text: modelText } : {}),
       ...(atts.length ? { attachments: atts } : {}),
       ...(useSelections.length ? { use_selections: useSelections } : {}),
-      ...(mergedRefs.length ? { references: mergedRefs } : {}),
+      ...(refs.length ? { references: refs } : {}),
     });
   },
 
@@ -2101,14 +2077,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, candidate: await recallCandidates.readRecallCandidate(ctx.userId, candidateId) };
   },
 
-  'recall.candidates.save': async ({ judgment, summary, uncertainty, suggestedType, suggestedScope, sourceRefs } = {}, ctx) => {
+  'recall.candidates.save': async ({ judgment, summary, uncertainty, suggestedType, suggestedScope, sourceRefs, spaceId } = {}, ctx) => {
     if (typeof judgment !== 'string' || judgment.length > 4_000) throw new Error('invalid recall candidate judgment');
     if (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) throw new Error('invalid recall candidate summary');
     if (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) throw new Error('invalid recall candidate uncertainty');
     if (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method') throw new Error('invalid recall candidate type');
     if (typeof suggestedScope !== 'string' || suggestedScope.length > 500) throw new Error('invalid recall candidate scope');
     if (!Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate source refs');
-    return { ok: true, candidate: await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs }) };
+    if (spaceId !== undefined && !safeId(spaceId)) throw new Error('invalid space id');
+    return { ok: true, candidate: await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(spaceId ? { spaceId } : {}) }) };
   },
 
   'recall.candidates.update': async ({ candidateId, judgment, summary, uncertainty, suggestedType, suggestedScope, sourceRefs } = {}, ctx) => {
@@ -2139,6 +2116,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
+  'recall.assets.listForSpace': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid space id');
+    return { ok: true, assets: await recallAssets.listAbilityAssetsForSpace(ctx.userId, spaceId) };
+  },
   'recall.assets.read': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, asset: await recallAssets.readAbilityAsset(ctx.userId, assetId) }; },
   'recall.assets.update': async ({ assetId, title, statement, scope, scopePolicy, type, evidenceRefs, ontologyRefs, reason, acknowledgeRecommendation } = {}, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');
@@ -3809,6 +3790,30 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Explorer on Windows, default file manager on Linux). The path must sit
   // inside the active user's file scope, or be an exact produced-file path
   // already recorded on the current conversation.
+  // Open a produced/attached file with the OS default application. The path
+  // must be a conversation-recorded file (produced[] / attachment) or inside
+  // the user's file sandbox — same gate as revealPath, but opens instead of
+  // revealing in the file manager.
+  'workspace.openFile': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { throw new Error('file not found'); }
+    if (st.isDirectory()) {
+      throw new Error('path is a directory');
+    }
+    const openErr = await shell.openPath(norm);
+    if (openErr) throw new Error(openErr);
+    return { path: norm };
+  },
+
   'workspace.revealPath': async (payload, ctx) => {
     const target = payload?.path;
     if (typeof target !== 'string' || !target) {

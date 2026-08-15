@@ -339,6 +339,9 @@ export const spaceChatArtifactsDir      = (uid: string, sid: string) => path.joi
 export const spaceChatArtifactCidDir    = (uid: string, sid: string, cid: string) => path.join(spaceChatArtifactsDir(uid, sid), cid);
 export const spaceArtifactDir           = (uid: string, sid: string, cid: string, artifactId: string) =>
   path.join(spaceChatArtifactCidDir(uid, sid, cid), artifactId);
+/** 空间工作区（会话 AI 产出文件按空间分开存放）：`<spaces>/<sid>/workspace/<slug>`。
+ *  空间化重构：空间会话的工作目录进各自空间目录，不再全堆在 userWorkSpace。 */
+export const spaceWorkspaceDir          = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'workspace');
 // 空间文件树（原项目文件树 project_files.ts 挂空间）。源文件属空间而非单会话，
 // 空间内每个会话都能拿到文件列表 + 只读访问。路径 `spaces/<sid>/contexts/`。
 export const spaceContextsDir           = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'contexts');

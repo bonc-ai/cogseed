@@ -1181,6 +1181,10 @@ export async function runRecallCapture(
         id: cognitionArtifactSourceId(artifact.conversationId || capture.conversationId, artifact.id),
         title: artifact.title,
       })));
+      // 空间归属：捕获的会话属于哪个空间 → 候选带 spaceId（资产随 recall 全局，
+      // 空间资产 tab 按 spaceId 过滤显示；空间可读全局资产但显示只显示本空间的）。
+      const captureSpaceId = typeof (conversation as any)?.space_id === 'string'
+        ? (conversation as any).space_id : undefined;
       try {
         candidates.push(await saveRecallCandidate(userId, {
           judgment: candidate.judgment,
@@ -1189,6 +1193,7 @@ export async function runRecallCapture(
           suggestedType: candidate.suggestedType,
           suggestedScope: candidate.suggestedScope,
           captureKey: `capture-${capture.id}-${index}`,
+          ...(captureSpaceId ? { spaceId: captureSpaceId } : {}),
           sourceRefs: [
             { kind: 'conversation', subtype: 'session', scope: 'conversation', id: capture.conversationId, title: conversation.title },
             ...evidenceMessages.map((message) => ({
@@ -1696,7 +1701,8 @@ export async function promoteRecallCaptureCandidate(
   if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
   const capture = (await listAllRecallCaptures(userId)).find((item) => item.candidateIds.includes(candidateId));
   if (!capture) {
-    const promoted = await promoteRecallCandidate(userId, candidateId);
+    // 用户确认提升 → actor 必须为 user（promoteRecallCandidate 强制校验；此前漏传导致 IPC 提升一直失败）
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user' });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     return promoted;
   }
@@ -1716,7 +1722,7 @@ export async function promoteRecallCaptureCandidate(
   });
 
   try {
-    const promoted = await promoteRecallCandidate(userId, candidateId);
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user' });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     await updateCapture(userId, capture.id, (current) => (
       current.status === 'writing' && current.writingCandidateId === candidateId
