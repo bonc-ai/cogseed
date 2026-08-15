@@ -1653,6 +1653,8 @@ export interface EnqueueParams {
   attachments?: string[];
   use_selections?: ChatUseSelection[];
   references?: ChatMessageReference[];
+  /** 空间任务引用（@ 资产）可见反馈：随 user 消息落 space_asset_refs，UI 气泡显示 chips。 */
+  space_asset_refs?: Array<{ name: string; asset_type?: string }>;
   recall_projection_card?: { projectionId: string };
   recall_citations?: RecallMessageCitation[];
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
@@ -2184,6 +2186,9 @@ async function _enqueueBody(
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(params.references && params.references.length
       ? { references: params.references }
+      : {}),
+    ...(params.space_asset_refs && params.space_asset_refs.length
+      ? { space_asset_refs: params.space_asset_refs }
       : {}),
     ...(params.recall_projection_card ? { recall_projection_card: params.recall_projection_card } : {}),
     ...(params.recall_citations && params.recall_citations.length
