@@ -208,6 +208,20 @@
 .recall-capture-review .recall-workbench-section-head { margin-bottom: 12px; }
 .recall-capture-review-head-actions { display: flex; align-items: center; gap: 8px; }
 .recall-capture-review .skills-cognition-record-list { display: grid; gap: 8px; }
+/* 认知卡片可折叠（交互规范：默认收起，展开看内容/证据/操作）。 */
+.recall-collapsible-body { border-radius: inherit; }
+.recall-collapsible-body summary { cursor: pointer; list-style: none; }
+.recall-collapsible-body summary::-webkit-details-marker { display: none; }
+.recall-collapsible-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.recall-collapsible-summary .recall-collapsible-title { flex: 1; min-width: 0; }
+.recall-collapsible-summary .recall-collapsible-title h2 { margin: 0 0 4px; }
+.recall-collapsible-summary .recall-collapsible-title .skills-cognition-meta { font-size: 11px; }
+.recall-collapsible-summary::after { content: '▸'; color: var(--muted-fg, #6b7280); margin-top: 4px; transition: transform 0.15s ease; }
+.recall-collapsible-body[open] > .recall-collapsible-summary::after { transform: rotate(90deg); }
+.ability-asset-row-details { margin-top: 6px; }
+.ability-asset-row-details summary { cursor: pointer; color: var(--accent, #2563eb); font-size: 11px; user-select: none; }
+.ability-asset-row-details summary::-webkit-details-marker { display: none; }
+.ability-asset-row-details .ability-asset-row-summary { display: block; margin-top: 6px; white-space: normal; }
 .skills-cognition-empty, .skills-cognition-loading, .skills-cognition-error { padding: 16px 10px; color: var(--muted-fg, #6b7280); text-align: center; font-size: 12px; }
 .skills-cognition-error { color: var(--danger, #b91c1c); }
 .skills-cognition-warning { margin-bottom: 14px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warning, #d97706) 30%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--warning, #d97706) 8%, transparent); color: var(--warning, #92400e); font-size: 12px; }
