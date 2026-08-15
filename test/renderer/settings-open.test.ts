@@ -54,7 +54,7 @@ function loadRendererNavigation() {
   const elements = new Map<string, FakeElement>();
   const panelIds = [
     'panel-new-chat', 'panel-auto', 'panel-agents', 'panel-skills',
-    'panel-connectors', 'panel-contexts', 'panel-settings',
+    'panel-connections', 'panel-contexts', 'panel-settings',
     'panel-memory', 'panel-devtools', 'panel-project', 'panel-marketplace',
     'panel-conversation',
   ];

@@ -37,7 +37,7 @@ import * as path from 'node:path';
 import { userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, genId12 } from '../storage';
 import { ENTRY_SEPARATOR } from './memory';
-import { getRoleTemplate, listRoleTemplates, type RoleTemplate, type PresetGroup } from './role_templates';
+import { getRoleTemplate, type PresetGroup } from './role_templates';
 import * as search from './search';
 import * as kbIndexer from './kb_indexer';
 import { createLogger } from '../logger';
@@ -66,7 +66,7 @@ export interface GroupMeta {
   rel_path: string;
   created_at: string;
   updated_at: string;
-  /** 可选：来源角色模板（installRoleTemplate 写入，`- 模板:` 台账行）。 */
+  /** 可选：来源角色模板（模板文件服务写入，`- 模板:` 台账行）。 */
   template_id?: string;
   template_version?: string;
   /** 运行时附加（IPC 层填充，不落盘）：模板显示名（如「学生」），供渲染层做层级展示。 */
@@ -779,116 +779,6 @@ export async function listGroupFields(uid: string, groupId: string): Promise<Lis
     }
   }
   return { ok: true, fields: merged };
-}
-
-export interface InstallRoleTemplateResult {
-  ok: boolean;
-  already_installed?: boolean;
-  created?: GroupMeta[];
-  /** 与模板名/预设组名同名的现有普通分组（无 template_id）——用户已有同名组，
-   *  安装后会出现"模板 vs 普通组"两个同名字样，UI 应提示用户处理。 */
-  conflict_groups?: Array<{ group_id: string; title: string }>;
-  error?: string;
-}
-
-/**
- * 安装角色模板：对每个 preset_group 创建分组，并给这些组写 template_id/
- * template_version 到台账。幂等：已存在同 template_id 的分组 → already_installed。
- * 同名冲突检测：模板名 / 预设组名与现有普通分组（无 template_id）撞名时，
- * 在返回体带 `conflict_groups` 警告（不阻断安装）。
- */
-export async function installRoleTemplate(uid: string, templateId: string): Promise<InstallRoleTemplateResult> {
-  if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
-  const template = getRoleTemplate(templateId);
-  if (!template) return { ok: false, error: 'template not found' };
-
-  const groups = readGroups(uid);
-  // 与模板名 / 预设组名同名的普通组（早期手工建的同名组，无模板归属）
-  const reservedTitles = new Set([template.name, ...template.preset_groups.map((p) => p.title)]);
-  const conflictGroups = groups
-    .filter((g) => !g.template_id && reservedTitles.has(g.title))
-    .map((g) => ({ group_id: g.group_id, title: g.title }));
-
-  if (groups.some((g) => g.template_id === templateId)) {
-    return { ok: true, already_installed: true, conflict_groups: conflictGroups };
-  }
-
-  const created: GroupMeta[] = [];
-  for (const preset of template.preset_groups) {
-    const res = await createGroup(uid, preset.title);
-    if (!res.ok || !res.group) {
-      return { ok: false, error: `create preset group "${preset.title}" failed: ${res.error || ''}` };
-    }
-    created.push(res.group);
-  }
-
-  // 给新建组补模板标记（重写台账）
-  const all = readGroups(uid);
-  for (const meta of created) {
-    const idx = all.findIndex((g) => g.group_id === meta.group_id);
-    if (idx !== -1) {
-      all[idx] = { ...all[idx], template_id: templateId, template_version: template.version };
-    }
-  }
-  writeGroups(uid, all);
-
-  log.info('ontology role template installed', { uid, templateId, created: created.length, conflicts: conflictGroups.length });
-  return { ok: true, created, conflict_groups: conflictGroups };
-}
-
-export interface TemplateGap {
-  group_id: string;
-  title: string;
-  empty_fields: string[];
-}
-
-export interface RoleTemplateStatus extends RoleTemplate {
-  installed: boolean;
-  installed_version?: string;
-  gaps: TemplateGap[];
-  /** 该模板已安装的分组（group_id + title 映射），渲染层模板卡片展开用。 */
-  installed_groups?: Array<{ group_id: string; title: string }>;
-}
-
-/**
- * 每个模板的安装状态 + 缺口（模板声明字段在该组无值的字段名列表，读内容判空）。
- * 供渲染层“角色模板”区块展示：未安装 → 安装按钮；已安装 → 缺口清单。
- */
-export async function listRoleTemplateStatus(uid: string): Promise<RoleTemplateStatus[]> {
-  if (!safeId(uid)) throw new Error('invalid uid');
-  const groups = readGroups(uid);
-
-  const out: RoleTemplateStatus[] = [];
-  for (const template of listRoleTemplates()) {
-    const installedGroups = groups.filter((g) => g.template_id === template.template_id);
-    const installed = installedGroups.length > 0;
-    const gaps: TemplateGap[] = [];
-
-    if (installed) {
-      for (const g of installedGroups) {
-        const preset = template.preset_groups.find((p) => p.title === g.title);
-        if (!preset) continue;
-        let abs: string;
-        try { abs = resolveGroupFileAbsPath(uid, g.group_id); } catch { continue; }
-        const content = parseGroupContent(readTextSafe(abs));
-        const emptyFields = preset.fields
-          .filter((f) => !(content.fields[f.name] && content.fields[f.name].length))
-          .map((f) => f.name);
-        if (emptyFields.length) {
-          gaps.push({ group_id: g.group_id, title: g.title, empty_fields: emptyFields });
-        }
-      }
-    }
-
-    out.push({
-      ...template,
-      installed,
-      installed_version: installed ? installedGroups[0].template_version : undefined,
-      gaps,
-      installed_groups: installed ? installedGroups.map((g) => ({ group_id: g.group_id, title: g.title })) : [],
-    });
-  }
-  return out;
 }
 
 // Exposed for the IPC layer / tests that need to resolve a group's absolute

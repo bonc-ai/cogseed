@@ -28,13 +28,10 @@
         </span>
       </button>
       <div class="sidebar-actions">
-        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">New session</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
+        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.home">首页</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">Auto</span></button>
-        <button class="sidebar-btn" id="agents-btn"><span data-ui-icon="users" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.agents">Agents</span></button>
-        <button class="sidebar-btn" id="skills-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.skills">Skills</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">Cognitive assets</span></button>
-        <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
-        <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">我的认知</span></button>
+        <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
         <button class="sidebar-btn" id="spaces-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.spaces">工作空间</span></button>
       </div>
       <div class="sidebar-conversation-nav">
@@ -432,13 +429,13 @@
         </div>
       </section>
 
-      <!-- Recall -->
+      <!-- Cognitive assets -->
       <section class="panel" id="panel-recall">
         <div class="skills-cognition-console">
           <div class="skills-cognition-surface">
           <header class="skills-cognition-header">
             <div>
-              <h1 data-i18n="cognition.title">Recall</h1>
+              <h1 data-i18n="cognition.title">认知资产</h1>
               <p data-i18n="cognition.subtitle">查看会话沉淀进度与认知资产</p>
             </div>
             <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
@@ -446,12 +443,14 @@
             </button>
           </header>
           <div class="skills-cognition-workspace">
-          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="Recall 导航">
+          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产导航">
             <div class="skills-cognition-tab-group">
               <button type="button" id="skills-cognition-tab-overview" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-overview" data-cognition-page="overview"><span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span></button>
               <button type="button" id="skills-cognition-tab-captures" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-captures" tabindex="-1" data-cognition-page="captures"><span data-ui-icon="clock"></span><span data-i18n="cognition.capture_tasks">沉淀任务</span></button>
               <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.ability_assets">能力资产</span></button>
               <button type="button" id="skills-cognition-tab-sources" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-sources" tabindex="-1" data-cognition-page="sources"><span data-ui-icon="folder-open"></span><span data-i18n="cognition.sources">数据来源</span></button>
+              <button type="button" id="skills-cognition-tab-my-abilities" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-my-abilities" tabindex="-1" data-cognition-page="my-abilities"><span data-ui-icon="sparkles"></span><span data-i18n="cognition.my_abilities">我的能力</span></button>
+              <button type="button" id="skills-cognition-tab-about-me" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-about-me" tabindex="-1" data-cognition-page="about-me"><span data-ui-icon="user"></span><span data-i18n="cognition.about_me">关于我</span></button>
             </div>
           </nav>
           <main class="skills-cognition-main">
@@ -466,7 +465,209 @@
             <div id="skills-cognition-capture-review-body"></div>
           </section>
           <section class="skills-cognition-page" id="skills-cognition-assets" role="tabpanel" aria-labelledby="skills-cognition-tab-assets" data-cognition-page-body="assets" hidden>
-            <div id="skills-cognition-assets-body"></div>
+            <div id="skills-cognition-assets-summary"></div>
+            <section class="recall-personal-ontology-section" id="skills-cognition-personal-ontology" hidden>
+              <div class="recall-asset-section-head">
+                <div>
+                  <h2 data-i18n="cognition.personal_ontology_section">个人本体</h2>
+                  <p data-i18n="cognition.personal_ontology_section_hint">管理身份、角色、偏好与关系等结构化个人信息</p>
+                </div>
+              </div>
+              <div class="recall-personal-ontology-frame">
+                <div class="personal-onto-layout">
+                  <div class="personal-onto-sidebar" id="personal-onto-sidebar">
+                    <div class="personal-onto-nav" id="personal-onto-nav"></div>
+                  </div>
+                  <div class="personal-onto-main">
+                    <div class="personal-onto-main-header" id="personal-onto-main-header"></div>
+                    <div class="personal-onto-main-body" id="personal-onto-main-body"></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section class="recall-formal-assets-section" id="skills-cognition-formal-assets">
+              <div class="recall-asset-section-head recall-personal-memory-head" hidden>
+                <div>
+                  <h2 data-i18n="cognition.personal_memories_section">已沉淀信息</h2>
+                  <p data-i18n="cognition.personal_memories_section_hint">从会话中确认并保存的“关于我”认知资产</p>
+                </div>
+              </div>
+              <div id="skills-cognition-assets-body"></div>
+            </section>
+            <div class="personal-onto-modal-overlay" id="personal-onto-template-library-modal" style="display:none" aria-hidden="true">
+              <div class="personal-onto-modal personal-onto-library-modal" role="dialog" aria-modal="true" aria-labelledby="personal-onto-template-library-title" tabindex="-1">
+                <div class="personal-onto-modal-header">
+                  <span id="personal-onto-template-library-title" data-i18n="personalOntology.template_library">角色模板库</span>
+                  <button type="button" class="modal-close-btn" id="personal-onto-template-library-close" data-i18n-title="common.close" data-i18n-aria-label="common.close" title="关闭" aria-label="关闭"><span data-ui-icon="x"></span></button>
+                </div>
+                <div class="personal-onto-modal-body">
+                  <div class="personal-onto-library-sub muted" data-i18n="personalOntology.template_library_sub">未安装的角色模板，安装后显示在左侧「角色模板」区（最多 3 个）</div>
+                  <div class="personal-onto-library-list" id="personal-onto-template-library-list"></div>
+                </div>
+                <div class="personal-onto-modal-footer">
+                  <button class="btn btn-sm" id="personal-onto-template-library-cancel" data-i18n="common.close">关闭</button>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-my-abilities" role="tabpanel" aria-labelledby="skills-cognition-tab-my-abilities" data-cognition-page-body="my-abilities" hidden>
+            <!-- 技能库（#panel-skills）整体内嵌：保留 id，渲染函数照常工作。 -->
+            <section class="panel skills-embedded-panel" id="panel-skills">
+              <!-- Grid view (default) -->
+              <div class="skills-grid-view" id="skills-grid-view">
+                <div class="skills-grid-header">
+                  <span data-i18n="skills.title">Skills</span>
+                  <div class="header-actions">
+                    <button class="btn btn-sm" id="create-skill-btn" data-i18n="skills.add">+ Create</button>
+                    <button class="btn btn-sm" id="skills-more-btn" data-i18n="skills.more_btn">More</button>
+                  </div>
+                </div>
+                <div class="marketplace-reconcile-banner" data-reconcile-banner data-reconcile-kind="skill" style="display:none"></div>
+                <!-- Category chip strip — see the parallel comment on agents-categories. -->
+                <div class="marketplace-categories skills-categories" id="skills-categories"></div>
+                <div class="skills-grid-scroll">
+                  <div class="skills-grid" id="skills-grid"></div>
+                  <div class="skills-empty" id="skills-empty" data-i18n="skills.empty">No skills yet</div>
+                </div>
+              </div>
+
+              <!-- Detail view (replaces grid when a card is opened) -->
+              <div class="skills-detail-view" id="skills-detail-view" style="display:none">
+                <div class="skills-detail-col" id="skills-detail-col">
+                  <div class="skills-detail-content" id="skills-detail-content" style="display:none">
+                    <div class="skills-doc-headline">
+                      <button type="button" class="btn btn-sm" id="skills-back-btn" data-i18n="common.back">Back</button>
+                      <h1 class="skills-doc-title" id="skills-detail-name" data-editable="false"></h1>
+                      <span class="skills-doc-source" id="skills-detail-source"></span>
+                      <div class="skills-doc-actions" id="skills-detail-actions">
+                        <button type="button" class="skill-card-use skill-dialog-btn" id="skill-use-btn" data-i18n="skills.use" data-i18n-title="skills.use_tooltip" data-i18n-aria-label="skills.use_tooltip" aria-label="Use this skill">Use</button>
+                        <button class="btn btn-sm" id="skill-edit-btn" data-i18n="skills.edit">Edit</button>
+                        <button class="btn btn-sm" id="skill-enabled-btn" data-i18n="component.disable">Disable</button>
+                        <button class="btn btn-sm" id="skill-upload-marketplace-btn" style="display:none" data-i18n="marketplace.upload">Upload to marketplace (dev)</button>
+                        <button class="btn btn-sm btn-danger" id="skill-delete-btn" data-i18n="skills.delete">Delete</button>
+                      </div>
+                    </div>
+
+                    <section class="skills-doc-section" id="skills-section-summary">
+                      <h3 class="skills-doc-section-label" data-i18n="skills.label_summary">Summary</h3>
+                      <div class="skills-doc-section-body" id="skills-detail-summary"></div>
+                    </section>
+
+                    <section class="skills-doc-section" id="skills-section-category">
+                      <h3 class="skills-doc-section-label" data-i18n="skills.label_category">Category</h3>
+                      <div class="skills-doc-section-body">
+                        <div class="skills-detail-category" id="skills-detail-category"></div>
+                      </div>
+                    </section>
+
+                    <section class="skills-doc-section" id="skills-section-extra" style="display:none">
+                      <h3 class="skills-doc-section-label" data-i18n="skills.label_extra">Other attributes</h3>
+                      <div class="skills-doc-section-body" id="skills-detail-extra"></div>
+                    </section>
+
+                    <section class="skills-doc-section skills-usage-section">
+                      <h3 class="skills-doc-section-label skills-usage-label">
+                        <span data-i18n="skills.label_usage">Usage</span>
+                        <button type="button" class="skills-source-toggle" id="skills-source-toggle" aria-expanded="false">
+                          <span class="skills-source-toggle-caret" aria-hidden="true" data-ui-icon="chevron-right" data-ui-icon-class="ui-icon"></span>
+                          <span data-i18n="skills.label_source">View source</span>
+                        </button>
+                      </h3>
+                      <div class="skills-source-panel" id="skills-source-panel" style="display:none">
+                        <div class="skills-source-tree" id="skills-source-tree"></div>
+                      </div>
+                      <div class="skills-doc-section-body markdown-body" id="skills-detail-body"></div>
+                    </section>
+                  </div>
+                </div>
+                <!-- Shown when a URL import was installed as an external package: no
+                     skill content to edit; point the user to package management. -->
+                <div class="skills-detail-content" id="skills-as-package" style="display:none">
+                  <div class="skills-doc-headline">
+                    <button type="button" class="btn btn-sm" id="skills-as-package-back" data-i18n="common.back">Back</button>
+                    <h1 class="skills-doc-title" id="skills-as-package-name"></h1>
+                  </div>
+                  <section class="skills-doc-section">
+                    <div class="skills-doc-section-body" id="skills-as-package-desc"></div>
+                    <button class="btn btn-sm" id="skills-as-package-manage" data-i18n="skills.as_package.manage">Manage packages</button>
+                  </section>
+                </div>
+                <!-- Inline chat for custom skill editing -->
+                <div class="skills-chat-col" id="skills-chat-col" style="display:none">
+                  <div class="skills-chat-toolbar">
+                    <button id="skill-chat-clear-btn" class="skill-chat-link" data-i18n-title="skills.clear_chat_title" title="Clear the edit chat for this skill" data-i18n="skills.clear_chat">Clear</button>
+                  </div>
+                  <div class="skills-chat-messages" id="skills-chat-messages"></div>
+                  <div class="chat-queue" id="skills-chat-queue" style="display:none">
+                    <div class="chat-queue-header">
+                      <span class="chat-queue-label"><span data-i18n="chat.queue_label">Queued</span> <span class="chat-queue-count" id="skills-chat-queue-count">0</span></span>
+                      <span class="chat-queue-hint" data-i18n="chat.queue_hint">Drag to reorder · Edit · Delete</span>
+                    </div>
+                    <div class="chat-queue-list" id="skills-chat-queue-list"></div>
+                  </div>
+                  <div class="skills-chat-input-area">
+                    <div class="chat-attachments edit-chat-attachments" id="skills-chat-attachments" style="display:none"></div>
+                    <button type="button" class="chat-attach-btn edit-chat-attach-btn" id="skills-chat-attach-btn" data-i18n-title="chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
+                    <textarea id="skills-chat-input" data-i18n-placeholder="skills.chat_input_placeholder" placeholder="Describe what to change..." rows="1"></textarea>
+                    <button id="skills-chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
+                      <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
+                      <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-about-me" role="tabpanel" aria-labelledby="skills-cognition-tab-about-me" data-cognition-page-body="about-me" hidden>
+            <!-- 个人本体（#panel-personal-ontology）整体内嵌：保留 id，渲染函数照常工作。 -->
+            <section class="panel skills-embedded-panel" id="panel-personal-ontology">
+              <div class="personal-onto-layout">
+                <!-- 左栏：文件列表（候选 / 角色模板 / 记忆分组）资料库风格 -->
+                <div class="personal-onto-sidebar" id="personal-onto-sidebar">
+                  <div class="personal-onto-sidebar-header">
+                    <span class="personal-onto-sidebar-title" data-i18n="personalOntology.title">个人本体</span>
+                    <span class="personal-onto-sidebar-actions" id="personal-onto-sidebar-actions"></span>
+                  </div>
+                  <div class="personal-onto-nav" id="personal-onto-nav"></div>
+                </div>
+                <!-- 右栏：内容（候选详情 / 分组 md 内容） -->
+                <div class="personal-onto-main">
+                  <div class="personal-onto-main-header" id="personal-onto-main-header"></div>
+                  <div class="personal-onto-main-body" id="personal-onto-main-body"></div>
+                </div>
+              </div>
+              <!-- Reject reason modal -->
+              <div class="personal-onto-modal-overlay" id="personal-onto-modal" style="display:none">
+                <div class="personal-onto-modal">
+                  <div class="personal-onto-modal-header">
+                    <span data-i18n="personalOntology.reject_reason_title">驳回原因</span>
+                  </div>
+                  <div class="personal-onto-modal-body">
+                    <textarea id="personal-onto-modal-reason" rows="3" placeholder="可选，填写驳回原因..." data-i18n-placeholder="personalOntology.reject_reason_placeholder"></textarea>
+                  </div>
+                  <div class="personal-onto-modal-footer">
+                    <button class="btn btn-sm" id="personal-onto-modal-cancel" data-i18n="common.cancel">取消</button>
+                    <button class="btn btn-sm btn-primary" id="personal-onto-modal-ok" data-i18n="personalOntology.reject_btn">驳回</button>
+                  </div>
+                </div>
+              </div>
+              <!-- 角色模板库弹窗：未安装模板列表 -->
+              <div class="personal-onto-modal-overlay" id="personal-onto-template-library-modal" style="display:none">
+                <div class="personal-onto-modal personal-onto-library-modal">
+                  <div class="personal-onto-modal-header">
+                    <span data-i18n="personalOntology.template_library">角色模板库</span>
+                    <button type="button" class="modal-close-btn" id="personal-onto-template-library-close" aria-label="Close">×</button>
+                  </div>
+                  <div class="personal-onto-modal-body">
+                    <div class="personal-onto-library-sub muted" data-i18n="personalOntology.template_library_sub">未安装的角色模板，安装后显示在左侧「角色模板」区（最多 3 个）</div>
+                    <div class="personal-onto-library-list" id="personal-onto-template-library-list"></div>
+                  </div>
+                  <div class="personal-onto-modal-footer">
+                    <button class="btn btn-sm" id="personal-onto-template-library-cancel" data-i18n="common.close">关闭</button>
+                  </div>
+                </div>
+              </div>
+            </section>
           </section>
           </main>
           </div>
@@ -474,244 +675,7 @@
         </div>
       </section>
 
-      <!-- Skills -->
-      <section class="panel" id="panel-skills">
-        <!-- Grid view (default) -->
-        <div class="skills-grid-view" id="skills-grid-view">
-          <div class="skills-grid-header">
-            <span data-i18n="skills.title">Skills</span>
-            <div class="header-actions">
-              <button class="btn btn-sm" id="create-skill-btn" data-i18n="skills.add">+ Create</button>
-              <button class="btn btn-sm" id="skills-more-btn" data-i18n="skills.more_btn">More</button>
-            </div>
-          </div>
-          <div class="marketplace-reconcile-banner" data-reconcile-banner data-reconcile-kind="skill" style="display:none"></div>
-          <!-- Category chip strip — see the parallel comment on agents-categories. -->
-          <div class="marketplace-categories skills-categories" id="skills-categories"></div>
-          <div class="skills-grid-scroll">
-            <div class="skills-grid" id="skills-grid"></div>
-            <div class="skills-empty" id="skills-empty" data-i18n="skills.empty">No skills yet</div>
-          </div>
-        </div>
 
-        <!-- Detail view (replaces grid when a card is opened) -->
-        <div class="skills-detail-view" id="skills-detail-view" style="display:none">
-          <div class="skills-detail-col" id="skills-detail-col">
-            <div class="skills-detail-content" id="skills-detail-content" style="display:none">
-              <div class="skills-doc-headline">
-                <button type="button" class="btn btn-sm" id="skills-back-btn" data-i18n="common.back">Back</button>
-                <h1 class="skills-doc-title" id="skills-detail-name" data-editable="false"></h1>
-                <span class="skills-doc-source" id="skills-detail-source"></span>
-                <div class="skills-doc-actions" id="skills-detail-actions">
-                  <button type="button" class="skill-card-use skill-dialog-btn" id="skill-use-btn" data-i18n="skills.use" data-i18n-title="skills.use_tooltip" data-i18n-aria-label="skills.use_tooltip" aria-label="Use this skill">Use</button>
-                  <button class="btn btn-sm" id="skill-edit-btn" data-i18n="skills.edit">Edit</button>
-                  <button class="btn btn-sm" id="skill-enabled-btn" data-i18n="component.disable">Disable</button>
-                  <button class="btn btn-sm" id="skill-upload-marketplace-btn" style="display:none" data-i18n="marketplace.upload">Upload to marketplace (dev)</button>
-                  <button class="btn btn-sm btn-danger" id="skill-delete-btn" data-i18n="skills.delete">Delete</button>
-                </div>
-              </div>
-
-              <section class="skills-doc-section" id="skills-section-summary">
-                <h3 class="skills-doc-section-label" data-i18n="skills.label_summary">Summary</h3>
-                <div class="skills-doc-section-body" id="skills-detail-summary"></div>
-              </section>
-
-              <section class="skills-doc-section" id="skills-section-category">
-                <h3 class="skills-doc-section-label" data-i18n="skills.label_category">Category</h3>
-                <div class="skills-doc-section-body">
-                  <div class="skills-detail-category" id="skills-detail-category"></div>
-                </div>
-              </section>
-
-              <section class="skills-doc-section" id="skills-section-extra" style="display:none">
-                <h3 class="skills-doc-section-label" data-i18n="skills.label_extra">Other attributes</h3>
-                <div class="skills-doc-section-body" id="skills-detail-extra"></div>
-              </section>
-
-              <section class="skills-doc-section skills-usage-section">
-                <h3 class="skills-doc-section-label skills-usage-label">
-                  <span data-i18n="skills.label_usage">Usage</span>
-                  <button type="button" class="skills-source-toggle" id="skills-source-toggle" aria-expanded="false">
-                    <span class="skills-source-toggle-caret" aria-hidden="true" data-ui-icon="chevron-right" data-ui-icon-class="ui-icon"></span>
-                    <span data-i18n="skills.label_source">View source</span>
-                  </button>
-                </h3>
-                <div class="skills-source-panel" id="skills-source-panel" style="display:none">
-                  <div class="skills-source-tree" id="skills-source-tree"></div>
-                </div>
-                <div class="skills-doc-section-body markdown-body" id="skills-detail-body"></div>
-              </section>
-            </div>
-          </div>
-          <!-- Shown when a URL import was installed as an external package: no
-               skill content to edit; point the user to package management. -->
-          <div class="skills-detail-content" id="skills-as-package" style="display:none">
-            <div class="skills-doc-headline">
-              <button type="button" class="btn btn-sm" id="skills-as-package-back" data-i18n="common.back">Back</button>
-              <h1 class="skills-doc-title" id="skills-as-package-name"></h1>
-            </div>
-            <section class="skills-doc-section">
-              <div class="skills-doc-section-body" id="skills-as-package-desc"></div>
-              <button class="btn btn-sm" id="skills-as-package-manage" data-i18n="skills.as_package.manage">Manage packages</button>
-            </section>
-          </div>
-          <!-- Inline chat for custom skill editing -->
-          <div class="skills-chat-col" id="skills-chat-col" style="display:none">
-            <div class="skills-chat-toolbar">
-              <button id="skill-chat-clear-btn" class="skill-chat-link" data-i18n-title="skills.clear_chat_title" title="Clear the edit chat for this skill" data-i18n="skills.clear_chat">Clear</button>
-            </div>
-            <div class="skills-chat-messages" id="skills-chat-messages"></div>
-            <div class="chat-queue" id="skills-chat-queue" style="display:none">
-              <div class="chat-queue-header">
-                <span class="chat-queue-label"><span data-i18n="chat.queue_label">Queued</span> <span class="chat-queue-count" id="skills-chat-queue-count">0</span></span>
-                <span class="chat-queue-hint" data-i18n="chat.queue_hint">Drag to reorder · Edit · Delete</span>
-              </div>
-              <div class="chat-queue-list" id="skills-chat-queue-list"></div>
-            </div>
-            <div class="skills-chat-input-area">
-              <div class="chat-attachments edit-chat-attachments" id="skills-chat-attachments" style="display:none"></div>
-              <button type="button" class="chat-attach-btn edit-chat-attach-btn" id="skills-chat-attach-btn" data-i18n-title="chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
-              <textarea id="skills-chat-input" data-i18n-placeholder="skills.chat_input_placeholder" placeholder="Describe what to change..." rows="1"></textarea>
-              <button id="skills-chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
-                <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
-                <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Agents -->
-      <section class="panel" id="panel-agents">
-        <!-- Grid view (default) -->
-        <div class="agents-grid-view" id="agents-grid-view">
-          <div class="agents-grid-header">
-            <div class="agents-grid-header-titles">
-              <span class="agents-grid-title" data-i18n="agents.title">AI Team</span>
-              <span class="agents-grid-subtitle" data-i18n="agents.subtitle">Every member is an agent — @ it, form squads, assign tasks.</span>
-            </div>
-            <div class="header-actions">
-              <button class="btn btn-sm" id="create-agent-btn" data-i18n="agents.create_btn">+ Create</button>
-              <button class="btn btn-sm" id="agents-more-btn" data-i18n="agents.more_btn">More</button>
-            </div>
-          </div>
-          <div class="marketplace-reconcile-banner" data-reconcile-banner data-reconcile-kind="agent" style="display:none"></div>
-          <!-- Category chip strip — mirrors `.marketplace-categories` above the
-               grid. Chips are injected by renderAgentsGrid() from the same
-               `_mpCategoriesCache` that drives the marketplace strip. -->
-          <div class="marketplace-categories agents-categories" id="agents-categories"></div>
-          <div class="agents-grid-scroll">
-            <div class="agents-grid" id="agents-grid"></div>
-            <div class="agents-empty" id="agents-empty" data-i18n="agents.empty">No agents yet</div>
-          </div>
-        </div>
-
-        <!-- Detail view (replaces grid when a card is opened) -->
-        <div class="agents-detail-view" id="agents-detail-view" style="display:none">
-          <div class="agents-detail-col" id="agents-detail-col">
-            <div class="agents-detail-content" id="agents-detail-content" style="display:none">
-              <div class="agents-detail-header">
-                <div class="agents-detail-title-row">
-                  <button type="button" class="btn btn-sm" id="agents-back-btn" data-i18n="common.back">Back</button>
-                  <span class="agents-detail-avatar-slot" id="agents-detail-avatar"></span>
-                  <div class="agents-detail-name" id="agents-detail-name" contenteditable="false"></div>
-                  <input type="text" class="agents-detail-name-input" id="agents-detail-name-input" autocomplete="off" spellcheck="false" hidden />
-                  <span class="agents-detail-source" id="agents-detail-source"></span>
-                  <div class="detail-actions" id="agents-detail-actions">
-                    <button type="button" class="agent-card-use agent-dialog-btn" id="agent-use-btn" data-i18n="agents.use" data-i18n-title="agents.use_tooltip" data-i18n-aria-label="agents.use_tooltip" aria-label="Use this agent">Use</button>
-                    <button type="button" class="btn btn-sm" id="agent-manage-btn" data-i18n="agents.manage" data-i18n-title="agents.manage_tooltip" data-i18n-aria-label="agents.manage_tooltip" aria-label="Manage this agent" hidden>Manage</button>
-                    <button class="btn btn-sm" id="agent-edit-btn" data-i18n="agents.edit_btn_edit">Edit</button>
-                    <button class="btn btn-sm" id="agent-enabled-btn" data-i18n="component.disable">Disable</button>
-                    <button class="btn btn-sm" id="agent-upload-marketplace-btn" style="display:none" data-i18n="marketplace.upload">Upload to marketplace (dev)</button>
-                    <button class="btn btn-sm btn-danger" id="agent-delete-btn" data-i18n="agents.delete">Delete</button>
-                  </div>
-                </div>
-              </div>
-              <div class="agents-detail-body">
-                <div class="agents-detail-hero">
-                  <div class="agents-detail-section" id="agents-detail-runtime-section" style="display:none">
-                    <div class="agents-detail-label" data-i18n="agents.label_runtime">External agent</div>
-                    <div class="agents-detail-runtime" id="agents-detail-runtime"></div>
-                  </div>
-                  <div class="agents-detail-section agents-detail-intro-section" id="agents-detail-intro-section">
-                    <div class="agents-detail-label" data-i18n="agents.label_desc">Summary</div>
-                    <div class="agents-detail-desc" id="agents-detail-desc" contenteditable="false"></div>
-                  </div>
-                  <div class="agents-detail-section agents-detail-stats-section" id="agents-detail-stats-section" style="display:none">
-                    <div class="agents-detail-label" data-i18n="agents.label_runtime_stats">Runtime data</div>
-                    <div class="agents-detail-stats" id="agents-detail-stats"></div>
-                  </div>
-                </div>
-                <div class="agents-detail-section" id="agents-detail-memory-section" style="display:none">
-                  <div class="agents-detail-label" data-i18n="agents.label_core_memory">Core memory</div>
-                  <p class="agents-detail-section-desc" data-i18n="agents.core_memory_desc">Persistent memory this agent has built with you.</p>
-                  <div class="agents-detail-list" id="agents-detail-memory"></div>
-                </div>
-                <div class="agents-detail-section" id="agents-detail-knowhow-section" style="display:none">
-                  <div class="agents-detail-label" data-i18n="agents.label_knowhow">Know-how</div>
-                  <p class="agents-detail-section-desc" data-i18n="agents.knowhow_desc">Task areas this agent is better at.</p>
-                  <div class="agents-detail-list" id="agents-detail-knowhow"></div>
-                </div>
-                <div class="agents-detail-section" id="agents-detail-inheritance-section" style="display:none">
-                  <div class="agents-detail-label" data-i18n="agents.label_inheritance">Inherited at creation</div>
-                  <p class="agents-detail-section-desc" data-i18n="agents.inheritance_desc">Cognition this agent was given when it was created, frozen at the version it had then.</p>
-                  <div class="agents-detail-list" id="agents-detail-inheritance"></div>
-                </div>
-                <div class="agents-detail-section" id="agents-detail-project-dir-section" style="display:none">
-                  <div class="agents-detail-label" data-i18n="agents.label_project_dir">Project directory</div>
-                  <div class="agents-detail-project-dir" id="agents-detail-project-dir"></div>
-                </div>
-                <div class="agents-detail-section" id="agents-detail-output-standards-section" style="display:none">
-                  <div class="agents-detail-label" data-i18n="agents.label_delivery_standards">Delivery standards</div>
-                  <p class="agents-detail-section-desc" data-i18n="agents.delivery_standards_desc">Standards this agent checks before delivering.</p>
-                  <div class="agents-detail-list" id="agents-detail-output-standards"></div>
-                </div>
-                <div class="agents-detail-section" id="agents-detail-input-output-section" style="display:none">
-                  <div class="agents-detail-label" data-i18n="agents.label_input_output">Input / output</div>
-                  <div class="agents-detail-io" id="agents-detail-input-output">
-                    <div class="agents-detail-io-row" id="agents-detail-inputs-row">
-                      <div class="agents-detail-io-label" data-i18n="agents.label_inputs">Inputs</div>
-                      <div class="agents-detail-tag-row" id="agents-detail-inputs"></div>
-                    </div>
-                    <div class="agents-detail-io-row" id="agents-detail-output-format-control">
-                      <div class="agents-detail-io-label" data-i18n="agents.label_output_format">Output format</div>
-                      <div class="agents-detail-output-format" id="agents-detail-output-format"></div>
-                    </div>
-                  </div>
-                </div>
-                <div class="agents-detail-section agents-detail-section-workflow">
-                  <div class="agents-detail-label" data-i18n="agents.label_workflow">Workflow</div>
-                  <div class="agents-detail-workflow markdown-body" id="agents-detail-workflow" contenteditable="false"></div>
-                </div>
-              </div>
-            </div>
-            <div id="agent-management-surface" class="agent-management-surface" hidden></div>
-          </div>
-          <!-- Inline chat for agent editing -->
-          <div class="agents-chat-col" id="agents-chat-col" style="display:none">
-            <div class="agents-chat-toolbar">
-              <button id="agent-chat-clear-btn" class="agent-chat-link" data-i18n-title="agents.clear_chat_title" title="Clear the edit chat for this agent" data-i18n="agents.clear_chat">Clear</button>
-            </div>
-            <div class="agents-chat-messages" id="agents-chat-messages"></div>
-            <div class="chat-queue" id="agents-chat-queue" style="display:none">
-              <div class="chat-queue-header">
-                <span class="chat-queue-label"><span data-i18n="chat.queue_label">Queued</span> <span class="chat-queue-count" id="agents-chat-queue-count">0</span></span>
-                <span class="chat-queue-hint" data-i18n="chat.queue_hint">Drag to reorder · Edit · Delete</span>
-              </div>
-              <div class="chat-queue-list" id="agents-chat-queue-list"></div>
-            </div>
-            <div class="agents-chat-input-area">
-              <div class="chat-attachments edit-chat-attachments" id="agents-chat-attachments" style="display:none"></div>
-              <button type="button" class="chat-attach-btn edit-chat-attach-btn" id="agents-chat-attach-btn" data-i18n-title="chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
-              <textarea id="agents-chat-input" data-i18n-placeholder="agents.chat_input_placeholder" placeholder="Describe what to adjust..." rows="1"></textarea>
-              <button id="agents-chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
-                <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
-                <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
 
       <!-- Marketplace (entered via the More button on agents / skills tabs;
            closes back to its origin view via openMarketplace's return-stack).
@@ -987,45 +951,190 @@
         </div>
       </section>
 
-      <!-- Connectors — Surface E per PC/docs/design/PATTERNS.md.
-           Page header (P1) above two grouped grids. The custom MCP action
-           lives in the top bar; per-connector actions live on each card.
-           Card chrome restyled in CSS; the
-           per-card markup stays the same as today (no functional change). -->
-      <section class="panel" id="panel-connectors">
-        <div class="connectors-grid-view" id="connectors-grid-view">
-          <div class="connectors-page-header">
-            <div class="connectors-page-header-main">
-              <div class="connectors-page-header-title-row">
-                <h1 class="connectors-page-header-title" data-i18n="connectors.title">Connectors</h1>
-              </div>
-            </div>
-            <button class="btn btn-sm connectors-page-header-action" id="connectors-add-custom-btn" data-i18n="connectors.action.add_custom">Add MCP server</button>
+      <!-- Connections — 连接：Agent / MCP与工具 / 数据源 / 触点 / 模型与额度。
+           MCP 与工具 tab 真嵌入原 connectors 网格（connectors.js 仍按这些 ID 渲染）；
+           Agent / 数据源 / 触点 / 模型与额度 为入口卡，跳转到各自面板。 -->
+      <section class="panel" id="panel-connections">
+        <div class="connections-container">
+          <div class="connections-tabs" role="tablist" aria-label="连接">
+            <button type="button" class="connections-tab is-active" data-connections-tab="agents" data-i18n="connections.tab.agents">Agent</button>
+            <button type="button" class="connections-tab" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
+            <button type="button" class="connections-tab" data-connections-tab="sources" data-i18n="connections.tab.sources">数据源</button>
+            <button type="button" class="connections-tab" data-connections-tab="touchpoints" data-i18n="connections.tab.touchpoints">触点</button>
+            <button type="button" class="connections-tab" data-connections-tab="models" data-i18n="connections.tab.models">模型与额度</button>
           </div>
-          <div class="connectors-grid-scroll">
-            <div class="connectors-group" id="connectors-group-connected" style="display:none">
-              <div class="connectors-group-label-row">
-                <span class="connectors-group-label" data-i18n="connectors.group.connected">Connected</span>
-                <span class="connectors-group-count" id="connectors-group-connected-count"></span>
-              </div>
-              <div class="connectors-grid" id="connectors-grid-connected"></div>
+          <div class="connections-body">
+
+            <!-- Agent → AI 团队面板整体内嵌 -->
+            <div class="connections-tab-pane" id="connections-pane-agents" data-connections-pane="agents">
+              <!-- AI 团队（#panel-agents）整体内嵌：保留 id，渲染函数照常工作。 -->
+      <section class="panel connections-embedded-panel" id="panel-agents">
+        <!-- Grid view (default) -->
+        <div class="agents-grid-view" id="agents-grid-view">
+          <div class="agents-grid-header">
+            <div class="agents-grid-header-titles">
+              <span class="agents-grid-title" data-i18n="agents.title">AI Team</span>
+              <span class="agents-grid-subtitle" data-i18n="agents.subtitle">Every member is an agent — @ it, form squads, assign tasks.</span>
             </div>
-            <div class="connectors-group" id="connectors-group-available" style="display:none">
-              <div class="connectors-group-label-row">
-                <span class="connectors-group-label" data-i18n="connectors.group.available">Available</span>
-                <span class="connectors-group-count" id="connectors-group-available-count"></span>
-              </div>
-              <div class="connectors-grid" id="connectors-grid-available"></div>
+            <div class="header-actions">
+              <button class="btn btn-sm" id="create-agent-btn" data-i18n="agents.create_btn">+ Create</button>
+              <button class="btn btn-sm" id="agents-more-btn" data-i18n="agents.more_btn">More</button>
             </div>
-            <div class="connectors-empty empty" id="connectors-empty" style="display:none" data-i18n="connectors.empty">No connectors available.</div>
+          </div>
+          <div class="marketplace-reconcile-banner" data-reconcile-banner data-reconcile-kind="agent" style="display:none"></div>
+          <!-- Category chip strip — mirrors `.marketplace-categories` above the
+               grid. Chips are injected by renderAgentsGrid() from the same
+               `_mpCategoriesCache` that drives the marketplace strip. -->
+          <div class="marketplace-categories agents-categories" id="agents-categories"></div>
+          <div class="agents-grid-scroll">
+            <div class="agents-grid" id="agents-grid"></div>
+            <div class="agents-empty" id="agents-empty" data-i18n="agents.empty">No agents yet</div>
+          </div>
+        </div>
+
+        <!-- Detail view (replaces grid when a card is opened) -->
+        <div class="agents-detail-view" id="agents-detail-view" style="display:none">
+          <div class="agents-detail-col" id="agents-detail-col">
+            <div class="agents-detail-content" id="agents-detail-content" style="display:none">
+              <div class="agents-detail-header">
+                <div class="agents-detail-title-row">
+                  <button type="button" class="btn btn-sm" id="agents-back-btn" data-i18n="common.back">Back</button>
+                  <span class="agents-detail-avatar-slot" id="agents-detail-avatar"></span>
+                  <div class="agents-detail-name" id="agents-detail-name" contenteditable="false"></div>
+                  <input type="text" class="agents-detail-name-input" id="agents-detail-name-input" autocomplete="off" spellcheck="false" hidden />
+                  <span class="agents-detail-source" id="agents-detail-source"></span>
+                  <div class="detail-actions" id="agents-detail-actions">
+                    <button type="button" class="agent-card-use agent-dialog-btn" id="agent-use-btn" data-i18n="agents.use" data-i18n-title="agents.use_tooltip" data-i18n-aria-label="agents.use_tooltip" aria-label="Use this agent">Use</button>
+                    <button type="button" class="btn btn-sm" id="agent-manage-btn" data-i18n="agents.manage" data-i18n-title="agents.manage_tooltip" data-i18n-aria-label="agents.manage_tooltip" aria-label="Manage this agent" hidden>Manage</button>
+                    <button class="btn btn-sm" id="agent-edit-btn" data-i18n="agents.edit_btn_edit">Edit</button>
+                    <button class="btn btn-sm" id="agent-enabled-btn" data-i18n="component.disable">Disable</button>
+                    <button class="btn btn-sm" id="agent-upload-marketplace-btn" style="display:none" data-i18n="marketplace.upload">Upload to marketplace (dev)</button>
+                    <button class="btn btn-sm btn-danger" id="agent-delete-btn" data-i18n="agents.delete">Delete</button>
+                  </div>
+                </div>
+              </div>
+              <div class="agents-detail-body">
+                <div class="agents-detail-hero">
+                  <div class="agents-detail-section" id="agents-detail-runtime-section" style="display:none">
+                    <div class="agents-detail-label" data-i18n="agents.label_runtime">External agent</div>
+                    <div class="agents-detail-runtime" id="agents-detail-runtime"></div>
+                  </div>
+                  <div class="agents-detail-section agents-detail-intro-section" id="agents-detail-intro-section">
+                    <div class="agents-detail-label" data-i18n="agents.label_desc">Summary</div>
+                    <div class="agents-detail-desc" id="agents-detail-desc" contenteditable="false"></div>
+                  </div>
+                  <div class="agents-detail-section agents-detail-stats-section" id="agents-detail-stats-section" style="display:none">
+                    <div class="agents-detail-label" data-i18n="agents.label_runtime_stats">Runtime data</div>
+                    <div class="agents-detail-stats" id="agents-detail-stats"></div>
+                  </div>
+                </div>
+                <div class="agents-detail-section" id="agents-detail-memory-section" style="display:none">
+                  <div class="agents-detail-label" data-i18n="agents.label_core_memory">Core memory</div>
+                  <p class="agents-detail-section-desc" data-i18n="agents.core_memory_desc">Persistent memory this agent has built with you.</p>
+                  <div class="agents-detail-list" id="agents-detail-memory"></div>
+                </div>
+                <div class="agents-detail-section" id="agents-detail-knowhow-section" style="display:none">
+                  <div class="agents-detail-label" data-i18n="agents.label_knowhow">Know-how</div>
+                  <p class="agents-detail-section-desc" data-i18n="agents.knowhow_desc">Task areas this agent is better at.</p>
+                  <div class="agents-detail-list" id="agents-detail-knowhow"></div>
+                </div>
+                <div class="agents-detail-section" id="agents-detail-inheritance-section" style="display:none">
+                  <div class="agents-detail-label" data-i18n="agents.label_inheritance">Inherited at creation</div>
+                  <p class="agents-detail-section-desc" data-i18n="agents.inheritance_desc">Cognition this agent was given when it was created, frozen at the version it had then.</p>
+                  <div class="agents-detail-list" id="agents-detail-inheritance"></div>
+                </div>
+                <div class="agents-detail-section" id="agents-detail-project-dir-section" style="display:none">
+                  <div class="agents-detail-label" data-i18n="agents.label_project_dir">Project directory</div>
+                  <div class="agents-detail-project-dir" id="agents-detail-project-dir"></div>
+                </div>
+                <div class="agents-detail-section" id="agents-detail-output-standards-section" style="display:none">
+                  <div class="agents-detail-label" data-i18n="agents.label_delivery_standards">Delivery standards</div>
+                  <p class="agents-detail-section-desc" data-i18n="agents.delivery_standards_desc">Standards this agent checks before delivering.</p>
+                  <div class="agents-detail-list" id="agents-detail-output-standards"></div>
+                </div>
+                <div class="agents-detail-section" id="agents-detail-input-output-section" style="display:none">
+                  <div class="agents-detail-label" data-i18n="agents.label_input_output">Input / output</div>
+                  <div class="agents-detail-io" id="agents-detail-input-output">
+                    <div class="agents-detail-io-row" id="agents-detail-inputs-row">
+                      <div class="agents-detail-io-label" data-i18n="agents.label_inputs">Inputs</div>
+                      <div class="agents-detail-tag-row" id="agents-detail-inputs"></div>
+                    </div>
+                    <div class="agents-detail-io-row" id="agents-detail-output-format-control">
+                      <div class="agents-detail-io-label" data-i18n="agents.label_output_format">Output format</div>
+                      <div class="agents-detail-output-format" id="agents-detail-output-format"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="agents-detail-section agents-detail-section-workflow">
+                  <div class="agents-detail-label" data-i18n="agents.label_workflow">Workflow</div>
+                  <div class="agents-detail-workflow markdown-body" id="agents-detail-workflow" contenteditable="false"></div>
+                </div>
+              </div>
+            </div>
+            <div id="agent-management-surface" class="agent-management-surface" hidden></div>
+          </div>
+          <!-- Inline chat for agent editing -->
+          <div class="agents-chat-col" id="agents-chat-col" style="display:none">
+            <div class="agents-chat-toolbar">
+              <button id="agent-chat-clear-btn" class="agent-chat-link" data-i18n-title="agents.clear_chat_title" title="Clear the edit chat for this agent" data-i18n="agents.clear_chat">Clear</button>
+            </div>
+            <div class="agents-chat-messages" id="agents-chat-messages"></div>
+            <div class="chat-queue" id="agents-chat-queue" style="display:none">
+              <div class="chat-queue-header">
+                <span class="chat-queue-label"><span data-i18n="chat.queue_label">Queued</span> <span class="chat-queue-count" id="agents-chat-queue-count">0</span></span>
+                <span class="chat-queue-hint" data-i18n="chat.queue_hint">Drag to reorder · Edit · Delete</span>
+              </div>
+              <div class="chat-queue-list" id="agents-chat-queue-list"></div>
+            </div>
+            <div class="agents-chat-input-area">
+              <div class="chat-attachments edit-chat-attachments" id="agents-chat-attachments" style="display:none"></div>
+              <button type="button" class="chat-attach-btn edit-chat-attach-btn" id="agents-chat-attach-btn" data-i18n-title="chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
+              <textarea id="agents-chat-input" data-i18n-placeholder="agents.chat_input_placeholder" placeholder="Describe what to adjust..." rows="1"></textarea>
+              <button id="agents-chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
+                <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
+                <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
+              </button>
+            </div>
           </div>
         </div>
       </section>
+            </div>
 
-      <!-- Library — Surface D per PC/docs/design/PATTERNS.md.
-           Page header (P1) above the existing two-column layout. The body
-           layout / interactions stay exactly as today — chrome only. -->
-      <section class="panel" id="panel-contexts">
+            <!-- MCP与工具 → 真嵌入原 connectors 网格 -->
+            <div class="connections-tab-pane" id="connections-pane-mcp" data-connections-pane="mcp" hidden>
+              <div class="connectors-grid-view" id="connectors-grid-view">
+                <div class="connectors-page-header">
+                  <div class="connectors-page-header-main">
+                    <div class="connectors-page-header-title-row">
+                      <h1 class="connectors-page-header-title" data-i18n="connectors.title">Connectors</h1>
+                    </div>
+                  </div>
+                  <button class="btn btn-sm connectors-page-header-action" id="connectors-add-custom-btn" data-i18n="connectors.action.add_custom">Add MCP server</button>
+                </div>
+                <div class="connectors-grid-scroll">
+                  <div class="connectors-group" id="connectors-group-connected" style="display:none">
+                    <div class="connectors-group-label-row">
+                      <span class="connectors-group-label" data-i18n="connectors.group.connected">Connected</span>
+                      <span class="connectors-group-count" id="connectors-group-connected-count"></span>
+                    </div>
+                    <div class="connectors-grid" id="connectors-grid-connected"></div>
+                  </div>
+                  <div class="connectors-group" id="connectors-group-available" style="display:none">
+                    <div class="connectors-group-label-row">
+                      <span class="connectors-group-label" data-i18n="connectors.group.available">Available</span>
+                      <span class="connectors-group-count" id="connectors-group-available-count"></span>
+                    </div>
+                    <div class="connectors-grid" id="connectors-grid-available"></div>
+                  </div>
+                  <div class="connectors-empty empty" id="connectors-empty" style="display:none" data-i18n="connectors.empty">No connectors available.</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 数据源 → 入口卡跳转到资料库面板 -->
+            <div class="connections-tab-pane" id="connections-pane-sources" data-connections-pane="sources" hidden>
+                <!-- 资料库（#panel-contexts）整体内嵌：保留 id，渲染函数照常工作。 -->
+      <section class="panel connections-embedded-panel" id="panel-contexts">
         <div class="contexts-page-header">
           <div class="contexts-page-header-main">
             <div class="contexts-page-header-title-row">
@@ -1072,6 +1181,50 @@
           </div>
         </div>
       </section>
+            </div>
+
+            <!-- 触点 → 入口卡跳转到设置 > 消息平台 -->
+            <div class="connections-tab-pane" id="connections-pane-touchpoints" data-connections-pane="touchpoints" hidden>
+              <!-- 触点（飞书等）整体迁入：原设置 messaging pane 的内容原样搬移。 -->
+              <div class="touchpoint-settings-shell" aria-live="polite">
+                <div class="touchpoint-view" id="touchpoint-overview-view">
+                  <div id="touchpoint-settings-page"></div>
+                </div>
+                <div class="touchpoint-view touchpoint-connections-view" id="touchpoint-connections-view" hidden>
+                  <header class="touchpoint-connections-header">
+                    <button class="btn touchpoint-back-button" type="button" data-touchpoint-action="connections.back" data-i18n-title="touchpoint_settings.connections.back" data-i18n-aria-label="touchpoint_settings.connections.back" title="返回触点概览" aria-label="返回触点概览">
+                      <span data-ui-icon="chevron-left" data-ui-icon-class="touchpoint-connections-back-icon"></span>
+                      <span data-i18n="common.back">返回</span>
+                    </button>
+                    <div>
+                      <h2 data-i18n="touchpoint_settings.connections.title">连接管理</h2>
+                      <p data-i18n="touchpoint_settings.connections.detail">机器人实例、扫码绑定与消息行为</p>
+                    </div>
+                  </header>
+                  <div class="messaging-settings-shell" id="messaging-settings-shell">
+                    <div class="messaging-page" id="messaging-page"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 模型与额度 → 入口卡跳转到设置 > Model Providers -->
+            <div class="connections-tab-pane" id="connections-pane-models" data-connections-pane="models" hidden>
+              <div class="cognition-subentry-list">
+                <button type="button" class="cognition-entry-card" data-connections-subentry="models">
+                  <span class="cognition-entry-icon" data-ui-icon="cpu"></span>
+                  <span class="cognition-entry-body">
+                    <span class="cognition-entry-title" data-i18n="connections.models_entry_title">模型与额度</span>
+                    <span class="cognition-entry-desc" data-i18n="connections.models_entry_desc">配置模型提供方、授权与额度。</span>
+                  </span>
+                  <span class="cognition-entry-chevron" data-ui-icon="chevron-right"></span>
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </section>
 
       <!-- Auto — scheduled tasks (see modules/auto.js). Sidebar sibling to
            Commander. Main content: header + list. Create / edit happen in
@@ -1091,57 +1244,6 @@
             <!-- Starter-template grid, painted by auto.js when the list is empty. -->
             <div class="auto-templates" id="auto-templates" hidden></div>
             <div class="auto-empty empty" id="auto-empty" data-i18n="auto.empty">No auto tasks yet</div>
-          </div>
-        </div>
-      </section>
-
-
-      <!-- Personal Ontology Candidates -->
-      <section class="panel" id="panel-personal-ontology">
-        <div class="personal-onto-layout">
-          <!-- 左栏：文件列表（候选 / 角色模板 / 记忆分组）资料库风格 -->
-          <div class="personal-onto-sidebar" id="personal-onto-sidebar">
-            <div class="personal-onto-sidebar-header">
-              <span class="personal-onto-sidebar-title" data-i18n="personalOntology.title">个人本体</span>
-              <span class="personal-onto-sidebar-actions" id="personal-onto-sidebar-actions"></span>
-            </div>
-            <div class="personal-onto-nav" id="personal-onto-nav"></div>
-          </div>
-          <!-- 右栏：内容（候选详情 / 分组 md 内容） -->
-          <div class="personal-onto-main">
-            <div class="personal-onto-main-header" id="personal-onto-main-header"></div>
-            <div class="personal-onto-main-body" id="personal-onto-main-body"></div>
-          </div>
-        </div>
-        <!-- Reject reason modal -->
-        <div class="personal-onto-modal-overlay" id="personal-onto-modal" style="display:none">
-          <div class="personal-onto-modal">
-            <div class="personal-onto-modal-header">
-              <span data-i18n="personalOntology.reject_reason_title">驳回原因</span>
-            </div>
-            <div class="personal-onto-modal-body">
-              <textarea id="personal-onto-modal-reason" rows="3" placeholder="可选，填写驳回原因..." data-i18n-placeholder="personalOntology.reject_reason_placeholder"></textarea>
-            </div>
-            <div class="personal-onto-modal-footer">
-              <button class="btn btn-sm" id="personal-onto-modal-cancel" data-i18n="common.cancel">取消</button>
-              <button class="btn btn-sm btn-primary" id="personal-onto-modal-ok" data-i18n="personalOntology.reject_btn">驳回</button>
-            </div>
-          </div>
-        </div>
-        <!-- 角色模板库弹窗：未安装模板列表 -->
-        <div class="personal-onto-modal-overlay" id="personal-onto-template-library-modal" style="display:none">
-          <div class="personal-onto-modal personal-onto-library-modal">
-            <div class="personal-onto-modal-header">
-              <span data-i18n="personalOntology.template_library">角色模板库</span>
-              <button type="button" class="modal-close-btn" id="personal-onto-template-library-close" aria-label="Close">×</button>
-            </div>
-            <div class="personal-onto-modal-body">
-              <div class="personal-onto-library-sub muted" data-i18n="personalOntology.template_library_sub">未安装的角色模板，安装后显示在左侧「角色模板」区（最多 3 个）</div>
-              <div class="personal-onto-library-list" id="personal-onto-template-library-list"></div>
-            </div>
-            <div class="personal-onto-modal-footer">
-              <button class="btn btn-sm" id="personal-onto-template-library-cancel" data-i18n="common.close">关闭</button>
-            </div>
           </div>
         </div>
       </section>
@@ -1193,8 +1295,8 @@
           <div class="settings-tabs" role="tablist">
             <button class="settings-tab is-active" data-settings-tab="data" data-i18n="settings.tab.data">数据</button>
             <button class="settings-tab" data-settings-tab="credentials" data-i18n="settings.tab.credentials">Model Providers</button>
-            <button class="settings-tab" data-settings-tab="messaging" data-i18n="settings.tab.messaging">消息平台</button>
             <button class="settings-tab" data-settings-tab="account" data-i18n="settings.tab.account">账号</button>
+            <button class="settings-tab" data-settings-tab="usage" data-i18n="settings.tab.usage">账号与用量</button>
             <button class="settings-tab" data-settings-tab="general" data-i18n="settings.tab.general">通用</button>
           </div>
 
@@ -1519,33 +1621,37 @@
 
             </div>
 
-            <!-- ─────────────────────── 消息平台 ─────────────────────── -->
-            <div class="settings-tab-pane" data-settings-pane="messaging" hidden>
-              <div class="touchpoint-settings-shell" aria-live="polite">
-                <div class="touchpoint-view" id="touchpoint-overview-view">
-                  <div id="touchpoint-settings-page"></div>
-                </div>
-                <div class="touchpoint-view touchpoint-connections-view" id="touchpoint-connections-view" hidden>
-                  <header class="touchpoint-connections-header">
-                    <button class="btn touchpoint-back-button" type="button" data-touchpoint-action="connections.back" data-i18n-title="touchpoint_settings.connections.back" data-i18n-aria-label="touchpoint_settings.connections.back" title="返回触点概览" aria-label="返回触点概览">
-                      <span data-ui-icon="chevron-left" data-ui-icon-class="touchpoint-connections-back-icon"></span>
-                      <span data-i18n="common.back">返回</span>
-                    </button>
-                    <div>
-                      <h2 data-i18n="touchpoint_settings.connections.title">连接管理</h2>
-                      <p data-i18n="touchpoint_settings.connections.detail">机器人实例、扫码绑定与消息行为</p>
-                    </div>
-                  </header>
-                  <div class="messaging-settings-shell" id="messaging-settings-shell">
-                    <div class="messaging-page" id="messaging-page"></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
             <!-- ───────────────────────── 账号 ───────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="account" hidden>
               <div class="settings-group" id="hub-account-card"></div>
+            </div>
+
+            <!-- ───────────────────────── 账号与用量 ─────────────────────────
+                 额度明细前端占位（hosted-only）。本开源构建不接 Token 平台、
+                 不写额度账本、不扣减；空态 degraded 标注占位，规则待后端确认。 -->
+            <div class="settings-tab-pane" data-settings-pane="usage" hidden>
+              <div class="settings-section-head" data-i18n="settings.usage.section">用量</div>
+              <div class="settings-group">
+                <div class="settings-group-head">
+                  <div class="settings-group-title" data-i18n="settings.usage.quota_title">体验额度 / 运行额度</div>
+                  <div class="settings-group-sub" data-i18n="settings.usage.quota_sub">显示当前执行方、可用状态与额度来源。</div>
+                </div>
+                <div class="settings-row" id="settings-quota-placeholder">
+                  <div class="quota-placeholder">
+                    <span class="quota-placeholder-label" data-i18n="settings.usage.quota_placeholder">当前为占位展示，额度规则待后端确认。</span>
+                    <span class="quota-placeholder-note" data-i18n="settings.usage.quota_hosted_only">本能力仅在 hosted 构建提供真实额度数据。</span>
+                  </div>
+                </div>
+              </div>
+              <div class="settings-group">
+                <div class="settings-group-head">
+                  <div class="settings-group-title" data-i18n="settings.usage.connections_link_title">模型与额度</div>
+                  <div class="settings-group-sub" data-i18n="settings.usage.connections_link_sub">模型配置与授权已移至「连接」。</div>
+                </div>
+                <div class="settings-row">
+                  <button class="btn btn-sm" type="button" id="settings-usage-open-connections" data-i18n="settings.usage.open_connections">前往连接</button>
+                </div>
+              </div>
             </div>
 
           </div>
@@ -1731,19 +1837,6 @@
       <div class="modal-body settings-ccswitch-body" id="settings-ccswitch-preview-modal-body"></div>
       <div class="form-msg" id="settings-ccswitch-preview-modal-status"></div>
       <div class="modal-actions" id="settings-ccswitch-preview-modal-actions"></div>
-    </div>
-  </div>
-
-  <div class="modal-overlay" id="personal-onto-modal" hidden>
-    <div class="modal modal-standard" role="dialog" aria-modal="true" aria-labelledby="personal-onto-modal-title">
-      <h3 class="modal-title" id="personal-onto-modal-title" data-i18n="personalOntology.reject_title">Reject candidate</h3>
-      <div class="modal-body">
-        <textarea class="form-input" id="personal-onto-modal-reason" rows="4" data-i18n-placeholder="personalOntology.reject_placeholder"></textarea>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" id="personal-onto-modal-cancel" data-i18n="common.cancel">Cancel</button>
-        <button class="btn btn-danger" id="personal-onto-modal-ok" data-i18n="common.confirm">Confirm</button>
-      </div>
     </div>
   </div>
 
@@ -1986,6 +2079,7 @@
   <script src="./modules/conversation-info.js"></script>
   <script src="./modules/queue-draft.js"></script>
   <script src="./modules/connectors.js"></script>
+  <script src="./modules/connections.js"></script>
   <script src="./modules/bridge.js"></script>
   <script src="./modules/bash_permission.js"></script>
   <script src="./modules/interactive-cli.js"></script>

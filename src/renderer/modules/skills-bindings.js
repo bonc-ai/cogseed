@@ -31,8 +31,9 @@ function _initSkillsStaticBindings() {
   document.getElementById('skills-source-toggle')?.addEventListener('click', () => _toggleSkillsSource());
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    const skillsPanel = document.getElementById('panel-skills');
-    if (!skillsPanel || !skillsPanel.classList.contains('active')) return;
+    // 技能库已内嵌进认知资产「我的能力」tab：仅当该 pane 可见时处理 Esc 返回。
+    const myAbilitiesPane = document.getElementById('skills-cognition-my-abilities');
+    if (!myAbilitiesPane || myAbilitiesPane.hidden) return;
     const detail = document.getElementById('skills-detail-view');
     if (detail && detail.style.display !== 'none') {
       _onSkillsBack();
@@ -64,6 +65,29 @@ function _initSkillsCognitionBindings() {
   const panel = document.getElementById('panel-recall');
   if (!panel || panel.dataset.cognitionBindings === '1') return;
   panel.dataset.cognitionBindings = '1';
+
+  const refreshPersonalOntologyAfterPromotion = async () => {
+    if (typeof window.refreshPersonalOntology !== 'function') return true;
+    try {
+      await window.refreshPersonalOntology();
+      return true;
+    } catch (error) {
+      if (typeof _skillsLog !== 'undefined' && typeof _skillsLog.warn === 'function') {
+        _skillsLog.warn('Personal ontology projection refresh deferred', error);
+      }
+      const message = _cognitionText(
+        'personalOntology.profile_sync_warning',
+        '资产已保存，个人画像自动更新未完成，稍后可重试。',
+      );
+      try {
+        if (typeof uiToast === 'function') uiToast(message, { variant: 'warning' });
+        else if (typeof uiAlert === 'function') await uiAlert(message);
+      } catch (_) {
+        // The formal asset is already persisted; feedback failure must not turn it into a save error.
+      }
+      return false;
+    }
+  };
 
   panel.addEventListener('input', (event) => {
     const search = event.target.closest('.asset-search');
@@ -267,6 +291,10 @@ function _initSkillsCognitionBindings() {
       reload.dataset.busy = '1'; reload.disabled = true;
       try {
         await loadSkillsCognitionSnapshot();
+        if (_skillsCognitionState.assetCategoryFilter === 'personal'
+          && typeof window.refreshPersonalOntology === 'function') {
+          await window.refreshPersonalOntology();
+        }
       } finally {
         reload.dataset.busy = '0'; reload.disabled = false;
       }
@@ -387,6 +415,18 @@ function _initSkillsCognitionBindings() {
     const openAsset = event.target.closest('[data-cognition-open-asset]');
     if (openAsset) {
       _skillsCognitionState.selectedAssetId = openAsset.dataset.cognitionOpenAsset || '';
+      const selectedAsset = (_skillsCognitionState.assets || []).find((item) => item.id === _skillsCognitionState.selectedAssetId);
+      if (selectedAsset) _skillsCognitionState.assetCategoryFilter = selectedAsset.category || selectedAsset.type || '';
+      switchSkillsCognitionPage('assets');
+      return;
+    }
+
+    const receiptAsset = event.target.closest('[data-recall-open-asset]');
+    if (receiptAsset) {
+      const assetId = receiptAsset.dataset.recallOpenAsset || '';
+      if (!assetId) return;
+      _skillsCognitionState.selectedAssetId = assetId;
+      _skillsCognitionState.assetCategoryFilter = '';
       switchSkillsCognitionPage('assets');
       return;
     }
@@ -428,22 +468,53 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const manualOpen = event.target.closest('[data-recall-manual-open]');
+    if (manualOpen) {
+      const captureId = manualOpen.dataset.recallManualOpen || '';
+      if (!captureId) return;
+      const visibleCaptures = [...(_skillsCognitionState.captures || []), ...(_skillsCognitionState.recentCaptures || [])];
+      const shouldLoad = _skillsCognitionState.captureFilter !== 'all'
+        || !visibleCaptures.some((capture) => capture.id === captureId);
+      _skillsCognitionState.captureFilter = 'all';
+      _skillsCognitionState.captureNextCursor = null;
+      try {
+        if (shouldLoad) await loadRecallCaptureTasks();
+        _skillsCognitionState.selectedCaptureId = captureId;
+        renderSkillsCognitionCaptures();
+        setTimeout(() => {
+          const row = Array.from(document.querySelectorAll('[data-recall-capture-select]'))
+            .find((item) => item.dataset.recallCaptureSelect === captureId);
+          if (row && typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'center' });
+        }, 0);
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      }
+      return;
+    }
+
     const manualAdd = event.target.closest('[data-recall-manual-add]');
     if (manualAdd) {
       const conversationId = manualAdd.dataset.recallManualAdd || '';
       if (!conversationId || manualAdd.dataset.busy === '1') return;
       manualAdd.dataset.busy = '1'; manualAdd.disabled = true;
+      const actionLabel = typeof manualAdd.querySelector === 'function'
+        ? manualAdd.querySelector('.recall-manual-conversation-action')
+        : null;
+      const previousActionLabel = actionLabel?.textContent || '';
+      if (actionLabel) actionLabel.textContent = _cognitionText('cognition.capture_manual_history_processing', '正在提取');
       try {
-        const result = await window.cogseed.invoke('recall.captures.manualCreate', { conversationId });
-        if (!result?.ok) throw new Error(result?.error || _cognitionText('cognition.capture_manual_history_create_failed', '加入沉淀任务失败'));
+        const result = await window.cogseed.invoke('recall.captures.historicalAutoStart', { conversationId });
+        if (!result?.ok) throw new Error(result?.error || _cognitionText('cognition.capture_manual_history_create_failed', '启动提取失败'));
         _skillsCognitionState.captureFilter = 'all';
         _skillsCognitionState.captureNextCursor = null;
-        _skillsCognitionState.selectedCaptureId = '';
+        _skillsCognitionState.selectedCaptureId = result.capture?.id || '';
         await loadRecallCaptureTasks();
+        loadSkillsCognitionSnapshot().catch(() => {});
       } catch (error) {
         if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
         renderSkillsCognitionCaptures();
       } finally {
+        if (actionLabel && previousActionLabel) actionLabel.textContent = previousActionLabel;
         manualAdd.dataset.busy = '0'; manualAdd.disabled = false;
       }
       return;
@@ -488,7 +559,7 @@ function _initSkillsCognitionBindings() {
         return;
       }
       if (actionName === 'view-assets') {
-        _skillsCognitionState.selectedAssetId = capture?.linkedAssetIds?.[0] || '';
+        _skillsCognitionState.selectedAssetId = _captureLinkedAssetIds(capture)[0] || '';
         _skillsCognitionState.assetCategoryFilter = '';
         switchSkillsCognitionPage('assets');
         return;
@@ -678,6 +749,9 @@ function _initSkillsCognitionBindings() {
         .filter((candidate) => candidate.status === 'pending_review' && candidate.risk !== 'high'
           && (!selectedIds || selectedIds.has(candidate.id)))
         .map((candidate) => candidate.id);
+      const includesPersonal = (_skillsCognitionState.recallCandidates || []).some((candidate) =>
+        candidateIds.includes(candidate.id) && candidate.suggestedType === 'personal',
+      );
       if (!candidateIds.length) return;
       promoteAll.dataset.busy = '1'; promoteAll.disabled = true;
       _skillsCognitionState.writingRecallCandidateBatch = true;
@@ -687,13 +761,14 @@ function _initSkillsCognitionBindings() {
         if (!result?.ok) throw new Error(result?.error || 'recall candidate batch action failed');
         failures.push(...(result.failed || []));
         await loadSkillsCognitionSnapshot().catch(() => {});
+        const profileSynced = !includesPersonal || await refreshPersonalOntologyAfterPromotion();
         if (failures.length) {
           const message = _cognitionText(
             'cognition.capture_save_all_partial',
             '已保存 {success} 条，{failed} 条失败；失败内容已保留，可单独重试。',
           ).replace('{success}', String(candidateIds.length - failures.length)).replace('{failed}', String(failures.length));
           if (typeof uiAlert === 'function') await uiAlert(message);
-        } else if (typeof uiToast === 'function') {
+        } else if (profileSynced && typeof uiToast === 'function') {
           uiToast(_cognitionText('cognition.capture_save_all_done', '已全部写入 Recall'), { variant: 'success' });
         }
       } finally {
@@ -756,6 +831,11 @@ function _initSkillsCognitionBindings() {
         _skillsCognitionState.editingRecallCandidateId = '';
         _skillsCognitionState.writingRecallCandidateId = '';
         await loadSkillsCognitionSnapshot();
+        const promotedType = actionName === 'save-and-promote' ? payload.suggestedType : candidate?.suggestedType;
+        if ((actionName === 'promote' || actionName === 'save-and-promote')
+          && promotedType === 'personal') {
+          await refreshPersonalOntologyAfterPromotion();
+        }
       } catch (error) {
         if (actionName === 'promote' || actionName === 'save-and-promote') await loadSkillsCognitionSnapshot().catch(() => {});
         if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
@@ -767,82 +847,6 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
-    const action = event.target.closest('[data-cognition-candidate-action]');
-    if (!action) return;
-    if (action.dataset.cognitionCandidateAction === 'open-personal-ontology') {
-      _setViewFromSidebar('personal-ontology');
-      return;
-    }
-    if (action.dataset.cognitionCandidateAction === 'source') return;
-    if (action.dataset.cognitionCandidateAction === 'import-to-recall') {
-      const candidateId = action.dataset.cognitionCandidateId;
-      if (!candidateId || action.dataset.busy === '1') return;
-      action.dataset.busy = '1'; action.disabled = true;
-      try {
-        const result = await window.cogseed.invoke('recall.candidates.importPersonalOntology', { candidateId });
-        if (!result?.ok) throw new Error(result?.error || 'personal ontology import failed');
-        await loadSkillsCognitionSnapshot();
-      } catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
-      finally { action.dataset.busy = '0'; action.disabled = false; }
-      return;
-    }
-    const source = action.dataset.cognitionCandidateSource;
-    const candidateId = action.dataset.cognitionCandidateId;
-    if (!source || !candidateId || action.dataset.busy === '1') return;
-    // Deep review is a read-only probe: it runs both gate layers and reports,
-    // without deciding the candidate. Model failure is reported as
-    // "unavailable" rather than as a clean pass.
-    if (action.dataset.cognitionCandidateAction === 'deep-review') {
-      action.dataset.busy = '1'; action.disabled = true;
-      try {
-        const res = await window.orkas.invoke('cognition.candidates.deepReview', { source, candidateId });
-        if (!res?.ok) throw new Error(res?.error || 'deep review failed');
-        const r = res.review || {};
-        const lines = [
-          `${_cognitionText('cognition.security', '安全检查')}: ${r.status || 'unknown'}`,
-          `${_cognitionText('cognition.findings', '发现')}: ${r.findingCount || 0}`,
-        ];
-        if (r.topRule) lines.push(r.topRule);
-        if (r.degradedReason) lines.push(_cognitionText('cognition.security_degraded', '深度审查不可用'));
-        if (typeof uiAlert === 'function') await uiAlert(lines.join('\n'));
-        await loadSkillsCognitionSnapshot();
-      } catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
-      finally { action.dataset.busy = '0'; action.disabled = false; }
-      return;
-    }
-    const decided = action.dataset.cognitionCandidateAction;
-    // 四决定（PRD §5.6）：accept / modify / defer / reject；其余动作已在前面分支处理。
-    if (decided !== 'accept' && decided !== 'modify' && decided !== 'defer' && decided !== 'reject') return;
-    action.dataset.busy = '1';
-    action.disabled = true;
-    try {
-      const result = await window.cogseed.invoke('cognition.candidates.decide', {
-        source,
-        candidateId,
-        decision: decided,
-      });
-      // A gate block is an expected outcome with structured findings, not a
-      // generic failure — explain what was found rather than showing the raw
-      // error string. The block itself is not user-overridable.
-      if (result && result.ok === false && result.code === 'cognition_gate_blocked') {
-        const findings = (result.gate && result.gate.findings) || [];
-        const lines = findings.slice(0, 5).map((f) => `· ${f.rule}${f.field ? ` (${f.field})` : ''}`);
-        const title = (typeof t === 'function' ? t('cognition.gate_blocked_title') : '') || '';
-        const header = title && title !== 'cognition.gate_blocked_title'
-          ? title
-          : '该候选未通过安全检查，无法保存为正式资产';
-        if (typeof uiAlert === 'function') await uiAlert([header, ...lines].join('\n'));
-        await loadSkillsCognitionSnapshot();
-        return;
-      }
-      if (!result?.ok) throw new Error(result?.error || 'candidate decision failed');
-      await loadSkillsCognitionSnapshot();
-    } catch (error) {
-      if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
-    } finally {
-      action.dataset.busy = '0';
-      action.disabled = false;
-    }
   });
 
   panel.addEventListener('change', async (event) => {
@@ -874,6 +878,10 @@ function _initSkillsCognitionBindings() {
     renderSkillsCognitionCaptures();
     renderSkillsCognitionCandidates();
     renderSkillsCognitionAssets();
+    if (_skillsCognitionState.assetCategoryFilter === 'personal'
+      && typeof window.renderPersonalOntology === 'function') {
+      window.renderPersonalOntology();
+    }
   });
 
 }

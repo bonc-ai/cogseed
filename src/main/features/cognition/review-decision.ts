@@ -24,6 +24,7 @@ const log = createLogger('review-decision');
 
 /** 候选审查四决定（PRD §5.6 候选卡：保存/修改后保存/暂缓/拒绝）。 */
 export type ReviewDecisionType = 'accept' | 'modify' | 'defer' | 'reject' | 'ignore' | 'keep_current' | 'trial';
+export type ReviewDecisionActor = 'user' | 'system';
 
 export interface ReviewDecision {
   decision_id: string;
@@ -34,6 +35,8 @@ export interface ReviewDecision {
   decision_type: ReviewDecisionType;
   /** 用户原始表达或规范化决定。 */
   decision: string;
+  /** Who applied the decision. Automatic capture writes are explicitly system-authored. */
+  actor?: ReviewDecisionActor;
   /** 作用域（PRD：必须绑定作用域；缺省 'default'）。 */
   scope?: string;
   /** 来源信号引用（Teaching Signal / 对话消息 id）。 */
@@ -55,6 +58,7 @@ export interface WriteReviewDecisionInput {
   targetRef: string;
   decisionType: ReviewDecisionType;
   decision: string;
+  actor?: ReviewDecisionActor;
   antecedentRef?: string;
   scope?: string;
   sourceSignalRef?: string;
@@ -94,6 +98,9 @@ export async function writeReviewDecision(
   if (!input.targetRef || typeof input.targetRef !== 'string') throw new Error('invalid review target');
   assertDecisionType(input.decisionType);
   if (!input.decision || typeof input.decision !== 'string') throw new Error('invalid review decision');
+  if (input.actor !== undefined && input.actor !== 'user' && input.actor !== 'system') {
+    throw new Error('invalid review decision actor');
+  }
   if (isShortConfirmation(input.decision) && !input.antecedentRef) {
     throw new Error('short confirmation requires antecedent_ref');
   }
@@ -114,6 +121,7 @@ export async function writeReviewDecision(
     ...(input.antecedentRef ? { antecedent_ref: input.antecedentRef } : {}),
     decision_type: input.decisionType,
     decision: input.decision,
+    ...(input.actor ? { actor: input.actor } : {}),
     ...(input.scope ? { scope: input.scope } : {}),
     ...(input.sourceSignalRef ? { source_signal_ref: input.sourceSignalRef } : {}),
     ...(input.supersedesRef ? { supersedes_ref: input.supersedesRef } : {}),
@@ -124,7 +132,7 @@ export async function writeReviewDecision(
     timestamp: nowIso(),
   };
   await appendJsonlAtomic<ReviewDecision>(reviewDecisionLogPath(uid, input.targetRef), record);
-  log.info(`review decision user=${maskId(uid)} target=${maskId(input.targetRef)} type=${input.decisionType}`);
+  log.info(`review decision actor=${input.actor || 'user'} user=${maskId(uid)} target=${maskId(input.targetRef)} type=${input.decisionType}`);
   return record;
 }
 

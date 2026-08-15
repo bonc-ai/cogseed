@@ -65,11 +65,22 @@ function importedConversationId(source: string, sourceId: string): string {
   return safeId(id) ? id : `imp-${hash}`;
 }
 
+/** Codex injects this block as a synthetic user turn before the real prompt. */
+const RECOMMENDED_PLUGINS_PREFIX =
+  /^<recommended_plugins>\s*here is a list of plugins that are available but not installed\b/i;
+
+/** Return a usable one-line title, rejecting known runtime-injected content. */
+function titleFromText(text: string | undefined): string {
+  const trimmed = text?.trim() || '';
+  if (!trimmed || RECOMMENDED_PLUGINS_PREFIX.test(trimmed)) return '';
+  return trimmed.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 40) || '';
+}
+
 /** Build a short title from the summary head or the picker hint. */
 function buildTitle(input: MaterializeInput): string {
-  const src = input.extraction.sessionSummary || input.titleHint || '';
-  const firstLine = src.split('\n').map((l) => l.trim()).find(Boolean) || '导入的会话';
-  const title = firstLine.slice(0, 40);
+  const title = titleFromText(input.extraction.sessionSummary) ||
+    titleFromText(input.titleHint) ||
+    '导入的会话';
   return `⤴ ${title}`;
 }
 

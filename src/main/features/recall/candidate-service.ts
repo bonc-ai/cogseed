@@ -29,12 +29,16 @@ import {
 } from './asset-semantics';
 import {
   createAbilityAsset,
+  listAbilityAssetVersions,
   pauseAbilityAsset,
   readAbilityAsset,
   updateAbilityAsset,
+  type AbilityAssetActor,
 } from './asset-service';
+import { evaluateCandidate, isCandidateBlocked } from '../cognition/gate';
 import { isCognitionSourceEnabled } from './source-control';
 import {
+  readReviewDecision,
   recordReviewDecisionOutcome,
   writeReviewDecision,
   type ReviewDecision,
@@ -60,6 +64,7 @@ export type RecallCandidateStatus =
 export type AbilityAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
 export type RecallCandidateAction = 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
 export type RecallCandidateRisk = 'low' | 'medium' | 'high';
+export type RecallAbilityAssetLifecycleStatus = 'user_confirmed_unverified' | 'automatically_extracted_unverified';
 
 const DEFAULT_CANDIDATE_TTL_MS = 90 * 24 * 60 * 60 * 1_000;
 const DEFAULT_DEFER_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -131,7 +136,7 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   recommendationReason?: string;
   recommendationAt?: string;
   status: 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked';
-  lifecycleStatus: 'user_confirmed_unverified';
+  lifecycleStatus: RecallAbilityAssetLifecycleStatus;
   maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable';
   deletedAt?: string;
   purgedAt?: string;
@@ -159,13 +164,15 @@ export interface SaveRecallCandidateInput {
   learningSignal?: KstarLearningSignal;
   learningProvenance?: KstarLearningProvenance;
   captureKey?: string;
+  /** Internal extraction gate: preserve evidence without creating user review work. */
+  forceWeakObservation?: boolean;
 }
 
 export interface RecallAssetHandoffReceipt {
   assetId: string;
   assetType: AbilityAssetType;
   version: string;
-  lifecycleStatus: 'user_confirmed_unverified';
+  lifecycleStatus: RecallAbilityAssetLifecycleStatus;
   scope: string;
   sourceRefs: CognitionSourceRef[];
   reviewDecisionId: string;
@@ -178,7 +185,7 @@ interface StoredRecallAssetHandoffReceipt extends RecallJsonRecord, RecallAssetH
 }
 
 export interface PromoteRecallCandidateOptions extends AbilityAssetSemantics {
-  actor?: 'user';
+  actor?: AbilityAssetActor;
   ontologyRefs?: AbilityAssetOntologyRef[];
   scopePolicy?: RecallAbilityAssetScopePolicy;
   decisionType?: 'accept' | 'modify';
@@ -230,6 +237,11 @@ function requireCandidateRisk(value: unknown): RecallCandidateRisk {
   if (value === undefined) return 'low';
   if (value === 'low' || value === 'medium' || value === 'high') return value;
   throw new Error('invalid candidate risk');
+}
+
+function requireAssetLifecycleStatus(value: unknown): RecallAbilityAssetLifecycleStatus {
+  if (value === 'user_confirmed_unverified' || value === 'automatically_extracted_unverified') return value;
+  throw new Error('malformed recall asset handoff receipt lifecycle');
 }
 
 function normalizeCandidateStatus(value: unknown): RecallCandidateStatus {
@@ -421,7 +433,9 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   return {
     ...value,
     reviewDecisionId: typeof value.reviewDecisionId === 'string' ? value.reviewDecisionId : 'legacy-untracked',
-    lifecycleStatus: 'user_confirmed_unverified',
+    lifecycleStatus: value.lifecycleStatus === 'automatically_extracted_unverified'
+      ? 'automatically_extracted_unverified'
+      : 'user_confirmed_unverified',
     evidenceRefs,
     ...(learningSignal ? { learningSignal } : {}),
     ...(learningProvenance ? { learningProvenance } : {}),
@@ -461,7 +475,11 @@ function isCandidateContentReviewReady(candidate: Pick<
 >): boolean {
   return Boolean(candidate.value) && candidate.sourceRefs.length > 0 && candidate.evidenceRefs.length > 0
     && Boolean(candidate.suggestedScope)
-    && (candidate.suggestedAction === 'create' || Boolean(candidate.targetAssetId));
+    && (!candidateActionNeedsTarget(candidate.suggestedAction) || Boolean(candidate.targetAssetId));
+}
+
+function candidateActionNeedsTarget(action: RecallCandidateAction): boolean {
+  return action === 'update' || action === 'limit_scope' || action === 'pause';
 }
 
 function candidateIdForCaptureKey(captureKey: string): string {
@@ -544,9 +562,10 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   const targetAssetId = input.targetAssetId === undefined ? undefined : boundedText(input.targetAssetId, 'target asset id', 160, true);
   if (targetAssetId && !safeId(targetAssetId)) throw new Error('invalid target asset id');
   const candidateDraft = { judgment, value: resolvedValue, suggestedType, suggestedScope, suggestedAction, targetAssetId };
-  const reviewReady = Boolean(resolvedValue) && sourceRefs.length > 0 && evidenceRefs.length > 0
+  const reviewReady = input.forceWeakObservation !== true
+    && Boolean(resolvedValue) && sourceRefs.length > 0 && evidenceRefs.length > 0
     && Boolean(suggestedScope) && (hasExplicitAction || !hasExplicitValue)
-    && (suggestedAction === 'create' || Boolean(targetAssetId));
+    && (!candidateActionNeedsTarget(suggestedAction) || Boolean(targetAssetId));
   const existing = (await listRecallCandidates(userId)).find((candidate) => {
     if (fingerprint(candidate) !== fingerprint(candidateDraft)) return false;
     const hasNewEvidence = hasNewSourceRefs(candidate.evidenceRefs, evidenceRefs);
@@ -631,6 +650,16 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
   const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   const evidenceRefs = normalizeCognitionSourceRefsForWrite(input.evidenceRefs || input.sourceRefs);
   const currentCandidate = await readRecallCandidate(userId, candidateId);
+  if (currentCandidate.status === 'failed' && currentCandidate.reviewDecisionId) {
+    const appliedAsset = await readAppliedHandoffAsset(
+      userId,
+      currentCandidate,
+      currentCandidate.reviewDecisionId,
+    );
+    if (appliedAsset) {
+      throw new Error('candidate has an incomplete asset handoff; retry confirmation before editing');
+    }
+  }
   const suggestedAction = input.suggestedAction === undefined
     ? currentCandidate.suggestedAction
     : requireCandidateAction(input.suggestedAction);
@@ -668,7 +697,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
     const current = asCandidate(raw);
     if (isTerminalCandidate(current.status)) throw new Error('recall candidate is terminal');
     const reviewReady = Boolean(resolvedValue) && sourceRefs.length > 0 && evidenceRefs.length > 0
-      && Boolean(suggestedScope) && (suggestedAction === 'create' || Boolean(targetAssetId));
+      && Boolean(suggestedScope) && (!candidateActionNeedsTarget(suggestedAction) || Boolean(targetAssetId));
     const now = new Date().toISOString();
     return {
       ...current,
@@ -689,6 +718,8 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
       failureCode: undefined,
       failureMessage: undefined,
       failedAt: undefined,
+      promotedAssetId: undefined,
+      reviewDecisionId: undefined,
       promotionErrorCode: undefined,
       promotionErrorMessage: undefined,
       promotionFailedAt: undefined,
@@ -741,6 +772,7 @@ async function decideWithoutAsset(
   decisionType: 'defer' | 'reject' | 'ignore' | 'keep_current',
   status: 'deferred' | 'rejected' | 'ignored',
   note?: string,
+  actor: AbilityAssetActor = 'user',
 ): Promise<RecallCandidateRecord> {
   const decisionNote = boundedText(note, 'decision note', 1_000);
   const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
@@ -757,6 +789,7 @@ async function decideWithoutAsset(
       antecedentRef: candidate.id,
       scope: candidate.suggestedScope,
       reason: decisionNote,
+      actor,
       idempotencyKey: `${decisionType}-${candidate.updatedAt}`,
     });
     return {
@@ -770,6 +803,42 @@ async function decideWithoutAsset(
     };
   });
   return asCandidate(updated);
+}
+
+/** Apply an extracted candidate under the user's automatic-capture policy. */
+export async function autoApplyRecallCandidate(
+  userId: string,
+  candidateId: string,
+): Promise<{ candidate: RecallCandidateRecord; asset?: RecallAbilityAssetRecord }> {
+  const candidate = await readRecallCandidate(userId, candidateId);
+  if (candidate.status === 'confirmed') {
+    try {
+      const promoted = await promoteRecallCandidate(userId, candidate.id, { actor: 'system' });
+      return { candidate: promoted.candidate, asset: promoted.asset };
+    } catch (error) {
+      const retryable = await readRecallCandidate(userId, candidate.id);
+      if (retryable.status !== 'failed') throw error;
+      const recovered = await promoteRecallCandidate(userId, retryable.id, { actor: 'system' });
+      return { candidate: recovered.candidate, asset: recovered.asset };
+    }
+  }
+  if (!isRecallCandidateReviewable(candidate)) throw new Error('candidate is not ready for automatic capture');
+  if (candidate.risk === 'high') {
+    throw new Error('high-risk candidate requires an independent user risk gate');
+  }
+  const reason = 'automatic capture policy';
+  if (candidate.suggestedAction === 'reject') {
+    return { candidate: await decideWithoutAsset(userId, candidate.id, 'reject', 'rejected', reason, 'system') };
+  }
+  if (candidate.suggestedAction === 'keep_current') {
+    return { candidate: await decideWithoutAsset(userId, candidate.id, 'keep_current', 'ignored', reason, 'system') };
+  }
+  const promoted = await promoteRecallCandidate(userId, candidate.id, {
+    actor: 'system',
+    decisionType: 'accept',
+    decisionReason: reason,
+  });
+  return { candidate: promoted.candidate, asset: promoted.asset };
 }
 
 export async function batchPromoteRecallCandidates(
@@ -822,7 +891,41 @@ function confirmationIdempotencyKey(candidate: RecallCandidateRecord): string {
   })).digest('hex').slice(0, 32)}`;
 }
 
-function handoffReceipt(asset: RecallAbilityAssetRecord): RecallAssetHandoffReceipt {
+function createdAssetId(candidateId: string, reviewDecisionId: string): string {
+  return `aa-${createHash('sha256').update(`${candidateId}\n${reviewDecisionId}`).digest('hex').slice(0, 24)}`;
+}
+
+async function readAppliedHandoffAsset(
+  userId: string,
+  candidate: RecallCandidateRecord,
+  reviewDecisionId: string,
+): Promise<RecallAbilityAssetRecord | undefined> {
+  const assetId = candidate.suggestedAction === 'create'
+    ? createdAssetId(candidate.id, reviewDecisionId)
+    : candidate.targetAssetId || candidate.promotedAssetId;
+  if (!assetId) return undefined;
+  let asset: RecallAbilityAssetRecord;
+  try {
+    asset = await readAbilityAsset(userId, assetId);
+  } catch {
+    return undefined;
+  }
+  const belongsToCandidate = asset.candidateId === candidate.id
+    || asset.sourceCandidateIds?.includes(candidate.id);
+  if (!belongsToCandidate) return undefined;
+  if (candidate.suggestedAction === 'create') {
+    return asset.reviewDecisionId === reviewDecisionId ? asset : undefined;
+  }
+  return asset.reviewDecisionId === reviewDecisionId
+    || asset.appliedReviewDecisionIds?.includes(reviewDecisionId)
+    ? asset
+    : undefined;
+}
+
+function handoffReceipt(
+  asset: RecallAbilityAssetRecord,
+  reviewDecisionId = asset.reviewDecisionId,
+): RecallAssetHandoffReceipt {
   return {
     assetId: asset.id,
     assetType: asset.type,
@@ -830,7 +933,84 @@ function handoffReceipt(asset: RecallAbilityAssetRecord): RecallAssetHandoffRece
     lifecycleStatus: asset.lifecycleStatus,
     scope: asset.scope,
     sourceRefs: asset.evidenceRefs,
-    reviewDecisionId: asset.reviewDecisionId,
+    reviewDecisionId,
+  };
+}
+
+function handoffReceiptId(candidateId: string, reviewDecisionId: string): string {
+  return `handoff-${createHash('sha256').update(`${candidateId}\n${reviewDecisionId}`).digest('hex').slice(0, 24)}`;
+}
+
+function asStoredHandoffReceipt(
+  value: RecallJsonRecord,
+  candidateId: string,
+  reviewDecisionId: string,
+): StoredRecallAssetHandoffReceipt {
+  if (
+    value.candidateId !== candidateId
+    || value.reviewDecisionId !== reviewDecisionId
+    || typeof value.assetId !== 'string'
+    || !safeId(value.assetId)
+    || typeof value.version !== 'string'
+    || !value.version.trim()
+    || typeof value.scope !== 'string'
+    || !value.scope.trim()
+    || !Array.isArray(value.sourceRefs)
+    || typeof value.createdAt !== 'string'
+  ) throw new Error('malformed recall asset handoff receipt');
+  const sourceRefs = normalizeCognitionSourceRefs(value.sourceRefs);
+  if (!sourceRefs.length) throw new Error('malformed recall asset handoff receipt sources');
+  return {
+    ...value,
+    candidateId,
+    reviewDecisionId,
+    assetId: value.assetId,
+    assetType: requireAssetType(value.assetType),
+    lifecycleStatus: requireAssetLifecycleStatus(value.lifecycleStatus),
+    version: value.version.trim(),
+    scope: value.scope.trim(),
+    sourceRefs,
+    createdAt: requireIsoTimestamp(value.createdAt, 'handoff receipt created at'),
+  } as StoredRecallAssetHandoffReceipt;
+}
+
+export async function readRecallAssetHandoffReceipt(
+  userId: string,
+  candidateId: string,
+  reviewDecisionId: string,
+): Promise<RecallAssetHandoffReceipt | undefined> {
+  if (!safeId(candidateId) || !/^rd_[A-Za-z0-9_-]{8,64}$/.test(reviewDecisionId)) {
+    throw new Error('invalid recall asset handoff receipt identity');
+  }
+  const stored = await readRecallJsonRecord(
+    userId,
+    'asset-handoff-receipts',
+    handoffReceiptId(candidateId, reviewDecisionId),
+  );
+  let receipt: StoredRecallAssetHandoffReceipt;
+  if (stored) {
+    receipt = asStoredHandoffReceipt(stored, candidateId, reviewDecisionId);
+  } else {
+    const candidateRecord = await readRecallJsonRecord(userId, 'candidates', candidateId);
+    if (!candidateRecord) return undefined;
+    const candidate = asCandidate(candidateRecord);
+    if (
+      candidate.status !== 'confirmed'
+      || candidate.reviewDecisionId !== reviewDecisionId
+      || !candidate.promotedAssetId
+    ) return undefined;
+    const assetRecord = await readRecallJsonRecord(userId, 'ability-assets', candidate.promotedAssetId);
+    if (!assetRecord) return undefined;
+    return recoverHandoffReceipt(userId, candidate, reviewDecisionId, asAsset(assetRecord));
+  }
+  return {
+    assetId: receipt.assetId,
+    assetType: receipt.assetType,
+    version: receipt.version,
+    lifecycleStatus: receipt.lifecycleStatus,
+    scope: receipt.scope,
+    sourceRefs: receipt.sourceRefs,
+    reviewDecisionId: receipt.reviewDecisionId,
   };
 }
 
@@ -838,10 +1018,10 @@ async function persistHandoffReceipt(
   userId: string,
   candidateId: string,
   receipt: RecallAssetHandoffReceipt,
-): Promise<void> {
-  const id = `handoff-${createHash('sha256').update(`${candidateId}\n${receipt.reviewDecisionId}`).digest('hex').slice(0, 24)}`;
+): Promise<RecallAssetHandoffReceipt> {
+  const id = handoffReceiptId(candidateId, receipt.reviewDecisionId);
   const now = new Date().toISOString();
-  await updateRecallJsonRecord(userId, 'asset-handoff-receipts', id, (current) => current || ({
+  const record = await updateRecallJsonRecord(userId, 'asset-handoff-receipts', id, (current) => current || ({
     schemaVersion: 2,
     ownerId: userId,
     id,
@@ -849,6 +1029,42 @@ async function persistHandoffReceipt(
     ...receipt,
     createdAt: now,
   } satisfies StoredRecallAssetHandoffReceipt));
+  const stored = asStoredHandoffReceipt(record, candidateId, receipt.reviewDecisionId);
+  return {
+    assetId: stored.assetId,
+    assetType: stored.assetType,
+    version: stored.version,
+    lifecycleStatus: stored.lifecycleStatus,
+    scope: stored.scope,
+    sourceRefs: stored.sourceRefs,
+    reviewDecisionId: stored.reviewDecisionId,
+  };
+}
+
+async function recoverHandoffReceipt(
+  userId: string,
+  candidate: RecallCandidateRecord,
+  reviewDecisionId: string,
+  asset: RecallAbilityAssetRecord,
+): Promise<RecallAssetHandoffReceipt | undefined> {
+  const belongsToCandidate = asset.candidateId === candidate.id
+    || asset.sourceCandidateIds?.includes(candidate.id);
+  if (!belongsToCandidate || asset.type !== candidate.suggestedType) return undefined;
+  if (asset.reviewDecisionId === reviewDecisionId) {
+    return persistHandoffReceipt(userId, candidate.id, handoffReceipt(asset, reviewDecisionId));
+  }
+  const version = (await listAbilityAssetVersions(userId, asset.id))
+    .find((entry) => entry.reason === `review_decision:${reviewDecisionId}`);
+  if (!version || version.snapshot.type !== candidate.suggestedType) return undefined;
+  return persistHandoffReceipt(userId, candidate.id, {
+    assetId: asset.id,
+    assetType: version.snapshot.type,
+    version: version.version,
+    lifecycleStatus: asset.lifecycleStatus,
+    scope: version.snapshot.scope,
+    sourceRefs: version.snapshot.evidenceRefs,
+    reviewDecisionId,
+  });
 }
 
 export async function promoteRecallCandidate(
@@ -856,7 +1072,9 @@ export async function promoteRecallCandidate(
   candidateId: string,
   options: PromoteRecallCandidateOptions & AbilityAssetRelationContract = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord; decision: ReviewDecision; receipt: RecallAssetHandoffReceipt }> {
-  if (options.actor !== 'user') throw new Error('recall candidate promotion requires a user actor');
+  if (options.actor !== 'user' && options.actor !== 'system') {
+    throw new Error('recall candidate promotion requires a user actor or system actor');
+  }
   const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
   const relationContract = readAbilityAssetRelationContract(options as Record<string, unknown>);
   const semantics = readAbilityAssetSemantics(options as unknown as Record<string, unknown>);
@@ -868,6 +1086,7 @@ export async function promoteRecallCandidate(
   const causalRule = options.causalRule === undefined ? undefined : normalizeCausalRule(options.causalRule);
   const scopePolicy = normalizeAbilityAssetScopePolicy(options.scopePolicy);
   let decision: ReviewDecision | undefined;
+  let receipt: RecallAssetHandoffReceipt | undefined;
   let updated: RecallJsonRecord;
   try {
     updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
@@ -878,12 +1097,18 @@ export async function promoteRecallCandidate(
     if (candidate.status === 'weak_observation' || candidate.status === 'observed') {
       throw new Error('candidate evidence is insufficient for review');
     }
-    if (candidate.risk === 'high' && options.riskAcknowledged !== true) {
+    if (candidate.risk === 'high' && (options.actor !== 'user' || options.riskAcknowledged !== true)) {
       throw new Error('high-risk candidate requires an independent risk gate');
     }
     if (candidate.suggestedAction === 'keep_current' || candidate.suggestedAction === 'reject') {
       throw new Error('candidate action must use its non-asset review decision');
     }
+    const gate = evaluateCandidate({
+      title: candidate.summary,
+      summary: candidate.value,
+      body: candidate.judgment,
+    });
+    if (isCandidateBlocked(gate)) throw new Error('candidate is blocked by cognition security gate');
     if (Date.parse(candidate.expiresAt) <= Date.now()) {
       return {
         ...candidate,
@@ -894,7 +1119,10 @@ export async function promoteRecallCandidate(
         updatedAt: new Date().toISOString(),
       };
     }
-    const unavailableSources = await unavailableCandidateSources(userId, candidate.sourceRefs);
+    const unavailableSources = await unavailableCandidateSources(
+      userId,
+      mergeSourceRefs(candidate.sourceRefs, candidate.evidenceRefs),
+    );
     if (unavailableSources.length || !candidate.evidenceRefs.length) {
       return {
         ...candidate,
@@ -907,24 +1135,56 @@ export async function promoteRecallCandidate(
         updatedAt: new Date().toISOString(),
       };
     }
-    const idempotencyKey = confirmationIdempotencyKey(candidate);
-    decision = await writeReviewDecision(userId, {
-      targetRef: `recall_candidate:${candidate.id}`,
+    const targetRef = `recall_candidate:${candidate.id}`;
+    decision = candidate.status === 'failed' && candidate.reviewDecisionId
+      ? await readReviewDecision(userId, targetRef, candidate.reviewDecisionId)
+      : undefined;
+    if (candidate.status === 'failed' && candidate.reviewDecisionId && !decision) {
+      throw new Error('previous review decision is unavailable; confirmation cannot be retried safely');
+    }
+    decision = decision || await writeReviewDecision(userId, {
+      targetRef,
       decisionType: options.decisionType || (candidate.userModifiedAt ? 'modify' : 'accept'),
-      decision: options.decisionType === 'modify' || candidate.userModifiedAt ? 'modify and save' : 'accept',
+      decision: options.actor === 'system'
+        ? 'automatic capture'
+        : options.decisionType === 'modify' || candidate.userModifiedAt ? 'modify and save' : 'accept',
       antecedentRef: candidate.id,
       scope: candidate.suggestedScope,
       reason: options.decisionReason,
+      actor: options.actor,
       modifiedContent: candidate.userModifiedAt ? candidate.judgment : undefined,
-      idempotencyKey,
+      idempotencyKey: confirmationIdempotencyKey(candidate),
       decisionId: options.decisionId,
     });
+    const handoffActor: AbilityAssetActor = decision.actor === 'system' ? 'system' : 'user';
     const now = new Date().toISOString();
     let stored: RecallAbilityAssetRecord;
     const handoffReason = `review_decision:${decision.decision_id}`;
+    const alreadyApplied = await readAppliedHandoffAsset(userId, candidate, decision.decision_id);
+    if (alreadyApplied) {
+      receipt = await readRecallAssetHandoffReceipt(userId, candidate.id, decision.decision_id)
+        || await recoverHandoffReceipt(userId, candidate, decision.decision_id, alreadyApplied);
+      if (!receipt) throw new Error('immutable handoff receipt cannot be recovered safely');
+      decision = await recordReviewDecisionOutcome(
+        userId,
+        targetRef,
+        decision.decision_id,
+        { assetId: alreadyApplied.id },
+      );
+      return {
+        ...candidate,
+        status: 'confirmed',
+        promotedAssetId: alreadyApplied.id,
+        reviewDecisionId: decision.decision_id,
+        failureCode: undefined,
+        failureMessage: undefined,
+        failedAt: undefined,
+        updatedAt: now,
+      };
+    }
     if (candidate.suggestedAction === 'create') {
-      const assetId = `aa-${createHash('sha256').update(`${candidate.id}\n${decision.decision_id}`).digest('hex').slice(0, 24)}`;
       const sourceSessionIds = sourceSessionIdsFrom(candidate.sourceRefs);
+      const assetId = createdAssetId(candidate.id, decision.decision_id);
       stored = await createAbilityAsset(userId, {
         schemaVersion: 2,
         ownerId: userId,
@@ -954,33 +1214,22 @@ export async function promoteRecallCandidate(
         scope: candidate.suggestedScope,
         ...(scopePolicy ? { scopePolicy } : {}),
         status: 'active',
-        lifecycleStatus: 'user_confirmed_unverified',
-        // 用户已经在评审里确认过这条内容，所以起点是 bud 而不是 seed。
-        //
-        // 规范 10.2 的 seed 档写的是「Candidate」——而候选在这个系统里是
-        // RecallCandidateRecord，不是已 promote 的资产。资产一旦走到这里，
-        // 用户确认那一关已经过了，再归进候选档就和它自己的 lifecycleStatus
-        // 「user_confirmed_unverified」自相矛盾，而 bud 的定义恰恰就是
-        // 「User Confirmed / Unverified：用户确认了内容，不代表效果已验证」。
-        //
-        // 这个矛盾以前不显形，因为 resolveDefaultUsePolicy 没有调用方。接上
-        // 选择层之后后果变成实的：seed 一律 never，于是新资产永远不会被带入
-        // 任何 Agent，也就永远产生不了使用证据、做不了 transfer proof、升不了
-        // 档——卡死在最底下一级。seed→bud 至今没有任何升档路径
-        // （setAbilityAssetMaturity 只有 proof-service 一个调用方）。
-        maturity: 'bud',
+        lifecycleStatus: handoffActor === 'system'
+          ? 'automatically_extracted_unverified'
+          : 'user_confirmed_unverified',
+        maturity: handoffActor === 'system' ? 'seed' : 'bud',
         version: '1',
         ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
         createdAt: now,
         updatedAt: now,
-      }, { actor: 'user', reason: handoffReason });
+      }, { actor: handoffActor, reason: handoffReason });
     } else {
       if (!candidate.targetAssetId) throw new Error('candidate target asset is required');
       const target = await readAbilityAsset(userId, candidate.targetAssetId);
       if (target.type !== candidate.suggestedType) throw new Error('candidate target asset type mismatch');
       if (candidate.suggestedAction === 'pause') {
         stored = await pauseAbilityAsset(userId, target.id, {
-          actor: 'user',
+          actor: handoffActor,
           reason: handoffReason,
           reviewDecisionId: decision.decision_id,
           sourceCandidateId: candidate.id,
@@ -995,7 +1244,7 @@ export async function promoteRecallCandidate(
           ...relationContract,
           ...semantics,
           ...(scopePolicy ? { scopePolicy } : {}),
-          actor: 'user',
+          actor: handoffActor,
           reason: handoffReason,
           reviewDecisionId: decision.decision_id,
           sourceCandidateId: candidate.id,
@@ -1004,8 +1253,13 @@ export async function promoteRecallCandidate(
         throw new Error('candidate action does not create or change an asset');
       }
     }
-    await persistHandoffReceipt(userId, candidate.id, handoffReceipt(stored));
-    await recordReviewDecisionOutcome(userId, `recall_candidate:${candidate.id}`, decision.decision_id, { assetId: stored.id });
+    receipt = await persistHandoffReceipt(userId, candidate.id, handoffReceipt(stored, decision.decision_id));
+    decision = await recordReviewDecisionOutcome(
+      userId,
+      `recall_candidate:${candidate.id}`,
+      decision.decision_id,
+      { assetId: stored.id },
+    );
     return {
       ...candidate,
       status: 'confirmed',
@@ -1047,14 +1301,53 @@ export async function promoteRecallCandidate(
   const candidate = asCandidate(updated);
   if (candidate.status === 'expired') throw new Error('recall candidate expired');
   if (candidate.status === 'failed') throw new Error(candidate.failureMessage || 'recall candidate confirmation failed');
-  if (!candidate.promotedAssetId) throw new Error('promoted candidate has no ability asset');
-  const storedAsset = await readRecallJsonRecord(userId, 'ability-assets', candidate.promotedAssetId);
-  if (!storedAsset) throw new Error('promoted ability asset not found');
+  if (!candidate.promotedAssetId) {
+    const now = new Date().toISOString();
+    await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => {
+      if (!current) throw new Error('recall candidate not found');
+      const latest = asCandidate(current);
+      return {
+        ...latest,
+        status: 'failed',
+        failureCode: 'asset_write_failed',
+        failureMessage: 'confirmed candidate has no asset identity; confirmation can be retried',
+        failedAt: now,
+        updatedAt: now,
+      };
+    });
+    throw new Error('promoted candidate has no ability asset; confirmation can be retried');
+  }
+  let storedAsset: RecallJsonRecord | undefined;
+  try {
+    storedAsset = await readRecallJsonRecord(userId, 'ability-assets', candidate.promotedAssetId);
+  } catch {
+    storedAsset = undefined;
+  }
+  if (!storedAsset) {
+    const now = new Date().toISOString();
+    await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => {
+      if (!current) throw new Error('recall candidate not found');
+      const latest = asCandidate(current);
+      return {
+        ...latest,
+        status: 'failed',
+        failureCode: 'asset_write_failed',
+        failureMessage: 'confirmed ability asset is missing; confirmation can be retried',
+        failedAt: now,
+        updatedAt: now,
+      };
+    });
+    throw new Error('promoted ability asset not found; confirmation can be retried');
+  }
   const asset = asAsset(storedAsset);
+  const reviewDecisionId = candidate.reviewDecisionId || asset.reviewDecisionId;
   if (!decision) {
-    const decisions = await import('../cognition/review-decision');
-    decision = await decisions.readReviewDecision(userId, `recall_candidate:${candidate.id}`, asset.reviewDecisionId);
+    decision = await readReviewDecision(userId, `recall_candidate:${candidate.id}`, reviewDecisionId);
   }
   if (!decision) throw new Error('review decision not found for promoted asset');
-  return { candidate, asset, decision, receipt: handoffReceipt(asset) };
+  receipt = receipt || await readRecallAssetHandoffReceipt(userId, candidate.id, reviewDecisionId);
+  if (!receipt) {
+    throw new Error('immutable handoff receipt not found for promoted asset');
+  }
+  return { candidate, asset, decision, receipt };
 }

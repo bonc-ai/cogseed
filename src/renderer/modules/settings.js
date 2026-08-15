@@ -83,6 +83,7 @@ async function loadSettings() {
   _settingsBindTaskNotificationsOnce();
   _settingsBindClientConfigOnce();
   _settingsBindContextsEntryOnce();
+  _settingsBindUsageConnectionsOnce();
   _settingsSyncLanguageRadio();
   await Promise.all([
     _settingsSafeCall('settings providers refresh', _settingsRefreshProviders),
@@ -376,6 +377,16 @@ function _settingsBindContextsEntryOnce() {
   if (!btn || btn.dataset.bound) return;
   btn.addEventListener('click', () => {
     if (typeof setView === 'function') setView('contexts');
+  });
+  btn.dataset.bound = '1';
+}
+
+// Settings › 账号与用量 › 前往连接：模型与触点配置已收敛到「连接」一级入口。
+function _settingsBindUsageConnectionsOnce() {
+  const btn = document.getElementById('settings-usage-open-connections');
+  if (!btn || btn.dataset.bound) return;
+  btn.addEventListener('click', () => {
+    if (typeof setView === 'function') setView('connections');
   });
   btn.dataset.bound = '1';
 }

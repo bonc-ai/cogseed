@@ -99,7 +99,7 @@ for (const [key, value] of Object.entries(providerEnv || {})) {
    用户终端 B: export ANTHROPIC_API_KEY=sk-ant-bbb
    Mate Agent GUI 启动: process.env.ANTHROPIC_API_KEY = ?
    ```
-   
+
    GUI 应用不一定继承用户当前终端的环境变量。
 
 2. **与 CC Switch 语义冲突**
@@ -127,11 +127,11 @@ async function readCcSwitchWithAuthorization(userId: string) {
       dbPath: ccSwitchDbPath(),
     });
     if (!granted) throw new Error('User denied CC Switch access');
-    
+
     // 3. 记录会话级授权（重启后失效）
     grantSessionPermission('ccswitch:read');
   }
-  
+
   // 4. 读取数据库（只读模式）
   return readCcSwitchImportItems();
 }
@@ -151,7 +151,7 @@ async function readOpencodeAuthWithAuthorization(baseUrl: string) {
     if (!granted) throw new Error('User denied OpenCode access');
     grantSessionPermission('opencode:read');
   }
-  
+
   return opencodeApiKeyFromAuth(baseUrl);
 }
 ```

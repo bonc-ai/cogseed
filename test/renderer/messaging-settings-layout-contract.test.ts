@@ -77,7 +77,7 @@ describe('messaging connection-management layout contract', () => {
   });
 
   it('keeps the connection page compact and removes the generic settings inset', () => {
-    expect(rendererStyle).toContain('#panel-settings:has(.touchpoint-settings-shell.is-connections-view) .settings-container');
+    expect(rendererStyle).toContain('#panel-connections:has(.touchpoint-settings-shell.is-connections-view) .connections-container');
     expect(rendererStyle).toContain('.touchpoint-connections-header {');
     expect(rendererStyle).toMatch(/\.touchpoint-connections-header\s*\{[^{}]*display:\s*flex;[^{}]*min-height:\s*52px;/);
     expect(rendererStyle).toMatch(/\.touchpoint-connections-header h2\s*\{[^{}]*font-size:\s*16px;/);
