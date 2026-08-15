@@ -27,8 +27,10 @@ function renderFilesResult(snapshot: {
   protocolEvents?: any[];
   protocolError?: string;
   protocolResponse?: any;
+  executions?: any[];
+  receipts?: Record<string, any>;
   syncEnabled?: boolean;
-  activeTab?: 'files' | 'attachments' | 'collaboration' | 'protocol';
+  activeTab?: 'files' | 'attachments' | 'collaboration' | 'protocol' | 'carried';
 }, afterMount?: (context: any) => Promise<void> | void): Promise<RenderFilesResult> {
   const elements = new Map<string, any>();
   const getEl = (id: string) => {
@@ -51,6 +53,7 @@ function renderFilesResult(snapshot: {
     { dataset: { infoTab: 'attachments' }, classList: { toggle() {} }, addEventListener(type: string, fn: () => void) { (this as any)[`on${type}`] = fn; } },
     { dataset: { infoTab: 'collaboration' }, classList: { toggle() {} }, addEventListener(type: string, fn: () => void) { (this as any)[`on${type}`] = fn; } },
     { dataset: { infoTab: 'protocol' }, classList: { toggle() {} }, addEventListener(type: string, fn: () => void) { (this as any)[`on${type}`] = fn; } },
+    { dataset: { infoTab: 'carried' }, classList: { toggle() {} }, addEventListener(type: string, fn: () => void) { (this as any)[`on${type}`] = fn; } },
   ];
   const urls: string[] = [];
   const focusCalls: Array<[string, string, string]> = [];
@@ -108,6 +111,16 @@ function renderFilesResult(snapshot: {
         sync: {
           getEnabled: async () => ({ ok: true, enabled: snapshot.syncEnabled === true }),
         },
+        invoke: async (channel: string, payload?: any) => {
+          if (channel === 'p3394.execution.list') {
+            return { ok: true, executions: snapshot.executions || [] };
+          }
+          if (channel === 'p3394.contextReuseReceipt.read') {
+            const receipt = (snapshot.receipts || {})[payload && payload.executionId];
+            return receipt ? { ok: true, receipt } : { ok: false, error: 'not found' };
+          }
+          return { ok: false, error: 'unexpected channel' };
+        },
       },
     },
   };
@@ -118,7 +131,7 @@ function renderFilesResult(snapshot: {
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation-info.js'), 'utf8');
   vm.runInContext(source, context);
   context.window.ConversationInfo.bind('c1');
-  const tabIndex = snapshot.activeTab === 'attachments' ? 1 : snapshot.activeTab === 'collaboration' ? 2 : snapshot.activeTab === 'protocol' ? 3 : 0;
+  const tabIndex = snapshot.activeTab === 'attachments' ? 1 : snapshot.activeTab === 'collaboration' ? 2 : snapshot.activeTab === 'protocol' ? 3 : snapshot.activeTab === 'carried' ? 4 : 0;
   (tabs[tabIndex] as any).onclick();
   getEl('conversation-info-toggle').onclick();
   return new Promise((resolve, reject) => setTimeout(async () => {
@@ -763,5 +776,125 @@ describe('ConversationInfo files tab', () => {
     expect(html).toContain('初中几何成绩下滑-沟通准备.xlsx');
     expect(html).toContain('XLS');
     expect(html).not.toContain('spreadsheet');
+  });
+
+  // ── 9.1 会话区域统一框架 · 右侧「本次携带」──
+  it('renders the carried tab in the conversation info drawer', () => {
+    const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
+
+    expect(html).toContain('data-info-tab="carried"');
+    expect(html).toContain('conversation_info.tab_carried');
+  });
+
+  it('renders the carried empty state without executions', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'carried',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      executions: [],
+    });
+
+    expect(result.html).toContain('本会话暂无执行记录。');
+    expect(result.html).not.toContain('conversation-info-carried-run');
+  });
+
+  it('renders real execution records with status, boundary and permission', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'carried',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      executions: [
+        {
+          executionId: 'ex-1',
+          conversationId: 'c1',
+          kind: 'codex',
+          agentId: 'codex',
+          status: 'running',
+          boundary: 'real',
+          permissionMode: 'read-only',
+          artifactIds: ['a1', 'a2'],
+          startedAt: '2026-08-15T10:00:00Z',
+          receiptId: 'r-1',
+        },
+        {
+          executionId: 'ex-2',
+          conversationId: 'c1',
+          kind: 'core-agent',
+          status: 'completed',
+          boundary: 'degraded',
+          permissionMode: 'ask',
+          artifactIds: [],
+          startedAt: '2026-08-15T09:00:00Z',
+        },
+      ],
+    });
+
+    expect(result.html).toContain('codex');
+    expect(result.html).toContain('运行中');
+    expect(result.html).toContain('已完成');
+    expect(result.html).toContain('只读');
+    expect(result.html).toContain('逐次询问');
+    expect(result.html).toContain('真实');
+    expect(result.html).toContain('降级');
+    expect(result.html).toContain('2 个产物');
+    expect(result.html).toContain('查看回执');
+    expect(result.html).not.toContain('本会话暂无执行记录');
+  });
+
+  it('expands a ContextReuseReceipt detail when the receipt toggle is clicked', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'carried',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      executions: [
+        {
+          executionId: 'ex-1',
+          conversationId: 'c1',
+          kind: 'core-agent',
+          status: 'completed',
+          boundary: 'real',
+          permissionMode: 'read-only',
+          artifactIds: [],
+          startedAt: '2026-08-15T10:00:00Z',
+          receiptId: 'r-1',
+        },
+      ],
+      receipts: {
+        'ex-1': {
+          sourceSessionId: 'src-9',
+          targetSessionId: 'c1',
+          reusedRefs: ['asset-a', 'asset-b'],
+          omittedRefs: ['asset-c'],
+          permissionMode: 'read-only',
+          boundary: 'real',
+          status: 'completed',
+        },
+      },
+    }, async (context) => {
+      const container = { hidden: true, dataset: {}, innerHTML: '' };
+      const runEl = { querySelector: () => container };
+      const toggle = {
+        dataset: { receiptExecutionId: 'ex-1' },
+        disabled: false,
+        textContent: '',
+        closest(selector: string) {
+          if (selector === '.conversation-info-carried-run') return runEl;
+          if (selector === '[data-receipt-execution-id]') return this;
+          return null;
+        },
+      };
+      await context.document.getElementById('conversation-info-body').onclick({
+        target: toggle,
+        preventDefault() {},
+        stopPropagation() {},
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(container.innerHTML).toContain('src-9');
+      expect(container.innerHTML).toContain('asset-a · asset-b');
+      expect(container.innerHTML).toContain('只读');
+    });
   });
 });
