@@ -62,7 +62,9 @@ describe('9.1 unified framework · bottom zone (continue + risk)', () => {
   it('binds the continue button to send the localized continue prompt', () => {
     expect(conversationSource).toContain("getElementById('chat-continue-btn')");
     expect(conversationSource).toContain("t('chat.continue_prompt')");
-    expect(conversationSource).toContain('send(content, undefined)');
+    expect(conversationSource).toContain('await sendInCurrentConversation(content)');
+    // 主会话控制器 bindInput=false，继续按钮必须单独接线而非挂在通用控制器。
+    expect(conversationSource).toContain('function _bindChatContinueButton');
   });
 
   it('shows continue only while the executor is idle', () => {

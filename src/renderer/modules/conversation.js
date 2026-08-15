@@ -998,11 +998,30 @@ if (typeof window !== 'undefined') {
     document.addEventListener('DOMContentLoaded', () => {
       _initAllMentionMirrors();
       _initChatInputReserveObserver();
+      _bindChatContinueButton();
     }, { once: true });
   } else {
     _initAllMentionMirrors();
     _initChatInputReserveObserver();
+    _bindChatContinueButton();
   }
+}
+
+// 9.1 统一框架 · 底部「继续」：主会话的一次性绑定。主会话控制器
+// （_makeConvChatController）的 features.bindInput=false，输入接线由主会话
+// 自己接管，所以「继续」不能在通用控制器里绑，必须单独接一次。点击以
+// 「请继续」作为一条普通用户消息发给当前执行方（走 sendInCurrentConversation，
+// 与手输同一条发送管线）；运行中按钮已隐藏，这里再兜底一次 pending 判断。
+function _bindChatContinueButton() {
+  const btn = document.getElementById('chat-continue-btn');
+  if (!btn || btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', async () => {
+    if (!currentCid || isConvPending(currentCid)) return;
+    if (typeof ensureModelConfigured === 'function' && !ensureModelConfigured()) return;
+    const content = t('chat.continue_prompt');
+    try { await sendInCurrentConversation(content); } catch (_) { /* 与普通发送一致的容错 */ }
+  });
 }
 
 // ─── Recipient chip — per-cid for conversations, ephemeral for new-chat ──
@@ -11909,21 +11928,6 @@ function createChatController(config) {
       sendBtnEl.addEventListener('click', () => {
         if (pending) abort({ userInitiated: true });
         else _submitFromInput();
-      });
-    }
-    // 9.1 统一框架 · 底部「继续」：以「请继续」作为一条普通用户消息发送给
-    // 当前执行方（与正常发送走同一路径，含模型配置门与队列）。按钮只在
-    // 主会话面板存在（其它场景 getElementById 返回 null，自动跳过）。
-    const continueBtn = document.getElementById('chat-continue-btn');
-    if (continueBtn && !continueBtn.dataset.ctrlBound) {
-      continueBtn.dataset.ctrlBound = '1';
-      continueBtn.addEventListener('click', () => {
-        if (pending) return;
-        const id = config.getCurrentId();
-        if (!id) return;
-        if (typeof ensureModelConfigured === 'function' && !ensureModelConfigured()) return;
-        const content = t('chat.continue_prompt');
-        send(content, undefined);
       });
     }
     if (inputEl && !inputEl.dataset.ctrlBound) {
