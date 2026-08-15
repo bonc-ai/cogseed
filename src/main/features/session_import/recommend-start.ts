@@ -21,13 +21,14 @@
  *      Both are min-max normalized across the actual candidate set, so the
  *      weights compare like with like.
  *
- *   2. Which role template best fits that session?
+ *   2. Which workspace scenario best fits that session?
  *      Local keyword match (product-owner choice A) between the session's
  *      REAL text sample (first user message + a bounded content sample) and
- *      each of the 8 built-in templates' REAL name + description keywords.
- *      Returns the top-scoring template ONLY when the match clears a
- *      confidence floor; below it we honestly return `null` so the UI says
- *      "未找到明显匹配，你可以自己选" rather than pushing a guess.
+ *      each built-in scenario's REAL description keywords. Returns the
+ *      top-scoring scenario (with its suggested primary role template) ONLY
+ *      when the match clears a confidence floor; below it we honestly return
+ *      `null` so the UI falls back to a temporary workspace rather than
+ *      pushing a guess.
  *
  * Everything is read-only. jsonl reads are line-capped so a giant transcript
  * can't stall onboarding.
@@ -42,7 +43,7 @@ import { listClaudeSessions } from '../local_agents/claude_sessions.js';
 import { listWorkbuddySessions } from '../local_agents/workbuddy_sessions.js';
 import { listCodexSessions } from './codex-import.js';
 import { listOpencodeSessions } from '../local_agents/opencode_sessions.js';
-import { listRoleTemplates } from '../role_templates.js';
+import { listScenarios } from '../role_templates.js';
 
 const log = createLogger('session-import:recommend-start');
 
@@ -77,9 +78,12 @@ export interface StartCandidate {
 }
 
 export interface TemplateSuggestion {
+  /** 命中的场景 id（education / writing / workplace / custom）。 */
+  scenarioId: string;
+  /** 场景建议主角色模板 id（无 = custom 场景，由用户自选）。 */
   templateId: string;
   name: string;
-  /** Why this template — the matched keywords, shown to the user verbatim so
+  /** Why this scenario — the matched keywords, shown to the user verbatim so
    *  the recommendation is transparent, never a black box. */
   matchedKeywords: string[];
   /** Raw keyword score (for debugging / thresholding). */
@@ -89,7 +93,9 @@ export interface TemplateSuggestion {
 export interface RecommendStartResult {
   /** Best session to continue, or null when no readable sessions exist. */
   top: StartCandidate | null;
-  /** Suggested role template for `top`, or null when no confident match. */
+  /** Suggested scenario (with its primary template) for `top`, or null when
+   *  no confident match. Kept as `suggestedTemplate` for renderer compatibility;
+   *  scenarioId identifies the workspace scenario, templateId its primary role. */
   suggestedTemplate: TemplateSuggestion | null;
   /** How many total candidates were ranked (across all agents). */
   candidateCount: number;
@@ -243,34 +249,32 @@ function rank(list: StartCandidate[]): StartCandidate[] {
 }
 
 /**
- * Per-template keyword sets, derived from the built-in templates' real
- * Chinese names + description themes. Keyword matching is a legitimate
- * heuristic, not fabricated data: it maps observed session vocabulary to the
- * template whose real description covers that vocabulary. Kept deliberately
- * small and high-signal so a match is meaningful.
+ * Per-scenario keyword sets. Each scenario bundles a suggested primary role
+ * template (education → student, writing → technical_writer, workplace →
+ * product_manager); matching a session to a scenario means the created
+ * workspace carries that scenario's primary template. `custom` has no preset
+ * templates and is intentionally NOT auto-matched — it exists for free
+ * assembly. Keyword matching is a legitimate heuristic, not fabricated data:
+ * it maps observed session vocabulary to the scenario whose description
+ * covers that vocabulary. Kept deliberately small and high-signal.
  */
-const TEMPLATE_KEYWORDS: Record<string, string[]> = {
-  software_engineer: ['代码', '开发', '实现', '重构', 'bug', '修复', '函数', '接口', 'api', '测试', '调试', '报错', '部署', '编译', 'typescript', 'python', 'react', '前端', '后端', 'git'],
-  product_manager: ['需求', '产品', '功能', '用户', '迭代', '路线图', 'roadmap', '优先级', '竞品', '方案', '验收', 'prd', '增长', '指标', '体验'],
-  scholar: ['论文', '研究', '文献', '引文', '综述', '假设', '证据', '实验', '数据集', '方法', '复现', '理论', '学术', '发表'],
-  student: ['学习', '课程', '作业', '考试', '复习', '笔记', '掌握', '知识点', '题目', '练习', '截止', '学期', '教材'],
-  fde: ['客户', '交付', '解决方案', '集成', 'poc', '验收', '部署', '现场', '架构', '对接', '需求澄清', '回滚', 'readiness'],
-  project_manager: ['项目', '进度', '排期', '里程碑', '风险', '依赖', '资源', '甘特', '计划', '协调', '交付物', '会议', 'timeline'],
-  technical_writer: ['文档', '写作', '说明', '教程', '手册', 'readme', '注释', '章节', '排版', 'markdown', '发布说明', '术语', '润色'],
-  recruiter: ['招聘', '候选人', '简历', '面试', 'jd', '岗位', '人才', '入职', '评估', 'offer', '猎头', '筛选'],
+const SCENARIO_KEYWORDS: Record<string, string[]> = {
+  education: ['学习', '课程', '作业', '考试', '复习', '笔记', '掌握', '知识点', '题目', '练习', '截止', '学期', '教材', '论文', '研究', '文献', '引文', '综述', '假设', '证据', '实验', '数据集', '方法', '复现', '理论', '学术', '发表'],
+  writing: ['文档', '写作', '说明', '教程', '手册', 'readme', '注释', '章节', '排版', 'markdown', '发布说明', '术语', '润色'],
+  workplace: ['需求', '产品', '功能', '用户', '迭代', '路线图', 'roadmap', '优先级', '竞品', '方案', '验收', 'prd', '增长', '指标', '体验', '客户', '交付', '解决方案', '集成', 'poc', '部署', '现场', '架构', '对接', '需求澄清', '回滚', 'readiness', '项目', '进度', '排期', '里程碑', '风险', '依赖', '资源', '甘特', '计划', '协调', '交付物', '会议', 'timeline', '招聘', '候选人', '简历', '面试', 'jd', '岗位', '人才', '入职', '评估', 'offer', '猎头', '筛选'],
 };
 
-/** Match a text sample against template keywords; return the best template
+/** Match a text sample against scenario keywords; return the best scenario
  *  above the confidence floor, or null. Longer keyword wins ties. */
-function matchTemplate(sampleText: string): TemplateSuggestion | null {
-  const templates = listRoleTemplates();
-  const byId = new Map(templates.map(t => [t.template_id, t]));
+function matchScenario(sampleText: string): TemplateSuggestion | null {
+  const scenarios = listScenarios();
+  const byId = new Map(scenarios.map(s => [s.scenario_id, s]));
   const hay = sampleText.toLowerCase();
 
   let best: TemplateSuggestion | null = null;
-  for (const [templateId, keywords] of Object.entries(TEMPLATE_KEYWORDS)) {
-    const tpl = byId.get(templateId);
-    if (!tpl) continue; // template not present in this build — skip honestly
+  for (const [scenarioId, keywords] of Object.entries(SCENARIO_KEYWORDS)) {
+    const scenario = byId.get(scenarioId);
+    if (!scenario) continue; // scenario not present in this build — skip honestly
     const matched: string[] = [];
     let score = 0;
     for (const kw of keywords) {
@@ -281,7 +285,13 @@ function matchTemplate(sampleText: string): TemplateSuggestion | null {
       }
     }
     if (score > (best?.score ?? 0)) {
-      best = { templateId, name: tpl.name, matchedKeywords: matched, score };
+      best = {
+        scenarioId,
+        templateId: scenario.suggested_primary_template_id || '',
+        name: scenario.name,
+        matchedKeywords: matched,
+        score,
+      };
     }
   }
   if (!best || best.score < TEMPLATE_MATCH_FLOOR) return null;
@@ -310,7 +320,7 @@ export async function recommendStartingPoint(home = os.homedir()): Promise<Recom
   if (top.filePath) {
     sampleText = `${sampleText}\n${await readSample(top.filePath)}`;
   }
-  const suggestedTemplate = matchTemplate(sampleText);
+  const suggestedTemplate = matchScenario(sampleText);
 
   return { top, suggestedTemplate, candidateCount, perSource };
 }

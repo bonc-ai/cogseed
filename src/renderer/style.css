@@ -12996,18 +12996,29 @@ body.model-not-configured .main-content { flex-direction: column; }
   overflow: auto;
 }
 
-.settings-tab-pane[data-settings-pane="messaging"] {
-  overflow: hidden;
+/* Quota placeholder (Settings › 账号与用量; hosted-only stub). */
+.quota-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg);
 }
+.quota-placeholder-label { font-size: 12.5px; color: var(--text); }
+.quota-placeholder-note { font-size: 11.5px; color: var(--muted); }
 
 /* Connection management is a full workbench, so it must not inherit the
-   document-style horizontal inset used by ordinary settings forms. */
-#panel-settings:has(.touchpoint-settings-shell.is-connections-view) .settings-container {
+   document-style horizontal inset used by ordinary settings forms. The
+   touchpoint/messaging shell now lives inside #panel-connections. */
+#panel-connections:has(.touchpoint-settings-shell.is-connections-view) .connections-container {
   padding-right: 12px;
   padding-bottom: 12px;
   padding-left: 12px;
 }
-#panel-settings:has(.touchpoint-settings-shell.is-connections-view) .settings-tabs {
+#panel-connections:has(.touchpoint-settings-shell.is-connections-view) .connections-tabs {
   margin-bottom: 8px;
 }
 
@@ -16557,10 +16568,10 @@ body.model-not-configured .main-content { flex-direction: column; }
   color: var(--muted);
 }
 
-/* ─── Connectors panel ─── */
+/* ─── Connectors panel (now embedded in #panel-connections › MCP tab) ─── */
 /* The `.panel` base rule already sets display:none → flex toggle via `.active`; do NOT
-   override `#panel-connectors` with `display: flex`, that breaks the setView() gating
-   (id selector beats the class rule → panel stays visible regardless of `.active`). */
+   force `display: flex` on the grid view, that breaks the setView() gating
+   (id selector beats the class rule → content stays visible regardless of `.active`). */
 .connectors-grid-view, .connectors-detail-view {
   flex: 1;
   display: flex;
@@ -19086,7 +19097,106 @@ body.model-not-configured .main-content { flex-direction: column; }
 .skills-cognition-tab { display: flex; align-items: center; gap: 9px; width: auto; min-width: max-content; min-height: 34px; margin: 0; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; font-size: 13px; text-align: left; white-space: nowrap; }
 .skills-cognition-tab:hover { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, transparent); }
 .skills-cognition-tab.is-active { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, var(--card, #fff)); box-shadow: inset 0 -2px 0 var(--primary, #0E9F6E); font-weight: 600; }
-.skills-cognition-page { min-height: 100%; overflow: visible; padding: 18px 24px 28px; background: var(--card, #fff); }
+.skills-cognition-page { min-height: 100%; overflow: visible; padding: 18px 24px 28px; background: var(--card, #fff); display: flex; flex-direction: column; }
+/* 内嵌到 tab pane 的原一级面板：pane 的 [hidden] 控制显隐，面板本身不再依赖
+   `.panel.active`，始终保持 flex 布局。 */
+.skills-embedded-panel,
+.connections-embedded-panel {
+  display: flex;
+}
+.skills-embedded-panel,
+.connections-embedded-panel {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.cognition-subentry-list { display: grid; gap: 12px; max-width: 640px; }
+.cognition-entry-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+.cognition-entry-card:hover { border-color: var(--border-strong, #9ca3af); }
+.cognition-entry-icon {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--primary-soft, #e2f5ec);
+  color: var(--primary-text, #0f8a5f);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.cognition-entry-icon .ui-icon { width: 20px; height: 20px; }
+.cognition-entry-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cognition-entry-title { font-size: 13.5px; font-weight: 600; color: var(--text, #111827); }
+.cognition-entry-desc { font-size: 12px; color: var(--muted, #6b7280); line-height: 1.5; }
+.cognition-entry-chevron { flex: 0 0 auto; color: var(--muted, #6b7280); display: inline-flex; align-items: center; }
+.cognition-entry-chevron .ui-icon { width: 16px; height: 16px; }
+
+/* ═══ Connections panel (一级入口「连接」) ═══════════════════════════════ */
+.connections-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 24px clamp(20px, 3vw, 48px) 28px;
+  width: 100%;
+  margin: 0;
+}
+.connections-tabs {
+  display: flex;
+  gap: 20px;
+  margin: 0 0 20px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  position: relative;
+}
+.connections-tab {
+  background: transparent;
+  border: none;
+  padding: 8px 4px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2, #6b7280);
+  cursor: pointer;
+  position: relative;
+}
+.connections-tab:hover { color: var(--text, #111827); }
+.connections-tab.is-active {
+  color: var(--text, #111827);
+  font-weight: 600;
+  border-bottom: 2px solid var(--primary, #0E9F6E);
+  margin-bottom: -1px;
+}
+.connections-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.connections-tab-pane[hidden] { display: none; }
+.connections-tab-pane:not([hidden]) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+.connections-tab-pane[data-connections-pane="mcp"] {
+  overflow: hidden;
+  padding: 0;
+}
 .skills-cognition-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
 .skills-cognition-stat { display: flex; flex-direction: column; gap: 3px; padding: 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
 .skills-cognition-stat strong { font-size: 22px; line-height: 1; color: var(--fg, #111827); }
@@ -23063,7 +23173,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   .touchpoint-delivery-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
-  #panel-settings:has(.touchpoint-settings-shell.is-connections-view) .settings-container {
+  #panel-connections:has(.touchpoint-settings-shell.is-connections-view) .connections-container {
     padding-right: 8px;
     padding-left: 8px;
   }

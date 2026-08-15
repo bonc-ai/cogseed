@@ -68,36 +68,26 @@ describe('personal ontology renderer integration', () => {
     expect(invoke).toHaveBeenCalledWith('cognition.assets.list', {});
   });
 
-  it('embeds the personal ontology in Recall while preserving legacy entry compatibility', () => {
+  it('contains the embedded panel, about-me tab, rejection modal, and lazy view wiring', () => {
     for (const id of [
-      'panel-recall', 'skills-cognition-assets', 'skills-cognition-assets-summary',
-      'skills-cognition-personal-ontology', 'skills-cognition-formal-assets',
-      'personal-onto-sidebar',
+      'panel-personal-ontology', 'personal-onto-sidebar',
       'personal-onto-nav', 'personal-onto-main-header', 'personal-onto-main-body',
       'personal-onto-template-library-modal', 'personal-onto-template-library-list',
     ]) expect(html).toContain(`id="${id}"`);
-    for (const id of ['personal-onto-modal', 'personal-onto-modal-reason', 'personal-onto-modal-ok', 'personal-onto-modal-cancel']) {
-      expect(html).not.toContain(`id="${id}"`);
-    }
-    expect(html).not.toContain('id="personal-ontology-btn"');
-    expect(html).not.toContain('id="panel-personal-ontology"');
+    expect(html).toContain('id="skills-cognition-tab-about-me"');
+    // Personal ontology is embedded inside Recall's "关于我" pane.
+    const paneStart = html.indexOf('id="skills-cognition-about-me"');
+    expect(paneStart).toBeGreaterThan(0);
+    const paneHtml = html.slice(paneStart, html.indexOf('</main>', paneStart));
+    expect(paneHtml).toContain('id="panel-personal-ontology"');
+    expect(boot).toContain("view === 'skills' || view === 'personal-ontology' ? 'panel-recall'");
+    expect(boot).toContain("switchSkillsCognitionPage('about-me')");
+    expect(boot).toContain("_loadViewFeature('recall', 'recall'");
+    // The sidebar button is gone; personal ontology is reached from Recall's
+    // "关于我" tab instead of a fixed primary entry.
     expect(state).not.toContain("document.getElementById('personal-ontology-btn')");
-    expect(boot).toContain("const openPersonalOntology = view === 'personal-ontology';");
-    expect(boot).toContain("if (openPersonalOntology) view = 'recall';");
-    expect(boot).toContain('openRecallPersonalOntology();');
-
-    const recallBundle = lazy.slice(lazy.indexOf('  recall: ['), lazy.indexOf("  'personal-ontology': ["));
-    const legacyBundle = lazy.slice(lazy.indexOf("  'personal-ontology': ["), lazy.indexOf('  spaces: ['));
-    expect(recallBundle).toContain("./modules/personal-ontology.js");
-    expect(legacyBundle).toContain("./modules/personal-context-review.js");
-    expect(legacyBundle).toContain("./modules/personal-ontology.js");
-    const openHelper = skills.slice(skills.indexOf('function openRecallPersonalOntology()'), skills.indexOf('window.openRecallPersonalOntology'));
-    expect(openHelper).toContain("_skillsCognitionState.assetCategoryFilter = 'personal';");
-    expect(openHelper).not.toContain('renderPersonalOntology');
-
-    const ids = Array.from(html.matchAll(/\bid="([^"]+)"/g), (match) => match[1]);
-    const duplicateIds = ids.filter((id, index) => ids.indexOf(id) !== index);
-    expect(duplicateIds).toEqual([]);
+    expect(lazy).toContain("'personal-ontology'");
+    expect(lazy).toContain("./modules/personal-ontology.js");
   });
 
   it('keeps only role-template editing in the personal ontology surface', () => {

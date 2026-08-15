@@ -31,8 +31,9 @@ function _initSkillsStaticBindings() {
   document.getElementById('skills-source-toggle')?.addEventListener('click', () => _toggleSkillsSource());
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    const skillsPanel = document.getElementById('panel-skills');
-    if (!skillsPanel || !skillsPanel.classList.contains('active')) return;
+    // 技能库已内嵌进认知资产「我的能力」tab：仅当该 pane 可见时处理 Esc 返回。
+    const myAbilitiesPane = document.getElementById('skills-cognition-my-abilities');
+    if (!myAbilitiesPane || myAbilitiesPane.hidden) return;
     const detail = document.getElementById('skills-detail-view');
     if (detail && detail.style.display !== 'none') {
       _onSkillsBack();

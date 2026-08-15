@@ -185,7 +185,7 @@ function _cognitionSetPageVisibility(page) {
 function switchSkillsCognitionPage(page) {
   const aliases = { candidates: 'captures', receipts: 'assets', brain: 'overview', context: 'overview', ontology: 'overview' };
   const requested = aliases[page] || page;
-  const allowed = new Set(['overview', 'captures', 'assets', 'sources']);
+  const allowed = new Set(['overview', 'captures', 'assets', 'sources', 'my-abilities', 'about-me']);
   const next = allowed.has(requested) ? requested : 'overview';
   _skillsCognitionState.page = next;
   if (next === 'assets' && !_skillsCognitionState.assetCategoryFilter && !_skillsCognitionState.selectedAssetId) {
@@ -196,6 +196,39 @@ function switchSkillsCognitionPage(page) {
   if (next === 'sources') renderSkillsCognitionSources();
   if (next === 'captures') renderSkillsCognitionCaptures();
   if (next === 'assets') renderSkillsCognitionAssets();
+  if (next === 'my-abilities') _renderMyAbilitiesPane();
+  if (next === 'about-me') _renderAboutMePane();
+}
+
+// 「我的能力」tab：技能库 DOM 已内嵌此处，首次进入时加载并渲染技能网格。
+function _renderMyAbilitiesPane() {
+  const grid = document.getElementById('skills-grid');
+  if (!grid) return;
+  if (typeof _skillsCache !== 'undefined' && _skillsCache && _skillsCache.length) {
+    renderSkillsList(_skillsCache);
+  } else if (typeof loadSkills === 'function') {
+    Promise.resolve(loadSkills(false))
+      .then(() => {
+        if (typeof _skillsCache !== 'undefined' && _skillsCache) renderSkillsList(_skillsCache);
+      })
+      .catch(() => {});
+  }
+}
+
+// 「关于我」tab：个人本体 DOM 已内嵌此处，首次进入时加载对应 feature 并渲染。
+function _renderAboutMePane() {
+  if (typeof renderPersonalOntology === 'function') {
+    renderPersonalOntology();
+    return;
+  }
+  const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+  if (typeof loader === 'function') {
+    Promise.resolve(loader('personal-ontology'))
+      .then(() => {
+        if (typeof renderPersonalOntology === 'function') renderPersonalOntology();
+      })
+      .catch(() => {});
+  }
 }
 
 function _renderCognitionLoading(host) {

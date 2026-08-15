@@ -112,7 +112,9 @@ describe('settings tabs module', () => {
 
     expect(fs.existsSync(modulePath)).toBe(true);
     expect(indexHtml).toContain('data-i18n="settings.tab.credentials">Model Providers</button>');
-    expect(indexHtml).toContain('data-i18n="settings.tab.messaging">消息平台</button>');
+    // 触点已从设置迁至「连接 > 触点」，设置不再保留消息平台 tab。
+    expect(indexHtml).not.toContain('data-i18n="settings.tab.messaging"');
+    expect(indexHtml).toContain('data-connections-pane="touchpoints"');
     expect(lazyFeatures).toContain("{ src: './modules/messaging-settings.js' }");
     expect(indexHtml).toContain('id="messaging-page"');
     expect(indexHtml).not.toContain('id="messaging-catalog"');

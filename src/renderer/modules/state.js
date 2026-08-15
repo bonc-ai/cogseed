@@ -312,10 +312,8 @@ function bindStaticHandlers() {
   // Sidebar nav
   document.getElementById('new-chat-btn').addEventListener('click', () => _setViewFromSidebar('new-chat'));
   document.getElementById('auto-btn')?.addEventListener('click', () => _setViewFromSidebar('auto'));
-  document.getElementById('agents-btn').addEventListener('click', () => _setViewFromSidebar('agents'));
-  document.getElementById('skills-btn').addEventListener('click', () => _setViewFromSidebar('skills'));
   document.getElementById('recall-btn')?.addEventListener('click', () => _setViewFromSidebar('recall'));
-  document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connectors'));
+  document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connections'));
   document.getElementById('spaces-btn')?.addEventListener('click', () => _setViewFromSidebar('spaces'));
   document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
 
@@ -426,8 +424,9 @@ function bindStaticHandlers() {
   // Esc returns to grid when detail view is open
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    const agentsPanel = document.getElementById('panel-agents');
-    if (!agentsPanel || !agentsPanel.classList.contains('active')) return;
+    // 面板已内嵌进「连接」：仅当 Agent pane 可见时处理 Esc 返回。
+    const agentsPane = document.getElementById('connections-pane-agents');
+    if (!agentsPane || agentsPane.hidden) return;
     const detail = document.getElementById('agents-detail-view');
     if (detail && detail.style.display !== 'none') {
       _showAgentsGridView();
