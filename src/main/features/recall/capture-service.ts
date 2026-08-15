@@ -8,6 +8,7 @@ import { safeId } from '../../storage';
 import { scheduleBootBackground, type ScheduledBootBackgroundTask } from '../../util/boot_init';
 import { getConfiguredModelOAuthExpiredMessage, hasConfiguredModel } from '../auth';
 import * as chats from '../chats';
+import type { ReviewDecision } from '../cognition/review-decision';
 import {
   isQuiescent,
   subscribeTaskTerminals,
@@ -15,12 +16,16 @@ import {
   type TaskTerminalListener,
 } from '../group_chat/bus';
 import type { GroupMessage } from '../group_chat/visibility';
+import { readAbilityAsset } from './asset-service';
 import {
   isRecallCandidateReviewable,
+  autoApplyRecallCandidate,
   promoteRecallCandidate,
+  readRecallAssetHandoffReceipt,
   readRecallCandidate,
   saveRecallCandidate,
   type AbilityAssetType,
+  type RecallAssetHandoffReceipt,
   type RecallAbilityAssetRecord,
   type RecallCandidateRecord,
 } from './candidate-service';
@@ -45,6 +50,12 @@ import {
   readRecallCaptureSettings,
   type RecallCaptureExecutionPolicy,
 } from './capture-settings';
+import {
+  assessRecallCaptureCandidateQuality,
+  screenRecallCaptureValue,
+  type RecallCaptureFilterReason,
+  type RecallCaptureValueSignal,
+} from './capture-value-screening';
 
 const log = createLogger('recall.capture');
 const CAPTURE_COLLECTION = 'captures';
@@ -84,6 +95,7 @@ export type RecallCaptureStatus =
   | 'paused'
   | 'review_ready'
   | 'no_candidate'
+  | 'completed'
   | 'configuration_required'
   | 'failed'
   | 'cancelled';
@@ -110,6 +122,12 @@ export interface RecallCaptureRecord extends RecallJsonRecord {
   anchorMessageId: string;
   messageIds: string[];
   status: RecallCaptureStatus;
+  visibility: 'internal' | 'visible';
+  screeningStatus: 'pending' | 'qualified' | 'filtered';
+  screeningSignals?: RecallCaptureValueSignal[];
+  screenedAt?: string;
+  filterReason?: RecallCaptureFilterReason;
+  waitingCompletionReason?: 'terminal_waiting_input' | 'activity_changed';
   stage?: RecallCaptureStage;
   executionPolicy: RecallCaptureExecutionPolicy | 'immediate';
   quietMinutes?: number;
@@ -122,6 +140,8 @@ export interface RecallCaptureRecord extends RecallJsonRecord {
   attempt: number;
   candidateIds: string[];
   writingCandidateId?: string;
+  /** Persisted intent to write qualifying candidates without a later approval click. */
+  autoWrite?: boolean;
   recallViewId?: string;
   errorCode?: string;
   recoveredAt?: string;
@@ -202,8 +222,26 @@ export interface RecallCaptureWorkflowRecord extends RecallCaptureRecord {
   displayReason: RecallCaptureDisplayReason;
   reviewSummary: RecallCaptureReviewSummary;
   linkedAssetIds: string[];
+  confirmedAssetReceipts: RecallCaptureConfirmedAssetReceipt[];
   nextAction: RecallCaptureNextAction;
   actions: RecallCaptureAction[];
+}
+
+/** Small, display-safe view of a formal asset created through candidate review. */
+export interface RecallCaptureConfirmedAssetReceipt {
+  assetId: string;
+  assetType: AbilityAssetType;
+  version: string;
+  scope: string;
+  sourceRefCount: number;
+  reviewDecisionId: string;
+}
+
+export interface RecallCaptureCandidatePromotion {
+  candidate: RecallCandidateRecord;
+  asset: RecallAbilityAssetRecord;
+  decision: ReviewDecision;
+  receipt: RecallAssetHandoffReceipt;
 }
 
 export type RecallCaptureQueryStatus = RecallCaptureStatus | RecallCaptureDisplayStatus | 'completed';
@@ -242,11 +280,13 @@ export interface CapturePromptMessage {
 interface ParsedCandidate {
   judgment: string;
   value: string;
+  valueProvided: boolean;
   summary: string;
   uncertainty?: string;
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   suggestedAction?: 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
+  actionProvided: boolean;
   risk?: 'low' | 'medium' | 'high';
   targetAssetId?: string;
   evidence: string[];
@@ -273,6 +313,7 @@ function isCaptureStatus(value: unknown): value is RecallCaptureStatus {
     || value === 'paused'
     || value === 'review_ready'
     || value === 'no_candidate'
+    || value === 'completed'
     || value === 'configuration_required'
     || value === 'failed'
     || value === 'cancelled';
@@ -288,6 +329,28 @@ function isCaptureStage(value: unknown): value is RecallCaptureStage {
 
 function isExecutionPolicy(value: unknown): value is RecallCaptureRecord['executionPolicy'] {
   return value === 'smart' || value === 'immediate' || value === 'nightly' || value === 'manual';
+}
+
+function isCaptureVisibility(value: unknown): value is RecallCaptureRecord['visibility'] {
+  return value === 'internal' || value === 'visible';
+}
+
+function isCaptureScreeningStatus(value: unknown): value is RecallCaptureRecord['screeningStatus'] {
+  return value === 'pending' || value === 'qualified' || value === 'filtered';
+}
+
+const CAPTURE_VALUE_SIGNALS = new Set<RecallCaptureValueSignal>([
+  'preference', 'rule', 'decision', 'template', 'method', 'artifact',
+  'reusable_outcome', 'substantive_exchange', 'manual_selection',
+]);
+
+const CAPTURE_FILTER_REASONS = new Set<RecallCaptureFilterReason>([
+  'trivial_exchange', 'no_result', 'low_reuse_value', 'model_no_candidate', 'candidate_quality',
+]);
+
+function isCaptureValueSignals(value: unknown): value is RecallCaptureValueSignal[] {
+  return Array.isArray(value) && value.length <= CAPTURE_VALUE_SIGNALS.size
+    && value.every((signal) => typeof signal === 'string' && CAPTURE_VALUE_SIGNALS.has(signal as RecallCaptureValueSignal));
 }
 
 function isQuietMinutes(value: unknown): value is number {
@@ -331,9 +394,18 @@ function asCapture(value: RecallJsonRecord): RecallCaptureRecord {
     || value.candidateIds.some((id) => typeof id !== 'string')
     || (value.writingCandidateId !== undefined
       && (typeof value.writingCandidateId !== 'string' || !safeId(value.writingCandidateId)))
+    || (value.autoWrite !== undefined && typeof value.autoWrite !== 'boolean')
     || (value.recallViewId !== undefined && (typeof value.recallViewId !== 'string' || !safeId(value.recallViewId)))
     || (value.stage !== undefined && !isCaptureStage(value.stage))
     || (value.executionPolicy !== undefined && !isExecutionPolicy(value.executionPolicy))
+    || (value.visibility !== undefined && !isCaptureVisibility(value.visibility))
+    || (value.screeningStatus !== undefined && !isCaptureScreeningStatus(value.screeningStatus))
+    || (value.screeningSignals !== undefined && !isCaptureValueSignals(value.screeningSignals))
+    || (value.filterReason !== undefined
+      && (typeof value.filterReason !== 'string' || !CAPTURE_FILTER_REASONS.has(value.filterReason as RecallCaptureFilterReason)))
+    || (value.waitingCompletionReason !== undefined
+      && value.waitingCompletionReason !== 'terminal_waiting_input'
+      && value.waitingCompletionReason !== 'activity_changed')
     || (value.quietMinutes !== undefined && !isQuietMinutes(value.quietMinutes))
     || (value.nightlyStart !== undefined && (typeof value.nightlyStart !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.nightlyStart)))
     || (value.nightlyEnd !== undefined && (typeof value.nightlyEnd !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.nightlyEnd)))
@@ -346,6 +418,7 @@ function asCapture(value: RecallJsonRecord): RecallCaptureRecord {
       && value.resumeStatus !== 'queued')
     || !optionalTimestampIsValid(value.scheduledFor)
     || !optionalTimestampIsValid(value.lastActivityAt)
+    || !optionalTimestampIsValid(value.screenedAt)
     || !optionalTimestampIsValid(value.recoveredAt)
     || !optionalTimestampIsValid(value.startedAt)
     || !optionalTimestampIsValid(value.finishedAt)
@@ -353,11 +426,27 @@ function asCapture(value: RecallJsonRecord): RecallCaptureRecord {
     || !isIsoTimestamp(value.createdAt)
     || !isIsoTimestamp(value.updatedAt)
   ) throw new Error('malformed recall capture');
+  const executionPolicy = isExecutionPolicy(value.executionPolicy) ? value.executionPolicy : 'immediate';
+  const status = value.status as RecallCaptureStatus;
+  const legacyVisible = executionPolicy === 'manual'
+    || ['paused', 'review_ready', 'writing', 'completed', 'configuration_required', 'failed', 'cancelled'].includes(status);
+  const visibility = isCaptureVisibility(value.visibility) ? value.visibility : legacyVisible ? 'visible' : 'internal';
+  const screeningStatus = isCaptureScreeningStatus(value.screeningStatus)
+    ? value.screeningStatus
+    : executionPolicy === 'manual'
+      ? 'qualified'
+      : status === 'no_candidate'
+        ? 'filtered'
+        : ['waiting_quiet', 'waiting_completion', 'scheduled', 'queued', 'extracting'].includes(status)
+          ? 'pending'
+          : 'qualified';
   return {
     ...value,
     taxonomyVersion: 2,
-    executionPolicy: isExecutionPolicy(value.executionPolicy) ? value.executionPolicy : 'immediate',
-    stage: ['review_ready', 'no_candidate', 'cancelled'].includes(String(value.status))
+    executionPolicy,
+    visibility,
+    screeningStatus,
+    stage: ['review_ready', 'no_candidate', 'completed', 'cancelled'].includes(String(value.status))
       ? undefined
       : value.stage,
     ...(normalizeModelUsage(value.modelUsage) ? { modelUsage: normalizeModelUsage(value.modelUsage) } : {}),
@@ -539,14 +628,18 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
       ? undefined
       : boundedRequiredText(candidate.targetAssetId, 'targetAssetId', 160);
     if (targetAssetId && !safeId(targetAssetId)) throw new CaptureFailure('invalid_model_output', 'invalid targetAssetId');
+    const valueProvided = Object.prototype.hasOwnProperty.call(candidate, 'value');
+    const actionProvided = Object.prototype.hasOwnProperty.call(candidate, 'suggestedAction');
     return {
       judgment: boundedRequiredText(candidate.judgment, 'judgment', 4_000),
-      value: boundedRequiredText(candidate.value ?? candidate.summary, 'value', 1_000),
+      value: valueProvided ? boundedRequiredText(candidate.value, 'value', 1_000) : '',
+      valueProvided,
       summary: boundedRequiredText(candidate.summary, 'summary', 1_000),
       ...(uncertainty ? { uncertainty } : {}),
       suggestedType: parseCandidateType(candidate.suggestedType),
       suggestedScope: boundedRequiredText(candidate.suggestedScope, 'suggestedScope', 500),
       ...(candidate.suggestedAction === undefined ? {} : { suggestedAction: parseCandidateAction(candidate.suggestedAction) }),
+      actionProvided,
       ...(candidate.risk === undefined ? {} : { risk: parseCandidateRisk(candidate.risk) }),
       ...(targetAssetId ? { targetAssetId } : {}),
       evidence,
@@ -558,9 +651,11 @@ function extractionSystemPrompt(): string {
   return [
     'You extract durable, user-reviewable knowledge from one completed conversation run.',
     'Return exactly one JSON object and no markdown or commentary.',
-    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required unless action is create","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
+    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
     'Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.',
     'Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.',
+    'Each candidate must state a concrete future value and an explicit suggestedAction; do not restate its summary as value.',
+    'Every candidate must cite at least one user message. Short acknowledgements, greetings, status checks, and failed work are not candidates.',
     'Write candidate text in the same language as the conversation.',
     'Do not invent facts. Every candidate must cite at least one supplied message label.',
   ].join('\n');
@@ -609,6 +704,42 @@ function candidateUnavailableForWorkflow(error: unknown): boolean {
   return error.message === 'recall candidate not found'
     || error.message.startsWith('malformed recall candidate')
     || error.message.startsWith('malformed recall record:');
+}
+
+function abilityAssetUnavailableForWorkflow(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message === 'recall ability asset not found'
+    || error.message.startsWith('malformed recall ability asset')
+    || error.message.startsWith('malformed recall record:');
+}
+
+function confirmedAssetReceipt(
+  candidate: RecallCandidateRecord,
+  asset: RecallAbilityAssetRecord,
+  receipt: RecallAssetHandoffReceipt,
+): RecallCaptureConfirmedAssetReceipt | undefined {
+  if (candidate.status !== 'confirmed' || !candidate.promotedAssetId || asset.id !== candidate.promotedAssetId) {
+    return undefined;
+  }
+  const belongsToCandidate = asset.candidateId === candidate.id
+    || asset.sourceCandidateIds?.includes(candidate.id);
+  if (!belongsToCandidate) return undefined;
+  if (
+    !candidate.reviewDecisionId
+    || receipt.assetId !== asset.id
+    || receipt.assetType !== asset.type
+    || receipt.reviewDecisionId !== candidate.reviewDecisionId
+  ) {
+    return undefined;
+  }
+  return {
+    assetId: receipt.assetId,
+    assetType: receipt.assetType,
+    version: receipt.version,
+    scope: receipt.scope,
+    sourceRefCount: receipt.sourceRefs.length,
+    reviewDecisionId: receipt.reviewDecisionId,
+  };
 }
 
 function captureNextAction(
@@ -674,7 +805,7 @@ function captureActions(
   linkedAssetIds: string[],
 ): RecallCaptureAction[] {
   const actions: RecallCaptureAction[] = [];
-  if (['waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'paused'].includes(capture.status)) {
+  if (['waiting_quiet', 'waiting_manual', 'scheduled', 'paused'].includes(capture.status)) {
     actions.push('run_now');
   }
   if (['waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting'].includes(capture.status)
@@ -699,6 +830,8 @@ async function summarizeRecallCaptures(
   captures: RecallCaptureRecord[],
 ): Promise<RecallCaptureWorkflowRecord[]> {
   const candidateReads = new Map<string, Promise<RecallCandidateRecord | undefined>>();
+  const assetReads = new Map<string, Promise<RecallAbilityAssetRecord | undefined>>();
+  const receiptReads = new Map<string, Promise<RecallAssetHandoffReceipt | undefined>>();
   const readCandidate = (candidateId: string): Promise<RecallCandidateRecord | undefined> => {
     if (!safeId(candidateId)) return Promise.resolve(undefined);
     const cached = candidateReads.get(candidateId);
@@ -708,6 +841,38 @@ async function summarizeRecallCaptures(
       throw error;
     });
     candidateReads.set(candidateId, pending);
+    return pending;
+  };
+  const readAsset = (assetId: string): Promise<RecallAbilityAssetRecord | undefined> => {
+    if (!safeId(assetId)) return Promise.resolve(undefined);
+    const cached = assetReads.get(assetId);
+    if (cached) return cached;
+    const pending = readAbilityAsset(userId, assetId).catch((error: unknown) => {
+      if (abilityAssetUnavailableForWorkflow(error)) return undefined;
+      throw error;
+    });
+    assetReads.set(assetId, pending);
+    return pending;
+  };
+  const readReceipt = (
+    candidateId: string,
+    reviewDecisionId: string,
+  ): Promise<RecallAssetHandoffReceipt | undefined> => {
+    if (!safeId(candidateId) || !/^rd_[A-Za-z0-9_-]{8,64}$/.test(reviewDecisionId)) {
+      return Promise.resolve(undefined);
+    }
+    const key = `${candidateId}:${reviewDecisionId}`;
+    const cached = receiptReads.get(key);
+    if (cached) return cached;
+    const pending = readRecallAssetHandoffReceipt(userId, candidateId, reviewDecisionId).catch((error: unknown) => {
+      if (candidateUnavailableForWorkflow(error)) return undefined;
+      if (error instanceof Error && (
+        error.message.startsWith('malformed recall asset handoff receipt')
+        || error.message.startsWith('invalid recall asset handoff receipt')
+      )) return undefined;
+      throw error;
+    });
+    receiptReads.set(key, pending);
     return pending;
   };
 
@@ -723,6 +888,7 @@ async function summarizeRecallCaptures(
       missing: 0,
     };
     const linkedAssetIds = new Set<string>();
+    const confirmedAssetReceipts: RecallCaptureConfirmedAssetReceipt[] = [];
     for (const candidate of candidates) {
       if (!candidate) {
         reviewSummary.total += 1;
@@ -732,16 +898,35 @@ async function summarizeRecallCaptures(
       if (candidate.status === 'observed' || candidate.status === 'weak_observation' || candidate.status === 'deferred') continue;
       reviewSummary.total += 1;
       if (candidate.status === 'pending_review' || candidate.status === 'failed') reviewSummary.pending += 1;
-      else if (candidate.status === 'confirmed') reviewSummary.promoted += 1;
-      else if (candidate.status === 'ignored' || candidate.status === 'expired') reviewSummary.rejected += 1;
+      else if (candidate.status === 'confirmed') {
+        if (!candidate.promotedAssetId || !candidate.reviewDecisionId) {
+          reviewSummary.missing += 1;
+          continue;
+        }
+        const [asset, receipt] = await Promise.all([
+          readAsset(candidate.promotedAssetId),
+          readReceipt(candidate.id, candidate.reviewDecisionId),
+        ]);
+        const displayReceipt = asset && receipt
+          ? confirmedAssetReceipt(candidate, asset, receipt)
+          : undefined;
+        if (!displayReceipt) {
+          reviewSummary.missing += 1;
+          continue;
+        }
+        reviewSummary.promoted += 1;
+        linkedAssetIds.add(displayReceipt.assetId);
+        confirmedAssetReceipts.push(displayReceipt);
+      } else if (candidate.status === 'ignored' || candidate.status === 'expired') reviewSummary.rejected += 1;
       else reviewSummary[candidate.status] += 1;
-      if (candidate.status === 'confirmed' && candidate.promotedAssetId && safeId(candidate.promotedAssetId)) {
-        linkedAssetIds.add(candidate.promotedAssetId);
-      }
     }
 
     let workflowStatus: RecallCaptureWorkflowStatus = capture.status;
-    if (capture.status === 'no_candidate') {
+    if (capture.status === 'completed') {
+      workflowStatus = reviewSummary.pending || reviewSummary.deferred || reviewSummary.missing
+        ? 'failed'
+        : 'completed';
+    } else if (capture.status === 'no_candidate') {
       workflowStatus = 'completed';
     } else if (capture.status === 'review_ready' && reviewSummary.total === 0) {
       workflowStatus = 'completed';
@@ -766,6 +951,7 @@ async function summarizeRecallCaptures(
       displayReason: captureDisplayReason(capture, workflowStatus),
       reviewSummary,
       linkedAssetIds: linkedAssets,
+      confirmedAssetReceipts,
       nextAction: captureNextAction(capture, workflowStatus, linkedAssets),
       actions: captureActions(capture, workflowStatus, linkedAssets),
     };
@@ -820,7 +1006,8 @@ async function findMergeableAutomaticCapture(
 
 export async function listRecallCaptures(userId: string, limit = 20): Promise<RecallCaptureWorkflowRecord[]> {
   const wanted = Math.max(1, Math.min(100, Math.floor(Number(limit) || 20)));
-  return summarizeRecallCaptures(userId, (await listAllRecallCaptures(userId)).slice(0, wanted));
+  const visible = (await listAllRecallCaptures(userId)).filter((capture) => capture.visibility === 'visible');
+  return summarizeRecallCaptures(userId, visible.slice(0, wanted));
 }
 
 function captureCounts(captures: RecallCaptureWorkflowRecord[]): RecallCaptureCounts {
@@ -863,7 +1050,8 @@ export async function queryRecallCaptures(
   userId: string,
   query: ListRecallCapturesQuery = {},
 ): Promise<RecallCapturePage> {
-  const all = await summarizeRecallCaptures(userId, await listAllRecallCaptures(userId));
+  const visible = (await listAllRecallCaptures(userId)).filter((capture) => capture.visibility === 'visible');
+  const all = await summarizeRecallCaptures(userId, visible);
   const counts = captureCounts(all);
   const statuses = query.statuses?.length ? new Set(query.statuses) : undefined;
   const cursor = query.cursor ? decodeCaptureCursor(query.cursor) : undefined;
@@ -990,12 +1178,119 @@ async function loadStoredPromptMessages(
   }));
 }
 
+async function screenQueuedRecallCapture(
+  userId: string,
+  id: string,
+  capture: RecallCaptureRecord,
+): Promise<RecallCaptureRecord> {
+  if (capture.executionPolicy === 'manual' || capture.screeningStatus === 'qualified') return capture;
+  let promptMessages: CapturePromptMessage[];
+  try {
+    promptMessages = await loadStoredPromptMessages(userId, capture);
+  } catch {
+    const finishedAt = new Date().toISOString();
+    return updateCapture(userId, id, (current) => current.status !== 'queued'
+      ? current
+      : {
+          ...current,
+          status: 'failed',
+          visibility: 'internal',
+          errorCode: 'source_unavailable',
+          finishedAt,
+          updatedAt: finishedAt,
+        });
+  }
+  const screening = screenRecallCaptureValue(promptMessages);
+  const screenedAt = new Date().toISOString();
+  return updateCapture(userId, id, (current) => current.status !== 'queued'
+    ? current
+    : screening.eligible
+      ? {
+          ...current,
+          screeningStatus: 'qualified',
+          screeningSignals: screening.signals,
+          screenedAt,
+          filterReason: undefined,
+          updatedAt: screenedAt,
+        }
+      : {
+          ...current,
+          status: 'no_candidate',
+          visibility: 'internal',
+          screeningStatus: 'filtered',
+          screeningSignals: screening.signals,
+          screenedAt,
+          filterReason: screening.reason || 'low_reuse_value',
+          finishedAt: screenedAt,
+          durationMs: undefined,
+          updatedAt: screenedAt,
+        });
+}
+
+function isSettledAutomaticCandidate(candidate: Pick<RecallCandidateRecord, 'status'>): boolean {
+  return ['rejected', 'ignored', 'expired'].includes(candidate.status);
+}
+
+async function automaticallyApplyReviewableCandidates(
+  userId: string,
+  candidateIds: Iterable<string>,
+): Promise<{
+  resolved: Map<string, RecallCandidateRecord>;
+  failedCandidateIds: string[];
+}> {
+  const resolved = new Map<string, RecallCandidateRecord>();
+  const failedCandidateIds: string[] = [];
+  for (const candidateId of new Set(candidateIds)) {
+    try {
+      // Read immediately before applying. A prior run or a concurrent user
+      // decision may already have settled this candidate.
+      const candidate = await readRecallCandidate(userId, candidateId);
+      resolved.set(candidate.id, candidate);
+      if (isSettledAutomaticCandidate(candidate)) continue;
+      if (candidate.status === 'confirmed') {
+        // A complete handoff is already settled. Only re-enter the recovery
+        // path when the persisted asset or immutable receipt is missing.
+        if (candidate.promotedAssetId && candidate.reviewDecisionId) {
+          let asset: RecallAbilityAssetRecord | undefined;
+          let receipt: RecallAssetHandoffReceipt | undefined;
+          try { asset = await readAbilityAsset(userId, candidate.promotedAssetId); } catch { asset = undefined; }
+          try { receipt = await readRecallAssetHandoffReceipt(userId, candidate.id, candidate.reviewDecisionId); } catch { receipt = undefined; }
+          if (asset && receipt && confirmedAssetReceipt(candidate, asset, receipt)) continue;
+        } else {
+          continue;
+        }
+        const applied = await autoApplyRecallCandidate(userId, candidate.id);
+        resolved.set(applied.candidate.id, applied.candidate);
+        if (applied.asset) await prepareSkillDraftForPromotedAsset(userId, {
+          candidate: applied.candidate,
+          asset: applied.asset,
+        });
+        continue;
+      }
+      if (!isRecallCandidateReviewable(candidate)) continue;
+      if (candidate.risk === 'high') continue;
+
+      const applied = await autoApplyRecallCandidate(userId, candidate.id);
+      resolved.set(applied.candidate.id, applied.candidate);
+      if (applied.asset) await prepareSkillDraftForPromotedAsset(userId, {
+        candidate: applied.candidate,
+        asset: applied.asset,
+      });
+    } catch {
+      // Continue so one blocked or temporarily failed candidate cannot prevent
+      // independent later candidates from reaching their terminal state.
+      failedCandidateIds.push(candidateId);
+    }
+  }
+  return { resolved, failedCandidateIds };
+}
+
 export async function runRecallCapture(
   userId: string,
   id: string,
   signal?: AbortSignal,
 ): Promise<RecallCaptureRecord> {
-  const queued = await readRecallCapture(userId, id);
+  let queued = await readRecallCapture(userId, id);
   if (queued.status !== 'queued') return queued;
   const sourceControl = await readCognitionSourceControl(userId, {
     kind: 'conversation',
@@ -1012,6 +1307,8 @@ export async function runRecallCapture(
           updatedAt: new Date().toISOString(),
         });
   }
+  queued = await screenQueuedRecallCapture(userId, id, queued);
+  if (queued.status !== 'queued') return queued;
   let claimed = false;
   const startedAt = new Date().toISOString();
   let capture = await updateCapture(userId, id, (current) => ({
@@ -1185,14 +1482,27 @@ export async function runRecallCapture(
     );
     capture = await setCaptureStage(userId, id, 'candidate_save');
     if (capture.status !== 'extracting') return capture;
+    const automaticMode = capture.autoWrite === true || (
+      capture.executionPolicy !== 'manual'
+      && (await readRecallCaptureSettings(userId)).reviewPolicy === 'auto'
+    );
     const byLabel = new Map(promptMessages.map((message) => [message.label, message]));
-    const candidates = [];
+    const candidates: RecallCandidateRecord[] = [];
+    // Once an automatic task reaches writing, these ids are the durable replay
+    // set. Preserve them even if a retry's model output is not byte-identical.
+    const automaticallyEligibleCandidateIds = new Set<string>(
+      capture.autoWrite === true ? capture.candidateIds : [],
+    );
     for (const [index, candidate] of parsed.entries()) {
       const evidenceMessages = candidate.evidence.map((label) => byLabel.get(label)!);
+      const quality = assessRecallCaptureCandidateQuality(candidate, evidenceMessages);
+      const requiresManualRiskGate = quality.reviewable
+        && quality.automaticIneligibilityReasons.includes('high_risk_requires_review');
+      const retainForReview = !automaticMode || quality.automaticEligible || requiresManualRiskGate;
       const teachingSignals = activeTeachingSignals.filter((signal) => (
         evidenceMessages.some((message) => message.id === signal.messageId)
       ));
-      if (teachingSignals.length) {
+      if (quality.reviewable && teachingSignals.length) {
         const teachingCandidateIds = [...new Set(teachingSignals.flatMap((signal) => signal.candidateIds))];
         const existing = await Promise.all(teachingCandidateIds.map(async (candidateId) => {
           try { return await readRecallCandidate(userId, candidateId); }
@@ -1202,7 +1512,14 @@ export async function runRecallCapture(
           comparableCandidateText(current.judgment) === comparableCandidateText(candidate.judgment)
         ));
         if (matching) {
-          if (isRecallCandidateReviewable(matching)) candidates.push(matching);
+          const retainMatching = quality.reviewable
+            && retainForReview
+            && isRecallCandidateReviewable(matching);
+          if (retainMatching) {
+            candidates.push(matching);
+            if (quality.automaticEligible) automaticallyEligibleCandidateIds.add(matching.id);
+            else automaticallyEligibleCandidateIds.delete(matching.id);
+          }
           if (isRecallCandidateReviewable(matching) || matching.status === 'confirmed') continue;
         }
       }
@@ -1224,6 +1541,7 @@ export async function runRecallCapture(
           ...(candidate.suggestedAction ? { suggestedAction: candidate.suggestedAction } : {}),
           ...(candidate.risk ? { risk: candidate.risk } : {}),
           ...(candidate.targetAssetId ? { targetAssetId: candidate.targetAssetId } : {}),
+          forceWeakObservation: !quality.reviewable || (automaticMode && !quality.automaticEligible && !requiresManualRiskGate),
           captureKey: `capture-${capture.id}-${index}`,
           taskRunId: capture.terminalRunId,
           sourceRefs: [
@@ -1237,13 +1555,24 @@ export async function runRecallCapture(
             ...artifactRefs,
           ],
         });
-        if (isRecallCandidateReviewable(storedCandidate)) candidates.push(storedCandidate);
+        if (quality.reviewable
+          && retainForReview
+          && (
+            isRecallCandidateReviewable(storedCandidate) || isSettledAutomaticCandidate(storedCandidate)
+          )) {
+          candidates.push(storedCandidate);
+          if (quality.automaticEligible) automaticallyEligibleCandidateIds.add(storedCandidate.id);
+          else automaticallyEligibleCandidateIds.delete(storedCandidate.id);
+        }
       } catch {
         throw new CaptureFailure('candidate_save_failed', 'candidate could not be saved');
       }
     }
 
-    const candidateIds = [...new Set(candidates.map((candidate) => candidate.id))];
+    const candidateIds = [...new Set([
+      ...(automaticMode ? automaticallyEligibleCandidateIds : []),
+      ...candidates.map((candidate) => candidate.id),
+    ])];
     capture = await updateCapture(userId, id, (current) => current.status !== 'extracting'
       ? current
       : {
@@ -1253,14 +1582,55 @@ export async function runRecallCapture(
         });
     if (capture.status !== 'extracting' || signal?.aborted) return settleInterruptedCapture(userId, id);
 
+    const automaticWrite = automaticMode && automaticallyEligibleCandidateIds.size > 0;
+    const resolvedCandidates = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    if (automaticWrite) {
+      capture = await updateCapture(userId, id, (current) => current.status !== 'extracting'
+        ? current
+        : {
+            ...current,
+            status: 'writing',
+            stage: 'asset_write',
+            autoWrite: true,
+            updatedAt: new Date().toISOString(),
+      });
+      if (capture.status !== 'writing') return capture;
+      try {
+        const application = await automaticallyApplyReviewableCandidates(
+          userId,
+          automaticallyEligibleCandidateIds,
+        );
+        for (const [candidateId, candidate] of application.resolved) {
+          resolvedCandidates.set(candidateId, candidate);
+        }
+        if (application.failedCandidateIds.length) {
+          throw new Error('one or more candidates could not be automatically written');
+        }
+      } catch {
+        throw new CaptureFailure('asset_write_failed', 'candidate could not be automatically written to Recall');
+      }
+    }
+
     const finishedAt = new Date().toISOString();
     const modelUsage = normalizeModelUsage(result.meta.usage);
-    capture = await updateCapture(userId, id, (current) => current.status !== 'extracting'
+    const hasQualifiedCandidates = candidateIds.length > 0;
+    const hasReviewableCandidates = candidates.some((candidate) => (
+      isRecallCandidateReviewable(resolvedCandidates.get(candidate.id) || candidate)
+    ));
+    capture = await updateCapture(userId, id, (current) => (automaticWrite
+      ? current.status !== 'writing'
+      : current.status !== 'extracting')
       ? current
       : {
           ...current,
-          status: candidates.some(isRecallCandidateReviewable) ? 'review_ready' : 'no_candidate',
+          status: hasReviewableCandidates ? 'review_ready' : automaticWrite ? 'completed' : 'no_candidate',
+          visibility: current.executionPolicy === 'manual' || hasQualifiedCandidates || automaticWrite ? 'visible' : 'internal',
+          screeningStatus: hasQualifiedCandidates ? 'qualified' : 'filtered',
+          filterReason: hasQualifiedCandidates
+            ? undefined
+            : parsed.length ? 'candidate_quality' : 'model_no_candidate',
           stage: undefined,
+          ...(automaticWrite ? { autoWrite: true } : {}),
           candidateIds,
           errorCode: undefined,
           finishedAt,
@@ -1283,11 +1653,12 @@ export async function runRecallCapture(
     });
     const finishedAt = new Date().toISOString();
     captureControlRequests.delete(captureTaskKey(userId, id));
-    return updateCapture(userId, id, (current) => current.status !== 'extracting'
+    return updateCapture(userId, id, (current) => (current.status !== 'extracting' && current.status !== 'writing')
       ? current
       : {
           ...current,
           status,
+          visibility: current.screeningStatus === 'qualified' ? 'visible' : current.visibility,
           errorCode: code,
           finishedAt,
           durationMs: durationSince(current.startedAt, finishedAt),
@@ -1298,6 +1669,8 @@ export async function runRecallCapture(
 
 const scheduledCaptures = new Map<string, ScheduledBootBackgroundTask>();
 const captureScheduleAdmissions = new Set<string>();
+const manualCaptureRequests = new Map<string, Promise<RecallCaptureRecord>>();
+const historicalAutoStartRequests = new Map<string, Promise<RecallCaptureRecord>>();
 let captureSchedulingEnabled = true;
 
 function cancelScheduledCapture(userId: string, id: string): void {
@@ -1309,46 +1682,94 @@ function cancelScheduledCapture(userId: string, id: string): void {
 }
 
 async function activateScheduledCapture(userId: string, id: string): Promise<RecallCaptureRecord> {
-  const stored = await readRecallCapture(userId, id);
-  if (stored.status === 'waiting_quiet' || stored.status === 'scheduled') {
+  let stored = await readRecallCapture(userId, id);
+  const schedulableStatus = stored.status === 'waiting_quiet'
+    || stored.status === 'scheduled'
+    || (stored.status === 'waiting_completion' && stored.waitingCompletionReason === 'activity_changed');
+  if (schedulableStatus) {
     if (stored.scheduledFor && Date.parse(stored.scheduledFor) > Date.now()) return stored;
-    if (!isQuiescent(userId, stored.conversationId)) {
-      return updateCapture(userId, id, (current) => !['waiting_quiet', 'scheduled'].includes(current.status)
-        ? current
-        : {
-            ...current,
-            scheduledFor: new Date(Date.now() + 60_000).toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-    }
+    const rescheduleCheck = () => updateCapture(userId, id, (current) => ![
+      'waiting_quiet', 'waiting_completion', 'scheduled',
+    ].includes(current.status)
+      ? current
+      : {
+          ...current,
+          scheduledFor: new Date(Date.now() + 60_000).toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+    if (!isQuiescent(userId, stored.conversationId)) return rescheduleCheck();
 
-    let latestMessage: GroupMessage | undefined;
+    let allMessages: GroupMessage[];
     try {
-      latestMessage = (await chats.getMessages(userId, stored.conversationId, 2_000))
-        .filter(isCaptureMessage)
-        .at(-1);
+      allMessages = await chats.getMessages(userId, stored.conversationId, 2_000);
     } catch {
-      return updateCapture(userId, id, (current) => !['waiting_quiet', 'scheduled'].includes(current.status)
+      return rescheduleCheck();
+    }
+    const latestMessage = allMessages.filter(isCaptureMessage).at(-1);
+    const capturedLastMessageId = stored.messageIds.at(-1);
+    const activityChanged = Boolean(latestMessage && latestMessage.id !== capturedLastMessageId);
+    if (activityChanged || stored.waitingCompletionReason === 'activity_changed') {
+      const selected = latestMessage
+        ? selectCaptureMessages(
+            allMessages,
+            0,
+            Number.MAX_SAFE_INTEGER,
+            stored.anchorMessageId,
+            latestMessage.id,
+          )
+        : [];
+      const selectedLast = selected.at(-1);
+      if (!selectedLast || selectedLast.role !== 'assistant') {
+        return updateCapture(userId, id, (current) => ![
+          'waiting_quiet', 'waiting_completion', 'scheduled',
+        ].includes(current.status)
+          ? current
+          : {
+              ...current,
+              status: 'waiting_completion',
+              waitingCompletionReason: 'activity_changed',
+              messageIds: selected.length ? selected.map((message) => message.id) : current.messageIds,
+              scheduledFor: new Date(Date.now() + 60_000).toISOString(),
+              ...(latestMessage && isIsoTimestamp(latestMessage.ts) ? { lastActivityAt: latestMessage.ts } : {}),
+              updatedAt: new Date().toISOString(),
+            });
+      }
+
+      const activityAt = isIsoTimestamp(selectedLast.ts) ? new Date(selectedLast.ts) : new Date();
+      const nextStatus: RecallCaptureStatus = stored.executionPolicy === 'nightly' ? 'scheduled' : 'waiting_quiet';
+      const scheduledFor = stored.executionPolicy === 'nightly'
+        ? nightlyScheduleAfterQuiet(
+            activityAt,
+            stored.quietMinutes || 10,
+            stored.nightlyStart || '02:00',
+            stored.nightlyEnd || '06:00',
+          ).toISOString()
+        : quietScheduleAt(activityAt, stored.quietMinutes || 10).toISOString();
+      stored = await updateCapture(userId, id, (current) => ![
+        'waiting_quiet', 'waiting_completion', 'scheduled',
+      ].includes(current.status)
         ? current
         : {
             ...current,
-            scheduledFor: new Date(Date.now() + 60_000).toISOString(),
+            status: nextStatus,
+            visibility: 'internal',
+            screeningStatus: 'pending',
+            screeningSignals: undefined,
+            screenedAt: undefined,
+            filterReason: undefined,
+            waitingCompletionReason: undefined,
+            messageIds: selected.map((message) => message.id),
+            recallViewId: undefined,
+            candidateIds: [],
+            scheduledFor,
+            lastActivityAt: selectedLast.ts,
             updatedAt: new Date().toISOString(),
           });
+      return stored;
     }
 
-    const capturedLastMessageId = stored.messageIds.at(-1);
-    if (!latestMessage || latestMessage.id !== capturedLastMessageId) {
-      return updateCapture(userId, id, (current) => !['waiting_quiet', 'scheduled'].includes(current.status)
-        ? current
-        : {
-            ...current,
-            status: 'waiting_completion',
-            scheduledFor: undefined,
-            ...(latestMessage && isIsoTimestamp(latestMessage.ts) ? { lastActivityAt: latestMessage.ts } : {}),
-            updatedAt: new Date().toISOString(),
-          });
-    }
+    if (stored.status === 'waiting_completion') return stored;
+    if (!latestMessage) return rescheduleCheck();
 
     if (stored.status === 'scheduled') {
       return updateCapture(userId, id, (current) => {
@@ -1380,7 +1801,13 @@ async function activateScheduledCapture(userId: string, id: string): Promise<Rec
 }
 
 function scheduleKnownRecallCapture(userId: string, capture: RecallCaptureRecord): void {
-  if (!captureSchedulingEnabled || !['waiting_quiet', 'queued', 'scheduled'].includes(capture.status)) return;
+  const schedulable = ['waiting_quiet', 'queued', 'scheduled'].includes(capture.status)
+    || (
+      capture.status === 'waiting_completion'
+      && capture.waitingCompletionReason === 'activity_changed'
+      && Boolean(capture.scheduledFor)
+    );
+  if (!captureSchedulingEnabled || !schedulable) return;
   const key = captureTaskKey(userId, capture.id);
   if (scheduledCaptures.has(key)) return;
   const delayMs = capture.status !== 'queued' && capture.scheduledFor
@@ -1442,6 +1869,9 @@ export async function queueRecallCaptureFromTerminal(
     const stored = await updateCapture(event.user_id, pending.id, (current) => {
       if (!MERGEABLE_AUTOMATIC_STATUSES.has(current.status)) return current;
       const waitingStatus = event.status === 'waiting_input' ? 'waiting_completion' : 'waiting_manual';
+      const waitingCompletionReason = waitingStatus === 'waiting_completion'
+        ? 'terminal_waiting_input' as const
+        : undefined;
       const errorCode = event.status === 'failed'
         ? 'conversation_failed'
         : event.status === 'cancelled'
@@ -1452,6 +1882,7 @@ export async function queueRecallCaptureFromTerminal(
           ...current,
           resumeStatus: waitingStatus,
           scheduledFor: undefined,
+          waitingCompletionReason,
           errorCode,
           updatedAt: new Date().toISOString(),
         };
@@ -1460,6 +1891,7 @@ export async function queueRecallCaptureFromTerminal(
         ...current,
         status: waitingStatus,
         scheduledFor: undefined,
+        waitingCompletionReason,
         errorCode,
         updatedAt: new Date().toISOString(),
       };
@@ -1558,6 +1990,12 @@ export async function queueRecallCaptureFromTerminal(
     anchorMessageId: anchor.id,
     messageIds: selected.map((message) => message.id),
     status,
+    visibility: settings.executionPolicy === 'manual' ? 'visible' : 'internal',
+    screeningStatus: settings.executionPolicy === 'manual' ? 'qualified' : 'pending',
+    ...(settings.executionPolicy === 'manual' ? {
+      screeningSignals: ['manual_selection' as const],
+      screenedAt: now,
+    } : {}),
     executionPolicy: settings.executionPolicy,
     ...(settings.executionPolicy !== 'manual' ? {
       quietMinutes: settings.quietMinutes,
@@ -1588,6 +2026,12 @@ export async function queueRecallCaptureFromTerminal(
         anchorMessageId: anchor.id,
         messageIds: selected.map((message) => message.id),
         status: paused ? 'paused' : status,
+        visibility: settings.executionPolicy === 'manual' ? 'visible' : 'internal',
+        screeningStatus: settings.executionPolicy === 'manual' ? 'qualified' : 'pending',
+        screeningSignals: settings.executionPolicy === 'manual' ? ['manual_selection'] : undefined,
+        screenedAt: settings.executionPolicy === 'manual' ? now : undefined,
+        filterReason: undefined,
+        waitingCompletionReason: undefined,
         executionPolicy: settings.executionPolicy,
         quietMinutes: settings.executionPolicy === 'manual' ? undefined : settings.quietMinutes,
         lastActivityAt: settings.executionPolicy === 'manual' ? undefined : lastActivityAt,
@@ -1613,7 +2057,60 @@ export async function queueRecallCaptureFromTerminal(
   return stored;
 }
 
-export async function queueManualRecallCaptureFromConversation(
+const MANUAL_TAKEOVER_STATUSES = new Set<RecallCaptureStatus>([
+  'waiting_quiet',
+  'waiting_completion',
+  'waiting_manual',
+  'scheduled',
+  'queued',
+  'paused',
+  'cancelled',
+]);
+
+function canConvertToWaitingManual(capture: RecallCaptureRecord): boolean {
+  return MANUAL_TAKEOVER_STATUSES.has(capture.status)
+    && capture.candidateIds.length === 0
+    && capture.writingCandidateId === undefined
+    && capture.stage === undefined
+    && capture.startedAt === undefined
+    && capture.autoWrite !== true;
+}
+
+function makeWaitingManual(
+  capture: RecallCaptureRecord,
+  finishedAt: string,
+  now: string,
+): RecallCaptureRecord {
+  if (!canConvertToWaitingManual(capture)) return capture;
+  return {
+    ...capture,
+    status: 'waiting_manual',
+    visibility: 'visible',
+    screeningStatus: 'qualified',
+    screeningSignals: ['manual_selection'],
+    screenedAt: now,
+    filterReason: undefined,
+    waitingCompletionReason: undefined,
+    stage: undefined,
+    executionPolicy: 'manual',
+    quietMinutes: undefined,
+    scheduledFor: undefined,
+    nightlyStart: undefined,
+    nightlyEnd: undefined,
+    catchUpMissed: undefined,
+    resumeStatus: undefined,
+    lastActivityAt: finishedAt,
+    autoWrite: undefined,
+    errorCode: undefined,
+    recoveredAt: undefined,
+    finishedAt: undefined,
+    durationMs: undefined,
+    modelUsage: undefined,
+    updatedAt: now,
+  };
+}
+
+async function queueManualRecallCaptureRequest(
   userId: string,
   conversationId: string,
 ): Promise<RecallCaptureRecord> {
@@ -1646,36 +2143,32 @@ export async function queueManualRecallCaptureFromConversation(
     throw new Error('conversation is still waiting for a response');
   }
 
-  const covering = (await listAllRecallCaptures(userId)).find((capture) => (
-    capture.conversationId === conversationId
-    && capture.status !== 'cancelled'
-    && capture.messageIds.includes(finished.id)
-  ));
-  if (covering) return covering;
-
   const settings = await readRecallCaptureSettings(userId);
   if (!settings.enabled) throw new Error('recall capture is disabled');
 
   const id = manualConversationCaptureId(conversationId, finished.id);
-  const existing = await readRecallJsonRecord(userId, CAPTURE_COLLECTION, id);
-  if (existing) {
-    const stored = asCapture(existing);
-    if (stored.status !== 'cancelled') return stored;
-    return updateCapture(userId, id, (current) => ({
-      ...current,
-      status: 'waiting_manual',
-      stage: undefined,
-      executionPolicy: 'manual',
-      attempt: current.attempt + 1,
-      candidateIds: [],
-      errorCode: undefined,
-      scheduledFor: undefined,
-      startedAt: undefined,
-      finishedAt: undefined,
-      durationMs: undefined,
-      modelUsage: undefined,
-      updatedAt: new Date().toISOString(),
-    }));
+  const exact = await readRecallJsonRecord(userId, CAPTURE_COLLECTION, id);
+  if (exact) {
+    const stored = asCapture(exact);
+    if (stored.status === 'waiting_manual') return stored;
+    if (!canConvertToWaitingManual(stored)) return stored;
+    cancelScheduledCapture(userId, stored.id);
+    const now = new Date().toISOString();
+    return updateCapture(userId, stored.id, (current) => makeWaitingManual(current, finished.ts, now));
+  }
+
+  const covering = (await listAllRecallCaptures(userId)).find((capture) => (
+    capture.conversationId === conversationId
+    && capture.status !== 'cancelled'
+    && !(capture.status === 'no_candidate' && capture.visibility === 'internal')
+    && capture.messageIds.includes(finished.id)
+  ));
+  if (covering) {
+    if (covering.status === 'waiting_manual') return covering;
+    if (!canConvertToWaitingManual(covering)) return covering;
+    cancelScheduledCapture(userId, covering.id);
+    const now = new Date().toISOString();
+    return updateCapture(userId, covering.id, (current) => makeWaitingManual(current, finished.ts, now));
   }
 
   const now = new Date().toISOString();
@@ -1690,7 +2183,12 @@ export async function queueManualRecallCaptureFromConversation(
     anchorMessageId: firstUser.id,
     messageIds: selected.map((message) => message.id),
     status: 'waiting_manual',
+    visibility: 'visible',
+    screeningStatus: 'qualified',
+    screeningSignals: ['manual_selection'],
+    screenedAt: now,
     executionPolicy: 'manual',
+    lastActivityAt: finished.ts,
     attempt: 1,
     candidateIds: [],
     createdAt: now,
@@ -1710,11 +2208,191 @@ export async function queueManualRecallCaptureFromConversation(
   return stored;
 }
 
+export function queueManualRecallCaptureFromConversation(
+  userId: string,
+  conversationId: string,
+): Promise<RecallCaptureRecord> {
+  if (!safeId(conversationId)) return Promise.reject(new Error('invalid conversation id'));
+  const key = `${userId}:${conversationId}`;
+  const inFlight = manualCaptureRequests.get(key);
+  if (inFlight) return inFlight;
+
+  let request: Promise<RecallCaptureRecord>;
+  request = queueManualRecallCaptureRequest(userId, conversationId).finally(() => {
+    if (manualCaptureRequests.get(key) === request) manualCaptureRequests.delete(key);
+  });
+  manualCaptureRequests.set(key, request);
+  return request;
+}
+
+function canQueueHistoricalAuto(capture: RecallCaptureRecord): boolean {
+  return !['extracting', 'writing', 'review_ready', 'completed', 'no_candidate'].includes(capture.status)
+    && capture.writingCandidateId === undefined
+    && capture.stage === undefined
+    && capture.startedAt === undefined;
+}
+
+function makeHistoricalAutoQueued(
+  capture: RecallCaptureRecord,
+  finishedAt: string,
+  now: string,
+): RecallCaptureRecord {
+  if (!canQueueHistoricalAuto(capture)) return capture;
+  return {
+    ...capture,
+    status: 'queued',
+    visibility: 'visible',
+    screeningStatus: 'qualified',
+    screeningSignals: ['manual_selection'],
+    screenedAt: capture.screenedAt || now,
+    filterReason: undefined,
+    waitingCompletionReason: undefined,
+    stage: undefined,
+    executionPolicy: 'manual',
+    quietMinutes: undefined,
+    scheduledFor: undefined,
+    nightlyStart: undefined,
+    nightlyEnd: undefined,
+    catchUpMissed: undefined,
+    resumeStatus: undefined,
+    lastActivityAt: finishedAt,
+    autoWrite: true,
+    errorCode: undefined,
+    recoveredAt: undefined,
+    startedAt: undefined,
+    finishedAt: undefined,
+    durationMs: undefined,
+    modelUsage: undefined,
+    updatedAt: now,
+  };
+}
+
+async function queueHistoricalAutoRecallCaptureRequest(
+  userId: string,
+  conversationId: string,
+): Promise<RecallCaptureRecord> {
+  const sourceControl = await readCognitionSourceControl(userId, {
+    kind: 'conversation',
+    id: conversationId,
+  });
+  if (sourceControl && sourceControl.availability !== 'active') {
+    throw new Error(sourceControl.availability === 'removed'
+      ? 'conversation source was removed from Recall'
+      : 'conversation source is paused');
+  }
+  const conversation = await chats.getConversation(userId, conversationId);
+  if (!conversation) throw new Error('conversation not found');
+  const messages = await chats.getMessages(userId, conversationId, 2_000);
+  const eligible = messages.filter(isCaptureMessage);
+  const firstUser = eligible.find((message) => message.from === 'user');
+  const finished = eligible.at(-1);
+  if (!firstUser || !finished) throw new Error('conversation has no completed exchange');
+  const selected = selectCaptureMessages(
+    messages,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    firstUser.id,
+    finished.id,
+  );
+  if (!selected.length || selected.at(-1)?.role !== 'assistant') {
+    throw new Error('conversation is still waiting for a response');
+  }
+
+  const settings = await readRecallCaptureSettings(userId);
+  if (!settings.enabled) throw new Error('recall capture is disabled');
+
+  const id = manualConversationCaptureId(conversationId, finished.id);
+  const now = new Date().toISOString();
+  const exact = await readRecallJsonRecord(userId, CAPTURE_COLLECTION, id);
+  if (exact) {
+    const stored = asCapture(exact);
+    if (stored.status === 'queued' && stored.autoWrite === true) {
+      scheduleRecallCapture(userId, stored.id);
+      return stored;
+    }
+    if (stored.status === 'completed' || stored.status === 'no_candidate' || stored.status === 'review_ready') return stored;
+    if (stored.status === 'extracting' || stored.status === 'writing') return stored;
+    const queued = await updateCapture(userId, stored.id, (current) => makeHistoricalAutoQueued(current, finished.ts, now));
+    if (queued.status === 'queued') scheduleRecallCapture(userId, queued.id);
+    return queued;
+  }
+
+  const covering = (await listAllRecallCaptures(userId)).find((capture) => (
+    capture.conversationId === conversationId
+    && capture.status !== 'cancelled'
+    && capture.messageIds.includes(finished.id)
+  ));
+  if (covering) {
+    if (covering.status === 'completed' || covering.status === 'no_candidate' || covering.status === 'review_ready'
+      || covering.status === 'extracting' || covering.status === 'writing') return covering;
+    cancelScheduledCapture(userId, covering.id);
+    const queued = await updateCapture(userId, covering.id, (current) => makeHistoricalAutoQueued(current, finished.ts, now));
+    if (queued.status === 'queued') scheduleRecallCapture(userId, queued.id);
+    return queued;
+  }
+
+  const record: RecallCaptureRecord = {
+    schemaVersion: 1,
+    taxonomyVersion: 2,
+    ownerId: userId,
+    id,
+    conversationId,
+    conversationTitle: conversation.title,
+    terminalRunId: `historical-${id.slice('rcap-'.length)}`,
+    anchorMessageId: firstUser.id,
+    messageIds: selected.map((message) => message.id),
+    status: 'queued',
+    visibility: 'visible',
+    screeningStatus: 'qualified',
+    screeningSignals: ['manual_selection'],
+    screenedAt: now,
+    executionPolicy: 'manual',
+    lastActivityAt: finished.ts,
+    autoWrite: true,
+    attempt: 1,
+    candidateIds: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  const stored = asCapture(await updateRecallJsonRecord(
+    userId,
+    CAPTURE_COLLECTION,
+    id,
+    (current) => current || record,
+  ));
+  if (stored.status === 'queued') scheduleRecallCapture(userId, stored.id);
+  log.info('historical automatic recall capture task created', {
+    conversation_id: conversationId,
+    capture_id: stored.id,
+    message_count: stored.messageIds.length,
+  });
+  return stored;
+}
+
+export function startHistoricalRecallCapture(
+  userId: string,
+  conversationId: string,
+): Promise<RecallCaptureRecord> {
+  if (!safeId(conversationId)) return Promise.reject(new Error('invalid conversation id'));
+  const key = `${userId}:${conversationId}`;
+  const inFlight = historicalAutoStartRequests.get(key);
+  if (inFlight) return inFlight;
+
+  let request: Promise<RecallCaptureRecord>;
+  request = queueHistoricalAutoRecallCaptureRequest(userId, conversationId).finally(() => {
+    if (historicalAutoStartRequests.get(key) === request) {
+      historicalAutoStartRequests.delete(key);
+    }
+  });
+  historicalAutoStartRequests.set(key, request);
+  return request;
+}
+
 export async function promoteRecallCaptureCandidate(
   userId: string,
   candidateId: string,
   options: { riskAcknowledged?: boolean } = {},
-): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
+): Promise<RecallCaptureCandidatePromotion> {
   if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
   const capture = (await listAllRecallCaptures(userId)).find((item) => item.candidateIds.includes(candidateId));
   if (!capture) {
@@ -1773,7 +2451,7 @@ export async function promoteRecallCaptureCandidate(
 export async function retryRecallCapture(userId: string, id: string): Promise<RecallCaptureRecord> {
   const capture = await updateCapture(userId, id, async (current) => {
     let retryable = current.status === 'failed' || current.status === 'configuration_required';
-    if (current.status === 'review_ready') {
+    if (current.status === 'review_ready' || current.status === 'completed') {
       const [workflow] = await summarizeRecallCaptures(userId, [current]);
       retryable = workflow.workflowStatus === 'failed' && workflow.reviewSummary.missing > 0;
     }
@@ -1841,10 +2519,20 @@ export async function resumeRecallCapture(userId: string, id: string): Promise<R
     if (status === 'waiting_quiet' && !scheduledFor) {
       scheduledFor = quietScheduleAt(new Date(), current.quietMinutes || 10).toISOString();
     }
+    if (
+      status === 'waiting_completion'
+      && current.waitingCompletionReason === 'activity_changed'
+      && !scheduledFor
+    ) {
+      scheduledFor = new Date(Date.now() + 60_000).toISOString();
+    }
+    const keepsSchedule = status === 'waiting_quiet'
+      || status === 'scheduled'
+      || (status === 'waiting_completion' && current.waitingCompletionReason === 'activity_changed');
     return {
       ...current,
       status,
-      scheduledFor: ['waiting_quiet', 'scheduled'].includes(status) ? scheduledFor : undefined,
+      scheduledFor: keepsSchedule ? scheduledFor : undefined,
       resumeStatus: undefined,
       updatedAt: new Date().toISOString(),
     };
@@ -1859,7 +2547,7 @@ export async function cancelRecallCapture(userId: string, id: string): Promise<R
   const finishedAt = new Date().toISOString();
   const capture = await updateCapture(userId, id, (current) => {
     if (current.status === 'writing') throw new Error('recall capture is writing an approved candidate');
-    if (['review_ready', 'no_candidate', 'cancelled'].includes(current.status)) {
+    if (['review_ready', 'no_candidate', 'completed', 'cancelled'].includes(current.status)) {
       throw new Error('recall capture is terminal');
     }
     if (current.status === 'extracting' && current.stage === 'candidate_save') {
@@ -1893,10 +2581,13 @@ export async function runRecallCaptureNow(userId: string, id: string): Promise<R
       ? 'conversation source was removed from Recall'
       : 'conversation source is paused');
   }
+  if (stored.status === 'waiting_completion') {
+    throw new Error('recall capture conversation is not complete');
+  }
   const capture = await updateCapture(userId, id, (current) => {
     if (current.status === 'queued' || current.status === 'extracting') return current;
     if (![
-      'waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'paused', 'failed', 'configuration_required',
+      'waiting_quiet', 'waiting_manual', 'scheduled', 'paused', 'failed', 'configuration_required',
     ].includes(current.status)) {
       throw new Error('recall capture cannot run now');
     }
@@ -1906,6 +2597,8 @@ export async function runRecallCaptureNow(userId: string, id: string): Promise<R
       status: 'queued',
       stage: undefined,
       resumeStatus: undefined,
+      scheduledFor: undefined,
+      waitingCompletionReason: undefined,
       attempt: retrying ? current.attempt + 1 : current.attempt,
       errorCode: undefined,
       recoveredAt: undefined,
@@ -1931,7 +2624,7 @@ export async function recoverRecallCaptures(userId: string): Promise<number> {
       const recoveredAt = new Date().toISOString();
       capture = await updateCapture(userId, capture.id, (current) => ({
         ...current,
-        status: 'review_ready',
+        status: current.autoWrite ? 'failed' : 'review_ready',
         stage: undefined,
         writingCandidateId: undefined,
         errorCode: 'asset_write_interrupted',
@@ -1950,7 +2643,55 @@ export async function recoverRecallCaptures(userId: string): Promise<number> {
         updatedAt: recoveredAt,
       }));
     }
-    if (capture.status === 'queued' || capture.status === 'waiting_quiet' || capture.status === 'scheduled') {
+    if (capture.status === 'waiting_completion' && !capture.waitingCompletionReason) {
+      try {
+        const latestMessage = (await chats.getMessages(userId, capture.conversationId, 2_000))
+          .filter(isCaptureMessage)
+          .at(-1);
+        if (latestMessage && latestMessage.id !== capture.messageIds.at(-1)) {
+          const recoveredAt = new Date().toISOString();
+          capture = await updateCapture(userId, capture.id, (current) => (
+            current.status !== 'waiting_completion' || current.waitingCompletionReason
+              ? current
+              : {
+                  ...current,
+                  waitingCompletionReason: 'activity_changed',
+                  scheduledFor: recoveredAt,
+                  recoveredAt,
+                  updatedAt: recoveredAt,
+                }
+          ));
+        }
+      } catch {
+        // Keep an ambiguous legacy wait untouched until its conversation is readable.
+      }
+    }
+    if (
+      capture.status === 'waiting_completion'
+      && capture.waitingCompletionReason === 'activity_changed'
+      && !capture.scheduledFor
+    ) {
+      const recoveredAt = new Date().toISOString();
+      capture = await updateCapture(userId, capture.id, (current) => (
+        current.status !== 'waiting_completion' || current.waitingCompletionReason !== 'activity_changed'
+          ? current
+          : {
+              ...current,
+              scheduledFor: recoveredAt,
+              recoveredAt,
+              updatedAt: recoveredAt,
+            }
+      ));
+    }
+    const schedulable = capture.status === 'queued'
+      || capture.status === 'waiting_quiet'
+      || capture.status === 'scheduled'
+      || (
+        capture.status === 'waiting_completion'
+        && capture.waitingCompletionReason === 'activity_changed'
+        && Boolean(capture.scheduledFor)
+      );
+    if (schedulable) {
       scheduleKnownRecallCapture(userId, capture);
       recovered += 1;
     }
@@ -1985,6 +2726,8 @@ export function startRecallCaptureOrchestrator(
     for (const task of scheduledCaptures.values()) task.cancel();
     scheduledCaptures.clear();
     captureScheduleAdmissions.clear();
+    manualCaptureRequests.clear();
+    historicalAutoStartRequests.clear();
     captureControlRequests.clear();
   };
 }

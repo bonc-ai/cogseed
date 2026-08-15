@@ -101,6 +101,10 @@ export interface KstarReviewRecord extends KstarJsonRecord {
   inferenceMethod?: KstarReviewInferenceMethod;
   needsConfirmation?: boolean;
   confirmedAt?: string;
+  /** Model-reasoned reusable lesson ("why the gap happened + what is worth
+   *  reusing"). When present it becomes the precipitation judgment instead
+   *  of a fixed template sentence. */
+  lesson?: string;
   evidenceRefs: CognitionSourceRef[];
   createdAt: string;
   updatedAt: string;

@@ -18639,396 +18639,24 @@ body.model-not-configured .main-content { flex-direction: column; }
   font-size: 11px; font-weight: 600; margin-right: 6px;
 }
 
-#panel-personal-ontology {
-  /* ─── 个人本体设计令牌：与全局绿色系统统一，不引入第二套色系 ─── */
+#skills-cognition-personal-ontology {
   --personal-onto-bg: hsl(150 25% 98%);
   --personal-onto-card: #fff;
   --personal-onto-border: hsl(152 22% 90%);
   --personal-onto-fg: hsl(155 32% 12%);
   --personal-onto-muted: hsl(152 12% 47%);
   --personal-onto-primary: hsl(158 85% 26%);
-  --personal-onto-accent: #0E9F6E;              /* 与全局 --primary 同源 */
+  --personal-onto-accent: #0E9F6E;
   --personal-onto-green: hsl(142 76% 36%);
   --personal-onto-red: hsl(0 84% 45%);
   --personal-onto-orange: hsl(38 92% 45%);
-  --personal-onto-radius: 10px;                  /* 对齐全局 --radius-sm */
-  --personal-onto-radius-sm: 8px;                /* 小控件统一档位 */
+  --personal-onto-radius: 10px;
+  --personal-onto-radius-sm: 8px;
   --personal-onto-shadow: 0 1px 2px 0 rgba(20, 71, 55, 0.05), 0 1px 3px 0 rgba(20, 71, 55, 0.07);
-  background: var(--personal-onto-bg);
-  color: var(--personal-onto-fg);
-}
-
-.personal-onto-view { display: flex; flex-direction: column; height: 100%; }
-
-.personal-onto-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 24px 32px 16px;
-  border-bottom: 1px solid var(--personal-onto-border);
-  background: var(--personal-onto-card);
-}
-
-.personal-onto-title {
-  font-size: 16px; font-weight: 600; margin: 0; line-height: 1.4;
-  color: var(--personal-onto-primary);
-}
-
-.personal-onto-subtitle {
-  max-width: 680px; margin: 6px 0 0;
-  color: var(--personal-onto-muted); font-size: 12px; line-height: 1.6;
-}
-
-.personal-onto-workspace-tabs { display: flex; gap: 6px; flex-shrink: 0; }
-.personal-onto-workspace-tab {
-  border: 1px solid var(--personal-onto-border); border-radius: var(--personal-onto-radius-sm);
-  background: var(--personal-onto-card); color: var(--personal-onto-muted);
-  cursor: pointer; padding: 8px 12px; font: inherit; font-size: 13px;
-  transition: border-color .15s, color .15s, background .15s;
-}
-.personal-onto-workspace-tab:hover {
-  border-color: var(--personal-onto-accent); color: var(--personal-onto-primary);
-}
-.personal-onto-workspace-tab.active {
-  border-color: var(--personal-onto-accent);
-  background: color-mix(in srgb, var(--personal-onto-accent) 10%, var(--personal-onto-card));
-  color: var(--personal-onto-primary); font-weight: 600;
-}
-.personal-onto-workspace-pane { min-height: 0; flex: 1; overflow: auto; }
-.personal-onto-workspace-pane[hidden] { display: none; }
-.personal-onto-candidate-toolbar { display: flex; justify-content: flex-end; padding: 14px 32px 0; }
-
-.personal-onto-actions { display: flex; gap: 8px; }
-
-.personal-onto-scroll {
-  flex: 1; padding: 24px 32px; overflow: auto;
-}
-
-/* 统计卡片 */
-.personal-onto-stats-row {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px;
-  margin-bottom: 24px;
-}
-
-.personal-onto-stat-card {
-  padding: 18px 20px;
-  background: var(--personal-onto-card);
-  border: 1px solid var(--personal-onto-border);
-  border-radius: var(--personal-onto-radius);
-  box-shadow: var(--personal-onto-shadow);
-}
-
-.personal-onto-stat-card-confirmed { border-left: 3px solid var(--personal-onto-green); }
-.personal-onto-stat-card-rejected { border-left: 3px solid var(--personal-onto-red); }
-.personal-onto-stat-card-blocked { border-left: 3px solid var(--personal-onto-orange); }
-
-.personal-onto-stat-value {
-  font-size: 28px; font-weight: 700; line-height: 1.1;
-  font-family: var(--font-mono);
-  letter-spacing: -0.02em;
-}
-
-.personal-onto-stat-label {
-  font-size: 12px; color: var(--personal-onto-muted); margin-top: 4px;
-}
-
-/* 候选卡片 */
-.personal-onto-section {
-  margin-bottom: 32px;
-}
-
-.personal-onto-section-title {
-  font-size: 16px; font-weight: 600; margin: 0 0 16px;
-  color: var(--personal-onto-primary);
-}
-
-.personal-onto-cards {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 16px;
-}
-
-.personal-onto-card {
-  background: var(--personal-onto-card);
-  border: 1px solid var(--personal-onto-border);
-  border-radius: var(--personal-onto-radius);
-  box-shadow: var(--personal-onto-shadow);
-  padding: 16px;
-  transition: border-color .2s;
-}
-
-.personal-onto-card-pending { border-left: 3px solid var(--personal-onto-accent); }
-.personal-onto-card-confirmed { border-left: 3px solid var(--personal-onto-green); opacity: 0.7; }
-.personal-onto-card-rejected { border-left: 3px solid var(--personal-onto-red); opacity: 0.6; }
-
-.personal-onto-card-header {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  margin-bottom: 12px; padding-bottom: 12px;
-  border-bottom: 1px solid var(--personal-onto-border);
-}
-
-.personal-onto-card-kind {
-  font-weight: 600; font-size: 13px;
-  padding: 2px 10px; border-radius: 999px;
-  background: var(--personal-onto-accent); color: #fff;
-}
-
-.personal-onto-card-confidence {
-  font-size: 12px; color: var(--personal-onto-muted);
-}
-
-.personal-onto-card-status {
-  margin-left: auto;
-  font-size: 11px; font-weight: 600;
-  padding: 2px 10px; border-radius: 999px;
-  background: hsl(152 32% 94%); color: var(--personal-onto-muted);
-}
-
-.personal-onto-card-confirmed .personal-onto-card-status {
-  background: hsl(142 76% 92%); color: var(--personal-onto-green);
-}
-
-.personal-onto-card-rejected .personal-onto-card-status {
-  background: hsl(0 84% 95%); color: var(--personal-onto-red);
-}
-
-.personal-onto-card-body {
-  font-size: 13px; line-height: 1.6;
-}
-
-.personal-onto-card-field {
-  margin-bottom: 8px;
-}
-
-.personal-onto-card-field strong {
-  color: var(--personal-onto-primary);
-}
-
-.personal-onto-card-payload pre {
-  margin: 4px 0 0 0; padding: 8px;
-  background: hsl(150 25% 97%);
-  border: 1px solid var(--personal-onto-border);
-  border-radius: 8px;
-  font-size: 11px; white-space: pre-wrap; word-break: break-word;
-}
-
-.personal-onto-card-actions {
-  display: flex; gap: 8px; margin-top: 12px;
-  padding-top: 12px; border-top: 1px solid var(--personal-onto-border);
-}
-
-/* "选择去向"面板 — 常驻在确认/驳回按钮上方，不弹二次面板。 */
-.personal-onto-dest-panel {
-  margin-top: 12px; padding-top: 12px;
-  border-top: 1px solid var(--personal-onto-border);
-  font-size: 12.5px;
-}
-.personal-onto-dest-title {
-  font-weight: 600; color: var(--personal-onto-muted);
-  margin-bottom: 8px;
-}
-.personal-onto-dest-global-row,
-.personal-onto-dest-group-row {
-  display: flex; align-items: center; gap: 6px;
-  padding: 3px 0; cursor: pointer;
-}
-.personal-onto-dest-groups {
-  margin-left: 4px;
-  padding-left: 14px;
-  border-left: 2px solid var(--personal-onto-border);
-}
-.personal-onto-dest-empty {
-  padding: 4px 0 4px 14px;
-  font-size: 12px;
-}
-.personal-onto-dest-create-row {
-  display: flex; gap: 6px; margin-top: 8px;
-}
-.personal-onto-dest-new-group-input {
-  flex: 1; min-width: 0;
-  padding: 4px 8px;
-  border: 1px solid var(--personal-onto-border);
-  border-radius: 8px;
-  font-size: 12.5px;
-}
-
-/* AI 自动归位提示（确认按钮上方） */
-.personal-onto-dest-ai-hint {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--personal-onto-muted);
-  background: rgba(14, 159, 110, 0.05);
-  border: 1px solid rgba(14, 159, 110, 0.16);
-  border-radius: 8px;
-  padding: 8px 10px;
-  margin-bottom: 10px;
-}
-.personal-onto-dest-ai-icon {
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  margin-top: 1px;
-  color: var(--primary);
-}
-
-/* 角色单选列表 */
-.personal-onto-dest-roles {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.personal-onto-dest-role-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.personal-onto-dest-role-row:hover {
-  background: rgba(14, 159, 110, 0.06);
-}
-.personal-onto-dest-role-row.is-selected {
-  background: rgba(14, 159, 110, 0.12);
-}
-.personal-onto-dest-role-row.is-none {
-  margin-bottom: 2px;
-  border-bottom: 1px dashed var(--personal-onto-border);
-  border-radius: 0;
-}
-.personal-onto-dest-role-radio {
-  flex: 0 0 auto;
-  accent-color: var(--primary);
-  cursor: pointer;
-}
-.personal-onto-dest-role-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.personal-onto-dest-role-meta {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--personal-onto-muted);
-  font-family: var(--font-mono);
-}
-
-/* 高级选项（默认折叠） */
-.personal-onto-dest-advanced {
-  margin-top: 8px;
-}
-.personal-onto-dest-advanced-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  border: none;
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--personal-onto-muted);
-  cursor: pointer;
-  border-radius: 6px;
-  transition: background 0.12s, color 0.12s;
-}
-.personal-onto-dest-advanced-toggle:hover {
-  background: rgba(14, 159, 110, 0.08);
-  color: var(--personal-onto-primary);
-}
-.personal-onto-dest-advanced-caret {
-  width: 13px;
-  height: 13px;
-}
-.personal-onto-dest-advanced-body {
-  margin-top: 6px;
-  padding: 10px;
-  border: 1px solid var(--personal-onto-border);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.6);
-}
-
-.personal-onto-btn-confirm {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
-}
-
-.personal-onto-btn-confirm:hover {
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
-}
-
-.personal-onto-btn-confirm:active {
-  transform: translateY(1px);
-}
-
-.personal-onto-btn-reject {
-  background: var(--personal-onto-card);
-  border-color: var(--personal-onto-red);
-  color: var(--personal-onto-red);
-}
-
-.personal-onto-btn-reject:hover {
-  background: hsl(0 84% 95%);
-  border-color: var(--personal-onto-red);
-}
-
-.personal-onto-btn-reject:active {
-  transform: translateY(1px);
-}
-
-/* 阻断项卡片 */
-.personal-onto-blocked-cards {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 16px;
-}
-
-.personal-onto-blocked-card {
-  background: var(--personal-onto-card);
-  border: 1px solid var(--personal-onto-orange);
-  border-left: 3px solid var(--personal-onto-orange);
-  border-radius: var(--personal-onto-radius);
-  box-shadow: var(--personal-onto-shadow);
-  padding: 16px;
-}
-
-.personal-onto-blocked-header {
-  display: flex; align-items: center; gap: 8px;
-  margin-bottom: 12px; padding-bottom: 12px;
-  border-bottom: 1px solid var(--personal-onto-border);
-}
-
-.personal-onto-blocked-icon {
-  font-size: 18px; color: var(--personal-onto-orange);
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.personal-onto-blocked-icon .ui-icon { width: 17px; height: 17px; }
-
-.personal-onto-blocked-source {
-  font-weight: 600; font-size: 13px;
-}
-
-.personal-onto-blocked-body {
-  font-size: 13px; line-height: 1.6;
-}
-
-.personal-onto-blocked-field {
-  margin-bottom: 8px;
-}
-
-.personal-onto-blocked-field strong {
-  color: var(--personal-onto-primary);
 }
 
 /* 空态/加载/错误 */
-.personal-onto-empty,
-.personal-onto-loading,
-.personal-onto-error {
+.personal-onto-empty {
   text-align: center; padding: 48px 24px;
   color: var(--personal-onto-muted);
   background: var(--personal-onto-card);
@@ -19036,13 +18664,28 @@ body.model-not-configured .main-content { flex-direction: column; }
   border-radius: var(--personal-onto-radius);
 }
 
-.personal-onto-error {
-  color: var(--personal-onto-red);
-  border-color: var(--personal-onto-red);
-  border-style: solid;
+.personal-onto-template-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
 }
 
-/* 驳回原因弹窗 */
+.personal-onto-template-empty .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.personal-onto-template-read-error {
+  border: 1px solid color-mix(in srgb, var(--personal-onto-red) 35%, var(--personal-onto-border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--personal-onto-red) 6%, var(--personal-onto-card));
+  color: var(--personal-onto-red);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+/* 角色模板库弹窗遮罩 */
 .personal-onto-modal-overlay {
   position: absolute; inset: 0; z-index: 100;
   display: flex; align-items: center; justify-content: center;
@@ -19051,188 +18694,14 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 .personal-onto-modal {
-  background: #fff;
+  background: var(--personal-onto-card, var(--card, #fff));
+  color: var(--personal-onto-fg, var(--fg, #111827));
   border-radius: 12px;
   box-shadow: 0 8px 32px rgba(0,0,0,.18);
   width: 420px; max-width: 90vw;
   overflow: hidden;
 }
 
-/* ── Evidence-backed cognition growth inside the unified cognition page ── */
-#panel-personal-ontology {
-  --cog-bg: #f7f9fa;
-  --cog-card: #fff;
-  --cog-border: #d9e1e8;
-  --cog-fg: #17263b;
-  --cog-muted: #66778d;
-  --cog-green: #277b5d;
-  --cog-green-soft: #e8f4ed;
-  --cog-gold: #b97816;
-  --cog-gold-soft: #fff3dc;
-  overflow: auto;
-  background: var(--cog-bg);
-}
-#panel-personal-ontology .cognition-page-host,
-#panel-personal-ontology .cognition-page { width: 100%; min-height: 100%; }
-#panel-personal-ontology .cognition-page { display: flex; flex-direction: column; padding: 30px 34px 44px; color: var(--cog-fg); }
-#panel-personal-ontology .cognition-header { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--cog-border); }
-#panel-personal-ontology .cognition-header h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; font-weight: 650; }
-#panel-personal-ontology .cognition-header p { margin: 0; color: var(--cog-muted); font-size: 14px; line-height: 1.6; }
-#panel-personal-ontology .cognition-tabs { display: flex; gap: 28px; border-bottom: 1px solid var(--cog-border); margin: 18px 0 22px; }
-#panel-personal-ontology .cognition-tab { appearance: none; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--cog-muted); cursor: pointer; padding: 11px 2px 12px; font: inherit; font-size: 14px; }
-#panel-personal-ontology .cognition-tab:hover { color: var(--cog-fg); }
-#panel-personal-ontology .cognition-tab.active { color: var(--cog-green); border-bottom-color: var(--cog-green); font-weight: 600; }
-#panel-personal-ontology .cognition-content { display: flex; flex: 1 0 auto; width: 100%; flex-direction: column; gap: 16px; align-items: stretch; }
-#panel-personal-ontology .cognition-content > aside { width: 100%; order: 2; }
-#panel-personal-ontology .cognition-content > .cognition-detail { width: 100%; order: 3; }
-#panel-personal-ontology .cognition-main,
-#panel-personal-ontology .cognition-detail,
-#panel-personal-ontology .cognition-asset-list { background: var(--cog-card); border: 1px solid var(--cog-border); border-radius: 8px; }
-#panel-personal-ontology .cognition-main { width: 100%; min-height: max(530px, calc(100vh - 280px)); padding: 22px; order: 1; }
-#panel-personal-ontology .cognition-growth-visual { min-height: max(482px, calc(100vh - 330px)); border: 1px solid #e6ecef; border-radius: 6px; background: #fff; display: flex; flex-direction: column; justify-content: space-between; padding: 20px; }
-#panel-personal-ontology .cognition-growth-visual-label { display: flex; justify-content: space-between; color: var(--cog-muted); font-size: 12px; }
-#panel-personal-ontology .cognition-growth-visual-label small { color: var(--cog-green); font-size: 12px; font-weight: 600; }
-#panel-personal-ontology .cognition-growth-scene { position: relative; display: flex; flex: 1 1 auto; min-height: clamp(400px, calc(100vh - 430px), 760px); margin: 15px 0 17px; overflow: hidden; isolation: isolate; border: 1px solid #e3ece7; border-radius: 8px; background: #fbfdfc; }
-#panel-personal-ontology .cognition-growth-scene::before { position: absolute; top: 14px; right: 14px; left: 14px; height: 1px; background: #edf4ef; content: ''; pointer-events: none; }
-#panel-personal-ontology .cognition-tree-svg { display: block; width: min(100%, 760px); height: 100%; min-height: 320px; margin: auto; overflow: visible; }
-#panel-personal-ontology .cognition-tree-soil { fill: #d8bd8d; opacity: .22; }
-#panel-personal-ontology .cognition-tree-soil-ring { fill: #e7d5b4; stroke: #c6a976; stroke-width: 2; opacity: .32; }
-#panel-personal-ontology .cognition-tree-roots { fill: none; stroke: #8b6a42; stroke-linecap: round; stroke-width: 5; opacity: .84; }
-#panel-personal-ontology .cognition-tree-seed { fill: #8d5f34; stroke: #714724; stroke-width: 2; }
-#panel-personal-ontology .cognition-tree-seed-line { fill: none; stroke: #d8b582; stroke-linecap: round; stroke-width: 2; }
-#panel-personal-ontology .cognition-tree-sprout-stem { fill: none; stroke: #4f8c69; stroke-linecap: round; stroke-width: 7; }
-#panel-personal-ontology .cognition-tree-sprout-leaf { fill: #5a9b72; stroke: #3d7955; stroke-width: 1.5; }
-#panel-personal-ontology .cognition-tree-sprout-leaf-alt { fill: #79ad87; }
-#panel-personal-ontology .cognition-tree-trunk { fill: none; stroke: #765633; stroke-linecap: round; stroke-width: 19; }
-#panel-personal-ontology .cognition-tree-trunk-highlight { fill: none; stroke: #9d7a4d; stroke-linecap: round; stroke-width: 6; opacity: .65; }
-#panel-personal-ontology .cognition-tree-branch { fill: none; stroke: #765633; stroke-linecap: round; stroke-width: 10; }
-#panel-personal-ontology .cognition-tree-branch-high { stroke-width: 8; }
-#panel-personal-ontology .cognition-tree-branch-twig { stroke-width: 5; }
-#panel-personal-ontology .cognition-tree-leaf { fill: #4f8a67; stroke: #376d4f; stroke-width: 1.4; }
-#panel-personal-ontology .cognition-tree-leaf-light { fill: #6da47c; }
-#panel-personal-ontology .cognition-tree-leaf-large { fill: #447d5c; }
-#panel-personal-ontology .cognition-tree-leaf-small { fill: #659976; }
-#panel-personal-ontology .cognition-tree-vein { fill: none; stroke: #d8e7dd; stroke-width: 2; opacity: .72; }
-#panel-personal-ontology .cognition-tree-bud { fill: #d2a954; stroke: #a47725; stroke-width: 1.4; }
-#panel-personal-ontology .cognition-tree-bud-alt { fill: #d9ba72; }
-#panel-personal-ontology .cognition-tree-roots,
-#panel-personal-ontology .cognition-tree-sprout-layer,
-#panel-personal-ontology .cognition-tree-growing-layer,
-#panel-personal-ontology .cognition-tree-canopy-layer { opacity: 0; transform-origin: 260px 292px; transition: opacity .35s ease, transform .45s ease; }
-#panel-personal-ontology .cognition-tree-seed-layer { opacity: 1; }
-#panel-personal-ontology .cognition-growth-visual-seed .cognition-tree-seed-layer { transform: translateY(4px); }
-#panel-personal-ontology .cognition-growth-visual-sprout .cognition-tree-roots,
-#panel-personal-ontology .cognition-growth-visual-sprout .cognition-tree-sprout-layer { opacity: 1; }
-#panel-personal-ontology .cognition-growth-visual-sprout .cognition-tree-seed-layer { opacity: .32; }
-#panel-personal-ontology .cognition-growth-visual-growing .cognition-tree-roots,
-#panel-personal-ontology .cognition-growth-visual-growing .cognition-tree-growing-layer,
-#panel-personal-ontology .cognition-growth-visual-growing .cognition-tree-canopy-base { opacity: 1; }
-#panel-personal-ontology .cognition-growth-visual-growing .cognition-tree-seed-layer,
-#panel-personal-ontology .cognition-growth-visual-growing .cognition-tree-sprout-layer { opacity: 0; }
-#panel-personal-ontology .cognition-growth-visual-bright .cognition-tree-roots,
-#panel-personal-ontology .cognition-growth-visual-bright .cognition-tree-growing-layer,
-#panel-personal-ontology .cognition-growth-visual-bright .cognition-tree-canopy-layer { opacity: 1; }
-#panel-personal-ontology .cognition-growth-visual-bright .cognition-tree-seed-layer,
-#panel-personal-ontology .cognition-growth-visual-bright .cognition-tree-sprout-layer { opacity: 0; }
-#panel-personal-ontology .cognition-growth-visual-bright .cognition-tree-svg { filter: drop-shadow(0 14px 18px rgba(39, 123, 93, .16)); }
-#panel-personal-ontology .cognition-tree-caption { display: flex; align-items: center; justify-content: space-between; gap: 14px; border-top: 1px solid #edf1f3; padding: 13px 3px 0; }
-#panel-personal-ontology .cognition-tree-caption strong { color: var(--cog-fg); font-size: 14px; }
-#panel-personal-ontology .cognition-tree-caption span { color: var(--cog-muted); font-size: 11px; text-align: right; }
-#panel-personal-ontology .cognition-stage-rail { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 16px; }
-#panel-personal-ontology .cognition-stage-step { position: relative; min-height: 67px; border: 1px solid #e0e6ea; border-radius: 5px; background: #fafbfc; padding: 9px 8px 8px 35px; color: var(--cog-muted); }
-#panel-personal-ontology .cognition-stage-step.reached { border-color: #bcd7c7; background: #f1f8f4; color: #315f4a; }
-#panel-personal-ontology .cognition-stage-step.active { border-color: var(--cog-green); box-shadow: inset 0 0 0 1px var(--cog-green); }
-#panel-personal-ontology .cognition-stage-index { position: absolute; left: 9px; top: 9px; display: grid; width: 18px; height: 18px; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; }
-#panel-personal-ontology .cognition-stage-step strong,
-#panel-personal-ontology .cognition-stage-step small { display: block; }
-#panel-personal-ontology .cognition-stage-step strong { font-size: 12px; line-height: 18px; }
-#panel-personal-ontology .cognition-stage-step small { margin-top: 4px; font-size: 10px; line-height: 1.35; }
-#panel-personal-ontology .cognition-asset-list { max-height: 360px; margin: 0; padding: 7px; overflow: auto; list-style: none; }
-#panel-personal-ontology .cognition-asset-list li + li { border-top: 1px solid #edf1f3; }
-#panel-personal-ontology .cognition-asset-row { display: flex; width: 100%; align-items: flex-start; gap: 9px; border: 0; border-left: 3px solid transparent; background: transparent; color: var(--cog-fg); cursor: pointer; padding: 11px 8px; text-align: left; }
-#panel-personal-ontology .cognition-asset-row:hover { background: #f6f8f9; }
-#panel-personal-ontology .cognition-asset-row.active { border-left-color: var(--cog-green); background: #f0f7f3; }
-#panel-personal-ontology .cognition-asset-row-stage { flex: 0 0 auto; border-radius: 4px; background: #eef1f3; color: var(--cog-muted); padding: 3px 5px; font-size: 10px; }
-#panel-personal-ontology .cognition-stage-sprout { background: var(--cog-gold-soft); color: var(--cog-gold); }
-#panel-personal-ontology .cognition-stage-growing,
-#panel-personal-ontology .cognition-stage-bright { background: var(--cog-green-soft); color: var(--cog-green); }
-#panel-personal-ontology .cognition-asset-row-copy { min-width: 0; }
-#panel-personal-ontology .cognition-asset-row-copy strong,
-#panel-personal-ontology .cognition-asset-row-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#panel-personal-ontology .cognition-asset-row-copy strong { font-size: 12px; font-weight: 600; }
-#panel-personal-ontology .cognition-asset-row-copy small { margin-top: 4px; color: var(--cog-muted); font-size: 11px; }
-#panel-personal-ontology .cognition-detail { padding: 22px; }
-#panel-personal-ontology .cognition-detail-kicker { color: var(--cog-muted); font-size: 12px; margin-bottom: 9px; }
-#panel-personal-ontology .cognition-detail h2 { margin: 0 0 11px; font-size: 21px; line-height: 1.35; }
-#panel-personal-ontology .cognition-status { display: inline-flex; align-items: center; gap: 7px; border-radius: 5px; background: #eef1f3; color: var(--cog-muted); padding: 7px 9px; font-size: 12px; line-height: 1.3; }
-#panel-personal-ontology .cognition-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-#panel-personal-ontology .cognition-status-sprout { background: var(--cog-gold-soft); color: var(--cog-gold); }
-#panel-personal-ontology .cognition-status-growing,
-#panel-personal-ontology .cognition-status-bright { background: var(--cog-green-soft); color: var(--cog-green); }
-#panel-personal-ontology .cognition-summary { margin: 17px 0; padding-bottom: 17px; border-bottom: 1px solid var(--cog-border); color: #435970; font-size: 14px; line-height: 1.7; }
-#panel-personal-ontology .cognition-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-#panel-personal-ontology .cognition-metrics > div { border: 1px solid #e2eee7; border-radius: 5px; background: #f7faf8; padding: 10px; }
-#panel-personal-ontology .cognition-metrics strong,
-#panel-personal-ontology .cognition-metrics span { display: block; }
-#panel-personal-ontology .cognition-metrics strong { color: var(--cog-green); font-size: 18px; line-height: 1.2; }
-#panel-personal-ontology .cognition-metrics span { margin-top: 4px; color: var(--cog-muted); font-size: 11px; }
-#panel-personal-ontology .cognition-detail-section { margin-top: 20px; }
-#panel-personal-ontology .cognition-detail-section h3 { margin: 0 0 10px; font-size: 14px; }
-#panel-personal-ontology .cognition-detail-loading { min-height: 190px; }
-#panel-personal-ontology .cognition-detail-loading p { margin: 16px 0 0; color: var(--cog-muted); font-size: 13px; line-height: 1.6; }
-#panel-personal-ontology .cognition-invalidated { margin: 0 0 18px; border: 1px solid #dfb96c; border-radius: 6px; background: #fff8e8; color: #705223; padding: 12px 14px; }
-#panel-personal-ontology .cognition-invalidated strong,
-#panel-personal-ontology .cognition-invalidated p,
-#panel-personal-ontology .cognition-invalidated span { display: block; }
-#panel-personal-ontology .cognition-invalidated p { margin: 6px 0; font-size: 12px; line-height: 1.55; }
-#panel-personal-ontology .cognition-invalidated span { font-size: 11px; line-height: 1.5; }
-#panel-personal-ontology .cognition-evidence-list,
-#panel-personal-ontology .cognition-reuse-list,
-#panel-personal-ontology .cognition-history-list { margin: 0; padding: 0 0 0 18px; border-left: 2px solid #b8d7c5; list-style: none; }
-#panel-personal-ontology .cognition-evidence-list li,
-#panel-personal-ontology .cognition-reuse-list li,
-#panel-personal-ontology .cognition-history-list li { position: relative; padding: 0 0 13px 0; }
-#panel-personal-ontology .cognition-evidence-list li::before,
-#panel-personal-ontology .cognition-reuse-list li::before,
-#panel-personal-ontology .cognition-history-list li::before { position: absolute; left: -23px; top: 3px; width: 7px; height: 7px; border: 2px solid #fff; border-radius: 50%; background: var(--cog-green); box-shadow: 0 0 0 1px #b8d7c5; content: ''; }
-#panel-personal-ontology .cognition-evidence-list strong,
-#panel-personal-ontology .cognition-reuse-list strong,
-#panel-personal-ontology .cognition-history-list strong,
-#panel-personal-ontology .cognition-evidence-list span,
-#panel-personal-ontology .cognition-reuse-list span,
-#panel-personal-ontology .cognition-history-list span,
-#panel-personal-ontology .cognition-history-list time { display: block; }
-#panel-personal-ontology .cognition-evidence-list strong,
-#panel-personal-ontology .cognition-reuse-list strong,
-#panel-personal-ontology .cognition-history-list strong { font-size: 13px; font-weight: 500; line-height: 1.5; }
-#panel-personal-ontology .cognition-evidence-list span,
-#panel-personal-ontology .cognition-reuse-list span,
-#panel-personal-ontology .cognition-history-list span,
-#panel-personal-ontology .cognition-history-list time { margin-top: 4px; color: var(--cog-muted); font-size: 11px; }
-#panel-personal-ontology .cognition-empty,
-#panel-personal-ontology .cognition-empty-page,
-#panel-personal-ontology .cognition-empty-inline { color: var(--cog-muted); font-size: 13px; line-height: 1.6; }
-#panel-personal-ontology .cognition-empty { padding: 18px 8px; text-align: center; }
-#panel-personal-ontology .cognition-empty-page { display: grid; min-height: 360px; place-items: center; border: 1px dashed var(--cog-border); border-radius: 8px; background: var(--cog-card); }
-#panel-personal-ontology .cognition-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
-#panel-personal-ontology .cognition-actions .btn { border: 1px solid var(--cog-border); border-radius: 5px; background: #fff; color: var(--cog-fg); cursor: pointer; padding: 8px 11px; font: inherit; font-size: 12px; }
-#panel-personal-ontology .cognition-actions .btn:hover { background: #f3f7f5; }
-#panel-personal-ontology .cognition-actions .btn-primary { border-color: var(--cog-green); background: var(--cog-green); color: #fff; }
-#panel-personal-ontology .cognition-actions .btn-primary:hover { background: #21694f; }
-#panel-personal-ontology .cognition-actions .btn:disabled { cursor: not-allowed; opacity: .45; }
-#panel-personal-ontology .cognition-create-form { display: grid; gap: 12px; margin-bottom: 18px; border: 1px solid var(--cog-border); border-radius: 8px; background: var(--cog-card); padding: 18px; }
-#panel-personal-ontology .cognition-create-form[hidden] { display: none; }
-#panel-personal-ontology .cognition-create-form label { display: grid; gap: 6px; color: var(--cog-muted); font-size: 12px; }
-#panel-personal-ontology .cognition-create-form input,
-#panel-personal-ontology .cognition-create-form textarea { width: 100%; border: 1px solid var(--cog-border); border-radius: 5px; background: #fff; color: var(--cog-fg); padding: 9px 10px; font: inherit; font-size: 13px; }
-#panel-personal-ontology .cognition-create-form textarea { min-height: 80px; resize: vertical; }
-#panel-personal-ontology .cognition-create-form input:focus,
-#panel-personal-ontology .cognition-create-form textarea:focus { outline: none; border-color: var(--cog-green); box-shadow: 0 0 0 3px rgba(39,123,93,.12); }
-#panel-personal-ontology .cognition-error { margin-bottom: 15px; border: 1px solid #e7b8b8; border-radius: 5px; background: #fff3f3; color: #9b3a3a; padding: 10px 12px; font-size: 12px; line-height: 1.5; }
-#panel-personal-ontology .cognition-pagination { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; }
-#panel-personal-ontology .cognition-pagination .btn { border: 1px solid var(--cog-border); border-radius: 5px; background: var(--cog-card); color: var(--cog-fg); cursor: pointer; padding: 6px 9px; font: inherit; font-size: 11px; }
-#panel-personal-ontology .cognition-pagination .btn:disabled { cursor: not-allowed; opacity: .45; }
-#panel-personal-ontology .cognition-pagination span { color: var(--cog-muted); font-size: 11px; }
 .cognition-capture-overlay { position: fixed; inset: 0; z-index: 13000; display: grid; place-items: center; background: rgba(20, 34, 42, .32); padding: 24px; }
 .cognition-capture-modal { width: min(600px, 100%); max-height: min(720px, calc(100vh - 48px)); overflow: auto; border: 1px solid #d9e1e8; border-radius: 10px; background: #fff; box-shadow: 0 18px 50px rgba(20, 34, 42, .18); color: #17263b; }
 .cognition-capture-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid #e6ecef; padding: 18px 20px 15px; }
@@ -19253,20 +18722,6 @@ body.model-not-configured .main-content { flex-direction: column; }
 .cognition-capture-actions { display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid #e6ecef; padding: 14px 20px 18px; }
 .cognition-capture-actions .btn { border: 1px solid #d9e1e8; border-radius: 5px; background: #fff; color: #17263b; cursor: pointer; padding: 8px 12px; }
 .cognition-capture-actions .btn-primary { border-color: #277b5d; background: #277b5d; color: #fff; }
-@media (max-width: 720px) {
-  .personal-onto-header { align-items: flex-start; flex-direction: column; }
-  #panel-personal-ontology .cognition-page { padding: 22px 15px 35px; }
-  #panel-personal-ontology .cognition-header { align-items: flex-start; flex-direction: column; }
-  #panel-personal-ontology .cognition-header h1 { font-size: 24px; }
-  #panel-personal-ontology .cognition-content { display: block; }
-  #panel-personal-ontology .cognition-detail,
-  #panel-personal-ontology .cognition-asset-list { margin-top: 14px; }
-  #panel-personal-ontology .cognition-stage-step small { display: none; }
-  #panel-personal-ontology .cognition-growth-scene { min-height: 310px; }
-  #panel-personal-ontology .cognition-tree-svg { min-height: 292px; }
-  #panel-personal-ontology .cognition-tree-caption { align-items: flex-start; }
-}
-
 /* Expense workbench: dense operational surface with bounded responsive tracks. */
 .expense-workbench {
   --ew-bg: var(--surface-2, #f6f7f9);
@@ -20668,26 +20123,6 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 }
 
-.personal-onto-sidebar-header {
-
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 18px 16px 12px;
-  border-bottom: 1px solid var(--personal-onto-border);
-
-}
-
-.personal-onto-sidebar-title {
-
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 1.4;
-  color: var(--personal-onto-primary);
-  flex: 1;
-
-}
-
 .personal-onto-nav {
 
   flex: 1;
@@ -20757,10 +20192,6 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 }
 
-.personal-onto-nav-row-meta {
- font-size: 10.5px; color: var(--personal-onto-muted); flex-shrink: 0; 
-}
-
 .personal-onto-nav-row.is-file {
  padding-left: 14px; 
 }
@@ -20771,62 +20202,6 @@ body.model-not-configured .main-content { flex-direction: column; }
   color: var(--personal-onto-muted);
 }
 .personal-onto-nav-file-icon .ui-icon { width: 14px; height: 14px; }
-
-.personal-onto-nav-template {
- display: flex; flex-direction: column; 
-}
-
-.personal-onto-nav-template-head {
-
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-
-}
-
-.personal-onto-nav-caret {
-
-  width: 18px; height: 18px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--personal-onto-muted);
-  font-size: 10px;
-  cursor: pointer;
-  flex-shrink: 0;
-
-}
-
-.personal-onto-nav-template-name {
-
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 1;
-  min-width: 0;
-
-}
-
-.personal-onto-template-badge {
-
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--success, #16a34a);
-  background: rgba(22, 163, 74, 0.1);
-  border: 1px solid rgba(22, 163, 74, 0.25);
-  border-radius: 99px;
-  padding: 1px 7px;
-  flex-shrink: 0;
-
-}
-
-.personal-onto-template-install {
- flex-shrink: 0; font-size: 11px; padding: 2px 8px; 
-}
 
 .personal-onto-nav-template-list {
  display: flex; flex-direction: column; 
@@ -20928,9 +20303,9 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .personal-onto-library-card {
   border: 1px solid var(--personal-onto-border);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 12px 14px;
-  background: #fff;
+  background: var(--personal-onto-card);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -21057,15 +20432,6 @@ body.model-not-configured .main-content { flex-direction: column; }
   color: var(--personal-onto-muted);
 }
 
-/* 阶段 D：模板文件 = 一行一个文件（左树） */
-.personal-onto-nav-template {
- display: flex; flex-direction: row; align-items: center; gap: 6px; padding: 3px 6px; 
-}
-
-.personal-onto-nav-template .memory-template-name-suffix {
- flex-shrink: 0; 
-}
-
 /* 阶段 D：模板文件编辑器 —— 分节平铺表单 */
 .memory-group-template-section {
 
@@ -21132,135 +20498,64 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 }
 
-/* 候选详情（右栏） */
-.personal-onto-detail-card {
-
-  background: var(--personal-onto-card);
-  border: 1px solid var(--personal-onto-border);
-  border-radius: 10px;
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-
-}
-
-.personal-onto-llm-hint {
-
-  font-size: 11.5px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(14, 159, 110, 0.06);
-  border: 1px dashed rgba(14, 159, 110, 0.3);
-
-}
-
-.personal-onto-overview-actions {
-
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-
-}
-
-/* 分组编辑器（右栏，复用 memory-* 表单/流水样式） */
+/* 角色模板编辑器（复用 memory-* 字段、流水与页签控件） */
 .personal-onto-group-editor {
-
-  background: var(--personal-onto-card);
-  border: 1px solid var(--personal-onto-border);
-  border-radius: 10px;
-  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-
+  padding: 14px 16px;
+  border: 1px solid var(--personal-onto-border);
+  border-radius: 8px;
+  background: var(--personal-onto-card);
 }
 
 .personal-onto-group-editor-head {
-
   display: flex;
   align-items: center;
   gap: 8px;
-
 }
 
 .personal-onto-group-editor-title {
- font-size: 15px; font-weight: 700; color: var(--text); 
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .personal-onto-group-editor-body {
- display: flex; flex-direction: column; gap: 8px; 
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-/* "填入字段"下拉（阶段 B） */
-.personal-onto-dest-field-row {
-
-  display: flex; align-items: center; gap: 8px;
-  margin-top: 8px;
-
+.personal-onto-editor-loading,
+.personal-onto-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 96px;
+  color: var(--personal-onto-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
 }
 
-.personal-onto-dest-field-label {
-
-  flex-shrink: 0;
-  font-weight: 600; color: var(--personal-onto-muted);
-
+.personal-onto-load-error {
+  color: var(--personal-onto-red);
 }
 
-.personal-onto-dest-field-select {
-
-  flex: 1; min-width: 0;
-  padding: 4px 8px;
-  border: 1px solid var(--personal-onto-border);
-  border-radius: 6px;
-  font-size: 12.5px;
-  background: var(--surface);
-  color: var(--text);
-
+.personal-onto-nav-empty.personal-onto-load-error {
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-height: 0;
+  padding: 8px;
+  text-align: left;
 }
 
-/* 分组选择按模板折叠（候选面板） */
-.personal-onto-dest-template {
- margin: 2px 0; 
+.personal-onto-group-editor button[aria-busy="true"],
+.personal-onto-library-modal button[aria-busy="true"] {
+  cursor: wait;
 }
-
-.personal-onto-dest-template-row {
-
-  display: flex; align-items: center; gap: 6px;
-  padding: 3px 0; cursor: pointer;
-  font-weight: 600;
-
-}
-
-.personal-onto-dest-template-caret {
-
-  font-size: 10px; width: 12px; flex-shrink: 0;
-  cursor: pointer; color: var(--personal-onto-muted);
-  display: inline-flex; align-items: center; justify-content: center;
-
-}
-.personal-onto-dest-template-caret .ui-icon { width: 12px; height: 12px; }
-
-.personal-onto-dest-template-name {
- font-weight: 600; 
-}
-
-.personal-onto-dest-template-partial {
- font-size: 11px; font-weight: 400; 
-}
-
-.personal-onto-dest-template-groups {
-
-  margin-left: 4px;
-  padding-left: 14px;
-  border-left: 2px solid var(--personal-onto-border);
-
-}
-
-.personal-onto-dest-group-row.is-template-child {
- padding-left: 4px; 
-}
-
 
 /* ── 自定义字段徽标（模板 T-box 之外的字段） ── */
 .memory-group-field-custom-badge {
@@ -21277,8 +20572,12 @@ body.model-not-configured .main-content { flex-direction: column; }
   white-space: nowrap;
 }
 
-/* ── 驳回弹窗内部布局（原版缺失：header/body/footer/textarea 无样式，内容靠左） ── */
+/* ── 角色模板库弹窗布局 ── */
 .personal-onto-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 14px 16px;
   font-size: 14px;
   font-weight: 600;
@@ -21288,25 +20587,6 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 .personal-onto-modal-body {
   padding: 14px 16px;
-}
-
-.personal-onto-modal-reason {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
-  border: 1px solid var(--personal-onto-border, #cbd5e1);
-  border-radius: 8px;
-  font-size: 13px;
-  font-family: inherit;
-  color: var(--personal-onto-fg, #1e293b);
-  resize: vertical;
-  min-height: 64px;
-}
-
-.personal-onto-modal-reason:focus {
-  outline: none;
-  border-color: var(--personal-onto-blue, #0E9F6E);
-  box-shadow: 0 0 0 2px rgba(14, 159, 110, 0.15);
 }
 
 .personal-onto-modal-footer {
@@ -23910,3 +23190,70 @@ body.model-not-configured .main-content { flex-direction: column; }
   .touchpoint-resource-row { grid-template-columns: auto minmax(0, 1fr); }
   .touchpoint-resource-type { grid-column: 2; }
 }
+
+/* Approval card management keeps the frequent edit path short and moves
+ * routing controls into an explicit advanced section. */
+.touchpoint-button-icon { width: 14px; height: 14px; margin-right: 6px; }
+.touchpoint-approval-manager { display: flex; flex-direction: column; gap: 18px; padding: 20px 2px 32px; color: var(--text); }
+.touchpoint-manager-header { display: flex; align-items: flex-start; gap: 12px; padding-bottom: 4px; }
+.touchpoint-manager-header > div:nth-child(2) { min-width: 0; flex: 1 1 auto; }
+.touchpoint-manager-header h1 { margin: 2px 0 5px; font-size: 26px; line-height: 1.2; letter-spacing: -.03em; }
+.touchpoint-manager-header p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.touchpoint-manager-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.touchpoint-back-icon { width: 17px; height: 17px; }
+.touchpoint-approval-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(270px, .9fr); gap: 18px; align-items: start; }
+.touchpoint-template-editor { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.touchpoint-scene-tabs { display: flex; gap: 5px; margin-bottom: 18px; padding: 4px; border-radius: 10px; background: var(--surface-2); }
+.touchpoint-scene-tab { flex: 1 1 0; min-width: 0; min-height: 34px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 11.5px; font-weight: 650; cursor: pointer; }
+.touchpoint-scene-tab.is-active { background: var(--surface); color: var(--text); box-shadow: 0 1px 4px color-mix(in srgb, var(--text) 10%, transparent); }
+.touchpoint-template-fields { display: grid; gap: 15px; }
+.touchpoint-template-fields label,
+.touchpoint-template-button-fields label,
+.touchpoint-template-routing label { display: flex; flex-direction: column; gap: 6px; color: var(--text-2, var(--muted)); font-size: 11.5px; font-weight: 650; }
+.touchpoint-template-fields input,
+.touchpoint-template-fields textarea,
+.touchpoint-template-button-fields input,
+.touchpoint-template-routing select { width: 100%; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 500; }
+.touchpoint-template-fields input,
+.touchpoint-template-button-fields input,
+.touchpoint-template-routing select { min-height: 38px; padding: 0 10px; }
+.touchpoint-template-fields textarea { min-height: 128px; padding: 10px; resize: vertical; line-height: 1.6; }
+.touchpoint-template-fields input:focus,
+.touchpoint-template-fields textarea:focus,
+.touchpoint-template-button-fields input:focus,
+.touchpoint-template-routing select:focus { outline: 2px solid color-mix(in srgb, var(--primary) 24%, transparent); border-color: var(--primary); }
+.touchpoint-template-button-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.touchpoint-template-variables,
+.touchpoint-template-advanced { margin-top: 15px; border-top: 1px solid var(--border); }
+.touchpoint-template-variables > summary,
+.touchpoint-template-advanced > summary { display: flex; align-items: center; gap: 9px; padding: 14px 0 3px; list-style: none; color: var(--text); font-size: 12px; font-weight: 700; cursor: pointer; }
+.touchpoint-template-variables > summary::-webkit-details-marker,
+.touchpoint-template-advanced > summary::-webkit-details-marker { display: none; }
+.touchpoint-template-variables > summary::after,
+.touchpoint-template-advanced > summary::after { content: '›'; margin-left: auto; color: var(--muted); font-size: 17px; transition: transform .16s ease; }
+.touchpoint-template-variables[open] > summary::after,
+.touchpoint-template-advanced[open] > summary::after { transform: rotate(90deg); }
+.touchpoint-template-variables summary small,
+.touchpoint-template-advanced summary small { margin-left: 2px; color: var(--muted); font-size: 10.5px; font-weight: 400; }
+.touchpoint-template-variable-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0 2px; }
+.touchpoint-template-variable-list code { padding: 4px 7px; border-radius: 5px; color: var(--primary); background: color-mix(in srgb, var(--primary) 9%, var(--surface-2)); font-size: 11px; }
+.touchpoint-advanced-icon { width: 14px; height: 14px; color: var(--muted); }
+.touchpoint-template-routing { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 8px 0 2px 23px; }
+.touchpoint-template-routing p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; font-weight: 400; }
+.touchpoint-template-preview { position: sticky; top: 18px; min-width: 0; padding: 18px; border: 1px solid color-mix(in srgb, var(--primary) 20%, var(--border)); border-radius: 14px; background: linear-gradient(145deg, color-mix(in srgb, var(--primary) 6%, var(--surface)), var(--surface)); }
+.touchpoint-template-preview-label { display: flex; align-items: center; gap: 7px; margin-bottom: 13px; color: var(--muted); font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
+.touchpoint-preview-icon { width: 14px; height: 14px; color: var(--primary); }
+.touchpoint-template-card { padding: 17px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 22px color-mix(in srgb, var(--text) 6%, transparent); }
+.touchpoint-template-card-badge { display: inline-flex; padding: 4px 7px; border-radius: 5px; color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--surface-2)); font-size: 10px; font-weight: 750; }
+.touchpoint-template-card h3 { margin: 14px 0 8px; font-size: 17px; line-height: 1.35; }
+.touchpoint-template-card p { min-height: 68px; margin: 0; color: var(--text-2, var(--muted)); font-size: 12px; line-height: 1.65; }
+.touchpoint-template-card-note { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10.5px; }
+.touchpoint-template-card-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+.touchpoint-template-card-actions button { min-height: 34px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 11.5px; font-weight: 650; }
+.touchpoint-template-card-actions button.is-primary { border-color: var(--primary); background: var(--primary); color: #fff; }
+.touchpoint-template-help { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--success) 5%, var(--surface)); }
+.touchpoint-template-help > div:first-child { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: 0 0 auto; border-radius: 8px; color: var(--success); background: color-mix(in srgb, var(--success) 11%, var(--surface)); }
+.touchpoint-template-help strong { display: block; margin: 2px 0 4px; font-size: 12px; }
+.touchpoint-template-help p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+@media (max-width: 820px) { .touchpoint-approval-layout { grid-template-columns: 1fr; } .touchpoint-template-preview { position: static; } }
+@media (max-width: 620px) { .touchpoint-manager-header { flex-wrap: wrap; } .touchpoint-manager-header > div:nth-child(2) { flex-basis: calc(100% - 52px); } .touchpoint-manager-actions { width: 100%; padding-left: 46px; } .touchpoint-manager-actions .btn { flex: 1 1 0; } .touchpoint-scene-tabs { overflow-x: auto; } .touchpoint-scene-tab { flex: 0 0 auto; min-width: 100px; } .touchpoint-template-button-fields, .touchpoint-template-routing { grid-template-columns: 1fr; } .touchpoint-template-routing { padding-left: 23px; } }

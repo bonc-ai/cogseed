@@ -3307,7 +3307,7 @@ let _agentPickerLoadedTabs = new Set();
 const _agentPickerTabLoads = new Map();
 let _pickerProjectContextLoading = false;
 let _pickerProjectContextSeq = 0;
-const _AGENT_PICKER_TAB_ORDER = ['agents', 'skills'];
+const _AGENT_PICKER_TAB_ORDER = ['agents', 'skills', 'connectors', 'library', 'ontology'];
 const _AGENT_PICKER_TABS = new Set(_AGENT_PICKER_TAB_ORDER);
 
 function _normalizeAgentPickerTab(tab) {

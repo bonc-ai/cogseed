@@ -74,7 +74,7 @@ interface Task {
 }
 
 const DEFAULT_DEFER_MS = 3_000;
-const SLOW_WARN_MS = 1_500;
+export const SLOW_WARN_MS = 1_500;
 
 const _immediate: Task[] = [];
 const _deferred: Task[] = [];
@@ -284,16 +284,40 @@ async function _runAdmitted(t: Task, phase: string): Promise<void> {
     }, Number(t.options.maxSliceMs));
     sliceTimer.unref?.();
   }
+  let completed = false;
+  let aborted = false;
   try {
     await Promise.resolve(t.fn(controller.signal));
+    completed = !controller.signal.aborted && !t.signal?.aborted;
   } catch (err) {
-    log.warn(`task threw phase=${phase} name=${t.name}: ${(err as Error).message}`);
+    aborted = controller.signal.aborted
+      || t.signal?.aborted === true
+      || (err as Error)?.name === 'AbortError';
+    if (!aborted) {
+      log.warn(`task threw phase=${phase} name=${t.name}: ${(err as Error).message}`);
+    }
   } finally {
     if (sliceTimer) clearTimeout(sliceTimer);
     t.signal?.removeEventListener('abort', abortFromTask);
   }
   const ms = Date.now() - t0;
-  if (ms > SLOW_WARN_MS) log.warn(`task slow phase=${phase} name=${t.name} ms=${ms}`);
+  if (completed && ms > SLOW_WARN_MS) log.warn(`task slow phase=${phase} name=${t.name} ms=${ms}`);
+}
+
+/** Test-only entry into the per-task runner (no registration side effects). */
+export async function runBootTaskForTest(
+  name: string,
+  fn: BootFn,
+  options: { signal?: AbortSignal; maxSliceMs?: number } = {},
+): Promise<void> {
+  return _runAdmitted({
+    name,
+    fn,
+    mode: 'parallel',
+    delayMs: 0,
+    options: { maxSliceMs: options.maxSliceMs },
+    ...(options.signal ? { signal: options.signal } : {}),
+  }, 'test');
 }
 
 async function _waitForAdmission(t: Task, phase: string): Promise<boolean> {

@@ -10,15 +10,15 @@ export type { CognitionCatalogKind, CognitionCatalogSource, CognitionSourceActio
 export { cognitionSourceControlId, isCognitionSourceEnabled, listCognitionSourceControls, readCognitionSourceControl } from './source-control';
 export type { CognitionSourceAvailability, CognitionSourceControlRecord, CognitionSourceRemovalImpact, RemoveCognitionSourceResult } from './source-control';
 
-export { deferRecallCandidate, importPersonalOntologyCandidate, listRecallCandidates, promoteRecallCandidate, readRecallCandidate, rejectRecallCandidate, updateRecallCandidate, resumeRecallCandidate, saveRecallCandidate } from './candidate-service';
-export type { AbilityAssetType, RecallAbilityAssetRecord, RecallCandidateRecord, RecallCandidateStatus, SaveRecallCandidateInput } from './candidate-service';
+export { deferRecallCandidate, importPersonalOntologyCandidate, listRecallCandidates, promoteRecallCandidate, readRecallAssetHandoffReceipt, readRecallCandidate, rejectRecallCandidate, updateRecallCandidate, resumeRecallCandidate, saveRecallCandidate } from './candidate-service';
+export type { AbilityAssetType, RecallAbilityAssetRecord, RecallAssetHandoffReceipt, RecallCandidateRecord, RecallCandidateStatus, SaveRecallCandidateInput } from './candidate-service';
 export { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 export type { AbilityAssetOntologyRef } from './ontology-refs';
 export { normalizeAbilityAssetDerivedFrom, normalizeAbilityAssetRelations, readAbilityAssetRelationContract } from './asset-relations';
 export type { AbilityAssetRelation, AbilityAssetRelationContract, AbilityAssetRelationKind } from './asset-relations';
 
-export { cancelRecallCapture, listRecallCaptures, pauseRecallCapture, queryRecallCaptures, queueManualRecallCaptureFromConversation, queueRecallCaptureFromTerminal, readRecallCapture, readRecallCaptureWorkflow, recoverRecallCaptures, resumeRecallCapture, retryRecallCapture, runRecallCapture, runRecallCaptureNow, scheduleRecallCapture, startRecallCaptureOrchestrator } from './capture-service';
-export type { CapturePromptMessage, ListRecallCapturesQuery, RecallCaptureCounts, RecallCaptureModelUsage, RecallCaptureNextAction, RecallCapturePage, RecallCaptureQueryStatus, RecallCaptureRecord, RecallCaptureReviewSummary, RecallCaptureStage, RecallCaptureStatus, RecallCaptureWorkflowRecord, RecallCaptureWorkflowStatus } from './capture-service';
+export { cancelRecallCapture, listRecallCaptures, pauseRecallCapture, queryRecallCaptures, queueManualRecallCaptureFromConversation, queueRecallCaptureFromTerminal, readRecallCapture, readRecallCaptureWorkflow, recoverRecallCaptures, resumeRecallCapture, retryRecallCapture, runRecallCapture, runRecallCaptureNow, scheduleRecallCapture, startHistoricalRecallCapture, startRecallCaptureOrchestrator } from './capture-service';
+export type { CapturePromptMessage, ListRecallCapturesQuery, RecallCaptureCandidatePromotion, RecallCaptureConfirmedAssetReceipt, RecallCaptureCounts, RecallCaptureModelUsage, RecallCaptureNextAction, RecallCapturePage, RecallCaptureQueryStatus, RecallCaptureRecord, RecallCaptureReviewSummary, RecallCaptureStage, RecallCaptureStatus, RecallCaptureWorkflowRecord, RecallCaptureWorkflowStatus } from './capture-service';
 
 export { isWithinNightlyWindow, nextNightlyRunAt, readRecallCaptureSettings, updateRecallCaptureSettings } from './capture-settings';
 export type { RecallCaptureExecutionPolicy, RecallCaptureSettingsRecord, UpdateRecallCaptureSettingsInput } from './capture-settings';
@@ -63,7 +63,7 @@ export type { RecallTaskTerminalEvent, RecallTaskTerminalStatus } from './termin
 export { recordEffectivenessFeedback, recordTaskEffectivenessFeedback } from './effectiveness-feedback';
 export type { RecallEffectivenessFeedback, RecordEffectivenessFeedbackInput, RecordTaskEffectivenessFeedbackInput } from './effectiveness-feedback';
 
-export { applyCausalRules, buildWorldModelForecastRecord, collectWorldSnapshot, readWorldModelForecast, reconcileWorldModel, saveWorldModelForecast, simulateWorld } from './world-model';
+export { applyCausalRules, buildWorldModelForecastRecord, collectWorldSnapshot, readWorldModelForecast, reconcileWorldModel, saveWorldModelForecast } from './world-model';
 export { normalizeCausalRule } from './world-model-types';
 export type { WorldModelReconciliationOptions } from './world-model-reconciliation';
 export type { CausalRule, CausalRuleSeverity, PredictedRisk, AcceptanceSignalResult, ActionDeltaDetail, ResultDeltaDetail, WorldModelAbilityAsset, WorldModelCausalRuleRef, WorldModelCoreState, WorldModelEnvironmentState, WorldModelForecast, WorldModelForecastRecord, WorldModelOntologyState, WorldModelPredicateKey, WorldModelSimulationInput, WorldModelSkillsState, WorldModelReconciliation, WorldModelSnapshot } from './world-model-types';

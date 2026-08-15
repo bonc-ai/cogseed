@@ -289,7 +289,6 @@ function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
     : view === 'skills' ? 'panel-skills'
     : view === 'recall' ? 'panel-recall'
-    : view === 'personal-ontology' ? 'panel-personal-ontology'
     : view === 'spaces' ? 'panel-spaces'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
@@ -364,6 +363,8 @@ async function initUser() {
 // ─── View routing ───
 
 function setView(view, cid, opts = {}) {
+  const openPersonalOntology = view === 'personal-ontology';
+  if (openPersonalOntology) view = 'recall';
   if (view === 'evolution') view = 'skills';
   if (currentView !== view || (view === 'conversation' && currentCid !== cid)) {
     _bootLog.info('view change', { view, cid: cid || undefined });
@@ -518,6 +519,11 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('recall-tab-refresh', () => {
       _loadViewFeature('recall', 'recall', () => {
         if (typeof initSkillsCognitionConsole === 'function') initSkillsCognitionConsole();
+        // 深链 setView('personal-ontology') 在 setView 顶部被归一化为 recall；
+        // 个人本体已内嵌为「关于我」tab，这里切过去（保留 develop 的归一化兼容）。
+        if (openPersonalOntology && typeof switchSkillsCognitionPage === 'function') {
+          switchSkillsCognitionPage('about-me');
+        }
         if (typeof loadSkillsCognitionSnapshot === 'function') {
           Promise.resolve(loadSkillsCognitionSnapshot())
             .catch((e) => _bootLog.warn('Recall refresh on tab entry failed', { error: (e && e.message) || String(e) }));
@@ -555,17 +561,6 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('auto-tab-load', () => {
       _loadViewFeature('auto', 'auto', () => {
         if (typeof loadAutoList === 'function') loadAutoList(true);
-      });
-    });
-  } else if (view === 'personal-ontology') {
-    currentCid = null;
-    _deferSidebarNavWork('personal-ontology-tab-load', () => {
-      // 个人本体已内嵌进认知资产：深链先切到「关于我」tab，再渲染。
-      _loadViewFeature('recall', 'personal-ontology', () => {
-        if (typeof switchSkillsCognitionPage === 'function') switchSkillsCognitionPage('about-me');
-        _loadViewFeature('personal-ontology', 'personal-ontology', () => {
-          if (typeof renderPersonalOntology === 'function') renderPersonalOntology();
-        });
       });
     });
   } else if (view === 'spaces') {

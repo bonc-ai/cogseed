@@ -47,6 +47,7 @@ import {
 } from './personal_ontology_groups';
 import { createLogger } from '../logger';
 import { registerDeferred } from '../util/boot_init';
+import { fileEditLock } from '../util/locks';
 import { getActiveUserId, hasActiveUser } from './users';
 
 export { readGroups };
@@ -489,32 +490,34 @@ async function mutateTemplateFile(
   templateId: string,
   mutator: TemplateMutator,
 ): Promise<{ ok: boolean; error?: string }> {
-  const content = parseTemplateContent(readTemplateFileText(uid, templateId));
-  const outcome = mutator(content);
-  if (outcome.error || outcome.ok === false) return { ok: false, error: outcome.error || 'failed' };
-
-  const next = serializeTemplateContent(content);
-  const bytes = Buffer.byteLength(next, 'utf8');
-  if (bytes > MAX_FILE_BYTES) {
-    return { ok: false, error: `file exceeds ${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB limit` };
-  }
-
   const abs = templateFileAbsPath(uid, templateId);
-  try {
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
-    writeTextAtomicSync(abs, next);
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  }
+  return fileEditLock(abs).runExclusive(async () => {
+    const content = parseTemplateContent(readTemplateFileText(uid, templateId));
+    const outcome = mutator(content);
+    if (outcome.error || outcome.ok === false) return { ok: false, error: outcome.error || 'failed' };
 
-  const groups = readGroups(uid);
-  const idx = groups.findIndex((g) => g.group_id === groupId);
-  if (idx !== -1) {
-    groups[idx] = { ...groups[idx], updated_at: nowIso() };
-    writeGroups(uid, groups);
-  }
-  notifyGroupUpserted(uid, `.personal_ontology_groups/${templateId}.md`);
-  return { ok: true };
+    const next = serializeTemplateContent(content);
+    const bytes = Buffer.byteLength(next, 'utf8');
+    if (bytes > MAX_FILE_BYTES) {
+      return { ok: false, error: `file exceeds ${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB limit` };
+    }
+
+    try {
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      writeTextAtomicSync(abs, next);
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+
+    const groups = readGroups(uid);
+    const idx = groups.findIndex((g) => g.group_id === groupId);
+    if (idx !== -1) {
+      groups[idx] = { ...groups[idx], updated_at: nowIso() };
+      writeGroups(uid, groups);
+    }
+    notifyGroupUpserted(uid, `.personal_ontology_groups/${templateId}.md`);
+    return { ok: true };
+  });
 }
 
 /** 定位模板文件里的分节；不存在 → null。 */
@@ -584,6 +587,54 @@ export async function appendFieldValueToRef(
     const values = sec.fields[name] || (sec.fields[name] = []);
     if (values.some((fv) => fv.value === val && fv.source === src && (fv.project ?? undefined) === proj)) {
       return { changed: false }; // 同值同源同项目去重
+    }
+    values.push({ value: val, source: src, ...(proj ? { project: proj } : {}) });
+    return { changed: true };
+  });
+}
+
+/**
+ * Automatic profile projection may only append to a field declared by the
+ * installed built-in role template and still present in the template file.
+ * Unlike appendFieldValueToRef, this never creates a field and never falls
+ * back to a free-form group.
+ */
+export async function appendExistingTemplateFieldValueToRef(
+  uid: string,
+  ref: string,
+  fieldName: string,
+  value: string,
+  source: string,
+  project?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
+  const { groupId, section } = splitContentRef(ref);
+  if (!section) return { ok: false, error: 'template section ref required' };
+
+  const name = String(fieldName || '').trim();
+  const val = String(value ?? '').trim();
+  if (!name) return { ok: false, error: 'field name required' };
+  if (!val) return { ok: false, error: 'empty value' };
+  const src = normalizeSource(source);
+  const proj = project ? String(project).trim() : undefined;
+
+  const meta = findTemplateMeta(uid, groupId);
+  if (!meta) return { ok: false, error: 'template group not found' };
+  const template = getRoleTemplate(meta.template_id);
+  const declared = template?.preset_groups.some((preset) =>
+    preset.title === section && preset.fields.some((field) => field.name === name),
+  );
+  if (!declared) return { ok: false, error: 'field is not declared by the role template' };
+
+  return mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
+    const sec = findSection(content, section);
+    if (!sec) return { ok: false, error: 'section not found' };
+    if (!Object.prototype.hasOwnProperty.call(sec.fields, name)) {
+      return { ok: false, error: 'field not found' };
+    }
+    const values = sec.fields[name];
+    if (values.some((fv) => fv.value === val && fv.source === src && (fv.project ?? undefined) === proj)) {
+      return { changed: false };
     }
     values.push({ value: val, source: src, ...(proj ? { project: proj } : {}) });
     return { changed: true };

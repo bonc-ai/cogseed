@@ -32,6 +32,12 @@ export interface RouteDecision {
   field_name?: string;
   /** 命中置信度：仅 high 允许自动填坑；medium/low 一律回退流水区（防误填污染画像）。 */
   confidence?: 'high' | 'medium' | 'low';
+  /**
+   * `flow` may be a valid model decision or a recoverable routing failure.
+   * Callers that only need a fallback can ignore this field; background profile
+   * projection uses it to retry provider/response failures instead of caching them.
+   */
+  failure?: 'model_unavailable' | 'invalid_response';
 }
 
 type BuildRunnerFn = typeof buildRunner;
@@ -107,12 +113,12 @@ export async function routeCandidateToField(
   try {
     const build = opts.buildRunnerFn ?? buildRunner;
     const tail = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    const { runner } = await build({ sessionId: `ontology-route-${tail}`, userId: uid });
+    const { runner } = await build({ sessionId: `reflect-ontology-route-${tail}`, userId: uid });
     const text = await runner.runReflection(prompt);
-    if (!text || !text.trim()) return { action: 'flow' };
+    if (!text || !text.trim()) return { action: 'flow', failure: 'invalid_response' };
 
     const decision = parseRouteDecision(text);
-    if (!decision) return { action: 'flow' };
+    if (!decision) return { action: 'flow', failure: 'invalid_response' };
     if (decision.action === 'field') {
       // 置信度门禁：仅 high 允许自动填坑；medium/low 回退流水区（防误填污染画像）
       if (decision.confidence !== 'high') {
@@ -125,12 +131,12 @@ export async function routeCandidateToField(
       );
       if (!hit) {
         log.warn('llm route returned unknown field, falling back to flow', { uid, decision });
-        return { action: 'flow' };
+        return { action: 'flow', failure: 'invalid_response' };
       }
     }
     return decision;
   } catch (err) {
     log.warn('llm route failed, falling back to flow', { uid, error: (err as Error).message });
-    return { action: 'flow' };
+    return { action: 'flow', failure: 'model_unavailable' };
   }
 }

@@ -52,6 +52,24 @@ const sourceMock = vi.hoisted(() => ({
     revokedAssetIds: revokeAssets ? ['aa-a'] : [],
     failedAssetIds: [],
   })),
+  removeCognitionSourceRef: vi.fn(async (_uid: string, source: { kind: string; id: string }, revokeAssets: boolean) => ({
+    control: { kind: source.kind, sourceId: source.id, availability: 'removed' },
+    affectedAssetIds: [],
+    revokedAssetIds: revokeAssets ? ['aa-a'] : [],
+    failedAssetIds: [],
+  })),
+}));
+const chatsMock = vi.hoisted(() => ({
+  getConversation: vi.fn(async () => ({
+    conversation_id: 'conv-delete',
+    title: 'Deleted conversation',
+    updated_at: '2026-08-14T00:00:00.000Z',
+  })),
+  deleteConversation: vi.fn(async () => true),
+}));
+const recycleBinMock = vi.hoisted(() => ({
+  createAppRecycleBatchForConversation: vi.fn(async () => ({ id: 'recycle-a' })),
+  createAppRecycleBatchForConversations: vi.fn(async () => ({ id: 'recycle-all' })),
 }));
 const captureMock = vi.hoisted(() => ({
   listRecallCaptures: vi.fn(async () => []),
@@ -64,7 +82,23 @@ const captureMock = vi.hoisted(() => ({
   cancelRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'cancelled' })),
   runRecallCaptureNow: vi.fn(async (_uid: string, id: string) => ({ id, status: 'queued' })),
   queueManualRecallCaptureFromConversation: vi.fn(async (_uid: string, conversationId: string) => ({ id: 'rcap-manual', conversationId, status: 'waiting_manual' })),
-  promoteRecallCaptureCandidate: vi.fn(async (_uid: string, id: string) => ({ candidate: { id }, asset: { id: 'aa-a' } })),
+  startHistoricalRecallCapture: vi.fn(async (_uid: string, conversationId: string) => ({
+    id: 'rcap-historical-auto', conversationId, status: 'queued', autoWrite: true,
+  })),
+  promoteRecallCaptureCandidate: vi.fn(async (_uid: string, id: string) => ({
+    candidate: { id },
+    asset: { id: 'aa-a' },
+    decision: { decision_id: 'rd_capture00000000' },
+    receipt: {
+      assetId: 'aa-a',
+      assetType: 'rule',
+      version: '1',
+      lifecycleStatus: 'user_confirmed_unverified',
+      scope: 'project',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-a' }],
+      reviewDecisionId: 'rd_capture00000000',
+    },
+  })),
 }));
 const captureSettingsMock = vi.hoisted(() => ({
   readRecallCaptureSettings: vi.fn(async (uid: string) => ({ id: 'settings', ownerId: uid, enabled: true, executionPolicy: 'smart', quietMinutes: 10, nightlyStart: '02:00', nightlyEnd: '06:00', catchUpMissed: true })),
@@ -84,16 +118,34 @@ const projectionMock = vi.hoisted(() => ({
   confirmContextProjection: vi.fn(async (_uid: string, id: string) => ({ id, status: 'confirmed' })),
   readContextProjection: vi.fn(async (_uid: string, id: string) => ({ id })),
 }));
-const preExecutionMock = vi.hoisted(() => ({
-  confirmProjectionAndPrepareDispatch: vi.fn(async (_uid: string, input: unknown) => ({
+const kstarClosureMock = vi.hoisted(() => ({
+  confirmKstarReview: vi.fn(async () => ({ episode: {}, review: {} })),
+}));
+const kstarReviewServiceMock = vi.hoisted(() => ({
+  readKstarReview: vi.fn(async () => ({
+    reviewState: 'needs_confirmation',
+    expectedResult: 'Expected',
+    actualResult: 'Actual',
+  })),
+}));
+
+const projectionDecisionMock = vi.hoisted(() => ({
+  confirmProjectionAndResumeCommander: vi.fn(async (_uid: string, input: unknown) => ({
     projection: { id: 'proj-a', status: 'confirmed' },
-    forecast: { id: 'wf-a' },
     resumed: true,
     ...input as object,
   })),
-  retryProjectionForecast: vi.fn(async (_uid: string, input: unknown) => ({
-    forecast: { id: 'wf-a' }, resumed: true, ...input as object,
+  retryProjectionInCommander: vi.fn(async (_uid: string, input: unknown) => ({
+    projection: { id: 'proj-a', status: 'confirmed' },
+    resumed: true,
+    ...input as object,
   })),
+  rejectProjectionAndResumeCommander: vi.fn(async (_uid: string, input: unknown) => ({
+    projection: { id: 'proj-a', status: 'rejected' },
+    resumed: true,
+    ...input as object,
+  })),
+  recoverLegacyPendingProjectionDispatch: vi.fn(async () => 'none' as const),
 }));
 const usageFeedbackMock = vi.hoisted(() => ({
   recordRecallMessageFeedback: vi.fn(async (_uid: string, input: unknown) => ({
@@ -123,6 +175,8 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => os.tmpdir()), isPackaged: false },
 }));
 vi.mock('../../../src/main/logger', () => ({ createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }), logFromRenderer: vi.fn() }));
+vi.mock('../../../src/main/features/chats', () => chatsMock);
+vi.mock('../../../src/main/features/recycle_bin', () => recycleBinMock);
 vi.mock('../../../src/main/features/recall/candidate-service', () => recallMock);
 vi.mock('../../../src/main/features/recall/asset-service', () => assetMock);
 vi.mock('../../../src/main/features/recall/source-catalog', () => sourceMock);
@@ -131,7 +185,15 @@ vi.mock('../../../src/main/features/recall/capture-settings', () => captureSetti
 vi.mock('../../../src/main/features/recall/recall-view-service', () => viewMock);
 vi.mock('../../../src/main/features/recall/teaching-service', () => teachingMock);
 vi.mock('../../../src/main/features/recall/context-projection', () => projectionMock);
-vi.mock('../../../src/main/features/kstar/pre-execution-service', () => preExecutionMock);
+vi.mock('../../../src/main/features/kstar/projection-decision-service', () => projectionDecisionMock);
+vi.mock('../../../src/main/features/kstar/task-closure', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/features/kstar/task-closure')>()),
+  confirmKstarReview: kstarClosureMock.confirmKstarReview,
+}));
+vi.mock('../../../src/main/features/kstar/review-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/features/kstar/review-service')>()),
+  readKstarReview: kstarReviewServiceMock.readKstarReview,
+}));
 vi.mock('../../../src/main/features/recall/usage-feedback-service', () => usageFeedbackMock);
 vi.mock('../../../src/main/features/recall/skill-draft-service', () => skillDraftMock);
 
@@ -168,7 +230,18 @@ describe('ipc › recall candidate governance', () => {
   it('routes validated save and governance actions with the active uid', async () => {
     await expect(call('recall.candidates.save', { judgment: 'Use decision logs', suggestedType: 'rule', suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] })).resolves.toMatchObject({ ok: true });
     expect(recallMock.saveRecallCandidate).toHaveBeenCalledWith(UID, expect.objectContaining({ judgment: 'Use decision logs', suggestedType: 'rule' }));
-    await expect(call('recall.candidates.promote', { candidateId: 'cand-a' })).resolves.toMatchObject({ ok: true, asset: { id: 'aa-a' } });
+    await expect(call('recall.candidates.promote', { candidateId: 'cand-a' })).resolves.toMatchObject({
+      ok: true,
+      asset: { id: 'aa-a' },
+      decision: { decision_id: 'rd_capture00000000' },
+      receipt: {
+        assetId: 'aa-a',
+        assetType: 'rule',
+        version: '1',
+        scope: 'project',
+        reviewDecisionId: 'rd_capture00000000',
+      },
+    });
     expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenCalledWith(UID, 'cand-a', { riskAcknowledged: false });
     await expect(call('recall.candidates.ignore', { candidateId: 'cand-a', note: 'not reusable' })).resolves.toMatchObject({ ok: true, candidate: { status: 'ignored' } });
     expect(recallMock.ignoreRecallCandidate).toHaveBeenCalledWith(UID, 'cand-a', 'not reusable');
@@ -308,6 +381,10 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('recall.captures.manualCreate', { conversationId: 'conv-a' }))
       .resolves.toMatchObject({ capture: { conversationId: 'conv-a', status: 'waiting_manual' } });
     expect(captureMock.queueManualRecallCaptureFromConversation).toHaveBeenCalledWith(UID, 'conv-a');
+    await expect(call('recall.captures.historicalAutoStart', { conversationId: 'conv-a' }))
+      .resolves.toMatchObject({ capture: { conversationId: 'conv-a', status: 'queued', autoWrite: true } });
+    expect(captureMock.startHistoricalRecallCapture).toHaveBeenCalledWith(UID, 'conv-a');
+    expect(captureMock.queueManualRecallCaptureFromConversation).toHaveBeenCalledTimes(1);
 
     await expect(call('recall.captures.settings.update', { executionPolicy: 'nightly', nightlyStart: '02:00' }))
       .resolves.toMatchObject({ ok: true, settings: { executionPolicy: 'nightly' } });
@@ -336,18 +413,53 @@ describe('ipc › recall candidate governance', () => {
     expect(teachingMock.revokeUserTeachingSignal).toHaveBeenCalledWith(UID, 'teach-a');
   });
 
-  it('routes KSTAR projection confirmation and Forecast retry through the pre-execution service', async () => {
+  it('writes a Recall source tombstone only after a conversation delete succeeds', async () => {
+    await expect(call('conversations.delete', { cid: 'conv-delete' }))
+      .resolves.toMatchObject({ ok: true, deleted: true });
+
+    expect(chatsMock.getConversation).toHaveBeenCalledWith(UID, 'conv-delete', undefined);
+    expect(chatsMock.deleteConversation).toHaveBeenCalledWith(UID, 'conv-delete', undefined);
+    expect(sourceMock.removeCognitionSourceRef).toHaveBeenCalledWith(UID, expect.objectContaining({
+      kind: 'conversation',
+      subtype: 'session',
+      scope: 'conversation',
+      id: 'conv-delete',
+      title: 'Deleted conversation',
+    }), false);
+  });
+
+  it('routes KStar projection decisions into the same Commander session', async () => {
     await expect(call('recall.projections.confirm', { projectionId: 'proj-a', cid: 'cid-a' }))
-      .resolves.toMatchObject({ ok: true, forecast: { id: 'wf-a' }, resumed: true });
-    expect(preExecutionMock.confirmProjectionAndPrepareDispatch).toHaveBeenCalledWith(UID, {
+      .resolves.toMatchObject({ ok: true, projection: { id: 'proj-a', status: 'confirmed' }, resumed: true });
+    expect(projectionDecisionMock.confirmProjectionAndResumeCommander).toHaveBeenCalledWith(UID, {
       projectionId: 'proj-a', cid: 'cid-a',
     });
 
     await expect(call('recall.projections.retryForecast', { projectionId: 'proj-a', cid: 'cid-a' }))
-      .resolves.toMatchObject({ ok: true, forecast: { id: 'wf-a' }, resumed: true });
-    expect(preExecutionMock.retryProjectionForecast).toHaveBeenCalledWith(UID, {
+      .resolves.toMatchObject({ ok: true, projection: { id: 'proj-a', status: 'confirmed' }, resumed: true });
+    expect(projectionDecisionMock.retryProjectionInCommander).toHaveBeenCalledWith(UID, {
       projectionId: 'proj-a', cid: 'cid-a',
     });
+
+    await expect(call('recall.projections.reject', { projectionId: 'proj-a', cid: 'cid-a', note: 'not now' }))
+      .resolves.toMatchObject({ ok: true, projection: { id: 'proj-a', status: 'rejected' }, resumed: true });
+    expect(projectionDecisionMock.rejectProjectionAndResumeCommander).toHaveBeenCalledWith(UID, {
+      projectionId: 'proj-a', cid: 'cid-a', note: 'not now',
+    });
+  });
+
+  it('routes KStar review confirmation and read through the closure services', async () => {
+    await expect(call('kstar.review.confirm', { episodeId: 'kse-episode-a', verdict: 'met' }))
+      .resolves.toMatchObject({ ok: true });
+    expect(kstarClosureMock.confirmKstarReview).toHaveBeenCalledWith(UID, 'kse-episode-a', { verdict: 'met' });
+
+    await expect(call('kstar.review.confirm', { episodeId: 'kse-episode-a', verdict: 'bogus' }))
+      .resolves.toMatchObject({ ok: false });
+    expect(kstarClosureMock.confirmKstarReview).toHaveBeenCalledTimes(1);
+
+    await expect(call('kstar.review.read', { episodeId: 'kse-episode-a' }))
+      .resolves.toMatchObject({ ok: true, review: { reviewState: 'needs_confirmation' } });
+    expect(kstarReviewServiceMock.readKstarReview).toHaveBeenCalledWith(UID, 'kse-episode-a');
   });
 
   it('rejects malformed source and capture inputs before feature calls', async () => {
@@ -371,6 +483,9 @@ describe('ipc › recall candidate governance', () => {
       .resolves.toMatchObject({ ok: false });
     await expect(call('recall.captures.pause', { captureId: '../bad' }))
       .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.captures.historicalAutoStart', { conversationId: '../bad' }))
+      .resolves.toMatchObject({ ok: false });
+    expect(captureMock.startHistoricalRecallCapture).not.toHaveBeenCalledWith(UID, '../bad');
     await expect(call('recall.projections.list', { status: 'unknown' }))
       .resolves.toMatchObject({ ok: false });
   });

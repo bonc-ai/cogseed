@@ -504,6 +504,20 @@ export async function removeCognitionSource(
   return removeSourceControl(userId, await resolveCognitionSource(userId, kind, sourceId), revokeAssets);
 }
 
+/**
+ * Write a source tombstone from a durable reference when the backing object
+ * has already been deleted. The catalog resolver intentionally only discovers
+ * live objects, so deletion workflows must use this narrow path after a
+ * successful delete rather than guessing from a now-missing source.
+ */
+export async function removeCognitionSourceRef(
+  userId: string,
+  source: CognitionSourceInput,
+  revokeAssets: boolean,
+): Promise<RemoveCognitionSourceResult> {
+  return removeSourceControl(userId, sourceRef(source), revokeAssets);
+}
+
 export async function previewCognitionSourceRemoval(
   userId: string,
   kind: CognitionCatalogKind,

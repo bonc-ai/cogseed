@@ -113,6 +113,7 @@ const _recordedCalls = vi.hoisted(
     [] as Array<{
       sid: string;
       message: string;
+      systemPrompt?: string;
       sourceMessageText?: string;
     }>,
 );
@@ -142,18 +143,13 @@ const _recordedToolDefinitions = vi.hoisted(
 );
 const _recordedNestedOutcomes: any[] = [];
 
-// Blocking projection gate: keep ordinary routing tests on the pre-gate path
-// by making the Recall preview fail; gating has dedicated coverage elsewhere.
-vi.mock("../../../../src/main/features/recall/context-projection", () => ({
-  previewContextProjection: vi.fn(async () => { throw new Error("no projection in integration routing tests"); }),
-}));
-
 vi.mock("../../../../src/main/model/client", () => ({
   async *streamChatWithModel(opts: any) {
     const sid = opts.sessionId || "";
     _recordedCalls.push({
       sid,
       message: String(opts.message || ""),
+      ...(opts.systemPrompt ? { systemPrompt: String(opts.systemPrompt) } : {}),
       ...(opts.sourceMessageText ? { sourceMessageText: String(opts.sourceMessageText) } : {}),
     });
     // Ephemeral worker sessions have a random id (`gworker-<cid>-<rand>`); a
@@ -282,6 +278,7 @@ vi.mock("../../../../src/main/features/local_agents/runner", () => ({
 let tmpDir: string;
 let prevWs: string | undefined;
 let prevWakeGate: string | undefined;
+let prevHostRouting: string | undefined;
 const TEST_UID = "u1";
 const AGENT_ID = "b8c7d6a5e4f3";
 const AGENT_NAME = "Writer";
@@ -297,8 +294,12 @@ beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "orkas-int-"));
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
   prevWakeGate = process.env.ORKAS_P3394_WAKE_GATE;
+  prevHostRouting = process.env.ORKAS_KSTAR_HOST_ROUTING;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
   process.env.ORKAS_P3394_WAKE_GATE = "0";
+  // Host routing off by default in bus tests: dispatch-mechanism tests are
+  // not governance tests. The dedicated host-routing describe enables it.
+  process.env.ORKAS_KSTAR_HOST_ROUTING = "0";
   process.env.ORKAS_LEGACY_RUN_WORKER_TEST = "0";
   _resetScripts();
   _recordedCalls.length = 0;
@@ -340,6 +341,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (prevHostRouting === undefined) delete process.env.ORKAS_KSTAR_HOST_ROUTING;
+  else process.env.ORKAS_KSTAR_HOST_ROUTING = prevHostRouting;
+
   // Drop conv state so workers terminate before the tmpDir is rm'd —
   // otherwise a half-finished worker writes after dir removal and we get
   // ENOENT log noise.
@@ -989,6 +993,31 @@ describe("group_chat state logging privacy", () => {
 });
 
 describe("group_chat bus integration › G8d in-process dispatch (run_worker / dispatch_to)", () => {
+  it('exposes kstar_control to the formal Commander when the rollout flag is enabled', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const previous = process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
+    process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = '1';
+    try {
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: '__capture_tool_definitions__' },
+        { type: 'final', text: 'captured' },
+      ]);
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        text: 'inspect KStar tools',
+      });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      expect(_recordedToolDefinitions.filter((tool) => tool.name === 'kstar_control')).toHaveLength(1);
+    } finally {
+      if (previous === undefined) delete process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
+      else process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = previous;
+    }
+  });
+
   // G8d step 3: dispatch tools run their target's turn in-process and hand the
   // result back as the tool result — no staging, no turn-end flush, no re-wake.
   // The commander reads the result and synthesises within the SAME turn. The
@@ -1358,6 +1387,88 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       payload: toolResult!.content,
     });
   });
+
+  it("grants ability assets ONLY via Commander dispatch — no host-side injection into agents", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const candidates = await import("../../../../src/main/features/recall/candidate-service");
+
+    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+      judgment: "Never leak asset context into delegated turns unless the Commander grants it.",
+      summary: "Commander-gated asset grant rule",
+      suggestedType: "rule",
+      suggestedScope: "review",
+      sourceRefs: [{ kind: "execution", id: "exec-gate" }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+
+    const AGENT_REPLY = "AGENT-OK-58d2";
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "audit the flow", ability_assets: [asset.id] },
+      },
+      { type: "final", text: "Synthesised." },
+    ]);
+    const agentSid = state.buildGmemberSessionId(cid, AGENT_ID);
+    _setScript(agentSid, [{ type: "final", text: AGENT_REPLY }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the audit" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    // The agent's system prompt received the Commander-granted asset block...
+    const agentCall = _recordedCalls.find((c) => c.sid === agentSid);
+    expect(agentCall).toBeTruthy();
+    expect(agentCall!.systemPrompt).toContain("<commander-dispatched-assets>");
+    expect(agentCall!.systemPrompt).toContain(asset.title);
+    // ...and NEVER the host-side confirmed-assets block.
+    expect(agentCall!.systemPrompt).not.toContain("<confirmed-ability-assets>");
+    // The Commander itself still gets automatic Recall injection.
+    const commanderCall = _recordedCalls.find((c) => c.sid === state.buildGconvSessionId(cid));
+    expect(commanderCall).toBeTruthy();
+    expect(commanderCall!.systemPrompt).toContain("<confirmed-ability-assets>");
+
+    // The dispatched grant landed in the usage ledger with outcome 'dispatched'.
+    const usage = await import("../../../../src/main/features/recall/usage-service");
+    const dispatchedRecords = (await usage.listRecallUsage(TEST_UID, asset.id))
+      .filter((record) => record.outcome === "dispatched");
+    expect(dispatchedRecords.length).toBeGreaterThanOrEqual(1);
+    expect(dispatchedRecords[0]).toMatchObject({
+      assetId: asset.id,
+      assetVersion: asset.version,
+      boundary: "real",
+    });
+  }, 10_000);
+
+  it("rejects dispatch with an unknown or inactive ability asset id", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "audit the flow", ability_assets: ["aa-does-not-exist"] },
+      },
+      { type: "final", text: "handled" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "MUST NOT RUN" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the audit" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    const toolResult = _recordedToolResults.find((r) => r.name === "dispatch_to");
+    expect(toolResult?.isError).toBe(true);
+    expect(JSON.parse(toolResult!.content).error).toMatch(/unknown ability asset/);
+    // The agent never started.
+    expect(_recordedCalls.filter((c) => c.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
+  }, 10_000);
 
   it.each(["agent_idle", "tool_idle"] as const)(
     "run_worker classifies coordinator %s aborts as retryable without claiming a user stop",
@@ -5121,6 +5232,229 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       ),
     ).toBe(true);
   }, 15_000);
+});
+
+
+describe("group_chat bus integration › Recall asset usage receipt", () => {
+  it("attaches the injected assets as a read-only citation receipt on the commander reply and records usage", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const layout = await import("../../../../src/main/util/project-layout");
+    const storage = await import("../../../../src/main/storage");
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const candidates = await import("../../../../src/main/features/recall/candidate-service");
+    const projections = await import("../../../../src/main/features/recall/context-projection");
+
+    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+      judgment: "Keep OAuth state checks before token exchange.",
+      summary: "OAuth state check rule",
+      suggestedType: "rule",
+      suggestedScope: "review",
+      sourceRefs: [{ kind: "execution", id: "exec-receipt" }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+    const preview = await projections.previewContextProjection(TEST_UID, {
+      taskRunId: "task-receipt",
+      purpose: "review",
+      taskText: "Audit OAuth login",
+      authorization: "workspace_policy",
+      confirm: true,
+    });
+    const messageFile = layout.conversationMessageFile(TEST_UID, cid);
+    fs.mkdirSync(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: "msg-card", ts: new Date().toISOString(), from: "commander", to: ["user"], text: "confirmed",
+      recall_projection_card: { projectionId: preview.id },
+    });
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "done with receipt" },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the approved task" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const messages = await readConversationMessages(cid);
+    const reply = messages.find((message) => message.from === "commander" && message.text === "done with receipt");
+    expect(reply).toBeTruthy();
+    expect(reply!.recall_citations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ asset_id: asset.id, projection_id: preview.id }),
+      ]),
+    );
+    const usage = await import("../../../../src/main/features/recall/usage-service");
+    const records = await usage.listRecallUsage(TEST_UID, asset.id);
+    expect(records.length).toBeGreaterThanOrEqual(1);
+  }, 10_000);
+});
+
+describe("group_chat bus integration › deterministic host routing (task turn)", () => {
+  it("opens a governed KStar task + confirmed projection for a task-shaped user message before the model turn", async () => {
+    process.env.ORKAS_KSTAR_HOST_ROUTING = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "I will review it." },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "审查一下 bus.ts 的守卫实现" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const taskState = await store.readConversationTaskState(TEST_UID, cid);
+    expect(taskState?.currentTaskId).toBeTruthy();
+    const requirement = await store.readKstarRequirement(TEST_UID, taskState!.currentRequirementId!);
+    expect(requirement?.projectionId).toBeTruthy();
+    const projections = await import("../../../../src/main/features/recall/context-projection");
+    const projection = await projections.readContextProjection(TEST_UID, requirement!.projectionId!);
+    expect(projection.status).toBe("confirmed");
+  }, 10_000);
+
+  it("leaves greetings untouched — zero KStar writes", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "hi" },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "你好" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const taskState = await store.readConversationTaskState(TEST_UID, cid);
+    expect(taskState?.currentTaskId).toBeFalsy();
+  }, 10_000);
+});
+
+describe("group_chat bus integration › KStar privileged dispatch approval", () => {
+  async function seedKstarControlledConversation(cid: string, options: { projectionStatus: "preview" | "confirmed"; forecastId?: string }) {
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const projections = await import("../../../../src/main/features/recall/context-projection");
+    const task = store.createKstarTaskRecord(TEST_UID, {
+      conversationId: cid,
+      title: "Approved task",
+    });
+    const requirement = store.createKstarRequirementRecord(TEST_UID, {
+      taskId: task.id,
+      conversationId: cid,
+      userMessageIds: ["msg-a"],
+      title: "Approved task",
+      goalText: "Change files",
+    });
+    const preview = await projections.previewContextProjection(TEST_UID, {
+      taskRunId: task.id,
+      purpose: "Use frozen OAuth review knowledge",
+      taskText: "Change files",
+    });
+    const projection = options.projectionStatus === "confirmed"
+      ? await projections.confirmContextProjection(TEST_UID, preview.id)
+      : preview;
+    requirement.projectionId = projection.id;
+    requirement.projectionIds = [projection.id];
+    if (options.forecastId) requirement.forecastId = options.forecastId;
+    await store.replaceKstarTask(TEST_UID, {
+      ...task,
+      requirementIds: [requirement.id],
+      currentRequirementId: requirement.id,
+    });
+    await store.replaceKstarRequirement(TEST_UID, requirement);
+    await store.writeConversationTaskState(TEST_UID, {
+      ...store.createInitialConversationTaskState(TEST_UID, cid),
+      currentTaskId: task.id,
+      currentRequirementId: requirement.id,
+      taskComplete: false,
+    });
+    return { task, requirement, projection };
+  }
+
+  it("blocks privileged dispatch but preserves an ordinary reply while approval is pending", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const seeded = await seedKstarControlledConversation(cid, { projectionStatus: "preview" });
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__call_tool__", name: "dispatch_to", input: { to: AGENT_NAME, message: "change files" } },
+      { type: "final", text: "I need your approval before execution." },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "MUST NOT RUN" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the approved task" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const result = _recordedToolResults.find((entry) => entry.name === "dispatch_to");
+    expect(JSON.parse(result!.content)).toMatchObject({
+      ok: false,
+      error_code: "kstar_projection_not_confirmed",
+    });
+    expect(_recordedCalls.filter((call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
+    const messages = await readConversationMessages(cid);
+    expect(messages).toContainEqual(expect.objectContaining({
+      from: "commander",
+      text: "I need your approval before execution.",
+    }));
+    expect(seeded.requirement.id).toBeTruthy();
+  });
+
+  it("stamps verified Projection and Forecast provenance after approval", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const seeded = await seedKstarControlledConversation(cid, { projectionStatus: "confirmed", forecastId: "wmf-a" });
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) => terminals.push(event));
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__call_tool__", name: "dispatch_to", input: { to: AGENT_NAME, message: "perform approved work" } },
+      { type: "final", text: "approved work done" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "agent work complete" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "execute approved task" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    expect(await waitUntil(() => terminals.length >= 1)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(terminals[0]).toMatchObject({
+      logical_run_id: seeded.task.id,
+      projection_id: seeded.projection.id,
+      forecast_id: "wmf-a",
+    });
+    unsubscribe();
+  }, 10_000);
+
+  it("still blocks a hand_off_to without a committed forecast when the task was NOT auto-created (once-only semantics)", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    // Pre-existing task with confirmed projection but NO forecast: this was
+    // not host-auto-created by THIS dispatch, so the forecast gate must hold.
+    await seedKstarControlledConversation(cid, { projectionStatus: "confirmed" });
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__call_tool__", name: "hand_off_to", input: { to: AGENT_NAME, message: "deliver the report" } },
+      { type: "final", text: "handed off" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "MUST NOT RUN" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "deliver the report" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    const toolResult = _recordedToolResults.find((r) => r.name === "hand_off_to");
+    expect(toolResult?.isError).toBe(true);
+    expect(JSON.parse(toolResult!.content).error).toMatch(/Forecast is not committed/);
+    // The agent never started.
+    expect(_recordedCalls.filter((c) => c.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
+  }, 10_000);
 });
 
 describe("group_chat bus integration › task terminal boundary", () => {

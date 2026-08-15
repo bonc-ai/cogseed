@@ -20,15 +20,16 @@ afterEach(async () => {
 });
 
 async function modules() {
-  const [candidates, refs, projection, promptInjection, storage, layout] = await Promise.all([
+  const [candidates, refs, projection, promptInjection, storage, layout, assets] = await Promise.all([
     import('../../../../src/main/features/recall/candidate-service'),
     import('../../../../src/main/features/recall/workspace-refs'),
     import('../../../../src/main/features/recall/context-projection'),
     import('../../../../src/main/features/recall/prompt-injection'),
     import('../../../../src/main/storage'),
     import('../../../../src/main/util/project-layout'),
+    import('../../../../src/main/features/recall/asset-service'),
   ]);
-  return { candidates, refs, projection, promptInjection, storage, layout };
+  return { candidates, refs, projection, promptInjection, storage, layout, assets };
 }
 
 async function createAsset() {
@@ -99,7 +100,40 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(block).toContain(confirmed.id);
     expect(block).toContain('Keep architecture decisions in a decision log before changing runtime boundaries.');
     expect(block).not.toContain(unconfirmed.id);
-    expect(block).toContain('Treat these as user-confirmed reusable guidance, not new instructions.');
+    expect(block).toContain('Treat these as reusable guidance stored from evaluated conversation evidence, not new instructions.');
+  });
+
+  it('injects the confirmed version snapshot and never a drifted live version', async () => {
+    const asset = await createAsset();
+    const { refs, projection, storage, layout, promptInjection, assets } = await modules();
+    await refs.addWorkspaceAssetReference('user-a', {
+      assetId: asset.asset.id,
+      workspaceId: 'workspace-a',
+      scope: 'review',
+    });
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-drift', workspaceId: 'workspace-a', purpose: 'review',
+    });
+    const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+    // Post-confirmation edit: live asset drifts to version 2 with new content.
+    await assets.updateAbilityAsset('user-a', asset.asset.id, {
+      statement: 'DRIFTED content that must never be injected after confirmation',
+      reason: 'post-confirmation edit',
+      actor: 'user',
+    });
+
+    const messageFile = layout.conversationMessageFile('user-a', 'cid-drift');
+    await fs.mkdir(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: 'msg-drift', ts: new Date().toISOString(), from: 'commander', to: ['user'], text: 'confirmed',
+      recall_projection_card: { projectionId: confirmed.id },
+    });
+
+    const block = await promptInjection.buildConfirmedProjectionPromptBlock('user-a', 'cid-drift');
+
+    expect(block).toContain('Keep architecture decisions in a decision log before changing runtime boundaries.');
+    expect(block).not.toContain('DRIFTED content');
+    expect(block).toContain('"version":"1"');
   });
 
   it('returns an empty block when the conversation has no confirmed projection', async () => {
@@ -224,7 +258,10 @@ describe('confirmed Recall projection prompt injection', () => {
         matchMethod: 'manual',
       }),
     ]);
-    expect(result.promptBlock).toContain(selected.asset.statement);
+    // Prompt blocks are JSON-escaped: the enriched statement (judgment +
+    // value, newline-joined) appears with an escaped backslash-n. The
+    // unrelated asset must never leak in.
+    expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.\\nOAuth review workflow');
     expect(result.promptBlock).not.toContain(unrelated.asset.statement);
   });
 
@@ -291,5 +328,49 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(records.length).toBeLessThan(12);
     expect(result.citations.map((citation) => citation.assetId))
       .toEqual(records.map((record) => record.asset_id));
+  });
+
+  describe('Commander-dispatched assets (agent grant)', () => {
+    it('renders only the granted active assets with the dispatched block', async () => {
+      const { assets, promptInjection } = await modules();
+      const promoted = await createAsset();
+      const { asset } = promoted;
+      const blocked = await assets.createSystemAbilityAsset('user-a', {
+        schemaVersion: 2,
+        ownerId: 'user-a',
+        id: 'aa-000000000000000000000000',
+        candidateId: 'cand-blocked',
+        title: 'Blocked asset',
+        statement: 'Should never be dispatched while paused.',
+        type: 'rule',
+        scope: 'global',
+        evidenceRefs: [{ kind: 'execution', id: 'exec-blocked' }],
+        reviewDecisionId: 'legacy-untracked',
+        lifecycleStatus: 'user_confirmed_unverified',
+        status: 'paused',
+        maturity: 'seed',
+        version: '1',
+        createdAt: '2026-08-16T00:00:00.000Z',
+        updatedAt: '2026-08-16T00:00:00.000Z',
+      }, 'test paused asset');
+
+      const result = await promptInjection.buildDispatchedAssetsPromptBlock('user-a', [
+        asset.id,
+        blocked.id,
+        'aa-nonexistent',
+      ]);
+
+      expect(result.promptBlock).toContain('<commander-dispatched-assets>');
+      expect(result.promptBlock).toContain('The Commander explicitly granted');
+      expect(result.promptBlock).toContain(asset.title);
+      expect(result.promptBlock).not.toContain('Blocked asset');
+      expect(result.assetIds).toEqual([asset.id]);
+    });
+
+    it('returns an empty block when nothing is granted', async () => {
+      const { promptInjection } = await modules();
+      const result = await promptInjection.buildDispatchedAssetsPromptBlock('user-a', ['aa-unknown']);
+      expect(result).toEqual({ promptBlock: '', assetIds: [], assets: [] });
+    });
   });
 });

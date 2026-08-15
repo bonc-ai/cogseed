@@ -10,7 +10,7 @@ import {
 } from './store';
 import type { RecallJsonRecord } from './types';
 import { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
-import type { RecallAbilityAssetRecord } from './candidate-service';
+import type { RecallAbilityAssetRecord, RecallAbilityAssetLifecycleStatus } from './candidate-service';
 import { readAbilityAssetRelationContract } from './asset-relations';
 import { readAbilityAssetSemantics } from './asset-semantics';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
@@ -67,7 +67,7 @@ export interface UpdateAbilityAssetInput {
   forbiddenWhen?: RecallAbilityAssetRecord['forbiddenWhen'];
   sensitivity?: RecallAbilityAssetRecord['sensitivity'];
   reason: string;
-  actor: 'user';
+  actor: AbilityAssetActor;
   acknowledgeRecommendation?: boolean;
   reviewDecisionId?: string;
   sourceCandidateId?: string;
@@ -76,7 +76,7 @@ export interface UpdateAbilityAssetInput {
 }
 
 export interface AbilityAssetUserActionInput {
-  actor: 'user';
+  actor: AbilityAssetActor;
   reason: string;
   reviewDecisionId?: string;
   sourceCandidateId?: string;
@@ -162,10 +162,13 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   const appliedReviewDecisionIds = Array.isArray(value.appliedReviewDecisionIds)
     ? [...new Set(value.appliedReviewDecisionIds.filter((id): id is string => typeof id === 'string' && /^rd_[A-Za-z0-9_-]{8,64}$/.test(id)))]
     : [];
+  const lifecycleStatus: RecallAbilityAssetLifecycleStatus = value.lifecycleStatus === 'automatically_extracted_unverified'
+    ? 'automatically_extracted_unverified'
+    : 'user_confirmed_unverified';
   return {
     ...value,
     reviewDecisionId: typeof value.reviewDecisionId === 'string' ? value.reviewDecisionId : 'legacy-untracked',
-    lifecycleStatus: 'user_confirmed_unverified',
+    lifecycleStatus,
     sourceCandidateIds,
     appliedReviewDecisionIds,
     evidenceRefs,
@@ -183,11 +186,13 @@ function bounded(value: unknown, field: string, max: number): string {
   return text;
 }
 
-function requireUserAction(input: unknown): AbilityAssetUserActionInput {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('ability asset action requires a user actor');
+function requireAssetAction(input: unknown): AbilityAssetUserActionInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('ability asset action requires an actor');
   const record = input as Record<string, unknown>;
-  if (record.actor !== 'user') throw new Error('ability asset action requires a user actor');
-  return { actor: 'user', reason: bounded(record.reason, 'reason', 1_000) };
+  if (record.actor !== 'user' && record.actor !== 'system') {
+    throw new Error('ability asset action requires a user actor or system actor');
+  }
+  return { actor: record.actor, reason: bounded(record.reason, 'reason', 1_000) };
 }
 
 function nextVersion(version: string): string {
@@ -276,9 +281,9 @@ export async function initializeAbilityAsset(userId: string, asset: RecallAbilit
 export async function createAbilityAsset(
   userId: string,
   input: CreateAbilityAssetInput,
-  metadata: { reason: string; actor: 'user' },
+  metadata: { reason: string; actor: AbilityAssetActor },
 ): Promise<RecallAbilityAssetRecord> {
-  if (metadata.actor !== 'user') throw new Error('ability asset creation requires a user actor');
+  if (metadata.actor !== 'user' && metadata.actor !== 'system') throw new Error('invalid ability asset creation actor');
   bounded(metadata.reason, 'reason', 1_000);
   assertNotForbiddenToPersist([
     input.title,
@@ -292,11 +297,11 @@ export async function createAbilityAsset(
   if (!safeId(validated.candidateId) || !/^rd_[A-Za-z0-9_-]{8,64}$/.test(validated.reviewDecisionId)) {
     throw new Error('invalid ability asset handoff identity');
   }
-  // 新资产的起点是 bud：走到这里说明用户在评审里确认过内容了，而 seed 在
-  // 规范 10.2 里是候选档——候选是 RecallCandidateRecord，不是资产。归成 seed
-  // 会和它自己的 lifecycleStatus「user_confirmed_unverified」自相矛盾，也会让
-  // 它在使用矩阵里一律 never，从此进不了任何 Agent 也升不了档。
-  if (validated.lifecycleStatus !== 'user_confirmed_unverified' || validated.maturity !== 'bud' || validated.version !== '1') {
+  const expectedLifecycle: RecallAbilityAssetLifecycleStatus = metadata.actor === 'system'
+    ? 'automatically_extracted_unverified'
+    : 'user_confirmed_unverified';
+  const expectedMaturity = metadata.actor === 'system' ? 'seed' : 'bud';
+  if (validated.lifecycleStatus !== expectedLifecycle || validated.maturity !== expectedMaturity || validated.version !== '1') {
     throw new Error('invalid initial ability asset lifecycle');
   }
   const stored = asAsset(await updateRecallJsonRecord(
@@ -309,6 +314,28 @@ export async function createAbilityAsset(
     throw new Error('ability asset idempotency identity mismatch');
   }
   await initializeAbilityAsset(userId, stored, metadata);
+  return stored;
+}
+
+/** System-authored formal asset boundary (KStar direct experience line).
+ *  Content-addressed and idempotent: the same asset id is never duplicated.
+ *  Validation happens through asAsset before the record is persisted. */
+export async function createSystemAbilityAsset(
+  userId: string,
+  input: RecallAbilityAssetRecord,
+  reason: string,
+): Promise<RecallAbilityAssetRecord> {
+  if (!safeId(userId) || !safeId(input.id) || !safeId(input.candidateId || '')) throw new Error('invalid system ability asset identity');
+  if (typeof reason !== 'string' || !reason.trim() || reason.length > 1_000) throw new Error('invalid system ability asset reason');
+  const validated = asAsset(input);
+  if (validated.ownerId !== userId) throw new Error('ability asset owner mismatch');
+  const stored = asAsset(await updateRecallJsonRecord(
+    userId,
+    'ability-assets',
+    validated.id,
+    (current) => current || validated,
+  ));
+  await initializeAbilityAsset(userId, stored, { reason: reason.trim(), actor: 'system' });
   return stored;
 }
 
@@ -331,7 +358,7 @@ export async function listAbilityAssets(userId: string): Promise<RecallAbilityAs
 
 export async function updateAbilityAsset(userId: string, assetId: string, input: UpdateAbilityAssetInput): Promise<RecallAbilityAssetRecord> {
   if ('id' in input || 'ownerId' in input) throw new Error('ability asset identity is immutable');
-  const action = requireUserAction(input);
+  const action = requireAssetAction(input);
   const evidenceRefs = input.evidenceRefs === undefined ? undefined : normalizeCognitionSourceRefs(input.evidenceRefs);
   if (evidenceRefs && !evidenceRefs.length) throw new Error('ability asset evidence is required');
   const ontologyRefs = input.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(input.ontologyRefs);
@@ -343,6 +370,9 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
   if ((reviewDecisionId === undefined) !== (sourceCandidateId === undefined)) throw new Error('incomplete ability asset review handoff');
   if (reviewDecisionId !== undefined && !/^rd_[A-Za-z0-9_-]{8,64}$/.test(reviewDecisionId)) throw new Error('invalid ability asset review decision');
   if (sourceCandidateId !== undefined && !safeId(sourceCandidateId)) throw new Error('invalid ability asset source candidate');
+  if (action.actor === 'system' && reviewDecisionId === undefined) {
+    throw new Error('system asset action requires an automatic review handoff');
+  }
   assertNotForbiddenToPersist([
     input.title,
     input.statement,
@@ -419,12 +449,15 @@ async function setStatus(
   guard?: (current: RecallAbilityAssetRecord) => void,
   auditAction: AbilityAssetAuditRecord['action'] = STATUS_AUDIT_ACTION[status],
 ): Promise<RecallAbilityAssetRecord> {
-  const action = requireUserAction(input);
+  const action = requireAssetAction(input);
   const reviewDecisionId = input.reviewDecisionId;
   const sourceCandidateId = input.sourceCandidateId;
   if ((reviewDecisionId === undefined) !== (sourceCandidateId === undefined)) throw new Error('incomplete ability asset review handoff');
   if (reviewDecisionId !== undefined && !/^rd_[A-Za-z0-9_-]{8,64}$/.test(reviewDecisionId)) throw new Error('invalid ability asset review decision');
   if (sourceCandidateId !== undefined && !safeId(sourceCandidateId)) throw new Error('invalid ability asset source candidate');
+  if (action.actor === 'system' && reviewDecisionId === undefined) {
+    throw new Error('system asset action requires an automatic review handoff');
+  }
   let clearedRecommendation = false;
   let changed = false;
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
@@ -542,7 +575,7 @@ export async function setAbilityAssetCrossScopeConfirmation(
   confirmed: boolean,
   input: AbilityAssetUserActionInput,
 ): Promise<RecallAbilityAssetRecord> {
-  const action = requireUserAction(input);
+  const action = requireAssetAction(input);
   let changed = false;
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
@@ -678,7 +711,7 @@ export async function rollbackAbilityAsset(
   toVersion: string,
   input: AbilityAssetUserActionInput,
 ): Promise<RecallAbilityAssetRecord> {
-  const action = requireUserAction(input);
+  const action = requireAssetAction(input);
   // 先判终态再查版本：彻底清除会一并删掉版本流，反过来的顺序会把「已被清除」
   // 报成「版本不存在」，让调用方以为是自己传错了版本号。
   assertNotPurged(await readAbilityAsset(userId, assetId));
@@ -710,6 +743,22 @@ export async function listAbilityAssetVersions(userId: string, assetId: string):
   return (await listRecallJsonlRecords(userId, 'ability-asset-versions', assetId, 0)).map(asVersion);
 }
 
+/** Read the immutable content snapshot of a specific asset version, or null
+ *  when no such version record exists. Used by prompt injection so confirmed
+ *  Projections keep injecting exactly the knowledge the user approved. */
+export async function readAbilityAssetVersionSnapshot(
+  userId: string,
+  assetId: string,
+  version: string,
+): Promise<AbilityAssetVersionRecord['snapshot'] | null> {
+  if (!safeId(userId) || !safeId(assetId) || typeof version !== 'string' || !version.trim()) {
+    throw new Error('invalid ability asset version reference');
+  }
+  const records = await listAbilityAssetVersions(userId, assetId);
+  const match = records.find((record) => record.version === version);
+  return match?.snapshot ?? null;
+}
+
 export async function listAbilityAssetAudit(userId: string, assetId: string): Promise<AbilityAssetAuditRecord[]> {
   return (await listRecallJsonlRecords(userId, 'ability-asset-audit', assetId, 0)) as AbilityAssetAuditRecord[];
 }
@@ -731,6 +780,41 @@ export async function setAbilityAssetMaturity(userId: string, assetId: string, m
  * User Confirmed / Unverified 档，正好表达「资产仍在、效果待重新验证」。来源随后
  * 恢复也不会自动升回去，新的 proof 才能升阶。
  */
+/**
+ * 证据撤销后暂停由它支撑的正式资产（系统发起，幂等）。
+ *
+ * 资产仍是用户确认过的正式资产，不删除、不撤销；但来源链已失效，暂停后不再进入
+ * 新 Projection、不再注入 Prompt，直到用户显式恢复（resume 仍要求 user actor）。
+ */
+export async function pauseAbilityAssetForRevokedEvidence(
+  userId: string,
+  assetId: string,
+  source: Pick<CognitionSourceRef, 'kind' | 'id'>,
+): Promise<{ asset: RecallAbilityAssetRecord; paused: boolean }> {
+  if (typeof source.kind !== 'string' || !safeId(source.id)) throw new Error('invalid revoked evidence source');
+  let paused = false;
+  const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    if (
+      current.status === 'purged'
+      || current.status === 'revoked'
+      || current.status === 'paused'
+      || !current.evidenceRefs.some((ref) => ref.kind === source.kind && ref.id === source.id)
+    ) return current;
+    paused = true;
+    return { ...current, status: 'paused', updatedAt: new Date().toISOString() };
+  });
+  const asset = asAsset(updated);
+  if (paused) {
+    await appendAudit(userId, asset.id, 'paused', {
+      note: `evidence_revoked:${source.kind}:${source.id}`,
+      actor: 'system',
+    });
+  }
+  return { asset, paused };
+}
+
 export async function downgradeAbilityAssetMaturityForRevokedEvidence(
   userId: string,
   assetId: string,

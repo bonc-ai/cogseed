@@ -1,4 +1,5 @@
 import { createLogger } from '../../logger';
+import { normalizeCognitionSourceRefs, type CognitionSourceRef } from '../recall/source-service';
 import { subscribeTaskTerminals, type TaskTerminalEvent, type TaskTerminalListener } from '../group_chat/bus';
 import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../cogseed_runtime/protocol';
 import type { RecallCandidateRecord } from '../recall/candidate-service';
@@ -15,6 +16,7 @@ import { createInitialKstarReview, readKstarReview, saveKstarReview, saveKstarRe
 import { inferKstarReview, type KstarReviewInferenceResult } from './review-inference';
 import { postKstarReviewCard } from './review-card';
 import type { KstarEpisodeRecord, KstarExtractionRunRecord, KstarReviewRecord } from './types';
+import { readConversationTaskState, readKstarRequirement } from './requirement-store';
 
 const log = createLogger('kstar.task-closure');
 const closureLocks = new Map<string, Promise<KstarClosureResult>>();
@@ -105,6 +107,18 @@ async function reconcileKstarExtraction(
   let errorCode: string | undefined;
   try {
     candidates = proposals.length ? await bridge(userId, proposals) : [];
+    if (proposals.length) {
+      try {
+        const { precipitateDirectExperienceAssets } = await import('./direct-experience-assets');
+        await precipitateDirectExperienceAssets(userId, episode, proposals);
+      } catch (error) {
+        log.warn('kstar direct experience precipitation failed', {
+          userId,
+          episodeId: episode.id,
+          error: (error as Error).message,
+        });
+      }
+    }
   } catch {
     status = 'failed';
     errorCode = 'candidate_bridge_failed';
@@ -222,13 +236,86 @@ export async function confirmKstarReview(
   });
 }
 
+/** Merge Commander-submitted completion evidence (kstar_control.finish) into
+ *  an episode, so the review pipeline consumes the terminal evidence the
+ *  Commander explicitly declared. Explicit evidence wins over message-derived
+ *  text; missing evidence leaves the episode untouched. */
+async function enrichEpisodeFromRequirementEvidence(
+  userId: string,
+  conversationId: string,
+  episode: KstarEpisodeRecord,
+): Promise<KstarEpisodeRecord> {
+  try {
+    const state = await readConversationTaskState(userId, conversationId);
+    const requirement = state?.currentRequirementId
+      ? await readKstarRequirement(userId, state.currentRequirementId)
+      : null;
+    const evidence = requirement?.completionEvidence;
+    if (!evidence) return episode;
+    const r = { ...episode.r };
+    // Explicit Commander-submitted terminal evidence wins over message-derived text.
+    if (evidence.finalText?.trim()) r.finalText = evidence.finalText;
+    if (evidence.producedFiles.length) {
+      r.producedFiles = Array.from(new Set([...(r.producedFiles || []), ...evidence.producedFiles])).slice(0, 50);
+    }
+    if (!r.finalText?.trim() && !r.producedFiles.length) return episode;
+    return { ...episode, r };
+  } catch (error) {
+    log.warn('kstar completion evidence merge degraded', {
+      userId,
+      conversationId,
+      error: (error as Error).message,
+    });
+    return episode;
+  }
+}
+
 export async function captureRuntimeKstarClosure(input: RuntimeKstarClosureInput): Promise<KstarClosureResult> {
   const episode = buildRuntimeKstarEpisode(input);
   return serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.bridge, input.inferReview));
 }
 
 export async function captureGroupKstarClosure(input: GroupKstarClosureInput): Promise<KstarClosureResult> {
-  const episode = buildGroupKstarEpisode(input);
+  // Five-source evidence context: delta-r/delta-a reasoning evolves from ALL
+  // cognition sources. Teaching signals + execution evaluations bound to this
+  // conversation are resolved host-side and attached to the episode before
+  // review inference; connectors may add authorized_external_system refs.
+  let teachingRefs: CognitionSourceRef[] = [];
+  let executionRefs: CognitionSourceRef[] = [];
+  try {
+    const [signals, executionGroups] = await Promise.all([
+      import('../recall/teaching-service').then((m) => m.listUserTeachingSignals(input.userId, {
+        conversationId: input.conversationId,
+        status: 'active',
+        limit: 50,
+      })),
+      import('../recall/source-catalog').then((m) => m.listCognitionSources(input.userId, {
+        kinds: ['execution_evaluation'],
+        conversationId: input.conversationId,
+        limit: 10,
+      })),
+    ]);
+    teachingRefs = normalizeCognitionSourceRefs(signals.map((signal) => ({
+      kind: 'user_teaching_signal',
+      subtype: 'teaching',
+      scope: signal.scope,
+      id: signal.id,
+      ...(signal.title ? { title: signal.title } : {}),
+    })));
+    executionRefs = executionGroups.flatMap((group) => group.items);
+  } catch (error) {
+    log.warn('kstar five-source evidence resolution degraded', {
+      userId: input.userId,
+      conversationId: input.conversationId,
+      error: (error as Error).message,
+    });
+  }
+  const built = buildGroupKstarEpisode({
+    ...input,
+    ...(teachingRefs.length ? { userTeachingSignalRefs: teachingRefs } : {}),
+    ...(executionRefs.length ? { executionEvaluationRefs: executionRefs } : {}),
+  });
+  const episode = await enrichEpisodeFromRequirementEvidence(input.userId, input.conversationId, built);
   const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.bridge, input.inferReview));
   try {
     const { attachKstarEpisodeToCurrentRequirement } = await import('./requirement-state');
@@ -331,7 +418,6 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
   const subscribe = runtime.subscribe || subscribeTaskTerminals;
   const loadMessages = runtime.readMessages || defaultGroupMessageLoader;
   const capture = runtime.capture || captureGroupKstarClosure;
-  const publishReviewCard = runtime.publishReviewCard || defaultReviewCardPublisher;
   const seen = new Set<string>();
   const inFlight = new Set<string>();
   const listener: TaskTerminalListener = (event: TaskTerminalEvent) => {
@@ -354,9 +440,11 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
           ...(event.projection_id ? { projectionId: event.projection_id } : {}),
           ...(event.forecast_id ? { forecastId: event.forecast_id } : {}),
         });
-        if (event.status === 'completed' && result?.review?.needsConfirmation) {
-          await publishReviewCard(event.user_id, event.conversation_id, result.review);
-        }
+        // Self-evolution is Agent-implemented: the review is automatically
+        // precipitated (direct ability-asset line) without asking the user to
+        // confirm the expected-vs-actual comparison — the user neither made
+        // the prediction nor observes the execution internals, so they cannot
+        // verify it. No review card is posted.
         inFlight.delete(key);
         seen.add(key);
       } catch {

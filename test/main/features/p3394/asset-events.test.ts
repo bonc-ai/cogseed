@@ -17,7 +17,6 @@ beforeEach(async () => {
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
 });
-
 afterEach(() => {
   process.env.ORKAS_WORKSPACE_ROOT = prevWs;
   fs.rmSync(testRoot, { recursive: true, force: true });
@@ -148,4 +147,3 @@ describe('audit-receipt › 生成与读取', () => {
     expect(back?.after_ref).toBe('asset:sk-020@1.0.0');
   });
 });
-

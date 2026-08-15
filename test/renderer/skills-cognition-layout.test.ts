@@ -174,15 +174,29 @@ describe('Recall cognition workspace layout', () => {
     expect(css).toContain('height: fit-content');
   });
 
-  it('scrolls only the memory list while keeping the detail pane fixed on desktop', () => {
+  it('scrolls the combined page while keeping the formal memory list independently scrollable on desktop', () => {
     const css = recallCss;
     const desktopStart = css.indexOf('@media (min-width: 901px)');
     const desktopEnd = css.indexOf('@media (max-width: 900px)', desktopStart);
     const desktopRules = css.slice(desktopStart, desktopEnd);
-    expect(desktopRules).toContain('#skills-cognition-assets { overflow: hidden; }');
+    expect(desktopRules).toContain('#skills-cognition-assets { overflow-x: hidden; overflow-y: auto; }');
+    expect(desktopRules).toContain('#skills-cognition-assets-body { height: min(620px, calc(100vh - 184px)); min-height: 520px; }');
     expect(desktopRules).toMatch(/\.ability-asset-list-body\s*\{[\s\S]*overflow-y:\s*auto;/);
     expect(desktopRules).toMatch(/\.ability-asset-detail\s*\{[\s\S]*height:\s*100%;/);
     expect(desktopRules).toContain('overscroll-behavior: contain');
+  });
+
+  it('keeps the cognition asset header compact and removes the personal tag surface', () => {
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
+    const zh = JSON.parse(fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/zh.json'), 'utf-8'));
+    expect(html).toContain('<h1 data-i18n="cognition.title">认知资产</h1>');
+    expect(zh['cognition.title']).toBe('认知资产');
+    expect(recallCss).toMatch(/\.skills-cognition-header\s*\{[^}]*min-height:\s*48px;[^}]*padding:\s*6px 20px;/s);
+    expect(recallCss).toMatch(/\.skills-cognition-header h1\s*\{[^}]*font-size:\s*16px;/s);
+    expect(recallCss).not.toContain('.ability-profile-');
+    expect(recallCss).not.toContain('.ability-personal-memory-');
+    expect(skills).not.toContain("window.cogseed.invoke('personalOntology.profile.summary'");
+    expect(skills).not.toContain('data-personal-ontology-manage');
   });
 
   it('shows source health and conversation capture next actions in the existing overview', () => {
@@ -274,6 +288,11 @@ describe('Recall cognition workspace layout', () => {
         'cognition.capture_review_title',
         'cognition.capture_review_hint',
         'cognition.capture_review_empty',
+        'cognition.memory_content',
+        'cognition.personal_ontology_section',
+        'cognition.personal_ontology_section_hint',
+        'cognition.personal_memories_section',
+        'cognition.personal_memories_section_hint',
         'cognition.ability_assets',
         'cognition.generate_skill',
         'cognition.add_to_skill_library',
