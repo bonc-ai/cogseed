@@ -6,6 +6,7 @@ import {
   createMateAnthropicProvider,
   createMateGeminiProvider,
   createMateOpenAICompatibleProvider,
+  createMateOpenAIResponsesProvider,
   createMateRuntimeProvider,
 } from '../../../../src/main/features/cogseed_backend/model-provider';
 
@@ -399,4 +400,106 @@ describe('CogSeed multi-protocol Runtime Provider', () => {
     expect(calls[0].url).toBe('https://provider.test/v1/chat/completions');
     expect(calls[0].init?.headers).toMatchObject({ Authorization: 'Bearer sk-secret-value-must-not-leak' });
   });
+
+describe('CogSeed OpenAI Responses Model Provider', () => {
+  function responsesProfile(overrides: Partial<MateProviderProfile> = {}): MateProviderProfile {
+    return {
+      profileId: 'openai:default',
+      provider: 'openai',
+      protocol: 'openai-responses',
+      model: 'gpt-5.6-sol',
+      apiKey: 'sk-secret-responses-key',
+      baseUrl: 'https://api.openai.com/v1',
+      maxOutputTokens: 8192,
+      ...overrides,
+    };
+  }
+
+  it('posts a Responses request and streams text + usage from SSE events', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const provider = createMateOpenAIResponsesProvider({
+      resolveProfile: async () => responsesProfile(),
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), init });
+        return sseResponse([
+          'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+          'data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_1","role":"assistant"}}\n\n',
+          'data: {"type":"response.content_part.added","part":{"type":"output_text","text":""}}\n\n',
+          'data: {"type":"response.output_text.delta","delta":"Checking. "}\n\n',
+          'data: {"type":"response.output_text.delta","delta":"Done."}\n\n',
+          'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":30,"output_tokens":8,"total_tokens":38,"input_tokens_details":{"cached_tokens":10}}}}\n\n',
+        ]);
+      },
+    });
+
+    const events = await collect(provider(REQUEST));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://api.openai.com/v1/responses');
+    expect(calls[0].init?.headers).toMatchObject({ Authorization: 'Bearer sk-secret-responses-key' });
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+      model: 'gpt-5.6-sol',
+      stream: true,
+      store: false,
+      instructions: REQUEST.systemPrompt,
+      max_output_tokens: 8192,
+      input: [{ role: 'user', content: REQUEST.message }],
+      tools: [{
+        type: 'function',
+        name: 'read_file',
+        description: 'Read a visible file.',
+      }],
+    });
+    expect(events).toEqual([
+      { type: 'delta', text: 'Checking. ' },
+      { type: 'delta', text: 'Done.' },
+      // cached tokens (10) subtracted from input_tokens (30) → 20
+      { type: 'usage', usage: { inputTokens: 20, outputTokens: 8, totalTokens: 38 } },
+    ]);
+  });
+
+  it('aggregates function_call arguments across delta / done / output_item.done events', async () => {
+    const provider = createMateOpenAIResponsesProvider({
+      resolveProfile: async () => responsesProfile(),
+      fetchImpl: async () => sseResponse([
+        'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_7","name":"read_file","arguments":""}}\n\n',
+        'data: {"type":"response.function_call_arguments.delta","delta":"{\\\"path\\\":\\\"not"}\n\n',
+        'data: {"type":"response.function_call_arguments.delta","delta":"es.txt\\\"}"}\n\n',
+        'data: {"type":"response.function_call_arguments.done","arguments":"{\\\"path\\\":\\\"notes.txt\\\"}"}\n\n',
+        'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"fc_1","call_id":"call_7","name":"read_file","arguments":"{\\\"path\\\":\\\"notes.txt\\\"}"}}\n\n',
+        'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}\n\n',
+      ]),
+    });
+
+    const events = await collect(createRuntimeModelAdapter({ provider }).stream(REQUEST));
+
+    expect(events).toEqual([
+      { type: 'tool_call', call: { id: 'call_7', name: 'read_file', arguments: { path: 'notes.txt' } } },
+      { type: 'usage', usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 } },
+      { type: 'done' },
+    ]);
+  });
+
+  it('rejects a stream that never completes and redacts the key on 401', async () => {
+    const truncated = createMateOpenAIResponsesProvider({
+      resolveProfile: async () => responsesProfile(),
+      fetchImpl: async () => sseResponse(['data: {"type":"response.created","response":{"id":"resp_1"}}\n\n']),
+    });
+    await expect(collect(createRuntimeModelAdapter({ provider: truncated }).stream(REQUEST))).resolves.toEqual([
+      expect.objectContaining({ type: 'error', message: expect.stringMatching(/response.completed/i) }),
+      { type: 'done' },
+    ]);
+
+    const rejected = createMateOpenAIResponsesProvider({
+      resolveProfile: async () => responsesProfile(),
+      fetchImpl: async () => new Response('bad key sk-secret-responses-key', { status: 401 }),
+    });
+    const events = await collect(createRuntimeModelAdapter({ provider: rejected }).stream(REQUEST));
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'error', code: 'provider_auth' }),
+      { type: 'done' },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('sk-secret-responses-key');
+  });
+});
 });

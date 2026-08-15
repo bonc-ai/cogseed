@@ -265,4 +265,22 @@ describe('CogSeed provider profiles', () => {
       protocol: 'openai-completions',
     });
   });
+
+  it('resolves an openai API-key profile to the OpenAI Responses wire protocol', async () => {
+    await activateAndAddApiKey(USER_A, 'openai', 'sk-openai-responses-key');
+
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(USER_B);
+    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+
+    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+      profileId: 'openai:default',
+      provider: 'openai',
+      protocol: 'openai-responses',
+      model: 'mate-test-model',
+      apiKey: 'sk-openai-responses-key',
+      baseUrl: 'https://api.openai.com/v1',
+      maxOutputTokens: 8192,
+    });
+  });
 });

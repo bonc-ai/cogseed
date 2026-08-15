@@ -18,6 +18,7 @@ export interface MateProviderProfile {
  *  baseUrl. Endpoint values mirror external-providers.ts / pi-ai models. */
 const DEFAULT_BASE_URLS: Readonly<Record<string, string>> = {
   'openai-compatible': '',
+  openai: 'https://api.openai.com/v1',
   anthropic: 'https://api.anthropic.com',
   'kimi-coding': 'https://api.kimi.com/coding',
   google: 'https://generativelanguage.googleapis.com',
@@ -47,6 +48,8 @@ function assertHttpBaseUrl(value: string | undefined, provider: string): string 
 const ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 /** Gemini caps are optional; a sane default keeps long generations bounded. */
 const GEMINI_DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+/** OpenAI Responses caps are optional too; 8192 keeps unbounded relays sane. */
+const OPENAI_RESPONSES_DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 
 /**
  * Resolve the runtime model profile for an explicit user: walks the priority
@@ -69,6 +72,8 @@ export async function resolveMateModelProfile(
     maxOutputTokens = ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS;
   } else if (choice.protocol === 'gemini' && !maxOutputTokens) {
     maxOutputTokens = GEMINI_DEFAULT_MAX_OUTPUT_TOKENS;
+  } else if (choice.protocol === 'openai-responses' && !maxOutputTokens) {
+    maxOutputTokens = OPENAI_RESPONSES_DEFAULT_MAX_OUTPUT_TOKENS;
   }
   return {
     profileId: choice.profileId,

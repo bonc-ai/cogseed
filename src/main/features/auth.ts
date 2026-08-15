@@ -2239,7 +2239,7 @@ export function cancelOAuthFlow(flowId: string): { ok: boolean } {
 // ── Chat entry picker (runner integration) ───────────────────────────────
 
 /** Wire protocols the CogSeed runtime model providers can speak natively. */
-export type RuntimeChatProtocol = 'openai-completions' | 'anthropic' | 'gemini';
+export type RuntimeChatProtocol = 'openai-completions' | 'openai-responses' | 'anthropic' | 'gemini';
 
 export interface ChatEntryChoice {
   entryId: string;
@@ -2276,14 +2276,16 @@ function runtimeProtocolForEntry(store: ProfilesFile, entry: Entry): RuntimeChat
       case 'deepseek':
       case 'doubao':
         return 'openai-completions';
+      case 'openai':
+        return 'openai-responses';
       case 'anthropic':
       case 'kimi-coding':
         return 'anthropic';
       case 'google':
         return 'gemini';
       default:
-        // openai (Responses API), zai, minimax-cn, openrouter, ... are
-        // native pi-ai surfaces the runtime cannot reach.
+        // zai, minimax-cn, openrouter, ... are native pi-ai surfaces the
+        // runtime cannot reach.
         return null;
     }
   }

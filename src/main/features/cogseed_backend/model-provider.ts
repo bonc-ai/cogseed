@@ -80,9 +80,11 @@ function mergeToolCalls(delta: Record<string, unknown>, pending: Map<number, Pen
   }
 }
 
-function finalizeToolCalls(pending: Map<number, PendingToolCall>): RuntimeModelProviderChunk[] {
+function finalizeToolCalls(pending: Map<unknown, PendingToolCall>): RuntimeModelProviderChunk[] {
   const calls: RuntimeModelProviderChunk[] = [];
-  for (const [, value] of [...pending.entries()].sort(([a], [b]) => a - b)) {
+  // Map preserves insertion order: index-keyed (completions/anthropic) and
+  // call-id-keyed (responses) accumulators both arrive in stream order.
+  for (const [, value] of pending.entries()) {
     if (!value.id || !value.name) throw new Error('CogSeed model provider returned incomplete tool call');
     let parsed: unknown;
     try {
@@ -449,6 +451,162 @@ export function createMateGeminiProvider(
   };
 }
 
+
+// ── OpenAI Responses provider ─────────────────────────────────────────────
+
+function endpointForResponses(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/responses`;
+}
+
+export interface MateOpenAIResponsesProviderOptions {
+  resolveProfile?: (userId: string, profileId?: string) => Promise<MateProviderProfile>;
+  fetchImpl?: MateFetch;
+}
+
+/**
+ * OpenAI Responses API provider (SSE). Bearer auth; system prompt goes in
+ * `instructions`, tools as function declarations with JSON-schema
+ * `parameters`. Tool calls arrive as function_call items whose arguments
+ * stream through response.function_call_arguments.delta and are finalized by
+ * response.output_item.done; usage lands on response.completed (input_tokens
+ * includes cached tokens — subtract them for the non-cached figure).
+ */
+export function createMateOpenAIResponsesProvider(
+  options: MateOpenAIResponsesProviderOptions = {},
+): RuntimeModelProvider {
+  const resolveProfile = options.resolveProfile ?? resolveMateApiKeyProfile;
+  const fetchImpl = options.fetchImpl ?? fetch;
+
+  return async function* streamMateOpenAIResponsesProvider(input) {
+    const profile = await resolveProfile(input.userId, input.modelProfile);
+    if (profile.protocol !== 'openai-responses') {
+      throw new Error('CogSeed OpenAI Responses provider requires an openai-responses-protocol profile');
+    }
+    const payload = {
+      model: profile.model,
+      stream: true,
+      store: false,
+      input: [{ role: 'user', content: input.message }],
+      ...(input.systemPrompt ? { instructions: input.systemPrompt } : {}),
+      ...(profile.maxOutputTokens ? { max_output_tokens: profile.maxOutputTokens } : {}),
+      ...(input.tools.length ? {
+        tools: input.tools.map((tool) => ({
+          type: 'function',
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
+      } : {}),
+    };
+    const response = await fetchImpl(endpointForResponses(profile.baseUrl), {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${profile.apiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal: input.signal ?? undefined,
+    });
+    if (!response.ok) {
+      throw providerHttpError(response.status, await response.text().catch(() => ''), profile.apiKey);
+    }
+    if (!response.body) throw new Error('CogSeed model provider returned an empty stream');
+
+    const pendingToolCalls = new Map<string, PendingToolCall>();
+    let currentItemType: string | null = null;
+    let currentCallId: string | null = null;
+    let sawCompleted = false;
+    let usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
+
+    for await (const frame of sseDataFrames(response.body)) {
+      let event: Record<string, unknown> | null;
+      try {
+        event = asRecord(JSON.parse(frame));
+      } catch {
+        throw new Error('CogSeed model provider returned malformed SSE JSON');
+      }
+      if (!event) throw new Error('CogSeed model provider returned malformed SSE JSON');
+      const type = readString(event, 'type');
+      if (type === 'error') {
+        const detail = asRecord(event?.error);
+        throw new Error(`CogSeed OpenAI Responses provider error: ${readString(detail, 'message') || readString(detail, 'code') || 'unknown'}`);
+      }
+      if (type === 'response.output_item.added') {
+        const item = asRecord(event?.item);
+        currentItemType = readString(item, 'type');
+        if (currentItemType === 'function_call') {
+          const callId = readString(item, 'call_id') ?? readString(item, 'id') ?? `call_${pendingToolCalls.size}`;
+          currentCallId = callId;
+          const pending = pendingToolCalls.get(callId) ?? { argumentsText: '' };
+          const name = readString(item, 'name');
+          if (name) pending.name = name;
+          pendingToolCalls.set(callId, pending);
+        } else {
+          currentCallId = null;
+        }
+      } else if (type === 'response.output_text.delta') {
+        const text = readString(event, 'delta');
+        if (text && currentItemType === 'message') yield { type: 'delta', text };
+      } else if (type === 'response.function_call_arguments.delta') {
+        const fragment = readString(event, 'delta');
+        if (currentCallId && fragment) {
+          const pending = pendingToolCalls.get(currentCallId) ?? { argumentsText: '' };
+          pending.argumentsText += fragment;
+          pendingToolCalls.set(currentCallId, pending);
+        }
+      } else if (type === 'response.function_call_arguments.done') {
+        const argumentsText = readString(event, 'arguments');
+        if (currentCallId && argumentsText) {
+          const pending = pendingToolCalls.get(currentCallId) ?? { argumentsText: '' };
+          pending.argumentsText = argumentsText;
+          pendingToolCalls.set(currentCallId, pending);
+        }
+      } else if (type === 'response.output_item.done') {
+        const item = asRecord(event?.item);
+        if (readString(item, 'type') === 'function_call') {
+          const callId = readString(item, 'call_id') ?? readString(item, 'id');
+          if (callId) {
+            const pending = pendingToolCalls.get(callId) ?? { argumentsText: '' };
+            const name = readString(item, 'name');
+            const argumentsText = readString(item, 'arguments');
+            if (name) pending.name = name;
+            if (argumentsText) pending.argumentsText = argumentsText;
+            pending.id = callId;
+            pendingToolCalls.set(callId, pending);
+          }
+        }
+      } else if (type === 'response.completed') {
+        sawCompleted = true;
+        const response = asRecord(event?.response);
+        const usageRecord = asRecord(response?.usage);
+        if (usageRecord) {
+          const cached = readNumberValue(asRecord(usageRecord?.input_tokens_details), 'cached_tokens') ?? 0;
+          const inputTokens = readNumberValue(usageRecord, 'input_tokens');
+          const outputTokens = readNumberValue(usageRecord, 'output_tokens');
+          const totalTokens = readNumberValue(usageRecord, 'total_tokens');
+          if (inputTokens !== undefined || outputTokens !== undefined || totalTokens !== undefined) {
+            // Deferred until after tool calls are finalized so usage lands
+            // after the tool_call chunks, matching the other providers.
+            usage = {
+              inputTokens: inputTokens === undefined ? undefined : Math.max(0, inputTokens - cached),
+              outputTokens,
+              totalTokens,
+            };
+          }
+        }
+        break;
+      } else if (type === 'response.failed') {
+        const detail = asRecord(event?.response);
+        throw new Error(`CogSeed OpenAI Responses provider failed: ${readString(detail, 'status') || 'unknown'}`);
+      }
+    }
+    for (const call of finalizeToolCalls(pendingToolCalls)) yield call;
+    if (usage) yield { type: 'usage', usage };
+    if (!sawCompleted) throw new Error('CogSeed OpenAI Responses stream ended before response.completed');
+  };
+}
+
 // ── Multi-protocol dispatcher ────────────────────────────────────────────
 
 export interface MateRuntimeProviderOptions {
@@ -467,11 +625,13 @@ export function createMateRuntimeProvider(
   const resolveProfile = options.resolveProfile ?? resolveMateApiKeyProfile;
   const shared = { resolveProfile, fetchImpl: options.fetchImpl };
   const openai = createMateOpenAICompatibleProvider(shared);
+  const openaiResponses = createMateOpenAIResponsesProvider(shared);
   const anthropic = createMateAnthropicProvider(shared);
   const gemini = createMateGeminiProvider(shared);
   return async function* streamMateRuntimeProvider(input) {
     const profile = await resolveProfile(input.userId, input.modelProfile);
-    if (profile.protocol === 'anthropic') yield* anthropic(input);
+    if (profile.protocol === 'openai-responses') yield* openaiResponses(input);
+    else if (profile.protocol === 'anthropic') yield* anthropic(input);
     else if (profile.protocol === 'gemini') yield* gemini(input);
     else yield* openai(input);
   };
