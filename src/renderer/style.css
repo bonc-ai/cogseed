@@ -6756,6 +6756,16 @@ body.model-not-configured .main-content { flex-direction: column; }
   cursor: default;
 }
 .chat-continue-btn[hidden] { display: none; }
+/* 智能继续 · 重试态：最后一条失败时按钮转为重试，用警示色提示。 */
+.chat-continue-btn.is-retry {
+  border-color: rgba(220, 38, 38, 0.35);
+  color: #b91c1c;
+}
+.chat-continue-btn.is-retry:hover {
+  border-color: rgba(220, 38, 38, 0.6);
+  background: rgba(220, 38, 38, 0.05);
+  color: #b91c1c;
+}
 .chat-continue-icon {
   width: 13px;
   height: 13px;

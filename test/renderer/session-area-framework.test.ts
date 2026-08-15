@@ -67,6 +67,14 @@ describe('9.1 unified framework · bottom zone (continue + risk)', () => {
     expect(conversationSource).toContain('function _bindChatContinueButton');
   });
 
+  it('turns the continue button into a retry button when the last exchange failed', () => {
+    expect(conversationSource).toContain('function _chatContinueButtonState');
+    expect(conversationSource).toContain("dataset.failed === '1'");
+    expect(conversationSource).toContain('_retryFailedAssistantMessage(state.failedMsgEl, null)');
+    expect(conversationSource).toContain("continueBtn.classList.toggle('is-retry', isRetry)");
+    expect(indexSource).toContain('data-role="continue-label"');
+  });
+
   it('shows continue only while the executor is idle', () => {
     const start = conversationSource.indexOf('function _updateConvSendUI');
     const end = conversationSource.indexOf('\n/** Show / hide a banner', start);

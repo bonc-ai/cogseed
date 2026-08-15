@@ -1009,9 +1009,22 @@ if (typeof window !== 'undefined') {
 
 // 9.1 统一框架 · 底部「继续」：主会话的一次性绑定。主会话控制器
 // （_makeConvChatController）的 features.bindInput=false，输入接线由主会话
-// 自己接管，所以「继续」不能在通用控制器里绑，必须单独接一次。点击以
-// 「请继续」作为一条普通用户消息发给当前执行方（走 sendInCurrentConversation，
-// 与手输同一条发送管线）；运行中按钮已隐藏，这里再兜底一次 pending 判断。
+// 自己接管，所以「继续」不能在通用控制器里绑，必须单独接一次。
+// 按钮按当前会话状态决定动作（智能继续）：
+//   - 最后一条消息失败（failed/failure_kind）→ 重试该消息（复用既有
+//     _retryFailedAssistantMessage 路径，带 retry_message_id）；
+//   - 其余（被中断 / 有计划未完成 / 普通空闲）→ 发送「请继续」续跑提示，
+//     走 sendInCurrentConversation，与手输同一条发送管线。
+function _chatContinueButtonState() {
+  const container = document.getElementById('chat-history');
+  const msgs = container ? Array.from(container.querySelectorAll('.chat-message')) : [];
+  const last = msgs[msgs.length - 1];
+  const lastFailed = !!last
+    && !last.classList.contains('user')
+    && (last.dataset.failed === '1' || !!last.dataset.failureKind || !!last.dataset.failureCode);
+  return { kind: lastFailed ? 'retry' : 'continue', failedMsgEl: lastFailed ? last : null };
+}
+
 function _bindChatContinueButton() {
   const btn = document.getElementById('chat-continue-btn');
   if (!btn || btn.dataset.bound === '1') return;
@@ -1019,6 +1032,11 @@ function _bindChatContinueButton() {
   btn.addEventListener('click', async () => {
     if (!currentCid || isConvPending(currentCid)) return;
     if (typeof ensureModelConfigured === 'function' && !ensureModelConfigured()) return;
+    const state = _chatContinueButtonState();
+    if (state.kind === 'retry' && state.failedMsgEl) {
+      try { await _retryFailedAssistantMessage(state.failedMsgEl, null); } catch (_) {}
+      return;
+    }
     const content = t('chat.continue_prompt');
     try { await sendInCurrentConversation(content); } catch (_) { /* 与普通发送一致的容错 */ }
   });
@@ -13639,10 +13657,19 @@ function _updateConvSendUI(cid) {
     input.placeholder = pending ? t('chat.input_placeholder_queue') : t('chat.input_placeholder');
   }
   // 9.1 统一框架 · 底部「继续」：非运行态且执行方可用时显示；运行中隐藏
-  // （此时发送按钮已是「停止」，继续与停止并存会误导）。
+  // （此时发送按钮已是「停止」，继续与停止并存会误导）。文案按状态切换：
+  // 最后一条失败 → 「重试」，否则「继续」。
   if (continueBtn) {
     continueBtn.hidden = pending;
     continueBtn.disabled = pending;
+    if (!pending) {
+      const continueState = _chatContinueButtonState();
+      const isRetry = continueState.kind === 'retry';
+      const labelEl = continueBtn.querySelector('[data-role="continue-label"]');
+      if (labelEl) labelEl.textContent = isRetry ? t('chat.retry_btn') : t('chat.continue');
+      continueBtn.title = isRetry ? t('chat.retry_btn') : t('chat.continue');
+      continueBtn.classList.toggle('is-retry', isRetry);
+    }
   }
   if (!pending) input?.focus();
 }
