@@ -64,6 +64,8 @@ export function sanitizeLogText(value: unknown): string {
   text = text.replace(/\/sync\/[A-Za-z0-9_/-]+/g, (m) => m.split('?')[0]);
   text = text.replace(/https?:\/\/[^\s'",)]+/g, (m) => safeUrlAction(m));
   text = text.replace(/\b(ORKLSEC1|ghp|github_pat|sk|sk-proj|xox[baprs])[-_][-_A-Za-z0-9+/=:.]{12,}\b/g, '***REDACTED***');
+  // Hub refresh tokens are opaque `rT_`-prefixed credentials — never leak them.
+  text = text.replace(/\brT_[-_A-Za-z0-9+/=:.]{12,}\b/g, '***REDACTED***');
   if (text.length > MAX_LOG_MESSAGE_LEN) text = `${text.slice(0, MAX_LOG_MESSAGE_LEN)}...`;
   return text;
 }

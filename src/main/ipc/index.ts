@@ -115,6 +115,7 @@ import { invokeHandlers as messagingHandlers } from './messaging';
 import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as touchpointHandlers } from './touchpoints';
 import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
+import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
@@ -3782,6 +3783,83 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       : undefined;
     return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases);
   },
+  'customProviders.storeActiveCliConfig': async ({ cli } = {}, ctx) => {
+    if (typeof cli !== 'string' || !cli) {
+      return { ok: false, error: 'invalid_cli' };
+    }
+
+    const { readActiveCliConfig } = await import('../features/local_agents/active_config.js');
+    const config = readActiveCliConfig(cli as LocalCliType);
+
+    if (!config) {
+      return { ok: false, error: 'no_active_config' };
+    }
+
+    // Check if this active config is already stored (avoid duplicates)
+    const externalId = `${cli}:active`;
+    const existing = customProviders.listCustomProviders(ctx.userId);
+    const existingProvider = existing.find((p) => p.externalId === externalId);
+
+    // Map CLI type to protocol
+    const protocolMap: Record<string, 'anthropic' | 'openai' | 'gemini'> = {
+      claude: 'anthropic',
+      codex: 'openai',
+      opencode: 'anthropic', // OpenCode supports multiple, default to anthropic
+      hermes: 'anthropic',
+      workbuddy: 'anthropic',
+    };
+
+    const protocol = protocolMap[cli] || 'anthropic';
+    const name = `${cli.charAt(0).toUpperCase() + cli.slice(1)} (当前使用)`;
+    const baseUrl = config.baseUrl || (protocol === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1');
+
+    let providerId: string;
+
+    if (existingProvider) {
+      // Update existing provider
+      const updateResult = customProviders.updateCustomProvider(ctx.userId, existingProvider.id, {
+        name,
+        protocol,
+        baseUrl,
+        apiKey: config.apiKey,
+      });
+      if (!updateResult.ok) {
+        return { ok: false, error: updateResult.error };
+      }
+      providerId = existingProvider.id;
+      log.info('active CLI config updated', { cli, providerId, mode: config.mode });
+    } else {
+      // Add new provider
+      const addResult = customProviders.addCustomProvider(ctx.userId, {
+        name,
+        protocol,
+        baseUrl,
+        apiKey: config.apiKey,
+        source: 'manual', // Use 'manual' as source since custom_providers doesn't recognize 'active_cli'
+        externalId,
+      });
+      if (!addResult.ok) {
+        return { ok: false, error: addResult.error };
+      }
+      providerId = addResult.id;
+      log.info('active CLI config stored', { cli, providerId, mode: config.mode });
+    }
+
+    // Auto-bind entry if protocol has default model
+    if (protocol === 'anthropic') {
+      try {
+        await auth.addEntry({
+          provider: `cp:${providerId}`,
+          model: 'claude-sonnet-4-6',
+          profileId: `cp:${providerId}`,
+        });
+      } catch (err) {
+        log.warn('active cli auto-bind entry failed', { provider: providerId, error: (err as Error).message });
+      }
+    }
+
+    return { ok: true, providerId, mode: config.mode };
+  },
 
   // ── Commander backend binding (settings page) ──
   'settings.getCommanderBackend': async () => commanderBackend.getCommanderBackendView(),
@@ -4322,6 +4400,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   ...personalContextHandlers,
   ...touchpointHandlers,
   ...desktopWorkbenchHandlers,
+
+  // CogSeed Hub account — desktop-side account management against the Hub
+  // account service. Tokens never cross this table; renderer-safe status DTOs only.
+  ...hubAccountHandlers,
 
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,
