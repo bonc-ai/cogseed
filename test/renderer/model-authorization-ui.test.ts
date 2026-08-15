@@ -7,6 +7,8 @@ const root = resolve(__dirname, '../..');
 const indexHtml = readFileSync(resolve(root, 'src/renderer/index.html'), 'utf8');
 const flushAsync = () => new Promise((resolve) => setTimeout(resolve, 0));
 const style = readFileSync(resolve(root, 'src/renderer/style.css'), 'utf8');
+const moduleSource = readFileSync(resolve(root, 'src/renderer/modules/model-authorization.js'), 'utf8');
+const settingsSource = readFileSync(resolve(root, 'src/renderer/modules/settings.js'), 'utf8');
 const locales = ['en', 'zh', 'ja', 'pt'].map((lang) => [lang, JSON.parse(readFileSync(resolve(root, `src/renderer/locales/${lang}.json`), 'utf8'))] as const);
 
 function modelAuthorizationKeys(locale: Record<string, unknown>): string[] {
@@ -14,53 +16,49 @@ function modelAuthorizationKeys(locale: Record<string, unknown>): string[] {
 }
 
 describe('unified model authorization settings surface', () => {
-  it('declares one primary authorization surface and one wizard modal', () => {
+  it('declares the direct model authorization picker and configured priority list', () => {
     for (const id of [
       'settings-model-authorizations',
-      'settings-model-authorization-add-btn',
-      'settings-model-authorization-advanced-btn',
-      'settings-model-authorization-list',
-      'model-authorization-modal',
-      'model-authorization-steps',
-      'model-authorization-body',
-      'model-authorization-status',
-      'model-authorization-actions',
+      'settings-picker-provider',
+      'settings-picker-model',
+      'settings-add-entry-btn',
+      'settings-picker-status',
+      'settings-entries',
     ]) {
       expect(indexHtml).toContain(`id="${id}"`);
     }
   });
 
-  it('removes old primary provider picker and standalone CC Switch entry controls', () => {
-    expect(indexHtml).not.toContain('id="settings-picker-provider"');
-    expect(indexHtml).not.toContain('id="settings-picker-model"');
-    expect(indexHtml).not.toContain('id="settings-ccswitch-preview-btn"');
-    expect(indexHtml).not.toContain('id="settings-add-entry-btn"');
+  it('does not make the multi-step wizard the primary entrypoint', () => {
+    expect(indexHtml).not.toContain('id="settings-model-authorization-add-btn"');
+    expect(indexHtml).not.toContain('id="settings-model-authorization-list"');
   });
 
   it('replaces the legacy interface-type hint with a concise flow subtitle', () => {
     // The old two-line hint described the protocol-first flow (choose an
     // interface type, enter key and URL). The preset-first flow keeps a
     // single concise subtitle; the hint line must not resurface.
-    expect(indexHtml).toContain('data-i18n="settings.model_authorization.subtitle"');
+    expect(indexHtml).toContain('data-i18n="settings.add_auth_sub"');
     expect(indexHtml).not.toContain('data-i18n="settings.model_authorization.api_key_flow_hint"');
   });
 
-  it('labels advanced management as custom endpoint management and explains its scope', () => {
-    expect(indexHtml).toContain('data-i18n="settings.model_authorization.advanced"');
-    expect(indexHtml).toContain('id="settings-model-authorization-advanced-hint"');
-    expect(indexHtml).toContain('data-i18n="settings.model_authorization.advanced_hint"');
+  it('folds custom endpoint management into the provider picker instead of a separate section', () => {
+    // The standalone custom-endpoints card was removed; the entry points now
+    // live inside the provider picker as the two action rows.
+    expect(indexHtml).not.toContain('id="settings-custom-providers-group"');
+    expect(indexHtml).not.toContain('id="settings-model-authorization-advanced-btn"');
+    expect(settingsSource).toContain('_PICKER_ACTION_CUSTOM_PROVIDERS');
+    expect(settingsSource).toContain('_PICKER_ACTION_CCSWITCH_IMPORT');
+    expect(settingsSource).toContain("_settingsOpenCustomProviderModal()");
+    expect(settingsSource).toContain("_settingsOpenCcswitchPreviewDialog()");
   });
 
-  it('keeps advanced custom provider management collapsed away from the primary flow', () => {
-    expect(indexHtml).toContain('id="settings-model-authorization-advanced"');
-    expect(indexHtml).toMatch(/id="settings-model-authorization-advanced"[^>]*hidden/);
-    expect(indexHtml).toContain('id="settings-custom-provider-add-btn"');
-    const primaryStart = indexHtml.indexOf('id="settings-model-authorizations"');
-    const advancedStart = indexHtml.indexOf('id="settings-model-authorization-advanced"');
-    const addProviderStart = indexHtml.indexOf('id="settings-custom-provider-add-btn"');
-    expect(primaryStart).toBeGreaterThan(-1);
-    expect(advancedStart).toBeGreaterThan(primaryStart);
-    expect(addProviderStart).toBeGreaterThan(advancedStart);
+  it('keeps custom provider management reachable from the direct picker', () => {
+    expect(indexHtml).toContain('id="settings-picker-provider"');
+    expect(indexHtml).toContain('id="settings-custom-provider-modal"');
+    expect(indexHtml).toContain('id="settings-ccswitch-preview-modal"');
+    expect(settingsSource).toContain("_PICKER_ACTION_CUSTOM_PROVIDERS");
+    expect(settingsSource).toContain("_PICKER_ACTION_CCSWITCH_IMPORT");
   });
 
   it('adds scoped styles for authorization cards and wizard controls', () => {
@@ -82,6 +80,33 @@ describe('unified model authorization settings surface', () => {
     for (const [lang, locale] of locales.slice(1)) {
       expect(modelAuthorizationKeys(locale), `${lang} differs from ${baseLang}`).toEqual(baseKeys);
     }
+  });
+
+  it('localizes every hardened authorization state and removes visible production literals', () => {
+    const requiredKeys = [
+      'settings.model_authorization.make_default',
+      'settings.model_authorization.providers_empty',
+      'settings.model_authorization.providers_load_failed',
+      'settings.model_authorization.retry_providers',
+      'settings.model_authorization.ccswitch_load_failed',
+      'settings.model_authorization.ccswitch_draft_expired',
+      'settings.model_authorization.remove_model_failed',
+      'settings.model_authorization.authorization_list_failed',
+      'settings.model_authorization.model_list_empty',
+      'settings.model_authorization.custom_endpoint_default_name',
+      'settings.model_authorization.error_auth_failed',
+      'settings.model_authorization.error_unsupported_discovery',
+      'settings.model_authorization.error_network',
+      'settings.model_authorization.error_provider',
+      'settings.model_authorization.error_invalid_request',
+      'settings.model_authorization.error_missing_key',
+    ];
+    for (const [lang, locale] of locales) {
+      for (const key of requiredKeys) expect(locale[key], `${lang} missing ${key}`).toBeTruthy();
+    }
+    expect(moduleSource).not.toContain("'Make default'");
+    expect(moduleSource).not.toContain("'Custom endpoint'");
+    expect(moduleSource).not.toContain("'👁'");
   });
 });
 
@@ -146,9 +171,14 @@ function loadInteractiveHarness() {
   const invoke = vi.fn((channel: string, payload?: any) => {
     if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [] });
     if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [
-      { id: 'openai-codex', label: 'OpenAI Codex', supportsOAuth: true, supportsApiKey: false },
-      { id: 'openai-compatible', label: 'OpenAI Compatible', supportsOAuth: false, supportsApiKey: true, manualModel: true },
-      { id: 'anthropic', label: 'Anthropic', supportsOAuth: false, supportsApiKey: true },
+      { id: 'openai-codex', label: 'OpenAI Codex', providerKind: 'builtin', supportsOAuth: true, supportsApiKey: false },
+      { id: 'openai-compatible', label: 'OpenAI Compatible', providerKind: 'builtin', supportsOAuth: false, supportsApiKey: true, manualModel: true },
+      { id: 'anthropic', label: 'Anthropic', providerKind: 'builtin', supportsOAuth: false, supportsApiKey: true },
+      {
+        id: 'cp:custom-relay', label: 'Custom Relay', providerKind: 'custom',
+        supportsOAuth: false, supportsApiKey: true, manualModel: false,
+        profiles: [{ profileId: 'cp:custom-relay' }],
+      },
     ] });
     if (channel === 'auth.startOAuth') return Promise.resolve({ ok: true, kind: 'done', profileId: `${payload.provider}:profile` });
     if (channel === 'customProviders.ccswitch.preview') return Promise.resolve({ ok: true, items: [
@@ -183,6 +213,26 @@ function loadInteractiveHarness() {
   vm.createContext(context);
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/model-authorization.js'), 'utf8'), context, { filename: 'model-authorization.js' });
   return { context, registry, invoke, discoverResolvers, windowListeners, refreshModelGuard };
+}
+
+async function enterManualBuiltinModels(harness: ReturnType<typeof loadInteractiveHarness>) {
+  const { context, registry, discoverResolvers } = harness;
+  await context.window.initModelAuthorizationSettings();
+  await registry.get('settings-model-authorization-add-btn')!.click();
+  await registry.get('model-authorization-body')!.dispatch('click', {
+    target: { dataset: { modelAuthAction: 'source-manual' } },
+  });
+  await registry.get('model-authorization-body')!.dispatch('click', {
+    target: { dataset: { modelAuthAction: 'choose-provider-preset', providerId: 'anthropic' } },
+  });
+  registry.get('model-authorization-api-key')!.value = 'sk-private-test-value';
+  const pending = registry.get('model-authorization-actions')!.dispatch('click', {
+    target: { dataset: { modelAuthAction: 'continue-credentials' } },
+  });
+  await flushAsync();
+  discoverResolvers.shift()!({ ok: true, models: [{ id: 'claude-test' }] });
+  await pending;
+  return registry.get('model-authorization-body')!;
 }
 
 describe('model authorization interactive wizard', () => {
@@ -301,6 +351,325 @@ describe('model authorization interactive wizard', () => {
     expect(registry.get('settings-model-authorization-advanced')!.hidden).toBe(false);
     await registry.get('model-authorization-body')!.dispatch('keydown', { key: 'Enter', isComposing: true, keyCode: 229, preventDefault: vi.fn() });
     expect(registry.get('model-authorization-body')!.innerHTML).toContain('source-manual');
+  });
+
+  it('keeps saved custom providers out of builtin presets while preserving the custom endpoint entry', async () => {
+    const { context, registry } = loadInteractiveHarness();
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-manual' } },
+    });
+
+    const bodyHtml = registry.get('model-authorization-body')!.innerHTML;
+    expect(bodyHtml).not.toContain('data-provider-id="cp:custom-relay"');
+    expect(bodyHtml).not.toContain('Custom Relay');
+    expect(bodyHtml).toContain('choose-custom-endpoint');
+  });
+
+  it('renders an empty builtin catalog without hiding the custom endpoint entry', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [] });
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-manual' } },
+    });
+
+    const bodyHtml = registry.get('model-authorization-body')!.innerHTML;
+    expect(bodyHtml).toContain('choose-custom-endpoint');
+    expect(bodyHtml).toContain('settings.model_authorization.providers_empty');
+  });
+
+  it('recovers when provider loading rejects and keeps retry plus custom endpoint available', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    invoke.mockRejectedValueOnce(new Error('provider loader secret detail'));
+
+    await expect(context.window.initModelAuthorizationSettings()).resolves.toBeUndefined();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-manual' } },
+    });
+
+    const bodyHtml = registry.get('model-authorization-body')!.innerHTML;
+    expect(bodyHtml).toContain('retry-providers');
+    expect(bodyHtml).toContain('choose-custom-endpoint');
+    expect(bodyHtml).toContain('settings.model_authorization.providers_load_failed');
+    expect(bodyHtml).not.toContain('provider loader secret detail');
+  });
+
+  it('recovers when CC Switch preview or preparation rejects', async () => {
+    const previewHarness = loadInteractiveHarness();
+    await previewHarness.context.window.initModelAuthorizationSettings();
+    await previewHarness.registry.get('settings-model-authorization-add-btn')!.click();
+    previewHarness.invoke.mockRejectedValueOnce(new Error('preview failure'));
+    await expect(previewHarness.registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-ccswitch' } },
+    })).resolves.toBeUndefined();
+    expect(previewHarness.registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.ccswitch_load_failed');
+    expect(previewHarness.registry.get('model-authorization-body')!.innerHTML).toContain('ccswitch_preview_empty');
+
+    const prepareHarness = loadInteractiveHarness();
+    await prepareHarness.context.window.initModelAuthorizationSettings();
+    await prepareHarness.registry.get('settings-model-authorization-add-btn')!.click();
+    await prepareHarness.registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-ccswitch' } },
+    });
+    prepareHarness.invoke.mockRejectedValueOnce(new Error('prepare failure'));
+    await expect(prepareHarness.registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'select-ccswitch', externalId: 'cc-1' } },
+    })).resolves.toBeUndefined();
+    expect(prepareHarness.registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.ccswitch_load_failed');
+    expect(prepareHarness.registry.get('model-authorization-body')!.innerHTML).toContain('cc-1');
+  });
+
+  it('requires CC Switch reselection when the draft expires during discovery', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string, payload?: any) => {
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [] });
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      if (channel === 'customProviders.ccswitch.preview') return Promise.resolve({ ok: true, items: [{
+        externalId: 'cc-1', name: 'CC entry', protocol: 'anthropic', apiKeyMasked: 'sk-***', models: ['a'],
+      }] });
+      if (channel === 'modelAuthorizations.prepareCcSwitch') return Promise.resolve({
+        ok: true, draft: { draftId: 'expired-draft', externalId: payload.externalId, maskedKey: 'sk-***' },
+      });
+      if (channel === 'modelAuthorizations.discover') return Promise.resolve({ ok: false, errorCode: 'draft_expired' });
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-ccswitch' } },
+    });
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'select-ccswitch', externalId: 'cc-1' } },
+    });
+
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('cc-1');
+    expect(registry.get('model-authorization-actions')!.innerHTML).toContain('model-auth-action="back"');
+    expect(registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.ccswitch_draft_expired');
+  });
+
+  it('requires CC Switch reselection when the draft expires between test and completion', async () => {
+    const { context, registry, invoke, discoverResolvers } = loadInteractiveHarness();
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-ccswitch' } },
+    });
+    const selecting = registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'select-ccswitch', externalId: 'cc-1' } },
+    });
+    await flushAsync();
+    discoverResolvers.shift()!({ ok: true, models: [{ id: 'claude-test' }], declaredModels: ['claude-test'] });
+    await selecting;
+    invoke.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, errorCode: 'draft_not_found' });
+
+    await registry.get('model-authorization-actions')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'complete' } },
+    });
+
+    expect(registry.get('model-authorization-modal')!.classList.contains('open')).toBe(true);
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('cc-1');
+    expect(registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.ccswitch_draft_expired');
+  });
+
+  it('restores credentials when discovery rejects without rendering the API key', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-manual' } },
+    });
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'choose-provider-preset', providerId: 'anthropic' } },
+    });
+    registry.get('model-authorization-api-key')!.value = 'sk-never-render-this';
+    invoke.mockRejectedValueOnce(new Error('discover failure'));
+
+    await expect(registry.get('model-authorization-actions')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'continue-credentials' } },
+    })).resolves.toBeUndefined();
+
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('model-authorization-api-key');
+    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('sk-never-render-this');
+    expect(registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.error_discovery_failed');
+  });
+
+  it('renders a localized empty model result and keeps save disabled', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-manual' } },
+    });
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'choose-provider-preset', providerId: 'anthropic' } },
+    });
+    registry.get('model-authorization-api-key')!.value = 'sk-empty-model-result';
+    invoke.mockResolvedValueOnce({ ok: true, models: [] });
+    await registry.get('model-authorization-actions')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'continue-credentials' } },
+    });
+
+    expect(registry.get('model-authorization-body')!.innerHTML)
+      .toContain('settings.model_authorization.model_list_empty');
+    expect(registry.get('model-authorization-actions')!.innerHTML).toContain('complete" disabled');
+    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('sk-empty-model-result');
+  });
+
+  it('recovers busy state when draft testing or completion rejects', async () => {
+    const testHarness = loadInteractiveHarness();
+    const testBody = await enterManualBuiltinModels(testHarness);
+    await testBody.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'toggle-model', modelId: 'claude-test', checked: 'true' } },
+    });
+    testHarness.invoke.mockRejectedValueOnce(new Error('test failure'));
+    await expect(testHarness.registry.get('model-authorization-actions')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'complete' } },
+    })).resolves.toBeUndefined();
+    expect(testHarness.registry.get('model-authorization-modal')!.classList.contains('open')).toBe(true);
+    expect(testHarness.registry.get('model-authorization-actions')!.innerHTML).not.toContain('complete" disabled');
+    expect(testHarness.registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.error_test_failed');
+
+    const completeHarness = loadInteractiveHarness();
+    const completeBody = await enterManualBuiltinModels(completeHarness);
+    await completeBody.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'toggle-model', modelId: 'claude-test', checked: 'true' } },
+    });
+    completeHarness.invoke.mockResolvedValueOnce({ ok: true }).mockRejectedValueOnce(new Error('save failure'));
+    await expect(completeHarness.registry.get('model-authorization-actions')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'complete' } },
+    })).resolves.toBeUndefined();
+    expect(completeHarness.registry.get('model-authorization-modal')!.classList.contains('open')).toBe(true);
+    expect(completeHarness.registry.get('model-authorization-actions')!.innerHTML).not.toContain('complete" disabled');
+    expect(completeHarness.registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.complete_failed');
+  });
+
+  it('preserves authorization cards when list refresh or removal rejects', async () => {
+    const { context, registry, invoke, refreshModelGuard } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [{
+        authorizationId: 'profile:deepseek:kept', label: 'kept', authType: 'api_key', source: 'manual', models: [],
+      }] });
+      return Promise.resolve({ ok: true });
+    });
+    await context.window.initModelAuthorizationSettings();
+
+    invoke.mockRejectedValueOnce(new Error('list failure'));
+    await expect(context.window.refreshModelAuthorizationSettings()).resolves.toBeUndefined();
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('kept');
+    expect(registry.get('settings-model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.authorization_list_failed');
+
+    invoke.mockRejectedValueOnce(new Error('remove failure'));
+    await expect(registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-authorization', authorizationId: 'profile:deepseek:kept' } },
+    })).resolves.toBeUndefined();
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('kept');
+    expect(refreshModelGuard).not.toHaveBeenCalled();
+  });
+
+  it('renders removable model chips only when the backend provides entry ids', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [{
+        authorizationId: 'profile:anthropic:work', label: 'work', authType: 'api_key', source: 'manual', models: [
+          { entryId: 'entry-a', model: 'model-a', default: true },
+          { entryId: 'entry-b', model: 'model-b', default: false },
+          { model: 'legacy-model', default: false },
+        ],
+      }] });
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+    const html = registry.get('settings-model-authorization-list')!.innerHTML;
+    expect(html).toContain('data-model-auth-action="remove-model"');
+    expect(html).toContain('data-authorization-id="profile:anthropic:work"');
+    expect(html).toContain('data-entry-id="entry-a"');
+    expect(html).toContain('data-entry-id="entry-b"');
+    expect(html).not.toMatch(/data-entry-id=""/);
+  });
+
+  it('keeps models when removal is cancelled or rejected', async () => {
+    const harness = loadInteractiveHarness();
+    const { context, registry, invoke, refreshModelGuard } = harness;
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [{
+        authorizationId: 'profile:anthropic:work', label: 'work', authType: 'api_key', source: 'manual', models: [
+          { entryId: 'entry-a', model: 'model-a', default: true },
+          { entryId: 'entry-b', model: 'model-b', default: false },
+        ],
+      }] });
+      return Promise.resolve({ ok: true });
+    });
+    await context.window.initModelAuthorizationSettings();
+    context.uiConfirm.mockResolvedValueOnce(false);
+    await registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-model', authorizationId: 'profile:anthropic:work', entryId: 'entry-a' } },
+    });
+    expect(invoke).not.toHaveBeenCalledWith('modelAuthorizations.removeModel', expect.anything());
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('model-a');
+
+    context.uiConfirm.mockResolvedValueOnce(true);
+    invoke.mockRejectedValueOnce(new Error('remove model failure'));
+    await expect(registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-model', authorizationId: 'profile:anthropic:work', entryId: 'entry-a' } },
+    })).resolves.toBeUndefined();
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('model-a');
+    expect(registry.get('settings-model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.remove_model_failed');
+    expect(refreshModelGuard).not.toHaveBeenCalled();
+  });
+
+  it('refreshes backend model order and leaves the authorization unbound after the last removal', async () => {
+    const { context, registry, invoke, refreshModelGuard } = loadInteractiveHarness();
+    let listCount = 0;
+    invoke.mockImplementation((channel: string, payload?: any) => {
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      if (channel === 'modelAuthorizations.removeModel') return Promise.resolve({ ok: true, removed: true });
+      if (channel === 'modelAuthorizations.list') {
+        listCount += 1;
+        const models = listCount === 1
+          ? [{ entryId: 'entry-a', model: 'model-a', default: true }]
+          : [];
+        return Promise.resolve({ ok: true, authorizations: [{
+          authorizationId: 'profile:anthropic:work', label: 'work', authType: 'api_key', source: 'manual',
+          unbound: models.length === 0, warningCode: models.length === 0 ? 'unbound_authorization' : undefined, models,
+        }] });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-model', authorizationId: 'profile:anthropic:work', entryId: 'entry-a' } },
+    });
+
+    expect(invoke).toHaveBeenCalledWith('modelAuthorizations.removeModel', {
+      authorizationId: 'profile:anthropic:work', entryId: 'entry-a',
+    });
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('settings.model_authorization.unbound_title');
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).not.toContain('>model-a<');
+    expect(refreshModelGuard).toHaveBeenCalledOnce();
   });
 
   it('validates manual API key fields and discards late discovery after source changes', async () => {

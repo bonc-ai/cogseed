@@ -186,7 +186,8 @@ describe('Recall terminal transfer proof handler', () => {
     });
 
     expect(result).toMatchObject({ handled: true, proof: { status: 'rejected', executionId: 'run-failed' } });
-    expect((await assets.readAbilityAsset('user-a', asset.id)).maturity).toBe('seed');
+    // 被拒的迁移不推进成熟度：起点 bud 就该还是 bud。
+    expect((await assets.readAbilityAsset('user-a', asset.id)).maturity).toBe('bud');
     expect((await proofs.listTransferProofs('user-a'))[0].status).toBe('rejected');
   });
 

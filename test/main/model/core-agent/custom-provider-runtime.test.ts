@@ -47,4 +47,28 @@ describe('custom provider runtime', () => {
     expect(runtime.findCustomProvider(UID, 'cp:missing')).toBeUndefined();
     expect(runtime.isCustomProviderId('openai-compatible')).toBe(false);
   });
+
+  it('uses the selected model metadata for runtime and runner catalog limits', async () => {
+    const providers = await import('../../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Configured relay',
+      protocol: 'openai',
+      baseUrl: 'https://configured.example/v1',
+      apiKey: 'secret',
+      models: [{ id: 'large-model', contextWindow: 1048576, maxTokens: 65536 }],
+    });
+    if (!added.ok) throw new Error(added.error);
+    const record = providers.listCustomProviders(UID)[0];
+    const runtime = await import('../../../../src/main/model/core-agent/custom_provider_runtime');
+
+    expect(runtime.buildCustomProviderModel(record, 'large-model')).toMatchObject({
+      id: 'large-model', contextWindow: 1048576, maxTokens: 65536,
+    });
+    expect(runtime.buildCustomProviderModelMeta(record, 'large-model')).toEqual({
+      contextWindow: 1048576, maxTokens: 65536,
+    });
+    expect(runtime.buildCustomProviderModel(record, 'unknown-model')).toMatchObject({
+      contextWindow: 131072, maxTokens: 8192,
+    });
+  });
 });

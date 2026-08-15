@@ -58,6 +58,9 @@ export interface CcSwitchImportItem {
   apiKey: string;
   /** Optional model hints declared in CC Switch's provider configuration. */
   models?: string[];
+  /** True when `models` came from a live probe of the endpoint's model-list
+   *  API (authoritative). False = probe failed and config hints remain. */
+  modelsProbe?: boolean;
   notes?: string;
   websiteUrl?: string;
   /** True when CC Switch stored no usable key for this row (e.g. codex rows
@@ -116,18 +119,54 @@ function apiKeyFromCodexConfigToml(configToml: unknown): string | undefined {
   return m ? m[1] : undefined;
 }
 
-function modelFromCodexConfigToml(configToml: unknown): string | undefined {
-  if (typeof configToml !== 'string' || !configToml) return undefined;
-  const m = /(?:^|\n)\s*model\s*=\s*"([^"]+)"/.exec(configToml);
-  return m ? m[1] : undefined;
+/** Collect every `model = "..."` declared in a codex config TOML blob. */
+function codexModelsFromConfigToml(configToml: unknown): string[] {
+  if (typeof configToml !== 'string' || !configToml) return [];
+  const out: string[] = [];
+  const re = /^\s*model\s*=\s*"([^"]+)"/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(configToml)) !== null) {
+    const id = m[1].trim().slice(0, 200);
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
 }
 
+/**
+ * Collect model hints from one CC Switch row's parsed config. Sources:
+ *  - `cfg.models` array (hermes rows) and `cfg.modelCatalog.models[].model`
+ *    (codex rows with CC Switch's model picker data)
+ *  - singular fields `model` / `defaultModel` / `default_model`
+ *  - env vars: ANTHROPIC_MODEL / OPENAI_MODEL / GEMINI_MODEL / GOOGLE_MODEL,
+ *    plus the Claude Code tier defaults ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU,
+ *    FABLE}_MODEL (claude / claude-desktop rows keep their model list there;
+ *    the *_NAME siblings are display labels and are intentionally skipped)
+ *  - every `model = "..."` inside a codex config TOML (older rows list only
+ *    one, but model_providers sections can declare more)
+ */
 function modelHints(cfg: Record<string, unknown>, env: Record<string, unknown>): string[] | undefined {
   const raw: unknown[] = [];
   if (Array.isArray(cfg.models)) raw.push(...cfg.models);
+  if (cfg.modelCatalog && typeof cfg.modelCatalog === 'object') {
+    const catalogModels = (cfg.modelCatalog as Record<string, unknown>).models;
+    if (Array.isArray(catalogModels)) {
+      for (const entry of catalogModels) {
+        const id = entry && typeof entry === 'object' ? (entry as Record<string, unknown>).model : entry;
+        raw.push(id);
+      }
+    }
+  }
   raw.push(cfg.model, cfg.defaultModel, cfg.default_model);
   raw.push(env.ANTHROPIC_MODEL, env.OPENAI_MODEL, env.GEMINI_MODEL, env.GOOGLE_MODEL);
-  raw.push(modelFromCodexConfigToml(cfg.config));
+  for (const key of [
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'ANTHROPIC_DEFAULT_FABLE_MODEL',
+  ]) {
+    raw.push(env[key]);
+  }
+  raw.push(...codexModelsFromConfigToml(cfg.config));
   const out: string[] = [];
   const seen = new Set<string>();
   for (const value of raw) {
@@ -287,7 +326,7 @@ export function readCcSwitchImportItems(
       }
       let reason: CcSwitchSkippedItem['reason'] = item ? 'missing_api_key' : 'missing_base_url';
       if (r.category === 'official') reason = 'official';
-      else if (!['claude', 'claude-desktop', 'codex', 'gemini'].includes(r.app_type)) reason = 'unsupported_protocol';
+      else if (!['claude', 'claude-desktop', 'codex', 'gemini', 'opencode'].includes(r.app_type)) reason = 'unsupported_protocol';
       else {
         try { JSON.parse(r.settings_config || '{}'); }
         catch { reason = 'invalid_config'; }
@@ -306,4 +345,120 @@ export function readCcSwitchImportItems(
   } finally {
     try { db?.close(); } catch { /* noop */ }
   }
+}
+
+/**
+ * Probe the REAL model list of one provider endpoint by calling its
+ * model-list API (authoritative — CC Switch config hints may be wrong or
+ * stale and are only used as a fallback when the probe fails).
+ *
+ * Endpoint candidates per protocol (version-segment tolerant):
+ *  - openai    : GET {base}/models (Bearer) — also tries without /v1
+ *  - anthropic : GET {base}/v1/models (x-api-key + anthropic-version)
+ *  - gemini    : GET {base}/v1beta/models?key=...
+ *
+ * Returns deduped model ids. Keys never leave this module except inside
+ * the probe request to the user-configured endpoint itself; nothing is
+ * logged.
+ */
+export async function probeProviderModels(
+  protocol: string,
+  baseUrl: string,
+  apiKey: string,
+  timeoutMs = 10000,
+): Promise<{ ok: true; models: string[]; baseUrl: string } | { ok: false; error: string }> {
+  const base = String(baseUrl || '').trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(base) || !String(apiKey || '').trim()) {
+    return { ok: false, error: 'missing_base_or_key' };
+  }
+  const candidates = modelsEndpointCandidates(protocol, base);
+  // `timeoutMs` is a total budget shared across candidate endpoints, so a
+  // dead host can never stall the import dialog for 2×timeout.
+  const deadline = Date.now() + timeoutMs;
+  let lastError = 'no_endpoint';
+  for (const endpoint of candidates) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) { lastError = 'timeout'; break; }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remaining);
+    const headers: Record<string, string> = {};
+    let url = endpoint;
+    if (protocol === 'gemini') {
+      url = endpoint + (endpoint.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(String(apiKey));
+    } else if (protocol === 'anthropic') {
+      headers['x-api-key'] = String(apiKey);
+      headers['anthropic-version'] = '2023-06-01';
+    } else {
+      headers.Authorization = 'Bearer ' + String(apiKey);
+    }
+    try {
+      const res = await fetch(url, { headers, signal: controller.signal });
+      if (!res.ok) {
+        lastError = 'http_' + res.status;
+        continue; // next candidate endpoint
+      }
+      const payload = await res.json().catch(() => null) as Record<string, unknown> | null;
+      const models = extractModelIds(payload, protocol);
+      // Empty list is still authoritative: the endpoint answered. The probe
+      // also pins the REAL api base (endpoint minus the /models suffix):
+      // CC Switch base_url values often lack the version segment (e.g.
+      // "https://linkapi.ai" instead of "https://linkapi.ai/v1"), which breaks
+      // the runtime's /chat/completions routing.
+      let apiBase = endpoint.replace(/\/models$/, '');
+      if (protocol === 'anthropic') apiBase = apiBase.replace(/\/v1$/, '');
+      return { ok: true, models, baseUrl: apiBase };
+    } catch (err) {
+      lastError = (err instanceof Error && err.name === 'AbortError') ? 'timeout' : 'network';
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  log.warn('cc-switch model probe failed', { protocol, baseUrl: base, error: lastError });
+  return { ok: false, error: lastError };
+}
+
+/** Version-segment tolerant model-list endpoint candidates. */
+function modelsEndpointCandidates(protocol: string, base: string): string[] {
+  const out: string[] = [];
+  if (protocol === 'gemini') {
+    const b = base.endsWith('/v1beta') ? base : base + '/v1beta';
+    out.push(b + '/models');
+    return out;
+  }
+  if (base.endsWith('/v1')) {
+    out.push(base + '/models');
+    out.push(base.slice(0, -3) + '/models');
+    return out;
+  }
+  out.push(base + '/v1/models');
+  out.push(base + '/models');
+  return out;
+}
+
+/** Pull model ids out of openai/anthropic (`data[].id`) or gemini
+ *  (`models[].name`, prefixed with `models/`) payloads. */
+function extractModelIds(payload: Record<string, unknown> | null, protocol: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (id: unknown) => {
+    if (typeof id !== 'string') return;
+    let clean = id.trim();
+    if (protocol === 'gemini') clean = clean.replace(/^models\//, '');
+    if (!clean || seen.has(clean)) return;
+    seen.add(clean);
+    out.push(clean);
+  };
+  if (payload && Array.isArray(payload.data)) {
+    for (const entry of payload.data) {
+      const id = entry && typeof entry === 'object' ? (entry as Record<string, unknown>).id : entry;
+      push(id);
+    }
+  }
+  if (payload && Array.isArray(payload.models)) {
+    for (const entry of payload.models) {
+      const name = entry && typeof entry === 'object' ? (entry as Record<string, unknown>).name : entry;
+      push(name);
+    }
+  }
+  return out;
 }

@@ -139,6 +139,25 @@ describe('model authorization discovery', () => {
     expect(auth.listAuthorizationSummaries(UID).authorizations).toEqual([]);
   });
 
+  it('does not persist a credential when the provider connection probe fails', async () => {
+    vi.doMock('#core-agent', () => ({
+      createPiProvider: () => ({
+        complete: async () => { throw new Error('401 rejected secret-probe-key'); },
+      }),
+      listPiProviders: () => ['anthropic'],
+    }));
+    const auth = await import('../../../src/main/features/auth');
+
+    const result = await auth.testAuthorizationDraft(UID, {
+      kind: 'builtin_api_key', providerId: 'anthropic', apiKey: 'secret-probe-key', model: 'claude-opus-4-8',
+    });
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('[redacted]') });
+    expect(JSON.stringify(result)).not.toContain('secret-probe-key');
+    expect(auth.listAuthorizationSummaries(UID).authorizations).toEqual([]);
+    expect((await auth.listEntries()).entries).toEqual([]);
+  });
+
   it('prepares an opaque CC Switch draft without exposing the raw key and can discover with it', async () => {
     createCcSwitchDb({
       auth: { OPENAI_API_KEY: 'cc-secret-key' },

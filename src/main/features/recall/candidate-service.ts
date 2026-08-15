@@ -23,6 +23,11 @@ import {
 } from './asset-relations';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import {
+  readAbilityAssetSemantics,
+  type AbilityAssetSemantics,
+  type AbilityAssetSensitivity,
+} from './asset-semantics';
+import {
   createAbilityAsset,
   pauseAbilityAsset,
   readAbilityAsset,
@@ -110,6 +115,16 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   ontologyRefs?: AbilityAssetOntologyRef[];
   relations?: AbilityAssetRelation[];
   derivedFrom?: string[];
+  /** 适用/禁用条件。缺失=没记录过，**不是**「无限制」。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
+  /** 缺失=没分过级，不等于 L0。 */
+  sensitivity?: AbilityAssetSensitivity;
+  /** 用户显式确认过「这条可以跨作用域使用」的时间。
+   *
+   *  规范 10.2 里跨作用域是 confirm 档——既然规范要求「确认」，系统就得有地方
+   *  记下确认发生过，否则那一档永远停在等待里。缺失=没确认过，不是拒绝过。 */
+  crossScopeConfirmedAt?: string;
   scope: string;
   scopePolicy?: RecallAbilityAssetScopePolicy;
   recommendedAction?: 'pause' | 'rework';
@@ -162,7 +177,7 @@ interface StoredRecallAssetHandoffReceipt extends RecallJsonRecord, RecallAssetH
   createdAt: string;
 }
 
-export interface PromoteRecallCandidateOptions {
+export interface PromoteRecallCandidateOptions extends AbilityAssetSemantics {
   actor?: 'user';
   ontologyRefs?: AbilityAssetOntologyRef[];
   scopePolicy?: RecallAbilityAssetScopePolicy;
@@ -844,6 +859,12 @@ export async function promoteRecallCandidate(
   if (options.actor !== 'user') throw new Error('recall candidate promotion requires a user actor');
   const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
   const relationContract = readAbilityAssetRelationContract(options as Record<string, unknown>);
+  const semantics = readAbilityAssetSemantics(options as unknown as Record<string, unknown>);
+  // 条件是评审时新写下的自由文本，不走 saveRecallCandidate 那道闸，这里补上。
+  assertNotForbiddenToPersist([
+    ...(semantics.applicableWhen || []),
+    ...(semantics.forbiddenWhen || []),
+  ]);
   const causalRule = options.causalRule === undefined ? undefined : normalizeCausalRule(options.causalRule);
   const scopePolicy = normalizeAbilityAssetScopePolicy(options.scopePolicy);
   let decision: ReviewDecision | undefined;
@@ -929,11 +950,25 @@ export async function promoteRecallCandidate(
         ...(causalRule ? { causalRule } : {}),
         ...(ontologyRefs?.length ? { ontologyRefs } : {}),
         ...relationContract,
+        ...semantics,
         scope: candidate.suggestedScope,
         ...(scopePolicy ? { scopePolicy } : {}),
         status: 'active',
         lifecycleStatus: 'user_confirmed_unverified',
-        maturity: 'seed',
+        // 用户已经在评审里确认过这条内容，所以起点是 bud 而不是 seed。
+        //
+        // 规范 10.2 的 seed 档写的是「Candidate」——而候选在这个系统里是
+        // RecallCandidateRecord，不是已 promote 的资产。资产一旦走到这里，
+        // 用户确认那一关已经过了，再归进候选档就和它自己的 lifecycleStatus
+        // 「user_confirmed_unverified」自相矛盾，而 bud 的定义恰恰就是
+        // 「User Confirmed / Unverified：用户确认了内容，不代表效果已验证」。
+        //
+        // 这个矛盾以前不显形，因为 resolveDefaultUsePolicy 没有调用方。接上
+        // 选择层之后后果变成实的：seed 一律 never，于是新资产永远不会被带入
+        // 任何 Agent，也就永远产生不了使用证据、做不了 transfer proof、升不了
+        // 档——卡死在最底下一级。seed→bud 至今没有任何升档路径
+        // （setAbilityAssetMaturity 只有 proof-service 一个调用方）。
+        maturity: 'bud',
         version: '1',
         ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
         createdAt: now,
@@ -958,6 +993,7 @@ export async function promoteRecallCandidate(
           evidenceRefs: candidate.evidenceRefs,
           ...(ontologyRefs?.length ? { ontologyRefs } : {}),
           ...relationContract,
+          ...semantics,
           ...(scopePolicy ? { scopePolicy } : {}),
           actor: 'user',
           reason: handoffReason,

@@ -76,3 +76,70 @@ export async function evaluateEffectivenessProof(userId: string, input: { transf
   if (record.status === 'valid' && record.outcome === 'better') for (const item of transfer.assetVersions) await setAbilityAssetMaturity(userId, item.assetId, 'effectiveness_validated');
   return asEffectiveness(record);
 }
+
+/** 列出全部效果证明。与 listTransferProofs 同构——迁移证明能按目录扫，
+ *  效果证明也该能，否则「这条资产有没有被证明有用」永远问不出来。 */
+export async function listEffectivenessProofs(userId: string): Promise<EffectivenessProofRecord[]> {
+  const directory = path.dirname(recallJsonRecordPath(userId, 'effectiveness-proofs', 'placeholder'));
+  let names: string[];
+  try {
+    names = await fs.readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const records = await Promise.all(names
+    .filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5)))
+    .map(async (name) => readRecallJsonRecord(userId, 'effectiveness-proofs', name.slice(0, -5))));
+  return records
+    .filter((record): record is RecallJsonRecord => Boolean(record))
+    .map(asEffectiveness)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** 一次迁移，加上挂在它上面的效果结论。 */
+export interface AssetProofView {
+  transfer: TransferProofRecord;
+  /** 这次迁移带的是这条资产的哪一版。 */
+  version: string;
+  /** 同一次迁移可以被评价多次（复评、改判），全部列出，不只留最后一条。 */
+  effectiveness: EffectivenessProofRecord[];
+}
+
+/**
+ * 按资产反查证明。
+ *
+ * **迁移证明与效果证明说的不是一回事，这里刻意不合并成一个「已验证」布尔值：**
+ *
+ *   transfer.status = succeeded      → 它确实被带过去、被用了（USED）
+ *   effectiveness.outcome = better   → 用了之后确实更好（PROVED_USEFUL）
+ *   effectiveness.outcome = worse    → **也是一条证明**，证明它没帮上忙
+ *
+ * 只显示 better 会把「证明」变成宣传：一条被证明有害的资产和一条从没被评价过
+ * 的资产在界面上会长得一样。所以三种结论一视同仁地列出来。
+ */
+export async function listAssetProofs(userId: string, assetId: string): Promise<AssetProofView[]> {
+  if (!safeId(assetId)) throw new Error('invalid recall asset id');
+  const [transfers, effectiveness] = await Promise.all([
+    listTransferProofs(userId),
+    listEffectivenessProofs(userId),
+  ]);
+  const byTransfer = new Map<string, EffectivenessProofRecord[]>();
+  for (const record of effectiveness) {
+    const list = byTransfer.get(record.transferProofId) || [];
+    list.push(record);
+    byTransfer.set(record.transferProofId, list);
+  }
+
+  const views: AssetProofView[] = [];
+  for (const transfer of transfers) {
+    const carried = transfer.assetVersions.find((item) => item.assetId === assetId);
+    if (!carried) continue;
+    views.push({
+      transfer,
+      version: carried.version,
+      effectiveness: byTransfer.get(transfer.id) || [],
+    });
+  }
+  return views;
+}

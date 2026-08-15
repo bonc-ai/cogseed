@@ -1,7 +1,8 @@
 import { Mutex } from 'async-mutex';
 import { readJson, safeId, writeJson } from '../../storage';
 import { userCloudConfigDir } from '../../paths';
-import type { TouchpointActionKind, TouchpointIntent, TouchpointTemplate } from './types';
+import type { TouchpointActionKind, TouchpointIntent, TouchpointRouteScene, TouchpointTemplate } from './types';
+import { TOUCHPOINT_ROUTE_SCENES } from './types';
 import * as path from 'node:path';
 
 const CONFIG_VERSION = 1 as const;
@@ -10,7 +11,14 @@ const MAX_BODY = 4_000;
 const MAX_BUTTON = 80;
 const ACTIONS = new Set<TouchpointActionKind>(['open', 'snooze', 'confirm', 'reject', 'edit', 'approve', 'adjust', 'retry', 'forget_source', 'revoke_grant']);
 const TEMPLATES = new Set<TouchpointTemplate>(['daily_briefing', 'ontology_confirmation', 'task_approval', 'task_result', 'task_failure', 'deadline_risk', 'calendar_conflict', 'binding_status']);
+const ROUTE_SCENES = new Set<TouchpointRouteScene>(TOUCHPOINT_ROUTE_SCENES);
+const FEISHU_ONLY_ROUTE_SCENES = ['task_approval', 'daily_briefing'] as const satisfies readonly TouchpointRouteScene[];
 const locks = new Map<string, Mutex>();
+
+export interface TouchpointRoutingInstance {
+  id: string;
+  platform: 'feishu_lark' | 'wechat_personal';
+}
 
 export interface TouchpointTemplateConfig {
   title: string;
@@ -22,7 +30,7 @@ export interface TouchpointConfigFile {
   version: typeof CONFIG_VERSION;
   defaultInstanceId: string | null;
   templates: Partial<Record<TouchpointTemplate, TouchpointTemplateConfig>>;
-  routes: Partial<Record<TouchpointTemplate, string | null>>;
+  routes: Partial<Record<TouchpointRouteScene, string | null>>;
 }
 
 export class TouchpointConfigError extends Error {
@@ -89,12 +97,12 @@ function normalizeConfig(raw: unknown): TouchpointConfigFile {
   if (candidate.templates && typeof candidate.templates === 'object' && !Array.isArray(candidate.templates)) {
     for (const [key, value] of Object.entries(candidate.templates)) if (TEMPLATES.has(key as TouchpointTemplate)) templates[key as TouchpointTemplate] = normalizeTemplate(value, `templates.${key}`);
   }
-  const routes: Partial<Record<TouchpointTemplate, string | null>> = {};
+  const routes: Partial<Record<TouchpointRouteScene, string | null>> = {};
   if (candidate.routes && typeof candidate.routes === 'object' && !Array.isArray(candidate.routes)) {
     for (const [key, value] of Object.entries(candidate.routes)) {
-      if (!TEMPLATES.has(key as TouchpointTemplate)) continue;
-      if (value === null || value === '') routes[key as TouchpointTemplate] = null;
-      else if (typeof value === 'string' && safeId(value)) routes[key as TouchpointTemplate] = value;
+      if (!ROUTE_SCENES.has(key as TouchpointRouteScene)) continue;
+      if (value === null || value === '') routes[key as TouchpointRouteScene] = null;
+      else if (typeof value === 'string' && safeId(value)) routes[key as TouchpointRouteScene] = value;
     }
   }
   return { version: CONFIG_VERSION, defaultInstanceId, templates, routes };
@@ -105,11 +113,58 @@ export async function getTouchpointConfig(userId: string): Promise<TouchpointCon
   catch { return emptyConfig(); }
 }
 
-export async function saveTouchpointConfig(userId: string, input: unknown): Promise<TouchpointConfigFile> {
+function validateRoutingConfig(
+  config: TouchpointConfigFile,
+  instances: readonly TouchpointRoutingInstance[],
+): void {
+  const instancesById = new Map(instances.map((instance) => [instance.id, instance]));
+  const validateTarget = (
+    field: string,
+    instanceId: string | null | undefined,
+    allowedPlatforms: readonly TouchpointRoutingInstance['platform'][],
+  ): TouchpointRoutingInstance | undefined => {
+    if (!instanceId) return undefined;
+    const instance = instancesById.get(instanceId);
+    if (!instance || !allowedPlatforms.includes(instance.platform)) {
+      throw new TouchpointConfigError(field, '消息实例不存在或不支持此投递场景');
+    }
+    return instance;
+  };
+
+  const defaultInstance = validateTarget(
+    'defaultInstanceId',
+    config.defaultInstanceId,
+    ['feishu_lark', 'wechat_personal'],
+  );
+  for (const scene of TOUCHPOINT_ROUTE_SCENES) {
+    validateTarget(
+      `routes.${scene}`,
+      config.routes[scene],
+      scene === 'external_send' ? ['feishu_lark', 'wechat_personal'] : ['feishu_lark'],
+    );
+  }
+  if (defaultInstance?.platform === 'wechat_personal') {
+    for (const scene of FEISHU_ONLY_ROUTE_SCENES) {
+      if (!config.routes[scene]) {
+        throw new TouchpointConfigError(
+          `routes.${scene}`,
+          '默认投递实例为个人微信时，飞书专属场景必须明确选择飞书/Lark 机器人',
+        );
+      }
+    }
+  }
+}
+
+export async function saveTouchpointConfig(
+  userId: string,
+  input: unknown,
+  instances: readonly TouchpointRoutingInstance[],
+): Promise<TouchpointConfigFile> {
   if (!input || typeof input !== 'object' || (input as { version?: unknown }).version !== CONFIG_VERSION) {
     throw new TouchpointConfigError('version', '触达配置版本不受支持');
   }
   const config = normalizeConfig(input);
+  validateRoutingConfig(config, instances);
   return lockFor(userId).runExclusive(async () => {
     await writeJson(filePath(userId), config);
     return config;
@@ -149,8 +204,8 @@ export async function applyTouchpointTemplate(userId: string, intent: Touchpoint
   };
 }
 
-export async function resolveTouchpointInstanceId(userId: string, template: TouchpointTemplate, explicit?: string): Promise<string | undefined> {
+export async function resolveTouchpointInstanceId(userId: string, scene: TouchpointRouteScene, explicit?: string): Promise<string | undefined> {
   const config = await getTouchpointConfig(userId);
-  const candidate = explicit?.trim() || config.routes[template] || config.defaultInstanceId || undefined;
+  const candidate = explicit?.trim() || config.routes[scene] || config.defaultInstanceId || undefined;
   return candidate && safeId(candidate) ? candidate : undefined;
 }

@@ -85,6 +85,34 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-fact strong{display:block;margin:12px 0 5px;font-size:13.5px}
 #cs-onboarding .cs-fact span{color:var(--cs-muted);font-size:12px;line-height:1.6;display:block}
 
+/* ── step 1: two-column hero (story + action card), matching the
+   prototype's first-run landing. Scoped to panel 0 only so panels 1-3
+   keep their existing single-column layout untouched. ── */
+#cs-onboarding .cs-panel[data-cspanel="0"]{width:min(1120px,100%)}
+#cs-onboarding .cs-hero-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(300px,.95fr);gap:56px;align-items:start}
+#cs-onboarding .cs-hero-story{min-width:0}
+#cs-onboarding .cs-promise{display:grid;gap:14px;margin-top:26px}
+#cs-onboarding .cs-promise>div{display:grid;grid-template-columns:30px minmax(0,1fr);gap:12px;align-items:start}
+#cs-onboarding .cs-promise i{width:30px;height:30px;border-radius:7px;background:var(--cs-forest-weak);
+  display:grid;place-items:center;color:var(--cs-forest-deep)}
+#cs-onboarding .cs-promise svg{width:16px;height:16px}
+#cs-onboarding .cs-promise p{margin:0}
+#cs-onboarding .cs-promise strong{display:block;font-size:13.5px;color:var(--cs-ink)}
+#cs-onboarding .cs-promise span{display:block;margin-top:3px;color:var(--cs-muted);font-size:12px;line-height:1.55}
+#cs-onboarding .cs-hero-footnote{margin-top:24px;font-size:12px;color:var(--cs-faint);font-weight:600}
+#cs-onboarding .cs-hero-card-wrap{position:sticky;top:0}
+#cs-onboarding .cs-hero-card{border:1px solid var(--cs-line);border-radius:14px;background:#fff;padding:26px;
+  box-shadow:0 14px 36px rgba(22,55,39,.09)}
+#cs-onboarding .cs-eyebrow{font-family:var(--cs-mono);font-size:10px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--cs-forest-deep)}
+#cs-onboarding .cs-hero-card h2{margin:10px 0 10px;font-size:20px;line-height:1.3;color:var(--cs-ink)}
+#cs-onboarding .cs-hero-card>p{margin:0 0 20px;color:var(--cs-muted);font-size:12.5px;line-height:1.6}
+#cs-onboarding .cs-btn-block{width:100%;justify-content:center}
+@media (max-width:760px){
+  #cs-onboarding .cs-hero-grid{grid-template-columns:1fr}
+  #cs-onboarding .cs-hero-card-wrap{position:static;margin-top:8px}
+}
+
 /* ── action bar / buttons ── */
 #cs-onboarding .cs-actions{display:flex;gap:10px;align-items:center;margin-top:30px;flex-wrap:wrap}
 #cs-onboarding .cs-btn{display:inline-flex;align-items:center;gap:7px;padding:11px 20px;border-radius:var(--cs-radius);
@@ -352,6 +380,12 @@ body.cs-onboarding-active .app-container{display:none !important}
    template: icon / flexible-name / auto actions. */
 #cs-onboarding .cs-team-row{grid-template-columns:42px minmax(0,1fr) auto}
 #cs-onboarding .cs-team-row .cs-team-right{display:flex;align-items:center;gap:10px}
+#cs-onboarding .cs-team-actions{display:flex;align-items:center;gap:8px}
+#cs-onboarding .cs-team-action-select{padding:7px 12px;font-size:12px;border:1px solid var(--cs-line);
+  border-radius:6px;background:var(--cs-paper);color:var(--cs-ink);cursor:pointer;
+  transition:all .15s;outline:none}
+#cs-onboarding .cs-team-action-select:hover{border-color:var(--cs-forest);background:var(--cs-paper-lift)}
+#cs-onboarding .cs-team-action-select:focus{border-color:var(--cs-forest);box-shadow:0 0 0 3px var(--cs-forest-ghost)}
 #cs-onboarding .cs-team-connect{padding:7px 16px;font-size:12px}
 #cs-onboarding .cs-team-connect.done{background:var(--cs-forest-weak);color:var(--cs-forest-deep);cursor:default}
 #cs-onboarding .cs-team-connect.done:hover{background:var(--cs-forest-weak)}

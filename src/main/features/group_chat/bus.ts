@@ -136,6 +136,12 @@ import {
 } from "../../util/project-layout";
 import * as agentsFeat from "../agents";
 import * as commanderRuntimeStats from "../commander_runtime_stats";
+import { getThinkingLevel } from "../config";
+
+// Narrowed once so TS can see the excluded 'auto' branch.
+function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
+  return getThinkingLevel();
+}
 import type { AgentRunStatus } from "../agent_runtime_stats";
 import {
   activityFromLocalEvent,
@@ -3866,6 +3872,49 @@ async function runActorTurnBody(
         log.warn(`Commander-dispatched asset injection failed cid=${cid}: ${(error as Error).message}`);
       }
     }
+
+    // 出生继承的认知。和上面的 Recall 投影是两条来源：投影是这次会话里确认过的
+    // 上下文，继承是这个 Agent 出生时就带着的。两者都只走宿主拼的 system prompt，
+    // CLI Agent 不消费这条路径，所以也不能拿到（否则它事后会声称用过）。
+    // actor.id 就是 agent id（上面 getAgent(actor.id) 用的同一个）。G8b 临时 worker
+    // 没有 agent.json，读出来是 null，走同一条降级路径。
+    if (agentsFeat.isValidAgentId(actor.id)) {
+      try {
+        const [{ selectInheritedCognition }, { buildInheritedCognitionPrompt }] = await Promise.all([
+          import("../recall/cognition-selection"),
+          import("../recall/inherited-cognition-prompt"),
+        ]);
+        const selection = await selectInheritedCognition(uid, actor.id, {
+          ...(turnProjectId ? { projectId: turnProjectId } : {}),
+        });
+        // null = 这个 Agent 生成时还没有继承机制，和「继承了空」不是一回事，
+        // 但对提示词而言都是没有可注入的内容。
+        if (selection) {
+          const rendered = buildInheritedCognitionPrompt(selection.selected);
+          if (rendered.promptBlock) {
+            systemPrompt = `${systemPrompt}\n\n${rendered.promptBlock}`;
+          }
+          // 回执要在注入的同一处落，用同一份事实——分开算两次早晚会对不上。
+          const { reuseRefsForTurn, truncatedByBudget } = await import(
+            "../recall/inherited-cognition-prompt"
+          );
+          await recordInheritedCognitionReuse(
+            uid,
+            cid,
+            actor.id,
+            item.turnId,
+            reuseRefsForTurn(
+              rendered,
+              selection.withheld,
+              truncatedByBudget(selection.selected, rendered),
+            ),
+          );
+        }
+      } catch (error) {
+        // 继承注入失败不该让这一轮对话起不来——降级成这次不带继承认知。
+        log.warn(`Inherited cognition injection failed cid=${cid}: ${(error as Error).message}`);
+      }
+    }
   }
 
   // Streaming.
@@ -4229,6 +4278,9 @@ async function runActorTurnBody(
         boundary: "real",
         permissionMode: getLocalExecMode(),
       });
+      // User-selected thinking strength ('auto' = no override; let the
+      // provider default / model decide).
+      const turnThinkingLevel = thinkingLevelForRun();
       for await (const ev of streamChatWithModel({
         userId: uid,
         message: messageText,
@@ -4236,6 +4288,9 @@ async function runActorTurnBody(
         systemPrompt,
         workingDir,
         agentName: actor.name || actor.id,
+        // User-selected thinking strength ('auto' = no override; let the
+        // provider default / model decide).
+        ...(turnThinkingLevel !== "auto" ? { thinkingLevel: turnThinkingLevel } : {}),
         ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
         cid,
         turnId: item.turnId,
@@ -4691,7 +4746,13 @@ async function runActorTurnBody(
               }
             }
           } else {
-            const ag = await agentsFeat.createAgentFromBlocks(fields);
+            // 带上出生上下文，新 Agent 才能承接前序项目的认知资产与会话来源；
+            // 没有这一步生成出来的只有角色提示，被问到前序项目的术语只能瞎猜。
+            const ag = await agentsFeat.createAgentFromBlocks(fields, {
+              userId: uid,
+              ...(cid ? { conversationId: cid } : {}),
+              ...(turnProjectId ? { projectId: turnProjectId } : {}),
+            });
             if (ag) {
               createdAgents.push({
                 agent_id: ag.agent_id,
@@ -5427,6 +5488,61 @@ export async function _buildActiveSharedTaskContextBlockForTest(
   cid: string,
 ): Promise<string> {
   return buildActiveSharedTaskContextBlock(uid, cid);
+}
+
+/**
+ * 记一张 ContextReuseReceipt：这个 Agent 出生时继承的认知，本轮被真实注入了哪几条、
+ * 哪几条没带上、各是什么原因。这是 `资产 → 出生继承 → 复用` 的最后一跳，也是
+ * 履历页 use 段与 evidence 段唯一的数据来源。
+ *
+ * **execution id 用本轮真实的 `turn-<turnId>`**，与 `execution-records` 写的执行
+ * 记录同名、落在同一个目录里。早先版本自造过 `exec-inherit-<hash>` 合成 id 来做
+ * 幂等，真机重启后暴露出问题：回执落在一个没有 `record.json` 的目录里，执行记录
+ * 扫描器每次启动都反复 warn，而且语义上回执挂在了一次并不存在的执行上——回执
+ * 本该是某次真实执行的凭证。噪音该在展示层处理，不该靠编造 id。
+ *
+ * 同一轮重试会撞上「已存在」，那是预期结果，不是错误。
+ *
+ * 状态停在 `prepared`：它如实表示「这一轮把这些认知带进去了」，不表示模型真的
+ * 用上了、更不表示用了有帮助。DELIVERED / LOADED / USED / PROVED_USEFUL 是四件
+ * 不同的事，这里只落得起第二件。
+ */
+async function recordInheritedCognitionReuse(
+  uid: string,
+  cid: string,
+  agentId: string,
+  turnId: string,
+  facts: { reusedRefs: string[]; omittedRefs: string[] },
+): Promise<void> {
+  if (!facts.reusedRefs.length && !facts.omittedRefs.length) return;
+  try {
+    const [{ prepareReceipt }, { buildGmemberSessionId }] = await Promise.all([
+      import("../p3394/context-reuse-receipt"),
+      import("./state"),
+    ]);
+    const targetSessionId = buildGmemberSessionId(cid, agentId);
+    await prepareReceipt(
+      uid,
+      {
+        executionId: `turn-${turnId}`,
+        targetSessionId,
+        reusedRefs: facts.reusedRefs,
+        omittedRefs: facts.omittedRefs,
+        // 继承注入是只读的：Agent 拿到判断，但不能改写认知资产。
+        permissionMode: "read-only",
+        allowedScopes: ["cognition:inherited"],
+        boundary: "real",
+      },
+      { sessionId: targetSessionId },
+    );
+  } catch (err) {
+    const message = (err as Error).message;
+    // 同一轮重试必然走到这里，属正常路径，不该刷 warn。
+    if (message.includes("already exists")) return;
+    log.warn(
+      `inherited cognition receipt not recorded agent=${agentId} cid=${cid}: ${message}`,
+    );
+  }
 }
 
 async function buildSpaceBuilderSystemPrompt(uid: string): Promise<string> {

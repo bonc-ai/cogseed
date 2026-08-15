@@ -89,7 +89,7 @@ describe('cognition tree asset relation contract', () => {
       id: `asset:${updated.id}`,
       assetType: 'rule',
       status: 'active',
-      maturity: 'seed',
+      maturity: 'bud',
       version: '2',
     }));
     expect(graph.edges).toEqual([{

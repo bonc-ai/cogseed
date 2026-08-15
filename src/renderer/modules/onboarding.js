@@ -188,17 +188,26 @@ function _csObShellHtml() {
     <main class="cs-content">
 
       <section class="cs-panel active" data-cspanel="0">
-        <div class="cs-kicker">模型是大家的 · 认知是你的</div>
-        <h1>换模型、换 Agent，你的经验不丢。</h1>
-        <p class="cs-lead">你确认过的判断、规则和方法，会被 CogSeed 沉淀成你的认知资产——换哪个 AI，都接着用。</p>
-        <div class="cs-facts">
-          <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="12" r="4"/></svg><strong>无需注册账号</strong><span>创建本机个人空间，不需要手机号、邮箱或企业身份。</span></div>
-          <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 13v5M12 9v9M17 5v13"/></svg><strong>数据只在本机</strong><span>项目和会话不会因为打开应用就被上传。</span></div>
-          <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><strong>密钥自己保管</strong><span>密钥由你保管，只在本机使用；跳过也行，之后随时配。</span></div>
-        </div>
-        <div class="cs-actions">
-          <button class="cs-btn" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>继续 · 连接 AI 工具</button>
-          <small>全程本机操作，不上传任何数据。</small>
+        <div class="cs-hero-grid">
+          <div class="cs-hero-story">
+            <div class="cs-kicker">模型是大家的 · 认知是你的</div>
+            <h1>换模型、换 Agent，你的经验不丢。</h1>
+            <p class="cs-lead">你确认过的判断、规则和方法，会被 CogSeed 沉淀成你的认知资产——换哪个 AI，都接着用。</p>
+            <div class="cs-promise">
+              <div><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="12" r="4"/></svg></i><p><strong>无需注册账号</strong><span>创建本机个人空间，不需要手机号、邮箱或企业身份。</span></p></div>
+              <div><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 13v5M12 9v9M17 5v13"/></svg></i><p><strong>数据只在本机</strong><span>项目和会话不会因为打开应用就被上传。</span></p></div>
+              <div><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></i><p><strong>密钥自己保管</strong><span>密钥由你保管，只在本机使用；跳过也行，之后随时配。</span></p></div>
+            </div>
+            <div class="cs-hero-footnote">全程本机操作，不上传任何数据。</div>
+          </div>
+          <aside class="cs-hero-card-wrap">
+            <div class="cs-hero-card">
+              <div class="cs-eyebrow">Start with CogSeed</div>
+              <h2>开始把经验变成资产</h2>
+              <p>先看看这台机器上已经装了哪些 AI 工具，一键接入；密钥和数据全程留在本机。</p>
+              <button class="cs-btn cs-btn-block" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>继续 · 连接 AI 工具</button>
+            </div>
+          </aside>
         </div>
       </section>
 
@@ -210,7 +219,9 @@ function _csObShellHtml() {
         <div class="cs-list" id="cs-team-list">
           <div class="cs-state loading">正在检测可连接的 Agent…</div>
         </div>
-        <div class="cs-mode"><span>无需粘贴密钥。订阅登录的 Agent 本机就能干活，接入不受影响。</span></div>
+        <div class="cs-mode">
+          <span>无需粘贴密钥。订阅登录的 Agent 本机就能干活，接入不受影响。</span>
+        </div>
 
         <div class="cs-actions">
           <button class="cs-btn ghost" data-csnext="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
@@ -1091,7 +1102,13 @@ function _csRenderTeam(items, unsupported, localClis) {
     const hintHtml = hints.length ? `<small>${_csEsc(hints.join(' · '))}</small>` : '';
 
     const action = connectable
-      ? `<button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">连接</button>`
+      ? `<div class="cs-team-actions">
+          <select class="cs-team-action-select" data-app-type="${_csEsc(appType)}">
+            <option value="connect-only">只连接</option>
+            <option value="connect-store">连接并存储 API</option>
+          </select>
+          <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
+        </div>`
       : '';
 
     return `
@@ -1108,14 +1125,19 @@ function _csRenderTeam(items, unsupported, localClis) {
   box.innerHTML = rows;
 
   box.querySelectorAll('.cs-team-connect').forEach((btn) => {
-    btn.addEventListener('click', () => void _csConnectTeam(box, btn.dataset.appType));
+    btn.addEventListener('click', () => {
+      const appType = btn.dataset.appType;
+      const select = box.querySelector(`.cs-team-action-select[data-app-type="${appType}"]`);
+      const shouldStore = select && select.value === 'connect-store';
+      void _csConnectTeam(box, appType, shouldStore);
+    });
   });
 }
 
 // Connect ONE agent's models into custom providers ("AI 团队"): sync all of
 // that agent's importable externalIds at once. Honest result — added/updated
 // counts, and a note when some still need a key.
-async function _csConnectTeam(box, appType) {
+async function _csConnectTeam(box, appType, shouldStoreApi = false) {
   const row = box.querySelector(`.cs-team-row[data-app-type="${appType}"]`);
   const btn = row ? row.querySelector('.cs-team-connect') : null;
   const externalIds = (_csTeamByAgent[appType] || []).slice();
@@ -1138,7 +1160,7 @@ async function _csConnectTeam(box, appType) {
       if (!res || res.ok !== true) {
         const reason = (res && res.reason) || '未知原因';
         _csToast(`连接「${label}」失败：${reason}`);
-        if (btn) { btn.disabled = false; btn.textContent = '连接'; }
+        if (btn) { btn.disabled = false; btn.textContent = '执行'; }
         return;
       }
       added = res.added || 0;
@@ -1160,6 +1182,22 @@ async function _csConnectTeam(box, appType) {
       cliResult = await _csEnsureCliAgent(cli, existing);
     }
 
+    // 3) If user selected "connect and store", store the currently-in-use API.
+    let storedApi = false;
+    if (shouldStoreApi && cli) {
+      try {
+        const storeRes = await window.cogseed.invoke('customProviders.storeActiveCliConfig', { cli });
+        if (storeRes && storeRes.ok) {
+          storedApi = true;
+          _obLog.info('active CLI config stored', { cli, providerId: storeRes.providerId });
+        } else {
+          _obLog.warn('active CLI config store failed', { cli, error: storeRes?.error || 'unknown' });
+        }
+      } catch (err) {
+        _obLog.warn('active CLI config store error', { cli, error: (err && err.message) || String(err) });
+      }
+    }
+
     // Reflect the connected state on the row itself; keep it non-technical.
     if (row) {
       const statusEl = row.querySelector('.g-status');
@@ -1173,17 +1211,18 @@ async function _csConnectTeam(box, appType) {
     if (models) parts.push(`${models} 个模型`);
     if (cliResult === 'created') parts.push('新增 1 位 CLI 成员');
     else if (cliResult === 'exists') parts.push('CLI 成员已在团队');
+    if (storedApi) parts.push('已存储当前正在使用的 API');
     if (cliResult === 'error') {
       _csToast(`「${label}」模型已连接，但加入 CLI 成员失败，可稍后在「AI 团队」里手动新建`);
     } else {
       _csToast(parts.length ? `已把「${label}」连接到 AI 团队（${parts.join('，')}）` : `已连接「${label}」`);
     }
-    _obLog.info('team connect finished', { appType, added, updated, cli, cliResult });
+    _obLog.info('team connect finished', { appType, added, updated, cli, cliResult, storedApi });
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('team connect failed', { appType, error: msg });
     _csToast(`连接「${label}」失败：${msg}`);
-    if (btn) { btn.disabled = false; btn.textContent = '连接'; }
+    if (btn) { btn.disabled = false; btn.textContent = '执行'; }
   }
 }
 

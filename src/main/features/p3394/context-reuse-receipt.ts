@@ -215,6 +215,38 @@ export async function readReceipt(
   }
 }
 
+function contextReuseExecutionsDir(userId: string): string {
+  return path.join(userLocalRoot(userId), 'kstar', 'executions');
+}
+
+/** 列出该用户全部回执，按创建时间升序。
+ *
+ *  回执按执行 id 分目录存，单条读要先知道 executionId。但「这条资产被带入过
+ *  几次、哪几次没带上」是从资产往回问的，问的时候手上只有 assetId，所以得扫。
+ *
+ *  单条损坏跳过而不是整体抛错：一份读不出来的回执不该让整个履历页空白，
+ *  那会把「没用过」和「读失败」显示成同一件事。 */
+export async function listReceipts(userId: string): Promise<ContextReuseReceipt[]> {
+  let executionIds: string[];
+  try {
+    executionIds = await fs.readdir(contextReuseExecutionsDir(userId));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+
+  const receipts: ContextReuseReceipt[] = [];
+  for (const executionId of executionIds) {
+    if (!safeId(executionId)) continue;
+    try {
+      receipts.push(await readReceipt(userId, executionId));
+    } catch {
+      continue;
+    }
+  }
+  return receipts.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
 export async function prepareReceipt(
   userId: string,
   input: PrepareContextReuseReceiptInput,

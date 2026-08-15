@@ -94,7 +94,7 @@ import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
 import * as cliFallback from '../features/cli_fallback';
 import * as cognitionExtraction from '../features/cognition_extraction';
-import { detectAll } from '../features/local_agents/registry';
+import { detectAll, type LocalCliType } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
 import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
@@ -114,6 +114,7 @@ import { invokeHandlers as messagingHandlers } from './messaging';
 import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as touchpointHandlers } from './touchpoints';
 import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
+import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
@@ -174,6 +175,26 @@ function boundedText(value: unknown, field: string, max: number, required = true
 function boundedModelIds(value: unknown): string[] {
   if (!Array.isArray(value)) throw new Error('selectedModels must be array');
   return value.slice(0, 100).map((model) => boundedText(model, 'model', 200)).filter(Boolean);
+}
+
+function boundedCustomProviderModel(value: unknown, field: string): {
+  id: string;
+  contextWindow: number;
+  maxTokens: number;
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${field} required`);
+  const raw = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown };
+  const id = boundedText(raw.id, `${field}.id`, 200);
+  const boundedInteger = (candidate: unknown, name: string, max: number): number => {
+    if (!Number.isSafeInteger(candidate) || (candidate as number) <= 0 || (candidate as number) > max) {
+      throw new Error(`${name} must be a positive safe integer at most ${max}`);
+    }
+    return candidate as number;
+  };
+  const contextWindow = boundedInteger(raw.contextWindow, `${field}.contextWindow`, 16_777_216);
+  const maxTokens = boundedInteger(raw.maxTokens, `${field}.maxTokens`, 1_048_576);
+  if (maxTokens > contextWindow) throw new Error(`${field}.maxTokens must not exceed contextWindow`);
+  return { id, contextWindow, maxTokens };
 }
 type StreamHandler = (
   payload: any,
@@ -2328,6 +2349,33 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.proofs.effectiveness.feedback': async ({ transferProofId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(transferProofId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, proof: await effectivenessFeedback.recordEffectivenessFeedback(ctx.userId, { transferProofId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) }) }; },
   'recall.proofs.effectiveness.feedbackForTask': async ({ taskRunId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(taskRunId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, ...(await effectivenessFeedback.recordTaskEffectivenessFeedback(ctx.userId, { taskRunId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) })) }; },
+  // 跨作用域使用的确认与撤回。规范 10.2 要求「确认」，这里是确认真正发生的地方
+  // ——没有它，confirm 档只会永远停在等待里。撤回后立刻回到需要确认的状态。
+  'recall.assets.crossScope': async ({ assetId, confirmed, reason } = {}, ctx) => {
+    if (!safeId(assetId) || typeof confirmed !== 'boolean') throw new Error('invalid cross-scope confirmation');
+    return {
+      ok: true,
+      asset: await recallAssets.setAbilityAssetCrossScopeConfirmation(ctx.userId, assetId, confirmed, {
+        actor: 'user',
+        reason: typeof reason === 'string' && reason.trim() ? reason : 'cross-scope use decision',
+      }),
+    };
+  },
+
+  // 按资产反查证明。迁移证明说「被带过去用了」，效果证明说「用了有没有帮上忙」
+  // ——两者不合并成一个「已验证」布尔值，outcome=worse 也是一条证明。
+  'recall.proofs.list': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    return { ok: true, proofs: await recallProofs.listAssetProofs(ctx.userId, assetId) };
+  },
+
+  // 一条认知的履历：从哪来、进过哪些智能体、真用过几次、哪几次没带上。
+  // 这是履历不是进度条——渲染层不得把 `not_yet` 画成红色或警告。
+  'recall.cognitionChain.read': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    const { traceCognitionChainByAsset } = await import('../features/recall/cognition-chain');
+    return { ok: true, chain: await traceCognitionChainByAsset(ctx.userId, assetId) };
+  },
   'recall.tree.read': async (_args, ctx) => ({ ok: true, tree: await recallTree.readCognitionTree(ctx.userId) }),
   'recall.tree.rebuild': async (_args, ctx) => ({ ok: true, tree: await recallTree.rebuildCognitionTree(ctx.userId) }),
   'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
@@ -2685,6 +2733,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const agent = await agents.getAgent(agent_id);
     if (!agent) throw new Error('agent not found');
     return { agent };
+  },
+
+  // 「查看继承内容」入口。inheritance 为 null 表示这个 Agent 生成时还没有继承
+  // 机制，渲染层必须把它和「继承为空」分开说，不能都显示成没继承任何东西。
+  'agents.inheritance': async ({ agent_id } = {}, ctx) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    const { readAgentInheritance } = await import('../features/agent_inheritance');
+    return { ok: true, inheritance: await readAgentInheritance(ctx.userId, agent_id) };
   },
 
   'agents.create': async ({ name = '', description = '', description_zh, description_en, workflow = '', icon, color, runtime, category, output_format } = {}) => {
@@ -3428,6 +3484,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { enabled: appConfig.setMetacognitionEnabled(!!enabled) };
   },
 
+  // Thinking strength (reasoning effort) for chat model calls.
+  'prefs.getThinkingLevel': async () => ({ level: appConfig.getThinkingLevel() }),
+  'prefs.setThinkingLevel': async ({ level }) => ({ level: appConfig.setThinkingLevel(level) }),
+
   // First-run onboarding marker (machine-local, NOT cloud-synced — stored
   // under WS_ROOT/onboarding-state.json, shared across uids). The renderer's
   // boot.js checks `completed` after restoring the last view and lifts the
@@ -3503,7 +3563,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // consent page renders where the user is already logged in).
   'auth.openExternal':     async ({ url }) => auth.openExternalUrl(url),
   // Priority list (entries) — ordered (provider, model, profile) tuples.
-  'auth.listEntries':     async () => auth.listEntries(),
+  'auth.listEntries':     async ({ includeUnavailable } = {}) => {
+    if (includeUnavailable !== undefined && typeof includeUnavailable !== 'boolean') {
+      throw new Error('includeUnavailable must be boolean');
+    }
+    return auth.listEntries({ includeUnavailable: includeUnavailable === true });
+  },
   'auth.addEntry':        async ({ provider, model, profileId }) => auth.addEntry({ provider, model, profileId }),
   'auth.removeEntry':     async ({ entryId }) => auth.removeEntry(entryId),
   'auth.reorderEntries':  async ({ orderedIds }) => auth.reorderEntries(orderedIds || []),
@@ -3644,6 +3709,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       name: provider.name,
       protocol: provider.protocol,
       baseUrl: provider.baseUrl,
+      enabled: provider.enabled,
       notes: provider.notes,
       websiteUrl: provider.websiteUrl,
       needsKey: !!provider.needsKey,
@@ -3665,12 +3731,38 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof id !== 'string' || !id) throw new Error('invalid id');
     return customProviders.removeCustomProvider(ctx.userId, id);
   },
+  'customProviders.setEnabled': async (args, ctx) => {
+    const id = boundedText(args?.id, 'id', 120);
+    if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
+    return customProviders.setCustomProviderEnabled(ctx.userId, id, args.enabled);
+  },
+  'customProviders.model.add': async (args, ctx) => customProviders.addCustomProviderModel(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+    boundedCustomProviderModel(args.model, 'model'),
+  ),
+  'customProviders.model.update': async (args, ctx) => customProviders.updateCustomProviderModel(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+    boundedText(args?.modelId, 'modelId', 200),
+    boundedCustomProviderModel(args.model, 'model'),
+  ),
+  'customProviders.model.remove': async (args, ctx) => customProviders.removeCustomProviderModel(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+    boundedText(args?.modelId, 'modelId', 200),
+  ),
+  'customProviders.model.test': async (args, ctx) => customProviders.testCustomProviderModel(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+    boundedText(args?.modelId, 'modelId', 200),
+  ),
   'customProviders.ccswitch.probe': async () => {
     const probe = probeCcSwitch();
     return { available: probe.available, reason: probe.reason };
   },
   'customProviders.ccswitch.preview': async (_args, ctx) => {
-    const preview = customProviders.previewCcSwitchImport(ctx.userId);
+    const preview = await customProviders.previewCcSwitchImport(ctx.userId);
     if (!preview.ok) return preview;
     return {
       ok: true,
@@ -3686,6 +3778,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         notes: item.notes,
         websiteUrl: item.websiteUrl,
         models: item.models || [],
+        modelsProbe: item.modelsProbe !== false,
         needsKey: !!item.needsKey,
         apiKeyMasked: auth.maskKey(item.apiKey),
       })),
@@ -3697,11 +3790,94 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       })),
     };
   },
-  'customProviders.ccswitch.sync': async ({ externalIds } = {}, ctx) => {
+  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId } = {}, ctx) => {
     const selected = Array.isArray(externalIds)
       ? externalIds.filter((id): id is string => typeof id === 'string' && !!id)
       : undefined;
-    return customProviders.syncFromCcSwitch(ctx.userId, selected);
+    const models = modelsByExternalId && typeof modelsByExternalId === 'object' && !Array.isArray(modelsByExternalId)
+      ? modelsByExternalId
+      : undefined;
+    const bases = baseUrlsByExternalId && typeof baseUrlsByExternalId === 'object' && !Array.isArray(baseUrlsByExternalId)
+      ? baseUrlsByExternalId
+      : undefined;
+    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases);
+  },
+  'customProviders.storeActiveCliConfig': async ({ cli } = {}, ctx) => {
+    if (typeof cli !== 'string' || !cli) {
+      return { ok: false, error: 'invalid_cli' };
+    }
+
+    const { readActiveCliConfig } = await import('../features/local_agents/active_config.js');
+    const config = readActiveCliConfig(cli as LocalCliType);
+
+    if (!config) {
+      return { ok: false, error: 'no_active_config' };
+    }
+
+    // Check if this active config is already stored (avoid duplicates)
+    const externalId = `${cli}:active`;
+    const existing = customProviders.listCustomProviders(ctx.userId);
+    const existingProvider = existing.find((p) => p.externalId === externalId);
+
+    // Map CLI type to protocol
+    const protocolMap: Record<string, 'anthropic' | 'openai' | 'gemini'> = {
+      claude: 'anthropic',
+      codex: 'openai',
+      opencode: 'anthropic', // OpenCode supports multiple, default to anthropic
+      hermes: 'anthropic',
+      workbuddy: 'anthropic',
+    };
+
+    const protocol = protocolMap[cli] || 'anthropic';
+    const name = `${cli.charAt(0).toUpperCase() + cli.slice(1)} (当前使用)`;
+    const baseUrl = config.baseUrl || (protocol === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1');
+
+    let providerId: string;
+
+    if (existingProvider) {
+      // Update existing provider
+      const updateResult = customProviders.updateCustomProvider(ctx.userId, existingProvider.id, {
+        name,
+        protocol,
+        baseUrl,
+        apiKey: config.apiKey,
+      });
+      if (!updateResult.ok) {
+        return { ok: false, error: (updateResult as { error: string }).error };
+      }
+      providerId = existingProvider.id;
+      log.info('active CLI config updated', { cli, providerId, mode: config.mode });
+    } else {
+      // Add new provider
+      const addResult = customProviders.addCustomProvider(ctx.userId, {
+        name,
+        protocol,
+        baseUrl,
+        apiKey: config.apiKey,
+        source: 'manual', // Use 'manual' as source since custom_providers doesn't recognize 'active_cli'
+        externalId,
+      });
+      if (!addResult.ok) {
+        return { ok: false, error: (addResult as { error: string }).error };
+      }
+      providerId = (addResult as { id: string }).id;
+      log.info('active CLI config stored', { cli, providerId, mode: config.mode });
+    }
+
+    // Auto-bind entry if protocol has default model
+    if (protocol === 'anthropic') {
+      try {
+        await auth.addEntry({
+          provider: `cp:${providerId}`,
+          model: 'claude-sonnet-4-6',
+          profileId: `cp:${providerId}`,
+        });
+      } catch (err) {
+        log.warn('active cli auto-bind entry failed', { provider: providerId, error: (err as Error).message });
+      }
+    }
+
+    return { ok: true, providerId, mode: config.mode };
   },
 
   // ── Commander backend binding (settings page) ──
@@ -4263,6 +4439,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   ...personalContextHandlers,
   ...touchpointHandlers,
   ...desktopWorkbenchHandlers,
+
+  // CogSeed Hub account — desktop-side account management against the Hub
+  // account service. Tokens never cross this table; renderer-safe status DTOs only.
+  ...hubAccountHandlers,
 
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,

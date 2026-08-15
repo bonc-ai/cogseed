@@ -126,4 +126,27 @@ env_key = "OPENAI_API_KEY"` }),
     const providerId = `cp:${providers.listCustomProviders(UID)[0].id}`;
     expect(entries.some((e) => e.provider === providerId && e.model === 'gpt-5')).toBe(true);
   });
+
+  it('preserves configured model limits when re-syncing the same model id', async () => {
+    createDb([{
+      id: 'limits', app_type: 'codex', name: 'Limits',
+      settings_config: JSON.stringify({
+        auth: { OPENAI_API_KEY: 'key-limits' },
+        env: { OPENAI_BASE_URL: 'https://limits.example/v1' },
+        model: 'model-a',
+      }),
+    }]);
+    const providers = await import('../../../src/main/features/custom_providers');
+    await providers.syncFromCcSwitch(UID, ['codex:limits'], home);
+    const provider = providers.listCustomProviders(UID)[0];
+    expect(providers.updateCustomProviderModel(UID, provider.id, 'model-a', {
+      id: 'model-a', contextWindow: 524288, maxTokens: 32768,
+    })).toMatchObject({ ok: true });
+
+    await providers.syncFromCcSwitch(UID, ['codex:limits'], home);
+
+    expect(providers.listCustomProviders(UID)[0].models).toEqual([
+      { id: 'model-a', contextWindow: 524288, maxTokens: 32768 },
+    ]);
+  });
 });
