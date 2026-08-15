@@ -124,6 +124,7 @@ export interface CognitionAssetSummary {
   title: string;
   summary?: string;
   source: string;
+  lifecycleStatus?: 'user_confirmed_unverified' | 'automatically_extracted_unverified' | 'system_precipitated_unverified';
   version?: string;
   status?: CognitionAssetStatus | string;
   enabled?: boolean;

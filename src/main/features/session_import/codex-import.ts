@@ -56,9 +56,13 @@ const SYNTHETIC_USER_PREFIXES = [
   '>>> TRANSCRIPT START',
 ];
 
+const RECOMMENDED_PLUGINS_BLOCK_PREFIX =
+  /^<recommended_plugins>\s*here is a list of plugins that are available but not installed\b/i;
+
 function isSyntheticUserText(text: string): boolean {
   const t = text.trimStart();
-  return SYNTHETIC_USER_PREFIXES.some((p) => t.startsWith(p));
+  return RECOMMENDED_PLUGINS_BLOCK_PREFIX.test(t) ||
+    SYNTHETIC_USER_PREFIXES.some((p) => t.startsWith(p));
 }
 
 /** Numbered transcript replay Codex emits when resuming: `[1] user: …`. */

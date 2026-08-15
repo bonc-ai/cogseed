@@ -67,6 +67,7 @@ import * as localSecrets from '../util/local-secret-store';
 import { safeExternalUserActionUrl } from '../util/window-security';
 import { getActiveUserId } from './users';
 import {
+  CATALOG,
   FEATURED_API_PROVIDERS,
   OAUTH_PROVIDERS,
   OAUTH_ALIAS_FOR,
@@ -287,7 +288,7 @@ export interface CustomProviderModel {
 export interface CustomProvider {
   id: string;
   name: string;
-  protocol: 'anthropic' | 'openai' | 'gemini';
+  protocol: 'anthropic' | 'openai' | 'openai-responses' | 'gemini';
   baseUrl: string;
   apiKey: string;
   enabled: boolean;
@@ -679,7 +680,7 @@ function migrateCustomProviderModelsFromEntries(
 
 function parseCustomProvidersArray(arr: unknown, entries: readonly Entry[] = []): CustomProvider[] {
   if (!Array.isArray(arr)) return [];
-  const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'gemini']);
+  const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'openai-responses', 'gemini']);
   const out: CustomProvider[] = [];
   for (const raw of arr) {
     const p = raw as any;
@@ -962,7 +963,23 @@ export function getConfiguredModelCooldown(): {
   return best;
 }
 
+/**
+ * Return a user-facing message when the configured chat model is backed by an
+ * OAuth profile whose access token has expired. Synchronous on purpose:
+ * token refresh (with its side effects) already happened inside
+ * pickChatEntryGroup / resolveEntryApiKey; by the time this is consulted the
+ * refresh either succeeded (profile no longer counts as expired) or failed
+ * (the expired profile is skipped and the user needs to reauthorize).
+ */
 export function getConfiguredModelOAuthExpiredMessage(): string | null {
+  const store = loadProfilesForActiveUserOrEmpty();
+  for (const entry of store.entries) {
+    if (!isEntryAllowed(store, entry)) continue;
+    const profile = store.profiles[entry.profileId];
+    if (profile?.type === 'oauth' && Date.now() >= profile.expires) {
+      return t('errors.model_oauth_expired', { provider: providerLabel(profile.provider) });
+    }
+  }
   return null;
 }
 
@@ -1125,10 +1142,15 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     ? new Set<string>([...mod.listPiProviders(), ...EXTERNAL_API_PROVIDERS])
     : new Set<string>([...visible, ...EXTERNAL_API_PROVIDERS]);
 
-  // OAuth-only providers (ChatGPT Codex, Gemini Code Assist, GitHub Copilot,
-  // Google Antigravity) can't be authenticated with a raw API key — their
+  // OAuth-only providers can't be authenticated with a raw API key — their
   // endpoints only accept OAuth access tokens. Force the API-key tile off.
-  const oauthOnlyIds = new Set(['openai-codex', 'google-gemini-cli', 'google-antigravity', 'github-copilot']);
+  // Single source of truth: oauthOnly marks on CATALOG entries, plus the
+  // OAuth back-ends that only exist outside the catalog (Gemini CLI,
+  // Antigravity, GitHub Copilot) and surface once a saved profile exists.
+  const oauthOnlyIds = new Set([
+    ...CATALOG.filter((entry) => entry.oauthOnly).map((entry) => entry.id),
+    ...OAUTH_PROVIDERS.filter((entry) => !isVisibleProvider(entry.id)).map((entry) => entry.id),
+  ]);
 
   const providers: ProviderEntry[] = sorted.map((id) => {
     const directOAuth = oauthIds.has(id);
@@ -1849,7 +1871,7 @@ export async function completeAuthorization(
       const protocol = draft?.protocol;
       if (!name) throw new Error('custom provider name required');
       if (!apiKey) throw new Error('apiKey required');
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') {
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') {
         throw new Error('unsupported custom provider protocol');
       }
       const baseUrl = normalizeAuthorizationBaseUrl(draft.baseUrl);
@@ -2216,6 +2238,9 @@ export function cancelOAuthFlow(flowId: string): { ok: boolean } {
 
 // ── Chat entry picker (runner integration) ───────────────────────────────
 
+/** Wire protocols the CogSeed runtime model providers can speak natively. */
+export type RuntimeChatProtocol = 'openai-completions' | 'openai-responses' | 'anthropic' | 'gemini';
+
 export interface ChatEntryChoice {
   entryId: string;
   profileId: string;
@@ -2224,14 +2249,68 @@ export interface ChatEntryChoice {
   apiKey: string;
   baseUrl?: string;
   maxOutputTokens?: number;
+  /** Wire protocol this entry speaks; undefined = native pi-ai surface the
+   *  CogSeed runtime cannot reach (OpenAI Responses, OpenRouter, zai, ...). */
+  protocol?: RuntimeChatProtocol;
 }
 
-/** Resolve one API-key chat entry for an explicit user. This is intentionally
- * independent from active-user state, OAuth refresh, and Core Agent rotation. */
-export function pickApiKeyChatEntryForUser(
+/**
+ * Map an entry to the wire protocol the CogSeed runtime can speak, or null
+ * when the entry only exists on a native pi-ai surface (OpenAI Responses,
+ * OpenRouter aggregates, zai, minimax portal, Codex/Copilot OAuth, ...).
+ */
+function runtimeProtocolForEntry(store: ProfilesFile, entry: Entry): RuntimeChatProtocol | null {
+  const custom = customProviderForId(store, entry.provider);
+  if (custom) {
+    if (custom.protocol === 'openai') return 'openai-completions';
+    if (custom.protocol === 'openai-responses') return 'openai-responses';
+    if (custom.protocol === 'anthropic') return 'anthropic';
+    if (custom.protocol === 'gemini') return 'gemini';
+    return null;
+  }
+  const profile = store.profiles[entry.profileId];
+  if (!profile) return null;
+  if (profile.type === 'api_key') {
+    switch (profile.provider) {
+      case 'openai-compatible':
+      case 'moonshot':
+      case 'deepseek':
+      case 'doubao':
+        return 'openai-completions';
+      case 'openai':
+        return 'openai-responses';
+      case 'anthropic':
+      case 'kimi-coding':
+        return 'anthropic';
+      case 'google':
+        return 'gemini';
+      default:
+        // zai, minimax-cn, openrouter, ... are native pi-ai surfaces the
+        // runtime cannot reach.
+        return null;
+    }
+  }
+  // OAuth-backed entries: only the Anthropic surface is reachable with a raw
+  // Messages-API request (Claude Pro/Max access tokens). Codex / Gemini CLI /
+  // Copilot / MiniMax portal tokens are native-protocol only.
+  return profile.provider === 'anthropic' ? 'anthropic' : null;
+}
+
+/**
+ * Resolve one usable chat entry for an explicit user that the CogSeed runtime
+ * can actually call, walking the priority list like pickChatEntryGroup does.
+ * Accepts entries backed by api_key profiles, OAuth profiles (with refresh)
+ * and custom providers, as long as the entry maps to one of the wire
+ * protocols the runtime implements (openai-completions / anthropic / gemini).
+ * Native-only surfaces (OpenAI Responses, OpenRouter, zai, minimax portal,
+ * Codex / Copilot OAuth) are skipped so the runtime never gets a candidate it
+ * cannot talk to. OAuth refresh runs inside resolveEntryApiKey; when it fails
+ * the expired entry is skipped and the user gets the OAuth-expired hint.
+ */
+export async function pickRuntimeChatEntryForUser(
   userId: string,
   profileId?: string,
-): ChatEntryChoice | null {
+): Promise<ChatEntryChoice | null> {
   const uid = assertAuthUserId(userId);
   const wantedProfileId = profileId === undefined ? undefined : String(profileId).trim();
   if (profileId !== undefined && !wantedProfileId) throw new Error('invalid profile id');
@@ -2240,17 +2319,24 @@ export function pickApiKeyChatEntryForUser(
   for (const entry of store.entries) {
     if (wantedProfileId && entry.profileId !== wantedProfileId) continue;
     if (!isEntryAllowed(store, entry)) continue;
+    const protocol = runtimeProtocolForEntry(store, entry);
+    if (!protocol) continue;
+    const apiKey = await resolveEntryApiKey(store, entry);
+    if (!apiKey) continue;
     const profile = store.profiles[entry.profileId];
-    if (!profile || profile.type !== 'api_key') continue;
+    const apiProfile = profile?.type === 'api_key' ? profile as ApiKeyProfile : undefined;
+    const custom = customProviderForId(store, entry.provider);
     return {
       entryId: entry.entryId,
       profileId: entry.profileId,
       provider: entry.provider,
       model: entry.model,
-      apiKey: profile.key,
-      ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
-      ...(isOpenAICompatibleProvider(entry.provider)
-        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, profile.maxOutputTokens) }
+      apiKey,
+      protocol,
+      ...(custom?.baseUrl ? { baseUrl: custom.baseUrl } : {}),
+      ...(apiProfile?.baseUrl ? { baseUrl: apiProfile.baseUrl } : {}),
+      ...(apiProfile && isOpenAICompatibleProvider(entry.provider)
+        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, apiProfile.maxOutputTokens) }
         : {}),
     };
   }

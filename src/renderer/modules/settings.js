@@ -83,6 +83,7 @@ async function loadSettings() {
   _settingsBindTaskNotificationsOnce();
   _settingsBindClientConfigOnce();
   _settingsBindContextsEntryOnce();
+  _settingsBindUsageConnectionsOnce();
   _settingsSyncLanguageRadio();
   await Promise.all([
     _settingsSafeCall('settings providers refresh', _settingsRefreshProviders),
@@ -380,6 +381,16 @@ function _settingsBindContextsEntryOnce() {
   btn.dataset.bound = '1';
 }
 
+// Settings › 账号与用量 › 前往连接：模型与触点配置已收敛到「连接」一级入口。
+function _settingsBindUsageConnectionsOnce() {
+  const btn = document.getElementById('settings-usage-open-connections');
+  if (!btn || btn.dataset.bound) return;
+  btn.addEventListener('click', () => {
+    if (typeof setView === 'function') setView('connections');
+  });
+  btn.dataset.bound = '1';
+}
+
 function _settingsRenderDataRoot() {
   const btn = document.getElementById('settings-data-root-btn');
   const span = document.getElementById('settings-data-root-path');
@@ -667,6 +678,7 @@ function _settingsCustomProviderProtocolLabel(protocol) {
   const key = String(protocol || '').toLowerCase();
   if (key === 'anthropic') return t('settings.custom_providers.protocol_anthropic');
   if (key === 'openai') return t('settings.custom_providers.protocol_openai');
+  if (key === 'openai-responses') return t('settings.custom_providers.protocol_openai_responses');
   if (key === 'gemini') return t('settings.custom_providers.protocol_gemini');
   return key || t('settings.custom_providers.protocol_unknown');
 }
@@ -729,6 +741,7 @@ function _settingsCustomProviderApiFormatLabel(protocol) {
   const key = String(protocol || '').toLowerCase();
   if (key === 'anthropic') return t('settings.custom_providers.api_format_anthropic');
   if (key === 'openai') return t('settings.custom_providers.api_format_openai');
+  if (key === 'openai-responses') return t('settings.custom_providers.api_format_openai_responses');
   if (key === 'gemini') return t('settings.custom_providers.api_format_gemini');
   return _settingsCustomProviderProtocolLabel(key);
 }
@@ -1042,6 +1055,7 @@ function _settingsOpenCustomProviderModal(provider = null, options = {}) {
     protocolSel.setOptions([
       { value: 'anthropic', label: t('settings.custom_providers.api_format_anthropic') },
       { value: 'openai', label: t('settings.custom_providers.api_format_openai') },
+      { value: 'openai-responses', label: t('settings.custom_providers.api_format_openai_responses') },
       { value: 'gemini', label: t('settings.custom_providers.api_format_gemini') },
     ], { value: provider?.protocol || 'anthropic' });
   }

@@ -128,6 +128,17 @@ describe('model authorization discovery', () => {
     expect(result.models.length).toBeGreaterThan(0);
   });
 
+  it('routes manualModel providers (openai-compatible) to the manual entry step instead of an empty list', async () => {
+    const discovery = await import('../../../src/main/features/model_authorization_discovery');
+    const result = await discovery.discoverAuthorizationModels(UID, { kind: 'builtin', providerId: 'openai-compatible' });
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'unsupported_discovery',
+      retryable: false,
+      manualAllowed: true,
+    });
+  });
+
   it('validates draft connection inputs without persisting credentials', async () => {
     const auth = await import('../../../src/main/features/auth');
     expect(await auth.testAuthorizationDraft(UID, {
@@ -184,7 +195,9 @@ describe('model authorization discovery', () => {
   it('rejects missing keys and expires or consumes drafts', async () => {
     createCcSwitchDb({ env: { OPENAI_BASE_URL: 'https://cc.example/v1' } });
     const discovery = await import('../../../src/main/features/model_authorization_discovery');
-    expect(discovery.prepareCcSwitchAuthorization(UID, 'codex:relay', { home })).toEqual({ ok: false, errorCode: 'not_found' });
+    // The row is importable (endpoint known) but has no stored key — the
+    // authorization gate reports missing_key instead of dropping it.
+    expect(discovery.prepareCcSwitchAuthorization(UID, 'codex:relay', { home })).toEqual({ ok: false, errorCode: 'missing_key' });
 
     fs.rmSync(path.join(home, '.cc-switch', 'cc-switch.db'));
     createCcSwitchDb({ auth: { OPENAI_API_KEY: 'cc-secret' }, env: { OPENAI_BASE_URL: 'https://cc.example/v1' } });

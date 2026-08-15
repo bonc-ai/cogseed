@@ -505,6 +505,7 @@
       <div class="model-authorization-progress">${esc(tr('settings.model_authorization.protocol_title'))}</div>
       <div class="model-authorization-choice-grid">
         <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="openai">${esc(tr('settings.model_authorization.protocol_openai'))}</button>
+        <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="openai-responses">${esc(tr('settings.model_authorization.protocol_openai_responses'))}</button>
         <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="anthropic">${esc(tr('settings.model_authorization.protocol_anthropic'))}</button>
         <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="gemini">${esc(tr('settings.model_authorization.protocol_gemini'))}</button>
       </div>
@@ -745,7 +746,7 @@
   }
 
   async function chooseProtocol(protocol) {
-    if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') return;
+    if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') return;
     controller.draft = transition(controller.draft, { type: 'choose_provider', providerId: protocol, providerKind: 'custom' });
     controller.draft.customProvider = { ...(controller.draft.customProvider || {}), protocol };
     render();

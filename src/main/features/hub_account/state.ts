@@ -22,6 +22,8 @@ export interface HubAccountState {
   auth_provider?: string;
   /** Device id assigned by the Hub service on bind; identifies this machine in device lists. */
   device_id?: string;
+  /** Stable per-installation id used to reuse the same Hub device row. */
+  installation_id?: string;
   device_name?: string;
   /** Local identity is bound to the Hub account. */
   bound: boolean;
@@ -50,6 +52,7 @@ export function readHubAccountState(uid: string): HubAccountState {
       ...(typeof raw.account_id === 'string' ? { account_id: raw.account_id } : {}),
       ...(typeof raw.auth_provider === 'string' ? { auth_provider: raw.auth_provider } : {}),
       ...(typeof raw.device_id === 'string' ? { device_id: raw.device_id } : {}),
+      ...(typeof raw.installation_id === 'string' ? { installation_id: raw.installation_id } : {}),
       ...(typeof raw.device_name === 'string' ? { device_name: raw.device_name } : {}),
       ...(typeof raw.bound_at === 'string' ? { bound_at: raw.bound_at } : {}),
       ...(typeof raw.account_status === 'string' ? { account_status: raw.account_status as HubAccountState['account_status'] } : {}),

@@ -34,6 +34,7 @@ import * as workbench from '../features/workbench';
 import * as cognition from '../features/cognition';
 import * as recallCandidates from '../features/recall/candidate-service';
 import * as recallAssets from '../features/recall/asset-service';
+import * as recallProfileSync from '../features/recall/personal-profile-sync';
 import * as recallSkillDrafts from '../features/recall/skill-draft-service';
 import * as recallWorkspaceRefs from '../features/recall/workspace-refs';
 import * as recallProjection from '../features/recall/context-projection';
@@ -54,7 +55,6 @@ import * as recallCaptures from '../features/recall/capture-service';
 import * as recallCaptureSettings from '../features/recall/capture-settings';
 import * as recallViews from '../features/recall/recall-view-service';
 import * as recallTeaching from '../features/recall/teaching-service';
-import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
 import { getRoleTemplate } from '../features/role_templates';
@@ -155,6 +155,20 @@ function conversationProjectHint(args: Record<string, any>): string | null | und
   if (raw === '' || raw === null) return null;
   if (typeof raw !== 'string' || !safeId(raw)) throw new Error('invalid project id');
   return raw;
+}
+
+async function recordDeletedConversationSource(
+  userId: string,
+  conversation: chats.Conversation,
+): Promise<void> {
+  await recallSources.removeCognitionSourceRef(userId, {
+    kind: 'conversation',
+    subtype: 'session',
+    scope: 'conversation',
+    id: conversation.conversation_id,
+    title: conversation.title,
+    sourceVersion: conversation.updated_at,
+  }, false);
 }
 
 interface IpcContext {
@@ -1064,8 +1078,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'conversations.delete': async (args, ctx) => {
     const { cid } = args;
     if (!safeId(cid)) throw new Error('invalid cid');
+    const conversation = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
+    if (!conversation) return { deleted: false };
     await recycleBin.createAppRecycleBatchForConversation(ctx.userId, cid);
     const ok = await chats.deleteConversation(ctx.userId, cid, conversationProjectHint(args));
+    if (ok) {
+      // The conversation no longer exists by this point, so persist its
+      // durable source reference directly. Do not revoke assets here: source
+      // removal must remain an explicit user choice.
+      await recordDeletedConversationSource(ctx.userId, conversation);
+    }
     return { deleted: ok };
   },
 
@@ -1106,6 +1128,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       convs.map((c) => c.conversation_id),
     );
     const deleted = await chats.deleteAllConversations(ctx.userId);
+    // `deleteAllConversations` intentionally returns only a count. Re-check
+    // each pre-delete row so a partial failure cannot create a tombstone for a
+    // conversation that is still available.
+    await Promise.all(convs.map(async (conversation) => {
+      const remaining = await chats.getConversation(ctx.userId, conversation.conversation_id, conversation.project_id || null);
+      if (!remaining) await recordDeletedConversationSource(ctx.userId, conversation);
+    }));
     return { deleted };
   },
 
@@ -2147,6 +2176,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  'recall.captures.historicalAutoStart': async ({ conversationId } = {}, ctx) => {
+    if (!safeId(conversationId)) throw new Error('invalid conversation id');
+    return {
+      ok: true,
+      capture: await recallCaptures.startHistoricalRecallCapture(ctx.userId, conversationId),
+    };
+  },
+
   'recall.captures.settings.get': async (_input, ctx) => {
     const [settings, model] = await Promise.all([
       recallCaptureSettings.readRecallCaptureSettings(ctx.userId),
@@ -2810,42 +2847,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
-  // ── Skills ──
-  // ── Personal Ontology Candidates ──
-  'personalOntology.candidates.list': async (_payload, ctx) => {
-    return personalOntologyCandidates.listCandidates(ctx.userId);
-  },
-  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
-    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
-    if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
-    if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
-    if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
-    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest, { routeWithLlm: routeWithLlm === true });
-  },
-  'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
-    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
-  },
-  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
-    if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
-    if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
-    if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
-    if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
-    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest, { routeWithLlm: routeWithLlm === true });
-  },
-  'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
-    if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    return personalOntologyCandidates.rejectCandidates(ctx.userId, candidateIds, reason);
-  },
-  // onboarding 第 4 步：把抽取出的候选批量入池（不确认，等勾选后走 confirm）。
-  // 只做忠实映射与写入，返回实际写入的 candidate_ids 供前端记账。
-  'personalOntology.candidates.addFromOnboarding': async ({ candidates } = {}, ctx) => {
-    if (!Array.isArray(candidates)) throw new Error('candidates must be array');
-    return personalOntologyCandidates.addCandidates(ctx.userId, candidates);
-  },
-
   // ── Personal Ontology Groups ("记忆分组") ──
   'personalOntology.groups.list': async (_payload, ctx) => {
     const groups = await personalOntologyGroups.listGroups(ctx.userId);
@@ -2885,9 +2886,23 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.templates.list': async (_payload, ctx) => {
     return { templates: await personalOntologyTemplateFiles.listTemplateStatus(ctx.userId) };
   },
-  'personalOntology.templates.install': async ({ templateId }, ctx) => {
+  'personalOntology.profile.syncRecall': async (_payload, ctx) => {
+    return { ok: true, ...(await recallProfileSync.schedulePersonalProfileSync(ctx.userId)) };
+  },
+  'personalOntology.templates.install': async ({ templateId, restoreData }, ctx) => {
     if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
-    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId);
+    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId, restoreData === true);
+  },
+  'personalOntology.templates.hasArchive': async ({ templateId }, ctx) => {
+    if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
+    return {
+      hasArchive: personalOntologyTemplateFiles.templateHasArchive(ctx.userId, templateId),
+      hasMemoryArchive: personalOntologyTemplateFiles.templateHasMemoryArchive(ctx.userId, templateId),
+    };
+  },
+  'personalOntology.templates.uninstall': async ({ templateId, archiveMemory }, ctx) => {
+    if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
+    return personalOntologyTemplateFiles.uninstallTemplateFile(ctx.userId, templateId, archiveMemory === true);
   },
 
   // ── Personal Ontology Group Fields (挖空表单字段，兼容复合 id) ──
@@ -3543,9 +3558,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ── Auth / model config (settings page) ──
   'auth.listProviders': async () => auth.listProviders(),
   'auth.listModels': async ({ provider }) => auth.listModels(provider),
-  'auth.addApiKey': async ({ provider, apiKey, label, baseUrl }) => auth.addApiKey(provider, apiKey, label, { baseUrl }),
+  'auth.addApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }) => auth.addApiKey(provider, apiKey, label, {
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(maxOutputTokens !== undefined && maxOutputTokens !== null ? { maxOutputTokens } : {}),
+  }),
   // Legacy alias; renderer migrated to auth.addApiKey.
-  'auth.saveApiKey': async ({ provider, apiKey, label, baseUrl }) => auth.saveApiKey(provider, apiKey, label, { baseUrl }),
+  'auth.saveApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }) => auth.saveApiKey(provider, apiKey, label, {
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(maxOutputTokens !== undefined && maxOutputTokens !== null ? { maxOutputTokens } : {}),
+  }),
   'auth.renameProfile': async ({ profileId, label }) => auth.renameProfile(profileId, label),
   'auth.removeCredential': async ({ profileId }) => auth.removeCredential(profileId),
   'auth.testConnection': async ({ provider, model, profileId }) => auth.testConnection(provider, model, profileId),
@@ -3598,7 +3619,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     if (kind === 'custom_api_key') {
       const protocol = boundedText(args.protocol, 'protocol', 20);
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
       return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
         kind,
         protocol,
@@ -3637,7 +3658,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     if (kind === 'custom_api_key') {
       const protocol = boundedText(args.protocol, 'protocol', 20);
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
       return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
         kind,
         protocol,
@@ -3677,7 +3698,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     if (args?.providerKind === 'custom' && args?.authType === 'api_key') {
       const protocol = boundedText(args?.customProvider?.protocol, 'protocol', 20);
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
       return auth.completeAuthorization(ctx.userId, {
         requestId, selectedModels, defaultModel,
         authType: 'api_key', source: 'manual', providerKind: 'custom',
@@ -3842,9 +3863,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         baseUrl,
         apiKey: config.apiKey,
       });
-      if (!updateResult.ok) {
-        return { ok: false, error: (updateResult as { error: string }).error };
-      }
+      if (!updateResult.ok) return updateResult;
       providerId = existingProvider.id;
       log.info('active CLI config updated', { cli, providerId, mode: config.mode });
     } else {
@@ -3857,10 +3876,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         source: 'manual', // Use 'manual' as source since custom_providers doesn't recognize 'active_cli'
         externalId,
       });
-      if (!addResult.ok) {
-        return { ok: false, error: (addResult as { error: string }).error };
-      }
-      providerId = (addResult as { id: string }).id;
+      if (!addResult.ok) return addResult;
+      providerId = addResult.id;
       log.info('active CLI config stored', { cli, providerId, mode: config.mode });
     }
 
