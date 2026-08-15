@@ -2677,6 +2677,56 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   background: var(--success);
 }
 
+/* 9.1 统一框架 · 左侧「任务与 Session」聚合状态行 */
+.conv-task-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+  padding-left: 2px;
+}
+.conv-task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+}
+.conv-task-chip .conv-task-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.conv-task-chip.is-running {
+  color: var(--success);
+  background: rgba(16, 185, 129, 0.10);
+}
+.conv-task-chip.is-queued {
+  color: #b45309;
+  background: rgba(234, 179, 8, 0.14);
+}
+.conv-task-chip.is-plan,
+.conv-task-chip.is-active {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+.conv-task-chip.is-blocked {
+  color: #b45309;
+  background: rgba(234, 179, 8, 0.14);
+}
+.conv-task-chip.is-failed {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.10);
+}
+
 .conv-status-dot {
   width: 6px;
   height: 6px;

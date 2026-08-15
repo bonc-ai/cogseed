@@ -32,6 +32,26 @@ describe('9.1 unified framework · compact result blocks (middle)', () => {
     expect(blockSource).toContain('count: message.artifacts.length');
   });
 
+  it('wraps source references and teaching receipts in an evidence result block', () => {
+    expect(conversationSource).toContain("t('chat.result_block.evidence')");
+    expect(conversationSource).toContain('_compactResultBlockHtml');
+    expect(conversationSource).toContain('evidenceRefCount + evidenceReceiptCount');
+    // 证据块默认展开（open: true），证据不能被折叠藏起来。
+    expect(conversationSource).toContain('icon: \'link\',');
+    const bubbleLine = conversationSource.split('\n').find((l) => l.includes('chat-bubble">${planAnnHtml}${evidenceHtml}'));
+    expect(bubbleLine).toBeTruthy();
+  });
+
+  it('wraps the produced-file footer in a receipt result block', () => {
+    expect(conversationSource).toContain("t('chat.result_block.receipt')");
+    const start = conversationSource.indexOf('function _mountMessageProducedFooter');
+    const end = conversationSource.indexOf('\n// Render a "view details" chip', start);
+    const fnSource = conversationSource.slice(start, end);
+    expect(fnSource).toContain('_mountCompactResultBlock(bubble');
+    expect(fnSource).toContain('count: absPaths.length');
+    expect(fnSource).toContain('open: true');
+  });
+
   it('wraps KSTAR review, expense forms, recall projection and marketplace requests in result blocks', () => {
     expect(conversationSource).toContain("t('chat.result_block.kstar_review')");
     expect(conversationSource).toContain("t('chat.result_block.expense_setup')");
@@ -96,6 +116,24 @@ describe('9.1 unified framework · left zone (tasks & sessions)', () => {
     expect(conversationSource).toContain('const inFlight = (_latestInFlight.get(cid) || []).length;');
     expect(styleSource).toContain('.conv-status-badge.is-running');
   });
+
+  it('aggregates a task status line (running / queued / plan progress) per conversation', () => {
+    expect(conversationSource).toContain('function _convTaskStatusLine');
+    expect(conversationSource).toContain('window.planRail.planFor(cid)');
+    expect(conversationSource).toContain("t('chat.task_plan_label'");
+    expect(conversationSource).toContain('_refreshConvTaskLine(cid)');
+    expect(styleSource).toContain('.conv-task-line');
+    expect(styleSource).toContain('.conv-task-chip.is-running');
+  });
+
+  it('exposes plan progress per conversation from the plan rail', () => {
+    const planRailSource = readFileSync(
+      resolve(__dirname, '../../src/renderer/modules/plan-rail.js'),
+      'utf8',
+    );
+    expect(planRailSource).toContain('planFor(cid)');
+    expect(planRailSource).toContain('done: counts.done');
+  });
 });
 
 describe('9.1 unified framework · locale coverage', () => {
@@ -105,7 +143,10 @@ describe('9.1 unified framework · locale coverage', () => {
       'chat.continue_prompt',
       'chat.risk_zone',
       'chat.status.running',
+      'chat.task_plan_label',
       'chat.result_block.artifact',
+      'chat.result_block.evidence',
+      'chat.result_block.receipt',
       'chat.result_block.marketplace',
       'chat.result_block.kstar_review',
       'chat.result_block.expense_setup',

@@ -3916,7 +3916,15 @@ function _mountMessageProducedFooter(msgDiv, absPaths, opts = {}) {
   });
   const node = wrap.firstElementChild;
   if (!node) return;
-  bubble.appendChild(node);
+  // 9.1 统一框架 · 中间区「Receipt 结果块」：产物回执统一收进「回执」块
+  // （数量角标 = 产物数），默认展开——产物是结果的一部分，不折叠藏起来。
+  const body = _mountCompactResultBlock(bubble, {
+    label: t('chat.result_block.receipt'),
+    icon: 'file-text',
+    count: absPaths.length,
+    open: true,
+  });
+  (body || bubble).appendChild(node);
   msgDiv.dataset.produced = JSON.stringify(absPaths);
   _hydrateMessageProducedChips(msgDiv);
 }
@@ -4857,6 +4865,9 @@ function _renderConversationSidebarItem(c, opts = {}) {
                   data-conv-menu-cid="${cid}" data-hide-pin="${hidePin ? '1' : '0'}"
                   title="${menuTitle}" aria-label="${menuTitle}">⋯</button>
         </span>`;
+  // 9.1 统一框架 · 左侧「任务与 Session」：聚合任务状态行（运行中执行方 /
+  // 排队消息 / 计划进度），数据来自真实运行态。
+  const taskLine = _convTaskStatusLine(c.conversation_id);
   return `
     <div class="${classes}" data-cid="${cid}">
       <div class="conv-item-row">
@@ -4866,8 +4877,58 @@ function _renderConversationSidebarItem(c, opts = {}) {
         ${actionsHtml}
       </div>
       ${metaRow}
+      ${taskLine}
     </div>
   `;
+}
+
+// 9.1 统一框架 · 左侧「任务与 Session」：聚合会话的任务状态行。
+// 数据来源（全部真实运行态，不造数据）：
+//   - 运行中：state_changed 的在途执行方（_latestInFlight）；
+//   - 排队：本地消息队列（_getQueue）；
+//   - 计划进度：plan-rail 的 plan 事件（planFor）。
+// 无任何状态时返回空串，不渲染占位。
+function _convTaskStatusLine(cid) {
+  if (!cid) return '';
+  const parts = [];
+  const inFlight = (_latestInFlight.get(cid) || []).filter(Boolean).length;
+  if (inFlight > 0) {
+    parts.push(`<span class="conv-task-chip is-running"><span class="conv-task-dot"></span>${escapeHtml(t('chat.status.running'))}${inFlight > 1 ? ` ${inFlight}` : ''}</span>`);
+  }
+  // _getQueue 来自 queue-draft.js（独立脚本），跨模块调用加 typeof 守卫。
+  const queued = (typeof _getQueue === 'function') ? _getQueue(cid).length : 0;
+  if (queued > 0) {
+    parts.push(`<span class="conv-task-chip is-queued">${escapeHtml(t('chat.status.pending_short'))} ${queued}</span>`);
+  }
+  if (typeof window.planRail === 'object' && window.planRail
+      && typeof window.planRail.planFor === 'function') {
+    const plan = window.planRail.planFor(cid);
+    if (plan && plan.total > 0) {
+      const failed = plan.failed > 0;
+      const blocked = !failed && plan.blocked > 0;
+      const active = !failed && !blocked && plan.active > 0;
+      const cls = failed ? ' is-failed' : blocked ? ' is-blocked' : active ? ' is-active' : ' is-plan';
+      const label = t('chat.task_plan_label', { done: plan.done, total: plan.total });
+      const display = label && label !== 'chat.task_plan_label' ? label : `${plan.done}/${plan.total}`;
+      parts.push(`<span class="conv-task-chip${cls}">${escapeHtml(display)}</span>`);
+    }
+  }
+  if (!parts.length) return '';
+  return `<div class="conv-task-line">${parts.join('')}</div>`;
+}
+
+// 单项刷新任务状态行（state_changed / 队列 / plan 事件变化时由
+// _updateConvSidebarBadge 顺带调用）。
+function _refreshConvTaskLine(cid) {
+  if (!cid) return;
+  const item = document.querySelector(`.conv-item[data-cid="${cid}"]`);
+  if (!item) return;
+  item.querySelector('.conv-task-line')?.remove();
+  const line = _convTaskStatusLine(cid);
+  if (!line) return;
+  const meta = item.querySelector('.conv-item-meta');
+  if (meta) meta.insertAdjacentHTML('afterend', line);
+  else item.insertAdjacentHTML('beforeend', line);
 }
 
 function _normaliseConversationTitle(raw) {
@@ -7212,6 +7273,21 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const teachingReceiptsHtml = role === 'assistant'
     ? _renderTeachingReceiptsHtml(message.teaching_receipts)
     : '';
+  // 9.1 统一框架 · 中间区「Evidence 结果块」：来源引用 + 教学回执统一收进
+  // 一个默认展开的「证据」块（数量角标 = 引用数 + 回执数），放在正文之前，
+  // 与 Artifact / Receipt 同一视觉语言。
+  const evidenceRefCount = Array.isArray(message.references) ? message.references.length : 0;
+  const evidenceReceiptCount = role === 'assistant' && Array.isArray(message.teaching_receipts)
+    ? message.teaching_receipts.length : 0;
+  const evidenceHtml = (referencesHtml || teachingReceiptsHtml)
+    ? _compactResultBlockHtml({
+        label: t('chat.result_block.evidence'),
+        icon: 'link',
+        count: evidenceRefCount + evidenceReceiptCount,
+        open: true,
+        bodyHtml: `${referencesHtml}${teachingReceiptsHtml}`,
+      })
+    : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
   // timestamp on one row. Same DOM strip for historical (loaded via
   // getMessages) and live-streamed messages so users always see "who said
@@ -7244,7 +7320,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${spaceDraftHtml}${attachmentsHtml}${teachingReceiptsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${evidenceHtml}${contentHtml}${spaceDraftHtml}${attachmentsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
@@ -7891,6 +7967,22 @@ async function _resolveWakeRequest(card, request, cid, decision) {
 // 表单 / 认知投影）统一收进一个紧凑的可折叠容器：小标题行（图标 + 类型 +
 // 数量）+ 正文。默认折叠，不再以连续大卡片打断消息流；需要人工确认的块
 // （待安装 / 待评审 / 表单）默认展开。返回正文容器供调用方挂载内容。
+// 静态版结果块 HTML（用于 appendChatMessage 的字符串组合路径），供 Evidence /
+// Receipt 等内联内容使用；动态挂载用 _mountCompactResultBlock。
+function _compactResultBlockHtml(opts = {}) {
+  const icon = _uiIconHtml(opts.icon || 'box', 'chat-result-block-icon-svg');
+  const countHtml = opts.count ? `<span class="chat-result-block-count">${escapeHtml(String(opts.count))}</span>` : '';
+  return `<details class="chat-result-block${opts.open ? ' is-open' : ''}"${opts.open ? ' open' : ''}>
+    <summary class="chat-result-block-head">
+      <span class="chat-result-block-icon">${icon || ''}</span>
+      <span class="chat-result-block-label">${escapeHtml(opts.label || '')}</span>
+      ${countHtml}
+      <span class="chat-result-block-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'chat-result-block-caret-svg') || ''}</span>
+    </summary>
+    <div class="chat-result-block-body">${opts.bodyHtml || ''}</div>
+  </details>`;
+}
+
 function _mountCompactResultBlock(host, opts = {}) {
   if (!host) return null;
   const details = document.createElement('details');
@@ -13765,6 +13857,8 @@ function abortConvStream(cid) {
 // pendingConvs / messageQueues directly so callers don't have to stay in sync.
 function _updateConvSidebarBadge(cid, _unused) {
   _refreshCommanderRunningChip();
+  // 9.1 统一框架：任务状态行与徽标同源刷新（运行中/排队/计划进度）。
+  _refreshConvTaskLine(cid);
   // Chat header's status pill follows the same per-conversation signal.
   if (cid === currentCid) {
     try { _refreshChatHeader(); } catch (_) { /* not yet bound */ }

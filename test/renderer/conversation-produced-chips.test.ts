@@ -60,7 +60,9 @@ describe('conversation produced chips', () => {
 
   it('mounts compact file rows with a separate trailing menu at the bottom of the bubble', () => {
     expect(source).toContain('function _mountMessageProducedFooter');
-    expect(source).toContain('bubble.appendChild(node)');
+    // 9.1 统一框架：产物回执现在挂在「回执」结果块里（带 body 时挂 body，
+    // 兜底挂 bubble）。
+    expect(source).toContain('(body || bubble).appendChild(node)');
     expect(source).toContain('<div class="chat-msg-produced-item${invalid ?');
     expect(source).toContain('class="chat-msg-produced-main"');
     expect(source).toContain('class="chat-msg-produced-open-btn btn btn-sm"');
