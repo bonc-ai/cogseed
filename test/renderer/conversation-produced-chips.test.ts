@@ -82,9 +82,11 @@ describe('conversation produced chips', () => {
 
 
 
-  it('folds intermediate process logs by default while keeping the activity strip visible', () => {
-    expect(source).toContain('<details class="stream-process" data-role="process-container" style="display:none">');
-    expect(source).not.toContain('<details class="stream-process" data-role="process-container" open style="display:none">');
+  it('shows intermediate process logs inline by default while keeping the activity strip visible', () => {
+    // 9.1 统一框架：运行中的真实工具事件/状态/检查点内联可见——占位的
+    // process 容器带 `open`（首个事件到达即展开显示事件流），初始仍
+    // `display:none`（首事件前不占位），activity 条继续显示状态+耗时。
+    expect(source).toContain('<details class="stream-process" data-role="process-container" open style="display:none">');
     expect(source).toContain('stream-activity');
   });
 

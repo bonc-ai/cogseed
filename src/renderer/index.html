@@ -294,45 +294,19 @@
           </div>
           <aside class="conversation-info-panel" id="conversation-info-panel" hidden>
             <div class="conversation-info-header">
-              <div class="conversation-info-title" data-i18n="conversation_info.title">Conversation info</div>
+              <div class="conversation-info-heading-wrap">
+                <div class="conversation-info-title" data-i18n="conversation_info.title">运行上下文</div>
+                <div class="conversation-info-subtitle" data-i18n="conversation_info.subtitle">本次最小上下文 · 来源 · 权限 · 运行证明 · 协作参与者</div>
+              </div>
               <button type="button" class="conversation-info-icon-btn conversation-info-close" id="conversation-info-close"
                       data-i18n-title="common.close" data-i18n-aria-label="common.close"
                       title="Close" aria-label="Close">
                 <span data-ui-icon="x" data-ui-icon-class="conversation-info-icon-svg"></span>
               </button>
             </div>
-            <!-- Tabs: each carries an icon + label + count chip filled by
-                 ConversationInfo._renderBody() from the snapshot. Active tab
-                 chrome (underline + bold + soft-primary chip) handled in CSS
-                 via .is-active. -->
-            <div class="conversation-info-tabs" role="tablist">
-              <button type="button" class="conversation-info-tab is-active" data-info-tab="files">
-                <span data-ui-icon="folder" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_files">Files</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-files"></span>
-              </button>
-              <button type="button" class="conversation-info-tab" data-info-tab="attachments">
-                <span data-ui-icon="paperclip" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_attachments">Attachments</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-attachments"></span>
-              </button>
-              <button type="button" class="conversation-info-tab" data-info-tab="collaboration">
-                <span data-ui-icon="layout-dashboard" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_collaboration">Collaboration</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-collaboration"></span>
-              </button>
-              <button type="button" class="conversation-info-tab" data-info-tab="protocol">
-                <span data-ui-icon="route" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_protocol">Protocol</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-protocol"></span>
-              </button>
-              <!-- 9.1 会话区域统一框架 · 右侧「本次携带」：本次 Context、来源与
-                   边界、运行证明（复用现有 snapshot / protocolEvents，不新增 IPC）。 -->
-              <button type="button" class="conversation-info-tab" data-info-tab="carried">
-                <span data-ui-icon="list-ordered" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_carried">Carried</span>
-              </button>
-            </div>
+            <!-- 9.1 统一框架 · 右侧「运行上下文」：单列五段分节（本次 Context / 来源 /
+                 权限 / 运行证明 / 协作参与者），由 conversation-info.js 的
+                 _renderRunContext() 渲染，懒加载展开全文。 -->
             <div class="conversation-info-body" id="conversation-info-body"></div>
           </aside>
           <!-- Markdown viewer / editor drawer. Hosts the shared mountMdViewEdit

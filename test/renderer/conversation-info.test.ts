@@ -29,6 +29,7 @@ function renderFilesResult(snapshot: {
   protocolResponse?: any;
   executions?: any[];
   receipts?: Record<string, any>;
+  conversationTitle?: string;
   syncEnabled?: boolean;
   activeTab?: 'files' | 'attachments' | 'collaboration' | 'protocol' | 'carried';
 }, afterMount?: (context: any) => Promise<void> | void): Promise<RenderFilesResult> {
@@ -82,7 +83,7 @@ function renderFilesResult(snapshot: {
       urls.push(url);
       return ({
       json: async () => {
-        if (url.includes('/history')) return { ok: true, conversation: { title: 'Current title' }, history: snapshot.history };
+        if (url.includes('/history')) return { ok: true, conversation: { title: snapshot.conversationTitle || 'Current title' }, history: snapshot.history };
         if (url.includes('/files')) return { ok: true, ...snapshot.files };
         if (url.includes('/attachments')) return { ok: true, items: snapshot.attachments || [] };
         if (url.includes('/wake-requests')) return { ok: true, requests: snapshot.wakeRequests || [] };
@@ -174,15 +175,19 @@ describe('ConversationInfo Collaboration tab shell', () => {
 
     expect(html).not.toContain('data-info-tab="tasks"');
     expect(html).not.toContain('conversation_info.tab_tasks');
-    expect(html).toContain('class="conversation-info-tab is-active" data-info-tab="files"');
+    // 9.1 统一框架：右侧从 5 个互斥 tab 收敛为「运行上下文」单列五段，不再有任何 tab。
+    expect(html).not.toContain('data-info-tab=');
+    expect(html).toContain('id="conversation-info-body"');
+    expect(html).toContain('conversation_info.subtitle');
   });
 
-  it('renders a Collaboration tab in the conversation info drawer', async () => {
+  it('renders a single run-context panel instead of per-feature tabs', () => {
     const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
 
-    expect(html).toContain('data-info-tab="collaboration"');
-    expect(html).toContain('conversation_info.tab_collaboration');
-    expect(html).toContain('conversation-info-tab-count-collaboration');
+    expect(html).toContain('id="conversation-info-panel"');
+    expect(html).toContain('id="conversation-info-body"');
+    expect(html).toContain('conversation_info.subtitle');
+    expect(html).not.toContain('data-info-tab="collaboration"');
     expect(html).not.toContain('data-info-tab="agent-activity"');
   });
 
@@ -411,12 +416,11 @@ describe('ConversationInfo live agent activity refresh', () => {
 });
 
 describe('ConversationInfo P3394 Protocol Inspector', () => {
-  it('renders a Protocol tab in the conversation info drawer', async () => {
-    const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
+  it('defines the run-context proof section in the renderer source', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation-info.js'), 'utf8');
 
-    expect(html).toContain('data-info-tab="protocol"');
-    expect(html).toContain('conversation_info.tab_protocol');
-    expect(html).toContain('conversation-info-tab-count-protocol');
+    expect(source).toContain('conversation_info.run_context.proof');
+    expect(source).toContain('_renderRcProofSummary');
   });
 
   it('loads protocol events through the per-conversation API route', async () => {
@@ -607,7 +611,7 @@ describe('ConversationInfo files tab', () => {
     expect(html).toContain('conversation-info-file-menu-btn');
     expect(html).toContain('data-entry-kind="dir"');
     expect(html).toContain('data-entry-kind="text"');
-    expect(html).not.toMatch(/<details[^>]*\sopen(?:\s|>|=)/);
+    expect(html).toContain('data-rc-section="sources"');
   });
 
   it('marks unsupported workspace files distinctly for Library menu filtering', async () => {
@@ -778,12 +782,12 @@ describe('ConversationInfo files tab', () => {
     expect(html).not.toContain('spreadsheet');
   });
 
-  // ── 9.1 会话区域统一框架 · 右侧「本次携带」──
-  it('renders the carried tab in the conversation info drawer', () => {
-    const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
+  // ── 9.1 会话区域统一框架 · 右侧「运行上下文」──
+  it('defines the run-context context section in the renderer source', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation-info.js'), 'utf8');
 
-    expect(html).toContain('data-info-tab="carried"');
-    expect(html).toContain('conversation_info.tab_carried');
+    expect(source).toContain('conversation_info.run_context.context');
+    expect(source).toContain('_renderRcContext');
   });
 
   it('renders the carried empty state without executions', async () => {
@@ -799,7 +803,7 @@ describe('ConversationInfo files tab', () => {
     expect(result.html).not.toContain('conversation-info-carried-run');
   });
 
-  it('renders real execution records with status, boundary and permission', async () => {
+  it('renders real execution records with status and executor names', async () => {
     const result = await renderFilesResult({
       activeTab: 'carried',
       history: [],
@@ -809,11 +813,10 @@ describe('ConversationInfo files tab', () => {
         {
           executionId: 'ex-1',
           conversationId: 'c1',
-          kind: 'codex',
-          agentId: 'codex',
+          kind: 'core-agent',
           status: 'running',
           boundary: 'real',
-          permissionMode: 'read-only',
+          permissionMode: 'all_files_approval',
           artifactIds: ['a1', 'a2'],
           startedAt: '2026-08-15T10:00:00Z',
           receiptId: 'r-1',
@@ -821,7 +824,7 @@ describe('ConversationInfo files tab', () => {
         {
           executionId: 'ex-2',
           conversationId: 'c1',
-          kind: 'core-agent',
+          kind: 'codex',
           status: 'completed',
           boundary: 'degraded',
           permissionMode: 'ask',
@@ -831,16 +834,49 @@ describe('ConversationInfo files tab', () => {
       ],
     });
 
-    expect(result.html).toContain('codex');
+    // 执行方按 kind 映射为可读名
+    expect(result.html).toContain('CogSeed');
+    expect(result.html).toContain('Codex');
     expect(result.html).toContain('运行中');
     expect(result.html).toContain('已完成');
-    expect(result.html).toContain('只读');
-    expect(result.html).toContain('逐次询问');
-    expect(result.html).toContain('真实');
-    expect(result.html).toContain('降级');
+    // 权限用户语言：最近一次执行 all_files_approval → 常规；不显示原文
+    expect(result.html).toContain('常规');
+    expect(result.html).not.toContain('all_files_approval');
+    expect(result.html).not.toContain('executionId');
+    // 边界：正常 real 不显示；异常 degraded 显示提示
+    expect(result.html).not.toContain('真实');
+    expect(result.html).toContain('降级执行');
     expect(result.html).toContain('2 个产物');
     expect(result.html).toContain('查看回执');
     expect(result.html).not.toContain('本会话暂无执行记录');
+    // 内部 ID 不直接暴露（data 属性仅作内部机制，不视为可见文本）
+    expect(result.html).not.toContain('a1');
+    expect(result.html).not.toContain('artifactIds');
+  });
+
+  it('masks internal session ids in the source name', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'carried',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      conversationTitle: 'Lark · oc_15f99db2d577faa78f79bf2113ab88d3',
+      executions: [
+        {
+          executionId: 'ex-1',
+          conversationId: 'c1',
+          kind: 'core-agent',
+          status: 'completed',
+          boundary: 'real',
+          permissionMode: 'all_files_approval',
+          artifactIds: [],
+          startedAt: '2026-08-15T10:00:00Z',
+        },
+      ],
+    });
+
+    expect(result.html).toContain('Lark');
+    expect(result.html).not.toContain('oc_15f99db2d577faa78f79bf2113ab88d3');
   });
 
   it('expands a ContextReuseReceipt detail when the receipt toggle is clicked', async () => {

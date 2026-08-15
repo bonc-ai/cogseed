@@ -10573,7 +10573,7 @@ function _createStreamingAssistantMessage(container, opts = {}) {
       <span class="chat-msg-time">${formatTime(new Date().toISOString())}</span>
     </div>
     <div class="chat-bubble">
-      <details class="stream-process" data-role="process-container" style="display:none">
+      <details class="stream-process" data-role="process-container" open style="display:none">
         <summary class="stream-process-summary">
           <span class="stream-process-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'ui-icon stream-process-caret-icon')}</span>
           <span class="stream-process-label">${escapeHtml(t('chat.process_info'))}</span>
@@ -11014,6 +11014,24 @@ function _streamingUpdateActivityFromEvent(msg, evt) {
   if (cliType === 'status' && phase === 'usage') {
     _streamingUpdateActivity(msg, t('chat.activity_working'));
     return;
+  }
+  // 9.1 统一框架 · 中间区：运行中的「状态」行显示真实当前动作（工具名 +
+  // 阶段），而不是泛化的「执行中…」。工具名是技术标识符（不翻译），阶段
+  // 复用既有 phase 文案，与 _formatEventLine 的工具行同一口径。
+  const toolName = _processEventName(evt);
+  if (toolName) {
+    const phaseLabel = phase === 'start' ? t('chat.stream.phase_start')
+      : phase === 'end' ? t('chat.stream.phase_end')
+        : phase === 'progress' ? t('chat.stream.phase_progress')
+          : '';
+    _streamingUpdateActivity(msg, phaseLabel ? `${toolName} · ${phaseLabel}` : toolName);
+    return;
+  }
+  // 非工具事件：有明确语义的 stream 用紧凑行显示，其余维持泛化状态。
+  if (stream === 'lifecycle' || stream === 'context' || stream === 'compaction'
+      || stream === 'patch' || stream === 'approval' || stream === 'error') {
+    const line = _formatEventLine(evt);
+    if (line) { _streamingUpdateActivity(msg, line); return; }
   }
   _streamingUpdateActivity(msg, t('chat.activity_working'));
 }
@@ -12511,6 +12529,13 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
         _streamingUpdateActivity(target, t('chat.activity_writing'));
       } else if (data.type === 'progress' && data.text) {
         const evt = data.event && data.event.stream ? data.event : null;
+        // 9.1 会话区域统一框架：plan 事件也可能以 progress 形态到达
+        // （主进程 processItems 两种形态都持久化），这里同样转发给
+        // 顶部执行计划轨道，避免轨道漏更新。
+        if (evt && evt.stream === 'plan' && typeof window.planRail !== 'undefined'
+            && typeof window.planRail.onPlanEvent === 'function') {
+          window.planRail.onPlanEvent(cid, evt);
+        }
         const line = evt ? (_formatEventLine(evt) || String(data.text)) : String(data.text);
         if (evt) _setProcessSummaryRuntimeFromEvent(target, evt);
         _streamingAppendProgress(target, line, evt ? _eventProcessKind(evt, line) : undefined);

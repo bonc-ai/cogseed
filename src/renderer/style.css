@@ -130,18 +130,38 @@ body {
 .sidebar-resize-handle {
   position: absolute;
   top: 0;
-  right: -3px;
+  right: -4px;
   bottom: 0;
-  width: 6px;
+  width: 10px;
   cursor: col-resize;
-  z-index: 20;
+  z-index: 40;
   background: transparent;
   transition: background 0.15s;
   -webkit-app-region: no-drag;
+  touch-action: none;
+}
+/* 可见拖拽指示条：悬停时在侧边栏边缘显示，让"可拖动"一眼可见。 */
+.sidebar-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 3px;
+  height: 30px;
+  border-radius: 2px;
+  background: rgba(59, 130, 246, 0.45);
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
 }
 .sidebar-resize-handle:hover,
 .sidebar-resize-handle.is-active {
-  background: rgba(59, 130, 246, 0.25);
+  background: rgba(59, 130, 246, 0.18);
+}
+.sidebar-resize-handle:hover::after,
+.sidebar-resize-handle.is-active::after {
+  opacity: 1;
 }
 
 /* While the user is dragging the handle the whole window adopts a
@@ -5096,6 +5116,118 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .conversation-info-empty.is-error { color: var(--danger); }
 
+/* ── 9.1 统一框架 · 右侧「运行上下文」五段总览 ── */
+.conversation-info-heading-wrap {
+  flex: 1;
+  min-width: 0;
+}
+.conversation-info-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conversation-info-run-context {
+  padding: 8px 12px 16px;
+}
+.run-context-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: var(--surface);
+}
+.run-context-section[open] {
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+}
+.run-context-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.run-context-section-head::-webkit-details-marker { display: none; }
+.run-context-section-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+.run-context-section[open] .run-context-section-icon { color: var(--primary); }
+.run-context-section-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.run-context-section-caret {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  flex: 0 0 auto;
+  transition: transform 0.15s;
+}
+.run-context-section[open] .run-context-section-caret { transform: rotate(90deg); }
+.run-context-section-body {
+  padding: 2px 12px 12px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+.run-context-kv {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.run-context-kv-k {
+  flex: 0 0 auto;
+  color: var(--muted);
+  min-width: 64px;
+}
+.run-context-kv-v {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-context-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.run-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  padding: 2px 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.run-context-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.run-context-chip-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
 .conversation-info-agent-activity {
   padding: 14px 16px 16px;
 }
@@ -5492,6 +5624,18 @@ body.model-not-configured .main-content { flex-direction: column; }
   flex: 0 0 auto;
   margin-top: 1px;
   color: var(--primary);
+}
+.conversation-info-carried-safety {
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.conversation-info-carried-run-note {
+  color: var(--danger);
+  font-weight: 650;
 }
 .conversation-info-carried-recent {
   display: grid;
