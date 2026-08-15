@@ -100,7 +100,14 @@ if [ "$(uname -s)" = "Darwin" ]; then
       ARGS+=("--orkas-kstar-engine-cwd=$ORKAS_KSTAR_ENGINE_CWD")
       ARGS+=("--orkas-kstar-engine-ontology-dir=$ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR")
     fi
-    exec open -W -n "${OPEN_ENV_ARGS[@]}" "$APP_BUNDLE" --args "${ARGS[@]}"
+    # macOS ships bash 3.2, where expanding an EMPTY array as
+    # "${OPEN_ENV_ARGS[@]}" under `set -u` fails with "unbound variable".
+    # The ${arr[@]+...} guard makes the empty case expand to nothing.
+    if [ "${#OPEN_ENV_ARGS[@]}" -gt 0 ]; then
+      exec open -W -n "${OPEN_ENV_ARGS[@]}" "$APP_BUNDLE" --args "${ARGS[@]}"
+    else
+      exec open -W -n "$APP_BUNDLE" --args "${ARGS[@]}"
+    fi
   fi
 fi
 
