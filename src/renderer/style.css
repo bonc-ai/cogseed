@@ -2446,6 +2446,93 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   line-height: 18px;
   text-align: center;
 }
+/* 侧栏「置顶 / 空间 / 最近」分区标题（分区级标签，比时间桶标题更醒目） */
+.conv-list-section-header.conv-list-space-title {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 15px 6px 7px 6px;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #334155;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  margin-bottom: 4px;
+}
+.conv-list-section-header.conv-list-space-title:first-child { padding-top: 8px; }
+/* 分区标题内的折叠按钮（占满，点击切换整区展开/收起） */
+.conv-list-section-fold {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.conv-list-section-fold:hover { background: rgba(148, 163, 184, 0.14); color: var(--text-2); }
+/* 分区标题右侧操作按钮（＋）：hover 分区标题时显示 */
+.conv-list-section-action {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #7f8fa8;
+  cursor: pointer;
+  visibility: hidden;
+  opacity: 0;
+  transition: background 0.12s, color 0.12s, opacity 0.12s;
+}
+.conv-list-section-header.conv-list-space-title:hover .conv-list-section-action,
+.conv-list-section-header.conv-list-space-title:focus-within .conv-list-section-action {
+  visibility: visible;
+  opacity: 1;
+}
+.conv-list-section-action:hover { background: var(--surface); color: var(--primary-text); }
+.conv-list-section-action-icon { width: 14px; height: 14px; }
+/* 空间折叠组内会话行：左侧缩进对齐空间名 */
+.conv-list-section-header[data-conv-space-toggle="1"] {
+  margin-top: 2px;
+}
+.conv-list-section-header[data-conv-space-toggle="1"] + .conv-item-nested {
+  margin-left: 6px;
+}
+/* 侧栏「最近任务」内联新建任务输入条 */
+.conv-sidebar-new-task {
+  padding: 4px 10px 6px 12px;
+}
+.conv-sidebar-new-task input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+}
+.conv-sidebar-new-task input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(24, 84, 60, 0.12);
+}
 .project-conv-list .conv-list-section-header {
   font-size: 10px;
 }
@@ -6429,6 +6516,51 @@ body.model-not-configured .main-content { flex-direction: column; }
   to { transform: rotate(360deg); }
 }
 
+/* 任务引用条（@ 产物/资产）：composer overlay 里 attachments 之下的一排 chips。
+   conversation = 已持久化 task_references；new-chat = 待提交 pending。 */
+.chat-taskrefs {
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 6px;
+}
+.chat-taskref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px 3px 5px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.2;
+  max-width: 260px;
+}
+.chat-taskref-chip em {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 6px;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 600;
+}
+.chat-taskref-chip.is-artifact em { color: #0e7490; background: #e0f2fe; }
+.chat-taskref-chip.is-asset em { color: #7c3aed; background: #ede9fe; }
+.chat-taskref-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-taskref-remove {
+  cursor: pointer;
+  color: #94a3b8;
+  padding: 0 2px;
+  font-size: 15px;
+  line-height: 1;
+}
+.chat-taskref-remove:hover { color: #ef4444; }
+
 /* Quote-reply preview sits above the textarea and can contain multiple
    independently removable messages. Cap its height so a large selection
    does not crowd the composer out of view. */
@@ -7432,6 +7564,16 @@ body.model-not-configured .main-content { flex-direction: column; }
 .conversation-operation-time-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .conversation-operation-time-range label { display: grid; gap: 4px; min-width: 0; font-size: 11px; color: var(--text-muted); }
 .conversation-operation-time-range input { min-width: 0; padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+/* 会话「移至空间」选择器（侧栏操作菜单 → conversation-space-*） */
+.conversation-space-list { display: grid; gap: 6px; margin-top: 12px; max-height: 320px; overflow-y: auto; }
+.conversation-space-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer; }
+.conversation-space-row:hover { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 6%, var(--surface)); }
+.conversation-space-row[data-current="1"] { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--surface)); }
+.conversation-space-mark { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: none; border-radius: 6px; background: color-mix(in srgb, var(--primary) 14%, transparent); font-size: 13px; }
+.conversation-space-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.conversation-space-current { flex: none; color: var(--primary); font-size: 11px; font-style: normal; }
+.conversation-space-empty { padding: 18px 10px; color: var(--text-muted); font-size: 12px; text-align: center; }
+.conversation-space-unbind { color: var(--danger); }
 .conversation-merge-scope-receipt { display: grid; gap: 8px; margin-bottom: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--primary) 4%, transparent); }
 .conversation-merge-scope-receipt > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
 .conversation-merge-scope-receipt > div:first-child span { color: var(--text-muted); font-size: 12px; }
@@ -8811,6 +8953,46 @@ body.model-not-configured .main-content { flex-direction: column; }
   background: rgba(37, 99, 235, 0.04);
   overflow: hidden;
 }
+/* 发送后即时反馈：user 气泡内联「引用」条（不等历史重载） */
+.chat-taskref-inline {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-left: 3px solid rgba(14, 159, 110, 0.5);
+  border-radius: 4px;
+  background: rgba(14, 159, 110, 0.05);
+  color: #0b7a4f;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 空间任务引用（@ 资产）可见反馈：user 气泡「引用资产」chips */
+.chat-space-asset-refs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 0 0 8px;
+}
+.chat-space-asset-refs-label {
+  color: #0E9F6E;
+  font-size: 11px;
+  font-weight: 600;
+}
+.chat-space-asset-ref-chip {
+  max-width: 220px;
+  padding: 2px 8px;
+  border: 1px solid rgba(14, 159, 110, 0.28);
+  border-radius: 99px;
+  background: rgba(14, 159, 110, 0.06);
+  color: #0b7a4f;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chat-reference-title {
   margin-bottom: 4px;
   overflow: hidden;
@@ -9658,6 +9840,42 @@ body.model-not-configured .main-content { flex-direction: column; }
   background: var(--border);
   margin: 4px 12px;
 }
+/* 空间选择器（work 空间 chip 下拉）：搜索 + 列表 + 新建 */
+.workspace-menu.space-menu { padding: 6px; }
+.workspace-menu-search {
+  width: calc(100% - 8px);
+  margin: 0 4px 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+}
+.workspace-menu-search:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(24, 84, 60, 0.12); }
+.workspace-menu-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: grid;
+  gap: 2px;
+}
+.workspace-menu-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  box-sizing: border-box;
+}
+.workspace-menu-new-space {
+  color: var(--primary-text);
+  font-weight: 600;
+}
+.workspace-menu-new-space:hover { background: var(--primary-soft); }
 
 .skill-picker {
   position: fixed;
@@ -19253,6 +19471,9 @@ body.model-not-configured .main-content { flex-direction: column; }
 .skills-cognition-tab:hover { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, transparent); }
 .skills-cognition-tab.is-active { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, var(--card, #fff)); box-shadow: inset 0 -2px 0 var(--primary, #0E9F6E); font-weight: 600; }
 .skills-cognition-page { min-height: 100%; overflow: visible; padding: 18px 24px 28px; background: var(--card, #fff); display: flex; flex-direction: column; }
+/* display:flex 会压掉 UA [hidden] 的 display:none → 六个 tab 页全部同时显示。
+   显式补覆盖，让 [hidden] 真正隐藏非活动 tab 页。 */
+.skills-cognition-page[hidden] { display: none; }
 /* 内嵌到 tab pane 的原一级面板：pane 的 [hidden] 控制显隐，面板本身不再依赖
    `.panel.active`，始终保持 flex 布局。 */
 .skills-embedded-panel,
@@ -19870,6 +20091,82 @@ body.model-not-configured .main-content { flex-direction: column; }
   .ew-service-state { min-height: 260px; padding: 24px 16px; }
   .ew-service-callout .btn { width: 100%; }
 }
+
+/* Recall 引用反馈（「提供给本次回答的记忆」+ 有帮助/需改进）——合并时被远端
+   style.css 覆盖丢失，已恢复。 */
+.chat-recall-citations {
+  margin: 10px 0 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(14, 159, 110, 0.22);
+  border-radius: 8px;
+  background: rgba(14, 159, 110, 0.04);
+}
+.chat-recall-citations-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.chat-recall-citations-head > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #0b7a4f;
+  font-size: 12px;
+  font-weight: 600;
+}
+.chat-recall-citations-head .ui-icon { width: 15px; height: 15px; }
+.chat-recall-feedback-status {
+  color: var(--text-secondary, #6b7280);
+  font-size: 11px;
+}
+.chat-recall-citation-list {
+  display: grid;
+  gap: 6px;
+}
+.chat-recall-citation {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.chat-recall-citation strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-recall-citation span {
+  flex: none;
+  color: var(--text-secondary, #6b7280);
+  font-size: 11px;
+}
+.chat-recall-feedback-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(14, 159, 110, 0.15);
+}
+.chat-recall-feedback-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid rgba(14, 159, 110, 0.3);
+  border-radius: 99px;
+  color: #0b7a4f;
+  background: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chat-recall-feedback-btn .ui-icon { width: 13px; height: 13px; }
+.chat-recall-feedback-btn:hover { background: rgba(14, 159, 110, 0.08); }
+.chat-recall-feedback-btn:disabled { opacity: 0.55; cursor: default; }
+.chat-recall-citations.is-feedback-sent .chat-recall-feedback-btn { opacity: 0.55; pointer-events: none; }
 
 .chat-teaching-receipts {
   display: grid;

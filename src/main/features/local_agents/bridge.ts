@@ -48,13 +48,13 @@ const log = createLogger('local-agents:bridge');
 const MAX_LINE_BYTES = 1024 * 1024;
 const CONNECTOR_RESULT_CAP = 100_000;
 
-function bridgeLogContext(opts: Pick<StartBridgeOpts, 'uid' | 'cid' | 'agentId' | 'projectId' | 'runId' | 'configDir'>, socketPath?: string): Record<string, unknown> {
+function bridgeLogContext(opts: Pick<StartBridgeOpts, 'uid' | 'cid' | 'agentId' | 'spaceId' | 'runId' | 'configDir'>, socketPath?: string): Record<string, unknown> {
   return {
     run_id: maskId(opts.runId),
     user_id: maskId(opts.uid),
     cid: maskId(opts.cid),
     agent_id: maskId(opts.agentId),
-    project_id: maskId(opts.projectId),
+    space_id: maskId(opts.spaceId),
     config_dir: logPathRef(opts.configDir),
     socket: socketPath ? logPathRef(socketPath) : undefined,
   };
@@ -81,8 +81,8 @@ export interface StartBridgeOpts {
   cid: string;
   agentId: string;
   agentName: string;
-  /** Current conversation project, if any. Enables project + global Library tools. */
-  projectId?: string;
+  /** Current conversation space, if any. Enables space + global Library tools. */
+  spaceId?: string;
   runId: string;
   /** Where to write the per-run mcp-config file (the persist run dir). */
   configDir: string;
@@ -108,7 +108,7 @@ function _buildMethods(opts: StartBridgeOpts): Record<string, BridgeMethod> {
   // KB tools are reused as-is; map by tool name for dispatch.
   const kbTools = new Map(createKbTools({
     userId: opts.uid,
-    ...(opts.projectId ? { projectId: opts.projectId } : {}),
+    ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
   }).map((t) => [t.name, t]));
   const runKbTool = async (name: string, params: Record<string, unknown>) => {
     const tool = kbTools.get(name);

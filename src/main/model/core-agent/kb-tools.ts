@@ -4,7 +4,7 @@
  *   - `kb_list`   — list Library files and indexing status so the model can
  *                   discover what exists before choosing a search/read path.
  *   - `kb_search` — semantic search over the user's Library
- *                   (global, plus project-scoped Library when available).
+ *                   (global, plus space-scoped Library when available).
  *   - `kb_read`   — read a Library file's chunk text back out of the
  *                   vector store (no re-parsing of the source; fast).
  *
@@ -22,14 +22,14 @@ import type { AgentTool } from '#core-agent';
 import { createLogger } from '../../logger';
 import * as kb from '../../features/kb_vector';
 import * as kbEmbed from '../../features/kb_embed';
-import * as projectLibrary from '../../features/project_library_indexer';
+import * as spaceLibrary from '../../features/project_library_indexer';
 import { logErrorRef, maskId } from '../../util/log-redact';
 
 const log = createLogger('kb-tools');
 
 export interface KbToolsOpts {
   userId: string;
-  projectId?: string;
+  spaceId?: string;
 }
 
 const PREVIEW_CHARS = 400;
@@ -49,29 +49,29 @@ function parseKbKind(raw: unknown): kb.KbKind | undefined {
     : undefined;
 }
 
-type LibraryScope = 'global' | 'project';
+type LibraryScope = 'global' | 'space';
 type ScopeInput = LibraryScope | 'all';
 type LibraryHit = kb.KbSearchHit & { scope: LibraryScope };
 
-function parseSearchScope(raw: unknown, hasProject: boolean): ScopeInput {
+function parseSearchScope(raw: unknown, hasSpace: boolean): ScopeInput {
   if (raw === 'global') return 'global';
-  if (raw === 'project' && hasProject) return 'project';
-  if (raw === 'all' && hasProject) return 'all';
-  return hasProject ? 'all' : 'global';
+  if (raw === 'space' && hasSpace) return 'space';
+  if (raw === 'all' && hasSpace) return 'all';
+  return hasSpace ? 'all' : 'global';
 }
 
-function parseReadScope(raw: unknown, hasProject: boolean): ScopeInput {
+function parseReadScope(raw: unknown, hasSpace: boolean): ScopeInput {
   if (raw === 'global') return 'global';
-  if (raw === 'project' && hasProject) return 'project';
-  if (raw === 'all' && hasProject) return 'all';
-  return hasProject ? 'all' : 'global';
+  if (raw === 'space' && hasSpace) return 'space';
+  if (raw === 'all' && hasSpace) return 'all';
+  return hasSpace ? 'all' : 'global';
 }
 
-function parseListScope(raw: unknown, hasProject: boolean): ScopeInput {
+function parseListScope(raw: unknown, hasSpace: boolean): ScopeInput {
   if (raw === 'global') return 'global';
-  if (raw === 'project' && hasProject) return 'project';
-  if (raw === 'all' && hasProject) return 'all';
-  return hasProject ? 'all' : 'global';
+  if (raw === 'space' && hasSpace) return 'space';
+  if (raw === 'all' && hasSpace) return 'all';
+  return hasSpace ? 'all' : 'global';
 }
 
 type LibraryFileEntry = {
@@ -99,13 +99,13 @@ function statusRank(status: kb.KbStatus): number {
 }
 
 function createKbListTool(opts: KbToolsOpts): AgentTool {
-  const hasProject = !!opts.projectId;
+  const hasSpace = !!opts.spaceId;
   return {
     name: 'kb_list',
     executionMode: 'parallel',
     description:
       'List files in the user Library before deciding what to search or read'
-      + (hasProject ? ' (current project + global by default)' : '')
+      + (hasSpace ? ' (current space + global by default)' : '')
       + '. Use this when the user asks what is in the Library, asks about files\n'
       + 'without naming one, or when semantic search has no good hits. Returns\n'
       + 'relative paths, scope, kind, indexing status, chunk count, and size.\n'
@@ -116,10 +116,10 @@ function createKbListTool(opts: KbToolsOpts): AgentTool {
       properties: {
         scope: {
           type: 'string',
-          enum: hasProject ? ['all', 'project', 'global'] : ['global'],
-          description: hasProject
-            ? 'List scope. Default all = current project Library plus global Library.'
-            : 'List scope. Only global is available outside a project.',
+          enum: hasSpace ? ['all', 'space', 'global'] : ['global'],
+          description: hasSpace
+            ? 'List scope. Default all = current space Library plus global Library.'
+            : 'List scope. Only global is available outside a space.',
         },
         dir: {
           type: 'string',
@@ -142,7 +142,7 @@ function createKbListTool(opts: KbToolsOpts): AgentTool {
       },
     },
     async execute(input) {
-      const scope = parseListScope(input.scope, hasProject);
+      const scope = parseListScope(input.scope, hasSpace);
       const rawDir = typeof input.dir === 'string' ? input.dir.trim().replace(/^\/+|\/+$/g, '') : '';
       const dir = rawDir ? `${rawDir}/` : '';
       const kind = parseKbKind(input.kind);
@@ -157,9 +157,9 @@ function createKbListTool(opts: KbToolsOpts): AgentTool {
       if (scope === 'global' || scope === 'all') {
         files.push(...kb.listFiles(opts.userId).map((row) => ({ scope: 'global' as const, row })));
       }
-      if ((scope === 'project' || scope === 'all') && opts.projectId) {
-        files.push(...projectLibrary.listFiles(opts.userId, opts.projectId)
-          .map((row) => ({ scope: 'project' as const, row })));
+      if ((scope === 'space' || scope === 'all') && opts.spaceId) {
+        files.push(...spaceLibrary.listFiles(opts.userId, opts.spaceId)
+          .map((row) => ({ scope: 'space' as const, row })));
       }
 
       const filtered = files
@@ -173,13 +173,13 @@ function createKbListTool(opts: KbToolsOpts): AgentTool {
         );
 
       const globalSummary = kb.statusSummary(opts.userId);
-      const projectSummary = opts.projectId ? projectLibrary.statusSummary(opts.userId, opts.projectId) : null;
+      const spaceSummary = opts.spaceId ? spaceLibrary.statusSummary(opts.userId, opts.spaceId) : null;
       const summaryBits = [
         `global total=${globalSummary.total} ready=${globalSummary.ready} processing=${globalSummary.processing} pending=${globalSummary.pending} failed=${globalSummary.failed}`,
       ];
-      if (projectSummary) {
+      if (spaceSummary) {
         summaryBits.push(
-          `project total=${projectSummary.total} ready=${projectSummary.ready} processing=${projectSummary.processing} pending=${projectSummary.pending} failed=${projectSummary.failed}`,
+          `space total=${spaceSummary.total} ready=${spaceSummary.ready} processing=${spaceSummary.processing} pending=${spaceSummary.pending} failed=${spaceSummary.failed}`,
         );
       }
 
@@ -208,7 +208,7 @@ function createKbListTool(opts: KbToolsOpts): AgentTool {
 }
 
 function createKbSearchTool(opts: KbToolsOpts): AgentTool {
-  const hasProject = !!opts.projectId;
+  const hasSpace = !!opts.spaceId;
   return {
     name: 'kb_search',
     // Parallel-safe (verified 2026-06-18 by reading fastembed@2.1.0). kb_search
@@ -224,7 +224,7 @@ function createKbSearchTool(opts: KbToolsOpts): AgentTool {
     executionMode: 'parallel',
     description:
       'Semantic search over the user Library'
-      + (hasProject ? ' (current project + global by default)' : '')
+      + (hasSpace ? ' (current space + global by default)' : '')
       + '. Returns the top-k most similar chunks across processed files. Prefer this\n'
       + 'over manual directory walking / grep — the embeddings handle synonymy and\n'
       + 'cross-language matches. Call `kb_read` with the returned `scope` + `path`\n'
@@ -258,10 +258,10 @@ function createKbSearchTool(opts: KbToolsOpts): AgentTool {
         },
         scope: {
           type: 'string',
-          enum: hasProject ? ['all', 'project', 'global'] : ['global'],
-          description: hasProject
-            ? 'Search scope. Default all = current project Library plus global Library.'
-            : 'Search scope. Only global is available outside a project.',
+          enum: hasSpace ? ['all', 'space', 'global'] : ['global'],
+          description: hasSpace
+            ? 'Search scope. Default all = current space Library plus global Library.'
+            : 'Search scope. Only global is available outside a space.',
         },
       },
       required: ['query'],
@@ -275,7 +275,7 @@ function createKbSearchTool(opts: KbToolsOpts): AgentTool {
       const dir = rawDir || undefined;
       const rawPath = typeof input.path === 'string' ? input.path.trim().replace(/^\/+/, '') : '';
       const filePath = rawPath || undefined;
-      const scope = parseSearchScope(input.scope, hasProject);
+      const scope = parseSearchScope(input.scope, hasSpace);
 
       let vec: number[];
       try { vec = await kbEmbed.embedQuery(query); }
@@ -283,7 +283,7 @@ function createKbSearchTool(opts: KbToolsOpts): AgentTool {
         const msg = (err as Error).message;
         log.warn('kb_search embed failed', {
           user_id: maskId(opts.userId),
-          project_id: maskId(opts.projectId),
+          space_id: maskId(opts.spaceId),
           query_chars: query.length,
           k,
           kind,
@@ -299,17 +299,17 @@ function createKbSearchTool(opts: KbToolsOpts): AgentTool {
         if (dir) globalSearchOpts.dir = dir;
         if (filePath) globalSearchOpts.path = filePath;
         if (kind) globalSearchOpts.kind = kind;
-        const projectSearchOpts: kb.KbSearchOpts = { k };
-        if (dir) projectSearchOpts.dir = dir;
-        if (filePath) projectSearchOpts.path = filePath;
-        if (kind) projectSearchOpts.kind = kind;
+        const spaceSearchOpts: kb.KbSearchOpts = { k };
+        if (dir) spaceSearchOpts.dir = dir;
+        if (filePath) spaceSearchOpts.path = filePath;
+        if (kind) spaceSearchOpts.kind = kind;
         const collected: LibraryHit[] = [];
         if (scope === 'global' || scope === 'all') {
           collected.push(...kb.search(opts.userId, vec, globalSearchOpts).map((h) => ({ ...h, scope: 'global' as const })));
         }
-        if ((scope === 'project' || scope === 'all') && opts.projectId) {
-          collected.push(...(await projectLibrary.search(opts.userId, opts.projectId, vec, projectSearchOpts))
-            .map((h) => ({ ...h, scope: 'project' as const })));
+        if ((scope === 'space' || scope === 'all') && opts.spaceId) {
+          collected.push(...(await spaceLibrary.search(opts.userId, opts.spaceId, vec, spaceSearchOpts))
+            .map((h) => ({ ...h, scope: 'space' as const })));
         }
         collected.sort((a, b) => b.score - a.score);
         hits = collected.slice(0, k);
@@ -317,7 +317,7 @@ function createKbSearchTool(opts: KbToolsOpts): AgentTool {
         const msg = (err as Error).message;
         log.warn('kb_search query failed', {
           user_id: maskId(opts.userId),
-          project_id: maskId(opts.projectId),
+          space_id: maskId(opts.spaceId),
           query_chars: query.length,
           k,
           kind,
@@ -330,12 +330,12 @@ function createKbSearchTool(opts: KbToolsOpts): AgentTool {
       }
 
       const globalSummary = kb.statusSummary(opts.userId);
-      const projectSummary = opts.projectId ? projectLibrary.statusSummary(opts.userId, opts.projectId) : null;
+      const spaceSummary = opts.spaceId ? spaceLibrary.statusSummary(opts.userId, opts.spaceId) : null;
       const lines: string[] = [];
       if (!hits.length) {
         lines.push(`No results for "${query}".`);
-        const processing = globalSummary.processing + (projectSummary?.processing || 0);
-        const total = globalSummary.total + (projectSummary?.total || 0);
+        const processing = globalSummary.processing + (spaceSummary?.processing || 0);
+        const total = globalSummary.total + (spaceSummary?.total || 0);
         if (processing > 0) {
           lines.push(`Note: ${processing} Library file(s) are still being processed — retry shortly.`);
         } else if (total === 0) {
@@ -345,8 +345,8 @@ function createKbSearchTool(opts: KbToolsOpts): AgentTool {
       }
 
       const summaryBits = [`global=${globalSummary.total}`];
-      if (projectSummary) summaryBits.push(`project=${projectSummary.total}`);
-      const processing = globalSummary.processing + (projectSummary?.processing || 0);
+      if (spaceSummary) summaryBits.push(`space=${spaceSummary.total}`);
+      const processing = globalSummary.processing + (spaceSummary?.processing || 0);
       lines.push(`${hits.length} hit(s) for "${query}" (Library ${summaryBits.join(', ')}, processing=${processing}):`);
       for (const h of hits) {
         lines.push(
@@ -361,7 +361,7 @@ function createKbSearchTool(opts: KbToolsOpts): AgentTool {
 }
 
 function createKbReadTool(opts: KbToolsOpts): AgentTool {
-  const hasProject = !!opts.projectId;
+  const hasSpace = !!opts.spaceId;
   return {
     name: 'kb_read',
     executionMode: 'parallel',
@@ -378,10 +378,10 @@ function createKbReadTool(opts: KbToolsOpts): AgentTool {
         path: { type: 'string', description: 'Library-relative path (as returned by kb_search hits).' },
         scope: {
           type: 'string',
-          enum: hasProject ? ['all', 'project', 'global'] : ['global'],
-          description: hasProject
-            ? 'Read scope. Prefer the scope returned by kb_search. Default all tries project, then global.'
-            : 'Read scope. Only global is available outside a project.',
+          enum: hasSpace ? ['all', 'space', 'global'] : ['global'],
+          description: hasSpace
+            ? 'Read scope. Prefer the scope returned by kb_search. Default all tries space, then global.'
+            : 'Read scope. Only global is available outside a space.',
         },
         chunk: { type: 'number', description: '1-based chunk index. Omit for full body.' },
         window: {
@@ -394,19 +394,19 @@ function createKbReadTool(opts: KbToolsOpts): AgentTool {
     async execute(input) {
       const relPath = String(input.path ?? '').trim();
       if (!relPath) return { content: 'kb_read: `path` is required', isError: true };
-      const scope = parseReadScope(input.scope, hasProject);
+      const scope = parseReadScope(input.scope, hasSpace);
       let source: {
         scope: LibraryScope;
         row: kb.KbFileRow;
         chunks: Array<{ chunk_idx: number; title: string | null; content: string }>;
       } | null = null;
-      if ((scope === 'project' || scope === 'all') && opts.projectId) {
-        const row = projectLibrary.getFileByPath(opts.userId, opts.projectId, relPath);
+      if ((scope === 'space' || scope === 'all') && opts.spaceId) {
+        const row = spaceLibrary.getFileByPath(opts.userId, opts.spaceId, relPath);
         if (row) {
           source = {
-            scope: 'project',
+            scope: 'space',
             row,
-            chunks: projectLibrary.readFileChunks(opts.userId, opts.projectId, relPath),
+            chunks: spaceLibrary.readFileChunks(opts.userId, opts.spaceId, relPath),
           };
         }
       }

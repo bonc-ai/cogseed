@@ -5,16 +5,12 @@
 // row menus stay compact. Main owns path validation and copy/move semantics.
 (function initLibraryTransfer(root) {
   function _libraryValue(ref) {
-    return ref && ref.scope === 'project' ? `project:${ref.projectId || ''}` : 'global';
+    // 空间化后仅全局资料库（contexts）可迁移；项目库已删。
+    return 'global';
   }
 
   function _parseLibraryValue(value) {
-    const raw = String(value || '');
-    if (raw === 'global') return { scope: 'global' };
-    if (raw.startsWith('project:') && raw.slice(8)) {
-      return { scope: 'project', projectId: raw.slice(8) };
-    }
-    return null;
+    return { scope: 'global' };
   }
 
   function _folderRows(nodes, depth = 0, out = []) {
@@ -26,10 +22,6 @@
       _folderRows(node.children || [], depth + 1, out);
     }
     return out;
-  }
-
-  function _projectsFromResponse(response) {
-    return Array.isArray(response?.projects) ? response.projects : [];
   }
 
   function _icon(name, cls) {
@@ -48,21 +40,12 @@
     return t(key);
   }
 
-  async function _loadProjects() {
-    const res = await root.orkas.invoke('projects.list', {});
-    return _projectsFromResponse(res);
-  }
-
   async function _loadFolderTree(ref) {
-    if (ref.scope === 'global') {
-      const res = await apiFetch('/api/contexts/tree');
-      const data = await res.json();
-      if (!data?.ok) throw new Error(data?.error || 'load_failed');
-      return data.tree || [];
-    }
-    const data = await root.orkas.invoke('projects.files.tree', { projectId: ref.projectId });
-    if (!Array.isArray(data?.tree)) throw new Error(data?.error || 'load_failed');
-    return data.tree;
+    // 空间化后仅全局资料库（contexts）可迁移；项目文件树已删。
+    const res = await apiFetch('/api/contexts/tree');
+    const data = await res.json();
+    if (!data?.ok) throw new Error(data?.error || 'load_failed');
+    return data.tree || [];
   }
 
   function _track(name, payload, kind = 'event') {
@@ -77,17 +60,8 @@
     if (!source || !paths.length) return null;
     document.getElementById('library-transfer-overlay')?.remove();
 
-    let projects;
-    try { projects = await _loadProjects(); }
-    catch (_) { projects = []; }
     const libraryOptions = [
       { value: 'global', label: t('contexts.transfer.global_library'), iconName: 'folder' },
-      ...projects.map((project) => ({
-        value: `project:${project.project_id}`,
-        label: project.name || project.project_id,
-        hint: t('contexts.transfer.project_library'),
-        iconName: 'folder',
-      })),
     ];
     const initialLibrary = _libraryValue(source);
     const overlay = document.createElement('div');
@@ -286,6 +260,6 @@
   const api = Object.freeze({ open: openLibraryTransfer });
   root.LibraryTransfer = api;
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { _libraryValue, _parseLibraryValue, _folderRows, _projectsFromResponse };
+    module.exports = { _libraryValue, _parseLibraryValue, _folderRows };
   }
 })(typeof window !== 'undefined' ? window : globalThis);

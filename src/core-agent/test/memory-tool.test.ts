@@ -209,43 +209,43 @@ describe('cross_session_memory › error handling', () => {
   });
 });
 
-describe('cross_session_memory › project tier', () => {
-  it('adds the "project" target and a routing block only when includeProjectTier', () => {
+describe('cross_session_memory › space tier', () => {
+  it('adds the "space" target and a routing block only when includeProjectTier', () => {
     const withProject = createCrossSessionMemoryTool(mockHandler(), { includeProjectTier: true });
-    expect((withProject.inputSchema as any).properties.target.enum).toEqual(['agent', 'project', 'shared', 'user']);
-    expect(withProject.description).toContain('project:');
+    expect((withProject.inputSchema as any).properties.target.enum).toEqual(['agent', 'space', 'shared', 'user']);
+    expect(withProject.description).toContain('space:');
 
     const without = createCrossSessionMemoryTool(mockHandler());
-    expect((without.inputSchema as any).properties.target.enum).not.toContain('project');
+    expect((without.inputSchema as any).properties.target.enum).not.toContain('space');
   });
 
-  it('commander (read+write) can write the project tier', async () => {
+  it('commander (read+write) can write the space tier', async () => {
     const handler = mockHandler();
     const tool = createCrossSessionMemoryTool(handler, { includeProjectTier: true });
-    const result = await tool.execute({ action: 'add', target: 'project', content: 'decided X' }, dummyCtx);
+    const result = await tool.execute({ action: 'add', target: 'space', content: 'decided X' }, dummyCtx);
     expect(result.isError).toBeFalsy();
-    expect(handler.add).toHaveBeenCalledWith('project', 'decided X');
+    expect(handler.add).toHaveBeenCalledWith('space', 'decided X');
   });
 
-  it('read-only sub-agent may list the project tier but not add/replace/remove', async () => {
+  it('read-only sub-agent may list the space tier but not add/replace/remove', async () => {
     const handler = mockHandler();
     const tool = createCrossSessionMemoryTool(handler, { includeProjectTier: true, projectTierReadOnly: true });
 
-    // Description tells the model the project tier is read-only for it.
+    // Description tells the model the space tier is read-only for it.
     expect(tool.description).toContain('READ-ONLY');
     expect(tool.description).toContain('already present in your system context');
     expect(tool.description).toContain('Do not list it merely to reload context');
 
     // list is allowed (read).
-    const listed = await tool.execute({ action: 'list', target: 'project' }, dummyCtx);
+    const listed = await tool.execute({ action: 'list', target: 'space' }, dummyCtx);
     expect(listed.isError).toBeFalsy();
-    expect(handler.list).toHaveBeenCalledWith('project');
+    expect(handler.list).toHaveBeenCalledWith('space');
 
     // writes are rejected before reaching the handler.
     for (const input of [
-      { action: 'add', target: 'project', content: 'x' },
-      { action: 'replace', target: 'project', old_text: 'a', content: 'b' },
-      { action: 'remove', target: 'project', old_text: 'a' },
+      { action: 'add', target: 'space', content: 'x' },
+      { action: 'replace', target: 'space', old_text: 'a', content: 'b' },
+      { action: 'remove', target: 'space', old_text: 'a' },
     ]) {
       const res = await tool.execute(input, dummyCtx);
       expect(res.isError).toBe(true);
@@ -255,7 +255,7 @@ describe('cross_session_memory › project tier', () => {
     expect(handler.replace).not.toHaveBeenCalled();
     expect(handler.remove).not.toHaveBeenCalled();
 
-    // read-only applies to the project tier only — the agent's own tier still writes.
+    // read-only applies to the space tier only — the agent's own tier still writes.
     const ownAdd = await tool.execute({ action: 'add', target: 'agent', content: 'lesson' }, dummyCtx);
     expect(ownAdd.isError).toBeFalsy();
     expect(handler.add).toHaveBeenCalledWith('agent', 'lesson');

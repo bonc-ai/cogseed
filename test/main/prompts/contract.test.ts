@@ -191,16 +191,15 @@ describe('prompts ↔ code contract', () => {
     const memoryTool = readFile('src/core-agent/src/tools/memory-tool.ts');
 
     // Tool description ships in two shapes: the legacy three-tier one and the
-    // project-session one that adds the `project` tier plus the belongs-where
-    // routing rule ("would this still hold in another project?").
+    // space-session one that adds the `space` tier plus the belongs-where
+    // routing rule ("would this still hold in another space?").
     expect(memoryTool).toContain("- agent (default): this agent's private lessons");
-    expect(memoryTool).toContain('- shared: stable facts that hold across projects and matter to every agent');
+    expect(memoryTool).toContain('- shared: stable facts that hold across spaces and matter to every agent');
     expect(memoryTool).toContain('- user: stable user-wide profile/preferences every agent should know');
-    expect(memoryTool).toContain('- project: durable facts, decisions, outcomes, milestones, and conventions that belong to THIS project only');
-    expect(memoryTool).toContain('Live progress and todo status belong in project_tasks');
-    expect(memoryTool).toContain('would this still hold in another project?');
-    // The project tier is schema-gated: offered only when the host marks the
-    // session as belonging to a project.
+    expect(memoryTool).toContain('- space: durable facts, decisions, outcomes, milestones, and conventions that belong to THIS space only');
+    expect(memoryTool).toContain('would this still hold in another space?');
+    // The space tier is schema-gated: offered only when the host marks the
+    // session as belonging to a space.
     expect(memoryTool).toContain('includeProjectTier');
     // Language rule: write in the user's current language, preserving literals.
     expect(memoryTool).toContain("Write in the user's current language while preserving code, paths, commands, URLs");
@@ -542,9 +541,9 @@ describe('prompts ↔ code contract', () => {
     expect(runner).not.toContain("## User language\\n'");
     expect(runner).toContain('splitCommanderAgentsBlock');
     expect(runner).not.toContain('splitCommanderPlanStateBlock');
-    // P2: orchestration state + datetime + project status are per-turn
-    // volatile. Execution-plan state is injected independently by Session at
-    // every model-loop tail, so the host must not maintain a second plan block.
+    // P2: orchestration state + datetime are per-turn volatile.
+    // Execution-plan state is injected independently by Session at every
+    // model-loop tail, so the host must not maintain a second plan block.
     expect(runner).toContain('splitCommanderOrchestrationBlock');
     expect(runner).toMatch(/if \(connectorBlock\) parts\.push\(connectorBlock\.trim\(\)\);\s+if \(systemSkillsBlock\) parts\.push\(systemSkillsBlock\.trim\(\)\);\s+if \(skillsBlock\) parts\.push\(skillsBlock\.trim\(\)\);\s+if \(agentsBlock\) parts\.push\(agentsBlock\);/);
     // User-authored project instructions are low-churn configuration and sit
@@ -554,9 +553,7 @@ describe('prompts ↔ code contract', () => {
     // memoryBlock is the LAST block pushed into the (cached) system prompt.
     expect(runner).toMatch(/if \(memoryBlock\) parts\.push\(memoryBlock\);/);
     // The volatile blocks feed turnEphemeral, NOT the system prompt parts.
-    expect(runner).toMatch(/const turnEphemeral = \[orchestrationBlock, volatileTail, projectStatusBlock\]/);
-    // The live project task board rides the turn (uncached), never the system prefix.
-    expect(runner).toContain('formatProjectStatusForTurn');
+    expect(runner).toMatch(/const turnEphemeral = \[orchestrationBlock, volatileTail\]/);
     expect(runner).not.toMatch(/parts\.push\(projectStatusBlock\)/);
     expect(runner).not.toMatch(/parts\.push\(orchestrationBlock\)/);
     expect(runner).not.toMatch(/parts\.push\(volatileTail\)/);

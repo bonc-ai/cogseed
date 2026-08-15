@@ -428,7 +428,7 @@ describe('global recycle bin', () => {
 
     expect(batch?.display_items).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        category: 'project_file',
+        category: 'space_file',
         title: 'specs/overview.md',
         detail: 'Knowledge Hub',
         path: relProjectFile,
@@ -511,32 +511,52 @@ describe('global recycle bin', () => {
 
   it('restores a project delete cascade while showing only the project in the recycle bin', async () => {
     const paths = await import('../../../src/main/paths');
-    const projects = await import('../../../src/main/features/projects');
-    const chats = await import('../../../src/main/features/chats');
-    const autoTasks = await import('../../../src/main/features/auto_tasks');
     const {
       createAppRecycleBatchForProject,
       listRecycleBatches,
       restoreRecycleBatch,
     } = await import('../../../src/main/features/recycle_bin');
 
-    const createdProject = await projects.createProject(UID, 'Client Launch');
-    if (!createdProject.ok) throw new Error('project create failed');
-    const pid = createdProject.project.project_id;
-    const conv = await chats.createConversation(UID, {
-      title: 'Launch checklist',
-      projectId: pid,
-    });
-    const task = await autoTasks.createTask(UID, {
+    // 项目壳已废弃（T4.5），但回收站仍须能归档/恢复遗留项目布局数据。
+    // 手工构造 `cloud/projects/<pid>/` 布局：project.json + 会话 + auto_task。
+    const pid = 'p_recycle1';
+    const cid = 'launch-checklist';
+    const abs = (relPath: string) => path.join(paths.userCloudRoot(UID), ...relPath.slice('cloud/'.length).split('/'));
+    const relsToWrite = [
+      `cloud/projects/${pid}/project.json`,
+      `cloud/projects/${pid}/chats/${cid}.jsonl`,
+      `cloud/projects/${pid}/chats/_index.json`,
+      `cloud/projects/${pid}/auto_tasks/at_c0ffee12/config.json`,
+      `cloud/projects/${pid}/auto_tasks/at_c0ffee12/attachments/brief.txt`,
+    ];
+    for (const rel of relsToWrite) {
+      await fsp.mkdir(path.dirname(abs(rel)), { recursive: true });
+    }
+    await fsp.writeFile(abs(`cloud/projects/${pid}/project.json`), JSON.stringify({
+      project_id: pid,
+      name: 'Client Launch',
+      owner_uid: UID,
+      created_at: '2026-05-29T09:00:00.000Z',
+      updated_at: '2026-05-29T09:00:00.000Z',
+    }, null, 2));
+    await fsp.writeFile(abs(`cloud/projects/${pid}/chats/${cid}.jsonl`), '{"role":"user","content":"launch checklist"}\n');
+    await fsp.writeFile(abs(`cloud/projects/${pid}/chats/_index.json`), JSON.stringify([
+      {
+        conversation_id: cid,
+        title: 'Launch checklist',
+        kind: 'normal',
+        project_id: pid,
+        session_id: `gconv-${cid}`,
+        created_at: '2026-05-29T10:00:00.000Z',
+        updated_at: '2026-05-29T10:00:00.000Z',
+      },
+    ], null, 2));
+    await fsp.writeFile(abs(`cloud/projects/${pid}/auto_tasks/at_c0ffee12/config.json`), JSON.stringify({
       id: 'at_c0ffee12',
       title: 'Weekly launch report',
-      content: 'Prepare the weekly launch report',
       project_id: pid,
-      schedule: { type: 'weekly', weekday: 1, hour: 9, minute: 0 },
-      attachments: ['brief.txt'],
-    });
-    if (!task.ok) throw new Error('task create failed');
-    await autoTasks.uploadAttachment(UID, 'at_c0ffee12', 'brief.txt', Buffer.from('brief'));
+    }, null, 2));
+    await fsp.writeFile(abs(`cloud/projects/${pid}/auto_tasks/at_c0ffee12/attachments/brief.txt`), 'brief');
 
     const batch = await createAppRecycleBatchForProject(UID, pid);
     expect(batch?.display_items).toEqual([
@@ -563,16 +583,17 @@ describe('global recycle bin', () => {
       }),
     ]);
 
-    const deleted = await projects.deleteProject(UID, pid);
-    expect(deleted.ok).toBe(true);
-    expect(await projects.listProjects(UID)).toEqual([]);
-    expect(await autoTasks.listTasks(UID, { projectId: pid })).toEqual([]);
+    // 模拟级联删除（项目壳删除逻辑已随 projects.ts 移除）：移除全部项目文件。
+    for (const rel of relsToWrite) {
+      await fsp.rm(abs(rel), { force: true });
+    }
+    expect(fs.existsSync(abs(`cloud/projects/${pid}/project.json`))).toBe(false);
 
     const restored = await restoreRecycleBatch(UID, batch!.id);
     expect(restored.failed_paths).toEqual([]);
     expect(restored.restored_paths).toEqual(expect.arrayContaining([
       `cloud/projects/${pid}/project.json`,
-      `cloud/projects/${pid}/chats/${conv.conversation_id}.jsonl`,
+      `cloud/projects/${pid}/chats/${cid}.jsonl`,
       `cloud/projects/${pid}/auto_tasks/at_c0ffee12/config.json`,
       `cloud/projects/${pid}/auto_tasks/at_c0ffee12/attachments/brief.txt`,
     ]));
@@ -580,22 +601,11 @@ describe('global recycle bin', () => {
     const [batchAfterRestore] = await listRecycleBatches(UID);
     expect(batchAfterRestore.id).toBe(batch!.id);
 
-    const restoredProjects = await projects.listProjects(UID);
-    expect(restoredProjects).toEqual([
-      expect.objectContaining({
-        project_id: pid,
-        name: 'Client Launch',
-        conv_count: 1,
-      }),
-    ]);
-    const restoredTasks = await autoTasks.listTasks(UID, { projectId: pid });
-    expect(restoredTasks).toEqual([
-      expect.objectContaining({
-        id: 'at_c0ffee12',
-        title: 'Weekly launch report',
-        project_id: pid,
-      }),
-    ]);
+    expect(JSON.parse(await fsp.readFile(abs(`cloud/projects/${pid}/project.json`), 'utf-8')).name).toBe('Client Launch');
+    expect(JSON.parse(await fsp.readFile(abs(`cloud/projects/${pid}/chats/_index.json`), 'utf-8'))[0]).toEqual(expect.objectContaining({
+      conversation_id: cid,
+      project_id: pid,
+    }));
     const attachmentPath = path.join(
       paths.userCloudRoot(UID),
       'projects',
@@ -610,15 +620,22 @@ describe('global recycle bin', () => {
 
   it('fails a project recycle snapshot if any cascade file cannot be archived', async () => {
     const paths = await import('../../../src/main/paths');
-    const projects = await import('../../../src/main/features/projects');
     const {
       createAppRecycleBatchForProject,
       listRecycleBatches,
     } = await import('../../../src/main/features/recycle_bin');
 
-    const createdProject = await projects.createProject(UID, 'Do Not Lose Files');
-    if (!createdProject.ok) throw new Error('project create failed');
-    const pid = createdProject.project.project_id;
+    const pid = 'p_recycle2';
+    const abs = (relPath: string) => path.join(paths.userCloudRoot(UID), ...relPath.slice('cloud/'.length).split('/'));
+    const projectMetaRel = `cloud/projects/${pid}/project.json`;
+    await fsp.mkdir(path.dirname(abs(projectMetaRel)), { recursive: true });
+    await fsp.writeFile(abs(projectMetaRel), JSON.stringify({
+      project_id: pid,
+      name: 'Do Not Lose Files',
+      owner_uid: UID,
+      created_at: '2026-05-29T09:00:00.000Z',
+      updated_at: '2026-05-29T09:00:00.000Z',
+    }, null, 2));
     const protectedFile = path.join(paths.projectFilesDir(UID, pid), 'locked.txt');
     await fsp.mkdir(path.dirname(protectedFile), { recursive: true });
     await fsp.writeFile(protectedFile, 'must stay recoverable');
@@ -632,10 +649,9 @@ describe('global recycle bin', () => {
         code: 'recycle_archive_failed',
       });
       expect(await listRecycleBatches(UID)).toEqual([]);
-      expect(await projects.getProject(UID, pid)).toEqual(expect.objectContaining({
-        project_id: pid,
-        name: 'Do Not Lose Files',
-      }));
+      expect(JSON.parse(await fsp.readFile(abs(projectMetaRel), 'utf-8')).name).toBe('Do Not Lose Files');
+      // 受保护文件不可读（chmod 000），但必须原样保留未被回收。
+      expect(fs.existsSync(protectedFile)).toBe(true);
     } finally {
       if (lockChild) await releaseExclusiveWindowsLock(lockChild);
       else await fsp.chmod(protectedFile, 0o600).catch(() => {});

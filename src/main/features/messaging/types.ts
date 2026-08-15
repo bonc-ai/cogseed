@@ -47,12 +47,13 @@ export type InstanceStatusKind = (typeof INSTANCE_STATUS_KINDS)[number];
 export interface WorkspaceScope {
   /**
    * `all` is the explicit UI choice for every workspace. It intentionally
-   * routes to a normal, project-free conversation rather than granting a
-   * connector access to arbitrary project paths. `default` is retained for
-   * existing persisted configuration and has the same project-free routing.
+   * routes to a normal, space-free conversation rather than granting a
+   * connector access to arbitrary space paths. `default` is retained for
+   * existing persisted configuration and has the same space-free routing.
+   * `space` scopes inbound routing to a specific space's conversations.
    */
-  type: 'default' | 'all' | 'project';
-  projectId?: string;
+  type: 'default' | 'all' | 'space';
+  spaceId?: string;
 }
 
 export interface MessagingPolicy {
@@ -126,6 +127,8 @@ export interface MessagingBinding {
   externalUserId?: string;
   externalChatTitle?: string;
   cid: string;
+  /** 空间化后 workspace 绑定写 spaceId；旧记录保留 projectId 兼容读。 */
+  spaceId?: string;
   projectId?: string;
   /** Latest inbound platform context for the isolated conversation. */
   replyToMessageId?: string;

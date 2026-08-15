@@ -100,7 +100,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
       ARGS+=("--orkas-kstar-engine-cwd=$ORKAS_KSTAR_ENGINE_CWD")
       ARGS+=("--orkas-kstar-engine-ontology-dir=$ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR")
     fi
-    exec open -W -n "${OPEN_ENV_ARGS[@]}" "$APP_BUNDLE" --args "${ARGS[@]}"
+    exec open -W -n "${OPEN_ENV_ARGS[@]+"${OPEN_ENV_ARGS[@]}"}" "$APP_BUNDLE" --args "${ARGS[@]}"
   fi
 fi
 

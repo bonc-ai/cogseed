@@ -11,10 +11,6 @@ const draftSource = fs.readFileSync(
   'utf8',
 );
 const styleSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
-const projectDetailSource = fs.readFileSync(
-  path.join(__dirname, '../../src/renderer/modules/project-detail.js'),
-  'utf8',
-);
 const indexSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
 
 describe('conversation cross-task message reference UI', () => {
@@ -81,15 +77,15 @@ describe('conversation cross-task message reference UI', () => {
     expect(conversationSource).toContain('data-target-cid=');
     expect(conversationSource).toContain("setView('conversation', targetCid");
     expect(conversationSource).toContain("setView('new-chat')");
-    expect(conversationSource).toContain("setView('project', projectId)");
-    expect(conversationSource).toContain('_stageReferencesForNewTask(payloads, sourceProjectId)');
+    // 空间化后新任务不再继承项目作用域：恒走 new-chat，不再引用 project 视图。
+    expect(conversationSource).not.toContain("setView('project', projectId)");
+    expect(conversationSource).toContain('_stageReferencesForNewTask(payloads)');
     expect(conversationSource).not.toContain('function _createReferenceTargetTask');
     expect(conversationSource).not.toContain('_transferSelectedReferences(targetCid, payloads);\n  sendInCurrentConversation');
   });
 
-  it('inherits project scope for new tasks and shows only the five most recent tasks by default', () => {
-    expect(conversationSource).toContain("const sourceProjectId = _projectIdForConversation(currentCid)");
-    expect(conversationSource).toContain('return projectId ? `projchat-${projectId}` : DRAFT_CID');
+  it('shows only the five most recent tasks by default for new tasks', () => {
+    expect(conversationSource).toContain('return DRAFT_CID');
     expect(conversationSource).toContain("const res = await apiFetch('/api/conversations/list')");
     expect(conversationSource).toContain('const [targetConversations] = await Promise.all(loads)');
     expect(conversationSource).toContain('Array.isArray(targetConversations) ? targetConversations : []');
@@ -118,10 +114,7 @@ describe('conversation cross-task message reference UI', () => {
   it('sends references as structured sidecar data and persists them with drafts', () => {
     expect(conversationSource).toContain('const references = _referenceSnapshotsForQuotes(quotes)');
     expect(conversationSource).toContain('...(references.length ? { references } : {})');
-    expect(projectDetailSource).toContain('const references = (typeof _referenceSnapshotsForQuotes === \'function\')');
-    expect(projectDetailSource).toContain('...(references.length ? { references } : {})');
     expect(indexSource).toContain('id="new-chat-quote-preview"');
-    expect(indexSource).toContain('id="project-chat-quote-preview"');
     expect(draftSource).toContain('function _persistQuoteDraft(cid)');
     expect(draftSource).toContain('{ references: safeReferences }');
     expect(draftSource).toContain('_quotesByCid.set(cid, references)');

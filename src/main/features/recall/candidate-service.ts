@@ -91,6 +91,9 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   promotedAssetId?: string;
   reviewDecisionId?: string;
   decisionNote?: string;
+  /** 空间归属：候选来自哪个空间（空间绘画/任务产出的认知）。资产随 recall 全局存储，
+   *  空间资产 tab 按此字段过滤显示；空间可读全局资产但显示只显示本空间产生的。 */
+  spaceId?: string;
   cooldownUntil?: string;
   expiresAt: string;
   taskRunId?: string;
@@ -141,6 +144,8 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   deletedAt?: string;
   purgedAt?: string;
   version: string;
+  /** 空间归属：资产由某空间的候选确认而来（随 recall 全局存储，不随空间删）。 */
+  spaceId?: string;
   /** Provenance for assets learned from conversation sources. */
   sourceSessionIds?: string[];
   createdAt: string;
@@ -164,6 +169,8 @@ export interface SaveRecallCandidateInput {
   learningSignal?: KstarLearningSignal;
   learningProvenance?: KstarLearningProvenance;
   captureKey?: string;
+  /** 空间归属（可选）：来源会话/任务的 space_id。 */
+  spaceId?: string;
   /** Internal extraction gate: preserve evidence without creating user review work. */
   forceWeakObservation?: boolean;
 }
@@ -622,6 +629,7 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
     ...(learningSignal ? { learningSignal } : {}),
     ...(learningProvenance ? { learningProvenance } : {}),
     ...(captureKey ? { captureKey } : {}),
+    ...(input.spaceId && safeId(input.spaceId) ? { spaceId: input.spaceId } : {}),
     ...(taskRunId ? { taskRunId } : {}),
     ...(targetAssetId ? { targetAssetId } : {}),
     expiresAt,
@@ -1213,6 +1221,7 @@ export async function promoteRecallCandidate(
         ...semantics,
         scope: candidate.suggestedScope,
         ...(scopePolicy ? { scopePolicy } : {}),
+        ...(candidate.spaceId ? { spaceId: candidate.spaceId } : {}),
         status: 'active',
         lifecycleStatus: handoffActor === 'system'
           ? 'automatically_extracted_unverified'

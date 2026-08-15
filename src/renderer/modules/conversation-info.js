@@ -1693,9 +1693,6 @@ const ConversationInfo = (() => {
       if (res.scope === 'global' && typeof currentView !== 'undefined' && currentView === 'contexts' && typeof loadContexts === 'function') {
         loadContexts();
       }
-      if (res.scope === 'project' && res.projectId && typeof currentView !== 'undefined' && currentView === 'project' && typeof loadProjectDetail === 'function') {
-        loadProjectDetail(res.projectId).catch(() => {});
-      }
     } catch (err) {
       await uiAlert(_label('conversation_info.file_add_to_library_failed', 'Add to Library failed: {reason}', {
         reason: String(err && err.message || err),
