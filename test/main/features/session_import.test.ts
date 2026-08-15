@@ -493,6 +493,27 @@ describe('session_import › materialize', () => {
     const msgs = await chats.getMessages(TEST_UID, res.conversationId);
     expect(msgs[0].text).toContain('未能自动提炼');
   });
+
+  it('falls back from an injected plugin block to a usable picker title', async () => {
+    const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
+    const chats = await import('../../../src/main/features/chats');
+
+    const res = await materializeSession({
+      userId: TEST_UID,
+      source: 'codex',
+      sourceId: 'plugin-title-fallback',
+      titleHint: '修复自动沉淀流程',
+      extraction: {
+        ok: true,
+        sessionSummary: '<recommended_plugins> Here is a list of plugins that are available but not installed.',
+        personal: [], rules: [], templates: [],
+      },
+    });
+
+    const list = await chats.listConversations(TEST_UID);
+    const found = list.find((c: any) => c.conversation_id === res.conversationId);
+    expect(found.title).toBe('⤴ 修复自动沉淀流程');
+  });
 });
 
 describe('session_import › memory-import (CLAUDE.md → shared memory tier)', () => {
@@ -702,6 +723,7 @@ describe('session_import › Codex import', () => {
   it('titles sessions from input_text content, skipping synthetic preamble turns', async () => {
     writeCodexSession('2026-08-09', [
       JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/test/dir' } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '<recommended_plugins>\nHere is a list of plugins that are available but not installed.\n</recommended_plugins>' }] } }),
       JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '<environment_context>\ncwd: /test/dir\n</environment_context>' }] } }),
       JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '# AGENTS.md instructions for /test/dir\n\nbe concise' }] } }),
       JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '真正的第一个问题' }] } }),
@@ -711,6 +733,18 @@ describe('session_import › Codex import', () => {
     const [session] = await listCodexSessions(homeDir);
 
     expect(session.title).toBe('真正的第一个问题');
+  });
+
+  it('keeps a real prompt that merely mentions the plugin tag', async () => {
+    writeCodexSession('2026-08-09', [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/test/dir' } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '<recommended_plugins> 标签应该如何解析？' }] } }),
+    ].join('\n'));
+
+    const { listCodexSessions } = await import('../../../src/main/features/session_import/codex-import');
+    const [session] = await listCodexSessions(homeDir);
+
+    expect(session.title).toBe('<recommended_plugins> 标签应该如何解析？');
   });
 
   it('unwraps resumed-replay and file-mention envelopes in titles', async () => {

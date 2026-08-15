@@ -55,6 +55,7 @@ export async function listCognitionAssets(
       title: asset.title,
       summary: asset.statement,
       source: 'recall_ability_asset',
+      lifecycleStatus: asset.lifecycleStatus,
       version: asset.version,
       status: asset.status,
       maturity: asset.maturity,

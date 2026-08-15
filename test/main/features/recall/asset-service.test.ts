@@ -52,7 +52,7 @@ describe('Recall ability assets', () => {
 
 
 
-  it('requires user governance metadata for promotion and user asset mutations', async () => {
+  it('requires an actor for asset mutations and a review handoff for system mutations', async () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Keep decision records with evidence.',
@@ -72,7 +72,8 @@ describe('Recall ability assets', () => {
       statement: 'Keep architecture decision records with source evidence.',
       actor: 'user',
     } as never)).rejects.toThrow(/reason/i);
-    await expect(assets.pauseAbilityAsset('user-a', asset.id, { actor: 'system', reason: 'automated pause' } as never)).rejects.toThrow(/user actor/i);
+    await expect(assets.pauseAbilityAsset('user-a', asset.id, { actor: 'system', reason: 'automated pause' } as never))
+      .rejects.toThrow(/review handoff/i);
   });
 
   it('rejects L3 credentials from asset edits without creating a new version', async () => {

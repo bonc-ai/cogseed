@@ -487,10 +487,10 @@ async function resolveTemplateGroupSections(
 
 /**
  * 把一条候选实际写入所有请求的去向（全局记忆 + 0..N 个记忆分组）。不改候选池，
- * 纯粹的“写”这一步 —— 池的增删由调用方（confirmCandidate/confirmCandidates）
+ * 纯粹的“写”这一步 —— 候选池的增删由调用方（confirmCandidate）
  * 负责，方便批量场景复用同一份落地逻辑。
  *
- * 容错风格跟现有批量确认一致：一个去向失败不影响其余去向。只要至少一个去向
+ * 容错风格：一个去向失败不影响其余去向。只要至少一个去向
  * 写入成功，就认为这条候选“已处理”，应该从池里移除；如果全部去向都失败
  * （或没有任何去向被请求），候选保留在池里，不会静默丢失。
  */
@@ -758,78 +758,6 @@ export async function rejectCandidate(uid: string, candidateId: string, reason?:
   writeCandidates(uid, candidates);
   log.info('candidate rejected', { uid, candidateId, reason });
   return { ok: true };
-}
-
-/** 批量确认的去向总览：`toFields` = 各字段名实际填坑成功条数，`toEntries` =
- *  实际进入流水区的条数（每条候选每个组的流水区写入计一次）。供确认前总览提示。 */
-export interface ConfirmSummary {
-  toFields: Array<{ fieldName: string; count: number }>;
-  toEntries: number;
-}
-
-/**
- * 批量确认。逐条尝试写入所有请求的去向；某条候选的某个去向失败不影响其余候选
- * 或其余去向 —— 一条候选只要至少一个去向成功就算确认，全部失败才保留在池里。
- * `dest` 对这一批里的每一条候选生效（跟审阅面板"批量操作走同一份选择去向"的
- * 用法一致；如需要逐条不同去向，调用方应改用单条 `confirmCandidate`）。
- * 返回体带 `summary`（实际路由总览：填坑 vs 流水区）。
- */
-export async function confirmCandidates(
-  uid: string,
-  candidateIds: string[],
-  dest: ConfirmDestinations = {},
-  opts: ConfirmCandidateOptions = {},
-): Promise<{
-  ok: boolean;
-  confirmedCount: number;
-  failedIds: string[];
-  results: Record<string, ConfirmCandidateResult>;
-  summary: ConfirmSummary;
-}> {
-  if (!safeId(uid)) throw new Error('invalid uid');
-  if (!Array.isArray(candidateIds) || !candidateIds.length) {
-    return { ok: true, confirmedCount: 0, failedIds: [], results: {}, summary: { toFields: [], toEntries: 0 } };
-  }
-
-  const candidates = readCandidates(uid);
-  const idSet = new Set(candidateIds);
-  const remaining: CandidateUpdate[] = [];
-  const failedIds: string[] = [];
-  const results: Record<string, ConfirmCandidateResult> = {};
-  let confirmedCount = 0;
-
-  for (const c of candidates) {
-    if (!idSet.has(c.candidate_id)) { remaining.push(c); continue; }
-    const { effectiveDest, source, userPickedRole } = await resolveLlmRoute(uid, c, dest, opts);
-    const res = await writeCandidateToDestinations(uid, c, effectiveDest, source, userPickedRole);
-    results[c.candidate_id] = res;
-    if (res.ok) confirmedCount++;
-    else { remaining.push(c); failedIds.push(c.candidate_id); }
-  }
-
-  writeCandidates(uid, remaining);
-  log.info('candidates batch confirmed', { uid, confirmedCount, failed: failedIds.length });
-
-  // 按每条候选各自的实际路由结果统计总览（填坑 ok 的按字段名聚合；流水区计数）
-  const fieldCounts = new Map<string, number>();
-  let toEntries = 0;
-  for (const res of Object.values(results)) {
-    if (!res.ok) continue;
-    for (const fw of res.fieldWrites || []) {
-      if (fw.ok) fieldCounts.set(fw.fieldName, (fieldCounts.get(fw.fieldName) || 0) + 1);
-    }
-    for (const g of res.groups || []) {
-      if (!g.ok) continue;
-      const hadFieldWrite = (res.fieldWrites || []).some((fw) => fw.ok && fw.groupId === g.groupId);
-      if (!hadFieldWrite) toEntries++;
-    }
-  }
-  const summary: ConfirmSummary = {
-    toFields: Array.from(fieldCounts.entries()).map(([fieldName, count]) => ({ fieldName, count })),
-    toEntries,
-  };
-
-  return { ok: true, confirmedCount, failedIds, results, summary };
 }
 
 /**

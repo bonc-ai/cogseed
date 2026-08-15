@@ -6,13 +6,13 @@
 //   2. View Agents (AI Team)
 //   3. View Skills
 //   4. Open Recall
-//   5. Reach the candidate list and decide one cognition
+//   5. Reach the capture-task candidate list and decide one cognition
 //   6. Open the ability-assets page
 //   7. Inspect one asset's detail
 //
 // Steps 4 and 5 are split because Recall opens on its overview page while
-// candidates live under deposition/candidates — one step asking for both left
-// the navigation hop unmentioned and unreachable.
+// candidates live under capture tasks — one step asking for both left the
+// navigation hop unmentioned and unreachable.
 //
 // Steps 6 and 7 continue inside Recall on purpose: deciding a candidate only
 // shows the intake side of the loop, so the tour then walks to where confirmed
@@ -98,20 +98,16 @@ const TOUR_STEPS = [
     },
   },
   {
-    // Recall opens on the `overview` page, but candidate cards live under
-    // deposition/candidates — so "click Recall then review a candidate" had an
-    // unmentioned navigation hop in the middle and could never complete.
-    // Overview already renders a link to the candidate list whenever candidates
-    // are pending, so anchor to that instead of inventing a new entry point.
+    // Recall opens on the overview page, while candidate actions live under
+    // capture tasks. Anchor to a real formal-candidate action after the user
+    // navigates, and fall back to the existing captures link on the overview.
     id: 'recall-review',
     title: '候选认知，你说了算',
     description: '候选只是建议，不是结论。进入候选列表，确认或拒绝任意一条——只有你点头的才会留下。',
     resolveTarget: () => (
-      // Once the user has navigated, the overview link is gone and the decision
-      // buttons are on screen — follow them so the card stops pointing at a
-      // stale rect.
-      document.querySelector('#panel-recall [data-cognition-candidate-action]')
-      || document.querySelector('#panel-recall [data-cognition-page-link="deposition"][data-cognition-deposition-target="candidates"]')
+      document.querySelector('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')
+      || document.querySelector('#panel-recall [data-cognition-page-link="captures"]')
+      || document.querySelector('#panel-recall .skills-cognition-tab[data-cognition-page="captures"]')
     ),
     position: 'bottom',
     checkComplete: () => {
@@ -274,6 +270,11 @@ function _setupTourListeners() {
     if (!_tourState || _tourState.completed) return;
     const node = event.target;
     if (!node || typeof node.closest !== 'function') return;
+    if (node.closest('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')) {
+      _tourState.recallReviewed = true;
+      _checkStepComplete();
+      return;
+    }
     if (node.closest('#panel-recall .skills-cognition-tab[data-cognition-page="assets"], #panel-recall [data-cognition-page-link="assets"]')) {
       _tourState.assetsOpened = true;
       _checkStepComplete();
