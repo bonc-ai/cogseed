@@ -51,7 +51,7 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   return out;
 }
 
-describe('Mate OpenAI-compatible Model Provider', () => {
+describe('CogSeed OpenAI-compatible Model Provider', () => {
   it('posts a scoped streaming request and aggregates fragmented tool calls', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const provider = createMateOpenAICompatibleProvider({

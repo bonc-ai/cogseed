@@ -196,14 +196,15 @@ describe('model authorization pure wizard state', () => {
       models: [{ id: 'a' }, { id: 'b' }],
     });
 
-    expect(flow.buildCompletionPayload(draft)).toMatchObject({
+    expect(flow.buildCompletionPayload(draft)).toEqual(expect.objectContaining({
       authType: 'api_key',
-      providerKind: 'builtin',
+      providerKind: 'custom',
       source: 'ccswitch',
+      draftId: 'draft-1',
       requestId: 'draft-1',
       selectedModels: ['a'],
       defaultModel: 'a',
-    });
+    }));
   });
 
   it('steps back through the active flow without discarding entered data', () => {

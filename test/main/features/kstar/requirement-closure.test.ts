@@ -59,6 +59,34 @@ async function seedRequirement() {
   return { store, task, requirement };
 }
 
+async function seedWorldModelForecast(requirementId: string): Promise<string> {
+  const { saveWorldModelForecast } = await import('../../../../src/main/features/recall/world-model');
+  const record = {
+    schemaVersion: 1,
+    ownerId: 'user-a',
+    id: 'wf-test-forecast',
+    taskRunId: 'task-a',
+    requirementId,
+    input: {
+      k: { abilityAssetRefs: [], rules: [] },
+      s: { conversationSummary: 'Fix OAuth callback and verify login succeeds' },
+      t: { userGoal: 'Fix OAuth callback and verify login succeeds', constraints: [] },
+    },
+    forecast: {
+      aHat: { plan: ['write_file'], expectedTools: ['write_file'], expectedActors: ['commander'] },
+      rHat: {
+        summary: 'Fixed the OAuth callback and wrote the regression test.',
+        acceptanceSignals: [],
+        predictedFiles: ['src/auth/callback.ts', 'test/auth/callback.test.ts'],
+      },
+      predictedRisks: [],
+    },
+    createdAt: '2026-08-09T00:00:00.000Z',
+  };
+  await saveWorldModelForecast('user-a', record as any);
+  return record.id;
+}
+
 describe('KSTAR requirement closure', () => {
   it('computes weighted PRM score with the Phase 2 weights', async () => {
     const closure = await import('../../../../src/main/features/kstar/requirement-closure');
@@ -80,7 +108,7 @@ describe('KSTAR requirement closure', () => {
     await expect(store.readKstarRequirement('user-a', requirement.id)).resolves.toMatchObject({ status: 'closed' });
   });
 
-  it('derives a provisional learning signal from an actual completed result without user feedback', async () => {
+  it('does not fabricate a met_expected signal without a configured model', async () => {
     const { store, requirement } = await seedRequirement();
     await writeCompletedEpisode();
     const closure = await import('../../../../src/main/features/kstar/requirement-closure');
@@ -88,11 +116,12 @@ describe('KSTAR requirement closure', () => {
     const closed = await closure.closeKstarRequirement('user-a', { requirementId: requirement.id });
 
     expect(closed.prmReview).toMatchObject({
-      actualResult: expect.stringContaining('Fixed the OAuth callback'),
-      outcome: 'met_expected',
-      deltaR: 0,
+      outcome: 'unclear',
+      deltaR: 'unknown',
+      deltaA: 'unknown',
+      confidence: 0,
     });
-    expect(closed.aar?.candidateSeed).toEqual(expect.stringContaining('Fixed the OAuth callback'));
+    expect(closed.aar?.candidateSeed).toBeUndefined();
   });
 
   it('uses conservative unknown scoring when no subjective feedback exists', async () => {
@@ -105,9 +134,12 @@ describe('KSTAR requirement closure', () => {
     expect(closed.aar?.candidateSeed).toBeUndefined();
   });
 
-  it('re-evaluates a previously unclear closed review when completion evidence becomes available', async () => {
-    const { requirement } = await seedRequirement();
+  it('re-evaluates a previously unclear closed review when completion evidence and a world-model forecast become available', async () => {
+    const { store, requirement } = await seedRequirement();
+    const forecastId = await seedWorldModelForecast(requirement.id);
+    await store.replaceKstarRequirement('user-a', { ...requirement, forecastId });
     const closure = await import('../../../../src/main/features/kstar/requirement-closure');
+
     const first = await closure.closeKstarRequirement('user-a', { requirementId: requirement.id });
     expect(first.prmReview?.deltaR).toBe('unknown');
 

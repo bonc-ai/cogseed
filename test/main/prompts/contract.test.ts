@@ -314,7 +314,7 @@ describe('prompts ↔ code contract', () => {
     // task size.
     expect(commanderPrompt).toMatch(/Keep outcomes separate/i);
     expect(commanderPrompt).toMatch(/Multiple independent outcomes with different high-confidence owners/i);
-    expect(commanderPrompt).toMatch(/named `run_worker\(\{ to, task \}\)`/i);
+    expect(commanderPrompt).toMatch(/Multiple independent outcomes[\s\S]+`dispatch_to`/i);
     expect(commanderPrompt).toMatch(/SINGLE response/i);
     expect(commanderPrompt).toMatch(/run concurrently/i);
     expect(commanderPrompt).toMatch(/outcome diversity, not just task size/i);
@@ -328,9 +328,8 @@ describe('prompts ↔ code contract', () => {
     // Dependent chains: one step at a time, deciding the next from the last.
     expect(commanderPrompt).toMatch(/one at a time/i);
     expect(commanderPrompt).toMatch(/decide and run the next/i);
-    // Independent sub-tasks fan out by emitting all run_worker calls in a single
-    // response so they run concurrently (G4 partitioner; the executionMode fix
-    // makes plain run_worker actually parallelize).
+    // Independent formal-Agent sub-tasks fan out through dispatch_to; anonymous
+    // run_worker remains reserved for internal read-only helper work.
     expect(commanderPrompt).toMatch(/single response/i);
     expect(commanderPrompt).toMatch(/concurrently/i);
     // Decoupling is the delegation gate: only cleanly-separable work is delegated;
@@ -345,8 +344,10 @@ describe('prompts ↔ code contract', () => {
     const commanderPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_commander.md'), 'utf-8');
     const bus = readFile('src/main/features/group_chat/bus.ts');
 
-    expect(commanderPrompt).toMatch(/Calling an anonymous worker is delegation, not self-execution/i);
+    expect(commanderPrompt).toMatch(/anonymous[^\n]+run_worker[^\n]+read-only/i);
     expect(commanderPrompt).toMatch(/does not inherit your skills or evolving context/i);
+    expect(commanderPrompt).toMatch(/named `run_worker`[^\n]+forbidden/i);
+    expect(commanderPrompt).toMatch(/formal Agent[^\n]+`dispatch_to`/i);
     expect(commanderPrompt).toMatch(/user explicitly requires you to do the work yourself/i);
     expect(commanderPrompt).toMatch(/fallback for an unavailable agent/i);
     expect(commanderPrompt).toMatch(/coupled milestone chain/i);
@@ -359,7 +360,7 @@ describe('prompts ↔ code contract', () => {
     expect(bus).not.toMatch(/your own hands|commander(?:\\'|')s hands/i);
   });
 
-  it('commander prompt makes hand_off_to the default for a single deliverable, dispatch_to the next-action exception', () => {
+  it('commander prompt reserves hand_off_to for explicit user-requested takeover', () => {
     const commanderPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_commander.md'), 'utf-8');
 
     // hand_off_to is taught as a distinct tool that ends the turn without re-summary.
@@ -369,28 +370,26 @@ describe('prompts ↔ code contract', () => {
     // concrete NEXT action in the same turn (another dispatch / tool call /
     // multi-result synthesis) — NOT to present/bless a reply that already stands.
     expect(commanderPrompt).toMatch(/commits you to a concrete NEXT action|another dispatch, a tool call, or a synthesis/i);
-    // hand_off_to is the DEFAULT for a single agent's finished deliverable.
-    expect(commanderPrompt).toMatch(/default for a single agent's finished deliverable/i);
+    // hand_off_to is reserved for explicit user takeover; ordinary formal work uses dispatch_to.
+    expect(commanderPrompt).toMatch(/hand_off_to[^\n]+only when the user explicitly requests/i);
+    expect(commanderPrompt).toMatch(/formal Agent[^\n]+dispatch_to/i);
     // The decision is a pre-dispatch procedural litmus: name the next action; if
     // there is none (only deliver/restate the reply) → hand_off.
-    expect(commanderPrompt).toMatch(/Name that next action before you dispatch/i);
-    expect(commanderPrompt).toMatch(/redundant re-summary to avoid/i);
-    // The teach/coach/guide-with-me case must point at hand_off, not dispatch.
+    expect(commanderPrompt).toMatch(/Commander retains coordination control/i);
+    // Interactive agents still use dispatch_to unless the user explicitly asks them to take over.
     expect(commanderPrompt).toMatch(/teach|coach|guide|walk me through/i);
     expect(commanderPrompt).toMatch(/blocking part of a broader commander-owned task/i);
     expect(commanderPrompt).toMatch(/A good `resume` says exactly what remains/i);
   });
 
-  it('commander prompt makes the last requested Agent in a dependent chain the terminal delivery', () => {
+  it('commander prompt keeps dependent formal-Agent chains under Commander control', () => {
     const commanderPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_commander.md'), 'utf-8');
     const bus = readFile('src/main/features/group_chat/bus.ts');
 
-    expect(commanderPrompt).toMatch(/intermediate agents?[^\n]+`dispatch_to`/i);
-    expect(commanderPrompt).toMatch(/last requested agent[^\n]+`hand_off_to`/i);
-    expect(commanderPrompt).toMatch(/do not append a separate[^\n]+synthesis[^\n]+delivery step/i);
+    expect(commanderPrompt).toMatch(/dependent[^\n]+formal Agent[^\n]+`dispatch_to`/i);
+    expect(commanderPrompt).toMatch(/Commander[^\n]+final synthesis/i);
     expect(commanderPrompt).toMatch(/reviewed, edited, validated, or saved the final deliverable/i);
-    expect(bus).toMatch(/last requested agent[^\n]+hand_off_to/i);
-    expect(bus).toMatch(/Do not create a trailing Commander summary/i);
+    expect(bus).toMatch(/formal Agent[^\n]+dispatch_to/i);
   });
 
   it('commander owns one terminal KSTAR validation instead of per-Agent gates', () => {

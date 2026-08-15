@@ -19,7 +19,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({ shell: { openExternal: mocks.shellOpenExternal } }));
 vi.mock('../../../../src/main/features/users', () => ({ getActiveUserId: mocks.getActiveUserId }));
-vi.mock('../../../../src/main/paths', () => ({ userLocalConfigDir: () => mocks.tmpConfigDir }));
+vi.mock('../../../../src/main/paths', () => ({
+  userLocalConfigDir: () => mocks.tmpConfigDir,
+  WS_ROOT: mocks.tmpConfigDir,
+}));
 
 vi.mock('../../../../src/main/features/hub_account/account-events', () => ({
   broadcastHubLoginOutcome: (...args: unknown[]) => mocks.broadcastHubLoginOutcome(...args),

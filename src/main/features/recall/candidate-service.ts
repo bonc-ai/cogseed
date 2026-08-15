@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { genId12, safeId } from '../../storage';
+import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { recallJsonRecordPath } from './paths';
 import {
   readRecallJsonRecord,
@@ -11,19 +12,62 @@ import {
   writeRecallJsonRecord,
 } from './store';
 import type { RecallJsonRecord } from './types';
-import type { KstarLearningSignal } from '../kstar/types';
+import type { KstarLearningProvenance, KstarLearningSignal } from '../kstar/types';
+import type { CausalRule } from './world-model-types';
+import { normalizeCausalRule } from './world-model-types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
+import {
+  readAbilityAssetRelationContract,
+  type AbilityAssetRelation,
+  type AbilityAssetRelationContract,
+} from './asset-relations';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
-import { initializeAbilityAsset } from './asset-service';
+import {
+  readAbilityAssetSemantics,
+  type AbilityAssetSemantics,
+  type AbilityAssetSensitivity,
+} from './asset-semantics';
+import {
+  createAbilityAsset,
+  listAbilityAssetVersions,
+  pauseAbilityAsset,
+  readAbilityAsset,
+  updateAbilityAsset,
+  type AbilityAssetActor,
+} from './asset-service';
+import { evaluateCandidate, isCandidateBlocked } from '../cognition/gate';
+import { isCognitionSourceEnabled } from './source-control';
+import {
+  readReviewDecision,
+  recordReviewDecisionOutcome,
+  writeReviewDecision,
+  type ReviewDecision,
+} from '../cognition/review-decision';
 import {
   cognitionSourceRefKey,
   normalizeCognitionSourceRefs,
   normalizeCognitionSourceRefsForWrite,
   type CognitionSourceRef,
+  type CognitionSourceType,
 } from './source-service';
 
-export type RecallCandidateStatus = 'pending' | 'deferred' | 'rejected' | 'promoted';
+export type RecallCandidateStatus =
+  | 'observed'
+  | 'weak_observation'
+  | 'pending_review'
+  | 'deferred'
+  | 'confirmed'
+  | 'rejected'
+  | 'ignored'
+  | 'expired'
+  | 'failed';
 export type AbilityAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
+export type RecallCandidateAction = 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
+export type RecallCandidateRisk = 'low' | 'medium' | 'high';
+export type RecallAbilityAssetLifecycleStatus = 'user_confirmed_unverified' | 'automatically_extracted_unverified';
+
+const DEFAULT_CANDIDATE_TTL_MS = 90 * 24 * 60 * 60 * 1_000;
+const DEFAULT_DEFER_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1_000;
 
 
 export interface RecallCandidateRecord extends RecallJsonRecord {
@@ -31,15 +75,30 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   taxonomyVersion: 2;
   status: RecallCandidateStatus;
   judgment: string;
+  /** Why retaining this cognition will be useful in later work. */
+  value: string;
   summary?: string;
   uncertainty?: string;
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   sourceRefs: CognitionSourceRef[];
+  evidenceRefs: CognitionSourceRef[];
+  suggestedAction: RecallCandidateAction;
+  risk: RecallCandidateRisk;
   learningSignal?: KstarLearningSignal;
+  learningProvenance?: KstarLearningProvenance;
   captureKey?: string;
   promotedAssetId?: string;
+  reviewDecisionId?: string;
   decisionNote?: string;
+  cooldownUntil?: string;
+  expiresAt: string;
+  taskRunId?: string;
+  targetAssetId?: string;
+  failureCode?: 'asset_write_failed' | 'source_unavailable' | 'candidate_expired' | 'evidence_insufficient';
+  failureMessage?: string;
+  failedAt?: string;
+  userModifiedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -47,33 +106,106 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
 export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   id: string;
   candidateId: string;
+  sourceCandidateIds?: string[];
+  appliedReviewDecisionIds?: string[];
+  reviewDecisionId: string;
   type: AbilityAssetType;
   title: string;
   statement: string;
   evidenceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
+  learningProvenance?: KstarLearningProvenance;
+  /** R-Box causal rule frozen from a delta_r lesson (world-model ontology). */
+  causalRule?: CausalRule;
   ontologyRefs?: AbilityAssetOntologyRef[];
+  relations?: AbilityAssetRelation[];
+  derivedFrom?: string[];
+  /** 适用/禁用条件。缺失=没记录过，**不是**「无限制」。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
+  /** 缺失=没分过级，不等于 L0。 */
+  sensitivity?: AbilityAssetSensitivity;
+  /** 用户显式确认过「这条可以跨作用域使用」的时间。
+   *
+   *  规范 10.2 里跨作用域是 confirm 档——既然规范要求「确认」，系统就得有地方
+   *  记下确认发生过，否则那一档永远停在等待里。缺失=没确认过，不是拒绝过。 */
+  crossScopeConfirmedAt?: string;
   scope: string;
   scopePolicy?: RecallAbilityAssetScopePolicy;
   recommendedAction?: 'pause' | 'rework';
   recommendationReason?: string;
   recommendationAt?: string;
-  status: 'active' | 'paused' | 'revoked';
-  maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
+  status: 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked';
+  lifecycleStatus: RecallAbilityAssetLifecycleStatus;
+  maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable';
+  deletedAt?: string;
+  purgedAt?: string;
   version: string;
+  /** Provenance for assets learned from conversation sources. */
+  sourceSessionIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
 
 export interface SaveRecallCandidateInput {
   judgment: string;
+  value?: string;
   summary?: string;
   uncertainty?: string;
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   sourceRefs: unknown[];
+  evidenceRefs?: unknown[];
+  suggestedAction?: RecallCandidateAction;
+  risk?: RecallCandidateRisk;
+  expiresAt?: string;
+  taskRunId?: string;
+  targetAssetId?: string;
   learningSignal?: KstarLearningSignal;
+  learningProvenance?: KstarLearningProvenance;
   captureKey?: string;
+  /** Internal extraction gate: preserve evidence without creating user review work. */
+  forceWeakObservation?: boolean;
+}
+
+export interface RecallAssetHandoffReceipt {
+  assetId: string;
+  assetType: AbilityAssetType;
+  version: string;
+  lifecycleStatus: RecallAbilityAssetLifecycleStatus;
+  scope: string;
+  sourceRefs: CognitionSourceRef[];
+  reviewDecisionId: string;
+}
+
+interface StoredRecallAssetHandoffReceipt extends RecallJsonRecord, RecallAssetHandoffReceipt {
+  id: string;
+  candidateId: string;
+  createdAt: string;
+}
+
+export interface PromoteRecallCandidateOptions extends AbilityAssetSemantics {
+  actor?: AbilityAssetActor;
+  ontologyRefs?: AbilityAssetOntologyRef[];
+  scopePolicy?: RecallAbilityAssetScopePolicy;
+  decisionType?: 'accept' | 'modify';
+  decisionId?: string;
+  decisionReason?: string;
+  riskAcknowledged?: boolean;
+  /** R-Box causal rule; only activated when explicitly supplied by the user. */
+  causalRule?: CausalRule;
+}
+
+const MAX_SOURCE_SESSION_IDS = 50;
+
+function sourceSessionIdsFrom(refs: CognitionSourceRef[]): string[] {
+  const ids: string[] = [];
+  for (const ref of refs) {
+    if (ref.kind !== 'conversation' || ids.includes(ref.id)) continue;
+    ids.push(ref.id);
+    if (ids.length >= MAX_SOURCE_SESSION_IDS) break;
+  }
+  return ids;
 }
 
 function boundedText(value: unknown, field: string, max: number, required = false): string | undefined {
@@ -95,6 +227,132 @@ function requireAssetType(value: unknown): AbilityAssetType {
   throw new Error('invalid suggested type');
 }
 
+function requireCandidateAction(value: unknown): RecallCandidateAction {
+  if (value === undefined) return 'create';
+  if (value === 'create' || value === 'update' || value === 'limit_scope' || value === 'pause' || value === 'keep_current' || value === 'reject') return value;
+  throw new Error('invalid suggested action');
+}
+
+function requireCandidateRisk(value: unknown): RecallCandidateRisk {
+  if (value === undefined) return 'low';
+  if (value === 'low' || value === 'medium' || value === 'high') return value;
+  throw new Error('invalid candidate risk');
+}
+
+function requireAssetLifecycleStatus(value: unknown): RecallAbilityAssetLifecycleStatus {
+  if (value === 'user_confirmed_unverified' || value === 'automatically_extracted_unverified') return value;
+  throw new Error('malformed recall asset handoff receipt lifecycle');
+}
+
+function normalizeCandidateStatus(value: unknown): RecallCandidateStatus {
+  if (value === 'pending') return 'pending_review';
+  if (value === 'promoted') return 'confirmed';
+  if (value === 'observed' || value === 'weak_observation' || value === 'pending_review'
+    || value === 'deferred' || value === 'confirmed' || value === 'rejected'
+    || value === 'ignored' || value === 'expired' || value === 'failed') return value;
+  throw new Error('malformed recall candidate');
+}
+
+function isTerminalCandidate(status: RecallCandidateStatus): boolean {
+  return status === 'confirmed' || status === 'rejected' || status === 'ignored' || status === 'expired';
+}
+
+function isSuppressedTerminalCandidate(status: RecallCandidateStatus): boolean {
+  return status === 'rejected' || status === 'ignored' || status === 'expired';
+}
+
+export function isRecallCandidateReviewable(candidate: Pick<RecallCandidateRecord, 'status'>): boolean {
+  return candidate.status === 'pending_review' || candidate.status === 'failed';
+}
+
+function requireIsoTimestamp(value: unknown, field: string, fallback?: string): string {
+  const text = typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  if (!text || !Number.isFinite(Date.parse(text))) throw new Error(`invalid ${field}`);
+  return new Date(text).toISOString();
+}
+
+
+const KSTAR_ATTRIBUTIONS = new Set<KstarLearningProvenance['attribution']>([
+  'knowledge_gap', 'rule_gap', 'template_gap', 'skill_gap', 'execution_gap', 'unclear',
+]);
+
+function normalizedStringArray(value: unknown, field: string, maxItems = 100): string[] {
+  if (!Array.isArray(value) || value.length > maxItems) throw new Error(`malformed candidate learning provenance ${field}`);
+  return value.map((item) => {
+    if (typeof item !== 'string') throw new Error(`malformed candidate learning provenance ${field}`);
+    const text = item.replace(/\s+/g, ' ').trim();
+    if (!text || text.length > 500) throw new Error(`malformed candidate learning provenance ${field}`);
+    return text;
+  });
+}
+
+function normalizeActionDelta(value: unknown): KstarLearningProvenance['actionDelta'] {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning provenance action delta');
+  const record = value as Record<string, unknown>;
+  if (typeof record.orderMismatch !== 'boolean') throw new Error('malformed candidate learning provenance action delta');
+  return {
+    missingTools: normalizedStringArray(record.missingTools, 'missing tools'),
+    unexpectedTools: normalizedStringArray(record.unexpectedTools, 'unexpected tools'),
+    missingActors: normalizedStringArray(record.missingActors, 'missing actors'),
+    unexpectedActors: normalizedStringArray(record.unexpectedActors, 'unexpected actors'),
+    missingPlanSteps: normalizedStringArray(record.missingPlanSteps, 'missing plan steps'),
+    extraActions: normalizedStringArray(record.extraActions, 'extra actions'),
+    failedActions: normalizedStringArray(record.failedActions, 'failed actions'),
+    orderMismatch: record.orderMismatch,
+  };
+}
+
+function normalizeResultDelta(value: unknown): KstarLearningProvenance['resultDelta'] {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning provenance result delta');
+  const record = value as Record<string, unknown>;
+  if (!['completed', 'failed', 'cancelled', 'waiting_input'].includes(String(record.terminalStatus))) {
+    throw new Error('malformed candidate learning provenance result delta');
+  }
+  if (!Array.isArray(record.acceptanceSignals) || record.acceptanceSignals.length > 100) {
+    throw new Error('malformed candidate learning provenance acceptance signals');
+  }
+  const acceptanceSignals = record.acceptanceSignals.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('malformed candidate learning provenance acceptance signal');
+    const signal = item as Record<string, unknown>;
+    if (!['met', 'not_met', 'unknown'].includes(String(signal.status))) throw new Error('malformed candidate learning provenance acceptance signal');
+    const normalizedSignal = boundedText(signal.signal, 'learning provenance acceptance signal', 500, true)!;
+    const evidence = boundedText(signal.evidence, 'learning provenance acceptance evidence', 2_000, true)!;
+    return { signal: normalizedSignal, status: signal.status as 'met' | 'not_met' | 'unknown', evidence };
+  });
+  return {
+    acceptanceSignals,
+    missingPredictedFiles: normalizedStringArray(record.missingPredictedFiles, 'missing predicted files'),
+    unexpectedProducedFiles: normalizedStringArray(record.unexpectedProducedFiles, 'unexpected produced files'),
+    terminalStatus: record.terminalStatus as 'completed' | 'failed' | 'cancelled' | 'waiting_input',
+  };
+}
+
+function normalizeLearningProvenance(value: unknown): KstarLearningProvenance | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning provenance');
+  const record = value as Record<string, unknown>;
+  if (!safeId(record.projectionId) || !safeId(record.forecastId) || !safeId(record.episodeId)) {
+    throw new Error('malformed candidate learning provenance ids');
+  }
+  if (!KSTAR_ATTRIBUTIONS.has(record.attribution as KstarLearningProvenance['attribution'])) {
+    throw new Error('malformed candidate learning provenance attribution');
+  }
+  const ruleRefs = normalizedStringArray(record.ruleRefs, 'rule refs');
+  if (ruleRefs.some((ref) => !/^[A-Za-z0-9:_-]+$/.test(ref))) throw new Error('malformed candidate learning provenance rule refs');
+  const actionDelta = normalizeActionDelta(record.actionDelta);
+  const resultDelta = normalizeResultDelta(record.resultDelta);
+  return {
+    projectionId: record.projectionId as string,
+    forecastId: record.forecastId as string,
+    episodeId: record.episodeId as string,
+    ruleRefs,
+    attribution: record.attribution as KstarLearningProvenance['attribution'],
+    ...(actionDelta ? { actionDelta } : {}),
+    ...(resultDelta ? { resultDelta } : {}),
+  };
+}
 
 function normalizeLearningSignal(value: unknown): KstarLearningSignal | undefined {
   if (value === undefined) return undefined;
@@ -114,7 +372,6 @@ function normalizeLearningSignal(value: unknown): KstarLearningSignal | undefine
 
 function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
   if (
-    (value.status !== 'pending' && value.status !== 'deferred' && value.status !== 'rejected' && value.status !== 'promoted') ||
     typeof value.judgment !== 'string' ||
     typeof value.suggestedType !== 'string' ||
     typeof value.suggestedScope !== 'string' ||
@@ -122,10 +379,41 @@ function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
     typeof value.createdAt !== 'string' ||
     typeof value.updatedAt !== 'string'
   ) throw new Error('malformed recall candidate');
+  const storedStatus = normalizeCandidateStatus(value.status);
+  const cooldownUntil = value.cooldownUntil === undefined
+    ? undefined
+    : requireIsoTimestamp(value.cooldownUntil, 'candidate cooldown');
+  const status = storedStatus === 'deferred' && cooldownUntil !== undefined && Date.parse(cooldownUntil) <= Date.now()
+    ? 'pending_review'
+    : storedStatus;
   const sourceRefs = normalizeCognitionSourceRefs(value.sourceRefs);
-  if (!sourceRefs.length) throw new Error('malformed recall candidate evidence');
+  const evidenceRefs = Array.isArray(value.evidenceRefs)
+    ? normalizeCognitionSourceRefs(value.evidenceRefs)
+    : sourceRefs;
+  if ((!sourceRefs.length || !evidenceRefs.length) && status !== 'observed' && status !== 'weak_observation') {
+    throw new Error('malformed recall candidate evidence');
+  }
   const learningSignal = normalizeLearningSignal(value.learningSignal);
-  return { ...value, taxonomyVersion: 2, sourceRefs, ...(learningSignal ? { learningSignal } : {}) } as RecallCandidateRecord;
+  const learningProvenance = normalizeLearningProvenance(value.learningProvenance);
+  const createdAt = requireIsoTimestamp(value.createdAt, 'candidate created at');
+  const candidateValue = Object.prototype.hasOwnProperty.call(value, 'value')
+    ? (boundedText(value.value, 'candidate value', 1_000) || '')
+    : (boundedText(value.summary, 'candidate summary', 1_000) || value.judgment);
+  return {
+    ...value,
+    taxonomyVersion: 2,
+    status,
+    value: candidateValue,
+    suggestedType: requireAssetType(value.suggestedType),
+    suggestedAction: requireCandidateAction(value.suggestedAction),
+    risk: requireCandidateRisk(value.risk),
+    sourceRefs,
+    evidenceRefs,
+    ...(cooldownUntil ? { cooldownUntil } : {}),
+    expiresAt: requireIsoTimestamp(value.expiresAt, 'candidate expiry', new Date(Date.parse(createdAt) + DEFAULT_CANDIDATE_TTL_MS).toISOString()),
+    ...(learningSignal ? { learningSignal } : {}),
+    ...(learningProvenance ? { learningProvenance } : {}),
+  } as RecallCandidateRecord;
 }
 
 function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
@@ -137,17 +425,61 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   const evidenceRefs = normalizeCognitionSourceRefs(value.evidenceRefs);
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
   const learningSignal = normalizeLearningSignal(value.learningSignal);
+  const learningProvenance = normalizeLearningProvenance(value.learningProvenance);
+  const causalRule = value.causalRule === undefined ? undefined : normalizeCausalRule(value.causalRule);
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
+  const relationContract = readAbilityAssetRelationContract(value, value.id);
   const scopePolicy = normalizeAbilityAssetScopePolicy(value.scopePolicy);
-  return { ...value, evidenceRefs, ...(learningSignal ? { learningSignal } : {}), ...(ontologyRefs ? { ontologyRefs } : {}), ...(scopePolicy ? { scopePolicy } : {}) } as RecallAbilityAssetRecord;
+  return {
+    ...value,
+    reviewDecisionId: typeof value.reviewDecisionId === 'string' ? value.reviewDecisionId : 'legacy-untracked',
+    lifecycleStatus: value.lifecycleStatus === 'automatically_extracted_unverified'
+      ? 'automatically_extracted_unverified'
+      : 'user_confirmed_unverified',
+    evidenceRefs,
+    ...(learningSignal ? { learningSignal } : {}),
+    ...(learningProvenance ? { learningProvenance } : {}),
+    ...(causalRule ? { causalRule } : {}),
+    ...(ontologyRefs ? { ontologyRefs } : {}),
+    ...relationContract,
+    ...(scopePolicy ? { scopePolicy } : {}),
+  } as RecallAbilityAssetRecord;
 }
 
 function candidateDirectory(userId: string): string {
   return path.dirname(recallJsonRecordPath(userId, 'candidates', 'placeholder'));
 }
 
-function fingerprint(input: Pick<RecallCandidateRecord, 'judgment' | 'sourceRefs'>): string {
-  return `${input.judgment.toLocaleLowerCase()}\n${input.sourceRefs.map(cognitionSourceRefKey).sort().join('\n')}`;
+function fingerprint(input: Pick<RecallCandidateRecord, 'judgment' | 'value' | 'suggestedType' | 'suggestedScope' | 'suggestedAction' | 'targetAssetId'>): string {
+  return [input.judgment, input.value, input.suggestedType, input.suggestedScope, input.suggestedAction, input.targetAssetId || '']
+    .map((part) => part.trim().toLocaleLowerCase()).join('\n');
+}
+
+function mergeSourceRefs(left: CognitionSourceRef[], right: CognitionSourceRef[]): CognitionSourceRef[] {
+  return normalizeCognitionSourceRefsForWrite([...left, ...right]);
+}
+
+function hasNewSourceRefs(existing: CognitionSourceRef[], incoming: CognitionSourceRef[]): boolean {
+  const existingKeys = new Set(existing.map(cognitionSourceRefKey));
+  return incoming.some((ref) => !existingKeys.has(cognitionSourceRefKey(ref)));
+}
+
+function maxCandidateRisk(left: RecallCandidateRisk, right: RecallCandidateRisk): RecallCandidateRisk {
+  const rank: Record<RecallCandidateRisk, number> = { low: 0, medium: 1, high: 2 };
+  return rank[left] >= rank[right] ? left : right;
+}
+
+function isCandidateContentReviewReady(candidate: Pick<
+  RecallCandidateRecord,
+  'value' | 'sourceRefs' | 'evidenceRefs' | 'suggestedScope' | 'suggestedAction' | 'targetAssetId'
+>): boolean {
+  return Boolean(candidate.value) && candidate.sourceRefs.length > 0 && candidate.evidenceRefs.length > 0
+    && Boolean(candidate.suggestedScope)
+    && (!candidateActionNeedsTarget(candidate.suggestedAction) || Boolean(candidate.targetAssetId));
+}
+
+function candidateActionNeedsTarget(action: RecallCandidateAction): boolean {
+  return action === 'update' || action === 'limit_scope' || action === 'pause';
 }
 
 function candidateIdForCaptureKey(captureKey: string): string {
@@ -191,12 +523,29 @@ export async function importPersonalOntologyCandidate(userId: string, legacyCand
 
 export async function saveRecallCandidate(userId: string, input: SaveRecallCandidateInput): Promise<RecallCandidateRecord> {
   const judgment = boundedText(input.judgment, 'judgment', 4_000, true)!;
+  const value = boundedText(input.value, 'value', 1_000);
   const summary = boundedText(input.summary, 'summary', 1_000);
   const uncertainty = boundedText(input.uncertainty, 'uncertainty', 1_000);
-  const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500, true)!;
+  const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500) || '';
   const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
-  if (!sourceRefs.length) throw new Error('candidate evidence is required');
+  const evidenceRefs = normalizeCognitionSourceRefsForWrite(input.evidenceRefs || input.sourceRefs);
+  const suggestedType = requireAssetType(input.suggestedType);
+  const hasExplicitValue = Object.prototype.hasOwnProperty.call(input, 'value');
+  const hasExplicitAction = Object.prototype.hasOwnProperty.call(input, 'suggestedAction');
+  const suggestedAction = requireCandidateAction(input.suggestedAction);
+  const risk = requireCandidateRisk(input.risk);
   const learningSignal = normalizeLearningSignal(input.learningSignal);
+  const learningProvenance = normalizeLearningProvenance(input.learningProvenance);
+  assertNotForbiddenToPersist([
+    judgment,
+    value,
+    summary,
+    uncertainty,
+    JSON.stringify(sourceRefs),
+    JSON.stringify(evidenceRefs),
+    learningSignal ? JSON.stringify(learningSignal) : undefined,
+    learningProvenance ? JSON.stringify(learningProvenance) : undefined,
+  ]);
   const captureKey = input.captureKey === undefined
     ? undefined
     : boundedText(input.captureKey, 'capture key', 160, true);
@@ -205,25 +554,77 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
     const captured = (await listRecallCandidates(userId)).find((candidate) => candidate.captureKey === captureKey);
     if (captured) return captured;
   }
-  const candidateDraft = { judgment, sourceRefs } as Pick<RecallCandidateRecord, 'judgment' | 'sourceRefs'>;
-  const existing = (await listRecallCandidates(userId)).find((candidate) => fingerprint(candidate) === fingerprint(candidateDraft));
-  if (existing) return existing;
-
   const now = new Date().toISOString();
+  const resolvedValue = hasExplicitValue ? (value || '') : (summary || judgment);
+  const expiresAt = requireIsoTimestamp(input.expiresAt, 'candidate expiry', new Date(Date.parse(now) + DEFAULT_CANDIDATE_TTL_MS).toISOString());
+  const taskRunId = input.taskRunId === undefined ? undefined : boundedText(input.taskRunId, 'task run id', 160, true);
+  if (taskRunId && !safeId(taskRunId)) throw new Error('invalid task run id');
+  const targetAssetId = input.targetAssetId === undefined ? undefined : boundedText(input.targetAssetId, 'target asset id', 160, true);
+  if (targetAssetId && !safeId(targetAssetId)) throw new Error('invalid target asset id');
+  const candidateDraft = { judgment, value: resolvedValue, suggestedType, suggestedScope, suggestedAction, targetAssetId };
+  const reviewReady = input.forceWeakObservation !== true
+    && Boolean(resolvedValue) && sourceRefs.length > 0 && evidenceRefs.length > 0
+    && Boolean(suggestedScope) && (hasExplicitAction || !hasExplicitValue)
+    && (!candidateActionNeedsTarget(suggestedAction) || Boolean(targetAssetId));
+  const existing = (await listRecallCandidates(userId)).find((candidate) => {
+    if (fingerprint(candidate) !== fingerprint(candidateDraft)) return false;
+    const hasNewEvidence = hasNewSourceRefs(candidate.evidenceRefs, evidenceRefs);
+    const riskIncreased = maxCandidateRisk(candidate.risk, risk) !== candidate.risk;
+    if (isSuppressedTerminalCandidate(candidate.status)) return !hasNewEvidence && !riskIncreased;
+    if (candidate.status === 'confirmed') return !riskIncreased;
+    return true;
+  });
+  if (existing) {
+    const merged = await updateRecallJsonRecord(userId, 'candidates', existing.id, (current) => {
+      if (!current) return existing;
+      const candidate = asCandidate(current);
+      const hasNewEvidence = hasNewSourceRefs(candidate.evidenceRefs, evidenceRefs);
+      const riskIncreased = maxCandidateRisk(candidate.risk, risk) !== candidate.risk;
+      const shouldReopen = (hasNewEvidence || riskIncreased) && (
+        candidate.status === 'observed'
+        || candidate.status === 'weak_observation'
+        || candidate.status === 'deferred'
+        || candidate.status === 'failed'
+      );
+      return {
+        ...candidate,
+        sourceRefs: mergeSourceRefs(candidate.sourceRefs, sourceRefs),
+        evidenceRefs: mergeSourceRefs(candidate.evidenceRefs, evidenceRefs),
+        risk: maxCandidateRisk(candidate.risk, risk),
+        ...(shouldReopen ? {
+          status: reviewReady ? 'pending_review' : 'weak_observation',
+          cooldownUntil: undefined,
+          failureCode: undefined,
+          failureMessage: undefined,
+          failedAt: undefined,
+        } : {}),
+        updatedAt: now,
+      };
+    });
+    return asCandidate(merged);
+  }
   const record: RecallCandidateRecord = {
     schemaVersion: 1,
     taxonomyVersion: 2,
     ownerId: userId,
     id: captureKey ? candidateIdForCaptureKey(captureKey) : `cand-${genId12()}`,
-    status: 'pending',
+    status: reviewReady ? 'pending_review' : 'weak_observation',
     judgment,
+    value: resolvedValue,
     ...(summary ? { summary } : {}),
     ...(uncertainty ? { uncertainty } : {}),
-    suggestedType: requireAssetType(input.suggestedType),
+    suggestedType,
     suggestedScope,
     sourceRefs,
+    evidenceRefs,
+    suggestedAction,
+    risk,
     ...(learningSignal ? { learningSignal } : {}),
+    ...(learningProvenance ? { learningProvenance } : {}),
     ...(captureKey ? { captureKey } : {}),
+    ...(taskRunId ? { taskRunId } : {}),
+    ...(targetAssetId ? { targetAssetId } : {}),
+    expiresAt,
     createdAt: now,
     updatedAt: now,
   };
@@ -239,101 +640,714 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   return record;
 }
 
-async function transitionCandidate(
-  userId: string,
-  candidateId: string,
-  nextStatus: RecallCandidateStatus,
-  decisionNote?: string,
-): Promise<RecallCandidateRecord> {
+export async function updateRecallCandidate(userId: string, candidateId: string, input: SaveRecallCandidateInput): Promise<RecallCandidateRecord> {
+  const judgment = boundedText(input.judgment, 'judgment', 4_000, true)!;
+  const value = boundedText(input.value, 'value', 1_000);
+  const summary = boundedText(input.summary, 'summary', 1_000);
+  const uncertainty = boundedText(input.uncertainty, 'uncertainty', 1_000);
+  const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500) || '';
+  const suggestedType = requireAssetType(input.suggestedType);
+  const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
+  const evidenceRefs = normalizeCognitionSourceRefsForWrite(input.evidenceRefs || input.sourceRefs);
+  const currentCandidate = await readRecallCandidate(userId, candidateId);
+  if (currentCandidate.status === 'failed' && currentCandidate.reviewDecisionId) {
+    const appliedAsset = await readAppliedHandoffAsset(
+      userId,
+      currentCandidate,
+      currentCandidate.reviewDecisionId,
+    );
+    if (appliedAsset) {
+      throw new Error('candidate has an incomplete asset handoff; retry confirmation before editing');
+    }
+  }
+  const suggestedAction = input.suggestedAction === undefined
+    ? currentCandidate.suggestedAction
+    : requireCandidateAction(input.suggestedAction);
+  const risk = input.risk === undefined ? currentCandidate.risk : requireCandidateRisk(input.risk);
+  const learningSignal = normalizeLearningSignal(input.learningSignal);
+  const learningProvenance = normalizeLearningProvenance(input.learningProvenance);
+  assertNotForbiddenToPersist([
+    judgment,
+    value,
+    summary,
+    uncertainty,
+    JSON.stringify(sourceRefs),
+    JSON.stringify(evidenceRefs),
+    learningSignal ? JSON.stringify(learningSignal) : undefined,
+    learningProvenance ? JSON.stringify(learningProvenance) : undefined,
+  ]);
+  const duplicates = await listRecallCandidates(userId);
+  const hasExplicitValue = Object.prototype.hasOwnProperty.call(input, 'value');
+  const resolvedValue = hasExplicitValue ? (value || '') : (summary || currentCandidate.value || judgment);
+  const expiresAt = input.expiresAt === undefined
+    ? currentCandidate.expiresAt
+    : requireIsoTimestamp(input.expiresAt, 'candidate expiry');
+  const taskRunId = input.taskRunId === undefined
+    ? currentCandidate.taskRunId
+    : boundedText(input.taskRunId, 'task run id', 160, true);
+  if (taskRunId && !safeId(taskRunId)) throw new Error('invalid task run id');
+  const targetAssetId = input.targetAssetId === undefined
+    ? currentCandidate.targetAssetId
+    : boundedText(input.targetAssetId, 'target asset id', 160, true);
+  if (targetAssetId && !safeId(targetAssetId)) throw new Error('invalid target asset id');
+  const nextFingerprint = fingerprint({ judgment, value: resolvedValue, suggestedType, suggestedScope, suggestedAction, targetAssetId });
+  if (duplicates.some((candidate) => candidate.id !== candidateId && fingerprint(candidate) === nextFingerprint)) throw new Error('duplicate recall candidate');
+  const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, (raw) => {
+    if (!raw) throw new Error('recall candidate not found');
+    const current = asCandidate(raw);
+    if (isTerminalCandidate(current.status)) throw new Error('recall candidate is terminal');
+    const reviewReady = Boolean(resolvedValue) && sourceRefs.length > 0 && evidenceRefs.length > 0
+      && Boolean(suggestedScope) && (!candidateActionNeedsTarget(suggestedAction) || Boolean(targetAssetId));
+    const now = new Date().toISOString();
+    return {
+      ...current,
+      judgment,
+      value: resolvedValue,
+      ...(summary ? { summary } : {}),
+      ...(uncertainty ? { uncertainty } : {}),
+      suggestedType,
+      suggestedScope,
+      sourceRefs,
+      evidenceRefs,
+      suggestedAction,
+      risk,
+      expiresAt,
+      ...(taskRunId ? { taskRunId } : {}),
+      ...(targetAssetId ? { targetAssetId } : {}),
+      status: reviewReady ? 'pending_review' : 'weak_observation',
+      failureCode: undefined,
+      failureMessage: undefined,
+      failedAt: undefined,
+      promotedAssetId: undefined,
+      reviewDecisionId: undefined,
+      promotionErrorCode: undefined,
+      promotionErrorMessage: undefined,
+      promotionFailedAt: undefined,
+      userModifiedAt: now,
+      ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}),
+      ...(learningProvenance ? { learningProvenance } : current.learningProvenance ? { learningProvenance: current.learningProvenance } : {}),
+      updatedAt: now,
+    };
+  });
+  return asCandidate(updated);
+}
+
+export function deferRecallCandidate(userId: string, candidateId: string, note?: string): Promise<RecallCandidateRecord> {
+  return decideWithoutAsset(userId, candidateId, 'defer', 'deferred', note);
+}
+
+export async function resumeRecallCandidate(userId: string, candidateId: string): Promise<RecallCandidateRecord> {
   const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, (current) => {
     if (!current) throw new Error('recall candidate not found');
+    const storedStatus = normalizeCandidateStatus(current.status);
     const candidate = asCandidate(current);
-    if (candidate.status === 'rejected' || candidate.status === 'promoted') throw new Error('recall candidate is terminal');
-    if (nextStatus === 'promoted') throw new Error('use promoteRecallCandidate');
-    const note = boundedText(decisionNote, 'decision note', 1_000);
+    if (isTerminalCandidate(storedStatus)) throw new Error('recall candidate is terminal');
+    if (storedStatus !== 'deferred') throw new Error('only a deferred recall candidate can be resumed');
+    if (!isCandidateContentReviewReady(candidate)) throw new Error('candidate evidence is insufficient for review');
     return {
       ...candidate,
-      status: nextStatus,
-      ...(note ? { decisionNote: note } : {}),
+      status: 'pending_review',
+      cooldownUntil: undefined,
       updatedAt: new Date().toISOString(),
     };
   });
   return asCandidate(updated);
 }
 
-export async function updateRecallCandidate(userId: string, candidateId: string, input: SaveRecallCandidateInput): Promise<RecallCandidateRecord> {
-  const judgment = boundedText(input.judgment, 'judgment', 4_000, true)!;
-  const summary = boundedText(input.summary, 'summary', 1_000);
-  const uncertainty = boundedText(input.uncertainty, 'uncertainty', 1_000);
-  const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500, true)!;
-  const suggestedType = requireAssetType(input.suggestedType);
-  const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
-  if (!sourceRefs.length) throw new Error('candidate evidence is required');
-  const learningSignal = normalizeLearningSignal(input.learningSignal);
-  const duplicates = await listRecallCandidates(userId);
-  const nextFingerprint = fingerprint({ judgment, sourceRefs });
-  if (duplicates.some((candidate) => candidate.id !== candidateId && fingerprint(candidate) === nextFingerprint)) throw new Error('duplicate recall candidate');
-  const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, (raw) => {
-    if (!raw) throw new Error('recall candidate not found');
-    const current = asCandidate(raw);
-    if (current.status === 'rejected' || current.status === 'promoted') throw new Error('recall candidate is terminal');
-    return { ...current, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}), updatedAt: new Date().toISOString() };
+export function rejectRecallCandidate(userId: string, candidateId: string, note?: string): Promise<RecallCandidateRecord> {
+  return decideWithoutAsset(userId, candidateId, 'reject', 'rejected', note);
+}
+
+export function ignoreRecallCandidate(userId: string, candidateId: string, note?: string): Promise<RecallCandidateRecord> {
+  return decideWithoutAsset(userId, candidateId, 'ignore', 'ignored', note);
+}
+
+export function keepCurrentRecallCandidate(userId: string, candidateId: string, note?: string): Promise<RecallCandidateRecord> {
+  return decideWithoutAsset(userId, candidateId, 'keep_current', 'ignored', note);
+}
+
+async function decideWithoutAsset(
+  userId: string,
+  candidateId: string,
+  decisionType: 'defer' | 'reject' | 'ignore' | 'keep_current',
+  status: 'deferred' | 'rejected' | 'ignored',
+  note?: string,
+  actor: AbilityAssetActor = 'user',
+): Promise<RecallCandidateRecord> {
+  const decisionNote = boundedText(note, 'decision note', 1_000);
+  const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
+    if (!current) throw new Error('recall candidate not found');
+    const candidate = asCandidate(current);
+    if (isTerminalCandidate(candidate.status)) return candidate;
+    if (candidate.status === 'observed' || candidate.status === 'weak_observation') {
+      throw new Error('candidate evidence is insufficient for review');
+    }
+    await writeReviewDecision(userId, {
+      targetRef: `recall_candidate:${candidate.id}`,
+      decisionType,
+      decision: decisionType,
+      antecedentRef: candidate.id,
+      scope: candidate.suggestedScope,
+      reason: decisionNote,
+      actor,
+      idempotencyKey: `${decisionType}-${candidate.updatedAt}`,
+    });
+    return {
+      ...candidate,
+      status,
+      ...(decisionNote ? { decisionNote } : {}),
+      ...(status === 'deferred'
+        ? { cooldownUntil: new Date(Date.now() + DEFAULT_DEFER_COOLDOWN_MS).toISOString() }
+        : { cooldownUntil: undefined }),
+      updatedAt: new Date().toISOString(),
+    };
   });
   return asCandidate(updated);
 }
 
-export function deferRecallCandidate(userId: string, candidateId: string, note?: string): Promise<RecallCandidateRecord> {
-  return transitionCandidate(userId, candidateId, 'deferred', note);
+/** Apply an extracted candidate under the user's automatic-capture policy. */
+export async function autoApplyRecallCandidate(
+  userId: string,
+  candidateId: string,
+): Promise<{ candidate: RecallCandidateRecord; asset?: RecallAbilityAssetRecord }> {
+  const candidate = await readRecallCandidate(userId, candidateId);
+  if (candidate.status === 'confirmed') {
+    try {
+      const promoted = await promoteRecallCandidate(userId, candidate.id, { actor: 'system' });
+      return { candidate: promoted.candidate, asset: promoted.asset };
+    } catch (error) {
+      const retryable = await readRecallCandidate(userId, candidate.id);
+      if (retryable.status !== 'failed') throw error;
+      const recovered = await promoteRecallCandidate(userId, retryable.id, { actor: 'system' });
+      return { candidate: recovered.candidate, asset: recovered.asset };
+    }
+  }
+  if (!isRecallCandidateReviewable(candidate)) throw new Error('candidate is not ready for automatic capture');
+  if (candidate.risk === 'high') {
+    throw new Error('high-risk candidate requires an independent user risk gate');
+  }
+  const reason = 'automatic capture policy';
+  if (candidate.suggestedAction === 'reject') {
+    return { candidate: await decideWithoutAsset(userId, candidate.id, 'reject', 'rejected', reason, 'system') };
+  }
+  if (candidate.suggestedAction === 'keep_current') {
+    return { candidate: await decideWithoutAsset(userId, candidate.id, 'keep_current', 'ignored', reason, 'system') };
+  }
+  const promoted = await promoteRecallCandidate(userId, candidate.id, {
+    actor: 'system',
+    decisionType: 'accept',
+    decisionReason: reason,
+  });
+  return { candidate: promoted.candidate, asset: promoted.asset };
 }
 
-export function resumeRecallCandidate(userId: string, candidateId: string): Promise<RecallCandidateRecord> {
-  return transitionCandidate(userId, candidateId, 'pending');
+export async function batchPromoteRecallCandidates(
+  userId: string,
+  candidateIds: string[],
+): Promise<{ succeeded: Array<{ candidateId: string; assetId: string; reviewDecisionId: string }>; failed: Array<{ candidateId: string; error: string }> }> {
+  const succeeded: Array<{ candidateId: string; assetId: string; reviewDecisionId: string }> = [];
+  const failed: Array<{ candidateId: string; error: string }> = [];
+  for (const candidateId of [...new Set(candidateIds)]) {
+    try {
+      const candidate = await readRecallCandidate(userId, candidateId);
+      if (candidate.status !== 'pending_review') {
+        failed.push({ candidateId, error: 'candidate is not pending review' });
+        continue;
+      }
+      const result = await promoteRecallCandidate(userId, candidateId, { actor: 'user' });
+      succeeded.push({ candidateId, assetId: result.asset.id, reviewDecisionId: result.decision.decision_id });
+    } catch (error) {
+      failed.push({ candidateId, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { succeeded, failed };
 }
 
-export function rejectRecallCandidate(userId: string, candidateId: string, note?: string): Promise<RecallCandidateRecord> {
-  return transitionCandidate(userId, candidateId, 'rejected', note);
+async function unavailableCandidateSources(
+  userId: string,
+  refs: CognitionSourceRef[],
+): Promise<CognitionSourceRef[]> {
+  const checks = await Promise.all(refs.map(async (ref) => {
+    if (ref.taxonomyVersion !== 2) return undefined;
+    const enabled = await isCognitionSourceEnabled(userId, {
+      kind: ref.kind as CognitionSourceType,
+      id: ref.id,
+    });
+    return enabled ? undefined : ref;
+  }));
+  return checks.filter((ref): ref is CognitionSourceRef => Boolean(ref));
+}
+
+function confirmationIdempotencyKey(candidate: RecallCandidateRecord): string {
+  return `confirm-${createHash('sha256').update(JSON.stringify({
+    candidateId: candidate.id,
+    judgment: candidate.judgment,
+    value: candidate.value,
+    type: candidate.suggestedType,
+    scope: candidate.suggestedScope,
+    action: candidate.suggestedAction,
+    targetAssetId: candidate.targetAssetId,
+    evidence: candidate.evidenceRefs.map(cognitionSourceRefKey).sort(),
+  })).digest('hex').slice(0, 32)}`;
+}
+
+function createdAssetId(candidateId: string, reviewDecisionId: string): string {
+  return `aa-${createHash('sha256').update(`${candidateId}\n${reviewDecisionId}`).digest('hex').slice(0, 24)}`;
+}
+
+async function readAppliedHandoffAsset(
+  userId: string,
+  candidate: RecallCandidateRecord,
+  reviewDecisionId: string,
+): Promise<RecallAbilityAssetRecord | undefined> {
+  const assetId = candidate.suggestedAction === 'create'
+    ? createdAssetId(candidate.id, reviewDecisionId)
+    : candidate.targetAssetId || candidate.promotedAssetId;
+  if (!assetId) return undefined;
+  let asset: RecallAbilityAssetRecord;
+  try {
+    asset = await readAbilityAsset(userId, assetId);
+  } catch {
+    return undefined;
+  }
+  const belongsToCandidate = asset.candidateId === candidate.id
+    || asset.sourceCandidateIds?.includes(candidate.id);
+  if (!belongsToCandidate) return undefined;
+  if (candidate.suggestedAction === 'create') {
+    return asset.reviewDecisionId === reviewDecisionId ? asset : undefined;
+  }
+  return asset.reviewDecisionId === reviewDecisionId
+    || asset.appliedReviewDecisionIds?.includes(reviewDecisionId)
+    ? asset
+    : undefined;
+}
+
+function handoffReceipt(
+  asset: RecallAbilityAssetRecord,
+  reviewDecisionId = asset.reviewDecisionId,
+): RecallAssetHandoffReceipt {
+  return {
+    assetId: asset.id,
+    assetType: asset.type,
+    version: asset.version,
+    lifecycleStatus: asset.lifecycleStatus,
+    scope: asset.scope,
+    sourceRefs: asset.evidenceRefs,
+    reviewDecisionId,
+  };
+}
+
+function handoffReceiptId(candidateId: string, reviewDecisionId: string): string {
+  return `handoff-${createHash('sha256').update(`${candidateId}\n${reviewDecisionId}`).digest('hex').slice(0, 24)}`;
+}
+
+function asStoredHandoffReceipt(
+  value: RecallJsonRecord,
+  candidateId: string,
+  reviewDecisionId: string,
+): StoredRecallAssetHandoffReceipt {
+  if (
+    value.candidateId !== candidateId
+    || value.reviewDecisionId !== reviewDecisionId
+    || typeof value.assetId !== 'string'
+    || !safeId(value.assetId)
+    || typeof value.version !== 'string'
+    || !value.version.trim()
+    || typeof value.scope !== 'string'
+    || !value.scope.trim()
+    || !Array.isArray(value.sourceRefs)
+    || typeof value.createdAt !== 'string'
+  ) throw new Error('malformed recall asset handoff receipt');
+  const sourceRefs = normalizeCognitionSourceRefs(value.sourceRefs);
+  if (!sourceRefs.length) throw new Error('malformed recall asset handoff receipt sources');
+  return {
+    ...value,
+    candidateId,
+    reviewDecisionId,
+    assetId: value.assetId,
+    assetType: requireAssetType(value.assetType),
+    lifecycleStatus: requireAssetLifecycleStatus(value.lifecycleStatus),
+    version: value.version.trim(),
+    scope: value.scope.trim(),
+    sourceRefs,
+    createdAt: requireIsoTimestamp(value.createdAt, 'handoff receipt created at'),
+  } as StoredRecallAssetHandoffReceipt;
+}
+
+export async function readRecallAssetHandoffReceipt(
+  userId: string,
+  candidateId: string,
+  reviewDecisionId: string,
+): Promise<RecallAssetHandoffReceipt | undefined> {
+  if (!safeId(candidateId) || !/^rd_[A-Za-z0-9_-]{8,64}$/.test(reviewDecisionId)) {
+    throw new Error('invalid recall asset handoff receipt identity');
+  }
+  const stored = await readRecallJsonRecord(
+    userId,
+    'asset-handoff-receipts',
+    handoffReceiptId(candidateId, reviewDecisionId),
+  );
+  let receipt: StoredRecallAssetHandoffReceipt;
+  if (stored) {
+    receipt = asStoredHandoffReceipt(stored, candidateId, reviewDecisionId);
+  } else {
+    const candidateRecord = await readRecallJsonRecord(userId, 'candidates', candidateId);
+    if (!candidateRecord) return undefined;
+    const candidate = asCandidate(candidateRecord);
+    if (
+      candidate.status !== 'confirmed'
+      || candidate.reviewDecisionId !== reviewDecisionId
+      || !candidate.promotedAssetId
+    ) return undefined;
+    const assetRecord = await readRecallJsonRecord(userId, 'ability-assets', candidate.promotedAssetId);
+    if (!assetRecord) return undefined;
+    return recoverHandoffReceipt(userId, candidate, reviewDecisionId, asAsset(assetRecord));
+  }
+  return {
+    assetId: receipt.assetId,
+    assetType: receipt.assetType,
+    version: receipt.version,
+    lifecycleStatus: receipt.lifecycleStatus,
+    scope: receipt.scope,
+    sourceRefs: receipt.sourceRefs,
+    reviewDecisionId: receipt.reviewDecisionId,
+  };
+}
+
+async function persistHandoffReceipt(
+  userId: string,
+  candidateId: string,
+  receipt: RecallAssetHandoffReceipt,
+): Promise<RecallAssetHandoffReceipt> {
+  const id = handoffReceiptId(candidateId, receipt.reviewDecisionId);
+  const now = new Date().toISOString();
+  const record = await updateRecallJsonRecord(userId, 'asset-handoff-receipts', id, (current) => current || ({
+    schemaVersion: 2,
+    ownerId: userId,
+    id,
+    candidateId,
+    ...receipt,
+    createdAt: now,
+  } satisfies StoredRecallAssetHandoffReceipt));
+  const stored = asStoredHandoffReceipt(record, candidateId, receipt.reviewDecisionId);
+  return {
+    assetId: stored.assetId,
+    assetType: stored.assetType,
+    version: stored.version,
+    lifecycleStatus: stored.lifecycleStatus,
+    scope: stored.scope,
+    sourceRefs: stored.sourceRefs,
+    reviewDecisionId: stored.reviewDecisionId,
+  };
+}
+
+async function recoverHandoffReceipt(
+  userId: string,
+  candidate: RecallCandidateRecord,
+  reviewDecisionId: string,
+  asset: RecallAbilityAssetRecord,
+): Promise<RecallAssetHandoffReceipt | undefined> {
+  const belongsToCandidate = asset.candidateId === candidate.id
+    || asset.sourceCandidateIds?.includes(candidate.id);
+  if (!belongsToCandidate || asset.type !== candidate.suggestedType) return undefined;
+  if (asset.reviewDecisionId === reviewDecisionId) {
+    return persistHandoffReceipt(userId, candidate.id, handoffReceipt(asset, reviewDecisionId));
+  }
+  const version = (await listAbilityAssetVersions(userId, asset.id))
+    .find((entry) => entry.reason === `review_decision:${reviewDecisionId}`);
+  if (!version || version.snapshot.type !== candidate.suggestedType) return undefined;
+  return persistHandoffReceipt(userId, candidate.id, {
+    assetId: asset.id,
+    assetType: version.snapshot.type,
+    version: version.version,
+    lifecycleStatus: asset.lifecycleStatus,
+    scope: version.snapshot.scope,
+    sourceRefs: version.snapshot.evidenceRefs,
+    reviewDecisionId,
+  });
 }
 
 export async function promoteRecallCandidate(
   userId: string,
   candidateId: string,
-  options: { actor?: 'user'; ontologyRefs?: AbilityAssetOntologyRef[]; scopePolicy?: RecallAbilityAssetScopePolicy } = {},
-): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
-  if (options.actor !== 'user') throw new Error('recall candidate promotion requires a user actor');
+  options: PromoteRecallCandidateOptions & AbilityAssetRelationContract = {},
+): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord; decision: ReviewDecision; receipt: RecallAssetHandoffReceipt }> {
+  if (options.actor !== 'user' && options.actor !== 'system') {
+    throw new Error('recall candidate promotion requires a user actor or system actor');
+  }
   const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
+  const relationContract = readAbilityAssetRelationContract(options as Record<string, unknown>);
+  const semantics = readAbilityAssetSemantics(options as unknown as Record<string, unknown>);
+  // 条件是评审时新写下的自由文本，不走 saveRecallCandidate 那道闸，这里补上。
+  assertNotForbiddenToPersist([
+    ...(semantics.applicableWhen || []),
+    ...(semantics.forbiddenWhen || []),
+  ]);
+  const causalRule = options.causalRule === undefined ? undefined : normalizeCausalRule(options.causalRule);
   const scopePolicy = normalizeAbilityAssetScopePolicy(options.scopePolicy);
-  const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
+  let decision: ReviewDecision | undefined;
+  let receipt: RecallAssetHandoffReceipt | undefined;
+  let updated: RecallJsonRecord;
+  try {
+    updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
     if (!current) throw new Error('recall candidate not found');
     const candidate = asCandidate(current);
-    if (candidate.status === 'promoted') return candidate;
-    if (candidate.status === 'rejected') throw new Error('recall candidate is terminal');
-    const now = new Date().toISOString();
-    const asset: RecallAbilityAssetRecord = {
-      schemaVersion: 1,
-      ownerId: userId,
-      id: `aa-${genId12()}`,
-      candidateId: candidate.id,
-      type: candidate.suggestedType,
-      title: candidate.summary || candidate.judgment.slice(0, 120),
-      statement: candidate.judgment,
-      evidenceRefs: candidate.sourceRefs,
-      ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
-      ...(ontologyRefs?.length ? { ontologyRefs } : {}),
+    if (candidate.status === 'confirmed') return candidate;
+    if (isTerminalCandidate(candidate.status)) throw new Error('recall candidate is terminal');
+    if (candidate.status === 'weak_observation' || candidate.status === 'observed') {
+      throw new Error('candidate evidence is insufficient for review');
+    }
+    if (candidate.risk === 'high' && (options.actor !== 'user' || options.riskAcknowledged !== true)) {
+      throw new Error('high-risk candidate requires an independent risk gate');
+    }
+    if (candidate.suggestedAction === 'keep_current' || candidate.suggestedAction === 'reject') {
+      throw new Error('candidate action must use its non-asset review decision');
+    }
+    const gate = evaluateCandidate({
+      title: candidate.summary,
+      summary: candidate.value,
+      body: candidate.judgment,
+    });
+    if (isCandidateBlocked(gate)) throw new Error('candidate is blocked by cognition security gate');
+    if (Date.parse(candidate.expiresAt) <= Date.now()) {
+      return {
+        ...candidate,
+        status: 'expired',
+        failureCode: 'candidate_expired',
+        failureMessage: 'candidate expired before confirmation',
+        failedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    const unavailableSources = await unavailableCandidateSources(
+      userId,
+      mergeSourceRefs(candidate.sourceRefs, candidate.evidenceRefs),
+    );
+    if (unavailableSources.length || !candidate.evidenceRefs.length) {
+      return {
+        ...candidate,
+        status: 'failed',
+        failureCode: unavailableSources.length ? 'source_unavailable' : 'evidence_insufficient',
+        failureMessage: unavailableSources.length
+          ? 'candidate source is paused, removed, or no longer authorized'
+          : 'candidate has no usable evidence',
+        failedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    const targetRef = `recall_candidate:${candidate.id}`;
+    decision = candidate.status === 'failed' && candidate.reviewDecisionId
+      ? await readReviewDecision(userId, targetRef, candidate.reviewDecisionId)
+      : undefined;
+    if (candidate.status === 'failed' && candidate.reviewDecisionId && !decision) {
+      throw new Error('previous review decision is unavailable; confirmation cannot be retried safely');
+    }
+    decision = decision || await writeReviewDecision(userId, {
+      targetRef,
+      decisionType: options.decisionType || (candidate.userModifiedAt ? 'modify' : 'accept'),
+      decision: options.actor === 'system'
+        ? 'automatic capture'
+        : options.decisionType === 'modify' || candidate.userModifiedAt ? 'modify and save' : 'accept',
+      antecedentRef: candidate.id,
       scope: candidate.suggestedScope,
-      ...(scopePolicy ? { scopePolicy } : {}),
-      status: 'active',
-      maturity: 'seed',
-      version: '1',
-      createdAt: now,
+      reason: options.decisionReason,
+      actor: options.actor,
+      modifiedContent: candidate.userModifiedAt ? candidate.judgment : undefined,
+      idempotencyKey: confirmationIdempotencyKey(candidate),
+      decisionId: options.decisionId,
+    });
+    const handoffActor: AbilityAssetActor = decision.actor === 'system' ? 'system' : 'user';
+    const now = new Date().toISOString();
+    let stored: RecallAbilityAssetRecord;
+    const handoffReason = `review_decision:${decision.decision_id}`;
+    const alreadyApplied = await readAppliedHandoffAsset(userId, candidate, decision.decision_id);
+    if (alreadyApplied) {
+      receipt = await readRecallAssetHandoffReceipt(userId, candidate.id, decision.decision_id)
+        || await recoverHandoffReceipt(userId, candidate, decision.decision_id, alreadyApplied);
+      if (!receipt) throw new Error('immutable handoff receipt cannot be recovered safely');
+      decision = await recordReviewDecisionOutcome(
+        userId,
+        targetRef,
+        decision.decision_id,
+        { assetId: alreadyApplied.id },
+      );
+      return {
+        ...candidate,
+        status: 'confirmed',
+        promotedAssetId: alreadyApplied.id,
+        reviewDecisionId: decision.decision_id,
+        failureCode: undefined,
+        failureMessage: undefined,
+        failedAt: undefined,
+        updatedAt: now,
+      };
+    }
+    if (candidate.suggestedAction === 'create') {
+      const sourceSessionIds = sourceSessionIdsFrom(candidate.sourceRefs);
+      const assetId = createdAssetId(candidate.id, decision.decision_id);
+      stored = await createAbilityAsset(userId, {
+        schemaVersion: 2,
+        ownerId: userId,
+        id: assetId,
+        candidateId: candidate.id,
+        sourceCandidateIds: [candidate.id],
+        reviewDecisionId: decision.decision_id,
+        type: candidate.suggestedType,
+        title: candidate.summary || candidate.judgment.slice(0, 120),
+        // Substantive statement: judgment (what to retain) + value (why it
+        // matters / future value) when present — the value clause is the
+        // reusable insight, and a bare conclusion sentence alone is too thin
+        // to stand as a method/template asset body.
+        statement: [
+          candidate.judgment,
+          ...(candidate.value?.trim() && candidate.value !== candidate.judgment
+            ? [candidate.value.trim()]
+            : []),
+        ].join('\n').slice(0, 4_000),
+        evidenceRefs: candidate.evidenceRefs,
+        ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
+        ...(candidate.learningProvenance ? { learningProvenance: candidate.learningProvenance } : {}),
+        ...(causalRule ? { causalRule } : {}),
+        ...(ontologyRefs?.length ? { ontologyRefs } : {}),
+        ...relationContract,
+        ...semantics,
+        scope: candidate.suggestedScope,
+        ...(scopePolicy ? { scopePolicy } : {}),
+        status: 'active',
+        lifecycleStatus: handoffActor === 'system'
+          ? 'automatically_extracted_unverified'
+          : 'user_confirmed_unverified',
+        maturity: handoffActor === 'system' ? 'seed' : 'bud',
+        version: '1',
+        ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
+        createdAt: now,
+        updatedAt: now,
+      }, { actor: handoffActor, reason: handoffReason });
+    } else {
+      if (!candidate.targetAssetId) throw new Error('candidate target asset is required');
+      const target = await readAbilityAsset(userId, candidate.targetAssetId);
+      if (target.type !== candidate.suggestedType) throw new Error('candidate target asset type mismatch');
+      if (candidate.suggestedAction === 'pause') {
+        stored = await pauseAbilityAsset(userId, target.id, {
+          actor: handoffActor,
+          reason: handoffReason,
+          reviewDecisionId: decision.decision_id,
+          sourceCandidateId: candidate.id,
+        });
+      } else if (candidate.suggestedAction === 'update' || candidate.suggestedAction === 'limit_scope') {
+        stored = await updateAbilityAsset(userId, target.id, {
+          title: candidate.summary || candidate.judgment.slice(0, 120),
+          statement: candidate.judgment,
+          scope: candidate.suggestedScope,
+          evidenceRefs: candidate.evidenceRefs,
+          ...(ontologyRefs?.length ? { ontologyRefs } : {}),
+          ...relationContract,
+          ...semantics,
+          ...(scopePolicy ? { scopePolicy } : {}),
+          actor: handoffActor,
+          reason: handoffReason,
+          reviewDecisionId: decision.decision_id,
+          sourceCandidateId: candidate.id,
+        });
+      } else {
+        throw new Error('candidate action does not create or change an asset');
+      }
+    }
+    receipt = await persistHandoffReceipt(userId, candidate.id, handoffReceipt(stored, decision.decision_id));
+    decision = await recordReviewDecisionOutcome(
+      userId,
+      `recall_candidate:${candidate.id}`,
+      decision.decision_id,
+      { assetId: stored.id },
+    );
+    return {
+      ...candidate,
+      status: 'confirmed',
+      promotedAssetId: stored.id,
+      reviewDecisionId: decision.decision_id,
+      failureCode: undefined,
+      failureMessage: undefined,
+      failedAt: undefined,
       updatedAt: now,
     };
-    await writeRecallJsonRecord(userId, 'ability-assets', asset.id, asset);
-    await initializeAbilityAsset(userId, asset);
-    return { ...candidate, status: 'promoted', promotedAssetId: asset.id, updatedAt: now };
-  });
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (decision) {
+      await recordReviewDecisionOutcome(
+        userId,
+        `recall_candidate:${candidateId}`,
+        decision.decision_id,
+        { failureCode: 'asset_write_failed' },
+      ).catch(() => undefined);
+      await updateRecallJsonRecord(userId, 'candidates', candidateId, (current) => {
+        if (!current) throw error;
+        const candidate = asCandidate(current);
+        if (candidate.status === 'confirmed' || isTerminalCandidate(candidate.status)) return candidate;
+        const now = new Date().toISOString();
+        return {
+          ...candidate,
+          status: 'failed',
+          failureCode: 'asset_write_failed',
+          failureMessage: message.slice(0, 1_000),
+          failedAt: now,
+          reviewDecisionId: decision.decision_id,
+          updatedAt: now,
+        };
+      }).catch(() => undefined);
+    }
+    throw error;
+  }
   const candidate = asCandidate(updated);
-  if (!candidate.promotedAssetId) throw new Error('promoted candidate has no ability asset');
-  const storedAsset = await readRecallJsonRecord(userId, 'ability-assets', candidate.promotedAssetId);
-  if (!storedAsset) throw new Error('promoted ability asset not found');
-  return { candidate, asset: asAsset(storedAsset) };
+  if (candidate.status === 'expired') throw new Error('recall candidate expired');
+  if (candidate.status === 'failed') throw new Error(candidate.failureMessage || 'recall candidate confirmation failed');
+  if (!candidate.promotedAssetId) {
+    const now = new Date().toISOString();
+    await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => {
+      if (!current) throw new Error('recall candidate not found');
+      const latest = asCandidate(current);
+      return {
+        ...latest,
+        status: 'failed',
+        failureCode: 'asset_write_failed',
+        failureMessage: 'confirmed candidate has no asset identity; confirmation can be retried',
+        failedAt: now,
+        updatedAt: now,
+      };
+    });
+    throw new Error('promoted candidate has no ability asset; confirmation can be retried');
+  }
+  let storedAsset: RecallJsonRecord | undefined;
+  try {
+    storedAsset = await readRecallJsonRecord(userId, 'ability-assets', candidate.promotedAssetId);
+  } catch {
+    storedAsset = undefined;
+  }
+  if (!storedAsset) {
+    const now = new Date().toISOString();
+    await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => {
+      if (!current) throw new Error('recall candidate not found');
+      const latest = asCandidate(current);
+      return {
+        ...latest,
+        status: 'failed',
+        failureCode: 'asset_write_failed',
+        failureMessage: 'confirmed ability asset is missing; confirmation can be retried',
+        failedAt: now,
+        updatedAt: now,
+      };
+    });
+    throw new Error('promoted ability asset not found; confirmation can be retried');
+  }
+  const asset = asAsset(storedAsset);
+  const reviewDecisionId = candidate.reviewDecisionId || asset.reviewDecisionId;
+  if (!decision) {
+    decision = await readReviewDecision(userId, `recall_candidate:${candidate.id}`, reviewDecisionId);
+  }
+  if (!decision) throw new Error('review decision not found for promoted asset');
+  receipt = receipt || await readRecallAssetHandoffReceipt(userId, candidate.id, reviewDecisionId);
+  if (!receipt) {
+    throw new Error('immutable handoff receipt not found for promoted asset');
+  }
+  return { candidate, asset, decision, receipt };
 }

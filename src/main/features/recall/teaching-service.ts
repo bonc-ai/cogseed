@@ -8,6 +8,7 @@ import {
   rejectRecallCandidate,
   saveRecallCandidate,
 } from './candidate-service';
+import { removeCognitionSource } from './source-control';
 import { recallJsonRecordPath } from './paths';
 import { updateRecallJsonRecord, readRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
@@ -223,12 +224,20 @@ export async function revokeUserTeachingSignal(userId: string, signalId: string)
   await Promise.all(updated.candidateIds.map(async (candidateId) => {
     try {
       const candidate = await readRecallCandidate(userId, candidateId);
-      if (candidate.status === 'pending' || candidate.status === 'deferred') {
+      if (candidate.status === 'pending_review' || candidate.status === 'deferred' || candidate.status === 'failed') {
         await rejectRecallCandidate(userId, candidateId, 'teaching_signal_revoked');
       }
     } catch {
       // Revocation remains authoritative even if a legacy candidate is missing.
     }
   }));
+  await removeCognitionSource(userId, {
+    kind: 'user_teaching_signal',
+    id: updated.id,
+    taxonomyVersion: 2,
+    subtype: 'teaching',
+    scope: updated.scope,
+    title: updated.summary,
+  }, false);
   return updated;
 }

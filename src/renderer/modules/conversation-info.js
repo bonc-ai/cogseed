@@ -255,7 +255,7 @@ const ConversationInfo = (() => {
 
   async function _load(cid) {
     const enc = encodeURIComponent(cid);
-    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, protocolData] = await Promise.all([
+    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, protocolData, executionsData] = await Promise.all([
       _fetchJson(typeof _historyRequestUrl === 'function'
         ? _historyRequestUrl(cid)
         : `/api/conversations/${enc}/history?limit=10`),
@@ -271,6 +271,13 @@ const ConversationInfo = (() => {
       _loadAgentActivitySnapshot(cid),
       _fetchJson(`/api/conversations/${enc}/wake-requests`).catch(() => ({ requests: [] })),
       _fetchJson(`/api/conversations/${enc}/protocol-events`).catch((err) => ({ events: [], error: (err && err.message) || String(err) })),
+      // 9.1 右侧「本次携带」：真实执行记录（状态 / 权限 / 边界 / 回执关联）。
+      // IPC 已存在；加载失败或环境无 IPC 时静默降级为空列表。
+      _invokeOrDefault('p3394.execution.list', {}, { ok: false }).then((data) => (
+        data && Array.isArray(data.executions)
+          ? data.executions.filter((item) => item && item.conversationId === cid)
+          : []
+      )).catch(() => []),
     ]);
     return {
       conversation: historyData.conversation || null,
@@ -289,6 +296,7 @@ const ConversationInfo = (() => {
       wakeRequests: Array.isArray(wakeData.requests) ? wakeData.requests : [],
       protocolEvents: Array.isArray(protocolData.events) ? protocolData.events : (Array.isArray(protocolData.protocol_events) ? protocolData.protocol_events : []),
       protocolError: protocolData.error ? String(protocolData.error) : '',
+      executions: Array.isArray(executionsData) ? executionsData : [],
     };
   }
 
@@ -1109,6 +1117,169 @@ const ConversationInfo = (() => {
     return `<div class="conversation-info-protocol">${header}${_renderProtocolSummary(events)}${_renderProtocolFilters(events)}${list}</div>`;
   }
 
+  // 9.1 会话区域统一框架 · 右侧「本次携带」：
+  // 本次运行（真实执行记录）、运行证明（ContextReuseReceipt）、
+  // 本次 Context 引用、来源与边界。数据全部来自既有 IPC
+  // （p3394.execution.list / p3394.contextReuseReceipt.read）与 snapshot；
+  // 无执行记录时如实显示空态，不造数据、不显示技术噪声。
+  function _latestCollaborationRef(events) {
+    if (!Array.isArray(events)) return null;
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const data = _protocolEventData(events[i]);
+      const collab = data && data.collaboration && typeof data.collaboration === 'object'
+        ? data.collaboration
+        : null;
+      if (collab) return collab;
+    }
+    return null;
+  }
+
+  function _carriedStatusLabel(status) {
+    const key = {
+      running: 'conversation_info.carried.status.running',
+      completed: 'conversation_info.carried.status.completed',
+      failed: 'conversation_info.carried.status.failed',
+      cancelled: 'conversation_info.carried.status.cancelled',
+      timed_out: 'conversation_info.carried.status.timed_out',
+      queued: 'conversation_info.carried.status.queued',
+    }[String(status || '')];
+    const fallback = {
+      running: '运行中',
+      completed: '已完成',
+      failed: '失败',
+      cancelled: '已取消',
+      timed_out: '超时',
+      queued: '排队',
+    }[String(status || '')] || String(status || '');
+    return key ? _label(key, fallback) : fallback;
+  }
+
+  function _carriedBoundaryLabel(boundary) {
+    if (boundary === 'real') return _label('conversation_info.carried.boundary.real', '真实');
+    if (boundary === 'degraded') return _label('conversation_info.carried.boundary.degraded', '降级');
+    if (boundary === 'test-double') return _label('conversation_info.carried.boundary.test_double', '测试替身');
+    return String(boundary || '');
+  }
+
+  function _carriedPermissionLabel(mode) {
+    const s = String(mode || '').toLowerCase();
+    if (s === 'read-only' || s === 'readonly') return _label('conversation_info.carried.permission.read_only', '只读');
+    if (s === 'read_write' || s === 'readwrite') return _label('conversation_info.carried.permission.read_write', '可写');
+    if (s === 'ask') return _label('conversation_info.carried.permission.ask', '逐次询问');
+    return String(mode || '');
+  }
+
+  function _carriedTime(iso) {
+    if (!iso) return '';
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function _carriedRunHtml(execution) {
+    const statusRaw = String(execution && execution.status || '');
+    const status = _carriedStatusLabel(statusRaw);
+    const agent = String(execution && (execution.agentId || execution.cli)
+      || _label('conversation_info.carried.executor_unknown', 'CogSeed'));
+    const boundary = _carriedBoundaryLabel(execution && execution.boundary);
+    const permission = _carriedPermissionLabel(execution && execution.permissionMode);
+    const artifacts = Array.isArray(execution && execution.artifactIds) ? execution.artifactIds.length : 0;
+    const time = _carriedTime(execution && execution.startedAt);
+    const executionId = String(execution && execution.executionId || '');
+    const receiptBtn = execution && execution.receiptId
+      ? `<button type="button" class="conversation-info-carried-receipt-toggle" data-receipt-execution-id="${escapeHtml(executionId)}">${escapeHtml(_label('conversation_info.carried.receipt_view', '查看回执'))}</button>`
+      : '';
+    return `<div class="conversation-info-carried-run is-${escapeHtml(statusRaw) || 'unknown'}">
+      <div class="conversation-info-carried-run-head">
+        <span class="conversation-info-carried-run-agent">${escapeHtml(agent)}</span>
+        <span class="conversation-info-carried-run-status is-${escapeHtml(statusRaw) || 'unknown'}">${escapeHtml(status)}</span>
+      </div>
+      <div class="conversation-info-carried-run-meta">
+        ${permission ? `<span>${escapeHtml(_label('conversation_info.carried.permission_label', '权限'))} · ${escapeHtml(permission)}</span>` : ''}
+        ${boundary ? `<span>${escapeHtml(boundary)}</span>` : ''}
+        ${artifacts ? `<span>${artifacts} ${escapeHtml(_label('conversation_info.carried.artifacts', '个产物'))}</span>` : ''}
+        ${time ? `<span>${escapeHtml(time)}</span>` : ''}
+      </div>
+      <div class="conversation-info-carried-run-receipt" data-receipt-container="${escapeHtml(executionId)}" hidden></div>
+      ${receiptBtn}
+    </div>`;
+  }
+
+  function _renderReceiptDetailHtml(receipt) {
+    const rows = [];
+    if (receipt && receipt.sourceSessionId) rows.push([_label('conversation_info.carried.receipt_source', '来源'), String(receipt.sourceSessionId)]);
+    if (receipt && receipt.targetSessionId) rows.push([_label('conversation_info.carried.receipt_target', '目标'), String(receipt.targetSessionId)]);
+    if (Array.isArray(receipt && receipt.reusedRefs) && receipt.reusedRefs.length) {
+      rows.push([_label('conversation_info.carried.receipt_reused', '复用引用'), receipt.reusedRefs.join(' · ')]);
+    }
+    if (Array.isArray(receipt && receipt.omittedRefs) && receipt.omittedRefs.length) {
+      rows.push([_label('conversation_info.carried.receipt_omitted', '未复用'), receipt.omittedRefs.join(' · ')]);
+    }
+    if (receipt && receipt.permissionMode) rows.push([_label('conversation_info.carried.receipt_permission', '权限'), _carriedPermissionLabel(receipt.permissionMode)]);
+    if (receipt && receipt.boundary) rows.push([_label('conversation_info.carried.receipt_boundary', '边界'), _carriedBoundaryLabel(receipt.boundary)]);
+    if (receipt && receipt.status) rows.push([_label('conversation_info.carried.receipt_status', '状态'), String(receipt.status)]);
+    if (!rows.length) return `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.receipt_empty', '回执内容为空。'))}</div>`;
+    return `<dl class="conversation-info-carried-rows">${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`;
+  }
+
+  function _renderCarried() {
+    const events = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents : [];
+    const executions = Array.isArray(_snapshot.executions) ? _snapshot.executions : [];
+    const collab = _latestCollaborationRef(events);
+    const title = _currentConversationTitle();
+
+    // 本次运行：真实执行记录，按开始时间倒序。
+    const sorted = executions.slice().sort((a, b) => {
+      const at = a && a.startedAt ? String(a.startedAt) : '';
+      const bt = b && b.startedAt ? String(b.startedAt) : '';
+      return bt.localeCompare(at);
+    });
+    const runsHtml = sorted.length
+      ? `<div class="conversation-info-carried-runs">${sorted.map(_carriedRunHtml).join('')}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.runs_empty', '本会话暂无执行记录。'))}</div>`;
+
+    // 本次 Context：执行记录携带的 contextId + 协议协作引用（workflow / step）。
+    const contextIds = [];
+    sorted.forEach((execution) => {
+      if (execution && execution.contextId && !contextIds.includes(execution.contextId)) {
+        contextIds.push(String(execution.contextId));
+      }
+    });
+    const contextRows = [];
+    if (collab && collab.workflow_run_id) contextRows.push([_label('conversation_info.carried.run', '运行'), String(collab.workflow_run_id)]);
+    if (collab && collab.step_id) contextRows.push([_label('conversation_info.carried.step', '步骤'), String(collab.step_id)]);
+    if (contextIds.length) contextRows.push([_label('conversation_info.carried.context_id', 'Context ID'), contextIds.join(' · ')]);
+    const contextHtml = contextRows.length
+      ? `<dl class="conversation-info-carried-rows">${contextRows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.context_empty', '本会话暂无 Context 投影记录；接续不会凭空生成正式资产。'))}</div>`;
+
+    // 来源与边界：会话来源 + 最近一次执行的执行方 / 边界 / 真实权限模式。
+    const latestRun = sorted[0] || null;
+    const boundaryRows = [[_label('conversation_info.carried.source', '来源'), title]];
+    if (latestRun && (latestRun.agentId || latestRun.cli)) {
+      boundaryRows.push([_label('conversation_info.carried.executor', '执行方'), String(latestRun.agentId || latestRun.cli)]);
+    }
+    if (latestRun && latestRun.boundary) {
+      boundaryRows.push([_label('conversation_info.carried.boundary_label', '边界'), _carriedBoundaryLabel(latestRun.boundary)]);
+    }
+    const boundaryHtml = `<dl class="conversation-info-carried-rows">${boundaryRows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`;
+    const permissionNote = latestRun && latestRun.permissionMode
+      ? _label('conversation_info.carried.permission_note', '本会话最近一次执行的权限模式：{mode}', { mode: _carriedPermissionLabel(latestRun.permissionMode) })
+      : _label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、扩权或正式资产变更会单独确认。');
+
+    return `<div class="conversation-info-carried">
+      <div class="conversation-info-carried-header">
+        <div class="conversation-info-carried-heading">${escapeHtml(_label('conversation_info.carried.title', '本次携带'))}</div>
+        <div class="conversation-info-carried-subtitle">${escapeHtml(_label('conversation_info.carried.subtitle', '本次最小 Context、来源边界与运行证明'))}</div>
+      </div>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.runs', '本次运行'))}</div>${runsHtml}</section>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.context', '本次 Context'))}</div>${contextHtml}</section>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.boundary', '来源与边界'))}</div>${boundaryHtml}<div class="conversation-info-carried-permission">${_uiIcon('shield-check', 'conversation-info-carried-permission-icon')}<span>${escapeHtml(permissionNote)}</span></div></section>
+    </div>`;
+  }
+
   function _renderBody() {
     _closeFileMenu();
     const body = document.getElementById('conversation-info-body');
@@ -1131,6 +1302,7 @@ const ConversationInfo = (() => {
     if (_activeTab === 'attachments') body.innerHTML = _renderAttachments();
     else if (_activeTab === 'collaboration') body.innerHTML = _renderCollaborationOverview();
     else if (_activeTab === 'protocol') body.innerHTML = _renderProtocolInspector();
+    else if (_activeTab === 'carried') body.innerHTML = _renderCarried();
     else body.innerHTML = _renderFiles();
     // Hydrate any data-ui-icon placeholders that the renderers emitted.
     if (typeof window !== 'undefined' && typeof window.hydrateUiIcons === 'function') {
@@ -1434,17 +1606,27 @@ const ConversationInfo = (() => {
     const addLabel = _label('conversation_info.file_add_to_chat_action', 'Add to chat');
     const addLibraryLabel = _label('conversation_info.file_add_to_library_action', 'Add to Library');
     const deleteLabel = _label('common.delete', 'Delete');
-    const addItem = entryKind === 'file' && _canAddEntryToChat(name || absPath)
+    const allowedActions = Array.isArray(options.allowedActions)
+      ? new Set(options.allowedActions.map((action) => String(action)))
+      : null;
+    const actionAllowed = (action) => !allowedActions || allowedActions.has(action);
+    const revealItem = actionAllowed('reveal')
+      ? `<div class="ctx-row-menu-item" data-action="reveal">${escapeHtml(revealLabel)}</div>`
+      : '';
+    const addItem = actionAllowed('add-to-chat') && entryKind === 'file' && _canAddEntryToChat(name || absPath)
       ? `<div class="ctx-row-menu-item" data-action="add-to-chat">${escapeHtml(addLabel)}</div>`
       : '';
-    const addLibraryItem = entryKind === 'file' && _canAddEntryToLibrary(name || absPath, projectScoped)
+    const addLibraryItem = actionAllowed('add-to-library') && entryKind === 'file' && _canAddEntryToLibrary(name || absPath, projectScoped)
       ? `<div class="ctx-row-menu-item" data-action="add-to-library">${escapeHtml(addLibraryLabel)}</div>`
       : '';
+    const deleteItem = actionAllowed('delete')
+      ? `<div class="ctx-row-menu-item is-danger" data-action="delete">${escapeHtml(deleteLabel)}</div>`
+      : '';
     menu.innerHTML = `
-      <div class="ctx-row-menu-item" data-action="reveal">${escapeHtml(revealLabel)}</div>
+      ${revealItem}
       ${addLibraryItem}
       ${addItem}
-      <div class="ctx-row-menu-item is-danger" data-action="delete">${escapeHtml(deleteLabel)}</div>
+      ${deleteItem}
     `;
     menu.dataset.filePath = absPath;
     menu.dataset.fileName = name;
@@ -1638,6 +1820,42 @@ const ConversationInfo = (() => {
           ev.preventDefault();
           ev.stopPropagation();
           void refresh(_cid);
+          return;
+        }
+        // 9.1 右侧「本次携带」：点击「查看回执」→ 读取该执行的
+        // ContextReuseReceipt（IPC 已存在）并展开明细。
+        const receiptToggle = ev.target.closest('[data-receipt-execution-id]');
+        if (receiptToggle) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const executionId = receiptToggle.dataset.receiptExecutionId || '';
+          const runEl = receiptToggle.closest('.conversation-info-carried-run');
+          const container = runEl && runEl.querySelector('[data-receipt-container]');
+          if (!executionId || !container) return;
+          if (container.dataset.loaded === '1') {
+            container.hidden = !container.hidden;
+            return;
+          }
+          receiptToggle.disabled = true;
+          const invoke = window && window.cogseed && typeof window.cogseed.invoke === 'function'
+            ? window.cogseed.invoke.bind(window.cogseed)
+            : null;
+          if (!invoke) return;
+          invoke('p3394.contextReuseReceipt.read', { executionId })
+            .then((res) => {
+              const receipt = res && res.receipt ? res.receipt : null;
+              if (!receipt) return;
+              container.innerHTML = _renderReceiptDetailHtml(receipt);
+              container.dataset.loaded = '1';
+              container.hidden = false;
+              receiptToggle.textContent = _label('conversation_info.carried.receipt_hide', '收起回执');
+            })
+            .catch((err) => {
+              _infoLog.warn('carried receipt read failed', { executionId, error: err && err.message });
+              container.innerHTML = `<div class="conversation-info-empty is-small is-error">${escapeHtml(_label('conversation_info.carried.receipt_failed', '回执读取失败。'))}</div>`;
+              container.hidden = false;
+              receiptToggle.disabled = false;
+            });
           return;
         }
         const mateAction = ev.target.closest('[data-mate-action]');

@@ -7,6 +7,8 @@ import { createLogger } from '../../logger';
 import { listAbilityAssets, readAbilityAsset } from './asset-service';
 import { recallJsonRecordPath } from './paths';
 import { listWorkspaceAssetReferences } from './workspace-refs';
+import { isAssetScopeAllowed, matchesScopeToken, scopeIncludes } from './scope-policy';
+import { loadOntologyGroupTitleMap } from './ontology-taxonomy';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 import type { RecallAbilityAssetRecord } from './candidate-service';
@@ -21,9 +23,34 @@ let lastProjectionCreatedAtMs = 0;
 export type ProjectionAuthorization = 'user_confirmed' | 'workspace_policy' | 'not_required';
 export type ContextProjectionStatus = 'preview' | 'confirmed' | 'deferred' | 'rejected' | 'expired' | 'revoked';
 
+export type ProjectionKnowledgeErrorCode =
+  | 'projection_not_committed'
+  | 'projection_expired'
+  | 'projection_versions_missing'
+  | 'projection_asset_missing'
+  | 'projection_asset_inactive'
+  | 'projection_asset_version_changed'
+  | 'projection_asset_ineligible'
+  | 'projection_source_unavailable';
+
+const PROJECTION_KNOWLEDGE_ERROR_MESSAGES: Record<ProjectionKnowledgeErrorCode, string> = {
+  projection_not_committed: 'projection is not committed',
+  projection_expired: 'projection has expired',
+  projection_versions_missing: 'projection asset versions are missing',
+  projection_asset_missing: 'projection asset is missing',
+  projection_asset_inactive: 'projection asset is no longer active',
+  projection_asset_version_changed: 'projection asset version changed',
+  projection_asset_ineligible: 'projection asset is no longer eligible',
+  projection_source_unavailable: 'projection source is unavailable',
+};
+
+export function projectionKnowledgeError(code: ProjectionKnowledgeErrorCode): Error & { code: ProjectionKnowledgeErrorCode } {
+  return Object.assign(new Error(PROJECTION_KNOWLEDGE_ERROR_MESSAGES[code]), { code });
+}
+
 export interface OmittedAssetRef {
   assetId: string;
-  reason: 'asset_paused' | 'asset_revoked' | 'workspace_not_referenced' | 'workspace_disabled' | 'scope_mismatch' | 'source_unavailable';
+  reason: 'asset_paused' | 'asset_revoked' | 'workspace_not_referenced' | 'workspace_disabled' | 'scope_mismatch' | 'source_unavailable' | 'low_relevance';
 }
 
 export type RecallAssetMatchMethod = 'semantic' | 'recency_fallback' | 'manual';
@@ -45,11 +72,17 @@ export interface ContextProjectionRecord extends RecallJsonRecord {
   sourceRefs: CognitionSourceRef[];
   omittedRefs: OmittedAssetRef[];
   expiresAt?: string;
+  /** True when the selection fell back to recency order (embedding failure). */
+  selectionDegraded?: boolean;
   status: ContextProjectionStatus;
   createdAt: string;
   confirmedAt?: string;
   decidedAt?: string;
   decisionNote?: string;
+}
+
+export function isCommittedProjection(projection: ContextProjectionRecord): boolean {
+  return projection.status === 'confirmed';
 }
 
 export interface ProjectionInput {
@@ -59,12 +92,19 @@ export interface ProjectionInput {
   taskText?: string;
   authorization?: ProjectionAuthorization;
   expiresAt?: string;
+  /** Auto-confirm on creation (workspace_policy line): the projection is
+   *  written as confirmed immediately, skipping the user confirmation card. */
+  confirm?: boolean;
 }
 
 
 export interface ProjectionSemanticOptions {
   embedTexts?: (texts: string[]) => Promise<number[][]>;
+  /** Absolute hard floor (noise gate); default DEFAULT_MIN_MATCH_SCORE. */
   minScore?: number;
+  /** Relative gate: fraction of the batch's best score; default
+   *  DEFAULT_RELATIVE_SIGNIFICANCE. */
+  relativeSignificance?: number;
   limit?: number;
 }
 
@@ -80,6 +120,8 @@ export interface BuildRecallViewResult {
   assetMatches?: RecallAssetMatch[];
   sourceRefs: CognitionSourceRef[];
   omittedRefs: OmittedAssetRef[];
+  /** Semantic embedding was unavailable; selection degraded to recency order. */
+  degraded?: boolean;
 }
 
 export interface ProjectionRevisionInput {
@@ -168,12 +210,20 @@ function validateProjectionStatus(value: unknown): ContextProjectionStatus {
   throw new Error('malformed context projection: invalid status');
 }
 
-function assetMatchText(asset: RecallAbilityAssetRecord): string {
-  const ontology = (asset.ontologyRefs || []).map((ref) => [ref.groupId, ref.section, ref.field].filter(Boolean).join(' / ')).filter(Boolean).join('\n');
+function assetMatchText(asset: RecallAbilityAssetRecord, groupTitles: Map<string, string>): string {
+  // T-Box vocabulary: resolve each referenced ontology group to its CONCEPT
+  // title so the match text carries the concept name, not an opaque id.
+  // Only the asset's own refs are rendered — a shared full-group vocabulary
+  // would inflate baseline similarity for every asset of the same group (M2).
+  const ontology = (asset.ontologyRefs || []).map((ref) => [
+    groupTitles.get(ref.groupId) || ref.groupId,
+    ref.section,
+    ref.field,
+  ].filter(Boolean).join(' / ')).filter(Boolean).join('\n');
+  // type/scope are shared dimension labels, not content: including them
+  // inflated baseline similarity for every asset of the same type (M2).
   return [
     asset.title,
-    asset.type,
-    asset.scope,
     asset.statement.slice(0, 1_200),
     ontology,
   ].filter(Boolean).join('\n');
@@ -200,12 +250,14 @@ async function defaultEmbedTexts(texts: string[]): Promise<number[][]> {
 }
 
 async function rankAssetsBySemanticMatch(
+  userId: string,
   taskText: string,
   assets: RecallAbilityAssetRecord[],
   options: ProjectionSemanticOptions,
 ): Promise<{ assets: RecallAbilityAssetRecord[]; assetMatches: RecallAssetMatch[] }> {
   const embedTexts = options.embedTexts || defaultEmbedTexts;
-  const vectors = await embedTexts([taskText, ...assets.map(assetMatchText)]);
+  const groupTitles = loadOntologyGroupTitleMap(userId);
+  const vectors = await embedTexts([taskText, ...assets.map((asset) => assetMatchText(asset, groupTitles))]);
   if (vectors.length !== assets.length + 1) throw new Error('semantic embedding count mismatch');
   const query = vectors[0];
   const scored = assets.map((asset, index) => ({
@@ -219,11 +271,6 @@ async function rankAssetsBySemanticMatch(
   }));
   scored.sort((left, right) => right.match.matchScore - left.match.matchScore || left.index - right.index);
   return { assets: scored.map((item) => item.asset), assetMatches: scored.map((item) => item.match) };
-}
-
-function scopeIncludes(scope: string, purpose: string): boolean {
-  const terms = scope.split(',').map((term) => term.trim());
-  return terms.includes(purpose) || terms.includes('*');
 }
 
 function automaticProjectionId(taskRunId: string, workspaceId?: string): string {
@@ -259,6 +306,10 @@ function normalizeProjectionAssetIds(value: unknown, field: string): string[] {
 
 async function isAssetEligibleForProjection(userId: string, asset: RecallAbilityAssetRecord, projection: Pick<ContextProjectionRecord, 'workspaceId' | 'purpose'>): Promise<boolean> {
   if (asset.status !== 'active') throw new Error('context projection asset is not active');
+  if (!isAssetScopeAllowed(asset.scopePolicy, {
+    purpose: projection.purpose,
+    workspaceId: projection.workspaceId,
+  })) return false;
   if (projection.workspaceId) {
     const refs = await listWorkspaceAssetReferences(userId);
     const ref = refs.find((item) => item.assetId === asset.id && item.workspaceId === projection.workspaceId);
@@ -290,9 +341,131 @@ function sourceRefsForAssets(assets: RecallAbilityAssetRecord[]): CognitionSourc
 
 function asProjection(value: RecallJsonRecord): ContextProjectionRecord {
   if (!Array.isArray(value.assetIds) || !Array.isArray(value.sourceRefs) || !Array.isArray(value.omittedRefs) || typeof value.taskRunId !== 'string' || typeof value.purpose !== 'string' || typeof value.authorization !== 'string' || typeof value.createdAt !== 'string') throw new Error('malformed context projection');
+  if (value.selectionDegraded !== undefined && typeof value.selectionDegraded !== 'boolean') throw new Error('malformed context projection');
   const assetMatches = validateAssetMatches(value.assetMatches);
   const assetVersions = validateAssetVersions(value.assetVersions);
   return { ...value, status: validateProjectionStatus(value.status), sourceRefs: normalizeCognitionSourceRefs(value.sourceRefs), ...(assetMatches ? { assetMatches } : {}), ...(assetVersions ? { assetVersions } : {}) } as ContextProjectionRecord;
+}
+
+/** Default semantic HARD FLOOR (dual-signal selection): scores below this
+ *  are treated as embedding noise and never injected, even when Top-N slots
+ *  remain. It is deliberately low — admission is primarily governed by the
+ *  Top-N slots plus a relative-significance gate (see applySemanticSelection),
+ *  not by this absolute cutoff. */
+export const DEFAULT_MIN_MATCH_SCORE = 0.25;
+/** Relative gate: an asset scoring below this fraction of the batch's best
+ *  semantic score is dropped even inside Top-N, so a weak pool cannot force
+ *  irrelevant assets into the injection just because slots remain. */
+export const DEFAULT_RELATIVE_SIGNIFICANCE = 0.5;
+/** Default Top-N selection size. */
+export const DEFAULT_SELECTION_LIMIT = 8;
+
+interface SemanticSelection {
+  assets: RecallAbilityAssetRecord[];
+  assetMatches?: RecallAssetMatch[];
+  degraded: boolean;
+}
+
+/** Shared semantic selection: rank eligible assets against the query text,
+ *  drop scores below the relevance threshold, cap to Top-N, and record
+ *  low-relevance exclusions. Embedding failure degrades to recency order
+ *  with an explicit flag instead of silently injecting everything. */
+async function applySemanticSelection(
+  userId: string,
+  assets: RecallAbilityAssetRecord[],
+  queryText: string,
+  options: ProjectionSemanticOptions,
+  omittedRefs: OmittedAssetRef[],
+  skipOnDegrade = false,
+): Promise<SemanticSelection> {
+  const minScore = Number.isFinite(options.minScore)
+    ? Math.max(0, Math.min(1, Number(options.minScore)))
+    : DEFAULT_MIN_MATCH_SCORE;
+  const relativeSignificance = Number.isFinite(options.relativeSignificance)
+    ? Math.max(0, Math.min(1, Number(options.relativeSignificance)))
+    : DEFAULT_RELATIVE_SIGNIFICANCE;
+  const limit = Number.isFinite(options.limit)
+    ? Math.max(1, Math.min(12, Math.floor(Number(options.limit))))
+    : DEFAULT_SELECTION_LIMIT;
+  if (!queryText || !queryText.trim() || !assets.length) return { assets: assets.slice(0, limit), degraded: false };
+
+  let ranked: Awaited<ReturnType<typeof rankAssetsBySemanticMatch>>;
+  let degraded = false;
+  try {
+    ranked = await rankAssetsBySemanticMatch(userId, queryText, assets, options);
+  } catch (error) {
+    log.warn('semantic recall ranking unavailable; using recency fallback', { userId, error: (error as Error).message });
+    degraded = true;
+    if (skipOnDegrade) return { assets: [], degraded: true };
+    ranked = {
+      assets,
+      assetMatches: assets.map((asset) => ({ assetId: asset.id, matchScore: 0, matchMethod: 'recency_fallback' as const })),
+    };
+  }
+
+  let orderedAssets = ranked.assets;
+  let assetMatches = ranked.assetMatches;
+  if (assetMatches) {
+    const matchByAssetId = new Map(assetMatches.map((match) => [match.assetId, match]));
+    const droppedByRelevance: string[] = [];
+    // Dual-signal admission: an asset must clear BOTH the absolute hard floor
+    // (noise gate) and the relative-significance gate (score >= best * ratio)
+    // when the batch's best score is itself meaningful. A weak pool therefore
+    // yields fewer assets instead of force-filling Top-N with irrelevant ones.
+    const semanticMatches = assetMatches.filter((match) => match.matchMethod === 'semantic');
+    const bestScore = semanticMatches.reduce((best, match) => Math.max(best, match.matchScore), 0);
+    const relativeFloor = bestScore * relativeSignificance;
+    orderedAssets = orderedAssets.filter((asset) => {
+      const match = matchByAssetId.get(asset.id);
+      if (!match || match.matchMethod !== 'semantic') return true;
+      if (match.matchScore < minScore) {
+        droppedByRelevance.push(asset.id);
+        return false;
+      }
+      if (bestScore > minScore && match.matchScore < relativeFloor) {
+        droppedByRelevance.push(asset.id);
+        return false;
+      }
+      return true;
+    });
+    for (const assetId of droppedByRelevance) {
+      omittedRefs.push({ assetId, reason: 'low_relevance' });
+    }
+    assetMatches = assetMatches.filter((match) => (
+      match.matchMethod !== 'semantic' || orderedAssets.some((asset) => asset.id === match.assetId)
+    ));
+  }
+  // M5 type diversity: guarantee one highest-scoring asset per type before
+  // filling the remaining slots by score, so Top-N is not dominated by a
+  // single asset type. Order stays score-descending within the same type.
+  const diverse: RecallAbilityAssetRecord[] = [];
+  const seenTypes = new Set<string>();
+  for (const asset of orderedAssets) {
+    if (seenTypes.has(asset.type)) continue;
+    seenTypes.add(asset.type);
+    diverse.push(asset);
+    if (diverse.length >= limit) break;
+  }
+  if (diverse.length < limit) {
+    const picked = new Set(diverse.map((asset) => asset.id));
+    for (const asset of orderedAssets) {
+      if (picked.has(asset.id)) continue;
+      diverse.push(asset);
+      if (diverse.length >= limit) break;
+    }
+  }
+  if (diverse.length < orderedAssets.length) {
+    const picked = new Set(diverse.map((asset) => asset.id));
+    for (const asset of orderedAssets) {
+      if (!picked.has(asset.id)) omittedRefs.push({ assetId: asset.id, reason: 'low_relevance' });
+    }
+  }
+  orderedAssets = diverse;
+  if (assetMatches) {
+    const pickedIds = new Set(orderedAssets.map((asset) => asset.id));
+    assetMatches = assetMatches.filter((match) => pickedIds.has(match.assetId));
+  }
+  return { assets: orderedAssets, ...(assetMatches ? { assetMatches } : {}), degraded };
 }
 
 export async function buildRecallView(userId: string, input: ProjectionInput, options: ProjectionSemanticOptions = {}): Promise<BuildRecallViewResult> {
@@ -306,26 +479,27 @@ export async function buildRecallView(userId: string, input: ProjectionInput, op
   for (const asset of assets) {
     if (asset.status === 'paused') { omittedRefs.push({ assetId: asset.id, reason: 'asset_paused' }); continue; }
     if (asset.status === 'revoked') { omittedRefs.push({ assetId: asset.id, reason: 'asset_revoked' }); continue; }
+    if (!isAssetScopeAllowed(asset.scopePolicy, { purpose, workspaceId: input.workspaceId })) {
+      omittedRefs.push({ assetId: asset.id, reason: 'scope_mismatch' });
+      continue;
+    }
     const ref = input.workspaceId ? refsByAsset.get(asset.id) : undefined;
     if (input.workspaceId && !ref) { omittedRefs.push({ assetId: asset.id, reason: 'workspace_not_referenced' }); continue; }
     if (ref && !ref.enabled) { omittedRefs.push({ assetId: asset.id, reason: 'workspace_disabled' }); continue; }
     if (ref && !scopeIncludes(ref.scope, purpose)) { omittedRefs.push({ assetId: asset.id, reason: 'scope_mismatch' }); continue; }
+    // Soft whole-word scope gate: a sentence-shaped purpose (e.g. "Use frozen
+    // OAuth review knowledge") still matches a 'review' scope term, unlike the
+    // old exact-equality gate which silently emptied the candidate pool.
     if (!ref && !scopeIncludes(asset.scope, purpose)) { omittedRefs.push({ assetId: asset.id, reason: 'scope_mismatch' }); continue; }
     includedAssets.push(asset);
   }
 
-  let orderedAssets = includedAssets;
-  let assetMatches: RecallAssetMatch[] | undefined;
-  if (taskText && includedAssets.length) {
-    try {
-      const ranked = await rankAssetsBySemanticMatch(taskText, includedAssets, options);
-      orderedAssets = ranked.assets;
-      assetMatches = ranked.assetMatches;
-    } catch (error) {
-      log.warn('semantic recall ranking unavailable; using recency fallback', { userId, error: (error as Error).message });
-      assetMatches = includedAssets.map((asset) => ({ assetId: asset.id, matchScore: 0, matchMethod: 'recency_fallback' as const }));
-    }
-  }
+  // Ranking runs only on real task text: a short purpose label (e.g.
+  // 'review') is not a meaningful query, and skipping the embed avoids
+  // blocking calls when no task text exists.
+  const selection = await applySemanticSelection(userId, includedAssets, taskText, options, omittedRefs);
+  const orderedAssets = selection.assets;
+  const assetMatches = selection.assetMatches;
 
   const sourceRefs: CognitionSourceRef[] = [];
   const seen = new Set<string>();
@@ -341,6 +515,7 @@ export async function buildRecallView(userId: string, input: ProjectionInput, op
     ...(assetMatches ? { assetMatches } : {}),
     sourceRefs,
     omittedRefs,
+    ...(selection.degraded ? { degraded: true as const } : {}),
   };
 }
 
@@ -354,11 +529,16 @@ export async function previewContextProjection(userId: string, input: Projection
   if (input.expiresAt !== undefined && Number.isNaN(Date.parse(input.expiresAt))) throw new Error('invalid projection expiry');
   const view = await buildRecallView(userId, { taskRunId, purpose, ...(workspaceId ? { workspaceId } : {}), ...(taskText ? { taskText } : {}) }, options);
   const now = projectionNowIso();
+  const confirmedAt = input.confirm ? now : undefined;
   const record: ContextProjectionRecord = {
     schemaVersion: 2, ownerId: userId, id: `proj-${genId12()}`,
     taskRunId, ...(workspaceId ? { workspaceId } : {}), purpose, authorization,
     assetIds: view.assetIds, ...(view.assetVersions ? { assetVersions: view.assetVersions } : {}), ...(view.assetMatches ? { assetMatches: view.assetMatches } : {}), sourceRefs: view.sourceRefs, omittedRefs: view.omittedRefs,
-    ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}), status: 'preview', createdAt: now,
+    ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+    ...(view.degraded ? { selectionDegraded: true } : {}),
+    status: confirmedAt ? 'confirmed' : 'preview',
+    ...(confirmedAt ? { confirmedAt, decidedAt: confirmedAt } : {}),
+    createdAt: now,
   };
   await writeRecallJsonRecord(userId, 'projections', record.id, record);
   return record;
@@ -381,12 +561,6 @@ export async function createAutomaticContextProjection(
     if (projection.status === 'confirmed') return projection;
   }
 
-  const minScore = Number.isFinite(options.minScore)
-    ? Math.max(0, Math.min(1, Number(options.minScore)))
-    : 0.35;
-  const limit = Number.isFinite(options.limit)
-    ? Math.max(1, Math.min(12, Math.floor(Number(options.limit))))
-    : 4;
   const allAssets = await listAbilityAssets(userId);
   const workspaceRefs = workspaceId ? await listWorkspaceAssetReferences(userId) : [];
   const workspaceRefsByAsset = new Map(
@@ -418,21 +592,8 @@ export async function createAutomaticContextProjection(
   }
   if (!eligibleAssets.length) return undefined;
 
-  let ranked: Awaited<ReturnType<typeof rankAssetsBySemanticMatch>>;
-  try {
-    ranked = await rankAssetsBySemanticMatch(taskText, eligibleAssets, options);
-  } catch (error) {
-    log.warn('automatic Recall semantic matching unavailable; skipping injection', {
-      userId,
-      taskRunId,
-      error: (error as Error).message,
-    });
-    return undefined;
-  }
-  const matchByAssetId = new Map(ranked.assetMatches.map((match) => [match.assetId, match]));
-  const selectedAssets = ranked.assets
-    .filter((asset) => (matchByAssetId.get(asset.id)?.matchScore || 0) >= minScore)
-    .slice(0, limit);
+  const selection = await applySemanticSelection(userId, eligibleAssets, taskText, options, [], true);
+  const selectedAssets = selection.assets;
   if (!selectedAssets.length) return undefined;
 
   const now = projectionNowIso();
@@ -443,11 +604,12 @@ export async function createAutomaticContextProjection(
     id,
     taskRunId,
     ...(workspaceId ? { workspaceId } : {}),
+    ...(selection.degraded ? { selectionDegraded: true } : {}),
     purpose: 'conversation_reply',
     authorization: 'not_required',
     assetIds: selectedAssets.map((asset) => asset.id),
     assetVersions: Object.fromEntries(selectedAssets.map((asset) => [asset.id, asset.version])),
-    assetMatches: ranked.assetMatches.filter((match) => selectedIds.has(match.assetId)),
+    ...(selection.assetMatches ? { assetMatches: selection.assetMatches.filter((match) => selectedIds.has(match.assetId)) } : {}),
     sourceRefs: sourceRefsForAssets(selectedAssets),
     omittedRefs,
     status: 'confirmed',
@@ -459,18 +621,57 @@ export async function createAutomaticContextProjection(
   return record;
 }
 
-async function validateProjectionAssetVersions(userId: string, projection: ContextProjectionRecord): Promise<Record<string, string>> {
-  const expected = projection.assetVersions || {};
-  const actual: Record<string, string> = {};
-  for (const assetId of projection.assetIds) {
-    const asset = await readAbilityAsset(userId, assetId);
-    if (asset.status !== 'active') throw new Error('context projection asset is no longer active');
-    actual[asset.id] = asset.version;
-    if (expected[asset.id] !== undefined && expected[asset.id] !== asset.version) {
-      throw new Error('context projection asset version changed; refresh projection');
-    }
+async function validateFrozenProjectionAssets(
+  userId: string,
+  projection: ContextProjectionRecord,
+  requireCommitted: boolean,
+): Promise<Record<string, string>> {
+  if (requireCommitted && !isCommittedProjection(projection)) {
+    throw projectionKnowledgeError('projection_not_committed');
   }
-  return Object.keys(expected).length ? expected : actual;
+  if (projection.expiresAt && Date.parse(projection.expiresAt) <= Date.now()) {
+    throw projectionKnowledgeError('projection_expired');
+  }
+  const expected = projection.assetVersions;
+  if (!expected || Object.keys(expected).length !== projection.assetIds.length) {
+    throw projectionKnowledgeError('projection_versions_missing');
+  }
+  const out: Record<string, string> = {};
+  for (const assetId of projection.assetIds) {
+    let asset: RecallAbilityAssetRecord;
+    try {
+      asset = await readAbilityAsset(userId, assetId);
+    } catch {
+      throw projectionKnowledgeError('projection_asset_missing');
+    }
+    if (asset.status !== 'active') throw projectionKnowledgeError('projection_asset_inactive');
+    if (expected[assetId] !== asset.version) throw projectionKnowledgeError('projection_asset_version_changed');
+    if (!(await isAssetEligibleForProjection(userId, asset, projection))) {
+      throw projectionKnowledgeError('projection_asset_ineligible');
+    }
+    for (const source of asset.evidenceRefs) {
+      if (source.taxonomyVersion !== 2) continue;
+      if (!(await isCognitionSourceEnabled(userId, source))) {
+        throw projectionKnowledgeError('projection_source_unavailable');
+      }
+    }
+    out[assetId] = expected[assetId];
+  }
+  return out;
+}
+
+export function validateProjectionAssetVersions(
+  userId: string,
+  projection: ContextProjectionRecord,
+): Promise<Record<string, string>> {
+  return validateFrozenProjectionAssets(userId, projection, false);
+}
+
+export function validateCommittedProjectionAssetVersions(
+  userId: string,
+  projection: ContextProjectionRecord,
+): Promise<Record<string, string>> {
+  return validateFrozenProjectionAssets(userId, projection, true);
 }
 
 

@@ -77,6 +77,19 @@ describe('personal_ontology_router › buildRoutePrompt', () => {
 });
 
 describe('personal_ontology_router › routeCandidateToField', () => {
+  it('uses the allowed one-shot reflection session kind', async () => {
+    const r = await loadModule();
+    let buildInput: any;
+    await r.routeCandidateToField('u1', '喜欢大白话', fakeCatalog(), {
+      buildRunnerFn: (async (input: any) => {
+        buildInput = input;
+        return fakeBuildRunner('{"action":"flow"}')();
+      }) as any,
+    });
+    expect(buildInput).toMatchObject({ userId: 'u1' });
+    expect(buildInput.sessionId).toMatch(/^reflect-ontology-route-/);
+  });
+
   it('returns a validated field decision when LLM output is high-confidence and in the catalog', async () => {
     const r = await loadModule();
     const decision = await r.routeCandidateToField('u1', '喜欢大白话', fakeCatalog(), {
@@ -85,12 +98,13 @@ describe('personal_ontology_router › routeCandidateToField', () => {
     expect(decision).toEqual({ action: 'field', group_title: '偏好', field_name: '沟通风格', confidence: 'high' });
   });
 
-  it('flow when LLM says flow', async () => {
+  it('returns a legitimate flow without marking it as a routing failure', async () => {
     const r = await loadModule();
     const decision = await r.routeCandidateToField('u1', '今天是周一', fakeCatalog(), {
       buildRunnerFn: fakeBuildRunner('{"action":"flow"}') as any,
     });
     expect(decision).toEqual({ action: 'flow' });
+    expect(decision.failure).toBeUndefined();
   });
 
   it('flow when LLM is only medium/low confidence (置信度门禁：防误填污染画像)', async () => {
@@ -110,24 +124,34 @@ describe('personal_ontology_router › routeCandidateToField', () => {
     expect(d3).toEqual({ action: 'flow' });
   });
 
-  it('flow when LLM hallucinates a section/field not in the catalog', async () => {
+  it('marks a hallucinated section/field as invalid_response', async () => {
     const r = await loadModule();
     const decision = await r.routeCandidateToField('u1', 'x', fakeCatalog(), {
       buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"不存在的分节","field_name":"不存在的字段","confidence":"high"}') as any,
     });
-    expect(decision).toEqual({ action: 'flow' });
+    expect(decision).toEqual({ action: 'flow', failure: 'invalid_response' });
   });
 
-  it('flow when LLM throws / returns empty — never throws to caller', async () => {
+  it('marks empty and malformed model output as invalid_response without throwing', async () => {
     const r = await loadModule();
     const d1 = await r.routeCandidateToField('u1', 'x', fakeCatalog(), {
       buildRunnerFn: fakeBuildRunner('') as any,
     });
-    expect(d1).toEqual({ action: 'flow' });
+    expect(d1).toEqual({ action: 'flow', failure: 'invalid_response' });
+
     const d2 = await r.routeCandidateToField('u1', 'x', fakeCatalog(), {
+      buildRunnerFn: fakeBuildRunner('这不是合法路由结果') as any,
+    });
+    expect(d2).toEqual({ action: 'flow', failure: 'invalid_response' });
+
+  });
+
+  it('marks provider/build failures as model_unavailable without throwing', async () => {
+    const r = await loadModule();
+    const decision = await r.routeCandidateToField('u1', 'x', fakeCatalog(), {
       buildRunnerFn: (async () => { throw new Error('provider down'); }) as any,
     });
-    expect(d2).toEqual({ action: 'flow' });
+    expect(decision).toEqual({ action: 'flow', failure: 'model_unavailable' });
   });
 
   it('flow when catalog is empty (no installed templates)', async () => {

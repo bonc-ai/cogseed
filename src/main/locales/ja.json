@@ -215,6 +215,7 @@
   "expense_agent.submit.detail": "ケース: {case}\\n資料指紋: {hash}\\n\\nFeishu の承認申請を作成します。支払い承認ではなく、指定された承認者が Feishu で確認します。",
   "expense_agent.submit.unavailable": "送信確認を表示できません。何も送信されていません。",
   "expense_agent.submit.cancelled": "送信をキャンセルしました。Feishu にデータは送信されていません。",
+"cogseed.runtime_failed": "エージェントはこの応答を完了できませんでした。もう一度お試しください。",
   "messaging.new_session_confirmation": "新しい会話を開始しました。次に何を処理しますか？",
   "messaging.approval.approve": "許可済み",
   "messaging.approval.approve_once": "1回だけ許可済み",

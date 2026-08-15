@@ -1,3 +1,5 @@
+import type { RecallAbilityAssetScopePolicy } from '../recall/scope-policy';
+
 export type CognitionCandidateSource = 'personal_ontology';
 export type CognitionCandidateType = 'preference' | 'ontology' | 'rule' | 'experience' | 'skill_evolution';
 export type CognitionCandidateStatus = 'pending' | 'accepted' | 'deferred' | 'rejected';
@@ -99,8 +101,11 @@ export interface CognitionReuseReceiptView {
 }
 
 export type CognitionAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
-export type CognitionAssetMaturity = 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
-export type CognitionAssetStatus = 'active' | 'paused' | 'revoked' | 'candidate';
+// 与 RecallAbilityAssetRecord 的治理状态保持同步，另加展示层特有的 `candidate`
+// ——候选还没 promote 成资产，在资产侧没有对应状态。
+export type CognitionAssetMaturity = 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable';
+export type CognitionAssetStatus =
+  | 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked' | 'candidate';
 
 export interface CognitionRecallSkillDraftSummary {
   draftHash: string;
@@ -119,6 +124,7 @@ export interface CognitionAssetSummary {
   title: string;
   summary?: string;
   source: string;
+  lifecycleStatus?: 'user_confirmed_unverified' | 'automatically_extracted_unverified';
   version?: string;
   status?: CognitionAssetStatus | string;
   enabled?: boolean;
@@ -133,6 +139,10 @@ export interface CognitionAssetSummary {
   security?: CognitionSecurityView;
   owner: string;
   scope: string;
+  scopePolicy?: RecallAbilityAssetScopePolicy;
+  recommendedAction?: 'pause' | 'rework';
+  recommendationReason?: string;
+  recommendationAt?: string;
   workspaceRefs: string[];
   receiptRefs: string[];
   candidateRefs: string[];

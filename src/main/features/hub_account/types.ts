@@ -1,9 +1,10 @@
 /**
  * Shared types for the CogSeed Hub account feature.
  *
- * Shapes mirror the Hub account service API contract (v1.1):
+ * Shapes mirror the Hub account service API contract (v1.3):
  *   - response envelope: `{ ok: true, data: ... }` / `{ ok: false, error: { code, message } }`
- *   - `access_token` (JWT, ~1h) + `refresh_token` (opaque, ~30d, rotated on refresh)
+ *   - `access_token` (opaque, ~1h) + `refresh_token` (opaque, ~30d, rotated on refresh);
+ *     both are random opaque strings — no JWT
  *   - `local_identity_id` is the desktop's local uid (`users.ts::getActiveUserId`)
  */
 export type HubAccountStatus = 'active' | 'suspended' | 'pending_deletion' | 'deleted';
@@ -40,6 +41,12 @@ export interface HubRefreshResult {
   refresh_token: string;
   access_expires_at: string;
   refresh_expires_at: string;
+}
+
+export interface HubDeviceMetadata {
+  installation_id: string;
+  device_name: string;
+  device_os: string;
 }
 
 export interface HubDevice {

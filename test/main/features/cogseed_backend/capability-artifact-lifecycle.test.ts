@@ -19,7 +19,7 @@ afterEach(() => {
   fs.rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
-describe('Mate capability artifact lifecycle', () => {
+describe('CogSeed capability artifact lifecycle', () => {
   it('preserves the first artifact registered before a manifest exists', async () => {
     const { createMateCapabilityArtifactRegistry } = await import('../../../../src/main/features/cogseed_backend/capability-artifact-lifecycle');
     const registry = createMateCapabilityArtifactRegistry();

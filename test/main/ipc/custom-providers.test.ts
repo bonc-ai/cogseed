@@ -11,6 +11,11 @@ describe('custom provider IPC contract', () => {
       'customProviders.add',
       'customProviders.update',
       'customProviders.remove',
+      'customProviders.setEnabled',
+      'customProviders.model.add',
+      'customProviders.model.update',
+      'customProviders.model.remove',
+      'customProviders.model.test',
       'customProviders.ccswitch.probe',
       'customProviders.ccswitch.preview',
       'customProviders.ccswitch.sync',
@@ -19,6 +24,21 @@ describe('custom provider IPC contract', () => {
     }
     expect(source).toMatch(/customProviders\.listCustomProviders\(ctx\.userId\)/);
     expect(source).toContain('apiKeyMasked: auth.maskKey');
+    expect(source).toContain('enabled: provider.enabled');
+    expect(source).toMatch(/customProviders\.setCustomProviderEnabled\(\s*ctx\.userId,/);
+    expect(source).toMatch(/customProviders\.addCustomProviderModel\(\s*ctx\.userId,/);
+    expect(source).toMatch(/customProviders\.updateCustomProviderModel\(\s*ctx\.userId,/);
+    expect(source).toMatch(/customProviders\.removeCustomProviderModel\(\s*ctx\.userId,/);
+    expect(source).toMatch(/customProviders\.testCustomProviderModel\(\s*ctx\.userId,/);
+    expect(source).toContain("boundedCustomProviderModel(args.model, 'model')");
+    expect(source).toMatch(/boundedText\(args\?\.modelId,\s*'modelId',\s*200\)/);
+    expect(source).toMatch(/boundedText\(args\?\.providerId,\s*'providerId',\s*120\)/);
     expect(source).not.toMatch(/customProviders\.[^(]+\([^)]*\buid\b/);
+  });
+
+  it('validates and forwards the unavailable-entry view option', () => {
+    expect(source).toMatch(/'auth\.listEntries':\s*async\s*\(\{\s*includeUnavailable\s*\}\s*=\s*\{\}\)\s*=>\s*\{/);
+    expect(source).toContain("typeof includeUnavailable !== 'boolean'");
+    expect(source).toMatch(/auth\.listEntries\(\{\s*includeUnavailable:\s*includeUnavailable\s*===\s*true\s*\}\)/);
   });
 });

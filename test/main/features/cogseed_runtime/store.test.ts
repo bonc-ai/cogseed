@@ -14,7 +14,7 @@ afterEach(() => {
   fs.rmSync(paths.userRoot('runtime-store-user'), { recursive: true, force: true });
 });
 
-describe('Mate Agent Runtime local run store', () => {
+describe('CogSeed Runtime local run store', () => {
   it('writes metadata and events under local/mate_runtime/runs', async () => {
     const uid = 'runtime-store-user';
     const runId = 'run_abc123';

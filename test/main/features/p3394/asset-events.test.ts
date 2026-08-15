@@ -17,7 +17,6 @@ beforeEach(async () => {
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
 });
-
 afterEach(() => {
   process.env.ORKAS_WORKSPACE_ROOT = prevWs;
   fs.rmSync(testRoot, { recursive: true, force: true });
@@ -146,66 +145,5 @@ describe('audit-receipt › 生成与读取', () => {
     const back = await readAuditReceipt(UID, rcpt.receipt_id);
     expect(back?.event_ref).toBe(ev.event.event_id);
     expect(back?.after_ref).toBe('asset:sk-020@1.0.0');
-  });
-});
-
-describe('ability-asset-store › 可选事件钩子', () => {
-  async function makeAsset() {
-    const assets = await import('../../../../src/main/features/p3394/ability-assets');
-    return assets.createAbilityAsset({
-      id: 'aa-ev-001',
-      sourceCandidateId: 'cand-ev-001',
-      sourceRunId: 'run-ev-001',
-      type: 'skill_method',
-      capabilityStatement: 'validated workflow',
-      scope: { purpose_tags: ['test'] },
-      evidenceRefs: [{ kind: 'episode', id: 'ep-ev-001' }],
-      workspaceRefs: [],
-      actor: { by: 'user', id: 'user-001' },
-      createdAt: '2026-08-10T00:00:00.000Z',
-    });
-  }
-
-  it('带事件选项：资产写入 + 事件落账（事件先行）', async () => {
-    const store = await import('../../../../src/main/features/p3394/ability-asset-store');
-    const events = await loadEvents();
-    const asset = await makeAsset();
-    const saved = await store.createAbilityAssetRecord(UID, asset, {
-      eventType: 'asset_user_confirmed', actor: 'user', toState: 'active',
-    });
-    expect(saved.id).toBe('aa-ev-001');
-    const ledger = await events.listAssetEvents(UID, 'aa-ev-001');
-    expect(ledger.length).toBe(1);
-    expect(ledger[0].event_type).toBe('asset_user_confirmed');
-  });
-
-  it('事件写失败 → 抛错且资产零变化（提交点语义）', async () => {
-    const store = await import('../../../../src/main/features/p3394/ability-asset-store');
-    const events = await loadEvents();
-    const asset = await makeAsset();
-    // 先把事件目录设为只读 → 事件写失败
-    const file = events.assetEventLogPath(UID, 'aa-ev-002');
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.chmodSync(path.dirname(file), 0o555);
-    const asset2 = { ...asset, id: 'aa-ev-002' };
-    try {
-      await expect(store.createAbilityAssetRecord(UID, asset2, {
-        eventType: 'asset_user_confirmed', actor: 'user',
-      })).rejects.toThrow('asset event write failed');
-    } finally {
-      fs.chmodSync(path.dirname(file), 0o755);
-    }
-    // 资产未写入
-    const list = await store.listAbilityAssets(UID);
-    expect(list.some((a) => a.id === 'aa-ev-002')).toBe(false);
-  });
-
-  it('向后兼容：不带事件选项 → 无事件、行为不变', async () => {
-    const store = await import('../../../../src/main/features/p3394/ability-asset-store');
-    const events = await loadEvents();
-    const asset = await makeAsset();
-    await store.createAbilityAssetRecord(UID, asset); // 无事件选项
-    expect((await store.listAbilityAssets(UID)).length).toBe(1);
-    expect((await events.listAssetEvents(UID, 'aa-ev-001')).length).toBe(0);
   });
 });

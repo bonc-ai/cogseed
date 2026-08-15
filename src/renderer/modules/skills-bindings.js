@@ -31,8 +31,9 @@ function _initSkillsStaticBindings() {
   document.getElementById('skills-source-toggle')?.addEventListener('click', () => _toggleSkillsSource());
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    const skillsPanel = document.getElementById('panel-skills');
-    if (!skillsPanel || !skillsPanel.classList.contains('active')) return;
+    // 技能库已内嵌进认知资产「我的能力」tab：仅当该 pane 可见时处理 Esc 返回。
+    const myAbilitiesPane = document.getElementById('skills-cognition-my-abilities');
+    if (!myAbilitiesPane || myAbilitiesPane.hidden) return;
     const detail = document.getElementById('skills-detail-view');
     if (detail && detail.style.display !== 'none') {
       _onSkillsBack();
@@ -64,6 +65,29 @@ function _initSkillsCognitionBindings() {
   const panel = document.getElementById('panel-recall');
   if (!panel || panel.dataset.cognitionBindings === '1') return;
   panel.dataset.cognitionBindings = '1';
+
+  const refreshPersonalOntologyAfterPromotion = async () => {
+    if (typeof window.refreshPersonalOntology !== 'function') return true;
+    try {
+      await window.refreshPersonalOntology();
+      return true;
+    } catch (error) {
+      if (typeof _skillsLog !== 'undefined' && typeof _skillsLog.warn === 'function') {
+        _skillsLog.warn('Personal ontology projection refresh deferred', error);
+      }
+      const message = _cognitionText(
+        'personalOntology.profile_sync_warning',
+        '资产已保存，个人画像自动更新未完成，稍后可重试。',
+      );
+      try {
+        if (typeof uiToast === 'function') uiToast(message, { variant: 'warning' });
+        else if (typeof uiAlert === 'function') await uiAlert(message);
+      } catch (_) {
+        // The formal asset is already persisted; feedback failure must not turn it into a save error.
+      }
+      return false;
+    }
+  };
 
   panel.addEventListener('input', (event) => {
     const search = event.target.closest('.asset-search');
@@ -170,14 +194,48 @@ function _initSkillsCognitionBindings() {
         renderSkillsCognitionAssets();
         return;
       }
-      if (actionName === 'revoke') {
-        const message = _cognitionText('cognition.asset_revoke_confirm', '确认从 Recall 中移除这条记忆？原始会话和文件不会被删除。');
+      if (actionName === 'chain') {
+        _skillsCognitionState.assetChainById ||= {};
+        _skillsCognitionState.visibleAssetChainId = assetId;
+        _skillsCognitionState.assetChainById[assetId] = { loading: true };
+        renderSkillsCognitionAssets();
+        const [chainResult, usageResult, proofResult] = await Promise.all([
+          window.cogseed.invoke('recall.cognitionChain.read', { assetId }),
+          // 使用记录与证明取不到都不该让整个履历打不开——它们是补充，
+          // 履历本身来自回执。
+          window.cogseed.invoke('recall.usage.list', { assetId }).catch(() => null),
+          window.cogseed.invoke('recall.proofs.list', { assetId }).catch(() => null),
+        ]);
+        if (!chainResult?.ok) throw new Error(chainResult?.error || 'recall cognition chain failed');
+        _skillsCognitionState.assetChainById[assetId] = {
+          loading: false,
+          chain: chainResult.chain || null,
+          usage: usageResult?.usage || [],
+          proofs: proofResult?.proofs || [],
+        };
+        renderSkillsCognitionAssets();
+        return;
+      }
+      // 不可逆或有时限的动作必须先确认。归档与恢复不确认：它们随时可撤销，
+      // 每一步都拦一下只会让用户养成闭眼点确认的习惯，真正危险的那次也就拦不住。
+      const confirmations = {
+        revoke: ['cognition.asset_revoke_confirm', '确认从 Recall 中移除这条记忆？原始会话和文件不会被删除。'],
+        delete: ['cognition.asset_delete_confirm', '删除后进入保留期，期内可以恢复；保留期过后将无法找回。确认删除？'],
+        purge: ['cognition.asset_purge_confirm', '彻底清除会删掉这条认知的内容和全部历史版本，且无法恢复。确认清除？'],
+      };
+      const confirmation = confirmations[actionName];
+      if (confirmation) {
+        const message = _cognitionText(confirmation[0], confirmation[1]);
         if (typeof uiConfirm !== 'function' || !(await uiConfirm(message))) return;
       }
       const channels = {
         pause: 'recall.assets.pause',
         resume: 'recall.assets.resume',
         revoke: 'recall.assets.revoke',
+        archive: 'recall.assets.archive',
+        restore: 'recall.assets.restore',
+        delete: 'recall.assets.delete',
+        purge: 'recall.assets.purge',
       };
       const channel = channels[actionName];
       if (!channel) return;
@@ -185,7 +243,12 @@ function _initSkillsCognitionBindings() {
       if (!result?.ok) throw new Error(result?.error || 'recall asset action failed');
       await loadSkillsCognitionSnapshot();
       if (typeof uiToast === 'function') {
-        uiToast(_cognitionText(`cognition.asset_action_${actionName}_done`, actionName === 'pause' ? '记忆已暂停使用' : actionName === 'resume' ? '记忆已恢复使用' : '记忆已移除'), { variant: 'success' });
+        const done = {
+          pause: '已暂停使用', resume: '已恢复使用', revoke: '已移除',
+          archive: '已归档', restore: '已恢复', delete: '已删除，保留期内可恢复',
+          purge: '已彻底清除',
+        };
+        uiToast(_cognitionText(`cognition.asset_action_${actionName}_done`, done[actionName] || '已完成'), { variant: 'success' });
       }
     } catch (error) {
       _skillsCognitionState.assetHistoryById ||= {};
@@ -193,6 +256,28 @@ function _initSkillsCognitionBindings() {
         _skillsCognitionState.assetHistoryById[assetId] = { loading: false, error: (error && error.message) || String(error) };
         renderSkillsCognitionAssets();
       }
+      if (actionName === 'chain') {
+        _skillsCognitionState.assetChainById ||= {};
+        _skillsCognitionState.assetChainById[assetId] = { loading: false, error: (error && error.message) || String(error) };
+        renderSkillsCognitionAssets();
+      }
+      if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+    } finally {
+      control.dataset.busy = '0'; control.disabled = false;
+    }
+  };
+
+  const runRecallAssetRollback = async (control, assetId, version) => {
+    if (!assetId || !version || control.dataset.busy === '1') return;
+    control.dataset.busy = '1'; control.disabled = true;
+    try {
+      const result = await window.cogseed.invoke('recall.assets.rollback', { assetId, version });
+      if (!result?.ok) throw new Error(result?.error || 'recall asset rollback failed');
+      await loadSkillsCognitionSnapshot();
+      if (typeof uiToast === 'function') {
+        uiToast(_cognitionText('cognition.asset_action_rollback_done', '已回滚到所选版本'), { variant: 'success' });
+      }
+    } catch (error) {
       if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
     } finally {
       control.dataset.busy = '0'; control.disabled = false;
@@ -206,6 +291,10 @@ function _initSkillsCognitionBindings() {
       reload.dataset.busy = '1'; reload.disabled = true;
       try {
         await loadSkillsCognitionSnapshot();
+        if (_skillsCognitionState.assetCategoryFilter === 'personal'
+          && typeof window.refreshPersonalOntology === 'function') {
+          await window.refreshPersonalOntology();
+        }
       } finally {
         reload.dataset.busy = '0'; reload.disabled = false;
       }
@@ -256,14 +345,57 @@ function _initSkillsCognitionBindings() {
         clientY: event.clientY || rect.bottom,
       }, actions.map((actionName) => ({
         label: _recallAssetActionLabel(actionName),
-        icon: actionName === 'revoke' ? 'trash-2' : actionName === 'versions' ? 'history' : actionName === 'resume' ? 'play' : 'pause',
+        icon: ({
+          pause: 'pause', resume: 'play', archive: 'archive', restore: 'rotate-ccw',
+          delete: 'trash-2', purge: 'trash-2', revoke: 'trash-2', versions: 'history',
+        })[actionName] || 'pause',
         onClick: () => runRecallAssetAction(assetMore, actionName, assetId),
       })));
       return;
     }
 
+    const assetRollback = event.target.closest('[data-recall-asset-rollback]');
+    if (assetRollback) {
+      const assetId = assetRollback.dataset.recallAssetRollback || '';
+      const version = assetRollback.dataset.recallAssetVersion || '';
+      if (assetId && version) await runRecallAssetRollback(assetRollback, assetId, version);
+      return;
+    }
+
     if (event.target.closest('[data-recall-asset-history-close]')) {
       _skillsCognitionState.visibleAssetHistoryId = '';
+      renderSkillsCognitionAssets();
+      return;
+    }
+
+    const crossScope = event.target.closest('[data-recall-cross-scope]');
+    if (crossScope) {
+      const assetId = crossScope.dataset.recallCrossScope;
+      const confirmed = crossScope.dataset.recallCrossScopeNext === '1';
+      if (!assetId || crossScope.dataset.busy === '1') return;
+      crossScope.dataset.busy = '1'; crossScope.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.assets.crossScope', { assetId, confirmed });
+        if (!result?.ok) throw new Error(result?.error || 'cross-scope confirmation failed');
+        // 资产列表里那份要跟着更新，否则面板重画时按钮又弹回旧状态。
+        const list = _skillsCognitionState.assets || [];
+        const index = list.findIndex((item) => item.id === assetId);
+        if (index >= 0) list[index] = result.asset;
+        renderSkillsCognitionAssets();
+        uiToast(_cognitionText(
+          confirmed ? 'cognition.cross_scope_confirmed_done' : 'cognition.cross_scope_withdrawn_done',
+          confirmed ? '已允许跨作用域使用' : '已撤回跨作用域许可',
+        ), { variant: 'success' });
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        crossScope.dataset.busy = '0'; crossScope.disabled = false;
+      }
+      return;
+    }
+
+    if (event.target.closest('[data-recall-asset-chain-close]')) {
+      _skillsCognitionState.visibleAssetChainId = '';
       renderSkillsCognitionAssets();
       return;
     }
@@ -283,6 +415,18 @@ function _initSkillsCognitionBindings() {
     const openAsset = event.target.closest('[data-cognition-open-asset]');
     if (openAsset) {
       _skillsCognitionState.selectedAssetId = openAsset.dataset.cognitionOpenAsset || '';
+      const selectedAsset = (_skillsCognitionState.assets || []).find((item) => item.id === _skillsCognitionState.selectedAssetId);
+      if (selectedAsset) _skillsCognitionState.assetCategoryFilter = selectedAsset.category || selectedAsset.type || '';
+      switchSkillsCognitionPage('assets');
+      return;
+    }
+
+    const receiptAsset = event.target.closest('[data-recall-open-asset]');
+    if (receiptAsset) {
+      const assetId = receiptAsset.dataset.recallOpenAsset || '';
+      if (!assetId) return;
+      _skillsCognitionState.selectedAssetId = assetId;
+      _skillsCognitionState.assetCategoryFilter = '';
       switchSkillsCognitionPage('assets');
       return;
     }
@@ -324,22 +468,53 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const manualOpen = event.target.closest('[data-recall-manual-open]');
+    if (manualOpen) {
+      const captureId = manualOpen.dataset.recallManualOpen || '';
+      if (!captureId) return;
+      const visibleCaptures = [...(_skillsCognitionState.captures || []), ...(_skillsCognitionState.recentCaptures || [])];
+      const shouldLoad = _skillsCognitionState.captureFilter !== 'all'
+        || !visibleCaptures.some((capture) => capture.id === captureId);
+      _skillsCognitionState.captureFilter = 'all';
+      _skillsCognitionState.captureNextCursor = null;
+      try {
+        if (shouldLoad) await loadRecallCaptureTasks();
+        _skillsCognitionState.selectedCaptureId = captureId;
+        renderSkillsCognitionCaptures();
+        setTimeout(() => {
+          const row = Array.from(document.querySelectorAll('[data-recall-capture-select]'))
+            .find((item) => item.dataset.recallCaptureSelect === captureId);
+          if (row && typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'center' });
+        }, 0);
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      }
+      return;
+    }
+
     const manualAdd = event.target.closest('[data-recall-manual-add]');
     if (manualAdd) {
       const conversationId = manualAdd.dataset.recallManualAdd || '';
       if (!conversationId || manualAdd.dataset.busy === '1') return;
       manualAdd.dataset.busy = '1'; manualAdd.disabled = true;
+      const actionLabel = typeof manualAdd.querySelector === 'function'
+        ? manualAdd.querySelector('.recall-manual-conversation-action')
+        : null;
+      const previousActionLabel = actionLabel?.textContent || '';
+      if (actionLabel) actionLabel.textContent = _cognitionText('cognition.capture_manual_history_processing', '正在提取');
       try {
-        const result = await window.cogseed.invoke('recall.captures.manualCreate', { conversationId });
-        if (!result?.ok) throw new Error(result?.error || _cognitionText('cognition.capture_manual_history_create_failed', '加入沉淀任务失败'));
+        const result = await window.cogseed.invoke('recall.captures.historicalAutoStart', { conversationId });
+        if (!result?.ok) throw new Error(result?.error || _cognitionText('cognition.capture_manual_history_create_failed', '启动提取失败'));
         _skillsCognitionState.captureFilter = 'all';
         _skillsCognitionState.captureNextCursor = null;
-        _skillsCognitionState.selectedCaptureId = '';
+        _skillsCognitionState.selectedCaptureId = result.capture?.id || '';
         await loadRecallCaptureTasks();
+        loadSkillsCognitionSnapshot().catch(() => {});
       } catch (error) {
         if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
         renderSkillsCognitionCaptures();
       } finally {
+        if (actionLabel && previousActionLabel) actionLabel.textContent = previousActionLabel;
         manualAdd.dataset.busy = '0'; manualAdd.disabled = false;
       }
       return;
@@ -384,7 +559,7 @@ function _initSkillsCognitionBindings() {
         return;
       }
       if (actionName === 'view-assets') {
-        _skillsCognitionState.selectedAssetId = capture?.linkedAssetIds?.[0] || '';
+        _skillsCognitionState.selectedAssetId = _captureLinkedAssetIds(capture)[0] || '';
         _skillsCognitionState.assetCategoryFilter = '';
         switchSkillsCognitionPage('assets');
         return;
@@ -571,41 +746,29 @@ function _initSkillsCognitionBindings() {
         .find((capture) => capture.id === _skillsCognitionState.selectedCaptureId);
       const selectedIds = selectedCapture ? new Set(selectedCapture.candidateIds || []) : null;
       const candidateIds = (_skillsCognitionState.recallCandidates || [])
-        .filter((candidate) => (candidate.status === 'pending' || candidate.status === 'deferred')
+        .filter((candidate) => candidate.status === 'pending_review' && candidate.risk !== 'high'
           && (!selectedIds || selectedIds.has(candidate.id)))
         .map((candidate) => candidate.id);
+      const includesPersonal = (_skillsCognitionState.recallCandidates || []).some((candidate) =>
+        candidateIds.includes(candidate.id) && candidate.suggestedType === 'personal',
+      );
       if (!candidateIds.length) return;
       promoteAll.dataset.busy = '1'; promoteAll.disabled = true;
       _skillsCognitionState.writingRecallCandidateBatch = true;
       const failures = [];
       try {
-        for (const candidateId of candidateIds) {
-          _skillsCognitionState.writingRecallCandidateId = candidateId;
-          renderSkillsCognitionCaptures();
-          try {
-            const result = await window.cogseed.invoke('recall.candidates.promote', { candidateId });
-            if (!result?.ok) throw new Error(result?.error || 'recall candidate action failed');
-            if (result.candidate) {
-              _skillsCognitionState.recallCandidates = (_skillsCognitionState.recallCandidates || [])
-                .map((candidate) => candidate.id === candidateId ? result.candidate : candidate);
-            }
-            if (result.asset) {
-              const assets = new Map((_skillsCognitionState.assets || []).map((asset) => [asset.id, asset]));
-              assets.set(result.asset.id, result.asset);
-              _skillsCognitionState.assets = Array.from(assets.values());
-            }
-          } catch (error) {
-            failures.push({ candidateId, error });
-          }
-        }
+        const result = await window.cogseed.invoke('recall.candidates.promoteBatch', { candidateIds });
+        if (!result?.ok) throw new Error(result?.error || 'recall candidate batch action failed');
+        failures.push(...(result.failed || []));
         await loadSkillsCognitionSnapshot().catch(() => {});
+        const profileSynced = !includesPersonal || await refreshPersonalOntologyAfterPromotion();
         if (failures.length) {
           const message = _cognitionText(
             'cognition.capture_save_all_partial',
             '已保存 {success} 条，{failed} 条失败；失败内容已保留，可单独重试。',
           ).replace('{success}', String(candidateIds.length - failures.length)).replace('{failed}', String(failures.length));
           if (typeof uiAlert === 'function') await uiAlert(message);
-        } else if (typeof uiToast === 'function') {
+        } else if (profileSynced && typeof uiToast === 'function') {
           uiToast(_cognitionText('cognition.capture_save_all_done', '已全部写入 Recall'), { variant: 'success' });
         }
       } finally {
@@ -626,11 +789,24 @@ function _initSkillsCognitionBindings() {
       if (actionName === 'cancel-edit') { _skillsCognitionState.editingRecallCandidateId = ''; renderSkillsCognitionCandidates(); return; }
       recallAction.dataset.busy = '1'; recallAction.disabled = true;
       try {
-        let channel = actionName === 'promote' ? 'recall.candidates.promote' : actionName === 'reject' ? 'recall.candidates.reject' : actionName === 'defer' ? 'recall.candidates.defer' : actionName === 'resume' ? 'recall.candidates.resume' : '';
+        let channel = actionName === 'promote' ? 'recall.candidates.promote' : actionName === 'reject' ? 'recall.candidates.reject' : actionName === 'ignore' ? 'recall.candidates.ignore' : actionName === 'keep-current' ? 'recall.candidates.keepCurrent' : actionName === 'defer' ? 'recall.candidates.defer' : actionName === 'resume' ? 'recall.candidates.resume' : '';
         let payload = { candidateId };
+        const candidate = (_skillsCognitionState.recallCandidates || []).find((item) => item.id === candidateId);
+        let riskAcknowledged = false;
+        if (actionName === 'promote' || actionName === 'save-and-promote') {
+          if (candidate?.risk === 'high') {
+            const confirmed = typeof uiConfirm === 'function' && await uiConfirm({
+              message: _cognitionText('cognition.candidate_high_risk_confirm', '这是高风险资产变更。确认继续保存吗？'),
+              okLabel: _cognitionText('common.confirm', '确认'),
+              cancelLabel: _cognitionText('common.cancel', '取消'),
+            });
+            if (!confirmed) return;
+            riskAcknowledged = true;
+            if (actionName === 'promote') payload = { candidateId, riskAcknowledged: true };
+          }
+        }
         if (actionName === 'save-and-promote') {
           const card = recallAction.closest('[data-recall-candidate-id]');
-          const candidate = (_skillsCognitionState.recallCandidates || []).find((item) => item.id === candidateId);
           if (!card || !candidate) throw new Error('recall candidate unavailable');
           channel = 'recall.candidates.update';
           const evidenceText = card.querySelector('[data-recall-edit-evidence]')?.value || '';
@@ -638,7 +814,7 @@ function _initSkillsCognitionBindings() {
             const divider = value.indexOf(':');
             return divider > 0 ? { kind: value.slice(0, divider), id: value.slice(divider + 1) } : { kind: 'memory', id: value };
           });
-          payload = { candidateId, judgment: card.querySelector('[data-recall-edit-judgment]')?.value || '', summary: card.querySelector('[data-recall-edit-summary]')?.value || '', suggestedScope: card.querySelector('[data-recall-edit-scope]')?.value || '', suggestedType: card.querySelector('[data-recall-edit-type]')?.value || '', sourceRefs };
+          payload = { candidateId, judgment: card.querySelector('[data-recall-edit-judgment]')?.value || '', value: candidate.value || '', summary: card.querySelector('[data-recall-edit-summary]')?.value || '', suggestedScope: card.querySelector('[data-recall-edit-scope]')?.value || '', suggestedType: card.querySelector('[data-recall-edit-type]')?.value || '', suggestedAction: candidate.suggestedAction || 'create', risk: candidate.risk || 'low', sourceRefs, evidenceRefs: sourceRefs, expiresAt: candidate.expiresAt, taskRunId: candidate.taskRunId, targetAssetId: candidate.targetAssetId };
         }
         if (!channel) return;
         if (actionName === 'promote' || actionName === 'save-and-promote') {
@@ -649,12 +825,17 @@ function _initSkillsCognitionBindings() {
         const result = await window.cogseed.invoke(channel, payload);
         if (!result?.ok) throw new Error(result?.error || 'recall candidate action failed');
         if (actionName === 'save-and-promote') {
-          const promoted = await window.cogseed.invoke('recall.candidates.promote', { candidateId });
+          const promoted = await window.cogseed.invoke('recall.candidates.promote', { candidateId, ...(riskAcknowledged ? { riskAcknowledged: true } : {}) });
           if (!promoted?.ok) throw new Error(promoted?.error || 'recall candidate action failed');
         }
         _skillsCognitionState.editingRecallCandidateId = '';
         _skillsCognitionState.writingRecallCandidateId = '';
         await loadSkillsCognitionSnapshot();
+        const promotedType = actionName === 'save-and-promote' ? payload.suggestedType : candidate?.suggestedType;
+        if ((actionName === 'promote' || actionName === 'save-and-promote')
+          && promotedType === 'personal') {
+          await refreshPersonalOntologyAfterPromotion();
+        }
       } catch (error) {
         if (actionName === 'promote' || actionName === 'save-and-promote') await loadSkillsCognitionSnapshot().catch(() => {});
         if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
@@ -666,82 +847,6 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
-    const action = event.target.closest('[data-cognition-candidate-action]');
-    if (!action) return;
-    if (action.dataset.cognitionCandidateAction === 'open-personal-ontology') {
-      _setViewFromSidebar('personal-ontology');
-      return;
-    }
-    if (action.dataset.cognitionCandidateAction === 'source') return;
-    if (action.dataset.cognitionCandidateAction === 'import-to-recall') {
-      const candidateId = action.dataset.cognitionCandidateId;
-      if (!candidateId || action.dataset.busy === '1') return;
-      action.dataset.busy = '1'; action.disabled = true;
-      try {
-        const result = await window.cogseed.invoke('recall.candidates.importPersonalOntology', { candidateId });
-        if (!result?.ok) throw new Error(result?.error || 'personal ontology import failed');
-        await loadSkillsCognitionSnapshot();
-      } catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
-      finally { action.dataset.busy = '0'; action.disabled = false; }
-      return;
-    }
-    const source = action.dataset.cognitionCandidateSource;
-    const candidateId = action.dataset.cognitionCandidateId;
-    if (!source || !candidateId || action.dataset.busy === '1') return;
-    // Deep review is a read-only probe: it runs both gate layers and reports,
-    // without deciding the candidate. Model failure is reported as
-    // "unavailable" rather than as a clean pass.
-    if (action.dataset.cognitionCandidateAction === 'deep-review') {
-      action.dataset.busy = '1'; action.disabled = true;
-      try {
-        const res = await window.orkas.invoke('cognition.candidates.deepReview', { source, candidateId });
-        if (!res?.ok) throw new Error(res?.error || 'deep review failed');
-        const r = res.review || {};
-        const lines = [
-          `${_cognitionText('cognition.security', '安全检查')}: ${r.status || 'unknown'}`,
-          `${_cognitionText('cognition.findings', '发现')}: ${r.findingCount || 0}`,
-        ];
-        if (r.topRule) lines.push(r.topRule);
-        if (r.degradedReason) lines.push(_cognitionText('cognition.security_degraded', '深度审查不可用'));
-        if (typeof uiAlert === 'function') await uiAlert(lines.join('\n'));
-        await loadSkillsCognitionSnapshot();
-      } catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
-      finally { action.dataset.busy = '0'; action.disabled = false; }
-      return;
-    }
-    const decided = action.dataset.cognitionCandidateAction;
-    // 四决定（PRD §5.6）：accept / modify / defer / reject；其余动作已在前面分支处理。
-    if (decided !== 'accept' && decided !== 'modify' && decided !== 'defer' && decided !== 'reject') return;
-    action.dataset.busy = '1';
-    action.disabled = true;
-    try {
-      const result = await window.cogseed.invoke('cognition.candidates.decide', {
-        source,
-        candidateId,
-        decision: decided,
-      });
-      // A gate block is an expected outcome with structured findings, not a
-      // generic failure — explain what was found rather than showing the raw
-      // error string. The block itself is not user-overridable.
-      if (result && result.ok === false && result.code === 'cognition_gate_blocked') {
-        const findings = (result.gate && result.gate.findings) || [];
-        const lines = findings.slice(0, 5).map((f) => `· ${f.rule}${f.field ? ` (${f.field})` : ''}`);
-        const title = (typeof t === 'function' ? t('cognition.gate_blocked_title') : '') || '';
-        const header = title && title !== 'cognition.gate_blocked_title'
-          ? title
-          : '该候选未通过安全检查，无法保存为正式资产';
-        if (typeof uiAlert === 'function') await uiAlert([header, ...lines].join('\n'));
-        await loadSkillsCognitionSnapshot();
-        return;
-      }
-      if (!result?.ok) throw new Error(result?.error || 'candidate decision failed');
-      await loadSkillsCognitionSnapshot();
-    } catch (error) {
-      if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
-    } finally {
-      action.dataset.busy = '0';
-      action.disabled = false;
-    }
   });
 
   panel.addEventListener('change', async (event) => {
@@ -773,6 +878,10 @@ function _initSkillsCognitionBindings() {
     renderSkillsCognitionCaptures();
     renderSkillsCognitionCandidates();
     renderSkillsCognitionAssets();
+    if (_skillsCognitionState.assetCategoryFilter === 'personal'
+      && typeof window.renderPersonalOntology === 'function') {
+      window.renderPersonalOntology();
+    }
   });
 
 }

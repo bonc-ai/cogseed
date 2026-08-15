@@ -9,7 +9,7 @@ const visibleSkillIds = vi.hoisted(() => new Set<string>());
 const visibleAgentIds = vi.hoisted(() => new Set<string>());
 
 vi.mock('../../../src/main/features/skills', () => ({
-  listSkills: async () => Array.from(visibleSkillIds).map((id) => ({ id, name: id })),
+  listSkillCatalog: async () => Array.from(visibleSkillIds).map((id) => ({ id, name: id })),
 }));
 vi.mock('../../../src/main/features/agents', () => ({
   listAgents: async () => Array.from(visibleAgentIds).map((agent_id) => ({ agent_id, name: agent_id })),

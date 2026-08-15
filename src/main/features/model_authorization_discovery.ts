@@ -225,6 +225,12 @@ export async function discoverAuthorizationModels(
   if (input.kind === 'builtin') {
     const providerId = String(input.providerId || '').trim();
     if (!providerId) return { ok: false, errorCode: 'invalid_request', retryable: false, manualAllowed: false };
+    // manualModel providers (openai-compatible) have no catalog model list;
+    // route them to the manual model entry step instead of an empty list.
+    const providers = await auth.listProviders();
+    if (providers.providers.some((p) => p.id === providerId && p.manualModel)) {
+      return { ok: false, errorCode: 'unsupported_discovery', retryable: false, manualAllowed: true };
+    }
     const result = await auth.listModels(providerId);
     return { ok: true, source: 'catalog', models: normalizeModels(result.models) };
   }

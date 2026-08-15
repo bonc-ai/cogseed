@@ -201,7 +201,11 @@ describe('nseap-core-adapter › engine run', () => {
       try {
         const r = spawnSync(p, ['-c', 'import yaml'], {
           stdio: 'ignore', timeout: 10_000,
-          env: { ...process.env, PYTHONPATH: path.join(dir, 'vendor') },
+          env: {
+            ...process.env,
+            PYTHONPATH: path.join(dir, 'vendor'),
+            PYTHONDONTWRITEBYTECODE: '1',
+          },
         });
         if (r.status === 0) return true;
       } catch { /* next */ }

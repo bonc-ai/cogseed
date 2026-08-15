@@ -1238,6 +1238,13 @@ if (!gotLock) {
       }
     });
 
+    // 修正 33a16ad 之前 promote 出来的资产：lifecycleStatus 说「用户已确认」，
+    // maturity 却归在 seed（候选档）。那个矛盾会让它们永远进不了任何 Agent，
+    // 而 seed→bud 没有别的路径。幂等，修完就空转。
+    registerDeferred('recall:correct-seed-maturity', async () => {
+      const { correctMisfiledSeedMaturity } = await import('./features/recall/asset-service');
+      await correctMisfiledSeedMaturity(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('kb:reconcile', async (signal) => {
@@ -1274,6 +1281,7 @@ if (!gotLock) {
       const uid = users.getActiveUserId();
       if (uid) await recoverRecallCaptures(uid);
     }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
+
 
 
     // Drive the immediate batch + schedule the deferred one.

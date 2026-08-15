@@ -35,7 +35,7 @@ function harness() {
   return { manager: createMateBrowserManager({ createWindow }), createWindow, win, scripts };
 }
 
-describe('Mate browser manager', () => {
+describe('CogSeed browser manager', () => {
   it('creates a sandboxed hidden session and rejects unsafe URLs', async () => {
     const h = harness();
     const opened = await h.manager.open(scope(), 'https://example.com'); expect(JSON.parse(opened.content)).toMatchObject({ title: 'Example' });

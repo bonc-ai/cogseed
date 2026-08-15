@@ -45,12 +45,14 @@ export interface RuntimeRunRequest {
   context: RuntimeContextItem[];
   attachments: RuntimeAttachment[];
   agent_id?: string;
+  execution_kind?: 'cogseed-native' | 'local-cli';
+  allowed_skill_ids?: string[];
   model_profile?: string;
   working_dir?: string;
   read_only_roots?: string[];
   writable_roots?: string[];
   /** Trusted capability grants derived by the main process from the persisted
-   *  Mate task/session (never self-declared by the worker or the model). The
+   *  CogSeed task/session (never self-declared by the worker or the model). The
    *  tool runner filters its catalog by these; the host router re-validates
    *  against the persisted session independently. */
   capabilities?: string[];
@@ -168,6 +170,15 @@ function validateId(value: string, expectedPrefix: 'req' | 'mruntime', field: st
     return fail('E_RUNTIME_INVALID_ID', `invalid ${field}`);
   }
   return null;
+}
+
+/** Profile ids are `<provider>:<label>` (e.g. `openai-compatible:default`) or
+ *  `cp:<id>` for custom providers — the `:` separator is NOT covered by
+ *  `safeId`. Accept the character set `makeProfileId` / `sanitizeLabel` /
+ *  custom-provider ids actually produce (alphanumerics plus `: _ -`), bounded
+ *  to the same 300-char cap the CogSeed IPC layer applies. */
+function isModelProfileId(value: string): boolean {
+  return value.length > 0 && value.length <= 300 && /^[A-Za-z0-9:_-]+$/.test(value);
 }
 
 function realOrResolve(p: string): string {
@@ -303,7 +314,24 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
   const agentId = (raw as any).agent_id;
   if (agentId !== undefined && (typeof agentId !== 'string' || !safeId(agentId))) return fail('E_RUNTIME_INVALID_ID', 'invalid agent_id');
   const modelProfile = (raw as any).model_profile;
-  if (modelProfile !== undefined && (typeof modelProfile !== 'string' || !safeId(modelProfile))) return fail('E_RUNTIME_INVALID_ID', 'invalid model_profile');
+  if (modelProfile !== undefined && (typeof modelProfile !== 'string' || !isModelProfileId(modelProfile))) return fail('E_RUNTIME_INVALID_ID', 'invalid model_profile');
+  const executionKind = (raw as any).execution_kind ?? 'cogseed-native';
+  if (executionKind !== 'cogseed-native' && executionKind !== 'local-cli') {
+    return fail('E_RUNTIME_INVALID_REQUEST', 'invalid runtime execution_kind');
+  }
+  if (executionKind === 'local-cli') {
+    return fail('E_RUNTIME_INVALID_REQUEST', 'local CLI execution is owned by the CogSeed Backend adapter');
+  }
+  const rawAllowedSkillIds = (raw as any).allowed_skill_ids;
+  if (rawAllowedSkillIds !== undefined && (!Array.isArray(rawAllowedSkillIds) || rawAllowedSkillIds.length > 128)) {
+    return fail('E_RUNTIME_INVALID_REQUEST', 'allowed_skill_ids must be a bounded array');
+  }
+  const allowedSkillIds: string[] | undefined = rawAllowedSkillIds === undefined
+    ? undefined
+    : Array.from(new Set(rawAllowedSkillIds.map((item: unknown) => String(item || '').trim())));
+  if (allowedSkillIds?.some((item) => !safeId(item))) {
+    return fail('E_RUNTIME_INVALID_ID', 'invalid allowed_skill_ids');
+  }
   const workingDir = (raw as any).working_dir;
   if (workingDir !== undefined) {
     const normalized = normalizeFilePath(uid, workingDir, opts.allowedRoots);
@@ -327,9 +355,11 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
     task: task.trim(),
     context: context.context,
     attachments: attachments.attachments,
+    execution_kind: 'cogseed-native',
   };
   if (agentId) request.agent_id = agentId;
   if (modelProfile) request.model_profile = modelProfile;
+  if (allowedSkillIds !== undefined) request.allowed_skill_ids = allowedSkillIds;
   if (typeof workingDir === 'string') {
     request.working_dir = path.resolve(workingDir);
     request.writable_roots = [request.working_dir];

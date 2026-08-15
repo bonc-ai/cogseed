@@ -40,15 +40,31 @@ describe('icons.js', () => {
 });
 
 describe('brand channel icons', () => {
-  it('renders a fill-style brand svg for every messaging channel', () => {
+  it('renders the supplied Feishu artwork and keeps the other channel marks vector based', () => {
     const { uiIconHtml } = loadIcons();
-    for (const name of ['feishu', 'lark', 'wechat', 'wecom', 'telegram', 'qq', 'dingtalk', 'discord']) {
+    const feishu = uiIconHtml('feishu', 'messaging-brand-glyph');
+    expect(feishu).toContain('<img');
+    expect(feishu).toContain('../resources/icons/feishu.png');
+    expect(feishu).toContain('class="is-feishu"');
+
+    for (const name of ['lark', 'wechat', 'wecom', 'telegram', 'qq', 'dingtalk', 'discord']) {
       const html = uiIconHtml(name, 'messaging-brand-glyph');
       expect(html).toContain(`is-${name}`);
       expect(html).toContain('<svg');
       expect(html).toContain('fill=');
       expect(html).not.toContain('stroke="currentColor"');
     }
+  });
+
+  it('keeps the Lark mark distinct and gives the WeCom artwork a non-cropping view box', () => {
+    const { uiIconHtml } = loadIcons();
+    const lark = uiIconHtml('lark', 'messaging-brand-glyph');
+    const wecom = uiIconHtml('wecom', 'messaging-brand-glyph');
+
+    expect(lark).not.toContain('./assets/messaging/feishu.png');
+    expect(lark).toContain('viewBox="0 0 48 48"');
+    expect(wecom).toContain('viewBox="-2 -2 38 38"');
+    expect(wecom).not.toContain('viewBox="9 -3 27 35"');
   });
 
   it('keeps generic icons routing through the ui-icon wrapper', () => {
