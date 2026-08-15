@@ -81,8 +81,7 @@ async function reconcileKstarExtraction(
   userId: string,
   episode: KstarEpisodeRecord,
   review: KstarReviewRecord,
-): Promise<KstarClosureResult> {
-  const proposals = proposeKstarCandidates(episode, review);
+) : Promise<KstarClosureResult> {
   const extractionRunId = `ksx-${episode.id}`;
   let existingRun: KstarExtractionRunRecord | null = null;
   try {
@@ -91,40 +90,13 @@ async function reconcileKstarExtraction(
   } catch {
     // A malformed/future synced run is rebuilt below with the current schema.
   }
-  // Direct-only precipitation (self-evolution): the KStar line SKIPS the
-  // cognitive-precipitation candidate line (saveRecallCandidate →
-  // pending_review) entirely — lessons go straight into ability assets.
-  // Idempotency is content-addressed (same judgment + evidence → same
-  // asset id), so repeated closure runs never duplicate.
+  // Review-only closure: this pass captures the episode + Commander review
+  // and marks the run reviewed. NO precipitation happens here — the KStar
+  // line precipitates only at the WHOLE-TASK loop boundary (finish/abandon/
+  // task switch, where requirement-level aggregation runs). Per-run closure
+  // precipitation would fragment lessons before the task closes.
   if (existingRun?.status === 'created') {
-    return {
-      episode,
-      review,
-      candidates: [],
-      extractionRun: existingRun,
-    };
-  }
-  let precipitatedAssetIds: string[] = [];
-  let status: KstarExtractionRunRecord['status'] = 'created';
-  let errorCode: string | undefined;
-  try {
-    if (proposals.length) {
-      try {
-        const { precipitateDirectExperienceAssets } = await import('./direct-experience-assets');
-        const result = await precipitateDirectExperienceAssets(userId, episode, proposals);
-        precipitatedAssetIds = result.createdAssetIds;
-      } catch (error) {
-        log.warn('kstar direct experience precipitation failed', {
-          userId,
-          episodeId: episode.id,
-          error: (error as Error).message,
-        });
-      }
-    }
-  } catch {
-    status = 'failed';
-    errorCode = 'precipitation_failed';
-    log.warn('kstar precipitation degraded', { userId, episodeId: episode.id, errorCode });
+    return { episode, review, candidates: [], extractionRun: existingRun };
   }
   const extractionRun: KstarExtractionRunRecord = {
     schemaVersion: 1,
@@ -132,11 +104,10 @@ async function reconcileKstarExtraction(
     id: extractionRunId,
     episodeId: episode.id,
     reviewId: review.id,
-    candidateIds: precipitatedAssetIds,
-    status,
+    candidateIds: [],
+    status: 'created',
     createdAt: episode.createdAt,
     updatedAt: episode.updatedAt,
-    ...(errorCode ? { error: errorCode } : {}),
   };
   await replaceKstarJsonRecord(userId, 'extraction-runs', extractionRun);
   return { episode, review, candidates: [], extractionRun };

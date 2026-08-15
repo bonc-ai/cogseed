@@ -124,7 +124,14 @@ describe('KStar task-level precipitation (B5)', () => {
     const abilityAssets = await assets.listAbilityAssets('user-b5');
     const created = abilityAssets.filter((asset) => asset.id === result.createdAssetIds[0]);
     expect(created).toHaveLength(1);
-    expect(created[0]).toMatchObject({ type: 'skill_method', status: 'active', maturity: 'seed' });
+    expect(created[0]).toMatchObject({
+      type: 'skill_method',
+      status: 'active',
+      maturity: 'seed',
+      // Honest confirmation semantics: self-evolution never claims user
+      // confirmation (P0-2).
+      lifecycleStatus: 'system_precipitated_unverified',
+    });
     // Direct-only line: the cognitive-precipitation candidate line is
     // skipped, so no pending candidate exists.
     const candidates = await import('../../../../src/main/features/recall/candidate-service');

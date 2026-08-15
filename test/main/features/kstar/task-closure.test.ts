@@ -244,7 +244,7 @@ describe('KSTAR task closure', () => {
 
 
 
-  it('persists an inferred objective review and creates a governed candidate without a user form', async () => {
+  it('persists an inferred review and marks the run reviewed WITHOUT precipitating (task-loop boundary owns precipitation)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const inferred = async (_userId: string, builtEpisode: any) => ({
       review: {
@@ -275,12 +275,13 @@ describe('KSTAR task closure', () => {
       reviewState: 'inferred', inferenceMethod: 'deterministic', needsConfirmation: false,
       outcome: 'better_than_expected', deltaR: 0.3,
     });
-    // Direct-only precipitation: no candidate line, lessons go straight to
-    // ability assets.
     expect(result.candidates).toEqual([]);
+    // Review-only closure: no assets are precipitated at run level — the
+    // WHOLE-TASK loop boundary (finish/abandon/switch) owns precipitation.
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const all = await assets.listAbilityAssets('closure-user');
-    expect(all.some((a) => a.candidateId?.startsWith('direct-'))).toBe(true);
+    expect(all.some((a) => a.candidateId?.startsWith('direct-'))).toBe(false);
+    expect(result.extractionRun.status).toBe('created');
   });
 
   it('evolves delta reasoning from all five cognition sources in the episode evidence', async () => {
@@ -384,22 +385,18 @@ describe('KSTAR task closure', () => {
       commanderReviewTimeoutMs: 50,
     });
 
-    // The lesson-driven proposal precipitates with the full evidence context
-    // (direct-only: no candidate line).
     expect(result.candidates).toEqual([]);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const all = await assets.listAbilityAssets('closure-user');
-    const fresh = all.find((a) => a.candidateId?.startsWith('direct-'));
-    expect(fresh).toBeTruthy();
-    const kinds = (fresh?.evidenceRefs || []).map((ref) => ref.kind);
+    // The five-source evidence context and the reasoned lesson live on the
+    // REVIEW (closure is review-only); precipitation happens at the
+    // requirement-level loop boundary.
+    const kinds = (result.review.evidenceRefs || []).map((ref) => ref.kind);
     expect(kinds).toContain('conversation');
     expect(kinds).toContain('user_teaching_signal');
     expect(kinds).toContain('artifact_file');
-    // The reasoned lesson is the asset body (not a template sentence).
-    expect(fresh?.statement).toContain('OAuth 回调必须先校验 state');
+    expect(result.review.lesson).toContain('OAuth 回调必须先校验 state');
   });
 
-  it('precipitated assets carry an honest lifecycleStatus (system, not fake user confirmation)', async () => {
+  it('review-only closure never precipitates (task-loop boundary owns precipitation)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const inferred = async (_userId: string, builtEpisode: any) => ({
       review: {
@@ -433,17 +430,10 @@ describe('KSTAR task closure', () => {
       commanderReviewTimeoutMs: 50,
     });
 
+    // Closure is review-only: no direct assets at run level.
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const all = await assets.listAbilityAssets('closure-user');
-    // Every asset carrying the direct-precipitation candidate marker uses the
-    // honest system status — the self-evolution line never claims user
-    // confirmation (P0-2). (Older fixtures may predate the fix; the current
-    // line always writes system_precipitated_unverified.)
-    const precipitated = all.filter((a) => a.candidateId?.startsWith('direct-'));
-    expect(precipitated.length).toBeGreaterThanOrEqual(1);
-    for (const asset of precipitated) {
-      expect(asset.lifecycleStatus).toBe('system_precipitated_unverified');
-    }
+    expect(all.filter((a) => a.candidateId?.startsWith('direct-'))).toHaveLength(0);
   });
 
   it('parses a Commander in-context review and persists it with inferenceMethod commander', async () => {
@@ -560,17 +550,21 @@ describe('KSTAR task closure', () => {
 });
 
 describe('KSTAR direct experience asset line', () => {
-  it('precipitates verified workflow experience directly as an ability asset without review', async () => {
-    const closure = await import('../../../../src/main/features/kstar/task-closure');
+  it('precipitates verified workflow experience directly as an ability asset (direct line)', async () => {
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-    await seedLearningReview('closure-user', seededEpisode);
+    const result = await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [{
+      judgment: 'For similar tasks, use the verified workflow: read_file → write_file.',
+      summary: 'Verified multi-tool workflow',
+      suggestedType: 'skill_method',
+      suggestedScope: 'report',
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct' }],
+    }]);
 
-    const result = await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-
-    expect(result.episode.id).toBe('kse-run-direct');
+    expect(result.createdAssetIds).toHaveLength(1);
     const all = await assets.listAbilityAssets('closure-user');
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({
@@ -578,24 +572,29 @@ describe('KSTAR direct experience asset line', () => {
       maturity: 'seed',
       type: 'skill_method',
       version: '1',
+      lifecycleStatus: 'system_precipitated_unverified',
     });
     expect(all[0].statement).toContain('verified workflow');
     expect(all[0].evidenceRefs.some((ref) => ref.kind === 'execution' && ref.id === 'kse-run-direct')).toBe(true);
-    // Direct-only precipitation: the cognitive-precipitation candidate line
-    // is skipped — no pending_review candidate is created for this lesson.
+    // The cognitive-precipitation candidate line is skipped — no candidates.
     const pending = await candidates.listRecallCandidates('closure-user');
-    expect(pending.some((candidate) => candidate.status === 'pending_review' && candidate.suggestedType === 'skill_method')).toBe(false);
+    expect(pending).toHaveLength(0);
   });
 
-  it('does not duplicate the direct asset across repeated closure delivery', async () => {
-    const closure = await import('../../../../src/main/features/kstar/task-closure');
+  it('does not duplicate the direct asset across repeated precipitation (content-addressed)', async () => {
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-    await seedLearningReview('closure-user', seededEpisode);
-
-    await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-    await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+    const proposal = {
+      judgment: 'For similar tasks, use the verified workflow: read_file → write_file.',
+      summary: 'Verified multi-tool workflow',
+      suggestedType: 'skill_method',
+      suggestedScope: 'report',
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-dup' }],
+    };
+    await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [proposal]);
+    await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [proposal]);
 
     expect(await assets.listAbilityAssets('closure-user')).toHaveLength(1);
   });
@@ -697,17 +696,18 @@ describe('KSTAR group terminal subscriber', () => {
 });
 
 describe('KSTAR closure concurrency', () => {
-  it('serializes concurrent captures for the same user and episode (single asset)', async () => {
+  it('serializes concurrent captures for the same user and episode (single extraction run)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
-    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const store = await import('../../../../src/main/features/kstar/episode-store');
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-concurrent', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
     await seedLearningReview('closure-user', seededEpisode);
     const input = { userId: 'closure-user', runId: 'run-concurrent', request, events, createdAt: '2026-08-05T00:00:00.000Z' };
     await Promise.all([closure.captureRuntimeKstarClosure(input), closure.captureRuntimeKstarClosure(input)]);
-    // Content-addressed direct precipitation: concurrent runs yield exactly
-    // one asset (the second run reuses the idempotent result).
-    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(1);
+    // Review-only closure serialized: exactly one extraction run (no
+    // duplicates) and the review is recorded once.
+    const runs = await store.listKstarJsonRecords('closure-user', 'extraction-runs');
+    expect(runs.filter((run) => run.episodeId === 'kse-run-concurrent')).toHaveLength(1);
   });
 });
 
