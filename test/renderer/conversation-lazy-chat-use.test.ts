@@ -9,7 +9,6 @@ const skillsSource = fs.readFileSync(path.join(rendererRoot, 'modules/skills.js'
 const chatUseSource = fs.readFileSync(path.join(rendererRoot, 'modules/chat-use.js'), 'utf8');
 const conversationSource = fs.readFileSync(path.join(rendererRoot, 'modules/conversation.js'), 'utf8');
 const queueSource = fs.readFileSync(path.join(rendererRoot, 'modules/queue-draft.js'), 'utf8');
-const projectSource = fs.readFileSync(path.join(rendererRoot, 'modules/project-detail.js'), 'utf8');
 const agentsSource = fs.readFileSync(path.join(rendererRoot, 'modules/agents.js'), 'utf8');
 
 describe('chat-use core and lazy Skills page boundary', () => {
@@ -37,7 +36,6 @@ describe('chat-use core and lazy Skills page boundary', () => {
     expect(conversationSource).toContain('transformWithChatUse(requestText)');
     expect(conversationSource).not.toContain("loadRendererFeature('skills')");
     expect(queueSource).toContain('transformWithChatUse(next.content, use)');
-    expect(projectSource).toContain('transformWithChatUse(requestText)');
   });
 
   it('guards optional lazy Skills refreshes as undeclared globals', () => {

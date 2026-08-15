@@ -256,10 +256,10 @@ function normalizePolicy(input?: Partial<MessagingPolicy>, strict = false): Mess
 function normalizeWorkspace(input?: WorkspaceScope): WorkspaceScope {
   if (!input || input.type === 'default') return { type: 'default' };
   if (input.type === 'all') return { type: 'all' };
-  if (input.type !== 'project' || !input.projectId || !safeId(input.projectId)) {
+  if (input.type !== 'space' || !input.spaceId || !safeId(input.spaceId)) {
     throw new Error('invalid workspace scope');
   }
-  return { type: 'project', projectId: input.projectId };
+  return { type: 'space', spaceId: input.spaceId };
 }
 
 function normalizeResponseMode(

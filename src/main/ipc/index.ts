@@ -20,11 +20,10 @@ import * as users from '../features/users';
 import * as chats from '../features/chats';
 import * as conversationAside from '../features/conversation_aside';
 import * as modelClient from '../model/client';
-import * as projects from '../features/projects';
 import * as spaces from '../features/spaces';
-import * as projectFiles from '../features/project_files';
-import * as projectTasks from '../features/project_tasks';
-import * as projectLibraryIndexer from '../features/project_library_indexer';
+import * as spacesArtifacts from '../features/spaces_artifacts';
+import * as spaceFiles from '../features/project_files';
+import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
@@ -117,7 +116,7 @@ import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench'
 import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
-import { safeId } from '../storage';
+import { readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
   markConfirmationVisible as markDeleteConfirmationVisible,
@@ -130,6 +129,7 @@ import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillD
 import {
   chatAttachmentDirForConversation,
   chatAttachmentRelPath,
+  conversationMessageReadFile,
   findAutoTaskLocation,
   globalAutoTaskLocation,
 } from '../util/project-layout';
@@ -331,17 +331,17 @@ async function _importLocalFileEntries(payload: any, ctx: IpcContext): Promise<{
     return { files: results };
   }
 
-  if (scope === 'project') {
-    const projectId = payload?.projectId;
-    if (!safeId(projectId) || !await projects.projectExists(ctx.userId, projectId)) {
-      throw new Error('invalid projectId');
+  if (scope === 'space') {
+    const spaceId = payload?.spaceId;
+    if (!safeId(spaceId) || !await spaces.spaceExists(ctx.userId, spaceId)) {
+      throw new Error('invalid spaceId');
     }
     for (const entry of entries) {
       const name = path.basename(entry.name);
       const targetName = _targetInDir(payload?.targetDir, name);
-      const result = await projectFiles.importProjectFileFromPath(
+      const result = await spaceFiles.importSpaceFileFromPath(
         ctx.userId,
-        projectId,
+        spaceId,
         targetName,
         entry.path,
       );
@@ -622,7 +622,21 @@ async function _isConversationRecordedFile(userId: string, cid: string, absPath:
 async function _isAllowedFileActionPath(userId: string, payload: any, absPath: string): Promise<boolean> {
   if (isPathAllowed(absPath, await _ipcFileSandboxAllowedRoots(userId, payload))) return true;
   const cid = payload?.cid;
-  return typeof cid === 'string' && !!cid && await _isConversationRecordedFile(userId, cid, absPath);
+  if (typeof cid !== 'string' || !cid) return false;
+  // 1) 会话记录过的产物文件（消息 produced[]）
+  if (await _isConversationRecordedFile(userId, cid, absPath)) return true;
+  // 2) 空间会话工作区目录内的文件（工作区兜底扫到的产物——部分工具直接写文件、
+  //    未登记 produced，打开/定位产物时也应放行）
+  try {
+    const conv = await chats.getConversation(userId, cid);
+    if (conv?.space_id) {
+      const { getConversationWorkspacePath } = await import('../features/group_chat/conv_workspace');
+      const wsDir = path.resolve(await getConversationWorkspacePath(userId, cid));
+      const target = path.resolve(absPath);
+      if (target === wsDir || target.startsWith(wsDir + path.sep)) return true;
+    }
+  } catch { /* fall through to false */ }
+  return false;
 }
 
 // Scan an HTML file with constant memory and return only the authored
@@ -693,17 +707,24 @@ function _libraryTextTargetName(payload: any): string {
   return raw || 'archive.md';
 }
 
-async function _resolveLibraryTargetProjectId(userId: string, payload: any): Promise<string | undefined> {
+async function _resolveLibraryTargetSpaceId(userId: string, payload: any): Promise<string | undefined> {
   const requestedScope = payload?.targetScope && typeof payload.targetScope === 'object'
     ? payload.targetScope
     : null;
-  const cidProjectId = await _resolveWorkspaceScope(userId, payload);
-  let projectId: string | undefined = cidProjectId;
-  if (requestedScope?.type === 'global') projectId = undefined;
-  if (requestedScope?.type === 'project' && typeof requestedScope.projectId === 'string' && safeId(requestedScope.projectId)) {
-    projectId = requestedScope.projectId;
+  let spaceId: string | undefined;
+  if (payload && typeof payload.cid === 'string' && payload.cid && safeId(payload.cid)) {
+    const { getConversation } = await import('../features/chats');
+    const conv = await getConversation(userId, payload.cid);
+    const sid = (conv as any)?.space_id;
+    spaceId = typeof sid === 'string' && sid ? sid : undefined;
+  } else if (payload && typeof payload.spaceId === 'string' && payload.spaceId && safeId(payload.spaceId)) {
+    spaceId = payload.spaceId;
   }
-  return projectId;
+  if (requestedScope?.type === 'global') spaceId = undefined;
+  if (requestedScope?.type === 'space' && typeof requestedScope.spaceId === 'string' && safeId(requestedScope.spaceId)) {
+    spaceId = requestedScope.spaceId;
+  }
+  return spaceId;
 }
 
 async function _importProducedToLibrary(payload: any, ctx: IpcContext): Promise<any> {
@@ -718,13 +739,13 @@ async function _importProducedToLibrary(payload: any, ctx: IpcContext): Promise<
   catch { return { ok: false, error: 'not_found' }; }
   if (!st.isFile()) return { ok: false, error: 'not_supported' };
 
-  const projectId = await _resolveLibraryTargetProjectId(ctx.userId, payload);
+  const spaceId = await _resolveLibraryTargetSpaceId(ctx.userId, payload);
   const buf = fs.readFileSync(norm);
   const targetName = _libraryImportTargetName(payload, norm);
-  if (projectId) {
-    const result = await projectFiles.uploadProjectFile(ctx.userId, projectId, targetName, buf);
+  if (spaceId) {
+    const result = await spaceFiles.uploadSpaceFile(ctx.userId, spaceId, targetName, buf);
     if (!result.ok) return result;
-    return { ok: true, scope: 'project', projectId, info: result.info };
+    return { ok: true, scope: 'space', spaceId, info: result.info };
   }
 
   const relPath = typeof payload?.targetPath === 'string' && payload.targetPath.trim()
@@ -738,11 +759,11 @@ async function _importProducedToLibrary(payload: any, ctx: IpcContext): Promise<
 async function _writeTextToLibrary(payload: any, ctx: IpcContext): Promise<any> {
   const content = typeof payload?.content === 'string' ? payload.content : '';
   const targetName = _libraryTextTargetName(payload);
-  const projectId = await _resolveLibraryTargetProjectId(ctx.userId, payload);
-  if (projectId) {
-    const result = await projectFiles.uploadProjectFile(ctx.userId, projectId, targetName, Buffer.from(content, 'utf8'));
+  const spaceId = await _resolveLibraryTargetSpaceId(ctx.userId, payload);
+  if (spaceId) {
+    const result = await spaceFiles.uploadSpaceFile(ctx.userId, spaceId, targetName, Buffer.from(content, 'utf8'));
     if (!result.ok) return result;
-    return { ok: true, scope: 'project', projectId, info: result.info };
+    return { ok: true, scope: 'space', spaceId, info: result.info };
   }
 
   const result = contexts.writeContextFile(targetName, content);
@@ -812,7 +833,7 @@ async function _afterRecycleRestore(ctx: IpcContext, paths: string[]): Promise<v
     }
     const projectFile = /^cloud\/projects\/([^/]+)\/(?:contexts|files)\/(.+)$/.exec(rel);
     if (projectFile && safeId(projectFile[1]) && projectFile[2]) {
-      projectLibraryIndexer.enqueue(ctx.userId, projectFile[1], projectFile[2], 'upsert');
+      spaceLibraryIndexer.enqueue(ctx.userId, projectFile[1], projectFile[2], 'upsert');
     }
   }
   if (change.domains.includes('agents')) {
@@ -1053,16 +1074,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  'conversations.create': async ({ title = '', projectId = '', kind = '' } = {}, ctx) => {
-    // Validate the projectId belongs to this user before persisting it on
-    // the conv record. Unknown / invalid projectIds are dropped silently
-    // (the conv lands without project membership) — the renderer should
-    // not be able to put a conv into a project the backend doesn't know
-    // about, but a stale / since-deleted pid coming from the commander chip
+  'conversations.create': async ({ title = '', spaceId = '', kind = '' } = {}, ctx) => {
+    // Validate the spaceId belongs to this user before persisting it on
+    // the conv record. Unknown / invalid spaceIds are dropped silently
+    // (the conv lands without space membership) — the renderer should
+    // not be able to put a conv into a space the backend doesn't know
+    // about, but a stale / since-deleted sid coming from the commander chip
     // shouldn't fail the create either.
-    let validProjectId = '';
-    if (projectId && typeof projectId === 'string' && safeId(projectId)) {
-      if (await projects.projectExists(ctx.userId, projectId)) validProjectId = projectId;
+    let validSpaceId = '';
+    if (spaceId && typeof spaceId === 'string' && safeId(spaceId)) {
+      if (await spaces.spaceExists(ctx.userId, spaceId)) validSpaceId = spaceId;
     }
     // 会话 kind 白名单：目前只有 space_builder（空间模式）被允许透传；
     // 其余一律回落 normal，防止渲染层任意指定会话类型。
@@ -1070,9 +1091,74 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const conv = await chats.createConversation(ctx.userId, {
       kind: convKind,
       title,
-      ...(validProjectId ? { projectId: validProjectId } : {}),
+      ...(validSpaceId ? { spaceId: validSpaceId } : {}),
     });
     return { conversation: conv };
+  },
+
+  // ── 把已有会话绑定到空间（问题 A：只有新建时能绑，这里补「移入/移出」）──
+  // spaceId 合法且属于该用户 → 绑定；空/缺失 → 解绑（移出空间回到普通列表）。
+  'conversations.setSpace': async (args, ctx) => {
+    const { cid, spaceId } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    let validSpaceId: string | null = null;
+    if (spaceId && typeof spaceId === 'string' && safeId(spaceId)) {
+      if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('invalid spaceId');
+      validSpaceId = spaceId;
+    }
+    const conv = await chats.setConversationSpace(
+      ctx.userId, cid, validSpaceId, conversationProjectHint(args));
+    if (!conv) throw new Error('conversation not found');
+    return { conversation: conv };
+  },
+
+  // ── 空间任务引用（任务级：产物 → references / 资产 → 上下文块）──────────
+  'conversations.taskRefs.list': async ({ cid } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const conv = await chats.getConversation(ctx.userId, cid);
+    return { references: conv?.task_references || [] };
+  },
+
+  'conversations.taskRefs.add': async ({ cid, reference } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (!reference || typeof reference !== 'object') throw new Error('invalid reference');
+    if (reference.kind !== 'artifact' && reference.kind !== 'asset') throw new Error('invalid reference kind');
+    if (typeof reference.name !== 'string' || !reference.name) throw new Error('invalid reference name');
+    const conv = await chats.getConversation(ctx.userId, cid);
+    if (!conv) throw new Error('conversation not found');
+    const refs = [...(conv.task_references || [])];
+    if (refs.length >= 20) throw new Error('too many references');
+    const item = {
+      kind: reference.kind,
+      name: String(reference.name).slice(0, 200),
+      ...(typeof reference.source_cid === 'string' && reference.source_cid ? { source_cid: reference.source_cid } : {}),
+      ...(typeof reference.source_title === 'string' && reference.source_title ? { source_title: String(reference.source_title).slice(0, 200) } : {}),
+      ...(typeof reference.source_msg_id === 'string' && reference.source_msg_id ? { source_msg_id: reference.source_msg_id } : {}),
+      ...(typeof reference.source_ts === 'string' && reference.source_ts ? { source_ts: reference.source_ts } : {}),
+      ...(typeof reference.file_name === 'string' && reference.file_name ? { file_name: String(reference.file_name).slice(0, 200) } : {}),
+      ...(typeof reference.asset_id === 'string' && reference.asset_id ? { asset_id: reference.asset_id } : {}),
+      ...(typeof reference.asset_type === 'string' && reference.asset_type ? { asset_type: String(reference.asset_type).slice(0, 60) } : {}),
+      ...(typeof reference.summary === 'string' && reference.summary ? { summary: String(reference.summary).slice(0, 400) } : {}),
+    };
+    const key = item.kind === 'asset'
+      ? `asset:${item.asset_id || ''}`
+      : `artifact:${item.source_cid || ''}:${item.file_name || ''}`;
+    const dup = refs.some((r) => (r.kind === 'asset' ? `asset:${r.asset_id || ''}` : `artifact:${r.source_cid || ''}:${r.file_name || ''}`) === key);
+    if (!dup) refs.push(item);
+    await chats.updateConversation(ctx.userId, cid, { task_references: refs });
+    return { references: refs };
+  },
+
+  'conversations.taskRefs.remove': async ({ cid, index } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const conv = await chats.getConversation(ctx.userId, cid);
+    if (!conv) throw new Error('conversation not found');
+    const refs = [...(conv.task_references || [])];
+    const i = Number(index);
+    if (!Number.isInteger(i) || i < 0 || i >= refs.length) throw new Error('invalid index');
+    refs.splice(i, 1);
+    await chats.updateConversation(ctx.userId, cid, { task_references: refs.length ? refs : undefined });
+    return { references: refs };
   },
 
   'conversations.delete': async (args, ctx) => {
@@ -1138,51 +1224,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { deleted };
   },
 
-  'conversations.batchUpdateProject': async ({ conversationIds, projectId }, ctx) => {
-    if (!Array.isArray(conversationIds)) throw new Error('conversationIds must be an array');
-    if (typeof projectId !== 'string' || !safeId(projectId)) throw new Error('invalid projectId');
-    const result = await chats.batchUpdateConversationProject(ctx.userId, conversationIds, projectId);
-    return result;
-  },
-
-  // ── Projects (logical groups of conversations + scoped workspace) ──
-  'projects.list': async (_payload, ctx) => {
-    return { projects: await projects.listProjects(ctx.userId) };
-  },
-
-  'projects.create': async ({ name }, ctx) => {
-    const result = await projects.createProject(ctx.userId, name);
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { project: result.project };
-  },
-
-  'projects.rename': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    const result = await projects.renameProject(ctx.userId, projectId, name);
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { project: result.project };
-  },
-
-  'projects.delete': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    const batch = await recycleBin.createAppRecycleBatchForProject(ctx.userId, projectId);
-    if (!batch?.items?.length) throw _codedError('recycle_archive_failed');
-    const result = await projects.deleteProject(ctx.userId, projectId);
-    if (!result.ok) {
-      await recycleBin.deleteRecycleBatch(ctx.userId, batch.id).catch(() => {});
-      throw new Error((result as { error: string }).error);
-    }
-    return { deleted_convs: result.deleted_convs, deleted_auto_tasks: result.deleted_auto_tasks };
-  },
-
-  'projects.get': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    const project = await projects.getProject(ctx.userId, projectId);
-    if (!project) throw new Error('not_found');
-    return { project };
-  },
-
-  // ── Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制）────────────
   'spaces.list': async (_payload, ctx) => {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
@@ -1197,8 +1238,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { skills: skillRows, agents: agentRows };
   },
 
-  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1210,7 +1251,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       const err = result as { error: string; details?: string[] };
       throw new Error(err.details && err.details.length ? `invalid_draft: ${err.details.join('；')}` : err.error);
     }
-    return { space: result.space };
+    // corrections：资源引用（模板/技能/智能体）自动纠正/忽略说明（LLM 幻觉 id 的后端兜底）
+    return { space: result.space, ...(result.corrections && result.corrections.length ? { corrections: result.corrections } : {}) };
   },
 
   'spaces.get': async ({ spaceId }, ctx) => {
@@ -1220,9 +1262,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { space };
   },
 
-  'spaces.update': async ({ spaceId, name, icon, template_id } = {}, ctx) => {
+  'spaces.update': async (args, ctx) => {
+    const { spaceId, name, icon, template_id, base_agent, main_skill_ref } = args || {};
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id });
+    const result = await spaces.updateSpace(ctx.userId, spaceId, {
+      name, icon, template_id,
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'base_agent') ? { base_agent } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'main_skill_ref') ? { main_skill_ref } : {}),
+    });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1231,7 +1278,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const result = await spaces.deleteSpace(ctx.userId, spaceId);
     if (!result.ok) throw new Error((result as { error: string }).error);
-    return { unbound_projects: result.unbound_projects };
+    return { ok: true };
   },
 
   'spaces.resources.add': async ({ spaceId, kind, id } = {}, ctx) => {
@@ -1278,116 +1325,115 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { scenarios };
   },
 
-  // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
-  'projects.bindSpace': async ({ projectId, spaceId } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (spaceId && !safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await projects.bindSpace(ctx.userId, projectId, spaceId || '');
+  // ── 空间三 tab 数据源（空间化重构阶段 1）──────────────────────────────
+  'spaces.conversations.list': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    return { conversations: await chats.listSpaceConversations(ctx.userId, spaceId) };
+  },
+
+  'spaces.artifacts.list': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    return { artifacts: await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId) };
+  },
+
+  'spaces.artifacts.confirm': async ({ spaceId, cid, name } = {}, ctx) => {
+    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    const result = await spacesArtifacts.confirmSpaceArtifact(ctx.userId, spaceId, cid, name);
     if (!result.ok) throw new Error((result as { error: string }).error);
-    return { ok: true };
+    return { confirmed: result.confirmed };
   },
 
-  'projects.getSpace': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    return { space: await projects.getSpace(ctx.userId, projectId) };
+  'spaces.artifacts.reject': async ({ spaceId, cid, name } = {}, ctx) => {
+    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    const result = await spacesArtifacts.rejectSpaceArtifact(ctx.userId, spaceId, cid, name);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { rejected: result.rejected };
   },
 
-  // User-authored per-project instructions (ORKAS.md). User-owned: edited only
-  // here via the project settings UI; agents read it from the system prompt.
-  'projects.instructions.get': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    const result = await projects.readProjectInstructions(ctx.userId, projectId);
+  'spaces.assets.list': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    return { bindings: await spaces.listSpaceAssetBindings(ctx.userId, spaceId) };
+  },
+
+  'spaces.assets.bind': async ({ spaceId, ref } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const result = await spaces.bindSpaceAsset(ctx.userId, spaceId, ref || {});
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { bindings: result.bindings };
+  },
+
+  // ── 空间作用域（@ 选择器按空间能力过滤：agents ∪ skills = 模板 bundle ∪ extra）──
+  // 语义与 runner 一致（S1）：空间缺失/空配置/全失效 → scope=null（全局可见不过滤）。
+  'spaces.scope.resolve': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('invalid spaceId');
+    const scope = await spaces.resolveSpaceScope(ctx.userId, spaceId);
+    return { scope }; // null = 全局；否则 { skills: string[]; agents: string[] }
+  },
+
+  'spaces.assets.unbind': async ({ spaceId, assetId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const result = await spaces.unbindSpaceAsset(ctx.userId, spaceId, assetId || '');
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { bindings: result.bindings };
+  },
+
+  // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
+  'spaces.instructions.get': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const result = await spaces.readSpaceInstructions(ctx.userId, spaceId);
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { content: result.content, limit: result.limit };
   },
 
-  'projects.instructions.set': async ({ projectId, content }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.instructions.set': async ({ spaceId, content }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof content !== 'string') throw new Error('invalid content');
-    const result = await projects.writeProjectInstructions(ctx.userId, projectId, content);
+    const result = await spaces.writeSpaceInstructions(ctx.userId, spaceId, content);
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { ok: true };
   },
 
-  // ── Project tasks (structured work backlog — user + agent shared) ─────────
-  'projects.tasks.list': async ({ projectId } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    const tasks = await projectTasks.listTasks(ctx.userId, projectId);
-    return { tasks, progress: projectTasks.computeProgress(tasks) };
+  'spaces.files.list': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    return { files: await spaceFiles.listSpaceFiles(ctx.userId, spaceId) };
   },
 
-  'projects.tasks.create': async ({ projectId, title, detail, status, owner_agent, owner_agent_id, depends_on } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof title !== 'string') throw new Error('invalid title');
-    const r = await projectTasks.createTask(ctx.userId, projectId, {
-      title, detail, status, owner_agent, owner_agent_id, depends_on, created_by: 'user',
-    });
-    if (!r.ok) throw new Error((r as { error: string }).error);
-    return { task: r.task };
+  'spaces.files.tree': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    return { tree: await spaceFiles.listSpaceFileTree(ctx.userId, spaceId) };
   },
 
-  'projects.tasks.update': async ({ projectId, taskId, title, detail, status, owner_agent, owner_agent_id, result_ref } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
-    const r = await projectTasks.updateTask(ctx.userId, projectId, taskId, { title, detail, status, owner_agent, owner_agent_id, result_ref });
-    if (!r.ok) throw new Error((r as { error: string }).error);
-    return { task: r.task };
-  },
-
-  'projects.tasks.complete': async ({ projectId, taskId, resultRef } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
-    const r = await projectTasks.completeTask(ctx.userId, projectId, taskId, resultRef);
-    if (!r.ok) throw new Error((r as { error: string }).error);
-    return { task: r.task };
-  },
-
-  'projects.tasks.delete': async ({ projectId, taskId } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
-    const r = await projectTasks.deleteTask(ctx.userId, projectId, taskId);
-    if (!r.ok) throw new Error((r as { error: string }).error);
-    return { ok: true };
-  },
-
-  'projects.files.list': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    return { files: await projectFiles.listProjectFiles(ctx.userId, projectId) };
-  },
-
-  'projects.files.tree': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    return { tree: await projectFiles.listProjectFileTree(ctx.userId, projectId) };
-  },
-
-  'projects.files.mkdir': async ({ projectId, path: relPath }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.mkdir': async ({ spaceId, path: relPath }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof relPath !== 'string' || !relPath) throw new Error('invalid path');
-    return projectFiles.createProjectDir(ctx.userId, projectId, relPath);
+    return spaceFiles.createSpaceDir(ctx.userId, spaceId, relPath);
   },
 
-  'projects.files.upload': async ({ projectId, name, data }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.upload': async ({ spaceId, name, data }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof data !== 'string') throw new Error('missing data');
     if (data.length > 12 * 1024 * 1024) {
       return { ok: false, error: 'large uploads require path-based import', code: 'E_IMPORT_PATH_REQUIRED' };
     }
     const buf = Buffer.from(data, 'base64');
-    return projectFiles.uploadProjectFile(ctx.userId, projectId, name || '', buf);
+    return spaceFiles.uploadSpaceFile(ctx.userId, spaceId, name || '', buf);
   },
 
-  'projects.files.pickAndUpload': async ({ projectId, targetDir } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
+  'spaces.files.pickAndUpload': async ({ spaceId, targetDir } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
     const picked = await _pickLocalFiles('Choose files', PROJECT_PICK_EXTENSIONS, true);
     const results = [];
     for (const filePath of picked) {
       const name = path.basename(filePath);
       try {
         const targetName = _targetInDir(targetDir, name);
-        const res = await projectFiles.importProjectFileFromPath(ctx.userId, projectId, targetName, filePath);
+        const res = await spaceFiles.importSpaceFileFromPath(ctx.userId, spaceId, targetName, filePath);
         results.push({ name, targetName, ...res });
       } catch (err) {
         results.push({ ok: false, name, error: (err as Error)?.message || String(err) });
@@ -1396,73 +1442,73 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, files: results };
   },
 
-  'projects.files.createText': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.createText': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    return projectFiles.createProjectTextFile(ctx.userId, projectId, name);
+    return spaceFiles.createSpaceTextFile(ctx.userId, spaceId, name);
   },
 
-  'projects.files.readText': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.readText': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    return projectFiles.readProjectTextFile(ctx.userId, projectId, name);
+    return spaceFiles.readSpaceTextFile(ctx.userId, spaceId, name);
   },
 
-  'projects.files.updateText': async ({ projectId, name, content }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.updateText': async ({ spaceId, name, content }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
     if (typeof content !== 'string') throw new Error('missing content');
-    return projectFiles.updateProjectTextFile(ctx.userId, projectId, name, content);
+    return spaceFiles.updateSpaceTextFile(ctx.userId, spaceId, name, content);
   },
 
-  'projects.files.rename': async ({ projectId, oldName, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.rename': async ({ spaceId, oldName, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof oldName !== 'string' || !oldName) throw new Error('invalid oldName');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    return projectFiles.renameProjectFile(ctx.userId, projectId, oldName, name);
+    return spaceFiles.renameSpaceFile(ctx.userId, spaceId, oldName, name);
   },
 
-  'projects.files.delete': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.delete': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
     await recycleBin.createAppRecycleBatchForCloudEntry(
       ctx.userId,
-      `cloud/projects/${projectId}/contexts/${name}`,
-      'project_file',
+      `cloud/spaces/${spaceId}/contexts/${name}`,
+      'space_file',
     );
-    return projectFiles.deleteProjectEntry(ctx.userId, projectId, name);
+    return spaceFiles.deleteSpaceEntry(ctx.userId, spaceId, name);
   },
 
   'library.transfer': async (payload, ctx) => {
     return libraryTransfer.transferLibraryEntries(ctx.userId, payload);
   },
 
-  'projects.files.absPath': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.absPath': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    const r = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    const r = await spaceFiles.resolveSpaceFileAbsPath(ctx.userId, spaceId, name);
     if (!r.ok) return { ok: false, error: (r as { error?: string }).error || 'failed' };
     return { ok: true, path: r.absPath, kind: r.kind };
   },
 
-  'projects.files.image': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.image': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    return projectFiles.readProjectImage(ctx.userId, projectId, name);
+    return spaceFiles.readSpaceImage(ctx.userId, spaceId, name);
   },
 
-  'projects.files.docxHtml': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.docxHtml': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    return projectFiles.readProjectDocxHtml(ctx.userId, projectId, name);
+    return spaceFiles.readSpaceDocxHtml(ctx.userId, spaceId, name);
   },
 
-  'projects.files.status': async ({ projectId, skipReconcile }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    const reconcile = skipReconcile ? null : await projectLibraryIndexer.reconcile(ctx.userId, projectId);
-    const summary = projectLibraryIndexer.statusSummary(ctx.userId, projectId);
-    const files = projectLibraryIndexer.listFiles(ctx.userId, projectId).map((r) => ({
+  'spaces.files.status': async ({ spaceId, skipReconcile }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const reconcile = skipReconcile ? null : await spaceLibraryIndexer.reconcile(ctx.userId, spaceId);
+    const summary = spaceLibraryIndexer.statusSummary(ctx.userId, spaceId);
+    const files = spaceLibraryIndexer.listFiles(ctx.userId, spaceId).map((r) => ({
       name: r.rel_path,
       path: r.rel_path,
       kind: r.kind,
@@ -1475,18 +1521,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { summary, files, reconcile };
   },
 
-  'projects.files.reconcile': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    const result = await projectLibraryIndexer.reconcile(ctx.userId, projectId);
+  'spaces.files.reconcile': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const result = await spaceLibraryIndexer.reconcile(ctx.userId, spaceId);
     return { result };
   },
 
-  'projects.files.reprocess': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.reprocess': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    projectLibraryIndexer.enqueue(ctx.userId, projectId, name, 'upsert', { force: true });
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    spaceLibraryIndexer.enqueue(ctx.userId, spaceId, name, 'upsert', { force: true });
     return { ok: true, name };
   },
 
@@ -1496,86 +1542,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // the renderer can paint the detail page in one round-trip. Unknown ids
   // (referent deleted) are pruned here so stale bindings never become user
   // cleanup work.
-  'projects.bindings.list': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    const [agentList, skillList] = await Promise.all([
-      agents.listAgentSummaries(),
-      skills.listSkills(),
-    ]);
-    const dispatchableAgents = agentList.filter((agent) => agents.isAgentChatDispatchable(agent));
-    const agentById = new Map(dispatchableAgents.map((agent) => [agent.agent_id, agent]));
-    const skillById = new Map(skillList.map((s: any) => [s.id, s]));
-    const pruned = await projects.pruneBindings(ctx.userId, projectId, {
-      agents: new Set(dispatchableAgents.map((agent) => agent.agent_id)),
-      skills: new Set(skillList.map((s: any) => s.id)),
-    });
-    if (!pruned.ok) throw new Error((pruned as { error: string }).error);
-    const bindings = pruned.bindings;
-    return {
-      bindings,
-      agentDetails: bindings.agents
-        .map((id) => agentById.get(id))
-        .filter(Boolean),
-      skillDetails: bindings.skills
-        .map((id) => skillById.get(id))
-        .filter(Boolean),
-    };
-  },
-
-  'projects.bindings.add': async ({ projectId, kind, id }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof id !== 'string' || !id) throw new Error('invalid id');
-    let result;
-    if (kind === 'agent') {
-      if (!agents.isValidAgentId(id)) throw new Error('invalid id');
-      const agent = await agents.getAgent(id);
-      if (!agents.isAgentChatDispatchable(agent)) throw new Error('agent_disabled');
-      result = await projects.addAgentBinding(ctx.userId, projectId, id);
-    } else if (kind === 'skill') {
-      result = await projects.addSkillBinding(ctx.userId, projectId, id);
-    } else {
-      throw new Error('invalid kind');
-    }
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { bindings: result.bindings };
-  },
-
-  'projects.bindings.remove': async ({ projectId, kind, id }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof id !== 'string' || !id) throw new Error('invalid id');
-    let result;
-    if (kind === 'agent') {
-      result = await projects.removeAgentBinding(ctx.userId, projectId, id);
-    } else if (kind === 'skill') {
-      result = await projects.removeSkillBinding(ctx.userId, projectId, id);
-    } else {
-      throw new Error('invalid kind');
-    }
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { bindings: result.bindings };
-  },
-
-  // Candidates = enabled [builtin + custom] minus already-bound. Powers the
-  // "Add" picker on the project detail page so disabled agents never appear
-  // as addable project members.
-  'projects.bindings.candidates': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    const bindings = await projects.getBindings(ctx.userId, projectId);
-    const boundAgents = new Set(bindings.agents);
-    const boundSkills = new Set(bindings.skills);
-    const [agentList, skillList] = await Promise.all([
-      agents.listAgentSearchListings(),
-      skills.listSkills(),
-    ]);
-    return {
-      agents: agentList.filter((agent) => agents.isAgentChatDispatchable(agent) && !boundAgents.has(agent.agent_id)),
-      skills: skillList.filter((s: any) => !boundSkills.has(s.id)),
-    };
-  },
-
-  // ── Auto tasks (per-task dir at cloud/auto_tasks/<id>/; see features/auto_tasks.ts) ──
   'autoTasks.list': async ({ projectId } = {}, ctx) => {
     const opts: { projectId?: string | null } = {};
     if (projectId === null) opts.projectId = null;
@@ -1649,7 +1615,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
     if (!safeId(projectId)) throw new Error('invalid projectId');
     if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
-    const resolved = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    const resolved = await spaceFiles.resolveSpaceFileAbsPath(ctx.userId, projectId, name);
     if (!resolved.ok) throw new Error((resolved as { error?: string }).error || 'not_found');
     const st = fs.statSync(resolved.absPath);
     if (!st.isFile()) throw new Error('not_a_file');
@@ -1750,6 +1716,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // ── Group chat (replaces legacy conversations.send / .stream / .markFormSubmitted) ──
+  // 任务级引用合并（@ 产物/资产 → task_references）已下沉到 groupChat.send() 核心——
+  // conversations.sendStream（标准 composer 实际走的流式路径）与 groupChat.send 都汇聚
+  // 到那里，引用才能随消息发出。这里只做参数透传。
   'groupChat.send': async ({ cid, content, attachments, use_selections, references }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     const text = (content || '').trim();
@@ -1917,44 +1886,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         receiptExecutionId,
       }),
     };
-  },
-
-  'workbench.actionPlan.read': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid project id');
-    return { ok: true, plan: await workbench.projectActionPlan(ctx.userId, projectId) };
-  },
-
-  'workbench.taskRuns.list': async ({ projectId, taskId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid project id');
-    if (!safeId(taskId)) throw new Error('invalid task id');
-    return { ok: true, runs: await workbench.listTaskRuns(ctx.userId, projectId, taskId) };
-  },
-
-  'workbench.taskRun.start': async ({ projectId, taskId, baselineId, role }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid project id');
-    if (!safeId(taskId)) throw new Error('invalid task id');
-    if (!safeId(baselineId)) throw new Error('invalid baseline id');
-    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
-    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id);
-    if (!skillDir) return { ok: false, refusal: 'baseline_unreadable' };
-    const started = await workbench.startTaskRun(ctx.userId, {
-      projectId,
-      taskId,
-      baselineId,
-      skillDir,
-      allowedRoots: [skillDir],
-      role: role === 'agent-a' ? 'agent-a' : 'agent-b',
-      // The Workspace surface starts an in-process run; CLI-backed dispatch
-      // keeps flowing through the local-agents runner, which owns its own
-      // adapter identity.
-      kind: 'core-agent',
-      boundary: 'real',
-      permissionMode: 'ask',
-    });
-    // A refusal is a normal outcome (a drifted or absent baseline must block),
-    // so it is reported rather than thrown.
-    if (started.ok !== true) return { ok: false, refusal: started.reason };
-    return { ok: true, executionId: started.executionId, role: started.role };
   },
 
   'p3394.behaviorContrast.start': async ({ contrastId, receiptExecutionId, task, attachmentIds, conversationId, agentId, executionKind }, ctx) => {
@@ -2215,7 +2146,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, candidate: await recallCandidates.readRecallCandidate(ctx.userId, candidateId) };
   },
 
-  'recall.candidates.save': async ({ judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId } = {}, ctx) => {
+  'recall.candidates.save': async ({ judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, spaceId } = {}, ctx) => {
     if (typeof judgment !== 'string' || judgment.length > 4_000) throw new Error('invalid recall candidate judgment');
     if (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) throw new Error('invalid recall candidate summary');
     if (value !== undefined && (typeof value !== 'string' || value.length > 1_000)) throw new Error('invalid recall candidate value');
@@ -2223,13 +2154,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method') throw new Error('invalid recall candidate type');
     if (typeof suggestedScope !== 'string' || suggestedScope.length > 500) throw new Error('invalid recall candidate scope');
     if (!Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate source refs');
+    if (spaceId !== undefined && !safeId(spaceId)) throw new Error('invalid space id');
     if (evidenceRefs !== undefined && (!Array.isArray(evidenceRefs) || evidenceRefs.length > 100)) throw new Error('invalid recall candidate evidence refs');
     if (suggestedAction !== undefined && !['create', 'update', 'limit_scope', 'pause', 'keep_current', 'reject'].includes(suggestedAction)) throw new Error('invalid recall candidate action');
     if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) throw new Error('invalid recall candidate risk');
     if (expiresAt !== undefined && (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)))) throw new Error('invalid recall candidate expiry');
     if (taskRunId !== undefined && !safeId(taskRunId)) throw new Error('invalid recall candidate task run id');
     if (targetAssetId !== undefined && !safeId(targetAssetId)) throw new Error('invalid recall candidate target asset id');
-    return { ok: true, candidate: await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}) }) };
+    return { ok: true, candidate: await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(spaceId ? { spaceId } : {}) }) };
   },
 
   'recall.candidates.update': async ({ candidateId, judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId } = {}, ctx) => {
@@ -2284,6 +2216,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
+  'recall.assets.listForSpace': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid space id');
+    return { ok: true, assets: await recallAssets.listAbilityAssetsForSpace(ctx.userId, spaceId) };
+  },
   'recall.assets.read': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, asset: await recallAssets.readAbilityAsset(ctx.userId, assetId) }; },
   'recall.assets.update': async ({ assetId, title, statement, scope, scopePolicy, type, evidenceRefs, ontologyRefs, relations, derivedFrom, reason, acknowledgeRecommendation } = {}, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');
@@ -2718,13 +2654,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { info: res.info };
   },
 
-  // Same as above but for a project-scoped Library file — resolves through
-  // `resolveProjectFileAbsPath`, which validates project ownership + name.
-  'projects.files.attachToDraft': async ({ projectId, name, cid } = {}, ctx) => {
+  // Same as above but for a space-scoped Library file — resolves through
+  // `resolveSpaceFileAbsPath`, which validates space ownership + name.
+  'spaces.files.attachToDraft': async ({ spaceId, name, cid } = {}, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
-    const resolved = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    const resolved = await spaceFiles.resolveSpaceFileAbsPath(ctx.userId, spaceId, name);
     if (!resolved.ok) throw new Error((resolved as { error?: string }).error || 'not_found');
     const res = await chatAttachments.importAttachmentFromPath(ctx.userId, cid, resolved.absPath);
     if (!res.ok) throw new Error((res as { error: string }).error);
@@ -2959,10 +2895,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return marketplace.uninstallMarketplaceSkill(id);
   },
 
-  'projects.files.officeHtml': async ({ projectId, name }, ctx) => {
-    if (!projectId || typeof projectId !== 'string') throw new Error('missing projectId');
+  'spaces.files.officeHtml': async ({ spaceId, name }, ctx) => {
+    if (!spaceId || typeof spaceId !== 'string') throw new Error('missing spaceId');
     if (!name || typeof name !== 'string') throw new Error('missing name');
-    return projectFiles.readProjectOfficeHtml(ctx.userId, projectId, name);
+    return spaceFiles.readSpaceOfficeHtml(ctx.userId, spaceId, name);
   },
 
   'prefs.getTaskNotifications': async () => ({
@@ -3619,7 +3555,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     if (kind === 'custom_api_key') {
       const protocol = boundedText(args.protocol, 'protocol', 20);
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
       return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
         kind,
         protocol,
@@ -3658,7 +3594,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     if (kind === 'custom_api_key') {
       const protocol = boundedText(args.protocol, 'protocol', 20);
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
       return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
         kind,
         protocol,
@@ -3698,7 +3634,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }
     if (args?.providerKind === 'custom' && args?.authType === 'api_key') {
       const protocol = boundedText(args?.customProvider?.protocol, 'protocol', 20);
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
       return auth.completeAuthorization(ctx.userId, {
         requestId, selectedModels, defaultModel,
         authType: 'api_key', source: 'manual', providerKind: 'custom',
@@ -4127,6 +4063,30 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Explorer on Windows, default file manager on Linux). The path must sit
   // inside the active user's file scope, or be an exact produced-file path
   // already recorded on the current conversation.
+  // Open a produced/attached file with the OS default application. The path
+  // must be a conversation-recorded file (produced[] / attachment) or inside
+  // the user's file sandbox — same gate as revealPath, but opens instead of
+  // revealing in the file manager.
+  'workspace.openFile': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { throw new Error('file not found'); }
+    if (st.isDirectory()) {
+      throw new Error('path is a directory');
+    }
+    const openErr = await shell.openPath(norm);
+    if (openErr) throw new Error(openErr);
+    return { path: norm };
+  },
+
   'workspace.revealPath': async (payload, ctx) => {
     const target = payload?.path;
     if (typeof target !== 'string' || !target) {
@@ -4787,19 +4747,19 @@ const streamHandlers: Record<string, StreamHandler> = {
     });
   },
 
-  'project.kb.events': async function* ({ projectId }, ctx, signal) {
-    if (!safeId(projectId)) {
-      yield { type: 'error', text: 'invalid projectId' };
+  'space.kb.events': async function* ({ spaceId }, ctx, signal) {
+    if (!safeId(spaceId)) {
+      yield { type: 'error', text: 'invalid spaceId' };
       return;
     }
-    const queue: import('../features/project_library_indexer').ProjectLibraryStatusEvent[] = [];
+    const queue: import('../features/project_library_indexer').SpaceLibraryStatusEvent[] = [];
     let notify: (() => void) | null = null;
-    const listener = (ev: import('../features/project_library_indexer').ProjectLibraryStatusEvent) => {
-      if (ev.userId !== ctx.userId || ev.projectId !== projectId) return;
+    const listener = (ev: import('../features/project_library_indexer').SpaceLibraryStatusEvent) => {
+      if (ev.userId !== ctx.userId || ev.spaceId !== spaceId) return;
       queue.push(ev);
       notify?.();
     };
-    projectLibraryIndexer.projectLibraryEvents.on('status', listener);
+    spaceLibraryIndexer.spaceLibraryEvents.on('status', listener);
     const abortPromise = new Promise<void>((r) => {
       if (signal.aborted) r();
       else signal.addEventListener('abort', () => r(), { once: true });
@@ -4816,7 +4776,7 @@ const streamHandlers: Record<string, StreamHandler> = {
         ]);
       }
     } finally {
-      projectLibraryIndexer.projectLibraryEvents.off('status', listener);
+      spaceLibraryIndexer.spaceLibraryEvents.off('status', listener);
     }
   },
 

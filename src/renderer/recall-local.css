@@ -9,6 +9,9 @@
 .skills-cognition-tab:hover { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, transparent); }
 .skills-cognition-tab.is-active { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, var(--card, #fff)); box-shadow: inset 0 -2px 0 var(--primary, #0E9F6E); font-weight: 600; }
 .skills-cognition-page { height: 100%; min-height: 0; overflow: auto; padding: 18px 24px 28px; background: var(--card, #fff); }
+/* style.css 里 .skills-cognition-page 是 display:flex，会压掉 UA [hidden] 的 display:none，
+   导致六个 tab 页全部同时显示（点 tab 无反应、看着像同一个页面）。这里显式补覆盖。 */
+.skills-cognition-page[hidden] { display: none; }
 .skills-cognition-overview { display: grid; gap: 14px; max-width: 1480px; margin: 0 auto; }
 .recall-overview-notices { display: grid; gap: 8px; }
 .recall-overview-notices .skills-cognition-warning { margin-bottom: 0; }

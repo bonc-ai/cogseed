@@ -10,7 +10,6 @@
  */
 import { getActiveUserId } from '../users';
 import { createLogger } from '../../logger';
-import { logErrorRef } from '../../util/log-redact';
 import { HubApiError } from './client';
 import {
   startLogin,
@@ -33,6 +32,7 @@ import {
 } from './auth-flow';
 import { readHubAccountState } from './state';
 import { loadHubSession } from './tokens';
+import { broadcastHubLoginOutcome } from './account-events';
 import { assertHubAccountReleaseEnabled } from './gate';
 
 const log = createLogger('hub_account');
@@ -62,6 +62,10 @@ type ParsedAccountCallback =
   | { ok: true; url: string; code: string; state: string }
   | { ok: false; error: string };
 
+/**
+ * Validate the callback URL and extract `code` + `state`, rejecting duplicate,
+ * empty, oversized, or control-character parameters before any state is touched.
+ */
 export function parseAccountCallback(rawUrl: string): ParsedAccountCallback {
   const url = accountCallbackUrl(rawUrl);
   if (!url) return { ok: false, error: 'not_an_account_callback' };
@@ -82,24 +86,42 @@ export function parseAccountCallback(rawUrl: string): ParsedAccountCallback {
 /**
  * Consume a `cogseed://account/callback` deep link: extract `code` + `state`
  * and complete the login flow for the active local identity.
+ *
+ * Always notifies the renderer of the outcome: nothing on the renderer side
+ * awaits this call, so the broadcast is the only way the account pane learns
+ * that the login finished.
  */
 export async function handleAccountCallbackUrl(rawUrl: string): Promise<{ ok: boolean; error?: string; account_id?: string; is_new_account?: boolean }> {
+  // The release Gate short-circuits before any authorization parameter is
+  // consumed or any user-scoped state is touched.
   try {
     assertHubAccountReleaseEnabled();
   } catch (err) {
-    return { ok: false, error: err instanceof HubApiError ? err.code : 'HUB_RELEASE_GATE_CLOSED' };
+    const failureCode = err instanceof HubApiError ? err.code : 'HUB_RELEASE_GATE_CLOSED';
+    broadcastHubLoginOutcome({ result: 'failure', code: failureCode });
+    return { ok: false, error: failureCode };
   }
+
   const callback = parseAccountCallback(rawUrl);
-  if (!callback.ok) return callback;
+  if (callback.ok === false) {
+    // Non-account deep links belong to other flows: leave their traffic alone.
+    if (callback.error !== 'not_an_account_callback') {
+      broadcastHubLoginOutcome({ result: 'failure', code: callback.error });
+    }
+    return callback;
+  }
 
   // Login is always bound to the active local identity.
   const userId = getActiveUserId();
   try {
     const { account_id, is_new_account } = await completeLogin(userId, callback.code, callback.state);
+    broadcastHubLoginOutcome({ result: 'success', account_id, is_new_account });
     return { ok: true, account_id, is_new_account };
   } catch (err) {
-    log.warn('account deep-link login failed', { error: logErrorRef(err) });
-    return { ok: false, error: err instanceof HubApiError ? err.code : 'login_failed' };
+    log.warn('account deep-link login failed', { error: (err as Error).message });
+    const failureCode = err instanceof HubApiError ? err.code : 'login_failed';
+    broadcastHubLoginOutcome({ result: 'failure', code: failureCode, error: (err as Error).message });
+    return { ok: false, error: failureCode };
   }
 }
 

@@ -127,7 +127,6 @@ async function bootApp() {
     _stampSettingsVersion(),
     (async () => { await initUser(); await initUserWorkspace(); if (typeof initModelChip === 'function') initModelChip(); })(),
     initAvatarCatalog(),
-    loadProjects(),
   ]));
 
   // ── Stage B (parallel, depends on Stage A) ─────────────────────────
@@ -289,10 +288,9 @@ function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
     : view === 'skills' ? 'panel-skills'
     : view === 'recall' ? 'panel-recall'
-    : view === 'spaces' ? 'panel-spaces'
+    : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
-    : view === 'project' ? 'panel-project'
     : view === 'auto' ? 'panel-auto'
     : view === 'marketplace' ? 'panel-marketplace'
     : view === 'devtools' ? 'panel-devtools'
@@ -381,11 +379,10 @@ function setView(view, cid, opts = {}) {
                 : view === 'skills' || view === 'personal-ontology' ? 'panel-recall'
                 : view === 'recall' ? 'panel-recall'
                 : view === 'connections' || view === 'connectors' ? 'panel-connections'
-                : view === 'spaces' ? 'panel-spaces'
+                : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
-                : view === 'project' ? 'panel-project'
                 : view === 'marketplace' ? 'panel-marketplace'
                 : 'panel-conversation';
   document.getElementById(panelId).classList.add('active');
@@ -395,6 +392,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'skills' || view === 'personal-ontology');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts');
   document.getElementById('spaces-btn')?.classList.toggle('active', view === 'spaces');
+  document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
   document.querySelectorAll('.conv-item').forEach(it => {
@@ -563,11 +561,11 @@ function setView(view, cid, opts = {}) {
         if (typeof loadAutoList === 'function') loadAutoList(true);
       });
     });
-  } else if (view === 'spaces') {
+  } else if (view === 'spaces' || view === 'workspace') {
     currentCid = null;
-    _deferSidebarNavWork('spaces-tab-load', () => {
-      _loadViewFeature('spaces', 'spaces', () => {
-        if (typeof renderSpaces === 'function') renderSpaces();
+    _deferSidebarNavWork('workspace-tab-load', () => {
+      _loadViewFeature('workspace', 'workspace', () => {
+        if (typeof renderWorkspace === 'function') renderWorkspace();
       });
     });
   } else if (view === 'settings') {
@@ -580,20 +578,9 @@ function setView(view, cid, opts = {}) {
         }
       });
     });
-  } else if (view === 'project') {
-    // `cid` arg is repurposed as `pid` for this view (single second-arg
-    // slot kept; the function only inspects it for 'conversation' above).
-    currentCid = null;
-    if (typeof primeProjectDetailShell === 'function') primeProjectDetailShell(cid || '');
-    _deferSidebarNavWork('project-tab-load', () => {
-      _loadViewFeature('project', 'project', () => {
-        if (typeof loadProjectDetail === 'function') loadProjectDetail(cid || '');
-      });
-    });
   } else {
     currentCid = null;
   }
-  if (typeof renderProjectsSection === 'function') renderProjectsSection();
 }
 
 // Expose setView to window for interactive tour

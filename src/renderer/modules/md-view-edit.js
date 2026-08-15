@@ -73,9 +73,6 @@ function _mveDefaultCapabilities(kind) {
   if (kind === 'workspace') {
     return { edit: true, save: true, delete: false, reveal: true, taskCheckbox: true };
   }
-  if (kind === 'project-file') {
-    return { edit: true, save: true, delete: true, reveal: true, taskCheckbox: true };
-  }
   // ephemeral
   return { edit: true, save: false, delete: false, reveal: false, taskCheckbox: false };
 }
@@ -245,18 +242,7 @@ async function _mveReadSource(source) {
       return { ok: false, error: e.message || String(e) };
     }
   }
-  if (source.kind === 'project-file') {
-    try {
-      const res = await window.cogseed.invoke('projects.files.readText', {
-        projectId: source.projectId,
-        name: source.name,
-      });
-      if (!res || !res.ok) return { ok: false, error: (res && res.error) || 'read_failed' };
-      return { ok: true, content: String(res.content || '') };
-    } catch (e) {
-      return { ok: false, error: e.message || String(e) };
-    }
-  }
+  // 空间化后项目文件（project-file）已删，不再可读。
   return { ok: false, error: 'unknown source kind' };
 }
 
@@ -287,19 +273,7 @@ async function _mveWriteSource(source, content) {
       return { ok: false, error: e.message || String(e) };
     }
   }
-  if (source.kind === 'project-file') {
-    try {
-      const res = await window.cogseed.invoke('projects.files.updateText', {
-        projectId: source.projectId,
-        name: source.name,
-        content,
-      });
-      if (!res || !res.ok) return { ok: false, error: (res && res.error) || 'save_failed' };
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, error: e.message || String(e) };
-    }
-  }
+  // 空间化后项目文件（project-file）已删，不再可写。
   return { ok: false, error: 'source is not writable' };
 }
 

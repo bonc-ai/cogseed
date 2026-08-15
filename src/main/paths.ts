@@ -300,6 +300,56 @@ export const projectBindingsFile   = (uid: string, pid: string) => path.join(pro
 // no-aggregate rationale as projects).
 export const userSpacesDir         = (uid: string) => path.join(userCloudRoot(uid), 'spaces');
 export const spaceMetaFile         = (uid: string, sid: string) => path.join(userSpacesDir(uid), `${sid}.json`);
+/** 空间内容目录段防护——与 assertProjectSegment 同姿势：空间 id 用作单路径段
+ *  前防御性拒绝遍历/分隔符。sid 来自 conv index / IPC（非模型供给），但这些
+ *  路径会被写盘。 */
+function assertSpaceSegment(sid: string): string {
+  if (!sid || sid.includes('/') || sid.includes('\\') || sid.includes('..') || sid.includes('\0')) {
+    throw new Error(`invalid space id for space path: ${JSON.stringify(sid)}`);
+  }
+  return sid;
+}
+// 空间化重构（删项目层）：空间内容目录。空间 meta 仍是单文件
+// `cloud/spaces/<sid>.json`；空间承载的会话/附件/产物/会话状态放在同名目录
+// `cloud/spaces/<sid>/` 下（`<sid>` 目录与 `<sid>.json` 文件同层共存，互不冲突）。
+// 列目录扫描（spaces._listSpaceIds）只认 `.json` 文件，故内容目录不会被误判为空间实体。
+export const spaceContentDir            = (uid: string, sid: string) => path.join(userSpacesDir(uid), assertSpaceSegment(sid));
+export const spaceChatsDir              = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'chats');
+export const spaceChatIndexFile         = (uid: string, sid: string) => path.join(spaceChatsDir(uid, sid), '_index.json');
+export const spaceChatJsonlFile         = (uid: string, sid: string, cid: string) => path.join(spaceChatsDir(uid, sid), `${cid}.jsonl`);
+export const spaceGroupChatDir          = (uid: string, sid: string, cid: string) => path.join(spaceChatsDir(uid, sid), cid);
+export const spaceGroupChatMembersFile  = (uid: string, sid: string, cid: string) => path.join(spaceGroupChatDir(uid, sid, cid), 'members.json');
+export const spaceGroupChatStateFile    = (uid: string, sid: string, cid: string) => path.join(spaceGroupChatDir(uid, sid, cid), 'state.json');
+export const spaceGroupChatPlanFile     = (uid: string, sid: string, cid: string) => path.join(spaceGroupChatDir(uid, sid, cid), 'plan.json');
+export const spaceGroupChatVisibilityDir = (uid: string, sid: string, cid: string) =>
+  path.join(spaceGroupChatDir(uid, sid, cid), 'visibility');
+// 空间级跨会话记忆（cross_session_memory 的 `space` tier）——原项目级
+// `projects/<pid>/MEMORY.md` 挂空间后的新落点。放在空间内容目录下，随空间
+// 数据同生共死；旧项目文件仅作读侧兼容回退（见 features/memory.ts）。
+export const spaceMemoryFile            = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'MEMORY.md');
+export const spaceGroupChatVisibilityFile = (uid: string, sid: string, cid: string, actorId: string) =>
+  path.join(spaceGroupChatVisibilityDir(uid, sid, cid), `${actorId}.jsonl`);
+export const spaceSessionsDir           = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'sessions');
+export const spaceSessionFile           = (uid: string, sid: string, sessionId: string) => path.join(spaceSessionsDir(uid, sid), `${sessionId}.jsonl`);
+export const spaceSessionCloudToolResultsDir = (uid: string, sid: string, sessionId: string) =>
+  path.join(spaceSessionsDir(uid, sid), `${sessionId}.tool-results`);
+export const spaceChatAttachmentsDir    = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'chat_attachments');
+export const spaceChatAttachmentDir     = (uid: string, sid: string, cid: string) => path.join(spaceChatAttachmentsDir(uid, sid), cid);
+export const spaceChatArtifactsDir      = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'chat_artifacts');
+export const spaceChatArtifactCidDir    = (uid: string, sid: string, cid: string) => path.join(spaceChatArtifactsDir(uid, sid), cid);
+export const spaceArtifactDir           = (uid: string, sid: string, cid: string, artifactId: string) =>
+  path.join(spaceChatArtifactCidDir(uid, sid, cid), artifactId);
+/** 空间工作区（会话 AI 产出文件按空间分开存放）：`<spaces>/<sid>/workspace/<slug>`。
+ *  空间化重构：空间会话的工作目录进各自空间目录，不再全堆在 userWorkSpace。 */
+export const spaceWorkspaceDir          = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'workspace');
+// 空间文件树（原项目文件树 project_files.ts 挂空间）。源文件属空间而非单会话，
+// 空间内每个会话都能拿到文件列表 + 只读访问。路径 `spaces/<sid>/contexts/`。
+export const spaceContextsDir           = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'contexts');
+export const spaceFilesDir              = (uid: string, sid: string) => spaceContextsDir(uid, sid);
+// 空间库索引（原项目库索引挂空间）：源文件 `spaces/<sid>/contexts/`，派生向量库
+// 机器本地 `local/spaces/<sid>/contexts/.kb/`，与全局 Library/KB 设计对齐。
+export const spaceLocalDir              = (uid: string, sid: string) => path.join(userLocalRoot(uid), 'spaces', sid);
+export const spaceLibraryVectorDbPath   = (uid: string, sid: string) => path.join(spaceLocalDir(uid, sid), 'contexts', '.kb', 'vector.db');
 /** Guard a project id used as a single path segment for project-scoped
  *  instructions/memory. The pid comes from the conv index / IPC (never
  *  model-supplied), but these paths are written to, so reject traversal /
@@ -348,11 +398,6 @@ export const projectFilesDir           = (uid: string, pid: string) => projectCo
 // Legacy project Library source from v3 and earlier. Only migration/fallback
 // paths should read this; new writes use projectFilesDir()/contexts/.
 export const projectLegacyFilesDir     = (uid: string, pid: string) => path.join(projectDir(uid, assertProjectSegment(pid)), 'files');
-// Structured task backlog (the project work-state's task layer). One file per
-// task, cloud-synced with the project (directory-is-truth, no aggregate index —
-// mirrors the project listing). See Common/docs/plans/project-work-state.md.
-export const projectTasksDir        = (uid: string, pid: string) => path.join(projectDir(uid, assertProjectSegment(pid)), 'tasks');
-export const projectTaskFile        = (uid: string, pid: string, tid: string) => path.join(projectTasksDir(uid, pid), `${assertProjectSegment(tid)}.json`);
 export const projectLocalDir        = (uid: string, pid: string) => path.join(userLocalRoot(uid), 'projects', pid);
 export const projectLibraryVectorDbPath = (uid: string, pid: string) => path.join(projectLocalDir(uid, pid), 'contexts', '.kb', 'vector.db');
 export const agentDir            = (uid: string, agentId: string) => path.join(userAgentsDir(uid), agentId || '_default');

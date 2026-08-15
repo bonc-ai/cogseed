@@ -498,98 +498,32 @@ async function _csEnsureWorkspaceFromScenario(scenario, primaryTemplateId, space
     return;
   }
 
-  let projectId = '';
-  try {
-    const projList = await window.cogseed.invoke('projects.list', {});
-    const bound = (projList && projList.projects || []).find((p) => p && p.space_id === spaceId);
-    if (bound && bound.project_id) {
-      projectId = bound.project_id;
-      _obLog.info('reusing existing project under workspace', { spaceId, projectId });
-    } else {
-      // 该空间下没有已绑定项目；同名项目可能已存在但未挂到空间（历史数据），
-      // 优先按名复用，避免 name_dup。
-      const byName = (projList && projList.projects || []).find((p) => p && p.name === '导入的会话');
-      if (byName && byName.project_id) {
-        projectId = byName.project_id;
-        _obLog.info('reusing existing project by name under workspace', { spaceId, projectId });
-        try {
-          await window.cogseed.invoke('projects.bindSpace', { projectId, spaceId });
-        } catch (bindErr) {
-          _obLog.warn('failed to bind by-name project to workspace', {
-            projectId,
-            spaceId,
-            error: (bindErr && bindErr.message) || String(bindErr),
-          });
-        }
-      }
-    }
-  } catch (projListErr) {
-    _obLog.warn('projects.list failed before create', { error: (projListErr && projListErr.message) || String(projListErr) });
-  }
-
-  if (!projectId) {
+  // 空间化语义：导入会话直接绑定到空间（不再经手已废弃的项目层）。
+  // 逐个 conversations.setSpace（cid → spaceId），无项目建/绑/批操作。
+  let boundCount = 0;
+  for (const cid of _csImportedConversationIds) {
     try {
-      const projectRes = await window.cogseed.invoke('projects.create', { name: '导入的会话' });
-      if (projectRes && projectRes.project && projectRes.project.project_id) {
-        projectId = projectRes.project.project_id;
-        try {
-          await window.cogseed.invoke('projects.bindSpace', { projectId, spaceId });
-        } catch (bindErr) {
-          _obLog.warn('failed to bind project to workspace', {
-            projectId,
-            spaceId,
-            error: (bindErr && bindErr.message) || String(bindErr),
-          });
-        }
+      const setRes = await window.cogseed.invoke('conversations.setSpace', { cid, spaceId });
+      if (setRes && setRes.conversation) {
+        boundCount += 1;
+        _obLog.info('bound imported session to workspace', { cid, spaceId });
       }
-    } catch (projErr) {
-      _obLog.warn('projects.create failed', { error: (projErr && projErr.message) || String(projErr) });
+    } catch (setErr) {
+      _obLog.warn('conversations.setSpace failed', { cid, spaceId, error: (setErr && setErr.message) || String(setErr) });
     }
   }
 
-  // 无论项目绑定是否成功，都要刷新侧边栏空间分组，让匹配出的空间对用户可见。
+  // 刷新侧边栏空间分组，让匹配出的空间对用户可见（替代原 loadProjects 展开）。
   try {
-    if (projectId && typeof _projectsExpanded === 'object' && _projectsExpanded) {
-      _projectsExpanded[projectId] = true;
-    }
-    if (typeof _saveProjectsExpanded === 'function') _saveProjectsExpanded();
-    if (typeof loadProjects === 'function') await loadProjects(true);
+    if (typeof window.invalidateSidebarSpaces === 'function') window.invalidateSidebarSpaces();
+    if (typeof renderConversationList === 'function') await renderConversationList();
   } catch (revealErr) {
-    _obLog.warn('failed to reveal workspace in sidebar', {
-      spaceId,
-      error: (revealErr && revealErr.message) || String(revealErr),
-    });
+    _obLog.warn('failed to reveal workspace in sidebar', { spaceId, error: (revealErr && revealErr.message) || String(revealErr) });
   }
 
-  if (!projectId) return;
-
-  try {
-    const updateRes = await window.cogseed.invoke('conversations.batchUpdateProject', {
-      conversationIds: _csImportedConversationIds,
-      projectId,
-    });
-    if (updateRes && updateRes.ok) {
-      _obLog.info('bound imported sessions to workspace project', {
-        primaryTemplateId,
-        spaceId,
-        projectId,
-        updated: updateRes.updated,
-        total: _csImportedConversationIds.length,
-      });
-      _csToast(`已将 ${updateRes.updated} 个导入的会话整理好`);
-    }
-  } catch (updErr) {
-    _obLog.warn('conversations.batchUpdateProject failed', { error: (updErr && updErr.message) || String(updErr) });
-  }
-
-  // 会话已绑定到项目，加载该项目使其在侧边栏展开显示。
-  try {
-    if (typeof loadConversationProject === 'function') await loadConversationProject(projectId);
-  } catch (revealErr) {
-    _obLog.warn('failed to load imported-session project in sidebar', {
-      projectId,
-      error: (revealErr && revealErr.message) || String(revealErr),
-    });
+  if (boundCount > 0) {
+    _obLog.info('bound imported sessions to workspace', { primaryTemplateId, spaceId, bound: boundCount, total: _csImportedConversationIds.length });
+    _csToast(`已将 ${boundCount} 个导入的会话整理好`);
   }
 }
 

@@ -293,30 +293,27 @@ describe('PC core regression unit coverage', () => {
     expect(kbEnqueueCalls).toContainEqual({ userId: TEST_UID, relPath: 'regression/renamed.md', op: 'delete' });
   });
 
-  it('[PC-PROJ-001][PC-PROJ-002][PC-WORK-001][PC-COLLAB-004] keeps project conversations and bindings scoped on disk', async () => {
-    const projects = await import('../../src/main/features/projects');
+  it('[PC-PROJ-001][PC-PROJ-002][PC-WORK-001][PC-COLLAB-004] keeps space conversations scoped on disk', async () => {
+    const spaces = await import('../../src/main/features/spaces');
     const chats = await import('../../src/main/features/chats');
 
-    const projectRes = await projects.createProject(TEST_UID, 'Regression Project');
-    expect(projectRes.ok).toBe(true);
-    const project = projectRes.ok ? projectRes.project : null;
-    expect(project?.project_id).toMatch(/^p_[0-9a-f]{12}$/);
+    const spaceRes = await spaces.createSpace(TEST_UID, { name: 'Regression Space' });
+    expect(spaceRes.ok).toBe(true);
+    const space = spaceRes.ok ? spaceRes.space : null;
+    expect(space?.space_id).toMatch(/^sp_[0-9a-f]{12}$/);
 
     const conv = await chats.createConversation(TEST_UID, {
-      title: 'project task',
-      projectId: project!.project_id,
+      title: 'space task',
+      spaceId: space!.space_id,
     });
-    expect(conv.project_id).toBe(project!.project_id);
+    expect(conv.space_id).toBe(space!.space_id);
 
-    await projects.addAgentBinding(TEST_UID, project!.project_id, 'agent_a');
-    await projects.addSkillBinding(TEST_UID, project!.project_id, 'skill_a');
-    expect(await projects.resolveProjectScope(TEST_UID, project!.project_id)).toEqual({
-      agents: ['agent_a'],
-      skills: ['skill_a'],
-    });
-
-    await projects.removeAgentBinding(TEST_UID, project!.project_id, 'agent_a');
-    expect((await projects.getBindings(TEST_UID, project!.project_id)).agents).toEqual([]);
+    // 空间资源扩充（原项目 bindings 语义）：extra_agents / extra_skills。
+    // S1 语义：引用全部失效（agent_a/skill_a 非真实技能/智能体）→ 派生集空
+    // → resolveSpaceScope 返回 null = 全局可见（等价于无 bindings 的项目）。
+    await spaces.addSpaceResource(TEST_UID, space!.space_id, 'agent', 'agent_a');
+    await spaces.addSpaceResource(TEST_UID, space!.space_id, 'skill', 'skill_a');
+    expect(await spaces.resolveSpaceScope(TEST_UID, space!.space_id)).toBeNull();
   });
 
   it('[PC-MODEL-004][PC-PERM-001] persists local execution permission changes', async () => {

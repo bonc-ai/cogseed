@@ -78,6 +78,8 @@ function apiForProtocol(protocol: CustomProvider['protocol']): Api {
   switch (protocol) {
     case 'openai':
       return 'openai-completions' as Api;
+    case 'openai-responses':
+      return 'openai-responses' as Api;
     case 'gemini':
       return 'google-generative-ai' as Api;
     case 'anthropic':

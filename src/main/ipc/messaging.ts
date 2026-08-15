@@ -83,13 +83,13 @@ function workspace(value: unknown): WorkspaceScope | undefined {
   if (value === undefined || value === null) return undefined;
   if (!value || typeof value !== 'object') throw new Error('invalid workspace');
   const input = value as Record<string, unknown>;
-  const type = input.type === 'project' ? 'project' : input.type === 'default' ? 'default' : input.type === 'all' ? 'all' : '';
+  const type = input.type === 'space' ? 'space' : input.type === 'default' ? 'default' : input.type === 'all' ? 'all' : '';
   if (!type) throw new Error('invalid workspace type');
   if (type === 'default') return { type: 'default' };
   if (type === 'all') return { type: 'all' };
-  const projectId = text(input.projectId, 'projectId', 160);
-  if (!safeId(projectId)) throw new Error('invalid projectId');
-  return { type: 'project', projectId };
+  const spaceId = text(input.spaceId, 'spaceId', 160);
+  if (!safeId(spaceId)) throw new Error('invalid spaceId');
+  return { type: 'space', spaceId };
 }
 
 function idList(value: unknown, field: string): string[] | undefined {

@@ -689,6 +689,7 @@ function _settingsCustomProviderProtocolLabel(protocol) {
   const key = String(protocol || '').toLowerCase();
   if (key === 'anthropic') return t('settings.custom_providers.protocol_anthropic');
   if (key === 'openai') return t('settings.custom_providers.protocol_openai');
+  if (key === 'openai-responses') return t('settings.custom_providers.protocol_openai_responses');
   if (key === 'gemini') return t('settings.custom_providers.protocol_gemini');
   return key || t('settings.custom_providers.protocol_unknown');
 }
@@ -751,6 +752,7 @@ function _settingsCustomProviderApiFormatLabel(protocol) {
   const key = String(protocol || '').toLowerCase();
   if (key === 'anthropic') return t('settings.custom_providers.api_format_anthropic');
   if (key === 'openai') return t('settings.custom_providers.api_format_openai');
+  if (key === 'openai-responses') return t('settings.custom_providers.api_format_openai_responses');
   if (key === 'gemini') return t('settings.custom_providers.api_format_gemini');
   return _settingsCustomProviderProtocolLabel(key);
 }
@@ -1064,6 +1066,7 @@ function _settingsOpenCustomProviderModal(provider = null, options = {}) {
     protocolSel.setOptions([
       { value: 'anthropic', label: t('settings.custom_providers.api_format_anthropic') },
       { value: 'openai', label: t('settings.custom_providers.api_format_openai') },
+      { value: 'openai-responses', label: t('settings.custom_providers.api_format_openai_responses') },
       { value: 'gemini', label: t('settings.custom_providers.api_format_gemini') },
     ], { value: provider?.protocol || 'anthropic' });
   }

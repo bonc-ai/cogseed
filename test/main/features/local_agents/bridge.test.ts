@@ -102,7 +102,7 @@ afterEach(async () => {
 });
 
 async function startTestBridge(opts: {
-  projectId?: string;
+  spaceId?: string;
   orchestration?: import('../../../../src/main/features/local_agents/bridge').BridgeOrchestrationTools;
 } = {}) {
   const { startBridge } = await import('../../../../src/main/features/local_agents/bridge');
@@ -111,7 +111,7 @@ async function startTestBridge(opts: {
     cid: 'c1',
     agentId: 'a1',
     agentName: 'Agent One',
-    ...(opts.projectId ? { projectId: opts.projectId } : {}),
+    ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
     ...(opts.orchestration ? { orchestration: opts.orchestration } : {}),
     runId: `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
     configDir: path.join(tmpDir, 'rundir'),
@@ -280,19 +280,19 @@ describe('local_agents/bridge › auth + skills', () => {
 });
 
 describe('local_agents/bridge › KB project scope', () => {
-  it('serves kb.list across global and current project libraries when projectId is supplied', async () => {
+  it('serves kb.list across global and current project libraries when spaceId is supplied', async () => {
     await seedGlobalKbFile('global-note.md', 'global bridge alpha');
-    const projects = await import('../../../../src/main/features/projects');
-    const projectFiles = await import('../../../../src/main/features/project_files');
-    const projectLibrary = await import('../../../../src/main/features/project_library_indexer');
-    const created = await projects.createProject(TEST_UID, 'Bridge Project');
+    const spaces = await import('../../../../src/main/features/spaces');
+    const spaceFiles = await import('../../../../src/main/features/project_files');
+    const spaceLibrary = await import('../../../../src/main/features/project_library_indexer');
+    const created = await spaces.createSpace(TEST_UID, { name: 'Bridge Project' });
     expect(created.ok).toBe(true);
-    const projectId = created.ok ? created.project.project_id : '';
-    const uploaded = await projectFiles.uploadProjectFile(TEST_UID, projectId, 'project-note.md', Buffer.from('project bridge alpha', 'utf8'));
+    const spaceId = created.ok ? created.space.space_id : '';
+    const uploaded = await spaceFiles.uploadSpaceFile(TEST_UID, spaceId, 'project-note.md', Buffer.from('project bridge alpha', 'utf8'));
     expect(uploaded.ok).toBe(true);
-    await projectLibrary.drain(TEST_UID);
+    await spaceLibrary.drain(TEST_UID);
 
-    const bridge = await startTestBridge({ projectId });
+    const bridge = await startTestBridge({ spaceId });
     try {
       const r = await rpcOnce(bridge.socketPath, {
         id: 5, token: bridge.token, method: 'kb.list', params: {},
@@ -300,9 +300,9 @@ describe('local_agents/bridge › KB project scope', () => {
       expect((r.reply as any).ok).toBe(true);
       const text = (r.reply as any).result.text;
       expect(text).toMatch(/global total=1 ready=1/);
-      expect(text).toMatch(/project total=1 ready=1/);
+      expect(text).toMatch(/space total=1 ready=1/);
       expect(text).toMatch(/scope=global path=global-note\.md/);
-      expect(text).toMatch(/scope=project path=project-note\.md/);
+      expect(text).toMatch(/scope=space path=project-note\.md/);
 
       const search = await rpcOnce(bridge.socketPath, {
         id: 6, token: bridge.token, method: 'kb.search', params: { query: 'bridge alpha', k: 10 },
@@ -310,23 +310,23 @@ describe('local_agents/bridge › KB project scope', () => {
       expect((search.reply as any).ok).toBe(true);
       const searchText = (search.reply as any).result.text;
       expect(searchText).toMatch(/scope=global path=global-note\.md/);
-      expect(searchText).toMatch(/scope=project path=project-note\.md/);
+      expect(searchText).toMatch(/scope=space path=project-note\.md/);
     } finally {
       await bridge.close();
     }
   });
 
-  it('serves only global kb.list when no projectId is supplied', async () => {
+  it('serves only global kb.list when no spaceId is supplied', async () => {
     await seedGlobalKbFile('global-only.md', 'global only bridge alpha');
-    const projects = await import('../../../../src/main/features/projects');
-    const projectFiles = await import('../../../../src/main/features/project_files');
-    const projectLibrary = await import('../../../../src/main/features/project_library_indexer');
-    const created = await projects.createProject(TEST_UID, 'Detached Project');
+    const spaces = await import('../../../../src/main/features/spaces');
+    const spaceFiles = await import('../../../../src/main/features/project_files');
+    const spaceLibrary = await import('../../../../src/main/features/project_library_indexer');
+    const created = await spaces.createSpace(TEST_UID, { name: 'Detached Project' });
     expect(created.ok).toBe(true);
-    const projectId = created.ok ? created.project.project_id : '';
-    const uploaded = await projectFiles.uploadProjectFile(TEST_UID, projectId, 'project-hidden.md', Buffer.from('project hidden bridge alpha', 'utf8'));
+    const spaceId = created.ok ? created.space.space_id : '';
+    const uploaded = await spaceFiles.uploadSpaceFile(TEST_UID, spaceId, 'project-hidden.md', Buffer.from('project hidden bridge alpha', 'utf8'));
     expect(uploaded.ok).toBe(true);
-    await projectLibrary.drain(TEST_UID);
+    await spaceLibrary.drain(TEST_UID);
 
     const bridge = await startTestBridge();
     try {
@@ -336,7 +336,7 @@ describe('local_agents/bridge › KB project scope', () => {
       expect((r.reply as any).ok).toBe(true);
       const text = (r.reply as any).result.text;
       expect(text).toMatch(/global total=1 ready=1/);
-      expect(text).not.toContain('project total=');
+      expect(text).not.toContain('space total=');
       expect(text).toMatch(/scope=global path=global-only\.md/);
       expect(text).not.toMatch(/project-hidden\.md/);
 
@@ -347,7 +347,7 @@ describe('local_agents/bridge › KB project scope', () => {
       const searchText = (search.reply as any).result.text;
       expect(searchText).toMatch(/scope=global path=global-only\.md/);
       expect(searchText).not.toMatch(/project-hidden\.md/);
-      expect(searchText).not.toMatch(/scope=project/);
+      expect(searchText).not.toMatch(/scope=space/);
     } finally {
       await bridge.close();
     }

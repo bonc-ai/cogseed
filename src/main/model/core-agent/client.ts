@@ -939,6 +939,7 @@ export function modelTurnContextForLog(input: {
   cid?: string;
   agentId?: string;
   projectId?: string;
+  spaceId?: string;
   workingDir?: string;
   message?: string;
   systemPrompt?: string;
@@ -982,6 +983,7 @@ export function modelTurnContextForLog(input: {
     cid: maskId(input.cid),
     agent_id: maskId(input.agentId),
     project_id: maskId(input.projectId),
+    space_id: input.spaceId ? maskId(input.spaceId) : undefined,
     provider: input.providerId || undefined,
     model: input.modelId || undefined,
     profile_id: maskId(input.profileId),
@@ -1057,6 +1059,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     onTeachingReceipt,
     onResolvedRuntime,
     projectId,
+    spaceId,
     onFileWritten,
     onOutputsPublished,
     hasProducedPath,
@@ -1079,6 +1082,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     cid,
     agentId,
     projectId,
+    spaceId,
     workingDir,
     message,
     systemPrompt,
@@ -1301,6 +1305,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       ...(onTeachingReceipt ? { onTeachingReceipt } : {}),
       ...(sourceMessageText ? { userMessage: sourceMessageText } : message ? { userMessage: message } : {}),
       ...(projectId ? { projectId } : {}),
+      ...(spaceId ? { spaceId } : {}),
       ...(skillList !== undefined ? { skillList } : {}),
       ...(forceOpenSkillRefs && forceOpenSkillRefs.length ? { forceOpenSkillRefs } : {}),
       ...(projectAllowedSkillIds !== undefined ? { projectAllowedSkillIds } : {}),
@@ -1359,6 +1364,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       cid,
       agentId,
       projectId,
+      spaceId,
       workingDir,
       message,
       systemPrompt,

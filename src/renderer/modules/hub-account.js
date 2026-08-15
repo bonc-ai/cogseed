@@ -313,4 +313,27 @@ window.addEventListener('i18n-change', () => {
   if (pane && !pane.hidden) void _renderHubAccount();
 });
 
+// deep link 登录完成的推送事件。`start_login` 在打开浏览器时就已返回，登录真正
+// 完成是在主进程收到 cogseed://account/callback 之后，渲染端不 await 那一步，
+// 所以只能靠这个事件刷新。
+//
+// 这里刻意不判断面板是否可见：上面的 focus 处理器不足以覆盖两种情况——
+//   1. 主进程会先 _focusMainWindow() 再 await completeLogin，focus 那次刷新
+//      读到的仍是旧状态，之后不会有第二次刷新；
+//   2. 用户当时不在账号面板（甚至没打开设置），focus 分支直接跳过。
+// _renderHubAccount 自身在找不到卡片时会立即返回，因此无条件调用是安全的。
+if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
+  try {
+    window.cogseed.onPushEvent('hub-account:login-result', (outcome) => {
+      _hubLog.info('hub login result received', {
+        result: (outcome && outcome.result) || 'unknown',
+        code: (outcome && outcome.code) || undefined,
+      });
+      void _renderHubAccount();
+    });
+  } catch (err) {
+    _hubLog.warn('hub login result subscription failed', { error: (err && err.message) || String(err) });
+  }
+}
+
 window.initHubAccountSettings = _renderHubAccount;

@@ -87,13 +87,24 @@ if [ "$(uname -s)" = "Darwin" ]; then
   APP_BUNDLE="$APP_DIR/node_modules/electron/dist/CogSeed.app"
   if [ -d "$APP_BUNDLE" ]; then
     ARGS=("$APP_DIR" "--orkas-runtime-variant=$VARIANT")
+    OPEN_ENV_ARGS=()
+    if [ -n "${COGSEED_HUB_API_BASE:-}" ]; then
+      OPEN_ENV_ARGS+=(--env "COGSEED_HUB_API_BASE=$COGSEED_HUB_API_BASE")
+    fi
+    if [ -n "${ORKAS_HUB_API_BASE:-}" ]; then
+      OPEN_ENV_ARGS+=(--env "ORKAS_HUB_API_BASE=$ORKAS_HUB_API_BASE")
+    fi
     if [ -n "${ORKAS_KSTAR_ENGINE_COMMAND:-}" ] && [ -n "${ORKAS_KSTAR_ENGINE_ARGS:-}" ]; then
       ARGS+=("--orkas-kstar-engine-command=$ORKAS_KSTAR_ENGINE_COMMAND")
       ARGS+=("--orkas-kstar-engine-args=$ORKAS_KSTAR_ENGINE_ARGS")
       ARGS+=("--orkas-kstar-engine-cwd=$ORKAS_KSTAR_ENGINE_CWD")
       ARGS+=("--orkas-kstar-engine-ontology-dir=$ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR")
     fi
-    exec open -W -n "$APP_BUNDLE" --args "${ARGS[@]}"
+    if (( ${#OPEN_ENV_ARGS[@]} > 0 )); then
+      exec open -W -n "${OPEN_ENV_ARGS[@]}" "$APP_BUNDLE" --args "${ARGS[@]}"
+    else
+      exec open -W -n "$APP_BUNDLE" --args "${ARGS[@]}"
+    fi
   fi
 fi
 

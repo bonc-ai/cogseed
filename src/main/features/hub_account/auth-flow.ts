@@ -1,29 +1,28 @@
 /**
  * Hub account orchestration for the desktop app.
  *
- * Flow (mirrors the Hub API contract v1.3):
+ * Flow (mirrors the Hub API contract v1.1):
  *   1. `startLogin`   — GET /auth/login → authorize_url, remember state
  *   2. open browser   — user authorizes on GitHub; the deep link
  *                       `cogseed://account/callback?code=..&state=..` comes back
  *                       (delivered via `features/connectors/protocol.ts`)
  *   3. `completeLogin`— POST /auth/callback {code,state} → store session
- *                       (encrypted), bind the current local identity
+ *                       (encrypted), bind local identity when new account
  *   4. thereafter     — silent refresh before expiry; 401 → refresh → retry
  *
  * Local semantics: signing out (or a failed Hub call) never touches the
  * local identity or its data — only the Hub session and binding metadata.
  */
 import * as os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { shell } from 'electron';
 
-import { tokenStore } from '../connectors/_server_bridge';
+import { getActiveUserId } from '../users';
 import { createLogger } from '../../logger';
-import { logErrorRef } from '../../util/log-redact';
 import { HubApiError, hubClient, type HubClient } from './client';
 import { saveHubSession, loadHubSession, clearHubSession } from './tokens';
 import { readHubAccountState, writeHubAccountState } from './state';
 import type { HubSession, HubBindResult } from './types';
-import { isHubAccountReleaseEnabled } from './gate';
 
 const log = createLogger('hub_account:auth-flow');
 const ACCOUNT_CALLBACK_SCHEME = 'cogseed';
@@ -38,17 +37,20 @@ export function _pendingLoginStateForTest(): string | null {
   return _pendingState;
 }
 
-/** Test hook — clear the in-memory pending state (simulates an abandoned login). */
-export function _clearPendingLoginForTest(): void {
-  _pendingState = null;
-}
-
 function _deviceName(): string {
   return os.hostname() || 'Unknown';
 }
 
 function _deviceOs(): string {
   return `${os.platform()} ${os.release()}`;
+}
+
+function getOrCreateInstallationId(userId: string): string {
+  const state = readHubAccountState(userId);
+  if (state.installation_id) return state.installation_id;
+  const installation_id = randomUUID();
+  writeHubAccountState(userId, { installation_id });
+  return installation_id;
 }
 
 function _isExpiringSoon(session: HubSession, withinMs: number): boolean {
@@ -65,11 +67,7 @@ function _isExpiringSoon(session: HubSession, withinMs: number): boolean {
  * The caller (IPC layer) opens the browser.
  */
 export async function startLogin(userId: string, client: HubClient = hubClient()): Promise<{ authorize_url: string; state: string }> {
-  // Provider is selectable for local joint debugging: `COGSEED_HUB_PROVIDER=mock`
-  // exercises the full login flow against the development Hub service without
-  // a real GitHub OAuth App. Default stays `github`.
-  const provider = (process.env.COGSEED_HUB_PROVIDER ?? 'github').trim() || 'github';
-  const { authorize_url, state } = await client.login(provider, ACCOUNT_CALLBACK_URL);
+  const { authorize_url, state } = await client.login('github', ACCOUNT_CALLBACK_URL);
   _pendingState = state;
   writeHubAccountState(userId, { pending_login: { state, started_at: new Date().toISOString() } });
   return { authorize_url, state };
@@ -77,13 +75,6 @@ export async function startLogin(userId: string, client: HubClient = hubClient()
 
 /** Open the system browser at the authorize URL (user-facing step). */
 export async function openAuthorizeUrl(authorizeUrl: string): Promise<void> {
-  // Mock provider (local joint debugging): `mock://` has no registered app, so
-  // the "browser" step is skipped and the login completes via the deep-link
-  // callback (or the test harness feeding `cogseed://account/callback`).
-  if (authorizeUrl.startsWith('mock://')) {
-    log.info('mock provider: skipping browser open; complete via deep link');
-    return;
-  }
   try {
     await shell.openExternal(authorizeUrl);
   } catch (err) {
@@ -112,10 +103,6 @@ export async function completeLogin(
   client: HubClient = hubClient(),
 ): Promise<{ account_id: string; is_new_account: boolean }> {
   const expected = currentLoginState(userId);
-  // Attack shape: a deep link carrying code+state with NO in-flight login must
-  // not complete — otherwise a forged cogseed://account/callback can trigger
-  // an unexpected login/bind on this machine. The Hub service also validates
-  // state (one-time, TTL), but we drop it locally first.
   if (!expected) {
     throw new HubApiError('AUTH_NO_PENDING_LOGIN', '没有进行中的登录，请重新发起登录', 400);
   }
@@ -123,7 +110,11 @@ export async function completeLogin(
     throw new HubApiError('AUTH_INVALID_STATE', 'OAuth state 不匹配，请重新登录', 400);
   }
 
-  const result = await client.callback(code, state);
+  const result = await client.callback(code, state, {
+    installation_id: getOrCreateInstallationId(userId),
+    device_name: _deviceName(),
+    device_os: _deviceOs(),
+  });
   saveHubSession(userId, result.session);
   writeHubAccountState(userId, {
     account_id: result.account.account_id,
@@ -131,26 +122,22 @@ export async function completeLogin(
     account_status: result.account.status,
     pending_login: undefined,
   });
+  // The session is persisted from here on, so the login has succeeded — clear
+  // the pending state before the optional bind. Letting a bind failure throw
+  // past this point would report a failed login while the user is in fact
+  // signed in, and would leave the consumed state pending.
+  _pendingState = null;
 
-  // Contract v1.3: LocalIdentity binding happens only for a brand-new account.
-  // Returning users already have a binding; re-binding would be wrong (and the
-  // Hub service would reject a duplicate).
   let bind: HubBindResult | null = null;
   if (result.is_new_account) {
     try {
       bind = await bindLocalIdentity(userId, result.session.access_token, client);
     } catch (err) {
-      try {
-        await client.logout(result.session.access_token);
-      } catch (logoutError) {
-        log.warn('failed to revoke partially established Hub session', { error: logErrorRef(logoutError) });
-      }
-      clearHubAuthorization(userId);
-      _pendingState = null;
-      throw err;
+      // Binding is device metadata, not an auth step; it is retried on the next
+      // authenticated call. Surfacing it as a login failure would be wrong.
+      log.warn('hub local identity bind failed after login', { error: (err as Error).message });
     }
   }
-  _pendingState = null;
   log.info('hub login completed', { accountId: mask(result.account.account_id), isNew: result.is_new_account, bound: !!bind });
   return { account_id: result.account.account_id, is_new_account: result.is_new_account };
 }
@@ -167,8 +154,8 @@ export async function bindLocalIdentity(
   client: HubClient = hubClient(),
 ): Promise<HubBindResult> {
   const result = await client.bind(accessToken, {
-    local_identity_id: userId,
-    installation_id: tokenStore.getDeviceId(),
+    local_identity_id: getActiveUserId(),
+    installation_id: getOrCreateInstallationId(userId),
     device_name: _deviceName(),
     device_os: _deviceOs(),
   });
@@ -182,81 +169,22 @@ export async function bindLocalIdentity(
   return result;
 }
 
-const TERMINAL_AUTH_CODES = new Set([
-  'AUTH_REFRESH_TOKEN_REVOKED',
-  'AUTH_SESSION_NOT_FOUND',
-  'AUTH_SESSION_REVOKED',
-  'AUTH_SESSION_EXPIRED',
-  'AUTH_DEVICE_REVOKED',
-  'ACCOUNT_SUSPENDED',
-  'ACCOUNT_PENDING_DELETION',
-  'ACCOUNT_DELETED',
-]);
-
-function lifecycleStatus(code: string): 'active' | 'suspended' | 'pending_deletion' | 'deleted' | undefined {
-  if (code === 'ACCOUNT_SUSPENDED') return 'suspended';
-  if (code === 'ACCOUNT_PENDING_DELETION') return 'pending_deletion';
-  if (code === 'ACCOUNT_DELETED') return 'deleted';
-  if (code.startsWith('AUTH_')) return 'active';
-  return undefined;
-}
-
-function clearHubAuthorization(userId: string, code?: string): void {
-  clearHubSession(userId);
-  writeHubAccountState(userId, {
-    bound: false,
-    account_id: undefined,
-    auth_provider: undefined,
-    device_id: undefined,
-    device_name: undefined,
-    account_status: code ? lifecycleStatus(code) : undefined,
-    bound_at: undefined,
-    pending_login: undefined,
-  });
-}
-
-function handleTerminalAuthError(userId: string, err: unknown): void {
-  if (err instanceof HubApiError && TERMINAL_AUTH_CODES.has(err.code)) clearHubAuthorization(userId, err.code);
-}
-
 // ── Session refresh + authorized calls ───────────────────────────────────
-
-/**
- * In-flight refresh per local identity. Concurrent callers share one
- * request — a rotated refresh token must never be replayed by a second
- * in-flight call (the Hub treats that as a leak and revokes all sessions).
- */
-const _refreshInFlight = new Map<string, Promise<HubSession>>();
 
 /** Refresh the Hub session now; throws `HubApiError` when the refresh token is gone/revoked. */
 export async function refreshSession(userId: string, client: HubClient = hubClient()): Promise<HubSession> {
-  const inFlight = _refreshInFlight.get(userId);
-  if (inFlight) return inFlight;
   const session = loadHubSession(userId);
   if (!session) throw new HubApiError('AUTH_REQUIRED', '未登录', 401);
-  const pending = _doRefresh(userId, session, client);
-  _refreshInFlight.set(userId, pending);
-  return pending;
-}
-
-async function _doRefresh(userId: string, session: HubSession, client: HubClient): Promise<HubSession> {
-  try {
-    const refreshed = await client.refresh(session.refresh_token);
-    const next: HubSession = {
-      session_id: session.session_id, // server keeps the same session family across rotation
-      access_token: refreshed.access_token,
-      refresh_token: refreshed.refresh_token,
-      access_expires_at: refreshed.access_expires_at,
-      refresh_expires_at: refreshed.refresh_expires_at,
-    };
-    saveHubSession(userId, next);
-    return next;
-  } catch (err) {
-    handleTerminalAuthError(userId, err);
-    throw err;
-  } finally {
-    _refreshInFlight.delete(userId);
-  }
+  const refreshed = await client.refresh(session.refresh_token);
+  const next: HubSession = {
+    session_id: session.session_id, // server keeps the same session family across rotation
+    access_token: refreshed.access_token,
+    refresh_token: refreshed.refresh_token,
+    access_expires_at: refreshed.access_expires_at,
+    refresh_expires_at: refreshed.refresh_expires_at,
+  };
+  saveHubSession(userId, next);
+  return next;
 }
 
 /** Ensure a non-expired session exists (silent refresh when needed). */
@@ -281,15 +209,9 @@ async function withAuthRetry<T>(
     return await fn(session.access_token, client);
   } catch (err) {
     if (err instanceof HubApiError && err.code === 'AUTH_INVALID_TOKEN') {
-      try {
-        const fresh = await refreshSession(userId, client);
-        return await fn(fresh.access_token, client);
-      } catch (retryError) {
-        handleTerminalAuthError(userId, retryError);
-        throw retryError;
-      }
+      const fresh = await refreshSession(userId, client);
+      return fn(fresh.access_token, client);
     }
-    handleTerminalAuthError(userId, err);
     throw err;
   }
 }
@@ -323,7 +245,7 @@ export async function revokeConsent(userId: string, scope: string): Promise<impo
 
 export async function deleteHubAccount(userId: string, confirmation: string): Promise<{ account_id: string; status: string; deletion_scheduled_at: string }> {
   const result = await withAuthRetry(userId, (token, client) => client.deleteAccount(token, confirmation));
-  clearHubAuthorization(userId, 'ACCOUNT_PENDING_DELETION');
+  writeHubAccountState(userId, { account_status: 'pending_deletion' });
   return result;
 }
 
@@ -335,9 +257,6 @@ export async function deleteHubAccount(userId: string, confirmation: string): Pr
  * its data are intentionally preserved.
  */
 export async function logout(userId: string, client: HubClient = hubClient()): Promise<void> {
-  // Drain an in-flight refresh first so we revoke the latest session and a
-  // late refresh write-back cannot restore credentials after sign-out.
-  await _refreshInFlight.get(userId)?.catch(() => {});
   const session = loadHubSession(userId);
   if (session) {
     try {
@@ -346,7 +265,17 @@ export async function logout(userId: string, client: HubClient = hubClient()): P
       log.warn('hub logout request failed; clearing local session anyway', { error: (err as Error).message });
     }
   }
-  clearHubAuthorization(userId);
+  clearHubSession(userId);
+  writeHubAccountState(userId, {
+    bound: false,
+    account_id: undefined,
+    auth_provider: undefined,
+    device_id: undefined,
+    device_name: undefined,
+    account_status: undefined,
+    bound_at: undefined,
+    pending_login: undefined,
+  });
   log.info('hub account signed out locally');
 }
 
@@ -361,16 +290,13 @@ export interface HubStatusView {
   account_status: string | null;
   hub_reachable: boolean;
   access_expires_at: string | null;
-  release_enabled: boolean;
-  disabled_reason: 'release_gate' | null;
 }
 
 /** Renderer-safe status snapshot (no tokens). */
 export async function getHubStatus(userId: string): Promise<HubStatusView> {
   const state = readHubAccountState(userId);
   const session = loadHubSession(userId);
-  const releaseEnabled = isHubAccountReleaseEnabled();
-  const reachable = releaseEnabled ? await hubClient().healthz().catch(() => false) : false;
+  const reachable = await hubClient().healthz().catch(() => false);
   return {
     signed_in: !!session && !!state.account_id,
     account_id: state.account_id ?? null,
@@ -380,7 +306,5 @@ export async function getHubStatus(userId: string): Promise<HubStatusView> {
     account_status: state.account_status ?? null,
     hub_reachable: reachable,
     access_expires_at: session?.access_expires_at ?? null,
-    release_enabled: releaseEnabled,
-    disabled_reason: releaseEnabled ? null : 'release_gate',
   };
 }

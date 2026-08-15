@@ -21,7 +21,6 @@
 
 import { createLogger } from '../../logger';
 import { listAbilityAssets } from '../recall/asset-service';
-import { getProject } from '../projects';
 import { getSpace } from '../spaces';
 import { getRoleTemplate } from '../role_templates';
 import { readContinuationSnapshot } from '../task_continuation';
@@ -61,8 +60,8 @@ export interface GenerateWelcomeMessageInput {
   userId: string;
   /** Conversation this welcome belongs to (used to read the snapshot). */
   conversationId?: string;
-  /** Project the conversation is bound to (used to resolve the space). */
-  projectId?: string | null;
+  /** Space the conversation is bound to (used to resolve the space template). */
+  spaceId?: string | null;
   /** The session summary extracted during import (describes what was done). */
   sessionSummary?: string;
 }
@@ -78,17 +77,14 @@ const BOUNDARY_STATEMENT =
   '我不会在运行中静默改写正式资产；只有冲突、扩权或外发时才会停下来询问。';
 
 /** Read the space template bundle's ability count for the conversation's
- *  project → space. Real data: project.space_id → space → primary/secondary
- *  templates → bundle.skill_ids. Returns the union of bundled skill ids. */
+ *  space. Real data: space → primary/secondary templates → bundle.skill_ids.
+ *  Returns the union of bundled skill ids. */
 async function spaceTemplateSkillIds(
   userId: string,
-  projectId?: string | null,
+  spaceId?: string | null,
 ): Promise<string[]> {
-  if (!projectId) return [];
+  if (!spaceId) return [];
   try {
-    const project = await getProject(userId, projectId);
-    const spaceId = project?.space_id;
-    if (!spaceId) return [];
     const space = await getSpace(userId, spaceId);
     if (!space) return [];
     const primary = space.primary_template_id || space.template_id;
@@ -104,7 +100,7 @@ async function spaceTemplateSkillIds(
     return [...ids];
   } catch (err) {
     log.warn('space template bundle read failed', {
-      userId, projectId, error: (err as Error)?.message || String(err),
+      userId, spaceId, error: (err as Error)?.message || String(err),
     });
     return [];
   }
@@ -131,10 +127,10 @@ async function confirmedAssetCounts(userId: string): Promise<{ personal: number;
 async function buildCarry(
   userId: string,
   hasSnapshot: boolean,
-  projectId?: string | null,
+  spaceId?: string | null,
 ): Promise<WelcomeCarryItem[]> {
   const [spaceSkills, counts] = await Promise.all([
-    spaceTemplateSkillIds(userId, projectId),
+    spaceTemplateSkillIds(userId, spaceId),
     confirmedAssetCounts(userId),
   ]);
 
@@ -193,10 +189,10 @@ async function generateActionPlan(userId: string, summary: string): Promise<stri
  */
 export async function generateWelcomeMessage(input: GenerateWelcomeMessageInput): Promise<WelcomeMessageData> {
   const snapshot = input.conversationId
-    ? await readContinuationSnapshot(input.userId, input.conversationId, input.projectId)
+    ? await readContinuationSnapshot(input.userId, input.conversationId, null)
     : null;
   const summary = (input.sessionSummary ?? '').trim() || (snapshot?.sourceSummary ?? '');
-  const carry = await buildCarry(input.userId, !!snapshot, input.projectId);
+  const carry = await buildCarry(input.userId, !!snapshot, input.spaceId);
 
   // 第一部分：项目介绍（来自真实快照数据：目标 + 当前阶段 + 已知约束）。
   const goal = snapshot?.goal || summary.split('\n')[0] || '当前目标';

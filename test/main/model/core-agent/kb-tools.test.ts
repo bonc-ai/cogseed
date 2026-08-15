@@ -120,22 +120,22 @@ describe('kb-tools › kb_search', () => {
 
   it('searches project and global Library scopes inside a project', async () => {
     await seedFiles();
-    const projects = await import('../../../../src/main/features/projects');
-    const projectFiles = await import('../../../../src/main/features/project_files');
-    const projectLibrary = await import('../../../../src/main/features/project_library_indexer');
-    const created = await projects.createProject(TEST_UID, 'Project A');
+    const spaces = await import('../../../../src/main/features/spaces');
+    const spaceFiles = await import('../../../../src/main/features/project_files');
+    const spaceLibrary = await import('../../../../src/main/features/project_library_indexer');
+    const created = await spaces.createSpace(TEST_UID, { name: 'Project A' });
     expect(created.ok).toBe(true);
-    const projectId = created.ok ? created.project.project_id : '';
-    const dir = await projectFiles.createProjectDir(TEST_UID, projectId, 'project-folder');
+    const spaceId = created.ok ? created.space.space_id : '';
+    const dir = await spaceFiles.createSpaceDir(TEST_UID, spaceId, 'project-folder');
     expect(dir.ok).toBe(true);
-    const uploaded = await projectFiles.uploadProjectFile(
+    const uploaded = await spaceFiles.uploadSpaceFile(
       TEST_UID,
-      projectId,
+      spaceId,
       'project-folder/project-note.md',
       Buffer.from('project alpha body', 'utf8'),
     );
     expect(uploaded.ok).toBe(true);
-    const tree = await projectFiles.listProjectFileTree(TEST_UID, projectId);
+    const tree = await spaceFiles.listSpaceFileTree(TEST_UID, spaceId);
     expect(tree).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: 'dir',
@@ -145,18 +145,18 @@ describe('kb-tools › kb_search', () => {
         ]),
       }),
     ]));
-    await projectLibrary.drain(TEST_UID);
+    await spaceLibrary.drain(TEST_UID);
 
     const { createKbTools } = await import('../../../../src/main/model/core-agent/kb-tools');
-    const [, kbSearch, kbRead] = createKbTools({ userId: TEST_UID, projectId });
+    const [, kbSearch, kbRead] = createKbTools({ userId: TEST_UID, spaceId });
     const r = await kbSearch.execute({ query: 'alpha', k: 10 }, ctxFor());
     expect(r.isError).toBeFalsy();
     expect(r.content).toMatch(/scope=global path=notes\/a\.md/);
-    expect(r.content).toMatch(/scope=project path=project-folder\/project-note\.md/);
+    expect(r.content).toMatch(/scope=space path=project-folder\/project-note\.md/);
 
-    const read = await kbRead.execute({ scope: 'project', path: 'project-folder/project-note.md' }, ctxFor());
+    const read = await kbRead.execute({ scope: 'space', path: 'project-folder/project-note.md' }, ctxFor());
     expect(read.isError).toBeFalsy();
-    expect(read.content).toMatch(/<library-file scope="project" path="project-folder\/project-note\.md"/);
+    expect(read.content).toMatch(/<library-file scope="space" path="project-folder\/project-note\.md"/);
     expect(read.content).toMatch(/project alpha body/);
   });
 });
@@ -186,28 +186,28 @@ describe('kb-tools › kb_list', () => {
 
   it('lists project and global Library scopes inside a project', async () => {
     await seedFiles();
-    const projects = await import('../../../../src/main/features/projects');
-    const projectFiles = await import('../../../../src/main/features/project_files');
-    const projectLibrary = await import('../../../../src/main/features/project_library_indexer');
-    const created = await projects.createProject(TEST_UID, 'Project B');
+    const spaces = await import('../../../../src/main/features/spaces');
+    const spaceFiles = await import('../../../../src/main/features/project_files');
+    const spaceLibrary = await import('../../../../src/main/features/project_library_indexer');
+    const created = await spaces.createSpace(TEST_UID, { name: 'Project B' });
     expect(created.ok).toBe(true);
-    const projectId = created.ok ? created.project.project_id : '';
-    const uploaded = await projectFiles.uploadProjectFile(
+    const spaceId = created.ok ? created.space.space_id : '';
+    const uploaded = await spaceFiles.uploadSpaceFile(
       TEST_UID,
-      projectId,
+      spaceId,
       'project-note.md',
       Buffer.from('project list body', 'utf8'),
     );
     expect(uploaded.ok).toBe(true);
-    await projectLibrary.drain(TEST_UID);
+    await spaceLibrary.drain(TEST_UID);
 
     const { createKbTools } = await import('../../../../src/main/model/core-agent/kb-tools');
-    const [kbList] = createKbTools({ userId: TEST_UID, projectId });
+    const [kbList] = createKbTools({ userId: TEST_UID, spaceId });
     const r = await kbList.execute({}, ctxFor());
     expect(r.isError).toBeFalsy();
     expect(r.content).toMatch(/global total=3 ready=3/);
-    expect(r.content).toMatch(/project total=1 ready=1/);
-    expect(r.content).toMatch(/scope=project path=project-note\.md/);
+    expect(r.content).toMatch(/space total=1 ready=1/);
+    expect(r.content).toMatch(/scope=space path=project-note\.md/);
     expect(r.content).toMatch(/scope=global path=notes\/a\.md/);
   });
 });

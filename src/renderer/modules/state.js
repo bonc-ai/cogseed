@@ -315,6 +315,7 @@ function bindStaticHandlers() {
   document.getElementById('recall-btn')?.addEventListener('click', () => _setViewFromSidebar('recall'));
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connections'));
   document.getElementById('spaces-btn')?.addEventListener('click', () => _setViewFromSidebar('spaces'));
+  document.getElementById('workspace-btn')?.addEventListener('click', () => _setViewFromSidebar('workspace'));
   document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
 
   // Global search trigger + Cmd+K

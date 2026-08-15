@@ -48,6 +48,22 @@ async function loadChats() {
   return import('../../../src/main/features/chats');
 }
 
+// T4.5 空间化：projects 模块已删，测试直接手工建项目壳目录（数据层仍在）。
+function makeProject(name: string): { ok: true; project: { project_id: string; name: string } } {
+  const pid = `p${Math.random().toString(16).slice(2, 10)}`;
+  const projectDir = path.join(tmpDir, TEST_UID, 'cloud', 'projects', pid);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'project.json'), JSON.stringify({
+    project_id: pid,
+    name,
+    owner_uid: TEST_UID,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  }));
+  return { ok: true, project: { project_id: pid, name } };
+}
+
+
 describe('chats › createConversation', () => {
   it('generates a 12-hex cid and writes it to _index.json', async () => {
     const chats = await loadChats();
@@ -72,6 +88,26 @@ describe('chats › createConversation', () => {
     expect(normal.kind).toBe('normal');
   });
 
+  it('persists task_references (空间任务引用) and round-trips them', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { title: '任务引用', spaceId: 'sp_test' });
+    const refs = [
+      { kind: 'artifact', name: '需求分析基线.md', source_cid: 'abc123', source_title: '源任务', file_name: '需求分析基线.md' },
+      { kind: 'asset', name: '产品经理方法论', asset_id: 'ast-1', asset_type: '决策规则与方法', summary: '围绕需求' },
+    ];
+    const updated = await chats.updateConversation(TEST_UID, conv.conversation_id, { task_references: refs });
+    expect(updated?.task_references?.length).toBe(2);
+    const back = await chats.getConversation(TEST_UID, conv.conversation_id);
+    expect(back?.task_references).toHaveLength(2);
+    expect(back?.task_references?.[0].kind).toBe('artifact');
+    expect(back?.task_references?.[0].file_name).toBe('需求分析基线.md');
+    expect(back?.task_references?.[1].asset_id).toBe('ast-1');
+    // 非法引用写入后，读取时被归一化过滤（IPC add 层另有形状校验）
+    await chats.updateConversation(TEST_UID, conv.conversation_id, { task_references: [{ kind: 'nope', name: 'x' } as any] });
+    const backBad = await chats.getConversation(TEST_UID, conv.conversation_id);
+    expect(backBad?.task_references ?? []).toHaveLength(0);
+  });
+
   it('touches the per-cid jsonl on create', async () => {
     const chats = await loadChats();
     const conv = await chats.createConversation(TEST_UID);
@@ -93,8 +129,7 @@ describe('chats › createConversation', () => {
   // When projectId is omitted the global record must not carry an empty field.
   it('persists project_id when supplied; omits the field when absent', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const createdProject = await projects.createProject(TEST_UID, 'Contained project');
+    const createdProject = makeProject('Contained project');
     if (!createdProject.ok) throw new Error(`project setup failed: ${createdProject.error}`);
     const pid = createdProject.project.project_id;
     const c1 = await chats.createConversation(TEST_UID, { projectId: pid });
@@ -193,8 +228,7 @@ describe('chats › message history tombstones', () => {
 
   it('keeps an explicit global history read out of a duplicate project root', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const project = await projects.createProject(TEST_UID, 'Unrelated history');
+    const project = makeProject('Unrelated history');
     if (!project.ok) throw new Error(`project setup failed: ${project.error}`);
     const conv = await chats.createConversation(TEST_UID, { title: 'global history' });
     const globalFile = path.join(
@@ -220,8 +254,7 @@ describe('chats › message history tombstones', () => {
 describe('chats › automation execution history', () => {
   it('paginates runs across global and project roots and reports exact totals', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const createdProject = await projects.createProject(TEST_UID, 'Automation runs');
+    const createdProject = makeProject('Automation runs');
     if (!createdProject.ok) throw new Error(`project setup failed: ${createdProject.error}`);
     const taskId = 'at_history';
     const createdIds: string[] = [];
@@ -297,12 +330,67 @@ describe('chats › setConversationPinned', () => {
   });
 });
 
+describe('chats › setConversationSpace (把已有会话绑定到空间)', () => {
+  it('binds an existing conversation to a space and includes it in listSpaceConversations', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { title: '待绑定' });
+    expect(conv.space_id).toBeUndefined();
+
+    const bound = await chats.setConversationSpace(TEST_UID, conv.conversation_id, 'sp_abc123');
+    expect(bound?.space_id).toBe('sp_abc123');
+
+    // 索引与 meta 双落盘
+    const idx = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, TEST_UID, 'cloud', 'chats', '_index.json'), 'utf-8'));
+    expect(idx[0].space_id).toBe('sp_abc123');
+    const meta = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, TEST_UID, 'cloud', 'chats', conv.conversation_id, 'meta.json'), 'utf-8'));
+    expect(meta.space_id).toBe('sp_abc123');
+
+    // 空间「任务」列表纳入（listSpaceConversations 按 space_id 匹配全局索引兜底）
+    const inSpace = await chats.listSpaceConversations(TEST_UID, 'sp_abc123');
+    expect(inSpace.map((c) => c.conversation_id)).toContain(conv.conversation_id);
+    // 其它空间不含
+    const other = await chats.listSpaceConversations(TEST_UID, 'sp_other');
+    expect(other.map((c) => c.conversation_id)).not.toContain(conv.conversation_id);
+  });
+
+  it('unbinds (null) a conversation and removes space_id from index + meta', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { title: '移出', spaceId: 'sp_abc123' });
+    expect(conv.space_id).toBe('sp_abc123');
+
+    const unbound = await chats.setConversationSpace(TEST_UID, conv.conversation_id, null);
+    expect(unbound?.space_id).toBeUndefined();
+
+    const idx = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, TEST_UID, 'cloud', 'chats', '_index.json'), 'utf-8'));
+    expect(idx[0].space_id).toBeUndefined();
+    const meta = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, TEST_UID, 'cloud', 'chats', conv.conversation_id, 'meta.json'), 'utf-8'));
+    expect(meta.space_id).toBeUndefined();
+
+    const inSpace = await chats.listSpaceConversations(TEST_UID, 'sp_abc123');
+    expect(inSpace.map((c) => c.conversation_id)).not.toContain(conv.conversation_id);
+  });
+
+  it('rejects invalid space ids and missing conversations', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { title: 'x' });
+    // 非法 spaceId（非 safeId）→ 拒绝，不写
+    expect(await chats.setConversationSpace(TEST_UID, conv.conversation_id, '../../evil')).toBeNull();
+    const after = await chats.getConversation(TEST_UID, conv.conversation_id);
+    expect(after?.space_id).toBeUndefined();
+    // 不存在的会话 → null
+    expect(await chats.setConversationSpace(TEST_UID, 'deadbeefcafe', 'sp_abc123')).toBeNull();
+  });
+});
+
 describe('chats › targeted conversation lookup', () => {
   it('uses a validated project/global hint without opening unrelated indexes', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const first = await projects.createProject(TEST_UID, 'Lookup target');
-    const second = await projects.createProject(TEST_UID, 'Lookup unrelated');
+    const first = makeProject('Lookup target');
+    const second = makeProject('Lookup unrelated');
     if (!first.ok || !second.ok) throw new Error('project setup failed');
     const target = await chats.createConversation(TEST_UID, {
       title: 'target',
@@ -346,9 +434,8 @@ describe('chats › targeted conversation lookup', () => {
 
   it('falls back to the shared all-root lookup when a project hint is stale', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const owner = await projects.createProject(TEST_UID, 'Actual owner');
-    const stale = await projects.createProject(TEST_UID, 'Stale hint');
+    const owner = makeProject('Actual owner');
+    const stale = makeProject('Stale hint');
     if (!owner.ok || !stale.ok) throw new Error('project setup failed');
     const target = await chats.createConversation(TEST_UID, {
       title: 'moved by sync',
@@ -366,9 +453,8 @@ describe('chats › targeted conversation lookup', () => {
 describe('chats › root-scoped mutation store', () => {
   it('keeps normal create/activity/rename/pin/delete work inside the hinted root', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const owner = await projects.createProject(TEST_UID, 'Mutation owner');
-    const unrelatedProject = await projects.createProject(TEST_UID, 'Mutation unrelated');
+    const owner = makeProject('Mutation owner');
+    const unrelatedProject = makeProject('Mutation unrelated');
     if (!owner.ok || !unrelatedProject.ok) throw new Error('project setup failed');
     await chats.createConversation(TEST_UID, {
       title: 'unrelated row',
@@ -456,9 +542,8 @@ describe('chats › renameConversation', () => {
 
   it('persists only the changed metadata and affected project index', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const first = await projects.createProject(TEST_UID, 'First project');
-    const second = await projects.createProject(TEST_UID, 'Second project');
+    const first = makeProject('First project');
+    const second = makeProject('Second project');
     if (!first.ok || !second.ok) throw new Error('project setup failed');
     const changed = await chats.createConversation(TEST_UID, {
       title: 'changed', projectId: first.project.project_id,
@@ -495,9 +580,8 @@ describe('chats › renameConversation', () => {
 
   it('rewrites both aggregate roots when project membership changes', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const first = await projects.createProject(TEST_UID, 'Old root');
-    const second = await projects.createProject(TEST_UID, 'New root');
+    const first = makeProject('Old root');
+    const second = makeProject('New root');
     if (!first.ok || !second.ok) throw new Error('project setup failed');
     const conv = await chats.createConversation(TEST_UID, {
       title: 'move me', projectId: first.project.project_id,
@@ -523,19 +607,26 @@ describe('chats › renameConversation', () => {
 describe('chats › index repair', () => {
   it('limits startup enrichment to visible age buckets and expanded projects', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const expanded = await projects.createProject(TEST_UID, 'Expanded');
-    const collapsed = await projects.createProject(TEST_UID, 'Collapsed');
+    const expanded = makeProject('Expanded');
+    const collapsed = makeProject('Collapsed');
     if (!expanded.ok || !collapsed.ok) throw new Error('project setup failed');
 
     const recent = await chats.createConversation(TEST_UID, { title: 'recent' });
     const old = await chats.createConversation(TEST_UID, { title: 'old' });
+    // 空间化后：绑定空间的会话（project_id + space_id）仍按项目展开机制归属；
+    // 纯 project_id（无 space_id）的旧孤儿会话按 unprojected 放行（F2-A）。
     const expandedConv = await chats.createConversation(TEST_UID, {
       title: 'expanded project',
       projectId: expanded.project.project_id,
+      spaceId: 'sp_expanded',
     });
     const collapsedConv = await chats.createConversation(TEST_UID, {
       title: 'collapsed project',
+      projectId: collapsed.project.project_id,
+      spaceId: 'sp_collapsed',
+    });
+    const orphanProjConv = await chats.createConversation(TEST_UID, {
+      title: 'orphan project',
       projectId: collapsed.project.project_id,
     });
     const globalIndex = path.join(tmpDir, TEST_UID, 'cloud', 'chats', '_index.json');
@@ -552,29 +643,37 @@ describe('chats › index repair', () => {
     const startupIds = startup.conversations.map((c) => c.conversation_id);
     expect(startupIds).toContain(recent.conversation_id);
     expect(startupIds).toContain(expandedConv.conversation_id);
+    // 空间化后旧孤儿项目会话（纯 project_id）在普通列表可见（F2-A）。
+    expect(startupIds).toContain(orphanProjConv.conversation_id);
     expect(startupIds).not.toContain(old.conversation_id);
-    expect(startupIds).not.toContain(collapsedConv.conversation_id);
+    // 语义统一（bug 4 修复）：space_id 非空 = 空间会话，侧栏空间组需要全量显示，
+    // 不再走项目分页懒加载 → collapsed project 的空间会话也始终返回。
+    expect(startupIds).toContain(collapsedConv.conversation_id);
     expect(startup.deferred_unprojected.older).toBe(1);
     expect(startup.loaded_project_ids).toEqual([expanded.project.project_id]);
 
     expect((await chats.listOldUnprojectedConversations(TEST_UID)).map((c) => c.conversation_id))
       .toEqual([old.conversation_id]);
+    // 孤儿项目会话与空间绑定会话同属该项目根，物理读取都应返回。
     expect((await chats.listProjectConversations(TEST_UID, collapsed.project.project_id))
-      .map((c) => c.conversation_id)).toEqual([collapsedConv.conversation_id]);
+      .map((c) => c.conversation_id).sort()).toEqual(
+        [collapsedConv.conversation_id, orphanProjConv.conversation_id].sort(),
+      );
   });
 
   it('pages expanded projects and old buckets in independent 10-row slices', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const project = await projects.createProject(TEST_UID, 'Paged project');
+    const project = makeProject('Paged project');
     if (!project.ok) throw new Error('project setup failed');
     const pid = project.project.project_id;
     const now = Date.now();
-    const row = (cid: string, title: string, at: Date, projectId?: string) => ({
+    const row = (cid: string, title: string, at: Date, projectId?: string, spaceId?: string) => ({
       conversation_id: cid,
       title,
       kind: 'normal',
       ...(projectId ? { project_id: projectId } : {}),
+      // 空间化后：绑定空间的会话才按项目展开机制处理（F2-A 语义）。
+      ...(spaceId ? { space_id: spaceId } : {}),
       created_at: at.toISOString(),
       updated_at: at.toISOString(),
       participant_summary_updated_at: at.toISOString(),
@@ -588,6 +687,7 @@ describe('chats › index repair', () => {
       `project-${i}`,
       new Date(now - i * 60_000),
       pid,
+      `sp_${pid}`,
     ));
     const projectIndex = path.join(
       tmpDir, TEST_UID, 'cloud', 'projects', pid, 'chats', '_index.json');
@@ -612,7 +712,8 @@ describe('chats › index repair', () => {
     const startup = await chats.listStartupConversations(TEST_UID, {
       expandedProjectIds: [pid],
     });
-    expect(startup.conversations.filter((c) => c.project_id === pid)).toHaveLength(10);
+    // 语义统一（bug 4 修复）：space 会话始终返回（侧栏空间组全量展示），不再受项目分页 10 条限制。
+    expect(startup.conversations.filter((c) => c.project_id === pid)).toHaveLength(15);
     expect(startup.project_pagination[pid]).toEqual({ total: 15, next_offset: 10 });
     expect(startup.deferred_unprojected).toEqual({ last30: 12, older: 13 });
 
@@ -620,7 +721,7 @@ describe('chats › index repair', () => {
       activeConversationId: projectRows[14].conversation_id,
       expandedProjectIds: [pid],
     });
-    expect(restored.conversations.filter((c) => c.project_id === pid)).toHaveLength(11);
+    expect(restored.conversations.filter((c) => c.project_id === pid)).toHaveLength(15);
     expect(restored.conversations.some((c) => c.conversation_id === projectRows[14].conversation_id)).toBe(true);
 
     const projectFirst = await chats.listProjectConversationPage(TEST_UID, pid, 0);
@@ -644,8 +745,7 @@ describe('chats › index repair', () => {
 
   it('loads the owning project slice when restoring its active conversation', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const project = await projects.createProject(TEST_UID, 'Active project');
+    const project = makeProject('Active project');
     if (!project.ok) throw new Error('project setup failed');
     const first = await chats.createConversation(TEST_UID, { projectId: project.project.project_id });
     const second = await chats.createConversation(TEST_UID, { projectId: project.project.project_id });
@@ -660,9 +760,8 @@ describe('chats › index repair', () => {
 
   it('keeps scoped expansion isolated from duplicate rows in unrelated roots', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const first = await projects.createProject(TEST_UID, 'First root');
-    const second = await projects.createProject(TEST_UID, 'Second root');
+    const first = makeProject('First root');
+    const second = makeProject('Second root');
     if (!first.ok || !second.ok) throw new Error('project setup failed');
     const projected = await chats.createConversation(TEST_UID, {
       title: 'first-root row',

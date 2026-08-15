@@ -87,7 +87,6 @@ export const CORE_TO_MATE_TOOL_MAPPINGS: readonly CoreToMateToolMapping[] = Obje
   replacement('manage_execution_plan', ['mate_workflow', 'mate_retry_step', 'mate_skip_step', 'mate_resume_workflow'], 'CogSeed workflow inspection and auditable step controls replace the Core plan tool without importing the legacy state machine.'),
   deferred('cross_session_memory', 'Deferred because Runtime has no approved user-memory adapter and must not read business data directly.'),
   deferred('project_instructions', 'Deferred because project instruction mutation belongs to the project/session owner boundary.'),
-  deferred('project_tasks', 'Deferred because project task mutation belongs to the project/session owner boundary.'),
   deferred('metacognition', 'Deferred because the Runtime worker has no approved metacognition storage or visibility adapter.'),
 ]);
 

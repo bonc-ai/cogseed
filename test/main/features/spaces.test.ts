@@ -342,23 +342,43 @@ describe('spaces › CRUD', () => {
     expect(r.resources.extra_skills).toEqual([]);
   });
 
-  it('deleteSpace 解绑引用项目并返回受影响列表', async () => {
+  it('deleteSpace 删除带资产绑定的空间（路线 A 引用不阻碍删除）', async () => {
     const spaces = await loadSpaces();
-    const projects = await import('../../../src/main/features/projects');
     const space = await spaces.createSpace(TEST_UID, { name: 'S' });
     if (!space.ok) throw new Error('create failed');
-    const p1 = await projects.createProject(TEST_UID, 'P1');
-    if (!p1.ok) throw new Error('create p1 failed');
-    const bind = await projects.bindSpace(TEST_UID, p1.project.project_id, space.space.space_id);
+    const bind = await spaces.bindSpaceAsset(TEST_UID, space.space.space_id, {
+      asset_id: 'asset-a',
+      version: '1.0.0',
+    });
     expect(bind.ok).toBe(true);
 
     const del = await spaces.deleteSpace(TEST_UID, space.space.space_id);
     expect(del.ok).toBe(true);
     if (!del.ok) return;
-    expect(del.unbound_projects).toEqual([p1.project.project_id]);
+    expect(await spaces.getSpace(TEST_UID, space.space.space_id)).toBeNull();
+    expect((await spaces.listSpaces(TEST_UID)).some((s) => s.space_id === space.space.space_id)).toBe(false);
+  });
 
-    const scope = await projects.resolveProjectScope(TEST_UID, p1.project.project_id);
-    expect(scope).toBeNull(); // 解绑后无 bindings → 全局可见
+  it('deleteSpace 清空该空间会话的 space_id（会话落到最近任务，不残留）', async () => {
+    const spaces = await loadSpaces();
+    const chats = await import('../../../src/main/features/chats');
+    const created = await spaces.createSpace(TEST_UID, { name: '待删空间' });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    // 两条会话绑定到该空间
+    const c1 = await chats.createConversation(TEST_UID, { title: 'a', spaceId: sid });
+    const c2 = await chats.createConversation(TEST_UID, { title: 'b', spaceId: sid });
+    expect((await chats.listSpaceConversations(TEST_UID, sid)).length).toBe(2);
+
+    const del = await spaces.deleteSpace(TEST_UID, sid);
+    expect(del.ok).toBe(true);
+
+    // 会话 space_id 已清空（落到最近任务），不再归属已删空间
+    const back1 = await chats.getConversation(TEST_UID, c1.conversation_id);
+    const back2 = await chats.getConversation(TEST_UID, c2.conversation_id);
+    expect(back1?.space_id).toBeUndefined();
+    expect(back2?.space_id).toBeUndefined();
+    expect((await chats.listSpaceConversations(TEST_UID, sid)).length).toBe(0);
   });
 
   it('pruneInvalidSpaceResources 清理失效引用', async () => {
@@ -387,6 +407,53 @@ describe('spaces › CRUD', () => {
     // listSpaces 跳过坏文件
     const list = await spaces.listSpaces(TEST_UID);
     expect(list.length).toBe(0);
+  });
+});
+
+describe('spaces › resolveSpaceScope（会话作用域，T4.1）', () => {
+  it('spaceId 空 → null（全局可见）', async () => {
+    const spaces = await loadSpaces();
+    expect(await spaces.resolveSpaceScope(TEST_UID, null)).toBeNull();
+    expect(await spaces.resolveSpaceScope(TEST_UID, '')).toBeNull();
+    expect(await spaces.resolveSpaceScope(TEST_UID, undefined)).toBeNull();
+  });
+
+  it('空间不存在 → null（降级全局可见）', async () => {
+    const spaces = await loadSpaces();
+    expect(await spaces.resolveSpaceScope(TEST_UID, 'sp_nonexistent')).toBeNull();
+  });
+
+  it('空配置（无模板无 extra）→ null（裁决 S1：全局可见）', async () => {
+    visibleSkillIds.clear();
+    visibleAgentIds.clear();
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '空空间' });
+    if (!created.ok) throw new Error('create failed');
+    expect(await spaces.resolveSpaceScope(TEST_UID, created.space.space_id)).toBeNull();
+  });
+
+  it('有有效 extra 技能/智能体 → 严格作用域 {skills, agents}', async () => {
+    visibleSkillIds.clear();
+    visibleAgentIds.clear();
+    visibleSkillIds.add('sk-a');
+    visibleAgentIds.add('ag-1');
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '作用域空间' });
+    if (!created.ok) throw new Error('create failed');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', 'sk-a');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'agent', 'ag-1');
+    const scope = await spaces.resolveSpaceScope(TEST_UID, created.space.space_id);
+    expect(scope).toEqual({ skills: ['sk-a'], agents: ['ag-1'] });
+  });
+
+  it('全部引用失效 → null（派生集全空 → 全局可见，S1）', async () => {
+    visibleSkillIds.clear();
+    visibleAgentIds.clear();
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '失效空间' });
+    if (!created.ok) throw new Error('create failed');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', '__gone__');
+    expect(await spaces.resolveSpaceScope(TEST_UID, created.space.space_id)).toBeNull();
   });
 });
 
@@ -439,5 +506,37 @@ describe('spaces › listSpaces 失效数（真实有效集合，P3394 假阳性
     expect(me?.skill_count).toBe(7); // bundle 5 + extra 2（含失效）
     expect(me?.agent_count).toBe(4); // bundle 3 + extra 1（含失效）
     expect(me?.invalid_count).toBe(2); // 仅 2 个真失效
+  });
+});
+
+describe('spaces › listSpaces 最近活跃会话（last_conversation_*）', () => {
+  beforeEach(() => {
+    visibleSkillIds.clear();
+    visibleAgentIds.clear();
+  });
+
+  it('有会话 → 取最近活跃会话标题/时间；无会话 → 字段缺省', async () => {
+    const spaces = await loadSpaces();
+    const empty = await spaces.createSpace(TEST_UID, { name: '空会话空间' });
+    if (!empty.ok) throw new Error('create failed');
+    const busy = await spaces.createSpace(TEST_UID, { name: '有会话空间' });
+    if (!busy.ok) throw new Error('create failed');
+
+    const chats = await import('../../../src/main/features/chats');
+    await chats.createConversation(TEST_UID, { spaceId: busy.space.space_id, title: '第一条旧任务' });
+    const c2 = await chats.createConversation(TEST_UID, { spaceId: busy.space.space_id, title: '最近任务' });
+    // nowIso 秒级精度：用 bump 把 c2 活动时间往后拨 1 秒，保证最近活跃序稳定
+    const later = new Date(Date.now() + 1000);
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const laterTs = `${later.getFullYear()}-${pad2(later.getMonth() + 1)}-${pad2(later.getDate())}T${pad2(later.getHours())}:${pad2(later.getMinutes())}:${pad2(later.getSeconds())}`;
+    await chats.bumpConversationActivity(TEST_UID, c2.conversation_id, laterTs);
+
+    const list = await spaces.listSpaces(TEST_UID);
+    const meEmpty = list.find((s) => s.space_id === empty.space.space_id);
+    const meBusy = list.find((s) => s.space_id === busy.space.space_id);
+    expect(meEmpty?.last_conversation_title).toBeUndefined();
+    expect(meEmpty?.last_conversation_at).toBeUndefined();
+    expect(meBusy?.last_conversation_title).toBe('最近任务');
+    expect(meBusy?.last_conversation_at).toBeTruthy();
   });
 });
