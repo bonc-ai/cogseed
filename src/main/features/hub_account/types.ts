@@ -30,6 +30,12 @@ export interface HubCallbackResult {
   session: HubSession;
 }
 
+export interface HubCallbackDeviceInfo {
+  installation_id: string;
+  device_name: string;
+  device_os: string;
+}
+
 export interface HubRefreshResult {
   access_token: string;
   refresh_token: string;

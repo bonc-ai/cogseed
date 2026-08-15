@@ -1,21 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HubApiError, createHubClient, hubApiBase } from '../../../../src/main/features/hub_account/client';
-
-vi.mock('../../../../src/main/features/connectors/_server_bridge', () => ({
-  accountApiBase: () => 'https://server.test/api',
-}));
+import { HubApiError, createHubClient } from '../../../../src/main/features/hub_account/client';
 
 const BASE = 'http://hub.test';
 
 describe('hub account client', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
-    delete process.env.COGSEED_HUB_API_BASE;
   });
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete process.env.COGSEED_HUB_API_BASE;
   });
 
   function mockFetchOnce(status: number, body: unknown) {
@@ -25,20 +19,6 @@ describe('hub account client', () => {
       json: async () => body,
     });
   }
-
-  it('derives the Hub base from the canonical account API helper', () => {
-    expect(hubApiBase()).toBe('https://server.test');
-  });
-
-  it('honors the COGSEED_HUB_API_BASE override for local joint debugging', () => {
-    process.env.COGSEED_HUB_API_BASE = 'http://localhost:3000';
-    expect(hubApiBase()).toBe('http://localhost:3000');
-  });
-
-  it('strips a trailing /api from the override like the canonical helper', () => {
-    process.env.COGSEED_HUB_API_BASE = 'http://localhost:3000/api';
-    expect(hubApiBase()).toBe('http://localhost:3000');
-  });
 
   it('login builds the provider query and returns authorize_url + state', async () => {
     mockFetchOnce(200, { ok: true, data: { authorize_url: 'https://github.com/...', state: 's1' } });
@@ -62,14 +42,23 @@ describe('hub account client', () => {
       },
     });
     const client = createHubClient(BASE);
-    const res = await client.callback('code1', 'state1');
+    const res = await client.callback('code1', 'state1', {
+      installation_id: 'install_1',
+      device_name: 'MacBook',
+      device_os: 'macOS 15.0',
+    });
     expect(res.is_new_account).toBe(true);
     expect(res.session.access_token).toBe('at');
     const [url, init] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/api/v1/auth/callback');
     expect(init.method).toBe('POST');
-    // Contract v1.3: body is exactly { code, state } — no device fields.
-    expect(JSON.parse(String(init.body))).toEqual({ code: 'code1', state: 'state1' });
+    expect(JSON.parse(String(init.body))).toEqual({
+      code: 'code1',
+      state: 'state1',
+      installation_id: 'install_1',
+      device_name: 'MacBook',
+      device_os: 'macOS 15.0',
+    });
   });
 
   it('authenticated endpoints attach the Bearer header', async () => {
