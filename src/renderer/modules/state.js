@@ -320,7 +320,8 @@ function bindStaticHandlers() {
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connections'));
   document.getElementById('spaces-btn')?.addEventListener('click', () => _setViewFromSidebar('spaces'));
   document.getElementById('workspace-btn')?.addEventListener('click', () => _setViewFromSidebar('workspace'));
-  document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
+  // 设置入口已并入左下角融合面板（account-chip.js 的「设置」菜单项，
+  // 通过 window.setView('settings') 切换视图）。
 
   // Sidebar conv tabs（ZCode 式「空间 | 最近任务」）
   document.querySelectorAll('#sidebar-conv-tabs [data-conv-tab]').forEach((btn) => {

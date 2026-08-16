@@ -38,6 +38,13 @@ import {
 } from './marketplace_installs';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
 import { extractBundleSafely, postJson } from './marketplace';
+import { validateSkillDir } from '../quality';
+import { persistReport as persistQualityReport } from '../quality/report';
+import {
+  scanSkillDir, scanVerdictBlocksInstall, type SentryScanResult, type SkillSource,
+} from './security/sentry-adapter';
+import { topViolationOf } from './skill_reverify';
+import { writeInstallReceipt, writeReceipt } from './skill_trust';
 import { withMarketplaceInstallLock } from './marketplace_locks';
 import { agentPrivateSkillIdsFromBundle } from './marketplace_private_skills';
 import { downloadMarketplaceBundle, parseMarketplaceBundle } from './marketplace_bundle';
@@ -1105,6 +1112,69 @@ function _readInstallMeta(dir: string): InstallMeta | null {
   } catch { return null; }
 }
 
+/** W3: quality + deep-scan gate for a skill pulled by reconcile. Never throws
+ *  for the security verdict — it receipts it. See the call site for why the
+ *  content is kept on refusal (UX-first: reconciliation must not destroy the
+ *  user's synced library). */
+async function _gateReconciledSkill(
+  uid: string,
+  skillId: string,
+  dir: string,
+  current: { create_uid?: string },
+): Promise<void> {
+  try {
+    const report = validateSkillDir(dir, { enforceSkillRunner: false });
+    try {
+      await persistQualityReport({ uid, kind: 'skill', id: skillId, report });
+    } catch (err) {
+      log.warn('reconcile quality report persist failed', { skillId, error: String(err) });
+    }
+    const sourceTier: SkillSource = String(current.create_uid || '') === '0'
+      ? 'official'
+      : 'community';
+    const scan = await scanSkillDir(dir, sourceTier);
+    const treeHash = marketplaceContentTreeHash(dir);
+    if (scanVerdictBlocksInstall(scan.outcome)) {
+      if (scan.outcome === 'blocked' && treeHash) {
+        // Receipt the refusal so nothing runs it and the panel explains it.
+        const rule = scan.blockingRules?.[0] || scan.localRedLines?.[0];
+        writeReceipt(uid, skillId, {
+          payloadHash: treeHash,
+          decision: 'blocked',
+          violationCount: report.violations.length,
+          scanner: 'deep',
+          ...(typeof scan.score === 'number' ? { securityScore: scan.score } : {}),
+          ...(scan.scannerVersion ? { scannerVersion: scan.scannerVersion } : {}),
+          ...(scan.rulesetVersion ? { rulesetVersion: scan.rulesetVersion } : {}),
+          ...(typeof scan.isolated === 'boolean' ? { isolated: scan.isolated } : {}),
+          ...(scan.rulesDegraded ? { rulesDegraded: true } : {}),
+          ...(scan.attackSurface ? { attackSurface: { ...scan.attackSurface } } : {}),
+          ...(scan.instructionRisk ? { instructionRisk: scan.instructionRisk } : {}),
+          ...(rule ? { topRule: rule, topLevel: 'EXTREME' } : {}),
+        });
+      }
+      log.warn('reconciled skill refused by security gate; kept but withheld', {
+        skillId, outcome: scan.outcome, rules: [...(scan.blockingRules || []), ...(scan.localRedLines || [])],
+      });
+      return;
+    }
+    if (treeHash) {
+      const top = topViolationOf(report.violations);
+      writeInstallReceipt(uid, skillId, treeHash, scan, {
+        violationCount: report.violations.length,
+        ...(top?.rule ? { topRule: top.rule } : {}),
+        ...(top?.level ? { topLevel: top.level } : {}),
+      }, undefined, dir);
+    }
+  } catch (err) {
+    // The pull itself must not fail on a scanner infrastructure error: the
+    // content stays, unreceipted, and the load gate retries at first use.
+    log.warn('reconcile security gate errored; content kept unreceipted', {
+      skillId, error: (err as Error).message,
+    });
+  }
+}
+
 async function _writeInstallMeta(dir: string, meta: InstallMeta): Promise<void> {
   await fsp.writeFile(path.join(dir, '_install.json'), JSON.stringify(meta, null, 2), 'utf8');
 }
@@ -1294,6 +1364,14 @@ async function _pullSkillLocked(uid: string, row: SkillInstall, opts: Marketplac
   const skillMdFile = path.join(dir, 'SKILL.md');
   if (!fs.existsSync(skillMdFile)) throw new Error('bundle missing SKILL.md');
   _assertContinue(opts);
+  // W3 install gate for the reconcile path. UX-first, by product decision:
+  // a refusal NEVER deletes the pulled content — the user installed this skill
+  // on another device through the same gated flow, and silently removing it
+  // here would punish them for a scanner disagreement. Instead the verdict is
+  // receipted: a `blocked` receipt makes the load gate withhold the skill (the
+  // card stays visible, explained, and re-checkable), and `unknown` writes
+  // nothing so the load gate retries the deep scan at first use.
+  await _gateReconciledSkill(uid, row.id, dir, current);
   await _writeInstallMeta(dir, {
     version: current.version, published_at: current.published_at,
     ...(typeof current.updated_at === 'number' ? { updated_at: current.updated_at } : {}),

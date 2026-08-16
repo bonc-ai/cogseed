@@ -31,10 +31,10 @@ describe('hub channel-aware defaults', () => {
     expect(resolveHubApiBase('', 'release')).toBe(RELEASE_HUB_API_BASE);
   });
 
-  it('enables the release gate only for packaged-dev builds', () => {
+  it('enables the release gate by default for every channel', () => {
     expect(hubReleaseDefaultEnabled('packaged-dev')).toBe(true);
-    expect(hubReleaseDefaultEnabled('dev')).toBe(false);
-    expect(hubReleaseDefaultEnabled('release')).toBe(false);
-    expect(hubReleaseDefaultEnabled('unknown')).toBe(false);
+    expect(hubReleaseDefaultEnabled('dev')).toBe(true);
+    expect(hubReleaseDefaultEnabled('release')).toBe(true);
+    expect(hubReleaseDefaultEnabled('unknown')).toBe(true);
   });
 });

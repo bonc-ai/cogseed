@@ -22,6 +22,7 @@
  * Storage is `<uid>/local/`: this is derived, machine-local state. It must not
  * sync, because a receipt vouches for bytes on *this* disk.
  */
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -192,6 +193,24 @@ export interface SecurityReceipt {
     outcome: string;
     at: number;
   };
+  /**
+   * Hash over the skill's DECLARED dependencies: the "External dependencies"
+   * section of SKILL.md plus any dependency-manifest files (requirements.txt,
+   * package.json, pyproject.toml, ...). Spec §4.4 binds the verdict to this
+   * dimension so a dependency-only republish is distinguishable in audit.
+   *
+   * Evidence field, not a gate: the payload tree hash already covers these
+   * files, so `payload_changed` fires first when they change. Recording the
+   * dimension separately costs nothing and keeps receipts exportable against
+   * the spec's field list without inventing a second gate.
+   */
+  dependencyHash?: string;
+  /**
+   * Hash over the skill's declared permissions: `schemas.json.runtime_contracts`
+   * canonicalized. `'none'` is the constant for skills without a schema — a
+   * distinct value, never a false "matches".
+   */
+  permissionHash?: string;
 }
 
 /** Why a receipt no longer applies. `null` when it still does. */
@@ -230,9 +249,100 @@ function _receiptsDir(uid: string): string {
   return path.join(userLocalRoot(uid), 'skill_trust');
 }
 
-function _receiptFile(uid: string, skillId: string): string {
+function _receiptFile(uid: string, skillId: string, agentId?: string): string {
   if (!safeId(skillId)) throw new Error('invalid skill id');
-  return path.join(_receiptsDir(uid), `${skillId}.json`);
+  // Agent-private skills share a skillId namespace with standalone installs
+  // (`userMarketplaceAgentSkillsDir`), so their receipts are namespaced by
+  // agent: `${agentId}__${skillId}.json`. Without the prefix a private skill
+  // that shadows a standalone id would verify the WRONG bytes — the exact
+  // trap documented in skill-registry's private branch.
+  const name = agentId ? `${agentId}__${skillId}.json` : `${skillId}.json`;
+  return path.join(_receiptsDir(uid), name);
+}
+
+const DEP_MANIFEST_NAMES: ReadonlySet<string> = new Set([
+  'requirements.txt', 'package.json', 'package-lock.json', 'yarn.lock',
+  'pyproject.toml', 'Pipfile', 'Pipfile.lock', 'Gemfile', 'Gemfile.lock',
+  'go.mod', 'go.sum', 'Cargo.toml', 'Cargo.lock', 'composer.json', 'composer.lock',
+]);
+
+/** Value recorded when a skill declares no machine-readable permissions. */
+export const PERMISSION_HASH_NONE = 'none';
+
+function _hashText(parts: string[]): string {
+  return `sha256:${crypto.createHash('sha256').update(parts.join('\n'), 'utf8').digest('hex')}`;
+}
+
+/** Stable serialization for hashing: keys sorted at every depth, so the same
+ *  semantic object hashes identically regardless of key order in the file. */
+function _stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(_stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value as object).sort();
+    return `{${keys
+      .map((k) => `${JSON.stringify(k)}:${_stableStringify((value as Record<string, unknown>)[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Hash over the skill's DECLARED dependencies: the "External dependencies"
+ * section of SKILL.md plus any dependency-manifest files. Bounded: a hostile
+ * tree cannot grow the scan unboundedly (each manifest is capped at 64KiB and
+ * at most 32 manifests are read).
+ */
+export function currentDependencyHash(skillDir: string): string {
+  const parts: string[] = [];
+  const manifests: Array<{ rel: string; content: string }> = [];
+  const walk = (dir: string, rel: string): void => {
+    if (manifests.length >= 32) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (manifests.length >= 32) return;
+      if (e.name.startsWith('.') || e.name === 'node_modules' || e.name === '__pycache__') continue;
+      const full = path.join(dir, e.name);
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { walk(full, childRel); continue; }
+      if (!DEP_MANIFEST_NAMES.has(e.name.toLowerCase())) continue;
+      try {
+        const stat = fs.statSync(full);
+        if (stat.size > 64 * 1024) continue;
+        manifests.push({ rel: childRel, content: fs.readFileSync(full, 'utf8') });
+      } catch { /* unreadable manifest is simply not part of the hash */ }
+    }
+  };
+  walk(skillDir, '');
+  manifests.sort((a, b) => a.rel.localeCompare(b.rel));
+  for (const m of manifests) parts.push(`@@${m.rel}
+${m.content}`);
+  // The declared-dependencies section of SKILL.md, when present.
+  try {
+    const md = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
+    const section = /(?:##|#)\s*External dependencies?[^\n]*\n([\s\S]*?)(?=\n##|\n#|$)/i.exec(md);
+    if (section) parts.push(`@@SKILL.md#deps
+${section[1].trim()}`);
+  } catch { /* no SKILL.md — nothing to add */ }
+  return _hashText(parts);
+}
+
+/**
+ * Hash over the skill's declared permissions: `schemas.json.runtime_contracts`
+ * canonicalized (sorted keys, stable serialization). `PERMISSION_HASH_NONE`
+ * when the skill declares none — a distinct value, never a false match.
+ */
+export function currentPermissionHash(skillDir: string): string {
+  try {
+    const raw = fs.readFileSync(path.join(skillDir, 'schemas.json'), 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return PERMISSION_HASH_NONE;
+    const rc = (parsed as Record<string, unknown>).runtime_contracts;
+    if (!rc || typeof rc !== 'object') return PERMISSION_HASH_NONE;
+    return _hashText([_stableStringify(rc)]);
+  } catch {
+    return PERMISSION_HASH_NONE;
+  }
 }
 
 /** Hash a skill directory. Returns '' when unreadable or empty. */
@@ -356,9 +466,10 @@ function _readUserOverride(raw: unknown): { userOverride?: SecurityReceipt['user
   return { userOverride: { outcome: o.outcome.slice(0, 64), at } };
 }
 
-export function readReceipt(uid: string, skillId: string): SecurityReceipt | null {
+export function readReceipt(uid: string, skillId: string, agentId?: string): SecurityReceipt | null {
   if (!safeId(uid) || !safeId(skillId)) return null;
-  const raw = readJsonSync<Partial<SecurityReceipt>>(_receiptFile(uid, skillId));
+  if (agentId !== undefined && !safeId(agentId)) return null;
+  const raw = readJsonSync<Partial<SecurityReceipt>>(_receiptFile(uid, skillId, agentId));
   if (!raw || typeof raw !== 'object') return null;
   if (typeof raw.payloadHash !== 'string' || !raw.payloadHash) return null;
   if (raw.decision !== 'pass' && raw.decision !== 'risk' && raw.decision !== 'blocked') return null;
@@ -401,6 +512,10 @@ export function readReceipt(uid: string, skillId: string): SecurityReceipt | nul
     ...(_readInstructionRisk(raw.instructionRisk)),
     ...(_readNseapDeclaration(raw.nseapDeclaration)),
     ...(_readUserOverride(raw.userOverride)),
+    ...(typeof raw.dependencyHash === 'string' && raw.dependencyHash
+      ? { dependencyHash: raw.dependencyHash } : {}),
+    ...(typeof raw.permissionHash === 'string' && raw.permissionHash
+      ? { permissionHash: raw.permissionHash } : {}),
     scannedAt: String(raw.scannedAt || ''),
   };
 }
@@ -443,9 +558,13 @@ export function writeReceipt(
     instructionRisk?: SecurityReceipt['instructionRisk'];
     nseapDeclaration?: SecurityReceipt['nseapDeclaration'];
     userOverride?: SecurityReceipt['userOverride'];
+    dependencyHash?: string;
+    permissionHash?: string;
   },
+  agentId?: string,
 ): SecurityReceipt {
   if (!safeId(uid)) throw new Error('invalid uid');
+  if (agentId !== undefined && !safeId(agentId)) throw new Error('invalid agent id');
   const receipt: SecurityReceipt = {
     skillId,
     payloadHash: input.payloadHash,
@@ -465,9 +584,11 @@ export function writeReceipt(
     ...(input.instructionRisk ? { instructionRisk: input.instructionRisk } : {}),
     ...(input.nseapDeclaration ? { nseapDeclaration: input.nseapDeclaration } : {}),
     ...(input.userOverride ? { userOverride: input.userOverride } : {}),
+    ...(input.dependencyHash ? { dependencyHash: input.dependencyHash } : {}),
+    ...(input.permissionHash ? { permissionHash: input.permissionHash } : {}),
     scannedAt: nowIso(),
   };
-  const file = _receiptFile(uid, skillId);
+  const file = _receiptFile(uid, skillId, agentId);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   writeTextAtomicSync(file, JSON.stringify(receipt, null, 2));
   return receipt;
@@ -503,6 +624,8 @@ export function writeInstallReceipt(
     userOverride?: SecurityReceipt['userOverride'];
   },
   violations: { violationCount: number; topRule?: string; topLevel?: 'EXTREME' | 'MEDIUM' | 'LOW' },
+  agentId?: string,
+  skillDir?: string,
 ): SecurityReceipt | null {
   try {
     return writeReceipt(uid, skillId, {
@@ -529,7 +652,9 @@ export function writeInstallReceipt(
       ...(scan.attackSurface ? { attackSurface: { ...scan.attackSurface } } : {}),
       ...(scan.instructionRisk ? { instructionRisk: scan.instructionRisk } : {}),
       ...(scan.userOverride ? { userOverride: scan.userOverride } : {}),
-    });
+      ...(skillDir ? { dependencyHash: currentDependencyHash(skillDir) } : {}),
+      ...(skillDir ? { permissionHash: currentPermissionHash(skillDir) } : {}),
+    }, agentId);
   } catch (err) {
     log.warn('failed to write install security receipt', {
       skillId, error: (err as Error).message,
@@ -545,8 +670,8 @@ export function writeInstallReceipt(
  * always stale. A cheap wrong answer here costs one extra scan (measured in
  * milliseconds); the opposite error silently trusts content nobody checked.
  */
-export function isReceiptStale(uid: string, skillId: string, skillDir: string): StaleVerdict {
-  const receipt = readReceipt(uid, skillId);
+export function isReceiptStale(uid: string, skillId: string, skillDir: string, agentId?: string): StaleVerdict {
+  const receipt = readReceipt(uid, skillId, agentId);
   if (!receipt) return { stale: true, reason: 'no_receipt' };
 
   const diskHash = skillPayloadHash(skillDir);
@@ -561,9 +686,9 @@ export function isReceiptStale(uid: string, skillId: string, skillDir: string): 
   return { stale: false, reason: null };
 }
 
-export function deleteReceipt(uid: string, skillId: string): void {
+export function deleteReceipt(uid: string, skillId: string, agentId?: string): void {
   try {
-    fs.rmSync(_receiptFile(uid, skillId), { force: true });
+    fs.rmSync(_receiptFile(uid, skillId, agentId), { force: true });
   } catch (err) {
     log.warn('failed to delete receipt', { skillId, error: (err as Error).message });
   }
@@ -580,6 +705,10 @@ export function listReceipts(uid: string): SecurityReceipt[] {
   }
   const out: SecurityReceipt[] = [];
   for (const name of names) {
+    // Private receipts (`agentId__skillId.json`) are not part of the public
+    // trust list — they describe agent-bundled skills and would read as
+    // unrelated skill ids here.
+    if (name.includes('__')) continue;
     const receipt = readReceipt(uid, name.slice(0, -'.json'.length));
     if (receipt) out.push(receipt);
   }

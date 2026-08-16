@@ -282,9 +282,10 @@ export interface SentryScanResult {
  * plaintext credential exfiltration scores clean. Our `no_credential_path_read`
  * catches it.
  *
- * Conversely sentry catches far more than we do (58 rules vs our 21, plus the
- * context-demotion layer calibrated against a 43-skill corpus), which is why it
- * is the primary verdict rather than a second opinion.
+ * Conversely sentry catches far more than we do (58 rules vs our 25 local
+ * red-flag rules, plus the context-demotion layer calibrated against a
+ * 43-skill corpus), which is why it is the primary verdict rather than a
+ * second opinion.
  *
  * Safe to union because our EXTREME set is empirically quiet: measured 0 hits
  * across all five real builtin skills, so adding it cannot introduce the
@@ -455,10 +456,24 @@ function pythonCandidates(): string[] {
   return out;
 }
 
-/** True when this interpreter can import PyYAML, i.e. can load the full ruleset. */
+/** True when this interpreter can import PyYAML, i.e. can load the full ruleset.
+ *
+ *  W6: the probe runs with the vendored payload on PYTHONPATH, so a bare
+ *  bundled CPython (which ships without PyYAML) now loads the full ruleset.
+ *  That removes the machine-dependent coverage gap where the same skill scored
+ *  ALLOW/100 on one machine and DO_NOT_INSTALL/20 on another.
+ */
 function hasPyYaml(python: string): boolean {
   try {
-    const r = spawnSync(python, ['-c', 'import yaml'], { stdio: 'ignore', timeout: 10_000 });
+    const r = spawnSync(python, ['-c', 'import yaml'], {
+      stdio: 'ignore',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        PYTHONPATH: path.join(enginePath(), 'vendor'),
+        PYTHONDONTWRITEBYTECODE: '1',
+      },
+    });
     return r.status === 0;
   } catch {
     return false;
@@ -656,7 +671,16 @@ async function runGate(
         stdio: ['ignore', 'pipe', 'pipe'],
         // PYTHONIOENCODING guards against a non-UTF8 default on Windows
         // mangling the scanner's Chinese-language messages.
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONDONTWRITEBYTECODE: '1' },
+        env: {
+          ...process.env,
+          PYTHONIOENCODING: 'utf-8',
+          PYTHONDONTWRITEBYTECODE: '1',
+          // Vendored PyYAML (W6): same rationale as the probe — the bundled
+          // interpreter carries no site-packages, and the full ruleset is what
+          // makes a verdict meaningful. PYTHONPATH here also keeps .pyc files
+          // out of the engine tree (hence the bytecode guard above).
+          PYTHONPATH: [path.join(engineRoot, 'vendor'), process.env.PYTHONPATH || ''].filter(Boolean).join(path.delimiter),
+        },
       });
       let out = '';
       let err = '';
@@ -664,8 +688,30 @@ async function runGate(
         child.kill('SIGKILL');
         reject(new Error('timeout'));
       }, SCAN_TIMEOUT_MS);
-      child.stdout.on('data', (d) => { out += String(d); });
-      child.stderr.on('data', (d) => { err += String(d); });
+      // Output accumulation caps (W5/D4): the scanner's own report is a few KB.
+      // A runaway engine (or a hostile payload making a parser print) must not
+      // balloon the main process before the timeout fires. Overflow is a scan
+      // failure, mapped to `unknown` — never a verdict.
+      const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
+      const MAX_STDERR_BYTES = 1024 * 1024;
+      let overflowed = false;
+      const killOverflow = () => {
+        if (overflowed) return;
+        overflowed = true;
+        clearTimeout(timer);
+        child.kill('SIGKILL');
+        reject(new Error('output_overflow'));
+      };
+      child.stdout.on('data', (d) => {
+        if (overflowed) return;
+        out += String(d);
+        if (out.length > MAX_STDOUT_BYTES) killOverflow();
+      });
+      child.stderr.on('data', (d) => {
+        if (overflowed) return;
+        err += String(d);
+        if (err.length > MAX_STDERR_BYTES) killOverflow();
+      });
       child.on('error', (e) => { clearTimeout(timer); reject(e); });
       child.on('close', (code) => {
         clearTimeout(timer);

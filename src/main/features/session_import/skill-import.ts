@@ -37,6 +37,7 @@ import {
   writeSkillFileForEdit,
   getCustomSkill,
   parseSkillFrontmatter,
+  deleteCustomSkill,
 } from '../skills';
 import { ensureNseapSkillSkeleton } from '../nseap_skill_skeleton';
 import { userSkillsDir } from '../../paths';
@@ -232,6 +233,38 @@ export async function importClaudeSkill(dirName: string): Promise<ImportSkillRes
   }
 
   log.info(`imported claude skill "${name}" as ${skillId} (files=${files.length}, helperFails=${helperFails})`);
+  return _admitImportedSkill(skillId, name, 'claude');
+}
+
+/**
+ * W1 generation gate: admit an onboarding-imported skill before reporting it
+ * as done. Rollback on refusal — the imported content is third-party, so the
+ * import fails closed exactly like the skill-library import path. `unknown`
+ * (scanner unavailable) fails closed too: nothing claims to be checked.
+ */
+async function _admitImportedSkill(
+  skillId: string,
+  name: string,
+  source: 'claude' | 'codex',
+): Promise<ImportSkillResult> {
+  try {
+    const { admitCustomSkill } = await import('../security/custom-skill-admission');
+    const admission = await admitCustomSkill(getActiveUserId(), skillId);
+    if (admission.outcome === 'blocked' || admission.outcome === 'unknown') {
+      await deleteCustomSkill(skillId);
+      log.warn(`${source}-import skill refused by admission gate`, {
+        skillId, outcome: admission.outcome, reason: admission.reason,
+      });
+      return {
+        ok: false, skillId, name,
+        reason: admission.outcome === 'unknown' ? 'security_unavailable' : 'security_blocked',
+      };
+    }
+  } catch (err) {
+    log.warn(`${source}-import skill admission failed`, { skillId, error: String(err) });
+    try { await deleteCustomSkill(skillId); } catch { /* best effort */ }
+    return { ok: false, skillId, name, reason: 'security_unavailable' };
+  }
   return { ok: true, skillId, name };
 }
 
@@ -373,7 +406,7 @@ export async function importCodexSkill(dirName: string): Promise<ImportSkillResu
   }
 
   log.info(`imported codex skill "${name}" as ${skillId} (files=${files.length}, helperFails=${helperFails})`);
-  return { ok: true, skillId, name };
+  return _admitImportedSkill(skillId, name, 'codex');
 }
 
 /** Import a batch of Codex skills by dir name. Best-effort per skill. */

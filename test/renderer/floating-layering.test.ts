@@ -25,33 +25,27 @@ describe('floating layer ordering', () => {
     }
   });
 
-  it('keeps a data-attribute fallback for the sidebar settings status badge', () => {
+  it('keeps the merged footer panel seamlessly attached to its trigger', () => {
     const css = readRendererCss();
-    const badgeBlock = css.match(/\.sidebar-settings-alerts\s*\{[\s\S]*?\}/)?.[0] || '';
-    const buttonBlock = css.match(/#settings-btn\s*\{[\s\S]*?\}/)?.[0] || '';
-    const alertButtonBlock = css.match(/#settings-btn\.has-sidebar-alert\s*\{[\s\S]*?\}/)?.[0] || '';
-    const buttonBadgeBlock = css.match(/#settings-btn::after\s*\{[\s\S]*?\}/)?.[0] || '';
-    expect(buttonBlock).toContain('padding-right: 8px');
-    expect(alertButtonBlock).toContain('padding-right: 104px');
-    expect(buttonBadgeBlock).toContain('content: attr(data-sidebar-status)');
-    expect(buttonBadgeBlock).toContain('right: 8px');
-    expect(buttonBadgeBlock).toContain('min-width: 56px');
-    expect(badgeBlock).toContain('clip-path');
-    expect(badgeBlock).toContain('width: 1px');
-    expect(badgeBlock).toContain('height: 1px');
-    const syncingBadgeBlock = css.match(/#settings-btn\.is-syncing::after\s*\{[\s\S]*?\}/)?.[0] || '';
-    expect(syncingBadgeBlock).toContain('background: var(--primary-soft)');
-    expect(syncingBadgeBlock).toContain('color: var(--primary-text)');
+    const menuBlock = css.match(/\.hub-chip-menu\s*\{[\s\S]*?\}/)?.[0] || '';
+    // 与状态栏重叠 6px：hover 在入口与面板之间移动不经过空隙、不闪断。
+    expect(menuBlock).toContain('bottom: calc(100% - 6px)');
+    expect(menuBlock).toContain('z-index: 120');
+    expect(menuBlock).toContain('padding: 6px 6px 14px');
   });
 
-  it('anchors the sidebar settings dot next to the label text', () => {
+  it('keeps open / pinned / active state styles for the merged footer panel', () => {
     const css = readRendererCss();
-    const buttonBadgeBlock = css.match(/#settings-btn::after\s*\{[\s\S]*?\}/)?.[0] || '';
-    const labelDotBlock = css.match(/#settings-btn\.has-dot \.sidebar-footer-label::after\s*\{[\s\S]*?\}/)?.[0] || '';
-    expect(buttonBadgeBlock).toContain('content: attr(data-sidebar-status)');
-    expect(labelDotBlock).toContain("content: ''");
-    expect(labelDotBlock).toContain('width: 6px');
-    expect(labelDotBlock).toContain('margin-left: 6px');
+    expect(css).toMatch(/\.sidebar-footer-account\.is-open \.hub-chip\s*\{/);
+    expect(css).toMatch(/\.sidebar-footer-account\.is-open \.hub-chip-chev\s*\{/);
+    expect(css).toMatch(/\.sidebar-footer-account\.is-pinned \.hub-chip-pin\s*\{/);
+    const activeBlock = css.match(/\.hub-chip-menu-item\.is-active\s*\{[\s\S]*?\}/)?.[0] || '';
+    expect(activeBlock).toContain('background: var(--primary-soft)');
+    expect(activeBlock).toContain('color: var(--primary-text)');
+  });
+
+  it('keeps the generic has-dot rules from leaking past their opt-in class', () => {
+    const css = readRendererCss();
     expect(css).toContain('.has-dot:not(.sidebar-footer-btn)::after');
     expect(css).not.toMatch(/(^|[,\n]\s*)\.has-dot::after\s*\{/);
     expect(css).not.toMatch(/(^|[,\n]\s*)\.has-dot\.is-(red|orange)::after\b/);
