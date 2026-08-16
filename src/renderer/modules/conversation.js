@@ -1213,8 +1213,6 @@ function onEnterNewChatView() {
   // so the time-of-day greeting is correct after a long idle session.
   _refreshEmptyStateAll();
   _initEmptyStateScenarios();
-  // Open-source-driven「还能帮你做这些」capability strip (below the scenario row).
-  if (typeof initOssEntry === 'function') initOssEntry();
 }
 
 // ── Empty-state landing helpers ──────────────────────────────────────────

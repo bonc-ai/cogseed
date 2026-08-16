@@ -76,7 +76,6 @@
         <div class="new-chat-center">
           <div class="new-chat-header">
             <h1 class="new-chat-greeting" id="new-chat-greeting"></h1>
-            <p class="new-chat-subtitle" data-i18n="new_chat.subtitle"></p>
           </div>
           <div class="new-chat-input-wrapper">
             <div class="new-chat-input-area">
@@ -154,23 +153,6 @@
               <span data-ui-icon="code" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.rnd">Build app</span>
             </button>
-          </div>
-          <!-- Open-source-driven「还能帮你做这些」capability strip. Task cards are
-               rendered + wired by modules/oss.js::initOssEntry() (data from the
-               curated marketplace projects catalog). Cards only show the task +
-               "由 X 开源驱动"; repo/star/driver detail lives in the marketplace
-               「开源项目」专区. -->
-          <div class="oss-entry" id="oss-entry" style="display:none">
-            <div class="oss-entry-head">
-              <span data-ui-icon="sparkles" data-ui-icon-class="oss-entry-spark"></span>
-              <span class="oss-entry-title" data-i18n="oss.title">You can also ask for these</span>
-              <span class="oss-entry-sub" data-i18n="oss.subtitle">Just describe what you need — CogSeed sets up the right tools.</span>
-              <button type="button" class="oss-entry-more" id="oss-entry-more">
-                <span data-i18n="oss.more">More capabilities</span>
-                <span data-ui-icon="arrow-right" data-ui-icon-class="oss-entry-more-arrow"></span>
-              </button>
-            </div>
-            <div class="oss-entry-grid" id="oss-entry-grid"></div>
           </div>
         </div>
       </section>

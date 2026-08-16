@@ -368,67 +368,9 @@ function unresolvedOssTemplatePlaceholder(input) {
   return marker;
 }
 
-// ① entry — render the task cards into #oss-entry-grid + bind clicks. Called on
-// every new-chat view enter (and on i18n-change, since task text is localized).
-async function initOssEntry(opts = {}) {
-  const entry = document.getElementById('oss-entry');
-  const grid = document.getElementById('oss-entry-grid');
-  if (!entry || !grid) return;
-
-  // Bind the "更多能力 →" header link once.
-  const more = document.getElementById('oss-entry-more');
-  if (more && !more.dataset.bound) {
-    more.addEventListener('click', () => {
-      const load = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
-      if (typeof load !== 'function') return;
-      load('marketplace').then(() => openMarketplace('oss')).catch(() => {});
-    });
-    more.dataset.bound = '1';
-  }
-
-  let data;
-  try {
-    data = await loadOssCatalog({
-      homeOnly: true,
-      revalidate: opts.revalidate === false ? false : 'cold-start',
-    });
-  }
-  catch (err) { _ossLog.warn('oss entry load failed', { error: err && err.message }); entry.style.display = 'none'; return; }
-
-  // ① receives the curated home subset from the Server. The Server config
-  // controls how many rows are returned; the client renders whatever it gets.
-  const projects = data.projects || [];
-  if (!projects.length) { entry.style.display = 'none'; return; }
-  entry.style.display = '';
-
-  grid.innerHTML = projects.map((p) => {
-    const task = escapeHtml(ossTaskFor(p));
-    const by = escapeHtml(p.by || p.name || '');
-    const icon = uiIconHtml(ossIconFor(p.category), 'oss-card-icon');
-    const byLine = (typeof t === 'function') ? t('oss.driven_by').replace('{name}', by) : by;
-    return `
-      <button type="button" class="oss-card" data-oss-id="${escapeHtml(p.id)}">
-        <span class="oss-card-top">
-          <span class="oss-card-glyph" style="--oss-c:${escapeHtml(p.color || 'var(--primary)')}">${icon}</span>
-          <span class="oss-card-task">${task}</span>
-        </span>
-        <span class="oss-card-by">${byLine}</span>
-      </button>`;
-  }).join('');
-
-  grid.querySelectorAll('.oss-card').forEach((btn) => {
-    const p = projects.find((x) => x.id === btn.dataset.ossId);
-    btn.addEventListener('click', () => { if (p) prefillCommander(ossPromptFor(p)); });
-  });
-}
-
-window.addEventListener('i18n-change', () => {
-  if (document.getElementById('oss-entry-grid')) initOssEntry();
-});
 window.addEventListener('oss-catalog-updated', (e) => {
   const d = (e && e.detail) || {};
   if (!d.homeOnly) return;
-  if (document.getElementById('oss-entry-grid')) initOssEntry({ revalidate: false });
 });
 
 // Exposed for marketplace.js (② rendering) + conversation.js (① init).
@@ -448,4 +390,3 @@ window.ossInstallPromptFor = ossInstallPromptFor;
 window.ossOpenRepo = ossOpenRepo;
 window.prefillCommander = prefillCommander;
 window.unresolvedOssTemplatePlaceholder = unresolvedOssTemplatePlaceholder;
-window.initOssEntry = initOssEntry;
