@@ -318,6 +318,12 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
     // Short quiet window for this test (user-perceived-latency optimization).
     closure._setReviewQuietMsForTest(300);
     try {
+      // The previous test's fire-and-forget capture may still be in its quiet
+      // window and enqueue its review round DURING this test (model calls are
+      // recorded on a global hoisted array) — drain it before counting.
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      modelCalls.length = 0;
+
       const cid = newCid();
       await seedRequirementWithLesson(cid, '写一份 500 字资料', 'N 字资料类请求：交付开头注明实际字数');
       bus._setHostRoutingJudgeForTest(async () => ({ isTask: false, continuation: false }));
