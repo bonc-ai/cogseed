@@ -187,13 +187,19 @@ export async function awaitCommanderReview(
     // 请求 review，Commander 队列被占 5-10s，用户下一条消息排队等待。等
     // 一个静默期；期间用户继续发消息 → 跳过 review（宿主推理兜底），
     // 用户回合永远优先。
+    // 检测用消息 id 集合（非 ts：消息 ts 为秒级精度，窗口内第一秒的消息
+    // 会漏检）；排除 dispatch 消息（review 请求本身 from=user + dispatch，
+    // 不能算用户活跃）。
     const quietMs = reviewQuietMs();
     if (quietMs > 0) {
-      const marker = Date.now();
-      await new Promise((resolve) => setTimeout(resolve, quietMs));
       const groupChat = await import('../group_chat');
-      const recent = await groupChat.readMessages(userId, conversationId, 50).catch(() => []);
-      if (recent.some((m) => m.from === 'user' && new Date(m.ts).getTime() > marker)) {
+      const before = await groupChat.readMessages(userId, conversationId, 50).catch(() => []);
+      const beforeUserIds = new Set(
+        before.filter((m) => m.from === 'user' && !m.dispatch).map((m) => m.id),
+      );
+      await new Promise((resolve) => setTimeout(resolve, quietMs));
+      const after = await groupChat.readMessages(userId, conversationId, 50).catch(() => []);
+      if (after.some((m) => m.from === 'user' && !m.dispatch && !beforeUserIds.has(m.id))) {
         log.info('kstar commander review skipped: user active during quiet window', {
           userId,
           episodeId: episode.id,
