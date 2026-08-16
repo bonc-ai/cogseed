@@ -263,6 +263,13 @@ function _abilityCandidateDisplayTitle(candidate) {
   const judgment = String(candidate.judgment || '').trim();
   const isLegacyEnglish = /^(Reusable experience lesson|KSTAR rule gap candidate|Verified multi-tool workflow|Reusable workflow lesson)/.test(summary);
   if (isLegacyEnglish && judgment) return _abilityTitleFromContent(judgment);
+  // 旧模板标题（'可复用经验：XX（通用）'）剥离前缀与 scope 后缀——存量
+  // 候选的 summary 是模板时代生成的，剥离后标题=内容，消除列表雷同。
+  const stripped = summary
+    .replace(/^(?:可复用经验|待修正经验|已验证的工作流程)[：:]\s*/, '')
+    .replace(/（[^）]*）$/, '')
+    .trim();
+  if (stripped && stripped !== summary) return stripped;
   return summary || _abilityTitleFromContent(judgment) || candidate.id || '';
 }
 
