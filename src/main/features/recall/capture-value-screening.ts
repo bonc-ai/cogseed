@@ -179,6 +179,27 @@ function collectSignals(messages: readonly RecallCaptureScreeningMessage[]): Rec
   return [...new Set(signals)];
 }
 
+/** 判断是否只是复述任务目标（平凡套话）。归一化后：
+ *  - 判断包含目标全文，或目标包含判断全文 → 复述；
+ *  - 目标词在判断中的覆盖率 ≥ 0.8 → 复述（如"写一份成都资料"→"成都资料 500 字"）。 */
+function platitudeRestatesTask(judgment: string, taskText: string): boolean {
+  const j = normalized(judgment);
+  const t = normalized(taskText);
+  if (!j || !t) return false;
+  if (j.includes(t) || t.includes(j)) return true;
+  const taskWords = [...new Set(t.split(/\s+/).filter((word) => word.length > 1))];
+  if (!taskWords.length) return false;
+  const covered = taskWords.filter((word) => j.includes(word)).length;
+  return covered / taskWords.length >= 0.8;
+}
+
+/** 任务请求特征：这类消息是"要我做什么"，复述它 = 平凡。
+ *  规则陈述（Always/所有…必须/保持…）不是任务请求——用户消息本身即知识。 */
+const TASK_REQUEST_PATTERN = /(帮我|请|写|生成|创建|整理|分析|重构|修复|改造|总结|制作|做一|查一下|实现|开发|设计|把|将|need|please|write|create|make|build|refactor|fix|summarize|generate|analyze|draft|prepare)/i;
+
+/** 套话模式：报告完成/成功，本身不携带可复用知识（需配合具体信号判定）。 */
+const PLATITUDE_PATTERN = /(认真完成|按时交付|已完成|完成得不错|顺利完成任务|成功完成|task completed|successfully (completed|delivered|finished)|well done|good (job|work))/i;
+
 function collectTextSignals(text: string): RecallCaptureValueSignal[] {
   return SIGNAL_PATTERNS
     .filter(([, pattern]) => pattern.test(text))
@@ -501,6 +522,25 @@ export function assessRecallCaptureCandidateQuality(
   const hasArtifactEvidence = evidenceMessages.some((message) => (message.artifacts?.length || 0) > 0);
   if (!candidateSignals.length && !hasArtifactEvidence && combinedLength < 40) {
     reasons.push('candidate_not_reusable');
+  }
+
+  // P0 平凡性闸门（宿主侧确定性校验，不依赖模型听话）：
+  // 1. 判断只是复述任务目标（"帮我写成都资料" → "写成都资料"）→ 无复用价值；
+  // 2. 判断是套话且没有任何具体信号（"认真完成了任务"）→ 无复用价值。
+  // 命中即不可 review → 调用方降级为弱观察（保留 trace，不沉淀）。
+  // 注意：复述判定只对"任务请求型"用户消息生效——用户直接陈述的规则
+  // （"Always keep decisions traceable."）本身即知识，judgment 与之一致是
+  // 正确提取，不是套话。
+  const firstUserText = evidenceMessages.find((message) => message.role === 'user')?.text || '';
+  if (firstUserText && TASK_REQUEST_PATTERN.test(firstUserText) && platitudeRestatesTask(candidate.judgment, firstUserText)) {
+    reasons.push('platitude_restates_task');
+  }
+  // 套话判定只看 judgment 自身的信号——value/summary 里的 reuse 措辞
+  // （"以后也能顺利完成"）不该救回一个套话判断；reusable_outcome（报告
+  // 完成/交付）与套话天然重叠，不计入有效信号。
+  if (PLATITUDE_PATTERN.test(normalized(candidate.judgment))
+    && !collectTextSignals(candidate.judgment).some((signal) => signal !== 'reusable_outcome')) {
+    reasons.push('platitude_no_specifics');
   }
 
   const uniqueReasons = [...new Set(reasons)];
