@@ -20,7 +20,10 @@ export function scopeForTask(task: string): string {
   // Short ASCII tags by design (retrieval matches scope tokens whole-word /
   // bidirectional + cross-language aliases); CJK keywords keep Chinese tasks
   // out of the weak 'general' fallback.
-  if (/report|summary|document|file|报告|总结|文档|文件/i.test(task)) return 'report';
+  // NOTE: `file`/`文件` are weak words — "文件不存在时返回默认值" is CODE
+  // logic, not a document/report task; matching them to 'report' mislabels
+  // refactor/code tasks and breaks retrieval. Strong document words only.
+  if (/report|summary|document|报告|总结|文档/i.test(task)) return 'report';
   if (/code|function|bug|test|代码|函数|缺陷|测试/i.test(task)) return 'code';
   if (/review|audit|审查|审计|检查|评审/i.test(task)) return 'review';
   if (/product|decision|architecture|产品|决策|架构/i.test(task)) return 'product';

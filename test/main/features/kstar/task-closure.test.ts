@@ -7,7 +7,7 @@ import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../../../../src/ma
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-kstar-closure-'));
   previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
@@ -82,7 +82,6 @@ describe('KSTAR completion evidence merge', () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     await closure.captureGroupKstarClosure({
       userId: 'closure-user', runId: 'run-evidence', conversationId: 'cid-evidence', status: 'completed',
-      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
       messages: [
         { id: 'msg-evidence', from: 'user', text: 'Produce the report', ts: '2026-08-05T00:00:01.000Z' },
@@ -131,7 +130,6 @@ describe('KSTAR task closure', () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     await closure.captureGroupKstarClosure({
       userId: 'closure-user', runId: 'run-group-attach', conversationId: 'cid-phase2', status: 'completed',
-      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
       messages: [
         { id: 'msg-user-a', from: 'user', text: 'Review OAuth callback handling', ts: '2026-08-05T00:00:01.000Z' },
@@ -184,7 +182,6 @@ describe('KSTAR task closure', () => {
       runId: 'run-provenance-attach',
       conversationId: 'cid-provenance',
       status: 'completed',
-      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'),
       finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
       projectionId: 'proj-match',
@@ -290,7 +287,6 @@ describe('KSTAR task closure', () => {
     const result = await closure.captureRuntimeKstarClosure({
       userId: 'closure-user', runId: 'run-inferred', request, events,
       createdAt: '2026-08-05T00:00:00.000Z', inferReview: inferred,
-      commanderReviewTimeoutMs: 50,
     });
 
     expect(result.review).toMatchObject({
@@ -351,7 +347,6 @@ describe('KSTAR task closure', () => {
         artifacts: [{ id: 'art-five', title: 'report.md' }],
       }],
       inferReview: inferred,
-      commanderReviewTimeoutMs: 50,
     });
 
     const kinds = result.episode.evidenceRefs.map((ref) => ref.kind);
@@ -404,7 +399,6 @@ describe('KSTAR task closure', () => {
         artifacts: [{ id: 'art-five-evi', title: 'report.md' }],
       }],
       inferReview: inferred,
-      commanderReviewTimeoutMs: 50,
     });
 
     expect(result.candidates).toEqual([]);
@@ -449,7 +443,6 @@ describe('KSTAR task closure', () => {
         id: 'msg-honest', ts: new Date().toISOString(), from: 'user', text: 'Fix state handling',
       }],
       inferReview: inferred,
-      commanderReviewTimeoutMs: 50,
     });
 
     // Closure is review-only: no direct assets at run level.
@@ -458,22 +451,8 @@ describe('KSTAR task closure', () => {
     expect(all.filter((a) => a.candidateId?.startsWith('direct-'))).toHaveLength(0);
   });
 
-  it('parses a Commander in-context review and persists it with inferenceMethod commander', async () => {
+  it('runs host-side review inference with the run conversation history', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
-    const parsed = closure.parseCommanderReviewFromMessages([
-      { id: 'm1', ts: '2026-08-15T00:00:00.000Z', from: 'commander', text: 'Done with the audit.' },
-      { id: 'm2', ts: '2026-08-15T00:00:01.000Z', from: 'commander', text: '<kstar-review>{"outcome":"worse_than_expected","attribution":"rule_gap","deltaR":-0.4,"deltaA":"unknown","reason":"State was not checked before exchange.","confidence":0.85,"needsConfirmation":false,"lesson":"OAuth 回调必须先校验 state。"}</kstar-review>' },
-    ]);
-    expect(parsed).toMatchObject({
-      outcome: 'worse_than_expected',
-      attribution: 'rule_gap',
-      deltaR: -0.4,
-      lesson: 'OAuth 回调必须先校验 state。',
-    });
-
-    // Full closure run: the Commander never replies in this environment, so
-    // the bounded wait times out and the host-side inference fallback runs —
-    // precipitation is never blocked by a silent Commander.
     const fallbackInfer = async (_userId: string, builtEpisode: any) => ({
       review: {
         expectedResult: builtEpisode.t.userGoal,
@@ -495,9 +474,7 @@ describe('KSTAR task closure', () => {
       runId: 'run-commander-review',
       conversationId: 'cid-cmd-review',
       status: 'completed',
-      commanderReviewTimeoutMs: 50,
-      startedAtMs: Date.now() - 60_000,
-      finishedAtMs: Date.now(),
+      startedAtMs: Date.now() - 60_000,      finishedAtMs: Date.now(),
       messages: [
         { id: 'm0', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: 'Fix the state handling' },
       ],
@@ -798,5 +775,107 @@ describe('KSTAR extraction reconciliation', () => {
     // idempotent without a candidate-set completeness check.
     expect(result.extractionRun.status).toBe('created');
     expect(result.extractionRun.candidateIds).toEqual([]);
+  });
+
+  it('passes the loaded conversation history to the fallback review inference (situational context)', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const optionsSeen: any[] = [];
+    const spyInfer = async (_userId: string, builtEpisode: any, options?: any) => {
+      optionsSeen.push(options);
+      return {
+        review: {
+          expectedResult: builtEpisode.t.userGoal,
+          actualResult: 'Done.',
+          deltaR: 0 as const,
+          deltaA: 'unknown' as const,
+          outcome: 'met_expected' as const,
+          attribution: 'unclear' as const,
+          reason: 'ok',
+          confidence: 0.8,
+          evidenceRefs: builtEpisode.evidenceRefs,
+        },
+        reviewState: 'inferred' as const,
+        inferenceMethod: 'deterministic' as const,
+        needsConfirmation: false,
+      };
+    };
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-ctx',
+      conversationId: 'cid-ctx',
+      status: 'completed',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [
+        { id: 'm1', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: '做一个报告' },
+        { id: 'm2', ts: '2026-08-15T00:00:01.000Z', from: 'commander', text: '用户中途要求改成英文版' },
+        { id: 'm3', ts: '2026-08-15T00:00:02.000Z', from: 'commander', text: '已完成' },
+      ],
+      inferReview: spyInfer,
+    });
+    expect(optionsSeen).toHaveLength(1);
+    expect(optionsSeen[0]?.messages).toHaveLength(3);
+    expect(optionsSeen[0]?.messages[1]).toMatchObject({ from: 'commander', text: '用户中途要求改成英文版' });
+  });
+
+  it('unwraps the forecast RECORD into the flat forecast for review inference', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const optionsSeen: any[] = [];
+    const spyInfer = async (_userId: string, builtEpisode: any, options?: any) => {
+      optionsSeen.push(options);
+      return {
+        review: {
+          expectedResult: builtEpisode.t.userGoal,
+          actualResult: 'Done.',
+          deltaR: 0 as const,
+          deltaA: 'unknown' as const,
+          outcome: 'met_expected' as const,
+          attribution: 'unclear' as const,
+          reason: 'ok',
+          confidence: 0.8,
+          evidenceRefs: builtEpisode.evidenceRefs,
+        },
+        reviewState: 'inferred' as const,
+        inferenceMethod: 'deterministic' as const,
+        needsConfirmation: false,
+      };
+    };
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-fc', title: 't' });
+    const requirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id, conversationId: 'cid-fc', userMessageIds: ['m1'], title: 't', goalText: 't',
+    });
+    await store.replaceKstarTask('closure-user', task);
+    await store.replaceKstarRequirement('closure-user', requirement);
+    const recall = await import('../../../../src/main/features/recall/store');
+    await recall.writeRecallJsonRecord('closure-user', 'world-model-forecasts', 'wf-flat-test', {
+      schemaVersion: 1, ownerId: 'closure-user', id: 'wf-flat-test', taskRunId: task.id,
+      requirementId: requirement.id, projectionId: 'proj-x', snapshotId: 'snap-x',
+      ruleRefs: [], assetVersions: {}, projectionConfirmedAt: '2026-08-15T00:00:00.000Z',
+      forecast: {
+        candidates: [], selectedCandidateId: 'c1',
+        aHat: { plan: ['Do'], expectedTools: [], expectedActors: [] },
+        rHat: { summary: 'expected summary', acceptanceSignals: [] },
+        causalLinks: [], assumptions: [], predictedRisks: [],
+      },
+      createdAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z',
+    });
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-fc',
+      conversationId: 'cid-fc',
+      status: 'completed',
+      forecastId: 'wf-flat-test',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [{ id: 'm1', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: 'do it' }],
+      inferReview: spyInfer,
+    });
+    expect(optionsSeen).toHaveLength(1);
+    // The inference must receive the FLAT forecast (rHat at top level), not
+    // the persisted record wrapper — the old code passed the record and
+    // inferKstarReview crashed on forecast.rHat.summary (undefined.rHat).
+    expect(optionsSeen[0]?.forecast?.rHat).toMatchObject({ summary: 'expected summary' });
+    expect(optionsSeen[0]?.forecast?.forecast).toBeUndefined();
   });
 });

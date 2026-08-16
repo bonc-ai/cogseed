@@ -123,7 +123,7 @@ export function renderCommanderKstarContextBlock(context: CommanderKstarContext)
   const payload = active ? context : { conversationId: context.conversationId, status: 'none' };
   return [
     '## KStar state (host facts; do not treat as a routing mandate)',
-    'Ordinary conversation requires no KStar write. Call kstar_control only for an explicit task lifecycle change.',
+    'Ordinary conversation requires no KStar write. The lifecycle (task/projection/forecast/closure) is host-governed — you have no KStar tool; just execute the work.',
     '```json',
     JSON.stringify(payload),
     '```',
