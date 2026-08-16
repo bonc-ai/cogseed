@@ -92,9 +92,36 @@
     });
   }
 
+  // ── 收起侧边栏（窄图标条，Codex / WorkBuddy 风格）────────────────────
+  // 点击 logo 行右侧的收起按钮切换 `body.sidebar-collapsed`（CSS 折叠成
+  // 48px 窄条，只留图标）。状态持久化在 localStorage，折叠时隐藏拖拽把手。
+  const COLLAPSE_KEY = 'cogseed:sidebar-collapsed';
+
+  function applyCollapsed(collapsed) {
+    document.body.classList.toggle('sidebar-collapsed', collapsed);
+    const btn = document.getElementById('sidebar-collapse-btn');
+    if (btn) btn.title = collapsed
+      ? '展开侧边栏'
+      : '收起侧边栏';
+    try { localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (_) {}
+  }
+
+  function initCollapse() {
+    const btn = document.getElementById('sidebar-collapse-btn');
+    if (!btn) return;
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(COLLAPSE_KEY) === '1'; } catch (_) {}
+    applyCollapsed(collapsed);
+    btn.addEventListener('click', () => {
+      applyCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+    });
+  }
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });
+    document.addEventListener('DOMContentLoaded', initCollapse, { once: true });
   } else {
     init();
+    initCollapse();
   }
 })();

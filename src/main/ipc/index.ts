@@ -94,6 +94,7 @@ import * as permissions from '../features/permissions';
 import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
 import * as cliFallback from '../features/cli_fallback';
+import * as tourState from '../features/tour_state';
 import * as cognitionExtraction from '../features/cognition_extraction';
 import { detectAll, type LocalCliType } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
@@ -3537,6 +3538,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   }),
   'prefs.setOnboarding': async ({ completed }: { completed?: unknown } = {}) => ({
     completed: onboardingState.setOnboardingCompleted(completed !== false),
+  }),
+
+  // Interactive-tour completion marker — PER-ACCOUNT (unlike onboarding,
+  // which is machine-wide): stored under <uid>/local/config/tour-state.json,
+  // so switching accounts does not re-trap a user who already finished or
+  // skipped the tour on this device.
+  'prefs.getTourCompleted': async (_payload, ctx) => ({
+    completed: tourState.getTourCompleted(ctx.userId),
+  }),
+  'prefs.setTourCompleted': async (_payload, ctx) => ({
+    completed: tourState.setTourCompleted(ctx.userId),
   }),
 
   // ── Commander CLI fallback (no API-key model configured) ──

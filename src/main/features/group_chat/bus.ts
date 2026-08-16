@@ -4385,7 +4385,9 @@ async function runActorTurnBody(
         kind: "core-agent",
         sessionId,
         conversationId: cid,
-        ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
+        // 执行方是谁就记谁：commander 驱动的 turn 也写入 agentId=commander，
+        // 否则右侧「本次运行」的执行方全部落到兜底名。
+        ...(actor.id ? { agentId: actor.id } : {}),
         boundary: "real",
         permissionMode: getLocalExecMode(),
       });

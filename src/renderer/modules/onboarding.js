@@ -376,24 +376,18 @@ function _csObShellHtml() {
 }
 
 function _csGoStep(n) {
-  console.log('[ONBOARDING DEBUG] _csGoStep called with n =', n);
   const step = Math.max(0, Math.min(3, n));
   const shell = document.getElementById('cs-onboarding');
-  console.log('[ONBOARDING DEBUG] _csGoStep shell found:', !!shell);
   if (!shell) {
-    console.error('[ONBOARDING DEBUG] _csGoStep: shell not found!');
     return;
   }
-  console.log('[ONBOARDING DEBUG] Setting step to', step);
   shell.querySelectorAll('.cs-panel').forEach((p) => {
     p.classList.toggle('active', Number(p.dataset.cspanel) === step);
   });
   shell.querySelector('.cs-content')?.scrollTo?.(0, 0);
-  console.log('[ONBOARDING DEBUG] _csGoStep: loading data for step', step);
   if (step === 1) _csLoadTeam(false);
   if (step === 2) _csShowForkView();
   if (step === 3) _csShowMatchingView();
-  console.log('[ONBOARDING DEBUG] _csGoStep complete');
 }
 
 function _csShowMatchingView() {
@@ -2930,8 +2924,13 @@ async function _csFinish() {
     // 步骤在注册入口融合后追加。
     if (typeof window.interactiveTour !== 'undefined' && typeof window.interactiveTour.start === 'function') {
       setTimeout(() => {
-        try { window.interactiveTour.start(); } catch (err) {
-          _obLog.warn('interactive tour start failed', { error: (err && err.message) || String(err) });
+        // start 是 async（先查 per-account 完成标记再决定是否弹出），同步 try/catch
+        // 捕不到异步 reject，改用 .catch 兜底。
+        const p = window.interactiveTour.start();
+        if (p && typeof p.catch === 'function') {
+          p.catch((err) => {
+            _obLog.warn('interactive tour start failed', { error: (err && err.message) || String(err) });
+          });
         }
       }, 600);
     }
@@ -2939,21 +2938,13 @@ async function _csFinish() {
 }
 
 function _csBuild() {
-  console.log('[ONBOARDING DEBUG] _csBuild called, _csObBuilt =', _csObBuilt);
   if (_csObBuilt) {
-    console.log('[ONBOARDING DEBUG] Already built, returning early');
     return;
   }
-  console.log('[ONBOARDING DEBUG] Building onboarding shell');
   const shell = document.createElement('div');
   shell.id = 'cs-onboarding';
-  console.log('[ONBOARDING DEBUG] Shell element created:', shell);
   shell.innerHTML = _csObShellHtml();
-  console.log('[ONBOARDING DEBUG] Shell innerHTML set, length:', shell.innerHTML.length);
-  console.log('[ONBOARDING DEBUG] Appending shell to body');
   document.body.appendChild(shell);
-  console.log('[ONBOARDING DEBUG] Shell appended. Checking if in DOM...');
-  console.log('[ONBOARDING DEBUG] getElementById result:', document.getElementById('cs-onboarding'));
 
   const toast = document.createElement('div');
   toast.id = 'cs-ob-toast';
@@ -2967,6 +2958,12 @@ function _csBuild() {
   // Inline next/back navigation (`data-csnext` buttons).
   shell.querySelectorAll('[data-csnext]').forEach((b) => {
     b.addEventListener('click', () => _csGoStep(Number(b.dataset.csnext)));
+  });
+
+  // 首次引导第一步：「我已经使用过CogSeed」= 跳过本次引导，直接完成并进首页。
+  shell.querySelector('#first-known-user')?.addEventListener('click', () => {
+    _obLog.info('first-run: user chose to skip onboarding');
+    void _csFinish();
   });
 
   shell.querySelector('#cs-team-refresh')?.addEventListener('click', () => _csLoadTeam(true));
@@ -3022,12 +3019,10 @@ async function maybeStartOnboarding() {
     _obLog.info('onboarding already started, skipping re-entry');
     return;
   }
-  console.log('[ONBOARDING DEBUG] maybeStartOnboarding called');
   _obLog.info('maybeStartOnboarding called');
 
   try {
     const res = await window.cogseed.invoke('prefs.getOnboarding');
-    console.log('[ONBOARDING DEBUG] prefs.getOnboarding result:', res);
     if (res && res.completed === true) {
       _obLog.info('onboarding already completed, skipping');
       return;
