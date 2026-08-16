@@ -1076,11 +1076,13 @@
     _reRender();
   }
 
-  /** 保存能力调整：diff extra → spaces.resources.add/remove。 */
+  /** 保存能力调整：diff extra → spaces.resources.add/remove。内部 kind（task/skill）映射为 IPC kind（agent/skill）。 */
   async function _saveEditAbility() {
     const sp = _space();
     if (!sp) return;
     const kind = _editAbilityKind;
+    // IPC 契约只接受 'agent' | 'skill'；内部 UI 语义 task（Task Agent 分组）映射为 agent。
+    const ipcKind = kind === 'task' ? 'agent' : kind;
     const tmpls = _templates.filter((t) => t && (t.template_id === sp.primary_template_id || t.template_id === sp.template_id
       || (sp.secondary_template_ids || []).includes(t.template_id)));
     const bundleIds = new Set(tmpls.flatMap((t) => (t.bundle
@@ -1090,16 +1092,23 @@
     const nextSet = new Set(nextExtras);
     // 移除
     for (const id of _editAbilityBefore || []) {
-      if (!nextSet.has(id)) await _invoke('spaces.resources.remove', { spaceId: sp.space_id, kind, id });
+      if (!nextSet.has(id)) {
+        const res = await _invoke('spaces.resources.remove', { spaceId: sp.space_id, kind: ipcKind, id });
+        if (res.error) { _stub('保存失败：' + res.error); return; }
+      }
     }
     // 新增
     for (const id of nextExtras) {
-      if (!beforeSet.has(id)) await _invoke('spaces.resources.add', { spaceId: sp.space_id, kind, id });
+      if (!beforeSet.has(id)) {
+        const res = await _invoke('spaces.resources.add', { spaceId: sp.space_id, kind: ipcKind, id });
+        if (res.error) { _stub('保存失败：' + res.error); return; }
+      }
     }
     _editAbilityOpen = false;
     await _loadData();
     if (_detailSpaceId) await _loadSpaceDetail(_detailSpaceId);
     _reRender();
+    if (typeof uiToast === 'function') uiToast(_t('ws.saved', '已保存'), { variant: 'success' });
   }
 
   /** 保存指令（spaces.instructions.set）。 */
