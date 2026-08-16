@@ -503,9 +503,6 @@ function _completeTour(opts) {
     return;
   }
   _showTourFinishCard();
-
-  // Completion is deliberately not persisted: the tour runs on every launch
-  // until the once-per-account prefs gate lands.
 }
 
 // Passing the last step used to make the whole tour vanish with no closing

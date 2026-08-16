@@ -6246,6 +6246,30 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 /* 本次运行：执行卡片（Codex 风格头像 + 状态徽章 + 元信息行） */
 .conversation-info-carried-runs { display: grid; gap: 8px; }
+.conversation-info-carried-runs-summary {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 2px;
+}
+.conversation-info-carried-runs-toggle {
+  margin-top: 2px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.conversation-info-carried-runs-toggle:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
 .conversation-info-carried-run {
   padding: 11px 12px;
   border: 1px solid var(--border);
@@ -24254,7 +24278,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   box-shadow:0 6px 18px rgba(14,159,110,0.28);
 }
 .cw-done-icon svg{width:24px;height:24px}
-.cw-done-title{font-size:16px;font-weight:650;color:var(--text,#14281E)}
+.cw-done-title{font-size:15px;font-weight:500;color:var(--text,#14281E)}
 .cw-done-meta{font-size:12.5px;color:var(--muted,#6E8578)}
 .cw-done-hint{
   display:flex;align-items:flex-start;gap:10px;margin:2px 0 12px;
