@@ -253,4 +253,58 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
     expect(after?.pendingAutoCloseAt).toBeUndefined();
     expect(after?.taskComplete).toBe(false);
   });
+
+  it('5. internal-control turn (Commander review request) does NOT cancel the auto-close window', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+
+    const cid = newCid();
+    await seedRequirementWithLesson(cid, '写一份 500 字资料', 'N 字资料类请求：交付开头注明实际字数');
+    await closure.scheduleAutoClose('user-a', cid);
+    const before = await store.readConversationTaskState('user-a', cid);
+    expect(before?.pendingAutoCloseAt).toBeTruthy();
+
+    // A Commander review request rides fromActorId=USER_ID for routing but is
+    // internalControl=true: it must NOT behave like a user message (the old
+    // turn gate cancelled the just-scheduled window on every review turn —
+    // the auto-close timer was killed by the closure's own review request).
+    await bus.enqueueCommanderControlMessage({
+      userId: 'user-a',
+      cid,
+      displayText: '',
+      control: { type: 'kstar_review_request', episodeId: 'kse-test', evidence: {} },
+    });
+    await waitForQuiescent(bus, cid);
+
+    const after = await store.readConversationTaskState('user-a', cid);
+    expect(after?.pendingAutoCloseAt).toBe(before!.pendingAutoCloseAt);
+    expect(after?.taskComplete).toBe(false);
+  });
+
+  it('6. real user message cancels then re-schedules the auto-close window (activity-based)', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+
+    const cid = newCid();
+    await seedRequirementWithLesson(cid, '写一份 500 字资料', 'N 字资料类请求：交付开头注明实际字数');
+    await closure.scheduleAutoClose('user-a', cid);
+    const before = await store.readConversationTaskState('user-a', cid);
+    expect(before?.pendingAutoCloseAt).toBeTruthy();
+
+    // Non-task judgement keeps the seeded state untouched; the turn gate must
+    // still cancel the window for a genuine user message (activity-based:
+    // the completed turn then schedules a fresh window).
+    bus._setHostRoutingJudgeForTest(async () => ({ isTask: false, continuation: false }));
+    await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '继续' });
+    await waitForQuiescent(bus, cid);
+
+    const after = await store.readConversationTaskState('user-a', cid);
+    expect(after?.taskComplete).toBe(false);
+    if (after?.pendingAutoCloseAt) {
+      // A fresh window replaced the cancelled one (terminal re-schedule).
+      expect(after.pendingAutoCloseAt).not.toBe(before!.pendingAutoCloseAt);
+    }
+  });
 });
