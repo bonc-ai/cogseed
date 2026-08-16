@@ -7,11 +7,14 @@ import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../../../../src/ma
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-kstar-closure-'));
   previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  // 静默窗口在测试中关闭：review 请求不等待 8s（用户感知优化不参与单测）。
+  const closure = await import('../../../../src/main/features/kstar/task-closure');
+  closure._setReviewQuietMsForTest(0);
 });
 
 afterEach(() => {

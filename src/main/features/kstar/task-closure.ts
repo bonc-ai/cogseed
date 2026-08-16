@@ -157,6 +157,19 @@ export interface ParsedReviewFromCommander {
  *  a normal round plus scheduling slack. Tests inject a tiny timeout. */
 export const COMMANDER_REVIEW_TIMEOUT_MS = 120_000;
 
+/** 静默窗口：用户回合刚结束就立即发起 review 回合会再次占住 Commander
+ *  队列 5-10s——用户紧接着发的下一条消息只能排队等待，体感"回复慢"。
+ *  先等一个静默期再请求 review；窗口内有新用户消息则跳过（宿主推理兜底），
+ *  review 永不与用户回合抢队列。 */
+export const REVIEW_QUIET_MS = 8_000;
+let _reviewQuietMsOverride: number | undefined;
+export function _setReviewQuietMsForTest(ms: number | undefined): void {
+  _reviewQuietMsOverride = ms;
+}
+function reviewQuietMs(): number {
+  return _reviewQuietMsOverride === undefined ? REVIEW_QUIET_MS : _reviewQuietMsOverride;
+}
+
 /** Ask the Commander — in its own conversation, with FULL context — to
  *  produce the expected-vs-actual review for a finished episode, and wait
  *  (bounded) for the `<kstar-review>` reply. Returns the parsed review, or
@@ -170,6 +183,24 @@ export async function awaitCommanderReview(
   timeoutMs: number = COMMANDER_REVIEW_TIMEOUT_MS,
 ): Promise<ParsedReviewFromCommander | null> {
   try {
+    // 静默窗口（用户感知优化）：用户回合结束后 capture 立即触发。若立刻
+    // 请求 review，Commander 队列被占 5-10s，用户下一条消息排队等待。等
+    // 一个静默期；期间用户继续发消息 → 跳过 review（宿主推理兜底），
+    // 用户回合永远优先。
+    const quietMs = reviewQuietMs();
+    if (quietMs > 0) {
+      const marker = Date.now();
+      await new Promise((resolve) => setTimeout(resolve, quietMs));
+      const groupChat = await import('../group_chat');
+      const recent = await groupChat.readMessages(userId, conversationId, 50).catch(() => []);
+      if (recent.some((m) => m.from === 'user' && new Date(m.ts).getTime() > marker)) {
+        log.info('kstar commander review skipped: user active during quiet window', {
+          userId,
+          episodeId: episode.id,
+        });
+        return null;
+      }
+    }
     const bus = await import('../group_chat/bus');
     const unsubscribe = bus.subscribe(userId, conversationId, (event) => {
       if (event.type !== 'message') return;

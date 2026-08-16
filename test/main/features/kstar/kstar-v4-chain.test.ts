@@ -73,6 +73,8 @@ beforeEach(async () => {
   ]));
   const closure = await import('../../../../src/main/features/kstar/task-closure');
   closure._setAutoCloseQuietMsForTest(50);
+  // 静默窗口在测试中关闭：review 请求不等待 8s（用户感知优化不参与单测）。
+  closure._setReviewQuietMsForTest(0);
   // Start the terminal subscriber so scheduleAutoClose runs on completed runs.
   _stopClosure = closure.startGroupKstarClosure();
 });
@@ -306,5 +308,41 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
       // A fresh window replaced the cancelled one (terminal re-schedule).
       expect(after.pendingAutoCloseAt).not.toBe(before!.pendingAutoCloseAt);
     }
+  });
+
+  it('7. review request waits a quiet window; user activity during it skips the review turn', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+
+    // Short quiet window for this test (user-perceived-latency optimization).
+    closure._setReviewQuietMsForTest(300);
+    try {
+      const cid = newCid();
+      await seedRequirementWithLesson(cid, '写一份 500 字资料', 'N 字资料类请求：交付开头注明实际字数');
+      bus._setHostRoutingJudgeForTest(async () => ({ isTask: false, continuation: false }));
+
+      // Turn 1: user message → Commander reply → terminal → closure capture
+      // starts (waits 300ms before requesting the review).
+      await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '第一轮' });
+      await waitForQuiescent(bus, cid);
+      const callsAfterFirst = modelCalls.length;
+      expect(callsAfterFirst).toBe(1);
+
+      // User keeps chatting inside the quiet window → the review turn must be
+      // skipped, so turn 2 is NOT queued behind a 5-10s review round.
+      await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '继续第二轮' });
+      await waitForQuiescent(bus, cid);
+
+      // Turn 2 must be the second model call directly after turn 1 — no
+      // review round (its payload contains the kstar_review_request control
+      // block) may sit between them.
+      const idx = modelCalls.findIndex((c) => c.message.includes('继续第二轮'));
+      expect(idx).toBe(1);
+      expect(modelCalls.slice(0, idx).every((c) => !c.message.includes('kstar_review_request'))).toBe(true);
+    } finally {
+      closure._setReviewQuietMsForTest(0);
+    }
+    void store;
   });
 });
