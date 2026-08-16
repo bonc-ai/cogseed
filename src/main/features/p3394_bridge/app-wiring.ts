@@ -31,6 +31,8 @@ import { P3394PeerRegistry, type P3394Locality, type P3394NodeKind } from './reg
 import { recordP3394Episode } from './kstar-episodes';
 import { projectP3394NodeToTeam } from './team-projection';
 import { buildP3394WiringDoctorInput, runP3394BridgeDoctor, type P3394DoctorReport } from './doctor';
+import { loadP3394EventCursors, persistP3394EventCursors, recordP3394EventCursor } from './event-cursor-store';
+import { P3394RecoveryController } from './recovery-controller';
 import * as groupChatBus from '../group_chat/bus';
 
 const log = createLogger('p3394-bridge:app-wiring');
@@ -166,6 +168,11 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
 
   outboundHub = new P3394OutboundHub({ listPeers: () => bridge.registry.list() });
 
+  // 事件游标（R-06/S-05）：记录最后确认写入 resultFile 的事件序列，
+  // 断线恢复按游标续读，不重放已确认事件。
+  const eventCursors = loadP3394EventCursors();
+  let cursorEventsSincePersist = 0;
+
   const executor = new P3394BridgeExecutor({
     bridge,
     runtime: adapter,
@@ -196,8 +203,34 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
     onEvent: (sessionId, event) => {
       const line = JSON.stringify({ at: new Date().toISOString(), session_id: sessionId, event });
       fs.appendFileSync(resultFile, line + '\n');
+      recordP3394EventCursor(eventCursors, event.task_id, event.sequence);
+      cursorEventsSincePersist += 1;
+      if (
+        event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled'
+        || cursorEventsSincePersist >= 10
+      ) {
+        persistP3394EventCursors(eventCursors);
+        cursorEventsSincePersist = 0;
+      }
     },
   });
+
+  // 自动恢复（C-03/R-06/S-05）：transport 失败 → recoverable → 定时 sweep
+  // 按持久化游标 resumeForward 续读；尝试受控制器 maxAttempts 封顶。
+  const recoveryController = new P3394RecoveryController(executor, {
+    cursorFor: (taskId) => eventCursors.get(taskId) ?? 0,
+    onAttempt: (taskId, ok, error) => {
+      log.info('P3394 recovery attempt', { task_id: taskId, ok, ...(error ? { error } : {}) });
+    },
+  });
+  const recoveryTimer = setInterval(() => {
+    void recoveryController.sweep().then((result) => {
+      if (result.recovered.length > 0 || result.pending.length > 0) {
+        log.info('P3394 recovery sweep', result);
+      }
+    });
+  }, 30_000);
+  if (typeof recoveryTimer.unref === 'function') recoveryTimer.unref();
   channel.subscribe((envelope) => {
     // 自举接入：本机已通过 Bearer 认证但尚未注册的 sender，自报身份即注册
     // （minimal manifest）。这样任何本机智能体/自研 Agent 无需预配置即可入网。
@@ -298,7 +331,10 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
     token,
     channel,
     registry: bridge.registry,
-    close: async () => { await channel.close(); },
+    close: async () => {
+      clearInterval(recoveryTimer);
+      await channel.close();
+    },
   };
   // 启动门（SDK §5.4）：桥承诺的语义必须被所选 channel 完整承载，
   // 必需能力缺失 → 拒绝启动（fail-loud，绝不静默降级）。
