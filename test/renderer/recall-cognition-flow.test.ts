@@ -1173,14 +1173,52 @@ describe('Recall cognition renderer flow', () => {
     expect(inbox.innerHTML).toContain('1 个数据来源需要处理');
     expect(inbox.innerHTML).toContain('data-recall-capture-settings');
     expect(inbox.innerHTML).toContain('data-cognition-page-link="sources"');
-    expect(inbox.innerHTML).toContain('Skill 创建建议');
-    expect(inbox.innerHTML).toContain('data-cognition-open-asset="asset-method"');
     // 失败任务是加工进度，不进待我处理
     expect(inbox.innerHTML).not.toContain('2 个沉淀任务需要重试');
     expect(captures.innerHTML).toContain('2 个沉淀任务需要重试');
     // 最近变化在我的资产
     expect(assets.innerHTML).toContain('需求评审方法');
     expect(assets.innerHTML).toContain('data-cognition-open-asset="asset-rule"');
+  });
+
+  /**
+   * 待办来自服务端读模型（cognition.inbox.list），渲染层只负责分组与措辞。
+   * 这条同时守住两件事：分级由服务端给（需确认的排在前面），以及渲染层不
+   * 再自己从 assets 里推算"有哪些 Skill 可以生成"——那套推算一旦和 gate
+   * 分叉，用户看到的待办就和系统真正拦下的事对不上了。
+   */
+  it('renders the inbox from the server read model, confirm items first', () => {
+    const context = loadSkillsRenderer();
+    const inbox = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-inbox-body' ? inbox : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      sources: [], recallCandidates: [], teachingSignals: [], assets: [],
+      captureCounts: { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 },
+      captureModel: { configured: true, authorizationRequired: false },
+      inboxItems: [
+        {
+          id: 'skill:asset-method', kind: 'skill_creation_suggested', urgency: 'confirm',
+          title: '需求评审方法', assetType: 'skill_method', assetId: 'asset-method',
+        },
+        {
+          id: 'rule-boundary:asset-rule', kind: 'rule_boundary_missing', urgency: 'low_disturbance',
+          title: '保持决策可追溯', assetType: 'rule', assetId: 'asset-rule',
+        },
+      ],
+    })})`, context);
+
+    context.renderSkillsCognitionInbox();
+
+    expect(inbox.innerHTML).toContain('Skill 创建建议');
+    expect(inbox.innerHTML).toContain('data-cognition-open-asset="asset-method"');
+    expect(inbox.innerHTML).toContain('规则缺少作用边界');
+    expect(inbox.innerHTML).toContain('data-cognition-open-asset="asset-rule"');
+    expect(inbox.innerHTML).not.toContain('当前无需处理');
+    // 需确认的分组排在低打扰分组前面。
+    expect(inbox.innerHTML.indexOf('cognition-inbox-confirm'))
+      .toBeLessThan(inbox.innerHTML.indexOf('cognition-inbox-later'));
   });
 
   it('keeps the overview attention area hidden when Recall is healthy', () => {
