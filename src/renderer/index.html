@@ -87,14 +87,14 @@
               <div class="chat-quote-preview" id="new-chat-quote-preview" style="display:none"></div>
               <textarea id="new-chat-input" data-i18n-placeholder="new_chat.input_placeholder" placeholder="Type @ to choose agents, skills, connectors, Library files." rows="2"></textarea>
               <!-- Composer bottom bar order matches PC/docs/design/PATTERNS.md
-                   P11: [+] | divider | [To] | [workspace - JS-injected] |
+                   P11: [+] | divider | [@agent] | [workspace - JS-injected] |
                    [skill] | spacer | [send]. The open-source build strips
                    voice input, so send owns the right spacer. -->
               <div class="chat-bottom-bar">
                 <button type="button" class="chat-attach-btn" id="new-chat-attach-btn" data-i18n-title="new_chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
                 <span class="chat-composer-divider" aria-hidden="true"></span>
                 <button type="button" class="chat-recipient-chip" id="new-chat-recipient-chip" data-i18n-title="chat.recipient_picker_title_with_library" title="Choose agent, skill, connector, or Library file">
-                  <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">To: </span>
+                  <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">@</span>
                   <span class="chat-recipient-name" id="new-chat-recipient-name" data-i18n="chat.recipient_commander">Commander</span>
                 </button>
                 <!-- Workspace chip is injected by user-workspace.js::initUserWorkspace
@@ -259,13 +259,13 @@
                 <div class="chat-quote-preview" id="chat-quote-preview" style="display:none"></div>
                 <textarea id="chat-input" data-i18n-placeholder="chat.input_placeholder" placeholder="Type @ to choose agents, skills, connectors." rows="2"></textarea>
                 <!-- Composer bottom bar order matches PC/docs/design/PATTERNS.md
-                     P11: [+] | divider | [To] | [workspace - JS-injected] |
+                     P11: [+] | divider | [@agent] | [workspace - JS-injected] |
                      [skill] | spacer | [send].                      by `chat-send-btn { margin-left: auto }`. -->
                 <div class="chat-bottom-bar">
                   <button type="button" class="chat-attach-btn" id="chat-attach-btn" data-i18n-title="chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
                   <span class="chat-composer-divider" aria-hidden="true"></span>
                   <button type="button" class="chat-recipient-chip" id="chat-recipient-chip" data-i18n-title="chat.recipient_picker_title" title="Choose agent, skill, or connector">
-                    <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">To: </span>
+                    <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">@</span>
                     <span class="chat-recipient-name" id="chat-recipient-name" data-i18n="chat.recipient_commander">Commander</span>
                   </button>
                   <!-- Workspace chip is injected by user-workspace.js right after
@@ -1605,7 +1605,7 @@
               <button type="button" class="chat-attach-btn" id="auto-attach-btn" data-i18n-title="new_chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
               <span class="chat-composer-divider" aria-hidden="true"></span>
               <button type="button" class="chat-recipient-chip" id="auto-recipient-chip" data-i18n-title="chat.recipient_picker_title_with_library" title="Choose agent, skill, connector, or Library file">
-                <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">To: </span>
+                <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">@</span>
                 <span class="chat-recipient-name" id="auto-recipient-name" data-i18n="chat.recipient_commander">Commander</span>
               </button>
             </div>

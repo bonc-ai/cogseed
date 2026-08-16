@@ -23,6 +23,8 @@
   --warn: #d97706;
   --danger: #dc2626;
   --danger-hover: #b91c1c;
+  --control-stop: #5B6470;
+  --control-stop-hover: #46505B;
   --radius-lg: 20px;
   --radius-md: 14px;
   --radius-sm: 10px;
@@ -2357,6 +2359,50 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   gap: 1px;
   padding-right: 0;
 }
+
+/* Merge remains a lightweight task-list command in the sidebar. Selection
+   and confirmation live in the picker, so this row never expands into a
+   status/action block that displaces the task groups below it. */
+#conversation-merge-action-bar {
+  flex: 0 0 auto;
+  padding: 5px 10px 3px;
+}
+.conversation-merge-action-bar { display: flex; min-width: 0; }
+.conversation-merge-start {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #536b61;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.conversation-merge-start:hover {
+  background: rgba(24, 84, 60, 0.07);
+  color: var(--primary-text);
+}
+.conversation-merge-start:focus-visible {
+  outline: 2px solid rgba(14, 159, 110, 0.28);
+  outline-offset: 1px;
+}
+.conversation-merge-start-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #72867e;
+}
+.conversation-merge-start-icon .ui-icon { width: 15px; height: 15px; }
 
 /* Time-bucket headers inside #conversation-list (today / yesterday /
    last 7 / last 30 / older). Muted color keeps them scannable as section
@@ -6348,6 +6394,31 @@ body.model-not-configured .main-content { flex-direction: column; }
   color: var(--primary);
 }
 
+/* Conversation composer only. The empty-state composer keeps its compact
+   landing-page proportions; an active conversation gets a little more room
+   for composing without taking over the message history. */
+#panel-conversation .chat-main-pane {
+  --chat-input-reserve: 180px;
+}
+
+#panel-conversation .chat-input-area {
+  width: min(82%, 1600px);
+  max-width: 100%;
+  gap: 6px;
+  padding: 10px 18px 12px;
+}
+
+#panel-conversation .chat-input-area textarea#chat-input:not(.chat-rich-source),
+#panel-conversation .chat-input-area .chat-rich-editor {
+  min-height: 64px;
+  max-height: 200px;
+  padding: 6px;
+}
+
+#panel-conversation .chat-input-area .chat-bottom-bar {
+  padding: 4px;
+}
+
 .chat-send-btn {
   width: 32px;
   height: 32px;
@@ -6368,6 +6439,21 @@ body.model-not-configured .main-content { flex-direction: column; }
   background: var(--primary-hover);
 }
 
+/* In an active conversation the send action sits inside a dense tool row.
+   Keep it quiet and integrated; the new-chat landing retains the stronger
+   primary-green CTA. */
+#panel-conversation .chat-send-btn:not(.streaming):not(:disabled) {
+  background: color-mix(in srgb, var(--surface-2) 78%, var(--surface));
+  color: var(--primary-text);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+#panel-conversation .chat-send-btn:not(.streaming):not(:disabled):hover {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
 .chat-send-btn:disabled {
   background: var(--surface-3);
   color: var(--muted);
@@ -6385,19 +6471,36 @@ body.model-not-configured .main-content { flex-direction: column; }
   display: none;
 }
 .chat-send-btn.streaming {
-  background: #dc2626;
+  background: var(--control-stop);
+  box-shadow: 0 1px 2px rgba(70, 80, 91, 0.22);
 }
 .chat-send-btn.streaming:hover {
-  background: #b91c1c;
+  background: var(--control-stop-hover);
 }
 .chat-send-btn.streaming:disabled {
-  background: #dc2626;
+  background: var(--control-stop);
   cursor: pointer;
   transform: none;
   opacity: 1;
 }
 .chat-send-btn.streaming .send-icon { display: none; }
 .chat-send-btn.streaming .stop-icon { display: block; }
+
+/* The conversation stop action mirrors the light send-button chrome. Its
+   square icon carries the state, so a heavy filled block is unnecessary. */
+#panel-conversation .chat-send-btn.streaming,
+#panel-conversation .chat-send-btn.streaming:disabled {
+  background: color-mix(in srgb, var(--control-stop) 8%, var(--surface));
+  color: var(--control-stop);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+#panel-conversation .chat-send-btn.streaming:hover,
+#panel-conversation .chat-send-btn.streaming:disabled:hover {
+  background: color-mix(in srgb, var(--control-stop) 13%, var(--surface));
+  color: var(--control-stop-hover);
+}
 
 /* Queue panel above the input area.
    Aligned with .chat-input-area's centered 80% layout. The workspace chip
@@ -7564,6 +7667,241 @@ body.model-not-configured .main-content { flex-direction: column; }
 .conversation-operation-time-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .conversation-operation-time-range label { display: grid; gap: 4px; min-width: 0; font-size: 11px; color: var(--text-muted); }
 .conversation-operation-time-range input { min-width: 0; padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+
+/* Conversation merge picker: a focused task-selection surface based on the
+   Work Buddy reference, with dense rows and low-contrast app chrome. */
+.modal-overlay.conversation-merge-picker-overlay {
+  padding: 24px;
+  box-sizing: border-box;
+  background: rgba(30, 41, 59, 0.16);
+  backdrop-filter: blur(1px);
+}
+.conversation-merge-picker-dialog {
+  width: min(720px, 100%);
+  height: min(780px, calc(100vh - 48px));
+  min-height: 520px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: 26px 32px 24px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: var(--text, #111827);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
+}
+.conversation-merge-picker-header {
+  min-height: 36px;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 30px;
+}
+.conversation-merge-picker-header h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.45;
+  letter-spacing: 0;
+}
+.conversation-merge-picker-header .modal-close-btn { margin: -4px -4px 0 0; }
+.conversation-merge-picker-search-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0 4px 16px;
+}
+.conversation-merge-picker-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+.conversation-merge-picker-search-icon .ui-icon { width: 17px; height: 17px; }
+.conversation-merge-picker-search {
+  width: 100%;
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0 14px 0 38px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  outline: none;
+  background: #f6f8f7;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+.conversation-merge-picker-search:focus {
+  border-color: rgba(14, 159, 110, 0.42);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(14, 159, 110, 0.09);
+}
+.conversation-merge-picker-search::-webkit-search-cancel-button { opacity: 0.5; }
+.conversation-merge-picker-section-label {
+  flex: 0 0 auto;
+  padding: 0 8px 8px;
+  color: #66776f;
+  font-size: 12px;
+  font-weight: 650;
+}
+.conversation-merge-picker-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 4px 8px;
+  scrollbar-gutter: stable;
+}
+.conversation-merge-picker-row {
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  margin: 0 0 2px;
+  padding: 7px 10px 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: inset 0 -1px 0 rgba(148, 163, 184, 0.16);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.conversation-merge-picker-row:hover {
+  background: #f7faf8;
+  box-shadow: inset 0 -1px 0 rgba(148, 163, 184, 0.22);
+}
+.conversation-merge-picker-row.is-selected {
+  border-color: rgba(14, 159, 110, 0.52);
+  background: rgba(14, 159, 110, 0.045);
+  box-shadow: none;
+}
+.conversation-merge-picker-row:focus-visible {
+  outline: 2px solid rgba(14, 159, 110, 0.28);
+  outline-offset: -1px;
+}
+.conversation-merge-picker-checkbox {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 1px solid #cbd5d1;
+  border-radius: 6px;
+  background: #fff;
+  color: #fff;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.conversation-merge-picker-checkbox .ui-icon { width: 15px; height: 15px; stroke-width: 2.4; }
+.conversation-merge-picker-row.is-selected .conversation-merge-picker-checkbox {
+  border-color: #20aa72;
+  background: #20aa72;
+}
+.conversation-merge-picker-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 230px);
+  align-items: center;
+  gap: 16px;
+}
+.conversation-merge-picker-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #1f2937;
+  font-size: 13.5px;
+  font-weight: 560;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conversation-merge-picker-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  overflow: hidden;
+  color: #89968f;
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.conversation-merge-picker-meta .ui-icon { width: 14px; height: 14px; flex: 0 0 auto; }
+.conversation-merge-picker-meta span { overflow: hidden; text-overflow: ellipsis; }
+.conversation-merge-picker-empty {
+  padding: 52px 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+.conversation-merge-picker-error {
+  flex: 0 0 auto;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 6px;
+  background: rgba(220, 38, 38, 0.06);
+  color: var(--danger);
+  font-size: 12px;
+}
+.conversation-merge-picker-footer {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 22px;
+}
+.conversation-merge-picker-footer .btn {
+  min-height: 40px;
+  padding: 8px 18px;
+  border-radius: 7px;
+  font-size: 13.5px;
+}
+.conversation-merge-picker-cancel { min-width: 84px; }
+.conversation-merge-picker-footer .btn.conversation-merge-picker-confirm {
+  min-width: 146px;
+  border-color: #76bda2;
+  background: #76bda2;
+  color: #fff;
+  box-shadow: none;
+}
+.conversation-merge-picker-footer .btn.conversation-merge-picker-confirm:hover:not(:disabled) {
+  border-color: #5cae8d;
+  background: #5cae8d;
+}
+.conversation-merge-picker-footer .btn.conversation-merge-picker-confirm:disabled {
+  border-color: #d9e3df;
+  background: #e8eeeb;
+  color: #9aa9a2;
+  opacity: 1;
+}
+@media (max-width: 680px) {
+  .modal-overlay.conversation-merge-picker-overlay { padding: 12px; }
+  .conversation-merge-picker-dialog {
+    height: calc(100vh - 24px);
+    min-height: 0;
+    padding: 22px 18px 18px;
+  }
+  .conversation-merge-picker-header { margin-bottom: 22px; }
+  .conversation-merge-picker-copy { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .conversation-merge-picker-meta { justify-content: flex-start; }
+  .conversation-merge-picker-footer .btn { min-width: 0; }
+  .conversation-merge-picker-confirm { flex: 1 1 auto; }
+}
 /* 会话「移至空间」选择器（侧栏操作菜单 → conversation-space-*） */
 .conversation-space-list { display: grid; gap: 6px; margin-top: 12px; max-height: 320px; overflow-y: auto; }
 .conversation-space-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer; }
@@ -8478,8 +8816,8 @@ body.model-not-configured .main-content { flex-direction: column; }
   font-weight: 500;
 }
 
-/* Compact message actions. Two high-frequency actions stay visible; secondary
- * actions use the same restrained popover language as task-detail file menus. */
+/* Message actions use a WorkBuddy-style icon rail: common actions stay one
+ * click away, secondary actions live in the restrained overflow menu. */
 .chat-msg-actions {
   display: flex;
   flex-wrap: wrap;
@@ -8585,46 +8923,44 @@ body.model-not-configured .main-content { flex-direction: column; }
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   order: -1;
 }
 .chat-bubble-direct-actions {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
 }
 .bubble-action-btn,
 .bubble-more-btn {
-  height: 24px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, #94a3b8);
-  background: rgba(255, 255, 255, 0.82);
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  padding: 0 8px;
-  border-radius: 6px;
-  cursor: pointer;
-  box-shadow: 0 1px 1px rgba(20, 71, 55, 0.03);
-  transition: color 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
-}
-.bubble-more-btn {
-  width: 24px;
   padding: 0;
-  font-size: 13px;
-  letter-spacing: 0.5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 88%, #475569);
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: none;
+  transition: color 120ms ease, background 120ms ease;
+}
+.bubble-action-btn .ui-icon,
+.bubble-more-btn .ui-icon {
+  width: 17px;
+  height: 17px;
+  stroke-width: 1.85;
 }
 .bubble-action-btn:hover,
 .bubble-more-btn:hover,
 .bubble-more-btn[aria-expanded="true"] {
   color: var(--text);
-  border-color: color-mix(in srgb, var(--text) 22%, var(--border));
-  background: #fff;
-  box-shadow: 0 2px 5px rgba(20, 71, 55, 0.08);
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  box-shadow: none;
 }
 .bubble-action-btn:focus-visible,
 .bubble-more-btn:focus-visible,
@@ -8654,6 +8990,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   min-height: 30px;
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 6px 9px;
   border: 0;
   border-radius: 7px;
@@ -8665,6 +9002,13 @@ body.model-not-configured .main-content { flex-direction: column; }
   text-align: left;
   cursor: pointer;
 }
+.chat-bubble-menu-item .ui-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.chat-bubble-menu-item span { min-width: 0; }
 .chat-bubble-menu-item:hover {
   background: var(--surface-2, #f1f5f9);
 }
@@ -8676,9 +9020,53 @@ body.model-not-configured .main-content { flex-direction: column; }
 .bubble-action-btn:disabled:hover,
 .chat-bubble-menu-item:disabled:hover {
   color: inherit;
-  border-color: color-mix(in srgb, var(--border) 88%, #94a3b8);
-  background: rgba(255, 255, 255, 0.82);
+  background: transparent;
   box-shadow: none;
+}
+
+/* Keep long conversations visually quiet. The toolbar occupies no vertical
+   space until its message is hovered, focused, or has an open overflow menu. */
+#panel-conversation .chat-message .chat-bubble-actions {
+  max-width: 0;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition: max-width 150ms ease, max-height 150ms ease, opacity 120ms ease, transform 150ms ease;
+}
+#panel-conversation .chat-message > .chat-msg-actions:has(> .chat-bubble-actions:only-child) {
+  margin-top: 0;
+  transition: margin-top 150ms ease;
+}
+#panel-conversation .chat-message:hover .chat-bubble-actions,
+#panel-conversation .chat-message:focus-within .chat-bubble-actions,
+#panel-conversation .chat-bubble-actions:has(.bubble-more-btn[aria-expanded="true"]) {
+  max-width: 180px;
+  max-height: 28px;
+  opacity: 1;
+  overflow: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+#panel-conversation .chat-message:hover > .chat-msg-actions:has(> .chat-bubble-actions:only-child),
+#panel-conversation .chat-message:focus-within > .chat-msg-actions:has(> .chat-bubble-actions:only-child) {
+  margin-top: 5px;
+}
+#panel-conversation .chat-message.user > .chat-msg-actions { justify-content: flex-end; }
+
+@media (hover: none), (pointer: coarse) {
+  #panel-conversation .chat-message .chat-bubble-actions {
+    max-width: 180px;
+    max-height: 28px;
+    opacity: 1;
+    overflow: visible;
+    pointer-events: auto;
+    transform: none;
+  }
+  #panel-conversation .chat-message > .chat-msg-actions:has(> .chat-bubble-actions:only-child) {
+    margin-top: 5px;
+  }
 }
 
 /* ─── Cross-task message selection / reference transfer ─────────────── */
@@ -9096,6 +9484,21 @@ body.model-not-configured .main-content { flex-direction: column; }
   border: 1px solid rgba(14, 159, 110, 0.12);
 }
 
+/* Main conversation user messages follow the quiet Work Buddy treatment:
+   neutral translucent fill, barely visible edge, and no elevation. Keep the
+   legacy user-bubble treatment in other embedded chat surfaces. */
+#panel-conversation .chat-message.user > .chat-bubble {
+  background: rgba(245, 247, 246, 0.82);
+  border: 1px solid rgba(30, 41, 59, 0.045);
+  border-radius: 20px;
+  box-shadow: none;
+}
+#panel-conversation .chat-message.user.is-message-selected > .chat-bubble {
+  background: rgba(14, 159, 110, 0.035);
+  border-color: rgba(14, 159, 110, 0.42);
+  box-shadow: 0 0 0 2px rgba(14, 159, 110, 0.09);
+}
+
 .chat-message.assistant .chat-bubble {
   background: #fff;
   color: var(--text);
@@ -9448,8 +9851,8 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 /* Composer chips — recipient / workspace / project / skill all share P3 chrome
    (PC/docs/design/PATTERNS.md): surface-2 fill, 1px hairline border, radius 7,
-   12px / 500 / var(--text-2). Prefix labels ("To:" / "Project:" / "Workspace:")
-   render in var(--muted). Active / open states upgrade to primary-soft. */
+   12px / 500 / var(--text-2). The recipient "@" uses primary text while
+   field prefixes ("Project:" / "Workspace:") stay muted. */
 .chat-skill-chip {
   flex-shrink: 0;
   display: inline-flex;
@@ -9470,7 +9873,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 0;
   padding: 4px 9px;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -9490,8 +9893,8 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 .chat-recipient-chip .chat-recipient-prefix {
-  color: var(--muted);
-  font-weight: 400;
+  color: var(--primary-text);
+  font-weight: 600;
 }
 
 .chat-recipient-chip .chat-recipient-name {
