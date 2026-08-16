@@ -92,12 +92,13 @@ function resolveAvatar(iconId, colorId, fallbackSeed) {
   if (!resolvedIcon || !resolvedColor) {
     // catalog hasn't been fetched yet (edge case) — return an empty
     // shell so the render layer at least doesn't crash.
-    return { icon: '', color: '', iconSvg: '', bg: '#e5e7eb', fg: '#475569' };
+    return { icon: '', color: '', iconSvg: '', iconImage: '', bg: '#e5e7eb', fg: '#475569' };
   }
   return {
     icon: resolvedIcon.id,
     color: resolvedColor.id,
     iconSvg: resolvedIcon.svg,
+    iconImage: resolvedIcon.imageUrl || '',
     bg: resolvedColor.bg,
     fg: resolvedColor.fg,
   };
@@ -113,9 +114,11 @@ function applyAvatarToElement(el, iconId, colorId, seed) {
   const sizeMatch = el.style.width && el.style.width.match(/(\d+)/);
   const sizePx = sizeMatch ? parseInt(sizeMatch[1], 10) : 28;
   const innerSize = Math.round(sizePx * 0.55);
-  el.innerHTML = a.iconSvg
-    ? a.iconSvg.replace('<svg ', `<svg width="${innerSize}" height="${innerSize}" `)
-    : '';
+  el.innerHTML = a.iconImage
+    ? `<img class="avatar-img" src="${a.iconImage}" width="${innerSize}" height="${innerSize}" alt="" draggable="false" />`
+    : a.iconSvg
+      ? a.iconSvg.replace('<svg ', `<svg width="${innerSize}" height="${innerSize}" `)
+      : '';
 }
 
 /** Generate an avatar HTML fragment. Used by cards, the detail view,
@@ -131,8 +134,10 @@ function renderAvatarHtml(iconId, colorId, opts = {}) {
     .map(([k, v]) => `data-${k}="${String(v).replace(/"/g, '&quot;')}"`)
     .join(' ');
   const innerSize = Math.round(size * 0.55);
-  const inner = a.iconSvg
-    ? a.iconSvg.replace('<svg ', `<svg width="${innerSize}" height="${innerSize}" `)
-    : '';
+  const inner = a.iconImage
+    ? `<img class="avatar-img" src="${a.iconImage}" width="${innerSize}" height="${innerSize}" alt="" draggable="false" />`
+    : a.iconSvg
+      ? a.iconSvg.replace('<svg ', `<svg width="${innerSize}" height="${innerSize}" `)
+      : '';
   return `<span class="${cls.join(' ')}" style="--avatar-bg:${a.bg};--avatar-fg:${a.fg};width:${size}px;height:${size}px" ${data}>${inner}</span>`;
 }

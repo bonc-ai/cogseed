@@ -27,6 +27,9 @@ import {
   artifactDir,
   projectChatArtifactCidDir,
   projectArtifactDir,
+  spaceChatAttachmentDir,
+  spaceChatArtifactCidDir,
+  spaceArtifactDir,
   userAutoTasksDir,
   autoTaskDir,
   autoTaskConfigFile,
@@ -268,29 +271,36 @@ export function projectSessionRoots(uid: string, cid: string): string[] {
   return pid ? [projectSessionsDir(uid, pid), userSessionsDir(uid)] : [userSessionsDir(uid)];
 }
 
-export function chatAttachmentDirForConversation(uid: string, cid: string, projectHint?: string | null): string {
+export function chatAttachmentDirForConversation(uid: string, cid: string, projectHint?: string | null, spaceHint?: string | null): string {
+  if (spaceHint && safeId(spaceHint)) return spaceChatAttachmentDir(uid, spaceHint, cid);
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid ? projectChatAttachmentDir(uid, pid, cid) : chatAttachmentDir(uid, cid);
 }
 
-export function chatAttachmentRelPath(uid: string, cid: string, name: string, projectHint?: string | null): string {
+export function chatAttachmentRelPath(uid: string, cid: string, name: string, projectHint?: string | null, spaceHint?: string | null): string {
+  if (spaceHint && safeId(spaceHint)) return `cloud/spaces/${spaceHint}/chat_attachments/${cid}/${name}`;
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid
     ? `cloud/projects/${pid}/chat_attachments/${cid}/${name}`
     : `cloud/chat_attachments/${cid}/${name}`;
 }
 
-export function chatArtifactCidDirForConversation(uid: string, cid: string, projectHint?: string | null): string {
+export function chatArtifactCidDirForConversation(uid: string, cid: string, projectHint?: string | null, spaceHint?: string | null): string {
+  if (spaceHint && safeId(spaceHint)) return spaceChatArtifactCidDir(uid, spaceHint, cid);
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid ? projectChatArtifactCidDir(uid, pid, cid) : chatArtifactCidDir(uid, cid);
 }
 
-export function artifactDirForConversation(uid: string, cid: string, artifactId: string, projectHint?: string | null): string {
+export function artifactDirForConversation(uid: string, cid: string, artifactId: string, projectHint?: string | null, spaceHint?: string | null): string {
+  if (spaceHint && safeId(spaceHint)) return spaceArtifactDir(uid, spaceHint, cid, artifactId);
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid ? projectArtifactDir(uid, pid, cid, artifactId) : artifactDir(uid, cid, artifactId);
 }
 
-export function chatArtifactRelPath(uid: string, cid: string, artifactId: string, rel = '', projectHint?: string | null): string {
+export function chatArtifactRelPath(uid: string, cid: string, artifactId: string, rel = '', projectHint?: string | null, spaceHint?: string | null): string {
+  if (spaceHint && safeId(spaceHint)) {
+    return ['cloud/spaces', spaceHint, 'chat_artifacts', cid, artifactId, rel].filter(Boolean).join('/');
+  }
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid
     ? ['cloud/projects', pid, 'chat_artifacts', cid, artifactId, rel].filter(Boolean).join('/')

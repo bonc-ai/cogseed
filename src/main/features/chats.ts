@@ -1254,6 +1254,25 @@ export async function listConversations(userId: string): Promise<Conversation[]>
  *  直接按 conversation.space_id 匹配——先读空间自有索引（v5 迁移后 / 空间根落点），
  *  再扫全局+项目根兜底双字段兼容期带 space_id 的会话，按 conversation_id 去重
  *  （空间索引优先），过滤墓碑，活动倒序。 */
+/** 会话 → 空间 id 解析（带短 TTL 缓存）。供附件/网页产物路径空间化使用：
+ *  写路径需要知道会话所属空间才能把文件放进 spaces/<sid>/ 对应目录。 */
+const _spaceIdCache = new Map<string, { sid: string | undefined; at: number }>();
+const SPACE_ID_CACHE_TTL_MS = 30_000;
+export async function conversationSpaceId(uid: string, cid: string): Promise<string | undefined> {
+  const key = `${uid}:${cid}`;
+  const hit = _spaceIdCache.get(key);
+  if (hit && Date.now() - hit.at < SPACE_ID_CACHE_TTL_MS) return hit.sid;
+  let sid: string | undefined;
+  try {
+    const conv = await getConversation(uid, cid);
+    sid = conv && typeof (conv as any).space_id === 'string' && (conv as any).space_id
+      ? (conv as any).space_id
+      : undefined;
+  } catch { /* 解析失败按无空间处理 */ }
+  _spaceIdCache.set(key, { sid, at: Date.now() });
+  return sid;
+}
+
 export async function listSpaceConversations(userId: string, spaceId: string): Promise<Conversation[]> {
   if (!safeId(spaceId)) return [];
   const byCid = new Map<string, Conversation>();

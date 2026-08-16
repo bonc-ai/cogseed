@@ -209,8 +209,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   gap: 8px;
   margin: 4px 10px 10px;
   padding: 7px 10px;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  border: 1px solid rgba(24, 84, 60, 0.08);
+  border-radius: 10px;
   background: var(--surface-2);
   color: var(--text-2);
   font-size: 13px;
@@ -220,7 +220,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   -webkit-app-region: no-drag;
   flex-shrink: 0;
 }
-.sidebar-search-btn:hover { background: var(--surface-3); color: var(--text); }
+.sidebar-search-btn:hover { background: var(--surface-3); border-color: rgba(24, 84, 60, 0.14); color: var(--text); }
 .sidebar-search-icon {
   width: 14px;
   height: 14px;
@@ -566,7 +566,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   color: var(--text-2);
   font-size: 13px;
   font-weight: 500;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   transition: background 0.13s, color 0.13s;
   font-family: inherit;
@@ -633,8 +633,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   gap: 2px;
   align-items: stretch;
   padding: 6px 12px 10px;
-  border-top: 1px solid var(--border);
-  background: #fafafa;
+  border-top: 1px solid rgba(24, 84, 60, 0.06);
+  background: transparent;
   flex-shrink: 0;
 }
 .sidebar-footer-btn {
@@ -945,11 +945,47 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid rgba(24, 84, 60, 0.06);
   margin-top: 4px;
 }
 .sidebar-conversation-nav::-webkit-scrollbar { width: 4px; }
 .sidebar-conversation-nav::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
+
+/* ZCode 式双 tab（空间 | 最近任务）：胶囊 tab 行，切换侧栏会话视图。 */
+.sidebar-conv-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  padding: 2px 2px 8px;
+}
+.sidebar-conv-tab {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #8b9ab1;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+}
+.sidebar-conv-tab:hover {
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--text-2);
+}
+.sidebar-conv-tab.is-active {
+  background: var(--surface-2);
+  color: var(--primary-text);
+  box-shadow: inset 0 0 0 1px rgba(14, 159, 110, 0.14);
+}
+.sidebar-conv-tab:focus-visible {
+  outline: 2px solid rgba(91, 87, 214, 0.26);
+  outline-offset: 1px;
+}
 
 .sidebar-section {
   flex: 0 0 auto;
@@ -2600,7 +2636,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   stroke-width: 2.15;
 }
 .conv-list-section-label {
-  flex: 0 1 auto;
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2627,18 +2663,18 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   line-height: 18px;
   text-align: center;
 }
-/* 侧栏「置顶 / 空间 / 最近」分区标题（分区级标签，比时间桶标题更醒目） */
+/* 侧栏「置顶 / 空间 / 最近」分区标题（分区级标签，比时间桶标题更醒目）。
+   大厂风格：克制的分组标签 —— 小字号、中字重、中性灰，无分隔线，靠留白分区。 */
 .conv-list-section-header.conv-list-space-title {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 15px 6px 7px 6px;
-  font-size: 12.5px;
-  font-weight: 800;
-  color: #334155;
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  margin-bottom: 4px;
+  padding: 14px 8px 6px 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #7c8a99;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
 }
 .conv-list-section-header.conv-list-space-title:first-child { padding-top: 8px; }
 /* 分区标题内的折叠按钮（占满，点击切换整区展开/收起） */
@@ -2692,8 +2728,53 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   margin-top: 2px;
 }
 .conv-list-section-header[data-conv-space-toggle="1"] + .conv-item-nested {
-  margin-left: 6px;
+  margin-left: 10px;
 }
+/* 空间行 ⋯ 菜单按钮：hover 显现（与最近任务行的 ⋯ 同款交互） */
+.conv-space-more-btn {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: #7f8fa8;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  visibility: hidden;
+  opacity: 0;
+  transition: background 0.12s, color 0.12s, opacity 0.12s;
+}
+.conv-space-more-btn:hover,
+.conv-space-more-btn:focus-visible {
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--primary-text);
+}
+.conv-list-section-header:hover .conv-space-more-btn,
+.conv-list-section-header:focus-within .conv-space-more-btn,
+.conv-list-section-header.is-menu-open .conv-space-more-btn {
+  visibility: visible;
+  opacity: 1;
+}
+/* 空间行内联重命名输入框 */
+.conv-space-rename-input {
+  flex: 0 1 auto;
+  min-width: 60px;
+  max-width: 180px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--primary);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(14, 159, 110, 0.12);
+}
+.conv-list-section-header.is-renaming { cursor: default; }
 /* 侧栏「最近任务」内联新建任务输入条 */
 .conv-sidebar-new-task {
   padding: 4px 10px 6px 12px;
@@ -2739,15 +2820,15 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 3px;
-  padding: 6px 9px;
+  gap: 2px;
+  padding: 5px 8px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   color: var(--text);
   font-size: 13px;
   line-height: 1.35;
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
   position: relative;
 }
 
@@ -2762,7 +2843,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .conv-item.active {
   background: var(--primary-soft);
   color: var(--primary-text);
-  border-color: rgba(91, 87, 214, 0.18);
+  border-color: rgba(14, 159, 110, 0.16);
   font-weight: 600;
 }
 .conv-item.active .conv-item-title { font-weight: 600; }
@@ -2794,6 +2875,23 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   align-items: center;
   gap: 2px;
 }
+
+/* ZCode 式行内相对时间：行尾弱化小字（58分 / 3小时 / 6小时）。
+   时间与 ⋯ 菜单相邻，hover 时菜单显现，时间让位不换行。 */
+.conv-item-time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 6px;
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 1;
+  color: #9aa7b4;
+  white-space: nowrap;
+  user-select: none;
+}
+.conv-item.active .conv-item-time { color: rgba(20, 71, 55, 0.55); }
+.conv-item:hover .conv-item-time { color: #8b9ab1; }
+.conv-item.is-menu-open .conv-item-time { visibility: hidden; }
 
 .conv-item-action {
   flex: 0 0 auto;
@@ -2836,6 +2934,11 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 未命名会话（默认「新任务」标题）：弱化显示，参照大厂对 Untitled 的处理 */
+.conv-item-title-untitled {
+  color: #9aa7b4;
+  font-weight: 400;
 }
 .conv-item-title-input {
   flex: 1;
@@ -13971,11 +14074,11 @@ body.model-not-configured .main-content { flex-direction: column; }
   margin: 0;
 }
 .settings-section-head {
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
-  color: var(--text-2);
+  color: #7c8a99;
   margin: 24px 4px 8px;
 }
 .settings-section-head:first-child { margin-top: 0; }
@@ -14361,20 +14464,21 @@ body.model-not-configured .main-content { flex-direction: column; }
    active tab overlaps it with a 2px primary underline. */
 .settings-tabs {
   display: flex;
-  gap: 20px;
+  gap: 24px;
   margin: 0 0 20px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid rgba(24, 84, 60, 0.08);
   position: relative;
 }
 .settings-tab {
   background: transparent;
   border: none;
-  padding: 8px 4px 10px;
+  padding: 8px 2px 10px;
   font-size: 13px;
   font-weight: 500;
   color: var(--text-2);
   cursor: pointer;
   position: relative;
+  transition: color 0.12s;
 }
 .settings-tab:hover { color: var(--text); }
 .settings-tab.is-active {
@@ -16867,6 +16971,14 @@ body.model-not-configured .main-content { flex-direction: column; }
 .avatar-circle svg {
   display: block;
   pointer-events: none;
+}
+/* 头像用原图(品牌 logo 等)：圆内填满、圆角裁剪 */
+.avatar-circle .avatar-img {
+  display: block;
+  border-radius: 50%;
+  object-fit: cover;
+  pointer-events: none;
+  -webkit-user-drag: none;
 }
 .avatar-circle.is-clickable {
   cursor: pointer;

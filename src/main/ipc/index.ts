@@ -1241,8 +1241,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { skills: skillRows, agents: agentRows };
   },
 
-  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, main_skill_ref, asset_reference_bindings });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1266,12 +1266,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'spaces.update': async (args, ctx) => {
-    const { spaceId, name, icon, template_id, base_agent, main_skill_ref } = args || {};
+    const { spaceId, name, icon, template_id, base_agent, base_agents, main_skill_ref } = args || {};
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const result = await spaces.updateSpace(ctx.userId, spaceId, {
       name, icon, template_id,
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'base_agent') ? { base_agent } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'base_agents') ? { base_agents } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'main_skill_ref') ? { main_skill_ref } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'pinned_at') ? { pinned_at: args.pinned_at } : {}),
     });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
@@ -1282,6 +1284,27 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const result = await spaces.deleteSpace(ctx.userId, spaceId);
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { ok: true };
+  },
+
+  // 在系统文件管理器中打开空间文件夹（macOS 访达 / Windows 资源管理器）。
+  // 路径由主进程从 spaceId 解析，渲染端不提供任意路径。
+  'spaces.openInFinder': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const { spaceContentDir } = await import('../paths');
+    const target = spaceContentDir(ctx.userId, spaceId);
+    try {
+      const st = fs.statSync(target);
+      if (!st.isDirectory()) throw new Error('not_a_directory');
+    } catch {
+      // 空间目录未创建（无产物/附件）→ 打开其父级，仍能定位到空间文件夹
+      const parent = path.dirname(target);
+      const openErr = await shell.openPath(parent);
+      if (openErr) throw new Error(openErr);
+      return { ok: true, path: parent };
+    }
+    const openErr = await shell.openPath(target);
+    if (openErr) throw new Error(openErr);
+    return { ok: true, path: target };
   },
 
   'spaces.resources.add': async ({ spaceId, kind, id } = {}, ctx) => {
@@ -2627,6 +2650,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ── Chat attachments (per-cid file pool for main chat) ──
   'conversations.attachments.list': async ({ cid }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
+    await chatAttachments.warmConversationSpace(ctx.userId, cid);
     return { items: chatAttachments.listPendingAttachments(ctx.userId, cid) };
   },
 
@@ -2675,10 +2699,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'conversations.attachments.delete': async ({ cid, name }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
+    await chatAttachments.warmConversationSpace(ctx.userId, cid);
     if (!chatAttachments.isDraftAttachmentCid(cid)) {
       await recycleBin.createAppRecycleBatchForCloudEntry(
         ctx.userId,
-        chatAttachmentRelPath(ctx.userId, cid, name || ''),
+        chatAttachmentRelPath(ctx.userId, cid, name || '', null, chatAttachments.cachedConversationSpace(ctx.userId, cid)),
         'attachment',
       );
     }
@@ -4314,6 +4339,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const name = payload?.name;
     if (typeof cid !== 'string' || !cid) throw new Error('missing cid');
     if (typeof name !== 'string' || !name) throw new Error('missing name');
+    await chatAttachments.warmConversationSpace(ctx.userId, cid);
     const r = chatAttachments.resolveAttachmentAbsPath(ctx.userId, cid, name);
     if (!r.ok) {
       const err = r as { code?: string; error?: string };
