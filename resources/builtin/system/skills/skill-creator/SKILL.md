@@ -469,3 +469,22 @@ Right: "I've written `SKILL.md`: this skill is invoked when the user asks 'scrap
 - **On failure, state the cause clearly + suggest a remedy** ("download failed: timeout; suggest switching mirror"); do not power through.
 - Output is **concise**; don't dump giant code blocks at once; advance step by step.
 - **Also handle ordinary conversation**: if the user asks something unrelated, just answer normally; afterwards you may ask whether to continue refining.
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：用户明确要求创建、编辑或导入自定义技能（"make a skill that does X"、"tweak the X skill"、"import this SKILL.md as a custom skill"、"造一个做 X 的技能"），且产出物是技能包草稿/候选资产。
+- `do_not_use_when`：用户只是普通对话或要求执行某个业务任务而非生产技能；要求把候选技能自动晋升为生产发布/直接写入共享注册表并绕过治理；要求修改保护面（形式化规则结构、HITL 要求、审计机制）；要求无界递归自我补丁；要求删除技能本体切片或强制九要素之外的伪制品。
+- `positive_examples`：`帮我创建一个把发票催款流程固化的技能，带触发/反触发和输入输出契约。`；`把这份已有 SKILL.md 导入为自定义技能。`
+- `negative_examples`：`直接把这个技能发布到生产环境。`；`把我这个技能的审计要求去掉。`；`不管什么情况都自己改自己直到完美。`
+
+本 Skill 是 `meta_skill · L5 · Full · production_process · interpreted` 的共享候选能力：`is_skill_of_skill: true`，`operates_on: [Skill, OntologySlice, EvalCase, Workflow, Policy, MetaSkill]`，`promotion_ceiling: staged`，`production_release_allowed: false`。它只产出技能包草稿与候选资产，从不自动发布任何最终技能。
+
+### 元技能附加契约（§6.2 同构原则）
+
+- **可变面（mutable_surface）**：配置键、阈值权重、策略开关、提示措辞、模板占位文本——补丁只允许触碰这些。
+- **保护面（protected_surface）**：形式化规则结构（九要素契约、三级合规档、三门顺序）、HITL 要求（预览→确认→执行）、审计机制（append-only 账本）、staged 封顶与生产发布硬锁——永不可被任何补丁修改。
+- **递归护栏（recursive_guard）**：自我演进补丁预算 `max_self_patch_ops ≤ 2`，`max_self_patch_depth: 1`（一次自审至多一层补丁）；任何自改必须依次通过验证门、治理门、金丝雀门；被拒补丁进入拒绝缓冲永久留痕，防止同一变更反复提交。
+- **无热更新路径**：本技能不存在对生产资产（技能/本体/元技能）的运行时热更新；所有产出物止步于候选/staged。
+- **每个一等子技能独立适用本标准**：由本技能产出的每个技能自身必须满足第 13 章合规评定；尚未独立成包的过渡形态必须记录合规差距与成包计划。
+<!-- NSEAP-GATE:END -->

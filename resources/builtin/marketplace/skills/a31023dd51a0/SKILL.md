@@ -27,10 +27,10 @@ description: "销售数据复盘：按周期汇总 GMV/转化/流量结构/广�
 <!-- NSEAP-GATE:BEGIN -->
 ## NSEAP Gate 契约
 
-- `use_when`：销售数据复盘：按周期汇总 GMV/转化/流量结构/广告数据，定位问题并给出下周行动建议。，并具备完成该任务所需的授权材料、环境和范围。
-- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「sales-data-review」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
-- `positive_examples`：`请基于已授权材料执行sales-data-review，输出结构化的可审计结果并保留证据定位。`
-- `negative_examples`：`缺少执行sales-data-review所需证据，仍请直接定稿。`
+- `use_when`：需要做日/周/月销售复盘、大促后复盘或广告投放效果评估：汇总 GMV、订单量、客单价、转化率、流量来源、广告花费/ROI，定位问题并给出下周行动建议，且已提供对应周期的数据。
+- `do_not_use_when`：任务不是销售数据复盘（如制定全年预算、调整广告出价）；未提供周期数据却要求直接出结论；要求编造 GMV/ROI 数字或把归因当事实。
+- `positive_examples`：`基于这份本周销售数据（GMV/流量/转化/广告花费），定位3个问题并给出下周3个行动项。`；`大促刚结束，做一份大促复盘。`
+- `negative_examples`：`没有数据，你按行业平均编一份复盘。`；`直接把转化率下降归因到竞品，不用看数据。`
 
-本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
 <!-- NSEAP-GATE:END -->

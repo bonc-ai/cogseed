@@ -1,0 +1,29 @@
+{
+ "interface": {
+  "display_name": "深度研究（确定性脚本组）",
+  "short_description": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。",
+  "default_prompt": "Use $deep-research and follow its evidence, approval, and output contract."
+ },
+ "policy": {
+  "allow_implicit_invocation": true
+ },
+ "nseap_runtime": {
+  "executor": "codex_skill_interpreter",
+  "binding_status": "target_state_not_run",
+  "skill_entrypoint": "../SKILL.md",
+  "schema_ref": "../schemas.json",
+  "permissions": {
+   "direct_resource_access": false,
+   "external_actions": "deny_without_explicit_approval",
+   "formal_asset_write": false,
+   "candidate_write_only": true
+  },
+  "governance": {
+   "level": "L5",
+   "risk_route": "Full",
+   "promotion_ceiling": "staged",
+   "production_release_allowed": false,
+   "independent_review": "pending"
+  }
+ }
+}

@@ -406,10 +406,10 @@ ecs-presales-agent/
 <!-- NSEAP-GATE:BEGIN -->
 ## NSEAP Gate 契约
 
-- `use_when`：根据行业类型、客户场景和会议目的，确定 ECS 售前 PPT 各节内容框架、行业本体选型和核心场景的四 What 映射，输出可供业务团队直接填写的结构化交流材料。，并具备完成该任务所需的授权材料、环境和范围。
-- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「ECS售前交流材料」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
-- `positive_examples`：`请基于已授权材料执行ECS售前交流材料，输出结构化的可审计结果并保留证据定位。`
-- `negative_examples`：`缺少执行ECS售前交流材料所需证据，仍请直接定稿。`
+- `use_when`：需要准备 ECS 售前交流材料：按行业类型（制造/能源/电信/医疗/金融/政务）、客户场景（合规审计/运营分析/流程自动化）和会议目的（首次拜访/跟进演示/POC 汇报）确定 PPT 框架、行业本体选型（ISA-95/TM Forum/HL7 FHIR/FIBO/NSEAP Meta）与四 What 映射。
+- `do_not_use_when`：PPT 美化排版、具体客户案例内容撰写、公司介绍段落生成；用户未提供行业/场景/会议目的时直接出框架；把四 What 叙事当事实数据；超越本体覆盖范围编造行业标准。
+- `positive_examples`：`制造业+财务审计+初次拜访，给我 ECS 售前 PPT 框架和行业本体选型。`；`合规审查场景的四 What 映射怎么写？`
+- `negative_examples`：`直接帮我写好这份 PPT 的美化排版。`；`我还没说行业和场景，你先出个通用框架。`
 
-本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
 <!-- NSEAP-GATE:END -->
