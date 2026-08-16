@@ -39,6 +39,20 @@ function validateRecipientAdmission(envelope: P3394Envelope, peer: P3394PeerReco
   return null;
 }
 
+/**
+ * 发送方准入（M-08/M-09 对称性）：capability / model_runtime 节点不是
+ * 自主 Agent，不得发起 task/message 交换；node_kind 来自注册表的真实
+ * 记录（hello 自报 + 本地配置），而非信封自述。
+ */
+function validateSenderAdmission(envelope: P3394Envelope, peer: P3394PeerRecord): { reason: string; field: string; message: string } | null {
+  if (envelope.kind !== 'task' && envelope.kind !== 'message') return null;
+  const nodeKind = peer.node_kind ?? 'agent';
+  if (nodeKind === 'capability' || nodeKind === 'model_runtime') {
+    return { reason: 'sender_not_authorized', field: 'sender', message: 'Capability and model runtime nodes cannot initiate autonomous task messages.' };
+  }
+  return null;
+}
+
 export class P3394BridgeKernel {
   readonly registry: P3394PeerRegistry;
   readonly idempotency: P3394IdempotencyStore<P3394BridgeDeliveryReceipt>;
@@ -63,6 +77,11 @@ export class P3394BridgeKernel {
     if (sender.ok === false) {
       this.audit.append({ event: 'peer.resolve.sender', actor_id: envelope.sender.agent_id, status: 'rejected', metadata: { ...sender.error } });
       return { ok: false, error: sender.error };
+    }
+    const senderAdmission = validateSenderAdmission(envelope, sender.value);
+    if (senderAdmission) {
+      this.audit.append({ event: 'sender.authorize', actor_id: envelope.sender.agent_id, status: 'rejected', metadata: senderAdmission });
+      return { ok: false, error: senderAdmission };
     }
     const recipientIds: string[] = [];
     for (let i = 0; i < envelope.recipients.length; i += 1) {
