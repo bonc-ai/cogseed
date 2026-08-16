@@ -1442,7 +1442,13 @@ export async function addEntry({
   provider,
   model,
   profileId,
-}: { provider: string; model: string; profileId: string }): Promise<{ entryId: string }> {
+  position = 'front',
+}: {
+  provider: string; model: string; profileId: string;
+  /** Where to insert: 'front' makes this entry the primary chat choice;
+   *  'back' appends it as a fallback (chat dispatch walks entries in order). */
+  position?: 'front' | 'back';
+}): Promise<{ entryId: string }> {
   const p = String(provider || '').trim();
   const m = String(model || '').trim();
   const pid = String(profileId || '').trim();
@@ -1467,14 +1473,16 @@ export async function addEntry({
 
   const entryId = nextEntryId();
   const now = Date.now();
-  store.entries.unshift({
+  const entry = {
     entryId,
     provider: p,
     model: m,
     profileId: pid,
     lastUsed: 0,
     createdAt: now,
-  });
+  };
+  if (position === 'back') store.entries.push(entry);
+  else store.entries.unshift(entry);
   saveProfiles(store);
   invalidateCoreAgentRunner();
   return { entryId };

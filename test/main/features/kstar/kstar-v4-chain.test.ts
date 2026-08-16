@@ -307,4 +307,6 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
       expect(after.pendingAutoCloseAt).not.toBe(before!.pendingAutoCloseAt);
     }
   });
+
+
 });

@@ -224,16 +224,6 @@ Your only KStar-related behaviors:
 - Greetings, thanks, acknowledgements, and ordinary discussion need no
   governance and produce zero KStar writes.
 
-### KStar review requests (in-context review)
-
-When you receive a `<kstar-control>` message with `"type":"kstar_review_request"`, the host is asking YOU — with your full conversation context — to review a finished task: compare the expected result against what actually happened and produce the review. This is part of self-evolution; do it before any other work.
-
-Reply with EXACTLY one `<kstar-review>{...}</kstar-review>` block (strict JSON, no markdown, nothing else around it):
-`{"outcome":"better_than_expected|met_expected|worse_than_expected|unclear","attribution":"knowledge_gap|rule_gap|template_gap|skill_gap|execution_gap|unclear","deltaR":number_or_unknown,"deltaA":number_or_unknown,"reason":"evidence-grounded summary","confidence":0_to_1,"needsConfirmation":boolean,"lesson":"optional reusable experience"}`
-- deltaR/deltaA between -1 and 1; "unknown" when evidence cannot support a value.
-- `lesson` is optional but valuable: a reusable pattern/pitfall/method discovered DURING execution, even on a fully successful task (met_expected). Omit for routine work.
-- Never invent tests, files, feedback, or outcomes. Use your actual context of the conversation.
-
 ### Routing judgement (is task? continue or new?)
 
 When the host sends a `<kstar-control>` message with `"type":"kstar_continuation_judge"`, judge the incoming user message with your full conversation context. Reply with EXACTLY one `<kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge>` block and nothing else around it:

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { createLogger } from '../../logger';
@@ -9,6 +10,10 @@ import { scheduleBootBackground, type ScheduledBootBackgroundTask } from '../../
 import { getConfiguredModelOAuthExpiredMessage, hasConfiguredModel } from '../auth';
 import * as chats from '../chats';
 import type { ReviewDecision } from '../cognition/review-decision';
+import {
+  run as runCliAgent,
+} from '../local_agents/runner';
+import { detectAll } from '../local_agents/registry';
 import {
   isQuiescent,
   subscribeTaskTerminals,
@@ -711,6 +716,65 @@ function extractionInput(
         : {}),
     })),
   });
+}
+
+/** CLI-based extraction fallback for recall capture when no CogSeed model is
+ *  configured. Mirrors onboarding's `cognition_extraction.ts`: pick an
+ *  installed/authenticated local CLI (claude preferred, else first available),
+ *  dispatch a one-shot print-mode turn with the extraction prompt + input, and
+ *  return the CLI's final text. Returns null when no CLI is usable. */
+async function extractCaptureViaCli(
+  userId: string,
+  capture: RecallCaptureRecord,
+  conversation: Awaited<ReturnType<typeof chats.getConversation>>,
+  promptMessages: CapturePromptMessage[],
+  recallView: RecallViewRecord,
+  signal: AbortSignal | undefined,
+): Promise<string | null> {
+  const entries = await detectAll();
+  const available = entries.filter((e) => e && e.available);
+  if (!available.length) return null;
+  const chosen = available.find((e) => e.type === 'claude') ?? available[0];
+  const input = extractionInput(conversation?.title || capture.conversationTitle || '', promptMessages, recallView);
+  const prompt =
+    `You extract durable, user-reviewable knowledge from one completed conversation run.\n` +
+    `Analyze the JSON conversation below and return exactly ONE JSON object and no markdown or commentary:\n` +
+    `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
+    `Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.\n` +
+    `Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.\n` +
+    `Each candidate must cite at least one user message label in "evidence". Do not invent facts.\n` +
+    `Write candidate text in the same language as the conversation.\n\n` +
+    `## Conversation JSON\n${input}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const result = await runCliAgent({
+      uid: userId,
+      cid: capture.conversationId,
+      agentId: 'recall-capture-extractor',
+      agentName: 'Capture Extractor',
+      cli: chosen.type,
+      prompt,
+      cwd: os.tmpdir(),
+      signal: controller.signal,
+      skipDispatchCheck: true,
+      onEvent: () => {},
+    });
+    if (signal?.aborted) return null;
+    if (result.status !== 'completed' || typeof result.output !== 'string' || !result.output.trim()) {
+      log.warn('recall capture CLI extraction did not complete', {
+        conversation_id: capture.conversationId,
+        cli: chosen.type,
+        status: result.status,
+        error: result.error,
+      });
+      return null;
+    }
+    return result.output.trim();
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function readRecallCapture(userId: string, id: string): Promise<RecallCaptureRecord> {
@@ -1467,40 +1531,69 @@ export async function runRecallCapture(
     capture = await setCaptureStage(userId, id, 'model_extraction');
     if (capture.status !== 'extracting' || signal?.aborted) return settleInterruptedCapture(userId, id);
 
-    let runner: Awaited<ReturnType<typeof buildRunner>>['runner'];
-    try {
-      ({ runner } = await buildRunner({
-        sessionId: `memory-extract-recall-${capture.id}`,
-        userId,
-        systemPrompt: extractionSystemPrompt(),
-        disableTools: true,
-        ephemeralSession: true,
-        skillList: [],
-      }));
-    } catch {
-      throw new CaptureFailure('model_failed', 'model runner could not be built');
-    }
-    let result: Awaited<ReturnType<typeof runner.run>>;
-    try {
-      result = await runner.run({
-        message: extractionInput(conversation.title, promptMessages, recallView),
-        signal,
-        thinkingLevel: 'off',
-        cacheRetention: 'none',
-      });
-    } catch {
-      throw new CaptureFailure('model_failed', 'model extraction failed');
-    }
-    if (signal?.aborted) return settleInterruptedCapture(userId, id);
-    if (result.meta.aborted) throw new CaptureFailure('model_failed', 'model extraction was aborted');
-    if (result.meta.error) {
-      const code = result.meta.error.kind === 'auth' ? 'model_auth_required' : 'model_failed';
-      throw new CaptureFailure(code, result.meta.error.message);
+    // No-model CLI fallback: when the user has no CogSeed API model (commander
+    // already routes to local CLI agents), drive the extraction through an
+    // installed/authenticated local CLI instead of failing with
+    // model_not_configured. This keeps the capture→candidate→confirm loop
+    // working in the exact setup that motivated CLI fallback.
+    let extractionText: string;
+    let extractionModelUsage: RecallCaptureModelUsage | undefined;
+    if (!hasConfiguredModel().configured && !process.env.ANTHROPIC_API_KEY) {
+      try {
+        const cliText = await extractCaptureViaCli(
+          userId,
+          capture,
+          conversation,
+          promptMessages,
+          recallView,
+          signal,
+        );
+        if (cliText === null) {
+          throw new CaptureFailure('model_not_configured', 'model configuration is required (no local CLI available)');
+        }
+        extractionText = cliText;
+      } catch (err) {
+        if (err instanceof CaptureFailure) throw err;
+        throw new CaptureFailure('model_failed', `CLI extraction failed: ${(err as Error).message}`);
+      }
+    } else {
+      let runner: Awaited<ReturnType<typeof buildRunner>>['runner'];
+      try {
+        ({ runner } = await buildRunner({
+          sessionId: `memory-extract-recall-${capture.id}`,
+          userId,
+          systemPrompt: extractionSystemPrompt(),
+          disableTools: true,
+          ephemeralSession: true,
+          skillList: [],
+        }));
+      } catch {
+        throw new CaptureFailure('model_failed', 'model runner could not be built');
+      }
+      let result: Awaited<ReturnType<typeof runner.run>>;
+      try {
+        result = await runner.run({
+          message: extractionInput(conversation.title, promptMessages, recallView),
+          signal,
+          thinkingLevel: 'off',
+          cacheRetention: 'none',
+        });
+      } catch {
+        throw new CaptureFailure('model_failed', 'model extraction failed');
+      }
+      if (signal?.aborted) return settleInterruptedCapture(userId, id);
+      if (result.meta.aborted) throw new CaptureFailure('model_failed', 'model extraction was aborted');
+      if (result.meta.error) {
+        const code = result.meta.error.kind === 'auth' ? 'model_auth_required' : 'model_failed';
+        throw new CaptureFailure(code, result.meta.error.message);
+      }
+      extractionText = result.text.trim();
+      extractionModelUsage = normalizeModelUsage(result.meta.usage);
     }
     let parsed: ReturnType<typeof parseRecallCaptureOutput>;
     try {
       parsed = parseRecallCaptureOutput(
-        result.text.trim(),
+        extractionText,
         new Set(promptMessages.map((message) => message.label)),
       );
     } catch (error) {
@@ -1509,7 +1602,7 @@ export async function runRecallCapture(
       log.warn('recall capture parse failed (debug)', {
         capture_id: id,
         conversation_id: capture.conversationId,
-        rawOutput: String(result.text || '').slice(0, 2000),
+        rawOutput: String(extractionText || '').slice(0, 2000),
         error: error instanceof CaptureFailure ? error.message : String((error as Error)?.message || error),
       });
       throw error;
@@ -1651,7 +1744,7 @@ export async function runRecallCapture(
     }
 
     const finishedAt = new Date().toISOString();
-    const modelUsage = normalizeModelUsage(result.meta.usage);
+    const modelUsage = extractionModelUsage;
     const hasQualifiedCandidates = candidateIds.length > 0;
     const hasReviewableCandidates = candidates.some((candidate) => (
       isRecallCandidateReviewable(resolvedCandidates.get(candidate.id) || candidate)

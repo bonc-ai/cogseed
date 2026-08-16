@@ -14,8 +14,7 @@ import { buildGroupKstarEpisode, buildRuntimeKstarEpisode, type GroupKstarEpisod
 import { proposeKstarCandidates } from './extraction-service';
 import { saveKstarCandidateProposals } from './recall-bridge';
 import { createInitialKstarReview, readKstarReview, saveKstarReview, saveKstarReviewRecord } from './review-service';
-import { inferKstarReview, type KstarReviewInferenceResult } from './review-inference';
-import { parseKstarReviewInference } from './review-inference';
+import { inferKstarReview, type KstarReviewInferenceOptions, type KstarReviewInferenceResult } from './review-inference';
 import { postKstarReviewCard } from './review-card';
 import type { KstarEpisodeRecord, KstarExtractionRunRecord, KstarReviewRecord } from './types';
 import { readConversationTaskState, readKstarRequirement } from './requirement-store';
@@ -36,7 +35,11 @@ export type KstarCandidateBridge = (
   proposals: ReturnType<typeof proposeKstarCandidates>,
 ) => Promise<RecallCandidateRecord[]>;
 
-export type KstarReviewInfer = (userId: string, episode: KstarEpisodeRecord) => Promise<KstarReviewInferenceResult>;
+export type KstarReviewInfer = (
+  userId: string,
+  episode: KstarEpisodeRecord,
+  options?: KstarReviewInferenceOptions,
+) => Promise<KstarReviewInferenceResult>;
 
 export interface RuntimeKstarClosureInput extends RuntimeKstarEpisodeInput {
   bridge?: KstarCandidateBridge;
@@ -46,9 +49,6 @@ export interface RuntimeKstarClosureInput extends RuntimeKstarEpisodeInput {
 export interface GroupKstarClosureInput extends GroupKstarEpisodeInput {
   bridge?: KstarCandidateBridge;
   inferReview?: KstarReviewInfer;
-  /** Bounded wait for the Commander's in-context review reply. Tests inject
-   *  a small value; production defaults to COMMANDER_REVIEW_TIMEOUT_MS. */
-  commanderReviewTimeoutMs?: number;
 }
 
 function validExtractionRun(userId: string, episodeId: string, reviewId: string, runId: string, raw: Record<string, unknown>): KstarExtractionRunRecord {
@@ -113,109 +113,12 @@ async function reconcileKstarExtraction(
   return { episode, review, candidates: [], extractionRun };
 }
 
-/** Extract a Commander-authored review from a `<kstar-review>{...}</kstar-review>`
- *  block inside a message stream (the Commander replies in-context). Returns
- *  the parsed review fields or null when absent/malformed. */
-export function parseCommanderReviewFromMessages(messages: GroupKstarMessageInput[]): ParsedReviewFromCommander | null {
-  for (const message of messages) {
-    const text = String(message.text || '');
-    const match = text.match(/<kstar-review>([\s\S]*?)<\/kstar-review>/);
-    if (!match) continue;
-    try {
-      const parsed = parseKstarReviewInference(match[1].trim());
-      return {
-        deltaR: parsed.deltaR,
-        deltaA: parsed.deltaA,
-        outcome: parsed.outcome,
-        attribution: parsed.attribution,
-        reason: parsed.reason,
-        confidence: parsed.confidence,
-        ...(parsed.lesson ? { lesson: parsed.lesson } : {}),
-      };
-    } catch (error) {
-      log.warn('kstar commander review block malformed', {
-        episodeId: message.id,
-        error: (error as Error).message,
-      });
-    }
-  }
-  return null;
-}
-
-export interface ParsedReviewFromCommander {
-  deltaR: number | 'unknown';
-  deltaA: number | 'unknown';
-  outcome: KstarReviewRecord['outcome'];
-  attribution: KstarReviewRecord['attribution'];
-  reason: string;
-  confidence: number;
-  lesson?: string;
-}
-
-/** Default ceiling for waiting on the Commander's in-context review reply.
- *  The reply is one extra LLM round in the SAME conversation; 120s covers
- *  a normal round plus scheduling slack. Tests inject a tiny timeout. */
-export const COMMANDER_REVIEW_TIMEOUT_MS = 120_000;
-
-/** Ask the Commander — in its own conversation, with FULL context — to
- *  produce the expected-vs-actual review for a finished episode, and wait
- *  (bounded) for the `<kstar-review>` reply. Returns the parsed review, or
- *  null on timeout / enqueue failure — the caller then falls back to
- *  host-side inference so precipitation is never blocked forever. */
-export async function awaitCommanderReview(
-  userId: string,
-  conversationId: string,
-  episode: KstarEpisodeRecord,
-  evidence: Record<string, unknown>,
-  timeoutMs: number = COMMANDER_REVIEW_TIMEOUT_MS,
-): Promise<ParsedReviewFromCommander | null> {
-  try {
-    const bus = await import('../group_chat/bus');
-    const unsubscribe = bus.subscribe(userId, conversationId, (event) => {
-      if (event.type !== 'message') return;
-      const text = String(event.msg?.text || '');
-      if (!text.includes('<kstar-review>')) return;
-      const parsed = parseCommanderReviewFromMessages([{ id: event.msg.id, ts: event.msg.ts, from: event.msg.from, text }]);
-      if (parsed) resolve(parsed);
-    });
-    let resolve: (value: ParsedReviewFromCommander | null) => void;
-    let settled = false;
-    const done = new Promise<ParsedReviewFromCommander | null>((res) => { resolve = res; });
-    const timer = setTimeout(() => {
-      if (!settled) { settled = true; resolve(null); }
-    }, Math.max(1, Number(timeoutMs) || COMMANDER_REVIEW_TIMEOUT_MS));
-    try {
-      await bus.enqueueCommanderControlMessage({
-        userId,
-        cid: conversationId,
-        displayText: '',
-        control: { type: 'kstar_review_request', episodeId: episode.id, evidence },
-      });
-    } catch (error) {
-      log.warn('kstar commander review request enqueue degraded', {
-        userId, episodeId: episode.id, error: (error as Error).message,
-      });
-      clearTimeout(timer);
-      unsubscribe();
-      return null;
-    }
-    const parsed = await done;
-    clearTimeout(timer);
-    unsubscribe();
-    return parsed;
-  } catch (error) {
-    log.warn('kstar commander review wait degraded', {
-      userId, episodeId: episode.id, error: (error as Error).message,
-    });
-    return null;
-  }
-}
-
 async function finishClosure(
   userId: string,
   episode: KstarEpisodeRecord,
   bridge: KstarCandidateBridge = saveKstarCandidateProposals,
   inferReview: KstarReviewInfer = inferKstarReview,
+  options: { forecast?: Awaited<ReturnType<typeof readWorldModelForecast>> | null; messages?: Array<{ from: string; text: string; ts?: string }> } = {},
 ): Promise<KstarClosureResult> {
   await writeKstarEpisode(userId, episode);
   let storedReview: KstarReviewRecord | null = null;
@@ -227,7 +130,14 @@ async function finishClosure(
   let review = storedReview;
   if (!review) {
     try {
-      const inferred = await inferReview(userId, episode);
+      // fallback 推理也走确定性世界模型度量（forecast）：期望 vs 实际由
+      // reconcileWorldModel 确定性计算，模型只做归因与教训提炼——不依赖
+      // Commander 回合（不占队列）。对话历史（messages）恢复执行情境
+      // （中途变更/失败/临时决策），质量与 Commander review 相当。
+      const inferred = await inferReview(userId, episode, {
+        ...(options.forecast ? { forecast: options.forecast } : {}),
+        ...(options.messages?.length ? { messages: options.messages } : {}),
+      });
       review = await saveKstarReview(userId, episode, {
         ...inferred.review,
         reviewState: inferred.reviewState,
@@ -387,55 +297,26 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
     ...(executionRefs.length ? { executionEvaluationRefs: executionRefs } : {}),
   });
   const episode = await enrichEpisodeFromRequirementEvidence(input.userId, input.conversationId, built);
-  // Commander-in-context review (self-evolution): ask the Commander — with its
-  // full conversation context — to produce the expected-vs-actual review. The
-  // reply (a <kstar-review> block) is picked up by a later closure pass; until
-  // then finishClosure falls back to host-side inference so precipitation is
-  // never blocked. Request enqueue is best-effort.
-  // Commander-in-context review (self-evolution, SYNCHRONOUS): ask the
-  // Commander — with its full conversation context — to produce the
-  // expected-vs-actual review and WAIT (bounded) for the <kstar-review>
-  // reply. The Commander-authored review drives precipitation; host-side
-  // inference is the timeout fallback so a silent Commander never blocks
-  // the line forever.
-  const commanderReview = input.conversationId
-    ? await awaitCommanderReview(input.userId, input.conversationId, episode, {
-        episode: {
-          id: episode.id,
-          status: episode.r.status,
-          task: episode.t.userGoal,
-          toolCalls: episode.a.toolCalls.map((call) => ({ name: call.name, status: call.status })),
-          producedFiles: (episode.r.producedFiles || []).slice(0, 20),
-          finalText: episode.r.finalText,
-          verification: episode.r.verification,
-        },
-        evidenceKinds: [...new Set(episode.evidenceRefs.map((ref) => ref.kind))],
-      }, input.commanderReviewTimeoutMs)
-    : null;
-  const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, async () => {
-    if (commanderReview) {
-      const now = nowIso();
-      await saveKstarReviewRecord(input.userId, {
-        schemaVersion: 1,
-        ownerId: input.userId,
-        id: `ksr-${episode.id}`,
-        episodeId: episode.id,
-        deltaR: commanderReview.deltaR,
-        deltaA: commanderReview.deltaA,
-        outcome: commanderReview.outcome,
-        attribution: commanderReview.attribution,
-        reason: commanderReview.reason,
-        confidence: commanderReview.confidence,
-        ...(commanderReview.lesson ? { lesson: commanderReview.lesson } : {}),
-        reviewState: 'inferred',
-        inferenceMethod: 'commander',
-        needsConfirmation: false,
-        evidenceRefs: episode.evidenceRefs,
-        createdAt: now,
-        updatedAt: now,
-      });
+  // 确定性世界模型度量（review 推理用）：期望 vs 实际由 forecast 记录
+  // 确定性计算，模型只归因——全程独立后台 runner，不占 Commander 队列
+  // （Commander review 回合已移除：实测其占队列 8-10s 且 lesson 产出为
+  // 空，而确定性度量 + 对话历史的后台推理质量更稳定）。
+  let forecast: Awaited<ReturnType<typeof readWorldModelForecast>> | null = null;
+  if (input.forecastId) {
+    try {
+      const { readWorldModelForecast } = await import('../recall/world-model');
+      forecast = await readWorldModelForecast(input.userId, input.forecastId);
+    } catch {
+      // 无 forecast 记录 → 退化为机械推断（现状行为）。
     }
-    return finishClosure(input.userId, episode, input.bridge, input.inferReview);
+  }
+  const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, async () => {
+    return finishClosure(input.userId, episode, input.bridge, input.inferReview, {
+      // readWorldModelForecast returns the RECORD (forecast nested under
+      // `record.forecast`); inferKstarReview expects the flat WorldModelForecast.
+      ...(forecast ? { forecast: forecast.forecast } : {}),
+      ...(input.messages?.length ? { messages: input.messages } : {}),
+    });
   });
   try {
     const { attachKstarEpisodeToCurrentRequirement } = await import('./requirement-state');
