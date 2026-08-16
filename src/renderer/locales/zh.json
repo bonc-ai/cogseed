@@ -3750,8 +3750,8 @@
   "cognition.asset_action_pause_done": "记忆已暂停使用",
   "cognition.asset_action_resume": "恢复使用",
   "cognition.asset_action_resume_done": "记忆已恢复使用",
-  "cognition.asset_action_revoke": "移除记忆",
-  "cognition.asset_action_revoke_done": "记忆已移除",
+  "cognition.asset_action_revoke": "撤回使用",
+  "cognition.asset_action_revoke_done": "已撤回使用",
   "cognition.asset_action_versions": "查看版本",
   "cognition.asset_action_chain": "使用与证明",
   "cognition.chain_title": "使用与证明",
@@ -4447,5 +4447,5 @@
   "cognition.governance_history_control": "版本与证明",
   "cognition.governance_history_control_hint": "查看历史版本、回滚入口，以及这条资产的使用履历。",
   "cognition.governance_asset_body": "资产本体",
-  "cognition.governance_asset_body_hint": "删除、移除记忆与彻底清除影响不同，执行前会再次确认。"
+  "cognition.governance_asset_body_hint": "删除、撤回使用与彻底清除影响不同，执行前会再次确认。"
 }

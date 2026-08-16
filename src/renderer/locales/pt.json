@@ -3510,8 +3510,8 @@
   "cognition.asset_action_pause_done": "Memória pausada",
   "cognition.asset_action_resume": "Retomar uso",
   "cognition.asset_action_resume_done": "Memória retomada",
-  "cognition.asset_action_revoke": "Remover memória",
-  "cognition.asset_action_revoke_done": "Memória removida",
+  "cognition.asset_action_revoke": "Retirar de uso",
+  "cognition.asset_action_revoke_done": "Retirado de uso",
   "cognition.asset_action_versions": "Ver versões",
   "cognition.asset_action_chain": "Uso e prova",
   "cognition.chain_title": "Uso e prova",
@@ -4140,5 +4140,5 @@
   "cognition.governance_history_control": "Versões e provas",
   "cognition.governance_history_control_hint": "Veja o histórico, as opções de reversão e o registro de uso deste ativo.",
   "cognition.governance_asset_body": "Conteúdo do ativo",
-  "cognition.governance_asset_body_hint": "Excluir, revogar memória e limpar têm efeitos diferentes; cada ação é confirmada antes de executar."
+  "cognition.governance_asset_body_hint": "Excluir, retirar de uso e limpar por completo deixam coisas diferentes para trás; cada um pede confirmação."
 }

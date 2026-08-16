@@ -3510,8 +3510,8 @@
   "cognition.asset_action_pause_done": "メモリを一時停止しました",
   "cognition.asset_action_resume": "使用を再開",
   "cognition.asset_action_resume_done": "メモリを再開しました",
-  "cognition.asset_action_revoke": "メモリを削除",
-  "cognition.asset_action_revoke_done": "メモリを削除しました",
+  "cognition.asset_action_revoke": "使用を撤回",
+  "cognition.asset_action_revoke_done": "使用を撤回しました",
   "cognition.asset_action_versions": "バージョンを表示",
   "cognition.asset_action_chain": "使用と証明",
   "cognition.chain_title": "使用と証明",
@@ -4140,5 +4140,5 @@
   "cognition.governance_history_control": "バージョンと証明",
   "cognition.governance_history_control_hint": "履歴、ロールバック、利用記録を確認します。",
   "cognition.governance_asset_body": "資産本体",
-  "cognition.governance_asset_body_hint": "削除、記憶の撤回、完全消去は影響が異なり、実行前に再確認します。"
+  "cognition.governance_asset_body_hint": "削除・使用の撤回・完全消去は残るものが異なります。実行前に再度確認します。"
 }

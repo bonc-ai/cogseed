@@ -1639,7 +1639,7 @@ function _recallAssetActionLabel(action) {
     restore: _cognitionText('cognition.asset_action_restore', '恢复'),
     delete: _cognitionText('cognition.asset_action_delete', '删除'),
     purge: _cognitionText('cognition.asset_action_purge', '彻底清除'),
-    revoke: _cognitionText('cognition.asset_action_revoke', '移除记忆'),
+    revoke: _cognitionText('cognition.asset_action_revoke', '撤回使用'),
     versions: _cognitionText('cognition.asset_action_versions', '查看版本'),
     chain: _cognitionText('cognition.asset_action_chain', '使用与证明'),
   };
@@ -2079,7 +2079,7 @@ function renderSkillsCognitionGovernance() {
       <dl class="cognition-governance-facts"><div><dt>${escapeHtml(_cognitionText('cognition.governance_scope', '作用范围'))}</dt><dd>${escapeHtml(_abilityAssetScopeLabel(selected.scope || 'general'))}</dd></div><div><dt>${escapeHtml(_cognitionText('cognition.asset_write_origin', '写入来源'))}</dt><dd>${escapeHtml(writeOrigin || '—')}</dd></div><div><dt>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</dt><dd>${escapeHtml(workspaceRefs.length ? workspaceRefs.join('、') : _cognitionText('cognition.no_refs', '未记录引用'))}</dd></div></dl>
       ${usageActions ? `<section class="cognition-governance-action-group"><h3>${escapeHtml(_cognitionText('cognition.governance_use_control', '使用控制'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_use_control_hint', '暂停或归档不会删除资产及其历史记录。'))}</p><div>${usageActions}</div></section>` : ''}
       ${recordActions ? `<section class="cognition-governance-action-group"><h3>${escapeHtml(_cognitionText('cognition.governance_history_control', '版本与证明'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_history_control_hint', '查看历史版本、回滚入口，以及这条资产的使用履历。'))}</p><div>${recordActions}</div></section>` : ''}
-      ${destructiveActions ? `<section class="cognition-governance-action-group is-danger"><h3>${escapeHtml(_cognitionText('cognition.governance_asset_body', '资产本体'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_asset_body_hint', '删除、移除记忆与彻底清除影响不同，执行前会再次确认。'))}</p><div>${destructiveActions}</div></section>` : ''}
+      ${destructiveActions ? `<section class="cognition-governance-action-group is-danger"><h3>${escapeHtml(_cognitionText('cognition.governance_asset_body', '资产本体'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_asset_body_hint', '删除、撤回使用与彻底清除影响不同，执行前会再次确认。'))}</p><div>${destructiveActions}</div></section>` : ''}
       ${_renderRecallAssetHistory(selected.id)}
       ${_renderRecallAssetChain(selected.id)}
     </section>

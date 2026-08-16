@@ -3750,8 +3750,8 @@
   "cognition.asset_action_pause_done": "Memory paused",
   "cognition.asset_action_resume": "Resume use",
   "cognition.asset_action_resume_done": "Memory resumed",
-  "cognition.asset_action_revoke": "Remove memory",
-  "cognition.asset_action_revoke_done": "Memory removed",
+  "cognition.asset_action_revoke": "Withdraw from use",
+  "cognition.asset_action_revoke_done": "Withdrawn from use",
   "cognition.asset_action_versions": "View versions",
   "cognition.asset_action_chain": "Usage and proof",
   "cognition.chain_title": "Usage and proof",
@@ -4447,5 +4447,5 @@
   "cognition.governance_history_control": "Versions and evidence",
   "cognition.governance_history_control_hint": "Open version history, rollback options, and this asset's use record.",
   "cognition.governance_asset_body": "Asset content",
-  "cognition.governance_asset_body_hint": "Deleting, revoking memory, and purging have different effects; each is confirmed before it runs."
+  "cognition.governance_asset_body_hint": "Delete, withdraw and purge differ in what they leave behind; each asks again before it runs."
 }
