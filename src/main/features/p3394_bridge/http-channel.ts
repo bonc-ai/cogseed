@@ -29,6 +29,7 @@ import * as crypto from 'node:crypto';
 import { createLogger } from '../../logger';
 import { validateP3394Envelope, type P3394Envelope } from './envelope';
 import { p3394ObjectStoreGet } from './object-store';
+import { P3394_CHANNEL_LIMITS, P3394RateLimiter } from './channel-limits';
 import { buildP3394ChannelDescriptor, type P3394ChannelAdapter, type P3394ChannelDeliveryReceipt, type P3394ChannelDescriptor, type P3394ChannelHealth, type P3394ChannelListener, type P3394ChannelListenerResult } from './channel-adapter';
 import type { P3394BridgeManifest } from './manifest';
 
@@ -61,6 +62,8 @@ export interface P3394HttpChannelOptions {
   authToken?: string;
   maxBodyBytes?: number;
   timeoutMs?: number;
+  /** Inbound request rate limit per minute (0 disables; S-06). */
+  maxInboundRequestsPerMinute?: number;
   now?: () => number;
 }
 
@@ -103,11 +106,14 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
   private closed = false;
   /** Manifest presented by this node during negotiation. */
   private localManifest: P3394BridgeManifest | null = null;
+  private readonly inboundLimiter: P3394RateLimiter | null;
 
   constructor(channel_id = 'http', options: P3394HttpChannelOptions = {}) {
     this.channel_id = channel_id;
     this.options = options;
     this.now = options.now ?? (() => Date.now());
+    const perMinute = options.maxInboundRequestsPerMinute ?? P3394_CHANNEL_LIMITS.maxInboundRequestsPerMinute;
+    this.inboundLimiter = perMinute <= 0 ? null : new P3394RateLimiter(perMinute, 60_000, this.now());
   }
 
   setLocalManifest(manifest: P3394BridgeManifest): void {
@@ -136,6 +142,15 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, agent_id: this.localManifest?.identity.agent_id ?? null }));
         return;
+      }
+      // 统一入站速率限制（S-06）：health 探活豁免，其余路由共享同一预算。
+      if (this.inboundLimiter) {
+        const rate = this.inboundLimiter.tryAcquire(this.now());
+        if (!rate.ok) {
+          res.writeHead(429, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'rate_limited', retry_after_ms: rate.retryAfterMs }));
+          return;
+        }
       }
       // Resource endpoint (§12): authenticated content-addressed object fetch.
       if (req.method === 'GET' && req.url.startsWith(OBJECTS_PATH_PREFIX)) {

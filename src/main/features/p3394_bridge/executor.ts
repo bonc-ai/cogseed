@@ -26,6 +26,7 @@ import { P3394BridgeSessionManager } from './session-manager';
 import { P3394BridgeTaskManager } from './task-manager';
 import type { P3394Envelope, P3394PayloadPart } from './envelope';
 import { normalizeDigest } from './artifact-parts';
+import { P3394ByteBudget, P3394_CHANNEL_LIMITS } from './channel-limits';
 import type { P3394RuntimeAdapter, P3394RuntimeEvent } from './runtime-adapter';
 
 export type P3394BridgeExecutorResult =
@@ -60,6 +61,10 @@ export interface P3394BridgeExecutorDeps {
   /** Durable session-state file per session id (SDK design §6: the six-state
    *  machine survives restarts). When absent, sessions stay in-memory. */
   sessionFileFor?: (sessionId: string) => string | null;
+  /** Per-session cumulative auto artifact reply byte cap (0 disables; S-06). */
+  maxArtifactAutoReplyBytes?: number;
+  /** Per-session auto artifact reply count cap (0 disables; S-06). */
+  maxArtifactAutoRepliesPerSession?: number;
   /** Clock for lifecycle records. */
   now?: () => string;
 }
@@ -88,6 +93,11 @@ export class P3394BridgeExecutor {
   private readonly autoReply: P3394AutoReplyOptions;
   private readonly now: () => string;
   private readonly forwards = new Map<string, Promise<void>>();
+  /** S-06：artifact 自动回发的按会话累计预算（字节 + 数量）。 */
+  private readonly artifactBudgets = new Map<string, P3394ByteBudget>();
+  private readonly artifactCounts = new Map<string, number>();
+  private readonly maxArtifactAutoReplyBytes: number;
+  private readonly maxArtifactAutoRepliesPerSession: number;
 
   constructor(deps: P3394BridgeExecutorDeps) {
     this.bridge = deps.bridge;
@@ -102,6 +112,8 @@ export class P3394BridgeExecutor {
     this.onEvent = deps.onEvent;
     this.autoReply = deps.autoReply ?? {};
     this.now = deps.now ?? (() => new Date().toISOString());
+    this.maxArtifactAutoReplyBytes = deps.maxArtifactAutoReplyBytes ?? P3394_CHANNEL_LIMITS.maxArtifactAutoReplyBytes;
+    this.maxArtifactAutoRepliesPerSession = deps.maxArtifactAutoRepliesPerSession ?? P3394_CHANNEL_LIMITS.maxArtifactAutoRepliesPerSession;
   }
 
   /**
@@ -261,6 +273,21 @@ export class P3394BridgeExecutor {
       part.digest = digest;
     }
     if (!part.uri && part.data === undefined) return;
+    // S-06：按会话累计的 artifact 自动回发总量/数量预算（默认不限，超限 fail-closed）。
+    const budget = this.artifactBudgets.get(envelope.session_id)
+      ?? new P3394ByteBudget(this.maxArtifactAutoReplyBytes);
+    this.artifactBudgets.set(envelope.session_id, budget);
+    const count = (this.artifactCounts.get(envelope.session_id) ?? 0) + 1;
+    if (this.maxArtifactAutoRepliesPerSession > 0 && count > this.maxArtifactAutoRepliesPerSession) {
+      this.bridge.audit.append({ event: 'autoreply.reject', actor_id: envelope.sender.agent_id, status: 'rejected', metadata: { endpoint, kind: 'artifact', reason: 'artifact_count_exceeded' } });
+      return;
+    }
+    this.artifactCounts.set(envelope.session_id, count);
+    const cost = Buffer.byteLength(JSON.stringify(part), 'utf8');
+    if (!budget.tryReserve(cost)) {
+      this.bridge.audit.append({ event: 'autoreply.reject', actor_id: envelope.sender.agent_id, status: 'rejected', metadata: { endpoint, kind: 'artifact', reason: 'artifact_budget_exceeded' } });
+      return;
+    }
     const token = ext && typeof ext.reply_token === 'string' ? ext.reply_token : '';
     const reply: P3394Envelope = {
       spec_version: 'p3394/1.0',
