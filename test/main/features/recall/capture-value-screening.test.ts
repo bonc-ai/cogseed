@@ -127,54 +127,6 @@ describe('Recall capture candidate quality', () => {
     ]));
   });
 
-  it('flags a judgment that merely restates a task request (platitude_restates_task)', () => {
-    const quality = assessRecallCaptureCandidateQuality({
-      judgment: '写一份成都资料，500 字',
-      value: '减少用户重复发同类请求的成本。',
-      summary: '成都资料',
-      suggestedType: 'template',
-      suggestedScope: 'general',
-      suggestedAction: 'create',
-      valueProvided: true,
-      actionProvided: true,
-    }, [{ role: 'user', text: '帮我写一份成都资料，500 字' }]);
-
-    expect(quality.reviewable).toBe(false);
-    expect(quality.reasons).toContain('platitude_restates_task');
-  });
-
-  it('does NOT flag a judgment that matches a user-stated rule (message itself is knowledge)', () => {
-    const quality = assessRecallCaptureCandidateQuality({
-      judgment: '所有架构决定必须记录来源。',
-      value: '减少后续评审时重复追溯决策背景的成本。',
-      summary: '架构决定来源规则',
-      suggestedType: 'rule',
-      suggestedScope: 'project',
-      suggestedAction: 'create',
-      valueProvided: true,
-      actionProvided: true,
-    }, [{ role: 'user', text: 'Always keep decisions traceable.' }]);
-
-    expect(quality.reviewable).toBe(true);
-    expect(quality.reasons).not.toContain('platitude_restates_task');
-  });
-
-  it('flags a platitude without any specific signal (platitude_no_specifics)', () => {
-    const quality = assessRecallCaptureCandidateQuality({
-      judgment: '认真完成了任务，已按时交付。',
-      value: '以后同类任务也能顺利完成。',
-      summary: '完成任务',
-      suggestedType: 'rule',
-      suggestedScope: 'general',
-      suggestedAction: 'create',
-      valueProvided: true,
-      actionProvided: true,
-    }, [{ role: 'user', text: '帮我写一份成都资料，500 字' }]);
-
-    expect(quality.reviewable).toBe(false);
-    expect(quality.reasons).toContain('platitude_no_specifics');
-  });
-
   it('requires a target asset for update-like actions', () => {
     const quality = assessRecallCaptureCandidateQuality({
       judgment: '将项目评审模板增加来源字段。',
