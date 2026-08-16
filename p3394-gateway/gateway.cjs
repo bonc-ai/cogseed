@@ -65,6 +65,8 @@ const HEARTBEAT_MS = Number(process.env.P3394_HEARTBEAT_MS ?? 60 * 1000);
 // 等待自动回发结果、打印后退出（Hermes → CogSeed → Hermes 闭环）。
 const SEND_TASK = (process.env.P3394_SEND_TASK || '').trim();
 const SEND_TASK_TIMEOUT_MS = Number(process.env.P3394_SEND_TASK_TIMEOUT_MS || 30 * 1000);
+// V-04 断线重试：发送失败（连接拒绝/非 2xx）按退避重试，默认 2 次额外尝试。
+const SEND_TASK_RETRIES = Math.max(1, Number(process.env.P3394_SEND_TASK_RETRIES || 2));
 const replyWaiters = new Map(); // message_id → 处理回信的函数
 
 // 预设：市面上常见智能体的 CLI 模板（oneshot 非交互模式，stdout 输出最终回复）。
@@ -785,8 +787,12 @@ server.listen(PORT, GATEWAY_HOST, () => {
  * V-04 反向闭环：本网关（对端 Agent）主动向 CogSeed 发起一次任务，
  * 信封携带本端 reply_endpoint/reply_token；CogSeed 执行完自动回发结果，
  * 网关命中 waiter 后打印回复并退出。
+ *
+ * 断线恢复：发送失败（CogSeed 未起/连接拒绝/非 2xx）按退避重试
+ * （P3394_SEND_TASK_RETRIES 次，间隔 1.2s * attempt）；总等待受
+ * SEND_TASK_TIMEOUT_MS 封顶，超时以非零码退出。
  */
-function sendTaskOneShot(text) {
+function sendTaskOneShot(text, attempt = 1) {
   const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
   const task = {
     spec_version: 'p3394/1.0',
@@ -815,16 +821,24 @@ function sendTaskOneShot(text) {
   const headers = { 'Content-Type': 'application/json' };
   if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
   const body = JSON.stringify({ envelope: task });
+  const retry = (why) => {
+    if (attempt < SEND_TASK_RETRIES) {
+      console.error('[p3394-gateway] send-task ' + why + ', retrying (' + attempt + '/' + SEND_TASK_RETRIES + ')');
+      setTimeout(() => sendTaskOneShot(text, attempt + 1), 1200 * attempt);
+      return true;
+    }
+    console.error('[p3394-gateway] send-task ' + why + ' after ' + attempt + ' attempt(s)');
+    process.exit(1);
+    return false;
+  };
   const req = http.request(url, { method: 'POST', headers }, (res) => {
     res.resume();
     if (!(res.statusCode >= 200 && res.statusCode < 300)) {
-      console.error('[p3394-gateway] send-task rejected ' + res.statusCode);
-      process.exit(1);
+      retry('rejected ' + res.statusCode);
     }
   });
   req.on('error', (error) => {
-    console.error('[p3394-gateway] send-task failed: ' + error.message);
-    process.exit(1);
+    retry('failed: ' + error.message);
   });
   req.end(body);
 }
