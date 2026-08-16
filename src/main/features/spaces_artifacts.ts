@@ -18,7 +18,7 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { chatArtifactCidDir, chatAttachmentDir, spaceChatAttachmentDir, spaceChatArtifactCidDir, spaceContentDir } from '../paths';
-import { writeJson } from '../storage';
+import { writeJson, safeId } from '../storage';
 import { ALLOWED_EXTENSIONS } from './chat_attachments';
 import { getMessages, listSpaceConversations } from './chats';
 
@@ -37,6 +37,71 @@ function isProducedExt(ext: string): boolean {
 }
 
 const ARTIFACT_META_FILENAME = '__cogseed-meta.json';
+
+// ── 附件/网页产物空间化迁移（搬家工人）────────────────────────────────────
+// 历史数据：空间会话的附件/网页产物落在全局 cloud/chat_attachments|chat_artifacts/<cid>/，
+// 空间化后应落 spaces/<sid>/chat_attachments|chat_artifacts/<cid>/。
+// 幂等（目标已有内容则按文件名补漏，绝不覆盖）；失败只告警不阻断。
+const _migratedSpaces = new Set<string>(); // 进程内已迁移空间（防重复扫描）
+
+function _migrateDirEntry(srcDir: string, dstDir: string): number {
+  if (!srcDir || !dstDir || !fs.existsSync(srcDir)) return 0;
+  let moved = 0;
+  try {
+    const srcExists = fs.existsSync(srcDir);
+    const dstExists = fs.existsSync(dstDir) && fs.readdirSync(dstDir).length > 0;
+    if (!srcExists) return 0;
+    if (!dstExists) {
+      // 目标空/不存在 → 整个目录搬过去（同盘 rename，跨盘 copy+rm）
+      fs.mkdirSync(path.dirname(dstDir), { recursive: true });
+      try { fs.renameSync(srcDir, dstDir); moved = 1; }
+      catch {
+        fs.cpSync(srcDir, dstDir, { recursive: true });
+        fs.rmSync(srcDir, { recursive: true, force: true });
+        moved = 1;
+      }
+    } else {
+      // 目标已有内容 → 只补漏（源有目标没有的文件），搬完删源空壳
+      let changed = false;
+      for (const name of fs.readdirSync(srcDir)) {
+        if (name.startsWith('.')) continue;
+        const from = path.join(srcDir, name);
+        const to = path.join(dstDir, name);
+        if (fs.existsSync(to)) continue; // 目标已有 → 保留目标（更新版本优先）
+        try {
+          fs.copyFileSync(from, to);
+          moved++;
+          changed = true;
+        } catch { /* best-effort */ }
+      }
+      if (changed || fs.readdirSync(srcDir).filter((n) => !n.startsWith('.')).length === 0) {
+        try { fs.rmSync(srcDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      }
+    }
+  } catch { /* 单目录迁移失败不阻断 */ }
+  return moved;
+}
+
+/** 空间附件/网页产物迁移：遍历空间会话，把全局目录搬进空间目录。幂等。返回迁移的目录数。 */
+export async function migrateSpaceAttachments(uid: string, spaceId: string): Promise<number> {
+  if (!safeId(spaceId)) return 0;
+  let conversations: Array<{ conversation_id: string }> = [];
+  try { conversations = await listSpaceConversations(uid, spaceId); } catch { return 0; }
+  let moved = 0;
+  for (const c of conversations) {
+    const cid = c.conversation_id;
+    if (!cid) continue;
+    moved += _migrateDirEntry(chatAttachmentDir(uid, cid), spaceChatAttachmentDir(uid, spaceId, cid));
+    moved += _migrateDirEntry(chatArtifactCidDir(uid, cid), spaceChatArtifactCidDir(uid, spaceId, cid));
+  }
+  if (moved > 0) {
+    try {
+      const log = (await import('../logger')).createLogger('spaces_artifacts');
+      log.info(`migrated space attachments user=${uid} sid=${spaceId} dirs=${moved}`);
+    } catch { /* best-effort */ }
+  }
+  return moved;
+}
 
 export type SpaceArtifactType = 'attachment' | 'artifact';
 /** 产物来源：attachment=上传附件；artifact=网页交互产物；produced=AI 工具产出文件。 */
@@ -267,6 +332,11 @@ async function scanProducedFiles(uid: string, spaceId: string, cid: string, out:
 /** 空间产物聚合：附件 + artifact + AI 产出文件统一列表，按时间倒序。空空间返回空数组（不 mock）。 */
 export async function listSpaceArtifacts(uid: string, spaceId: string): Promise<SpaceArtifactEntry[]> {
   if (!spaceId) return [];
+  // 触发一次附件/网页产物空间化迁移（幂等，进程内只跑一次）
+  if (!_migratedSpaces.has(spaceId)) {
+    try { await migrateSpaceAttachments(uid, spaceId); } catch { /* 迁移失败不阻断列表 */ }
+    _migratedSpaces.add(spaceId);
+  }
   const conversations = await listSpaceConversations(uid, spaceId);
   const out: SpaceArtifactEntry[] = [];
   for (const c of conversations) {

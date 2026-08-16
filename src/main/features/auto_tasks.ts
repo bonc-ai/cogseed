@@ -49,6 +49,7 @@ import {
   globalAutoTaskLocation,
   listAutoTaskLocations,
 } from '../util/project-layout';
+import { cachedConversationSpace, warmConversationSpace } from './chat_attachments';
 import { readJson, writeJson, nowIso, safeId } from '../storage';
 import { createLogger } from '../logger';
 import { t as translate } from '../i18n';
@@ -854,7 +855,8 @@ async function _stageContainerAttachments(
     ? container.updates.attachments.map((name) => _sanitiseFilename(name)).filter((name) => !!name)
     : [];
   if (!names.length || !opts.sourceAttachmentCid) return;
-  const srcDir = chatAttachmentDirForConversation(uid, opts.sourceAttachmentCid);
+  await warmConversationSpace(uid, opts.sourceAttachmentCid);
+  const srcDir = chatAttachmentDirForConversation(uid, opts.sourceAttachmentCid, null, cachedConversationSpace(uid, opts.sourceAttachmentCid) || null);
   const loc = findAutoTaskLocation(uid, taskId) || globalAutoTaskLocation(uid, taskId);
   const destDir = loc.attachmentsDir;
   if (!fs.existsSync(srcDir)) return;
@@ -1257,7 +1259,8 @@ async function _copyAttachmentsForFire(uid: string, task: AutoTask, cid: string)
   if (!_isValidTaskId(task.id)) return [];
   const srcDir = autoTaskLocationForTask(uid, task.id, task.project_id).attachmentsDir;
   if (!fs.existsSync(srcDir)) return [];
-  const destDir = chatAttachmentDirForConversation(uid, cid, task.project_id);
+  await warmConversationSpace(uid, cid);
+  const destDir = chatAttachmentDirForConversation(uid, cid, task.project_id, cachedConversationSpace(uid, cid) || null);
   try { fs.mkdirSync(destDir, { recursive: true }); } catch (_) { /* ignore */ }
   const copied: string[] = [];
   for (const name of want) {

@@ -265,8 +265,47 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   flex-shrink: 0;
 }
 
-/* Sidebar search trigger — now a small icon button in the logo row
-   (`.sidebar-icon-btn` above); these legacy full-width styles are gone. */
+/* Sidebar search trigger — sits between the logo strip and the action list. */
+.sidebar-search-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 10px 10px;
+  padding: 7px 10px;
+  border: 1px solid rgba(24, 84, 60, 0.08);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+}
+.sidebar-search-btn:hover { background: var(--surface-3); border-color: rgba(24, 84, 60, 0.14); color: var(--text); }
+.sidebar-search-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.sidebar-search-btn .sidebar-search-label { flex: 1; text-align: left; }
+.sidebar-search-btn .sidebar-search-kbd {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--muted);
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.sidebar-search-command-icon {
+  width: 11px;
+  height: 11px;
+}
 
 .sidebar-footer-icon {
   width: 14px;
@@ -590,7 +629,7 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   color: var(--text-2);
   font-size: 13px;
   font-weight: 500;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   transition: background 0.13s, color 0.13s;
   font-family: inherit;
@@ -657,8 +696,8 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   gap: 2px;
   align-items: stretch;
   padding: 6px 12px 10px;
-  border-top: 1px solid var(--border);
-  background: #fafafa;
+  border-top: 1px solid rgba(24, 84, 60, 0.06);
+  background: transparent;
   flex-shrink: 0;
 }
 .sidebar-footer-btn {
@@ -969,11 +1008,47 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid rgba(24, 84, 60, 0.06);
   margin-top: 4px;
 }
 .sidebar-conversation-nav::-webkit-scrollbar { width: 4px; }
 .sidebar-conversation-nav::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
+
+/* ZCode 式双 tab（空间 | 最近任务）：胶囊 tab 行，切换侧栏会话视图。 */
+.sidebar-conv-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  padding: 2px 2px 8px;
+}
+.sidebar-conv-tab {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #8b9ab1;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+}
+.sidebar-conv-tab:hover {
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--text-2);
+}
+.sidebar-conv-tab.is-active {
+  background: var(--surface-2);
+  color: var(--primary-text);
+  box-shadow: inset 0 0 0 1px rgba(14, 159, 110, 0.14);
+}
+.sidebar-conv-tab:focus-visible {
+  outline: 2px solid rgba(91, 87, 214, 0.26);
+  outline-offset: 1px;
+}
 
 .sidebar-section {
   flex: 0 0 auto;
@@ -2624,7 +2699,7 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   stroke-width: 2.15;
 }
 .conv-list-section-label {
-  flex: 0 1 auto;
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2651,18 +2726,18 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   line-height: 18px;
   text-align: center;
 }
-/* 侧栏「置顶 / 空间 / 最近」分区标题（分区级标签，比时间桶标题更醒目） */
+/* 侧栏「置顶 / 空间 / 最近」分区标题（分区级标签，比时间桶标题更醒目）。
+   大厂风格：克制的分组标签 —— 小字号、中字重、中性灰，无分隔线，靠留白分区。 */
 .conv-list-section-header.conv-list-space-title {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 15px 6px 7px 6px;
-  font-size: 12.5px;
-  font-weight: 800;
-  color: #334155;
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  margin-bottom: 4px;
+  padding: 14px 8px 6px 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #7c8a99;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
 }
 .conv-list-section-header.conv-list-space-title:first-child { padding-top: 8px; }
 /* 分区标题内的折叠按钮（占满，点击切换整区展开/收起） */
@@ -2716,8 +2791,53 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   margin-top: 2px;
 }
 .conv-list-section-header[data-conv-space-toggle="1"] + .conv-item-nested {
-  margin-left: 6px;
+  margin-left: 10px;
 }
+/* 空间行 ⋯ 菜单按钮：hover 显现（与最近任务行的 ⋯ 同款交互） */
+.conv-space-more-btn {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: #7f8fa8;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  visibility: hidden;
+  opacity: 0;
+  transition: background 0.12s, color 0.12s, opacity 0.12s;
+}
+.conv-space-more-btn:hover,
+.conv-space-more-btn:focus-visible {
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--primary-text);
+}
+.conv-list-section-header:hover .conv-space-more-btn,
+.conv-list-section-header:focus-within .conv-space-more-btn,
+.conv-list-section-header.is-menu-open .conv-space-more-btn {
+  visibility: visible;
+  opacity: 1;
+}
+/* 空间行内联重命名输入框 */
+.conv-space-rename-input {
+  flex: 0 1 auto;
+  min-width: 60px;
+  max-width: 180px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--primary);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(14, 159, 110, 0.12);
+}
+.conv-list-section-header.is-renaming { cursor: default; }
 /* 侧栏「最近任务」内联新建任务输入条 */
 .conv-sidebar-new-task {
   padding: 4px 10px 6px 12px;
@@ -2763,15 +2883,15 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 3px;
-  padding: 6px 9px;
+  gap: 2px;
+  padding: 5px 8px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   color: var(--text);
   font-size: 13px;
   line-height: 1.35;
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
   position: relative;
 }
 
@@ -2786,7 +2906,7 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
 .conv-item.active {
   background: var(--primary-soft);
   color: var(--primary-text);
-  border-color: rgba(91, 87, 214, 0.18);
+  border-color: rgba(14, 159, 110, 0.16);
   font-weight: 600;
 }
 .conv-item.active .conv-item-title { font-weight: 600; }
@@ -2818,6 +2938,23 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   align-items: center;
   gap: 2px;
 }
+
+/* ZCode 式行内相对时间：行尾弱化小字（58分 / 3小时 / 6小时）。
+   时间与 ⋯ 菜单相邻，hover 时菜单显现，时间让位不换行。 */
+.conv-item-time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 6px;
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 1;
+  color: #9aa7b4;
+  white-space: nowrap;
+  user-select: none;
+}
+.conv-item.active .conv-item-time { color: rgba(20, 71, 55, 0.55); }
+.conv-item:hover .conv-item-time { color: #8b9ab1; }
+.conv-item.is-menu-open .conv-item-time { visibility: hidden; }
 
 .conv-item-action {
   flex: 0 0 auto;
@@ -2860,6 +2997,11 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 未命名会话（默认「新任务」标题）：弱化显示，参照大厂对 Untitled 的处理 */
+.conv-item-title-untitled {
+  color: #9aa7b4;
+  font-weight: 400;
 }
 .conv-item-title-input {
   flex: 1;
@@ -13999,11 +14141,11 @@ body.model-not-configured .main-content { flex-direction: column; }
   margin: 0;
 }
 .settings-section-head {
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
-  color: var(--text-2);
+  color: #7c8a99;
   margin: 24px 4px 8px;
 }
 .settings-section-head:first-child { margin-top: 0; }
@@ -14389,20 +14531,21 @@ body.model-not-configured .main-content { flex-direction: column; }
    active tab overlaps it with a 2px primary underline. */
 .settings-tabs {
   display: flex;
-  gap: 20px;
+  gap: 24px;
   margin: 0 0 20px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid rgba(24, 84, 60, 0.08);
   position: relative;
 }
 .settings-tab {
   background: transparent;
   border: none;
-  padding: 8px 4px 10px;
+  padding: 8px 2px 10px;
   font-size: 13px;
   font-weight: 500;
   color: var(--text-2);
   cursor: pointer;
   position: relative;
+  transition: color 0.12s;
 }
 .settings-tab:hover { color: var(--text); }
 .settings-tab.is-active {
@@ -15307,46 +15450,101 @@ body.model-not-configured .main-content { flex-direction: column; }
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 7px;
+  gap: 2px;
+}
+/* Minimal toolbar: quiet text buttons, background only on hover. */
+.settings-custom-provider-detail-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+.settings-custom-provider-detail-actions .btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 .settings-custom-provider-state {
   display: inline-flex;
   align-items: center;
-  min-height: 30px;
-  padding: 4px 10px;
-  border-radius: 999px;
+  gap: 6px;
+  height: 24px;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 550;
   white-space: nowrap;
+}
+.settings-custom-provider-state::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 .settings-custom-provider-state.is-enabled {
   color: var(--success);
-  background: var(--success-soft);
 }
 .settings-custom-provider-state.is-disabled {
   color: var(--muted);
-  background: var(--surface-2);
 }
 .settings-custom-provider-facts {
   display: grid;
-  gap: 12px;
-  margin: 20px 0 24px;
+  gap: 7px;
+  margin: 16px 0 18px;
 }
-.settings-custom-provider-facts > div { display: grid; gap: 5px; }
+.settings-custom-provider-facts > div {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
 .settings-custom-provider-facts dt {
+  flex: 0 0 96px;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 500;
 }
 .settings-custom-provider-facts dd {
+  flex: 1;
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
+  font-size: 13px;
+  color: var(--text);
+}
+.settings-custom-provider-facts dd.account-mask {
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 .settings-custom-provider-detail-models-head { margin-bottom: 10px; }
 .settings-custom-provider-detail-models-head h4 {
   margin: 0;
-  font-size: 14px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-2);
+  letter-spacing: 0.2px;
+}
+.settings-custom-provider-detail-models-head .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+}
+.settings-custom-provider-detail-models-head .btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 .settings-custom-provider-detail-model-list {
   overflow: hidden;
@@ -15357,8 +15555,8 @@ body.model-not-configured .main-content { flex-direction: column; }
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 56px;
-  padding: 9px 12px;
+  min-height: 44px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--border);
 }
 .settings-custom-provider-detail-model-row:last-child { border-bottom: 0; }
@@ -15367,37 +15565,60 @@ body.model-not-configured .main-content { flex-direction: column; }
   align-items: center;
   flex: 1 1 auto;
   min-width: 0;
-  gap: 8px;
+  gap: 7px;
 }
 .settings-custom-provider-detail-model-info strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 13px;
+  font-weight: 550;
 }
+/* Token badges stay plain text — no chips, no tinted backgrounds. */
 .settings-custom-provider-detail-model-info span {
   flex: 0 0 auto;
-  padding: 2px 7px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--muted);
   font-size: 11px;
-  line-height: 1.3;
+  font-weight: 400;
+  line-height: 1.4;
 }
 .settings-custom-provider-detail-model-actions {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-  gap: 4px;
+  gap: 1px;
 }
+/* Ghost icon buttons: no border, no fill; subtle hover only. */
 .settings-custom-provider-detail-model-actions .icon-btn,
 .settings-custom-provider-detail-actions > .icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 24px;
+  height: 24px;
   padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+.settings-custom-provider-detail-model-actions .icon-btn:hover,
+.settings-custom-provider-detail-actions > .icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.settings-custom-provider-detail-model-actions .icon-btn.danger,
+.settings-custom-provider-detail-actions > .icon-btn.danger {
+  color: var(--danger);
+}
+.settings-custom-provider-detail-model-actions .icon-btn.danger:hover,
+.settings-custom-provider-detail-actions > .icon-btn.danger:hover {
+  background: rgba(220, 38, 38, 0.08);
+  color: var(--danger);
 }
 .settings-custom-provider-action-icon { width: 15px; height: 15px; }
 .settings-custom-provider-detail-actions button.is-busy,
@@ -15878,6 +16099,13 @@ body.model-not-configured .main-content { flex-direction: column; }
 .entry-row.is-default .ai-select-compact .ai-select-trigger {
   background: var(--primary-soft);
 }
+/* Model picker sits to the left of the settings (gear) button.
+   Fixed width keeps the capsule column aligned across rows. */
+.entry-actions .entry-model-select {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 150px;
+}
 .ai-select-compact .ai-select-caret { width: 10px; height: 10px; }
 .ai-select-compact .ai-select-popover { min-width: 180px; }
 
@@ -15949,6 +16177,46 @@ body.model-not-configured .main-content { flex-direction: column; }
   gap: 4px;
   min-width: 0;
 }
+/* Model config entries render on a single line: provider, API key badge and
+   status sit next to each other. */
+#settings-entries .entry-main {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+#settings-entries .entry-meta {
+  flex: 1;
+  min-width: 0;
+}
+/* Unified control sizing inside the model config list: pills, badges and
+   buttons share one 28px rhythm so each row reads as a single line. */
+#settings-entries .entry-rank {
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 16px;
+}
+#settings-entries .account-type-badge {
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 16px;
+}
+#settings-entries .entry-api-key-capsule {
+  padding: 5px 4px 5px 12px;
+}
+#settings-entries .entry-api-key-input {
+  line-height: 16px;
+}
+#settings-entries .entry-api-key-toggle {
+  width: 20px;
+  height: 20px;
+}
+#settings-entries .ai-select-compact .ai-select-trigger {
+  padding: 5px 10px;
+  line-height: 16px;
+}
+#settings-entries .entry-actions .icon-btn {
+  line-height: 16px;
+}
 .entry-primary {
   display: flex;
   align-items: center;
@@ -15956,6 +16224,11 @@ body.model-not-configured .main-content { flex-direction: column; }
   font-size: 13px;
 }
 .entry-provider {
+  flex: 0 0 190px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   color: var(--text);
 }
@@ -16017,6 +16290,58 @@ body.model-not-configured .main-content { flex-direction: column; }
   font-family: var(--font-mono);
   color: var(--text-2);
 }
+
+/* Editable API-key capsule inside model config entry rows: a long pill with
+   the key (dot-masked by default) and a reveal eye at its right end. */
+.entry-api-key-capsule {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 12px;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: 99px;
+  transition: border-color .15s, background .15s;
+  cursor: text;
+}
+.entry-api-key-capsule:focus-within {
+  border-color: var(--primary);
+  background: var(--surface);
+}
+.entry-row.is-default .entry-api-key-capsule {
+  background: rgba(255, 255, 255, 0.55);
+}
+.entry-api-key-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  cursor: text;
+}
+.entry-api-key-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.entry-api-key-toggle:hover { background: var(--surface-2); color: var(--text-2); }
+.entry-api-key-toggle .ui-icon { width: 14px; height: 14px; }
 
 .entry-actions {
   display: flex;
@@ -16713,6 +17038,17 @@ body.model-not-configured .main-content { flex-direction: column; }
 .avatar-circle svg {
   display: block;
   pointer-events: none;
+}
+/* 头像用原图(品牌 logo 等)：完整显示不裁剪(原图自带透明留白) */
+.avatar-circle .avatar-img {
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+/* 图片图标(透明底)用白底衬托，避免彩色圆背景干扰 logo 配色 */
+.avatar-circle:has(.avatar-img) {
+  background: #fff;
 }
 .avatar-circle.is-clickable {
   cursor: pointer;
@@ -24787,6 +25123,25 @@ body.model-not-configured .main-content { flex-direction: column; }
 @media (max-width: 820px) { .touchpoint-approval-layout { grid-template-columns: 1fr; } .touchpoint-template-preview { position: static; } }
 @media (max-width: 620px) { .touchpoint-manager-header { flex-wrap: wrap; } .touchpoint-manager-header > div:nth-child(2) { flex-basis: calc(100% - 52px); } .touchpoint-manager-actions { width: 100%; padding-left: 46px; } .touchpoint-manager-actions .btn { flex: 1 1 0; } .touchpoint-scene-tabs { overflow-x: auto; } .touchpoint-scene-tab { flex: 0 0 auto; min-width: 100px; } .touchpoint-template-button-fields, .touchpoint-template-routing { grid-template-columns: 1fr; } .touchpoint-template-routing { padding-left: 23px; } }
 
+/* P3394 node message badge (external agent traffic via the bridge). */
+.p3394-node-badge {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 6px; padding: 3px 10px;
+  background: rgba(99, 102, 241, 0.07);
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  border-radius: 8px;
+  font-size: 12px; line-height: 20px;
+  color: #6366f1;
+}
+.p3394-node-badge-icon { font-size: 13px; }
+.p3394-node-badge-name { font-weight: 600; }
+.p3394-node-badge-tag {
+  margin-left: auto;
+  font-size: 10px; font-weight: 600;
+  background: rgba(99, 102, 241, 0.12);
+  padding: 1px 6px; border-radius: 5px;
+  letter-spacing: 0.3px;
+}
 .auto-time-adjust-card {
   background: #f0fdf4;
   border: 1px solid #bbf7d0;

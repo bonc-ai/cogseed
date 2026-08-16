@@ -55,6 +55,20 @@ export function createMateHostToolRouter(deps: MateHostToolRouterDeps = {}) {
           signal: context.signal,
         }));
       }
+      // P3394 agent interop (outbound): Commander-only, capability re-derived
+      // from the persisted task/session chain on every call.
+      if (call.name === 'p3394_send') {
+        const capabilities = await resolveRuntimeCapabilities(request.user_id, request.request_id, request.runtime_session_id);
+        if (!capabilities.includes('p3394.interop')) {
+          return { content: '[E_RUNTIME_HOST_TOOL_FORBIDDEN] p3394_send requires a Commander runtime scope', isError: true };
+        }
+        const { runP3394HostTool } = await import('./p3394-host-adapter');
+        return cap(await runP3394HostTool(call.input, {
+          userId: request.user_id,
+          sourceKey: `${request.request_id}:${call.call_id}`,
+          signal: context.signal,
+        }));
+      }
       try {
         if (call.name === 'mate_delegate') {
           const task = typeof call.input.task === 'string' ? call.input.task.trim() : '';

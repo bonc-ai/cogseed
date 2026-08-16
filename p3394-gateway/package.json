@@ -1,0 +1,11 @@
+{
+  "name": "@cogseed/p3394-gateway",
+  "version": "0.1.0",
+  "description": "给对端 Agent 装的 P3394 实现包 — 装上即内建 P3394，与 CogSeed 直接互通（默认适配 Hermes，可配任意 CLI Agent）。",
+  "license": "MIT",
+  "bin": { "p3394-gateway": "gateway.cjs" },
+  "files": ["gateway.cjs", "README.md"],
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node gateway.cjs" }
+}
+
