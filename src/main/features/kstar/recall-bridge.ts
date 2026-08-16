@@ -19,8 +19,9 @@ export async function saveKstarCandidateProposals(
       // 不传时 value 默认成 summary（标题），promote 会把标题残片拼进
       // statement（已观测：'可复用经验：数据的文档…' 污染资产正文）。
       // 注意新建路径防呆：显式 value 必须配显式 suggestedAction，否则 weak。
+      // KstarCandidateProposal 不再携带 suggestedAction——suggestedAction 由
+      // saveRecallCandidate 默认派生（create），此处显式传 value 已满足 reviewReady。
       value: proposal.judgment,
-      suggestedAction: proposal.suggestedAction || 'create',
       ...(proposal.summary ? { summary: proposal.summary } : {}),
       ...(proposal.uncertainty ? { uncertainty: proposal.uncertainty } : {}),
       suggestedType: proposal.suggestedType,

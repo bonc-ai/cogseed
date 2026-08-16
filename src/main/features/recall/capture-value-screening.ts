@@ -50,7 +50,8 @@ export type RecallCaptureCandidateQualityReason =
   | 'missing_user_evidence'
   | 'candidate_too_short'
   | 'value_not_explanatory'
-  | 'candidate_not_reusable';
+  | 'candidate_not_reusable'
+  | 'platitude_no_specifics';
 
 export type RecallCaptureAutomaticIneligibilityReason =
   | RecallCaptureCandidateQualityReason

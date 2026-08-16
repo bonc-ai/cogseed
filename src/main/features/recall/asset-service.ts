@@ -465,7 +465,7 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
 export async function mergeAbilityAssetEvidence(
   userId: string,
   assetId: string,
-  newRefs: Array<{ kind: string; id: string }>,
+  newRefs: RecallAbilityAssetRecord['evidenceRefs'],
   metadata: { reason: string; actor: AbilityAssetActor },
 ): Promise<RecallAbilityAssetRecord> {
   const current = await readAbilityAsset(userId, assetId);
@@ -491,7 +491,7 @@ export async function mergeAbilityAssetEvidence(
 
 function mergeRefsDedup(
   left: RecallAbilityAssetRecord['evidenceRefs'],
-  right: Array<{ kind: string; id: string }>,
+  right: RecallAbilityAssetRecord['evidenceRefs'],
 ): RecallAbilityAssetRecord['evidenceRefs'] {
   const seen = new Set<string>();
   const out: RecallAbilityAssetRecord['evidenceRefs'] = [];
