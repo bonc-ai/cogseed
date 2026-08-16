@@ -2930,8 +2930,13 @@ async function _csFinish() {
     // 步骤在注册入口融合后追加。
     if (typeof window.interactiveTour !== 'undefined' && typeof window.interactiveTour.start === 'function') {
       setTimeout(() => {
-        try { window.interactiveTour.start(); } catch (err) {
-          _obLog.warn('interactive tour start failed', { error: (err && err.message) || String(err) });
+        // start 是 async（先查 per-account 完成标记再决定是否弹出），同步 try/catch
+        // 捕不到异步 reject，改用 .catch 兜底。
+        const p = window.interactiveTour.start();
+        if (p && typeof p.catch === 'function') {
+          p.catch((err) => {
+            _obLog.warn('interactive tour start failed', { error: (err && err.message) || String(err) });
+          });
         }
       }, 600);
     }
