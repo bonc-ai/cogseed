@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assessRecallCandidateClassification,
   assessRecallCaptureCandidateQuality,
   screenRecallCaptureValue,
 } from '../../../../src/main/features/recall/capture-value-screening';
@@ -349,5 +350,136 @@ describe('Recall capture candidate quality', () => {
       automaticEligible: true,
       automaticIneligibilityReasons: [],
     });
+  });
+});
+
+// 归类校验守的是 PRD 3.1/3.2/3.3 的硬边界：提示词只能"要求"模型按四类定义
+// 分类，这一层保证它没照做时候选也进不了 pending_review。
+describe('Recall candidate classification gate', () => {
+  const base = {
+    suggestedScope: 'project',
+    suggestedAction: 'create' as const,
+    valueProvided: true,
+    actionProvided: true,
+  };
+
+  it('rejects a current-task fact claiming to be a personal ontology asset', () => {
+    const result = assessRecallCandidateClassification({
+      ...base,
+      judgment: '我今天在修 KSTAR 的候选池',
+      summary: '当前任务',
+      value: '记录当前进度',
+      suggestedType: 'personal',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blockingReasons).toContain('personal_is_project_fact');
+  });
+
+  it('accepts a durable personal preference', () => {
+    const result = assessRecallCandidateClassification({
+      ...base,
+      judgment: '我长期更喜欢先看整体结构再看细节',
+      summary: '结构优先',
+      value: '后续任务先给结构再展开，可以少一轮返工',
+      suggestedType: 'personal',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.blockingReasons).toEqual([]);
+  });
+
+  it('rejects a raw source file claiming to be a template', () => {
+    const result = assessRecallCandidateClassification({
+      ...base,
+      judgment: '保存这份 PRD.docx 以后参考',
+      summary: '上传的文件',
+      value: '以后可以再看',
+      suggestedType: 'template',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blockingReasons).toContain('template_not_reusable_structure');
+  });
+
+  it('accepts a reusable structure extracted from a source file', () => {
+    const result = assessRecallCandidateClassification({
+      ...base,
+      judgment: '复杂 AI 产品 PRD 的稳定章节结构：问题定义、对象模型、边界、验收标准',
+      summary: 'PRD 章节模板',
+      value: '下次写同类 PRD 可以直接套用这个大纲',
+      suggestedType: 'template',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.blockingReasons).toEqual([]);
+  });
+
+  it('rejects a bare capability claim typed as a method', () => {
+    const result = assessRecallCandidateClassification({
+      ...base,
+      judgment: '我擅长写 PRD',
+      summary: '写作能力',
+      value: '以后写 PRD 会更快',
+      suggestedType: 'skill_method',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blockingReasons).toContain('skill_not_executable');
+  });
+
+  // 归类层只拦"根本不是方法"的东西。完整 SkillManifest 校验属于 Skill 正式
+  // 准入（PRD 8.2），放在这里会误伤逗号连接的正常写法。
+  it('accepts a comma-joined action sequence as a method', () => {
+    const result = assessRecallCandidateClassification({
+      ...base,
+      judgment: 'Review the request, apply the method, and validate the result.',
+      summary: 'Evidence-first review method',
+      value: 'Keeps later reviews from skipping the validation step.',
+      suggestedType: 'skill_method',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.advisoryReasons).toContain('skill_shape_incomplete');
+  });
+
+  it('accepts a method that states trigger, plan, output and validation', () => {
+    const result = assessRecallCandidateClassification({
+      ...base,
+      judgment: '进入新产品定义阶段时，先做问题定义，再建对象模型，然后画 Golden Path，最后补边界；输出一份 PRD，验收标准是完整性与可验证性都通过复核。',
+      summary: '复杂产品 PRD 编写方法',
+      value: '同类任务可以按同一套步骤走完，不用每次重新设计流程',
+      suggestedType: 'skill_method',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.blockingReasons).toEqual([]);
+  });
+
+  it('flags a rule without applicable or forbidden boundaries without blocking it', () => {
+    const result = assessRecallCandidateClassification({
+      ...base,
+      judgment: '正式评审必须先讲产品模型，再谈实现细节',
+      summary: '评审顺序规则',
+      value: '避免评审跑偏到实现细节上',
+      suggestedType: 'rule',
+    });
+
+    // PRD 3.1 要求 RuleAsset 确认适用与禁止范围，但缺失时如何处置尚未冻结
+    // （spec Q1）。在决策前只如实记录，不改变自动线产能。
+    expect(result.ok).toBe(true);
+    expect(result.advisoryReasons).toContain('rule_missing_boundary');
+  });
+
+  it('stops flagging a rule once boundaries are supplied', () => {
+    const result = assessRecallCandidateClassification({
+      ...base,
+      judgment: '正式评审必须先讲产品模型，再谈实现细节',
+      summary: '评审顺序规则',
+      value: '避免评审跑偏到实现细节上',
+      suggestedType: 'rule',
+    }, { applicableWhen: ['正式评审'], forbiddenWhen: ['内部快速对齐'] });
+
+    expect(result.advisoryReasons).not.toContain('rule_missing_boundary');
   });
 });

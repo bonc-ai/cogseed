@@ -25,10 +25,10 @@ description: "电商比价调研：多平台比价（淘宝/京东/拼多多/抖
 <!-- NSEAP-GATE:BEGIN -->
 ## NSEAP Gate 契约
 
-- `use_when`：电商比价调研：多平台比价（淘宝/京东/拼多多/抖音），输出价格带分布、促销节奏与定价建议。，并具备完成该任务所需的授权材料、环境和范围。
-- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「ecommerce-price-research」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
-- `positive_examples`：`请基于已授权材料执行ecommerce-price-research，输出结构化的可审计结果并保留证据定位。`
-- `negative_examples`：`缺少执行ecommerce-price-research所需证据，仍请直接定稿。`
+- `use_when`：需要新品定价、大促前调价或竞品价格监测：对目标商品做多平台比价（淘宝/京东/拼多多/抖音），输出价格带分布、促销节奏与定价建议，且已确认商品关键词与平台清单。
+- `do_not_use_when`：任务不是比价调研（如直接决定定价并发布）；商品关键词或平台未确认却要求直接出建议；要求编造价格、销量数据或访问未授权渠道。
+- `positive_examples`：`调研这款保温杯在淘宝/京东/拼多多的价格带与促销节奏，给出定价建议。`；`大促前调价，监测这三家平台的竞品价格。`
+- `negative_examples`：`没有平台数据，你凭经验给个价格。`；`把竞品旗舰店的内部销量数据编出来。`
 
-本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
 <!-- NSEAP-GATE:END -->

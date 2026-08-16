@@ -1,9 +1,9 @@
 /**
  * Hub account orchestration for the desktop app.
  *
- * Flow (mirrors the Hub API contract v1.1):
+ * Flow (mirrors the Hub API contract):
  *   1. `startLogin`   — GET /auth/login → authorize_url, remember state
- *   2. open browser   — user authorizes on GitHub; the deep link
+ *   2. open browser   — user signs in on the official website; the deep link
  *                       `cogseed://account/callback?code=..&state=..` comes back
  *                       (delivered via `features/connectors/protocol.ts`)
  *   3. `completeLogin`— POST /auth/callback {code,state} → store session
@@ -67,7 +67,7 @@ function _isExpiringSoon(session: HubSession, withinMs: number): boolean {
  * The caller (IPC layer) opens the browser.
  */
 export async function startLogin(userId: string, client: HubClient = hubClient()): Promise<{ authorize_url: string; state: string }> {
-  const { authorize_url, state } = await client.login('github', ACCOUNT_CALLBACK_URL);
+  const { authorize_url, state } = await client.login('web', ACCOUNT_CALLBACK_URL);
   _pendingState = state;
   writeHubAccountState(userId, { pending_login: { state, started_at: new Date().toISOString() } });
   return { authorize_url, state };

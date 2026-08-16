@@ -94,6 +94,11 @@ if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "${ORKAS_HUB_API_BASE:-}" ]; then
       OPEN_ENV_ARGS+=(--env "ORKAS_HUB_API_BASE=$ORKAS_HUB_API_BASE")
     fi
+    # Hub 账号发布 Gate 显式开关（gate.ts 的 env override）。
+    # 源码开发模式默认关；本地联调登录功能时用 COGSEED_HUB_ENABLED=true 启动。
+    if [ -n "${COGSEED_HUB_ENABLED:-}" ]; then
+      OPEN_ENV_ARGS+=(--env "COGSEED_HUB_ENABLED=$COGSEED_HUB_ENABLED")
+    fi
     if [ -n "${ORKAS_KSTAR_ENGINE_COMMAND:-}" ] && [ -n "${ORKAS_KSTAR_ENGINE_ARGS:-}" ]; then
       ARGS+=("--orkas-kstar-engine-command=$ORKAS_KSTAR_ENGINE_COMMAND")
       ARGS+=("--orkas-kstar-engine-args=$ORKAS_KSTAR_ENGINE_ARGS")

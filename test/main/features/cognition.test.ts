@@ -53,20 +53,13 @@ describe('cognition feature aggregate layer', () => {
     const assets = await cognition.listCognitionAssets(UID);
     expect(assets.some((asset) => asset.id === 'memory:user')).toBe(false);
     expect(assets.some((asset) => asset.category === 'skill' || asset.type === 'skill')).toBe(false);
+    // 个人本体「分组」是 PRD 3.3 的非资产支撑对象，不占四类一级分类。它曾被
+    // 合成为 `CA-PERSONAL-*` 条目并硬编码 maturity: 'transfer_validated' —— 在
+    // 没有 TransferProof / Receipt 的情况下伪造成熟度（PRD 3.6）。分组的入口在
+    // 「关于我」tab，不该在资产列表里重复出现。
+    expect(assets.some((asset) => asset.id === `CA-PERSONAL-${created.group?.group_id}`)).toBe(false);
+    expect(assets.some((asset) => asset.source === 'personal_ontology')).toBe(false);
     expect(assets).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: `CA-PERSONAL-${created.group?.group_id}`,
-        category: 'personal',
-        type: 'personal',
-        title: 'Research ontology',
-        maturity: 'transfer_validated',
-        status: 'active',
-        owner: expect.any(String),
-        scope: expect.any(String),
-        workspaceRefs: expect.any(Array),
-        receiptRefs: expect.any(Array),
-        candidateRefs: expect.any(Array),
-      }),
       expect.objectContaining({
         id: recallAsset.id,
         source: 'recall_ability_asset',

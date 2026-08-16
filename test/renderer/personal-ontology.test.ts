@@ -68,20 +68,21 @@ describe('personal ontology renderer integration', () => {
     expect(invoke).toHaveBeenCalledWith('cognition.assets.list', {});
   });
 
-  it('contains the embedded panel, about-me tab, rejection modal, and lazy view wiring', () => {
+  it('contains the embedded panel inside My assets, rejection modal, and lazy view wiring', () => {
     for (const id of [
       'panel-personal-ontology', 'personal-onto-sidebar',
       'personal-onto-nav', 'personal-onto-main-header', 'personal-onto-main-body',
       'personal-onto-template-library-modal', 'personal-onto-template-library-list',
     ]) expect(html).toContain(`id="${id}"`);
-    expect(html).toContain('id="skills-cognition-tab-about-me"');
-    // Personal ontology is embedded inside Recall's "关于我" pane.
-    const paneStart = html.indexOf('id="skills-cognition-about-me"');
+    // 「关于我」并入「我的资产」：不再有独立 tab，个人本体在 personal 分类下展开。
+    expect(html).not.toContain('skills-cognition-tab-about-me');
+    const paneStart = html.indexOf('id="skills-cognition-personal-ontology"');
     expect(paneStart).toBeGreaterThan(0);
     const paneHtml = html.slice(paneStart, html.indexOf('</main>', paneStart));
     expect(paneHtml).toContain('id="panel-personal-ontology"');
-    expect(boot).toContain("view === 'skills' || view === 'personal-ontology' ? 'panel-recall'");
-    expect(boot).toContain("switchSkillsCognitionPage('about-me')");
+    // 技能库已移出到连接页，personal-ontology 深链仍归认知资产。
+    expect(boot).toContain("view === 'personal-ontology' ? 'panel-recall'");
+    expect(boot).toContain("switchSkillsCognitionPage('assets')");
     expect(boot).toContain("_loadViewFeature('recall', 'recall'");
     // The sidebar button is gone; personal ontology is reached from Recall's
     // "关于我" tab instead of a fixed primary entry.

@@ -47,6 +47,7 @@ import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
+import * as formalAssets from '../features/recall/formal-assets';
 import * as recallUsage from '../features/recall/usage-service';
 import * as recallUsageFeedback from '../features/recall/usage-feedback-service';
 import * as effectivenessFeedback from '../features/recall/effectiveness-feedback';
@@ -2232,12 +2233,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, { riskAcknowledged: riskAcknowledged === true })) };
   },
 
-  'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
+  // 资产读口统一走 canonical layer：出去的每一条必然是四类正式资产，
+  // 渲染层不需要再自己辨真假。返回底层记录形状以保持读兼容。
+  'recall.assets.list': async (_args, ctx) => ({
+    ok: true,
+    assets: (await formalAssets.listFormalAssets(ctx.userId)).map((asset) => asset.record),
+  }),
   'recall.assets.listForSpace': async ({ spaceId } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid space id');
-    return { ok: true, assets: await recallAssets.listAbilityAssetsForSpace(ctx.userId, spaceId) };
+    return {
+      ok: true,
+      assets: (await formalAssets.listFormalAssets(ctx.userId, { spaceId })).map((asset) => asset.record),
+    };
   },
-  'recall.assets.read': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, asset: await recallAssets.readAbilityAsset(ctx.userId, assetId) }; },
+  'recall.assets.read': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    const asset = await formalAssets.getFormalAsset(ctx.userId, assetId);
+    if (!asset) throw new Error('recall ability asset not found');
+    return { ok: true, asset: asset.record };
+  },
   'recall.assets.update': async ({ assetId, title, statement, scope, scopePolicy, type, evidenceRefs, ontologyRefs, relations, derivedFrom, reason, acknowledgeRecommendation } = {}, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');
     const note = boundedText(reason, 'recall asset update reason', 1_000);
@@ -2370,6 +2384,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.tree.rebuild': async (_args, ctx) => ({ ok: true, tree: await recallTree.rebuildCognitionTree(ctx.userId) }),
   'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
 
+  // 「使用与证明」视图：timeline-service 已按资产把使用、迁移证明、效果证明和
+  // 治理事件聚合成一条事实链，但此前没有 IPC 暴露，渲染层拿不到。
+  'recall.timeline.forAsset': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    return { ok: true, items: await formalAssets.listFormalAssetTimeline(ctx.userId, assetId) };
+  },
+  'recall.timeline.list': async ({ limit } = {}, ctx) => {
+    const bounded = limit === undefined ? undefined : Number(limit);
+    if (bounded !== undefined && (!Number.isFinite(bounded) || bounded <= 0 || bounded > 2_000)) {
+      throw new Error('invalid recall timeline limit');
+    }
+    return { ok: true, items: await formalAssets.listFormalAssetTimeline(ctx.userId, undefined, bounded) };
+  },
+
   'recall.usage.feedback': async ({ cid, messageId, feedback } = {}, ctx) => {
     if (!safeId(cid) || !safeId(messageId) || (feedback !== 'positive' && feedback !== 'negative')) {
       throw new Error('invalid Recall usage feedback');
@@ -2443,6 +2471,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ...(Number.isFinite(n) && n > 0 ? { limit: Math.min(n, 500) } : {}),
     }) };
   },
+
+  // 「待我处理」的唯一读口。判断规则在 formal-assets/inbox.ts，与晋升 gate、
+  // Runtime gate 复用同一批函数——渲染层不再自己判断什么算待办。
+  'cognition.inbox.list': async (_args, ctx) => ({
+    ok: true,
+    items: await cognition.listCognitionInbox(ctx.userId),
+  }),
 
   'cognition.skills.summary': async ({ skillId } = {}, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skill id');

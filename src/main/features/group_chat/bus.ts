@@ -1268,6 +1268,11 @@ interface CidState {
     projectionId?: string;
     forecastId?: string;
     wakeRequestId?: string;
+    /** 本次运行里真正落过 ContextReuseReceipt 的轮次 id。
+     *  回执按 `turn-<turnId>` 存（与 execution-records 同名），终态事件带上这份
+     *  清单，迁移证明就能显式关联到"哪一次真实加载"——不靠时间窗反查，也不靠
+     *  execution id 推断粘合。 */
+    reuseTurnIds?: string[];
   };
 }
 
@@ -1290,6 +1295,9 @@ export interface TaskTerminalEvent {
   execution_id?: string;
   projection_id?: string;
   forecast_id?: string;
+  /** 本次运行里落过 ContextReuseReceipt 的轮次 id（回执键为 `turn-<id>`）。
+   *  迁移证明凭这份清单找到真实加载凭证，一一对应，不做推断。 */
+  reuse_turn_ids?: string[];
   wake_request_id?: string;
 }
 
@@ -1501,6 +1509,7 @@ function _emitTaskRunTerminalIfQuiescent(
       ...(run.projectionId ? { projection_id: run.projectionId } : {}),
       ...(run.forecastId ? { forecast_id: run.forecastId } : {}),
       ...(run.wakeRequestId ? { wake_request_id: run.wakeRequestId } : {}),
+      ...(run.reuseTurnIds?.length ? { reuse_turn_ids: [...run.reuseTurnIds] } : {}),
     };
     if (!event.projection_id || !event.logical_run_id || !event.wake_request_id) {
       try {
@@ -3963,6 +3972,14 @@ async function runActorTurnBody(
           const { reuseRefsForTurn, truncatedByBudget } = await import(
             "../recall/inherited-cognition-prompt"
           );
+          // 回执落成即登记到本次运行：终态事件靠这份清单把迁移证明关联到
+          // 真实加载凭证。登记发生在注入的同一处，与回执用同一份事实。
+          if (state.taskRun) {
+            const turns = state.taskRun.reuseTurnIds || [];
+            if (!turns.includes(item.turnId)) {
+              state.taskRun.reuseTurnIds = [...turns, item.turnId];
+            }
+          }
           await recordInheritedCognitionReuse(
             uid,
             cid,

@@ -8,6 +8,20 @@ const recallCss = [
   fs.readFileSync(path.join(__dirname, '../../src/renderer/recall-local.css'), 'utf-8'),
 ].join('\n');
 
+/**
+ * 取出一个顶层函数的函数体文本。断言"某个面板出现在哪个视图里"必须限定到
+ * 单个函数——在整份 skills.js 上做 toContain 只能证明这段代码存在，证明不了
+ * 它挂在哪个页面上，而这里要守的恰恰是归属。
+ */
+function sliceFunction(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`function ${name} not found`);
+  // 到下一个顶层 `function` 声明为止。不数花括号：skills.js 全是嵌套模板字符串，
+  // 括号计数会被 `${...}` 和 '{count}' 这类字面量带偏。
+  const next = source.indexOf('\nfunction ', start + 1);
+  return source.slice(start, next < 0 ? source.length : next);
+}
+
 function cssBraceDepthAt(source: string, offset: number): number {
   let depth = 0;
   let quote = '';
@@ -40,12 +54,29 @@ function cssBraceDepthAt(source: string, offset: number): number {
 }
 
 describe('Recall cognition workspace layout', () => {
+  /**
+   * 四个任务视图回答的是"用户来这里要做什么"：需要我决定什么 / 我拥有什么 /
+   * 是否真的有用 / 我怎样控制。它们与"四类资产"（关于我、规则与偏好、模板与
+   * 范例、技能与方法）不是一回事——四类资产全部在「我的资产」里面。
+   *
+   * `overview` 不再是任务视图：总览不是用户要完成的事，深链由
+   * switchSkillsCognitionPage 归一化到 inbox，页面上不再有它的 tab / pane。
+   */
   it('keeps Recall navigation focused on four user workflows', () => {
-    for (const page of ['overview', 'captures', 'assets', 'sources']) {
+    for (const page of ['inbox', 'assets', 'proofs', 'governance']) {
       expect(html).toContain(`data-cognition-page="${page}"`);
       expect(html).toContain(`data-cognition-page-body="${page}"`);
     }
-    for (const excluded of ['candidates', 'receipts', 'brain', 'context', 'ontology', 'kstar', 'evolution', 'capability']) {
+    // 来源与沉淀活动降为页头辅助入口：仍有 pane，但不占任务视图的位置。
+    for (const aux of ['sources', 'captures']) {
+      expect(html).toContain(`data-cognition-page="${aux}"`);
+      expect(html).toContain(`data-cognition-page-body="${aux}"`);
+    }
+    const tabNav = html.slice(html.indexOf('id="skills-cognition-tabs"'), html.indexOf('</nav>', html.indexOf('id="skills-cognition-tabs"')));
+    for (const aux of ['sources', 'captures']) {
+      expect(tabNav).not.toContain(`data-cognition-page="${aux}"`);
+    }
+    for (const excluded of ['overview', 'candidates', 'receipts', 'brain', 'context', 'ontology', 'kstar', 'evolution', 'capability']) {
       expect(html).not.toContain(`data-cognition-page="${excluded}"`);
       expect(html).not.toContain(`data-cognition-page-body="${excluded}"`);
     }
@@ -90,12 +121,56 @@ describe('Recall cognition workspace layout', () => {
     }
   });
 
-  it('embeds the skill library inside Recall\'s 我的能力 tab (no sibling panel)', () => {
+  // 「使用与证明」是 CogSeed 区别于普通 Memory / Skill 库的地方：它必须回答
+  // "这条资产在哪里用过、真的起作用了吗"，且结论用用户能读懂的话，不露内部枚举。
+  it('exposes use-and-proof as its own task view backed by the fact chain', () => {
+    expect(html).toContain('data-cognition-page="proofs"');
+    expect(html).toContain('data-cognition-page-body="proofs"');
+    expect(html).toContain('id="skills-cognition-proofs-body"');
+
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
+    expect(skills).toContain('recall.timeline.list');
+    // 治理事件属于「版本与治理」，不能混进这一页。
+    expect(skills).toMatch(/_COGNITION_PROOF_KINDS[\s\S]{0,240}effectiveness_recorded/);
+    expect(skills).not.toMatch(/_COGNITION_PROOF_KINDS[\s\S]{0,240}asset_rolled_back/);
+    // 结果状态必须翻译成用户说法，不能直接把 better/worse 打到界面上。
+    for (const key of [
+      'cognition.proof_carried_in', 'cognition.proof_effective', 'cognition.proof_no_diff',
+      'cognition.proof_negative', 'cognition.proof_degraded', 'cognition.proof_rework',
+    ]) expect(skills).toContain(key);
+  });
+
+  // 任务视图回答"用户来这里要做什么"；来源是输入配置、沉淀活动是后台加工
+  // 进度，两者都不是任务，降为页头辅助入口。它们打开的仍是同一批 page body。
+  it('keeps sources and capture activity as header entries, not task tabs', () => {
+    const navStart = html.indexOf('id="skills-cognition-tabs"');
+    const navEnd = html.indexOf('</nav>', navStart);
+    expect(navStart).toBeGreaterThan(0);
+    const navHtml = html.slice(navStart, navEnd);
+    for (const page of ['sources', 'captures']) {
+      expect(navHtml).not.toContain(`data-cognition-page="${page}"`);
+      // 页面本体仍在，只是入口换了位置。
+      expect(html).toContain(`data-cognition-page-body="${page}"`);
+      expect(html).toContain(`class="btn btn-sm cognition-aux-entry" data-cognition-page="${page}"`);
+    }
+    // 辅助入口不得伪装成 tab：没有 role="tab"，就不该出现在 tablist 语义里。
+    const headerStart = html.indexOf('class="skills-cognition-header"');
+    const headerHtml = html.slice(headerStart, html.indexOf('</header>', headerStart));
+    expect(headerHtml).toContain('cognition-aux-entry');
+    expect(headerHtml).not.toContain('role="tab"');
+  });
+
+  // 技能市场与外部 Skill 库是「可用资源」，安装/导入不等于用户已确认拥有，
+  // 所以它们不属于个人认知资产，移到连接页「技能」tab。个人已确认的 Skill
+  // 仍以 skill_method 正式资产留在认知资产「技能与方法」分类里。
+  it('hosts the skill library in the Connections 技能 tab, not inside Recall', () => {
     expect(html).toContain('id="recall-btn"');
     expect(html).toContain('id="panel-recall"');
-    const paneStart = html.indexOf('id="skills-cognition-my-abilities"');
+    expect(html).not.toContain('skills-cognition-my-abilities');
+    expect(html).toContain('data-connections-tab="skills"');
+    const paneStart = html.indexOf('id="connections-pane-skills"');
     expect(paneStart).toBeGreaterThan(0);
-    const paneEnd = html.indexOf('</main>', paneStart);
+    const paneEnd = html.indexOf('id="connections-pane-sources"', paneStart);
     expect(paneEnd).toBeGreaterThan(paneStart);
     const paneHtml = html.slice(paneStart, paneEnd);
     expect(paneHtml).toContain('id="panel-skills"');
@@ -108,18 +183,17 @@ describe('Recall cognition workspace layout', () => {
     expect(paneHtml).toContain('id="skills-chat-input"');
   });
 
-  it('routes and lazy-loads Skills through Recall', () => {
+  it('routes and lazy-loads Skills through Connections', () => {
     const boot = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/boot.js'), 'utf-8');
     const state = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/state.js'), 'utf-8');
     const lazy = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/lazy-features.js'), 'utf-8');
-    // Skills no longer has a sidebar button and its panel lives inside Recall's
-    // "我的能力" tab; deep links route to Recall and switch the tab.
+    // Skills 没有独立侧栏按钮；技能库挂在连接页「技能」tab，深链切到连接页。
     expect(state).not.toContain("_setViewFromSidebar('skills')");
     expect(state).toContain("_setViewFromSidebar('recall')");
-    expect(boot).toContain("view === 'skills' || view === 'personal-ontology' ? 'panel-recall'");
+    expect(boot).toContain("view === 'skills' ? 'panel-connections'");
     expect(boot).toContain("view === 'recall' ? 'panel-recall'");
     expect(boot).toContain("_loadViewFeature('recall', 'recall'");
-    expect(boot).toContain("switchSkillsCognitionPage('my-abilities')");
+    expect(boot).toContain("activateConnectionsTab('skills')");
     expect(lazy).toMatch(/recall:\s*\[[\s\S]*?\{ src: '\.\/modules\/skills\.js' \}/);
   });
 
@@ -135,8 +209,6 @@ describe('Recall cognition workspace layout', () => {
     expect(surfaceHtml).toContain('class="skills-cognition-main"');
     expect(surfaceHtml).toContain('id="skills-cognition-tabs"');
     expect(surfaceHtml).toContain('id="skills-cognition-assets"');
-    expect(surfaceHtml).toContain('id="skills-cognition-my-abilities"');
-    expect(surfaceHtml).toContain('id="skills-cognition-about-me"');
   });
 
   it('places Recall navigation in a horizontal top bar', () => {
@@ -160,7 +232,7 @@ describe('Recall cognition workspace layout', () => {
 
   it('keeps review inside capture tasks and exposes memory content as one page', () => {
     expect(html).not.toContain('data-i18n="cognition.candidate_review"');
-    expect(html).toContain('data-i18n="cognition.ability_assets"');
+    expect(html).toContain('data-i18n="cognition.my_assets"');
     expect(html).not.toContain('data-ability-assets-view');
     expect(html).not.toContain('data-ability-assets-view-panel');
     expect(html).not.toContain('cognition.cognition_tree');
@@ -199,7 +271,12 @@ describe('Recall cognition workspace layout', () => {
     expect(skills).not.toContain('data-personal-ontology-manage');
   });
 
-  it('shows source health and conversation capture next actions in the existing overview', () => {
+  /**
+   * 进度归进度，决策归决策。这条守的是拆分本身：沉淀进度与来源健康度不能
+   * 回流到「待我处理」——一旦回流，"需要我决定"的红点就会被后台噪音顶满，
+   * 用户很快就不再点它。
+   */
+  it('keeps processing status out of the decision inbox', () => {
     const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
     const bindings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8');
     const css = recallCss;
@@ -214,15 +291,50 @@ describe('Recall cognition workspace layout', () => {
     expect(bindings).toContain("window.cogseed.invoke('recall.captures.retry'");
     expect(bindings).toContain("window.activateSettingsTab('credentials')");
     expect(css).toContain('.skills-cognition-source-state.is-degraded');
-    expect(skills).toContain('skills-cognition-overview');
-    expect(skills).toContain('recall-overview-metrics');
-    expect(skills).toContain('recall-overview-metric');
-    expect(skills).toContain('recall-overview-attention');
-    expect(skills).toContain('recall-overview-activity');
-    expect(skills).toContain('data-cognition-open-asset');
-    expect(skills).toContain('recall-overview-operation-grid');
-    expect(skills).not.toContain('skills-cognition-stat-grid');
     expect(css).toContain('.recall-overview-pipeline');
+    expect(skills).not.toContain('skills-cognition-stat-grid');
+
+    expect(skills).toContain('recall-overview-attention');
+    const inbox = sliceFunction(skills, 'renderSkillsCognitionInbox');
+    expect(inbox).toContain('_renderCognitionOverviewAttention()');
+    expect(inbox).toContain('cognition.inbox_empty');
+    // 进度面板不在待我处理里。
+    expect(inbox).not.toContain('_renderCognitionPipelineStatus');
+    expect(inbox).not.toContain('_renderCognitionSourceStatus');
+    expect(inbox).not.toContain('_renderCognitionCaptureStatus');
+    expect(inbox).not.toContain('_renderCognitionRecentActivity');
+
+    // 进度面板落在沉淀活动；来源健康度落在管理来源；最近变化落在我的资产。
+    const captures = sliceFunction(skills, 'renderSkillsCognitionCaptures');
+    expect(captures).toContain('_renderCognitionPipelineStatus()');
+    expect(captures).toContain('_renderCognitionCaptureStatus()');
+    expect(captures).toContain('includeProcessing: true');
+    expect(sliceFunction(skills, 'renderSkillsCognitionSources')).toContain('_renderCognitionSourceStatus()');
+    expect(sliceFunction(skills, 'renderSkillsCognitionAssets')).toContain('_renderCognitionRecentActivity()');
+    expect(skills).toContain('data-cognition-open-asset');
+  });
+
+  /**
+   * 落地规则只准作用一次、且只在初始化里：用户主动点「待我处理」时不得被
+   * 弹到别处，否则空状态永远见不到，用户也无从区分"真的没事"和"页面坏了"。
+   */
+  it('only redirects away from an empty inbox on first landing, never on an explicit tab click', () => {
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
+    const init = sliceFunction(skills, 'initSkillsCognitionConsole');
+    expect(init).toContain('_cognitionInboxIsEmpty()');
+    expect(init).toContain("switchSkillsCognitionPage('assets')");
+    expect(sliceFunction(skills, 'switchSkillsCognitionPage')).not.toContain('_cognitionInboxIsEmpty');
+  });
+
+  it('routes the retired overview and about-me deep links into the new views', () => {
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
+    const aliases = sliceFunction(skills, 'switchSkillsCognitionPage');
+    expect(aliases).toContain("overview: 'inbox'");
+    for (const legacy of ['brain', 'context', 'ontology']) {
+      expect(aliases).toContain(`${legacy}: 'assets'`);
+    }
+    expect(skills).not.toContain('function renderSkillsCognitionOverview');
+    expect(skills).not.toContain("getElementById('skills-cognition-overview-body')");
   });
 
   it('does not load internal Brain, Context Pack, or Ontology data for the four-page snapshot', () => {
@@ -289,8 +401,6 @@ describe('Recall cognition workspace layout', () => {
         'cognition.capture_review_hint',
         'cognition.capture_review_empty',
         'cognition.memory_content',
-        'cognition.personal_ontology_section',
-        'cognition.personal_ontology_section_hint',
         'cognition.personal_memories_section',
         'cognition.personal_memories_section_hint',
         'cognition.ability_assets',
@@ -303,6 +413,42 @@ describe('Recall cognition workspace layout', () => {
         'cognition.skill_created',
         'cognition.capture_error_unknown',
       ]) expect(messages[key]).toBeTruthy();
+    }
+  });
+
+  // tab 切换只翻 pane 的 hidden 属性，而 .skills-cognition-page 自带 display，
+  // 会盖掉 UA 的 [hidden]{display:none}。少了这条守卫，六个 pane 全部保留布局
+  // 竖排在 overflow:hidden 的容器里，只有第一屏露出来，切 tab 像点不动。
+  it('keeps hidden cognition panes out of the layout', () => {
+    const guard = /\.skills-cognition-page\[hidden\][^{]*\{[^}]*display\s*:\s*none/;
+    expect(guard.test(recallCss)).toBe(true);
+    const match = recallCss.match(guard);
+    expect(cssBraceDepthAt(recallCss, match!.index!)).toBe(0);
+  });
+
+  // 认知资产页把技能库和个人本体整体内嵌，两份骨架很容易在合并时被同时保留。
+  // 重复 id 不会报错，只会让 getElementById 命中文档靠前的那一份，被内嵌的
+  // tab 就成了收不到渲染的死壳——所以整页 id 唯一性要当契约守住。
+  it('keeps every element id unique across the embedded panels', () => {
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
+    const seen = new Set<string>();
+    const duplicated = [...new Set(ids.filter((id) => (seen.has(id) ? true : (seen.add(id), false))))];
+    expect(duplicated).toEqual([]);
+  });
+
+  // 「关于我」不再是独立任务页，而是「我的资产」里的一类。个人本体骨架跟着
+  // 搬进 assets 页，但仍然只能有一份——两份同 id 骨架会让渲染落到靠前那份。
+  it('renders the personal ontology shell exactly once, inside My assets', () => {
+    expect(html).not.toContain('skills-cognition-about-me');
+    const sectionStart = html.indexOf('id="skills-cognition-personal-ontology"');
+    expect(sectionStart).toBeGreaterThan(-1);
+    const assetsStart = html.indexOf('data-cognition-page-body="assets"');
+    expect(assetsStart).toBeGreaterThan(-1);
+    expect(sectionStart).toBeGreaterThan(assetsStart);
+    for (const id of ['personal-onto-nav', 'personal-onto-main-body', 'personal-onto-template-library-modal']) {
+      const occurrences = [...html.matchAll(new RegExp(`\\sid="${id}"`, 'g'))];
+      expect(occurrences).toHaveLength(1);
+      expect(occurrences[0].index).toBeGreaterThan(sectionStart);
     }
   });
 

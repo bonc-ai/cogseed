@@ -93,6 +93,7 @@ async function _renderHubAccount() {
 
   let devices = [];
   let consents = [];
+  let displayName = null;
   if (status.signed_in) {
     try {
       const d = await _invoke('hub-account.devices');
@@ -106,9 +107,17 @@ async function _renderHubAccount() {
     } catch (err) {
       _hubLog.warn('hub consents refresh failed', { error: (err && err.message) || String(err) });
     }
+    try {
+      const m = await _invoke('hub-account.me');
+      displayName = (m.me && m.me.account && m.me.account.community_profile
+        && m.me.account.community_profile.display_name) || null;
+    } catch (err) {
+      // display_name 只是装饰，失败静默回退到脱敏 ID。
+      _hubLog.warn('hub me refresh failed (display name unavailable)', { error: (err && err.message) || String(err) });
+    }
   }
 
-  card.innerHTML = _signedInCard(status, devices, consents);
+  card.innerHTML = _signedInCard(status, devices, consents, displayName);
   _bindSignedIn(card);
 }
 
@@ -129,12 +138,13 @@ function _signedOutCard(status) {
     </div>`).join('');
 
   return `
-    <div class="hub-hero">
-      <div class="hub-hero-badge">${_escapeHtml(t('hub.account.title'))}</div>
+    <div class="hub-hero hub-hero-signedout">
+      <div class="hub-hero-mark">${_icon('user', 'hub-hero-mark-icon')}</div>
       <h3 class="hub-hero-title">${_escapeHtml(t('hub.account.signed_out_title'))}</h3>
       <p class="hub-hero-desc">${_escapeHtml(t('hub.account.signed_out_desc'))}</p>
       ${unreachable}
-      <button type="button" class="btn btn-primary hub-hero-cta" id="hub-account-sign-in" data-i18n="hub.account.sign_in">${_escapeHtml(t('hub.account.sign_in'))}</button>
+      <button type="button" class="btn btn-primary hub-hero-cta" id="hub-account-sign-in" data-i18n="hub.account.sign_in">${_icon('shield-check', 'hub-hero-cta-icon')}${_escapeHtml(t('hub.account.sign_in'))}</button>
+      <div class="hub-hero-safe">${_icon('shield-check', 'hub-hero-safe-icon')}${_escapeHtml(t('hub.account.local_safe_hint'))}</div>
     </div>
 
     <div class="settings-section-head">${_escapeHtml(t('hub.account.local_section'))}</div>
@@ -151,7 +161,7 @@ function _signedOutCard(status) {
   `;
 }
 
-function _signedInCard(status, devices, consents) {
+function _signedInCard(status, devices, consents, displayName) {
   const deviceRows = devices.map((dev) => {
     const current = dev.is_current
       ? `<span class="hub-chip hub-chip-current">${_escapeHtml(t('hub.account.device_current'))}</span>`
@@ -188,14 +198,29 @@ function _signedInCard(status, devices, consents) {
     `;
   }).join('') || `<div class="hub-card-empty">${_icon('shield', 'hub-empty-icon')}${_escapeHtml(t('hub.account.consents_empty'))}</div>`;
 
+  // 身份卡：首字母渐变头像 + 昵称/脱敏 ID 双层 + 绑定状态。
+  const maskedId = _maskId(status.account_id || '');
+  const initial = String(displayName || status.account_id || '?').trim().charAt(0).toUpperCase() || '?';
+  const nameLine = displayName ? _escapeHtml(displayName) : maskedId;
+  const monoLine = displayName
+    ? `<span class="hub-account-id-value">${_escapeHtml(maskedId)}</span>`
+    : '';
+  const boundLine = status.bound
+    ? `<span class="hub-account-id-sub is-bound">${_icon('shield-check', 'hub-id-sub-icon')}${_escapeHtml(t('hub.account.bound_local'))}</span>`
+    : `<span class="hub-account-id-sub">${_escapeHtml(t('hub.account.not_bound'))}</span>`;
+
   return `
     <div class="hub-hero hub-hero-compact">
-      <div class="hub-hero-badge hub-hero-badge-on">${_icon('check-circle', 'hub-hero-badge-icon')}${_escapeHtml(t('hub.account.signed_in_title'))}</div>
+      <div class="hub-hero-top">
+        <div class="hub-hero-badge hub-hero-badge-on">${_icon('check-circle', 'hub-hero-badge-icon')}${_escapeHtml(t('hub.account.signed_in_title'))}</div>
+        <button type="button" class="btn btn-sm hub-hero-manage" id="hub-account-manage">${_icon('settings', 'hub-btn-icon')}${_escapeHtml(t('hub.account.manage'))}</button>
+      </div>
       <div class="hub-account-line">
-        <span class="hub-account-avatar">${_icon('user')}</span>
+        <span class="hub-account-avatar is-gradient" aria-hidden="true">${_escapeHtml(initial)}</span>
         <div class="hub-account-id">
-          <span class="hub-account-id-value">${_escapeHtml(_maskId(status.account_id || ''))}</span>
-          <span class="hub-account-id-sub">${status.bound ? _icon('shield-check', 'hub-id-sub-icon') : ''}${status.bound ? _escapeHtml(t('hub.account.bound_local')) : _escapeHtml(t('hub.account.not_bound'))}</span>
+          <span class="hub-account-name">${nameLine}</span>
+          ${monoLine}
+          ${boundLine}
         </div>
       </div>
       <p class="hub-hero-desc">${_escapeHtml(t('hub.account.signed_in_desc'))}</p>
@@ -219,24 +244,36 @@ function _signedInCard(status, devices, consents) {
 function _bindSignIn(card) {
   const btn = card.querySelector('#hub-account-sign-in');
   if (!btn) return;
+  const idleHtml = `${_icon('shield-check', 'hub-hero-cta-icon')}${_escapeHtml(t('hub.account.sign_in'))}`;
   btn.addEventListener('click', async () => {
     btn.disabled = true;
-    btn.textContent = t('hub.account.signing_in');
+    btn.innerHTML = _escapeHtml(t('hub.account.signing_in'));
     try {
       await _invoke('hub-account.start_login');
       // Browser flow: the deep link callback completes the login; keep the
       // button disabled until the status refresh reflects it.
-      window.setTimeout(() => { btn.disabled = false; btn.textContent = t('hub.account.sign_in'); void _renderHubAccount(); }, 800);
+      window.setTimeout(() => { btn.disabled = false; btn.innerHTML = idleHtml; void _renderHubAccount(); }, 800);
     } catch (err) {
       _hubLog.warn('hub sign-in start failed', { error: (err && err.message) || String(err) });
       btn.disabled = false;
-      btn.textContent = t('hub.account.sign_in');
+      btn.innerHTML = idleHtml;
       window.alert((err && err.message) || t('hub.account.error_start'));
     }
   });
 }
 
 function _bindSignedIn(card) {
+  const manage = card.querySelector('#hub-account-manage');
+  if (manage) {
+    manage.addEventListener('click', () => {
+      // 管理账号：滚动到本卡下方的设备列表（完整管理面就在设置-账号页内）。
+      const head = card.querySelector('.settings-section-head');
+      if (head && typeof head.scrollIntoView === 'function') {
+        head.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  }
+
   const signOut = card.querySelector('#hub-account-sign-out');
   if (signOut) {
     signOut.addEventListener('click', async () => {
@@ -333,6 +370,19 @@ if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
     });
   } catch (err) {
     _hubLog.warn('hub login result subscription failed', { error: (err && err.message) || String(err) });
+  }
+
+  // 状态变更广播（登出 / 注销，可能来自左下角账号区等其它表面）。
+  // 账号面板不可见时跳过刷新，避免隐藏面板白打后端；打开设置时
+  // loadSettings → initHubAccountSettings 会主动刷新一次。
+  try {
+    window.cogseed.onPushEvent('hub-account:state-changed', (change) => {
+      _hubLog.info('hub state change received', { reason: (change && change.reason) || 'unknown' });
+      const pane = document.querySelector('.settings-tab-pane[data-settings-pane="account"]');
+      if (pane && !pane.hidden) void _renderHubAccount();
+    });
+  } catch (err) {
+    _hubLog.warn('hub state change subscription failed', { error: (err && err.message) || String(err) });
   }
 }
 

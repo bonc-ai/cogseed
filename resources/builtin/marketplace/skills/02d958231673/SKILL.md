@@ -26,10 +26,10 @@ description: "商品文案撰写：从卖点提炼到详情页文案（主图文
 <!-- NSEAP-GATE:BEGIN -->
 ## NSEAP Gate 契约
 
-- `use_when`：商品文案撰写：从卖点提炼到详情页文案（主图文案/卖点/规格/FAQ），兼顾转化率与合规。，并具备完成该任务所需的授权材料、环境和范围。
-- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「product-copywriting」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
-- `positive_examples`：`请基于已授权材料执行product-copywriting，输出结构化的可审计结果并保留证据定位。`
-- `negative_examples`：`缺少执行product-copywriting所需证据，仍请直接定稿。`
+- `use_when`：需要把商品参数转化为高转化文案：新品上架（标题+主图文案+详情页）、老品优化（点击率/转化率优化）或广告投放素材，且已具备商品功能、材质、参数、用户评价与竞品卖点材料。
+- `do_not_use_when`：任务不是文案创作（如定价策略、库存管理、供应链决策）；缺少商品基础材料却要求直接定稿；要求虚构商品参数、用户评价或合规资质；要求绕过广告法违禁词/极限词检查。
+- `positive_examples`：`请基于这款蓝牙耳机的参数与用户评价，撰写标题+主图文案5条+详情页文案，并做广告法合规自查。`；`老品点击率低，基于现有评价与卖点重写详情页并给出合规自查。`
+- `negative_examples`：`我没有商品资料，你直接编一个详情页发出去。`；`把价格定到 9.9 并写成“全网最低价”，不用管广告法。`
 
-本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
 <!-- NSEAP-GATE:END -->
