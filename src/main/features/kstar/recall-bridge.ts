@@ -20,7 +20,7 @@ export async function saveKstarCandidateProposals(
       // statement（已观测：'可复用经验：数据的文档…' 污染资产正文）。
       // 注意新建路径防呆：显式 value 必须配显式 suggestedAction，否则 weak。
       value: proposal.judgment,
-      suggestedAction: proposal.suggestedAction || 'create',
+      suggestedAction: 'create',
       ...(proposal.summary ? { summary: proposal.summary } : {}),
       ...(proposal.uncertainty ? { uncertainty: proposal.uncertainty } : {}),
       suggestedType: proposal.suggestedType,
