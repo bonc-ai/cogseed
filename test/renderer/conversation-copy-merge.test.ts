@@ -49,10 +49,8 @@ function extractFunction(name: string, functionSource = source): string {
 function loadHelpers(): any {
   const names = [
     '_conversationActionItems',
-    '_renderConversationMergeActionBar',
     '_conversationMergePickerMeta',
     '_renderConversationMergePickerRows',
-    '_ensureConversationMergeActionBar',
     '_copyNoticeBodyHtml',
     '_mergeSummarySectionLabel',
     '_renderMergeSummaryDetails',
@@ -98,6 +96,7 @@ function loadHelpers(): any {
     _toggleConversationPinned() {},
     _startConversationHeaderRename() {},
     _renameConversation() {},
+    _enterConversationMergeSelection() {},
     _deleteConversationWithConfirm() {},
     _cloneConversationWithConfirm() {},
     document: { createElement() { return {}; }, getElementById() { return null; } },
@@ -113,13 +112,11 @@ describe('conversation copy and merge renderer', () => {
     expect(labels).toContain('复制会话');
   });
 
-  it('keeps the sidebar merge control as a compact picker entry', () => {
-    const { _renderConversationMergeActionBar } = loadHelpers();
-    const html = _renderConversationMergeActionBar(2);
-    expect(html).toContain('选择并合并');
-    expect(html).toContain('data-merge-start');
-    expect(html).not.toContain('已选择 2 个会话');
-    expect(html).not.toContain('data-merge-cancel');
+  it('adds merge to the single-conversation menu', () => {
+    const { _conversationActionItems } = loadHelpers();
+    const items = _conversationActionItems('c1');
+    expect(items.map((item: any) => item.label)).toContain('选择并合并');
+    expect(items.find((item: any) => item.label === '选择并合并')?.action).toBe('merge');
   });
 
   it('renders selected conversations inside the merge picker', () => {

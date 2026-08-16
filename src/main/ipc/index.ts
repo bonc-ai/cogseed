@@ -2456,6 +2456,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }) };
   },
 
+  // 「待我处理」的唯一读口。判断规则在 formal-assets/inbox.ts，与晋升 gate、
+  // Runtime gate 复用同一批函数——渲染层不再自己判断什么算待办。
+  'cognition.inbox.list': async (_args, ctx) => ({
+    ok: true,
+    items: await cognition.listCognitionInbox(ctx.userId),
+  }),
+
   'cognition.skills.summary': async ({ skillId } = {}, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skill id');
     return { ok: true, summary: await cognition.getSkillCognitionSummary(ctx.userId, skillId) };
