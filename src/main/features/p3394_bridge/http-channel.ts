@@ -494,6 +494,21 @@ export function p3394CheckEnvelopeDigests(input: unknown): { ok: true } | { ok: 
           const meta = part.uri.slice(5, comma);
           const payload = part.uri.slice(comma + 1);
           content = /;base64$/i.test(meta) ? Buffer.from(payload, 'base64') : Buffer.from(decodeURIComponent(payload), 'utf8');
+        } else if (part.uri.startsWith('p3394-object:')) {
+          // §12 内容寻址引用。引用声明的 embedded digest 与 part.digest
+          // 一致时视为可信引用：本地对象存储有该对象 → 取回真实字节校验；
+          // 对象不在本地（跨机器常态）→ 信任引用，由资源端点
+          // （/p3394/objects/<digest>）拉取时校验内容。
+          // 引用与 digest 不一致/畸形 → 回退引用字符串哈希保持 fail-closed。
+          const ref = part.uri.slice('p3394-object:'.length);
+          const refDigest = ref.startsWith('sha256:') ? ref.slice('sha256:'.length) : ref;
+          if (/^[a-f0-9]{64}$/.test(refDigest) && refDigest === expected) {
+            const fetched = p3394ObjectStoreGet(part.uri);
+            if (fetched.ok) content = fetched.value;
+            else continue;
+          } else {
+            content = Buffer.from(part.uri, 'utf8');
+          }
         } else {
           content = Buffer.from(part.uri, 'utf8');
         }
