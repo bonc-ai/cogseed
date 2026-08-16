@@ -1221,6 +1221,109 @@ describe('Recall cognition renderer flow', () => {
       .toBeLessThan(inbox.innerHTML.indexOf('cognition-inbox-later'));
   });
 
+  /**
+   * 「使用与证明」的两条判断，都值得钉死：
+   *
+   * 1. 事件与回执之间走**显式 id**（transfer_completed 的 refs.usageReceiptId
+   *    就是回执 id）。绝不能按时间就近匹配——靠时间猜出来的"这两条大概是同
+   *    一次"，在一个专门用来证明的面板里是最不该出现的东西。
+   * 2. 没有可归属的证明或任务时不给评价按钮。一次无法归属的评价写进去之后，
+   *    没人能说清它评的是哪次复用。
+   */
+  it('binds a receipt to a use by explicit id, never by proximity in time', async () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-proofs-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      assets: [{
+        id: 'aa-method', title: '日报方法', category: 'skill_method', type: 'skill_method',
+        status: 'active', version: '0.5.0', workspaceRefs: ['周期汇报'],
+      }],
+      selectedProofEventId: '',
+    })})`, context);
+    context.window.cogseed = {
+      invoke: async (channel: string) => {
+        if (channel === 'recall.timeline.list') {
+          return { ok: true, items: [
+            {
+              id: 'ev-with-receipt', kind: 'transfer_completed', status: 'succeeded',
+              occurredAt: '2026-08-16T10:00:00.000Z',
+              refs: { assetId: 'aa-method', transferProofId: 'tp-1', usageReceiptId: 'CRR-018' },
+            },
+            {
+              // 时间上紧挨着，但没有回执号——绝不能借用上面那张回执。
+              id: 'ev-no-receipt', kind: 'usage_recorded',
+              occurredAt: '2026-08-16T09:59:59.000Z',
+              refs: { assetId: 'aa-method', taskRunId: 'task-9' },
+            },
+          ] };
+        }
+        if (channel === 'cognition.receipts.list') {
+          return { ok: true, receipts: [{
+            receiptId: 'CRR-018', executionId: 'exec-1', targetSessionId: 'Codex 新会话',
+            reusedRefs: ['aa-method', 'rule-a'], omittedRefs: ['完整旧会话'],
+            permissionMode: 'scoped', allowedScopes: ['product'], boundary: 'real',
+            status: 'completed', createdAt: '2026-08-16T10:00:00.000Z',
+          }] };
+        }
+        return { ok: true };
+      },
+    };
+
+    await context.renderSkillsCognitionProofs();
+
+    // 默认落在有回执的那条，右侧逐项摊开。
+    expect(host.innerHTML).toContain('CRR-018');
+    expect(host.innerHTML).toContain('带入内容');
+    expect(host.innerHTML).toContain('aa-method、rule-a');
+    expect(host.innerHTML).toContain('未带入');
+    expect(host.innerHTML).toContain('完整旧会话');
+    // 六段链条
+    expect(host.innerHTML).toContain('正式资产');
+    expect(host.innerHTML).toContain('周期汇报');
+    expect(host.innerHTML).toContain('Codex 新会话');
+    // 有证明可归属 → 给评价按钮
+    expect(host.innerHTML).toContain('这次复用是否有用？');
+    expect(host.innerHTML).toContain('data-recall-proof-feedback-proof="tp-1"');
+
+    // 切到没有回执的那条：必须明说"没有回执"，不能显示上一张回执的内容。
+    vm.runInContext("_skillsCognitionState.selectedProofEventId = 'ev-no-receipt';", context);
+    await context.renderSkillsCognitionProofs();
+    expect(host.innerHTML).toContain('没有留下复用回执');
+    expect(host.innerHTML).not.toContain('CRR-018');
+    expect(host.innerHTML).not.toContain('完整旧会话');
+    // 这条只有 taskRunId，仍然可归属，所以评价按钮走 task 通道。
+    expect(host.innerHTML).toContain('data-recall-proof-feedback-task="task-9"');
+  });
+
+  it('offers no rating when the use cannot be attributed to a proof or a task', async () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-proofs-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assets: [], selectedProofEventId: '' })})`, context);
+    context.window.cogseed = {
+      invoke: async (channel: string) => {
+        if (channel === 'recall.timeline.list') {
+          return { ok: true, items: [{
+            id: 'ev-bare', kind: 'usage_recorded', occurredAt: '2026-08-16T10:00:00.000Z',
+            refs: { assetId: 'aa-x' },
+          }] };
+        }
+        if (channel === 'cognition.receipts.list') return { ok: true, receipts: [] };
+        return { ok: true };
+      },
+    };
+
+    await context.renderSkillsCognitionProofs();
+
+    expect(host.innerHTML).not.toContain('这次复用是否有用？');
+    expect(host.innerHTML).not.toContain('data-recall-proof-feedback=');
+  });
+
   it('keeps the overview attention area hidden when Recall is healthy', () => {
     const context = loadSkillsRenderer();
     const inbox = { innerHTML: '' };

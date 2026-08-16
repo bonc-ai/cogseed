@@ -862,3 +862,35 @@
 .recall-asset-version-change.is-sensitivity_escalated b,
 .recall-asset-version-change.is-sensitivity_escalated i { color: var(--danger, #b42318); }
 .recall-asset-version-change.is-boundary b { color: var(--warning, #92400e); }
+
+/* ── 使用与证明：链条条带 + 使用记录/回执双栏 ────────────────────────── */
+/* 六段链条把一次复用摊开成可核对的一条线。取不到的那一段显示 —— 并降透明度，
+   让"这里没有事实"和"这里有事实"一眼分得开，而不是留白让人以为没渲染。 */
+.recall-proof-chain { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; margin: 0 0 14px; overflow: hidden; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--card, #fff); }
+.recall-proof-chain-stage { display: flex; min-width: 0; flex: 1 1 150px; flex-direction: column; gap: 5px; padding: 12px 14px; }
+.recall-proof-chain-stage span { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-proof-chain-stage strong { overflow-wrap: anywhere; color: var(--fg, #111827); font-size: 13px; }
+.recall-proof-chain-stage.is-empty strong { color: var(--muted-fg, #9ca3af); font-weight: 400; }
+.recall-proof-chain-arrow { display: grid; flex: none; padding: 0 2px; place-items: center; color: var(--muted-fg, #9ca3af); font-size: 12px; font-style: normal; }
+.recall-proof-workbench { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 14px; align-items: start; }
+.recall-proof-event { display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.recall-proof-event:hover { background: var(--surface-subtle, #f7f8fa); }
+.recall-proof-event.is-selected { background: color-mix(in srgb, var(--primary, #0E9F6E) 8%, var(--card, #fff)); box-shadow: inset 2px 0 0 var(--primary, #0E9F6E); }
+.recall-proof-event-body { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.recall-proof-event-body .recall-proof-summary,
+.recall-proof-event-body .recall-proof-meta { overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-proof-receipt { position: sticky; top: 0; }
+.recall-proof-receipt.is-empty p,
+.recall-proof-receipt-note { margin: 8px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; }
+.recall-proof-receipt-id { color: var(--muted-fg, #6b7280); font-size: 11px; font-variant-numeric: tabular-nums; }
+.recall-proof-receipt-body { display: grid; gap: 8px; margin: 12px 0 0; }
+.recall-proof-receipt-row { display: grid; grid-template-columns: minmax(72px, auto) minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.recall-proof-receipt-row dt { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-proof-receipt-row dd { margin: 0; overflow-wrap: anywhere; color: var(--fg, #374151); font-size: 12px; }
+.recall-proof-rating { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border, #eef0f3); }
+.recall-proof-rating > strong { display: block; margin-bottom: 8px; color: var(--fg, #111827); font-size: 12px; }
+.recall-proof-rating-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 1000px) {
+  .recall-proof-workbench { grid-template-columns: 1fr; }
+  .recall-proof-receipt { position: static; }
+}

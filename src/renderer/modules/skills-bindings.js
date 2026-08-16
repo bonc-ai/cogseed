@@ -303,6 +303,39 @@ function _initSkillsCognitionBindings() {
   };
 
   panel.addEventListener('click', async (event) => {
+    // ── 使用与证明 ──────────────────────────────────────────────────
+    const proofEvent = event.target.closest('[data-recall-proof-event]');
+    if (proofEvent) {
+      _skillsCognitionState.selectedProofEventId = proofEvent.dataset.recallProofEvent || '';
+      renderSkillsCognitionProofs();
+      return;
+    }
+    const proofFeedback = event.target.closest('[data-recall-proof-feedback]');
+    if (proofFeedback) {
+      if (proofFeedback.dataset.busy === '1') return;
+      const feedback = proofFeedback.dataset.recallProofFeedback;
+      const proofId = proofFeedback.dataset.recallProofFeedbackProof;
+      const taskRunId = proofFeedback.dataset.recallProofFeedbackTask;
+      // 评价必须落到一条具体的证明或任务上。两者都没有时不该发请求——
+      // 一次无法归属的评价写进去，之后没人能说清它评的是哪次复用。
+      if (!feedback || (!proofId && !taskRunId)) return;
+      proofFeedback.dataset.busy = '1'; proofFeedback.disabled = true;
+      try {
+        const result = proofId
+          ? await window.cogseed.invoke('recall.proofs.effectiveness.feedback', { transferProofId: proofId, feedback })
+          : await window.cogseed.invoke('recall.proofs.effectiveness.feedbackForTask', { taskRunId, feedback });
+        if (!result?.ok) throw new Error(result?.error || 'effectiveness feedback failed');
+        // 评价会推进成熟度，所以整份快照都要重取，不能只重画本页。
+        await loadSkillsCognitionSnapshot();
+        await renderSkillsCognitionProofs();
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        proofFeedback.dataset.busy = '0'; proofFeedback.disabled = false;
+      }
+      return;
+    }
+
     const reload = event.target.closest('[data-cognition-reload]');
     if (reload) {
       if (reload.dataset.busy === '1') return;

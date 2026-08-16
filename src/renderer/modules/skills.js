@@ -24,6 +24,8 @@ const _skillsCognitionState = {
   /** 「待我处理」的服务端读模型（cognition.inbox.list）。渲染层不自己判断
    *  什么算待办——判断在 formal-assets/inbox.ts，与 gate 同源。 */
   inboxItems: [],
+  /** 「使用与证明」右侧回执面板对应的那条使用事件。 */
+  selectedProofEventId: '',
   recallCandidates: [],
   sources: [],
   teachingSignals: [],
@@ -1510,19 +1512,111 @@ function _cognitionProofOutcomeLabel(item) {
   return '';
 }
 
+/**
+ * 一次复用的六段链条：正式资产 → 引用空间 → 目标 Session → 实际注入 →
+ * 结果 → 评价。
+ *
+ * 这是「使用与证明」区别于普通使用日志的地方——它把一次复用摊开成一条可核
+ * 对的链，每一段都指向一个具体事实，而不是只说"用过 3 次"。取不到的那一段
+ * 显示 `—`，不猜、也不用相邻信息顶替。
+ */
+function _renderProofChainStrip(asset, event, receipt) {
+  const refs = (event && event.refs) || {};
+  const workspaceRefs = Array.isArray(asset?.workspaceRefs) ? asset.workspaceRefs.filter(Boolean) : [];
+  const injected = receipt && Array.isArray(receipt.reusedRefs) && receipt.reusedRefs.length
+    ? _cognitionText('cognition.proof_chain_injected_n', '{n} 项').replace('{n}', String(receipt.reusedRefs.length))
+    : '';
+  const stages = [
+    ['cognition.proof_chain_asset', '正式资产', asset ? `${_abilityAssetDisplayTitle(asset)}${asset.version ? ` v${asset.version}` : ''}` : ''],
+    ['cognition.proof_chain_space', '引用空间', workspaceRefs.join('、')],
+    ['cognition.proof_chain_session', '目标 Session', receipt?.targetSessionId || refs.taskRunId || ''],
+    ['cognition.proof_chain_injected', '实际注入', injected],
+    ['cognition.proof_chain_result', '结果', _cognitionProofOutcomeLabel(event || {})],
+    ['cognition.proof_chain_rating', '评价', refs.transferProofId || refs.taskRunId
+      ? _cognitionText('cognition.proof_chain_rating_open', '可评价')
+      : ''],
+  ];
+  return `<section class="recall-proof-chain" aria-label="${escapeHtml(_cognitionText('cognition.proof_chain', '这次复用的链条'))}">${stages.map(([key, fallback, value], index) => `
+    <div class="recall-proof-chain-stage${value ? '' : ' is-empty'}">
+      <span>${escapeHtml(_cognitionText(key, fallback))}</span>
+      <strong>${escapeHtml(value || '—')}</strong>
+    </div>${index < stages.length - 1 ? '<i class="recall-proof-chain-arrow" aria-hidden="true">→</i>' : ''}`).join('')}</section>`;
+}
+
+/**
+ * Context Reuse Receipt 详情。
+ *
+ * 回执与事件之间走**显式 id**：transfer_completed 事件的 refs.usageReceiptId
+ * 就是回执 id。不做时间窗反查——靠时间猜出来的"这两条大概是同一次"在证明
+ * 面板里是最不该出现的东西。
+ */
+function _renderProofReceiptPanel(event, receipt) {
+  const refs = (event && event.refs) || {};
+  const title = _cognitionText('cognition.proof_receipt_title', 'Context Reuse Receipt');
+  if (!event) {
+    return `<section class="skills-cognition-card recall-proof-receipt is-empty"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(_cognitionText('cognition.proof_receipt_pick', '在左侧选择一次使用，这里显示那一次到底带了什么进去。'))}</p></section>`;
+  }
+  const feedbackTarget = refs.transferProofId
+    ? `data-recall-proof-feedback-proof="${escapeHtml(refs.transferProofId)}"`
+    : refs.taskRunId ? `data-recall-proof-feedback-task="${escapeHtml(refs.taskRunId)}"` : '';
+  // 没有可归属的证明或任务时不显示评价按钮：评价必须落到一条具体的证明上，
+  // 否则这次点击不知道该写给谁。
+  const rating = feedbackTarget
+    ? `<div class="recall-proof-rating"><strong>${escapeHtml(_cognitionText('cognition.proof_rating_question', '这次复用是否有用？'))}</strong><div class="recall-proof-rating-actions">${[
+      ['positive', 'cognition.proof_carried_in', '带入正确'],
+      ['rework', 'cognition.proof_rework', '需要修正'],
+      ['neutral', 'cognition.proof_no_diff', '未产生明显差异'],
+      ['invalid', 'cognition.proof_degraded', 'Evidence 不足'],
+    ].map(([value, key, fallback]) => `<button type="button" class="btn btn-sm" ${feedbackTarget} data-recall-proof-feedback="${value}">${escapeHtml(_cognitionText(key, fallback))}</button>`).join('')}</div></div>`
+    : '';
+  if (!receipt) {
+    const why = refs.usageReceiptId
+      ? _cognitionText('cognition.proof_receipt_unreadable', '这一次记录了回执号，但回执内容当前读不到。')
+      : _cognitionText('cognition.proof_receipt_absent', '这一次没有留下复用回执，因此无法逐项核对带入内容。');
+    return `<section class="skills-cognition-card recall-proof-receipt"><div class="skills-cognition-card-head"><h2>${escapeHtml(title)}</h2></div><p class="recall-proof-receipt-note">${escapeHtml(why)}</p>${rating}</section>`;
+  }
+  const rows = [
+    ['cognition.proof_receipt_carried', '带入内容', (receipt.reusedRefs || []).join('、')],
+    ['cognition.proof_receipt_omitted', '未带入', (receipt.omittedRefs || []).join('、')],
+    ['cognition.proof_chain_session', '目标 Session', receipt.targetSessionId || ''],
+    ['cognition.proof_receipt_permission', '权限范围', [receipt.permissionMode, ...(receipt.allowedScopes || [])].filter(Boolean).join(' · ')],
+  ].filter(([, , value]) => value)
+    .map(([key, fallback, value]) => `<div class="recall-proof-receipt-row"><dt>${escapeHtml(_cognitionText(key, fallback))}</dt><dd>${escapeHtml(value)}</dd></div>`).join('');
+  // boundary 不是 real 时必须说出来：拿一次降级或测试替身的回执当真实证据，
+  // 比没有证据更危险。
+  const boundary = receipt.boundary && receipt.boundary !== 'real'
+    ? `<span class="skills-cognition-status is-degraded">${escapeHtml(_cognitionText('cognition.proof_receipt_not_real', '非真实边界：{b}').replace('{b}', String(receipt.boundary)))}</span>`
+    : `<span class="skills-cognition-status">${escapeHtml(_cognitionText('cognition.proof_receipt_traceable', '可追溯'))}</span>`;
+  return `<section class="skills-cognition-card recall-proof-receipt">
+    <div class="skills-cognition-card-head"><div><h2>${escapeHtml(title)}</h2><span class="recall-proof-receipt-id">${escapeHtml(receipt.receiptId || '')}</span></div>${boundary}</div>
+    <dl class="recall-proof-receipt-body">${rows}</dl>
+    ${rating}
+  </section>`;
+}
+
 async function renderSkillsCognitionProofs() {
   const host = document.getElementById('skills-cognition-proofs-body');
   if (!host) return;
   _renderCognitionLoading(host);
   let items = [];
+  let receipts = [];
   try {
-    const result = await window.cogseed.invoke('recall.timeline.list', { limit: 500 });
-    items = Array.isArray(result && result.items) ? result.items : [];
+    // 回执与时间线一起取。回执取不到不该让整页打不开——它是逐项核对用的补充，
+    // 缺了仍能看见"在哪里用过、结果如何"。
+    const [timelineResult, receiptResult] = await Promise.all([
+      window.cogseed.invoke('recall.timeline.list', { limit: 500 }),
+      window.cogseed.invoke('cognition.receipts.list', { limit: 200 }).catch(() => null),
+    ]);
+    items = Array.isArray(timelineResult && timelineResult.items) ? timelineResult.items : [];
+    receipts = Array.isArray(receiptResult && receiptResult.receipts) ? receiptResult.receipts : [];
   } catch (error) {
     _skillsLog.warn('recall timeline load failed', { error: (error && error.message) || String(error) });
     _renderCognitionError(host);
     return;
   }
+  // 回执按 receiptId 索引：事件的 refs.usageReceiptId 就是它，属于显式关联，
+  // 不做时间窗反查。
+  const receiptById = new Map(receipts.filter((entry) => entry && entry.receiptId).map((entry) => [String(entry.receiptId), entry]));
   const assets = Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [];
   const titleById = new Map(assets.map((asset) => [asset.id, _abilityAssetDisplayTitle(asset)]));
 
@@ -1551,22 +1645,38 @@ async function renderSkillsCognitionProofs() {
     return;
   }
 
+  // 选中的那一次使用。默认取最新一条有回执的——用户来这一页多半是想核对
+  // 最近那次到底带了什么，落在一条没有回执的事件上会白点一次。
+  const allEvents = [...byAsset.entries()].flatMap(([assetId, entries]) => entries.map((item) => ({ ...item, assetId })))
+    .sort((a, b) => String(b.occurredAt || '').localeCompare(String(a.occurredAt || '')));
+  const selectedId = _skillsCognitionState.selectedProofEventId;
+  const selected = allEvents.find((item) => item.id === selectedId)
+    || allEvents.find((item) => item.refs && receiptById.has(String(item.refs.usageReceiptId || '')))
+    || allEvents[0];
+  _skillsCognitionState.selectedProofEventId = selected ? selected.id : '';
+  const selectedReceipt = selected && selected.refs
+    ? receiptById.get(String(selected.refs.usageReceiptId || ''))
+    : undefined;
+  const selectedAsset = selected ? assets.find((asset) => asset.id === selected.assetId) : undefined;
+
   const sections = [...byAsset.entries()].map(([assetId, entries]) => {
     entries.sort((a, b) => String(b.occurredAt || '').localeCompare(String(a.occurredAt || '')));
     const title = titleById.get(assetId) || assetId;
     const rows = entries.slice(0, 20).map((item) => {
       const outcome = _cognitionProofOutcomeLabel(item);
       const refs = item.refs || {};
+      const hasReceipt = receiptById.has(String(refs.usageReceiptId || ''));
       const meta = [
         refs.taskRunId ? `${escapeHtml(_cognitionText('cognition.proof_task', '任务'))} ${escapeHtml(refs.taskRunId)}` : '',
         refs.version ? `v${escapeHtml(refs.version)}` : '',
-        refs.usageReceiptId ? escapeHtml(_cognitionText('cognition.proof_receipt', '有回执')) : '',
+        hasReceipt ? escapeHtml(_cognitionText('cognition.proof_receipt', '有回执')) : '',
       ].filter(Boolean).join(' · ');
-      return `<article class="recall-proof-event is-${escapeHtml(item.kind || 'event')}">
+      const active = selected && item.id === selected.id ? ' is-selected' : '';
+      return `<button type="button" class="recall-proof-event is-${escapeHtml(item.kind || 'event')}${active}" data-recall-proof-event="${escapeHtml(item.id)}">
         <span class="recall-proof-marker" aria-hidden="true"></span>
-        <div class="recall-proof-event-body"><strong class="recall-proof-outcome">${escapeHtml(outcome || item.title || item.kind)}</strong>${item.summary || item.title ? `<p class="recall-proof-summary">${escapeHtml(item.summary || item.title || '')}</p>` : ''}${meta ? `<span class="recall-proof-meta">${meta}</span>` : ''}</div>
+        <span class="recall-proof-event-body"><strong class="recall-proof-outcome">${escapeHtml(outcome || item.title || item.kind)}</strong>${item.summary || item.title ? `<span class="recall-proof-summary">${escapeHtml(item.summary || item.title || '')}</span>` : ''}${meta ? `<span class="recall-proof-meta">${meta}</span>` : ''}</span>
         <time class="recall-proof-time">${escapeHtml(_cognitionDate(item.occurredAt))}</time>
-      </article>`;
+      </button>`;
     }).join('');
     return `<section class="skills-cognition-card recall-proof-asset">
       <div class="skills-cognition-card-head">
@@ -1576,7 +1686,12 @@ async function renderSkillsCognitionProofs() {
       <div class="recall-proof-timeline">${rows}</div>
     </section>`;
   }).join('');
-  host.innerHTML = `${hero}<div class="recall-proof-list">${sections}</div>`;
+  host.innerHTML = `${hero}
+    ${_renderProofChainStrip(selectedAsset, selected, selectedReceipt)}
+    <div class="recall-proof-workbench">
+      <div class="recall-proof-list">${sections}</div>
+      ${_renderProofReceiptPanel(selected, selectedReceipt)}
+    </div>`;
 }
 
 function renderSkillsCognitionCandidates() {
