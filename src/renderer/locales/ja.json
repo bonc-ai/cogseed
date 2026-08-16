@@ -2531,7 +2531,7 @@
   "sidebar.devtools_title": "開発モードでのみ表示",
   "sidebar.space_open_folder": "フォルダを表示",
   "sidebar.load_more_conversations": "さらに読み込む",
-  "sidebar.new_chat": "新しいタスク",
+  "sidebar.new_chat": "新しいセッション",
   "sidebar.personal_ontology": "パーソナルオントロジー",
   "sidebar.project_conv_empty": "（タスクなし）",
   "sidebar.project_create_placeholder": "プロジェクト名を入力",
@@ -4127,5 +4127,11 @@
   "cognition.proof_receipt": "レシートあり",
   "cognition.proof_open_asset": "資産を開く",
   "hub.chip.menu.templates": "テンプレート",
-  "hub.chip.menu.usage": "クォータ"
+  "hub.chip.menu.usage": "クォータ",
+  "new_chat.subtitle": "チームに何をしてほしいですか？タスクを直接入力するか、テンプレートを選んでください。",
+  "sidebar.new_task": "新しいタスク",
+  "sidebar.new_task_ph": "タスク内容を入力して Enter で作成…",
+  "sidebar.home": "ホーム",
+  "cognition.maturity_transfer_validated": "移行済み検証",
+  "cognition.asset_write_origin_system": "システム沈殿"
 }

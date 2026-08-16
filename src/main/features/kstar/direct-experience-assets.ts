@@ -45,7 +45,12 @@ function proposalToCandidateInput(
   const evidenceRefs = normalizeCognitionSourceRefs(proposal.sourceRefs);
   return {
     judgment: String(proposal.judgment || '').replace(/\s+/g, ' ').trim().slice(0, 4_000),
-    value: String(proposal.summary || proposal.judgment || '').replace(/\s+/g, ' ').trim().slice(0, 1_000),
+    // value = judgment：与 recall-bridge（drain 路径）一致——两条沉淀路径
+    // 的候选指纹（含 value）相同，saveRecallCandidate 指纹去重让第二次
+    // 沉淀返回 existing（不产生 confirmed+superseded 双候选，也不让
+    // summary 标题残片进 statement）。promote 时 value!==judgment 检查
+    // 保证 statement 纯净。
+    value: String(proposal.judgment || '').replace(/\s+/g, ' ').trim().slice(0, 1_000),
     summary: String(proposal.summary || '').replace(/\s+/g, ' ').trim().slice(0, 1_000),
     ...(proposal.uncertainty ? { uncertainty: String(proposal.uncertainty).slice(0, 1_000) } : {}),
     suggestedType: proposal.suggestedType,

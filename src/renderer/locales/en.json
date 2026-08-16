@@ -2685,7 +2685,7 @@
   "sidebar.devtools_title": "Visible in dev mode only",
   "sidebar.space_open_folder": "Show in Folder",
   "sidebar.load_more_conversations": "Load more",
-  "sidebar.new_chat": "New task",
+  "sidebar.new_chat": "New session",
   "sidebar.personal_ontology": "Personal Ontology",
   "sidebar.project_conv_empty": "(no tasks)",
   "sidebar.project_create_placeholder": "Enter project name",
@@ -4434,5 +4434,11 @@
   "cognition.proof_receipt": "Receipt",
   "cognition.proof_open_asset": "Open asset",
   "hub.chip.menu.templates": "Templates",
-  "hub.chip.menu.usage": "Quota"
+  "hub.chip.menu.usage": "Quota",
+  "new_chat.subtitle": "What should the team work on? Describe a task, or pick a template.",
+  "sidebar.new_task": "New task",
+  "sidebar.new_task_ph": "Describe the task, press Enter to create…",
+  "sidebar.home": "Home",
+  "cognition.maturity_transfer_validated": "Transfer validated",
+  "cognition.asset_write_origin_system": "System precipitated"
 }

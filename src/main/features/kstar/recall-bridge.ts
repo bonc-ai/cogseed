@@ -13,6 +13,14 @@ export async function saveKstarCandidateProposals(
   for (const proposal of proposals.slice(0, 3)) {
     candidates.push(await saveRecallCandidate(userId, {
       judgment: proposal.judgment,
+      // value = judgment：saveRecallCandidate 的 reviewReady 要求 value 非空
+      // （空 → weak_observation）；promote 时 statement 拼接有
+      // value !== judgment 检查——相等则不拼，statement 保持纯净 lesson。
+      // 不传时 value 默认成 summary（标题），promote 会把标题残片拼进
+      // statement（已观测：'可复用经验：数据的文档…' 污染资产正文）。
+      // 注意新建路径防呆：显式 value 必须配显式 suggestedAction，否则 weak。
+      value: proposal.judgment,
+      suggestedAction: proposal.suggestedAction || 'create',
       ...(proposal.summary ? { summary: proposal.summary } : {}),
       ...(proposal.uncertainty ? { uncertainty: proposal.uncertainty } : {}),
       suggestedType: proposal.suggestedType,

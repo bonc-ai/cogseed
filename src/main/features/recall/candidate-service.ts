@@ -63,7 +63,8 @@ export type RecallCandidateStatus =
   | 'rejected'
   | 'ignored'
   | 'expired'
-  | 'failed';
+  | 'failed'
+  | 'superseded';
 export type AbilityAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
 export type RecallCandidateAction = 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
 export type RecallCandidateRisk = 'low' | 'medium' | 'high';
@@ -310,7 +311,11 @@ function normalizeCandidateStatus(value: unknown): RecallCandidateStatus {
   if (value === 'promoted') return 'confirmed';
   if (value === 'observed' || value === 'weak_observation' || value === 'pending_review'
     || value === 'deferred' || value === 'confirmed' || value === 'rejected'
-    || value === 'ignored' || value === 'expired' || value === 'failed') return value;
+    || value === 'ignored' || value === 'expired' || value === 'failed'
+    // 语义去重候选合并路径（semanticDedupBeforePromote）写入的运行时状态；
+    // 缺了它，池遍历（listRecallCandidates → asCandidate）遇到 superseded
+    // 候选就抛 malformed——整个沉淀 degraded（已观测 19:37）。
+    || value === 'superseded') return value;
   throw new Error('malformed recall candidate');
 }
 
@@ -1066,22 +1071,18 @@ async function readAbilityAssetSafe(userId: string, assetId: string): Promise<Re
   }
 }
 
-/** 证据并入资产（内容不变不 bump 版本）。返回更新后的资产。 */
+/** 证据并入资产：内容变化时 bump 版本 + 快照 + 审计（走 asset-service 的
+ *  导出边界，旧实现不 bump 版本导致冻结快照与实时 evidenceRefs 分叉）。 */
 async function appendAssetEvidence(
   userId: string,
   asset: RecallAbilityAssetRecord,
   candidate: RecallCandidateRecord,
 ): Promise<RecallAbilityAssetRecord> {
-  const merged = mergeSourceRefs(asset.evidenceRefs || [], candidate.evidenceRefs || []);
-  const updated = await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
-    const current = raw ? asAsset(raw) : asset;
-    return {
-      ...current,
-      evidenceRefs: merged,
-      updatedAt: new Date().toISOString(),
-    };
+  const { mergeAbilityAssetEvidence } = await import('./asset-service');
+  return mergeAbilityAssetEvidence(userId, asset.id, candidate.evidenceRefs || [], {
+    reason: 'evidence merged from candidate on semantic dedup',
+    actor: 'system',
   });
-  return asAsset(updated);
 }
 
 export async function batchPromoteRecallCandidates(

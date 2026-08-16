@@ -2333,16 +2333,25 @@ describe('Recall conversation capture', () => {
     expect(recovered).not.toHaveProperty('writingCandidateId');
   });
 
-  it('rejects unknown evidence, invalid types, and more than three candidates as a whole', async () => {
+  it('skips malformed candidates individually and rejects oversized batches', async () => {
     const capture = await captureModule();
     const validLabels = new Set(['m1']);
+    const good = { judgment: 'x', summary: 'x', suggestedType: 'rule', suggestedScope: 'x', evidence: ['m1'] };
 
-    expect(() => capture.parseRecallCaptureOutput(JSON.stringify({ candidates: [{
-      judgment: 'x', summary: 'x', suggestedType: 'rule', suggestedScope: 'x', evidence: ['m2'],
-    }] }), validLabels)).toThrow(/unknown evidence/i);
-    expect(() => capture.parseRecallCaptureOutput(JSON.stringify({ candidates: [{
+    // A single malformed candidate no longer kills the batch: it is skipped
+    // and the remaining valid candidates survive.
+    expect(capture.parseRecallCaptureOutput(JSON.stringify({ candidates: [
+      { ...good, suggestedType: 'method' },      // invalid type → skipped
+      good,                                       // valid → kept
+      { ...good, evidence: ['m2'] },              // unknown evidence → skipped
+    ] }), validLabels)).toHaveLength(1);
+
+    // All-malformed batch → empty result (not an exception).
+    expect(capture.parseRecallCaptureOutput(JSON.stringify({ candidates: [{
       judgment: 'x', summary: 'x', suggestedType: 'other', suggestedScope: 'x', evidence: ['m1'],
-    }] }), validLabels)).toThrow(/suggestedType/i);
+    }] }), validLabels)).toEqual([]);
+
+    // Oversized batch is still rejected as a whole.
     expect(() => capture.parseRecallCaptureOutput(JSON.stringify({ candidates: Array.from({ length: 4 }, () => ({})) }), validLabels))
       .toThrow(/candidate count/i);
   });

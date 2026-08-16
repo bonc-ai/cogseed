@@ -2685,9 +2685,9 @@
   "sidebar.new_space": "新建空间",
   "sidebar.devtools": "调试",
   "sidebar.devtools_title": "仅开发环境可见",
-    "sidebar.space_open_folder": "在访达中显示",
+  "sidebar.space_open_folder": "在访达中显示",
   "sidebar.load_more_conversations": "加载更多",
-  "sidebar.new_chat": "新建任务",
+  "sidebar.new_chat": "新建会话",
   "sidebar.personal_ontology": "个人本体",
   "sidebar.project_conv_empty": "（暂无任务）",
   "sidebar.project_create_placeholder": "输入项目名",
@@ -4434,5 +4434,11 @@
   "cognition.proof_projected": "已带入本次任务",
   "cognition.proof_task": "任务",
   "cognition.proof_receipt": "有回执",
-  "cognition.proof_open_asset": "查看资产"
+  "cognition.proof_open_asset": "查看资产",
+  "new_chat.subtitle": "想让团队做什么？直接描述任务，或者选一个模板。",
+  "sidebar.new_task": "新建任务",
+  "sidebar.new_task_ph": "输入任务描述，回车创建…",
+  "sidebar.home": "首页",
+  "cognition.maturity_transfer_validated": "已迁移验证",
+  "cognition.asset_write_origin_system": "系统沉淀"
 }

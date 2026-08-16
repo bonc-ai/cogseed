@@ -2531,7 +2531,7 @@
   "sidebar.devtools_title": "Visível apenas no modo de desenvolvimento",
   "sidebar.space_open_folder": "Mostrar na pasta",
   "sidebar.load_more_conversations": "Carregar mais",
-  "sidebar.new_chat": "Nova tarefa",
+  "sidebar.new_chat": "Nova sessão",
   "sidebar.personal_ontology": "Ontologia pessoal",
   "sidebar.project_conv_empty": "(sem tarefas)",
   "sidebar.project_create_placeholder": "Digite o nome do projeto",
@@ -4127,5 +4127,11 @@
   "cognition.proof_receipt": "Com recibo",
   "cognition.proof_open_asset": "Abrir ativo",
   "hub.chip.menu.templates": "Modelos",
-  "hub.chip.menu.usage": "Cota"
+  "hub.chip.menu.usage": "Cota",
+  "new_chat.subtitle": "Em que a equipe deve trabalhar? Descreva uma tarefa ou escolha um modelo.",
+  "sidebar.new_task": "Nova tarefa",
+  "sidebar.new_task_ph": "Descreva a tarefa, Enter para criar…",
+  "sidebar.home": "Início",
+  "cognition.maturity_transfer_validated": "Validação transferida",
+  "cognition.asset_write_origin_system": "Precipitado pelo sistema"
 }
