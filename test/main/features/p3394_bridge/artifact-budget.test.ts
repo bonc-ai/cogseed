@@ -74,21 +74,22 @@ function artifactRuntime(artifactCount: number): P3394RuntimeAdapter {
 
 function harness(
   runtime: P3394RuntimeAdapter,
-  options: { maxArtifactAutoReplyBytes?: number; maxArtifactAutoRepliesPerSession?: number } = {},
-): { executor: P3394BridgeExecutor; posted: Array<{ session_id: string; message_id: string }> } {
+  options: { maxArtifactAutoReplyBytes?: number; maxArtifactAutoRepliesPerSession?: number; selfIdentity?: { agent_id: string; alias?: string } } = {},
+): { executor: P3394BridgeExecutor; posted: Array<{ session_id: string; message_id: string; sender: { agent_id: string; alias?: string } }> } {
   const bridge = new P3394BridgeKernel();
   bridge.registry.register({ identity: { agent_id: 'peer-a', display_name: 'Peer' }, manifest: manifest('peer-a') });
   bridge.registry.register({ identity: { agent_id: 'cogseed', display_name: 'CogSeed' }, manifest: manifest('cogseed') });
-  const posted: Array<{ session_id: string; message_id: string }> = [];
+  const posted: Array<{ session_id: string; message_id: string; sender: { agent_id: string; alias?: string } }> = [];
   const executor = new P3394BridgeExecutor({
     bridge,
     runtime,
     autoReply: {
       post: vi.fn(async (_endpoint, _token, reply) => {
-        posted.push({ session_id: reply.session_id, message_id: reply.message_id });
+        posted.push({ session_id: reply.session_id, message_id: reply.message_id, sender: reply.sender });
       }),
       allowEndpoint: () => true,
     },
+    ...(options.selfIdentity ? { selfIdentity: options.selfIdentity as never } : {}),
     ...options,
   });
   return { executor, posted };
@@ -131,5 +132,18 @@ describe('P3394 executor artifact auto-reply budget (S-06/M-05)', () => {
     const rejects = executor.bridge.audit.list()
       .filter((record) => record.event === 'autoreply.reject' && (record.metadata as { reason?: string }).reason === 'artifact_count_exceeded');
     expect(rejects).toHaveLength(2); // 每个 session 各自的第二个 artifact 被拒
+  });
+
+  it('auto artifact replies carry the injected node identity (M-07)', async () => {
+    const { executor, posted } = harness(artifactRuntime(1), {
+      maxArtifactAutoRepliesPerSession: 10,
+      selfIdentity: { agent_id: 'my-node', alias: 'MyNode' },
+    });
+    const result = executor.execute(envelope('sess-id', 'tsk-id'));
+    expect(result.ok).toBe(true);
+    await executor.awaitForward('tsk-id');
+    expect(posted).toHaveLength(1);
+    expect(posted[0].sender.agent_id).toBe('my-node');
+    expect(posted[0].sender.alias).toBe('MyNode');
   });
 });

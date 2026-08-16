@@ -24,7 +24,7 @@ import { P3394BridgeKernel, type P3394BridgeSendResult } from './bridge';
 import { P3394BridgeKstarCloseHook } from './kstar-close-hook';
 import { P3394BridgeSessionManager } from './session-manager';
 import { P3394BridgeTaskManager } from './task-manager';
-import type { P3394Envelope, P3394PayloadPart } from './envelope';
+import type { P3394Envelope, P3394EnvelopeParticipant, P3394PayloadPart } from './envelope';
 import { normalizeDigest } from './artifact-parts';
 import { P3394ByteBudget, P3394_CHANNEL_LIMITS } from './channel-limits';
 import type { P3394RuntimeAdapter, P3394RuntimeEvent } from './runtime-adapter';
@@ -58,6 +58,9 @@ export interface P3394BridgeExecutorDeps {
    *  carries extensions.reply_endpoint/reply_token, the CogSeed answer is
    *  POSTed back automatically on task completion/failure. */
   autoReply?: P3394AutoReplyOptions;
+  /** 自动回发信封的本节点身份（默认 cogseed，向后兼容；M-07：不得
+   *  用远端或写死的身份声明本节点）。 */
+  selfIdentity?: P3394EnvelopeParticipant;
   /** Durable session-state file per session id (SDK design §6: the six-state
    *  machine survives restarts). When absent, sessions stay in-memory. */
   sessionFileFor?: (sessionId: string) => string | null;
@@ -91,6 +94,7 @@ export class P3394BridgeExecutor {
   private readonly outboundHub: { tryResolveReply(envelope: P3394Envelope): boolean } | undefined;
   private readonly recordEpisode: P3394BridgeExecutorDeps['recordEpisode'];
   private readonly autoReply: P3394AutoReplyOptions;
+  private readonly selfIdentity: P3394EnvelopeParticipant;
   private readonly now: () => string;
   private readonly forwards = new Map<string, Promise<void>>();
   /** S-06：artifact 自动回发的按会话累计预算（字节 + 数量）。 */
@@ -111,6 +115,7 @@ export class P3394BridgeExecutor {
     this.recordEpisode = deps.recordEpisode;
     this.onEvent = deps.onEvent;
     this.autoReply = deps.autoReply ?? {};
+    this.selfIdentity = deps.selfIdentity ?? { agent_id: 'cogseed', alias: 'CogSeed', channel_instance_id: 'cogseed-app' };
     this.now = deps.now ?? (() => new Date().toISOString());
     this.maxArtifactAutoReplyBytes = deps.maxArtifactAutoReplyBytes ?? P3394_CHANNEL_LIMITS.maxArtifactAutoReplyBytes;
     this.maxArtifactAutoRepliesPerSession = deps.maxArtifactAutoRepliesPerSession ?? P3394_CHANNEL_LIMITS.maxArtifactAutoRepliesPerSession;
@@ -297,7 +302,7 @@ export class P3394BridgeExecutor {
       kind: 'artifact',
       performative: 'inform',
       role: 'responder',
-      sender: { agent_id: 'cogseed', alias: 'CogSeed', channel_instance_id: 'cogseed-app' },
+      sender: { ...this.selfIdentity },
       recipients: [{ agent_id: envelope.sender.agent_id }],
       payload: { parts: [part] },
       reply_to: envelope.message_id,
@@ -343,7 +348,7 @@ export class P3394BridgeExecutor {
       kind: performative === 'error' ? 'error' : 'message',
       performative,
       role: 'responder',
-      sender: { agent_id: 'cogseed', alias: 'CogSeed', channel_instance_id: 'cogseed-app' },
+      sender: { ...this.selfIdentity },
       recipients: [{ agent_id: envelope.sender.agent_id }],
       payload: {
         parts: performative === 'error'
