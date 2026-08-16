@@ -1,114 +1,98 @@
-# 场景测试：review 沉淀质量验证（对话历史注入后台推理）
+# 场景测试 v2：后台 review 沉淀质量验证（Commander review 已移除）
 
 - 日期：2026-08-16
-- 构建：`930f14c5`（静默窗口 review + 后台推理注入对话历史 + forecast 确定性度量）
-- 目的：验证 review 方案改动对**沉淀质量**的影响——活跃期 review 由后台推理承担（对话历史 + 确定性度量），质量是否保持、噪音是否可控
-- 方式：用户在 GUI 跑 5 类任务，我跑审计脚本 + 盯后台日志对比基线
-- 配套：`scripts/audit-kstar-precipitation.mjs`（质量审计）
+- 构建：`2ea90030`（review 彻底后台化——独立 runner + forecast 确定性度量 + 对话历史；Commander review 回合已删除）
+- 前情：v1（静默窗口方案）实测失败——review 回合照发占队列、8 个 Commander review 全部 lesson=None（重构类任务的明显教训也不沉淀）。本次验证纯后台推理路径
+- 方式：用户在 GUI 跑任务，我盯后台日志 + 审计脚本
+- 配套：`scripts/audit-kstar-precipitation.mjs`
 
 ---
 
-## 基线（改动生效前，48h 窗口，uid 78967691）
+## 方案要点（v2 与 v1 差异）
 
-| 指标 | 基线值 | 健康区间 |
+| | v1（已废弃） | v2（当前） |
 |---|---|---|
-| lesson 提取率 | 31%（211/683） | 20~60% |
-| review 生成方式 | commander=673 / model=6 / unknown=3 | 改动后 model 占比应上升 |
-| attribution | unclear=484(71%) / rule_gap=193(28%) / execution_gap=6 | unclear 偏高，重点观察 |
-| outcome | met_expected=673(98%) | 正常 |
-| 资产 type | rule=8 / skill_method=1 / template=1 | 合理 |
-| kstar- 候选 | 2（confirmed=2，mergedInto=1） | 去重命中正常 |
-
-**核心对比问题**：改动后新 review 应主要来自 `model` 方式（后台推理），其 lesson 率/归因分布/具体性要与基线 commander 方式相当或更好。
+| review 来源 | Commander 回合（8s 静默窗口后） | **纯后台推理**（ephemeral runner） |
+| 队列影响 | 每回合后占队列 8-10s | **零**（独立 runner，永不入 Commander 队列） |
+| 期望基准 | Commander 凭记忆 | **forecast rHat 确定性对比**（reconcileWorldModel） |
+| 情境 | Commander 记忆 | **对话历史**（最新 40 条/6KB，注入模型归因） |
+| lesson 产出 | 实测 0% | 待验证（期望重构类任务有产出） |
 
 ---
 
-## 场景 A：资料/写作类（含同语义重复）
+## 基线（v1 实测：8 个 review 全部 commander 方式）
+
+| 指标 | v1 实测 | v2 期望 |
+|---|---|---|
+| review 生成方式 | commander=8 | **model 为主**（inferenceMethod='model'） |
+| lesson 提取率 | **0%**（8/8 无 lesson） | 出现非平凡 lesson（尤其重构类） |
+| review 回合占队列 | 每回合 +8-10s | **无 review 回合**（日志无 review 请求） |
+| attribution | 全 unclear | 需求漂移场景 ≠ execution_gap |
+
+---
+
+## 场景 A：资料类（去重 + lesson 具体性）
 
 ### A1 发任务
 
 **操作**：新会话，发送：
 
 ```
-帮我写一份 成都城市 的资料，500 字
+帮我写一份 广州城市 的资料，500 字
 ```
 
 **你可见的预期**：
-- Commander 直接交付约 500 字成都资料
-- 无 review 气泡、无 KStar 工具提示
+- Commander 直接交付约 500 字广州资料
+- **回复后不再出现"正在输入"幽灵**（无 review 回合）
 
 **后台验证**（我盯）：
 ```
-kstar model routing verdict { isTask: true }
-kstar auto-forecast committed        ← 世界模型预测（后台）
-【回合结束】terminal completed → capture 启动
+【回合结束】terminal completed → capture（后台推理启动，无新回合）
+【日志】无 kstar_review_request / 无额外 turn-start
+【review】inferenceMethod='model'
 ```
 
 **质量观察点**：
-- review 生成方式：**期望 model**（你在 8s 内继续 → 跳过 commander；或后台推理）
-- lesson 若存在：应具体（"XX 类资料：开头注明字数、按板块组织"），且**与既有"N 字资料"资产语义重复 → 触发去重融合，不产生新资产**（场景 A 的隐式验证）
-
-### A2 快速连续第二个任务（验证活跃期不插队）
-
-**操作**：回复后**立即**（8s 内）发送：
-
-```
-再帮我写一份 重庆城市 的资料，500 字
-```
-
-**你可见的预期**：
-- 第二个任务**不被 review 回合排队阻塞**，直接开始执行
-
-**后台验证**：
-```
-【第一个回合 terminal 后】8s 内检测到用户新消息 → review 跳过
-kstar commander review skipped: user active during quiet window
-【第二个回合正常进行】无 review 回合插入
-```
-
-**质量观察点**：
-- 第一个回合的 review 由**后台推理**（model 方式）生成，带对话历史
-- lesson 与既有资产去重 → mergedIntoAssetId 或证据并入
+- review 生成方式 = **model**（不是 commander）
+- lesson：若产出应为"N 字资料"类（与既有资产同语义 → **语义去重触发 mergedIntoAssetId**，不新建资产）
+- 若 lesson=None 也接受（routine 任务）——**关键是不再出现"幽灵回合"**
 
 ---
 
-## 场景 B：文件/代码操作类（工具类 lesson）
+## 场景 B：重构类（核心验证——确定性度量算出 gap）
 
-**操作**：新会话，发送：
+**操作**：新会话，发送（源码不存在也没关系，按原样发）：
 
 ```
 把我项目里这段逻辑重构一下：读取配置时如果文件不存在就返回默认值，不要抛异常。保存到 refactor.ts
 ```
 
 **你可见的预期**：
-- Commander 读取相关文件、重构、写出 `refactor.ts`
+- Commander 核查工作区后说明无法凭空重构（索要源码）——或真重构成功（取决于工作区）
 
 **后台验证**：
 ```
-【执行回合】read_file/write_file 工具调用
-【终态】terminal completed → capture → review
+【review】model 方式
+【delta】若未交付重构 → deltaR 应 < 0（worse_than_expected）而非 met_expected
+【lesson】期望产出"重构类任务先确认源码存在/先读取当前实现再动手"
 ```
 
-**质量观察点**（重点）：
-- lesson 是否含**具体工具/步骤/触发条件**（如"配置读取用 try-catch 降级而非抛错"）——而不是"认真完成了任务"
-- attribution 应贴近 `skill_gap`/`template_gap`（执行偏差），不应是 `rule_gap` 大量堆叠
-- lesson 具体性：含 `read_file`/`write_file`/文件名/异常类型 → 好；泛泛而谈 → 关注
+**质量观察点**（**核心**）：
+- v1 的 Commander review 对同一任务给了 `met_expected` + 无 lesson（自评"处置得体"）
+- v2 的确定性度量**以 forecast 为基准**：用户要"重构交付"，实际"未交付" → gap → **worse_than_expected**
+- lesson 若产出"先确认源码存在"→ **v2 方案成功**（确定性度量 > 执行者自评）
 
 ---
 
-## 场景 C：需求中途变更类（归因准确性，重点场景）
+## 场景 C：需求中途变更（归因准确性）
 
-### C1 发任务
-
-**操作**：新会话，发送：
+**操作**：新会话发送：
 
 ```
-帮我写一份 天津城市 的资料，500 字，用表格形式
+帮我写一份 西安城市 的资料，500 字，用表格形式
 ```
 
-### C2 中途变更
-
-**操作**：Commander 交付后（或执行中）追加：
+交付后追加：
 
 ```
 改成散文风格，不要表格了，再加一段历史沿革
@@ -117,17 +101,10 @@ kstar commander review skipped: user active during quiet window
 **你可见的预期**：
 - Commander 按新要求重写
 
-**后台验证**：
-```
-【回合 2】terminal → capture 2（用户活跃可能跳过 commander review）
-```
-
-**质量观察点**（核心）：
-- **归因正确性**：最终结果与最初预测（表格）不同，但原因 = **需求漂移**（用户改了要求），不是执行失败
-  - 期望：attribution 不应是 `execution_gap`（执行没问题）；合理的是 `unclear` 或与需求相关
-  - 后台推理**有对话历史**应能识别"用户改了要求"——这是本次改动的核心价值
-- lesson 若存在：应为"需求变更场景先确认新要求再执行"类，而不是"表格任务要执行得更好"（错误教训）
-- **错误信号**：lesson 把需求漂移归因为执行失败 → 后台推理被确定性度量误导（弊病回归）
+**质量观察点**：
+- 变更后的 review：delta 可能非零（结果与最初 forecast 不同）——**归因不应是 execution_gap**（执行没问题，是需求变了）
+- 对话历史应让模型识别"用户改了要求" → attribution 合理（unclear/knowledge_gap 可接受，execution_gap 是错误信号）
+- lesson 若产出：应为"需求变更场景先确认新要求"类
 
 ---
 
@@ -139,24 +116,16 @@ kstar commander review skipped: user active during quiet window
 让 研究助手 帮我查一下 2024 年新能源汽车销量前五，整理成表格
 ```
 
-（若无"研究助手"agent，换任意已装 agent）
-
-**你可见的预期**：
-- Commander 委派 agent 执行、汇总结果
-
-**后台验证**：
-```
-【dispatch】dispatch_to/run_worker + ability_assets 授权
-【终态】Commander 汇总 → terminal → capture
-```
+（若无该 agent 换任意已装 agent）
 
 **质量观察点**：
-- lesson 是否捕获委派相关经验（如"查数据类任务先确认数据源/时间范围"）
-- 对话历史应包含委派过程（narration），归因能区分"agent 结果质量问题" vs "委派指令不清"
+- 委派场景的 review 正常（model 方式）
+- lesson 若产出：委派相关经验（如"查数据先确认数据源/时间范围"）
+- **注意**：若 agent 需要交互授权，任务可能挂起——review 应记录"episode 停留在等待授权"且不沉淀错误教训
 
 ---
 
-## 场景 E：简单问答（噪音控制）
+## 场景 E：简单问候（噪音控制）
 
 **操作**：新会话，发送：
 
@@ -164,59 +133,70 @@ kstar commander review skipped: user active during quiet window
 你好
 ```
 
-（等回复后再发一条"谢谢"或普通闲聊）
+**质量观察点**：
+- review 存在（audit trail）但 **lesson 应为空**（问候无沉淀价值）
+- 若产出 lesson → 噪音（对话历史被当素材），需上平凡性 gate
+
+---
+
+## 场景 F：快速连续消息（验证完全不插队）
+
+**操作**：同一会话，发任务后**立即**（几秒内）发下一条：
+
+```
+帮我写一份 深圳城市 的资料，500 字
+再写一份 杭州城市 的资料，500 字
+```
+
+（或分两条快速发送）
 
 **你可见的预期**：
-- Commander 正常回应
+- 两条都直接执行，**第二条不被任何 review 排队**（v1 会插一个 review 回合）
 
 **后台验证**：
 ```
-kstar model routing verdict { isTask: false } 或 trivial 过滤
-【terminal】capture → review
+【两条消息间】无 kstar_review_request、无 review 回合 turn-start
+【两个回合】连续两个用户回合
 ```
-
-**质量观察点**（重点）：
-- **不应沉淀**：问候/闲聊的 review 应无 lesson（lesson 率对 trivial 任务应为 0）或 lesson 平凡（confidence 低 → 被沉淀 gate 拦截）
-- review 记录本身存在（audit trail），但 `lesson` 缺失或 confidence < 0.7
-- **错误信号**：闲聊也产出 lesson → 对话历史把噪音当素材（幻觉入口）
 
 ---
 
 ## 审计与判定
 
-### 验证命令（跑完全部场景后）
+### 验证命令
 
 ```bash
 node scripts/audit-kstar-precipitation.mjs --since-hours 24
 ```
 
-### 判定表
+### 判定表（v2）
 
-| 指标 | 通过 | 关注（需缓解） | 失败 |
+| 指标 | 通过 | 关注 | 失败 |
 |---|---|---|---|
-| model 方式 review 占比 | 显著上升（>20%） | 无 model review（路径未生效） | — |
-| model 方式 lesson 率 | 20~60% | 偏低(<10%) 或偏高(>70%) | 全是噪音 lesson |
-| 场景 C 归因 | 需求漂移 → 非 execution_gap | 部分 execution_gap | 全部执行归因（对话历史没起作用） |
-| 场景 E 闲聊 | 无 lesson / confidence 低 | 偶发 lesson | 稳定产出 lesson（噪音） |
-| lesson 具体性 | 含步骤/工具/触发条件 | 半泛化 | 全泛化（"认真完成任务"） |
-| 语义去重 | 场景 A 触发 mergedInto | 未触发（可能无重复资产） | 重复资产出现 |
+| review 生成方式 | model 为主 | 混合 | 仍全 commander（路径未生效） |
+| review 回合 | 无（日志无 review 请求） | 偶发 | 每回合都有（删除不彻底） |
+| lesson 率（任务型） | 出现非平凡 lesson | 极低 | 全无（同 v1，推理没起作用） |
+| 场景 B delta | 未交付 → worse_than_expected | met_expected（度量失效） | — |
+| 场景 C 归因 | 非 execution_gap | 部分 | 全 execution_gap（对话历史没起作用） |
+| 场景 E 问候 | lesson 空 | 偶发 lesson | 稳定产出（噪音） |
+| 语义去重 | 场景 A 触发 mergedInto | 未触发 | 重复资产 |
 
-### 缓解预案（按失败形态选择）
+### 缓解预案（按失败形态）
 
-1. **对话过滤收紧**：只保留 user 消息 + Commander 关键消息（去状态/重试噪音）
-2. **截断策略**：保留开头（需求）+ 结尾（结果）两端，中间抽样——而非纯最新优先
-3. **平凡性 gate**：lesson 与 goalText 相似度过高视为平凡，模型输出后确定性拦截
-4. **归因约束**：对话出现"用户变更/追加要求"信号时，禁止 attribution=execution_gap
+1. **lesson 平凡性 gate**：lesson 与 goalText 相似度过高 → 判定平凡，拦截
+2. **对话过滤收紧**：只留 user + Commander 关键消息（去状态/重试噪音）
+3. **截断策略**：开头（需求）+ 结尾（结果）两端保留，中间抽样
+4. **归因约束**：对话含"用户变更/追加"信号时禁止 execution_gap
 
 ---
 
-## 记录区（填完场景后更新）
+## 记录区
 
-| 场景 | 日期 | review 方式 | lesson | 归因 | 判定 |
-|---|---|---|---|---|---|
-| A 成都 | | | | | |
-| A2 重庆（活跃） | | | | | |
-| B 重构 | | | | | |
-| C 天津变更 | | | | | |
-| D 委派 | | | | | |
-| E 问候 | | | | | |
+| 场景 | 日期 | review 方式 | delta | 归因 | lesson | 判定 |
+|---|---|---|---|---|---|---|
+| A 广州 | | | | | | |
+| B 重构 | | | | | | |
+| C 西安变更 | | | | | | |
+| D 委派 | | | | | | |
+| E 问候 | | | | | | |
+| F 快速连续 | | | | | | |
