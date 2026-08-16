@@ -1739,6 +1739,9 @@ describe('Recall cognition renderer flow', () => {
             if (channel === 'recall.assets.versions') {
               return { ok: true, versions: [{ version: '1', at: '2026-08-07T00:00:00.000Z', snapshot: { title: 'PRD 方法' } }], audit: [] };
             }
+            if (channel === 'cognition.assets.diff') {
+              return { ok: true, diffs: [] };
+            }
             return { ok: true, asset: { id: 'aa-method' } };
           },
         },
@@ -1781,6 +1784,8 @@ describe('Recall cognition renderer flow', () => {
       ['recall.assets.purge', { assetId: 'aa-method' }],
       ['recall.assets.revoke', { assetId: 'aa-method' }],
       ['recall.assets.versions', { assetId: 'aa-method' }],
+      // 版本与 diff 一起取：只有版本号和时间的话，「回滚到此版本」对用户就是盲赌。
+      ['cognition.assets.diff', { assetId: 'aa-method' }],
       ['recall.assets.rollback', { assetId: 'aa-method', version: '1' }],
     ]);
     expect(refreshes).toBe(8);

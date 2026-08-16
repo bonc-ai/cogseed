@@ -1224,6 +1224,10 @@ async function updateRecallCaptureSettings(patch) {
 function _cognitionInboxKindLabel(kind) {
   const labels = {
     skill_creation_suggested: ['cognition.inbox_skill_suggestions', 'Skill 创建建议'],
+    skill_upgrade_suggested: ['cognition.inbox_skill_upgrade', 'Skill 可以升版'],
+    rule_scope_changed: ['cognition.inbox_rule_scope_changed', '规则的作用范围变了'],
+    template_updated: ['cognition.inbox_template_updated', '模板正文被更新'],
+    sensitivity_escalated: ['cognition.inbox_sensitivity_escalated', '敏感级被升高'],
     rule_boundary_missing: ['cognition.inbox_rule_boundary', '规则缺少作用边界'],
     classification_conflict: ['cognition.inbox_classification_conflict', '同一条判断被归成了两类'],
     evidence_insufficient: ['cognition.inbox_evidence_insufficient', 'Evidence 不足，需要补证'],
@@ -1238,6 +1242,10 @@ function _cognitionInboxKindLabel(kind) {
 function _cognitionInboxKindHint(kind) {
   const hints = {
     skill_creation_suggested: ['cognition.inbox_skill_suggestions_hint', '这些方法已是你的正式资产，确认后可生成为可执行 Skill。'],
+    skill_upgrade_suggested: ['cognition.inbox_skill_upgrade_hint', '方法在生成 Skill 之后又改过，已装的 Skill 落后于资产。'],
+    rule_scope_changed: ['cognition.inbox_rule_scope_changed_hint', '系统改动了它的适用/禁止范围，它从此会进出一批不同的任务。'],
+    template_updated: ['cognition.inbox_template_updated_hint', '系统改写了模板内容，确认后继续使用。'],
+    sensitivity_escalated: ['cognition.inbox_sensitivity_escalated_hint', '这条资产能带往的目的地变多了，请确认这次扩权。'],
     rule_boundary_missing: ['cognition.inbox_rule_boundary_hint', '没有作用边界的规则不会被自动带入任何任务，补齐后才会生效。'],
     classification_conflict: ['cognition.inbox_classification_conflict_hint', '同一句话被归到两个类型，两边都不会晋升，需要你裁定。'],
     evidence_insufficient: ['cognition.inbox_evidence_insufficient_hint', '没有可追溯的证据，无法确认为正式资产。'],
@@ -1790,6 +1798,41 @@ function _renderRecallAssetChain(assetId) {
   return `<section class="recall-asset-chain-panel"><div class="recall-asset-version-head"><strong>${escapeHtml(_cognitionText('cognition.chain_title', '使用与证明'))}</strong><button type="button" class="btn btn-sm recall-asset-version-close" data-recall-asset-chain-close title="${escapeHtml(closeLabel)}" aria-label="${escapeHtml(closeLabel)}">${closeIcon}</button></div>${body}</section>`;
 }
 
+/** 变更分类 → 用户读得懂的字段名。服务端只给 kind/field，措辞归渲染层。 */
+function _assetChangeFieldLabel(change) {
+  const labels = {
+    applicableWhen: _cognitionText('cognition.applicable_when', '适用范围'),
+    forbiddenWhen: _cognitionText('cognition.forbidden_when', '禁止范围'),
+    statement: _cognitionText('cognition.deposited_content', '沉淀内容'),
+    title: _cognitionText('cognition.asset_title', '标题'),
+    scope: _cognitionText('cognition.governance_scope', '作用范围'),
+    sensitivity: _cognitionText('cognition.sensitivity', '敏感级'),
+    evidenceRefs: _cognitionText('cognition.evidence_refs', '证据'),
+    maturity: _cognitionText('cognition.maturity', '成熟度'),
+    status: _cognitionText('cognition.asset_governance', '治理状态'),
+  };
+  return labels[change.field] || String(change.field || '');
+}
+
+/**
+ * 某个版本相对上一版改了什么。
+ *
+ * 最早那一版不显示"没有变化"而是显示"首个版本"——两者是不同的事实，混为
+ * 一谈会让用户以为系统没算出来。
+ */
+function _renderAssetVersionChanges(diff, version, versions) {
+  const isFirst = Array.isArray(versions) && versions.length > 0
+    && String(versions[versions.length - 1]?.version || '') === String(version || '');
+  if (!diff) {
+    const text = isFirst
+      ? _cognitionText('cognition.governance_first_version', '首个版本，没有可对比的前一版')
+      : _cognitionText('cognition.governance_no_changes', '这一版没有内容变化');
+    return `<div class="recall-asset-version-changes is-empty">${escapeHtml(text)}</div>`;
+  }
+  const rows = (diff.changes || []).map((change) => `<div class="recall-asset-version-change is-${escapeHtml(change.kind || '')}"><b>${escapeHtml(_assetChangeFieldLabel(change))}</b><span>${escapeHtml(change.before)}</span><i aria-hidden="true">→</i><span>${escapeHtml(change.after)}</span></div>`).join('');
+  return `<div class="recall-asset-version-changes"><strong>${escapeHtml(_cognitionText('cognition.governance_changes', '本次改动'))}</strong>${rows}</div>`;
+}
+
 function _renderRecallAssetHistory(assetId) {
   if (_skillsCognitionState.visibleAssetHistoryId !== assetId) return '';
   const history = _skillsCognitionState.assetHistoryById?.[assetId];
@@ -1804,12 +1847,16 @@ function _renderRecallAssetHistory(assetId) {
     // 当前版本不给回滚按钮——回滚到自己没有意义，服务端也会拒。
     const currentVersion = String(_skillsCognitionState.assets?.find((item) => item.id === assetId)?.version || '');
     const rollbackLabel = _cognitionText('cognition.asset_action_rollback', '回滚到此版本');
+    // diff 按 toVersion 索引：每个版本行下面挂它相对上一版改了什么。没有这个，
+    // "回滚到此版本"就只能靠时间戳猜。
+    const diffsByVersion = new Map((Array.isArray(history.diffs) ? history.diffs : [])
+      .map((diff) => [String(diff.toVersion || ''), diff]));
     body = versions.length ? versions.map((version) => {
       const value = String(version.version || '');
       const rollback = value && value !== currentVersion
         ? `<button type="button" class="btn btn-sm recall-asset-rollback" data-recall-asset-rollback="${escapeHtml(assetId)}" data-recall-asset-version="${escapeHtml(value)}">${escapeHtml(rollbackLabel)}</button>`
         : '';
-      return `<div class="recall-asset-version-row"><span><strong>v${escapeHtml(value)}</strong><small>${escapeHtml(_cognitionDate(version.at))}</small></span><p>${escapeHtml(version.snapshot?.title || '')}</p>${rollback}</div>`;
+      return `<div class="recall-asset-version-row"><span><strong>v${escapeHtml(value)}</strong><small>${escapeHtml(_cognitionDate(version.at))}</small></span><p>${escapeHtml(version.snapshot?.title || '')}</p>${rollback}</div>${_renderAssetVersionChanges(diffsByVersion.get(value), value, versions)}`;
     }).join('') : `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.asset_versions_empty', '暂无版本记录'))}</div>`;
   }
   return `<section class="recall-asset-version-panel"><div class="recall-asset-version-head"><strong>${escapeHtml(_cognitionText('cognition.version_history', '版本历史'))}</strong><button type="button" class="btn btn-sm recall-asset-version-close" data-recall-asset-history-close title="${escapeHtml(closeLabel)}" aria-label="${escapeHtml(closeLabel)}">${closeIcon}</button></div>${body}</section>`;

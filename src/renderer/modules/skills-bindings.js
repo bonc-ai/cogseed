@@ -195,12 +195,19 @@ function _initSkillsCognitionBindings() {
         _skillsCognitionState.visibleAssetHistoryId = assetId;
         _skillsCognitionState.assetHistoryById[assetId] = { loading: true };
         renderActiveAssetSurface();
-        const result = await window.cogseed.invoke('recall.assets.versions', { assetId });
+        // diff 与版本一起取：只有版本号和时间的话，"回滚到此版本"对用户就是
+        // 盲赌——他只能靠时间戳猜哪一版是他要的。diff 取不到不该让版本面板
+        // 打不开，所以单独兜底。
+        const [result, diffResult] = await Promise.all([
+          window.cogseed.invoke('recall.assets.versions', { assetId }),
+          window.cogseed.invoke('cognition.assets.diff', { assetId }).catch(() => null),
+        ]);
         if (!result?.ok) throw new Error(result?.error || 'recall asset versions failed');
         _skillsCognitionState.assetHistoryById[assetId] = {
           loading: false,
           versions: result.versions || [],
           audit: result.audit || [],
+          diffs: diffResult?.ok ? (diffResult.diffs || []) : [],
         };
         renderActiveAssetSurface();
         return;
