@@ -17,6 +17,7 @@ import { createInitialKstarReview, readKstarReview, saveKstarReview, saveKstarRe
 import { inferKstarReview, type KstarReviewInferenceOptions, type KstarReviewInferenceResult } from './review-inference';
 import { postKstarReviewCard } from './review-card';
 import type { KstarEpisodeRecord, KstarExtractionRunRecord, KstarReviewRecord } from './types';
+import type { WorldModelForecast } from '../recall/world-model-types';
 import { readConversationTaskState, readKstarRequirement } from './requirement-store';
 
 const log = createLogger('kstar.task-closure');
@@ -118,7 +119,7 @@ async function finishClosure(
   episode: KstarEpisodeRecord,
   bridge: KstarCandidateBridge = saveKstarCandidateProposals,
   inferReview: KstarReviewInfer = inferKstarReview,
-  options: { forecast?: Awaited<ReturnType<typeof readWorldModelForecast>> | null; messages?: Array<{ from: string; text: string; ts?: string }> } = {},
+  options: { forecast?: WorldModelForecast | null; messages?: Array<{ from: string; text: string; ts?: string }> } = {},
 ): Promise<KstarClosureResult> {
   await writeKstarEpisode(userId, episode);
   let storedReview: KstarReviewRecord | null = null;
@@ -301,7 +302,7 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
   // 确定性计算，模型只归因——全程独立后台 runner，不占 Commander 队列
   // （Commander review 回合已移除：实测其占队列 8-10s 且 lesson 产出为
   // 空，而确定性度量 + 对话历史的后台推理质量更稳定）。
-  let forecast: Awaited<ReturnType<typeof readWorldModelForecast>> | null = null;
+  let forecast: Awaited<ReturnType<typeof import('../recall/world-model').readWorldModelForecast>> | null = null;
   if (input.forecastId) {
     try {
       const { readWorldModelForecast } = await import('../recall/world-model');

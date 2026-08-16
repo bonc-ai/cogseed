@@ -36,15 +36,16 @@ import {
   type NormalizedTranscript,
   type TranscriptTurn,
 } from './transcript-normalize';
-import { EXTRACT_SYSTEM_PROMPT, REDUCE_SYSTEM_PROMPT } from '../../prompts/session-extract';
+import { EXTRACT_SYSTEM_PROMPT } from '../../prompts/session-extract';
 
 const log = createLogger('session-import:extractor');
 
 /** Max transcript tokens fed to the model in a single pass. Transcripts above
- *  this are chunked and map-reduced. Raised from the original 6000 — modern
- *  providers comfortably handle this, and fewer/larger chunks means fewer
- *  serial-ish round trips, which is the dominant import cost. */
-const CHUNK_TOKEN_BUDGET = 14000;
+ *  this are chunked and map-reduced. Raised from the original 6000 → 14000 →
+ *  48000: fewer/larger chunks means fewer model round trips, and each pass is
+ *  the dominant import cost (tens of seconds on the user's configured model).
+ *  48000 stays comfortably inside modern provider context windows. */
+const CHUNK_TOKEN_BUDGET = 48000;
 
 /** How many chunk passes run at once. The model client guards everything with
  *  a 5-slot global semaphore, so we stay under that to leave headroom for any
@@ -249,22 +250,17 @@ export async function extractSession(
 
   if (!partials.length) return fallback(transcript, 'all_passes_failed');
 
-  // Reduce: merge partial summaries into one final brief + deduped cognitions.
-  const mergedInput = partials
-    .map((p, i) => `# Segment ${i + 1}\nSummary: ${p.summary}\n`)
-    .join('\n');
-  const reduceOut = await runPass(userId, REDUCE_SYSTEM_PROMPT, mergedInput);
-  const reduced = reduceOut ? parseExtraction(reduceOut) : null;
-
+  // No reduce pass: merging per-chunk summaries + deduping cognitions is done
+  // locally. A reduce pass was one more full model call — the dominant cost
+  // on long transcripts — for marginal coherence gains.
   return {
     ok: true,
     sessionSummary:
-      (reduced?.summary && reduced.summary.trim()) ||
       partials.map((p) => p.summary).filter(Boolean).join('\n\n') ||
       fallbackSummary(transcript),
-    personal: dedupeItems(partials.flatMap((p) => p.personal).concat(reduced?.personal ?? [])),
-    rules: dedupeItems(partials.flatMap((p) => p.rules).concat(reduced?.rules ?? [])),
-    templates: dedupeItems(partials.flatMap((p) => p.templates).concat(reduced?.templates ?? [])),
+    personal: dedupeItems(partials.flatMap((p) => p.personal)),
+    rules: dedupeItems(partials.flatMap((p) => p.rules)),
+    templates: dedupeItems(partials.flatMap((p) => p.templates)),
   };
 }
 

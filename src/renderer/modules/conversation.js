@@ -1718,13 +1718,25 @@ document.addEventListener('click', (e) => {
  *  按钮，避免"点了没反应"。 */
 async function _submitWelcomeContinue(cid, block, btn) {
   let plan = [];
+  let summary = '';
   try {
     const raw = block && block.dataset.welcomeResume;
     if (raw) {
       const parsed = JSON.parse(raw);
       plan = Array.isArray(parsed && parsed.plan) ? parsed.plan : [];
+      summary = String((parsed && parsed.summary) || '');
     }
   } catch (_) { /* keep empty plan */ }
+
+  // 任务较长判定：摘要字符数超过阈值视为长任务（按任务长度判断）。
+  const taskIsLong = summary.trim().length > 300;
+
+  // 通知交互引导（onboarding 后的真实页面 tour）步骤 1 已完成；长任务才继续
+  // 展示「认知资产」引导步骤。
+  if (typeof window !== 'undefined' && window.interactiveTour
+      && typeof window.interactiveTour.markWelcomeContinued === 'function') {
+    try { window.interactiveTour.markWelcomeContinued({ taskIsLong }); } catch (_) {}
+  }
 
   const message = plan.length
     ? `继续。先按这个 Action Plan 执行，遇到冲突或需要扩大权限时再问我：\n${plan.map((item, i) => `${i + 1}. ${item}`).join('\n')}`

@@ -191,10 +191,15 @@ export function parseTemplateFileBundle(text: string): RoleTemplateBundle {
 /** 空间 → 资源派生（纯函数，同步）。
  *  @param space  空间（可部分：primary_template_id/extra_skills/extra_agents）
  *  @param valid  当前用户可见资源的 id 集合（调用方从 listSkills/listAgents 构造）
- *  @returns effective = 模板 bundle ∪ extra 过滤失效去重保序；失效 id 归 invalid_refs。 */
+ *  @param opts   可选：baseAgentAgentId = 空间 base_agent（cli type）对应的团队成员
+ *                agent_id（调用方负责把 cli type 映射到 agent_id；纯函数不做 IO）。
+ *                base_agent 是「承接空间任务的默认执行体」，与指挥官同层，必须进
+ *                effective_agents，否则空间里 @ 不到、任务派发不到。
+ *  @returns effective = 模板 bundle ∪ extra ∪ base agent 过滤失效去重保序；失效 id 归 invalid_refs。 */
 export function resolveSpaceResources(
   space: Pick<Space, 'primary_template_id' | 'secondary_template_ids' | 'extra_skills' | 'extra_agents'> & { template_id?: string },
   valid: { skills?: ReadonlySet<string>; agents?: ReadonlySet<string> },
+  opts?: { baseAgentAgentId?: string },
 ): SpaceResources {
   const validSkills = valid.skills ?? new Set<string>();
   const validAgents = valid.agents ?? new Set<string>();
@@ -230,7 +235,10 @@ export function resolveSpaceResources(
   }
 
   const unionSkills = [...bundleSkills, ...(space.extra_skills ?? [])];
+  // base_agent（cli type）已由调用方映射为团队成员 agent_id：与模板 bundle /
+  // extra_agents 并列参与有效集过滤，重复（已勾进 extra）自动去重。
   const unionAgents = [...bundleAgents, ...(space.extra_agents ?? [])];
+  if (opts?.baseAgentAgentId) unionAgents.push(opts.baseAgentAgentId);
 
   const effectiveSkills: string[] = [];
   const invalidSkills: string[] = [];
@@ -366,6 +374,20 @@ async function _listSpaceIds(uid: string): Promise<string[]> {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
+/** 空间 base_agent（cli type，如 'claude'）→ 团队成员 agent_id。
+ *  从 agents 列表里找 runtime.kind==='cli' 且 cli===type 的成员（注册名如
+ *  ClaudeCode）。找不到（未注册/非 cli）返回 undefined——纯映射，不兜底。
+ *  兼容旧数据：早期硬编码下拉存的是显示名（'Codex' 而非 'codex'），
+ *  做一次大小写不敏感匹配兜底。 */
+function baseAgentToAgentId(agents: ReadonlyArray<{ agent_id?: string; runtime?: { kind?: string; cli?: string } }>, baseAgent: string | undefined): string | undefined {
+  if (!baseAgent) return undefined;
+  const hit = agents.find((a) => a && a.runtime?.kind === 'cli' && a.runtime.cli === baseAgent);
+  if (hit?.agent_id) return hit.agent_id;
+  const lower = baseAgent.toLowerCase();
+  const hitLower = agents.find((a) => a && a.runtime?.kind === 'cli' && String(a.runtime.cli || '').toLowerCase() === lower);
+  return hitLower?.agent_id;
+}
+
 /** 空间列表 + 派生展示元数据（模板名/资源数/失效数）。坏文件跳过。
  *  失效数用真实有效集合（listSkillCatalog/listAgents，均有磁盘缓存）：一次构造、
  *  全部空间复用，避免空集合导致「所有引用全失效」的假阳性（P3394 回归）。 */
@@ -383,7 +405,9 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   for (const sid of ids) {
     const s = await _readSpace(uid, sid);
     if (!s) continue;
-    const res = resolveSpaceResources(s, valid);
+    const res = resolveSpaceResources(s, valid, {
+      baseAgentAgentId: baseAgentToAgentId(agents, s.base_agent),
+    });
     // 最近活跃会话（列表「最近」展示 + 最近使用排序；chats 动态引入避免模块加载链）
     let lastConv: { title?: string; updated_at?: string; created_at?: string } | undefined;
     try {
@@ -939,6 +963,8 @@ export async function resolveSpaceResourcesForUser(uid: string, space: Space): P
   return resolveSpaceResources(space, {
     skills: new Set(skills.map((s) => s.id)),
     agents: new Set(agents.map((a) => a.agent_id)),
+  }, {
+    baseAgentAgentId: baseAgentToAgentId(agents, space.base_agent),
   });
 }
 

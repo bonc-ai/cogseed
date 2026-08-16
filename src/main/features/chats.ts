@@ -2700,6 +2700,7 @@ export async function handoffWelcomeReply(
         carry: data.carry,
         boundary: data.boundary,
         plan: data.plan,
+        summary: data.summary,
       }),
     };
 

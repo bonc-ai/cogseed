@@ -123,6 +123,26 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
     expect(r.invalid_refs.skills).toEqual([]);
   });
 
+  it('base_agent 映射的成员进 effective_agents（基础 Agent 与指挥官同层，必须可派发）', () => {
+    const r = resolveSpaceResources(makeSpace(), validAll, { baseAgentAgentId: 'ag-2' });
+    expect(r.effective_agents).toEqual(['ag-2']);
+  });
+
+  it('base_agent 映射成员与 extra 重复 → 去重不重复计数', () => {
+    const r = resolveSpaceResources(
+      makeSpace({ extra_agents: ['ag-2'] }),
+      validAll,
+      { baseAgentAgentId: 'ag-2' },
+    );
+    expect(r.effective_agents).toEqual(['ag-2']);
+  });
+
+  it('base_agent 映射的成员不在有效集 → 归 invalid_refs（与 extra 同语义）', () => {
+    const r = resolveSpaceResources(makeSpace(), validAll, { baseAgentAgentId: '__gone_base__' });
+    expect(r.effective_agents).toEqual([]);
+    expect(r.invalid_refs.agents).toEqual(['__gone_base__']);
+  });
+
   it('extra 与 bundle 重复的 id 去重（保留模板优先序）', () => {
     const space = makeSpace({
       template_id: 'student',
