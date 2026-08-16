@@ -1,5 +1,5 @@
 import { createLogger } from '../../logger';
-import { nowIso } from '../../storage';
+import { safeId, nowIso } from '../../storage';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from '../recall/source-service';
 import { subscribeTaskTerminals, type TaskTerminalEvent, type TaskTerminalListener } from '../group_chat/bus';
 import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../cogseed_runtime/protocol';
@@ -297,7 +297,27 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
     ...(teachingRefs.length ? { userTeachingSignalRefs: teachingRefs } : {}),
     ...(executionRefs.length ? { executionEvaluationRefs: executionRefs } : {}),
   });
-  const episode = await enrichEpisodeFromRequirementEvidence(input.userId, input.conversationId, built);
+  let episode = await enrichEpisodeFromRequirementEvidence(input.userId, input.conversationId, built);
+  // 空间归属：episode 构建链路（buildGroupKstarEpisode）不透传 workspaceId，
+  // 这里从会话的 space_id 补齐——KStar 沉淀的资产才挂得到空间（空间资产
+  // tab 按 asset.spaceId 过滤；否则全局可见但空间里看不到）。runtime 链路
+  // （RuntimeRunRequest 禁止 conversation_id）无会话上下文，不做空间归属。
+  try {
+    const { getConversation } = await import('../chats');
+    const conversation = await getConversation(input.userId, input.conversationId);
+    const spaceId = conversation && typeof (conversation as { space_id?: unknown }).space_id === 'string'
+      ? (conversation as { space_id: string }).space_id
+      : undefined;
+    if (spaceId && safeId(spaceId) && !episode.s?.workspaceId) {
+      episode = { ...episode, s: { ...(episode.s || {}), workspaceId: spaceId } };
+    }
+  } catch (error) {
+    log.warn('kstar episode space attribution degraded', {
+      userId: input.userId,
+      conversationId: input.conversationId,
+      error: (error as Error).message,
+    });
+  }
   // 确定性世界模型度量（review 推理用）：期望 vs 实际由 forecast 记录
   // 确定性计算，模型只归因——全程独立后台 runner，不占 Commander 队列
   // （Commander review 回合已移除：实测其占队列 8-10s 且 lesson 产出为
