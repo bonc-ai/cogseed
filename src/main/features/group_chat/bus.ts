@@ -2543,8 +2543,8 @@ async function _enqueueBody(
 
   // Dispatch to non-user recipients. User routing remains the ordinary
   // group-chat rule (user -> Commander unless an explicit floor/mention
-  // chooses another actor). KStar bookkeeping happens only through
-  // Commander-owned kstar_control calls and cannot gate this turn.
+  // chooses another actor). KStar bookkeeping is host-governed (routing /
+  // projection / forecast / closure all host-side) and cannot gate this turn.
 
   let backendFollowupHandled = false;
   if (backendFollowupAgentId) {
@@ -6272,8 +6272,8 @@ function kstarApprovalBlockedToolResult(code: string, message: string): { conten
 }
 
 /** Host-side approval guard for privileged agent dispatch. When the active
- *  KStar requirement carries a Projection (the Commander requested one through
- *  kstar_control), execution is paused until the Projection is confirmed AND a
+ *  KStar requirement carries a Projection (the host auto-confirms it at task
+ *  open), execution is paused until the Projection is confirmed AND a
  *  Forecast is committed. Returns verified provenance IDs — never model
  *  claims — and stamps them onto the current taskRun so the terminal event
  *  carries them. Ordinary chat and tools without an active Projection are
