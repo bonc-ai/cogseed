@@ -23309,8 +23309,8 @@ body.model-not-configured .main-content { flex-direction: column; }
 .tour-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(20, 40, 30, 0.4);
-  backdrop-filter: blur(2px);
+  /* 极淡的提示性压暗——不锁死页面、不强制，只为让高亮目标更易被注意到。 */
+  background: rgba(20, 40, 30, 0.05);
   z-index: 9998;
   /* The backdrop must never swallow clicks: the whole point of the tour is
      that the user ACTS on the highlighted target (open a conversation, open
@@ -23323,18 +23323,17 @@ body.model-not-configured .main-content { flex-direction: column; }
   position: fixed;
   z-index: 9999;
   pointer-events: none;
-  max-width: 360px;
+  max-width: 300px;
   background: #ffffff;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px rgba(14, 159, 110, 0.12),
-              0 2px 8px rgba(20, 40, 30, 0.08);
-  animation: tour-slide-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(20, 40, 30, 0.08);
+  animation: tour-slide-in 0.25s ease;
   display: none;
 }
 
 .tour-tooltip-content {
-  padding: 20px;
+  padding: 12px 14px;
 }
 
 .tour-tooltip-header {
@@ -23345,22 +23344,12 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 .tour-tooltip-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 22px;
-  padding: 0 8px;
-  background: var(--primary-soft);
-  color: var(--primary-text);
-  font-size: 11px;
-  font-weight: 650;
-  border-radius: 6px;
-  letter-spacing: 0.02em;
+  display: none;
 }
 
 .tour-tooltip-title {
   margin: 0;
-  font-size: 16px;
+  font-size: 13.5px;
   font-weight: 650;
   color: var(--text);
   line-height: 1.3;
@@ -23369,18 +23358,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 /* Step progress strip: fills as the tour advances, so the user always sees
    how far the journey has come. */
 .tour-tooltip-progress {
-  height: 3px;
-  border-radius: 3px;
-  background: var(--surface-2);
-  overflow: hidden;
-  margin: -4px 0 12px;
+  display: none;
 }
 .tour-tooltip-progress i {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  background: var(--primary);
-  transition: width 0.3s ease;
+  display: none;
 }
 
 .tour-tooltip.tour-tooltip-finish .tour-tooltip-progress {
@@ -23388,45 +23369,35 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 .tour-tooltip-desc {
-  margin: 0 0 14px;
-  font-size: 13.5px;
+  margin: 5px 0 0;
+  font-size: 12.5px;
   color: var(--text-2);
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .tour-tooltip-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  /* Deliberately NOT button-styled: this is a status line, not a control.
-     The real controls live in .tour-tooltip-actions below. */
-  background: var(--surface-2);
-  color: var(--text-2);
-  font-size: 12.5px;
-  font-weight: 500;
-  border-radius: 8px;
-  margin-top: 4px;
+  display: none;
 }
 
 .tour-tooltip-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
 }
 
 /* The card itself stays pointer-events:none so it never blocks a click on the
    highlighted target underneath. Only the buttons opt back in. */
 .tour-tooltip-btn {
   pointer-events: auto;
-  height: 30px;
-  padding: 0 14px;
+  height: 26px;
+  padding: 0 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: 7px;
   background: #ffffff;
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
@@ -23446,6 +23417,23 @@ body.model-not-configured .main-content { flex-direction: column; }
 .tour-tooltip-btn.primary:hover {
   filter: brightness(1.05);
   color: #ffffff;
+}
+
+/* 弱化的"跳过"：纯文字链接，不强占视线。 */
+.tour-tooltip-link {
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.tour-tooltip-link:hover {
+  color: var(--text-2);
+  text-decoration: underline;
 }
 
 .tour-tooltip-arrow {
@@ -23506,12 +23494,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 .tour-highlight {
   position: relative;
   /* Above the backdrop so the target stays fully clickable (the backdrop is
-     pointer-events:none, but stacking also matters for the glow/pulse). */
+     pointer-events:none, but stacking also matters for the glow). */
   z-index: 10000;
-  box-shadow: 0 0 0 4px var(--primary-soft),
-              0 0 0 2px var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 55%, transparent);
   border-radius: var(--radius-sm);
-  animation: tour-pulse 2s ease-in-out infinite;
 }
 
 @keyframes tour-fade-in {

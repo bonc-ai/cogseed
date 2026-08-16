@@ -1220,8 +1220,8 @@ function _csRenderTeam(localClis) {
   }
 
   _csCliByAgent = {};
-  // Stable, friendly ordering: known agents first, then any others.
-  const order = ['claude', 'codex', 'opencode', 'workbuddy'];
+  // Stable, friendly ordering: WorkBuddy first, then known agents, then others.
+  const order = ['workbuddy', 'claude', 'codex', 'opencode'];
   const appTypes = Array.from(clis.keys()).sort((a, b) => {
     const ia = order.indexOf(a); const ib = order.indexOf(b);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
@@ -2925,6 +2925,16 @@ async function _csFinish() {
     _obLog.info('opening first imported conversation after onboarding', { conversationId: firstImported });
     // 会话列表已刷新，切到对话视图（打开时会触发 needs_welcome → 接续模板）。
     setView('conversation', firstImported);
+    // 真实页面引导（悬窗 tour）：第一步指向欢迎消息的「带着这些继续」。
+    // 步骤 1 完成后按任务长度决定是否继续「认知资产」引导；「左下角注册」
+    // 步骤在注册入口融合后追加。
+    if (typeof window.interactiveTour !== 'undefined' && typeof window.interactiveTour.start === 'function') {
+      setTimeout(() => {
+        try { window.interactiveTour.start(); } catch (err) {
+          _obLog.warn('interactive tour start failed', { error: (err && err.message) || String(err) });
+        }
+      }, 600);
+    }
   }
 }
 
