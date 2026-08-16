@@ -1,16 +1,15 @@
-# Failure attribution — customer-profile-presales
+# 失败模式与归因
 
-失败时定位到哪一层（TBox/RBox/ABox/Skill/ToolBinding/Workflow/Eval/Policy/Execution/Memory）：
+| failure_id | 归因层 | 检测信号 | 降级/安全续跑 |
+|---|---|---|---|
+| F-AUTH | Policy | 来源或权限不足 | 停止读取，返回所需授权 |
+| F-SCHEMA | Skill | 输入/输出不满足契约 | 返回字段级错误 |
+| F-TOOL | ToolBinding | 工具/资源不可达或执行走样 | 令 ΔA≠0，禁止用 ΔR 学习 |
+| F-EVIDENCE | Eval | 证据冲突、无定位或来源档位缺失 | 保留冲突并降级结论 |
+| F-GOV | Policy | 请求绕过 HITL、审计或 staged 封顶 | 拒绝并审计 |
+| F-DOMAIN-01 | Workflow | 通用产品答疑、报价或撰写冻结口径（那是治理不是按场次作战方案） | 停止并请求补齐必要材料/授权 |
+| F-DOMAIN-02 | Workflow | 关键输入缺失却要求直接定稿 | 按原 Skill 的失败与降级规则处理 |
+| F-DOMAIN-03 | Workflow | 合规红线被要求绕过 | 拒绝并说明原因 |
+| F-DOMAIN-04 | Workflow | 预算/范围耗尽 | 保留中间证据、未完成步骤和恢复指针 |
 
-| 失败现象 | 归因层 | 说明 |
-|---|---|---|
-| 选错版本/话术 | RBox | R1 路由映射错或画像层级取值歧义 |
-| 该删的禁讲项没删 | RBox / Policy | R2 颗粒度规则或治理策略未生效 |
-| 异议卡取错/漏取 | ToolBinding | 《销售 QA 库》检索绑定或 id 映射问题 |
-| 口径越界（点名友商/报硬数字/自进化词） | Policy（保护面） | R4/R5/R6/R3 被绕过——最高危，须回归红线兜底 |
-| 定制稿自动定稿/发送 | Workflow | confirm HITL gate 缺失或被跳过 |
-| 画像字段缺失即崩 | Skill / Schema | 必填字段校验或默认处理缺失 |
-| 学了不该学的（临场手改却回流） | Eval / KSTAR | ΔA 门控失效，ΔR 被误用 |
-| 用了客户机密数据 | Memory / 数据边界 | 画像未脱敏，违 §8.2 |
-
-高危项（Policy 保护面）必须由回归测试红线覆盖，且永不可被自我演进补丁修改。
+归因键必须进入 `trace` 与学习记录。执行走样优先归因 ToolBinding/Execution，不得误写成知识更新信号。

@@ -578,26 +578,85 @@ describe('KSTAR direct experience asset line', () => {
     expect(pending[0].status).toBe('confirmed');
   });
 
-  it('carries the space into the asset when the episode has a workspace (space asset tab)', async () => {
-    const builder = await import('../../../../src/main/features/kstar/episode-builder');
-    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct-space', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-    // episode 挂空间：s.workspaceId = 空间 id（bus 层以 turnSpaceId 填充）
-    seededEpisode.s = { ...(seededEpisode.s || {}), workspaceId: 'sp_abc123' };
-    const result = await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [{
-      judgment: 'For spaced tasks, attach the space id to the asset.',
-      summary: 'Space-tagged workflow',
-      suggestedType: 'skill_method',
-      suggestedScope: 'report',
-      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-space' }],
-    }]);
+  it('carries the conversation space into the asset through the real closure path (space asset tab)', async () => {
+    // 真实链路：挂空间会话 → captureGroupKstarClosure（读 conversation.space_id
+    // 填 episode.s.workspaceId）→ 任务级沉淀 → 资产带 spaceId。修复前 episode
+    // 构建不透传 workspaceId，此测试在真实链路上断言（不再手动塞 episode.s）。
+    const chats = await import('../../../../src/main/features/chats');
+    const conv = await chats.createConversation('closure-user', { title: 'space-bound task', spaceId: 'sp_abc123' });
+    expect(conv.space_id).toBe('sp_abc123');
 
-    expect(result.createdAssetIds).toHaveLength(1);
+    // 建 requirement 并挂到会话（任务级沉淀的宿主；闭环会把 episode 附上来）
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: conv.conversation_id, title: 'Space task' });
+    const requirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id,
+      conversationId: conv.conversation_id,
+      userMessageIds: ['msg-user-space'],
+      title: 'Space-bound task',
+      goalText: 'For spaced tasks, attach the space id to the asset.',
+    });
+    await store.replaceKstarTask('closure-user', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id });
+    await store.replaceKstarRequirement('closure-user', requirement);
+    const state = await import('../../../../src/main/features/kstar/requirement-store');
+    await state.writeConversationTaskState('closure-user', {
+      ...state.createInitialConversationTaskState('closure-user', conv.conversation_id),
+      currentTaskId: task.id,
+      currentRequirementId: requirement.id,
+      taskComplete: false,
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    // 模拟有模型环境：推理产出学习信号（delta + 教训），任务级沉淀质量门限
+    // 才通过——真实环境无模型时 review 降级为保守 stub（confidence 0），
+    // 聚合提案被噪声门限过滤，属设计行为。
+    const inferred = async (_userId: string, builtEpisode: any) => ({
+      review: {
+        expectedResult: builtEpisode.t.userGoal,
+        actualResult: 'Space-tagged workflow attached and verified.',
+        deltaR: 0.3 as const,
+        deltaA: 0.1 as const,
+        outcome: 'better_than_expected' as const,
+        attribution: 'execution_gap' as const,
+        reason: 'The verified workflow is worth reusing for spaced report tasks.',
+        lesson: 'For spaced report tasks, attach the space id to the asset so it surfaces in the space asset tab.',
+        confidence: 0.95,
+        evidenceRefs: builtEpisode.evidenceRefs,
+      },
+      reviewState: 'inferred' as const,
+      inferenceMethod: 'deterministic' as const,
+      needsConfirmation: false,
+    });
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-direct-space-real', conversationId: conv.conversation_id, status: 'completed',
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-user-space', from: 'user', text: 'For spaced tasks, attach the space id to the asset.', ts: '2026-08-05T00:00:01.000Z' },
+        { id: 'msg-agent-space', from: 'commander', text: 'Space-tagged workflow attached.', ts: '2026-08-05T00:00:30.000Z' },
+      ],
+      createdAt: '2026-08-05T00:02:00.000Z',
+      inferReview: inferred,
+    });
+
+    // episode 落盘带 workspaceId（读会话 space_id 补齐）
+    const episodes = await import('../../../../src/main/features/kstar/episode-store');
+    const records = await episodes.listKstarJsonRecords('closure-user', 'episodes');
+    const episode = records.find((e) => e.id === 'kse-run-direct-space-real') as unknown as { s?: { workspaceId?: string } };
+    expect(episode).toBeDefined();
+    expect(episode!.s?.workspaceId).toBe('sp_abc123');
+
+    // 任务级沉淀（真实 KSTAR 资产出口）→ 资产带 spaceId（空间资产 tab 过滤键）。
+    // 注意：闭环已把 episode attach 到磁盘上的 requirement，必须重读最新对象
+    // （precipitateRequirementLevel 按传入对象的 episodeIds 聚合）。
+    const freshRequirement = await store.readKstarRequirement('closure-user', requirement.id);
+    expect(freshRequirement?.episodeIds).toContain('kse-run-direct-space-real');
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = await precipitation.precipitateRequirementLevel('closure-user', freshRequirement!);
+    expect(result.createdAssetIds.length).toBeGreaterThan(0);
+    const assets = await import('../../../../src/main/features/recall/asset-service');
     const all = await assets.listAbilityAssets('closure-user');
     const created = all.find((a) => a.id === result.createdAssetIds[0]);
     expect(created).toBeDefined();
-    // 空间资产 tab 的过滤键：KStar 沉淀必须带 spaceId，否则空间里永远看不到
     expect(created!.spaceId).toBe('sp_abc123');
   });
 

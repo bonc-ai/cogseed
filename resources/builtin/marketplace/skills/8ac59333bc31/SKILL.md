@@ -26,10 +26,10 @@ description: "小红书笔记创作：根据商品/品牌资料撰写小红书�
 <!-- NSEAP-GATE:BEGIN -->
 ## NSEAP Gate 契约
 
-- `use_when`：小红书笔记创作：根据商品/品牌资料撰写小红书风格标题+正文，并输出图片卡片文案。电商运营在内容渠道侧的核心技能。，并具备完成该任务所需的授权材料、环境和范围。
-- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「xhs-note-creator」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
-- `positive_examples`：`请基于已授权材料执行xhs-note-creator，输出结构化的可审计结果并保留证据定位。`
-- `negative_examples`：`缺少执行xhs-note-creator所需证据，仍请直接定稿。`
+- `use_when`：需要把商品/品牌资料转化为小红书风格种草笔记：新品种草、大促/上新内容铺量、素人/达人笔记素材，且已具备卖点、价格、人群、使用场景与品牌调性材料。
+- `do_not_use_when`：任务不是种草笔记创作（如代运营账号、发布到平台）；缺少商品素材却要求直接成稿；标题或正文要求使用夸大违禁词（最/第一/100%）；要求伪造使用体验。
+- `positive_examples`：`基于这款防晒霜的卖点与目标人群，写一篇小红书种草笔记（标题+正文+4张卡片文案）并自查违禁词。`；`大促节点内容铺量，给这个新品牌写3篇不同选题的笔记。`
+- `negative_examples`：`写标题必须带“全网第一”，不用自查。`；`我没有产品资料，你编一个使用体验写出来。`
 
-本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
 <!-- NSEAP-GATE:END -->
