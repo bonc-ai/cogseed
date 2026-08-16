@@ -312,7 +312,9 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
   }
   const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, async () => {
     return finishClosure(input.userId, episode, input.bridge, input.inferReview, {
-      ...(forecast ? { forecast } : {}),
+      // readWorldModelForecast returns the RECORD (forecast nested under
+      // `record.forecast`); inferKstarReview expects the flat WorldModelForecast.
+      ...(forecast ? { forecast: forecast.forecast } : {}),
       ...(input.messages?.length ? { messages: input.messages } : {}),
     });
   });

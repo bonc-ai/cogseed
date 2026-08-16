@@ -817,4 +817,65 @@ describe('KSTAR extraction reconciliation', () => {
     expect(optionsSeen[0]?.messages).toHaveLength(3);
     expect(optionsSeen[0]?.messages[1]).toMatchObject({ from: 'commander', text: '用户中途要求改成英文版' });
   });
+
+  it('unwraps the forecast RECORD into the flat forecast for review inference', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const optionsSeen: any[] = [];
+    const spyInfer = async (_userId: string, builtEpisode: any, options?: any) => {
+      optionsSeen.push(options);
+      return {
+        review: {
+          expectedResult: builtEpisode.t.userGoal,
+          actualResult: 'Done.',
+          deltaR: 0 as const,
+          deltaA: 'unknown' as const,
+          outcome: 'met_expected' as const,
+          attribution: 'unclear' as const,
+          reason: 'ok',
+          confidence: 0.8,
+          evidenceRefs: builtEpisode.evidenceRefs,
+        },
+        reviewState: 'inferred' as const,
+        inferenceMethod: 'deterministic' as const,
+        needsConfirmation: false,
+      };
+    };
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-fc', title: 't' });
+    const requirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id, conversationId: 'cid-fc', userMessageIds: ['m1'], title: 't', goalText: 't',
+    });
+    await store.replaceKstarTask('closure-user', task);
+    await store.replaceKstarRequirement('closure-user', requirement);
+    const recall = await import('../../../../src/main/features/recall/store');
+    await recall.writeRecallJsonRecord('closure-user', 'world-model-forecasts', 'wf-flat-test', {
+      schemaVersion: 1, ownerId: 'closure-user', id: 'wf-flat-test', taskRunId: task.id,
+      requirementId: requirement.id, projectionId: 'proj-x', snapshotId: 'snap-x',
+      ruleRefs: [], assetVersions: {}, projectionConfirmedAt: '2026-08-15T00:00:00.000Z',
+      forecast: {
+        candidates: [], selectedCandidateId: 'c1',
+        aHat: { plan: ['Do'], expectedTools: [], expectedActors: [] },
+        rHat: { summary: 'expected summary', acceptanceSignals: [] },
+        causalLinks: [], assumptions: [], predictedRisks: [],
+      },
+      createdAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z',
+    });
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-fc',
+      conversationId: 'cid-fc',
+      status: 'completed',
+      forecastId: 'wf-flat-test',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [{ id: 'm1', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: 'do it' }],
+      inferReview: spyInfer,
+    });
+    expect(optionsSeen).toHaveLength(1);
+    // The inference must receive the FLAT forecast (rHat at top level), not
+    // the persisted record wrapper — the old code passed the record and
+    // inferKstarReview crashed on forecast.rHat.summary (undefined.rHat).
+    expect(optionsSeen[0]?.forecast?.rHat).toMatchObject({ summary: 'expected summary' });
+    expect(optionsSeen[0]?.forecast?.forecast).toBeUndefined();
+  });
 });
