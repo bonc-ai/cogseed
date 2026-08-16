@@ -163,6 +163,10 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
   const channel = new P3394HttpChannel('cogseed-app', {
     listen: { host: listenHost, port },
     authToken: token,
+    // C-04：认证失败进入内核审计（可追溯；入站速率限制兜底审计量）。
+    audit: (record) => {
+      bridge.audit.append({ ...record, actor_id: 'http-listener' });
+    },
   });
   channel.setLocalManifest(manifestOf('cogseed'));
 

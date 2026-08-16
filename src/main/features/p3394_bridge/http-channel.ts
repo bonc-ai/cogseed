@@ -64,6 +64,8 @@ export interface P3394HttpChannelOptions {
   timeoutMs?: number;
   /** Inbound request rate limit per minute (0 disables; S-06). */
   maxInboundRequestsPerMinute?: number;
+  /** 认证/边界失败审计回调（C-04）：由 wiring 注入 kernel 审计。 */
+  audit?: (record: { event: string; status: 'rejected'; metadata: Record<string, unknown> }) => void;
   now?: () => number;
 }
 
@@ -132,6 +134,13 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
     return this.options.authToken ?? '';
   }
 
+  /** 401 响应 + 审计回调（C-04）：认证失败可追溯，且不发任何提示。 */
+  private rejectUnauthorized(res: http.ServerResponse, path: string): void {
+    this.options.audit?.({ event: 'http.auth.reject', status: 'rejected', metadata: { path } });
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+  }
+
   async listen(): Promise<void> {
     if (this.closed) throw new Error('p3394_channel_closed');
     if (this.server) return;
@@ -155,8 +164,7 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
       // Resource endpoint (§12): authenticated content-addressed object fetch.
       if (req.method === 'GET' && req.url.startsWith(OBJECTS_PATH_PREFIX)) {
         if (!this.authorized(req)) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+          this.rejectUnauthorized(res, req.url ?? OBJECTS_PATH_PREFIX);
           return;
         }
         const digest = req.url.slice(OBJECTS_PATH_PREFIX.length).split('?')[0];
@@ -177,8 +185,7 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
       }
       if (req.method === 'GET' && req.url === MANIFEST_PATH) {
         if (!this.authorized(req)) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+          this.rejectUnauthorized(res, MANIFEST_PATH);
           return;
         }
         if (!this.localManifest) {
@@ -192,8 +199,7 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
       }
       if (req.method === 'POST' && req.url === ENVELOPE_PATH) {
         if (!this.authorized(req)) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+          this.rejectUnauthorized(res, ENVELOPE_PATH);
           return;
         }
         const chunks: Buffer[] = [];
