@@ -20,7 +20,10 @@ const _GLOBAL_SKILL_GROUP_MIN = 2;
 
 
 const _skillsCognitionState = {
-  page: 'overview',
+  page: 'inbox',
+  /** 「待我处理」的服务端读模型（cognition.inbox.list）。渲染层不自己判断
+   *  什么算待办——判断在 formal-assets/inbox.ts，与 gate 同源。 */
+  inboxItems: [],
   recallCandidates: [],
   sources: [],
   teachingSignals: [],
@@ -186,20 +189,32 @@ function _cognitionSetPageVisibility(page) {
 }
 
 function switchSkillsCognitionPage(page) {
-  const aliases = { candidates: 'captures', receipts: 'assets', brain: 'overview', context: 'overview', ontology: 'overview' };
+  // 旧 IA 的六页语义在这里收敛，而不是靠留幽灵页面兼容：
+  //   overview 不再是独立任务视图，深链落到「待我处理」；
+  //   brain / context / ontology 讲的都是"我拥有什么"，落到「我的资产」
+  //   （「关于我」已是 personal 分类，不再是独立页）。
+  const aliases = {
+    candidates: 'captures',
+    receipts: 'assets',
+    overview: 'inbox',
+    brain: 'assets',
+    context: 'assets',
+    ontology: 'assets',
+  };
   const requested = aliases[page] || page;
-  const allowed = new Set(['overview', 'captures', 'assets', 'sources', 'proofs']);
-  const next = allowed.has(requested) ? requested : 'overview';
+  const allowed = new Set(['inbox', 'captures', 'assets', 'sources', 'proofs', 'governance']);
+  const next = allowed.has(requested) ? requested : 'inbox';
   _skillsCognitionState.page = next;
   if (next === 'assets' && !_skillsCognitionState.assetCategoryFilter && !_skillsCognitionState.selectedAssetId) {
     _skillsCognitionState.assetCategoryFilter = 'personal';
   }
   _cognitionSetPageVisibility(next);
-  if (next === 'overview') renderSkillsCognitionOverview();
+  if (next === 'inbox') renderSkillsCognitionInbox();
   if (next === 'sources') renderSkillsCognitionSources();
   if (next === 'proofs') renderSkillsCognitionProofs();
   if (next === 'captures') renderSkillsCognitionCaptures();
   if (next === 'assets') renderSkillsCognitionAssets();
+  if (next === 'governance') renderSkillsCognitionGovernance();
 }
 
 function _renderCognitionLoading(host) {
@@ -721,7 +736,7 @@ function renderSkillsCognitionSources() {
     <span>${escapeHtml(_cognitionText('cognition.pipeline_next_conversation', '下一步：完成一轮会话，系统会自动整理内容'))}</span>
     <button type="button" class="btn btn-sm" data-cognition-page-link="captures">${escapeHtml(_cognitionText('cognition.capture_tasks', '沉淀任务'))}</button>
   </div>`;
-  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>${escapeHtml(_cognitionText('cognition.sources', '数据来源'))}</h2><p>${escapeHtml(_cognitionText('cognition.sources_page_hint', '会话、文件、执行、教学信号与已授权系统'))}</p></div></div>${summary ? `<div class="recall-workbench-summary">${summary}</div>` : ''}<div class="recall-source-groups">${body}</div>`;
+  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>${escapeHtml(_cognitionText('cognition.manage_sources', '管理来源'))}</h2><p>${escapeHtml(_cognitionText('cognition.sources_page_hint', '会话、文件、执行、教学信号与已授权系统'))}</p></div></div>${_renderCognitionSourceStatus()}${summary ? `<div class="recall-workbench-summary">${summary}</div>` : ''}<div class="recall-source-groups">${body}</div>`;
 }
 
 function _renderCognitionCaptureStatus() {
@@ -1148,7 +1163,10 @@ function renderSkillsCognitionCaptures() {
   const more = _skillsCognitionState.captureNextCursor
     ? `<button type="button" class="btn btn-sm recall-capture-load-more" data-recall-capture-load-more>${escapeHtml(_cognitionText('common.load_more', '加载更多'))}</button>`
     : '';
-  host.innerHTML = `${_renderCaptureSettings()}${_renderManualConversationPicker()}<section class="recall-capture-task-workbench"><div class="recall-capture-filter-bar">${filters}</div><div class="recall-capture-task-list">${rows}</div>${more}</section>`;
+  // 沉淀进度、失败任务、最近沉淀状态都归这里——它们是后台加工进度，不是
+  // "需要我决定"的事，所以从落地页移了过来。
+  const processing = `${_renderCognitionPipelineStatus()}${_renderCognitionOverviewAttention({ includeProcessing: true })}`;
+  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>${escapeHtml(_cognitionText('cognition.capture_activity', '沉淀活动'))}</h2><p>${escapeHtml(_cognitionText('cognition.capture_activity_hint', '自动发现与整理；只有经用户确认的内容才能成为正式资产。'))}</p></div></div>${processing}${_renderCaptureSettings()}${_renderManualConversationPicker()}<section class="recall-capture-task-workbench"><div class="recall-capture-filter-bar">${filters}</div><div class="recall-capture-task-list">${rows}</div>${more}</section>${_renderCognitionCaptureStatus()}`;
   renderSkillsCognitionCandidates();
 }
 
@@ -1188,36 +1206,83 @@ async function updateRecallCaptureSettings(patch) {
   renderSkillsCognitionCaptures();
 }
 
-function _renderCognitionOverviewMetrics() {
-  const sources = Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [];
-  const captures = _skillsCognitionState.captureCounts || {};
-  const candidates = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
-    .filter((candidate) => candidate.status === 'pending_review' || candidate.status === 'failed');
-  const assets = (Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [])
-    .filter((asset) => asset.status === 'active');
-  const skillCandidates = assets.filter((asset) => (
-    (asset.category || asset.type) === 'skill_method' && !asset.generatedSkillId
-  ));
-  const metrics = [
-    ['sources', 'cognition.pipeline_sources', '数据来源', _cognitionVisibleSourceCount(sources)],
-    ['captures', 'cognition.overview_active_tasks', '进行中任务', Number(captures.waiting || 0) + Number(captures.processing || 0)],
-    ['captures', 'cognition.pipeline_candidates', '待审核', Math.max(candidates.length, Number(captures.review || 0))],
-    ['assets', 'cognition.ability_assets', '能力资产', assets.length],
-    ['assets', 'cognition.overview_skill_candidates', '可生成 Skill', skillCandidates.length],
-  ];
-  return `<section class="recall-overview-metrics" aria-label="${escapeHtml(_cognitionText('cognition.overview_metrics', 'Recall 核心指标'))}">${metrics.map(([page, key, fallback, value]) => `
-    <button type="button" class="recall-overview-metric" data-cognition-page-link="${page}">
-      <span>${escapeHtml(_cognitionText(key, fallback))}</span><strong>${escapeHtml(String(value))}</strong>
-    </button>`).join('')}</section>`;
+/** 每一类待办的用户可读标题。服务端只给 kind，措辞归渲染层。 */
+function _cognitionInboxKindLabel(kind) {
+  const labels = {
+    skill_creation_suggested: ['cognition.inbox_skill_suggestions', 'Skill 创建建议'],
+    rule_boundary_missing: ['cognition.inbox_rule_boundary', '规则缺少作用边界'],
+    classification_conflict: ['cognition.inbox_classification_conflict', '同一条判断被归成了两类'],
+    evidence_insufficient: ['cognition.inbox_evidence_insufficient', 'Evidence 不足，需要补证'],
+    source_unavailable: ['cognition.inbox_source_unavailable', '来源失效，影响了已有资产'],
+    sensitivity_unclassified: ['cognition.inbox_sensitivity_unclassified', '尚未分级的敏感信息'],
+    candidate_pending_review: ['cognition.pending_review', '待确认认知候选'],
+  };
+  const entry = labels[kind];
+  return entry ? _cognitionText(entry[0], entry[1]) : String(kind || '');
 }
 
-function _renderCognitionOverviewAttention() {
+function _cognitionInboxKindHint(kind) {
+  const hints = {
+    skill_creation_suggested: ['cognition.inbox_skill_suggestions_hint', '这些方法已是你的正式资产，确认后可生成为可执行 Skill。'],
+    rule_boundary_missing: ['cognition.inbox_rule_boundary_hint', '没有作用边界的规则不会被自动带入任何任务，补齐后才会生效。'],
+    classification_conflict: ['cognition.inbox_classification_conflict_hint', '同一句话被归到两个类型，两边都不会晋升，需要你裁定。'],
+    evidence_insufficient: ['cognition.inbox_evidence_insufficient_hint', '没有可追溯的证据，无法确认为正式资产。'],
+    source_unavailable: ['cognition.inbox_source_unavailable_hint', '这些资产的证据来源已不可读，请决定继续保留还是撤销。'],
+    sensitivity_unclassified: ['cognition.inbox_sensitivity_unclassified_hint', '未分级不等于 L0：分级前不会被带往声明了敏感上限的目的地。'],
+    candidate_pending_review: ['cognition.inbox_candidate_hint', '确认后才会成为正式资产。'],
+  };
+  const entry = hints[kind];
+  return entry ? _cognitionText(entry[0], entry[1]) : '';
+}
+
+/**
+ * 按 kind 分组渲染待办。同一类事情合成一个面板，用户一次处理一类，而不是
+ * 面对一条一条互不相干的行。
+ */
+function _renderCognitionInboxGroups(urgency) {
+  const items = (Array.isArray(_skillsCognitionState.inboxItems) ? _skillsCognitionState.inboxItems : [])
+    .filter((entry) => entry && entry.urgency === urgency);
+  if (!items.length) return '';
+  const grouped = new Map();
+  for (const entry of items) {
+    const bucket = grouped.get(entry.kind) || [];
+    bucket.push(entry);
+    grouped.set(entry.kind, bucket);
+  }
+  return [...grouped.entries()].map(([kind, bucket]) => {
+    const rows = bucket.slice(0, 8).map((entry) => {
+      const target = entry.assetId
+        ? `data-cognition-open-asset="${escapeHtml(entry.assetId)}"`
+        : entry.candidateId
+          ? `data-cognition-open-candidate="${escapeHtml(entry.candidateId)}"`
+          : '';
+      const meta = [entry.assetType ? _abilityAssetCategoryLabel(entry.assetType) : '', entry.detail || '']
+        .filter(Boolean).join(' · ');
+      return `<button type="button" class="skills-cognition-list-card" ${target}><strong>${escapeHtml(entry.title || entry.id)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</button>`;
+    }).join('');
+    const more = bucket.length > 8
+      ? `<div class="skills-cognition-muted">${escapeHtml(_cognitionText('cognition.inbox_more', '另有 {n} 项未显示').replace('{n}', String(bucket.length - 8)))}</div>`
+      : '';
+    return `<section class="skills-cognition-card recall-overview-panel cognition-inbox-group is-${escapeHtml(urgency)}"><div class="skills-cognition-card-head"><h2>${escapeHtml(_cognitionInboxKindLabel(kind))}</h2><b>${escapeHtml(String(bucket.length))}</b></div><p class="cognition-inbox-hint">${escapeHtml(_cognitionInboxKindHint(kind))}</p>${rows}${more}</section>`;
+  }).join('');
+}
+
+/**
+ * 「待我处理」里的阻塞项。
+ *
+ * 只收"用户不决定就走不下去"的三类：沉淀模型没配（整条链停摆）、来源失效
+ * （已有资产的证据来源断了）、以及失败的沉淀任务。第三类默认不在这里显示——
+ * 它是后台加工进度，归「沉淀活动」；`includeProcessing` 让沉淀活动页复用同一
+ * 段渲染，不用再写一份。
+ */
+function _renderCognitionOverviewAttention(options) {
+  const includeProcessing = options?.includeProcessing === true;
   const captures = _skillsCognitionState.captureCounts || {};
   const recentCaptures = Array.isArray(_skillsCognitionState.recentCaptures) ? _skillsCognitionState.recentCaptures : [];
   const sourceItems = (Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [])
     .flatMap((source) => _cognitionPrimarySourceItems(source));
   const captureModel = _skillsCognitionState.captureModel;
-  const failedTasks = Number(captures.failed || 0);
+  const failedTasks = includeProcessing ? Number(captures.failed || 0) : 0;
   const sourceIssues = sourceItems.filter((item) => item.status === 'failed' || item.status === 'paused').length;
   const modelAuthorizationRequired = !!captureModel?.authorizationRequired;
   const modelRequired = (!!captureModel && (!captureModel.configured || modelAuthorizationRequired))
@@ -1315,14 +1380,38 @@ function _renderTeachingSignalStatus() {
   return `<section class="skills-cognition-flow-band recall-overview-panel recall-overview-teaching"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.teaching_title', '教学信号'))}</h2><span>${escapeHtml(_cognitionText('cognition.teaching_hint', '已记住的内容立即生效，长期资产仍需审核'))}</span></div><div class="skills-cognition-capture-list">${rows}</div></section>`;
 }
 
-function renderSkillsCognitionOverview() {
-  const host = document.getElementById('skills-cognition-overview-body');
+/**
+ * 「待我处理」有没有内容。落地页规则要用它：有待决策项就停在这里，没有就
+ * 直接进「我的资产」——用户不该为了看资产先穿过一个空页。
+ */
+function _cognitionInboxIsEmpty() {
+  const items = Array.isArray(_skillsCognitionState.inboxItems) ? _skillsCognitionState.inboxItems : [];
+  if (items.length) return false;
+  // 失败候选不在服务端待办里（那是加工失败，不是分类问题），但用户仍然要
+  // 处理，所以单独算一笔。
+  const failedCandidates = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
+    .filter((candidate) => candidate.status === 'failed');
+  if (failedCandidates.length) return false;
+  const teachingSignals = Array.isArray(_skillsCognitionState.teachingSignals) ? _skillsCognitionState.teachingSignals : [];
+  if (teachingSignals.some((signal) => signal.status === 'active')) return false;
+  return _renderCognitionOverviewAttention() === '';
+}
+
+/**
+ * 「待我处理」：回答"现在有什么事情真的需要我决定"。
+ *
+ * 刻意不放的东西：沉淀任务进度、来源连接状态面板、指标卡。它们是后台加工
+ * 与配置，分别归右上角「沉淀活动」「管理来源」——放进来会让"需要我决定"
+ * 这件事被进度噪音淹没，用户就不再信任这个红点。
+ */
+function renderSkillsCognitionInbox() {
+  const host = document.getElementById('skills-cognition-inbox-body');
   if (!host) return;
   const d = _skillsCognitionState.dashboard || {};
   const candidates = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
     .filter((candidate) => candidate.status === 'pending_review' || candidate.status === 'failed');
   const warnings = Array.isArray(d.warnings) ? d.warnings : [];
-  const primarySections = new Set(['dashboard', 'recallCandidates', 'assets', 'sources', 'captures', 'recentCaptures', 'captureSettings']);
+  const primarySections = new Set(['dashboard', 'recallCandidates', 'assets', 'sources', 'captures', 'recentCaptures', 'captureSettings', 'inboxItems']);
   const loadErrors = (Array.isArray(_skillsCognitionState.loadErrors) ? _skillsCognitionState.loadErrors : [])
     .filter((section) => primarySections.has(section));
   const warningHtml = d.degraded || warnings.length
@@ -1331,27 +1420,29 @@ function renderSkillsCognitionOverview() {
   const loadFailureHtml = loadErrors.length
     ? `<div class="skills-cognition-warning"><span>${escapeHtml(_cognitionText('cognition.load_failed', '认知资产数据加载失败'))}</span><button class="btn btn-sm" data-cognition-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`
     : '';
-  const pendingHtml = candidates.length
-    ? candidates.slice(0, 5).map((c) => `<button type="button" class="skills-cognition-list-card" data-cognition-open-candidate="${escapeHtml(c.id)}"><strong>${escapeHtml(c.title || c.summary || c.judgment || c.id)}</strong><span>${escapeHtml(_cognitionStatusLabel(c.status))} · ${escapeHtml(_abilityAssetCategoryLabel(c.suggestedType || c.type))}</span></button>`).join('')
+  // 沉淀失败的候选不在服务端待办里——那是加工失败，不是分类问题——但用户
+  // 仍然要处理，所以单独列一段。
+  const failedCandidates = candidates.filter((candidate) => candidate.status === 'failed');
+  const failedHtml = failedCandidates.length
+    ? `<section class="skills-cognition-card recall-overview-panel cognition-inbox-group is-confirm"><div class="skills-cognition-card-head"><h2>${escapeHtml(_cognitionText('cognition.inbox_failed_candidates', '沉淀失败的候选'))}</h2><b>${escapeHtml(String(failedCandidates.length))}</b></div>${failedCandidates.slice(0, 5).map((c) => `<button type="button" class="skills-cognition-list-card" data-cognition-open-candidate="${escapeHtml(c.id)}"><strong>${escapeHtml(c.title || c.summary || c.judgment || c.id)}</strong><span>${escapeHtml(_cognitionStatusLabel(c.status))} · ${escapeHtml(_abilityAssetCategoryLabel(c.suggestedType || c.type))}</span></button>`).join('')}</section>`
     : '';
   const teachingSignals = Array.isArray(_skillsCognitionState.teachingSignals) ? _skillsCognitionState.teachingSignals : [];
-  const activityPanels = [
-    _renderCognitionRecentActivity(),
-    teachingSignals.length ? _renderTeachingSignalStatus() : '',
-    candidates.length ? `<section class="skills-cognition-card recall-overview-panel"><div class="skills-cognition-card-head"><h2>${escapeHtml(_cognitionText('cognition.pending_review', '待确认认知候选'))}</h2><button type="button" class="btn btn-sm" data-cognition-page-link="captures">${escapeHtml(_cognitionText('cognition.view_candidates', '查看候选'))}</button></div>${pendingHtml}</section>` : '',
-  ].filter(Boolean).join('');
+  // 需要主动确认的排在前面；普通候选低打扰地跟在后面。分级来自服务端 gate，
+  // 渲染层不自己判断哪件事更急。
+  const confirmPanels = `${_renderCognitionInboxGroups('confirm')}${failedHtml}`;
+  const laterPanels = `${_renderCognitionInboxGroups('low_disturbance')}${teachingSignals.length ? _renderTeachingSignalStatus() : ''}`;
+  const attention = _renderCognitionOverviewAttention();
   const notices = `${loadFailureHtml}${warningHtml}`;
+  const emptyHtml = (!attention && !confirmPanels && !laterPanels)
+    ? `<div class="skills-cognition-empty cognition-inbox-empty"><strong>${escapeHtml(_cognitionText('cognition.inbox_empty', '当前无需处理'))}</strong><span>${escapeHtml(_cognitionText('cognition.inbox_empty_hint', '需要你决定的事项会出现在这里；系统自动整理的进度在「沉淀活动」里查看。'))}</span></div>`
+    : '';
   host.innerHTML = `
     <div class="skills-cognition-overview">
       ${notices ? `<div class="recall-overview-notices">${notices}</div>` : ''}
-      ${_renderCognitionOverviewMetrics()}
-      ${_renderCognitionOverviewAttention()}
-      ${_renderCognitionPipelineStatus()}
-      <div class="recall-overview-operation-grid">
-        ${_renderCognitionSourceStatus()}
-        ${_renderCognitionCaptureStatus()}
-      </div>
-      ${activityPanels ? `<div class="recall-overview-activity-grid">${activityPanels}</div>` : ''}
+      ${attention}
+      ${confirmPanels ? `<div class="recall-overview-activity-grid cognition-inbox-confirm">${confirmPanels}</div>` : ''}
+      ${laterPanels ? `<div class="recall-overview-activity-grid cognition-inbox-later">${laterPanels}</div>` : ''}
+      ${emptyHtml}
     </div>`;
 }
 
@@ -1730,6 +1821,8 @@ function renderSkillsCognitionAssets() {
   const categoryItems = _skillsCognitionState.assetCategoryFilter
     ? items.filter((item) => (item.category || item.type) === _skillsCognitionState.assetCategoryFilter)
     : items;
+  // 搜索时不再挂「最近变化」：搜索是一次明确的查询，下面再列一串没被搜到的
+  // 资产只会让人以为过滤没生效。分类切换不算——那是导航，不是查询。
   const searchQuery = String(_skillsCognitionState.assetSearchQuery || '').trim().toLocaleLowerCase();
   const filteredItems = searchQuery
     ? categoryItems.filter((item) => [item.title, item.summary, item.statement, item.id, item.scope, item.category, item.type]
@@ -1833,9 +1926,58 @@ function renderSkillsCognitionAssets() {
         </div>
       </section>
     </div>
-  </div>`;
+  </div>${searchQuery ? '' : _renderCognitionRecentActivity()}`;
   const nextList = host.querySelector?.('.ability-asset-list-body');
   if (nextList) nextList.scrollTop = previousListScrollTop;
+}
+
+/**
+ * 「版本与治理」：回答"我的资产发生过什么变化、我怎样保持控制"。
+ *
+ * 这里刻意不引入新的治理语义——每一个动作都落在既有 IPC 上（pause / resume /
+ * archive / restore / delete / purge / revoke / versions / rollback），复用
+ * 「更多」菜单与版本面板的同一套 data 属性，所以事件绑定不需要再写一遍。
+ *
+ * 与「我的资产」的分工：那边按四类看"我拥有什么"，只展示 active 的正常视图；
+ * 这里按变更看"发生过什么、怎么收回"，因此暂停、归档、已撤销的资产也必须
+ * 列出来——否则用户暂停之后就再也找不到它了。
+ */
+function renderSkillsCognitionGovernance() {
+  const host = document.getElementById('skills-cognition-governance-body');
+  if (!host) return;
+  const items = Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [];
+  const head = `<div class="recall-workbench-page-head"><div><h2>${escapeHtml(_cognitionText('cognition.governance', '版本与治理'))}</h2><p>${escapeHtml(_cognitionText('cognition.governance_hint', '资产的版本变化、作用范围与引用，以及停止使用、回滚、归档的入口。'))}</p></div></div>`;
+  if (!items.length) {
+    host.innerHTML = `${head}<div class="skills-cognition-empty"><strong>${escapeHtml(_cognitionText('cognition.governance_empty', '尚无可治理的资产'))}</strong><span>${escapeHtml(_cognitionText('cognition.governance_empty_hint', '资产被确认为正式资产后，它的版本与治理入口会出现在这里。'))}</span></div>`;
+    return;
+  }
+  const moreLabel = _cognitionText('common.more', '更多');
+  const moreIcon = typeof uiIconHtml === 'function' ? uiIconHtml('more-horizontal') : '<span aria-hidden="true">...</span>';
+  const rows = items.map((asset) => {
+    const category = asset.category || asset.type;
+    const workspaceRefs = Array.isArray(asset.workspaceRefs) ? asset.workspaceRefs.filter(Boolean) : [];
+    const writeOrigin = _abilityAssetWriteOriginLabel(asset.lifecycleStatus);
+    const actions = _recallAssetActions(asset.status);
+    const more = actions.length
+      ? `<button type="button" class="btn btn-sm recall-asset-more" data-recall-asset-more="${escapeHtml(asset.id)}" data-recall-asset-actions="${escapeHtml(actions.join(','))}" title="${escapeHtml(moreLabel)}" aria-label="${escapeHtml(moreLabel)}">${moreIcon}</button>`
+      : '';
+    const facts = [
+      `${_cognitionText('cognition.governance_version', '版本')}：${asset.version ? `v${asset.version}` : '—'}`,
+      `${_cognitionText('cognition.governance_scope', '作用范围')}：${_abilityAssetScopeLabel(asset.scope || 'general')}`,
+      writeOrigin ? `${_cognitionText('cognition.asset_write_origin', '写入来源')}：${writeOrigin}` : '',
+      `${_cognitionText('cognition.workspace_refs', 'Workspace引用')}：${workspaceRefs.length ? workspaceRefs.join('、') : _cognitionText('cognition.no_refs', '未记录引用')}`,
+    ].filter(Boolean).join(' · ');
+    return `<article class="skills-cognition-card cognition-governance-row" data-cognition-governance-asset="${escapeHtml(asset.id)}">
+      <div class="skills-cognition-card-head">
+        <h2>${escapeHtml(_abilityAssetDisplayTitle(asset))}</h2>
+        <span class="skills-cognition-status is-${escapeHtml(asset.status || '')}">${escapeHtml(_abilityAssetMaturityLabel(asset.maturity, asset.status))}</span>
+        ${more}
+      </div>
+      <p class="cognition-governance-facts">${escapeHtml(_abilityAssetCategoryLabel(category))} · ${escapeHtml(facts)}</p>
+      ${_renderRecallAssetHistory(asset.id)}
+    </article>`;
+  }).join('');
+  host.innerHTML = `${head}<div class="cognition-governance-list">${rows}</div>`;
 }
 
 function openRecallPersonalOntology() {
@@ -1855,7 +1997,7 @@ async function loadSkillsCognitionSnapshot() {
   const capturePayload = { limit: 25 };
   const captureStatuses = _captureStatusesForFilter(snapshotCaptureFilter);
   if (captureStatuses.length) capturePayload.statuses = captureStatuses;
-  const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings] = await Promise.allSettled([
+  const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings, inbox] = await Promise.allSettled([
     Promise.resolve().then(() => window.cogseed.invoke('cognition.dashboard.read')),
     Promise.resolve().then(() => window.cogseed.invoke('recall.candidates.list')),
     Promise.resolve().then(() => window.cogseed.invoke('cognition.assets.list', { limit: 500 })),
@@ -1864,6 +2006,7 @@ async function loadSkillsCognitionSnapshot() {
     Promise.resolve().then(() => window.cogseed.invoke('recall.captures.list', { limit: 5 })),
     Promise.resolve().then(() => window.cogseed.invoke('recall.teaching.list', { limit: 20 })),
     Promise.resolve().then(() => window.cogseed.invoke('recall.captures.settings.get')),
+    Promise.resolve().then(() => window.cogseed.invoke('cognition.inbox.list')),
   ]);
   const captureResultIsCurrent = !captureRequestWasInFlight
     && snapshotCaptureRequestId === _skillsCognitionCaptureRequestId
@@ -1890,6 +2033,7 @@ async function loadSkillsCognitionSnapshot() {
   }
   if (recentCaptures.status === 'fulfilled' && recentCaptures.value?.ok) _skillsCognitionState.recentCaptures = recentCaptures.value.captures || [];
   if (teachingSignals.status === 'fulfilled' && teachingSignals.value?.ok) _skillsCognitionState.teachingSignals = teachingSignals.value.signals || [];
+  if (inbox.status === 'fulfilled' && inbox.value?.ok) _skillsCognitionState.inboxItems = inbox.value.items || [];
   _skillsCognitionState.captureSettings = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.settings : _skillsCognitionState.captureSettings;
   _skillsCognitionState.captureModel = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.model : _skillsCognitionState.captureModel;
   _skillsCognitionState.loadErrors = [
@@ -1900,14 +2044,16 @@ async function loadSkillsCognitionSnapshot() {
     ...(captureResultIsCurrent ? [['captures', captures]] : []),
     ['recentCaptures', recentCaptures],
     ['teachingSignals', teachingSignals],
+    ['inboxItems', inbox],
     ['captureSettings', captureSettings],
   ].filter(([, result]) => result.status !== 'fulfilled' || !result.value?.ok).map(([name]) => name);
   _skillsCognitionState.loadedAt = Date.now();
   _skillsCognitionState.loading = false;
-  renderSkillsCognitionOverview();
+  renderSkillsCognitionInbox();
   if (_skillsCognitionState.page === 'sources') renderSkillsCognitionSources();
   if (_skillsCognitionState.page === 'captures') renderSkillsCognitionCaptures();
   if (_skillsCognitionState.page === 'assets') renderSkillsCognitionAssets();
+  if (_skillsCognitionState.page === 'governance') renderSkillsCognitionGovernance();
   if (_skillsCognitionRefreshTimer) clearTimeout(_skillsCognitionRefreshTimer);
   const visibleCaptures = [...(_skillsCognitionState.captures || []), ...(_skillsCognitionState.recentCaptures || [])];
   const captureInProgress = Number(_skillsCognitionState.captureCounts?.processing || 0) > 0
@@ -1926,8 +2072,17 @@ function initSkillsCognitionConsole() {
   const panel = document.getElementById('panel-recall');
   if (!panel || panel.dataset.cognitionInitialized === '1') return;
   panel.dataset.cognitionInitialized = '1';
-  _cognitionSetPageVisibility('overview');
-  loadSkillsCognitionSnapshot().catch(() => {});
+  _cognitionSetPageVisibility(_skillsCognitionState.page);
+  // 落地页只在这里决定一次，且只在快照回来之后：待处理为空就默认进「我的
+  // 资产」。注意这不是"进了待我处理再弹走"——用户主动点 tab 走的是
+  // switchSkillsCognitionPage，那条路径不会改页，空的时候照常显示空状态。
+  loadSkillsCognitionSnapshot()
+    .then(() => {
+      if (_skillsCognitionState.page !== 'inbox') return;
+      if (!_cognitionInboxIsEmpty()) return;
+      switchSkillsCognitionPage('assets');
+    })
+    .catch(() => {});
 }
 
 function _skillSource(source) {
