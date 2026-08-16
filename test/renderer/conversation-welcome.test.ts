@@ -115,69 +115,47 @@ describe('imported-session welcome panel', () => {
     expect(render([])).toBe('');
   });
 
-  it('renders the top-of-history panel with resume data and continue button', () => {
-    const history = {
-      querySelector: () => null,
-      prepend: (el: any) => { history.prepended = el; },
-    };
-    const panel: any = {
-      className: '',
-      dataset: {},
-      innerHTML: '',
-    };
-    const renderPanel = runWith(
+  it('renders the welcome-carry block with resume data and continue button', () => {
+    const render = runWith(
       [
-        extractFunction('_parseWelcomeCarry'),
         extractFunction('_renderWelcomeCarryHtml'),
-        extractFunction('_renderImportedWelcomePanel'),
       ],
       {
-        document: {
-          getElementById: (id: string) => (id === 'chat-history' ? history : null),
-          createElement: () => panel,
-        },
-        t: (key: string, fallback?: string) => fallback || key,
         escapeHtml,
-        JSON,
+        t: (key: string, fallback?: string) => fallback || key,
         Array,
         String,
         Number,
       },
-      '_renderImportedWelcomePanel',
+      '_renderWelcomeCarryHtml',
     );
     const carry = [
       { kind: 'ability', label: '我的能力', count: 1, sources: ['已确认资产 1 项'] },
     ];
-
-    renderPanel('c1', {
-      restatement: '复述：同一复杂任务已恢复',
-      carry,
-      plan: ['补齐主路径', '输出评审问题'],
-      boundary: '不会静默改写正式资产',
-    });
-
-    expect(history.prepended).toBe(panel);
-    expect(panel.className).toBe('welcome-panel');
-    expect(panel.dataset.welcomeCid).toBe('c1');
-    expect(panel.innerHTML).toContain('复述：同一复杂任务已恢复');
-    expect(panel.innerHTML).toContain('补齐主路径');
-    expect(panel.innerHTML).toContain('不会静默改写正式资产');
-    expect(panel.innerHTML).toContain('带着这些继续');
-    expect(JSON.parse(panel.dataset.resumeJson)).toEqual({
+    const resumeJson = JSON.stringify({
       restatement: '复述：同一复杂任务已恢复',
       carry,
       boundary: '不会静默改写正式资产',
       plan: ['补齐主路径', '输出评审问题'],
     });
+
+    const html = render(carry, resumeJson);
+
+    expect(html).toContain('welcome-carry');
+    expect(html).toContain('准备携带');
+    expect(html).toContain('我的能力');
+    expect(html).toContain('1项');
+    expect(html).toContain('data-welcome-carry-toggle');
+    expect(html).toContain('data-welcome-continue');
+    expect(html).toContain('data-welcome-resume');
+    expect(html).toContain('带着这些继续');
+    expect(render([], '')).toBe('');
   });
 
   it('sends the Action Plan via sendInConversation and marks the welcome seen', async () => {
-    const input = { value: '' };
-    const panel = {
-      removed: false,
-      remove() { this.removed = true; },
+    const block = {
       dataset: {
-        resumeJson: JSON.stringify({
+        welcomeResume: JSON.stringify({
           restatement: '复述',
           carry: [],
           boundary: '边界',
@@ -185,15 +163,12 @@ describe('imported-session welcome panel', () => {
         }),
       },
     };
+    const btn = { disabled: false };
     const invokeCalls: string[] = [];
     let sent: { cid: string; text: string } | null = null;
     const submit = runWith(
-      [extractFunction('_submitImportedWelcomeContinue')],
+      [extractFunction('_submitWelcomeContinue')],
       {
-        document: {
-          getElementById: (id: string) => (id === 'chat-input' ? input : null),
-          querySelector: () => panel,
-        },
         t: (key: string, fallback?: string) => fallback || key,
         sendInConversation: async (cid: string, text: string) => { sent = { cid, text }; },
         window: {
@@ -204,16 +179,19 @@ describe('imported-session welcome panel', () => {
             },
           },
         },
+        JSON,
+        Array,
+        String,
+        Number,
       },
-      '_submitImportedWelcomeContinue',
+      '_submitWelcomeContinue',
     );
 
-    await submit('c1');
+    await submit('c1', block, btn);
 
     expect(sent).not.toBeNull();
     expect(sent!.text).toContain('1. 补齐主路径');
     expect(sent!.text).toContain('2. 输出评审问题');
-    expect(panel.removed).toBe(true);
     expect(invokeCalls).toEqual(['chats.markWelcomeSeen']);
   });
 

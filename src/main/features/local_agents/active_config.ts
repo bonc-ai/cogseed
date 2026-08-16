@@ -94,6 +94,11 @@ function readClaudeActiveConfig(home: string): ActiveCliConfig | null {
 
 /**
  * Read Codex's active configuration from ~/.codex/auth.json.
+ * Two supported shapes:
+ *   - OAuth:  { "access_token": "...", "refresh_token": "...", ... }
+ *   - API key stored under OPENAI_API_KEY (observed in the wild — Codex also
+ *     writes `{ "OPENAI_API_KEY": "sk-..." }`; this is the actual key value,
+ *     not an env-var reference).
  */
 function readCodexActiveConfig(home: string): ActiveCliConfig | null {
   const authPath = path.join(home, '.codex', 'auth.json');
@@ -109,6 +114,18 @@ function readCodexActiveConfig(home: string): ActiveCliConfig | null {
         baseUrl: '', // Official OpenAI endpoint
         apiKey: token,
         mode: 'oauth',
+        sourcePath: authPath,
+      };
+    }
+
+    // API-key shape: { "OPENAI_API_KEY": "sk-..." }
+    const apiKey = auth.OPENAI_API_KEY;
+    if (apiKey && typeof apiKey === 'string') {
+      return {
+        cli: 'codex',
+        baseUrl: '', // Official OpenAI endpoint
+        apiKey,
+        mode: 'api',
         sourcePath: authPath,
       };
     }
@@ -203,4 +220,59 @@ export function readAllActiveCliConfigs(home = os.homedir()): ActiveCliConfig[] 
   }
 
   return configs;
+}
+
+/**
+ * Lightweight model-endpoint probe from a CLI's OWN config — used to surface
+ * "this CLI routes through a local proxy (CC Switch etc.)" hints in onboarding.
+ * The app itself never depends on the proxy; this is purely informational.
+ * Returns null when no endpoint is readable.
+ *
+ * Also reports whether the CLI has a READABLE credential and what kind
+ * (`configAvailable` / `authMode` from readActiveCliConfig) so the UI can
+ * decide whether "连接并存储 API" is meaningful: an OAuth (account) login has
+ * no API key to store — storing an OAuth token as an API key would be broken.
+ */
+export function readCliModelEndpoint(
+  cli: LocalCliType,
+  home = os.homedir(),
+): { baseUrl: string; isLocalProxy: boolean; configAvailable: boolean; authMode: 'api' | 'oauth' | null } | null {
+  let baseUrl = '';
+  try {
+    if (cli === 'codex') {
+      // ~/.codex/config.toml: base_url lives inside [model_providers.*].
+      // Restrict the scan to that section — [mcp_servers.*] etc. may carry
+      // unrelated url-ish keys.
+      const cfgPath = path.join(home, '.codex', 'config.toml');
+      const toml = fs.readFileSync(cfgPath, 'utf8');
+      const match = toml.match(/\[model_providers\.[^\]]+\][^\[]*base_url\s*=\s*"([^"]+)"/m);
+      baseUrl = match ? match[1] : '';
+    } else if (cli === 'claude') {
+      const settingsPath = path.join(home, '.claude', 'settings.json');
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      const env = settings && typeof settings.env === 'object' ? settings.env : {};
+      baseUrl = settings.baseUrl || settings.anthropicBaseUrl || env.ANTHROPIC_BASE_URL || env.ANTHROPIC_API_URL || '';
+    } else if (cli === 'opencode') {
+      const cfg = readOpencodeActiveConfig(home);
+      baseUrl = cfg ? cfg.baseUrl : '';
+    }
+  } catch {
+    baseUrl = '';
+  }
+
+  let configAvailable = false;
+  let authMode: 'api' | 'oauth' | null = null;
+  try {
+    const cfg = readActiveCliConfig(cli, home);
+    if (cfg) {
+      configAvailable = true;
+      authMode = cfg.mode === 'oauth' ? 'oauth' : 'api';
+    }
+  } catch {
+    /* no readable credential */
+  }
+
+  if (!baseUrl && !configAvailable) return null;
+  const isLocalProxy = /(?:127\.0\.0\.1|localhost|0\.0\.0\.0|::1)/i.test(baseUrl);
+  return { baseUrl, isLocalProxy, configAvailable, authMode };
 }

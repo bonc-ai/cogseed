@@ -61,6 +61,7 @@ import {
   importCodexSession,
 } from '../features/session_import/codex-import.js';
 import { listOpencodeSessions } from '../features/local_agents/opencode_sessions.js';
+import { importOpencodeSession } from '../features/session_import/opencode-import.js';
 import {
   readOpencodeMemory,
   importOpencodeMemory,
@@ -113,6 +114,21 @@ export const invokeHandlers = {
   'localAgents.list': async ({ force = false }: { force?: boolean } = {}) => {
     const entries = await detectAll({ force: !!force });
     return { entries: maskUnsupported(entries) };
+  },
+
+  /**
+   * Probe each CLI's OWN model endpoint (from its config files) so the
+   * onboarding UI can honestly tell the user "this CLI routes through a
+   * local proxy (e.g. CC Switch) — keep it running, or switch to a direct
+   * endpoint". The app never depends on the proxy; this is informational.
+   */
+  'localAgents.cliEndpointInfo': async () => {
+    const { readCliModelEndpoint } = await import('../features/local_agents/active_config.js');
+    const endpoints: Record<string, { baseUrl: string; isLocalProxy: boolean } | null> = {};
+    for (const cli of ['claude', 'codex', 'opencode', 'workbuddy'] as const) {
+      endpoints[cli] = readCliModelEndpoint(cli);
+    }
+    return { ok: true, endpoints };
   },
 
   /**
@@ -463,7 +479,8 @@ export const invokeHandlers = {
    * UI can honestly fall back to "选择其他 session" / "从空白开始".
    */
   'sessionImport.recommendStartingPoint': async () => {
-    return recommendStartingPoint();
+    const userId = getActiveUserId();
+    return recommendStartingPoint(undefined, userId || undefined);
   },
 
   /**
@@ -500,6 +517,24 @@ export const invokeHandlers = {
       return { ok: false, sessions: [], error: result.error };
     }
     return { ok: true, sessions: result.sessions, totalCount: result.totalCount };
+  },
+
+  /**
+   * Import an OpenCode session into a continuable conversation. Reads the
+   * session's text parts from the OpenCode SQLite DB (READ-ONLY) and
+   * materializes it like the other CLI sources.
+   */
+  'sessionImport.importOpencodeSession': async (
+    { sessionId, titleHint }: { sessionId?: unknown; titleHint?: unknown } = {},
+  ) => {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importOpencodeSession(
+      userId,
+      sessionId,
+      typeof titleHint === 'string' ? titleHint : undefined,
+    );
   },
 
   /**
@@ -609,6 +644,21 @@ export const invokeHandlers = {
     if (!userId) throw new Error('no active user');
     const { handoffWelcomeReply } = await import('../features/chats');
     return handoffWelcomeReply(userId, conversationId, typeof text === 'string' ? text : undefined);
+  },
+
+  /**
+   * 打开导入会话时自动开始接续（真实消息流）：系统替用户发送第一条引导句
+   * 「继续这项工作。先告诉我现在做到哪里…」，随后 commander 回复三段式
+   * （项目介绍 / 工作空间能力 / Action Plan）。两条消息落盘并清除 needs_welcome。
+   */
+  'chats.beginWelcome': async ({ conversationId }: { conversationId?: unknown } = {}) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { beginWelcome } = await import('../features/chats');
+    return beginWelcome(userId, conversationId);
   },
 
   /**

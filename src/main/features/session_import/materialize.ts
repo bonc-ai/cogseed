@@ -39,7 +39,7 @@ const log = createLogger('session-import:materialize');
 
 export interface MaterializeInput {
   userId: string;
-  source: 'claude' | 'codex' | 'workbuddy';
+  source: 'claude' | 'codex' | 'workbuddy' | 'opencode';
   sourceId: string;
   /** Original project path, used only to enrich the title. */
   projectPath?: string;
@@ -77,6 +77,15 @@ function titleFromText(text: string | undefined): string {
 }
 
 /** Build a short title from the summary head or the picker hint. */
+/** Human-friendly source name for import banners (never i18n-ed — user content). */
+function sourceDisplayName(source: MaterializeInput['source']): string {
+  if (source === 'claude') return 'Claude Code';
+  if (source === 'codex') return 'Codex';
+  if (source === 'workbuddy') return 'WorkBuddy';
+  if (source === 'opencode') return 'OpenCode';
+  return source;
+}
+
 function buildTitle(input: MaterializeInput): string {
   const title = titleFromText(input.extraction.sessionSummary) ||
     titleFromText(input.titleHint) ||
@@ -88,12 +97,13 @@ function buildTitle(input: MaterializeInput): string {
  *  banner; model_text carries the same brief as durable pickup context. */
 function buildSeed(input: MaterializeInput): { text: string; modelText: string } {
   const summary = input.extraction.sessionSummary.trim();
+  const src = sourceDisplayName(input.source);
   const banner = input.extraction.degraded
-    ? '[从 Claude Code 导入 · 未能自动提炼，以下为原始开头]'
-    : '[从 Claude Code 导入 · 已提炼]';
+    ? `[从 ${src} 导入 · 未能自动提炼，以下为原始开头]`
+    : `[从 ${src} 导入 · 已提炼]`;
   const text = `${banner}\n\n${summary}`;
   const modelText =
-    `以下是用户从 Claude Code 导入的一段历史会话的提炼简报。` +
+    `以下是用户从 ${src} 导入的一段历史会话的提炼简报。` +
     `请把它当作已发生的上下文，在此基础上继续协助用户，不要重复已完成的工作：\n\n${summary}`;
   return { text, modelText };
 }

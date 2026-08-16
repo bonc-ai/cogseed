@@ -404,10 +404,30 @@ function _csShowMatchingView() {
   _csRunInvisibleMatching();
 }
 
-// 隐形匹配：根据后端建议的场景建/复用工作空间并把导入会话绑定进去；
-// 无建议或建议不可用时落入「临时空间」。完成后直接进入主界面（不展示确认页）。
+// 隐形匹配：优先复用后端匹配到的「已有真实空间」；否则按场景建/复用工作空间
+// 并把导入会话绑定进去；无建议落入「临时空间」。完成后直接进入主界面。
 async function _csRunInvisibleMatching() {
   const lead = document.getElementById('cs-matching-lead');
+
+  // 优先：后端匹配到的已有真实空间（用真实工作空间复用）。
+  const suggestedSpace = (_csRecommendation && _csRecommendation.suggestedSpace) || null;
+  if (suggestedSpace && suggestedSpace.spaceId) {
+    if (lead) lead.textContent = '正在把你的内容归入已有的工作空间…';
+    try {
+      await _csEnsureWorkspaceFromScenario(null, '', suggestedSpace.name || '临时空间', suggestedSpace.spaceId);
+    } catch (wsErr) {
+      _obLog.warn('workspace reuse failed during matching', { error: (wsErr && wsErr.message) || String(wsErr) });
+    }
+    _csMatchResult = {
+      spaceName: suggestedSpace.name || '临时空间',
+      scenarioId: '',
+      matchedTemplateId: '',
+      matchedName: suggestedSpace.name || '',
+      reusedSpaceId: suggestedSpace.spaceId,
+    };
+    await _csFinish();
+    return;
+  }
 
   // 有建议场景（「继续项目」来自 recommendStartingPoint.suggestedTemplate，
   // 后端现在返回场景建议：scenarioId + 该场景建议主模板 templateId）。
@@ -458,35 +478,52 @@ let _csMatchResult = null;
 // 创建/复用工作空间并把导入会话绑定进去（隐形匹配的核心落地）。
 // 有场景：按场景名建空间（场景名 + 主/副模板 + 图标），复用同名空间。
 // 无场景：复用/新建「临时空间」，会话同样绑定到其下项目。
-async function _csEnsureWorkspaceFromScenario(scenario, primaryTemplateId, spaceName) {
+async function _csEnsureWorkspaceFromScenario(scenario, primaryTemplateId, spaceName, explicitSpaceId) {
   let spaceId = '';
-  try {
-    // 场景空间以场景名为标识（与前端「工作空间」面板一致）。按名称匹配复用，
-    // 避免误命中历史遗留的同 primary_template 角色空间（如旧「产品经理」）。
-    const listRes = await window.cogseed.invoke('spaces.list', {});
-    const existing = (listRes && listRes.spaces || []).find((s) => s && s.name === spaceName);
-    if (existing && existing.space_id) {
-      spaceId = existing.space_id;
-      _obLog.info('reusing existing workspace', { primaryTemplateId, spaceId, name: spaceName });
-    }
-  } catch (listErr) {
-    _obLog.warn('spaces.list failed before create', { error: (listErr && listErr.message) || String(listErr) });
-  }
-
-  if (!spaceId) {
+  // 显式指定的空间（后端已匹配到的已有真实空间）——直接复用，不再按名查找/创建。
+  if (explicitSpaceId) {
+    spaceId = explicitSpaceId;
+    _obLog.info('reusing matched existing workspace', { spaceId, name: spaceName });
+  } else {
     try {
-      const createRes = await window.cogseed.invoke('spaces.create', {
-        name: spaceName,
-        primary_template_id: primaryTemplateId || undefined,
-        secondary_template_ids: (scenario && scenario.suggested_secondary_template_ids) || [],
-        icon: (scenario && scenario.icon) || undefined,
-      });
-      if (createRes && createRes.space && createRes.space.space_id) {
-        spaceId = createRes.space.space_id;
-        _obLog.info('created workspace', { primaryTemplateId, spaceId, name: spaceName });
+      // 场景空间以场景名为标识（与前端「工作空间」面板一致）。按名称匹配复用，
+      // 避免误命中历史遗留的同 primary_template 角色空间（如旧「产品经理」）。
+      const listRes = await window.cogseed.invoke('spaces.list', {});
+      const spaces = (listRes && listRes.spaces) || [];
+      const byName = spaces.find((s) => s && s.name === spaceName);
+      if (byName && byName.space_id) {
+        spaceId = byName.space_id;
+        _obLog.info('reusing existing workspace', { primaryTemplateId, spaceId, name: spaceName });
+      } else if (primaryTemplateId) {
+        // 名称不匹配时，按主角色模板复用已有真实空间（最近更新的优先），
+        // 避免为同一模板反复新建同质空间。
+        const byTemplate = spaces
+          .filter((s) => s && s.primary_template_id === primaryTemplateId)
+          .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+        if (byTemplate[0] && byTemplate[0].space_id) {
+          spaceId = byTemplate[0].space_id;
+          _obLog.info('reusing existing workspace by template', { primaryTemplateId, spaceId, name: spaceName });
+        }
       }
-    } catch (createErr) {
-      _obLog.warn('spaces.create failed', { error: (createErr && createErr.message) || String(createErr) });
+    } catch (listErr) {
+      _obLog.warn('spaces.list failed before create', { error: (listErr && listErr.message) || String(listErr) });
+    }
+
+    if (!spaceId) {
+      try {
+        const createRes = await window.cogseed.invoke('spaces.create', {
+          name: spaceName,
+          primary_template_id: primaryTemplateId || undefined,
+          secondary_template_ids: (scenario && scenario.suggested_secondary_template_ids) || [],
+          icon: (scenario && scenario.icon) || undefined,
+        });
+        if (createRes && createRes.space && createRes.space.space_id) {
+          spaceId = createRes.space.space_id;
+          _obLog.info('created workspace', { primaryTemplateId, spaceId, name: spaceName });
+        }
+      } catch (createErr) {
+        _obLog.warn('spaces.create failed', { error: (createErr && createErr.message) || String(createErr) });
+      }
     }
   }
 
@@ -1040,81 +1077,48 @@ function _csFillAssetSection(agentType, asset, html) {
 }
 
 // ── Step 1a: connect AI team ────────────────────────────────────────────────
-// Detect importable model providers (via CC Switch aggregation), let the user
-// pick which to one-click connect into the "AI team" (custom providers), then
-// sync the selected keys. Keys stay local; OAuth-only sources are surfaced as
-// non-migratable rather than silently dropped.
+// Detect the user's local coding CLIs (Claude Code / Codex / OpenCode /
+// WorkBuddy), let the user pick which to connect into the "AI team" as a real
+// member, and — only when explicitly chosen — store the API the CLI is
+// currently using (read from the CLI's own config; no CC Switch involved).
 async function _csLoadTeam(force) {
   const box = document.getElementById('cs-team-list');
   if (!box) return;
   if (force) box.innerHTML = '<div class="cs-state loading">正在检测可连接的 Agent…</div>';
 
-  // Probe first so we can give an honest "no CC Switch found" state instead of
-  // an empty list that looks like a bug.
-  let probe = null;
+  // 只检测本机已安装的编码 CLI（Claude Code / Codex / OpenCode / WorkBuddy），
+  // 不读取 CC Switch ——「连接并存储 API」的凭据来自 CLI 自身的配置文件。
   try {
-    probe = await window.cogseed.invoke('customProviders.ccswitch.probe');
-  } catch (err) {
-    _obLog.warn('ccswitch probe failed', { error: (err && err.message) || String(err) });
-  }
-  if (probe && probe.available === false) {
-    box.innerHTML =
-      '<div class="cs-state">未检测到可一键连接的 Agent。' +
-      '你仍可继续——之后可在设置的「AI 团队」里手动添加模型，导入会话时也会用你已配置的模型。</div>';
-    return;
-  }
-
-  try {
-    // CC Switch model preview and local CLI detection are independent sources —
-    // fetch both in parallel. CC Switch gives model providers to sync; local
-    // detection gives coding CLIs (Claude/Codex) we can add as team agents.
-    // The team should show a CLI even when CC Switch has no card for it.
-    const [res, localClis] = await Promise.all([
-      window.cogseed.invoke('customProviders.ccswitch.preview'),
-      _csDetectCodingClis(),
-    ]);
-    if (!res || res.ok !== true) {
-      const reason = (res && res.reason) || 'unknown';
-      // CC Switch unavailable is fine if we still detected a local CLI — render
-      // the CLI-only team rather than an error state.
-      if (localClis.size) {
-        _csRenderTeam([], [], localClis);
-        return;
-      }
-      box.innerHTML = `<div class="cs-state">暂时无法读取可连接的 Agent（${_csEsc(reason)}）。可稍后在设置的「AI 团队」里手动添加。</div>`;
+    const localClis = await _csDetectCodingClis();
+    if (localClis.size) {
+      _csRenderTeam(localClis);
       return;
     }
-    _csRenderTeam(res.items || [], res.unsupported || [], localClis);
+    // 本机没有任何 Agent → 直接显示「未安装，不可连接」。
+    box.innerHTML =
+      '<div class="cs-state">未检测到本机已安装的 Agent（Claude Code / Codex / OpenCode / WorkBuddy），' +
+      '当前不可连接。安装并登录后点「重新检测」即可。</div>';
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    _obLog.warn('ccswitch preview failed', { error: msg });
-    box.innerHTML = `<div class="cs-state err">检测可连接的 Agent 失败：${_csEsc(msg)}。可稍后在设置里手动添加。</div>`;
+    _obLog.warn('agent detect failed', { error: msg });
+    box.innerHTML = `<div class="cs-state err">检测本机 Agent 失败：${_csEsc(msg)}。可稍后在设置的「AI 团队」里手动添加。</div>`;
   }
 }
 
-// Friendly agent label from a CC Switch appType (externalId prefix). Reuses
-// the shared CS_AGENT_LABELS map defined at the top of the module.
+// Friendly agent label for a local CLI type. Reuses the shared CS_AGENT_LABELS
+// map defined at the top of the module.
 function _csAgentLabel(appType) {
   return CS_AGENT_LABELS[appType] || appType || '其他 Agent';
 }
 
-// Render the importable model services GROUPED BY AGENT (Claude Code, Codex …).
-// Each agent is its own group with its own "connect" button, so the user
-// connects an agent's models as a unit rather than picking from a flat list.
-// Per-agent connectable externalIds, filled by _csRenderTeam and consumed by
-// _csConnectTeam. Keeps the CC Switch key/provider details out of the DOM —
-// the user only sees "this agent can connect", not the underlying keys.
-let _csTeamByAgent = {};
-
 // Per-appType local coding-CLI availability, filled by _csRenderTeam and read
 // by _csConnectTeam. When an appType maps to a detected local CLI (Claude /
-// Codex), "connect" also creates a CLI-backed agent so it shows up as a real
-// member of the AI team — not just a synced model provider.
+// Codex / OpenCode / WorkBuddy), "connect" creates a CLI-backed agent so it
+// shows up as a real member of the AI team.
 let _csCliByAgent = {};
 
-// appType (CC Switch prefix / local CLI type) → coding-CLI runtime name.
-// Only claude & codex are coding CLIs the team can drive as agents; other
-// appTypes stay model-provider-only (CC Switch sync path).
+// appType (local CLI type) → coding-CLI runtime name. Everything here is a
+// CLI the team can drive as an agent; no CC Switch involved.
 function _csCodingCliForAppType(appType) {
   if (appType === 'claude' || appType === 'claude-desktop') return 'claude';
   if (appType === 'codex') return 'codex';
@@ -1134,20 +1138,27 @@ function _csAgentNameForCli(cli) {
 }
 
 // Detect local coding CLIs once per connect pass. Returns a Map cli-name →
-// { loggedIn, mode } from the real localAgents.list probe (file-based auth
-// state, never guessed).
+// { loggedIn, mode, endpoint? } from the real localAgents.list probe
+// (file-based auth state, never guessed) + a best-effort model-endpoint probe
+// so the UI can flag CLIs that route through a local proxy (e.g. CC Switch).
 async function _csDetectCodingClis() {
   const found = new Map();
   try {
-    const res = await window.cogseed.invoke('localAgents.list', { force: false });
+    const [res, epRes] = await Promise.all([
+      window.cogseed.invoke('localAgents.list', { force: false }),
+      window.cogseed.invoke('localAgents.cliEndpointInfo').catch(() => null),
+    ]);
+    const endpoints = (epRes && epRes.ok && epRes.endpoints) || {};
     const entries = (res && res.entries) || [];
     entries.forEach((e) => {
       if (!e || !e.available) return;
       const cli = _csCodingCliForAppType(e.type);
       if (cli) {
+        const ep = endpoints[cli];
         found.set(cli, {
           loggedIn: !!(e.auth && e.auth.loggedIn),
           mode: (e.auth && e.auth.mode) || 'unknown',
+          ...(ep ? { endpoint: ep } : {}),
         });
       }
     });
@@ -1192,139 +1203,70 @@ async function _csEnsureCliAgent(cli, existingAgents) {
   }
 }
 
-// Render one card PER AGENT (Claude Code, Codex …) — no key details, no
-// provider list, no checkboxes. Each agent shows a status line and a single
-// "connect" button that syncs all of that agent's importable providers.
-function _csRenderTeam(items, unsupported, localClis) {
+// Render one card PER detected local coding CLI (Claude Code, Codex,
+// OpenCode, WorkBuddy) — no CC Switch, no provider/key details. Each agent
+// shows a status line and a single "connect" button with the two choices
+// (只连接 / 连接并存储 API).
+function _csRenderTeam(localClis) {
   const box = document.getElementById('cs-team-list');
   if (!box) return;
 
   const clis = localClis instanceof Map ? localClis : (localClis instanceof Set ? new Map([...localClis].map((c) => [c, { loggedIn: false, mode: 'unknown' }])) : new Map());
 
-  if (!items.length && !unsupported.length && !clis.size) {
+  if (!clis.size) {
     box.innerHTML =
-      '<div class="cs-state">未检测到可一键连接的 Agent。可在设置的「AI 团队」里手动添加模型后再回来。</div>';
+      '<div class="cs-state">未检测到本机已安装的 Agent（Claude Code / Codex / OpenCode / WorkBuddy），当前不可连接。</div>';
     return;
   }
 
-  // Bucket both importable and unsupported rows by their originating agent.
-  const groups = new Map(); // appType → { ids: [], needsKey: n, unsupportedReasons: [], hasCli: bool }
-  const bucket = (appType) => {
-    if (!groups.has(appType)) groups.set(appType, { ids: [], needsKey: 0, unsupportedReasons: [], hasCli: false, cliAuth: '' });
-    return groups.get(appType);
-  };
-  items.forEach((it) => {
-    const g = bucket(it.appType || 'other');
-    g.ids.push(it.externalId);
-    if (it.needsKey) g.needsKey += 1;
-  });
-  unsupported.forEach((u) => { bucket(u.appType || 'other').unsupportedReasons.push(u.reason || 'unknown'); });
-
-  // Fold detected local coding CLIs into the same buckets. A CLI maps to a
-  // canonical appType so it either enriches an existing CC Switch card or
-  // stands up its own card when CC Switch had nothing for it.
-  const cliAppType = { claude: 'claude', codex: 'codex' };
-  clis.forEach((info, cli) => {
-    const appType = cliAppType[cli] || cli;
-    const g = bucket(appType);
-    g.hasCli = true;
-    // Honest sign-in state from the real credential files.
-    if (info && info.loggedIn) {
-      g.cliAuth = info.mode === 'api' ? 'API 登录' : (info.mode === 'oauth' ? '官方账号登录' : '已登录');
-    } else {
-      g.cliAuth = '';
-    }
-  });
-
-  // Stash ids + CLI presence for the connect handler; DOM never carries key material.
-  _csTeamByAgent = {};
   _csCliByAgent = {};
-  groups.forEach((g, appType) => {
-    _csTeamByAgent[appType] = g.ids.slice();
-    if (g.hasCli) _csCliByAgent[appType] = _csCodingCliForAppType(appType);
-  });
-
   // Stable, friendly ordering: known agents first, then any others.
-  const order = ['claude', 'claude-desktop', 'codex', 'gemini'];
-  const appTypes = Array.from(groups.keys()).sort((a, b) => {
+  const order = ['claude', 'codex', 'opencode', 'workbuddy'];
+  const appTypes = Array.from(clis.keys()).sort((a, b) => {
     const ia = order.indexOf(a); const ib = order.indexOf(b);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
 
   const rows = appTypes.map((appType) => {
-    const g = groups.get(appType);
+    const info = clis.get(appType);
     const label = _csAgentLabel(appType);
-
-    // Claude Desktop is a read-only session source, NOT an executable team
-    // runtime: it is not a local CLI agent (absent from LOCAL_CLI_TYPES) and
-    // can never be dispatched tasks. Presenting it as 可连接/已连接 here would
-    // falsely imply it joins the AI team as a working member. Show it as
-    // unsupported instead — its sessions remain importable via 「继续项目」.
-    if (appType === 'claude-desktop') {
-      return `
-      <div class="cs-src cs-team-row" data-app-type="${_csEsc(appType)}">
-        <div class="s-ico">${CS_TERMINAL_SVG}</div>
-        <div>
-          <strong>${_csEsc(label)}</strong>
-          <small>桌面版无法作为团队成员执行任务，可在「继续项目」里导入其会话</small>
-        </div>
-        <div class="cs-team-right"><span class="g-status off">不支持桌面版</span></div>
-      </div>`;
-    }
-
-    // Connectable if there are models to sync OR a local CLI to add as an agent.
-    const connectable = g.ids.length > 0 || g.hasCli;
-
-    // Status line: connectable count, plus honest hints for needs-key /
-    // non-migratable credentials — without exposing any key values.
-    const reasonLabels = {
-      official: '官方订阅登录',
-      unsupported_protocol: '暂不支持该 Agent 类型',
-      missing_api_key: '缺少 API Key',
-      invalid_config: '配置无法解析',
-    };
-    const unReasonCounts = {};
-    (g.unsupportedReasons || []).forEach((r) => { unReasonCounts[r] = (unReasonCounts[r] || 0) + 1; });
-    const unsupportedCount = (g.unsupportedReasons || []).length;
-
-    let status;
-    if (connectable) {
-      status = `<span class="g-status">可连接</span>`;
-    } else if (unsupportedCount) {
-      // Honest reason per CC Switch's own classification — never guess "官方".
-      const onlyOfficial = unReasonCounts.official === unsupportedCount;
-      status = onlyOfficial
-        ? `<span class="g-status off">官方登录 · 需配置 Key 直连</span>`
-        : `<span class="g-status off">暂不支持直连</span>`;
-    } else {
-      status = `<span class="g-status off">暂不可连接</span>`;
-    }
-
-    const hints = [];
-    if (g.ids.length > 0) hints.push(`模型 ${g.ids.length} 项 → 模型供应商（提取/对话用）`);
-    if (g.hasCli) {
-      hints.push(g.cliAuth
-        ? `执行 Agent → AI 团队（${g.cliAuth}，无需 Key 即可派发任务）`
-        : '执行 Agent → AI 团队（可派发任务）');
-    }
-    if (g.needsKey) hints.push('部分模型直连需 API Key（平台规则），可稍后在设置里补充');
-    Object.keys(unReasonCounts).forEach((r) => {
-      const n = unReasonCounts[r];
-      const label = reasonLabels[r] || '暂不支持';
-      hints.push(`${n} 项为${label}${r === 'unsupported_protocol' ? ' · 可稍后在设置里手动添加' : (r === 'missing_api_key' ? ' · 该 Agent 自身的 Key 可稍后补充' : '')}`);
-    });
-    const hintHtml = hints.length ? `<small>${_csEsc(hints.join(' · '))}</small>` : '';
-
-    const action = connectable
-      ? `<div class="cs-team-actions">
-          <select class="cs-team-action-select" data-app-type="${_csEsc(appType)}">
-            <option value="connect-only">只连接</option>
-            <option value="connect-store">连接并存储 API</option>
-          </select>
-          <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
-        </div>`
+    // Honest sign-in state from the real credential files.
+    const cliAuth = info && info.loggedIn
+      ? (info.mode === 'api' ? 'API 登录' : (info.mode === 'oauth' ? '官方账号登录' : '已登录'))
       : '';
+    const status = `<span class="status green">可连接</span>`;
+    const hints = [
+      cliAuth
+        ? `执行 Agent → AI 团队（${cliAuth}，无需 Key 即可派发任务）`
+        : '执行 Agent → AI 团队（可派发任务）',
+    ];
+    // 「连接并存储 API」只在能读到 API Key 时才有意义：OAuth（账号）登录没有
+    // 可存储的 API Key（存 OAuth token 当 key 用会调用失败），未登录则无可读取凭据。
+    const ep = info && info.endpoint;
+    const isOAuthLogin = !!(ep && ep.configAvailable && ep.authMode === 'oauth');
+    const noReadableCred = !!(ep && !ep.configAvailable);
+    const canStoreApi = !!(ep && ep.configAvailable && ep.authMode === 'api');
+    if (isOAuthLogin) {
+      hints.push('官方账号登录，CLI 使用账号能力，无需存储 API');
+    } else if (noReadableCred) {
+      hints.push('未检测到可读取的 API 凭据，请先在 CLI 中登录或配置 API');
+    }
+    // Honest local-proxy hint: this CLI routes model calls through a local
+    // proxy (e.g. CC Switch). It still connects — but the proxy must be
+    // running when the agent is woken, unless the user stores a direct API.
+    if (ep && ep.isLocalProxy) {
+      hints.push('模型走本地代理连接，使用时需保持代理运行；或「连接并存储 API」改为直连');
+    }
+    const hintHtml = `<small>${_csEsc(hints.join(' · '))}</small>`;
+    const action = `<div class="cs-team-actions">
+        <select class="cs-team-action-select" data-app-type="${_csEsc(appType)}">
+          <option value="connect-only">只连接</option>
+          ${canStoreApi ? '<option value="connect-store">连接并存储 API</option>' : ''}
+        </select>
+        <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
+      </div>`;
 
+    _csCliByAgent[appType] = _csCodingCliForAppType(appType);
     return `
       <div class="cs-src cs-team-row" data-app-type="${_csEsc(appType)}">
         <div class="s-ico">${CS_TERMINAL_SVG}</div>
@@ -1348,85 +1290,94 @@ function _csRenderTeam(items, unsupported, localClis) {
   });
 }
 
-// Connect ONE agent's models into custom providers ("AI 团队"): sync all of
-// that agent's importable externalIds at once. Honest result — added/updated
-// counts, and a note when some still need a key.
+// Connect ONE local coding CLI into the AI team: add it as a real team member,
+// and — only when the user chose 「连接并存储 API」 — store the API the CLI is
+// currently using (read from the CLI's own config file; no CC Switch involved).
 async function _csConnectTeam(box, appType, shouldStoreApi = false) {
   const row = box.querySelector(`.cs-team-row[data-app-type="${appType}"]`);
   const btn = row ? row.querySelector('.cs-team-connect') : null;
-  const externalIds = (_csTeamByAgent[appType] || []).slice();
   const cli = _csCliByAgent[appType] || '';
   const label = _csAgentLabel(appType);
 
-  if (!externalIds.length && !cli) {
-    _csToast(`「${label}」暂无可一键连接的模型`);
+  if (!cli) {
+    _csToast(`「${label}」暂无可连接的本地 Agent`);
     return;
   }
 
   if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
 
   try {
-    // 1) Sync CC Switch model providers (if any) into "AI 团队" — 仅当用户
-    //    明确选择「连接并存储 API」时才执行。绝不自动拿走用户的 API Key；
-    //    只连接（connect-only）不同步任何模型凭据。
-    let added = 0;
-    let updated = 0;
-    if (externalIds.length && shouldStoreApi) {
-      const res = await window.cogseed.invoke('customProviders.ccswitch.sync', { externalIds });
-      if (!res || res.ok !== true) {
-        const reason = (res && res.reason) || '未知原因';
-        _csToast(`连接「${label}」失败：${reason}`);
-        if (btn) { btn.disabled = false; btn.textContent = '执行'; }
-        return;
-      }
-      added = res.added || 0;
-      updated = res.updated || 0;
-    }
-
-    // 2) If this agent has a local coding CLI, add it as a real team member.
-    // Best-effort: a create failure is reported but does not undo the model
-    // sync above. Load existing agents once so we don't duplicate.
+    // 1) Add the local coding CLI as a real team member. Best-effort: a create
+    //    failure is reported but does not undo the rest. Load existing agents
+    //    once so we don't duplicate.
     let cliResult = '';
-    if (cli) {
-      let existing = [];
-      try {
-        const listRes = await window.cogseed.invoke('agents.list', {});
-        existing = (listRes && listRes.agents) || [];
-      } catch (err) {
-        _obLog.warn('team connect: agents.list failed', { error: (err && err.message) || String(err) });
-      }
-      cliResult = await _csEnsureCliAgent(cli, existing);
+    let existing = [];
+    try {
+      const listRes = await window.cogseed.invoke('agents.list', {});
+      existing = (listRes && listRes.agents) || [];
+    } catch (err) {
+      _obLog.warn('team connect: agents.list failed', { error: (err && err.message) || String(err) });
+    }
+    cliResult = await _csEnsureCliAgent(cli, existing);
 
-      // 2b) Make this CLI the commander's no-API fallback preference — but only
-      // when the user has not already picked one (first connected agent wins;
-      // a manual choice in settings always overrides). This is what makes the
-      // walkthrough promise real: "指挥官默认调用你连接的第一个 Agent 降级".
-      if (cliResult === 'created' || cliResult === 'exists') {
-        try {
-          const fb = await window.cogseed.invoke('prefs.getCliFallback');
-          if (!fb || !fb.cli) {
-            const saved = await window.cogseed.invoke('prefs.setCliFallback', { cli });
-            _obLog.info('team connect: set cli fallback preference', { cli, saved: saved && saved.cli });
-          }
-        } catch (err) {
-          _obLog.warn('team connect: set cli fallback failed', { cli, error: (err && err.message) || String(err) });
+    // 1b) Make this CLI the commander's no-API fallback preference — but only
+    // when the user has not already picked one (first connected agent wins;
+    // a manual choice in settings always overrides). This is what makes the
+    // walkthrough promise real: "指挥官默认调用你连接的第一个 Agent 降级".
+    if (cliResult === 'created' || cliResult === 'exists') {
+      try {
+        const fb = await window.cogseed.invoke('prefs.getCliFallback');
+        if (!fb || !fb.cli) {
+          const saved = await window.cogseed.invoke('prefs.setCliFallback', { cli });
+          _obLog.info('team connect: set cli fallback preference', { cli, saved: saved && saved.cli });
         }
+      } catch (err) {
+        _obLog.warn('team connect: set cli fallback failed', { cli, error: (err && err.message) || String(err) });
       }
     }
 
-    // 3) If user selected "connect and store", store the currently-in-use API.
+    // 2) If user selected "connect and store", store the currently-in-use API.
     let storedApi = false;
+    let storedProviderId = '';
     if (shouldStoreApi && cli) {
       try {
         const storeRes = await window.cogseed.invoke('customProviders.storeActiveCliConfig', { cli });
         if (storeRes && storeRes.ok) {
           storedApi = true;
-          _obLog.info('active CLI config stored', { cli, providerId: storeRes.providerId });
+          storedProviderId = storeRes.providerId || '';
+          _obLog.info('active CLI config stored', { cli, providerId: storedProviderId });
         } else {
           _obLog.warn('active CLI config store failed', { cli, error: storeRes?.error || 'unknown' });
         }
       } catch (err) {
         _obLog.warn('active CLI config store error', { cli, error: (err && err.message) || String(err) });
+      }
+    }
+
+    // 3) Bind the stored provider to the CLI agent's runtime so future spawns
+    //    inject OPENAI_BASE_URL/API_KEY (or ANTHROPIC_*) via provider_env and
+    //    bypass the CLI's own config — including a CC Switch local proxy. This
+    //    is what makes 唤醒 agent 不依赖 CC Switch: the agent carries its own
+    //    endpoint + credential.
+    if (storedApi && storedProviderId) {
+      try {
+        const listRes = await window.cogseed.invoke('agents.list', {});
+        const row = ((listRes && listRes.agents) || []).find(
+          (a) => a && a.runtime && a.runtime.kind === 'cli' && a.runtime.cli === cli,
+        );
+        if (row && row.agent_id) {
+          const upd = await window.cogseed.invoke('agents.update', {
+            agent_id: row.agent_id,
+            updates: { runtime: { kind: 'cli', cli, cli_provider_id: `cp:${storedProviderId}` } },
+          });
+          if (upd && upd.agent) {
+            _obLog.info('cli provider bound to agent', { cli, agentId: row.agent_id, providerId: storedProviderId });
+          } else {
+            _obLog.warn('cli provider bind returned no agent', { cli, agentId: row.agent_id });
+          }
+        }
+      } catch (err) {
+        _obLog.warn('cli provider bind failed', { cli, error: (err && err.message) || String(err) });
       }
     }
 
@@ -1439,17 +1390,15 @@ async function _csConnectTeam(box, appType, shouldStoreApi = false) {
 
     // Honest, combined summary of what actually happened.
     const parts = [];
-    const models = added + updated;
-    if (models) parts.push(`${models} 个模型`);
     if (cliResult === 'created') parts.push('新增 1 位 CLI 成员');
     else if (cliResult === 'exists') parts.push('CLI 成员已在团队');
     if (storedApi) parts.push('已存储当前正在使用的 API');
     if (cliResult === 'error') {
-      _csToast(`「${label}」模型已连接，但加入 CLI 成员失败，可稍后在「AI 团队」里手动新建`);
+      _csToast(`连接「${label}」失败，可稍后在「AI 团队」里手动新建`);
     } else {
       _csToast(parts.length ? `已把「${label}」连接到 AI 团队（${parts.join('，')}）` : `已连接「${label}」`);
     }
-    _obLog.info('team connect finished', { appType, added, updated, cli, cliResult, storedApi });
+    _obLog.info('team connect finished', { appType, cli, cliResult, storedApi });
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('team connect failed', { appType, error: msg });

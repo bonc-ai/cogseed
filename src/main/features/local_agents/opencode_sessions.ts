@@ -237,3 +237,60 @@ export function readOpencodeSessionMessages(
     try { db?.close(); } catch { /* noop */ }
   }
 }
+
+/**
+ * Read OpenCode message parts for a session (the `part` table). Returns
+ * human text / reasoning parts keyed by the owning message's role. Used by
+ * the session importer to distill a summary from real user prose — the
+ * message.data blob does NOT carry the text (only role/model/summary).
+ */
+export function readOpencodeSessionParts(
+  sessionId: string,
+  home = os.homedir(),
+): Array<{ messageId: string; role: string; type: string; text: string }> | { error: string } {
+  const probe = probeOpencode(home);
+  if (!probe.available) {
+    return { error: probe.reason || 'not_installed' };
+  }
+
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(probe.dbPath, { readonly: true, fileMustExist: true });
+    const rows = db.prepare(`
+      SELECT p.message_id, m.data AS message_data, p.data AS part_data
+      FROM part p
+      JOIN message m ON m.id = p.message_id
+      WHERE p.session_id = ?
+      ORDER BY p.time_created ASC
+    `).all(sessionId) as Array<{
+      message_id: string;
+      message_data: string;
+      part_data: string;
+    }>;
+
+    const out: Array<{ messageId: string; role: string; type: string; text: string }> = [];
+    for (const row of rows) {
+      let role = '';
+      try {
+        const md = JSON.parse(row.message_data);
+        role = typeof md.role === 'string' ? md.role : '';
+      } catch { /* keep '' */ }
+      let type = '';
+      let text = '';
+      try {
+        const pd = JSON.parse(row.part_data);
+        type = typeof pd.type === 'string' ? pd.type : '';
+        if (type === 'text' && typeof pd.text === 'string') text = pd.text;
+      } catch { /* skip unparseable part */ }
+      if (type === 'text' && text) {
+        out.push({ messageId: row.message_id, role, type, text });
+      }
+    }
+    return out;
+  } catch (err) {
+    log.warn('opencode part read failed', { error: (err as Error).message });
+    return { error: 'unreadable' };
+  } finally {
+    try { db?.close(); } catch { /* noop */ }
+  }
+}

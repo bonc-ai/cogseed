@@ -1603,11 +1603,16 @@ function _parseWelcomeCarry(raw) {
   }
 }
 
-/** 渲染导入会话接续欢迎的「准备携带」条（查看依据 → 打开右栏展示完整来源）。 */
-function _renderWelcomeCarryHtml(carry) {
+/** 渲染导入会话接续欢迎的「准备携带」条（查看依据 → 打开右栏展示完整来源；
+ *  带着这些继续 → 按 Action Plan 真实执行）。resumeJson 为 commander 回复携带的
+ *  welcome_resume（{restatement, carry, boundary, plan}），挂在 DOM 供事件委托用。 */
+function _renderWelcomeCarryHtml(carry, resumeJson) {
   if (!Array.isArray(carry) || !carry.length) return '';
   const summary = carry.map((c) => `${escapeHtml(c.label)} ${Number(c.count) || 0}项`).join(' · ');
-  return `<div class="welcome-carry">
+  const resumeAttr = (typeof resumeJson === 'string' && resumeJson.trim())
+    ? ` data-welcome-resume="${escapeHtml(resumeJson)}"`
+    : '';
+  return `<div class="welcome-carry"${resumeAttr}>
     <div class="welcome-carry-head">
       <b>${escapeHtml(t('chat.welcome_carry_title', '准备携带'))}</b>
       <span>${summary}</span>
@@ -1616,6 +1621,11 @@ function _renderWelcomeCarryHtml(carry) {
       </button>
     </div>
     <div class="welcome-carry-scope">${escapeHtml(t('chat.welcome_carry_scope', '只对目标任务生效'))}</div>
+    <div class="welcome-carry-actions">
+      <button type="button" class="btn btn-primary welcome-carry-continue" data-welcome-continue>
+        ${escapeHtml(t('chat.welcome_continue', '带着这些继续'))}
+      </button>
+    </div>
   </div>`;
 }
 
@@ -1673,31 +1683,74 @@ async function _createSpaceFromDraft(draft) {
   }
 }
 
-/** 事件委托：导入会话接续准备面板「带着这些继续」。 */
+/** 事件委托：导入会话接续欢迎「带着这些继续」→ 按 Action Plan 真实执行。
+ *  按钮挂在 commander 欢迎回复的 welcome-carry 块上，plan 来自 welcome_resume。 */
 document.addEventListener('click', (e) => {
   const btn = e.target && e.target.closest ? e.target.closest('[data-welcome-continue]') : null;
   if (!btn) return;
-  const panel = btn.closest('.welcome-panel');
-  const cid = panel && panel.dataset.welcomeCid;
+  const block = btn.closest('.welcome-carry');
+  const msgEl = btn.closest('.chat-message');
+  const cid = msgEl && msgEl.dataset ? msgEl.dataset.cid : null;
   if (!cid) return;
   btn.disabled = true;
-  void _submitImportedWelcomeContinue(cid);
+  void _submitWelcomeContinue(cid, block, btn);
 });
 
 /** 事件委托：导入会话接续欢迎「查看依据」→ 打开右栏展示完整依据。 */
 document.addEventListener('click', (e) => {
   const btn = e.target && e.target.closest ? e.target.closest('[data-welcome-carry-toggle]') : null;
   if (!btn) return;
-  const panel = btn.closest('.welcome-panel');
-  if (!panel) return;
-  const cid = panel.dataset.welcomeCid;
+  const block = btn.closest('.welcome-carry');
+  if (!block) return;
+  const msgEl = btn.closest('.chat-message');
+  const cid = msgEl && msgEl.dataset ? msgEl.dataset.cid : null;
   let resume = null;
-  try { resume = panel.dataset.resumeJson ? JSON.parse(panel.dataset.resumeJson) : null; } catch (_) { resume = null; }
+  try { resume = block.dataset.welcomeResume ? JSON.parse(block.dataset.welcomeResume) : null; } catch (_) { resume = null; }
   if (!resume) return;
   if (typeof window.ConversationInfo?.showResumeEvidence === 'function') {
     window.ConversationInfo.showResumeEvidence(resume, cid || undefined);
   }
 });
+
+/** 「带着这些继续」：按 welcome_resume 的 Action Plan 构造真实执行消息发给
+ *  CLI / commander（不走模板交接回复），随后标记 welcome 已处理。失败时恢复
+ *  按钮，避免"点了没反应"。 */
+async function _submitWelcomeContinue(cid, block, btn) {
+  let plan = [];
+  try {
+    const raw = block && block.dataset.welcomeResume;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      plan = Array.isArray(parsed && parsed.plan) ? parsed.plan : [];
+    }
+  } catch (_) { /* keep empty plan */ }
+
+  const message = plan.length
+    ? `继续。先按这个 Action Plan 执行，遇到冲突或需要扩大权限时再问我：\n${plan.map((item, i) => `${i + 1}. ${item}`).join('\n')}`
+    : t('chat.welcome_guide_sentence', '继续这项工作。先告诉我现在做到哪里、哪些约束不能丢，以及下一步准备怎么做。');
+  try {
+    if (typeof sendInConversation === 'function') {
+      const res = await sendInConversation(cid, message, undefined, {});
+      // sendInConversation 失败不抛错（返回 result:'failure'）；此时恢复按钮
+      // 并提示，避免"点了没反应"。
+      if (res && (res.errored === true || res.result === 'failure')) {
+        if (btn) btn.disabled = false;
+        if (typeof uiToast === 'function') {
+          uiToast(t('chat.welcome_continue_failed', '发送失败，请检查模型配置或本机 Agent 后重试'), { variant: 'warning', timeoutMs: 5000 });
+        }
+        return;
+      }
+    }
+    if (window.cogseed?.invoke) {
+      try {
+        await window.cogseed.invoke('chats.markWelcomeSeen', { conversationId: cid });
+      } catch (_) {}
+    }
+  } catch (err) {
+    _convLog.warn('welcome continue failed', { cid, error: err });
+    if (btn) btn.disabled = false;
+  }
+}
 
 /** 事件委托：草稿卡「创建空间」按钮。 */
 document.addEventListener('click', async (e) => {
@@ -3041,6 +3094,7 @@ function _groupMsgToLegacy(gm) {
     ...(gm.kstar_review_card ? { kstar_review_card: gm.kstar_review_card } : {}),
     ...(gm.recall_projection_card ? { recall_projection_card: gm.recall_projection_card } : {}),
     ...(typeof gm.welcome_carry === 'string' && gm.welcome_carry ? { welcome_carry: gm.welcome_carry } : {}),
+    ...(typeof gm.welcome_resume === 'string' && gm.welcome_resume ? { welcome_resume: gm.welcome_resume } : {}),
     ...(gm.imported_seed === true ? { imported_seed: true } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
@@ -6706,91 +6760,47 @@ function _ensureCreateAgentInlineObserver() {
 }
 
 /**
- * Show the resume welcome panel for an imported conversation (v1.6 three-part
- * template). Called when the user opens an imported conversation for the first
- * time. Renders a top-of-history pre-send panel (复述 / 准备携带 / Action Plan
- * + boundary) with a「带着这些继续」button; the guide sentence is sent only
- * when the user confirms.
+ * 打开导入会话自动开始接续（真实消息流，v1.6 模板），分两步让界面不空白：
+ *  1) 立即：系统替用户插入第一条「继续这项工作。先告诉我现在做到哪里…」并刷新
+ *     ——刚进入会话就有内容。
+ *  2) 动态：后台生成 commander 三段式回复（项目介绍 / 工作空间能力 / Action
+ *     Plan，Action Plan 走 LLM 需要时间），期间显示轻量占位气泡，生成完刷新。
  */
 async function _showImportedConversationWelcome(cid) {
   if (!window.cogseed?.invoke) return;
   try {
-    const result = await window.cogseed.invoke('chats.getWelcomePanel', { conversationId: cid });
-    if (!result?.ok || !result.text) return;
-    if (cid !== currentCid) return;
-    _renderImportedWelcomePanel(cid, result);
-  } catch (err) {
-    _convLog.error('welcome panel load failed', { cid, error: err });
-  }
-}
-
-/** 渲染导入会话接续准备面板（顶部，非聊天记录消息）。 */
-function _renderImportedWelcomePanel(cid, data) {
-  const history = document.getElementById('chat-history');
-  if (!history) return;
-  if (history.querySelector('.welcome-panel')) return; // 已渲染过，不重复
-
-  const carry = Array.isArray(data.carry) ? data.carry : _parseWelcomeCarry(JSON.stringify(data.carry || []));
-  const carryHtml = _renderWelcomeCarryHtml(carry);
-  const plan = Array.isArray(data.plan) && data.plan.length ? data.plan : [];
-  const planHtml = plan.length
-    ? `<ol class="welcome-panel-plan">${plan.map((item) => `<li>${escapeHtml(String(item))}</li>`).join('')}</ol>`
-    : '';
-  const boundary = String(data.boundary || '').trim();
-
-  const panel = document.createElement('div');
-  panel.className = 'welcome-panel';
-  panel.dataset.welcomeCid = cid;
-  // 完整依据数据存面板（供「查看依据」打开右栏渲染）。
-  panel.dataset.resumeJson = JSON.stringify({
-    restatement: String(data.restatement || data.text || '').split('\n')[0],
-    carry,
-    boundary,
-    plan: Array.isArray(data.plan) ? data.plan : [],
-  });
-  panel.innerHTML = `
-    <div class="welcome-panel-restatement">${escapeHtml(String(data.restatement || data.text || '').split('\n')[0])}</div>
-    ${carryHtml}
-    ${planHtml ? `<div class="welcome-panel-plan-block"><b>${escapeHtml(t('chat.welcome_plan_title', '建议 Action Plan'))}</b>${planHtml}</div>` : ''}
-    ${boundary ? `<div class="welcome-panel-boundary">${escapeHtml(boundary)}</div>` : ''}
-    <div class="welcome-panel-actions">
-      <button type="button" class="btn btn-primary" data-welcome-continue>
-        ${escapeHtml(t('chat.welcome_continue', '带着这些继续'))}
-      </button>
-    </div>
-  `;
-  history.prepend(panel);
-}
-
-/** 「带着这些继续」：按 Action Plan 真正执行。读取面板的 plan，构造真实
- *  执行消息发给 CLI / commander（不走模板交接回复），随后关闭面板。 */
-async function _submitImportedWelcomeContinue(cid) {
-  const panel = document.querySelector(`.welcome-panel[data-welcome-cid="${cid}"]`);
-  let plan = [];
-  try {
-    const raw = panel && panel.dataset.resumeJson;
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      plan = Array.isArray(parsed && parsed.plan) ? parsed.plan : [];
+    const result = await window.cogseed.invoke('chats.beginWelcome', { conversationId: cid });
+    if (!result?.ok) return;
+    if (cid === currentCid) {
+      await loadConversationHistory(cid, { preserveScroll: false });
     }
-  } catch (_) { /* keep empty plan */ }
-
-  // 构造按 Action Plan 执行的真实任务消息（用户确认开始干活）。
-  const planText = plan.length
-    ? `按以下 Action Plan 执行：\n${plan.map((item, i) => `${i + 1}. ${item}`).join('\n')}`
-    : t('chat.welcome_guide_sentence', '继续这项工作。先告诉我现在做到哪里、哪些约束不能丢，以及下一步准备怎么做。');
-  if (typeof sendInConversation === 'function') {
-    await sendInConversation(cid, planText, undefined, {});
-  }
-
-  // 关闭面板。
-  if (panel) panel.remove();
-  // 标记已处理，避免下次再弹。
-  if (window.cogseed?.invoke) {
+    // 动态回复：后台生成 commander 三段式（不阻塞 UI），期间显示占位。
+    if (cid !== currentCid) return;
+    const placeholder = _appendWelcomeThinkingPlaceholder(cid);
     try {
-      await window.cogseed.invoke('chats.markWelcomeSeen', { conversationId: cid });
-    } catch (_) {}
+      const reply = await window.cogseed.invoke('chats.handoffWelcomeReply', { conversationId: cid });
+      if (reply?.ok && cid === currentCid) {
+        await loadConversationHistory(cid, { preserveScroll: false });
+      }
+    } finally {
+      if (placeholder && placeholder.parentElement) placeholder.remove();
+    }
+  } catch (err) {
+    _convLog.error('welcome begin failed', { cid, error: err });
   }
+}
+
+/** 轻量占位气泡：commander 回复生成中（LLM 可能需要几秒），先告知用户在整理。 */
+function _appendWelcomeThinkingPlaceholder(cid) {
+  const history = document.getElementById('chat-history');
+  if (!history) return null;
+  const el = document.createElement('div');
+  el.className = 'chat-msg welcome-thinking';
+  el.dataset.cid = cid;
+  el.innerHTML = `<div class="chat-bubble"><div class="markdown-body">${escapeHtml(t('chat.welcome_thinking', 'Commander 正在整理接续信息…'))}</div></div>`;
+  history.appendChild(el);
+  history.scrollTop = history.scrollHeight;
+  return el;
 }
 
 async function loadConversationHistory(cid, opts = {}) {
@@ -7792,7 +7802,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     : null;
   const spaceDraftHtml = spaceDraft ? _renderSpaceDraftButtonHtml(spaceDraft) : '';
   const welcomeCarryHtml = (role === 'assistant' && message.welcome_carry)
-    ? _renderWelcomeCarryHtml(_parseWelcomeCarry(message.welcome_carry))
+    ? _renderWelcomeCarryHtml(_parseWelcomeCarry(message.welcome_carry), message.welcome_resume || '')
     : '';
 
   const attachmentCid = message.attachment_cid || message.attachments_cid || opts.cid || currentCid;
@@ -7862,6 +7872,8 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
   if (message._msg_id) msgDiv.dataset.msgId = String(message._msg_id);
   if (message._from) msgDiv.dataset.fromActor = String(message._from);
+  // 消息归属会话（welcome 块「查看依据 / 带着这些继续」事件委托需要）。
+  msgDiv.dataset.cid = String(opts.cid || currentCid || '');
   if (message._turn_id) msgDiv.dataset.turnId = String(message._turn_id);
   if (message._system_kind) msgDiv.dataset.systemKind = String(message._system_kind);
   if (message.failure_kind) msgDiv.dataset.failureKind = String(message.failure_kind);
@@ -9764,6 +9776,44 @@ function _trackChatSendResult(result, data = {}) {
   void data;
 }
 
+/** 「新任务」：像市面主流 AI 助手一样，直接进入一个空的会话界面。
+ *  后端创建一个 normal 会话，前端立即进入该会话（无需先输入）。 */
+async function openNewTask() {
+  _convLog.info('new task: creating empty conversation');
+  let convId = '';
+  try {
+    const newChatSpaceId = (typeof window.getNewChatSpaceId === 'function') ? window.getNewChatSpaceId() : '';
+    const res = await apiFetch('/api/conversations/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'normal', ...(newChatSpaceId ? { spaceId: newChatSpaceId } : {}) }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || t('chat.create_conv_failed'));
+    const conv = data.conversation;
+    convId = conv.conversation_id;
+    conv.title = t('chat.default_title');
+    conv.last_active_at = new Date().toISOString();
+    _markConversationListLocallyChanged();
+    conversations.unshift(conv);
+    renderConversationList();
+  } catch (err) {
+    _convLog.warn('new task create conversation failed', { error: err });
+    if (typeof uiAlert === 'function') {
+      await uiAlert(t('chat.create_conv_failed_with_reason', { reason: err && err.message ? err.message : String(err) }));
+    }
+    return;
+  }
+  // 清空两个输入框，避免旧草稿进入新会话。
+  const chatInput = document.getElementById('chat-input');
+  if (chatInput) { chatInput.value = ''; autoGrow(chatInput, 200); }
+  const newInput = document.getElementById('new-chat-input');
+  if (newInput) { newInput.value = ''; autoGrow(newInput, 260); }
+  setView('conversation', convId, { skipLoad: true });
+  _transferNewChatRecipientTo(convId);
+  _renderRecipientChip('conversation');
+}
+
 async function handleNewChatSubmit() {
   const input = document.getElementById('new-chat-input');
   const raw = (input.value || '').trim();
@@ -10234,6 +10284,11 @@ function _taskTurnRecordProcess(run, evData) {
 function _taskTurnRecordStreamEvent(cid, ev) {
   const run = _taskTurnRun(cid);
   if (!run || !ev) return;
+  // 右栏「本次携带」执行记录实时刷新（原型运行态 rail）：process/status 事件
+  // 到达即触发；refreshExecutions 内部有 2s 节流 + carried tab 激活检查。
+  if (typeof window !== 'undefined' && typeof window.ConversationInfo?.refreshExecutions === 'function') {
+    try { window.ConversationInfo.refreshExecutions(cid); } catch (_) {}
+  }
   if (ev.type === 'final' && ev.text) {
     const text = String(ev.text || '');
     run.assistantMessages.push({ actor: '', text });
@@ -10451,7 +10506,11 @@ function _makeConvChatController(cid, options = {}) {
 // Honest, idempotent, never fabricates a model.
 let _cliFallbackApplied = null; // cid → cli (per conversation, once)
 
-async function _maybeApplyCliFallback(cid) {
+async function _maybeApplyCliFallback(cid, opts = {}) {
+  // `force` skips the `model.hasConfigured` gate: used when the configured API
+  // exists but just FAILED at call time (bad key / network / quota) — we still
+  // want to fall back to the local CLI instead of showing a bare error.
+  const force = !!(opts && opts.force);
   if (_cliFallbackApplied === cid) {
     // Already fell back for this conversation: a CLI agent is in place (or the
     // user picked one manually). Treat that as success, not as "no fallback".
@@ -10461,11 +10520,13 @@ async function _maybeApplyCliFallback(cid) {
   }
   if (!window.orkas || typeof window.orkas.invoke !== 'function') return false;
 
-  let modelRes;
-  try {
-    modelRes = await window.orkas.invoke('model.hasConfigured');
-  } catch (_) { return false; }
-  if (modelRes && modelRes.configured) return false;
+  if (!force) {
+    let modelRes;
+    try {
+      modelRes = await window.orkas.invoke('model.hasConfigured');
+    } catch (_) { return false; }
+    if (modelRes && modelRes.configured) return false;
+  }
 
   let cli = '';
   try {
@@ -10538,6 +10599,27 @@ async function _maybeApplyCliFallback(cid) {
     uiToast(`指挥官当前没有可用的 API Key，消息已自动交给 ${label} 执行（可在设置中更改）`, { variant: 'warning', timeoutMs: 6000 });
   }
   return true;
+}
+
+/**
+ * API 调用失败后的自动降级（差距修复：配置存在但用不了 → 走本机 agent）。
+ * 模型流事件带 `failureKind: 'model' | 'config'`（key 失效 / 网络 / 额度 / 权限等）
+ * 时，把该会话切换到本机 CLI agent，后续消息由它执行。只作用于发给 commander
+ * 的模型失败；幂等（已降级 / recipient 已非 commander 时跳过）。不自动重发当前
+ * 消息——避免重复消费用户意图，用户重新发送即走 CLI。
+ */
+async function _maybeAutoCliFallbackOnModelFailure(cid, ev) {
+  if (!ev || ev.aborted) return;
+  const kind = ev.failureKind;
+  if (kind !== 'model' && kind !== 'config') return;
+  if (_cliFallbackApplied === cid) return;
+  let recipient = null;
+  try { recipient = _activeRecipient('conversation'); } catch (_) {}
+  if (recipient && recipient.kind !== 'commander') return;
+  const ok = await _maybeApplyCliFallback(cid, { force: true });
+  if (ok && typeof uiToast === 'function') {
+    uiToast('API 调用失败，已切换到本机 Agent 执行（可在设置中更改）', { variant: 'warning', timeoutMs: 6000 });
+  }
 }
 
 /**
@@ -12485,6 +12567,9 @@ function createChatController(config) {
               } else {
                 pending.errored = true;
                 if (hooks.onError) hooks.onError(ev.text, msgEl, id);
+                // API 模型调用失败（failureKind model/config）→ 自动降级到本机
+                // CLI agent，后续消息由它执行（不自动重发当前消息）。
+                void _maybeAutoCliFallbackOnModelFailure(id, ev);
               }
             }
             const paintWait = maybeYieldToPaint();

@@ -22,7 +22,7 @@ interface InvokeLog {
   payload: unknown;
 }
 
-function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => unknown)>) {
+function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => unknown)>, opts: { recipient?: unknown } = {}) {
   const invokeLog: InvokeLog[] = [];
   const toasts: Array<{ message: string; opts: unknown }> = [];
   const recipientByCid: Record<string, unknown> = {};
@@ -34,6 +34,7 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     Promise,
     console,
     _recipientByCid: recipientByCid,
+    _activeRecipient: () => (opts.recipient === undefined ? { kind: 'commander' } : opts.recipient),
     _renderRecipientChip: () => {},
     uiToast: (message: string, opts: unknown) => { toasts.push({ message, opts }); },
     _convLog: { info: () => {}, warn: () => {}, error: () => {} },
@@ -158,6 +159,66 @@ describe('commander CLI fallback', () => {
     // Preference wins even though claude appears first in the detection list.
     expect(applied).toBe(true);
     expect(recipientByCid['cid-pref']).toMatchObject({ kind: 'agent', id: 'agent-wb-1' });
+  });
+
+  it('force-falls back even when an API-key model IS configured (API failed at call time)', async () => {
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: true }, // config exists but failed at call time
+      'prefs.getCliFallback': { cli: 'claude' },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'cli', cli: 'claude' } },
+        ],
+      },
+    });
+
+    // Without force, the configured model blocks the fallback…
+    expect(await sandbox._maybeApplyCliFallback('cid-noforce')).toBe(false);
+    // …with force, the CLI agent takes over despite the stored API config.
+    const applied = await sandbox._maybeApplyCliFallback('cid-force', { force: true });
+    expect(applied).toBe(true);
+    expect(recipientByCid['cid-force']).toMatchObject({ kind: 'agent', id: 'agent-claude-1' });
+  });
+
+  it('auto-falls back when a commander model turn fails with failureKind=model', async () => {
+    const { sandbox, recipientByCid, toasts } = buildSandbox({
+      'prefs.getCliFallback': { cli: 'codex' },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+        ],
+      },
+    });
+
+    await sandbox._maybeAutoCliFallbackOnModelFailure('cid-err', {
+      failureKind: 'model',
+      failureCode: 'provider_auth',
+    });
+
+    expect(recipientByCid['cid-err']).toMatchObject({ kind: 'agent', id: 'agent-codex-1' });
+    expect(toasts.some((t) => t.message.includes('切换到本机 Agent'))).toBe(true);
+  });
+
+  it('does NOT auto-fallback when the failure is not model-related', async () => {
+    const { sandbox, recipientByCid } = buildSandbox({});
+
+    await sandbox._maybeAutoCliFallbackOnModelFailure('cid-err2', {
+      failureKind: 'dependency',
+      failureCode: 'skill_disabled',
+    });
+
+    expect(recipientByCid['cid-err2']).toBeUndefined();
+  });
+
+  it('does NOT auto-fallback when the recipient is already a non-commander agent', async () => {
+    const { sandbox, recipientByCid } = buildSandbox({}, { recipient: { kind: 'agent', id: 'other-agent' } });
+
+    await sandbox._maybeAutoCliFallbackOnModelFailure('cid-err3', {
+      failureKind: 'model',
+      failureCode: 'provider_timeout',
+    });
+
+    expect(recipientByCid['cid-err3']).toBeUndefined();
   });
 
   it('skips fallback entirely when an API-key model IS configured', async () => {

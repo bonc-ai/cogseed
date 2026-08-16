@@ -619,17 +619,29 @@ const ConversationInfo = (() => {
   }
 
   function _renderFiles() {
-    const files = _collectVisibleFiles();
-    if (!files.length) {
-      if (_snapshot.filesScanSkipped) {
-        return `<div class="conversation-info-empty">${escapeHtml(_label(
-          'conversation_info.files_scan_skipped',
-          'File listing is paused for this privacy-protected workspace. Files created or attached in chat still appear.'
-        ))}</div>`;
-      }
-      return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.empty_files', 'No files yet'))}</div>`;
+    // 复用 _collectVisibleFiles（含工作区权威过滤 + produced/工作区去重），
+    // 按 source 拆「产出 / 工作区」两个区块。区块框架始终存在——内容可以为
+    // 空，但不能没有（Codex 风格）。
+    const merged = _collectVisibleFiles();
+    const produced = merged.filter((f) => f.source === 'produced');
+    const workspace = merged.filter((f) => f.source === 'workspace');
+
+    const producedHtml = produced.length
+      ? `<div class="conversation-info-tree">${_renderTreeNode(_buildFileTree(produced), 0)}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_no_produced', '暂无产出文件'))}</div>`;
+
+    let workspaceHtml;
+    if (_snapshot.filesScanSkipped) {
+      workspaceHtml = `<div class="conversation-info-empty is-small">${escapeHtml(_label(
+        'conversation_info.files_scan_skipped',
+        'File listing is paused for this privacy-protected workspace. Files created or attached in chat still appear.'
+      ))}</div>`;
+    } else if (workspace.length) {
+      workspaceHtml = `<div class="conversation-info-tree">${_renderTreeNode(_buildFileTree(workspace), 0)}</div>`;
+    } else {
+      workspaceHtml = `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_no_workspace', '暂无工作区文件'))}</div>`;
     }
-    const tree = _buildFileTree(files);
+
     const syncNotice = _snapshot.syncEnabled
       ? `<div class="ci-files-sync-note">
           <span class="ci-files-sync-note-icon">${_uiIcon('info', 'ui-icon ci-files-sync-note-svg')}</span>
@@ -640,9 +652,20 @@ const ConversationInfo = (() => {
         </div>`
       : '';
     const trunc = _snapshot.filesTruncated
-      ? `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_truncated', 'Showing first {count} files', { count: _snapshot.filesCount || files.length }))}</div>`
+      ? `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_truncated', 'Showing first {count} files', { count: _snapshot.filesCount || workspace.length }))}</div>`
       : '';
-    return `<div class="ci-files">${syncNotice}${trunc}<div class="conversation-info-tree">${_renderTreeNode(tree, 0)}</div></div>`;
+
+    return `<div class="ci-files">
+      <section class="ci-files-section">
+        <div class="ci-files-section-title">${_uiIcon('file-text', '')}${escapeHtml(_label('conversation_info.files_produced', '产出'))}</div>
+        ${producedHtml}
+      </section>
+      <section class="ci-files-section">
+        <div class="ci-files-section-title">${_uiIcon('folder-open', '')}${escapeHtml(_label('conversation_info.files_workspace', '工作区'))}</div>
+        ${workspaceHtml}
+      </section>
+      ${syncNotice}${trunc}
+    </div>`;
   }
 
   function _collectConversationAttachments() {
@@ -1191,20 +1214,28 @@ const ConversationInfo = (() => {
     const artifacts = Array.isArray(execution && execution.artifactIds) ? execution.artifactIds.length : 0;
     const time = _carriedTime(execution && execution.startedAt);
     const executionId = String(execution && execution.executionId || '');
+    // 原型「真实状态」：运行中的执行明确提示"仍在运行，不伪装完成"。
+    const truthNote = statusRaw === 'running'
+      ? `<div class="conversation-info-carried-run-truth">${escapeHtml(_label('conversation_info.carried.truth_running', '任务仍在运行；不会用动画或预设文本冒充已完成。'))}</div>`
+      : '';
     const receiptBtn = execution && execution.receiptId
       ? `<button type="button" class="conversation-info-carried-receipt-toggle" data-receipt-execution-id="${escapeHtml(executionId)}">${escapeHtml(_label('conversation_info.carried.receipt_view', '查看回执'))}</button>`
       : '';
     return `<div class="conversation-info-carried-run is-${escapeHtml(statusRaw) || 'unknown'}">
       <div class="conversation-info-carried-run-head">
-        <span class="conversation-info-carried-run-agent">${escapeHtml(agent)}</span>
+        <span class="conversation-info-carried-run-agent">
+          <span class="conversation-info-carried-run-avatar">${_uiIcon('code-block', '')}</span>
+          <span class="conversation-info-carried-run-agent-name">${escapeHtml(agent)}</span>
+        </span>
         <span class="conversation-info-carried-run-status is-${escapeHtml(statusRaw) || 'unknown'}">${escapeHtml(status)}</span>
       </div>
       <div class="conversation-info-carried-run-meta">
-        ${permission ? `<span>${escapeHtml(_label('conversation_info.carried.permission_label', '权限'))} · ${escapeHtml(permission)}</span>` : ''}
-        ${boundary ? `<span>${escapeHtml(boundary)}</span>` : ''}
-        ${artifacts ? `<span>${artifacts} ${escapeHtml(_label('conversation_info.carried.artifacts', '个产物'))}</span>` : ''}
+        ${permission ? `<span>${_uiIcon('shield-check', '')}${escapeHtml(_label('conversation_info.carried.permission_label', '权限'))} · ${escapeHtml(permission)}</span>` : ''}
+        ${boundary ? `<span>${_uiIcon('git-branch', '')}${escapeHtml(boundary)}</span>` : ''}
+        ${artifacts ? `<span>${_uiIcon('file-text', '')}${artifacts} ${escapeHtml(_label('conversation_info.carried.artifacts', '个产物'))}</span>` : ''}
         ${time ? `<span>${escapeHtml(time)}</span>` : ''}
       </div>
+      ${truthNote}
       <div class="conversation-info-carried-run-receipt" data-receipt-container="${escapeHtml(executionId)}" hidden></div>
       ${receiptBtn}
     </div>`;
@@ -1233,7 +1264,7 @@ const ConversationInfo = (() => {
     const resumeEvidence = _snapshot.resumeEvidence;
     const resumeHtml = resumeEvidence
       ? `<section class="conversation-info-resume">
-          <div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.resume_title', '接续准备'))}</div>
+          <div class="conversation-info-carried-section-label">${_uiIcon('clipboard-list', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.resume_title', '接续准备'))}</div>
           ${resumeEvidence.restatement ? `<div class="conversation-info-resume-restatement">${escapeHtml(resumeEvidence.restatement)}</div>` : ''}
           ${_renderResumeCarry(resumeEvidence.carry)}
           ${resumeEvidence.boundary ? `<div class="conversation-info-resume-boundary">${escapeHtml(resumeEvidence.boundary)}</div>` : ''}
@@ -1289,21 +1320,37 @@ const ConversationInfo = (() => {
         <div class="conversation-info-carried-heading">${escapeHtml(_label('conversation_info.carried.title', '本次携带'))}</div>
         <div class="conversation-info-carried-subtitle">${escapeHtml(_label('conversation_info.carried.subtitle', '本次最小 Context、来源边界与运行证明'))}</div>
       </div>
-      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.runs', '本次运行'))}</div>${runsHtml}</section>
-      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.context', '本次 Context'))}</div>${contextHtml}</section>
-      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${escapeHtml(_label('conversation_info.carried.boundary', '来源与边界'))}</div>${boundaryHtml}<div class="conversation-info-carried-permission">${_uiIcon('shield-check', 'conversation-info-carried-permission-icon')}<span>${escapeHtml(permissionNote)}</span></div></section>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${_uiIcon('play-triangle', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.runs', '本次运行'))}</div>${runsHtml}</section>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${_uiIcon('panel-list', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.context', '本次 Context'))}</div>${contextHtml}</section>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${_uiIcon('git-branch', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.boundary', '来源与边界'))}</div>${boundaryHtml}<div class="conversation-info-carried-permission">${_uiIcon('shield-check', 'conversation-info-carried-permission-icon')}<span>${escapeHtml(permissionNote)}</span></div></section>
     </div>`;
   }
 
-  /** 接续准备「准备携带」明细：每类能力的数量 + 真实来源。 */
+  /** 接续准备「准备携带」明细：每类能力的数量 + 真实明细（资产/技能名 + 版本）
+   *  + 来源。明细来自主进程 buildCarry 的 items 字段。 */
   function _renderResumeCarry(carry) {
     const items = Array.isArray(carry) ? carry : [];
     if (!items.length) return '';
+    // kind → 图标（icons.js 集中图标，禁止硬编码 SVG / emoji）。
+    const kindIcon = { personal: 'book-open', ability: 'brain-circuit', snapshot: 'database' };
     const rows = items.map((c) => {
+      const icon = kindIcon[c && c.kind] || 'list-ordered';
       const sources = (Array.isArray(c.sources) ? c.sources : [])
         .map((s) => `<li>${escapeHtml(String(s))}</li>`).join('');
+      const details = (Array.isArray(c.items) ? c.items : [])
+        .map((it) => {
+          const name = String((it && it.name) || '');
+          if (!name) return '';
+          const version = (it && it.version) ? ` <span class="conversation-info-resume-version">v${escapeHtml(String(it.version))}</span>` : '';
+          return `<li class="conversation-info-resume-item">${escapeHtml(name)}${version}</li>`;
+        }).join('');
       return `<div class="conversation-info-resume-carry-row">
-        <b>${escapeHtml(c.label || '')}</b><span>${Number(c.count) || 0} 项</span>
+        <div class="conversation-info-resume-carry-row-head">
+          <span class="conversation-info-resume-carry-ico">${_uiIcon(icon, '')}</span>
+          <b>${escapeHtml(c.label || '')}</b>
+          <span class="conversation-info-resume-carry-count">${Number(c.count) || 0} 项</span>
+        </div>
+        ${details ? `<ul class="conversation-info-resume-carry-items">${details}</ul>` : ''}
         ${sources ? `<ul class="conversation-info-resume-carry-sources">${sources}</ul>` : ''}
       </div>`;
     }).join('');
@@ -2013,6 +2060,36 @@ const ConversationInfo = (() => {
     _snapshot = { ..._snapshot, resumeEvidence: data || null };
     openAndSetTab('carried');
   }
+
+  // 右栏实时刷新执行记录（原型「运行与证明」rail 的真实状态）：由
+  // conversation.js 在执行事件时调用。仅 carried tab 激活且 cid 匹配时生效，
+  // 带 2s 节流与状态签名去抖，避免 process 事件洪峰导致右栏抖动。
+  let _executionsSig = '';
+  let _executionsRefreshAt = 0;
+  async function refreshExecutions(cid) {
+    if (!cid || cid !== _cid) return;
+    if (_activeTab !== 'carried') return;
+    const now = Date.now();
+    if (now - _executionsRefreshAt < 2000) return;
+    _executionsRefreshAt = now;
+    try {
+      const res = await (window.cogseed || window.orkas).invoke('p3394.execution.list', {});
+      const list = (res && Array.isArray(res.executions))
+        ? res.executions.filter((item) => item && item.conversationId === cid)
+        : [];
+      const sig = list.map((e) => `${e.executionId || ''}:${e.status || ''}`).join('|');
+      if (sig === _executionsSig) return;
+      _executionsSig = sig;
+      _snapshot = { ..._snapshot, executions: list };
+      if (_activeTab === 'carried') {
+        const body = document.getElementById('conversation-info-body');
+        if (body) {
+          body.innerHTML = _renderCarried();
+          if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(body);
+        }
+      }
+    } catch (_) { /* 刷新失败保持现状 */ }
+  }
   function openFileMenu(anchorBtn, absPath, displayName, options = {}) {
     return _openFileMenu(anchorBtn, absPath, displayName, 'file', options);
   }
@@ -2033,6 +2110,7 @@ const ConversationInfo = (() => {
     openAndSetTab,
     setProtocolFilters,
     showResumeEvidence,
+    refreshExecutions,
     openFileMenu,
   };
 })();

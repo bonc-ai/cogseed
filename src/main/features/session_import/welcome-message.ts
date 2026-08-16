@@ -23,6 +23,7 @@ import { createLogger } from '../../logger';
 import { listAbilityAssets } from '../recall/asset-service';
 import { getSpace } from '../spaces';
 import { getRoleTemplate } from '../role_templates';
+import { listSkills } from '../skills';
 import { readContinuationSnapshot } from '../task_continuation';
 
 const log = createLogger('session-import:welcome');
@@ -35,6 +36,8 @@ export interface WelcomeCarryItem {
   count: number;
   /** Source detail shown when「查看依据」is expanded. */
   sources: string[];
+  /** 真实明细（资产名/技能名 + 版本），供右栏「查看依据」逐条展示。 */
+  items?: Array<{ name: string; version?: string }>;
 }
 
 export interface WelcomeMessageData {
@@ -76,13 +79,17 @@ const FIXED_ACTION_PLAN = [
 const BOUNDARY_STATEMENT =
   '我不会在运行中静默改写正式资产；只有冲突、扩权或外发时才会停下来询问。';
 
-/** Read the space template bundle's ability count for the conversation's
- *  space. Real data: space → primary/secondary templates → bundle.skill_ids.
- *  Returns the union of bundled skill ids. */
-async function spaceTemplateSkillIds(
+/** 打开导入会话时，系统替用户发送的第一条接续引导句（v1.6 原型同款）。 */
+export const WELCOME_GUIDE_SENTENCE =
+  '继续这项工作。先告诉我现在做到哪里、哪些约束不能丢，以及下一步准备怎么做。';
+
+/** Read the space template bundle's skills for the conversation's space.
+ *  Real data: space → primary/secondary templates → bundle.skill_ids →
+ *  listSkills() names. Returns the union of bundled skills with names. */
+async function spaceTemplateSkills(
   userId: string,
   spaceId?: string | null,
-): Promise<string[]> {
+): Promise<Array<{ name: string; version?: string }>> {
   if (!spaceId) return [];
   try {
     const space = await getSpace(userId, spaceId);
@@ -97,7 +104,20 @@ async function spaceTemplateSkillIds(
     };
     collect(primary);
     secondary.forEach(collect);
-    return [...ids];
+    if (!ids.size) return [];
+
+    const skills = await listSkills();
+    const byId = new Map(skills.map((s) => [s.id, s]));
+    const out: Array<{ name: string; version?: string }> = [];
+    for (const id of ids) {
+      const s = byId.get(id);
+      if (!s) continue;
+      const brief: { name: string; version?: string } = { name: s.name || id };
+      const ver = (s as { version?: unknown }).version;
+      if (typeof ver === 'string' && ver) brief.version = ver;
+      out.push(brief);
+    }
+    return out;
   } catch (err) {
     log.warn('space template bundle read failed', {
       userId, spaceId, error: (err as Error)?.message || String(err),
@@ -106,20 +126,23 @@ async function spaceTemplateSkillIds(
   }
 }
 
-/** Count confirmed assets by type from the real ability-asset store. */
-async function confirmedAssetCounts(userId: string): Promise<{ personal: number; ability: number }> {
+/** Confirmed assets by type with real names/versions from the asset store. */
+async function confirmedAssetDetails(
+  userId: string,
+): Promise<{ personal: Array<{ name: string; version?: string }>; ability: Array<{ name: string; version?: string }> }> {
   try {
     const assets = await listAbilityAssets(userId);
     const active = assets.filter((a) => a.status === 'active');
+    const brief = (a: { title?: string; version?: string }) => ({ name: a.title || '未命名资产', version: a.version });
     return {
-      personal: active.filter((a) => a.type === 'personal').length,
-      ability: active.filter((a) => a.type === 'skill_method').length,
+      personal: active.filter((a) => a.type === 'personal').map(brief),
+      ability: active.filter((a) => a.type === 'skill_method').map(brief),
     };
   } catch (err) {
-    log.warn('confirmed asset count failed', {
+    log.warn('confirmed asset read failed', {
       userId, error: (err as Error)?.message || String(err),
     });
-    return { personal: 0, ability: 0 };
+    return { personal: [], ability: [] };
   }
 }
 
@@ -130,21 +153,28 @@ async function buildCarry(
   spaceId?: string | null,
 ): Promise<WelcomeCarryItem[]> {
   const [spaceSkills, counts] = await Promise.all([
-    spaceTemplateSkillIds(userId, spaceId),
-    confirmedAssetCounts(userId),
+    spaceTemplateSkills(userId, spaceId),
+    confirmedAssetDetails(userId),
   ]);
 
   // 「我的能力」= 空间模板内置技能 + 已确认 skill_method 资产（去重计数）。
-  const abilityCount = spaceSkills.length + counts.ability;
+  const abilityItems = [...spaceSkills, ...counts.ability];
   const carry: WelcomeCarryItem[] = [];
-  if (counts.personal > 0) {
-    carry.push({ kind: 'personal', label: '关于我', count: counts.personal, sources: [`已确认「关于我」资产 ${counts.personal} 项`] });
+  if (counts.personal.length > 0) {
+    carry.push({
+      kind: 'personal', label: '关于我', count: counts.personal.length,
+      sources: [`已确认「关于我」资产 ${counts.personal.length} 项`],
+      items: counts.personal,
+    });
   }
-  if (abilityCount > 0) {
+  if (abilityItems.length > 0) {
     const sources: string[] = [];
     if (spaceSkills.length) sources.push(`空间模板内置技能 ${spaceSkills.length} 项`);
-    if (counts.ability) sources.push(`已确认「我的能力」资产 ${counts.ability} 项`);
-    carry.push({ kind: 'ability', label: '我的能力', count: abilityCount, sources });
+    if (counts.ability.length) sources.push(`已确认「我的能力」资产 ${counts.ability.length} 项`);
+    carry.push({
+      kind: 'ability', label: '我的能力', count: abilityItems.length,
+      sources, items: abilityItems,
+    });
   }
   if (hasSnapshot) {
     carry.push({ kind: 'snapshot', label: '接续快照', count: 1, sources: ['目标、阶段、约束与下一步已恢复'] });

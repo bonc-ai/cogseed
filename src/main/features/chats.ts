@@ -2694,6 +2694,13 @@ export async function handoffWelcomeReply(
       text: data.text,
       model_text: data.modelText,
       ...(data.carry.length ? { welcome_carry: JSON.stringify(data.carry) } : {}),
+      // Full resume bundle for「查看依据」右栏 + 「带着这些继续」Action Plan。
+      welcome_resume: JSON.stringify({
+        restatement: data.restatement,
+        carry: data.carry,
+        boundary: data.boundary,
+        plan: data.plan,
+      }),
     };
 
     await appendJsonlAtomic(layout.messageFile, reply);
@@ -2704,6 +2711,42 @@ export async function handoffWelcomeReply(
     return { ok: true, text: data.text, modelText: data.modelText };
   } catch (err) {
     log.error('handoff welcome reply failed', { conversationId, error: String(err) });
+    return { ok: false, error: String(err) };
+  }
+}
+
+/**
+ * 打开导入会话时立即发送第一条（真实消息流）：系统替用户插入
+ * 「继续这项工作。先告诉我现在做到哪里、哪些约束不能丢，以及下一步准备怎么做。」
+ * 只做这一步（无 LLM、无模板生成），保证用户刚进入会话就有内容、不空白。
+ * commander 的三段式回复由 renderer 随后异步调 `handoffWelcomeReply` 动态生成。
+ */
+export async function beginWelcome(
+  userId: string,
+  conversationId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const conv = await getConversation(userId, conversationId);
+    if (!conv) return { ok: false, error: 'conversation_not_found' };
+    if (conv.needs_welcome !== true) return { ok: false, error: 'already_welcomed' };
+    const { WELCOME_GUIDE_SENTENCE } = await import('./session_import/welcome-message');
+    const layout = conversationLayout(userId, conversationId, conv.project_id ?? null);
+
+    const userMsg: GroupMessage = {
+      id: genId12(),
+      ts: nowIso(),
+      from: 'user',
+      to: ['commander'],
+      text: WELCOME_GUIDE_SENTENCE,
+    };
+    await appendJsonlAtomic(layout.messageFile, userMsg);
+    await appendVisible(userId, conversationId, userMsg, ['user', 'commander']);
+    await updateConversation(userId, conversationId, { needs_welcome: false }, conv.project_id ?? null);
+
+    log.info(`begin welcome cid=${conversationId} (user guide inserted)`);
+    return { ok: true };
+  } catch (err) {
+    log.error('begin welcome failed', { conversationId, error: String(err) });
     return { ok: false, error: String(err) };
   }
 }
