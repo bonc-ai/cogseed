@@ -78,6 +78,16 @@ export class P3394BridgeTaskManager {
     return t ? { ...t } : null;
   }
 
+  /** Snapshot of all tasks (recovery controller / doctor consumption). */
+  list(): P3394BridgeTask[] {
+    return [...this.tasks.values()].map((t) => ({ ...t }));
+  }
+
+  /** Tasks waiting for transport recovery (state === 'recoverable'). */
+  listRecoverable(): P3394BridgeTask[] {
+    return this.list().filter((t) => t.state === 'recoverable');
+  }
+
   require(taskId: string): P3394BridgeTask {
     const t = this.tasks.get(taskId);
     if (!t) throw new Error('p3394_task_not_found');
