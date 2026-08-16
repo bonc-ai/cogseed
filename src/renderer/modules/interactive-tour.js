@@ -132,10 +132,26 @@ function _tourEsc(s) {
 }
 
 // Start the interactive tour
-function startTour() {
+async function startTour() {
   if (_tourState) {
     _tourLog.warn('tour already running');
     return;
+  }
+
+  // 每账户只强制弹出一次：本账户已完成（或跳过）过引导则不再弹。
+  // 读取失败（如旧版本主进程无此通道）视为未完成，照常弹出，不阻塞引导。
+  try {
+    if (typeof window.cogseed !== 'undefined' && typeof window.cogseed.invoke === 'function') {
+      const res = await window.cogseed.invoke('prefs.getTourCompleted');
+      if (res && res.completed) {
+        _tourLog.info('interactive tour already completed for this account, skipping');
+        return;
+      }
+    }
+  } catch (err) {
+    _tourLog.warn('tour completion gate read failed, showing tour anyway', {
+      error: (err && err.message) || String(err),
+    });
   }
 
   _tourLog.info('starting interactive tour');
@@ -437,6 +453,17 @@ function _completeTour(opts) {
   const skipped = !!(opts && opts.skipped);
   _tourLog.info(skipped ? 'interactive tour skipped' : 'interactive tour completed');
 
+  // 每账户只强制弹出一次：完成或跳过都视为「已看过」，立即落盘（fire-and-forget，
+  // 失败仅记日志，下次启动会再次尝试，不阻塞当前 UI）。落盘必须放在任何提前
+  // return 之前，保证跳过/完成两个路径都写入。
+  if (typeof window.cogseed !== 'undefined' && typeof window.cogseed.invoke === 'function') {
+    window.cogseed.invoke('prefs.setTourCompleted').catch((err) => {
+      _tourLog.warn('failed to persist tour completion', {
+        error: (err && err.message) || String(err),
+      });
+    });
+  }
+
   // Everything that could advance a step or move the card is stopped here,
   // before the finish card goes up, so nothing repositions behind it.
   if (_tourState) {
@@ -476,9 +503,6 @@ function _completeTour(opts) {
     return;
   }
   _showTourFinishCard();
-
-  // Completion is deliberately not persisted: the tour runs on every launch
-  // until the once-per-account prefs gate lands.
 }
 
 // Passing the last step used to make the whole tour vanish with no closing

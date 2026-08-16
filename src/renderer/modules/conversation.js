@@ -1235,8 +1235,6 @@ function onEnterNewChatView() {
   // so the time-of-day greeting is correct after a long idle session.
   _refreshEmptyStateAll();
   _initEmptyStateScenarios();
-  // Open-source-driven「还能帮你做这些」capability strip (below the scenario row).
-  if (typeof initOssEntry === 'function') initOssEntry();
 }
 
 // ── Empty-state landing helpers ──────────────────────────────────────────
@@ -1515,6 +1513,73 @@ function _initEmptyStateScenarios() {
     });
   });
   _initContinueWorkChip();
+  _initScenariosFold();
+}
+
+// WorkBuddy-style fold toggle for the quick-scenario line: the chips run in a
+// single horizontally scrollable row, and the toggle collapses the whole row
+// into the button. Collapsed state persists across sessions.
+function _initScenariosFold() {
+  const wrap = document.getElementById('new-chat-scenarios-wrap');
+  if (!wrap || wrap.dataset.bound === '1') return;
+  wrap.dataset.bound = '1';
+
+  const row = document.getElementById('new-chat-scenarios');
+  if (!row) return;
+
+  // Vertical wheel over the chip line scrolls it horizontally while it still
+  // has room to scroll; at either end the page keeps its normal wheel
+  // behavior.
+  row.addEventListener('wheel', (e) => {
+    if (row.scrollWidth <= row.clientWidth + 1) return;
+    const dy = e.deltaY;
+    if (Math.abs(dy) <= Math.abs(e.deltaX)) return;
+    const atStart = row.scrollLeft <= 0 && dy < 0;
+    const atEnd = row.scrollLeft + row.clientWidth >= row.scrollWidth - 1 && dy > 0;
+    if (atStart || atEnd) return;
+    row.scrollLeft += dy;
+    e.preventDefault();
+  }, { passive: false });
+
+  // Seamless drag-to-scroll: press and drag left/right to move the row with a
+  // soft damped follow. A small movement threshold keeps clicks on a chip
+  // intact (they prefill the composer) instead of being swallowed by the drag.
+  let dragStartX = 0;
+  let dragStartLeft = 0;
+  let dragging = false;
+  let moved = 0;
+  row.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    dragStartX = e.clientX;
+    dragStartLeft = row.scrollLeft;
+    dragging = true;
+    moved = 0;
+    row.style.cursor = 'grabbing';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - dragStartX;
+    moved = Math.max(moved, Math.abs(dx));
+    // Damped follow: the row moves a fraction of the pointer delta so the
+    // gesture feels soft / subtle rather than jumpy 1:1 tracking.
+    row.scrollLeft = dragStartLeft - dx * 0.6;
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    row.style.cursor = '';
+    // If the user dragged more than a click, suppress the chip click that
+    // follows the mouseup (only when a real drag happened).
+    if (moved > 6) {
+      row.addEventListener('click', suppressOnce, { capture: true });
+    }
+  });
+  function suppressOnce(ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    row.removeEventListener('click', suppressOnce, { capture: true });
+  }
 }
 
 // ── Continue-previous-work importer ───────────────────────────────────────
@@ -10259,42 +10324,6 @@ function _trackChatSendResult(result, data = {}) {
 
 /** 「新任务」：像市面主流 AI 助手一样，直接进入一个空的会话界面。
  *  后端创建一个 normal 会话，前端立即进入该会话（无需先输入）。 */
-async function openNewTask() {
-  _convLog.info('new task: creating empty conversation');
-  let convId = '';
-  try {
-    const newChatSpaceId = (typeof window.getNewChatSpaceId === 'function') ? window.getNewChatSpaceId() : '';
-    const res = await apiFetch('/api/conversations/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'normal', ...(newChatSpaceId ? { spaceId: newChatSpaceId } : {}) }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || t('chat.create_conv_failed'));
-    const conv = data.conversation;
-    convId = conv.conversation_id;
-    conv.title = t('chat.default_title');
-    conv.last_active_at = new Date().toISOString();
-    _markConversationListLocallyChanged();
-    conversations.unshift(conv);
-    renderConversationList();
-  } catch (err) {
-    _convLog.warn('new task create conversation failed', { error: err });
-    if (typeof uiAlert === 'function') {
-      await uiAlert(t('chat.create_conv_failed_with_reason', { reason: err && err.message ? err.message : String(err) }));
-    }
-    return;
-  }
-  // 清空两个输入框，避免旧草稿进入新会话。
-  const chatInput = document.getElementById('chat-input');
-  if (chatInput) { chatInput.value = ''; autoGrow(chatInput, 200); }
-  const newInput = document.getElementById('new-chat-input');
-  if (newInput) { newInput.value = ''; autoGrow(newInput, 260); }
-  setView('conversation', convId, { skipLoad: true });
-  _transferNewChatRecipientTo(convId);
-  _renderRecipientChip('conversation');
-}
-
 async function handleNewChatSubmit() {
   const input = document.getElementById('new-chat-input');
   const raw = (input.value || '').trim();

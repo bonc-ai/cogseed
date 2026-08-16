@@ -127,6 +127,38 @@ describe('Recall capture candidate quality', () => {
     ]));
   });
 
+  it('flags a pure platitude with no specific signal (platitude_no_specifics)', () => {
+    const quality = assessRecallCaptureCandidateQuality({
+      judgment: '认真完成了任务，已按时交付。',
+      value: '以后同类任务也能顺利完成。',
+      summary: '完成任务',
+      suggestedType: 'rule',
+      suggestedScope: 'general',
+      suggestedAction: 'create',
+      valueProvided: true,
+      actionProvided: true,
+    }, [{ role: 'user', text: '帮我写一份成都资料，500 字' }]);
+
+    expect(quality.reviewable).toBe(false);
+    expect(quality.reasons).toContain('platitude_no_specifics');
+  });
+
+  it('does NOT flag a concrete template judgment even though it contains task words', () => {
+    const quality = assessRecallCaptureCandidateQuality({
+      judgment: '用户写城市资料时默认格式为：概况/历史/现状/亮点四个板块，正文字数控制在约500字（含标点），保存为markdown文件。',
+      value: '同类城市资料请求可直接复用该结构，减少每次重新设计版式。',
+      summary: '城市资料四板块模板',
+      suggestedType: 'template',
+      suggestedScope: 'general',
+      suggestedAction: 'create',
+      valueProvided: true,
+      actionProvided: true,
+    }, [{ role: 'user', text: '帮我写一份 南昌城市 的资料，500 字' }]);
+
+    expect(quality.reviewable).toBe(true);
+    expect(quality.reasons).not.toContain('platitude_no_specifics');
+  });
+
   it('requires a target asset for update-like actions', () => {
     const quality = assessRecallCaptureCandidateQuality({
       judgment: '将项目评审模板增加来源字段。',

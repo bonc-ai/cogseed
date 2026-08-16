@@ -358,7 +358,7 @@ describe('confirmed Recall projection prompt injection', () => {
         scope: 'global',
         evidenceRefs: [{ kind: 'execution', id: 'exec-blocked' }],
         reviewDecisionId: 'legacy-untracked',
-        lifecycleStatus: 'user_confirmed_unverified',
+        lifecycleStatus: 'automatically_extracted_unverified',
         status: 'paused',
         maturity: 'seed',
         version: '1',

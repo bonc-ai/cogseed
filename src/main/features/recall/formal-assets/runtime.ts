@@ -121,20 +121,33 @@ export function evaluateAssetRuntimeEligibility(
     }
   }
 
+  // 静默默认注入以「适合度」为准，不以成熟度为硬门槛：
+  // - 适合度 = status / scope / forbidden / applicable / target_agent /
+  //   sensitivity（上方已全部检查）+ 调用方的语义匹配分（投影双信号门槛）。
+  // - 成熟度（置信度）不再是注入与否的依据——未验证资产（seed）的诚实性
+  //   由注入标注承担（prompt 块里带 lifecycle 提示，模型知道这是系统自评、
+  //   参考不盲从），而不是把资产完全排除（旧逻辑下 seed 永远无法被使用、
+  //   自进化闭环断裂——沉淀了却永远用不上）。
+  // - applicableWhen 声明却对不上当前任务：不适合 → 不注入（适合度维度）。
+  if (context.silentDefaultInjection === true) {
+    if (declaredApplicable && !applicableMatched) {
+      reasons.push('not_applicable_context');
+    }
+    // 适合度含作用域维度：跨作用域且无确认 → 不注入（不比同作用域宽松）。
+    if (!sameScope && !asset.crossScopeConfirmedAt) {
+      reasons.push('scope_mismatch');
+    }
+    if (reasons.length) return { eligible: false, mode: 'blocked', reasons, usePolicy };
+    const mode: AssetRuntimeMode = asset.maturity === 'effectiveness_validated'
+      ? 'preferred'
+      : 'default_allowed';
+    return { eligible: true, mode, reasons: [], usePolicy };
+  }
+
+  // 非静默路径（用户主动选择）保留原语义：maturity 只影响使用策略提示。
   if (usePolicy === 'never' && asset.status === 'active') {
-    // status 已经解释过的不重复记——never 在这里专指"成熟度还不够"。
     reasons.push('maturity_below_default_use');
   }
-
-  // 静默默认注入这条路，PRD 3.6 只放行 Transfer Verified 及以上。
-  const silentBlocked = context.silentDefaultInjection === true && usePolicy !== 'auto';
-  if (silentBlocked && !reasons.includes('maturity_below_default_use')) {
-    reasons.push('maturity_below_default_use');
-  }
-  if (context.silentDefaultInjection === true && declaredApplicable && !applicableMatched) {
-    reasons.push('not_applicable_context');
-  }
-
   if (reasons.length) return { eligible: false, mode: 'blocked', reasons, usePolicy };
 
   const mode: AssetRuntimeMode = usePolicy === 'auto'

@@ -10,7 +10,8 @@ const en = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/en.j
  describe('sidebar navigation contract', () => {
   it('keeps internal navigation ids while exposing the requested product labels', () => {
     expect(html).toContain('id="new-chat-btn"');
-    expect(html).toContain('data-i18n="sidebar.home"');
+    expect(html).toContain('data-i18n="sidebar.new_chat"');
+    expect(html).not.toContain('id="new-task-btn"');
     expect(html).toContain('id="recall-btn"');
     expect(html).toContain('data-i18n="sidebar.recall"');
     expect(html).toContain('id="connectors-btn"');
@@ -25,10 +26,10 @@ const en = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/en.j
   });
 
   it('uses the consolidated 6-entry navigation labels', () => {
-    expect(zh['sidebar.home']).toBe('首页');
+    expect(zh['sidebar.new_chat']).toBe('新建会话');
     expect(zh['sidebar.recall']).toBe('认知资产');
     expect(zh['sidebar.connections']).toBe('连接');
-    expect(en['sidebar.home']).toBe('Home');
+    expect(en['sidebar.new_chat']).toBe('New session');
     expect(en['sidebar.recall']).toBe('Cognitive assets');
     expect(en['sidebar.connections']).toBe('Connections');
   });

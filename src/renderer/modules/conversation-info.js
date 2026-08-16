@@ -24,6 +24,11 @@ const ConversationInfo = (() => {
   let _loadingSeq = 0;
   let _error = '';
   let _fileMenuScrollHost = null;
+  // 接续准备依据归属的会话（showResumeEvidence 写入）；refresh 覆盖 snapshot
+  // 时据此判断依据是否仍属于当前会话，避免跨会话残留。
+  let _resumeEvidenceCid = '';
+  // 「本次运行」默认只展示最近 10 条，展开后显示全部（运行证明真实全量保留）。
+  let _carriedRunsExpanded = false;
   let _snapshot = {
     conversation: null,
     history: [],
@@ -1204,11 +1209,23 @@ const ConversationInfo = (() => {
     }
   }
 
+  /** 执行方显示名：优先 agentId / cli；缺失时按执行类型给真实名称
+   *  （core-agent 由 commander 驱动 → Commander；codex → Codex；local-agent
+   *   → 本地智能体），而不是一律兜底成产品名。 */
+  function _carriedExecutorLabel(execution) {
+    const explicit = String(execution && (execution.agentId || execution.cli) || '');
+    const kind = String(execution && execution.kind || '');
+    if (explicit && explicit !== 'commander') return explicit;
+    if (kind === 'core-agent' || explicit === 'commander') return _label('conversation_info.carried.executor_core', 'Commander');
+    if (kind === 'codex') return _label('conversation_info.carried.executor_codex', 'Codex');
+    if (kind === 'local-agent') return _label('conversation_info.carried.executor_local_agent', 'Local agent');
+    return _label('conversation_info.carried.executor_unknown', 'CogSeed');
+  }
+
   function _carriedRunHtml(execution) {
     const statusRaw = String(execution && execution.status || '');
     const status = _carriedStatusLabel(statusRaw);
-    const agent = String(execution && (execution.agentId || execution.cli)
-      || _label('conversation_info.carried.executor_unknown', 'CogSeed'));
+    const agent = _carriedExecutorLabel(execution);
     const boundary = _carriedBoundaryLabel(execution && execution.boundary);
     const permission = _carriedPermissionLabel(execution && execution.permissionMode);
     const artifacts = Array.isArray(execution && execution.artifactIds) ? execution.artifactIds.length : 0;
@@ -1275,14 +1292,27 @@ const ConversationInfo = (() => {
     const collab = _latestCollaborationRef(events);
     const title = _currentConversationTitle();
 
-    // 本次运行：真实执行记录，按开始时间倒序。
+    // 本次运行：真实执行记录，按开始时间倒序。默认只列最近 10 条，
+    // 顶部汇总总数，超出部分一键展开（展开后全量展示，不删数据）。
     const sorted = executions.slice().sort((a, b) => {
       const at = a && a.startedAt ? String(a.startedAt) : '';
       const bt = b && b.startedAt ? String(b.startedAt) : '';
       return bt.localeCompare(at);
     });
-    const runsHtml = sorted.length
-      ? `<div class="conversation-info-carried-runs">${sorted.map(_carriedRunHtml).join('')}</div>`
+    const RUNS_VISIBLE_LIMIT = 10;
+    const totalRuns = sorted.length;
+    const visibleRuns = _carriedRunsExpanded ? sorted : sorted.slice(0, RUNS_VISIBLE_LIMIT);
+    const runsList = visibleRuns.length
+      ? `<div class="conversation-info-carried-runs">${visibleRuns.map(_carriedRunHtml).join('')}</div>`
+      : '';
+    const runsSummary = totalRuns
+      ? `<div class="conversation-info-carried-runs-summary">${escapeHtml(_label('conversation_info.carried.runs_total', '共 {count} 次运行', { count: totalRuns }))}</div>`
+      : '';
+    const runsToggle = totalRuns > RUNS_VISIBLE_LIMIT
+      ? `<button type="button" class="conversation-info-carried-runs-toggle" data-carried-runs-toggle>${escapeHtml(_label(_carriedRunsExpanded ? 'conversation_info.carried.runs_collapse' : 'conversation_info.carried.runs_expand', _carriedRunsExpanded ? '收起' : '展开全部'))}</button>`
+      : '';
+    const runsHtml = totalRuns
+      ? `${runsSummary}${runsList}${runsToggle}`
       : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.runs_empty', '本会话暂无执行记录。'))}</div>`;
 
     // 本次 Context：执行记录携带的 contextId + 协议协作引用（workflow / step）。
@@ -1447,7 +1477,15 @@ const ConversationInfo = (() => {
     try {
       const snapshot = await _load(target);
       if (seq !== _seq || target !== _cid) return;
-      _snapshot = { ...snapshot, mate: _snapshot.mate || { session: null, collaboration: null, sessions: [], loading: false, error: '' } };
+      // 保留「查看依据」的接续准备依据（_load 返回里没有该字段，整体覆盖会
+      // 把它清掉）；仅当依据仍属于当前会话时才保留，切换会话即丢弃。
+      const keepResume = !!(_snapshot.resumeEvidence && _resumeEvidenceCid === target);
+      _snapshot = {
+        ...snapshot,
+        mate: _snapshot.mate || { session: null, collaboration: null, sessions: [], loading: false, error: '' },
+        resumeEvidence: keepResume ? _snapshot.resumeEvidence : null,
+      };
+      if (!keepResume) _resumeEvidenceCid = '';
       _error = '';
       void _primeMateProjection(target, { render: silent }).catch(() => {});
     } catch (err) {
@@ -1522,6 +1560,8 @@ const ConversationInfo = (() => {
   function bind(cid) {
     _cid = cid || null;
     _open = false;
+    _resumeEvidenceCid = '';
+    _carriedRunsExpanded = false;
     _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '' };
     _protocolFilters.agent = '';
     _protocolFilters.role = '';
@@ -1896,6 +1936,15 @@ const ConversationInfo = (() => {
           void refresh(_cid);
           return;
         }
+        // 「本次运行」展开/收起（默认显示最近 10 条，展开后全量展示）。
+        const runsToggle = ev.target.closest('[data-carried-runs-toggle]');
+        if (runsToggle) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          _carriedRunsExpanded = !_carriedRunsExpanded;
+          _renderBody();
+          return;
+        }
         // 9.1 右侧「本次携带」：点击「查看回执」→ 读取该执行的
         // ContextReuseReceipt（IPC 已存在）并展开明细。
         const receiptToggle = ev.target.closest('[data-receipt-execution-id]');
@@ -2053,12 +2102,19 @@ const ConversationInfo = (() => {
     _syncChrome();
     _renderBody();
   }
-  /** 展示导入会话接续准备的依据（「查看依据」）：设置 resumeEvidence 并打开
-   *  carried tab，右栏顶部渲染复述 / 准备携带明细 / 边界。 */
+  /** 展示导入会话接续准备的依据（「查看依据」）：立即切到 carried tab 并渲染
+   *  依据（resumeEvidence 已就绪，不依赖网络），随后静默刷新执行记录等数据；
+   *  刷新结果合并时保留 resumeEvidence（见 refresh），依据不会消失。 */
   function showResumeEvidence(data, cid) {
     if (cid) _cid = cid;
+    _resumeEvidenceCid = cid || _cid || '';
     _snapshot = { ..._snapshot, resumeEvidence: data || null };
-    openAndSetTab('carried');
+    _activeTab = 'carried';
+    _open = true;
+    _resetLoading(); // 依据已就绪，先渲染，避免旧 loading 状态遮挡
+    _syncChrome();
+    _renderBody();
+    void refresh(_cid, { silent: true }).catch(() => {});
   }
 
   // 右栏实时刷新执行记录（原型「运行与证明」rail 的真实状态）：由

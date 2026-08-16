@@ -20,18 +20,19 @@
       <div class="sidebar-logo">
         <img class="logo-icon" src="../resources/icons/logo.png" alt="" draggable="false" />
         <div class="logo-text" data-i18n="brand.name">CogSeed</div>
+        <div class="sidebar-top-tools">
+          <button class="sidebar-icon-btn" id="sidebar-search-btn" data-i18n-title="sidebar.search_title" title="Global search (Cmd/Ctrl+K)">
+            <span data-ui-icon="search" data-ui-icon-class="sidebar-top-tool-icon"></span>
+          </button>
+          <button class="sidebar-icon-btn" id="sidebar-collapse-btn" data-i18n-title="sidebar.collapse_title" title="收起侧边栏">
+            <span data-ui-icon="panel" data-ui-icon-class="sidebar-top-tool-icon sb-collapse-ico"></span>
+            <span data-ui-icon="panel" data-ui-icon-class="sidebar-top-tool-icon sb-expand-ico" hidden></span>
+          </button>
+        </div>
       </div>
-      <button class="sidebar-search-btn" id="sidebar-search-btn" data-i18n-title="sidebar.search_title" title="Global search (Cmd/Ctrl+K)">
-        <span data-ui-icon="search" data-ui-icon-class="sidebar-search-icon"></span>
-        <span class="sidebar-search-label" data-i18n="sidebar.search">Search</span>
-        <span class="sidebar-search-kbd">
-          <span data-ui-icon="command" data-ui-icon-class="ui-icon sidebar-search-command-icon"></span><span>K</span>
-        </span>
-      </button>
       <div class="sidebar-actions">
-        <button class="sidebar-btn" id="new-task-btn"><span data-ui-icon="plus" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_task">新建任务</span></button>
-        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.home">首页</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
-        <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">工作空间</span></button>
+        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
+        <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
@@ -76,7 +77,6 @@
         <div class="new-chat-center">
           <div class="new-chat-header">
             <h1 class="new-chat-greeting" id="new-chat-greeting"></h1>
-            <p class="new-chat-subtitle" data-i18n="new_chat.subtitle"></p>
           </div>
           <div class="new-chat-input-wrapper">
             <div class="new-chat-input-area">
@@ -120,8 +120,10 @@
           <!-- Quick-scenario chip row. Each chip pre-fills the textarea with
                its template (per PC/docs/design/README §Surface B) and moves
                the caret to the first [...] placeholder. Wired by
-               _initEmptyStateScenarios() in conversation.js. -->
-          <div class="new-chat-scenarios" id="new-chat-scenarios">
+               _initEmptyStateScenarios() in conversation.js. Single-line
+               WorkBuddy-style row: horizontal scroll, fold toggle on the right. -->
+          <div class="new-chat-scenarios-wrap" id="new-chat-scenarios-wrap">
+            <div class="new-chat-scenarios" id="new-chat-scenarios">
             <button type="button" class="new-chat-scenario-chip is-space-builder" data-scenario="space_builder">
               <span data-ui-icon="layout-grid" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.space_builder">Space Mode</span>
@@ -154,23 +156,7 @@
               <span data-ui-icon="code" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.rnd">Build app</span>
             </button>
-          </div>
-          <!-- Open-source-driven「还能帮你做这些」capability strip. Task cards are
-               rendered + wired by modules/oss.js::initOssEntry() (data from the
-               curated marketplace projects catalog). Cards only show the task +
-               "由 X 开源驱动"; repo/star/driver detail lives in the marketplace
-               「开源项目」专区. -->
-          <div class="oss-entry" id="oss-entry" style="display:none">
-            <div class="oss-entry-head">
-              <span data-ui-icon="sparkles" data-ui-icon-class="oss-entry-spark"></span>
-              <span class="oss-entry-title" data-i18n="oss.title">You can also ask for these</span>
-              <span class="oss-entry-sub" data-i18n="oss.subtitle">Just describe what you need — CogSeed sets up the right tools.</span>
-              <button type="button" class="oss-entry-more" id="oss-entry-more">
-                <span data-i18n="oss.more">More capabilities</span>
-                <span data-ui-icon="arrow-right" data-ui-icon-class="oss-entry-more-arrow"></span>
-              </button>
             </div>
-            <div class="oss-entry-grid" id="oss-entry-grid"></div>
           </div>
         </div>
       </section>
