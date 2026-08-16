@@ -114,8 +114,10 @@ function applyAvatarToElement(el, iconId, colorId, seed) {
   const sizeMatch = el.style.width && el.style.width.match(/(\d+)/);
   const sizePx = sizeMatch ? parseInt(sizeMatch[1], 10) : 28;
   const innerSize = Math.round(sizePx * 0.55);
+  // 图片图标（品牌 logo 等）占满整个头像圆：原图常带透明留白，缩小后图形过小
+  const imgSize = a.iconImage ? sizePx : innerSize;
   el.innerHTML = a.iconImage
-    ? `<img class="avatar-img" src="${a.iconImage}" width="${innerSize}" height="${innerSize}" alt="" draggable="false" />`
+    ? `<img class="avatar-img" src="${a.iconImage}" width="${imgSize}" height="${imgSize}" alt="" draggable="false" />`
     : a.iconSvg
       ? a.iconSvg.replace('<svg ', `<svg width="${innerSize}" height="${innerSize}" `)
       : '';
@@ -134,8 +136,10 @@ function renderAvatarHtml(iconId, colorId, opts = {}) {
     .map(([k, v]) => `data-${k}="${String(v).replace(/"/g, '&quot;')}"`)
     .join(' ');
   const innerSize = Math.round(size * 0.55);
+  // 图片图标占满整个头像圆(原图自带透明留白)
+  const imgSize = a.iconImage ? size : innerSize;
   const inner = a.iconImage
-    ? `<img class="avatar-img" src="${a.iconImage}" width="${innerSize}" height="${innerSize}" alt="" draggable="false" />`
+    ? `<img class="avatar-img" src="${a.iconImage}" width="${imgSize}" height="${imgSize}" alt="" draggable="false" />`
     : a.iconSvg
       ? a.iconSvg.replace('<svg ', `<svg width="${innerSize}" height="${innerSize}" `)
       : '';

@@ -16972,13 +16972,16 @@ body.model-not-configured .main-content { flex-direction: column; }
   display: block;
   pointer-events: none;
 }
-/* 头像用原图(品牌 logo 等)：圆内填满、圆角裁剪 */
+/* 头像用原图(品牌 logo 等)：完整显示不裁剪(原图自带透明留白) */
 .avatar-circle .avatar-img {
   display: block;
-  border-radius: 50%;
-  object-fit: cover;
+  object-fit: contain;
   pointer-events: none;
   -webkit-user-drag: none;
+}
+/* 图片图标(透明底)用白底衬托，避免彩色圆背景干扰 logo 配色 */
+.avatar-circle:has(.avatar-img) {
+  background: #fff;
 }
 .avatar-circle.is-clickable {
   cursor: pointer;

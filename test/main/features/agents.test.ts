@@ -763,8 +763,11 @@ describe('agents › extractAgentFieldBlocks', () => {
       .blocks[0].icon).toBe('spreadsheet');
     expect('icon' in a.extractAgentFieldBlocks('<agent><icon>not-a-real-icon</icon></agent>')
       .blocks[0]).toBe(false);
-    expect('icon' in a.extractAgentFieldBlocks('<agent><icon>crown</icon></agent>')
+    // 指挥官默认图标(cogseed)不允许被 agent 占用；crown 已回归可选
+    expect('icon' in a.extractAgentFieldBlocks('<agent><icon>cogseed</icon></agent>')
       .blocks[0]).toBe(false);
+    expect(a.extractAgentFieldBlocks('<agent><icon>crown</icon></agent>')
+      .blocks[0].icon).toBe('crown');
   });
 
   it('parses each block independently — a malformed sub-tag in one does not affect the other', async () => {
