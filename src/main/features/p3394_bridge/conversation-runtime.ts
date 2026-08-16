@@ -108,7 +108,7 @@ function hashString(value: string, seed: number): number {
   return Math.abs(hash);
 }
 
-function stableCid(sessionId: string): string {
+export function stableCid(sessionId: string): string {
   // Fully deterministic: two independent hashes of the session id. Restarts
   // map the same P3394 session to the SAME conversation (guide §5.3 会话恢复).
   return 'p3394-' + hashString(sessionId, 0).toString(36) + '-' + hashString(sessionId, 5381).toString(36);

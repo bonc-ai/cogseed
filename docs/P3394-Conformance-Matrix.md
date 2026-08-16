@@ -34,7 +34,7 @@
 
 | ID | 要求 | 代码/证据 | 状态 | 下一步 |
 |---|---|---|---|---|
-| R-01 | 显式 `session_id` 优先恢复，Goal 不替代 Session ID | `session-manager.ts`、`conversation-runtime.ts`、`session-state-machine.test.ts`、`session-routing.test.ts` | 部分符合 | 已集成验证：同一 session_id 复用同一 Work Session 且不同 Goal 不覆盖；不同 session_id 即使 Goal 相同也不合并；重复信封按 idempotency 拒绝执行、不产生新 Session/Task；仍需 Channel Thread 绑定与权限校验的集成测试。 |
+| R-01 | 显式 `session_id` 优先恢复，Goal 不替代 Session ID | `session-manager.ts`、`conversation-runtime.ts`、`session-state-machine.test.ts`、`session-routing.test.ts`、`conversation-runtime.test.ts` | 部分符合 | 已集成验证：同一 session_id 复用同一 Work Session 且不同 Goal 不覆盖；不同 session_id 即使 Goal 相同也不合并；重复信封按 idempotency 拒绝执行；Channel Thread 绑定已验证（stableCid 确定性：同一 session 跨实例/跨消息映射同一 conversation，不同 session 互不串扰）；仍需权限校验的集成测试。 |
 | R-02 | Session 内可关联多个 Task，Task 有独立生命周期 | `session-manager.ts`、`task-manager.ts`；session-task-lifecycle tests | 已符合 | 接入真实 Runtime 的多 Task 恢复场景。 |
 | R-03 | `openSession` 接真实 Backend session store | `cogseed-runtime-adapter.ts`、`cogseed_backend/session-store.ts`；adapter tests | 已符合 | 增加跨进程重启和数据根恢复证据。 |
 | R-04 | `deliver` 接真实 admission/task store | `cogseed-runtime-adapter.ts`、`runtime-controller.ts`、`task-store.ts`；`cogseed-runtime-adapter.test.ts` R-04 | 部分符合 | 已验证多 Agent 任务账本隔离：同一会话不同 Agent 的任务记录各自保留 agentId（身份来自信封 recipient）；一个 Agent 的 admission 失败零残留、不影响另一 Agent 的账本；仍需权限（信任策略）维度的失败路径证据。 |

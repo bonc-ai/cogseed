@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { P3394ConversationRuntimeAdapter } from '../../../../src/main/features/p3394_bridge/conversation-runtime';
+import { P3394ConversationRuntimeAdapter, stableCid } from '../../../../src/main/features/p3394_bridge/conversation-runtime';
 
 class FakeBus {
   calls: Array<{ uid: string; cid: string; fromActorId: string; text: string }> = [];
@@ -239,6 +239,34 @@ describe('P3394ConversationRuntimeAdapter (path B: daily conversation flow)', ()
     expect(snapshot.native_session_id).toBe('p3394-fixed-cid');
     await adapter.closeSession('ses-conv-1');
     await expect(adapter.snapshot('ses-conv-1')).rejects.toThrow('p3394_session_not_found');
+  });
+
+  it('R-01 channel-thread binding: stableCid 确定且 session 一一对应 conversation', () => {
+    expect(stableCid('ses-thread-1')).toBe(stableCid('ses-thread-1'));
+    expect(stableCid('ses-thread-1')).not.toBe(stableCid('ses-thread-2'));
+    expect(stableCid('ses-thread-1')).toMatch(/^p3394-[a-z0-9]+-[a-z0-9]+$/);
+  });
+
+  it('R-01 channel-thread binding: deliver 路径的 session→conversation 绑定跨实例稳定且互不串扰', async () => {
+    const bus = new FakeBus();
+    const adapterA = new P3394ConversationRuntimeAdapter({ userId: () => UID, bus });
+    await adapterA.deliver(envelope({ session_id: 'ses-thread-a', task_id: 'tsk-a1', message_id: 'msg-a1', idempotency_key: 'idem-a1' }) as never);
+    const cidA = bus.calls[0].cid;
+    // 同一 session 的第二条消息 → 同一 conversation（thread 绑定）。
+    await adapterA.deliver(envelope({ session_id: 'ses-thread-a', task_id: 'tsk-a2', message_id: 'msg-a2', idempotency_key: 'idem-a2' }) as never);
+    expect(bus.calls[1].cid).toBe(cidA);
+
+    // 不同 session → 不同 conversation，不串扰。
+    const busB = new FakeBus();
+    const adapterB = new P3394ConversationRuntimeAdapter({ userId: () => UID, bus: busB });
+    await adapterB.deliver(envelope({ session_id: 'ses-thread-b', task_id: 'tsk-b1', message_id: 'msg-b1', idempotency_key: 'idem-b1' }) as never);
+    expect(busB.calls[0].cid).not.toBe(cidA);
+
+    // 跨实例重启：新 adapter（新 bus）同一 session → 同一 cid（stableCid 确定性）。
+    const busRestart = new FakeBus();
+    const adapterRestart = new P3394ConversationRuntimeAdapter({ userId: () => UID, bus: busRestart });
+    await adapterRestart.deliver(envelope({ session_id: 'ses-thread-a', task_id: 'tsk-a3', message_id: 'msg-a3', idempotency_key: 'idem-a3' }) as never);
+    expect(busRestart.calls[0].cid).toBe(cidA);
   });
 });
 
