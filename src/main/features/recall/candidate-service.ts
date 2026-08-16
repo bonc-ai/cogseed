@@ -63,7 +63,8 @@ export type RecallCandidateStatus =
   | 'rejected'
   | 'ignored'
   | 'expired'
-  | 'failed';
+  | 'failed'
+  | 'superseded';
 export type AbilityAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
 export type RecallCandidateAction = 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
 export type RecallCandidateRisk = 'low' | 'medium' | 'high';
@@ -310,7 +311,11 @@ function normalizeCandidateStatus(value: unknown): RecallCandidateStatus {
   if (value === 'promoted') return 'confirmed';
   if (value === 'observed' || value === 'weak_observation' || value === 'pending_review'
     || value === 'deferred' || value === 'confirmed' || value === 'rejected'
-    || value === 'ignored' || value === 'expired' || value === 'failed') return value;
+    || value === 'ignored' || value === 'expired' || value === 'failed'
+    // 语义去重候选合并路径（semanticDedupBeforePromote）写入的运行时状态；
+    // 缺了它，池遍历（listRecallCandidates → asCandidate）遇到 superseded
+    // 候选就抛 malformed——整个沉淀 degraded（已观测 19:37）。
+    || value === 'superseded') return value;
   throw new Error('malformed recall candidate');
 }
 
