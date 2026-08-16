@@ -340,3 +340,213 @@ describe('P3394BridgeExecutor inbound pipeline', () => {
     expect(result.ok).toBe(false);
   });
 });
+
+/** Collects the first error an async iterable throws ('' when it completes). */
+async function streamError(iterable: AsyncIterable<unknown>): Promise<string> {
+  try {
+    for await (const _event of iterable) void _event;
+    return '';
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
+ * Wraps a real controller and fails exactly one admission/control method,
+ * delegating everything else (including runtimeStatus) to the real controller.
+ */
+function failingController(real: any, failOn: 'start' | 'resume' | 'cancel'): never {
+  const failure = new Error(`injected ${failOn} failure`);
+  const fail = vi.fn(async () => { throw failure; });
+  const pass = (method: string) => vi.fn(async (...args: unknown[]) => (real as Record<string, (...a: unknown[]) => unknown>)[method](...args));
+  return {
+    startMateTask: failOn === 'start' ? fail : pass('startMateTask'),
+    resumeMateTask: failOn === 'resume' ? fail : pass('resumeMateTask'),
+    cancelMateTask: failOn === 'cancel' ? fail : pass('cancelMateTask'),
+    retryMateTask: pass('retryMateTask'),
+    cancelConversationTasks: pass('cancelConversationTasks'),
+    runtimeStatus: pass('runtimeStatus'),
+    restartRuntime: pass('restartRuntime'),
+  } as never;
+}
+
+describe('P3394CogseedRuntimeAdapter R-08 failure discipline (no ledger mutation on failure)', () => {
+  // 注：P3394 adapter 任务不携带 conversationId，group-chat projection 按设计跳过；
+  // 这里把断言绑定到 P3394 任务真实涉及的 ledger：task-store、event-store 与 activeRuns。
+  it('a failed task admission leaves no task record, mapping, or active run', async () => {
+    const { adapterModule, controllerModule } = await load();
+    const real = controllerModule.createMateRuntimeController({ runtime: fakeRuntime() });
+    const controller = failingController(real, 'start');
+    const adapter = new adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller });
+    const binding = await adapter.openSession({ session_id: 'ses-fail-admit', agent_id: 'cogseed-agent' });
+
+    await expect(
+      adapter.deliver(envelope({ session_id: 'ses-fail-admit', task_id: 'tsk-fail-admit' }) as never),
+    ).rejects.toThrow('injected start failure');
+
+    const taskStore = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const tasks = await taskStore.listMateTasks(UID);
+    expect(tasks.filter((task) => task.sessionId === binding.native_session_id)).toHaveLength(0);
+    expect(await streamError(adapter.stream('tsk-fail-admit'))).toBe('p3394_task_not_found');
+    const status = await controller.runtimeStatus();
+    expect(status.activeTaskCount).toBe(0);
+  });
+
+  it('a failed resume keeps the task recoverable, spawns no run, and appends no event', async () => {
+    const { adapterModule, controllerModule } = await load();
+    const stateFile = path.join(tmpDir, 'agent-home', 'p3394-adapter-fail-resume.json');
+    const real = controllerModule.createMateRuntimeController({ runtime: fakeRuntime('first', 'throw') });
+    const adapter = new adapterModule.P3394CogseedRuntimeAdapter({
+      userId: () => UID, controller: real, pollIntervalMs: 20, stateFile,
+    });
+    await adapter.openSession({ session_id: 'ses-fail-resume', agent_id: 'cogseed-agent' });
+    await adapter.deliver(envelope({ session_id: 'ses-fail-resume', task_id: 'tsk-fail-resume' }) as never);
+
+    await vi.waitFor(async () => {
+      const snapshot = await adapter.snapshot('ses-fail-resume');
+      const tasks = (snapshot.state as { tasks: { status: string }[] }).tasks;
+      expect(tasks.some((task) => task.status === 'recoverable')).toBe(true);
+    });
+    const snapshot = await adapter.snapshot('ses-fail-resume');
+    const mateTaskId = (snapshot.state as { tasks: { task_id: string }[] }).tasks[0].task_id;
+    const eventStore = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const eventsBefore = await eventStore.readMateTaskEvents(UID, mateTaskId, 0, 200);
+
+    const failing = failingController(real, 'resume');
+    const adapter2 = new adapterModule.P3394CogseedRuntimeAdapter({
+      userId: () => UID, controller: failing, pollIntervalMs: 20, stateFile,
+    });
+    await expect(adapter2.resume('ses-fail-resume')).rejects.toThrow('injected resume failure');
+
+    // 给任何（错误的）恢复运行留出启动时间，再验证 ledger 未变化。
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const taskStore = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const tasks = await taskStore.listMateTasks(UID);
+    const mateTask = tasks.find((task) => task.taskId === mateTaskId);
+    expect(mateTask?.status).toBe('recoverable');
+    const status = await failing.runtimeStatus();
+    expect(status.activeTaskCount).toBe(0);
+    const eventsAfter = await eventStore.readMateTaskEvents(UID, mateTaskId, 0, 200);
+    expect(eventsAfter.length).toBe(eventsBefore.length);
+  });
+
+  it('a failed cancel leaves a running task running and active with no cancelled event', async () => {
+    const { adapterModule, controllerModule } = await load();
+    const stateFile = path.join(tmpDir, 'agent-home', 'p3394-adapter-fail-cancel.json');
+    const real = controllerModule.createMateRuntimeController({ runtime: fakeRuntime('long delta', 'hold') });
+    const adapter = new adapterModule.P3394CogseedRuntimeAdapter({
+      userId: () => UID, controller: real, pollIntervalMs: 20, stateFile,
+    });
+    await adapter.openSession({ session_id: 'ses-fail-cancel', agent_id: 'cogseed-agent' });
+    await adapter.deliver(envelope({ session_id: 'ses-fail-cancel', task_id: 'tsk-fail-cancel' }) as never);
+
+    await vi.waitFor(async () => {
+      const status = await real.runtimeStatus();
+      expect(status.activeTaskCount).toBe(1);
+    });
+
+    const failing = failingController(real, 'cancel');
+    const adapter2 = new adapterModule.P3394CogseedRuntimeAdapter({
+      userId: () => UID, controller: failing, pollIntervalMs: 20, stateFile,
+    });
+    await expect(adapter2.cancel('tsk-fail-cancel')).rejects.toThrow('injected cancel failure');
+
+    const snapshot = await adapter2.snapshot('ses-fail-cancel');
+    const mateTaskId = (snapshot.state as { tasks: { task_id: string }[] }).tasks[0].task_id;
+    const taskStore = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const task = await taskStore.readMateTask(UID, mateTaskId);
+    expect(task?.status).not.toBe('cancelled');
+    const status = await failing.runtimeStatus();
+    expect(status.activeTaskCount).toBe(1);
+    const eventStore = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const storedEvents = await eventStore.readMateTaskEvents(UID, mateTaskId, 0, 500);
+    expect(storedEvents.map((event) => event.type)).not.toContain('task.cancelled');
+
+    // 清理：通过真实控制器取消，结束 hold 运行。
+    await real.cancelMateTask(UID, mateTaskId);
+  });
+});
+
+describe('P3394CogseedRuntimeAdapter R-09 状态文件损坏恢复', () => {
+  function writeStateFile(stateFile: string, content: string): void {
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, content);
+  }
+
+  it('损坏的 state 文件以空映射启动，并重写有效状态', async () => {
+    const { adapterModule, controllerModule } = await load();
+    const stateFile = path.join(tmpDir, 'agent-home', 'p3394-adapter-corrupt.json');
+    writeStateFile(stateFile, '{not-json');
+    const controller = controllerModule.createMateRuntimeController({ runtime: fakeRuntime() });
+    const adapter = new adapterModule.P3394CogseedRuntimeAdapter({
+      userId: () => UID, controller, stateFile, pollIntervalMs: 20,
+    });
+    await adapter.openSession({ session_id: 'ses-corrupt', agent_id: 'cogseed-agent' });
+    await adapter.deliver(envelope({ session_id: 'ses-corrupt', task_id: 'tsk-corrupt' }) as never);
+
+    const parsed = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as {
+      schemaVersion: number;
+      sessions: Array<Record<string, unknown>>;
+      tasks: Array<Record<string, unknown>>;
+    };
+    expect(parsed.schemaVersion).toBe(1);
+    for (const entry of parsed.sessions) {
+      expect(typeof entry.p3394_session_id).toBe('string');
+      expect(typeof entry.mate_session_id).toBe('string');
+    }
+    for (const entry of parsed.tasks) {
+      expect(typeof entry.p3394_task_id).toBe('string');
+      expect(typeof entry.mate_task_id).toBe('string');
+    }
+    expect(parsed.sessions.some((session) => session.p3394_session_id === 'ses-corrupt')).toBe(true);
+    expect(parsed.tasks.some((task) => task.p3394_task_id === 'tsk-corrupt')).toBe(true);
+  });
+
+  it('不支持的 schema 版本被忽略，映射从零开始', async () => {
+    const { adapterModule, controllerModule } = await load();
+    const stateFile = path.join(tmpDir, 'agent-home', 'p3394-adapter-v2.json');
+    writeStateFile(stateFile, JSON.stringify({
+      schemaVersion: 2,
+      sessions: [{ p3394_session_id: 'old', mate_session_id: 'mate-session-old' }],
+      tasks: [],
+    }));
+    const controller = controllerModule.createMateRuntimeController({ runtime: fakeRuntime() });
+    const adapter = new adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller, stateFile });
+    const binding = await adapter.openSession({ session_id: 'ses-v2', agent_id: 'cogseed-agent' });
+    expect(binding.native_session_id).toMatch(/^mate-session-/);
+    expect(binding.native_session_id).not.toBe('mate-session-old');
+    await expect(adapter.snapshot('old')).rejects.toThrow('p3394_session_not_found');
+  });
+
+  it('跳过畸形条目，持久化只包含良构映射', async () => {
+    const { adapterModule, controllerModule } = await load();
+    const stateFile = path.join(tmpDir, 'agent-home', 'p3394-adapter-malformed.json');
+    writeStateFile(stateFile, JSON.stringify({
+      schemaVersion: 1,
+      sessions: [
+        { mate_session_id: 'mate-session-phantom' }, // 缺 p3394_session_id
+        { p3394_session_id: 'ses-ok', mate_session_id: 'mate-session-ok' },
+      ],
+      tasks: [{ mate_task_id: 'mate-task-phantom' }], // 缺 p3394_task_id
+    }));
+    const controller = controllerModule.createMateRuntimeController({ runtime: fakeRuntime() });
+    const adapter = new adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller, stateFile });
+    await adapter.openSession({ session_id: 'ses-new', agent_id: 'cogseed-agent' });
+    await adapter.deliver(envelope({ session_id: 'ses-new', task_id: 'tsk-new' }) as never);
+
+    const parsed = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as {
+      sessions: Array<{ p3394_session_id?: string; mate_session_id?: string }>;
+      tasks: Array<{ p3394_task_id?: string; mate_task_id?: string }>;
+    };
+    for (const entry of parsed.sessions) {
+      expect(typeof entry.p3394_session_id).toBe('string');
+      expect(typeof entry.mate_session_id).toBe('string');
+    }
+    for (const entry of parsed.tasks) {
+      expect(typeof entry.p3394_task_id).toBe('string');
+      expect(typeof entry.mate_task_id).toBe('string');
+    }
+    expect(parsed.sessions.some((session) => session.mate_session_id === 'mate-session-phantom')).toBe(false);
+    expect(parsed.tasks.some((task) => task.mate_task_id === 'mate-task-phantom')).toBe(false);
+  });
+});
