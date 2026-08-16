@@ -74,7 +74,7 @@ describe('P3394 Phase 1 persistence hardening', () => {
     const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
     expect(lines).toHaveLength(1);
     const parsed = JSON.parse(lines[0]) as { metadata: { api_key: string; message_id: string } };
-    expect(parsed.metadata.api_key).toBe('[REDACTED]');
+    expect(parsed.metadata.api_key).toBe('***REDACTED***');
     expect(parsed.metadata.message_id).toBe('m1');
   });
 

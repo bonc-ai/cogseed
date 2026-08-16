@@ -1,20 +1,9 @@
-import { createLogger } from '../../logger';
+import { createLogger, redact } from '../../logger';
 import { appendJsonlAtomic } from '../../storage';
 
 export interface P3394AuditRecord { event: string; actor_id: string; target_id?: string; status: 'accepted' | 'rejected' | 'replayed' | 'failed'; metadata?: Record<string, unknown>; at: string }
 
 const log = createLogger('p3394-bridge:audit-journal');
-
-const SECRET_KEYS = /secret|token|password|credential|api[_-]?key|authorization/i;
-function redact(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redact);
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = SECRET_KEYS.test(k) ? '[REDACTED]' : redact(v);
-    return out;
-  }
-  return value;
-}
 
 export interface P3394AuditJournalOptions {
   /** Optional append-only JSONL persistence target (e.g. Agent Home audit dir). */
@@ -30,6 +19,8 @@ export class P3394AuditJournal {
   }
 
   append(input: Omit<P3394AuditRecord, 'at'> & { at?: string }): P3394AuditRecord {
+    // 统一走 logger 的 canonical 脱敏：secret 命名键掩码 + 位置化
+    // secret（Bearer/key=value/JWT/邮箱/手机号/绝对路径）扫描。
     const record: P3394AuditRecord = { ...input, ...(input.metadata ? { metadata: redact(input.metadata) as Record<string, unknown> } : {}), at: input.at ?? new Date().toISOString() };
     this.records.push(record);
     if (this.filePath) {
