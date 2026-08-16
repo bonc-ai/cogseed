@@ -500,12 +500,12 @@ function timestampMs(value: string): number {
 }
 
 function isCaptureMessage(message: GroupMessage): boolean {
-  return !message.deleted_at
-    && !message.dispatch
-    && !message.system_kind
-    && !message.failure_kind
-    && typeof message.text === 'string'
-    && Boolean(message.text.trim());
+  if (message.deleted_at || message.dispatch || message.system_kind || message.failure_kind) return false;
+  if (typeof message.text !== 'string' || !message.text.trim()) return false;
+  // 噪音过滤：纯状态/占位消息不进提取输入（"（stopped）" / "正在整理…"）。
+  // 注意：短用户消息（"好"、"Hi"）保留——它们可能是需求的确认/变更信号。
+  if (/^[（(]?stopped[）)]?$/i.test(message.text.trim())) return false;
+  return true;
 }
 
 function truncateText(value: string, max: number): string {
@@ -550,9 +550,24 @@ export function selectCaptureMessages(
   const firstUserIndex = inRun.findIndex((message) => message.from === 'user');
   if (firstUserIndex < 0) return [];
   const fromFirstUser = inRun.slice(firstUserIndex);
+  // 两端保留 + 中间均匀抽样：首条（需求定义）与尾部（结果/验证）是提取
+  // 模型最需要的上下文；中间段按步长均匀抽样，避免超长会话中间信息全丢。
   const selected = fromFirstUser.length <= MAX_CAPTURE_MESSAGES
     ? fromFirstUser
-    : [fromFirstUser[0], ...fromFirstUser.slice(-(MAX_CAPTURE_MESSAGES - 1))];
+    : (() => {
+        const head = fromFirstUser[0];
+        // tail 只取 head 之后的部分（slice(-n) 在消息少时会把 head 也包含
+        // 进去导致重复）。
+        const tailCount = Math.min(fromFirstUser.length - 1, MAX_CAPTURE_MESSAGES - 2);
+        const tail = tailCount > 0 ? fromFirstUser.slice(-tailCount) : [];
+        const middle = fromFirstUser.slice(1, fromFirstUser.length - tail.length);
+        const sampled: typeof fromFirstUser = [];
+        if (middle.length) {
+          const step = Math.max(1, Math.ceil(middle.length / 4));
+          for (let i = 0; i < middle.length; i += step) sampled.push(middle[i]);
+        }
+        return [head, ...sampled, ...tail].slice(0, MAX_CAPTURE_MESSAGES);
+      })();
 
   const firstCap = selected.length === 1 ? MAX_CAPTURE_TEXT_CHARS : 6_000;
   const lastCap = selected.length === 1 ? MAX_CAPTURE_TEXT_CHARS : 8_000;
@@ -735,6 +750,8 @@ function extractionSystemPrompt(): string {
     '- skill_method: "Is there an executable, checkable method here?" It must be able to state a trigger, inputs, an ordered action plan, outputs, and how the result is validated. EXCLUDED: capability claims such as "I am good at writing PRDs", and single one-step actions.',
     'When the content does not satisfy the type it would need, drop it rather than forcing it into the closest type.',
     'judgment must BE the reusable content itself, never a verdict about the candidate. "Useful and reusable" or "valuable, shows what the user expects" are judgements about your own extraction, not knowledge — drop those instead of emitting them.',
+    'NEVER extract platitudes: "认真完成了任务", "已按时交付", "task completed successfully", "工作完成得不错" — a judgment that merely restates the task goal or reports completion carries no reusable knowledge. Drop it.',
+    'A judgment that duplicates the task request (restating the requirement instead of a lesson learned) is invalid — if the user could have written it before the run, it is not extracted knowledge.',
     'Never emit the same judgment under two different suggestedType values. Pick the one type it actually satisfies, or drop it.',
     'Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.',
     'Each candidate must state a concrete future value and an explicit suggestedAction; do not restate its summary as value.',
