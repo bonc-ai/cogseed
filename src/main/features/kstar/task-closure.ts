@@ -447,7 +447,9 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
     if (seen.has(key) || inFlight.has(key)) return;
     // 静默窗口自动闭环（设计 §5）：completed 终态立即安排窗口，不等待
     // capture（Commander review 可能耗时）——窗口计时从任务终态起算。
-    if (event.status === 'completed') {
+    // cancelled（用户中止）也安排窗口：中止任务不再悬挂——30min 静默后
+    // 自动闭环（中止回合 review 证据不足 → 不沉淀，仅关任务）。
+    if (event.status === 'completed' || event.status === 'cancelled') {
       void scheduleAutoClose(event.user_id, event.conversation_id);
     }
     const runCapture = async (attempt: number): Promise<void> => {
