@@ -12,19 +12,25 @@ const draftSource = fs.readFileSync(
 );
 const styleSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
 const indexSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
+const iconsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/icons.js'), 'utf8');
 
 describe('conversation cross-task message reference UI', () => {
-  it('keeps quote visible while moving secondary actions into the overflow menu', () => {
-    expect(conversationSource).toContain('<span class="chat-bubble-direct-actions">${quoteButton}</span>');
+  it('uses a collapsible WorkBuddy-style icon rail with secondary actions in overflow', () => {
+    expect(conversationSource).toContain('<span class="chat-bubble-direct-actions">${copyButton}${quoteButton}${asideButton}</span>');
     expect(conversationSource).toContain('class="chat-bubble-more-menu" role="menu" hidden');
-    expect(conversationSource).toContain('chat-bubble-menu-item bubble-copy-btn');
+    expect(conversationSource).toContain("_uiIconHtml('copy', 'ui-icon')");
+    expect(conversationSource).toContain("_uiIconHtml('at-sign', 'ui-icon')");
+    expect(iconsSource).toContain("'at-sign':");
+    expect(conversationSource).toContain("_uiIconHtml('message-square', 'ui-icon')");
+    expect(conversationSource).toContain("_uiIconHtml('more-horizontal', 'ui-icon')");
     expect(conversationSource).toContain('chat-bubble-menu-item bubble-select-btn');
     expect(conversationSource).toContain('chat-bubble-menu-item bubble-archive-btn');
     expect(styleSource).toContain('.chat-bubble-more-menu');
     expect(styleSource).toContain('.chat-bubble-menu-item');
     expect(conversationSource).not.toContain("'bubble-action-icon'");
-    expect(styleSource).toContain('border: 1px solid color-mix(in srgb, var(--border) 88%, #94a3b8);');
-    expect(styleSource).toContain('height: 24px;');
+    expect(styleSource).toContain('#panel-conversation .chat-message:hover .chat-bubble-actions');
+    expect(styleSource).toContain('max-height: 0;');
+    expect(styleSource).toContain('height: 28px;');
   });
 
   it('opens the overflow menu without scanning every message menu', () => {

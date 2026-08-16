@@ -107,6 +107,8 @@
     image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><circle cx="8.5" cy="9" r="1.6"></circle><path d="M5 17l4.4-4.4a1.5 1.5 0 0 1 2.1 0L14 15l2-2a1.5 1.5 0 0 1 2.1 0L20 14.9"></path>',
     list: '<path d="M9 6h11M9 12h11M9 18h11"></path><path d="M4 6h.01M4 12h.01M4 18h.01"></path>',
     'list-ordered': '<path d="M10 6h10M10 12h10M10 18h10"></path><path d="M4 5h1v3M4 8h2"></path><path d="M4 11.5h2L4 14h2"></path><path d="M4 17h2v3H4"></path>',
+    'at-sign': '<circle cx="12" cy="12" r="4"></circle><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"></path>',
+    copy: '<rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>',
     quote: '<path d="M9 7H5v5h4v5H4"></path><path d="M20 7h-4v5h4v5h-5"></path>',
     code: '<path d="m9 8-4 4 4 4"></path><path d="m15 8 4 4-4 4"></path>',
     'code-block': '<path d="M8 9l-3 3 3 3"></path><path d="M16 9l3 3-3 3"></path><path d="M12 6l-2 12"></path><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect>',
