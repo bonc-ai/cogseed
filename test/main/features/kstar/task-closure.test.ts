@@ -499,8 +499,7 @@ describe('KSTAR task closure', () => {
       conversationId: 'cid-cmd-review',
       status: 'completed',
       commanderReviewTimeoutMs: 50,
-      startedAtMs: Date.now() - 60_000,
-      finishedAtMs: Date.now(),
+      startedAtMs: Date.now() - 60_000,      finishedAtMs: Date.now(),
       messages: [
         { id: 'm0', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: 'Fix the state handling' },
       ],
@@ -801,5 +800,47 @@ describe('KSTAR extraction reconciliation', () => {
     // idempotent without a candidate-set completeness check.
     expect(result.extractionRun.status).toBe('created');
     expect(result.extractionRun.candidateIds).toEqual([]);
+  });
+
+  it('passes the loaded conversation history to the fallback review inference (situational context)', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const optionsSeen: any[] = [];
+    const spyInfer = async (_userId: string, builtEpisode: any, options?: any) => {
+      optionsSeen.push(options);
+      return {
+        review: {
+          expectedResult: builtEpisode.t.userGoal,
+          actualResult: 'Done.',
+          deltaR: 0 as const,
+          deltaA: 'unknown' as const,
+          outcome: 'met_expected' as const,
+          attribution: 'unclear' as const,
+          reason: 'ok',
+          confidence: 0.8,
+          evidenceRefs: builtEpisode.evidenceRefs,
+        },
+        reviewState: 'inferred' as const,
+        inferenceMethod: 'deterministic' as const,
+        needsConfirmation: false,
+      };
+    };
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-ctx',
+      conversationId: 'cid-ctx',
+      status: 'completed',
+      commanderReviewTimeoutMs: 20,
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [
+        { id: 'm1', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: '做一个报告' },
+        { id: 'm2', ts: '2026-08-15T00:00:01.000Z', from: 'commander', text: '用户中途要求改成英文版' },
+        { id: 'm3', ts: '2026-08-15T00:00:02.000Z', from: 'commander', text: '已完成' },
+      ],
+      inferReview: spyInfer,
+    });
+    expect(optionsSeen).toHaveLength(1);
+    expect(optionsSeen[0]?.messages).toHaveLength(3);
+    expect(optionsSeen[0]?.messages[1]).toMatchObject({ from: 'commander', text: '用户中途要求改成英文版' });
   });
 });

@@ -257,7 +257,7 @@ async function finishClosure(
   episode: KstarEpisodeRecord,
   bridge: KstarCandidateBridge = saveKstarCandidateProposals,
   inferReview: KstarReviewInfer = inferKstarReview,
-  forecast?: Awaited<ReturnType<typeof readWorldModelForecast>> | null,
+  options: { forecast?: Awaited<ReturnType<typeof readWorldModelForecast>> | null; messages?: Array<{ from: string; text: string; ts?: string }> } = {},
 ): Promise<KstarClosureResult> {
   await writeKstarEpisode(userId, episode);
   let storedReview: KstarReviewRecord | null = null;
@@ -271,8 +271,12 @@ async function finishClosure(
     try {
       // fallback 推理也走确定性世界模型度量（forecast）：期望 vs 实际由
       // reconcileWorldModel 确定性计算，模型只做归因与教训提炼——不依赖
-      // Commander 回合（不占队列），质量与 Commander 凭记忆 review 相当。
-      const inferred = await inferReview(userId, episode, forecast ? { forecast } : {});
+      // Commander 回合（不占队列）。对话历史（messages）恢复执行情境
+      // （中途变更/失败/临时决策），质量与 Commander review 相当。
+      const inferred = await inferReview(userId, episode, {
+        ...(options.forecast ? { forecast: options.forecast } : {}),
+        ...(options.messages?.length ? { messages: options.messages } : {}),
+      });
       review = await saveKstarReview(userId, episode, {
         ...inferred.review,
         reviewState: inferred.reviewState,
@@ -491,7 +495,10 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
         updatedAt: now,
       });
     }
-    return finishClosure(input.userId, episode, input.bridge, input.inferReview, forecast);
+    return finishClosure(input.userId, episode, input.bridge, input.inferReview, {
+      ...(forecast ? { forecast } : {}),
+      ...(input.messages?.length ? { messages: input.messages } : {}),
+    });
   });
   try {
     const { attachKstarEpisodeToCurrentRequirement } = await import('./requirement-state');
