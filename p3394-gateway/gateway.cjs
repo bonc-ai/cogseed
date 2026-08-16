@@ -61,6 +61,11 @@ const isLoopbackHost = GATEWAY_HOST === '127.0.0.1' || GATEWAY_HOST === 'localho
 const ADVERTISE_ENDPOINT = (process.env.P3394_ADVERTISE_ENDPOINT || 'http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT).replace(/\/$/, '');
 // ECS 心跳：定期向 CogSeed 报告在线（默认 60s；0 关闭）。
 const HEARTBEAT_MS = Number(process.env.P3394_HEARTBEAT_MS ?? 60 * 1000);
+// V-04 反向入口：P3394_SEND_TASK 非空时，启动后向 CogSeed 发起一次任务，
+// 等待自动回发结果、打印后退出（Hermes → CogSeed → Hermes 闭环）。
+const SEND_TASK = (process.env.P3394_SEND_TASK || '').trim();
+const SEND_TASK_TIMEOUT_MS = Number(process.env.P3394_SEND_TASK_TIMEOUT_MS || 30 * 1000);
+const replyWaiters = new Map(); // message_id → 处理回信的函数
 
 // 预设：市面上常见智能体的 CLI 模板（oneshot 非交互模式，stdout 输出最终回复）。
 const PRESETS = {
@@ -736,6 +741,14 @@ const server = http.createServer((req, res) => {
         return;
       }
       json(res, 200, { ok: true, message_id: envelope.message_id });
+      // V-04 反向闭环：本端发起的任务回信（reply_to 命中 waiter）直接交给
+      // 等待方，不进入 CLI 执行路径。
+      if (envelope.reply_to && replyWaiters.has(envelope.reply_to)) {
+        const waiter = replyWaiters.get(envelope.reply_to);
+        replyWaiters.delete(envelope.reply_to);
+        waiter(envelope);
+        return;
+      }
       // cancel 控制帧必须绕过串行队列立即处理，否则会被正在运行的长任务阻塞。
       if (envelope.kind === 'control' && envelope.performative === 'cancel') {
         handleCancel(envelope);
@@ -761,11 +774,60 @@ server.listen(PORT, GATEWAY_HOST, () => {
   console.log('[p3394-gateway] ' + AGENT_ID + ' P3394 endpoint on http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT + ' · mode: ' + AGENT_MODE);
   console.log('[p3394-gateway] replies to ' + COGSEED_ENDPOINT + ' · preset: ' + PRESET_NAME + (PRESET_NAME === 'codex' ? ' · runtime: Codex Desktop app-server (' + CODEX_APP_SERVER + ')' : ' · CLI: ' + CLI + ' ' + CLI_ARGS));
   registerWithCogseed();
+  if (SEND_TASK) sendTaskOneShot(SEND_TASK);
   if (HEARTBEAT_MS > 0) {
     const timer = setInterval(sendHeartbeat, HEARTBEAT_MS);
     timer.unref();
   }
 });
+
+/**
+ * V-04 反向闭环：本网关（对端 Agent）主动向 CogSeed 发起一次任务，
+ * 信封携带本端 reply_endpoint/reply_token；CogSeed 执行完自动回发结果，
+ * 网关命中 waiter 后打印回复并退出。
+ */
+function sendTaskOneShot(text) {
+  const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const task = {
+    spec_version: 'p3394/1.0',
+    message_id: 'msg-task-' + nonce,
+    session_id: 'ses-task-' + nonce,
+    task_id: 'tsk-' + nonce,
+    kind: 'task',
+    performative: 'request',
+    sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+    recipients: [{ agent_id: 'cogseed' }],
+    payload: { parts: [{ type: 'text', text: text.slice(0, MAX_MESSAGE_LEN) }], metadata: { goal: text.slice(0, 200) } },
+    extensions: { reply_endpoint: ADVERTISE_ENDPOINT, reply_token: AUTH_TOKEN },
+    idempotency_key: 'idem-task-' + nonce,
+  };
+  replyWaiters.set(task.message_id, (reply) => {
+    const replyText = envelopeText(reply);
+    console.log('[p3394-gateway] task reply from ' + (reply.sender && reply.sender.agent_id) + ': ' + replyText.slice(0, 120));
+    process.stdout.write(replyText + '\n');
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.error('[p3394-gateway] send-task timeout waiting for reply');
+    process.exit(1);
+  }, SEND_TASK_TIMEOUT_MS);
+  const url = new URL(COGSEED_ENDPOINT + '/p3394/envelope');
+  const headers = { 'Content-Type': 'application/json' };
+  if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
+  const body = JSON.stringify({ envelope: task });
+  const req = http.request(url, { method: 'POST', headers }, (res) => {
+    res.resume();
+    if (!(res.statusCode >= 200 && res.statusCode < 300)) {
+      console.error('[p3394-gateway] send-task rejected ' + res.statusCode);
+      process.exit(1);
+    }
+  });
+  req.on('error', (error) => {
+    console.error('[p3394-gateway] send-task failed: ' + error.message);
+    process.exit(1);
+  });
+  req.end(body);
+}
 
 /** ECS 心跳：轻量 control 信封（inform），刷新 CogSeed 注册表里的 last_seen。 */
 function sendHeartbeat() {

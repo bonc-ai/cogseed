@@ -76,6 +76,10 @@ function waitFor(probe: () => boolean, timeoutMs = 8000): Promise<void> {
 
 function waitExit(child: ChildProcess, timeoutMs: number): Promise<number> {
   return new Promise((resolve, reject) => {
+    if (child.exitCode !== null) {
+      resolve(child.exitCode);
+      return;
+    }
     const timer = setTimeout(() => reject(new Error('child exit timeout')), timeoutMs);
     child.once('exit', (code) => {
       clearTimeout(timer);
