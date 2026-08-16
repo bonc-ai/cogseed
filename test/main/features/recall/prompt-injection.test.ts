@@ -19,6 +19,14 @@ afterEach(async () => {
   await fs.rm(tmp, { recursive: true, force: true });
 });
 
+// 自动投影是"静默默认注入"，按 PRD 3.6 只接纳 Transfer Verified 及以上。
+// 这些用例考的是相关性 / 提示词结构 / 引用对齐，不是成熟度闸门，所以先把资产
+// 抬到够格的档位；闸门本身由 formal-asset-runtime.test.ts 覆盖。
+async function elevateToTransferVerified(assetId: string) {
+  const assets = await import('../../../../src/main/features/recall/asset-service');
+  await assets.setAbilityAssetMaturity('user-a', assetId, 'transfer_validated');
+}
+
 async function modules() {
   const [candidates, refs, projection, promptInjection, storage, layout, assets] = await Promise.all([
     import('../../../../src/main/features/recall/candidate-service'),
@@ -41,7 +49,9 @@ async function createAsset() {
     suggestedScope: 'review,project',
     sourceRefs: [{ kind: 'execution', id: 'exec-a' }],
   });
-  return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await elevateToTransferVerified(promoted.asset.id);
+  return promoted;
 }
 
 async function createAssetWith(input: { judgment: string; summary: string; sourceId: string }) {
@@ -58,7 +68,9 @@ async function createAssetWith(input: { judgment: string; summary: string; sourc
       scope: 'personal',
     }],
   });
-  return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await elevateToTransferVerified(promoted.asset.id);
+  return promoted;
 }
 
 const fakeSemanticOptions = {

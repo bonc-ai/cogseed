@@ -471,6 +471,7 @@ async function upsertState(
       ...state,
       requirementJustClosed: requirement.id,
       taskComplete: true,
+      pendingAutoCloseAt: undefined,
       updatedAt: now,
     };
   } else {
@@ -611,6 +612,7 @@ async function finish(
     ...state,
     requirementJustClosed: requirement.id,
     taskComplete: true,
+    pendingAutoCloseAt: undefined,
     updatedAt: now,
   };
   await replaceConversationTaskState(context.userId, state);

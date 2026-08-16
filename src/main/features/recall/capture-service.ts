@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { createLogger } from '../../logger';
@@ -9,6 +10,10 @@ import { scheduleBootBackground, type ScheduledBootBackgroundTask } from '../../
 import { getConfiguredModelOAuthExpiredMessage, hasConfiguredModel } from '../auth';
 import * as chats from '../chats';
 import type { ReviewDecision } from '../cognition/review-decision';
+import {
+  run as runCliAgent,
+} from '../local_agents/runner';
+import { detectAll } from '../local_agents/registry';
 import {
   isQuiescent,
   subscribeTaskTerminals,
@@ -51,6 +56,7 @@ import {
   type RecallCaptureExecutionPolicy,
 } from './capture-settings';
 import {
+  assessRecallCandidateClassification,
   assessRecallCaptureCandidateQuality,
   screenRecallCaptureValue,
   type RecallCaptureFilterReason,
@@ -289,6 +295,9 @@ interface ParsedCandidate {
   actionProvided: boolean;
   risk?: 'low' | 'medium' | 'high';
   targetAssetId?: string;
+  /** 规则候选的适用/禁止范围。缺失 = 模型没给出，不是「无限制」。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
   evidence: string[];
 }
 
@@ -592,11 +601,32 @@ function parseCandidateRisk(value: unknown): NonNullable<ParsedCandidate['risk']
   throw new CaptureFailure('invalid_model_output', 'invalid risk');
 }
 
+/** 容错解析模型输出：LLM 常把 JSON 包在 ```json 围栏里，或前后带散文/说明。
+ *  先剥 markdown 围栏，再隔离最外层 {...}，最后 JSON.parse。任何一步失败
+ *  都抛 invalid_model_output（与严格路径同码，语义不变）。 */
+function parseCaptureJson(raw: string): unknown {
+  let text = String(raw || '').trim();
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) text = fence[1].trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new CaptureFailure('invalid_model_output', 'model output is not strict JSON');
+  }
+  const slice = text.slice(start, end + 1);
+  try {
+    return JSON.parse(slice);
+  } catch {
+    throw new CaptureFailure('invalid_model_output', 'model output is not strict JSON');
+  }
+}
+
 export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>): ParsedCandidate[] {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
+    parsed = parseCaptureJson(raw);
+  } catch (error) {
+    if (error instanceof CaptureFailure) throw error;
     throw new CaptureFailure('invalid_model_output', 'model output is not strict JSON');
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -621,10 +651,10 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
       }
       return label;
     }))];
-    const uncertainty = candidate.uncertainty === undefined
+    const uncertainty = candidate.uncertainty === undefined || candidate.uncertainty === ''
       ? undefined
       : boundedRequiredText(candidate.uncertainty, 'uncertainty', 1_000);
-    const targetAssetId = candidate.targetAssetId === undefined
+    const targetAssetId = candidate.targetAssetId === undefined || candidate.targetAssetId === ''
       ? undefined
       : boundedRequiredText(candidate.targetAssetId, 'targetAssetId', 160);
     if (targetAssetId && !safeId(targetAssetId)) throw new CaptureFailure('invalid_model_output', 'invalid targetAssetId');
@@ -638,6 +668,9 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
       ...(uncertainty ? { uncertainty } : {}),
       suggestedType: parseCandidateType(candidate.suggestedType),
       suggestedScope: boundedRequiredText(candidate.suggestedScope, 'suggestedScope', 500),
+      // 规则的适用/禁止范围。模型给不出就留空——晋升闸门会据此把候选留在
+      // 池子里等人补，而不是当作「无限制」写进正式资产。
+      ...parseCandidateBoundaries(candidate),
       ...(candidate.suggestedAction === undefined ? {} : { suggestedAction: parseCandidateAction(candidate.suggestedAction) }),
       actionProvided,
       ...(candidate.risk === undefined ? {} : { risk: parseCandidateRisk(candidate.risk) }),
@@ -647,12 +680,45 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
   });
 }
 
+/** 读模型给出的边界短语。非数组/空串一律忽略，宁可留空也不编造边界。 */
+function parseCandidateBoundaries(candidate: Record<string, unknown>): {
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
+} {
+  const read = (raw: unknown): string[] | undefined => {
+    if (!Array.isArray(raw)) return undefined;
+    const items = raw
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item) => item.length > 0)
+      .slice(0, 10)
+      .map((item) => item.slice(0, 300));
+    return items.length ? items : undefined;
+  };
+  const applicableWhen = read(candidate.applicableWhen);
+  const forbiddenWhen = read(candidate.forbiddenWhen);
+  return {
+    ...(applicableWhen ? { applicableWhen } : {}),
+    ...(forbiddenWhen ? { forbiddenWhen } : {}),
+  };
+}
+
 function extractionSystemPrompt(): string {
   return [
     'You extract durable, user-reviewable knowledge from one completed conversation run.',
     'Return exactly one JSON object and no markdown or commentary.',
-    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
+    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","applicableWhen":["required for rule"],"forbiddenWhen":["required for rule"],"suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
     'Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.',
+    // 四类定义与硬边界（PRD 3.1/3.2/3.3）。缺了这段，模型只能靠四个英文枚举
+    // 词自行猜测，项目事实会被写成 personal、原文件会被写成 template。
+    'suggestedType must answer one of four questions, and each has contents that are explicitly excluded:',
+    '- personal: "What is durably true about this user?" Identity, role, long-term preference, stable relationship, long-term environment, boundary. EXCLUDED: current task progress, the current sprint or milestone, a meeting or schedule, a temporary contact relationship, any project fact. Those stay with the project, not with the person.',
+    '- rule: "Under what condition should which judgment or behaviour hold?" A complete rule has a condition, a principle, and a boundary. EXCLUDED: a bare preference with no condition ("likes concise"), and one-off instructions for this task only.',
+    'For a rule candidate you MUST also return applicableWhen and forbiddenWhen: short concrete phrases for when it applies and where it must not be used. A rule without both cannot become a formal asset. Do not invent a boundary the messages do not support — drop the candidate instead.',
+    '- template: "Is there a structure that can be applied again next time?" Document skeletons, checklists, section structures, reusable fragments, output schemas. EXCLUDED: the source file itself. A PRD.docx stays a source file; only the reusable structure extracted from it can be a template.',
+    '- skill_method: "Is there an executable, checkable method here?" It must be able to state a trigger, inputs, an ordered action plan, outputs, and how the result is validated. EXCLUDED: capability claims such as "I am good at writing PRDs", and single one-step actions.',
+    'When the content does not satisfy the type it would need, drop it rather than forcing it into the closest type.',
+    'judgment must BE the reusable content itself, never a verdict about the candidate. "Useful and reusable" or "valuable, shows what the user expects" are judgements about your own extraction, not knowledge — drop those instead of emitting them.',
+    'Never emit the same judgment under two different suggestedType values. Pick the one type it actually satisfies, or drop it.',
     'Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.',
     'Each candidate must state a concrete future value and an explicit suggestedAction; do not restate its summary as value.',
     'Every candidate must cite at least one user message. Short acknowledgements, greetings, status checks, and failed work are not candidates.',
@@ -690,6 +756,65 @@ function extractionInput(
         : {}),
     })),
   });
+}
+
+/** CLI-based extraction fallback for recall capture when no CogSeed model is
+ *  configured. Mirrors onboarding's `cognition_extraction.ts`: pick an
+ *  installed/authenticated local CLI (claude preferred, else first available),
+ *  dispatch a one-shot print-mode turn with the extraction prompt + input, and
+ *  return the CLI's final text. Returns null when no CLI is usable. */
+async function extractCaptureViaCli(
+  userId: string,
+  capture: RecallCaptureRecord,
+  conversation: Awaited<ReturnType<typeof chats.getConversation>>,
+  promptMessages: CapturePromptMessage[],
+  recallView: RecallViewRecord,
+  signal: AbortSignal | undefined,
+): Promise<string | null> {
+  const entries = await detectAll();
+  const available = entries.filter((e) => e && e.available);
+  if (!available.length) return null;
+  const chosen = available.find((e) => e.type === 'claude') ?? available[0];
+  const input = extractionInput(conversation?.title || capture.conversationTitle || '', promptMessages, recallView);
+  const prompt =
+    `You extract durable, user-reviewable knowledge from one completed conversation run.\n` +
+    `Analyze the JSON conversation below and return exactly ONE JSON object and no markdown or commentary:\n` +
+    `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
+    `Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.\n` +
+    `Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.\n` +
+    `Each candidate must cite at least one user message label in "evidence". Do not invent facts.\n` +
+    `Write candidate text in the same language as the conversation.\n\n` +
+    `## Conversation JSON\n${input}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const result = await runCliAgent({
+      uid: userId,
+      cid: capture.conversationId,
+      agentId: 'recall-capture-extractor',
+      agentName: 'Capture Extractor',
+      cli: chosen.type,
+      prompt,
+      cwd: os.tmpdir(),
+      signal: controller.signal,
+      skipDispatchCheck: true,
+      onEvent: () => {},
+    });
+    if (signal?.aborted) return null;
+    if (result.status !== 'completed' || typeof result.output !== 'string' || !result.output.trim()) {
+      log.warn('recall capture CLI extraction did not complete', {
+        conversation_id: capture.conversationId,
+        cli: chosen.type,
+        status: result.status,
+        error: result.error,
+      });
+      return null;
+    }
+    return result.output.trim();
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function readRecallCapture(userId: string, id: string): Promise<RecallCaptureRecord> {
@@ -1237,9 +1362,12 @@ async function automaticallyApplyReviewableCandidates(
 ): Promise<{
   resolved: Map<string, RecallCandidateRecord>;
   failedCandidateIds: string[];
+  /** 自动写入被安全机制挡下（不是失败）：候选原封不动留在池子里等人工确认。 */
+  deferredCandidateIds: string[];
 }> {
   const resolved = new Map<string, RecallCandidateRecord>();
   const failedCandidateIds: string[] = [];
+  const deferredCandidateIds: string[] = [];
   for (const candidateId of new Set(candidateIds)) {
     try {
       // Read immediately before applying. A prior run or a concurrent user
@@ -1276,13 +1404,24 @@ async function automaticallyApplyReviewableCandidates(
         candidate: applied.candidate,
         asset: applied.asset,
       });
-    } catch {
+    } catch (error) {
+      // 语义查重不可用不是写入失败：候选没被动过，仍然可以人工确认。把它记成
+      // 失败会让整次沉淀显示成错误并催用户重试，而重试同样查不了重。
+      // 两类"挡下"都不是写入失败：候选没被动过，仍然可以人工确认。
+      //   semantic_dedup_unavailable  查重做不了，不能当作"查过且干净"
+      //   promotion_blocked           没到该类型的正式准入门槛（PRD 3.1）
+      // 记成失败会让整次沉淀显示成错误并催用户重试，而重试同样过不了。
+      const code = (error as { code?: string })?.code;
+      if (code === 'semantic_dedup_unavailable' || code === 'promotion_blocked') {
+        deferredCandidateIds.push(candidateId);
+        continue;
+      }
       // Continue so one blocked or temporarily failed candidate cannot prevent
       // independent later candidates from reaching their terminal state.
       failedCandidateIds.push(candidateId);
     }
   }
-  return { resolved, failedCandidateIds };
+  return { resolved, failedCandidateIds, deferredCandidateIds };
 }
 
 export async function runRecallCapture(
@@ -1446,40 +1585,82 @@ export async function runRecallCapture(
     capture = await setCaptureStage(userId, id, 'model_extraction');
     if (capture.status !== 'extracting' || signal?.aborted) return settleInterruptedCapture(userId, id);
 
-    let runner: Awaited<ReturnType<typeof buildRunner>>['runner'];
-    try {
-      ({ runner } = await buildRunner({
-        sessionId: `memory-extract-recall-${capture.id}`,
-        userId,
-        systemPrompt: extractionSystemPrompt(),
-        disableTools: true,
-        ephemeralSession: true,
-        skillList: [],
-      }));
-    } catch {
-      throw new CaptureFailure('model_failed', 'model runner could not be built');
+    // No-model CLI fallback: when the user has no CogSeed API model (commander
+    // already routes to local CLI agents), drive the extraction through an
+    // installed/authenticated local CLI instead of failing with
+    // model_not_configured. This keeps the capture→candidate→confirm loop
+    // working in the exact setup that motivated CLI fallback.
+    let extractionText: string;
+    let extractionModelUsage: RecallCaptureModelUsage | undefined;
+    if (!hasConfiguredModel().configured && !process.env.ANTHROPIC_API_KEY) {
+      try {
+        const cliText = await extractCaptureViaCli(
+          userId,
+          capture,
+          conversation,
+          promptMessages,
+          recallView,
+          signal,
+        );
+        if (cliText === null) {
+          throw new CaptureFailure('model_not_configured', 'model configuration is required (no local CLI available)');
+        }
+        extractionText = cliText;
+      } catch (err) {
+        if (err instanceof CaptureFailure) throw err;
+        throw new CaptureFailure('model_failed', `CLI extraction failed: ${(err as Error).message}`);
+      }
+    } else {
+      let runner: Awaited<ReturnType<typeof buildRunner>>['runner'];
+      try {
+        ({ runner } = await buildRunner({
+          sessionId: `memory-extract-recall-${capture.id}`,
+          userId,
+          systemPrompt: extractionSystemPrompt(),
+          disableTools: true,
+          ephemeralSession: true,
+          skillList: [],
+        }));
+      } catch {
+        throw new CaptureFailure('model_failed', 'model runner could not be built');
+      }
+      let result: Awaited<ReturnType<typeof runner.run>>;
+      try {
+        result = await runner.run({
+          message: extractionInput(conversation.title, promptMessages, recallView),
+          signal,
+          thinkingLevel: 'off',
+          cacheRetention: 'none',
+        });
+      } catch {
+        throw new CaptureFailure('model_failed', 'model extraction failed');
+      }
+      if (signal?.aborted) return settleInterruptedCapture(userId, id);
+      if (result.meta.aborted) throw new CaptureFailure('model_failed', 'model extraction was aborted');
+      if (result.meta.error) {
+        const code = result.meta.error.kind === 'auth' ? 'model_auth_required' : 'model_failed';
+        throw new CaptureFailure(code, result.meta.error.message);
+      }
+      extractionText = result.text.trim();
+      extractionModelUsage = normalizeModelUsage(result.meta.usage);
     }
-    let result: Awaited<ReturnType<typeof runner.run>>;
+    let parsed: ReturnType<typeof parseRecallCaptureOutput>;
     try {
-      result = await runner.run({
-        message: extractionInput(conversation.title, promptMessages, recallView),
-        signal,
-        thinkingLevel: 'off',
-        cacheRetention: 'none',
+      parsed = parseRecallCaptureOutput(
+        extractionText,
+        new Set(promptMessages.map((message) => message.label)),
+      );
+    } catch (error) {
+      // TEMP DEBUG: log the raw model output + failure detail to diagnose
+      // persistent invalid_model_output (remove after root cause fixed).
+      log.warn('recall capture parse failed (debug)', {
+        capture_id: id,
+        conversation_id: capture.conversationId,
+        rawOutput: String(extractionText || '').slice(0, 2000),
+        error: error instanceof CaptureFailure ? error.message : String((error as Error)?.message || error),
       });
-    } catch {
-      throw new CaptureFailure('model_failed', 'model extraction failed');
+      throw error;
     }
-    if (signal?.aborted) return settleInterruptedCapture(userId, id);
-    if (result.meta.aborted) throw new CaptureFailure('model_failed', 'model extraction was aborted');
-    if (result.meta.error) {
-      const code = result.meta.error.kind === 'auth' ? 'model_auth_required' : 'model_failed';
-      throw new CaptureFailure(code, result.meta.error.message);
-    }
-    const parsed = parseRecallCaptureOutput(
-      result.text.trim(),
-      new Set(promptMessages.map((message) => message.label)),
-    );
     capture = await setCaptureStage(userId, id, 'candidate_save');
     if (capture.status !== 'extracting') return capture;
     const automaticMode = capture.autoWrite === true || (
@@ -1496,9 +1677,22 @@ export async function runRecallCapture(
     for (const [index, candidate] of parsed.entries()) {
       const evidenceMessages = candidate.evidence.map((label) => byLabel.get(label)!);
       const quality = assessRecallCaptureCandidateQuality(candidate, evidenceMessages);
+      // 归类校验：提示词只能"要求"模型按四类定义分类，兜底靠这里。命中 PRD
+      // 明确排除的内容（项目事实当 personal、原文件当 template、能力自述当
+      // skill_method）时降级为弱观察，不进 pending_review。
+      const classification = assessRecallCandidateClassification(candidate);
+      if (!classification.ok) {
+        log.info('recall capture candidate misclassified', {
+          captureId: capture.id,
+          suggestedType: candidate.suggestedType,
+          reasons: classification.blockingReasons,
+        });
+      }
       const requiresManualRiskGate = quality.reviewable
+        && classification.ok
         && quality.automaticIneligibilityReasons.includes('high_risk_requires_review');
-      const retainForReview = !automaticMode || quality.automaticEligible || requiresManualRiskGate;
+      const retainForReview = classification.ok
+        && (!automaticMode || quality.automaticEligible || requiresManualRiskGate);
       const teachingSignals = activeTeachingSignals.filter((signal) => (
         evidenceMessages.some((message) => message.id === signal.messageId)
       ));
@@ -1545,7 +1739,9 @@ export async function runRecallCapture(
           ...(candidate.suggestedAction ? { suggestedAction: candidate.suggestedAction } : {}),
           ...(candidate.risk ? { risk: candidate.risk } : {}),
           ...(candidate.targetAssetId ? { targetAssetId: candidate.targetAssetId } : {}),
-          forceWeakObservation: !quality.reviewable || (automaticMode && !quality.automaticEligible && !requiresManualRiskGate),
+          ...(candidate.applicableWhen ? { applicableWhen: candidate.applicableWhen } : {}),
+          ...(candidate.forbiddenWhen ? { forbiddenWhen: candidate.forbiddenWhen } : {}),
+          forceWeakObservation: !quality.reviewable || !classification.ok || (automaticMode && !quality.automaticEligible && !requiresManualRiskGate),
           captureKey: `capture-${capture.id}-${index}`,
           ...(captureSpaceId ? { spaceId: captureSpaceId } : {}),
           taskRunId: capture.terminalRunId,
@@ -1608,6 +1804,13 @@ export async function runRecallCapture(
         for (const [candidateId, candidate] of application.resolved) {
           resolvedCandidates.set(candidateId, candidate);
         }
+        if (application.deferredCandidateIds.length) {
+          log.info('recall capture automatic write deferred to manual review', {
+            captureId: id,
+            candidateIds: application.deferredCandidateIds,
+            reason: 'blocked_or_undecidable',
+          });
+        }
         if (application.failedCandidateIds.length) {
           throw new Error('one or more candidates could not be automatically written');
         }
@@ -1617,7 +1820,7 @@ export async function runRecallCapture(
     }
 
     const finishedAt = new Date().toISOString();
-    const modelUsage = normalizeModelUsage(result.meta.usage);
+    const modelUsage = extractionModelUsage;
     const hasQualifiedCandidates = candidateIds.length > 0;
     const hasReviewableCandidates = candidates.some((candidate) => (
       isRecallCandidateReviewable(resolvedCandidates.get(candidate.id) || candidate)

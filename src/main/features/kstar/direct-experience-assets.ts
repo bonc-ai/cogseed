@@ -53,9 +53,15 @@ function proposalToCandidateInput(
     suggestedAction: 'create',
     sourceRefs: evidenceRefs,
     evidenceRefs,
+    ...(proposal.applicableWhen ? { applicableWhen: proposal.applicableWhen } : {}),
+    ...(proposal.forbiddenWhen ? { forbiddenWhen: proposal.forbiddenWhen } : {}),
     ...(proposal.learningSignal ? { learningSignal: proposal.learningSignal } : {}),
     ...(proposal.learningProvenance ? { learningProvenance: proposal.learningProvenance } : {}),
     captureKey: `kstar-${source.id}-${index}`,
+    // 空间归属：KStar 会话挂空间时 workspaceId 即空间 id（bus.ts 以
+    // turnSpaceId 填充）。带上后资产落 spaceId，空间资产 tab 才能显示
+    // KStar 沉淀的资产（否则全局可见但空间过滤不到）。
+    ...(source.workspaceId && safeId(source.workspaceId) ? { spaceId: source.workspaceId } : {}),
   };
 }
 
@@ -94,7 +100,9 @@ export async function precipitateDirectExperienceFromSource(
 
       // 2. Unified promotion exit: semantic dedup + quality fusion against
       //    the asset library, then promote (or generate an update candidate).
-      const outcome = await autoApplyRecallCandidate(userId, candidate.id);
+      //    `provenance: 'kstar'` 让资产落成 system_precipitated_unverified，
+      //    与会话自动抽取线区分开——两者都没有用户确认，但可信度来源不同。
+      const outcome = await autoApplyRecallCandidate(userId, candidate.id, { provenance: 'kstar' });
       if (outcome.asset) {
         result.createdAssetIds.push(outcome.asset.id);
         const workspaceId = source.workspaceId;

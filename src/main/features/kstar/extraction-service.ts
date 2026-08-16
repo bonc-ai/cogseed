@@ -20,7 +20,10 @@ export function scopeForTask(task: string): string {
   // Short ASCII tags by design (retrieval matches scope tokens whole-word /
   // bidirectional + cross-language aliases); CJK keywords keep Chinese tasks
   // out of the weak 'general' fallback.
-  if (/report|summary|document|file|报告|总结|文档|文件/i.test(task)) return 'report';
+  // NOTE: `file`/`文件` are weak words — "文件不存在时返回默认值" is CODE
+  // logic, not a document/report task; matching them to 'report' mislabels
+  // refactor/code tasks and breaks retrieval. Strong document words only.
+  if (/report|summary|document|报告|总结|文档/i.test(task)) return 'report';
   if (/code|function|bug|test|代码|函数|缺陷|测试/i.test(task)) return 'code';
   if (/review|audit|审查|审计|检查|评审/i.test(task)) return 'review';
   if (/product|decision|architecture|产品|决策|架构/i.test(task)) return 'product';
@@ -123,6 +126,12 @@ export function proposeKstarCandidates(
     report: '报告类任务', code: '代码类任务', review: '审查类任务',
     product: '产品类任务', general: '通用',
   } as Record<string, string>)[scope] ?? scope;
+  // 规则类候选的适用范围：PRD 3.1 把"确认适用与禁止范围"列为 RuleAsset 的
+  // 最低门槛，没有边界的规则只能停在候选池。KStar 唯一有证据支撑的边界是
+  // "这条教训是在哪类任务上学到的"——就只声明这一条，不编造禁止范围。
+  const ruleBoundary = (suggestedType: string): Pick<KstarCandidateProposal, 'applicableWhen'> => (
+    suggestedType === 'rule' ? { applicableWhen: [`处理${scopeLabel}时`] } : {}
+  );
   if (verifiedWorkflow && signalAvailable) {
     const lesson = review.lesson?.trim();
     const core = lessonTitleCore(lesson || episode.t.userGoal);
@@ -141,23 +150,27 @@ export function proposeKstarCandidates(
         ? (gapType(review) ?? 'rule')
         : 'skill_method',
       suggestedScope: scope,
+      ...ruleBoundary(lesson ? (gapType(review) ?? 'rule') : 'skill_method'),
       sourceRefs,
       learningSignal: learningSignal(review),
     });
   }
 
   const type = review.confidence >= 0.7 ? gapType(review) : null;
-  if (type && review.reason) {
-    const lesson = review.lesson?.trim();
+  const gapLesson = review.lesson?.trim();
+  // 没有推理出的 lesson 就不产缺口候选。此前会退回
+  // `遇到同类情况时，应注意修正：${review.reason}`，而 review.reason 在推断出来的
+  // 复盘里往往是一句诊断（"expected 'oi' but actual was …"）——把诊断当认知写进
+  // 候选池，用户看到的是一条读不懂也用不上的"规则"。宁可不产。
+  if (type && gapLesson) {
+    const lesson = gapLesson;
     proposals.push({
-      // Same for gap lessons: the reasoned judgment replaces the template.
-      judgment: lesson
-        ? lesson
-        : `遇到同类情况时，应注意修正：${review.reason}`,
-      summary: `待修正经验：${lessonTitleCore(lesson || review.reason)}（${scopeLabel}）`,
+      judgment: lesson,
+      summary: `待修正经验：${lessonTitleCore(lesson)}（${scopeLabel}）`,
       uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: type,
       suggestedScope: scope,
+      ...ruleBoundary(type),
       sourceRefs,
       learningSignal: learningSignal(review),
     });

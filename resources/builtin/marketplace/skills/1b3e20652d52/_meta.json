@@ -1,6 +1,6 @@
 {
-  "version": "0.1.1",
-  "updated_at": "2026-08-10T00:00:00",
+  "version": "0.2.0",
+  "updated_at": "2026-08-16T12:00:00+08:00",
   "nseap": {
     "standard_id": "nseap-skill-standard-v1",
     "skill_class": "execution",

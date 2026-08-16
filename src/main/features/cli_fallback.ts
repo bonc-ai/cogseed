@@ -3,10 +3,10 @@
  *
  * When NO API-key model is configured (no entry in the auth profiles, no
  * usable provider), the commander cannot answer by itself. The user's own
- * signed-in CLI agent (Claude Code / Codex / OpenCode, official account) is
- * the only local execution backend, so conversations are routed to it. This
- * module persists which CLI is the preferred fallback, and whether the user
- * has been told about the state.
+ * signed-in CLI agent (Claude Code / Codex / OpenCode / WorkBuddy, official
+ * account) is the only local execution backend, so conversations are routed
+ * to it. This module persists which CLI is the preferred fallback, and
+ * whether the user has been told about the state.
  *
  * Storage: `<uid>/local/config/cli-fallback.json` — machine-local preference,
  * never synced.
@@ -19,11 +19,16 @@ import { userLocalConfigDir } from '../paths';
 const FILE = 'cli-fallback.json';
 
 interface CliFallbackPrefs {
-  /** Preferred fallback CLI type: 'claude' | 'codex' | 'opencode' | ''. */
+  /** Preferred fallback CLI type: 'claude' | 'codex' | 'opencode' |
+   *  'workbuddy' | ''. */
   cli: string;
   /** Set once the settings UI has explained the no-API fallback state. */
   noticeShown?: boolean;
 }
+
+/** CLI types the commander can fall back to (mirrors the onboarding
+ *  connect list — a CLI connected there must be selectable here). */
+const FALLBACK_CLI_TYPES = ['claude', 'codex', 'opencode', 'workbuddy'] as const;
 
 function filePath(uid: string): string {
   return path.join(userLocalConfigDir(uid), FILE);
@@ -33,7 +38,7 @@ function read(uid: string): CliFallbackPrefs {
   try {
     const raw = JSON.parse(fs.readFileSync(filePath(uid), 'utf8')) as Partial<CliFallbackPrefs>;
     const cli = typeof raw.cli === 'string' ? raw.cli : '';
-    return { cli: ['claude', 'codex', 'opencode'].includes(cli) ? cli : '', noticeShown: !!raw.noticeShown };
+    return { cli: (FALLBACK_CLI_TYPES as readonly string[]).includes(cli) ? cli : '', noticeShown: !!raw.noticeShown };
   } catch {
     return { cli: '', noticeShown: false };
   }
@@ -51,7 +56,7 @@ export function getCliFallback(uid: string): string {
 
 /** Set the preferred fallback CLI ('' clears it). Returns the saved value. */
 export function setCliFallback(uid: string, cli: string): string {
-  const next = ['claude', 'codex', 'opencode'].includes(cli) ? cli : '';
+  const next = (FALLBACK_CLI_TYPES as readonly string[]).includes(cli) ? cli : '';
   write(uid, { ...read(uid), cli: next });
   return next;
 }

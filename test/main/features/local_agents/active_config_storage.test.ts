@@ -55,7 +55,64 @@ describe('Active CLI Config Storage', () => {
     expect(providers).toHaveLength(1);
     expect(providers[0].name).toBe('Claude (Active)');
     expect(providers[0].apiKey).toBe('sk-ant-active-key');
-    expect(providers[0].source).toBe('active_cli');
+    // addCustomProvider only recognizes 'ccswitch' as a special source;
+    // everything else (including active-cli configs) is stored as 'manual'.
+    expect(providers[0].source).toBe('manual');
+  });
+
+  it('binds a chat entry when the stored config carries a matching default model', async () => {
+    // Root-cause regression: without `models` on the provider,
+    // auth.addEntry's isCustomProviderModelAllowed check rejects the bind,
+    // so the stored API never appears in settings 已配置 / becomes usable.
+    const customProviders = await import('../../../../src/main/features/custom_providers.js');
+    const auth = await import('../../../../src/main/features/auth.js');
+
+    const addResult = customProviders.addCustomProvider(UID, {
+      name: 'Claude (当前使用)',
+      protocol: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'sk-ant-active-key',
+      models: ['claude-sonnet-4-6'], // must match the bound entry model
+      source: 'manual',
+      externalId: 'claude:active',
+    });
+    expect(addResult.ok).toBe(true);
+    const providerId = (addResult as { id: string }).id;
+
+    const bound = await auth.addEntry({
+      provider: `cp:${providerId}`,
+      model: 'claude-sonnet-4-6',
+      profileId: `cp:${providerId}`,
+      position: 'front',
+    });
+    expect(bound.entryId).toBeTruthy();
+
+    const { entries } = await auth.listEntries({ includeUnavailable: true });
+    const ours = entries.filter((e) => e.provider === `cp:${providerId}`);
+    expect(ours).toHaveLength(1);
+    expect(ours[0].model).toBe('claude-sonnet-4-6');
+  });
+
+  it('rejects binding an entry when the provider has no matching models (root-cause guard)', async () => {
+    const customProviders = await import('../../../../src/main/features/custom_providers.js');
+    const auth = await import('../../../../src/main/features/auth.js');
+
+    const addResult = customProviders.addCustomProvider(UID, {
+      name: 'Claude (当前使用)',
+      protocol: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'sk-ant-active-key',
+      source: 'manual', // no models — the historical bug shape
+      externalId: 'claude:active',
+    });
+    expect(addResult.ok).toBe(true);
+    const providerId = (addResult as { id: string }).id;
+
+    await expect(auth.addEntry({
+      provider: `cp:${providerId}`,
+      model: 'claude-sonnet-4-6',
+      profileId: `cp:${providerId}`,
+    })).rejects.toThrow(/model not found/i);
   });
 
   it('does not duplicate when storing the same active config twice', async () => {
@@ -125,5 +182,20 @@ describe('Active CLI Config Storage', () => {
     expect(result.ok).toBe(true);
     const providers = customProviders.listCustomProviders(UID);
     expect(providers[0].protocol).toBe('openai');
+  });
+
+  it('reads a Codex API key stored under OPENAI_API_KEY (env-style shape)', async () => {
+    const codexDir = path.join(tempHome, '.codex');
+    fs.mkdirSync(codexDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(codexDir, 'auth.json'),
+      JSON.stringify({ OPENAI_API_KEY: 'sk-codex-api-active' }),
+    );
+
+    const { readActiveCliConfig } = await import('../../../../src/main/features/local_agents/active_config.js');
+    const config = readActiveCliConfig('codex', tempHome);
+    expect(config).toBeTruthy();
+    expect(config?.mode).toBe('api');
+    expect(config?.apiKey).toBe('sk-codex-api-active');
   });
 });

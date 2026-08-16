@@ -103,7 +103,10 @@ export interface CognitionReuseReceiptView {
 export type CognitionAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
 // 与 RecallAbilityAssetRecord 的治理状态保持同步，另加展示层特有的 `candidate`
 // ——候选还没 promote 成资产，在资产侧没有对应状态。
-export type CognitionAssetMaturity = 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable';
+// PRD 3.6 的成熟度阶梯顶到 effectiveness_validated。曾经多出的 'stable' 档
+// 从未被任何代码写入（setAbilityAssetMaturity 只写 transfer_validated 与
+// effectiveness_validated），是个到不了的状态，已移除。
+export type CognitionAssetMaturity = 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
 export type CognitionAssetStatus =
   | 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked' | 'candidate';
 

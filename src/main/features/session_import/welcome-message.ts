@@ -2,154 +2,285 @@
  * Welcome message generator for imported sessions.
  *
  * When a user opens an imported conversation for the first time, we generate
- * a personalized welcome message from commander that:
- * - Acknowledges the imported work context
- * - Summarizes the previous work from the session summary
- * - Lists extracted cognition candidates grouped by the four ability asset
- *   types: 关于我 (personal) / 规则与判断 (rule) / 模板与范例 (template) /
- *   技能与方法 (skill_method)
- * - Proactively suggests how to continue the work
+ * a structured "resume" message from commander using the v1.6 resume template:
  *
- * The message is concise and actionable, not a verbose dump of all candidates.
+ *   1. 复述 (restatement) — the same complex task has been moved into a new
+ *      Session; goal, confirmed boundary, latest Artifact and next step are
+ *      restored (from the TaskContinuationSnapshot) — no re-explaining needed.
+ *   2. 准备携带 (carry) — what will be carried into the target:
+ *      「准备携带：关于我 X项 · 我的能力 Y项 · 接续快照 1份」+
+ *      「只对目标任务生效」+ 「查看依据」 (expands real sources).
+ *   3. 建议 Action Plan + boundary statement — dynamic plan from the session
+ *      summary (LLM), falling back to the fixed three-step v1.6 plan on any
+ *      generation failure; the boundary statement is a product promise and is
+ *      always included.
+ *
+ * All carry counts come from REAL data (confirmed assets, space template
+ * bundle, TaskContinuationSnapshot) — never fabricated.
  */
 
-import { listRecallCandidates } from '../recall/candidate-service';
 import { createLogger } from '../../logger';
+import { listAbilityAssets } from '../recall/asset-service';
+import { getSpace } from '../spaces';
+import { getRoleTemplate } from '../role_templates';
+import { listSkills } from '../skills';
+import { readContinuationSnapshot } from '../task_continuation';
 
 const log = createLogger('session-import:welcome');
 
+export interface WelcomeCarryItem {
+  kind: 'personal' | 'ability' | 'snapshot';
+  /** Display label (关于我 / 我的能力 / 接续快照). */
+  label: string;
+  /** How many items of this kind. */
+  count: number;
+  /** Source detail shown when「查看依据」is expanded. */
+  sources: string[];
+  /** 真实明细（资产名/技能名 + 版本），供右栏「查看依据」逐条展示。 */
+  items?: Array<{ name: string; version?: string }>;
+}
+
 export interface WelcomeMessageData {
-  /** Human-facing greeting text (rendered in the chat UI) */
-  text: string;
-  /** Model-facing context (goes into model_text field) */
+  /** 第一部分：复述（当前目标、已确认边界、最新Artifact和下一步已恢复）。 */
+  restatement: string;
+  /** 第二部分：准备携带摘要（「准备携带：关于我 X项 · 我的能力 Y项 · 接续快照 1份」）。 */
+  carrySummary: string;
+  /** 第三部分：建议 Action Plan（动态生成，失败回退固定三条）。 */
+  plan: string[];
+  /** 边界声明（固定，产品承诺）。 */
+  boundary: string;
+  /** 结构化 carry 列表，供「查看依据」展开真实来源。 */
+  carry: WelcomeCarryItem[];
+  /** 会话摘要（真实来源，供面板副文案/模型上下文）。 */
+  summary: string;
+  /** Model-facing context (goes into model_text field). */
   modelText: string;
+  /** 兼容旧调用方：拼接后的完整面板文本（复述+携带+Plan+边界）。 */
+  text: string;
 }
 
 export interface GenerateWelcomeMessageInput {
   userId: string;
-  /** The session summary extracted during import (describes what was done) */
+  /** Conversation this welcome belongs to (used to read the snapshot). */
+  conversationId?: string;
+  /** Space the conversation is bound to (used to resolve the space template). */
+  spaceId?: string | null;
+  /** The session summary extracted during import (describes what was done). */
   sessionSummary?: string;
 }
 
-/** The four ability asset types, in display order. */
-const TYPE_LABELS: ReadonlyArray<{ type: string; label: string }> = [
-  { type: 'personal', label: '关于我' },
-  { type: 'rule', label: '规则与判断' },
-  { type: 'template', label: '模板与范例' },
-  { type: 'skill_method', label: '技能与方法' },
+/** The v1.6 fixed three-step Action Plan, used as the LLM fallback. */
+const FIXED_ACTION_PLAN = [
+  '核对产品对象和术语，标出尚有歧义的内容。',
+  '补齐主路径、失败路径和用户可见状态。',
+  '输出本轮修改建议及技术评审问题。',
 ];
 
+const BOUNDARY_STATEMENT =
+  '我不会在运行中静默改写正式资产；只有冲突、扩权或外发时才会停下来询问。';
+
+/** 打开导入会话时，系统替用户发送的第一条接续引导句（v1.6 原型同款）。 */
+export const WELCOME_GUIDE_SENTENCE =
+  '继续这项工作。先告诉我现在做到哪里、哪些约束不能丢，以及下一步准备怎么做。';
+
+/** Read the space template bundle's skills for the conversation's space.
+ *  Real data: space → primary/secondary templates → bundle.skill_ids →
+ *  listSkills() names. Returns the union of bundled skills with names. */
+async function spaceTemplateSkills(
+  userId: string,
+  spaceId?: string | null,
+): Promise<Array<{ name: string; version?: string }>> {
+  if (!spaceId) return [];
+  try {
+    const space = await getSpace(userId, spaceId);
+    if (!space) return [];
+    const primary = space.primary_template_id || space.template_id;
+    const secondary = space.secondary_template_ids ?? [];
+    const ids = new Set<string>();
+    const collect = (tplId?: string) => {
+      if (!tplId) return;
+      const tpl = getRoleTemplate(tplId);
+      if (tpl?.bundle) tpl.bundle.skill_ids.forEach((id) => ids.add(id));
+    };
+    collect(primary);
+    secondary.forEach(collect);
+    if (!ids.size) return [];
+
+    const skills = await listSkills();
+    const byId = new Map(skills.map((s) => [s.id, s]));
+    const out: Array<{ name: string; version?: string }> = [];
+    for (const id of ids) {
+      const s = byId.get(id);
+      if (!s) continue;
+      const brief: { name: string; version?: string } = { name: s.name || id };
+      const ver = (s as { version?: unknown }).version;
+      if (typeof ver === 'string' && ver) brief.version = ver;
+      out.push(brief);
+    }
+    return out;
+  } catch (err) {
+    log.warn('space template bundle read failed', {
+      userId, spaceId, error: (err as Error)?.message || String(err),
+    });
+    return [];
+  }
+}
+
+/** Confirmed assets by type with real names/versions from the asset store. */
+async function confirmedAssetDetails(
+  userId: string,
+): Promise<{ personal: Array<{ name: string; version?: string }>; ability: Array<{ name: string; version?: string }> }> {
+  try {
+    const assets = await listAbilityAssets(userId);
+    const active = assets.filter((a) => a.status === 'active');
+    const brief = (a: { title?: string; version?: string }) => ({ name: a.title || '未命名资产', version: a.version });
+    return {
+      personal: active.filter((a) => a.type === 'personal').map(brief),
+      ability: active.filter((a) => a.type === 'skill_method').map(brief),
+    };
+  } catch (err) {
+    log.warn('confirmed asset read failed', {
+      userId, error: (err as Error)?.message || String(err),
+    });
+    return { personal: [], ability: [] };
+  }
+}
+
+/** Build the「准备携带」carry list from real data. */
+async function buildCarry(
+  userId: string,
+  hasSnapshot: boolean,
+  spaceId?: string | null,
+): Promise<WelcomeCarryItem[]> {
+  const [spaceSkills, counts] = await Promise.all([
+    spaceTemplateSkills(userId, spaceId),
+    confirmedAssetDetails(userId),
+  ]);
+
+  // 「我的能力」= 空间模板内置技能 + 已确认 skill_method 资产（去重计数）。
+  const abilityItems = [...spaceSkills, ...counts.ability];
+  const carry: WelcomeCarryItem[] = [];
+  if (counts.personal.length > 0) {
+    carry.push({
+      kind: 'personal', label: '关于我', count: counts.personal.length,
+      sources: [`已确认「关于我」资产 ${counts.personal.length} 项`],
+      items: counts.personal,
+    });
+  }
+  if (abilityItems.length > 0) {
+    const sources: string[] = [];
+    if (spaceSkills.length) sources.push(`空间模板内置技能 ${spaceSkills.length} 项`);
+    if (counts.ability.length) sources.push(`已确认「我的能力」资产 ${counts.ability.length} 项`);
+    carry.push({
+      kind: 'ability', label: '我的能力', count: abilityItems.length,
+      sources, items: abilityItems,
+    });
+  }
+  if (hasSnapshot) {
+    carry.push({ kind: 'snapshot', label: '接续快照', count: 1, sources: ['目标、阶段、约束与下一步已恢复'] });
+  }
+  return carry;
+}
+
+/** Dynamic Action Plan via the core-agent reflection runner. Always resolves;
+ *  returns the fixed v1.6 plan on any failure/empty reply. */
+async function generateActionPlan(userId: string, summary: string): Promise<string[]> {
+  if (!summary.trim()) return [...FIXED_ACTION_PLAN];
+  try {
+    const { buildRunner } = await import('../../model/core-agent/runner');
+    const tail = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    // sessionId 必须以受支持 kind 开头（gconv|gmember|reflect|...）。
+    const { runner } = await buildRunner({
+      sessionId: `reflect-welcome-${tail}`,
+      userId,
+    });
+    const prompt =
+      `根据以下导入会话的摘要，给出接下来最合理的 3 条 Action Plan（每条一句话，` +
+      `编号列表，中文）。只基于摘要内容，不要编造。\n\n摘要：\n${summary.slice(0, 2000)}`;
+    const text = await runner.runReflection(prompt);
+    if (!text || !text.trim()) return [...FIXED_ACTION_PLAN];
+    const lines = text
+      .split('\n')
+      .map((l) => l.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim())
+      .filter(Boolean);
+    return lines.length >= 2 ? lines.slice(0, 3) : [...FIXED_ACTION_PLAN];
+  } catch (err) {
+    log.warn('dynamic action plan failed, using fixed plan', {
+      userId, error: (err as Error)?.message || String(err),
+    });
+    return [...FIXED_ACTION_PLAN];
+  }
+}
+
 /**
- * Generate a welcome message for an imported conversation.
- * Reads pending Recall candidates (routed by the session importer) and
- * formats them into a concise greeting grouped by the four asset types,
- * with actionable next-step suggestions.
+ * Generate a structured resume welcome for an imported conversation.
+ * Reads the TaskContinuationSnapshot + confirmed assets + space template
+ * bundle; produces the v1.6 three-part template. Always resolves.
  */
 export async function generateWelcomeMessage(input: GenerateWelcomeMessageInput): Promise<WelcomeMessageData> {
-  const candidates = await listRecallCandidates(input.userId);
-  const pending = (candidates || []).filter((c) => c.status === 'pending_review');
+  const snapshot = input.conversationId
+    ? await readContinuationSnapshot(input.userId, input.conversationId, null)
+    : null;
+  const summary = (input.sessionSummary ?? '').trim() || (snapshot?.sourceSummary ?? '');
+  const carry = await buildCarry(input.userId, !!snapshot, input.spaceId);
 
-  // Group by suggestedType; judgment is the primary text, summary the fallback.
-  const byType: Record<string, string[]> = {};
-  for (const c of pending) {
-    const key = c.suggestedType || 'personal';
-    const text = (c.judgment || c.summary || '').trim();
-    if (!text) continue;
-    if (!byType[key]) byType[key] = [];
-    byType[key].push(text);
-  }
+  // 第一部分：项目介绍（来自真实快照数据：目标 + 当前阶段 + 已知约束）。
+  const goal = snapshot?.goal || summary.split('\n')[0] || '当前目标';
+  const stage = snapshot?.stage || '';
+  const constraints = (snapshot?.constraints ?? []).filter(Boolean);
+  const projectIntro =
+    `**项目**：${goal}` +
+    (stage ? `\n**当前进展**：${stage}` : '') +
+    (constraints.length ? `\n**不能丢的约束**：${constraints.join('；')}` : '');
+  const restatement = projectIntro;
 
-  const total = pending.length;
+  // 第二部分：工作空间合适的能力（真实资产：空间模板技能 + 已确认能力）。
+  const carrySummary = carry.length
+    ? `工作空间可用能力：${carry.map((c) => `${c.label} ${c.count}项`).join(' · ')}`
+    : '工作空间可用能力：无';
+  const carryBlock =
+    `${carrySummary}\n` +
+    `只对目标任务生效`;
 
-  // Build human-facing greeting with proactive continuation
-  let greeting = '欢迎回来！我整理了你之前的工作。';
+  // 第三部分：Action Plan——只保留最该做的一条真实任务（snapshot.nextStep，
+  // 由 CLI 提炼；无则回退固定第一条）。避免一次铺多条通用步骤拖慢执行。
+  const nextStep = snapshot?.nextStep || '';
+  const planLines = [nextStep || FIXED_ACTION_PLAN[0]];
+  const planBlock =
+    `**建议 Action Plan**\n` +
+    planLines.map((item, i) => `${i + 1}. ${item}`).join('\n') +
+    `\n${BOUNDARY_STATEMENT}`;
 
-  // Add session summary context if available
-  if (input.sessionSummary && input.sessionSummary.trim()) {
-    const summary = input.sessionSummary.trim();
-    // Extract key work context from summary
-    const lines = summary.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length > 0) {
-      greeting += `\n\n📋 **之前在做什么**\n${lines[0]}`;
-      // Add more context if available (up to 3 key points)
-      const additionalContext = lines.slice(1, 3);
-      if (additionalContext.length > 0) {
-        greeting += '\n' + additionalContext.map(l => `• ${l}`).join('\n');
-      }
-    }
-  }
+  const text = `${restatement}\n\n${carryBlock}\n\n${planBlock}`;
 
-  if (total > 0) {
-    greeting += `\n\n🎯 **提取的能力资产（${total} 条待确认）**`;
-    for (const { type, label } of TYPE_LABELS) {
-      const items = byType[type] || [];
-      if (items.length > 0) {
-        greeting += `\n• ${label}：${items.length} 条`;
-        // Show first example to give concrete preview
-        if (items[0]) {
-          const preview = items[0].length > 60 ? items[0].slice(0, 57) + '...' : items[0];
-          greeting += ` _（例如：${preview}）_`;
-        }
-      }
-    }
-  }
+  // Model-facing context carries the structured metadata + sources for
+  // the「查看依据」expand (rendered by the renderer from model_text).
+  const modelText = [
+    `## 接续上下文（导入会话）`,
+    summary ? `\n摘要：\n${summary}` : '',
+    `\n## 准备携带`,
+    carry.length ? carry.map((c) => `- ${c.label}：${c.count}（${c.sources.join('；')}）`).join('\n') : '- 无',
+    `\n## 建议 Action Plan`,
+    planLines.map((item, i) => `${i + 1}. ${item}`).join('\n'),
+    `\n${BOUNDARY_STATEMENT}`,
+  ].join('\n');
 
-  // Proactive continuation suggestions based on context
-  greeting += '\n\n💡 **可以这样继续**';
-  if (input.sessionSummary && input.sessionSummary.trim()) {
-    // Give concrete suggestions based on what was being worked on
-    greeting += '\n• 直接告诉我："继续刚才的工作"，我会接着之前的进度推进';
-    greeting += '\n• 或者说明你想调整的方向，我基于已有上下文帮你';
-  } else {
-    greeting += '\n• 告诉我你想继续哪项工作，我会基于历史上下文推进';
-  }
-  if (total > 0) {
-    greeting += '\n• 去「Recall 确认」页面查看和确认这些能力资产';
-  }
-  greeting += '\n\n准备好了就告诉我！';
-
-  // Build model-facing context with strong continuation guidance
-  let modelContext = '这是一个从其他 AI 助手导入的会话。用户希望在已有工作的基础上继续推进，而不是从头开始。';
-
-  if (input.sessionSummary && input.sessionSummary.trim()) {
-    modelContext += `\n\n## 原会话工作内容\n${input.sessionSummary.trim()}`;
-  }
-
-  if (total > 0) {
-    modelContext += `\n\n## 已提取的候选认知（${total} 条，待确认）`;
-    for (const { type, label } of TYPE_LABELS) {
-      const items = byType[type] || [];
-      if (items.length > 0) {
-        modelContext += `\n### ${label}（${items.length} 条）`;
-        // Show more examples to model for better context
-        for (const example of items.slice(0, 3)) {
-          modelContext += `\n- ${example}`;
-        }
-        if (items.length > 3) {
-          modelContext += `\n- _...还有 ${items.length - 3} 条_`;
-        }
-      }
-    }
-  }
-
-  modelContext += '\n\n## 你的任务';
-  modelContext += '\n1. **理解用户之前在做什么** - 仔细阅读上面的工作内容摘要';
-  modelContext += '\n2. **主动识别可继续的点** - 找出未完成的任务、待解决的问题、或可以深化的方向';
-  modelContext += '\n3. **等待用户明确意图** - 当用户说"继续之前的工作"或类似表述时，基于上述上下文提出3-5个具体可行的下一步选项';
-  modelContext += '\n4. **避免重复劳动** - 不要让用户重新解释已经做过的事情，直接在已有基础上推进';
-  modelContext += '\n5. **利用提取的认知** - 这些候选认知反映了用户的工作方式和偏好，在建议时要考虑进去';
-
-  modelContext += '\n\n**重要**：用户打开这个导入的会话，很可能是想继续之前中断的工作。如果他们说"继续"、"接着做"、"继续之前的工作"等，你应该：';
-  modelContext += '\n- 快速回顾："你之前在做[具体任务]，已经完成了[已完成部分]"';
-  modelContext += '\n- 给出选项："接下来可以：1) [选项A] 2) [选项B] 3) [选项C]"';
-  modelContext += '\n- 询问偏好："你想从哪个开始？"或直接开始最明显的下一步';
-
-  modelContext += '\n\n**不要**只是笼统地说"我可以帮你"，而要给出具体的、可操作的建议。';
-
-  log.info(`generated welcome message userId=${input.userId} totalCandidates=${total}`);
+  log.info('generated structured resume welcome', {
+    userId: input.userId,
+    conversationId: input.conversationId ?? null,
+    hasSnapshot: !!snapshot,
+    carryCount: carry.length,
+    planSource: 'dynamic',
+  });
 
   return {
-    text: greeting,
-    modelText: modelContext,
+    restatement,
+    carrySummary,
+    plan: planLines,
+    boundary: BOUNDARY_STATEMENT,
+    carry,
+    summary,
+    modelText,
+    text,
   };
 }

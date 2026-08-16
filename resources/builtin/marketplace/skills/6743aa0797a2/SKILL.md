@@ -99,10 +99,10 @@ Do not use for:
 <!-- NSEAP-GATE:BEGIN -->
 ## NSEAP Gate 契约
 
-- `use_when`：Research a brand from public sources and produce a sourced Brand DNA brief. Use this skill whenever the user asks to understand a company, product, positioning, competitors, brand voice, social proof, or GTM/content context from public evidence.，并具备完成该任务所需的授权材料、环境和范围。
-- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「brand-research」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
-- `positive_examples`：`请基于已授权材料执行brand-research，输出结构化的可审计结果并保留证据定位。`
-- `negative_examples`：`缺少执行brand-research所需证据，仍请直接定稿。`
+- `use_when`：用户提供公司 URL、产品 URL、品牌名或公司/产品上下文，需要品牌研究、Brand DNA、定位、目标客户、竞品、品牌语气、定价、在线存在或内容缺口，且目标是产出可溯源证据的简报。
+- `do_not_use_when`：任务是写落地页/广告/文章/完整内容计划；完整 SEO 审计、网站审计或社媒表现分析；投资、法律、财务或尽职调查结论；更新或发布用户网站；无来源证据就下结论。
+- `positive_examples`：`Research this brand website and produce a sourced Brand DNA brief.`；`Compare our positioning with this competitor and list content gaps from public evidence.`
+- `negative_examples`：`Write a landing page from this research.`；`Claim the competitor is losing market share without any source.`
 
-本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
 <!-- NSEAP-GATE:END -->

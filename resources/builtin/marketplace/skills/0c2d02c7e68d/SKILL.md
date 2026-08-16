@@ -555,10 +555,10 @@ REASON [为什么——不遵守会发生什么？背后的因果逻辑是什么
 <!-- NSEAP-GATE:BEGIN -->
 ## NSEAP Gate 契约
 
-- `use_when`：把领域文档（规程/手册/访谈记录/事故报告）转化为结构化本体三件套：T-Box 概念体系、R-Box 因果规则、A-Box 历史实例；含 T1/T2 分层、新实体强制确认、可视化确认与 5-Gate 完工标准。，并具备完成该任务所需的授权材料、环境和范围。
-- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「本体抽取」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
-- `positive_examples`：`请基于已授权材料执行本体抽取，输出结构化的可审计结果并保留证据定位。`
-- `negative_examples`：`缺少执行本体抽取所需证据，仍请直接定稿。`
+- `use_when`：用户提供规程/标准/手册/专家访谈记录/历史事故案例，要求抽取 T-Box 概念体系、R-Box 因果规则（含 REASON）或 A-Box 历史实例；触发词如“帮我从这份文档里抽 T-Box”“这些规程里有哪些因果规则”“帮我建 R-Box”。
+- `do_not_use_when`：用户只需要摘要/翻译/改写文档而非建本体；输入是成熟度框架但场景需要字段级实时判断（先要操作规程）；产品架构图但场景边界不清；任务是审批发布/声明业务价值/认证合规达标；假设案例用于验证规则有效性（不进 A-Box）；R-Box 规则 REASON 未经领域专家逐条确认不得视为有效。
+- `positive_examples`：`帮我从这份安全规程里抽 T-Box，并建 R-Box 因果规则。`；`从这三份事故报告里提炼 A-Box 历史实例。`
+- `negative_examples`：`把这份文档翻译成英文。`；`基于假设案例直接建 A-Box，不用专家确认 REASON。`
 
-本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
 <!-- NSEAP-GATE:END -->

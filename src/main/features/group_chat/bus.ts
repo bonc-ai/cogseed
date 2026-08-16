@@ -1268,6 +1268,11 @@ interface CidState {
     projectionId?: string;
     forecastId?: string;
     wakeRequestId?: string;
+    /** 本次运行里真正落过 ContextReuseReceipt 的轮次 id。
+     *  回执按 `turn-<turnId>` 存（与 execution-records 同名），终态事件带上这份
+     *  清单，迁移证明就能显式关联到"哪一次真实加载"——不靠时间窗反查，也不靠
+     *  execution id 推断粘合。 */
+    reuseTurnIds?: string[];
   };
 }
 
@@ -1290,6 +1295,9 @@ export interface TaskTerminalEvent {
   execution_id?: string;
   projection_id?: string;
   forecast_id?: string;
+  /** 本次运行里落过 ContextReuseReceipt 的轮次 id（回执键为 `turn-<id>`）。
+   *  迁移证明凭这份清单找到真实加载凭证，一一对应，不做推断。 */
+  reuse_turn_ids?: string[];
   wake_request_id?: string;
 }
 
@@ -1501,6 +1509,7 @@ function _emitTaskRunTerminalIfQuiescent(
       ...(run.projectionId ? { projection_id: run.projectionId } : {}),
       ...(run.forecastId ? { forecast_id: run.forecastId } : {}),
       ...(run.wakeRequestId ? { wake_request_id: run.wakeRequestId } : {}),
+      ...(run.reuseTurnIds?.length ? { reuse_turn_ids: [...run.reuseTurnIds] } : {}),
     };
     if (!event.projection_id || !event.logical_run_id || !event.wake_request_id) {
       try {
@@ -2158,7 +2167,27 @@ async function _enqueueBody(
       if (scope) {
         const bound = new Set(scope.agents);
         const before = to;
-        to = to.filter((id) => RESERVED_IDS.has(id) || bound.has(id));
+        // CLI-backed agents are exempt from project-scope filtering: they run
+        // on the local machine with their own credentials (no project API
+        // budget consumed), and the user picks them explicitly (composer chip,
+        // `@name` mention, or the no-model → CLI fallback). Dropping them here
+        // would route every CLI message back to the commander, which defeats
+        // the fallback and `@Codex`/`@Claude` mentions in a project-scoped chat.
+        const kept: string[] = [];
+        for (const id of to) {
+          if (RESERVED_IDS.has(id) || bound.has(id)) {
+            kept.push(id);
+            continue;
+          }
+          try {
+            const ag = await agentsFeat.getAgent(id);
+            if (ag && ag.runtime && ag.runtime.kind === 'cli') {
+              kept.push(id);
+              continue;
+            }
+          } catch { /* fall through to drop */ }
+        }
+        to = kept;
         if (to.length !== before.length) {
           const dropped = before.filter((id) => !to.includes(id));
           log.info(
@@ -2543,8 +2572,8 @@ async function _enqueueBody(
 
   // Dispatch to non-user recipients. User routing remains the ordinary
   // group-chat rule (user -> Commander unless an explicit floor/mention
-  // chooses another actor). KStar bookkeeping happens only through
-  // Commander-owned kstar_control calls and cannot gate this turn.
+  // chooses another actor). KStar bookkeeping is host-governed (routing /
+  // projection / forecast / closure all host-side) and cannot gate this turn.
 
   let backendFollowupHandled = false;
   if (backendFollowupAgentId) {
@@ -3937,6 +3966,14 @@ async function runActorTurnBody(
           const { reuseRefsForTurn, truncatedByBudget } = await import(
             "../recall/inherited-cognition-prompt"
           );
+          // 回执落成即登记到本次运行：终态事件靠这份清单把迁移证明关联到
+          // 真实加载凭证。登记发生在注入的同一处，与回执用同一份事实。
+          if (state.taskRun) {
+            const turns = state.taskRun.reuseTurnIds || [];
+            if (!turns.includes(item.turnId)) {
+              state.taskRun.reuseTurnIds = [...turns, item.turnId];
+            }
+          }
           await recordInheritedCognitionReuse(
             uid,
             cid,
@@ -4643,15 +4680,18 @@ async function runActorTurnBody(
       );
     }
     if (extracted.patches.length) {
+      // Strip the patch blocks from the surfaced text regardless of whether
+      // the workflow context is present — a `<context-patch>` is machine
+      // metadata, never user-facing. Applying it to shared context is a
+      // bonus; leaving it in the reply text is a leak (users see raw JSON).
+      workingText = extracted.cleanText || workingText;
       try {
         const activeContext = await applyActiveContextPatches(
           uid,
           cid,
           extracted.patches,
         );
-        if (activeContext) {
-          workingText = extracted.cleanText;
-        } else {
+        if (!activeContext) {
           log.warn(
             `context_patch ignored because no active shared context cid=${cid} actor=${actor.id}`,
           );
@@ -6272,8 +6312,8 @@ function kstarApprovalBlockedToolResult(code: string, message: string): { conten
 }
 
 /** Host-side approval guard for privileged agent dispatch. When the active
- *  KStar requirement carries a Projection (the Commander requested one through
- *  kstar_control), execution is paused until the Projection is confirmed AND a
+ *  KStar requirement carries a Projection (the host auto-confirms it at task
+ *  open), execution is paused until the Projection is confirmed AND a
  *  Forecast is committed. Returns verified provenance IDs — never model
  *  claims — and stamps them onto the current taskRun so the terminal event
  *  carries them. Ordinary chat and tools without an active Projection are
@@ -10828,6 +10868,26 @@ async function _buildCliPrompt(
     if (!text) continue;
     sliceLines.push(`[${m.from} → ${to}] ${text}`);
   }
+
+  // Imported-conversation context: when a prior commander message carries a
+  // distilled model_text summary (session import), surface it to the CLI so
+  // it doesn't have to re-derive "what was done / what can't be dropped"
+  // from a cold start. This is the compressed CogSeed-side context the user
+  // expects to travel with the handoff — without it a cold CLI re-scans the
+  // whole workspace (slow first turn). Reads the conversation file directly
+  // (not the actor-scoped slice) because the seed's model_text is exactly
+  // what the CLI must not have to re-discover.
+  const importedSummary = await _extractImportedCliContext(uid, cid);
+  if (importedSummary) {
+    sliceLines.unshift(
+      `[commander → user] (导入会话接续上下文) ${importedSummary}`,
+    );
+    sliceLines.push(
+      `[系统] 接续上下文已在上方完整提供（目标、约束、已完成工作、下一步）。直接执行用户的当前任务即可，不要重新扫描工作区、不要重读历史日志、不要运行完整测试套件来“恢复上下文”——只为当前任务做最小必要的检查。`,
+    );
+    log.info(`cli prompt: injected imported context cid=${cid} agent=${agent.agent_id} chars=${importedSummary.length}`);
+  }
+
   if (!sliceLines.length) return render("");
 
   const baseBytes = Buffer.byteLength(render(""), "utf8");
@@ -10884,6 +10944,35 @@ function _priorVisibleCliHistory(
 ): GroupMessage[] {
   const idx = slice.findIndex((m) => m.id === item.msgId);
   return idx >= 0 ? slice.slice(0, idx) : slice;
+}
+
+/** Distilled summary from an imported conversation's commander seed message
+ *  (materialize writes `model_text` = "以下是用户从...提炼简报...<summary>").
+  *  Returns the trimmed summary, or '' when there is none. */
+async function _extractImportedCliContext(uid: string, cid: string): Promise<string> {
+  const re = /以下是用户从[^\n]*提炼简报[^\n]*\n*\s*([\s\S]+)/;
+  try {
+    const chats = await import("../chats");
+    // Resolve the conversation's project so the correct jsonl (root vs
+    // project-scoped) is read for the seed's model_text.
+    let projectId: string | null = null;
+    try {
+      const conv = await chats.getConversation(uid, cid);
+      projectId = (conv as any)?.project_id ?? null;
+    } catch { /* fall through — root path read below */ }
+    const page = await chats.getMessagesPage(uid, cid, 2000, null, projectId || null);
+    const messages = page.history;
+    for (const m of messages) {
+      const modelText = (m as any)?.model_text;
+      if (m.from !== "commander" || typeof modelText !== "string") continue;
+      const match = re.exec(modelText);
+      const summary = (match && match[1]) ? match[1].trim() : "";
+      if (summary) return summary;
+    }
+  } catch {
+    // Fall back to '' — no context block is better than failing the dispatch.
+  }
+  return "";
 }
 
 function _hasPriorVisibleCliHistory(

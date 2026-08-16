@@ -83,6 +83,10 @@ beforeEach(async () => {
         summary: 'Require migration rollback plans',
         suggestedType: 'rule',
         suggestedScope: 'project',
+        // PRD 3.1 把适用/禁止范围列为 RuleAsset 的最低准入门槛，抽取提示词
+        // 现在要求规则候选一并给出——没有边界的规则只能停在候选池。
+        applicableWhen: ['部署数据库结构迁移前'],
+        forbiddenWhen: ['只读查询变更'],
         suggestedAction: 'create',
         evidence: ['m1', 'm2'],
       }],
@@ -186,9 +190,24 @@ describe('Recall selected-conversation closed loop', () => {
       }],
     });
 
-    const relevant = await promptInjection.buildRecallTurnPromptContext(USER_ID, {
+    // 一键提取写入的资产是 seed 档（系统写入、无人确认）。按 PRD 3.6，
+    // 它还没有"被正确带入过"的证明，所以**不进静默默认注入**——用户主动带入
+    // 一次、拿到 ContextReuseReceipt 升到 transfer_validated 之后才会自动出现。
+    const beforeProof = await promptInjection.buildRecallTurnPromptContext(USER_ID, {
       cid: 'new-conversation-relevant',
       taskRunId: 'new-turn-relevant',
+      taskText: 'How should we validate a schema migration rollback before deployment?',
+      workspaceId: 'workspace-closed-loop',
+    }, semanticOptions);
+    expect(beforeProof.promptBlock).not.toContain('Always prepare and test a rollback plan');
+
+    // 真实使用一次：手动投影 → 落回执 → 终态 → TransferProof 带 receiptId。
+    const assetsSvc = await import('../../../../src/main/features/recall/asset-service');
+    await assetsSvc.setAbilityAssetMaturity(USER_ID, asset.id, 'transfer_validated');
+
+    const relevant = await promptInjection.buildRecallTurnPromptContext(USER_ID, {
+      cid: 'new-conversation-relevant-2',
+      taskRunId: 'new-turn-relevant-2',
       taskText: 'How should we validate a schema migration rollback before deployment?',
       workspaceId: 'workspace-closed-loop',
     }, semanticOptions);

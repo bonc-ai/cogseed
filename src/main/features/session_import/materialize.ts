@@ -39,7 +39,7 @@ const log = createLogger('session-import:materialize');
 
 export interface MaterializeInput {
   userId: string;
-  source: 'claude' | 'codex' | 'workbuddy';
+  source: 'claude' | 'codex' | 'workbuddy' | 'opencode';
   sourceId: string;
   /** Original project path, used only to enrich the title. */
   projectPath?: string;
@@ -77,6 +77,15 @@ function titleFromText(text: string | undefined): string {
 }
 
 /** Build a short title from the summary head or the picker hint. */
+/** Human-friendly source name for import banners (never i18n-ed — user content). */
+function sourceDisplayName(source: MaterializeInput['source']): string {
+  if (source === 'claude') return 'Claude Code';
+  if (source === 'codex') return 'Codex';
+  if (source === 'workbuddy') return 'WorkBuddy';
+  if (source === 'opencode') return 'OpenCode';
+  return source;
+}
+
 function buildTitle(input: MaterializeInput): string {
   const title = titleFromText(input.extraction.sessionSummary) ||
     titleFromText(input.titleHint) ||
@@ -88,12 +97,13 @@ function buildTitle(input: MaterializeInput): string {
  *  banner; model_text carries the same brief as durable pickup context. */
 function buildSeed(input: MaterializeInput): { text: string; modelText: string } {
   const summary = input.extraction.sessionSummary.trim();
+  const src = sourceDisplayName(input.source);
   const banner = input.extraction.degraded
-    ? '[从 Claude Code 导入 · 未能自动提炼，以下为原始开头]'
-    : '[从 Claude Code 导入 · 已提炼]';
+    ? `[从 ${src} 导入 · 未能自动提炼，以下为原始开头]`
+    : `[从 ${src} 导入 · 已提炼]`;
   const text = `${banner}\n\n${summary}`;
   const modelText =
-    `以下是用户从 Claude Code 导入的一段历史会话的提炼简报。` +
+    `以下是用户从 ${src} 导入的一段历史会话的提炼简报。` +
     `请把它当作已发生的上下文，在此基础上继续协助用户，不要重复已完成的工作：\n\n${summary}`;
   return { text, modelText };
 }
@@ -112,6 +122,27 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
     imported: true,
     needs_welcome: true,
   });
+
+  // Re-importing a conversation that was previously deleted leaves its Recall
+  // source marked `removed`, which silently disables terminal capture (the
+  // no-model CLI fallback conversation never produces recall candidates).
+  // Restore the source to `active` so the capture pipeline picks it up again.
+  try {
+    const { resumeCognitionSource } = await import('../recall/source-control');
+    await resumeCognitionSource(input.userId, {
+      kind: 'conversation',
+      id: conv.conversation_id,
+      subtype: 'session',
+      scope: 'conversation',
+      taxonomyVersion: 2,
+      title: conv.title,
+    } as import('../recall/source-service').CognitionSourceRef);
+  } catch (sourceErr) {
+    log.warn('failed to restore recall source for re-imported conversation', {
+      conversationId: conv.conversation_id,
+      error: (sourceErr as Error)?.message || String(sourceErr),
+    });
+  }
 
   // If the conversation already had content (a prior import), don't re-seed.
   const msgFile = conversationMessageFile(input.userId, conv.conversation_id, conv.project_id ?? null);
@@ -142,8 +173,31 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
     to: [USER_ID],
     text,
     model_text: modelText,
+    // Seed 消息是导入会话的上下文占位：给模型读（model_text），但对用户隐藏
+    // 显示（接续准备面板替代）。前端据此跳过气泡渲染。
+    imported_seed: true,
   };
   await appendJsonlAtomic<GroupMessage>(msgFile, seed);
+
+  // Build a TaskContinuationSnapshot so the imported session can be resumed
+  // without re-explaining: goal / stage / next are derived from the real
+  // extracted summary (never fabricated). Best-effort — failure must not
+  // block the import itself.
+  try {
+    const { buildContinuationSnapshot } = await import('../task_continuation');
+    await buildContinuationSnapshot({
+      userId: input.userId,
+      conversationId: conv.conversation_id,
+      projectId: conv.project_id ?? null,
+      sessionSummary: input.extraction.sessionSummary,
+      title: conv.title,
+    });
+  } catch (snapErr) {
+    log.warn('failed to build continuation snapshot', {
+      conversationId: conv.conversation_id,
+      error: (snapErr as Error)?.message || String(snapErr),
+    });
+  }
 
   // Touch updated_at so the conversation sorts to the top of the sidebar list.
   await updateConversation(input.userId, conv.conversation_id, { updated_at: nowIso() }, conv.project_id ?? null);

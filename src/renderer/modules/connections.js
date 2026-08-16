@@ -39,6 +39,7 @@ function initConnections() {
 let _connectionsBound = false;
 let _connectionsLastTab = '';
 let _connectionsMcpPrimed = false;
+let _connectionsSkillsPrimed = false;
 
 function _connectionsOpenTarget(target) {
   // Agent / 数据源 / 触点 已内嵌；仅模型与额度保留入口卡。
@@ -85,14 +86,49 @@ function activateConnectionsTab(name) {
     }
   }
 
+  // 技能 tab 承载技能市场与外部 Skill 库（可用资源，不是个人认知资产）。
+  // 技能库的渲染函数在 skills.js，属于 `skills` 懒加载包。
+  if (target === 'skills') {
+    const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+    Promise.resolve(typeof loader === 'function' ? loader('skills') : undefined)
+      .then(() => {
+        if (typeof _skillsCache !== 'undefined' && _skillsCache && typeof renderSkillsList === 'function') {
+          renderSkillsList(_skillsCache);
+        }
+        if (typeof loadSkills === 'function') return loadSkills(!_connectionsSkillsPrimed);
+        return undefined;
+      })
+      .then(() => { _connectionsSkillsPrimed = true; })
+      .catch((err) => {
+        if (typeof createLogger === 'function') {
+          createLogger('connections').warn('skills load failed', {
+            error: (err && err.message) || String(err),
+          });
+        }
+      });
+  }
+
   // Agent / 数据源 tab 内嵌了 AI 团队与资料库：切到该 tab 时按需加载。
   if (target === 'agents' && typeof loadAgents === 'function') {
     // boot 只加载了 summary 列表（无描述）。这里始终走一次完整加载以升级缓存，
     // 避免「介绍未填写」。_agentsCacheIsSummary 由 loadAgents 内部维护。
     Promise.resolve(loadAgents(false)).catch(() => {});
   }
-  if (target === 'sources' && typeof loadContexts === 'function') {
-    Promise.resolve(loadContexts()).catch(() => {});
+  if (target === 'sources') {
+    // 资料库（contexts）是懒加载模块：从「连接」视图进入时 boot 只初始化
+    // tab 壳，不会加载 contexts.js。这里先加载模块再渲染，否则面板永远
+    // 停留在 index.html 的静态空态（loadContexts 为 undefined 直接跳过）。
+    const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+    if (typeof loader === 'function') {
+      Promise.resolve(loader('contexts'))
+        .then(() => {
+          if (typeof loadContexts === 'function') return loadContexts();
+          return undefined;
+        })
+        .catch(() => {});
+    } else if (typeof loadContexts === 'function') {
+      Promise.resolve(loadContexts()).catch(() => {});
+    }
   }
 
   // 触点 tab 内嵌了飞书/消息平台：首次进入时初始化（依赖 settings bundle 已加载）。

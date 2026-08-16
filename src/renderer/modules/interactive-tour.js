@@ -1,25 +1,16 @@
 // ─── Interactive Product Tour (交互式新手引导) ──────────────────────────
 //
-// Triggered after the 4-step onboarding completes. Guides users through
-// the main modules with interactive prompts that require real actions:
-//   1. Open an imported conversation
-//   2. View Agents (AI Team)
-//   3. View Skills
-//   4. Open Recall
-//   5. Reach the capture-task candidate list and decide one cognition
-//   6. Open the ability-assets page
-//   7. Inspect one asset's detail
+// Triggered after the 3/4-step onboarding completes and the user lands on the
+// first imported conversation. Guides with real actions via a hover tooltip:
+//   1. 带着这些继续 —— 指向欢迎消息的按钮，用户确认把能力带入执行
+//      （可跳过；短任务在步骤 1 完成后直接结束）。
+//   2. 认知资产 —— 仅当任务较长时展示：「本次任务过长，可以先了解其他核心
+//      部分」，引导点开认知资产（导入会话提取的能力在这里，可手动审核落库）。
+//   3.（预留）左下角注册 —— 注册入口融合后追加。
 //
-// Steps 4 and 5 are split because Recall opens on its overview page while
-// candidates live under capture tasks — one step asking for both left the
-// navigation hop unmentioned and unreachable.
-//
-// Steps 6 and 7 continue inside Recall on purpose: deciding a candidate only
-// shows the intake side of the loop, so the tour then walks to where confirmed
-// cognition actually lands and what a single asset record looks like.
-//
-// Each step blocks until the user completes the required action. For now,
-// triggers on every launch; later will be gated to once per account.
+// Each step blocks until the user completes the required action. 悬窗/遮罩
+// 框架与四步引导后的页面结构解耦：目标通过 resolveTarget 实时解析，DOM 变化
+// 由 MutationObserver 重锚定。
 
 const _tourLog = typeof createLogger === 'function'
   ? createLogger('interactive-tour')
@@ -32,108 +23,106 @@ let _tourObserver = null;
 let _tourRepositionTimer = null;
 let _tourFinishTimer = null;
 
-// Tour step definitions
+// Tour step definitions（四步引导之后的真实页面引导，复用同一悬窗/遮罩框架）：
+//   1. 带着这些继续 —— 指向欢迎消息里的按钮，用户确认把能力带入执行。
+//      （短任务在步骤 1 完成后直接结束；长任务继续认知资产流程。）
+//   2. 认知资产 —— 提示「本次任务过长」，引导点开认知资产（导入会话提取的
+//      能力在这里，可手动审核落库）。
+//   3. 候选认知 —— 进入候选列表，确认或拒绝一条（只有你点头的才会留下）。
+//   4. 确认后认知归你 —— 已确认资产沉淀为正式资产。
+//   5. 一条资产里有什么 —— 点开资产详情看版本与来源。
+//   6.（预留）左下角注册 —— 注册入口融合后追加。
 const TOUR_STEPS = [
   {
-    id: 'conversation',
-    title: '查看导入的会话',
-    description: '这些是你从其他 Agent 导入的历史会话。点击打开一个会话，看看它的内容。',
-    // 空间化重构后项目层已废弃，导入会话直接落在未分组会话列表；空间中心
-    // 的空间卡片作兜底锚点。
-    resolveTarget: () => (
-      document.querySelector('#conversation-list .conv-item[data-cid]')
-      || document.querySelector('#ws-view .ws-space-card')
-    ),
+    id: 'welcome-continue',
+    title: '带着这些继续',
+    description: '点击欢迎消息里的「带着这些继续」，把工作空间里匹配好的能力带入任务，开始真正执行。',
+    resolveTarget: () => document.querySelector('.welcome-carry .welcome-carry-continue'),
     position: 'right',
+    // commander 三段式回复由 LLM 生成，按钮要等回复渲染后才出现：给足等待
+    // 窗口（60 × 500ms = 30s），而不是默认的 3.6s 后跳过。
+    maxRetries: 60,
+    retryDelay: 500,
+    // 关键动作：必须实际点击按钮才继续（只提供「跳过引导」，不提供「下一步」，
+    // 否则跳过后 taskIsLong 未设置 → 后续直接结束）。
+    requireAction: true,
     checkComplete: () => {
-      // User opened a conversation (view changed to 'conversation')
-      return _tourState && _tourState.conversationOpened;
-    },
-  },
-  {
-    id: 'agents',
-    title: '查看 AI 团队',
-    description: '这些是你接入的模型和本机 Agent，任务由它们执行。点「连接」，再从「Agent」查看。',
-    target: '#connectors-btn',
-    position: 'right',
-    checkComplete: () => {
-      return _tourState && _tourState.agentsViewed;
-    },
-  },
-  {
-    id: 'skills',
-    title: '查看你的能力',
-    description: 'CogSeed 为你保留的正式能力都放在「认知资产」里。点「认知资产」，再从「我的能力」进入技能库。',
-    target: '#recall-btn',
-    position: 'right',
-    checkComplete: () => {
-      return _tourState && _tourState.skillsViewed;
+      if (_tourState && _tourState.welcomeContinued) return true;
+      // 用户已在 tour 启动前点击过按钮（按钮 disabled）→ 视为已完成。
+      const btn = document.querySelector('.welcome-carry .welcome-carry-continue');
+      return !!(btn && btn.disabled === true);
     },
   },
   {
     id: 'recall',
-    title: '你的认知资产',
-    description: 'CogSeed 从你的会话里发现了值得留下的认知。点「认知资产」，看它们放在了哪。',
+    title: '了解其他核心部分',
+    description: '本次任务较长，可以先了解其他核心模块——点「认知资产」：你导入会话提取出来的能力都在这里展示，可以手动审核后落库。',
     target: '#recall-btn',
     position: 'right',
-    checkComplete: () => {
-      return _tourState && _tourState.recallOpened;
-    },
+    // 必须实际点开认知资产才继续（后续步骤都在面板内；跳过则结束引导）。
+    requireAction: true,
+    checkComplete: () => !!(_tourState && _tourState.recallOpened),
   },
   {
     // Recall opens on the overview page, while candidate actions live under
     // capture tasks. Anchor to a real formal-candidate action after the user
-    // navigates, and fall back to the existing captures link on the overview.
+    // navigates, and fall back to the captures nav tab (常驻) — the tab stays
+    // visible even when there are no candidates yet, so the step can always
+    // point somewhere actionable. 若认知资产面板尚未打开，先回退到入口按钮。
     id: 'recall-review',
     title: '候选认知，你说了算',
-    description: '候选只是建议，不是结论。进入候选列表，确认或拒绝任意一条——只有你点头的才会留下。',
-    resolveTarget: () => (
-      document.querySelector('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')
-      || document.querySelector('#panel-recall [data-cognition-page-link="captures"]')
-      || document.querySelector('#panel-recall .skills-cognition-tab[data-cognition-page="captures"]')
-    ),
-    position: 'bottom',
-    checkComplete: () => {
-      return _tourState && _tourState.recallReviewed;
+    description: '候选只是建议，不是结论。进入「沉淀任务」，确认或拒绝任意一条——只有你点头的才会留下。',
+    resolveTarget: () => {
+      const panel = document.getElementById('panel-recall');
+      const visible = !!panel && panel.offsetParent !== null;
+      if (!visible) return document.getElementById('recall-btn');
+      return (
+        document.querySelector('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')
+        || document.querySelector('#panel-recall .skills-cognition-tab[data-cognition-page="captures"]')
+        || document.querySelector('#panel-recall [data-cognition-page-link="captures"]')
+      );
     },
+    position: 'bottom',
+    checkComplete: () => !!(_tourState && (_tourState.recallReviewed || _tourState.capturesTabClicked)),
   },
   {
     id: 'recall-assets',
     title: '确认后，认知归你',
-    description: '你刚确认的认知，已经沉淀为正式资产。点开这页，看看攒下了什么。',
-    // The Recall nav tab is the stable entry point; the overview page also
-    // renders a link to the same place, so fall back to it when the user is
-    // still on overview and the tab is off-screen.
-    resolveTarget: () => (
-      document.querySelector('#panel-recall .skills-cognition-tab[data-cognition-page="assets"]')
-      || document.querySelector('#panel-recall [data-cognition-page-link="assets"]')
-    ),
+    description: '你确认的认知会沉淀为正式能力资产。点开「能力资产」这页，看看攒下了什么。',
+    resolveTarget: () => {
+      const panel = document.getElementById('panel-recall');
+      const visible = !!panel && panel.offsetParent !== null;
+      if (!visible) return document.getElementById('recall-btn');
+      return (
+        document.querySelector('#panel-recall .skills-cognition-tab[data-cognition-page="assets"]')
+        || document.querySelector('#panel-recall [data-cognition-page-link="assets"]')
+      );
+    },
     position: 'bottom',
     checkComplete: () => {
       if (!_tourState) return false;
-      // The assets page starts hidden and only the user's click can reveal it,
-      // so its visibility is a real completion signal on its own — the click
-      // flag just makes the step respond without waiting for a re-render.
       if (_tourState.assetsOpened) return true;
-      return !!document.querySelector('#panel-recall [data-cognition-page-body="assets"]:not([hidden])');
+      return !!document.querySelector('#panel-recall .skills-cognition-tab[data-cognition-page="assets"].is-active');
     },
   },
   {
     id: 'recall-asset-detail',
     title: '一条资产里有什么',
     description: '点开任意一条：能看到它的版本、来源，以及下次任务时会怎样用上它。',
-    // Prefer a row the user hasn't got open: the assets page auto-selects the
-    // first record, so pointing at that one asks for a click that changes
-    // nothing on screen.
-    resolveTarget: () => (
-      document.querySelector('#panel-recall [data-ability-asset-id]:not(.is-selected)')
-      || document.querySelector('#panel-recall [data-ability-asset-id]')
-    ),
-    position: 'right',
-    checkComplete: () => {
-      return _tourState && _tourState.assetDetailViewed;
+    resolveTarget: () => {
+      const panel = document.getElementById('panel-recall');
+      const visible = !!panel && panel.offsetParent !== null;
+      if (!visible) return document.getElementById('recall-btn');
+      return (
+        document.querySelector('#panel-recall [data-ability-asset-id]:not(.is-selected)')
+        || document.querySelector('#panel-recall [data-ability-asset-id]')
+      );
     },
+    position: 'right',
+    checkComplete: () => !!(_tourState && _tourState.assetDetailViewed),
   },
+  // 第六步「左下角注册」预留：注册入口融合后追加
+  // { id: 'signup', title: '注册 CogSeed', description: '…', resolveTarget: () => …, position: 'top', checkComplete: … },
 ];
 
 function _tourEsc(s) {
@@ -152,11 +141,11 @@ function startTour() {
   _tourLog.info('starting interactive tour');
   _tourState = {
     currentStep: 0,
-    conversationOpened: false,
-    agentsViewed: false,
-    skillsViewed: false,
+    welcomeContinued: false,
+    taskIsLong: false,
     recallOpened: false,
     recallReviewed: false,
+    capturesTabClicked: false,
     assetsOpened: false,
     assetDetailViewed: false,
     completed: false,
@@ -210,23 +199,14 @@ function _startTourReanchor() {
 }
 
 function _setupTourListeners() {
-  // Listen for view changes
+  // Listen for view changes: 认知资产（recall）步骤的完成检测。
   const originalSetView = window.setView;
   if (typeof originalSetView === 'function') {
     _tourState.originalSetView = originalSetView;
     window.setView = function(view, ...args) {
       const result = originalSetView.apply(this, [view, ...args]);
       if (_tourState && !_tourState.completed) {
-        if (view === 'conversation') {
-          _tourState.conversationOpened = true;
-          _checkStepComplete();
-        } else if (view === 'agents') {
-          _tourState.agentsViewed = true;
-          _checkStepComplete();
-        } else if (view === 'skills') {
-          _tourState.skillsViewed = true;
-          _checkStepComplete();
-        } else if (view === 'recall') {
+        if (view === 'recall') {
           _tourState.recallOpened = true;
           _checkStepComplete();
         }
@@ -235,26 +215,21 @@ function _setupTourListeners() {
     };
   }
 
-  // Listen for recall review actions
-  // This will be triggered when user approves/rejects a cognition in Recall
-  window.addEventListener('tour:recall-reviewed', () => {
-    if (_tourState && !_tourState.completed) {
-      _tourState.recallReviewed = true;
-      _checkStepComplete();
-    }
-  });
-
-  // The last two steps navigate inside the Recall panel rather than through
-  // `setView`, so watch the clicks that drive them. Capture phase, because the
-  // recall module's own delegated handler re-renders the list and replaces the
-  // clicked node — reading the intent first keeps this independent of render
-  // timing.
+  // 认知资产面板内的交互（候选审核 / 资产页 / 资产详情）：capture 阶段监听，
+  // 因为 recall 模块自己的委托处理器会重渲染并替换被点击节点——先读意图保持
+  // 独立于渲染时机。
   _tourState.onTourClick = (event) => {
     if (!_tourState || _tourState.completed) return;
     const node = event.target;
     if (!node || typeof node.closest !== 'function') return;
     if (node.closest('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')) {
       _tourState.recallReviewed = true;
+      _checkStepComplete();
+      return;
+    }
+    // 沉淀任务 tab（常驻导航）：无候选时点 tab 也算展示了"审核候选"的位置。
+    if (node.closest('#panel-recall .skills-cognition-tab[data-cognition-page="captures"], #panel-recall [data-cognition-page-link="captures"]')) {
+      _tourState.capturesTabClicked = true;
       _checkStepComplete();
       return;
     }
@@ -303,11 +278,21 @@ function _advanceStep() {
     _tourState.advanceTimer = null;
   }
   _tourState.advancing = false;
+  const current = TOUR_STEPS[_tourState.currentStep];
+  // 步骤 1（带着这些继续）完成后：任务不长 → 直接结束，不展示
+  // 「本次任务过长 → 认知资产」的步骤。
+  if (current && current.id === 'welcome-continue' && !_tourState.taskIsLong) {
+    _tourLog.info('short task — completing tour after welcome step', { taskIsLong: _tourState.taskIsLong });
+    _completeTour();
+    return;
+  }
   if (_tourState.currentStep < TOUR_STEPS.length - 1) {
     _tourState.currentStep++;
     _tourState.targetRetries = 0;
+    _tourLog.info('tour advance', { from: current && current.id, to: TOUR_STEPS[_tourState.currentStep].id });
     _showTourStep(_tourState.currentStep);
   } else {
+    _tourLog.info('tour reached last step, completing', { step: current && current.id });
     _completeTour();
   }
 }
@@ -334,11 +319,15 @@ function _showTourStep(stepIndex) {
 
   // Find target element. The sidebar tree can still be rendering when the tour
   // starts right after onboarding, so a miss is retried before giving up —
-  // skipping immediately used to silently drop the step.
+  // skipping immediately used to silently drop the step. Steps that depend on
+  // slow async content (e.g. the welcome reply generated by an LLM) declare a
+  // longer window via step.maxRetries / step.retryDelay.
   const targetEl = _resolveStepTarget(step);
   if (!targetEl) {
+    const maxRetries = Number.isFinite(step.maxRetries) ? step.maxRetries : 12;
+    const retryDelay = Number.isFinite(step.retryDelay) ? step.retryDelay : 300;
     _tourState.targetRetries = (_tourState.targetRetries || 0) + 1;
-    if (_tourState.targetRetries <= 12) {
+    if (_tourState.targetRetries <= maxRetries) {
       _tourLog.warn('tour target not ready, retrying', {
         step: step.id, attempt: _tourState.targetRetries,
       });
@@ -346,7 +335,7 @@ function _showTourStep(stepIndex) {
         if (_tourState && !_tourState.completed && _tourState.currentStep === stepIndex) {
           _showTourStep(stepIndex);
         }
-      }, 300);
+      }, retryDelay);
       return;
     }
     _tourLog.warn('tour target not found, skipping step', { step: step.id });
@@ -367,20 +356,18 @@ function _showTourStep(stepIndex) {
 
   // Position tooltip near target
   const rect = targetEl.getBoundingClientRect();
+  // requireAction 步骤（关键动作）只提供「跳过引导」，隐藏「下一步」——必须
+  // 实际完成高亮处的操作才能继续，避免连点跳过导致引导断裂/提前结束。
+  const nextBtnHtml = step.requireAction
+    ? ''
+    : `<button type="button" class="tour-tooltip-btn primary" data-tour-action="next">${stepIndex < TOUR_STEPS.length - 1 ? '知道了' : '完成'}</button>`;
   const tooltipHTML = `
     <div class="tour-tooltip-content">
-      <div class="tour-tooltip-header">
-        <span class="tour-tooltip-badge">第 ${stepIndex + 1} 步 / 共 ${TOUR_STEPS.length} 步</span>
-        <h3 class="tour-tooltip-title">${_tourEsc(step.title)}</h3>
-      </div>
-      <div class="tour-tooltip-progress"><i style="width:${Math.round(((stepIndex + 1) / TOUR_STEPS.length) * 100)}%"></i></div>
-      <p class="tour-tooltip-desc">${_tourEsc(step.description)}</p>
-      <div class="tour-tooltip-hint">👆 按提示完成高亮处的操作，自动进入下一步</div>
+      <div class="tour-tooltip-title">${_tourEsc(step.title)}</div>
+      <div class="tour-tooltip-desc">${_tourEsc(step.description)}</div>
       <div class="tour-tooltip-actions">
-        <button type="button" class="tour-tooltip-btn" data-tour-action="skip">跳过引导</button>
-        <button type="button" class="tour-tooltip-btn primary" data-tour-action="next">${
-          stepIndex < TOUR_STEPS.length - 1 ? '下一步' : '完成'
-        }</button>
+        <button type="button" class="tour-tooltip-link" data-tour-action="skip">跳过</button>
+        ${nextBtnHtml}
       </div>
     </div>
     <div class="tour-tooltip-arrow"></div>
@@ -501,10 +488,8 @@ function _showTourFinishCard() {
   _tourTooltip.classList.add('tour-tooltip-finish');
   _tourTooltip.innerHTML = `
     <div class="tour-tooltip-content">
-      <div class="tour-tooltip-header">
-        <h3 class="tour-tooltip-title">引导完成</h3>
-      </div>
-      <p class="tour-tooltip-desc">你刚走通了完整链路：会话 → 提取候选 → 你确认 → 沉淀为正式认知。下次开工时，这些认知会自动跟上——换哪个 AI 都能接着干。随时可从左侧边栏回来。</p>
+      <div class="tour-tooltip-title">引导完成</div>
+      <p class="tour-tooltip-desc">你已把工作空间的能力带入任务开始执行。认知资产里沉淀的能力会随任务自动跟上。</p>
       <div class="tour-tooltip-actions">
         <button type="button" class="tour-tooltip-btn primary" data-tour-action="done">知道了</button>
       </div>
@@ -544,10 +529,12 @@ function _teardownTour() {
 // Expose for external triggers
 window.interactiveTour = {
   start: startTour,
-  // Called by recall module when user reviews a cognition
-  markRecallReviewed: () => {
+  // 用户点击了欢迎消息里的「带着这些继续」：opts.taskIsLong 表示本次任务是否
+  // 较长（决定是否继续展示「认知资产」步骤）。
+  markWelcomeContinued: (opts) => {
     if (_tourState && !_tourState.completed) {
-      _tourState.recallReviewed = true;
+      _tourState.welcomeContinued = true;
+      _tourState.taskIsLong = !!(opts && opts.taskIsLong);
       _checkStepComplete();
     }
   },

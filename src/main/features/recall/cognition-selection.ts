@@ -24,11 +24,11 @@ import type { CapabilityPackAssetRef } from '../p3394/capability-pack';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import type { RecallAbilityAssetScopePolicy } from './scope-policy';
 import {
-  applyCrossScopeConfirmation,
-  resolveDefaultUsePolicy,
   type AbilityAssetSensitivity,
   type AbilityAssetUsePolicy,
 } from './asset-semantics';
+import { resolveAssetUsePolicy } from './formal-assets/policy';
+import { evaluateAssetRuntimeEligibility } from './formal-assets/runtime';
 import { inheritedAssetContentHash } from '../agent_inheritance';
 
 /** 一条资产没被带入的原因。**可能同时成立多条**——一条资产完全可以既被暂停、
@@ -205,24 +205,28 @@ export function classifyInheritedAsset(
 
   const reasons: WithheldReason[] = [];
 
-  // 权限/安全
+  // 权限/安全。scopePolicy 是能力包继承独有的合同检查，留在这里；
+  // 敏感级、状态、成熟度三项走统一 runtime 闸门，不再本地重写一遍规则。
   reasons.push(...scopePolicyReasons(asset.scopePolicy, context));
-  if (context.maxSensitivity !== undefined) {
-    if (asset.sensitivity === undefined) {
-      // 缺失不等于 L0。目的地既然声明了上限，就不能把「没分过级」当作已确认低风险。
-      reasons.push('sensitivity_unclassified');
-    } else if (SENSITIVITY_RANK[asset.sensitivity] > SENSITIVITY_RANK[context.maxSensitivity]) {
-      reasons.push('sensitivity_above_destination');
-    }
-  }
-
-  // 状态
-  if (asset.status !== 'active') reasons.push(STATUS_REASON[asset.status]);
 
   const sameScope = context.scope === undefined || context.scope === asset.scope;
-  if (resolveDefaultUsePolicy(asset, sameScope) === 'never' && asset.status === 'active') {
-    // 状态已经解释过的不重复记一条——never 这里只用来表达「成熟度还不够默认带入」。
-    reasons.push('use_policy_never');
+  const runtime = evaluateAssetRuntimeEligibility({
+    status: asset.status,
+    maturity: asset.maturity,
+    scope: asset.scope,
+    ...(asset.crossScopeConfirmedAt ? { crossScopeConfirmedAt: asset.crossScopeConfirmedAt } : {}),
+    ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
+  }, {
+    ...(context.scope !== undefined ? { scope: context.scope } : {}),
+    ...(context.maxSensitivity !== undefined
+      ? { maxSensitivity: context.maxSensitivity, sensitivityRank: SENSITIVITY_RANK }
+      : {}),
+  });
+  for (const reason of runtime.reasons) {
+    if (reason === 'status_not_active') reasons.push(STATUS_REASON[asset.status]);
+    else if (reason === 'maturity_below_default_use') reasons.push('use_policy_never');
+    else if (reason === 'sensitivity_unclassified') reasons.push('sensitivity_unclassified');
+    else if (reason === 'sensitivity_above_destination') reasons.push('sensitivity_above_destination');
   }
 
   // 内容完整性：出生时冻结的是哪一版、哪一份内容，现在还对不对得上。
@@ -241,10 +245,9 @@ function toSelected(
 ): SelectedCognition {
   const sameScope = context.scope === undefined || context.scope === asset.scope;
   const crossScopeConfirmed = !sameScope && Boolean(asset.crossScopeConfirmedAt);
-  const usePolicy = applyCrossScopeConfirmation(
-    resolveDefaultUsePolicy(asset, sameScope),
-    crossScopeConfirmed,
-  );
+  // 策略只有一处解释：formal-assets/policy。这里不再自己拼
+  // resolveDefaultUsePolicy + applyCrossScopeConfirmation。
+  const usePolicy = resolveAssetUsePolicy(asset, sameScope);
   if (usePolicy === 'never') throw new Error('cannot select a cognition whose use policy is never');
   return {
     ...(crossScopeConfirmed ? { crossScopeConfirmed: true } : {}),
