@@ -2539,50 +2539,6 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   padding-right: 0;
 }
 
-/* Merge remains a lightweight task-list command in the sidebar. Selection
-   and confirmation live in the picker, so this row never expands into a
-   status/action block that displaces the task groups below it. */
-#conversation-merge-action-bar {
-  flex: 0 0 auto;
-  padding: 5px 10px 3px;
-}
-.conversation-merge-action-bar { display: flex; min-width: 0; }
-.conversation-merge-start {
-  width: 100%;
-  min-height: 30px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #536b61;
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
-}
-.conversation-merge-start:hover {
-  background: rgba(24, 84, 60, 0.07);
-  color: var(--primary-text);
-}
-.conversation-merge-start:focus-visible {
-  outline: 2px solid rgba(14, 159, 110, 0.28);
-  outline-offset: 1px;
-}
-.conversation-merge-start-icon {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #72867e;
-}
-.conversation-merge-start-icon .ui-icon { width: 15px; height: 15px; }
-
 /* Time-bucket headers inside #conversation-list (today / yesterday /
    last 7 / last 30 / older). Muted color keeps them scannable as section
    labels; lazy old buckets add button affordance without becoming cards. */
