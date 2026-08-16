@@ -159,6 +159,22 @@ describe('Recall capture candidate quality', () => {
     expect(quality.reasons).not.toContain('platitude_restates_task');
   });
 
+  it('does NOT flag a template judgment that carries structure beyond the task text', () => {
+    const quality = assessRecallCaptureCandidateQuality({
+      judgment: '用户写城市资料时默认格式为：概况/历史/现状/亮点四个板块，正文字数控制在约500字（含标点），保存为markdown文件，并以“如需调整字数”结尾。',
+      value: '同类城市资料请求可直接复用该结构，减少每次重新设计版式。',
+      summary: '城市资料四板块模板',
+      suggestedType: 'template',
+      suggestedScope: 'general',
+      suggestedAction: 'create',
+      valueProvided: true,
+      actionProvided: true,
+    }, [{ role: 'user', text: '帮我写一份 南昌城市 的资料，500 字' }]);
+
+    expect(quality.reviewable).toBe(true);
+    expect(quality.reasons).not.toContain('platitude_restates_task');
+  });
+
   it('flags a platitude without any specific signal (platitude_no_specifics)', () => {
     const quality = assessRecallCaptureCandidateQuality({
       judgment: '认真完成了任务，已按时交付。',

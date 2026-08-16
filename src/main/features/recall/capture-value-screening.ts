@@ -181,7 +181,10 @@ function collectSignals(messages: readonly RecallCaptureScreeningMessage[]): Rec
 
 /** 判断是否只是复述任务目标（平凡套话）。归一化后：
  *  - 判断包含目标全文，或目标包含判断全文 → 复述；
- *  - 目标词在判断中的覆盖率 ≥ 0.8 → 复述（如"写一份成都资料"→"成都资料 500 字"）。 */
+ *  - 目标词在判断中的覆盖率 ≥ 0.8 且判断不比目标长太多 → 复述。
+ *  关键防误伤：复用模板类 judgment（"写城市资料时按概况/历史/现状/亮点
+ *  组织"）天然包含任务词（写/城市资料/500字），但内容显著长于任务
+ *  （携带结构细节）——那不是复述，是知识。只有长度接近任务的才算。 */
 function platitudeRestatesTask(judgment: string, taskText: string): boolean {
   const j = normalized(judgment);
   const t = normalized(taskText);
@@ -190,7 +193,9 @@ function platitudeRestatesTask(judgment: string, taskText: string): boolean {
   const taskWords = [...new Set(t.split(/\s+/).filter((word) => word.length > 1))];
   if (!taskWords.length) return false;
   const covered = taskWords.filter((word) => j.includes(word)).length;
-  return covered / taskWords.length >= 0.8;
+  if (covered / taskWords.length < 0.8) return false;
+  // judgment 显著长于任务（>1.6x）→ 携带额外结构，不是纯复述。
+  return j.length <= t.length * 1.6;
 }
 
 /** 任务请求特征：这类消息是"要我做什么"，复述它 = 平凡。
