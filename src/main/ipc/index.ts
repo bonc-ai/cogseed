@@ -3792,17 +3792,32 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       return { ok: false, error: 'invalid_cli' };
     }
 
-    const { readActiveCliConfig } = await import('../features/local_agents/active_config.js');
+    const { readActiveCliConfig, readCliModelEndpoint } = await import('../features/local_agents/active_config.js');
     const config = readActiveCliConfig(cli as LocalCliType);
 
     if (!config) {
       return { ok: false, error: 'no_active_config' };
     }
 
+    // 账号（OAuth）登录没有可存储的 API Key：OAuth token 不能当 API key 直连
+    // 上游端点，存下去只会得到一个"配置存在但调用失败"的假配置。拒绝存储，
+    // UI 端（引导下拉）也会对 OAuth 隐藏「连接并存储 API」选项。
+    if (config.mode === 'oauth') {
+      return { ok: false, error: 'oauth_login_no_api_key' };
+    }
+
     // Check if this active config is already stored (avoid duplicates)
     const externalId = `${cli}:active`;
     const existing = customProviders.listCustomProviders(ctx.userId);
     const existingProvider = existing.find((p) => p.externalId === externalId);
+
+    // Primary/fallback rule for "连接并存储 API": the FIRST stored active-CLI
+    // config becomes the commander's primary chat entry; later ones are
+    // appended as fallbacks (chat dispatch walks entries in order, so a
+    // failed primary is retried on the next). `:active` configs already
+    // present mean this is not the first one.
+    const position: 'front' | 'back' =
+      existing.some((p) => p.externalId && p.externalId.endsWith(':active')) ? 'back' : 'front';
 
     // Map CLI type to protocol
     const protocolMap: Record<string, 'anthropic' | 'openai' | 'gemini'> = {
@@ -3815,43 +3830,76 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
     const protocol = protocolMap[cli] || 'anthropic';
     const name = `${cli.charAt(0).toUpperCase() + cli.slice(1)} (当前使用)`;
-    const baseUrl = config.baseUrl || (protocol === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1');
+
+    // 隐层适配：baseUrl 优先取 CLI 自己配置里的真实端点（codex 读
+    // config.toml 的 base_url、claude 读 settings.json、opencode 读 auth.json），
+    // 而不是猜测官方端点——这样直连的用户存的就是直连地址，走本地代理的
+    // 用户存的就是代理地址（与其 CLI 自身行为一致）。都没有才回退协议默认。
+    let endpointBaseUrl = '';
+    try {
+      const endpoint = readCliModelEndpoint(cli as LocalCliType);
+      if (endpoint && endpoint.baseUrl) endpointBaseUrl = endpoint.baseUrl;
+    } catch {
+      /* fall through */
+    }
+    const baseUrl = endpointBaseUrl || config.baseUrl || (protocol === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1');
+
+    // Default model to bind as the chat entry. It MUST be present in the
+    // provider's `models` list — otherwise `auth.addEntry`'s
+    // isCustomProviderModelAllowed check rejects the bind, the entry silently
+    // fails (only a warn log), and the stored API never shows up in settings'
+    // 已配置 nor becomes usable for chat, while the connect toast still says
+    // "已存储当前正在使用的 API". anthropic mirrors the historical
+    // claude-sonnet-4-6 bind; openai uses codex's default (models.ts).
+    const DEFAULT_MODEL_BY_PROTOCOL: Record<string, string> = {
+      anthropic: 'claude-sonnet-4-6',
+      openai: 'gpt-5.6-sol', // codex default (local_agents/models.ts)
+    };
+    const defaultModel = DEFAULT_MODEL_BY_PROTOCOL[protocol] || '';
+    const models = defaultModel ? [defaultModel] : [];
 
     let providerId: string;
 
     if (existingProvider) {
-      // Update existing provider
+      // Update existing provider (also back-fills `models` for providers
+      // created before the models fix, so the entry bind below succeeds).
       const updateResult = customProviders.updateCustomProvider(ctx.userId, existingProvider.id, {
         name,
         protocol,
         baseUrl,
         apiKey: config.apiKey,
+        models,
       });
       if (!updateResult.ok) return updateResult;
       providerId = existingProvider.id;
       log.info('active CLI config updated', { cli, providerId, mode: config.mode });
     } else {
-      // Add new provider
+      // Add new provider (front for the first stored active-CLI config, so
+      // it becomes the primary; back for later ones = fallback).
       const addResult = customProviders.addCustomProvider(ctx.userId, {
         name,
         protocol,
         baseUrl,
         apiKey: config.apiKey,
+        models,
         source: 'manual', // Use 'manual' as source since custom_providers doesn't recognize 'active_cli'
         externalId,
-      });
+      }, position);
       if (!addResult.ok) return addResult;
       providerId = addResult.id;
-      log.info('active CLI config stored', { cli, providerId, mode: config.mode });
+      log.info('active CLI config stored', { cli, providerId, mode: config.mode, position });
     }
 
-    // Auto-bind entry if protocol has default model
-    if (protocol === 'anthropic') {
+    // Bind a chat entry when we have a default model for this protocol —
+    // anthropic AND openai (codex). The entry is what makes the stored API
+    // appear in settings 已配置 and be selectable for chat.
+    if (defaultModel) {
       try {
         await auth.addEntry({
           provider: `cp:${providerId}`,
-          model: 'claude-sonnet-4-6',
+          model: defaultModel,
           profileId: `cp:${providerId}`,
+          position,
         });
       } catch (err) {
         log.warn('active cli auto-bind entry failed', { provider: providerId, error: (err as Error).message });

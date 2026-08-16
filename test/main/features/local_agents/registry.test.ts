@@ -212,7 +212,7 @@ describe('local_agents/registry', () => {
     expect(r.path).toBe(fake);
   });
 
-  it('uses the documented version subcommand for Hermes', async () => {
+  it('prefers the --version flag for Hermes (subcommand hangs without TTY)', async () => {
     const fake = writeArgAwareMockCli(path.join(tmpDir, 'hermes'), {
       version: 'Hermes Agent v0.18.2',
       '--version': 'Hermes Agent v9.9.9',
@@ -222,7 +222,11 @@ describe('local_agents/registry', () => {
 
     const r = await detectOne('hermes');
     expect(isWindows ? r.path?.toLowerCase() : r.path).toBe(isWindows ? fake.toLowerCase() : fake);
-    expect(r.version).toBe('0.18.2');
+    // `--version` MUST be probed first: `hermes version` (subcommand) hangs
+    // with no output/no exit when spawned without a TTY on arm64 macOS,
+    // which previously made localAgents.list wait out the 5s detectVersion
+    // timeout on every cold probe. The flag form returns in <100ms.
+    expect(r.version).toBe('9.9.9');
     expect(r.available).toBe(true);
     expect(r.error).toBeUndefined();
   });

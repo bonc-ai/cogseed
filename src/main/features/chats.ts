@@ -1872,6 +1872,8 @@ export async function createConversation(userId: string, {
           ...(projectId ? { project_id: projectId } : {}),
           ...(spaceId ? { space_id: spaceId } : {}),
           ...(originAutoTaskId ? { origin_auto_task_id: originAutoTaskId } : {}),
+          ...(imported ? { imported: true } : {}),
+          ...(needs_welcome ? { needs_welcome: true } : {}),
           updated_at: now,
         });
         delete revived.deleted_at;
@@ -2475,8 +2477,7 @@ export async function sweepStaleProcessing(activeUserId?: string): Promise<{ swe
 export async function insertWelcomeMessage(
   userId: string,
   conversationId: string,
-): Promise<{ ok: boolean; error?: string }> {
-  try {
+): Promise<{ ok: boolean; error?: string }> { try {
     // Read conversation to verify it needs a welcome
     const conv = await getConversation(userId, conversationId);
     if (!conv) return { ok: false, error: 'conversation_not_found' };
@@ -2506,7 +2507,12 @@ export async function insertWelcomeMessage(
 
     // Generate welcome message
     const { generateWelcomeMessage } = await import('./session_import/welcome-message');
-    const { text, modelText } = await generateWelcomeMessage({ userId, sessionSummary });
+    const { text, modelText, carry } = await generateWelcomeMessage({
+      userId,
+      conversationId,
+      spaceId: (conv as any)?.space_id ?? null,
+      sessionSummary,
+    });
 
     // Build and append the message
     const welcomeMessage: GroupMessage = {
@@ -2516,6 +2522,9 @@ export async function insertWelcomeMessage(
       to: ['user'],
       text,
       model_text: modelText,
+      // Structured carry metadata rides along for the「查看依据」expand.
+      // GroupMessage allows extra fields; renderer reads `welcome_carry`.
+      ...(carry.length ? { welcome_carry: JSON.stringify(carry) } : {}),
     };
 
     await appendJsonlAtomic<GroupMessage>(layout.messageFile, welcomeMessage);
@@ -2528,6 +2537,217 @@ export async function insertWelcomeMessage(
     return { ok: true };
   } catch (err) {
     log.error('failed to insert welcome message', { conversationId, error: String(err) });
+    return { ok: false, error: String(err) };
+  }
+}
+
+/**
+ * Build the resume welcome panel for an imported conversation (v1.6 three-part
+ * template): 复述 / 准备携带 / Action Plan + boundary. Does NOT append any
+ * message and does NOT clear `needs_welcome` — the renderer shows this as a
+ * pre-send panel and only sends the guide sentence when the user confirms.
+ */export async function getWelcomePanel(
+  userId: string,
+  conversationId: string,
+): Promise<{
+  ok: boolean;
+  error?: string;
+  restatement?: string;
+  carrySummary?: string;
+  carry?: Array<{ kind: string; label: string; count: number; sources: string[] }>;
+  plan?: string[];
+  boundary?: string;
+  summary?: string;
+  text?: string;
+  sessionSummary?: string;
+}> {
+  try {
+    const conv = await getConversation(userId, conversationId);
+    if (!conv) return { ok: false, error: 'conversation_not_found' };
+
+    // Recover the session summary from the seed message (same as insertWelcomeMessage).
+    const layout = conversationLayout(userId, conversationId, conv.project_id);
+    let sessionSummary: string | undefined;
+    try {
+      const fs = await import('node:fs/promises');
+      const content = await fs.readFile(layout.messageFile, 'utf8');
+      const lines = content.trim().split('\n').filter(Boolean);
+      if (lines.length > 0) {
+        const firstMsg = JSON.parse(lines[0]) as GroupMessage;
+        if (firstMsg.from === 'commander' && firstMsg.model_text) {
+          const match = firstMsg.model_text.match(/请把它当作已发生的上下文.*?：\n\n(.+)/s);
+          if (match) sessionSummary = match[1].trim();
+        }
+      }
+    } catch (err) {
+      log.warn('failed to read seed message for welcome panel', { conversationId, error: String(err) });
+    }
+
+    const { generateWelcomeMessage } = await import('./session_import/welcome-message');
+    const data = await generateWelcomeMessage({
+      userId,
+      conversationId,
+      spaceId: (conv as any)?.space_id ?? null,
+      sessionSummary,
+    });
+
+    return {
+      ok: true,
+      restatement: data.restatement,
+      carrySummary: data.carrySummary,
+      carry: data.carry,
+      plan: data.plan,
+      boundary: data.boundary,
+      summary: data.summary,
+      text: data.text,
+      sessionSummary,
+    };
+  } catch (err) {
+    log.error('failed to build welcome panel', { conversationId, error: String(err) });
+    return { ok: false, error: String(err) };
+  }
+}
+
+/** Mark an imported conversation's welcome as seen (clears `needs_welcome`)
+ *  without appending any message. Called after the user confirms「带着这些继续」
+ *  so the panel does not reappear on the next open. */
+export async function markWelcomeSeen(
+  userId: string,
+  conversationId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const conv = await getConversation(userId, conversationId);
+    if (!conv) return { ok: false, error: 'conversation_not_found' };
+    if (conv.needs_welcome !== true) return { ok: true };
+    await updateConversation(userId, conversationId, { needs_welcome: false }, conv.project_id ?? null);
+    return { ok: true };
+  } catch (err) {
+    log.error('failed to mark welcome seen', { conversationId, error: String(err) });
+    return { ok: false, error: String(err) };
+  }
+}
+
+/**
+ * Template-based handoff reply for an imported conversation. When the user
+ * sends a handoff/continue prompt ("继续这项工作", "现在做到哪里…"), we answer
+ * directly from REAL CogSeed data — no CLI turn, no LLM — so the reply is
+ * instant. The three-part template (项目介绍 / 工作空间能力 / Action Plan) is
+ * assembled by `generateWelcomeMessage` from the TaskContinuationSnapshot,
+ * confirmed assets and space template bundle. The commander reply is appended
+ * to the conversation (visible to user + commander) and returned.
+ */
+export async function handoffWelcomeReply(
+  userId: string,
+  conversationId: string,
+  userText?: string,
+): Promise<{
+  ok: boolean;
+  error?: string;
+  text?: string;
+  modelText?: string;
+}> {
+  try {
+    const conv = await getConversation(userId, conversationId);
+    if (!conv) return { ok: false, error: 'conversation_not_found' };
+
+    const panel = await getWelcomePanel(userId, conversationId);
+    if (!panel.ok || !panel.text) return { ok: false, error: panel.error || 'no welcome template' };
+
+    // First handoff: if the imported summary's goal is unusable boilerplate,
+    // distill a real 1-2 line project brief via a local CLI (one-time cost,
+    // cached into the snapshot). Subsequent handoffs are instant.
+    try {
+      const { ensureProjectBrief } = await import('./task_continuation');
+      await ensureProjectBrief(userId, conversationId, conv.project_id ?? null);
+    } catch (err) {
+      log.warn('project brief ensure failed', { conversationId, error: String(err) });
+    }
+
+    const { generateWelcomeMessage } = await import('./session_import/welcome-message');
+    const data = await generateWelcomeMessage({
+      userId,
+      conversationId,
+      spaceId: (conv as any)?.space_id ?? null,
+      sessionSummary: panel.sessionSummary,
+    });
+
+    const layout = conversationLayout(userId, conversationId, conv.project_id ?? null);
+
+    // Persist the user's handoff message so the transcript stays consistent.
+    if (typeof userText === 'string' && userText.trim()) {
+      const userMsg: GroupMessage = {
+        id: genId12(),
+        ts: nowIso(),
+        from: 'user',
+        to: ['commander'],
+        text: userText.trim(),
+      };
+      await appendJsonlAtomic(layout.messageFile, userMsg);
+      await appendVisible(userId, conversationId, userMsg, ['user', 'commander']);
+    }
+
+    const reply: GroupMessage = {
+      id: genId12(),
+      ts: nowIso(),
+      from: 'commander',
+      to: ['user'],
+      text: data.text,
+      model_text: data.modelText,
+      ...(data.carry.length ? { welcome_carry: JSON.stringify(data.carry) } : {}),
+      // Full resume bundle for「查看依据」右栏 + 「带着这些继续」Action Plan。
+      welcome_resume: JSON.stringify({
+        restatement: data.restatement,
+        carry: data.carry,
+        boundary: data.boundary,
+        plan: data.plan,
+        summary: data.summary,
+      }),
+    };
+
+    await appendJsonlAtomic(layout.messageFile, reply);
+    await appendVisible(userId, conversationId, reply, ['user', 'commander']);
+    await updateConversation(userId, conversationId, { needs_welcome: false }, conv.project_id ?? null);
+
+    log.info(`handoff welcome reply cid=${conversationId}`);
+    return { ok: true, text: data.text, modelText: data.modelText };
+  } catch (err) {
+    log.error('handoff welcome reply failed', { conversationId, error: String(err) });
+    return { ok: false, error: String(err) };
+  }
+}
+
+/**
+ * 打开导入会话时立即发送第一条（真实消息流）：系统替用户插入
+ * 「继续这项工作。先告诉我现在做到哪里、哪些约束不能丢，以及下一步准备怎么做。」
+ * 只做这一步（无 LLM、无模板生成），保证用户刚进入会话就有内容、不空白。
+ * commander 的三段式回复由 renderer 随后异步调 `handoffWelcomeReply` 动态生成。
+ */
+export async function beginWelcome(
+  userId: string,
+  conversationId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const conv = await getConversation(userId, conversationId);
+    if (!conv) return { ok: false, error: 'conversation_not_found' };
+    if (conv.needs_welcome !== true) return { ok: false, error: 'already_welcomed' };
+    const { WELCOME_GUIDE_SENTENCE } = await import('./session_import/welcome-message');
+    const layout = conversationLayout(userId, conversationId, conv.project_id ?? null);
+
+    const userMsg: GroupMessage = {
+      id: genId12(),
+      ts: nowIso(),
+      from: 'user',
+      to: ['commander'],
+      text: WELCOME_GUIDE_SENTENCE,
+    };
+    await appendJsonlAtomic(layout.messageFile, userMsg);
+    await appendVisible(userId, conversationId, userMsg, ['user', 'commander']);
+    await updateConversation(userId, conversationId, { needs_welcome: false }, conv.project_id ?? null);
+
+    log.info(`begin welcome cid=${conversationId} (user guide inserted)`);
+    return { ok: true };
+  } catch (err) {
+    log.error('begin welcome failed', { conversationId, error: String(err) });
     return { ok: false, error: String(err) };
   }
 }

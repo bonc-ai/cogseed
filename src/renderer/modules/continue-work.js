@@ -14,7 +14,6 @@ const _CW_STEPS = [
   { id: 'source', n: 1, label: '选择来源' },
   { id: 'sessions', n: 2, label: '选择会话' },
   { id: 'import', n: 3, label: '导入' },
-  { id: 'done', n: 4, label: '完成' },
 ];
 
 let _cw = null;
@@ -80,9 +79,10 @@ function open() {
   const state = {
     step: 1,
     sources: [],
-    source: '',
+    selectedSources: new Set(),
     sessions: [],
     selected: new Set(),
+    activeSourceTab: '',
     imported: [],
     failed: [],
     cognitions: 0,
@@ -129,15 +129,13 @@ function _cwGo(step) {
   _cwRenderSteps();
   _cwRenderBody();
   _cwRenderFoot();
-}
-
-function _cwRenderSteps() {
+}function _cwRenderSteps() {
   const host = _cw.backdrop.querySelector('[data-cw-steps]');
   if (!host) return;
   host.innerHTML = _CW_STEPS.map((s) => {
     const isActive = s.n === _cw.step;
-    const isDone = s.n < _cw.step || (_cw.done && s.n === 4);
-    const clickable = s.n === 1 || s.n === 2 || (s.n === 4 && _cw.done);
+    const isDone = s.n < _cw.step;
+    const clickable = s.n === 1 || s.n === 2;
     return `
       <button type="button" class="cw-step${isActive ? ' is-active' : ''}${isDone ? ' is-done' : ''}"
         data-cw-goto="${s.n}"${clickable ? '' : ' disabled'}>
@@ -169,6 +167,7 @@ function _cwRenderBody() {
         <h3>勾选要继续的会话</h3>
         <p>导入后会生成新的可继续对话，重复导入同一会话不会产生副本。</p>
       </div>
+      <div class="cw-source-tabs" data-cw-source-tabs></div>
       <div class="cw-session-toolbar">
         <div class="cw-search">${_cwIcon('search')}<input type="text" data-cw-search placeholder="搜索标题、路径或来源" /></div>
         <button type="button" class="cw-select-all" data-cw-select-all>全选</button>
@@ -186,7 +185,8 @@ function _cwRenderBody() {
       selectAll.addEventListener('click', () => {
         const search = _cw.backdrop.querySelector('[data-cw-search]');
         const q = String(search && search.value || '').trim().toLowerCase();
-        const visible = _cw.sessions.filter((s) => (
+        const tabSessions = _cw.sessions.filter((s) => s.source === _cw.activeSourceTab);
+        const visible = tabSessions.filter((s) => (
           !q || `${s.title} ${s.meta} ${s.source}`.toLowerCase().includes(q)
         ));
         const allSelected = visible.length > 0 && visible.every((s) => _cw.selected.has(s.id));
@@ -198,7 +198,7 @@ function _cwRenderBody() {
       });
     }
     void _cwLoadSessions();
-  } else if (_cw.step === 3) {
+  } else {
     body.innerHTML = `
       <div class="cw-import-head">
         <h3>正在导入</h3>
@@ -207,8 +207,6 @@ function _cwRenderBody() {
       <div class="cw-progress-track"><div class="cw-progress-bar" data-cw-progress></div></div>
       <div class="cw-import-list" data-cw-import-list></div>`;
     void _cwRunImport();
-  } else {
-    _cwRenderDone();
   }
 }
 
@@ -221,20 +219,14 @@ function _cwRenderFoot() {
 
   if (_cw.step === 1) {
     left = '<button type="button" class="cw-btn ghost" data-cw-action="close">取消</button>';
-    const canNext = _cw.source === 'all' || _cw.sources.some((s) => s.type === _cw.source);
+    const canNext = _cw.selectedSources.size > 0;
     right = `<button type="button" class="cw-btn primary" data-cw-action="next"${canNext ? '' : ' disabled'}>下一步</button>`;
   } else if (_cw.step === 2) {
     left = '<button type="button" class="cw-btn ghost" data-cw-action="source">返回</button>';
     right = `<button type="button" class="cw-btn primary" data-cw-action="import"${_cw.selected.size ? '' : ' disabled'}>开始导入${_cw.selected.size ? ` (${_cw.selected.size})` : ''}</button>`;
-  } else if (_cw.step === 3) {
-    left = '';
-    right = `<button type="button" class="cw-btn ghost" data-cw-action="close"${_cw.busy ? ' disabled' : ''}>关闭</button>`;
   } else {
-    const okCount = _cw.imported.length;
-    left = '<button type="button" class="cw-btn ghost" data-cw-action="sessions">再导入更多</button>';
-    right = `
-      <button type="button" class="cw-btn ghost" data-cw-action="close">完成</button>
-      ${okCount ? '<button type="button" class="cw-btn primary" data-cw-action="open-latest">打开最近导入的会话</button>' : ''}`;
+    left = '';
+    right = `<button type="button" class="cw-btn ghost" data-cw-action="close"${_cw.busy ? ' disabled' : ''}>${_cw.busy ? '导入中…' : '关闭'}</button>`;
   }
 
   foot.innerHTML = `<div class="cw-foot-left">${left}</div><div class="cw-foot-right">${right}</div>`;
@@ -245,11 +237,6 @@ function _cwRenderFoot() {
       else if (action === 'next') _cwGo(2);
       else if (action === 'source') _cwGo(1);
       else if (action === 'import') _cwGo(3);
-      else if (action === 'sessions') _cwGo(2);
-      else if (action === 'open-latest') {
-        const latest = _cw.imported[_cw.imported.length - 1];
-        _cwOpenConversation(latest && latest.cid);
-      }
     });
   });
 }
@@ -258,7 +245,10 @@ function _cwRenderFoot() {
 function _cwSourceLabel(source) {
   if (source === 'claude') return 'Claude Code';
   if (source === 'claude-desktop') return 'Claude 桌面版';
-  return 'Codex';
+  if (source === 'codex') return 'Codex';
+  if (source === 'workbuddy') return 'WorkBuddy';
+  if (source === 'opencode') return 'OpenCode';
+  return String(source || 'Agent');
 }
 
 async function _cwLoadSources() {
@@ -267,7 +257,9 @@ async function _cwLoadSources() {
   try {
     const res = await window.orkas.invoke('localAgents.list');
     const entries = Array.isArray(res && res.entries) ? res.entries : [];
-    const available = entries.filter((e) => e && e.available && (e.type === 'claude' || e.type === 'codex'));
+    // 显示所有已连接/可用的 CLI Agent（Claude Code / Codex / OpenCode /
+    // WorkBuddy 等）——用户连接的 agent 都应在此展示。
+    const available = entries.filter((e) => e && e.available);
 
     // Claude Desktop is not a CLI, so it never appears in `localAgents.list`.
     // Probe it separately and offer it as a source only when it has sessions,
@@ -306,33 +298,31 @@ async function _cwLoadSources() {
     const sourceCard = (a) => {
       const version = a.version ? `v${_cwEsc(a.version)}` : '';
       const meta = a.type === 'claude-desktop' ? `${a.count} 个会话` : (version || '本机检测到');
+      const selected = _cw.selectedSources.has(a.type);
       return `
-        <button type="button" class="cw-source-card${_cw.source === a.type ? ' is-active' : ''}" data-cw-source="${_cwEsc(a.type)}">
+        <button type="button" class="cw-source-card${selected ? ' is-active' : ''}" data-cw-source="${_cwEsc(a.type)}">
+          <span class="cw-source-check">${_cwIcon('check')}</span>
           <span class="cw-source-icon">${_cwIcon('play')}</span>
           <span class="cw-source-name">${_cwEsc(_cwSourceLabel(a.type))}</span>
           <span class="cw-source-meta">${meta}</span>
         </button>`;
     };
 
-    const allCard = available.length > 1
-      ? `
-        <button type="button" class="cw-source-card is-all${_cw.source === 'all' ? ' is-active' : ''}" data-cw-source="all">
-          <span class="cw-source-icon">${_cwIcon('check')}</span>
-          <span class="cw-source-name">全部来源</span>
-          <span class="cw-source-meta">包含 ${available.length} 个 Agent</span>
-        </button>`
-      : '';
+    // 默认全选所有已连接的 Agent，用户可手动取消。
+    if (!_cw.selectedSources.size) {
+      available.forEach((a) => _cw.selectedSources.add(a.type));
+    }
+    _cw.activeSourceTab = _cw.activeSourceTab || _cw.sources[0]?.type || '';
 
-    const divider = available.length > 1
-      ? `<div class="cw-source-divider"><span>或按来源单独选择</span></div>`
-      : '';
-
-    grid.innerHTML = allCard + divider + available.map(sourceCard).join('');
+    grid.innerHTML = available.map(sourceCard).join('');
     grid.querySelectorAll('[data-cw-source]').forEach((el) => {
       el.addEventListener('click', () => {
-        _cw.source = el.dataset.cwSource;
-        _cw.selected = new Set();
-        grid.querySelectorAll('[data-cw-source]').forEach((x) => x.classList.toggle('is-active', x === el));
+        const type = el.dataset.cwSource;
+        if (_cw.selectedSources.has(type)) _cw.selectedSources.delete(type);
+        else _cw.selectedSources.add(type);
+        grid.querySelectorAll('[data-cw-source]').forEach((x) => (
+          x.classList.toggle('is-active', _cw.selectedSources.has(x.dataset.cwSource))
+        ));
         _cwRenderFoot();
       });
     });
@@ -348,9 +338,7 @@ async function _cwLoadSessions() {
   if (!list) return;
   list.innerHTML = '<div class="cw-loading">正在读取会话…</div>';
 
-  const wanted = _cw.source === 'all'
-    ? _cw.sources.map((s) => s.type)
-    : [_cw.source];
+  const wanted = [..._cw.selectedSources];
   const sessions = [];
   _cw.denied = false;
   for (const type of wanted) {
@@ -384,7 +372,7 @@ async function _cwLoadSessions() {
             time: s.timestamp || '',
           });
         }
-      } else {
+      } else if (type === 'codex') {
         const res = await window.orkas.invoke('sessionImport.listCodexSessions');
         for (const s of (res && res.sessions) || []) {
           sessions.push({
@@ -396,6 +384,30 @@ async function _cwLoadSessions() {
             time: s.createdAt || '',
           });
         }
+      } else if (type === 'workbuddy') {
+        const res = await window.orkas.invoke('sessionImport.listWorkbuddySessions');
+        for (const s of (res && res.sessions) || []) {
+          sessions.push({
+            id: `workbuddy::${s.filePath}`,
+            source: 'workbuddy',
+            filePath: s.filePath,
+            title: s.firstMessage || '未命名会话',
+            meta: s.projectPath || '',
+            time: s.timestamp || '',
+          });
+        }
+      } else if (type === 'opencode') {
+        const res = await window.orkas.invoke('sessionImport.listOpencodeSessions');
+        for (const s of (res && res.sessions) || []) {
+          sessions.push({
+            id: `opencode::${s.id}`,
+            source: 'opencode',
+            sessionId: s.id,
+            title: s.title || '未命名会话',
+            meta: s.model && s.model.modelID ? s.model.modelID : (s.projectId || ''),
+            time: s.timeCreated ? new Date(s.timeCreated).toISOString() : '',
+          });
+        }
       }
     } catch (err) {
       _cwLog.warn(`failed to list ${type} sessions`, err);
@@ -403,8 +415,42 @@ async function _cwLoadSessions() {
   }
 
   _cw.sessions = sessions;
+  // 会话不默认全选：保持用户之前的选择，未选过的保持未选。
   _cw.selected = new Set(sessions.map((s) => s.id).filter((id) => _cw.selected.has(id)));
+  if (!_cw.activeSourceTab || !_cw.selectedSources.has(_cw.activeSourceTab)) {
+    _cw.activeSourceTab = wanted[0] || '';
+  }
+  _cwRenderSourceTabs();
   _cwRenderSessionList();
+}
+
+/** 第二步：按已选 Agent 渲染会话 tab 栏。 */
+function _cwRenderSourceTabs() {
+  const host = _cw.backdrop.querySelector('[data-cw-source-tabs]');
+  if (!host) return;
+  const types = [..._cw.selectedSources];
+  if (!types.length) {
+    host.innerHTML = '';
+    return;
+  }
+  host.innerHTML = types.map((type) => `
+    <button type="button" class="cw-source-tab${type === _cw.activeSourceTab ? ' is-active' : ''}"
+      data-cw-source-tab="${_cwEsc(type)}">
+      ${_cwEsc(_cwSourceLabel(type))}
+      <span class="cw-source-tab-count" data-cw-tab-count="${_cwEsc(type)}"></span>
+    </button>`).join('');
+  host.querySelectorAll('[data-cw-source-tab]').forEach((el) => {
+    el.addEventListener('click', () => {
+      _cw.activeSourceTab = el.dataset.cwSourceTab;
+      _cwRenderSourceTabs();
+      _cwRenderSessionList();
+    });
+  });
+  // 每个 tab 显示该 Agent 的会话数。
+  types.forEach((type) => {
+    const el = host.querySelector(`[data-cw-tab-count="${CSS.escape ? CSS.escape(type) : type}"]`);
+    if (el) el.textContent = _cw.sessions.filter((s) => s.source === type).length;
+  });
 }
 
 function _cwRenderSessionList() {
@@ -414,7 +460,9 @@ function _cwRenderSessionList() {
   if (!list) return;
 
   const q = String(search && search.value || '').trim().toLowerCase();
-  const visible = _cw.sessions.filter((s) => (
+  // 只显示当前 Agent tab 下的会话（activeSourceTab）。
+  const tabSessions = _cw.sessions.filter((s) => s.source === _cw.activeSourceTab);
+  const visible = tabSessions.filter((s) => (
     !q || `${s.title} ${s.meta} ${s.source}`.toLowerCase().includes(q)
   ));
 
@@ -425,10 +473,10 @@ function _cwRenderSessionList() {
     if (selectAll) selectAll.textContent = allVisibleSelected ? '取消全选' : '全选';
   }
 
-  if (!_cw.sessions.length) {
+  if (!tabSessions.length) {
     list.innerHTML = _cw.denied
       ? '<div class="cw-empty">无法访问 Claude 数据目录，请检查软件权限。</div>'
-      : '<div class="cw-empty">所选来源没有可导入的历史会话。</div>';
+      : '<div class="cw-empty">所选 Agent 没有可导入的历史会话。</div>';
     _cwRenderFoot();
     return;
   }
@@ -516,6 +564,16 @@ async function _cwRunImport() {
         res = await window.orkas.invoke('sessionImport.importClaudeDesktopSession', {
           sessionId: item.sessionId,
         });
+      } else if (item.source === 'workbuddy') {
+        res = await window.orkas.invoke('sessionImport.importWorkbuddySession', {
+          filePath: item.filePath,
+          titleHint: item.title,
+        });
+      } else if (item.source === 'opencode') {
+        res = await window.orkas.invoke('sessionImport.importOpencodeSession', {
+          sessionId: item.sessionId,
+          titleHint: item.title,
+        });
       } else {
         res = await window.orkas.invoke('sessionImport.importCodexSession', {
           filePath: item.filePath,
@@ -524,6 +582,17 @@ async function _cwRunImport() {
       }
       if (res && res.conversationId) {
         item.cid = res.conversationId;
+        // 已导入过的会话：后端跳过重新提炼，直接提示已存在，不再重复导入。
+        if (res.alreadyImported) {
+          item.status = 'exists';
+          if (row) {
+            row.outerHTML = _cwRowHtml(item, 'is-exists', '已存在 · 跳过');
+            row = list.querySelectorAll('[data-cw-import-row]')[i];
+          }
+          doneCount += 1;
+          updateProgress();
+          continue;
+        }
         _cw.imported.push(item);
         if (item.source === 'claude' && res.cognitions) {
           _cw.cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
@@ -572,48 +641,9 @@ async function _cwRunImport() {
   _cw.busy = false;
   _cw.done = true;
   await _cwRefreshConversationList();
-  _cwGo(4);
-}
-
-function _cwRenderDone() {
-  const body = _cw.backdrop.querySelector('[data-cw-body]');
-  if (!body) return;
-  const okCount = _cw.imported.length;
-  const failCount = _cw.failed.length;
-  const degradedCount = _cw.degradedCount || 0;
-  const metaParts = [`成功 ${okCount}`];
-  if (failCount) metaParts.push(`失败 ${failCount}`);
-  if (degradedCount) metaParts.push(`其中 ${degradedCount} 个未提炼`);
-  if (_cw.cognitions) metaParts.push(`提取 ${_cw.cognitions} 条候选认知`);
-  const meta = metaParts.join(' · ');
-  // When some imports fell back to raw (no distillation), tell the user why and
-  // how to fix it. This is the honest surfacing of the previously-silent
-  // degrade: an import that "succeeded" but only saved the raw opening.
-  const degradedHint = degradedCount
-    ? `<div class="cw-done-hint">${_cwIcon('clock')}<span>有 ${degradedCount} 个会话仅保存了原始开头，未能自动提炼简报与认知。通常是因为还没有配置可用的模型（提炼需要调用模型）。在设置里配置一个可用模型后重新导入即可获得提炼简报。</span></div>`
-    : '';
-  const listHtml = okCount
-    ? `<div class="cw-done-list">${_cw.imported.map((item) => `
-        <div class="cw-done-row${item.degraded ? ' is-degraded' : ''}">
-          <span class="cw-done-title">${_cwEsc(item.title)}</span>
-          ${item.degraded ? '<span class="cw-done-tag">未提炼</span>' : ''}
-          <button type="button" class="cw-btn small" data-cw-open-cid="${_cwEsc(item.cid)}">打开</button>
-        </div>`).join('')}</div>`
-    : '<div class="cw-empty">没有成功导入的会话，可以返回重新选择。</div>';
-
-  body.innerHTML = `
-    <div class="cw-done-summary">
-      <div class="cw-done-icon">${okCount ? _cwIcon('check') : _cwIcon('clock')}</div>
-      <div class="cw-done-title">${okCount ? `已导入 ${okCount} 个会话` : '导入未完成'}</div>
-      <div class="cw-done-meta">${_cwEsc(meta)}</div>
-    </div>
-    ${degradedHint}
-    ${listHtml}`;
-
-  body.querySelectorAll('[data-cw-open-cid]').forEach((el) => {
-    el.addEventListener('click', () => _cwOpenConversation(el.dataset.cwOpenCid));
-  });
-  _cwRenderFoot();
+  // 导入完成：自动关闭向导并打开最近导入的会话（无独立完成页）。
+  const latest = _cw.imported.length ? _cw.imported[_cw.imported.length - 1] : null;
+  _cwOpenConversation(latest && latest.cid);
 }
 
 window.continueWork = { open };

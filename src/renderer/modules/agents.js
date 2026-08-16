@@ -715,6 +715,10 @@ function renderAgentsGrid(agents) {
   const moreTitle = escapeHtml(t('agents.more_actions'));
   const lang = getLang();
   const customChipLabel = t('agents.custom_group');
+  const baseGroupLabel = (() => {
+    const raw = t('agents.base_group');
+    return (raw && raw !== 'agents.base_group') ? raw : t('agents.external_group');
+  })();
   const marketplaceGroupLabel = (() => {
     const raw = t('agents.builtin_group');
     return (raw && raw !== 'agents.builtin_group') ? raw : t('agents.source_marketplace');
@@ -831,11 +835,14 @@ function renderAgentsGrid(agents) {
     `;
   };
 
-  const groups = { commander: [], custom: [], marketplace: [] };
+  const groups = { commander: [], base: [], custom: [], marketplace: [] };
   for (const a of filtered) {
     const source = _agentSource(a?.source);
     if (_isCommanderAgent(a)) groups.commander.push(a);
     else if (source === 'marketplace') groups.marketplace.push(a);
+    // 外接 CLI agent（ClaudeCode / Codex / WorkBuddy…）是「基础 Agent」：
+    // 与指挥官同层（谁来承接空间任务），与自定义团队成员分开。
+    else if (_isExternalCliAgent(a)) groups.base.push(a);
     else groups.custom.push(a);
   }
   const sectionHtml = (label, list, opts = {}) => {
@@ -856,6 +863,7 @@ function renderAgentsGrid(agents) {
   };
   gridEl.classList.add('is-sectioned');
   gridEl.innerHTML = sectionHtml('', groups.commander, { hideHead: true })
+    + sectionHtml(baseGroupLabel, groups.base)
     + sectionHtml(customChipLabel, groups.custom)
     + sectionHtml(marketplaceGroupLabel, groups.marketplace);
 

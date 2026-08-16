@@ -50,6 +50,8 @@ function loadHelpers(): any {
   const names = [
     '_conversationActionItems',
     '_renderConversationMergeActionBar',
+    '_conversationMergePickerMeta',
+    '_renderConversationMergePickerRows',
     '_ensureConversationMergeActionBar',
     '_copyNoticeBodyHtml',
     '_mergeSummarySectionLabel',
@@ -67,6 +69,8 @@ function loadHelpers(): any {
         'chat.conv_del_title': 'Delete',
         'chat.merge.selected_count': `已选择 ${vars?.count || 0} 个会话`,
         'chat.merge.action': '合并为新会话',
+        'chat.merge.select_action': '选择并合并',
+        'chat.merge.picker_empty': '没有匹配的会话',
         'chat.merge.summary_title': `已合并 ${vars?.count || 0} 个会话`,
         'chat.merge.summary_subtitle': `${vars?.agentCount || 0} 个 Agent 的私有上下文已归并`,
         'chat.merge.expand': '查看合并摘要',
@@ -87,6 +91,9 @@ function loadHelpers(): any {
       return strings[key] || key;
     },
     escapeHtml: (value: unknown) => String(value),
+    _uiIconHtml: (name: string) => `<svg data-icon="${name}"></svg>`,
+    _conversationMergeSelection: new Set(['c2']),
+    _conversationActivityIso: (conversation: any) => conversation.last_active_at || '',
     _renderMessageMarkdown: (value: unknown) => String(value),
     _toggleConversationPinned() {},
     _startConversationHeaderRename() {},
@@ -106,11 +113,25 @@ describe('conversation copy and merge renderer', () => {
     expect(labels).toContain('复制会话');
   });
 
-  it('renders the merge action bar for selected conversations', () => {
+  it('keeps the sidebar merge control as a compact picker entry', () => {
     const { _renderConversationMergeActionBar } = loadHelpers();
     const html = _renderConversationMergeActionBar(2);
-    expect(html).toContain('已选择 2 个会话');
-    expect(html).toContain('合并为新会话');
+    expect(html).toContain('选择并合并');
+    expect(html).toContain('data-merge-start');
+    expect(html).not.toContain('已选择 2 个会话');
+    expect(html).not.toContain('data-merge-cancel');
+  });
+
+  it('renders selected conversations inside the merge picker', () => {
+    const { _renderConversationMergePickerRows } = loadHelpers();
+    const html = _renderConversationMergePickerRows([
+      { conversation_id: 'c1', title: 'First task' },
+      { conversation_id: 'c2', title: 'Second task' },
+    ]);
+    expect(html).toContain('data-merge-picker-cid="c1"');
+    expect(html).toContain('data-merge-picker-cid="c2"');
+    expect(html).toContain('conversation-merge-picker-row is-selected');
+    expect(html).toContain('data-icon="check"');
   });
 
   it('renders the merged summary card title and detail sections', () => {

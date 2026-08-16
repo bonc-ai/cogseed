@@ -58,6 +58,10 @@ function proposalToCandidateInput(
     ...(proposal.learningSignal ? { learningSignal: proposal.learningSignal } : {}),
     ...(proposal.learningProvenance ? { learningProvenance: proposal.learningProvenance } : {}),
     captureKey: `kstar-${source.id}-${index}`,
+    // 空间归属：KStar 会话挂空间时 workspaceId 即空间 id（bus.ts 以
+    // turnSpaceId 填充）。带上后资产落 spaceId，空间资产 tab 才能显示
+    // KStar 沉淀的资产（否则全局可见但空间过滤不到）。
+    ...(source.workspaceId && safeId(source.workspaceId) ? { spaceId: source.workspaceId } : {}),
   };
 }
 
