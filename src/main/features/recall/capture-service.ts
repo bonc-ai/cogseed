@@ -51,6 +51,7 @@ import {
   type RecallCaptureExecutionPolicy,
 } from './capture-settings';
 import {
+  assessRecallCandidateClassification,
   assessRecallCaptureCandidateQuality,
   screenRecallCaptureValue,
   type RecallCaptureFilterReason,
@@ -289,6 +290,9 @@ interface ParsedCandidate {
   actionProvided: boolean;
   risk?: 'low' | 'medium' | 'high';
   targetAssetId?: string;
+  /** 规则候选的适用/禁止范围。缺失 = 模型没给出，不是「无限制」。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
   evidence: string[];
 }
 
@@ -638,6 +642,9 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
       ...(uncertainty ? { uncertainty } : {}),
       suggestedType: parseCandidateType(candidate.suggestedType),
       suggestedScope: boundedRequiredText(candidate.suggestedScope, 'suggestedScope', 500),
+      // 规则的适用/禁止范围。模型给不出就留空——晋升闸门会据此把候选留在
+      // 池子里等人补，而不是当作「无限制」写进正式资产。
+      ...parseCandidateBoundaries(candidate),
       ...(candidate.suggestedAction === undefined ? {} : { suggestedAction: parseCandidateAction(candidate.suggestedAction) }),
       actionProvided,
       ...(candidate.risk === undefined ? {} : { risk: parseCandidateRisk(candidate.risk) }),
@@ -647,12 +654,45 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
   });
 }
 
+/** 读模型给出的边界短语。非数组/空串一律忽略，宁可留空也不编造边界。 */
+function parseCandidateBoundaries(candidate: Record<string, unknown>): {
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
+} {
+  const read = (raw: unknown): string[] | undefined => {
+    if (!Array.isArray(raw)) return undefined;
+    const items = raw
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item) => item.length > 0)
+      .slice(0, 10)
+      .map((item) => item.slice(0, 300));
+    return items.length ? items : undefined;
+  };
+  const applicableWhen = read(candidate.applicableWhen);
+  const forbiddenWhen = read(candidate.forbiddenWhen);
+  return {
+    ...(applicableWhen ? { applicableWhen } : {}),
+    ...(forbiddenWhen ? { forbiddenWhen } : {}),
+  };
+}
+
 function extractionSystemPrompt(): string {
   return [
     'You extract durable, user-reviewable knowledge from one completed conversation run.',
     'Return exactly one JSON object and no markdown or commentary.',
-    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
+    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","applicableWhen":["required for rule"],"forbiddenWhen":["required for rule"],"suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
     'Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.',
+    // 四类定义与硬边界（PRD 3.1/3.2/3.3）。缺了这段，模型只能靠四个英文枚举
+    // 词自行猜测，项目事实会被写成 personal、原文件会被写成 template。
+    'suggestedType must answer one of four questions, and each has contents that are explicitly excluded:',
+    '- personal: "What is durably true about this user?" Identity, role, long-term preference, stable relationship, long-term environment, boundary. EXCLUDED: current task progress, the current sprint or milestone, a meeting or schedule, a temporary contact relationship, any project fact. Those stay with the project, not with the person.',
+    '- rule: "Under what condition should which judgment or behaviour hold?" A complete rule has a condition, a principle, and a boundary. EXCLUDED: a bare preference with no condition ("likes concise"), and one-off instructions for this task only.',
+    'For a rule candidate you MUST also return applicableWhen and forbiddenWhen: short concrete phrases for when it applies and where it must not be used. A rule without both cannot become a formal asset. Do not invent a boundary the messages do not support — drop the candidate instead.',
+    '- template: "Is there a structure that can be applied again next time?" Document skeletons, checklists, section structures, reusable fragments, output schemas. EXCLUDED: the source file itself. A PRD.docx stays a source file; only the reusable structure extracted from it can be a template.',
+    '- skill_method: "Is there an executable, checkable method here?" It must be able to state a trigger, inputs, an ordered action plan, outputs, and how the result is validated. EXCLUDED: capability claims such as "I am good at writing PRDs", and single one-step actions.',
+    'When the content does not satisfy the type it would need, drop it rather than forcing it into the closest type.',
+    'judgment must BE the reusable content itself, never a verdict about the candidate. "Useful and reusable" or "valuable, shows what the user expects" are judgements about your own extraction, not knowledge — drop those instead of emitting them.',
+    'Never emit the same judgment under two different suggestedType values. Pick the one type it actually satisfies, or drop it.',
     'Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.',
     'Each candidate must state a concrete future value and an explicit suggestedAction; do not restate its summary as value.',
     'Every candidate must cite at least one user message. Short acknowledgements, greetings, status checks, and failed work are not candidates.',
@@ -1237,9 +1277,12 @@ async function automaticallyApplyReviewableCandidates(
 ): Promise<{
   resolved: Map<string, RecallCandidateRecord>;
   failedCandidateIds: string[];
+  /** 自动写入被安全机制挡下（不是失败）：候选原封不动留在池子里等人工确认。 */
+  deferredCandidateIds: string[];
 }> {
   const resolved = new Map<string, RecallCandidateRecord>();
   const failedCandidateIds: string[] = [];
+  const deferredCandidateIds: string[] = [];
   for (const candidateId of new Set(candidateIds)) {
     try {
       // Read immediately before applying. A prior run or a concurrent user
@@ -1276,13 +1319,24 @@ async function automaticallyApplyReviewableCandidates(
         candidate: applied.candidate,
         asset: applied.asset,
       });
-    } catch {
+    } catch (error) {
+      // 语义查重不可用不是写入失败：候选没被动过，仍然可以人工确认。把它记成
+      // 失败会让整次沉淀显示成错误并催用户重试，而重试同样查不了重。
+      // 两类"挡下"都不是写入失败：候选没被动过，仍然可以人工确认。
+      //   semantic_dedup_unavailable  查重做不了，不能当作"查过且干净"
+      //   promotion_blocked           没到该类型的正式准入门槛（PRD 3.1）
+      // 记成失败会让整次沉淀显示成错误并催用户重试，而重试同样过不了。
+      const code = (error as { code?: string })?.code;
+      if (code === 'semantic_dedup_unavailable' || code === 'promotion_blocked') {
+        deferredCandidateIds.push(candidateId);
+        continue;
+      }
       // Continue so one blocked or temporarily failed candidate cannot prevent
       // independent later candidates from reaching their terminal state.
       failedCandidateIds.push(candidateId);
     }
   }
-  return { resolved, failedCandidateIds };
+  return { resolved, failedCandidateIds, deferredCandidateIds };
 }
 
 export async function runRecallCapture(
@@ -1496,9 +1550,22 @@ export async function runRecallCapture(
     for (const [index, candidate] of parsed.entries()) {
       const evidenceMessages = candidate.evidence.map((label) => byLabel.get(label)!);
       const quality = assessRecallCaptureCandidateQuality(candidate, evidenceMessages);
+      // 归类校验：提示词只能"要求"模型按四类定义分类，兜底靠这里。命中 PRD
+      // 明确排除的内容（项目事实当 personal、原文件当 template、能力自述当
+      // skill_method）时降级为弱观察，不进 pending_review。
+      const classification = assessRecallCandidateClassification(candidate);
+      if (!classification.ok) {
+        log.info('recall capture candidate misclassified', {
+          captureId: capture.id,
+          suggestedType: candidate.suggestedType,
+          reasons: classification.blockingReasons,
+        });
+      }
       const requiresManualRiskGate = quality.reviewable
+        && classification.ok
         && quality.automaticIneligibilityReasons.includes('high_risk_requires_review');
-      const retainForReview = !automaticMode || quality.automaticEligible || requiresManualRiskGate;
+      const retainForReview = classification.ok
+        && (!automaticMode || quality.automaticEligible || requiresManualRiskGate);
       const teachingSignals = activeTeachingSignals.filter((signal) => (
         evidenceMessages.some((message) => message.id === signal.messageId)
       ));
@@ -1545,7 +1612,9 @@ export async function runRecallCapture(
           ...(candidate.suggestedAction ? { suggestedAction: candidate.suggestedAction } : {}),
           ...(candidate.risk ? { risk: candidate.risk } : {}),
           ...(candidate.targetAssetId ? { targetAssetId: candidate.targetAssetId } : {}),
-          forceWeakObservation: !quality.reviewable || (automaticMode && !quality.automaticEligible && !requiresManualRiskGate),
+          ...(candidate.applicableWhen ? { applicableWhen: candidate.applicableWhen } : {}),
+          ...(candidate.forbiddenWhen ? { forbiddenWhen: candidate.forbiddenWhen } : {}),
+          forceWeakObservation: !quality.reviewable || !classification.ok || (automaticMode && !quality.automaticEligible && !requiresManualRiskGate),
           captureKey: `capture-${capture.id}-${index}`,
           ...(captureSpaceId ? { spaceId: captureSpaceId } : {}),
           taskRunId: capture.terminalRunId,
@@ -1607,6 +1676,13 @@ export async function runRecallCapture(
         );
         for (const [candidateId, candidate] of application.resolved) {
           resolvedCandidates.set(candidateId, candidate);
+        }
+        if (application.deferredCandidateIds.length) {
+          log.info('recall capture automatic write deferred to manual review', {
+            captureId: id,
+            candidateIds: application.deferredCandidateIds,
+            reason: 'blocked_or_undecidable',
+          });
         }
         if (application.failedCandidateIds.length) {
           throw new Error('one or more candidates could not be automatically written');

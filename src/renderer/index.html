@@ -431,6 +431,10 @@
               <h1 data-i18n="cognition.title">认知资产</h1>
               <p data-i18n="cognition.subtitle">查看会话沉淀进度与认知资产</p>
             </div>
+            <!-- 辅助入口：来源是输入配置、沉淀活动是后台加工进度，两者都不是
+                 用户来这里要完成的任务，所以不与任务视图并列。 -->
+            <button type="button" class="btn btn-sm cognition-aux-entry" data-cognition-page="sources" data-i18n="cognition.manage_sources">管理来源</button>
+            <button type="button" class="btn btn-sm cognition-aux-entry" data-cognition-page="captures" data-i18n="cognition.capture_activity">沉淀活动</button>
             <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
               <span data-ui-icon="refresh"></span>
             </button>
@@ -439,16 +443,19 @@
           <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产导航">
             <div class="skills-cognition-tab-group">
               <button type="button" id="skills-cognition-tab-overview" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-overview" data-cognition-page="overview"><span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span></button>
-              <button type="button" id="skills-cognition-tab-captures" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-captures" tabindex="-1" data-cognition-page="captures"><span data-ui-icon="clock"></span><span data-i18n="cognition.capture_tasks">沉淀任务</span></button>
-              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.ability_assets">能力资产</span></button>
-              <button type="button" id="skills-cognition-tab-sources" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-sources" tabindex="-1" data-cognition-page="sources"><span data-ui-icon="folder-open"></span><span data-i18n="cognition.sources">数据来源</span></button>
-              <button type="button" id="skills-cognition-tab-my-abilities" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-my-abilities" tabindex="-1" data-cognition-page="my-abilities"><span data-ui-icon="sparkles"></span><span data-i18n="cognition.my_abilities">我的能力</span></button>
-              <button type="button" id="skills-cognition-tab-about-me" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-about-me" tabindex="-1" data-cognition-page="about-me"><span data-ui-icon="user"></span><span data-i18n="cognition.about_me">关于我</span></button>
+              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.my_assets">我的资产</span></button>
+              <button type="button" id="skills-cognition-tab-proofs" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-proofs" tabindex="-1" data-cognition-page="proofs"><span data-ui-icon="shield-check"></span><span data-i18n="cognition.proofs">使用与证明</span></button>
             </div>
           </nav>
           <main class="skills-cognition-main">
           <section class="skills-cognition-page" id="skills-cognition-overview" role="tabpanel" aria-labelledby="skills-cognition-tab-overview" data-cognition-page-body="overview">
             <div id="skills-cognition-overview-body"></div>
+          </section>
+          <!-- 使用与证明：回答"这些资产究竟在哪里用过、真的起作用了吗"。
+               数据全部来自既有事实链（usage / transfer proof / effectiveness proof
+               / receipt），这里只做按资产的聚合展示，不新增事实。 -->
+          <section class="skills-cognition-page" id="skills-cognition-proofs" role="tabpanel" aria-labelledby="skills-cognition-tab-proofs" data-cognition-page-body="proofs" hidden>
+            <div id="skills-cognition-proofs-body"></div>
           </section>
           <section class="skills-cognition-page" id="skills-cognition-sources" role="tabpanel" aria-labelledby="skills-cognition-tab-sources" data-cognition-page-body="sources" hidden>
             <div id="skills-cognition-sources-body"></div>
@@ -459,159 +466,12 @@
           </section>
           <section class="skills-cognition-page" id="skills-cognition-assets" role="tabpanel" aria-labelledby="skills-cognition-tab-assets" data-cognition-page-body="assets" hidden>
             <div id="skills-cognition-assets-summary"></div>
+            <!-- 「关于我」不再是独立任务页：它是四类资产之一，选中 personal
+                 分类时在这里展开个人本体。整份骨架全仓只有这一处——
+                 personal-ontology.js 全程用 getElementById 定位
+                 #personal-onto-nav / -main-header / -main-body，一旦出现第二份
+                 同 id 骨架，渲染会落到文档靠前那份，另一处就变成死壳。 -->
             <section class="recall-personal-ontology-section" id="skills-cognition-personal-ontology" hidden>
-              <div class="recall-asset-section-head">
-                <div>
-                  <h2 data-i18n="cognition.personal_ontology_section">个人本体</h2>
-                  <p data-i18n="cognition.personal_ontology_section_hint">管理身份、角色、偏好与关系等结构化个人信息</p>
-                </div>
-              </div>
-              <div class="recall-personal-ontology-frame">
-                <div class="personal-onto-layout">
-                  <div class="personal-onto-sidebar" id="personal-onto-sidebar">
-                    <div class="personal-onto-nav" id="personal-onto-nav"></div>
-                  </div>
-                  <div class="personal-onto-main">
-                    <div class="personal-onto-main-header" id="personal-onto-main-header"></div>
-                    <div class="personal-onto-main-body" id="personal-onto-main-body"></div>
-                  </div>
-                </div>
-              </div>
-            </section>
-            <section class="recall-formal-assets-section" id="skills-cognition-formal-assets">
-              <div class="recall-asset-section-head recall-personal-memory-head" hidden>
-                <div>
-                  <h2 data-i18n="cognition.personal_memories_section">已沉淀信息</h2>
-                  <p data-i18n="cognition.personal_memories_section_hint">从会话中确认并保存的“关于我”认知资产</p>
-                </div>
-              </div>
-              <div id="skills-cognition-assets-body"></div>
-            </section>
-            <div class="personal-onto-modal-overlay" id="personal-onto-template-library-modal" style="display:none" aria-hidden="true">
-              <div class="personal-onto-modal personal-onto-library-modal" role="dialog" aria-modal="true" aria-labelledby="personal-onto-template-library-title" tabindex="-1">
-                <div class="personal-onto-modal-header">
-                  <span id="personal-onto-template-library-title" data-i18n="personalOntology.template_library">角色模板库</span>
-                  <button type="button" class="modal-close-btn" id="personal-onto-template-library-close" data-i18n-title="common.close" data-i18n-aria-label="common.close" title="关闭" aria-label="关闭"><span data-ui-icon="x"></span></button>
-                </div>
-                <div class="personal-onto-modal-body">
-                  <div class="personal-onto-library-sub muted" data-i18n="personalOntology.template_library_sub">未安装的角色模板，安装后显示在左侧「角色模板」区（最多 3 个）</div>
-                  <div class="personal-onto-library-list" id="personal-onto-template-library-list"></div>
-                </div>
-                <div class="personal-onto-modal-footer">
-                  <button class="btn btn-sm" id="personal-onto-template-library-cancel" data-i18n="common.close">关闭</button>
-                </div>
-              </div>
-            </div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-my-abilities" role="tabpanel" aria-labelledby="skills-cognition-tab-my-abilities" data-cognition-page-body="my-abilities" hidden>
-            <!-- 技能库（#panel-skills）整体内嵌：保留 id，渲染函数照常工作。 -->
-            <section class="panel skills-embedded-panel" id="panel-skills">
-              <!-- Grid view (default) -->
-              <div class="skills-grid-view" id="skills-grid-view">
-                <div class="skills-grid-header">
-                  <span data-i18n="skills.title">Skills</span>
-                  <div class="header-actions">
-                    <button class="btn btn-sm" id="create-skill-btn" data-i18n="skills.add">+ Create</button>
-                    <button class="btn btn-sm" id="skills-more-btn" data-i18n="skills.more_btn">More</button>
-                  </div>
-                </div>
-                <div class="marketplace-reconcile-banner" data-reconcile-banner data-reconcile-kind="skill" style="display:none"></div>
-                <!-- Category chip strip — see the parallel comment on agents-categories. -->
-                <div class="marketplace-categories skills-categories" id="skills-categories"></div>
-                <div class="skills-grid-scroll">
-                  <div class="skills-grid" id="skills-grid"></div>
-                  <div class="skills-empty" id="skills-empty" data-i18n="skills.empty">No skills yet</div>
-                </div>
-              </div>
-
-              <!-- Detail view (replaces grid when a card is opened) -->
-              <div class="skills-detail-view" id="skills-detail-view" style="display:none">
-                <div class="skills-detail-col" id="skills-detail-col">
-                  <div class="skills-detail-content" id="skills-detail-content" style="display:none">
-                    <div class="skills-doc-headline">
-                      <button type="button" class="btn btn-sm" id="skills-back-btn" data-i18n="common.back">Back</button>
-                      <h1 class="skills-doc-title" id="skills-detail-name" data-editable="false"></h1>
-                      <span class="skills-doc-source" id="skills-detail-source"></span>
-                      <div class="skills-doc-actions" id="skills-detail-actions">
-                        <button type="button" class="skill-card-use skill-dialog-btn" id="skill-use-btn" data-i18n="skills.use" data-i18n-title="skills.use_tooltip" data-i18n-aria-label="skills.use_tooltip" aria-label="Use this skill">Use</button>
-                        <button class="btn btn-sm" id="skill-edit-btn" data-i18n="skills.edit">Edit</button>
-                        <button class="btn btn-sm" id="skill-enabled-btn" data-i18n="component.disable">Disable</button>
-                        <button class="btn btn-sm" id="skill-upload-marketplace-btn" style="display:none" data-i18n="marketplace.upload">Upload to marketplace (dev)</button>
-                        <button class="btn btn-sm btn-danger" id="skill-delete-btn" data-i18n="skills.delete">Delete</button>
-                      </div>
-                    </div>
-
-                    <section class="skills-doc-section" id="skills-section-summary">
-                      <h3 class="skills-doc-section-label" data-i18n="skills.label_summary">Summary</h3>
-                      <div class="skills-doc-section-body" id="skills-detail-summary"></div>
-                    </section>
-
-                    <section class="skills-doc-section" id="skills-section-category">
-                      <h3 class="skills-doc-section-label" data-i18n="skills.label_category">Category</h3>
-                      <div class="skills-doc-section-body">
-                        <div class="skills-detail-category" id="skills-detail-category"></div>
-                      </div>
-                    </section>
-
-                    <section class="skills-doc-section" id="skills-section-extra" style="display:none">
-                      <h3 class="skills-doc-section-label" data-i18n="skills.label_extra">Other attributes</h3>
-                      <div class="skills-doc-section-body" id="skills-detail-extra"></div>
-                    </section>
-
-                    <section class="skills-doc-section skills-usage-section">
-                      <h3 class="skills-doc-section-label skills-usage-label">
-                        <span data-i18n="skills.label_usage">Usage</span>
-                        <button type="button" class="skills-source-toggle" id="skills-source-toggle" aria-expanded="false">
-                          <span class="skills-source-toggle-caret" aria-hidden="true" data-ui-icon="chevron-right" data-ui-icon-class="ui-icon"></span>
-                          <span data-i18n="skills.label_source">View source</span>
-                        </button>
-                      </h3>
-                      <div class="skills-source-panel" id="skills-source-panel" style="display:none">
-                        <div class="skills-source-tree" id="skills-source-tree"></div>
-                      </div>
-                      <div class="skills-doc-section-body markdown-body" id="skills-detail-body"></div>
-                    </section>
-                  </div>
-                </div>
-                <!-- Shown when a URL import was installed as an external package: no
-                     skill content to edit; point the user to package management. -->
-                <div class="skills-detail-content" id="skills-as-package" style="display:none">
-                  <div class="skills-doc-headline">
-                    <button type="button" class="btn btn-sm" id="skills-as-package-back" data-i18n="common.back">Back</button>
-                    <h1 class="skills-doc-title" id="skills-as-package-name"></h1>
-                  </div>
-                  <section class="skills-doc-section">
-                    <div class="skills-doc-section-body" id="skills-as-package-desc"></div>
-                    <button class="btn btn-sm" id="skills-as-package-manage" data-i18n="skills.as_package.manage">Manage packages</button>
-                  </section>
-                </div>
-                <!-- Inline chat for custom skill editing -->
-                <div class="skills-chat-col" id="skills-chat-col" style="display:none">
-                  <div class="skills-chat-toolbar">
-                    <button id="skill-chat-clear-btn" class="skill-chat-link" data-i18n-title="skills.clear_chat_title" title="Clear the edit chat for this skill" data-i18n="skills.clear_chat">Clear</button>
-                  </div>
-                  <div class="skills-chat-messages" id="skills-chat-messages"></div>
-                  <div class="chat-queue" id="skills-chat-queue" style="display:none">
-                    <div class="chat-queue-header">
-                      <span class="chat-queue-label"><span data-i18n="chat.queue_label">Queued</span> <span class="chat-queue-count" id="skills-chat-queue-count">0</span></span>
-                      <span class="chat-queue-hint" data-i18n="chat.queue_hint">Drag to reorder · Edit · Delete</span>
-                    </div>
-                    <div class="chat-queue-list" id="skills-chat-queue-list"></div>
-                  </div>
-                  <div class="skills-chat-input-area">
-                    <div class="chat-attachments edit-chat-attachments" id="skills-chat-attachments" style="display:none"></div>
-                    <button type="button" class="chat-attach-btn edit-chat-attach-btn" id="skills-chat-attach-btn" data-i18n-title="chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
-                    <textarea id="skills-chat-input" data-i18n-placeholder="skills.chat_input_placeholder" placeholder="Describe what to change..." rows="1"></textarea>
-                    <button id="skills-chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
-                      <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
-                      <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-about-me" role="tabpanel" aria-labelledby="skills-cognition-tab-about-me" data-cognition-page-body="about-me" hidden>
             <!-- 个人本体（#panel-personal-ontology）整体内嵌：保留 id，渲染函数照常工作。 -->
             <section class="panel skills-embedded-panel" id="panel-personal-ontology">
               <div class="personal-onto-layout">
@@ -661,6 +521,17 @@
                 </div>
               </div>
             </section>
+            </section>
+            <section class="recall-formal-assets-section" id="skills-cognition-formal-assets">
+              <div class="recall-asset-section-head recall-personal-memory-head" hidden>
+                <div>
+                  <h2 data-i18n="cognition.personal_memories_section">已沉淀信息</h2>
+                  <p data-i18n="cognition.personal_memories_section_hint">从会话中确认并保存的“关于我”认知资产</p>
+                </div>
+              </div>
+              <div id="skills-cognition-assets-body"></div>
+            </section>
+            <!-- 角色模板库弹窗同理：唯一一份跟着个人本体放在「关于我」tab。 -->
           </section>
           </main>
           </div>
@@ -716,6 +587,7 @@
           <div class="connections-tabs" role="tablist" aria-label="连接">
             <button type="button" class="connections-tab is-active" data-connections-tab="agents" data-i18n="connections.tab.agents">Agent</button>
             <button type="button" class="connections-tab" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
+            <button type="button" class="connections-tab" data-connections-tab="skills" data-i18n="connections.tab.skills">技能</button>
             <button type="button" class="connections-tab" data-connections-tab="sources" data-i18n="connections.tab.sources">数据源</button>
             <button type="button" class="connections-tab" data-connections-tab="touchpoints" data-i18n="connections.tab.touchpoints">触点</button>
             <button type="button" class="connections-tab" data-connections-tab="models" data-i18n="connections.tab.models">模型与额度</button>
@@ -889,6 +761,117 @@
             </div>
 
             <!-- 数据源 → 入口卡跳转到资料库面板 -->
+            <!-- 技能市场与外部 Skill 库属于「可用资源」，不是个人认知资产：
+                 它们的安装/导入不等于用户已确认拥有。个人已确认的 Skill 仍以
+                 skill_method 正式资产的形式留在认知资产「技能与方法」分类里。
+                 这里是技能库唯一一份 DOM，认知资产页不再内嵌副本。 -->
+            <div class="connections-tab-pane" id="connections-pane-skills" data-connections-pane="skills" hidden>
+              <section class="panel skills-embedded-panel" id="panel-skills">
+                <!-- Grid view (default) -->
+                <div class="skills-grid-view" id="skills-grid-view">
+                  <div class="skills-grid-header">
+                    <span data-i18n="skills.title">Skills</span>
+                    <div class="header-actions">
+                      <button class="btn btn-sm" id="create-skill-btn" data-i18n="skills.add">+ Create</button>
+                      <button class="btn btn-sm" id="skills-more-btn" data-i18n="skills.more_btn">More</button>
+                    </div>
+                  </div>
+                  <div class="marketplace-reconcile-banner" data-reconcile-banner data-reconcile-kind="skill" style="display:none"></div>
+                  <!-- Category chip strip — see the parallel comment on agents-categories. -->
+                  <div class="marketplace-categories skills-categories" id="skills-categories"></div>
+                  <div class="skills-grid-scroll">
+                    <div class="skills-grid" id="skills-grid"></div>
+                    <div class="skills-empty" id="skills-empty" data-i18n="skills.empty">No skills yet</div>
+                  </div>
+                </div>
+
+                <!-- Detail view (replaces grid when a card is opened) -->
+                <div class="skills-detail-view" id="skills-detail-view" style="display:none">
+                  <div class="skills-detail-col" id="skills-detail-col">
+                    <div class="skills-detail-content" id="skills-detail-content" style="display:none">
+                      <div class="skills-doc-headline">
+                        <button type="button" class="btn btn-sm" id="skills-back-btn" data-i18n="common.back">Back</button>
+                        <h1 class="skills-doc-title" id="skills-detail-name" data-editable="false"></h1>
+                        <span class="skills-doc-source" id="skills-detail-source"></span>
+                        <div class="skills-doc-actions" id="skills-detail-actions">
+                          <button type="button" class="skill-card-use skill-dialog-btn" id="skill-use-btn" data-i18n="skills.use" data-i18n-title="skills.use_tooltip" data-i18n-aria-label="skills.use_tooltip" aria-label="Use this skill">Use</button>
+                          <button class="btn btn-sm" id="skill-edit-btn" data-i18n="skills.edit">Edit</button>
+                          <button class="btn btn-sm" id="skill-enabled-btn" data-i18n="component.disable">Disable</button>
+                          <button class="btn btn-sm" id="skill-upload-marketplace-btn" style="display:none" data-i18n="marketplace.upload">Upload to marketplace (dev)</button>
+                          <button class="btn btn-sm btn-danger" id="skill-delete-btn" data-i18n="skills.delete">Delete</button>
+                        </div>
+                      </div>
+
+                      <section class="skills-doc-section" id="skills-section-summary">
+                        <h3 class="skills-doc-section-label" data-i18n="skills.label_summary">Summary</h3>
+                        <div class="skills-doc-section-body" id="skills-detail-summary"></div>
+                      </section>
+
+                      <section class="skills-doc-section" id="skills-section-category">
+                        <h3 class="skills-doc-section-label" data-i18n="skills.label_category">Category</h3>
+                        <div class="skills-doc-section-body">
+                          <div class="skills-detail-category" id="skills-detail-category"></div>
+                        </div>
+                      </section>
+
+                      <section class="skills-doc-section" id="skills-section-extra" style="display:none">
+                        <h3 class="skills-doc-section-label" data-i18n="skills.label_extra">Other attributes</h3>
+                        <div class="skills-doc-section-body" id="skills-detail-extra"></div>
+                      </section>
+
+                      <section class="skills-doc-section skills-usage-section">
+                        <h3 class="skills-doc-section-label skills-usage-label">
+                          <span data-i18n="skills.label_usage">Usage</span>
+                          <button type="button" class="skills-source-toggle" id="skills-source-toggle" aria-expanded="false">
+                            <span class="skills-source-toggle-caret" aria-hidden="true" data-ui-icon="chevron-right" data-ui-icon-class="ui-icon"></span>
+                            <span data-i18n="skills.label_source">View source</span>
+                          </button>
+                        </h3>
+                        <div class="skills-source-panel" id="skills-source-panel" style="display:none">
+                          <div class="skills-source-tree" id="skills-source-tree"></div>
+                        </div>
+                        <div class="skills-doc-section-body markdown-body" id="skills-detail-body"></div>
+                      </section>
+                    </div>
+                  </div>
+                  <!-- Shown when a URL import was installed as an external package: no
+                       skill content to edit; point the user to package management. -->
+                  <div class="skills-detail-content" id="skills-as-package" style="display:none">
+                    <div class="skills-doc-headline">
+                      <button type="button" class="btn btn-sm" id="skills-as-package-back" data-i18n="common.back">Back</button>
+                      <h1 class="skills-doc-title" id="skills-as-package-name"></h1>
+                    </div>
+                    <section class="skills-doc-section">
+                      <div class="skills-doc-section-body" id="skills-as-package-desc"></div>
+                      <button class="btn btn-sm" id="skills-as-package-manage" data-i18n="skills.as_package.manage">Manage packages</button>
+                    </section>
+                  </div>
+                  <!-- Inline chat for custom skill editing -->
+                  <div class="skills-chat-col" id="skills-chat-col" style="display:none">
+                    <div class="skills-chat-toolbar">
+                      <button id="skill-chat-clear-btn" class="skill-chat-link" data-i18n-title="skills.clear_chat_title" title="Clear the edit chat for this skill" data-i18n="skills.clear_chat">Clear</button>
+                    </div>
+                    <div class="skills-chat-messages" id="skills-chat-messages"></div>
+                    <div class="chat-queue" id="skills-chat-queue" style="display:none">
+                      <div class="chat-queue-header">
+                        <span class="chat-queue-label"><span data-i18n="chat.queue_label">Queued</span> <span class="chat-queue-count" id="skills-chat-queue-count">0</span></span>
+                        <span class="chat-queue-hint" data-i18n="chat.queue_hint">Drag to reorder · Edit · Delete</span>
+                      </div>
+                      <div class="chat-queue-list" id="skills-chat-queue-list"></div>
+                    </div>
+                    <div class="skills-chat-input-area">
+                      <div class="chat-attachments edit-chat-attachments" id="skills-chat-attachments" style="display:none"></div>
+                      <button type="button" class="chat-attach-btn edit-chat-attach-btn" id="skills-chat-attach-btn" data-i18n-title="chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
+                      <textarea id="skills-chat-input" data-i18n-placeholder="skills.chat_input_placeholder" placeholder="Describe what to change..." rows="1"></textarea>
+                      <button id="skills-chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
+                        <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
+                        <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
             <div class="connections-tab-pane" id="connections-pane-sources" data-connections-pane="sources" hidden>
                 <!-- 资料库（#panel-contexts）整体内嵌：保留 id，渲染函数照常工作。 -->
       <section class="panel connections-embedded-panel" id="panel-contexts">

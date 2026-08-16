@@ -419,8 +419,13 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).toContain('规则与判断');
     expect(body.innerHTML).toContain('可复用方法');
     expect(body.innerHTML).toContain('P3394产品决策治理规则');
-    expect(body.innerHTML).toContain('Transfer Validated');
-    expect(body.innerHTML).toContain('芽点');
+    // 成熟度按 PRD 3.6 的用户侧表达，不再露出内部枚举名或园艺隐喻。
+    // 第一条 transfer_validated → 已成功带入；第二条 status=candidate 还没被
+    // 用户确认，按 PRD 3.6 属于 Candidate 档 → 待确认（旧实现把它和 bud 混成
+    // 同一个「芽点」标签，看不出它其实还不是正式资产）。
+    expect(body.innerHTML).toContain('已成功带入');
+    expect(body.innerHTML).toContain('待确认');
+    expect(body.innerHTML).not.toContain('Transfer Validated');
     expect(body.innerHTML).not.toContain('office-excel');
     expect(body.innerHTML).not.toContain('marketplace · 1.0.6');
   });

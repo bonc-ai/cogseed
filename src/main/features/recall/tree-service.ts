@@ -48,7 +48,7 @@ const ASSET_STATUSES = new Set<RecallAbilityAssetRecord['status']>([
   'active', 'paused', 'archived', 'deleted', 'purged', 'revoked',
 ]);
 const ASSET_MATURITIES = new Set<RecallAbilityAssetRecord['maturity']>([
-  'seed', 'bud', 'transfer_validated', 'effectiveness_validated', 'stable',
+  'seed', 'bud', 'transfer_validated', 'effectiveness_validated',
 ]);
 const RELATION_KINDS = new Set<AbilityAssetRelationKind>([
   'refines', 'depends_on', 'replaces', 'conflicts_with', 'related_to',

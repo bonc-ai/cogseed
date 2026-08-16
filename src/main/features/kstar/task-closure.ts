@@ -11,8 +11,6 @@ import {
   writeKstarEpisode,
 } from './episode-store';
 import { buildGroupKstarEpisode, buildRuntimeKstarEpisode, type GroupKstarEpisodeInput, type GroupKstarMessageInput, type RuntimeKstarEpisodeInput } from './episode-builder';
-import { proposeKstarCandidates } from './extraction-service';
-import { saveKstarCandidateProposals } from './recall-bridge';
 import { createInitialKstarReview, readKstarReview, saveKstarReview, saveKstarReviewRecord } from './review-service';
 import { inferKstarReview, type KstarReviewInferenceResult } from './review-inference';
 import { parseKstarReviewInference } from './review-inference';
@@ -31,20 +29,19 @@ export interface KstarClosureResult {
   extractionRun: KstarExtractionRunRecord;
 }
 
-export type KstarCandidateBridge = (
-  userId: string,
-  proposals: ReturnType<typeof proposeKstarCandidates>,
-) => Promise<RecallCandidateRecord[]>;
-
 export type KstarReviewInfer = (userId: string, episode: KstarEpisodeRecord) => Promise<KstarReviewInferenceResult>;
 
+// 这里曾有一个可注入的 candidate bridge。per-run closure 改成 review-only 之后
+// （reconcileKstarExtraction 不再产候选，沉淀只发生在任务闭环边界），它就再也
+// 没有被调用过——函数体传的是三参 reconcileKstarExtraction。留着只会让调用方
+// 以为还能从这里换掉沉淀出口。需求级沉淀的注入点在 task-aggregate 的
+// `candidateBridge` 与 task-level-precipitation 的 `candidateBridge`。
+
 export interface RuntimeKstarClosureInput extends RuntimeKstarEpisodeInput {
-  bridge?: KstarCandidateBridge;
   inferReview?: KstarReviewInfer;
 }
 
 export interface GroupKstarClosureInput extends GroupKstarEpisodeInput {
-  bridge?: KstarCandidateBridge;
   inferReview?: KstarReviewInfer;
   /** Bounded wait for the Commander's in-context review reply. Tests inject
    *  a small value; production defaults to COMMANDER_REVIEW_TIMEOUT_MS. */
@@ -214,7 +211,6 @@ export async function awaitCommanderReview(
 async function finishClosure(
   userId: string,
   episode: KstarEpisodeRecord,
-  bridge: KstarCandidateBridge = saveKstarCandidateProposals,
   inferReview: KstarReviewInfer = inferKstarReview,
 ): Promise<KstarClosureResult> {
   await writeKstarEpisode(userId, episode);
@@ -295,7 +291,6 @@ export async function confirmKstarReview(
   userId: string,
   episodeId: string,
   input: ConfirmKstarReviewInput,
-  bridge: KstarCandidateBridge = saveKstarCandidateProposals,
 ): Promise<KstarClosureResult> {
   return serializeClosure(confirmationLocks, `${userId}:${episodeId}`, async () => {
     const episode = await readKstarEpisode(userId, episodeId);
@@ -343,7 +338,7 @@ async function enrichEpisodeFromRequirementEvidence(
 
 export async function captureRuntimeKstarClosure(input: RuntimeKstarClosureInput): Promise<KstarClosureResult> {
   const episode = buildRuntimeKstarEpisode(input);
-  return serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.bridge, input.inferReview));
+  return serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.inferReview));
 }
 
 export async function captureGroupKstarClosure(input: GroupKstarClosureInput): Promise<KstarClosureResult> {
@@ -435,7 +430,7 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
         updatedAt: now,
       });
     }
-    return finishClosure(input.userId, episode, input.bridge, input.inferReview);
+    return finishClosure(input.userId, episode, input.inferReview);
   });
   try {
     const { attachKstarEpisodeToCurrentRequirement } = await import('./requirement-state');

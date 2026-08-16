@@ -171,8 +171,11 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const asset = await assets.readAbilityAsset('user-a', result.createdAssetIds[0]);
     expect(asset.statement).toContain('N 字资料');
-    // Honest lifecycle from the system-actor promote (P0-2).
-    expect(asset.lifecycleStatus).toBe('automatically_extracted_unverified');
+    // Honest lifecycle from the system-actor promote (P0-2)，并且要能认出这是
+    // KStar 自进化线：它和会话自动抽取都没有用户确认，但证据来源不同
+    // （冻结预期 vs 实际结果的复盘，而不是模型从对话里猜）。两者共用一个
+    // lifecycleStatus 会让认知树分不出可信度。
+    expect(asset.lifecycleStatus).toBe('system_precipitated_unverified');
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const all = await candidates.listRecallCandidates('user-a');
     expect(all.some((c) => c.status === 'confirmed' && String(c.captureKey).startsWith('kstar-'))).toBe(true);

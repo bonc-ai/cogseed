@@ -130,7 +130,9 @@ describe('KStar task-level precipitation (B5)', () => {
       maturity: 'seed',
       // Honest confirmation semantics: promoted by the system actor via the
       // unified candidate pool — never claims user confirmation (P0-2).
-      lifecycleStatus: 'automatically_extracted_unverified',
+      // 需求级沉淀走的是 KStar 自进化线，来源标签必须是 system_precipitated_*，
+      // 不能和会话自动抽取线混成同一个值。
+      lifecycleStatus: 'system_precipitated_unverified',
     });
     // Unified pool: the promoted candidate exists (confirmed) behind the asset.
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
@@ -181,6 +183,9 @@ describe('KStar task-level precipitation (B5)', () => {
       outcome: 'worse_than_expected',
       attribution: 'template_gap',
       reason: 'A report template is missing for this kind of task.',
+      // 缺口候选必须有推理出的 lesson：只有 reason（诊断文本）时不再产候选，
+      // 否则写进池子的是一句读不懂的诊断而不是可复用认知。
+      lesson: '报告类任务缺少固定模板时，先补齐章节骨架再动笔，避免每次重排结构。',
       confidence: 0.85,
     });
     await seedReview(epB, {
@@ -196,13 +201,14 @@ describe('KStar task-level precipitation (B5)', () => {
     const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
     const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
 
-    expect(result.proposals).toHaveLength(1);
-    expect(result.proposals[0]).toMatchObject({
-      suggestedType: 'template',
-      summary: expect.stringContaining('待修正经验：'),
-    });
-    expect(result.proposals[0].judgment).toContain('A report template is missing');
-    expect(result.proposals[0].learningSignal?.confidence).toBe(0.85);
+    // 缺口候选的正文必须是推理出的 lesson。此前会拿 review.reason 拼成
+    // 「遇到同类情况时，应注意修正：<诊断文本>」——那是诊断，不是可复用认知。
+    const gap = result.proposals.find((proposal) => proposal.suggestedType === 'template');
+    expect(gap).toBeDefined();
+    expect(gap!.summary).toContain('待修正经验：');
+    expect(gap!.judgment).toBe('报告类任务缺少固定模板时，先补齐章节骨架再动笔，避免每次重排结构。');
+    expect(gap!.judgment).not.toContain('A report template is missing');
+    expect(gap!.learningSignal?.confidence).toBe(0.85);
   });
 
   it('does not precipitate when the ΔR signal is below the noise gate (|ΔR| < 0.15)', async () => {

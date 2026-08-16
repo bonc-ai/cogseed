@@ -153,7 +153,12 @@ afterEach(async () => {
 async function createAsset(type: 'rule' | 'skill_method' = 'skill_method') {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
   const candidate = await candidates.saveRecallCandidate(UID, {
-    judgment: 'Review the request, apply the agreed method, and verify the result against supplied evidence.',
+    // 两种类型必须用不同正文：同一句话同时落成 rule 和 skill_method 会被
+    // 晋升闸门判为分类冲突（谁都不晋升），而本用例考的是 skill-draft 的类型
+    // 过滤，不是分类冲突。
+    judgment: type === 'skill_method'
+      ? 'Review the request, apply the agreed method, and verify the result against supplied evidence.'
+      : 'Product review must cite supplied evidence before any conclusion is recorded.',
     summary: type === 'skill_method' ? 'Evidence-first review method' : 'Evidence-first review rule',
     suggestedType: type,
     suggestedScope: 'product review',

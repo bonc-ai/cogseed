@@ -286,7 +286,7 @@ function _loadViewFeature(feature, view, run) {
 
 function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
-    : view === 'skills' ? 'panel-skills'
+    : view === 'skills' ? 'panel-connections'
     : view === 'recall' ? 'panel-recall'
     : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
     : view === 'contexts' ? 'panel-contexts'
@@ -376,7 +376,8 @@ function setView(view, cid, opts = {}) {
   const panelId = view === 'new-chat' ? 'panel-new-chat'
                 : view === 'auto' ? 'panel-auto'
                 : view === 'agents' || view === 'contexts' ? 'panel-connections'
-                : view === 'skills' || view === 'personal-ontology' ? 'panel-recall'
+                : view === 'skills' ? 'panel-connections'
+                : view === 'personal-ontology' ? 'panel-recall'
                 : view === 'recall' ? 'panel-recall'
                 : view === 'connections' || view === 'connectors' ? 'panel-connections'
                 : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
@@ -389,8 +390,8 @@ function setView(view, cid, opts = {}) {
 
   document.getElementById('new-chat-btn').classList.toggle('active', view === 'new-chat');
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
-  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'skills' || view === 'personal-ontology');
-  document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts');
+  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'personal-ontology');
+  document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('spaces-btn')?.classList.toggle('active', view === 'spaces');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
@@ -498,8 +499,9 @@ function setView(view, cid, opts = {}) {
     currentCid = null;
     _deferSidebarNavWork('skills-tab-refresh', () => {
       _loadViewFeature('skills', 'skills', () => {
-        // Skills 已内嵌进认知资产：深链先切到「我的能力」tab，再渲染技能库。
-        if (typeof switchSkillsCognitionPage === 'function') switchSkillsCognitionPage('my-abilities');
+        // 技能库已移到连接页「技能」tab（技能市场/外部库属于可用资源，不是
+        // 个人认知资产）。深链先切过去，再渲染技能网格。
+        if (typeof activateConnectionsTab === 'function') activateConnectionsTab('skills');
         if (typeof _skillsCache !== 'undefined' && _skillsCache) renderSkillsList(_skillsCache);
         const forceRefresh = !!(typeof _skillsCache !== 'undefined' && _skillsCache);
         Promise.resolve(loadSkills(forceRefresh))
@@ -518,9 +520,13 @@ function setView(view, cid, opts = {}) {
       _loadViewFeature('recall', 'recall', () => {
         if (typeof initSkillsCognitionConsole === 'function') initSkillsCognitionConsole();
         // 深链 setView('personal-ontology') 在 setView 顶部被归一化为 recall；
-        // 个人本体已内嵌为「关于我」tab，这里切过去（保留 develop 的归一化兼容）。
+        // 「关于我」已不是独立 tab，而是「我的资产」里的 personal 分类：切到
+        // 该页并选中该分类，个人本体就在页内展开。
         if (openPersonalOntology && typeof switchSkillsCognitionPage === 'function') {
-          switchSkillsCognitionPage('about-me');
+          if (typeof _skillsCognitionState !== 'undefined' && _skillsCognitionState) {
+            _skillsCognitionState.assetCategoryFilter = 'personal';
+          }
+          switchSkillsCognitionPage('assets');
         }
         if (typeof loadSkillsCognitionSnapshot === 'function') {
           Promise.resolve(loadSkillsCognitionSnapshot())

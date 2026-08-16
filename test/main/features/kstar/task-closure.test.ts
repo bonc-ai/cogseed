@@ -509,7 +509,6 @@ describe('KSTAR task closure', () => {
 
   it('confirms a lightweight user verdict and reconciles candidate extraction idempotently', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
-    const recallBridge = await import('../../../../src/main/features/kstar/recall-bridge');
     const unknownInference = async (_userId: string, builtEpisode: any) => ({
       review: {
         expectedResult: builtEpisode.t.userGoal,
@@ -532,26 +531,23 @@ describe('KSTAR task closure', () => {
     });
     expect(initial.candidates).toEqual([]);
 
-    let bridgeCalls = 0;
-    const bridge = async (userId: string, proposals: any[]) => {
-      bridgeCalls += 1;
-      return recallBridge.saveKstarCandidateProposals(userId, proposals);
-    };
     const first = await closure.confirmKstarReview('closure-user', initial.episode.id, {
       verdict: 'partial', reason: 'The report was created but missed one requested section.',
-    }, bridge);
+    });
     const second = await closure.confirmKstarReview('closure-user', initial.episode.id, {
       verdict: 'partial', reason: 'The report was created but missed one requested section.',
-    }, bridge);
+    });
 
     expect(first.review).toMatchObject({
       reviewState: 'confirmed', inferenceMethod: 'user', needsConfirmation: false,
       outcome: 'worse_than_expected', deltaR: -0.5,
     });
+    // Review-only closure: confirming a verdict never produces candidates here.
+    // Precipitation happens at the whole-task loop boundary. The injectable
+    // candidate bridge that used to sit on this signature is gone, so "the
+    // bridge is not called" is now structurally guaranteed, not asserted.
     expect(first.candidates).toEqual([]);
     expect(second.candidates).toEqual([]);
-    // The candidate bridge is no longer invoked by the direct-only line.
-    expect(bridgeCalls).toBe(0);
   });
 
   it('keeps episode and review when direct precipitation fails (run marked failed, line never blocks)', async () => {

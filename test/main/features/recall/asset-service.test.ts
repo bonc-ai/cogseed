@@ -376,7 +376,7 @@ describe('治理状态模型', () => {
 
   it('Evidence 撤销将验证成熟度退回 bud，且 seed、bud 与无关 Evidence 幂等不变', async () => {
     const { assets } = await modules();
-    for (const maturity of ['transfer_validated', 'effectiveness_validated', 'stable'] as const) {
+    for (const maturity of ['transfer_validated', 'effectiveness_validated'] as const) {
       const uid = `user-evidence-${maturity}`;
       const asset = await seedAsset(uid);
       await assets.setAbilityAssetMaturity(uid, asset.id, maturity);

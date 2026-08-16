@@ -53,6 +53,8 @@ function proposalToCandidateInput(
     suggestedAction: 'create',
     sourceRefs: evidenceRefs,
     evidenceRefs,
+    ...(proposal.applicableWhen ? { applicableWhen: proposal.applicableWhen } : {}),
+    ...(proposal.forbiddenWhen ? { forbiddenWhen: proposal.forbiddenWhen } : {}),
     ...(proposal.learningSignal ? { learningSignal: proposal.learningSignal } : {}),
     ...(proposal.learningProvenance ? { learningProvenance: proposal.learningProvenance } : {}),
     captureKey: `kstar-${source.id}-${index}`,
@@ -94,7 +96,9 @@ export async function precipitateDirectExperienceFromSource(
 
       // 2. Unified promotion exit: semantic dedup + quality fusion against
       //    the asset library, then promote (or generate an update candidate).
-      const outcome = await autoApplyRecallCandidate(userId, candidate.id);
+      //    `provenance: 'kstar'` 让资产落成 system_precipitated_unverified，
+      //    与会话自动抽取线区分开——两者都没有用户确认，但可信度来源不同。
+      const outcome = await autoApplyRecallCandidate(userId, candidate.id, { provenance: 'kstar' });
       if (outcome.asset) {
         result.createdAssetIds.push(outcome.asset.id);
         const workspaceId = source.workspaceId;

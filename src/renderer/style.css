@@ -19471,8 +19471,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 .skills-cognition-tab:hover { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, transparent); }
 .skills-cognition-tab.is-active { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, var(--card, #fff)); box-shadow: inset 0 -2px 0 var(--primary, #0E9F6E); font-weight: 600; }
 .skills-cognition-page { min-height: 100%; overflow: visible; padding: 18px 24px 28px; background: var(--card, #fff); display: flex; flex-direction: column; }
-/* display:flex 会压掉 UA [hidden] 的 display:none → 六个 tab 页全部同时显示。
-   显式补覆盖，让 [hidden] 真正隐藏非活动 tab 页。 */
+/* tab 切换只改 pane 的 hidden 属性（_cognitionSetPageVisibility），而上面这条
+   类规则里的 display 会盖掉 UA 的 [hidden]{display:none}。少了这条守卫，六个
+   pane 会全部保留布局、在 overflow:hidden 的 .skills-cognition-main 里首尾相接
+   竖排，只有第一屏（总览）露出来，切 tab 看着毫无反应。 */
 .skills-cognition-page[hidden] { display: none; }
 /* 内嵌到 tab pane 的原一级面板：pane 的 [hidden] 控制显隐，面板本身不再依赖
    `.panel.active`，始终保持 flex 布局。 */
@@ -19764,6 +19766,44 @@ body.model-not-configured .main-content { flex-direction: column; }
   height: 34px;
   padding: 0;
   place-items: center;
+}
+
+/* 使用与证明：按资产展开事实链（用过哪里 / 带入是否正确 / 结果如何）。
+   一行一件事实，结论在最左，依据在右——默认看意义，需要时看依据。 */
+.recall-proof-list { display: flex; flex-direction: column; gap: 12px; }
+.recall-proof-asset .skills-cognition-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.recall-proof-row {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) 1fr minmax(0, auto) minmax(0, auto);
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border, #e5e7eb);
+  font-size: 13px;
+}
+.recall-proof-outcome { font-weight: 600; color: var(--fg, #111827); }
+.recall-proof-summary { color: var(--muted-fg, #6b7280); overflow-wrap: anywhere; }
+.recall-proof-meta, .recall-proof-time { color: var(--muted-fg, #6b7280); font-size: 12px; white-space: nowrap; }
+@media (max-width: 900px) {
+  .recall-proof-row { grid-template-columns: 1fr; gap: 2px; }
+  .recall-proof-meta, .recall-proof-time { white-space: normal; }
+}
+
+/* 页头辅助入口：管理来源 / 沉淀活动。它们是输入配置与后台加工进度，不是
+   用户来认知资产要完成的任务，所以放在页头而不是任务视图 tab 条里。
+   视觉上比 tab 弱一档，选中时只做浅底提示，不抢主导航的存在感。 */
+.cognition-aux-entry {
+  height: 34px;
+  padding: 0 10px;
+  color: var(--muted-fg, #6b7280);
+  white-space: nowrap;
+}
+.cognition-aux-entry:hover {
+  color: var(--fg, #111827);
+}
+.cognition-aux-entry.is-active {
+  color: var(--fg, #111827);
+  background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, var(--card, #fff));
 }
 
 .skills-cognition-workspace {

@@ -109,8 +109,10 @@ describe('asset-view › 账本重放派生', () => {
     await appendAssetEvent(UID, { assetId: 'sk-010', version: '2.0.0', eventType: 'asset_scope_changed', actor: 'user' });
 
     const view = await replayAssetView(UID, 'sk-010');
-    // scope_changed 映射为 'unchanged'，不覆盖最后一次成熟度变化（transfer_verified）
-    expect(view.derived_state).toBe('transfer_verified');
+    // scope_changed 映射为 'unchanged'，不覆盖最后一次成熟度变化。
+    // 取值统一到 formal-assets 的规范词汇：transfer_validated（此前账本里
+    // 独有一个 transfer_verified 拼法，同一概念在系统里有两种写法）。
+    expect(view.derived_state).toBe('transfer_validated');
     expect(view.versions).toEqual(['1.0.0', '2.0.0']);
     expect(view.last_state_event?.event_type).toBe('asset_transfer_verified');
     expect(view.events.length).toBe(3);
