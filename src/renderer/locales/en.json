@@ -4428,7 +4428,6 @@
   "cognition.proof_chain_rating": "Rating",
   "cognition.proof_chain_rating_open": "Can be rated",
   "cognition.proof_receipt_title": "Context Reuse Receipt",
-  "cognition.proof_receipt_pick": "Pick a use on the left to see exactly what that run carried in.",
   "cognition.proof_receipt_carried": "Carried in",
   "cognition.proof_receipt_omitted": "Left out",
   "cognition.proof_receipt_permission": "Permission scope",

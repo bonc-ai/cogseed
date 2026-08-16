@@ -1274,7 +1274,16 @@ describe('Recall cognition renderer flow', () => {
 
     await context.renderSkillsCognitionProofs();
 
-    // 默认落在有回执的那条，右侧逐项摊开。
+    // 默认全部收起，与「版本与治理」一致：详情要用户主动点开。
+    expect(host.innerHTML).not.toContain('CRR-018');
+    expect(host.innerHTML).not.toContain('带入内容');
+    expect(host.innerHTML).toContain('aria-expanded="false"');
+
+    vm.runInContext("_skillsCognitionState.selectedProofEventId = 'ev-with-receipt';", context);
+    await context.renderSkillsCognitionProofs();
+
+    // 展开后所有字段就挂在这一行底下。
+    expect(host.innerHTML).toContain('recall-proof-detail');
     expect(host.innerHTML).toContain('CRR-018');
     expect(host.innerHTML).toContain('带入内容');
     expect(host.innerHTML).toContain('aa-method、rule-a');
@@ -1304,7 +1313,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => (id === 'skills-cognition-proofs-body' ? host : null),
     };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assets: [], selectedProofEventId: '' })})`, context);
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assets: [], selectedProofEventId: 'ev-bare' })})`, context);
     context.window.cogseed = {
       invoke: async (channel: string) => {
         if (channel === 'recall.timeline.list') {

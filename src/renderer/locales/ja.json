@@ -4121,7 +4121,6 @@
   "cognition.proof_chain_rating": "評価",
   "cognition.proof_chain_rating_open": "評価できます",
   "cognition.proof_receipt_title": "Context Reuse Receipt",
-  "cognition.proof_receipt_pick": "左で使用を選ぶと、その回に何を持ち込んだかを表示します。",
   "cognition.proof_receipt_carried": "持ち込んだ内容",
   "cognition.proof_receipt_omitted": "持ち込まなかったもの",
   "cognition.proof_receipt_permission": "権限の範囲",

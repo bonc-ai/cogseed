@@ -4121,7 +4121,6 @@
   "cognition.proof_chain_rating": "Avaliação",
   "cognition.proof_chain_rating_open": "Pode ser avaliada",
   "cognition.proof_receipt_title": "Context Reuse Receipt",
-  "cognition.proof_receipt_pick": "Escolha um uso à esquerda para ver exatamente o que aquela execução levou.",
   "cognition.proof_receipt_carried": "Levado",
   "cognition.proof_receipt_omitted": "Deixado de fora",
   "cognition.proof_receipt_permission": "Escopo de permissão",

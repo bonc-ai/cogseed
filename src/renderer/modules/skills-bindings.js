@@ -306,7 +306,9 @@ function _initSkillsCognitionBindings() {
     // ── 使用与证明 ──────────────────────────────────────────────────
     const proofEvent = event.target.closest('[data-recall-proof-event]');
     if (proofEvent) {
-      _skillsCognitionState.selectedProofEventId = proofEvent.dataset.recallProofEvent || '';
+      // 再点一次收起，和版本面板的开合一致。
+      const next = proofEvent.dataset.recallProofEvent || '';
+      _skillsCognitionState.selectedProofEventId = _skillsCognitionState.selectedProofEventId === next ? '' : next;
       renderSkillsCognitionProofs();
       return;
     }

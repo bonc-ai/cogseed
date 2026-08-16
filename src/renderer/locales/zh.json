@@ -4428,7 +4428,6 @@
   "cognition.proof_chain_rating": "评价",
   "cognition.proof_chain_rating_open": "可评价",
   "cognition.proof_receipt_title": "Context Reuse Receipt",
-  "cognition.proof_receipt_pick": "在左侧选择一次使用，这里显示那一次到底带了什么进去。",
   "cognition.proof_receipt_carried": "带入内容",
   "cognition.proof_receipt_omitted": "未带入",
   "cognition.proof_receipt_permission": "权限范围",
