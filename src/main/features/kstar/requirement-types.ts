@@ -134,6 +134,9 @@ export interface KstarConversationTaskStateRecord extends KstarJsonRecord {
   requirementJustClosed?: string;
   taskComplete: boolean;
   pendingTaskStart?: KstarPendingTaskStart;
+  /** ISO timestamp of the scheduled auto-close (静默窗口到期)。任务终态后
+   *  写入；用户新消息到达即清除；重启后由 recoverPendingAutoClosures 恢复。 */
+  pendingAutoCloseAt?: string;
   lastRoutedUserMessageId?: string;
   controlReceipts?: KstarControlReceipt[];
   projectionDecisions?: KstarProjectionDecisionMarker[];

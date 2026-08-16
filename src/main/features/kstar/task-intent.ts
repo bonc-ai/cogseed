@@ -17,8 +17,9 @@ const log = createLogger('kstar.task-intent');
 
 /** Message shapes that are NOT tasks (inverse detection). */
 const TRIVIAL_PATTERNS = [
-  // Greetings / politeness
-  /^(你好|您好|嗨|哈喽|hello|hi|hey|早上好|下午好|晚上好|谢谢|感谢|辛苦了|ok|好的|收到|明白|嗯|好|行|可以|再见|拜拜)[\s。！!？?,.，]*$/i,
+  // Greetings / politeness — word sequences with optional separators
+  // ("谢谢，辛苦了", "好的收到", "嗯 好的" all trivial).
+  /^(你好|您好|嗨|哈喽|hello|hi|hey|早上好|下午好|晚上好|谢谢|感谢|辛苦了|ok|好的|收到|明白|嗯|好|行|可以|再见|拜拜|谢谢[，,、]辛苦了)([\s。！!？?,.，、]*|$)/i,
   // Pure acknowledgements / single-word confirmations
   /^(嗯+|哦+|对|是|不是|对的对的|没问题|可以的?|就这样|继续|好的继续|接着来)[\s。！!？?,.，]*$/i,
   // Status queries ("where are we", "done?")
@@ -43,7 +44,21 @@ export interface TaskIntentResult {
   reason?: string;
 }
 
-/** Detect whether a user message is a task-shaped request. Advisory only. */
+/** Fast deterministic filter: is this message OBVIOUSLY trivial (greeting,
+ *  politeness, pure confirmation, status query, punctuation/emoji)? Only
+ *  these are filtered without a model call — everything else goes to the
+ *  model judgement so boundary task-shaped requests are never missed.
+ *  Zero KStar writes either way (a trivial message simply never routes). */
+export function isObviouslyTrivial(text: string | undefined): boolean {
+  const trimmed = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!trimmed) return true;
+  return TRIVIAL_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+/** Detect whether a user message is a task-shaped request. Kept for
+ *  compatibility: the host routing line now uses isObviouslyTrivial +
+ *  the model judgement; this keyword-based detector remains as a fast
+ *  pre-check helper (and for tests / non-model contexts). */
 export function detectTaskIntent(text: string | undefined): TaskIntentResult {
   const trimmed = String(text || '').replace(/\s+/g, ' ').trim();
   if (!trimmed) return { isTask: false };
@@ -56,18 +71,28 @@ export function detectTaskIntent(text: string | undefined): TaskIntentResult {
   return { isTask: true, reason: 'task signal detected' };
 }
 
-/** Render the routing note appended to the Commander system prompt. The host
- *  has ALREADY opened the governed task + auto-confirmed the projection for
- *  task-shaped user messages (deterministic host routing), so the Commander's
- *  only KStar duty is the prediction itself. */
-export function taskIntentHint(text: string | undefined): string {
+/** Render the routing note appended to the Commander system prompt.
+ *  `hostOpenedTask` must reflect what host routing ACTUALLY did for this
+ *  turn's user message. The world model owns the whole governed lifecycle:
+ *  task, projection, and forecast are all host-side (auto-forecast), so the
+ *  note only informs the Commander — it never instructs a kstar_control
+ *  call (that tool is no longer in the Commander's surface). When the host
+ *  did NOT open a task, the note must not claim tracked state that doesn't
+ *  exist. */
+export function taskIntentHint(
+  text: string | undefined,
+  opts?: { hostOpenedTask?: boolean },
+): string {
   try {
     const detected = detectTaskIntent(text);
     if (!detected.isTask) return '';
+    const hostOpened = opts?.hostOpenedTask === true;
     return [
       '',
       '## Host routing note',
-      'The host has already tracked this task (KStar task + confirmed projection). Your remaining KStar duty: call `kstar_control` with operation `commit_forecast` (2–4 candidates with plan/expectedTools/expectedActors/predictedResult) BEFORE executing any work. Do not call upsert_state or request_projection again — they are already done.',
+      hostOpened
+        ? 'The host has already tracked this task (KStar task + confirmed projection + world-model forecast). Governance is handled automatically — just execute the work.'
+        : 'This message looks task-shaped. The host did not open a governed KStar task for it (routing judged it non-task or the judgement was unavailable), so this turn runs ungoverned.',
       '',
     ].join('\n');
   } catch (error) {

@@ -82,7 +82,7 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
 }
 
 export type KstarReviewState = 'inferred' | 'needs_confirmation' | 'confirmed' | 'unknown';
-export type KstarReviewInferenceMethod = 'deterministic' | 'model' | 'user' | 'unknown';
+export type KstarReviewInferenceMethod = 'deterministic' | 'model' | 'commander' | 'user' | 'unknown';
 
 export interface KstarReviewRecord extends KstarJsonRecord {
   schemaVersion: 1;

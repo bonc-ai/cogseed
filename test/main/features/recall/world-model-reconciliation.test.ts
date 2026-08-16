@@ -42,24 +42,26 @@ function episode(overrides: Record<string, unknown> = {}): any {
 }
 
 describe('world-model reconciliation detail', () => {
-  it('gates deltaR when a predicted tool is missing', () => {
+  it('keeps the result signal when a predicted tool is missing (no veto)', () => {
     const current = episode();
     current.a.toolCalls = current.a.toolCalls.filter((call: any) => call.name !== 'write_file');
     const result = reconcileWorldModel(forecast, current);
     expect(result.deltaA).toBeLessThan(0);
-    expect(result.deltaR).toBe('unknown');
+    // P1-3: execution deviation no longer erases the (positive) result.
+    expect(result.deltaR).toBe(0);
     expect(result.attribution).toBe('execution_gap');
     expect(result.actionDelta.missingTools).toEqual(['write_file']);
   });
 
-  it('gates deltaR for failed actions, wrong actor, and wrong order', () => {
+  it('keeps the result signal for failed actions, wrong actor, and wrong order (no veto)', () => {
     const current = episode();
     current.a.toolCalls[0].actor = 'agent-a';
     current.a.toolCalls[1].status = 'error';
     current.a.toolCalls = [current.a.toolCalls[1], current.a.toolCalls[0], current.a.toolCalls[2]];
     current.a.toolCalls.forEach((call: any, index: number) => { call.sequence = index; });
     const result = reconcileWorldModel(forecast, current);
-    expect(result.deltaR).toBe('unknown');
+    // Result measurement survives the execution deviation.
+    expect(result.deltaR).toBe(0);
     expect(result.actionDelta.failedActions).toContain('write_file');
     expect(result.actionDelta.unexpectedActors).toContain('agent-a');
     expect(result.actionDelta.orderMismatch).toBe(true);
@@ -89,7 +91,7 @@ describe('world-model reconciliation detail', () => {
     expect(result.attribution).toBe('unclear');
   });
 
-  it('attributes a clean negative result through selected knowledge type', () => {
+  it('does not guess attribution from selected asset types (honest unclear fallback)', () => {
     const current = episode();
     current.r.producedFiles = [];
     current.r.verification = { checks: { 'OAuth tests pass': false } };
@@ -98,6 +100,25 @@ describe('world-model reconciliation detail', () => {
     });
     expect(result.deltaA).toBe(0);
     expect(result.deltaR).toBeLessThan(0);
-    expect(result.attribution).toBe('rule_gap');
+    // P1-4: the deterministic path measures but must NOT fake the cause.
+    expect(result.attribution).toBe('unclear');
+  });
+
+  it('preserves the result signal when the execution deviates (no veto)', () => {
+    const current = episode();
+    current.r.verification = { checks: { 'OAuth tests pass': true } };
+    // Introduce an execution deviation: predicted tool not actually used.
+    current.a.toolCalls = [{ name: 'write_file', status: 'ok' }];
+    const result = reconcileWorldModel({
+      ...forecast,
+      aHat: { ...forecast.aHat, expectedTools: ['read_file', 'write_file'] },
+    }, current);
+    expect(result.deltaA).toBeLessThan(0);
+    // The result signal is NOT thrown away: verification passed → deltaR 0.
+    expect(result.deltaR).toBe(0);
+    expect(result.attribution).toBe('execution_gap');
+    expect(result.resultDelta.acceptanceSignals).toEqual(
+      expect.arrayContaining([expect.objectContaining({ status: 'met' })]),
+    );
   });
 });

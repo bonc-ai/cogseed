@@ -3,11 +3,39 @@ import { safeId } from '../../storage';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { precipitateDirectExperienceFromSource } from './direct-experience-assets';
 import { readKstarEpisode } from './episode-store';
-import { clearsPrecipitationGate, gapType, learningSignal, scopeForTask } from './extraction-service';
+import { clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
 import { readKstarReview } from './review-service';
-import { saveKstarCandidateProposals } from './recall-bridge';
 import type { KstarRequirementRecord } from './requirement-types';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
+
+/** 用户可读的作用域标签（交互规范 §17.3：作用域要"看得懂"）。
+ *  scopeForTask 输出短 ASCII 标签（retrieval 用），展示层转中文。 */
+const SCOPE_LABELS: Record<string, string> = {
+  report: '报告类任务',
+  code: '代码类任务',
+  review: '审查类任务',
+  product: '产品类任务',
+  general: '通用',
+};
+
+export function userScopeLabel(scope: string): string {
+  return SCOPE_LABELS[scope] ?? scope;
+}
+
+/** 用户可读的经验标题（替代英文技术标题，交互规范附录 A 风格）。 */
+export function userFacingSummary(
+  kind: 'lesson' | 'workflow' | 'gap',
+  scope: string,
+  content?: string,
+): string {
+  const scopeLabel = userScopeLabel(scope);
+  const core = content ? lessonTitleCore(content) : '';
+  switch (kind) {
+    case 'lesson': return core ? `可复用经验：${core}（${scopeLabel}）` : `可复用经验（${scopeLabel}）`;
+    case 'workflow': return core ? `已验证的工作流程：${core}（${scopeLabel}）` : `已验证的工作流程（${scopeLabel}）`;
+    case 'gap': return core ? `待修正经验：${core}（${scopeLabel}）` : `待修正的经验（${scopeLabel}）`;
+  }
+}
 
 /**
  * task-level-precipitation.ts — requirement-level delta-r aggregation.
@@ -38,6 +66,8 @@ export interface RequirementLevelPrecipitationResult {
   proposals: KstarCandidateProposal[];
   createdAssetIds: string[];
   candidateIds: string[];
+  mergedIntoIds: string[];
+  updateCandidateIds: string[];
 }
 
 export function aggregateRequirementProposals(input: AggregateRequirementProposalsInput): KstarCandidateProposal[] {
@@ -73,16 +103,33 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
 
   const proposals: KstarCandidateProposal[] = [];
   const goal = requirement.goalText || requirement.title;
-  if (verifiedWorkflow && strongest) {
-    proposals.push({
-      judgment: `For tasks like "${goal}", use the verified workflow: ${toolChain.join(' → ')}.`,
-      summary: 'Verified multi-tool workflow (requirement-level)',
-      uncertainty: 'Generated from a closed multi-episode requirement; confirm before treating it as durable.',
-      suggestedType: 'skill_method',
-      suggestedScope: scopeForTask(goal),
-      sourceRefs: mergedRefs,
-      learningSignal: learningSignal(strongest),
-    });
+  const scope = scopeForTask(goal);
+  if (strongest) {
+    if (verifiedWorkflow && !strongest.lesson?.trim()) {
+      // Verified workflow without a reasoned lesson → skill_method.
+      proposals.push({
+        judgment: `处理类似「${goal}」的任务时，可使用已验证的工作流程：${toolChain.join(' → ')}。`,
+        summary: userFacingSummary('workflow', scope, goal),
+        uncertainty: '基于已闭环任务的执行经验生成，使用前可复核。',
+        suggestedType: 'skill_method',
+        suggestedScope: scope,
+        sourceRefs: mergedRefs,
+        learningSignal: learningSignal(strongest),
+      });
+    } else if (strongest.lesson?.trim()) {
+      // Process-experience lesson (even on met_expected tasks): the reasoned
+      // reusable pattern/pitfall is the asset body. Type rule by default —
+      // it is a judgment lesson, not a workflow.
+      proposals.push({
+        judgment: strongest.lesson,
+        summary: userFacingSummary('lesson', scope, strongest.lesson),
+        uncertainty: '基于任务执行经验提炼，使用前可复核。',
+        suggestedType: 'rule',
+        suggestedScope: scope,
+        sourceRefs: mergedRefs,
+        learningSignal: learningSignal(strongest),
+      });
+    }
   }
 
   // Highest-confidence gap across all episodes, only when evidence-gated.
@@ -92,11 +139,11 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   const gapAssetType = gapReview ? gapType(gapReview) : null;
   if (gapAssetType && gapReview) {
     proposals.push({
-      judgment: `For similar tasks, address this ${gapReview.attribution.replace(/_/g, ' ')}: ${gapReview.reason}`,
-      summary: `KSTAR ${gapReview.attribution.replace(/_/g, ' ')} candidate (requirement-level)`,
-      uncertainty: 'This proposal is based on an explicit review and still requires user confirmation.',
+      judgment: `遇到同类情况时，应注意修正：${gapReview.reason}`,
+      summary: userFacingSummary('gap', scope, gapReview.reason),
+      uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: gapAssetType,
-      suggestedScope: scopeForTask(goal),
+      suggestedScope: scope,
       sourceRefs: mergedRefs,
       learningSignal: learningSignal(gapReview),
     });
@@ -105,20 +152,15 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   return proposals.slice(0, 3);
 }
 
-export interface RequirementLevelPrecipitationOptions {
-  /** Overridable bridge for the candidate review line; defaults to the shared bridge. */
-  candidateBridge?: (userId: string, proposals: KstarCandidateProposal[]) => Promise<Array<{ id: string }>>;
-}
-
 /**
- * Precipitate requirement-level ability assets: aggregated proposals go BOTH
- * to the direct-experience asset line (evidence-gated, no user confirmation)
- * and to the candidate review line for optional promotion.
+ * Precipitate requirement-level ability assets: aggregated proposals go
+ * DIRECTLY into ability assets. The KStar line skips the cognitive-
+ * precipitation candidate line (no pending_review) — self-evolution
+ * precipitates straight to the asset store.
  */
 export async function precipitateRequirementLevel(
   userId: string,
   requirement: KstarRequirementRecord,
-  options: RequirementLevelPrecipitationOptions = {},
 ): Promise<RequirementLevelPrecipitationResult> {
   if (!safeId(userId) || !safeId(requirement.id)) throw new Error('invalid requirement precipitation reference');
   const episodes = (
@@ -129,36 +171,32 @@ export async function precipitateRequirementLevel(
   ).filter((review): review is KstarReviewRecord => Boolean(review));
 
   const proposals = aggregateRequirementProposals({ requirement, episodes, reviews });
-  if (proposals.length === 0) return { proposals: [], createdAssetIds: [], candidateIds: [] };
+  if (proposals.length === 0) {
+    return { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [] };
+  }
 
   const workspaceId = episodes.map((episode) => episode.s?.workspaceId).find((id) => id && safeId(id));
-  const bridge = options.candidateBridge || saveKstarCandidateProposals;
 
   let createdAssetIds: string[] = [];
   let candidateIds: string[] = [];
+  let mergedIntoIds: string[] = [];
+  let updateCandidateIds: string[] = [];
   try {
     const direct = await precipitateDirectExperienceFromSource(userId, {
       id: requirement.id,
       ...(workspaceId ? { workspaceId } : {}),
     }, proposals);
     createdAssetIds = direct.createdAssetIds;
+    candidateIds = direct.candidateIds;
+    mergedIntoIds = direct.mergedIntoIds;
+    updateCandidateIds = direct.updateCandidateIds;
   } catch (error) {
-    // Best-effort: never break task closure or the review line.
+    // Best-effort: never break task closure.
     log.warn('requirement-level direct precipitation degraded', {
       userId,
       requirementId: requirement.id,
       error: (error as Error).message,
     });
   }
-  try {
-    const candidates = await bridge(userId, proposals);
-    candidateIds = candidates.map((candidate) => candidate.id);
-  } catch (error) {
-    log.warn('requirement-level candidate bridge degraded', {
-      userId,
-      requirementId: requirement.id,
-      error: (error as Error).message,
-    });
-  }
-  return { proposals, createdAssetIds, candidateIds };
+  return { proposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds };
 }

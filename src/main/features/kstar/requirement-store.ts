@@ -233,6 +233,7 @@ function validateState(userId: string, raw: Record<string, unknown>, conversatio
     (raw.currentTaskId !== undefined && (typeof raw.currentTaskId !== 'string' || !safeId(raw.currentTaskId))) ||
     (raw.currentRequirementId !== undefined && (typeof raw.currentRequirementId !== 'string' || !safeId(raw.currentRequirementId))) ||
     (raw.requirementJustClosed !== undefined && (typeof raw.requirementJustClosed !== 'string' || !safeId(raw.requirementJustClosed))) ||
+    (raw.pendingAutoCloseAt !== undefined && (typeof raw.pendingAutoCloseAt !== 'string' || !Number.isFinite(Date.parse(raw.pendingAutoCloseAt)))) ||
     (raw.lastRoutedUserMessageId !== undefined && (typeof raw.lastRoutedUserMessageId !== 'string' || !safeId(raw.lastRoutedUserMessageId))) ||
     typeof raw.createdAt !== 'string' || typeof raw.updatedAt !== 'string'
   ) throw new Error('malformed kstar conversation task state');

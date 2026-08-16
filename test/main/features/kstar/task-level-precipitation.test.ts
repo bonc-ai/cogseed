@@ -124,11 +124,18 @@ describe('KStar task-level precipitation (B5)', () => {
     const abilityAssets = await assets.listAbilityAssets('user-b5');
     const created = abilityAssets.filter((asset) => asset.id === result.createdAssetIds[0]);
     expect(created).toHaveLength(1);
-    expect(created[0]).toMatchObject({ type: 'skill_method', status: 'active', maturity: 'seed' });
-    // Candidate review line also received the proposal.
+    expect(created[0]).toMatchObject({
+      type: 'skill_method',
+      status: 'active',
+      maturity: 'seed',
+      // Honest confirmation semantics: promoted by the system actor via the
+      // unified candidate pool — never claims user confirmation (P0-2).
+      lifecycleStatus: 'automatically_extracted_unverified',
+    });
+    // Unified pool: the promoted candidate exists (confirmed) behind the asset.
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const saved = await candidates.listRecallCandidates('user-b5');
-    expect(saved).toHaveLength(1);
+    expect(saved.some((c) => c.status === 'confirmed')).toBe(true);
     expect(result.candidateIds).toHaveLength(1);
   });
 
@@ -192,7 +199,7 @@ describe('KStar task-level precipitation (B5)', () => {
     expect(result.proposals).toHaveLength(1);
     expect(result.proposals[0]).toMatchObject({
       suggestedType: 'template',
-      summary: expect.stringContaining('template gap'),
+      summary: expect.stringContaining('待修正经验：'),
     });
     expect(result.proposals[0].judgment).toContain('A report template is missing');
     expect(result.proposals[0].learningSignal?.confidence).toBe(0.85);
@@ -240,6 +247,53 @@ describe('KStar task-level precipitation (B5)', () => {
 
     expect(result.proposals).toHaveLength(1);
     expect(result.createdAssetIds).toHaveLength(1);
+  });
+
+  it('precipitates a process-experience lesson even when the task met expectations (met_expected + lesson)', async () => {
+    const epA = episode('kse-b5-proc', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
+    await seedEpisode(epA);
+    await seedReview(epA, {
+      expectedResult: 'A report is built.',
+      actualResult: 'The report was built.',
+      deltaR: 0,
+      deltaA: 0,
+      outcome: 'met_expected',
+      attribution: 'unclear',
+      reason: '审查发现合并冲突的类型断言（as X）会掩盖运行时错误，应改为显式判别。',
+      confidence: 0.9,
+      lesson: '合并冲突的类型断言（as X）会掩盖运行时错误，应改为显式判别联合。',
+    });
+    const requirement = await seedRequirement(['kse-b5-proc']);
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
+
+    expect(result.proposals).toHaveLength(1);
+    expect(result.proposals[0].judgment).toContain('类型断言');
+    expect(result.createdAssetIds).toHaveLength(1);
+  });
+
+  it('does not precipitate a routine met_expected without a lesson (process-experience noise gate)', async () => {
+    const epA = episode('kse-b5-routine', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
+    await seedEpisode(epA);
+    await seedReview(epA, {
+      expectedResult: 'A report is built.',
+      actualResult: 'The report was built.',
+      deltaR: 0,
+      deltaA: 0,
+      outcome: 'met_expected',
+      attribution: 'unclear',
+      reason: '任务按预期完成。',
+      confidence: 0.95,
+      // No lesson: routine success carries nothing forward.
+    });
+    const requirement = await seedRequirement(['kse-b5-routine']);
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
+
+    expect(result.proposals).toHaveLength(0);
+    expect(result.createdAssetIds).toHaveLength(0);
   });
 
   it('tolerates missing episodes/reviews without throwing', async () => {

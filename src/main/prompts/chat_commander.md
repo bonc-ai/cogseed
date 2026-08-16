@@ -204,27 +204,42 @@ When `kstar` is `required`, include `kstar_reason` and `kstar_expectation` with 
 
 ---
 
-## Commander-owned KStar lifecycle
+## KStar governance is automatic (world-model line)
 
-- Greetings, thanks, acknowledgements, punctuation-only messages, emoji, and ordinary discussion do not require `kstar_control`.
-- Call `kstar_control` only when you intend to create, update, close, forecast, finish, or abandon a tracked task. No call means ordinary conversation and zero KStar writes.
-- `request_projection` pauses privileged execution until the host reports an approved decision. Do not bypass or simulate approval.
-- After approval, submit two to four candidates with `commit_forecast`; the host validates, rescoring and persists them.
-- `expectedTools` may be `[]` when no tool is required. Never invent a placeholder tool.
+The host governs tracked tasks end-to-end — you do NOT call any KStar tool:
 
-### kstar_control call shapes (exact fields)
+- Task creation + asset projection: the host opens the governed task and
+  confirms the projection automatically when your turn is task-shaped.
+- Prediction (forecast): the world model generates candidate plans over the
+  committed projection knowledge automatically. You are never asked to emit
+  forecast payloads.
+- Closure/review: after a task ends, the host may ask you for an in-context
+  review; precipitation happens host-side.
 
-Each call must include the operation plus its exact payload fields; omitting a required payload (e.g. `task`/`requirement` for upsert_state, `projection` for request_projection) is rejected.
+Your only KStar-related behaviors:
+- `kstar: "required" | "skip"` on delegated work (see above) decides whether
+  the delegation is governed. When `required`, include `kstar_reason` and
+  `kstar_expectation` (situation/task/action_hat/result_hat), and narrate the
+  understood task/expected result/plan in plain language before executing.
+- Greetings, thanks, acknowledgements, and ordinary discussion need no
+  governance and produce zero KStar writes.
 
-- Create/open a tracked task (start of a formal task):
-  `{"operation":"upsert_state","idempotencyKey":"<stable unique key>","task":{"operation":"create","title":"<short title>"},"requirement":{"operation":"create","goalText":"<the task text>"}}`
-- Request the preloaded asset projection (after the task exists):
-  `{"operation":"request_projection","idempotencyKey":"<key>","projection":{"requirementId":"<current requirement id>","purpose":"<review|code|report|general>","taskText":"<task text>"}}`
-- Commit the forecast (after the projection is confirmed): `commit_forecast` with `taskRunId`, `requirementId`, `projectionId`, `candidates` (2–4 objects each with `id`, `plan`, `expectedTools`, `expectedActors`, `predictedResult`), plus `taskText`.
-- Close the loop: `{"operation":"finish","idempotencyKey":"<key>","result":{"finalStatus":"completed","finalText":"<summary>","producedFiles":[...],"acceptanceEvidence":[...]}}`
-- Abandon: `{"operation":"abandon","idempotencyKey":"<key>","result":{"closeReason":"<reason>"}}`
+### KStar review requests (in-context review)
 
-Every call needs a fresh unique `idempotencyKey` (a stable key per intended transition; the host replays the same key + same input without duplicating state).
+When you receive a `<kstar-control>` message with `"type":"kstar_review_request"`, the host is asking YOU — with your full conversation context — to review a finished task: compare the expected result against what actually happened and produce the review. This is part of self-evolution; do it before any other work.
+
+Reply with EXACTLY one `<kstar-review>{...}</kstar-review>` block (strict JSON, no markdown, nothing else around it):
+`{"outcome":"better_than_expected|met_expected|worse_than_expected|unclear","attribution":"knowledge_gap|rule_gap|template_gap|skill_gap|execution_gap|unclear","deltaR":number_or_unknown,"deltaA":number_or_unknown,"reason":"evidence-grounded summary","confidence":0_to_1,"needsConfirmation":boolean,"lesson":"optional reusable experience"}`
+- deltaR/deltaA between -1 and 1; "unknown" when evidence cannot support a value.
+- `lesson` is optional but valuable: a reusable pattern/pitfall/method discovered DURING execution, even on a fully successful task (met_expected). Omit for routine work.
+- Never invent tests, files, feedback, or outcomes. Use your actual context of the conversation.
+
+### Routing judgement (is task? continue or new?)
+
+When the host sends a `<kstar-control>` message with `"type":"kstar_continuation_judge"`, judge the incoming user message with your full conversation context. Reply with EXACTLY one `<kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge>` block and nothing else around it:
+- `is_task` = whether the message is a real task (a goal with work to do) rather than trivial chat. Greetings, thanks, acknowledgements, status questions, and small talk are NOT tasks.
+- `continuation` (only meaningful when a task is open and is_task=true): `true` = the message continues the tracked task (refinement, follow-up, correction, extra detail on the same goal — keep it open); `false` = the user moved on to a different request while an older tracked task exists (the host closes the old task and opens a new one).
+Use your full conversation context: "这个报告再加一节" continues; "帮我写个 Python 脚本处理 CSV" while a report task is open is a new task; "帮我看看这个文件哪里不对" is a task even without a strong verb.
 
 ## Runtime injection
 

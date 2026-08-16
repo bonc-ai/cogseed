@@ -119,7 +119,7 @@ export interface GroupMessage {
   /** Host-generated status records are not model replies. Kept explicit so
    * recovery/reconciliation never claims a live actor placeholder merely
    * because the status row has the same sender. */
-  system_kind?: "reply_interrupted";
+  system_kind?: "reply_interrupted" | "kstar_review";
   /** Markdown text body. */
   text: string;
   /** Structured failure origin. Older records omit this field and must not be

@@ -40,33 +40,70 @@ function text(value: unknown, field: string, max: number): string {
 }
 
 function texts(value: unknown, field: string, maxItems: number, maxLength: number, allowEmpty = false): string[] {
-  if (!Array.isArray(value) || value.length > maxItems) throw new Error(`invalid_candidate_${field}`);
-  const out = value.map((item) => text(item, field, maxLength));
+  // Tolerant normalization: deepseek-v4-flash frequently flattens nested
+  // arrays into a single string (live-observed: plan and expectedTools
+  // arrived as one prose sentence). A single string is treated as a
+  // one-item array; missing/undefined values are only legal for optional
+  // fields (allowEmpty); malformed arrays are still rejected.
+  if (value === undefined && allowEmpty) return [];
+  const items = typeof value === 'string' ? [value] : value;
+  if (!Array.isArray(items) || items.length > maxItems) throw new Error(`invalid_candidate_${field}`);
+  const out = items.map((item) => text(item, field, maxLength));
   if (!allowEmpty && !out.length) throw new Error(`invalid_candidate_${field}`);
   return out;
 }
 
+/**
+ * Candidate scoring weights (P1-1): currently hand-picked starting values,
+ * NOT calibrated against historical data. Calibration requires a
+ * prediction-vs-actual regression loop (forecast score vs realized ΔR),
+ * which is not built yet — until then these weights are honest about being
+ * guesses. They are named constants so calibration can swap them in one
+ * place.
+ */
+export const SCORE_WEIGHTS = Object.freeze({
+  goalFit: 0.35,
+  feasibility: 0.25,
+  observability: 0.20,
+  causalSupport: 0.20,
+  /** Risk penalty is a discount term (subtracted), not a positive signal —
+   *  semantically distinct from the four quality dimensions on purpose:
+   *  a risky candidate must beat a safe one by a real margin. */
+  riskPenalty: 0.25,
+} as const);
+
 export function recomputeCandidateScore(value: unknown): WorldModelCandidateScore {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_candidate_score');
-  const score = value as Record<string, unknown>;
-  const goalFit = dimension(score.goalFit, 'goal_fit');
-  const feasibility = dimension(score.feasibility, 'feasibility');
-  const observability = dimension(score.observability, 'observability');
-  const causalSupport = dimension(score.causalSupport, 'causal_support');
-  const riskPenalty = dimension(score.riskPenalty, 'risk_penalty');
+  // Tolerant scoring: the model cannot self-score the four dimensions
+  // (live: score was absent/guessed). Missing or malformed dimensions fall
+  // back to the neutral 0.5 so a real forecast can commit; weights are
+  // documented uncalibrated (P1-1) pending a prediction-vs-actual loop.
+  const score = (value && typeof value === 'object' && !Array.isArray(value))
+    ? value as Record<string, unknown>
+    : {};
+  const safe = (raw: unknown): number => {
+    try { return dimension(raw, 'x'); } catch { return 0.5; }
+  };
+  const goalFit = safe(score.goalFit);
+  const feasibility = safe(score.feasibility);
+  const observability = safe(score.observability);
+  const causalSupport = safe(score.causalSupport);
+  const riskPenalty = safe(score.riskPenalty);
   const total = Number(clamp01(
-    goalFit * 0.35
-    + feasibility * 0.25
-    + observability * 0.20
-    + causalSupport * 0.20
-    - riskPenalty * 0.25,
+    goalFit * SCORE_WEIGHTS.goalFit
+    + feasibility * SCORE_WEIGHTS.feasibility
+    + observability * SCORE_WEIGHTS.observability
+    + causalSupport * SCORE_WEIGHTS.causalSupport
+    - riskPenalty * SCORE_WEIGHTS.riskPenalty,
   ).toFixed(4));
   return { goalFit, feasibility, observability, causalSupport, riskPenalty, total };
 }
 
 function intervention(raw: Record<string, unknown>, context: WorldModelCandidateValidationContext): WorldModelIntervention {
   const expectedTools = texts(raw.expectedTools, 'expected_tools', MAX_TOOLS, 120, true);
-  if (context.allowedTools) {
+  // Empty set = no tool availability constraint (auto-forecast: the
+  // generator cannot know the live tool set at prediction time). Only a
+  // NON-empty allowlist rejects unavailable tools.
+  if (context.allowedTools && context.allowedTools.size > 0) {
     for (const tool of expectedTools) {
       if (!context.allowedTools.has(tool)) throw new Error(`unavailable_tool:${tool}`);
     }
@@ -79,11 +116,23 @@ function intervention(raw: Record<string, unknown>, context: WorldModelCandidate
 }
 
 function predictedResult(raw: unknown): WorldModelPredictedResult {
+  // Tolerant normalization: the model may flatten predictedResult to a plain
+  // string (live-observed). A string becomes { summary }. acceptanceSignals
+  // are optional (auto-forecast candidates may omit them) → missing/empty is
+  // an empty list, NOT a validation error; the old non-empty requirement
+  // rejected every auto-generated candidate.
+  if (typeof raw === 'string') {
+    return {
+      summary: text(raw, 'result_summary', 4_000),
+      acceptanceSignals: [],
+      predictedFiles: [],
+    };
+  }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('invalid_candidate_predicted_result');
   const result = raw as Record<string, unknown>;
   return {
     summary: text(result.summary, 'result_summary', 4_000),
-    acceptanceSignals: texts(result.acceptanceSignals, 'acceptance_signals', MAX_SIGNALS, 1_000),
+    acceptanceSignals: texts(result.acceptanceSignals, 'acceptance_signals', MAX_SIGNALS, 1_000, true),
     predictedFiles: texts(result.predictedFiles, 'predicted_files', MAX_FILES, 1_000, true),
   };
 }
@@ -116,13 +165,24 @@ export function validateWorldModelCandidate(
 ): WorldModelCandidateForecast {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_world_model_candidate');
   const raw = value as Record<string, unknown>;
-  const id = text(raw.id, 'id', 120);
+  // Tolerant id: the model may omit candidate ids (live-observed). Fall back
+  // to a stable generated id so selectedCandidateId is never empty.
+  let id = '';
+  try { id = text(raw.id, 'id', 120); } catch { id = ''; }
+  id = id || `candidate-${modelOrder + 1}`;
   const aHat = intervention(raw, context);
-  const links = causalLinks(raw.causalLinks, aHat.plan.length, context);
-  const riskRuleRefs = texts(raw.riskRuleRefs, 'risk_rule_refs', 20, 240, true);
-  for (const ref of riskRuleRefs) {
-    if (!context.allowedRuleRefs.has(ref)) throw new Error(`invalid_rule_ref:${ref}`);
-  }
+  // causalLinks / riskRuleRefs are world-model INTERNAL structures: the
+  // model cannot know the host's rule ids or causal-link semantics (live:
+  // it emitted a string array of projection ids). Tolerate absence/any
+  // malformed shape → empty; the host scoring pass derives causal support
+  // from the committed projection knowledge instead of the model's guesses.
+  let links: WorldModelCausalLink[] = [];
+  try { links = causalLinks(raw.causalLinks, aHat.plan.length, context); } catch { links = []; }
+  // riskRuleRefs from the model are guesses (live: it emitted asset ids).
+  // Drop non-string items and unknown refs instead of rejecting.
+  let riskRuleRefs: string[] = [];
+  try { riskRuleRefs = texts(raw.riskRuleRefs, 'risk_rule_refs', 20, 240, true); } catch { riskRuleRefs = []; }
+  riskRuleRefs = riskRuleRefs.filter((ref) => context.allowedRuleRefs.has(ref));
   const risksById = new Map(context.predictedRisks.map((risk) => [risk.ruleId, risk]));
   return {
     id,

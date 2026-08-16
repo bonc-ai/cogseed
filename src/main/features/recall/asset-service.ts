@@ -162,12 +162,19 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   const appliedReviewDecisionIds = Array.isArray(value.appliedReviewDecisionIds)
     ? [...new Set(value.appliedReviewDecisionIds.filter((id): id is string => typeof id === 'string' && /^rd_[A-Za-z0-9_-]{8,64}$/.test(id)))]
     : [];
-  const lifecycleStatus: RecallAbilityAssetLifecycleStatus = value.lifecycleStatus === 'automatically_extracted_unverified'
-    ? 'automatically_extracted_unverified'
-    : 'user_confirmed_unverified';
+  const lifecycleStatus: RecallAbilityAssetLifecycleStatus =
+    value.lifecycleStatus === 'automatically_extracted_unverified'
+      || value.lifecycleStatus === 'system_precipitated_unverified'
+      ? value.lifecycleStatus
+      : 'user_confirmed_unverified';
   return {
     ...value,
     reviewDecisionId: typeof value.reviewDecisionId === 'string' ? value.reviewDecisionId : 'legacy-untracked',
+    // Preserve the written confirmation semantics instead of force-rewriting
+    // to user_confirmed_unverified (P0-2): both automatic lines
+    // (automatically_extracted_unverified / system_precipitated_unverified)
+    // must survive reads — the asset stays honest about NOT being
+    // user-confirmed.
     lifecycleStatus,
     sourceCandidateIds,
     appliedReviewDecisionIds,
@@ -298,7 +305,9 @@ export async function createAbilityAsset(
     throw new Error('invalid ability asset handoff identity');
   }
   const expectedLifecycle: RecallAbilityAssetLifecycleStatus = metadata.actor === 'system'
-    ? 'automatically_extracted_unverified'
+    ? (validated.lifecycleStatus === 'automatically_extracted_unverified' || validated.lifecycleStatus === 'system_precipitated_unverified'
+        ? validated.lifecycleStatus
+        : 'automatically_extracted_unverified')
     : 'user_confirmed_unverified';
   const expectedMaturity = metadata.actor === 'system' ? 'seed' : 'bud';
   if (validated.lifecycleStatus !== expectedLifecycle || validated.maturity !== expectedMaturity || validated.version !== '1') {
@@ -576,6 +585,59 @@ export async function correctMisfiledSeedMaturity(userId: string): Promise<numbe
   }
   if (corrected) log.info(`ability asset maturity corrected seed->bud count=${corrected}`);
   return corrected;
+}
+
+/** 作用域中文标签（与 renderer _abilityAssetScopeLabel 一致；展示层另有映射，
+ *  这里仅用于迁移时生成中文标题）。 */
+export function userScopeLabel(scope: string): string {
+  const map: Record<string, string> = {
+    report: '报告类任务', code: '代码类任务', review: '审查类任务',
+    product: '产品类任务', general: '通用',
+  };
+  return map[scope] || scope;
+}
+
+/** 一次性幂等迁移（2026-08-15 UI 优化）：旧 KStar 线资产带英文技术标题
+ *  （'Reusable experience lesson (requirement-level)' 等），用户看不懂。
+ *  只改写匹配的 title / statement 前缀，内容/证据/版本不动。可重复运行。 */
+export async function migrateLegacyUserFacingTitles(userId: string): Promise<number> {
+  let migrated = 0;
+  const titleRules: Array<[RegExp, (scope: string) => string]> = [
+    [/^Reusable experience lesson \(requirement-level\)$/, (s) => `可复用经验（${userScopeLabel(s)}）`],
+    [/^KSTAR rule gap candidate \(requirement-level\)$/, (s) => `待修正的经验（${userScopeLabel(s)}）`],
+    [/^Reusable workflow lesson$/, () => '可复用经验'],
+    [/^Verified multi-tool workflow$/, () => '已验证的工作流程'],
+  ];
+  for (const asset of await listAbilityAssets(userId)) {
+    if (asset.status === 'revoked' || asset.status === 'purged') continue;
+    const scope = String(asset.scope || '');
+    let nextTitle: string | undefined;
+    for (const [pattern, build] of titleRules) {
+      if (pattern.test(String(asset.title || ''))) { nextTitle = build(scope); break; }
+    }
+    const gap = String(asset.statement || '').match(/^For similar tasks, address this [a-z_ ]+: ([\s\S]*)$/);
+    const nextStatement = gap ? `遇到同类情况时，应注意修正：${gap[1].trim()}` : undefined;
+    if (!nextTitle && !nextStatement) continue;
+    try {
+      await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
+        if (!raw) throw new Error('recall ability asset not found');
+        const current = asAsset(raw);
+        if (nextTitle) current.title = nextTitle;
+        if (nextStatement) current.statement = nextStatement;
+        current.updatedAt = new Date().toISOString();
+        return current;
+      });
+      await appendAudit(userId, asset.id, 'updated', {
+        actor: 'system',
+        note: 'legacy English title → user-facing Chinese (2026-08-15)',
+      });
+      migrated += 1;
+    } catch (err) {
+      log.warn(`ability asset title migration skipped id=${asset.id}: ${(err as Error).message}`);
+    }
+  }
+  if (migrated) log.info(`ability asset legacy titles migrated count=${migrated}`);
+  return migrated;
 }
 
 export async function setAbilityAssetCrossScopeConfirmation(

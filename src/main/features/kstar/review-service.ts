@@ -138,7 +138,7 @@ function validateStoredReview(userId: string, episodeId: string, raw: Record<str
     (raw.actionDelta !== undefined && (typeof raw.actionDelta !== 'object' || raw.actionDelta === null || Array.isArray(raw.actionDelta))) ||
     (raw.resultDelta !== undefined && (typeof raw.resultDelta !== 'object' || raw.resultDelta === null || Array.isArray(raw.resultDelta))) ||
     (raw.reviewState !== undefined && !['inferred', 'needs_confirmation', 'confirmed', 'unknown'].includes(String(raw.reviewState))) ||
-    (raw.inferenceMethod !== undefined && !['deterministic', 'model', 'user', 'unknown'].includes(String(raw.inferenceMethod))) ||
+    (raw.inferenceMethod !== undefined && !['deterministic', 'model', 'commander', 'user', 'unknown'].includes(String(raw.inferenceMethod))) ||
     (raw.needsConfirmation !== undefined && typeof raw.needsConfirmation !== 'boolean') ||
     (raw.confirmedAt !== undefined && typeof raw.confirmedAt !== 'string') ||
     (raw.lesson !== undefined && typeof raw.lesson !== 'string') ||
