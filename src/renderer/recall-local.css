@@ -1,18 +1,56 @@
 /* Recall cognition console. */
-.skills-cognition-console { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 0; padding: 0; box-sizing: border-box; background: var(--card, #fff); }
-.skills-cognition-header { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 20px; border-bottom: 1px solid var(--border, #e5e7eb); box-sizing: border-box; }
-.skills-cognition-header > div { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
-.skills-cognition-header h1 { margin: 0; font-size: 16px; line-height: 1.3; }
-.skills-cognition-header p { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; }
-.skills-cognition-tabs { display: flex; flex: none; align-items: center; gap: 8px; min-width: 0; min-height: 48px; padding: 6px 20px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--border, #e5e7eb); background: color-mix(in srgb, var(--card, #fff) 96%, var(--fg, #111827) 4%); }
-.skills-cognition-tab { display: flex; align-items: center; gap: 9px; width: auto; min-width: max-content; min-height: 34px; margin: 0; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; font-size: 13px; text-align: left; white-space: nowrap; }
-.skills-cognition-tab:hover { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, transparent); }
-.skills-cognition-tab.is-active { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, var(--card, #fff)); box-shadow: inset 0 -2px 0 var(--primary, #0E9F6E); font-weight: 600; }
-.skills-cognition-page { height: 100%; min-height: 0; overflow: auto; padding: 18px 24px 28px; background: var(--card, #fff); }
+.skills-cognition-console { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 0; padding: 0; box-sizing: border-box; background: var(--app-bg, #f6f7fb); }
+.skills-cognition-header { display: flex; flex: none; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 24px 28px 20px; box-sizing: border-box; background: var(--card, #fff); }
+.skills-cognition-heading { display: flex; min-width: 0; max-width: 680px; flex-direction: column; align-items: flex-start; gap: 0; }
+.skills-cognition-eyebrow { margin-bottom: 8px; color: var(--primary, #0E9F6E); font-size: 10px; font-weight: 700; letter-spacing: .12em; line-height: 1.2; text-transform: uppercase; }
+.skills-cognition-header h1 { margin: 0; color: var(--fg, #111827); font-size: 24px; line-height: 1.25; letter-spacing: -.02em; }
+.skills-cognition-header p { max-width: 620px; margin: 7px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.6; }
+.skills-cognition-header-actions { display: flex; flex: none; align-items: center; gap: 8px; padding-top: 2px; }
+.skills-cognition-tabs { display: block; flex: none; min-width: 0; padding: 0 28px 20px; overflow-x: hidden; overflow-y: visible; border-bottom: 1px solid var(--border, #e5e7eb); background: var(--card, #fff); }
+.skills-cognition-tab { display: flex; min-width: 0; min-height: 82px; align-items: flex-start; gap: 12px; margin: 0; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: color-mix(in srgb, var(--card, #fff) 97%, var(--fg, #111827) 3%); color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; text-align: left; white-space: normal; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, transform .16s ease; }
+.skills-cognition-tab:hover { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 30%, var(--border, #e5e7eb)); background: color-mix(in srgb, var(--primary, #0E9F6E) 5%, var(--card, #fff)); color: var(--fg, #111827); transform: translateY(-1px); }
+.skills-cognition-tab.is-active { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 55%, var(--border, #e5e7eb)); background: color-mix(in srgb, var(--primary, #0E9F6E) 8%, var(--card, #fff)); color: var(--fg, #111827); box-shadow: inset 3px 0 0 var(--primary, #0E9F6E), 0 4px 12px rgba(20, 71, 55, .08); }
+.skills-cognition-tab-icon { display: grid; flex: none; width: 34px; height: 34px; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--fg, #111827) 5%, transparent); color: var(--muted-fg, #6b7280); }
+.skills-cognition-tab.is-active .skills-cognition-tab-icon { background: color-mix(in srgb, var(--primary, #0E9F6E) 14%, transparent); color: var(--primary-text, #06734f); }
+.skills-cognition-tab-copy { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.skills-cognition-tab-copy strong { color: var(--fg, #111827); font-size: 13px; line-height: 1.35; }
+.skills-cognition-tab-copy small { color: var(--muted-fg, #6b7280); font-size: 11px; font-weight: 400; line-height: 1.45; }
+.skills-cognition-page { height: 100%; min-height: 0; overflow: auto; padding: 22px 28px 32px; background: var(--app-bg, #f6f7fb); }
 /* style.css 里 .skills-cognition-page 是 display:flex，会压掉 UA [hidden] 的 display:none，
    导致六个 tab 页全部同时显示（点 tab 无反应、看着像同一个页面）。这里显式补覆盖。 */
 .skills-cognition-page[hidden] { display: none; }
 .skills-cognition-overview { display: grid; gap: 14px; max-width: 1480px; margin: 0 auto; }
+.cognition-task-hero { max-width: 1480px; margin: 0 auto 20px; padding: 4px 0 20px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.skills-cognition-overview > .cognition-task-hero { width: 100%; margin-bottom: 2px; }
+.cognition-task-eyebrow { display: block; margin-bottom: 8px; color: var(--primary-text, #06734f); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.cognition-task-hero-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; }
+.cognition-task-hero-row > div:first-child { min-width: 0; max-width: 760px; }
+.cognition-task-hero h2 { margin: 0; color: var(--fg, #111827); font-size: 24px; line-height: 1.28; letter-spacing: -.025em; }
+.cognition-task-hero p { margin: 8px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.65; }
+.cognition-task-metrics { display: flex; flex: none; align-items: stretch; overflow: hidden; border: 1px solid var(--border, #e5e7eb); border-radius: 9px; background: var(--card, #fff); }
+.cognition-task-metric { display: grid; min-width: 104px; gap: 2px; padding: 10px 14px; border-left: 1px solid var(--border, #e5e7eb); }
+.cognition-task-metric:first-child { border-left: 0; }
+.cognition-task-metric strong { color: var(--fg, #111827); font-size: 19px; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.cognition-task-metric span { color: var(--muted-fg, #6b7280); font-size: 10px; white-space: nowrap; }
+.cognition-task-empty { max-width: 1480px; min-height: 180px; margin: 0 auto; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--card, #fff); }
+.recall-proof-list { display: grid; max-width: 1480px; margin: 0 auto; gap: 14px; }
+.recall-proof-asset { padding: 0; overflow: hidden; border-radius: 10px; }
+.recall-proof-asset > .skills-cognition-card-head { align-items: center; padding: 15px 18px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.recall-proof-asset > .skills-cognition-card-head > div { display: grid; min-width: 0; gap: 4px; }
+.recall-proof-count { color: var(--muted-fg, #6b7280); font-size: 10px; }
+.recall-proof-timeline { position: relative; display: grid; padding: 4px 18px 8px; }
+.recall-proof-event { position: relative; display: grid; min-height: 62px; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 13px 0; border-top: 1px solid var(--border, #eef0f3); }
+.recall-proof-event:first-child { border-top: 0; }
+.recall-proof-event:not(:last-child)::before { position: absolute; top: 24px; bottom: -14px; left: 5px; width: 1px; background: color-mix(in srgb, var(--primary, #0E9F6E) 22%, var(--border, #e5e7eb)); content: ''; }
+.recall-proof-marker { position: relative; z-index: 1; width: 9px; height: 9px; margin-top: 5px; border: 2px solid var(--card, #fff); border-radius: 999px; background: var(--primary, #0E9F6E); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary, #0E9F6E) 40%, var(--border, #e5e7eb)); }
+.recall-proof-event.is-effectiveness_recorded .recall-proof-marker { background: var(--success, #15803d); }
+.recall-proof-event.is-transfer_completed .recall-proof-marker { background: var(--warning, #d97706); }
+.recall-proof-event-body { display: grid; min-width: 0; gap: 4px; }
+.recall-proof-outcome { color: var(--fg, #111827); font-size: 12px; font-weight: 650; line-height: 1.45; }
+.recall-proof-summary { margin: 0; overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
+.recall-proof-meta,
+.recall-proof-time { color: var(--muted-fg, #6b7280); font-size: 10px; line-height: 1.45; }
+.recall-proof-time { padding-top: 3px; white-space: nowrap; }
 .recall-overview-notices { display: grid; gap: 8px; }
 .recall-overview-notices .skills-cognition-warning { margin-bottom: 0; }
 .skills-cognition-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -73,9 +111,37 @@
    "真的没事"和"页面没渲染出来"。 */
 .cognition-inbox-empty { display: grid; gap: 6px; padding: 40px 16px; }
 .cognition-inbox-empty strong { color: var(--fg, #111827); font-size: 14px; }
-.cognition-governance-list { display: grid; gap: 12px; }
-.cognition-governance-row .skills-cognition-card-head { align-items: center; gap: 10px; }
-.cognition-governance-facts { margin: 6px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; overflow-wrap: anywhere; }
+.cognition-governance-workbench { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(320px, .8fr) minmax(0, 1.2fr); gap: 14px; align-items: start; }
+.cognition-governance-history-card,
+.cognition-governance-control-card { min-width: 0; padding: 0; overflow: hidden; border-radius: 10px; }
+.cognition-governance-panel-head,
+.cognition-governance-selected-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.cognition-governance-panel-head h2,
+.cognition-governance-selected-head h2 { margin: 0; color: var(--fg, #111827); font-size: 15px; line-height: 1.4; }
+.cognition-governance-panel-head p,
+.cognition-governance-selected-head p { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
+.cognition-governance-panel-head > span { display: grid; min-width: 28px; height: 28px; place-items: center; border-radius: 999px; background: color-mix(in srgb, var(--primary, #0E9F6E) 9%, transparent); color: var(--primary-text, #06734f); font-size: 11px; font-weight: 700; }
+.cognition-governance-asset-list { display: grid; max-height: min(620px, calc(100vh - 360px)); overflow-y: auto; }
+.cognition-governance-asset-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; width: 100%; min-height: 70px; padding: 12px 16px; border: 0; border-top: 1px solid var(--border, #eef0f3); background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.cognition-governance-asset-row:first-child { border-top: 0; }
+.cognition-governance-asset-row:hover { background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, transparent); }
+.cognition-governance-asset-row.is-selected { background: color-mix(in srgb, var(--primary, #0E9F6E) 8%, var(--card, #fff)); box-shadow: inset 3px 0 0 var(--primary, #0E9F6E); }
+.cognition-governance-asset-row > span:first-child { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.cognition-governance-asset-row strong { overflow: hidden; color: var(--fg, #111827); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.cognition-governance-asset-row small { overflow: hidden; color: var(--muted-fg, #6b7280); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.cognition-governance-version { color: var(--fg, #374151); font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.cognition-governance-selected-head { align-items: center; }
+.cognition-governance-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 0 18px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.cognition-governance-facts > div { min-width: 0; padding: 13px 12px; border-left: 1px solid var(--border, #eef0f3); }
+.cognition-governance-facts > div:first-child { padding-left: 0; border-left: 0; }
+.cognition-governance-facts dt { margin-bottom: 4px; color: var(--muted-fg, #6b7280); font-size: 10px; }
+.cognition-governance-facts dd { margin: 0; overflow-wrap: anywhere; color: var(--fg, #374151); font-size: 11px; line-height: 1.5; }
+.cognition-governance-action-group { padding: 16px 18px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.cognition-governance-action-group h3 { margin: 0; color: var(--fg, #111827); font-size: 13px; }
+.cognition-governance-action-group p { margin: 5px 0 12px; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
+.cognition-governance-action-group > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.cognition-governance-action-group.is-danger { background: color-mix(in srgb, var(--danger, #b42318) 2%, var(--card, #fff)); }
+.cognition-governance-control-card > :is(.recall-asset-version-panel, .recall-asset-chain-panel) { margin: 16px 18px; }
 .recall-overview-panel { padding: 14px; }
 .recall-overview-attention { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--warning, #d97706) 28%, var(--border, #e5e7eb)); border-radius: 8px; background: color-mix(in srgb, var(--warning, #d97706) 5%, var(--card, #fff)); }
 .recall-overview-attention .skills-cognition-band-head { margin-bottom: 8px; }
@@ -331,10 +397,10 @@
 }
 
 .skills-cognition-tab-group {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 10px;
   padding: 0;
 }
 .skills-cognition-tab-group + .skills-cognition-tab-group {
@@ -346,13 +412,14 @@
   display: none;
 }
 
-.skills-cognition-tab .ui-icon { width: 16px; height: 16px; flex: none; }
+.skills-cognition-tab-icon .ui-icon { width: 17px; height: 17px; flex: none; }
 
 .skills-cognition-main {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  background: var(--app-bg, #f6f7fb);
 }
 
 .recall-workbench-page-head {
@@ -422,22 +489,44 @@
 .recall-source-group-advanced > summary::after { content: ''; width: 7px; height: 7px; margin-left: 4px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; color: var(--muted-fg, #6b7280); transform: rotate(45deg); transition: transform .16s ease; }
 .recall-source-group-advanced[open] > summary::after { transform: rotate(225deg); }
 @media (max-width: 1100px) {
-  .skills-cognition-surface .skills-cognition-tabs { flex-wrap: nowrap; gap: 4px; min-height: 44px; padding: 5px 10px; }
-  .skills-cognition-tab-group { gap: 0; }
-  .skills-cognition-tab-group + .skills-cognition-tab-group { margin-left: 0; padding-left: 5px; }
-  .skills-cognition-surface .skills-cognition-tab { gap: 0; padding: 7px 6px; font-size: 12px; }
-  .skills-cognition-surface .skills-cognition-tab .ui-icon { display: none; }
+  .skills-cognition-surface .skills-cognition-header { padding: 24px 28px 20px; }
+  .skills-cognition-surface .skills-cognition-tabs { min-height: 0; padding: 0 28px 20px; overflow-x: hidden; overflow-y: visible; }
+  .skills-cognition-tab-group { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .skills-cognition-surface .skills-cognition-tab { gap: 12px; padding: 14px; font-size: inherit; }
+  .skills-cognition-surface .skills-cognition-tab .ui-icon { display: inline-block; }
+  .skills-cognition-surface .skills-cognition-page { padding: 22px 28px 32px; }
+  .cognition-task-hero-row { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .cognition-task-metrics { width: 100%; }
+  .cognition-task-metric { min-width: 0; flex: 1 1 0; }
+  .cognition-governance-workbench { grid-template-columns: 1fr; }
+  .cognition-governance-asset-list { max-height: 360px; }
 }
 
 @media (max-width: 600px) {
-  .skills-cognition-surface .skills-cognition-header { padding: 6px 16px; }
-  .skills-cognition-header p { display: none; }
+  .skills-cognition-surface .skills-cognition-header { flex-direction: column; gap: 16px; padding: 20px 16px 16px; }
+  .skills-cognition-header-actions { width: 100%; padding-top: 0; }
+  .skills-cognition-header-actions .cognition-aux-entry { flex: 1 1 auto; }
+  .skills-cognition-surface .skills-cognition-tabs { padding: 0 16px 16px; overflow-x: auto; overflow-y: hidden; }
+  .skills-cognition-tab-group { display: flex; width: max-content; }
+  .skills-cognition-surface .skills-cognition-tab { width: min(76vw, 260px); }
   .skills-cognition-surface .skills-cognition-page { padding: 18px 16px 24px; }
   .recall-workbench-summary { grid-template-columns: 1fr; }
   .recall-workbench-summary > div { border-left: 0; border-top: 1px solid var(--border, #e5e7eb); }
   .recall-workbench-summary > div:first-child { border-top: 0; }
   .recall-source-item { grid-template-columns: minmax(0, 1fr) auto; }
   .recall-source-item-actions { grid-column: 1 / -1; }
+  .cognition-task-hero h2 { font-size: 20px; }
+  .cognition-task-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cognition-task-metric { padding: 9px 10px; border-left: 1px solid var(--border, #e5e7eb); }
+  .cognition-task-metric:first-child { border-left: 0; }
+  .cognition-task-metric span { overflow: hidden; text-overflow: ellipsis; }
+  .recall-proof-event { grid-template-columns: 14px minmax(0, 1fr); }
+  .recall-proof-time { grid-column: 2; padding-top: 0; white-space: normal; }
+  .cognition-governance-asset-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .cognition-governance-asset-row > .skills-cognition-status { grid-column: 1 / -1; justify-self: start; }
+  .cognition-governance-facts { grid-template-columns: 1fr; }
+  .cognition-governance-facts > div { padding: 10px 0; border-top: 1px solid var(--border, #eef0f3); border-left: 0; }
+  .cognition-governance-facts > div:first-child { border-top: 0; }
 }
 
 .skills-cognition-record-list {
@@ -497,8 +586,8 @@
 }
 
 .ability-assets-workbench { display: grid; gap: 14px; }
-.ability-asset-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.ability-asset-summary-card { padding: 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
+.ability-asset-summary-grid { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.ability-asset-summary-card { min-height: 96px; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--card, #fff); }
 .ability-asset-summary-card span { display: block; color: var(--muted-fg, #6b7280); font-size: 12px; }
 .ability-asset-summary-card strong { display: block; margin: 6px 0 2px; font-size: 22px; }
 .ability-asset-summary-card small { color: var(--muted-fg, #6b7280); font-size: 11px; }
@@ -619,38 +708,35 @@
 .recall-capture-task-error.recall-skill-draft-state b { margin-bottom: 5px; }
 .ability-assets-empty { padding: 36px 18px; color: var(--muted-fg, #6b7280); text-align: center; }
 @media (min-width: 901px) {
+  /* 「我的资产」由整页负责纵向滚动。过去这里同时让页面、左侧列表和右侧详情
+     各自滚动，并把滚动链限制在内层；触控板停在内层边界
+     时滚轮事件无法交还给页面，看起来就像页面卡住。 */
   #skills-cognition-assets { overflow-x: hidden; overflow-y: auto; }
-  #skills-cognition-assets-body { height: min(620px, calc(100vh - 184px)); min-height: 520px; }
+  #skills-cognition-assets-body { height: auto; min-height: 0; }
   .ability-assets-workbench {
-    grid-template-rows: auto minmax(0, 1fr);
-    height: 100%;
+    grid-template-rows: auto;
+    height: auto;
     min-height: 0;
   }
-  .ability-assets-workbench.is-asset-management-only { grid-template-rows: minmax(0, 1fr); }
+  .ability-assets-workbench.is-asset-management-only { grid-template-rows: auto; }
   .ability-assets-management {
-    height: 100%;
+    height: auto;
     min-height: 0;
-    align-items: stretch;
+    align-items: start;
   }
   .ability-asset-list {
-    display: flex;
+    display: block;
     min-height: 0;
-    flex-direction: column;
   }
-  .ability-asset-list-head { flex: 0 0 auto; }
   .ability-asset-list-body {
-    flex: 1 1 auto;
     min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    scrollbar-gutter: stable;
+    overflow: visible;
   }
   .ability-asset-detail {
-    height: 100%;
+    height: auto;
     min-height: 0;
-    align-self: stretch;
-    overflow-y: auto;
-    overscroll-behavior: contain;
+    align-self: start;
+    overflow: visible;
   }
 }
 @media (max-width: 900px) {

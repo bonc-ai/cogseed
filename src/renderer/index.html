@@ -428,25 +428,40 @@
         <div class="skills-cognition-console">
           <div class="skills-cognition-surface">
           <header class="skills-cognition-header">
-            <div>
+            <div class="skills-cognition-heading">
+              <span class="skills-cognition-eyebrow" data-i18n="cognition.workspace_eyebrow">Cognition Assets</span>
               <h1 data-i18n="cognition.title">认知资产</h1>
-              <p data-i18n="cognition.subtitle">查看会话沉淀进度与认知资产</p>
+              <p data-i18n="cognition.subtitle">集中处理待办、管理资产，并查看使用效果与版本变化</p>
             </div>
             <!-- 辅助入口：来源是输入配置、沉淀活动是后台加工进度，两者都不是
                  用户来这里要完成的任务，所以不与任务视图并列。 -->
-            <button type="button" class="btn btn-sm cognition-aux-entry" data-cognition-page="sources" data-i18n="cognition.manage_sources">管理来源</button>
-            <button type="button" class="btn btn-sm cognition-aux-entry" data-cognition-page="captures" data-i18n="cognition.capture_activity">沉淀活动</button>
-            <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
-              <span data-ui-icon="refresh"></span>
-            </button>
+            <div class="skills-cognition-header-actions">
+              <button type="button" class="btn btn-sm cognition-aux-entry" data-cognition-page="sources" data-i18n="cognition.manage_sources">管理来源</button>
+              <button type="button" class="btn btn-sm cognition-aux-entry" data-cognition-page="captures" data-i18n="cognition.capture_activity">沉淀活动</button>
+              <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
+                <span data-ui-icon="refresh"></span>
+              </button>
+            </div>
           </header>
           <div class="skills-cognition-workspace">
-          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产导航">
-            <div class="skills-cognition-tab-group">
-              <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-inbox" data-cognition-page="inbox"><span data-ui-icon="clipboard-list"></span><span data-i18n="cognition.inbox">待我处理</span></button>
-              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.my_assets">我的资产</span></button>
-              <button type="button" id="skills-cognition-tab-proofs" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-proofs" tabindex="-1" data-cognition-page="proofs"><span data-ui-icon="shield-check"></span><span data-i18n="cognition.proofs">使用与证明</span></button>
-              <button type="button" id="skills-cognition-tab-governance" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-governance" tabindex="-1" data-cognition-page="governance"><span data-ui-icon="list-ordered"></span><span data-i18n="cognition.governance">版本与治理</span></button>
+          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产任务视图" data-i18n-aria-label="cognition.task_views">
+            <div class="skills-cognition-tab-group" role="presentation">
+              <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-inbox" data-cognition-page="inbox">
+                <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="clipboard-list"></span></span>
+                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.inbox">待我处理</strong><small data-i18n="cognition.inbox_desc">处理需要你判断与确认的事项</small></span>
+              </button>
+              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets">
+                <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="archive"></span></span>
+                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.my_assets">我的资产</strong><small data-i18n="cognition.my_assets_desc">按四类资产查看与管理已有认知</small></span>
+              </button>
+              <button type="button" id="skills-cognition-tab-proofs" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-proofs" tabindex="-1" data-cognition-page="proofs">
+                <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="shield-check"></span></span>
+                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.proofs">使用与证明</strong><small data-i18n="cognition.proofs_desc">了解资产在哪里使用以及是否有效</small></span>
+              </button>
+              <button type="button" id="skills-cognition-tab-governance" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-governance" tabindex="-1" data-cognition-page="governance">
+                <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="list-ordered"></span></span>
+                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.governance">版本与治理</strong><small data-i18n="cognition.governance_desc">查看版本变化并控制资产状态</small></span>
+              </button>
             </div>
           </nav>
           <main class="skills-cognition-main">

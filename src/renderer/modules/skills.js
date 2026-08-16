@@ -57,6 +57,20 @@ function _cognitionText(key, fallback) {
   return value && value !== key ? value : fallback;
 }
 
+/**
+ * 四个任务页共用的内容层页头。顶层标题回答“这是什么模块”，这里回答
+ * “来到这一页要完成什么”；数字只接收调用方从现有读模型算出的真实值。
+ */
+function _renderCognitionTaskHero({ eyebrowKey, eyebrow, titleKey, title, hintKey, hint, metrics = [] }) {
+  const metricHtml = metrics.length
+    ? `<div class="cognition-task-metrics">${metrics.map((metric) => `<div class="cognition-task-metric"><strong>${escapeHtml(String(metric.value))}</strong><span>${escapeHtml(_cognitionText(metric.key, metric.label))}</span></div>`).join('')}</div>`
+    : '';
+  return `<header class="cognition-task-hero">
+    <span class="cognition-task-eyebrow">${escapeHtml(_cognitionText(eyebrowKey, eyebrow))}</span>
+    <div class="cognition-task-hero-row"><div><h2>${escapeHtml(_cognitionText(titleKey, title))}</h2><p>${escapeHtml(_cognitionText(hintKey, hint))}</p></div>${metricHtml}</div>
+  </header>`;
+}
+
 function _cognitionTypeLabel(type) {
   const labels = {
     preference: _cognitionText('cognition.type_preference', '偏好'),
@@ -250,9 +264,9 @@ function _renderCognitionInlineRefs(refs) {
 function _abilityAssetCategoryLabel(category) {
   const labels = {
     personal: _cognitionText('cognition.asset_category_personal', '关于我'),
-    rule: _cognitionText('cognition.asset_category_rule', '规则与判断'),
+    rule: _cognitionText('cognition.asset_category_rule', '规则与偏好'),
     template: _cognitionText('cognition.asset_category_template', '模板与范例'),
-    skill_method: _cognitionText('cognition.asset_category_skill_method', '可复用方法'),
+    skill_method: _cognitionText('cognition.asset_category_skill_method', '技能与方法'),
   };
   return labels[category] || category || _cognitionText('cognition.unknown', '未知');
 }
@@ -1427,6 +1441,20 @@ function renderSkillsCognitionInbox() {
     ? `<section class="skills-cognition-card recall-overview-panel cognition-inbox-group is-confirm"><div class="skills-cognition-card-head"><h2>${escapeHtml(_cognitionText('cognition.inbox_failed_candidates', '沉淀失败的候选'))}</h2><b>${escapeHtml(String(failedCandidates.length))}</b></div>${failedCandidates.slice(0, 5).map((c) => `<button type="button" class="skills-cognition-list-card" data-cognition-open-candidate="${escapeHtml(c.id)}"><strong>${escapeHtml(c.title || c.summary || c.judgment || c.id)}</strong><span>${escapeHtml(_cognitionStatusLabel(c.status))} · ${escapeHtml(_abilityAssetCategoryLabel(c.suggestedType || c.type))}</span></button>`).join('')}</section>`
     : '';
   const teachingSignals = Array.isArray(_skillsCognitionState.teachingSignals) ? _skillsCognitionState.teachingSignals : [];
+  const inboxItems = Array.isArray(_skillsCognitionState.inboxItems) ? _skillsCognitionState.inboxItems : [];
+  const confirmCount = inboxItems.filter((entry) => entry?.urgency === 'confirm').length + failedCandidates.length;
+  const laterCount = inboxItems.filter((entry) => entry?.urgency === 'low_disturbance').length;
+  const activeTeachingCount = teachingSignals.filter((signal) => signal?.status === 'active').length;
+  const hero = _renderCognitionTaskHero({
+    eyebrowKey: 'cognition.inbox_eyebrow', eyebrow: 'TO REVIEW',
+    titleKey: 'cognition.inbox_title', title: '只把需要你决定的事放在这里',
+    hintKey: 'cognition.inbox_page_hint', hint: '先处理会阻塞沉淀或资产使用的事项，其余内容保持低打扰。',
+    metrics: [
+      { value: confirmCount, key: 'cognition.inbox_confirm_now', label: '需要确认' },
+      { value: laterCount, key: 'cognition.inbox_can_wait', label: '可以稍后' },
+      { value: activeTeachingCount, key: 'cognition.inbox_teaching_receipts', label: '教学回执' },
+    ],
+  });
   // 需要主动确认的排在前面；普通候选低打扰地跟在后面。分级来自服务端 gate，
   // 渲染层不自己判断哪件事更急。
   const confirmPanels = `${_renderCognitionInboxGroups('confirm')}${failedHtml}`;
@@ -1438,6 +1466,7 @@ function renderSkillsCognitionInbox() {
     : '';
   host.innerHTML = `
     <div class="skills-cognition-overview">
+      ${hero}
       ${notices ? `<div class="recall-overview-notices">${notices}</div>` : ''}
       ${attention}
       ${confirmPanels ? `<div class="recall-overview-activity-grid cognition-inbox-confirm">${confirmPanels}</div>` : ''}
@@ -1498,8 +1527,19 @@ async function renderSkillsCognitionProofs() {
     if (!byAsset.has(assetId)) byAsset.set(assetId, []);
     byAsset.get(assetId).push(item);
   }
+  const proofEvents = [...byAsset.values()].flat();
+  const hero = _renderCognitionTaskHero({
+    eyebrowKey: 'cognition.proofs_eyebrow', eyebrow: 'USE & EVIDENCE',
+    titleKey: 'cognition.proofs_title', title: '先看在哪里用，再看是否真的有效',
+    hintKey: 'cognition.proofs_page_hint', hint: '使用、迁移与效果分层展示；没有效果证明时，不会把“被使用”说成“已验证”。',
+    metrics: [
+      { value: byAsset.size, key: 'cognition.proofs_assets_covered', label: '涉及资产' },
+      { value: proofEvents.length, key: 'cognition.proofs_event_count', label: '使用与证明记录' },
+      { value: proofEvents.filter((item) => item.kind === 'effectiveness_recorded').length, key: 'cognition.proofs_effect_count', label: '效果评价' },
+    ],
+  });
   if (!byAsset.size) {
-    host.innerHTML = `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.proofs_empty', '还没有资产被真正带入过任务。资产被使用后，这里会显示它在哪里用过、结果如何。'))}</div>`;
+    host.innerHTML = `${hero}<div class="skills-cognition-empty cognition-task-empty">${escapeHtml(_cognitionText('cognition.proofs_empty', '还没有资产被真正带入过任务。资产被使用后，这里会显示它在哪里用过、结果如何。'))}</div>`;
     return;
   }
 
@@ -1514,22 +1554,21 @@ async function renderSkillsCognitionProofs() {
         refs.version ? `v${escapeHtml(refs.version)}` : '',
         refs.usageReceiptId ? escapeHtml(_cognitionText('cognition.proof_receipt', '有回执')) : '',
       ].filter(Boolean).join(' · ');
-      return `<div class="recall-proof-row">
-        <span class="recall-proof-outcome">${escapeHtml(outcome || item.title || item.kind)}</span>
-        <span class="recall-proof-summary">${escapeHtml(item.summary || item.title || '')}</span>
-        <span class="recall-proof-meta">${meta}</span>
-        <span class="recall-proof-time">${escapeHtml(_cognitionDate(item.occurredAt))}</span>
-      </div>`;
+      return `<article class="recall-proof-event is-${escapeHtml(item.kind || 'event')}">
+        <span class="recall-proof-marker" aria-hidden="true"></span>
+        <div class="recall-proof-event-body"><strong class="recall-proof-outcome">${escapeHtml(outcome || item.title || item.kind)}</strong>${item.summary || item.title ? `<p class="recall-proof-summary">${escapeHtml(item.summary || item.title || '')}</p>` : ''}${meta ? `<span class="recall-proof-meta">${meta}</span>` : ''}</div>
+        <time class="recall-proof-time">${escapeHtml(_cognitionDate(item.occurredAt))}</time>
+      </article>`;
     }).join('');
     return `<section class="skills-cognition-card recall-proof-asset">
       <div class="skills-cognition-card-head">
-        <h2>${escapeHtml(title)}</h2>
+        <div><h2>${escapeHtml(title)}</h2><span class="recall-proof-count">${escapeHtml(_cognitionText('cognition.proofs_asset_events', '{n} 条记录').replace('{n}', String(entries.length)))}</span></div>
         <button type="button" class="btn btn-sm" data-ability-asset-id="${escapeHtml(assetId)}" data-cognition-page-link="assets">${escapeHtml(_cognitionText('cognition.proof_open_asset', '查看资产'))}</button>
       </div>
-      ${rows}
+      <div class="recall-proof-timeline">${rows}</div>
     </section>`;
   }).join('');
-  host.innerHTML = `<div class="recall-proof-list">${sections}</div>`;
+  host.innerHTML = `${hero}<div class="recall-proof-list">${sections}</div>`;
 }
 
 function renderSkillsCognitionCandidates() {
@@ -1782,13 +1821,17 @@ function renderSkillsCognitionAssets() {
   const summaryHost = document.getElementById('skills-cognition-assets-summary');
   const personalMemoryHead = document.getElementById('skills-cognition-formal-assets')
     ?.querySelector?.('.recall-personal-memory-head');
-  const previousListScrollTop = Number(host.querySelector?.('.ability-asset-list-body')?.scrollTop || 0);
   const items = _skillsCognitionState.assets;
+  const assetsHero = _renderCognitionTaskHero({
+    eyebrowKey: 'cognition.assets_eyebrow', eyebrow: 'MY COGNITION',
+    titleKey: 'cognition.assets_title', title: '把拥有的认知按四类整理清楚',
+    hintKey: 'cognition.assets_page_hint', hint: '四类资产是“我拥有什么”，不是新的任务入口；选择分类后继续使用现有资产页与个人本体。',
+  });
   const categories = [
     ['personal', 'cognition.asset_category_personal', '关于我', 'cognition.asset_category_personal_desc', '长期角色与个人边界'],
-    ['rule', 'cognition.asset_category_rule', '规则与判断', 'cognition.asset_category_rule_desc', '可复用的决策约束'],
+    ['rule', 'cognition.asset_category_rule', '规则与偏好', 'cognition.asset_category_rule_desc', '可复用的决策约束'],
     ['template', 'cognition.asset_category_template', '模板与范例', 'cognition.asset_category_template_desc', '结构与参考样例'],
-    ['skill_method', 'cognition.asset_category_skill_method', '可复用方法', 'cognition.asset_category_skill_method_desc', '流程、工具与评价方法'],
+    ['skill_method', 'cognition.asset_category_skill_method', '技能与方法', 'cognition.asset_category_skill_method_desc', '流程、工具与评价方法'],
   ];
   const summary = categories.map(([category, key, fallback, descKey, descFallback]) => {
     const active = _skillsCognitionState.assetCategoryFilter === category ? ' is-active' : '';
@@ -1797,7 +1840,8 @@ function renderSkillsCognitionAssets() {
   `;
   }).join('');
   const summaryMarkup = `<div class="ability-asset-summary-grid">${summary}</div>`;
-  if (summaryHost) summaryHost.innerHTML = summaryMarkup;
+  const summaryContent = `${assetsHero}${summaryMarkup}`;
+  if (summaryHost) summaryHost.innerHTML = summaryContent;
   const isPersonalCategory = _skillsCognitionState.assetCategoryFilter === 'personal';
   // 「关于我」是四类资产之一，不再是独立任务页：选中 personal 分类时在本页
   // 展开个人本体。骨架全仓只有这一处，渲染函数按 id 定位即可命中。
@@ -1828,16 +1872,16 @@ function renderSkillsCognitionAssets() {
     ? categoryItems.filter((item) => [item.title, item.summary, item.statement, item.id, item.scope, item.category, item.type]
       .some((value) => String(value || '').toLocaleLowerCase().includes(searchQuery)))
     : categoryItems;
-  const searchInput = `<input class="asset-search" value="${escapeHtml(_skillsCognitionState.assetSearchQuery || '')}" placeholder="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索记忆内容'))}" aria-label="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索记忆内容'))}">`;
+  const searchInput = `<input class="asset-search" value="${escapeHtml(_skillsCognitionState.assetSearchQuery || '')}" placeholder="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索认知资产'))}" aria-label="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索认知资产'))}">`;
   if (!items.length) {
-    host.innerHTML = `${summaryHost ? '' : summaryMarkup}<div class="ability-assets-workbench is-asset-management-only">
+    host.innerHTML = `${summaryHost ? '' : summaryContent}<div class="ability-assets-workbench is-asset-management-only">
       <div class="ability-assets-empty">${escapeHtml(_cognitionText('cognition.no_ability_assets', '尚无正式资产。完成复用证明、确认带入正确并保存后，资产才会出现在这里。'))}</div>
     </div>`;
     return;
   }
   if (!filteredItems.length) {
     const selectedCategory = _abilityAssetCategoryLabel(_skillsCognitionState.assetCategoryFilter);
-    host.innerHTML = `${summaryHost ? '' : summaryMarkup}<div class="ability-assets-workbench is-asset-management-only">
+    host.innerHTML = `${summaryHost ? '' : summaryContent}<div class="ability-assets-workbench is-asset-management-only">
       <div class="ability-assets-management">
         <section class="ability-asset-list"><div class="ability-asset-list-head">${searchInput}</div><div class="ability-assets-empty">${escapeHtml(searchQuery ? _cognitionText('cognition.asset_search_empty', '未找到匹配的能力资产') : _cognitionText('cognition.empty_asset_category', '该分类暂无能力资产'))}</div></section>
         <section class="ability-asset-detail"><div class="ability-assets-empty"><strong>${escapeHtml(selectedCategory)}</strong><br>${escapeHtml(_cognitionText('cognition.empty_asset_category_hint', '当候选被确认并保存为正式资产后，会出现在这里。'))}</div></section>
@@ -1906,7 +1950,7 @@ function renderSkillsCognitionAssets() {
       : skillDraftGenerating
         ? `<div class="reference-strip recall-skill-draft-state"><div><strong>${escapeHtml(_cognitionText('cognition.skill_draft_auto_generating', '正在生成 Skill…'))}</strong><p>${escapeHtml(_cognitionText('cognition.skill_draft_auto_hint', '正在整理相关记忆与来源。'))}</p></div>${skillAction}</div>`
         : '';
-  host.innerHTML = `${summaryHost ? '' : summaryMarkup}<div class="ability-assets-workbench is-asset-management-only">
+  host.innerHTML = `${summaryHost ? '' : summaryContent}<div class="ability-assets-workbench is-asset-management-only">
     <div class="ability-assets-management">
       <section class="ability-asset-list">
         <div class="ability-asset-list-head">${searchInput}</div>
@@ -1927,8 +1971,6 @@ function renderSkillsCognitionAssets() {
       </section>
     </div>
   </div>${searchQuery ? '' : _renderCognitionRecentActivity()}`;
-  const nextList = host.querySelector?.('.ability-asset-list-body');
-  if (nextList) nextList.scrollTop = previousListScrollTop;
 }
 
 /**
@@ -1946,38 +1988,55 @@ function renderSkillsCognitionGovernance() {
   const host = document.getElementById('skills-cognition-governance-body');
   if (!host) return;
   const items = Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [];
-  const head = `<div class="recall-workbench-page-head"><div><h2>${escapeHtml(_cognitionText('cognition.governance', '版本与治理'))}</h2><p>${escapeHtml(_cognitionText('cognition.governance_hint', '资产的版本变化、作用范围与引用，以及停止使用、回滚、归档的入口。'))}</p></div></div>`;
+  const hero = _renderCognitionTaskHero({
+    eyebrowKey: 'cognition.governance_eyebrow', eyebrow: 'VERSION & GOVERNANCE',
+    titleKey: 'cognition.governance_title', title: '每次变化都有版本，也有退路',
+    hintKey: 'cognition.governance_page_hint', hint: '暂停、停止默认使用、撤销引用、删除资产与清除历史是不同动作；先看影响，再执行。',
+    metrics: [
+      { value: items.length, key: 'cognition.governance_total', label: '全部资产' },
+      { value: items.filter((asset) => asset.status === 'active').length, key: 'cognition.governance_active', label: '正常使用' },
+      { value: items.filter((asset) => asset.status !== 'active').length, key: 'cognition.governance_attention', label: '非正常状态' },
+    ],
+  });
   if (!items.length) {
-    host.innerHTML = `${head}<div class="skills-cognition-empty"><strong>${escapeHtml(_cognitionText('cognition.governance_empty', '尚无可治理的资产'))}</strong><span>${escapeHtml(_cognitionText('cognition.governance_empty_hint', '资产被确认为正式资产后，它的版本与治理入口会出现在这里。'))}</span></div>`;
+    host.innerHTML = `${hero}<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.governance_empty', '尚无可治理的资产'))}</strong><span>${escapeHtml(_cognitionText('cognition.governance_empty_hint', '资产被确认为正式资产后，它的版本与治理入口会出现在这里。'))}</span></div>`;
     return;
   }
-  const moreLabel = _cognitionText('common.more', '更多');
-  const moreIcon = typeof uiIconHtml === 'function' ? uiIconHtml('more-horizontal') : '<span aria-hidden="true">...</span>';
+  const selected = items.find((asset) => asset.id === _skillsCognitionState.selectedAssetId)
+    || items.find((asset) => asset.status === 'active')
+    || items[0];
+  _skillsCognitionState.selectedAssetId = selected.id;
   const rows = items.map((asset) => {
     const category = asset.category || asset.type;
-    const workspaceRefs = Array.isArray(asset.workspaceRefs) ? asset.workspaceRefs.filter(Boolean) : [];
-    const writeOrigin = _abilityAssetWriteOriginLabel(asset.lifecycleStatus);
-    const actions = _recallAssetActions(asset.status);
-    const more = actions.length
-      ? `<button type="button" class="btn btn-sm recall-asset-more" data-recall-asset-more="${escapeHtml(asset.id)}" data-recall-asset-actions="${escapeHtml(actions.join(','))}" title="${escapeHtml(moreLabel)}" aria-label="${escapeHtml(moreLabel)}">${moreIcon}</button>`
-      : '';
-    const facts = [
-      `${_cognitionText('cognition.governance_version', '版本')}：${asset.version ? `v${asset.version}` : '—'}`,
-      `${_cognitionText('cognition.governance_scope', '作用范围')}：${_abilityAssetScopeLabel(asset.scope || 'general')}`,
-      writeOrigin ? `${_cognitionText('cognition.asset_write_origin', '写入来源')}：${writeOrigin}` : '',
-      `${_cognitionText('cognition.workspace_refs', 'Workspace引用')}：${workspaceRefs.length ? workspaceRefs.join('、') : _cognitionText('cognition.no_refs', '未记录引用')}`,
-    ].filter(Boolean).join(' · ');
-    return `<article class="skills-cognition-card cognition-governance-row" data-cognition-governance-asset="${escapeHtml(asset.id)}">
-      <div class="skills-cognition-card-head">
-        <h2>${escapeHtml(_abilityAssetDisplayTitle(asset))}</h2>
-        <span class="skills-cognition-status is-${escapeHtml(asset.status || '')}">${escapeHtml(_abilityAssetMaturityLabel(asset.maturity, asset.status))}</span>
-        ${more}
-      </div>
-      <p class="cognition-governance-facts">${escapeHtml(_abilityAssetCategoryLabel(category))} · ${escapeHtml(facts)}</p>
-      ${_renderRecallAssetHistory(asset.id)}
-    </article>`;
+    const selectedClass = asset.id === selected.id ? ' is-selected' : '';
+    return `<button type="button" class="cognition-governance-asset-row${selectedClass}" data-cognition-governance-select="${escapeHtml(asset.id)}">
+      <span><strong>${escapeHtml(_abilityAssetDisplayTitle(asset))}</strong><small>${escapeHtml(_abilityAssetCategoryLabel(category))} · ${escapeHtml(_abilityAssetScopeLabel(asset.scope || 'general'))}</small></span>
+      <span class="cognition-governance-version">${asset.version ? `v${escapeHtml(asset.version)}` : '—'}</span>
+      <span class="skills-cognition-status is-${escapeHtml(asset.status || '')}">${escapeHtml(_abilityAssetMaturityLabel(asset.maturity, asset.status))}</span>
+    </button>`;
   }).join('');
-  host.innerHTML = `${head}<div class="cognition-governance-list">${rows}</div>`;
+  const actions = _recallAssetActions(selected.status);
+  const renderAction = (action, dangerous = false) => `<button type="button" class="btn btn-sm${dangerous ? ' btn-danger' : ''}" data-cognition-governance-action="${escapeHtml(action)}" data-cognition-governance-asset="${escapeHtml(selected.id)}">${escapeHtml(_recallAssetActionLabel(action))}</button>`;
+  const usageActions = actions.filter((action) => ['pause', 'resume', 'archive', 'restore'].includes(action)).map((action) => renderAction(action)).join('');
+  const recordActions = actions.filter((action) => ['versions', 'chain'].includes(action)).map((action) => renderAction(action)).join('');
+  const destructiveActions = actions.filter((action) => ['delete', 'revoke', 'purge'].includes(action)).map((action) => renderAction(action, true)).join('');
+  const workspaceRefs = Array.isArray(selected.workspaceRefs) ? selected.workspaceRefs.filter(Boolean) : [];
+  const writeOrigin = _abilityAssetWriteOriginLabel(selected.lifecycleStatus);
+  host.innerHTML = `${hero}<div class="cognition-governance-workbench">
+    <section class="skills-cognition-card cognition-governance-history-card">
+      <div class="cognition-governance-panel-head"><div><h2>${escapeHtml(_cognitionText('cognition.governance_assets_versions', '资产与当前版本'))}</h2><p>${escapeHtml(_cognitionText('cognition.governance_assets_versions_hint', '选择一项，查看它的状态、版本与可执行动作。'))}</p></div><span>${escapeHtml(String(items.length))}</span></div>
+      <div class="cognition-governance-asset-list">${rows}</div>
+    </section>
+    <section class="skills-cognition-card cognition-governance-control-card">
+      <div class="cognition-governance-selected-head"><div><h2>${escapeHtml(_abilityAssetDisplayTitle(selected))}</h2><p>${escapeHtml(_abilityAssetCategoryLabel(selected.category || selected.type))} · ${escapeHtml(_cognitionText('cognition.governance_version', '版本'))} ${selected.version ? `v${escapeHtml(selected.version)}` : '—'}</p></div><span class="skills-cognition-status is-${escapeHtml(selected.status || '')}">${escapeHtml(_abilityAssetMaturityLabel(selected.maturity, selected.status))}</span></div>
+      <dl class="cognition-governance-facts"><div><dt>${escapeHtml(_cognitionText('cognition.governance_scope', '作用范围'))}</dt><dd>${escapeHtml(_abilityAssetScopeLabel(selected.scope || 'general'))}</dd></div><div><dt>${escapeHtml(_cognitionText('cognition.asset_write_origin', '写入来源'))}</dt><dd>${escapeHtml(writeOrigin || '—')}</dd></div><div><dt>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</dt><dd>${escapeHtml(workspaceRefs.length ? workspaceRefs.join('、') : _cognitionText('cognition.no_refs', '未记录引用'))}</dd></div></dl>
+      ${usageActions ? `<section class="cognition-governance-action-group"><h3>${escapeHtml(_cognitionText('cognition.governance_use_control', '使用控制'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_use_control_hint', '暂停或归档不会删除资产及其历史记录。'))}</p><div>${usageActions}</div></section>` : ''}
+      ${recordActions ? `<section class="cognition-governance-action-group"><h3>${escapeHtml(_cognitionText('cognition.governance_history_control', '版本与证明'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_history_control_hint', '查看历史版本、回滚入口，以及这条资产的使用履历。'))}</p><div>${recordActions}</div></section>` : ''}
+      ${destructiveActions ? `<section class="cognition-governance-action-group is-danger"><h3>${escapeHtml(_cognitionText('cognition.governance_asset_body', '资产本体'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_asset_body_hint', '删除、移除记忆与彻底清除影响不同，执行前会再次确认。'))}</p><div>${destructiveActions}</div></section>` : ''}
+      ${_renderRecallAssetHistory(selected.id)}
+      ${_renderRecallAssetChain(selected.id)}
+    </section>
+  </div>`;
 }
 
 function openRecallPersonalOntology() {

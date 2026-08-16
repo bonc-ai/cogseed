@@ -83,7 +83,7 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).not.toContain('下一次任务认知注入预览');
     expect(host.innerHTML).not.toContain('data-cognition-page-link="captures"');
     expect(host.innerHTML).not.toContain('data-cognition-page-link="sources"');
-    expect(host.innerHTML).toContain('可复用方法');
+    expect(host.innerHTML).toContain('技能与方法');
     expect(host.innerHTML).toContain('自动入库');
     expect(host.innerHTML).toContain('data-recall-asset-more="aa-method"');
     expect(host.innerHTML).toContain('data-recall-asset-actions="pause,archive,delete,revoke,purge,versions,chain"');
@@ -538,7 +538,7 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('asset_id');
     expect(host.innerHTML).toContain('asset-a');
     expect(host.innerHTML).toContain('asset-b');
-    expect(host.innerHTML).toContain('规则与判断');
+    expect(host.innerHTML).toContain('规则与偏好');
     expect(host.innerHTML).toContain('project');
     expect(host.innerHTML).toContain('<dt>来源引用</dt><dd>2</dd>');
     expect(host.innerHTML).toContain('review_decision_id');

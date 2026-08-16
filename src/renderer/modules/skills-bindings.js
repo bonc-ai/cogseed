@@ -181,6 +181,11 @@ function _initSkillsCognitionBindings() {
     }
   };
 
+  const renderActiveAssetSurface = () => {
+    if (_skillsCognitionState.page === 'governance') renderSkillsCognitionGovernance();
+    else renderSkillsCognitionAssets();
+  };
+
   const runRecallAssetAction = async (control, actionName, assetId) => {
     if (!actionName || !assetId || control.dataset.busy === '1') return;
     control.dataset.busy = '1'; control.disabled = true;
@@ -189,7 +194,7 @@ function _initSkillsCognitionBindings() {
         _skillsCognitionState.assetHistoryById ||= {};
         _skillsCognitionState.visibleAssetHistoryId = assetId;
         _skillsCognitionState.assetHistoryById[assetId] = { loading: true };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
         const result = await window.cogseed.invoke('recall.assets.versions', { assetId });
         if (!result?.ok) throw new Error(result?.error || 'recall asset versions failed');
         _skillsCognitionState.assetHistoryById[assetId] = {
@@ -197,14 +202,14 @@ function _initSkillsCognitionBindings() {
           versions: result.versions || [],
           audit: result.audit || [],
         };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
         return;
       }
       if (actionName === 'chain') {
         _skillsCognitionState.assetChainById ||= {};
         _skillsCognitionState.visibleAssetChainId = assetId;
         _skillsCognitionState.assetChainById[assetId] = { loading: true };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
         const [chainResult, usageResult, proofResult] = await Promise.all([
           window.cogseed.invoke('recall.cognitionChain.read', { assetId }),
           // 使用记录与证明取不到都不该让整个履历打不开——它们是补充，
@@ -219,7 +224,7 @@ function _initSkillsCognitionBindings() {
           usage: usageResult?.usage || [],
           proofs: proofResult?.proofs || [],
         };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
         return;
       }
       // 不可逆或有时限的动作必须先确认。归档与恢复不确认：它们随时可撤销，
@@ -260,12 +265,12 @@ function _initSkillsCognitionBindings() {
       _skillsCognitionState.assetHistoryById ||= {};
       if (actionName === 'versions') {
         _skillsCognitionState.assetHistoryById[assetId] = { loading: false, error: (error && error.message) || String(error) };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
       }
       if (actionName === 'chain') {
         _skillsCognitionState.assetChainById ||= {};
         _skillsCognitionState.assetChainById[assetId] = { loading: false, error: (error && error.message) || String(error) };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
       }
       if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
     } finally {
@@ -360,6 +365,14 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const governanceAction = event.target.closest('[data-cognition-governance-action]');
+    if (governanceAction) {
+      const actionName = governanceAction.dataset.cognitionGovernanceAction || '';
+      const assetId = governanceAction.dataset.cognitionGovernanceAsset || '';
+      if (actionName && assetId) await runRecallAssetAction(governanceAction, actionName, assetId);
+      return;
+    }
+
     const assetRollback = event.target.closest('[data-recall-asset-rollback]');
     if (assetRollback) {
       const assetId = assetRollback.dataset.recallAssetRollback || '';
@@ -370,7 +383,7 @@ function _initSkillsCognitionBindings() {
 
     if (event.target.closest('[data-recall-asset-history-close]')) {
       _skillsCognitionState.visibleAssetHistoryId = '';
-      renderSkillsCognitionAssets();
+      renderActiveAssetSurface();
       return;
     }
 
@@ -387,7 +400,7 @@ function _initSkillsCognitionBindings() {
         const list = _skillsCognitionState.assets || [];
         const index = list.findIndex((item) => item.id === assetId);
         if (index >= 0) list[index] = result.asset;
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
         uiToast(_cognitionText(
           confirmed ? 'cognition.cross_scope_confirmed_done' : 'cognition.cross_scope_withdrawn_done',
           confirmed ? '已允许跨作用域使用' : '已撤回跨作用域许可',
@@ -402,7 +415,16 @@ function _initSkillsCognitionBindings() {
 
     if (event.target.closest('[data-recall-asset-chain-close]')) {
       _skillsCognitionState.visibleAssetChainId = '';
-      renderSkillsCognitionAssets();
+      renderActiveAssetSurface();
+      return;
+    }
+
+    const governanceAsset = event.target.closest('[data-cognition-governance-select]');
+    if (governanceAsset) {
+      _skillsCognitionState.selectedAssetId = governanceAsset.dataset.cognitionGovernanceSelect || '';
+      _skillsCognitionState.visibleAssetHistoryId = '';
+      _skillsCognitionState.visibleAssetChainId = '';
+      renderSkillsCognitionGovernance();
       return;
     }
 
