@@ -48,10 +48,12 @@ export async function findTransferProof(userId: string, projectionId: string, ex
   return (await listTransferProofs(userId)).find((proof) => proof.projectionId === projectionId && proof.executionId === executionId);
 }
 
-export async function prepareTransferProof(userId: string, input: { projectionId: string; executionId: string; expectedResultSnapshot: string; wakeRequestId?: string }): Promise<TransferProofRecord> {
+export async function prepareTransferProof(userId: string, input: { projectionId: string; executionId: string; expectedResultSnapshot: string; assetIds?: string[]; wakeRequestId?: string }): Promise<TransferProofRecord> {
   const projection = await readContextProjection(userId, input.projectionId);
   if (projection.status !== 'confirmed') throw new Error('transfer proof requires a confirmed projection');
-  const assetVersions = await Promise.all(projection.assetIds.map(async (assetId) => { const asset = await readAbilityAsset(userId, assetId); return { assetId, version: asset.version }; }));
+  // 资产事实默认取投影冻结清单；调用方可覆盖为"真实加载"的资产（以回执为准）。
+  const assetIds = input.assetIds && input.assetIds.length ? input.assetIds : projection.assetIds;
+  const assetVersions = await Promise.all(assetIds.map(async (assetId) => { const asset = await readAbilityAsset(userId, assetId); return { assetId, version: asset.version }; }));
   const now = new Date().toISOString();
   const record: TransferProofRecord = { schemaVersion: 1, ownerId: userId, id: `tp-${genId12()}`, projectionId: projection.id, executionId: text(input.executionId, 'execution id', 160), expectedResultSnapshot: text(input.expectedResultSnapshot, 'expected result snapshot', 4000), assetVersions, status: 'prepared', ...(input.wakeRequestId ? { wakeRequestId: text(input.wakeRequestId, 'wake request id', 160) } : {}), createdAt: now };
   await writeRecallJsonRecord(userId, 'transfer-proofs', record.id, record);

@@ -35,35 +35,65 @@ function proofStatusFor(event: RecallTaskTerminalEvent): 'succeeded' | 'degraded
 }
 
 
-/** 在本次运行落过的回执里，找覆盖了这次投影资产的那一张。
- *
- *  回执的 `reusedRefs` 记的是"本轮真的注入了哪几条"，所以只要与投影冻结的
- *  assetIds 有交集，就说明这次投影的认知真的被加载过。没有交集或压根没有回执，
- *  就不是 Transfer Verified——宁可停在"任务跑完了"。 */
-async function findReuseReceiptForProjection(
+/** 归一化回执引用：可能带前缀（`asset:aa-xxx`）——按尾段取资产 id。 */
+function bareAssetId(ref: unknown): string | undefined {
+  const raw = String(ref || '');
+  if (!raw) return undefined;
+  const tail = raw.slice(raw.lastIndexOf(':') + 1);
+  return tail.length > 0 ? tail : undefined;
+}
+
+/**
+ * 以回执为准（产品决定 2026-08-16）：回执的 `reusedRefs` 是"本轮真的注入了
+ * 哪几条"的唯一事实。终态证明升档的资产清单 = 本次运行全部回执的并集，提交
+ * 投影只作为治理记录（证明挂在哪个投影上），不再当证明锚点——投影冻结清单与
+ * 回合实际注入集合会因阈值校准等漂移（实机观测：提交投影含旧阈值资产，回合
+ * 自动投影按新阈值过滤后两者无交集），导致回执永远"覆盖不到"投影资产。
+ */
+async function collectLoadedAssetsFromReceipts(
   userId: string,
   turnIds: readonly string[],
-  assetIds: ReadonlySet<string>,
-): Promise<string | undefined> {
-  if (!turnIds.length || !assetIds.size) return undefined;
+): Promise<{ loadedAssetIds: string[]; receiptId?: string }> {
+  if (!turnIds.length) return { loadedAssetIds: [] };
   const { readReceipt } = await import('../p3394/context-reuse-receipt');
+  const loadedAssetIds: string[] = [];
+  let receiptId: string | undefined;
+  const seen = new Set<string>();
   for (const turnId of turnIds) {
     try {
       const receipt = await readReceipt(userId, `turn-${turnId}`);
       if (!receipt) continue;
-      const covers = (receipt.reusedRefs || []).some((ref) => {
-        const raw = String(ref || '');
-        if (assetIds.has(raw)) return true;
-        // 引用可能带前缀（`asset:aa-xxx`）——按尾段再比一次。
-        const tail = raw.slice(raw.lastIndexOf(':') + 1);
-        return tail.length > 0 && assetIds.has(tail);
-      });
-      if (covers) return receipt.receiptId || `turn-${turnId}`;
+      if (!receiptId) receiptId = receipt.receiptId || `turn-${turnId}`;
+      for (const ref of receipt.reusedRefs || []) {
+        const id = bareAssetId(ref);
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        loadedAssetIds.push(id);
+      }
     } catch {
       // 单张回执读不到不影响其它轮次的判定。
     }
   }
-  return undefined;
+  return { loadedAssetIds, receiptId };
+}
+
+/** 本次运行回执覆盖的、仍存在的资产（以回执为准的升档事实）。 */
+async function loadedExistingAssets(
+  userId: string,
+  turnIds: readonly string[],
+): Promise<{ existing: string[]; receiptId?: string }> {
+  const { loadedAssetIds, receiptId } = await collectLoadedAssetsFromReceipts(userId, turnIds);
+  const { readAbilityAsset } = await import('./asset-service');
+  const existing: string[] = [];
+  for (const assetId of loadedAssetIds) {
+    try {
+      await readAbilityAsset(userId, assetId);
+      existing.push(assetId);
+    } catch {
+      // 回执引用了已删除/合并的资产——不参与升档，也不让证明失败。
+    }
+  }
+  return { existing, receiptId };
 }
 
 export async function handleRecallTaskTerminal(event: RecallTaskTerminalEvent): Promise<TerminalProofResult> {
@@ -85,27 +115,26 @@ export async function handleRecallTaskTerminal(event: RecallTaskTerminalEvent): 
     return { handled: false, reason: 'no_confirmed_projection' };
   }
 
+  const { existing, receiptId } = await loadedExistingAssets(event.user_id, event.reuse_turn_ids || []);
+  const receiptProvesTransfer = Boolean(receiptId) && existing.length > 0;
+
   let proof = await findTransferProof(event.user_id, projection.id, executionId);
   if (!proof) {
+    // 以回执为准：真实加载并生成回执的资产才是本次迁移证明的资产事实。
+    // 没有回执（或回执为空）时退回投影冻结清单——只记录"任务跑完"，不升档。
     proof = await prepareTransferProof(event.user_id, {
       projectionId: projection.id,
       executionId,
       expectedResultSnapshot: `Task terminal status: ${event.status}.`,
+      ...(existing.length ? { assetIds: existing } : {}),
       ...(event.wake_request_id ? { wakeRequestId: event.wake_request_id } : {}),
     });
   }
   if (proof.status === 'prepared') {
-    // 找出本次运行里真实加载了这次投影资产的那张回执。显式按 turn id 定位，
-    // 不按时间窗反查、也不拿 execution id 硬粘——回执必须指得回某一次真实加载。
-    const receiptId = await findReuseReceiptForProjection(
-      event.user_id,
-      event.reuse_turn_ids || [],
-      new Set(projection.assetIds || []),
-    );
     proof = await completeTransferProof(event.user_id, proof.id, {
       status,
-      ...(receiptId ? { receiptId } : {}),
-      observedTransfer: receiptId
+      ...(receiptProvesTransfer ? { receiptId } : {}),
+      observedTransfer: receiptProvesTransfer
         ? `Task run ${logicalRunId} attempt ${executionId} reached ${event.status}; assets were loaded under receipt ${receiptId}.`
         : `Task run ${logicalRunId} attempt ${executionId} reached terminal status ${event.status}.`,
     });
