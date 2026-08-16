@@ -14,7 +14,7 @@ import { buildGroupKstarEpisode, buildRuntimeKstarEpisode, type GroupKstarEpisod
 import { proposeKstarCandidates } from './extraction-service';
 import { saveKstarCandidateProposals } from './recall-bridge';
 import { createInitialKstarReview, readKstarReview, saveKstarReview, saveKstarReviewRecord } from './review-service';
-import { inferKstarReview, type KstarReviewInferenceResult } from './review-inference';
+import { inferKstarReview, type KstarReviewInferenceOptions, type KstarReviewInferenceResult } from './review-inference';
 import { parseKstarReviewInference } from './review-inference';
 import { postKstarReviewCard } from './review-card';
 import type { KstarEpisodeRecord, KstarExtractionRunRecord, KstarReviewRecord } from './types';
@@ -36,7 +36,11 @@ export type KstarCandidateBridge = (
   proposals: ReturnType<typeof proposeKstarCandidates>,
 ) => Promise<RecallCandidateRecord[]>;
 
-export type KstarReviewInfer = (userId: string, episode: KstarEpisodeRecord) => Promise<KstarReviewInferenceResult>;
+export type KstarReviewInfer = (
+  userId: string,
+  episode: KstarEpisodeRecord,
+  options?: KstarReviewInferenceOptions,
+) => Promise<KstarReviewInferenceResult>;
 
 export interface RuntimeKstarClosureInput extends RuntimeKstarEpisodeInput {
   bridge?: KstarCandidateBridge;
@@ -253,6 +257,7 @@ async function finishClosure(
   episode: KstarEpisodeRecord,
   bridge: KstarCandidateBridge = saveKstarCandidateProposals,
   inferReview: KstarReviewInfer = inferKstarReview,
+  forecast?: Awaited<ReturnType<typeof readWorldModelForecast>> | null,
 ): Promise<KstarClosureResult> {
   await writeKstarEpisode(userId, episode);
   let storedReview: KstarReviewRecord | null = null;
@@ -264,7 +269,10 @@ async function finishClosure(
   let review = storedReview;
   if (!review) {
     try {
-      const inferred = await inferReview(userId, episode);
+      // fallback 推理也走确定性世界模型度量（forecast）：期望 vs 实际由
+      // reconcileWorldModel 确定性计算，模型只做归因与教训提炼——不依赖
+      // Commander 回合（不占队列），质量与 Commander 凭记忆 review 相当。
+      const inferred = await inferReview(userId, episode, forecast ? { forecast } : {});
       review = await saveKstarReview(userId, episode, {
         ...inferred.review,
         reviewState: inferred.reviewState,
@@ -449,6 +457,17 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
         evidenceKinds: [...new Set(episode.evidenceRefs.map((ref) => ref.kind))],
       }, input.commanderReviewTimeoutMs)
     : null;
+  // 确定性世界模型度量（fallback 推理用）：期望 vs 实际由 forecast 记录
+  // 确定性计算，模型只归因——Commander review 缺席时质量不降级。
+  let forecast: Awaited<ReturnType<typeof readWorldModelForecast>> | null = null;
+  if (input.forecastId) {
+    try {
+      const { readWorldModelForecast } = await import('../recall/world-model');
+      forecast = await readWorldModelForecast(input.userId, input.forecastId);
+    } catch {
+      // 无 forecast 记录 → 退化为机械推断（现状行为）。
+    }
+  }
   const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, async () => {
     if (commanderReview) {
       const now = nowIso();
@@ -472,7 +491,7 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
         updatedAt: now,
       });
     }
-    return finishClosure(input.userId, episode, input.bridge, input.inferReview);
+    return finishClosure(input.userId, episode, input.bridge, input.inferReview, forecast);
   });
   try {
     const { attachKstarEpisodeToCurrentRequirement } = await import('./requirement-state');
