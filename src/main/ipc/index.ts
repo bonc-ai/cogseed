@@ -3558,6 +3558,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'auth.removeEntry':     async ({ entryId }) => auth.removeEntry(entryId),
   'auth.reorderEntries':  async ({ orderedIds }) => auth.reorderEntries(orderedIds || []),
   'auth.updateEntryModel':async ({ entryId, model }) => auth.updateEntryModel(entryId, model),
+  'auth.revealApiKey':   async ({ profileId }) => auth.revealApiKey(profileId),
+  'auth.updateApiKey':   async ({ profileId, apiKey }) => auth.updateApiKey(profileId, apiKey),
 
   // ── Unified model authorization workflow ──
   'modelAuthorizations.list': async (_args, ctx) =>
