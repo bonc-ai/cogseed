@@ -118,7 +118,7 @@ describe('KSTAR review inference', () => {
       reason: 'The forecast expected a state check that the execution skipped.',
       confidence: 0.85,
       needsConfirmation: false,
-      lesson: 'OAuth 回调必须在校验 state 之后再交换 code，否则会接受无效会话。',
+      lesson: 'OAuth callbacks must exchange the code only after validating state, otherwise invalid sessions are accepted.',
     }));
 
     const result = await inference.inferKstarReview('user-a', episode(), {
@@ -143,9 +143,70 @@ describe('KSTAR review inference', () => {
       review: {
         attribution: 'rule_gap',
         reason: 'The forecast expected a state check that the execution skipped.',
-        lesson: 'OAuth 回调必须在校验 state 之后再交换 code，否则会接受无效会话。',
+        lesson: 'OAuth callbacks must exchange the code only after validating state, otherwise invalid sessions are accepted.',
       },
     });
+  });
+
+  it('drops an English lesson from a Chinese task at the language gate', async () => {
+    const inference = await import('../../../../src/main/features/kstar/review-inference');
+    const runModel = vi.fn(async () => JSON.stringify({
+      outcome: 'better_than_expected',
+      attribution: 'unclear',
+      deltaR: 0.3,
+      deltaA: 0.2,
+      reason: 'Task completed faster than predicted.',
+      confidence: 0.8,
+      needsConfirmation: false,
+      lesson: 'For well-known factual city profiles, skip explicit information-gathering plan steps.',
+    }));
+
+    const result = await inference.inferKstarReview('user-a', episode({
+      t: { userGoal: '帮我写一份广州城市的资料，500 字', constraints: [] },
+    }), {
+      forecast: {
+        aHat: { plan: ['Gather', 'Write'], expectedTools: ['read_file'], expectedActors: ['commander'] },
+        rHat: { summary: 'City profile written', acceptanceSignals: [], predictedFiles: [] },
+        predictedRisks: [],
+        selectedCandidateId: 'cand-a',
+      },
+      selectedAssetTypes: ['rule'],
+      runModel,
+    });
+
+    // 语言硬闸：中文任务产出的英文 lesson 被丢弃，绝不进候选池。
+    expect(result).toMatchObject({ reviewState: 'inferred', inferenceMethod: 'model' });
+    expect(result.review.lesson).toBeUndefined();
+    expect(result.review.reason).toBe('Task completed faster than predicted.');
+  });
+
+  it('keeps a same-language lesson from the model', async () => {
+    const inference = await import('../../../../src/main/features/kstar/review-inference');
+    const runModel = vi.fn(async () => JSON.stringify({
+      outcome: 'better_than_expected',
+      attribution: 'unclear',
+      deltaR: 0.3,
+      deltaA: 0.2,
+      reason: '任务比预期更快完成。',
+      confidence: 0.8,
+      needsConfirmation: false,
+      lesson: '写城市资料时应先收集数据再成文，避免编造。',
+    }));
+
+    const result = await inference.inferKstarReview('user-a', episode({
+      t: { userGoal: '帮我写一份广州城市的资料，500 字', constraints: [] },
+    }), {
+      forecast: {
+        aHat: { plan: ['Gather', 'Write'], expectedTools: ['read_file'], expectedActors: ['commander'] },
+        rHat: { summary: 'City profile written', acceptanceSignals: [], predictedFiles: [] },
+        predictedRisks: [],
+        selectedCandidateId: 'cand-a',
+      },
+      selectedAssetTypes: ['rule'],
+      runModel,
+    });
+
+    expect(result.review.lesson).toBe('写城市资料时应先收集数据再成文，避免编造。');
   });
 
   it('falls back to deterministic reconciliation when the model is unavailable', async () => {

@@ -1,5 +1,6 @@
 import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
+import { lessonLanguageMismatches } from '../../util/language';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { precipitateDirectExperienceFromSource } from './direct-experience-assets';
 import { readKstarEpisode } from './episode-store';
@@ -7,6 +8,13 @@ import { clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scop
 import { readKstarReview } from './review-service';
 import type { KstarRequirementRecord } from './requirement-types';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
+
+/** 语言硬闸（消费方防御）：与任务主导脚本不匹配的 lesson 视为无效——
+ *  中文任务产出的英文经验宁可不沉淀。 */
+function lessonUsable(taskGoal: string, lesson: string | undefined): string | undefined {
+  if (!lesson?.trim()) return undefined;
+  return lessonLanguageMismatches(taskGoal, lesson) ? undefined : lesson.trim();
+}
 
 /** 用户可读的作用域标签（交互规范 §17.3：作用域要"看得懂"）。
  *  scopeForTask 输出短 ASCII 标签（retrieval 用），展示层转中文。 */
@@ -112,7 +120,8 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
     type === 'rule' ? { applicableWhen: [`处理${userScopeLabel(scope)}时`] } : {}
   );
   if (strongest) {
-    if (verifiedWorkflow && !strongest.lesson?.trim()) {
+    const strongestLesson = lessonUsable(goal, strongest.lesson);
+    if (verifiedWorkflow && !strongestLesson) {
       // Verified workflow without a reasoned lesson → skill_method.
       proposals.push({
         judgment: `处理类似「${goal}」的任务时，可使用已验证的工作流程：${toolChain.join(' → ')}。`,
@@ -123,13 +132,13 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
         sourceRefs: mergedRefs,
         learningSignal: learningSignal(strongest),
       });
-    } else if (strongest.lesson?.trim()) {
+    } else if (strongestLesson) {
       // Process-experience lesson (even on met_expected tasks): the reasoned
       // reusable pattern/pitfall is the asset body. Type rule by default —
       // it is a judgment lesson, not a workflow.
       proposals.push({
-        judgment: strongest.lesson,
-        summary: userFacingSummary('lesson', scope, strongest.lesson),
+        judgment: strongestLesson,
+        summary: userFacingSummary('lesson', scope, strongestLesson),
         uncertainty: '基于任务执行经验提炼，使用前可复核。',
         suggestedType: 'rule',
         suggestedScope: scope,
@@ -143,13 +152,14 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   // Highest-confidence gap across all episodes, only when evidence-gated.
   // 同上：缺口候选必须有推理出的 lesson，不拿 review.reason 的诊断文本充数。
   const gapReview = [...reviews]
-    .filter((review) => review.confidence >= 0.7 && (review.lesson?.trim().length || 0) > 0)
+    .filter((review) => review.confidence >= 0.7 && lessonUsable(goal, review.lesson))
     .sort((a, b) => b.confidence - a.confidence)[0];
   const gapAssetType = gapReview ? gapType(gapReview) : null;
   if (gapAssetType && gapReview) {
+    const gapLesson = lessonUsable(goal, gapReview.lesson)!;
     proposals.push({
-      judgment: gapReview.lesson!.trim(),
-      summary: userFacingSummary('gap', scope, gapReview.lesson!.trim()),
+      judgment: gapLesson,
+      summary: userFacingSummary('gap', scope, gapLesson),
       uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: gapAssetType,
       suggestedScope: scope,

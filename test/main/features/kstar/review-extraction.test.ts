@@ -102,6 +102,40 @@ describe('KSTAR review and Recall bridge', () => {
     });
   });
 
+  it('drops an English lesson from a Chinese task at the consumer gate (falls back to workflow template)', async () => {
+    const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
+      import('../../../../src/main/features/kstar/review-service'),
+      import('../../../../src/main/features/kstar/extraction-service'),
+    ]);
+    const current = {
+      ...episode([
+        { name: 'read_file', status: 'ok' },
+        { name: 'write_file', status: 'ok' },
+      ]),
+      t: { userGoal: '帮我写一份广州城市的资料，500 字', constraints: [] },
+    };
+    const review = await saveKstarReview('review-user', current, {
+      expectedResult: '城市资料',
+      actualResult: '城市资料',
+      deltaR: 'unknown',
+      deltaA: 'unknown',
+      outcome: 'met_expected',
+      attribution: 'unclear',
+      reason: '任务完成。',
+      confidence: 0.9,
+      lesson: 'For well-known factual city profiles, skip explicit information-gathering plan steps.',
+      evidenceRefs: current.evidenceRefs,
+    });
+    const proposals = proposeKstarCandidates(current, review);
+    // 语言不匹配的 lesson 不产候选——宁可用确定性工作流模板，也不让英文经验进池。
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].judgment).not.toContain('For well-known factual city profiles');
+    expect(proposals[0]).toMatchObject({
+      suggestedType: 'skill_method',
+      judgment: expect.stringContaining('处理类似「帮我写一份广州城市的资料，500 字」的任务时'),
+    });
+  });
+
   it('extracts a skill-method proposal only when review evidence compares expected and actual results', async () => {
     const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
       import('../../../../src/main/features/kstar/review-service'),
@@ -202,7 +236,7 @@ describe('KSTAR review and Recall bridge', () => {
       attribution: 'rule_gap',
       reason: 'Check the report acceptance criteria before writing the final file.',
       // 缺口候选必须有推理出的 lesson：只有 reason（诊断文本）时不再产候选。
-      lesson: '写最终文件前先核对报告验收标准，避免返工重排。',
+      lesson: 'Check the report acceptance criteria before writing the final file to avoid rework.',
       confidence: 0.9,
       evidenceRefs: current.evidenceRefs,
     });

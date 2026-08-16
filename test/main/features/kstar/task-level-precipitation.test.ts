@@ -185,7 +185,7 @@ describe('KStar task-level precipitation (B5)', () => {
       reason: 'A report template is missing for this kind of task.',
       // 缺口候选必须有推理出的 lesson：只有 reason（诊断文本）时不再产候选，
       // 否则写进池子的是一句读不懂的诊断而不是可复用认知。
-      lesson: '报告类任务缺少固定模板时，先补齐章节骨架再动笔，避免每次重排结构。',
+      lesson: 'When a report task lacks a fixed template, scaffold the section structure first to avoid reworking the layout each time.',
       confidence: 0.85,
     });
     await seedReview(epB, {
@@ -207,9 +207,9 @@ describe('KStar task-level precipitation (B5)', () => {
     expect(gap).toBeDefined();
     // 标题 = 内容核心本身（无模板前缀/scope 后缀——前缀由渲染层分类标签承担）。
     // 标题 = 内容核心第一句主干（lessonTitleCore），无模板前缀/scope 后缀。
-    expect(gap!.summary).toBe('报告类任务缺少固定模板时，');
+    expect(gap!.summary).toBe('When a report task lacks a fixed templat…');
     expect(gap!.summary).not.toContain('待修正经验：');
-    expect(gap!.judgment).toBe('报告类任务缺少固定模板时，先补齐章节骨架再动笔，避免每次重排结构。');
+    expect(gap!.judgment).toBe('When a report task lacks a fixed template, scaffold the section structure first to avoid reworking the layout each time.');
     expect(gap!.judgment).not.toContain('A report template is missing');
     expect(gap!.learningSignal?.confidence).toBe(0.85);
   });
@@ -268,9 +268,9 @@ describe('KStar task-level precipitation (B5)', () => {
       deltaA: 0,
       outcome: 'met_expected',
       attribution: 'unclear',
-      reason: '审查发现合并冲突的类型断言（as X）会掩盖运行时错误，应改为显式判别。',
+      reason: 'The review found that merge-conflict type assertions (as X) hide runtime errors; prefer explicit checks.',
       confidence: 0.9,
-      lesson: '合并冲突的类型断言（as X）会掩盖运行时错误，应改为显式判别联合。',
+      lesson: 'Merge-conflict type assertions (as X) hide runtime errors; use explicit discriminant checks instead.',
     });
     const requirement = await seedRequirement(['kse-b5-proc']);
 
@@ -278,7 +278,7 @@ describe('KStar task-level precipitation (B5)', () => {
     const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
 
     expect(result.proposals).toHaveLength(1);
-    expect(result.proposals[0].judgment).toContain('类型断言');
+    expect(result.proposals[0].judgment).toContain('type assertions');
     expect(result.createdAssetIds).toHaveLength(1);
   });
 
