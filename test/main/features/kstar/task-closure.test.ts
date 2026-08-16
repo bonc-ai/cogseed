@@ -12,9 +12,6 @@ beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-kstar-closure-'));
   previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-  // 静默窗口在测试中关闭：review 请求不等待 8s（用户感知优化不参与单测）。
-  const closure = await import('../../../../src/main/features/kstar/task-closure');
-  closure._setReviewQuietMsForTest(0);
 });
 
 afterEach(() => {
@@ -85,7 +82,6 @@ describe('KSTAR completion evidence merge', () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     await closure.captureGroupKstarClosure({
       userId: 'closure-user', runId: 'run-evidence', conversationId: 'cid-evidence', status: 'completed',
-      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
       messages: [
         { id: 'msg-evidence', from: 'user', text: 'Produce the report', ts: '2026-08-05T00:00:01.000Z' },
@@ -134,7 +130,6 @@ describe('KSTAR task closure', () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     await closure.captureGroupKstarClosure({
       userId: 'closure-user', runId: 'run-group-attach', conversationId: 'cid-phase2', status: 'completed',
-      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
       messages: [
         { id: 'msg-user-a', from: 'user', text: 'Review OAuth callback handling', ts: '2026-08-05T00:00:01.000Z' },
@@ -187,7 +182,6 @@ describe('KSTAR task closure', () => {
       runId: 'run-provenance-attach',
       conversationId: 'cid-provenance',
       status: 'completed',
-      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'),
       finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
       projectionId: 'proj-match',
@@ -293,7 +287,6 @@ describe('KSTAR task closure', () => {
     const result = await closure.captureRuntimeKstarClosure({
       userId: 'closure-user', runId: 'run-inferred', request, events,
       createdAt: '2026-08-05T00:00:00.000Z', inferReview: inferred,
-      commanderReviewTimeoutMs: 50,
     });
 
     expect(result.review).toMatchObject({
@@ -354,7 +347,6 @@ describe('KSTAR task closure', () => {
         artifacts: [{ id: 'art-five', title: 'report.md' }],
       }],
       inferReview: inferred,
-      commanderReviewTimeoutMs: 50,
     });
 
     const kinds = result.episode.evidenceRefs.map((ref) => ref.kind);
@@ -407,7 +399,6 @@ describe('KSTAR task closure', () => {
         artifacts: [{ id: 'art-five-evi', title: 'report.md' }],
       }],
       inferReview: inferred,
-      commanderReviewTimeoutMs: 50,
     });
 
     expect(result.candidates).toEqual([]);
@@ -452,7 +443,6 @@ describe('KSTAR task closure', () => {
         id: 'msg-honest', ts: new Date().toISOString(), from: 'user', text: 'Fix state handling',
       }],
       inferReview: inferred,
-      commanderReviewTimeoutMs: 50,
     });
 
     // Closure is review-only: no direct assets at run level.
@@ -461,22 +451,8 @@ describe('KSTAR task closure', () => {
     expect(all.filter((a) => a.candidateId?.startsWith('direct-'))).toHaveLength(0);
   });
 
-  it('parses a Commander in-context review and persists it with inferenceMethod commander', async () => {
+  it('runs host-side review inference with the run conversation history', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
-    const parsed = closure.parseCommanderReviewFromMessages([
-      { id: 'm1', ts: '2026-08-15T00:00:00.000Z', from: 'commander', text: 'Done with the audit.' },
-      { id: 'm2', ts: '2026-08-15T00:00:01.000Z', from: 'commander', text: '<kstar-review>{"outcome":"worse_than_expected","attribution":"rule_gap","deltaR":-0.4,"deltaA":"unknown","reason":"State was not checked before exchange.","confidence":0.85,"needsConfirmation":false,"lesson":"OAuth 回调必须先校验 state。"}</kstar-review>' },
-    ]);
-    expect(parsed).toMatchObject({
-      outcome: 'worse_than_expected',
-      attribution: 'rule_gap',
-      deltaR: -0.4,
-      lesson: 'OAuth 回调必须先校验 state。',
-    });
-
-    // Full closure run: the Commander never replies in this environment, so
-    // the bounded wait times out and the host-side inference fallback runs —
-    // precipitation is never blocked by a silent Commander.
     const fallbackInfer = async (_userId: string, builtEpisode: any) => ({
       review: {
         expectedResult: builtEpisode.t.userGoal,
@@ -498,7 +474,6 @@ describe('KSTAR task closure', () => {
       runId: 'run-commander-review',
       conversationId: 'cid-cmd-review',
       status: 'completed',
-      commanderReviewTimeoutMs: 50,
       startedAtMs: Date.now() - 60_000,      finishedAtMs: Date.now(),
       messages: [
         { id: 'm0', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: 'Fix the state handling' },
@@ -829,7 +804,6 @@ describe('KSTAR extraction reconciliation', () => {
       runId: 'run-ctx',
       conversationId: 'cid-ctx',
       status: 'completed',
-      commanderReviewTimeoutMs: 20,
       startedAtMs: Date.now() - 60_000,
       finishedAtMs: Date.now(),
       messages: [
