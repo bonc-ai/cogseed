@@ -592,11 +592,32 @@ function parseCandidateRisk(value: unknown): NonNullable<ParsedCandidate['risk']
   throw new CaptureFailure('invalid_model_output', 'invalid risk');
 }
 
+/** 容错解析模型输出：LLM 常把 JSON 包在 ```json 围栏里，或前后带散文/说明。
+ *  先剥 markdown 围栏，再隔离最外层 {...}，最后 JSON.parse。任何一步失败
+ *  都抛 invalid_model_output（与严格路径同码，语义不变）。 */
+function parseCaptureJson(raw: string): unknown {
+  let text = String(raw || '').trim();
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) text = fence[1].trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new CaptureFailure('invalid_model_output', 'model output is not strict JSON');
+  }
+  const slice = text.slice(start, end + 1);
+  try {
+    return JSON.parse(slice);
+  } catch {
+    throw new CaptureFailure('invalid_model_output', 'model output is not strict JSON');
+  }
+}
+
 export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>): ParsedCandidate[] {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
+    parsed = parseCaptureJson(raw);
+  } catch (error) {
+    if (error instanceof CaptureFailure) throw error;
     throw new CaptureFailure('invalid_model_output', 'model output is not strict JSON');
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -621,10 +642,10 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
       }
       return label;
     }))];
-    const uncertainty = candidate.uncertainty === undefined
+    const uncertainty = candidate.uncertainty === undefined || candidate.uncertainty === ''
       ? undefined
       : boundedRequiredText(candidate.uncertainty, 'uncertainty', 1_000);
-    const targetAssetId = candidate.targetAssetId === undefined
+    const targetAssetId = candidate.targetAssetId === undefined || candidate.targetAssetId === ''
       ? undefined
       : boundedRequiredText(candidate.targetAssetId, 'targetAssetId', 160);
     if (targetAssetId && !safeId(targetAssetId)) throw new CaptureFailure('invalid_model_output', 'invalid targetAssetId');
@@ -1476,10 +1497,23 @@ export async function runRecallCapture(
       const code = result.meta.error.kind === 'auth' ? 'model_auth_required' : 'model_failed';
       throw new CaptureFailure(code, result.meta.error.message);
     }
-    const parsed = parseRecallCaptureOutput(
-      result.text.trim(),
-      new Set(promptMessages.map((message) => message.label)),
-    );
+    let parsed: ReturnType<typeof parseRecallCaptureOutput>;
+    try {
+      parsed = parseRecallCaptureOutput(
+        result.text.trim(),
+        new Set(promptMessages.map((message) => message.label)),
+      );
+    } catch (error) {
+      // TEMP DEBUG: log the raw model output + failure detail to diagnose
+      // persistent invalid_model_output (remove after root cause fixed).
+      log.warn('recall capture parse failed (debug)', {
+        capture_id: id,
+        conversation_id: capture.conversationId,
+        rawOutput: String(result.text || '').slice(0, 2000),
+        error: error instanceof CaptureFailure ? error.message : String((error as Error)?.message || error),
+      });
+      throw error;
+    }
     capture = await setCaptureStage(userId, id, 'candidate_save');
     if (capture.status !== 'extracting') return capture;
     const automaticMode = capture.autoWrite === true || (

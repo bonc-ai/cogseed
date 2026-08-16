@@ -106,6 +106,7 @@
   "agents.agent_not_found": "エージェントが見つかりません",
   "agents.back": "エージェントに戻る",
   "agents.builtin_group": "マーケットプレイス",
+  "agents.base_group": "ベースエージェント",
   "agents.card_delivery_count": "{n} 納品",
   "agents.card_memory_count": "{n} 記憶",
   "agents.card_skill_count": "{n} スキル",

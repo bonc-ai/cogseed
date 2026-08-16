@@ -2346,4 +2346,65 @@ describe('Recall conversation capture', () => {
     expect(() => capture.parseRecallCaptureOutput(JSON.stringify({ candidates: Array.from({ length: 4 }, () => ({})) }), validLabels))
       .toThrow(/candidate count/i);
   });
+
+  it('tolerates markdown fences and prose wrapping around the JSON (model habit)', async () => {
+    const capture = await captureModule();
+    const validLabels = new Set(['m1']);
+    const payload = JSON.stringify({ candidates: [{
+      judgment: 'keep the four-part announcement structure',
+      summary: '公告五段式',
+      suggestedType: 'template',
+      suggestedScope: 'general',
+      suggestedAction: 'create',
+      risk: 'low',
+      evidence: ['m1'],
+    }] });
+
+    // ```json 围栏包裹
+    const fenced = capture.parseRecallCaptureOutput(`\`\`\`json\n${payload}\n\`\`\``, validLabels);
+    expect(fenced).toHaveLength(1);
+    expect(fenced[0]).toMatchObject({ suggestedType: 'template', summary: '公告五段式' });
+    // 前后散文说明
+    const prosey = capture.parseRecallCaptureOutput(`Here is the result:\n${payload}\nHope this helps!`, validLabels);
+    expect(prosey).toHaveLength(1);
+    expect(prosey[0].evidence).toEqual(['m1']);
+    // 围栏 + 散文混合
+    const mixed = capture.parseRecallCaptureOutput(`Sure!\n\`\`\`\n${payload}\n\`\`\`\nDone.`, validLabels);
+    expect(mixed).toHaveLength(1);
+  });
+
+  it('still rejects non-JSON garbage even after tolerance (no balanced object)', async () => {
+    const capture = await captureModule();
+    const validLabels = new Set(['m1']);
+    expect(() => capture.parseRecallCaptureOutput('just some text without braces', validLabels))
+      .toThrow(/not strict JSON/i);
+    expect(() => capture.parseRecallCaptureOutput('```json\nnot json at all\n```', validLabels))
+      .toThrow(/not strict JSON/i);
+  });
+
+  it('treats empty-string optional fields as absent (model habit of blanking unused fields)', async () => {
+    const capture = await captureModule();
+    const validLabels = new Set(['m1']);
+    // 模型对不需要的字段（targetAssetId/uncertainty）给空串，不应判失败
+    const parsed = capture.parseRecallCaptureOutput(JSON.stringify({ candidates: [{
+      judgment: 'multi-format output preference',
+      value: 'produce Word/MD/PPT/XLSX/HTML together',
+      summary: '多格式输出偏好',
+      suggestedType: 'rule',
+      suggestedScope: '文档生成类任务',
+      suggestedAction: 'create',
+      targetAssetId: '',
+      risk: 'low',
+      evidence: ['m1'],
+      uncertainty: '',
+    }] }), validLabels);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({
+      suggestedType: 'rule',
+      suggestedAction: 'create',
+      evidence: ['m1'],
+    });
+    expect(parsed[0]).not.toHaveProperty('targetAssetId');
+    expect(parsed[0]).not.toHaveProperty('uncertainty');
+  });
 });
