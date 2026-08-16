@@ -446,7 +446,7 @@ export async function importCodexSession(
   userId: string,
   filePath: string,
   titleHint?: string,
-): Promise<{ ok: boolean; conversationId?: string; reason?: string }> {
+): Promise<{ ok: boolean; conversationId?: string; alreadyImported?: boolean; reason?: string }> {
   const read = await readCodexSessionTranscript(filePath);
   if (!read.ok || !read.transcript) {
     return { ok: false, reason: read.reason || 'unreadable' };
@@ -488,6 +488,7 @@ export async function importCodexSession(
   return {
     ok: true,
     conversationId: materialize.conversationId,
+    alreadyImported: materialize.created === false,
   };
 }
 

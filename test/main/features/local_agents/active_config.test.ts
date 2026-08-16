@@ -44,6 +44,32 @@ describe('readActiveCliConfig - Claude', () => {
     });
   });
 
+  it('reads env-injected token from settings.json env block (ANTHROPIC_AUTH_TOKEN)', () => {
+    const claudeDir = path.join(tempHome, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+
+    // Claude Code commonly stores credentials under settings.env (e.g. a
+    // DeepSeek-style gateway): env.ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL.
+    fs.writeFileSync(
+      path.join(claudeDir, 'settings.json'),
+      JSON.stringify({
+        env: {
+          ANTHROPIC_AUTH_TOKEN: 'sk-env-auth-token',
+          ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
+        },
+      }),
+    );
+
+    const result = readActiveCliConfig('claude', tempHome);
+    expect(result).toEqual({
+      cli: 'claude',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      apiKey: 'sk-env-auth-token',
+      mode: 'api',
+      sourcePath: path.join(claudeDir, 'settings.json'),
+    });
+  });
+
   it('reads OAuth token from credentials.json when no API key', () => {
     const claudeDir = path.join(tempHome, '.claude');
     fs.mkdirSync(claudeDir, { recursive: true });

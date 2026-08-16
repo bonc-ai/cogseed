@@ -18,7 +18,7 @@ import { readJsonSync, writeJsonSync } from '../storage';
 
 export interface OnboardingState {
   /** Set to true once the user finishes (or explicitly completes) the
-   *  four-step first-run walkthrough. Missing / any non-true value is
+   *  three-step first-run walkthrough. Missing / any non-true value is
    *  treated as "not yet done" so a fresh install always shows it. */
   completed?: boolean;
   /** Epoch ms of completion — diagnostic only, never gates anything. */
