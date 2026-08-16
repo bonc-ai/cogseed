@@ -5496,30 +5496,6 @@ async function _cloneConversationWithConfirm(cid) {
   setView('conversation', result.conversation.conversation_id);
 }
 
-function _renderConversationMergeActionBar(selectedCount) {
-  void selectedCount;
-  return `<div class="conversation-merge-action-bar" role="region" aria-label="${escapeHtml(t('chat.merge.select_action'))}">
-    <button type="button" class="conversation-merge-start" data-merge-start>
-      <span class="conversation-merge-start-icon" aria-hidden="true">${_uiIconHtml('list', 'ui-icon')}</span>
-      <span>${escapeHtml(t('chat.merge.select_action'))}</span>
-    </button>
-  </div>`;
-}
-
-function _ensureConversationMergeActionBar() {
-  if (typeof document === 'undefined' || typeof document.createElement !== 'function'
-    || typeof document.getElementById !== 'function') return;
-  let bar = document.getElementById('conversation-merge-action-bar');
-  if (!bar) {
-    bar = document.createElement('div');
-    bar.id = 'conversation-merge-action-bar';
-    const list = document.getElementById('conversation-list');
-    if (list && list.parentElement) list.parentElement.insertBefore(bar, list);
-  }
-  bar.innerHTML = _renderConversationMergeActionBar(_conversationMergeSelection.size);
-  bar.querySelector('[data-merge-start]')?.addEventListener('click', () => _enterConversationMergeSelection());
-}
-
 function _enterConversationMergeSelection(initialCid) {
   _openConversationMergePicker(initialCid);
 }
@@ -5781,6 +5757,11 @@ function _conversationActionItems(cid, opts = {}) {
     onClick: () => _openConversationSpacePicker(cid),
   });
   items.push({
+    action: 'merge',
+    label: t('chat.merge.select_action'),
+    onClick: () => _enterConversationMergeSelection(cid),
+  });
+  items.push({
     action: 'delete',
     label: t('chat.conv_del_title'),
     danger: true,
@@ -5960,7 +5941,6 @@ document.addEventListener('mousedown', (e) => {
 window.addEventListener('resize', _closeConversationActionMenu);
 window.addEventListener('i18n-change', () => {
   _closeConversationActionMenu();
-  _ensureConversationMergeActionBar();
   _mountConversationResultCard(currentCid);
 });
 window.openConversationActionMenu = _openConversationActionMenu;
@@ -6303,7 +6283,6 @@ function renderConversationList() {
   const hasDeferredRecent = _conversationDeferredBuckets.last30 > 0
     || _conversationDeferredBuckets.older > 0;
   const spaceMap = _spaceConversationMap();
-  _ensureConversationMergeActionBar();
   // 触发空间列表懒加载（异步；加载完成后会再次 renderConversationList）
   _ensureSidebarSpaces();
   // 空间组 = 会话里出现过的全部 space_id 并集（含新建空间：缓存未刷新时用 sid 兜底名，
@@ -6319,7 +6298,6 @@ function renderConversationList() {
   if (!pinned.length && !recent.length && !hasDeferredRecent && !spacesWithConvs.length) {
     container.innerHTML = `<div class="conv-empty" data-i18n="sidebar.conv_empty">${escapeHtml(t('sidebar.conv_empty'))}</div>`;
     if (typeof _refreshAutoExpandedTaskConvs === 'function') _refreshAutoExpandedTaskConvs();
-    _ensureConversationMergeActionBar();
     return;
   }
   const parts = [];
@@ -6385,7 +6363,6 @@ function renderConversationList() {
 
   // 侧栏行不显示进行中徽标（_updateConvSidebarBadge 已空化），仅刷新全局 chip 与当前头。
   _refreshAllConvBadges();
-  _ensureConversationMergeActionBar();
 }
 
 /** 空间组内最近活跃时间（排序用）。 */
