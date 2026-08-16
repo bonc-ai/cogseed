@@ -4046,5 +4046,6 @@
   "chat.taskref_inline_label": "Referenciado",
   "settings.custom_providers.api_format_openai_responses": "OpenAI Responses (/responses)",
   "settings.custom_providers.protocol_openai_responses": "OpenAI Responses",
-  "settings.model_authorization.protocol_openai_responses": "OpenAI Responses (/responses)"
+  "settings.model_authorization.protocol_openai_responses": "OpenAI Responses (/responses)",
+  "cognition.asset_view_content": "Ver conteúdo"
 }
