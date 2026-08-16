@@ -459,6 +459,51 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
   return asset;
 }
 
+/** 证据并入资产（内容变化即 bump 版本 + 快照 + 审计）。
+ *  调用方：候选语义去重融合路径（candidate-service 无权限直接访问
+ *  appendVersion/appendAudit 内部函数）。 */
+export async function mergeAbilityAssetEvidence(
+  userId: string,
+  assetId: string,
+  newRefs: Array<{ kind: string; id: string }>,
+  metadata: { reason: string; actor: AbilityAssetActor },
+): Promise<RecallAbilityAssetRecord> {
+  const current = await readAbilityAsset(userId, assetId);
+  if (!current) throw new Error('recall ability asset not found');
+  const merged = mergeRefsDedup(current.evidenceRefs || [], newRefs);
+  const changed = merged.length !== (current.evidenceRefs || []).length
+    || merged.some((ref, i) => JSON.stringify(ref) !== JSON.stringify((current.evidenceRefs || [])[i]));
+  if (!changed) return current;
+  const updated = asAsset(await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const cur = asAsset(raw);
+    return {
+      ...cur,
+      evidenceRefs: merged,
+      version: nextVersion(cur.version),
+      updatedAt: new Date().toISOString(),
+    };
+  }));
+  await appendVersion(userId, updated, metadata);
+  await appendAudit(userId, assetId, 'updated', metadata);
+  return updated;
+}
+
+function mergeRefsDedup(
+  left: RecallAbilityAssetRecord['evidenceRefs'],
+  right: Array<{ kind: string; id: string }>,
+): RecallAbilityAssetRecord['evidenceRefs'] {
+  const seen = new Set<string>();
+  const out: RecallAbilityAssetRecord['evidenceRefs'] = [];
+  for (const ref of [...left, ...right]) {
+    const key = `${ref.kind}:${ref.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ref);
+  }
+  return out;
+}
+
 const STATUS_AUDIT_ACTION: Record<RecallAbilityAssetRecord['status'], AbilityAssetAuditRecord['action']> = {
   active: 'resumed',
   paused: 'paused',
