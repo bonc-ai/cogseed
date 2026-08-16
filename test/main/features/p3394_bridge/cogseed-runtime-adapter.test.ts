@@ -465,6 +465,35 @@ describe('P3394CogseedRuntimeAdapter R-08 failure discipline (no ledger mutation
     // 清理：通过真实控制器取消，结束 hold 运行。
     await real.cancelMateTask(UID, mateTaskId);
   });
+
+  it('event-store 读取失败只传播错误，不修改后端任务账本', async () => {
+    const { adapterModule, controllerModule } = await load();
+    const real = controllerModule.createMateRuntimeController({ runtime: fakeRuntime('long delta', 'hold') });
+    const readEvents = async () => { throw new Error('event store down'); };
+    const adapter = new adapterModule.P3394CogseedRuntimeAdapter({
+      userId: () => UID, controller: real, pollIntervalMs: 20, readEvents: readEvents as never,
+    });
+    await adapter.openSession({ session_id: 'ses-read-fail', agent_id: 'cogseed-agent' });
+    const { task_id } = await adapter.deliver(envelope({ session_id: 'ses-read-fail', task_id: 'tsk-read-fail' }) as never);
+    await vi.waitFor(async () => {
+      const status = await real.runtimeStatus();
+      expect(status.activeTaskCount).toBe(1);
+    });
+
+    // 读取失败：错误传播（不吞掉），任务保持 running。
+    expect(await streamError(adapter.stream(task_id))).toBe('event store down');
+    const snapshot = await adapter.snapshot('ses-read-fail');
+    const mateTaskId = (snapshot.state as { tasks: Array<{ task_id: string }> }).tasks[0].task_id;
+    const taskStore = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const record = await taskStore.readMateTask(UID, mateTaskId);
+    expect(record?.status).toBe('running'); // 读取失败不把任务标记为 failed
+    const eventStore = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const events = await eventStore.readMateTaskEvents(UID, mateTaskId, 0, 500);
+    expect(events.map((event) => event.type)).not.toContain('task.failed');
+
+    // 清理：结束 hold 运行。
+    await real.cancelMateTask(UID, mateTaskId);
+  });
 });
 
 describe('P3394CogseedRuntimeAdapter R-09 状态文件损坏恢复', () => {

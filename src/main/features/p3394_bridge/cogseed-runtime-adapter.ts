@@ -60,6 +60,8 @@ export interface P3394CogseedRuntimeAdapterDeps {
   streamTimeoutMs?: number;
   /** Optional persistence file for the session/task id mappings (Agent Home). */
   stateFile?: string;
+  /** Event-store read seam（R-08 失败注入；默认接真实 event-store）。 */
+  readEvents?: (userId: string, taskId: string, afterSequence: number, limit: number) => Promise<MateTaskEvent[]>;
 }
 
 export interface P3394CogseedAdapterState {
@@ -108,6 +110,7 @@ export class P3394CogseedRuntimeAdapter implements P3394RuntimeAdapter {
   private readonly taskMap = new Map<string, string>();
   /** p3394 task_id → p3394 session_id. */
   private readonly taskSessionMap = new Map<string, string>();
+  private readonly readEvents: NonNullable<P3394CogseedRuntimeAdapterDeps['readEvents']>;
 
   constructor(deps: P3394CogseedRuntimeAdapterDeps = {}) {
     this.userId = deps.userId ?? getActiveUserId;
@@ -116,6 +119,7 @@ export class P3394CogseedRuntimeAdapter implements P3394RuntimeAdapter {
     this.pollIntervalMs = deps.pollIntervalMs ?? P3394_COGSEED_ADAPTER_DEFAULTS.pollIntervalMs;
     this.streamTimeoutMs = deps.streamTimeoutMs ?? P3394_COGSEED_ADAPTER_DEFAULTS.streamTimeoutMs;
     this.stateFile = deps.stateFile ?? null;
+    this.readEvents = deps.readEvents ?? readMateTaskEvents;
     if (this.stateFile) this.loadStateSync();
   }
 
@@ -245,7 +249,7 @@ export class P3394CogseedRuntimeAdapter implements P3394RuntimeAdapter {
     const deadline = Date.now() + this.streamTimeoutMs;
 
     for (;;) {
-      const events = await readMateTaskEvents(userId, mateTaskId, lastSequence, 200);
+      const events = await this.readEvents(userId, mateTaskId, lastSequence, 200);
       for (const event of events) {
         lastSequence = event.sequence;
         if (event.sequence <= startSequence) continue;
