@@ -188,6 +188,7 @@ export interface AddCustomProviderInput {
 export function addCustomProvider(
   userId: string,
   input: AddCustomProviderInput,
+  position: 'front' | 'back' = 'front',
 ): { ok: true; id: string } | { ok: false; error: string } {
   const name = sanitizeName(input?.name || '');
   const baseUrl = normalizeBaseUrl(input?.baseUrl || '');
@@ -221,8 +222,17 @@ export function addCustomProvider(
       ...(input.externalId ? { externalId: String(input.externalId).trim().slice(0, 160) } : {}),
       createdAt: Date.now(),
     };
-    customProviders.unshift(provider);
-    if (models[0]) entries.unshift(createCustomProviderEntry(provider.id, models[0].id));
+    // `front` keeps the existing "newest provider becomes the primary chat
+    // entry" behaviour; `back` appends so a later "connect & store" CLI does
+    // not steal the primary slot from the first connected one (it becomes a
+    // fallback instead — chat dispatch walks entries in order).
+    if (position === 'back') {
+      customProviders.push(provider);
+      if (models[0]) entries.push(createCustomProviderEntry(provider.id, models[0].id));
+    } else {
+      customProviders.unshift(provider);
+      if (models[0]) entries.unshift(createCustomProviderEntry(provider.id, models[0].id));
+    }
     return provider.id;
   });
   log.info('custom provider added', { id, protocol, source: input.source === 'ccswitch' ? 'ccswitch' : 'manual' });
@@ -562,7 +572,10 @@ export async function syncFromCcSwitch(
             ...(needsKey ? { needsKey: true } : {}),
             createdAt: Date.now(),
           };
-          customProviders.unshift(provider);
+          // Append, never unshift: a later connect & store (or re-sync) must
+          // not move CC Switch models ahead of the primary `cli:active`
+          // provider that the first connect & store established.
+          customProviders.push(provider);
           added++;
         }
         if (!provider.apiKey || !provider.models[0]) continue;
@@ -571,7 +584,8 @@ export async function syncFromCcSwitch(
           && entry.profileId === synthetic
           && entry.model === provider.models[0].id);
         if (!exists) {
-          entries.unshift(createCustomProviderEntry(provider.id, provider.models[0].id));
+          // Append (see the provider insertion above): keep primary order stable.
+          entries.push(createCustomProviderEntry(provider.id, provider.models[0].id));
           bound++;
         }
       }
@@ -605,7 +619,9 @@ export async function ensureCcSwitchBoundEntries(userId: string): Promise<number
         && entry.profileId === synthetic
         && entry.model === provider.models[0].id);
       if (exists) continue;
-      entries.unshift(createCustomProviderEntry(provider.id, provider.models[0].id));
+      // Append (see syncFromCcSwitch): boot-time repair must not reorder
+      // existing primary/fallback slots established by connect & store.
+      entries.push(createCustomProviderEntry(provider.id, provider.models[0].id));
       bound++;
     }
   });

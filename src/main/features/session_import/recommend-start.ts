@@ -97,6 +97,14 @@ export interface RecommendStartResult {
    *  no confident match. Kept as `suggestedTemplate` for renderer compatibility;
    *  scenarioId identifies the workspace scenario, templateId its primary role. */
   suggestedTemplate: TemplateSuggestion | null;
+  /** Matched EXISTING real workspace (when the session text is closer to a
+   *  user's existing space than to any scenario keyword match). null when no
+   *  confident reuse — the renderer then creates/reuses by scenario instead. */
+  suggestedSpace: {
+    spaceId: string;
+    name: string;
+    spaceType?: string;
+  } | null;
   /** How many total candidates were ranked (across all agents). */
   candidateCount: number;
   /** Per-agent candidate counts, for diagnostics / honest empty states. */
@@ -298,16 +306,78 @@ function matchScenario(sampleText: string): TemplateSuggestion | null {
   return best;
 }
 
+/** Weighted token match of session text against a space's real features
+ *  (name + sustained outcome + instructions). Returns the matched token count
+ *  (0 = no overlap). Kept token-based and honest: only REAL user-visible
+ *  space text is compared, never fabricated signals. */
+function matchSpaceText(sampleText: string, spaceText: string): number {
+  if (!sampleText || !spaceText) return 0;
+  const hay = sampleText.toLowerCase();
+  const tokens = spaceText.toLowerCase()
+    .replace(/[，。！？、；：""''（）\s/\\_-]+/g, ' ')
+    .split(' ')
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+  const seen = new Set<string>();
+  let score = 0;
+  for (const tok of tokens) {
+    if (seen.has(tok)) continue;
+    seen.add(tok);
+    if (hay.includes(tok)) {
+      score += tok.length >= 4 ? 2 : 1;
+    }
+  }
+  return score;
+}
+
+/** Match the top session against the user's EXISTING real workspaces.
+ *  Returns the best-scoring space above the confidence floor, or null. */
+async function matchExistingSpace(
+  userId: string,
+  sampleText: string,
+): Promise<NonNullable<RecommendStartResult['suggestedSpace']>> {
+  try {
+    const { listSpaces } = await import('../spaces');
+    const spaces = await listSpaces(userId);
+    let best: NonNullable<RecommendStartResult['suggestedSpace']> | null = null;
+    let bestScore = 0;
+    for (const space of spaces) {
+      if (!space || !space.space_id) continue;
+      const parts = [
+        space.name,
+        space.sustained_outcome,
+        space.instructions,
+        space.template_names,
+      ].filter((v): v is string => typeof v === 'string' && !!v.trim());
+      const score = matchSpaceText(sampleText, parts.join(' '));
+      if (score > bestScore) {
+        bestScore = score;
+        best = {
+          spaceId: space.space_id,
+          name: space.name || '',
+          spaceType: space.space_type,
+        };
+      }
+    }
+    // A space must clear a real overlap floor to be recommended; a single
+    // two-char token match is noise, not a confident reuse.
+    return bestScore >= 4 ? best : null;
+  } catch (err) {
+    log.warn('existing-space match failed', { error: String(err) });
+    return null;
+  }
+}
+
 /**
  * Compute the onboarding start recommendation. Read-only, best-effort, always
  * returns a result (top:null when nothing readable). `home` override is for
  * tests; production uses the real home dir.
  */
-export async function recommendStartingPoint(home = os.homedir()): Promise<RecommendStartResult> {
+export async function recommendStartingPoint(home = os.homedir(), userId?: string): Promise<RecommendStartResult> {
   const { list, perSource } = await gatherCandidates(home);
   const candidateCount = list.length;
   if (!candidateCount) {
-    return { top: null, suggestedTemplate: null, candidateCount: 0, perSource };
+    return { top: null, suggestedTemplate: null, suggestedSpace: null, candidateCount: 0, perSource };
   }
 
   const ranked = rank(list);
@@ -322,5 +392,13 @@ export async function recommendStartingPoint(home = os.homedir()): Promise<Recom
   }
   const suggestedTemplate = matchScenario(sampleText);
 
-  return { top, suggestedTemplate, candidateCount, perSource };
+  // Reuse-first: when the session text is close to one of the user's EXISTING
+  // real workspaces, prefer that over inventing a new scenario space. This is
+  // the "用真实工作空间" matching the product owner asked for — sessions land
+  // in the workspace that already fits instead of spawning lookalikes.
+  const suggestedSpace = userId
+    ? await matchExistingSpace(userId, sampleText)
+    : null;
+
+  return { top, suggestedTemplate, suggestedSpace, candidateCount, perSource };
 }

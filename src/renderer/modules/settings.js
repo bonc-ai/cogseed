@@ -499,6 +499,17 @@ window.addEventListener('i18n-change', () => {
 });
 
 // ── Commander CLI fallback (no API-key model) ─────────────────────────────
+// Friendly label for a fallback CLI value ('' → auto). Mirrors the
+// conversation.js fallback labels; must cover every cli-fallback whitelist
+// entry (claude / codex / opencode / workbuddy).
+function _settingsCliFallbackLabel(cli) {
+  if (cli === 'claude') return 'Claude Code';
+  if (cli === 'codex') return 'Codex';
+  if (cli === 'opencode') return 'OpenCode';
+  if (cli === 'workbuddy') return 'WorkBuddy';
+  return '';
+}
+
 async function _settingsRenderCliFallback() {
   const select = document.getElementById('settings-cli-fallback-select');
   const stateEl = document.getElementById('settings-cli-fallback-state');
@@ -513,7 +524,7 @@ async function _settingsRenderCliFallback() {
   select.value = prefs.cli || '';
   if (stateEl) {
     stateEl.textContent = prefs.cli
-      ? t('settings.cli_fallback.state_chosen').replace('{cli}', prefs.cli === 'claude' ? 'Claude Code' : (prefs.cli === 'codex' ? 'Codex' : 'OpenCode'))
+      ? t('settings.cli_fallback.state_chosen').replace('{cli}', _settingsCliFallbackLabel(prefs.cli))
       : t('settings.cli_fallback.state_auto');
   }
 
@@ -526,7 +537,7 @@ async function _settingsRenderCliFallback() {
       const noApi = !(res && res.configured);
       if (stateEl) {
         stateEl.textContent = select.value
-          ? t('settings.cli_fallback.state_chosen').replace('{cli}', select.value === 'claude' ? 'Claude Code' : (select.value === 'codex' ? 'Codex' : 'OpenCode'))
+          ? t('settings.cli_fallback.state_chosen').replace('{cli}', _settingsCliFallbackLabel(select.value))
           : t('settings.cli_fallback.state_auto');
       }
       if (noApi && typeof uiToast === 'function') {

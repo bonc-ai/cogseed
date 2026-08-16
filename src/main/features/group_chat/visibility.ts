@@ -131,6 +131,19 @@ export interface GroupMessage {
    * present so system-created messages can stay terse for humans while
    * preserving full instructions for the model. */
   model_text?: string;
+  /** Structured carry metadata for an imported-session resume welcome
+   *  (「准备携带」 items + sources). JSON-stringified array; renderer
+   *  parses it to power the「查看依据」expand. */
+  welcome_carry?: string;
+  /** Full resume bundle for the imported-session welcome reply:
+   *  `{ restatement, carry, boundary, plan }` (JSON string). Renders the
+   *  right-rail「查看依据」evidence and the「带着这些继续」Action Plan
+   *  without re-fetching. */
+  welcome_resume?: string;
+  /** True on the seed message of an imported session. The seed carries the
+   *  session summary for the model (model_text) but is hidden from the user
+   *  UI — the resume welcome panel replaces its display. */
+  imported_seed?: boolean;
   /** Attachment filenames (only meaningful for user messages). */
   attachments?: string[];
   /** Structured composer selections captured at send time. The text still
