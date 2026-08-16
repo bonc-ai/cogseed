@@ -20280,8 +20280,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 .skills-cognition-tab:hover { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, transparent); }
 .skills-cognition-tab.is-active { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, var(--card, #fff)); box-shadow: inset 0 -2px 0 var(--primary, #0E9F6E); font-weight: 600; }
 .skills-cognition-page { min-height: 100%; overflow: visible; padding: 18px 24px 28px; background: var(--card, #fff); display: flex; flex-direction: column; }
-/* display:flex 会压掉 UA [hidden] 的 display:none → 六个 tab 页全部同时显示。
-   显式补覆盖，让 [hidden] 真正隐藏非活动 tab 页。 */
+/* tab 切换只改 pane 的 hidden 属性（_cognitionSetPageVisibility），而上面这条
+   类规则里的 display 会盖掉 UA 的 [hidden]{display:none}。少了这条守卫，六个
+   pane 会全部保留布局、在 overflow:hidden 的 .skills-cognition-main 里首尾相接
+   竖排，只有第一屏（总览）露出来，切 tab 看着毫无反应。 */
 .skills-cognition-page[hidden] { display: none; }
 /* 内嵌到 tab pane 的原一级面板：pane 的 [hidden] 控制显隐，面板本身不再依赖
    `.panel.active`，始终保持 flex 布局。 */
@@ -20573,6 +20575,44 @@ body.model-not-configured .main-content { flex-direction: column; }
   height: 34px;
   padding: 0;
   place-items: center;
+}
+
+/* 使用与证明：按资产展开事实链（用过哪里 / 带入是否正确 / 结果如何）。
+   一行一件事实，结论在最左，依据在右——默认看意义，需要时看依据。 */
+.recall-proof-list { display: flex; flex-direction: column; gap: 12px; }
+.recall-proof-asset .skills-cognition-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.recall-proof-row {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) 1fr minmax(0, auto) minmax(0, auto);
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border, #e5e7eb);
+  font-size: 13px;
+}
+.recall-proof-outcome { font-weight: 600; color: var(--fg, #111827); }
+.recall-proof-summary { color: var(--muted-fg, #6b7280); overflow-wrap: anywhere; }
+.recall-proof-meta, .recall-proof-time { color: var(--muted-fg, #6b7280); font-size: 12px; white-space: nowrap; }
+@media (max-width: 900px) {
+  .recall-proof-row { grid-template-columns: 1fr; gap: 2px; }
+  .recall-proof-meta, .recall-proof-time { white-space: normal; }
+}
+
+/* 页头辅助入口：管理来源 / 沉淀活动。它们是输入配置与后台加工进度，不是
+   用户来认知资产要完成的任务，所以放在页头而不是任务视图 tab 条里。
+   视觉上比 tab 弱一档，选中时只做浅底提示，不抢主导航的存在感。 */
+.cognition-aux-entry {
+  height: 34px;
+  padding: 0 10px;
+  color: var(--muted-fg, #6b7280);
+  white-space: nowrap;
+}
+.cognition-aux-entry:hover {
+  color: var(--fg, #111827);
+}
+.cognition-aux-entry.is-active {
+  color: var(--fg, #111827);
+  background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, var(--card, #fff));
 }
 
 .skills-cognition-workspace {
@@ -23712,8 +23752,8 @@ body.model-not-configured .main-content { flex-direction: column; }
 .tour-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(20, 40, 30, 0.4);
-  backdrop-filter: blur(2px);
+  /* 极淡的提示性压暗——不锁死页面、不强制，只为让高亮目标更易被注意到。 */
+  background: rgba(20, 40, 30, 0.05);
   z-index: 9998;
   /* The backdrop must never swallow clicks: the whole point of the tour is
      that the user ACTS on the highlighted target (open a conversation, open
@@ -23726,18 +23766,17 @@ body.model-not-configured .main-content { flex-direction: column; }
   position: fixed;
   z-index: 9999;
   pointer-events: none;
-  max-width: 360px;
+  max-width: 300px;
   background: #ffffff;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px rgba(14, 159, 110, 0.12),
-              0 2px 8px rgba(20, 40, 30, 0.08);
-  animation: tour-slide-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(20, 40, 30, 0.08);
+  animation: tour-slide-in 0.25s ease;
   display: none;
 }
 
 .tour-tooltip-content {
-  padding: 20px;
+  padding: 12px 14px;
 }
 
 .tour-tooltip-header {
@@ -23748,22 +23787,12 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 .tour-tooltip-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 22px;
-  padding: 0 8px;
-  background: var(--primary-soft);
-  color: var(--primary-text);
-  font-size: 11px;
-  font-weight: 650;
-  border-radius: 6px;
-  letter-spacing: 0.02em;
+  display: none;
 }
 
 .tour-tooltip-title {
   margin: 0;
-  font-size: 16px;
+  font-size: 13.5px;
   font-weight: 650;
   color: var(--text);
   line-height: 1.3;
@@ -23772,18 +23801,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 /* Step progress strip: fills as the tour advances, so the user always sees
    how far the journey has come. */
 .tour-tooltip-progress {
-  height: 3px;
-  border-radius: 3px;
-  background: var(--surface-2);
-  overflow: hidden;
-  margin: -4px 0 12px;
+  display: none;
 }
 .tour-tooltip-progress i {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  background: var(--primary);
-  transition: width 0.3s ease;
+  display: none;
 }
 
 .tour-tooltip.tour-tooltip-finish .tour-tooltip-progress {
@@ -23791,45 +23812,35 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 .tour-tooltip-desc {
-  margin: 0 0 14px;
-  font-size: 13.5px;
+  margin: 5px 0 0;
+  font-size: 12.5px;
   color: var(--text-2);
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .tour-tooltip-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  /* Deliberately NOT button-styled: this is a status line, not a control.
-     The real controls live in .tour-tooltip-actions below. */
-  background: var(--surface-2);
-  color: var(--text-2);
-  font-size: 12.5px;
-  font-weight: 500;
-  border-radius: 8px;
-  margin-top: 4px;
+  display: none;
 }
 
 .tour-tooltip-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
 }
 
 /* The card itself stays pointer-events:none so it never blocks a click on the
    highlighted target underneath. Only the buttons opt back in. */
 .tour-tooltip-btn {
   pointer-events: auto;
-  height: 30px;
-  padding: 0 14px;
+  height: 26px;
+  padding: 0 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: 7px;
   background: #ffffff;
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
@@ -23849,6 +23860,23 @@ body.model-not-configured .main-content { flex-direction: column; }
 .tour-tooltip-btn.primary:hover {
   filter: brightness(1.05);
   color: #ffffff;
+}
+
+/* 弱化的"跳过"：纯文字链接，不强占视线。 */
+.tour-tooltip-link {
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.tour-tooltip-link:hover {
+  color: var(--text-2);
+  text-decoration: underline;
 }
 
 .tour-tooltip-arrow {
@@ -23909,12 +23937,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 .tour-highlight {
   position: relative;
   /* Above the backdrop so the target stays fully clickable (the backdrop is
-     pointer-events:none, but stacking also matters for the glow/pulse). */
+     pointer-events:none, but stacking also matters for the glow). */
   z-index: 10000;
-  box-shadow: 0 0 0 4px var(--primary-soft),
-              0 0 0 2px var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 55%, transparent);
   border-radius: var(--radius-sm);
-  animation: tour-pulse 2s ease-in-out infinite;
 }
 
 @keyframes tour-fade-in {

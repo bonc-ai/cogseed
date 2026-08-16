@@ -39,6 +39,7 @@ function initConnections() {
 let _connectionsBound = false;
 let _connectionsLastTab = '';
 let _connectionsMcpPrimed = false;
+let _connectionsSkillsPrimed = false;
 
 function _connectionsOpenTarget(target) {
   // Agent / 数据源 / 触点 已内嵌；仅模型与额度保留入口卡。
@@ -83,6 +84,28 @@ function activateConnectionsTab(name) {
     } else if (typeof _renderConnectorsGrid === 'function') {
       _renderConnectorsGrid();
     }
+  }
+
+  // 技能 tab 承载技能市场与外部 Skill 库（可用资源，不是个人认知资产）。
+  // 技能库的渲染函数在 skills.js，属于 `skills` 懒加载包。
+  if (target === 'skills') {
+    const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+    Promise.resolve(typeof loader === 'function' ? loader('skills') : undefined)
+      .then(() => {
+        if (typeof _skillsCache !== 'undefined' && _skillsCache && typeof renderSkillsList === 'function') {
+          renderSkillsList(_skillsCache);
+        }
+        if (typeof loadSkills === 'function') return loadSkills(!_connectionsSkillsPrimed);
+        return undefined;
+      })
+      .then(() => { _connectionsSkillsPrimed = true; })
+      .catch((err) => {
+        if (typeof createLogger === 'function') {
+          createLogger('connections').warn('skills load failed', {
+            error: (err && err.message) || String(err),
+          });
+        }
+      });
   }
 
   // Agent / 数据源 tab 内嵌了 AI 团队与资料库：切到该 tab 时按需加载。

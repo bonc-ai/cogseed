@@ -104,6 +104,11 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   const proposals: KstarCandidateProposal[] = [];
   const goal = requirement.goalText || requirement.title;
   const scope = scopeForTask(goal);
+  // 规则类候选的适用范围（PRD 3.1 RuleAsset 最低门槛）。只声明有证据支撑的
+  // 那一条——这条经验学自哪类任务；禁止范围没有证据支撑，不编。
+  const ruleBoundary = (type: string): Pick<KstarCandidateProposal, 'applicableWhen'> => (
+    type === 'rule' ? { applicableWhen: [`处理${userScopeLabel(scope)}时`] } : {}
+  );
   if (strongest) {
     if (verifiedWorkflow && !strongest.lesson?.trim()) {
       // Verified workflow without a reasoned lesson → skill_method.
@@ -126,6 +131,7 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
         uncertainty: '基于任务执行经验提炼，使用前可复核。',
         suggestedType: 'rule',
         suggestedScope: scope,
+        ...ruleBoundary('rule'),
         sourceRefs: mergedRefs,
         learningSignal: learningSignal(strongest),
       });
@@ -133,17 +139,19 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   }
 
   // Highest-confidence gap across all episodes, only when evidence-gated.
+  // 同上：缺口候选必须有推理出的 lesson，不拿 review.reason 的诊断文本充数。
   const gapReview = [...reviews]
-    .filter((review) => review.confidence >= 0.7 && review.reason.trim().length > 0)
+    .filter((review) => review.confidence >= 0.7 && (review.lesson?.trim().length || 0) > 0)
     .sort((a, b) => b.confidence - a.confidence)[0];
   const gapAssetType = gapReview ? gapType(gapReview) : null;
   if (gapAssetType && gapReview) {
     proposals.push({
-      judgment: `遇到同类情况时，应注意修正：${gapReview.reason}`,
-      summary: userFacingSummary('gap', scope, gapReview.reason),
+      judgment: gapReview.lesson!.trim(),
+      summary: userFacingSummary('gap', scope, gapReview.lesson!.trim()),
       uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: gapAssetType,
       suggestedScope: scope,
+      ...ruleBoundary(gapAssetType),
       sourceRefs: mergedRefs,
       learningSignal: learningSignal(gapReview),
     });

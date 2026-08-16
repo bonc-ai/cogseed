@@ -16,6 +16,23 @@ import type { AgentWakeRequest, WakeApproval } from '../p3394/types';
 import { approveWakeRequest, getWakeRequest } from '../p3394/wake-service';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from './source-service';
 import { isCognitionSourceEnabled } from './source-control';
+import {
+  evaluateAssetRuntimeEligibility,
+  type AssetRuntimeBlockReason,
+} from './formal-assets/runtime';
+
+/** Runtime 阻断原因 → 投影里对用户可见的省略原因。 */
+const RUNTIME_OMISSION_REASON: Partial<Record<AssetRuntimeBlockReason, OmittedAssetRef['reason']>> = {
+  status_not_active: 'asset_paused',
+  maturity_below_default_use: 'maturity_requires_user_selection',
+  not_applicable_context: 'not_applicable_context',
+  forbidden_context: 'forbidden_context',
+  target_agent_not_allowed: 'target_agent_not_allowed',
+  sensitivity_above_destination: 'sensitivity_blocked',
+  sensitivity_unclassified: 'sensitivity_blocked',
+  scope_mismatch: 'scope_mismatch',
+  source_unavailable: 'source_unavailable',
+};
 
 const log = createLogger('recall.context-projection');
 let lastProjectionCreatedAtMs = 0;
@@ -50,7 +67,7 @@ export function projectionKnowledgeError(code: ProjectionKnowledgeErrorCode): Er
 
 export interface OmittedAssetRef {
   assetId: string;
-  reason: 'asset_paused' | 'asset_revoked' | 'workspace_not_referenced' | 'workspace_disabled' | 'scope_mismatch' | 'source_unavailable' | 'low_relevance';
+  reason: 'asset_paused' | 'asset_revoked' | 'workspace_not_referenced' | 'workspace_disabled' | 'scope_mismatch' | 'source_unavailable' | 'low_relevance' | 'maturity_requires_user_selection' | 'not_applicable_context' | 'forbidden_context' | 'target_agent_not_allowed' | 'sensitivity_blocked';
 }
 
 export type RecallAssetMatchMethod = 'semantic' | 'recency_fallback' | 'manual';
@@ -586,6 +603,26 @@ export async function createAutomaticContextProjection(
     }
     if (!(await hasEnabledAutomaticSources(userId, asset))) {
       omittedRefs.push({ assetId: asset.id, reason: 'source_unavailable' });
+      continue;
+    }
+    // 统一 Runtime 闸门。这条自动投影是"静默默认注入"：它自己把 status 置成
+    // confirmed、authorization 置成 not_required，不经用户挑选就进本轮提示词。
+    // 所以按 PRD 3.6 只接纳已经证明过能被正确带入的资产——User Confirmed /
+    // Unverified 仍然只能由用户主动带入（手动投影那条路不经过这里）。
+    const runtime = evaluateAssetRuntimeEligibility({
+      status: asset.status,
+      maturity: asset.maturity,
+      scope: asset.scope,
+      ...(asset.crossScopeConfirmedAt ? { crossScopeConfirmedAt: asset.crossScopeConfirmedAt } : {}),
+      ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
+      ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
+      ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
+    }, {
+      silentDefaultInjection: true,
+      ...(taskText ? { taskText } : {}),
+    });
+    if (!runtime.eligible) {
+      omittedRefs.push({ assetId: asset.id, reason: RUNTIME_OMISSION_REASON[runtime.reasons[0]] || 'source_unavailable' });
       continue;
     }
     eligibleAssets.push(asset);

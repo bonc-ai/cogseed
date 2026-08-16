@@ -166,7 +166,10 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).not.toContain('下一次任务认知注入预览');
     expect(host.innerHTML).not.toContain('class="asset-detail-grid"');
     expect(host.innerHTML).not.toContain('class="asset-controls"');
-    expect(host.innerHTML).not.toContain('data-recall-asset-more');
+    // 列表里的每一条都由 canonical layer 保证是正式资产，所以治理动作一定可用。
+    // 过去这条断言的是"没有 source 标记就不给治理动作"——那是边界不存在时，
+    // 渲染层自己辨真假的产物。
+    expect(host.innerHTML).toContain('data-recall-asset-more');
   });
 
   it('automatically prepares legacy skill and method assets that do not have a draft yet', async () => {
@@ -334,11 +337,16 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('未找到匹配的能力资产');
   });
 
-  it('shows the personal ontology once above About me memories and hides its proxy assets', () => {
+  // 个人本体的 DOM 只有一份，挂在「关于我」tab 上由 _renderAboutMePane 驱动。
+  // 能力资产页只切「已沉淀信息」小标题，绝不能自己再渲染一次个人本体——
+  // 那需要第二份同 id 的骨架，会把「关于我」tab 变成收不到渲染的死壳。
+  // 分类计数和列表必须数同一批东西。过去后端把个人本体分组合成为
+  // `CA-PERSONAL-*` 伪资产，列表在渲染层补救过滤掉、计数没过滤，卡片数字就会
+  // 大于实际可见条数。现在后端不再产出伪资产，这里守住"计数 == 列表"。
+  it('counts exactly what the assets list renders', () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '', querySelector: () => null };
     const summaryHost = { innerHTML: '' };
-    const ontologyHost = { hidden: true };
     const memoryHead = { hidden: true };
     const formalAssets = { querySelector: () => memoryHead };
     const renderPersonalOntology = vi.fn(() => Promise.resolve());
@@ -347,14 +355,13 @@ describe('Recall cognition renderer flow', () => {
       getElementById: (id: string) => ({
         'skills-cognition-assets-body': host,
         'skills-cognition-assets-summary': summaryHost,
-        'skills-cognition-personal-ontology': ontologyHost,
         'skills-cognition-formal-assets': formalAssets,
       } as Record<string, any>)[id] || null,
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
       assets: [
-        { id: 'ontology-proxy', title: '个人本体代理项', type: 'personal', category: 'personal', source: 'personal_ontology', status: 'active', relationRefs: [] },
         { id: 'personal-memory', title: '中文交付优先', type: 'personal', category: 'personal', source: 'recall_ability_asset', status: 'active', relationRefs: [] },
+        { id: 'personal-scope', title: '只做认知资产治理', type: 'personal', category: 'personal', source: 'recall_ability_asset', status: 'active', relationRefs: [] },
       ],
       assetCategoryFilter: 'personal', selectedAssetId: 'personal-memory', assetView: 'list',
     })})`, context);
@@ -362,12 +369,14 @@ describe('Recall cognition renderer flow', () => {
     context.renderSkillsCognitionAssets();
     context.renderSkillsCognitionAssets();
 
-    expect(ontologyHost.hidden).toBe(false);
     expect(memoryHead.hidden).toBe(false);
-    expect(renderPersonalOntology).toHaveBeenCalledTimes(1);
+    // 个人本体的 DOM 只在「关于我」tab，由 _renderAboutMePane 驱动。
+    expect(renderPersonalOntology).not.toHaveBeenCalled();
     expect(summaryHost.innerHTML).toContain('data-ability-asset-category="personal"');
+    // 计数卡片写 2，列表就必须渲染出这 2 条。
+    expect(summaryHost.innerHTML).toContain('<strong>2</strong>');
     expect(host.innerHTML).toContain('中文交付优先');
-    expect(host.innerHTML).not.toContain('个人本体代理项');
+    expect(host.innerHTML).toContain('只做认知资产治理');
   });
 
   it('shows model configuration failures and exposes the existing credentials settings', async () => {

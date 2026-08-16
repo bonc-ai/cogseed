@@ -277,7 +277,7 @@ describe('跨作用域确认', () => {
   it('跨作用域一律不比同作用域松，确认之后依然成立', async () => {
     const { applyCrossScopeConfirmation, resolveDefaultUsePolicy } = await import('../../../../src/main/features/recall/asset-semantics');
     const rank = { never: 0, confirm: 1, prompt: 2, auto: 3 } as const;
-    for (const maturity of ['bud', 'transfer_validated', 'effectiveness_validated', 'stable'] as const) {
+    for (const maturity of ['bud', 'transfer_validated', 'effectiveness_validated'] as const) {
       const same = resolveDefaultUsePolicy({ status: 'active', maturity }, true);
       const crossConfirmed = applyCrossScopeConfirmation(
         resolveDefaultUsePolicy({ status: 'active', maturity }, false),

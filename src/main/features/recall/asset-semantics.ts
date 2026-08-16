@@ -115,7 +115,7 @@ export function applyCrossScopeConfirmation(
  *  反向依赖 candidate-service 的完整记录类型。 */
 export interface AbilityAssetSemanticsHost {
   status: 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked';
-  maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable';
+  maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
 }
 
 export function resolveDefaultUsePolicy(
@@ -137,10 +137,7 @@ export function resolveDefaultUsePolicy(
       // 只证明目标端正确读取并使用过。
       return sameScope ? 'auto' : 'confirm';
     case 'effectiveness_validated':
-      return sameScope ? 'auto' : 'confirm';
-    case 'stable':
-      // 'stable' 是 effectiveness_validated 之上的稳定档，不能比它更松：
-      // 跨作用域仍然要确认，因为「在这里稳定」不等于「换个场景也对」。
+      // PRD 3.6 的顶档。跨作用域仍然要确认——「在这里有效」不等于「换个场景也对」。
       return sameScope ? 'auto' : 'confirm';
     default:
       return 'never';

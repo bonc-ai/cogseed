@@ -1,14 +1,18 @@
 import * as fs from 'node:fs/promises';
+import { createLogger } from '../../logger';
 import * as path from 'node:path';
 import { recallJsonRecordPath } from './paths';
 import { genId12 } from '../../storage';
 import { safeId } from '../../storage';
 import { readAbilityAsset, setAbilityAssetMaturity } from './asset-service';
+import { maturityForEffectivenessOutcome, maturityForTransferOutcome } from './formal-assets/policy';
 import { readContextProjection } from './context-projection';
 import { recordRecallUsage } from './usage-service';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from './source-service';
+
+const log = createLogger('recall.proofs');
 
 export type TransferProofStatus = 'prepared' | 'succeeded' | 'degraded' | 'rejected';
 export type EffectivenessOutcome = 'better' | 'no_improvement' | 'worse' | 'insufficient_evidence' | 'invalid' | 'rework';
@@ -58,9 +62,22 @@ export async function completeTransferProof(userId: string, proofId: string, inp
   const proof = asTransfer(updated);
   if (proof.status === 'succeeded') {
     const projection = await readContextProjection(userId, proof.projectionId);
+    // PRD 3.6 的 Transfer Verified 要求「目标 Agent 或隔离新 Session 真实加载该
+    // 资产，形成可追溯 Action Plan 或可观察行为，**并生成 Receipt**」。没有回执
+    // 就只证明了任务跑完，没证明这条资产被正确带入——不升档。
+    // 使用记录照常写：它记的是"这次运行引用过它"，与够不够格升档无关。
+    const receiptProvesTransfer = Boolean(proof.receiptId);
     for (const item of proof.assetVersions) {
-      await setAbilityAssetMaturity(userId, item.assetId, 'transfer_validated');
+      const advanced = receiptProvesTransfer ? maturityForTransferOutcome(proof.status) : undefined;
+      if (advanced) await setAbilityAssetMaturity(userId, item.assetId, advanced);
       await recordRecallUsage(userId, { assetId: item.assetId, assetVersion: item.version, taskRunId: projection.taskRunId, projectionId: projection.id, ...(projection.workspaceId ? { workspaceId: projection.workspaceId } : {}), outcome: proof.status });
+    }
+    if (!receiptProvesTransfer) {
+      log.info('transfer proof completed without a reuse receipt; maturity unchanged', {
+        proofId: proof.id,
+        projectionId: proof.projectionId,
+        assetIds: proof.assetVersions.map((item) => item.assetId),
+      });
     }
   }
   return proof;
@@ -73,7 +90,10 @@ export async function evaluateEffectivenessProof(userId: string, input: { transf
   const recommendedAction = input.outcome === 'worse' ? 'pause' : input.outcome === 'rework' ? 'rework' : undefined;
   const record: EffectivenessProofRecord = { schemaVersion: 1, ownerId: userId, id: `ep-${genId12()}`, transferProofId: transfer.id, outcome: input.outcome, status: valid ? 'valid' : 'invalid', observedResult: text(input.observedResult, 'observed result', 4000), evidenceRefs: refs, ...(recommendedAction ? { recommendedAction } : {}), createdAt: new Date().toISOString() };
   await writeRecallJsonRecord(userId, 'effectiveness-proofs', record.id, record);
-  if (record.status === 'valid' && record.outcome === 'better') for (const item of transfer.assetVersions) await setAbilityAssetMaturity(userId, item.assetId, 'effectiveness_validated');
+  const effectivenessMaturity = maturityForEffectivenessOutcome(record.outcome, record.status === 'valid');
+  if (effectivenessMaturity) {
+    for (const item of transfer.assetVersions) await setAbilityAssetMaturity(userId, item.assetId, effectivenessMaturity);
+  }
   return asEffectiveness(record);
 }
 

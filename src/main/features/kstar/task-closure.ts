@@ -501,8 +501,8 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
 // ──────────────────────────────────────────────────────────────────────────
 // 静默窗口自动闭环（设计 §5）：任务终态后启动窗口，窗口内无新用户消息 →
 // 自动 finish（沉淀）。用户消息到达 → 清除（见 bus.ts 的 cancel 钩子）。
-// 重启恢复：recoverPendingAutoClosures 扫描 task-state 中未过期且仍 open 的
-// pendingAutoCloseAt，重建定时器（剩余时间）。
+// 重启恢复：startAutoCloseRecovery 扫描 task-state 中未过期且仍 open 的
+// pendingAutoCloseAt，按剩余时间重建定时器。
 // ──────────────────────────────────────────────────────────────────────────
 
 /** 静默窗口默认时长：30 分钟（任务级闭环，不宜过短——OQ-7 可校准）。 */
@@ -518,7 +518,34 @@ function autoCloseQuietMs(): number {
   return _autoCloseQuietMsOverride ?? AUTO_CLOSE_QUIET_MS;
 }
 
-/** 在任务终态（completed run）后安排自动闭环。幂等：已有 pending 不重复。 */
+/** 运行时到期定时器：key = userId:conversationId。
+ *  终端调度时按剩余时间 arm；用户消息到达时清除；重启由 recovery 重建。
+ *  （旧实现只在 boot 时 setTimeout(0) 检查一次，runAutoClose 未到期时仅
+ *  重写 state 不建 timer——窗口到期永远不触发，只能靠下次重启补跑。） */
+const autoCloseTimers = new Map<string, NodeJS.Timeout>();
+
+function autoCloseKey(userId: string, conversationId: string): string {
+  return `${userId}:${conversationId}`;
+}
+
+function clearAutoCloseTimer(key: string): void {
+  const timer = autoCloseTimers.get(key);
+  if (timer) clearTimeout(timer);
+  autoCloseTimers.delete(key);
+}
+
+function armAutoCloseTimer(userId: string, conversationId: string, atMs: number): void {
+  const key = autoCloseKey(userId, conversationId);
+  clearAutoCloseTimer(key);
+  const timer = setTimeout(() => {
+    autoCloseTimers.delete(key);
+    void runAutoClose(userId, conversationId);
+  }, Math.max(0, atMs - Date.now()));
+  autoCloseTimers.set(key, timer);
+}
+
+/** 在任务终态（completed run）后安排自动闭环。幂等：已有 pending 不重复；
+ *  但每次都会按剩余时间重建运行时定时器（防 timer 丢失）。 */
 export async function scheduleAutoClose(
   userId: string,
   conversationId: string,
@@ -528,13 +555,18 @@ export async function scheduleAutoClose(
     const state = await readConversationTaskState(userId, conversationId);
     if (!state?.currentTaskId || !state.currentRequirementId) return { scheduled: false };
     if (state.taskComplete) return { scheduled: false }; // already closed
-    if (state.pendingAutoCloseAt) return { scheduled: true, at: state.pendingAutoCloseAt }; // idempotent
+    if (state.pendingAutoCloseAt) {
+      // 幂等：窗口已存在。重建定时器（可能在 cancel 后被重新调度时丢失）。
+      armAutoCloseTimer(userId, conversationId, Date.parse(state.pendingAutoCloseAt));
+      return { scheduled: true, at: state.pendingAutoCloseAt };
+    }
     const at = new Date(Date.now() + autoCloseQuietMs()).toISOString();
     await replaceConversationTaskState(userId, {
       ...state,
       pendingAutoCloseAt: at,
       updatedAt: new Date().toISOString(),
     });
+    armAutoCloseTimer(userId, conversationId, Date.parse(at));
     return { scheduled: true, at };
   } catch (error) {
     log.warn('kstar auto-close schedule degraded', {
@@ -551,6 +583,8 @@ export async function cancelAutoClose(
   userId: string,
   conversationId: string,
 ): Promise<void> {
+  const key = autoCloseKey(userId, conversationId);
+  clearAutoCloseTimer(key);
   try {
     const { readConversationTaskState, replaceConversationTaskState } = await import('./requirement-store');
     const state = await readConversationTaskState(userId, conversationId);
@@ -593,6 +627,7 @@ export async function runAutoClose(
           closeReason: 'auto_close_quiet',
         },
       }).catch(() => undefined);
+      clearAutoCloseTimer(autoCloseKey(userId, conversationId));
       return { ok: true };
     }
     // 窗口未到期（恢复定时器早触发）：按剩余时间重建。
@@ -609,19 +644,11 @@ export async function runAutoClose(
   }
 }
 
-/** 启动时恢复：扫描当前激活用户的 task-states，重建未过期的自动闭环定时器。
- *  返回恢复的数量。由 bus 启动路径调用。 */
+/** 启动时恢复：扫描当前激活用户的 task-states，为未过期的 pendingAutoCloseAt
+ *  按剩余时间重建运行时定时器；已过期的直接跑 auto-close。 */
 export function startAutoCloseRecovery(
   runtime: { scan?: () => Promise<Array<{ userId: string; conversationId: string }>> } = {},
 ): () => void {
-  const timers = new Set<NodeJS.Timeout>();
-  const scheduleOne = (userId: string, conversationId: string): void => {
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      void runAutoClose(userId, conversationId);
-    }, 0);
-    timers.add(timer);
-  };
   const scan = runtime.scan || (async () => {
     try {
       const { listKstarJsonRecords } = await import('./episode-store');
@@ -635,13 +662,27 @@ export function startAutoCloseRecovery(
   });
   void scan().then((entries) => {
     for (const entry of entries) {
-      scheduleOne(entry.userId, entry.conversationId);
+      void (async () => {
+        try {
+          const { readConversationTaskState } = await import('./requirement-store');
+          const state = await readConversationTaskState(entry.userId, entry.conversationId);
+          if (!state?.pendingAutoCloseAt || state.taskComplete) return;
+          const atMs = Date.parse(state.pendingAutoCloseAt);
+          if (atMs <= Date.now()) {
+            void runAutoClose(entry.userId, entry.conversationId);
+          } else {
+            armAutoCloseTimer(entry.userId, entry.conversationId, atMs);
+          }
+        } catch {
+          // degraded state → skip; a later boot re-scans.
+        }
+      })();
     }
   }).catch((error) => {
     log.warn('kstar auto-close recovery scan degraded', { error: (error as Error).message });
   });
   return () => {
-    for (const timer of timers) clearTimeout(timer);
-    timers.clear();
+    for (const timer of autoCloseTimers.values()) clearTimeout(timer);
+    autoCloseTimers.clear();
   };
 }

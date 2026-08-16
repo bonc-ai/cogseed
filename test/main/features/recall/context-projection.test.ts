@@ -5,8 +5,18 @@ import * as path from 'node:path';
 let tmp: string; let previous: string | undefined;
 beforeEach(() => { vi.resetModules(); tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-recall-projection-')); previous = process.env.ORKAS_WORKSPACE_ROOT; process.env.ORKAS_WORKSPACE_ROOT = tmp; });
 afterEach(() => { if (previous === undefined) delete process.env.ORKAS_WORKSPACE_ROOT; else process.env.ORKAS_WORKSPACE_ROOT = previous; fs.rmSync(tmp, { recursive: true, force: true }); });
+// 自动投影是"静默默认注入"，按 PRD 3.6 只接纳 Transfer Verified 及以上。
+// 这些用例考的是相关性 / 提示词结构 / 引用对齐，不是成熟度闸门，所以先把资产
+// 抬到够格的档位；闸门本身由 formal-asset-runtime.test.ts 覆盖。
+async function elevateToTransferVerified(assetId: string) {
+  const assets = await import('../../../../src/main/features/recall/asset-service');
+  await assets.setAbilityAssetMaturity('user-a', assetId, 'transfer_validated');
+}
+
 async function modules() { const [candidates, assets, refs, projection] = await Promise.all([import('../../../../src/main/features/recall/candidate-service'), import('../../../../src/main/features/recall/asset-service'), import('../../../../src/main/features/recall/workspace-refs'), import('../../../../src/main/features/recall/context-projection')]); return { candidates, assets, refs, projection }; }
-async function createAsset() { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', suggestedScope: 'review,project', sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' }); }
+async function createAsset() { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', suggestedScope: 'review,project', sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await elevateToTransferVerified(promoted.asset.id);
+  return promoted; }
 
 async function createAssetWith(input: { judgment: string; summary: string; scope?: string; sourceId: string }) {
   const { candidates } = await modules();
@@ -14,10 +24,14 @@ async function createAssetWith(input: { judgment: string; summary: string; scope
     judgment: input.judgment,
     summary: input.summary,
     suggestedType: 'rule',
+    applicableWhen: ['正式评审与架构决策时'],
+    forbiddenWhen: ['内部快速对齐'],
     suggestedScope: input.scope || 'review',
     sourceRefs: [{ kind: 'execution', id: input.sourceId }],
   });
-  return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await elevateToTransferVerified(promoted.asset.id);
+  return promoted;
 }
 
 async function createAutomaticAssetWith(input: {
@@ -32,6 +46,8 @@ async function createAutomaticAssetWith(input: {
     judgment: input.judgment,
     summary: input.summary,
     suggestedType: 'rule',
+    applicableWhen: ['正式评审与架构决策时'],
+    forbiddenWhen: ['内部快速对齐'],
     suggestedScope: 'global',
     sourceRefs: [{
       kind: sourceKind,
@@ -40,7 +56,9 @@ async function createAutomaticAssetWith(input: {
       scope: 'personal',
     }],
   });
-  return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await elevateToTransferVerified(promoted.asset.id);
+  return promoted;
 }
 
 const fakeSemanticOptions = {
@@ -59,10 +77,14 @@ describe('Recall context projection scope policy', () => {
       judgment,
       summary: 'Scoped knowledge',
       suggestedType: 'rule',
+      applicableWhen: ['正式评审与架构决策时'],
+      forbiddenWhen: ['内部快速对齐'],
       suggestedScope: 'review',
       sourceRefs: [{ kind: 'execution', id: sourceId }],
     });
-    return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await elevateToTransferVerified(promoted.asset.id);
+  return promoted;
   }
 
   it('excludes assets whose scope policy restricts the projection workspace or purpose', async () => {
@@ -385,10 +407,14 @@ describe('Recall projection auto-confirm and semantic Top-N', () => {
       judgment,
       summary: judgment.slice(0, 60),
       suggestedType: 'rule',
+      applicableWhen: ['正式评审与架构决策时'],
+      forbiddenWhen: ['内部快速对齐'],
       suggestedScope: scope,
       sourceRefs: [{ kind: 'execution', id: sourceId }],
     });
-    return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await elevateToTransferVerified(promoted.asset.id);
+  return promoted;
   }
 
   it('writes a confirmed projection when confirm is requested', async () => {
@@ -485,10 +511,14 @@ describe('Recall retrieval quality regression', () => {
       judgment,
       summary: judgment.slice(0, 60),
       suggestedType: 'rule',
+      applicableWhen: ['正式评审与架构决策时'],
+      forbiddenWhen: ['内部快速对齐'],
       suggestedScope: scope,
       sourceRefs: [{ kind: 'execution', id: sourceId }],
     });
-    return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await elevateToTransferVerified(promoted.asset.id);
+  return promoted;
   }
 
   it('recalls assets whose scope term appears inside a sentence-shaped purpose', async () => {
@@ -601,13 +631,15 @@ describe('Recall retrieval refinement', () => {
       suggestedScope: scope,
       sourceRefs: [{ kind: 'execution', id: sourceId }],
     });
-    return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  await elevateToTransferVerified(promoted.asset.id);
+  return promoted;
   }
 
   it('does not let shared type/scope labels inflate semantic similarity', async () => {
     const { projection } = await modules();
     const ruleAsset = (await promoteAsset('OAuth callback state validation.', 'exec-match-1', 'review', 'rule')).asset;
-    const methodAsset = (await promoteAsset('OAuth token refresh flow.', 'exec-match-2', 'review', 'skill_method')).asset;
+    const methodAsset = (await promoteAsset('OAuth token refresh method: read the stored refresh token, request a new access token, then verify the new expiry before use.', 'exec-match-2', 'review', 'skill_method')).asset;
     let embedTexts: string[] = [];
     const preview = await projection.previewContextProjection('user-a', {
       taskRunId: 'task-match',
@@ -637,6 +669,8 @@ describe('Recall retrieval refinement', () => {
       judgment: 'OAuth callback review must check state.',
       summary: 'OAuth callback review',
       suggestedType: 'rule',
+      applicableWhen: ['正式评审与架构决策时'],
+      forbiddenWhen: ['内部快速对齐'],
       suggestedScope: 'review',
       sourceRefs: [{ kind: 'execution', id: 'exec-tbox' }],
     });
@@ -673,7 +707,7 @@ describe('Recall retrieval refinement', () => {
     const { projection } = await modules();
     const ruleA = (await promoteAsset('OAuth callback rule one.', 'exec-div-1', 'review', 'rule')).asset;
     const ruleB = (await promoteAsset('OAuth callback rule two.', 'exec-div-2', 'review', 'rule')).asset;
-    const method = (await promoteAsset('OAuth callback method.', 'exec-div-3', 'review', 'skill_method')).asset;
+    const method = (await promoteAsset('OAuth callback method: validate the state first, then exchange the code, then verify the returned scope.', 'exec-div-3', 'review', 'skill_method')).asset;
 
     const preview = await projection.previewContextProjection('user-a', {
       taskRunId: 'task-div',
