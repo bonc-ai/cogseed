@@ -2462,6 +2462,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     items: await cognition.listCognitionInbox(ctx.userId),
   }),
 
+  // 「版本与治理」问的是"这一版改了什么"。版本快照本来就存着全量内容，这里
+  // 只做比对，不新增持久化。没有 diff 的话，"回滚到此版本"对用户就是盲赌。
+  'cognition.assets.diff': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid cognition asset id');
+    return { ok: true, diffs: await cognition.listCognitionAssetDiffs(ctx.userId, assetId) };
+  },
+
   'cognition.skills.summary': async ({ skillId } = {}, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skill id');
     return { ok: true, summary: await cognition.getSkillCognitionSummary(ctx.userId, skillId) };
