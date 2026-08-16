@@ -49,21 +49,21 @@ function ctx(userId = TEST_UID): any {
 }
 
 describe('library.writeText', () => {
-  it('recovers an orphaned project processing row and completes it', async () => {
-    const projects = await import('../../../src/main/features/projects');
-    const projectLibrary = await import('../../../src/main/features/project_library_indexer');
+  it('recovers an orphaned space processing row and completes it', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const spaceLibrary = await import('../../../src/main/features/project_library_indexer');
     const vec = await import('../../../src/main/features/vec_store');
-    const { projectFilesDir, projectLibraryVectorDbPath } = await import('../../../src/main/paths');
-    const project = await projects.createProject(TEST_UID, 'Recovery Project');
-    if (!project.ok) throw new Error('project precondition failed');
-    const projectId = project.project.project_id;
+    const { spaceFilesDir, spaceLibraryVectorDbPath } = await import('../../../src/main/paths');
+    const space = await spaces.createSpace(TEST_UID, { name: 'Recovery Project' });
+    if (!space.ok) throw new Error('space precondition failed');
+    const spaceId = space.space.space_id;
     const name = 'orphan.md';
-    const body = 'project crash recovery';
-    const source = path.join(projectFilesDir(TEST_UID, projectId), name);
+    const body = 'space crash recovery';
+    const source = path.join(spaceFilesDir(TEST_UID, spaceId), name);
     fs.mkdirSync(path.dirname(source), { recursive: true });
     fs.writeFileSync(source, body, 'utf8');
     const stat = fs.statSync(source);
-    const store = vec.openVecStore(path.dirname(projectLibraryVectorDbPath(TEST_UID, projectId)));
+    const store = vec.openVecStore(path.dirname(spaceLibraryVectorDbPath(TEST_UID, spaceId)));
     await store.setFileStatus(name, 'processing', {
       kind: 'text',
       bytes: stat.size,
@@ -71,68 +71,68 @@ describe('library.writeText', () => {
       sha1: crypto.createHash('sha1').update(body).digest('hex'),
     });
 
-    const result = await projectLibrary.reconcile(TEST_UID, projectId);
+    const result = await spaceLibrary.reconcile(TEST_UID, spaceId);
     expect(result.recoveredProcessing).toBe(1);
-    await projectLibrary.drain(TEST_UID);
-    expect(projectLibrary.getFileByPath(TEST_UID, projectId, name)?.status).toBe('ready');
+    await spaceLibrary.drain(TEST_UID);
+    expect(spaceLibrary.getFileByPath(TEST_UID, spaceId, name)?.status).toBe('ready');
   });
 
-  it('keeps project vectors when a reconcile snapshot is temporarily unreadable', async () => {
-    const projects = await import('../../../src/main/features/projects');
-    const projectLibrary = await import('../../../src/main/features/project_library_indexer');
-    const { projectFilesDir } = await import('../../../src/main/paths');
-    const project = await projects.createProject(TEST_UID, 'Incomplete Snapshot');
-    if (!project.ok) throw new Error('project precondition failed');
-    const projectId = project.project.project_id;
-    const root = projectFilesDir(TEST_UID, projectId);
+  it('keeps space vectors when a reconcile snapshot is temporarily unreadable', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const spaceLibrary = await import('../../../src/main/features/project_library_indexer');
+    const { spaceFilesDir } = await import('../../../src/main/paths');
+    const space = await spaces.createSpace(TEST_UID, { name: 'Incomplete Snapshot' });
+    if (!space.ok) throw new Error('space precondition failed');
+    const spaceId = space.space.space_id;
+    const root = spaceFilesDir(TEST_UID, spaceId);
     fs.mkdirSync(root, { recursive: true });
     fs.writeFileSync(path.join(root, 'keep.md'), 'keep indexed data', 'utf8');
-    await projectLibrary.reconcile(TEST_UID, projectId);
-    await projectLibrary.drain(TEST_UID);
-    expect(projectLibrary.getFileByPath(TEST_UID, projectId, 'keep.md')?.status).toBe('ready');
+    await spaceLibrary.reconcile(TEST_UID, spaceId);
+    await spaceLibrary.drain(TEST_UID);
+    expect(spaceLibrary.getFileByPath(TEST_UID, spaceId, 'keep.md')?.status).toBe('ready');
 
     const backup = `${root}.backup`;
     fs.renameSync(root, backup);
     fs.writeFileSync(root, 'not a directory', 'utf8');
     try {
-      const result = await projectLibrary.reconcile(TEST_UID, projectId);
+      const result = await spaceLibrary.reconcile(TEST_UID, spaceId);
       expect(result).toMatchObject({ incomplete: true, enqueuedDelete: 0 });
-      expect(projectLibrary.getFileByPath(TEST_UID, projectId, 'keep.md')?.status).toBe('ready');
+      expect(spaceLibrary.getFileByPath(TEST_UID, spaceId, 'keep.md')?.status).toBe('ready');
     } finally {
       fs.rmSync(root, { force: true });
       fs.renameSync(backup, root);
     }
   });
 
-  it('writes archived chat text into the owning project Library when cid is project-scoped', async () => {
-    const projects = await import('../../../src/main/features/projects');
+  it('writes archived chat text into the owning space Library when cid is space-scoped', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
     const chats = await import('../../../src/main/features/chats');
-    const projectLibrary = await import('../../../src/main/features/project_library_indexer');
-    const { projectFilesDir, userContextsDir } = await import('../../../src/main/paths');
+    const spaceLibrary = await import('../../../src/main/features/project_library_indexer');
+    const { spaceFilesDir, userContextsDir } = await import('../../../src/main/paths');
     const { _libraryWriteTextForTest } = await import('../../../src/main/ipc/index');
 
-    const project = await projects.createProject(TEST_UID, 'Project Library');
-    if (!project.ok) throw new Error('project precondition failed');
-    const projectId = project.project.project_id;
-    const conv = await chats.createConversation(TEST_UID, { projectId });
+    const space = await spaces.createSpace(TEST_UID, { name: 'Project Library' });
+    if (!space.ok) throw new Error('space precondition failed');
+    const spaceId = space.space.space_id;
+    const conv = await chats.createConversation(TEST_UID, { spaceId });
 
     const res = await _libraryWriteTextForTest({
       cid: conv.conversation_id,
       targetPath: 'notes/message.md',
-      content: 'project-scoped message',
+      content: 'space-scoped message',
     }, ctx());
 
     expect(res.ok).toBe(true);
-    expect(res.scope).toBe('project');
-    expect(res.projectId).toBe(projectId);
-    const projectFile = path.join(projectFilesDir(TEST_UID, projectId), 'notes', 'message.md');
-    expect(fs.readFileSync(projectFile, 'utf8')).toBe('project-scoped message');
+    expect(res.scope).toBe('space');
+    expect(res.spaceId).toBe(spaceId);
+    const spaceFile = path.join(spaceFilesDir(TEST_UID, spaceId), 'notes', 'message.md');
+    expect(fs.readFileSync(spaceFile, 'utf8')).toBe('space-scoped message');
     expect(fs.existsSync(path.join(userContextsDir(TEST_UID), 'notes', 'message.md'))).toBe(false);
 
-    await projectLibrary.drain(TEST_UID);
+    await spaceLibrary.drain(TEST_UID);
   });
 
-  it('keeps archived chat text in the global Library when no project scope exists', async () => {
+  it('keeps archived chat text in the global Library when no space scope exists', async () => {
     const chats = await import('../../../src/main/features/chats');
     const { userContextsDir } = await import('../../../src/main/paths');
     const { _libraryWriteTextForTest } = await import('../../../src/main/ipc/index');
@@ -151,20 +151,20 @@ describe('library.writeText', () => {
 });
 
 describe('library.importProduced', () => {
-  it('preserves target folders when importing a produced file into a project Library', async () => {
-    const projects = await import('../../../src/main/features/projects');
+  it('preserves target folders when importing a produced file into a space Library', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
     const chats = await import('../../../src/main/features/chats');
     const userWorkspace = await import('../../../src/main/features/user_workspace');
-    const projectLibrary = await import('../../../src/main/features/project_library_indexer');
-    const { projectFilesDir } = await import('../../../src/main/paths');
+    const spaceLibrary = await import('../../../src/main/features/project_library_indexer');
+    const { spaceFilesDir } = await import('../../../src/main/paths');
     const { _libraryImportProducedForTest } = await import('../../../src/main/ipc/index');
 
-    const project = await projects.createProject(TEST_UID, 'Produced Import');
-    if (!project.ok) throw new Error('project precondition failed');
-    const projectId = project.project.project_id;
-    const conv = await chats.createConversation(TEST_UID, { projectId });
+    const space = await spaces.createSpace(TEST_UID, { name: 'Produced Import' });
+    if (!space.ok) throw new Error('space precondition failed');
+    const spaceId = space.space.space_id;
+    const conv = await chats.createConversation(TEST_UID, { spaceId });
 
-    const ws = userWorkspace.getWorkspacePath(TEST_UID, projectId);
+    const ws = userWorkspace.getWorkspacePath(TEST_UID, spaceId);
     fs.mkdirSync(ws, { recursive: true });
     const source = path.join(ws, 'result.txt');
     fs.writeFileSync(source, 'produced body', 'utf8');
@@ -176,35 +176,35 @@ describe('library.importProduced', () => {
     }, ctx());
 
     expect(res.ok).toBe(true);
-    expect(res.scope).toBe('project');
-    expect(fs.readFileSync(path.join(projectFilesDir(TEST_UID, projectId), 'reports', 'result.txt'), 'utf8')).toBe('produced body');
+    expect(res.scope).toBe('space');
+    expect(fs.readFileSync(path.join(spaceFilesDir(TEST_UID, spaceId), 'reports', 'result.txt'), 'utf8')).toBe('produced body');
 
-    await projectLibrary.drain(TEST_UID);
+    await spaceLibrary.drain(TEST_UID);
   });
 
-  it('imports a produced video into a project Library but not the global Library', async () => {
-    const projects = await import('../../../src/main/features/projects');
+  it('imports a produced video into a space Library but not the global Library', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
     const chats = await import('../../../src/main/features/chats');
     const userWorkspace = await import('../../../src/main/features/user_workspace');
-    const projectLibrary = await import('../../../src/main/features/project_library_indexer');
-    const { projectFilesDir, userContextsDir } = await import('../../../src/main/paths');
+    const spaceLibrary = await import('../../../src/main/features/project_library_indexer');
+    const { spaceFilesDir, userContextsDir } = await import('../../../src/main/paths');
     const { _libraryImportProducedForTest } = await import('../../../src/main/ipc/index');
 
-    const project = await projects.createProject(TEST_UID, 'Produced Video Import');
-    if (!project.ok) throw new Error('project precondition failed');
-    const projectId = project.project.project_id;
-    const projectConversation = await chats.createConversation(TEST_UID, { projectId });
-    const projectWorkspace = userWorkspace.getWorkspacePath(TEST_UID, projectId);
-    fs.mkdirSync(projectWorkspace, { recursive: true });
-    const projectVideo = path.join(projectWorkspace, 'demo.mp4');
-    fs.writeFileSync(projectVideo, 'fake video bytes');
+    const space = await spaces.createSpace(TEST_UID, { name: 'Produced Video Import' });
+    if (!space.ok) throw new Error('space precondition failed');
+    const spaceId = space.space.space_id;
+    const spaceConversation = await chats.createConversation(TEST_UID, { spaceId });
+    const spaceWorkspace = userWorkspace.getWorkspacePath(TEST_UID, spaceId);
+    fs.mkdirSync(spaceWorkspace, { recursive: true });
+    const spaceVideo = path.join(spaceWorkspace, 'demo.mp4');
+    fs.writeFileSync(spaceVideo, 'fake video bytes');
 
-    const projectResult = await _libraryImportProducedForTest({
-      cid: projectConversation.conversation_id,
-      path: projectVideo,
+    const spaceResult = await _libraryImportProducedForTest({
+      cid: spaceConversation.conversation_id,
+      path: spaceVideo,
     }, ctx());
-    expect(projectResult).toMatchObject({ ok: true, scope: 'project', projectId });
-    expect(fs.readFileSync(path.join(projectFilesDir(TEST_UID, projectId), 'demo.mp4'), 'utf8')).toBe('fake video bytes');
+    expect(spaceResult).toMatchObject({ ok: true, scope: 'space', spaceId });
+    expect(fs.readFileSync(path.join(spaceFilesDir(TEST_UID, spaceId), 'demo.mp4'), 'utf8')).toBe('fake video bytes');
 
     const globalConversation = await chats.createConversation(TEST_UID);
     const globalWorkspace = userWorkspace.getWorkspacePath(TEST_UID);
@@ -218,22 +218,22 @@ describe('library.importProduced', () => {
     expect(globalResult.ok).toBe(false);
     expect(fs.existsSync(path.join(userContextsDir(TEST_UID), 'global.mp4'))).toBe(false);
 
-    await projectLibrary.drain(TEST_UID);
+    await spaceLibrary.drain(TEST_UID);
   });
 
-  it('rejects unsupported produced files before importing into a project Library', async () => {
-    const projects = await import('../../../src/main/features/projects');
+  it('rejects unsupported produced files before importing into a space Library', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
     const chats = await import('../../../src/main/features/chats');
     const userWorkspace = await import('../../../src/main/features/user_workspace');
-    const { projectFilesDir } = await import('../../../src/main/paths');
+    const { spaceFilesDir } = await import('../../../src/main/paths');
     const { _libraryImportProducedForTest } = await import('../../../src/main/ipc/index');
 
-    const project = await projects.createProject(TEST_UID, 'Produced Import Filter');
-    if (!project.ok) throw new Error('project precondition failed');
-    const projectId = project.project.project_id;
-    const conv = await chats.createConversation(TEST_UID, { projectId });
+    const space = await spaces.createSpace(TEST_UID, { name: 'Produced Import Filter' });
+    if (!space.ok) throw new Error('space precondition failed');
+    const spaceId = space.space.space_id;
+    const conv = await chats.createConversation(TEST_UID, { spaceId });
 
-    const ws = userWorkspace.getWorkspacePath(TEST_UID, projectId);
+    const ws = userWorkspace.getWorkspacePath(TEST_UID, spaceId);
     fs.mkdirSync(ws, { recursive: true });
     const source = path.join(ws, 'archive.zip');
     fs.writeFileSync(source, 'zip-ish bytes', 'utf8');
@@ -245,6 +245,6 @@ describe('library.importProduced', () => {
 
     expect(res.ok).toBe(false);
     expect(String(res.error)).toMatch(/Unsupported file type|不支持的文件类型|未対応/);
-    expect(fs.existsSync(path.join(projectFilesDir(TEST_UID, projectId), 'archive.zip'))).toBe(false);
+    expect(fs.existsSync(path.join(spaceFilesDir(TEST_UID, spaceId), 'archive.zip'))).toBe(false);
   });
 });

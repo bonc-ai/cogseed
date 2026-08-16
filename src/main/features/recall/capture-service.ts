@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { createLogger } from '../../logger';
@@ -9,6 +10,10 @@ import { scheduleBootBackground, type ScheduledBootBackgroundTask } from '../../
 import { getConfiguredModelOAuthExpiredMessage, hasConfiguredModel } from '../auth';
 import * as chats from '../chats';
 import type { ReviewDecision } from '../cognition/review-decision';
+import {
+  run as runCliAgent,
+} from '../local_agents/runner';
+import { detectAll } from '../local_agents/registry';
 import {
   isQuiescent,
   subscribeTaskTerminals,
@@ -592,11 +597,32 @@ function parseCandidateRisk(value: unknown): NonNullable<ParsedCandidate['risk']
   throw new CaptureFailure('invalid_model_output', 'invalid risk');
 }
 
+/** 容错解析模型输出：LLM 常把 JSON 包在 ```json 围栏里，或前后带散文/说明。
+ *  先剥 markdown 围栏，再隔离最外层 {...}，最后 JSON.parse。任何一步失败
+ *  都抛 invalid_model_output（与严格路径同码，语义不变）。 */
+function parseCaptureJson(raw: string): unknown {
+  let text = String(raw || '').trim();
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) text = fence[1].trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new CaptureFailure('invalid_model_output', 'model output is not strict JSON');
+  }
+  const slice = text.slice(start, end + 1);
+  try {
+    return JSON.parse(slice);
+  } catch {
+    throw new CaptureFailure('invalid_model_output', 'model output is not strict JSON');
+  }
+}
+
 export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>): ParsedCandidate[] {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
+    parsed = parseCaptureJson(raw);
+  } catch (error) {
+    if (error instanceof CaptureFailure) throw error;
     throw new CaptureFailure('invalid_model_output', 'model output is not strict JSON');
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -621,10 +647,10 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
       }
       return label;
     }))];
-    const uncertainty = candidate.uncertainty === undefined
+    const uncertainty = candidate.uncertainty === undefined || candidate.uncertainty === ''
       ? undefined
       : boundedRequiredText(candidate.uncertainty, 'uncertainty', 1_000);
-    const targetAssetId = candidate.targetAssetId === undefined
+    const targetAssetId = candidate.targetAssetId === undefined || candidate.targetAssetId === ''
       ? undefined
       : boundedRequiredText(candidate.targetAssetId, 'targetAssetId', 160);
     if (targetAssetId && !safeId(targetAssetId)) throw new CaptureFailure('invalid_model_output', 'invalid targetAssetId');
@@ -690,6 +716,65 @@ function extractionInput(
         : {}),
     })),
   });
+}
+
+/** CLI-based extraction fallback for recall capture when no CogSeed model is
+ *  configured. Mirrors onboarding's `cognition_extraction.ts`: pick an
+ *  installed/authenticated local CLI (claude preferred, else first available),
+ *  dispatch a one-shot print-mode turn with the extraction prompt + input, and
+ *  return the CLI's final text. Returns null when no CLI is usable. */
+async function extractCaptureViaCli(
+  userId: string,
+  capture: RecallCaptureRecord,
+  conversation: Awaited<ReturnType<typeof chats.getConversation>>,
+  promptMessages: CapturePromptMessage[],
+  recallView: RecallViewRecord,
+  signal: AbortSignal | undefined,
+): Promise<string | null> {
+  const entries = await detectAll();
+  const available = entries.filter((e) => e && e.available);
+  if (!available.length) return null;
+  const chosen = available.find((e) => e.type === 'claude') ?? available[0];
+  const input = extractionInput(conversation?.title || capture.conversationTitle || '', promptMessages, recallView);
+  const prompt =
+    `You extract durable, user-reviewable knowledge from one completed conversation run.\n` +
+    `Analyze the JSON conversation below and return exactly ONE JSON object and no markdown or commentary:\n` +
+    `Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required for update, limit_scope, or pause","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}\n` +
+    `Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.\n` +
+    `Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.\n` +
+    `Each candidate must cite at least one user message label in "evidence". Do not invent facts.\n` +
+    `Write candidate text in the same language as the conversation.\n\n` +
+    `## Conversation JSON\n${input}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const result = await runCliAgent({
+      uid: userId,
+      cid: capture.conversationId,
+      agentId: 'recall-capture-extractor',
+      agentName: 'Capture Extractor',
+      cli: chosen.type,
+      prompt,
+      cwd: os.tmpdir(),
+      signal: controller.signal,
+      skipDispatchCheck: true,
+      onEvent: () => {},
+    });
+    if (signal?.aborted) return null;
+    if (result.status !== 'completed' || typeof result.output !== 'string' || !result.output.trim()) {
+      log.warn('recall capture CLI extraction did not complete', {
+        conversation_id: capture.conversationId,
+        cli: chosen.type,
+        status: result.status,
+        error: result.error,
+      });
+      return null;
+    }
+    return result.output.trim();
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function readRecallCapture(userId: string, id: string): Promise<RecallCaptureRecord> {
@@ -1446,40 +1531,82 @@ export async function runRecallCapture(
     capture = await setCaptureStage(userId, id, 'model_extraction');
     if (capture.status !== 'extracting' || signal?.aborted) return settleInterruptedCapture(userId, id);
 
-    let runner: Awaited<ReturnType<typeof buildRunner>>['runner'];
-    try {
-      ({ runner } = await buildRunner({
-        sessionId: `memory-extract-recall-${capture.id}`,
-        userId,
-        systemPrompt: extractionSystemPrompt(),
-        disableTools: true,
-        ephemeralSession: true,
-        skillList: [],
-      }));
-    } catch {
-      throw new CaptureFailure('model_failed', 'model runner could not be built');
+    // No-model CLI fallback: when the user has no CogSeed API model (commander
+    // already routes to local CLI agents), drive the extraction through an
+    // installed/authenticated local CLI instead of failing with
+    // model_not_configured. This keeps the capture→candidate→confirm loop
+    // working in the exact setup that motivated CLI fallback.
+    let extractionText: string;
+    let extractionModelUsage: RecallCaptureModelUsage | undefined;
+    if (!hasConfiguredModel().configured && !process.env.ANTHROPIC_API_KEY) {
+      try {
+        const cliText = await extractCaptureViaCli(
+          userId,
+          capture,
+          conversation,
+          promptMessages,
+          recallView,
+          signal,
+        );
+        if (cliText === null) {
+          throw new CaptureFailure('model_not_configured', 'model configuration is required (no local CLI available)');
+        }
+        extractionText = cliText;
+      } catch (err) {
+        if (err instanceof CaptureFailure) throw err;
+        throw new CaptureFailure('model_failed', `CLI extraction failed: ${(err as Error).message}`);
+      }
+    } else {
+      let runner: Awaited<ReturnType<typeof buildRunner>>['runner'];
+      try {
+        ({ runner } = await buildRunner({
+          sessionId: `memory-extract-recall-${capture.id}`,
+          userId,
+          systemPrompt: extractionSystemPrompt(),
+          disableTools: true,
+          ephemeralSession: true,
+          skillList: [],
+        }));
+      } catch {
+        throw new CaptureFailure('model_failed', 'model runner could not be built');
+      }
+      let result: Awaited<ReturnType<typeof runner.run>>;
+      try {
+        result = await runner.run({
+          message: extractionInput(conversation.title, promptMessages, recallView),
+          signal,
+          thinkingLevel: 'off',
+          cacheRetention: 'none',
+        });
+      } catch {
+        throw new CaptureFailure('model_failed', 'model extraction failed');
+      }
+      if (signal?.aborted) return settleInterruptedCapture(userId, id);
+      if (result.meta.aborted) throw new CaptureFailure('model_failed', 'model extraction was aborted');
+      if (result.meta.error) {
+        const code = result.meta.error.kind === 'auth' ? 'model_auth_required' : 'model_failed';
+        throw new CaptureFailure(code, result.meta.error.message);
+      }
+      extractionText = result.text.trim();
+      extractionModelUsage = normalizeModelUsage(result.meta.usage);
     }
-    let result: Awaited<ReturnType<typeof runner.run>>;
+    let parsed: ReturnType<typeof parseRecallCaptureOutput>;
     try {
-      result = await runner.run({
-        message: extractionInput(conversation.title, promptMessages, recallView),
-        signal,
-        thinkingLevel: 'off',
-        cacheRetention: 'none',
+      parsed = parseRecallCaptureOutput(
+        extractionText,
+        new Set(promptMessages.map((message) => message.label)),
+      );
+    } catch (error) {
+      // TEMP DEBUG: log the raw model output + failure detail to diagnose
+      // persistent invalid_model_output (remove after root cause fixed).
+      log.warn('recall capture parse failed (debug)', {
+        capture_id: id,
+        conversation_id: capture.conversationId,
+        rawOutput: String(extractionText || '').slice(0, 2000),
+        error: error instanceof CaptureFailure ? error.message : String((error as Error)?.message || error),
       });
-    } catch {
-      throw new CaptureFailure('model_failed', 'model extraction failed');
+      throw error;
     }
-    if (signal?.aborted) return settleInterruptedCapture(userId, id);
-    if (result.meta.aborted) throw new CaptureFailure('model_failed', 'model extraction was aborted');
-    if (result.meta.error) {
-      const code = result.meta.error.kind === 'auth' ? 'model_auth_required' : 'model_failed';
-      throw new CaptureFailure(code, result.meta.error.message);
-    }
-    const parsed = parseRecallCaptureOutput(
-      result.text.trim(),
-      new Set(promptMessages.map((message) => message.label)),
-    );
     capture = await setCaptureStage(userId, id, 'candidate_save');
     if (capture.status !== 'extracting') return capture;
     const automaticMode = capture.autoWrite === true || (
@@ -1530,6 +1657,10 @@ export async function runRecallCapture(
         id: cognitionArtifactSourceId(artifact.conversationId || capture.conversationId, artifact.id),
         title: artifact.title,
       })));
+      // 空间归属：捕获的会话属于哪个空间 → 候选带 spaceId（资产随 recall 全局，
+      // 空间资产 tab 按 spaceId 过滤显示；空间可读全局资产但显示只显示本空间的）。
+      const captureSpaceId = typeof (conversation as any)?.space_id === 'string'
+        ? (conversation as any).space_id : undefined;
       try {
         const storedCandidate = await saveRecallCandidate(userId, {
           judgment: candidate.judgment,
@@ -1543,6 +1674,7 @@ export async function runRecallCapture(
           ...(candidate.targetAssetId ? { targetAssetId: candidate.targetAssetId } : {}),
           forceWeakObservation: !quality.reviewable || (automaticMode && !quality.automaticEligible && !requiresManualRiskGate),
           captureKey: `capture-${capture.id}-${index}`,
+          ...(captureSpaceId ? { spaceId: captureSpaceId } : {}),
           taskRunId: capture.terminalRunId,
           sourceRefs: [
             { kind: 'conversation', subtype: 'session', scope: 'conversation', id: capture.conversationId, title: conversation.title },
@@ -1612,7 +1744,7 @@ export async function runRecallCapture(
     }
 
     const finishedAt = new Date().toISOString();
-    const modelUsage = normalizeModelUsage(result.meta.usage);
+    const modelUsage = extractionModelUsage;
     const hasQualifiedCandidates = candidateIds.length > 0;
     const hasReviewableCandidates = candidates.some((candidate) => (
       isRecallCandidateReviewable(resolvedCandidates.get(candidate.id) || candidate)
@@ -2396,6 +2528,7 @@ export async function promoteRecallCaptureCandidate(
   if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
   const capture = (await listAllRecallCaptures(userId)).find((item) => item.candidateIds.includes(candidateId));
   if (!capture) {
+    // 用户确认提升 → actor 必须为 user（promoteRecallCandidate 强制校验；此前漏传导致 IPC 提升一直失败）
     const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     return promoted;

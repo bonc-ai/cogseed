@@ -1028,21 +1028,6 @@ function _autoRefreshProjectOptions(removedProjectId = '') {
   _autoRefreshProjectScopedPicker();
 }
 
-async function _autoClearRecipientIfOutsideProject() {
-  const rec = _autoCurrentRecipient;
-  if (!rec || rec.kind !== 'agent' || !rec.id) return;
-  const pid = _autoSelectedProjectId();
-  if (!pid) return;
-  try {
-    const res = await window.cogseed.invoke('projects.bindings.list', { projectId: pid });
-    const allowed = new Set((res && res.bindings && res.bindings.agents) || []);
-    if (!allowed.has(rec.id)) {
-      _autoCurrentRecipient = { kind: 'commander' };
-      _repaintAutoRecipientChip();
-    }
-  } catch (_) { /* backend validation still guards save */ }
-}
-
 function _autoHourOptions() {
   const opts = [];
   for (let h = 0; h < 24; h++) opts.push({ value: String(h), label: String(h).padStart(2, '0') });
@@ -1193,7 +1178,6 @@ function _mountAutoForm() {
       value: '',
       onChange: () => {
         _autoRefreshProjectScopedPicker();
-        _autoClearRecipientIfOutsideProject().catch(() => {});
       },
     });
     const runDeviceMount = document.getElementById('auto-run-device-select');
@@ -2127,6 +2111,158 @@ function startAutoEventsSubscription() {
 
 if (typeof window !== 'undefined') {
   window.startAutoEventsSubscription = startAutoEventsSubscription;
+}
+
+// ---- Auto-task time-adjust suggestion ----
+
+/** 15-minute threshold for suggesting schedule adjustment. */
+var _AUTO_TIME_ADJUST_THRESHOLD_MIN = 1;
+
+/** Track which cids have already shown a suggestion card (avoid spamming). */
+var _autoTimeAdjustSuggestions = new Set();
+
+/**
+ * Format hour/minute as HH:MM string.
+ */
+function _formatAutoTaskTime(h, m) {
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
+
+/**
+ * Entry point: check whether opening a conversation from a daily auto-task
+ * should trigger a time-adjust suggestion card.
+ *
+ * Called from conversation.js `loadConversationHistory` after conv metadata
+ * arrives.
+ *
+ * @param {string} cid - conversation id
+ * @param {string} originAutoTaskId - origin_auto_task_id from conversation metadata
+ */
+async function checkAndSuggestAutoTaskTimeAdjustment(cid, originAutoTaskId) {
+  if (!cid || !originAutoTaskId) return;
+  if (_autoTimeAdjustSuggestions.has(cid)) return;
+
+  try {
+    var res = await window.cogseed.invoke('autoTasks.list', {});
+    if (!res || !res.ok) return;
+
+    var tasks = res.tasks || [];
+    var task = null;
+    for (var i = 0; i < tasks.length; i++) {
+      if (tasks[i].id === originAutoTaskId) { task = tasks[i]; break; }
+    }
+    if (!task) return; // task may have been deleted
+    if (!task.enabled) return;
+    if (!task.schedule || task.schedule.type !== 'daily') return;
+
+    // Compute time diff
+    var now = new Date();
+    var curH = now.getHours();
+    var curM = now.getMinutes();
+    var schH = task.schedule.hour;
+    var schM = task.schedule.minute;
+
+    var diffMin = Math.abs((curH * 60 + curM) - (schH * 60 + schM));
+    if (diffMin < _AUTO_TIME_ADJUST_THRESHOLD_MIN) return;
+
+    // Mark shown so we don't spam
+    _autoTimeAdjustSuggestions.add(cid);
+
+    _renderAutoTimeAdjustCard(cid, task, { hour: curH, minute: curM });
+  } catch (err) {
+    _autoLog.warn('time-adjust suggestion failed', err);
+  }
+}
+
+/**
+ * Render the inline confirmation card at the bottom of the active chat panel.
+ */
+function _renderAutoTimeAdjustCard(cid, task, newTime) {
+  // Find the active chat container
+  var container = document.getElementById('chat-history');
+  if (!container || container.offsetParent === null) {
+    container = document.getElementById('chat-history'); // fallback — panel swap may hide
+  }
+  if (!container) return;
+
+  var oldH = task.schedule.hour;
+  var oldM = task.schedule.minute;
+  var oldTime = _formatAutoTaskTime(oldH, oldM);
+  var newTimeStr = _formatAutoTaskTime(newTime.hour, newTime.minute);
+
+  var card = document.createElement('div');
+  card.className = 'auto-time-adjust-card';
+
+  card.innerHTML =
+    '<div class="auto-time-adjust-header">' +
+      '<svg class="auto-time-adjust-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<circle cx="12" cy="12" r="10"></circle>' +
+        '<polyline points="12 6 12 12 16 14"></polyline>' +
+      '</svg>' +
+      '<span class="auto-time-adjust-title">' + escapeHtml(t('auto.time_adjust_title')) + '</span>' +
+    '</div>' +
+    '<div class="auto-time-adjust-body">' +
+      t('auto.time_adjust_message', { oldTime: '<span class="time-highlight">' + escapeHtml(oldTime) + '</span>', newTime: '<span class="time-highlight">' + escapeHtml(newTimeStr) + '</span>' }) +
+    '</div>' +
+    '<div class="auto-time-adjust-actions">' +
+      '<button class="btn" data-act="dismiss">' + escapeHtml(t('auto.time_adjust_keep', { oldTime: oldTime })) + '</button>' +
+      '<button class="btn btn-primary" data-act="confirm">' + escapeHtml(t('auto.time_adjust_confirm', { newTime: newTimeStr })) + '</button>' +
+    '</div>' +
+    '<div class="auto-time-adjust-result"></div>';
+
+  var resultEl = card.querySelector('.auto-time-adjust-result');
+  var allBtns = card.querySelectorAll('button');
+
+  card.querySelector('[data-act="confirm"]').addEventListener('click', function () {
+    _confirmAutoTimeAdjust(cid, task, newTime, card, resultEl, allBtns);
+  });
+
+  card.querySelector('[data-act="dismiss"]').addEventListener('click', function () {
+    _dismissAutoTimeAdjustCard(card, resultEl, allBtns, oldTime);
+  });
+
+  container.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+/**
+ * User clicked confirm: update the task schedule and show settled state.
+ */
+async function _confirmAutoTimeAdjust(cid, task, newTime, card, resultEl, allBtns) {
+  var newTimeStr = _formatAutoTaskTime(newTime.hour, newTime.minute);
+  try {
+    var res = await window.cogseed.invoke('autoTasks.update', {
+      taskId: task.id,
+      updates: {
+        schedule: { type: 'daily', hour: newTime.hour, minute: newTime.minute }
+      }
+    });
+    if (res && res.ok) {
+      card.classList.add('is-confirmed');
+      resultEl.textContent = t('auto.time_adjust_confirmed', { newTime: newTimeStr });
+    } else {
+      uiToast(t('auto.time_adjust_failed', { error: (res && res.error) || 'unknown' }), { variant: 'error' });
+      return;
+    }
+  } catch (err) {
+    uiToast(t('auto.time_adjust_failed', { error: err.message || 'unknown' }), { variant: 'error' });
+    return;
+  }
+  // Disable buttons after settling
+  for (var i = 0; i < allBtns.length; i++) allBtns[i].disabled = true;
+  // Refresh the auto task list in background if open
+  if (_autoLoadedOnce && typeof loadAutoList === 'function') {
+    loadAutoList(true).catch(function () {});
+  }
+}
+
+/**
+ * User clicked keep/dismiss: show settled state without updating.
+ */
+function _dismissAutoTimeAdjustCard(card, resultEl, allBtns, oldTime) {
+  card.classList.add('is-dismissed');
+  resultEl.textContent = t('auto.time_adjust_kept', { oldTime: oldTime });
+  for (var i = 0; i < allBtns.length; i++) allBtns[i].disabled = true;
 }
 
 if (typeof module !== 'undefined' && typeof module.exports === 'object') {

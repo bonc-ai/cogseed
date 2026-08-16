@@ -83,8 +83,12 @@ function id(value: unknown, field: string, required = false): string | undefined
 
 function stringList(value: unknown, field: string, maxItems: number, maxLength: number): string[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length > maxItems) throw new ControlInputError(`${field} is invalid`);
-  return value.map((item) => {
+  // Tolerant normalization: deepseek-v4-flash may flatten a list into a
+  // single string (live-observed: forecast.constraints). Treat a plain
+  // string as a one-item list.
+  const items = typeof value === 'string' ? [value] : value;
+  if (!Array.isArray(items) || items.length > maxItems) throw new ControlInputError(`${field} is invalid`);
+  return items.map((item) => {
     const normalized = text(item, field, maxLength, true);
     if (!normalized) throw new ControlInputError(`${field} is invalid`);
     return normalized;
@@ -154,7 +158,9 @@ function requirementMutation(value: unknown): KstarRequirementMutation {
 function projectionProposal(value: unknown): KstarProjectionProposal {
   if (!plain(value)) throw new ControlInputError('projection proposal is required');
   return {
-    requirementId: id(value.requirementId, 'projection.requirementId', true)!,
+    ...(id(value.requirementId, 'projection.requirementId')
+      ? { requirementId: id(value.requirementId, 'projection.requirementId') }
+      : {}),
     purpose: text(value.purpose, 'projection.purpose', 120, true)!,
     ...(text(value.taskText, 'projection.taskText', 4_000)
       ? { taskText: text(value.taskText, 'projection.taskText', 4_000) }
@@ -163,18 +169,29 @@ function projectionProposal(value: unknown): KstarProjectionProposal {
 }
 
 function forecastProposal(value: unknown): KstarForecastProposal {
-  if (!plain(value)) throw new ControlInputError('forecast proposal is required');
-  if (!Array.isArray(value.candidates)) throw new ControlInputError('forecast.candidates is invalid');
+  // The Commander's tool call may arrive with `forecast` as a JSON STRING
+  // (deepseek-v4-flash serializes nested objects into strings — live
+  // observed: forecast was a quoted JSON blob), or with the runtime IDs
+  // guessed/absent (the model cannot know taskRunId/requirementId/
+  // projectionId — those are host-generated). Both shapes must be accepted;
+  // commitForecast resolves the REAL ids from the current state and ignores
+  // any model-supplied ones.
+  let parsed: unknown = value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) throw new ControlInputError('forecast proposal is required');
+    try { parsed = JSON.parse(trimmed); }
+    catch { throw new ControlInputError('forecast proposal is invalid'); }
+  }
+  if (!plain(parsed)) throw new ControlInputError('forecast proposal is required');
+  if (!Array.isArray(parsed.candidates)) throw new ControlInputError('forecast.candidates is invalid');
   return {
-    taskRunId: id(value.taskRunId, 'forecast.taskRunId', true)!,
-    requirementId: id(value.requirementId, 'forecast.requirementId', true)!,
-    projectionId: id(value.projectionId, 'forecast.projectionId', true)!,
-    candidates: value.candidates,
-    ...(stringList(value.constraints, 'forecast.constraints', 20, 1_000)
-      ? { constraints: stringList(value.constraints, 'forecast.constraints', 20, 1_000) }
+    candidates: parsed.candidates,
+    ...(stringList(parsed.constraints, 'forecast.constraints', 20, 1_000)
+      ? { constraints: stringList(parsed.constraints, 'forecast.constraints', 20, 1_000) }
       : {}),
-    ...(stringList(value.acceptanceCriteria, 'forecast.acceptanceCriteria', 20, 1_000)
-      ? { acceptanceCriteria: stringList(value.acceptanceCriteria, 'forecast.acceptanceCriteria', 20, 1_000) }
+    ...(stringList(parsed.acceptanceCriteria, 'forecast.acceptanceCriteria', 20, 1_000)
+      ? { acceptanceCriteria: stringList(parsed.acceptanceCriteria, 'forecast.acceptanceCriteria', 20, 1_000) }
       : {}),
   };
 }
@@ -454,6 +471,7 @@ async function upsertState(
       ...state,
       requirementJustClosed: requirement.id,
       taskComplete: true,
+      pendingAutoCloseAt: undefined,
       updatedAt: now,
     };
   } else {
@@ -483,7 +501,11 @@ async function requestProjection(
   if (!task || !requirement || task.status !== 'open' || requirement.status !== 'open') {
     throw new ControlInputError('an open Task and Requirement are required');
   }
-  assertOwnedId(proposal.requirementId, requirement.id, 'projection.requirementId');
+  // The model cannot know the host-generated requirementId; resolve it from
+  // the current state when the submitted one is absent/mismatched.
+  if (proposal.requirementId && proposal.requirementId !== requirement.id) {
+    assertOwnedId(proposal.requirementId, requirement.id, 'projection.requirementId');
+  }
   // workspace_policy line: the projection is confirmed on creation (no user
   // candidate confirmation); the card is still posted as a read-only record.
   const projection = await previewContextProjection(context.userId, {
@@ -525,15 +547,15 @@ async function commitForecast(
 ): Promise<{ result: KstarControlResult; state: KstarConversationTaskStateRecord }> {
   const { task, requirement } = await currentRecords(context, state);
   if (!task || !requirement) throw new ControlInputError('an active Task and Requirement are required');
-  assertOwnedId(proposal.taskRunId, task.id, 'forecast.taskRunId');
-  assertOwnedId(proposal.requirementId, requirement.id, 'forecast.requirementId');
-  if (requirement.projectionId !== proposal.projectionId) {
-    throw new ControlInputError('forecast.projectionId does not match current state');
-  }
+  // The Commander cannot know the host-generated runtime ids (taskRunId /
+  // requirementId / projectionId) and live model output guessed or omitted
+  // them. Resolve the REAL ids from the current state here — model-supplied
+  // ids are advisory at most and must never be trusted.
+  if (!requirement.projectionId) throw new ControlInputError('a confirmed projection is required before forecasting');
   const record = await commitCommanderForecast(context.userId, {
     taskRunId: task.id,
     requirementId: requirement.id,
-    projectionId: proposal.projectionId,
+    projectionId: requirement.projectionId,
     candidates: proposal.candidates,
     allowedToolNames: context.allowedToolNames,
     ...(context.workspaceId || task.workspaceId
@@ -551,7 +573,7 @@ async function commitForecast(
       status: 'forecast_committed',
       taskId: task.id,
       requirementId: requirement.id,
-      projectionId: proposal.projectionId,
+      projectionId: requirement.projectionId,
       forecastId: record.id,
       selectedCandidateId,
     },
@@ -590,6 +612,7 @@ async function finish(
     ...state,
     requirementJustClosed: requirement.id,
     taskComplete: true,
+    pendingAutoCloseAt: undefined,
     updatedAt: now,
   };
   await replaceConversationTaskState(context.userId, state);

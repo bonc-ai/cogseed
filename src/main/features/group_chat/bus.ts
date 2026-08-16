@@ -1109,6 +1109,11 @@ interface QueueItem {
   turnId: string;
   msgId: string;
   fromActorId: string;
+  /** Host-internal control turn (review request etc.): routed with
+   * `fromActorId: USER_ID` but must NOT behave like a user message — no
+   * auto-close cancellation, no KStar host routing (see the commander turn
+   * gate). */
+  internalControl?: boolean;
   /** Exact visible user text, kept separate from the LLM payload so teaching
    * intent cannot be inferred from injected references or attachment metadata. */
   sourceMessageText?: string;
@@ -1326,6 +1331,9 @@ function cidKey(uid: string, cid: string): string {
   return `${uid}:${cid}`;
 }
 let _enqueueAdmissionGateForTest: (() => Promise<void>) | null = null;
+let _hostRoutingJudgeForTest:
+  ((message: string, openRequirement?: { requirementId: string; goalText: string }) => Promise<ModelRoutingVerdict | null>) | null =
+  null;
 let _actorTurnPreBodyHookForTest:
   ((state: CidState, actor: Actor, item: QueueItem) => Promise<void>) | null =
   null;
@@ -1348,6 +1356,12 @@ export function _setEnqueueAdmissionGateForTest(
   gate: (() => Promise<void>) | null,
 ): void {
   _enqueueAdmissionGateForTest = gate;
+}
+
+export function _setHostRoutingJudgeForTest(
+  judge: ((message: string, openRequirement?: { requirementId: string; goalText: string }) => Promise<ModelRoutingVerdict | null>) | null,
+): void {
+  _hostRoutingJudgeForTest = judge;
 }
 
 export function _setActorTurnPreBodyHookForTest(
@@ -1838,6 +1852,11 @@ export interface EnqueueParams {
   cid: string;
   fromActorId: string;
   text: string;
+  /** Host-internal control message (Commander-only, e.g. review request /
+   *  continuation judge): must NOT open a new taskRun (fromActorId is USER_ID
+   *  for routing but this is not a user action) — otherwise each control
+   *  message creates a run, terminal event, and closure loop. */
+  internalControl?: boolean;
   /** Structured source for a user-visible failure. This controls analytics
    * taxonomy only; the rendered text still controls failure actions/UI. */
   failure_kind?: GroupMessageFailureKind;
@@ -1856,6 +1875,8 @@ export interface EnqueueParams {
   attachments?: string[];
   use_selections?: ChatUseSelection[];
   references?: ChatMessageReference[];
+  /** 空间任务引用（@ 资产）可见反馈：随 user 消息落 space_asset_refs，UI 气泡显示 chips。 */
+  space_asset_refs?: Array<{ name: string; asset_type?: string }>;
   recall_projection_card?: { projectionId: string };
   recall_citations?: RecallMessageCitation[];
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
@@ -1957,7 +1978,7 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       code: "E_CONVERSATION_TERMINATING",
     });
   }
-  if (!state.taskRun && (fromActorId === USER_ID || params.kstarTerminalProvenance)) {
+  if (!params.internalControl && !state.taskRun && (fromActorId === USER_ID || params.kstarTerminalProvenance)) {
     const provenance = params.kstarTerminalProvenance;
     state.taskRun = {
       runId: genId12(),
@@ -2122,43 +2143,52 @@ async function _enqueueBody(
   }
   to = Array.from(new Set(to));
 
-  // Conversation project id resolved once here and threaded to KSTAR/Recall
-  // so automatic projection matching is scoped to the same project the
-  // dispatch/workspace resolution below uses.
-  let conversationProjectId: string | undefined;
-
-  // Project scope at dispatch time: if the conversation belongs to a
-  // project, drop any recipient agent_id that isn't bound to the project
-  // (CLAUDE.md §6 — "if recipient unavailable, hand off to commander").
-  // Reserved ids (user / commander) always pass through. After filtering,
-  // an empty `to` falls through to the sender-default rule below — for
-  // user-initiated text that means "go to commander", which is the
-  // explicit hand-off the requirement asks for. Cheap: one project.json
-  // + bindings.json read,
-  // resolveProjectScope already memoises file existence checks. Skipped
-  // when the conv has no project_id (orphan = unrestricted).
+  // 空间作用域 at dispatch time: 会话挂空间 → 丢弃未绑定空间的 recipient
+  // （CLAUDE.md §6 — "recipient 不可用则转交 commander"）。reserved ids
+  // （user/commander）恒放行。过滤后空 `to` 落入下方 sender-default 规则。
+  // 廉价：一次 space.json 读 + 空间派生集解析，resolveSpaceScope 已 memoise
+  // 文件存在性。会话无 space_id（orphan）→ 跳过（不受限）。
   try {
     const { getConversation } = await import("../chats");
     const conv = await getConversation(uid, cid);
-    const projectId = (conv as any)?.project_id;
-    if (typeof projectId === "string" && projectId) conversationProjectId = projectId;
-    if (typeof projectId === "string" && projectId) {
-      const projectsFeat = await import("../projects");
-      const scope = await projectsFeat.resolveProjectScope(uid, projectId);
+    const spaceId = (conv as any)?.space_id;
+    if (typeof spaceId === "string" && spaceId) {
+      const spacesFeat = await import("../spaces");
+      const scope = await spacesFeat.resolveSpaceScope(uid, spaceId);
       if (scope) {
         const bound = new Set(scope.agents);
         const before = to;
-        to = to.filter((id) => RESERVED_IDS.has(id) || bound.has(id));
+        // CLI-backed agents are exempt from project-scope filtering: they run
+        // on the local machine with their own credentials (no project API
+        // budget consumed), and the user picks them explicitly (composer chip,
+        // `@name` mention, or the no-model → CLI fallback). Dropping them here
+        // would route every CLI message back to the commander, which defeats
+        // the fallback and `@Codex`/`@Claude` mentions in a project-scoped chat.
+        const kept: string[] = [];
+        for (const id of to) {
+          if (RESERVED_IDS.has(id) || bound.has(id)) {
+            kept.push(id);
+            continue;
+          }
+          try {
+            const ag = await agentsFeat.getAgent(id);
+            if (ag && ag.runtime && ag.runtime.kind === 'cli') {
+              kept.push(id);
+              continue;
+            }
+          } catch { /* fall through to drop */ }
+        }
+        to = kept;
         if (to.length !== before.length) {
           const dropped = before.filter((id) => !to.includes(id));
           log.info(
-            `dispatch project-scope drop cid=${cid} pid=${projectId} from=${fromActorId} dropped=${dropped.join(",")}`,
+            `dispatch space-scope drop cid=${cid} sid=${spaceId} from=${fromActorId} dropped=${dropped.join(",")}`,
           );
         }
       }
     }
   } catch (err) {
-    log.warn(`project-scope filter cid=${cid}: ${(err as Error).message}`);
+    log.warn(`space-scope filter cid=${cid}: ${(err as Error).message}`);
   }
 
   let backendFollowupAgentId = '';
@@ -2417,6 +2447,13 @@ async function _enqueueBody(
       ? { p3394: { recipient_epochs: recipientEpochs } }
       : {}),
     text: rewrittenText,
+    // The Commander's in-context KStar review (<kstar-review>…</kstar-review>)
+    // is a host-internal self-evolution signal, not user-facing content. Tag
+    // it so the renderer never shows it as a chat bubble while the record
+    // stays in the message stream for closure parsing.
+    ...(rewrittenText.includes('<kstar-review>')
+      ? { system_kind: 'kstar_review' as const }
+      : {}),
     ...(params.failure_kind ? { failure_kind: params.failure_kind } : {}),
     ...(params.failure_code ? { failure_code: params.failure_code } : {}),
     ...(params.model_text && params.model_text.trim()
@@ -2428,6 +2465,9 @@ async function _enqueueBody(
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(params.references && params.references.length
       ? { references: params.references }
+      : {}),
+    ...(params.space_asset_refs && params.space_asset_refs.length
+      ? { space_asset_refs: params.space_asset_refs }
       : {}),
     ...(params.recall_projection_card ? { recall_projection_card: params.recall_projection_card } : {}),
     ...(params.recall_citations && params.recall_citations.length
@@ -2523,8 +2563,8 @@ async function _enqueueBody(
 
   // Dispatch to non-user recipients. User routing remains the ordinary
   // group-chat rule (user -> Commander unless an explicit floor/mention
-  // chooses another actor). KStar bookkeeping happens only through
-  // Commander-owned kstar_control calls and cannot gate this turn.
+  // chooses another actor). KStar bookkeeping is host-governed (routing /
+  // projection / forecast / closure all host-side) and cannot gate this turn.
 
   let backendFollowupHandled = false;
   if (backendFollowupAgentId) {
@@ -2598,6 +2638,7 @@ async function _enqueueBody(
       turnId: genId12(),
       msgId,
       fromActorId,
+      ...(params.internalControl ? { internalControl: true } : {}),
       ...(fromActorId === USER_ID ? { sourceMessageText: msg.text } : {}),
       llmPayload: composeLlmTurnPayload(uid, fromActorId, msg),
       ...(msg.p3394?.recipient_epochs[recipientId] !== undefined
@@ -3436,32 +3477,30 @@ async function runActorTurnBody(
   // consumer below (CLI cwd fallback, streamChatWithModel, etc.) without
   // re-reading the conv index per tool call.
   let turnProjectId: string | undefined;
+  let turnSpaceId: string | undefined;
   try {
     const { getConversation } = await import("../chats");
     const _conv = await getConversation(uid, cid);
     const _pid = (_conv as any)?.project_id;
     if (typeof _pid === "string" && _pid) turnProjectId = _pid;
+    const _sid = (_conv as any)?.space_id;
+    if (typeof _sid === "string" && _sid) turnSpaceId = _sid;
   } catch {
     /* default scope */
   }
 
-  // Project bindings (strict scope of agents visible to the commander LLM).
-  // `null` = orphan conversation OR stale projectId — falls back to legacy
-  // global visibility. Resolved once per turn alongside the workspace
-  // resolver and threaded into the commander prompt. See
-  // CLAUDE.md §6: project scope is the outer intersection BEFORE the 4
-  // enable-filter sites; do not add a 5th.
-  let turnProjectScope: import("../projects").ProjectBindings | null = null;
-  if (turnProjectId) {
+  // 空间作用域（删项目层后：会话直接挂空间，严格作用域 = 空间派生集 agents）。
+  // `null` = orphan 会话（无 space_id）或空间缺失 → 回退全局可见。每 turn 解析一次，
+  // 与 workspace resolver 并列，注入 commander prompt。见 CLAUDE.md §6（外层交集，
+  // 4 个 enable-filter 站点之前，勿加第 5 个）。
+  let turnSpaceScope: import("../spaces").SpaceScope | null = null;
+  if (turnSpaceId) {
     try {
-      const projectsFeat = await import("../projects");
-      turnProjectScope = await projectsFeat.resolveProjectScope(
-        uid,
-        turnProjectId,
-      );
+      const spacesFeat = await import("../spaces");
+      turnSpaceScope = await spacesFeat.resolveSpaceScope(uid, turnSpaceId);
     } catch (err) {
       log.warn(
-        `resolve project scope cid=${cid} pid=${turnProjectId}: ${(err as Error).message}`,
+        `resolve space scope cid=${cid} sid=${turnSpaceId}: ${(err as Error).message}`,
       );
     }
   }
@@ -3674,6 +3713,10 @@ async function runActorTurnBody(
   // process trail: prep/control-plane tools may precede hand_off_to, and that
   // brittle classification is what repeatedly recreated empty tail bubbles.
   let terminalHandoffCompleted = false;
+  // True only when the host's model-judged routing ACTUALLY opened a KStar
+  // task + projection for this turn's user message. The Commander hint must
+  // not claim tracked state that doesn't exist (see call site below).
+  let hostOpenedTaskThisTurn = false;
   if (isCommander) {
     // 空间模式会话（kind=space_builder）：用户↔构建师的一对一引导对话。
     // 构建师不派活不写文件——零额外工具，数据全部走 Runtime injection 快照。
@@ -3686,9 +3729,22 @@ async function runActorTurnBody(
     if (
       convKind !== "space_builder"
       && item.fromActorId === USER_ID
+      && !item.internalControl
       && process.env.ORKAS_KSTAR_HOST_ROUTING !== '0'
     ) {
-      await hostRouteTaskTurn(uid, cid, item.sourceMessageText, item.msgId, turnProjectId);
+      // 用户新消息到达：清除该会话的 pending 自动闭环（设计 §5）。
+      // 之后 hostRouteTaskTurn 的 judge 判定 continuation 决定任务去留。
+      const { cancelAutoClose } = await import('../kstar/task-closure');
+      await cancelAutoClose(uid, cid);
+      const routing = await hostRouteTaskTurn(uid, cid, item.sourceMessageText, item.msgId, turnSpaceId ?? turnProjectId);
+      // The hint must reflect what the host ACTUALLY did. The old hint
+      // unconditionally claimed "the host has already tracked this task"
+      // while the routing judgement could silently no-op (parser/prompt
+      // contract mismatch) — so the Commander was told to skip
+      // upsert_state on a task that never existed, then its commit_forecast
+      // failed with "forecast proposal is required". Only advertise the
+      // tracked state when it is true.
+      hostOpenedTaskThisTurn = routing.openedTask;
     }
     if (convKind === "space_builder") {
       systemPrompt = await buildSpaceBuilderSystemPrompt(uid);
@@ -3697,7 +3753,7 @@ async function runActorTurnBody(
       systemPrompt = await buildCommanderSystemPrompt(
         uid,
         cid,
-        turnProjectScope?.agents ?? null,
+        turnSpaceScope?.agents ?? null,
       );
       extraTools = await buildCommanderExtraTools(
         state,
@@ -3705,7 +3761,7 @@ async function runActorTurnBody(
         item.llmPayload,
         item.fromActorId,
         item.attachments,
-        turnProjectId,
+        turnSpaceId ?? turnProjectId,
         item.msgId,
         () => commanderResolvedRuntime,
         item.sourceMessageText,
@@ -3836,7 +3892,7 @@ async function runActorTurnBody(
           cid,
           taskRunId: item.turnId,
           taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
-          ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+          ...((turnSpaceId ?? turnProjectId) ? { workspaceId: turnSpaceId ?? turnProjectId } : {}),
           ...(item.committedProjectionId ? { committedProjectionId: item.committedProjectionId } : {}),
           ...(item.forecastId ? { forecastId: item.forecastId } : {}),
         });
@@ -3848,11 +3904,14 @@ async function runActorTurnBody(
         log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
       }
       // Layer 1 routing uplift: deterministic task-intent detection adds an
-      // advisory hint so an ordinary user request is not silently skipped by
-      // the Commander's default kstar:skip. Advisory only — no state writes.
+      // advisory hint so an ordinary user request is not silently skipped.
+      // Advisory only — no state writes. The world model owns governance
+      // (task/projection/forecast all host-side), so the hint only informs
+      // the Commander that the task is tracked; it never instructs a
+      // kstar_control call (that tool no longer exists for the Commander).
       if (item.fromActorId === USER_ID) {
         const { taskIntentHint } = await import('../kstar/task-intent');
-        const hint = taskIntentHint(item.sourceMessageText);
+        const hint = taskIntentHint(item.sourceMessageText, { hostOpenedTask: hostOpenedTaskThisTurn });
         if (hint) systemPrompt = `${systemPrompt}\n\n${hint}`;
       }
     } else if (item.dispatchedAssetIds?.length) {
@@ -4187,6 +4246,7 @@ async function runActorTurnBody(
         slice,
         workingDir: cliWorkingDir,
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
+        ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
         signal: w.abortController.signal,
         onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
         onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
@@ -4314,6 +4374,7 @@ async function runActorTurnBody(
         } : {}),
         ...(item.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
+        ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
         onFileWritten,
         onOutputsPublished,
         hasProducedPath,
@@ -4602,15 +4663,18 @@ async function runActorTurnBody(
       );
     }
     if (extracted.patches.length) {
+      // Strip the patch blocks from the surfaced text regardless of whether
+      // the workflow context is present — a `<context-patch>` is machine
+      // metadata, never user-facing. Applying it to shared context is a
+      // bonus; leaving it in the reply text is a leak (users see raw JSON).
+      workingText = extracted.cleanText || workingText;
       try {
         const activeContext = await applyActiveContextPatches(
           uid,
           cid,
           extracted.patches,
         );
-        if (activeContext) {
-          workingText = extracted.cleanText;
-        } else {
+        if (!activeContext) {
           log.warn(
             `context_patch ignored because no active shared context cid=${cid} actor=${actor.id}`,
           );
@@ -4759,27 +4823,28 @@ async function runActorTurnBody(
                 name: ag.name,
                 kind: "created",
               });
-              // Project-scoped conv: auto-bind the new agent into the project's
-              // bindings.json so it's actually reachable from this conversation
-              // (commander picker filters by `_pickerBoundAgentIds`; LLM
-              // dispatch is gated by the same project scope per CLAUDE.md §5).
+              // Space-scoped conv: auto-add the new agent to the space's
+              // extra_agents so it's actually reachable from this conversation
+              // (commander picker filters by the space scope; LLM dispatch is
+              // gated by the same space scope per CLAUDE.md §6).
               // Without this hop the user creates an agent and immediately
               // can't @-mention it from the same conv — observed bug shape
-              // when the project's bindings predate the new agent.
-              if (turnProjectId) {
+              // when the space predates the new agent.
+              if (turnSpaceId) {
                 try {
-                  const projectsFeatBind = await import("../projects");
-                  await projectsFeatBind.addAgentBinding(
+                  const spacesFeatBind = await import("../spaces");
+                  await spacesFeatBind.addSpaceResource(
                     uid,
-                    turnProjectId,
+                    turnSpaceId,
+                    "agent",
                     ag.agent_id,
                   );
                   log.info(
-                    `auto-bound agent ${ag.agent_id} to project ${turnProjectId} after commander creation`,
+                    `auto-added agent ${ag.agent_id} to space ${turnSpaceId} after commander creation`,
                   );
                 } catch (err) {
                   log.warn(
-                    `auto-bind agent failed cid=${cid} pid=${turnProjectId} aid=${ag.agent_id}: ${(err as Error).message}`,
+                    `auto-add agent failed cid=${cid} sid=${turnSpaceId} aid=${ag.agent_id}: ${(err as Error).message}`,
                   );
                 }
               }
@@ -4843,25 +4908,26 @@ async function runActorTurnBody(
             ) {
               workingText = `${workingText}\n\n${_formatValidationWarnings(result.validation_warnings)}`;
             }
-            // Project-scoped conv: auto-bind the new skill so the LLM in this
+            // Space-scoped conv: auto-add the new skill so the LLM in this
             // conv actually sees it via getSystemPromptBlock allowlist. Same
-            // bug shape as the agent auto-bind above — without this the user
+            // bug shape as the agent auto-add above — without this the user
             // creates a skill, the file lands on disk, but the LLM in this
-            // project conv can never invoke it (allowlist excludes it).
-            if (turnProjectId && result.kind === "created") {
+            // space conv can never invoke it (allowlist excludes it).
+            if (turnSpaceId && result.kind === "created") {
               try {
-                const projectsFeatBind = await import("../projects");
-                await projectsFeatBind.addSkillBinding(
+                const spacesFeatBind = await import("../spaces");
+                await spacesFeatBind.addSpaceResource(
                   uid,
-                  turnProjectId,
+                  turnSpaceId,
+                  "skill",
                   result.skillId,
                 );
                 log.info(
-                  `auto-bound skill ${result.skillId} to project ${turnProjectId} after commander creation`,
+                  `auto-added skill ${result.skillId} to space ${turnSpaceId} after commander creation`,
                 );
               } catch (err) {
                 log.warn(
-                  `auto-bind skill failed cid=${cid} pid=${turnProjectId} sid=${result.skillId}: ${(err as Error).message}`,
+                  `auto-add skill failed cid=${cid} sid=${turnSpaceId} sid=${result.skillId}: ${(err as Error).message}`,
                 );
               }
             }
@@ -6229,8 +6295,8 @@ function kstarApprovalBlockedToolResult(code: string, message: string): { conten
 }
 
 /** Host-side approval guard for privileged agent dispatch. When the active
- *  KStar requirement carries a Projection (the Commander requested one through
- *  kstar_control), execution is paused until the Projection is confirmed AND a
+ *  KStar requirement carries a Projection (the host auto-confirms it at task
+ *  open), execution is paused until the Projection is confirmed AND a
  *  Forecast is committed. Returns verified provenance IDs — never model
  *  claims — and stamps them onto the current taskRun so the terminal event
  *  carries them. Ordinary chat and tools without an active Projection are
@@ -6249,15 +6315,16 @@ async function guardKstarPrivilegedDispatch(
     );
   }
   if (!lifecycle.requirement.forecastId) {
-    // Host auto-tracked tasks (layer 2) skip the forecast requirement ONCE so
-    // the dispatch proceeds; the Commander is expected to commit_forecast
-    // afterwards. Commander-initiated tasks still require a committed forecast
-    // before execution.
-    if (options.allowHostAutoTracked) return { provenance: {} };
-    return kstarApprovalBlockedToolResult(
-      'kstar_projection_not_confirmed',
-      'KStar Forecast is not committed.',
-    );
+    // The world model owns prediction: forecast is generated by the host
+    // (auto-forecast over the committed projection knowledge). It is
+    // advisory for execution gating — if generation failed (model
+    // unavailable, no candidates), the dispatch still proceeds rather than
+    // demanding a kstar_control call the Commander no longer has.
+    log.warn('kstar execution without forecast record (auto-forecast unavailable)', {
+      cid: maskId(state.cid),
+      requirementId: lifecycle.requirement.id,
+    });
+    return { provenance: {} };
   }
   const provenance = {
     ...(lifecycle.task?.id ? { logicalRunId: lifecycle.task.id } : {}),
@@ -7971,6 +8038,8 @@ function _toolError(error: string): { content: string; isError: true } {
   return { content: JSON.stringify({ ok: false, error }), isError: true };
 }
 
+
+
 /**
  * Deterministic host routing (the fix for model-dependent routing): when a
  * USER message is detected as a task, the HOST opens the governed KStar task
@@ -7983,22 +8052,178 @@ function _toolError(error: string): { content: string; isError: true } {
  * Zero-write guarantee preserved: greetings/status/trivia are not tasks, and
  * an already-open task is never duplicated.
  */
+/** Parse the Commander's routing judgement:
+ *  `<kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge>`.
+ *  Returns null when absent/malformed. Tolerant of bare JSON output too —
+ *  the historical prompt said "no markdown / plain JSON" while the parser
+ *  only accepted the tagged form, so EVERY live routing judgement silently
+ *  failed and no task was ever opened. Accept both shapes. */
+export function parseContinuationJudgement(text: string | undefined): { isTask: boolean; continuation: boolean } | null {
+  const raw = String(text || '').trim();
+  const tagged = raw.match(/<kstar-judge>\s*([\s\S]*?)\s*<\/kstar-judge>/);
+  const payload = (tagged ? tagged[1] : raw).trim();
+  const jsonStart = payload.search(/[{[]/);
+  if (jsonStart < 0) return null;
+  const candidate = payload.slice(jsonStart);
+  // Trim trailing prose (e.g. "Sure: {...} here.") by progressively cutting
+  // the suffix until the prefix parses as JSON; the first successful parse
+  // is authoritative.
+  for (let end = candidate.length; end > 0; end -= 1) {
+    try {
+      const value = JSON.parse(candidate.slice(0, end)) as { is_task?: unknown; continuation?: unknown };
+      if (typeof value.is_task !== 'boolean') return null;
+      return {
+        isTask: value.is_task,
+        continuation: value.continuation === true,
+      };
+    } catch {
+      /* keep trimming */
+    }
+  }
+  return null;
+}
+
+/** Default ceiling for the model-judged routing question. */
+export const CONTINUATION_JUDGE_TIMEOUT_MS = 20_000;
+
+export interface ModelRoutingVerdict {
+  isTask: boolean;
+  continuation: boolean;
+}
+
+const ROUTING_JUDGE_PROMPT = [
+  'You are the routing judge for a single user message.',
+  'Decide whether the message is a real task, and (when a tracked task is open) whether it CONTINUES that task or starts a NEW one.',
+  'Reply with EXACTLY one <kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge> block and nothing else around it.',
+  'is_task=false for greetings, thanks, acknowledgements, status questions, and small talk.',
+  'continuation=true when the message refines/follows-up/corrects the open task ("这个报告再加一节"); continuation=false when it is a different request while an older task exists ("帮我写个 Python 脚本" while a report task is open).',
+  'A task does not need a strong verb: "帮我看看这个文件哪里不对" is a task.',
+].join('\n');
+
+/**
+ * Model-judged routing (mixed deterministic + model): for any non-trivial
+ * user message, a dedicated runner (NOT the busy commander turn — a bus
+ * enqueue would deadlock because the current turn holds the queue) judges
+ * whether the message is a task and, when one is open, whether it continues
+ * it. Returns the verdict, or null on model failure (caller applies the safe
+ * default). Bounded by CONTINUATION_JUDGE_TIMEOUT_MS.
+ */
+async function judgeModelRouting(
+  uid: string,
+  cid: string,
+  newMessage: string,
+  openRequirement?: { requirementId: string; goalText: string },
+): Promise<ModelRoutingVerdict | null> {
+  if (_hostRoutingJudgeForTest) {
+    return _hostRoutingJudgeForTest(newMessage, openRequirement);
+  }
+  try {
+    const { hasConfiguredModel } = await import('../auth');
+    if (!hasConfiguredModel().configured) {
+      log.warn('kstar model routing skipped: no configured model', { cid: maskId(cid) });
+      return null;
+    }
+    const { buildRunner } = await import('../../model/core-agent/runner');
+    const { runner } = await buildRunner({
+      sessionId: `kstar-routing-${cid}`,
+      userId: uid,
+      systemPrompt: ROUTING_JUDGE_PROMPT,
+      disableTools: true,
+      ephemeralSession: true,
+      skillList: [],
+    });
+    const task = await Promise.race([
+      runner.run({
+        message: JSON.stringify({
+          newMessage: String(newMessage || '').slice(0, 2_000),
+          ...(openRequirement ? { openTaskGoal: String(openRequirement.goalText).slice(0, 1_000) } : {}),
+        }),
+        thinkingLevel: 'off',
+        cacheRetention: 'none',
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), CONTINUATION_JUDGE_TIMEOUT_MS)),
+    ]);
+    if (!task || task.meta.aborted || task.meta.error) {
+      log.warn('kstar model routing runner failed', { cid: maskId(cid), aborted: task?.meta.aborted, error: task?.meta.error });
+      return null;
+    }
+    const verdict = parseContinuationJudgement(task.text);
+    if (!verdict) {
+      log.warn('kstar model routing judge output unparsable', { cid: maskId(cid), text: String(task.text || '').slice(0, 200) });
+      return null;
+    }
+    log.info('kstar model routing verdict', {
+      cid: maskId(cid),
+      isTask: verdict.isTask,
+      continuation: verdict.continuation,
+      hasOpenRequirement: !!openRequirement,
+      messagePreview: String(newMessage || '').replace(/\s+/g, ' ').slice(0, 80),
+    });
+    return verdict;
+  } catch (error) {
+    log.warn(`kstar model routing degraded cid=${cid}: ${(error as Error).message}`);
+    return null;
+  }
+}
+
 async function hostRouteTaskTurn(
   uid: string,
   cid: string,
   messageText: string | undefined,
   sourceMessageId: string | undefined,
   workspaceId?: string,
-): Promise<void> {
-  const { detectTaskIntent } = await import('../kstar/task-intent');
-  if (!detectTaskIntent(messageText).isTask) return;
+): Promise<{ openedTask: boolean }> {
+  // Mixed routing: fast deterministic filter skips OBVIOUS trivial messages
+  // (greetings/status/emoji) with zero model calls and zero KStar writes;
+  // everything else goes to the model judgement which decides is_task AND
+  // continuation in one call with full conversation context.
+  const { isObviouslyTrivial } = await import('../kstar/task-intent');
+  if (isObviouslyTrivial(messageText)) return { openedTask: false };
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
     const lifecycle = await readKstarTaskLifecycle(uid, cid);
-    if (lifecycle.task || lifecycle.requirement) return;
+    const openRequirement = lifecycle.requirement && lifecycle.requirement.status === 'open'
+      ? { requirementId: lifecycle.requirement.id, goalText: lifecycle.requirement.goalText }
+      : undefined;
+    const verdict = await judgeModelRouting(uid, cid, messageText, openRequirement);
+    if (!verdict) return { openedTask: false }; // timeout/enqueue failure → no routing decision (safe no-op)
+    if (!verdict.isTask) return { openedTask: false }; // model says not a task → zero KStar writes
+
+    if (openRequirement && verdict.continuation === false) {
+      // Model judged: user moved to a NEW task while one was open. Close the
+      // old task via the finish path (requirement precipitation runs) and
+      // let this message open a fresh task below.
+      const { executeKstarControl } = await import('../kstar/control-service');
+      await executeKstarControl(
+        {
+          userId: uid,
+          conversationId: cid,
+          ...(sourceMessageId ? { sourceMessageId } : {}),
+          ...(workspaceId ? { workspaceId } : {}),
+          allowedToolNames: new Set(['kstar_control']),
+        },
+        {
+          operation: 'finish',
+          idempotencyKey: `host-continuation-${cid}-${sourceMessageId || Date.now()}`,
+          result: {
+            finalStatus: 'completed',
+            finalText: String(messageText || '').slice(0, 4_000),
+            producedFiles: [],
+            acceptanceEvidence: [],
+            closeReason: 'user moved to a new task',
+          },
+        },
+      );
+      log.info('kstar model routing judged NEW task; old task closed', {
+        cid: maskId(cid),
+        requirementId: openRequirement.requirementId,
+      });
+    } else if (openRequirement && verdict.continuation === true) {
+      return { openedTask: false }; // continues the open task → keep it
+    }
     const { executeKstarControl } = await import('../kstar/control-service');
     const goal = String(messageText || '').replace(/\s+/g, ' ').trim().slice(0, 4_000);
-    if (!goal) return;
+    if (!goal) return { openedTask: false };
     const created = await executeKstarControl(
       {
         userId: uid,
@@ -8014,7 +8239,7 @@ async function hostRouteTaskTurn(
         requirement: { operation: 'create', goalText: goal },
       },
     );
-    if (!created.ok || created.status !== 'state_committed') return;
+    if (!created.ok || created.status !== 'state_committed') return { openedTask: false };
     await executeKstarControl(
       {
         userId: uid,
@@ -8033,8 +8258,28 @@ async function hostRouteTaskTurn(
         },
       },
     );
+    // World-model prediction: the host owns forecast generation (dedicated
+    // runner over the committed projection knowledge). Run it ASYNC so the
+    // Commander turn starts immediately — a 10-30s forecast generation must
+    // never gate the user's reply. Errors are logged inside auto-forecast
+    // and execution proceeds without a forecast record if it fails.
+    const { autoForecastForRequirement } = await import('../kstar/auto-forecast');
+    void autoForecastForRequirement(uid, cid, created.requirementId).catch((error) => {
+      log.warn('kstar auto-forecast async degraded', {
+        cid: maskId(cid),
+        requirementId: created.requirementId,
+        error: (error as Error).message,
+      });
+    });
+    log.info('kstar host routing opened task', {
+      cid: maskId(cid),
+      requirementId: created.requirementId,
+      sourceMessageId: sourceMessageId ? maskId(sourceMessageId) : undefined,
+    });
+    return { openedTask: true };
   } catch (error) {
     log.warn(`kstar host routing degraded cid=${cid}: ${(error as Error).message}`);
+    return { openedTask: false };
   }
 }
 
@@ -8098,9 +8343,20 @@ async function ensureKstarTaskForDispatch(
       },
     );
     if (!state2.ok || state2.status !== 'projection_confirmed') return { created: true };
+    // World-model prediction: forecast is generated by the host (dedicated
+    // runner), ASYNC so the dispatch turn is not gated by the 10-30s
+    // generation call.
+    const { autoForecastForRequirement } = await import('../kstar/auto-forecast');
+    void autoForecastForRequirement(uid, cid, result.requirementId).catch((error) => {
+      log.warn('kstar auto-forecast async degraded', {
+        cid: maskId(cid),
+        requirementId: result.requirementId,
+        error: (error as Error).message,
+      });
+    });
     return {
       created: true,
-      hint: `The host auto-tracked this dispatch as a KStar task (projection confirmed). Submit kstar_control commit_forecast with 2-4 candidates before execution continues.`,
+      hint: `The host auto-tracked this dispatch as a KStar task (projection confirmed) and generated the world-model forecast automatically.`,
     };
   } catch (error) {
     log.warn(`kstar auto-task for dispatch degraded cid=${cid}: ${(error as Error).message}`);
@@ -8431,21 +8687,13 @@ async function buildCommanderExtraTools(
   const { getConversationWorkspacePath } = await import("./conv_workspace");
   const coordinatorWorkingDir = await getConversationWorkspacePath(uid, cid);
   const tools: AgentTool[] = [];
-  const kstarTool = await import('../kstar/control-tool');
-  if (kstarTool.isCommanderCentricKstarEnabled()) {
-    tools.push(kstarTool.createKstarControlTool({
-      userId: uid,
-      conversationId: cid,
-      ...(currentSourceActorId === USER_ID && currentSourceMessageId
-        ? { sourceMessageId: currentSourceMessageId }
-        : {}),
-      ...(currentSourceActorId === USER_ID && currentSourceMessageText?.trim()
-        ? { sourceMessageText: currentSourceMessageText }
-        : {}),
-      ...(currentProjectId ? { workspaceId: currentProjectId } : {}),
-      resolvedRuntime,
-    }));
-  }
+  // NOTE: kstar_control is intentionally NOT in the Commander's tool surface.
+  // The world model owns the whole governed lifecycle: host routing opens
+  // task + projection, and auto-forecast generates the prediction over the
+  // committed projection knowledge. The Commander's only duty is executing
+  // the work; asking it to emit nested JSON lifecycle payloads is what
+  // produced the repeated live failures (stringified forecast, flattened
+  // candidates, guessed runtime ids).
   tools.push({
     name: "auto_tasks_list",
     description: [
@@ -10048,6 +10296,7 @@ async function _runCliAgentTurn(opts: {
   item: QueueItem;
   slice: GroupMessage[];
   projectId?: string;
+  spaceId?: string;
   workingDir: string;
   signal: AbortSignal;
   onCoordinatorActivity?: (event: CoordinatorActivityEvent) => void;
@@ -10107,7 +10356,7 @@ async function _runCliAgentTurn(opts: {
     opts.item,
     opts.slice,
     bridgeHistory,
-    opts.projectId,
+    opts.spaceId,
   );
   // When `_buildCliPrompt` took the slash-command fast-path, promptText is
   // the raw `/cmd …` we forwarded. Remember the command name so the
@@ -10436,7 +10685,7 @@ async function _buildCliPrompt(
   item: QueueItem,
   slice: GroupMessage[],
   bridgeHistory: boolean,
-  projectId?: string,
+  spaceId?: string,
 ): Promise<string> {
   // Slash-command fast-path: when the user sends `/foo …` to a CLI agent,
   // forward the raw text so the CLI's own slash dispatcher (built-ins +
@@ -10490,21 +10739,21 @@ async function _buildCliPrompt(
       .trim();
   }
 
-  // ── Project instructions (ORKAS.md) — the conversation's project scope.
+  // ── Space instructions — the conversation's space scope.
   // Mirrors `core-agent/runner.ts`, which injects the same block for
   // in-process agents: low-churn user configuration, so it sits ahead of
   // the runtime region and stays byte-identical across turns. Without it a
   // CLI agent is told its name, the protocol, and the task — but nothing
-  // about the project it was summoned into, so standing rules like a repo
+  // about the space it was summoned into, so standing rules like a repo
   // path never reach it and it guesses from cwd instead.
-  // Instructions only: the in-process context policy arbitrates project
+  // Instructions only: the in-process context policy arbitrates space
   // status / memory layers that this frame does not carry.
   let projectBlock = "";
-  if (projectId) {
-    const projectsFeat = await import("../projects");
-    projectBlock = projectsFeat.formatProjectInstructionsForSystemPrompt(
+  if (spaceId) {
+    const spacesFeat = await import("../spaces");
+    projectBlock = spacesFeat.formatSpaceInstructionsForSystemPrompt(
       uid,
-      projectId,
+      spaceId,
     );
   }
 
@@ -10602,6 +10851,26 @@ async function _buildCliPrompt(
     if (!text) continue;
     sliceLines.push(`[${m.from} → ${to}] ${text}`);
   }
+
+  // Imported-conversation context: when a prior commander message carries a
+  // distilled model_text summary (session import), surface it to the CLI so
+  // it doesn't have to re-derive "what was done / what can't be dropped"
+  // from a cold start. This is the compressed CogSeed-side context the user
+  // expects to travel with the handoff — without it a cold CLI re-scans the
+  // whole workspace (slow first turn). Reads the conversation file directly
+  // (not the actor-scoped slice) because the seed's model_text is exactly
+  // what the CLI must not have to re-discover.
+  const importedSummary = await _extractImportedCliContext(uid, cid);
+  if (importedSummary) {
+    sliceLines.unshift(
+      `[commander → user] (导入会话接续上下文) ${importedSummary}`,
+    );
+    sliceLines.push(
+      `[系统] 接续上下文已在上方完整提供（目标、约束、已完成工作、下一步）。直接执行用户的当前任务即可，不要重新扫描工作区、不要重读历史日志、不要运行完整测试套件来“恢复上下文”——只为当前任务做最小必要的检查。`,
+    );
+    log.info(`cli prompt: injected imported context cid=${cid} agent=${agent.agent_id} chars=${importedSummary.length}`);
+  }
+
   if (!sliceLines.length) return render("");
 
   const baseBytes = Buffer.byteLength(render(""), "utf8");
@@ -10639,7 +10908,7 @@ export async function _buildCliPromptForTest(
   item: QueueItem,
   slice: GroupMessage[],
   bridgeHistory: boolean,
-  projectId?: string,
+  spaceId?: string,
 ): Promise<string> {
   return _buildCliPrompt(
     uid,
@@ -10648,7 +10917,7 @@ export async function _buildCliPromptForTest(
     item,
     slice,
     bridgeHistory,
-    projectId,
+    spaceId,
   );
 }
 
@@ -10658,6 +10927,35 @@ function _priorVisibleCliHistory(
 ): GroupMessage[] {
   const idx = slice.findIndex((m) => m.id === item.msgId);
   return idx >= 0 ? slice.slice(0, idx) : slice;
+}
+
+/** Distilled summary from an imported conversation's commander seed message
+ *  (materialize writes `model_text` = "以下是用户从...提炼简报...<summary>").
+  *  Returns the trimmed summary, or '' when there is none. */
+async function _extractImportedCliContext(uid: string, cid: string): Promise<string> {
+  const re = /以下是用户从[^\n]*提炼简报[^\n]*\n*\s*([\s\S]+)/;
+  try {
+    const chats = await import("../chats");
+    // Resolve the conversation's project so the correct jsonl (root vs
+    // project-scoped) is read for the seed's model_text.
+    let projectId: string | null = null;
+    try {
+      const conv = await chats.getConversation(uid, cid);
+      projectId = (conv as any)?.project_id ?? null;
+    } catch { /* fall through — root path read below */ }
+    const page = await chats.getMessagesPage(uid, cid, 2000, null, projectId || null);
+    const messages = page.history;
+    for (const m of messages) {
+      const modelText = (m as any)?.model_text;
+      if (m.from !== "commander" || typeof modelText !== "string") continue;
+      const match = re.exec(modelText);
+      const summary = (match && match[1]) ? match[1].trim() : "";
+      if (summary) return summary;
+    }
+  } catch {
+    // Fall back to '' — no context block is better than failing the dispatch.
+  }
+  return "";
 }
 
 function _hasPriorVisibleCliHistory(
@@ -10679,6 +10977,27 @@ export interface EnqueueCommanderControlInput {
     decision: 'approved' | 'rejected';
     confirmedSnapshot?: { assetIds: string[]; ruleRefs: string[] };
     legacy?: { requirementId?: string; taskRunId?: string; forecastId?: string; originalText?: string };
+  } | {
+    /** Commander-in-context review (self-evolution): the closure loop asks the
+     *  Commander — with its FULL conversation context — to produce the
+     *  expected-vs-actual review for a finished episode, instead of a
+     *  context-free host-side inference call. The reply must contain a
+     *  <kstar-review>{...}</kstar-review> JSON block. */
+    type: 'kstar_review_request';
+    episodeId: string;
+    evidence: Record<string, unknown>;
+  } | {
+    /** Model-judged routing (mixed deterministic+model): for any non-trivial
+     *  user message, the host asks the Commander to judge BOTH whether the
+     *  message is a task AND (when a task is open) whether it continues it.
+     *  Reply: <kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge>.
+     *  is_task=false → zero KStar writes (trivial/boundary chat);
+     *  continuation=false closes the old task (precipitation) and the
+     *  message opens a fresh task. */
+    type: 'kstar_continuation_judge';
+    requirementId?: string;
+    currentGoal?: string;
+    newMessage: string;
   };
 }
 
@@ -10692,6 +11011,9 @@ export async function enqueueCommanderControlMessage(input: EnqueueCommanderCont
     uid: input.userId,
     cid: input.cid,
     fromActorId: USER_ID,
+    // Internal control: never opens a taskRun (fixes the closure deadloop
+    // where each review request created a new run → terminal → review …).
+    internalControl: true,
     text: input.displayText,
     model_text: [
       '<kstar-control>',

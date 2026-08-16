@@ -42,73 +42,73 @@ const ITEM = {
   llmPayload: '<msg from="user">查一下 Orkas 仓库当前的版本分支</msg>',
 } as any;
 
-async function buildPrompt(projectId?: string): Promise<string> {
+async function buildPrompt(spaceId?: string): Promise<string> {
   const users = await import('../../../../src/main/features/users');
   users.activateUser(TEST_UID);
   const bus = await import('../../../../src/main/features/group_chat/bus');
-  return bus._buildCliPromptForTest(TEST_UID, CID, AGENT, ITEM, [], false, projectId);
+  return bus._buildCliPromptForTest(TEST_UID, CID, AGENT, ITEM, [], false, spaceId);
 }
 
-async function makeProject(instructions?: string): Promise<string> {
+async function makeSpace(instructions?: string): Promise<string> {
   const users = await import('../../../../src/main/features/users');
   users.activateUser(TEST_UID);
-  const projects = await import('../../../../src/main/features/projects');
-  const r = await projects.createProject(TEST_UID, '迭代Orkas');
-  if (!r.ok) throw new Error('project setup failed');
+  const spaces = await import('../../../../src/main/features/spaces');
+  const r = await spaces.createSpace(TEST_UID, { name: '迭代Orkas' });
+  if (!r.ok) throw new Error('space setup failed');
   if (instructions !== undefined) {
-    await projects.writeProjectInstructions(TEST_UID, r.project.project_id, instructions);
+    await spaces.writeSpaceInstructions(TEST_UID, r.space.space_id, instructions);
   }
-  return r.project.project_id;
+  return r.space.space_id;
 }
 
-describe('CLI prompt › project instructions', () => {
-  it('injects ORKAS.md when the conversation is scoped to a project', async () => {
-    const pid = await makeProject(`本项目用于迭代 Orkas。\n\n- ${REPO_LINE}`);
-    const prompt = await buildPrompt(pid);
+describe('CLI prompt › space instructions', () => {
+  it('injects instructions when the conversation is scoped to a space', async () => {
+    const sid = await makeSpace(`本项目用于迭代 Orkas。\n\n- ${REPO_LINE}`);
+    const prompt = await buildPrompt(sid);
 
-    expect(prompt).toContain('## Project instructions (user-authored)');
+    expect(prompt).toContain('## Space instructions (user-authored)');
     // The whole point: the user's repo path actually reaches the CLI.
     expect(prompt).toContain(REPO_LINE);
   });
 
-  it('places the project block in the stable prefix, ahead of the runtime region', async () => {
-    const pid = await makeProject(`- ${REPO_LINE}`);
-    const prompt = await buildPrompt(pid);
+  it('places the space block in the stable prefix, ahead of the runtime region', async () => {
+    const sid = await makeSpace(`- ${REPO_LINE}`);
+    const prompt = await buildPrompt(sid);
 
-    const projectIdx = prompt.indexOf('## Project instructions (user-authored)');
+    const spaceIdx = prompt.indexOf('## Space instructions (user-authored)');
     const runtimeIdx = prompt.indexOf('## Runtime injection');
     const taskIdx = prompt.indexOf('## Your task');
-    expect(projectIdx).toBeGreaterThan(-1);
+    expect(spaceIdx).toBeGreaterThan(-1);
     expect(runtimeIdx).toBeGreaterThan(-1);
     // Low-churn config sits before the per-turn region so the CLI's prompt
     // cache stays stable across turns.
-    expect(projectIdx).toBeLessThan(runtimeIdx);
-    expect(projectIdx).toBeLessThan(taskIdx);
+    expect(spaceIdx).toBeLessThan(runtimeIdx);
+    expect(spaceIdx).toBeLessThan(taskIdx);
   });
 
-  it('omits the block entirely for a conversation with no project', async () => {
-    await makeProject(`- ${REPO_LINE}`);
+  it('omits the block entirely for a conversation with no space', async () => {
+    await makeSpace(`- ${REPO_LINE}`);
     const prompt = await buildPrompt(undefined);
 
-    expect(prompt).not.toContain('## Project instructions');
+    expect(prompt).not.toContain('## Space instructions');
     expect(prompt).not.toContain(REPO_LINE);
-    // The frame itself is intact — only the project slot is empty.
+    // The frame itself is intact — only the space slot is empty.
     expect(prompt).toContain('## Your task');
     expect(prompt).toContain('## Runtime injection');
   });
 
-  it('omits the block when the project has no ORKAS.md yet', async () => {
-    const pid = await makeProject();
-    const prompt = await buildPrompt(pid);
+  it('omits the block when the space has no instructions yet', async () => {
+    const sid = await makeSpace();
+    const prompt = await buildPrompt(sid);
 
-    expect(prompt).not.toContain('## Project instructions');
+    expect(prompt).not.toContain('## Space instructions');
     expect(prompt).toContain('## Your task');
   });
 
   it('leaves no unsubstituted $project_block placeholder in any case', async () => {
-    const withPid = await buildPrompt(await makeProject(`- ${REPO_LINE}`));
-    const withoutPid = await buildPrompt(undefined);
-    expect(withPid).not.toContain('$project_block');
-    expect(withoutPid).not.toContain('$project_block');
+    const withSid = await buildPrompt(await makeSpace(`- ${REPO_LINE}`));
+    const withoutSid = await buildPrompt(undefined);
+    expect(withSid).not.toContain('$project_block');
+    expect(withoutSid).not.toContain('$project_block');
   });
 });

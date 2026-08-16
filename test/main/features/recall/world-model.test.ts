@@ -101,10 +101,11 @@ describe('recall world-model reconciliation', () => {
     };
   }
 
-  it('returns execution_gap when a predicted tool was not realized (deltaA gate)', () => {
+  it('returns execution_gap attribution while keeping the result signal when a predicted tool was not realized', () => {
     const result = reconcileWorldModel(forecast, episode({ a: { toolCalls: [{ name: 'read_file', status: 'ok' }] } }));
     expect(result.deltaA).toBeLessThan(0);
-    expect(result.deltaR).toBe('unknown');
+    // P1-3: no veto — the verification-passed result survives as deltaR 0.
+    expect(result.deltaR).toBe(0);
     expect(result.attribution).toBe('execution_gap');
   });
 
@@ -114,10 +115,11 @@ describe('recall world-model reconciliation', () => {
     expect(result.deltaR).toBe(0);
   });
 
-  it('marks deltaR polluted when tools match but predicted files are missing', () => {
+  it('marks deltaR polluted when tools match but predicted files are missing (honest unclear attribution)', () => {
     const result = reconcileWorldModel(forecast, episode({ r: { status: 'completed', finalText: 'done', producedFiles: [], verification: { passed: true } } }));
     expect(result.deltaA).toBe(0);
     expect(result.deltaR).toBeLessThan(0);
-    expect(result.attribution).toBe('knowledge_gap');
+    // P1-4: deterministic fallback never guesses the cause.
+    expect(result.attribution).toBe('unclear');
   });
 });

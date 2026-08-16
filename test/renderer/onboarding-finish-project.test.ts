@@ -5,6 +5,7 @@ import * as vm from 'node:vm';
 
 function loadOnboardingRenderer() {
   const calls: any[] = [];
+  const setViewCalls: string[] = [];
   const loadProjectsCalls: Array<boolean | undefined> = [];
   const loadConversationProjectCalls: string[] = [];
   const context: any = {
@@ -24,6 +25,9 @@ function loadOnboardingRenderer() {
     encodeURIComponent,
     URLSearchParams,
     createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} }),
+    setView(view: string, cid?: string) {
+      setViewCalls.push(cid ? `${view}:${cid}` : view);
+    },
     localStorage: {
       getItem: () => null,
       setItem() {},
@@ -43,9 +47,7 @@ function loadOnboardingRenderer() {
           calls.push([channel, payload]);
           if (channel === 'spaces.list') return { ok: true, spaces: context._mockSpaces || [] };
           if (channel === 'spaces.create') return { ok: true, space: { space_id: 'space1' } };
-          if (channel === 'projects.create') return { ok: true, project: { project_id: 'project1' } };
-          if (channel === 'projects.bindSpace') return { ok: true };
-          if (channel === 'conversations.batchUpdateProject') return { ok: true, updated: 2 };
+          if (channel === 'conversations.setSpace') return { ok: true, conversation: { conversation_id: payload.cid } };
           if (channel === 'prefs.setOnboarding') return { ok: true };
           throw new Error(`unexpected channel: ${channel}`);
         },
@@ -69,11 +71,11 @@ function loadOnboardingRenderer() {
     'utf8',
   );
   vm.runInContext(source, context);
-  return { context, calls, loadProjectsCalls, loadConversationProjectCalls };
+  return { context, calls, setViewCalls, loadProjectsCalls, loadConversationProjectCalls };
 }
 
-describe('onboarding invisible workspace matching', () => {
-  it('creates a scenario workspace (primary template) and binds imported sessions to its project', async () => {
+describe('onboarding invisible workspace matching (space semantics)', () => {
+  it('creates a scenario workspace (primary template) and binds imported sessions via conversations.setSpace', async () => {
     const { context, calls, loadProjectsCalls, loadConversationProjectCalls } = loadOnboardingRenderer();
     vm.runInContext('_csImportedConversationIds = ["c1", "c2"];', context);
 
@@ -88,15 +90,17 @@ describe('onboarding invisible workspace matching', () => {
       icon: '💼',
     });
 
-    const bindCall = calls.find(([channel]) => channel === 'projects.bindSpace');
-    expect(bindCall[1]).toEqual({ projectId: 'project1', spaceId: 'space1' });
-
-    const batchUpdate = calls.find(([channel]) => channel === 'conversations.batchUpdateProject');
-    expect(batchUpdate[1]).toEqual({ conversationIds: ['c1', 'c2'], projectId: 'project1' });
-
-    expect(context._projectsExpanded.project1).toBe(true);
-    expect(loadProjectsCalls).toEqual([true]);
-    expect(loadConversationProjectCalls).toEqual(['project1']);
+    // 空间化后项目层已删：导入会话经 conversations.setSpace 绑定到空间，不再创建/绑定项目。
+    const setSpaceCalls = calls.filter(([channel]) => channel === 'conversations.setSpace');
+    expect(setSpaceCalls.map(([, payload]) => payload)).toEqual([
+      { cid: 'c1', spaceId: 'space1' },
+      { cid: 'c2', spaceId: 'space1' },
+    ]);
+    expect(calls.some(([channel]) => channel.startsWith('projects.'))).toBe(false);
+    expect(calls.some(([channel]) => channel === 'conversations.batchUpdateProject')).toBe(false);
+    expect(context._projectsExpanded.project1).toBeUndefined();
+    expect(loadProjectsCalls).toEqual([]);
+    expect(loadConversationProjectCalls).toEqual([]);
   });
 
   it('creates a 临时空间 when no scenario is given', async () => {
@@ -127,7 +131,26 @@ describe('onboarding invisible workspace matching', () => {
 
     // 复用「职场」空间，而非旧「产品经理」空间；不应调用 spaces.create。
     expect(calls.some(([c]) => c === 'spaces.create')).toBe(false);
-    const bindCall = calls.find(([channel]) => channel === 'projects.bindSpace');
-    expect(bindCall[1]).toEqual({ projectId: 'project1', spaceId: 'scenario-space' });
+    // 导入会话经 setSpace 绑定到复用的「职场」空间。
+    const setSpaceCall = calls.find(([channel]) => channel === 'conversations.setSpace');
+    expect(setSpaceCall[1]).toEqual({ cid: 'c1', spaceId: 'scenario-space' });
+  });
+
+  it('auto-opens the first imported conversation after finishing onboarding', async () => {
+    const { context, calls, setViewCalls } = loadOnboardingRenderer();
+    vm.runInContext('_csImportedConversationIds = ["c1"];', context);
+
+    await vm.runInContext('_csFinish()', context);
+
+    // 有导入会话 → 引导结束后自动跳转到第一个导入会话的对话页.
+    expect(setViewCalls).toContain('conversation:c1');
+    // 完成状态已持久化.
+    expect(calls.some(([channel]) => channel === 'prefs.setOnboarding')).toBe(true);
+  });
+
+  it('does not auto-open when no session was imported (blank start)', async () => {
+    const { context, setViewCalls } = loadOnboardingRenderer();
+    await vm.runInContext('_csFinish()', context);
+    expect(setViewCalls).not.toContain('conversation:');
   });
 });

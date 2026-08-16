@@ -48,6 +48,8 @@ function loadConversationRenderer() {
       'chat.conv_unpin_title': 'Unpin',
       'chat.conv_rename_title': 'Rename',
       'chat.conv_copy_title': 'Copy',
+      'chat.conv_set_space_title': 'Move to space',
+      'chat.conv_move_space_title': 'Move to another space',
       'chat.conv_del_title': 'Delete',
       'project.menu.more_actions': 'More actions',
       'auto.title': 'Automation',
@@ -514,11 +516,11 @@ describe('conversation sidebar task row actions', () => {
     ];
 
     expect(context._conversationActionItems('c1').map((it: any) => it.label))
-      .toEqual(['Pin', 'Rename', 'Copy', 'Delete']);
+      .toEqual(['Pin', 'Rename', 'Copy', 'Move to space', 'Delete']);
     expect(context._conversationActionItems('c2').map((it: any) => it.label))
-      .toEqual(['Unpin', 'Rename', 'Copy', 'Delete']);
+      .toEqual(['Unpin', 'Rename', 'Copy', 'Move to space', 'Delete']);
     expect(context._conversationActionItems('c1', { hidePin: true }).map((it: any) => it.label))
-      .toEqual(['Rename', 'Copy', 'Delete']);
+      .toEqual(['Rename', 'Copy', 'Move to space', 'Delete']);
   });
 });
 

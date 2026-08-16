@@ -58,15 +58,22 @@ describe('world-model candidate scoring', () => {
     });
   });
 
-  it('rejects unknown rule refs and unavailable tools', () => {
+  it('rejects unavailable tools but tolerates model-supplied causal/risk guesses', () => {
     expect(() => validateWorldModelCandidate({
       ...base,
       expectedTools: ['delete_everything'],
     }, context, 0)).toThrow(/unavailable_tool/);
-    expect(() => validateWorldModelCandidate({
+    // causalLinks/riskRuleRefs are host-internal structures the model cannot
+    // know (live: it emitted string arrays of projection ids). Any malformed
+    // or unknown-ref shape is dropped to empty instead of rejecting the
+    // candidate; host derives causal support from projection knowledge.
+    const withUnknownRefs = validateWorldModelCandidate({
       ...base,
       causalLinks: [{ ...base.causalLinks[0], ruleRefs: ['rule:unknown:1'] }],
-    }, context, 0)).toThrow(/invalid_rule_ref/);
+      riskRuleRefs: ['rule:unknown:1'],
+    }, context, 0);
+    expect(withUnknownRefs.causalLinks).toEqual([]);
+    expect(withUnknownRefs.predictedRisks).toEqual([]);
   });
 
   it('selects highest score then lower risk then higher observability', () => {
@@ -86,27 +93,58 @@ describe('world-model candidate scoring', () => {
     }, context, 0).aHat.expectedTools).toEqual([]);
   });
 
+  it('accepts a candidate with expectedTools omitted entirely (auto-forecast shape)', () => {
+    const candidate: Record<string, unknown> = { ...base };
+    delete candidate.expectedTools;
+    expect(validateWorldModelCandidate(candidate, context, 0).aHat.expectedTools).toEqual([]);
+  });
+
   it.each([
-    ['missing', undefined],
-    ['not an array', 'read_file'],
     ['malformed item', [42]],
   ])('rejects expectedTools when %s', (_label, expectedTools) => {
     const candidate: Record<string, unknown> = { ...base };
-    if (expectedTools === undefined) delete candidate.expectedTools;
-    else candidate.expectedTools = expectedTools;
+    candidate.expectedTools = expectedTools;
 
     expect(() => validateWorldModelCandidate(candidate, context, 0))
       .toThrow('invalid_candidate_expected_tools');
   });
 
-  it('keeps plan, expectedActors, and acceptanceSignals non-empty', () => {
+  it('keeps plan and expectedActors non-empty; acceptanceSignals may be empty', () => {
     expect(() => validateWorldModelCandidate({ ...base, plan: [] }, context, 0))
       .toThrow('invalid_candidate_plan');
     expect(() => validateWorldModelCandidate({ ...base, expectedActors: [] }, context, 0))
       .toThrow('invalid_candidate_expected_actors');
-    expect(() => validateWorldModelCandidate({
+    // acceptanceSignals are optional (auto-forecast candidates may omit them).
+    const noSignals = validateWorldModelCandidate({
       ...base,
       predictedResult: { ...base.predictedResult, acceptanceSignals: [] },
-    }, context, 0)).toThrow('invalid_candidate_acceptance_signals');
+    }, context, 0);
+    expect(noSignals.rHat.acceptanceSignals).toEqual([]);
+  });
+
+  it('accepts flattened string shapes (deepseek flattens nested arrays/objects)', () => {
+    // plan/expectedTools/expectedActors as single strings.
+    const flattened = validateWorldModelCandidate({
+      ...base,
+      plan: 'Inspect callback then run tests',
+      expectedTools: 'read_file',
+      expectedActors: 'commander',
+    }, context, 0);
+    expect(flattened.aHat.plan).toEqual(['Inspect callback then run tests']);
+    expect(flattened.aHat.expectedTools).toEqual(['read_file']);
+    expect(flattened.aHat.expectedActors).toEqual(['commander']);
+
+    // predictedResult as a plain string → { summary }.
+    const stringResult = validateWorldModelCandidate({
+      ...base,
+      predictedResult: 'Callback is fixed and verified.',
+    }, context, 0);
+    expect(stringResult.rHat.summary).toBe('Callback is fixed and verified.');
+    expect(stringResult.rHat.acceptanceSignals).toEqual([]);
+
+    // missing id → stable generated id, never empty.
+    const noId: Record<string, unknown> = { ...base };
+    delete noId.id;
+    expect(validateWorldModelCandidate(noId, context, 2).id).toBe('candidate-3');
   });
 });

@@ -100,10 +100,14 @@ if [ "$(uname -s)" = "Darwin" ]; then
       ARGS+=("--orkas-kstar-engine-cwd=$ORKAS_KSTAR_ENGINE_CWD")
       ARGS+=("--orkas-kstar-engine-ontology-dir=$ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR")
     fi
-    # macOS `/bin/bash` 是 3.2：空数组在 `set -u` 下用 `"${arr[@]}"` 会报
-    # "unbound variable"。下面 `+` 展开是 3.2 安全写法——OPEN_ENV_ARGS 为空时
-    # 展开为空，非空时按原样带引号展开成独立参数。
-    exec open -W -n "${OPEN_ENV_ARGS[@]+"${OPEN_ENV_ARGS[@]}"}" "$APP_BUNDLE" --args "${ARGS[@]}"
+    # macOS ships bash 3.2, where expanding an EMPTY array as
+    # "${OPEN_ENV_ARGS[@]}" under `set -u` fails with "unbound variable".
+    # Guard the empty case so the launcher works without hub env vars.
+    if (( ${#OPEN_ENV_ARGS[@]} > 0 )); then
+      exec open -W -n "${OPEN_ENV_ARGS[@]}" "$APP_BUNDLE" --args "${ARGS[@]}"
+    else
+      exec open -W -n "$APP_BUNDLE" --args "${ARGS[@]}"
+    fi
   fi
 fi
 

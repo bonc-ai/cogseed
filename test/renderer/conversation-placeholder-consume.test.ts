@@ -346,6 +346,26 @@ describe('conversation interruption bubble collapse', () => {
     ]).map((row) => row.id)).toEqual(['status', 'user-2', 'answer']);
   });
 
+  it('never renders host-internal KStar review replies as chat bubbles', () => {
+    const { collapse } = loadInterruptionHelpers();
+    const review = {
+      id: 'review-1',
+      from: 'commander',
+      system_kind: 'kstar_review',
+      text: '<kstar-review>{"outcome":"met_expected"}</kstar-review>',
+      turn_id: 'turn-review',
+    };
+    const reply = { id: 'reply', from: 'commander', turn_id: 'turn-2', text: 'Done.' };
+    // The review row is filtered out of the render list while the rest of
+    // the stream (user + normal replies) stays intact.
+    expect(collapse([review, reply]).map((row) => row.id)).toEqual(['reply']);
+    expect(collapse([
+      { id: 'user-1', from: 'user', text: 'do it' },
+      review,
+      reply,
+    ]).map((row) => row.id)).toEqual(['user-1', 'reply']);
+  });
+
   it('keeps exactly one VideoStudio bubble through stale polling, resumed progress, and terminal persistence', () => {
     const { placeholders, consumeHistory, key } = loadPlaceholderHelpers();
     const { removeBubbles } = loadInterruptionHelpers();

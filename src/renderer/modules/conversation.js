@@ -7,8 +7,36 @@ let _conversationBucketDateRefreshTimer = null;
 let _conversationBucketDateRefreshBound = false;
 const _conversationMergeSelection = new Set();
 let _conversationMergeSelectionActive = false;
+let _conversationMergePickerOpen = false;
 const _conversationResultCards = new Map();
 let _latestCollaborationSnapshot = null;
+// ── 侧栏三段结构（置顶 → 空间 → 最近，均支持折叠）─────────────────────────
+let _sidebarSpaces = [];                 // SpaceWithMeta[]（spaces.list 缓存）
+let _sidebarSpacesLoaded = false;        // 本次会话是否已拉取过空间列表
+let _sidebarSpacesLoading = null;        // in-flight promise（防重入）
+const _SIDEBAR_COLLAPSE_KEY = 'chat.sidebar.collapse.v1';
+// 分区折叠：{ pinned, spaces, recent } + 空间组折叠 spaceGroups[sid]。默认全展开。
+let _sidebarCollapse = _loadSidebarCollapse();
+function _loadSidebarCollapse() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(_SIDEBAR_COLLAPSE_KEY) || '');
+    if (raw && typeof raw === 'object') {
+      return {
+        pinned: raw.pinned === true,
+        spaces: raw.spaces === true,
+        recent: raw.recent === true,
+        spaceGroups: (raw.spaceGroups && typeof raw.spaceGroups === 'object') ? raw.spaceGroups : {},
+      };
+    }
+  } catch (_) {}
+  return { pinned: false, spaces: false, recent: false, spaceGroups: {} };
+}
+function _saveSidebarCollapse() {
+  try { localStorage.setItem(_SIDEBAR_COLLAPSE_KEY, JSON.stringify(_sidebarCollapse)); } catch (_) {}
+}
+// 「最近任务」分区内联新建任务输入条（＋ 展开，回车即建）
+let _sidebarNewTaskOpen = false;
+let _sidebarNewTaskValue = '';
 
 function _convTrackClick(action, data) {
   try { if (window.Monitor) (() => {})(action, data || {}); } catch (_) {}
@@ -585,21 +613,18 @@ function _chatRichRenderValue(editor, value) {
 
 function _chatRichInputTarget(inputId) {
   if (inputId === 'new-chat-input') return 'new-chat';
-  if (inputId === 'project-chat-input') return 'project';
   if (inputId === 'auto-task-input') return 'auto';
   return 'conversation';
 }
 
 function _chatRichAutoGrowMax(inputId) {
   if (inputId === 'new-chat-input') return 260;
-  if (inputId === 'project-chat-input') return 180;
   if (inputId === 'auto-task-input') return 220;
   return 200;
 }
 
 function _chatRichRecipientChipId(inputId) {
   if (inputId === 'new-chat-input') return 'new-chat-recipient-chip';
-  if (inputId === 'project-chat-input') return 'project-chat-recipient-chip';
   if (inputId === 'auto-task-input') return 'auto-recipient-chip';
   if (inputId === 'chat-input') return 'chat-recipient-chip';
   return '';
@@ -852,7 +877,6 @@ function _chatRichCreateApi(textarea, editor) {
     if (e.altKey) return;
     e.preventDefault();
     if (textarea.id === 'new-chat-input' && typeof handleNewChatSubmit === 'function') handleNewChatSubmit();
-    else if (textarea.id === 'project-chat-input' && typeof _submitProjectChat === 'function') _submitProjectChat();
     else if (typeof handleChatSubmit === 'function') handleChatSubmit();
   });
 
@@ -944,8 +968,6 @@ function _initAllMentionMirrors() {
   if (chatInput) _initMentionMirror(chatInput);
   const newChatInput = document.getElementById('new-chat-input');
   if (newChatInput) _initMentionMirror(newChatInput);
-  const projectChatInput = document.getElementById('project-chat-input');
-  if (projectChatInput) _initMentionMirror(projectChatInput);
   const autoTaskInput = document.getElementById('auto-task-input');
   if (autoTaskInput) _initMentionMirror(autoTaskInput);
 }
@@ -998,48 +1020,11 @@ if (typeof window !== 'undefined') {
     document.addEventListener('DOMContentLoaded', () => {
       _initAllMentionMirrors();
       _initChatInputReserveObserver();
-      _bindChatContinueButton();
     }, { once: true });
   } else {
     _initAllMentionMirrors();
     _initChatInputReserveObserver();
-    _bindChatContinueButton();
   }
-}
-
-// 9.1 统一框架 · 底部「继续」：主会话的一次性绑定。主会话控制器
-// （_makeConvChatController）的 features.bindInput=false，输入接线由主会话
-// 自己接管，所以「继续」不能在通用控制器里绑，必须单独接一次。
-// 按钮按当前会话状态决定动作（智能继续）：
-//   - 最后一条消息失败（failed/failure_kind）→ 重试该消息（复用既有
-//     _retryFailedAssistantMessage 路径，带 retry_message_id）；
-//   - 其余（被中断 / 有计划未完成 / 普通空闲）→ 发送「请继续」续跑提示，
-//     走 sendInCurrentConversation，与手输同一条发送管线。
-function _chatContinueButtonState() {
-  const container = document.getElementById('chat-history');
-  const msgs = container ? Array.from(container.querySelectorAll('.chat-message')) : [];
-  const last = msgs[msgs.length - 1];
-  const lastFailed = !!last
-    && !last.classList.contains('user')
-    && (last.dataset.failed === '1' || !!last.dataset.failureKind || !!last.dataset.failureCode);
-  return { kind: lastFailed ? 'retry' : 'continue', failedMsgEl: lastFailed ? last : null };
-}
-
-function _bindChatContinueButton() {
-  const btn = document.getElementById('chat-continue-btn');
-  if (!btn || btn.dataset.bound === '1') return;
-  btn.dataset.bound = '1';
-  btn.addEventListener('click', async () => {
-    if (!currentCid || isConvPending(currentCid)) return;
-    if (typeof ensureModelConfigured === 'function' && !ensureModelConfigured()) return;
-    const state = _chatContinueButtonState();
-    if (state.kind === 'retry' && state.failedMsgEl) {
-      try { await _retryFailedAssistantMessage(state.failedMsgEl, null); } catch (_) {}
-      return;
-    }
-    const content = t('chat.continue_prompt');
-    try { await sendInCurrentConversation(content); } catch (_) { /* 与普通发送一致的容错 */ }
-  });
 }
 
 // ─── Recipient chip — per-cid for conversations, ephemeral for new-chat ──
@@ -1117,23 +1102,7 @@ function _onRecipientChanged(_target) { /* reserved for future hooks */ }
  *  project, or project rename/binding edit while a chat is open), the
  *  current recipient may no longer be a valid agent for the new scope.
  *  Reset to commander silently — the user will see the chip flip on next
- *  render. Called from `projects.js` post project-pick. No-op for `commander`
- *  recipients and for orphan contexts (pid empty). */
-async function validateRecipientAgainstProject(target, pid) {
-  const cur = _activeRecipient(target);
-  if (!cur || cur.kind !== 'agent') return;
-  if (!pid) return;
-  try {
-    const res = await window.cogseed.invoke('projects.bindings.list', { projectId: pid });
-    if (!res || !res.ok) return;
-    const bound = new Set((res.bindings && res.bindings.agents) || []);
-    if (!bound.has(cur.id)) {
-      setChatRecipient(target, { kind: 'commander' });
-      _renderRecipientChip(target);
-    }
-  } catch (_) { /* leave as-is on failure */ }
-}
-
+ *  render. No-op for `commander` recipients and for orphan contexts (pid empty). */
 function setChatRecipient(target, next, _opts = {}) {
   const r = _normRecipient(next);
   if (!r) return;
@@ -1179,11 +1148,9 @@ function _transferNewChatRecipientTo(cid) {
 }
 
 function _renderRecipientChip(target) {
-  const targets = target ? [target] : ['conversation', 'new-chat', 'project'];
+  const targets = target ? [target] : ['conversation', 'new-chat'];
   for (const tg of targets) {
-    const id = tg === 'new-chat'
-      ? 'new-chat-recipient-name'
-      : (tg === 'project' ? 'project-chat-recipient-name' : 'chat-recipient-name');
+    const id = tg === 'new-chat' ? 'new-chat-recipient-name' : 'chat-recipient-name';
     const nameEl = document.getElementById(id);
     if (!nameEl) continue;
     const r = _activeRecipient(tg);
@@ -1590,6 +1557,12 @@ function _renderSpaceDraftButtonHtml(draft) {
     const tplName = _spaceAssetNames.templates[draft.primary_template_id] || draft.primary_template_id;
     rows.push({ label: t('new_chat.space_draft_template', '模板'), text: tplName });
   }
+  // 副模板（新管线 1 主 + 2 副）：构建师草稿可带 secondary_template_ids
+  const secondaryTplNames = (Array.isArray(draft.secondary_template_ids) ? draft.secondary_template_ids : [])
+    .map((id) => _spaceAssetNames.templates[id] || id);
+  if (secondaryTplNames.length) {
+    rows.push({ label: t('new_chat.space_draft_secondary', '副模板'), text: secondaryTplNames.join('、') });
+  }
   if (draft.main_skill_ref && draft.main_skill_ref.asset_id) {
     const skillName = _spaceAssetNames.skills[draft.main_skill_ref.asset_id] || draft.main_skill_ref.asset_id;
     const ver = fmtVersion(draft.main_skill_ref.version);
@@ -1616,6 +1589,44 @@ function _renderSpaceDraftButtonHtml(draft) {
     ${outcome ? `<div class="space-draft-goal">${escapeHtml(outcome)}</div>` : ''}
     ${rowsHtml}
     <button type="button" class="btn btn-sm btn-primary space-draft-create-btn" data-space-draft-create>${escapeHtml(t('new_chat.space_draft_create', '创建空间'))}</button>
+  </div>`;
+}
+
+/** 解析 welcome_carry（导入会话接续欢迎的「准备携带」元数据，JSON 字符串）。
+ *  返回 items 数组；解析失败返回空数组（降级为不渲染携带条）。 */
+function _parseWelcomeCarry(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+/** 渲染导入会话接续欢迎的「准备携带」条（查看依据 → 打开右栏展示完整来源；
+ *  带着这些继续 → 按 Action Plan 真实执行）。resumeJson 为 commander 回复携带的
+ *  welcome_resume（{restatement, carry, boundary, plan}），挂在 DOM 供事件委托用。 */
+function _renderWelcomeCarryHtml(carry, resumeJson) {
+  if (!Array.isArray(carry) || !carry.length) return '';
+  const summary = carry.map((c) => `${escapeHtml(c.label)} ${Number(c.count) || 0}项`).join(' · ');
+  const resumeAttr = (typeof resumeJson === 'string' && resumeJson.trim())
+    ? ` data-welcome-resume="${escapeHtml(resumeJson)}"`
+    : '';
+  return `<div class="welcome-carry"${resumeAttr}>
+    <div class="welcome-carry-head">
+      <b>${escapeHtml(t('chat.welcome_carry_title', '准备携带'))}</b>
+      <span>${summary}</span>
+      <button type="button" class="inline-link welcome-carry-toggle" data-welcome-carry-toggle>
+        ${escapeHtml(t('chat.welcome_carry_view_evidence', '查看依据'))}
+      </button>
+    </div>
+    <div class="welcome-carry-scope">${escapeHtml(t('chat.welcome_carry_scope', '只对目标任务生效'))}</div>
+    <div class="welcome-carry-actions">
+      <button type="button" class="btn btn-primary welcome-carry-continue" data-welcome-continue>
+        ${escapeHtml(t('chat.welcome_continue', '带着这些继续'))}
+      </button>
+    </div>
   </div>`;
 }
 
@@ -1653,6 +1664,7 @@ async function _createSpaceFromDraft(draft) {
   if (typeof draft.space_type === 'string' && draft.space_type) payload.space_type = draft.space_type;
   if (typeof draft.sustained_outcome === 'string' && draft.sustained_outcome.trim()) payload.sustained_outcome = draft.sustained_outcome.trim();
   if (typeof draft.primary_template_id === 'string' && draft.primary_template_id) payload.primary_template_id = draft.primary_template_id;
+  if (Array.isArray(draft.secondary_template_ids)) payload.secondary_template_ids = draft.secondary_template_ids;
   if (draft.main_skill_ref && typeof draft.main_skill_ref.asset_id === 'string' && typeof draft.main_skill_ref.version === 'string') {
     payload.main_skill_ref = { asset_id: draft.main_skill_ref.asset_id, version: draft.main_skill_ref.version };
   }
@@ -1661,13 +1673,95 @@ async function _createSpaceFromDraft(draft) {
   try {
     const res = await (window.cogseed || window.orkas).invoke('spaces.createFromDraft', { draft: payload });
     if (!res || res.error || !res.space) throw new Error((res && res.error) || 'create failed');
-    return res.space;
+    // corrections：后端自动纠正/忽略的非法引用说明（LLM 幻觉 id → 按名称解析或丢弃）
+    return { space: res.space, corrections: Array.isArray(res.corrections) ? res.corrections : [] };
   } catch (e) {
     const reason = (e && e.message) || String(e || '');
     if (typeof uiAlert === 'function') {
       uiAlert(t('new_chat.space_draft_failed', { reason }));
     }
     return null;
+  }
+}
+
+/** 事件委托：导入会话接续欢迎「带着这些继续」→ 按 Action Plan 真实执行。
+ *  按钮挂在 commander 欢迎回复的 welcome-carry 块上，plan 来自 welcome_resume。 */
+document.addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest('[data-welcome-continue]') : null;
+  if (!btn) return;
+  const block = btn.closest('.welcome-carry');
+  const msgEl = btn.closest('.chat-message');
+  const cid = msgEl && msgEl.dataset ? msgEl.dataset.cid : null;
+  if (!cid) return;
+  btn.disabled = true;
+  void _submitWelcomeContinue(cid, block, btn);
+});
+
+/** 事件委托：导入会话接续欢迎「查看依据」→ 打开右栏展示完整依据。 */
+document.addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest('[data-welcome-carry-toggle]') : null;
+  if (!btn) return;
+  const block = btn.closest('.welcome-carry');
+  if (!block) return;
+  const msgEl = btn.closest('.chat-message');
+  const cid = msgEl && msgEl.dataset ? msgEl.dataset.cid : null;
+  let resume = null;
+  try { resume = block.dataset.welcomeResume ? JSON.parse(block.dataset.welcomeResume) : null; } catch (_) { resume = null; }
+  if (!resume) return;
+  if (typeof window.ConversationInfo?.showResumeEvidence === 'function') {
+    window.ConversationInfo.showResumeEvidence(resume, cid || undefined);
+  }
+});
+
+/** 「带着这些继续」：按 welcome_resume 的 Action Plan 构造真实执行消息发给
+ *  CLI / commander（不走模板交接回复），随后标记 welcome 已处理。失败时恢复
+ *  按钮，避免"点了没反应"。 */
+async function _submitWelcomeContinue(cid, block, btn) {
+  let plan = [];
+  let summary = '';
+  try {
+    const raw = block && block.dataset.welcomeResume;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      plan = Array.isArray(parsed && parsed.plan) ? parsed.plan : [];
+      summary = String((parsed && parsed.summary) || '');
+    }
+  } catch (_) { /* keep empty plan */ }
+
+  // 任务较长判定：摘要字符数超过阈值视为长任务（按任务长度判断）。
+  const taskIsLong = summary.trim().length > 300;
+
+  // 通知交互引导（onboarding 后的真实页面 tour）步骤 1 已完成；长任务才继续
+  // 展示「认知资产」引导步骤。
+  if (typeof window !== 'undefined' && window.interactiveTour
+      && typeof window.interactiveTour.markWelcomeContinued === 'function') {
+    try { window.interactiveTour.markWelcomeContinued({ taskIsLong }); } catch (_) {}
+  }
+
+  const message = plan.length
+    ? `继续。先按这个 Action Plan 执行，遇到冲突或需要扩大权限时再问我：\n${plan.map((item, i) => `${i + 1}. ${item}`).join('\n')}`
+    : t('chat.welcome_guide_sentence', '继续这项工作。先告诉我现在做到哪里、哪些约束不能丢，以及下一步准备怎么做。');
+  try {
+    if (typeof sendInConversation === 'function') {
+      const res = await sendInConversation(cid, message, undefined, {});
+      // sendInConversation 失败不抛错（返回 result:'failure'）；此时恢复按钮
+      // 并提示，避免"点了没反应"。
+      if (res && (res.errored === true || res.result === 'failure')) {
+        if (btn) btn.disabled = false;
+        if (typeof uiToast === 'function') {
+          uiToast(t('chat.welcome_continue_failed', '发送失败，请检查模型配置或本机 Agent 后重试'), { variant: 'warning', timeoutMs: 5000 });
+        }
+        return;
+      }
+    }
+    if (window.cogseed?.invoke) {
+      try {
+        await window.cogseed.invoke('chats.markWelcomeSeen', { conversationId: cid });
+      } catch (_) {}
+    }
+  } catch (err) {
+    _convLog.warn('welcome continue failed', { cid, error: err });
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1681,9 +1775,11 @@ document.addEventListener('click', async (e) => {
   let draft = null;
   try { draft = card.dataset.draft ? JSON.parse(card.dataset.draft) : null; } catch (_) { draft = null; }
   if (!draft) { btn.disabled = false; return; }
-  const space = await _createSpaceFromDraft(draft);
+  const created = await _createSpaceFromDraft(draft);
   btn.disabled = false;
-  if (!space) return;
+  if (!created || !created.space) return;
+  const space = created.space;
+  const corrections = created.corrections || [];
   // 空间已建成：标记当前 space_builder 会话完成，下次点「空间模式」不再复用
   // 这个会话，而是新建引导会话（僵尸会话陷阱：旧会话无产出也会一直吸附点击）。
   if (typeof currentCid === 'string' && currentCid) {
@@ -1699,10 +1795,15 @@ document.addEventListener('click', async (e) => {
       }
     } catch (_) { /* 标记失败不阻断——空间已创建成功 */ }
   }
+  const createdText = t('new_chat.space_draft_created', { name: space.name || space.space_id });
+  // 自动纠正提示（LLM 幻觉 id 已被后端按名称解析/忽略）：随成功 toast 展示，用户知道被修正了什么
+  const correctionsText = corrections.length
+    ? `（${corrections.join('；')}）`
+    : '';
   if (typeof uiToast === 'function') {
-    uiToast(t('new_chat.space_draft_created', { name: space.name || space.space_id }), { variant: 'success' });
+    uiToast(correctionsText ? `${createdText}${correctionsText}` : createdText, { variant: 'success', timeoutMs: corrections.length ? 6000 : 3000 });
   }
-  card.innerHTML = `<div class="space-draft-done">${escapeHtml(t('new_chat.space_draft_created', { name: space.name || space.space_id }))} ${escapeHtml(t('new_chat.space_draft_go'))}</div>`;
+  card.innerHTML = `<div class="space-draft-done">${escapeHtml(createdText)} ${escapeHtml(t('new_chat.space_draft_go'))}</div>`;
 });
 
 async function _startSpaceBuilderConversation() {
@@ -1767,28 +1868,14 @@ function onEnterConversationView() {
   // Workspace chip scope follows the active conv's project (resolved on
   // main side via cid → conv.project_id). Refresh whenever a conv mounts.
   if (typeof refreshWorkspaceChip === 'function') refreshWorkspaceChip();
-  // Recipient validation: bindings may have changed since this conv was
-  // last open (user removed the agent from the project). If the sticky
-  // recipient is no longer in the project's agents, drop back to commander
-  // so the chip matches what the dispatch path will actually route to.
-  if (currentCid && Array.isArray(conversations)) {
-    const conv = conversations.find((c) => c && c.conversation_id === currentCid);
-    const pid = (conv && conv.project_id) || '';
-    if (pid && typeof validateRecipientAgainstProject === 'function') {
-      validateRecipientAgainstProject('conversation', pid);
-    }
+  // 任务引用条（@ 产物/资产）随会话切换刷新（空间详情「＋引用」写入的也在此显示）
+  if (typeof window !== 'undefined' && typeof window.renderChatTaskRefChips === 'function') {
+    window.renderChatTaskRefChips();
   }
-  // Empty-bindings banner: when this conv belongs to a project and the
-  // project has zero agents bound, surface a one-line notice + "Open
-  // project page" affordance. Cheap IPC; only fires for in-project
-  // conversations.
-  if (typeof refreshConvProjectEmptyBanner === 'function') refreshConvProjectEmptyBanner(currentCid);
-  // One-shot auto-expand: if the conv we just entered belongs to a
-  // project, surface the project's row in the sidebar. Skipped when the
-  // project is already expanded; manual user collapse on subsequent
-  // renders is preserved (the auto-expand does not run inside
-  // renderProjectsSection — see comments in projects.js).
-  if (typeof autoExpandActiveConvProject === 'function') autoExpandActiveConvProject();
+  // composer 占位符随会话空间状态更新（空间会话提示产物/资产可选）
+  if (typeof window !== 'undefined' && typeof window.updateAgentPickerPlaceholders === 'function') {
+    window.updateAgentPickerPlaceholders();
+  }
   // Kick a one-shot evaluation so that a cid with a live interactive agent
   // picks it up as the composer target even if no state_changed event fires
   // before the user types. View-enter never reverts to commander (see
@@ -2936,6 +3023,12 @@ function _groupMessageSystemKind(gm) {
   if (modelText.startsWith('The previous assistant run was interrupted by an application exit or crash')) {
     return 'reply_interrupted';
   }
+  // Compatibility for review replies persisted before the system_kind tag:
+  // a commander message whose body is exactly a <kstar-review> block is a
+  // host-internal self-evolution signal and must not render as a bubble.
+  if (String(gm?.text || '').trim().startsWith('<kstar-review>')) {
+    return 'kstar_review';
+  }
   return '';
 }
 
@@ -2950,6 +3043,10 @@ function _collapseSupersededInterruptionRecords(records) {
   const pendingByActor = new Map();
   for (const gm of records) {
     if (!gm) continue;
+    // Host-internal KStar review replies are self-evolution signals, not
+    // user-facing content. Keep them in the persisted stream (closure and
+    // agent visibility still read them) but never render them as bubbles.
+    if (_groupMessageSystemKind(gm) === 'kstar_review') continue;
     const actor = String(gm.from || gm._from || '');
     const isUser = actor === 'user' || gm.role === 'user';
     if (isUser) {
@@ -2993,10 +3090,12 @@ function _groupMsgToLegacy(gm) {
     time: gm.ts || new Date().toISOString(),
     _from: fromId,
     _msg_id: gm.id,
+    ...(gm.model_text ? { model_text: gm.model_text } : {}),
     ...(label ? { _from_label: label } : {}),
     ...(Array.isArray(gm.attachments) && gm.attachments.length ? { attachments: gm.attachments } : {}),
     ...(Array.isArray(gm.produced) && gm.produced.length ? { produced: gm.produced } : {}),
     ...(Array.isArray(gm.references) && gm.references.length ? { references: gm.references } : {}),
+    ...(Array.isArray(gm.space_asset_refs) && gm.space_asset_refs.length ? { space_asset_refs: gm.space_asset_refs } : {}),
     ...(gm.form ? { form: gm.form } : {}),
     ...(_normalizeCreatedAgents(gm) ? { created_agents: _normalizeCreatedAgents(gm) } : {}),
     ...(_normalizeCreatedSkills(gm) ? { created_skills: _normalizeCreatedSkills(gm) } : {}),
@@ -3007,6 +3106,9 @@ function _groupMsgToLegacy(gm) {
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
     ...(gm.kstar_review_card ? { kstar_review_card: gm.kstar_review_card } : {}),
     ...(gm.recall_projection_card ? { recall_projection_card: gm.recall_projection_card } : {}),
+    ...(typeof gm.welcome_carry === 'string' && gm.welcome_carry ? { welcome_carry: gm.welcome_carry } : {}),
+    ...(typeof gm.welcome_resume === 'string' && gm.welcome_resume ? { welcome_resume: gm.welcome_resume } : {}),
+    ...(gm.imported_seed === true ? { imported_seed: true } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
@@ -3103,6 +3205,9 @@ function _findRenderedMessageForHistoryRecord(container, gm) {
 // real attachment-pool filename; `displayName` is the stable composer label.
 
 const _chatAttachments = new Map();   // cid → Array<{name, displayName?, kind, bytes, dataUrl?, sha256?, reused?}>
+// cid → 自定义 chips 宿主（外部模块如 workspace 复用附件管线时指定自己的容器；
+// 未设置则回落 _chatAttachHostIdFor 的默认宿主）。
+const _chatAttachHostOverride = new Map();
 
 // Draft cid used by the commander (new-chat) tab — files land in a local-only
 // draft pool until the user hits send, at which point the backend adopts that
@@ -3294,7 +3399,7 @@ function _chatAttachHostIdFor(cid) {
 
 function _chatAttachRenderChips(cid) {
   const targetCid = cid || currentCid;
-  const hostId = _chatAttachHostIdFor(targetCid);
+  const hostId = _chatAttachHostOverride.get(targetCid) || _chatAttachHostIdFor(targetCid);
   if (!hostId) return;
   const host = document.getElementById(hostId);
   if (!host) return;
@@ -3664,6 +3769,34 @@ window.attachKbFileToDraft = async function attachKbFileToDraft(channel, payload
   _addReadyDraftAttachment(draftCid, data.info);
 };
 
+// ── 外部模块复用附件管线的小门（workspace 空间任务 composer 的「＋」等）。
+//   用自定义宿主渲染 chips：先 render(cid, hostId) 注册宿主，之后上传/移除/清空
+//   都渲染进该宿主；releaseHost 解除注册。草稿 cid 由调用方决定（如 spacetask-<sid>），
+//   开新任务时后端 conversations.attachments.adopt 会把草稿附件搬进真实会话。 ──
+window.chatAttach = {
+  /** 打开系统文件选择框上传到 cid 并渲染 chips 到 hostId。 */
+  pickAndUpload: (cid, hostId) => {
+    _chatAttachSetHost(cid, hostId);
+    return _chatAttachPickAndUpload(cid, 'picker');
+  },
+  /** 注册宿主并渲染该 cid 的 chips（重渲染后需重新调用）。 */
+  render: (cid, hostId) => {
+    _chatAttachSetHost(cid, hostId);
+    _chatAttachRenderChips(cid);
+  },
+  list: (cid) => _chatAttachList(cid),
+  remove: (cid, idx) => _chatAttachRemove(cid, idx),
+  /** 清空本地列表；opts.deleteFiles=true 时同时删文件（adopt 后只需清列表）。 */
+  clear: (cid, opts) => _chatAttachClear(cid, opts || {}),
+  releaseHost: (cid) => _chatAttachSetHost(cid, null),
+};
+
+function _chatAttachSetHost(cid, hostId) {
+  if (!cid) return;
+  if (hostId) _chatAttachHostOverride.set(cid, hostId);
+  else _chatAttachHostOverride.delete(cid);
+}
+
 async function _chatAttachRefreshFromServer(cid) {
   const startedAt = performance.now();
   try {
@@ -3916,15 +4049,7 @@ function _mountMessageProducedFooter(msgDiv, absPaths, opts = {}) {
   });
   const node = wrap.firstElementChild;
   if (!node) return;
-  // 9.1 统一框架 · 中间区「Receipt 结果块」：产物回执统一收进「回执」块
-  // （数量角标 = 产物数），默认展开——产物是结果的一部分，不折叠藏起来。
-  const body = _mountCompactResultBlock(bubble, {
-    label: t('chat.result_block.receipt'),
-    icon: 'file-text',
-    count: absPaths.length,
-    open: true,
-  });
-  (body || bubble).appendChild(node);
+  bubble.appendChild(node);
   msgDiv.dataset.produced = JSON.stringify(absPaths);
   _hydrateMessageProducedChips(msgDiv);
 }
@@ -4023,6 +4148,100 @@ function _renderTeachingReceiptsHtml(receipts) {
 
 
 
+
+// ── Recall 引用反馈（「提供给本次回答的记忆」+ 有帮助/需改进）───────────────
+// 合并时曾被远端 conversation.js 覆盖丢失，已按原实现恢复。
+
+function _recallCitationTypeLabel(type) {
+  const normalized = String(type || '').trim().toLowerCase();
+  const key = normalized === 'personal' ? 'chat.recall.type_personal'
+    : normalized === 'rule' ? 'chat.recall.type_rule'
+    : normalized === 'template' ? 'chat.recall.type_template'
+    : normalized === 'skill_method' ? 'chat.recall.type_skill_method'
+    : '';
+  if (!key) return String(type || '').trim();
+  const fallback = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  const value = typeof t === 'function' ? t(key) : key;
+  return value && value !== key ? value : fallback;
+}
+
+function _recallCitationScopeLabel(scope) {
+  const normalized = String(scope || '').trim().toLowerCase();
+  const key = normalized === 'global'
+    ? 'chat.recall.scope_global'
+    : normalized === 'project'
+      ? 'chat.recall.scope_project'
+      : normalized === 'agent'
+        ? 'chat.recall.scope_agent'
+        : normalized === 'personal'
+          ? 'chat.recall.scope_personal'
+          : '';
+  if (!key) return String(scope || '').trim();
+  const fallback = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  const value = typeof t === 'function' ? t(key) : key;
+  return value && value !== key ? value : fallback;
+}
+
+function _renderRecallCitationsHtml(citations) {
+  if (!Array.isArray(citations) || !citations.length) return '';
+  const items = citations
+    .filter((citation) => citation && citation.asset_id && citation.title)
+    .slice(0, 12);
+  if (!items.length) return '';
+  const titleKey = 'chat.recall.citations_title';
+  const titleValue = typeof t === 'function' ? t(titleKey) : titleKey;
+  const title = titleValue && titleValue !== titleKey ? titleValue : 'Memories provided to this answer';
+  const helpfulKey = 'chat.recall.feedback_helpful';
+  const helpfulValue = typeof t === 'function' ? t(helpfulKey) : helpfulKey;
+  const helpful = helpfulValue && helpfulValue !== helpfulKey ? helpfulValue : 'Helpful';
+  const improveKey = 'chat.recall.feedback_improve';
+  const improveValue = typeof t === 'function' ? t(improveKey) : improveKey;
+  const improve = improveValue && improveValue !== improveKey ? improveValue : 'Needs improvement';
+  return `<section class="chat-recall-citations"><div class="chat-recall-citations-head"><span>${_uiIconHtml('brain-circuit', 'ui-icon')}<strong>${escapeHtml(title)}</strong></span><span class="chat-recall-feedback-status" data-recall-feedback-status aria-live="polite"></span></div><div class="chat-recall-citation-list">${items.map((citation) => {
+    const type = _recallCitationTypeLabel(citation.type);
+    const scope = _recallCitationScopeLabel(citation.scope);
+    const meta = [type, scope].filter(Boolean).join(' · ');
+    return `<div class="chat-recall-citation" data-recall-asset-id="${escapeHtml(citation.asset_id)}"><strong>${escapeHtml(citation.title)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</div>`;
+  }).join('')}</div><div class="chat-recall-feedback-actions"><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="positive" title="${escapeHtml(helpful)}">${_uiIconHtml('thumbs-up', 'ui-icon')}<span>${escapeHtml(helpful)}</span></button><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="negative" title="${escapeHtml(improve)}">${_uiIconHtml('thumbs-down', 'ui-icon')}<span>${escapeHtml(improve)}</span></button></div></section>`;
+}
+
+function _hydrateRecallCitations(messageEl, cid, messageId) {
+  const host = messageEl?.querySelector('.chat-recall-citations');
+  if (!host) return;
+  const resolvedMessageId = String(messageId || messageEl?.dataset?.msgId || '');
+  const buttons = Array.from(host.querySelectorAll('[data-recall-feedback]'));
+  for (const button of buttons) {
+    if (button.dataset.bound === '1') continue;
+    button.dataset.bound = '1';
+    button.addEventListener('click', async () => {
+      const feedback = button.dataset.recallFeedback;
+      if (!cid || !resolvedMessageId || (feedback !== 'positive' && feedback !== 'negative')) return;
+      if (host.dataset.feedbackBusy === '1' || host.dataset.feedbackSent === '1') return;
+      host.dataset.feedbackBusy = '1';
+      buttons.forEach((item) => { item.disabled = true; });
+      try {
+        const result = await window.cogseed.invoke('recall.usage.feedback', {
+          cid,
+          messageId: resolvedMessageId,
+          feedback,
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Recall feedback failed');
+        host.dataset.feedbackSent = '1';
+        host.dataset.feedback = feedback;
+        host.classList.add('is-feedback-sent');
+        const status = host.querySelector('[data-recall-feedback-status]');
+        const key = 'chat.recall.feedback_thanks';
+        const value = typeof t === 'function' ? t(key) : key;
+        if (status) status.textContent = value && value !== key ? value : 'Thanks for the feedback';
+      } catch (error) {
+        buttons.forEach((item) => { item.disabled = false; });
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        host.dataset.feedbackBusy = '0';
+      }
+    });
+  }
+}
 
 function _hydrateTeachingReceipts(messageEl) {
   messageEl?.querySelectorAll('[data-chat-teaching-revoke]').forEach((button) => {
@@ -4556,7 +4775,7 @@ async function loadConversations(options = {}) {
           for (const bucket of ['last30', 'older']) {
             _oldConversationPages[bucket] = {
               initialized: true,
-              total: (conversations || []).filter((c) => !c.project_id
+              total: (conversations || []).filter((c) => !(c.project_id && c.space_id)
                 && timeBucket(_conversationActivityIso(c), new Date()) === bucket).length,
               nextOffset: null,
               loading: false,
@@ -4622,7 +4841,7 @@ async function _loadOldUnprojectedConversations(bucket) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'old conversation list failed');
     if (page.initialized) _appendConversationSlice(data.conversations);
-    else _replaceConversationSlice(data.conversations, (c) => c && !c.project_id && !c.pinned_at
+    else _replaceConversationSlice(data.conversations, (c) => c && !c.space_id && !c.pinned_at
       && timeBucket(_conversationActivityIso(c), new Date()) === bucket);
     const next = data.next_offset === null ? null : Number(data.next_offset);
     page.initialized = true;
@@ -4850,10 +5069,6 @@ function _renderConversationSidebarItem(c, opts = {}) {
     isFromAuto ? 'is-from-auto' : '',
     hidePin ? 'no-pin' : '',
   ].filter(Boolean).join(' ');
-  const membersHtml = _renderConvAgentStackHtml(c);
-  const metaRow = membersHtml
-    ? `<div class="conv-item-meta">${membersHtml}</div>`
-    : '';
   const selectionHtml = _conversationMergeSelectionActive
     ? `<button type="button" class="conv-item-select${_conversationMergeSelection.has(c.conversation_id) ? ' is-selected' : ''}"
         data-conv-select-cid="${cid}" aria-pressed="${_conversationMergeSelection.has(c.conversation_id) ? 'true' : 'false'}"
@@ -4865,9 +5080,6 @@ function _renderConversationSidebarItem(c, opts = {}) {
                   data-conv-menu-cid="${cid}" data-hide-pin="${hidePin ? '1' : '0'}"
                   title="${menuTitle}" aria-label="${menuTitle}">⋯</button>
         </span>`;
-  // 9.1 统一框架 · 左侧「任务与 Session」：聚合任务状态行（运行中执行方 /
-  // 排队消息 / 计划进度），数据来自真实运行态。
-  const taskLine = _convTaskStatusLine(c.conversation_id);
   return `
     <div class="${classes}" data-cid="${cid}">
       <div class="conv-item-row">
@@ -4876,59 +5088,8 @@ function _renderConversationSidebarItem(c, opts = {}) {
         ${titleNode}
         ${actionsHtml}
       </div>
-      ${metaRow}
-      ${taskLine}
     </div>
   `;
-}
-
-// 9.1 统一框架 · 左侧「任务与 Session」：聚合会话的任务状态行。
-// 数据来源（全部真实运行态，不造数据）：
-//   - 运行中：state_changed 的在途执行方（_latestInFlight）；
-//   - 排队：本地消息队列（_getQueue）；
-//   - 计划进度：plan-rail 的 plan 事件（planFor）。
-// 无任何状态时返回空串，不渲染占位。
-function _convTaskStatusLine(cid) {
-  if (!cid) return '';
-  const parts = [];
-  const inFlight = (_latestInFlight.get(cid) || []).filter(Boolean).length;
-  if (inFlight > 0) {
-    parts.push(`<span class="conv-task-chip is-running"><span class="conv-task-dot"></span>${escapeHtml(t('chat.status.running'))}${inFlight > 1 ? ` ${inFlight}` : ''}</span>`);
-  }
-  // _getQueue 来自 queue-draft.js（独立脚本），跨模块调用加 typeof 守卫。
-  const queued = (typeof _getQueue === 'function') ? _getQueue(cid).length : 0;
-  if (queued > 0) {
-    parts.push(`<span class="conv-task-chip is-queued">${escapeHtml(t('chat.status.pending_short'))} ${queued}</span>`);
-  }
-  if (typeof window.planRail === 'object' && window.planRail
-      && typeof window.planRail.planFor === 'function') {
-    const plan = window.planRail.planFor(cid);
-    if (plan && plan.total > 0) {
-      const failed = plan.failed > 0;
-      const blocked = !failed && plan.blocked > 0;
-      const active = !failed && !blocked && plan.active > 0;
-      const cls = failed ? ' is-failed' : blocked ? ' is-blocked' : active ? ' is-active' : ' is-plan';
-      const label = t('chat.task_plan_label', { done: plan.done, total: plan.total });
-      const display = label && label !== 'chat.task_plan_label' ? label : `${plan.done}/${plan.total}`;
-      parts.push(`<span class="conv-task-chip${cls}">${escapeHtml(display)}</span>`);
-    }
-  }
-  if (!parts.length) return '';
-  return `<div class="conv-task-line">${parts.join('')}</div>`;
-}
-
-// 单项刷新任务状态行（state_changed / 队列 / plan 事件变化时由
-// _updateConvSidebarBadge 顺带调用）。
-function _refreshConvTaskLine(cid) {
-  if (!cid) return;
-  const item = document.querySelector(`.conv-item[data-cid="${cid}"]`);
-  if (!item) return;
-  item.querySelector('.conv-task-line')?.remove();
-  const line = _convTaskStatusLine(cid);
-  if (!line) return;
-  const meta = item.querySelector('.conv-item-meta');
-  if (meta) meta.insertAdjacentHTML('afterend', line);
-  else item.insertAdjacentHTML('beforeend', line);
 }
 
 function _normaliseConversationTitle(raw) {
@@ -5336,12 +5497,12 @@ async function _cloneConversationWithConfirm(cid) {
 }
 
 function _renderConversationMergeActionBar(selectedCount) {
-  const count = Math.max(0, Number(selectedCount) || 0);
-  return `<div class="conversation-merge-action-bar" role="status">
-    <span>${escapeHtml(t('chat.merge.selected_count', { count }))}</span>
-    <span class="conversation-merge-action-spacer"></span>
-    <button type="button" class="btn btn-sm" data-merge-cancel>${escapeHtml(t('common.cancel'))}</button>
-    <button type="button" class="btn btn-sm btn-primary" data-merge-confirm${count < 2 ? ' disabled' : ''}>${escapeHtml(t('chat.merge.action'))}</button>
+  void selectedCount;
+  return `<div class="conversation-merge-action-bar" role="region" aria-label="${escapeHtml(t('chat.merge.select_action'))}">
+    <button type="button" class="conversation-merge-start" data-merge-start>
+      <span class="conversation-merge-start-icon" aria-hidden="true">${_uiIconHtml('list', 'ui-icon')}</span>
+      <span>${escapeHtml(t('chat.merge.select_action'))}</span>
+    </button>
   </div>`;
 }
 
@@ -5349,17 +5510,6 @@ function _ensureConversationMergeActionBar() {
   if (typeof document === 'undefined' || typeof document.createElement !== 'function'
     || typeof document.getElementById !== 'function') return;
   let bar = document.getElementById('conversation-merge-action-bar');
-  if (!_conversationMergeSelectionActive) {
-    if (!bar) {
-      bar = document.createElement('div');
-      bar.id = 'conversation-merge-action-bar';
-      const list = document.getElementById('conversation-list');
-      if (list && list.parentElement) list.parentElement.insertBefore(bar, list);
-    }
-    bar.innerHTML = `<button type="button" class="btn btn-sm conversation-merge-start" data-merge-start>${escapeHtml(t('chat.merge.select_action'))}</button>`;
-    bar.querySelector('[data-merge-start]')?.addEventListener('click', () => _enterConversationMergeSelection());
-    return;
-  }
   if (!bar) {
     bar = document.createElement('div');
     bar.id = 'conversation-merge-action-bar';
@@ -5367,20 +5517,17 @@ function _ensureConversationMergeActionBar() {
     if (list && list.parentElement) list.parentElement.insertBefore(bar, list);
   }
   bar.innerHTML = _renderConversationMergeActionBar(_conversationMergeSelection.size);
-  bar.querySelector('[data-merge-cancel]')?.addEventListener('click', _exitConversationMergeSelection);
-  bar.querySelector('[data-merge-confirm]')?.addEventListener('click', _mergeSelectedConversationsWithConfirm);
+  bar.querySelector('[data-merge-start]')?.addEventListener('click', () => _enterConversationMergeSelection());
 }
 
 function _enterConversationMergeSelection(initialCid) {
-  _conversationMergeSelectionActive = true;
-  if (initialCid) _conversationMergeSelection.add(initialCid);
-  _closeConversationActionMenu();
-  renderConversationList();
+  _openConversationMergePicker(initialCid);
 }
 
 function _exitConversationMergeSelection() {
   _conversationMergeSelectionActive = false;
   _conversationMergeSelection.clear();
+  _conversationMergePickerOpen = false;
   renderConversationList();
 }
 
@@ -5388,7 +5535,176 @@ function _toggleConversationMergeSelection(cid) {
   if (!cid) return;
   if (_conversationMergeSelection.has(cid)) _conversationMergeSelection.delete(cid);
   else _conversationMergeSelection.add(cid);
-  renderConversationList();
+  if (_conversationMergePickerOpen) {
+    const picker = document.getElementById('conversation-merge-picker');
+    if (picker && typeof picker.__render === 'function') picker.__render();
+  } else {
+    renderConversationList();
+  }
+}
+
+function _conversationMergePickerMeta(conversation) {
+  if (!conversation) return '';
+  const scope = conversation.space_name || conversation.project_name || conversation.space_id || conversation.project_id || '';
+  let time = '';
+  const raw = _conversationActivityIso(conversation);
+  if (raw) {
+    const date = new Date(raw);
+    if (Number.isFinite(date.getTime())) {
+      try {
+        time = new Intl.DateTimeFormat(undefined, {
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit',
+        }).format(date);
+      } catch (_) { time = ''; }
+    }
+  }
+  return [scope, time].filter(Boolean).join(' · ');
+}
+
+function _renderConversationMergePickerRows(items) {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) {
+    return `<div class="conversation-merge-picker-empty">${escapeHtml(t('chat.merge.picker_empty'))}</div>`;
+  }
+  return rows.map((conversation) => {
+    const cid = String(conversation.conversation_id || '');
+    const selected = _conversationMergeSelection.has(cid);
+    const title = conversation.title || t('chat.new_conv_title');
+    const meta = _conversationMergePickerMeta(conversation);
+    return `<button type="button" class="conversation-merge-picker-row${selected ? ' is-selected' : ''}"
+      data-merge-picker-cid="${escapeHtml(cid)}" aria-pressed="${selected ? 'true' : 'false'}">
+      <span class="conversation-merge-picker-checkbox" aria-hidden="true">${selected ? _uiIconHtml('check', 'ui-icon') : ''}</span>
+      <span class="conversation-merge-picker-copy">
+        <span class="conversation-merge-picker-title" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+        ${meta ? `<span class="conversation-merge-picker-meta">${_uiIconHtml('folder', 'ui-icon')}<span>${escapeHtml(meta)}</span></span>` : ''}
+      </span>
+    </button>`;
+  }).join('');
+}
+
+function _openConversationMergePicker(initialCid) {
+  if (typeof document === 'undefined') return;
+  const existing = document.getElementById('conversation-merge-picker');
+  if (existing) existing.remove();
+  _closeConversationActionMenu();
+  _conversationMergeSelection.clear();
+  if (initialCid) _conversationMergeSelection.add(initialCid);
+  _conversationMergeSelectionActive = false;
+  _conversationMergePickerOpen = true;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'conversation-merge-picker';
+  overlay.className = 'modal-overlay ui-dialog-overlay conversation-merge-picker-overlay open';
+  overlay.innerHTML = `
+    <div class="conversation-merge-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-merge-picker-title">
+      <div class="conversation-merge-picker-header">
+        <h2 id="conversation-merge-picker-title">${escapeHtml(t('chat.merge.picker_title'))}</h2>
+        <button type="button" class="modal-close-btn" data-merge-picker-close aria-label="${escapeHtml(t('common.close'))}" title="${escapeHtml(t('common.close'))}">${_uiIconHtml('x', 'modal-close-icon')}</button>
+      </div>
+      <div class="conversation-merge-picker-search-wrap">
+        <span class="conversation-merge-picker-search-icon" aria-hidden="true">${_uiIconHtml('search', 'ui-icon')}</span>
+        <input type="search" class="conversation-merge-picker-search" data-merge-picker-search placeholder="${escapeHtml(t('chat.merge.picker_search'))}" autocomplete="off" />
+      </div>
+      <div class="conversation-merge-picker-section-label">${escapeHtml(t('chat.merge.picker_recent'))}</div>
+      <div class="conversation-merge-picker-list" data-merge-picker-list></div>
+      <div class="conversation-merge-picker-error" data-merge-picker-error hidden></div>
+      <div class="conversation-merge-picker-footer">
+        <button type="button" class="btn conversation-merge-picker-cancel" data-merge-picker-cancel>${escapeHtml(t('common.cancel'))}</button>
+        <button type="button" class="btn btn-primary conversation-merge-picker-confirm" data-merge-picker-confirm disabled>${escapeHtml(t('chat.merge.action'))}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const list = overlay.querySelector('[data-merge-picker-list]');
+  const search = overlay.querySelector('[data-merge-picker-search]');
+  const confirm = overlay.querySelector('[data-merge-picker-confirm]');
+  const errorEl = overlay.querySelector('[data-merge-picker-error]');
+  const all = (Array.isArray(conversations) ? conversations : [])
+    .filter((conversation) => conversation && conversation.conversation_id)
+    .slice()
+    .sort(_compareConversationsForSidebar);
+  let busy = false;
+  const close = () => {
+    if (busy) return;
+    _conversationMergePickerOpen = false;
+    _conversationMergeSelection.clear();
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const onKey = (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape') close();
+  };
+  const getFiltered = () => {
+    const query = String(search?.value || '').trim().toLocaleLowerCase();
+    if (!query) return all;
+    return all.filter((conversation) => {
+      const title = String(conversation.title || '').toLocaleLowerCase();
+      const meta = _conversationMergePickerMeta(conversation).toLocaleLowerCase();
+      return title.includes(query) || meta.includes(query);
+    });
+  };
+  const render = () => {
+    const selectedCount = _conversationMergeSelection.size;
+    if (list) list.innerHTML = _renderConversationMergePickerRows(getFiltered());
+    if (confirm) confirm.disabled = selectedCount < 2 || busy;
+    overlay.querySelectorAll('[data-merge-picker-cid]').forEach((row) => {
+      row.addEventListener('click', () => _toggleConversationMergeSelection(row.dataset.mergePickerCid));
+    });
+  };
+  overlay.__render = render;
+  search?.addEventListener('input', render);
+  overlay.querySelector('[data-merge-picker-close]')?.addEventListener('click', close);
+  overlay.querySelector('[data-merge-picker-cancel]')?.addEventListener('click', close);
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+  confirm?.addEventListener('click', async () => {
+    if (busy || _conversationMergeSelection.size < 2) return;
+    busy = true;
+    confirm.disabled = true;
+    confirm.classList.add('is-loading');
+    confirm.textContent = t('chat.merge.loading');
+    if (errorEl) errorEl.hidden = true;
+    const cids = [..._conversationMergeSelection];
+    const sources = cids.map(_conversationById).filter(Boolean);
+    try {
+      const projectIds = [...new Set(sources.map((source) => source.project_id || ''))];
+      const projectId = projectIds.length === 1 ? projectIds[0] : '';
+      const res = await apiFetch('/api/conversations/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cids, title: t('chat.merge.default_title'), project_id: projectId || null }),
+      });
+      const data = await res.json();
+      if (!data || data.ok === false || !data.conversation) throw new Error(data?.error || t('chat.unknown_error'));
+      const agentCount = data.agent_summaries && typeof data.agent_summaries === 'object'
+        ? Object.keys(data.agent_summaries).length
+        : 0;
+      _addConversationToCache(data.conversation);
+      _rememberConversationResultCard(data.conversation.conversation_id, {
+        kind: 'merge', sourceCount: cids.length, agentCount, summary: data.summary || '',
+      });
+      _conversationMergePickerOpen = false;
+      _conversationMergeSelection.clear();
+      overlay.remove();
+      document.removeEventListener('keydown', onKey, true);
+      renderConversationList();
+      uiToast(t('chat.merge.success'), { variant: 'success' });
+      setView('conversation', data.conversation.conversation_id);
+    } catch (err) {
+      busy = false;
+      confirm.disabled = false;
+      confirm.classList.remove('is-loading');
+      confirm.textContent = t('chat.merge.action');
+      if (errorEl) {
+        errorEl.hidden = false;
+        errorEl.textContent = t('chat.merge.failed', { reason: err?.message || String(err) });
+      }
+    }
+  });
+  document.addEventListener('keydown', onKey, true);
+  render();
+  setTimeout(() => search?.focus(), 0);
 }
 
 async function _mergeSelectedConversationsWithConfirm() {
@@ -5458,6 +5774,12 @@ function _conversationActionItems(cid, opts = {}) {
     label: t('chat.conv_copy_title'),
     onClick: () => _cloneConversationWithConfirm(cid),
   });
+  // 空间化重构：把已有会话绑定到空间（问题 A 补齐）。已绑 → 「移至其他空间/移出空间」。
+  items.push({
+    action: 'setSpace',
+    label: t(conv && conv.space_id ? 'chat.conv_move_space_title' : 'chat.conv_set_space_title'),
+    onClick: () => _openConversationSpacePicker(cid),
+  });
   items.push({
     action: 'delete',
     label: t('chat.conv_del_title'),
@@ -5465,6 +5787,107 @@ function _conversationActionItems(cid, opts = {}) {
     onClick: () => _deleteConversationWithConfirm(cid, opts),
   });
   return items;
+}
+
+/** 会话 → 空间绑定选择器（侧栏「移至空间」）。
+ *  弹层列出用户全部空间，点击即绑定；已绑会话显示当前空间并可「移出空间」。
+ *  复用 conversations.setSpace IPC（spaces.list 数据源）。 */
+async function _openConversationSpacePicker(cid) {
+  if (!cid) return;
+  const conv = _conversationById(cid);
+  let spaceList = [];
+  try {
+    const res = await window.cogseed.invoke('spaces.list', {});
+    spaceList = Array.isArray(res && res.spaces) ? res.spaces : [];
+  } catch (err) {
+    _convLog.warn('load spaces for move failed', err);
+  }
+  const currentSpaceId = (conv && conv.space_id) || '';
+  const currentSpace = spaceList.find((s) => s && s.space_id === currentSpaceId) || null;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay open';
+  const rows = spaceList.length
+    ? spaceList.map((s) => `
+        <button type="button" class="conversation-space-row" data-space-id="${escapeHtml(s.space_id)}" data-space-name="${escapeHtml(s.name || s.space_id)}" ${s.space_id === currentSpaceId ? 'data-current="1"' : ''}>
+          <span class="conversation-space-mark">${escapeHtml((s.icon || (s.name || '空').charAt(0)))}</span>
+          <span class="conversation-space-name">${escapeHtml(s.name || s.space_id)}</span>
+          ${s.space_id === currentSpaceId ? `<em class="conversation-space-current">${escapeHtml(t('chat.conv_space_current'))}</em>` : ''}
+        </button>`).join('')
+    : `<div class="conversation-space-empty">${escapeHtml(t('chat.conv_space_none'))}</div>`;
+  const unbindHtml = currentSpaceId
+    ? `<button type="button" class="btn conversation-space-unbind" data-space-unbind>${escapeHtml(t('chat.conv_space_unbind'))}</button>`
+    : '';
+  overlay.innerHTML = `
+    <div class="modal modal-standard ui-dialog conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-space-title">
+      <div class="modal-title ui-dialog-title" id="conversation-space-title">${escapeHtml(t(currentSpaceId ? 'chat.conv_space_title_move' : 'chat.conv_space_title_set'))}</div>
+      <div class="modal-body">
+        <div class="ui-dialog-message">${escapeHtml(t('chat.conv_space_hint', { title: (conv && conv.title) || '' }))}</div>
+        <div class="conversation-space-list">${rows}</div>
+        <div class="conversation-operation-error" data-space-error hidden></div>
+      </div>
+      <div class="modal-actions">
+        ${unbindHtml}
+        <button type="button" class="btn" data-space-cancel>${escapeHtml(t('common.cancel'))}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  let busy = false;
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); };
+  const onKey = (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape') close();
+  };
+  const errorEl = overlay.querySelector('[data-space-error]');
+  const fail = (msg) => {
+    errorEl.hidden = false;
+    errorEl.textContent = msg;
+    busy = false;
+  };
+  const applySpace = async (spaceId) => {
+    if (busy) return;
+    busy = true;
+    errorEl.hidden = true;
+    try {
+      const res = await window.cogseed.invoke('conversations.setSpace', {
+        cid,
+        spaceId: spaceId || '',
+        project_id: _projectIdForConversation(cid) || null,
+      });
+      if (!res || res.error || !res.conversation) {
+        throw new Error((res && res.error) || 'set space failed');
+      }
+      const idx = conversations.findIndex((c) => c && c.conversation_id === cid);
+      if (idx >= 0) {
+        _markConversationListLocallyChanged();
+        // 解绑时后端返回无 space_id 键，需显式删除本地残留值
+        const updated = { ...conversations[idx], ...res.conversation };
+        if (spaceId) updated.space_id = spaceId;
+        else delete updated.space_id;
+        conversations[idx] = updated;
+        _sortConversationCacheForSidebar();
+        renderConversationList();
+        _refreshChatHeader();
+      }
+      close();
+      if (typeof uiToast === 'function') {
+        const target = spaceId ? (spaceList.find((s) => s.space_id === spaceId) || {}) : null;
+        uiToast(t(spaceId ? 'chat.conv_space_bound' : 'chat.conv_space_unbound',
+          { name: (target && target.name) || '' }), { variant: 'success' });
+      }
+    } catch (err) {
+      fail(err && err.message ? String(err.message) : String(err));
+    }
+  };
+  overlay.querySelectorAll('[data-space-id]').forEach((btn) => {
+    btn.addEventListener('click', () => applySpace(btn.dataset.spaceId || ''));
+  });
+  const unbindBtn = overlay.querySelector('[data-space-unbind]');
+  if (unbindBtn) unbindBtn.addEventListener('click', () => applySpace(''));
+  const cancelBtn = overlay.querySelector('[data-space-cancel]');
+  if (cancelBtn) cancelBtn.addEventListener('click', close);
+  document.addEventListener('keydown', onKey, true);
 }
 
 function _openConversationActionMenu(anchorBtn, cid, opts = {}) {
@@ -5542,6 +5965,7 @@ window.addEventListener('i18n-change', () => {
 });
 window.openConversationActionMenu = _openConversationActionMenu;
 window.closeConversationActionMenu = _closeConversationActionMenu;
+window.invalidateSidebarSpaces = _invalidateSidebarSpaces;
 
 function _bindConversationSidebarItems(container, opts = {}) {
   if (!container) return;
@@ -5565,6 +5989,73 @@ function _bindConversationSidebarItems(container, opts = {}) {
       }
     });
   });
+  // 侧栏「空间」折叠组切换（状态持久化 localStorage）
+  container.querySelectorAll('[data-conv-space-toggle="1"]').forEach((btn) => {
+    if (btn.dataset.spaceBound === '1') return;
+    btn.dataset.spaceBound = '1';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const sid = btn.dataset.convSpace || '';
+      if (!sid) return;
+      _sidebarCollapse.spaceGroups[sid] = !_sidebarCollapse.spaceGroups[sid];
+      _saveSidebarCollapse();
+      renderConversationList();
+    });
+  });
+  // 分区折叠（置顶/空间/最近）切换（状态持久化 localStorage）
+  container.querySelectorAll('[data-sidebar-fold]').forEach((btn) => {
+    if (btn.dataset.foldBound === '1') return;
+    btn.dataset.foldBound = '1';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const section = btn.dataset.sidebarFold || '';
+      if (!section || !(section in _sidebarCollapse)) return;
+      _sidebarCollapse[section] = !_sidebarCollapse[section];
+      _saveSidebarCollapse();
+      renderConversationList();
+    });
+  });
+  // 分区标题右侧操作按钮：新建空间 / 新建任务
+  container.querySelectorAll('[data-sidebar-action]').forEach((btn) => {
+    if (btn.dataset.actionBound === '1') return;
+    btn.dataset.actionBound = '1';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const action = btn.dataset.sidebarAction;
+      if (action === 'new-task') {
+        // 若最近区被折叠，先展开（否则输入条渲染不出来，点了没反馈）
+        if (_sidebarCollapse.recent) {
+          _sidebarCollapse.recent = false;
+          _saveSidebarCollapse();
+        }
+        _sidebarNewTaskOpen = true;
+        renderConversationList();
+        const input = document.querySelector('[data-sidebar-new-task-input]');
+        if (input) setTimeout(() => input.focus(), 30);
+      } else if (action === 'new-space') {
+        _openSidebarNewSpace();
+      }
+    });
+  });
+  // 「最近任务」内联新建任务输入条：回车创建、输入记忆
+  const newTaskInput = (typeof container.querySelector === 'function')
+    ? container.querySelector('[data-sidebar-new-task-input]')
+    : null;
+  if (newTaskInput) {
+    if (newTaskInput.dataset.taskBound !== '1') {
+      newTaskInput.dataset.taskBound = '1';
+      newTaskInput.addEventListener('input', () => { _sidebarNewTaskValue = newTaskInput.value; });
+      newTaskInput.addEventListener('keydown', (e) => {
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _createSidebarNewTask(); }
+        else if (e.key === 'Escape') { e.preventDefault(); _sidebarNewTaskOpen = false; renderConversationList(); }
+      });
+      setTimeout(() => newTaskInput.focus(), 30);
+    }
+  }
   container.querySelectorAll('[data-conv-bucket-more="1"]').forEach((btn) => {
     if (btn.dataset.moreBound === '1') return;
     btn.dataset.moreBound = '1';
@@ -5644,79 +6135,267 @@ function _bindConversationSidebarItems(container, opts = {}) {
   });
 }
 
+/** 侧栏空间列表懒加载（spaces.list）；加载完触发一次重绘让空间分组出现。
+ *  失败静默降级为无空间区（最近任务照常）。 */
+function _ensureSidebarSpaces() {
+  if (_sidebarSpacesLoaded || _sidebarSpacesLoading) return _sidebarSpacesLoading || Promise.resolve();
+  _sidebarSpacesLoading = (async () => {
+    try {
+      const res = await (window.cogseed || window.orkas).invoke('spaces.list', {});
+      _sidebarSpaces = Array.isArray(res && res.spaces) ? res.spaces : [];
+    } catch (err) {
+      _convLog.warn('load spaces for sidebar failed', err);
+      _sidebarSpaces = [];
+    } finally {
+      _sidebarSpacesLoaded = true;
+      _sidebarSpacesLoading = null;
+      renderConversationList();
+    }
+  })();
+  return _sidebarSpacesLoading;
+}
+
+/** 强制刷新侧栏空间缓存（新建/删除空间后调用，保证新空间组立即可见）。 */
+function _invalidateSidebarSpaces() {
+  _sidebarSpacesLoaded = false;
+  _sidebarSpaces = [];
+  _ensureSidebarSpaces();
+}
+
+/** 按空间分组当前缓存会话：{ spaceId: Conversation[] }（按最近活跃倒序）。 */
+function _spaceConversationMap() {
+  const map = new Map();
+  for (const c of conversations || []) {
+    // 排除 pinned：置顶会话只在「置顶区」出现，不重复进空间组
+    if (!c || !c.space_id || c.pinned_at) continue;
+    if (!map.has(c.space_id)) map.set(c.space_id, []);
+    map.get(c.space_id).push(c);
+  }
+  for (const list of map.values()) list.sort(_compareConversationsForSidebar);
+  return map;
+}
+
+/** 空间折叠组：组头（空间名 + chevron + 会话数）+ 组内会话行。默认展开。 */
+function _renderSpaceSidebarGroup(sp, convs) {
+  const collapsed = !!_sidebarCollapse.spaceGroups[sp.space_id];
+  const name = sp.name || sp.space_id;
+  return `
+    <button type="button" class="conv-list-section-header is-collapsible${collapsed ? ' is-collapsed' : ''}"
+      data-conv-space-toggle="1" data-conv-space="${escapeHtml(sp.space_id)}"
+      aria-expanded="${collapsed ? 'false' : 'true'}">
+      <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
+      <span class="conv-list-section-label" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+      <span class="conv-list-section-count">${convs.length}</span>
+      <span class="conv-list-section-rule" aria-hidden="true"></span>
+    </button>
+    ${collapsed ? '' : convs.map((c) => _renderConversationSidebarItem(c, {
+      bucketScope: `space:${sp.space_id}`,
+      nested: true,
+    })).join('')}`;
+}
+
+/** 分区标题行：可折叠（data-sidebar-fold）+ 可选右侧操作按钮（data-sidebar-action）。 */
+function _renderSidebarSectionHeader(section, label, opts = {}) {
+  const collapsed = !!_sidebarCollapse[section];
+  const actionHtml = opts.action
+    ? `<button type="button" class="conv-list-section-action" data-sidebar-action="${escapeHtml(opts.action)}"
+        title="${escapeHtml(opts.actionTitle || '')}" aria-label="${escapeHtml(opts.actionTitle || '')}">
+        ${_uiIconHtml(opts.actionIcon || 'plus', 'conv-list-section-action-icon')}</button>`
+    : '';
+  return `
+    <div class="conv-list-section-header conv-list-space-title${collapsed ? ' is-collapsed' : ''}">
+      <button type="button" class="conv-list-section-fold" data-sidebar-fold="${escapeHtml(section)}"
+        aria-expanded="${collapsed ? 'false' : 'true'}">
+        <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
+        <span class="conv-list-section-label">${escapeHtml(label)}</span>
+        <span class="conv-list-section-rule" aria-hidden="true"></span>
+      </button>
+      ${actionHtml}
+    </div>`;
+}
+
+/** 平铺会话列表（置顶/最近区用，不渲染时间桶标题；按最近活跃倒序）。 */
+function _renderConversationFlatList(items, itemOpts = {}) {
+  const rows = (Array.isArray(items) ? items : []).filter(Boolean).slice();
+  rows.sort(_compareConversationsForSidebar);
+  const parts = rows.map((c) => _renderConversationSidebarItem(c, itemOpts));
+  if (itemOpts.loadMore) {
+    parts.push(`<button type="button" class="conversation-list-load-more" data-conv-bucket-more="1"
+      data-conv-bucket="${escapeHtml(itemOpts.loadMoreBucket || 'last30')}" data-conv-bucket-scope="sidebar">
+      ${escapeHtml(t('sidebar.load_more_conversations'))}</button>`);
+  }
+  return parts.join('');
+}
+
+/** 「最近任务」分区内联新建任务输入条（＋ 展开，回车即建普通会话）。 */
+function _renderSidebarNewTaskComposer() {
+  return `
+    <div class="conv-sidebar-new-task">
+      <input data-sidebar-new-task-input value="${escapeHtml(_sidebarNewTaskValue)}"
+        placeholder="${escapeHtml(t('sidebar.new_task_ph', '输入任务描述，回车创建…'))}"
+        maxlength="500" autocomplete="off" spellcheck="false" />
+    </div>`;
+}
+
+/** 侧栏「最近任务」＋ → 新建普通会话（无空间）。 */
+async function _createSidebarNewTask() {
+  const input = document.querySelector('[data-sidebar-new-task-input]');
+  const title = String((input ? input.value : _sidebarNewTaskValue) || '').trim();
+  if (!title) { if (input) input.focus(); return; }
+  try {
+    const res = await apiFetch('/api/conversations/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'normal', title }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || t('chat.create_conv_failed'));
+    const conv = data.conversation;
+    conv.last_active_at = new Date().toISOString();
+    _markConversationListLocallyChanged();
+    conversations.unshift(conv);
+    _sidebarNewTaskOpen = false;
+    _sidebarNewTaskValue = '';
+    renderConversationList();
+    if (typeof setView === 'function') setView('conversation', conv.conversation_id, { skipLoad: true });
+  } catch (err) {
+    _convLog.warn('create sidebar new task failed', err);
+    try { await uiAlert(t('chat.create_conv_failed')); } catch (_) {}
+  }
+}
+
+/** 侧栏「空间」＋ → 跳空间中心并打开新建空间弹窗（workspace.js 懒加载，需轮询等它注册）。 */
+function _openSidebarNewSpace() {
+  if (typeof setView === 'function') setView('workspace'); // 触发 boot 懒加载 workspace.js
+  const tryOpen = () => {
+    if (typeof window.openWorkspaceCreate === 'function') {
+      window.openWorkspaceCreate();
+      return true;
+    }
+    return false;
+  };
+  if (tryOpen()) return;
+  const deadline = Date.now() + 5000;
+  const timer = setInterval(() => {
+    if (tryOpen() || Date.now() > deadline) clearInterval(timer);
+  }, 200);
+}
+
+/** 最近区是否还有未加载的旧会话（加载更多按钮判定）。 */
+function _sidebarHasMoreOld() {
+  return ['last30', 'older'].some((b) => {
+    const page = _oldConversationPages[b];
+    if (!page) return false;
+    if (page.initialized) return page.nextOffset !== null;
+    return (Number(page.total) || 0) > 0;
+  });
+}
+
 function renderConversationList() {
   _conversationBucketDateKey = _conversationLocalDateKey();
   const container = document.getElementById('conversation-list');
   _sortConversationCacheForSidebar();
-  // Conversations with a project_id are rendered nested under their project
-  // by `projects.js::renderProjectsSection`. The "Conversations" section
-  // here only shows the unprojected ones — same data model as the user's
-  // mental picture (projected convs live "inside" their project, the rest
-  // sit in the catch-all section).
-  const unprojected = (conversations || []).filter((c) => !c || !c.project_id);
-  const hasDeferredUnprojected = _conversationDeferredBuckets.last30 > 0
+  // 三段结构：置顶（pinned）→ 空间（space_id）→ 最近（无 space_id，含纯 project_id 旧孤儿 F2-A）。
+  // pin 的会话只在置顶区出现（不重复进空间/最近区）。
+  const all = (conversations || []).filter(Boolean);
+  const pinned = all.filter((c) => c.pinned_at);
+  const recent = all.filter((c) => !c.pinned_at && !c.space_id);
+  const hasDeferredRecent = _conversationDeferredBuckets.last30 > 0
     || _conversationDeferredBuckets.older > 0;
+  const spaceMap = _spaceConversationMap();
   _ensureConversationMergeActionBar();
-  if (!unprojected.length && !hasDeferredUnprojected) {
+  // 触发空间列表懒加载（异步；加载完成后会再次 renderConversationList）
+  _ensureSidebarSpaces();
+  // 空间组 = 会话里出现过的全部 space_id 并集（含新建空间：缓存未刷新时用 sid 兜底名，
+  // 避免「新空间有会话但侧栏不显示组」）。
+  const spaceMetaById = new Map(_sidebarSpaces.map((s) => [s.space_id, s]));
+  const spacesWithConvs = Array.from(spaceMap.keys())
+    .map((sid) => spaceMetaById.get(sid) || { space_id: sid, name: sid })
+    .sort((a, b) => {
+      const aa = _spaceLatestAt(spaceMap.get(a.space_id));
+      const bb = _spaceLatestAt(spaceMap.get(b.space_id));
+      return (bb || '').localeCompare(aa || '');
+    });
+  if (!pinned.length && !recent.length && !hasDeferredRecent && !spacesWithConvs.length) {
     container.innerHTML = `<div class="conv-empty" data-i18n="sidebar.conv_empty">${escapeHtml(t('sidebar.conv_empty'))}</div>`;
-    // Still re-render the projects section so its badges refresh (the call
-    // is cheap when the cache is already loaded).
-    if (typeof renderProjectsSection === 'function') renderProjectsSection();
-    if (typeof _renderProjectAllTasks === 'function') _renderProjectAllTasks();
     if (typeof _refreshAutoExpandedTaskConvs === 'function') _refreshAutoExpandedTaskConvs();
     _ensureConversationMergeActionBar();
     return;
   }
-  container.innerHTML = _renderConversationTimeBucketList(unprojected, {
-    bucketScope: 'sidebar',
-    deferredBucketCounts: _conversationDeferredBuckets,
-    loadMoreBuckets: {
-      last30: _oldConversationPages.last30.initialized
-        && _oldConversationPages.last30.nextOffset !== null,
-      older: _oldConversationPages.older.initialized
-        && _oldConversationPages.older.nextOffset !== null,
-    },
-  });
+  const parts = [];
+  // ① 置顶区
+  if (pinned.length) {
+    parts.push(_renderSidebarSectionHeader('pinned', t('sidebar.pinned_section', '置顶')));
+    if (!_sidebarCollapse.pinned) {
+      parts.push(_renderConversationFlatList(pinned, { bucketScope: 'pinned' }));
+    }
+  }
+  // ② 空间区
+  if (spacesWithConvs.length) {
+    parts.push(_renderSidebarSectionHeader('spaces', t('sidebar.spaces_section'), {
+      action: 'new-space',
+      actionTitle: t('sidebar.new_space', '新建空间'),
+      actionIcon: 'plus',
+    }));
+    if (!_sidebarCollapse.spaces) {
+      for (const sp of spacesWithConvs) {
+        parts.push(_renderSpaceSidebarGroup(sp, spaceMap.get(sp.space_id)));
+      }
+    }
+  }
+  // ③ 最近任务区（平铺，无时间桶标题）
+  if (recent.length || hasDeferredRecent) {
+    parts.push(_renderSidebarSectionHeader('recent', t('sidebar.recent_tasks'), {
+      action: 'new-task',
+      actionTitle: t('sidebar.new_task', '新建任务'),
+      actionIcon: 'plus',
+    }));
+    if (!_sidebarCollapse.recent) {
+      if (_sidebarNewTaskOpen) parts.push(_renderSidebarNewTaskComposer());
+      parts.push(_renderConversationFlatList(recent, {
+        bucketScope: 'sidebar',
+        loadMore: _sidebarHasMoreOld(),
+        loadMoreBucket: 'last30',
+      }));
+    }
+  }
+  container.innerHTML = parts.join('');
 
   _bindConversationSidebarItems(container, {
-    onBucketToggle(scope, bucket) {
-      const key = _conversationBucketKey(scope, bucket);
-      const page = _oldConversationPages[bucket];
-      const needsLoad = scope === 'sidebar'
-        && _conversationExpandedBuckets.has(key)
-        && page && !page.initialized && page.total > 0;
-      if (!needsLoad) {
-        renderConversationList();
-        return;
-      }
-      _loadOldUnprojectedConversations(bucket).catch((err) => {
-        _convLog.warn('load deferred conversation bucket failed', err);
-        _conversationExpandedBuckets.delete(key);
-        renderConversationList();
-      });
-    },
     onBucketLoadMore(scope, bucket) {
       if (scope !== 'sidebar') return;
-      return _loadOldUnprojectedConversations(bucket).catch((err) => {
-        _convLog.warn('load more deferred conversations failed', err);
+      // 平铺后只有一个「加载更多」：优先加载 last30，完了再 older
+      const pick = () => {
+        if (_sidebarHasMoreOld()) {
+          const p = _oldConversationPages[bucket];
+          if (p && (p.initialized ? p.nextOffset !== null : (Number(p.total) || 0) > 0)) return bucket;
+          return bucket === 'last30' ? 'older' : 'last30';
+        }
+        return null;
+      };
+      const target = pick();
+      if (!target) return Promise.resolve();
+      return _loadOldUnprojectedConversations(target).catch((err) => {
+        _convLog.warn('load more old conversations failed', err);
       });
     },
   });
 
-  // Re-render the projects section (it consumes the same `conversations`
-  // global to group projected items by project).
-  if (typeof renderProjectsSection === 'function') renderProjectsSection();
-
-  // Re-render mirror surfaces that consume the same `conversations` cache:
-  // project-detail tasks and expanded automation run lists.
-  if (typeof _renderProjectAllTasks === 'function') _renderProjectAllTasks();
   if (typeof _refreshAutoExpandedTaskConvs === 'function') _refreshAutoExpandedTaskConvs();
 
-  // Reapply pending / queued status badges after the DOM was re-rendered
-  // (covers both the unprojected list and the projects section's nested
-  // conv items, since the helper queries by cid only).
+  // 侧栏行不显示进行中徽标（_updateConvSidebarBadge 已空化），仅刷新全局 chip 与当前头。
   _refreshAllConvBadges();
   _ensureConversationMergeActionBar();
+}
+
+/** 空间组内最近活跃时间（排序用）。 */
+function _spaceLatestAt(convs) {
+  let latest = '';
+  for (const c of convs || []) {
+    const at = _conversationActivityIso(c);
+    if (at && at > latest) latest = at;
+  }
+  return latest;
 }
 
 // ─── Conversation history render ───
@@ -6249,22 +6928,47 @@ function _ensureCreateAgentInlineObserver() {
 }
 
 /**
- * Insert a welcome message for an imported conversation.
- * Called when user opens an imported conversation for the first time.
+ * 打开导入会话自动开始接续（真实消息流，v1.6 模板），分两步让界面不空白：
+ *  1) 立即：系统替用户插入第一条「继续这项工作。先告诉我现在做到哪里…」并刷新
+ *     ——刚进入会话就有内容。
+ *  2) 动态：后台生成 commander 三段式回复（项目介绍 / 工作空间能力 / Action
+ *     Plan，Action Plan 走 LLM 需要时间），期间显示轻量占位气泡，生成完刷新。
  */
-async function _insertImportedConversationWelcome(cid) {
+async function _showImportedConversationWelcome(cid) {
   if (!window.cogseed?.invoke) return;
   try {
-    const result = await window.cogseed.invoke('chats.insertWelcomeMessage', { conversationId: cid });
-    if (result?.ok) {
-      // Reload the conversation to show the new welcome message
-      if (cid === currentCid) {
+    const result = await window.cogseed.invoke('chats.beginWelcome', { conversationId: cid });
+    if (!result?.ok) return;
+    if (cid === currentCid) {
+      await loadConversationHistory(cid, { preserveScroll: false });
+    }
+    // 动态回复：后台生成 commander 三段式（不阻塞 UI），期间显示占位。
+    if (cid !== currentCid) return;
+    const placeholder = _appendWelcomeThinkingPlaceholder(cid);
+    try {
+      const reply = await window.cogseed.invoke('chats.handoffWelcomeReply', { conversationId: cid });
+      if (reply?.ok && cid === currentCid) {
         await loadConversationHistory(cid, { preserveScroll: false });
       }
+    } finally {
+      if (placeholder && placeholder.parentElement) placeholder.remove();
     }
   } catch (err) {
-    _convLog.error('welcome message insertion failed', { cid, error: err });
+    _convLog.error('welcome begin failed', { cid, error: err });
   }
+}
+
+/** 轻量占位气泡：commander 回复生成中（LLM 可能需要几秒），先告知用户在整理。 */
+function _appendWelcomeThinkingPlaceholder(cid) {
+  const history = document.getElementById('chat-history');
+  if (!history) return null;
+  const el = document.createElement('div');
+  el.className = 'chat-msg welcome-thinking';
+  el.dataset.cid = cid;
+  el.innerHTML = `<div class="chat-bubble"><div class="markdown-body">${escapeHtml(t('chat.welcome_thinking', 'Commander 正在整理接续信息…'))}</div></div>`;
+  history.appendChild(el);
+  history.scrollTop = history.scrollHeight;
+  return el;
 }
 
 async function loadConversationHistory(cid, opts = {}) {
@@ -6335,6 +7039,11 @@ async function loadConversationHistory(cid, opts = {}) {
     if (!data.ok) throw new Error(data.error || 'load failed');
     if (cid !== currentCid) return;
     const convMeta = data.conversation || {};
+    // Auto-task time-adjust suggestion: check if this conversation was created
+    // by a daily auto-task and the user opens it at a different time.
+    if (convMeta.origin_auto_task_id && typeof checkAndSuggestAutoTaskTimeAdjustment === 'function') {
+      checkAndSuggestAutoTaskTimeAdjustment(cid, convMeta.origin_auto_task_id);
+    }
     _serverFloorByCid.set(cid, typeof convMeta.active_recipient === 'string' ? convMeta.active_recipient : '');
     // History reload: drop ALL per-actor placeholder map entries — the
     // `container.innerHTML=''` below detaches every placeholder DOM node,
@@ -6389,6 +7098,13 @@ async function loadConversationHistory(cid, opts = {}) {
       container.innerHTML = `<div class="empty">${escapeHtml(t('chat.empty'))}</div>`;
     } else {
       container.innerHTML = '';
+      // 兼容旧导入会话（seed 未带 imported_seed 标记）：若会话是 imported 且
+      // 第一条是 commander 的上下文占位（有 model_text），前端按 seed 隐藏。
+      if (convMeta.imported === true && history.length && history[0]
+        && history[0].role === 'assistant' && history[0]._from === 'commander'
+        && history[0].model_text) {
+        history[0].imported_seed = true;
+      }
       // The history array is already time-sorted above. Stage it off-DOM and
       // bypass the live-event dedupe/sorted-insertion work: doing either for
       // every persisted row turns even a small paged cold open into repeated DOM
@@ -6528,8 +7244,8 @@ async function loadConversationHistory(cid, opts = {}) {
 
     // Check if this is an imported conversation that needs a welcome message
     if (convMeta.needs_welcome === true) {
-      _insertImportedConversationWelcome(cid).catch((err) => {
-        _convLog.warn('failed to insert welcome message', { cid, error: err });
+      _showImportedConversationWelcome(cid).catch((err) => {
+        _convLog.warn('failed to show welcome panel', { cid, error: err });
       });
     }
 
@@ -6562,6 +7278,8 @@ function _messageRecordHasMountedSidecars(gm, el, opts = {}) {
       && gm.form?.submitted
       && !el.querySelector('.chat-input-form.is-submitted')) return false;
   if (gm.plan_announcement && !el.querySelector('.chat-plan-announce')) return false;
+  if (Array.isArray(gm.references) && gm.references.length && !el.querySelector('.chat-reference-bundle')) return false;
+  if (Array.isArray(gm.space_asset_refs) && gm.space_asset_refs.length && !el.querySelector('.chat-space-asset-refs')) return false;
   if (Array.isArray(gm.produced) && gm.produced.length && !el.querySelector('.chat-msg-produced')) return false;
   if ((_normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)) && !el.querySelector('.chat-msg-created-agent-chip')) return false;
   if (Array.isArray(gm.artifacts) && gm.artifacts.length && !el.querySelector('.chat-artifact-host')) return false;
@@ -7187,6 +7905,12 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const archive = opts.archive !== false;   // default on for backwards compat
   const historyHydration = opts.historyHydration === true;
 
+  // 导入会话的 seed 消息（imported_seed）：只给模型当上下文（model_text），
+  // 不渲染气泡——接续准备面板替代其用户可见呈现。
+  if (message && message.imported_seed === true) {
+    return null;
+  }
+
   // Dedupe by `_msg_id`: when the user switches conv tabs during a
   // streaming turn, the same persisted message can reach the renderer
   // twice — once via `loadConversationHistory` reading jsonl on
@@ -7250,6 +7974,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     ? _extractSpaceDraft(displayContent)
     : null;
   const spaceDraftHtml = spaceDraft ? _renderSpaceDraftButtonHtml(spaceDraft) : '';
+  const welcomeCarryHtml = (role === 'assistant' && message.welcome_carry)
+    ? _renderWelcomeCarryHtml(_parseWelcomeCarry(message.welcome_carry), message.welcome_resume || '')
+    : '';
 
   const attachmentCid = message.attachment_cid || message.attachments_cid || opts.cid || currentCid;
   const attachmentsHtml = (role === 'user' && Array.isArray(message.attachments) && message.attachments.length)
@@ -7260,6 +7987,10 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     : null;
   const referencesHtml = (Array.isArray(message.references) && message.references.length)
     ? _renderMessageReferencesHtml(message.references)
+    : '';
+  // 空间任务引用（@ 资产）可见反馈：user 气泡显示「引用资产」chips
+  const spaceAssetRefsHtml = (Array.isArray(message.space_asset_refs) && message.space_asset_refs.length)
+    ? _renderSpaceAssetRefsHtml(message.space_asset_refs)
     : '';
   const failedAssistant = role === 'assistant' && _isFailedAssistantContent(rawContent, message);
   const createdAgentsList = role === 'assistant' ? _normalizeCreatedAgents(message) : null;
@@ -7273,20 +8004,8 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const teachingReceiptsHtml = role === 'assistant'
     ? _renderTeachingReceiptsHtml(message.teaching_receipts)
     : '';
-  // 9.1 统一框架 · 中间区「Evidence 结果块」：来源引用 + 教学回执统一收进
-  // 一个默认展开的「证据」块（数量角标 = 引用数 + 回执数），放在正文之前，
-  // 与 Artifact / Receipt 同一视觉语言。
-  const evidenceRefCount = Array.isArray(message.references) ? message.references.length : 0;
-  const evidenceReceiptCount = role === 'assistant' && Array.isArray(message.teaching_receipts)
-    ? message.teaching_receipts.length : 0;
-  const evidenceHtml = (referencesHtml || teachingReceiptsHtml)
-    ? _compactResultBlockHtml({
-        label: t('chat.result_block.evidence'),
-        icon: 'link',
-        count: evidenceRefCount + evidenceReceiptCount,
-        open: true,
-        bodyHtml: `${referencesHtml}${teachingReceiptsHtml}`,
-      })
+  const recallCitationsHtml = role === 'assistant'
+    ? _renderRecallCitationsHtml(message.recall_citations)
     : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
   // timestamp on one row. Same DOM strip for historical (loaded via
@@ -7320,12 +8039,14 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${evidenceHtml}${contentHtml}${spaceDraftHtml}${attachmentsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
   if (message._msg_id) msgDiv.dataset.msgId = String(message._msg_id);
   if (message._from) msgDiv.dataset.fromActor = String(message._from);
+  // 消息归属会话（welcome 块「查看依据 / 带着这些继续」事件委托需要）。
+  msgDiv.dataset.cid = String(opts.cid || currentCid || '');
   if (message._turn_id) msgDiv.dataset.turnId = String(message._turn_id);
   if (message._system_kind) msgDiv.dataset.systemKind = String(message._system_kind);
   if (message.failure_kind) msgDiv.dataset.failureKind = String(message.failure_kind);
@@ -7368,6 +8089,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (createdAgentHtml) _hydrateMessageCreatedAgentChip(msgDiv);
   if (createdSkillHtml) _hydrateMessageCreatedSkillChip(msgDiv);
   if (teachingReceiptsHtml) _hydrateTeachingReceipts(msgDiv);
+  if (recallCitationsHtml) _hydrateRecallCitations(msgDiv, attachmentCid, message._msg_id);
   // Interactive input-form widget (assistant messages only). Appended inside
   // the bubble after markdown + chips so it reads as "reply text → confirm
   // this form". See chat-input-form.js for the widget implementation.
@@ -7382,23 +8104,13 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (role === 'assistant' && message.expense_setup && typeof window.mountExpenseSetupCard === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.expense-agent-setup-card')) {
-      const body = _mountCompactResultBlock(bubble, {
-        label: t('chat.result_block.expense_setup'),
-        icon: 'file-text',
-        open: true,
-      });
-      if (body) window.mountExpenseSetupCard(body, message.expense_setup);
+      window.mountExpenseSetupCard(bubble, message.expense_setup);
     }
   }
   if (role === 'assistant' && message.expense_submit && typeof window.mountExpenseSubmitCard === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.expense-agent-submit-card')) {
-      const body = _mountCompactResultBlock(bubble, {
-        label: t('chat.result_block.expense_submit'),
-        icon: 'file-text',
-        open: true,
-      });
-      if (body) window.mountExpenseSubmitCard(body, message.expense_submit, opts.cid || currentCid);
+      window.mountExpenseSubmitCard(bubble, message.expense_submit, opts.cid || currentCid);
     }
   }
   // P3394 Wake Gate approval cards are rendered in the current composer
@@ -7414,26 +8126,15 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   }
   if (role === 'assistant' && message.kstar_review_card) {
     const bubble = msgDiv.querySelector('.chat-bubble');
-    if (bubble) {
-      const body = _mountCompactResultBlock(bubble, {
-        label: t('chat.result_block.kstar_review'),
-        icon: 'shield-check',
-        open: String(message.kstar_review_card.status || 'pending') === 'pending',
-      });
-      if (body) _mountKstarResultReviewCard(body, message.kstar_review_card);
-    }
+    if (bubble) _mountKstarResultReviewCard(bubble, message.kstar_review_card);
   }
 
   if (message.recall_projection_card && typeof window.mountRecallProjectionCard === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
-      const body = _mountCompactResultBlock(bubble, {
-        label: t('chat.result_block.recall_projection'),
-        icon: 'git-branch',
-      });
-      const recallProjectionHost = body || document.createElement('div');
-      if (!body) bubble.appendChild(recallProjectionHost);
+      const recallProjectionHost = document.createElement('div');
       const recallProjectionFallback = bubble.querySelector('.markdown-body');
+      bubble.appendChild(recallProjectionHost);
       Promise.resolve(window.mountRecallProjectionCard(
         recallProjectionHost,
         message.recall_projection_card,
@@ -7449,20 +8150,12 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   }
 
   // Interactive web-app artifacts (assistant messages only) — sandboxed
-  // `<iframe>` over the `chat-app://` protocol, mounted inside a compact
-  // collapsible result block so the reply text stays the primary content.
-  // See chat-artifact.js.
+  // `<iframe>` over the `chat-app://` protocol, appended after the form so it
+  // reads as "reply text → embedded app". See chat-artifact.js.
   if (role === 'assistant' && Array.isArray(message.artifacts) && message.artifacts.length
       && typeof window.mountMessageArtifacts === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
-    if (bubble) {
-      const body = _mountCompactResultBlock(bubble, {
-        label: t('chat.result_block.artifact'),
-        icon: 'box',
-        count: message.artifacts.length,
-      });
-      if (body) window.mountMessageArtifacts(body, message.artifacts, opts.cid || currentCid);
-    }
+    if (bubble) window.mountMessageArtifacts(bubble, message.artifacts, opts.cid || currentCid);
   }
   if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths, {
     status: _producedStatusFromReviewStatus(message.kstar_review?.status),
@@ -7801,10 +8494,6 @@ function _wakeRequestHost(cid, options = {}) {
     host.className = 'chat-wake-pending-host';
     host.setAttribute('role', 'region');
     host.setAttribute('aria-live', 'polite');
-    // 9.1 统一框架 · 底部「风险操作」：待人工确认的风险卡统一挂在这里，
-    // 带一个明确的区域标题，与输入/附件/执行方/继续同属底部区。
-    host.innerHTML = `<div class="chat-wake-pending-title">${_uiIconHtml('shield-check', 'chat-wake-pending-title-icon') || ''}<span>${escapeHtml(t('chat.risk_zone'))}</span></div>`;
-    if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(host);
     const anchor = wrap.querySelector('.chat-input-area');
     wrap.insertBefore(host, anchor || wrap.firstChild);
     try { _updateChatInputReserve(); } catch (_) {}
@@ -7962,80 +8651,18 @@ async function _resolveWakeRequest(card, request, cid, decision) {
   }
 }
 
-// ── 9.1 统一框架 · 中间区「紧凑结果块」────────────────────────────────
-// 把 Artifact / Evidence / Receipt 和交互卡（市场安装 / KSTAR 评审 / 报销
-// 表单 / 认知投影）统一收进一个紧凑的可折叠容器：小标题行（图标 + 类型 +
-// 数量）+ 正文。默认折叠，不再以连续大卡片打断消息流；需要人工确认的块
-// （待安装 / 待评审 / 表单）默认展开。返回正文容器供调用方挂载内容。
-// 静态版结果块 HTML（用于 appendChatMessage 的字符串组合路径），供 Evidence /
-// Receipt 等内联内容使用；动态挂载用 _mountCompactResultBlock。
-function _compactResultBlockHtml(opts = {}) {
-  const icon = _uiIconHtml(opts.icon || 'box', 'chat-result-block-icon-svg');
-  const countHtml = opts.count ? `<span class="chat-result-block-count">${escapeHtml(String(opts.count))}</span>` : '';
-  return `<details class="chat-result-block${opts.open ? ' is-open' : ''}"${opts.open ? ' open' : ''}>
-    <summary class="chat-result-block-head">
-      <span class="chat-result-block-icon">${icon || ''}</span>
-      <span class="chat-result-block-label">${escapeHtml(opts.label || '')}</span>
-      ${countHtml}
-      <span class="chat-result-block-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'chat-result-block-caret-svg') || ''}</span>
-    </summary>
-    <div class="chat-result-block-body">${opts.bodyHtml || ''}</div>
-  </details>`;
-}
-
-function _mountCompactResultBlock(host, opts = {}) {
-  if (!host) return null;
-  const details = document.createElement('details');
-  details.className = 'chat-result-block';
-  if (opts.open) {
-    details.open = true;
-    details.classList.add('is-open');
-  }
-  const icon = _uiIconHtml(opts.icon || 'box', 'chat-result-block-icon-svg');
-  const countHtml = opts.count ? `<span class="chat-result-block-count">${escapeHtml(String(opts.count))}</span>` : '';
-  details.innerHTML = `
-    <summary class="chat-result-block-head">
-      <span class="chat-result-block-icon">${icon || ''}</span>
-      <span class="chat-result-block-label">${escapeHtml(opts.label || '')}</span>
-      ${countHtml}
-      <span class="chat-result-block-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'chat-result-block-caret-svg') || ''}</span>
-    </summary>
-    <div class="chat-result-block-body"></div>
-  `;
-  host.appendChild(details);
-  // 图标占位统一由 icons.js 水合机制填充。
-  if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(details);
-  return details.querySelector('.chat-result-block-body');
-}
-
 function _mountMarketplaceInstallRequests(host, msgDiv, message, opts) {
   const cid = opts.cid || currentCid;
   if (!cid || !host || !message) return;
   const msgId = msgDiv.dataset.msgId || message._msg_id || '';
   if (!msgId) return;
   const requests = Array.isArray(message.marketplace_requests) ? message.marketplace_requests : [];
-  const pending = requests.filter((req) => req && String(req.status || 'pending') === 'pending');
-  // 9.1 统一框架 · 中间区：安装确认卡收进统一的「待安装」紧凑结果块，
-  // 需要人工确认的默认展开，其余折叠。
-  const blockHost = pending.length
-    ? _mountCompactResultBlock(host, {
-        label: t('chat.result_block.marketplace'),
-        icon: 'plus',
-        count: requests.length,
-        open: true,
-      })
-    : _mountCompactResultBlock(host, {
-        label: t('chat.result_block.marketplace'),
-        icon: 'plus',
-        count: requests.length,
-      });
-  const cardHost = blockHost || host;
   for (const req of requests) {
     if (!req || !req.request_id) continue;
     const selector = `.chat-marketplace-request[data-marketplace-request-id="${CSS.escape(String(req.request_id))}"]`;
     if (host.querySelector(selector)) continue;
     const card = document.createElement('div');
-    cardHost.appendChild(card);
+    host.appendChild(card);
     _renderMarketplaceInstallCard(card, req, cid, msgId);
   }
 }
@@ -8179,6 +8806,43 @@ function _quotePreviewAttribution(quote, targetCid) {
   }
   const sourceTitle = quote.sourceTitle || _conversationTitleForCid(sourceCid);
   return t('chat.reference_from_task', { title: sourceTitle, name: fromName });
+}
+
+/** 发送后即时反馈：把当前会话 task_references 注入刚发送的 user 气泡（轻量「引用」条）。
+ *  服务端消息随后经历史重载会显示完整的引用 bundle；此条先保证立即可见。 */
+function _injectUserTaskRefFeedback(userMsgEl, cid) {
+  if (!userMsgEl || !cid || userMsgEl.dataset.taskRefFeedback === '1') return;
+  userMsgEl.dataset.taskRefFeedback = '1';
+  try {
+    (window.cogseed || window.orkas).invoke('conversations.taskRefs.list', { cid }).then((res) => {
+      try {
+        if (!res || userMsgEl.isConnected === false) return;
+        const refs = Array.isArray(res.references) ? res.references : [];
+        if (!refs.length) return;
+        const bubble = userMsgEl.querySelector('.chat-bubble');
+        if (!bubble) return;
+        const strip = document.createElement('div');
+        strip.className = 'chat-taskref-inline';
+        strip.textContent = `${t('chat.taskref_inline_label', '引用')}：` + refs
+          .map((r) => `${r.kind === 'asset' ? t('agent_picker.ref_asset', '资产') : t('agent_picker.ref_artifact', '产物')} · ${r.name || ''}`)
+          .join('　');
+        bubble.insertBefore(strip, bubble.firstChild);
+      } catch (_) {}
+    }).catch(() => {});
+  } catch (_) {}
+}
+
+/** 空间任务引用（@ 资产）可见反馈：一行「引用资产」chips（资产不污染用户可见文本，
+ *  但 UI 必须让用户看到引用已随消息发出）。 */
+function _renderSpaceAssetRefsHtml(refs) {
+  const items = Array.isArray(refs) ? refs.slice(0, 12) : [];
+  if (!items.length) return '';
+  return `<div class="chat-space-asset-refs"><span class="chat-space-asset-refs-label">${escapeHtml(t('chat.space_asset_refs_label', '引用资产'))}</span>${items.map((r) => {
+    const name = (r && r.name) || '';
+    if (!name) return '';
+    const typeLabel = (r && r.asset_type) ? `（${escapeHtml(r.asset_type)}）` : '';
+    return `<span class="chat-space-asset-ref-chip" title="${escapeHtml(r.asset_type || '空间资产')}">${escapeHtml(name)}${typeLabel}</span>`;
+  }).join('')}</div>`;
 }
 
 function _renderMessageReferencesHtml(references) {
@@ -8478,7 +9142,8 @@ function _attachBubbleRetryBtn(actions, msgDiv) {
   const retryBtn = document.createElement('button');
   retryBtn.className = 'bubble-action-btn bubble-retry-btn';
   retryBtn.title = t('chat.retry_btn_title');
-  retryBtn.textContent = t('chat.retry_btn');
+  retryBtn.setAttribute('aria-label', t('chat.retry_btn_title'));
+  retryBtn.innerHTML = _uiIconHtml('refresh', 'ui-icon');
   retryBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     await _retryFailedAssistantMessage(msgDiv, retryBtn);
@@ -8768,21 +9433,15 @@ function _referenceTargetActivity(conversation) {
 }
 
 function _referenceNewTaskDraftCid(projectId = '') {
-  return projectId ? `projchat-${projectId}` : DRAFT_CID;
+  return DRAFT_CID;
 }
 
-function _stageReferencesForNewTask(payloads, projectId = '') {
+function _stageReferencesForNewTask(payloads) {
   if (!Array.isArray(payloads) || !payloads.length) return;
-  const draftCid = _referenceNewTaskDraftCid(projectId);
+  const draftCid = _referenceNewTaskDraftCid();
   for (const payload of payloads) _addQuote(draftCid, payload);
   _closeReferenceTargetPicker();
   _exitMessageSelection();
-  if (projectId) {
-    setView('project', projectId);
-    _renderQuotePreview(draftCid);
-    document.getElementById('project-chat-input')?.focus();
-    return;
-  }
   setView('new-chat');
   _renderQuotePreview(DRAFT_CID);
   document.getElementById('new-chat-input')?.focus();
@@ -8805,10 +9464,8 @@ async function _loadReferenceTargetConversations() {
 async function _openReferenceTargetPicker(payloads) {
   if (!Array.isArray(payloads) || !payloads.length) return;
   const loads = [_loadReferenceTargetConversations()];
-  if (typeof loadProjects === 'function') loads.push(loadProjects());
   const [targetConversations] = await Promise.all(loads);
   _closeReferenceTargetPicker();
-  const sourceProjectId = _projectIdForConversation(currentCid);
   const overlay = document.createElement('div');
   overlay.id = 'chat-reference-target-overlay';
   overlay.className = 'modal-overlay open chat-reference-target-overlay';
@@ -8865,7 +9522,7 @@ async function _openReferenceTargetPicker(payloads) {
     });
   };
   overlay.querySelector('[data-new-task]')?.addEventListener('click', () => {
-    _stageReferencesForNewTask(payloads, sourceProjectId);
+    _stageReferencesForNewTask(payloads);
   });
   overlay.querySelector('.chat-reference-target-close')?.addEventListener('click', _closeReferenceTargetPicker);
   overlay.addEventListener('keydown', (event) => { if (event.key === 'Escape') _closeReferenceTargetPicker(); });
@@ -9037,16 +9694,19 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   const actions = document.createElement('span');
   actions.className = 'chat-bubble-actions';
   actions.dataset.mode = mode;
-  const quoteButton = `<button type="button" class="bubble-action-btn bubble-quote-btn" title="${escapeHtml(t('chat.quote_btn_title'))}">${escapeHtml(t('chat.quote_btn'))}</button>`;
-  const overflowItems = `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-copy-btn" title="${escapeHtml(t('chat.copy_btn_title'))}">${escapeHtml(t('chat.copy_btn'))}</button>
-    <button type="button" role="menuitem" class="chat-bubble-menu-item bubble-aside-btn" title="${escapeHtml(t('aside.ask_btn_title'))}">${escapeHtml(t('aside.ask_btn'))}</button>
-    <button type="button" role="menuitem" class="chat-bubble-menu-item bubble-select-btn" title="${escapeHtml(t('chat.message_select_title'))}">${escapeHtml(t('chat.message_select'))}</button>
-    ${includeArchive && !includeRetry ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-cognition-btn" title="${escapeHtml(t('cognition.capture.menu_title'))}">${escapeHtml(t('cognition.capture.menu'))}</button>` : ''}
-    ${includeArchive ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-archive-btn" title="${escapeHtml(t('chat.archive_btn_title'))}">${escapeHtml(t('chat.archive_btn'))}</button>` : ''}`;
+  const quoteLabel = escapeHtml(t('chat.quote_btn_title'));
+  const copyLabel = escapeHtml(t('chat.copy_btn_title'));
+  const asideLabel = escapeHtml(t('aside.ask_btn_title'));
+  const quoteButton = `<button type="button" class="bubble-action-btn bubble-quote-btn" title="${quoteLabel}" aria-label="${quoteLabel}">${_uiIconHtml('at-sign', 'ui-icon')}</button>`;
+  const copyButton = `<button type="button" class="bubble-action-btn bubble-copy-btn" title="${copyLabel}" aria-label="${copyLabel}">${_uiIconHtml('copy', 'ui-icon')}</button>`;
+  const asideButton = `<button type="button" class="bubble-action-btn bubble-aside-btn" title="${asideLabel}" aria-label="${asideLabel}">${_uiIconHtml('message-square', 'ui-icon')}</button>`;
+  const overflowItems = `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-select-btn" title="${escapeHtml(t('chat.message_select_title'))}">${_uiIconHtml('list', 'ui-icon')}<span>${escapeHtml(t('chat.message_select'))}</span></button>
+    ${includeArchive && !includeRetry ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-cognition-btn" title="${escapeHtml(t('cognition.capture.menu_title'))}">${_uiIconHtml('brain-circuit', 'ui-icon')}<span>${escapeHtml(t('cognition.capture.menu'))}</span></button>` : ''}
+    ${includeArchive ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-archive-btn" title="${escapeHtml(t('chat.archive_btn_title'))}">${_uiIconHtml('book-open', 'ui-icon')}<span>${escapeHtml(t('chat.archive_btn'))}</span></button>` : ''}`;
   actions.innerHTML = `
-    <span class="chat-bubble-direct-actions">${quoteButton}</span>
+    <span class="chat-bubble-direct-actions">${copyButton}${quoteButton}${asideButton}</span>
     <span class="chat-bubble-more-wrap">
-      <button type="button" class="bubble-more-btn" title="${escapeHtml(t('chat.more_actions'))}" aria-label="${escapeHtml(t('chat.more_actions'))}" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true">···</span></button>
+      <button type="button" class="bubble-more-btn" title="${escapeHtml(t('chat.more_actions'))}" aria-label="${escapeHtml(t('chat.more_actions'))}" aria-haspopup="menu" aria-expanded="false">${_uiIconHtml('more-horizontal', 'ui-icon')}</button>
       <span class="chat-bubble-more-menu" role="menu" hidden>${overflowItems}</span>
     </span>
   `;
@@ -9144,13 +9804,23 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
     if (!text.trim() || copyBtn.disabled) return;
     copyBtn.disabled = true;
     const orig = copyBtn.innerHTML;
+    const origTitle = copyBtn.title;
     try {
       await navigator.clipboard.writeText(text);
-      copyBtn.textContent = t('chat.copy_done');
+      copyBtn.innerHTML = _uiIconHtml('check', 'ui-icon');
+      copyBtn.title = t('chat.copy_done');
+      copyBtn.setAttribute('aria-label', t('chat.copy_done'));
     } catch (err) {
-      copyBtn.textContent = t('chat.copy_failed');
+      copyBtn.innerHTML = _uiIconHtml('x-circle', 'ui-icon');
+      copyBtn.title = t('chat.copy_failed');
+      copyBtn.setAttribute('aria-label', t('chat.copy_failed'));
     }
-    setTimeout(() => { copyBtn.innerHTML = orig; copyBtn.disabled = false; }, 1500);
+    setTimeout(() => {
+      copyBtn.innerHTML = orig;
+      copyBtn.title = origTitle;
+      copyBtn.setAttribute('aria-label', origTitle);
+      copyBtn.disabled = false;
+    }, 1500);
   });
   if (!btn) {
     actionsRow.appendChild(actions);
@@ -9293,6 +9963,44 @@ function _trackChatSendResult(result, data = {}) {
   void data;
 }
 
+/** 「新任务」：像市面主流 AI 助手一样，直接进入一个空的会话界面。
+ *  后端创建一个 normal 会话，前端立即进入该会话（无需先输入）。 */
+async function openNewTask() {
+  _convLog.info('new task: creating empty conversation');
+  let convId = '';
+  try {
+    const newChatSpaceId = (typeof window.getNewChatSpaceId === 'function') ? window.getNewChatSpaceId() : '';
+    const res = await apiFetch('/api/conversations/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'normal', ...(newChatSpaceId ? { spaceId: newChatSpaceId } : {}) }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || t('chat.create_conv_failed'));
+    const conv = data.conversation;
+    convId = conv.conversation_id;
+    conv.title = t('chat.default_title');
+    conv.last_active_at = new Date().toISOString();
+    _markConversationListLocallyChanged();
+    conversations.unshift(conv);
+    renderConversationList();
+  } catch (err) {
+    _convLog.warn('new task create conversation failed', { error: err });
+    if (typeof uiAlert === 'function') {
+      await uiAlert(t('chat.create_conv_failed_with_reason', { reason: err && err.message ? err.message : String(err) }));
+    }
+    return;
+  }
+  // 清空两个输入框，避免旧草稿进入新会话。
+  const chatInput = document.getElementById('chat-input');
+  if (chatInput) { chatInput.value = ''; autoGrow(chatInput, 200); }
+  const newInput = document.getElementById('new-chat-input');
+  if (newInput) { newInput.value = ''; autoGrow(newInput, 260); }
+  setView('conversation', convId, { skipLoad: true });
+  _transferNewChatRecipientTo(convId);
+  _renderRecipientChip('conversation');
+}
+
 async function handleNewChatSubmit() {
   const input = document.getElementById('new-chat-input');
   const raw = (input.value || '').trim();
@@ -9303,7 +10011,7 @@ async function handleNewChatSubmit() {
     await uiAlert(t('oss.task_required'));
     return;
   }
-  if (!ensureModelConfigured()) return;
+  if (!(await _ensureModelOrCliFallback(DRAFT_CID))) return;
   const references = _referenceSnapshotsForQuotes(quotes);
   const requestText = raw || t('chat.reference_default_prompt');
   const useSelections = (typeof consumeChatUseSelections === 'function')
@@ -9346,10 +10054,12 @@ async function handleNewChatSubmit() {
   if (newBtn) newBtn.disabled = true;
   let convId;
   try {
+    // 工作空间 chip 选中的空间（无 = 默认工作区，普通会话）
+    const newChatSpaceId = (typeof window.getNewChatSpaceId === 'function') ? window.getNewChatSpaceId() : '';
     const res = await apiFetch('/api/conversations/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'normal' }),
+      body: JSON.stringify({ kind: 'normal', ...(newChatSpaceId ? { spaceId: newChatSpaceId } : {}) }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || t('chat.create_conv_failed'));
@@ -9432,22 +10142,64 @@ async function handleNewChatSubmit() {
   _transferNewChatRecipientTo(convId);
   _renderRecipientChip('conversation');
   if (newBtn) newBtn.disabled = false;
+  // @ 选的产物/资产引用（new-chat pending）→ 提交进新会话 task_references，
+  // 发送时后端自动并入 AI 可读（groupChat.send 合并 task_references）。
+  if (typeof window !== 'undefined' && typeof window.commitNewChatTaskRefs === 'function') {
+    await window.commitNewChatTaskRefs(convId);
+  }
   const extra = {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
   };
+  // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
+  if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
   await sendInCurrentConversation(content, Object.keys(extra).length ? extra : undefined);
 }
 
+/** 交接意图关键词：命中即视为「继续这项工作/交接」类请求。 */
+const _HANDOFF_INTENT_RE =
+  /继续这项工作|现在做到哪里|做到哪里了|交接|继续工作|接着做|下一步准备怎么做|哪些约束不能丢|进度.*继续|继续.*进度|工作交接|汇报进度/;
+
+/** 模板交接回复：导入会话 + 交接意图 → 用真实数据直出三部分模板回复，
+ *  不调 CLI / LLM，毫秒级。命中并成功返回 true（已处理，发送流程跳过）。 */
+async function _tryTemplateHandoffReply(cid, raw) {
+  if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return false;
+  const text = String(raw || '').trim();
+  if (!_HANDOFF_INTENT_RE.test(text)) return false;
+  try {
+    const res = await window.cogseed.invoke('chats.handoffWelcomeReply', { conversationId: cid, text });
+    if (!res || !res.ok) return false;
+    _convLog.info('template handoff reply used', { cid, chars: String(res.text || '').length });
+    // The backend appended the user message + commander reply to the transcript.
+    await loadConversationHistory(cid, { preserveScroll: true });
+    return true;
+  } catch (err) {
+    _convLog.warn('template handoff reply failed', { cid, error: err });
+    return false;
+  }
+}
+
 async function handleChatSubmit() {
+  _convLog.info('[cli-fallback] handleChatSubmit entered', { currentCid });
   const input = document.getElementById('chat-input');
   const raw = (input.value || '').trim();
   if (!currentCid) return;
   // A bare quote with no extra text is a legitimate "look at this" forward;
   // only reject when both the textarea AND the quote are empty.
   if (!raw && !_getQuotes(currentCid).length) return;
-  if (!ensureModelConfigured()) return;
+  // Template handoff reply: when the user sends a handoff/continue prompt on an
+  // imported conversation, answer instantly from real CogSeed data (three-part
+  // template) instead of running a slow CLI/LLM turn. Only when this
+  // conversation has a welcome template (i.e. is an imported conversation).
+  const handoffHandled = await _tryTemplateHandoffReply(currentCid, raw);
+  if (handoffHandled) {
+    input.value = '';
+    autoGrow(input, 200);
+    _clearDraft(currentCid);
+    return;
+  }
+  if (!(await _ensureModelOrCliFallback(currentCid))) return;
   const cid = currentCid;
   const quotes = _getQuotes(cid).slice();
   const references = _referenceSnapshotsForQuotes(quotes);
@@ -9518,6 +10270,8 @@ async function handleChatSubmit() {
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
   };
+  // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
+  if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
   await sendInCurrentConversation(content, Object.keys(extra).length ? extra : undefined);
 }
 
@@ -9717,6 +10471,11 @@ function _taskTurnRecordProcess(run, evData) {
 function _taskTurnRecordStreamEvent(cid, ev) {
   const run = _taskTurnRun(cid);
   if (!run || !ev) return;
+  // 右栏「本次携带」执行记录实时刷新（原型运行态 rail）：process/status 事件
+  // 到达即触发；refreshExecutions 内部有 2s 节流 + carried tab 激活检查。
+  if (typeof window !== 'undefined' && typeof window.ConversationInfo?.refreshExecutions === 'function') {
+    try { window.ConversationInfo.refreshExecutions(cid); } catch (_) {}
+  }
   if (ev.type === 'final' && ev.text) {
     const text = String(ev.text || '');
     run.assistantMessages.push({ actor: '', text });
@@ -9836,6 +10595,9 @@ function _makeConvChatController(cid, options = {}) {
         // user timestamp lands a few milliseconds later than the placeholder.
         activePairId = `send-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         userMsgEl.dataset.convPair = activePairId;
+        // 空间任务引用（@ 产物/资产）即时反馈：user 气泡里注入「引用」条
+        // （不等历史 reconcile——controller 发送路径不会自动重载气泡）。
+        _injectUserTaskRefFeedback(userMsgEl, cid);
       },
       onAssistantStart(msgEl, id) {
         // New send → drop any stale per-actor placeholders left over from a
@@ -9924,21 +10686,34 @@ function _makeConvChatController(cid, options = {}) {
 // ── Commander CLI fallback ────────────────────────────────────────────────
 // No API-key model configured → the commander can't answer by itself. Route
 // the conversation to the user's signed-in CLI agent (Claude Code / Codex /
-// OpenCode), which runs on their official account — the only local execution
-// backend. Preferred CLI comes from settings (prefs.setCliFallback); when
-// unset, the first signed-in CLI is picked. Honest, idempotent, never
-// fabricates a model.
+// OpenCode / WorkBuddy), which runs on their official account — the only
+// local execution backend. Preferred CLI comes from settings
+// (prefs.setCliFallback; the onboarding connect step writes the first
+// connected CLI here); when unset, the first signed-in CLI is picked.
+// Honest, idempotent, never fabricates a model.
 let _cliFallbackApplied = null; // cid → cli (per conversation, once)
 
-async function _maybeApplyCliFallback(cid) {
-  if (_cliFallbackApplied === cid) return false;
+async function _maybeApplyCliFallback(cid, opts = {}) {
+  // `force` skips the `model.hasConfigured` gate: used when the configured API
+  // exists but just FAILED at call time (bad key / network / quota) — we still
+  // want to fall back to the local CLI instead of showing a bare error.
+  const force = !!(opts && opts.force);
+  if (_cliFallbackApplied === cid) {
+    // Already fell back for this conversation: a CLI agent is in place (or the
+    // user picked one manually). Treat that as success, not as "no fallback".
+    const existing = _activeRecipient('conversation');
+    if (existing && existing.kind === 'agent' && existing.id) return true;
+    return false;
+  }
   if (!window.orkas || typeof window.orkas.invoke !== 'function') return false;
 
-  let modelRes;
-  try {
-    modelRes = await window.orkas.invoke('model.hasConfigured');
-  } catch (_) { return false; }
-  if (modelRes && modelRes.configured) return false;
+  if (!force) {
+    let modelRes;
+    try {
+      modelRes = await window.orkas.invoke('model.hasConfigured');
+    } catch (_) { return false; }
+    if (modelRes && modelRes.configured) return false;
+  }
 
   let cli = '';
   try {
@@ -9954,12 +10729,16 @@ async function _maybeApplyCliFallback(cid) {
       // available one — the credential check is file-based and can miss
       // keychain-stored sessions, so an available CLI is still a valid
       // fallback backend (it will surface its own login error if not logged in).
+      // CLI whitelist mirrors onboarding's connectable list (claude / codex /
+      // opencode / workbuddy) so a CLI connected in the walkthrough is
+      // selectable here.
+      const FALLBACK_CLIS = ['claude', 'codex', 'opencode', 'workbuddy'];
       const signedIn = entries.find(
         (e) => e && e.available && e.auth && e.auth.loggedIn
-          && ['claude', 'codex', 'opencode'].includes(e.type),
+          && FALLBACK_CLIS.includes(e.type),
       );
       const anyAvailable = entries.find(
-        (e) => e && e.available && ['claude', 'codex', 'opencode'].includes(e.type),
+        (e) => e && e.available && FALLBACK_CLIS.includes(e.type),
       );
       const entry = signedIn || anyAvailable;
       cli = entry ? entry.type : '';
@@ -9982,7 +10761,7 @@ async function _maybeApplyCliFallback(cid) {
   // on the fly so the fallback actually has a backend to route to.
   if (!agent) {
     try {
-      const name = cli === 'claude' ? 'Claude' : (cli === 'codex' ? 'Codex' : 'OpenCode');
+      const name = cli === 'claude' ? 'Claude' : (cli === 'codex' ? 'Codex' : (cli === 'opencode' ? 'OpenCode' : 'WorkBuddy'));
       const res = await window.orkas.invoke('agents.create', {
         name,
         description: `本机 ${name} 命令行，作为 AI 团队成员执行任务`,
@@ -10001,12 +10780,51 @@ async function _maybeApplyCliFallback(cid) {
   _recipientByCid[cid] = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
   _cliFallbackApplied = cid;
   try { _renderRecipientChip('conversation'); } catch (_) {}
-  const label = cli === 'claude' ? 'Claude Code' : (cli === 'codex' ? 'Codex' : 'OpenCode');
+  const label = cli === 'claude' ? 'Claude Code' : (cli === 'codex' ? 'Codex' : (cli === 'opencode' ? 'OpenCode' : 'WorkBuddy'));
   _convLog.info('commander CLI fallback applied', { cid, cli, agentId: agent.agent_id });
   if (typeof uiToast === 'function') {
     uiToast(`指挥官当前没有可用的 API Key，消息已自动交给 ${label} 执行（可在设置中更改）`, { variant: 'warning', timeoutMs: 6000 });
   }
   return true;
+}
+
+/**
+ * API 调用失败后的自动降级（差距修复：配置存在但用不了 → 走本机 agent）。
+ * 模型流事件带 `failureKind: 'model' | 'config'`（key 失效 / 网络 / 额度 / 权限等）
+ * 时，把该会话切换到本机 CLI agent，后续消息由它执行。只作用于发给 commander
+ * 的模型失败；幂等（已降级 / recipient 已非 commander 时跳过）。不自动重发当前
+ * 消息——避免重复消费用户意图，用户重新发送即走 CLI。
+ */
+async function _maybeAutoCliFallbackOnModelFailure(cid, ev) {
+  if (!ev || ev.aborted) return;
+  const kind = ev.failureKind;
+  if (kind !== 'model' && kind !== 'config') return;
+  if (_cliFallbackApplied === cid) return;
+  let recipient = null;
+  try { recipient = _activeRecipient('conversation'); } catch (_) {}
+  if (recipient && recipient.kind !== 'commander') return;
+  const ok = await _maybeApplyCliFallback(cid, { force: true });
+  if (ok && typeof uiToast === 'function') {
+    uiToast('API 调用失败，已切换到本机 Agent 执行（可在设置中更改）', { variant: 'warning', timeoutMs: 6000 });
+  }
+}
+
+/**
+ * 发送前的模型守卫 + 无模型降级：
+ * - 有已配置模型 → true（正常发送）。
+ * - 无模型 → 尝试把 recipient 自动切换到本机已登录 CLI agent（_maybeApplyCliFallback），
+ *   成功则放行（后端按 CLI agent 路由执行）；无可用 CLI 才返回 false（引导用户配置）。
+ * 仅用于主对话（new-chat / conversation）的 Commander 场景；技能/agent 编辑聊天
+ * 等仍走 ensureModelConfigured 原逻辑。
+ */
+async function _ensureModelOrCliFallback(cid) {
+  if (ensureModelConfigured({ silent: true })) return true;
+  const ok = await _maybeApplyCliFallback(cid);
+  _convLog.info('[cli-fallback] ensureModelOrCliFallback', { cid, ok, recipient: _activeRecipient('conversation') });
+  if (ok) return true;
+  // 无模型也无可用 CLI：走原提示（弹框 + 跳设置）。
+  ensureModelConfigured();
+  return false;
 }
 
 // No usable local CLI backend: guide the user instead of failing with a bare
@@ -10037,7 +10855,7 @@ async function sendInConversation(cid, content, extra, options = {}) {
   if (!cid) return { started: false, aborted: false, errored: false, result: 'failure' };
   const startedAt = performance.now();
   const sendOptions = options && typeof options === 'object' ? options : {};
-  const statAgentId = String(sendOptions.agent_id || '');
+  let statAgentId = String(sendOptions.agent_id || '');
 
   // Commander CLI fallback: when no API-key model is configured and the
   // message targets the commander (no explicit agent), route this
@@ -10047,8 +10865,28 @@ async function sendInConversation(cid, content, extra, options = {}) {
     try {
       const recipient = _activeRecipient('conversation');
       const toCommander = !recipient || recipient.kind === 'commander';
+      _convLog.info('[cli-fallback] sendInConversation check', { cid, statAgentId, recipientKind: recipient && recipient.kind, toCommander });
       if (toCommander) {
         await _maybeApplyCliFallback(cid);
+      }
+      // A successful fallback updates _recipientByCid but NOT sendOptions
+      // (it was snapshot before this helper ran). Mirror it back so the
+      // actual send is routed to the CLI agent, not the commander.
+      const after = _activeRecipient('conversation');
+      if (after && after.kind === 'agent' && after.id) {
+        sendOptions.agent_id = after.id;
+        statAgentId = after.id;
+        // The server floor is set by parsing `@name` mentions, not by any
+        // agent_id field. When this send did not already carry a recipient
+        // prefix (direct sendInConversation callers bypass applyRecipientPrefix),
+        // inject the mention so the CLI agent actually holds the floor.
+        if (!_LEADING_MENTION_RE.exec(String(content || ''))) {
+          const display = _recipientPrefixName(after);
+          if (display) {
+            const sep = /^>/.test(String(content || '')) ? '\n' : ' ';
+            content = '@' + display + sep + content;
+          }
+        }
       }
     } catch (err) {
       _convLog.warn('cli fallback check failed', err);
@@ -10781,7 +11619,7 @@ function _createStreamingAssistantMessage(container, opts = {}) {
       <span class="chat-msg-time">${formatTime(new Date().toISOString())}</span>
     </div>
     <div class="chat-bubble">
-      <details class="stream-process" data-role="process-container" open style="display:none">
+      <details class="stream-process" data-role="process-container" style="display:none">
         <summary class="stream-process-summary">
           <span class="stream-process-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'ui-icon stream-process-caret-icon')}</span>
           <span class="stream-process-label">${escapeHtml(t('chat.process_info'))}</span>
@@ -11222,24 +12060,6 @@ function _streamingUpdateActivityFromEvent(msg, evt) {
   if (cliType === 'status' && phase === 'usage') {
     _streamingUpdateActivity(msg, t('chat.activity_working'));
     return;
-  }
-  // 9.1 统一框架 · 中间区：运行中的「状态」行显示真实当前动作（工具名 +
-  // 阶段），而不是泛化的「执行中…」。工具名是技术标识符（不翻译），阶段
-  // 复用既有 phase 文案，与 _formatEventLine 的工具行同一口径。
-  const toolName = _processEventName(evt);
-  if (toolName) {
-    const phaseLabel = phase === 'start' ? t('chat.stream.phase_start')
-      : phase === 'end' ? t('chat.stream.phase_end')
-        : phase === 'progress' ? t('chat.stream.phase_progress')
-          : '';
-    _streamingUpdateActivity(msg, phaseLabel ? `${toolName} · ${phaseLabel}` : toolName);
-    return;
-  }
-  // 非工具事件：有明确语义的 stream 用紧凑行显示，其余维持泛化状态。
-  if (stream === 'lifecycle' || stream === 'context' || stream === 'compaction'
-      || stream === 'patch' || stream === 'approval' || stream === 'error') {
-    const line = _formatEventLine(evt);
-    if (line) { _streamingUpdateActivity(msg, line); return; }
   }
   _streamingUpdateActivity(msg, t('chat.activity_working'));
 }
@@ -11813,7 +12633,9 @@ function createChatController(config) {
     // Gate every chat-controller send on model config — covers the normal
     // conversation flow plus skill/agent edit chats, and also catches queue
     // drains and auto-seed sends (e.g. skills.js 'autoSeed').
-    if (!ensureModelConfigured()) {
+    // 无模型自动降级：若该会话已降级到本机 CLI agent（_cliFallbackApplied === id），
+    // CLI 用自己的凭据执行，不需要 CogSeed 的 API 模型 → 放行。
+    if (!(_cliFallbackApplied === id) && !ensureModelConfigured()) {
       return { started: false, aborted: false, errored: false, reason: 'model_not_configured' };
     }
     if (hooks.beforeSend) {
@@ -11932,6 +12754,9 @@ function createChatController(config) {
               } else {
                 pending.errored = true;
                 if (hooks.onError) hooks.onError(ev.text, msgEl, id);
+                // API 模型调用失败（failureKind model/config）→ 自动降级到本机
+                // CLI agent，后续消息由它执行（不自动重发当前消息）。
+                void _maybeAutoCliFallbackOnModelFailure(id, ev);
               }
             }
             const paintWait = maybeYieldToPaint();
@@ -12460,6 +13285,17 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     for (const payload of gmSkills) _mountCreatedSkillChip(ph, payload);
   }
 
+  // 空间构建师 space-draft 块 → 实时流式 finalize 也渲染「空间配置草稿」卡。
+  // 之前只在历史重载 appendChatMessage 里渲染 → 对话中看不到、切页回来才显示。
+  const bubble = ph.querySelector('.chat-bubble');
+  const spaceDraftCard = bubble && !bubble.querySelector('.space-draft-card') ? _extractSpaceDraft(text) : null;
+  if (bubble && spaceDraftCard && !bubble.querySelector('.space-draft-card')) {
+    const host = document.createElement('div');
+    host.innerHTML = _renderSpaceDraftButtonHtml(spaceDraftCard);
+    const cardNode = host.firstElementChild;
+    if (cardNode) bubble.appendChild(cardNode);
+  }
+
   // Form widget (agent → user input form).
   if (gm.form && typeof window.renderChatInputForm === 'function') {
     const bubble = ph.querySelector('.chat-bubble');
@@ -12477,23 +13313,13 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   if (gm.expense_setup && typeof window.mountExpenseSetupCard === 'function') {
     const bubble = ph.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.expense-agent-setup-card')) {
-      const body = _mountCompactResultBlock(bubble, {
-        label: t('chat.result_block.expense_setup'),
-        icon: 'file-text',
-        open: true,
-      });
-      if (body) window.mountExpenseSetupCard(body, gm.expense_setup);
+      window.mountExpenseSetupCard(bubble, gm.expense_setup);
     }
   }
   if (gm.expense_submit && typeof window.mountExpenseSubmitCard === 'function') {
     const bubble = ph.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.expense-agent-submit-card')) {
-      const body = _mountCompactResultBlock(bubble, {
-        label: t('chat.result_block.expense_submit'),
-        icon: 'file-text',
-        open: true,
-      });
-      if (body) window.mountExpenseSubmitCard(body, gm.expense_submit, cid);
+      window.mountExpenseSubmitCard(bubble, gm.expense_submit, cid);
     }
   }
 
@@ -12520,28 +13346,14 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
 
   if (gm.kstar_review_card) {
     const bubble = ph.querySelector('.chat-bubble');
-    if (bubble) {
-      const body = _mountCompactResultBlock(bubble, {
-        label: t('chat.result_block.kstar_review'),
-        icon: 'shield-check',
-        open: String(gm.kstar_review_card.status || 'pending') === 'pending',
-      });
-      if (body) _mountKstarResultReviewCard(body, gm.kstar_review_card);
-    }
+    if (bubble) _mountKstarResultReviewCard(bubble, gm.kstar_review_card);
   }
 
   // Interactive web-app artifacts (chat-app:// iframe). Idempotent — skips
   // ids already mounted in this bubble.
   if (Array.isArray(gm.artifacts) && gm.artifacts.length && typeof window.mountMessageArtifacts === 'function') {
     const bubble = ph.querySelector('.chat-bubble');
-    if (bubble) {
-      const body = _mountCompactResultBlock(bubble, {
-        label: t('chat.result_block.artifact'),
-        icon: 'box',
-        count: gm.artifacts.length,
-      });
-      if (body) window.mountMessageArtifacts(body, gm.artifacts, cid);
-    }
+    if (bubble) window.mountMessageArtifacts(bubble, gm.artifacts, cid);
   }
   if (Array.isArray(gm.produced) && gm.produced.length) {
     _mountMessageProducedFooter(ph, gm.produced, {
@@ -12635,6 +13447,17 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
   if (evData.type === 'message') {
     const gm = evData.msg;
     if (!gm) return;
+    // Host-internal KStar review replies (self-evolution signal) are never
+    // rendered as bubbles. Consume the actor placeholder so the turn still
+    // settles cleanly, then skip the visible message entirely.
+    if (_groupMessageSystemKind(gm) === 'kstar_review') {
+      const ph = _consumeActorPlaceholder(cid, gm.from, _eventTurnId(evData));
+      if (ph && ph.parentElement) {
+        _finalizeActorPlaceholder(ph, gm, cid, archive);
+      }
+      if (evData.turn_end) _evaluateAutoRecipient(cid);
+      return;
+    }
     // The user's own send is already rendered optimistically by the input
     // handler. Still stamp it with the persisted message id once the bus echoes
     // the write, so history reconciliation can prove the DOM matches jsonl
@@ -12761,13 +13584,6 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
         _streamingUpdateActivity(target, t('chat.activity_writing'));
       } else if (data.type === 'progress' && data.text) {
         const evt = data.event && data.event.stream ? data.event : null;
-        // 9.1 会话区域统一框架：plan 事件也可能以 progress 形态到达
-        // （主进程 processItems 两种形态都持久化），这里同样转发给
-        // 顶部执行计划轨道，避免轨道漏更新。
-        if (evt && evt.stream === 'plan' && typeof window.planRail !== 'undefined'
-            && typeof window.planRail.onPlanEvent === 'function') {
-          window.planRail.onPlanEvent(cid, evt);
-        }
         const line = evt ? (_formatEventLine(evt) || String(data.text)) : String(data.text);
         if (evt) _setProcessSummaryRuntimeFromEvent(target, evt);
         _streamingAppendProgress(target, line, evt ? _eventProcessKind(evt, line) : undefined);
@@ -13713,7 +14529,6 @@ function _updateConvSendUI(cid) {
   if (cid !== currentCid) return;
   const sendBtn = document.getElementById('chat-send-btn');
   const input = document.getElementById('chat-input');
-  const continueBtn = document.getElementById('chat-continue-btn');
   if (!sendBtn) return;
   const pending = isConvPending(cid);
   _ensureConvCreateAgentInline();
@@ -13735,10 +14550,6 @@ function _updateConvSendUI(cid) {
       input.disabled = true;
       input.placeholder = t('component.send_blocked_disabled');
     }
-    if (continueBtn) {
-      continueBtn.hidden = true;
-      continueBtn.disabled = true;
-    }
     return;
   }
   if (input) input.disabled = false;
@@ -13747,21 +14558,6 @@ function _updateConvSendUI(cid) {
   sendBtn.title = pending ? t('chat.stop_reply') : t('chat.send_title');
   if (input) {
     input.placeholder = pending ? t('chat.input_placeholder_queue') : t('chat.input_placeholder');
-  }
-  // 9.1 统一框架 · 底部「继续」：非运行态且执行方可用时显示；运行中隐藏
-  // （此时发送按钮已是「停止」，继续与停止并存会误导）。文案按状态切换：
-  // 最后一条失败 → 「重试」，否则「继续」。
-  if (continueBtn) {
-    continueBtn.hidden = pending;
-    continueBtn.disabled = pending;
-    if (!pending) {
-      const continueState = _chatContinueButtonState();
-      const isRetry = continueState.kind === 'retry';
-      const labelEl = continueBtn.querySelector('[data-role="continue-label"]');
-      if (labelEl) labelEl.textContent = isRetry ? t('chat.retry_btn') : t('chat.continue');
-      continueBtn.title = isRetry ? t('chat.retry_btn') : t('chat.continue');
-      continueBtn.classList.toggle('is-retry', isRetry);
-    }
   }
   if (!pending) input?.focus();
 }
@@ -13856,55 +14652,12 @@ function abortConvStream(cid) {
 // arg is ignored (kept for call-site compatibility) — state is computed from
 // pendingConvs / messageQueues directly so callers don't have to stay in sync.
 function _updateConvSidebarBadge(cid, _unused) {
+  // 侧栏行不显示「进行中/排队」徽标（用户设计确认：行内无装饰状态）。
+  // 仅保留全局运行计数（顶部新聊天按钮 chip）与会话头状态更新。
   _refreshCommanderRunningChip();
-  // 9.1 统一框架：任务状态行与徽标同源刷新（运行中/排队/计划进度）。
-  _refreshConvTaskLine(cid);
-  // Chat header's status pill follows the same per-conversation signal.
   if (cid === currentCid) {
     try { _refreshChatHeader(); } catch (_) { /* not yet bound */ }
   }
-  const item = document.querySelector(`.conv-item[data-cid="${cid}"]`);
-  if (!item) return;
-  item.querySelector('.conv-status-badge')?.remove();
-  // Treat aborted-but-still-draining as not streaming. `pendingConvs` only
-  // clears when main emits `done`, which can trail the stop click; until then
-  // the bubble already shows the "stopped" state so the streaming badge would lie.
-  const state = pendingConvs.get(cid);
-  const pending = isConvPending(cid) && !(state && state.aborted);
-  // Use _getQueue so a queue persisted in localStorage is picked up even if
-  // the conversation hasn't been opened in this session yet.
-  const queued = _getQueue(cid).length;
-  // 9.1 统一框架 · 左侧「任务与 Session」：来自 state_changed 的在途执行方
-  // 也算运行中（群聊里 Agent 已在跑但当前消息未处于流式渲染时同样显示）。
-  const inFlight = (_latestInFlight.get(cid) || []).length;
-  if (!pending && !queued && !inFlight) return;
-
-  const badge = document.createElement('span');
-  badge.className = 'conv-status-badge';
-  if (pending) badge.classList.add('is-streaming');
-  else if (inFlight) badge.classList.add('is-running');
-  else badge.classList.add('is-queued');
-
-  let html = '';
-  if (pending) {
-    html += '<span class="conv-status-dot"></span>';
-    if (queued > 0) html += `<span class="conv-status-count">+${queued}</span>`;
-  } else if (inFlight) {
-    html += '<span class="conv-status-dot"></span>';
-    html += `<span class="conv-status-text">${escapeHtml(t('chat.status.running'))}</span>`;
-    if (inFlight > 1) html += `<span class="conv-status-count">${inFlight}</span>`;
-  } else {
-    html += `<span class="conv-status-text">${escapeHtml(t('chat.status.pending_short'))}</span>`;
-    html += `<span class="conv-status-count">${queued}</span>`;
-  }
-  badge.innerHTML = html;
-  // Insert the badge as a sibling of the title (now inside .conv-item-row);
-  // fall back to prepending into the item for legacy / nested-conv markup.
-  const title = item.querySelector('.conv-item-title');
-  const row = title ? title.parentElement : null;
-  if (title && row) row.insertBefore(badge, title);
-  else if (title) title.parentElement?.insertBefore(badge, title);
-  else item.prepend(badge);
 }
 
 // Repaint badges on every visible conversation item. Called after re-render

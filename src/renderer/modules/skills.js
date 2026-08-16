@@ -271,6 +271,44 @@ function _abilityAssetCategoryLabel(category) {
   return labels[category] || category || _cognitionText('cognition.unknown', '未知');
 }
 
+// 作用域中文标签（交互规范 §17.3：作用域要"看得懂"，不暴露英文检索 token）。
+function _abilityAssetScopeLabel(scope) {
+  const labels = {
+    report: '报告类任务',
+    code: '代码类任务',
+    review: '审查类任务',
+    product: '产品类任务',
+    general: '通用',
+  };
+  return labels[String(scope || '')] || String(scope || '');
+}
+
+// 候选/资产的展示标题（交互规范附录 A：标题体现内容）。
+// - 旧候选可能带英文模板 summary（'Reusable experience lesson...' 等），
+//   渲染层从 judgment 提炼中文标题，避免用户看到英文；
+// - 其余情况返回原 summary/title。
+function _abilityCandidateDisplayTitle(candidate) {
+  const summary = String(candidate.summary || '').trim();
+  const judgment = String(candidate.judgment || '').trim();
+  const isLegacyEnglish = /^(Reusable experience lesson|KSTAR rule gap candidate|Verified multi-tool workflow|Reusable workflow lesson)/.test(summary);
+  if (isLegacyEnglish && judgment) return _abilityTitleFromContent(judgment);
+  return summary || _abilityTitleFromContent(judgment) || candidate.id || '';
+}
+
+// 从经验内容提炼标题核心：去掉引导前缀，取第一句主干，限 24 字。
+function _abilityTitleFromContent(text) {
+  const t = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(处理|对于|遇到|当|在)[^，。；,.;:：]{0,12}[，,。；;]?/, '')
+    .replace(/^(可|应|须|要|建议|注意|务必|先|再)[^，。；,.;:：]{0,3}/, '')
+    .replace(/^(“|『|「)/, '')
+    .replace(/([，。；,.;:：])[\s\S]*$/, '$1')
+    .trim();
+  if (!t) return '通用经验';
+  return t.length <= 24 ? t : `${t.slice(0, 24)}…`;
+}
+
 function _abilityAssetMaturityLabel(maturity, status) {
   if (status === 'paused') return _cognitionText('cognition.asset_status_paused', '已暂停');
   if (status === 'revoked') return _cognitionText('cognition.asset_status_revoked', '已移除');
@@ -343,8 +381,8 @@ function _abilityAssetDisplayTitle(asset) {
   const title = String(asset?.title || asset?.id || '').trim();
   const scope = String(asset?.scope || '').trim();
   const category = asset?.category || asset?.type;
-  if (category === 'skill_method' && title.length > 56 && scope.length >= 8 && scope.length <= 60) return scope;
-  return title || scope;
+  if (category === 'skill_method' && title.length > 56 && scope.length >= 8 && scope.length <= 60) return _abilityAssetScopeLabel(scope);
+  return title || _abilityAssetScopeLabel(scope);
 }
 
 function _abilityAssetContentSummary(asset) {
@@ -1360,7 +1398,7 @@ function renderSkillsCognitionCandidates() {
       : [];
     const editing = _skillsCognitionState.editingRecallCandidateId === candidate.id;
     const editForm = editing ? `<div class="skills-cognition-detail-block recall-candidate-editor"><label>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}<textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label><label>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}<input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label><label>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}<input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}"></label><label>${escapeHtml(_cognitionText('cognition.type', '类型'))}<select data-recall-edit-type>${['personal','rule','template','skill_method'].map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('')}</select></label><label>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}<textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label><div class="skills-cognition-actions"><button class="btn btn-sm btn-primary" data-recall-candidate-action="save-and-promote" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_modify_and_save', '修改后保存'))}</button><button class="btn btn-sm" data-recall-candidate-action="cancel-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.cancel', '取消'))}</button></div></div>` : '';
-    return `<article class="skills-cognition-record cognition-candidate-row" data-recall-candidate-id="${escapeHtml(candidate.id)}"><div class="skills-cognition-record-head"><h2>${escapeHtml(candidate.summary || candidate.judgment || candidate.id)}</h2><span class="skills-cognition-status is-${escapeHtml(candidate.status || '')}">${escapeHtml(_cognitionStatusLabel(candidate.status))}</span></div><p>${escapeHtml(candidate.judgment || '')}</p>${candidate.value ? `<p class="skills-cognition-meta">${escapeHtml(candidate.value)}</p>` : ''}<div class="skills-cognition-meta">${escapeHtml(_abilityAssetCategoryLabel(candidate.suggestedType))} · ${escapeHtml(candidate.suggestedScope || '')}</div>${candidate.failureMessage ? `<div class="skills-cognition-error">${escapeHtml(candidate.failureMessage)}</div>` : ''}<div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(candidate.evidenceRefs || candidate.sourceRefs)}</div></div>${editForm}<div class="skills-cognition-actions">${actions.map((action) => `<button class="btn btn-sm ${action === primaryAction ? 'btn-primary' : ''}" data-recall-candidate-action="${escapeHtml(action)}" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(action === 'promote' ? _cognitionText('cognition.capture_save_to_recall', '保存到 Recall') : action === 'keep-current' ? _cognitionText('cognition.candidate_keep_current', '保持当前版本') : action === 'reject' ? _cognitionText('cognition.candidate_reject', '拒绝') : action === 'ignore' ? _cognitionText('cognition.capture_ignore', '忽略') : action === 'defer' ? _cognitionText('cognition.status_deferred', '稍后') : _cognitionText('skills.edit', '编辑'))}</button>`).join('')}</div></article>`;
+    return `<article class="skills-cognition-record cognition-candidate-row recall-collapsible" data-recall-candidate-id="${escapeHtml(candidate.id)}"><details class="recall-collapsible-body"><summary class="skills-cognition-record-head recall-collapsible-summary"><span class="recall-collapsible-title"><h2>${escapeHtml(_abilityCandidateDisplayTitle(candidate))}</h2><span class="skills-cognition-meta">${escapeHtml(_abilityAssetCategoryLabel(candidate.suggestedType))} · ${escapeHtml(_abilityAssetScopeLabel(candidate.suggestedScope))}</span></span><span class="skills-cognition-status is-${escapeHtml(candidate.status || '')}">${escapeHtml(_cognitionStatusLabel(candidate.status))}</span></summary><p>${escapeHtml(candidate.judgment || '')}</p>${candidate.value ? `<p class="skills-cognition-meta">${escapeHtml(candidate.value)}</p>` : ''}<div class="skills-cognition-meta">${escapeHtml(_abilityAssetCategoryLabel(candidate.suggestedType))} · ${escapeHtml(_abilityAssetScopeLabel(candidate.suggestedScope))}</div>${candidate.failureMessage ? `<div class="skills-cognition-error">${escapeHtml(candidate.failureMessage)}</div>` : ''}<div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(candidate.evidenceRefs || candidate.sourceRefs)}</div></div>${editForm}<div class="skills-cognition-actions">${actions.map((action) => `<button class="btn btn-sm ${action === primaryAction ? 'btn-primary' : ''}" data-recall-candidate-action="${escapeHtml(action)}" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(action === 'promote' ? _cognitionText('cognition.capture_save_to_recall', '保存到 Recall') : action === 'keep-current' ? _cognitionText('cognition.candidate_keep_current', '保持当前版本') : action === 'reject' ? _cognitionText('cognition.candidate_reject', '拒绝') : action === 'ignore' ? _cognitionText('cognition.capture_ignore', '忽略') : action === 'defer' ? _cognitionText('cognition.status_deferred', '稍后') : _cognitionText('skills.edit', '编辑'))}</button>`).join('')}</div></details></article>`;
   }).join('')}</div></section>`;
 }
 
@@ -1649,7 +1687,7 @@ function renderSkillsCognitionAssets() {
     const displayTitle = _abilityAssetDisplayTitle(a);
     const contentSummary = _abilityAssetContentSummary(a);
     return `<button type="button" class="skills-cognition-record cognition-asset-row ability-asset-list-row${selectedClass}" data-ability-asset-id="${escapeHtml(a.id)}">
-      <span class="ability-asset-row-main"><strong>${escapeHtml(displayTitle)}</strong>${contentSummary ? `<span class="ability-asset-row-summary">${escapeHtml(contentSummary)}</span>` : ''}<small>${escapeHtml(_abilityAssetCategoryLabel(category))}${a.version ? ` · ${escapeHtml(a.version)}` : ''}${!contentSummary && a.scope ? ` · ${escapeHtml(a.scope)}` : ''}</small></span>
+      <span class="ability-asset-row-main"><strong>${escapeHtml(displayTitle)}</strong><small>${escapeHtml(_abilityAssetCategoryLabel(category))}${a.version ? ` · ${escapeHtml(a.version)}` : ''} · ${escapeHtml(_abilityAssetScopeLabel(a.scope || 'general'))}</small>${contentSummary ? `<details class="recall-collapsible-body ability-asset-row-details" onclick="event.stopPropagation()"><summary>${escapeHtml(_cognitionText('cognition.asset_view_content', '查看内容'))}</summary><span class="ability-asset-row-summary">${escapeHtml(contentSummary)}</span></details>` : ''}</span>
       <span class="skills-cognition-status">${escapeHtml(_abilityAssetMaturityLabel(a.maturity, a.status))}</span>
     </button>`;
   }).join('');

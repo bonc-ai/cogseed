@@ -7,7 +7,7 @@ import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../../../../src/ma
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-kstar-closure-'));
   previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
@@ -225,6 +225,28 @@ describe('KSTAR task closure', () => {
     expect(episode.s.conversationSummary).not.toContain('授权已确认');
   });
 
+  it('uses the first REAL user message as the group episode goal, ignoring empty host-control messages', async () => {
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const episode = builder.buildGroupKstarEpisode({
+      userId: 'closure-user',
+      runId: 'run-empty-control',
+      conversationId: 'cid-empty-control',
+      status: 'completed',
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        // Host control message (kstar_review_request) — from=user but empty
+        // text; must not become the episode goal.
+        { id: 'msg-control', from: 'user', text: '', ts: '2026-08-05T00:00:01.000Z' },
+        { id: 'msg-user', from: 'user', text: 'Review OAuth callback handling', ts: '2026-08-05T00:00:02.000Z' },
+        { id: 'msg-commander', from: 'commander', text: 'Reviewed.', ts: '2026-08-05T00:00:40.000Z' },
+      ],
+    });
+
+    expect(episode.t.userGoal).toBe('Review OAuth callback handling');
+    expect(episode.t.userGoal).not.toContain('Conversation');
+  });
+
   it('persists episode and an empty extraction run when no learning signal exists', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const first = await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-closure', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
@@ -241,7 +263,7 @@ describe('KSTAR task closure', () => {
 
 
 
-  it('persists an inferred objective review and creates a governed candidate without a user form', async () => {
+  it('persists an inferred review and marks the run reviewed WITHOUT precipitating (task-loop boundary owns precipitation)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const inferred = async (_userId: string, builtEpisode: any) => ({
       review: {
@@ -271,8 +293,13 @@ describe('KSTAR task closure', () => {
       reviewState: 'inferred', inferenceMethod: 'deterministic', needsConfirmation: false,
       outcome: 'better_than_expected', deltaR: 0.3,
     });
-    expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({ status: 'pending_review', learningSignal: { outcome: 'better_than_expected', deltaR: 0.3 } });
+    expect(result.candidates).toEqual([]);
+    // Review-only closure: no assets are precipitated at run level — the
+    // WHOLE-TASK loop boundary (finish/abandon/switch) owns precipitation.
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const all = await assets.listAbilityAssets('closure-user');
+    expect(all.some((a) => a.candidateId?.startsWith('direct-'))).toBe(false);
+    expect(result.extractionRun.status).toBe('created');
   });
 
   it('evolves delta reasoning from all five cognition sources in the episode evidence', async () => {
@@ -374,18 +401,87 @@ describe('KSTAR task closure', () => {
       inferReview: inferred,
     });
 
-    // The lesson-driven proposal precipitates with the full evidence context.
-    expect(result.candidates.length).toBeGreaterThanOrEqual(1);
-    const assets = await import('../../../../src/main/features/recall/asset-service');
-    const all = await assets.listAbilityAssets('closure-user');
-    const fresh = all.find((a) => a.candidateId?.startsWith('direct-'));
-    expect(fresh).toBeTruthy();
-    const kinds = (fresh?.evidenceRefs || []).map((ref) => ref.kind);
+    expect(result.candidates).toEqual([]);
+    // The five-source evidence context and the reasoned lesson live on the
+    // REVIEW (closure is review-only); precipitation happens at the
+    // requirement-level loop boundary.
+    const kinds = (result.review.evidenceRefs || []).map((ref) => ref.kind);
     expect(kinds).toContain('conversation');
     expect(kinds).toContain('user_teaching_signal');
     expect(kinds).toContain('artifact_file');
-    // The reasoned lesson is the asset body (not a template sentence).
-    expect(fresh?.statement).toContain('OAuth 回调必须先校验 state');
+    expect(result.review.lesson).toContain('OAuth 回调必须先校验 state');
+  });
+
+  it('review-only closure never precipitates (task-loop boundary owns precipitation)', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const inferred = async (_userId: string, builtEpisode: any) => ({
+      review: {
+        expectedResult: builtEpisode.t.userGoal,
+        actualResult: 'Fixed.',
+        deltaR: -0.5 as const,
+        deltaA: 'unknown' as const,
+        outcome: 'worse_than_expected' as const,
+        attribution: 'rule_gap' as const,
+        reason: 'State check missing.',
+        confidence: 0.9,
+        lesson: 'State must be checked before exchange.',
+        evidenceRefs: builtEpisode.evidenceRefs,
+      },
+      reviewState: 'inferred' as const,
+      inferenceMethod: 'model' as const,
+      needsConfirmation: false,
+    });
+
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-honest-status',
+      conversationId: 'cid-honest',
+      status: 'completed',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [{
+        id: 'msg-honest', ts: new Date().toISOString(), from: 'user', text: 'Fix state handling',
+      }],
+      inferReview: inferred,
+    });
+
+    // Closure is review-only: no direct assets at run level.
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const all = await assets.listAbilityAssets('closure-user');
+    expect(all.filter((a) => a.candidateId?.startsWith('direct-'))).toHaveLength(0);
+  });
+
+  it('runs host-side review inference with the run conversation history', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const fallbackInfer = async (_userId: string, builtEpisode: any) => ({
+      review: {
+        expectedResult: builtEpisode.t.userGoal,
+        actualResult: 'Fixed.',
+        deltaR: -0.4 as const,
+        deltaA: 'unknown' as const,
+        outcome: 'worse_than_expected' as const,
+        attribution: 'rule_gap' as const,
+        reason: 'State was not checked before exchange.',
+        confidence: 0.85,
+        evidenceRefs: builtEpisode.evidenceRefs,
+      },
+      reviewState: 'inferred' as const,
+      inferenceMethod: 'deterministic' as const,
+      needsConfirmation: false,
+    });
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-commander-review',
+      conversationId: 'cid-cmd-review',
+      status: 'completed',
+      startedAtMs: Date.now() - 60_000,      finishedAtMs: Date.now(),
+      messages: [
+        { id: 'm0', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: 'Fix the state handling' },
+      ],
+      inferReview: fallbackInfer,
+    });
+    expect(result.review.inferenceMethod).toBe('deterministic');
+    expect(result.review.deltaR).toBe(-0.4);
   });
 
   it('confirms a lightweight user verdict and reconciles candidate extraction idempotently', async () => {
@@ -429,41 +525,47 @@ describe('KSTAR task closure', () => {
       reviewState: 'confirmed', inferenceMethod: 'user', needsConfirmation: false,
       outcome: 'worse_than_expected', deltaR: -0.5,
     });
-    expect(first.candidates).toHaveLength(1);
-    expect(second.candidates.map((candidate) => candidate.id)).toEqual(first.candidates.map((candidate) => candidate.id));
-    expect(bridgeCalls).toBe(1);
+    expect(first.candidates).toEqual([]);
+    expect(second.candidates).toEqual([]);
+    // The candidate bridge is no longer invoked by the direct-only line.
+    expect(bridgeCalls).toBe(0);
   });
 
-  it('keeps episode and review when proposal bridging fails', async () => {
+  it('keeps episode and review when direct precipitation fails (run marked failed, line never blocks)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-failed-bridge', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
     await seedLearningReview('closure-user', seededEpisode);
-    const failingBridge = async () => { throw new Error('recall unavailable'); };
+    // Direct-only line: no candidate bridge exists anymore. The run still
+    // records failure if precipitation itself fails (best-effort contract).
     const result = await closure.captureRuntimeKstarClosure({
       userId: 'closure-user', runId: 'run-failed-bridge', request, events, createdAt: '2026-08-05T00:00:00.000Z',
-      bridge: failingBridge,
     });
 
     expect(result.episode.id).toBe('kse-run-failed-bridge');
     expect(result.review.id).toBe('ksr-kse-run-failed-bridge');
     expect(result.candidates).toEqual([]);
-    expect(result.extractionRun).toMatchObject({ status: 'failed', error: 'candidate_bridge_failed' });
   });
 });
 
 describe('KSTAR direct experience asset line', () => {
-  it('precipitates verified workflow experience directly as an ability asset without review', async () => {
-    const closure = await import('../../../../src/main/features/kstar/task-closure');
+  it('precipitates verified workflow experience as an ability asset via the unified candidate pool (direct line)', async () => {
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-    await seedLearningReview('closure-user', seededEpisode);
+    const result = await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [{
+      judgment: 'For similar tasks, use the verified workflow: read_file → write_file.',
+      summary: 'Verified multi-tool workflow',
+      suggestedType: 'skill_method',
+      suggestedScope: 'report',
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct' }],
+    }]);
 
-    const result = await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-
-    expect(result.episode.id).toBe('kse-run-direct');
+    // 设计 §3.2.1：落点改为统一候选池，随后晋升为资产。
+    expect(result.createdAssetIds).toHaveLength(1);
+    expect(result.candidateIds).toHaveLength(1);
     const all = await assets.listAbilityAssets('closure-user');
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({
@@ -474,20 +576,49 @@ describe('KSTAR direct experience asset line', () => {
     });
     expect(all[0].statement).toContain('verified workflow');
     expect(all[0].evidenceRefs.some((ref) => ref.kind === 'execution' && ref.id === 'kse-run-direct')).toBe(true);
-    // The existing review line stays intact: the same experience is still a pending candidate.
+    // 候选池有记录（晋升后 confirmed）。
     const pending = await candidates.listRecallCandidates('closure-user');
-    expect(pending.some((candidate) => candidate.status === 'pending_review' && candidate.suggestedType === 'skill_method')).toBe(true);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].status).toBe('confirmed');
   });
 
-  it('does not duplicate the direct asset across repeated closure delivery', async () => {
-    const closure = await import('../../../../src/main/features/kstar/task-closure');
+  it('carries the space into the asset when the episode has a workspace (space asset tab)', async () => {
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct-space', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+    // episode 挂空间：s.workspaceId = 空间 id（bus 层以 turnSpaceId 填充）
+    seededEpisode.s = { ...(seededEpisode.s || {}), workspaceId: 'sp_abc123' };
+    const result = await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [{
+      judgment: 'For spaced tasks, attach the space id to the asset.',
+      summary: 'Space-tagged workflow',
+      suggestedType: 'skill_method',
+      suggestedScope: 'report',
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-space' }],
+    }]);
+
+    expect(result.createdAssetIds).toHaveLength(1);
+    const all = await assets.listAbilityAssets('closure-user');
+    const created = all.find((a) => a.id === result.createdAssetIds[0]);
+    expect(created).toBeDefined();
+    // 空间资产 tab 的过滤键：KStar 沉淀必须带 spaceId，否则空间里永远看不到
+    expect(created!.spaceId).toBe('sp_abc123');
+  });
+
+  it('does not duplicate the direct asset across repeated precipitation (content-addressed)', async () => {
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-    await seedLearningReview('closure-user', seededEpisode);
-
-    await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
-    await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+    const proposal = {
+      judgment: 'For similar tasks, use the verified workflow: read_file → write_file.',
+      summary: 'Verified multi-tool workflow',
+      suggestedType: 'skill_method',
+      suggestedScope: 'report',
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-dup' }],
+    };
+    await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [proposal]);
+    await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [proposal]);
 
     expect(await assets.listAbilityAssets('closure-user')).toHaveLength(1);
   });
@@ -589,21 +720,18 @@ describe('KSTAR group terminal subscriber', () => {
 });
 
 describe('KSTAR closure concurrency', () => {
-  it('serializes concurrent captures for the same user and episode', async () => {
+  it('serializes concurrent captures for the same user and episode (single extraction run)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
-    const recallBridge = await import('../../../../src/main/features/kstar/recall-bridge');
+    const store = await import('../../../../src/main/features/kstar/episode-store');
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-concurrent', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
     await seedLearningReview('closure-user', seededEpisode);
-    let bridgeCalls = 0;
-    const bridge = async (userId: string, proposals: any[]) => {
-      bridgeCalls += 1;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      return recallBridge.saveKstarCandidateProposals(userId, proposals);
-    };
-    const input = { userId: 'closure-user', runId: 'run-concurrent', request, events, createdAt: '2026-08-05T00:00:00.000Z', bridge };
+    const input = { userId: 'closure-user', runId: 'run-concurrent', request, events, createdAt: '2026-08-05T00:00:00.000Z' };
     await Promise.all([closure.captureRuntimeKstarClosure(input), closure.captureRuntimeKstarClosure(input)]);
-    expect(bridgeCalls).toBe(1);
+    // Review-only closure serialized: exactly one extraction run (no
+    // duplicates) and the review is recorded once.
+    const runs = await store.listKstarJsonRecords('closure-user', 'extraction-runs');
+    expect(runs.filter((run) => run.episodeId === 'kse-run-concurrent')).toHaveLength(1);
   });
 });
 
@@ -627,7 +755,7 @@ describe('KSTAR closure recovery and referential integrity', () => {
     stop();
   });
 
-  it('rebuilds a created extraction run whose review reference belongs to another episode', async () => {
+  it('treats an existing created extraction run as idempotent (no rebuild needed)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const store = await import('../../../../src/main/features/kstar/episode-store');
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
@@ -638,18 +766,18 @@ describe('KSTAR closure recovery and referential integrity', () => {
       reviewId: 'ksr-other-episode', candidateIds: [], status: 'created',
       createdAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:00:00.000Z',
     });
-    let bridgeCalls = 0;
     const result = await closure.captureRuntimeKstarClosure({
       userId: 'closure-user', runId: 'run-cross', request: { ...request, user_id: 'closure-user' }, events,
-      createdAt: '2026-08-05T00:00:00.000Z', bridge: async () => { bridgeCalls += 1; return []; },
+      createdAt: '2026-08-05T00:00:00.000Z',
     });
-    expect(bridgeCalls).toBe(1);
-    expect(result.extractionRun.reviewId).toBe(result.review.id);
+    // Direct-only idempotency: a created run is final (content-addressed
+    // assets make re-precipitation safe), no rebuild or candidate check.
+    expect(result.extractionRun.status).toBe('created');
   });
 });
 
 describe('KSTAR extraction reconciliation', () => {
-  it('does not treat an empty created run as complete when current proposals exist', async () => {
+  it('treats an existing created extraction run as complete (direct-only idempotency)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const reviews = await import('../../../../src/main/features/kstar/review-service');
@@ -663,12 +791,114 @@ describe('KSTAR extraction reconciliation', () => {
       reviewId: currentReview.id, candidateIds: [], status: 'created',
       createdAt: currentEpisode.createdAt, updatedAt: currentEpisode.updatedAt,
     });
-    let bridgeCalls = 0;
     const result = await closure.captureRuntimeKstarClosure({
       userId: 'closure-user', runId: 'run-reconcile', request, events, createdAt: '2026-08-05T00:00:00.000Z',
-      bridge: async (_userId, proposals) => { bridgeCalls += 1; return proposals.map(() => ({ id: `candidate-${bridgeCalls}`, status: 'pending' } as any)); },
     });
-    expect(bridgeCalls).toBe(1);
-    expect(result.extractionRun.candidateIds).toHaveLength(1);
+    // A created run is final: content-addressed assets make the run
+    // idempotent without a candidate-set completeness check.
+    expect(result.extractionRun.status).toBe('created');
+    expect(result.extractionRun.candidateIds).toEqual([]);
+  });
+
+  it('passes the loaded conversation history to the fallback review inference (situational context)', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const optionsSeen: any[] = [];
+    const spyInfer = async (_userId: string, builtEpisode: any, options?: any) => {
+      optionsSeen.push(options);
+      return {
+        review: {
+          expectedResult: builtEpisode.t.userGoal,
+          actualResult: 'Done.',
+          deltaR: 0 as const,
+          deltaA: 'unknown' as const,
+          outcome: 'met_expected' as const,
+          attribution: 'unclear' as const,
+          reason: 'ok',
+          confidence: 0.8,
+          evidenceRefs: builtEpisode.evidenceRefs,
+        },
+        reviewState: 'inferred' as const,
+        inferenceMethod: 'deterministic' as const,
+        needsConfirmation: false,
+      };
+    };
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-ctx',
+      conversationId: 'cid-ctx',
+      status: 'completed',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [
+        { id: 'm1', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: '做一个报告' },
+        { id: 'm2', ts: '2026-08-15T00:00:01.000Z', from: 'commander', text: '用户中途要求改成英文版' },
+        { id: 'm3', ts: '2026-08-15T00:00:02.000Z', from: 'commander', text: '已完成' },
+      ],
+      inferReview: spyInfer,
+    });
+    expect(optionsSeen).toHaveLength(1);
+    expect(optionsSeen[0]?.messages).toHaveLength(3);
+    expect(optionsSeen[0]?.messages[1]).toMatchObject({ from: 'commander', text: '用户中途要求改成英文版' });
+  });
+
+  it('unwraps the forecast RECORD into the flat forecast for review inference', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const optionsSeen: any[] = [];
+    const spyInfer = async (_userId: string, builtEpisode: any, options?: any) => {
+      optionsSeen.push(options);
+      return {
+        review: {
+          expectedResult: builtEpisode.t.userGoal,
+          actualResult: 'Done.',
+          deltaR: 0 as const,
+          deltaA: 'unknown' as const,
+          outcome: 'met_expected' as const,
+          attribution: 'unclear' as const,
+          reason: 'ok',
+          confidence: 0.8,
+          evidenceRefs: builtEpisode.evidenceRefs,
+        },
+        reviewState: 'inferred' as const,
+        inferenceMethod: 'deterministic' as const,
+        needsConfirmation: false,
+      };
+    };
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-fc', title: 't' });
+    const requirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id, conversationId: 'cid-fc', userMessageIds: ['m1'], title: 't', goalText: 't',
+    });
+    await store.replaceKstarTask('closure-user', task);
+    await store.replaceKstarRequirement('closure-user', requirement);
+    const recall = await import('../../../../src/main/features/recall/store');
+    await recall.writeRecallJsonRecord('closure-user', 'world-model-forecasts', 'wf-flat-test', {
+      schemaVersion: 1, ownerId: 'closure-user', id: 'wf-flat-test', taskRunId: task.id,
+      requirementId: requirement.id, projectionId: 'proj-x', snapshotId: 'snap-x',
+      ruleRefs: [], assetVersions: {}, projectionConfirmedAt: '2026-08-15T00:00:00.000Z',
+      forecast: {
+        candidates: [], selectedCandidateId: 'c1',
+        aHat: { plan: ['Do'], expectedTools: [], expectedActors: [] },
+        rHat: { summary: 'expected summary', acceptanceSignals: [] },
+        causalLinks: [], assumptions: [], predictedRisks: [],
+      },
+      createdAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z',
+    });
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-fc',
+      conversationId: 'cid-fc',
+      status: 'completed',
+      forecastId: 'wf-flat-test',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [{ id: 'm1', ts: '2026-08-15T00:00:00.000Z', from: 'user', text: 'do it' }],
+      inferReview: spyInfer,
+    });
+    expect(optionsSeen).toHaveLength(1);
+    // The inference must receive the FLAT forecast (rHat at top level), not
+    // the persisted record wrapper — the old code passed the record and
+    // inferKstarReview crashed on forecast.rHat.summary (undefined.rHat).
+    expect(optionsSeen[0]?.forecast?.rHat).toMatchObject({ summary: 'expected summary' });
+    expect(optionsSeen[0]?.forecast?.forecast).toBeUndefined();
   });
 });

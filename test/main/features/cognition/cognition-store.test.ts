@@ -1062,7 +1062,8 @@ describe('cognition store', () => {
     const activeIds = await listActiveCognitionSourceIds(uid);
 
     expect(activeIds).toContain(candidate.id);
-    expect(memory.formatForSystemPrompt(uid, undefined, undefined, activeIds)).toContain(candidate.summary);
+    // 签名：(uid, agentId?, spaceId?, legacyProjectId?, activeCognitionSourceIds?)
+    expect(memory.formatForSystemPrompt(uid, undefined, undefined, undefined, activeIds)).toContain(candidate.summary);
     expect(memory.formatForSystemPrompt(uid)).not.toContain(candidate.summary);
   });
 

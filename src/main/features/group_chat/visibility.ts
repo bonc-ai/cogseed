@@ -119,7 +119,7 @@ export interface GroupMessage {
   /** Host-generated status records are not model replies. Kept explicit so
    * recovery/reconciliation never claims a live actor placeholder merely
    * because the status row has the same sender. */
-  system_kind?: "reply_interrupted";
+  system_kind?: "reply_interrupted" | "kstar_review";
   /** Markdown text body. */
   text: string;
   /** Structured failure origin. Older records omit this field and must not be
@@ -131,6 +131,19 @@ export interface GroupMessage {
    * present so system-created messages can stay terse for humans while
    * preserving full instructions for the model. */
   model_text?: string;
+  /** Structured carry metadata for an imported-session resume welcome
+   *  (「准备携带」 items + sources). JSON-stringified array; renderer
+   *  parses it to power the「查看依据」expand. */
+  welcome_carry?: string;
+  /** Full resume bundle for the imported-session welcome reply:
+   *  `{ restatement, carry, boundary, plan }` (JSON string). Renders the
+   *  right-rail「查看依据」evidence and the「带着这些继续」Action Plan
+   *  without re-fetching. */
+  welcome_resume?: string;
+  /** True on the seed message of an imported session. The seed carries the
+   *  session summary for the model (model_text) but is hidden from the user
+   *  UI — the resume welcome panel replaces its display. */
+  imported_seed?: boolean;
   /** Attachment filenames (only meaningful for user messages). */
   attachments?: string[];
   /** Structured composer selections captured at send time. The text still
@@ -140,6 +153,8 @@ export interface GroupMessage {
   /** Structured snapshots quoted from this or another conversation. Kept
    * outside `text` so mentions in historical content never affect routing. */
   references?: ChatMessageReference[];
+  /** 空间任务引用（@ 资产）落可见字段：UI 在 user 气泡里显示「引用资产」chips。 */
+  space_asset_refs?: Array<{ name: string; asset_type?: string }>;
   /** Absolute paths produced by local-exec tools during this turn (only on
    * commander/agent messages). */
   produced?: string[];

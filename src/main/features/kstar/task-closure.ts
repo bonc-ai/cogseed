@@ -1,4 +1,5 @@
 import { createLogger } from '../../logger';
+import { nowIso } from '../../storage';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from '../recall/source-service';
 import { subscribeTaskTerminals, type TaskTerminalEvent, type TaskTerminalListener } from '../group_chat/bus';
 import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../cogseed_runtime/protocol';
@@ -13,9 +14,10 @@ import { buildGroupKstarEpisode, buildRuntimeKstarEpisode, type GroupKstarEpisod
 import { proposeKstarCandidates } from './extraction-service';
 import { saveKstarCandidateProposals } from './recall-bridge';
 import { createInitialKstarReview, readKstarReview, saveKstarReview, saveKstarReviewRecord } from './review-service';
-import { inferKstarReview, type KstarReviewInferenceResult } from './review-inference';
+import { inferKstarReview, type KstarReviewInferenceOptions, type KstarReviewInferenceResult } from './review-inference';
 import { postKstarReviewCard } from './review-card';
 import type { KstarEpisodeRecord, KstarExtractionRunRecord, KstarReviewRecord } from './types';
+import type { WorldModelForecast } from '../recall/world-model-types';
 import { readConversationTaskState, readKstarRequirement } from './requirement-store';
 
 const log = createLogger('kstar.task-closure');
@@ -34,7 +36,11 @@ export type KstarCandidateBridge = (
   proposals: ReturnType<typeof proposeKstarCandidates>,
 ) => Promise<RecallCandidateRecord[]>;
 
-export type KstarReviewInfer = (userId: string, episode: KstarEpisodeRecord) => Promise<KstarReviewInferenceResult>;
+export type KstarReviewInfer = (
+  userId: string,
+  episode: KstarEpisodeRecord,
+  options?: KstarReviewInferenceOptions,
+) => Promise<KstarReviewInferenceResult>;
 
 export interface RuntimeKstarClosureInput extends RuntimeKstarEpisodeInput {
   bridge?: KstarCandidateBridge;
@@ -76,9 +82,7 @@ async function reconcileKstarExtraction(
   userId: string,
   episode: KstarEpisodeRecord,
   review: KstarReviewRecord,
-  bridge: KstarCandidateBridge = saveKstarCandidateProposals,
-): Promise<KstarClosureResult> {
-  const proposals = proposeKstarCandidates(episode, review);
+) : Promise<KstarClosureResult> {
   const extractionRunId = `ksx-${episode.id}`;
   let existingRun: KstarExtractionRunRecord | null = null;
   try {
@@ -87,42 +91,13 @@ async function reconcileKstarExtraction(
   } catch {
     // A malformed/future synced run is rebuilt below with the current schema.
   }
+  // Review-only closure: this pass captures the episode + Commander review
+  // and marks the run reviewed. NO precipitation happens here — the KStar
+  // line precipitates only at the WHOLE-TASK loop boundary (finish/abandon/
+  // task switch, where requirement-level aggregation runs). Per-run closure
+  // precipitation would fragment lessons before the task closes.
   if (existingRun?.status === 'created') {
-    const existingCandidates = await (await import('../recall/candidate-service')).listRecallCandidates(userId);
-    const candidatesBelongToEpisode = existingRun.candidateIds.every((id) => existingCandidates.some((candidate) =>
-      candidate.id === id && candidate.sourceRefs.some((ref) => ref.kind === 'execution' && ref.id === episode.id)));
-    const candidateSetComplete = proposals.length === existingRun.candidateIds.length;
-    if (candidateSetComplete && candidatesBelongToEpisode) {
-      return {
-        episode,
-        review,
-        candidates: existingCandidates.filter((candidate) => existingRun!.candidateIds.includes(candidate.id)),
-        extractionRun: existingRun,
-      };
-    }
-  }
-
-  let candidates: RecallCandidateRecord[] = [];
-  let status: KstarExtractionRunRecord['status'] = 'created';
-  let errorCode: string | undefined;
-  try {
-    candidates = proposals.length ? await bridge(userId, proposals) : [];
-    if (proposals.length) {
-      try {
-        const { precipitateDirectExperienceAssets } = await import('./direct-experience-assets');
-        await precipitateDirectExperienceAssets(userId, episode, proposals);
-      } catch (error) {
-        log.warn('kstar direct experience precipitation failed', {
-          userId,
-          episodeId: episode.id,
-          error: (error as Error).message,
-        });
-      }
-    }
-  } catch {
-    status = 'failed';
-    errorCode = 'candidate_bridge_failed';
-    log.warn('kstar candidate extraction degraded', { userId, episodeId: episode.id, errorCode });
+    return { episode, review, candidates: [], extractionRun: existingRun };
   }
   const extractionRun: KstarExtractionRunRecord = {
     schemaVersion: 1,
@@ -130,14 +105,13 @@ async function reconcileKstarExtraction(
     id: extractionRunId,
     episodeId: episode.id,
     reviewId: review.id,
-    candidateIds: candidates.map((candidate) => candidate.id),
-    status,
+    candidateIds: [],
+    status: 'created',
     createdAt: episode.createdAt,
     updatedAt: episode.updatedAt,
-    ...(errorCode ? { error: errorCode } : {}),
   };
   await replaceKstarJsonRecord(userId, 'extraction-runs', extractionRun);
-  return { episode, review, candidates, extractionRun };
+  return { episode, review, candidates: [], extractionRun };
 }
 
 async function finishClosure(
@@ -145,6 +119,7 @@ async function finishClosure(
   episode: KstarEpisodeRecord,
   bridge: KstarCandidateBridge = saveKstarCandidateProposals,
   inferReview: KstarReviewInfer = inferKstarReview,
+  options: { forecast?: WorldModelForecast | null; messages?: Array<{ from: string; text: string; ts?: string }> } = {},
 ): Promise<KstarClosureResult> {
   await writeKstarEpisode(userId, episode);
   let storedReview: KstarReviewRecord | null = null;
@@ -156,7 +131,14 @@ async function finishClosure(
   let review = storedReview;
   if (!review) {
     try {
-      const inferred = await inferReview(userId, episode);
+      // fallback 推理也走确定性世界模型度量（forecast）：期望 vs 实际由
+      // reconcileWorldModel 确定性计算，模型只做归因与教训提炼——不依赖
+      // Commander 回合（不占队列）。对话历史（messages）恢复执行情境
+      // （中途变更/失败/临时决策），质量与 Commander review 相当。
+      const inferred = await inferReview(userId, episode, {
+        ...(options.forecast ? { forecast: options.forecast } : {}),
+        ...(options.messages?.length ? { messages: options.messages } : {}),
+      });
       review = await saveKstarReview(userId, episode, {
         ...inferred.review,
         reviewState: inferred.reviewState,
@@ -167,7 +149,7 @@ async function finishClosure(
       review = await saveKstarReviewRecord(userId, createInitialKstarReview(episode));
     }
   }
-  return reconcileKstarExtraction(userId, episode, review, bridge);
+  return reconcileKstarExtraction(userId, episode, review);
 }
 
 export type KstarReviewVerdict = 'met' | 'partial' | 'not_met' | 'skip';
@@ -232,7 +214,7 @@ export async function confirmKstarReview(
     const current = await readKstarReview(userId, episodeId);
     if (!current) throw new Error('kstar review not found');
     const review = await saveKstarReview(userId, episode, confirmationReviewInput(episode, current, input));
-    return reconcileKstarExtraction(userId, episode, review, bridge);
+    return reconcileKstarExtraction(userId, episode, review);
   });
 }
 
@@ -316,7 +298,27 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
     ...(executionRefs.length ? { executionEvaluationRefs: executionRefs } : {}),
   });
   const episode = await enrichEpisodeFromRequirementEvidence(input.userId, input.conversationId, built);
-  const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.bridge, input.inferReview));
+  // 确定性世界模型度量（review 推理用）：期望 vs 实际由 forecast 记录
+  // 确定性计算，模型只归因——全程独立后台 runner，不占 Commander 队列
+  // （Commander review 回合已移除：实测其占队列 8-10s 且 lesson 产出为
+  // 空，而确定性度量 + 对话历史的后台推理质量更稳定）。
+  let forecast: Awaited<ReturnType<typeof import('../recall/world-model').readWorldModelForecast>> | null = null;
+  if (input.forecastId) {
+    try {
+      const { readWorldModelForecast } = await import('../recall/world-model');
+      forecast = await readWorldModelForecast(input.userId, input.forecastId);
+    } catch {
+      // 无 forecast 记录 → 退化为机械推断（现状行为）。
+    }
+  }
+  const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, async () => {
+    return finishClosure(input.userId, episode, input.bridge, input.inferReview, {
+      // readWorldModelForecast returns the RECORD (forecast nested under
+      // `record.forecast`); inferKstarReview expects the flat WorldModelForecast.
+      ...(forecast ? { forecast: forecast.forecast } : {}),
+      ...(input.messages?.length ? { messages: input.messages } : {}),
+    });
+  });
   try {
     const { attachKstarEpisodeToCurrentRequirement } = await import('./requirement-state');
     await attachKstarEpisodeToCurrentRequirement(input.userId, {
@@ -423,6 +425,11 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
   const listener: TaskTerminalListener = (event: TaskTerminalEvent) => {
     const key = `${event.user_id}:${event.run_id}`;
     if (seen.has(key) || inFlight.has(key)) return;
+    // 静默窗口自动闭环（设计 §5）：completed 终态立即安排窗口，不等待
+    // capture（Commander review 可能耗时）——窗口计时从任务终态起算。
+    if (event.status === 'completed') {
+      void scheduleAutoClose(event.user_id, event.conversation_id);
+    }
     const runCapture = async (attempt: number): Promise<void> => {
       inFlight.add(key);
       try {
@@ -468,5 +475,194 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
     unsubscribe();
     seen.clear();
     inFlight.clear();
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 静默窗口自动闭环（设计 §5）：任务终态后启动窗口，窗口内无新用户消息 →
+// 自动 finish（沉淀）。用户消息到达 → 清除（见 bus.ts 的 cancel 钩子）。
+// 重启恢复：startAutoCloseRecovery 扫描 task-state 中未过期且仍 open 的
+// pendingAutoCloseAt，按剩余时间重建定时器。
+// ──────────────────────────────────────────────────────────────────────────
+
+/** 静默窗口默认时长：30 分钟（任务级闭环，不宜过短——OQ-7 可校准）。 */
+export const AUTO_CLOSE_QUIET_MS = 30 * 60 * 1_000;
+
+/** 测试注入：缩短窗口。 */
+let _autoCloseQuietMsOverride: number | undefined;
+export function _setAutoCloseQuietMsForTest(ms: number | undefined): void {
+  _autoCloseQuietMsOverride = ms;
+}
+
+function autoCloseQuietMs(): number {
+  return _autoCloseQuietMsOverride ?? AUTO_CLOSE_QUIET_MS;
+}
+
+/** 运行时到期定时器：key = userId:conversationId。
+ *  终端调度时按剩余时间 arm；用户消息到达时清除；重启由 recovery 重建。
+ *  （旧实现只在 boot 时 setTimeout(0) 检查一次，runAutoClose 未到期时仅
+ *  重写 state 不建 timer——窗口到期永远不触发，只能靠下次重启补跑。） */
+const autoCloseTimers = new Map<string, NodeJS.Timeout>();
+
+function autoCloseKey(userId: string, conversationId: string): string {
+  return `${userId}:${conversationId}`;
+}
+
+function clearAutoCloseTimer(key: string): void {
+  const timer = autoCloseTimers.get(key);
+  if (timer) clearTimeout(timer);
+  autoCloseTimers.delete(key);
+}
+
+function armAutoCloseTimer(userId: string, conversationId: string, atMs: number): void {
+  const key = autoCloseKey(userId, conversationId);
+  clearAutoCloseTimer(key);
+  const timer = setTimeout(() => {
+    autoCloseTimers.delete(key);
+    void runAutoClose(userId, conversationId);
+  }, Math.max(0, atMs - Date.now()));
+  autoCloseTimers.set(key, timer);
+}
+
+/** 在任务终态（completed run）后安排自动闭环。幂等：已有 pending 不重复；
+ *  但每次都会按剩余时间重建运行时定时器（防 timer 丢失）。 */
+export async function scheduleAutoClose(
+  userId: string,
+  conversationId: string,
+): Promise<{ scheduled: boolean; at?: string }> {
+  try {
+    const { readConversationTaskState, replaceConversationTaskState } = await import('./requirement-store');
+    const state = await readConversationTaskState(userId, conversationId);
+    if (!state?.currentTaskId || !state.currentRequirementId) return { scheduled: false };
+    if (state.taskComplete) return { scheduled: false }; // already closed
+    if (state.pendingAutoCloseAt) {
+      // 幂等：窗口已存在。重建定时器（可能在 cancel 后被重新调度时丢失）。
+      armAutoCloseTimer(userId, conversationId, Date.parse(state.pendingAutoCloseAt));
+      return { scheduled: true, at: state.pendingAutoCloseAt };
+    }
+    const at = new Date(Date.now() + autoCloseQuietMs()).toISOString();
+    await replaceConversationTaskState(userId, {
+      ...state,
+      pendingAutoCloseAt: at,
+      updatedAt: new Date().toISOString(),
+    });
+    armAutoCloseTimer(userId, conversationId, Date.parse(at));
+    return { scheduled: true, at };
+  } catch (error) {
+    log.warn('kstar auto-close schedule degraded', {
+      userId,
+      conversationId,
+      error: (error as Error).message,
+    });
+    return { scheduled: false };
+  }
+}
+
+/** 用户新消息到达时清除 pending 自动闭环（由 bus enqueue 调用）。 */
+export async function cancelAutoClose(
+  userId: string,
+  conversationId: string,
+): Promise<void> {
+  const key = autoCloseKey(userId, conversationId);
+  clearAutoCloseTimer(key);
+  try {
+    const { readConversationTaskState, replaceConversationTaskState } = await import('./requirement-store');
+    const state = await readConversationTaskState(userId, conversationId);
+    if (!state?.pendingAutoCloseAt) return;
+    await replaceConversationTaskState(userId, {
+      ...state,
+      pendingAutoCloseAt: undefined,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    log.warn('kstar auto-close cancel degraded', {
+      userId,
+      conversationId,
+      error: (error as Error).message,
+    });
+  }
+}
+
+/** 执行自动闭环：走 finish 控制路径（沉淀在 finish 内）。幂等。 */
+export async function runAutoClose(
+  userId: string,
+  conversationId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const { readConversationTaskState } = await import('./requirement-store');
+    const state = await readConversationTaskState(userId, conversationId);
+    if (!state?.pendingAutoCloseAt) return { ok: false, reason: 'no pending auto-close' };
+    if (state.taskComplete) return { ok: false, reason: 'already closed' };
+    // 到期校验：窗口必须真的过了（重启恢复的定时器按剩余时间，仍可能早触发）。
+    if (Date.parse(state.pendingAutoCloseAt) <= Date.now()) {
+      const { executeKstarControl } = await import('./control-service');
+      await executeKstarControl({ userId, conversationId, allowedToolNames: new Set(['kstar_control']) }, {
+        operation: 'finish',
+        idempotencyKey: `auto-close-${conversationId}-${state.currentRequirementId}`,
+        result: {
+          finalStatus: 'completed',
+          finalText: 'Auto-closed after a quiet period (no further user input).',
+          producedFiles: [],
+          acceptanceEvidence: [],
+          closeReason: 'auto_close_quiet',
+        },
+      }).catch(() => undefined);
+      clearAutoCloseTimer(autoCloseKey(userId, conversationId));
+      return { ok: true };
+    }
+    // 窗口未到期（恢复定时器早触发）：按剩余时间重建。
+    const { scheduleAutoClose: reschedule } = await import('./task-closure');
+    await reschedule(userId, conversationId);
+    return { ok: false, reason: 'window not expired yet' };
+  } catch (error) {
+    log.warn('kstar auto-close run degraded', {
+      userId,
+      conversationId,
+      error: (error as Error).message,
+    });
+    return { ok: false, reason: (error as Error).message };
+  }
+}
+
+/** 启动时恢复：扫描当前激活用户的 task-states，为未过期的 pendingAutoCloseAt
+ *  按剩余时间重建运行时定时器；已过期的直接跑 auto-close。 */
+export function startAutoCloseRecovery(
+  runtime: { scan?: () => Promise<Array<{ userId: string; conversationId: string }>> } = {},
+): () => void {
+  const scan = runtime.scan || (async () => {
+    try {
+      const { listKstarJsonRecords } = await import('./episode-store');
+      const { getActiveUserId } = await import('../users');
+      const userId = getActiveUserId();
+      const records = await listKstarJsonRecords(userId, 'task-states');
+      return records.map((r) => ({ userId, conversationId: r.id }));
+    } catch {
+      return [];
+    }
+  });
+  void scan().then((entries) => {
+    for (const entry of entries) {
+      void (async () => {
+        try {
+          const { readConversationTaskState } = await import('./requirement-store');
+          const state = await readConversationTaskState(entry.userId, entry.conversationId);
+          if (!state?.pendingAutoCloseAt || state.taskComplete) return;
+          const atMs = Date.parse(state.pendingAutoCloseAt);
+          if (atMs <= Date.now()) {
+            void runAutoClose(entry.userId, entry.conversationId);
+          } else {
+            armAutoCloseTimer(entry.userId, entry.conversationId, atMs);
+          }
+        } catch {
+          // degraded state → skip; a later boot re-scans.
+        }
+      })();
+    }
+  }).catch((error) => {
+    log.warn('kstar auto-close recovery scan degraded', { error: (error as Error).message });
+  });
+  return () => {
+    for (const timer of autoCloseTimers.values()) clearTimeout(timer);
+    autoCloseTimers.clear();
   };
 }

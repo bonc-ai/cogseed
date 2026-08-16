@@ -175,7 +175,7 @@ import * as connectorsFeature from './features/connectors';
 import * as messagingFeature from './features/messaging';
 import * as taskNotifications from './features/task_notifications';
 import { recoverRecallCaptures, startRecallCaptureOrchestrator } from './features/recall/capture-service';
-import { startGroupKstarClosure } from './features/kstar/task-closure';
+import { startAutoCloseRecovery, startGroupKstarClosure } from './features/kstar/task-closure';
 import { startGroupChatRecallTerminalProofs } from './features/group_chat/recall-terminal-proof';
 import * as notificationPermissions from './features/notification_permissions';
 import {
@@ -1142,6 +1142,8 @@ if (!gotLock) {
     app.once('before-quit', stopRecallCapture);
     const stopGroupKstarClosure = startGroupKstarClosure();
     app.once('before-quit', stopGroupKstarClosure);
+    const stopAutoCloseRecovery = startAutoCloseRecovery();
+    app.once('before-quit', stopAutoCloseRecovery);
     const stopGroupChatRecallTerminalProofs = startGroupChatRecallTerminalProofs();
     app.once('before-quit', stopGroupChatRecallTerminalProofs);
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
@@ -1229,13 +1231,11 @@ if (!gotLock) {
     // actually use it (pickChatEntry walks entries only). Cheap and idempotent.
     registerDeferred('auth:ccswitch-bind-entries', async () => {
       const uid = users.getActiveUserId();
-      if (!uid) return;
-      const { ensureCcSwitchBoundEntries } = await import('./features/custom_providers');
-      const bound = await ensureCcSwitchBoundEntries(uid);
-      if (bound > 0) {
-        const log = (await import('./logger')).createLogger('boot');
-        log.info('cc-switch auto-bound entries on boot', { bound });
-      }
+      // CC Switch providers are user-controlled: never auto-bind them back on
+      // boot. Doing so resurrects deleted model entries and defeats the
+      // no-model → CLI fallback. The user enables CC Switch providers
+      // explicitly in settings; entries are bound at that point.
+      void uid;
     });
 
     // 修正 33a16ad 之前 promote 出来的资产：lifecycleStatus 说「用户已确认」，
@@ -1244,6 +1244,12 @@ if (!gotLock) {
     registerDeferred('recall:correct-seed-maturity', async () => {
       const { correctMisfiledSeedMaturity } = await import('./features/recall/asset-service');
       await correctMisfiledSeedMaturity(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // 2026-08-15 UI 优化：旧 KStar 线资产带英文技术标题（'Reusable experience
+    // lesson (requirement-level)' 等），迁移为中文可读。幂等，修完空转。
+    registerDeferred('recall:migrate-legacy-titles', async () => {
+      const { migrateLegacyUserFacingTitles } = await import('./features/recall/asset-service');
+      await migrateLegacyUserFacingTitles(users.getActiveUserId());
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);

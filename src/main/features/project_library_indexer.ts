@@ -1,8 +1,8 @@
 /**
  * Project-scoped Library vector index.
  *
- * Project Library source files live under `<uid>/cloud/projects/<pid>/contexts/`.
- * The derived vector store is machine-local under `<uid>/local/projects/<pid>/`
+ * Project Library source files live under `<uid>/cloud/projects/<sid>/contexts/`.
+ * The derived vector store is machine-local under `<uid>/local/projects/<sid>/`
  * so project assets can sync independently from embeddings, mirroring the
  * global Library/KB design.
  */
@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
-import { projectFilesDir, projectLibraryVectorDbPath } from '../paths';
+import { spaceFilesDir, spaceLibraryVectorDbPath } from '../paths';
 import { createLogger } from '../logger';
 import { fileToChunks, type ChunkableKind } from '../util/file_to_chunks';
 import { logErrorSummary, logPathRef, maskId } from '../util/log-redact';
@@ -27,7 +27,7 @@ import { describeLibraryImage } from './library_image_describer';
 
 import * as vs from './vec_store';
 import * as kbEmbed from './kb_embed';
-import { projectExists } from './projects';
+import { spaceExists } from './spaces';
 
 const log = createLogger('project_library_indexer');
 
@@ -58,7 +58,7 @@ interface LibraryVectorizeSummary {
   max_queue_wait_ms: number;
 }
 
-function createLibraryVectorizeBatch(_scope: 'project'): LibraryVectorizeBatch {
+function createLibraryVectorizeBatch(_scope: 'space'): LibraryVectorizeBatch {
   return {};
 }
 
@@ -71,24 +71,24 @@ function recordLibraryVectorizeOutcome(
   _outcome: Record<string, string | number>,
 ): void {}
 
-type ProjectLibraryKind = ChunkableKind;
-export type ProjectLibraryEventType = 'pending' | 'processing' | 'ready' | 'failed' | 'deleted';
+type SpaceLibraryKind = ChunkableKind;
+export type SpaceLibraryEventType = 'pending' | 'processing' | 'ready' | 'failed' | 'deleted';
 
-export interface ProjectLibraryStatusEvent {
+export interface SpaceLibraryStatusEvent {
   userId: string;
-  projectId: string;
+  spaceId: string;
   name: string;
   relPath: string;
-  status: ProjectLibraryEventType;
+  status: SpaceLibraryEventType;
   chunks?: number;
   error?: string;
-  kind?: ProjectLibraryKind;
+  kind?: SpaceLibraryKind;
   stage?: 'queue' | 'extract' | 'embed' | 'persist' | 'reconcile';
   errorCode?: string;
   recovered?: boolean;
 }
 
-export interface ProjectLibraryReconcileResult {
+export interface SpaceLibraryReconcileResult {
   enqueuedUpsert: number;
   enqueuedDelete: number;
   unchanged: number;
@@ -97,7 +97,7 @@ export interface ProjectLibraryReconcileResult {
 }
 
 interface Job {
-  projectId: string;
+  spaceId: string;
   name: string;
   op: 'upsert' | 'delete';
   force?: boolean;
@@ -115,19 +115,19 @@ interface Queue {
 
 const _queues = new Map<string, Queue>();
 
-export const projectLibraryEvents = new EventEmitter();
-projectLibraryEvents.setMaxListeners(50);
+export const spaceLibraryEvents = new EventEmitter();
+spaceLibraryEvents.setMaxListeners(50);
 
-function emit(ev: ProjectLibraryStatusEvent): void {
-  projectLibraryEvents.emit('status', ev);
+function emit(ev: SpaceLibraryStatusEvent): void {
+  spaceLibraryEvents.emit('status', ev);
 }
 
-function safeProjectId(projectId: string): string {
-  if (typeof projectId !== 'string' || !projectId) throw new Error('projectId required');
-  if (projectId.includes('/') || projectId.includes('\\') || projectId.includes('\x00') || projectId === '.' || projectId === '..') {
-    throw new Error('invalid projectId');
+function safeSpaceId(spaceId: string): string {
+  if (typeof spaceId !== 'string' || !spaceId) throw new Error('spaceId required');
+  if (spaceId.includes('/') || spaceId.includes('\\') || spaceId.includes('\x00') || spaceId === '.' || spaceId === '..') {
+    throw new Error('invalid spaceId');
   }
-  return projectId;
+  return spaceId;
 }
 
 function safeFileName(name: string): string {
@@ -144,15 +144,15 @@ function safeFileName(name: string): string {
   return parts.join('/');
 }
 
-function resolveProjectFilePath(uid: string, projectId: string, relPath: string): string {
-  const root = path.resolve(projectFilesDir(uid, projectId));
+function resolveSpaceFilePath(uid: string, spaceId: string, relPath: string): string {
+  const root = path.resolve(spaceFilesDir(uid, spaceId));
   const abs = path.resolve(root, relPath);
   const rel = path.relative(root, abs);
   if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('forbidden');
   return abs;
 }
 
-function kindFor(name: string): ProjectLibraryKind | null {
+function kindFor(name: string): SpaceLibraryKind | null {
   const ext = path.extname(name).toLowerCase();
   if (ext === '.pdf') return 'pdf';
   if (ext === '.docx' || ext === '.docm') return 'docx';
@@ -163,9 +163,9 @@ function kindFor(name: string): ProjectLibraryKind | null {
   return null;
 }
 
-function storeFor(uid: string, projectId: string): vs.VecStore {
-  const pid = safeProjectId(projectId);
-  return vs.openVecStore(path.dirname(projectLibraryVectorDbPath(uid, pid)));
+function storeFor(uid: string, spaceId: string): vs.VecStore {
+  const sid = safeSpaceId(spaceId);
+  return vs.openVecStore(path.dirname(spaceLibraryVectorDbPath(uid, sid)));
 }
 
 function queueFor(uid: string): Queue {
@@ -189,26 +189,26 @@ function releaseActiveKey(q: Queue, key: string): void {
 
 export function enqueue(
   uid: string,
-  projectId: string,
+  spaceId: string,
   name: string,
   op: 'upsert' | 'delete' = 'upsert',
   opts: { force?: boolean; reason?: Job['reason']; attempt?: number } = {},
 ): void {
-  let pid: string;
+  let sid: string;
   let safeName: string;
   try {
-    pid = safeProjectId(projectId);
+    sid = safeSpaceId(spaceId);
     safeName = safeFileName(name);
   } catch { return; }
   if (op === 'upsert' && !kindFor(safeName)) return;
   const q = queueFor(uid);
-  const existing = q.jobs.find((j) => j.projectId === pid && j.name === safeName && j.op === op);
+  const existing = q.jobs.find((j) => j.spaceId === sid && j.name === safeName && j.op === op);
   if (existing) {
     if (opts.force) existing.force = true;
     return;
   }
   q.jobs.push({
-    projectId: pid,
+    spaceId: sid,
     name: safeName,
     op,
     force: opts.force === true,
@@ -218,7 +218,7 @@ export function enqueue(
   });
   if (op === 'upsert') {
     const kind = kindFor(safeName);
-    if (kind) emit({ userId: uid, projectId: pid, name: safeName, relPath: safeName, status: 'pending', kind });
+    if (kind) emit({ userId: uid, spaceId: sid, name: safeName, relPath: safeName, status: 'pending', kind });
   }
   scheduleRunQueue(uid);
 }
@@ -237,19 +237,19 @@ async function runQueue(uid: string): Promise<void> {
   const q = queueFor(uid);
   if (q.running) return;
   q.running = true;
-  const batch = createLibraryVectorizeBatch('project');
+  const batch = createLibraryVectorizeBatch('space');
   try {
     while (q.jobs.length) {
       const job = q.jobs.shift()!;
-      const key = jobKey(job.projectId, job.name);
+      const key = jobKey(job.spaceId, job.name);
       retainActiveKey(q, key);
       try {
-        if (job.op === 'delete') await processDelete(uid, job.projectId, job.name);
+        if (job.op === 'delete') await processDelete(uid, job.spaceId, job.name);
         else await processUpsert(uid, job, batch);
       } catch (err) {
         log.warn('project library job failed unexpectedly', {
           user_id: maskId(uid),
-          project_id: maskId(job.projectId),
+          space_id: maskId(job.spaceId),
           path: logPathRef(job.name),
           error: logErrorSummary(err),
         });
@@ -278,13 +278,13 @@ async function runQueue(uid: string): Promise<void> {
   }
 }
 
-function jobKey(projectId: string, name: string): string {
-  return `${projectId}\x00${name}`;
+function jobKey(spaceId: string, name: string): string {
+  return `${spaceId}\x00${name}`;
 }
 
-async function processDelete(uid: string, projectId: string, name: string): Promise<void> {
-  await storeFor(uid, projectId).deleteFile(name);
-  emit({ userId: uid, projectId, name, relPath: name, status: 'deleted' });
+async function processDelete(uid: string, spaceId: string, name: string): Promise<void> {
+  await storeFor(uid, spaceId).deleteFile(name);
+  emit({ userId: uid, spaceId, name, relPath: name, status: 'deleted' });
 }
 
 async function processUpsert(
@@ -292,24 +292,24 @@ async function processUpsert(
   job: Job,
   batch: LibraryVectorizeBatch,
 ): Promise<void> {
-  const { projectId, name } = job;
+  const { spaceId, name } = job;
   const force = job.force === true;
   const startedAt = Date.now();
   const kind = kindFor(name);
   if (!kind) return;
 
-  const store = storeFor(uid, projectId);
-  const abs = resolveProjectFilePath(uid, projectId, name);
+  const store = storeFor(uid, spaceId);
+  const abs = resolveSpaceFilePath(uid, spaceId, name);
   let stat: fs.Stats;
   try { stat = await fsp.stat(abs); }
   catch {
     await store.deleteFile(name);
-    emit({ userId: uid, projectId, name, relPath: name, status: 'deleted', kind });
+    emit({ userId: uid, spaceId, name, relPath: name, status: 'deleted', kind });
     return;
   }
   if (!stat.isFile()) {
     await store.deleteFile(name);
-    emit({ userId: uid, projectId, name, relPath: name, status: 'deleted', kind });
+    emit({ userId: uid, spaceId, name, relPath: name, status: 'deleted', kind });
     return;
   }
 
@@ -317,7 +317,7 @@ async function processUpsert(
   const sha1 = crypto.createHash('sha1').update(buf).digest('hex');
   const existing = store.getFile(name);
   if (!force && existing && existing.sha1 === sha1 && existing.status === 'ready') {
-    emit({ userId: uid, projectId, name, relPath: name, status: 'ready', kind, chunks: existing.chunks });
+    emit({ userId: uid, spaceId, name, relPath: name, status: 'ready', kind, chunks: existing.chunks });
     return;
   }
 
@@ -331,13 +331,13 @@ async function processUpsert(
       sha1,
       chunks: [],
     });
-    emit({ userId: uid, projectId, name, relPath: name, status: 'ready', kind, chunks: 0, stage: 'persist' });
+    emit({ userId: uid, spaceId, name, relPath: name, status: 'ready', kind, chunks: 0, stage: 'persist' });
     recordVectorizeResult(batch, job, startedAt, {
       result: 'success', stage: 'persist', chunks: 0,
     });
     log.debug('skipped empty project library file', {
       user_id: maskId(uid),
-      project_id: maskId(projectId),
+      space_id: maskId(spaceId),
       path: logPathRef(name),
       kind,
     });
@@ -350,7 +350,7 @@ async function processUpsert(
     mtime: stat.mtimeMs / 1000,
     sha1,
   });
-  emit({ userId: uid, projectId, name, relPath: name, status: 'processing', kind, stage: 'extract' });
+  emit({ userId: uid, spaceId, name, relPath: name, status: 'processing', kind, stage: 'extract' });
 
   let currentStage: 'extract' | 'embed' | 'persist' = 'extract';
   try {
@@ -369,7 +369,7 @@ async function processUpsert(
     if (!chunks.length) throw Object.assign(new Error('fileToChunks returned zero chunks'), { stage: 'extract' });
 
     currentStage = 'embed';
-    emit({ userId: uid, projectId, name, relPath: name, status: 'processing', kind, stage: 'embed' });
+    emit({ userId: uid, spaceId, name, relPath: name, status: 'processing', kind, stage: 'embed' });
     const embedOperation = kbEmbed.embedTexts(chunks.map((chunk) => chunk.content));
     const vectors = await withOperationTimeout(embedOperation, {
       timeoutMs: EMBED_TIMEOUT_MS,
@@ -390,7 +390,7 @@ async function processUpsert(
         embedding: vectors[index],
       })),
     });
-    emit({ userId: uid, projectId, name, relPath: name, status: 'ready', kind, chunks: chunks.length, stage: 'persist' });
+    emit({ userId: uid, spaceId, name, relPath: name, status: 'ready', kind, chunks: chunks.length, stage: 'persist' });
     recordVectorizeResult(batch, job, startedAt, {
       result: 'success', stage: 'persist', chunks: chunks.length,
     });
@@ -408,13 +408,13 @@ async function processUpsert(
           : 'E_LIBRARY_PERSIST_FAILED',
     );
     await store.setFileStatus(name, 'failed', { error: msg });
-    emit({ userId: uid, projectId, name, relPath: name, status: 'failed', kind, error: msg, stage, errorCode });
+    emit({ userId: uid, spaceId, name, relPath: name, status: 'failed', kind, error: msg, stage, errorCode });
     recordVectorizeResult(batch, job, startedAt, {
       result: 'failure', stage, errorCode,
     });
     log.warn('project library vectorization failed', {
       user_id: maskId(uid),
-      project_id: maskId(projectId),
+      space_id: maskId(spaceId),
       path: logPathRef(name),
       kind,
       stage,
@@ -458,27 +458,27 @@ function scheduleLateRecovery<T>(
   stage: 'extract' | 'embed',
 ): void {
   const queue = queueFor(uid);
-  const key = jobKey(job.projectId, job.name);
+  const key = jobKey(job.spaceId, job.name);
   retainActiveKey(queue, key);
   void late.then(() => {
     if (job.attempt >= 2) return;
-    const row = storeFor(uid, job.projectId).getFile(job.name);
+    const row = storeFor(uid, job.spaceId).getFile(job.name);
     if (!row || row.status !== 'failed' || row.sha1 !== expectedSha1) return;
     log.info('timed-out project library operation settled; scheduling one recovery attempt', {
       user_id: maskId(uid),
-      project_id: maskId(job.projectId),
+      space_id: maskId(job.spaceId),
       path: logPathRef(job.name),
       stage,
       attempt: job.attempt + 1,
     });
-    enqueue(uid, job.projectId, job.name, 'upsert', {
+    enqueue(uid, job.spaceId, job.name, 'upsert', {
       reason: 'late_recovery',
       attempt: job.attempt + 1,
     });
   }).catch((err) => {
     log.info('timed-out project library operation eventually failed', {
       user_id: maskId(uid),
-      project_id: maskId(job.projectId),
+      space_id: maskId(job.spaceId),
       path: logPathRef(job.name),
       stage,
       error: logErrorSummary(err),
@@ -495,7 +495,7 @@ async function failUnexpectedJob(
   batch: LibraryVectorizeBatch,
 ): Promise<void> {
   if (job.op !== 'upsert') return;
-  const store = storeFor(uid, job.projectId);
+  const store = storeFor(uid, job.spaceId);
   const row = store.getFile(job.name);
   const kind = kindFor(job.name) || row?.kind;
   const msg = (err as Error)?.message || String(err);
@@ -504,7 +504,7 @@ async function failUnexpectedJob(
   catch { /* primary log already records the storage failure */ }
   emit({
     userId: uid,
-    projectId: job.projectId,
+    spaceId: job.spaceId,
     name: job.name,
     relPath: job.name,
     status: 'failed',
@@ -521,19 +521,19 @@ async function failUnexpectedJob(
 }
 
 async function describeImage(userId: string, sourceName: string, raw: Buffer): Promise<string> {
-  return describeLibraryImage(userId, sourceName, raw, { sessionPrefix: 'extract-img-project' });
+  return describeLibraryImage(userId, sourceName, raw, { sessionPrefix: 'extract-img-space' });
 }
 
-export async function reconcile(uid: string, projectId: string): Promise<ProjectLibraryReconcileResult> {
+export async function reconcile(uid: string, spaceId: string): Promise<SpaceLibraryReconcileResult> {
   const startedAt = Date.now();
-  const pid = safeProjectId(projectId);
-  if (!await projectExists(uid, pid)) return { enqueuedUpsert: 0, enqueuedDelete: 0, unchanged: 0 };
+  const sid = safeSpaceId(spaceId);
+  if (!await spaceExists(uid, sid)) return { enqueuedUpsert: 0, enqueuedDelete: 0, unchanged: 0 };
 
-  const root = projectFilesDir(uid, pid);
-  const store = storeFor(uid, pid);
+  const root = spaceFilesDir(uid, sid);
+  const store = storeFor(uid, sid);
   const indexedRows = store.listFiles();
   const indexedByPath = new Map(indexedRows.map((row) => [row.rel_path, row]));
-  const scan = await scanProjectFiles(root, indexedByPath);
+  const scan = await scanSpaceFiles(root, indexedByPath);
   const onDisk = scan.files;
   let enqueuedUpsert = 0;
   let enqueuedDelete = 0;
@@ -543,9 +543,9 @@ export async function reconcile(uid: string, projectId: string): Promise<Project
 
   for (const [name, meta] of onDisk) {
     const existing = indexedByPath.get(name);
-    const key = jobKey(pid, name);
+    const key = jobKey(sid, name);
     const ownedByQueue = queue.activeKeys.has(key)
-      || queue.jobs.some((job) => jobKey(job.projectId, job.name) === key);
+      || queue.jobs.some((job) => jobKey(job.spaceId, job.name) === key);
     const orphanedProcessing = existing?.status === 'processing'
       && !ownedByQueue;
     if (
@@ -559,12 +559,12 @@ export async function reconcile(uid: string, projectId: string): Promise<Project
         await store.setFileStatus(name, 'pending', { error: null });
         log.warn('recovered orphaned processing project library row', {
           user_id: maskId(uid),
-          project_id: maskId(pid),
+          space_id: maskId(sid),
           path: logPathRef(name),
           stale_ms: Math.max(0, Date.now() - existing.updated_at * 1000),
         });
       }
-      enqueue(uid, pid, name, 'upsert', {
+      enqueue(uid, sid, name, 'upsert', {
         reason: orphanedProcessing ? 'crash_recovery' : 'reconcile',
       });
       enqueuedUpsert += 1;
@@ -576,14 +576,14 @@ export async function reconcile(uid: string, projectId: string): Promise<Project
   if (scan.complete) {
     for (const row of indexedRows) {
       if (!onDisk.has(row.rel_path)) {
-        enqueue(uid, pid, row.rel_path, 'delete');
+        enqueue(uid, sid, row.rel_path, 'delete');
         enqueuedDelete += 1;
       }
     }
   } else {
     log.warn('project library reconcile snapshot incomplete; skipped destructive deletes', {
       user_id: maskId(uid),
-      project_id: maskId(pid),
+      space_id: maskId(sid),
       discovered: onDisk.size,
       duration_ms: Date.now() - startedAt,
     });
@@ -592,7 +592,7 @@ export async function reconcile(uid: string, projectId: string): Promise<Project
   if (enqueuedUpsert || enqueuedDelete) {
     log.info('project library reconcile queued work', {
       user_id: maskId(uid),
-      project_id: maskId(pid),
+      space_id: maskId(sid),
       upsert: enqueuedUpsert,
       delete: enqueuedDelete,
       unchanged,
@@ -609,7 +609,7 @@ export async function reconcile(uid: string, projectId: string): Promise<Project
   };
 }
 
-async function scanProjectFiles(
+async function scanSpaceFiles(
   root: string,
   indexedByPath: ReadonlyMap<string, vs.VecFileRow>,
 ): Promise<{
@@ -665,28 +665,28 @@ async function scanProjectFiles(
 
 export async function search(
   uid: string,
-  projectId: string,
+  spaceId: string,
   queryVec: number[] | Float32Array,
   opts: vs.VecSearchOpts = {},
 ): Promise<vs.VecSearchHit[]> {
-  await reconcile(uid, projectId);
-  return storeFor(uid, projectId).search(queryVec, opts);
+  await reconcile(uid, spaceId);
+  return storeFor(uid, spaceId).search(queryVec, opts);
 }
 
-export function getFileByPath(uid: string, projectId: string, relPath: string): vs.VecFileRow | null {
-  return storeFor(uid, projectId).getFile(relPath);
+export function getFileByPath(uid: string, spaceId: string, relPath: string): vs.VecFileRow | null {
+  return storeFor(uid, spaceId).getFile(relPath);
 }
 
-export function listFiles(uid: string, projectId: string): vs.VecFileRow[] {
-  return storeFor(uid, projectId).listFiles();
+export function listFiles(uid: string, spaceId: string): vs.VecFileRow[] {
+  return storeFor(uid, spaceId).listFiles();
 }
 
-export function readFileChunks(uid: string, projectId: string, relPath: string): Array<{ chunk_idx: number; title: string | null; content: string }> {
-  return storeFor(uid, projectId).readFileChunks(relPath);
+export function readFileChunks(uid: string, spaceId: string, relPath: string): Array<{ chunk_idx: number; title: string | null; content: string }> {
+  return storeFor(uid, spaceId).readFileChunks(relPath);
 }
 
-export function statusSummary(uid: string, projectId: string): { total: number; ready: number; processing: number; pending: number; failed: number } {
-  return storeFor(uid, projectId).statusSummary();
+export function statusSummary(uid: string, spaceId: string): { total: number; ready: number; processing: number; pending: number; failed: number } {
+  return storeFor(uid, spaceId).statusSummary();
 }
 
 export async function drain(uid: string): Promise<void> {
@@ -698,6 +698,6 @@ export async function drain(uid: string): Promise<void> {
 
 export function _resetQueuesForTests(): void {
   _queues.clear();
-  projectLibraryEvents.removeAllListeners();
-  projectLibraryEvents.setMaxListeners(50);
+  spaceLibraryEvents.removeAllListeners();
+  spaceLibraryEvents.setMaxListeners(50);
 }

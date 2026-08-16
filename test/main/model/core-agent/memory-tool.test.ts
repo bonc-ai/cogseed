@@ -16,31 +16,31 @@ function stubHandler(): MemoryToolHandler & { calls: Array<{ op: string; tier: M
 const enumOf = (tool: ReturnType<typeof createCrossSessionMemoryTool>): string[] =>
   ((tool.inputSchema as any).properties.target.enum as string[]);
 
-describe('cross_session_memory tool › project tier exposure', () => {
-  it('non-project sessions: legacy three-tier schema, no project mention in the description', () => {
+describe('cross_session_memory tool › space tier exposure', () => {
+  it('non-space sessions: legacy three-tier schema, no space mention in the description', () => {
     const tool = createCrossSessionMemoryTool(stubHandler());
     expect(enumOf(tool)).toEqual(['agent', 'shared', 'user']);
-    expect(tool.description).not.toContain('project:');
+    expect(tool.description).not.toContain('space:');
     expect(tool.description).toContain('repo/project conventions -> shared'); // legacy routing line intact
   });
 
-  it('project sessions: four-tier schema and the belongs-where routing rule', () => {
+  it('space sessions: four-tier schema and the belongs-where routing rule', () => {
     const tool = createCrossSessionMemoryTool(stubHandler(), { includeProjectTier: true });
-    expect(enumOf(tool)).toEqual(['agent', 'project', 'shared', 'user']);
-    expect(tool.description).toContain('project: durable facts, decisions, outcomes, milestones, and conventions that belong to THIS project only');
-    expect(tool.description).toContain('would this still hold in another project?');
+    expect(enumOf(tool)).toEqual(['agent', 'space', 'shared', 'user']);
+    expect(tool.description).toContain('space: durable facts, decisions, outcomes, milestones, and conventions that belong to THIS space only');
+    expect(tool.description).toContain('would this still hold in another space?');
   });
 
-  it('project target executes against the handler only when the tier is offered', async () => {
+  it('space target executes against the handler only when the tier is offered', async () => {
     const withProject = stubHandler();
     const t1 = createCrossSessionMemoryTool(withProject, { includeProjectTier: true });
-    const okRes = await t1.execute({ action: 'add', target: 'project', content: 'x' }, {} as any);
+    const okRes = await t1.execute({ action: 'add', target: 'space', content: 'x' }, {} as any);
     expect(okRes.isError).toBeFalsy();
-    expect(withProject.calls).toEqual([{ op: 'add', tier: 'project' }]);
+    expect(withProject.calls).toEqual([{ op: 'add', tier: 'space' }]);
 
     const without = stubHandler();
     const t2 = createCrossSessionMemoryTool(without);
-    const errRes = await t2.execute({ action: 'add', target: 'project', content: 'x' }, {} as any);
+    const errRes = await t2.execute({ action: 'add', target: 'space', content: 'x' }, {} as any);
     expect(errRes.isError).toBe(true);
     expect(String(errRes.content)).toContain('target must be one of');
     expect(without.calls).toEqual([]); // never reached the handler

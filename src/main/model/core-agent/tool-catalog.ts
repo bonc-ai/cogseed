@@ -170,7 +170,6 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: 'manage_execution_plan', group: 'meta', summary: 'Manage the durable current-task objective and milestone statuses for long/tool-heavy work; session-local and independent of context summaries.' },
   { name: 'cross_session_memory', group: 'meta', summary: 'Read/write user profile, shared facts, and agent memory that persist across sessions.' },
   { name: 'project_instructions', group: 'meta', summary: "Replace the project's standing goal + rules (ORKAS.md, the Project instructions block); commander-only, project sessions." },
-  { name: 'project_tasks',        group: 'meta', summary: "Read/update the project's shared structured task backlog; project sessions only." },
   { name: 'metacognition',        group: 'meta', summary: 'Read/write metacognition (COMPETENCE / LEARNING_STRATEGIES); env-flag gated.' },
 
   // NB: the commander's group-dispatch tools (dispatch_to / run_worker) and other

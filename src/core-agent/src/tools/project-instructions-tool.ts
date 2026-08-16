@@ -2,11 +2,9 @@
  * Project instructions tool — writes the project's standing goal + rules
  * (the "Project instructions" block in the system prompt, backed by ORKAS.md).
  *
- * Split out from project_tasks so each project-state layer is ONE focused tool
- * (see plan project-work-state.md):
+ * This is one focused project-state layer (see plan project-work-state.md):
  *   - project_instructions (here)    = the project's goal + rules
  *   - cross_session_memory (project) = durable facts/decisions/learnings
- *   - project_tasks                  = concrete work items + their STATUS
  *
  * The host injects this tool for the COMMANDER only; sub-agents read the
  * instructions from their system prompt but cannot edit them. All IO is
@@ -21,7 +19,7 @@ export interface ProjectInstructionsToolHandler {
   set(instructions: string): Promise<{ ok: boolean; error?: string }>;
 }
 
-const TOOL_DESCRIPTION = `Replace this project's standing instructions (goal + rules). FULL replace, not append: send all text, preserving what still applies. Use for durable, project-specific direction: goals, scope, rules, preferences, constraints. Global preferences (communication style, identity, tech stack) go to cross_session_memory target "user"; learned project facts and decisions use target "project". Concrete tasks and status go to project_tasks. Make deliberate, reviewable edits.`;
+const TOOL_DESCRIPTION = `Replace this project's standing instructions (goal + rules). FULL replace, not append: send all text, preserving what still applies. Use for durable, project-specific direction: goals, scope, rules, preferences, constraints. Global preferences (communication style, identity, tech stack) go to cross_session_memory target "user"; learned project facts and decisions use target "project". Make deliberate, reviewable edits.`;
 
 export function createProjectInstructionsTool(handler: ProjectInstructionsToolHandler): AgentTool {
   return {
