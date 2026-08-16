@@ -6871,6 +6871,11 @@ async function loadConversationHistory(cid, opts = {}) {
     if (!data.ok) throw new Error(data.error || 'load failed');
     if (cid !== currentCid) return;
     const convMeta = data.conversation || {};
+    // Auto-task time-adjust suggestion: check if this conversation was created
+    // by a daily auto-task and the user opens it at a different time.
+    if (convMeta.origin_auto_task_id && typeof checkAndSuggestAutoTaskTimeAdjustment === 'function') {
+      checkAndSuggestAutoTaskTimeAdjustment(cid, convMeta.origin_auto_task_id);
+    }
     _serverFloorByCid.set(cid, typeof convMeta.active_recipient === 'string' ? convMeta.active_recipient : '');
     // History reload: drop ALL per-actor placeholder map entries — the
     // `container.innerHTML=''` below detaches every placeholder DOM node,
