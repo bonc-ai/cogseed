@@ -5,6 +5,9 @@ export interface P3394AuditRecord { event: string; actor_id: string; target_id?:
 
 const log = createLogger('p3394-bridge:audit-journal');
 
+/** 审计可追溯性的关联 id：不是 secret，脱敏后从原值恢复。 */
+const CORRELATION_KEYS = new Set(['session_id', 'task_id', 'message_id', 'reply_to']);
+
 export interface P3394AuditJournalOptions {
   /** Optional append-only JSONL persistence target (e.g. Agent Home audit dir). */
   filePath?: string;
@@ -21,7 +24,16 @@ export class P3394AuditJournal {
   append(input: Omit<P3394AuditRecord, 'at'> & { at?: string }): P3394AuditRecord {
     // 统一走 logger 的 canonical 脱敏：secret 命名键掩码 + 位置化
     // secret（Bearer/key=value/JWT/邮箱/手机号/绝对路径）扫描。
-    const record: P3394AuditRecord = { ...input, ...(input.metadata ? { metadata: redact(input.metadata) as Record<string, unknown> } : {}), at: input.at ?? new Date().toISOString() };
+    // 例外：顶层关联 id（session/task/message/reply_to）不是 secret，
+    // 而是审计可追溯性的必需字段——脱敏后从原值恢复（S-04：可追溯 ≠ 掩码一切）。
+    let metadata = input.metadata ? redact(input.metadata) as Record<string, unknown> : undefined;
+    if (metadata && input.metadata) {
+      for (const key of CORRELATION_KEYS) {
+        const original = (input.metadata as Record<string, unknown>)[key];
+        if (typeof original === 'string') metadata[key] = original;
+      }
+    }
+    const record: P3394AuditRecord = { ...input, ...(metadata ? { metadata } : {}), at: input.at ?? new Date().toISOString() };
     this.records.push(record);
     if (this.filePath) {
       void appendJsonlAtomic(this.filePath, record).catch((error) => {

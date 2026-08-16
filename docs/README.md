@@ -18,6 +18,7 @@
 - [`P3394-Bridge-Runtime-实施指挥书.md`](./P3394-Bridge-Runtime-实施指挥书.md) — Bridge Runtime 实施指挥书
 - [`P3394-会议对照与Dashboard后续事项-2026-08-16.md`](./P3394-会议对照与Dashboard后续事项-2026-08-16.md) — 今日会议对照、Dashboard 候选范围与进入条件
 - [`P3394-Conformance-Matrix.md`](./P3394-Conformance-Matrix.md) — P3394 规范符合性矩阵与实施证据索引
+- [`P3394-人工确认与授权矩阵.md`](./P3394-人工确认与授权矩阵.md) — 高风险操作的人工确认与授权边界（S-07）
 - [`P3394_Local_Bridge_SDK_Design(1).md`](./P3394_Local_Bridge_SDK_Design(1).md) — Local Bridge SDK 设计
 - [`P3394_Raymond_Hermes_Chinese_Implementation_Guide.md`](./P3394_Raymond_Hermes_Chinese_Implementation_Guide.md) — P3394 协议中文实施指南
 - [`superpowers/handover-p3394-bridge-runtime.md`](./superpowers/handover-p3394-bridge-runtime.md) — Bridge Runtime 交接文档

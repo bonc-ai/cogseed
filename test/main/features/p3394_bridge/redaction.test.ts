@@ -50,6 +50,29 @@ describe('P3394 统一脱敏（S-04/M-06）', () => {
     expect(metadata.task_id).toBe('tsk-1');
   });
 
+  it('audit journal 保留顶层关联 id 的可追溯性（S-04/S-07 平衡）', async () => {
+    const { P3394AuditJournal } = await import('../../../../src/main/features/p3394_bridge/audit-journal');
+    const journal = new P3394AuditJournal();
+    journal.append({
+      event: 'control.cancel',
+      actor_id: 'peer-a',
+      status: 'accepted',
+      metadata: {
+        session_id: 'ses-cancel-1',
+        task_id: 'tsk-cancel-1',
+        message_id: 'msg-cancel-1',
+        reply_to: 'msg-parent-1',
+        token: 'raw-token',
+      },
+    });
+    const metadata = journal.list()[0].metadata as Record<string, unknown>;
+    expect(metadata.session_id).toBe('ses-cancel-1');
+    expect(metadata.task_id).toBe('tsk-cancel-1');
+    expect(metadata.message_id).toBe('msg-cancel-1');
+    expect(metadata.reply_to).toBe('msg-parent-1');
+    expect(metadata.token).toBe('***REDACTED***');
+  });
+
   it('audit journal 扫描字符串值中的位置化 secret 与隐私数据', async () => {
     const { P3394AuditJournal } = await import('../../../../src/main/features/p3394_bridge/audit-journal');
     const journal = new P3394AuditJournal();

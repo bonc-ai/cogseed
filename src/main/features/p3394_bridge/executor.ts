@@ -136,6 +136,14 @@ export class P3394BridgeExecutor {
     if (envelope.kind === 'control' && envelope.performative === 'cancel' && envelope.task_id) {
       // Cross-node cancellation: hand the task id to the runtime without
       // opening a session; the running forward observes the terminal event.
+      // S-07：高风险控制操作保留审计——sender 已通过内核身份/能力准入，
+      // 审计记录谁取消了哪个任务，可追溯、不展示敏感字段。
+      this.bridge.audit.append({
+        event: 'control.cancel',
+        actor_id: envelope.sender.agent_id,
+        status: 'accepted',
+        metadata: { task_id: envelope.task_id, session_id: envelope.session_id },
+      });
       void this.runtime.cancel(envelope.task_id).catch(() => {});
       return { ok: true, receipt: sent.receipt, executed: false, task_id: envelope.task_id };
     }
