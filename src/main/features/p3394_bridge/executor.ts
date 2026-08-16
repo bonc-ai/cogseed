@@ -404,6 +404,13 @@ export class P3394BridgeExecutor {
   async resumeForward(taskId: string, sessionId: string, afterSequence = 0): Promise<void> {
     const resume = (async () => {
       this.sessions.activate(sessionId);
+      const actions: Array<{ sequence: number; kind: string; at: string; text?: string; error?: string }> = [];
+      let sequence = 0;
+      let lastDelta = '';
+      const pushAction = (kind: string, extra: { text?: string; error?: string } = {}) => {
+        sequence += 1;
+        actions.push({ sequence, kind, at: this.now(), ...extra });
+      };
       for await (const event of this.runtime.stream(taskId, afterSequence)) {
         try {
           await this.onEvent?.(sessionId, event);
@@ -412,11 +419,31 @@ export class P3394BridgeExecutor {
           this.sessions.toWaiting(sessionId);
           throw error;
         }
+        if (event.kind === 'delta' && event.data && typeof event.data.text === 'string') {
+          lastDelta = event.data.text;
+        }
+        pushAction(event.kind, event.data && typeof event.data.error === 'string' ? { error: event.data.error, text: lastDelta } : { text: lastDelta });
         if (event.kind === 'started') {
           this.tasks.start(taskId);
         }
         if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
           this.tasks.settle(taskId, event.kind);
+          // 恢复闭环同样产出 KSTAR episode（R-06/S-05）：恢复完成的
+          // 任务不重新 deliver，但终态仍进入 episode 落盘。
+          try {
+            const session = this.sessions.require(sessionId);
+            this.recordEpisode?.({
+              session_id: sessionId,
+              task_id: taskId,
+              goal: session.goal,
+              agent_id: session.agent_id,
+              status: event.kind,
+              result: lastDelta.slice(0, 24_000) || undefined,
+              actions,
+            });
+          } catch {
+            // Session may have been closed concurrently; episode is best-effort.
+          }
         }
       }
     })();
