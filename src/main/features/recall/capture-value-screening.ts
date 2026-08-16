@@ -179,6 +179,9 @@ function collectSignals(messages: readonly RecallCaptureScreeningMessage[]): Rec
   return [...new Set(signals)];
 }
 
+/** 套话模式：报告完成/成功，本身不携带可复用知识（需配合具体信号判定）。 */
+const PLATITUDE_PATTERN = /(认真完成|按时交付|已完成|完成得不错|顺利完成任务|成功完成|task completed|successfully (completed|delivered|finished)|well done|good (job|work))/i;
+
 function collectTextSignals(text: string): RecallCaptureValueSignal[] {
   return SIGNAL_PATTERNS
     .filter(([, pattern]) => pattern.test(text))
@@ -501,6 +504,15 @@ export function assessRecallCaptureCandidateQuality(
   const hasArtifactEvidence = evidenceMessages.some((message) => (message.artifacts?.length || 0) > 0);
   if (!candidateSignals.length && !hasArtifactEvidence && combinedLength < 40) {
     reasons.push('candidate_not_reusable');
+  }
+
+  // 套话闸门（保守版）：judgment 是报告完成/成功的套话，且没有任何具体
+  // 信号 → 无复用价值。只拦"纯套话"，不做复述任务判定（模板 judgment
+  // 天然含任务词，覆盖率判定误伤面大——上一版已回退）。
+  // reusable_outcome（报告完成）与套话天然重叠，不计入有效信号。
+  if (PLATITUDE_PATTERN.test(normalized(candidate.judgment))
+    && !collectTextSignals(candidate.judgment).some((signal) => signal !== 'reusable_outcome')) {
+    reasons.push('platitude_no_specifics');
   }
 
   const uniqueReasons = [...new Set(reasons)];
