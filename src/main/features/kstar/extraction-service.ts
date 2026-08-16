@@ -1,6 +1,21 @@
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
 
+/** 从经验内容提炼标题核心（交互规范附录 A 风格：标题体现内容）。
+ *  去掉常见引导前缀，取第一句主干，限 24 字。 */
+export function lessonTitleCore(text: string): string {
+  const t = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(处理|对于|遇到|当|在)[^，。；,.;:：]{0,12}[，,。；;]?/, '')
+    .replace(/^(可|应|须|要|建议|注意|务必|先|再)[^，。；,.;:：]{0,3}/, '')
+    .replace(/^(“|『|「)/, '')
+    .replace(/([，。；,.;:：])[\s\S]*$/, '$1')
+    .trim();
+  if (!t) return '通用经验';
+  return t.length <= 24 ? t : `${t.slice(0, 24)}…`;
+}
+
 export function scopeForTask(task: string): string {
   // Short ASCII tags by design (retrieval matches scope tokens whole-word /
   // bidirectional + cross-language aliases); CJK keywords keep Chinese tasks
@@ -103,22 +118,29 @@ export function proposeKstarCandidates(
     episode.a.toolCalls.every((call) => call.status === 'ok');
 
   const signalAvailable = clearsPrecipitationGate(review);
+  const scope = scopeForTask(episode.t.userGoal);
+  const scopeLabel = ({
+    report: '报告类任务', code: '代码类任务', review: '审查类任务',
+    product: '产品类任务', general: '通用',
+  } as Record<string, string>)[scope] ?? scope;
   if (verifiedWorkflow && signalAvailable) {
+    const lesson = review.lesson?.trim();
+    const core = lessonTitleCore(lesson || episode.t.userGoal);
     proposals.push({
       // A model-reasoned lesson (cause + reusable guidance) wins over the
       // fixed workflow template — the difference IS the lesson.
-      judgment: review.lesson?.trim()
-        ? review.lesson
-        : `For tasks like "${episode.t.userGoal}", use the verified workflow: ${distinctTools.join(' → ')}.`,
-      summary: review.lesson?.trim() ? 'Reusable workflow lesson' : 'Verified multi-tool workflow',
-      uncertainty: 'Generated from a verified workflow with an explicit learning signal; confirm before treating it as durable.',
+      judgment: lesson
+        ? lesson
+        : `处理类似「${episode.t.userGoal}」的任务时，可使用已验证的工作流程：${distinctTools.join(' → ')}。`,
+      summary: lesson ? `可复用经验：${core}（${scopeLabel}）` : `已验证的工作流程：${core}（${scopeLabel}）`,
+      uncertainty: '基于任务执行经验提炼，使用前可复核。',
       // A lesson is judgment experience, not a workflow recipe: tag it
       // 'rule' (or the named gap) so downstream use treats it as guidance
       // instead of replaying a tool chain.
-      suggestedType: review.lesson?.trim()
+      suggestedType: lesson
         ? (gapType(review) ?? 'rule')
         : 'skill_method',
-      suggestedScope: scopeForTask(episode.t.userGoal),
+      suggestedScope: scope,
       sourceRefs,
       learningSignal: learningSignal(review),
     });
@@ -126,15 +148,16 @@ export function proposeKstarCandidates(
 
   const type = review.confidence >= 0.7 ? gapType(review) : null;
   if (type && review.reason) {
+    const lesson = review.lesson?.trim();
     proposals.push({
       // Same for gap lessons: the reasoned judgment replaces the template.
-      judgment: review.lesson?.trim()
-        ? review.lesson
-        : `For similar tasks, address this ${review.attribution.replace('_', ' ')}: ${review.reason}`,
-      summary: review.lesson?.trim() ? `Reusable ${review.attribution.replace('_', ' ')} lesson` : `KSTAR ${review.attribution.replace('_', ' ')} candidate`,
-      uncertainty: 'This proposal is based on an explicit review and still requires user confirmation.',
+      judgment: lesson
+        ? lesson
+        : `遇到同类情况时，应注意修正：${review.reason}`,
+      summary: `待修正经验：${lessonTitleCore(lesson || review.reason)}（${scopeLabel}）`,
+      uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: type,
-      suggestedScope: scopeForTask(episode.t.userGoal),
+      suggestedScope: scope,
       sourceRefs,
       learningSignal: learningSignal(review),
     });
