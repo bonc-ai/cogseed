@@ -314,15 +314,19 @@ function _abilityAssetMaturityLabel(maturity, status) {
   if (status === 'revoked') return _cognitionText('cognition.asset_status_revoked', '已移除');
   if (maturity === 'bud' || status === 'candidate') return _cognitionText('cognition.maturity_bud', '芽点');
   if (maturity === 'effectiveness_validated') return _cognitionText('cognition.maturity_deep_leaf', '深叶');
-  if (maturity === 'transfer_validated') return 'Transfer Validated';
+  if (maturity === 'transfer_validated') return _cognitionText('cognition.maturity_transfer_validated', '已迁移验证');
   if (maturity === 'seed') return _cognitionText('cognition.maturity_seed', '种子');
   return maturity || status || _cognitionText('cognition.unknown', '未知');
 }
 
 function _abilityAssetWriteOriginLabel(lifecycleStatus) {
-  return lifecycleStatus === 'automatically_extracted_unverified'
-    ? _cognitionText('cognition.asset_write_origin_auto', '自动入库')
-    : _cognitionText('cognition.asset_write_origin_user', '确认入库');
+  if (lifecycleStatus === 'automatically_extracted_unverified') {
+    return _cognitionText('cognition.asset_write_origin_auto', '自动入库');
+  }
+  if (lifecycleStatus === 'system_precipitated_unverified') {
+    return _cognitionText('cognition.asset_write_origin_system', '系统沉淀');
+  }
+  return _cognitionText('cognition.asset_write_origin_user', '确认入库');
 }
 
 function _abilityAssetSummary(items, category) {
@@ -832,7 +836,7 @@ function _captureAssetReceiptDetail(capture) {
   const rows = receipts.map((receipt) => {
     const type = receipt.assetType ? _abilityAssetCategoryLabel(receipt.assetType) : notRecorded;
     const version = receipt.version || notRecorded;
-    const scope = receipt.scope || notRecorded;
+    const scope = receipt.scope ? _abilityAssetScopeLabel(receipt.scope) : notRecorded;
     const decision = receipt.reviewDecisionId || notRecorded;
     return `<article class="recall-capture-asset-receipt">
       <div class="recall-capture-asset-receipt-head"><span><b>asset_id</b><code>${escapeHtml(receipt.assetId)}</code></span><em>${escapeHtml(type)}</em></div>

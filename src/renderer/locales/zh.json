@@ -4354,5 +4354,7 @@
   "settings.custom_providers.api_format_openai_responses": "OpenAI Responses (/responses)",
   "settings.custom_providers.protocol_openai_responses": "OpenAI Responses",
   "settings.model_authorization.protocol_openai_responses": "OpenAI Responses (/responses)",
-  "cognition.asset_view_content": "查看内容"
+  "cognition.asset_view_content": "查看内容",
+  "cognition.maturity_transfer_validated": "已迁移验证",
+  "cognition.asset_write_origin_system": "系统沉淀"
 }
