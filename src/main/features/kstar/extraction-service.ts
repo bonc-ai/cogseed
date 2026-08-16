@@ -2,14 +2,21 @@ import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
 
 /** 从经验内容提炼标题核心（交互规范附录 A 风格：标题体现内容）。
- *  去掉常见引导前缀，取第一句主干，限 24 字。 */
+ *  去掉常见引导前缀，取第一句主干，限 24 字。
+ *  "当…时/对于…/遇到…"引导整体移除（含"时"边界）——旧实现对"当任务
+ *  要求生成基于用户具体数据的文档（如资产简介）时"只移除前 12 字符，
+ *  留下"数据的文档（如资产简介）时"残片。 */
 export function lessonTitleCore(text: string): string {
-  const t = String(text || '')
+  let t = String(text || '')
     .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^(处理|对于|遇到|当|在)[^，。；,.;:：]{0,12}[，,。；;]?/, '')
-    .replace(/^(可|应|须|要|建议|注意|务必|先|再)[^，。；,.;:：]{0,3}/, '')
-    .replace(/^(“|『|「)/, '')
+    .trim();
+  // "遇到同类情况时，应注意修正："是"待修正经验"模板引导，整体移除。
+  t = t.replace(/^(?:遇到同类情况时，)?(?:应|须|要)?注意修正[:：]/, '')
+    // 引导前缀（"当X时，"/"对于X，"/"处理X时，"等）惰性匹配到标点移除。
+    .replace(/^(?:当|对于|遇到|处理|在处理|在)[^，。；,.;:：]*?(?:时|后|中|之前|以后)?[，,。；;]/, '')
+    // 纯助动词引导（"可以/应该/需要"）——"先/再"是流程内容词（"先X再Y"），不移除。
+    .replace(/^(?:可|应|须|要|建议|务必|注意)[^，。；,.;:：]{0,2}/, '')
+    .replace(/^(?:“|『|「)/, '')
     .replace(/([，。；,.;:：])[\s\S]*$/, '$1')
     .trim();
   if (!t) return '通用经验';
@@ -23,7 +30,7 @@ export function scopeForTask(task: string): string {
   // NOTE: `file`/`文件` are weak words — "文件不存在时返回默认值" is CODE
   // logic, not a document/report task; matching them to 'report' mislabels
   // refactor/code tasks and breaks retrieval. Strong document words only.
-  if (/report|summary|document|报告|总结|文档/i.test(task)) return 'report';
+  if (/report|summary|document|报告|总结/i.test(task)) return 'report';
   if (/code|function|bug|test|代码|函数|缺陷|测试/i.test(task)) return 'code';
   if (/review|audit|审查|审计|检查|评审/i.test(task)) return 'review';
   if (/product|decision|architecture|产品|决策|架构/i.test(task)) return 'product';
