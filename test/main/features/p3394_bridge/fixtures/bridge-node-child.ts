@@ -25,6 +25,7 @@ import { buildP3394BridgeManifest } from '../../../../../src/main/features/p3394
 import { P3394HttpChannel } from '../../../../../src/main/features/p3394_bridge/http-channel';
 import { P3394CogseedRuntimeAdapter } from '../../../../../src/main/features/p3394_bridge/cogseed-runtime-adapter';
 import { P3394RecoveryController } from '../../../../../src/main/features/p3394_bridge/recovery-controller';
+import { P3394OutboundHub, p3394EnvelopeReplyText } from '../../../../../src/main/features/p3394_bridge/outbound-hub';
 import { createMateRuntimeController } from '../../../../../src/main/features/cogseed_backend/runtime-controller';
 
 function manifestOf(id: string) {
@@ -51,7 +52,19 @@ async function main(): Promise<void> {
 
   const bridge = new P3394BridgeKernel();
   bridge.registry.register({ identity: { agent_id: 'child-node', display_name: 'ChildNode' }, manifest: manifestOf('child-node') });
-  bridge.registry.register({ identity: { agent_id: 'parent-node', display_name: 'ParentNode' }, manifest: manifestOf('parent-node') });
+  bridge.registry.register({
+    identity: { agent_id: 'parent-node', display_name: 'ParentNode' },
+    manifest: manifestOf('parent-node'),
+    ...(parentEndpoint ? { endpoints: [parentEndpoint] } : {}),
+    // 出站凭据：hub 建通道时携带 Bearer token（C-07 认证出站）。
+    ...(parentToken ? { dial_token: parentToken } : {}),
+  });
+  // C-07/R-06：出站事务队列（outbox：submitted → sent → completed），
+  // 回复命中 waiter 完成闭环。
+  const outboundHub = new P3394OutboundHub({
+    listPeers: () => bridge.registry.list(),
+    replyTimeoutMs: 8000,
+  });
 
   // 真实 Runtime Adapter：接 CogSeed Backend 会话/任务/事件存储与运行控制器，
   // 由 fake runtime run 生成多轮 delta 文本（长任务，R-05 跨进程事件流证据）。
@@ -91,6 +104,7 @@ async function main(): Promise<void> {
   const executor = new P3394BridgeExecutor({
     bridge,
     runtime,
+    outboundHub,
     selfIdentity: { agent_id: 'child-node', alias: 'ChildNode' },
     onEvent: (sessionId, event) => {
       if (failDeliveryLeft > 0) {
@@ -144,12 +158,15 @@ async function main(): Promise<void> {
   const channel = new P3394HttpChannel('child-http', { listen: { host: '127.0.0.1', port }, authToken: token });
   channel.setLocalManifest(manifestOf('child-node'));
   channel.subscribe((envelope) => {
-    // reverse task 的回信（reply_to 指向其 message_id）直接落盘，不进入执行路径。
+    // reverse task 的回信（reply_to 指向其 message_id）：先让 outbound hub
+    // 命中 waiter（sendAndWait 完成 outbox 闭环），再落盘证据。
     if (envelope.reply_to && envelope.reply_to === reverseMessageId) {
+      outboundHub.tryResolveReply(envelope);
       if (reverseResult) {
         fs.writeFileSync(reverseResult, JSON.stringify({
           reply_to: envelope.reply_to,
           from: envelope.sender && envelope.sender.agent_id,
+          reply_text: p3394EnvelopeReplyText(envelope),
         }));
       }
       return;
@@ -159,7 +176,9 @@ async function main(): Promise<void> {
   await channel.listen();
   process.stdout.write('CHILD_READY\n');
 
-  /** C-09：本节点主动向父进程发起一次任务，携带 reply_endpoint/reply_token。 */
+  /** C-09/C-07：本节点主动向父进程发起一次任务，携带 reply_endpoint/reply_token。
+   *  出站走事务 outbox（sendAndWait：submitted → sent → completed），
+   *  回复由 subscribe → tryResolveReply 命中 waiter 完成闭环。 */
   async function sendReverseTask(): Promise<void> {
     try {
       await new Promise((resolve) => setTimeout(resolve, 400));
@@ -178,14 +197,9 @@ async function main(): Promise<void> {
         payload: { parts: [{ type: 'text', text: 'reverse task from child' }] },
         extensions: { reply_endpoint: `http://127.0.0.1:${port}`, reply_token: token },
         idempotency_key: 'idem-reverse-' + nonce,
-      };
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (parentToken) headers.Authorization = 'Bearer ' + parentToken;
-      await fetch(parentEndpoint + '/p3394/envelope', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ envelope: task }),
-      });
+      } as never;
+      await outboundHub.sendAndWait('parent-node', task as never);
+      // 回复由 subscribe 落盘 reverseResult；sendAndWait 返回即闭环完成。
     } catch (error) {
       process.stderr.write('bridge-node-child reverse task failed: ' + String(error) + '\n');
     }

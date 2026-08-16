@@ -48,6 +48,9 @@ export interface P3394PeerRecord {
   trust_policy?: string;
   /** When set, dialing must verify the remote manifest identity matches this. */
   expected_identity?: string;
+  /** Outbound dial Bearer token for this peer (per-peer credential, optional).
+   *  Stored in the local registry only; never exported to manifests or audit. */
+  dial_token?: string;
   /** 最近一次观察到该节点活动的时间（hello/心跳/任意入站信封刷新）——ECS 在线状态。 */
   last_seen_at?: string;
   disabled?: boolean;
@@ -177,6 +180,7 @@ export class P3394PeerRegistry {
     locality?: P3394Locality;
     trust_policy?: string;
     expected_identity?: string;
+    dial_token?: string;
     disabled?: boolean;
     now?: string;
   }): P3394RegistryResult<P3394PeerRecord> {
@@ -219,6 +223,7 @@ export class P3394PeerRegistry {
       : undefined;
     const trustPolicy = typeof input.trust_policy === 'string' && input.trust_policy.trim() ? input.trust_policy.trim().slice(0, 120) : undefined;
     const expectedIdentity = typeof input.expected_identity === 'string' && input.expected_identity.trim() ? input.expected_identity.trim().slice(0, 256) : undefined;
+    const dialToken = typeof input.dial_token === 'string' && input.dial_token.trim() ? input.dial_token.trim() : undefined;
     const record: P3394PeerRecord = {
       identity: identityResult.identity,
       aliases: aliasesResult.value,
@@ -233,6 +238,7 @@ export class P3394PeerRegistry {
       ...(locality ? { locality } : {}),
       ...(trustPolicy ? { trust_policy: trustPolicy } : {}),
       ...(expectedIdentity ? { expected_identity: expectedIdentity } : {}),
+      ...(dialToken ? { dial_token: dialToken } : {}),
       ...(input.disabled ? { disabled: true } : {}),
       last_seen_at: input.now ?? new Date().toISOString(),
       updated_at: input.now ?? new Date().toISOString(),

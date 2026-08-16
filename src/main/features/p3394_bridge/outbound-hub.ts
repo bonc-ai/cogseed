@@ -75,6 +75,9 @@ export class P3394OutboundHub {
         endpoints: [...(peer.endpoints ?? [])],
         // Registry expected_identity → dial-time identity verification.
         ...(peer.expected_identity ? { expected_identity: peer.expected_identity } : {}),
+        // Per-peer outbound credential (dial_token, optional) — the outbound
+        // hub must be able to reach authenticated peers.
+        ...(peer.dial_token ? { bearerToken: peer.dial_token } : {}),
       },
     });
   }

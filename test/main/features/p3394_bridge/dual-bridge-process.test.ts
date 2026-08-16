@@ -26,6 +26,8 @@ import type { P3394RuntimeAdapter, P3394RuntimeEvent, P3394RuntimeSessionBinding
 
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
+let previousRuntimeVariant: string | undefined;
+let variantName: string;
 const children: ChildProcess[] = [];
 const openChannels: P3394HttpChannel[] = [];
 
@@ -33,6 +35,11 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-dual-bridge-'));
   previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  // p3394StateFile 走 ORKAS_RUNTIME_VARIANT（非 ORKAS_WORKSPACE_ROOT）：
+  // 用一次性 variant 隔离 outbox/cursor 等状态文件，避免污染真实 cogseed variant。
+  variantName = 'p3394-dual-' + Math.random().toString(36).slice(2, 8);
+  previousRuntimeVariant = process.env.ORKAS_RUNTIME_VARIANT;
+  process.env.ORKAS_RUNTIME_VARIANT = variantName;
 });
 
 afterEach(async () => {
@@ -42,7 +49,10 @@ afterEach(async () => {
   for (const channel of openChannels.splice(0)) await channel.close().catch(() => {});
   if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
   else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousRuntimeVariant === undefined) delete process.env.ORKAS_RUNTIME_VARIANT;
+  else process.env.ORKAS_RUNTIME_VARIANT = previousRuntimeVariant;
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true });
 });
 
 function freePort(): Promise<number> {
@@ -238,6 +248,25 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
 
     const exitCode = await waitExit(child, 8000);
     expect(exitCode, 'child stderr: ' + childErr).toBe(0);
+
+    // C-07 出站事务闭环：reverse 任务在 outbox 里完整走过 submitted → sent → completed。
+    const outboxFile = path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName, 'p3394-outbox.jsonl');
+    expect(fs.existsSync(outboxFile)).toBe(true);
+    const outboxLines = fs.readFileSync(outboxFile, 'utf8').split('\n').filter((line) => line.trim());
+    const reverseMessageId = (JSON.parse(fs.readFileSync(reverseResult, 'utf8')) as { reply_to: string }).reply_to;
+    const statuses = outboxLines
+      .map((line) => JSON.parse(line) as { message_id?: string; status?: string })
+      .filter((record) => record.message_id === reverseMessageId)
+      .map((record) => record.status);
+    expect(statuses).toContain('submitted');
+    expect(statuses).toContain('sent');
+    expect(statuses).toContain('completed');
+    // 信封快照只随 submitted 存储一次，peer 目标正确。
+    const snapshotLines = outboxLines
+      .map((line) => JSON.parse(line) as { message_id?: string; kind?: string; peer?: string })
+      .filter((record) => record.kind === 'envelope' && record.message_id === reverseMessageId);
+    expect(snapshotLines).toHaveLength(1);
+    expect(snapshotLines[0].peer).toBe('parent-node');
 
     // R-09 进程重启恢复：同一 Agent Home + adapter stateFile 重启子进程，
     // 同一 session 继续执行任务（映射恢复 + 会话恢复）。
