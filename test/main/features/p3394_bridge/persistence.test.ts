@@ -105,6 +105,25 @@ describe('P3394 Phase 1 persistence hardening', () => {
     expect(missing.checks.find((c) => c.name === 'registry')?.status).toBe('fail');
   });
 
+  it('doctor checks replay, audit, policy and resource bindings', () => {
+    const complete = runP3394BridgeDoctor({
+      replayProtectionBound: true,
+      idempotencyBound: true,
+      auditJournalBound: true,
+      policyBound: true,
+      resourceLimitsMissing: [],
+    });
+    expect(complete.ok).toBe(true);
+    expect(complete.checks.filter((check) => ['replay-protection', 'idempotency', 'audit-journal', 'policy', 'resource-limits'].includes(check.name)).every((check) => check.status === 'pass')).toBe(true);
+
+    const incomplete = runP3394BridgeDoctor({ resourceLimitsMissing: ['rate', 'concurrency'] });
+    expect(incomplete.ok).toBe(false);
+    expect(incomplete.checks.find((check) => check.name === 'resource-limits')).toMatchObject({ status: 'fail', reason: 'missing resource limits: rate, concurrency' });
+
+    const unreported = runP3394BridgeDoctor({});
+    expect(unreported.checks.find((check) => check.name === 'policy')?.status).toBe('warn');
+  });
+
   it('doctor keeps warn defaults without breaking ok on manifest-only input', () => {
     const report = runP3394BridgeDoctor({ manifest: manifestFor('a') });
     expect(report.ok).toBe(true);

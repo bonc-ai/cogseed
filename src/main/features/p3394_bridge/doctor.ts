@@ -20,6 +20,14 @@ export interface P3394DoctorInput {
   autoReplyEnabled?: boolean;
   /** Missing required channel capabilities (empty array = all present). */
   channelCapabilitiesMissing?: string[];
+  /** Whether replay protection and idempotency are wired into the bridge. */
+  replayProtectionBound?: boolean;
+  idempotencyBound?: boolean;
+  /** Whether the audit journal and authorization policy are wired. */
+  auditJournalBound?: boolean;
+  policyBound?: boolean;
+  /** Missing resource controls such as frame, queue, rate and concurrency limits. */
+  resourceLimitsMissing?: string[];
 }
 
 export function runP3394BridgeDoctor(input: P3394DoctorInput = {}): P3394DoctorReport {
@@ -99,6 +107,23 @@ export function runP3394BridgeDoctor(input: P3394DoctorInput = {}): P3394DoctorR
     checks.push({ name: 'auto-reply', status: 'warn', reason: '§11 auto reply state not reported' });
   } else {
     checks.push({ name: 'auto-reply', status: input.autoReplyEnabled ? 'pass' : 'warn', reason: input.autoReplyEnabled ? '§11 result auto reply-back enabled' : '§11 result auto reply-back disabled' });
+  }
+
+  const booleanBindings: Array<[string, boolean | undefined, string]> = [
+    ['replay-protection', input.replayProtectionBound, 'replay protection binding not reported'],
+    ['idempotency', input.idempotencyBound, 'idempotency binding not reported'],
+    ['audit-journal', input.auditJournalBound, 'audit journal binding not reported'],
+    ['policy', input.policyBound, 'authorization policy binding not reported'],
+  ];
+  for (const [name, value, missingReason] of booleanBindings) {
+    checks.push({ name, status: value === undefined ? 'warn' : value ? 'pass' : 'fail', ...(value === undefined ? { reason: missingReason } : value ? {} : { reason: name + ' is not bound' }) });
+  }
+  if (input.resourceLimitsMissing === undefined) {
+    checks.push({ name: 'resource-limits', status: 'warn', reason: 'resource limit checks not reported' });
+  } else if (input.resourceLimitsMissing.length > 0) {
+    checks.push({ name: 'resource-limits', status: 'fail', reason: 'missing resource limits: ' + input.resourceLimitsMissing.join(', ') });
+  } else {
+    checks.push({ name: 'resource-limits', status: 'pass' });
   }
 
   return { ok: checks.every((c) => c.status !== 'fail'), checks };

@@ -2,7 +2,7 @@ import type { P3394Envelope } from './envelope';
 import { validateP3394Envelope } from './envelope';
 import { P3394AuditJournal } from './audit-journal';
 import { P3394IdempotencyStore } from './idempotency';
-import { P3394PeerRegistry } from './registry';
+import { P3394PeerRegistry, type P3394PeerRecord } from './registry';
 import { P3394ReplayProtector } from './replay-protection';
 
 export interface P3394BridgeDeliveryReceipt {
@@ -21,6 +21,22 @@ export interface P3394BridgeKernelDeps {
   idempotency?: P3394IdempotencyStore<P3394BridgeDeliveryReceipt>;
   replay?: P3394ReplayProtector;
   audit?: P3394AuditJournal;
+}
+
+function validateRecipientAdmission(envelope: P3394Envelope, peer: P3394PeerRecord): { reason: string; field: string; message: string } | null {
+  if (envelope.kind !== 'task' && envelope.kind !== 'message') return null;
+  const nodeKind = peer.node_kind ?? 'agent';
+  if (nodeKind === 'capability' || nodeKind === 'model_runtime') {
+    return { reason: 'capability_not_authorized', field: 'recipients', message: 'Capability and model runtime nodes cannot receive autonomous task messages.' };
+  }
+  const profile = peer.manifest.capability_profile;
+  if (!profile.capabilities.includes('handle_message')) {
+    return { reason: 'capability_not_authorized', field: 'capability_profile.capabilities', message: 'Recipient does not authorize handle_message.' };
+  }
+  if (!profile.supported_performatives.includes(envelope.performative)) {
+    return { reason: 'performative_not_authorized', field: 'capability_profile.supported_performatives', message: 'Recipient does not authorize this performative.' };
+  }
+  return null;
 }
 
 export class P3394BridgeKernel {
@@ -54,6 +70,11 @@ export class P3394BridgeKernel {
       if (recipient.ok === false) {
         this.audit.append({ event: 'peer.resolve.recipient', actor_id: envelope.sender.agent_id, target_id: envelope.recipients[i].agent_id, status: 'rejected', metadata: { ...recipient.error } });
         return { ok: false, error: recipient.error };
+      }
+      const admission = validateRecipientAdmission(envelope, recipient.value);
+      if (admission) {
+        this.audit.append({ event: 'capability.authorize', actor_id: envelope.sender.agent_id, target_id: recipient.value.identity.agent_id, status: 'rejected', metadata: admission });
+        return { ok: false, error: admission };
       }
       recipientIds.push(recipient.value.identity.agent_id);
     }

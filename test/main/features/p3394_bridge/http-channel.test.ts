@@ -34,6 +34,7 @@ function manifest(agentId: string) {
 
 function envelope(overrides: Record<string, unknown> = {}) {
   return {
+    spec_version: 'p3394/1.0',
     message_id: 'msg-http-' + counter,
     session_id: 'ses-http-1',
     kind: 'message',
@@ -169,7 +170,7 @@ describe('P3394HttpChannel real network transport', () => {
     openServers.push(server);
     await server.listen();
 
-    const big = { envelope: { message_id: 'm', session_id: 's', kind: 'message', performative: 'request', sender: { agent_id: 'a' }, recipients: [{ agent_id: 'b' }], payload: { parts: [{ type: 'text', text: 'x'.repeat(500) }] }, idempotency_key: 'k' } };
+    const big = { envelope: { spec_version: 'p3394/1.0', message_id: 'm', session_id: 's', kind: 'message', performative: 'request', sender: { agent_id: 'a' }, recipients: [{ agent_id: 'b' }], payload: { parts: [{ type: 'text', text: 'x'.repeat(500) }] }, idempotency_key: 'k' } };
     const status = await new Promise<number>((resolve) => {
       const req = http.request({ host: '127.0.0.1', port, path: '/p3394/envelope', method: 'POST', headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' } }, (res) => {
         res.resume();
@@ -178,6 +179,29 @@ describe('P3394HttpChannel real network transport', () => {
       req.end(JSON.stringify(big));
     });
     expect(status).toBe(413);
+  });
+
+  it('rejects a missing spec_version before dispatch (422)', async () => {
+    const port = nextPort();
+    const server = new P3394HttpChannel('server', { listen: { port }, authToken: 'tok' });
+    openServers.push(server);
+    await server.listen();
+
+    const payload = { envelope: {
+      message_id: 'msg-missing-version', session_id: 's', kind: 'message', performative: 'request',
+      sender: { agent_id: 'a' }, recipients: [{ agent_id: 'b' }],
+      payload: { parts: [{ type: 'text', text: 'missing version' }] }, idempotency_key: 'k-missing-version',
+    } };
+    const response = await new Promise<{ status: number; body: string }>((resolve) => {
+      const req = http.request({ host: '127.0.0.1', port, path: '/p3394/envelope', method: 'POST', headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json' } }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.end(JSON.stringify(payload));
+    });
+    expect(response.status).toBe(422);
+    expect(JSON.parse(response.body)).toMatchObject({ ok: false, error: 'missing_spec_version' });
   });
 
   it('rejects a digest mismatch before dispatch (422)', async () => {
@@ -190,7 +214,7 @@ describe('P3394HttpChannel real network transport', () => {
 
     const badDigest = '0'.repeat(64);
     const payload = { envelope: {
-      message_id: 'msg-digest', session_id: 's', kind: 'message', performative: 'request',
+      spec_version: 'p3394/1.0', message_id: 'msg-digest', session_id: 's', kind: 'message', performative: 'request',
       sender: { agent_id: 'a' }, recipients: [{ agent_id: 'b' }],
       payload: { parts: [{ type: 'resource', uri: 'p3394-object:sha256:abc', digest: badDigest }] },
       idempotency_key: 'k-digest',

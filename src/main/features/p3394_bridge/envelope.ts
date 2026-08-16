@@ -75,8 +75,8 @@ export interface P3394MessagePayload {
 
 export interface P3394Envelope {
   /** Protocol version this envelope conforms to (guide §6.1, SDK design §8).
-   *  Required when present on the wire; the validator normalizes absent
-   *  values to the current bridge version for backward compatibility. */
+   * Required on the wire; legacy callers must use an explicit adapter before
+   * entering the protocol validation path. */
   spec_version: string;
   message_id: string;
   session_id: string;
@@ -96,6 +96,7 @@ export interface P3394Envelope {
 
 export type P3394EnvelopeValidationReason =
   | 'invalid_envelope'
+  | 'missing_spec_version'
   | 'missing_message_id'
   | 'missing_session_id'
   | 'missing_idempotency_key'
@@ -249,14 +250,11 @@ export function validateP3394Envelope(input: unknown): P3394EnvelopeValidationRe
     return fail('invalid_envelope', '$', 'envelope must be an object');
   }
 
-  // spec_version: optional on the wire for backward compatibility; when
-  // present it must match the bridge version, and the normalized envelope
-  // always carries the current version (guide §6.1: spec_version defaults
-  // to p3394/1.0).
-  if (input.spec_version !== undefined) {
-    if (typeof input.spec_version !== 'string' || input.spec_version.trim() !== P3394_ENVELOPE_VERSION) {
-      return fail('unsupported_spec_version', 'spec_version', 'spec_version is not supported by this bridge');
-    }
+  if (input.spec_version === undefined) {
+    return fail('missing_spec_version', 'spec_version', 'spec_version is required on the wire');
+  }
+  if (typeof input.spec_version !== 'string' || input.spec_version.trim() !== P3394_ENVELOPE_VERSION) {
+    return fail('unsupported_spec_version', 'spec_version', 'spec_version is not supported by this bridge');
   }
   if (input.role !== undefined && (typeof input.role !== 'string' || !ROLES.has(input.role))) {
     return fail('unsupported_role', 'role', 'role is not supported by p3394/1.0');
@@ -348,11 +346,9 @@ export function validateP3394Envelope(input: unknown): P3394EnvelopeValidationRe
     }
   }
 
-  // Normalize: absent spec_version defaults to the current bridge version
-  // so downstream consumers can rely on it being present.
   const normalized: P3394Envelope = {
     ...(input as unknown as P3394Envelope),
-    spec_version: P3394_ENVELOPE_VERSION,
+    spec_version: input.spec_version,
   };
   return { ok: true, envelope: normalized };
 }

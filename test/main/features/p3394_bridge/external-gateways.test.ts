@@ -16,10 +16,64 @@ describe('P3394 external-agent gateway host', () => {
     expect(p3394ExternalGatewayIdFor('nonsense')).toBeNull();
   });
 
+  it('executes a task through the managed gateway and returns a real response', async () => {
+    const token = 'ext-task-token';
+    const registryFile = p3394StateFile('p3394-peers.json');
+    try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
+    const registry = new P3394PeerRegistry({ filePath: registryFile });
+    const channel = new P3394HttpChannel('ext-task-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
+    await channel.listen();
+    const replies: unknown[] = [];
+    let replyResolve: ((value: unknown) => void) | null = null;
+    const reply = new Promise<unknown>((resolve) => { replyResolve = resolve; });
+    channel.subscribe((envelope) => {
+      if (envelope.sender.agent_id === 'hermes' && envelope.performative === 'inform') {
+        replies.push(envelope);
+        replyResolve?.(envelope);
+        return;
+      }
+      const senderId = envelope.sender.agent_id;
+      const endpoints = (envelope.extensions?.endpoints ?? []).filter((v): v is string => typeof v === 'string');
+      if (registry.resolve(senderId).ok === false) {
+        registry.register({
+          identity: { agent_id: senderId, display_name: senderId },
+          manifest: { spec_version: 'p3394/1.0', identity: { agent_id: senderId, display_name: senderId }, runtime: { kind: 'in_process' }, capability_profile: { agent_id: senderId, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request'], supports_streaming: false, supports_artifacts: false }, channels: [{ id: 'x', kind: 'local', direction: 'inbound-outbound' }], session: { scope: 'per-conversation', requires_session_id: true }, security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true }, conformance: { level: 'level-2-session-aware', registry: true, agent_home: true, runtime_adapter: true } } as never,
+          ...(endpoints.length ? { endpoints } : {}),
+        });
+      }
+    });
+    const server = (channel as unknown as { server: http.Server }).server;
+    const port = (server.address() as { port: number }).port;
+    try {
+      await stopExternalGateway('hermes');
+      const started = await startExternalGateway({ cli: 'hermes', binPath: '/bin/echo', alias: '任务 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(started.ok).toBe(true);
+      if (!started.ok) throw new Error(started.error);
+      const dialer = new P3394HttpChannel('ext-task-dialer', { dial: { endpoints: [`http://127.0.0.1:${started.value.port}`] } });
+      await dialer.dial('hermes');
+      await dialer.send({
+        spec_version: 'p3394/1.0', message_id: 'msg-ext-task-1', session_id: 'ses-ext-task-1', task_id: 'tsk-ext-task-1', kind: 'task', performative: 'request',
+        sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'hello external gateway' }] },
+        extensions: { reply_endpoint: `http://127.0.0.1:${port}`, reply_token: token }, idempotency_key: 'idem-ext-task-1',
+      } as never);
+      const response = await Promise.race([reply, new Promise((_, reject) => setTimeout(() => reject(new Error('external gateway reply timeout')), 10_000))]) as { payload: { parts: Array<{ type?: string; text?: string }> }; task_id?: string };
+      expect(replies).toHaveLength(1);
+      expect(response.task_id).toBe('tsk-ext-task-1');
+      expect(response.payload.parts[0].type).toBe('text');
+      expect(response.payload.parts[0].text).toContain('hello external gateway');
+      await dialer.close();
+    } finally {
+      await stopExternalGateway('hermes');
+      await channel.close();
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+    }
+  }, 60_000);
+
   it('starts a real managed gateway that self-registers into the bridge registry', async () => {
     // Fake CogSeed bridge：收 hello → 把节点写进注册表（与 app-wiring 同构）。
     const token = 'ext-test-token';
     const registryFile = p3394StateFile('p3394-peers.json');
+    try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
     const registry = new P3394PeerRegistry({ filePath: registryFile });
     const channel = new P3394HttpChannel('ext-test-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
     await channel.listen();
@@ -50,6 +104,7 @@ describe('P3394 external-agent gateway host', () => {
     const server = (channel as unknown as { server: http.Server }).server;
     const port = (server.address() as { port: number }).port;
     try {
+      await stopExternalGateway('hermes');
       const started = await startExternalGateway({
         cli: 'hermes',
         binPath: '/bin/echo',

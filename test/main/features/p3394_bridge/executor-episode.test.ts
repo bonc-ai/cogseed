@@ -13,6 +13,7 @@ function manifest(id: string) {
 
 function envelope(overrides: Record<string, unknown> = {}): P3394Envelope {
   return {
+    spec_version: 'p3394/1.0',
     message_id: 'msg-ep-1',
     session_id: 'ses-ep-1',
     task_id: 'tsk-ep-1',

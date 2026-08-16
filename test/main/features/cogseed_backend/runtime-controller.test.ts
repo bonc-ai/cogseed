@@ -139,6 +139,7 @@ describe('CogSeed Runtime controller', () => {
       { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'started' },
       { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'running', text: 'thinking' },
       { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'running', metadata: { kernel_event: 'tool_call', name: 'read_file' } },
+      { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'running', metadata: { kernel_event: 'artifact', uri: 'p3394-object:sha256:abc', digest: 'abc', name: 'report.md', media_type: 'text/markdown', secret: 'must-not-cross' } },
       { type: 'result', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'completed', text: 'final answer' },
     ]);
     const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
@@ -174,6 +175,7 @@ describe('CogSeed Runtime controller', () => {
       expect.objectContaining({ type: 'task.started' }),
       expect.objectContaining({ type: 'model.delta', payload: { text: 'thinking' } }),
       expect.objectContaining({ type: 'tool.started', payload: { name: 'read_file' } }),
+      expect.objectContaining({ type: 'artifact', payload: { uri: 'p3394-object:sha256:abc', digest: 'abc', name: 'report.md', media_type: 'text/markdown' } }),
       expect.objectContaining({ type: 'task.completed', payload: { outputChars: 12 } }),
     ]);
   });

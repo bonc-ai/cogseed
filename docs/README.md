@@ -12,6 +12,33 @@
 - [`superpowers/specs/2026-08-11-cogseed-official-cutover-design.md`](./superpowers/specs/2026-08-11-cogseed-official-cutover-design.md) — CogSeed 正式仓库/品牌切换
 - [`superpowers/specs/2026-08-10-cogseed-full-identity-migration-design.md`](./superpowers/specs/2026-08-10-cogseed-full-identity-migration-design.md) — App ID、协议、数据根、IPC 和 Runtime 身份迁移
 - [`superpowers/specs/2026-08-10-cogseed-brand-cognition-navigation-design.md`](./superpowers/specs/2026-08-10-cogseed-brand-cognition-navigation-design.md) — 产品品牌与 Cognition 导航
+
+### P3394 开发指导（核心）
+
+- [`P3394-Bridge-Runtime-实施指挥书.md`](./P3394-Bridge-Runtime-实施指挥书.md) — Bridge Runtime 实施指挥书
+- [`P3394-会议对照与Dashboard后续事项-2026-08-16.md`](./P3394-会议对照与Dashboard后续事项-2026-08-16.md) — 今日会议对照、Dashboard 候选范围与进入条件
+- [`P3394-Conformance-Matrix.md`](./P3394-Conformance-Matrix.md) — P3394 规范符合性矩阵与实施证据索引
+- [`P3394_Local_Bridge_SDK_Design(1).md`](./P3394_Local_Bridge_SDK_Design(1).md) — Local Bridge SDK 设计
+- [`P3394_Raymond_Hermes_Chinese_Implementation_Guide.md`](./P3394_Raymond_Hermes_Chinese_Implementation_Guide.md) — P3394 协议中文实施指南
+- [`superpowers/handover-p3394-bridge-runtime.md`](./superpowers/handover-p3394-bridge-runtime.md) — Bridge Runtime 交接文档
+- [`superpowers/plans/2026-08-13-p3394-bridge-runtime.md`](./superpowers/plans/2026-08-13-p3394-bridge-runtime.md) — Bridge Runtime 实施计划
+- [`superpowers/specs/2026-08-13-p3394-bridge-runtime-design.md`](./superpowers/specs/2026-08-13-p3394-bridge-runtime-design.md) — Bridge Runtime 设计规格
+- [`superpowers/specs/2026-08-10-cogseed-production-architecture.md`](./superpowers/specs/2026-08-10-cogseed-production-architecture.md) — CogSeed（P3394）生产级架构
+
+### 飞书 / 微信机器人
+
+- [`Cogseed-Hermes-飞书-MVP实施计划.md`](./Cogseed-Hermes-飞书-MVP实施计划.md) — 飞书 MVP 实施计划
+- [`touchpoint-v2-quickstart.md`](./touchpoint-v2-quickstart.md) — 飞书触点 v2 快速上手
+- [`superpowers/plans/2026-08-08-wechat-personal-ilink.md`](./superpowers/plans/2026-08-08-wechat-personal-ilink.md) — 个人微信（iLink）接入计划
+- [`superpowers/specs/2026-08-08-wechat-personal-ilink-design.md`](./superpowers/specs/2026-08-08-wechat-personal-ilink-design.md) — 微信接入设计规格
+- [`superpowers/specs/2026-08-10-feishu-companion-context-design.md`](./superpowers/specs/2026-08-10-feishu-companion-context-design.md) — 飞书伴侣上下文设计
+
+### KSTAR / Recall（认知闭环核心）
+
+- [`superpowers/plans/2026-08-14-commander-centric-kstar.md`](./superpowers/plans/2026-08-14-commander-centric-kstar.md) — Commander 中心 KStar 实施计划
+- [`superpowers/specs/2026-08-14-commander-centric-kstar-design.md`](./superpowers/specs/2026-08-14-commander-centric-kstar-design.md) — KStar 设计
+- [`superpowers/specs/2026-08-13-kstar-recall-world-model-closed-loop-design.md`](./superpowers/specs/2026-08-13-kstar-recall-world-model-closed-loop-design.md) — KSTAR×Recall 世界模型闭环
+>>>>>>> 7f7a9e83 (feat(p3394): 模型纠偏与真实 Runtime/Channel 恢复加固)
 - [`superpowers/specs/2026-08-09-recall-prd-information-architecture-design.md`](./superpowers/specs/2026-08-09-recall-prd-information-architecture-design.md) — Recall/Cognition 信息架构
 
 ## 关键实现位置

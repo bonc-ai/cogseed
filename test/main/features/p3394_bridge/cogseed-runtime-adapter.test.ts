@@ -34,7 +34,7 @@ async function load() {
 }
 
 /** Fake CogSeed runtime. Modes: 'complete' (delta + result), 'fail' (error event), 'throw' (run throws → recoverable), 'hold' (runs forever). */
-function fakeRuntime(delta = 'partial reply', mode: 'complete' | 'fail' | 'throw' | 'hold' = 'complete') {
+function fakeRuntime(delta = 'partial reply', mode: 'complete' | 'fail' | 'throw' | 'hold' | 'artifact' = 'complete') {
   return {
     shutdown: vi.fn(async () => {}),
     run: vi.fn(async function* () {
@@ -48,7 +48,10 @@ function fakeRuntime(delta = 'partial reply', mode: 'complete' | 'fail' | 'throw
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
-      if (mode === 'fail') {
+      if (mode === 'artifact') {
+        yield { type: 'event', status: 'running', text: '', metadata: { kernel_event: 'artifact', uri: 'p3394-object:sha256:abc', digest: 'abc', name: 'report.md', media_type: 'text/markdown', secret: 'must-not-cross' } };
+        yield { type: 'result', status: 'completed', text: 'artifact done', metadata: {} };
+      } else if (mode === 'fail') {
         yield { type: 'error', status: 'failed', text: 'boom', metadata: {} };
       } else {
         yield { type: 'result', status: 'completed', text: 'final answer', metadata: {} };
@@ -59,6 +62,7 @@ function fakeRuntime(delta = 'partial reply', mode: 'complete' | 'fail' | 'throw
 
 function envelope(overrides: Record<string, unknown> = {}) {
   return {
+    spec_version: 'p3394/1.0',
     message_id: 'msg-1',
     session_id: 'ses-bridge-1',
     task_id: 'tsk-bridge-1',
@@ -114,6 +118,55 @@ describe('P3394CogseedRuntimeAdapter real backend wiring', () => {
     expect(kinds).toContain('delta');
     expect(deltas).toContain('partial reply');
     expect(kinds[kinds.length - 1]).toBe('completed');
+  });
+
+  it('maps persisted artifact events with bounded fields', async () => {
+    const m = await load();
+    const controller = m.controllerModule.createMateRuntimeController({ runtime: fakeRuntime('partial reply', 'artifact') });
+    const adapter = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller, pollIntervalMs: 20 });
+    await adapter.openSession({ session_id: 'ses-artifact', agent_id: 'cogseed-agent' });
+    const { task_id } = await adapter.deliver(envelope({ session_id: 'ses-artifact', task_id: 'tsk-artifact' }) as never);
+    const events: Array<{ kind: string; data?: Record<string, unknown> }> = [];
+    for await (const event of adapter.stream(task_id)) events.push(event);
+    const artifact = events.find((event) => event.kind === 'artifact');
+    expect(artifact).toMatchObject({
+      kind: 'artifact',
+      data: {
+        uri: 'p3394-object:sha256:abc',
+        digest: 'abc',
+        name: 'report.md',
+        media_type: 'text/markdown',
+      },
+    });
+    expect(artifact?.data).not.toHaveProperty('secret');
+    expect(events.at(-1)?.kind).toBe('completed');
+  });
+
+  it('restores session and task mappings across adapter instances', async () => {
+    const { adapterModule, controllerModule } = await load();
+    const stateFile = path.join(tmpDir, 'agent-home', 'p3394-adapter-state.json');
+    const controller = controllerModule.createMateRuntimeController({ runtime: fakeRuntime() });
+    const first = new adapterModule.P3394CogseedRuntimeAdapter({
+      userId: () => UID, controller, stateFile,
+    });
+    const binding = await first.openSession({ session_id: 'ses-persisted', agent_id: 'cogseed-agent' });
+    const delivered = await first.deliver(envelope({ session_id: 'ses-persisted', task_id: 'tsk-persisted' }) as never);
+    expect(delivered.task_id).toBe('tsk-persisted');
+
+    const second = new adapterModule.P3394CogseedRuntimeAdapter({
+      userId: () => UID, controller, stateFile,
+    });
+    const snapshot = await second.snapshot('ses-persisted');
+    expect(snapshot.native_session_id).toBe(binding.native_session_id);
+    expect((snapshot.state as { tasks: { task_id: string }[] }).tasks).toEqual(
+      expect.arrayContaining([{ task_id: expect.any(String), status: expect.any(String) }]),
+    );
+    const resumedEvents: string[] = [];
+    for await (const event of second.stream('tsk-persisted')) {
+      resumedEvents.push(event.kind);
+      if (event.kind === 'completed') break;
+    }
+    expect(resumedEvents).toContain('completed');
   });
 
   it('deliver without a text part is rejected', async () => {

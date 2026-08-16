@@ -59,11 +59,11 @@ const ENVELOPE_FRAME = 'envelope';
 
 type SocketFramePayload = { t: 'auth'; token: string } | { t: 'envelope'; envelope: P3394Envelope }
 
-function writeFrame(socket: net.Socket, payload: SocketFramePayload): void {
+function writeFrame(socket: net.Socket, payload: SocketFramePayload, onFlushed?: () => void): void {
   const body = Buffer.from(JSON.stringify(payload), 'utf8');
   const header = Buffer.alloc(FRAME_HEADER_BYTES);
   header.writeUInt32BE(body.length, 0);
-  socket.write(Buffer.concat([header, body]));
+  socket.write(Buffer.concat([header, body]), onFlushed);
 }
 
 export class P3394UnixSocketChannel implements P3394ChannelAdapter {
@@ -89,6 +89,9 @@ export class P3394UnixSocketChannel implements P3394ChannelAdapter {
   private readonly listeners = new Set<(envelope: P3394Envelope) => void>();
   private readonly sockets = new Set<net.Socket>();
   private client: net.Socket | null = null;
+  private clientPendingFrames = 0;
+  /** Frames accepted locally but not flushed to the current socket. */
+  private readonly clientUnacked = new Map<string, P3394Envelope>();
   private clientAuthSent = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
@@ -172,12 +175,14 @@ export class P3394UnixSocketChannel implements P3394ChannelAdapter {
     if (this.stopping) return;
     const client = net.createConnection(this.socketPath);
     this.client = client;
+    this.clientPendingFrames = 0;
     let authed = false;
     client.on('connect', () => {
       this.reconnectAttempts = 0;
       writeFrame(client, { t: AUTH_FRAME, token: this.token });
       this.clientAuthSent = true;
       authed = true;
+      for (const envelope of this.clientUnacked.values()) this.writeEnvelope(client, envelope);
     });
     client.on('error', () => {
       if (this.client === client) this.client = null;
@@ -252,6 +257,14 @@ export class P3394UnixSocketChannel implements P3394ChannelAdapter {
     });
   }
 
+  private writeEnvelope(client: net.Socket, envelope: P3394Envelope): void {
+    this.clientPendingFrames += 1;
+    writeFrame(client, { t: ENVELOPE_FRAME, envelope }, () => {
+      this.clientPendingFrames = Math.max(0, this.clientPendingFrames - 1);
+      this.clientUnacked.delete(envelope.message_id);
+    });
+  }
+
   /** Sends an envelope to the dialed peer (auto-connect on first send). */
   async send(envelope: P3394Envelope): Promise<P3394ChannelDeliveryReceipt> {
     if (this.stopping) throw new Error('p3394_channel_closed');
@@ -260,7 +273,10 @@ export class P3394UnixSocketChannel implements P3394ChannelAdapter {
     }
     const client = this.client;
     if (!client || !client.writable) throw new Error('p3394_channel_not_connected');
-    writeFrame(client, { t: ENVELOPE_FRAME, envelope });
+    const maxPending = this.options.maxPendingFrames ?? P3394_UNIX_SOCKET_DEFAULTS.maxPendingFrames;
+    if (this.clientPendingFrames >= maxPending) throw new Error('p3394_channel_backpressure');
+    this.clientUnacked.set(envelope.message_id, envelope);
+    this.writeEnvelope(client, envelope);
     return { channel_id: this.channel_id, message_id: envelope.message_id, accepted: true };
   }
 
@@ -281,6 +297,7 @@ export class P3394UnixSocketChannel implements P3394ChannelAdapter {
   /** Stops the listener and dialer, closes sockets and removes the socket file. */
   async close(): Promise<void> {
     this.stopping = true;
+    this.clientPendingFrames = 0;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -301,6 +318,8 @@ export class P3394UnixSocketChannel implements P3394ChannelAdapter {
         setTimeout(resolve, 500).unref();
       });
     }
-    await fs.promises.rm(this.socketPath, { force: true }).catch(() => {});
+    // A dialer may share this path with the peer's listener. Only the owner
+    // of the listening server may remove the socket file during shutdown.
+    if (server) await fs.promises.rm(this.socketPath, { force: true }).catch(() => {});
   }
 }

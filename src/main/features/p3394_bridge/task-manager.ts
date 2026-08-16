@@ -8,7 +8,7 @@
  * the session tracks task ids, this manager tracks per-task state.
  */
 
-export type P3394BridgeTaskState = 'submitted' | 'working' | 'input-required' | 'completed' | 'failed' | 'cancelled';
+export type P3394BridgeTaskState = 'submitted' | 'working' | 'input-required' | 'recoverable' | 'completed' | 'failed' | 'cancelled';
 
 export interface P3394BridgeTask {
   task_id: string;
@@ -21,9 +21,10 @@ export interface P3394BridgeTask {
 }
 
 const TASK_TRANSITIONS: Record<P3394BridgeTaskState, P3394BridgeTaskState[]> = {
-  submitted: ['working', 'completed', 'failed', 'cancelled'],
-  working: ['input-required', 'completed', 'failed', 'cancelled'],
-  'input-required': ['working', 'completed', 'failed', 'cancelled'],
+  submitted: ['working', 'recoverable', 'completed', 'failed', 'cancelled'],
+  working: ['input-required', 'recoverable', 'completed', 'failed', 'cancelled'],
+  'input-required': ['working', 'recoverable', 'completed', 'failed', 'cancelled'],
+  recoverable: ['working', 'completed', 'failed', 'cancelled'],
   completed: [],
   failed: [],
   cancelled: [],
@@ -52,6 +53,11 @@ export class P3394BridgeTaskManager {
    *  the active path. */
   awaitInput(taskId: string): P3394BridgeTask {
     return this.settle(taskId, 'input-required');
+  }
+
+  /** Marks transport loss as recoverable without declaring Runtime failure. */
+  markRecoverable(taskId: string): P3394BridgeTask {
+    return this.settle(taskId, 'recoverable');
   }
 
   /** Advances the task with transition validation; terminal re-settlement

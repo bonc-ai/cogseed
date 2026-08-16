@@ -18,12 +18,14 @@
  * their own kernel/runtime wiring.
  */
 
+import * as crypto from 'node:crypto';
 import * as http from 'node:http';
 import { P3394BridgeKernel, type P3394BridgeSendResult } from './bridge';
 import { P3394BridgeKstarCloseHook } from './kstar-close-hook';
 import { P3394BridgeSessionManager } from './session-manager';
 import { P3394BridgeTaskManager } from './task-manager';
-import type { P3394Envelope } from './envelope';
+import type { P3394Envelope, P3394PayloadPart } from './envelope';
+import { normalizeDigest } from './artifact-parts';
 import type { P3394RuntimeAdapter, P3394RuntimeEvent } from './runtime-adapter';
 
 export type P3394BridgeExecutorResult =
@@ -159,7 +161,17 @@ export class P3394BridgeExecutor {
         await this.runtime.openSession({ session_id: envelope.session_id, agent_id: recipientAgentId });
         await this.runtime.deliver(envelope);
         for await (const event of this.runtime.stream(p3394TaskId)) {
-          await this.onEvent?.(envelope.session_id, event);
+          try {
+            await this.onEvent?.(envelope.session_id, event);
+          } catch (error) {
+            this.tasks.markRecoverable(p3394TaskId);
+            this.sessions.toWaiting(envelope.session_id);
+            this.bridge.audit.append({ event: 'stream.pause', actor_id: envelope.sender.agent_id, status: 'accepted', metadata: { task_id: p3394TaskId, error: error instanceof Error ? error.message : String(error) } });
+            return;
+          }
+          if (event.kind === 'artifact') {
+            await this.postAutoArtifact(envelope, event.data ?? {});
+          }
           if (event.kind === 'delta' && event.data && typeof event.data.text === 'string') {
             lastDelta = event.data.text;
           }
@@ -227,8 +239,54 @@ export class P3394BridgeExecutor {
     return { ok: true, receipt: sent.receipt, executed: true, task_id: p3394TaskId, session_id: envelope.session_id };
   }
 
+  private async postAutoArtifact(envelope: P3394Envelope, data: Record<string, unknown>): Promise<void> {
+    if (this.autoReply.enabled === false) return;
+    const ext = envelope.extensions;
+    const endpoint = ext && typeof ext.reply_endpoint === 'string' ? ext.reply_endpoint.trim() : '';
+    if (!endpoint) return;
+    if (!this.autoReplyEndpointAllowed(endpoint)) {
+      this.bridge.audit.append({ event: 'autoreply.reject', actor_id: envelope.sender.agent_id, status: 'rejected', metadata: { endpoint, kind: 'artifact' } });
+      return;
+    }
+    const part: P3394PayloadPart = { type: 'artifact' };
+    for (const key of ['uri', 'name', 'media_type'] as const) {
+      if (typeof data[key] === 'string' && data[key].length <= 256) part[key] = data[key];
+    }
+    if (typeof data.digest === 'string') {
+      const digest = normalizeDigest(data.digest);
+      if (!digest) {
+        this.bridge.audit.append({ event: 'autoreply.reject', actor_id: envelope.sender.agent_id, status: 'rejected', metadata: { endpoint, kind: 'artifact', reason: 'invalid_digest' } });
+        return;
+      }
+      part.digest = digest;
+    }
+    if (!part.uri && part.data === undefined) return;
+    const token = ext && typeof ext.reply_token === 'string' ? ext.reply_token : '';
+    const reply: P3394Envelope = {
+      spec_version: 'p3394/1.0',
+      message_id: deriveAutoArtifactMessageId(envelope.message_id, part.digest),
+      session_id: envelope.session_id,
+      task_id: envelope.task_id,
+      kind: 'artifact',
+      performative: 'inform',
+      role: 'responder',
+      sender: { agent_id: 'cogseed', alias: 'CogSeed', channel_instance_id: 'cogseed-app' },
+      recipients: [{ agent_id: envelope.sender.agent_id }],
+      payload: { parts: [part] },
+      reply_to: envelope.message_id,
+      idempotency_key: 'auto-artifact:' + envelope.message_id + ':' + (part.digest ?? 'unknown'),
+    };
+    try {
+      if (this.autoReply.post) await this.autoReply.post(endpoint, token, reply);
+      else await postP3394AutoReplyHttp(endpoint, token, reply);
+      this.bridge.audit.append({ event: 'autoreply.send', actor_id: envelope.sender.agent_id, status: 'accepted', metadata: { endpoint, reply_to: envelope.message_id, kind: 'artifact' } });
+    } catch (error) {
+      this.bridge.audit.append({ event: 'autoreply.send', actor_id: envelope.sender.agent_id, status: 'rejected', metadata: { endpoint, kind: 'artifact', error: error instanceof Error ? error.message : String(error) } });
+    }
+  }
+
   /**
-   * §11 结果自动回发：向对端声明的 reply_endpoint POST 一个 reply 信封。
+   * §11 结果自动回发：向对端声明的 reply_endpoint POST 一个 reply 信封.
    * 安全边界（guide §15）：
    *  - 仅当入站信封 extensions.reply_endpoint 存在且通过 allow-list；
    *  - 默认允许 loopback（同机网关）；额外端点由 wiring 注入（已注册
@@ -252,7 +310,7 @@ export class P3394BridgeExecutor {
     const token = ext && typeof ext.reply_token === 'string' ? ext.reply_token : '';
     const reply: P3394Envelope = {
       spec_version: 'p3394/1.0',
-      message_id: 'msg-reply-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+      message_id: deriveAutoReplyMessageId(envelope.message_id, performative),
       session_id: envelope.session_id,
       task_id: envelope.task_id,
       kind: performative === 'error' ? 'error' : 'message',
@@ -302,6 +360,34 @@ export class P3394BridgeExecutor {
     return false;
   }
 
+  /** Resumes forwarding persisted runtime events without re-admitting the task. */
+  async resumeForward(taskId: string, sessionId: string, afterSequence = 0): Promise<void> {
+    const resume = (async () => {
+      this.sessions.activate(sessionId);
+      for await (const event of this.runtime.stream(taskId, afterSequence)) {
+        try {
+          await this.onEvent?.(sessionId, event);
+        } catch (error) {
+          this.tasks.markRecoverable(taskId);
+          this.sessions.toWaiting(sessionId);
+          throw error;
+        }
+        if (event.kind === 'started') {
+          this.tasks.start(taskId);
+        }
+        if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
+          this.tasks.settle(taskId, event.kind);
+        }
+      }
+    })();
+    this.forwards.set(taskId, resume);
+    try {
+      await resume;
+    } finally {
+      if (this.forwards.get(taskId) === resume) this.forwards.delete(taskId);
+    }
+  }
+
   /** Waits for in-flight forwarding of one task (test/diagnostic helper). */
   async awaitForward(taskId: string, timeoutMs = 30_000): Promise<void> {
     const forward = this.forwards.get(taskId);
@@ -330,6 +416,17 @@ export class P3394BridgeExecutor {
     }
     return record;
   }
+}
+
+export function deriveAutoArtifactMessageId(messageId: string, digest?: unknown): string {
+  const value = typeof digest === 'string' ? digest : 'unknown';
+  const hash = crypto.createHash('sha256').update(`p3394:auto-artifact:${messageId}:${value}`).digest('hex').slice(0, 32);
+  return `msg-artifact-${hash}`;
+}
+
+export function deriveAutoReplyMessageId(messageId: string, performative: 'inform' | 'error'): string {
+  const digest = crypto.createHash('sha256').update(`p3394:auto-reply:${performative}:${messageId}`).digest('hex').slice(0, 32);
+  return `msg-reply-${digest}`;
 }
 
 function p3394EnvelopeGoal(envelope: P3394Envelope): string {

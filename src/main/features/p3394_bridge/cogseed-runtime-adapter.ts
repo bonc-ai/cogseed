@@ -225,22 +225,24 @@ export class P3394CogseedRuntimeAdapter implements P3394RuntimeAdapter {
     return { task_id: p3394TaskId };
   }
 
-  async *stream(taskId: string): AsyncIterable<P3394RuntimeEvent> {
+  async *stream(taskId: string, afterSequence = 0): AsyncIterable<P3394RuntimeEvent> {
     const mateTaskId = this.taskMap.get(taskId);
     if (!mateTaskId) throw new Error('p3394_task_not_found');
     const userId = this.userId();
     const sessionId = this.taskSessionMap.get(taskId);
-    let lastSequence = 0;
-    let sequence = 0;
+    const startSequence = Math.max(0, Math.floor(Number(afterSequence) || 0));
+    let lastSequence = startSequence;
+    let sequence = startSequence;
     const deadline = Date.now() + this.streamTimeoutMs;
 
     for (;;) {
       const events = await readMateTaskEvents(userId, mateTaskId, lastSequence, 200);
       for (const event of events) {
         lastSequence = event.sequence;
+        if (event.sequence <= startSequence) continue;
         const mapped = mapMateTaskEvent(event);
         if (mapped) {
-          sequence += 1;
+          sequence = Math.max(sequence, event.sequence);
           yield { ...mapped, sequence, task_id: taskId };
         }
       }
@@ -333,6 +335,13 @@ function mapMateTaskEvent(event: MateTaskEvent): Omit<P3394RuntimeEvent, 'sequen
       return { kind: 'delta', data: { tool: 'started', name: typeof event.payload.name === 'string' ? event.payload.name : undefined } };
     case 'tool.finished':
       return { kind: 'delta', data: { tool: 'finished', name: typeof event.payload.name === 'string' ? event.payload.name : undefined } };
+    case 'artifact': {
+      const data: Record<string, unknown> = {};
+      for (const key of ['uri', 'digest', 'name', 'media_type'] as const) {
+        if (typeof event.payload[key] === 'string') data[key] = event.payload[key];
+      }
+      return { kind: 'artifact', data };
+    }
     default:
       return null;
   }

@@ -19,6 +19,28 @@ describe('P3394 bridge kernel and doctor', () => {
     expect(bridge.audit.list().map((r) => r.event)).toContain('bridge.send');
   });
 
+  it('fails closed when discovery does not authorize task delivery', () => {
+    const bridge = new P3394BridgeKernel();
+    bridge.registry.register({ identity: { agent_id: 'sender', display_name: 'Sender' }, manifest: manifest('sender') });
+    const base = manifest('target');
+    const noHandle = { ...base, capability_profile: { ...base.capability_profile, capabilities: ['tool.call'] } };
+    bridge.registry.register({ identity: { agent_id: 'target', display_name: 'Target' }, manifest: noHandle as never });
+    const envelope = { spec_version: 'p3394/1.0', message_id: 'msg-auth-1', session_id: 'session-auth-1', kind: 'task', performative: 'request', sender: { agent_id: 'sender' }, recipients: [{ agent_id: 'target' }], payload: { parts: [{ type: 'text', text: 'hello' }] }, idempotency_key: 'idem-auth-1' };
+    expect(bridge.send(envelope)).toMatchObject({ ok: false, error: { reason: 'capability_not_authorized' } });
+    expect(bridge.audit.list()).toContainEqual(expect.objectContaining({ event: 'capability.authorize', status: 'rejected' }));
+
+    const capability = new P3394BridgeKernel();
+    capability.registry.register({ identity: { agent_id: 'sender', display_name: 'Sender' }, manifest: manifest('sender') });
+    capability.registry.register({ identity: { agent_id: 'tool', display_name: 'Tool' }, node_kind: 'capability', capabilities: ['handle_message'], manifest: manifest('tool') });
+    expect(capability.send({ ...envelope, message_id: 'msg-auth-2', idempotency_key: 'idem-auth-2', recipients: [{ agent_id: 'tool' }] })).toMatchObject({ ok: false, error: { reason: 'capability_not_authorized' } });
+
+    const performative = new P3394BridgeKernel();
+    performative.registry.register({ identity: { agent_id: 'sender', display_name: 'Sender' }, manifest: manifest('sender') });
+    const noRequest = { ...manifest('target'), capability_profile: { ...manifest('target').capability_profile, supported_performatives: ['response'] } };
+    performative.registry.register({ identity: { agent_id: 'target', display_name: 'Target' }, manifest: noRequest as never });
+    expect(performative.send({ ...envelope, message_id: 'msg-auth-3', idempotency_key: 'idem-auth-3' })).toMatchObject({ ok: false, error: { reason: 'performative_not_authorized' } });
+  });
+
   it('doctor reports manifest pass/fail without mutating data', () => {
     expect(runP3394BridgeDoctor({ manifest: manifest('agent-a') })).toMatchObject({ ok: true });
     const bad = runP3394BridgeDoctor({ manifest: { spec_version: 'bad' } });
