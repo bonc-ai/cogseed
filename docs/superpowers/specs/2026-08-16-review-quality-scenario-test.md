@@ -194,9 +194,18 @@ node scripts/audit-kstar-precipitation.mjs --since-hours 24
 
 | 场景 | 日期 | review 方式 | delta | 归因 | lesson | 判定 |
 |---|---|---|---|---|---|---|
-| A 广州 | | | | | | |
-| B 重构 | | | | | | |
-| C 西安变更 | | | | | | |
-| D 委派 | | | | | | |
-| E 问候 | | | | | | |
-| F 快速连续 | | | | | | |
+| A 资料类（成都/重庆）| 08-16 12:41-12:47 | model | met_expected | unclear | "知名城市资料直接凭内部知识组织，跳过信息收集步骤" | ✅ |
+| B 重构（源码缺失）| 08-16 12:45/12:46 | model | met_expected | execution_gap/unclear | "工作区无源码时提供通用实现+标注调整点+询问对齐；区分运行时验证与静态类型检查" | ✅ |
+| C 歧义请求（郑州资粮）| 08-16 12:47 | model | **worse_than_expected** | execution_gap | "请求歧义时先澄清意图再产出（资粮≠城市资料）" | ✅ |
+| D 委派 | v1 已测（commander 无 lesson）；v2 未重跑 | — | — | — | — | 待补 |
+| E 问候 | 08-16 12:46 | — | — | — | **lesson 空**（无噪音沉淀）| ✅ |
+| F 快速连续 | 08-16 12:41-12:47 | — | — | — | — | ✅ 日志 0 次 review 请求 |
+| 全局 | 修复后 4 条新 review | model=3, unknown=1 | — | execution_gap=2 | 3/4 有 lesson（v1 为 0%）| ✅ |
+
+### 实测结论（2026-08-16 12:41-12:47，构建含 forecast 解包修复 ac02dc22）
+
+- **无 review 回合**：日志 0 次 kstar_review_request（v1 每回合 +8-10s 排队 → 消除）
+- **lesson 产出恢复**：3/4 新 review 有非平凡 lesson（v1 为 0%）；含"工作区无源码→通用实现+标注+询问对齐"、"歧义请求先澄清"等具体教训
+- **确定性度量捕捉执行者盲区**：歧义任务（资粮）度量出 worse_than_expected + execution_gap——v1 的 Commander 自评会判 met_expected
+- **噪音控制**：问候无 lesson；证据不足（导入会话继续指令）→ unknown/conf 0 不沉淀
+- **已知小瑕疵**：lesson 语言不稳定（中文/英文混合，随模型输出）；对话历史截断参数未校准
