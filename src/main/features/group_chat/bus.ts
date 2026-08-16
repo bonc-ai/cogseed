@@ -1109,6 +1109,11 @@ interface QueueItem {
   turnId: string;
   msgId: string;
   fromActorId: string;
+  /** Host-internal control turn (review request etc.): routed with
+   * `fromActorId: USER_ID` but must NOT behave like a user message — no
+   * auto-close cancellation, no KStar host routing (see the commander turn
+   * gate). */
+  internalControl?: boolean;
   /** Exact visible user text, kept separate from the LLM payload so teaching
    * intent cannot be inferred from injected references or attachment metadata. */
   sourceMessageText?: string;
@@ -2633,6 +2638,7 @@ async function _enqueueBody(
       turnId: genId12(),
       msgId,
       fromActorId,
+      ...(params.internalControl ? { internalControl: true } : {}),
       ...(fromActorId === USER_ID ? { sourceMessageText: msg.text } : {}),
       llmPayload: composeLlmTurnPayload(uid, fromActorId, msg),
       ...(msg.p3394?.recipient_epochs[recipientId] !== undefined
@@ -3723,6 +3729,7 @@ async function runActorTurnBody(
     if (
       convKind !== "space_builder"
       && item.fromActorId === USER_ID
+      && !item.internalControl
       && process.env.ORKAS_KSTAR_HOST_ROUTING !== '0'
     ) {
       // 用户新消息到达：清除该会话的 pending 自动闭环（设计 §5）。

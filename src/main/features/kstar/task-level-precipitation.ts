@@ -3,10 +3,39 @@ import { safeId } from '../../storage';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { precipitateDirectExperienceFromSource } from './direct-experience-assets';
 import { readKstarEpisode } from './episode-store';
-import { clearsPrecipitationGate, gapType, learningSignal, scopeForTask } from './extraction-service';
+import { clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
 import { readKstarReview } from './review-service';
 import type { KstarRequirementRecord } from './requirement-types';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
+
+/** 用户可读的作用域标签（交互规范 §17.3：作用域要"看得懂"）。
+ *  scopeForTask 输出短 ASCII 标签（retrieval 用），展示层转中文。 */
+const SCOPE_LABELS: Record<string, string> = {
+  report: '报告类任务',
+  code: '代码类任务',
+  review: '审查类任务',
+  product: '产品类任务',
+  general: '通用',
+};
+
+export function userScopeLabel(scope: string): string {
+  return SCOPE_LABELS[scope] ?? scope;
+}
+
+/** 用户可读的经验标题（替代英文技术标题，交互规范附录 A 风格）。 */
+export function userFacingSummary(
+  kind: 'lesson' | 'workflow' | 'gap',
+  scope: string,
+  content?: string,
+): string {
+  const scopeLabel = userScopeLabel(scope);
+  const core = content ? lessonTitleCore(content) : '';
+  switch (kind) {
+    case 'lesson': return core ? `可复用经验：${core}（${scopeLabel}）` : `可复用经验（${scopeLabel}）`;
+    case 'workflow': return core ? `已验证的工作流程：${core}（${scopeLabel}）` : `已验证的工作流程（${scopeLabel}）`;
+    case 'gap': return core ? `待修正经验：${core}（${scopeLabel}）` : `待修正的经验（${scopeLabel}）`;
+  }
+}
 
 /**
  * task-level-precipitation.ts — requirement-level delta-r aggregation.
@@ -74,15 +103,16 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
 
   const proposals: KstarCandidateProposal[] = [];
   const goal = requirement.goalText || requirement.title;
+  const scope = scopeForTask(goal);
   if (strongest) {
     if (verifiedWorkflow && !strongest.lesson?.trim()) {
       // Verified workflow without a reasoned lesson → skill_method.
       proposals.push({
-        judgment: `For tasks like "${goal}", use the verified workflow: ${toolChain.join(' → ')}.`,
-        summary: 'Verified multi-tool workflow (requirement-level)',
-        uncertainty: 'Generated from a closed multi-episode requirement; confirm before treating it as durable.',
+        judgment: `处理类似「${goal}」的任务时，可使用已验证的工作流程：${toolChain.join(' → ')}。`,
+        summary: userFacingSummary('workflow', scope, goal),
+        uncertainty: '基于已闭环任务的执行经验生成，使用前可复核。',
         suggestedType: 'skill_method',
-        suggestedScope: scopeForTask(goal),
+        suggestedScope: scope,
         sourceRefs: mergedRefs,
         learningSignal: learningSignal(strongest),
       });
@@ -92,10 +122,10 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
       // it is a judgment lesson, not a workflow.
       proposals.push({
         judgment: strongest.lesson,
-        summary: 'Reusable experience lesson (requirement-level)',
-        uncertainty: 'Model-reasoned from execution experience; confirm before treating it as durable.',
+        summary: userFacingSummary('lesson', scope, strongest.lesson),
+        uncertainty: '基于任务执行经验提炼，使用前可复核。',
         suggestedType: 'rule',
-        suggestedScope: scopeForTask(goal),
+        suggestedScope: scope,
         sourceRefs: mergedRefs,
         learningSignal: learningSignal(strongest),
       });
@@ -109,11 +139,11 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   const gapAssetType = gapReview ? gapType(gapReview) : null;
   if (gapAssetType && gapReview) {
     proposals.push({
-      judgment: `For similar tasks, address this ${gapReview.attribution.replace(/_/g, ' ')}: ${gapReview.reason}`,
-      summary: `KSTAR ${gapReview.attribution.replace(/_/g, ' ')} candidate (requirement-level)`,
-      uncertainty: 'This proposal is based on an explicit review and still requires user confirmation.',
+      judgment: `遇到同类情况时，应注意修正：${gapReview.reason}`,
+      summary: userFacingSummary('gap', scope, gapReview.reason),
+      uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: gapAssetType,
-      suggestedScope: scopeForTask(goal),
+      suggestedScope: scope,
       sourceRefs: mergedRefs,
       learningSignal: learningSignal(gapReview),
     });

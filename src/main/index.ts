@@ -1245,6 +1245,12 @@ if (!gotLock) {
       const { correctMisfiledSeedMaturity } = await import('./features/recall/asset-service');
       await correctMisfiledSeedMaturity(users.getActiveUserId());
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // 2026-08-15 UI 优化：旧 KStar 线资产带英文技术标题（'Reusable experience
+    // lesson (requirement-level)' 等），迁移为中文可读。幂等，修完空转。
+    registerDeferred('recall:migrate-legacy-titles', async () => {
+      const { migrateLegacyUserFacingTitles } = await import('./features/recall/asset-service');
+      await migrateLegacyUserFacingTitles(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('kb:reconcile', async (signal) => {

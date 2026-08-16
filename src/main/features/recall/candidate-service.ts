@@ -976,7 +976,7 @@ async function semanticDedupBeforePromote(
       const cur = current ? asCandidate(current) : candidate;
       return { ...cur, mergedInto: existingCandidate.id, status: 'superseded' };
     });
-    return { candidate: asCandidate(merged) };
+    return { candidate: asCandidate(merged), mergedIntoAssetId: existingCandidate.id };
   }
   return null;
 }

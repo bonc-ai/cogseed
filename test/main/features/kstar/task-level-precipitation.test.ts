@@ -199,7 +199,7 @@ describe('KStar task-level precipitation (B5)', () => {
     expect(result.proposals).toHaveLength(1);
     expect(result.proposals[0]).toMatchObject({
       suggestedType: 'template',
-      summary: expect.stringContaining('template gap'),
+      summary: expect.stringContaining('待修正经验：'),
     });
     expect(result.proposals[0].judgment).toContain('A report template is missing');
     expect(result.proposals[0].learningSignal?.confidence).toBe(0.85);
