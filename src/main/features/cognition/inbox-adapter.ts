@@ -9,9 +9,11 @@
  */
 
 import { createLogger } from '../../logger';
+import { listAbilityAssetVersions } from '../recall/asset-service';
 import { listRecallCandidates } from '../recall/candidate-service';
 import { listFormalAssets } from '../recall/formal-assets';
 import { buildCognitionInbox, type CognitionInboxItem } from '../recall/formal-assets/inbox';
+import { latestAssetVersionDiff, type AssetVersionDiff } from '../recall/formal-assets/version-diff';
 import { readInstalledSkillForAsset } from '../recall/skill-draft-service';
 import { listCognitionSources } from '../recall/source-catalog';
 
@@ -49,6 +51,21 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
       : asset;
   }));
 
+  // 变更类待办要知道"最近一次改了什么"。版本快照本来就存着全量内容，这里
+  // 只是把相邻两版比一遍；读失败按"没有版本历史"处理——宁可少报一条变更，
+  // 也不要凭空断言资产没变过。
+  const latestDiffs = new Map<string, AssetVersionDiff>();
+  await Promise.all(withSkillState.map(async (asset) => {
+    try {
+      const diff = latestAssetVersionDiff(asset.assetId, await listAbilityAssetVersions(userId, asset.assetId));
+      if (diff) latestDiffs.set(asset.assetId, diff);
+    } catch (error) {
+      log.warn('inbox version history read degraded', {
+        userId, assetId: asset.assetId, error: (error as Error).message,
+      });
+    }
+  }));
+
   const unavailableSourceIds = new Set(sourceGroups
     .flatMap((group) => group.items)
     .filter((item) => UNAVAILABLE_SOURCE_STATUSES.has(item.status))
@@ -64,5 +81,6 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
       ...(candidate.evidenceRefs ? { evidenceRefs: candidate.evidenceRefs } : {}),
     })),
     unavailableSourceIds,
+    latestDiffs,
   });
 }
