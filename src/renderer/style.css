@@ -24514,6 +24514,25 @@ body.model-not-configured .main-content { flex-direction: column; }
 @media (max-width: 820px) { .touchpoint-approval-layout { grid-template-columns: 1fr; } .touchpoint-template-preview { position: static; } }
 @media (max-width: 620px) { .touchpoint-manager-header { flex-wrap: wrap; } .touchpoint-manager-header > div:nth-child(2) { flex-basis: calc(100% - 52px); } .touchpoint-manager-actions { width: 100%; padding-left: 46px; } .touchpoint-manager-actions .btn { flex: 1 1 0; } .touchpoint-scene-tabs { overflow-x: auto; } .touchpoint-scene-tab { flex: 0 0 auto; min-width: 100px; } .touchpoint-template-button-fields, .touchpoint-template-routing { grid-template-columns: 1fr; } .touchpoint-template-routing { padding-left: 23px; } }
 
+/* P3394 node message badge (external agent traffic via the bridge). */
+.p3394-node-badge {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 6px; padding: 3px 10px;
+  background: rgba(99, 102, 241, 0.07);
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  border-radius: 8px;
+  font-size: 12px; line-height: 20px;
+  color: #6366f1;
+}
+.p3394-node-badge-icon { font-size: 13px; }
+.p3394-node-badge-name { font-weight: 600; }
+.p3394-node-badge-tag {
+  margin-left: auto;
+  font-size: 10px; font-weight: 600;
+  background: rgba(99, 102, 241, 0.12);
+  padding: 1px 6px; border-radius: 5px;
+  letter-spacing: 0.3px;
+}
 .auto-time-adjust-card {
   background: #f0fdf4;
   border: 1px solid #bbf7d0;

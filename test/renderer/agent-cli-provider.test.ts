@@ -19,13 +19,13 @@ function loadAgentProviderHelpers() {
   return window;
 }
 
-describe('CLI custom provider selector', () => {
-  it('renders a provider selector and loads masked providers through IPC', () => {
-    expect(html).toContain('id="agent-ext-provider-row"');
-    expect(html).toContain('id="agent-modal-ext-provider-select"');
-    expect(source).toContain("window.cogseed.invoke('customProviders.list')");
-    expect(source).toContain('_renderExternalCliProviderSelect');
-    expect(source).toContain('_getExternalCliProviderValue');
+describe('External agent creation (P3394 gateway)', () => {
+  it('external agents join through the P3394 gateway (no provider selector row)', () => {
+    // P3394 外接方式：新建外接智能体走受管网关，原 CLI provider selector 行已移除。
+    expect(html).not.toContain('id="agent-ext-provider-row"');
+    expect(html).not.toContain('id="agent-modal-ext-provider-select"');
+    expect(source).toContain("window.cogseed.invoke('p3394.external.start'");
+    expect(source).toContain("runtime: { kind: 'p3394-gateway', cli }");
   });
 
   it('filters Anthropic for Claude and OpenAI for Codex', () => {
@@ -46,6 +46,6 @@ describe('CLI custom provider selector', () => {
     const base = { kind: 'cli', cli: 'codex', model: 'gpt-5' };
     expect(api.withCliProviderSelection(base, 'cp:openai')).toEqual({ ...base, cli_provider_id: 'cp:openai' });
     expect(api.withCliProviderSelection({ ...base, cli_provider_id: 'cp:old' }, '')).toEqual(base);
-    expect(source).toContain('runtime: withCliProviderSelection');
+    expect(source).toContain("runtime: { kind: 'p3394-gateway', cli }");
   });
 });

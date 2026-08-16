@@ -1902,6 +1902,11 @@ export interface EnqueueParams {
   /** Override resolved recipients (commander emitting plan announcement
    *  uses this to force `to=[user]`). Otherwise router decides. */
   forceTo?: string[];
+  /** Trusted external-channel inbound (P3394 bridge): keeps the
+   * user-message abort-reset and task-run lifecycle semantics for a message
+   * that persists under the peer agent's own actor identity. Only the
+   * bridge wiring sets this; user IPC paths never do. */
+  externalInbound?: boolean;
   /** True when this enqueue IS the actor's own end-of-turn message (called
    * from runTurn after the LLM stream completed). False / absent for any
    * tool-side-effect or plan-executor mid-turn enqueues. Renderer routes
@@ -1978,7 +1983,7 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       code: "E_CONVERSATION_TERMINATING",
     });
   }
-  if (!params.internalControl && !state.taskRun && (fromActorId === USER_ID || params.kstarTerminalProvenance)) {
+  if (!params.internalControl && !state.taskRun && (fromActorId === USER_ID || params.externalInbound === true || params.kstarTerminalProvenance)) {
     const provenance = params.kstarTerminalProvenance;
     state.taskRun = {
       runId: genId12(),
@@ -2023,12 +2028,13 @@ async function _enqueueBody(
   const { uid, cid, fromActorId, text } = params;
 
   // Reset the sticky `aborted` flag ONLY when the human (user) sends
-  // a fresh message. Worker-emitted enqueues (commander/agent post-turn
-  // replies, including the abort-cleanup "(stopped)" message) must NOT clear
-  // the abort — otherwise a worker's own post-abort message would silently
-  // un-stick the conversation and the next state_changed would flip back
-  // to 'idle'/'running'.
-  if (params.fromActorId === USER_ID) {
+  // a fresh message — or when a trusted external channel (P3394 peer)
+  // delivers a fresh inbound, which resumes the conversation the same way.
+  // Worker-emitted enqueues (commander/agent post-turn replies, including
+  // the abort-cleanup "(stopped)" message) must NOT clear the abort —
+  // otherwise a worker's own post-abort message would silently un-stick the
+  // conversation and the next state_changed would flip back to 'idle'/'running'.
+  if (params.fromActorId === USER_ID || params.externalInbound === true) {
     const cur = await readState(uid, cid);
     if (cur.status === "aborted") {
       await setStatus(uid, cid, "idle");
@@ -3855,9 +3861,9 @@ async function runActorTurnBody(
       });
       return { kind: "early" };
     }
-    if (agentsFeat.isCliAgent(agent)) {
+    if (agentsFeat.isCliAgent(agent) || agentsFeat.isP3394GatewayAgent(agent)) {
       cliAgent = agent;
-      systemPrompt = ""; // unused on CLI path
+      systemPrompt = ""; // unused on CLI / P3394-gateway path
     } else {
       systemPrompt = await buildAgentInGroupSystemPrompt(
         uid,
@@ -4237,20 +4243,9 @@ async function runActorTurnBody(
     }
     try {
       const slice = await readSlice(uid, cid, actor.id);
-      const cliOut = await _runCliAgentTurn({
-        uid,
-        cid,
-        actor,
-        agent: cliAgent,
-        item,
-        slice,
-        workingDir: cliWorkingDir,
-        ...(turnProjectId ? { projectId: turnProjectId } : {}),
-        ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
-        signal: w.abortController.signal,
-        onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
-        onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
-        onProcess: (data) => {
+      // 共享 process 事件管道：CLI 直接派发与 P3394 网关派发共用同一套
+      // 事件形态（progress/delta/final/error），渲染端与 process rail 无感知。
+      const forwardProcess = (data: Record<string, unknown>): void => {
           // Mirror the LLM path: count every event for activity, but
           // persist only `progress` and `event` shapes into processItems
           // — `delta` text streams into the live bubble and is recovered
@@ -4287,8 +4282,46 @@ async function runActorTurnBody(
             turn_id: item.turnId,
             data: data as unknown as Record<string, unknown>,
           });
-        },
-      });
+      };
+      // P3394 外接智能体：每一轮都通过桥的出站 hub 与受管网关节点协作
+      // （同一协议覆盖 Hermes/Claude Code/Codex/OpenClaw/WorkBuddy 等）。
+      const isP3394Gateway = agentsFeat.isP3394GatewayAgent(cliAgent);
+      const cliOut = isP3394Gateway
+        ? await (
+            await import("../p3394_bridge/p3394-gateway-turn")
+          ).runP3394GatewayTurn({
+            uid,
+            cid,
+            agent: {
+              agent_id: cliAgent.agent_id,
+              name: cliAgent.name || cliAgent.agent_id,
+            },
+            cli:
+              cliAgent.runtime?.kind === "p3394-gateway"
+                ? cliAgent.runtime.cli
+                : "",
+            prompt: (item as { sourceMessageText?: string }).sourceMessageText || "",
+            signal: w.abortController.signal,
+            onCoordinatorActivity: (event) => {
+              coordinatorLease?.observe(event as never);
+            },
+            onProcess: forwardProcess,
+          })
+        : await _runCliAgentTurn({
+            uid,
+            cid,
+            actor,
+            agent: cliAgent,
+            item,
+            slice,
+            workingDir: cliWorkingDir,
+            ...(turnProjectId ? { projectId: turnProjectId } : {}),
+            ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
+            signal: w.abortController.signal,
+            onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
+            onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
+            onProcess: forwardProcess,
+          });
       for (const p of cliOut.produced || []) await onFileWritten(p);
       finalText = cliOut.text;
       streamingText = cliOut.text;
@@ -4296,7 +4329,7 @@ async function runActorTurnBody(
         errText = cliOut.error;
         turnInfrastructureFailure ||= !!cliOut.infrastructureFailure;
         markTurnFailure(
-          cliOut.failureKind || "runtime",
+          (cliOut.failureKind || "runtime") as import("./visibility").GroupMessageFailureKind,
           cliOut.failureCode || "cli_failed",
         );
       }

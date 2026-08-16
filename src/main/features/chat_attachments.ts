@@ -222,7 +222,9 @@ function migrateLegacyDraftCloudDir(userId: string, cid: string): void {
   for (const name of names) notifyAttachmentDeleted(userId, cid, name);
 }
 
-function attachmentDirForCid(userId: string, cid: string): string {
+/** Conversation attachment directory (used by the P3394 bridge to stage
+ *  inbound peer artifacts next to the conversation). */
+export function attachmentDirForCid(userId: string, cid: string): string {
   if (isDraftAttachmentCid(cid)) {
     migrateLegacyDraftCloudDir(userId, cid);
     return chatAttachmentDraftDir(userId, cid);

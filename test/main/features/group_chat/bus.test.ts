@@ -685,6 +685,29 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(await wake.listWakeRequests(TEST_UID, TEST_CID)).toHaveLength(1);
   });
 
+  it('P3394 external inbound never wakes a named agent directly (no bypass; Commander mediates)', async () => {
+    process.env.ORKAS_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const wake = await import('../../../../src/main/features/p3394/wake-service');
+    const cid = 'wake-external-' + Math.random().toString(36).slice(2, 10);
+
+    // 安全边界（指南 §15）：对端消息只路由给指挥官；@本地智能体不产生直接
+    // 唤醒，必须由指挥官中转并走常规唤醒审批。
+    const msg = await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'p3394_hermes',
+      text: `@${AGENT_NAME} 检查这个项目`,
+      forceTo: ['commander'],
+      externalInbound: true,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(msg.to).toEqual(['commander']);
+    expect(msg.wake_requests ?? []).toHaveLength(0);
+    const members = await state.readMembers(TEST_UID, cid);
+    expect(members.actors.some((actor) => actor.id === AGENT_ID)).toBe(false);
+    expect(await wake.listWakeRequests(TEST_UID, cid)).toHaveLength(0);
+  });
   it('P3394 approval admits the original intent through CogSeed Backend without using the Agent id as a model profile', async () => {
     process.env.ORKAS_P3394_WAKE_GATE = '1';
     const bus = await import('../../../../src/main/features/group_chat/bus');

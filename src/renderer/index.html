@@ -1133,6 +1133,7 @@
             </div>
 
             <!-- ───────────────────────── 配置 ───────────────────────── -->
+
             <div class="settings-tab-pane" data-settings-pane="credentials" hidden>
               <div class="settings-section-note" data-i18n="settings.section.models_note">API keys and OAuth tokens are stored locally only — never synced or sent off-device.</div>
 
@@ -1182,6 +1183,7 @@
                   </div>
                 </div>
               </div>
+
 
               <div class="settings-group settings-cli-fallback-group">
                 <div class="settings-group-head">
@@ -1403,19 +1405,14 @@
         </div>
       </div>
 
-      <!-- External panel: bind a local CLI as the runtime. CLI selector
-           appears first; name + description are pre-filled from the chosen
-           CLI's defaults but stay editable. claude / codex get a
-           project-directory setting on the detail page after creation. -->
+      <!-- External panel (P3394 way): a picked CLI joins through a managed
+           p3394-gateway — one protocol for ANY external agent (Hermes,
+           Claude Code, Codex, OpenClaw, WorkBuddy, user-built agents). -->
       <div class="skill-modal-panel" data-agent-panel="external">
         <div class="form-row">
           <label data-i18n="agent_modal.ext_cli_label">Agent</label>
           <div class="ai-select" id="agent-modal-ext-cli-select"></div>
-        </div>
-        <div class="form-row" id="agent-ext-provider-row" hidden>
-          <label data-i18n="agent_modal.ext_provider_label">Model provider</label>
-          <div class="ai-select" id="agent-modal-ext-provider-select"></div>
-          <div class="form-hint" data-i18n="agent_modal.ext_provider_hint">Optional. Leave empty to use the CLI's own configuration.</div>
+          <div class="form-hint" data-i18n="agent_modal.ext_p3394_hint">Connect over the P3394 protocol — CogSeed starts a local gateway and registers the agent as a collaboration node.</div>
         </div>
         <div class="form-row">
           <label data-i18n="agent_modal.ext_name">Name</label>

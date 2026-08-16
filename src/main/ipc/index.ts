@@ -27,6 +27,7 @@ import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
+import { P3394IpcChannel } from '../features/p3394_bridge/ipc-channel';
 import * as executionRecords from '../features/execution-records';
 import * as executionLog from '../features/execution_log';
 import * as workbench from '../features/workbench';
@@ -103,6 +104,7 @@ import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
 import { invokeHandlers as localAgentsHandlers } from './local_agents';
+import { p3394ExternalHandlers } from './p3394_external';
 import {
   invokeHandlers as expenseWorkbenchHandlers,
 
@@ -1833,6 +1835,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, receipt: await p3394.readReceipt(ctx.userId, executionId) };
   },
 
+  // P3394 Bridge inbound port (Phase 3). The renderer may initiate an
+  // operation, but the sender identity is always rewritten to the local
+  // agent by P3394IpcChannel.handleInbound — a renderer can never declare an
+  // Agent identity or capability.
+  'p3394.bridge.inbound': async (args, _ctx) => {
+    if (!args || typeof args !== 'object' || !('envelope' in args)) {
+      return { ok: false, error: 'invalid bridge inbound request' };
+    }
+    const result = p3394BridgeIpcPort.handleInbound((args as { envelope: unknown }).envelope);
+    if (result.ok === false) {
+      return { ok: false, error: result.error.message };
+    }
+    return { ok: true, accepted: true, channel_id: p3394BridgeIpcPort.channel_id };
+  },
+
   // ── Workbench: complex-delivery Workspace (US-20) ─────────────────────
   // The gate decides whether the renderer may paint the Workspace body at
   // all ("未达Gate不得展示空Workspace"). The skill tree is resolved here from
@@ -2730,6 +2747,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'agents.delete': async ({ agent_id }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    // P3394 外接智能体删除联动：先停掉其受管网关（否则节点会因心跳复活）。
+    try {
+      const target = await agents.getAgent(agent_id);
+      const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
+      if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
+        const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
+        await stopExternalGateway(rt.cli);
+      }
+    } catch (error) {
+      log.warn('P3394 gateway stop on agent delete failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
+    }
     await recycleBin.createAppRecycleBatchForAgent(ctx.userId, agent_id);
     return { deleted: await agents.deleteCustomAgent(agent_id) };
   },
@@ -4444,6 +4472,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // build; the renderer's External Agent picker depends on localAgents.list.
   ...localAgentsHandlers,
 
+  // P3394 external-agent gateways — the agent-modal 「外接」tab (P3394 way):
+  // a picked CLI joins through a managed p3394-gateway instead of direct CLI
+  // dispatch, so ANY agent speaks the same protocol.
+  ...p3394ExternalHandlers,
+
   // Canonical reimbursement management surface. Its feature layer validates
   // the active user, trusted Agent identity and bounded stdio protocol.
   ...expenseWorkbenchHandlers,
@@ -4936,6 +4969,13 @@ export function broadcastToRenderer(channel: string, payload: unknown): void {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
   }
 }
+
+/** P3394 Bridge IPC port (Phase 3): renderer-initiated inbound port with
+ *  sender identity pinned to the local agent, and main→renderer pushes on the
+ *  `p3394.bridge.push` channel. */
+export const p3394BridgeIpcPort = new P3394IpcChannel('ipc', {
+  sendToRenderer: (payload) => broadcastToRenderer('p3394.bridge.push', payload),
+});
 
 export function register(): void {
   const handleInvoke = async (event, request: unknown) => {

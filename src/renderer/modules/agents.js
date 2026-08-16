@@ -159,7 +159,7 @@ function _isAgentPlatformSource(source) {
 }
 
 function _isExternalCliAgent(agent) {
-  return !!(agent && agent.runtime && agent.runtime.kind === 'cli');
+  return !!(agent && agent.runtime && (agent.runtime.kind === 'cli' || agent.runtime.kind === 'p3394-gateway'));
 }
 
 function _agentCardMetaHtml(a, lang) {
@@ -804,7 +804,7 @@ function renderAgentsGrid(agents) {
     const moreBtn = (isMock || isCommander) ? '' : `<button type="button" class="agent-card-more" data-agent-more title="${moreTitle}" aria-label="${moreTitle}">⋯</button>`;
     const avatarHtml = renderAvatarHtml(a.icon, a.color, { size: 32, seed: a.agent_id, extraClass: 'agent-card-avatar' });
     // CLI brand chip on the bottom row, shared with the play button.
-    const cliChip = (a.runtime && a.runtime.kind === 'cli')
+    const cliChip = (a.runtime && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'))
       ? `<span class="agent-card-chip is-cli is-cli-${escapeHtml(a.runtime.cli)}">${escapeHtml(_cliBadgeLabel(a.runtime.cli))}</span>`
       : '';
     // Source provenance chips on the bottom row. Version/category now live
@@ -1839,7 +1839,7 @@ function _renderAgentDetail(agent, editing) {
   // external CLI brings its own behavior. Hide the entire workflow
   // section so the detail page doesn't show an empty editor block.
   const workflowSection = document.querySelector('.agents-detail-section-workflow');
-  const isCliRuntime = !!(agent.runtime && agent.runtime.kind === 'cli');
+  const isCliRuntime = !!(agent.runtime && (agent.runtime.kind === 'cli' || agent.runtime.kind === 'p3394-gateway'));
   const structuredWorkflow = _agentWorkflowSteps(agent);
   const hasWorkflowToShow = structuredWorkflow.length || !!String(agent.workflow || '').trim();
   if (workflowSection) workflowSection.style.display = (isCliRuntime && !hasWorkflowToShow) ? 'none' : '';
@@ -2156,7 +2156,7 @@ async function _renderAgentDetailProjectDir(agent) {
   const section = document.getElementById('agents-detail-project-dir-section');
   const slot = document.getElementById('agents-detail-project-dir');
   if (!section || !slot) return;
-  const cli = agent.runtime?.kind === 'cli' ? agent.runtime.cli : '';
+  const cli = (agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway') ? agent.runtime.cli : '';
   const supportsProjectDir = typeof cliIsCodingAgent === 'function' && cliIsCodingAgent(cli);
   if (!supportsProjectDir) {
     section.style.display = 'none';
@@ -2393,7 +2393,7 @@ async function _enterAgentEditMode() {
   _renderAgentDetail(agent, true);
   // External agents have no LLM-driven authoring. Marketplace installs in
   // the open-source build are memory-only edits. Both hide the edit chat.
-  const isExternal = !!(agent.runtime?.kind === 'cli');
+  const isExternal = !!(agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway');
   const isMemoryOnly = !_canEditAgentDefinition(agent) && _canEditAgentMemory(agent);
   const chatCol = document.getElementById('agents-chat-col');
   if (chatCol) chatCol.style.display = (isExternal || isMemoryOnly) ? 'none' : '';
@@ -2831,15 +2831,39 @@ async function _saveExternalAgent({ msgEl }) {
   }
 
   const startedAt = performance.now();
-  if (window.Monitor) (() => {})('agent_create_submit', { agent_type: 'cli', cli });
+  if (window.Monitor) (() => {})('agent_create_submit', { agent_type: 'p3394', cli });
   try {
+    // P3394 方式外接：先拉起该 CLI 的受管 P3394 网关（自注册进桥），
+    // 再创建智能体记录——之后对话里每一轮都走 P3394 协议协作。
+    const entries = await window.loadLocalCliEntries({ force: true });
+    const detected = entries.find((e) => e && e.type === cli);
+    const started = await window.cogseed.invoke('p3394.external.start', {
+      cli,
+      alias: name,
+      ...(detected && detected.path ? { binPath: detected.path } : {}),
+    });
+    if (!started || !started.ok) {
+      msgEl.textContent = t('agents.p3394_gateway_start_failed', {
+        reason: (started && started.error) || 'unknown',
+      });
+      msgEl.className = 'form-msg err';
+      if (window.Monitor) {
+        (() => {})('agent_create_result', {
+          result: 'failure',
+          agent_type: 'p3394',
+          cli,
+          duration_ms: Math.round(performance.now() - startedAt),
+          error_code: (started && started.error) || '',
+        });
+      }
+      return;
+    }
     const body = {
       name,
       description: desc,
-      // CLI-backed agents do not run the LLM authoring pass, so use the
-      // stable role-specific coding avatar instead of a random pair.
+      // P3394 外接智能体：每一轮对话都通过桥与受管网关节点协作。
       icon: 'code', color: 'sage',
-      runtime: withCliProviderSelection({ kind: 'cli', cli }, _getExternalCliProviderValue(cli)),
+      runtime: { kind: 'p3394-gateway', cli },
       category: 'general',
     };
     const res = await apiFetch('/api/agents/create', {
@@ -2872,7 +2896,7 @@ async function _saveExternalAgent({ msgEl }) {
     if (window.Monitor) (() => {})('agent_create_result', {
       result: 'success',
       agent_id: data.agent.agent_id,
-      agent_type: 'cli',
+      agent_type: 'p3394',
       cli,
       duration_ms: Math.round(performance.now() - startedAt),
     });
@@ -2889,12 +2913,12 @@ async function _saveExternalAgent({ msgEl }) {
     if (window.Monitor) {
       (() => {})('agent_create_result', {
         result: 'failure',
-        agent_type: 'cli',
+        agent_type: 'p3394',
         cli,
         duration_ms: Math.round(performance.now() - startedAt),
       });
       (() => {})('agent_create', {
-        agent_type: 'cli',
+        agent_type: 'p3394',
         cli,
         error_type: 'network',
         error_message: e.message || String(e),
