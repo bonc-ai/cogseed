@@ -1420,6 +1420,10 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       sourceRefs: [{ kind: "execution", id: "exec-gate" }],
     });
     const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+    // 自动投影按 PRD 3.6 只接纳 Transfer Verified 及以上。本用例考的是
+    // "资产只经 Commander 分发、不由宿主注入 Agent"的契约，不是成熟度闸门，
+    // 所以先把资产抬到够格的档位。
+    await (await import("../../../../src/main/features/recall/asset-service")).setAbilityAssetMaturity(TEST_UID, asset.id, "transfer_validated");
 
     const AGENT_REPLY = "AGENT-OK-58d2";
     _setScript(state.buildGconvSessionId(cid), [

@@ -31,9 +31,9 @@ function _initSkillsStaticBindings() {
   document.getElementById('skills-source-toggle')?.addEventListener('click', () => _toggleSkillsSource());
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    // 技能库已内嵌进认知资产「我的能力」tab：仅当该 pane 可见时处理 Esc 返回。
-    const myAbilitiesPane = document.getElementById('skills-cognition-my-abilities');
-    if (!myAbilitiesPane || myAbilitiesPane.hidden) return;
+    // 技能库现在挂在连接页「技能」tab：仅当该 pane 可见时处理 Esc 返回。
+    const skillsPane = document.getElementById('connections-pane-skills');
+    if (!skillsPane || skillsPane.hidden) return;
     const detail = document.getElementById('skills-detail-view');
     if (detail && detail.style.display !== 'none') {
       _onSkillsBack();
@@ -103,10 +103,16 @@ function _initSkillsCognitionBindings() {
   });
 
   const cognitionTabs = document.getElementById('skills-cognition-tabs');
-  cognitionTabs?.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-cognition-page]');
-    if (!button) return;
-    switchSkillsCognitionPage(button.dataset.cognitionPage || 'overview');
+  // tab 条与页头辅助入口（管理来源 / 沉淀活动）用同一套切换逻辑：辅助入口
+  // 打开的仍是既有的 page body，只是不占任务视图的位置。
+  document.querySelectorAll('.skills-cognition-console').forEach((console_) => {
+    if (console_.dataset.cognitionPageNav === '1') return;
+    console_.dataset.cognitionPageNav = '1';
+    console_.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-cognition-page]');
+      if (!button || !console_.contains(button)) return;
+      switchSkillsCognitionPage(button.dataset.cognitionPage || 'overview');
+    });
   });
   cognitionTabs?.addEventListener('keydown', (event) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;

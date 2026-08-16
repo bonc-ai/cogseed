@@ -45,7 +45,7 @@ async function createAsset(input: { judgment: string; summary: string; causal?: 
 describe('committed projection knowledge', () => {
   it('loads only the exact assets frozen by the confirmed projection', async () => {
     const selected = await createAsset({ judgment: 'Validate OAuth callback state before exchange.', summary: 'OAuth rule', causal: true });
-    const unprojected = await createAsset({ judgment: 'Deploy the unrelated billing service.', summary: 'Billing deploy', causal: false });
+    const unprojected = await createAsset({ judgment: 'When deploying the billing service, run the migration check first, then deploy, then verify the health endpoint.', summary: 'Billing deploy', causal: false });
     const refs = await import('../../../../src/main/features/recall/workspace-refs');
     const projection = await import('../../../../src/main/features/recall/context-projection');
     const knowledge = await import('../../../../src/main/features/recall/projection-knowledge');
@@ -71,7 +71,7 @@ describe('committed projection knowledge', () => {
   });
 
   it('rejects preview projections as an execution knowledge boundary', async () => {
-    const selected = await createAsset({ judgment: 'Review the callback.', summary: 'Callback review', causal: false });
+    const selected = await createAsset({ judgment: 'When reviewing a callback, check the state parameter first, then verify the redirect target, then confirm the token exchange result.', summary: 'Callback review', causal: false });
     const projection = await import('../../../../src/main/features/recall/context-projection');
     const knowledge = await import('../../../../src/main/features/recall/projection-knowledge');
     const preview = await projection.previewContextProjection('user-a', {

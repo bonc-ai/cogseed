@@ -155,30 +155,43 @@ export interface FindSemanticDuplicateInput {
   excludeIds?: Set<string>;
 }
 
+/** 查重结论。`no_match` 与 `degraded` 必须分开：前者是"查过了，没有重复"，
+ *  后者是"根本没查成"。把两者都表达成 null，会让 embedding 不可用时静默退回
+ *  纯指纹去重——而两条沉淀线的 judgment 文本几乎从不逐字相同，指纹拦不住，
+ *  结果就是无声地产出两条讲同一件事的正式资产。 */
+export type SemanticDuplicateOutcome =
+  | { status: 'match'; match: SemanticDuplicateMatch }
+  | { status: 'no_match' }
+  | { status: 'degraded'; reason: 'embedding_unavailable' };
+
 export async function findSemanticDuplicate(
   userId: string,
   input: FindSemanticDuplicateInput,
-): Promise<SemanticDuplicateMatch | null> {
+): Promise<SemanticDuplicateOutcome> {
   const query = await embedForDedup(userId, input.text);
-  if (!query) return null; // embed degraded → caller falls back to fingerprint only
+  if (!query) return { status: 'degraded', reason: 'embedding_unavailable' };
   let best: SemanticDuplicateMatch | null = null;
+  // 逐条比对时如果某条 embed 失败，只是这条比不了，不代表整次查重不可信；
+  // 但一条都没比成时，这次查重等于没做。
+  let compared = 0;
+  let skipped = 0;
+  const consider = (kind: SemanticDuplicateMatch['kind'], id: string, vector: number[] | null): void => {
+    if (!vector) { skipped += 1; return; }
+    compared += 1;
+    const score = cosineScore(query, vector);
+    if (score >= SEMANTIC_DUP_THRESHOLD && (!best || score > best.score)) {
+      best = { kind, id, score };
+    }
+  };
   for (const c of input.candidateTexts) {
     if (input.excludeIds?.has(c.id)) continue;
-    const v = await embedForDedup(userId, c.text);
-    if (!v) continue;
-    const score = cosineScore(query, v);
-    if (score >= SEMANTIC_DUP_THRESHOLD && (!best || score > best.score)) {
-      best = { kind: 'candidate', id: c.id, score };
-    }
+    consider('candidate', c.id, await embedForDedup(userId, c.text));
   }
   for (const a of input.assetTexts) {
     if (input.excludeIds?.has(a.id)) continue;
-    const v = await embedForDedup(userId, a.text);
-    if (!v) continue;
-    const score = cosineScore(query, v);
-    if (score >= SEMANTIC_DUP_THRESHOLD && (!best || score > best.score)) {
-      best = { kind: 'asset', id: a.id, score };
-    }
+    consider('asset', a.id, await embedForDedup(userId, a.text));
   }
-  return best;
+  if (best) return { status: 'match', match: best };
+  if (compared === 0 && skipped > 0) return { status: 'degraded', reason: 'embedding_unavailable' };
+  return { status: 'no_match' };
 }
