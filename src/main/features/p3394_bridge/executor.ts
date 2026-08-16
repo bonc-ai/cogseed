@@ -398,15 +398,20 @@ export class P3394BridgeExecutor {
     await Promise.race([forward, timeout]);
   }
 
+  /** Sessions whose runtime close (terminal-task Recall recording) already ran. */
+  private readonly runtimeClosedSessions = new Set<string>();
+
   /**
    * Closes a P3394 session: contract close hook first, then the real runtime
-   * close (terminal-task Recall recording). Idempotent.
+   * close (terminal-task Recall recording). Idempotent: the runtime close
+   * runs at most once per session; repeat calls return the same KSTAR record.
    */
   async closeSession(sessionId: string): Promise<unknown> {
-    const session = this.sessions.require(sessionId);
     // closing → closed: the KSTAR close hook journals before commit.
     this.sessions.beginClose(sessionId);
     const record = this.kstar.close(this.sessions.close(sessionId));
+    if (this.runtimeClosedSessions.has(sessionId)) return record;
+    this.runtimeClosedSessions.add(sessionId);
     try {
       await this.runtime.closeSession(sessionId);
     } catch (error) {

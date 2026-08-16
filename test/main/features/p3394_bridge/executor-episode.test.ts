@@ -103,4 +103,77 @@ describe('P3394 executor KSTAR episode sink', () => {
     const actions = episodes[0].actions as Array<{ kind: string; error?: string }>;
     expect(actions.some((action) => action.error === 'runtime exploded')).toBe(true);
   });
+
+  it('records a cancelled episode when the runtime stream ends cancelled', async () => {
+    const bridge = new P3394BridgeKernel();
+    bridge.registry.register({ identity: { agent_id: 'cogseed', display_name: 'CogSeed' }, manifest: manifest('cogseed') });
+    bridge.registry.register({ identity: { agent_id: 'hermes', display_name: 'Hermes' }, manifest: manifest('hermes') });
+    const cancelled: P3394RuntimeAdapter = {
+      ...fakeRuntime(),
+      async *stream(): AsyncIterable<P3394RuntimeEvent> {
+        yield { sequence: 1, task_id: 'tsk-ep-1', kind: 'started', data: {} };
+        yield { sequence: 2, task_id: 'tsk-ep-1', kind: 'delta', data: { text: 'partial' } };
+        yield { sequence: 3, task_id: 'tsk-ep-1', kind: 'cancelled', data: {} };
+      },
+    };
+    const episodes: Array<Record<string, unknown>> = [];
+    const executor = new P3394BridgeExecutor({
+      bridge,
+      runtime: cancelled,
+      recordEpisode: (episode) => { episodes.push(episode as unknown as Record<string, unknown>); },
+    });
+    const result = executor.execute(envelope());
+    expect(result.ok).toBe(true);
+    if (result.ok) await executor.awaitForward(result.task_id as string);
+    expect(episodes).toHaveLength(1);
+    expect(episodes[0].status).toBe('cancelled');
+  });
+
+  it('double closeSession runs the runtime close once and journals one KSTAR record', async () => {
+    const bridge = new P3394BridgeKernel();
+    bridge.registry.register({ identity: { agent_id: 'cogseed', display_name: 'CogSeed' }, manifest: manifest('cogseed') });
+    bridge.registry.register({ identity: { agent_id: 'hermes', display_name: 'Hermes' }, manifest: manifest('hermes') });
+    const runtimeCloses: string[] = [];
+    const runtime: P3394RuntimeAdapter = {
+      ...fakeRuntime(),
+      async closeSession(sessionId): Promise<void> {
+        runtimeCloses.push(sessionId);
+      },
+    };
+    const executor = new P3394BridgeExecutor({ bridge, runtime });
+    const result = executor.execute(envelope());
+    expect(result.ok).toBe(true);
+    if (result.ok) await executor.awaitForward(result.task_id as string);
+
+    const first = await executor.closeSession('ses-ep-1');
+    const second = await executor.closeSession('ses-ep-1');
+    expect(runtimeCloses).toEqual(['ses-ep-1']);
+    expect(executor.kstar.list()).toHaveLength(1);
+    expect(second).toBe(first);
+    expect(executor.sessions.require('ses-ep-1').state).toBe('closed');
+  });
+
+  it('a failing runtime close records close_error without throwing', async () => {
+    const bridge = new P3394BridgeKernel();
+    bridge.registry.register({ identity: { agent_id: 'cogseed', display_name: 'CogSeed' }, manifest: manifest('cogseed') });
+    bridge.registry.register({ identity: { agent_id: 'hermes', display_name: 'Hermes' }, manifest: manifest('hermes') });
+    const runtime: P3394RuntimeAdapter = {
+      ...fakeRuntime(),
+      async closeSession(): Promise<void> {
+        throw new Error('recall bridge down');
+      },
+    };
+    const executor = new P3394BridgeExecutor({ bridge, runtime });
+    const result = executor.execute(envelope());
+    expect(result.ok).toBe(true);
+    if (result.ok) await executor.awaitForward(result.task_id as string);
+
+    const record = await executor.closeSession('ses-ep-1');
+    expect(record).toMatchObject({ session_id: 'ses-ep-1' });
+    const updates = (record as { proposed_updates: Array<{ kind: string; message?: string }> }).proposed_updates;
+    expect(updates).toEqual([{ kind: 'close_error', message: 'recall bridge down' }]);
+    // close 失败不破坏会话终态与后续重复 close 的幂等返回。
+    await executor.closeSession('ses-ep-1');
+    expect(executor.kstar.list()).toHaveLength(1);
+  });
 });
