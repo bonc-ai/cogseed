@@ -443,14 +443,28 @@
           <div class="skills-cognition-workspace">
           <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产导航">
             <div class="skills-cognition-tab-group">
-              <button type="button" id="skills-cognition-tab-overview" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-overview" data-cognition-page="overview"><span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span></button>
+              <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-inbox" data-cognition-page="inbox"><span data-ui-icon="clipboard-list"></span><span data-i18n="cognition.inbox">待我处理</span></button>
               <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.my_assets">我的资产</span></button>
               <button type="button" id="skills-cognition-tab-proofs" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-proofs" tabindex="-1" data-cognition-page="proofs"><span data-ui-icon="shield-check"></span><span data-i18n="cognition.proofs">使用与证明</span></button>
+              <button type="button" id="skills-cognition-tab-governance" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-governance" tabindex="-1" data-cognition-page="governance"><span data-ui-icon="list-ordered"></span><span data-i18n="cognition.governance">版本与治理</span></button>
             </div>
           </nav>
           <main class="skills-cognition-main">
-          <section class="skills-cognition-page" id="skills-cognition-overview" role="tabpanel" aria-labelledby="skills-cognition-tab-overview" data-cognition-page-body="overview">
-            <div id="skills-cognition-overview-body"></div>
+          <!-- 待我处理：只放"真的需要用户决定"的事项。加工进度（沉淀任务、
+               来源连接状态）不进这里——它们是后台进度，归右上角「沉淀活动」
+               「管理来源」。
+               落地规则只作用于"进入认知资产时默认停在哪个 tab"：没有待决策
+               项就默认落「我的资产」。用户主动点进本页时永远停在这里并显示
+               "当前无需处理"，不会被弹走——否则空状态永远见不到，用户也无从
+               确认"是真的没事，还是页面坏了"。 -->
+          <section class="skills-cognition-page" id="skills-cognition-inbox" role="tabpanel" aria-labelledby="skills-cognition-tab-inbox" data-cognition-page-body="inbox">
+            <div id="skills-cognition-inbox-body"></div>
+          </section>
+          <!-- 版本与治理：回答"我的资产发生过什么变化、我怎样保持控制"。
+               动作全部落在既有 IPC（recall.assets.versions / rollback / pause /
+               resume / revoke / archive / delete），这里不新增治理语义。 -->
+          <section class="skills-cognition-page" id="skills-cognition-governance" role="tabpanel" aria-labelledby="skills-cognition-tab-governance" data-cognition-page-body="governance" hidden>
+            <div id="skills-cognition-governance-body"></div>
           </section>
           <!-- 使用与证明：回答"这些资产究竟在哪里用过、真的起作用了吗"。
                数据全部来自既有事实链（usage / transfer proof / effectiveness proof
