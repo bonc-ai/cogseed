@@ -197,7 +197,20 @@
   let _assets = [];          // 资产 = asset_reference_bindings（listSpaceAssetBindings）
   let _detailLoadedFor = null;  // 已加载详情的 space_id（切空间才重载）
   const _assetTypes = ['全部', '个人身份与偏好', '决策规则与方法', '文档模板及项目事实', '可复用的技能'];
-  const _baseAgents = ['Codex', 'ChatGPT', 'WorkBuddy'];
+  // 基础 Agent 候选 = 本机真实安装的 CLI agent（localAgents.list 探测，非硬编码）
+  let _baseAgentCatalog = [];     // [{ id: cliType, name: 显示名 }]
+  let _baseAgentProbeError = '';  // 探测失败时的提示文案
+
+  /** CLI type → 显示名（与 onboarding 的 _csAgentNameForCli 同风格；未知原样返回）。 */
+  function _baseAgentDisplayName(cli) {
+    if (cli === 'claude') return 'Claude';
+    if (cli === 'codex') return 'Codex';
+    if (cli === 'opencode') return 'OpenCode';
+    if (cli === 'hermes') return 'Hermes';
+    if (cli === 'workbuddy') return 'WorkBuddy';
+    if (cli === 'openclaw') return 'OpenClaw';
+    return cli;
+  }
 
   // ── 能力真实数据源（与 personal-ontology 的 skills.list/agents.list 同源）──
   let _skillCatalog = [];       // [{ id, name, desc }]（技能库）
@@ -218,12 +231,13 @@
   }
 
   async function _loadData() {
-    const [spacesRes, templatesRes, scenariosRes, skillsRes, agentsRes] = await Promise.all([
+    const [spacesRes, templatesRes, scenariosRes, skillsRes, agentsRes, cliRes] = await Promise.all([
       _invoke('spaces.list'),
       _invoke('spaces.templates.list'),
       _invoke('spaces.scenarios.list'),
       _invoke('skills.list'),
       _invoke('agents.list'),
+      _invoke('localAgents.list'),
     ]);
     if (spacesRes.error && templatesRes.error) {
       _loadError = (spacesRes.error || '') + ' / ' + (templatesRes.error || '');
@@ -237,8 +251,47 @@
       ? skillsRes.skills.map((s) => ({ id: s.id, name: s.name || s.id, desc: (s.description_zh || s.description_en || '').trim() }))
       : [];
     _agentCatalog = Array.isArray(agentsRes.agents)
-      ? agentsRes.agents.map((a) => ({ id: a.agent_id, name: a.name || a.agent_id, desc: (a.description_zh || a.description_en || '').trim() }))
+      ? agentsRes.agents.map((a) => ({
+          id: a.agent_id, name: a.name || a.agent_id,
+          desc: (a.description_zh || a.description_en || '').trim(),
+          // 保留 runtime 供基础 Agent 合并使用（外接 CLI agent = 基础 Agent）
+          runtime: (a && a.runtime) || null,
+        }))
       : [];
+    // 基础 Agent 候选 = AI 团队里的外接 CLI agent（注册名优先，如 ClaudeCode）
+    //                 + 本机探测到但团队里还没注册的 CLI（如 Hermes），按 cli type 去重。
+    // 与 AI 团队面板「基础 Agent」分组同源，不显示指挥官（指挥官默认隐形）。
+    _baseAgentProbeError = '';
+    const teamCli = (_agentCatalog || [])
+      .filter((a) => a.runtime && a.runtime.kind === 'cli' && a.runtime.cli)
+      .map((a) => ({ id: a.runtime.cli, name: a.name }));
+    let probedCli = [];
+    if (cliRes.error) {
+      _baseAgentProbeError = String(cliRes.error);
+    } else {
+      const entries = Array.isArray(cliRes.entries) ? cliRes.entries : [];
+      probedCli = entries
+        .filter((e) => e && e.available && e.type)
+        .map((e) => ({ id: e.type, name: _baseAgentDisplayName(e.type) }));
+    }
+    const seen = new Set();
+    _baseAgentCatalog = [...teamCli, ...probedCli].filter((a) => {
+      if (!a.id || seen.has(a.id)) return false;
+      seen.add(a.id);
+      return true;
+    }).sort((x, y) => {
+      // 固定优先级：claude 默认首选，其余按名字排（与探测体验一致，避免
+      // agents.list 目录顺序决定默认值）
+      const rank = { claude: 0, codex: 1, hermes: 2, opencode: 3, workbuddy: 4 };
+      const rx = rank[x.id] !== undefined ? rank[x.id] : 9;
+      const ry = rank[y.id] !== undefined ? rank[y.id] : 9;
+      if (rx !== ry) return rx - ry;
+      return x.name < y.name ? -1 : x.name > y.name ? 1 : 0;
+    });
+    // 已选值不在候选里（如装了新 CLI 或选了被卸载的）→ 回落首项
+    if (!_baseAgentCatalog.some((a) => a.id === _createBaseAgent)) {
+      _createBaseAgent = _baseAgentCatalog.length ? _baseAgentCatalog[0].id : '';
+    }
     _loaded = true;
     _loadError = '';
     // 详情默认指向第一个空间
@@ -259,7 +312,7 @@
   let _createName = '';            // 弹窗内已填空间名称（_reRender 时保留）
   let _createInstruction = '';     // 弹窗内已填默认目标/指令（_reRender 时保留）
   let _createTemplate = null;      // 弹窗套用的模板 template_id
-  let _createBaseAgent = 'Codex';   // 弹窗选中的基础 Agent（扩展点：后续接入其他 coding agent）
+  let _createBaseAgent = '';      // 弹窗选中的基础 Agent（cli type；探测结果首项为默认）
   let _abilityKind = 'role';       // 能力弹窗当前 tab：role | task | skill
   let _abilityOpen = false;
   // ── 任务引用选择器（@ 引用空间产物与资产）──────────────────────────────────
@@ -800,7 +853,7 @@
           <div class="ws-config-actions"><button class="ws-secondary" data-ws="save-instructions">${_t('ws.save', '保存')}</button><span class="ws-config-hint">${_t('ws.config_footer', '配置更新后，从下一次交互开始生效。')}</span></div>
         </section>
         <section><label>${_t('ws.base_agent', '当前对话 Agent')}</label>
-          <div class="ws-agent-row"><span>CX</span><div><strong>${escapeHtml(sp.base_agent || 'Codex')}</strong><small>${_t('ws.base_agent_hint', '承接空间内任务')}</small></div></div>
+          <div class="ws-agent-row"><span>CX</span><div><strong>${sp.base_agent ? escapeHtml(_baseAgentDisplayName(sp.base_agent)) : escapeHtml(_t('ws.no_agent', '未设置'))}</strong><small>${_t('ws.base_agent_hint', '承接空间内任务')}</small></div></div>
         </section>
         <section class="ws-config-ability">
           <label>${_t('ws.ability_config', '能力配置')}</label>
@@ -851,7 +904,9 @@
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
               <input data-ws="create-name" value="${escapeHtml(_createName)}" placeholder="${_t('ws.space_name_ph', '请输入空间名称')}" maxlength="60" autocomplete="off" spellcheck="false" /></label>
             <label><span>${_t('ws.base_agent', '基础 Agent')} <em>${_t('ws.base_agent_hint', '负责承接任务')}</em></span>
-              <select data-ws="create-agent">${_baseAgents.map((a) => `<option${_createBaseAgent === a ? ' selected' : ''}>${escapeHtml(a)}</option>`).join('')}</select></label>
+              <select data-ws="create-agent">${_baseAgentCatalog.length
+                ? _baseAgentCatalog.map((a) => `<option value="${escapeHtml(a.id)}"${_createBaseAgent === a.id ? ' selected' : ''}>${escapeHtml(a.name)}</option>`).join('')
+                : `<option value="" disabled>${_baseAgentProbeError ? escapeHtml('探测失败：' + _baseAgentProbeError) : escapeHtml(_t('ws.no_agent', '未检测到本机 Agent'))}</option>`}</select></label>
             <label class="full instruction"><span>${_t('ws.default_goal', '默认目标/指令')} <em>0 / 500</em></span>
               <textarea data-ws="create-instruction" maxlength="500" placeholder="${_t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等')}">${escapeHtml(_createInstruction)}</textarea></label>
           </div>
@@ -1021,11 +1076,13 @@
     _reRender();
   }
 
-  /** 保存能力调整：diff extra → spaces.resources.add/remove。 */
+  /** 保存能力调整：diff extra → spaces.resources.add/remove。内部 kind（task/skill）映射为 IPC kind（agent/skill）。 */
   async function _saveEditAbility() {
     const sp = _space();
     if (!sp) return;
     const kind = _editAbilityKind;
+    // IPC 契约只接受 'agent' | 'skill'；内部 UI 语义 task（Task Agent 分组）映射为 agent。
+    const ipcKind = kind === 'task' ? 'agent' : kind;
     const tmpls = _templates.filter((t) => t && (t.template_id === sp.primary_template_id || t.template_id === sp.template_id
       || (sp.secondary_template_ids || []).includes(t.template_id)));
     const bundleIds = new Set(tmpls.flatMap((t) => (t.bundle
@@ -1035,16 +1092,23 @@
     const nextSet = new Set(nextExtras);
     // 移除
     for (const id of _editAbilityBefore || []) {
-      if (!nextSet.has(id)) await _invoke('spaces.resources.remove', { spaceId: sp.space_id, kind, id });
+      if (!nextSet.has(id)) {
+        const res = await _invoke('spaces.resources.remove', { spaceId: sp.space_id, kind: ipcKind, id });
+        if (res.error) { _stub('保存失败：' + res.error); return; }
+      }
     }
     // 新增
     for (const id of nextExtras) {
-      if (!beforeSet.has(id)) await _invoke('spaces.resources.add', { spaceId: sp.space_id, kind, id });
+      if (!beforeSet.has(id)) {
+        const res = await _invoke('spaces.resources.add', { spaceId: sp.space_id, kind: ipcKind, id });
+        if (res.error) { _stub('保存失败：' + res.error); return; }
+      }
     }
     _editAbilityOpen = false;
     await _loadData();
     if (_detailSpaceId) await _loadSpaceDetail(_detailSpaceId);
     _reRender();
+    if (typeof uiToast === 'function') uiToast(_t('ws.saved', '已保存'), { variant: 'success' });
   }
 
   /** 保存指令（spaces.instructions.set）。 */

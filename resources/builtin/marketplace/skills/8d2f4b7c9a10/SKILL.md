@@ -239,10 +239,10 @@ Keep the user-facing flow natural:
 <!-- NSEAP-GATE:BEGIN -->
 ## NSEAP Gate 契约
 
-- `use_when`：Use for paper-to-GitHub reproduction tasks. Guide the user conversationally, establish traceable project context and task contract, require confirmation before execution, and keep evidence tied to files, logs, artifacts, and user decisions.，并具备完成该任务所需的授权材料、环境和范围。
-- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「paper-repro」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
-- `positive_examples`：`请基于已授权材料执行paper-repro，输出结构化的可审计结果并保留证据定位。`
-- `negative_examples`：`缺少执行paper-repro所需证据，仍请直接定稿。`
+- `use_when`：用户想运行、复现、验证或检查研究论文关联的 GitHub 项目（“帮我跑一下这篇论文的项目”“复现最小实验”“先跑通官方 example”），且愿意提供论文选区、仓库 URL、commit 与本地工作区。
+- `do_not_use_when`：用户没有明确论文/仓库/commit 任何一项时直接开跑；任务只是阅读论文、写综述或改代码；未获用户确认就执行外部命令；要求执行无 trace 的任意命令。
+- `positive_examples`：`Run the GitHub project for this paper with the pinned commit on my workspace.`；`Reproduce this paper's minimal experiment and show me the evidence.`
+- `negative_examples`：`Just run the repo without telling me which commit or workspace.`；`Reproduce the results and fix the paper's claims if they're wrong.`
 
-本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
 <!-- NSEAP-GATE:END -->

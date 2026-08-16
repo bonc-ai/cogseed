@@ -18,6 +18,8 @@ export async function saveKstarCandidateProposals(
       suggestedType: proposal.suggestedType,
       suggestedScope: proposal.suggestedScope,
       sourceRefs: proposal.sourceRefs,
+      ...(proposal.applicableWhen ? { applicableWhen: proposal.applicableWhen } : {}),
+      ...(proposal.forbiddenWhen ? { forbiddenWhen: proposal.forbiddenWhen } : {}),
       ...(proposal.learningSignal ? { learningSignal: proposal.learningSignal } : {}),
       ...(proposal.learningProvenance ? { learningProvenance: proposal.learningProvenance } : {}),
     }));

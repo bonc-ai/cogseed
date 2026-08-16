@@ -90,12 +90,56 @@ describe('Recall cognition workspace layout', () => {
     }
   });
 
-  it('embeds the skill library inside Recall\'s 我的能力 tab (no sibling panel)', () => {
+  // 「使用与证明」是 CogSeed 区别于普通 Memory / Skill 库的地方：它必须回答
+  // "这条资产在哪里用过、真的起作用了吗"，且结论用用户能读懂的话，不露内部枚举。
+  it('exposes use-and-proof as its own task view backed by the fact chain', () => {
+    expect(html).toContain('data-cognition-page="proofs"');
+    expect(html).toContain('data-cognition-page-body="proofs"');
+    expect(html).toContain('id="skills-cognition-proofs-body"');
+
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
+    expect(skills).toContain('recall.timeline.list');
+    // 治理事件属于「版本与治理」，不能混进这一页。
+    expect(skills).toMatch(/_COGNITION_PROOF_KINDS[\s\S]{0,240}effectiveness_recorded/);
+    expect(skills).not.toMatch(/_COGNITION_PROOF_KINDS[\s\S]{0,240}asset_rolled_back/);
+    // 结果状态必须翻译成用户说法，不能直接把 better/worse 打到界面上。
+    for (const key of [
+      'cognition.proof_carried_in', 'cognition.proof_effective', 'cognition.proof_no_diff',
+      'cognition.proof_negative', 'cognition.proof_degraded', 'cognition.proof_rework',
+    ]) expect(skills).toContain(key);
+  });
+
+  // 任务视图回答"用户来这里要做什么"；来源是输入配置、沉淀活动是后台加工
+  // 进度，两者都不是任务，降为页头辅助入口。它们打开的仍是同一批 page body。
+  it('keeps sources and capture activity as header entries, not task tabs', () => {
+    const navStart = html.indexOf('id="skills-cognition-tabs"');
+    const navEnd = html.indexOf('</nav>', navStart);
+    expect(navStart).toBeGreaterThan(0);
+    const navHtml = html.slice(navStart, navEnd);
+    for (const page of ['sources', 'captures']) {
+      expect(navHtml).not.toContain(`data-cognition-page="${page}"`);
+      // 页面本体仍在，只是入口换了位置。
+      expect(html).toContain(`data-cognition-page-body="${page}"`);
+      expect(html).toContain(`class="btn btn-sm cognition-aux-entry" data-cognition-page="${page}"`);
+    }
+    // 辅助入口不得伪装成 tab：没有 role="tab"，就不该出现在 tablist 语义里。
+    const headerStart = html.indexOf('class="skills-cognition-header"');
+    const headerHtml = html.slice(headerStart, html.indexOf('</header>', headerStart));
+    expect(headerHtml).toContain('cognition-aux-entry');
+    expect(headerHtml).not.toContain('role="tab"');
+  });
+
+  // 技能市场与外部 Skill 库是「可用资源」，安装/导入不等于用户已确认拥有，
+  // 所以它们不属于个人认知资产，移到连接页「技能」tab。个人已确认的 Skill
+  // 仍以 skill_method 正式资产留在认知资产「技能与方法」分类里。
+  it('hosts the skill library in the Connections 技能 tab, not inside Recall', () => {
     expect(html).toContain('id="recall-btn"');
     expect(html).toContain('id="panel-recall"');
-    const paneStart = html.indexOf('id="skills-cognition-my-abilities"');
+    expect(html).not.toContain('skills-cognition-my-abilities');
+    expect(html).toContain('data-connections-tab="skills"');
+    const paneStart = html.indexOf('id="connections-pane-skills"');
     expect(paneStart).toBeGreaterThan(0);
-    const paneEnd = html.indexOf('</main>', paneStart);
+    const paneEnd = html.indexOf('id="connections-pane-sources"', paneStart);
     expect(paneEnd).toBeGreaterThan(paneStart);
     const paneHtml = html.slice(paneStart, paneEnd);
     expect(paneHtml).toContain('id="panel-skills"');
@@ -108,18 +152,17 @@ describe('Recall cognition workspace layout', () => {
     expect(paneHtml).toContain('id="skills-chat-input"');
   });
 
-  it('routes and lazy-loads Skills through Recall', () => {
+  it('routes and lazy-loads Skills through Connections', () => {
     const boot = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/boot.js'), 'utf-8');
     const state = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/state.js'), 'utf-8');
     const lazy = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/lazy-features.js'), 'utf-8');
-    // Skills no longer has a sidebar button and its panel lives inside Recall's
-    // "我的能力" tab; deep links route to Recall and switch the tab.
+    // Skills 没有独立侧栏按钮；技能库挂在连接页「技能」tab，深链切到连接页。
     expect(state).not.toContain("_setViewFromSidebar('skills')");
     expect(state).toContain("_setViewFromSidebar('recall')");
-    expect(boot).toContain("view === 'skills' || view === 'personal-ontology' ? 'panel-recall'");
+    expect(boot).toContain("view === 'skills' ? 'panel-connections'");
     expect(boot).toContain("view === 'recall' ? 'panel-recall'");
     expect(boot).toContain("_loadViewFeature('recall', 'recall'");
-    expect(boot).toContain("switchSkillsCognitionPage('my-abilities')");
+    expect(boot).toContain("activateConnectionsTab('skills')");
     expect(lazy).toMatch(/recall:\s*\[[\s\S]*?\{ src: '\.\/modules\/skills\.js' \}/);
   });
 
@@ -135,8 +178,6 @@ describe('Recall cognition workspace layout', () => {
     expect(surfaceHtml).toContain('class="skills-cognition-main"');
     expect(surfaceHtml).toContain('id="skills-cognition-tabs"');
     expect(surfaceHtml).toContain('id="skills-cognition-assets"');
-    expect(surfaceHtml).toContain('id="skills-cognition-my-abilities"');
-    expect(surfaceHtml).toContain('id="skills-cognition-about-me"');
   });
 
   it('places Recall navigation in a horizontal top bar', () => {
@@ -160,7 +201,7 @@ describe('Recall cognition workspace layout', () => {
 
   it('keeps review inside capture tasks and exposes memory content as one page', () => {
     expect(html).not.toContain('data-i18n="cognition.candidate_review"');
-    expect(html).toContain('data-i18n="cognition.ability_assets"');
+    expect(html).toContain('data-i18n="cognition.my_assets"');
     expect(html).not.toContain('data-ability-assets-view');
     expect(html).not.toContain('data-ability-assets-view-panel');
     expect(html).not.toContain('cognition.cognition_tree');
@@ -289,8 +330,6 @@ describe('Recall cognition workspace layout', () => {
         'cognition.capture_review_hint',
         'cognition.capture_review_empty',
         'cognition.memory_content',
-        'cognition.personal_ontology_section',
-        'cognition.personal_ontology_section_hint',
         'cognition.personal_memories_section',
         'cognition.personal_memories_section_hint',
         'cognition.ability_assets',
@@ -303,6 +342,42 @@ describe('Recall cognition workspace layout', () => {
         'cognition.skill_created',
         'cognition.capture_error_unknown',
       ]) expect(messages[key]).toBeTruthy();
+    }
+  });
+
+  // tab 切换只翻 pane 的 hidden 属性，而 .skills-cognition-page 自带 display，
+  // 会盖掉 UA 的 [hidden]{display:none}。少了这条守卫，六个 pane 全部保留布局
+  // 竖排在 overflow:hidden 的容器里，只有第一屏露出来，切 tab 像点不动。
+  it('keeps hidden cognition panes out of the layout', () => {
+    const guard = /\.skills-cognition-page\[hidden\][^{]*\{[^}]*display\s*:\s*none/;
+    expect(guard.test(recallCss)).toBe(true);
+    const match = recallCss.match(guard);
+    expect(cssBraceDepthAt(recallCss, match!.index!)).toBe(0);
+  });
+
+  // 认知资产页把技能库和个人本体整体内嵌，两份骨架很容易在合并时被同时保留。
+  // 重复 id 不会报错，只会让 getElementById 命中文档靠前的那一份，被内嵌的
+  // tab 就成了收不到渲染的死壳——所以整页 id 唯一性要当契约守住。
+  it('keeps every element id unique across the embedded panels', () => {
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
+    const seen = new Set<string>();
+    const duplicated = [...new Set(ids.filter((id) => (seen.has(id) ? true : (seen.add(id), false))))];
+    expect(duplicated).toEqual([]);
+  });
+
+  // 「关于我」不再是独立任务页，而是「我的资产」里的一类。个人本体骨架跟着
+  // 搬进 assets 页，但仍然只能有一份——两份同 id 骨架会让渲染落到靠前那份。
+  it('renders the personal ontology shell exactly once, inside My assets', () => {
+    expect(html).not.toContain('skills-cognition-about-me');
+    const sectionStart = html.indexOf('id="skills-cognition-personal-ontology"');
+    expect(sectionStart).toBeGreaterThan(-1);
+    const assetsStart = html.indexOf('data-cognition-page-body="assets"');
+    expect(assetsStart).toBeGreaterThan(-1);
+    expect(sectionStart).toBeGreaterThan(assetsStart);
+    for (const id of ['personal-onto-nav', 'personal-onto-main-body', 'personal-onto-template-library-modal']) {
+      const occurrences = [...html.matchAll(new RegExp(`\\sid="${id}"`, 'g'))];
+      expect(occurrences).toHaveLength(1);
+      expect(occurrences[0].index).toBeGreaterThan(sectionStart);
     }
   });
 

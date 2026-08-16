@@ -1,0 +1,29 @@
+{
+ "interface": {
+  "display_name": "论文复现 Paper Repro",
+  "short_description": "引导用户复现论文对应 GitHub 项目：追问论文选区/仓库/commit/工作区/成功标准，生成 ProjectContext 与 TaskContract，确认后才执行。",
+  "default_prompt": "Use $paper-repro and follow its evidence, approval, and output contract."
+ },
+ "policy": {
+  "allow_implicit_invocation": true
+ },
+ "nseap_runtime": {
+  "executor": "codex_skill_interpreter",
+  "binding_status": "target_state_not_run",
+  "skill_entrypoint": "../SKILL.md",
+  "schema_ref": "../schemas.json",
+  "permissions": {
+   "direct_resource_access": false,
+   "external_actions": "deny_without_explicit_approval",
+   "formal_asset_write": false,
+   "candidate_write_only": true
+  },
+  "governance": {
+   "level": "L5",
+   "risk_route": "Full",
+   "promotion_ceiling": "staged",
+   "production_release_allowed": false,
+   "independent_review": "pending"
+  }
+ }
+}

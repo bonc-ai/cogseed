@@ -171,8 +171,11 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const asset = await assets.readAbilityAsset('user-a', result.createdAssetIds[0]);
     expect(asset.statement).toContain('N 字资料');
-    // Honest lifecycle from the system-actor promote (P0-2).
-    expect(asset.lifecycleStatus).toBe('automatically_extracted_unverified');
+    // Honest lifecycle from the system-actor promote (P0-2)，并且要能认出这是
+    // KStar 自进化线：它和会话自动抽取都没有用户确认，但证据来源不同
+    // （冻结预期 vs 实际结果的复盘，而不是模型从对话里猜）。两者共用一个
+    // lifecycleStatus 会让认知树分不出可信度。
+    expect(asset.lifecycleStatus).toBe('system_precipitated_unverified');
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const all = await candidates.listRecallCandidates('user-a');
     expect(all.some((c) => c.status === 'confirmed' && String(c.captureKey).startsWith('kstar-'))).toBe(true);
@@ -258,6 +261,9 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const store = await import('../../../../src/main/features/kstar/requirement-store');
     const closure = await import('../../../../src/main/features/kstar/task-closure');
+    // 运行时 timer 按窗口到期触发 finish——本测试只验证窗口不被取消，
+    // 用长窗口避免 timer 在断言前自动闭环。
+    closure._setAutoCloseQuietMsForTest(5_000);
 
     const cid = newCid();
     await seedRequirementWithLesson(cid, '写一份 500 字资料', 'N 字资料类请求：交付开头注明实际字数');
@@ -286,6 +292,8 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const store = await import('../../../../src/main/features/kstar/requirement-store');
     const closure = await import('../../../../src/main/features/kstar/task-closure');
+    // 长窗口：运行时 timer 不应在断言前触发自动闭环。
+    closure._setAutoCloseQuietMsForTest(5_000);
 
     const cid = newCid();
     await seedRequirementWithLesson(cid, '写一份 500 字资料', 'N 字资料类请求：交付开头注明实际字数');
@@ -306,5 +314,24 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
       // A fresh window replaced the cancelled one (terminal re-schedule).
       expect(after.pendingAutoCloseAt).not.toBe(before!.pendingAutoCloseAt);
     }
+  });
+
+  it('8. runtime timer auto-closes when the window expires (no restart needed)', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+
+    closure._setAutoCloseQuietMsForTest(80);
+    const cid = newCid();
+    await seedRequirementWithLesson(cid, '写一份 500 字资料', 'N 字资料类请求：交付开头注明实际字数');
+    await closure.scheduleAutoClose('user-a', cid);
+    expect((await store.readConversationTaskState('user-a', cid))?.pendingAutoCloseAt).toBeTruthy();
+
+    // Wait for the window to expire: the runtime timer must fire finish by
+    // itself — the old code only checked at boot (recovery), so expiry never
+    // triggered without a restart.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const after = await store.readConversationTaskState('user-a', cid);
+    expect(after?.taskComplete).toBe(true);
+    expect(after?.pendingAutoCloseAt).toBeUndefined();
   });
 });

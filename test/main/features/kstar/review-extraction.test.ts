@@ -201,6 +201,8 @@ describe('KSTAR review and Recall bridge', () => {
       outcome: 'worse_than_expected',
       attribution: 'rule_gap',
       reason: 'Check the report acceptance criteria before writing the final file.',
+      // 缺口候选必须有推理出的 lesson：只有 reason（诊断文本）时不再产候选。
+      lesson: '写最终文件前先核对报告验收标准，避免返工重排。',
       confidence: 0.9,
       evidenceRefs: current.evidenceRefs,
     });

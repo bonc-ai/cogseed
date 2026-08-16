@@ -372,3 +372,63 @@ describe('Recall personal profile projection', () => {
     ]);
   });
 });
+
+// 投影过去只有渲染层在打开「关于我」时触发（personal-ontology.js），用户不进
+// 那个页面就永远不同步。主进程在 personal 资产晋升成功后要自己发起一次。
+describe('personal profile projection is driven from the main process', () => {
+  it('schedules a projection after a personal asset is promoted', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(UID);
+    const sync = await import('../../../../src/main/features/recall/personal-profile-sync');
+    const scheduled: string[] = [];
+    const spy = vi.spyOn(sync, 'schedulePersonalProfileSync').mockImplementation(async (userId: string) => {
+      scheduled.push(userId);
+      return { eligible: 0, written: 0, skipped: 0, unmatched: 0, failed: [] };
+    });
+
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const candidate = await candidates.saveRecallCandidate(UID, {
+      judgment: '我长期偏好先给整体结构，再补细节。',
+      value: '后续任务可以直接按结构优先的方式组织输出。',
+      suggestedType: 'personal',
+      suggestedScope: 'personal',
+      suggestedAction: 'create',
+      sourceRefs: [{ kind: 'execution', id: 'exec-profile' }],
+      evidenceRefs: [{ kind: 'execution', id: 'exec-profile' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate(UID, candidate.id, { actor: 'user' });
+    expect(asset.type).toBe('personal');
+
+    // fire-and-forget：让微任务跑完再断言。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(scheduled).toContain(UID);
+    spy.mockRestore();
+  });
+
+  it('does not schedule a projection for non-personal assets', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(UID);
+    const sync = await import('../../../../src/main/features/recall/personal-profile-sync');
+    const scheduled: string[] = [];
+    const spy = vi.spyOn(sync, 'schedulePersonalProfileSync').mockImplementation(async (userId: string) => {
+      scheduled.push(userId);
+      return { eligible: 0, written: 0, skipped: 0, unmatched: 0, failed: [] };
+    });
+
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const candidate = await candidates.saveRecallCandidate(UID, {
+      judgment: '正式评审必须先讲产品模型，再谈实现细节。',
+      value: '避免评审跑偏到实现细节上。',
+      suggestedType: 'rule',
+      suggestedScope: 'review',
+      suggestedAction: 'create',
+      sourceRefs: [{ kind: 'execution', id: 'exec-rule' }],
+      evidenceRefs: [{ kind: 'execution', id: 'exec-rule' }],
+    });
+    await candidates.promoteRecallCandidate(UID, candidate.id, { actor: 'user' });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(scheduled).toEqual([]);
+    spy.mockRestore();
+  });
+});

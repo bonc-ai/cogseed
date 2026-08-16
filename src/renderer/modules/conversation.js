@@ -7,6 +7,7 @@ let _conversationBucketDateRefreshTimer = null;
 let _conversationBucketDateRefreshBound = false;
 const _conversationMergeSelection = new Set();
 let _conversationMergeSelectionActive = false;
+let _conversationMergePickerOpen = false;
 const _conversationResultCards = new Map();
 let _latestCollaborationSnapshot = null;
 // ── 侧栏三段结构（置顶 → 空间 → 最近，均支持折叠）─────────────────────────
@@ -5496,12 +5497,12 @@ async function _cloneConversationWithConfirm(cid) {
 }
 
 function _renderConversationMergeActionBar(selectedCount) {
-  const count = Math.max(0, Number(selectedCount) || 0);
-  return `<div class="conversation-merge-action-bar" role="status">
-    <span>${escapeHtml(t('chat.merge.selected_count', { count }))}</span>
-    <span class="conversation-merge-action-spacer"></span>
-    <button type="button" class="btn btn-sm" data-merge-cancel>${escapeHtml(t('common.cancel'))}</button>
-    <button type="button" class="btn btn-sm btn-primary" data-merge-confirm${count < 2 ? ' disabled' : ''}>${escapeHtml(t('chat.merge.action'))}</button>
+  void selectedCount;
+  return `<div class="conversation-merge-action-bar" role="region" aria-label="${escapeHtml(t('chat.merge.select_action'))}">
+    <button type="button" class="conversation-merge-start" data-merge-start>
+      <span class="conversation-merge-start-icon" aria-hidden="true">${_uiIconHtml('list', 'ui-icon')}</span>
+      <span>${escapeHtml(t('chat.merge.select_action'))}</span>
+    </button>
   </div>`;
 }
 
@@ -5509,17 +5510,6 @@ function _ensureConversationMergeActionBar() {
   if (typeof document === 'undefined' || typeof document.createElement !== 'function'
     || typeof document.getElementById !== 'function') return;
   let bar = document.getElementById('conversation-merge-action-bar');
-  if (!_conversationMergeSelectionActive) {
-    if (!bar) {
-      bar = document.createElement('div');
-      bar.id = 'conversation-merge-action-bar';
-      const list = document.getElementById('conversation-list');
-      if (list && list.parentElement) list.parentElement.insertBefore(bar, list);
-    }
-    bar.innerHTML = `<button type="button" class="btn btn-sm conversation-merge-start" data-merge-start>${escapeHtml(t('chat.merge.select_action'))}</button>`;
-    bar.querySelector('[data-merge-start]')?.addEventListener('click', () => _enterConversationMergeSelection());
-    return;
-  }
   if (!bar) {
     bar = document.createElement('div');
     bar.id = 'conversation-merge-action-bar';
@@ -5527,20 +5517,17 @@ function _ensureConversationMergeActionBar() {
     if (list && list.parentElement) list.parentElement.insertBefore(bar, list);
   }
   bar.innerHTML = _renderConversationMergeActionBar(_conversationMergeSelection.size);
-  bar.querySelector('[data-merge-cancel]')?.addEventListener('click', _exitConversationMergeSelection);
-  bar.querySelector('[data-merge-confirm]')?.addEventListener('click', _mergeSelectedConversationsWithConfirm);
+  bar.querySelector('[data-merge-start]')?.addEventListener('click', () => _enterConversationMergeSelection());
 }
 
 function _enterConversationMergeSelection(initialCid) {
-  _conversationMergeSelectionActive = true;
-  if (initialCid) _conversationMergeSelection.add(initialCid);
-  _closeConversationActionMenu();
-  renderConversationList();
+  _openConversationMergePicker(initialCid);
 }
 
 function _exitConversationMergeSelection() {
   _conversationMergeSelectionActive = false;
   _conversationMergeSelection.clear();
+  _conversationMergePickerOpen = false;
   renderConversationList();
 }
 
@@ -5548,7 +5535,176 @@ function _toggleConversationMergeSelection(cid) {
   if (!cid) return;
   if (_conversationMergeSelection.has(cid)) _conversationMergeSelection.delete(cid);
   else _conversationMergeSelection.add(cid);
-  renderConversationList();
+  if (_conversationMergePickerOpen) {
+    const picker = document.getElementById('conversation-merge-picker');
+    if (picker && typeof picker.__render === 'function') picker.__render();
+  } else {
+    renderConversationList();
+  }
+}
+
+function _conversationMergePickerMeta(conversation) {
+  if (!conversation) return '';
+  const scope = conversation.space_name || conversation.project_name || conversation.space_id || conversation.project_id || '';
+  let time = '';
+  const raw = _conversationActivityIso(conversation);
+  if (raw) {
+    const date = new Date(raw);
+    if (Number.isFinite(date.getTime())) {
+      try {
+        time = new Intl.DateTimeFormat(undefined, {
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit',
+        }).format(date);
+      } catch (_) { time = ''; }
+    }
+  }
+  return [scope, time].filter(Boolean).join(' · ');
+}
+
+function _renderConversationMergePickerRows(items) {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) {
+    return `<div class="conversation-merge-picker-empty">${escapeHtml(t('chat.merge.picker_empty'))}</div>`;
+  }
+  return rows.map((conversation) => {
+    const cid = String(conversation.conversation_id || '');
+    const selected = _conversationMergeSelection.has(cid);
+    const title = conversation.title || t('chat.new_conv_title');
+    const meta = _conversationMergePickerMeta(conversation);
+    return `<button type="button" class="conversation-merge-picker-row${selected ? ' is-selected' : ''}"
+      data-merge-picker-cid="${escapeHtml(cid)}" aria-pressed="${selected ? 'true' : 'false'}">
+      <span class="conversation-merge-picker-checkbox" aria-hidden="true">${selected ? _uiIconHtml('check', 'ui-icon') : ''}</span>
+      <span class="conversation-merge-picker-copy">
+        <span class="conversation-merge-picker-title" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+        ${meta ? `<span class="conversation-merge-picker-meta">${_uiIconHtml('folder', 'ui-icon')}<span>${escapeHtml(meta)}</span></span>` : ''}
+      </span>
+    </button>`;
+  }).join('');
+}
+
+function _openConversationMergePicker(initialCid) {
+  if (typeof document === 'undefined') return;
+  const existing = document.getElementById('conversation-merge-picker');
+  if (existing) existing.remove();
+  _closeConversationActionMenu();
+  _conversationMergeSelection.clear();
+  if (initialCid) _conversationMergeSelection.add(initialCid);
+  _conversationMergeSelectionActive = false;
+  _conversationMergePickerOpen = true;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'conversation-merge-picker';
+  overlay.className = 'modal-overlay ui-dialog-overlay conversation-merge-picker-overlay open';
+  overlay.innerHTML = `
+    <div class="conversation-merge-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-merge-picker-title">
+      <div class="conversation-merge-picker-header">
+        <h2 id="conversation-merge-picker-title">${escapeHtml(t('chat.merge.picker_title'))}</h2>
+        <button type="button" class="modal-close-btn" data-merge-picker-close aria-label="${escapeHtml(t('common.close'))}" title="${escapeHtml(t('common.close'))}">${_uiIconHtml('x', 'modal-close-icon')}</button>
+      </div>
+      <div class="conversation-merge-picker-search-wrap">
+        <span class="conversation-merge-picker-search-icon" aria-hidden="true">${_uiIconHtml('search', 'ui-icon')}</span>
+        <input type="search" class="conversation-merge-picker-search" data-merge-picker-search placeholder="${escapeHtml(t('chat.merge.picker_search'))}" autocomplete="off" />
+      </div>
+      <div class="conversation-merge-picker-section-label">${escapeHtml(t('chat.merge.picker_recent'))}</div>
+      <div class="conversation-merge-picker-list" data-merge-picker-list></div>
+      <div class="conversation-merge-picker-error" data-merge-picker-error hidden></div>
+      <div class="conversation-merge-picker-footer">
+        <button type="button" class="btn conversation-merge-picker-cancel" data-merge-picker-cancel>${escapeHtml(t('common.cancel'))}</button>
+        <button type="button" class="btn btn-primary conversation-merge-picker-confirm" data-merge-picker-confirm disabled>${escapeHtml(t('chat.merge.action'))}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const list = overlay.querySelector('[data-merge-picker-list]');
+  const search = overlay.querySelector('[data-merge-picker-search]');
+  const confirm = overlay.querySelector('[data-merge-picker-confirm]');
+  const errorEl = overlay.querySelector('[data-merge-picker-error]');
+  const all = (Array.isArray(conversations) ? conversations : [])
+    .filter((conversation) => conversation && conversation.conversation_id)
+    .slice()
+    .sort(_compareConversationsForSidebar);
+  let busy = false;
+  const close = () => {
+    if (busy) return;
+    _conversationMergePickerOpen = false;
+    _conversationMergeSelection.clear();
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const onKey = (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape') close();
+  };
+  const getFiltered = () => {
+    const query = String(search?.value || '').trim().toLocaleLowerCase();
+    if (!query) return all;
+    return all.filter((conversation) => {
+      const title = String(conversation.title || '').toLocaleLowerCase();
+      const meta = _conversationMergePickerMeta(conversation).toLocaleLowerCase();
+      return title.includes(query) || meta.includes(query);
+    });
+  };
+  const render = () => {
+    const selectedCount = _conversationMergeSelection.size;
+    if (list) list.innerHTML = _renderConversationMergePickerRows(getFiltered());
+    if (confirm) confirm.disabled = selectedCount < 2 || busy;
+    overlay.querySelectorAll('[data-merge-picker-cid]').forEach((row) => {
+      row.addEventListener('click', () => _toggleConversationMergeSelection(row.dataset.mergePickerCid));
+    });
+  };
+  overlay.__render = render;
+  search?.addEventListener('input', render);
+  overlay.querySelector('[data-merge-picker-close]')?.addEventListener('click', close);
+  overlay.querySelector('[data-merge-picker-cancel]')?.addEventListener('click', close);
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+  confirm?.addEventListener('click', async () => {
+    if (busy || _conversationMergeSelection.size < 2) return;
+    busy = true;
+    confirm.disabled = true;
+    confirm.classList.add('is-loading');
+    confirm.textContent = t('chat.merge.loading');
+    if (errorEl) errorEl.hidden = true;
+    const cids = [..._conversationMergeSelection];
+    const sources = cids.map(_conversationById).filter(Boolean);
+    try {
+      const projectIds = [...new Set(sources.map((source) => source.project_id || ''))];
+      const projectId = projectIds.length === 1 ? projectIds[0] : '';
+      const res = await apiFetch('/api/conversations/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cids, title: t('chat.merge.default_title'), project_id: projectId || null }),
+      });
+      const data = await res.json();
+      if (!data || data.ok === false || !data.conversation) throw new Error(data?.error || t('chat.unknown_error'));
+      const agentCount = data.agent_summaries && typeof data.agent_summaries === 'object'
+        ? Object.keys(data.agent_summaries).length
+        : 0;
+      _addConversationToCache(data.conversation);
+      _rememberConversationResultCard(data.conversation.conversation_id, {
+        kind: 'merge', sourceCount: cids.length, agentCount, summary: data.summary || '',
+      });
+      _conversationMergePickerOpen = false;
+      _conversationMergeSelection.clear();
+      overlay.remove();
+      document.removeEventListener('keydown', onKey, true);
+      renderConversationList();
+      uiToast(t('chat.merge.success'), { variant: 'success' });
+      setView('conversation', data.conversation.conversation_id);
+    } catch (err) {
+      busy = false;
+      confirm.disabled = false;
+      confirm.classList.remove('is-loading');
+      confirm.textContent = t('chat.merge.action');
+      if (errorEl) {
+        errorEl.hidden = false;
+        errorEl.textContent = t('chat.merge.failed', { reason: err?.message || String(err) });
+      }
+    }
+  });
+  document.addEventListener('keydown', onKey, true);
+  render();
+  setTimeout(() => search?.focus(), 0);
 }
 
 async function _mergeSelectedConversationsWithConfirm() {
@@ -8986,7 +9142,8 @@ function _attachBubbleRetryBtn(actions, msgDiv) {
   const retryBtn = document.createElement('button');
   retryBtn.className = 'bubble-action-btn bubble-retry-btn';
   retryBtn.title = t('chat.retry_btn_title');
-  retryBtn.textContent = t('chat.retry_btn');
+  retryBtn.setAttribute('aria-label', t('chat.retry_btn_title'));
+  retryBtn.innerHTML = _uiIconHtml('refresh', 'ui-icon');
   retryBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     await _retryFailedAssistantMessage(msgDiv, retryBtn);
@@ -9537,16 +9694,19 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   const actions = document.createElement('span');
   actions.className = 'chat-bubble-actions';
   actions.dataset.mode = mode;
-  const quoteButton = `<button type="button" class="bubble-action-btn bubble-quote-btn" title="${escapeHtml(t('chat.quote_btn_title'))}">${escapeHtml(t('chat.quote_btn'))}</button>`;
-  const overflowItems = `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-copy-btn" title="${escapeHtml(t('chat.copy_btn_title'))}">${escapeHtml(t('chat.copy_btn'))}</button>
-    <button type="button" role="menuitem" class="chat-bubble-menu-item bubble-aside-btn" title="${escapeHtml(t('aside.ask_btn_title'))}">${escapeHtml(t('aside.ask_btn'))}</button>
-    <button type="button" role="menuitem" class="chat-bubble-menu-item bubble-select-btn" title="${escapeHtml(t('chat.message_select_title'))}">${escapeHtml(t('chat.message_select'))}</button>
-    ${includeArchive && !includeRetry ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-cognition-btn" title="${escapeHtml(t('cognition.capture.menu_title'))}">${escapeHtml(t('cognition.capture.menu'))}</button>` : ''}
-    ${includeArchive ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-archive-btn" title="${escapeHtml(t('chat.archive_btn_title'))}">${escapeHtml(t('chat.archive_btn'))}</button>` : ''}`;
+  const quoteLabel = escapeHtml(t('chat.quote_btn_title'));
+  const copyLabel = escapeHtml(t('chat.copy_btn_title'));
+  const asideLabel = escapeHtml(t('aside.ask_btn_title'));
+  const quoteButton = `<button type="button" class="bubble-action-btn bubble-quote-btn" title="${quoteLabel}" aria-label="${quoteLabel}">${_uiIconHtml('at-sign', 'ui-icon')}</button>`;
+  const copyButton = `<button type="button" class="bubble-action-btn bubble-copy-btn" title="${copyLabel}" aria-label="${copyLabel}">${_uiIconHtml('copy', 'ui-icon')}</button>`;
+  const asideButton = `<button type="button" class="bubble-action-btn bubble-aside-btn" title="${asideLabel}" aria-label="${asideLabel}">${_uiIconHtml('message-square', 'ui-icon')}</button>`;
+  const overflowItems = `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-select-btn" title="${escapeHtml(t('chat.message_select_title'))}">${_uiIconHtml('list', 'ui-icon')}<span>${escapeHtml(t('chat.message_select'))}</span></button>
+    ${includeArchive && !includeRetry ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-cognition-btn" title="${escapeHtml(t('cognition.capture.menu_title'))}">${_uiIconHtml('brain-circuit', 'ui-icon')}<span>${escapeHtml(t('cognition.capture.menu'))}</span></button>` : ''}
+    ${includeArchive ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-archive-btn" title="${escapeHtml(t('chat.archive_btn_title'))}">${_uiIconHtml('book-open', 'ui-icon')}<span>${escapeHtml(t('chat.archive_btn'))}</span></button>` : ''}`;
   actions.innerHTML = `
-    <span class="chat-bubble-direct-actions">${quoteButton}</span>
+    <span class="chat-bubble-direct-actions">${copyButton}${quoteButton}${asideButton}</span>
     <span class="chat-bubble-more-wrap">
-      <button type="button" class="bubble-more-btn" title="${escapeHtml(t('chat.more_actions'))}" aria-label="${escapeHtml(t('chat.more_actions'))}" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true">···</span></button>
+      <button type="button" class="bubble-more-btn" title="${escapeHtml(t('chat.more_actions'))}" aria-label="${escapeHtml(t('chat.more_actions'))}" aria-haspopup="menu" aria-expanded="false">${_uiIconHtml('more-horizontal', 'ui-icon')}</button>
       <span class="chat-bubble-more-menu" role="menu" hidden>${overflowItems}</span>
     </span>
   `;
@@ -9644,13 +9804,23 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
     if (!text.trim() || copyBtn.disabled) return;
     copyBtn.disabled = true;
     const orig = copyBtn.innerHTML;
+    const origTitle = copyBtn.title;
     try {
       await navigator.clipboard.writeText(text);
-      copyBtn.textContent = t('chat.copy_done');
+      copyBtn.innerHTML = _uiIconHtml('check', 'ui-icon');
+      copyBtn.title = t('chat.copy_done');
+      copyBtn.setAttribute('aria-label', t('chat.copy_done'));
     } catch (err) {
-      copyBtn.textContent = t('chat.copy_failed');
+      copyBtn.innerHTML = _uiIconHtml('x-circle', 'ui-icon');
+      copyBtn.title = t('chat.copy_failed');
+      copyBtn.setAttribute('aria-label', t('chat.copy_failed'));
     }
-    setTimeout(() => { copyBtn.innerHTML = orig; copyBtn.disabled = false; }, 1500);
+    setTimeout(() => {
+      copyBtn.innerHTML = orig;
+      copyBtn.title = origTitle;
+      copyBtn.setAttribute('aria-label', origTitle);
+      copyBtn.disabled = false;
+    }, 1500);
   });
   if (!btn) {
     actionsRow.appendChild(actions);
