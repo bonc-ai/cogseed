@@ -84,6 +84,84 @@ async function waitFor(probe: () => boolean, timeoutMs = 5000): Promise<void> {
   }
 }
 
+/** 两个 delta 后 completed 的假 runtime；40ms 间隔给断线留出确定窗口。 */
+function cursorRuntime() {
+  return {
+    shutdown: async () => {},
+    run: vi.fn(async function* () {
+      yield { type: 'event', status: 'running', text: 'working...', metadata: {} };
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      yield { type: 'result', status: 'completed', text: 'recovered answer', metadata: {} };
+    }),
+  };
+}
+
+interface CursorFixture {
+  channelAOut: import('../../../../src/main/features/p3394_bridge/unix-socket-channel').P3394UnixSocketChannel;
+  executorB: import('../../../../src/main/features/p3394_bridge/executor').P3394BridgeExecutor;
+  receivedEvents: Array<{ kind: string; sequence: number }>;
+  closeOut: () => Promise<void>;
+  redialOut: () => Promise<void>;
+  closeAll: () => Promise<void>;
+}
+
+/**
+ * B→A 事件流的断线恢复夹具：生产路径 = executor 在 onEvent 传输失败时
+ * 标记 recoverable，恢复方用 resumeForward 从游标续读事件存储。
+ */
+async function setupCursorFixture(
+  m: Awaited<ReturnType<typeof load>>,
+  prefix: string,
+  runtime: { shutdown: () => Promise<void>; run: ReturnType<typeof vi.fn> },
+): Promise<CursorFixture> {
+  const inbound = sockPath(prefix + '-in');
+  const outbound = sockPath(prefix + '-out');
+  const bridgeB = new m.bridgeModule.P3394BridgeKernel();
+  bridgeB.registry.register({ identity: { agent_id: 'node-a', display_name: 'A' }, manifest: manifest(m.manifestModule, 'node-a') });
+  bridgeB.registry.register({ identity: { agent_id: 'node-b', display_name: 'B' }, manifest: manifest(m.manifestModule, 'node-b') });
+  const controllerB = m.controllerModule.createMateRuntimeController({ runtime });
+  const adapterB = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controllerB, pollIntervalMs: 10 });
+  const channelBIn = new m.socketModule.P3394UnixSocketChannel(prefix + '-b-in', { socketPath: inbound, token: 'tok' });
+  let channelBOut = new m.socketModule.P3394UnixSocketChannel(prefix + '-b-out-1', { socketPath: outbound, token: 'tok' });
+  const receivedEvents: Array<{ kind: string; sequence: number }> = [];
+  const channelAIn = new m.socketModule.P3394UnixSocketChannel(prefix + '-a-in', { socketPath: outbound, token: 'tok' });
+  channelAIn.subscribe((received) => {
+    if (received.kind === 'event') {
+      receivedEvents.push(received.payload.parts[0].data as { kind: string; sequence: number });
+    }
+  });
+  await channelAIn.listen();
+  await channelBOut.dial();
+  const executorB = new m.executorModule.P3394BridgeExecutor({
+    bridge: bridgeB,
+    runtime: adapterB,
+    onEvent: async (sessionId, event) => {
+      // 断线期间 send 抛错 → executor 标记 recoverable（生产恢复路径）。
+      await channelBOut.send(eventEnvelope(sessionId, event.task_id, event, event.sequence));
+    },
+  });
+  channelBIn.subscribe((received) => { executorB.execute(received); });
+  await channelBIn.listen();
+  const channelAOut = new m.socketModule.P3394UnixSocketChannel(prefix + '-a-out', { socketPath: inbound, token: 'tok' });
+  await channelAOut.dial();
+  return {
+    channelAOut,
+    executorB,
+    receivedEvents,
+    closeOut: async () => { await channelBOut.close(); },
+    redialOut: async () => {
+      channelBOut = new m.socketModule.P3394UnixSocketChannel(prefix + '-b-out-2', { socketPath: outbound, token: 'tok' });
+      await channelBOut.dial();
+    },
+    closeAll: async () => {
+      await channelAOut.close();
+      await channelAIn.close();
+      await channelBIn.close();
+      await channelBOut.close();
+    },
+  };
+}
+
 describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
   it('node A drives a task on node B and receives the event stream back', async () => {
     const m = await load();
@@ -170,137 +248,67 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
     await channelBOut.close();
   });
 
-  /*
-   * Event cursor continuation is covered at the Runtime Adapter and Executor
-   * contract layers. A full live-channel version is intentionally not kept
-   * here until the peer-side recovery controller owns the reconnect lifecycle.
-   */
-  /* it('resumes event delivery after channel loss without re-sending the first event', async () => {
+  it('断线后从游标续读事件流，不重发已确认事件', async () => {
     const m = await load();
-    const inbound = sockPath('cursor-in');
-    const outbound = sockPath('cursor-out');
-    const bridgeB = new m.bridgeModule.P3394BridgeKernel();
-    bridgeB.registry.register({ identity: { agent_id: 'node-a', display_name: 'A' }, manifest: manifest(m.manifestModule, 'node-a') });
-    bridgeB.registry.register({ identity: { agent_id: 'node-b', display_name: 'B' }, manifest: manifest(m.manifestModule, 'node-b') });
-    const runtimeB = { shutdown: async () => {}, run: vi.fn(async function* () {
-      yield { type: 'event', status: 'running', text: 'working...', metadata: {} };
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      yield { type: 'result', status: 'completed', text: 'recovered answer', metadata: {} };
-    }) };
-    const controllerB = m.controllerModule.createMateRuntimeController({ runtime: runtimeB });
-    const adapterB = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controllerB, pollIntervalMs: 10 });
-    const channelBIn = new m.socketModule.P3394UnixSocketChannel('cursor-node-b-in', { socketPath: inbound, token: 'tok' });
-    let channelBOut = new m.socketModule.P3394UnixSocketChannel('cursor-node-b-out-1', { socketPath: outbound, token: 'tok' });
-    const receivedEvents: Array<{ kind: string; sequence: number }> = [];
-    const channelAIn = new m.socketModule.P3394UnixSocketChannel('cursor-node-a-in', { socketPath: outbound, token: 'tok' });
-    channelAIn.subscribe((received) => {
-      if (received.kind === 'event') {
-        const data = received.payload.parts[0].data as { kind: string; sequence: number };
-        receivedEvents.push(data);
-      }
-    });
-    await channelAIn.listen();
-    await channelBOut.dial();
-    let firstEvent: Promise<void> | null = null;
-    let firstEventResolve: (() => void) | null = null;
-    let resumed = false;
-    firstEvent = new Promise<void>((resolve) => { firstEventResolve = resolve; });
-    const executorB = new m.executorModule.P3394BridgeExecutor({
-      bridge: bridgeB,
-      runtime: adapterB,
-      onEvent: async (sessionId, event) => {
-        if (event.sequence === 1) {
-          firstEventResolve?.();
-          await channelBOut.send(eventEnvelope(sessionId, event.task_id, event, event.sequence));
-          return;
-        }
-        if (resumed) await channelBOut.send(eventEnvelope(sessionId, event.task_id, event, event.sequence));
-      },
-    });
-    channelBIn.subscribe((received) => { executorB.execute(received); });
-    await channelBIn.listen();
-    const channelAOut = new m.socketModule.P3394UnixSocketChannel('cursor-node-a-out', { socketPath: inbound, token: 'tok' });
-    await channelAOut.dial();
-    await channelAOut.send(envelope({ message_id: 'msg-cursor-recovery', task_id: 'tsk-cursor-recovery', idempotency_key: 'idem-cursor-recovery' }));
-    await firstEvent;
-    await channelBOut.close();
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(receivedEvents.map((event) => event.sequence)).toEqual([1]);
+    const runtime = cursorRuntime();
+    const fx = await setupCursorFixture(m, 'cursor', runtime);
+    const task = envelope({ message_id: 'msg-cursor-recovery', task_id: 'tsk-cursor-recovery', idempotency_key: 'idem-cursor-recovery' });
+    await fx.channelAOut.send(task);
+    await waitFor(() => fx.receivedEvents.length >= 1);
 
-    channelBOut = new m.socketModule.P3394UnixSocketChannel('cursor-node-b-out-2', { socketPath: outbound, token: 'tok' });
-    await channelBOut.dial();
-    resumed = true;
-    await executorB.resumeForward('tsk-cursor-recovery', 'ses-interop-1', 1);
-    await waitFor(() => receivedEvents.some((event) => event.kind === 'completed'));
-    expect(receivedEvents.map((event) => event.sequence)).toEqual([1, 2, 3]);
-    expect(runtimeB.run).toHaveBeenCalledTimes(1);
-    await channelAOut.close();
-    await channelAIn.close();
-    await channelBIn.close();
-    await channelBOut.close();
-  }); */
+    // 断掉 B→A 通道：后续事件的 onEvent send 抛错 → 任务进入 recoverable。
+    await fx.closeOut();
+    await waitFor(() => {
+      try { return fx.executorB.tasks.require('tsk-cursor-recovery').state === 'recoverable'; }
+      catch { return false; }
+    });
+    // 断线前送达的是事件流的一个无重复前缀。
+    const before = fx.receivedEvents.map((event) => event.sequence);
+    expect(before.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(before).size).toBe(before.length);
+    expect(runtime.run).toHaveBeenCalledTimes(1);
 
-  /* Experimental live reconnect fixture remains disabled until the Channel
-   * owns reconnect/replay coordination instead of the test callback.
-   */
-  /* it('recovers a live event stream after Unix Socket loss without re-delivery', async () => {
+    // 重连后从最后确认游标续读：前缀保持不变（不重发已确认事件），
+    // 续读部分无重复，终态为 completed，且任务不重新执行。
+    const cursor = before[before.length - 1];
+    await fx.redialOut();
+    await fx.executorB.resumeForward('tsk-cursor-recovery', 'ses-interop-1', cursor);
+    await waitFor(() => fx.receivedEvents.some((event) => event.kind === 'completed'));
+    const after = fx.receivedEvents.map((event) => event.sequence);
+    expect(after.slice(0, before.length)).toEqual(before);
+    expect(new Set(after).size).toBe(after.length);
+    expect(fx.receivedEvents.map((event) => event.kind)).toEqual(expect.arrayContaining(['started', 'delta', 'completed']));
+    expect(fx.receivedEvents[fx.receivedEvents.length - 1].kind).toBe('completed');
+    expect(runtime.run).toHaveBeenCalledTimes(1);
+    await fx.closeAll();
+  });
+
+  it('首个事件送达前断线，恢复后完整重放且只执行一次', async () => {
     const m = await load();
-    const inbound = sockPath('cursor-live-in');
-    const outbound = sockPath('cursor-live-out');
-    const bridgeB = new m.bridgeModule.P3394BridgeKernel();
-    bridgeB.registry.register({ identity: { agent_id: 'node-a', display_name: 'A' }, manifest: manifest(m.manifestModule, 'node-a') });
-    bridgeB.registry.register({ identity: { agent_id: 'node-b', display_name: 'B' }, manifest: manifest(m.manifestModule, 'node-b') });
-    const runtimeB = { shutdown: async () => {}, run: vi.fn(async function* () {
-      yield { type: 'event', status: 'running', text: 'working...', metadata: {} };
-      yield { type: 'event', status: 'running', text: 'continued', metadata: {} };
-      yield { type: 'result', status: 'completed', text: 'done', metadata: {} };
-    }) };
-    const controllerB = m.controllerModule.createMateRuntimeController({ runtime: runtimeB });
-    const adapterB = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controllerB, pollIntervalMs: 10 });
-    const channelBIn = new m.socketModule.P3394UnixSocketChannel('cursor-live-b-in', { socketPath: inbound, token: 'tok' });
-    let channelBOut = new m.socketModule.P3394UnixSocketChannel('cursor-live-b-out-1', { socketPath: outbound, token: 'tok' });
-    const receivedEvents: Array<{ kind: string; sequence: number }> = [];
-    const channelAIn = new m.socketModule.P3394UnixSocketChannel('cursor-live-a-in', { socketPath: outbound, token: 'tok' });
-    channelAIn.subscribe((received) => {
-      if (received.kind === 'event') receivedEvents.push(received.payload.parts[0].data as { kind: string; sequence: number });
+    const runtime = cursorRuntime();
+    const fx = await setupCursorFixture(m, 'cursor-pre', runtime);
+    const task = envelope({ message_id: 'msg-cursor-pre-loss', task_id: 'tsk-cursor-pre-loss', idempotency_key: 'idem-cursor-pre-loss' });
+    // 先断线再投递任务：首个事件的 onEvent send 即失败 → recoverable。
+    await fx.closeOut();
+    await fx.channelAOut.send(task);
+    await waitFor(() => {
+      try { return fx.executorB.tasks.require('tsk-cursor-pre-loss').state === 'recoverable'; }
+      catch { return false; }
     });
-    await channelAIn.listen();
-    await channelBOut.dial();
-    let firstEventSeen: (() => void) | null = null;
-    const firstEvent = new Promise<void>((resolve) => { firstEventSeen = resolve; });
-    const executorB = new m.executorModule.P3394BridgeExecutor({
-      bridge: bridgeB,
-      runtime: adapterB,
-      onEvent: async (sessionId, event) => {
-        await channelBOut.send(eventEnvelope(sessionId, event.task_id, event, event.sequence));
-        if (event.sequence === 1) {
-          firstEventSeen?.();
-          await channelBOut.close();
-        }
-      },
-    });
-    channelBIn.subscribe((received) => { executorB.execute(received); });
-    await channelBIn.listen();
-    const channelAOut = new m.socketModule.P3394UnixSocketChannel('cursor-live-a-out', { socketPath: inbound, token: 'tok' });
-    await channelAOut.dial();
-    const task = envelope({ message_id: 'msg-cursor-live', task_id: 'tsk-cursor-live', idempotency_key: 'idem-cursor-live' });
-    await channelAOut.send(task);
-    await firstEvent;
-    await waitFor(() => executorB.tasks.require('tsk-cursor-live').state === 'recoverable');
-    expect(receivedEvents.map((event) => event.sequence)).toEqual([1]);
-    expect(runtimeB.run).toHaveBeenCalledTimes(1);
+    expect(fx.receivedEvents).toEqual([]);
+    expect(runtime.run).toHaveBeenCalledTimes(1);
 
-    channelBOut = new m.socketModule.P3394UnixSocketChannel('cursor-live-b-out-2', { socketPath: outbound, token: 'tok' });
-    await channelBOut.dial();
-    await executorB.resumeForward('tsk-cursor-live', 'ses-interop-1', 1);
-    await waitFor(() => executorB.tasks.require('tsk-cursor-live').state === 'completed');
-    expect(receivedEvents.map((event) => event.sequence)).toEqual([1, 2, 3]);
-    expect(runtimeB.run).toHaveBeenCalledTimes(1);
-    await channelAIn.close();
-    await channelAOut.close();
-    await channelBIn.close();
-    await channelBOut.close();
-  }); */
+    // 重连后从 0 游标完整重放：事件流无重复，终态 completed，任务不重新执行。
+    await fx.redialOut();
+    await fx.executorB.resumeForward('tsk-cursor-pre-loss', 'ses-interop-1', 0);
+    await waitFor(() => fx.receivedEvents.some((event) => event.kind === 'completed'));
+    const seqs = fx.receivedEvents.map((event) => event.sequence);
+    expect(new Set(seqs).size).toBe(seqs.length);
+    expect(fx.receivedEvents.map((event) => event.kind)).toEqual(expect.arrayContaining(['started', 'delta', 'completed']));
+    expect(fx.receivedEvents[fx.receivedEvents.length - 1].kind).toBe('completed');
+    expect(runtime.run).toHaveBeenCalledTimes(1);
+    await fx.closeAll();
+  });
 
   it('duplicate envelopes are replayed-rejected and executed exactly once', async () => {
     const m = await load();

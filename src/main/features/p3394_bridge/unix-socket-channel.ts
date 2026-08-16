@@ -59,7 +59,7 @@ const ENVELOPE_FRAME = 'envelope';
 
 type SocketFramePayload = { t: 'auth'; token: string } | { t: 'envelope'; envelope: P3394Envelope }
 
-function writeFrame(socket: net.Socket, payload: SocketFramePayload, onFlushed?: () => void): void {
+function writeFrame(socket: net.Socket, payload: SocketFramePayload, onFlushed?: (error?: Error) => void): void {
   const body = Buffer.from(JSON.stringify(payload), 'utf8');
   const header = Buffer.alloc(FRAME_HEADER_BYTES);
   header.writeUInt32BE(body.length, 0);
@@ -259,9 +259,11 @@ export class P3394UnixSocketChannel implements P3394ChannelAdapter {
 
   private writeEnvelope(client: net.Socket, envelope: P3394Envelope): void {
     this.clientPendingFrames += 1;
-    writeFrame(client, { t: ENVELOPE_FRAME, envelope }, () => {
+    writeFrame(client, { t: ENVELOPE_FRAME, envelope }, (error) => {
       this.clientPendingFrames = Math.max(0, this.clientPendingFrames - 1);
-      this.clientUnacked.delete(envelope.message_id);
+      // 只有确认写出成功才从未确认缓存移除；写失败（断线/销毁）保留，
+      // 由重连逻辑按原 message_id 重发，避免 flush 失败即丢语义消息。
+      if (!error) this.clientUnacked.delete(envelope.message_id);
     });
   }
 
