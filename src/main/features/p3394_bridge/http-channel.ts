@@ -386,6 +386,12 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
     const dialConfig = this.options.dial;
     const endpoint = this.activeEndpoint ?? dialConfig?.endpoints[0];
     if (!dialConfig || !endpoint) throw new Error('p3394_http_not_dialed');
+    // S-03：配置 expected_identity 的通道必须协商成功（token→peer identity
+    // 绑定）。身份不符的端点即使 token 有效也不得发送——协商失败后不得
+    // 退化为"用第一个端点裸发"。
+    if (dialConfig.expected_identity && !this.peerManifest) {
+      throw new Error('p3394_identity_not_negotiated');
+    }
     const supported = this.peerManifest?.capability_profile.supported_performatives;
     if (supported && !supported.includes(envelope.performative)) {
       throw new Error('p3394_capability_unsupported:' + envelope.performative);
