@@ -31,20 +31,26 @@
       <div class="sidebar-actions">
         <button class="sidebar-btn" id="new-task-btn"><span data-ui-icon="plus" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_task">新建任务</span></button>
         <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.home">首页</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
-        <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
+        <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">工作空间</span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
       </div>
       <div class="sidebar-conversation-nav">
+        <div class="sidebar-conv-tabs" id="sidebar-conv-tabs" role="tablist">
+          <button type="button" class="sidebar-conv-tab" role="tab" data-conv-tab="spaces" data-i18n="sidebar.spaces_section">空间</button>
+          <button type="button" class="sidebar-conv-tab is-active" role="tab" aria-selected="true" data-conv-tab="recent" data-i18n="sidebar.recent_tasks">最近任务</button>
+        </div>
         <div class="sidebar-section sidebar-conversations-section">
-          <div class="sidebar-section-title" data-i18n="sidebar.conversations">Conversations</div>
           <div class="conversation-list" id="conversation-list">
             <div class="conv-empty" data-i18n="sidebar.conv_empty">No conversations yet</div>
           </div>
         </div>
       </div>
       <div class="sidebar-footer-actions">
+        <!-- Hub 账号常驻入口（方案 A）：account-chip.js 渲染。初始 hidden，
+             拿到 status DTO 后按登录状态显示；status 拿不到则保持隐藏。 -->
+        <div class="sidebar-footer-account" id="hub-account-chip-root" hidden></div>
         <button class="sidebar-footer-btn" id="settings-btn" data-i18n-title="sidebar.settings_title" title="Settings">
           <span data-ui-icon="settings" data-ui-icon-class="sidebar-footer-icon"></span>
           <span data-i18n="sidebar.settings">Settings</span>
@@ -275,6 +281,14 @@
                     <span class="chip-label"></span>
                     <span class="chip-close" data-i18n-title="chat.chip_remove_title" title="Remove">×</span>
                   </div>
+                  <!-- 9.1 统一框架 · 底部「继续/重试」：按当前会话状态决定动作——
+                       最后一条失败→重试该消息；被中断/有计划未完成→发送续跑提示。
+                       由 conversation.js 按会话状态显隐并切换文案。 -->
+                  <button type="button" class="chat-continue-btn" id="chat-continue-btn"
+                          data-i18n-title="chat.continue" title="Continue" hidden>
+                    <span data-ui-icon="play" data-ui-icon-class="chat-continue-icon"></span>
+                    <span data-role="continue-label" data-i18n="chat.continue">继续</span>
+                  </button>
                   <button id="chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
                     <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
                     <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
@@ -288,45 +302,19 @@
           </div>
           <aside class="conversation-info-panel" id="conversation-info-panel" hidden>
             <div class="conversation-info-header">
-              <div class="conversation-info-title" data-i18n="conversation_info.title">Conversation info</div>
+              <div class="conversation-info-heading-wrap">
+                <div class="conversation-info-title" data-i18n="conversation_info.title">运行上下文</div>
+                <div class="conversation-info-subtitle" data-i18n="conversation_info.subtitle">本次最小上下文 · 来源 · 权限 · 运行证明 · 协作参与者</div>
+              </div>
               <button type="button" class="conversation-info-icon-btn conversation-info-close" id="conversation-info-close"
                       data-i18n-title="common.close" data-i18n-aria-label="common.close"
                       title="Close" aria-label="Close">
                 <span data-ui-icon="x" data-ui-icon-class="conversation-info-icon-svg"></span>
               </button>
             </div>
-            <!-- Tabs: each carries an icon + label + count chip filled by
-                 ConversationInfo._renderBody() from the snapshot. Active tab
-                 chrome (underline + bold + soft-primary chip) handled in CSS
-                 via .is-active. -->
-            <div class="conversation-info-tabs" role="tablist">
-              <button type="button" class="conversation-info-tab is-active" data-info-tab="files">
-                <span data-ui-icon="folder" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_files">Files</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-files"></span>
-              </button>
-              <button type="button" class="conversation-info-tab" data-info-tab="attachments">
-                <span data-ui-icon="paperclip" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_attachments">Attachments</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-attachments"></span>
-              </button>
-              <button type="button" class="conversation-info-tab" data-info-tab="collaboration">
-                <span data-ui-icon="layout-dashboard" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_collaboration">Collaboration</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-collaboration"></span>
-              </button>
-              <button type="button" class="conversation-info-tab" data-info-tab="protocol">
-                <span data-ui-icon="route" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_protocol">Protocol</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-protocol"></span>
-              </button>
-              <!-- 9.1 会话区域统一框架 · 右侧「本次携带」：本次 Context、来源与
-                   边界、运行证明（复用现有 snapshot / protocolEvents，不新增 IPC）。 -->
-              <button type="button" class="conversation-info-tab" data-info-tab="carried">
-                <span data-ui-icon="list-ordered" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_carried">Carried</span>
-              </button>
-            </div>
+            <!-- 9.1 统一框架 · 右侧「运行上下文」：单列五段分节（本次 Context / 来源 /
+                 权限 / 运行证明 / 协作参与者），由 conversation-info.js 的
+                 _renderRunContext() 渲染，懒加载展开全文。 -->
             <div class="conversation-info-body" id="conversation-info-body"></div>
           </aside>
           <!-- Markdown viewer / editor drawer. Hosts the shared mountMdViewEdit
@@ -443,14 +431,28 @@
           <div class="skills-cognition-workspace">
           <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产导航">
             <div class="skills-cognition-tab-group">
-              <button type="button" id="skills-cognition-tab-overview" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-overview" data-cognition-page="overview"><span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span></button>
+              <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-inbox" data-cognition-page="inbox"><span data-ui-icon="clipboard-list"></span><span data-i18n="cognition.inbox">待我处理</span></button>
               <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.my_assets">我的资产</span></button>
               <button type="button" id="skills-cognition-tab-proofs" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-proofs" tabindex="-1" data-cognition-page="proofs"><span data-ui-icon="shield-check"></span><span data-i18n="cognition.proofs">使用与证明</span></button>
+              <button type="button" id="skills-cognition-tab-governance" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-governance" tabindex="-1" data-cognition-page="governance"><span data-ui-icon="list-ordered"></span><span data-i18n="cognition.governance">版本与治理</span></button>
             </div>
           </nav>
           <main class="skills-cognition-main">
-          <section class="skills-cognition-page" id="skills-cognition-overview" role="tabpanel" aria-labelledby="skills-cognition-tab-overview" data-cognition-page-body="overview">
-            <div id="skills-cognition-overview-body"></div>
+          <!-- 待我处理：只放"真的需要用户决定"的事项。加工进度（沉淀任务、
+               来源连接状态）不进这里——它们是后台进度，归右上角「沉淀活动」
+               「管理来源」。
+               落地规则只作用于"进入认知资产时默认停在哪个 tab"：没有待决策
+               项就默认落「我的资产」。用户主动点进本页时永远停在这里并显示
+               "当前无需处理"，不会被弹走——否则空状态永远见不到，用户也无从
+               确认"是真的没事，还是页面坏了"。 -->
+          <section class="skills-cognition-page" id="skills-cognition-inbox" role="tabpanel" aria-labelledby="skills-cognition-tab-inbox" data-cognition-page-body="inbox">
+            <div id="skills-cognition-inbox-body"></div>
+          </section>
+          <!-- 版本与治理：回答"我的资产发生过什么变化、我怎样保持控制"。
+               动作全部落在既有 IPC（recall.assets.versions / rollback / pause /
+               resume / revoke / archive / delete），这里不新增治理语义。 -->
+          <section class="skills-cognition-page" id="skills-cognition-governance" role="tabpanel" aria-labelledby="skills-cognition-tab-governance" data-cognition-page-body="governance" hidden>
+            <div id="skills-cognition-governance-body"></div>
           </section>
           <!-- 使用与证明：回答"这些资产究竟在哪里用过、真的起作用了吗"。
                数据全部来自既有事实链（usage / transfer proof / effectiveness proof
@@ -1134,6 +1136,7 @@
             </div>
 
             <!-- ───────────────────────── 配置 ───────────────────────── -->
+
             <div class="settings-tab-pane" data-settings-pane="credentials" hidden>
               <div class="settings-section-note" data-i18n="settings.section.models_note">API keys and OAuth tokens are stored locally only — never synced or sent off-device.</div>
 
@@ -1183,6 +1186,7 @@
                   </div>
                 </div>
               </div>
+
 
               <div class="settings-group settings-cli-fallback-group">
                 <div class="settings-group-head">
@@ -1404,19 +1408,14 @@
         </div>
       </div>
 
-      <!-- External panel: bind a local CLI as the runtime. CLI selector
-           appears first; name + description are pre-filled from the chosen
-           CLI's defaults but stay editable. claude / codex get a
-           project-directory setting on the detail page after creation. -->
+      <!-- External panel (P3394 way): a picked CLI joins through a managed
+           p3394-gateway — one protocol for ANY external agent (Hermes,
+           Claude Code, Codex, OpenClaw, WorkBuddy, user-built agents). -->
       <div class="skill-modal-panel" data-agent-panel="external">
         <div class="form-row">
           <label data-i18n="agent_modal.ext_cli_label">Agent</label>
           <div class="ai-select" id="agent-modal-ext-cli-select"></div>
-        </div>
-        <div class="form-row" id="agent-ext-provider-row" hidden>
-          <label data-i18n="agent_modal.ext_provider_label">Model provider</label>
-          <div class="ai-select" id="agent-modal-ext-provider-select"></div>
-          <div class="form-hint" data-i18n="agent_modal.ext_provider_hint">Optional. Leave empty to use the CLI's own configuration.</div>
+          <div class="form-hint" data-i18n="agent_modal.ext_p3394_hint">Connect over the P3394 protocol — CogSeed starts a local gateway and registers the agent as a collaboration node.</div>
         </div>
         <div class="form-row">
           <label data-i18n="agent_modal.ext_name">Name</label>
@@ -1808,6 +1807,9 @@
   <script src="./modules/validation-report-view.js"></script>
   <script src="./modules/oss.js"></script>
   <script src="./modules/settings_tabs.js"></script>
+  <!-- 左下角 Hub 账号常驻入口（方案 A）。常驻加载（不随 settings lazy feature），
+       仅消费 hub-account.* 既有 IPC 与 hub-account:login-result 推送，不新增通道。 -->
+  <script src="./modules/account-chip.js"></script>
 
   <!--
     MathJax v3.2.2 — TeX → CommonHTML.

@@ -12,6 +12,7 @@
  * `AUTH_INVALID_TOKEN`, `BINDING_ALREADY_EXISTS`) so callers can branch.
  */
 import { createLogger } from '../../logger';
+import { resolveBuildIdentity } from '../../util/build-identity';
 import type {
   HubAccountMe,
   HubBindResult,
@@ -25,16 +26,30 @@ import type {
 const log = createLogger('hub_account:client');
 
 export const DEFAULT_HUB_API_BASE = 'http://localhost:3000';
+// 内部测试包（packaged-dev）指向测试官网；正式 release 指向 HTTPS 官网
+// （证书上线前 release 包不应分发）。
+export const PACKAGED_DEV_HUB_API_BASE = 'http://cogseed-open.bonc.com.cn';
+export const RELEASE_HUB_API_BASE = 'https://cogseed-open.bonc.com.cn';
+
+/**
+ * 按环境变量与构建通道解析 Hub 服务地址。
+ * 优先级：COGSEED_HUB_API_BASE > ORKAS_HUB_API_BASE > 通道默认值。
+ * 纯函数，便于测试。
+ */
+export function resolveHubApiBase(envOverride: string | undefined, channel: string): string {
+  const env = envOverride?.trim();
+  if (env) return env;
+  if (channel === 'release') return RELEASE_HUB_API_BASE;
+  if (channel === 'packaged-dev') return PACKAGED_DEV_HUB_API_BASE;
+  return DEFAULT_HUB_API_BASE; // dev / unknown：本地联调默认 localhost
+}
 
 /** Resolve the Hub service base URL. `COGSEED_HUB_API_BASE` is preferred for
- * 联调，`ORKAS_HUB_API_BASE` is kept as the legacy override, and localhost is
- * the fallback for local development. */
+ * 联调，`ORKAS_HUB_API_BASE` is kept as the legacy override. */
 export function hubApiBase(): string {
-  return (
-    process.env.COGSEED_HUB_API_BASE?.trim() ||
-    process.env.ORKAS_HUB_API_BASE?.trim() ||
-    DEFAULT_HUB_API_BASE
-  );
+  const env = process.env.COGSEED_HUB_API_BASE || process.env.ORKAS_HUB_API_BASE;
+  const { channel } = resolveBuildIdentity();
+  return resolveHubApiBase(env, channel);
 }
 
 export class HubApiError extends Error {

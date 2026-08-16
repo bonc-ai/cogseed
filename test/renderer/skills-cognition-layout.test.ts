@@ -8,6 +8,20 @@ const recallCss = [
   fs.readFileSync(path.join(__dirname, '../../src/renderer/recall-local.css'), 'utf-8'),
 ].join('\n');
 
+/**
+ * 取出一个顶层函数的函数体文本。断言"某个面板出现在哪个视图里"必须限定到
+ * 单个函数——在整份 skills.js 上做 toContain 只能证明这段代码存在，证明不了
+ * 它挂在哪个页面上，而这里要守的恰恰是归属。
+ */
+function sliceFunction(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`function ${name} not found`);
+  // 到下一个顶层 `function` 声明为止。不数花括号：skills.js 全是嵌套模板字符串，
+  // 括号计数会被 `${...}` 和 '{count}' 这类字面量带偏。
+  const next = source.indexOf('\nfunction ', start + 1);
+  return source.slice(start, next < 0 ? source.length : next);
+}
+
 function cssBraceDepthAt(source: string, offset: number): number {
   let depth = 0;
   let quote = '';
@@ -40,12 +54,29 @@ function cssBraceDepthAt(source: string, offset: number): number {
 }
 
 describe('Recall cognition workspace layout', () => {
+  /**
+   * 四个任务视图回答的是"用户来这里要做什么"：需要我决定什么 / 我拥有什么 /
+   * 是否真的有用 / 我怎样控制。它们与"四类资产"（关于我、规则与偏好、模板与
+   * 范例、技能与方法）不是一回事——四类资产全部在「我的资产」里面。
+   *
+   * `overview` 不再是任务视图：总览不是用户要完成的事，深链由
+   * switchSkillsCognitionPage 归一化到 inbox，页面上不再有它的 tab / pane。
+   */
   it('keeps Recall navigation focused on four user workflows', () => {
-    for (const page of ['overview', 'captures', 'assets', 'sources']) {
+    for (const page of ['inbox', 'assets', 'proofs', 'governance']) {
       expect(html).toContain(`data-cognition-page="${page}"`);
       expect(html).toContain(`data-cognition-page-body="${page}"`);
     }
-    for (const excluded of ['candidates', 'receipts', 'brain', 'context', 'ontology', 'kstar', 'evolution', 'capability']) {
+    // 来源与沉淀活动降为页头辅助入口：仍有 pane，但不占任务视图的位置。
+    for (const aux of ['sources', 'captures']) {
+      expect(html).toContain(`data-cognition-page="${aux}"`);
+      expect(html).toContain(`data-cognition-page-body="${aux}"`);
+    }
+    const tabNav = html.slice(html.indexOf('id="skills-cognition-tabs"'), html.indexOf('</nav>', html.indexOf('id="skills-cognition-tabs"')));
+    for (const aux of ['sources', 'captures']) {
+      expect(tabNav).not.toContain(`data-cognition-page="${aux}"`);
+    }
+    for (const excluded of ['overview', 'candidates', 'receipts', 'brain', 'context', 'ontology', 'kstar', 'evolution', 'capability']) {
       expect(html).not.toContain(`data-cognition-page="${excluded}"`);
       expect(html).not.toContain(`data-cognition-page-body="${excluded}"`);
     }
@@ -240,7 +271,12 @@ describe('Recall cognition workspace layout', () => {
     expect(skills).not.toContain('data-personal-ontology-manage');
   });
 
-  it('shows source health and conversation capture next actions in the existing overview', () => {
+  /**
+   * 进度归进度，决策归决策。这条守的是拆分本身：沉淀进度与来源健康度不能
+   * 回流到「待我处理」——一旦回流，"需要我决定"的红点就会被后台噪音顶满，
+   * 用户很快就不再点它。
+   */
+  it('keeps processing status out of the decision inbox', () => {
     const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
     const bindings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8');
     const css = recallCss;
@@ -255,15 +291,50 @@ describe('Recall cognition workspace layout', () => {
     expect(bindings).toContain("window.cogseed.invoke('recall.captures.retry'");
     expect(bindings).toContain("window.activateSettingsTab('credentials')");
     expect(css).toContain('.skills-cognition-source-state.is-degraded');
-    expect(skills).toContain('skills-cognition-overview');
-    expect(skills).toContain('recall-overview-metrics');
-    expect(skills).toContain('recall-overview-metric');
-    expect(skills).toContain('recall-overview-attention');
-    expect(skills).toContain('recall-overview-activity');
-    expect(skills).toContain('data-cognition-open-asset');
-    expect(skills).toContain('recall-overview-operation-grid');
-    expect(skills).not.toContain('skills-cognition-stat-grid');
     expect(css).toContain('.recall-overview-pipeline');
+    expect(skills).not.toContain('skills-cognition-stat-grid');
+
+    expect(skills).toContain('recall-overview-attention');
+    const inbox = sliceFunction(skills, 'renderSkillsCognitionInbox');
+    expect(inbox).toContain('_renderCognitionOverviewAttention()');
+    expect(inbox).toContain('cognition.inbox_empty');
+    // 进度面板不在待我处理里。
+    expect(inbox).not.toContain('_renderCognitionPipelineStatus');
+    expect(inbox).not.toContain('_renderCognitionSourceStatus');
+    expect(inbox).not.toContain('_renderCognitionCaptureStatus');
+    expect(inbox).not.toContain('_renderCognitionRecentActivity');
+
+    // 进度面板落在沉淀活动；来源健康度落在管理来源；最近变化落在我的资产。
+    const captures = sliceFunction(skills, 'renderSkillsCognitionCaptures');
+    expect(captures).toContain('_renderCognitionPipelineStatus()');
+    expect(captures).toContain('_renderCognitionCaptureStatus()');
+    expect(captures).toContain('includeProcessing: true');
+    expect(sliceFunction(skills, 'renderSkillsCognitionSources')).toContain('_renderCognitionSourceStatus()');
+    expect(sliceFunction(skills, 'renderSkillsCognitionAssets')).toContain('_renderCognitionRecentActivity()');
+    expect(skills).toContain('data-cognition-open-asset');
+  });
+
+  /**
+   * 落地规则只准作用一次、且只在初始化里：用户主动点「待我处理」时不得被
+   * 弹到别处，否则空状态永远见不到，用户也无从区分"真的没事"和"页面坏了"。
+   */
+  it('only redirects away from an empty inbox on first landing, never on an explicit tab click', () => {
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
+    const init = sliceFunction(skills, 'initSkillsCognitionConsole');
+    expect(init).toContain('_cognitionInboxIsEmpty()');
+    expect(init).toContain("switchSkillsCognitionPage('assets')");
+    expect(sliceFunction(skills, 'switchSkillsCognitionPage')).not.toContain('_cognitionInboxIsEmpty');
+  });
+
+  it('routes the retired overview and about-me deep links into the new views', () => {
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
+    const aliases = sliceFunction(skills, 'switchSkillsCognitionPage');
+    expect(aliases).toContain("overview: 'inbox'");
+    for (const legacy of ['brain', 'context', 'ontology']) {
+      expect(aliases).toContain(`${legacy}: 'assets'`);
+    }
+    expect(skills).not.toContain('function renderSkillsCognitionOverview');
+    expect(skills).not.toContain("getElementById('skills-cognition-overview-body')");
   });
 
   it('does not load internal Brain, Context Pack, or Ontology data for the four-page snapshot', () => {

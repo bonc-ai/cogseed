@@ -111,7 +111,7 @@ function _initSkillsCognitionBindings() {
     console_.addEventListener('click', (event) => {
       const button = event.target.closest('[data-cognition-page]');
       if (!button || !console_.contains(button)) return;
-      switchSkillsCognitionPage(button.dataset.cognitionPage || 'overview');
+      switchSkillsCognitionPage(button.dataset.cognitionPage || 'inbox');
     });
   });
   cognitionTabs?.addEventListener('keydown', (event) => {
@@ -126,7 +126,7 @@ function _initSkillsCognitionBindings() {
         : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
     event.preventDefault();
     tabs[nextIndex].focus();
-    switchSkillsCognitionPage(tabs[nextIndex].dataset.cognitionPage || 'overview');
+    switchSkillsCognitionPage(tabs[nextIndex].dataset.cognitionPage || 'inbox');
   });
 
   const runSourceAction = async (control, actionName, kind, sourceId) => {
@@ -309,7 +309,7 @@ function _initSkillsCognitionBindings() {
 
     const pageLink = event.target.closest('[data-cognition-page-link]');
     if (pageLink) {
-      switchSkillsCognitionPage(pageLink.dataset.cognitionPageLink || 'overview');
+      switchSkillsCognitionPage(pageLink.dataset.cognitionPageLink || 'inbox');
       return;
     }
 
@@ -879,11 +879,12 @@ function _initSkillsCognitionBindings() {
   });
 
   window.addEventListener('i18n-change', () => {
-    renderSkillsCognitionOverview();
+    renderSkillsCognitionInbox();
     renderSkillsCognitionSources();
     renderSkillsCognitionCaptures();
     renderSkillsCognitionCandidates();
     renderSkillsCognitionAssets();
+    renderSkillsCognitionGovernance();
     if (_skillsCognitionState.assetCategoryFilter === 'personal'
       && typeof window.renderPersonalOntology === 'function') {
       window.renderPersonalOntology();

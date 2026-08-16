@@ -83,6 +83,7 @@ import {
 } from '../../paths';
 import { chatAttachmentDirForConversation } from '../../util/project-layout';
 import * as chatArtifacts from '../../features/chat_artifacts';
+import { warmConversationSpace } from '../../features/chat_attachments';
 import { finalizeProducedArtifact, producedDocumentFooterText } from '../../features/produced_output_hooks';
 import { readDisabledSets } from '../../features/component_enabled';
 import {
@@ -3243,6 +3244,8 @@ function createCreateArtifactTool(opts: LocalToolsOpts): AgentTool {
       if (!uid || !cid) {
         return { content: errText('E_NO_CONVERSATION', 'create_artifact is only available inside a conversation.'), isError: true };
       }
+      // 空间化落盘：预热会话空间缓存，网页产物进入空间目录
+      await warmConversationSpace(uid, cid);
       const r = chatArtifacts.createArtifact(uid, cid, opts.agentId || '', {
         title: (input as { title?: unknown }).title,
         files: (input as { files?: unknown }).files,

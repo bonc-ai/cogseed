@@ -45,6 +45,8 @@ import {
 } from '../util/project-layout';
 import { createLogger } from '../logger';
 import { isPathAllowed } from '../util/path-sandbox';
+// 空间化落盘：复用 chat_attachments 的会话→空间归属缓存（warm 由 IPC/调用方触发）
+import { cachedConversationSpace, warmConversationSpace } from './chat_attachments';
 
 const log = createLogger('chat_artifacts');
 
@@ -339,7 +341,7 @@ export function createArtifact(
   let finalDir = '';
   for (let attempt = 0; attempt < 5; attempt++) {
     const candidate = crypto.randomBytes(9).toString('base64url'); // 12 url-safe chars
-    const dir = artifactDirForConversation(userId, safeConvId, candidate);
+    const dir = artifactDirForConversation(userId, safeConvId, candidate, null, cachedConversationSpace(userId, safeConvId));
     if (!fs.existsSync(dir)) { artifactId = candidate; finalDir = dir; break; }
   }
   if (!artifactId) return { ok: false, error: 'could not allocate an artifact id' };
@@ -410,7 +412,7 @@ export function resolveArtifactDir(
   let safeId: string;
   try { safeConvId = safeCid(cid); safeId = safeArtifactId(artifactId); }
   catch (err) { return { ok: false, code: 'bad_input', error: (err as Error).message }; }
-  const dir = artifactDirForConversation(userId, safeConvId, safeId);
+  const dir = artifactDirForConversation(userId, safeConvId, safeId, null, cachedConversationSpace(userId, safeConvId));
   let st: fs.Stats;
   try {
     const lst = fs.lstatSync(dir);
@@ -419,7 +421,7 @@ export function resolveArtifactDir(
   }
   catch { return { ok: false, code: 'not_found', error: 'artifact not found' }; }
   if (!st.isDirectory()) return { ok: false, code: 'not_found', error: 'artifact not found' };
-  if (!isPathAllowed(dir, [chatArtifactCidDirForConversation(userId, safeConvId)])) {
+  if (!isPathAllowed(dir, [chatArtifactCidDirForConversation(userId, safeConvId, null, cachedConversationSpace(userId, safeConvId))])) {
     return { ok: false, code: 'not_found', error: 'artifact not found' };
   }
   return { ok: true, dirPath: dir };
@@ -433,7 +435,7 @@ export function readArtifactMeta(userId: string, cid: string, artifactId: string
   try { safeConvId = safeCid(cid); safeId = safeArtifactId(artifactId); }
   catch { return undefined; }
   try {
-    const raw = fs.readFileSync(path.join(artifactDirForConversation(userId, safeConvId, safeId), META_FILENAME), 'utf8');
+    const raw = fs.readFileSync(path.join(artifactDirForConversation(userId, safeConvId, safeId, null, cachedConversationSpace(userId, safeConvId)), META_FILENAME), 'utf8');
     const obj = JSON.parse(raw) as Partial<ArtifactMeta>;
     if (obj && typeof obj === 'object') {
       return {
@@ -484,7 +486,7 @@ export function resolveArtifactFilePath(
     return { ok: false, code: 'forbidden', error: `extension not served: ${ext || '(none)'}` };
   }
 
-  const root = path.resolve(artifactDirForConversation(userId, safeConvId, safeId));
+  const root = path.resolve(artifactDirForConversation(userId, safeConvId, safeId, null, cachedConversationSpace(userId, safeConvId)));
   const abs = path.resolve(root, rel);
   const relCheck = path.relative(root, abs);
   if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
@@ -515,23 +517,30 @@ export async function purgeByCid(userId: string, cid: string): Promise<number> {
   let safeConvId: string;
   try { safeConvId = safeCid(cid); }
   catch { return 0; }
-  const dir = chatArtifactCidDirForConversation(userId, safeConvId);
+  await warmConversationSpace(userId, safeConvId);
+  // 双目录清理：空间目录（迁移后落点）+ 全局目录（迁移前/未迁移兜底）
+  const dirs = new Set<string>([
+    chatArtifactCidDirForConversation(userId, safeConvId, null, cachedConversationSpace(userId, safeConvId) || null),
+    chatArtifactCidDirForConversation(userId, safeConvId), // 全局根
+  ]);
   let count = 0;
   const deleted: Array<{ artifactId: string; rel: string }> = [];
-  try {
-    if (fs.existsSync(dir)) {
-      try {
-        const artifactIds = fs.readdirSync(dir).filter((n) => !n.startsWith('.'));
-        count = artifactIds.length;
-        for (const artifactId of artifactIds) {
-          const artifactRoot = path.join(dir, artifactId);
-          for (const rel of listArtifactFilesRel(artifactRoot)) deleted.push({ artifactId, rel });
+  for (const dir of dirs) {
+    try {
+      if (fs.existsSync(dir)) {
+        try {
+          const artifactIds = fs.readdirSync(dir).filter((n) => !n.startsWith('.'));
+          count += artifactIds.length;
+          for (const artifactId of artifactIds) {
+            const artifactRoot = path.join(dir, artifactId);
+            for (const rel of listArtifactFilesRel(artifactRoot)) deleted.push({ artifactId, rel });
+          }
         }
+        catch { /* ignore */ }
+        fs.rmSync(dir, { recursive: true, force: true });
       }
-      catch { /* ignore */ }
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  } catch (err) { log.warn(`purgeByCid(${cid}): ${(err as Error).message}`); }
+    } catch (err) { log.warn(`purgeByCid(${cid}): ${(err as Error).message}`); }
+  }
   for (const item of deleted) notifyArtifactDeleted(userId, safeConvId, item.artifactId, item.rel);
   return count;
 }

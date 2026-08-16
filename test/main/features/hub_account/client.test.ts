@@ -21,13 +21,13 @@ describe('hub account client', () => {
   }
 
   it('login builds the provider query and returns authorize_url + state', async () => {
-    mockFetchOnce(200, { ok: true, data: { authorize_url: 'https://github.com/...', state: 's1' } });
+    mockFetchOnce(200, { ok: true, data: { authorize_url: 'https://cogseed-open.bonc.com.cn/login', state: 's1' } });
     const client = createHubClient(BASE);
-    const res = await client.login('github', 'cogseed://account/callback');
+    const res = await client.login('web', 'cogseed://account/callback');
     expect(res.state).toBe('s1');
     const [url, init] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/api/v1/auth/login?');
-    expect(url).toContain('provider=github');
+    expect(url).toContain('provider=web');
     expect(url).toContain(encodeURIComponent('cogseed://account/callback'));
     expect(init.method).toBe('GET');
   });
@@ -37,7 +37,7 @@ describe('hub account client', () => {
       ok: true,
       data: {
         is_new_account: true,
-        account: { account_id: 'cogseed_acc_1', auth_provider: 'github', status: 'active', created_at: 't' },
+        account: { account_id: 'cogseed_acc_1', auth_provider: 'web', status: 'active', created_at: 't' },
         session: { session_id: 's', access_token: 'at', refresh_token: 'rt', access_expires_at: 'a', refresh_expires_at: 'r' },
       },
     });

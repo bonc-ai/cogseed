@@ -1341,6 +1341,51 @@ export async function renameProfile(
   return { profileId: newId };
 }
 
+// Full API key is returned only on explicit reveal. Every other path keeps
+// renderer-facing payloads masked (`profileMasked` / `apiKeyMasked`).
+export async function revealApiKey(profileId: string): Promise<{ apiKey: string }> {
+  const id = String(profileId || '').trim();
+  if (!id) throw new Error('profileId required');
+  const store = loadProfiles();
+  if (isCustomProviderId(id)) {
+    const custom = customProviderForId(store, id);
+    return { apiKey: custom?.apiKey || '' };
+  }
+  const prof = store.profiles[id];
+  if (!prof || prof.type !== 'api_key') return { apiKey: '' };
+  return { apiKey: prof.key || '' };
+}
+
+export async function updateApiKey(
+  profileId: string,
+  apiKey: string,
+): Promise<{ profileId: string }> {
+  const id = String(profileId || '').trim();
+  const key = String(apiKey || '').trim();
+  if (!id) throw new Error('profileId required');
+  if (!key) throw new Error('api key required');
+  const store = loadProfiles();
+  if (isCustomProviderId(id)) {
+    const custom = customProviderForId(store, id);
+    if (!custom) throw new Error('custom provider not found');
+    custom.apiKey = key;
+    custom.updatedAt = Date.now();
+    saveProfiles(store);
+    invalidateCoreAgentRunner();
+    return { profileId: id };
+  }
+  const prof = store.profiles[id];
+  if (!prof) throw new Error('profile not found');
+  if (prof.type !== 'api_key') throw new Error('profile is not an api key profile');
+  store.profiles[id] = { ...prof, key };
+  saveProfiles(store);
+  // User updated the key — mirror addApiKey: drop any failure cooldown so the
+  // next request actually tries this profile again.
+  clearCooldown(id);
+  invalidateCoreAgentRunner();
+  return { profileId: id };
+}
+
 // ── Entries (priority list) ──────────────────────────────────────────────
 
 export interface EntryView {

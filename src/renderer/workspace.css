@@ -195,7 +195,7 @@
 .ws-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 38px; margin-bottom: 12px; color: #758179; font-size: 11px; }
 .ws-session-list { overflow: hidden; border: 1px solid var(--ws-line); border-radius: 12px; background: #fff; }
 .ws-session-row {
-  display: grid; grid-template-columns: 32px minmax(0,1fr) 130px 82px 24px; align-items: center; gap: 9px;
+  display: grid; grid-template-columns: 32px minmax(0,1fr) 82px 24px; align-items: center; gap: 9px;
   width: 100%; min-height: 72px; padding: 11px 15px; border-bottom: 1px solid #e8eeea; background: #fff;
 }
 .ws-session-row:last-child { border-bottom: 0; }
@@ -280,13 +280,15 @@
 .ws-config-hint { color: #9aa49d; font-size: 10px; }
 .ws-config-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ws-config-value { color: #56635b; font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-ability-edit { margin-top: 8px; }
+.ws-ability-edit { margin-left: auto; }
 .ws-agent-row { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 0 9px; border: 1px solid var(--ws-line); border-radius: 8px; background: #fff; }
 .ws-agent-row > span { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 7px; color: #fff; background: #1f9d62; font-size: 9px; font-weight: 700; }
 .ws-agent-row strong { display: block; font-size: 11px; color: #465249; }
 .ws-agent-row small { display: block; margin-top: 1px; color: #969aa4; font-size: 9px; }
+.ws-agent-row .ws-ability-edit { margin-left: auto; }
 .ws-config-ability { display: flex; flex-direction: column; gap: 8px; }
-.ws-config-ability-card { display: grid; grid-template-columns: 30px minmax(0,1fr); gap: 9px; padding: 10px; border: 1px solid #e0e7e3; border-radius: 10px; background: #fff; }
+.ws-config-ability-card { display: grid; grid-template-columns: 30px minmax(0,1fr) auto; gap: 9px; padding: 10px; border: 1px solid #e0e7e3; border-radius: 10px; background: #fff; }
+.ws-config-ability-card .ws-ability-edit { align-self: center; margin-left: 0; }
 .ws-config-ability-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #208b58; background: #e9f7f0; }
 .ws-config-ability-icon .ui-icon { width: 15px; height: 15px; }
 .ws-config-ability-card.task .ws-config-ability-icon { color: #477394; background: #eaf2f7; }
@@ -375,14 +377,6 @@
 
 /* 任务 tab：不再内联开新任务输入条——右上角「新建任务」跳标准会话对话框，
    新任务引用/附件都在标准 composer 里完成（与主对话一致）。 */
-
-/* 任务行：引用按钮 + 徽标 */
-.ws-row-ref-btn {
-  display: inline-flex; align-items: center; justify-content: center; min-width: 46px; height: 24px;
-  border: 1px solid var(--ws-line-strong); border-radius: 7px; color: #178451; background: #fff; font-size: 10px; cursor: pointer;
-}
-.ws-row-ref-btn:hover { border-color: #9fc8b1; background: #f8fcfa; }
-.ws-row-ref-badge { color: #1f9d62; font-size: 10px; white-space: nowrap; }
 
 /* 引用选择器浮层 */
 .ws-ref-scrim {

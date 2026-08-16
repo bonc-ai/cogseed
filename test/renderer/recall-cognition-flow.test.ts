@@ -548,7 +548,10 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('data-recall-open-asset="asset-b"');
     expect(host.innerHTML).toContain('data-recall-capture-action="view-assets"');
     expect(host.innerHTML).not.toContain('data-recall-capture-action="cancel"');
-    expect(host.innerHTML).not.toContain('下一步：');
+    // 「下一步」只针对任务行本身：已完成的任务不该再催下一步。页面顶部的沉淀
+    // 进度条讲的是整条链路，不在这条断言的范围内。
+    const taskWorkbench = host.innerHTML.slice(host.innerHTML.indexOf('recall-capture-task-workbench'));
+    expect(taskWorkbench).not.toContain('下一步：');
     expect(host.innerHTML).not.toContain('已自动入库');
     expect(Array.from(context._captureStatusesForFilter('completed'))).toEqual(['completed']);
     expect(Array.from(context._captureLinkedAssetIds({ linkedAssetIds: ['asset-legacy'] }))).toEqual(['asset-legacy']);
@@ -1015,7 +1018,7 @@ describe('Recall cognition renderer flow', () => {
 
   it('renders a four-stage Recall pipeline and hides empty optional panels', async () => {
     const context = loadSkillsRenderer();
-    const overview = { innerHTML: '' };
+    const inbox = { innerHTML: '' };
     const calls: Array<[string, unknown]> = [];
     const canonicalSources = [
       'conversation',
@@ -1071,9 +1074,17 @@ describe('Recall cognition renderer flow', () => {
         }],
       },
     };
-    context.document = {
-      getElementById: (id: string) => id === 'skills-cognition-overview-body' ? overview : null,
+    // 一次快照，三个落点：加工进度进「沉淀活动」，来源健康度进「管理来源」，
+    // 需要用户决定的进「待我处理」。用同一份数据同时渲染，才能证明拆分之后
+    // 每条事实都还有归宿，没有在搬家途中掉地上。
+    const captures = { innerHTML: '' };
+    const sources = { innerHTML: '' };
+    const hosts: Record<string, { innerHTML: string }> = {
+      'skills-cognition-inbox-body': inbox,
+      'skills-cognition-captures-body': captures,
+      'skills-cognition-sources-body': sources,
     };
+    context.document = { getElementById: (id: string) => hosts[id] || null };
     context.window.cogseed = {
       invoke: async (channel: string, input: unknown) => {
         calls.push([channel, input]);
@@ -1082,6 +1093,8 @@ describe('Recall cognition renderer flow', () => {
     };
 
     await context.loadSkillsCognitionSnapshot();
+    context.renderSkillsCognitionCaptures();
+    context.renderSkillsCognitionSources();
 
     expect(calls.map(([channel]) => channel)).toEqual(expect.arrayContaining([
       'recall.sources.list',
@@ -1094,27 +1107,37 @@ describe('Recall cognition renderer flow', () => {
       'cognition.candidates.list', 'cognition.receipts.list',
     ]));
     for (const label of ['会话', 'Artifact 与文件', '执行与评价', '用户教学信号']) {
-      expect(overview.innerHTML).toContain(label);
+      expect(sources.innerHTML).toContain(label);
     }
-    expect(overview.innerHTML).not.toContain('授权外部系统');
-    expect(overview.innerHTML).toContain('已整理会话');
-    expect(overview.innerHTML).toContain('<b>数据来源</b><em>4</em>');
-    expect(overview.innerHTML).not.toContain('<b>数据来源</b><em>7</em>');
-    expect(overview.innerHTML).toContain('待审核');
-    expect(overview.innerHTML).toContain('<b>能力资产</b><em>1</em>');
-    expect(overview.innerHTML).toContain('以后保持决策可追溯');
-    expect(overview.innerHTML).toContain('已恢复处理');
-    expect(overview.innerHTML).toContain('data-recall-teaching-revoke="teach-a"');
-    expect(overview.innerHTML).toContain('data-recall-capture-action="view-candidates"');
-    expect(overview.innerHTML).not.toContain('skills-cognition-stat-grid');
+    expect(sources.innerHTML).not.toContain('授权外部系统');
+    expect(captures.innerHTML).toContain('已整理会话');
+    expect(captures.innerHTML).toContain('<b>数据来源</b><em>4</em>');
+    expect(captures.innerHTML).not.toContain('<b>数据来源</b><em>7</em>');
+    expect(captures.innerHTML).toContain('待审核');
+    expect(captures.innerHTML).toContain('<b>能力资产</b><em>1</em>');
+    expect(captures.innerHTML).toContain('已恢复处理');
+    expect(captures.innerHTML).toContain('data-recall-capture-action="view-candidates"');
+    expect(inbox.innerHTML).toContain('以后保持决策可追溯');
+    expect(inbox.innerHTML).toContain('data-recall-teaching-revoke="teach-a"');
+    expect(inbox.innerHTML).not.toContain('skills-cognition-stat-grid');
   });
 
-  it('summarizes actionable Recall metrics, issues, and recent activity', () => {
+  /**
+   * 同一份"不健康"的状态，按新 IA 应该分别落在三处：需要用户决定的（模型没
+   * 配、来源失效、Skill 创建建议）在「待我处理」；纯加工进度（失败任务、进行
+   * 中数量）在「沉淀活动」；最近变化在「我的资产」。
+   */
+  it('routes issues, processing progress and recent activity to their own views', () => {
     const context = loadSkillsRenderer();
-    const overview = { innerHTML: '' };
-    context.document = {
-      getElementById: (id: string) => id === 'skills-cognition-overview-body' ? overview : null,
+    const inbox = { innerHTML: '' };
+    const captures = { innerHTML: '' };
+    const assets = { innerHTML: '' };
+    const hosts: Record<string, { innerHTML: string }> = {
+      'skills-cognition-inbox-body': inbox,
+      'skills-cognition-captures-body': captures,
+      'skills-cognition-assets-body': assets,
     };
+    context.document = { getElementById: (id: string) => hosts[id] || null };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
       sources: [{
         kind: 'conversation', status: 'ready', items: [
@@ -1141,29 +1164,68 @@ describe('Recall cognition renderer flow', () => {
       }],
     })})`, context);
 
-    context.renderSkillsCognitionOverview();
+    context.renderSkillsCognitionInbox();
+    context.renderSkillsCognitionCaptures();
+    context.renderSkillsCognitionAssets();
 
-    expect(overview.innerHTML).toContain('class="recall-overview-metrics"');
-    expect(overview.innerHTML).toContain('数据来源</span><strong>2</strong>');
-    expect(overview.innerHTML).toContain('进行中任务</span><strong>3</strong>');
-    expect(overview.innerHTML).toContain('待审核</span><strong>2</strong>');
-    expect(overview.innerHTML).toContain('能力资产</span><strong>2</strong>');
-    expect(overview.innerHTML).toContain('可生成 Skill</span><strong>1</strong>');
-    expect(overview.innerHTML).toContain('沉淀模型尚未配置');
-    expect(overview.innerHTML).toContain('2 个沉淀任务需要重试');
-    expect(overview.innerHTML).toContain('1 个数据来源需要处理');
-    expect(overview.innerHTML).toContain('data-recall-capture-settings');
-    expect(overview.innerHTML).toContain('data-cognition-page-link="sources"');
-    expect(overview.innerHTML).toContain('data-cognition-open-asset="asset-method"');
-    expect(overview.innerHTML).toContain('活跃会话');
-    expect(overview.innerHTML).toContain('需求评审方法');
+    // 需要决定的
+    expect(inbox.innerHTML).toContain('沉淀模型尚未配置');
+    expect(inbox.innerHTML).toContain('1 个数据来源需要处理');
+    expect(inbox.innerHTML).toContain('data-recall-capture-settings');
+    expect(inbox.innerHTML).toContain('data-cognition-page-link="sources"');
+    // 失败任务是加工进度，不进待我处理
+    expect(inbox.innerHTML).not.toContain('2 个沉淀任务需要重试');
+    expect(captures.innerHTML).toContain('2 个沉淀任务需要重试');
+    // 最近变化在我的资产
+    expect(assets.innerHTML).toContain('需求评审方法');
+    expect(assets.innerHTML).toContain('data-cognition-open-asset="asset-rule"');
+  });
+
+  /**
+   * 待办来自服务端读模型（cognition.inbox.list），渲染层只负责分组与措辞。
+   * 这条同时守住两件事：分级由服务端给（需确认的排在前面），以及渲染层不
+   * 再自己从 assets 里推算"有哪些 Skill 可以生成"——那套推算一旦和 gate
+   * 分叉，用户看到的待办就和系统真正拦下的事对不上了。
+   */
+  it('renders the inbox from the server read model, confirm items first', () => {
+    const context = loadSkillsRenderer();
+    const inbox = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-inbox-body' ? inbox : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      sources: [], recallCandidates: [], teachingSignals: [], assets: [],
+      captureCounts: { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 },
+      captureModel: { configured: true, authorizationRequired: false },
+      inboxItems: [
+        {
+          id: 'skill:asset-method', kind: 'skill_creation_suggested', urgency: 'confirm',
+          title: '需求评审方法', assetType: 'skill_method', assetId: 'asset-method',
+        },
+        {
+          id: 'rule-boundary:asset-rule', kind: 'rule_boundary_missing', urgency: 'low_disturbance',
+          title: '保持决策可追溯', assetType: 'rule', assetId: 'asset-rule',
+        },
+      ],
+    })})`, context);
+
+    context.renderSkillsCognitionInbox();
+
+    expect(inbox.innerHTML).toContain('Skill 创建建议');
+    expect(inbox.innerHTML).toContain('data-cognition-open-asset="asset-method"');
+    expect(inbox.innerHTML).toContain('规则缺少作用边界');
+    expect(inbox.innerHTML).toContain('data-cognition-open-asset="asset-rule"');
+    expect(inbox.innerHTML).not.toContain('当前无需处理');
+    // 需确认的分组排在低打扰分组前面。
+    expect(inbox.innerHTML.indexOf('cognition-inbox-confirm'))
+      .toBeLessThan(inbox.innerHTML.indexOf('cognition-inbox-later'));
   });
 
   it('keeps the overview attention area hidden when Recall is healthy', () => {
     const context = loadSkillsRenderer();
-    const overview = { innerHTML: '' };
+    const inbox = { innerHTML: '' };
     context.document = {
-      getElementById: (id: string) => id === 'skills-cognition-overview-body' ? overview : null,
+      getElementById: (id: string) => id === 'skills-cognition-inbox-body' ? inbox : null,
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
       sources: [{
@@ -1180,17 +1242,19 @@ describe('Recall cognition renderer flow', () => {
       assets: [],
     })})`, context);
 
-    context.renderSkillsCognitionOverview();
+    context.renderSkillsCognitionInbox();
 
-    expect(overview.innerHTML).not.toContain('class="recall-overview-attention"');
-    expect(overview.innerHTML).toContain('class="recall-overview-activity-row"');
+    expect(inbox.innerHTML).not.toContain('class="recall-overview-attention"');
+    // 一切健康、也没有待确认候选时，待我处理必须明确说"当前无需处理"，
+    // 而不是渲染成一片空白——空白无法区分"没事"和"没渲染出来"。
+    expect(inbox.innerHTML).toContain('当前无需处理');
   });
 
   it('distinguishes a failed snapshot read from an empty source state and offers reload', async () => {
     const context = loadSkillsRenderer();
-    const overview = { innerHTML: '' };
+    const inbox = { innerHTML: '' };
     context.document = {
-      getElementById: (id: string) => id === 'skills-cognition-overview-body' ? overview : null,
+      getElementById: (id: string) => id === 'skills-cognition-inbox-body' ? inbox : null,
     };
     context.window.cogseed = {
       invoke: async (channel: string) => {
@@ -1201,15 +1265,15 @@ describe('Recall cognition renderer flow', () => {
 
     await context.loadSkillsCognitionSnapshot();
 
-    expect(overview.innerHTML).toContain('认知资产数据加载失败');
-    expect(overview.innerHTML).toContain('data-cognition-reload');
+    expect(inbox.innerHTML).toContain('认知资产数据加载失败');
+    expect(inbox.innerHTML).toContain('data-cognition-reload');
   });
 
   it('keeps the last successful Recall data when a refresh partially fails', async () => {
     const context = loadSkillsRenderer();
-    const overview = { innerHTML: '' };
+    const inbox = { innerHTML: '' };
     context.document = {
-      getElementById: (id: string) => id === 'skills-cognition-overview-body' ? overview : null,
+      getElementById: (id: string) => id === 'skills-cognition-inbox-body' ? inbox : null,
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
       assets: [{ id: 'asset-known', title: 'Known asset', type: 'rule' }],
@@ -1246,7 +1310,7 @@ describe('Recall cognition renderer flow', () => {
     expect(state.recentCaptures[0].id).toBe('recent-known');
     expect(state.candidates[0].id).toBe('candidate-known');
     expect(state.loadErrors).toEqual(expect.arrayContaining(['assets', 'sources', 'captures', 'recentCaptures', 'recallCandidates']));
-    expect(overview.innerHTML).toContain('认知资产数据加载失败');
+    expect(inbox.innerHTML).toContain('认知资产数据加载失败');
   });
 
   it('ignores an older capture-filter response after a newer filter finishes', async () => {
@@ -1365,7 +1429,8 @@ describe('Recall cognition renderer flow', () => {
       _skillsCognitionState: { captures: [] },
       loadRecallCaptureTasks: async () => { refreshes += 1; },
       initSkillsCognitionConsole() {},
-      renderSkillsCognitionOverview() {},
+      renderSkillsCognitionInbox() {},
+      renderSkillsCognitionGovernance() {},
       renderSkillsCognitionCaptures() {},
       renderSkillsCognitionCandidates() {},
       renderSkillsCognitionAssets() {},

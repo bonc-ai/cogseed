@@ -24,6 +24,7 @@ const _OSS_CAT_ICON = {
   browser: 'globe',
   office: 'file-text',
   slides: 'presentation',
+  interop: 'users',
 };
 function ossIconFor(cat) { return _OSS_CAT_ICON[cat] || 'sparkles'; }
 
@@ -271,6 +272,8 @@ function ossRepoInstallKey(repoOrUrl) {
 // Office engine, so point the model at built-in Office tools instead of install.
 function ossPromptFor(p) {
   const isOfficeCli = p && (p.id === 'OfficeCLI' || p.name === 'OfficeCLI');
+  const isP3394 = p && p.id === 'P3394';
+  if (isP3394) return (typeof t === 'function') ? t('oss.p3394_prompt') : '';
   const tmpl = (typeof t === 'function') ? t(isOfficeCli ? 'oss.office_prompt' : 'oss.prompt') : '';
   return tmpl
     .replace(/\{id\}/g, (p && p.id) || '')
@@ -397,15 +400,26 @@ async function initOssEntry(opts = {}) {
 
   // ① receives the curated home subset from the Server. The Server config
   // controls how many rows are returned; the client renders whatever it gets.
-  const projects = data.projects || [];
-  if (!projects.length) { entry.style.display = 'none'; return; }
+  const catalogProjects = data.projects || [];
+  // P3394 是 CogSeed 内建协议能力（非 marketplace 项目）：作为内置卡插在最前。
+  // 注意：绝不能 mutate 缓存的 catalog 数组（initOssEntry 会被 i18n-change /
+  // catalog-updated 等事件反复调用，mutate 会导致卡片重复累积）。
+  const projects = [
+    {
+      id: 'P3394', name: 'P3394', category: 'interop', color: '#7C3AED',
+      task_zh: '与其他智能体对话协作', task_en: 'Talk & collaborate with another Agent',
+    },
+    ...catalogProjects,
+  ];
   entry.style.display = '';
 
   grid.innerHTML = projects.map((p) => {
     const task = escapeHtml(ossTaskFor(p));
     const by = escapeHtml(p.by || p.name || '');
     const icon = uiIconHtml(ossIconFor(p.category), 'oss-card-icon');
-    const byLine = (typeof t === 'function') ? t('oss.driven_by').replace('{name}', by) : by;
+    const byLine = p.id === 'P3394'
+      ? (typeof t === 'function' ? t('oss.p3394_by') : 'P3394')
+      : (typeof t === 'function') ? t('oss.driven_by').replace('{name}', by) : by;
     return `
       <button type="button" class="oss-card" data-oss-id="${escapeHtml(p.id)}">
         <span class="oss-card-top">
