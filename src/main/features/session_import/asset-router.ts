@@ -62,6 +62,10 @@ export interface ImportSessionResult {
   degraded: boolean;
   /** Transcript was too large to read whole; only recent turns were imported. */
   truncated?: boolean;
+  /** True when the source session was already imported before (materialize
+   *  skipped re-seed) — the conversation already exists, no new content was
+   *  written and no extraction ran. */
+  alreadyImported?: boolean;
   reason?: string;
 }
 
@@ -324,6 +328,7 @@ async function commitPreparedSession(
     cognitions,
     degraded: !!extraction.degraded,
     truncated,
+    alreadyImported: materialize.created === false,
     reason: extraction.reason,
   };
 }
