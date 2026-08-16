@@ -45,6 +45,9 @@
         </div>
       </div>
       <div class="sidebar-footer-actions">
+        <!-- Hub 账号常驻入口（方案 A）：account-chip.js 渲染。初始 hidden，
+             拿到 status DTO 后按登录状态显示；status 拿不到则保持隐藏。 -->
+        <div class="sidebar-footer-account" id="hub-account-chip-root" hidden></div>
         <button class="sidebar-footer-btn" id="settings-btn" data-i18n-title="sidebar.settings_title" title="Settings">
           <span data-ui-icon="settings" data-ui-icon-class="sidebar-footer-icon"></span>
           <span data-i18n="sidebar.settings">Settings</span>
@@ -1808,6 +1811,9 @@
   <script src="./modules/validation-report-view.js"></script>
   <script src="./modules/oss.js"></script>
   <script src="./modules/settings_tabs.js"></script>
+  <!-- 左下角 Hub 账号常驻入口（方案 A）。常驻加载（不随 settings lazy feature），
+       仅消费 hub-account.* 既有 IPC 与 hub-account:login-result 推送，不新增通道。 -->
+  <script src="./modules/account-chip.js"></script>
 
   <!--
     MathJax v3.2.2 — TeX → CommonHTML.

@@ -20,6 +20,7 @@
 import * as hubAccount from '../features/hub_account';
 import { HubApiError } from '../features/hub_account';
 import { assertHubAccountReleaseEnabled } from '../features/hub_account/gate';
+import { broadcastHubStateChanged } from '../features/hub_account/account-events';
 
 function assertString(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`invalid ${name}`);
@@ -43,8 +44,13 @@ export const invokeHandlers = {
   },
 
   'hub-account.logout': async (_payload: unknown, ctx: { userId: string }) => {
-    requireReleaseGate();
+    // 不设 release gate：退出登录 = 清理本地会话，是用户的正当权利。
+    // gate 关闭时若拦截 logout，已登录用户会被困住（无法退出、也无法再登录）。
+    // 服务端通知仍是尽力而为（auth-flow.logout 网络失败也照常清本地）。
     await hubAccount.logout(ctx.userId);
+    // 状态已落盘；广播让所有 renderer 表面（左下角账号区 / 设置-账号页）
+    // 立即刷新，避免两处显示不一致。
+    broadcastHubStateChanged({ reason: 'signed_out' });
     return { signed_out: true };
   },
 
@@ -85,7 +91,9 @@ export const invokeHandlers = {
   'hub-account.delete_account': async (payload: { confirmation?: unknown }, ctx: { userId: string }) => {
     requireReleaseGate();
     const confirmation = assertString(payload?.confirmation, 'confirmation');
-    return { deletion: await hubAccount.deleteHubAccount(ctx.userId, confirmation) };
+    const result = await hubAccount.deleteHubAccount(ctx.userId, confirmation);
+    broadcastHubStateChanged({ reason: 'account_deleted' });
+    return { deletion: result };
   },
 };
 

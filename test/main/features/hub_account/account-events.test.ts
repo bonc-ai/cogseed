@@ -19,6 +19,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({ shell: { openExternal: mocks.shellOpenExternal } }));
 vi.mock('../../../../src/main/features/users', () => ({ getActiveUserId: mocks.getActiveUserId }));
+// 发布 Gate 默认关闭（GitHub 登录已撤除）；本文件测试的是 deep link 结果广播，
+// 与 Gate 无关，因此直接放行。
+vi.mock('../../../../src/main/features/hub_account/gate', () => ({
+  assertHubAccountReleaseEnabled: () => undefined,
+}));
 vi.mock('../../../../src/main/paths', () => ({
   userLocalConfigDir: () => mocks.tmpConfigDir,
   WS_ROOT: mocks.tmpConfigDir,
@@ -65,10 +70,10 @@ describe('hub account deep-link 登录结果广播', () => {
   beforeEach(() => {
     mocks.tmpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-account-events-'));
     vi.clearAllMocks();
-    fakeClient.login.mockResolvedValue({ authorize_url: 'https://github.com/oauth', state: 'state_abc' });
+    fakeClient.login.mockResolvedValue({ authorize_url: 'https://cogseed-open.bonc.com.cn/login', state: 'state_abc' });
     fakeClient.callback.mockResolvedValue({
       is_new_account: false,
-      account: { account_id: 'cogseed_acc_1', auth_provider: 'github', status: 'active', created_at: 't' },
+      account: { account_id: 'cogseed_acc_1', auth_provider: 'web', status: 'active', created_at: 't' },
       session: SESSION,
     });
   });
