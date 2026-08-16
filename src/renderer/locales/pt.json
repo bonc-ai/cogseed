@@ -106,6 +106,7 @@
   "agents.agent_not_found": "Agente não encontrado",
   "agents.back": "Voltar aos agentes",
   "agents.builtin_group": "Marketplace",
+  "agents.base_group": "Agentes Base",
   "agents.card_delivery_count": "{n} entregue",
   "agents.card_memory_count": "{n} memória",
   "agents.card_skill_count": "{n} habilidades",

@@ -59,9 +59,13 @@ const VERSION_PROBES: Record<LocalCliType, readonly (readonly string[])[]> = {
   codex: [['--version']],
   openclaw: [['--version']],
   opencode: [['--version']],
-  // Hermes documents both forms across releases. Prefer the stable
-  // subcommand, then tolerate installations that expose only the flag.
-  hermes: [['version'], ['--version']],
+  // Hermes documents both forms across releases. `version` (subcommand)
+  // HANGS (no output, no exit) on some builds when spawned without a TTY —
+  // observed on arm64 macOS where `hermes version` blocks until SIGKILL
+  // while `hermes --version` returns in <100ms. `--version` MUST stay first
+  // so the 5s detectVersion timeout is never hit during localAgents.list
+  // (the workspace view waits on this probe on every cold load).
+  hermes: [['--version'], ['version']],
   // codebuddy prints a bare semver on `--version` (verified 2.115.0).
   workbuddy: [['--version']],
 };

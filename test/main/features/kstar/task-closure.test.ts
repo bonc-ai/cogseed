@@ -582,6 +582,29 @@ describe('KSTAR direct experience asset line', () => {
     expect(pending[0].status).toBe('confirmed');
   });
 
+  it('carries the space into the asset when the episode has a workspace (space asset tab)', async () => {
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct-space', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+    // episode 挂空间：s.workspaceId = 空间 id（bus 层以 turnSpaceId 填充）
+    seededEpisode.s = { ...(seededEpisode.s || {}), workspaceId: 'sp_abc123' };
+    const result = await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [{
+      judgment: 'For spaced tasks, attach the space id to the asset.',
+      summary: 'Space-tagged workflow',
+      suggestedType: 'skill_method',
+      suggestedScope: 'report',
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-space' }],
+    }]);
+
+    expect(result.createdAssetIds).toHaveLength(1);
+    const all = await assets.listAbilityAssets('closure-user');
+    const created = all.find((a) => a.id === result.createdAssetIds[0]);
+    expect(created).toBeDefined();
+    // 空间资产 tab 的过滤键：KStar 沉淀必须带 spaceId，否则空间里永远看不到
+    expect(created!.spaceId).toBe('sp_abc123');
+  });
+
   it('does not duplicate the direct asset across repeated precipitation (content-addressed)', async () => {
     const builder = await import('../../../../src/main/features/kstar/episode-builder');
     const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');

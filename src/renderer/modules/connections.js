@@ -91,8 +91,21 @@ function activateConnectionsTab(name) {
     // 避免「介绍未填写」。_agentsCacheIsSummary 由 loadAgents 内部维护。
     Promise.resolve(loadAgents(false)).catch(() => {});
   }
-  if (target === 'sources' && typeof loadContexts === 'function') {
-    Promise.resolve(loadContexts()).catch(() => {});
+  if (target === 'sources') {
+    // 资料库（contexts）是懒加载模块：从「连接」视图进入时 boot 只初始化
+    // tab 壳，不会加载 contexts.js。这里先加载模块再渲染，否则面板永远
+    // 停留在 index.html 的静态空态（loadContexts 为 undefined 直接跳过）。
+    const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+    if (typeof loader === 'function') {
+      Promise.resolve(loader('contexts'))
+        .then(() => {
+          if (typeof loadContexts === 'function') return loadContexts();
+          return undefined;
+        })
+        .catch(() => {});
+    } else if (typeof loadContexts === 'function') {
+      Promise.resolve(loadContexts()).catch(() => {});
+    }
   }
 
   // 触点 tab 内嵌了飞书/消息平台：首次进入时初始化（依赖 settings bundle 已加载）。
