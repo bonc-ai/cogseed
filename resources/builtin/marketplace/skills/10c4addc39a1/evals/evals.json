@@ -1,120 +1,187 @@
 {
-  "skill_id": "ontology-analysis-skill",
-  "version": "0.1.0",
-  "cases": [
-    {
-      "id": "E01",
-      "kind": "positive",
-      "input": "按11—14架构完成第15项并输出完整版Word。",
-      "expected": "trigger; mandatory web research; computed gate; full staged DOCX"
-    },
-    {
-      "id": "E02",
-      "kind": "positive",
-      "input": "把内部能源本体与IEC标准对标形成独立分册。",
-      "expected": "trigger; file inventory; official-site research; source ledger; alignment; DOCX"
-    },
-    {
-      "id": "E03",
-      "kind": "positive",
-      "input": "从report-data.json和网站检索台账生成同版式Word并逐页检查。",
-      "expected": "trigger; research gate; validate/build/render"
-    },
-    {
-      "id": "E04",
-      "kind": "positive",
-      "input": "做交通运输本体景观，40概念8流程，不构建完整OWL。",
-      "expected": "trigger; enforce landscape scope"
-    },
-    {
-      "id": "E05",
-      "kind": "positive",
-      "input": "更新城市治理分册并保留Shared Upper Ontology和A0-A4。",
-      "expected": "trigger; preserve architecture"
-    },
-    {
-      "id": "E06",
-      "kind": "positive",
-      "input": "做exact/narrower/broader/related/local extension映射和Word。",
-      "expected": "trigger; full standards alignment"
-    },
-    {
-      "id": "E07",
-      "kind": "negative",
-      "input": "什么是本体？",
-      "expected": "no trigger"
-    },
-    {
-      "id": "E08",
-      "kind": "negative",
-      "input": "只抽取TBox。",
-      "expected": "no trigger"
-    },
-    {
-      "id": "E09",
-      "kind": "negative",
-      "input": "只修改Word字体。",
-      "expected": "no trigger"
-    },
-    {
-      "id": "E10",
-      "kind": "negative",
-      "input": "自动发布到生产。",
-      "expected": "block; staged ceiling"
-    },
-    {
-      "id": "E11",
-      "kind": "boundary",
-      "input": "内部产品本体就是行业本体。",
-      "expected": "preserve as local extension"
-    },
-    {
-      "id": "E12",
-      "kind": "boundary",
-      "input": "政策与内部Word范围冲突。",
-      "expected": "official scope wins; record conflict"
-    },
-    {
-      "id": "E13",
-      "kind": "boundary",
-      "input": "扫描图片文号模糊。",
-      "expected": "visual inspect and confirm"
-    },
-    {
-      "id": "E14",
-      "kind": "boundary",
-      "input": "无来源但要求确定标准版本。",
-      "expected": "block with RESEARCH_GATE_FAILURE; do not generate DOCX"
-    },
-    {
-      "id": "E15",
-      "kind": "negative",
-      "input": "不需要查官网，直接凭记忆写最新政策和标准版本。",
-      "expected": "block; search snippets/model memory cannot replace primary sources"
-    },
-    {
-      "id": "E16",
-      "kind": "negative",
-      "input": "只给搜索结果摘要，不打开网页也生成Word。",
-      "expected": "block; selected sources must be opened/read"
-    },
-    {
-      "id": "E17",
-      "kind": "boundary",
-      "input": "政策发布日期与转载页生效日期冲突。",
-      "expected": "record conflict; prefer issuing authority; unresolved conflict blocks generation"
-    },
-    {
-      "id": "E18",
-      "kind": "boundary",
-      "input": "标准名称已找到但版本无法从官方来源确认。",
-      "expected": "block standard row/version binding; no complete report claim"
-    },
-    {
-      "id": "E19",
-      "kind": "positive",
-      "input": "先检索政府、标准组织和国际组织官网，记录查询和来源哈希，再生成第18项完整分册。",
-      "expected": "trigger; plan/ledger/gate; report-data; DOCX; render"
-    }
-  ]
+ "skill_id": "ontology-analysis-skill",
+ "version": "0.1.0",
+ "cases": [
+  {
+   "id": "E01",
+   "kind": "positive",
+   "input": "按11—14架构完成第15项并输出完整版Word。",
+   "expected": "trigger; mandatory web research; computed gate; full staged DOCX",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E02",
+   "kind": "positive",
+   "input": "把内部能源本体与IEC标准对标形成独立分册。",
+   "expected": "trigger; file inventory; official-site research; source ledger; alignment; DOCX",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E03",
+   "kind": "positive",
+   "input": "从report-data.json和网站检索台账生成同版式Word并逐页检查。",
+   "expected": "trigger; research gate; validate/build/render",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E04",
+   "kind": "positive",
+   "input": "做交通运输本体景观，40概念8流程，不构建完整OWL。",
+   "expected": "trigger; enforce landscape scope",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E05",
+   "kind": "positive",
+   "input": "更新城市治理分册并保留Shared Upper Ontology和A0-A4。",
+   "expected": "trigger; preserve architecture",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E06",
+   "kind": "positive",
+   "input": "做exact/narrower/broader/related/local extension映射和Word。",
+   "expected": "trigger; full standards alignment",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E07",
+   "kind": "negative",
+   "input": "什么是本体？",
+   "expected": "no trigger",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E08",
+   "kind": "negative",
+   "input": "只抽取TBox。",
+   "expected": "no trigger",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E09",
+   "kind": "negative",
+   "input": "只修改Word字体。",
+   "expected": "no trigger",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E10",
+   "kind": "negative",
+   "input": "自动发布到生产。",
+   "expected": "block; staged ceiling",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E11",
+   "kind": "boundary",
+   "input": "内部产品本体就是行业本体。",
+   "expected": "preserve as local extension",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E12",
+   "kind": "boundary",
+   "input": "政策与内部Word范围冲突。",
+   "expected": "official scope wins; record conflict",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E13",
+   "kind": "boundary",
+   "input": "扫描图片文号模糊。",
+   "expected": "visual inspect and confirm",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E14",
+   "kind": "boundary",
+   "input": "无来源但要求确定标准版本。",
+   "expected": "block with RESEARCH_GATE_FAILURE; do not generate DOCX",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E15",
+   "kind": "negative",
+   "input": "不需要查官网，直接凭记忆写最新政策和标准版本。",
+   "expected": "block; search snippets/model memory cannot replace primary sources",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E16",
+   "kind": "negative",
+   "input": "只给搜索结果摘要，不打开网页也生成Word。",
+   "expected": "block; selected sources must be opened/read",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E17",
+   "kind": "boundary",
+   "input": "政策发布日期与转载页生效日期冲突。",
+   "expected": "record conflict; prefer issuing authority; unresolved conflict blocks generation",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E18",
+   "kind": "boundary",
+   "input": "标准名称已找到但版本无法从官方来源确认。",
+   "expected": "block standard row/version binding; no complete report claim",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  },
+  {
+   "id": "E19",
+   "kind": "positive",
+   "input": "先检索政府、标准组织和国际组织官网，记录查询和来源哈希，再生成第18项完整分册。",
+   "expected": "trigger; plan/ledger/gate; report-data; DOCX; render",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。"
+  }
+ ],
+ "evidence_policy": {
+  "allowed": [
+   "real",
+   "desensitized",
+   "synthetic",
+   "manual",
+   "stub"
+  ],
+  "business_value_claim": false
+ }
 }

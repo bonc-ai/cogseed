@@ -177,6 +177,9 @@ function _cognitionSetPageVisibility(page) {
   document.querySelectorAll('[data-cognition-page]').forEach((el) => {
     const active = el.dataset.cognitionPage === page;
     el.classList.toggle('is-active', active);
+    // 「管理来源」「沉淀活动」是页头辅助入口，不在 tablist 里：给它们套
+    // aria-selected / roving tabindex 会对屏幕阅读器谎报成第 N 个标签页。
+    if (el.getAttribute('role') !== 'tab') return;
     el.setAttribute('aria-selected', active ? 'true' : 'false');
     el.tabIndex = active ? 0 : -1;
   });
@@ -185,7 +188,7 @@ function _cognitionSetPageVisibility(page) {
 function switchSkillsCognitionPage(page) {
   const aliases = { candidates: 'captures', receipts: 'assets', brain: 'overview', context: 'overview', ontology: 'overview' };
   const requested = aliases[page] || page;
-  const allowed = new Set(['overview', 'captures', 'assets', 'sources', 'my-abilities', 'about-me']);
+  const allowed = new Set(['overview', 'captures', 'assets', 'sources', 'proofs']);
   const next = allowed.has(requested) ? requested : 'overview';
   _skillsCognitionState.page = next;
   if (next === 'assets' && !_skillsCognitionState.assetCategoryFilter && !_skillsCognitionState.selectedAssetId) {
@@ -194,41 +197,9 @@ function switchSkillsCognitionPage(page) {
   _cognitionSetPageVisibility(next);
   if (next === 'overview') renderSkillsCognitionOverview();
   if (next === 'sources') renderSkillsCognitionSources();
+  if (next === 'proofs') renderSkillsCognitionProofs();
   if (next === 'captures') renderSkillsCognitionCaptures();
   if (next === 'assets') renderSkillsCognitionAssets();
-  if (next === 'my-abilities') _renderMyAbilitiesPane();
-  if (next === 'about-me') _renderAboutMePane();
-}
-
-// 「我的能力」tab：技能库 DOM 已内嵌此处，首次进入时加载并渲染技能网格。
-function _renderMyAbilitiesPane() {
-  const grid = document.getElementById('skills-grid');
-  if (!grid) return;
-  if (typeof _skillsCache !== 'undefined' && _skillsCache && _skillsCache.length) {
-    renderSkillsList(_skillsCache);
-  } else if (typeof loadSkills === 'function') {
-    Promise.resolve(loadSkills(false))
-      .then(() => {
-        if (typeof _skillsCache !== 'undefined' && _skillsCache) renderSkillsList(_skillsCache);
-      })
-      .catch(() => {});
-  }
-}
-
-// 「关于我」tab：个人本体 DOM 已内嵌此处，首次进入时加载对应 feature 并渲染。
-function _renderAboutMePane() {
-  if (typeof renderPersonalOntology === 'function') {
-    renderPersonalOntology();
-    return;
-  }
-  const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
-  if (typeof loader === 'function') {
-    Promise.resolve(loader('personal-ontology'))
-      .then(() => {
-        if (typeof renderPersonalOntology === 'function') renderPersonalOntology();
-      })
-      .catch(() => {});
-  }
 }
 
 function _renderCognitionLoading(host) {
@@ -309,16 +280,28 @@ function _abilityTitleFromContent(text) {
   return t.length <= 24 ? t : `${t.slice(0, 24)}…`;
 }
 
+// 成熟度的用户侧表达按 PRD 3.6「资产成熟度与默认使用契约」的五档写法。
+// 内部枚举仍是 seed/bud/transfer_validated/effectiveness_validated（收敛枚举
+// 涉及 28 处源码 + 23 个测试文件 + 数据迁移，另开一批做），这里只在展示边界
+// 统一口径：seed 与 bud 都属于「已确认，尚未验证」——它们的差别是"谁写进来的"，
+// 由 lifecycleStatus 表达，不该在成熟度轴上再分一档。
 function _abilityAssetMaturityLabel(maturity, status) {
   if (status === 'paused') return _cognitionText('cognition.asset_status_paused', '已暂停');
-  if (status === 'revoked') return _cognitionText('cognition.asset_status_revoked', '已移除');
-  if (maturity === 'bud' || status === 'candidate') return _cognitionText('cognition.maturity_bud', '芽点');
-  if (maturity === 'effectiveness_validated') return _cognitionText('cognition.maturity_deep_leaf', '深叶');
-  if (maturity === 'transfer_validated') return _cognitionText('cognition.maturity_transfer_validated', '已迁移验证');
-  if (maturity === 'seed') return _cognitionText('cognition.maturity_seed', '种子');
+
+  if (status === 'revoked') return _cognitionText('cognition.maturity_revoked', '已撤销');
+  if (status === 'candidate') return _cognitionText('cognition.maturity_candidate', '待确认');
+  if (maturity === 'effectiveness_validated' || maturity === 'stable') {
+    return _cognitionText('cognition.maturity_effectiveness_validated', '已验证有效');
+  }
+  if (maturity === 'transfer_validated') return _cognitionText('cognition.maturity_transfer_verified', '已成功带入');
+  if (maturity === 'seed' || maturity === 'bud') {
+    return _cognitionText('cognition.maturity_confirmed_unverified', '已确认，尚未验证');
+  }
   return maturity || status || _cognitionText('cognition.unknown', '未知');
 }
 
+// lifecycleStatus 有三个值，只有 user_confirmed_unverified 代表真实用户确认。
+// 其余两个（会话自动抽取 / KStar 自进化沉淀）都不得显示成「确认入库」。
 function _abilityAssetWriteOriginLabel(lifecycleStatus) {
   if (lifecycleStatus === 'automatically_extracted_unverified') {
     return _cognitionText('cognition.asset_write_origin_auto', '自动入库');
@@ -327,6 +310,7 @@ function _abilityAssetWriteOriginLabel(lifecycleStatus) {
     return _cognitionText('cognition.asset_write_origin_system', '系统沉淀');
   }
   return _cognitionText('cognition.asset_write_origin_user', '确认入库');
+
 }
 
 function _abilityAssetSummary(items, category) {
@@ -473,9 +457,10 @@ function openRecallSkillModelSettings() {
 }
 
 function queueMissingRecallSkillDrafts() {
+  // 不再判断"这条是不是真资产"：后端 canonical layer 保证列表里只有四类
+  // 正式资产（formal-assets/repository.ts），支撑对象根本进不来。
   const targets = (_skillsCognitionState.assets || []).filter((asset) => (
     asset.category === 'skill_method'
-    && asset.source === 'recall_ability_asset'
     && asset.status === 'active'
     && !asset.generatedSkillId
     && !asset.recallSkillDraftStatus
@@ -1376,6 +1361,92 @@ function renderSkillsCognitionOverview() {
     </div>`;
 }
 
+// 「使用与证明」：回答"这些资产究竟在哪里用过、真的起作用了吗"。
+// 事实全部来自 timeline-service 已聚合的一条链（usage / transfer proof /
+// effectiveness proof / receipt），这里只翻译成用户能理解的说法，不造事实。
+const _COGNITION_PROOF_KINDS = new Set([
+  'usage_recorded', 'transfer_prepared', 'transfer_completed', 'effectiveness_recorded', 'projection_confirmed',
+]);
+
+// 结果状态用用户能读懂的话，不露出内部枚举。
+function _cognitionProofOutcomeLabel(item) {
+  const status = String(item && item.status || '');
+  if (item.kind === 'transfer_completed') {
+    if (status === 'succeeded') return _cognitionText('cognition.proof_carried_in', '已正确带入');
+    if (status === 'degraded') return _cognitionText('cognition.proof_degraded', 'Evidence 不足');
+    return _cognitionText('cognition.proof_rejected', '未能带入');
+  }
+  if (item.kind === 'effectiveness_recorded') {
+    if (status === 'better') return _cognitionText('cognition.proof_effective', '使用结果有效');
+    if (status === 'no_improvement') return _cognitionText('cognition.proof_no_diff', '未产生明显差异');
+    if (status === 'worse') return _cognitionText('cognition.proof_negative', '出现负面影响');
+    if (status === 'rework') return _cognitionText('cognition.proof_rework', '需要修正');
+    if (status === 'insufficient_evidence') return _cognitionText('cognition.proof_degraded', 'Evidence 不足');
+  }
+  if (item.kind === 'usage_recorded') return _cognitionText('cognition.proof_used', '被引用');
+  if (item.kind === 'projection_confirmed') return _cognitionText('cognition.proof_projected', '已带入本次任务');
+  return '';
+}
+
+async function renderSkillsCognitionProofs() {
+  const host = document.getElementById('skills-cognition-proofs-body');
+  if (!host) return;
+  _renderCognitionLoading(host);
+  let items = [];
+  try {
+    const result = await window.cogseed.invoke('recall.timeline.list', { limit: 500 });
+    items = Array.isArray(result && result.items) ? result.items : [];
+  } catch (error) {
+    _skillsLog.warn('recall timeline load failed', { error: (error && error.message) || String(error) });
+    _renderCognitionError(host);
+    return;
+  }
+  const assets = Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [];
+  const titleById = new Map(assets.map((asset) => [asset.id, _abilityAssetDisplayTitle(asset)]));
+
+  // 只保留"用过/证明过"的事实；治理事件属于「版本与治理」，不在这一页。
+  const byAsset = new Map();
+  for (const item of items) {
+    if (!_COGNITION_PROOF_KINDS.has(item.kind)) continue;
+    const assetId = item.refs && item.refs.assetId;
+    if (!assetId) continue;
+    if (!byAsset.has(assetId)) byAsset.set(assetId, []);
+    byAsset.get(assetId).push(item);
+  }
+  if (!byAsset.size) {
+    host.innerHTML = `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.proofs_empty', '还没有资产被真正带入过任务。资产被使用后，这里会显示它在哪里用过、结果如何。'))}</div>`;
+    return;
+  }
+
+  const sections = [...byAsset.entries()].map(([assetId, entries]) => {
+    entries.sort((a, b) => String(b.occurredAt || '').localeCompare(String(a.occurredAt || '')));
+    const title = titleById.get(assetId) || assetId;
+    const rows = entries.slice(0, 20).map((item) => {
+      const outcome = _cognitionProofOutcomeLabel(item);
+      const refs = item.refs || {};
+      const meta = [
+        refs.taskRunId ? `${escapeHtml(_cognitionText('cognition.proof_task', '任务'))} ${escapeHtml(refs.taskRunId)}` : '',
+        refs.version ? `v${escapeHtml(refs.version)}` : '',
+        refs.usageReceiptId ? escapeHtml(_cognitionText('cognition.proof_receipt', '有回执')) : '',
+      ].filter(Boolean).join(' · ');
+      return `<div class="recall-proof-row">
+        <span class="recall-proof-outcome">${escapeHtml(outcome || item.title || item.kind)}</span>
+        <span class="recall-proof-summary">${escapeHtml(item.summary || item.title || '')}</span>
+        <span class="recall-proof-meta">${meta}</span>
+        <span class="recall-proof-time">${escapeHtml(_cognitionDate(item.occurredAt))}</span>
+      </div>`;
+    }).join('');
+    return `<section class="skills-cognition-card recall-proof-asset">
+      <div class="skills-cognition-card-head">
+        <h2>${escapeHtml(title)}</h2>
+        <button type="button" class="btn btn-sm" data-ability-asset-id="${escapeHtml(assetId)}" data-cognition-page-link="assets">${escapeHtml(_cognitionText('cognition.proof_open_asset', '查看资产'))}</button>
+      </div>
+      ${rows}
+    </section>`;
+  }).join('');
+  host.innerHTML = `<div class="recall-proof-list">${sections}</div>`;
+}
+
 function renderSkillsCognitionCandidates() {
   const host = document.getElementById('skills-cognition-capture-review-body')
     || document.getElementById('skills-cognition-candidates-body');
@@ -1624,7 +1695,6 @@ function renderSkillsCognitionAssets() {
   const host = document.getElementById('skills-cognition-assets-body');
   if (!host) return;
   const summaryHost = document.getElementById('skills-cognition-assets-summary');
-  const personalOntologyHost = document.getElementById('skills-cognition-personal-ontology');
   const personalMemoryHead = document.getElementById('skills-cognition-formal-assets')
     ?.querySelector?.('.recall-personal-memory-head');
   const previousListScrollTop = Number(host.querySelector?.('.ability-asset-list-body')?.scrollTop || 0);
@@ -1644,28 +1714,33 @@ function renderSkillsCognitionAssets() {
   const summaryMarkup = `<div class="ability-asset-summary-grid">${summary}</div>`;
   if (summaryHost) summaryHost.innerHTML = summaryMarkup;
   const isPersonalCategory = _skillsCognitionState.assetCategoryFilter === 'personal';
+  // 「关于我」是四类资产之一，不再是独立任务页：选中 personal 分类时在本页
+  // 展开个人本体。骨架全仓只有这一处，渲染函数按 id 定位即可命中。
+  const personalOntologyHost = document.getElementById('skills-cognition-personal-ontology');
   const shouldRenderPersonalOntology = Boolean(personalOntologyHost && isPersonalCategory && personalOntologyHost.hidden);
   if (personalOntologyHost) personalOntologyHost.hidden = !isPersonalCategory;
   if (personalMemoryHead) personalMemoryHead.hidden = !isPersonalCategory;
-  const renderPersonalOntology = typeof window.refreshPersonalOntology === 'function'
-    ? window.refreshPersonalOntology
-    : window.renderPersonalOntology;
-  if (shouldRenderPersonalOntology && typeof renderPersonalOntology === 'function') {
-    Promise.resolve(renderPersonalOntology()).catch((error) => {
-      _skillsLog.warn('personal ontology render failed', { error: (error && error.message) || String(error) });
-    });
+  if (shouldRenderPersonalOntology) {
+    const renderOntology = typeof window.refreshPersonalOntology === 'function'
+      ? window.refreshPersonalOntology
+      : window.renderPersonalOntology;
+    if (typeof renderOntology === 'function') {
+      Promise.resolve(renderOntology()).catch((error) => {
+        _skillsLog.warn('personal ontology render failed', { error: (error && error.message) || String(error) });
+      });
+    }
   }
+  // 这里不再补救过滤 personal_ontology 代理项：后端 assets-adapter 已不再把
+  // 个人本体分组合成为资产，列表与上方分类计数因此天然一致。过去列表过滤、
+  // 计数不过滤，卡片数字会大于实际可见条数。
   const categoryItems = _skillsCognitionState.assetCategoryFilter
     ? items.filter((item) => (item.category || item.type) === _skillsCognitionState.assetCategoryFilter)
     : items;
-  const visibleCategoryItems = isPersonalCategory
-    ? categoryItems.filter((item) => item.source !== 'personal_ontology')
-    : categoryItems;
   const searchQuery = String(_skillsCognitionState.assetSearchQuery || '').trim().toLocaleLowerCase();
   const filteredItems = searchQuery
-    ? visibleCategoryItems.filter((item) => [item.title, item.summary, item.statement, item.id, item.scope, item.category, item.type]
+    ? categoryItems.filter((item) => [item.title, item.summary, item.statement, item.id, item.scope, item.category, item.type]
       .some((value) => String(value || '').toLocaleLowerCase().includes(searchQuery)))
-    : visibleCategoryItems;
+    : categoryItems;
   const searchInput = `<input class="asset-search" value="${escapeHtml(_skillsCognitionState.assetSearchQuery || '')}" placeholder="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索记忆内容'))}" aria-label="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索记忆内容'))}">`;
   if (!items.length) {
     host.innerHTML = `${summaryHost ? '' : summaryMarkup}<div class="ability-assets-workbench is-asset-management-only">
@@ -1704,9 +1779,9 @@ function renderSkillsCognitionAssets() {
   const workspaceRefs = Array.isArray(selected.workspaceRefs) ? selected.workspaceRefs.filter(Boolean) : [];
   const relationRefs = Array.isArray(selected.relationRefs) ? selected.relationRefs : [];
   const relationText = relationRefs.length ? [...new Set(relationRefs.map(_cognitionRelationRefText).filter(Boolean))].join('、') : _cognitionText('cognition.no_refs', '未记录引用');
-  const isRecallAsset = selected.source === 'recall_ability_asset';
-  const writeOrigin = isRecallAsset ? _abilityAssetWriteOriginLabel(selected.lifecycleStatus) : '';
-  const assetManagementActions = isRecallAsset ? _recallAssetActions(selected.status) : [];
+  // 列表里的每一条都是正式资产，治理动作与写入来源一律可显示。
+  const writeOrigin = _abilityAssetWriteOriginLabel(selected.lifecycleStatus);
+  const assetManagementActions = _recallAssetActions(selected.status);
   const assetMoreLabel = _cognitionText('common.more', '更多');
   const assetMoreIcon = typeof uiIconHtml === 'function' ? uiIconHtml('more-horizontal') : '<span aria-hidden="true">...</span>';
   const assetMore = assetManagementActions.length
@@ -1715,7 +1790,7 @@ function renderSkillsCognitionAssets() {
   const skillDraftFailed = selected.recallSkillDraftStatus === 'failed';
   const skillDraftNeedsModel = skillDraftFailed && (selected.recallSkillDraftErrorCode === 'model_not_configured' || selected.recallSkillDraftErrorCode === 'model_auth_required');
   const skillDraftReady = selected.recallSkillDraftStatus === 'draft';
-  const isRecallSkillAsset = selectedCategory === 'skill_method' && selected.source === 'recall_ability_asset' && selected.status === 'active';
+  const isRecallSkillAsset = selectedCategory === 'skill_method' && selected.status === 'active';
   const skillInstalled = isRecallSkillAsset && Boolean(selected.generatedSkillId);
   const skillDraftGenerating = isRecallSkillAsset && (selected.recallSkillDraftStatus === 'generating' || (!selected.recallSkillDraftStatus && !selected.generatedSkillId));
   const skillDraftRecallContext = selected.recallSkillDraft?.recallContext;

@@ -66,7 +66,7 @@ describe('ability asset semantics normalization', () => {
 describe('规范 10.2 默认使用矩阵', () => {
   it('跨作用域一律不比同作用域松', async () => {
     const { semantics } = await modules();
-    const maturities = ['seed', 'bud', 'transfer_validated', 'effectiveness_validated', 'stable'] as const;
+    const maturities = ['seed', 'bud', 'transfer_validated', 'effectiveness_validated'] as const;
     const rank = { never: 0, confirm: 1, prompt: 2, auto: 3 };
     for (const maturity of maturities) {
       const same = semantics.resolveDefaultUsePolicy({ status: 'active', maturity }, true);
@@ -84,7 +84,7 @@ describe('规范 10.2 默认使用矩阵', () => {
   it('非 active 状态一律不带入', async () => {
     const { semantics } = await modules();
     for (const status of ['paused', 'archived', 'deleted', 'purged', 'revoked'] as const) {
-      expect(semantics.resolveDefaultUsePolicy({ status, maturity: 'stable' }, true)).toBe('never');
+      expect(semantics.resolveDefaultUsePolicy({ status, maturity: 'effectiveness_validated' }, true)).toBe('never');
     }
   });
 });

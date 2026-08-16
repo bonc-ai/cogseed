@@ -151,23 +151,43 @@ export async function listAssetEvents(uid: string, assetId: string): Promise<Ass
   return readJsonl<AssetEvent>(assetEventLogPath(uid, assetId), 10000);
 }
 
-/** 事件类型到"用户侧状态"的映射（供视图重放与 UI 语义统一，非文案）。 */
-export function eventTypeToState(eventType: AssetEventType): string {
+/** 事件影响的是哪条状态轴（PRD 3.6 三轴正交）。事件账本里的一条事件只会
+ *  推动其中一条：确认动作动来源轴，证明动成熟度轴，暂停/撤销动治理轴。 */
+export type AssetEventAxis = 'lifecycle' | 'maturity' | 'status' | 'none';
+
+export interface AssetEventStateChange {
+  axis: AssetEventAxis;
+  /** 取值与 formal-assets 的规范词汇一致，不另立一套。 */
+  state: string;
+}
+
+/** 事件类型 → 它推动了哪条轴上的哪个取值。
+ *
+ *  这里过去把三条轴压成一个扁平字符串返回，还把成熟度档位拼成
+ *  `transfer_verified`（规范词汇是 `transfer_validated`），于是同一个概念在
+ *  账本、资产记录和策略层各有一种写法。现在取值统一到 formal-assets 的词汇。 */
+export function eventTypeToStateChange(eventType: AssetEventType): AssetEventStateChange {
   switch (eventType) {
     case 'asset_created':
     case 'asset_user_confirmed':
-      return 'user_confirmed_unverified';
+      return { axis: 'lifecycle', state: 'user_confirmed_unverified' };
     case 'asset_transfer_verified':
-      return 'transfer_verified';
+      return { axis: 'maturity', state: 'transfer_validated' };
     case 'asset_effectiveness_validated':
-      return 'effectiveness_validated';
+      return { axis: 'maturity', state: 'effectiveness_validated' };
     case 'asset_paused':
-      return 'paused';
+      return { axis: 'status', state: 'paused' };
     case 'asset_revoked':
-      return 'revoked';
+      return { axis: 'status', state: 'revoked' };
     case 'asset_rolled_back':
-      return 'rolled_back';
+      return { axis: 'status', state: 'rolled_back' };
     default:
-      return 'unchanged';
+      return { axis: 'none', state: 'unchanged' };
   }
+}
+
+/** 兼容出口：仍然只回一个字符串。调用方要区分轴时改用
+ *  `eventTypeToStateChange`。 */
+export function eventTypeToState(eventType: AssetEventType): string {
+  return eventTypeToStateChange(eventType).state;
 }

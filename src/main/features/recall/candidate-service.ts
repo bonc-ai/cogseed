@@ -3,6 +3,9 @@ import * as personalOntologyCandidates from '../personal_ontology_candidates';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
+import { createLogger } from '../../logger';
+import { resolveAssetLifecycle } from './formal-assets/policy';
+import { describePromotionBlock, validatePromotionByAssetType, type PromotionBlockReason } from './formal-assets/promotion';
 import { genId12, safeId } from '../../storage';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { recallJsonRecordPath } from './paths';
@@ -85,6 +88,9 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   evidenceRefs: CognitionSourceRef[];
   suggestedAction: RecallCandidateAction;
   risk: RecallCandidateRisk;
+  /** 规则候选提出的适用/禁止范围。缺失 = 没提出过，不是「无限制」。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
   learningSignal?: KstarLearningSignal;
   learningProvenance?: KstarLearningProvenance;
   captureKey?: string;
@@ -148,7 +154,7 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
    *     self-evolution line (system actor, no user confirmation) — the
    *     asset is honest about NOT being user-confirmed. */
   lifecycleStatus: RecallAbilityAssetLifecycleStatus;
-  maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable';
+  maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
   deletedAt?: string;
   purgedAt?: string;
   version: string;
@@ -179,6 +185,11 @@ export interface SaveRecallCandidateInput {
   captureKey?: string;
   /** 空间归属（可选）：来源会话/任务的 space_id。 */
   spaceId?: string;
+  /** 规则类候选的适用/禁止范围。PRD 3.1 把它们列为 RuleAsset 的最低准入门槛，
+   *  所以必须在候选阶段就带着走——否则自动线永远拿不出边界，规则也就永远
+   *  晋升不了。缺失 = 没提出过，**不是**「无限制」。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
   /** Internal extraction gate: preserve evidence without creating user review work. */
   forceWeakObservation?: boolean;
 }
@@ -199,8 +210,15 @@ interface StoredRecallAssetHandoffReceipt extends RecallJsonRecord, RecallAssetH
   createdAt: string;
 }
 
+/** 系统线的来源。actor 只区分"人还是系统"，但两条系统线的可信度不同：
+ *  会话自动抽取是模型从对话里猜的，KStar 自进化是从冻结预期 vs 实际结果的
+ *  复盘里推的。认知树和资产详情要能分辨，否则两者在界面上长一个样。 */
+export type RecallPromotionProvenance = 'capture' | 'kstar';
+
 export interface PromoteRecallCandidateOptions extends AbilityAssetSemantics {
   actor?: AbilityAssetActor;
+  /** 仅在 actor === 'system' 时有意义；缺省按会话自动抽取线处理。 */
+  provenance?: RecallPromotionProvenance;
   ontologyRefs?: AbilityAssetOntologyRef[];
   scopePolicy?: RecallAbilityAssetScopePolicy;
   decisionType?: 'accept' | 'modify';
@@ -209,6 +227,34 @@ export interface PromoteRecallCandidateOptions extends AbilityAssetSemantics {
   riskAcknowledged?: boolean;
   /** R-Box causal rule; only activated when explicitly supplied by the user. */
   causalRule?: CausalRule;
+}
+
+const log = createLogger('recall.candidates');
+
+/** 判重用的可比文本：与 capture-service 的同名归一化保持一致（大小写、
+ *  空白、标点都不参与比较）。 */
+function comparableJudgmentText(value: string): string {
+  return String(value || '').normalize('NFKC').replace(/[\p{P}\p{S}\s]/gu, '').toLocaleLowerCase();
+}
+
+/** 候选未通过分类型准入门槛时抛出。调用方据此把候选留在池子里等补齐，
+ *  而不是当作写入失败去重试——重试同样过不了闸。 */
+export class PromotionBlockedError extends Error {
+  readonly code = 'promotion_blocked';
+  constructor(readonly reasons: PromotionBlockReason[]) {
+    super(`candidate does not meet the formal asset bar: ${reasons.map(describePromotionBlock).join('; ')}`);
+    this.name = 'PromotionBlockedError';
+  }
+}
+
+/** 语义查重不可用时抛出。调用方据此把候选留在池子里等人工确认，而不是
+ *  当作"查过且没有重复"继续自动晋升。 */
+export class SemanticDedupUnavailableError extends Error {
+  readonly code = 'semantic_dedup_unavailable';
+  constructor(readonly reason: string) {
+    super(`semantic duplicate check unavailable: ${reason}`);
+    this.name = 'SemanticDedupUnavailableError';
+  }
 }
 
 const MAX_SOURCE_SESSION_IDS = 50;
@@ -577,6 +623,17 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   if (taskRunId && !safeId(taskRunId)) throw new Error('invalid task run id');
   const targetAssetId = input.targetAssetId === undefined ? undefined : boundedText(input.targetAssetId, 'target asset id', 160, true);
   if (targetAssetId && !safeId(targetAssetId)) throw new Error('invalid target asset id');
+  // 规则候选的适用/禁止范围：抽取阶段就带着走，否则自动线永远给不出边界，
+  // 而 PRD 3.1 把边界列为 RuleAsset 的最低准入门槛，规则就再也晋升不了。
+  // 走和资产同一套归一化，并过一遍敏感内容闸（这是自由文本）。
+  const candidateBoundaries = readAbilityAssetSemantics({
+    ...(input.applicableWhen ? { applicableWhen: input.applicableWhen } : {}),
+    ...(input.forbiddenWhen ? { forbiddenWhen: input.forbiddenWhen } : {}),
+  });
+  assertNotForbiddenToPersist([
+    ...(candidateBoundaries.applicableWhen || []),
+    ...(candidateBoundaries.forbiddenWhen || []),
+  ]);
   const candidateDraft = { judgment, value: resolvedValue, suggestedType, suggestedScope, suggestedAction, targetAssetId };
   const reviewReady = input.forceWeakObservation !== true
     && Boolean(resolvedValue) && sourceRefs.length > 0 && evidenceRefs.length > 0
@@ -635,6 +692,8 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
     evidenceRefs,
     suggestedAction,
     risk,
+    ...(candidateBoundaries.applicableWhen ? { applicableWhen: candidateBoundaries.applicableWhen } : {}),
+    ...(candidateBoundaries.forbiddenWhen ? { forbiddenWhen: candidateBoundaries.forbiddenWhen } : {}),
     ...(learningSignal ? { learningSignal } : {}),
     ...(learningProvenance ? { learningProvenance } : {}),
     ...(captureKey ? { captureKey } : {}),
@@ -826,17 +885,20 @@ async function decideWithoutAsset(
 export async function autoApplyRecallCandidate(
   userId: string,
   candidateId: string,
-  opts: { semanticDedup?: boolean } = {},
+  opts: { semanticDedup?: boolean; provenance?: RecallPromotionProvenance } = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset?: RecallAbilityAssetRecord; mergedIntoAssetId?: string; updateCandidate?: RecallCandidateRecord }> {
+  // 两条系统线共用这个出口，来源要一路带到 lifecycleStatus，否则 KStar
+  // 自进化沉淀会被记成会话自动抽取。缺省按 capture 线处理。
+  const provenance: RecallPromotionProvenance = opts.provenance || 'capture';
   const candidate = await readRecallCandidate(userId, candidateId);
   if (candidate.status === 'confirmed') {
     try {
-      const promoted = await promoteRecallCandidate(userId, candidate.id, { actor: 'system' });
+      const promoted = await promoteRecallCandidate(userId, candidate.id, { actor: 'system', provenance });
       return { candidate: promoted.candidate, asset: promoted.asset };
     } catch (error) {
       const retryable = await readRecallCandidate(userId, candidate.id);
       if (retryable.status !== 'failed') throw error;
-      const recovered = await promoteRecallCandidate(userId, retryable.id, { actor: 'system' });
+      const recovered = await promoteRecallCandidate(userId, retryable.id, { actor: 'system', provenance });
       return { candidate: recovered.candidate, asset: recovered.asset };
     }
   }
@@ -844,8 +906,8 @@ export async function autoApplyRecallCandidate(
   if (candidate.risk === 'high') {
     throw new Error('high-risk candidate requires an independent user risk gate');
   }
-  // 晋升前资产语义查重 + 质量融合（设计 §4.7/§4.9）。默认开启；embed 退化
-  // 时 findSemanticDuplicate 返回 null → 走原 promote 路径（行为不变）。
+  // 晋升前资产语义查重 + 质量融合（设计 §4.7/§4.9）。默认开启；查重不可用时
+  // semanticDedupBeforePromote 抛 SemanticDedupUnavailableError，自动晋升中止。
   if (opts.semanticDedup !== false) {
     const deduped = await semanticDedupBeforePromote(userId, candidate);
     if (deduped) return deduped;
@@ -859,6 +921,7 @@ export async function autoApplyRecallCandidate(
   }
   const promoted = await promoteRecallCandidate(userId, candidate.id, {
     actor: 'system',
+    provenance,
     decisionType: 'accept',
     decisionReason: reason,
   });
@@ -903,13 +966,21 @@ async function semanticDedupBeforePromote(
 } | null> {
   const { findSemanticDuplicate } = await import('./similarity');
   const pools = await loadDedupPools(userId);
-  const match = await findSemanticDuplicate(userId, {
+  const outcome = await findSemanticDuplicate(userId, {
     text: String(candidate.judgment || ''),
     candidateTexts: pools.candidateTexts.filter((c) => c.id !== candidate.id),
     assetTexts: pools.assetTexts,
     excludeIds: new Set([candidate.id]),
   });
-  if (!match) return null;
+  // 查重没做成 ≠ 没有重复。embedding 不可用时不能当作"查过且干净"继续晋升，
+  // 否则两条沉淀线会无声地各写一条讲同一件事的正式资产（指纹拦不住，两边
+  // judgment 文本几乎从不逐字相同）。这里抛错，让自动线把候选留在池子里等
+  // 人工确认；用户手动确认的晋升路径不经过这里，不受影响。
+  if (outcome.status === 'degraded') {
+    throw new SemanticDedupUnavailableError(outcome.reason);
+  }
+  if (outcome.status === 'no_match') return null;
+  const match = outcome.match;
   if (match.kind === 'asset') {
     const asset = await readAbilityAssetSafe(userId, match.id);
     if (!asset) return null;
@@ -1253,6 +1324,47 @@ export async function promoteRecallCandidate(
   ]);
   const causalRule = options.causalRule === undefined ? undefined : normalizeCausalRule(options.causalRule);
   const scopePolicy = normalizeAbilityAssetScopePolicy(options.scopePolicy);
+
+  // 统一晋升闸门（PRD 3.1 四类最低准入门槛）。晋升入口不止一个——会话线、
+  // KStar 线、用户确认、失败重试都能走到这里，所以校验必须钉在这一处，
+  // 而不是只在抽取管线里做一次。
+  {
+    const preflight = await readRecallCandidate(userId, candidateId);
+    // 同一句话被分成两类，说明至少一边分错了。扫一遍候选池：只看同文本、
+    // 未被否决的条目，收集它们的类型。
+    const sameText = comparableJudgmentText(preflight.judgment);
+    const conflictingTypes = sameText
+      ? [...new Set((await listRecallCandidates(userId))
+        .filter((other) => other.id !== preflight.id
+          && other.status !== 'rejected'
+          && other.status !== 'ignored'
+          && comparableJudgmentText(other.judgment) === sameText
+          && other.suggestedType !== preflight.suggestedType)
+        .map((other) => other.suggestedType))]
+      : [];
+    const validation = validatePromotionByAssetType({
+      judgment: preflight.judgment,
+      value: preflight.value,
+      summary: preflight.summary,
+      suggestedType: preflight.suggestedType,
+      suggestedScope: preflight.suggestedScope,
+      suggestedAction: preflight.suggestedAction,
+      // 评审时新写的边界优先，其次用候选自带的（抽取阶段提出的）。
+      applicableWhen: semantics.applicableWhen || preflight.applicableWhen,
+      forbiddenWhen: semantics.forbiddenWhen || preflight.forbiddenWhen,
+      ...(conflictingTypes.length ? { conflictingTypes } : {}),
+    }, { actor: options.actor });
+    if (!validation.ok) {
+      log.info('recall candidate blocked at the promotion gate', {
+        candidateId,
+        suggestedType: preflight.suggestedType,
+        actor: options.actor,
+        reasons: validation.reasons,
+      });
+      throw new PromotionBlockedError(validation.reasons);
+    }
+  }
+
   let decision: ReviewDecision | undefined;
   let receipt: RecallAssetHandoffReceipt | undefined;
   let updated: RecallJsonRecord;
@@ -1325,6 +1437,15 @@ export async function promoteRecallCandidate(
       decisionId: options.decisionId,
     });
     const handoffActor: AbilityAssetActor = decision.actor === 'system' ? 'system' : 'user';
+    // lifecycleStatus 记录的是"这条资产是谁写进来的"，与成熟度（验证到哪一步）
+    // 正交。三个值必须都能写出来，否则 KStar 自进化沉淀会被伪装成会话自动抽取。
+    const handoffLifecycleStatus: RecallAbilityAssetLifecycleStatus = handoffActor === 'user'
+      ? 'user_confirmed_unverified'
+      : resolveAssetLifecycle({
+        lifecycleStatus: options.provenance === 'kstar'
+          ? 'system_precipitated_unverified'
+          : 'automatically_extracted_unverified',
+      });
     const now = new Date().toISOString();
     let stored: RecallAbilityAssetRecord;
     const handoffReason = `review_decision:${decision.decision_id}`;
@@ -1383,9 +1504,7 @@ export async function promoteRecallCandidate(
         ...(scopePolicy ? { scopePolicy } : {}),
         ...(candidate.spaceId ? { spaceId: candidate.spaceId } : {}),
         status: 'active',
-        lifecycleStatus: handoffActor === 'system'
-          ? 'automatically_extracted_unverified'
-          : 'user_confirmed_unverified',
+        lifecycleStatus: handoffLifecycleStatus,
         maturity: handoffActor === 'system' ? 'seed' : 'bud',
         version: '1',
         ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
@@ -1517,6 +1636,19 @@ export async function promoteRecallCandidate(
   receipt = receipt || await readRecallAssetHandoffReceipt(userId, candidate.id, reviewDecisionId);
   if (!receipt) {
     throw new Error('immutable handoff receipt not found for promoted asset');
+  }
+  // 新的 personal 资产要投影进已安装角色模板的字段。这一步过去只有渲染层在
+  // 打开「关于我」时触发，用户不进那个页面就永远不同步。资产已经落盘，投影
+  // 是单向增量视图，失败不能反过来把这次晋升变成错误——所以只 fire-and-forget
+  // 并记日志。schedulePersonalProfileSync 自带同用户在途去重。
+  if (asset.type === 'personal') {
+    void import('./personal-profile-sync')
+      .then((mod) => mod.schedulePersonalProfileSync(userId))
+      .catch((error) => log.warn('personal profile projection after promote degraded', {
+        userId,
+        assetId: asset.id,
+        error: (error as Error).message,
+      }));
   }
   return { candidate, asset, decision, receipt };
 }

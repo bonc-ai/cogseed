@@ -65,6 +65,32 @@ export type RecallCaptureAutomaticIneligibilityReason =
   | 'uncertainty_present'
   | 'high_risk_requires_review';
 
+/** 四类资产的归类校验（PRD 3.1 / 3.2 / 3.3 的硬边界）。
+ *
+ *  提示词只能"要求"模型按四类定义分类，不能保证。这一层是确定性兜底：
+ *  模型把项目事实标成 personal、把原文件标成 template、把一句能力自述标成
+ *  skill_method 时，在候选入池前就降级，而不是等它变成正式资产之后再治理。
+ *
+ *  blocking 与 advisory 分开：blocking 是 PRD 明确排除的内容（有具体反例），
+ *  advisory 是"结构不完整但 PRD 未冻结如何处置"的情况（RuleAsset 边界缺失
+ *  属于此类，等 Q1 决策），advisory 不阻断，只如实记录。 */
+export type RecallCandidateClassificationReason =
+  | 'personal_is_project_fact'
+  | 'template_not_reusable_structure'
+  | 'skill_not_executable'
+  | 'rule_missing_boundary'
+  | 'personal_not_stable'
+  | 'skill_shape_incomplete'
+  | 'judgment_is_meta_commentary'
+  | 'type_conflicts_with_existing';
+
+export interface RecallCandidateClassificationResult {
+  /** 仅由 blocking 原因决定。false → 候选不得进入 pending_review。 */
+  ok: boolean;
+  blockingReasons: RecallCandidateClassificationReason[];
+  advisoryReasons: RecallCandidateClassificationReason[];
+}
+
 export interface RecallCaptureCandidateQualityResult {
   reviewable: boolean;
   reasons: RecallCaptureCandidateQualityReason[];
@@ -99,6 +125,30 @@ const RULE_PATTERN = /(?:必须|务必|不要|禁止|所有|每(?:次|个)|任�
 const TEMPLATE_PATTERN = /(?:模板|格式|结构|字段|清单|范例|示例|固定栏目|テンプレート|形式|構成|項目|チェックリスト|\b(?:template|format|structure|schema|fields?|checklist|modelo|formato|estrutura|campos?)\b)/i;
 const METHOD_PATTERN = /(?:方法|流程|步骤|工作流|操作顺序|校验|验证|排查顺序|方法|手順|ワークフロー|検証|確認|\b(?:method|workflow|procedure|steps?|validate|verify|método|processo|procedimento|etapas|validar|verificar)\b)/i;
 const ONE_OFF_REQUEST_PATTERN = /(?:帮我|请(?:帮我)?|麻烦|能否|可以(?:帮我)?|需要(?:你)?|\b(?:please|can you|could you|help me)\b).{0,80}(?:整理|生成|创建|转(?:成|为)|改(?:成|为)|分析|修复|处理|写|做|看(?:一下)?|转换|\b(?:organize|create|generate|turn|convert|analy[sz]e|fix|process|write|make|review)\b)/i;
+
+// —— 归类校验用的模式 ——
+// 项目/任务事实：PRD 3.4 要求它们留在 Workspace / Project 支撑记录，不进
+// PersonalOntologyAsset。典型："我今天在修 KSTAR"、"这个 Sprint 截止 8/19"。
+const PROJECT_FACT_PATTERN = /(?:今天|今日|昨天|明天|本周|这周|下周|本月|这次|本次|当前|目前|正在|眼下|这个(?:迭代|冲刺|阶段|版本|项目|需求)|本(?:轮|期|阶段|迭代)|截止|deadline|由\S{1,8}负责|负责人是|会议|日程|排期|\bsprint\b|\bmilestone\b|\btoday\b|\bthis (?:week|month|sprint|iteration|release)\b|\bdue\b|\bhoje\b|\besta semana\b)/i;
+// 长期稳定性标记：有这些才算"关于我"，否则多半是一次性状态。
+const LONG_TERM_PATTERN = /(?:长期|一直|向来|一贯|通常|一般|习惯(?:上|于)?|总是|每次都|我的风格|我倾向|我偏好|长年|多年|常年|いつも|普段|長期|\b(?:long[- ]term|usually|generally|typically|habitually|always|by habit|tend to|my style)\b)/i;
+// 可复用结构：Template 必须是"结构"，不是文件本身，也不是某次实例。
+const REUSABLE_STRUCTURE_PATTERN = /(?:模板|范式|骨架|框架|结构|章节|栏目|字段|清单|检查表|checklist|条目|格式|schema|占位|slots?|大纲|提纲|テンプレート|構成|項目|チェックリスト|\b(?:template|skeleton|outline|sections?|fields?|placeholders?|structure|checklist|boilerplate|modelo|estrutura|seções|campos)\b)/i;
+// 原文件 / 实例化信息：PRD 3.2 明确它们保持 CognitionSource 身份。
+const RAW_ARTIFACT_PATTERN = /(?:\.(?:docx?|xlsx?|pptx?|pdf|md|txt|csv|png|jpe?g|zip)\b|这(?:份|个)(?:文件|文档|附件)|上传的(?:文件|文档)|附件本身|\b(?:uploaded file|attached file|this document)\b)/i;
+// Skill 的五项可执行要素（PRD 8.2 Goal/Trigger/Input/Action Plan/Output/Evaluation）。
+const SKILL_TRIGGER_PATTERN = /(?:当\S{0,20}(?:时|时候)|遇到|一旦|如果|若|触发|适用于|什么时候用|进入\S{0,10}阶段|\b(?:when|whenever|if|trigger|use when|applies to)\b)/i;
+const SKILL_INPUT_PATTERN = /(?:输入|需要提供|先准备|前置|所需(?:材料|信息|资料)|依赖|参数|\b(?:input|requires?|prerequisite|given|parameters?)\b)/i;
+const SKILL_PLAN_PATTERN = /(?:步骤|流程|先\S{1,20}(?:再|然后|接着)|第一步|依次|按顺序|工作流|\d\s*[.、)]\s*\S|手順|\b(?:steps?|workflow|procedure|first.{0,30}then|process)\b)/i;
+const SKILL_OUTPUT_PATTERN = /(?:输出|产出|交付|结果是|生成\S{0,10}(?:文档|报告|清单|结论)|\b(?:output|deliverable|produces?|results? in)\b)/i;
+const SKILL_EVALUATION_PATTERN = /(?:验收|校验|验证|检查|通过条件|判断标准|评价|质量要求|自检|复核|\b(?:validate|verify|check|acceptance|criteria|evaluation|quality gate)\b)/i;
+// 能力自述：只声明"我会 X"，没有任何可执行结构。
+// 元评论：整句都在评价"这条候选值不值得留"，而不是给出可复用的内容本身。
+// 实测样本：「有用且可复用」「有用，体现用户对智能体的期望行为」。
+// 只匹配整句——正文里出现"值得沉淀"这类词是正常的，不该误伤。
+const META_COMMENTARY_PATTERN = /^(?:很)?(?:有用|有价值|有帮助|值得(?:保存|沉淀|保留|记住)|可复用|能复用|重要)(?:[、,，和与及]?(?:且|并|而且|同时)?(?:很)?(?:有用|有价值|有帮助|值得(?:保存|沉淀|保留|记住)|可复用|能复用|重要|通用))*[\s。.!！]*(?:[，,]\s*(?:体现|说明|反映|表明|符合)[^。.!！]{0,40})?[\s。.!！]*$/i;
+
+const CAPABILITY_CLAIM_PATTERN = /^(?:我(?:很)?(?:擅长|会|能|熟悉|精通|拿手)|\b(?:i(?:'m| am) (?:good at|skilled|experienced)|i can)\b)/i;
 
 function pushUnique<T>(items: T[], value: T): void {
   if (!items.includes(value)) items.push(value);
@@ -338,6 +388,86 @@ export function screenRecallCaptureValue(
     return { eligible: true, signals: ['substantive_exchange'] };
   }
   return { eligible: false, signals: [], reason: 'low_reuse_value' };
+}
+
+/** 归类校验：候选自称的 suggestedType 是否真的成立（PRD 3.1 四类边界）。
+ *
+ *  只看候选文本与其适用/禁止边界，不看来源——同一来源可以产生多类候选
+ *  （PRD 3.2「候选按内容而不是按来源分流」）。 */
+export function assessRecallCandidateClassification(
+  candidate: RecallCaptureCandidateQualityInput,
+  boundaries: {
+    applicableWhen?: readonly string[];
+    forbiddenWhen?: readonly string[];
+    /** 系统里已经存在的、同一 judgment 但类型不同的条目的类型集合。
+     *  同一句话不可能既是模板又是方法——出现即说明分类不可信。 */
+    conflictingTypes?: readonly string[];
+  } = {},
+): RecallCandidateClassificationResult {
+  const blockingReasons: RecallCandidateClassificationReason[] = [];
+  const advisoryReasons: RecallCandidateClassificationReason[] = [];
+  const text = `${candidate.judgment}\n${candidate.summary}\n${candidate.value}`;
+
+  // 元评论对四类都不成立：它评价的是"这条候选"，不是任何可复用的认知。
+  if (META_COMMENTARY_PATTERN.test(normalized(candidate.judgment))) {
+    pushUnique(blockingReasons, 'judgment_is_meta_commentary');
+  }
+
+  // 同一 judgment 已经以别的类型存在：两边至少有一边分错了，谁都不该晋升，
+  // 留给人判断这句话到底属于哪一类。
+  const conflicting = (boundaries.conflictingTypes || []).filter((type) => type && type !== candidate.suggestedType);
+  if (conflicting.length) pushUnique(blockingReasons, 'type_conflicts_with_existing');
+
+  if (candidate.suggestedType === 'personal') {
+    // 项目事实 + 没有任何长期性标记 → 这是任务状态，不是"关于我"。
+    if (PROJECT_FACT_PATTERN.test(text) && !LONG_TERM_PATTERN.test(text)) {
+      pushUnique(blockingReasons, 'personal_is_project_fact');
+    } else if (!LONG_TERM_PATTERN.test(text) && !STABLE_PREFERENCE_PATTERN.test(text)) {
+      // 没写明长期，但也不像项目事实：可能只是措辞省略，交人工判断。
+      pushUnique(advisoryReasons, 'personal_not_stable');
+    }
+  }
+
+  if (candidate.suggestedType === 'template') {
+    // 必须是可复用结构；指向原文件本身的不算（PRD 3.2 Artifact 晋升边界）。
+    const describesStructure = REUSABLE_STRUCTURE_PATTERN.test(text);
+    const pointsAtRawFile = RAW_ARTIFACT_PATTERN.test(text);
+    if (!describesStructure || (pointsAtRawFile && !describesStructure)) {
+      pushUnique(blockingReasons, 'template_not_reusable_structure');
+    }
+  }
+
+  if (candidate.suggestedType === 'skill_method') {
+    // 这一层只负责拦住"根本不是方法"的东西：能力自述（"我擅长写 PRD"），
+    // 以及五项要素一个都沾不上的空壳。完整的 SkillManifest 校验属于 Skill
+    // 正式准入（PRD 8.2 Validator + Security Scanner + 最小真实运行验证），
+    // 放在候选归类这一层会误伤大量写法正常的方法——例如用逗号连接的
+    // "Review the request, apply the method, and validate the result."
+    const shape = [
+      SKILL_TRIGGER_PATTERN.test(text),
+      SKILL_INPUT_PATTERN.test(text),
+      SKILL_PLAN_PATTERN.test(text),
+      SKILL_OUTPUT_PATTERN.test(text),
+      SKILL_EVALUATION_PATTERN.test(text),
+    ];
+    const present = shape.filter(Boolean).length;
+    if (CAPABILITY_CLAIM_PATTERN.test(normalized(candidate.judgment)) || present === 0) {
+      pushUnique(blockingReasons, 'skill_not_executable');
+    } else if (present < 3) {
+      // 结构不完整但不空：留给用户复核，同时给后续 Skill 准入留下记录。
+      pushUnique(advisoryReasons, 'skill_shape_incomplete');
+    }
+  }
+
+  if (candidate.suggestedType === 'rule') {
+    // PRD 3.1 要求 RuleAsset 确认适用与禁止范围。自动线目前拿不到这两个值，
+    // 如何处置由 Q1 决定，这里先如实记录，不阻断（避免在决策前改变产能）。
+    const hasBoundary = (boundaries.applicableWhen?.length || 0) > 0
+      || (boundaries.forbiddenWhen?.length || 0) > 0;
+    if (!hasBoundary) pushUnique(advisoryReasons, 'rule_missing_boundary');
+  }
+
+  return { ok: blockingReasons.length === 0, blockingReasons, advisoryReasons };
 }
 
 export function assessRecallCaptureCandidateQuality(

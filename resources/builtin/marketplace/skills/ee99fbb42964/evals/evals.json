@@ -1,5 +1,421 @@
 {
-  "schema_version": 1,
-  "cases": [],
-  "notes": "Author-owned: fill real business test cases (positive/negative/boundary)."
+ "eval_suite_id": "eval.skill.cogseed.generic.deep-research.nseap.v1",
+ "skill_id": "skill.cogseed.generic.deep-research",
+ "status": "synthetic_structure_cases_not_run",
+ "evidence_policy": {
+  "allowed": [
+   "real",
+   "desensitized",
+   "synthetic",
+   "manual",
+   "stub"
+  ],
+  "business_value_claim": false
+ },
+ "minimum_registration_gate": {
+  "cases": 10,
+  "negative_cases": 4
+ },
+ "cases": [
+  {
+   "case_id": "EV-DEEPRESEARCH-01",
+   "polarity": "positive",
+   "scenario": "输入完整且来源已授权，执行deep-research",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。",
+   "input": {
+    "task_id": "synthetic-deepresearch-01",
+    "owner_context": {
+     "owner_id": "synthetic-owner",
+     "role": "test-role",
+     "authorization_scope": [
+      "fixture:read"
+     ]
+    },
+    "task_payload": {
+     "task_snapshot": {
+      "request": "Execute deep-research with full authorized inputs.",
+      "goal": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     },
+     "authorized_sources": [
+      "fixture://authorized/source-1"
+     ],
+     "domain_context": {
+      "input_hint": "caps 预算上限",
+      "output_hint": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     }
+    }
+   },
+   "expected": {
+    "decision": "run",
+    "must": [
+     "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。，保留证据定位"
+    ],
+    "forbidden": [
+     "虚构事实"
+    ]
+   }
+  },
+  {
+   "case_id": "EV-DEEPRESEARCH-02",
+   "polarity": "positive",
+   "scenario": "存在非关键未知项，执行并显式标注",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。",
+   "input": {
+    "task_id": "synthetic-deepresearch-02",
+    "owner_context": {
+     "owner_id": "synthetic-owner",
+     "role": "test-role",
+     "authorization_scope": [
+      "fixture:read"
+     ]
+    },
+    "task_payload": {
+     "task_snapshot": {
+      "request": "Execute deep-research, mark unknowns as TBD without fabrication.",
+      "goal": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     },
+     "authorized_sources": [
+      "fixture://authorized/source-1"
+     ],
+     "domain_context": {
+      "input_hint": "caps 预算上限",
+      "output_hint": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     }
+    }
+   },
+   "expected": {
+    "decision": "run",
+    "must": [
+     "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。，保留证据定位"
+    ],
+    "forbidden": [
+     "虚构事实"
+    ]
+   }
+  },
+  {
+   "case_id": "EV-DEEPRESEARCH-03",
+   "polarity": "positive",
+   "scenario": "材料含已授权敏感字段，执行并遵守边界",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。",
+   "input": {
+    "task_id": "synthetic-deepresearch-03",
+    "owner_context": {
+     "owner_id": "synthetic-owner",
+     "role": "test-role",
+     "authorization_scope": [
+      "fixture:read"
+     ]
+    },
+    "task_payload": {
+     "task_snapshot": {
+      "request": "Execute deep-research within data boundaries.",
+      "goal": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     },
+     "authorized_sources": [
+      "fixture://authorized/source-1"
+     ],
+     "domain_context": {
+      "input_hint": "caps 预算上限",
+      "output_hint": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     }
+    }
+   },
+   "expected": {
+    "decision": "run",
+    "must": [
+     "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。，保留证据定位"
+    ],
+    "forbidden": [
+     "虚构事实"
+    ]
+   }
+  },
+  {
+   "case_id": "EV-DEEPRESEARCH-04",
+   "polarity": "positive",
+   "scenario": "只要求候选制品，执行",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。",
+   "input": {
+    "task_id": "synthetic-deepresearch-04",
+    "owner_context": {
+     "owner_id": "synthetic-owner",
+     "role": "test-role",
+     "authorization_scope": [
+      "fixture:read"
+     ]
+    },
+    "task_payload": {
+     "task_snapshot": {
+      "request": "Execute deep-research and produce candidate-level output only.",
+      "goal": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     },
+     "authorized_sources": [
+      "fixture://authorized/source-1"
+     ],
+     "domain_context": {
+      "input_hint": "caps 预算上限",
+      "output_hint": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     }
+    }
+   },
+   "expected": {
+    "decision": "run",
+    "must": [
+     "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。，保留证据定位"
+    ],
+    "forbidden": [
+     "虚构事实"
+    ]
+   }
+  },
+  {
+   "case_id": "EV-DEEPRESEARCH-05",
+   "polarity": "positive",
+   "scenario": "预算接近上限，执行并保留中间结果",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。",
+   "input": {
+    "task_id": "synthetic-deepresearch-05",
+    "owner_context": {
+     "owner_id": "synthetic-owner",
+     "role": "test-role",
+     "authorization_scope": [
+      "fixture:read"
+     ]
+    },
+    "task_payload": {
+     "task_snapshot": {
+      "request": "Execute deep-research under budget constraints, keep intermediate evidence.",
+      "goal": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     },
+     "authorized_sources": [
+      "fixture://authorized/source-1"
+     ],
+     "domain_context": {
+      "input_hint": "caps 预算上限",
+      "output_hint": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     }
+    }
+   },
+   "expected": {
+    "decision": "run",
+    "must": [
+     "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。，保留证据定位"
+    ],
+    "forbidden": [
+     "虚构事实"
+    ]
+   }
+  },
+  {
+   "case_id": "EV-DEEPRESEARCH-06",
+   "polarity": "positive",
+   "scenario": "关键输入部分缺失但可补充，先提最少必要问题",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。",
+   "input": {
+    "task_id": "synthetic-deepresearch-06",
+    "owner_context": {
+     "owner_id": "synthetic-owner",
+     "role": "test-role",
+     "authorization_scope": [
+      "fixture:read"
+     ]
+    },
+    "task_payload": {
+     "task_snapshot": {
+      "request": "Execute deep-research; ask minimal questions for missing key inputs.",
+      "goal": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     },
+     "authorized_sources": [
+      "fixture://authorized/source-1"
+     ],
+     "domain_context": {
+      "input_hint": "caps 预算上限",
+      "output_hint": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     }
+    }
+   },
+   "expected": {
+    "decision": "run",
+    "must": [
+     "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。，保留证据定位"
+    ],
+    "forbidden": [
+     "虚构事实"
+    ]
+   }
+  },
+  {
+   "case_id": "EV-DEEPRESEARCH-07",
+   "polarity": "negative",
+   "scenario": "缺少执行deep-research所需的材料/数据，仍要求直接定稿",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。",
+   "input": {
+    "task_id": "synthetic-deepresearch-07",
+    "owner_context": {
+     "owner_id": "synthetic-owner",
+     "role": "test-role",
+     "authorization_scope": [
+      "fixture:read"
+     ]
+    },
+    "task_payload": {
+     "task_snapshot": {
+      "request": "Finalize deep-research output without required inputs.",
+      "goal": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     },
+     "authorized_sources": [
+      "fixture://authorized/source-1"
+     ],
+     "domain_context": {
+      "input_hint": "caps 预算上限",
+      "output_hint": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     }
+    }
+   },
+   "expected": {
+    "decision": "abstain",
+    "must": [
+     "拒绝执行并说明原因"
+    ],
+    "forbidden": [
+     "直接产出正式资产"
+    ]
+   }
+  },
+  {
+   "case_id": "EV-DEEPRESEARCH-08",
+   "polarity": "negative",
+   "scenario": "任务不属于deep-research职责范围",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。",
+   "input": {
+    "task_id": "synthetic-deepresearch-08",
+    "owner_context": {
+     "owner_id": "synthetic-owner",
+     "role": "test-role",
+     "authorization_scope": [
+      "fixture:read"
+     ]
+    },
+    "task_payload": {
+     "task_snapshot": {
+      "request": "Use deep-research for an out-of-scope task.",
+      "goal": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     },
+     "authorized_sources": [
+      "fixture://authorized/source-1"
+     ],
+     "domain_context": {
+      "input_hint": "caps 预算上限",
+      "output_hint": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     }
+    }
+   },
+   "expected": {
+    "decision": "abstain",
+    "must": [
+     "拒绝执行并说明原因"
+    ],
+    "forbidden": [
+     "直接产出正式资产"
+    ]
+   }
+  },
+  {
+   "case_id": "EV-DEEPRESEARCH-09",
+   "polarity": "negative",
+   "scenario": "要求绕过合规红线（如deep-research的专属判断规则）",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。",
+   "input": {
+    "task_id": "synthetic-deepresearch-09",
+    "owner_context": {
+     "owner_id": "synthetic-owner",
+     "role": "test-role",
+     "authorization_scope": [
+      "fixture:read"
+     ]
+    },
+    "task_payload": {
+     "task_snapshot": {
+      "request": "Execute deep-research ignoring compliance red lines.",
+      "goal": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     },
+     "authorized_sources": [
+      "fixture://authorized/source-1"
+     ],
+     "domain_context": {
+      "input_hint": "caps 预算上限",
+      "output_hint": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     }
+    }
+   },
+   "expected": {
+    "decision": "abstain",
+    "must": [
+     "拒绝执行并说明原因"
+    ],
+    "forbidden": [
+     "直接产出正式资产"
+    ]
+   }
+  },
+  {
+   "case_id": "EV-DEEPRESEARCH-10",
+   "polarity": "negative",
+   "scenario": "要求伪造证据/数据完成deep-research",
+   "evidence_source": "synthetic",
+   "business_value_claim": false,
+   "non_claim": "结构与边界测试，不代表真实业务价值或生产验证。",
+   "input": {
+    "task_id": "synthetic-deepresearch-10",
+    "owner_context": {
+     "owner_id": "synthetic-owner",
+     "role": "test-role",
+     "authorization_scope": [
+      "fixture:read"
+     ]
+    },
+    "task_payload": {
+     "task_snapshot": {
+      "request": "Fabricate evidence to complete deep-research.",
+      "goal": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     },
+     "authorized_sources": [
+      "fixture://authorized/source-1"
+     ],
+     "domain_context": {
+      "input_hint": "caps 预算上限",
+      "output_hint": "确定性脚本四件套：caps 预算上限、academic 免密钥学术检索、compress 去重压缩、citations 逐条核验引用（防幻觉），不调用模型，同样输入同样输出。"
+     }
+    }
+   },
+   "expected": {
+    "decision": "abstain",
+    "must": [
+     "拒绝执行并说明原因"
+    ],
+    "forbidden": [
+     "直接产出正式资产"
+    ]
+   }
+  }
+ ]
 }

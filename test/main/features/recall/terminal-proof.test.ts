@@ -84,7 +84,76 @@ describe('Recall terminal transfer proof handler', () => {
     expect(first).toMatchObject({ handled: true, proof: { projectionId: projection.id, executionId: 'run-a', status: 'succeeded' } });
     expect(second).toMatchObject({ handled: true, proof: { id: first.proof?.id, status: 'succeeded' } });
     expect((await proofs.listTransferProofs('user-a'))).toHaveLength(1);
-    expect((await assets.listAbilityAssets('user-a'))[0].maturity).toBe('transfer_validated');
+    // PRD 3.6：Transfer Verified 要求真实加载 + 生成 Receipt。任务跑完但没有
+    // 回执时，只证明了"这次运行结束了"，不证明资产被正确带入——不升档。
+    expect((await assets.listAbilityAssets('user-a'))[0].maturity).not.toBe('transfer_validated');
+  });
+
+  it('advances maturity only when a reuse receipt proves the assets were loaded', async () => {
+    const { asset, projection } = await confirmedProjection('run-receipt');
+    const { terminalProof, proofs, assets } = await modules();
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+
+    // 本次运行真实落过的回执：executionId 是 `turn-<turnId>`，与 execution-records
+    // 同名；reusedRefs 记的是"本轮真的注入了哪几条"。
+    const targetSessionId = 'gmember-cid-a-agent-a';
+    await receipts.prepareReceipt('user-a', {
+      executionId: 'turn-t1',
+      targetSessionId,
+      reusedRefs: [asset.id],
+      omittedRefs: [],
+      permissionMode: 'read-only',
+      allowedScopes: ['cognition:inherited'],
+      boundary: 'real',
+    }, { sessionId: targetSessionId });
+
+    const result = await terminalProof.handleRecallTaskTerminal({
+      run_id: 'run-receipt',
+      user_id: 'user-a',
+      conversation_id: 'cid-a',
+      status: 'completed' as const,
+      projection_id: projection.id,
+      // 显式一一关联：终态事件带上本次运行落过回执的轮次，不靠时间窗反查。
+      reuse_turn_ids: ['t1'],
+      started_at_ms: 1,
+      finished_at_ms: 2,
+    });
+
+    expect(result).toMatchObject({ handled: true, proof: { status: 'succeeded' } });
+    expect(result.handled && result.proof.receiptId).toBeTruthy();
+    const advanced = (await assets.listAbilityAssets('user-a')).find((a) => a.id === asset.id);
+    expect(advanced?.maturity).toBe('transfer_validated');
+    expect((await proofs.listTransferProofs('user-a')).some((p) => p.receiptId)).toBe(true);
+  });
+
+  it('ignores a receipt that does not cover this projection\'s assets', async () => {
+    const { asset, projection } = await confirmedProjection('run-unrelated');
+    const { terminalProof, assets } = await modules();
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    const targetSessionId = 'gmember-cid-a-agent-b';
+    await receipts.prepareReceipt('user-a', {
+      executionId: 'turn-t2',
+      targetSessionId,
+      reusedRefs: ['aa-some-other-asset'],
+      omittedRefs: [],
+      permissionMode: 'read-only',
+      allowedScopes: ['cognition:inherited'],
+      boundary: 'real',
+    }, { sessionId: targetSessionId });
+
+    await terminalProof.handleRecallTaskTerminal({
+      run_id: 'run-unrelated',
+      user_id: 'user-a',
+      conversation_id: 'cid-a',
+      status: 'completed' as const,
+      projection_id: projection.id,
+      reuse_turn_ids: ['t2'],
+      started_at_ms: 1,
+      finished_at_ms: 2,
+    });
+
+    const untouched = (await assets.listAbilityAssets('user-a')).find((a) => a.id === asset.id);
+    expect(untouched?.maturity).not.toBe('transfer_validated');
   });
 
 

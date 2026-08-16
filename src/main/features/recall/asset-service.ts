@@ -100,7 +100,7 @@ const ABILITY_ASSET_STATUSES = new Set<RecallAbilityAssetRecord['status']>([
 ]);
 
 const ABILITY_ASSET_MATURITIES = new Set<RecallAbilityAssetRecord['maturity']>([
-  'seed', 'bud', 'transfer_validated', 'effectiveness_validated', 'stable',
+  'seed', 'bud', 'transfer_validated', 'effectiveness_validated',
 ]);
 
 /**

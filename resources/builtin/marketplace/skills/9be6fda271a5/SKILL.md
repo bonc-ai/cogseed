@@ -215,10 +215,10 @@ Handling:
 <!-- NSEAP-GATE:BEGIN -->
 ## NSEAP Gate 契约
 
-- `use_when`：Organize user-provided materials or local folders into traceable notes, knowledge cards, categories, indexes, and cleanup plans. Use this skill whenever the user asks to organize multiple links, files, snippets, research materials, downloads, personal knowledge flow materials, or a local directory.，并具备完成该任务所需的授权材料、环境和范围。
-- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「material-organizer」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
-- `positive_examples`：`请基于已授权材料执行material-organizer，输出结构化的可审计结果并保留证据定位。`
-- `negative_examples`：`缺少执行material-organizer所需证据，仍请直接定稿。`
+- `use_when`：用户提供 2 个以上资料（链接/文件/片段）或本地目录，要求整理、分类、归档、研究笔记、知识卡、实体关系或整理报告；材料是用户已提供或明确指向的。
+- `do_not_use_when`：单篇文章精读、论文阅读或广义证据综述；翻译、润色、简历优化或课程知识框架；主动搜索新材料（除非用户明确提供搜索结果）；未经许可写入外部知识库或改动目录内文件。
+- `positive_examples`：`Organize these 12 links into research notes with source tracing and keyword index.`；`Scan my Downloads folder and produce categories, duplicates, and archiving suggestions.`
+- `negative_examples`：`Search the web for more materials and add them to my notes.`；`Rewrite my resume based on these files.`
 
-本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
 <!-- NSEAP-GATE:END -->

@@ -136,6 +136,11 @@ export interface KstarCandidateProposal {
   uncertainty?: string;
   suggestedType: AbilityAssetType;
   suggestedScope: string;
+  /** 适用范围。规则类候选必须带（PRD 3.1 的 RuleAsset 最低门槛）。
+   *  只能写 Episode 真实支撑得起的范围——这条教训是在哪类任务上学到的，
+   *  就只声明适用于哪类任务；不编造禁止范围。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
   sourceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
   learningProvenance?: KstarLearningProvenance;
