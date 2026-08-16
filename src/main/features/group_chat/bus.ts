@@ -3909,6 +3909,35 @@ async function runActorTurnBody(
           systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
           recallCitations = recallContext.citations;
         }
+        // PRD 3.6 Transfer Verified 闭环：投影资产真实注入时在同一处落
+        // ContextReuseReceipt（key=turn-<turnId>），并登记到本次运行的
+        // reuseTurnIds——终态事件据此把迁移证明关联到真实加载凭证，资产
+        // 才升 transfer_validated（下次同类任务可自动注入）。缺失这一环，
+        // terminal-proof 永远找不到 receipt → 成熟度永不升档（已观测
+        // 'transfer proof completed without a reuse receipt'）。
+        if (recallCitations.length && state.taskRun) {
+          const receiptRefs = recallCitations.map((c) => c.assetId);
+          try {
+            const { prepareReceipt } = await import('../p3394/context-reuse-receipt');
+            await prepareReceipt(
+              uid,
+              {
+                executionId: `turn-${item.turnId}`,
+                targetSessionId: `gconv-${cid}`,
+                reusedRefs: receiptRefs,
+                omittedRefs: [],
+                permissionMode: 'read-only',
+                allowedScopes: ['cognition:projection'],
+                boundary: 'real',
+              },
+              { sessionId: `gconv-${cid}` },
+            ).catch(() => undefined);
+            const turns = state.taskRun.reuseTurnIds || [];
+            if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
+          } catch {
+            // receipt 落库失败不阻断回合——只是这次不产生迁移凭证。
+          }
+        }
       } catch (error) {
         log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
       }
@@ -3935,6 +3964,32 @@ async function runActorTurnBody(
             assetId: asset.id,
             assetVersion: asset.version,
           }));
+          // 派发授权资产同样落 receipt + 登记 reuseTurnIds（PRD 3.6 闭环）：
+          // worker 真实加载了 Commander 授权的资产，终态时应能据此升档。
+          if (state.taskRun) {
+            try {
+              const { prepareReceipt } = await import('../p3394/context-reuse-receipt');
+              await prepareReceipt(
+                uid,
+                {
+                  executionId: `turn-${item.turnId}`,
+                  targetSessionId: actor.kind === 'agent'
+                    ? `gmember-${cid}-${actor.id}`
+                    : `gconv-${cid}`,
+                  reusedRefs: dispatched.assets.map((asset) => asset.id),
+                  omittedRefs: [],
+                  permissionMode: 'read-only',
+                  allowedScopes: ['cognition:projection'],
+                  boundary: 'real',
+                },
+                { sessionId: `gmember-${cid}-${actor.id}` },
+              ).catch(() => undefined);
+              const turns = state.taskRun.reuseTurnIds || [];
+              if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
+            } catch {
+              // receipt 落库失败不阻断回合。
+            }
+          }
         }
       } catch (error) {
         log.warn(`Commander-dispatched asset injection failed cid=${cid}: ${(error as Error).message}`);
