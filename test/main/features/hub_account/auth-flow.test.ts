@@ -70,10 +70,10 @@ describe('hub account auth-flow', () => {
   beforeEach(() => {
     mocks.tmpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-account-test-'));
     vi.clearAllMocks();
-    fakeClient.login.mockResolvedValue({ authorize_url: 'https://github.com/oauth', state: 'state_abc' });
+    fakeClient.login.mockResolvedValue({ authorize_url: 'https://cogseed-open.bonc.com.cn/login', state: 'state_abc' });
     fakeClient.callback.mockResolvedValue({
       is_new_account: true,
-      account: { account_id: 'cogseed_acc_1', auth_provider: 'github', status: 'active', created_at: 't' },
+      account: { account_id: 'cogseed_acc_1', auth_provider: 'web', status: 'active', created_at: 't' },
       session: SESSION,
     });
     fakeClient.bind.mockResolvedValue({
@@ -98,13 +98,13 @@ describe('hub account auth-flow', () => {
 
   it('startLogin stores the pending state and returns the authorize URL', async () => {
     const res = await authFlow.startLogin('88492103');
-    expect(res.authorize_url).toContain('github');
+    expect(res.authorize_url).toContain('cogseed-open.bonc.com.cn');
     expect(authFlow.currentLoginState('88492103')).toBe('state_abc');
   });
 
   it('openAuthorizeUrl opens the system browser', async () => {
-    await authFlow.openAuthorizeUrl('https://github.com/oauth');
-    expect(mocks.shellOpenExternal).toHaveBeenCalledWith('https://github.com/oauth');
+    await authFlow.openAuthorizeUrl('https://cogseed-open.bonc.com.cn/login');
+    expect(mocks.shellOpenExternal).toHaveBeenCalledWith('https://cogseed-open.bonc.com.cn/login');
   });
 
   it('completeLogin rejects a mismatched state', async () => {
@@ -149,7 +149,7 @@ describe('hub account auth-flow', () => {
   it('completeLogin skips binding for an existing account', async () => {
     fakeClient.callback.mockResolvedValue({
       is_new_account: false,
-      account: { account_id: 'cogseed_acc_1', auth_provider: 'github', status: 'active', created_at: 't' },
+      account: { account_id: 'cogseed_acc_1', auth_provider: 'web', status: 'active', created_at: 't' },
       session: SESSION,
     });
     await authFlow.startLogin('88492103');
@@ -223,7 +223,7 @@ describe('hub account auth-flow', () => {
     };
     fakeClient.callback.mockResolvedValue({
       is_new_account: false,
-      account: { account_id: 'cogseed_acc_1', auth_provider: 'github', status: 'active', created_at: 't' },
+      account: { account_id: 'cogseed_acc_1', auth_provider: 'web', status: 'active', created_at: 't' },
       session: expiring,
     });
     await authFlow.startLogin('88492103');
@@ -238,7 +238,7 @@ describe('hub account auth-flow', () => {
     fakeClient.me
       .mockRejectedValueOnce(new HubApiError('AUTH_INVALID_TOKEN', 'access_token 已过期或无效', 401))
       .mockResolvedValueOnce({
-        account: { account_id: 'cogseed_acc_1', auth_provider: 'github', status: 'active', created_at: 't', bound_local_identity: '88492103', community_profile: { display_name: null, is_contributor: false } },
+        account: { account_id: 'cogseed_acc_1', auth_provider: 'web', status: 'active', created_at: 't', bound_local_identity: '88492103', community_profile: { display_name: null, is_contributor: false } },
         stats: { active_device_count: 1, consent_count: 0 },
       });
     const me = await authFlow.getAccountMe('88492103');
