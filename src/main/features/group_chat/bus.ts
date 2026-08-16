@@ -134,6 +134,7 @@ import {
   chatAttachmentDirForConversation,
   conversationLayout,
 } from "../../util/project-layout";
+import { cachedConversationSpace } from "../chat_attachments";
 import * as agentsFeat from "../agents";
 import * as commanderRuntimeStats from "../commander_runtime_stats";
 import { getThinkingLevel } from "../config";
@@ -2594,7 +2595,7 @@ async function _enqueueBody(
       .slice(0, 12_000);
     const attachments = (msg.attachments || []).map((name) => ({
       type: 'file',
-      path: path.join(chatAttachmentDirForConversation(uid, cid), name),
+      path: path.join(chatAttachmentDirForConversation(uid, cid, null, cachedConversationSpace(uid, cid) || null), name),
       name,
     }));
     const starter: InteractiveFollowupStarter = _interactiveFollowupStarterForTest ?? (async (input) => {
@@ -2733,7 +2734,7 @@ function _resolvedReferenceAttachments(
   if (!safeId(ref.source_cid) || !ref.attachments?.length) return [];
   let root: string;
   try {
-    root = path.resolve(chatAttachmentDirForConversation(uid, ref.source_cid));
+    root = path.resolve(chatAttachmentDirForConversation(uid, ref.source_cid, null, cachedConversationSpace(uid, ref.source_cid) || null));
   } catch {
     return ref.attachments.map((item) => ({
       name: item.name,
@@ -10809,7 +10810,8 @@ async function _buildCliPrompt(
 
   // ── Attachments — collected across the whole slice + this dispatch
   // De-duplicate by absolute path; preserve oldest-first order.
-  const attDir = chatAttachmentDirForConversation(uid, cid);
+  // 空间会话附件在空间目录（spaces/<sid>/chat_attachments/<cid>/）
+  const attDir = chatAttachmentDirForConversation(uid, cid, null, spaceId || null);
   const allAtts: string[] = [];
   const seenAtts = new Set<string>();
   const collect = (names: string[] | undefined) => {

@@ -322,6 +322,13 @@ function bindStaticHandlers() {
   document.getElementById('workspace-btn')?.addEventListener('click', () => _setViewFromSidebar('workspace'));
   document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
 
+  // Sidebar conv tabs（ZCode 式「空间 | 最近任务」）
+  document.querySelectorAll('#sidebar-conv-tabs [data-conv-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (typeof _setSidebarConvTab === 'function') _setSidebarConvTab(btn.dataset.convTab);
+    });
+  });
+
   // Global search trigger + Cmd+K
   _bindGlobalSearch();
 

@@ -31,14 +31,17 @@
       <div class="sidebar-actions">
         <button class="sidebar-btn" id="new-task-btn"><span data-ui-icon="plus" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_task">新建任务</span></button>
         <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.home">首页</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
-        <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
+        <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">工作空间</span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
       </div>
       <div class="sidebar-conversation-nav">
+        <div class="sidebar-conv-tabs" id="sidebar-conv-tabs" role="tablist">
+          <button type="button" class="sidebar-conv-tab" role="tab" data-conv-tab="spaces" data-i18n="sidebar.spaces_section">空间</button>
+          <button type="button" class="sidebar-conv-tab is-active" role="tab" aria-selected="true" data-conv-tab="recent" data-i18n="sidebar.recent_tasks">最近任务</button>
+        </div>
         <div class="sidebar-section sidebar-conversations-section">
-          <div class="sidebar-section-title" data-i18n="sidebar.conversations">Conversations</div>
           <div class="conversation-list" id="conversation-list">
             <div class="conv-empty" data-i18n="sidebar.conv_empty">No conversations yet</div>
           </div>

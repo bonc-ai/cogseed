@@ -66,6 +66,13 @@ function loadConversationRenderer() {
       'chat.stream.duration_hms': `${params?.h}h ${params?.m}m ${params?.s}s`,
       'sidebar.bucket.today': 'Today',
       'sidebar.bucket.last30': 'Last 30 days',
+      'sidebar.recent_tasks': 'Recent tasks',
+      'sidebar.spaces_section': 'Spaces',
+      'sidebar.time_just_now': 'Just now',
+      'sidebar.time_minutes': `${params?.n || ''}m ago`,
+      'sidebar.time_hours': `${params?.n || ''}h ago`,
+      'sidebar.time_days': `${params?.n || ''}d ago`,
+      'sidebar.time_old': 'Earlier',
     }[key] || key),
     _BUCKET_ORDER: ['today', 'last30'],
     timeBucket: () => 'today',
@@ -516,11 +523,11 @@ describe('conversation sidebar task row actions', () => {
     ];
 
     expect(context._conversationActionItems('c1').map((it: any) => it.label))
-      .toEqual(['Pin', 'Rename', 'Copy', 'Move to space', 'Delete']);
+      .toEqual(['Pin', 'Rename', 'Copy', 'Move to space', 'chat.merge.select_action', 'Delete']);
     expect(context._conversationActionItems('c2').map((it: any) => it.label))
-      .toEqual(['Unpin', 'Rename', 'Copy', 'Move to space', 'Delete']);
+      .toEqual(['Unpin', 'Rename', 'Copy', 'Move to space', 'chat.merge.select_action', 'Delete']);
     expect(context._conversationActionItems('c1', { hidePin: true }).map((it: any) => it.label))
-      .toEqual(['Rename', 'Copy', 'Move to space', 'Delete']);
+      .toEqual(['Rename', 'Copy', 'Move to space', 'chat.merge.select_action', 'Delete']);
   });
 });
 

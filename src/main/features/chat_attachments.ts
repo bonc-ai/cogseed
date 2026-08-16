@@ -2,6 +2,7 @@
  * Per-conversation file attachments for main chat (`normal`).
  * Layout:
  *   sent/committed attachments: `data/<uid>/cloud/chat_attachments/<cid>/`
+ *     —— 空间会话的附件按空间分柜：`data/<uid>/cloud/spaces/<sid>/chat_attachments/<cid>/`
  *   composer-only drafts:       `data/<uid>/local/chat_attachment_drafts/<draftCid>/`
  *
  * Supported kinds — mirrors `contexts` upload whitelist:
@@ -222,6 +223,26 @@ function migrateLegacyDraftCloudDir(userId: string, cid: string): void {
   for (const name of names) notifyAttachmentDeleted(userId, cid, name);
 }
 
+// ── 会话 → 空间归属缓存（同步读取用）─────────────────────────────────────
+// 空间化落盘：附件写入口（async）解析会话空间并写入 spaces/<sid>/；同步读/删
+// 函数（listAttachments / deleteAttachment / resolveAttachmentAbsPath）查此缓存
+// 定位空间目录。会话绑定空间后不迁移，缓存无需过期；IPC 层在请求前 warm。
+const _spaceByCid = new Map<string, string>(); // `${uid}:${cid}` → spaceId
+
+export function cachedConversationSpace(uid: string, cid: string): string | undefined {
+  return _spaceByCid.get(`${uid}:${cid}`);
+}
+
+/** IPC/HTTP 层预热：请求前解析会话空间，使同步读取命中空间目录。 */
+export async function warmConversationSpace(uid: string, cid: string): Promise<void> {
+  if (!cid || _spaceByCid.has(`${uid}:${cid}`)) return;
+  try {
+    const { conversationSpaceId } = await import('./chats');
+    const sid = await conversationSpaceId(uid, cid);
+    if (sid) _spaceByCid.set(`${uid}:${cid}`, sid);
+  } catch { /* 预热失败按无空间处理 */ }
+}
+
 /** Conversation attachment directory (used by the P3394 bridge to stage
  *  inbound peer artifacts next to the conversation). */
 export function attachmentDirForCid(userId: string, cid: string): string {
@@ -229,7 +250,9 @@ export function attachmentDirForCid(userId: string, cid: string): string {
     migrateLegacyDraftCloudDir(userId, cid);
     return chatAttachmentDraftDir(userId, cid);
   }
-  return chatAttachmentDirForConversation(userId, cid);
+  // 空间会话附件优先落在空间目录（写入口已缓存空间归属；未缓存 = 老数据/非空间会话 → 全局）
+  const sid = cachedConversationSpace(userId, cid);
+  return chatAttachmentDirForConversation(userId, cid, null, sid);
 }
 
 function ensureDir(userId: string, cid: string): string {
@@ -376,6 +399,9 @@ export async function uploadAttachment(
     }
   }
 
+  // 空间化落盘：解析会话空间并缓存，附件写入空间目录
+  await warmConversationSpace(userId, safeConvId);
+
   const dir = ensureDir(userId, safeConvId);
   const incomingHash = hashBuffer(buf);
   return withAttachmentWriteLock(userId, safeConvId, async () => {
@@ -454,6 +480,8 @@ export async function importAttachmentFromPath(
   }
 
   return withAttachmentWriteLock(userId, safeConvId, async () => {
+    // 空间化落盘：解析会话空间并缓存，附件导入空间目录
+    await warmConversationSpace(userId, safeConvId);
     const dir = ensureDir(userId, safeConvId);
     let incomingHash: string;
     try { incomingHash = await hashFile(absSource); }
@@ -848,11 +876,11 @@ function imageMimeFromExt(ext: string): ImageMimeType {
  * ensureFresh rebuilds for the new path. pruneOrphans sweeps the stale
  * draft-path cache at startup.
  */
-export function adoptDraftAttachments(
+export async function adoptDraftAttachments(
   userId: string,
   fromCid: string,
   toCid: string,
-): Result<{ count: number }> {
+): Promise<Result<{ count: number }>> {
   let srcSafe: string;
   let dstSafe: string;
   try { srcSafe = safeCid(fromCid); dstSafe = safeCid(toCid); }
@@ -861,7 +889,9 @@ export function adoptDraftAttachments(
 
   const src = attachmentDirForCid(userId, srcSafe);
   if (!fs.existsSync(src)) return { ok: true, count: 0 };
-  const dst = chatAttachmentDirForConversation(userId, dstSafe);
+  // 目标会话空间化：adopt 后文件进入空间目录
+  await warmConversationSpace(userId, dstSafe);
+  const dst = chatAttachmentDirForConversation(userId, dstSafe, null, cachedConversationSpace(userId, dstSafe));
   let movedNames: string[] = [];
   try { movedNames = fs.readdirSync(src).filter((n) => !n.startsWith('.')); }
   catch { /* ignore */ }
@@ -904,19 +934,27 @@ export async function purgeByCid(userId: string, cid: string): Promise<number> {
   let safeConvId: string;
   try { safeConvId = safeCid(cid); }
   catch { return 0; }
-  const dir = attachmentDirForCid(userId, safeConvId);
+  await warmConversationSpace(userId, safeConvId);
+  // 双目录清理：空间目录（迁移后落点）+ 全局目录（迁移前/未迁移兜底）
+  const dirs = new Set<string>();
+  if (cachedConversationSpace(userId, safeConvId)) {
+    dirs.add(attachmentDirForCid(userId, safeConvId));
+  }
+  dirs.add(chatAttachmentDirForConversation(userId, safeConvId)); // 全局根
   let count = 0;
   let names: string[] = [];
-  try {
-    if (fs.existsSync(dir)) {
-      const entries = fs.readdirSync(dir);
-      names = entries.filter((n) => !n.startsWith('.'));
-      for (const n of entries) {
-        try { fs.unlinkSync(path.join(dir, n)); count++; } catch { /* best-effort */ }
+  for (const dir of dirs) {
+    try {
+      if (fs.existsSync(dir)) {
+        const entries = fs.readdirSync(dir);
+        names = names.concat(entries.filter((n) => !n.startsWith('.')));
+        for (const n of entries) {
+          try { fs.unlinkSync(path.join(dir, n)); count++; } catch { /* best-effort */ }
+        }
+        try { fs.rmdirSync(dir); } catch { /* best-effort */ }
       }
-      try { fs.rmdirSync(dir); } catch { /* best-effort */ }
-    }
-  } catch (err) { log.warn(`purgeByCid(${cid}): ${(err as Error).message}`); }
+    } catch (err) { log.warn(`purgeByCid(${cid}): ${(err as Error).message}`); }
+  }
   try { await purgeFileCacheByCid(userId, safeConvId); }
   catch (err) { log.warn(`purge file_cache cid=${safeConvId}: ${(err as Error).message}`); }
   for (const name of names) notifyAttachmentDeletedIfSyncable(userId, safeConvId, name);

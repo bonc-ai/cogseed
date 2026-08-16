@@ -12,11 +12,33 @@ const _conversationResultCards = new Map();
 let _latestCollaborationSnapshot = null;
 // ── 侧栏三段结构（置顶 → 空间 → 最近，均支持折叠）─────────────────────────
 let _sidebarSpaces = [];                 // SpaceWithMeta[]（spaces.list 缓存）
+let _spaceRenameId = '';                 // 侧栏空间行内联重命名中的空间 id
+let _spaceRenameValue = '';              // 重命名输入当前值
 let _sidebarSpacesLoaded = false;        // 本次会话是否已拉取过空间列表
 let _sidebarSpacesLoading = null;        // in-flight promise（防重入）
 const _SIDEBAR_COLLAPSE_KEY = 'chat.sidebar.collapse.v1';
 // 分区折叠：{ pinned, spaces, recent } + 空间组折叠 spaceGroups[sid]。默认全展开。
 let _sidebarCollapse = _loadSidebarCollapse();
+// 侧栏双 tab（ZCode 式）：'spaces'（空间）| 'recent'（最近任务）。默认最近任务。
+const _SIDEBAR_CONV_TAB_KEY = 'chat.sidebar.convTab.v1';
+let _sidebarConvTab = (() => {
+  try { return localStorage.getItem(_SIDEBAR_CONV_TAB_KEY) === 'spaces' ? 'spaces' : 'recent'; } catch (_) { return 'recent'; }
+})();
+function _setSidebarConvTab(tab) {
+  _sidebarConvTab = tab === 'spaces' ? 'spaces' : 'recent';
+  try { localStorage.setItem(_SIDEBAR_CONV_TAB_KEY, _sidebarConvTab); } catch (_) {}
+  _syncSidebarConvTabUI();
+  renderConversationList();
+}
+function _syncSidebarConvTabUI() {
+  const tabs = document.querySelectorAll('#sidebar-conv-tabs [data-conv-tab]');
+  tabs.forEach((btn) => {
+    const active = btn.dataset.convTab === _sidebarConvTab;
+    btn.classList.toggle('is-active', active);
+    if (active) btn.setAttribute('aria-selected', 'true');
+    else btn.removeAttribute('aria-selected');
+  });
+}
 function _loadSidebarCollapse() {
   try {
     const raw = JSON.parse(localStorage.getItem(_SIDEBAR_COLLAPSE_KEY) || '');
@@ -5080,12 +5102,20 @@ function _renderConvAgentStackHtml(c) {
 
 function _renderConversationSidebarItem(c, opts = {}) {
   const cid = escapeHtml(c.conversation_id);
-  const title = escapeHtml(c.title || t('chat.new_conv_title'));
+  const rawTitle = c.title || t('chat.new_conv_title');
+  const title = escapeHtml(rawTitle);
+  // 未命名会话（尚无用户标题）在列表中弱化显示，避免满屏「新任务」占据视觉焦点。
+  const isUntitled = !c.title;
   const editing = _conversationInlineRenameCid === c.conversation_id;
   const isPinned = !!c.pinned_at;
   const isFromAuto = !!c.origin_auto_task_id;
   const hidePin = !!opts.hidePin;
   const menuTitle = escapeHtml(t('project.menu.more_actions'));
+  // ZCode 式行内相对时间（58分 / 3小时 / 6小时）：最近任务平铺列表没有时间桶标题，
+  // 行尾的相对时间承担「新近度」信号。置顶区/空间组同样受益（一眼看出哪些最近动过）。
+  const timeHtml = _renderConversationRelativeTime(c)
+    ? `<span class="conv-item-time" title="${escapeHtml(_conversationAbsoluteTime(c))}">${escapeHtml(_renderConversationRelativeTime(c))}</span>`
+    : '';
   // Auto-fired conversations get the same clock icon as the sidebar
   // "Automation" tab, rendered to the LEFT of the title text. Visible in
   // the sidebar conv list AND the project-detail conversations list (both
@@ -5096,7 +5126,7 @@ function _renderConversationSidebarItem(c, opts = {}) {
   const titleNode = editing
     ? `<input type="text" class="conv-item-title-input" data-conv-rename-cid="${cid}"
               value="${title}" autocomplete="off" spellcheck="false" />`
-    : `<div class="conv-item-title" title="${title}">${title}</div>`;
+    : `<div class="conv-item-title${isUntitled ? ' conv-item-title-untitled' : ''}" title="${title}">${title}</div>`;
   const classes = [
     'conv-item',
     opts.nested ? 'conv-item-nested' : '',
@@ -5122,10 +5152,39 @@ function _renderConversationSidebarItem(c, opts = {}) {
         ${selectionHtml}
         ${autoIconHtml}
         ${titleNode}
+        ${timeHtml}
         ${actionsHtml}
       </div>
     </div>
   `;
+}
+
+/** ZCode 式相对时间（「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
+function _renderConversationRelativeTime(c) {
+  const iso = _conversationActivityIso(c);
+  if (!iso) return '';
+  const dt = new Date(iso);
+  if (isNaN(dt.getTime())) return '';
+  const diff = Math.max(0, Date.now() - dt.getTime());
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return t('sidebar.time_just_now');
+  if (min < 60) return t('sidebar.time_minutes', { n: min });
+  const h = Math.floor(min / 60);
+  if (h < 24) return t('sidebar.time_hours', { n: h });
+  const d = Math.floor(h / 24);
+  if (d < 30) return t('sidebar.time_days', { n: d });
+  return t('sidebar.time_old');
+}
+
+/** 绝对时间（悬停 title 用）。 */
+function _conversationAbsoluteTime(c) {
+  const iso = _conversationActivityIso(c);
+  if (!iso) return '';
+  const dt = new Date(iso);
+  if (isNaN(dt.getTime())) return '';
+  try {
+    return dt.toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  } catch (_) { return iso; }
 }
 
 function _normaliseConversationTitle(raw) {
@@ -5966,11 +6025,166 @@ function _closeConversationActionMenu() {
   for (const r of document.querySelectorAll('.conv-item.is-menu-open')) r.classList.remove('is-menu-open');
 }
 
+// ── 侧栏空间行 ⋯ 菜单（置顶 / 重命名 / 在访达中显示 / 删除）──────────────
+function _spaceById(sid) {
+  return _sidebarSpaces.find((s) => s && s.space_id === sid) || null;
+}
+
+async function _openSpaceActionMenu(anchorBtn, sid) {
+  if (!anchorBtn || !sid) return;
+  let menu = document.getElementById('conversation-action-menu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.id = 'conversation-action-menu';
+    menu.className = 'ctx-row-menu conversation-action-menu';
+    menu.style.display = 'none';
+    document.body.appendChild(menu);
+  }
+  if (menu.dataset.cid === `space:${sid}` && menu.style.display !== 'none') { _closeConversationActionMenu(); return; }
+  _closeConversationActionMenu();
+
+  const sp = _spaceById(sid) || {};
+  const pinned = !!sp.pinned_at;
+  const items = [
+    {
+      action: 'pin',
+      label: t(pinned ? 'chat.conv_unpin_title' : 'chat.conv_pin_title'),
+      onClick: () => _toggleSpacePinned(sid, !pinned),
+    },
+    {
+      action: 'rename',
+      label: t('chat.conv_rename_title'),
+      onClick: () => _startSpaceRename(sid),
+    },
+    {
+      action: 'reveal',
+      label: t('sidebar.space_open_folder', '在访达中显示'),
+      onClick: () => { try { (window.cogseed || window.orkas).invoke('spaces.openInFinder', { spaceId: sid }); } catch (err) { _convLog.warn('open space folder failed', err); } },
+    },
+    {
+      action: 'delete',
+      label: t('chat.conv_del_title'),
+      danger: true,
+      onClick: () => _deleteSpaceWithConfirm(sid),
+    },
+  ];
+  menu.innerHTML = items.map((it, idx) =>
+    `<div class="ctx-row-menu-item${it.danger ? ' is-danger' : ''}" data-action-idx="${idx}">${escapeHtml(it.label)}</div>`
+  ).join('');
+  menu.dataset.cid = `space:${sid}`;
+
+  const row = anchorBtn.closest('.conv-list-section-header');
+  if (row) row.classList.add('is-menu-open');
+
+  menu.style.display = 'block';
+  menu.style.left = '-9999px';
+  menu.style.top = '-9999px';
+  const rect = anchorBtn.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const margin = 8;
+  const gap = 4;
+  let left = rect.right - menuRect.width;
+  if (left < margin) left = margin;
+  if (left + menuRect.width > window.innerWidth - margin) left = window.innerWidth - menuRect.width - margin;
+  const below = rect.bottom + gap + menuRect.height <= window.innerHeight - margin;
+  const top = below ? rect.bottom + gap : Math.max(margin, rect.top - menuRect.height - gap);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+
+  menu.querySelectorAll('.ctx-row-menu-item').forEach((item) => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = Number(item.dataset.actionIdx);
+      const action = items[idx];
+      _closeConversationActionMenu();
+      if (action && typeof action.onClick === 'function') action.onClick();
+    });
+  });
+}
+
+/** 空间置顶/取消置顶（spaces.update pinned_at）。 */
+async function _toggleSpacePinned(sid, pinned) {
+  try {
+    const res = await (window.cogseed || window.orkas).invoke('spaces.update', {
+      spaceId: sid,
+      pinned_at: pinned ? new Date().toISOString() : null,
+    });
+    if (!res || res.error) throw new Error((res && res.error) || 'pin failed');
+    const sp = _spaceById(sid);
+    if (sp) {
+      if (pinned) sp.pinned_at = res.space ? res.space.pinned_at : new Date().toISOString();
+      else delete sp.pinned_at;
+    }
+  } catch (err) {
+    _convLog.warn('toggle space pin failed', err);
+    try { await uiAlert(t('chat.pin_failed', '置顶失败')); } catch (_) {}
+  }
+  renderConversationList();
+}
+
+/** 空间行内联重命名开始。 */
+function _startSpaceRename(sid) {
+  const sp = _spaceById(sid);
+  if (!sp) return;
+  _spaceRenameId = sid;
+  _spaceRenameValue = sp.name || sid;
+  renderConversationList();
+}
+
+/** 保存空间重命名（spaces.update name）。 */
+async function _saveSpaceRename(sid, raw) {
+  const name = String(raw || '').trim();
+  _spaceRenameId = '';
+  renderConversationList();
+  if (!name || name === (_spaceById(sid) ? (_spaceById(sid).name || '') : '')) return;
+  try {
+    const res = await (window.cogseed || window.orkas).invoke('spaces.update', { spaceId: sid, name });
+    if (!res || res.error) throw new Error((res && res.error) || 'rename failed');
+  } catch (err) {
+    _convLog.warn('space rename failed', err);
+    try { await uiAlert(t('chat.conv_rename_failed', '重命名失败')); } catch (_) {}
+  }
+  // 刷新空间列表缓存（名称变化）
+  try { await _reloadSidebarSpaces(); } catch (_) {}
+  renderConversationList();
+}
+
+/** 删除空间（确认后 spaces.delete，删除后刷新侧栏）。 */
+async function _deleteSpaceWithConfirm(sid) {
+  const sp = _spaceById(sid);
+  const name = sp ? (sp.name || sid) : sid;
+  let ok = false;
+  try { ok = await uiConfirm(t('ws.delete_space_confirm', { name })); } catch (_) { ok = false; }
+  if (!ok) return;
+  try {
+    const res = await (window.cogseed || window.orkas).invoke('spaces.delete', { spaceId: sid });
+    if (res && res.error) throw new Error(res.error);
+  } catch (err) {
+    _convLog.warn('space delete failed', err);
+    try { await uiAlert(t('ws.delete_space_failed')); } catch (_) {}
+    return;
+  }
+  _sidebarSpaces = _sidebarSpaces.filter((s) => s && s.space_id !== sid);
+  _invalidateSidebarSpaces();
+  renderConversationList();
+}
+
+/** 重新拉取侧栏空间列表（重命名/删除后同步名称）。 */
+async function _reloadSidebarSpaces() {
+  try {
+    const res = await (window.cogseed || window.orkas).invoke('spaces.list', {});
+    if (res && Array.isArray(res.spaces)) _sidebarSpaces = res.spaces;
+  } catch (err) {
+    _convLog.warn('reload sidebar spaces failed', err);
+  }
+}
+
 document.addEventListener('mousedown', (e) => {
   const menu = document.getElementById('conversation-action-menu');
   if (!menu || menu.style.display === 'none') return;
   if (menu.contains(e.target)) return;
   if (e.target.closest && e.target.closest('.conv-item-menu')) return;
+  if (e.target.closest && e.target.closest('.conv-space-more-btn')) return;
   if (e.target.closest && e.target.closest('.chat-header-menu-btn')) return;
   _closeConversationActionMenu();
 }, true);
@@ -6018,6 +6232,30 @@ function _bindConversationSidebarItems(container, opts = {}) {
       _saveSidebarCollapse();
       renderConversationList();
     });
+  });
+  // 侧栏空间行 ⋯ 菜单（置顶/重命名/在访达中显示/删除）
+  container.querySelectorAll('[data-conv-space-more]').forEach((el) => {
+    if (el.dataset.moreBound === '1') return;
+    el.dataset.moreBound = '1';
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _openSpaceActionMenu(el, el.dataset.convSpaceMore || '');
+    });
+  });
+  // 空间行内联重命名：回车保存、Esc 取消、失焦保存
+  container.querySelectorAll('[data-conv-space-rename-input]').forEach((input) => {
+    if (input.dataset.renameBound === '1') return;
+    input.dataset.renameBound = '1';
+    const sid = input.dataset.convSpaceRenameInput || '';
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); _saveSpaceRename(sid, input.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); _spaceRenameId = ''; renderConversationList(); }
+    });
+    input.addEventListener('blur', () => _saveSpaceRename(sid, input.value));
+    input.addEventListener('click', (e) => e.stopPropagation());
+    setTimeout(() => { try { input.focus(); input.select(); } catch (_) {} }, 0);
   });
   // 分区折叠（置顶/空间/最近）切换（状态持久化 localStorage）
   container.querySelectorAll('[data-sidebar-fold]').forEach((btn) => {
@@ -6191,18 +6429,24 @@ function _spaceConversationMap() {
   return map;
 }
 
-/** 空间折叠组：组头（空间名 + chevron + 会话数）+ 组内会话行。默认展开。 */
+/** 空间折叠组：组头（空间名 + chevron + 会话数 + hover 显示 ⋯ 菜单按钮）+ 组内会话行。默认展开。 */
 function _renderSpaceSidebarGroup(sp, convs) {
   const collapsed = !!_sidebarCollapse.spaceGroups[sp.space_id];
   const name = sp.name || sp.space_id;
+  const moreTitle = t('project.menu.more_actions', '更多操作');
+  const renaming = _spaceRenameId === sp.space_id;
+  const labelHtml = renaming
+    ? `<input type="text" class="conv-space-rename-input" data-conv-space-rename-input="${escapeHtml(sp.space_id)}" value="${escapeHtml(_spaceRenameValue)}" autocomplete="off" spellcheck="false" />`
+    : `<span class="conv-list-section-label" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
   return `
-    <button type="button" class="conv-list-section-header is-collapsible${collapsed ? ' is-collapsed' : ''}"
+    <button type="button" class="conv-list-section-header is-collapsible${collapsed ? ' is-collapsed' : ''}${renaming ? ' is-renaming' : ''}"
       data-conv-space-toggle="1" data-conv-space="${escapeHtml(sp.space_id)}"
       aria-expanded="${collapsed ? 'false' : 'true'}">
       <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
-      <span class="conv-list-section-label" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+      ${labelHtml}
       <span class="conv-list-section-count">${convs.length}</span>
-      <span class="conv-list-section-rule" aria-hidden="true"></span>
+      <span class="conv-space-more-btn" role="button" tabindex="0" data-conv-space-more="${escapeHtml(sp.space_id)}"
+        title="${escapeHtml(moreTitle)}" aria-label="${escapeHtml(moreTitle)}">⋯</span>
     </button>
     ${collapsed ? '' : convs.map((c) => _renderConversationSidebarItem(c, {
       bucketScope: `space:${sp.space_id}`,
@@ -6224,7 +6468,6 @@ function _renderSidebarSectionHeader(section, label, opts = {}) {
         aria-expanded="${collapsed ? 'false' : 'true'}">
         <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
         <span class="conv-list-section-label">${escapeHtml(label)}</span>
-        <span class="conv-list-section-rule" aria-hidden="true"></span>
       </button>
       ${actionHtml}
     </div>`;
@@ -6327,50 +6570,56 @@ function renderConversationList() {
   const spacesWithConvs = Array.from(spaceMap.keys())
     .map((sid) => spaceMetaById.get(sid) || { space_id: sid, name: sid })
     .sort((a, b) => {
+      // 置顶空间优先（按置顶时间倒序），其余按最近活跃倒序
+      const pa = a.pinned_at || '';
+      const pb = b.pinned_at || '';
+      if (pa && pb) return pb.localeCompare(pa);
+      if (pa) return -1;
+      if (pb) return 1;
       const aa = _spaceLatestAt(spaceMap.get(a.space_id));
       const bb = _spaceLatestAt(spaceMap.get(b.space_id));
       return (bb || '').localeCompare(aa || '');
     });
-  if (!pinned.length && !recent.length && !hasDeferredRecent && !spacesWithConvs.length) {
+  // ZCode 式双 tab：空间 tab 只显空间分组，最近任务 tab 只显置顶+最近。
+  const isSpacesTab = _sidebarConvTab === 'spaces';
+  const tabVisible = isSpacesTab
+    ? spacesWithConvs.length > 0
+    : (pinned.length > 0 || recent.length > 0 || hasDeferredRecent);
+  if (!tabVisible) {
     container.innerHTML = `<div class="conv-empty" data-i18n="sidebar.conv_empty">${escapeHtml(t('sidebar.conv_empty'))}</div>`;
     if (typeof _refreshAutoExpandedTaskConvs === 'function') _refreshAutoExpandedTaskConvs();
+    _syncSidebarConvTabUI();
     return;
   }
   const parts = [];
-  // ① 置顶区
-  if (pinned.length) {
-    parts.push(_renderSidebarSectionHeader('pinned', t('sidebar.pinned_section', '置顶')));
-    if (!_sidebarCollapse.pinned) {
-      parts.push(_renderConversationFlatList(pinned, { bucketScope: 'pinned' }));
+  if (isSpacesTab) {
+    // ② 空间区（ZCode「分组|项目」中的分组列表：空间组头 + 组内会话）
+    for (const sp of spacesWithConvs) {
+      parts.push(_renderSpaceSidebarGroup(sp, spaceMap.get(sp.space_id)));
     }
-  }
-  // ② 空间区
-  if (spacesWithConvs.length) {
-    parts.push(_renderSidebarSectionHeader('spaces', t('sidebar.spaces_section'), {
-      action: 'new-space',
-      actionTitle: t('sidebar.new_space', '新建空间'),
-      actionIcon: 'plus',
-    }));
-    if (!_sidebarCollapse.spaces) {
-      for (const sp of spacesWithConvs) {
-        parts.push(_renderSpaceSidebarGroup(sp, spaceMap.get(sp.space_id)));
+  } else {
+    // ① 置顶区
+    if (pinned.length) {
+      parts.push(_renderSidebarSectionHeader('pinned', t('sidebar.pinned_section', '置顶')));
+      if (!_sidebarCollapse.pinned) {
+        parts.push(_renderConversationFlatList(pinned, { bucketScope: 'pinned' }));
       }
     }
-  }
-  // ③ 最近任务区（平铺，无时间桶标题）
-  if (recent.length || hasDeferredRecent) {
-    parts.push(_renderSidebarSectionHeader('recent', t('sidebar.recent_tasks'), {
-      action: 'new-task',
-      actionTitle: t('sidebar.new_task', '新建任务'),
-      actionIcon: 'plus',
-    }));
-    if (!_sidebarCollapse.recent) {
-      if (_sidebarNewTaskOpen) parts.push(_renderSidebarNewTaskComposer());
-      parts.push(_renderConversationFlatList(recent, {
-        bucketScope: 'sidebar',
-        loadMore: _sidebarHasMoreOld(),
-        loadMoreBucket: 'last30',
+    // ③ 最近任务区（平铺，无时间桶标题）
+    if (recent.length || hasDeferredRecent) {
+      parts.push(_renderSidebarSectionHeader('recent', t('sidebar.recent_tasks'), {
+        action: 'new-task',
+        actionTitle: t('sidebar.new_task', '新建任务'),
+        actionIcon: 'plus',
       }));
+      if (!_sidebarCollapse.recent) {
+        if (_sidebarNewTaskOpen) parts.push(_renderSidebarNewTaskComposer());
+        parts.push(_renderConversationFlatList(recent, {
+          bucketScope: 'sidebar',
+          loadMore: _sidebarHasMoreOld(),
+          loadMoreBucket: 'last30',
+        }));
+      }
     }
   }
   container.innerHTML = parts.join('');
@@ -6399,6 +6648,7 @@ function renderConversationList() {
 
   // 侧栏行不显示进行中徽标（_updateConvSidebarBadge 已空化），仅刷新全局 chip 与当前头。
   _refreshAllConvBadges();
+  _syncSidebarConvTabUI();
 }
 
 /** 空间组内最近活跃时间（排序用）。 */

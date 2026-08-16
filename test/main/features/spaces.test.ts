@@ -124,7 +124,7 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
   });
 
   it('base_agent 映射的成员进 effective_agents（基础 Agent 与指挥官同层，必须可派发）', () => {
-    const r = resolveSpaceResources(makeSpace(), validAll, { baseAgentAgentId: 'ag-2' });
+    const r = resolveSpaceResources(makeSpace(), validAll, { baseAgentAgentIds: ['ag-2'] });
     expect(r.effective_agents).toEqual(['ag-2']);
   });
 
@@ -132,13 +132,13 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
     const r = resolveSpaceResources(
       makeSpace({ extra_agents: ['ag-2'] }),
       validAll,
-      { baseAgentAgentId: 'ag-2' },
+      { baseAgentAgentIds: ['ag-2'] },
     );
     expect(r.effective_agents).toEqual(['ag-2']);
   });
 
   it('base_agent 映射的成员不在有效集 → 归 invalid_refs（与 extra 同语义）', () => {
-    const r = resolveSpaceResources(makeSpace(), validAll, { baseAgentAgentId: '__gone_base__' });
+    const r = resolveSpaceResources(makeSpace(), validAll, { baseAgentAgentIds: ['__gone_base__'] });
     expect(r.effective_agents).toEqual([]);
     expect(r.invalid_refs.agents).toEqual(['__gone_base__']);
   });
