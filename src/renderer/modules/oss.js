@@ -442,7 +442,6 @@ window.addEventListener('i18n-change', () => {
 window.addEventListener('oss-catalog-updated', (e) => {
   const d = (e && e.detail) || {};
   if (!d.homeOnly) return;
-  if (document.getElementById('oss-entry-grid')) initOssEntry({ revalidate: false });
 });
 
 // Exposed for marketplace.js (② rendering) + conversation.js (① init).
@@ -462,4 +461,3 @@ window.ossInstallPromptFor = ossInstallPromptFor;
 window.ossOpenRepo = ossOpenRepo;
 window.prefillCommander = prefillCommander;
 window.unresolvedOssTemplatePlaceholder = unresolvedOssTemplatePlaceholder;
-window.initOssEntry = initOssEntry;

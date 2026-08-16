@@ -188,17 +188,14 @@ async function _renderMenu() {
         <span class="hub-chip-menu-sub">${_chipEscapeHtml(maskedId)} · ${bound}</span>
       </div>
     </div>
-    <button type="button" class="hub-chip-menu-item" data-chip-action="overview">
-      ${_chipIcon('info', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.chip.menu.overview'))}
-    </button>
-    <button type="button" class="hub-chip-menu-item" data-chip-action="devices">
-      ${_chipIcon('monitor', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.chip.menu.devices'))}
-    </button>
     <button type="button" class="hub-chip-menu-item" data-chip-action="open-settings">
       ${_chipIcon('settings', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.chip.menu.open_settings'))}
     </button>
-    <button type="button" class="hub-chip-menu-item is-danger" data-chip-action="sign-out">
-      ${_chipIcon('log-out', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.account.sign_out'))}
+    <button type="button" class="hub-chip-menu-item" data-chip-action="open-templates">
+      ${_chipIcon('layout', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.chip.menu.templates', '模板'))}
+    </button>
+    <button type="button" class="hub-chip-menu-item" data-chip-action="open-usage">
+      ${_chipIcon('credit-card', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.chip.menu.usage', '额度'))}
     </button>`;
 
   menu.querySelectorAll('[data-chip-action]').forEach((item) => {
@@ -309,14 +306,26 @@ async function _onMenuAction(action) {
     }
     return;
   }
-  // overview / devices / open-settings：都落到 设置 › 账号 tab（完整管理面）。
-  // 复用 sidebar 的 settings-btn 点击路径与常驻的 activateSettingsTab，
-  // 不改动 state.js 的视图切换。
-  if (typeof window.setView === 'function') window.setView('settings');
-  else document.getElementById('settings-btn')?.click();
-  if (typeof window.activateSettingsTab === 'function') {
-    window.activateSettingsTab('account');
+  // 本地菜单：设置 / 模板 / 额度。
+  const goSettings = (tab) => {
+    if (typeof window.setView === 'function') window.setView('settings');
+    else document.getElementById('settings-btn')?.click();
+    if (typeof window.activateSettingsTab === 'function') {
+      window.activateSettingsTab(tab || 'general');
+    }
+  };
+  if (action === 'open-templates') {
+    // 模板：进入「认知资产」页（角色模板 / 个人本体区）。
+    if (typeof window.setView === 'function') window.setView('recall');
+    return;
   }
+  if (action === 'open-usage') {
+    // 额度：设置 › 账号与用量。
+    goSettings('usage');
+    return;
+  }
+  // open-settings（默认）：设置页。
+  goSettings('general');
 }
 
 // ── 生命周期 ─────────────────────────────────────────────────────────────
