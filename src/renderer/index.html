@@ -50,9 +50,14 @@
       </div>
       <div class="sidebar-footer-actions">
         <!-- 左下角融合入口（用户状态 + 设置）：account-chip.js 渲染。初始 hidden，
-             拿到 status DTO 后按登录状态显示；status 拿不到则降级为「设置」形态
-             （面板仅含本地功能），保证设置入口永不丢失。 -->
+             拿到 status DTO 后按登录状态显示；status 拿不到则保持隐藏。 -->
         <div class="sidebar-footer-account" id="hub-account-chip-root" hidden></div>
+        <!-- 独立设置入口：未登录 / Hub 不可达时账号区只有「登录」或不显示，
+             设置必须始终可达，不绑定登录状态。 -->
+        <button class="sidebar-footer-btn" id="settings-btn" data-i18n-title="sidebar.settings_title" title="Settings">
+          <span data-ui-icon="settings" data-ui-icon-class="sidebar-footer-icon"></span>
+          <span data-i18n="sidebar.settings">Settings</span>
+        </button>
       </div>
       <div class="sidebar-resize-handle" id="sidebar-resize-handle"
            role="separator" aria-orientation="vertical"

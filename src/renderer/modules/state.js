@@ -317,8 +317,8 @@ function bindStaticHandlers() {
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connections'));
   document.getElementById('spaces-btn')?.addEventListener('click', () => _setViewFromSidebar('spaces'));
   document.getElementById('workspace-btn')?.addEventListener('click', () => _setViewFromSidebar('workspace'));
-  // 设置入口已并入左下角融合面板（account-chip.js 的「设置」菜单项，
-  // 通过 window.setView('settings') 切换视图）。
+  // 独立设置入口：与登录状态无关，永远可打开设置。
+  document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
 
   // Sidebar conv tabs（ZCode 式「空间 | 最近任务」）
   document.querySelectorAll('#sidebar-conv-tabs [data-conv-tab]').forEach((btn) => {
