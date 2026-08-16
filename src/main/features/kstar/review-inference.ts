@@ -193,6 +193,7 @@ function inferenceSystemPrompt(): string {
     'Do not invent tests, files, feedback, or external outcomes. Mark needsConfirmation=true for subjective or ambiguous success.',
     'lesson is OPTIONAL but valuable: it captures a REUSABLE experience discovered DURING execution — a pattern, pitfall, or method the executor would apply differently next time. This is separate from deltaR: even a fully successful task (met_expected, deltaR 0) can yield a lesson, e.g. "merge-conflict type assertions (as X) hide runtime errors — prefer explicit discriminant checks".',
     'Only write a lesson when it is genuinely reusable and non-trivial (a specific pattern/pitfall/method, not "the task was completed"). Omit lesson when the execution was routine with nothing to carry forward.',
+    'Write the lesson (and reason) in the SAME language as the task goal and conversation: a Chinese task yields a Chinese lesson; an English task yields an English lesson. This keeps precipitated assets readable and retrievable for the user.',
   ].join('\n');
 }
 
