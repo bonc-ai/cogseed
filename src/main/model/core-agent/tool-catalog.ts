@@ -42,6 +42,7 @@ export type ToolGroup =
   | 'connector'  // third-party services via MCP umbrella tools
   | 'expense'    // reimbursement flow, scoped to the canonical expense agent
   | 'messaging'  // proactive Feishu/Lark sends (Commander-only)
+  | 'p3394'      // P3394 agent-interop outbound (Commander-only)
   | 'meta';      // cross-session state
 
 export interface ToolCatalogEntry {
@@ -157,6 +158,9 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   // recipients, credentials, chat ids, or open ids)
   { name: 'messaging_list_targets', group: 'messaging', summary: 'List configured Feishu/Lark bots and which can proactively message the configured owner (self); read-only diagnostics.' },
   { name: 'messaging_send', group: 'messaging', summary: 'Send a text message to the configured owner (self) through one Feishu/Lark bot, after the user approves a confirmation dialog.' },
+  { name: 'p3394_send', group: 'p3394', summary: 'Send a P3394 task to a registered peer Agent (e.g. hermes) and wait for its reply — agent-to-agent collaboration.' },
+  { name: 'p3394_peers', group: 'p3394', summary: 'List registered P3394 peer Agents: id, name, capabilities, locality, endpoints.' },
+  { name: 'p3394_sessions', group: 'p3394', summary: 'List the P3394 sessions opened from this conversation: session id, peer, goal, last used.' },
 
   // Feishu companion surface (Commander-only — injected by runner.ts for
   // gconv sessions with a resolved uid; read-only status + briefing write)

@@ -44,7 +44,10 @@
     "audit:workspace": "node scripts/audit-local-workspace.mjs",
     "package:dev:mac": "node scripts/package-dev-mac.cjs",
     "verify:package:dev:mac": "node scripts/verify-packaged-dev.cjs",
-    "audit:branch": "node scripts/audit-branch-diff.mjs"
+    "audit:branch": "node scripts/audit-branch-diff.mjs",
+    "p3394:doctor": "tsx scripts/p3394-doctor.ts",
+    "p3394:demo": "tsx scripts/p3394-demo.ts",
+    "p3394:hermes-server": "tsx scripts/p3394-hermes-server.ts"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",

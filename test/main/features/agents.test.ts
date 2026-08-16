@@ -488,12 +488,26 @@ describe('agents › normalizeAgent', () => {
       { kind: 'wat' },
       { kind: 'cli' },          // missing cli name
       { kind: 'cli', cli: '' }, // empty cli name
+      { kind: 'p3394-gateway' },
+      { kind: 'p3394-gateway', cli: '' },
     ]) {
       const norm = a.normalizeAgent({ agent_id: 'x', name: 'N', runtime: bad } as any, 'custom');
       expect(norm).toBeTruthy();
       expect('runtime' in (norm as any)).toBe(false);
       expect(a.isCliAgent(norm)).toBe(false);
+      expect(a.isP3394GatewayAgent(norm)).toBe(false);
     }
+  });
+
+  it('normalizes a p3394-gateway runtime (P3394 external agent)', async () => {
+    const a = await loadAgents();
+    const norm = a.normalizeAgent({
+      agent_id: 'x', name: 'N',
+      runtime: { kind: 'p3394-gateway', cli: 'hermes' },
+    } as any, 'custom');
+    expect(norm?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'hermes' });
+    expect(a.isP3394GatewayAgent(norm)).toBe(true);
+    expect(a.isCliAgent(norm)).toBe(false);
   });
 
   it('normalizes in_process runtime but does not flag as CLI', async () => {

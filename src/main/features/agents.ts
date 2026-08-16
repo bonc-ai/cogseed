@@ -386,6 +386,14 @@ export type AgentRuntime =
       custom_args?: string[];
       /** Optional synthetic custom-provider id (`cp:<id>`). */
       cli_provider_id?: string;
+    }
+  | {
+      /** P3394-managed external agent: every turn goes through the bridge's
+       *  outbound hub to the agent's p3394-gateway node — one protocol for
+       *  any external agent (agent-modal 「外接」tab, P3394 way). */
+      kind: 'p3394-gateway';
+      /** Canonical CLI type the gateway wraps (matches LOCAL_CLI_TYPES). */
+      cli: string;
     };
 
 export interface AgentInterfaceContract {
@@ -1013,6 +1021,11 @@ function _normalizeRuntime(raw: unknown): AgentRuntime | null {
   const r = raw as Record<string, unknown>;
   const kind = r.kind;
   if (kind === 'in_process') return { kind: 'in_process' };
+  if (kind === 'p3394-gateway') {
+    const cli = typeof r.cli === 'string' ? r.cli.trim() : '';
+    if (!cli) return null;
+    return { kind: 'p3394-gateway', cli };
+  }
   if (kind !== 'cli') return null;
   const cli = typeof r.cli === 'string' ? r.cli.trim() : '';
   if (!cli) return null;
@@ -1043,6 +1056,12 @@ export function cliIsCodingAgent(cli: string | undefined): boolean {
  *  all import this rather than re-checking `runtime?.kind` directly. */
 export function isCliAgent(agent: Pick<Agent, 'runtime'> | null | undefined): boolean {
   return !!agent && agent.runtime?.kind === 'cli';
+}
+
+/** True when this agent is a P3394-managed external agent (dispatch goes
+ *  through the bridge outbound hub instead of a direct CLI spawn). */
+export function isP3394GatewayAgent(agent: Pick<Agent, 'runtime'> | null | undefined): boolean {
+  return !!agent && agent.runtime?.kind === 'p3394-gateway';
 }
 
 function _agentContractOutput(outputFormat: ReturnType<typeof _canonicalOutputFormat>): AgentInterfaceContract['io']['output'] {
@@ -1754,7 +1773,7 @@ export async function createCustomAgent(
   // selection is the implicit default and not written to disk so old
   // tooling diffs cleanly.
   const rt = _normalizeRuntime(runtime);
-  if (rt && rt.kind === 'cli') {
+  if (rt && (rt.kind === 'cli' || rt.kind === 'p3394-gateway')) {
     data.runtime = rt;
     // Coding CLIs (claude / codex) need a working directory. We inject
     // a `project_dir` input dependency so the standard agent-input-form

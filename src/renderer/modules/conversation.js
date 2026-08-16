@@ -2875,6 +2875,12 @@ function _renderActorAvatarHtml(fromId) {
       if (m) { icon = icon || m.icon; color = color || m.color; }
     }
   }
+  // P3394 external peers get the 'users' (interop) icon instead of the
+  // generic 'bot', so a third-party agent (Hermes, …) is visually distinct
+  // from local agents. Color stays seed-derived per agent_id.
+  if (!icon && typeof fromId === 'string' && fromId.startsWith('p3394_')) {
+    icon = 'users';
+  }
   return renderAvatarHtml(icon, color, {
     size: 28,
     seed: fromId || 'agent',
@@ -2906,6 +2912,34 @@ function _groupActorLabel(fromId) {
   return t('chat.from_agent_unknown');
 }
 const _groupMembersCache = new Map(); // cid → Actor[]
+
+/** Upgrade sender chips that were painted while the roster cache was stale.
+ *  A P3394 peer can speak the same tick it joins the roster, so its first
+ *  bubbles may show the id-derived fallback name; once members.json is
+ *  cached, repaint those chips (name + avatar) in place. */
+function _repaintPendingActorHeaders(cid) {
+  const container = document.getElementById('chat-history');
+  if (!container) return;
+  const pending = container.querySelectorAll('[data-actor-pending="1"]');
+  if (!pending.length) return;
+  for (const bubble of pending) {
+    const actorId = String(bubble.dataset.fromActor || '');
+    if (!actorId) { delete bubble.dataset.actorPending; continue; }
+    const label = _knownGroupActorLabel(cid, actorId);
+    if (!label) continue; // cache still missing this actor — retry on next refresh
+    const chip = bubble.querySelector('.chat-msg-from');
+    if (chip) chip.textContent = label;
+    const header = bubble.querySelector('.chat-msg-header');
+    if (header) {
+      const avatarSlot = header.querySelector('.avatar-circle');
+      const fresh = _renderActorAvatarHtml(actorId);
+      if (avatarSlot) avatarSlot.outerHTML = fresh;
+      else header.insertAdjacentHTML('afterbegin', fresh);
+    }
+    delete bubble.dataset.actorPending;
+  }
+}
+
 async function _refreshGroupMembers(cid) {
   if (!cid) return [];
   try {
@@ -2914,6 +2948,7 @@ async function _refreshGroupMembers(cid) {
     if (data?.ok && Array.isArray(data.actors)) {
       _groupMembersCache.set(cid, data.actors);
       _refreshActorPlaceholders(cid);
+      _repaintPendingActorHeaders(cid);
       // Sidebar badge stack reads from this same cache as a live overlay
       // on top of the backend snapshot; repaint so a freshly @-mentioned
       // agent shows up in the row before the next loadConversations lands.
@@ -2946,6 +2981,7 @@ function _rememberGroupActor(cid, actor) {
   else next.push(actor);
   _groupMembersCache.set(cid, next);
   _refreshActorPlaceholders(cid, actor.id);
+  _repaintPendingActorHeaders(cid);
   _refreshSidebarBadgesForCid(cid);
   if (cid === currentCid) {
     try { _refreshChatHeader(); } catch (_) { /* not yet bound */ }
@@ -7943,6 +7979,16 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     if (role === 'user') displayContent = _stripUserStructuralBlocksForDisplay(rawContent);
     else if (role === 'assistant') displayContent = _stripSurvivingStructuralBlocks(rawContent);
   }
+  // P3394 node messages: `[来自 P3394 节点 <node>] <text>` → node badge card.
+  let p3394BadgeHtml = '';
+  if (role === 'user' && !isHtmlSnippet) {
+    const badgeMatch = /^\[来自 P3394 节点 ([^\]]+)\]\s*([\s\S]*)$/.exec(displayContent);
+    if (badgeMatch) {
+      const nodeName = badgeMatch[1].trim();
+      displayContent = badgeMatch[2];
+      p3394BadgeHtml = `<div class="p3394-node-badge"><span class="p3394-node-badge-icon">🤖</span><span class="p3394-node-badge-name">${escapeHtml(nodeName)}</span><span class="p3394-node-badge-tag">P3394</span></div>`;
+    }
+  }
   const contentHtml = isHtmlSnippet
     ? sanitizeHtml(rawContent)
     : `<div class="markdown-body">${_renderMessageMarkdown(displayContent)}</div>`;
@@ -7956,7 +8002,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     : '';
 
   const attachmentCid = message.attachment_cid || message.attachments_cid || opts.cid || currentCid;
-  const attachmentsHtml = (role === 'user' && Array.isArray(message.attachments) && message.attachments.length)
+  // Attachments render on user bubbles AND on P3394 peer bubbles — an
+  // external Agent may deliver files that should stay visible/reachable.
+  const attachmentsHtml = (Array.isArray(message.attachments) && message.attachments.length)
     ? _renderMessageAttachmentsHtml(message.attachments, attachmentCid)
     : '';
   const producedPaths = (role === 'assistant' && Array.isArray(message.produced) && message.produced.length)
@@ -7998,14 +8046,29 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const isSpaceBuilderCid = role !== 'user'
     && typeof conversations !== 'undefined' && Array.isArray(conversations)
     && conversations.some((c) => c && c.conversation_id === (opts.cid || currentCid) && c.kind === 'space_builder');
+  const headerActorId = role === 'user' ? '' : String(message._from || '');
+  // Resolved label for this actor (registry / roster cache). Empty when the
+  // cache hasn't caught up yet (e.g. a P3394 peer that just joined).
+  const resolvedActorLabel = role === 'user' || isSpaceBuilderCid
+    ? ''
+    : _groupActorLabel(headerActorId);
+  // _from_label may carry the raw actor id when the cache was stale at
+  // translate time — never surface raw ids as the sender name.
+  const fromLabel = message._from_label
+    && message._from_label !== headerActorId
+    ? message._from_label
+    : '';
+  // P3394 peer fallback: strip the actor prefix ('p3394_hermes' → 'hermes')
+  // so a just-joined peer shows a meaningful name immediately; the chip
+  // upgrades to the registry name ('Hermes') once the roster cache lands.
+  const p3394Fallback = typeof headerActorId === 'string' && headerActorId.startsWith('p3394_')
+    ? headerActorId.slice(7)
+    : '';
   const headerName = role === 'user'
     ? ''
     : isSpaceBuilderCid
       ? t('chat.recipient_space_builder')
-      : _groupActorLabel(message._from || (message._from_label ? '' : ''))
-        || message._from_label
-        || (t('chat.from_agent_unknown'));
-  const headerActorId = role === 'user' ? '' : String(message._from || '');
+      : resolvedActorLabel || fromLabel || p3394Fallback || t('chat.from_agent_unknown');
   const avatarHtml = role === 'user' ? '' : _renderActorAvatarHtml(headerActorId);
   const headerHtml = role === 'user'
     ? `<div class="chat-msg-header chat-msg-header-user"><span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`
@@ -8016,12 +8079,16 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${p3394BadgeHtml}${referencesHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
   if (message._msg_id) msgDiv.dataset.msgId = String(message._msg_id);
   if (message._from) msgDiv.dataset.fromActor = String(message._from);
+  // Sender label rendered from a stale roster cache: keep the bubble marked
+  // so _repaintPendingActorHeaders can upgrade the chip (and avatar) as soon
+  // as the members cache catches up.
+  if (role !== 'user' && !isSpaceBuilderCid && headerActorId && !resolvedActorLabel) msgDiv.dataset.actorPending = '1';
   // 消息归属会话（welcome 块「查看依据 / 带着这些继续」事件委托需要）。
   msgDiv.dataset.cid = String(opts.cid || currentCid || '');
   if (message._turn_id) msgDiv.dataset.turnId = String(message._turn_id);

@@ -59,6 +59,7 @@ import { officeCliAvailable } from '../../features/office/office_engine';
 import { createKbTools } from './kb-tools';
 import { createChatHistoryTools } from './chat-history-tools';
 import { createMessagingTools } from './messaging-tools';
+import { createP3394Tools } from './p3394-tools';
 import { createFeishuTools } from './feishu-tools';
 import { createImageGenTool } from './image-gen-tool';
 import { createVideoStudioTool } from './video-studio-tool';
@@ -758,6 +759,16 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       })
     : [];
 
+  // P3394 agent interop (Commander-only): the CogSeed agent itself calls
+  // registered peers through the built-in bridge.
+  const p3394Tools: AgentTool[] = uid && !params.disableTools && isCommander && params.cid
+    ? createP3394Tools({
+        userId: uid,
+        cid: params.cid,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+      })
+    : [];
+
   // Feishu touchpoint tools (status/briefing/touchpoint records + file send).
   // Same Commander-only gate as messaging tools: workers, edit sessions, CLI
   // and reflection never get them, so they cannot read or mutate user Feishu
@@ -886,6 +897,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...kbTools,
     ...chatHistoryTools,
     ...messagingTools,
+    ...p3394Tools,
     ...feishuTools,
     ...imageGenTools,
     ...videoStudioTools,
