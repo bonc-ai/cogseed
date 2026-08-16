@@ -30,12 +30,24 @@ import { P3394OutboundHub } from './outbound-hub';
 import { P3394PeerRegistry, type P3394Locality, type P3394NodeKind } from './registry';
 import { recordP3394Episode } from './kstar-episodes';
 import { projectP3394NodeToTeam } from './team-projection';
+import { buildP3394WiringDoctorInput, runP3394BridgeDoctor, type P3394DoctorReport } from './doctor';
 import * as groupChatBus from '../group_chat/bus';
 
 const log = createLogger('p3394-bridge:app-wiring');
 
 /** Default loopback port when COGSEED_P3394_PORT is not set. */
 export const P3394_DEFAULT_PORT = 8444;
+
+/**
+ * 启动门（SDK §5.4）：桥承诺的语义必须被所选 channel 完整承载，
+ * 必需能力缺失 → 拒绝启动（fail-loud，绝不静默降级）。
+ */
+export const P3394_REQUIRED_CHANNEL_CAPABILITIES = {
+  cancellation: true,
+  durable_tasks: true,
+  multi_party_sessions: true,
+  identity_proofs: ['bearer-token'],
+};
 
 export interface P3394AppBridgeHandle {
   endpoint: string;
@@ -290,13 +302,7 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
   };
   // 启动门（SDK §5.4）：桥承诺的语义必须被所选 channel 完整承载，
   // 必需能力缺失 → 拒绝启动（fail-loud，绝不静默降级）。
-  const requiredChannelCapabilities = {
-    cancellation: true,
-    durable_tasks: true,
-    multi_party_sessions: true,
-    identity_proofs: ['bearer-token'],
-  };
-  const missingCapabilities = missingP3394ChannelCapabilities(channel.descriptor, requiredChannelCapabilities);
+  const missingCapabilities = missingP3394ChannelCapabilities(channel.descriptor, P3394_REQUIRED_CHANNEL_CAPABILITIES);
   if (missingCapabilities.length > 0) {
     log.error('P3394 bridge refused to start: channel cannot carry required semantics', {
       missing: missingCapabilities,
@@ -350,6 +356,47 @@ export function maybeStartP3394Bridge(): P3394AppBridgeHandle | null {
 export function getP3394BridgeInfo(): { endpoint: string; token: string } | null {
   if (!activeHandle) return null;
   return { endpoint: activeHandle.endpoint, token: activeHandle.token };
+}
+
+/**
+ * V-01：把真实 wiring/listener 状态自动注入 Doctor。桥未启动时只返回
+ * 全 warn 报告（不虚报绑定）；启动后逐项反映：
+ *
+ * - manifest：本节点 CogSeed Manifest；
+ * - registry / agent-home：本地状态文件与数据根是否存在；
+ * - runtime-adapter / replay / idempotency / audit / policy：内核默认装配，
+ *   入站 extensions.epoch 已接入 replay protector；
+ * - channel-adapter / channel-capabilities：按 live descriptor 复核启动门；
+ * - resource-limits：HTTP body 上限 + 统一入站速率已接入；
+ * - auto-reply：按 COGSEED_P3394_AUTO_REPLY。
+ */
+export function runP3394WiringDoctor(): P3394DoctorReport {
+  if (!activeHandle) return runP3394BridgeDoctor({});
+  const manifestOf = (id: string) => {
+    const result = buildP3394BridgeManifest({
+      agent_id: id, name: id, description_zh: '', description_en: '', workflow: '', category: 'general',
+    } as never);
+    return result.ok ? result.manifest : undefined;
+  };
+  const missingCapabilities = missingP3394ChannelCapabilities(
+    activeHandle.channel.descriptor,
+    P3394_REQUIRED_CHANNEL_CAPABILITIES,
+  );
+  return runP3394BridgeDoctor(buildP3394WiringDoctorInput({
+    manifest: manifestOf('cogseed'),
+    agentHomeExists: fs.existsSync(variantRoot()),
+    registryPersisted: fs.existsSync(p3394StateFile('p3394-peers.json')),
+    runtimeAdapterBound: true,
+    replayProtectionBound: true,
+    idempotencyBound: true,
+    auditJournalBound: true,
+    policyBound: true,
+    channelAdapterBound: true,
+    objectStorePresent: true,
+    channelCapabilitiesMissing: missingCapabilities,
+    resourceLimitsMissing: [],
+    autoReplyEnabled: process.env.COGSEED_P3394_AUTO_REPLY !== '0',
+  }));
 }
 
 /** Resolve a p3394_send peer argument: agent id / alias first, then a

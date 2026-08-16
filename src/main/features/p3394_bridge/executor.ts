@@ -121,7 +121,7 @@ export class P3394BridgeExecutor {
    * handling stays in the kernel; only accepted envelopes reach the runtime.
    */
   execute(envelopeInput: unknown): P3394BridgeExecutorResult {
-    const sent = this.bridge.send(envelopeInput);
+    const sent = this.bridge.send(envelopeInput, p3394EnvelopeEpochOption(envelopeInput));
     if (sent.ok === false) return { ok: false, error: sent.error };
     // Replayed duplicates are acknowledged but never executed again.
     if (sent.receipt.replay) {
@@ -467,6 +467,23 @@ function p3394EnvelopeGoal(envelope: P3394Envelope): string {
     return (metadata as Record<string, unknown>).goal as string;
   }
   return 'p3394-inbound-task';
+}
+
+/**
+ * Inbound replay watermark: envelope.extensions.epoch (non-negative safe
+ * integer) engages the kernel's per-sender replay protector. Peers that do
+ * not carry epochs keep idempotency-only semantics; malformed epochs are
+ * ignored rather than crashing admission.
+ */
+function p3394EnvelopeEpochOption(input: unknown): { epoch: number } | undefined {
+  if (input && typeof input === 'object') {
+    const ext = (input as { extensions?: unknown }).extensions;
+    if (ext && typeof ext === 'object') {
+      const epoch = (ext as { epoch?: unknown }).epoch;
+      if (typeof epoch === 'number' && Number.isSafeInteger(epoch) && epoch >= 0) return { epoch };
+    }
+  }
+  return undefined;
 }
 
 /** Loopback hosts that may always receive auto replies (same-host gateway). */
