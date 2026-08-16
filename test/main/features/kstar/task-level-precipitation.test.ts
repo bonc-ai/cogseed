@@ -205,7 +205,10 @@ describe('KStar task-level precipitation (B5)', () => {
     // 「遇到同类情况时，应注意修正：<诊断文本>」——那是诊断，不是可复用认知。
     const gap = result.proposals.find((proposal) => proposal.suggestedType === 'template');
     expect(gap).toBeDefined();
-    expect(gap!.summary).toContain('待修正经验：');
+    // 标题 = 内容核心本身（无模板前缀/scope 后缀——前缀由渲染层分类标签承担）。
+    // 标题 = 内容核心第一句主干（lessonTitleCore），无模板前缀/scope 后缀。
+    expect(gap!.summary).toBe('报告类任务缺少固定模板时，');
+    expect(gap!.summary).not.toContain('待修正经验：');
     expect(gap!.judgment).toBe('报告类任务缺少固定模板时，先补齐章节骨架再动笔，避免每次重排结构。');
     expect(gap!.judgment).not.toContain('A report template is missing');
     expect(gap!.learningSignal?.confidence).toBe(0.85);

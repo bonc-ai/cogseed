@@ -28,12 +28,14 @@ export function userFacingSummary(
   scope: string,
   content?: string,
 ): string {
-  const scopeLabel = userScopeLabel(scope);
+  // 标题 = 内容核心本身，不带模板前缀/scope 后缀——前缀（可复用经验/待
+  // 修正经验）与 scope 由渲染层分类标签/作用域徽标单独展示，标题重复它们
+  // 只会造成列表雷同（用户反馈：标题无法体现沉淀内容）。
   const core = content ? lessonTitleCore(content) : '';
   switch (kind) {
-    case 'lesson': return core ? `可复用经验：${core}（${scopeLabel}）` : `可复用经验（${scopeLabel}）`;
-    case 'workflow': return core ? `已验证的工作流程：${core}（${scopeLabel}）` : `已验证的工作流程（${scopeLabel}）`;
-    case 'gap': return core ? `待修正经验：${core}（${scopeLabel}）` : `待修正的经验（${scopeLabel}）`;
+    case 'lesson': return core || '可复用经验';
+    case 'workflow': return core || '已验证的工作流程';
+    case 'gap': return core || '待修正经验';
   }
 }
 

@@ -20,7 +20,8 @@ export function lessonTitleCore(text: string): string {
     .replace(/([，。；,.;:：])[\s\S]*$/, '$1')
     .trim();
   if (!t) return '通用经验';
-  return t.length <= 24 ? t : `${t.slice(0, 24)}…`;
+  // 40 字截断：24 字太短，标题核心经常被截成无意义残片（用户反馈）。
+  return t.length <= 40 ? t : `${t.slice(0, 40)}…`;
 }
 
 export function scopeForTask(task: string): string {

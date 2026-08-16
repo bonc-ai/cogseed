@@ -266,18 +266,18 @@ function _abilityCandidateDisplayTitle(candidate) {
   return summary || _abilityTitleFromContent(judgment) || candidate.id || '';
 }
 
-// 从经验内容提炼标题核心：去掉引导前缀，取第一句主干，限 24 字。
+// 从经验内容提炼标题核心：去掉引导前缀，取第一句主干，限 40 字。
+// 与主进程 lessonTitleCore 同规则（渲染层是兜底路径）。
 function _abilityTitleFromContent(text) {
-  const t = String(text || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^(处理|对于|遇到|当|在)[^，。；,.;:：]{0,12}[，,。；;]?/, '')
-    .replace(/^(可|应|须|要|建议|注意|务必|先|再)[^，。；,.;:：]{0,3}/, '')
-    .replace(/^(“|『|「)/, '')
+  let t = String(text || '').replace(/\s+/g, ' ').trim();
+  t = t.replace(/^(?:遇到同类情况时，)?(?:应|须|要)?注意修正[:：]/, '')
+    .replace(/^(?:当|对于|遇到|处理|在处理|在)[^，。；,.;:：]*?(?:时|后|中|之前|以后)?[，,。；;]/, '')
+    .replace(/^(?:可|应|须|要|建议|务必|注意)[^，。；,.;:：]{0,2}/, '')
+    .replace(/^(?:“|『|「)/, '')
     .replace(/([，。；,.;:：])[\s\S]*$/, '$1')
     .trim();
   if (!t) return '通用经验';
-  return t.length <= 24 ? t : `${t.slice(0, 24)}…`;
+  return t.length <= 40 ? t : `${t.slice(0, 40)}…`;
 }
 
 // 成熟度的用户侧表达按 PRD 3.6「资产成熟度与默认使用契约」的五档写法。
