@@ -35,6 +35,15 @@ describe('CogSeed Group Chat projection bridge', () => {
       type: 'event',
       event: { stream: 'runtime', data: { kind: 'task.started' } },
     });
+    expect(groupChatProcessDataForProjection('artifact', {
+      uri: 'p3394-object:sha256:abc', digest: 'abc', name: 'report.md', media_type: 'text/markdown',
+    })).toEqual({
+      type: 'event',
+      event: {
+        stream: 'runtime',
+        data: { uri: 'p3394-object:sha256:abc', digest: 'abc', name: 'report.md', media_type: 'text/markdown', kind: 'artifact' },
+      },
+    });
   });
 
   it('keeps the Group Chat event stream active for a projected Backend task until its terminal event', async () => {

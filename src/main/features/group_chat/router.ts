@@ -31,7 +31,7 @@ import { safeId } from '../../storage';
 // list is available.
 const TOKEN_CLASS = '[A-Za-z0-9_一-鿿-]+';
 const FALLBACK_MENTION_RE = /(^|[^A-Za-z0-9_一-鿿-])@([A-Za-z0-9_一-鿿-]+)/gu;
-const RESERVED_ACTOR_ALIASES = ['指挥官', 'commander', '用户', 'user'] as const;
+const RESERVED_ACTOR_ALIASES = ['指挥官', 'commander', 'cogseed', '用户', 'user'] as const;
 
 function _escapeForRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -209,8 +209,8 @@ export function resolveRecipients(opts: ResolveOpts): RouteResolution {
   }
   if (opts.agentDisplayNames) namesForParser.push(...opts.agentDisplayNames);
   // Reserved-actor aliases — also accept the Chinese forms
-  // (`@指挥官` / `@用户`). Cheap (4 strings).
-  namesForParser.push('指挥官', '用户', 'commander', 'user');
+  // (`@指挥官` / `@用户`) and the cogseed brand name. Cheap (5 strings).
+  namesForParser.push('指挥官', '用户', 'commander', 'cogseed', 'user');
   const tokens = parseMentions(opts.text, { fromKind: opts.fromKind, names: namesForParser });
   const memberIds = new Set(opts.members.map((m) => m.id));
   // Build a case + space-insensitive name lookup once. Member display
@@ -231,7 +231,7 @@ export function resolveRecipients(opts: ResolveOpts): RouteResolution {
     }
     // Try name → id (in current roster first, then global registry).
     const key = _normalizeNameKey(tok);
-    if (key === '指挥官') { resolved.push(COMMANDER_ID); continue; }
+    if (key === '指挥官' || key === 'cogseed') { resolved.push(COMMANDER_ID); continue; }
     if (key === '用户') { resolved.push(USER_ID); continue; }
     const fromMembers = memberNameToId.get(key);
     if (fromMembers) { resolved.push(fromMembers); continue; }

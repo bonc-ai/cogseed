@@ -3,6 +3,7 @@ import { P3394IpcChannel } from '../../../../src/main/features/p3394_bridge/ipc-
 
 function envelope(overrides: Record<string, unknown> = {}) {
   return {
+    spec_version: 'p3394/1.0',
     message_id: 'msg-ipc-1',
     session_id: 'ses-ipc-1',
     kind: 'message',

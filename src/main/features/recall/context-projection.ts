@@ -326,19 +326,32 @@ function normalizeProjectionAssetIds(value: unknown, field: string): string[] {
   return ids;
 }
 
+/** 投影/预载的"任务类型词"闸门：'*' / 'general'（通用）/ 'space'（空间适用）
+ *  不按 purpose 过滤——否则真实资产（scope 多为 space/general）在
+ *  purpose='review' 等任务词下永远被 scope_mismatch 剔除，预载卡片选不出资产。
+ *  其余 scope（review/report/自定义词条）走软匹配（scopeIncludes）。 */
+function scopeAppliesToPurpose(scope: string, purpose: string): boolean {
+  const terms = scope.split(',').map((term) => term.trim().toLowerCase()).filter(Boolean);
+  if (terms.includes('*') || terms.includes('general') || terms.includes('space')) return true;
+  return scopeIncludes(scope, purpose);
+}
+
 async function isAssetEligibleForProjection(userId: string, asset: RecallAbilityAssetRecord, projection: Pick<ContextProjectionRecord, 'workspaceId' | 'purpose'>): Promise<boolean> {
   if (asset.status !== 'active') throw new Error('context projection asset is not active');
   if (!isAssetScopeAllowed(asset.scopePolicy, {
     purpose: projection.purpose,
     workspaceId: projection.workspaceId,
   })) return false;
+  // 资产池全局共享：空间投影可引用整个池子（含其它空间资产与全局资产）。
+  // workspace-ref 是可选收紧控制（显式停用 / scope 词），不是前置。
   if (projection.workspaceId) {
     const refs = await listWorkspaceAssetReferences(userId);
     const ref = refs.find((item) => item.assetId === asset.id && item.workspaceId === projection.workspaceId);
-    if (!ref || !ref.enabled || !scopeIncludes(ref.scope, projection.purpose)) return false;
+    if (ref && !ref.enabled) return false;
+    if (ref && !scopeAppliesToPurpose(ref.scope, projection.purpose)) return false;
     return true;
   }
-  return scopeIncludes(asset.scope, projection.purpose);
+  return scopeAppliesToPurpose(asset.scope, projection.purpose);
 }
 
 async function readEligibleProjectionAsset(userId: string, assetId: string, projection: ContextProjectionRecord): Promise<RecallAbilityAssetRecord> {
@@ -509,13 +522,15 @@ export async function buildRecallView(userId: string, input: ProjectionInput, op
       continue;
     }
     const ref = input.workspaceId ? refsByAsset.get(asset.id) : undefined;
-    if (input.workspaceId && !ref) { omittedRefs.push({ assetId: asset.id, reason: 'workspace_not_referenced' }); continue; }
+    // 产品设计（2026-08-17 最终版）：资产池全局共享——空间会话可引用
+    // **整个资产池**（含其它空间产生的资产与全局资产）；只有资产 tab
+    // 显示按空间过滤（listAbilityAssetsForSpace）。workspace-ref 只是可选
+    // 收紧控制（显式停用/scope 词），不是引用前置。
+    // 任务类型词闸门只约束"特定任务类型"的 scope（如 review/report）；
+    // 'space'（空间适用）/ 'general'（通用）不按 purpose 过滤。
     if (ref && !ref.enabled) { omittedRefs.push({ assetId: asset.id, reason: 'workspace_disabled' }); continue; }
-    if (ref && !scopeIncludes(ref.scope, purpose)) { omittedRefs.push({ assetId: asset.id, reason: 'scope_mismatch' }); continue; }
-    // Soft whole-word scope gate: a sentence-shaped purpose (e.g. "Use frozen
-    // OAuth review knowledge") still matches a 'review' scope term, unlike the
-    // old exact-equality gate which silently emptied the candidate pool.
-    if (!ref && !scopeIncludes(asset.scope, purpose)) { omittedRefs.push({ assetId: asset.id, reason: 'scope_mismatch' }); continue; }
+    if (ref && !scopeAppliesToPurpose(ref.scope, purpose)) { omittedRefs.push({ assetId: asset.id, reason: 'scope_mismatch' }); continue; }
+    if (!ref && !scopeAppliesToPurpose(asset.scope, purpose)) { omittedRefs.push({ assetId: asset.id, reason: 'scope_mismatch' }); continue; }
     includedAssets.push(asset);
   }
 
@@ -609,6 +624,8 @@ export async function createAutomaticContextProjection(
       omittedRefs.push({ assetId: asset.id, reason: 'workspace_disabled' });
       continue;
     }
+    // 资产池全局共享（2026-08-17 最终版）：空间会话的自动注入可引用整个
+    // 池子（含其它空间资产与全局资产）；tab 显示才按空间过滤。
     if (!(await hasEnabledAutomaticSources(userId, asset))) {
       omittedRefs.push({ assetId: asset.id, reason: 'source_unavailable' });
       continue;

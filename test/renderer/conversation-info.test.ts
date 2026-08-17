@@ -184,7 +184,7 @@ describe('ConversationInfo Collaboration tab shell', () => {
     // 9.1 统一框架：右侧从 5 个互斥 tab 收敛为「运行上下文」单列五段，不再有任何 tab。
     expect(html).not.toContain('data-info-tab=');
     expect(html).toContain('id="conversation-info-body"');
-    expect(html).toContain('conversation_info.subtitle');
+    expect(html).toContain('conversation_info.title');
   });
 
   it('renders a single run-context panel instead of per-feature tabs', () => {
@@ -192,7 +192,7 @@ describe('ConversationInfo Collaboration tab shell', () => {
 
     expect(html).toContain('id="conversation-info-panel"');
     expect(html).toContain('id="conversation-info-body"');
-    expect(html).toContain('conversation_info.subtitle');
+    expect(html).toContain('conversation_info.title');
     expect(html).not.toContain('data-info-tab="collaboration"');
     expect(html).not.toContain('data-info-tab="agent-activity"');
   });

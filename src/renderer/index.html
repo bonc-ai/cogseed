@@ -83,6 +83,10 @@
           </div>
           <div class="new-chat-input-wrapper">
             <div class="new-chat-input-area">
+              <!-- 松鼠趴卧（与会话对话框同款）：绝对定位压在输入框上沿，
+                   样式见 style.css `.chat-input-squirrel`（首页与会话共用）。 -->
+              <img class="chat-input-squirrel" src="../resources/icons/cogseed-squirrel-perch.png"
+                   alt="" draggable="false" aria-hidden="true" decoding="async" />
               <!-- Floats above the input box. Attachments wrap on the left;
                    the workspace chip moved into .chat-bottom-bar below
                    (next to recipient / project chips) so the overlay only
@@ -240,6 +244,12 @@
                 <div class="chat-queue-list" id="chat-queue-list"></div>
               </div>
               <div class="chat-input-area">
+                <!-- 松鼠趴卧（参考官网登录页 .auth-squirrel）：绝对定位压在
+                     输入框上沿——右缘探出 14px、底边压住上沿 24px、身体悬在
+                     消息区上方；pointer-events:none 不挡输入/滚动。
+                     样式见 style.css `#panel-conversation .chat-input-squirrel`。 -->
+                <img class="chat-input-squirrel" src="../resources/icons/cogseed-squirrel-perch.png"
+                     alt="" draggable="false" aria-hidden="true" decoding="async" />
                 <!-- Floats above the input box for the attachments strip only.
                      Plan rail moved up into #chat-plan-strip (between header
                      and chat history); workspace chip moved into the bottom
@@ -290,7 +300,6 @@
             <div class="conversation-info-header">
               <div class="conversation-info-heading-wrap">
                 <div class="conversation-info-title" data-i18n="conversation_info.title">运行上下文</div>
-                <div class="conversation-info-subtitle" data-i18n="conversation_info.subtitle">本次最小上下文 · 来源 · 权限 · 运行证明 · 协作参与者</div>
               </div>
               <button type="button" class="conversation-info-icon-btn conversation-info-close" id="conversation-info-close"
                       data-i18n-title="common.close" data-i18n-aria-label="common.close"

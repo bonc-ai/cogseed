@@ -7,7 +7,8 @@ export interface P3394RuntimeEvent { sequence: number; task_id: string; kind: 's
 export interface P3394RuntimeAdapter {
   openSession(input: { session_id: string; agent_id: string }): Promise<P3394RuntimeSessionBinding>;
   deliver(envelope: P3394Envelope): Promise<{ task_id: string }>;
-  stream(taskId: string): AsyncIterable<P3394RuntimeEvent>;
+  /** Streams from the first P3394 event sequence greater than afterSequence. */
+  stream(taskId: string, afterSequence?: number): AsyncIterable<P3394RuntimeEvent>;
   resume(sessionId: string): Promise<void>;
   cancel(taskId: string): Promise<void>;
   snapshot(sessionId: string): Promise<P3394RuntimeSnapshot>;
@@ -43,8 +44,11 @@ export class P3394InMemoryRuntimeAdapter implements P3394RuntimeAdapter {
     return { task_id };
   }
 
-  async *stream(taskId: string): AsyncIterable<P3394RuntimeEvent> {
-    for (const event of this.events.get(taskId) ?? []) yield event;
+  async *stream(taskId: string, afterSequence = 0): AsyncIterable<P3394RuntimeEvent> {
+    const after = Math.max(0, Math.floor(Number(afterSequence) || 0));
+    for (const event of this.events.get(taskId) ?? []) {
+      if (event.sequence > after) yield event;
+    }
   }
 
   async resume(sessionId: string): Promise<void> {

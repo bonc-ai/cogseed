@@ -19,6 +19,7 @@
   "chat.reply_interrupted": "A resposta anterior foi interrompida quando o aplicativo foi encerrado. O progresso persistido foi mantido; envie uma mensagem para continuar.",
   "chat.turn_limit_reached": "Atingiu o limite automático de passos para esta execução e parou. Envie sua mensagem novamente para continuar.",
   "cli_agent.missing": "⚠️ O agente “{name}” precisa da CLI local “{cli}” que não está instalada. Instale-o e tente novamente ou mude o agente para outro tipo.",
+  "cli_agent.local_proxy_unreachable": "“{name}” não pode ser executado: {cli} está configurado para passar por um proxy local ({url}), mas esse proxy não está em execução no momento. Inicie a ferramenta de proxy (ex.: CC Switch) ou volte {cli} para um endpoint direto / conta autenticada na própria configuração e tente novamente.",
   "cli_agent.not_found": "⚠️ O agente “{name}” não pode ser executado: a CLI local “{cli}” não foi encontrada. Instale-a ou configure o caminho e tente novamente.",
   "cli_agent.run_failed_detail": "“{name}” parou antes de concluir a tarefa. Confirme que a CLI está autenticada e funcionando e tente novamente.",
   "cli_agent.session_expired_detail": "A sessão externa de “{name}” expirou. Tente novamente para iniciar uma nova sessão.",

@@ -121,12 +121,35 @@ export const invokeHandlers = {
    * onboarding UI can honestly tell the user "this CLI routes through a
    * local proxy (e.g. CC Switch) — keep it running, or switch to a direct
    * endpoint". The app never depends on the proxy; this is informational.
+   * Also reports `reachable` (TCP probe against local proxy host:port) so
+   * the UI and the CLI-fallback picker can skip CLIs whose local proxy is
+   * not currently running. Probes run in parallel with a short per-CLI
+   * timeout so this never stalls onboarding rendering.
    */
   'localAgents.cliEndpointInfo': async () => {
-    const { readCliModelEndpoint } = await import('../features/local_agents/active_config.js');
-    const endpoints: Record<string, { baseUrl: string; isLocalProxy: boolean } | null> = {};
-    for (const cli of ['claude', 'codex', 'opencode', 'workbuddy'] as const) {
-      endpoints[cli] = readCliModelEndpoint(cli);
+    const { readCliModelEndpoint, probeModelEndpointReachable } = await import('../features/local_agents/active_config.js');
+    const clis = ['claude', 'codex', 'opencode', 'workbuddy'] as const;
+    const [reachableMap] = await Promise.all([
+      (async () => {
+        const out: Record<string, boolean | null> = {};
+        await Promise.all(clis.map(async (cli) => {
+          out[cli] = await probeModelEndpointReachable(cli);
+        }));
+        return out;
+      })(),
+    ]);
+    const endpoints: Record<string, { baseUrl: string; isLocalProxy: boolean; reachable: boolean | null; configAvailable: boolean; authMode: 'api' | 'oauth' | null } | null> = {};
+    for (const cli of clis) {
+      const ep = readCliModelEndpoint(cli);
+      endpoints[cli] = ep
+        ? {
+            baseUrl: ep.baseUrl,
+            isLocalProxy: ep.isLocalProxy,
+            reachable: reachableMap[cli],
+            configAvailable: ep.configAvailable,
+            authMode: ep.authMode,
+          }
+        : null;
     }
     return { ok: true, endpoints };
   },
