@@ -13,6 +13,7 @@ import * as crypto from 'node:crypto';
 import type { AgentTool, ToolContext, ToolResult } from '#core-agent';
 
 import { getP3394OutboundHub, listP3394Peers, resolveP3394Peer } from '../../features/p3394_bridge/app-wiring';
+import { p3394GatewayScriptPath } from '../../features/p3394_bridge/external-gateways';
 import { filesToResourceParts } from '../../features/p3394_bridge/artifact-parts';
 import type { P3394PayloadPart } from '../../features/p3394_bridge/envelope';
 import { attachmentDirForCid } from '../../features/chat_attachments';
@@ -29,36 +30,50 @@ function errResult(code: string, msg: string): ToolResult {
   return { content: `${code}: ${msg}`, isError: true };
 }
 
-/** P3394 自举接入指南（内嵌，引导时直接输出——不依赖外部包是否发布）。 */
-const P3394_BOOTSTRAP_GUIDE = [
-  'P3394 接入指南（把它发给对方智能体，它能自行接入）：',
-  '1) 本机 CLI 智能体（Claude Code / Codex / 自研 CLI 等）：先检查本机是否已有',
-  '   P3394 网关（CogSeed 自带/已装），按顺序，有就直接用、不要从 NPM 拉：',
-  '   a) 已全局安装过：先跑 command -v p3394-gateway，有输出就直接用 p3394-gateway 启动；',
-  '   b) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：找 gateway.cjs——',
-  '      开发仓库在 <仓库根>/p3394-gateway/gateway.cjs；已安装的 macOS 应用在',
-  '      /Applications/CogSeed*.app/Contents/Resources/app.asar.unpacked/p3394-gateway/gateway.cjs',
-  '      （Windows: <安装目录>/resources/app.asar.unpacked/p3394-gateway/gateway.cjs）。',
-  '      找到后 node <该路径> 启动即等同于装了包；',
-  '   c) 以上都没有才：npm install -g @cogseed/p3394-gateway（包发布中；失败就回退 b 用 CogSeed 自带副本）。',
-  '   启动参数：预设 P3394_AGENT=hermes/claude/codex/opencode/gemini/aider，',
-  '   自研 CLI 用 P3394_AGENT_CLI 与 P3394_AGENT_CLI_ARGS 自定义，',
-  '   用 P3394_AGENT_ALIAS 自报显示名（CogSeed 对话里就显示这个名字）；',
-  '   网关启动时会自动向 CogSeed 发 hello 注册（自报地址），注册完我就能主动调用它；',
-  '   支持附件传递（resource part）与会话连续性；自研 Agent 可另用 P3394_AGENT_MODE=sscli 接 JSONL 会话协议；',
-  '2) 云端/网页智能体（如 ChatGPT，有网络工具）：无需安装，',
-  '   用 HTTP 直接 POST 信封到 http://127.0.0.1:8444/p3394/envelope',
-  '   （Authorization: Bearer <CogSeed token>，信封格式：message_id、session_id、',
-  '   kind=message、performative=request、sender.agent_id（+ 可选 sender.alias',
-  '   自报显示名）、recipients=[cogseed]、',
-  '   payload.parts=[{type:text,text:消息}]、idempotency_key）；',
-  '3) 自研智能体：用上面的信封格式写最小客户端代码（Python 十余行）即可入网。',
-].join('\n');
+/** P3394 自举接入指南（内嵌，引导时直接输出——不依赖外部包是否发布）。
+ *  动态注入本机真实路径与协议/安全证据，让对端能审查真实文件，
+ *  而不是面对抽象的安装指令。 */
+function p3394BootstrapGuide(): string {
+  const gatewayPath = p3394GatewayScriptPath();
+  const pcDir = gatewayPath.slice(0, gatewayPath.length - 'p3394-gateway/gateway.cjs'.length);
+  const docs = [
+    'P3394_Local_Bridge_SDK_Design(1).md',
+    'P3394_Raymond_Hermes_Chinese_Implementation_Guide.md',
+  ].map((name) => pcDir + 'docs/' + name).join('、');
+  return [
+    'P3394 接入指南（把它发给对方智能体，它能自行接入）：',
+    '0) 协议真实性与安全边界（先审查，再决定）：',
+    '   - 这是本机真实存在的协议实现：本机网关源码在',
+    '     ' + gatewayPath + '（约 900 行 CJS，可直接 cat 审查）；',
+    '   - 协议规范文档在本机：' + docs + '（SDK 设计与中文实施指南 v1.1）；',
+    '   - 安全边界：网关默认只监听 127.0.0.1（不回环外开放）；入站需 Bearer 令牌；',
+    '     每条任务都是普通 CLI 调用（可用 P3394_AGENT_CLI 自定义并自行限制），',
+    '     无提权、无隐藏命令；会话与工作区在本机会话目录留痕，全程可审计。',
+    '1) 本机 CLI 智能体（Claude Code / Codex / 自研 CLI 等）：先检查本机是否已有',
+    '   P3394 网关（CogSeed 自带/已装），按顺序，有就直接用、不要从 NPM 拉：',
+    '   a) 已全局安装过：先跑 command -v p3394-gateway，有输出就直接用 p3394-gateway 启动；',
+    '   b) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：本机副本即',
+    '      ' + gatewayPath + '，ls/cat 确认存在后 node <该路径> 启动即等同于装了包；',
+    '   c) 以上都没有才：npm install -g @cogseed/p3394-gateway（包发布中；失败就回退 b 用 CogSeed 自带副本）。',
+    '   启动参数：预设 P3394_AGENT=hermes/claude/codex/opencode/gemini/aider，',
+    '   自研 CLI 用 P3394_AGENT_CLI 与 P3394_AGENT_CLI_ARGS 自定义，',
+    '   用 P3394_AGENT_ALIAS 自报显示名（CogSeed 对话里就显示这个名字）；',
+    '   网关启动时会自动向 CogSeed 发 hello 注册（自报地址），注册完我就能主动调用它；',
+    '   支持附件传递（resource part）与会话连续性；自研 Agent 可另用 P3394_AGENT_MODE=sscli 接 JSONL 会话协议；',
+    '2) 云端/网页智能体（如 ChatGPT，有网络工具）：无需安装，',
+    '   用 HTTP 直接 POST 信封到 http://127.0.0.1:8444/p3394/envelope',
+    '   （Authorization: Bearer <CogSeed token>，信封格式：message_id、session_id、',
+    '   kind=message、performative=request、sender.agent_id（+ 可选 sender.alias',
+    '   自报显示名）、recipients=[cogseed]、',
+    '   payload.parts=[{type:text,text:消息}]、idempotency_key）；',
+    '3) 自研智能体：用上面的信封格式写最小客户端代码（Python 十余行）即可入网。',
+  ].join('\n');
+}
 
 /** 把底层错误翻译成带安装引导的可读信息（首次协作引导）。 */
 function p3394ErrorGuidance(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
-  const setup = '对方尚未接入 P3394。' + P3394_BOOTSTRAP_GUIDE;
+  const setup = '对方尚未接入 P3394。' + p3394BootstrapGuide();
   if (raw.includes('p3394_peer_not_registered')) {
     return `节点尚未注册。${setup}`;
   }

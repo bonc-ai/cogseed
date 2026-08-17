@@ -118,7 +118,9 @@ function freePort(): Promise<number> {
   });
 }
 
-function gatewayScriptPath(): string {
+/** 本机 P3394 网关脚本的真实路径（本地优先：ORKAS_PC_DIR → 打包
+ *  asar-unpacked → dev 仓库根）。对端引导用它给出可审查的具体路径。 */
+export function p3394GatewayScriptPath(): string {
   // 本地优先：CogSeed 自带 gateway（仓库 dev 根 / 打包 asar-unpacked），
   // 无需对端从 NPM 拉取。
   if (process.env.ORKAS_PC_DIR) {
@@ -130,6 +132,10 @@ function gatewayScriptPath(): string {
     return path.join(process.resourcesPath, 'app.asar.unpacked', 'p3394-gateway', 'gateway.cjs');
   }
   return path.resolve(__dirname, '..', '..', '..', '..', 'p3394-gateway', 'gateway.cjs');
+}
+
+function gatewayScriptPath(): string {
+  return p3394GatewayScriptPath();
 }
 
 /**
