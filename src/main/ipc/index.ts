@@ -2782,6 +2782,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
   // ── Agents ──
   'agents.list': async ({ summary } = {}) => {
+    // P3394 local peers and AI team Agents share one directory. Reconcile
+    // online peers before every directory read so a live external node cannot
+    // remain invisible merely because its projection callback was missed.
+    try {
+      const { syncP3394TeamDirectory } = await import('../features/p3394_bridge/app-wiring');
+      await syncP3394TeamDirectory();
+    } catch {
+      // Directory reads remain available if the bridge is not active yet.
+    }
     // `force` is a renderer-cache concern: callers may need a fresh payload,
     // but ordinary navigation must not delete the validated on-disk Agent
     // catalog and reopen every agent.json. Actual definition mutations,
@@ -2823,13 +2832,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'agents.delete': async ({ agent_id }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
-    // P3394 外接智能体删除联动：先停掉其受管网关（否则节点会因心跳复活）。
+    // P3394 外接智能体删除联动：先停掉其受管网关（否则节点会因心跳复活），
+    // 再清掉团队投影映射（避免残留映射让下次 hello 复用已删除的记录）。
     try {
       const target = await agents.getAgent(agent_id);
       const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
       if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
         const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
         await stopExternalGateway(rt.cli);
+        const { removeProjection } = await import('../features/p3394_bridge/team-projection');
+        removeProjection(rt.cli);
       }
     } catch (error) {
       log.warn('P3394 gateway stop on agent delete failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
@@ -2845,6 +2857,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'agents.setEnabled': async ({ agent_id, enabled }) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
     if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean');
+    // P3394 外接智能体停用联动：禁用即停托管网关（否则网关心跳继续、
+    // peer 保持 online，与"已停用"的 UI 状态矛盾）；重新启用按需自愈
+    // （下一次 turn 的 runP3394GatewayTurn 会自动拉起）。
+    if (!enabled) {
+      try {
+        const target = await agents.getAgent(agent_id);
+        const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
+        if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
+          const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
+          await stopExternalGateway(rt.cli);
+        }
+      } catch (error) {
+        log.warn('P3394 gateway stop on agent disable failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     agents.setAgentEnabledForActiveUser(agent_id, enabled);
     return { ok: true, enabled };
   },

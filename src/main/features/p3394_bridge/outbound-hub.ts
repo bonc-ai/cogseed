@@ -164,6 +164,12 @@ export class P3394OutboundHub {
   tryResolveReply(envelope: P3394Envelope): boolean {
     const waiter = this.pending.get(envelope.session_id);
     if (!waiter) return false;
+    // 匹配粒度细化（S-03/S-04）：入站若带 reply_to，必须回指向本 waiter 期待
+    // 的出站消息才算"回复"；否则它是同 session 上的新 task/另一条消息，不应
+    // 被当回复消费（否则会被 executor 短路吞掉、不进 UI）。
+    if (typeof envelope.reply_to === 'string' && envelope.reply_to && waiter.outboundMessageId !== envelope.reply_to) {
+      return false;
+    }
     clearTimeout(waiter.timer);
     this.pending.delete(envelope.session_id);
     const text = envelopeText(envelope);

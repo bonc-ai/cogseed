@@ -221,6 +221,12 @@ function createWindow(): BrowserWindow {
     height: 800,
     ...restored.bounds,
     title: '',
+    // macOS: hiddenInset title bar — the traffic lights float over the app
+    // content so the conversation header can occupy the strip the native
+    // title bar would otherwise waste. The renderer keys its clearance and
+    // drag regions off the `.is-macos` class (index.html head). Windows
+    // keeps the native frame.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     show: !IS_PACKAGED_LAUNCH_SMOKE,
     backgroundColor: '#ffffff',
     icon: path.join(paths.SRC_ROOT, 'resources', 'icons', 'icon.png'),

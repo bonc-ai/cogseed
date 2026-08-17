@@ -75,6 +75,59 @@ const HEARTBEAT_MS = Number(process.env.P3394_HEARTBEAT_MS ?? 60 * 1000);
 // 等待自动回发结果、打印后退出（Hermes → CogSeed → Hermes 闭环）。
 const SEND_TASK = (process.env.P3394_SEND_TASK || '').trim();
 const SEND_TASK_TIMEOUT_MS = Number(process.env.P3394_SEND_TASK_TIMEOUT_MS || 30 * 1000);
+// Peer call 本地路由：等待 CogSeed 转发 + 目标回复回发的总时限（默认 3 分钟）。
+const PEER_CALL_TIMEOUT_MS = Number(process.env.P3394_PEER_CALL_TIMEOUT_MS || 3 * 60 * 1000);
+// H-04：运行中 CLI 的 peer 转调提示（P3394 外接智能体互调）。**绝不把
+// AUTH_TOKEN 拼进 prompt**——token 会进 Agent 模型上下文 / transcript /
+// 进程命令行。回环模式 /p3394/call 免鉴权（本机父子进程），非回环绑定
+// 已由下方启动门强制要求 token。
+const PEER_CALL_HINT = COGSEED_ENDPOINT
+  ? '\n\n[P3394 协作工具] 你可以调用本机 P3394 桥转调其他已接入智能体（如另一个代码智能体）帮你分担子任务。用法：curl -s -X POST http://127.0.0.1:' + PORT + '/p3394/call -H "Content-Type: application/json" -d \'{"peer":"<节点id>","message":"<子任务描述>"}\'，响应里的 reply 字段即对方回复。若网关配置了鉴权令牌请向使用者索取并在 Authorization 头附带；回环模式下可省略。仅在确有需要时使用，并保持回复简洁。'
+  : '';
+// 入站信封/调用请求体上限（M-01）：JSON 缓冲上限，超限 413。
+const MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024;
+// H-03 fail-closed：绑定非回环接口时必须在启动前配置入站鉴权令牌，
+// 否则任意内网主机都能无密码调用本网关（命令/数据面全暴露）。
+if (!isLoopbackHost && !AUTH_TOKEN) {
+  console.error('[p3394-gateway] 绑定到非回环地址（GATEWAY_HOST=' + GATEWAY_HOST + '）必须配置 P3394_GATEWAY_TOKEN —— 拒绝以无鉴权方式暴露内部接口。');
+  process.exit(2);
+}
+
+/**
+ * SSRF 收口（H-01）：入站信封的 reply_endpoint 是对端可控的，直接用于
+ * 回发/对象拉取会诱导本网关向任意地址 POST 结果或 GET 对象（数据外泄）。
+ * 只信任：回环地址，或用户显式配置的受信端点（COGSEED_ENDPOINT）。
+ * 其它声明一律拒绝并回退到配置端点。
+ */
+function isLoopbackUrl(urlString) {
+  let parsed = null;
+  try { parsed = new URL(urlString); } catch { return false; }
+  let host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  // 规范化 IPv4-mapped / IPv6 组合回环。注意 Node 的 URL 对 IPv4-mapped
+  // 可能编码成 ::ffff:7f00:1（十六进制）而非 ::ffff:127.0.0.1（点分）。
+  if (host.startsWith('::ffff:')) {
+    const ip4 = host.slice('::ffff:'.length);
+    const dot = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip4);
+    if (dot && dot.slice(1).every((s) => Number(s) >= 0 && Number(s) <= 255)) return Number(dot[1]) === 127;
+    const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip4);
+    if (hex) return (parseInt(hex[1], 16) >> 8) === 127;
+    return false;
+  }
+  if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
+  if (host === 'localhost') return true;
+  const ipv4Segs = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (ipv4Segs && ipv4Segs.slice(1).every((s) => Number(s) >= 0 && Number(s) <= 255)) {
+    return Number(ipv4Segs[1]) === 127; // 127.0.0.0/8 loopback
+  }
+  return false;
+}
+function trustedReplyEndpoint(declared) {
+  const d = (declared && typeof declared === 'string' && declared.trim()) || '';
+  if (!d) return COGSEED_ENDPOINT;
+  if (isLoopbackUrl(d) || d === COGSEED_ENDPOINT) return d;
+  console.warn('[p3394-gateway] 拒绝非回环/非受信 reply_endpoint: ' + d);
+  return COGSEED_ENDPOINT;
+}
 // V-04 断线重试：发送失败（连接拒绝/非 2xx）按退避重试，默认 2 次额外尝试。
 const SEND_TASK_RETRIES = Math.max(1, Number(process.env.P3394_SEND_TASK_RETRIES || 2));
 const replyWaiters = new Map(); // message_id → 处理回信的函数
@@ -89,7 +142,7 @@ const PRESETS = {
   opencode: { cli: 'opencode', args: 'run {message}',           id: 'opencode' },
   gemini:   { cli: 'gemini',  args: '-p {message}',             id: 'gemini' },
   aider:    { cli: 'aider',   args: '--message {message} --yes', id: 'aider' },
-  openclaw: { cli: 'openclaw', args: '-p {message}',            id: 'openclaw' },
+  openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw' },
   workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy' },
 };
 const PRESET_NAME = (process.env.P3394_AGENT || 'hermes').trim().toLowerCase();
@@ -244,7 +297,9 @@ async function fetchObjectParts(envelope, inDir) {
   const files = [];
   const parts = (envelope && envelope.payload && envelope.payload.parts) || [];
   const ext = (envelope && envelope.extensions) || {};
-  const endpoint = (typeof ext.reply_endpoint === 'string' && ext.reply_endpoint) || COGSEED_ENDPOINT;
+  // H-01：对象拉取端点同样走受信端点解析（回环/COGSEED_ENDPOINT），
+  // 防止诱导本网关向任意内部/外部地址 GET。
+  const endpoint = trustedReplyEndpoint(ext.reply_endpoint) || COGSEED_ENDPOINT;
   if (!endpoint) return files;
   const token = typeof ext.reply_token === 'string' ? ext.reply_token : COGSEED_TOKEN;
   let index = 0;
@@ -357,10 +412,30 @@ function runAgent(message, taskId) {
     child.on('close', (code) => {
       clearTimeout(timer);
       if (taskId) activeTasks.delete(taskId);
-      if (code === 0) resolve(out.trim());
+      if (code === 0) resolve(extractReplyText(out, PRESET_NAME));
       else reject(new Error('agent exited ' + code + (errOut ? ': ' + errOut.slice(-300) : '')));
     });
   });
+}
+
+/** openclaw --json 模式的输出是 JSON 信封；提取其中的可见回复文本。
+ *  优先 finalAssistantVisibleText（冒烟实测字段），再退 JSON 字段或原样。 */
+function extractReplyText(out, preset) {
+  const text = String(out || '').trim();
+  if (!text || preset !== 'openclaw') return text;
+  const visible = /"finalAssistantVisibleText"\s*:\s*"([^"]*)"/.exec(text);
+  if (visible && visible[1]) return visible[1].replace(/\\n/g, '\n');
+  try {
+    const parsed = JSON.parse(text);
+    const pick = [
+      parsed.finalAssistantVisibleText,
+      parsed.text,
+      parsed.result && parsed.result.text,
+      Array.isArray(parsed.payloads) && parsed.payloads[0] && parsed.payloads[0].text,
+    ].find((v) => typeof v === 'string' && v.trim());
+    if (pick) return pick.trim();
+  } catch { /* not a single JSON object — return raw */ }
+  return text;
 }
 
 function cancelTask(taskId) {
@@ -593,7 +668,9 @@ const sscliRuntime = new SscliRuntime();
 // ── 回复回发（可携带 resource parts） ──
 function postReply(envelope, replyText, resourceParts) {
   const ext = (envelope && envelope.extensions) || {};
-  const replyEndpoint = (typeof ext.reply_endpoint === 'string' && ext.reply_endpoint) || COGSEED_ENDPOINT;
+  // H-01：回发端点只信任回环/受信配置（COGSEED_ENDPOINT），防止诱导本网关
+  // 把任务结果 POST 到任意第三方地址（数据外泄）。
+  const replyEndpoint = trustedReplyEndpoint(ext.reply_endpoint) || COGSEED_ENDPOINT;
   const replyToken = typeof ext.reply_token === 'string' ? ext.reply_token : COGSEED_TOKEN;
   const parts = [{ type: 'text', text: replyText }];
   for (const part of (resourceParts || [])) parts.push(part);
@@ -608,6 +685,7 @@ function postReply(envelope, replyText, resourceParts) {
       role: 'responder',
       sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
       recipients: [{ agent_id: (envelope.sender && envelope.sender.agent_id) || 'cogseed' }],
+      reply_to: envelope.message_id,
       payload: { parts },
       idempotency_key: 'idem-reply-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
     },
@@ -688,16 +766,16 @@ async function handleEnvelope(envelope) {
   try {
     let rawReply;
     if (PRESET_NAME === 'codex') {
-      rawReply = await codexAppServerRuntime.deliver(sessionId, text + artifactNote, dir);
+      rawReply = await codexAppServerRuntime.deliver(sessionId, text + artifactNote + PEER_CALL_HINT, dir);
     } else if (AGENT_MODE === 'sscli') {
       const goal = envelope.payload && envelope.payload.metadata && typeof envelope.payload.metadata.goal === 'string'
         ? envelope.payload.metadata.goal
         : '';
       await sscliRuntime.openSession(sessionId, goal, dir);
-      rawReply = await sscliRuntime.deliver(sessionId, envelope.message_id, text + artifactNote);
+      rawReply = await sscliRuntime.deliver(sessionId, envelope.message_id, text + artifactNote + PEER_CALL_HINT);
     } else {
       const transcript = readTranscriptTail(sessionId);
-      const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + artifactNote;
+      const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + artifactNote + PEER_CALL_HINT;
       rawReply = await runAgent(prompt, envelope.task_id);
     }
     const reply = rawReply.length > MAX_REPLY_BYTES ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : rawReply;
@@ -731,6 +809,114 @@ const server = http.createServer((req, res) => {
     json(res, 200, { ok: true, agent_id: AGENT_ID });
     return;
   }
+  // Peer call 本地路由：运行中的 CLI 智能体（oneshot 子进程 / sscli 常驻）
+  // 通过本端点转调另一个 P3394 节点。本网关只与 CogSeed 桥通信：信封带
+  // extensions.forward_to，由桥解析目标并转发（peer-forward），回复经本端
+  // reply_endpoint 回发、由 replyWaiters 匹配后作为本端点响应返回。
+  // 鉴权：仅回环可访问 + 需 Bearer AUTH_TOKEN（与本端入站信封一致）。
+  if (req.url && req.url.startsWith('/p3394/call') && req.method === 'POST') {
+    if (AUTH_TOKEN) {
+      const auth = req.headers.authorization || '';
+      if (auth !== 'Bearer ' + AUTH_TOKEN) {
+        json(res, 401, { ok: false, error: 'unauthorized' });
+        return;
+      }
+    }
+    let body = '';
+    let bodyTooLarge = false;
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (Buffer.byteLength(body) > MAX_REQUEST_BODY_BYTES && !bodyTooLarge) {
+        bodyTooLarge = true;
+        json(res, 413, { ok: false, error: 'payload_too_large' });
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (bodyTooLarge) return;
+      let parsed = null;
+      try { parsed = JSON.parse(body); } catch { /* fallthrough */ }
+      const peer = parsed && typeof parsed.peer === 'string' ? parsed.peer.trim() : '';
+      const message = parsed && typeof parsed.message === 'string' ? parsed.message.trim() : '';
+      if (!peer || !message) {
+        json(res, 422, { ok: false, error: 'peer_and_message_required' });
+        return;
+      }
+      // 本地预校验（与桥 peer-forward 的拒绝规则一致，避免无效目标
+      // 空等 3 分钟超时）：桥自身节点 id 不可作为转发目标；也不可转发
+      // 给自己。桥对这些情况的响应是 200-ack + 异步失败（不回传错误），
+      // 所以必须在本地拦截。
+      if (peer === 'cogseed' || peer === 'mate' || peer === 'orkas') {
+        json(res, 502, { ok: false, error: 'p3394_call_forward_rejected: p3394_forward_invalid_target (bridge self node)' });
+        return;
+      }
+      if (peer === AGENT_ID) {
+        json(res, 502, { ok: false, error: 'p3394_call_forward_rejected: p3394_forward_invalid_target (cannot forward to self)' });
+        return;
+      }
+      const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+      const env = {
+        spec_version: 'p3394/1.0',
+        message_id: 'msg-fwd-' + nonce,
+        session_id: 'ses-fwd-' + nonce,
+        task_id: 'tsk-fwd-' + nonce,
+        kind: 'task',
+        performative: 'request',
+        role: 'requester',
+        sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+        recipients: [{ agent_id: peer }],
+        payload: { parts: [{ type: 'text', text: message.slice(0, MAX_MESSAGE_LEN) }], metadata: { goal: 'peer call to ' + peer } },
+        extensions: { forward_to: peer, reply_endpoint: ADVERTISE_ENDPOINT, reply_token: AUTH_TOKEN },
+        idempotency_key: 'idem-fwd-' + nonce,
+      };
+      const timer = setTimeout(() => {
+        if (replyWaiters.has(env.message_id)) {
+          replyWaiters.delete(env.message_id);
+          json(res, 504, { ok: false, error: 'p3394_call_timeout' });
+        }
+      }, PEER_CALL_TIMEOUT_MS);
+      if (typeof timer.unref === 'function') timer.unref();
+      replyWaiters.set(env.message_id, (reply) => {
+        clearTimeout(timer);
+        // 桥转发失败时回传的错误信封（app-wiring.ts 方案 2）：识别前缀并
+        // 映射为 502，而不是当作成功回复返回。
+        const replyText = envelopeText(reply);
+        if (replyText.startsWith('[p3394_forward_error]')) {
+          json(res, 502, { ok: false, peer, error: replyText.replace('[p3394_forward_error] ', '') });
+          return;
+        }
+        json(res, 200, { ok: true, peer, reply: replyText });
+      });
+      const url = new URL(COGSEED_ENDPOINT + '/p3394/envelope');
+      const headers = { 'Content-Type': 'application/json' };
+      if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
+      const fwdReq = http.request(url, { method: 'POST', headers }, (r) => {
+        // 读取桥的响应体：非 2xx（如 p3394_forward_invalid_target 422）必须
+        // 立即失败返回，否则 replyWaiters 会空等 PEER_CALL_TIMEOUT_MS 超时。
+        let resBody = '';
+        r.on('data', (chunk) => { resBody += chunk; });
+        r.on('end', () => {
+          if (r.statusCode && r.statusCode >= 200 && r.statusCode < 300) return; // 转发已受理，等待对端回信
+          clearTimeout(timer);
+          if (replyWaiters.has(env.message_id)) {
+            replyWaiters.delete(env.message_id);
+            let reason = 'HTTP ' + r.statusCode;
+            try { const parsed = JSON.parse(resBody); if (parsed && typeof parsed.error === 'string') reason = parsed.error; } catch { /* fallthrough */ }
+            json(res, 502, { ok: false, error: 'p3394_call_forward_rejected: ' + reason });
+          }
+        });
+      });
+      fwdReq.on('error', (error) => {
+        clearTimeout(timer);
+        if (replyWaiters.has(env.message_id)) {
+          replyWaiters.delete(env.message_id);
+          json(res, 502, { ok: false, error: 'p3394_call_send_failed: ' + (error && error.message ? error.message : String(error)) });
+        }
+      });
+      fwdReq.end(JSON.stringify({ envelope: env }));
+    });
+    return;
+  }
   if (req.url && req.url.startsWith('/p3394/envelope') && req.method === 'POST') {
     if (AUTH_TOKEN) {
       const auth = req.headers.authorization || '';
@@ -740,8 +926,17 @@ const server = http.createServer((req, res) => {
       }
     }
     let body = '';
-    req.on('data', (chunk) => { body += chunk; });
+    let bodyTooLarge = false;
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (Buffer.byteLength(body) > MAX_REQUEST_BODY_BYTES && !bodyTooLarge) {
+        bodyTooLarge = true;
+        json(res, 413, { ok: false, error: 'payload_too_large' });
+        req.destroy();
+      }
+    });
     req.on('end', () => {
+      if (bodyTooLarge) return;
       let envelope = null;
       try {
         const parsed = JSON.parse(body);

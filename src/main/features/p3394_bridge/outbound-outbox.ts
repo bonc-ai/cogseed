@@ -14,9 +14,22 @@ import * as path from 'node:path';
 import { createLogger } from '../../logger';
 import { sanitizeLogTextForUpload } from '../../util/log-sanitize';
 import { p3394StateFile } from './runtime-paths';
+import { redactP3394Secrets } from './secrets';
 import type { P3394Envelope } from './envelope';
 
 const log = createLogger('p3394-bridge:outbound-outbox');
+
+/** Append with a private 0600 file (outbox snapshots carry the bridge
+ *  token in extensions.reply_token — it must not be world-readable).
+ *  openSync mode applies on create; chmodSync reasserts it on existing. */
+function appendSecure(file: string, text: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  try {
+    const fd = fs.openSync(file, 'a', 0o600);
+    try { fs.writeSync(fd, text); } finally { fs.closeSync(fd); }
+  } catch { /* fall through to append + chmod */ }
+  try { fs.chmodSync(file, 0o600); } catch { /* best effort */ }
+}
 
 export type P3394OutboxStatus = 'submitted' | 'sent' | 'completed' | 'failed';
 
@@ -42,18 +55,61 @@ export function outboxFilePath(): string {
   return p3394StateFile('p3394-outbox.jsonl');
 }
 
-function appendEvent(event: P3394OutboxEvent): void {
+/** L-01：outbox 是追加式事件溯源，长运行后无限增长。超过此阈值时折叠
+ *  为"仅 active（submitted/sent）重放集"，丢弃已 terminal 的历史记录。
+ *  outbox 是运行机制而非审计归档，重放集完整保留即不破坏 at-least-once。 */
+const OUTBOX_COMPACT_BYTES = 5 * 1024 * 1024;
+let outboxCompactCounter = 0;
+
+function maybeCompactOutbox(): void {
+  // 概率摊薄 stat 成本，但仍保证最终触发。
+  outboxCompactCounter = (outboxCompactCounter + 1) % 256;
+  if (outboxCompactCounter !== 0) return;
   const file = outboxFilePath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, JSON.stringify(event) + '\n');
+  try { if (fs.statSync(file).size < OUTBOX_COMPACT_BYTES) return; } catch { return; }
+  try {
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    const envelopes = new Map<string, { peer: string; envelope: P3394Envelope }>();
+    const statuses = new Map<string, P3394OutboxEvent>();
+    for (const line of lines) {
+      try {
+        const event = JSON.parse(line) as P3394OutboxEvent & { kind?: string; peer?: string; envelope?: P3394Envelope };
+        if (event.kind === 'envelope' && event.message_id && event.envelope) {
+          envelopes.set(event.message_id, { peer: event.peer || '', envelope: event.envelope });
+        } else if (event.message_id && event.status) {
+          statuses.set(event.message_id, { at: event.at, message_id: event.message_id, status: event.status, ...(event.error ? { error: event.error } : {}) });
+        }
+      } catch { /* skip malformed */ }
+    }
+    const keep: string[] = [];
+    for (const [messageId, snapshot] of envelopes) {
+      const status = statuses.get(messageId)?.status;
+      if (!status || status === 'submitted' || status === 'sent') {
+        keep.push(JSON.stringify({ at: statuses.get(messageId)?.at ?? new Date().toISOString(), message_id: messageId, kind: 'envelope', peer: snapshot.peer, envelope: snapshot.envelope }));
+        if (status) keep.push(JSON.stringify(statuses.get(messageId)));
+      }
+    }
+    fs.writeFileSync(file, keep.join('\n') + '\n', { mode: 0o600 });
+    try { fs.chmodSync(file, 0o600); } catch { /* best effort */ }
+    log.info('P3394 outbox compacted', { before: lines.length, after: keep.length });
+  } catch (error) {
+    log.warn('P3394 outbox compact failed (append-only continues)', { error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
-/** 落盘提交：submitted 事件 + 信封快照（同一文件内嵌信封，便于重放）。 */
+function appendEvent(event: P3394OutboxEvent): void {
+  appendSecure(outboxFilePath(), redactP3394Secrets(JSON.stringify(event)) + '\n');
+  maybeCompactOutbox();
+}
+
+/** 落盘提交：submitted 事件 + 信封快照（同一文件内嵌信封，便于重放）。
+ *  依赖 0600 文件权限保护 token 扩展字段；追加一行正则兜底防 token 串进
+ *  事件字段。 */
 export function outboxRecordSubmitted(envelope: P3394Envelope, peer: string): void {
   const now = new Date().toISOString();
   appendEvent({ at: now, message_id: envelope.message_id, status: 'submitted' });
   // 信封快照只随 submitted 事件存储一次（信封不可变）。
-  fs.appendFileSync(outboxFilePath(), JSON.stringify({ at: now, message_id: envelope.message_id, kind: 'envelope', peer, envelope }) + '\n');
+  appendSecure(outboxFilePath(), JSON.stringify({ at: now, message_id: envelope.message_id, kind: 'envelope', peer, envelope }) + '\n');
 }
 
 export function outboxMarkSent(messageId: string): void {

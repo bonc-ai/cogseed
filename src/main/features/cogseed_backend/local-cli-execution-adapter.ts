@@ -148,6 +148,13 @@ export function createMateLocalCliExecutionAdapter(
 
   return {
     async *run(input, opts = {}) {
+      // 统一执行路径：P3394 外接智能体（viaP3394Gateway）走托管 gateway
+      // （UMF 信封），与对话分派共用同一条协议轨，事件语义映射到 Runtime
+      // 事件流（task store / recall 语义保持不变）。
+      if (input.localCli.viaP3394Gateway) {
+        yield* runViaP3394Gateway(input, opts);
+        return;
+      }
       const signal = opts.signal ?? new AbortController().signal;
       const cwd = input.workingDir || await resolveWorkingDir(input);
       const prompt = promptFromInput(input);
@@ -203,3 +210,53 @@ export function createMateLocalCliExecutionAdapter(
 }
 
 export const mateLocalCliExecutionAdapter = createMateLocalCliExecutionAdapter();
+
+/**
+ * P3394 外接智能体的执行（wake 路径）：经 runP3394GatewayTurn 走托管
+ * gateway 节点——与对话分派(p3394-gateway-turn)复用同一实现。gateway
+ * 离线时按需自愈（recoverGateway），事件/错误分类都在 gateway-turn 内完成。
+ * 产物仍以 RuntimeEventEnvelope 流返回，保持 task/event/recall 语义。
+ */
+async function* runViaP3394Gateway(
+  input: MateLocalCliExecutionInput,
+  opts: { signal?: AbortSignal | null } = {},
+): AsyncIterable<RuntimeEventEnvelope> {
+  const base = { request_id: input.requestId, runtime_session_id: input.runtimeSessionId };
+  const prompt = promptFromInput(input);
+  const { runP3394GatewayTurn } = await import('../p3394_bridge/p3394-gateway-turn');
+  const runningEvents: Array<{ text: string }> = [];
+  let result;
+  try {
+    result = await runP3394GatewayTurn({
+      uid: input.userId,
+      cid: input.conversationId,
+      agent: { agent_id: input.agentId, name: input.agentName || input.localCli.agentName || input.agentId },
+      cli: input.localCli.cli,
+      prompt,
+      signal: opts.signal ?? undefined,
+      onProcess: (data) => {
+        const typed = data as { type?: string; text?: string };
+        if ((typed.type === 'delta' || typed.type === 'final') && typeof typed.text === 'string' && typed.text) {
+          runningEvents.push({ text: typed.text });
+        }
+      },
+    });
+  } catch (error) {
+    yield { type: 'error', ...base, status: 'failed', error: error instanceof Error ? error.message : String(error) };
+    return;
+  }
+  for (const item of runningEvents) {
+    yield { type: 'event', ...base, status: 'running', text: item.text };
+  }
+  if (result.failureCode || result.error) {
+    yield {
+      type: 'error',
+      ...base,
+      status: 'failed',
+      error: result.error || result.failureCode || 'p3394 gateway execution failed',
+      metadata: result.failureCode ? { code: result.failureCode, p3394: true } : { p3394: true },
+    };
+    return;
+  }
+  yield { type: 'result', ...base, status: 'completed', text: result.text };
+}

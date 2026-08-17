@@ -39,6 +39,8 @@ const CATALOG: Record<LocalCliType, LocalModel[]> = {
   openclaw: [],
   opencode: [],
   hermes: [],
+  gemini: [],
+  aider: [],
   // WorkBuddy (Tencent) routes models by account; `auto` lets the CLI pick
   // (verified: init reports model:"auto", resolving to glm-5.2 /
   // deepseek-v4-flash per turn). We expose `auto` as the default plus the

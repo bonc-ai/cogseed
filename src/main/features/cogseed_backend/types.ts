@@ -39,6 +39,9 @@ export interface MateLocalCliConfig {
   model?: string;
   customArgs?: string[];
   cliProviderId?: string;
+  /** P3394 外接智能体标记：执行统一走托管 gateway（UMF），不再直跑
+   *  local_agents runner —— wake 与对话分派共用同一条协议轨。 */
+  viaP3394Gateway?: boolean;
 }
 
 export interface MateTaskRecord {

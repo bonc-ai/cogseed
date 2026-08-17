@@ -96,6 +96,10 @@ export function sanitizeLogTextForUpload(text: string): string {
     .replace(/\bgh[oprsu]_[A-Za-z0-9_]{20,}\b/g, '***TOKEN***')
     .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '***TOKEN***')
     .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '***TOKEN***')
+    // P3394 bridge token (p3394-<slug>-<slug>) — the bridge's shared auth
+    // factor. Must never appear verbatim in logs/audit/episodes even if a
+    // new code path pipes it into a plain string.
+    .replace(/\bp3394-[A-Za-z0-9]{8,}-[A-Za-z0-9]{8,}\b/g, '***P3394_TOKEN***')
     // Email — keep first local char + full domain for diagnostic value.
     .replace(/\b([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g, '$1***$2')
     // CN mobile (11 digits starting 1[3-9]) — keep first 3 + last 4.
