@@ -79,3 +79,39 @@ export function personalStatementsToProposals(
     },
   }));
 }
+
+/**
+ * 主题词提取：从句子中提取核心主题名词（≥2 字的词，去掉通用动词/连接词）。
+ * 用于跨类型去重的第二层——语义查重（0.85）对"同主题不同措辞"失效
+ * （实测：用户原话 vs 模型提炼相似度 <0.85），主题词重叠兜底。
+ */
+const THEME_STOPWORDS = /(?:我|我们|以后|都要|都用|都按|这个|格式|模板|结构|固定|采用|先按|再给|然后|以及|或者|需要|应该|应当|可以|不要|不能|必须|会|要|按|用|的|了|着|是|在|把|给|请|帮我|写|做|生成|制作|汇报|风险|阻塞|计划|完成|数据|指标|本周|下周|每月|每周|每次|时|中|里|内|上|下)/g;
+
+/** 提取句子的核心名词 token（去停用词后按非词边界拆分，保留 ≥2 字片段）。 */
+export function themeTerms(text: string): Set<string> {
+  const cleaned = String(text || '')
+    .replace(THEME_STOPWORDS, ' ')
+    .replace(/[，。！？、：；「」『』（）()【】\d.\s]/g, ' ');
+  const terms = new Set<string>();
+  for (const chunk of cleaned.split(/\s+/)) {
+    const stripped = chunk.replace(/[^\u4e00-\u9fffA-Za-z]/g, '');
+    if (stripped.length >= 2) terms.add(stripped);
+  }
+  return terms;
+}
+
+/** 主题重叠：personal 偏好句与已有表达是否同主题。语义查重对"同主题不同
+ *  措辞"失效（实测 <0.85），这里用核心名词**子串包含**兜底——"周报" ⊂
+ *  "团队周报" 即视为同主题。 */
+export function sharesTheme(preference: string, existing: string): boolean {
+  const pref = themeTerms(preference);
+  const ex = themeTerms(existing);
+  for (const term of pref) {
+    for (const other of ex) {
+      if (term.length >= 2 && other.length >= 2 && (other.includes(term) || term.includes(other))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}

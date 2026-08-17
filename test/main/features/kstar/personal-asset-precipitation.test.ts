@@ -165,3 +165,84 @@ describe('precipitateRequirementLevel 集成：从会话消息产 personal 候�
     expect(personal[0].suggestedScope).toBe('personal');
   });
 });
+
+describe('themeTerms / sharesTheme（跨类型去重第二层）', () => {
+  it('extracts core theme nouns from a preference sentence', async () => {
+    const { themeTerms } = await import('../../../../src/main/features/kstar/personal-asset-precipitation');
+    const terms = themeTerms('我以后的周报都要按这个格式：1.本周完成 2.数据指标 3.风险与阻塞 4.下周计划');
+    expect(terms.has('周报')).toBe(true);
+  });
+
+  it('detects same-theme across different wording (personal vs template)', async () => {
+    const { sharesTheme } = await import('../../../../src/main/features/kstar/personal-asset-precipitation');
+    const pref = '我以后的周报都要按这个格式：1.本周完成 2.数据指标 3.风险与阻塞 4.下周计划';
+    const template = '写团队周报时采用固定结构：先按「本周完成（分段列里程碑）→ 数据指标表（带对比上周与负责人列）→ 风险与阻塞（先标影响等级）→ 下周计划';
+    expect(sharesTheme(pref, template)).toBe(true);
+  });
+
+  it('does not treat unrelated themes as shared', async () => {
+    const { sharesTheme } = await import('../../../../src/main/features/kstar/personal-asset-precipitation');
+    const pref = '我以后的周报都要按这个格式';
+    const city = '写城市资料时应先收集数据再成文';
+    expect(sharesTheme(pref, city)).toBe(false);
+  });
+});
+
+describe('跨类型去重集成：已有同主题资产时不产 personal', () => {
+  it('skips personal precipitation when a same-theme template asset exists', async () => {
+    // 预置一条"周报模板"template 资产（模拟模型提炼已沉淀）
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const c = await candidates.saveRecallCandidate('user-dedup', {
+      judgment: '写团队周报时采用固定结构：先按「本周完成→数据指标表→风险与阻塞→下周计划」组织。',
+      value: '写团队周报时采用固定结构：先按「本周完成→数据指标表→风险与阻塞→下周计划」组织。',
+      summary: '周报模板',
+      suggestedType: 'template',
+      suggestedScope: 'report',
+      suggestedAction: 'create',
+      applicableWhen: ['处理报告类任务时'],
+      sourceRefs: [{ kind: 'execution', id: 'exec-dedup' }],
+      evidenceRefs: [{ kind: 'execution', id: 'exec-dedup' }],
+    });
+    await candidates.autoApplyRecallCandidate('user-dedup', c.id, { provenance: 'kstar' });
+
+    // mock chats 返回"我以后的周报都要按这个格式"（同主题偏好）
+    vi.doMock('../../../../src/main/features/chats', () => ({
+      getMessages: async () => [
+        { from: 'user', text: '我以后的周报都要按这个格式：1.本周完成 2.数据指标 3.风险与阻塞 4.下周计划' },
+      ],
+    }));
+    vi.resetModules();
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const episodeStore = await import('../../../../src/main/features/kstar/episode-store');
+    const reviews = await import('../../../../src/main/features/kstar/review-service');
+
+    const task = store.createKstarTaskRecord('user-dedup', { conversationId: 'cid-dedup', title: 'T' });
+    const requirement = store.createKstarRequirementRecord('user-dedup', {
+      taskId: task.id, conversationId: 'cid-dedup', userMessageIds: ['m1'], title: '写周报', goalText: '写周报',
+    });
+    const episode = {
+      schemaVersion: 1 as const, ownerId: 'user-dedup', id: 'kse-dedup', sessionId: 'gconv-cid-dedup',
+      taskRunId: 'run-dedup', k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [] }, s: {},
+      t: { userGoal: '写周报', constraints: [] },
+      a: { toolCalls: [{ name: 'write_file', status: 'ok' as const }], agentActions: [] },
+      r: { status: 'completed' as const, finalText: 'done', producedFiles: [] },
+      evidenceRefs: [{ kind: 'execution' as const, id: 'exec-dedup-ep' }],
+      createdAt: '2026-08-17T00:00:00.000Z', updatedAt: '2026-08-17T00:01:00.000Z',
+    };
+    await episodeStore.writeKstarEpisode('user-dedup', episode);
+    const initial = reviews.createInitialKstarReview(episode);
+    await reviews.saveKstarReviewRecord('user-dedup', { ...initial, confidence: 0.9 });
+    requirement.episodeIds = [episode.id];
+    await store.replaceKstarTask('user-dedup', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id });
+    await store.replaceKstarRequirement('user-dedup', requirement);
+
+    const result = await precipitation.precipitateRequirementLevel('user-dedup', requirement);
+
+    // 已有同主题 template 资产 → 不产 personal 候选（防跨类型重复）
+    const personal = result.proposals.filter((p) => p.suggestedType === 'personal');
+    expect(personal).toHaveLength(0);
+  });
+});
