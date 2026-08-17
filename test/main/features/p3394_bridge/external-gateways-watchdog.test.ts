@@ -102,4 +102,44 @@ describe('P3394 managed gateway watchdog (real processes)', () => {
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
     }
   }, 45_000);
+
+  it('does NOT auto-restart a gateway whose watch was detached (agent delete)', async () => {
+    // 删除 agent 对应 `stopExternalGateway`（内部 detachWatch）：即使 crash
+    // 时已排队的重启 timer 到点，网关也不得复活——否则 hello 触发投影
+    // 重建同名 agent，「删除后无法再创建同名」。
+    const previousDelay = process.env.ORKAS_P3394_WATCHDOG_DELAY_MS;
+    process.env.ORKAS_P3394_WATCHDOG_DELAY_MS = '500'; // 缩短退避，快速验证
+    const token = 'ext-watchdog-detach-token';
+    const registryFile = p3394StateFile('p3394-peers.json');
+    try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
+    const registry = new P3394PeerRegistry({ filePath: registryFile });
+    const channel = new P3394HttpChannel('ext-watchdog-detach-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
+    await channel.listen();
+    channel.subscribe(makeRegistryAutoRegister(registry));
+    const server = (channel as unknown as { server: http.Server }).server;
+    const port = (server.address() as { port: number }).port;
+    try {
+      await stopExternalGateway('hermes');
+      const started = await startExternalGateway({
+        cli: 'hermes', binPath: '/bin/echo', alias: 'Detach Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token },
+      });
+      expect(started.ok).toBe(true);
+      if (!started.ok) throw new Error(started.error);
+      const firstPid = started.value.pid;
+      // 模拟崩溃 → watchdog 排定重启 timer（500ms）。
+      expect(() => process.kill(firstPid, 'SIGKILL')).not.toThrow();
+      // 崩溃后立刻「删除」：stop 会 detachWatch（清 watched + 取消排队 timer）。
+      await stopExternalGateway('hermes');
+      // 等超过退避窗口（500ms timer 触发点 + 余量），确认网关没有复活。
+      await new Promise((r) => setTimeout(r, 3_000));
+      const alive = listExternalGateways().filter((g) => g.cli === 'hermes' && g.running);
+      expect(alive.length).toBe(0);
+    } finally {
+      await stopExternalGateway('hermes');
+      await channel.close();
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      if (previousDelay === undefined) delete process.env.ORKAS_P3394_WATCHDOG_DELAY_MS;
+      else process.env.ORKAS_P3394_WATCHDOG_DELAY_MS = previousDelay;
+    }
+  }, 45_000);
 });

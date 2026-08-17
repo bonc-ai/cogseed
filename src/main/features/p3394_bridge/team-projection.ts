@@ -112,6 +112,30 @@ export function removeProjection(nodeId: string): void {
   log.info('P3394 team projection removed', { nodeId: key });
 }
 
+/** Removes every projection mapping that points at the given agent id.
+ *  Projection keys are node ids, which may differ from the CLI type the
+ *  agent was created with (self-reported gateway ids like
+ *  "workbuddy-final"), so `removeProjection(cli)` alone can leave stale
+ *  mappings that re-project the deleted agent on the next hello. Returns
+ *  the number of removed mappings. Idempotent. */
+export function removeProjectionsForAgent(agentId: string): number {
+  const key = String(agentId || '').trim();
+  if (!key) return 0;
+  const map = readProjections();
+  let removed = 0;
+  for (const [nodeId, mappedAgentId] of [...map.entries()]) {
+    if (mappedAgentId === key) {
+      map.delete(nodeId);
+      removed += 1;
+    }
+  }
+  if (removed > 0) {
+    persistProjections(map);
+    log.info('P3394 team projections removed for agent', { agent_id: key, removed });
+  }
+  return removed;
+}
+
 /**
  * Projects a self-registered LOCAL node into the AI 团队 (idempotent).
  * Returns the agent id when projected (or already projected).

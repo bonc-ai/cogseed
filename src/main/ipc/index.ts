@@ -2867,21 +2867,23 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'agents.delete': async ({ agent_id }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
     // P3394 外接智能体删除联动：先停掉其受管网关（否则节点会因心跳复活），
-    // 再清掉团队投影映射（避免残留映射让下次 hello 复用已删除的记录）。
+    // 再清掉团队投影映射（按 agent_id 清，覆盖 nodeId ≠ cli 的自报节点，
+    // 避免残留映射让下次 hello 复用已删除的记录 / 重建同名 agent）。
     try {
       const target = await agents.getAgent(agent_id);
       const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
       if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
         const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
         await stopExternalGateway(rt.cli);
-        const { removeProjection } = await import('../features/p3394_bridge/team-projection');
-        removeProjection(rt.cli);
+        const { removeProjectionsForAgent } = await import('../features/p3394_bridge/team-projection');
+        removeProjectionsForAgent(agent_id);
       }
     } catch (error) {
       log.warn('P3394 gateway stop on agent delete failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
     }
     await recycleBin.createAppRecycleBatchForAgent(ctx.userId, agent_id);
-    return { deleted: await agents.deleteCustomAgent(agent_id) };
+    const deleted = await agents.deleteCustomAgent(agent_id);
+    return { ok: true, deleted };
   },
 
   // Per-user enable/disable toggle. enabled=true clears the override; both

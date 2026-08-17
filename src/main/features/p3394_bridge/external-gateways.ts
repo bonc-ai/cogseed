@@ -35,11 +35,25 @@ const watchedStartInput = new Map<string, { binPath?: string; alias?: string; br
 const restartCounts = new Map<string, number>();
 const WATCHDOG_RESTART_DELAY_MS = Number(process.env.ORKAS_P3394_WATCHDOG_DELAY_MS || 5_000);
 const WATCHDOG_MAX_CONSECUTIVE_FAILURES = 3;
+/** 已排队的自动重启定时器（key 为 cli）。detachWatch / stop 必须取消它，
+ *  否则「删除 agent → 网关 crash 时排队的 timer 到点复活网关 → hello →
+ *  投影重建同名 agent → 再次创建同名被拒」——重启必须尊重主动停止。 */
+const restartTimers = new Map<string, NodeJS.Timeout>();
+/** Crash 自愈语义标记：exit 回调排 timer 时加入，detachWatch 清除。timer
+ *  触发时以此判断「仍期望自愈」——不能用 `watched.has(cli)`，因为 crash
+ *  的 exit 回调会先删 watched 再排 timer，那会把正常自愈也拦掉。 */
+const expectedRestart = new Set<string>();
 
 export function detachWatch(cli: string): void {
   watched.delete(cli);
   watchedStartInput.delete(cli);
   restartCounts.delete(cli);
+  expectedRestart.delete(cli);
+  const timer = restartTimers.get(cli);
+  if (timer) {
+    clearTimeout(timer);
+    restartTimers.delete(cli);
+  }
 }
 
 function scheduleRestart(cli: string, input: { binPath?: string; alias?: string; bridgeInfo?: { endpoint: string; token: string } | null }): void {
@@ -49,8 +63,16 @@ function scheduleRestart(cli: string, input: { binPath?: string; alias?: string;
     restartCounts.delete(cli);
     return;
   }
+  // 已有排队 timer → 不重复排（stop/detach 会取消；防并发 crash 双排）。
+  if (restartTimers.has(cli)) return;
+  expectedRestart.add(cli);
   log.info('P3394 external gateway crashed — scheduling auto-restart', { cli, delayMs: WATCHDOG_RESTART_DELAY_MS });
   const timer = setTimeout(() => {
+    restartTimers.delete(cli);
+    // 触发前再确认该 cli 仍受托管（未被删除/停止）：detachWatch 取消不了
+    // 已在事件循环中等待的 timer 回调本身，这里双保险。
+    if (!expectedRestart.has(cli)) return;
+    expectedRestart.delete(cli);
     void startExternalGateway({
       cli,
       ...(input.binPath ? { binPath: input.binPath } : {}),
@@ -65,6 +87,7 @@ function scheduleRestart(cli: string, input: { binPath?: string; alias?: string;
       }
     });
   }, WATCHDOG_RESTART_DELAY_MS);
+  restartTimers.set(cli, timer);
   if (typeof timer.unref === 'function') timer.unref();
 }
 
@@ -333,14 +356,28 @@ async function doStartExternalGateway(input: {
 /** Stops a managed gateway (SIGTERM, graceful). Keeps the registry entry
  *  so the agent shows as offline rather than vanishing. */
 export async function stopExternalGateway(cli: string): Promise<P3394ExternalGatewayResult<null>> {
-  const record = listExternalGateways().find((g) => g.cli === String(cli || '').trim());
+  const key = String(cli || '').trim();
+  const record = listExternalGateways().find((g) => g.cli === key);
   if (!record) return { ok: true, value: null };
-  detachWatch(String(cli || '').trim());
+  detachWatch(key);
   try { process.kill(record.pid, 'SIGTERM'); } catch { /* already gone */ }
+  // 确认进程退出：SIGTERM 后短暂等待，仍存活则 SIGKILL 兜底——否则僵尸
+  // 网关会继续 hello/心跳，删除 agent 后触发投影重建同名 agent。
+  if (pidAlive(record.pid)) {
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline && pidAlive(record.pid)) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    if (pidAlive(record.pid)) {
+      try { process.kill(record.pid, 'SIGKILL'); } catch { /* already gone */ }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      log.warn('P3394 external gateway SIGKILL fallback', { cli: key, pid: record.pid });
+    }
+  }
   const state = readStateFile();
-  state.gateways = state.gateways.filter((g) => g.cli !== String(cli || '').trim());
+  state.gateways = state.gateways.filter((g) => g.cli !== key);
   writeStateFile(state);
-  log.info('P3394 external gateway stopped', { cli });
+  log.info('P3394 external gateway stopped', { cli: key });
   return { ok: true, value: null };
 }
 

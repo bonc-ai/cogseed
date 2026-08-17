@@ -85,6 +85,34 @@ describe('P3394 node -> AI team projection', () => {
     expect((await agents.listAgents()).filter((agent) => agent.runtime?.kind === 'p3394-gateway')).toHaveLength(1);
   });
 
+  it('removeProjectionsForAgent clears every node mapping that points at the agent', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(testUid);
+    const mod = await import('../../../../src/main/features/p3394_bridge/team-projection');
+    // 同一个 agent 可能被多个 nodeId 投影（自报网关 id ≠ cli 类型，如
+    // "workbuddy-final"）；删除 agent 时必须全部清掉，否则下次 hello 会
+    // 复用陈旧映射重建同名 agent。
+    const a = await mod.projectP3394NodeToTeam({
+      nodeId: 'cli-a', alias: 'Alpha', endpoints: ['http://127.0.0.1:9101'],
+    });
+    expect(a.projected).toBe(true);
+    const b = await mod.projectP3394NodeToTeam({
+      nodeId: 'cli-a-final', alias: 'Alpha', endpoints: ['http://127.0.0.1:9102'],
+    });
+    // 第二个 nodeId 命中同 cli 的 existing agent → 复用同一 agent_id。
+    expect(b.projected).toBe(false);
+    expect(b.agent_id).toBe(a.agent_id);
+    expect(mod.projectedTeamAgentId('cli-a')).toBe(a.agent_id);
+    expect(mod.projectedTeamAgentId('cli-a-final')).toBe(a.agent_id);
+
+    const removed = mod.removeProjectionsForAgent(a.agent_id!);
+    expect(removed).toBe(2);
+    expect(mod.projectedTeamAgentId('cli-a')).toBeUndefined();
+    expect(mod.projectedTeamAgentId('cli-a-final')).toBeUndefined();
+    // 幂等：再次清理返回 0。
+    expect(mod.removeProjectionsForAgent(a.agent_id!)).toBe(0);
+  });
+
   it('skips non-local nodes and endpoint-less cloud clients', async () => {
     const users = await import('../../../../src/main/features/users');
     users.activateUser(testUid);
