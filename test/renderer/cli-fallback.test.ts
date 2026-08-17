@@ -27,6 +27,9 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
   const toasts: Array<{ message: string; opts: unknown }> = [];
   const recipientByCid: Record<string, unknown> = {};
   const newChatRecipient = opts.newChatRecipient ?? { kind: 'commander' };
+  // 非 silent 的 ensureModelConfigured 调用次数：无模型时若被非 silent 调用，
+  // 意味着会弹窗 + 跳转设置页——@ 外部智能体的发送路径必须为 0。
+  const nonSilentModelGuardCalls: string[] = [];
   const sandbox: any = {
     Array,
     Math,
@@ -40,7 +43,10 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     _newChatRecipient: newChatRecipient,
     _COMMANDER: { kind: 'commander', id: '', name: '' },
     DRAFT_CID: 'main_chat',
-    ensureModelConfigured: (o?: unknown) => opts.hasConfiguredModel !== false,
+    ensureModelConfigured: (o?: unknown) => {
+      if (!(o && (o as any).silent === true)) nonSilentModelGuardCalls.push('non-silent');
+      return opts.hasConfiguredModel !== false;
+    },
     _activeRecipient: (target: string) => {
       if (target === 'new-chat') return newChatRecipient;
       return opts.recipient === undefined ? { kind: 'commander' } : opts.recipient;
@@ -63,7 +69,7 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     },
   };
   vm.runInNewContext(fallbackSource, sandbox, { filename: 'cli-fallback.js' });
-  return { sandbox, invokeLog, toasts, recipientByCid, newChatRecipient };
+  return { sandbox, invokeLog, toasts, recipientByCid, newChatRecipient, nonSilentModelGuardCalls };
 }
 
 describe('commander CLI fallback', () => {
@@ -218,7 +224,7 @@ describe('commander CLI fallback', () => {
 
     const ok = await sandbox._ensureModelOrCliFallback('cid-ext-1');
 
-    expect(ok).toBe(true);
+    expect(ok).toMatchObject({ ok: true });
     const fallbackChannels = invokeLog.filter((c) => (
       c.channel === 'prefs.getCliFallback'
       || c.channel === 'localAgents.list'
@@ -258,6 +264,35 @@ describe('commander CLI fallback', () => {
     });
     expect(await sandbox._mentionTargetsExternalAgent('@commander 你好')).toBe(false);
     expect(await sandbox._mentionTargetsExternalAgent('@指挥官 你好')).toBe(false);
+  });
+
+  it('never triggers the non-silent model guard (no popup/navigation) when sending to an external agent without a model', async () => {
+    // 回归：消息发出后「瞬间跳转 API 配置页」= 非 silent 的 ensureModelConfigured
+    // 被调用。@ 外部智能体的发送必须只走 silent 探测，非 silent 调用次数为 0。
+    const { sandbox, nonSilentModelGuardCalls } = buildSandbox(
+      {
+        'agents.list': {
+          agents: [
+            { agent_id: 'agent-claude-1', name: 'ClaudeCode', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+          ],
+        },
+      },
+      { hasConfiguredModel: false },
+    );
+
+    // 直接测 send 门使用的判定路径（_ensureModelOrCliFallback 的 @mention 分支）。
+    const ok = await sandbox._ensureModelOrCliFallback('cid-send', '@ClaudeCode 帮我写个测试');
+    expect(ok).toMatchObject({ ok: true });
+    expect(nonSilentModelGuardCalls).toHaveLength(0);
+
+    // recipient 已是外部 agent 的路径同样零非 silent 调用。
+    const { sandbox: sb2, nonSilentModelGuardCalls: calls2 } = buildSandbox(
+      { 'agents.list': { agents: [] } },
+      { hasConfiguredModel: false, recipient: { kind: 'agent', id: 'agent-claude-1', name: 'ClaudeCode' } },
+    );
+    const ok2 = await sb2._ensureModelOrCliFallback('cid-recipient', '帮我写个测试');
+    expect(ok2).toMatchObject({ ok: true });
+    expect(calls2).toHaveLength(0);
   });
 
   it('honours an explicit fallback preference over auto-pick', async () => {

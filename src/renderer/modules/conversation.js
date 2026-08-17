@@ -10556,9 +10556,20 @@ async function handleNewChatSubmit() {
     await uiAlert(t('oss.task_required'));
     return;
   }
-  if (!(await _ensureModelOrCliFallback(DRAFT_CID, raw))) return;
+  const guard = await _ensureModelOrCliFallback(DRAFT_CID, raw);
+  if (!guard || !guard.ok) return;
   const references = _referenceSnapshotsForQuotes(quotes);
-  const requestText = raw || t('chat.reference_default_prompt');
+  // 无模型降级到 fallback CLI agent 时，若消息以旧 @ 前缀开头，换成
+  // fallback agent 的名字（避免后端按旧 @ 解析失败回退 commander）。
+  let effectiveRaw = raw;
+  if (guard.fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw)) {
+    const fbName = _recipientPrefixName({ kind: 'agent', id: guard.fallbackAgentId });
+    if (fbName) {
+      effectiveRaw = '@' + fbName + ' ' + effectiveRaw.replace(/^@[A-Za-z0-9_一-鿿-]+\s?/u, '');
+      _convLog.info('[cli-fallback] rewrote mention prefix to fallback agent', { cid: DRAFT_CID, fb: fbName });
+    }
+  }
+  const requestText = effectiveRaw || t('chat.reference_default_prompt');
   const useSelections = (typeof consumeChatUseSelections === 'function')
     ? consumeChatUseSelections('new-chat')
     : [];
@@ -10744,11 +10755,23 @@ async function handleChatSubmit() {
     _clearDraft(currentCid);
     return;
   }
-  if (!(await _ensureModelOrCliFallback(currentCid, raw))) return;
+  const guard = await _ensureModelOrCliFallback(currentCid, raw);
+  if (!guard || !guard.ok) return;
   const cid = currentCid;
   const quotes = _getQuotes(cid).slice();
   const references = _referenceSnapshotsForQuotes(quotes);
-  const requestText = raw || t('chat.reference_default_prompt');
+  // 无模型降级到 fallback CLI agent 时，若消息以旧 @ 前缀开头（用户 @ 的
+  // 智能体当前没有 agent 记录），必须把前缀换成 fallback agent 的名字——
+  // 否则后端 router 按旧 @ 解析失败回退 commander → 弹「未配置模型」。
+  let effectiveRaw = raw;
+  if (guard.fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw)) {
+    const fbName = _recipientPrefixName({ kind: 'agent', id: guard.fallbackAgentId });
+    if (fbName) {
+      effectiveRaw = '@' + fbName + ' ' + effectiveRaw.replace(/^@[A-Za-z0-9_一-鿿-]+\s?/u, '');
+      _convLog.info('[cli-fallback] rewrote mention prefix to fallback agent', { cid, fb: fbName });
+    }
+  }
+  const requestText = effectiveRaw || t('chat.reference_default_prompt');
   const useSelections = (typeof getChatUseSelections === 'function')
     ? getChatUseSelections('conversation')
     : [];
@@ -11457,39 +11480,43 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
 
 /**
  * 发送前的模型守卫 + 无模型降级：
- * - 有已配置模型 → true（正常发送）。
+ * - 有已配置模型 → { ok: true }（正常发送）。
  * - 无模型 → 若当前 recipient 已经是外部智能体（CLI / P3394 外接网关）
  *   则直接放行；若消息文本以 `@<token>` 开头且该 token 命中本机外部
  *   智能体（手动输入 @ 智能体名 的场景），同样放行——外部智能体经本机
  *   CLI 执行，不依赖 CogSeed 模型配置，首次启动不配置模型也能直接调用。
  *   仅当目标确实需要模型（commander 且无 @ 外部智能体）时才走
- *   _maybeApplyCliFallback 自动切换。无可用 CLI 才返回 false（引导配置）。
+ *   _maybeApplyCliFallback 自动切换（返回 fallbackAgentId 供调用方重建
+ *   消息前缀，避免旧 @ 前缀与 fallback 目标不一致导致后端解析失败）。
+ *   无可用 CLI 才返回 { ok: false }（引导配置）。
  * 仅用于主对话（new-chat / conversation）的 Commander 场景；技能/agent 编辑聊天
  * 等仍走 ensureModelConfigured 原逻辑。
  */
 async function _ensureModelOrCliFallback(cid, rawText) {
-  if (ensureModelConfigured({ silent: true })) return true;
+  if (ensureModelConfigured({ silent: true })) return { ok: true };
   // 无模型：recipient 已是外部智能体（CLI / P3394 外接网关）→ 直接放行。
   const recipient = _activeRecipient(cid === DRAFT_CID ? 'new-chat' : 'conversation');
   if (recipient && recipient.kind === 'agent' && recipient.id) {
     _convLog.info('[cli-fallback] no-model send to external agent, skipping fallback', {
       cid, recipient: recipient.id,
     });
-    return true;
+    return { ok: true, recipientId: recipient.id };
   }
   // 手动输入 `@智能体名 消息`：leading mention 命中本机外部智能体 → 放行。
   // （recipient 仍为 commander，由后端 router 解析 @mention 路由到 agent；
   // 外部智能体不经 CogSeed 模型，直接走本机 CLI。）
   if (await _mentionTargetsExternalAgent(rawText)) {
     _convLog.info('[cli-fallback] no-model send with external @mention, skipping fallback', { cid });
-    return true;
+    return { ok: true };
   }
   const ok = await _maybeApplyCliFallback(cid);
-  _convLog.info('[cli-fallback] ensureModelOrCliFallback', { cid, ok, recipient: _activeRecipient('conversation') });
-  if (ok) return true;
+  const after = _activeRecipient(cid === DRAFT_CID ? 'new-chat' : 'conversation');
+  const fallbackAgentId = (after && after.kind === 'agent' && after.id) ? after.id : '';
+  _convLog.info('[cli-fallback] ensureModelOrCliFallback', { cid, ok, recipient: _activeRecipient('conversation'), fallbackAgentId });
+  if (ok) return { ok: true, fallbackAgentId };
   // 无模型也无可用 CLI：走原提示（弹框 + 跳设置）。
   ensureModelConfigured();
-  return false;
+  return { ok: false };
 }
 
 /** True when the leading `@<token>` in the raw text resolves to a local
@@ -13179,12 +13206,15 @@ function createChatController(config) {
     const q = _qGet(id);
     if (!q.length) return;
     // Preserve edit-chat queue entries when credentials/configuration become
-    // unavailable while another response is running.
-    if (!ensureModelConfigured()) {
-      // 队列项以 @ 外部智能体开头（无模型直调）→ 放行，交给 send 的同款门。
+    // unavailable while another response is running. Silent probe first：
+    // @ 外部智能体的队列项不触发非 silent 弹窗/跳转（外部智能体不经模型）。
+    if (!ensureModelConfigured({ silent: true })) {
       const next0 = q[0];
       const text0 = (next0 && next0.content) || '';
-      if (!await _mentionTargetsExternalAgent(text0)) return;
+      if (!await _mentionTargetsExternalAgent(text0)) {
+        ensureModelConfigured();
+        return;
+      }
     }
     const next = q.shift();
     _qSave(id, q);
@@ -13380,12 +13410,15 @@ function createChatController(config) {
     // CLI 用自己的凭据执行，不需要 CogSeed 的 API 模型 → 放行。
     // 手动输入 `@外部智能体 消息`（recipient 仍是 commander，由后端 router
     // 解析 @mention 路由到外部智能体）→ 同样放行：外部智能体不经 CogSeed 模型。
-    if (!(_cliFallbackApplied === id) && !ensureModelConfigured()) {
-      if (await _mentionTargetsExternalAgent(content)) {
-        _convLog.info('[cli-fallback] controller send with external @mention, skipping model gate', { id });
-      } else {
+    // 注意：先用 silent 探测 + @mention 判定，确认确实需要模型时才触发
+    // 非 silent 的 ensureModelConfigured（弹窗+跳设置）——否则无模型时即使
+    // @ 外部智能体放行成功，跳转副作用也已经发生。
+    if (!(_cliFallbackApplied === id) && !ensureModelConfigured({ silent: true })) {
+      if (!(await _mentionTargetsExternalAgent(content))) {
+        ensureModelConfigured();
         return { started: false, aborted: false, errored: false, reason: 'model_not_configured' };
       }
+      _convLog.info('[cli-fallback] controller send with external @mention, skipping model gate', { id });
     }
     if (hooks.beforeSend) {
       const transformed = await hooks.beforeSend(content, id);
