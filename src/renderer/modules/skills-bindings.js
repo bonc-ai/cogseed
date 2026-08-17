@@ -398,9 +398,18 @@ function _initSkillsCognitionBindings() {
       if (!feedback || (!proofId && !taskRunId)) return;
       proofFeedback.dataset.busy = '1'; proofFeedback.disabled = true;
       try {
+        // M-4: 评价必须带可追溯证据。不带证据的 better 会被后端降级成
+        // insufficient_evidence，effectiveness_validated 永远到不了。这里把
+        // 本次评价指向的迁移证明/任务运行作为 execution_evaluation 证据
+        // 一并提交——评价"哪次复用有没有用"，这次复用本身就是要引用的对比
+        // 事实。引用来源是当前评价按钮的 dataset（transferProofId/taskRunId），
+        // 与评价目标同源，不另造事实。
+        const evidenceRefs = [];
+        if (proofId) evidenceRefs.push({ kind: 'execution_evaluation', subtype: 'evaluation', scope: 'conversation', id: proofId });
+        if (taskRunId) evidenceRefs.push({ kind: 'execution_evaluation', subtype: 'execution', scope: 'conversation', id: taskRunId });
         const result = proofId
-          ? await window.cogseed.invoke('recall.proofs.effectiveness.feedback', { transferProofId: proofId, feedback })
-          : await window.cogseed.invoke('recall.proofs.effectiveness.feedbackForTask', { taskRunId, feedback });
+          ? await window.cogseed.invoke('recall.proofs.effectiveness.feedback', { transferProofId: proofId, feedback, evidenceRefs })
+          : await window.cogseed.invoke('recall.proofs.effectiveness.feedbackForTask', { taskRunId, feedback, evidenceRefs });
         if (!result?.ok) throw new Error(result?.error || 'effectiveness feedback failed');
         // 评价会推进成熟度，所以整份快照都要重取，不能只重画本页。
         await loadSkillsCognitionSnapshot();

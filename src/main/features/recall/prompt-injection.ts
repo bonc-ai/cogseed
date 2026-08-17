@@ -193,6 +193,11 @@ async function buildPromptContextForProjections(
         const scope = snapshot?.scope ?? liveAsset.scope;
         const version = confirmedVersion || liveAsset.version;
         const statement = snapshot?.statement ?? liveAsset.statement;
+        // M-3: 适用/禁用条件随注入带进 prompt（照 inherited-cognition-prompt.ts
+        // 的措辞——原样带上，由模型自己判断这次适不适用，系统不替它判定）。
+        // 与 statement 同源：优先投影冻结快照，缺失时回退 live asset。
+        const applicableWhen = snapshot?.applicableWhen ?? liveAsset.applicableWhen;
+        const forbiddenWhen = snapshot?.forbiddenWhen ?? liveAsset.forbiddenWhen;
         seenAssets.add(assetId);
         const match = matches.get(assetId);
         records.push({
@@ -207,6 +212,8 @@ async function buildPromptContextForProjections(
           scope: safePromptText(scope, 500),
           version: safePromptText(version, 40),
           statement: safePromptText(statement, MAX_STATEMENT_LENGTH),
+          ...(applicableWhen?.length ? { applicable_when: applicableWhen.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
+          ...(forbiddenWhen?.length ? { forbidden_when: forbiddenWhen.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
           source_refs: evidenceRefs.slice(0, 20).map((ref) => ({ kind: ref.kind, id: ref.id })),
         });
         citations.push({
@@ -266,11 +273,16 @@ async function buildPromptContextForCommittedProjection(
       scope: safePromptText(asset.scope, 500),
       version: asset.version,
       statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
+      // M-3: committed 投影同样带边界条件（优先 live asset 的治理态——
+      // 边界是运行时约束，与 governance 同源，不随快照冻结）。
+      ...(liveAssets.get(asset.id)?.applicableWhen?.length ? { applicable_when: liveAssets.get(asset.id)!.applicableWhen!.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
+      ...(liveAssets.get(asset.id)?.forbiddenWhen?.length ? { forbidden_when: liveAssets.get(asset.id)!.forbiddenWhen!.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
       source_refs: (liveAssets.get(asset.id)?.evidenceRefs || []).map((ref) => ({ kind: ref.kind, id: ref.id })),
     })),
     // Ontology (durable personal facts) rides along as personal ability
     // assets; it is not projection-selected, so it never contributes to
-    // citations.
+    // citations. Personal facts carry no applicable/forbidden boundary
+    // (M-3 只针对 rule/template 等有边界语义的资产)。
     ...knowledge.ontologyAssets.map((asset) => ({
       projection_id: knowledge.projectionId,
       asset_id: asset.id,
@@ -462,6 +474,10 @@ export async function buildDispatchedAssetsPromptBlock(
       scope: safePromptText(asset.scope, 500),
       version: asset.version,
       statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
+      // M-3: 派发授权注入同样带边界条件——这是被显式授予的资产，模型更要
+      // 知道它的适用/禁用范围。
+      ...(asset.applicableWhen?.length ? { applicable_when: asset.applicableWhen.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
+      ...(asset.forbiddenWhen?.length ? { forbidden_when: asset.forbiddenWhen.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
       source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
     });
     granted.push(asset.id);

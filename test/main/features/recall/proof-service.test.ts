@@ -68,4 +68,35 @@ describe('Recall transfer and effectiveness proofs', () => {
     await expect(proofs.completeTransferProofWithReceipt('user-a', prepared.id, { status: 'succeeded', receiptExecutionId: receipt.executionId, observedTransfer: 'done' })).rejects.toThrow(/does not prove/i);
     await expect(proofs.listTransferProofs('user-a')).resolves.toEqual([expect.objectContaining({ id: prepared.id, status: 'prepared' })]);
   });
+
+  it('closes the reuse receipt when the transfer proof completes with it (M-5)', async () => {
+    const { asset, projection } = await confirmedProjection(); const { proofs } = await modules();
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    const prepared = await proofs.prepareTransferProof('user-a', { projectionId: projection.id, executionId: 'exec-closure', expectedResultSnapshot: 'Expected result.' });
+    const receipt = await realReceipt(asset.id, 'receipt-exec-closure');
+    expect(receipt.status).toBe('prepared');
+    expect(receipt.completedAt).toBeUndefined();
+
+    await proofs.completeTransferProofWithReceipt('user-a', prepared.id, { status: 'succeeded', receiptExecutionId: receipt.executionId, observedTransfer: 'Evidence was injected.' });
+
+    // 迁移证明完成后，锚点回执必须从 prepared 落成 completed（M-5）。
+    const closed = await receipts.readReceipt('user-a', receipt.executionId);
+    expect(closed.status).toBe('completed');
+    expect(closed.completedAt).toBeDefined();
+    // 幂等：再次 complete 同一回执不破坏（completeReceipt 对已 finalize 抛错，
+    // 但 completeTransferProofWithReceipt 不应因此失败——回执已 completed）。
+    await expect(proofs.completeTransferProofWithReceipt('user-a', prepared.id, { status: 'succeeded', receiptExecutionId: receipt.executionId, observedTransfer: 'Evidence was injected.' })).rejects.toThrow(/already complete/i);
+  });
+
+  it('does not close the receipt when the transfer proof is degraded (M-5)', async () => {
+    const { asset, projection } = await confirmedProjection(); const { proofs } = await modules();
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    const prepared = await proofs.prepareTransferProof('user-a', { projectionId: projection.id, executionId: 'exec-degraded-close', expectedResultSnapshot: 'Expected result.' });
+    const receipt = await realReceipt(asset.id, 'receipt-exec-degraded-close');
+
+    await proofs.completeTransferProofWithReceipt('user-a', prepared.id, { status: 'degraded', receiptExecutionId: receipt.executionId, observedTransfer: 'Partial evidence.' });
+
+    const stored = await receipts.readReceipt('user-a', receipt.executionId);
+    expect(stored.status).toBe('prepared');
+  });
 });
