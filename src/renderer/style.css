@@ -242,11 +242,23 @@ body.sidebar-collapsed .sidebar-actions .sidebar-btn {
   padding: 10px 0;
 }
 body.sidebar-collapsed .sidebar-actions .sidebar-btn > span:not(.sidebar-btn-icon),
-body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn > span:not(.sidebar-footer-icon),
-body.sidebar-collapsed .sidebar-footer-account,
 body.sidebar-collapsed .sidebar-conversation-nav,
 body.sidebar-collapsed .sidebar-resize-handle { display: none; }
-body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-content: center; padding: 10px 0; }
+/* 融合入口折叠态：状态栏压缩为头像图标按钮（隐藏文字/状态点/箭头），
+   hover 仍向上展开完整面板，设置入口不丢失。 */
+body.sidebar-collapsed .sidebar-footer-actions { padding: 6px 6px 10px; }
+body.sidebar-collapsed .sidebar-footer-account { display: block; }
+body.sidebar-collapsed .hub-chip {
+  justify-content: center;
+  padding: 7px 0;
+  border-radius: var(--radius-sm);
+}
+body.sidebar-collapsed .hub-chip-meta,
+body.sidebar-collapsed .hub-chip-dot,
+body.sidebar-collapsed .hub-chip-chev,
+body.sidebar-collapsed .hub-chip-pin { display: none; }
+/* 折叠时面板宽度锚定最小值（侧栏只有 48px），仍向上完整展开。 */
+body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 
 @container (max-width: 230px) {
   /* Keep the brand text visible on the narrow rail — only shrink it.
@@ -842,6 +854,9 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   margin-bottom: 4px;
   border-bottom: 1px solid var(--border);
 }
+/* 未登录态：头卡整体是登录入口（点击开始浏览器授权登录）。 */
+.hub-chip-menu-head.is-clickable { cursor: pointer; border-radius: 8px; }
+.hub-chip-menu-head.is-clickable:hover { background: var(--surface-2); }
 .hub-chip-menu-id {
   display: flex;
   flex-direction: column;

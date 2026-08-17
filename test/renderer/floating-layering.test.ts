@@ -27,11 +27,20 @@ describe('floating layer ordering', () => {
 
   it('keeps the merged footer panel seamlessly attached to its trigger', () => {
     const css = readRendererCss();
-    const menuBlock = css.match(/\.hub-chip-menu\s*\{[\s\S]*?\}/)?.[0] || '';
+    // 锚定行首主块（折叠态的 body.sidebar-collapsed .hub-chip-menu 在更前面）。
+    const menuBlock = css.match(/^\.hub-chip-menu\s*\{[\s\S]*?\}/m)?.[0] || '';
     // 与状态栏重叠 6px：hover 在入口与面板之间移动不经过空隙、不闪断。
     expect(menuBlock).toContain('bottom: calc(100% - 6px)');
     expect(menuBlock).toContain('z-index: 120');
     expect(menuBlock).toContain('padding: 6px 6px 14px');
+  });
+
+  it('keeps the collapsed-rail footer entry alive as an icon trigger', () => {
+    const css = readRendererCss();
+    // 侧栏折叠（48px 窄条）时融合入口仍常驻：只留头像图标，面板加最小宽度。
+    expect(css).toMatch(/body\.sidebar-collapsed \.sidebar-footer-account\s*\{\s*display: block/);
+    expect(css).toMatch(/body\.sidebar-collapsed \.hub-chip-meta,[\s\S]*?\{ display: none; \}/);
+    expect(css).toContain('width: 236px');
   });
 
   it('keeps open / pinned / active state styles for the merged footer panel', () => {

@@ -389,8 +389,6 @@ function setView(view, cid, opts = {}) {
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('spaces-btn')?.classList.toggle('active', view === 'spaces');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
-  // 独立设置按钮与左下角融合面板「设置」项并行高亮。
-  document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
   // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。
   if (typeof window.setChipSettingsActive === 'function') {
     window.setChipSettingsActive(view === 'settings');

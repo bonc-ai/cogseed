@@ -107,6 +107,7 @@
     "files": [
       "bootstrap.cjs",
       "bin/**/*",
+      "p3394-gateway/**/*",
       "!bin/builtin-resource-gate.cjs",
       "!bin/ensure-runtime.cjs",
       "!bin/native-package-gate.cjs",
@@ -144,6 +145,7 @@
     "asar": true,
     "asarUnpack": [
       "bin/**/*",
+      "p3394-gateway/**/*",
       "src/main/native/build/*.node",
       "node_modules/tsx/**/*",
       "node_modules/get-tsconfig/**/*",

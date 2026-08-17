@@ -118,10 +118,14 @@ function freePort(): Promise<number> {
 }
 
 function gatewayScriptPath(): string {
-  // Dev: the gateway ships inside this repo. Packaged builds resolve
-  // through ORKAS_PC_DIR (asar-unpacked aware).
+  // Dev: the gateway ships inside this repo. Packaged builds keep
+  // p3394-gateway unpacked beside bin/ (build.asarUnpack), so the real-disk
+  // twin of the asar path is preferred there; the raw __dirname fallback
+  // lands inside app.asar where the script is not present.
   const pcDir = process.env.ORKAS_PC_DIR || path.resolve(__dirname, '..', '..', '..', '..');
-  return path.join(pcDir, 'p3394-gateway', 'gateway.cjs');
+  const primary = path.join(pcDir, 'p3394-gateway', 'gateway.cjs');
+  if (fs.existsSync(primary) || !pcDir.endsWith(`${path.sep}app.asar`)) return primary;
+  return path.join(pcDir.replace(/app\.asar$/, 'app.asar.unpacked'), 'p3394-gateway', 'gateway.cjs');
 }
 
 /**
