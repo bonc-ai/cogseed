@@ -82,4 +82,21 @@ describe('sessions_sweep', () => {
     expect(listActiveConversationIds).not.toHaveBeenCalled();
     expect(fs.existsSync(orphan)).toBe(true);
   });
+
+  it('collects throwaway skill-instr-audit-* sessions from cloud/sessions', async () => {
+    listActiveConversationIds.mockResolvedValue(['livecid']);
+    const globalDir = path.join(tmpDir, TEST_UID, 'cloud', 'sessions');
+    const audit = writeSession(globalDir, 'skill-instr-audit-586330fa');
+    fs.writeFileSync(path.join(globalDir, 'skill-instr-audit-586330fa.jsonl.context.json'), '{}');
+    // A real resumable skill session must survive the sweep.
+    const skillSession = writeSession(globalDir, 'skill-my_skill_id');
+
+    const sweep = await import('../../../src/main/features/sessions_sweep');
+    const result = await sweep.sweepSessions(TEST_UID);
+
+    expect(fs.existsSync(audit)).toBe(false);
+    expect(fs.existsSync(path.join(globalDir, 'skill-instr-audit-586330fa.jsonl.context.json'))).toBe(false);
+    expect(fs.existsSync(skillSession)).toBe(true);
+    expect(result.skill_audit).toBe(1);
+  });
 });

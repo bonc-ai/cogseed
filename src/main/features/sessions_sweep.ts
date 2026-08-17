@@ -28,7 +28,13 @@
  *                          new code doesn't write these and the legacy id
  *                          migrator in features/users.ts only renames live
  *                          ids, not the orphan files.
- *   4. local/sessions/  — mtime older than EPHEMERAL_AGE_MS.
+ *   4. cloud/sessions/  — skill-instr-audit leftovers (a bulk skill
+ *                          instruction-audit batch once wrote ~74k throwaway
+ *                          `skill-instr-audit-<hex>` sessions here; the
+ *                          kind is resumable so the normal classifier leaves
+ *                          them alone. New audits use the ephemeral
+ *                          `aside-instr-audit-` prefix and never land here).
+ *   5. local/sessions/  — mtime older than EPHEMERAL_AGE_MS.
  */
 
 import * as fs from 'node:fs';
@@ -52,6 +58,7 @@ export interface SweepResult {
   orphan_cid: number;         // gconv/gmember whose cid is no longer registered
   ephemeral_on_cloud: number; // ephemeral kinds that leaked into cloud/sessions/
   legacy: number;             // sub / organizer / conv leftovers
+  skill_audit: number;        // skill-instr-audit-* throwaway audits left in cloud/sessions/
   local_aged_out: number;     // local/sessions/ files older than EPHEMERAL_AGE_MS
   errors: number;
   cancelled?: boolean;
@@ -83,6 +90,11 @@ function classify(baseName: string): { kind: string; cid?: string } | null {
   if (dash < 0) return { kind: baseName };
   const kind = baseName.slice(0, dash);
   const rest = baseName.slice(dash + 1);
+  // `skill-instr-audit-*` matches the resumable `skill` kind prefix, so the
+  // normal classifier would preserve it forever. These are throwaway audit
+  // transcripts (pre-`aside-instr-audit-` routing); flag the prefix so the
+  // sweep can collect them.
+  if (baseName.startsWith('skill-instr-audit-')) return { kind: 'skill-instr-audit' };
   if (kind === 'gconv') return { kind, cid: rest };
   if (kind === 'gmember') {
     // gmember tail is `<cid>-<aid>`. Split the cid out by taking everything up to the LAST
@@ -122,8 +134,12 @@ async function sweepCloudDir(
     // have been renamed by `migrateLegacySessionIds`; classify() returns null for them.
     const info = classify(sid);
     if (!info) continue;
-    let reason: keyof Pick<SweepResult, 'orphan_cid' | 'ephemeral_on_cloud' | 'legacy'> | null = null;
-    if (isEphemeralSessionId(sid)) {
+    let reason: keyof Pick<SweepResult, 'orphan_cid' | 'ephemeral_on_cloud' | 'legacy' | 'skill_audit'> | null = null;
+    if (info.kind === 'skill-instr-audit') {
+      // Throwaway instruction-audit transcripts from before the aside- routing
+      // change. Not referenced by any index; collect unconditionally.
+      reason = 'skill_audit';
+    } else if (isEphemeralSessionId(sid)) {
       reason = 'ephemeral_on_cloud';
     } else if (LEGACY_KINDS.has(info.kind)) {
       reason = 'legacy';
@@ -216,12 +232,12 @@ export async function sweepSessions(userId: string, signal?: AbortSignal): Promi
   const t0 = Date.now();
   const result: SweepResult = {
     scanned: 0, orphan_cid: 0, ephemeral_on_cloud: 0, legacy: 0,
-    local_aged_out: 0, errors: 0,
+    skill_audit: 0, local_aged_out: 0, errors: 0,
   };
   await sweepCloud(userId, result, signal);
   if (!result.cancelled) await sweepLocalByAge(userId, result, Date.now(), signal);
   const removed = result.orphan_cid + result.ephemeral_on_cloud
-                + result.legacy + result.local_aged_out;
+                + result.legacy + result.skill_audit + result.local_aged_out;
   if (removed > 0 || result.errors > 0 || result.cancelled) {
     log.info('sweep complete', {
       uid: userId,
@@ -229,6 +245,7 @@ export async function sweepSessions(userId: string, signal?: AbortSignal): Promi
       orphan_cid: result.orphan_cid,
       ephemeral_on_cloud: result.ephemeral_on_cloud,
       legacy: result.legacy,
+      skill_audit: result.skill_audit,
       local_aged_out: result.local_aged_out,
       errors: result.errors,
       cancelled: !!result.cancelled,
