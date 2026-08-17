@@ -40,6 +40,57 @@ import { EXTRACT_SYSTEM_PROMPT } from '../../prompts/session-extract';
 
 const log = createLogger('session-import:extractor');
 
+/** How long a single CLI extraction pass may run before aborting. Local CLIs
+ *  are slower than a raw model call (process spawn + model latency). */
+const CLI_EXTRACT_TIMEOUT_MS = 120_000;
+
+/** Run a single extraction pass through an installed local CLI agent when no
+ *  CogSeed API model is configured (same no-model → CLI fallback as chat).
+ *  Returns the CLI's final text, or null on failure/unavailable CLI. */
+async function runCliExtractionPass(userId: string, systemPrompt: string, content: string): Promise<string | null> {
+  try {
+    const { run: runCliAgent } = await import('../local_agents/runner');
+    const { detectAll } = await import('../local_agents/registry');
+    const { tmpdir } = await import('node:os');
+    const entries = await detectAll();
+    const available = entries.filter((e) => e && e.available);
+    if (!available.length) return null;
+    // 优先 Claude Code，否则第一个可用 CLI。
+    const chosen = available.find((e) => e.type === 'claude') ?? available[0];
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CLI_EXTRACT_TIMEOUT_MS);
+    try {
+      const result = await runCliAgent({
+        uid: userId,
+        cid: 'session-import-extractor',
+        agentId: 'session-import-extractor',
+        agentName: 'Session Extractor',
+        cli: chosen.type,
+        prompt: `${systemPrompt}\n\n${content}`,
+        cwd: tmpdir(),
+        signal: controller.signal,
+        skipDispatchCheck: true,
+        onEvent: () => {},
+      });
+      if (result.status === 'completed' && typeof result.output === 'string' && result.output.trim()) {
+        return result.output.trim();
+      }
+      log.warn('cli extraction pass did not complete', {
+        cli: chosen.type,
+        status: result.status,
+        error: result.error,
+      });
+      return null;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  } catch (err) {
+    log.warn('cli extraction pass failed', { error: String(err) });
+    return null;
+  }
+}
+
 /** Max transcript tokens fed to the model in a single pass. Transcripts above
  *  this are chunked and map-reduced. Raised from the original 6000 → 14000 →
  *  48000: fewer/larger chunks means fewer model round trips, and each pass is
@@ -184,17 +235,29 @@ function parseExtraction(raw: string): RawExtraction | null {
 
 /** One model pass over a rendered transcript slice. */
 async function runPass(userId: string, systemPrompt: string, content: string): Promise<string | null> {
-  const res = await chatWithModel({
-    userId,
-    message: content,
-    systemPrompt,
-    disableTools: true,
-  });
-  if (!res.ok || !res.text) {
-    log.warn('extraction model pass failed', { error: res.error });
-    return null;
+  // 优先用 CogSeed 模型（测试/真实有模型场景）。仅当模型调用因「未配置模型」
+  // 抛错时，降级到本机 CLI agent 提炼（导入会话也能用外接 Agent）。
+  try {
+    const res = await chatWithModel({
+      userId,
+      message: content,
+      systemPrompt,
+      disableTools: true,
+    });
+    if (!res.ok || !res.text) {
+      log.warn('extraction model pass failed', { error: res.error });
+      return null;
+    }
+    return res.text;
+  } catch (err) {
+    const msg = String((err as Error)?.message || err);
+    const noModel = /未配置模型|no model configured|model.*not.*configured/i.test(msg);
+    if (!noModel) {
+      log.warn('extraction model pass threw', { error: msg });
+      return null;
+    }
+    return runCliExtractionPass(userId, systemPrompt, content);
   }
-  return res.text;
 }
 
 /**

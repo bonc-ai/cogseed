@@ -1160,7 +1160,18 @@ function setChatRecipient(target, next, _opts = {}) {
 // the landing page (otherwise the chip would snap back to commander as
 // soon as the conversation panel takes over).
 function _transferNewChatRecipientTo(cid) {
-  if (!cid || !_pendingNewChatRecipient) { _pendingNewChatRecipient = null; return; }
+  if (!cid) { _pendingNewChatRecipient = null; return; }
+  // 降级标记也要一并转移：new-chat 发送时 CLI fallback 是 applied 到 DRAFT_CID
+  // （main_chat）的，而新会话 cid 不同，controller 守卫 `_cliFallbackApplied === id`
+  // 会失配 → 又弹「配置 API」。把降级标记和 recipient 一起迁到新 cid。
+  if (_cliFallbackApplied === DRAFT_CID) {
+    _cliFallbackApplied = cid;
+    if (!_recipientByCid[cid] && _recipientByCid[DRAFT_CID]) {
+      _recipientByCid[cid] = _recipientByCid[DRAFT_CID];
+      _saveRecipientMap();
+    }
+  }
+  if (!_pendingNewChatRecipient) { _pendingNewChatRecipient = null; return; }
   const r = _pendingNewChatRecipient;
   _pendingNewChatRecipient = null;
   if (r.kind === 'agent') {
@@ -1396,8 +1407,11 @@ function _refreshChatHeader() {
     const members = _groupMembersCache.get(cid) || [];
     const agents = members.filter((a) => a && a.id && a.kind === 'agent');
     const slots = [];
+    // 与左侧会话列表对齐：commander（参与时）+ 真实 Agent 头像，多 Agent 各显示一个。
     if (conv && conv.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
     for (const a of agents) slots.push({ kind: 'agent', id: a.id });
+    // 无任何参与头像时回退显示 CogSeed 图标（与左侧列表一致）。
+    if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
     const visibleSlots = slots.slice(0, 4);
     if (visibleSlots.length) {
       if (parts.length) parts.push('<span class="chat-header-meta-sep">·</span>');
@@ -2439,8 +2453,8 @@ function _agentStatusLabel(key, fallback, vars) {
 function _agentStatusActorName(actor) {
   if (!actor) return '';
   const id = String(actor.id || '');
-  if (actor.name) return String(actor.name);
   if (id === 'commander') return _agentStatusLabel('chat.agent_status.commander', 'Commander');
+  if (actor.name) return String(actor.name);
   return id || _agentStatusLabel('chat.from_agent_unknown', 'Agent');
 }
 
@@ -2951,9 +2965,12 @@ function _renderActorAvatarHtml(fromId) {
   // for legacy conversations whose agent has since been deleted from
   // the registry.
   let icon, color;
+  // Full agent record from the global registry — also drives the CLI-letter
+  // treatment below so the message header matches the AI team card exactly.
+  let agent;
   if (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) {
     const a = _agentsCache.find((x) => x && x.agent_id === fromId);
-    if (a) { icon = a.icon; color = a.color; }
+    if (a) { icon = a.icon; color = a.color; agent = a; }
   }
   if (!icon || !color) {
     const members = _groupMembersCache.get(currentCid);
@@ -2973,6 +2990,10 @@ function _renderActorAvatarHtml(fromId) {
     seed: fromId || 'agent',
     clickable: _isActorDetailTarget(fromId),
     dataAttrs: _isActorDetailTarget(fromId) ? { 'actor-agent-id': String(fromId) } : {},
+    // 与 AI 团队卡片一致：外接 CLI agent 显示名称首字母而不是图标
+    letter: (typeof _isExternalCliAgent === 'function' && agent && _isExternalCliAgent(agent))
+      ? (agent.name || '')
+      : '',
   });
 }
 /** Resolve an actor id (commander / user / agent_id) to a human-readable
@@ -5142,6 +5163,9 @@ function _renderConvAgentStackHtml(c) {
       slots.push({ kind: 'agent', id: a.id });
     }
   }
+  // 没有任何参与头像时（纯 CogSeed/Commander 对话、`commander_in_chat` 未标记、
+  // 无 agent 参与），回退显示 CogSeed 图标——每个会话都有这一个身份。
+  if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
   const parts = slots.slice(0, 4).map((s) => {
     if (s.kind === 'commander') {
       const av = (typeof _commanderAvatar === 'function') ? _commanderAvatar() : { icon: '', color: '' };
@@ -11020,13 +11044,21 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   // `force` skips the `model.hasConfigured` gate: used when the configured API
   // exists but just FAILED at call time (bad key / network / quota) — we still
   // want to fall back to the local CLI instead of showing a bare error.
+  // `exclude` — CLI types to skip (e.g. a CLI that just failed at runtime);
+  //   used by the auto-switch path so a dead backend is replaced, not retried.
   const force = !!(opts && opts.force);
+  const exclude = (opts && opts.exclude) || null;
+  const excluded = (type) => !!exclude && exclude.has(type);
   if (_cliFallbackApplied === cid) {
     // Already fell back for this conversation: a CLI agent is in place (or the
     // user picked one manually). Treat that as success, not as "no fallback".
     const existing = _activeRecipient('conversation');
     if (existing && existing.kind === 'agent' && existing.id) return true;
-    return false;
+    // The recipient was switched back to the commander since the fallback was
+    // applied (e.g. the user clicked the cogseed chip, or a view switch reset
+    // the map). The CLI agent still exists and no API-key model is configured,
+    // so re-apply the fallback below instead of failing with "configure API" —
+    // this keeps a connected CLI usable after any recipient change.
   }
   if (!window.orkas || typeof window.orkas.invoke !== 'function') return false;
 
@@ -11044,7 +11076,23 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
     cli = (fb && fb.cli) || '';
   } catch (_) { /* fall through to auto-pick */ }
 
-  if (!cli) {
+  // Local-proxy reachability probe (CC Switch etc.): a CLI whose config points
+  // at a local proxy that isn't running can never execute — picking it leads
+  // straight to a runtime failure. `reachable === false` marks exactly that.
+  // We only skip on a definitive probe result; `null` (no proxy / unreadable)
+  // is treated as usable so we never block a CLI off an unknown endpoint.
+  let proxyUnreachable = {};
+  try {
+    const epRes = await window.orkas.invoke('localAgents.cliEndpointInfo');
+    const eps = (epRes && epRes.endpoints) || {};
+    for (const [type, ep] of Object.entries(eps)) {
+      if (ep && ep.isLocalProxy && ep.reachable === false) proxyUnreachable[type] = true;
+    }
+  } catch (_) { /* probe is best-effort — fall through with no exclusions */ }
+
+  if (!cli || excluded(cli)) {
+    // 无显式偏好，或偏好 CLI 已被排除（运行失败 / 代理不可达）→ 自动挑选下一个可用 CLI。
+    // 显式偏好被排除时不悄悄回退到偏好——它已被证明不可用，直接换。
     try {
       const listRes = await window.orkas.invoke('localAgents.list', { force: false });
       const entries = (listRes && listRes.entries) || [];
@@ -11054,15 +11102,15 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
       // fallback backend (it will surface its own login error if not logged in).
       // CLI whitelist mirrors onboarding's connectable list (claude / codex /
       // opencode / workbuddy) so a CLI connected in the walkthrough is
-      // selectable here.
+      // selectable here. CLIs whose local proxy is confirmed down, or that were
+      // explicitly excluded (failed at runtime), are skipped.
       const FALLBACK_CLIS = ['claude', 'codex', 'opencode', 'workbuddy'];
-      const signedIn = entries.find(
-        (e) => e && e.available && e.auth && e.auth.loggedIn
-          && FALLBACK_CLIS.includes(e.type),
-      );
-      const anyAvailable = entries.find(
-        (e) => e && e.available && FALLBACK_CLIS.includes(e.type),
-      );
+      const usable = (e) => e && e.available
+        && FALLBACK_CLIS.includes(e.type)
+        && !excluded(e.type)
+        && !proxyUnreachable[e.type];
+      const signedIn = entries.find((e) => usable(e) && e.auth && e.auth.loggedIn);
+      const anyAvailable = entries.find(usable);
       const entry = signedIn || anyAvailable;
       cli = entry ? entry.type : '';
     } catch (_) { /* no auth state available */ }
@@ -11101,12 +11149,20 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   if (!agent) return false;
 
   _recipientByCid[cid] = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
+  // new-chat（DRAFT_CID）场景：降级必须同步到 `_newChatRecipient` ——
+  // handleNewChatSubmit 的发送快照与 mention 注入都读 `_activeRecipient('new-chat')`
+  // （即 `_newChatRecipient`），只写 `_recipientByCid[DRAFT_CID]` 的话，后续
+  // `applyRecipientPrefix` 拿到的仍是 commander，消息不会带 `@Agent` 前缀，
+  // 后端仍按 to=commander 路由 → 又报「未配置模型」。
+  if (cid === DRAFT_CID && typeof _newChatRecipient !== 'undefined') {
+    _newChatRecipient = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
+  }
   _cliFallbackApplied = cid;
   try { _renderRecipientChip('conversation'); } catch (_) {}
   const label = cli === 'claude' ? 'Claude Code' : (cli === 'codex' ? 'Codex' : (cli === 'opencode' ? 'OpenCode' : 'WorkBuddy'));
   _convLog.info('commander CLI fallback applied', { cid, cli, agentId: agent.agent_id });
   if (typeof uiToast === 'function') {
-    uiToast(`指挥官当前没有可用的 API Key，消息已自动交给 ${label} 执行（可在设置中更改）`, { variant: 'warning', timeoutMs: 6000 });
+    uiToast(`cogseed 当前没有可用的 API Key，消息已自动交给 ${label} 执行（可在设置中更改）`, { variant: 'warning', timeoutMs: 6000 });
   }
   return true;
 }
@@ -11129,6 +11185,67 @@ async function _maybeAutoCliFallbackOnModelFailure(cid, ev) {
   const ok = await _maybeApplyCliFallback(cid, { force: true });
   if (ok && typeof uiToast === 'function') {
     uiToast('API 调用失败，已切换到本机 Agent 执行（可在设置中更改）', { variant: 'warning', timeoutMs: 6000 });
+  }
+}
+
+/**
+ * CLI agent 运行失败后的自动切换：当前降级到的 CLI（如 Codex 配了本地代理但代理
+ * 没开，或 CLI 本身不可用）执行失败时，排除它并自动换下一个可用 CLI agent，
+ * 同时重发当前消息——否则用户只能看到「Codex 未能完成任务」而卡住。
+ * 只作用于降级链路选中的 CLI agent（recipient 是 CLI 类且非用户手动指定）。
+ * 幂等：已经换过一次 / 没有别的可用 CLI 时不再尝试。
+ */
+let _cliSwitchTriedByCid = new Map(); // cid → Set<cli>（已尝试过的 CLI）
+async function _maybeAutoSwitchCliOnFailure(cid, ev) {
+  if (!ev || ev.aborted) return;
+  // 只处理 CLI 运行失败（runtime / dependency 类基础设施问题）；模型失败走
+  // _maybeAutoCliFallbackOnModelFailure。
+  const kind = ev.failureKind;
+  if (kind !== 'runtime' && kind !== 'dependency') return;
+  if (!cid) return;
+  // 直接读 per-cid 降级 recipient（不依赖 currentCid 的 _activeRecipient，
+  // 后台会话失败时 currentCid 可能指向别的会话）。
+  let recipient = _recipientByCid[cid] || null;
+  if (!recipient || recipient.kind !== 'agent' || !recipient.id) return;
+  // 找出当前 recipient 对应的 CLI 类型。
+  let failedCli = '';
+  try {
+    const listRes = await window.orkas.invoke('agents.list', {});
+    const a = (listRes && listRes.agents || []).find((x) => x && String(x.agent_id) === String(recipient.id));
+    if (a && a.runtime && a.runtime.kind === 'cli') failedCli = a.runtime.cli;
+  } catch (_) { /* agents list unavailable */ }
+  if (!failedCli) return;
+
+  const tried = _cliSwitchTriedByCid.get(cid) || new Set();
+  if (tried.has(failedCli)) return; // 已换过一次，不再重复
+  tried.add(failedCli);
+  _cliSwitchTriedByCid.set(cid, tried);
+
+  // 清除当前降级标记，重新挑选（排除失败的 CLI）。
+  const prevRecipient = _recipientByCid[cid] || null;
+  _cliFallbackApplied = null;
+  delete _recipientByCid[cid];
+  try { _renderRecipientChip('conversation'); } catch (_) {}
+
+  const ok = await _maybeApplyCliFallback(cid, { force: true, exclude: tried });
+  if (!ok) {
+    _cliFallbackApplied = null;
+    // 没有别的可用 CLI：恢复原 recipient（不让会话丢接收者），并明确告知
+    // 是 CLI 自身问题，而不是静默失败。
+    if (prevRecipient) {
+      _recipientByCid[cid] = prevRecipient;
+      try { _renderRecipientChip('conversation'); } catch (_) {}
+    }
+    _convLog.warn('[cli-fallback] auto-switch: no other CLI available', { cid, failedCli });
+    if (typeof uiToast === 'function') {
+      uiToast(`「${failedCli}」执行失败，且没有其他可用的本机 Agent。请检查该 CLI 的登录与配置，或在设置中配置 API Key。`, { variant: 'warning', timeoutMs: 8000 });
+    }
+    return;
+  }
+  _convLog.info('[cli-fallback] auto-switched CLI', { cid, from: failedCli });
+  if (typeof uiToast === 'function') {
+    const label = failedCli === 'claude' ? 'Claude' : (failedCli === 'codex' ? 'Codex' : (failedCli === 'opencode' ? 'OpenCode' : 'WorkBuddy'));
+    uiToast(`「${label}」执行失败，已自动切换到下一个可用 Agent。请重新发送消息。`, { variant: 'warning', timeoutMs: 6000 });
   }
 }
 
@@ -11169,7 +11286,7 @@ async function _cliFallbackGuideUser() {
     return;
   }
   uiToast(
-    '指挥官没有可用的 API Key，也没有检测到本机 CLI Agent（Claude Code / Codex / OpenCode）。请安装其中一个并登录，或在设置里配置 API Key。',
+    'cogseed 没有可用的 API Key，也没有检测到本机 CLI Agent（Claude Code / Codex / OpenCode）。请安装其中一个并登录，或在设置里配置 API Key。',
     { variant: 'warning', timeoutMs: 10000 },
   );
 }
@@ -13080,6 +13197,9 @@ function createChatController(config) {
                 // API 模型调用失败（failureKind model/config）→ 自动降级到本机
                 // CLI agent，后续消息由它执行（不自动重发当前消息）。
                 void _maybeAutoCliFallbackOnModelFailure(id, ev);
+                // CLI agent 运行失败（failureKind runtime/dependency）→ 自动
+                // 换下一个可用 CLI 并重发当前消息。
+                void _maybeAutoSwitchCliOnFailure(id, ev);
               }
             }
             const paintWait = maybeYieldToPaint();
@@ -13838,6 +13958,15 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       }
       if (isTurnEnd) {
         _evaluateAutoRecipient(cid);
+        // CLI agent 本轮失败（runtime/dependency，如 Codex 本地代理没开）→ 自动
+        // 换下一个可用 CLI，避免用户卡在「XX 未能完成任务」。
+        if (gm.failure_kind === 'runtime' || gm.failure_kind === 'dependency') {
+          void _maybeAutoSwitchCliOnFailure(cid, {
+            failureKind: gm.failure_kind,
+            failureCode: gm.failure_code || '',
+            aborted: false,
+          });
+        }
           }
     } else {
       // Mid-turn side-effect message (plan announcement etc., no `seg`) —

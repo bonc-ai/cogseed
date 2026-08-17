@@ -267,6 +267,21 @@ function _cwSourceLabel(source) {
   return String(source || 'Agent');
 }
 
+/** 把后端 degraded reason 转成用户可读的原因，展示「未提炼」的具体原因。 */
+function _cwDegradedReason(reason) {
+  const r = String(reason || '').trim();
+  if (!r) return '模型提炼失败';
+  const map = {
+    model_unavailable: '未配置可用的模型，或模型调用不可用',
+    model_failed: '模型调用失败',
+    empty_transcript: '会话内容为空，无法提炼',
+    unparseable_json: '模型返回内容无法解析',
+    all_passes_failed: '模型提炼失败',
+    no_model: '未配置可用的模型',
+  };
+  return map[r] || (r.length > 60 ? `${r.slice(0, 60)}…` : r);
+}
+
 async function _cwLoadSources() {
   const grid = _cw.backdrop.querySelector('[data-cw-sources]');
   if (!grid) return;
@@ -666,9 +681,10 @@ async function _cwRunImport() {
         if (res.degraded) {
           item.status = 'degraded';
           item.degraded = true;
+          item.degradedReason = _cwDegradedReason(res.reason);
           _cw.degradedCount += 1;
           if (row) {
-            row.outerHTML = _cwRowHtml(item, 'is-degraded', '已准备 · 未提炼');
+            row.outerHTML = _cwRowHtml(item, 'is-degraded', `已准备 · 未提炼：${item.degradedReason}`);
             row = list.querySelectorAll('[data-cw-import-row]')[i];
           }
         } else {
@@ -723,7 +739,8 @@ async function _cwRunImport() {
         <div class="cw-done-row${item.degraded ? ' is-degraded' : ''}">
           <span class="cw-done-title">${_cwEsc(item.title)}</span>
           ${item.existing ? '<span class="cw-done-tag is-exists">已存在</span>' : ''}
-          ${item.degraded ? '<span class="cw-done-tag">未提炼</span>' : ''}
+          ${item.degraded ? `<span class="cw-done-tag" title="${_cwEsc(item.degradedReason || '未提炼')}">未提炼</span>` : ''}
+          ${item.degraded && item.degradedReason ? `<small class="cw-done-reason">${_cwEsc(item.degradedReason)}</small>` : ''}
           <button type="button" class="cw-btn small" data-cw-open-cid="${_cwEsc(item.cid)}">打开</button>
         </div>`).join('')}</div>` : ''}`;
     body.querySelectorAll('[data-cw-open-cid]').forEach((btn) => {

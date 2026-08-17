@@ -418,6 +418,10 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-team-action-select{padding:7px 12px;font-size:12px;border:1px solid var(--cs-line);
   border-radius:6px;background:var(--cs-paper);color:var(--cs-ink);cursor:pointer;
   transition:all .15s;outline:none;min-width:160px}
+/* 单选项（无可存储 API）时不用 <select>，纯文本占位与下拉框视觉一致 */
+#cs-onboarding .cs-team-connect-only{padding:7px 12px;font-size:12px;min-width:160px;
+  border:1px solid var(--cs-line);border-radius:6px;background:var(--cs-paper);
+  color:var(--cs-muted);text-align:center;user-select:none}
 #cs-onboarding .cs-team-action-select:hover{border-color:var(--cs-forest);background:var(--cs-paper-lift)}
 #cs-onboarding .cs-team-action-select:focus{border-color:var(--cs-forest);box-shadow:0 0 0 3px var(--cs-forest-ghost)}
 #cs-onboarding .cs-team-connect{padding:7px 16px;font-size:12px}

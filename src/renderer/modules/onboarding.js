@@ -1252,11 +1252,18 @@ function _csRenderTeam(localClis) {
       hints.push('模型走本地代理连接，使用时需保持代理运行；或「连接并存储 API」改为直连');
     }
     const hintHtml = `<small>${_csEsc(hints.join(' · '))}</small>`;
-    const action = `<div class="cs-team-actions">
+    // 只有一个动作可选时不用 <select>（原生单选项下拉体验差，点开看不出变化），
+    // 直接渲染为只读文本 + 执行按钮；有两个选项（可存储 API）才用下拉框。
+    const action = canStoreApi
+      ? `<div class="cs-team-actions">
         <select class="cs-team-action-select" data-app-type="${_csEsc(appType)}">
           <option value="connect-only">只连接</option>
-          ${canStoreApi ? '<option value="connect-store">连接并存储 API</option>' : ''}
+          <option value="connect-store">连接并存储 API</option>
         </select>
+        <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
+      </div>`
+      : `<div class="cs-team-actions">
+        <span class="cs-team-connect-only" data-app-type="${_csEsc(appType)}">只连接</span>
         <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
       </div>`;
 

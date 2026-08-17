@@ -22,19 +22,28 @@ interface InvokeLog {
   payload: unknown;
 }
 
-function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => unknown)>, opts: { recipient?: unknown } = {}) {
+function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => unknown)>, opts: { recipient?: unknown; newChatRecipient?: unknown } = {}) {
   const invokeLog: InvokeLog[] = [];
   const toasts: Array<{ message: string; opts: unknown }> = [];
   const recipientByCid: Record<string, unknown> = {};
+  const newChatRecipient = opts.newChatRecipient ?? { kind: 'commander' };
   const sandbox: any = {
     Array,
     Math,
     String,
     Boolean,
     Promise,
+    Map,
+    Set,
     console,
     _recipientByCid: recipientByCid,
-    _activeRecipient: () => (opts.recipient === undefined ? { kind: 'commander' } : opts.recipient),
+    _newChatRecipient: newChatRecipient,
+    _COMMANDER: { kind: 'commander', id: '', name: '' },
+    DRAFT_CID: 'main_chat',
+    _activeRecipient: (target: string) => {
+      if (target === 'new-chat') return newChatRecipient;
+      return opts.recipient === undefined ? { kind: 'commander' } : opts.recipient;
+    },
     _renderRecipientChip: () => {},
     uiToast: (message: string, opts: unknown) => { toasts.push({ message, opts }); },
     _convLog: { info: () => {}, warn: () => {}, error: () => {} },
@@ -51,7 +60,7 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     },
   };
   vm.runInNewContext(fallbackSource, sandbox, { filename: 'cli-fallback.js' });
-  return { sandbox, invokeLog, toasts, recipientByCid };
+  return { sandbox, invokeLog, toasts, recipientByCid, newChatRecipient };
 }
 
 describe('commander CLI fallback', () => {
@@ -234,6 +243,32 @@ describe('commander CLI fallback', () => {
     expect(toasts).toHaveLength(0);
   });
 
+  it('re-applies the fallback when the recipient was switched back to the commander', async () => {
+    // Scenario: fallback was applied earlier (_cliFallbackApplied === cid), but
+    // the user later clicked the cogseed chip (recipient is commander again).
+    // It must re-apply the CLI fallback instead of failing with "configure API".
+    const { sandbox, recipientByCid, toasts } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: 'codex' },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+        ],
+      },
+    }, { recipient: { kind: 'commander' } });
+    // Simulate an earlier fallback for this cid.
+    sandbox._cliFallbackApplied = 'cid-reapply';
+    sandbox._recipientByCid['cid-reapply'] = { kind: 'agent', id: 'agent-codex-1', name: 'Codex' };
+
+    const applied = await sandbox._maybeApplyCliFallback('cid-reapply');
+
+    // Success: conversation is routed back to the CLI agent, no API prompt.
+    expect(applied).toBe(true);
+    expect(recipientByCid['cid-reapply']).toMatchObject({ kind: 'agent', id: 'agent-codex-1' });
+    expect(toasts.some((t) => t.message.includes('自动交给'))).toBe(true);
+    expect(toasts.some((t) => t.message.includes('配置 API Key'))).toBe(false);
+  });
+
   it('guides the user only when there is neither an API key NOR any CLI backend', async () => {
     const { sandbox, toasts, recipientByCid } = buildSandbox({
       'model.hasConfigured': { configured: false },
@@ -253,5 +288,164 @@ describe('commander CLI fallback', () => {
     // configuring an API key.
     expect(toasts).toHaveLength(1);
     expect(toasts[0].message).toContain('API Key');
+  });
+
+  it('skips a signed-in CLI whose local proxy is confirmed unreachable when auto-picking', async () => {
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: '' }, // no preference → auto-pick
+      // codex IS signed in and available, but its local proxy (CC Switch) is
+      // confirmed down → auto-pick must skip it and choose workbuddy instead.
+      'localAgents.list': {
+        entries: [
+          { type: 'codex', available: true, auth: { loggedIn: true } },
+          { type: 'workbuddy', available: true, auth: { loggedIn: true } },
+        ],
+      },
+      'localAgents.cliEndpointInfo': {
+        endpoints: {
+          claude: null,
+          codex: { baseUrl: 'http://127.0.0.1:15721/v1', isLocalProxy: true, reachable: false },
+          opencode: null,
+          workbuddy: null, // no proxy → treated as usable
+        },
+      },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+          { agent_id: 'agent-wb-1', name: 'WorkBuddy', runtime: { kind: 'cli', cli: 'workbuddy' } },
+        ],
+      },
+    });
+
+    const applied = await sandbox._maybeApplyCliFallback('cid-proxy-down');
+
+    expect(applied).toBe(true);
+    expect(recipientByCid['cid-proxy-down']).toMatchObject({ kind: 'agent', id: 'agent-wb-1' });
+  });
+
+  it('honours an explicit fallback preference even when its local proxy is unreachable', async () => {
+    // The user explicitly picked codex as the fallback backend. A dead local
+    // proxy must not silently swap them to another CLI — respect the choice
+    // and let the CLI's own run error surface the proxy hint.
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: 'codex' },
+      'localAgents.cliEndpointInfo': {
+        endpoints: {
+          codex: { baseUrl: 'http://127.0.0.1:15721/v1', isLocalProxy: true, reachable: false },
+        },
+      },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+        ],
+      },
+    });
+
+    const applied = await sandbox._maybeApplyCliFallback('cid-proxy-pref');
+
+    expect(applied).toBe(true);
+    expect(recipientByCid['cid-proxy-pref']).toMatchObject({ kind: 'agent', id: 'agent-codex-1' });
+  });
+
+  it('syncs the fallback into _newChatRecipient when applied on the draft cid (new-chat)', async () => {
+    // new-chat 发送路径：降级 applied 到 DRAFT_CID 时，必须同时更新
+    // `_newChatRecipient`——handleNewChatSubmit 的 mention 注入和 recipient
+    // 快照都读它。只写 `_recipientByCid[DRAFT_CID]` 会导致消息不带
+    // `@Codex` 前缀、后端仍按 to=commander 路由 → 「未配置模型」。
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: '' },
+      'localAgents.list': {
+        entries: [{ type: 'codex', available: true, auth: { loggedIn: true } }],
+      },
+      'localAgents.cliEndpointInfo': {
+        endpoints: { codex: null, claude: null, opencode: null, workbuddy: null },
+      },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+        ],
+      },
+    });
+
+    const applied = await sandbox._maybeApplyCliFallback('main_chat'); // DRAFT_CID
+
+    expect(applied).toBe(true);
+    expect(recipientByCid['main_chat']).toMatchObject({ kind: 'agent', id: 'agent-codex-1' });
+    // The new-chat recipient must also flip to the CLI agent so the
+    // `applyRecipientPrefix` path injects `@Codex` into the outbound message.
+    expect(sandbox._newChatRecipient).toMatchObject({ kind: 'agent', id: 'agent-codex-1' });
+  });
+
+  it('auto-switches to the next usable CLI when the current one fails at runtime', async () => {
+    // codex 是唯一「已登录」CLI 但运行失败（如本地代理没开）；claude 可用但未标记
+    // 登录。auto-switch 应排除 codex 并选 claude。
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: 'codex' }, // 显式偏好 codex
+      'localAgents.list': {
+        entries: [
+          { type: 'codex', available: true, auth: { loggedIn: true } },
+          { type: 'claude', available: true, auth: { loggedIn: false } },
+        ],
+      },
+      'localAgents.cliEndpointInfo': {
+        endpoints: { codex: null, claude: null, opencode: null, workbuddy: null },
+      },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'cli', cli: 'claude' } },
+        ],
+      },
+    });
+    // 先降级到 codex（模拟之前的降级）。
+    const first = await sandbox._maybeApplyCliFallback('cid-switch');
+    expect(first).toBe(true);
+    expect(recipientByCid['cid-switch']).toMatchObject({ kind: 'agent', id: 'agent-codex-1' });
+
+    // codex 运行失败 → 自动切换（排除 codex，选 claude）。
+    await sandbox._maybeAutoSwitchCliOnFailure('cid-switch', {
+      failureKind: 'runtime',
+      failureCode: 'cli_failed',
+      aborted: false,
+    });
+
+    expect(recipientByCid['cid-switch']).toMatchObject({ kind: 'agent', id: 'agent-claude-1' });
+  });
+
+  it('does not auto-switch twice to the same failed CLI', async () => {
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: 'codex' },
+      'localAgents.list': {
+        entries: [
+          { type: 'codex', available: true, auth: { loggedIn: true } },
+          { type: 'claude', available: true, auth: { loggedIn: false } },
+        ],
+      },
+      'localAgents.cliEndpointInfo': {
+        endpoints: { codex: null, claude: null, opencode: null, workbuddy: null },
+      },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'cli', cli: 'claude' } },
+        ],
+      },
+    });
+    await sandbox._maybeApplyCliFallback('cid-switch2');
+    await sandbox._maybeAutoSwitchCliOnFailure('cid-switch2', {
+      failureKind: 'runtime', failureCode: 'cli_failed', aborted: false,
+    });
+    // 第一次切换 → claude
+    expect(recipientByCid['cid-switch2']).toMatchObject({ kind: 'agent', id: 'agent-claude-1' });
+    // claude 也失败 → 已无其他可用 CLI，recipient 保持不变（不循环）。
+    await sandbox._maybeAutoSwitchCliOnFailure('cid-switch2', {
+      failureKind: 'runtime', failureCode: 'cli_failed', aborted: false,
+    });
+    expect(recipientByCid['cid-switch2']).toMatchObject({ kind: 'agent', id: 'agent-claude-1' });
   });
 });

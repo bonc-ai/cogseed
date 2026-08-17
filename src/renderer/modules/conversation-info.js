@@ -778,8 +778,8 @@ const ConversationInfo = (() => {
   function _agentActivityActorName(actor) {
     if (!actor) return '';
     const id = String(actor.id || '');
-    if (actor.name) return String(actor.name);
     if (id === 'commander') return _label('chat.agent_status.commander', 'Commander');
+    if (actor.name) return String(actor.name);
     return id || _label('chat.from_agent_unknown', 'Agent');
   }
 
@@ -1284,7 +1284,6 @@ const ConversationInfo = (() => {
           <div class="conversation-info-carried-section-label">${_uiIcon('clipboard-list', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.resume_title', '接续准备'))}</div>
           ${resumeEvidence.restatement ? `<div class="conversation-info-resume-restatement">${escapeHtml(resumeEvidence.restatement)}</div>` : ''}
           ${_renderResumeCarry(resumeEvidence.carry)}
-          ${resumeEvidence.boundary ? `<div class="conversation-info-resume-boundary">${escapeHtml(resumeEvidence.boundary)}</div>` : ''}
         </section>`
       : '';
     const events = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents : [];
@@ -1348,7 +1347,6 @@ const ConversationInfo = (() => {
       ${resumeHtml}
       <div class="conversation-info-carried-header">
         <div class="conversation-info-carried-heading">${escapeHtml(_label('conversation_info.carried.title', '本次携带'))}</div>
-        <div class="conversation-info-carried-subtitle">${escapeHtml(_label('conversation_info.carried.subtitle', '本次最小 Context、来源边界与运行证明'))}</div>
       </div>
       <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${_uiIcon('play-triangle', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.runs', '本次运行'))}</div>${runsHtml}</section>
       <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${_uiIcon('panel-list', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.context', '本次 Context'))}</div>${contextHtml}</section>

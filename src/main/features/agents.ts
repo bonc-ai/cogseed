@@ -496,7 +496,7 @@ const ALLOWED_INPUT_TYPES: readonly AgentInputType[] = ['text', 'textarea', 'sel
 // "commander" as a member id, so we guard localized display names and the
 // English form. Comparison is case-insensitive after stripping all whitespace;
 // whitespace itself is rejected by the charset guard below.
-const RESERVED_AGENT_NAMES = new Set(['指挥官', '总指挥', 'コマンダー', '司令官', 'commander']);
+const RESERVED_AGENT_NAMES = new Set(['指挥官', '总指挥', 'コマンダー', '司令官', 'commander', 'cogseed']);
 function _agentNameKey(name: string): string {
   return String(name || '').replace(/\s+/g, '').toLowerCase();
 }
