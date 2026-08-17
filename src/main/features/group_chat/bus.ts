@@ -8254,7 +8254,9 @@ function _toolError(error: string): { content: string; isError: true } {
  *  Returns null when absent/malformed. Tolerant of bare JSON output too —
  *  the historical prompt said "no markdown / plain JSON" while the parser
  *  only accepted the tagged form, so EVERY live routing judgement silently
- *  failed and no task was ever opened. Accept both shapes. */
+ *  failed and no task was ever opened. Accept both shapes, plus the wrapped
+ *  `{"kstar-judge":{"is_task":...,"continuation":...}}` shape some models
+ *  produce when they read the tag name as a JSON key. */
 export function parseContinuationJudgement(text: string | undefined): { isTask: boolean; continuation: boolean } | null {
   const raw = String(text || '').trim();
   const tagged = raw.match(/<kstar-judge>\s*([\s\S]*?)\s*<\/kstar-judge>/);
@@ -8267,14 +8269,30 @@ export function parseContinuationJudgement(text: string | undefined): { isTask: 
   // is authoritative.
   for (let end = candidate.length; end > 0; end -= 1) {
     try {
-      const value = JSON.parse(candidate.slice(0, end)) as { is_task?: unknown; continuation?: unknown };
-      if (typeof value.is_task !== 'boolean') return null;
+      const parsed = JSON.parse(candidate.slice(0, end)) as Record<string, unknown>;
+      const value = unwrapRoutingJudgement(parsed);
+      if (!value || typeof value.is_task !== 'boolean') continue;
       return {
         isTask: value.is_task,
         continuation: value.continuation === true,
       };
     } catch {
       /* keep trimming */
+    }
+  }
+  return null;
+}
+
+/** Peel model-output wrappers off a routing judgement object. Accepts the
+ *  canonical flat `{is_task, continuation}` and the wrapped
+ *  `{"kstar-judge": {...}}` / `{"kstar_judge": {...}}` shapes. */
+function unwrapRoutingJudgement(parsed: Record<string, unknown>): { is_task?: unknown; continuation?: unknown } | null {
+  if (typeof parsed.is_task === 'boolean') return parsed;
+  for (const key of ['kstar-judge', 'kstar_judge', 'judge', 'routing']) {
+    const nested = parsed[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const candidate = nested as Record<string, unknown>;
+      if (typeof candidate.is_task === 'boolean') return candidate;
     }
   }
   return null;
@@ -8374,7 +8392,51 @@ async function hostRouteTaskTurn(
   // (greetings/status/emoji) with zero model calls and zero KStar writes;
   // everything else goes to the model judgement which decides is_task AND
   // continuation in one call with full conversation context.
-  const { isObviouslyTrivial } = await import('../kstar/task-intent');
+  const { isObviouslyTrivial, isClosingIntent } = await import('../kstar/task-intent');
+  if (isClosingIntent(messageText)) {
+    // Deterministic closing intent ("完成/搞定/结束"): close the open task
+    // via the finish path (requirement precipitation runs) and NEVER open a
+    // new task from it. Checked before the trivial filter so it cannot be
+    // swallowed as small talk, and before the model judgement so a misjudged
+    // "new task" cannot be created for a closing message.
+    try {
+      const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+      const lifecycle = await readKstarTaskLifecycle(uid, cid);
+      const openRequirement = lifecycle.requirement && lifecycle.requirement.status === 'open'
+        ? { requirementId: lifecycle.requirement.id, goalText: lifecycle.requirement.goalText }
+        : undefined;
+      if (openRequirement) {
+        const { executeKstarControl } = await import('../kstar/control-service');
+        await executeKstarControl(
+          {
+            userId: uid,
+            conversationId: cid,
+            ...(sourceMessageId ? { sourceMessageId } : {}),
+            ...(workspaceId ? { workspaceId } : {}),
+            allowedToolNames: new Set(['kstar_control']),
+          },
+          {
+            operation: 'finish',
+            idempotencyKey: `host-close-${cid}-${sourceMessageId || Date.now()}`,
+            result: {
+              finalStatus: 'completed',
+              finalText: String(messageText || '').slice(0, 4_000),
+              producedFiles: [],
+              acceptanceEvidence: [],
+              closeReason: 'user_complete',
+            },
+          },
+        );
+        log.info('kstar closing intent closed open task', {
+          cid: maskId(cid),
+          requirementId: openRequirement.requirementId,
+        });
+      }
+    } catch (error) {
+      log.warn(`kstar closing intent degraded cid=${cid}: ${(error as Error).message}`);
+    }
+    return { openedTask: false };
+  }
   if (isObviouslyTrivial(messageText)) return { openedTask: false };
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');

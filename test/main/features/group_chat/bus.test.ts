@@ -1973,3 +1973,44 @@ describe('group_chat bus › processItemsAreRoutingOnly (abort promotion guard)'
     expect(bus.processItemsAreRoutingOnly([])).toBe(false);
   });
 });
+
+describe('group_chat bus › parseContinuationJudgement (kstar routing judge)', () => {
+  async function judge(): Promise<typeof import('../../../../src/main/features/group_chat/bus')> {
+    return import('../../../../src/main/features/group_chat/bus');
+  }
+
+  it('accepts the canonical tagged shape', async () => {
+    const bus = await judge();
+    expect(bus.parseContinuationJudgement('<kstar-judge>{"is_task":true,"continuation":false}</kstar-judge>'))
+      .toEqual({ isTask: true, continuation: false });
+    expect(bus.parseContinuationJudgement('<kstar-judge>{"is_task":false,"continuation":true}</kstar-judge>'))
+      .toEqual({ isTask: false, continuation: true });
+  });
+
+  it('accepts bare JSON and prose-wrapped JSON', async () => {
+    const bus = await judge();
+    expect(bus.parseContinuationJudgement('{"is_task":true,"continuation":true}'))
+      .toEqual({ isTask: true, continuation: true });
+    expect(bus.parseContinuationJudgement('Sure: {"is_task":false,"continuation":false} here.'))
+      .toEqual({ isTask: false, continuation: false });
+  });
+
+  it('accepts the wrapped {"kstar-judge":{...}} shape models actually emit', async () => {
+    const bus = await judge();
+    // 实测模型输出：把标签名误解成 JSON key
+    expect(bus.parseContinuationJudgement('{"kstar-judge":{"is_task":true,"continuation":false}}'))
+      .toEqual({ isTask: true, continuation: false });
+    expect(bus.parseContinuationJudgement('{"kstar_judge":{"is_task":true,"continuation":true}}'))
+      .toEqual({ isTask: true, continuation: true });
+  });
+
+  it('returns null for absent/malformed judgements', async () => {
+    const bus = await judge();
+    expect(bus.parseContinuationJudgement(undefined)).toBeNull();
+    expect(bus.parseContinuationJudgement('')).toBeNull();
+    expect(bus.parseContinuationJudgement('just prose')).toBeNull();
+    expect(bus.parseContinuationJudgement('{"is_task":"yes"}')).toBeNull();
+    expect(bus.parseContinuationJudgement('{"kstar-judge":{"continuation":true}}')).toBeNull();
+    expect(bus.parseContinuationJudgement('not json {')).toBeNull();
+  });
+});
