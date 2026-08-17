@@ -4,6 +4,16 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { KstarEpisodeRecord, KstarReviewRecord } from '../../../../src/main/features/kstar/types';
 
+// 语义查重不依赖真实 embedding 模型（95MB ONNX，测试环境无关性）：按文本
+// 哈希生成确定性 512 维向量——不同文本向量不同 → 查重走 no_match 正常晋升。
+vi.mock('../../../../src/main/features/kb_embed', () => ({
+  embedQuery: async (text: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < text.length; i += 1) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return Array.from({ length: 512 }, (_, i) => Math.sin(h + i * 0.618) * 0.1);
+  },
+}));
+
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
