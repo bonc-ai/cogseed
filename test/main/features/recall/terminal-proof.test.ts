@@ -5,6 +5,7 @@ import * as path from 'node:path';
 
 let tmp: string;
 let previous: string | undefined;
+const RULE_BOUNDARY = { applicableWhen: ['reviewing governed work'], forbiddenWhen: ['outside the review scope'] };
 beforeEach(() => {
   vi.resetModules();
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-recall-terminal-proof-'));
@@ -51,6 +52,7 @@ async function confirmedProjection(taskRunId: string) {
     judgment: 'Use confirmed evidence in task reviews.',
     summary: 'Use confirmed evidence',
     suggestedType: 'rule',
+    ...RULE_BOUNDARY,
     suggestedScope: 'review',
     sourceRefs: [{ kind: 'execution', id: `exec-${taskRunId}` }],
   });
@@ -119,8 +121,7 @@ describe('Recall terminal transfer proof handler', () => {
       finished_at_ms: 2,
     });
 
-    expect(result).toMatchObject({ handled: true, proof: { status: 'succeeded' } });
-    expect(result.handled && result.proof.receiptId).toBeTruthy();
+    expect(result).toMatchObject({ handled: true, proof: { status: 'succeeded', receiptId: expect.any(String), receiptExecutionId: 'turn-t1' } });
     const advanced = (await assets.listAbilityAssets('user-a')).find((a) => a.id === asset.id);
     expect(advanced?.maturity).toBe('transfer_validated');
     expect((await proofs.listTransferProofs('user-a')).some((p) => p.receiptId)).toBe(true);

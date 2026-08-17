@@ -16,6 +16,7 @@ function asset(overrides: Partial<FormalAbilityAsset> = {}): FormalAbilityAsset 
     statement: '在做需求评审时，先确认上线时间再排范围。',
     scope: 'product',
     applicableWhen: ['处理需求评审时'],
+    forbiddenWhen: ['不涉及上线安排的日常讨论'],
     evidenceRefs: [],
     createdAt: '2026-08-01T00:00:00.000Z',
     updatedAt: '2026-08-01T00:00:00.000Z',

@@ -1,5 +1,6 @@
-import { completeTransferProof, findTransferProof, prepareTransferProof, type TransferProofRecord } from './proof-service';
+import { completeTransferProof, completeTransferProofWithReceipt, findTransferProof, prepareTransferProof, type TransferProofRecord } from './proof-service';
 import { readContextProjection } from './context-projection';
+import { abilityAssetReferencesCover } from './asset-reference';
 
 export type RecallTaskTerminalStatus = 'completed' | 'failed' | 'cancelled' | 'waiting_input';
 
@@ -43,22 +44,16 @@ function proofStatusFor(event: RecallTaskTerminalEvent): 'succeeded' | 'degraded
 async function findReuseReceiptForProjection(
   userId: string,
   turnIds: readonly string[],
-  assetIds: ReadonlySet<string>,
-): Promise<string | undefined> {
-  if (!turnIds.length || !assetIds.size) return undefined;
+  assetVersions: readonly { assetId: string; version: string }[],
+): Promise<{ receiptId: string; receiptExecutionId: string } | undefined> {
+  if (!turnIds.length || !assetVersions.length) return undefined;
   const { readReceipt } = await import('../p3394/context-reuse-receipt');
   for (const turnId of turnIds) {
     try {
       const receipt = await readReceipt(userId, `turn-${turnId}`);
-      if (!receipt) continue;
-      const covers = (receipt.reusedRefs || []).some((ref) => {
-        const raw = String(ref || '');
-        if (assetIds.has(raw)) return true;
-        // 引用可能带前缀（`asset:aa-xxx`）——按尾段再比一次。
-        const tail = raw.slice(raw.lastIndexOf(':') + 1);
-        return tail.length > 0 && assetIds.has(tail);
-      });
-      if (covers) return receipt.receiptId || `turn-${turnId}`;
+      if (receipt.boundary !== 'real' || receipt.status === 'rejected') continue;
+      const covers = abilityAssetReferencesCover(receipt.reusedRefs || [], assetVersions);
+      if (covers) return { receiptId: receipt.receiptId, receiptExecutionId: receipt.executionId };
     } catch {
       // 单张回执读不到不影响其它轮次的判定。
     }
@@ -97,18 +92,21 @@ export async function handleRecallTaskTerminal(event: RecallTaskTerminalEvent): 
   if (proof.status === 'prepared') {
     // 找出本次运行里真实加载了这次投影资产的那张回执。显式按 turn id 定位，
     // 不按时间窗反查、也不拿 execution id 硬粘——回执必须指得回某一次真实加载。
-    const receiptId = await findReuseReceiptForProjection(
+    const receipt = await findReuseReceiptForProjection(
       event.user_id,
       event.reuse_turn_ids || [],
-      new Set(projection.assetIds || []),
+      proof.assetVersions,
     );
-    proof = await completeTransferProof(event.user_id, proof.id, {
-      status,
-      ...(receiptId ? { receiptId } : {}),
-      observedTransfer: receiptId
-        ? `Task run ${logicalRunId} attempt ${executionId} reached ${event.status}; assets were loaded under receipt ${receiptId}.`
-        : `Task run ${logicalRunId} attempt ${executionId} reached terminal status ${event.status}.`,
-    });
+    const observedTransfer = receipt
+      ? `Task run ${logicalRunId} attempt ${executionId} reached ${event.status}; assets were loaded under receipt ${receipt.receiptId}.`
+      : `Task run ${logicalRunId} attempt ${executionId} reached terminal status ${event.status}.`;
+    proof = receipt
+      ? await completeTransferProofWithReceipt(event.user_id, proof.id, {
+          status,
+          receiptExecutionId: receipt.receiptExecutionId,
+          observedTransfer,
+        })
+      : await completeTransferProof(event.user_id, proof.id, { status, observedTransfer });
   }
   return { handled: true, proof, proofs: [proof] };
 }

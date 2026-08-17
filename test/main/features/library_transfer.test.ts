@@ -14,11 +14,20 @@ vi.mock('../../../src/main/features/contexts', () => ({
   },
   deleteContextTarget: (rel: string) => {
     state.calls.push({ op: 'delete-global', args: [rel] });
-    return state.failDelete === `global:${rel}` ? { ok: false, error: 'delete_failed' } : { ok: true };
+    return state.failDelete === `global:${rel}`
+      ? { ok: false, error: 'delete_failed' }
+      : { ok: true, deletedPaths: [rel] };
   },
   renameContextEntry: (source: string, target: string) => {
     state.calls.push({ op: 'move-global', args: [source, target] });
     return { ok: true, src: source, dst: target };
+  },
+}));
+
+vi.mock('../../../src/main/features/recall/source-removal', () => ({
+  recordRemovedContextFiles: async (userId: string, paths: string[]) => {
+    state.calls.push({ op: 'record-removed-contexts', args: [userId, paths] });
+    return { removedSourceIds: paths, failedSourceIds: [] };
   },
 }));
 
@@ -165,6 +174,22 @@ describe('library_transfer', () => {
       results: [{ error: 'source_delete_failed' }],
     });
     expect(state.calls.map((row) => row.op)).toEqual(['copy-space', 'delete-global', 'delete-space']);
+  });
+
+  it('records a global source removal only after a cross-Library move succeeds', async () => {
+    const result = await transfer({
+      mode: 'move',
+      source: { scope: 'global' },
+      paths: ['note.md'],
+      destination: { scope: 'space', spaceId: 'p1', dir: '' },
+    });
+
+    expect(result).toMatchObject({ ok: true, succeeded: 1, failed: 0 });
+    expect(state.calls).toEqual([
+      { op: 'copy-space', args: ['p1', '/global/note.md', 'note.md'] },
+      { op: 'delete-global', args: ['note.md'] },
+      { op: 'record-removed-contexts', args: ['u1', ['note.md']] },
+    ]);
   });
 
   it('rejects copying a folder into its own descendant', async () => {

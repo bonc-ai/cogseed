@@ -69,6 +69,8 @@ export interface CognitionInboxInput {
   candidates: readonly CognitionInboxCandidate[];
   /** 当前不可用（失效/暂停/撤权）的来源 id。 */
   unavailableSourceIds: ReadonlySet<string>;
+  /** Skill 安装状态读取失败的资产。未知状态不能当成未生成。 */
+  skillStateUnknownAssetIds?: ReadonlySet<string>;
 }
 
 const URGENCY: Record<CognitionInboxKind, CognitionInboxUrgency> = {
@@ -118,7 +120,8 @@ export function buildCognitionInbox(input: CognitionInboxInput): CognitionInboxI
 
   for (const asset of activeAssets) {
     if (asset.assetType === 'skill_method' && asset.payload.kind === 'skill_method'
-      && !asset.payload.generatedSkillId) {
+      && !asset.payload.generatedSkillId
+      && !input.skillStateUnknownAssetIds?.has(asset.assetId)) {
       items.push(item('skill_creation_suggested', `skill:${asset.assetId}`, asset.title, {
         assetType: asset.assetType,
         assetId: asset.assetId,

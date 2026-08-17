@@ -5,6 +5,7 @@ import * as path from 'node:path';
 
 let tmpDir: string;
 let previousRoot: string | undefined;
+const RULE_BOUNDARY = { applicableWhen: ['performing governed work'], forbiddenWhen: ['outside the governed scope'] };
 beforeEach(() => { vi.resetModules(); tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-recall-assets-')); previousRoot = process.env.ORKAS_WORKSPACE_ROOT; process.env.ORKAS_WORKSPACE_ROOT = tmpDir; });
 afterEach(() => { if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT; else process.env.ORKAS_WORKSPACE_ROOT = previousRoot; fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
@@ -19,7 +20,7 @@ async function modules() {
 describe('Recall ability assets', () => {
   it('updates immutable-id assets with append-only snapshots and lifecycle audit events', async () => {
     const { candidates, assets } = await modules();
-    const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Keep decision records with evidence.', suggestedType: 'rule', suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] });
+    const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Keep decision records with evidence.', suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] });
     const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
 
     const updated = await assets.updateAbilityAsset('user-a', asset.id, { statement: 'Keep architecture decision records with source evidence.', scope: 'architecture-review', reason: 'Keep the newest architecture review version.', actor: 'user' });
@@ -79,6 +80,7 @@ describe('Recall ability assets', () => {
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Keep decision records with evidence.',
       suggestedType: 'rule',
+      ...RULE_BOUNDARY,
       suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-governance' }],
     });
@@ -103,6 +105,7 @@ describe('Recall ability assets', () => {
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Use the approved service client for requests.',
       suggestedType: 'rule',
+      ...RULE_BOUNDARY,
       suggestedScope: 'project',
       sourceRefs: [{ kind: 'execution', id: 'exec-secret-edit' }],
     });
@@ -158,6 +161,7 @@ describe('Recall ability assets', () => {
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Use PRM notes for architecture reviews.',
       suggestedType: 'rule',
+      ...RULE_BOUNDARY,
       suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-scope' }],
     });
@@ -201,6 +205,7 @@ describe('Recall ability assets', () => {
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Use a decision log before changing architecture.',
       suggestedType: 'rule',
+      ...RULE_BOUNDARY,
       suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-rework' }],
     });
@@ -245,6 +250,7 @@ describe('Recall ability assets', () => {
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Prefer reversible experiments.',
       suggestedType: 'rule',
+      ...RULE_BOUNDARY,
       suggestedScope: 'experiments',
       sourceRefs: [{ kind: 'execution', id: 'exec-pause' }],
     });
@@ -274,6 +280,7 @@ describe('Recall ability assets', () => {
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Keep source compatibility explicit.',
       suggestedType: 'rule',
+      ...RULE_BOUNDARY,
       suggestedScope: 'project',
       sourceRefs: [{ kind: 'message', id: 'msg-a' }],
     });
@@ -343,7 +350,7 @@ describe('治理状态模型', () => {
     const { candidates } = await modules();
     const candidate = await candidates.saveRecallCandidate(uid, {
       judgment: 'Record governance decisions with their evidence.',
-      suggestedType: 'rule', suggestedScope: 'architecture',
+      suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-gov' }],
     });
     return (await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' })).asset;
@@ -392,7 +399,12 @@ describe('治理状态模型', () => {
     for (const maturity of ['seed', 'bud'] as const) {
       const uid = `user-evidence-unchanged-${maturity}`;
       const asset = await seedAsset(uid);
-      await assets.setAbilityAssetMaturity(uid, asset.id, maturity);
+      if (maturity === 'seed') {
+        const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+        await updateRecallJsonRecord(uid, 'ability-assets', asset.id, (raw) => ({ ...raw!, maturity }));
+      } else {
+        await assets.setAbilityAssetMaturity(uid, asset.id, maturity);
+      }
       await expect(assets.downgradeAbilityAssetMaturityForRevokedEvidence(uid, asset.id, {
         kind: 'execution', id: 'exec-gov',
       })).resolves.toMatchObject({ downgraded: false, asset: { maturity } });
@@ -403,6 +415,37 @@ describe('治理状态模型', () => {
     await expect(assets.downgradeAbilityAssetMaturityForRevokedEvidence('user-evidence-unrelated', seed.id, {
       kind: 'execution', id: 'exec-other',
     })).resolves.toMatchObject({ downgraded: false, asset: { maturity: 'transfer_validated' } });
+  });
+
+  it('普通成熟度接口只允许升档，降级必须走专用证据撤销流程', async () => {
+    const { assets } = await modules();
+    const asset = await seedAsset('user-maturity-monotonic');
+    await assets.setAbilityAssetMaturity('user-maturity-monotonic', asset.id, 'transfer_validated');
+    await expect(assets.setAbilityAssetMaturity('user-maturity-monotonic', asset.id, 'bud'))
+      .rejects.toThrow(/cannot move backwards/i);
+    await expect(assets.readAbilityAsset('user-maturity-monotonic', asset.id))
+      .resolves.toMatchObject({ maturity: 'transfer_validated' });
+    await expect(assets.listAbilityAssetAudit('user-maturity-monotonic', asset.id))
+      .resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ action: 'maturity_advanced', note: 'bud->transfer_validated' }),
+      ]));
+  });
+
+  it('普通成熟度接口在写盘前拒绝非法运行时值', async () => {
+    const { assets } = await modules();
+    const asset = await seedAsset('user-maturity-invalid');
+
+    await expect(assets.setAbilityAssetMaturity(
+      'user-maturity-invalid',
+      asset.id,
+      'stable' as never,
+    )).rejects.toThrow(/invalid ability asset maturity/i);
+    await expect(assets.readAbilityAsset('user-maturity-invalid', asset.id))
+      .resolves.toMatchObject({ maturity: 'bud' });
+    await expect(assets.listAbilityAssetAudit('user-maturity-invalid', asset.id))
+      .resolves.not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ action: 'maturity_advanced' }),
+      ]));
   });
 
   it('保留期按 deletedAt 现算，不依赖预存的到期时间', async () => {
@@ -446,7 +489,7 @@ describe('治理动作', () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate(uid, {
       judgment: 'Prefer append-only audit trails.',
-      suggestedType: 'rule', suggestedScope: 'architecture',
+      suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-act' }],
     });
     const asset = (await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' })).asset;

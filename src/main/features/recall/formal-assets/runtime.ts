@@ -15,6 +15,11 @@
  */
 
 import { resolveAssetUsePolicy, type AbilityAssetUsePolicy, type AssetPolicyInput } from './policy';
+import {
+  isAssetScopeAllowed,
+  type AssetScopeContext,
+  type RecallAbilityAssetScopePolicy,
+} from '../scope-policy';
 
 /** 准入模式。比布尔值多一档，因为 PRD 3.6 区分「只能主动选」和「可默认注入」。 */
 export type AssetRuntimeMode =
@@ -40,17 +45,16 @@ export type AssetRuntimeBlockReason =
 
 export interface AssetRuntimeCandidate extends AssetPolicyInput {
   scope: string;
+  scopePolicy?: RecallAbilityAssetScopePolicy;
   applicableWhen?: readonly string[];
   forbiddenWhen?: readonly string[];
   targetAgents?: readonly string[];
   sensitivity?: string;
 }
 
-export interface AssetRuntimeContext {
+export interface AssetRuntimeContext extends AssetScopeContext {
   /** 目的地作用域。undefined = 不限定，视为同作用域。 */
   scope?: string;
-  /** 本次运行的 Agent 标识。资产声明了 targetAgents 时用它比对。 */
-  agentId?: string;
   /** 目的地能接受的最高敏感级。声明了就必须比对。 */
   maxSensitivity?: string;
   sensitivityRank?: Readonly<Record<string, number>>;
@@ -98,6 +102,8 @@ export function evaluateAssetRuntimeEligibility(
   // 来源撤权后停止新的读取与默认注入（PRD 3.4）。
   if (context.sourceAvailable === false) reasons.push('source_unavailable');
 
+  if (!isAssetScopeAllowed(asset.scopePolicy, context)) reasons.push('scope_mismatch');
+
   // 禁止范围命中即出局，优先于适用范围——"哪里不能用"比"哪里能用"更强。
   if (matchesAnyCondition(asset.forbiddenWhen, context.taskText)) reasons.push('forbidden_context');
 
@@ -107,8 +113,8 @@ export function evaluateAssetRuntimeEligibility(
 
   // 注入白名单（PRD 3.5 target_agents）。缺失 = 没限制过，不拦；
   // 一旦声明，未列出的 Agent 就不得注入。
-  if ((asset.targetAgents?.length || 0) > 0 && context.agentId
-    && !asset.targetAgents!.includes(context.agentId)) {
+  if ((asset.targetAgents?.length || 0) > 0
+    && (!context.agentId || !asset.targetAgents!.includes(context.agentId))) {
     reasons.push('target_agent_not_allowed');
   }
 

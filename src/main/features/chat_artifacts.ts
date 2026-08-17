@@ -148,27 +148,6 @@ function notifyArtifactDirty(userId: string, cid: string, artifactId: string): v
   void artifactId;
 }
 
-function notifyArtifactDeleted(userId: string, cid: string, artifactId: string, rel: string): void {
-  void userId;
-  void cid;
-  void artifactId;
-  void rel;
-}
-
-function listArtifactFilesRel(dir: string, prefix = ''): string[] {
-  const out: string[] = [];
-  let entries: fs.Dirent[];
-  try { entries = fs.readdirSync(path.join(dir, prefix), { withFileTypes: true }); }
-  catch { return out; }
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue;
-    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) out.push(...listArtifactFilesRel(dir, rel));
-    else if (entry.isFile()) out.push(rel);
-  }
-  return out;
-}
-
 function extOf(name: string): string {
   return path.extname(name).toLowerCase();
 }
@@ -517,21 +496,25 @@ export async function purgeByCid(userId: string, cid: string): Promise<number> {
   catch { return 0; }
   const dir = chatArtifactCidDirForConversation(userId, safeConvId);
   let count = 0;
-  const deleted: Array<{ artifactId: string; rel: string }> = [];
+  let deletedArtifactIds: string[] = [];
   try {
     if (fs.existsSync(dir)) {
       try {
-        const artifactIds = fs.readdirSync(dir).filter((n) => !n.startsWith('.'));
-        count = artifactIds.length;
-        for (const artifactId of artifactIds) {
-          const artifactRoot = path.join(dir, artifactId);
-          for (const rel of listArtifactFilesRel(artifactRoot)) deleted.push({ artifactId, rel });
-        }
+        deletedArtifactIds = fs.readdirSync(dir, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory() && /^[A-Za-z0-9_-]{1,64}$/.test(entry.name))
+          .map((entry) => entry.name);
+        count = deletedArtifactIds.length;
       }
       catch { /* ignore */ }
       fs.rmSync(dir, { recursive: true, force: true });
     }
-  } catch (err) { log.warn(`purgeByCid(${cid}): ${(err as Error).message}`); }
-  for (const item of deleted) notifyArtifactDeleted(userId, safeConvId, item.artifactId, item.rel);
+  } catch (err) {
+    log.warn(`purgeByCid(${cid}): ${(err as Error).message}`);
+    return 0;
+  }
+  if (deletedArtifactIds.length) {
+    const { recordRemovedArtifacts } = await import('./recall/source-removal');
+    await recordRemovedArtifacts(userId, safeConvId, deletedArtifactIds);
+  }
   return count;
 }

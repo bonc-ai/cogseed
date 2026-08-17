@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   autoApplyCandidate: vi.fn(),
   prepareSkillDraft: vi.fn(),
   scheduleBootBackground: vi.fn(),
+  detectLocalAgents: vi.fn(),
+  runCliAgent: vi.fn(),
 }));
 
 vi.mock('../../../../src/main/features/auth', () => ({
@@ -46,6 +48,12 @@ vi.mock('../../../../src/main/features/recall/asset-service', async (importOrigi
 }));
 vi.mock('../../../../src/main/features/recall/skill-draft-service', () => ({
   prepareRecallSkillDraft: mocks.prepareSkillDraft,
+}));
+vi.mock('../../../../src/main/features/local_agents/registry', () => ({
+  detectAll: mocks.detectLocalAgents,
+}));
+vi.mock('../../../../src/main/features/local_agents/runner', () => ({
+  run: mocks.runCliAgent,
 }));
 vi.mock('../../../../src/main/util/boot_init', () => ({
   scheduleBootBackground: mocks.scheduleBootBackground,
@@ -141,6 +149,8 @@ beforeEach(() => {
     asset: { id: 'aa-auto', type: 'rule', status: 'active' },
   }));
   mocks.prepareSkillDraft.mockReset().mockResolvedValue({ status: 'draft', assetId: 'aa-promoted' });
+  mocks.detectLocalAgents.mockReset().mockResolvedValue([]);
+  mocks.runCliAgent.mockReset().mockResolvedValue({ runId: 'recall-cli', status: 'failed' });
   mocks.scheduleBootBackground.mockImplementation(() => ({
     cancel: vi.fn(),
     promise: new Promise<void>(() => {}),
@@ -180,7 +190,12 @@ describe('Recall conversation capture', () => {
       .rejects.toThrow(/paused/i);
     await expect(capture.startHistoricalRecallCapture('capture-user', 'conv-1'))
       .rejects.toThrow(/paused/i);
-    await expect(capture.runRecallCaptureNow('capture-user', queued.id)).rejects.toThrow(/paused/i);
+    await expect(capture.runRecallCaptureNow('capture-user', queued.id)).resolves.toMatchObject({
+      id: queued.id,
+      status: 'paused',
+      errorCode: 'source_paused',
+      resumeStatus: 'waiting_manual',
+    });
 
     await controls.removeCognitionSource('capture-user', source as any, false);
     await expect(capture.queueRecallCaptureFromTerminal(completedEvent)).resolves.toBeUndefined();
@@ -188,7 +203,30 @@ describe('Recall conversation capture', () => {
       .rejects.toThrow(/removed/i);
     await expect(capture.startHistoricalRecallCapture('capture-user', 'conv-1'))
       .rejects.toThrow(/removed/i);
-    await expect(capture.runRecallCaptureNow('capture-user', queued.id)).rejects.toThrow(/removed/i);
+    await expect(capture.runRecallCaptureNow('capture-user', queued.id)).resolves.toMatchObject({
+      id: queued.id,
+      status: 'paused',
+      errorCode: 'source_removed',
+    });
+  });
+
+  it('migrates legacy queued source failures to a paused task on read', async () => {
+    const capture = await captureModule();
+    const queued = await capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1');
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', queued.id, (current) => ({
+      ...current!,
+      status: 'queued',
+      errorCode: 'source_removed',
+      resumeStatus: undefined,
+    }));
+
+    await expect(capture.readRecallCapture('capture-user', queued.id)).resolves.toMatchObject({
+      status: 'paused',
+      errorCode: 'source_removed',
+      resumeStatus: 'queued',
+    });
+    await expect(capture.readRecallCapture('capture-user', queued.id)).resolves.toMatchObject({ status: 'paused' });
   });
 
   it('keeps only visible successful messages and enforces the prompt budget', async () => {
@@ -211,6 +249,35 @@ describe('Recall conversation capture', () => {
     expect(JSON.stringify(selected)).not.toContain('private internal model text');
     expect(JSON.stringify(selected)).not.toContain('private tool trace');
     expect(JSON.stringify(selected)).not.toContain('/private/attachment.txt');
+  });
+
+  it('excludes internal senders while retaining real Agent replies', async () => {
+    const capture = await captureModule();
+    const selected = capture.selectCaptureMessages([
+      { id: 'user-policy', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: 'Keep this decision.' },
+      { id: 'system-policy', ts: '2026-08-01T00:02:00.000Z', from: 'system', text: 'internal status' },
+      { id: 'tool-policy', ts: '2026-08-01T00:03:00.000Z', from: 'tool', text: 'internal tool output' },
+      { id: 'process-policy', ts: '2026-08-01T00:04:00.000Z', from: 'process', text: 'internal process output' },
+      { id: 'agent-policy', ts: '2026-08-01T00:05:00.000Z', from: 'research-agent', text: 'The reusable decision is complete.' },
+    ] as any, completedEvent.started_at_ms, completedEvent.finished_at_ms);
+
+    expect(selected.map((message) => [message.id, message.role])).toEqual([
+      ['user-policy', 'user'],
+      ['agent-policy', 'assistant'],
+    ]);
+  });
+
+  it('does not treat system, tool, or process rows as a completed manual conversation', async () => {
+    mocks.getMessages.mockResolvedValue([
+      { id: 'user-internal', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: 'Keep this decision.' },
+      { id: 'system-internal', ts: '2026-08-01T00:02:00.000Z', from: 'system', text: 'internal status' },
+      { id: 'tool-internal', ts: '2026-08-01T00:03:00.000Z', from: 'tool', text: 'internal tool output' },
+      { id: 'process-internal', ts: '2026-08-01T00:04:00.000Z', from: 'process', text: 'internal process output' },
+    ]);
+    const capture = await captureModule('manual');
+
+    await expect(capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1'))
+      .rejects.toThrow(/waiting for a response/i);
   });
 
   it('keeps second-precision messages when the terminal run starts later in the same second', async () => {
@@ -395,7 +462,7 @@ describe('Recall conversation capture', () => {
       .rejects.toThrow(/waiting for a response/i);
   });
 
-  it('starts one durable automatic write task for a selected historical snapshot', async () => {
+  it('creates one durable manual task for a selected historical snapshot', async () => {
     const capture = await captureModule();
     const [first, concurrent] = await Promise.all([
       capture.startHistoricalRecallCapture('capture-user', 'conv-1'),
@@ -409,26 +476,18 @@ describe('Recall conversation capture', () => {
       conversationTitle: 'Decision work',
       anchorMessageId: 'user-1',
       messageIds: ['user-1', 'assistant-1'],
-      status: 'queued',
+      status: 'waiting_manual',
       visibility: 'visible',
       screeningStatus: 'qualified',
       screeningSignals: ['manual_selection'],
       executionPolicy: 'manual',
-      autoWrite: true,
       lastActivityAt: '2026-08-01T00:04:00.000Z',
       attempt: 1,
     });
     expect(duplicate).toEqual(first);
     expect(await capture.listRecallCaptures('capture-user')).toHaveLength(1);
     expect(mocks.runModel).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
-      expect(mocks.scheduleBootBackground).toHaveBeenCalledWith(
-        `recall:capture:${first.id}`,
-        expect.any(Function),
-        0,
-        expect.objectContaining({ preferIdle: true, resourceClass: 'model' }),
-      );
-    });
+    expect(mocks.scheduleBootBackground).not.toHaveBeenCalled();
 
     mocks.getMessages.mockResolvedValue([
       ...messages,
@@ -437,7 +496,7 @@ describe('Recall conversation capture', () => {
     ]);
     const nextSnapshot = await capture.startHistoricalRecallCapture('capture-user', 'conv-1');
     expect(nextSnapshot.id).not.toBe(first.id);
-    expect(nextSnapshot).toMatchObject({ status: 'queued', autoWrite: true });
+    expect(nextSnapshot).toMatchObject({ status: 'waiting_manual' });
     expect(nextSnapshot.messageIds).toEqual(['user-1', 'assistant-1', 'user-2', 'assistant-2']);
     expect(await capture.listRecallCaptures('capture-user')).toHaveLength(2);
   });
@@ -790,6 +849,53 @@ describe('Recall conversation capture', () => {
     await expect(running).resolves.toMatchObject({ status: 'queued' });
     await expect(capture.readRecallCapture('capture-user', queued!.id))
       .resolves.toMatchObject({ status: 'queued' });
+  });
+
+  it('uses an available local CLI when no API model is configured', async () => {
+    mocks.configured = false;
+    mocks.detectLocalAgents.mockResolvedValue([{ type: 'claude', available: true }]);
+    mocks.runCliAgent.mockResolvedValue({
+      runId: 'recall-cli',
+      status: 'completed',
+      output: JSON.stringify({ candidates: [] }),
+    });
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    await capture.runRecallCaptureNow('capture-user', queued!.id);
+
+    await expect(capture.runRecallCapture('capture-user', queued!.id))
+      .resolves.toMatchObject({ status: 'no_candidate' });
+    expect(mocks.runCliAgent).toHaveBeenCalledWith(expect.objectContaining({
+      uid: 'capture-user',
+      cid: 'conv-1',
+      cli: 'claude',
+      signal: expect.any(AbortSignal),
+      skipDispatchCheck: true,
+    }));
+    expect(mocks.buildRunner).not.toHaveBeenCalled();
+  });
+
+  it('forwards capture cancellation to a running local CLI extraction', async () => {
+    mocks.configured = false;
+    mocks.detectLocalAgents.mockResolvedValue([{ type: 'claude', available: true }]);
+    let markCliStarted!: () => void;
+    const cliStarted = new Promise<void>((resolve) => { markCliStarted = resolve; });
+    mocks.runCliAgent.mockImplementationOnce(async ({ signal }: { signal: AbortSignal }) => {
+      markCliStarted();
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      return { runId: 'recall-cli', status: 'cancelled' };
+    });
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    await capture.runRecallCaptureNow('capture-user', queued!.id);
+    const controller = new AbortController();
+    const running = capture.runRecallCapture('capture-user', queued!.id, controller.signal);
+
+    await cliStarted;
+    controller.abort();
+
+    await expect(running).resolves.toMatchObject({ status: 'queued' });
+    expect(mocks.runCliAgent.mock.calls[0][0].signal.aborted).toBe(true);
   });
 
   it('does not let an old paused run overwrite an immediate resume', async () => {
@@ -1808,32 +1914,51 @@ describe('Recall conversation capture', () => {
     );
   });
 
-  it('preserves and reschedules a historical automatic-write task after restart', async () => {
+  it('migrates a legacy historical automatic-write wait to manual after restart', async () => {
     const capture = await captureModule('manual');
     const queued = await capture.startHistoricalRecallCapture('capture-user', 'conv-1');
-    expect(queued).toMatchObject({
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', queued.id, (current) => ({
+      ...current!,
       status: 'queued',
       executionPolicy: 'manual',
       autoWrite: true,
-    });
+    }));
 
     mocks.scheduleBootBackground.mockClear();
     vi.resetModules();
     const restarted = await captureModule('manual');
 
-    await expect(restarted.recoverRecallCaptures('capture-user')).resolves.toBe(1);
-    await expect(restarted.readRecallCapture('capture-user', queued.id)).resolves.toMatchObject({
+    await expect(restarted.recoverRecallCaptures('capture-user')).resolves.toBe(0);
+    const migrated = await restarted.readRecallCapture('capture-user', queued.id);
+    expect(migrated).toMatchObject({
+      status: 'waiting_manual',
+      executionPolicy: 'manual',
+    });
+    expect(migrated.autoWrite).toBeUndefined();
+    expect(mocks.scheduleBootBackground).not.toHaveBeenCalled();
+  });
+
+  it('migrates a legacy historical automatic-write wait before a new manual selection', async () => {
+    const capture = await captureModule('manual');
+    const queued = await capture.startHistoricalRecallCapture('capture-user', 'conv-1');
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', queued.id, (current) => ({
+      ...current!,
       status: 'queued',
       executionPolicy: 'manual',
       autoWrite: true,
-      recoveredAt: expect.any(String),
-    });
-    expect(mocks.scheduleBootBackground).toHaveBeenCalledWith(
-      `recall:capture:${queued.id}`,
-      expect.any(Function),
-      0,
-      expect.objectContaining({ preferIdle: true, resourceClass: 'model' }),
-    );
+    }));
+
+    await expect(capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1'))
+      .resolves.toMatchObject({
+        id: queued.id,
+        status: 'waiting_manual',
+        executionPolicy: 'manual',
+      });
+    await expect(capture.readRecallCapture('capture-user', queued.id))
+      .resolves.not.toHaveProperty('autoWrite');
+    expect(mocks.runModel).not.toHaveBeenCalled();
   });
 
   it('does not reschedule a terminal waiting-input state after restart', async () => {

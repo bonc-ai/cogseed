@@ -10,8 +10,12 @@ import {
 } from './context-projection';
 import type { RecallProjectionCard } from './projection-card';
 import { isCognitionSourceEnabled } from './source-control';
-import { isAssetScopeAllowed } from './scope-policy';
 import { loadCommittedProjectionKnowledge } from './projection-knowledge';
+import {
+  evaluateAssetRuntimeEligibility,
+  type AssetRuntimeContext,
+  type AssetRuntimeEligibility,
+} from './formal-assets/runtime';
 
 type ConversationMessage = {
   recall_projection_card?: Pick<RecallProjectionCard, 'projectionId'>;
@@ -44,7 +48,12 @@ export interface RecallTurnPromptInput {
   cid: string;
   taskRunId: string;
   taskText: string;
+  agentId?: string;
+  roleId?: string;
+  projectId?: string;
   workspaceId?: string;
+  conversationKind?: string;
+  fileKinds?: string[];
   committedProjectionId?: string;
   forecastId?: string;
 }
@@ -98,25 +107,52 @@ async function hasEnabledSources(userId: string, evidenceRefs: Awaited<ReturnTyp
   return true;
 }
 
+/** Runtime admission for a stored asset. Keeping this conversion in one place
+ * prevents automatic injection, manual Projection use and Commander dispatch
+ * from drifting into three subtly different governance policies. */
+export async function evaluateRecallAssetRuntimeEligibility(
+  userId: string,
+  asset: Awaited<ReturnType<typeof readAbilityAsset>>,
+  context: AssetRuntimeContext = {},
+): Promise<AssetRuntimeEligibility> {
+  const sourceAvailable = await hasEnabledSources(userId, asset.evidenceRefs);
+  return evaluateAssetRuntimeEligibility({
+    status: asset.status,
+    maturity: asset.maturity,
+    lifecycleStatus: asset.lifecycleStatus,
+    scope: asset.scope,
+    ...(asset.crossScopeConfirmedAt ? { crossScopeConfirmedAt: asset.crossScopeConfirmedAt } : {}),
+    ...(asset.scopePolicy ? { scopePolicy: asset.scopePolicy } : {}),
+    ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
+    ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
+    ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
+  }, {
+    ...context,
+    sourceAvailable,
+  });
+}
+
+function projectionRuntimeContext(
+  projection: ContextProjectionRecord,
+  base: AssetRuntimeContext,
+  silentDefaultInjection: boolean,
+): AssetRuntimeContext {
+  const purpose = [projection.purpose, base.taskText]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  return {
+    ...base,
+    ...(purpose ? { purpose } : {}),
+    silentDefaultInjection,
+  };
+}
+
 async function buildPromptContextForProjections(
   userId: string,
-  cid: string,
   projections: ProjectionForPrompt[],
+  runtimeContext: AssetRuntimeContext = {},
 ): Promise<RecallTurnPromptContext> {
-  let resolvedConversationKind: { kind?: string } | null | undefined;
-  async function conversationKind(): Promise<{ kind?: string; known: boolean }> {
-    if (resolvedConversationKind !== undefined) {
-      return { ...(resolvedConversationKind || {}), known: true };
-    }
-    try {
-      const { getConversation } = await import('../chats');
-      const conversation = await getConversation(userId, cid, null);
-      resolvedConversationKind = conversation?.kind ? { kind: conversation.kind } : null;
-    } catch {
-      resolvedConversationKind = null;
-    }
-    return { ...(resolvedConversationKind || {}), known: true };
-  }
   const records: Array<Record<string, unknown>> = [];
   const citations: RecallPromptCitation[] = [];
   const seenAssets = new Set<string>();
@@ -128,7 +164,7 @@ async function buildPromptContextForProjections(
       if (seenAssets.has(assetId) || records.length >= MAX_ASSETS) continue;
       try {
         const confirmedVersion = projection.assetVersions?.[assetId];
-        let asset: Awaited<ReturnType<typeof readAbilityAsset>> | null = null;
+        const liveAsset = await readAbilityAsset(userId, assetId);
         let snapshot: Awaited<ReturnType<typeof readAbilityAssetVersionSnapshot>> | null = null;
         if (confirmedVersion) {
           // The user confirmed this exact version. Prefer its immutable
@@ -137,33 +173,26 @@ async function buildPromptContextForProjections(
           // the live asset ONLY if it still sits on the confirmed version.
           snapshot = await readAbilityAssetVersionSnapshot(userId, assetId, confirmedVersion);
           if (!snapshot) {
-            const live = await readAbilityAsset(userId, assetId);
-            if (live.version !== confirmedVersion) continue;
-            asset = live;
+            if (liveAsset.version !== confirmedVersion) continue;
           }
-        } else {
-          // Legacy projection without a version map: live read.
-          asset = await readAbilityAsset(userId, assetId);
         }
-        const status = snapshot?.status ?? asset?.status;
-        const evidenceRefs = snapshot?.evidenceRefs ?? asset?.evidenceRefs ?? [];
-        if (status !== 'active' || !(await hasEnabledSources(userId, evidenceRefs))) continue;
-        const scopePolicy = snapshot?.scopePolicy ?? asset?.scopePolicy;
-        if (scopePolicy) {
-          const kind = await conversationKind();
-          if (!(await isAssetScopeAllowed(scopePolicy, {
-            purpose: projection.purpose,
-            workspaceId: projection.workspaceId,
-            conversationKind: kind.kind,
-            conversationKindKnown: kind.known && Boolean(kind.kind),
-          }))) continue;
-        }
-        const title = snapshot?.title ?? asset?.title ?? '';
-        const type = snapshot?.type ?? asset?.type ?? 'rule';
-        const maturity = snapshot?.maturity ?? asset?.maturity ?? 'draft';
-        const scope = snapshot?.scope ?? asset?.scope ?? '';
-        const version = confirmedVersion || asset?.version || '';
-        const statement = snapshot?.statement ?? asset?.statement ?? '';
+        // Frozen snapshots preserve the content the user confirmed. Governance
+        // is deliberately live: pausing an asset, revoking its source or
+        // tightening its scope must take effect immediately even for an older
+        // confirmed Projection.
+        const gate = await evaluateRecallAssetRuntimeEligibility(
+          userId,
+          liveAsset,
+          projectionRuntimeContext(projection, runtimeContext, matchMethod === 'semantic'),
+        );
+        if (!gate.eligible) continue;
+        const evidenceRefs = liveAsset.evidenceRefs;
+        const title = snapshot?.title ?? liveAsset.title;
+        const type = snapshot?.type ?? liveAsset.type;
+        const maturity = liveAsset.maturity;
+        const scope = snapshot?.scope ?? liveAsset.scope;
+        const version = confirmedVersion || liveAsset.version;
+        const statement = snapshot?.statement ?? liveAsset.statement;
         seenAssets.add(assetId);
         const match = matches.get(assetId);
         records.push({
@@ -173,7 +202,7 @@ async function buildPromptContextForProjections(
           asset_id: assetId,
           title: safePromptText(title, 160),
           type,
-          ...(asset?.lifecycleStatus ? { lifecycle_status: asset.lifecycleStatus } : {}),
+          lifecycle_status: liveAsset.lifecycleStatus,
           maturity,
           scope: safePromptText(scope, 500),
           version: safePromptText(version, 40),
@@ -208,21 +237,36 @@ async function buildPromptContextForProjections(
 
 async function buildPromptContextForCommittedProjection(
   userId: string,
-  projectionId: string,
-  forecastId?: string,
+  input: RecallTurnPromptInput,
 ): Promise<RecallTurnPromptContext> {
+  const projectionId = input.committedProjectionId!;
   const knowledge = await loadCommittedProjectionKnowledge(userId, projectionId);
+  const projection = await readContextProjection(userId, projectionId);
+  const abilityAssets: typeof knowledge.abilityAssets = [];
+  const liveAssets = new Map<string, Awaited<ReturnType<typeof readAbilityAsset>>>();
+  for (const frozenAsset of knowledge.abilityAssets) {
+    const liveAsset = await readAbilityAsset(userId, frozenAsset.id);
+    const gate = await evaluateRecallAssetRuntimeEligibility(
+      userId,
+      liveAsset,
+      projectionRuntimeContext(projection, input, false),
+    );
+    if (!gate.eligible) continue;
+    abilityAssets.push(frozenAsset);
+    liveAssets.set(frozenAsset.id, liveAsset);
+  }
   const records = [
-    ...knowledge.abilityAssets.map((asset) => ({
+    ...abilityAssets.map((asset) => ({
       projection_id: knowledge.projectionId,
       asset_id: asset.id,
       title: safePromptText(asset.title, 160),
       type: asset.type,
-      maturity: asset.maturity,
+      lifecycle_status: liveAssets.get(asset.id)?.lifecycleStatus,
+      maturity: liveAssets.get(asset.id)?.maturity ?? asset.maturity,
       scope: safePromptText(asset.scope, 500),
       version: asset.version,
       statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
-      source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
+      source_refs: (liveAssets.get(asset.id)?.evidenceRefs || []).map((ref) => ({ kind: ref.kind, id: ref.id })),
     })),
     // Ontology (durable personal facts) rides along as personal ability
     // assets; it is not projection-selected, so it never contributes to
@@ -242,14 +286,14 @@ async function buildPromptContextForCommittedProjection(
   const rendered = renderPromptBlock(records);
   return {
     promptBlock: rendered.block,
-    citations: knowledge.abilityAssets.slice(0, rendered.recordCount).map((asset) => ({
+    citations: abilityAssets.slice(0, rendered.recordCount).map((asset) => ({
       assetId: asset.id,
       title: safePromptText(asset.title, 160),
       type: asset.type,
       version: asset.version,
       scope: safePromptText(asset.scope, 500),
       projectionId: knowledge.projectionId,
-      ...(forecastId ? { forecastId } : {}),
+      ...(input.forecastId ? { forecastId: input.forecastId } : {}),
       matchMethod: 'manual' as const,
     })),
   };
@@ -322,7 +366,7 @@ export async function buildConfirmedProjectionPromptBlock(userId: string, cid: s
       log.warn('read confirmed projection for prompt failed', { projectionId, error: (error as Error).message });
     }
   }
-  return (await buildPromptContextForProjections(userId, cid, projections)).promptBlock;
+  return (await buildPromptContextForProjections(userId, projections)).promptBlock;
 }
 
 export async function buildRecallTurnPromptContext(
@@ -331,7 +375,7 @@ export async function buildRecallTurnPromptContext(
   options: ProjectionSemanticOptions = {},
 ): Promise<RecallTurnPromptContext> {
   if (input.committedProjectionId) {
-    return buildPromptContextForCommittedProjection(userId, input.committedProjectionId, input.forecastId);
+    return buildPromptContextForCommittedProjection(userId, input);
   }
   const projections: ProjectionForPrompt[] = [];
   let manualProjectionIds: string[] = [];
@@ -355,7 +399,12 @@ export async function buildRecallTurnPromptContext(
     const automatic = await createAutomaticContextProjection(userId, {
       taskRunId: input.taskRunId,
       taskText: input.taskText,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.roleId ? { roleId: input.roleId } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.conversationKind ? { conversationKind: input.conversationKind } : {}),
+      ...(input.fileKinds ? { fileKinds: input.fileKinds } : {}),
     }, options);
     if (automatic) projections.push({ projection: automatic, matchMethod: 'semantic' });
   } catch (error) {
@@ -364,7 +413,7 @@ export async function buildRecallTurnPromptContext(
       error: (error as Error).message,
     });
   }
-  return buildPromptContextForProjections(userId, input.cid, projections);
+  return buildPromptContextForProjections(userId, projections, input);
 }
 
 export async function _buildConfirmedProjectionPromptBlockForTest(userId: string, cid: string): Promise<string> {
@@ -389,6 +438,7 @@ export interface DispatchedAssetsPromptResult {
 export async function buildDispatchedAssetsPromptBlock(
   userId: string,
   assetIds: string[],
+  context: AssetRuntimeContext = {},
 ): Promise<DispatchedAssetsPromptResult> {
   const records: Array<Record<string, unknown>> = [];
   const granted: string[] = [];
@@ -401,7 +451,9 @@ export async function buildDispatchedAssetsPromptBlock(
     } catch {
       continue; // defensive: caller already validated, skip if gone
     }
-    if (!asset || asset.status !== 'active') continue;
+    if (!asset) continue;
+    const gate = await evaluateRecallAssetRuntimeEligibility(userId, asset, context);
+    if (!gate.eligible) continue;
     records.push({
       asset_id: asset.id,
       title: safePromptText(asset.title, 160),

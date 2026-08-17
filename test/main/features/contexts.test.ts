@@ -377,6 +377,7 @@ describe('contexts › deleteContextTarget', () => {
     const c = await loadContexts();
     const r = c.deleteContextTarget('a.md');
     expect(r.ok).toBe(true);
+    expect(r.ok && r.deletedPaths).toEqual(['a.md']);
     expect(fs.existsSync(path.join(ctxRoot(), 'a.md'))).toBe(false);
     expect(kbEnqueueCalls).toContainEqual({ userId: TEST_UID, relPath: 'a.md', op: 'delete' });
   });
@@ -387,6 +388,7 @@ describe('contexts › deleteContextTarget', () => {
     const c = await loadContexts();
     const r = c.deleteContextTarget('domain');
     expect(r.ok).toBe(true);
+    expect(r.ok && r.deletedPaths.sort()).toEqual(['domain/a.md', 'domain/b.pdf']);
     expect(fs.existsSync(path.join(ctxRoot(), 'domain'))).toBe(false);
     const deletes = kbEnqueueCalls.filter((c) => c.op === 'delete').map((c) => c.relPath).sort();
     expect(deletes).toEqual(['domain/a.md', 'domain/b.pdf']);
@@ -396,6 +398,14 @@ describe('contexts › deleteContextTarget', () => {
     const c = await loadContexts();
     const r = c.deleteContextTarget('missing.md');
     expect(r.ok).toBe(false);
+  });
+
+  it('refuses to delete the Context root', async () => {
+    const c = await loadContexts();
+    const r = c.deleteContextTarget('');
+    expect(r.ok).toBe(false);
+    expect(r).toMatchObject({ code: 'E_CONTEXTS_ROOT' });
+    expect(fs.existsSync(ctxRoot())).toBe(true);
   });
 
   it('refuses to touch _INDEX.md', async () => {

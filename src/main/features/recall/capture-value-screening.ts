@@ -463,7 +463,7 @@ export function assessRecallCandidateClassification(
     // PRD 3.1 要求 RuleAsset 确认适用与禁止范围。自动线目前拿不到这两个值，
     // 如何处置由 Q1 决定，这里先如实记录，不阻断（避免在决策前改变产能）。
     const hasBoundary = (boundaries.applicableWhen?.length || 0) > 0
-      || (boundaries.forbiddenWhen?.length || 0) > 0;
+      && (boundaries.forbiddenWhen?.length || 0) > 0;
     if (!hasBoundary) pushUnique(advisoryReasons, 'rule_missing_boundary');
   }
 
