@@ -535,15 +535,20 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('已完成');
     expect(host.innerHTML).toContain('候选审核已完成：2 个已入库，1 个已拒绝');
     expect(host.innerHTML).toContain('class="recall-capture-asset-receipts"');
-    expect(host.innerHTML).toContain('asset_id');
+    // 卡片主位放用户读得懂的资产名；本地查不到这条资产时才退回 id（这个夹具
+    // 没有对应的 assets，因此退回 id）。数据库列名不再直接摊给用户看。
+    expect(host.innerHTML).not.toContain('>asset_id<');
+    // 审核决策编号是晋升的幂等键，对用户不可点也不可查，不再上屏——但字段仍要
+    // 读，`_captureConfirmedAssetReceipts` 的去重键依赖它。
+    expect(host.innerHTML).not.toContain('审核决策编号');
+    expect(host.innerHTML).not.toContain('rd_capture00000000');
     expect(host.innerHTML).toContain('asset-a');
     expect(host.innerHTML).toContain('asset-b');
     expect(host.innerHTML).toContain('规则与偏好');
     expect(host.innerHTML).toContain('project');
     expect(host.innerHTML).toContain('<dt>来源引用</dt><dd>2</dd>');
-    expect(host.innerHTML).toContain('review_decision_id');
-    expect(host.innerHTML).toContain('rd_capture00000000');
-    expect(host.innerHTML).toContain('rd_capture00000001');
+
+    expect(host.innerHTML).not.toContain('rd_capture00000001');
     expect(host.innerHTML).toContain('data-recall-open-asset="asset-a"');
     expect(host.innerHTML).toContain('data-recall-open-asset="asset-b"');
     expect(host.innerHTML).toContain('data-recall-capture-action="view-assets"');
@@ -2629,7 +2634,7 @@ describe('Recall cognition renderer flow', () => {
         ? { ok: true, items: [
           { id: 'e-use', kind: 'usage_recorded', occurredAt: '2026-08-14T10:00:00.000Z', refs: { assetId: 'a-1' } },
           { id: 'e-transfer', kind: 'transfer_completed', status: 'succeeded', occurredAt: '2026-08-15T10:00:00.000Z', refs: { assetId: 'a-1' } },
-          { id: 'e-effect', kind: 'effectiveness_recorded', status: 'better', occurredAt: '2026-08-16T10:00:00.000Z', refs: { assetId: 'a-1' } },
+          { id: 'e-effect', kind: 'effectiveness_recorded', status: 'valid', outcome: 'better', occurredAt: '2026-08-16T10:00:00.000Z', refs: { assetId: 'a-1' } },
           { id: 'e-degraded', kind: 'transfer_completed', status: 'degraded', occurredAt: '2026-08-13T10:00:00.000Z', refs: { assetId: 'a-1' } },
         ] }
         : { ok: true, receipts: [] }),

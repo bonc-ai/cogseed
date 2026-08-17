@@ -44,8 +44,16 @@
 .recall-proof-event:first-child { border-top: 0; }
 .recall-proof-event:not(:last-child)::before { position: absolute; top: 24px; bottom: -14px; left: 5px; width: 1px; background: color-mix(in srgb, var(--primary, #0E9F6E) 22%, var(--border, #e5e7eb)); content: ''; }
 .recall-proof-marker { position: relative; z-index: 1; width: 9px; height: 9px; margin-top: 5px; border: 2px solid var(--card, #fff); border-radius: 999px; background: var(--primary, #0E9F6E); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary, #0E9F6E) 40%, var(--border, #e5e7eb)); }
-.recall-proof-event.is-effectiveness_recorded .recall-proof-marker { background: var(--success, #15803d); }
-.recall-proof-event.is-transfer_completed .recall-proof-marker { background: var(--warning, #d97706); }
+/* 标记点按**结果**着色，不按事件种类。按种类上色时「需要修正」「出现负面
+   影响」也会画成绿点，等于用颜色说了一句与文字相反的结论。 */
+.recall-proof-event.is-tone-good .recall-proof-marker { background: var(--success, #15803d); }
+.recall-proof-event.is-tone-warn .recall-proof-marker { background: var(--warning, #d97706); }
+.recall-proof-event.is-tone-bad .recall-proof-marker { background: var(--danger, #b42318); }
+.recall-proof-event.is-tone-neutral .recall-proof-marker { background: var(--muted-fg, #6b7280); }
+/* 已评价的那一行不给首次评价控件，改为陈述已形成的结论。 */
+.recall-proof-rating.is-rated .recall-proof-rating-conclusion { display: grid; gap: 5px; }
+.recall-proof-rating.is-rated .recall-proof-outcome { color: var(--fg, #111827); font-size: 12px; font-weight: 600; }
+.recall-proof-rating.is-rated p { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .recall-proof-event-body { display: grid; min-width: 0; gap: 4px; }
 .recall-proof-outcome { color: var(--fg, #111827); font-size: 12px; font-weight: 650; line-height: 1.45; }
 .recall-proof-summary { margin: 0; overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }

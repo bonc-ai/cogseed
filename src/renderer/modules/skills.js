@@ -1014,14 +1014,21 @@ function _captureAssetReceiptDetail(capture) {
     const type = receipt.assetType ? _abilityAssetCategoryLabel(receipt.assetType) : notRecorded;
     const version = receipt.version || notRecorded;
     const scope = receipt.scope ? _abilityAssetScopeLabel(receipt.scope) : notRecorded;
-    const decision = receipt.reviewDecisionId || notRecorded;
+    // 标题主位放**用户读得懂的资产名**，不放 id。资产列表这一页已经加载过，
+    // 按 assetId 查得到就用它的显示名；查不到才退回 id——那说明这条资产已被
+    // 清除或还没同步过来，此时 id 是仅剩的可核对信息。
+    // `reviewDecisionId` 不再上屏：它是晋升的幂等键（主进程用它和 candidateId
+    // 一起哈希出 assetId / handoff 回执 id），对用户既不可点也不可查。字段仍要
+    // 读——`_captureConfirmedAssetReceipts` 的去重键依赖它——只是不展示。
+    const known = (Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [])
+      .find((item) => item && item.id === receipt.assetId);
+    const displayTitle = known ? _abilityAssetDisplayTitle(known) : receipt.assetId;
     return `<article class="recall-capture-asset-receipt">
-      <div class="recall-capture-asset-receipt-head"><span><b>asset_id</b><code>${escapeHtml(receipt.assetId)}</code></span><em>${escapeHtml(type)}</em></div>
+      <div class="recall-capture-asset-receipt-head"><span><b>${escapeHtml(displayTitle)}</b>${known ? `<code>${escapeHtml(receipt.assetId)}</code>` : ''}</span><em>${escapeHtml(type)}</em></div>
       <dl>
         <div><dt>${escapeHtml(_cognitionText('cognition.version', '版本'))}</dt><dd>${escapeHtml(version)}</dd></div>
         <div><dt>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}</dt><dd>${escapeHtml(scope)}</dd></div>
         <div><dt>${escapeHtml(_cognitionText('cognition.source_refs', '来源引用'))}</dt><dd>${escapeHtml(String(receipt.sourceRefCount))}</dd></div>
-        <div class="is-decision"><dt>review_decision_id</dt><dd><code>${escapeHtml(decision)}</code></dd></div>
       </dl>
       <button type="button" class="btn btn-sm" data-recall-open-asset="${escapeHtml(receipt.assetId)}">${escapeHtml(_cognitionText('cognition.capture_view_assets', '查看记忆'))}</button>
     </article>`;
@@ -1896,15 +1903,69 @@ function _cognitionProofOutcomeLabel(item) {
     return _cognitionText('cognition.proof_rejected', '未能带入');
   }
   if (item.kind === 'effectiveness_recorded') {
-    if (status === 'better') return _cognitionText('cognition.proof_effective', '使用结果有效');
-    if (status === 'no_improvement') return _cognitionText('cognition.proof_no_diff', '未产生明显差异');
-    if (status === 'worse') return _cognitionText('cognition.proof_negative', '出现负面影响');
-    if (status === 'rework') return _cognitionText('cognition.proof_rework', '需要修正');
-    if (status === 'insufficient_evidence') return _cognitionText('cognition.proof_degraded', 'Evidence 不足');
+    // 结论在 `outcome` 上，不在 `status` 上。效果证明记录里 `status` 是
+    // `outcome !== 'invalid'` 的派生量（proof-service.ts:180），没有独立语义，
+    // 因此不能拿它当结论词表的键——早先这里读 status，永远拿到 'valid'，
+    // 匹配全部落空，整行退回英文原文（"Effectiveness recorded"）。
+    const outcome = String(item.outcome || '');
+    if (outcome === 'better') return _cognitionText('cognition.proof_effective', '使用结果有效');
+    if (outcome === 'no_improvement') return _cognitionText('cognition.proof_no_diff', '未产生明显差异');
+    if (outcome === 'worse') return _cognitionText('cognition.proof_negative', '出现负面影响');
+    if (outcome === 'rework') return _cognitionText('cognition.proof_rework', '需要修正');
+    // `invalid` 与 `insufficient_evidence` 在产品里是同一句话「Evidence 不足」
+    // （评价按钮 invalid 的标签就是它），区别只在于前者是用户明说、后者是
+    // 系统在"点了有效却没有可追溯对比"时自动降级。不要在这里发明第三种说法。
+    if (outcome === 'insufficient_evidence' || outcome === 'invalid') {
+      return _cognitionText('cognition.proof_degraded', 'Evidence 不足');
+    }
+    return '';
   }
   if (item.kind === 'usage_recorded') return _cognitionText('cognition.proof_used', '被引用');
   if (item.kind === 'projection_confirmed') return _cognitionText('cognition.proof_projected', '已带入本次任务');
   return '';
+}
+
+/**
+ * 效果证明里**用户真正写下的观察**。没有就返回空。
+ *
+ * `observedResult` 是个双关字段（effectiveness-feedback.ts:34）：用户写了备注就
+ * 存备注，没写就存一句合成的 `User feedback: <feedback>`。而当前评价入口（四个
+ * 按钮）根本不收备注，所以实机落盘的几乎全是那句合成串。
+ *
+ * 把它印在「这次复用的效果结论」下面会有两个问题：它是英文的内部占位串，且它
+ * 表达的信息和上面那行结论词完全重复。这里识别出合成串并丢掉——宁可只显示结论，
+ * 也不要拿系统自己生成的回声冒充用户的观察。
+ */
+function _cognitionProofUserObservation(event) {
+  const summary = String(event && event.summary || '').trim();
+  if (!summary) return '';
+  return /^user feedback:\s*\S+$/i.test(summary) ? '' : summary;
+}
+
+/**
+ * 一条记录的色调按**结果**给，不按事件种类给。
+ *
+ * 之前标记点是按 kind 上色的：只要是 effectiveness_recorded 就画成绿色。于是
+ * 用户点了「需要修正」「出现负面影响」，时间线上照样是一个绿点——视觉上在说
+ * 「这次有效」，正好和这一页"不把被使用说成已验证"的立意相反。
+ */
+function _cognitionProofOutcomeTone(item) {
+  const status = String(item && item.status || '');
+  if (item.kind === 'transfer_completed') {
+    if (status === 'succeeded') return 'good';
+    if (status === 'degraded') return 'warn';
+    return 'bad';
+  }
+  if (item.kind === 'effectiveness_recorded') {
+    const outcome = String(item.outcome || '');
+    if (outcome === 'better') return 'good';
+    if (outcome === 'worse') return 'bad';
+    if (outcome === 'rework' || outcome === 'no_improvement') return 'warn';
+    // Evidence 不足（invalid / insufficient_evidence）：既不是好也不是坏，
+    // 上中性色，不要用绿色替这次复用背书。
+    return 'neutral';
+  }
+  return 'neutral';
 }
 
 /**
@@ -1952,9 +2013,18 @@ function _renderProofChainStrip(asset, event, receipt) {
 function _renderProofEventDetail(asset, event, receipt) {
   if (!event) return '';
   const refs = event.refs || {};
-  const feedbackTarget = refs.transferProofId
-    ? `data-recall-proof-feedback-proof="${escapeHtml(refs.transferProofId)}"`
-    : refs.taskRunId ? `data-recall-proof-feedback-task="${escapeHtml(refs.taskRunId)}"` : '';
+  // 效果评价这一行**本身就是评价结果**，不再挂首次评价控件。挂了会出现两个
+  // 后果：一是"给一条评价再评一次价"在语义上说不通；二是每点一次就再落一条
+  // 效果证明，同一次复用能攒出几条互相矛盾的结论（实机观测：4 秒内
+  // positive / positive / rework 三条并存，全部留在链上）。
+  // 首次评价只从 transfer_completed（以及尚未评价的使用记录）进入。
+  // 将来要支持改评价，另做「修改评价」语义，而不是复用这套首次评价控件。
+  const alreadyRated = event.kind === 'effectiveness_recorded';
+  const feedbackTarget = alreadyRated
+    ? ''
+    : refs.transferProofId
+      ? `data-recall-proof-feedback-proof="${escapeHtml(refs.transferProofId)}"`
+      : refs.taskRunId ? `data-recall-proof-feedback-task="${escapeHtml(refs.taskRunId)}"` : '';
   // 没有可归属的证明或任务时不显示评价按钮：评价必须落到一条具体的证明上，
   // 否则这次点击不知道该写给谁。
   const rating = feedbackTarget
@@ -1964,6 +2034,12 @@ function _renderProofEventDetail(asset, event, receipt) {
       ['neutral', 'cognition.proof_no_diff', '未产生明显差异'],
       ['invalid', 'cognition.proof_degraded', 'Evidence 不足'],
     ].map(([value, key, fallback]) => `<button type="button" class="btn btn-sm" ${feedbackTarget} data-recall-proof-feedback="${value}">${escapeHtml(_cognitionText(key, fallback))}</button>`).join('')}</div></div>`
+    : '';
+  // 已评价的那一行改为**只陈述已形成的结论**：结论词 + 用户当时写下的观察。
+  // 这一段替代原来的评价控件，让"这条已经有结论了"本身成为可读信息，而不是
+  // 留一块空白让人以为详情没渲染出来。
+  const ratedSummary = alreadyRated
+    ? `<div class="recall-proof-rating is-rated"><strong>${escapeHtml(_cognitionText('cognition.proof_rating_result', '这次复用的效果结论'))}</strong><div class="recall-proof-rating-conclusion"><span class="recall-proof-outcome">${escapeHtml(_cognitionProofOutcomeLabel(event) || _cognitionText('cognition.not_recorded', '未记录'))}</span>${_cognitionProofUserObservation(event) ? `<p>${escapeHtml(_cognitionProofUserObservation(event))}</p>` : ''}</div></div>`
     : '';
 
   const receiptTitle = _cognitionText('cognition.proof_receipt_title', 'Context Reuse Receipt');
@@ -1992,7 +2068,7 @@ function _renderProofEventDetail(asset, event, receipt) {
     </div>`;
   }
 
-  return `<div class="recall-proof-detail">${_renderProofChainStrip(asset, event, receipt)}${receiptBlock}${rating}</div>`;
+  return `<div class="recall-proof-detail">${_renderProofChainStrip(asset, event, receipt)}${receiptBlock}${rating}${ratedSummary}</div>`;
 }
 
 async function renderSkillsCognitionProofs() {
@@ -2036,10 +2112,15 @@ async function renderSkillsCognitionProofs() {
       (item) => item.kind === 'usage_recorded' || item.kind === 'projection_confirmed'],
     ['transferred', 'cognition.proofs_filter_transferred', '传递已证明',
       (item) => item.kind === 'transfer_completed' && item.status === 'succeeded'],
+    // 效果层读 `outcome` 而不是 `status`：效果证明的 status 是
+    // `outcome !== 'invalid'` 的派生量，恒为 'valid'/'invalid'，拿它比 'better'
+    // 永远为假——这一格因此在用户已经点过「带入正确」之后仍然显示 0。
     ['effective', 'cognition.proofs_filter_effective', '效果已验证',
-      (item) => item.kind === 'effectiveness_recorded' && item.status === 'better'],
+      (item) => item.kind === 'effectiveness_recorded' && item.outcome === 'better'],
     ['insufficient', 'cognition.proofs_filter_insufficient', 'Evidence 不足',
-      (item) => item.status === 'degraded' || item.status === 'insufficient_evidence'],
+      (item) => (item.kind === 'transfer_completed' && item.status === 'degraded')
+        || (item.kind === 'effectiveness_recorded'
+          && (item.outcome === 'insufficient_evidence' || item.outcome === 'invalid'))],
   ];
   const activeFilter = proofFilters.some(([id]) => id === _skillsCognitionState.proofFilter)
     ? _skillsCognitionState.proofFilter : 'all';
@@ -2098,10 +2179,30 @@ async function renderSkillsCognitionProofs() {
   const sections = [...byAsset.entries()].map(([assetId, entries]) => {
     entries.sort((a, b) => String(b.occurredAt || '').localeCompare(String(a.occurredAt || '')));
     const title = titleById.get(assetId) || assetId;
+    // 效果证明不直接持有回执号——回执挂在它指向的那条迁移证明上。这里按
+    // transferProofId 走一跳把回执解析出来，而不是让 timeline 把 receiptId 抄
+    // 到效果证明里：抄过去就等于断言"效果证明直接持有一张回执"，Receipt →
+    // Transfer → Effectiveness 三段关系会被拍平成一段，之后谁都说不清这张回执
+    // 到底证明的是"带入"还是"有用"。
+    const receiptIdByTransferProof = new Map(entries
+      .filter((item) => item.kind === 'transfer_completed' && item.refs?.transferProofId && item.refs?.usageReceiptId)
+      .map((item) => [String(item.refs.transferProofId), String(item.refs.usageReceiptId)]));
+    const receiptIdForItem = (item) => {
+      const refs = item.refs || {};
+      if (refs.usageReceiptId) return String(refs.usageReceiptId);
+      if (item.kind !== 'effectiveness_recorded' || !refs.transferProofId) return '';
+      return receiptIdByTransferProof.get(String(refs.transferProofId)) || '';
+    };
     const rows = entries.slice(0, 20).map((item) => {
       const outcome = _cognitionProofOutcomeLabel(item);
       const refs = item.refs || {};
-      const hasReceipt = receiptById.has(String(refs.usageReceiptId || ''));
+      const receiptId = receiptIdForItem(item);
+      const hasReceipt = receiptById.has(receiptId);
+      // 效果证明的 summary 多半是合成的 `User feedback: <feedback>`——英文内部
+      // 占位串，且和左边的结论词重复。只在它确实是用户写下的观察时才显示。
+      const rowSummary = item.kind === 'effectiveness_recorded'
+        ? _cognitionProofUserObservation(item)
+        : (item.summary || item.title || '');
       const meta = [
         refs.taskRunId ? `${escapeHtml(_cognitionText('cognition.proof_task', '任务'))} ${escapeHtml(refs.taskRunId)}` : '',
         refs.version ? `v${escapeHtml(refs.version)}` : '',
@@ -2110,12 +2211,12 @@ async function renderSkillsCognitionProofs() {
       const isOpen = selected && item.id === selected.id;
       // 展开区就挂在这一行下面——证明这件事要求视线不离开被证明的那一行。
       const detail = isOpen
-        ? _renderProofEventDetail(assets.find((asset) => asset.id === assetId), item, receiptById.get(String(refs.usageReceiptId || '')))
+        ? _renderProofEventDetail(assets.find((asset) => asset.id === assetId), item, receiptById.get(receiptId))
         : '';
       return `<div class="recall-proof-entry${isOpen ? ' is-open' : ''}">
-        <button type="button" class="recall-proof-event is-${escapeHtml(item.kind || 'event')}" data-recall-proof-event="${escapeHtml(item.id)}" aria-expanded="${isOpen ? 'true' : 'false'}">
+        <button type="button" class="recall-proof-event is-${escapeHtml(item.kind || 'event')} is-tone-${escapeHtml(_cognitionProofOutcomeTone(item))}" data-recall-proof-event="${escapeHtml(item.id)}" aria-expanded="${isOpen ? 'true' : 'false'}">
           <span class="recall-proof-marker" aria-hidden="true"></span>
-          <span class="recall-proof-event-body"><strong class="recall-proof-outcome">${escapeHtml(outcome || item.title || item.kind)}</strong>${item.summary || item.title ? `<span class="recall-proof-summary">${escapeHtml(item.summary || item.title || '')}</span>` : ''}${meta ? `<span class="recall-proof-meta">${meta}</span>` : ''}</span>
+          <span class="recall-proof-event-body"><strong class="recall-proof-outcome">${escapeHtml(outcome || item.title || item.kind)}</strong>${rowSummary ? `<span class="recall-proof-summary">${escapeHtml(rowSummary)}</span>` : ''}${meta ? `<span class="recall-proof-meta">${meta}</span>` : ''}</span>
           <time class="recall-proof-time">${escapeHtml(_cognitionDate(item.occurredAt))}</time>
         </button>${detail}
       </div>`;
