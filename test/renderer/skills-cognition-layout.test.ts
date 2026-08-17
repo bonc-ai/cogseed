@@ -3,10 +3,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf-8');
+const skillsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
 const recallCss = [
   fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8'),
   fs.readFileSync(path.join(__dirname, '../../src/renderer/recall-local.css'), 'utf-8'),
 ].join('\n');
+const recallLocalCss = fs.readFileSync(path.join(__dirname, '../../src/renderer/recall-local.css'), 'utf-8');
 
 /**
  * 取出一个顶层函数的函数体文本。断言"某个面板出现在哪个视图里"必须限定到
@@ -80,7 +82,9 @@ describe('Recall cognition workspace layout', () => {
       expect(html).not.toContain(`data-cognition-page="${excluded}"`);
       expect(html).not.toContain(`data-cognition-page-body="${excluded}"`);
     }
-    expect(html).toContain('id="skills-cognition-capture-review-body"');
+    // The review host is rendered after the history picker so the primary flow
+    // reads: select history -> review candidate pool -> inspect task log.
+    expect(skillsSource).toContain('id="skills-cognition-capture-review-body"');
   });
 
   it('does not ship the removed hidden Recall page implementations', () => {
@@ -140,6 +144,42 @@ describe('Recall cognition workspace layout', () => {
     ]) expect(skills).toContain(key);
   });
 
+  it('applies the task-oriented hierarchy inside all four views without adding a parallel data path', () => {
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
+    const bindings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8');
+
+    expect(skills).toContain('function _renderCognitionTaskHero');
+    for (const [view, key] of [
+      ['renderSkillsCognitionInbox', 'cognition.inbox_title'],
+      ['renderSkillsCognitionAssets', 'cognition.assets_title'],
+      ['renderSkillsCognitionProofs', 'cognition.proofs_title'],
+      ['renderSkillsCognitionGovernance', 'cognition.governance_title'],
+    ]) {
+      expect(sliceFunction(skills, view)).toContain(key);
+    }
+
+    const proofs = sliceFunction(skills, 'renderSkillsCognitionProofs');
+    expect(proofs).toContain('recall-proof-timeline');
+    expect(proofs).toContain('recall-proof-event');
+    expect(proofs).toContain("item.kind === 'effectiveness_recorded'");
+
+    const governance = sliceFunction(skills, 'renderSkillsCognitionGovernance');
+    expect(governance).toContain('cognition-governance-workbench');
+    expect(governance).toContain('cognition-governance-asset-list');
+    expect(governance).toContain('data-cognition-governance-action');
+    expect(governance).toContain('_recallAssetActions(selected.status)');
+    expect(governance).toContain('_renderRecallAssetHistory(selected.id)');
+    expect(governance).toContain('_renderRecallAssetChain(selected.id)');
+    expect(bindings).toContain("window.cogseed.invoke('recall.assets.versions'");
+    expect(bindings).toContain("window.cogseed.invoke('recall.assets.rollback'");
+    expect(bindings).toContain('[data-cognition-governance-action]');
+    expect(bindings).toContain('[data-cognition-governance-select]');
+
+    expect(recallCss).toContain('.cognition-task-hero');
+    expect(recallCss).toContain('.recall-proof-timeline');
+    expect(recallCss).toContain('.cognition-governance-workbench');
+  });
+
   // 任务视图回答"用户来这里要做什么"；来源是输入配置、沉淀活动是后台加工
   // 进度，两者都不是任务，降为页头辅助入口。它们打开的仍是同一批 page body。
   it('keeps sources and capture activity as header entries, not task tabs', () => {
@@ -157,6 +197,7 @@ describe('Recall cognition workspace layout', () => {
     const headerStart = html.indexOf('class="skills-cognition-header"');
     const headerHtml = html.slice(headerStart, html.indexOf('</header>', headerStart));
     expect(headerHtml).toContain('cognition-aux-entry');
+    expect(headerHtml).toContain('class="skills-cognition-header-actions"');
     expect(headerHtml).not.toContain('role="tab"');
   });
 
@@ -206,20 +247,38 @@ describe('Recall cognition workspace layout', () => {
     const surfaceHtml = html.slice(surfaceStart, surfaceEnd);
     expect(surfaceHtml).toContain('class="skills-cognition-header"');
     expect(surfaceHtml).toContain('class="skills-cognition-workspace"');
-    expect(surfaceHtml).toContain('class="skills-cognition-main"');
+    expect(surfaceHtml).toContain('class="skills-cognition-main" id="skills-cognition-main" tabindex="0"');
     expect(surfaceHtml).toContain('id="skills-cognition-tabs"');
     expect(surfaceHtml).toContain('id="skills-cognition-assets"');
   });
 
-  it('places Recall navigation in a horizontal top bar', () => {
+  it('presents the four user workflows as a task-card navigation shell', () => {
     const css = recallCss;
+    const navStart = html.indexOf('id="skills-cognition-tabs"');
+    const navHtml = html.slice(navStart, html.indexOf('</nav>', navStart));
+    expect(html).toContain('class="skills-cognition-heading"');
+    expect(html).toContain('class="skills-cognition-header-actions"');
+    expect(html).toContain('data-i18n="cognition.workspace_eyebrow"');
+    expect(navHtml).toContain('data-i18n-aria-label="cognition.task_views"');
+    for (const key of ['inbox_desc', 'my_assets_desc', 'proofs_desc', 'governance_desc']) {
+      expect(navHtml).toContain(`data-i18n="cognition.${key}"`);
+    }
     expect(css).toMatch(/\.skills-cognition-workspace\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s);
-    expect(css).toMatch(/\.skills-cognition-tabs\s*\{[^}]*display:\s*flex;[^}]*overflow-x:\s*auto;[^}]*border-bottom:/s);
-    expect(css).toMatch(/\.skills-cognition-tab-group\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s);
+    expect(css).toMatch(/\.skills-cognition-tabs\s*\{[^}]*display:\s*block;[^}]*border-bottom:/s);
+    expect(css).toMatch(/\.skills-cognition-tab-group\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(4,/s);
     expect(css).toMatch(/\.skills-cognition-tab-group-label\s*\{[^}]*display:\s*none;/s);
-    expect(css).toMatch(/\.skills-cognition-tab\.is-active\s*\{[^}]*inset 0 -2px 0/s);
-    expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.skills-cognition-surface \.skills-cognition-tabs\s*\{[^}]*flex-wrap:\s*nowrap;/);
-    expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.skills-cognition-surface \.skills-cognition-tab \.ui-icon\s*\{[^}]*display:\s*none;/);
+    expect(css).toMatch(/\.skills-cognition-tab\.is-active\s*\{[^}]*inset 3px 0 0/s);
+    expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.skills-cognition-tab-group\s*\{[^}]*grid-template-columns:\s*repeat\(2,/);
+    expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.skills-cognition-surface \.skills-cognition-tab \.ui-icon\s*\{[^}]*display:\s*inline-block;/);
+    expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.skills-cognition-surface \.skills-cognition-tabs\s*\{[^}]*overflow-x:\s*auto;/);
+    expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.skills-cognition-tab-group\s*\{[^}]*display:\s*flex;/);
+  });
+
+  it('keeps the main Recall content scrollable without a competing page-level scroller', () => {
+    expect(recallLocalCss).toMatch(/\.skills-cognition-main\s*\{[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*scroll;[^}]*overscroll-behavior:\s*auto;/s);
+    expect(recallLocalCss).toMatch(/\.skills-cognition-page\s*\{[^}]*min-height:\s*100%;[^}]*height:\s*auto;[^}]*overflow:\s*visible;/s);
+    expect(recallLocalCss).toContain('#skills-cognition-assets { overflow: visible; }');
+    expect(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8')).toContain('Find scrollable');
   });
 
 
@@ -246,29 +305,43 @@ describe('Recall cognition workspace layout', () => {
     expect(css).toContain('height: fit-content');
   });
 
-  it('scrolls the combined page while keeping the formal memory list independently scrollable on desktop', () => {
+  it('bounds the template and asset panes while handing edge scrolling back to the page', () => {
     const css = recallCss;
     const desktopStart = css.indexOf('@media (min-width: 901px)');
     const desktopEnd = css.indexOf('@media (max-width: 900px)', desktopStart);
     const desktopRules = css.slice(desktopStart, desktopEnd);
-    expect(desktopRules).toContain('#skills-cognition-assets { overflow-x: hidden; overflow-y: auto; }');
-    expect(desktopRules).toContain('#skills-cognition-assets-body { height: min(620px, calc(100vh - 184px)); min-height: 520px; }');
+    expect(html).toContain('class="panel skills-embedded-panel recall-personal-ontology-frame"');
+    expect(recallCss).toMatch(/\.recall-personal-ontology-frame\s*\{[^}]*height:\s*clamp\(420px, calc\(100dvh - 300px\), 580px\);[^}]*overflow:\s*hidden;/s);
+    expect(recallCss).toMatch(/@media \(max-width: 720px\)[\s\S]*?\.recall-personal-ontology-frame\s*\{[^}]*height:\s*max\(360px, calc\(100dvh - 160px\)\);[^}]*max-height:\s*680px;/);
+    expect(recallCss).toMatch(/\.recall-personal-ontology-frame \.personal-onto-modal\s*\{[^}]*max-height:\s*min\(720px, calc\(100dvh - 48px\)\);[^}]*overflow/s);
+    expect(recallCss).toMatch(/\.recall-personal-ontology-frame \.personal-onto-library-list\s*\{[^}]*max-height:\s*none;[^}]*overscroll-behavior:\s*auto;/s);
+    expect(recallCss).toMatch(/#skills-cognition-assets\s*\{[^}]*overflow-x:\s*hidden;[^}]*overscroll-behavior:\s*auto;/s);
+    expect(desktopRules).toContain('#skills-cognition-assets-body { height: clamp(420px, calc(100dvh - 250px), 620px); min-height: 0; }');
     expect(desktopRules).toMatch(/\.ability-asset-list-body\s*\{[\s\S]*overflow-y:\s*auto;/);
     expect(desktopRules).toMatch(/\.ability-asset-detail\s*\{[\s\S]*height:\s*100%;/);
-    expect(desktopRules).toContain('overscroll-behavior: contain');
+    expect(desktopRules).toContain('overscroll-behavior: auto');
+    expect(desktopRules).toContain('scrollbar-gutter: stable');
+    expect(recallLocalCss).toMatch(/\.recall-personal-ontology-frame \.personal-onto-nav,[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior:\s*auto;/);
   });
 
-  it('keeps the cognition asset header compact and removes the personal tag surface', () => {
+  it('uses a task-oriented cognition header and removes the personal tag surface', () => {
     const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
     const zh = JSON.parse(fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/zh.json'), 'utf-8'));
     expect(html).toContain('<h1 data-i18n="cognition.title">认知资产</h1>');
+    expect(html).toContain('data-i18n="cognition.workspace_eyebrow"');
     expect(zh['cognition.title']).toBe('认知资产');
-    expect(recallCss).toMatch(/\.skills-cognition-header\s*\{[^}]*min-height:\s*48px;[^}]*padding:\s*6px 20px;/s);
-    expect(recallCss).toMatch(/\.skills-cognition-header h1\s*\{[^}]*font-size:\s*16px;/s);
+    expect(zh['cognition.subtitle']).toContain('管理资产');
+    expect(recallCss).toMatch(/\.skills-cognition-header\s*\{[^}]*padding:\s*24px 28px 20px;/s);
+    expect(recallCss).toMatch(/\.skills-cognition-header h1\s*\{[^}]*font-size:\s*24px;/s);
     expect(recallCss).not.toContain('.ability-profile-');
     expect(recallCss).not.toContain('.ability-personal-memory-');
     expect(skills).not.toContain("window.cogseed.invoke('personalOntology.profile.summary'");
     expect(skills).not.toContain('data-personal-ontology-manage');
+  });
+
+  it('bounds expanded execution and evaluation source records inside their own scroller', () => {
+    expect(recallLocalCss).toMatch(/\.recall-source-group-advanced \.recall-source-items\s*\{[^}]*max-height:\s*clamp\(240px, calc\(100dvh - 300px\), 420px\);[^}]*overflow-y:\s*auto;[^}]*overscroll-behavior:\s*auto;/s);
+    expect(recallLocalCss).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.recall-source-group-advanced \.recall-source-items\s*\{\s*max-height:\s*clamp\(220px, calc\(100dvh - 260px\), 320px\);/);
   });
 
   /**
@@ -344,10 +417,24 @@ describe('Recall cognition workspace layout', () => {
     expect(skills).not.toContain("window.cogseed.invoke('recall.views.list'");
   });
 
-  it('ships capture feedback in every renderer locale', () => {
+  it('ships the task shell and capture feedback in every renderer locale', () => {
     for (const locale of ['en', 'zh', 'ja', 'pt']) {
       const messages = JSON.parse(fs.readFileSync(path.join(__dirname, `../../src/renderer/locales/${locale}.json`), 'utf-8'));
       for (const key of [
+        'cognition.workspace_eyebrow',
+        'cognition.task_views',
+        'cognition.inbox_desc',
+        'cognition.inbox_title',
+        'cognition.inbox_confirm_now',
+        'cognition.my_assets_desc',
+        'cognition.assets_title',
+        'cognition.proofs_desc',
+        'cognition.proofs_title',
+        'cognition.proofs_assets_covered',
+        'cognition.governance_desc',
+        'cognition.governance_title',
+        'cognition.governance_use_control',
+        'cognition.governance_asset_body',
         'cognition.source_status',
         'cognition.source_conversation',
         'cognition.source_artifact_file',

@@ -1,14 +1,7 @@
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
-
-import { safeId } from '../../storage';
 import { listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, readAbilityAsset } from './asset-service';
 import { listContextProjections, readContextProjection } from './context-projection';
-import { listTransferProofs, type TransferProofRecord } from './proof-service';
+import { listEffectivenessProofs, listTransferProofs, type TransferProofRecord } from './proof-service';
 import { listRecallUsage } from './usage-service';
-import { readRecallJsonRecord } from './store';
-import { recallJsonRecordPath } from './paths';
-import type { RecallJsonRecord } from './types';
 
 export type RecallAssetTimelineKind =
   | 'asset_created'
@@ -46,48 +39,6 @@ export interface RecallAssetTimelineItem {
   };
 }
 
-interface RecallEffectivenessProofRecord extends RecallJsonRecord {
-  transferProofId: string;
-  outcome: string;
-  status: string;
-  observedResult: string;
-  evidenceRefs: unknown[];
-  recommendedAction?: string;
-  createdAt: string;
-}
-
-function asEffectiveness(value: RecallJsonRecord): RecallEffectivenessProofRecord {
-  if (
-    typeof value.transferProofId !== 'string' ||
-    typeof value.outcome !== 'string' ||
-    typeof value.status !== 'string' ||
-    typeof value.observedResult !== 'string' ||
-    !Array.isArray(value.evidenceRefs) ||
-    typeof value.createdAt !== 'string'
-  ) throw new Error('malformed effectiveness proof');
-  return value as RecallEffectivenessProofRecord;
-}
-
-async function listEffectivenessProofs(userId: string): Promise<RecallEffectivenessProofRecord[]> {
-  const directory = path.dirname(recallJsonRecordPath(userId, 'effectiveness-proofs', 'placeholder'));
-  let names: string[];
-  try {
-    names = await fs.readdir(directory);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
-  }
-
-  const records = await Promise.all(
-    names
-      .filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5)))
-      .map(async (name) => readRecallJsonRecord(userId, 'effectiveness-proofs', name.slice(0, -5))),
-  );
-
-  return records.filter((record): record is RecallJsonRecord => Boolean(record)).map(asEffectiveness)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
 function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
   switch (kind) {
     case 'asset_created': return 'Asset created';
@@ -110,6 +61,37 @@ function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
   }
 }
 
+/**
+ * Audit actions are append-only data and can outlive the renderer's original
+ * vocabulary. Keep the timeline readable when a newer governance action is
+ * present, and ignore genuinely malformed legacy rows instead of producing an
+ * item with an undefined kind that crashes the final sort.
+ */
+function auditTimelineKind(action: unknown): RecallAssetTimelineKind | undefined {
+  switch (action) {
+    case 'created': return 'asset_created';
+    case 'updated': return 'asset_updated';
+    case 'paused': return 'asset_paused';
+    case 'resumed': return 'asset_resumed';
+    case 'revoked': return 'asset_revoked';
+    case 'archived': return 'asset_archived';
+    case 'deleted': return 'asset_deleted';
+    case 'purged': return 'asset_purged';
+    case 'restored': return 'asset_restored';
+    case 'rolled_back': return 'asset_rolled_back';
+    case 'maturity_downgraded': return 'asset_maturity_downgraded';
+    case 'pause_recommended':
+    case 'rework_recommended':
+    case 'recommendation_cleared':
+    case 'cross_scope_confirmed':
+    case 'cross_scope_withdrawn':
+    case 'maturity_advanced':
+    case 'maturity_corrected':
+      return 'asset_updated';
+    default: return undefined;
+  }
+}
+
 function pushSorted(items: RecallAssetTimelineItem[], item: RecallAssetTimelineItem): void {
   items.push(item);
 }
@@ -119,22 +101,9 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
   const items: RecallAssetTimelineItem[] = [];
 
   for (const audit of await listAbilityAssetAudit(userId, assetId)) {
-    const kind: RecallAssetTimelineKind = ({
-      created: 'asset_created',
-      updated: 'asset_updated',
-      paused: 'asset_paused',
-      resumed: 'asset_resumed',
-      revoked: 'asset_revoked',
-      archived: 'asset_archived',
-      deleted: 'asset_deleted',
-      purged: 'asset_purged',
-      restored: 'asset_restored',
-      rolled_back: 'asset_rolled_back',
-      maturity_downgraded: 'asset_maturity_downgraded',
-      pause_recommended: 'asset_updated',
-      rework_recommended: 'asset_updated',
-      recommendation_cleared: 'asset_updated',
-    } as const)[audit.action];
+    const kind = auditTimelineKind(audit.action);
+    if (!kind || typeof audit.id !== 'string' || !audit.id
+      || typeof audit.at !== 'string' || Number.isNaN(Date.parse(audit.at))) continue;
     pushSorted(items, {
       id: audit.id,
       kind,

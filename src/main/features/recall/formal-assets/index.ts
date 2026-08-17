@@ -21,6 +21,22 @@ export {
   type PromotionValidation,
 } from './promotion';
 export {
+  buildAssetVersionDiffs,
+  diffAssetSnapshots,
+  latestAssetVersionDiff,
+  type AssetChangeKind,
+  type AssetFieldChange,
+  type AssetVersionDiff,
+} from './version-diff';
+export {
+  buildCognitionInbox,
+  type CognitionInboxCandidate,
+  type CognitionInboxInput,
+  type CognitionInboxItem,
+  type CognitionInboxKind,
+  type CognitionInboxUrgency,
+} from './inbox';
+export {
   allowsSilentDefaultInjection,
   isTransferVerified,
   isUserConfirmed,

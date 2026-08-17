@@ -5,6 +5,7 @@ import * as path from 'node:path';
 
 let tmp: string;
 let previous: string | undefined;
+const RULE_BOUNDARY = { applicableWhen: ['reviewing governed work'], forbiddenWhen: ['outside the review scope'] };
 beforeEach(() => {
   vi.resetModules();
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-recall-terminal-proof-'));
@@ -51,6 +52,7 @@ async function confirmedProjection(taskRunId: string) {
     judgment: 'Use confirmed evidence in task reviews.',
     summary: 'Use confirmed evidence',
     suggestedType: 'rule',
+    ...RULE_BOUNDARY,
     suggestedScope: 'review',
     sourceRefs: [{ kind: 'execution', id: `exec-${taskRunId}` }],
   });
@@ -119,8 +121,7 @@ describe('Recall terminal transfer proof handler', () => {
       finished_at_ms: 2,
     });
 
-    expect(result).toMatchObject({ handled: true, proof: { status: 'succeeded' } });
-    expect(result.handled && result.proof.receiptId).toBeTruthy();
+    expect(result).toMatchObject({ handled: true, proof: { status: 'succeeded', receiptId: expect.any(String), receiptExecutionId: 'turn-t1' } });
     const advanced = (await assets.listAbilityAssets('user-a')).find((a) => a.id === asset.id);
     expect(advanced?.maturity).toBe('transfer_validated');
     expect((await proofs.listTransferProofs('user-a')).some((p) => p.receiptId)).toBe(true);
@@ -171,6 +172,48 @@ describe('Recall terminal transfer proof handler', () => {
     // ……提交投影里本轮没被加载的资产不升档（投影只是治理记录，不是证明锚点）。
     const untouched = (await assets.listAbilityAssets('user-a')).find((a) => a.id === asset.id);
     expect(untouched?.maturity).not.toBe('transfer_validated');
+  });
+
+  it('advances maturity when multiple receipts jointly cover the projected assets (union, not single-receipt full cover)', async () => {
+    // B4 回归场景：多回合任务每回合注入不同资产 → 回执分散。chen 版要求单张
+    // 回执覆盖全部 assetVersions → 永不升档。并集判定：全部资产被任一回执
+    // 覆盖即算迁移证明成立。
+    const { asset, projection } = await confirmedProjection('run-union-receipts');
+    const { candidates } = await modules();
+    const other = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Second asset injected in a later turn of the same run.',
+      summary: 'Second asset',
+      suggestedType: 'rule',
+      suggestedScope: 'review',
+      sourceRefs: [{ kind: 'execution', id: 'exec-run-union-receipts' }],
+    });
+    const { asset: otherAsset } = await candidates.promoteRecallCandidate('user-a', other.id, { actor: 'user' });
+    const { terminalProof, assets, proofs } = await modules();
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    // 回合 1 只注入 asset；回合 2 只注入 otherAsset——两张回执各覆盖一半。
+    await receipts.prepareReceipt('user-a', {
+      executionId: 'turn-union-1', targetSessionId: 'gconv-cid-union',
+      reusedRefs: [asset.id], omittedRefs: [],
+      permissionMode: 'read-only', allowedScopes: ['cognition:projection'], boundary: 'real',
+    }, { sessionId: 'gconv-cid-union' });
+    await receipts.prepareReceipt('user-a', {
+      executionId: 'turn-union-2', targetSessionId: 'gconv-cid-union',
+      reusedRefs: [otherAsset.id], omittedRefs: [],
+      permissionMode: 'read-only', allowedScopes: ['cognition:projection'], boundary: 'real',
+    }, { sessionId: 'gconv-cid-union' });
+
+    const result = await terminalProof.handleRecallTaskTerminal({
+      run_id: 'run-union-receipts', user_id: 'user-a', conversation_id: 'cid-union',
+      status: 'completed' as const, projection_id: projection.id,
+      reuse_turn_ids: ['union-1', 'union-2'],
+      started_at_ms: 1, finished_at_ms: 2,
+    });
+
+    expect(result).toMatchObject({ handled: true, proof: { status: 'succeeded', receiptId: expect.any(String) } });
+    const assetsList = await assets.listAbilityAssets('user-a');
+    expect(assetsList.find((a) => a.id === asset.id)?.maturity).toBe('transfer_validated');
+    expect(assetsList.find((a) => a.id === otherAsset.id)?.maturity).toBe('transfer_validated');
+    expect((await proofs.listTransferProofs('user-a')).some((p) => p.receiptId)).toBe(true);
   });
 
   it('ignores a receipt that covers no existing asset', async () => {

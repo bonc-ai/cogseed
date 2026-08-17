@@ -64,13 +64,18 @@ function normalizeList(value: unknown, field: keyof RecallAbilityAssetScopePolic
 export interface AssetScopeContext {
   /** Projection purpose (matched against purposeTags). */
   purpose?: string;
-  /** Projection/workspace id (matched against workspaceIds/projectIds). */
+  /** Target Agent id (matched against agentIds). */
+  agentId?: string;
+  /** Target role id (matched against roleIds). */
+  roleId?: string;
+  /** Project id (matched against projectIds). */
+  projectId?: string;
+  /** Workspace/space id (matched against workspaceIds). */
   workspaceId?: string;
   /** Conversation kind (matched against conversationKinds). */
   conversationKind?: string;
-  /** True when the conversation kind was actually resolved; unknown kinds
-   *  pass a conversationKinds restriction instead of failing closed. */
-  conversationKindKnown?: boolean;
+  /** File kinds present in this run (matched against fileKinds). */
+  fileKinds?: readonly string[];
 }
 
 /** Single whole-word token matcher used by BOTH asset.scope terms and
@@ -140,27 +145,46 @@ export function scopeIncludes(scope: string, text: string): boolean {
   return splitScopeTerms(scope).some((token) => scopeTokenMatches(textTokens, token));
 }
 
-/** Structured scope-policy gate. Unknown workspace dimensions are treated as
- *  "not allowed" when the policy restricts them (fail-closed); an unknown
- *  conversation kind passes the conversationKinds restriction (fail-open,
- *  M7) so non-standard conversations are not silently excluded. */
+/** One allow-list dimension with three-state semantics:
+ *
+ *   undefined  unrestricted
+ *   []         deny all
+ *   [a, b]     require a known matching value
+ *
+ * Unknown runtime context is deliberately fail-closed once an asset declares
+ * a restriction. Otherwise callers can bypass a policy simply by omitting the
+ * corresponding context field. */
+function allowsScalar(allowed: readonly string[] | undefined, actual: string | undefined): boolean {
+  if (allowed === undefined) return true;
+  if (!allowed.length || actual === undefined) return false;
+  return allowed.includes(actual);
+}
+
+function allowsFiles(allowed: readonly string[] | undefined, actual: readonly string[] | undefined): boolean {
+  if (allowed === undefined) return true;
+  if (!allowed.length || !actual?.length) return false;
+  // A mixed input must stay inside the declared boundary; one allowed file
+  // must not smuggle a second, disallowed kind into the same run.
+  return actual.every((kind) => allowed.includes(kind));
+}
+
+/** Structured scope-policy gate. All declared dimensions are combined with
+ * AND semantics and use the same fail-closed three-state rule. */
 export function isAssetScopeAllowed(
   policy: RecallAbilityAssetScopePolicy | undefined,
   context: AssetScopeContext,
 ): boolean {
   if (!policy) return true;
-  if (policy.purposeTags?.length && !policy.purposeTags.some((tag) => matchesScopeToken(context.purpose, tag))) {
-    return false;
+  if (policy.purposeTags !== undefined) {
+    if (policy.purposeTags.length === 0) return false;
+    if (!policy.purposeTags.some((tag) => matchesScopeToken(context.purpose, tag))) return false;
   }
-  const hasWorkspaceRestriction = Boolean(policy.workspaceIds?.length || policy.projectIds?.length);
-  if (hasWorkspaceRestriction && !context.workspaceId) return false;
-  if (policy.workspaceIds?.length && !policy.workspaceIds.includes(context.workspaceId!)) return false;
-  if (policy.projectIds?.length && !policy.projectIds.includes(context.workspaceId!)) return false;
-  if (
-    policy.conversationKinds?.length
-    && (context.conversationKindKnown ?? true)
-    && !policy.conversationKinds.includes(context.conversationKind || '')
-  ) return false;
+  if (!allowsScalar(policy.agentIds, context.agentId)) return false;
+  if (!allowsScalar(policy.roleIds, context.roleId)) return false;
+  if (!allowsScalar(policy.projectIds, context.projectId)) return false;
+  if (!allowsScalar(policy.workspaceIds, context.workspaceId)) return false;
+  if (!allowsScalar(policy.conversationKinds, context.conversationKind)) return false;
+  if (!allowsFiles(policy.fileKinds, context.fileKinds)) return false;
   return true;
 }
 

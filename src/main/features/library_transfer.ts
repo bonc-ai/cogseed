@@ -125,7 +125,11 @@ async function copyInto(
   return { ok: true, fileCount: copied.fileCount, bytes: copied.bytes };
 }
 
-async function deleteFrom(userId: string, ref: LibraryRef, rel: string): Promise<{ ok: boolean; error?: string }> {
+async function deleteFrom(
+  userId: string,
+  ref: LibraryRef,
+  rel: string,
+): Promise<{ ok: boolean; error?: string; deletedPaths?: string[] }> {
   if (ref.scope === 'global') return contexts.deleteContextTarget(rel);
   return spaceFiles.deleteSpaceEntry(userId, ref.spaceId!, rel);
 }
@@ -213,6 +217,10 @@ export async function transferLibraryEntries(
           error: rollback.ok ? 'source_delete_failed' : 'rollback_failed',
         });
         continue;
+      }
+      if (source.scope === 'global' && removed.deletedPaths?.length) {
+        const { recordRemovedContextFiles } = await import('./recall/source-removal');
+        await recordRemovedContextFiles(userId, removed.deletedPaths);
       }
     }
     results.push({

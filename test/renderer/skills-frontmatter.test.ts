@@ -416,8 +416,8 @@ describe('skills renderer frontmatter parsing', () => {
 
     expect(body.innerHTML).toContain('ability-assets-workbench');
     expect(body.innerHTML).not.toContain('证据摘要');
-    expect(body.innerHTML).toContain('规则与判断');
-    expect(body.innerHTML).toContain('可复用方法');
+    expect(body.innerHTML).toContain('规则与偏好');
+    expect(body.innerHTML).toContain('技能与方法');
     expect(body.innerHTML).toContain('P3394产品决策治理规则');
     // 成熟度按 PRD 3.6 的用户侧表达，不再露出内部枚举名或园艺隐喻。
     // 第一条 transfer_validated → 已成功带入；第二条 status=candidate 还没被
@@ -547,8 +547,11 @@ describe('skills renderer frontmatter parsing', () => {
 
     context.renderSkillsCognitionAssets();
 
+    // 守的是"过期的 assetView='tree' 不能顶掉可用的列表视图"。认知树本身现在
+    // 是一个独立页面，资产页上的入口链接是正当的——所以这里断言的是那个已被
+    // 移除的内嵌树视图不再出现，而不是「认知树」这三个字不许出现。
     expect(body.innerHTML).not.toContain('ability-assets-tree-page');
-    expect(body.innerHTML).not.toContain('认知树');
+    expect(body.innerHTML).not.toContain('cognition-tree-leaf');
     expect(body.innerHTML).toContain('ability-assets-management');
     expect(body.innerHTML).toContain('搜索能力资产');
   });

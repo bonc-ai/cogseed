@@ -5,6 +5,7 @@ import * as path from 'node:path';
 
 let tmpDir: string;
 let previousRoot: string | undefined;
+const RULE_BOUNDARY = { applicableWhen: ['recording architecture decisions'], forbiddenWhen: ['outside architecture work'] };
 
 beforeEach(() => {
   vi.resetModules();
@@ -69,6 +70,7 @@ describe('Recall source controls', () => {
     const matchingCandidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Record architecture decisions.',
       suggestedType: 'rule',
+      ...RULE_BOUNDARY,
       suggestedScope: 'architecture',
       sourceRefs: [conversationSource],
     });
@@ -100,6 +102,7 @@ describe('Recall source controls', () => {
     const candidate = await candidates.saveRecallCandidate('user-a', {
       judgment: 'Record architecture decisions.',
       suggestedType: 'rule',
+      ...RULE_BOUNDARY,
       suggestedScope: 'architecture',
       sourceRefs: [
         conversationSource,

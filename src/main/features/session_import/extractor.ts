@@ -9,7 +9,7 @@
  *                         user can continue without carrying the raw history
  *                         (avoids blowing the context window).
  *   - `personal[]`      — "关于我" candidate facts (preferences, background)
- *   - `rules[]`         — "规则与判断" candidate rules the user set/corrected
+ *   - `rules[]`         — "规则与偏好" candidate rules the user set/corrected
  *   - `templates[]`     — "模板与范例" reusable artifacts/formats observed
  *
  * The three cognition arrays map 1:1 onto Recall's AbilityAssetType values
