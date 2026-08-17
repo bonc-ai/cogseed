@@ -58,4 +58,31 @@ describe('workspace role picks (1 primary + up to 2 secondary)', () => {
     expect(spacesSource).not.toContain('function _openCreateModal');
     expect(spacesSource).not.toContain('function _templateName');
   });
+
+  it('unions role-template bundles into the create-modal task/skill display', () => {
+    // 修复：选多个角色（主+副）后，创建弹窗摘要与能力弹窗必须显示**全部已选角色
+    // 模板 bundle 的并集** + 手动 extra，而不是只显示初始预填的单一模板 bundle。
+    const start = wsSource.indexOf('/** 已选角色（主+副）模板 bundle 并集 + 手动 extra 的合并视图');
+    expect(start).toBeGreaterThan(-1);
+    const fn = wsSource.slice(start, start + 700);
+    expect(fn).toContain('function _abilityPicksWithBundle(kind)');
+    // 并集来源 = 全部已选角色模板（不是 _createTemplate 单模板）
+    expect(fn).toContain('_templates.filter((t) => roles.includes(t.template_id))');
+    // 内置项在前、手动 extra 在后；手动项不重复
+    expect(fn).toContain('[...bundle, ...manual]');
+    expect(fn).toContain('(_abilityPicks[kind] || []).filter((id) => !bundle.has(id))');
+    // 摘要区（_renderCreateModal）与能力弹窗（_renderAbilityModal）都走合并视图
+    const createModalStart = wsSource.indexOf('function _renderCreateModal()');
+    const createBody = wsSource.slice(createModalStart, createModalStart + 1500);
+    expect(createBody).toContain("_abilityPicksWithBundle('task')");
+    expect(createBody).toContain("_abilityPicksWithBundle('skill')");
+    const abilityStart = wsSource.indexOf('function _renderAbilityModal()');
+    const abilityBody = wsSource.slice(abilityStart, abilityStart + 1500);
+    expect(abilityBody).toContain("kind === 'role' ? (_abilityPicks.role || []) : _abilityPicksWithBundle(kind)");
+    // 提交层语义保持：bundle 内置项由后端派生，extra 只写手动勾选项（防回退）
+    const createSpaceStart = wsSource.indexOf('async function _createSpace()');
+    const createSpaceBody = wsSource.slice(createSpaceStart, createSpaceStart + 1500);
+    expect(createSpaceBody).toContain('(_abilityPicks.skill || []).filter((id) => !bundleSkills.has(id))');
+    expect(createSpaceBody).toContain('(_abilityPicks.task || []).filter((id) => !bundleAgents.has(id))');
+  });
 });
