@@ -29,6 +29,16 @@ export interface RecallAssetTimelineItem {
   title: string;
   summary?: string;
   status?: string;
+  /**
+   * 效果评价的**结论**（better / no_improvement / worse / rework /
+   * insufficient_evidence / invalid）。
+   *
+   * 必须和 `status` 分开带：效果证明记录里 `status` 只回答"这次评价本身可不可
+   * 归因"（valid / invalid），结论在 `outcome` 上。此前只带 status，渲染层拿
+   * 'valid' 去匹配结论词表永远落空，于是退回英文原文，页面上显示成
+   * "Effectiveness recorded / User feedback: rework"。
+   */
+  outcome?: string;
   refs?: {
     assetId?: string;
     version?: string;
@@ -202,8 +212,13 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       title: itemTitle('effectiveness_recorded'),
       summary: proof.observedResult,
       status: proof.status,
+      outcome: proof.outcome,
       refs: {
         assetId: asset.id,
+        // 只带自己这条记录真正持有的引用。回执号属于**迁移证明**，效果证明是
+        // 通过 transferProofId 指向它的——在这里顺手把 receiptId 抄过来，等于
+        // 断言"效果证明直接持有一张回执"，把 Receipt → Transfer → Effectiveness
+        // 三段关系拍成一段。要核对回执，消费方顺着 transferProofId 走一跳。
         transferProofId: proof.transferProofId,
         projectionId: transfer.projectionId,
       },
