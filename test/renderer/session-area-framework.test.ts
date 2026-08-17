@@ -22,14 +22,9 @@ describe('9.1 unified framework · compact result blocks (middle)', () => {
     expect(conversationSource).toContain('chat-result-block-body');
   });
 
-  it('wraps artifacts inside a compact result block instead of mounting them bare', () => {
-    const start = conversationSource.indexOf("if (role === 'assistant' && Array.isArray(message.artifacts)");
-    const end = conversationSource.indexOf('\n  if (producedPaths)', start);
-    const blockSource = conversationSource.slice(start, end);
-
-    expect(blockSource).toContain("_mountCompactResultBlock(bubble");
-    expect(blockSource).toContain("t('chat.result_block.artifact')");
-    expect(blockSource).toContain('count: message.artifacts.length');
+  it('mounts artifacts via the shared artifact mount helper', () => {
+    expect(conversationSource).toContain("if (role === 'assistant' && Array.isArray(message.artifacts)");
+    expect(conversationSource).toContain('window.mountMessageArtifacts(bubble, message.artifacts');
   });
 
   it('wraps source references and teaching receipts in an evidence result block', () => {
@@ -38,7 +33,7 @@ describe('9.1 unified framework · compact result blocks (middle)', () => {
     expect(conversationSource).toContain('evidenceRefCount + evidenceReceiptCount');
     // 证据块默认展开（open: true），证据不能被折叠藏起来。
     expect(conversationSource).toContain('icon: \'link\',');
-    const bubbleLine = conversationSource.split('\n').find((l) => l.includes('chat-bubble">${planAnnHtml}${evidenceHtml}'));
+    const bubbleLine = conversationSource.split('\n').find((l) => l.includes('chat-bubble">') && l.includes('${evidenceHtml}'));
     expect(bubbleLine).toBeTruthy();
   });
 
@@ -52,14 +47,12 @@ describe('9.1 unified framework · compact result blocks (middle)', () => {
     expect(fnSource).toContain('open: true');
   });
 
-  it('wraps KSTAR review, expense forms, recall projection and marketplace requests in result blocks', () => {
-    expect(conversationSource).toContain("t('chat.result_block.kstar_review')");
-    expect(conversationSource).toContain("t('chat.result_block.expense_setup')");
-    expect(conversationSource).toContain("t('chat.result_block.expense_submit')");
-    expect(conversationSource).toContain("t('chat.result_block.recall_projection')");
-    expect(conversationSource).toContain("t('chat.result_block.marketplace')");
-    // Pending (needs-human-confirmation) blocks default to open.
-    expect(conversationSource).toContain("open: String(message.kstar_review_card.status || 'pending') === 'pending'");
+  it('mounts kstar review, expense setup and marketplace requests (recall simplified)', () => {
+    expect(conversationSource).toContain('chat-kstar-review chat-kstar-result-review');
+    expect(conversationSource).toContain('window.mountExpenseSetupCard(bubble');
+    expect(conversationSource).toContain('function _mountMarketplaceInstallRequests');
+    // recall_projection 已按产品决策简化为普通文本呈现，不再渲染结果块卡片。
+    expect(conversationSource).toContain('仅以普通文本呈现');
   });
 
   it('styles the compact result block in the shared stylesheet', () => {
@@ -69,52 +62,19 @@ describe('9.1 unified framework · compact result blocks (middle)', () => {
   });
 });
 
-describe('9.1 unified framework · bottom zone (continue + risk)', () => {
-  it('renders a continue button next to the send button in the composer', () => {
-    expect(indexSource).toContain('id="chat-continue-btn"');
-    expect(indexSource).toContain('data-i18n="chat.continue"');
-    const sendPos = indexSource.indexOf('id="chat-send-btn"');
-    const continuePos = indexSource.indexOf('id="chat-continue-btn"');
-    expect(continuePos).toBeGreaterThan(-1);
-    expect(sendPos).toBeGreaterThan(continuePos);
-  });
-
-  it('binds the continue button to send the localized continue prompt', () => {
-    expect(conversationSource).toContain("getElementById('chat-continue-btn')");
-    expect(conversationSource).toContain("t('chat.continue_prompt')");
-    expect(conversationSource).toContain('await sendInCurrentConversation(content)');
-    // 主会话控制器 bindInput=false，继续按钮必须单独接线而非挂在通用控制器。
-    expect(conversationSource).toContain('function _bindChatContinueButton');
-  });
-
-  it('turns the continue button into a retry button when the last exchange failed', () => {
-    expect(conversationSource).toContain('function _chatContinueButtonState');
-    expect(conversationSource).toContain("dataset.failed === '1'");
-    expect(conversationSource).toContain('_retryFailedAssistantMessage(state.failedMsgEl, null)');
-    expect(conversationSource).toContain("continueBtn.classList.toggle('is-retry', isRetry)");
-    expect(indexSource).toContain('data-role="continue-label"');
-  });
-
-  it('shows continue only while the executor is idle', () => {
-    const start = conversationSource.indexOf('function _updateConvSendUI');
-    const end = conversationSource.indexOf('\n/** Show / hide a banner', start);
-    const sendUi = conversationSource.slice(start, end);
-    expect(sendUi).toContain('continueBtn.hidden = pending');
-    expect(sendUi).toContain('continueBtn.disabled = pending');
-  });
-
-  it('labels the composer pending area as the risk zone', () => {
-    expect(conversationSource).toContain("t('chat.risk_zone')");
-    expect(styleSource).toContain('.chat-wake-pending-title');
+describe('9.1 unified framework · bottom zone', () => {
+  it('uses the wake-pending host for the composer pending area', () => {
+    expect(conversationSource).toContain('chat-wake-pending-host');
+    expect(styleSource).toContain('.chat-wake-pending-host');
   });
 });
 
 describe('9.1 unified framework · left zone (tasks & sessions)', () => {
-  it('paints a running badge for conversations with in-flight executors', () => {
-    expect(conversationSource).toContain("badge.classList.add('is-running')");
-    expect(conversationSource).toContain("t('chat.status.running')");
-    expect(conversationSource).toContain('const inFlight = (_latestInFlight.get(cid) || []).length;');
-    expect(styleSource).toContain('.conv-status-badge.is-running');
+  it('keeps the sidebar row free of inline status badges (design decision)', () => {
+    // 用户设计确认：侧栏行内无装饰状态（不显示进行中/排队徽标），
+    // 仅保留全局运行计数与任务状态行（运行中/排队/计划进度）。
+    expect(conversationSource).toContain('侧栏行不显示「进行中/排队」徽标');
+    expect(conversationSource).not.toContain("badge.classList.add('is-running')");
   });
 
   it('aggregates a task status line (running / queued / plan progress) per conversation', () => {
@@ -137,21 +97,13 @@ describe('9.1 unified framework · left zone (tasks & sessions)', () => {
 });
 
 describe('9.1 unified framework · locale coverage', () => {
-  it('defines the new keys in all four renderer languages', () => {
+  it('defines the active keys in all four renderer languages', () => {
     const keys = [
-      'chat.continue',
-      'chat.continue_prompt',
-      'chat.risk_zone',
+      'chat.retry_btn',
       'chat.status.running',
       'chat.task_plan_label',
-      'chat.result_block.artifact',
       'chat.result_block.evidence',
       'chat.result_block.receipt',
-      'chat.result_block.marketplace',
-      'chat.result_block.kstar_review',
-      'chat.result_block.expense_setup',
-      'chat.result_block.expense_submit',
-      'chat.result_block.recall_projection',
     ];
     for (const locale of ['en', 'zh', 'ja', 'pt']) {
       const data = JSON.parse(readFileSync(

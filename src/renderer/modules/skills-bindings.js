@@ -824,6 +824,32 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const skillDecision = event.target.closest('[data-cognition-skill-decision]');
+    if (skillDecision) {
+      const decision = skillDecision.dataset.cognitionSkillDecision || '';
+      const assetId = skillDecision.dataset.cognitionSkillAsset || '';
+      const draftHash = skillDecision.dataset.cognitionSkillDraftHash || '';
+      if (!assetId || !draftHash || !['accept', 'defer', 'reject'].includes(decision) || skillDecision.dataset.busy === '1') return;
+      const messageKey = decision === 'accept' ? 'cognition.skillupdate_accept_confirm'
+        : decision === 'defer' ? 'cognition.skillupdate_defer_confirm' : 'cognition.skillupdate_reject_confirm';
+      const fallback = decision === 'accept' ? '确认接受这次 Skill 升级？'
+        : decision === 'defer' ? '暂缓这次升级，保留当前版本？' : '拒绝这次升级？';
+      if (typeof uiConfirm === 'function' && !(await uiConfirm(_cognitionText(messageKey, fallback)))) return;
+      skillDecision.dataset.busy = '1'; skillDecision.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.skills.decide', { assetId, draftHash, decision });
+        if (!result?.ok) throw new Error(result?.error || 'skill decision failed');
+        if (typeof uiToast === 'function') uiToast(_cognitionText(`cognition.skillupdate_${decision}_done`, decision === 'accept' ? 'Skill 已升级' : decision === 'defer' ? '已暂缓升级' : '已拒绝本次升级'), { variant: 'success' });
+        const current = _skillsCognitionState.skillUpdate || {};
+        await loadCognitionSkillUpdate(assetId, current.skillId || '');
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        skillDecision.dataset.busy = '0'; skillDecision.disabled = false;
+      }
+      return;
+    }
+
     // Skill 版本回滚走真实通道（cognition.skills.rollback）。回滚会改变下一次
     // 匹配任务实际使用的版本，所以先确认——这一步不可由一次误点完成。
     const skillRollback = event.target.closest('[data-cognition-skill-rollback]');
@@ -831,14 +857,41 @@ function _initSkillsCognitionBindings() {
       const skillId = skillRollback.dataset.cognitionSkillRollback || '';
       const version = skillRollback.dataset.cognitionSkillVersion || '';
       if (!skillId || !version || skillRollback.dataset.busy === '1') return;
+      let rollbackPreview;
+      try {
+        const previewResult = await window.cogseed.invoke('cognition.skills.rollback.preview', { skillId, version });
+        if (!previewResult?.ok) throw new Error(previewResult?.error || 'skill rollback preview failed');
+        rollbackPreview = previewResult.preview;
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+        return;
+      }
       const message = _cognitionText(
         'cognition.skillupdate_rollback_confirm',
         '回滚后，下一次匹配任务将使用 v{v}；更高版本仍然保留，历史结果不会被修改。确认回滚？',
-      ).replace('{v}', version);
+      ).replace('{v}', version)
+        + `\n\n${rollbackPreview?.rollbackScope === 'skill_md_only'
+          ? _cognitionText('cognition.skillupdate_rollback_legacy_scope', '这是旧版本记录，只会恢复 SKILL.md，不会恢复其他文件；本次会生成新的兼容版本。')
+          : _cognitionText('cognition.skillupdate_rollback_full_scope', '将恢复完整 Skill 文件树，新增、删除和脚本变化都会纳入新版本。')}`
+        + (rollbackPreview?.diff
+          ? `\n${_cognitionText('cognition.skillupdate_rollback_diff_summary', '文件变化：新增 {a}，修改 {m}，删除 {d}。')
+            .replace('{a}', String(rollbackPreview.diff.added || 0))
+            .replace('{m}', String(rollbackPreview.diff.modified || 0))
+            .replace('{d}', String(rollbackPreview.diff.deleted || 0))}`
+          : '')
+        + (rollbackPreview?.nextVersion
+          ? `\n${_cognitionText('cognition.skillupdate_rollback_new_version', '确认后生成新版本 v{v}。').replace('{v}', rollbackPreview.nextVersion)}`
+          : '');
       if (typeof uiConfirm !== 'function' || !(await uiConfirm(message))) return;
       skillRollback.dataset.busy = '1'; skillRollback.disabled = true;
       try {
-        const result = await window.cogseed.invoke('cognition.skills.rollback', { skillId, version });
+        const result = await window.cogseed.invoke('cognition.skills.rollback', {
+          skillId,
+          version,
+          ...(rollbackPreview?.currentManifestHash ? { expectedManifestHash: rollbackPreview.currentManifestHash } : {}),
+          ...(rollbackPreview?.currentRevisionId ? { expectedRevisionId: rollbackPreview.currentRevisionId } : {}),
+          ...(rollbackPreview?.rollbackScope === 'skill_md_only' ? { allowPartialLegacy: true } : {}),
+        });
         if (!result?.ok) throw new Error(result?.error || 'skill rollback failed');
         if (typeof uiToast === 'function') {
           uiToast(_cognitionText('cognition.skillupdate_rollback_done', '已回滚到 v{v}').replace('{v}', version), { variant: 'success' });

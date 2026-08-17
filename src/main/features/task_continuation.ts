@@ -218,11 +218,11 @@ export async function ensureProjectBrief(
 
   try {
     const { run: runCliAgent } = await import('./local_agents/runner');
-    const { detectAll } = await import('./local_agents/registry');
-    const entries = await detectAll();
-    const available = entries.filter((e) => e && e.available);
-    if (!available.length) return snapshot;
-    const chosen = available.find((e) => e.type === 'claude') ?? available[0];
+    const { pickBestCliForFallback } = await import('./local_agents/fallback-picker');
+    // 与聊天降级同规则：优先 Claude Code → 已登录 CLI → 任意可用；
+    // 跳过本地代理确认不可达的 CLI（避免派发给未登录/代理没开的 CLI）。
+    const chosen = await pickBestCliForFallback({ prefer: 'claude' });
+    if (!chosen) return snapshot;
 
     const prompt =
       `根据下面的会话摘要，用中文输出三行：一句话的项目目标、一句话的当前进展、` +

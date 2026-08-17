@@ -28,7 +28,10 @@ import {
   type MateSessionRecord,
   type MateTaskRecord,
   type MateLocalCliConfig,
+  type MateTaskSkillVersionPin,
 } from './types';
+import { listSkillVersions } from '../skills/version-store';
+import { ensureSkillRuntimeSnapshot } from '../skills/runtime-snapshot-service';
 
 export {
   getOrCreateMateAgentSession,
@@ -46,6 +49,11 @@ export interface CreateMateTaskInput {
   agentId?: string;
   executionKind?: 'cogseed-native' | 'local-cli';
   allowedSkillIds?: string[];
+  skillVersionPins?: MateTaskSkillVersionPin[];
+  skillVersionPinStatus?: 'pinned' | 'unpinned';
+  /** Internal retry path: preserve the already-persisted reference even when
+   * a legacy version envelope cannot be re-read during migration. */
+  preserveSkillVersionPins?: boolean;
   localCli?: MateLocalCliConfig;
   profileId?: string;
   retryOfTaskId?: string;
@@ -57,6 +65,46 @@ export interface CreateMateTaskInput {
 export interface CreateMateTaskResult {
   task: MateTaskRecord;
   created: boolean;
+}
+
+async function resolveSkillVersionPins(
+  userId: string,
+  allowedSkillIds: string[] | undefined,
+  requested: MateTaskSkillVersionPin[] | undefined,
+  preserveRequested: boolean,
+): Promise<MateTaskSkillVersionPin[] | undefined> {
+  if (!allowedSkillIds?.length && requested === undefined) return undefined;
+  const allowed = new Set(allowedSkillIds || []);
+  if (requested && requested.length > 128) throw new Error('too many Skill version pins');
+  const skillIds = requested !== undefined
+    ? requested.map((pin) => assertMateAgentId(String(pin.skillId)))
+    : allowedSkillIds || [];
+  if (new Set(skillIds).size !== skillIds.length) throw new Error('duplicate Skill version pin');
+  if (requested !== undefined && skillIds.some((skillId) => !allowed.has(skillId))) {
+    throw new Error('skill version pin is outside the persisted Skill allowlist');
+  }
+  const resolved: Array<MateTaskSkillVersionPin | undefined> = await Promise.all(skillIds.map(async (skillId, index): Promise<MateTaskSkillVersionPin | undefined> => {
+    const versions = await listSkillVersions(userId, skillId);
+    const requestedPin = requested?.[index];
+    const current = requestedPin
+      ? versions.find((record) => record.revisionId === requestedPin.revisionId
+        || (record.version === requestedPin.version && record.manifestHash === requestedPin.manifestHash))
+      : versions[0];
+    if (!current?.manifestHash || !current.revisionId || !current.files
+      || current.manifestHash !== (requestedPin?.manifestHash || current.manifestHash)) {
+      if (requestedPin && preserveRequested) return requestedPin;
+      if (requestedPin) throw new Error(`skill version pin is stale: ${skillId}`);
+      return undefined;
+    }
+    await ensureSkillRuntimeSnapshot(userId, skillId, current);
+    return {
+      skillId,
+      version: current.version,
+      manifestHash: current.manifestHash,
+      revisionId: current.revisionId,
+    } satisfies MateTaskSkillVersionPin;
+  }));
+  return resolved.filter((pin): pin is MateTaskSkillVersionPin => !!pin);
 }
 
 function isEnoent(error: unknown): boolean {
@@ -89,6 +137,23 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
   if (row.allowedSkillIds !== undefined) {
     if (!Array.isArray(row.allowedSkillIds) || row.allowedSkillIds.length > 128) throw new Error('malformed CogSeed task');
     for (const skillId of row.allowedSkillIds) assertMateAgentId(String(skillId));
+  }
+  if (row.skillVersionPins !== undefined) {
+    if (!Array.isArray(row.skillVersionPins) || row.skillVersionPins.length > 128) throw new Error('malformed CogSeed task');
+    const seen = new Set<string>();
+    for (const raw of row.skillVersionPins) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('malformed CogSeed task');
+      const pin = raw as Record<string, unknown>;
+      const skillId = String(pin.skillId || '');
+      assertMateAgentId(skillId);
+      if (seen.has(skillId) || typeof pin.version !== 'string' || !pin.version.trim()
+        || typeof pin.manifestHash !== 'string' || !/^[a-f0-9]{64}$/.test(pin.manifestHash)
+        || (pin.revisionId !== undefined && typeof pin.revisionId !== 'string')) throw new Error('malformed CogSeed task');
+      seen.add(skillId);
+    }
+  }
+  if (row.skillVersionPinStatus !== undefined && row.skillVersionPinStatus !== 'pinned' && row.skillVersionPinStatus !== 'unpinned') {
+    throw new Error('malformed CogSeed task');
   }
   if (row.localCli !== undefined) {
     const localCli = row.localCli as Record<string, unknown>;
@@ -240,6 +305,15 @@ export async function createMateTask(userId: string, input: CreateMateTaskInput)
       ? await getOrCreateMateAgentSession(userId, requestedConversationId, requestedAgentId)
       : await getOrCreateMateSession(userId, input.sessionId);
     const createdAt = nowIso();
+    const allowedSkillIds = input.allowedSkillIds !== undefined
+      ? Array.from(new Set(input.allowedSkillIds.map((item) => assertMateAgentId(String(item)))))
+      : undefined;
+    const skillVersionPins = await resolveSkillVersionPins(
+      userId,
+      allowedSkillIds,
+      input.skillVersionPins,
+      input.preserveSkillVersionPins === true,
+    );
     const taskRecord: MateTaskRecord = {
       schemaVersion: MATE_AGENT_BACKEND_SCHEMA_VERSION,
       taskId: `mate-task-${genId12()}`,
@@ -253,9 +327,9 @@ export async function createMateTask(userId: string, input: CreateMateTaskInput)
       ...(requestedConversationId ? { conversationId: requestedConversationId } : {}),
       ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
       ...(input.executionKind ? { executionKind: input.executionKind } : {}),
-      ...(input.allowedSkillIds !== undefined
-        ? { allowedSkillIds: Array.from(new Set(input.allowedSkillIds.map((item) => assertMateAgentId(String(item))))) }
-        : {}),
+      ...(allowedSkillIds !== undefined ? { allowedSkillIds } : {}),
+      ...(skillVersionPins?.length ? { skillVersionPins } : {}),
+      ...(allowedSkillIds?.length ? { skillVersionPinStatus: skillVersionPins?.length === allowedSkillIds.length ? 'pinned' : 'unpinned' } : {}),
       ...(input.localCli ? {
         localCli: {
           cli: String(input.localCli.cli || '').trim(),

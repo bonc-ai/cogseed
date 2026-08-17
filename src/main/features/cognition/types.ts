@@ -115,6 +115,17 @@ export interface CognitionRecallSkillDraftSummary {
   fileCount: number;
   workflowSteps: string[];
   validationOk: boolean;
+  mode?: 'install' | 'upgrade';
+  reviewDecision?: 'deferred' | 'rejected' | 'accepted';
+  targetSkillId?: string;
+  baseRevisionId?: string;
+  baseManifestHash?: string;
+  diffSummary?: {
+    added: number;
+    modified: number;
+    deleted: number;
+    unchanged: number;
+  };
   recallContext?: {
     assetCount: number;
     sourceCount: number;
@@ -162,19 +173,53 @@ export interface CognitionAssetSummary {
 
 export interface CognitionSkillVersionSummary {
   version: string;
+  revisionId?: string;
+  parentRevisionId?: string;
   at: string;
   note?: string;
   runId?: string;
+  operation?: 'install' | 'upgrade' | 'manual_edit' | 'rollback' | 'migration';
+  manifestHash?: string;
+  rollbackScope?: 'full_tree' | 'skill_md_only';
+  restoredFromVersion?: string;
+  sourceAssetId?: string;
+  sourceAssetVersion?: string;
+  securityOutcome?: 'pass' | 'restricted' | 'unknown';
   canRollback: boolean;
+}
+
+export interface CognitionSkillRollbackPreview {
+  skillId: string;
+  currentVersion?: string;
+  currentRevisionId?: string;
+  currentManifestHash?: string;
+  targetVersion: string;
+  targetRevisionId?: string;
+  targetManifestHash?: string;
+  nextVersion?: string;
+  rollbackScope: 'full_tree' | 'skill_md_only';
+  diff?: import('../skills/version-diff').SkillTreeDiff;
 }
 
 export interface SkillCognitionSummary {
   skillId: string;
   version?: string;
+  currentRevisionId?: string;
+  currentManifestHash?: string;
+  installedAssetVersion?: string;
+  sourceAssetId?: string;
   baselineStatus: 'available' | 'unversioned';
   pendingCandidateCount: number;
   recentReceipts: CognitionReuseReceiptView[];
   versions: CognitionSkillVersionSummary[];
+}
+
+export interface CognitionSkillMigrationAudit {
+  boundSkillCount: number;
+  fullTreeVersionCount: number;
+  legacyVersionCount: number;
+  legacyOrphanSkillCount: number;
+  unversionedBoundSkillCount: number;
 }
 
 export interface CognitionDashboard {

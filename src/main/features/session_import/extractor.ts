@@ -50,13 +50,13 @@ const CLI_EXTRACT_TIMEOUT_MS = 120_000;
 async function runCliExtractionPass(userId: string, systemPrompt: string, content: string): Promise<string | null> {
   try {
     const { run: runCliAgent } = await import('../local_agents/runner');
-    const { detectAll } = await import('../local_agents/registry');
+    const { pickBestCliForFallback } = await import('../local_agents/fallback-picker');
     const { tmpdir } = await import('node:os');
-    const entries = await detectAll();
-    const available = entries.filter((e) => e && e.available);
-    if (!available.length) return null;
-    // 优先 Claude Code，否则第一个可用 CLI。
-    const chosen = available.find((e) => e.type === 'claude') ?? available[0];
+    // 与聊天降级同规则：优先 Claude Code → 已登录 CLI → 任意可用；
+    // 跳过本地代理确认不可达的 CLI（否则派发给未登录/代理没开的 CLI 会
+    // 在非 TTY 下挂到超时，每个 chunk pass 都白等 120s）。
+    const chosen = await pickBestCliForFallback({ prefer: 'claude' });
+    if (!chosen) return null;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CLI_EXTRACT_TIMEOUT_MS);
@@ -245,7 +245,12 @@ async function runPass(userId: string, systemPrompt: string, content: string): P
       disableTools: true,
     });
     if (!res.ok || !res.text) {
-      log.warn('extraction model pass failed', { error: res.error });
+      // chatWithModel 对「未配置模型」是返回 {ok:false,error} 而非抛错，
+      // 这里同样按「未配置模型」降级到 CLI 提炼，否则提取永远失败。
+      const msg = String((res && res.error) || '');
+      const noModel = /未配置模型|no model configured|model.*not.*configured/i.test(msg);
+      if (noModel) return runCliExtractionPass(userId, systemPrompt, content);
+      log.warn('extraction model pass failed', { error: msg });
       return null;
     }
     return res.text;

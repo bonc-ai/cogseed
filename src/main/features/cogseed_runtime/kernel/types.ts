@@ -1,4 +1,4 @@
-import type { RuntimeAttachment, RuntimeContextItem } from '../protocol';
+import type { RuntimeAttachment, RuntimeContextItem, RuntimeSkillVersionPin } from '../protocol';
 
 export type RuntimeKernelEventType =
   | 'started'
@@ -33,6 +33,7 @@ export interface RuntimeKernelRequest {
   agentId?: string;
   executionKind: 'cogseed-native';
   allowedSkillIds: string[];
+  skillVersionPins: RuntimeSkillVersionPin[];
   modelProfile?: string;
   workingDir?: string;
 }

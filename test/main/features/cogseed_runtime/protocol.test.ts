@@ -35,6 +35,7 @@ describe('CogSeed Runtime protocol normalization', () => {
       agent_id: 'agent_runtime',
       execution_kind: 'cogseed-native',
       allowed_skill_ids: ['skill-alpha', 'skill-beta', 'skill-alpha'],
+      skill_version_pins: [{ skillId: 'skill-alpha', version: '2', manifestHash: 'a'.repeat(64), revisionId: 'revision-2' }],
     }, { allowedRoots: [root] });
 
     expect(result.ok).toBe(true);
@@ -44,10 +45,24 @@ describe('CogSeed Runtime protocol normalization', () => {
     expect(result.request.runtime_session_id).toMatch(/^mruntime-/);
     expect(result.request.execution_kind).toBe('cogseed-native');
     expect(result.request.allowed_skill_ids).toEqual(['skill-alpha', 'skill-beta']);
+    expect(result.request.skill_version_pins).toEqual([{ skillId: 'skill-alpha', version: '2', manifestHash: 'a'.repeat(64), revisionId: 'revision-2' }]);
     expect(result.request.task).toBe('Summarize this explicit input.');
     expect(result.request.context).toEqual([{ type: 'text', content: 'Only this context.' }]);
     expect(result.request.attachments?.[0].path).toBe(allowedFile);
     expect(result.request).not.toHaveProperty('cid');
+  });
+
+  it('rejects duplicate Skill pins so one task cannot carry ambiguous versions', () => {
+    const result = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Use one frozen Skill version.',
+      skill_version_pins: [
+        { skillId: 'skill-alpha', version: '1', manifestHash: 'a'.repeat(64) },
+        { skillId: 'skill-alpha', version: '2', manifestHash: 'b'.repeat(64) },
+      ],
+    }, { allowedRoots: [] });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected duplicate pin rejection');
+    expect(result.error).toMatch(/skill_version_pins/i);
   });
 
   it('rejects Backend-owned local CLI execution at the native Runtime boundary', () => {

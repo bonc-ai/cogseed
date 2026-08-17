@@ -170,6 +170,8 @@ describe('Recall cognition workspace layout', () => {
     expect(governance).toContain('_recallAssetActions(selected.status)');
     expect(governance).toContain('_renderRecallAssetHistory(selected.id)');
     expect(governance).toContain('_renderRecallAssetChain(selected.id)');
+    expect(governance).toContain('selected.generatedSkillId');
+    expect(governance).toContain('cognition.governance_open_skill_versions');
     expect(bindings).toContain("window.cogseed.invoke('recall.assets.versions'");
     expect(bindings).toContain("window.cogseed.invoke('recall.assets.rollback'");
     expect(bindings).toContain('[data-cognition-governance-action]');

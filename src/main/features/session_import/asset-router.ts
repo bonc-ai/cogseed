@@ -59,6 +59,10 @@ export interface ImportSessionResult {
   conversationId?: string;
   materialize?: MaterializeResult;
   cognitions: RoutedCognitionCounts;
+  /** True when the conversation was materialized immediately and extraction
+   *  runs in the background (B+ fast import). The renderer shows "正在提炼"
+   *  and swaps in the real carry details on the `sessionImport.events` stream. */
+  extractionPending?: boolean;
   degraded: boolean;
   /** Transcript was too large to read whole; only recent turns were imported. */
   truncated?: boolean;
@@ -146,6 +150,95 @@ function getPrepared(
     .then((r) => { if (!r.ok) prefetchCache.delete(key); })
     .catch(() => prefetchCache.delete(key));
   return promise;
+}
+
+/**
+ * B+ fast-import variant: return the cached prepared session only when the
+ * prefetch has ALREADY settled (extraction in hand). An in-flight or missing
+ * prefetch returns null in ~0ms — the caller then materializes immediately and
+ * defers extraction to the background task (which consumes the same prefetch).
+ */
+async function getPreparedIfReady(
+  source: 'claude' | 'workbuddy',
+  userId: string,
+  filePath: string,
+): Promise<PreparedSession | null> {
+  const key = prefetchKey(source, userId, filePath);
+  const existing = prefetchCache.get(key);
+  if (!existing || Date.now() - existing.at >= PREFETCH_TTL_MS) return null;
+  const result = await Promise.race([existing.promise, Promise.resolve(null)]);
+  if (!result || !result.ok || !result.prepared) return null;
+  return result.prepared;
+}
+
+/** 占位 extraction（B+）：materialize 立即落会话，提炼后台进行。 */
+function placeholderExtraction(transcript: NormalizedTranscript): ExtractionResult {
+  const first = (Array.isArray(transcript.turns) ? transcript.turns : [])
+    .find((t) => t && t.role === 'user');
+  const raw = first && first.text ? String(first.text).trim() : '';
+  const summary = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
+  return {
+    ok: false,
+    sessionSummary: summary || '从导入的会话开始',
+    personal: [],
+    rules: [],
+    templates: [],
+    degraded: true,
+    reason: 'extraction_pending',
+  };
+}
+
+/** B+ fast path: materialize the transcript immediately with a placeholder
+ *  seed, kick off background extraction, and return `extractionPending`. */
+async function fastImport(
+  input: {
+    userId: string;
+    source: 'claude' | 'workbuddy';
+    filePath: string;
+    transcript: NormalizedTranscript;
+    titleHint?: string;
+    projectPath?: string;
+  },
+  zeroCounts: RoutedCognitionCounts,
+): Promise<ImportSessionResult> {
+  const materialize = await materializeSession({
+    userId: input.userId,
+    source: input.source,
+    sourceId: input.transcript.sourceId,
+    projectPath: input.projectPath ?? input.transcript.projectPath,
+    titleHint: input.titleHint,
+    extraction: placeholderExtraction(input.transcript),
+  });
+
+  // 后台提炼：优先消费 prefetch（若已在提取则等待其完成，不重复调用模型）。
+  const { startBackgroundExtraction } = await import('./extraction-background');
+  startBackgroundExtraction({
+    userId: input.userId,
+    source: input.source,
+    sourceId: input.transcript.sourceId,
+    conversationId: materialize.conversationId,
+    projectId: materialize.projectId,
+    transcript: input.transcript,
+    seedMsgIndex: materialize.seedMsgIndex,
+    title: materialize.title,
+    prepare: () => getPrepared(
+      input.source,
+      input.userId,
+      input.filePath,
+      () => input.source === 'claude'
+        ? prepareClaudeSession(input.userId, input.filePath)
+        : prepareWorkbuddySession(input.userId, input.filePath),
+    ),
+  });
+
+  return {
+    ok: true,
+    conversationId: materialize.conversationId,
+    materialize,
+    cognitions: zeroCounts,
+    degraded: false,
+    extractionPending: true,
+  };
 }
 
 /** read → normalize → extract for a Claude Code session (no writes). */
@@ -336,19 +429,30 @@ async function commitPreparedSession(
 export async function importClaudeSession(input: ImportClaudeSessionInput): Promise<ImportSessionResult> {
   const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0 };
 
-  // Reuse a warm prefetch if present, otherwise run read+extract inline. Same
-  // result either way — a hit just skips the slow model call.
-  const prep = await getPrepared(
-    'claude',
-    input.userId,
-    input.filePath,
-    () => prepareClaudeSession(input.userId, input.filePath),
-  );
-  if (!prep.ok) {
-    return { ok: false, cognitions: zeroCounts, degraded: true, reason: prep.reason };
+  // B+ fast import: a settled prefetch (extraction already in hand) commits
+  // directly; otherwise the conversation materializes immediately and the
+  // extraction runs in the background — the click never waits on the model.
+  const ready = await getPreparedIfReady('claude', input.userId, input.filePath);
+  if (ready) {
+    return commitPreparedSession(input.userId, ready, input.titleHint);
   }
 
-  return commitPreparedSession(input.userId, prep.prepared, input.titleHint);
+  const read = await readClaudeSessionTranscript(input.filePath);
+  if (!read.ok) {
+    return { ok: false, cognitions: zeroCounts, degraded: true, reason: read.reason || 'unreadable' };
+  }
+  const transcript = parseClaudeTranscript(read.body, read.sessionId);
+  if (!transcript.turns.length) {
+    return { ok: false, cognitions: zeroCounts, degraded: true, reason: 'empty_transcript' };
+  }
+
+  return fastImport({
+    userId: input.userId,
+    source: 'claude',
+    filePath: input.filePath,
+    transcript,
+    titleHint: input.titleHint,
+  }, zeroCounts);
 }
 
 export interface ImportWorkbuddySessionInput {
@@ -375,21 +479,30 @@ export interface ImportWorkbuddySessionInput {
 export async function importWorkbuddySession(input: ImportWorkbuddySessionInput): Promise<ImportSessionResult> {
   const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0 };
 
-  const prep = await getPrepared(
-    'workbuddy',
-    input.userId,
-    input.filePath,
-    () => prepareWorkbuddySession(input.userId, input.filePath),
-  );
-  if (!prep.ok) {
-    return { ok: false, cognitions: zeroCounts, degraded: true, reason: prep.reason };
+  // B+ fast import (same split as importClaudeSession).
+  const ready = await getPreparedIfReady('workbuddy', input.userId, input.filePath);
+  if (ready) {
+    if (input.projectPath) ready.transcript.projectPath = input.projectPath;
+    return commitPreparedSession(input.userId, ready, input.titleHint);
   }
 
-  // WorkBuddy has no per-line cwd; take the picker-supplied path if any. Same
-  // session ⇒ same path, so overwriting the cached transcript is consistent.
-  if (input.projectPath) prep.prepared.transcript.projectPath = input.projectPath;
+  const read = await readWorkbuddySessionTranscript(input.filePath);
+  if (!read.ok) {
+    return { ok: false, cognitions: zeroCounts, degraded: true, reason: read.reason || 'unreadable' };
+  }
+  const transcript = parseWorkbuddyTranscript(read.body, read.sessionId);
+  if (!transcript.turns.length) {
+    return { ok: false, cognitions: zeroCounts, degraded: true, reason: 'empty_transcript' };
+  }
 
-  return commitPreparedSession(input.userId, prep.prepared, input.titleHint);
+  return fastImport({
+    userId: input.userId,
+    source: 'workbuddy',
+    filePath: input.filePath,
+    transcript,
+    titleHint: input.titleHint,
+    projectPath: input.projectPath,
+  }, zeroCounts);
 }
 
 export interface ImportClaudeDesktopSessionInput {
@@ -438,39 +551,38 @@ export async function importClaudeDesktopSession(
     turns: [{ role: 'user', text: opening, ts: meta.createdAt || '' }],
   };
 
-  const extraction = await extractSession(input.userId, transcript);
-
+  // B+ fast import: materialize immediately, extract in the background.
   const materialize = await materializeSession({
     userId: input.userId,
     source: 'claude',
     sourceId,
     projectPath: transcript.projectPath,
     titleHint: meta.title || undefined,
-    extraction,
+    extraction: placeholderExtraction(transcript),
   });
 
-  let cognitions = zeroCounts;
-  if (!extraction.degraded) {
-    cognitions = await routeCognitions(
-      input.userId,
-      'claude',
-      sourceId,
-      materialize.conversationId,
-      { personal: extraction.personal, rules: extraction.rules, templates: extraction.templates },
-    );
-  }
+  const { startBackgroundExtraction } = await import('./extraction-background');
+  startBackgroundExtraction({
+    userId: input.userId,
+    source: 'claude',
+    sourceId,
+    conversationId: materialize.conversationId,
+    projectId: materialize.projectId,
+    transcript,
+    seedMsgIndex: materialize.seedMsgIndex,
+    title: materialize.title,
+  });
 
   log.info(
-    `imported claude-desktop session=${sourceId} cid=${materialize.conversationId} ` +
-    `degraded=${!!extraction.degraded}`,
+    `imported claude-desktop session=${sourceId} cid=${materialize.conversationId} extractionPending`,
   );
 
   return {
-    ok: !extraction.degraded,
+    ok: true,
     conversationId: materialize.conversationId,
     materialize,
-    cognitions,
-    degraded: !!extraction.degraded,
-    reason: extraction.reason,
+    cognitions: zeroCounts,
+    degraded: false,
+    extractionPending: true,
   };
 }
