@@ -1325,15 +1325,25 @@ async function buildRotatingProvider(
     const candProviderId = choice.provider;
     const candModelId = choice.model;
     const isExternal = EXTERNAL_API_PROVIDERS.includes(candProviderId) || isCustomProviderId(candProviderId);
+    // Resolve each candidate's OWN output cap once up front so the rotating
+    // wrapper can override `params.maxTokens` per candidate. core-agent only
+    // knows the primary's cap; carrying it to a fallback with a lower cap
+    // makes that provider reject or truncate the request.
+    const resolvedModel = isExternal ? null : resolveConfiguredPiModel(mod, candProviderId, candModelId);
+    const candMaxOutputTokens = isExternal
+      ? buildExternalProviderModel(userId, candProviderId, candModelId, choice.maxOutputTokens)?.maxTokens
+      : resolvedModel?.model.maxTokens;
     return {
       profileId: choice.profileId,
       providerId: candProviderId,
       modelId: candModelId,
+      ...(typeof candMaxOutputTokens === 'number' && candMaxOutputTokens > 0
+        ? { maxOutputTokens: candMaxOutputTokens }
+        : {}),
       build: async () => {
         if (isExternal) {
           return buildExternalProvider(userId, candProviderId, choice.apiKey, candModelId, choice.baseUrl, choice.maxOutputTokens);
         }
-        const resolvedModel = resolveConfiguredPiModel(mod, candProviderId, candModelId);
         if (resolvedModel?.isConfiguredFallback) {
           log.info('using configured model fallback', {
             provider: candProviderId,

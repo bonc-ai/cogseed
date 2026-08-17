@@ -19,7 +19,7 @@
 import { createLogger } from '../../logger.js';
 import { whichBin } from './which.js';
 import { detectCliAuth } from './auth-state.js';
-import { checkMinVersion, detectVersion, parseSemver } from './version.js';
+import { checkMinVersion, detectVersion, parseSemver, MIN_VERSIONS } from './version.js';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -93,6 +93,11 @@ export function localCliSearchDirs(
     if (type === 'codex' && localAppData) {
       dirs.push(path.win32.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin'));
     }
+    if (type === 'workbuddy' && localAppData) {
+      // WorkBuddy (Tencent) desktop is an Electron app; the bundled `codebuddy`
+      // CLI lives under its unpacked asar (same layout as the macOS bundle).
+      dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'resources', 'app.asar.unpacked', 'cli', 'bin'));
+    }
     return dirs;
   }
   if (home) {
@@ -102,6 +107,19 @@ export function localCliSearchDirs(
     dirs.push(pathApi.join(home, '.local', 'bin'));
     dirs.push(pathApi.join(home, '.npm-global', 'bin'));
     dirs.push(pathApi.join(home, 'bin'));
+    dirs.push(pathApi.join(home, '.cargo', 'bin'));
+    // Codex's official standalone installer puts the binary in ~/.codex/bin
+    // by default. User-level installs must win over the /Applications
+    // bundles scanned further down, so this sits in the shared home block.
+    dirs.push(pathApi.join(home, '.codex', 'bin'));
+    // Version-manager shims / per-version bin dirs. These live OUTSIDE the
+    // PATH a Finder-launched app inherits, so without them every nvm/fnm/asdf
+    // install shows up as "not found" on GUI launches. The `*` segment is
+    // expanded by expandSearchDirs before whichBin runs.
+    dirs.push(pathApi.join(home, '.nvm', 'versions', 'node', '*', 'bin'));
+    dirs.push(pathApi.join(home, '.local', 'share', 'fnm', 'node-versions', '*', 'installation', 'bin'));
+    dirs.push(pathApi.join(home, '.asdf', 'installs', 'nodejs', '*', 'bin'));
+    dirs.push(pathApi.join(home, '.asdf', 'shims'));
   }
   if (env.NPM_CONFIG_PREFIX) dirs.push(pathApi.join(env.NPM_CONFIG_PREFIX, 'bin'));
   if (env.VOLTA_HOME) dirs.push(pathApi.join(env.VOLTA_HOME, 'bin'));
@@ -114,10 +132,80 @@ export function localCliSearchDirs(
   if (type === 'workbuddy' && platform === 'darwin') {
     // WorkBuddy bundles its CLI (`codebuddy`) inside the app's unpacked
     // asar. GUI-launched apps never see it on PATH, so probe the bundle.
+    // The fixed /Applications path is the standard install location; the
+    // `*` patterns cover non-standard locations (other disks via symlink,
+    // ~/Applications, renamed bundles) via expandSearchDirs.
     dirs.push('/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin');
+    dirs.push(pathApi.join(home, 'Applications', '*.app', 'Contents', 'Resources', 'app.asar.unpacked', 'cli', 'bin'));
+    dirs.push('/Applications/*.app/Contents/Resources/app.asar.unpacked/cli/bin');
   }
   return dirs;
 }
+
+/**
+ * Expand directories that contain a single `*` path segment by listing the
+ * parent directory (e.g. `~/.nvm/versions/node/<ver>/bin` expands to every
+ * installed node version's bin). Directories without `*` pass through
+ * unchanged; unreadable parents are skipped. Results are cached for the same
+ * TTL as `detectAll` so repeated per-CLI probes don't re-stat the filesystem.
+ *
+ * Only ONE wildcard segment is supported — enough for version-manager
+ * layouts and `*.app` bundle scanning without turning this into a glob
+ * engine.
+ */
+export async function expandSearchDirs(
+  dirs: string[],
+  platform: NodeJS.Platform = process.platform,
+  home = os.homedir(),
+): Promise<string[]> {
+  const key = dirs.join('\u0000');
+  if (expandCache && expandCache.key === key && Date.now() - expandCache.at < CACHE_TTL_MS) {
+    return expandCache.dirs;
+  }
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const out: string[] = [];
+  for (const dir of dirs) {
+    const segs = String(dir || '').split(pathApi.sep);
+    const starIdx = segs.findIndex((s) => s.includes('*'));
+    if (starIdx === -1) {
+      out.push(dir);
+      continue;
+    }
+    const prefix = segs.slice(0, starIdx).join(pathApi.sep) || pathApi.sep;
+    const pattern = segs[starIdx];
+    const re = new RegExp(`^${pattern.split('*').map(escapeRegExp).join('.*')}$`, 'i');
+    const tail = segs.slice(starIdx + 1).join(pathApi.sep);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(prefix);
+    } catch {
+      continue; // parent missing / unreadable → nothing to expand
+    }
+    for (const name of entries) {
+      if (!re.test(name)) continue;
+      const joined = tail ? pathApi.join(prefix, name, tail) : pathApi.join(prefix, name);
+      if (tail) {
+        // Only keep expansions whose tail actually exists — otherwise every
+        // `*.app` bundle would emit the same codebuddy path for apps that
+        // don't bundle it (noise + pointless stats downstream in whichBin).
+        try {
+          if (!(await fs.stat(joined)).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+      }
+      out.push(joined);
+    }
+  }
+  expandCache = { key, at: Date.now(), dirs: out };
+  return out;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+let expandCache: { key: string; at: number; dirs: string[] } | null = null;
 
 async function detectCodexPackageVersion(binPath: string): Promise<string | null> {
   let dir: string;
@@ -276,7 +364,7 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
   const envPath = process.env[ENV_KEYS[type]]?.trim();
   const candidate = envPath && envPath.length > 0 ? envPath : BIN_NAMES[type];
   const resolved = await whichBin(candidate, {
-    extraDirs: envPath ? [] : localCliSearchDirs(type),
+    extraDirs: envPath ? [] : await expandSearchDirs(localCliSearchDirs(type)),
   });
   if (!resolved) {
     return {
@@ -312,7 +400,9 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
     return {
       type, path: resolved, version: null, available: false,
       error: 'version_unknown',
-      errorDetail: `${attempted} produced no parsable output`,
+      errorDetail: type === 'codex'
+        ? `${attempted} produced no parsable output — Codex installed standalone (non-npm) can hang on \`--version\` when launched from a GUI app. Verify with \`codex --version\` in a terminal, install via \`npm install -g @openai/codex\`, or upgrade to >= ${MIN_VERSIONS.codex}.`
+        : `${attempted} produced no parsable output`,
     };
   }
   const minErr = checkMinVersion(type, version);
@@ -329,4 +419,5 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
 /** Clear the cache; mainly for tests and the IPC `force: true` path. */
 export function invalidateCache(): void {
   cache = null;
+  expandCache = null;
 }

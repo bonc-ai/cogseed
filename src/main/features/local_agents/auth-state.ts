@@ -9,7 +9,9 @@
  * Detection is FILE-BASED and READ-ONLY — we never probe the CLI's own auth
  * endpoints, never read tokens into memory beyond a boolean existence check.
  *
- *   claude    → ~/.claude/.credentials.json   (OAuth session file)
+ *   claude    → ~/.claude/.credentials.json (OAuth session file)
+ *               OR ~/.claude/settings.json with an API key / env-injected
+ *               key (raw-key config — counted as "configured", mode 'api')
  *   codex     → ~/.codex/auth.json            (OAuth session file)
  *   opencode  → ~/.local/share/opencode/auth.json ({ "<provider>": {type,key} })
  *   workbuddy → ~/.workbuddy/app/sessions.json (app-managed sign-in record)
@@ -35,6 +37,10 @@ function claudeAuthFile(home: string): string {
   return path.join(home, '.claude', '.credentials.json');
 }
 
+function claudeSettingsFile(home: string): string {
+  return path.join(home, '.claude', 'settings.json');
+}
+
 function codexAuthFile(home: string): string {
   return path.join(home, '.codex', 'auth.json');
 }
@@ -45,6 +51,33 @@ function opencodeAuthFile(home: string): string {
 
 function workbuddyAuthFile(home: string): string {
   return path.join(home, '.workbuddy', 'app', 'sessions.json');
+}
+
+/**
+ * Claude Code can be configured two ways that both make it usable without
+ * ever touching the OAuth flow: a top-level `apiKey`/`anthropicApiKey` in
+ * settings.json, or env-injected keys (`env.ANTHROPIC_AUTH_TOKEN` /
+ * `env.ANTHROPIC_API_KEY`) that the CLI reads at spawn time. Counting only
+ * the OAuth credentials file made API-key users show up as "not signed in"
+ * even though the CLI runs fine — treat either shape as `mode:'api'`.
+ * Boolean existence check only; the key value is never read into memory.
+ */
+function claudeApiKeyConfigured(home: string): boolean {
+  try {
+    const settings = JSON.parse(fs.readFileSync(claudeSettingsFile(home), 'utf8')) as {
+      apiKey?: unknown;
+      anthropicApiKey?: unknown;
+      env?: Record<string, unknown>;
+    };
+    if (typeof settings.apiKey === 'string' && settings.apiKey.length > 0) return true;
+    if (typeof settings.anthropicApiKey === 'string' && settings.anthropicApiKey.length > 0) return true;
+    const env = settings && typeof settings.env === 'object' ? settings.env : {};
+    if (typeof env.ANTHROPIC_AUTH_TOKEN === 'string' && (env.ANTHROPIC_AUTH_TOKEN as string).length > 0) return true;
+    if (typeof env.ANTHROPIC_API_KEY === 'string' && (env.ANTHROPIC_API_KEY as string).length > 0) return true;
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 /** WorkBuddy manages sign-in inside the app; the CLI reuses it and reports
@@ -85,9 +118,9 @@ function opencodeAuthMode(home: string): 'oauth' | 'api' | 'unknown' {
 export function detectCliAuth(type: string, home = os.homedir()): CliAuthState {
   switch (type) {
     case 'claude':
-      return fs.existsSync(claudeAuthFile(home))
-        ? { loggedIn: true, mode: 'oauth' }
-        : { loggedIn: false, mode: 'unknown' };
+      if (fs.existsSync(claudeAuthFile(home))) return { loggedIn: true, mode: 'oauth' };
+      if (claudeApiKeyConfigured(home)) return { loggedIn: true, mode: 'api' };
+      return { loggedIn: false, mode: 'unknown' };
     case 'codex':
       return fs.existsSync(codexAuthFile(home))
         ? { loggedIn: true, mode: 'oauth' }

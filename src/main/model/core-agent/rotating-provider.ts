@@ -32,22 +32,45 @@
  * ## Non-key failures
  *
  * Failures that `auth-error.ts::classifyKeyFailure` returns null for
- * (400 bad request, content policy, 5xx, timeout, network) skip rotation
+ * (400 bad request, content policy, 5xx, context overflow) skip rotation
  * and propagate on the first candidate. No point trying another key when
  * the problem isn't key-shaped.
+ *
+ * ## First-event timeout
+ *
+ * When `firstEventTimeoutMs` is set, each candidate must produce its first
+ * content event within that budget (the whole preamble-drain phase counts;
+ * `start` / `content_block_start` don't reset the clock). A stall beyond the
+ * budget is treated as a network-like failure: it rotates to the next
+ * candidate WITHOUT a cooldown, and yields a
+ * `{type:'provider_fallback', reason:'no_first_event_timeout'}` event so the
+ * UI can tell the user a fallback happened. Without this, a cold-start hang
+ * would sit in the outer idle watchdog (`idleTimeout`, 30 min default) and
+ * never fall back at all.
  *
  * ## Cooldown & onSuccess
  *
  * On a credential/account rotatable failure: `markCooldown(profileId, kind, reason)`.
- * Network failures are never cooled down; each new user request starts from
- * the configured entries list again.
+ * Network failures and first-event timeouts are never cooled down; each new
+ * user request starts from the configured entries list again.
  * On a successful first-event-yield: `onSuccess(profileId)` fires so
  * callers can clear any prior cooldown + bump lastUsed.
+ *
+ * ## Exhausted-all-candidates errors
+ *
+ * When every candidate is exhausted, the wrapper throws an Error carrying a
+ * `code` from the `PROVIDER_*_EXHAUSTED` / `PROVIDER_NO_FIRST_EVENT_TIMEOUT`
+ * family. core-agent's retry policy (`shared/errors.ts::hasPermanentFailureSignal`)
+ * treats those codes as permanent, so the AgentRunner outer retry loop does
+ * NOT re-run the whole candidate set (which would multiply the wait and the
+ * provider calls). Key-failure rotation also yields
+ * `{type:'provider_fallback', reason:'auth'}` events so the user sees that a
+ * fallback model took over instead of getting a bare 401 at the end.
  */
 
 import type { LLMProvider, CompletionParams, CompletionResult } from '#core-agent';
 import type { StreamEvent } from '#core-agent';
-import { classifyKeyFailure, formatKeyFailure } from './auth-error';
+import { classifyKeyFailure, formatKeyFailure, type KeyFailureKind } from './auth-error';
 import { markCooldown } from './profile-cooldown';
 import { createLogger } from '../../logger';
 
@@ -56,6 +79,111 @@ const log = createLogger('rotating-provider');
 const NETWORK_RETRY_ATTEMPTS = 3;
 const NETWORK_RETRY_BASE_DELAY_MS = 500;
 const NETWORK_RETRY_MAX_DELAY_MS = 2_000;
+
+// ── Exhaustion error codes (consumed by core-agent's retry policy) ───────
+// core-agent/src/shared/errors.ts::hasPermanentFailureSignal hard-codes the
+// PROVIDER_*_EXHAUSTED / PROVIDER_NO_FIRST_EVENT_TIMEOUT prefixes as
+// PERMANENT — the rotating provider already exhausted its safe candidates
+// and retries, so the AgentRunner outer retry loop must NOT repeat the whole
+// set (that would multiply wait time and provider calls).
+const FIRST_EVENT_TIMEOUT_CODE = 'PROVIDER_NO_FIRST_EVENT_TIMEOUT';
+const NETWORK_EXHAUSTED_CODE = 'PROVIDER_NETWORK_EXHAUSTED';
+const KEY_EXHAUSTED_CODE_BY_KIND: Record<Exclude<KeyFailureKind, 'network'>, string> = {
+  auth: 'PROVIDER_AUTH_EXHAUSTED',
+  permission: 'PROVIDER_PERMISSION_EXHAUSTED',
+  rate_limit: 'PROVIDER_RATE_LIMIT_EXHAUSTED',
+  balance: 'PROVIDER_BALANCE_EXHAUSTED',
+};
+
+/** Attach a stable `code` to an Error. The code is what core-agent's retry
+ *  policy reads (`errorCodeOf`), since instanceof doesn't survive the
+ *  CJS↔ESM module boundary. */
+function errorWithCode(message: string, code: string): Error {
+  const err = new Error(message) as Error & { code?: string };
+  err.code = code;
+  return err;
+}
+
+function isFirstEventTimeout(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === FIRST_EVENT_TIMEOUT_CODE;
+}
+
+function makeNoFirstEventTimeoutError(firstEventTimeoutMs: number | undefined): Error {
+  const ms = Number.isFinite(firstEventTimeoutMs) ? Math.max(0, Math.round(firstEventTimeoutMs as number)) : 0;
+  return errorWithCode(`no first event from candidate within ${ms}ms`, FIRST_EVENT_TIMEOUT_CODE);
+}
+
+function exhaustedNetworkError(lastErr: unknown): Error {
+  const msg = formatKeyFailure(lastErr) || 'network error';
+  return errorWithCode(
+    `All configured model candidates failed after network retries: ${msg.replace(/fetch[_\s-]?failed/ig, 'connection failed')}`,
+    NETWORK_EXHAUSTED_CODE,
+  );
+}
+
+function exhaustedFirstEventTimeoutError(firstEventTimeoutMs: number | undefined, lastErr: unknown): Error {
+  const ms = Number.isFinite(firstEventTimeoutMs) ? Math.max(0, Math.round(firstEventTimeoutMs as number)) : 0;
+  const msg = formatKeyFailure(lastErr) || 'first event timeout';
+  return errorWithCode(
+    `All configured model candidates failed after first-event timeout (${ms}ms): ${msg}`,
+    FIRST_EVENT_TIMEOUT_CODE,
+  );
+}
+
+function exhaustedKeyError(kind: Exclude<KeyFailureKind, 'network'>, lastErr: unknown): Error {
+  const msg = formatKeyFailure(lastErr) || String((lastErr as Error)?.message || lastErr || '');
+  return errorWithCode(
+    `All configured model candidates failed after credential errors (${kind}): ${msg}`,
+    KEY_EXHAUSTED_CODE_BY_KIND[kind],
+  );
+}
+
+/**
+ * `iterator.next()` raced against the remaining first-event budget. A stall
+ * beyond the budget rejects with a `PROVIDER_NO_FIRST_EVENT_TIMEOUT`-coded
+ * error so the caller treats it as a rotatable (network-like) failure. The
+ * abandoned iterator is closed best-effort (without awaiting — the generator
+ * may be suspended on a network call) so its finally can unwind when it
+ * eventually resumes. An abort signal cancels the wait the same way.
+ */
+async function nextEventOrTimeout(
+  iterator: AsyncIterator<StreamEvent>,
+  deadline: number,
+  firstEventTimeoutMs: number | undefined,
+  signal?: AbortSignal,
+): Promise<IteratorResult<StreamEvent>> {
+  if (!deadline) return iterator.next();
+  const remaining = Math.max(0, deadline - Date.now());
+  if (remaining <= 0) throw makeNoFirstEventTimeoutError(firstEventTimeoutMs);
+  return new Promise<IteratorResult<StreamEvent>>((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | null = null;
+    const cleanup = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      signal?.removeEventListener?.('abort', onAbort);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { void iterator.return?.(); } catch { /* best-effort close */ }
+      reject(makeNoFirstEventTimeoutError(firstEventTimeoutMs));
+    };
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { void iterator.return?.(); } catch { /* best-effort close */ }
+      reject(makeNoFirstEventTimeoutError(firstEventTimeoutMs));
+    }, remaining);
+    iterator.next().then(
+      (step) => { if (!settled) { settled = true; cleanup(); resolve(step); } },
+      (err) => { if (!settled) { settled = true; cleanup(); reject(err); } },
+    );
+  });
+}
 
 export interface RotatingCandidate {
   profileId: string;
@@ -66,6 +194,10 @@ export interface RotatingCandidate {
    *  (AgentRunner) doesn't need to know which candidate is active. */
   providerId: string;
   modelId: string;
+  /** This candidate's own max output tokens, used to override
+   *  `params.maxTokens` per candidate (the caller only knows the primary's
+   *  cap). Optional — when absent the caller's maxTokens is passed through. */
+  maxOutputTokens?: number;
   /** Factory is deferred-async because external providers need core-agent
    *  loaded lazily. We call it at most once per stream/complete request —
    *  if rotation happens to another candidate, we build that one too. */
@@ -96,6 +228,14 @@ export interface CreateRotatingProviderConfig {
   networkRetryAttempts?: number;
   /** Test hook / tuning knob for network retry backoff. */
   networkRetryDelayMs?: (attempt: number) => number;
+  /** Max ms a candidate may take to produce its FIRST content event (the
+   *  whole preamble-drain phase counts). On expiry the candidate is treated
+   *  as stalled and rotation moves to the next one (no cooldown), yielding a
+   *  `provider_fallback(no_first_event_timeout)` event. When every candidate
+   *  times out, the wrapper throws an error with code
+   *  `PROVIDER_NO_FIRST_EVENT_TIMEOUT` (permanent for the outer retry loop).
+   *  `0`/`undefined` disables (legacy behavior). Streaming only. */
+  firstEventTimeoutMs?: number;
 }
 
 export function createRotatingProvider(config: CreateRotatingProviderConfig): LLMProvider {
@@ -105,6 +245,7 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
   }
 
   const providerId = config.providerId;
+  const firstEventTimeoutMs = config.firstEventTimeoutMs;
   const networkRetryAttempts = Math.max(0, config.networkRetryAttempts ?? NETWORK_RETRY_ATTEMPTS);
   const networkRetryDelayMs = config.networkRetryDelayMs ?? ((attempt: number) => {
     return Math.min(NETWORK_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1), NETWORK_RETRY_MAX_DELAY_MS);
@@ -130,7 +271,15 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
    *  provider fallback hits its own endpoint even though AgentRunner
    *  only knows about the primary's model. */
   function paramsFor(cand: RotatingCandidate, params: CompletionParams): CompletionParams {
-    return { ...params, model: cand.modelId };
+    const out: CompletionParams = { ...params, model: cand.modelId };
+    // A fallback model can have a different output cap than the primary.
+    // Carry the candidate's OWN cap (when known) instead of the primary's:
+    // a smaller-cap fallback would otherwise get a request the provider
+    // rejects, and a bigger-cap fallback would be silently truncated.
+    if (typeof cand.maxOutputTokens === 'number' && cand.maxOutputTokens > 0) {
+      out.maxTokens = cand.maxOutputTokens;
+    }
+    return out;
   }
 
   function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -142,11 +291,6 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
         resolve();
       }, { once: true });
     });
-  }
-
-  function exhaustedNetworkError(lastErr: unknown): Error {
-    const msg = formatKeyFailure(lastErr) || 'network error';
-    return new Error(`All configured model candidates failed after network retries: ${msg.replace(/fetch[_\s-]?failed/ig, 'connection failed')}`);
   }
 
   async function streamOne(cand: RotatingCandidate, params: CompletionParams): Promise<{
@@ -167,6 +311,16 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
     const iterator: AsyncIterator<StreamEvent> = (iter as AsyncIterable<StreamEvent>)[Symbol.asyncIterator]();
     const buffered: StreamEvent[] = [];
 
+    // First-event budget: the whole preamble-drain phase must produce a
+    // content event within `firstEventTimeoutMs`, otherwise the candidate
+    // is treated as stalled and rotated away (a cold-start hang must not
+    // sit in the outer 30-min idle watchdog). Each `next()` races against
+    // the remaining budget, so preamble events don't reset the clock.
+    const deadline = Number.isFinite(firstEventTimeoutMs) && (firstEventTimeoutMs as number) > 0
+      ? Date.now() + (firstEventTimeoutMs as number)
+      : 0;
+    const signal = (params as { signal?: AbortSignal }).signal;
+
     // Drain past pure-preamble events. Bounded by PREAMBLE_MAX so a
     // misbehaving provider that endlessly emits `start`-like events can't
     // stall us forever.
@@ -174,8 +328,9 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
     for (let i = 0; i < PREAMBLE_MAX; i++) {
       let step: IteratorResult<StreamEvent>;
       try {
-        step = await iterator.next();
+        step = await nextEventOrTimeout(iterator, deadline, firstEventTimeoutMs, signal);
       } catch (err) {
+        if (isFirstEventTimeout(err)) return { rotatable: true, err };
         if (classifyKeyFailure(err)) return { rotatable: true, err };
         return { rotatable: false, err };
       }
@@ -218,6 +373,7 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
       let lastErr: unknown = new Error('rotating-provider: no candidates');
       let lastCand: RotatingCandidate | null = null;
       let exhaustedNetwork = false;
+      let lastKeyKind: Exclude<KeyFailureKind, 'network'> | null = null;
       for (let i = 0; i < candidates.length; i++) {
         const cand = candidates[i];
         lastCand = cand;
@@ -245,16 +401,24 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
             }
 
             const reason = formatKeyFailure(err);
-            if (kind !== 'network') markCooldown(cand.profileId, kind, reason);
+            if (kind !== 'network') {
+              markCooldown(cand.profileId, kind, reason);
+              lastKeyKind = kind;
+            } else {
+              lastKeyKind = null;
+            }
             exhaustedNetwork = kind === 'network';
             log.warn(`complete: profile=${cand.profileId} kind=${kind} — trying next candidate (${i + 1}/${candidates.length})`);
             break;
           }
         }
       }
-      // Exhausted: surface the last candidate's failure as the call's owner.
+      // Exhausted: surface the last candidate's failure as the call's owner,
+      // with a permanently-coded error so the AgentRunner outer retry loop
+      // does not repeat the whole candidate set (see errorWithCode).
       if (lastCand) config.onCandidateChosen?.({ profileId: lastCand.profileId, providerId: lastCand.providerId, modelId: lastCand.modelId });
       if (exhaustedNetwork) throw exhaustedNetworkError(lastErr);
+      if (lastKeyKind) throw exhaustedKeyError(lastKeyKind, lastErr);
       throw lastErr;
     },
 
@@ -262,6 +426,8 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
       let lastErr: unknown = new Error('rotating-provider: no candidates');
       let lastCand: RotatingCandidate | null = null;
       let exhaustedNetwork = false;
+      let exhaustedTimeout = false;
+      let lastKeyKind: Exclude<KeyFailureKind, 'network'> | null = null;
 
       for (let i = 0; i < candidates.length; i++) {
         const cand = candidates[i];
@@ -275,6 +441,10 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
 
           lastErr = attempt.err;
           if (!attempt.rotatable) break;
+
+          // A first-event stall is not retried on the same candidate —
+          // retrying a hung upstream only multiplies the wait. Rotate.
+          if (isFirstEventTimeout(attempt.err)) break;
 
           const kind = classifyKeyFailure(attempt.err)!;
           if (kind === 'network' && retry < networkRetryAttempts) {
@@ -298,11 +468,42 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
             config.onCandidateChosen?.({ profileId: cand.profileId, providerId: cand.providerId, modelId: cand.modelId });
             throw attempt.err;
           }
-          const kind = classifyKeyFailure(attempt.err)!;
+
+          // First-event timeout → network-like rotation WITHOUT cooldown,
+          // and a visible fallback notice (without this the outer idle
+          // watchdog would abort the whole turn after `idleTimeout` and
+          // never try the fallbacks at all).
+          if (isFirstEventTimeout(attempt.err)) {
+            exhaustedTimeout = true;
+            exhaustedNetwork = false;
+            lastKeyKind = null;
+            log.warn(`stream: profile=${cand.profileId} no first event within ${firstEventTimeoutMs}ms — trying next candidate (${i + 1}/${candidates.length})`);
+            yield { type: 'provider_fallback', reason: 'no_first_event_timeout', providerId: cand.providerId };
+            continue;
+          }
+
+          const kind = classifyKeyFailure(attempt.err);
+          if (!kind) {
+            // Defensive: a rotatable result that no longer classifies
+            // (rules changed under us) — surface it as the owner instead
+            // of silently rotating into the void.
+            config.onCandidateChosen?.({ profileId: cand.profileId, providerId: cand.providerId, modelId: cand.modelId });
+            throw attempt.err;
+          }
           const reason = formatKeyFailure(attempt.err);
-          if (kind !== 'network') markCooldown(cand.profileId, kind, reason);
-          exhaustedNetwork = kind === 'network';
-          log.warn(`stream: profile=${cand.profileId} kind=${kind} — trying next candidate (${i + 1}/${candidates.length})`);
+          if (kind !== 'network') {
+            markCooldown(cand.profileId, kind, reason);
+            lastKeyKind = kind;
+            exhaustedNetwork = false;
+            exhaustedTimeout = false;
+            log.warn(`stream: profile=${cand.profileId} kind=${kind} — trying next candidate (${i + 1}/${candidates.length})`);
+            yield { type: 'provider_fallback', reason: 'auth', providerId: cand.providerId };
+          } else {
+            lastKeyKind = null;
+            exhaustedNetwork = true;
+            exhaustedTimeout = false;
+            log.warn(`stream: profile=${cand.profileId} kind=network — trying next candidate (${i + 1}/${candidates.length})`);
+          }
           continue;
         }
 
@@ -328,9 +529,12 @@ export function createRotatingProvider(config: CreateRotatingProviderConfig): LL
       }
 
       // Exhausted all candidates — surface the last one as the owner of
-      // the visible failure, then throw whatever it gave us.
+      // the visible failure, then throw a permanently-coded error so the
+      // AgentRunner outer retry loop does not repeat the whole set.
       if (lastCand) config.onCandidateChosen?.({ profileId: lastCand.profileId, providerId: lastCand.providerId, modelId: lastCand.modelId });
+      if (exhaustedTimeout) throw exhaustedFirstEventTimeoutError(firstEventTimeoutMs, lastErr);
       if (exhaustedNetwork) throw exhaustedNetworkError(lastErr);
+      if (lastKeyKind) throw exhaustedKeyError(lastKeyKind, lastErr);
       throw lastErr;
     },
 

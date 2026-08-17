@@ -1042,11 +1042,48 @@ if (typeof window !== 'undefined') {
     document.addEventListener('DOMContentLoaded', () => {
       _initAllMentionMirrors();
       _initChatInputReserveObserver();
+      _bindChatContinueButton();
     }, { once: true });
   } else {
     _initAllMentionMirrors();
     _initChatInputReserveObserver();
+    _bindChatContinueButton();
   }
+}
+
+// 9.1 统一框架 · 底部「继续」（恢复自 9.1 会话区域框架）：主会话的一次性
+// 绑定。主会话控制器（_makeConvChatController）的 features.bindInput=false，
+// 输入接线由主会话自己接管，所以「继续」不能在通用控制器里绑，必须单独接
+// 一次。按钮按当前会话状态决定动作（智能继续）：
+//   - 最后一条消息失败（failed/failure_kind）→ 重试该消息（复用既有
+//     _retryFailedAssistantMessage 路径，带 retry_message_id）；
+//   - 其余（被中断 / 有计划未完成 / 普通空闲）→ 发送「请继续」续跑提示，
+//     走 sendInCurrentConversation，与手输同一条发送管线。
+function _chatContinueButtonState() {
+  const container = document.getElementById('chat-history');
+  const msgs = container ? Array.from(container.querySelectorAll('.chat-message')) : [];
+  const last = msgs[msgs.length - 1];
+  const lastFailed = !!last
+    && !last.classList.contains('user')
+    && (last.dataset.failed === '1' || !!last.dataset.failureKind || !!last.dataset.failureCode);
+  return { kind: lastFailed ? 'retry' : 'continue', failedMsgEl: lastFailed ? last : null };
+}
+
+function _bindChatContinueButton() {
+  const btn = document.getElementById('chat-continue-btn');
+  if (!btn || btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', async () => {
+    if (!currentCid || isConvPending(currentCid)) return;
+    if (typeof ensureModelConfigured === 'function' && !ensureModelConfigured()) return;
+    const state = _chatContinueButtonState();
+    if (state.kind === 'retry' && state.failedMsgEl) {
+      try { await _retryFailedAssistantMessage(state.failedMsgEl, null); } catch (_) {}
+      return;
+    }
+    const content = t('chat.continue_prompt');
+    try { await sendInCurrentConversation(content); } catch (_) { /* 与普通发送一致的容错 */ }
+  });
 }
 
 // ─── Recipient chip — per-cid for conversations, ephemeral for new-chat ──
@@ -4193,7 +4230,15 @@ function _mountMessageProducedFooter(msgDiv, absPaths, opts = {}) {
   });
   const node = wrap.firstElementChild;
   if (!node) return;
-  bubble.appendChild(node);
+  // 9.1 统一框架 · 中间区「Receipt 结果块」：产物回执统一收进「回执」块
+  // （数量角标 = 产物数），默认展开——产物是结果的一部分，不折叠藏起来。
+  const body = _mountCompactResultBlock(bubble, {
+    label: t('chat.result_block.receipt'),
+    icon: 'file-text',
+    count: absPaths.length,
+    open: true,
+  });
+  (body || bubble).appendChild(node);
   msgDiv.dataset.produced = JSON.stringify(absPaths);
   _hydrateMessageProducedChips(msgDiv);
 }
@@ -5235,6 +5280,9 @@ function _renderConversationSidebarItem(c, opts = {}) {
                   data-conv-menu-cid="${cid}" data-hide-pin="${hidePin ? '1' : '0'}"
                   title="${menuTitle}" aria-label="${menuTitle}">⋯</button>
         </span>`;
+  // 9.1 统一框架 · 左侧「任务与 Session」（恢复自 e88275e1）：聚合任务状态行
+  // （运行中执行方 / 排队消息 / 计划进度），数据来自真实运行态。
+  const taskLine = _convTaskStatusLine(c.conversation_id);
   return `
     <div class="${classes}" data-cid="${cid}">
       <div class="conv-item-row">
@@ -5244,8 +5292,58 @@ function _renderConversationSidebarItem(c, opts = {}) {
         ${timeHtml}
         ${actionsHtml}
       </div>
+      ${taskLine}
     </div>
   `;
+}
+
+// 9.1 统一框架 · 左侧「任务与 Session」：聚合会话的任务状态行。
+// 数据来源（全部真实运行态，不造数据）：
+//   - 运行中：state_changed 的在途执行方（_latestInFlight）；
+//   - 排队：本地消息队列（_getQueue）；
+//   - 计划进度：plan-rail 的 plan 事件（planFor）。
+// 无任何状态时返回空串，不渲染占位。
+function _convTaskStatusLine(cid) {
+  if (!cid) return '';
+  const parts = [];
+  const inFlight = (_latestInFlight.get(cid) || []).filter(Boolean).length;
+  if (inFlight > 0) {
+    parts.push(`<span class="conv-task-chip is-running"><span class="conv-task-dot"></span>${escapeHtml(t('chat.status.running'))}${inFlight > 1 ? ` ${inFlight}` : ''}</span>`);
+  }
+  // _getQueue 来自 queue-draft.js（独立脚本），跨模块调用加 typeof 守卫。
+  const queued = (typeof _getQueue === 'function') ? _getQueue(cid).length : 0;
+  if (queued > 0) {
+    parts.push(`<span class="conv-task-chip is-queued">${escapeHtml(t('chat.status.pending_short'))} ${queued}</span>`);
+  }
+  if (typeof window.planRail === 'object' && window.planRail
+      && typeof window.planRail.planFor === 'function') {
+    const plan = window.planRail.planFor(cid);
+    if (plan && plan.total > 0) {
+      const failed = plan.failed > 0;
+      const blocked = !failed && plan.blocked > 0;
+      const active = !failed && !blocked && plan.active > 0;
+      const cls = failed ? ' is-failed' : blocked ? ' is-blocked' : active ? ' is-active' : ' is-plan';
+      const label = t('chat.task_plan_label', { done: plan.done, total: plan.total });
+      const display = label && label !== 'chat.task_plan_label' ? label : `${plan.done}/${plan.total}`;
+      parts.push(`<span class="conv-task-chip${cls}">${escapeHtml(display)}</span>`);
+    }
+  }
+  if (!parts.length) return '';
+  return `<div class="conv-task-line">${parts.join('')}</div>`;
+}
+
+// 单项刷新任务状态行（state_changed / 队列 / plan 事件变化时由
+// _updateConvSidebarBadge 顺带调用）。
+function _refreshConvTaskLine(cid) {
+  if (!cid) return;
+  const item = document.querySelector(`.conv-item[data-cid="${cid}"]`);
+  if (!item) return;
+  item.querySelector('.conv-task-line')?.remove();
+  const line = _convTaskStatusLine(cid);
+  if (!line) return;
+  const meta = item.querySelector('.conv-item-meta');
+  if (meta) meta.insertAdjacentHTML('afterend', line);
+  else item.insertAdjacentHTML('beforeend', line);
 }
 
 /** ZCode 式相对时间（「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
@@ -8368,6 +8466,21 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const teachingReceiptsHtml = role === 'assistant'
     ? _renderTeachingReceiptsHtml(message.teaching_receipts)
     : '';
+  // 9.1 统一框架 · 中间区「Evidence 结果块」（恢复自 e88275e1）：来源引用 +
+  // 教学回执统一收进一个默认展开的「证据」块（数量角标 = 引用数 + 回执数），
+  // 放在正文之前，与 Artifact / Receipt 同一视觉语言。
+  const evidenceRefCount = Array.isArray(message.references) ? message.references.length : 0;
+  const evidenceReceiptCount = role === 'assistant' && Array.isArray(message.teaching_receipts)
+    ? message.teaching_receipts.length : 0;
+  const evidenceHtml = (referencesHtml || teachingReceiptsHtml)
+    ? _compactResultBlockHtml({
+        label: t('chat.result_block.evidence'),
+        icon: 'link',
+        count: evidenceRefCount + evidenceReceiptCount,
+        open: true,
+        bodyHtml: `${referencesHtml}${teachingReceiptsHtml}`,
+      })
+    : '';
   const recallCitationsHtml = role === 'assistant'
     ? _renderRecallCitationsHtml(message.recall_citations)
     : '';
@@ -8418,7 +8531,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${p3394BadgeHtml}${referencesHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${p3394BadgeHtml}${evidenceHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${attachmentsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
@@ -9016,6 +9129,48 @@ async function _resolveWakeRequest(card, request, cid, decision) {
     _convLog.warn('wake decision failed', (err && err.message) || String(err));
     try { await uiAlert(t('p3394.wake.failed')); } catch (_) {}
   }
+}
+
+// 9.1 统一框架 · 中间区紧凑结果块（恢复自 e88275e1）：
+// 静态版结果块 HTML（用于 appendChatMessage 的字符串组合路径），供 Evidence /
+// Receipt 等内联内容使用；动态挂载用 _mountCompactResultBlock。
+function _compactResultBlockHtml(opts = {}) {
+  const icon = _uiIconHtml(opts.icon || 'box', 'chat-result-block-icon-svg');
+  const countHtml = opts.count ? `<span class="chat-result-block-count">${escapeHtml(String(opts.count))}</span>` : '';
+  return `<details class="chat-result-block${opts.open ? ' is-open' : ''}"${opts.open ? ' open' : ''}>
+    <summary class="chat-result-block-head">
+      <span class="chat-result-block-icon">${icon || ''}</span>
+      <span class="chat-result-block-label">${escapeHtml(opts.label || '')}</span>
+      ${countHtml}
+      <span class="chat-result-block-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'chat-result-block-caret-svg') || ''}</span>
+    </summary>
+    <div class="chat-result-block-body">${opts.bodyHtml || ''}</div>
+  </details>`;
+}
+
+function _mountCompactResultBlock(host, opts = {}) {
+  if (!host) return null;
+  const details = document.createElement('details');
+  details.className = 'chat-result-block';
+  if (opts.open) {
+    details.open = true;
+    details.classList.add('is-open');
+  }
+  const icon = _uiIconHtml(opts.icon || 'box', 'chat-result-block-icon-svg');
+  const countHtml = opts.count ? `<span class="chat-result-block-count">${escapeHtml(String(opts.count))}</span>` : '';
+  details.innerHTML = `
+    <summary class="chat-result-block-head">
+      <span class="chat-result-block-icon">${icon || ''}</span>
+      <span class="chat-result-block-label">${escapeHtml(opts.label || '')}</span>
+      ${countHtml}
+      <span class="chat-result-block-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'chat-result-block-caret-svg') || ''}</span>
+    </summary>
+    <div class="chat-result-block-body"></div>
+  `;
+  host.appendChild(details);
+  // 图标占位统一由 icons.js 水合机制填充。
+  if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(details);
+  return details.querySelector('.chat-result-block-body');
 }
 
 function _mountMarketplaceInstallRequests(host, msgDiv, message, opts) {
@@ -14994,6 +15149,22 @@ function _updateConvSendUI(cid) {
   sendBtn.title = pending ? t('chat.stop_reply') : t('chat.send_title');
   if (input) {
     input.placeholder = pending ? t('chat.input_placeholder_queue') : t('chat.input_placeholder');
+  }
+  // 9.1 统一框架 · 底部「继续」（恢复自 9.1 会话区域框架）：非运行态且
+  // 执行方可用时显示；运行中隐藏（此时发送按钮已是「停止」，继续与停止
+  // 并存会误导）。文案按状态切换：最后一条失败 → 「重试」，否则「继续」。
+  const continueBtn = document.getElementById('chat-continue-btn');
+  if (continueBtn) {
+    continueBtn.hidden = pending;
+    continueBtn.disabled = pending;
+    if (!pending) {
+      const continueState = _chatContinueButtonState();
+      const isRetry = continueState.kind === 'retry';
+      const labelEl = continueBtn.querySelector('[data-role="continue-label"]');
+      if (labelEl) labelEl.textContent = isRetry ? t('chat.retry_btn') : t('chat.continue');
+      continueBtn.title = isRetry ? t('chat.retry_btn') : t('chat.continue');
+      continueBtn.classList.toggle('is-retry', isRetry);
+    }
   }
   if (!pending) input?.focus();
 }
