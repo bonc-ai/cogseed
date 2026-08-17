@@ -2324,6 +2324,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await recallSkillDrafts.confirmRecallSkillDraft(ctx.userId, assetId, draftHash)) };
   },
 
+  'recall.skills.decide': async ({ assetId, draftHash, decision } = {}, ctx) => {
+    if (!safeId(assetId) || typeof draftHash !== 'string' || !/^[a-f0-9]{64}$/.test(draftHash)
+      || (decision !== 'accept' && decision !== 'defer' && decision !== 'reject')) {
+      throw new Error('invalid recall skill decision');
+    }
+    if (decision === 'accept') {
+      return { ok: true, ...(await recallSkillDrafts.confirmRecallSkillDraft(ctx.userId, assetId, draftHash)) };
+    }
+    return { ok: true, draft: await recallSkillDrafts.decideRecallSkillDraft(ctx.userId, assetId, draftHash, decision) };
+  },
+
   'recall.workspaceRefs.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, references: await recallWorkspaceRefs.listWorkspaceAssetReferences(ctx.userId, assetId) }; },
   'recall.workspaceRefs.add': async ({ assetId, workspaceId, scope, enabled } = {}, ctx) => { if (!safeId(assetId) || !safeId(workspaceId) || typeof scope !== 'string' || (enabled !== undefined && typeof enabled !== 'boolean')) throw new Error('invalid workspace reference'); return { ok: true, reference: await recallWorkspaceRefs.addWorkspaceAssetReference(ctx.userId, { assetId, workspaceId, scope, ...(enabled !== undefined ? { enabled } : {}) }) }; },
   'recall.workspaceRefs.update': async ({ id, scope, enabled } = {}, ctx) => { if (!safeId(id) || (scope !== undefined && typeof scope !== 'string') || (enabled !== undefined && typeof enabled !== 'boolean')) throw new Error('invalid workspace reference'); return { ok: true, reference: await recallWorkspaceRefs.updateWorkspaceAssetReference(ctx.userId, id, { ...(scope !== undefined ? { scope } : {}), ...(enabled !== undefined ? { enabled } : {}) }) }; },
@@ -2523,10 +2534,33 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, summary: await cognition.getSkillCognitionSummary(ctx.userId, skillId) };
   },
 
-  'cognition.skills.rollback': async ({ skillId, version } = {}, ctx) => {
+  'cognition.skills.audit': async (_args, ctx) => ({
+    ok: true,
+    audit: await cognition.getSkillVersionMigrationAudit(ctx.userId),
+  }),
+
+  'cognition.skills.diff': async ({ skillId, fromVersion, toVersion } = {}, ctx) => {
+    if (!safeId(skillId) || typeof fromVersion !== 'string' || !fromVersion.trim()
+      || typeof toVersion !== 'string' || !toVersion.trim()) throw new Error('invalid skill diff request');
+    return { ok: true, diff: await cognition.diffSkillCognitionVersions(ctx.userId, skillId, fromVersion.trim(), toVersion.trim()) };
+  },
+
+  'cognition.skills.rollback.preview': async ({ skillId, version } = {}, ctx) => {
+    if (!safeId(skillId) || typeof version !== 'string' || !version.trim() || !safeId(version.trim())) throw new Error('invalid skill rollback preview');
+    return { ok: true, preview: await cognition.previewSkillCognitionRollback(ctx.userId, skillId, version.trim()) };
+  },
+
+  'cognition.skills.rollback': async ({ skillId, version, expectedManifestHash, expectedRevisionId, allowPartialLegacy } = {}, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skill id');
-    if (typeof version !== 'string' || !version.trim() || !/^[0-9]+(?:\.[0-9]+){0,3}$/.test(version.trim())) throw new Error('invalid skill version');
-    return { ok: true, result: await cognition.rollbackSkillCognitionVersion(ctx.userId, skillId, version.trim()) };
+    if (typeof version !== 'string' || !version.trim() || !safeId(version.trim())) throw new Error('invalid skill version');
+    if (expectedManifestHash !== undefined && (typeof expectedManifestHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedManifestHash))) throw new Error('invalid skill manifest hash');
+    if (expectedRevisionId !== undefined && (typeof expectedRevisionId !== 'string' || !safeId(expectedRevisionId))) throw new Error('invalid skill revision');
+    if (allowPartialLegacy !== undefined && typeof allowPartialLegacy !== 'boolean') throw new Error('invalid legacy rollback confirmation');
+    return { ok: true, result: await cognition.rollbackSkillCognitionVersion(ctx.userId, skillId, version.trim(), {
+      ...(expectedManifestHash ? { manifestHash: expectedManifestHash } : {}),
+      ...(expectedRevisionId ? { revisionId: expectedRevisionId } : {}),
+      ...(allowPartialLegacy === true ? { allowPartialLegacy: true } : {}),
+    }) };
   },
 
   'groupChat.abort': async ({ cid }, ctx) => {
@@ -4944,6 +4978,35 @@ const streamHandlers: Record<string, StreamHandler> = {
     const onAbort = () => { cancelled = true; const w = wake; wake = null; w?.(); };
     if (!cancelled) signal.addEventListener('abort', onAbort, { once: true });
     const unsub = autoTasks.subscribeFires((ev) => {
+      buf.push(ev);
+      const w = wake; wake = null; w?.();
+    });
+    try {
+      while (!cancelled) {
+        while (buf.length) {
+          const ev = buf.shift()!;
+          yield { type: 'event', event: ev };
+        }
+        if (cancelled) break;
+        await new Promise<void>((resolve) => { wake = resolve; });
+      }
+    } finally {
+      try { unsub(); } catch { /* ignore */ }
+      try { signal.removeEventListener?.('abort', onAbort); } catch { /* ignore */ }
+    }
+  },
+
+  // B+ fast import: background extraction completion. The renderer subscribes
+  // once on boot and uses these events to swap a conversation's "正在提炼"
+  // placeholder for the real carry details (and toast the user).
+  'sessionImport.events': async function* (_payload, _ctx, signal) {
+    const buf: Array<{ type: 'extraction_done' | 'extraction_failed'; cid: string; welcome?: unknown; reason?: string }> = [];
+    let wake: (() => void) | null = null;
+    let cancelled = signal.aborted;
+    const onAbort = () => { cancelled = true; const w = wake; wake = null; w?.(); };
+    if (!cancelled) signal.addEventListener('abort', onAbort, { once: true });
+    const { subscribeExtractionEvents } = await import('../features/session_import/extraction-background');
+    const unsub = subscribeExtractionEvents((ev) => {
       buf.push(ev);
       const w = wake; wake = null; w?.();
     });

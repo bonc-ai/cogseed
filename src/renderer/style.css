@@ -4940,6 +4940,24 @@ body.model-not-configured .main-content { flex-direction: column; }
   flex-direction: column;
   gap: 6px;
 }
+/* B+ 快速导入：后台提炼进行中的占位条（绿色呼吸提示，与常规欢迎面板同款）。 */
+.welcome-carry.is-pending {
+  border-style: dashed;
+  animation: welcome-carry-pending 1.6s ease-in-out infinite;
+}
+@keyframes welcome-carry-pending {
+  0%, 100% { border-color: color-mix(in srgb, var(--primary) 30%, var(--border)); }
+  50% { border-color: color-mix(in srgb, var(--primary) 65%, var(--border)); }
+}
+.welcome-carry-pending-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--primary-text, #0a7a55);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
 .welcome-carry-head {
   display: flex;
   align-items: center;
@@ -24245,6 +24263,8 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .cw-import-row.is-running{background:#FFF8E6;border-color:#F1C75B;animation:cw-import-pulse 1.2s ease-in-out infinite}
 @keyframes cw-import-pulse{0%,100%{background:#FFF8E6}50%{background:#FFEFC7}}
+.cw-import-row.is-pending{background:#EAF3EE;border-color:#9CC3AE;animation:cw-import-pending 1.4s ease-in-out infinite}
+@keyframes cw-import-pending{0%,100%{background:#EAF3EE}50%{background:#D7E9E0}}
 .cw-import-row.is-ok{background:var(--surface-2,#EDF3EF);border-color:var(--border-strong,rgba(24,84,60,.2))}
 .cw-import-row.is-degraded{background:#FBF3E0;border-color:#E3C56B}
 .cw-import-row.is-exists{background:var(--surface-2,#EDF3EF);border-color:var(--border-strong,rgba(24,84,60,.2))}
@@ -24299,6 +24319,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 .cw-done-tag{
   flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:0.04em;
   color:#9A6B00;background:#F3E2B0;border-radius:999px;padding:3px 9px;
+}
+/* 后台提炼中标记：绿色（区别于黄色「未提炼」）。 */
+.cw-done-tag.is-pending{
+  color:var(--primary-text,#0A7A55);background:var(--primary-soft,#E2F5EC);
 }
 /* 已存在的会话标记：绿色（区别于黄色「未提炼」）。 */
 .cw-done-tag.is-exists{
@@ -25504,3 +25528,134 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 /* footer 摘要 */
 .cw-selection-summary{color:var(--muted,#6E8578);font-size:12px}
+
+/* ── 结果块（恢复自 e88275e1「Evidence/Receipt 结果块」）──────────────
+   9.1 统一框架 · 中间区：来源引用/教学回执收进「证据 Evidence」块、产物
+   回执收进「回执 Receipt」块（与 Artifact 块同一视觉语言）；左侧会话项
+   任务状态行（运行中/排队/计划进度）。 */
+.chat-result-block {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.chat-result-block.is-open {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+}
+.chat-result-block + .chat-result-block { margin-top: 6px; }
+.chat-result-block-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.chat-result-block-head::-webkit-details-marker { display: none; }
+.chat-result-block-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.chat-result-block-icon .ui-icon,
+.chat-result-block-icon-svg {
+  width: 14px;
+  height: 14px;
+}
+.chat-result-block-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-result-block-count {
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: center;
+}
+.chat-result-block-caret {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.chat-result-block-caret .ui-icon,
+.chat-result-block-caret-svg {
+  width: 13px;
+  height: 13px;
+}
+.chat-result-block[open] .chat-result-block-caret { transform: rotate(90deg); }
+.chat-result-block-body {
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border);
+}
+.chat-result-block-body .marketplace-card,
+.chat-result-block-body .chat-kstar-review,
+.chat-result-block-body .expense-agent-card,
+.chat-result-block-body .chat-recall-projection-card {
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+.conv-task-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+  padding-left: 2px;
+}
+.conv-task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+}
+.conv-task-chip .conv-task-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.conv-task-chip.is-running {
+  color: var(--success);
+  background: rgba(16, 185, 129, 0.10);
+}
+.conv-task-chip.is-queued {
+  color: #b45309;
+  background: rgba(234, 179, 8, 0.14);
+}
+.conv-task-chip.is-plan,
+.conv-task-chip.is-active {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+.conv-task-chip.is-blocked {
+  color: #b45309;
+  background: rgba(234, 179, 8, 0.14);
+}
+.conv-task-chip.is-failed {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.10);
+}

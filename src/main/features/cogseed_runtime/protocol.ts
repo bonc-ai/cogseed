@@ -35,6 +35,13 @@ export interface RuntimeAttachment {
   name?: string;
 }
 
+export interface RuntimeSkillVersionPin {
+  skillId: string;
+  version: string;
+  manifestHash: string;
+  revisionId?: string;
+}
+
 export interface RuntimeRunRequest {
   protocol_version: number;
   type: 'run';
@@ -47,6 +54,7 @@ export interface RuntimeRunRequest {
   agent_id?: string;
   execution_kind?: 'cogseed-native' | 'local-cli';
   allowed_skill_ids?: string[];
+  skill_version_pins?: RuntimeSkillVersionPin[];
   model_profile?: string;
   working_dir?: string;
   read_only_roots?: string[];
@@ -333,6 +341,24 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
   if (allowedSkillIds?.some((item) => !safeId(item))) {
     return fail('E_RUNTIME_INVALID_ID', 'invalid allowed_skill_ids');
   }
+  const rawPins = (raw as any).skill_version_pins;
+  if (rawPins !== undefined && (!Array.isArray(rawPins) || rawPins.length > 128)) {
+    return fail('E_RUNTIME_INVALID_REQUEST', 'skill_version_pins must be a bounded array');
+  }
+  const skillVersionPins: RuntimeSkillVersionPin[] | undefined = rawPins === undefined
+    ? undefined
+    : rawPins.map((item: any) => ({
+      skillId: String(item?.skillId || '').trim(),
+      version: String(item?.version || '').trim(),
+      manifestHash: String(item?.manifestHash || '').trim(),
+      ...(item?.revisionId ? { revisionId: String(item.revisionId) } : {}),
+    }));
+  if (skillVersionPins?.some((pin, index) => !safeId(pin.skillId) || !pin.version
+    || !/^[a-f0-9]{64}$/.test(pin.manifestHash)
+    || (pin.revisionId !== undefined && !safeId(pin.revisionId))
+    || skillVersionPins.findIndex((candidate) => candidate.skillId === pin.skillId) !== index)) {
+    return fail('E_RUNTIME_INVALID_REQUEST', 'invalid skill_version_pins');
+  }
   const workingDir = (raw as any).working_dir;
   if (workingDir !== undefined) {
     const normalized = normalizeFilePath(uid, workingDir, opts.allowedRoots);
@@ -361,6 +387,7 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
   if (agentId) request.agent_id = agentId;
   if (modelProfile) request.model_profile = modelProfile;
   if (allowedSkillIds !== undefined) request.allowed_skill_ids = allowedSkillIds;
+  if (skillVersionPins !== undefined) request.skill_version_pins = skillVersionPins;
   if (typeof workingDir === 'string') {
     request.working_dir = path.resolve(workingDir);
     request.writable_roots = [request.working_dir];

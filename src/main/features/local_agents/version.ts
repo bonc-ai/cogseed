@@ -94,11 +94,15 @@ export async function detectVersion(
 
     let stdout = '';
     let stderr = '';
-    const launch = resolveCliCommand(binPath, [...versionArgs]);
+    const childEnv = buildCliSpawnEnv(binPath);
+    const launch = resolveCliCommand(binPath, [...versionArgs], process.platform, childEnv);
+    for (const [key, value] of Object.entries(launch.envPatch || {})) {
+      childEnv[key] = value;
+    }
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(launch.command, launch.args, {
-        env: buildCliSpawnEnv(binPath),
+        env: childEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         windowsVerbatimArguments: launch.windowsVerbatimArguments,

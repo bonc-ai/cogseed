@@ -1,81 +1,81 @@
 {
   "schema": 1,
-  "content_tree_sha256": "d644872ef1edcd5d08aab1e9670b568a0ab7a4053e0c9213e0fa0e5da70f133a",
+  "content_tree_sha256": "da73c297ebb9345fc3ba9978353a871b1e195596a1c1bb55bbe4d24cfa74ba8e",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
-      "bytes": 1218,
-      "sha256": "0920089986ca764588125fbf64159f52f4ceae04a46078d7b06c19cc5de9aaa5"
+      "bytes": 1219,
+      "sha256": "35891891263e1c607aa6988c3b4f79bbb414a088aaa2459e4fb88a1311b19573"
     },
     {
       "path": "marketplace/agents/1ce66a5d9875/agent.json",
-      "bytes": 1183,
-      "sha256": "68aec52685b7c3271abdc2ddc971d6eea26a8598774b40de597db0b535622c7d"
+      "bytes": 1184,
+      "sha256": "336eff8a5d8b1769f94f326cdd9be2c0c3891d9617453f5d8cf12a4b15218c7a"
     },
     {
       "path": "marketplace/agents/2a2d007ec7e2/agent.json",
-      "bytes": 1199,
-      "sha256": "9c3a70324889097b6269a0991006a7b304a9e75c94246042b14ce52f6ddf6764"
+      "bytes": 1200,
+      "sha256": "84bf0d4d2ea4229c48be5649adb4d694904de5b389c72714c8dcc35a9ec2d3b2"
     },
     {
       "path": "marketplace/agents/2ec891859db3/agent.json",
-      "bytes": 1179,
-      "sha256": "cd056da49724a47c5e14b2fe09e7aad3636227136cf78f8768cc14c84b36e766"
+      "bytes": 1180,
+      "sha256": "9ff73dc4f88d7feaab89019686b00bc0293e41e7dc5455319b2ec20ab8068996"
     },
     {
       "path": "marketplace/agents/36cb9c97ac31/agent.json",
-      "bytes": 1176,
-      "sha256": "ec992192804a52c6858cd1ff19201d56a6022b189eea90ab029fe53521c1a5f5"
+      "bytes": 1180,
+      "sha256": "8f931e4e045293a87077dbdf52c826fe0d0b0c13e5b2d3716f4bbacc8132ea68"
     },
     {
       "path": "marketplace/agents/37054bcc1740/agent.json",
-      "bytes": 1176,
-      "sha256": "d62c60ef3d66e250b920feb830874b60bb39045d64532bc56d731b4d7adea4fd"
+      "bytes": 1177,
+      "sha256": "982824936ecfd5e177e569f581ba74114110a8904a56600de5e34a1c80dc837b"
     },
     {
       "path": "marketplace/agents/373f22475ab4/agent.json",
-      "bytes": 1185,
-      "sha256": "405356144370f4c0d2feead416347b28c9e21cea8fa43136743ead7a6cd0f47b"
+      "bytes": 1192,
+      "sha256": "695758d0990d042f8400c41a269fe598cf4e91354860bd6509b48e76ad0a0be6"
     },
     {
       "path": "marketplace/agents/39f682807819/agent.json",
-      "bytes": 1210,
-      "sha256": "5ca7f3fe45856c518ff00051380856715e3e3270350ffc14bedb2a23289b1e55"
+      "bytes": 1215,
+      "sha256": "6eb2789da521e3d0ee51e7af9f6c29ffe09eb54da61d530a0a2f7851968ff1ac"
     },
     {
       "path": "marketplace/agents/3bf780cd23be/agent.json",
       "bytes": 1184,
-      "sha256": "5934f7550f71e89d41ebd3f839f82e0d694f7ada5e3e09449a4c35c104d4f340"
+      "sha256": "be445f8f38a808a57e066b39ff39d2f7ce7b055d3eba03ad741e7627594ea339"
     },
     {
       "path": "marketplace/agents/54f102b6c1ee/agent.json",
-      "bytes": 1151,
-      "sha256": "84787054fa6ace0981e2057c0f9d893516f42c5c3b53f3978c9dd2e6dc6a448c"
+      "bytes": 1160,
+      "sha256": "04cba4adead4ad653d9f2f3b1863c9ca2d99b794f691222864e7349cbdbee2fa"
     },
     {
       "path": "marketplace/agents/57f6f828af9f/agent.json",
-      "bytes": 1198,
-      "sha256": "12c8fa33c8f15e38fc9cced47786d4ab6ac2853f38266a2cf15b2694082592e9"
+      "bytes": 1199,
+      "sha256": "8169bbb1a997cc6651234be383018751495ab877910429b54e101284514a9203"
     },
     {
       "path": "marketplace/agents/5a5fe1598ed0/agent.json",
-      "bytes": 1163,
-      "sha256": "a1812500a39339d09867504a90e4c73bc0290f339081824c73bba0291a09b43d"
+      "bytes": 1162,
+      "sha256": "436d16796915988246a3b505ea6f3eb2ea97e10035d2a7eda62cc6df04a6a784"
     },
     {
       "path": "marketplace/agents/662cb1c1de2c/agent.json",
-      "bytes": 1237,
-      "sha256": "9238ee56ce5319f5a06fc0ab904e4ecb5d5a58f67159671f5faa0a078d7c71c0"
+      "bytes": 1239,
+      "sha256": "088ee05ac35ad29f9dc2f7bc16d77f32df5c286fefbde12a01ef9356ff6f0835"
     },
     {
       "path": "marketplace/agents/6a960be83f33/agent.json",
-      "bytes": 1168,
-      "sha256": "9328f4ed4c4efa378386e12f9f7cf110338be21ef66011bc81db8ddd1eebdea9"
+      "bytes": 1174,
+      "sha256": "22aa917d100a18c5e81d61614c609d0475c46a97c912efbe937d1a85849159fe"
     },
     {
       "path": "marketplace/agents/736cc1ac94b4/agent.json",
-      "bytes": 1209,
-      "sha256": "957f0636f258c1e2c8f7d0c58ac09d0f0cb5787733e343e6846da75887dd8dde"
+      "bytes": 1214,
+      "sha256": "196d05f18376a4c7c6aad8845a619311126fefbbf5b062cc93e241e635c92d3d"
     },
     {
       "path": "marketplace/agents/78900d8758bc/_meta.json",
@@ -84,18 +84,18 @@
     },
     {
       "path": "marketplace/agents/78900d8758bc/agent.json",
-      "bytes": 8655,
-      "sha256": "c325a71e2ea2c08734624bed48ae5597ee744cb0c2063cc31d5ee2f3c7c8880f"
+      "bytes": 8654,
+      "sha256": "fd2f2fb686af25d506e781846ece58dcdbc301876d8cec55deaa5f3308f59610"
     },
     {
       "path": "marketplace/agents/78ef7f901e81/agent.json",
-      "bytes": 1235,
-      "sha256": "66542440a86cbf127cc003b79db72a9cf786e9f51e6144a78c02da9d0c5a8cc9"
+      "bytes": 1236,
+      "sha256": "cffa851e533c52f0e268da6e52160d5360c64d4744065de5eb80a5d1df6a19cb"
     },
     {
       "path": "marketplace/agents/79df9cc89f5f/agent.json",
-      "bytes": 28820,
-      "sha256": "764064ddb2ed5cd1efbc3b40e3fbcc81995712da2872d52f06d538141e71b8c3"
+      "bytes": 28815,
+      "sha256": "6c4037978f3027d42fea2e48986090365d3432aeded2b6e239efbb2e83fa8525"
     },
     {
       "path": "marketplace/agents/79df9cc89f5f/skills/_shared/scripts/src/bundled-runtime.ts",
@@ -269,53 +269,53 @@
     },
     {
       "path": "marketplace/agents/7c3138523589/agent.json",
-      "bytes": 1088,
-      "sha256": "a8f830564f73c3799d7e4149c4fcf557f04e2924f3d47d2a5fb06fad719308e0"
+      "bytes": 1090,
+      "sha256": "8f10db139e3e93581dcebf893a843c9abb284fff03c3fdc13304afb3df9f0a99"
     },
     {
       "path": "marketplace/agents/7ece3121592e/agent.json",
-      "bytes": 1218,
-      "sha256": "10abd7f2007b220de1486f458f500f347d098bf263e46f3a4fb86c7ff15f0e90"
+      "bytes": 1231,
+      "sha256": "a3eaa2e1fe8d72ab75369f80466522fd5e3e5a6258abe3d53d27fff74273aafb"
     },
     {
       "path": "marketplace/agents/876218dd6c3f/agent.json",
-      "bytes": 1193,
-      "sha256": "ee63aba65af219a6fbe60c760f624e0ce7961df272affc85dde0cdf3ff3fee49"
+      "bytes": 1194,
+      "sha256": "e3fbf21b4ab3f3d6060c8327b3d9cfcc509681a0f03e51de7ebdac6f1b448289"
     },
     {
       "path": "marketplace/agents/8dcba242d360/agent.json",
-      "bytes": 1198,
-      "sha256": "873b4458ccbab4a6bda3f956628e578b9780d7250d448c7b7c67197a6b75bb90"
+      "bytes": 1205,
+      "sha256": "b5f0dfe886c7c247fef3427ea78655e4924fd36f9721855a945b650af7694a49"
     },
     {
       "path": "marketplace/agents/9099ea65848a/agent.json",
-      "bytes": 1180,
-      "sha256": "3a8c0b3ef88bbe164305443f62d44224078c350847e0588de29c464c7825ff0e"
+      "bytes": 1183,
+      "sha256": "0eb7ad0393eaf9b50d6d395f507d7feee693aa91a9ae97467e5d97271ceba124"
     },
     {
       "path": "marketplace/agents/9a26f9f2336d/agent.json",
-      "bytes": 1196,
-      "sha256": "ce75a3115feb95f35833d7964a5d2b79bb5c7ecd1266e89824dc45f2cbb577de"
+      "bytes": 1203,
+      "sha256": "0f9bf606da1b3451f61e68e599aad02a8e3a6afefd023c72d2f19acb001c29d9"
     },
     {
       "path": "marketplace/agents/a0aaf36d3c37/agent.json",
-      "bytes": 1221,
-      "sha256": "35747afe083138f0e502c0384e7c6fdc92b957e8e99ac7802b660782d962b06f"
+      "bytes": 1222,
+      "sha256": "4541aea4c30dbe57455fb3b881cee549ce3ca04d2e4ddac44b0df618d9aae000"
     },
     {
       "path": "marketplace/agents/a37e8dbcc57e/agent.json",
-      "bytes": 1159,
-      "sha256": "ee266bb7ef2678d1e7d8856bc2457b2c7d63f227cfa08ee2bef7f159d1e1d9bd"
+      "bytes": 1161,
+      "sha256": "158753dea5d566af52eb17ad61d9c7f2d070ad522342d00ef97ac02c46227050"
     },
     {
       "path": "marketplace/agents/bc60fe682b5a/agent.json",
-      "bytes": 1138,
-      "sha256": "138b1ec3c1a4637b137c28a702fd6a9dc3a2f819b9bfbae4ac358a78c6638bec"
+      "bytes": 1139,
+      "sha256": "5c0eb4ab60efb32246e305fcd7ad5fa97b868165ac29718b21f566dc61804d06"
     },
     {
       "path": "marketplace/agents/bcfcb4921dce/agent.json",
-      "bytes": 15578,
-      "sha256": "67fd40e6799d1592e67a075498442542350bc07fb5f8a1d6abed7fc7f901bed2"
+      "bytes": 15573,
+      "sha256": "ea8683c311884654634d3dc6efa27f0f9cf1d01fbbc4cea05e6b4689516fc503"
     },
     {
       "path": "marketplace/agents/bcfcb4921dce/skills/ui-artifact-workspace/SKILL.md",
@@ -399,18 +399,18 @@
     },
     {
       "path": "marketplace/agents/c045605cb916/agent.json",
-      "bytes": 3591,
-      "sha256": "76fd84ca51193c0853f50a38676d18c2eb62add283b46d535139bcc2c6f6bd16"
+      "bytes": 3595,
+      "sha256": "ada95a7cc011873bfdd35474906a237a7a824f6aab1a2983bab8d348aae3ebbd"
     },
     {
       "path": "marketplace/agents/c0e5a377b91c/agent.json",
-      "bytes": 1207,
-      "sha256": "8eeaecc952f969aa22d3d755b8598df794bbb34fce473270325d0d42fbfab563"
+      "bytes": 1208,
+      "sha256": "776d20e9ff094af76be1aef2f5e2c3c85d8adba9f62eab6fcc17f492f71d6da1"
     },
     {
       "path": "marketplace/agents/e064dca9e1bd/agent.json",
       "bytes": 15534,
-      "sha256": "10a603b1a9aa4b72787aebcdd907b2e1d294cd3d17bdc52cf04e15b3489c74da"
+      "sha256": "e78279073c926d8484c3e8fd99140b0ebfb6664d0c1bdfcb63442f79bf6a72e4"
     },
     {
       "path": "marketplace/agents/e064dca9e1bd/README.md",
@@ -575,17 +575,17 @@
     {
       "path": "marketplace/agents/e299e8f8ef9b/agent.json",
       "bytes": 1256,
-      "sha256": "a6b3f603140ddc97723eb7d362d816361da41f6a0d29e6c332575e4807a3e6ca"
+      "sha256": "4d718ac9c0e6af117a25d5e1842f364c92aa7a64f8c0aca0aedccdf8a6db781c"
     },
     {
       "path": "marketplace/agents/fb836f8b51ca/agent.json",
-      "bytes": 1228,
-      "sha256": "e89f3934dc97e0722336a4aafd307117475b436dd80b72c9ee659ace958c64eb"
+      "bytes": 1231,
+      "sha256": "33236e484e8a9d3f05fccf7a87425b8f75c35a2dc85f9a391fb57aac53684d86"
     },
     {
       "path": "marketplace/agents/fce0f5110ab2/agent.json",
-      "bytes": 1160,
-      "sha256": "2764ac4559ea4ad12f3679efdd2e5eaad6f611ebeb8581b3fced44edad9803f3"
+      "bytes": 1164,
+      "sha256": "7875a99d9b0563cce5f13465c87a9d539840daf3d171bfe27611056be7f7e67a"
     },
     {
       "path": "marketplace/skills/02d958231673/_meta.json",
@@ -6193,6 +6193,11 @@
       "sha256": "e5f6920a0144877d384039c827d02ad56580053a936cddd7598c6c6ffe0335d0"
     },
     {
+      "path": "marketplace/skills/d470761b0a07/工业企业ECS售前模板_基于V3.4_v2.0.pdf",
+      "bytes": 2224643,
+      "sha256": "673a2dcfc493a711fd85012ce56b239c1d9602e97e23d38a4f316ec44d1c8ba3"
+    },
+    {
       "path": "marketplace/skills/d470761b0a07/agents/openai.yaml",
       "bytes": 934,
       "sha256": "ed1e1c8cc6f1ecfa11c7f934c65493370b4e068de38d70d96a0935c3c3c30de3"
@@ -6236,6 +6241,11 @@
       "path": "marketplace/skills/d470761b0a07/evals/replay_dataset.md",
       "bytes": 254,
       "sha256": "4076c724587c0c912e66274197c30264ccbc00f4e33da3235229772f58908e05"
+    },
+    {
+      "path": "marketplace/skills/d470761b0a07/references/本体可视化-ECS售前.html",
+      "bytes": 41245,
+      "sha256": "414b931702d1a46353b74ebe23bcbaea80fd3534c2b1aaded7a0044e023fc158"
     },
     {
       "path": "marketplace/skills/d470761b0a07/references/eval-cases.yaml",
@@ -6288,11 +6298,6 @@
       "sha256": "e0fe7f9a6250947380c9ed4a6a316afc8cd481bceff8efd55ec48a523ecde71a"
     },
     {
-      "path": "marketplace/skills/d470761b0a07/references/本体可视化-ECS售前.html",
-      "bytes": 41245,
-      "sha256": "414b931702d1a46353b74ebe23bcbaea80fd3534c2b1aaded7a0044e023fc158"
-    },
-    {
       "path": "marketplace/skills/d470761b0a07/schemas.json",
       "bytes": 2792,
       "sha256": "a5bf4461476c6764a115772bbf1936e8c9eff3b5b326c78993627036060e9ed5"
@@ -6301,11 +6306,6 @@
       "path": "marketplace/skills/d470761b0a07/SKILL.md",
       "bytes": 19214,
       "sha256": "95bc15d45a8764579633f04692614fea5637b10e4075d763f4a3c3f721c99f20"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/工业企业ECS售前模板_基于V3.4_v2.0.pdf",
-      "bytes": 2224643,
-      "sha256": "673a2dcfc493a711fd85012ce56b239c1d9602e97e23d38a4f316ec44d1c8ba3"
     },
     {
       "path": "marketplace/skills/d5041e397e79/_meta.json",
@@ -7103,6 +7103,11 @@
       "sha256": "3e3a6f4706a432fab206ec97b225bee2b2156f318fbfe8d1779a263e24c8ee89"
     },
     {
+      "path": "marketplace/skills/f51578fae310/本体可视化-运营商数据安全.html",
+      "bytes": 39528,
+      "sha256": "dbb9a7201fb5679c72c894102bf2455116ec280cbb3bcb192159c3b0d9bd0d44"
+    },
+    {
       "path": "marketplace/skills/f51578fae310/agents/openai.yaml",
       "bytes": 1002,
       "sha256": "fb10c726693be01037afbd535d82101d16fc8c27baef658b533cbda4a991ff91"
@@ -7196,11 +7201,6 @@
       "path": "marketplace/skills/f51578fae310/SKILL.md",
       "bytes": 13966,
       "sha256": "9d0575f19fde947942d5ae09015bada64a04309909826c54022f02ee7828cecb"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/本体可视化-运营商数据安全.html",
-      "bytes": 39528,
-      "sha256": "dbb9a7201fb5679c72c894102bf2455116ec280cbb3bcb192159c3b0d9bd0d44"
     },
     {
       "path": "marketplace/skills/ffaad9705891/_meta.json",
@@ -7532,7 +7532,7 @@
         "version": "0.2.0-review.1",
         "icon": "target",
         "color": "violet",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "577787fb975e",
           "7432875f93bf"
@@ -7545,7 +7545,7 @@
         "version": "1.0.0",
         "icon": "search",
         "color": "violet",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "79943922f937",
           "a5c864d6b267"
@@ -7558,7 +7558,7 @@
         "version": "1.0.0",
         "icon": "pen",
         "color": "violet",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "02d958231673",
           "8ac59333bc31"
@@ -7571,7 +7571,7 @@
         "version": "0.2.0-review.1",
         "icon": "doc",
         "color": "emerald",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "06d69ee5f1bc",
           "d5d2fb6337fb"
@@ -7582,9 +7582,9 @@
         "id": "36cb9c97ac31",
         "name": "代码库探索Agent",
         "version": "0.2.0-review.1",
-        "icon": "code",
+        "icon": "compass",
         "color": "sky",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "93d7b28fb6b4",
           "d3d406dffdbc"
@@ -7597,7 +7597,7 @@
         "version": "0.2.0-review.1",
         "icon": "book",
         "color": "emerald",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "2b7f7c8621d5",
           "6c5609e76cf0"
@@ -7608,9 +7608,9 @@
         "id": "373f22475ab4",
         "name": "解决方案草案Agent",
         "version": "0.2.0-review.1",
-        "icon": "pen",
+        "icon": "clipboard",
         "color": "gold",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "464e3f3416cf",
           "90da4ae1fac4",
@@ -7622,9 +7622,9 @@
         "id": "39f682807819",
         "name": "周度状态Agent",
         "version": "0.2.0-review.1",
-        "icon": "flag",
+        "icon": "activity",
         "color": "gold",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "0d95910c7f2f",
           "4334030f8314"
@@ -7635,9 +7635,9 @@
         "id": "3bf780cd23be",
         "name": "学习研究Agent",
         "version": "0.2.0-review.1",
-        "icon": "search",
+        "icon": "brain",
         "color": "sky",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "0e847fc8685e",
           "aef5bf07573f"
@@ -7648,9 +7648,9 @@
         "id": "54f102b6c1ee",
         "name": "学习计划Agent",
         "version": "0.2.0-review.1",
-        "icon": "search",
+        "icon": "graduation-cap",
         "color": "sky",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "4a8054f512e9",
           "4bb1813c8335"
@@ -7661,9 +7661,9 @@
         "id": "57f6f828af9f",
         "name": "研究设计评审Agent",
         "version": "0.2.0-review.1",
-        "icon": "book",
+        "icon": "atom",
         "color": "emerald",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "2b7f7c8621d5",
           "4ff31e1cab6f"
@@ -7674,9 +7674,9 @@
         "id": "5a5fe1598ed0",
         "name": "练习反馈Agent",
         "version": "0.2.0-review.1",
-        "icon": "search",
+        "icon": "star",
         "color": "sky",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "0e847fc8685e",
           "3def7f0eb34a"
@@ -7687,9 +7687,9 @@
         "id": "662cb1c1de2c",
         "name": "项目风险扫描Agent",
         "version": "0.2.0-review.1",
-        "icon": "flag",
+        "icon": "flame",
         "color": "gold",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "181e249741e9",
           "9a2bc04da822"
@@ -7700,9 +7700,9 @@
         "id": "6a960be83f33",
         "name": "ECS售前Agent",
         "version": "1.0.0",
-        "icon": "pen",
+        "icon": "megaphone",
         "color": "gold",
-        "updated_at": "2026-08-10T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "d470761b0a07"
         ],
@@ -7712,9 +7712,9 @@
         "id": "736cc1ac94b4",
         "name": "客户Context Agent",
         "version": "0.2.0-review.1",
-        "icon": "pen",
+        "icon": "archive",
         "color": "gold",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "058e3bb57bf5",
           "c65fa3eae763"
@@ -7724,10 +7724,10 @@
       {
         "id": "78900d8758bc",
         "name": "DeepResearcher",
-        "version": "1.0.6",
-        "icon": "search",
+        "version": "1.0.35",
+        "icon": "bolt",
         "color": "sky",
-        "updated_at": "2026-07-14T15:17:44",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "6743aa0797a2",
           "9be6fda271a5",
@@ -7742,7 +7742,7 @@
         "version": "0.2.0-review.1",
         "icon": "users",
         "color": "rose",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "78967e9cfe10",
           "98e6c144f229",
@@ -7753,10 +7753,10 @@
       {
         "id": "79df9cc89f5f",
         "name": "VideoStudio",
-        "version": "1.1.15",
+        "version": "1.1.41",
         "icon": "film",
         "color": "violet",
-        "updated_at": "2026-07-20T15:23:23.000Z",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "composition-design-review",
           "design-system-importer",
@@ -7792,9 +7792,9 @@
         "id": "7c3138523589",
         "name": "竞品研究Agent",
         "version": "0.2.0-review.1",
-        "icon": "target",
+        "icon": "sparkle",
         "color": "violet",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "afae324569e2"
         ],
@@ -7804,9 +7804,9 @@
         "id": "7ece3121592e",
         "name": "集成验证Agent",
         "version": "0.2.0-review.1",
-        "icon": "pen",
-        "color": "gold",
-        "updated_at": "2026-08-07T00:00:00",
+        "icon": "git-pull-request",
+        "color": "sky",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "058e3bb57bf5",
           "90da4ae1fac4",
@@ -7818,9 +7818,9 @@
         "id": "876218dd6c3f",
         "name": "代码质量评审Agent",
         "version": "0.2.0-review.1",
-        "icon": "code",
+        "icon": "bulb",
         "color": "sky",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "6ba6255ee930",
           "991ac94fc4e1"
@@ -7831,9 +7831,9 @@
         "id": "8dcba242d360",
         "name": "客户需求评估Agent",
         "version": "0.2.0-review.1",
-        "icon": "target",
+        "icon": "presentation",
         "color": "violet",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "5a131fa3f845",
           "7432875f93bf",
@@ -7845,9 +7845,9 @@
         "id": "9099ea65848a",
         "name": "测试运行Agent",
         "version": "0.2.0-review.1",
-        "icon": "code",
+        "icon": "rocket",
         "color": "sky",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "991ac94fc4e1",
           "a988c001dc65"
@@ -7858,9 +7858,9 @@
         "id": "9a26f9f2336d",
         "name": "文档来源探索Agent",
         "version": "0.2.0-review.1",
-        "icon": "doc",
+        "icon": "book-open",
         "color": "emerald",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "13ac643c3ef9",
           "c07c2cab295d"
@@ -7871,9 +7871,9 @@
         "id": "a0aaf36d3c37",
         "name": "简历批量解析Agent",
         "version": "0.2.0-review.1",
-        "icon": "users",
+        "icon": "image",
         "color": "rose",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "8f090a1b0c27",
           "e117a4a3afef"
@@ -7884,9 +7884,9 @@
         "id": "a37e8dbcc57e",
         "name": "引文核验Agent",
         "version": "0.2.0-review.1",
-        "icon": "book",
+        "icon": "scale",
         "color": "emerald",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "6c5609e76cf0",
           "86cea925e282"
@@ -7899,7 +7899,7 @@
         "version": "1.0.0",
         "icon": "chart",
         "color": "violet",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "a31023dd51a0"
         ],
@@ -7908,10 +7908,10 @@
       {
         "id": "bcfcb4921dce",
         "name": "UIDesigner",
-        "version": "1.3.1",
+        "version": "1.3.9",
         "icon": "palette",
         "color": "violet",
-        "updated_at": "2026-07-17T06:59:13.000Z",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "ui-artifact-workspace",
           "ui-color",
@@ -7947,9 +7947,9 @@
         "id": "c045605cb916",
         "name": "Reimbursement Agent",
         "version": "0.2.0",
-        "icon": "target",
+        "icon": "calculator",
         "color": "gold",
-        "updated_at": "2026-08-02T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [],
         "embedded_skills": []
       },
@@ -7959,7 +7959,7 @@
         "version": "0.2.0-review.1",
         "icon": "flag",
         "color": "gold",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "15af984d02a5",
           "181e249741e9"
@@ -7969,10 +7969,10 @@
       {
         "id": "e064dca9e1bd",
         "name": "SeoGeoAgent",
-        "version": "1.0.2",
-        "icon": "target",
+        "version": "1.0.13",
+        "icon": "globe",
         "color": "gold",
-        "updated_at": "2026-07-04T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "geo-probe",
           "geo-score",
@@ -8002,9 +8002,9 @@
         "id": "e299e8f8ef9b",
         "name": "运营商数据安全问答Agent",
         "version": "1.0.0",
-        "icon": "search",
+        "icon": "shield",
         "color": "sky",
-        "updated_at": "2026-08-10T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "f51578fae310"
         ],
@@ -8014,9 +8014,9 @@
         "id": "fb836f8b51ca",
         "name": "候选人对比Agent",
         "version": "0.2.0-review.1",
-        "icon": "users",
+        "icon": "compare",
         "color": "rose",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "8f090a1b0c27",
           "d5041e397e79",
@@ -8028,9 +8028,9 @@
         "id": "fce0f5110ab2",
         "name": "文档变更影响Agent",
         "version": "0.2.0-review.1",
-        "icon": "doc",
+        "icon": "wrench",
         "color": "emerald",
-        "updated_at": "2026-08-07T00:00:00",
+        "updated_at": "2026-08-17T00:00:00",
         "skill_list": [
           "13ac643c3ef9",
           "ffaad9705891"

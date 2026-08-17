@@ -274,6 +274,18 @@ export const invokeHandlers = {
     });
   },
 
+  // B+ fast import: background extraction phase for one conversation.
+  // `null` status = extraction already completed inline (or never started).
+  'sessionImport.extractionStatus': async (
+    { cid }: { cid?: unknown } = {},
+  ) => {
+    if (typeof cid !== 'string' || !cid) throw new Error('cid required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getExtractionState } = await import('../features/session_import/extraction-background');
+    return { ok: true, status: await getExtractionState(userId, cid) };
+  },
+
   /**
    * Warm the read+extract cache for the recommended session so a later
    * "继续项目" click skips the slow distillation model call. Fire-and-forget

@@ -2541,4 +2541,36 @@ describe('Recall conversation capture', () => {
     expect(parsed[0]).not.toHaveProperty('targetAssetId');
     expect(parsed[0]).not.toHaveProperty('uncertainty');
   });
+
+  it('drops wrong-typed optional fields instead of killing the candidate', async () => {
+    const capture = await captureModule();
+    const validLabels = new Set(['m1']);
+    // 模型偶尔把 uncertainty 给成数字/对象（"uncertainty": 0.5），或把
+    // targetAssetId 给成非字符串：这些 optional 字段应被忽略，候选保留。
+    const parsed = capture.parseRecallCaptureOutput(JSON.stringify({ candidates: [{
+      judgment: 'user prefers Chinese comments with a purpose line at function head',
+      summary: '中文注释习惯',
+      suggestedType: 'personal',
+      suggestedScope: 'code',
+      suggestedAction: 'create',
+      risk: 'low',
+      uncertainty: 0.5,
+      targetAssetId: { id: 'aa-1' },
+      evidence: ['m1'],
+    }] }), validLabels);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({
+      suggestedType: 'personal',
+      summary: '中文注释习惯',
+    });
+    expect(parsed[0]).not.toHaveProperty('uncertainty');
+    expect(parsed[0]).not.toHaveProperty('targetAssetId');
+    // 超长 optional 字符串同样降级为 absent，不杀候选
+    const longUncertainty = capture.parseRecallCaptureOutput(JSON.stringify({ candidates: [{
+      judgment: 'x', summary: 'x', suggestedType: 'rule', suggestedScope: 'x',
+      uncertainty: 'u'.repeat(1_001), evidence: ['m1'],
+    }] }), validLabels);
+    expect(longUncertainty).toHaveLength(1);
+    expect(longUncertainty[0]).not.toHaveProperty('uncertainty');
+  });
 });

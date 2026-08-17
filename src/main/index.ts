@@ -1195,7 +1195,14 @@ if (!gotLock) {
     // P3394 bridge (opt-in): starts a loopback HTTP channel bound to the real
     // runtime controller when COGSEED_P3394_PORT is set; no-op otherwise.
     registerImmediate('p3394:bridge', () => {
-      p3394AppBridge = maybeStartP3394Bridge();
+      void maybeStartP3394Bridge().then((handle) => { p3394AppBridge = handle; });
+    }, 'serial');
+    registerImmediate('skills:version-recovery', async () => {
+      const { recoverSkillVersionMutations } = await import('./features/skills/version-mutation-service');
+      const result = await recoverSkillVersionMutations(users.getActiveUserId());
+      if (result.finalized || result.restored || result.removed) {
+        log.info('skill version mutation recovery complete', result);
+      }
     }, 'serial');
     createWindow();
     await consumeColdLaunchConnectorCallback();

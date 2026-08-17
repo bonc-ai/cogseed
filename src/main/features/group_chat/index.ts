@@ -55,6 +55,11 @@ export interface GroupChatRuntimeStatus {
   in_flight: string[];
   active_turns: Array<{ actor: string; turn_id: string; msg_id?: string; started_at_ms: number }>;
   active_recipient?: string;
+  /** True while a CogSeed Backend (Mate / local-CLI) task for this
+   *  conversation is still executing. Backend tasks run OUTSIDE the
+   *  group-chat bus, so without this the renderer's liveness model would
+   *  treat a bus-quiescent conversation as idle and finalize the run early. */
+  backend_active?: boolean;
   collaboration?: CollaborationSnapshot;
   kstarLifecycle?: KstarTaskLifecycleSnapshot;
 }
@@ -137,7 +142,7 @@ export async function runtimeStatus(
   cid: string,
   projectIdHint?: string | null,
 ): Promise<GroupChatRuntimeStatus> {
-  if (!safeId(cid)) return { processing: false, processing_since: null, in_flight: [], active_turns: [] };
+  if (!safeId(cid)) return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false };
   try {
     const state = await readState(userId, cid, projectIdHint);
     // Commander-centric KStar: recover legacy pending projection dispatch
@@ -153,6 +158,39 @@ export async function runtimeStatus(
     const diskInFlight = Array.isArray(state.in_flight)
       ? state.in_flight.filter(Boolean)
       : [];
+    // CogSeed Backend (Mate / local-CLI) tasks run OUTSIDE the group-chat
+    // bus: while one is active for this conversation the bus can be quiescent
+    // even though the turn is still executing (imported-session continuation
+    // dispatches long work there). This endpoint feeds the renderer's
+    // liveness model (`/runtime` polling + history `processing`), so surface
+    // backend tasks here or the UI finalizes the run prematurely, drops the
+    // running indicator, and never rediscovers the in-flight turn.
+    let backendActive = false;
+    let backendAgents: string[] = [];
+    let backendTurns: Array<{ actor: string; turn_id: string; started_at_ms: number }> = [];
+    try {
+      const { listMateTasks } = await import('../cogseed_backend/task-store');
+      const tasks = await listMateTasks(userId);
+      const active = (Array.isArray(tasks) ? tasks : []).filter((t) => (
+        t && t.conversationId === cid
+        && t.status !== 'completed' && t.status !== 'failed'
+        && t.status !== 'cancelled' && t.status !== 'recoverable'
+      ));
+      backendActive = active.length > 0;
+      backendAgents = Array.from(new Set(
+        active.map((t) => t.agentId).filter((a): a is string => !!a),
+      ));
+      backendTurns = active.map((t) => {
+        const startedMs = Date.parse(String(t.createdAt || ''));
+        return {
+          actor: String(t.agentId || ''),
+          turn_id: t.taskId,
+          started_at_ms: Number.isFinite(startedMs) ? startedMs : 0,
+        };
+      }).filter((t) => t.actor && t.turn_id);
+    } catch (err) {
+      log.warn(`backend task status unavailable user=${userId} cid=${cid}: ${(err as Error).message}`);
+    }
     const collaboration = await readCollaborationSnapshot(userId, cid).catch((err) => {
       log.warn(`collaboration snapshot unavailable user=${userId} cid=${cid}: ${(err as Error).message}`);
       return null;
@@ -169,27 +207,29 @@ export async function runtimeStatus(
     // restores the composer target (the agent the commander handed off to)
     // instead of dropping back to the commander until the next state_changed.
     const floor = state.active_recipient ? { active_recipient: state.active_recipient } : {};
-    if ((state.status === 'running' || diskInFlight.length > 0) && !runtime.processing) {
+    if ((state.status === 'running' || diskInFlight.length > 0) && !runtime.processing && !backendActive) {
       log.warn(`healing orphan running state user=${userId} cid=${cid} status=${state.status} in_flight=${diskInFlight.join(',')}`);
       await setStatus(userId, cid, 'idle');
-      return { processing: false, processing_since: null, in_flight: [], active_turns: [], ...collaborationPart, ...kstarLifecyclePart, ...floor };
+      return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false, ...collaborationPart, ...kstarLifecyclePart, ...floor };
     }
     const inFlight = Array.from(new Set([
       ...diskInFlight,
       ...runtime.inFlight,
+      ...backendAgents,
     ].filter(Boolean)));
-    const processing = state.status === 'running' || inFlight.length > 0 || runtime.processing;
+    const processing = state.status === 'running' || inFlight.length > 0 || runtime.processing || backendActive;
     return {
       processing,
       processing_since: processing ? (state.last_active_at || null) : null,
       in_flight: inFlight,
-      active_turns: runtime.activeTurns,
+      active_turns: [...runtime.activeTurns, ...backendTurns],
+      backend_active: backendActive,
       ...collaborationPart,
       ...kstarLifecyclePart,
       ...floor,
     };
   } catch {
-    return { processing: false, processing_since: null, in_flight: [], active_turns: [] };
+    return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false };
   }
 }
 

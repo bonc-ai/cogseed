@@ -115,6 +115,18 @@ function _initSkillsCognitionBindings() {
   };
 
   panel.addEventListener('input', (event) => {
+    const manualSearch = event.target.closest('[data-recall-manual-search]');
+    if (manualSearch) {
+      _skillsCognitionState.manualSearchQuery = manualSearch.value || '';
+      renderSkillsCognitionCaptures();
+      const next = document.querySelector('[data-recall-manual-search]');
+      if (next) {
+        next.focus();
+        const end = next.value.length;
+        if (typeof next.setSelectionRange === 'function') next.setSelectionRange(end, end);
+      }
+      return;
+    }
     const search = event.target.closest('.asset-search');
     if (!search) return;
     _skillsCognitionState.assetSearchQuery = search.value || '';
@@ -392,7 +404,8 @@ function _initSkillsCognitionBindings() {
         if (!result?.ok) throw new Error(result?.error || 'effectiveness feedback failed');
         // 评价会推进成熟度，所以整份快照都要重取，不能只重画本页。
         await loadSkillsCognitionSnapshot();
-        await renderSkillsCognitionProofs();
+        // 评价推进了成熟度，事实链变了，这里必须重取而不是重画。
+        await loadCognitionProofs();
       } catch (error) {
         if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
       } finally {
@@ -811,6 +824,32 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const skillDecision = event.target.closest('[data-cognition-skill-decision]');
+    if (skillDecision) {
+      const decision = skillDecision.dataset.cognitionSkillDecision || '';
+      const assetId = skillDecision.dataset.cognitionSkillAsset || '';
+      const draftHash = skillDecision.dataset.cognitionSkillDraftHash || '';
+      if (!assetId || !draftHash || !['accept', 'defer', 'reject'].includes(decision) || skillDecision.dataset.busy === '1') return;
+      const messageKey = decision === 'accept' ? 'cognition.skillupdate_accept_confirm'
+        : decision === 'defer' ? 'cognition.skillupdate_defer_confirm' : 'cognition.skillupdate_reject_confirm';
+      const fallback = decision === 'accept' ? '确认接受这次 Skill 升级？'
+        : decision === 'defer' ? '暂缓这次升级，保留当前版本？' : '拒绝这次升级？';
+      if (typeof uiConfirm === 'function' && !(await uiConfirm(_cognitionText(messageKey, fallback)))) return;
+      skillDecision.dataset.busy = '1'; skillDecision.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.skills.decide', { assetId, draftHash, decision });
+        if (!result?.ok) throw new Error(result?.error || 'skill decision failed');
+        if (typeof uiToast === 'function') uiToast(_cognitionText(`cognition.skillupdate_${decision}_done`, decision === 'accept' ? 'Skill 已升级' : decision === 'defer' ? '已暂缓升级' : '已拒绝本次升级'), { variant: 'success' });
+        const current = _skillsCognitionState.skillUpdate || {};
+        await loadCognitionSkillUpdate(assetId, current.skillId || '');
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        skillDecision.dataset.busy = '0'; skillDecision.disabled = false;
+      }
+      return;
+    }
+
     // Skill 版本回滚走真实通道（cognition.skills.rollback）。回滚会改变下一次
     // 匹配任务实际使用的版本，所以先确认——这一步不可由一次误点完成。
     const skillRollback = event.target.closest('[data-cognition-skill-rollback]');
@@ -818,14 +857,41 @@ function _initSkillsCognitionBindings() {
       const skillId = skillRollback.dataset.cognitionSkillRollback || '';
       const version = skillRollback.dataset.cognitionSkillVersion || '';
       if (!skillId || !version || skillRollback.dataset.busy === '1') return;
+      let rollbackPreview;
+      try {
+        const previewResult = await window.cogseed.invoke('cognition.skills.rollback.preview', { skillId, version });
+        if (!previewResult?.ok) throw new Error(previewResult?.error || 'skill rollback preview failed');
+        rollbackPreview = previewResult.preview;
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+        return;
+      }
       const message = _cognitionText(
         'cognition.skillupdate_rollback_confirm',
         '回滚后，下一次匹配任务将使用 v{v}；更高版本仍然保留，历史结果不会被修改。确认回滚？',
-      ).replace('{v}', version);
+      ).replace('{v}', version)
+        + `\n\n${rollbackPreview?.rollbackScope === 'skill_md_only'
+          ? _cognitionText('cognition.skillupdate_rollback_legacy_scope', '这是旧版本记录，只会恢复 SKILL.md，不会恢复其他文件；本次会生成新的兼容版本。')
+          : _cognitionText('cognition.skillupdate_rollback_full_scope', '将恢复完整 Skill 文件树，新增、删除和脚本变化都会纳入新版本。')}`
+        + (rollbackPreview?.diff
+          ? `\n${_cognitionText('cognition.skillupdate_rollback_diff_summary', '文件变化：新增 {a}，修改 {m}，删除 {d}。')
+            .replace('{a}', String(rollbackPreview.diff.added || 0))
+            .replace('{m}', String(rollbackPreview.diff.modified || 0))
+            .replace('{d}', String(rollbackPreview.diff.deleted || 0))}`
+          : '')
+        + (rollbackPreview?.nextVersion
+          ? `\n${_cognitionText('cognition.skillupdate_rollback_new_version', '确认后生成新版本 v{v}。').replace('{v}', rollbackPreview.nextVersion)}`
+          : '');
       if (typeof uiConfirm !== 'function' || !(await uiConfirm(message))) return;
       skillRollback.dataset.busy = '1'; skillRollback.disabled = true;
       try {
-        const result = await window.cogseed.invoke('cognition.skills.rollback', { skillId, version });
+        const result = await window.cogseed.invoke('cognition.skills.rollback', {
+          skillId,
+          version,
+          ...(rollbackPreview?.currentManifestHash ? { expectedManifestHash: rollbackPreview.currentManifestHash } : {}),
+          ...(rollbackPreview?.currentRevisionId ? { expectedRevisionId: rollbackPreview.currentRevisionId } : {}),
+          ...(rollbackPreview?.rollbackScope === 'skill_md_only' ? { allowPartialLegacy: true } : {}),
+        });
         if (!result?.ok) throw new Error(result?.error || 'skill rollback failed');
         if (typeof uiToast === 'function') {
           uiToast(_cognitionText('cognition.skillupdate_rollback_done', '已回滚到 v{v}').replace('{v}', version), { variant: 'success' });
@@ -837,6 +903,22 @@ function _initSkillsCognitionBindings() {
       } finally {
         skillRollback.dataset.busy = '0'; skillRollback.disabled = false;
       }
+      return;
+    }
+
+    // 管理来源：五类概览卡就地展开条目，不新增二级页——这一页先回答"系统能从
+    // 哪五类地方发现认知"，条目是钻进去之后的事。
+    const sourceExpand = event.target.closest('[data-cognition-source-expand]');
+    if (sourceExpand) {
+      const kind = sourceExpand.dataset.cognitionSourceExpand || '';
+      if (!kind) return;
+      const open = Array.isArray(_skillsCognitionState.expandedSourceKinds)
+        ? _skillsCognitionState.expandedSourceKinds
+        : [];
+      _skillsCognitionState.expandedSourceKinds = open.includes(kind)
+        ? open.filter((item) => item !== kind)
+        : [...open, kind];
+      renderSkillsCognitionSources();
       return;
     }
 
@@ -856,11 +938,20 @@ function _initSkillsCognitionBindings() {
         : '[data-cognition-source-group-failed]';
       const target = document.querySelector(selector);
       if (!target) return;
-      // 折叠组要先展开，否则滚过去看到的还是一行收起的摘要。
-      if (target.tagName === 'DETAILS') target.open = true;
-      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      target.classList.add('is-located');
-      setTimeout(() => target.classList.remove('is-located'), 1600);
+      // 卡片收着的话先展开：用户点这一格是要看"到底哪几条出了问题"，滚过去只
+      // 看到一张收起的卡等于没回答。展开会重画，所以要重新查一次节点再滚。
+      const kindToOpen = target.querySelector('[data-cognition-source-expand]')?.dataset.cognitionSourceExpand || '';
+      const open = Array.isArray(_skillsCognitionState.expandedSourceKinds)
+        ? _skillsCognitionState.expandedSourceKinds
+        : [];
+      if (kindToOpen && !open.includes(kindToOpen)) {
+        _skillsCognitionState.expandedSourceKinds = [...open, kindToOpen];
+        renderSkillsCognitionSources();
+      }
+      const located = document.querySelector(selector) || target;
+      located.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      located.classList.add('is-located');
+      setTimeout(() => located.classList.remove('is-located'), 1600);
       return;
     }
 

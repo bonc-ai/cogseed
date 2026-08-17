@@ -391,16 +391,23 @@ async function _listSpaceIds(uid: string): Promise<string[]> {
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /** 空间 base_agent（cli type，如 'claude'）→ 团队成员 agent_id。
- *  从 agents 列表里找 runtime.kind==='cli' 且 cli===type 的成员（注册名如
- *  ClaudeCode）。找不到（未注册/非 cli）返回 undefined——纯映射，不兜底。
+ *  从 agents 列表里找 runtime.kind==='cli'（或 'p3394-gateway'，即 Hermes 等
+ *  走 P3394 网关的外接 CLI）且 cli===type 的成员（注册名如 ClaudeCode）。
+ *  找不到（未注册/非 cli）返回 undefined——纯映射，不兜底。
  *  兼容旧数据：早期硬编码下拉存的是显示名（'Codex' 而非 'codex'），
  *  做一次大小写不敏感匹配兜底。 */
 function baseAgentToAgentId(agents: ReadonlyArray<{ agent_id?: string; runtime?: { kind?: string; cli?: string } }>, baseAgent: string | undefined): string | undefined {
   if (!baseAgent) return undefined;
-  const hit = agents.find((a) => a && a.runtime?.kind === 'cli' && a.runtime.cli === baseAgent);
+  // 外接 CLI agent 的 runtime.kind 有两种：'cli'（本地直接 spawn）与
+  // 'p3394-gateway'（Hermes 等经 P3394 网关协作）。两者都是"外接 CLI"，
+  // 必须都能映射，否则空间 base_agents 里选了 Hermes 也进不了
+  // effective_agents，空间会话 @ tab 里就看不到它。
+  const isExternalCli = (a: { runtime?: { kind?: string; cli?: string } } | undefined): a is { runtime: { kind?: string; cli?: string } } =>
+    !!a && !!a.runtime && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway') && !!a.runtime.cli;
+  const hit = agents.find((a) => isExternalCli(a) && a.runtime!.cli === baseAgent);
   if (hit?.agent_id) return hit.agent_id;
   const lower = baseAgent.toLowerCase();
-  const hitLower = agents.find((a) => a && a.runtime?.kind === 'cli' && String(a.runtime.cli || '').toLowerCase() === lower);
+  const hitLower = agents.find((a) => isExternalCli(a) && String(a.runtime!.cli || '').toLowerCase() === lower);
   return hitLower?.agent_id;
 }
 

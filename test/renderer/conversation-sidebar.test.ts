@@ -271,6 +271,10 @@ describe('conversation sidebar task row actions', () => {
     };
     context._projectsCache = [{ project_id: 'p1', name: 'Project One' }];
     context._projectsExpanded = { p1: true };
+    // 9.1 框架：backfill 后由 renderConversationList 刷新主列表（projects-list
+    // 独立容器已随侧边栏重构移除），记录调用以验证渲染入口被触发。
+    context.renderConversationListCalled = false;
+    context.renderConversationList = () => { context.renderConversationListCalled = true; };
     context.renderProjectsSection = function renderProjectsSection() {
       const rows = context.conversations
         .filter((c: any) => c && c.project_id === 'p1')
@@ -334,7 +338,7 @@ describe('conversation sidebar task row actions', () => {
       '/api/conversations/list?mode=project&project_id=p1&offset=10',
     ]);
     expect(context.conversations.map((c: any) => c.conversation_id)).toContain('p1-11');
-    expect(projectsContainer.innerHTML).toContain('Project task 11');
+    expect(context.renderConversationListCalled).toBe(true);
   });
 
   it('does not append a stale project page after a local sidebar change', async () => {
@@ -1292,6 +1296,14 @@ describe('conversation process metadata formatting', () => {
       stream: 'runtime',
       data: { duration_ms: 65_000 },
     });
+    const runtimeStarted = context._formatEventLine({
+      stream: 'runtime',
+      data: { kind: 'task.started' },
+    });
+    const runtimeRetrying = context._formatEventLine({
+      stream: 'runtime',
+      data: { phase: 'retrying', attempt: 2 },
+    });
     const runtimeWithBreakdown = context._formatEventLine({
       stream: 'runtime',
       data: {
@@ -1308,6 +1320,8 @@ describe('conversation process metadata formatting', () => {
     });
 
     expect(compaction).toBe('Context compressed: 20000 -> 3000 tokens');
+    expect(runtimeStarted).toBeNull();
+    expect(runtimeRetrying).toBeNull();
     expect(runtime).toBe('Total time 1m 5s');
     expect(runtimeWithBreakdown)
       .toBe('Total time 1m 5s · model 40s · tools 5s · context 15s · retry wait 5s');
@@ -1322,6 +1336,10 @@ describe('conversation process metadata formatting', () => {
     ])).toBe('1s');
     expect(context._processSummaryRuntimeFromItems([
       { type: 'progress', text: 'Context compressed', event: { stream: 'compaction', data: {} } },
+    ])).toBe('');
+    expect(context._processSummaryRuntimeFromItems([
+      { type: 'event', event: { stream: 'runtime', data: { kind: 'task.started' } } },
+      { type: 'event', event: { stream: 'runtime', data: { duration_ms: -1 } } },
     ])).toBe('');
     expect(context._eventProcessKind({ stream: 'context', data: {} }, 'Context prepared')).toBe('context');
     expect(context._eventProcessKind({ stream: 'compaction', data: {} }, compaction)).toBe('context');

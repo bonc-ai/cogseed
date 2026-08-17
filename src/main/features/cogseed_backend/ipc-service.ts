@@ -78,6 +78,7 @@ export interface MateRendererTaskSummary {
   title: string;
   createdAt: string;
   updatedAt: string;
+  skillVersionPinStatus?: 'pinned' | 'unpinned';
   actions: MateRendererActionSet;
 }
 
@@ -251,6 +252,7 @@ function taskSummary(task: MateTaskRecord, hasWorkflowStep = false): MateRendere
     title: redactRendererText(task.task),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+    ...(task.skillVersionPinStatus ? { skillVersionPinStatus: task.skillVersionPinStatus } : {}),
     actions: taskActions(task.status, hasWorkflowStep),
   };
 }

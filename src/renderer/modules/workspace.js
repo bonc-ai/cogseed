@@ -270,9 +270,11 @@
     // 基础 Agent 候选 = AI 团队里的外接 CLI agent（注册名优先，如 ClaudeCode）
     //                 + 本机探测到但团队里还没注册的 CLI（如 Hermes），按 cli type 去重。
     // 与 AI 团队面板「基础 Agent」分组同源，不显示指挥官（指挥官默认隐形）。
+    // runtime.kind 兼容 'cli' 与 'p3394-gateway'（Hermes 等经 P3394 网关协作的外接 CLI，
+    // 与后端 spaces.baseAgentToAgentId 的映射语义保持一致）。
     _baseAgentProbeError = '';
     const teamCli = (_agentCatalog || [])
-      .filter((a) => a.runtime && a.runtime.kind === 'cli' && a.runtime.cli)
+      .filter((a) => a.runtime && a.runtime.cli && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'))
       .map((a) => ({ id: a.runtime.cli, name: a.name }));
     let probedCli = [];
     if (cliRes.error) {
@@ -901,12 +903,26 @@
 
   // ── 弹窗：新建空间 ────────────────────────────────────────────────────────
 
+  /** 已选角色（主+副）模板 bundle 并集 + 手动 extra 的合并视图（task/skill）。
+   *  与提交语义一致：内置项由后端 resolveSpaceResources 按模板派生（无需 extra），
+   *  手动勾选项走 extra；显示层把两者并集展示，角色多选后 Task Agent/Skill
+   *  自动带出每个角色的模板内置能力，不再只显示初始预填的单一模板。 */
+  function _abilityPicksWithBundle(kind) {
+    const roles = _abilityPicks.role || [];
+    const roleTmpls = _templates.filter((t) => roles.includes(t.template_id));
+    const bundle = new Set(roleTmpls.flatMap((t) => (t.bundle
+      ? (kind === 'task' ? t.bundle.agent_ids : kind === 'skill' ? t.bundle.skill_ids : [])
+      : [])));
+    const manual = (_abilityPicks[kind] || []).filter((id) => !bundle.has(id));
+    return [...bundle, ...manual];
+  }
+
   function _renderCreateModal() {
     const tpl = _templates.find((t) => t.template_id === _createTemplate) || null;
     const cap = {
       role: { label: '角色', picked: _resolveCatalog('role', _abilityPicks.role) },
-      task: { label: 'Task Agent', picked: _resolveCatalog('task', _abilityPicks.task) },
-      skill: { label: 'Skill', picked: _resolveCatalog('skill', _abilityPicks.skill) },
+      task: { label: 'Task Agent', picked: _resolveCatalog('task', _abilityPicksWithBundle('task')) },
+      skill: { label: 'Skill', picked: _resolveCatalog('skill', _abilityPicksWithBundle('skill')) },
     };
     // 基础 Agent 已选显示名（注册名优先，未知回退 cli 显示名）
     const _createAgentNames = (_createBaseAgents || []).map((id) => {
@@ -1003,7 +1019,9 @@
       ...roleTmpls.flatMap((t) => (t.bundle ? t.bundle.agent_ids : [])),
       ...roleTmpls.flatMap((t) => (t.bundle ? t.bundle.skill_ids : [])),
     ]);
-    const picked = _abilityPicks[kind] || [];
+    // 显示层合并视图：task/skill 的内置项（角色模板 bundle 并集）也显示为已选
+    // （固定开启不可移除，data-bundled 拦截点击）；role 原样取 picks。
+    const picked = kind === 'role' ? (_abilityPicks.role || []) : _abilityPicksWithBundle(kind);
     return `
     <div class="ws-scrim ws-ability-scrim" data-ws="close-ability">
       <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">

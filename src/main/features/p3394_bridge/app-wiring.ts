@@ -15,6 +15,7 @@
 
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+import * as net from 'node:net';
 import * as path from 'node:path';
 import { createLogger } from '../../logger';
 import { getActiveUserId } from '../users';
@@ -150,7 +151,7 @@ function resolveToken(): string {
   return fresh;
 }
 
-function buildBridge(port: number, token: string, conversation: boolean): P3394AppBridgeHandle | null {
+async function buildBridge(port: number, token: string, conversation: boolean): Promise<P3394AppBridgeHandle | null> {
   const resultFile = path.join(variantRoot(), 'p3394-bridge-result.jsonl');
 
   const userId = getActiveUserId();
@@ -169,7 +170,18 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
   // H-01：不再硬编码注册 hermes→9000 类的"假节点"。外部/其他 CLI 节点一律
   // 通过 hello 自注册（loopback 端点）或用户外接流程建立；硬编码会让
   // @hermes 在 9000 无人监听时表现为"貌似在线实则误路由"（9000 可能被
-  // 其它网关占用，如 claude）。如需显式声明某远程节点，请用显式配置接入。
+  // 其它网关占用，如 claude）。Hermes 默认不注册静态地址——派发时由
+  // p3394-gateway-turn 的 recoverGateway 自动拉起 Hermes 自己的 external
+  // gateway（空闲端口）并动态注册。仅当显式配置 COGSEED_P3394_HERMES_ENDPOINT
+  // （对端自托管网关）时按配置注册。
+  const hermesEndpoint = process.env.COGSEED_P3394_HERMES_ENDPOINT || '';
+  if (hermesEndpoint) {
+    bridge.registry.register({
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      manifest: manifestOf('hermes'),
+      endpoints: [hermesEndpoint],
+    });
+  }
 
   // Default: messages enter the normal conversation flow and are visible in
   // the UI. COGSEED_P3394_CONVERSATION=0 switches to the mate-task backend.
@@ -482,41 +494,61 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
     return null;
   }
 
-  void channel.listen().then(async () => {
-    log.info('P3394 bridge listening', {
-      endpoint: handle.endpoint,
-      result_file: resultFile,
-    });
-    // §12 Transactional Outbox：启动重放上次运行未确认的出站信封
-    // （at-least-once；对端按 idempotency_key 幂等）。
-    try {
-      const outcome = await outboundHub.replayOutbox();
-      if (outcome.replayed > 0 || outcome.failed > 0) {
-        log.info('P3394 outbox replay done', outcome);
-      }
-    } catch (error) {
-      log.warn('P3394 outbox replay failed', { error: error instanceof Error ? error.message : String(error) });
-    }
-    // 托管网关恢复：应用重启会清掉所有托管网关（quit/boot 清理），这里按
-    // state 文件逐 CLI respawn，否则「外接」agent 依赖手动起的网关进程，
-    // 重启后必然"接入失败"。startExternalGateway 幂等（存活实例直接复用）。
-    try {
-      const { respawnManagedGateways } = await import('./external-gateways');
-      const outcome = await respawnManagedGateways();
-      if (outcome.restarted.length > 0 || outcome.failed.length > 0) {
-        log.info('P3394 managed gateways recovered at boot', outcome);
-      }
-    } catch (error) {
-      log.warn('P3394 managed gateway respawn failed', { error: error instanceof Error ? error.message : String(error) });
-    }
-  }).catch((error) => {
+  // 入站监听失败（如默认端口被本机其它实例占用）→ 立即失败返回 null，由
+  // maybeStartP3394Bridge 换空闲端口重试。绝不让 bridge 以"监听失败但 handle
+  // 存在"的假成功状态对外——否则对端网关按 bridgeInfo.endpoint 回发的回复
+  // 无人应答（此前 8444 被安装版占用时正是如此，回复 401 丢失 → 5 分钟超时）。
+  try {
+    await channel.listen();
+  } catch (error) {
     log.error('P3394 bridge listen failed', { error: error instanceof Error ? error.message : String(error) });
+    try { await channel.close(); } catch { /* ignore */ }
+    return null;
+  }
+  log.info('P3394 bridge listening', {
+    endpoint: handle.endpoint,
+    result_file: resultFile,
   });
+  // §12 Transactional Outbox：启动重放上次运行未确认的出站信封
+  // （at-least-once；对端按 idempotency_key 幂等）。
+  try {
+    const outcome = await outboundHub.replayOutbox();
+    if (outcome.replayed > 0 || outcome.failed > 0) {
+      log.info('P3394 outbox replay done', outcome);
+    }
+  } catch (error) {
+    log.warn('P3394 outbox replay failed', { error: error instanceof Error ? error.message : String(error) });
+  }
+  // 托管网关恢复：应用重启会清掉所有托管网关（quit/boot 清理），这里按
+  // state 文件逐 CLI respawn，否则「外接」agent 依赖手动起的网关进程，
+  // 重启后必然"接入失败"。startExternalGateway 幂等（存活实例直接复用）。
+  try {
+    const { respawnManagedGateways } = await import('./external-gateways');
+    const outcome = await respawnManagedGateways();
+    if (outcome.restarted.length > 0 || outcome.failed.length > 0) {
+      log.info('P3394 managed gateways recovered at boot', outcome);
+    }
+  } catch (error) {
+    log.warn('P3394 managed gateway respawn failed', { error: error instanceof Error ? error.message : String(error) });
+  }
   return handle;
 }
 
+/** Finds a free loopback port (bind-0 style allocation). */
+function freeLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
 /** Boot hook (serial task 'p3394:bridge'). Always starts; env only overrides. */
-export function maybeStartP3394Bridge(): P3394AppBridgeHandle | null {
+export async function maybeStartP3394Bridge(): Promise<P3394AppBridgeHandle | null> {
   try {
     const envPort = process.env.COGSEED_P3394_PORT;
     const port = envPort !== undefined ? Number(envPort) : P3394_DEFAULT_PORT;
@@ -526,8 +558,17 @@ export function maybeStartP3394Bridge(): P3394AppBridgeHandle | null {
     }
     const token = resolveToken();
     const conversation = process.env.COGSEED_P3394_CONVERSATION !== '0';
-    activeHandle = buildBridge(port, token, conversation);
-    return activeHandle;
+    let handle = await buildBridge(port, token, conversation);
+    // 默认端口被本机其它实例（安装版 CogSeed / DSH 网关等）占用时，自动换
+    // 空闲端口，保证 P3394 入站（对端网关回发地址）始终可用；显式配置的
+    // COGSEED_P3394_PORT 不兜底（fail-loud，让配置错误暴露）。
+    if (!handle && envPort === undefined) {
+      const fallback = await freeLoopbackPort();
+      log.warn('P3394 bridge default port in use — falling back to a free port', { desired: port, fallback });
+      handle = await buildBridge(fallback, token, conversation);
+    }
+    activeHandle = handle;
+    return handle;
   } catch (error) {
     log.warn('P3394 bridge start failed', { error: error instanceof Error ? error.message : String(error) });
     return null;

@@ -26,7 +26,7 @@ export type { RecallCaptureExecutionPolicy, RecallCaptureSettingsRecord, UpdateR
 export { archiveAbilityAsset, deleteAbilityAsset, downgradeAbilityAssetMaturityForRevokedEvidence, initializeAbilityAsset, listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, pauseAbilityAsset, purgeAbilityAsset, readAbilityAsset, recommendAbilityAssetAction, restoreAbilityAsset, resumeAbilityAsset, revokeAbilityAsset, rollbackAbilityAsset, setAbilityAssetCrossScopeConfirmation, setAbilityAssetMaturity, updateAbilityAsset } from './asset-service';
 export type { AbilityAssetActor, AbilityAssetAuditRecord, AbilityAssetRecommendedAction, AbilityAssetUserActionInput, AbilityAssetVersionRecord, RecommendAbilityAssetActionInput, UpdateAbilityAssetInput } from './asset-service';
 
-export { confirmRecallSkillDraft, prepareRecallSkillDraft, readInstalledSkillForAsset, readRecallSkillDraft } from './skill-draft-service';
+export { confirmRecallSkillDraft, decideRecallSkillDraft, prepareRecallSkillDraft, readInstalledSkillForAsset, readRecallSkillDraft } from './skill-draft-service';
 export type { RecallSkillDraftFile, RecallSkillDraftPreview, RecallSkillDraftRecord, RecallSkillDraftValidation } from './skill-draft-service';
 
 export { addWorkspaceAssetReference, listWorkspaceAssetReferenceHistory, listWorkspaceAssetReferences, removeWorkspaceAssetReference, updateWorkspaceAssetReference } from './workspace-refs';

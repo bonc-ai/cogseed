@@ -45,6 +45,31 @@ vi.mock('../../../src/main/features/cognition', () => ({
   confirmCognitionAsset: vi.fn(async (_uid: string, assetId: string) => ({ id: assetId, title: '认知', stage: 'growing' })),
   deferCognitionAsset: vi.fn(async (_uid: string, assetId: string) => ({ id: assetId, title: '认知', stage: 'sprout' })),
   recordCognitionReuse: vi.fn(async (_uid: string, assetId: string) => ({ id: assetId, title: '认知', stage: 'bright' })),
+  getSkillCognitionSummary: vi.fn(async (_uid: string, skillId: string) => ({
+    skillId,
+    version: '2',
+    baselineStatus: 'available',
+    pendingCandidateCount: 1,
+    recentReceipts: [],
+    versions: [{ version: '2', canRollback: true, rollbackScope: 'full_tree' }],
+  })),
+  diffSkillCognitionVersions: vi.fn(async () => ({
+    added: 1, modified: 1, deleted: 0, unchanged: 2,
+    files: [{ path: 'SKILL.md', status: 'modified', lines: [{ type: 'context', text: 'ok' }] }],
+  })),
+  previewSkillCognitionRollback: vi.fn(async (_uid: string, skillId: string, version: string) => ({
+    skillId,
+    currentVersion: '2',
+    currentRevisionId: 'revision-2',
+    currentManifestHash: 'a'.repeat(64),
+    targetVersion: version,
+    targetRevisionId: 'revision-1',
+    targetManifestHash: 'b'.repeat(64),
+    rollbackScope: 'full_tree',
+  })),
+  rollbackSkillCognitionVersion: vi.fn(async (_uid: string, skillId: string, version: string) => ({
+    ok: true, skillId, version: '3', restoredFromVersion: version, rollbackScope: 'full_tree',
+  })),
 }));
 
 vi.mock('../../../src/main/features/cognition/capture-draft', () => ({
@@ -144,5 +169,26 @@ describe('ipc cognition channels', () => {
       summary: '补充证据',
       sourceLabel: '手工输入',
     })).ok).toBe(false);
+  });
+
+  it('通过认知 Skill IPC 提供摘要、完整 diff 和带并发校验的回退', async () => {
+    const summary = await call('cognition.skills.summary', { skillId: 'skill-a' });
+    expect(summary).toMatchObject({ ok: true, summary: { skillId: 'skill-a', version: '2' } });
+
+    const diff = await call('cognition.skills.diff', { skillId: 'skill-a', fromVersion: '1', toVersion: '2' });
+    expect(diff).toMatchObject({ ok: true, diff: { added: 1, modified: 1 } });
+
+    const preview = await call('cognition.skills.rollback.preview', { skillId: 'skill-a', version: '1' });
+    expect(preview).toMatchObject({ ok: true, preview: { targetVersion: '1', rollbackScope: 'full_tree' } });
+    const rollback = await call('cognition.skills.rollback', {
+      skillId: 'skill-a', version: '1', expectedRevisionId: 'revision-2', expectedManifestHash: 'a'.repeat(64),
+    });
+    expect(rollback).toMatchObject({ ok: true, result: { restoredFromVersion: '1' } });
+  });
+
+  it('拒绝不安全的 Skill diff 和回退参数', async () => {
+    expect((await call('cognition.skills.diff', { skillId: '../escape', fromVersion: '1', toVersion: '2' })).ok).toBe(false);
+    expect((await call('cognition.skills.rollback.preview', { skillId: 'skill-a', version: '../escape' })).ok).toBe(false);
+    expect((await call('cognition.skills.rollback', { skillId: 'skill-a', version: '1', expectedManifestHash: 'x' })).ok).toBe(false);
   });
 });

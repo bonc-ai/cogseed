@@ -1,4 +1,5 @@
 import type { LocalEvent } from '../local_agents/backends/base';
+import * as fs from 'node:fs';
 import {
   run as runLocalAgent,
   type RunCliAgentOpts,
@@ -75,7 +76,13 @@ async function defaultWorkingDir(input: MateLocalCliExecutionInput): Promise<str
   const sid = conversation ? (conversation as { space_id?: unknown }).space_id : undefined;
   if (typeof sid === 'string' && sid) {
     const { getConversationWorkspacePath } = await import('../group_chat/conv_workspace');
-    return getConversationWorkspacePath(input.userId, input.conversationId);
+    const ws = await getConversationWorkspacePath(input.userId, input.conversationId);
+    // CLI spawn 要求 cwd 已存在（conv_workspace 惰性 mkdir 只覆盖产出工具路径；
+    // 空间会话 CLI 派发若此前只有对话没有产出，目录不存在会 spawn ENOENT）。
+    try {
+      fs.mkdirSync(ws, { recursive: true });
+    } catch { /* mkdir 失败由 spawn 环节报错兜底 */ }
+    return ws;
   }
   return info?.effective_path || getWorkspacePath(input.userId, projectId);
 }

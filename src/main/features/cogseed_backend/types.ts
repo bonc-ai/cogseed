@@ -44,6 +44,13 @@ export interface MateLocalCliConfig {
   viaP3394Gateway?: boolean;
 }
 
+export interface MateTaskSkillVersionPin {
+  skillId: string;
+  version: string;
+  manifestHash: string;
+  revisionId?: string;
+}
+
 export interface MateTaskRecord {
   schemaVersion: typeof MATE_AGENT_BACKEND_SCHEMA_VERSION;
   taskId: string;
@@ -60,6 +67,8 @@ export interface MateTaskRecord {
   agentId?: string;
   executionKind?: MateTaskExecutionKind;
   allowedSkillIds?: string[];
+  skillVersionPins?: MateTaskSkillVersionPin[];
+  skillVersionPinStatus?: 'pinned' | 'unpinned';
   localCli?: MateLocalCliConfig;
   profileId?: string;
   retryOfTaskId?: string;

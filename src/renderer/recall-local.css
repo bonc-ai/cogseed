@@ -44,8 +44,16 @@
 .recall-proof-event:first-child { border-top: 0; }
 .recall-proof-event:not(:last-child)::before { position: absolute; top: 24px; bottom: -14px; left: 5px; width: 1px; background: color-mix(in srgb, var(--primary, #0E9F6E) 22%, var(--border, #e5e7eb)); content: ''; }
 .recall-proof-marker { position: relative; z-index: 1; width: 9px; height: 9px; margin-top: 5px; border: 2px solid var(--card, #fff); border-radius: 999px; background: var(--primary, #0E9F6E); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary, #0E9F6E) 40%, var(--border, #e5e7eb)); }
-.recall-proof-event.is-effectiveness_recorded .recall-proof-marker { background: var(--success, #15803d); }
-.recall-proof-event.is-transfer_completed .recall-proof-marker { background: var(--warning, #d97706); }
+/* 标记点按**结果**着色，不按事件种类。按种类上色时「需要修正」「出现负面
+   影响」也会画成绿点，等于用颜色说了一句与文字相反的结论。 */
+.recall-proof-event.is-tone-good .recall-proof-marker { background: var(--success, #15803d); }
+.recall-proof-event.is-tone-warn .recall-proof-marker { background: var(--warning, #d97706); }
+.recall-proof-event.is-tone-bad .recall-proof-marker { background: var(--danger, #b42318); }
+.recall-proof-event.is-tone-neutral .recall-proof-marker { background: var(--muted-fg, #6b7280); }
+/* 已评价的那一行不给首次评价控件，改为陈述已形成的结论。 */
+.recall-proof-rating.is-rated .recall-proof-rating-conclusion { display: grid; gap: 5px; }
+.recall-proof-rating.is-rated .recall-proof-outcome { color: var(--fg, #111827); font-size: 12px; font-weight: 600; }
+.recall-proof-rating.is-rated p { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .recall-proof-event-body { display: grid; min-width: 0; gap: 4px; }
 .recall-proof-outcome { color: var(--fg, #111827); font-size: 12px; font-weight: 650; line-height: 1.45; }
 .recall-proof-summary { margin: 0; overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
@@ -133,11 +141,36 @@
 .cognition-inbox-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--fg, #111827) 6%, transparent); }
 .cognition-inbox-row-main { display: grid; gap: 3px; min-width: 0; }
 .cognition-inbox-row-main strong { color: var(--fg, #111827); font-size: 12px; font-weight: 600; line-height: 1.5; }
+/* 主位是"要你做什么"，资产名退为副行——同一条资产可能挂着几件不同的事，只有
+   资产名时它们长得一模一样，读起来像系统重复发了一条。 */
+.cognition-inbox-row-subject { color: var(--fg, #374151); font-size: 11px; line-height: 1.5; }
 .cognition-inbox-row-main span { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
 .cognition-inbox-row-actions { display: flex; flex: none; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 /* 辅助页页头右上角的返回按钮。这些页不在 tab 条里占位，四个 tab 全是未选中
    态，用户没有可依赖的返回路径。 */
 .cognition-task-hero-aside { display: flex; flex: none; align-items: center; gap: 8px; }
+/* 沉淀活动的三个区块：自动沉淀 / 从历史会话沉淀 / 沉淀记录。段头统一成一个
+   组件，消除此前三种并存的标题样式。 */
+.recall-capture-block { max-width: 1480px; margin: 0 auto 22px; }
+.recall-capture-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.recall-capture-section-head strong { color: var(--fg, #111827); font-size: 15px; letter-spacing: -.01em; }
+.recall-capture-section-head > span { color: var(--muted-fg, #6b7280); font-size: 11px; text-align: right; }
+/* 区块内部的小标题必须明显低一级，否则「执行时机」「自动沉淀设置」和它们的
+   父标题「自动沉淀」同重，看不出是下级——"合成一块"就只在 DOM 上成立。 */
+.recall-capture-block .cognition-inbox-band-head strong,
+.recall-capture-block .recall-capture-control-summary h2 { font-size: 12px; font-weight: 600; color: var(--muted-fg, #4b5563); }
+.recall-capture-block .recall-capture-control-summary { min-height: 40px; }
+.recall-capture-block .cognition-capture-modes { margin-bottom: 14px; }
+/* 区块之间拉开距离，让"三块"这件事在视觉上先于块内细节被读到。 */
+.recall-capture-block + .recall-capture-block { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border, #e5e7eb); }
+/* 去向说明。刻意不编号——编号会和下面的段落标题抢层级，用户会以为要照着做。 */
+.recall-capture-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 1480px; margin: 0 auto 20px; padding: 10px 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, var(--card, #fff)); color: var(--fg, #374151); font-size: 12px; }
+.recall-capture-chain i { color: var(--muted-fg, #9ca3af); font-style: normal; }
+.recall-manual-search { width: 100%; margin-bottom: 8px; padding: 8px 11px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; }
+/* 候选就地展开在被选中的那条沉淀记录底下，而不是另起一个一级区域——候选是
+   任务走到某一步的待确认结果，不是和任务平级的东西。 */
+.recall-capture-inline-review:empty { display: none; }
+.recall-capture-inline-review { margin-top: 10px; }
 /* 沉淀时机的三张模式卡。互斥语义——选中的那张给主色按钮，其余给普通按钮；
    不用开关样式，开关会让人以为可以同时开两种。 */
 .cognition-capture-modes { display: grid; gap: 10px; margin-bottom: 18px; }
@@ -149,6 +182,24 @@
 .cognition-capture-mode .panel-sub { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
 /* 管理来源页底的边界声明。用 attention 的外观但不是告警——它是一条常驻契约。 */
 .cognition-source-boundary { margin-top: 20px; }
+/* 五类来源概览卡。首屏要回答"系统能从哪五类地方发现认知、各自什么状态"，所以
+   五类并列成卡，条目收进展开态——直接铺条目时光「会话」一类就占满一屏，另外
+   四类被挤到屏幕外。 */
+.recall-source-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; margin-bottom: 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--card, #fff); }
+.recall-source-card.is-expanded { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 30%, var(--border, #e5e7eb)); }
+.recall-source-card-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 14px 4px 14px 16px; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.recall-source-card-icon { display: grid; width: 34px; height: 34px; flex: none; place-items: center; border-radius: 9px; background: color-mix(in srgb, var(--primary, #0E9F6E) 9%, transparent); color: var(--primary-text, #06734f); }
+.recall-source-card-icon-glyph { width: 17px; height: 17px; }
+.recall-source-card-copy { display: grid; gap: 3px; min-width: 0; }
+.recall-source-card-copy strong { color: var(--fg, #111827); font-size: 13px; }
+.recall-source-card-copy small { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.recall-source-card-action { padding: 0 16px 0 8px; }
+/* 展开的条目列表横跨整张卡，不挤在左列里。 */
+.recall-source-card > .recall-source-items { grid-column: 1 / -1; padding: 0 16px 12px; border-top: 1px solid var(--border, #eef0f3); }
+@media (max-width: 720px) {
+  .recall-source-card { grid-template-columns: minmax(0, 1fr); }
+  .recall-source-card-action { padding: 0 16px 14px 16px; }
+}
 /* 统计条里可点的那两格（需授权 / 失败记录）。其余三格保持纯统计的样子——
    让不可点的东西看起来可点，比不能点更糟。 */
 .recall-workbench-summary-action { display: flex; align-items: baseline; gap: 8px; padding: 14px 16px; border: 0; border-left: 1px solid var(--border, #e5e7eb); background: transparent; text-align: left; cursor: pointer; }
@@ -330,9 +381,15 @@
 .recall-manual-history-head .btn { flex: none; }
 .recall-manual-history-source { margin-top: 15px; padding-bottom: 7px; color: var(--muted-fg, #6b7280); font-size: 10px; font-weight: 600; }
 .recall-manual-conversation-list { max-height: 280px; overflow-y: auto; border-top: 1px solid var(--border, #e5e7eb); }
-.recall-manual-conversation { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; min-height: 54px; align-items: center; gap: 10px; padding: 9px 4px; border: 0; border-bottom: 1px solid var(--border, #e5e7eb); background: transparent; color: inherit; text-align: left; cursor: pointer; }
+/* 行是容器不是按钮：这个列表是 280px 的滚动框，整行可点时触控板在框里滑动
+   就会误发提取，没有安全的抓取区。动作收在右侧 .recall-manual-conversation-trigger。 */
+.recall-manual-conversation { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; min-height: 54px; align-items: center; gap: 10px; padding: 9px 4px; border: 0; border-bottom: 1px solid var(--border, #e5e7eb); background: transparent; color: inherit; text-align: left; }
 .recall-manual-conversation:hover { background: var(--surface-subtle, #f8f9fb); }
-.recall-manual-conversation.is-added, .recall-manual-conversation:disabled { cursor: default; opacity: 1; }
+/* style.css 里同名规则给了 cursor:pointer，行已经不是按钮，必须显式改回来，
+   否则整行看着仍像可点，用户还会往行上按。 */
+.recall-manual-conversation { cursor: default; }
+.recall-manual-conversation.is-disabled { opacity: .72; }
+.recall-manual-conversation-trigger { flex: none; white-space: nowrap; }
 .recall-manual-conversation-action { color: var(--primary, #0E9F6E); font-size: 11px; font-weight: 600; }
 .recall-manual-conversation-main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .recall-manual-conversation-main strong { overflow: hidden; color: var(--fg, #111827); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -377,13 +434,14 @@
 .recall-capture-asset-receipt:last-child { padding-bottom: 0; border-bottom: 0; }
 .recall-capture-asset-receipt-head { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; }
 .recall-capture-asset-receipt-head > span { display: flex; min-width: 0; align-items: baseline; gap: 6px; }
-.recall-capture-asset-receipt-head b,
+/* 卡头的 b 现在是**资产名**（过去是 asset_id 这个字段标签），必须按标题排，
+   不能继续用字段标签的 10px 灰字——否则资产名比它旁边的 id 还不起眼。 */
+.recall-capture-asset-receipt-head b { color: var(--fg, #111827); font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recall-capture-asset-receipt dt { color: var(--muted-fg, #6b7280); font-size: 10px; font-weight: 600; }
 .recall-capture-asset-receipt code { min-width: 0; overflow-wrap: anywhere; color: var(--fg, #111827); font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; }
 .recall-capture-asset-receipt-head em { flex: none; color: var(--primary-text, #06734f); font-size: 10px; font-style: normal; }
 .recall-capture-asset-receipt dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; margin: 7px 0 0; }
 .recall-capture-asset-receipt dl > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.recall-capture-asset-receipt dl > div.is-decision { grid-column: 1 / -1; }
 .recall-capture-asset-receipt dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--fg, #111827); font-size: 11px; }
 .recall-capture-task-detail .skills-cognition-actions { margin-top: 14px; }
 .recall-capture-load-more { display: block; margin: 14px auto 0; }
@@ -469,6 +527,19 @@
   margin: 6px 0 0;
   padding-left: 18px;
 }
+
+.skill-diff-summary { margin-top: 7px; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.skill-diff-files { display: grid; gap: 6px; margin-top: 8px; }
+.skill-diff-file { overflow: hidden; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--card, #fff); }
+.skill-diff-file > summary { display: flex; justify-content: space-between; gap: 8px; padding: 7px 9px; cursor: pointer; list-style: none; }
+.skill-diff-file > summary::-webkit-details-marker { display: none; }
+.skill-diff-file > summary span { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.skill-diff-line { display: grid; grid-template-columns: 18px minmax(0, 1fr); padding: 1px 8px; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.skill-diff-line > span { color: var(--muted-fg, #9ca3af); text-align: center; }
+.skill-diff-line.is-added { background: color-mix(in srgb, #22c55e 10%, transparent); }
+.skill-diff-line.is-added > span { color: #15803d; }
+.skill-diff-line.is-deleted { background: color-mix(in srgb, #ef4444 10%, transparent); }
+.skill-diff-line.is-deleted > span { color: #b91c1c; }
 
 .recall-candidate-editor {
   display: grid;

@@ -170,6 +170,8 @@ describe('Recall cognition workspace layout', () => {
     expect(governance).toContain('_recallAssetActions(selected.status)');
     expect(governance).toContain('_renderRecallAssetHistory(selected.id)');
     expect(governance).toContain('_renderRecallAssetChain(selected.id)');
+    expect(governance).toContain('selected.generatedSkillId');
+    expect(governance).toContain('cognition.governance_open_skill_versions');
     expect(bindings).toContain("window.cogseed.invoke('recall.assets.versions'");
     expect(bindings).toContain("window.cogseed.invoke('recall.assets.rollback'");
     expect(bindings).toContain('[data-cognition-governance-action]');
@@ -356,10 +358,12 @@ describe('Recall cognition workspace layout', () => {
 
     expect(skills).toContain("window.cogseed.invoke('recall.sources.list'");
     expect(skills).toContain("window.cogseed.invoke('recall.captures.list'");
-    expect(skills).toContain('skills-cognition-source-row');
+    expect(skills).toContain('recall-source-card');
     expect(skills).toContain('skills-cognition-capture-row');
     expect(skills).toContain('data-cognition-page-link="captures"');
-    expect(skills).toContain('data-recall-capture-retry');
+    // 重试入口从已移除的「最近沉淀状态」块移到展开的沉淀记录详情里，能力仍在
+    // （_captureTaskActions 在 failed / configuration_required 时产出）。
+    expect(skills).toContain("_captureActionButton(capture, 'retry'");
     expect(skills).toContain('data-recall-capture-settings');
     expect(bindings).toContain("window.cogseed.invoke('recall.captures.retry'");
     expect(bindings).toContain("window.activateSettingsTab('credentials')");
@@ -372,17 +376,25 @@ describe('Recall cognition workspace layout', () => {
     expect(inbox).toContain('_renderCognitionOverviewAttention()');
     expect(inbox).toContain('cognition.inbox_empty');
     // 进度面板不在待我处理里。
-    expect(inbox).not.toContain('_renderCognitionPipelineStatus');
+    // 编号流程条已被一句去向说明取代（编号会和段落标题抢层级），函数整体移除。
+    expect(skills).not.toContain('_renderCognitionPipelineStatus');
     expect(inbox).not.toContain('_renderCognitionSourceStatus');
-    expect(inbox).not.toContain('_renderCognitionCaptureStatus');
+    // 「最近沉淀状态」已并入「沉淀记录」——两者说的是同一件事，函数整体移除。
+    expect(skills).not.toContain('_renderCognitionCaptureStatus');
     expect(inbox).not.toContain('_renderCognitionRecentActivity');
 
     // 进度面板落在沉淀活动；来源健康度落在管理来源；最近变化落在我的资产。
     const captures = sliceFunction(skills, 'renderSkillsCognitionCaptures');
-    expect(captures).toContain('_renderCognitionPipelineStatus()');
-    expect(captures).toContain('_renderCognitionCaptureStatus()');
+    expect(captures).toContain('recall-capture-chain');
     expect(captures).toContain('includeProcessing: true');
-    expect(sliceFunction(skills, 'renderSkillsCognitionSources')).toContain('_renderCognitionSourceStatus()');
+    // 来源健康度不再由页头下方那条独立 band 表达——它和五张来源卡说的是同一
+    // 件事，摆两遍只会让首屏啰嗦、并削弱"五类概览"这个主结构。健康度现在长在
+    // 每张卡自己的状态徽标上。
+    const sources = sliceFunction(skills, 'renderSkillsCognitionSources');
+    expect(sources).not.toContain('_renderCognitionSourceStatus');
+    expect(skills).not.toContain('function _renderCognitionSourceStatus');
+    expect(sources).toContain('recall-source-card');
+    expect(sources).toContain('_cognitionSourceKindPresentation');
     expect(sliceFunction(skills, 'renderSkillsCognitionAssets')).toContain('_renderCognitionRecentActivity()');
     expect(skills).toContain('data-cognition-open-asset');
   });
