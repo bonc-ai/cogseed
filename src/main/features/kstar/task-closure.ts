@@ -149,21 +149,6 @@ async function finishClosure(
       review = await saveKstarReviewRecord(userId, createInitialKstarReview(episode));
     }
   }
-  // 个人画像同步（方案 B 2026-08-17）：模型提名 lessonPersonal 且确定性校验
-  // 通过时，把用户偏好写入 USER.md（每次投影自动加载为 ontology 资产，type=
-  // personal）。失败不阻断闭环。
-  if (review.lessonPersonal === true) {
-    try {
-      const { syncPersonalLessonToProfile } = await import('./personal-profile-sync');
-      await syncPersonalLessonToProfile(userId, review, options.messages || []);
-    } catch (error) {
-      log.warn('kstar personal profile sync degraded', {
-        userId,
-        episodeId: episode.id,
-        error: (error as Error).message,
-      });
-    }
-  }
   return reconcileKstarExtraction(userId, episode, review);
 }
 
