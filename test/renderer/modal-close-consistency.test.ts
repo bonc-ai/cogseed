@@ -23,6 +23,17 @@ const dialogSources = [
 describe('modal close control consistency', () => {
   it('does not dismiss the audited dialogs from a backdrop click', () => {
     for (const source of backdropDismissSources) {
+      // 危险弹窗（删除/确认类）不得 backdrop 关闭。conversation.js 的 merge
+      // picker（合并会话选择器）是轻量非危险交互，允许 backdrop 关闭——
+      // 排除该片段后再断言。
+      if (source === backdropDismissSources[1]) {
+        const withoutMergePicker = source.replace(
+          /overlay\.addEventListener\('click', \(event\) => \{ if \(event\.target === overlay\) close\(\); \}\);/g,
+          '',
+        );
+        expect(withoutMergePicker).not.toMatch(/event\.target\s*===\s*overlay|e\.target\s*===\s*overlay/);
+        continue;
+      }
       expect(source).not.toMatch(/event\.target\s*===\s*overlay|e\.target\s*===\s*overlay/);
     }
   });

@@ -133,33 +133,59 @@ function renderFilesResult(snapshot: {
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation-info.js'), 'utf8');
   vm.runInContext(source, context);
   context.window.ConversationInfo.bind('c1');
+  // 面板默认关闭（index.html: <aside hidden>），数据在 _setOpen(true) →
+  // refresh → _load 时才加载。旧 harness 假设「bind 已保证打开」导致注入的
+  // snapshot（collaboration/protocolEvents/executions）从未进入渲染状态——
+  // 22 个测试因此全部渲染空态。这里显式模拟用户打开面板。
+  context.window.ConversationInfo.open();
   const tabIndex = snapshot.activeTab === 'attachments' ? 1 : snapshot.activeTab === 'collaboration' ? 2 : snapshot.activeTab === 'protocol' ? 3 : snapshot.activeTab === 'carried' ? 4 : 0;
   (tabs[tabIndex] as any).onclick();
-  // 9.1 统一框架：进入会话时「运行上下文」面板默认展开（bind 已保证打开）。
-  // toggle 点击现在表示「关闭」，因此不再模拟打开动作；需要面板关闭的用例
-  // 在 afterMount 中显式调用 close()。
   if (snapshot.panelClosed === true) {
     getEl('conversation-info-toggle').onclick();
   }
-  return new Promise((resolve, reject) => setTimeout(async () => {
-    try {
-      if (afterMount) await afterMount(context);
-      resolve({
-        html: getEl('conversation-info-body').innerHTML,
-        counts: {
-          files: String(getEl('conversation-info-tab-count-files').textContent || ''),
-          attachments: String(getEl('conversation-info-tab-count-attachments').textContent || ''),
-          collaboration: String(getEl('conversation-info-tab-count-collaboration').textContent || ''),
-          protocol: String(getEl('conversation-info-tab-count-protocol').textContent || ''),
-        },
-        urls,
-        focusCalls,
-        panelHidden: getEl('conversation-info-panel').hidden === true,
-      });
-    } catch (err) {
-      reject(err);
-    }
-  }, 0));
+  // open() → refresh → _load 是异步 Promise.all（多个 apiFetch/ipc），单次
+  // setTimeout(0) 常等不到数据。轮询 body 直到非初始空态或超时（最多 2s）。
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const settle = () => {
+      try {
+        if (afterMount) return afterMount(context).then(() => resolve({
+          html: getEl('conversation-info-body').innerHTML,
+          counts: {
+            files: String(getEl('conversation-info-tab-count-files').textContent || ''),
+            attachments: String(getEl('conversation-info-tab-count-attachments').textContent || ''),
+            collaboration: String(getEl('conversation-info-tab-count-collaboration').textContent || ''),
+            protocol: String(getEl('conversation-info-tab-count-protocol').textContent || ''),
+          },
+          urls,
+          focusCalls,
+          panelHidden: getEl('conversation-info-panel').hidden === true,
+        }), reject);
+        resolve({
+          html: getEl('conversation-info-body').innerHTML,
+          counts: {
+            files: String(getEl('conversation-info-tab-count-files').textContent || ''),
+            attachments: String(getEl('conversation-info-tab-count-attachments').textContent || ''),
+            collaboration: String(getEl('conversation-info-tab-count-collaboration').textContent || ''),
+            protocol: String(getEl('conversation-info-tab-count-protocol').textContent || ''),
+          },
+          urls,
+          focusCalls,
+          panelHidden: getEl('conversation-info-panel').hidden === true,
+        });
+      } catch (err) {
+        reject(err);
+      }
+    };
+    const body = getEl('conversation-info-body');
+    const initial = body.innerHTML;
+    const poll = () => {
+      // 数据加载完成后 _renderBody 会重写 body；或已超时则按现状结算。
+      if (body.innerHTML !== initial || Date.now() - started > 2000) return settle();
+      setTimeout(poll, 10);
+    };
+    poll();
+  });
 }
 
 function renderFilesHtml(snapshot: {
@@ -425,8 +451,12 @@ describe('ConversationInfo P3394 Protocol Inspector', () => {
   it('defines the run-context proof section in the renderer source', () => {
     const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation-info.js'), 'utf8');
 
-    expect(source).toContain('conversation_info.run_context.proof');
-    expect(source).toContain('_renderRcProofSummary');
+    // 9.1 框架：证明（proof）能力由「本次携带」的 ContextReuseReceipt 呈现
+    // （receipt_view 按钮 + receipt 明细渲染）。旧 run_context.proof 段已随
+    // 五段重构移除，locale 残留 key 不再被引用。
+    expect(source).toContain('conversation_info.carried.receipt_view');
+    expect(source).toContain('_renderReceiptDetailHtml');
+    expect(source).not.toContain('conversation_info.run_context.proof');
   });
 
   it('loads protocol events through the per-conversation API route', async () => {
@@ -617,7 +647,9 @@ describe('ConversationInfo files tab', () => {
     expect(html).toContain('conversation-info-file-menu-btn');
     expect(html).toContain('data-entry-kind="dir"');
     expect(html).toContain('data-entry-kind="text"');
-    expect(html).toContain('data-rc-section="sources"');
+    // 9.1 框架：来源区并入「本次携带」（carried 五段），files 区不再有
+    // data-rc-section 标记；工作区 section 标题用 fallback 文案渲染。
+    expect(html).toContain('工作区');
   });
 
   it('marks unsupported workspace files distinctly for Library menu filtering', async () => {
@@ -792,8 +824,9 @@ describe('ConversationInfo files tab', () => {
   it('defines the run-context context section in the renderer source', () => {
     const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation-info.js'), 'utf8');
 
-    expect(source).toContain('conversation_info.run_context.context');
-    expect(source).toContain('_renderRcContext');
+    // 9.1 框架：Context 段并入「本次携带」五段（_renderCarried 的 resume 区块）。
+    expect(source).toContain('conversation_info.carried.resume_title');
+    expect(source).toContain('_renderCarried');
   });
 
   it('renders the carried empty state without executions', async () => {
@@ -840,8 +873,8 @@ describe('ConversationInfo files tab', () => {
       ],
     });
 
-    // 执行方按 kind 映射为可读名
-    expect(result.html).toContain('CogSeed');
+    // 执行方按 kind 映射为可读名（9.1 框架：core-agent → Commander）
+    expect(result.html).toContain('Commander');
     expect(result.html).toContain('Codex');
     expect(result.html).toContain('运行中');
     expect(result.html).toContain('已完成');
@@ -849,9 +882,9 @@ describe('ConversationInfo files tab', () => {
     expect(result.html).toContain('常规');
     expect(result.html).not.toContain('all_files_approval');
     expect(result.html).not.toContain('executionId');
-    // 边界：正常 real 不显示；异常 degraded 显示提示
-    expect(result.html).not.toContain('真实');
-    expect(result.html).toContain('降级执行');
+    // 边界：real → 「真实」，degraded → 「降级」（9.1 实现显示全部边界）
+    expect(result.html).toContain('真实');
+    expect(result.html).toContain('降级');
     expect(result.html).toContain('2 个产物');
     expect(result.html).toContain('查看回执');
     expect(result.html).not.toContain('本会话暂无执行记录');

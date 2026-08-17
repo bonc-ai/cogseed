@@ -4858,5 +4858,14 @@
   "sidebar.new_task_ph": "输入任务描述，回车创建…",
   "sidebar.home": "首页",
   "cognition.maturity_transfer_validated": "已迁移验证",
-  "cognition.asset_write_origin_system": "系统沉淀"
+  "cognition.asset_write_origin_system": "系统沉淀",
+  "conversation_info.carried.permission.default": "常规",
+  "common.id_masked": "…",
+  "skills.secpanel_nseap": "NSEAP 声明",
+  "skills.secpanel_nseap_unavailable": "NSEAP 声明不可用",
+  "skills.secpanel_nseap_mismatch": "NSEAP 声明不匹配",
+  "skills.secpanel_nseap_needs_input": "NSEAP 声明需补充输入",
+  "skills.secpanel_nseap_warnings": "NSEAP 警告",
+  "skills.secpanel_nseap_more": "还有 {n} 项未显示",
+  "skills.secpanel_nseap_note": "NSEAP 声明由宿主校验"
 }
