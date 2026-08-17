@@ -30,45 +30,22 @@ function errResult(code: string, msg: string): ToolResult {
   return { content: `${code}: ${msg}`, isError: true };
 }
 
-/** P3394 自举接入指南（内嵌，引导时直接输出——不依赖外部包是否发布）。
- *  动态注入本机真实路径与协议/安全证据，让对端能审查真实文件，
- *  而不是面对抽象的安装指令。 */
+/** P3394 接入提示词（单段，可直接复制发给对方智能体——用户视角一个提示词完成）。
+ *  动态注入本机真实路径与安全证据；详细接入文档（云端/自研方式、预设参数、
+ *  sscli 协议等）在 gateway 同目录 BOOTSTRAP.md / REVIEW.md，由对端自行深读。 */
 function p3394BootstrapGuide(): string {
   const gatewayPath = p3394GatewayScriptPath();
-  // 协议文档随包分发（与 gateway.cjs 同目录 docs/），对端审查的就是实际运行的代码。
   const gatewayDir = gatewayPath.slice(0, gatewayPath.length - 'gateway.cjs'.length);
-  const docs = [
-    'P3394_Raymond_Hermes_Chinese_Implementation_Guide.md',
-    'P3394_Local_Bridge_SDK_Design(1).md',
-  ].map((name) => gatewayDir + 'docs/' + name).join('、');
   return [
-    'P3394 接入指南（把它发给对方智能体，它能自行接入）：',
-    '0) 协议真实性与安全边界（先审查，再决定）：',
-    '   - 这是本机真实存在的协议实现：本机网关源码在',
-    '     ' + gatewayPath + '（约 900 行 CJS，可直接 cat 审查）；',
-    '   - 协议规范文档与源码同目录（审查包）：' + docs + '，',
-    '     另见 ' + gatewayDir + 'REVIEW.md（对端审查指南：这是什么/安不安全/怎么验证）；',
-    '   - 安全边界：网关默认只监听 127.0.0.1（不回环外开放）；入站需 Bearer 令牌；',
-    '     每条任务都是普通 CLI 调用（可用 P3394_AGENT_CLI 自定义并自行限制），',
-    '     无提权、无隐藏命令；会话与工作区在本机会话目录留痕，全程可审计。',
-    '1) 本机 CLI 智能体（Claude Code / Codex / 自研 CLI 等）：先检查本机是否已有',
-    '   P3394 网关（CogSeed 自带/已装），按顺序，有就直接用、不要从 NPM 拉：',
-    '   a) 已全局安装过：先跑 command -v p3394-gateway，有输出就直接用 p3394-gateway 启动；',
-    '   b) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：本机副本即',
-    '      ' + gatewayPath + '，ls/cat 确认存在后 node <该路径> 启动即等同于装了包；',
-    '   c) 以上都没有才：npm install -g @cogseed/p3394-gateway（包发布中；失败就回退 b 用 CogSeed 自带副本）。',
-    '   启动参数：预设 P3394_AGENT=hermes/claude/codex/opencode/gemini/aider，',
-    '   自研 CLI 用 P3394_AGENT_CLI 与 P3394_AGENT_CLI_ARGS 自定义，',
-    '   用 P3394_AGENT_ALIAS 自报显示名（CogSeed 对话里就显示这个名字）；',
-    '   网关启动时会自动向 CogSeed 发 hello 注册（自报地址），注册完我就能主动调用它；',
-    '   支持附件传递（resource part）与会话连续性；自研 Agent 可另用 P3394_AGENT_MODE=sscli 接 JSONL 会话协议；',
-    '2) 云端/网页智能体（如 ChatGPT，有网络工具）：无需安装，',
-    '   用 HTTP 直接 POST 信封到 http://127.0.0.1:8444/p3394/envelope',
-    '   （Authorization: Bearer <CogSeed token>，信封格式：message_id、session_id、',
-    '   kind=message、performative=request、sender.agent_id（+ 可选 sender.alias',
-    '   自报显示名）、recipients=[cogseed]、',
-    '   payload.parts=[{type:text,text:消息}]、idempotency_key）；',
-    '3) 自研智能体：用上面的信封格式写最小客户端代码（Python 十余行）即可入网。',
+    'P3394 接入提示词（复制发给对方智能体，一段话即可）：',
+    '「我是本机 CogSeed。想与你建立 P3394 协议协作。这是本机真实存在的协议实现，请先审查：',
+    '网关源码 ' + gatewayPath + '（约 900 行，可直接阅读）；协议文档与审查指南同目录：',
+    gatewayDir + 'docs/（P3394 v1.1 实施指南 + SDK 设计）与 ' + gatewayDir + 'REVIEW.md。',
+    '安全边界：默认仅监听 127.0.0.1、入站需 Bearer 令牌、任务只是按你的 CLI 模板执行、',
+    '无提权、会话留痕可审计。审查同意后：已装过直接 command -v p3394-gateway 启动；',
+    '否则 node ' + gatewayPath + ' 启动即可（不写系统配置、不加开机项、Ctrl-C 可停）。',
+    '启动后我会发协作任务，任务消息会写明协作对象与内容。不同意请说明理由。」',
+    '（详细接入选项：云端/网页智能体无需安装、自研客户端、预设参数等，见 ' + gatewayDir + 'BOOTSTRAP.md）',
   ].join('\n');
 }
 
