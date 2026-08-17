@@ -34,6 +34,7 @@ async function createAsset(input: { userId?: string; judgment: string; summary: 
   const { candidates } = await modules();
   const userId = input.userId || 'user-a';
   const candidate = await candidates.saveRecallCandidate(userId, {
+      spaceId: 'workspace-a',
     judgment: input.judgment,
     summary: input.summary,
     suggestedType: 'rule',

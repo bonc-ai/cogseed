@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   readArtifactMeta: vi.fn(),
   listKbFiles: vi.fn(),
   enqueueKb: vi.fn(),
+  listSourceControls: vi.fn(),
 }));
 
 vi.mock('../../../../src/main/features/chats', () => ({
@@ -35,6 +36,10 @@ vi.mock('../../../../src/main/features/kb_vector', () => ({
 }));
 vi.mock('../../../../src/main/features/kb_indexer', () => ({
   enqueue: mocks.enqueueKb,
+}));
+vi.mock('../../../../src/main/features/recall/source-control', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../../src/main/features/recall/source-control')>(),
+  listCognitionSourceControls: mocks.listSourceControls,
 }));
 
 import {
@@ -101,6 +106,7 @@ beforeEach(() => {
   mocks.listKbFiles.mockReturnValue([
     { rel_path: 'folder/private.md', status: 'ready' },
   ]);
+  mocks.listSourceControls.mockResolvedValue([]);
 });
 
 describe('Recall cognition source catalog', () => {
@@ -201,6 +207,54 @@ describe('Recall cognition source catalog', () => {
     await retryCognitionSource('user-a', 'artifact_file', contextFileId);
     expect(mocks.enqueueKb).toHaveBeenCalledWith('user-a', 'folder/private.md', 'upsert', { reason: 'manual' });
     expect(JSON.stringify(groups)).not.toContain('private backend error');
+  });
+
+  it('marks sessions without a completed assistant exchange as not capture-ready', async () => {
+    mocks.listConversations.mockResolvedValue([
+      conversation,
+      { ...conversation, conversation_id: 'conv-complete', title: 'Complete session' },
+      { ...conversation, conversation_id: 'conv-followup', title: 'Unanswered follow-up' },
+    ]);
+    mocks.getMessages.mockImplementation(async (_userId: string, conversationId: string) => {
+      if (conversationId === 'conv-complete') return [
+          { id: 'u-1', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: 'Keep this decision.' },
+          { id: 'a-1', ts: '2026-08-01T00:02:00.000Z', from: 'commander', text: 'Done.' },
+        ];
+      if (conversationId === 'conv-followup') return [
+        { id: 'u-1', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: 'Keep this decision.' },
+        { id: 'a-1', ts: '2026-08-01T00:02:00.000Z', from: 'commander', text: 'Done.' },
+        { id: 'u-2', ts: '2026-08-01T00:03:00.000Z', from: 'user', text: 'One more change.' },
+        { id: 'system-1', ts: '2026-08-01T00:04:00.000Z', from: 'system', text: 'internal status' },
+        { id: 'tool-1', ts: '2026-08-01T00:05:00.000Z', from: 'tool', text: 'internal tool output' },
+        { id: 'process-1', ts: '2026-08-01T00:06:00.000Z', from: 'process', text: 'internal process output' },
+      ];
+      return [{ id: 'u-only', ts: '2026-08-01T00:01:00.000Z', from: 'user', text: 'Still waiting.' }];
+    });
+
+    const [group] = await listCognitionSources('user-a', { kinds: ['conversation'], limit: 10 });
+    expect(group.items.find((item) => item.id === 'conv-a')).toMatchObject({ captureReady: false });
+    expect(group.items.find((item) => item.id === 'conv-complete')).toMatchObject({ captureReady: true });
+    expect(group.items.find((item) => item.id === 'conv-followup')).toMatchObject({ captureReady: false });
+    expect(mocks.getMessages.mock.calls.every((call) => call[2] === 50)).toBe(true);
+  });
+
+  it('does not read message bodies for paused or removed conversation sources', async () => {
+    mocks.listConversations.mockResolvedValue([
+      conversation,
+      { ...conversation, conversation_id: 'conv-removed', title: 'Removed session' },
+    ]);
+    mocks.listSourceControls.mockResolvedValue([
+      { kind: 'conversation', sourceId: 'conv-a', availability: 'paused' },
+      { kind: 'conversation', sourceId: 'conv-removed', availability: 'removed' },
+    ]);
+
+    const [group] = await listCognitionSources('user-a', { kinds: ['conversation'], limit: 10 });
+
+    expect(mocks.getMessages).not.toHaveBeenCalled();
+    expect(group.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'conv-a', availability: 'paused', status: 'paused' }),
+      expect.objectContaining({ id: 'conv-removed', availability: 'removed', status: 'paused' }),
+    ]));
   });
 
   it('does not offer or execute a fake retry for failed execution records', async () => {

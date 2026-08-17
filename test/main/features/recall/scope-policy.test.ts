@@ -16,8 +16,8 @@ describe('recall scope policy gate', () => {
     expect(isAssetScopeAllowed({ workspaceIds: ['workspace-a'] }, { workspaceId: 'workspace-a' })).toBe(true);
     expect(isAssetScopeAllowed({ workspaceIds: ['workspace-a'] }, { workspaceId: 'workspace-b' })).toBe(false);
     expect(isAssetScopeAllowed({ workspaceIds: ['workspace-a'] }, {})).toBe(false);
-    expect(isAssetScopeAllowed({ projectIds: ['project-x'] }, { workspaceId: 'project-x' })).toBe(true);
-    expect(isAssetScopeAllowed({ projectIds: ['project-x'] }, { workspaceId: 'project-y' })).toBe(false);
+    expect(isAssetScopeAllowed({ projectIds: ['project-x'] }, { projectId: 'project-x' })).toBe(true);
+    expect(isAssetScopeAllowed({ projectIds: ['project-x'] }, { projectId: 'project-y' })).toBe(false);
   });
 
   it('enforces conversationKinds fail-closed when the kind is unknown', () => {
@@ -35,14 +35,29 @@ describe('recall scope policy gate', () => {
     expect(isAssetScopeAllowed(policy, { purpose: '做 review 检查' })).toBe(true);
   });
 
-  it('passes conversationKinds restrictions when the conversation kind is unknown', () => {
+  it('fails closed when a restricted conversation kind is unknown', () => {
     const policy = { conversationKinds: ['normal'] };
-    expect(isAssetScopeAllowed(policy, { conversationKind: 'normal', conversationKindKnown: true })).toBe(true);
-    expect(isAssetScopeAllowed(policy, { conversationKind: 'gconv', conversationKindKnown: true })).toBe(false);
-    // M7: an explicitly unresolved kind is fail-open instead of silently
-    // excluding; an unspecified flag keeps the previous fail-closed default.
+    expect(isAssetScopeAllowed(policy, { conversationKind: 'normal' })).toBe(true);
+    expect(isAssetScopeAllowed(policy, { conversationKind: 'gconv' })).toBe(false);
     expect(isAssetScopeAllowed(policy, {})).toBe(false);
-    expect(isAssetScopeAllowed(policy, { conversationKindKnown: false })).toBe(true);
+  });
+
+  it('enforces agent, role, project and file dimensions with fail-closed semantics', () => {
+    const policy = {
+      agentIds: ['agent-a'],
+      roleIds: ['reviewer'],
+      projectIds: ['project-a'],
+      fileKinds: ['pdf', 'docx'],
+    };
+    expect(isAssetScopeAllowed(policy, {
+      agentId: 'agent-a', roleId: 'reviewer', projectId: 'project-a', fileKinds: ['pdf'],
+    })).toBe(true);
+    expect(isAssetScopeAllowed(policy, {
+      agentId: 'agent-a', roleId: 'reviewer', projectId: 'project-a', fileKinds: ['pdf', 'image'],
+    })).toBe(false);
+    expect(isAssetScopeAllowed(policy, {
+      agentId: 'agent-a', projectId: 'project-a', fileKinds: ['pdf'],
+    })).toBe(false);
   });
 
   it('combines dimensions with AND semantics', () => {
@@ -56,6 +71,21 @@ describe('recall scope policy gate', () => {
     expect(isAssetScopeAllowed(policy, {
       purpose: 'Build', workspaceId: 'workspace-a', conversationKind: 'normal',
     })).toBe(false);
+  });
+
+  it('treats empty projection allowlists as deny-all at runtime', () => {
+    const context = {
+      purpose: 'Review',
+      workspaceId: 'workspace-a',
+      conversationKind: 'normal',
+    };
+    for (const field of ['purposeTags', 'workspaceIds', 'projectIds', 'conversationKinds'] as const) {
+      expect(isAssetScopeAllowed({ [field]: [] }, context)).toBe(false);
+    }
+    expect(isAssetScopeAllowed(
+      { conversationKinds: [] },
+      {},
+    )).toBe(false);
   });
 });
 

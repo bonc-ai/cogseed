@@ -108,7 +108,7 @@ function hashString(value: string, seed: number): number {
   return Math.abs(hash);
 }
 
-function stableCid(sessionId: string): string {
+export function stableCid(sessionId: string): string {
   // Fully deterministic: two independent hashes of the session id. Restarts
   // map the same P3394 session to the SAME conversation (guide §5.3 会话恢复).
   return 'p3394-' + hashString(sessionId, 0).toString(36) + '-' + hashString(sessionId, 5381).toString(36);
@@ -192,6 +192,13 @@ export class P3394ConversationRuntimeAdapter implements P3394RuntimeAdapter {
     this.fetchObject = deps.fetchObject;
     this.now = deps.now ?? (() => new Date().toISOString());
     this.replyTimeoutMs = deps.replyTimeoutMs ?? P3394_CONVERSATION_DEFAULTS.replyTimeoutMs;
+  }
+
+  /** 出站会话绑定：p3394_send 从当前对话发起时，把 session 显式绑定到
+   *  该对话——对端的回复路由回同一个对话（不新建 [P3394] peer 独立对话）。 */
+  bindSession(sessionId: string, cid: string): void {
+    if (!sessionId || !cid) return;
+    this.sessionCidMap.set(sessionId, cid);
   }
 
   private cidFor(sessionId: string): string {

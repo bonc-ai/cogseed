@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { app } from 'electron';
 import { createLogger } from '../../logger';
 import { p3394StateFile, variantRoot } from './runtime-paths';
 import { P3394PeerRegistry } from './registry';
@@ -117,11 +118,24 @@ function freePort(): Promise<number> {
   });
 }
 
+/** 本机 P3394 网关脚本的真实路径（本地优先：ORKAS_PC_DIR → 打包
+ *  asar-unpacked → dev 仓库根）。对端引导用它给出可审查的具体路径。 */
+export function p3394GatewayScriptPath(): string {
+  // 本地优先：CogSeed 自带 gateway（仓库 dev 根 / 打包 asar-unpacked），
+  // 无需对端从 NPM 拉取。
+  if (process.env.ORKAS_PC_DIR) {
+    return path.join(process.env.ORKAS_PC_DIR, 'p3394-gateway', 'gateway.cjs');
+  }
+  if (app && app.isPackaged) {
+    // Packaged builds: gateway lives as a real file under app.asar.unpacked
+    // (asar contents are not readable by a spawned child process).
+    return path.join(process.resourcesPath, 'app.asar.unpacked', 'p3394-gateway', 'gateway.cjs');
+  }
+  return path.resolve(__dirname, '..', '..', '..', '..', 'p3394-gateway', 'gateway.cjs');
+}
+
 function gatewayScriptPath(): string {
-  // Dev: the gateway ships inside this repo. Packaged builds resolve
-  // through ORKAS_PC_DIR (asar-unpacked aware).
-  const pcDir = process.env.ORKAS_PC_DIR || path.resolve(__dirname, '..', '..', '..', '..');
-  return path.join(pcDir, 'p3394-gateway', 'gateway.cjs');
+  return p3394GatewayScriptPath();
 }
 
 /**

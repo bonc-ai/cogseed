@@ -29,6 +29,7 @@ import * as crypto from 'node:crypto';
 import { createLogger } from '../../logger';
 import { validateP3394Envelope, type P3394Envelope } from './envelope';
 import { p3394ObjectStoreGet } from './object-store';
+import { P3394_CHANNEL_LIMITS, P3394RateLimiter } from './channel-limits';
 import { buildP3394ChannelDescriptor, type P3394ChannelAdapter, type P3394ChannelDeliveryReceipt, type P3394ChannelDescriptor, type P3394ChannelHealth, type P3394ChannelListener, type P3394ChannelListenerResult } from './channel-adapter';
 import type { P3394BridgeManifest } from './manifest';
 
@@ -61,12 +62,19 @@ export interface P3394HttpChannelOptions {
   authToken?: string;
   maxBodyBytes?: number;
   timeoutMs?: number;
+  /** Inbound request rate limit per minute (0 disables; S-06). */
+  maxInboundRequestsPerMinute?: number;
+  /** 同时处理的入站请求上限（0 disables；超出返回 503 channel_busy；S-06）。 */
+  maxConcurrentRequests?: number;
+  /** 认证/边界失败审计回调（C-04）：由 wiring 注入 kernel 审计。 */
+  audit?: (record: { event: string; status: 'rejected'; metadata: Record<string, unknown> }) => void;
   now?: () => number;
 }
 
 export const P3394_HTTP_CHANNEL_DEFAULTS = {
   maxBodyBytes: 4 * 1024 * 1024,
   timeoutMs: 15_000,
+  maxConcurrentRequests: 16,
 } as const;
 
 const MANIFEST_PATH = '/p3394/manifest';
@@ -103,11 +111,20 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
   private closed = false;
   /** Manifest presented by this node during negotiation. */
   private localManifest: P3394BridgeManifest | null = null;
+  private readonly inboundLimiter: P3394RateLimiter | null;
+  /** S-06：当前在途入站请求数（并发上限）。 */
+  private inFlightRequests = 0;
 
   constructor(channel_id = 'http', options: P3394HttpChannelOptions = {}) {
     this.channel_id = channel_id;
     this.options = options;
     this.now = options.now ?? (() => Date.now());
+    const perMinute = options.maxInboundRequestsPerMinute ?? P3394_CHANNEL_LIMITS.maxInboundRequestsPerMinute;
+    this.inboundLimiter = perMinute <= 0 ? null : new P3394RateLimiter(perMinute, 60_000, this.now());
+  }
+
+  private maxConcurrentRequests(): number {
+    return this.options.maxConcurrentRequests ?? P3394_HTTP_CHANNEL_DEFAULTS.maxConcurrentRequests;
   }
 
   setLocalManifest(manifest: P3394BridgeManifest): void {
@@ -126,6 +143,13 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
     return this.options.authToken ?? '';
   }
 
+  /** 401 响应 + 审计回调（C-04）：认证失败可追溯，且不发任何提示。 */
+  private rejectUnauthorized(res: http.ServerResponse, path: string): void {
+    this.options.audit?.({ event: 'http.auth.reject', status: 'rejected', metadata: { path } });
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+  }
+
   async listen(): Promise<void> {
     if (this.closed) throw new Error('p3394_channel_closed');
     if (this.server) return;
@@ -137,11 +161,29 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
         res.end(JSON.stringify({ ok: true, agent_id: this.localManifest?.identity.agent_id ?? null }));
         return;
       }
+      // 统一入站速率限制（S-06）：health 探活豁免，其余路由共享同一预算。
+      if (this.inboundLimiter) {
+        const rate = this.inboundLimiter.tryAcquire(this.now());
+        if (!rate.ok) {
+          res.writeHead(429, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'rate_limited', retry_after_ms: rate.retryAfterMs }));
+          return;
+        }
+      }
+      // 统一入站并发限制（S-06）：超限立即 503，不排队。
+      const maxConcurrent = this.maxConcurrentRequests();
+      if (maxConcurrent > 0 && this.inFlightRequests >= maxConcurrent) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'channel_busy' }));
+        return;
+      }
+      this.inFlightRequests += 1;
+      // 'finish' 在响应完成时必然触发（keep-alive 下 'close' 不可靠）。
+      res.on('finish', () => { this.inFlightRequests = Math.max(0, this.inFlightRequests - 1); });
       // Resource endpoint (§12): authenticated content-addressed object fetch.
       if (req.method === 'GET' && req.url.startsWith(OBJECTS_PATH_PREFIX)) {
         if (!this.authorized(req)) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+          this.rejectUnauthorized(res, req.url ?? OBJECTS_PATH_PREFIX);
           return;
         }
         const digest = req.url.slice(OBJECTS_PATH_PREFIX.length).split('?')[0];
@@ -162,8 +204,7 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
       }
       if (req.method === 'GET' && req.url === MANIFEST_PATH) {
         if (!this.authorized(req)) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+          this.rejectUnauthorized(res, MANIFEST_PATH);
           return;
         }
         if (!this.localManifest) {
@@ -177,8 +218,7 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
       }
       if (req.method === 'POST' && req.url === ENVELOPE_PATH) {
         if (!this.authorized(req)) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+          this.rejectUnauthorized(res, ENVELOPE_PATH);
           return;
         }
         const chunks: Buffer[] = [];
@@ -346,6 +386,12 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
     const dialConfig = this.options.dial;
     const endpoint = this.activeEndpoint ?? dialConfig?.endpoints[0];
     if (!dialConfig || !endpoint) throw new Error('p3394_http_not_dialed');
+    // S-03：配置 expected_identity 的通道必须协商成功（token→peer identity
+    // 绑定）。身份不符的端点即使 token 有效也不得发送——协商失败后不得
+    // 退化为"用第一个端点裸发"。
+    if (dialConfig.expected_identity && !this.peerManifest) {
+      throw new Error('p3394_identity_not_negotiated');
+    }
     const supported = this.peerManifest?.capability_profile.supported_performatives;
     if (supported && !supported.includes(envelope.performative)) {
       throw new Error('p3394_capability_unsupported:' + envelope.performative);
@@ -448,6 +494,21 @@ export function p3394CheckEnvelopeDigests(input: unknown): { ok: true } | { ok: 
           const meta = part.uri.slice(5, comma);
           const payload = part.uri.slice(comma + 1);
           content = /;base64$/i.test(meta) ? Buffer.from(payload, 'base64') : Buffer.from(decodeURIComponent(payload), 'utf8');
+        } else if (part.uri.startsWith('p3394-object:')) {
+          // §12 内容寻址引用。引用声明的 embedded digest 与 part.digest
+          // 一致时视为可信引用：本地对象存储有该对象 → 取回真实字节校验；
+          // 对象不在本地（跨机器常态）→ 信任引用，由资源端点
+          // （/p3394/objects/<digest>）拉取时校验内容。
+          // 引用与 digest 不一致/畸形 → 回退引用字符串哈希保持 fail-closed。
+          const ref = part.uri.slice('p3394-object:'.length);
+          const refDigest = ref.startsWith('sha256:') ? ref.slice('sha256:'.length) : ref;
+          if (/^[a-f0-9]{64}$/.test(refDigest) && refDigest === expected) {
+            const fetched = p3394ObjectStoreGet(part.uri);
+            if (fetched.ok) content = fetched.value;
+            else continue;
+          } else {
+            content = Buffer.from(part.uri, 'utf8');
+          }
         } else {
           content = Buffer.from(part.uri, 'utf8');
         }

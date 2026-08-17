@@ -9,9 +9,11 @@
  */
 
 import { createLogger } from '../../logger';
+import { listAbilityAssetVersions } from '../recall/asset-service';
 import { listRecallCandidates } from '../recall/candidate-service';
 import { listFormalAssets } from '../recall/formal-assets';
 import { buildCognitionInbox, type CognitionInboxItem } from '../recall/formal-assets/inbox';
+import { latestAssetVersionDiff, type AssetVersionDiff } from '../recall/formal-assets/version-diff';
 import { readInstalledSkillForAsset } from '../recall/skill-draft-service';
 import { listCognitionSources } from '../recall/source-catalog';
 
@@ -34,7 +36,9 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
   ]);
 
   // skill_method 的 generatedSkillId 不在资产记录上，得问一次已安装 Skill。
-  // 读失败按"还没生成"处理：漏报一条建议，好过谎称已经生成。
+  // 读失败时不能当成"还没生成"，否则会给用户一个可能重复创建 Skill 的假建议。
+  // 资产本身仍保留给来源失效、敏感级等其他治理检查。
+  const skillStateUnknownAssetIds = new Set<string>();
   const withSkillState = await Promise.all(assets.map(async (asset) => {
     if (asset.assetType !== 'skill_method' || asset.payload.kind !== 'skill_method') return asset;
     let generatedSkillId: string | undefined;
@@ -43,10 +47,27 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
       log.warn('inbox installed skill read degraded', {
         userId, assetId: asset.assetId, error: (error as Error).message,
       });
+      skillStateUnknownAssetIds.add(asset.assetId);
+      return asset;
     }
     return generatedSkillId
       ? { ...asset, payload: { ...asset.payload, generatedSkillId } }
       : asset;
+  }));
+
+  // 变更类待办要知道"最近一次改了什么"。版本快照本来就存着全量内容，这里
+  // 只是把相邻两版比一遍；读失败按"没有版本历史"处理——宁可少报一条变更，
+  // 也不要凭空断言资产没变过。
+  const latestDiffs = new Map<string, AssetVersionDiff>();
+  await Promise.all(withSkillState.map(async (asset) => {
+    try {
+      const diff = latestAssetVersionDiff(asset.assetId, await listAbilityAssetVersions(userId, asset.assetId));
+      if (diff) latestDiffs.set(asset.assetId, diff);
+    } catch (error) {
+      log.warn('inbox version history read degraded', {
+        userId, assetId: asset.assetId, error: (error as Error).message,
+      });
+    }
   }));
 
   const unavailableSourceIds = new Set(sourceGroups
@@ -64,5 +85,7 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
       ...(candidate.evidenceRefs ? { evidenceRefs: candidate.evidenceRefs } : {}),
     })),
     unavailableSourceIds,
+    latestDiffs,
+    skillStateUnknownAssetIds,
   });
 }

@@ -9,11 +9,20 @@ const AGENT = 'helper';
 
 let tmpDir: string;
 let prevWs: string | undefined;
+const sourceRemovalCalls: Array<{ userId: string; conversationId: string; artifactIds: string[] }> = [];
+
+vi.mock('../../../src/main/features/recall/source-removal', () => ({
+  recordRemovedArtifacts: async (userId: string, conversationId: string, artifactIds: string[]) => {
+    sourceRemovalCalls.push({ userId, conversationId, artifactIds });
+    return { removedSourceIds: artifactIds, failedSourceIds: [] };
+  },
+}));
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-chatart-'));
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  sourceRemovalCalls.length = 0;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(UID);
@@ -321,13 +330,50 @@ describe('chat_artifacts › resolveArtifactFilePath', () => {
 describe('chat_artifacts › purgeByCid', () => {
   it('removes the whole chat_artifacts/<cid>/ tree', async () => {
     const m = await loadMod();
-    expect(m.createArtifact(UID, CID, AGENT, { files: MIN_FILES }).ok).toBe(true);
-    expect(m.createArtifact(UID, CID, AGENT, { files: MIN_FILES }).ok).toBe(true);
+    const first = m.createArtifact(UID, CID, AGENT, { files: MIN_FILES });
+    const second = m.createArtifact(UID, CID, AGENT, { files: MIN_FILES });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
     expect(fs.existsSync(cidDir())).toBe(true);
     const n = await m.purgeByCid(UID, CID);
     expect(n).toBe(2);
     expect(fs.existsSync(cidDir())).toBe(false);
+    expect(sourceRemovalCalls).toEqual([{
+      userId: UID,
+      conversationId: CID,
+      artifactIds: expect.arrayContaining([
+        first.ok ? first.artifactId : '',
+        second.ok ? second.artifactId : '',
+      ]),
+    }]);
     // Idempotent.
     expect(await m.purgeByCid(UID, CID)).toBe(0);
+    expect(sourceRemovalCalls).toHaveLength(1);
+  });
+
+  it('does not record artifact source removal when filesystem deletion fails', async () => {
+    vi.doMock('node:fs', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('node:fs')>();
+      return {
+        ...actual,
+        rmSync: (target: fs.PathLike, options?: fs.RmDirOptions) => {
+          if (path.resolve(String(target)) === path.resolve(cidDir())) {
+            throw new Error('delete failed');
+          }
+          return actual.rmSync(target, options);
+        },
+      };
+    });
+
+    try {
+      const m = await loadMod();
+      expect(m.createArtifact(UID, CID, AGENT, { files: MIN_FILES }).ok).toBe(true);
+      await expect(m.purgeByCid(UID, CID)).resolves.toBe(0);
+      expect(sourceRemovalCalls).toEqual([]);
+      expect(fs.existsSync(cidDir())).toBe(true);
+    } finally {
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
   });
 });

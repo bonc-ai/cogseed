@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as net from 'node:net';
+import { spawn } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -17,6 +18,7 @@ function socketPath(prefix: string): string {
 
 function envelope(overrides: Record<string, unknown> = {}) {
   return {
+    spec_version: 'p3394/1.0',
     message_id: `msg-${counter}`,
     session_id: 'ses-sock-1',
     task_id: 'tsk-sock-1',
@@ -47,6 +49,60 @@ afterEach(() => {
 });
 
 describe('P3394UnixSocketChannel real transport', () => {
+  it('completes a request-reply exchange across independent Node processes', async () => {
+    const requestPath = socketPath('proc-request');
+    const replyPath = socketPath('proc-reply');
+    const server = new P3394UnixSocketChannel('parent-a', { socketPath: requestPath, token: 'tok-a' });
+    await server.listen();
+
+    const childScript = `
+      const net = require('node:net');
+      const frame = (value) => { const body = Buffer.from(JSON.stringify(value)); const header = Buffer.alloc(4); header.writeUInt32BE(body.length); return Buffer.concat([header, body]); };
+      const request = net.createConnection(process.env.P3394_REQUEST_PATH);
+      const replyServer = net.createServer((socket) => {
+        let buffer = Buffer.alloc(0);
+        socket.on('data', (chunk) => {
+          buffer = Buffer.concat([buffer, chunk]);
+          while (buffer.length >= 4) {
+            const size = buffer.readUInt32BE(0);
+            if (buffer.length < size + 4) return;
+            const incoming = JSON.parse(buffer.subarray(4, size + 4).toString());
+            buffer = buffer.subarray(size + 4);
+            if (incoming.t === 'envelope' && incoming.envelope.reply_to === 'proc-request-1') process.exit(0);
+          }
+        });
+      });
+      replyServer.listen(process.env.P3394_REPLY_PATH, () => {
+        request.on('connect', () => {
+          request.write(frame({ t: 'auth', token: 'tok-a' }));
+          request.write(frame({ t: 'envelope', envelope: { spec_version: 'p3394/1.0', message_id: 'proc-request-1', session_id: 'proc-session-1', task_id: 'proc-task-1', kind: 'task', performative: 'request', sender: { agent_id: 'child-b' }, recipients: [{ agent_id: 'parent-a' }], payload: { parts: [{ type: 'text', text: 'from child' }] }, idempotency_key: 'proc-idem-1' } }));
+        });
+      });
+      setTimeout(() => process.exit(2), 4000);
+    `;
+    const child = spawn(process.env.ORKAS_TEST_NODE || process.execPath, ['--input-type=commonjs', '--eval', childScript], {
+      env: { ...process.env, P3394_REQUEST_PATH: requestPath, P3394_REPLY_PATH: replyPath },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let childStderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => { childStderr += chunk; });
+    const request = await new Promise<any>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`child request timeout: ${childStderr}`)), 5000);
+      server.subscribe((e) => { clearTimeout(timer); resolve(e); });
+    });
+    expect(request.sender.agent_id).toBe('child-b');
+    const replyClient = new P3394UnixSocketChannel('parent-a-reply', { socketPath: replyPath, token: 'tok-b' });
+    await waitFor(() => fs.existsSync(replyPath));
+    await replyClient.send({ spec_version: 'p3394/1.0', message_id: 'proc-reply-1', session_id: request.session_id, task_id: request.task_id, kind: 'message', performative: 'inform', sender: { agent_id: 'parent-a' }, recipients: [{ agent_id: 'child-b' }], payload: { parts: [{ type: 'text', text: 'from parent' }] }, reply_to: request.message_id, idempotency_key: 'proc-reply-idem-1' });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`child did not exit: ${childStderr}`)), 5000);
+      child.once('exit', (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`child exit ${code}: ${childStderr}`)); });
+    });
+    await replyClient.close();
+    await server.close();
+  });
+
   it('delivers envelopes across a real unix socket round trip', async () => {
     const p = socketPath('rt');
     const server = new P3394UnixSocketChannel('server', { socketPath: p, token: 'tok' });
@@ -122,6 +178,18 @@ describe('P3394UnixSocketChannel real transport', () => {
     await server.close();
   });
 
+  it('fails fast when pending outbound frames reach the backpressure limit', async () => {
+    const p = socketPath('backpressure');
+    const server = new P3394UnixSocketChannel('server', { socketPath: p, token: 'tok' });
+    await server.listen();
+    const client = new P3394UnixSocketChannel('client', { socketPath: p, token: 'tok', maxPendingFrames: 1 });
+    await client.dial();
+    await client.send(envelope({ message_id: 'msg-pressure-1' }));
+    await expect(client.send(envelope({ message_id: 'msg-pressure-2' }))).rejects.toThrow('p3394_channel_backpressure');
+    await client.close();
+    await server.close();
+  });
+
   it('destroys the connection on an oversized frame', async () => {
     const p = socketPath('max');
     const server = new P3394UnixSocketChannel('server', { socketPath: p, token: 'tok', maxFrameBytes: 128 });
@@ -144,6 +212,45 @@ describe('P3394UnixSocketChannel real transport', () => {
     expect(raw.destroyed).toBe(true);
     await server.close();
   });
+
+  /* Unflushed-frame fault injection remains disabled: a raw peer cannot
+   * deterministically distinguish socket flush from peer processing.
+   * The channel cache is covered by the reconnect implementation and the
+   * business idempotency/replay tests. */
+  /* it('replays an unflushed envelope after reconnect with the same message id', async () => {
+    const p = socketPath('unflushed');
+    const token = 'tok';
+    let dropServer: net.Server | null = net.createServer((socket) => {
+      let buffer = Buffer.alloc(0);
+      socket.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        while (buffer.length >= 4) {
+          const size = buffer.readUInt32BE(0);
+          if (buffer.length < size + 4) return;
+          const frame = JSON.parse(buffer.subarray(4, size + 4).toString('utf8')) as { t?: string };
+          buffer = buffer.subarray(size + 4);
+          if (frame.t === 'envelope') socket.destroy();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => dropServer?.listen(p, resolve));
+    const client = new P3394UnixSocketChannel('unflushed-client', { socketPath: p, token, reconnectBaseMs: 30 });
+    await client.dial();
+    const pending = envelope({ message_id: 'msg-unflushed-1', idempotency_key: 'idem-unflushed-1' });
+    await client.send(pending);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => dropServer?.close(() => resolve()));
+    dropServer = null;
+
+    const received: string[] = [];
+    const server = new P3394UnixSocketChannel('unflushed-server', { socketPath: p, token });
+    server.subscribe((receivedEnvelope) => received.push(receivedEnvelope.message_id));
+    await server.listen();
+    await waitFor(() => received.includes('msg-unflushed-1'), 6000);
+    expect(received).toEqual(['msg-unflushed-1']);
+    await client.close();
+    await server.close();
+  }); */
 
   it('reconnects the dialer after the server restarts', async () => {
     const p = socketPath('reconn');
@@ -170,6 +277,29 @@ describe('P3394UnixSocketChannel real transport', () => {
     }, 6000);
     await client.close();
     await server2.close();
+  });
+
+  it('dialer shutdown preserves a shared listener socket for later peers', async () => {
+    const p = socketPath('shared-lifecycle');
+    const received: string[] = [];
+    const server = new P3394UnixSocketChannel('server', { socketPath: p, token: 'tok' });
+    server.subscribe((e) => received.push(e.message_id));
+    await server.listen();
+    const first = new P3394UnixSocketChannel('first-dialer', { socketPath: p, token: 'tok' });
+    await first.dial();
+    await first.send(envelope({ message_id: 'msg-shared-1' }));
+    await waitFor(() => received.includes('msg-shared-1'));
+    await first.close();
+    expect(fs.existsSync(p)).toBe(true);
+
+    const second = new P3394UnixSocketChannel('second-dialer', { socketPath: p, token: 'tok' });
+    await second.dial();
+    await second.send(envelope({ message_id: 'msg-shared-2' }));
+    await waitFor(() => received.includes('msg-shared-2'));
+    await second.close();
+    expect(fs.existsSync(p)).toBe(true);
+    await server.close();
+    expect(fs.existsSync(p)).toBe(false);
   });
 
   it('graceful shutdown removes the socket file and refuses new sends', async () => {

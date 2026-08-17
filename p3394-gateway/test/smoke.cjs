@@ -208,11 +208,15 @@ async function main() {
   check('预设 claude → CLI 模板生效', presetLog.includes('preset: claude') && presetLog.includes('claude -p {message}'));
   presetProbe.kill('SIGTERM');
 
-  const unknownProbe = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: { ...process.env, P3394_AGENT: 'unknown-agent' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // 任意名字可接入：未知名不再报错——身份=名字、CLI=同名命令、参数={message}。
+  const unknownEnv = { ...process.env, P3394_AGENT: 'unknown-agent', P3394_GATEWAY_PORT: String(GATEWAY_PORT + 20), P3394_GATEWAY_HOME: path.join(tmp, 'unknown-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT };
+  const unknownProbe = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: unknownEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let unknownLog = '';
+  unknownProbe.stdout.on('data', (c) => { unknownLog += c; });
   unknownProbe.stderr.on('data', (c) => { unknownLog += c; });
-  await new Promise((resolve) => unknownProbe.on('exit', resolve));
-  check('未知预设 → 报错退出（列出可用预设）', unknownLog.includes('未知 P3394_AGENT') && unknownLog.includes('hermes, claude'));
+  for (let i = 0; i < 40 && !unknownLog.includes('preset:'); i += 1) await sleep(100);
+  check('任意名字可启动：身份=名字、CLI=同名命令、参数={message}', unknownLog.includes('preset: unknown-agent') && unknownLog.includes('CLI: unknown-agent {message}'));
+  unknownProbe.kill('SIGTERM');
 
   // ── SSCLI 模式：常驻 CLI + JSONL 协议 ──
   const sscliLog = path.join(tmp, 'sscli-ops.jsonl');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { P3394ConversationRuntimeAdapter } from '../../../../src/main/features/p3394_bridge/conversation-runtime';
+import { P3394ConversationRuntimeAdapter, stableCid } from '../../../../src/main/features/p3394_bridge/conversation-runtime';
 
 class FakeBus {
   calls: Array<{ uid: string; cid: string; fromActorId: string; text: string }> = [];
@@ -239,6 +239,75 @@ describe('P3394ConversationRuntimeAdapter (path B: daily conversation flow)', ()
     expect(snapshot.native_session_id).toBe('p3394-fixed-cid');
     await adapter.closeSession('ses-conv-1');
     await expect(adapter.snapshot('ses-conv-1')).rejects.toThrow('p3394_session_not_found');
+  });
+
+  it('R-01 channel-thread binding: stableCid 确定且 session 一一对应 conversation', () => {
+    expect(stableCid('ses-thread-1')).toBe(stableCid('ses-thread-1'));
+    expect(stableCid('ses-thread-1')).not.toBe(stableCid('ses-thread-2'));
+    expect(stableCid('ses-thread-1')).toMatch(/^p3394-[a-z0-9]+-[a-z0-9]+$/);
+  });
+
+  it('R-01 channel-thread binding: deliver 路径的 session→conversation 绑定跨实例稳定且互不串扰', async () => {
+    const bus = new FakeBus();
+    const adapterA = new P3394ConversationRuntimeAdapter({ userId: () => UID, bus });
+    await adapterA.deliver(envelope({ session_id: 'ses-thread-a', task_id: 'tsk-a1', message_id: 'msg-a1', idempotency_key: 'idem-a1' }) as never);
+    const cidA = bus.calls[0].cid;
+    // 同一 session 的第二条消息 → 同一 conversation（thread 绑定）。
+    await adapterA.deliver(envelope({ session_id: 'ses-thread-a', task_id: 'tsk-a2', message_id: 'msg-a2', idempotency_key: 'idem-a2' }) as never);
+    expect(bus.calls[1].cid).toBe(cidA);
+
+    // 不同 session → 不同 conversation，不串扰。
+    const busB = new FakeBus();
+    const adapterB = new P3394ConversationRuntimeAdapter({ userId: () => UID, bus: busB });
+    await adapterB.deliver(envelope({ session_id: 'ses-thread-b', task_id: 'tsk-b1', message_id: 'msg-b1', idempotency_key: 'idem-b1' }) as never);
+    expect(busB.calls[0].cid).not.toBe(cidA);
+
+    // 跨实例重启：新 adapter（新 bus）同一 session → 同一 cid（stableCid 确定性）。
+    const busRestart = new FakeBus();
+    const adapterRestart = new P3394ConversationRuntimeAdapter({ userId: () => UID, bus: busRestart });
+    await adapterRestart.deliver(envelope({ session_id: 'ses-thread-a', task_id: 'tsk-a3', message_id: 'msg-a3', idempotency_key: 'idem-a3' }) as never);
+    expect(busRestart.calls[0].cid).toBe(cidA);
+  });
+
+  it('出站会话绑定：bindSession 后对端回复路由回发起对话，不新建 [P3394] peer 独立对话', async () => {
+    const bus = new FakeBus();
+    const conversations: Array<{ uid: string; cid: string; title: string }> = [];
+    const peerActors: Array<{ uid: string; cid: string; actor: Record<string, unknown> }> = [];
+    const adapter = new P3394ConversationRuntimeAdapter({
+      userId: () => UID,
+      bus,
+      displayNameFor: (id) => (id === 'pi' ? 'pi' : undefined),
+      ensureConversation: async (uid, cid, title) => { conversations.push({ uid, cid, title }); },
+      ensurePeerActor: async (uid, cid, actor) => { peerActors.push({ uid, cid, actor }); },
+    });
+
+    // 出站侧：当前对话 'gconv-main-1' 发起协作 → 把 session 绑定到该对话。
+    adapter.bindSession('ses-out-pi', 'gconv-main-1');
+
+    // 对端回复（同一 session）入站 → 路由回绑定对话，不创建独立对话。
+    await adapter.deliver(envelope({
+      session_id: 'ses-out-pi',
+      task_id: 'tsk-out-pi',
+      message_id: 'msg-out-pi',
+      idempotency_key: 'idem-out-pi',
+      sender: { agent_id: 'pi' },
+    }) as never);
+    expect(bus.calls[0].cid).toBe('gconv-main-1');
+    // 独立对话未被创建：ensureConversation 用的是绑定对话。
+    expect(conversations.every((entry) => entry.cid === 'gconv-main-1')).toBe(true);
+    // peer actor 注册到绑定对话（pong 以 pi 身份出现在当前对话）。
+    expect(peerActors.some((entry) => entry.cid === 'gconv-main-1' && entry.actor.id === 'p3394_pi')).toBe(true);
+
+    // 未绑定的入站会话（Pi 主动发起）仍走 stableCid 独立对话。
+    await adapter.deliver(envelope({
+      session_id: 'ses-in-pi-active',
+      task_id: 'tsk-in-pi',
+      message_id: 'msg-in-pi',
+      idempotency_key: 'idem-in-pi',
+      sender: { agent_id: 'pi' },
+    }) as never);
+    expect(bus.calls[1].cid).toMatch(/^p3394-/);
+    expect(bus.calls[1].cid).not.toBe('gconv-main-1');
   });
 });
 

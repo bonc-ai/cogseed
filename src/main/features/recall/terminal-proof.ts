@@ -1,5 +1,6 @@
-import { completeTransferProof, findTransferProof, prepareTransferProof, type TransferProofRecord } from './proof-service';
+import { completeTransferProof, completeTransferProofWithReceipt, findTransferProof, prepareTransferProof, type TransferProofRecord } from './proof-service';
 import { readContextProjection } from './context-projection';
+import { abilityAssetReferencesCover } from './asset-reference';
 
 export type RecallTaskTerminalStatus = 'completed' | 'failed' | 'cancelled' | 'waiting_input';
 
@@ -53,17 +54,17 @@ function bareAssetId(ref: unknown): string | undefined {
 async function collectLoadedAssetsFromReceipts(
   userId: string,
   turnIds: readonly string[],
-): Promise<{ loadedAssetIds: string[]; receiptId?: string }> {
-  if (!turnIds.length) return { loadedAssetIds: [] };
+): Promise<{ loadedAssetIds: string[]; receipts: Array<{ receiptId: string; executionId: string; reusedRefs: string[] }> }> {
+  if (!turnIds.length) return { loadedAssetIds: [], receipts: [] };
   const { readReceipt } = await import('../p3394/context-reuse-receipt');
   const loadedAssetIds: string[] = [];
-  let receiptId: string | undefined;
+  const receipts: Array<{ receiptId: string; executionId: string; reusedRefs: string[] }> = [];
   const seen = new Set<string>();
   for (const turnId of turnIds) {
     try {
       const receipt = await readReceipt(userId, `turn-${turnId}`);
-      if (!receipt) continue;
-      if (!receiptId) receiptId = receipt.receiptId || `turn-${turnId}`;
+      if (receipt.boundary !== 'real' || receipt.status === 'rejected') continue;
+      receipts.push({ receiptId: receipt.receiptId || `turn-${turnId}`, executionId: receipt.executionId, reusedRefs: receipt.reusedRefs || [] });
       for (const ref of receipt.reusedRefs || []) {
         const id = bareAssetId(ref);
         if (!id || seen.has(id)) continue;
@@ -74,15 +75,15 @@ async function collectLoadedAssetsFromReceipts(
       // 单张回执读不到不影响其它轮次的判定。
     }
   }
-  return { loadedAssetIds, receiptId };
+  return { loadedAssetIds, receipts };
 }
 
 /** 本次运行回执覆盖的、仍存在的资产（以回执为准的升档事实）。 */
 async function loadedExistingAssets(
   userId: string,
   turnIds: readonly string[],
-): Promise<{ existing: string[]; receiptId?: string }> {
-  const { loadedAssetIds, receiptId } = await collectLoadedAssetsFromReceipts(userId, turnIds);
+): Promise<{ existing: string[]; receipts: Array<{ receiptId: string; executionId: string; reusedRefs: string[] }> }> {
+  const { loadedAssetIds, receipts } = await collectLoadedAssetsFromReceipts(userId, turnIds);
   const { readAbilityAsset } = await import('./asset-service');
   const existing: string[] = [];
   for (const assetId of loadedAssetIds) {
@@ -93,7 +94,34 @@ async function loadedExistingAssets(
       // 回执引用了已删除/合并的资产——不参与升档，也不让证明失败。
     }
   }
-  return { existing, receiptId };
+  return { existing, receipts };
+}
+
+/** 用回执「并集」判定覆盖：任一资产被任一真实回执覆盖即算本次迁移证明成立。
+ *
+ *  单回执全覆盖（chen 版本）要求一张回执的 reusedRefs 覆盖全部 assetVersions
+ *  ——多回合任务每回合注入不同资产时，回执分散、无单张覆盖全部 → 永不升档且
+ *  无任何信号（B4 观测）。并集判定与「以回执为准」的产品决定一致：真实加载
+ *  并生成回执的资产就是升档事实，不管它们散在几张回执里。保留 chen 的
+ *  boundary='real' 过滤（collectLoadedAssetsFromReceipts）与 asset-reference
+ *  解析（abilityAssetReferenceMatches 支持 asset:aa@v2 版本引用）。 */
+function findReceiptCoveringAssets(
+  receipts: ReadonlyArray<{ receiptId: string; executionId: string; reusedRefs: string[] }>,
+  assetVersions: readonly { assetId: string; version: string }[],
+): { receiptId: string; executionId: string; reusedRefs: string[] } | undefined {
+  if (!assetVersions.length || !receipts.length) return undefined;
+  const covered = new Set<string>();
+  for (const receipt of receipts) {
+    for (const ref of receipt.reusedRefs) {
+      for (const expected of assetVersions) {
+        if (abilityAssetReferencesCover([ref], [expected])) covered.add(expected.assetId);
+      }
+    }
+  }
+  if (!assetVersions.every((asset) => covered.has(asset.assetId))) return undefined;
+  // 全部资产被覆盖：返回第一张回执作为代表（receiptId 用于证明记录；
+  // executionId 让 completeTransferProofWithReceipt 能回读并复核这张回执）。
+  return receipts[0];
 }
 
 export async function handleRecallTaskTerminal(event: RecallTaskTerminalEvent): Promise<TerminalProofResult> {
@@ -115,8 +143,7 @@ export async function handleRecallTaskTerminal(event: RecallTaskTerminalEvent): 
     return { handled: false, reason: 'no_confirmed_projection' };
   }
 
-  const { existing, receiptId } = await loadedExistingAssets(event.user_id, event.reuse_turn_ids || []);
-  const receiptProvesTransfer = Boolean(receiptId) && existing.length > 0;
+  const { existing, receipts } = await loadedExistingAssets(event.user_id, event.reuse_turn_ids || []);
 
   let proof = await findTransferProof(event.user_id, projection.id, executionId);
   if (!proof) {
@@ -131,13 +158,19 @@ export async function handleRecallTaskTerminal(event: RecallTaskTerminalEvent): 
     });
   }
   if (proof.status === 'prepared') {
-    proof = await completeTransferProof(event.user_id, proof.id, {
-      status,
-      ...(receiptProvesTransfer ? { receiptId } : {}),
-      observedTransfer: receiptProvesTransfer
-        ? `Task run ${logicalRunId} attempt ${executionId} reached ${event.status}; assets were loaded under receipt ${receiptId}.`
-        : `Task run ${logicalRunId} attempt ${executionId} reached terminal status ${event.status}.`,
-    });
+    // 找出本次运行里真实加载了这次投影资产的那张回执。显式按 turn id 定位，
+    // 不按时间窗反查、也不拿 execution id 硬粘——回执必须指得回某一次真实加载。
+    const receipt = findReceiptCoveringAssets(receipts, proof.assetVersions);
+    const observedTransfer = receipt
+      ? `Task run ${logicalRunId} attempt ${executionId} reached ${event.status}; assets were loaded under receipt ${receipt.receiptId}.`
+      : `Task run ${logicalRunId} attempt ${executionId} reached terminal status ${event.status}.`;
+    proof = receipt
+      ? await completeTransferProofWithReceipt(event.user_id, proof.id, {
+          status,
+          receiptExecutionId: receipt.executionId,
+          observedTransfer,
+        })
+      : await completeTransferProof(event.user_id, proof.id, { status, observedTransfer });
   }
   return { handled: true, proof, proofs: [proof] };
 }

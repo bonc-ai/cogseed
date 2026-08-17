@@ -149,13 +149,14 @@ describe('P3394 envelope validation', () => {
     expect(metadataResult.error.field).toBe('payload.metadata');
   });
 
-  it('normalizes absent spec_version to the current bridge version', () => {
+  it('rejects a missing spec_version with a machine-readable code', () => {
     const raw = { ...validEnvelope() } as Partial<P3394Envelope> & Record<string, unknown>;
     delete raw.spec_version;
     const result = validateP3394Envelope(raw);
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error(result.error.reason);
-    expect(result.envelope.spec_version).toBe('p3394/1.0');
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected validation failure');
+    expect(result.error.reason).toBe('missing_spec_version');
+    expect(result.error.field).toBe('spec_version');
   });
 
   it('rejects an unsupported spec_version with a machine-readable code', () => {

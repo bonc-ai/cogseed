@@ -4,6 +4,15 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+// 语义查重不依赖真实 embedding 模型（测试环境无关性）：按文本哈希生成
+// 确定性 512 维向量——不同文本向量不同 → 查重走 no_match 正常晋升。
+vi.mock('../../../../src/main/features/kb_embed', () => ({
+  embedQuery: async (text: string) => {
+    const digest = createHash('sha256').update(text).digest();
+    return Array.from({ length: 512 }, (_, i) => (digest[i % 32] / 255 - 0.5) * 0.2);
+  },
+}));
+
 let tmpDir: string;
 let previousRoot: string | undefined;
 
@@ -1119,5 +1128,30 @@ describe('Recall candidate/asset › 空间归属（spaceId）管线', () => {
     const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
     expect(promoted.asset.spaceId).toBeUndefined();
     expect((await assets.listAbilityAssetsForSpace('user-a', 'sp_any')).some((a) => a.id === promoted.asset.id)).toBe(false);
+  });
+
+  it('promote 空间归属候选 → 自动补 workspace-ref（资产×空间绑定，注入可命中）', async () => {
+    const candidates = await service();
+    const refs = await import('../../../../src/main/features/recall/workspace-refs');
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: '空间内绘画沉淀：配色规范应遵循品牌色。',
+      summary: '品牌配色规范',
+      suggestedType: 'rule' as const,
+      suggestedScope: 'space',
+      spaceId: 'sp_space_a',
+      sourceRefs: [{ kind: 'memory' as const, id: 'mem-space-ref' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    expect(promoted.asset.spaceId).toBe('sp_space_a');
+    const all = await refs.listWorkspaceAssetReferences('user-a');
+    expect(all).toEqual([expect.objectContaining({
+      assetId: promoted.asset.id,
+      workspaceId: 'sp_space_a',
+      scope: 'space',
+      enabled: true,
+    })]);
+    // 幂等：重复 promote（already-applied 路径）不产生重复 ref
+    await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    expect(await refs.listWorkspaceAssetReferences('user-a')).toHaveLength(1);
   });
 });

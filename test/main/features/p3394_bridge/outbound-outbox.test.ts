@@ -66,4 +66,18 @@ describe('p3394 transactional outbox', () => {
     expect(replay).toHaveLength(1);
     expect(replay[0].status).toBe('submitted');
   });
+
+  it('replayed envelopes preserve the exact semantic message (M-03)', () => {
+    const original = { ...envelope('f'), reply_to: 'msg-parent' };
+    outboxRecordSubmitted(original, 'hermes');
+    outboxMarkSent('msg-f');
+    const replay = outboxListForReplay();
+    expect(replay).toHaveLength(1);
+    // 重放快照与原始信封完全一致：重试/重放不产生新的语义 Message，
+    // message_id / idempotency_key / reply_to 全部保持原值。
+    expect(replay[0].envelope).toEqual(original);
+    expect(replay[0].envelope.message_id).toBe('msg-f');
+    expect(replay[0].envelope.idempotency_key).toBe('idem-f');
+    expect(replay[0].envelope.reply_to).toBe('msg-parent');
+  });
 });

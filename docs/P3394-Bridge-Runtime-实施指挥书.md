@@ -371,9 +371,30 @@ p3394 doctor 至少检查 Manifest、Identity、Alias 冲突、Registry、Channe
 
 > CogSeed 已完成 P3394 Bridge Runtime 的标准模型、核心边界和部分本地互操作基础，正在按 P3394 v1.1 进入真实 Runtime、双 Bridge、Channel、安全和 Conformance 收敛阶段。
 
-## 12. 参考文件
+## 12. 后续产品化方向：P3394 Dashboard
+
+在 Phase 2-6 的真实 Runtime、双 Local Bridge、Channel、安全和 Conformance 闭环完成后，可规划一个本地优先的 P3394 Dashboard，作为多 Agent 运行态的观察和受控操作面。该 Dashboard 用于管理和监控多个 Agent/Node、Channel Instance、Work Session 和 Task 状态，但不得取代各 Agent 的本地 Session Authority、Runtime Authority、Agent Home 或安全边界。
+
+第一版候选能力：
+
+- 查看 Agent/Node 身份、alias、node kind、locality、Manifest 摘要和在线状态；
+- 查看 Channel Instance 的认证、连接、心跳、重连和故障状态；
+- 查看 Work Session、Goal 摘要、参与者、Task、最近活动和恢复状态；
+- 查看 response、event、error、artifact、cancel、resume 等可审计运行事件；
+- 在既有权限、策略和人工确认约束下执行暂停、恢复、取消、重连和详情查看。
+
+约束：
+
+- Dashboard 不是新的 P3394 Session Store，展示数据必须来自 Backend、Runtime Controller、Event Store、Audit Journal 和 Registry 等事实来源；
+- Renderer 不得声明或覆盖 Identity、Manifest、Capability、user scope 或权限；
+- 不展示 token、secret、完整模型上下文或未授权长期记忆；
+- Web Dashboard 只有在认证、授权、资源限制、审计和远程披露评审完成后才能规划实施，不默认开放公网。
+
+Dashboard 不属于当前 Bridge Runtime 完成定义，也不改变现阶段先完成真实 Runtime Adapter、双 Bridge、同机 Channel 和 Conformance 的实施顺序。会议对照和候选范围见 `docs/P3394-会议对照与Dashboard后续事项-2026-08-16.md`。
+
+## 13. 参考文件
 
 - /Users/an/.dsh/uploads/P3394_Raymond_Hermes_Chinese_Implementation_Guide.md v1.1；
 - /Users/an/.dsh/uploads/P3394_Local_Bridge_SDK_Design(1).md；
 - docs/superpowers/specs/2026-08-13-p3394-bridge-runtime-design.md；
-- docs/P3394-Conformance-Matrix.md（配套文档，后续建立）。
+- docs/P3394-Conformance-Matrix.md（持续更新的规范符合性矩阵与证据索引）。

@@ -57,6 +57,7 @@ import { createLocalTools, createFileTools } from './local-tools';
 import { createOfficeTools } from './office-tools';
 import { officeCliAvailable } from '../../features/office/office_engine';
 import { createKbTools } from './kb-tools';
+import { createRecallTools } from './recall-tools';
 import { createChatHistoryTools } from './chat-history-tools';
 import { createMessagingTools } from './messaging-tools';
 import { createP3394Tools } from './p3394-tools';
@@ -735,6 +736,14 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...(params.spaceId ? { spaceId: params.spaceId } : {}),
   }) : [];
 
+  // Recall ability-asset search tool (search_ability_assets). Read-only, no
+  // localExec required. Injected for every main conv + group_chat actor so
+  // the LLM can actively consult the GLOBAL asset pool (product design
+  // 2026-08-17: 注入只显示本空间资产，全局池的使用交给主动检索).
+  const recallTools = uid && !params.disableTools ? createRecallTools({
+    userId: uid,
+  }) : [];
+
   // Conversation-history tools (chat_search + chat_read). Commander-only:
   // agent workers receive the material they need through their visibility
   // slice / dispatcher payload and must never browse full conversation logs.
@@ -895,6 +904,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...localTools,
     ...fileTools,
     ...kbTools,
+    ...recallTools,
     ...chatHistoryTools,
     ...messagingTools,
     ...p3394Tools,
