@@ -105,6 +105,10 @@ export interface KstarReviewRecord extends KstarJsonRecord {
    *  reusing"). When present it becomes the precipitation judgment instead
    *  of a fixed template sentence. */
   lesson?: string;
+  /** Model nomination: the lesson is about the USER (durable identity, role,
+   *  long-term preference, stable habit). Host verifies against deterministic
+   *  evidence before persisting to USER.md (personal profile). */
+  lessonPersonal?: boolean;
   evidenceRefs: CognitionSourceRef[];
   createdAt: string;
   updatedAt: string;

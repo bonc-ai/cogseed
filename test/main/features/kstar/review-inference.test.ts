@@ -209,6 +209,69 @@ describe('KSTAR review inference', () => {
     expect(result.review.lesson).toBe('写城市资料时应先收集数据再成文，避免编造。');
   });
 
+  it('passes through a model-nominated personal lesson (lessonPersonal)', async () => {
+    const inference = await import('../../../../src/main/features/kstar/review-inference');
+    const runModel = vi.fn(async () => JSON.stringify({
+      outcome: 'met_expected',
+      attribution: 'unclear',
+      deltaR: 0,
+      deltaA: 0,
+      reason: '任务完成。',
+      confidence: 0.9,
+      needsConfirmation: false,
+      lesson: '我以后的周报都要按四段模板组织：本周完成/数据指标/风险与阻塞/下周计划。',
+      lessonPersonal: true,
+    }));
+
+    const result = await inference.inferKstarReview('user-a', episode({
+      t: { userGoal: '帮我写本周周报', constraints: [] },
+    }), {
+      forecast: {
+        aHat: { plan: ['Draft'], expectedTools: ['write_file'], expectedActors: ['commander'] },
+        rHat: { summary: 'Weekly report written', acceptanceSignals: [], predictedFiles: [] },
+        predictedRisks: [],
+        selectedCandidateId: 'cand-a',
+      },
+      selectedAssetTypes: ['rule'],
+      runModel,
+    });
+
+    expect(result.review.lessonPersonal).toBe(true);
+    expect(result.review.lesson).toContain('我以后的周报都要按四段模板组织');
+  });
+
+  it('drops lessonPersonal when the language gate discards the lesson', async () => {
+    const inference = await import('../../../../src/main/features/kstar/review-inference');
+    const runModel = vi.fn(async () => JSON.stringify({
+      outcome: 'met_expected',
+      attribution: 'unclear',
+      deltaR: 0,
+      deltaA: 0,
+      reason: 'Task completed.',
+      confidence: 0.9,
+      needsConfirmation: false,
+      lesson: 'My weekly reports must follow this format with four sections.',
+      lessonPersonal: true,
+    }));
+
+    const result = await inference.inferKstarReview('user-a', episode({
+      t: { userGoal: '帮我写本周周报', constraints: [] },
+    }), {
+      forecast: {
+        aHat: { plan: ['Draft'], expectedTools: ['write_file'], expectedActors: ['commander'] },
+        rHat: { summary: 'Weekly report written', acceptanceSignals: [], predictedFiles: [] },
+        predictedRisks: [],
+        selectedCandidateId: 'cand-a',
+      },
+      selectedAssetTypes: ['rule'],
+      runModel,
+    });
+
+    // 中文任务 + 英文 lesson → 语言硬闸丢弃 lesson，personal 提名也一并丢弃。
+    expect(result.review.lesson).toBeUndefined();
+    expect(result.review.lessonPersonal).toBeUndefined();
+  });
+
   it('falls back to deterministic reconciliation when the model is unavailable', async () => {
     const inference = await import('../../../../src/main/features/kstar/review-inference');
     const runModel = vi.fn(async () => { throw new Error('model down'); });
