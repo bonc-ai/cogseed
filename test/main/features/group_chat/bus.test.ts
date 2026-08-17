@@ -1601,6 +1601,37 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(st.coding_project_dir).toBe(expected);
   });
 
+  it('materialises the space workspace dir before CLI dispatch (chat-only space conv must not spawn ENOENT)', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'workbuddy' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const spaces = await import('../../../../src/main/features/spaces');
+    const chats = await import('../../../../src/main/features/chats');
+    const convWs = await import('../../../../src/main/features/group_chat/conv_workspace');
+    const created = await spaces.createSpace(TEST_UID, { name: '纯对话空间' });
+    if (!created.ok) throw new Error('create space failed');
+    const conv = await chats.createConversation(TEST_UID, { title: '纯对话任务', spaceId: created.space.space_id });
+
+    // 派发前空间工作区目录不存在（conv_workspace 惰性 mkdir：只对话不产出的会话零足迹）
+    const expected = await convWs.getConversationWorkspacePath(TEST_UID, conv.conversation_id);
+    expect(fs.existsSync(expected)).toBe(false);
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    await bus.enqueue({
+      uid: TEST_UID, cid: conv.conversation_id, fromActorId: 'user',
+      text: `@${AGENT_NAME} 看一下这个项目`,
+    });
+    await waitForQuiescent(TEST_UID, conv.conversation_id);
+
+    // CLI 派发后目录必须已创建——否则 child_process.spawn 因 cwd 缺失抛 ENOENT
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(expected);
+    expect(fs.statSync(expected).isDirectory()).toBe(true);
+  });
+
   it('re-points a stale non-explicit coding_project_dir (userWorkSpace root) to the space workspace dir', async () => {
     const paths = await import('../../../../src/main/paths');
     const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
