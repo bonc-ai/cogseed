@@ -216,6 +216,45 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   height: 15px;
 }
 
+/* ── Frameless macOS title bar ────────────────────────────────────────────
+   main/index.ts opens the window with titleBarStyle 'hiddenInset' on macOS,
+   so the web content extends into the strip the native title bar used to
+   occupy. index.html adds `.is-macos` on <html>; these rules reserve room
+   for the inset traffic lights and expose window drag regions.
+   Windows keeps the native frame and is untouched. */
+.is-macos .sidebar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  -webkit-app-region: drag;
+  z-index: 5;
+}
+.is-macos .sidebar-logo {
+  /* Clear the inset traffic lights (they float over the sidebar's
+     top-left corner) and make the brand row part of the drag region. */
+  padding-top: 40px;
+  -webkit-app-region: drag;
+}
+.is-macos .chat-header {
+  -webkit-app-region: drag;
+}
+.is-macos .chat-header-actions,
+.is-macos .chat-header-title-input,
+.is-macos .chat-header-meta {
+  -webkit-app-region: no-drag;
+}
+/* Myself 特有（is-macos 无边框窗口）：收起后 logo 行让出 traffic lights，
+   顶部拖拽区收窄，展开按钮设为可点击（否则被 drag 区域拦截）。 */
+body.sidebar-collapsed .is-macos .sidebar::before { height: 30px; }
+body.sidebar-collapsed .is-macos .sidebar-logo {
+  padding: 34px 10px 10px;
+  justify-content: center;
+}
+body.sidebar-collapsed .is-macos .sidebar-top-tools { -webkit-app-region: no-drag; }
+
 /* 收起侧边栏（窄图标条）：body.sidebar-collapsed 由 sidebar-resize.js 切换。
    只保留主按钮图标，隐藏文字 / 会话列表 / 搜索；logo 行只留 logo + 展开按钮。 */
 body.sidebar-collapsed .sidebar {
@@ -5160,24 +5199,32 @@ body.model-not-configured .main-content { flex-direction: column; }
 .chat-header {
   flex: 0 0 auto;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
-  padding: 14px 22px 12px;
+  padding: 8px 16px 8px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
 .chat-header-main {
   flex: 1;
   min-width: 0;
+  /* Title + agent chip share the header row (compact one-line top bar). */
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .chat-header-title-row {
+  /* Shrinks (title truncates) but never grows — so the agent chip sits
+     right after the title instead of being pushed to the far right. */
+  flex: 0 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .chat-header-title {
   margin: 0;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--text);
@@ -5188,27 +5235,27 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .chat-header-title-input {
   flex: 1;
-  min-width: 180px;
-  max-width: 720px;
-  height: 32px;
+  min-width: 150px;
+  max-width: 520px;
+  height: 28px;
   padding: 0 9px;
   border: 1px solid var(--primary);
   border-radius: 6px;
   background: var(--surface);
   color: var(--text);
   font-family: inherit;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   outline: none;
   box-shadow: 0 0 0 2px rgba(91, 87, 214, 0.10);
 }
 .chat-header-title-input[hidden] { display: none !important; }
 .chat-header-meta {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-  font-size: 12px;
+  gap: 6px;
+  font-size: 13px;
   color: var(--muted);
   flex-wrap: nowrap;
   overflow: hidden;
@@ -5241,19 +5288,19 @@ body.model-not-configured .main-content { flex-direction: column; }
   align-self: center;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 .chat-header-actions[hidden] { display: none !important; }
 .chat-header-menu-btn {
   flex: 0 0 auto;
-  width: 34px;
-  min-height: 34px;
+  width: 28px;
+  min-height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: #fff;
   color: var(--text);
   cursor: pointer;
@@ -5263,8 +5310,8 @@ body.model-not-configured .main-content { flex-direction: column; }
   background: #f1f5f9;
 }
 .chat-header-menu-icon {
-  width: 18px;
-  height: 18px;
+  width: 13px;
+  height: 13px;
 }
 .chat-header-action-btn {
   flex: 0 0 auto;
@@ -5302,15 +5349,15 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .chat-header-details-btn {
   flex: 0 0 auto;
-  width: 34px;
+  width: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  min-height: 34px;
+  min-height: 28px;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: #fff;
   color: var(--text);
   font-family: inherit;
@@ -12130,6 +12177,11 @@ body.model-not-configured .main-content { flex-direction: column; }
   font-size: 12px;
   color: var(--warning, #b45309);
   background: var(--warning-bg, rgba(245, 158, 11, 0.08));
+}
+/* 外接 tab：未找到 CLI 的可见引导区 */
+.agent-ext-missing-title { font-weight: 600; margin-bottom: 2px; }
+.agent-ext-missing-item { margin-top: 2px; }
+.agent-ext-missing-name { font-weight: 600; }
   border-left: 3px solid var(--warning, #b45309);
   border-radius: 4px;
 }
@@ -17115,6 +17167,12 @@ body.model-not-configured .main-content { flex-direction: column; }
    the dropdown from spanning the entire body. */
 .agents-detail-runtime { display: block; }
 .agents-detail-runtime-select { max-width: 280px; }
+/* P3394 外接智能体网关状态（详情页） */
+.agents-detail-gateway-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agents-detail-gateway-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.agents-detail-gateway-dot.is-on { background: #2e9e5b; box-shadow: 0 0 0 3px rgba(46,158,91,.15); }
+.agents-detail-gateway-dot.is-off { background: #b4b4b4; box-shadow: 0 0 0 3px rgba(180,180,180,.15); }
+.agents-detail-gateway-text { font-size: 12px; color: var(--cs-ink-soft, #666); }
 
 .agents-detail-project-dir { max-width: 100%; }
 .agent-project-dir-card {

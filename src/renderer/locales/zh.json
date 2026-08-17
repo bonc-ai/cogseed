@@ -48,6 +48,7 @@
   "agent_modal.desc_placeholder": "例如：帮我在提交前审查代码，重点看逻辑漏洞和安全问题...",
   "agent_modal.ext_cli_label": "智能体",
   "agent_modal.ext_cli_none": "未选择",
+  "agent_modal.ext_cli_scanning": "正在扫描本机 CLI…",
   "agent_modal.ext_desc": "简介",
   "agent_modal.ext_desc_placeholder": "选择后自动填入，可修改",
   "agent_modal.ext_name": "名称",
@@ -4814,5 +4815,12 @@
   "sidebar.new_task_ph": "输入任务描述，回车创建…",
   "sidebar.home": "首页",
   "cognition.maturity_transfer_validated": "已迁移验证",
-  "cognition.asset_write_origin_system": "系统沉淀"
+  "cognition.asset_write_origin_system": "系统沉淀",
+  "agents": {},
+  "agent_modal": {
+    "ext_cli_missing_label": "本机未找到的智能体"
+  },
+  "agent": {
+    "cli_missing_workbuddy": "未找到 codebuddy CLI。它通常随 WorkBuddy.app 内置或位于 ~/.local/bin（无需手动注册 PATH）；请确认已安装 WorkBuddy 并启用其 CLI 组件。"
+  }
 }

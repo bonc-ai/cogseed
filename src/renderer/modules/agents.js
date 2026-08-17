@@ -340,6 +340,15 @@ function _agentProfileEntries(value) {
 
 function _agentSummary(agent, lang) {
   if (_isCommanderAgent(agent)) return normalizeDisplayText(agent && agent.description);
+  // P3394 external Agents use the product preset description as the live
+  // contract. This also repairs older persisted records that were created
+  // before the external preset descriptions were corrected (for example,
+  // Hermes records that still say ACP despite runtime.kind=p3394-gateway).
+  const runtime = agent && agent.runtime;
+  if (runtime && runtime.kind === 'p3394-gateway' && runtime.cli && typeof getCliDefaults === 'function') {
+    const defaults = getCliDefaults(runtime.cli);
+    if (defaults) return (pickDesc(defaults, lang) || '').trim();
+  }
   return (pickDesc(agent, lang) || '').trim();
 }
 
@@ -1830,6 +1839,7 @@ function _renderAgentDetail(agent, editing) {
   // it duplicated information the dropdown already exposes.
   _renderAgentDetailRuntime(agent);
   _renderAgentDetailProjectDir(agent);
+  void _renderAgentDetailGateway(agent);
   const localizedDesc = _agentSummary(agent, lang);
   descEl.textContent = localizedDesc;
   descEl.classList.toggle('is-empty', !localizedDesc);
@@ -2155,11 +2165,69 @@ async function _renderAgentDetailRuntime(agent) {
   });
 }
 
+/** P3394 外接智能体详情：托管网关运行状态 + 停止/启动按钮。
+ *  复用现成 IPC p3394.external.list（返回 running/pid/port）与
+ *  p3394.external.start/stop；仅对 runtime.kind==='p3394-gateway' 显示。 */
+async function _renderAgentDetailGateway(agent) {
+  const section = document.getElementById('agents-detail-gateway-section');
+  const slot = document.getElementById('agents-detail-gateway');
+  if (!section || !slot) return;
+  const cli = (agent.runtime?.kind === 'p3394-gateway' && agent.runtime.cli) ? agent.runtime.cli : '';
+  if (!cli) {
+    section.style.display = 'none';
+    slot.innerHTML = '';
+    return;
+  }
+  section.style.display = '';
+  const gateways = (typeof loadExternalGateways === 'function')
+    ? await loadExternalGateways({ force: true })
+    : [];
+  const gw = gateways.find((g) => g && g.cli === cli);
+  const running = !!(gw && gw.running);
+  const statusText = running
+    ? t('agents.gateway_running')
+      + (gw.pid ? ` · pid ${gw.pid}` : '')
+      + (gw.port ? ` · :${gw.port}` : '')
+    : t('agents.gateway_offline');
+  const action = running ? 'stop' : 'start';
+  const btnLabel = running ? t('agents.gateway_stop') : t('agents.gateway_start');
+  slot.innerHTML = `
+    <div class="agents-detail-gateway-status">
+      <span class="agents-detail-gateway-dot ${running ? 'is-on' : 'is-off'}"></span>
+      <span class="agents-detail-gateway-text">${escapeHtml(statusText)}</span>
+      <button type="button" class="btn btn-sm" data-gateway-action="${action}" data-gateway-cli="${escapeHtml(cli)}">${escapeHtml(btnLabel)}</button>
+    </div>`;
+  const btn = slot.querySelector('[data-gateway-action]');
+  if (!btn) return;
+  btn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    try {
+      if (action === 'stop') {
+        await window.cogseed.invoke('p3394.external.stop', { cli });
+      } else {
+        const entries = (typeof loadLocalCliEntries === 'function')
+          ? await loadLocalCliEntries({ force: true })
+          : [];
+        const detected = entries.find((entry) => entry && entry.type === cli);
+        await window.cogseed.invoke('p3394.external.start', {
+          cli,
+          alias: agent.name || cli,
+          ...(detected && detected.path ? { binPath: detected.path } : {}),
+        });
+      }
+    } catch (err) {
+      _agentsLog.warn('p3394 gateway toggle failed', { cli, action, error: err && (err.message || err) });
+    }
+    btn.disabled = false;
+    void _renderAgentDetailGateway(agent);
+  });
+}
+
 /** Project directory setting for external coding agents (claude / codex).
  *  Stored in a local-only main-process config; each conversation copies
  *  the effective value on its first coding-agent dispatch. */
-async function _renderAgentDetailProjectDir(agent) {
-  const section = document.getElementById('agents-detail-project-dir-section');
+async function _renderAgentDetailProjectDir(agent) {  const section = document.getElementById('agents-detail-project-dir-section');
   const slot = document.getElementById('agents-detail-project-dir');
   if (!section || !slot) return;
   const cli = (agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway') ? agent.runtime.cli : '';
@@ -2838,32 +2906,13 @@ async function _saveExternalAgent({ msgEl }) {
 
   const startedAt = performance.now();
   if (window.Monitor) (() => {})('agent_create_submit', { agent_type: 'p3394', cli });
+  // P3394 方式外接：先创建智能体记录，再拉起该 CLI 的受管 P3394 网关。
+  // 顺序不能反：先起网关会立即收到 hello → 自动投影用默认名抢先创建，
+  // 用户命名的同名智能体反而被 "已占用" 拒绝（时序竞态，曾产生双卡）。
+  // 先建记录后，投影的 existing_agent 分支会复用本记录，不再重复创建。
   try {
-    // P3394 方式外接：先拉起该 CLI 的受管 P3394 网关（自注册进桥），
-    // 再创建智能体记录——之后对话里每一轮都走 P3394 协议协作。
     const entries = await window.loadLocalCliEntries({ force: true });
     const detected = entries.find((e) => e && e.type === cli);
-    const started = await window.cogseed.invoke('p3394.external.start', {
-      cli,
-      alias: name,
-      ...(detected && detected.path ? { binPath: detected.path } : {}),
-    });
-    if (!started || !started.ok) {
-      msgEl.textContent = t('agents.p3394_gateway_start_failed', {
-        reason: (started && started.error) || 'unknown',
-      });
-      msgEl.className = 'form-msg err';
-      if (window.Monitor) {
-        (() => {})('agent_create_result', {
-          result: 'failure',
-          agent_type: 'p3394',
-          cli,
-          duration_ms: Math.round(performance.now() - startedAt),
-          error_code: (started && started.error) || '',
-        });
-      }
-      return;
-    }
     const body = {
       name,
       description: desc,
@@ -2899,9 +2948,54 @@ async function _saveExternalAgent({ msgEl }) {
       }
       return;
     }
+    const agentId = data.agent.agent_id;
+    // 记录已创建，再启动网关。网关 hello 触发自动投影时会复用上面的
+    // 记录（team-projection 的 existing_agent 分支），不会重复创建默认名。
+    let started;
+    try {
+      started = await window.cogseed.invoke('p3394.external.start', {
+        cli,
+        alias: name,
+        ...(detected && detected.path ? { binPath: detected.path } : {}),
+      });
+    } catch (startErr) {
+      // 网关启动调用本身抛异常：回滚刚创建的记录，避免留下半成品。
+      try { await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' }); } catch { /* best effort */ }
+      msgEl.textContent = t('agents.network_error', { reason: startErr.message || startErr });
+      msgEl.className = 'form-msg err';
+      if (window.Monitor) {
+        (() => {})('agent_create_result', {
+          result: 'failure',
+          agent_type: 'p3394',
+          cli,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+      }
+      return;
+    }
+    if (!started || !started.ok) {
+      // 网关启动失败（脚本缺失 / 注册超时等）：回滚刚创建的记录。投影
+      // 映射可能残留指向已删除记录（已有投射记录时节点 hello 不再重建
+      // 卡片），属低频边界，后续可清理投影文件恢复。
+      try { await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' }); } catch { /* best effort */ }
+      msgEl.textContent = t('agents.p3394_gateway_start_failed', {
+        reason: (started && started.error) || 'unknown',
+      });
+      msgEl.className = 'form-msg err';
+      if (window.Monitor) {
+        (() => {})('agent_create_result', {
+          result: 'failure',
+          agent_type: 'p3394',
+          cli,
+          duration_ms: Math.round(performance.now() - startedAt),
+          error_code: (started && started.error) || '',
+        });
+      }
+      return;
+    }
     if (window.Monitor) (() => {})('agent_create_result', {
       result: 'success',
-      agent_id: data.agent.agent_id,
+      agent_id: agentId,
       agent_type: 'p3394',
       cli,
       duration_ms: Math.round(performance.now() - startedAt),
@@ -2912,7 +3006,7 @@ async function _saveExternalAgent({ msgEl }) {
     // External agents go straight to the detail view but skip the LLM
     // edit-chat — there's nothing to author. The user can still rename
     // or reword the description through the inline name/desc editors.
-    await _showAgentsDetailView(data.agent.agent_id);
+    await _showAgentsDetailView(agentId);
   } catch (e) {
     msgEl.textContent = t('agents.network_error', { reason: e.message || e });
     msgEl.className = 'form-msg err';

@@ -13,6 +13,15 @@
   <link rel="stylesheet" href="./workspace.css" />
   <link rel="stylesheet" href="./recall-local.css" />
   <link rel="stylesheet" href="./onboarding.css" />
+  <script>
+    // Frameless macOS window (main/index.ts: titleBarStyle hiddenInset): the
+    // web content extends under the inset traffic lights, so the CSS keys
+    // title-bar clearance and window drag regions off this class. Windows
+    // keeps the native frame and is unaffected (navigator.platform 'Win32').
+    if (typeof navigator !== 'undefined' && navigator.platform && /Mac/i.test(navigator.platform)) {
+      document.documentElement.classList.add('is-macos');
+    }
+  </script>
 </head>
 <body>
   <div class="app-container">
@@ -681,6 +690,10 @@
                   <div class="agents-detail-section" id="agents-detail-runtime-section" style="display:none">
                     <div class="agents-detail-label" data-i18n="agents.label_runtime">External agent</div>
                     <div class="agents-detail-runtime" id="agents-detail-runtime"></div>
+                  </div>
+                  <div class="agents-detail-section" id="agents-detail-gateway-section" style="display:none">
+                    <div class="agents-detail-label" data-i18n="agents.label_gateway_status">P3394 gateway</div>
+                    <div class="agents-detail-gateway" id="agents-detail-gateway"></div>
                   </div>
                   <div class="agents-detail-section agents-detail-intro-section" id="agents-detail-intro-section">
                     <div class="agents-detail-label" data-i18n="agents.label_desc">Summary</div>
@@ -1452,6 +1465,7 @@
         <div class="form-row">
           <label data-i18n="agent_modal.ext_cli_label">Agent</label>
           <div class="ai-select" id="agent-modal-ext-cli-select"></div>
+          <div class="form-hint" id="agent-ext-missing-hint" style="display:none"></div>
           <div class="form-hint" data-i18n="agent_modal.ext_p3394_hint">Connect over the P3394 protocol — CogSeed starts a local gateway and registers the agent as a collaboration node.</div>
         </div>
         <div class="form-row">

@@ -48,6 +48,7 @@
   "agent_modal.desc_placeholder": "por exemplo Revise meu código antes de confirmar, concentre-se em bugs lógicos e problemas de segurança...",
   "agent_modal.ext_cli_label": "Agente",
   "agent_modal.ext_cli_none": "Não selecionado",
+  "agent_modal.ext_cli_scanning": "A verificar CLIs locais…",
   "agent_modal.ext_desc": "Resumo",
   "agent_modal.ext_desc_placeholder": "(preenchido automaticamente quando uma CLI é escolhida; pode ser substituído)",
   "agent_modal.ext_name": "Nome",
@@ -4507,5 +4508,12 @@
   "sidebar.new_task_ph": "Descreva a tarefa, Enter para criar…",
   "sidebar.home": "Início",
   "cognition.maturity_transfer_validated": "Validação transferida",
-  "cognition.asset_write_origin_system": "Precipitado pelo sistema"
+  "cognition.asset_write_origin_system": "Precipitado pelo sistema",
+  "agents": {},
+  "agent_modal": {
+    "ext_cli_missing_label": "Agentes não encontrados nesta máquina"
+  },
+  "agent": {
+    "cli_missing_workbuddy": "CLI codebuddy não encontrada. Ela vem dentro do WorkBuddy.app ou em ~/.local/bin — nenhum registro de PATH é necessário; confirme que o WorkBuddy está instalado com o componente CLI ativado."
+  }
 }

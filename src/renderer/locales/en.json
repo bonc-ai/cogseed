@@ -48,6 +48,7 @@
   "agent_modal.desc_placeholder": "e.g. Review my code before commit, focus on logic bugs and security issues...",
   "agent_modal.ext_cli_label": "Agent",
   "agent_modal.ext_cli_none": "Not selected",
+  "agent_modal.ext_cli_scanning": "Scanning local CLIs…",
   "agent_modal.ext_desc": "Summary",
   "agent_modal.ext_desc_placeholder": "(auto-filled when a CLI is picked; can be overridden)",
   "agent_modal.ext_name": "Name",
@@ -4814,5 +4815,12 @@
   "sidebar.new_task_ph": "Describe the task, press Enter to create…",
   "sidebar.home": "Home",
   "cognition.maturity_transfer_validated": "Transfer validated",
-  "cognition.asset_write_origin_system": "System precipitated"
+  "cognition.asset_write_origin_system": "System precipitated",
+  "agents": {},
+  "agent_modal": {
+    "ext_cli_missing_label": "Agents not found on this machine"
+  },
+  "agent": {
+    "cli_missing_workbuddy": "codebuddy CLI not found. It ships inside WorkBuddy.app or under ~/.local/bin — no PATH registration needed; please confirm WorkBuddy is installed with its CLI component enabled."
+  }
 }

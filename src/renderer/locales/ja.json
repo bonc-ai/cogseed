@@ -48,6 +48,7 @@
   "agent_modal.desc_placeholder": "例: コミット前にコードをレビューし、ロジックバグとセキュリティ問題に注目する...",
   "agent_modal.ext_cli_label": "エージェント",
   "agent_modal.ext_cli_none": "未選択",
+  "agent_modal.ext_cli_scanning": "ローカル CLI をスキャン中…",
   "agent_modal.ext_desc": "概要",
   "agent_modal.ext_desc_placeholder": "（CLI 選択時に自動入力。上書き可能）",
   "agent_modal.ext_name": "名前",
@@ -4507,5 +4508,12 @@
   "sidebar.new_task_ph": "タスク内容を入力して Enter で作成…",
   "sidebar.home": "ホーム",
   "cognition.maturity_transfer_validated": "移行済み検証",
-  "cognition.asset_write_origin_system": "システム沈殿"
+  "cognition.asset_write_origin_system": "システム沈殿",
+  "agents": {},
+  "agent_modal": {
+    "ext_cli_missing_label": "このマシンで見つからなかったエージェント"
+  },
+  "agent": {
+    "cli_missing_workbuddy": "codebuddy CLI が見つかりません。WorkBuddy.app 内または ~/.local/bin に同梱されています（PATH 登録は不要）。WorkBuddy が CLI コンポーネント有効の状態でインストールされているか確認してください。"
+  }
 }

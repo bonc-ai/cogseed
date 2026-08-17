@@ -1419,7 +1419,7 @@ function _refreshChatHeader() {
         if (s.kind === 'commander') {
           const av = (typeof _commanderAvatar === 'function') ? _commanderAvatar() : { icon: '', color: '' };
           return renderAvatarHtml(av.icon, av.color, {
-            size: 18,
+            size: 16,
             seed: 'commander',
             extraClass: 'chat-header-meta-member',
           });
@@ -1430,7 +1430,7 @@ function _refreshChatHeader() {
           if (ag) { icon = ag.icon; color = ag.color; }
         }
         return renderAvatarHtml(icon, color, {
-          size: 18,
+          size: 16,
           seed: s.id || 'agent',
           extraClass: 'chat-header-meta-member',
         });
