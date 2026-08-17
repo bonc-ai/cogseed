@@ -73,15 +73,41 @@ export async function readCognitionReuseReceipt(userId: string, executionId: str
   return mapReceipt(receipt, execution);
 }
 
+/**
+ * 回执列表**以回执本身为准**，不再从 ExecutionRecord 的 `receiptId` 反查。
+ *
+ * 反查曾让这个列表恒空：群聊回合在 `bus.ts` 注入资产后直接
+ * `prepareReceipt({ executionId: 'turn-<turnId>' })` 落回执，而同回合建立的
+ * ExecutionRecord 从来没有人把 receiptId 回填上去（全仓仅 local_agents 那条
+ * 独立链路会写这个字段）。于是回执文件真实存在、terminal-proof 也照常按
+ * executionId 读到它并完成迁移证明，只有这个面向 UI 的读口看不见——实机可
+ * 观测：4 条资产升到 transfer_validated、迁移证明 status=succeeded 且带
+ * receiptId，而本函数返回 0 条。
+ *
+ * 权威源是 p3394 的回执目录（`<local>/kstar/executions/<id>/`）。ExecutionRecord
+ * 在这里降级为**可选的展示补充**（executionKind / agentId / conversationId），
+ * 取不到不影响回执本身出现在列表里。
+ */
 export async function listCognitionReuseReceipts(
   userId: string,
   filter: ListCognitionReceiptsFilter = {},
 ): Promise<CognitionReuseReceiptView[]> {
   const limit = Math.min(Math.max(Number(filter.limit || 50), 1), 200);
-  const records = (await executionRecords.list(userId)).filter((record) => !!record.receiptId).slice(0, Math.max(limit * 3, limit));
-  const settled = await Promise.allSettled(records.map(async (record) => {
-    const receipt = await p3394.readReceipt(userId, record.executionId);
-    const view = mapReceipt(receipt, record);
+  let receipts: ContextReuseReceipt[];
+  try {
+    receipts = await p3394.listReceipts(userId);
+  } catch (error) {
+    log.warn('list cognition reuse receipts failed', { error: (error as Error).message });
+    return [];
+  }
+  // 先按时间倒序截一个工作窗口再补执行记录：补充信息要按 executionId 逐条读盘，
+  // 全量补一遍在回执攒多之后会很贵，而调用方只要最新的 limit 条。窗口留出
+  // 冗余，给随后按 agentId / conversationId / skillId 的过滤留余量。
+  const ordered = receipts.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const window = ordered.slice(0, Math.max(limit * 3, limit));
+  const settled = await Promise.allSettled(window.map(async (receipt) => {
+    const execution = await executionRecords.read(userId, receipt.executionId).catch(() => undefined);
+    const view = mapReceipt(receipt, execution);
     return matches(view, receipt, filter) ? view : null;
   }));
   const out: CognitionReuseReceiptView[] = [];
@@ -94,5 +120,5 @@ export async function listCognitionReuseReceipts(
     }
   }
   if (skipped) log.warn('skipped unreadable cognition reuse receipts', { skipped });
-  return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
+  return out.slice(0, limit);
 }

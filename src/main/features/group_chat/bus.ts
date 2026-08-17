@@ -4383,6 +4383,18 @@ async function runActorTurnBody(
         }
       }
     }
+    // CLI spawn 要求 cwd 已存在：child_process.spawn 遇到不存在的 cwd 会直接
+    // ENOENT（报错文案只显示命令路径，极易误判为 CLI 未安装）。conv_workspace
+    // 刻意不 mkdir（目录由产出工具惰性创建，聊天气泡轮零磁盘足迹）——但 CLI
+    // 智能体从第一轮起就真实运行在该目录里，空间会话（cwd 进
+    // spaces/<sid>/workspace/<slug>）若此前只有对话、从未产出过文件，目录就不
+    // 存在，导致空间里外接 CLI agent 每轮必败（普通对话 cwd=userWorkSpace 根
+    // 常驻存在，所以表现正常）。与 wrapped bash 工具的防御性 mkdir 同思路。
+    try {
+      fs.mkdirSync(cliWorkingDir, { recursive: true });
+    } catch (err) {
+      log.warn(`cli workspace mkdir failed cid=${cid} dir=${cliWorkingDir}: ${(err as Error).message}`);
+    }
     try {
       const slice = await readSlice(uid, cid, actor.id);
       // 共享 process 事件管道：CLI 直接派发与 P3394 网关派发共用同一套
