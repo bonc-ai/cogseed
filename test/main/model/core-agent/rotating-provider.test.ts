@@ -83,7 +83,7 @@ describe('rotating-provider › stream 成功路径', () => {
 describe('rotating-provider › stream 可轮转失败', () => {
   beforeEach(() => _clearAll());
 
-  it('第一把 401 → 切第二把成功，第一把进冷却', async () => {
+  it('第一把 401 → 切第二把成功，第一把进冷却，并发出 provider_fallback(auth)', async () => {
     let winner: string | null = null;
     const authErr = Object.assign(new Error('Unauthorized'), { status: 401 });
     const p = createRotatingProvider({
@@ -95,8 +95,8 @@ describe('rotating-provider › stream 可轮转失败', () => {
       onSuccess: (pid) => { winner = pid; },
     });
     const events = await collect(p.stream(PARAMS));
-    expect(events.length).toBe(1);
-    expect((events[0] as any).text).toBe('ok');
+    expect(events).toContainEqual({ type: 'provider_fallback', reason: 'auth', providerId: 'test' });
+    expect((events[events.length - 1] as any).text).toBe('ok');
     expect(winner).toBe('p2');
     expect(getCooldown('p1')?.kind).toBe('auth');
     expect(getCooldown('p2')).toBeUndefined();
@@ -112,7 +112,7 @@ describe('rotating-provider › stream 可轮转失败', () => {
       ],
     });
     const events = await collect(p.stream(PARAMS));
-    expect(events.length).toBe(1);
+    expect(events.filter((ev) => ev.type === 'provider_fallback')).toHaveLength(1);
     expect(getCooldown('p1')?.kind).toBe('rate_limit');
   });
 
@@ -139,7 +139,7 @@ describe('rotating-provider › stream 可轮转失败', () => {
       ],
     });
     const events = await collect(p.stream(PARAMS));
-    expect(events.length).toBe(1);
+    expect(events.filter((ev) => ev.type === 'provider_fallback')).toHaveLength(1);
     expect(getCooldown('p1')?.kind).toBe('auth');
   });
 
@@ -246,9 +246,9 @@ describe('rotating-provider › stream preamble drain', () => {
     const events = await collect(p.stream(PARAMS));
     expect(winner).toBe('p2');
     expect(getCooldown('p1')?.kind).toBe('auth');
-    // p2 的 start + text_delta 都应该透传
-    expect(events.length).toBe(2);
-    expect((events[1] as any).text).toBe('ok');
+    // p2 的 start + text_delta 都应该透传（前面还有一个 provider_fallback 事件）
+    expect(events.length).toBe(3);
+    expect((events[events.length - 1] as any).text).toBe('ok');
   });
 
   it('in-band {type:"error"} 事件也触发轮转', async () => {
@@ -268,8 +268,8 @@ describe('rotating-provider › stream preamble drain', () => {
       ],
     });
     const events = await collect(p.stream(PARAMS));
-    expect(events.length).toBe(1);
-    expect((events[0] as any).text).toBe('ok');
+    expect(events.filter((ev) => ev.type === 'provider_fallback')).toHaveLength(1);
+    expect((events[events.length - 1] as any).text).toBe('ok');
     expect(getCooldown('p1')?.kind).toBe('auth');
   });
 
@@ -439,8 +439,8 @@ describe('rotating-provider › 跨 provider fallback', () => {
     // AgentRunner 会用 primary 的 defaultModel 调 stream；rotating 内部
     // 必须把它 override 成每个 candidate 自己的 model。
     const events = await collect(p.stream({ ...PARAMS, model: 'gpt-5.4' }));
-    expect(events.length).toBe(1);
-    expect((events[0] as any).text).toBe('hello from claude');
+    expect(events.filter((ev) => ev.type === 'provider_fallback')).toHaveLength(1);
+    expect((events[events.length - 1] as any).text).toBe('hello from claude');
     // 第一把 openai 用了 primary 的 model 'gpt-5.4'；第二把 anthropic
     // 必须看到被 override 后的 'claude-opus-4-7'，否则 pi-ai 会抛
     // "No model found for provider: anthropic, model: gpt-5.4"。
@@ -479,5 +479,208 @@ describe('rotating-provider › complete 分支', () => {
     });
     await expect(p.complete(PARAMS)).rejects.toThrow(/invalid_request/);
     expect(getCooldown('p1')).toBeUndefined();
+  });
+});
+
+describe('rotating-provider › 首事件超时(firstEventTimeoutMs)', () => {
+  beforeEach(() => _clearAll());
+
+  // 一个 stream 永远不产出事件的候选（模拟上游冷启动挂起）。
+  const stalledProvider = (id: string): LLMProvider => ({
+    id,
+    name: id,
+    async *stream() {
+      await new Promise(() => { /* never resolves */ });
+    },
+    async complete() { throw new Error('not used'); },
+    async validateAuth() { return true; },
+  });
+
+  it('候选迟迟不吐首事件 → 超时换下一个候选，发 provider_fallback(no_first_event_timeout)，不进冷却', async () => {
+    const p = createRotatingProvider({
+      providerId: 'test',
+      firstEventTimeoutMs: 40,
+      candidates: [
+        { profileId: 'p1', providerId: 'test', modelId: 'm', build: async () => stalledProvider('p1') },
+        candidate('p2', { streamEvents: [{ type: 'text_delta', text: 'ok' } as any] }),
+      ],
+    });
+    const events = await collect(p.stream(PARAMS));
+    expect(events).toContainEqual({ type: 'provider_fallback', reason: 'no_first_event_timeout', providerId: 'test' });
+    expect((events[events.length - 1] as any).text).toBe('ok');
+    // 超时是 network 类问题，不进冷却
+    expect(getCooldown('p1')).toBeUndefined();
+    expect(getCooldown('p2')).toBeUndefined();
+  });
+
+  it('全部候选都超时 → 抛带 PROVIDER_NO_FIRST_EVENT_TIMEOUT code 的错误', async () => {
+    const p = createRotatingProvider({
+      providerId: 'test',
+      firstEventTimeoutMs: 20,
+      candidates: [
+        { profileId: 'p1', providerId: 'test', modelId: 'm', build: async () => stalledProvider('p1') },
+        { profileId: 'p2', providerId: 'test', modelId: 'm', build: async () => stalledProvider('p2') },
+      ],
+    });
+    const err: unknown = await collect(p.stream(PARAMS)).then(() => null, (e) => e);
+    expect((err as { code?: string })?.code).toBe('PROVIDER_NO_FIRST_EVENT_TIMEOUT');
+  });
+
+  it('preamble 之后卡住也按超时处理（预算覆盖整个首事件阶段）', async () => {
+    // p1 先吐 start（preamble 不 commit），然后卡住 → 剩余预算内超时 → 切 p2
+    const startThenStall: LLMProvider = {
+      id: 'p1',
+      name: 'p1',
+      async *stream() {
+        yield { type: 'start', model: 'm' } as any;
+        await new Promise(() => { /* never resolves */ });
+      },
+      async complete() { throw new Error('not used'); },
+      async validateAuth() { return true; },
+    };
+    const p = createRotatingProvider({
+      providerId: 'test',
+      firstEventTimeoutMs: 60,
+      candidates: [
+        { profileId: 'p1', providerId: 'test', modelId: 'm', build: async () => startThenStall },
+        candidate('p2', { streamEvents: [{ type: 'text_delta', text: 'ok' } as any] }),
+      ],
+    });
+    const events = await collect(p.stream(PARAMS));
+    expect(events).toContainEqual({ type: 'provider_fallback', reason: 'no_first_event_timeout', providerId: 'test' });
+    expect((events[events.length - 1] as any).text).toBe('ok');
+    expect(getCooldown('p1')).toBeUndefined();
+  });
+
+  it('首事件超时不重试同一个候选（避免 3× 等待放大）', async () => {
+    let p1Builds = 0;
+    let p2Builds = 0;
+    const p = createRotatingProvider({
+      providerId: 'test',
+      firstEventTimeoutMs: 30,
+      networkRetryAttempts: 3,
+      candidates: [
+        {
+          profileId: 'p1', providerId: 'test', modelId: 'm',
+          build: async () => { p1Builds += 1; return stalledProvider('p1'); },
+        },
+        {
+          profileId: 'p2', providerId: 'test', modelId: 'm',
+          build: async () => { p2Builds += 1; return fakeProvider('p2', { streamEvents: [{ type: 'text_delta', text: 'ok' } as any] }); },
+        },
+      ],
+    });
+    const events = await collect(p.stream(PARAMS));
+    expect(p1Builds).toBe(1); // 不重试
+    expect(p2Builds).toBe(1);
+    expect(events.filter((ev) => ev.type === 'retry')).toHaveLength(0);
+  });
+});
+
+describe('rotating-provider › 全部候选失败的耗尽错误带永久 code（外层不再整轮重试）', () => {
+  beforeEach(() => _clearAll());
+
+  it('全 401 → PROVIDER_AUTH_EXHAUSTED，且错误文案仍可读', async () => {
+    const authErr = Object.assign(new Error('Unauthorized'), { status: 401 });
+    const p = createRotatingProvider({
+      providerId: 'test',
+      candidates: [
+        candidate('p1', { throwBefore: authErr }),
+        candidate('p2', { throwBefore: authErr }),
+      ],
+    });
+    const err: unknown = await collect(p.stream(PARAMS)).then(() => null, (e) => e);
+    expect((err as { code?: string })?.code).toBe('PROVIDER_AUTH_EXHAUSTED');
+    expect(String((err as Error).message)).toMatch(/Unauthorized/);
+    expect(getCooldown('p1')?.kind).toBe('auth');
+    expect(getCooldown('p2')?.kind).toBe('auth');
+  });
+
+  it('全 fetch failed → PROVIDER_NETWORK_EXHAUSTED（保留原汇总文案）', async () => {
+    const netErr = new TypeError('fetch failed');
+    const p = createRotatingProvider({
+      providerId: 'test',
+      networkRetryDelayMs: () => 0,
+      candidates: [
+        candidate('p1', { throwBefore: netErr }),
+        candidate('p2', { throwBefore: netErr }),
+      ],
+    });
+    const err: unknown = await collect(p.stream(PARAMS)).then(() => null, (e) => e);
+    expect((err as { code?: string })?.code).toBe('PROVIDER_NETWORK_EXHAUSTED');
+    expect(String((err as Error).message)).toMatch(/All configured model candidates failed after network retries/);
+    expect(getCooldown('p1')).toBeUndefined();
+  });
+
+  it('complete 全 401 也带 PROVIDER_AUTH_EXHAUSTED code', async () => {
+    const authErr = Object.assign(new Error('Unauthorized'), { status: 401 });
+    const p = createRotatingProvider({
+      providerId: 'test',
+      candidates: [
+        candidate('p1', { completeError: authErr }),
+        candidate('p2', { completeError: authErr }),
+      ],
+    });
+    const err: unknown = await p.complete(PARAMS).then(() => null, (e) => e);
+    expect((err as { code?: string })?.code).toBe('PROVIDER_AUTH_EXHAUSTED');
+  });
+});
+
+describe('rotating-provider › 候选自己的输出上限(maxOutputTokens)', () => {
+  it('fallback 候选带 maxOutputTokens → params.maxTokens 被替换成候选自己的值', async () => {
+    const received: Array<{ model?: string; maxTokens?: number }> = [];
+    const makeProvider = (id: string, b: FakeBehavior): LLMProvider => ({
+      id,
+      name: id,
+      async *stream(params) {
+        received.push({ model: params.model, maxTokens: params.maxTokens });
+        if (b.throwBefore !== undefined) throw b.throwBefore;
+        for (const ev of (b.streamEvents ?? [])) yield ev;
+      },
+      async complete() { return {} as any; },
+      async validateAuth() { return true; },
+    });
+    const authErr = Object.assign(new Error('Unauthorized'), { status: 401 });
+    const p = createRotatingProvider({
+      providerId: 'openai',
+      candidates: [
+        {
+          profileId: 'o1', providerId: 'openai', modelId: 'gpt-5.4', maxOutputTokens: 32000,
+          build: async () => makeProvider('openai', { throwBefore: authErr }),
+        },
+        {
+          profileId: 'd1', providerId: 'deepseek', modelId: 'deepseek-v4-flash', maxOutputTokens: 16384,
+          build: async () => makeProvider('deepseek', { streamEvents: [{ type: 'text_delta', text: 'ok' } as any] }),
+        },
+      ],
+    });
+    const events = await collect(p.stream({ ...PARAMS, model: 'gpt-5.4', maxTokens: 32000 }));
+    expect(events.filter((ev) => ev.type === 'provider_fallback')).toHaveLength(1);
+    expect(received[0]).toEqual({ model: 'gpt-5.4', maxTokens: 32000 });
+    // fallback：换成它自己的 cap，而不是继续带 primary 的 32000
+    expect(received[1]).toEqual({ model: 'deepseek-v4-flash', maxTokens: 16384 });
+  });
+
+  it('候选未声明 maxOutputTokens → 透传调用方原值', async () => {
+    const received: Array<{ model?: string; maxTokens?: number }> = [];
+    const p = createRotatingProvider({
+      providerId: 'test',
+      candidates: [
+        {
+          profileId: 'p1', providerId: 'test', modelId: 'm',
+          build: async () => ({
+            id: 'p1', name: 'p1',
+            async *stream(params) {
+              received.push({ model: params.model, maxTokens: params.maxTokens });
+              yield { type: 'text_delta', text: 'ok' } as any;
+            },
+            async complete() { return {} as any; },
+            async validateAuth() { return true; },
+          }),
+        },
+      ],
+    });
+    await collect(p.stream({ ...PARAMS, maxTokens: 8192 }));
+    expect(received).toEqual([{ model: 'm', maxTokens: 8192 }]);
   });
 });

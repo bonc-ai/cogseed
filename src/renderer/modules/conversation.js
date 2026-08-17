@@ -1042,11 +1042,76 @@ if (typeof window !== 'undefined') {
     document.addEventListener('DOMContentLoaded', () => {
       _initAllMentionMirrors();
       _initChatInputReserveObserver();
+      _initSessionImportEvents();
     }, { once: true });
   } else {
     _initAllMentionMirrors();
     _initChatInputReserveObserver();
+    _initSessionImportEvents();
   }
+}
+
+// ── B+ fast import: background extraction events ──────────────────────────
+// `sessionImport.events` fires when a background extraction finishes. We
+// swap the "正在提炼" placeholder welcome panel for the real carry details
+// (and toast the user) — the user opened the conversation while extraction
+// was still running, so the assets arrive after the welcome reply.
+let _sessionImportEventsBound = false;
+let _sessionImportEventsHandle = null;
+
+function _initSessionImportEvents() {
+  if (_sessionImportEventsBound) return;
+  _sessionImportEventsBound = true;
+  if (!window.cogseed || typeof window.cogseed.stream !== 'function') return;
+  try {
+    _sessionImportEventsHandle = window.cogseed.stream('sessionImport.events', {}, (ev) => {
+      const event = ev && ev.event ? ev.event : ev;
+      if (!event || !event.cid) return;
+      if (event.type === 'extraction_done') _handleExtractionDone(event);
+      else if (event.type === 'extraction_failed') _handleExtractionFailed(event);
+    });
+    if (_sessionImportEventsHandle && typeof _sessionImportEventsHandle.catch === 'function') {
+      _sessionImportEventsHandle.catch(() => { /* 流断开静默，下次启动重连 */ });
+    }
+  } catch (_) { /* 无事件通道时静默降级（导入仍正常，只是不实时提示） */ }
+}
+
+function _handleExtractionDone(event) {
+  const { cid, welcome } = event;
+  if (cid === currentCid) _upgradeWelcomePanel(cid, welcome);
+  if (typeof uiToast === 'function') {
+    uiToast(t('chat.welcome_extraction_done', '导入会话已完成提炼，可查看携带明细'), { variant: 'success', timeoutMs: 5000 });
+  }
+}
+
+function _handleExtractionFailed(event) {
+  const { cid } = event;
+  if (cid === currentCid) {
+    const panel = document.querySelector(`.chat-message[data-cid="${cid}"] .welcome-carry.is-pending`);
+    if (panel) {
+      panel.classList.remove('is-pending');
+      const badge = panel.querySelector('.welcome-carry-pending-badge');
+      if (badge) badge.textContent = t('chat.welcome_extraction_failed', '提炼失败');
+    }
+  }
+  if (typeof uiToast === 'function') {
+    uiToast(t('chat.welcome_extraction_failed_toast', '导入会话提炼失败，可稍后在设置中检查模型配置'), { variant: 'warning', timeoutMs: 5000 });
+  }
+}
+
+/** 提炼完成：用事件携带的 welcome 数据替换「正在提炼」占位面板。 */
+function _upgradeWelcomePanel(cid, welcome) {
+  const panel = document.querySelector(`.chat-message[data-cid="${cid}"] .welcome-carry.is-pending`);
+  if (!panel || !welcome) return;
+  const carry = Array.isArray(welcome.carry) ? welcome.carry : [];
+  const resumeJson = JSON.stringify({
+    restatement: welcome.restatement || '',
+    carry,
+    boundary: welcome.boundary || '',
+    plan: Array.isArray(welcome.plan) ? welcome.plan : [],
+    summary: welcome.summary || '',
+  });
+  panel.outerHTML = _renderWelcomeCarryHtml(carry, resumeJson);
 }
 
 // ─── Recipient chip — per-cid for conversations, ephemeral for new-chat ──
@@ -1731,6 +1796,22 @@ function _renderWelcomeCarryHtml(carry, resumeJson) {
   </div>`;
 }
 
+/** B+ 快速导入：后台提炼尚未完成时，欢迎回复渲染「正在提炼」占位条。
+ *  提炼完成事件（sessionImport.events → extraction_done）携带真实
+ *  welcome 数据，renderer 用 _renderWelcomeCarryHtml 原地替换。 */
+function _renderWelcomePendingHtml(resumeJson) {
+  const resumeAttr = (typeof resumeJson === 'string' && resumeJson.trim())
+    ? ` data-welcome-resume="${escapeHtml(resumeJson)}"`
+    : '';
+  return `<div class="welcome-carry is-pending"${resumeAttr}>
+    <div class="welcome-carry-head">
+      <b>${escapeHtml(t('chat.welcome_carry_title', '准备携带'))}</b>
+      <span class="welcome-carry-pending-badge">${escapeHtml(t('chat.welcome_extracting', '正在提炼…'))}</span>
+    </div>
+    <div class="welcome-carry-scope">${escapeHtml(t('chat.welcome_extracting_hint', '正在后台提炼认知资产，完成后自动更新携带明细。'))}</div>
+  </div>`;
+}
+
 /** 资产 id → 名字映射（惰性加载一次，草稿卡友好显示用）。加载完成后
  *  自动刷新页面上已渲染的草稿卡（无论从哪个入口进入会话都会生效）。 */
 let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
@@ -1994,6 +2075,12 @@ function onEnterConversationView() {
     if (pendingState?.loadingEl?.isConnected) {
       _replayBufferedGroupEvents(currentCid);
     }
+  } else if (currentCid && typeof _rediscoverBackendRun === 'function') {
+    // The send-stream already finalized (bus went quiescent) but a CogSeed
+    // Backend task for this conversation may still be executing. Re-check
+    // once on view enter so an in-flight Backend turn is picked up again
+    // (running indicator + live process rail) instead of looking stopped.
+    void _rediscoverBackendRun(currentCid);
   }
   // Quote preview is per-cid; rerender so a quote captured in another conv
   // doesn't bleed into this one (and a quote left in this conv reappears
@@ -2301,7 +2388,13 @@ async function _syncPendingActorsFromRuntime(cid, opts = {}) {
     : [];
   const hasActiveTurnsField = Array.isArray(data.active_turns);
   const activeTurns = _normaliseActiveTurns(data.active_turns);
-  const processing = data.processing === true || inFlight.length > 0 || activeTurns.length > 0;
+  // backend_active: a CogSeed Backend (Mate / local-CLI) task for this cid
+  // is still executing outside the group-chat bus. Treat it as processing —
+  // otherwise the recovery poll would finalize the run while the turn is
+  // genuinely still working (imported-session continuation dispatches long
+  // work there), making the conversation look "stopped".
+  const processing = data.processing === true || data.backend_active === true
+    || inFlight.length > 0 || activeTurns.length > 0;
   if (window.ConversationInfo) {
     try { window.ConversationInfo.refreshFiles(cid, { silent: true }); } catch (_) {}
   }
@@ -3252,6 +3345,7 @@ function _groupMsgToLegacy(gm) {
     ...(gm.recall_projection_card ? { recall_projection_card: gm.recall_projection_card } : {}),
     ...(typeof gm.welcome_carry === 'string' && gm.welcome_carry ? { welcome_carry: gm.welcome_carry } : {}),
     ...(typeof gm.welcome_resume === 'string' && gm.welcome_resume ? { welcome_resume: gm.welcome_resume } : {}),
+    ...(gm.welcome_pending === true ? { welcome_pending: true } : {}),
     ...(gm.imported_seed === true ? { imported_seed: true } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
@@ -4193,7 +4287,15 @@ function _mountMessageProducedFooter(msgDiv, absPaths, opts = {}) {
   });
   const node = wrap.firstElementChild;
   if (!node) return;
-  bubble.appendChild(node);
+  // 9.1 统一框架 · 中间区「Receipt 结果块」：产物回执统一收进「回执」块
+  // （数量角标 = 产物数），默认展开——产物是结果的一部分，不折叠藏起来。
+  const body = _mountCompactResultBlock(bubble, {
+    label: t('chat.result_block.receipt'),
+    icon: 'file-text',
+    count: absPaths.length,
+    open: true,
+  });
+  (body || bubble).appendChild(node);
   msgDiv.dataset.produced = JSON.stringify(absPaths);
   _hydrateMessageProducedChips(msgDiv);
 }
@@ -5235,6 +5337,9 @@ function _renderConversationSidebarItem(c, opts = {}) {
                   data-conv-menu-cid="${cid}" data-hide-pin="${hidePin ? '1' : '0'}"
                   title="${menuTitle}" aria-label="${menuTitle}">⋯</button>
         </span>`;
+  // 9.1 统一框架 · 左侧「任务与 Session」（恢复自 e88275e1）：聚合任务状态行
+  // （运行中执行方 / 排队消息 / 计划进度），数据来自真实运行态。
+  const taskLine = _convTaskStatusLine(c.conversation_id);
   return `
     <div class="${classes}" data-cid="${cid}">
       <div class="conv-item-row">
@@ -5244,8 +5349,58 @@ function _renderConversationSidebarItem(c, opts = {}) {
         ${timeHtml}
         ${actionsHtml}
       </div>
+      ${taskLine}
     </div>
   `;
+}
+
+// 9.1 统一框架 · 左侧「任务与 Session」：聚合会话的任务状态行。
+// 数据来源（全部真实运行态，不造数据）：
+//   - 运行中：state_changed 的在途执行方（_latestInFlight）；
+//   - 排队：本地消息队列（_getQueue）；
+//   - 计划进度：plan-rail 的 plan 事件（planFor）。
+// 无任何状态时返回空串，不渲染占位。
+function _convTaskStatusLine(cid) {
+  if (!cid) return '';
+  const parts = [];
+  const inFlight = (_latestInFlight.get(cid) || []).filter(Boolean).length;
+  if (inFlight > 0) {
+    parts.push(`<span class="conv-task-chip is-running"><span class="conv-task-dot"></span>${escapeHtml(t('chat.status.running'))}${inFlight > 1 ? ` ${inFlight}` : ''}</span>`);
+  }
+  // _getQueue 来自 queue-draft.js（独立脚本），跨模块调用加 typeof 守卫。
+  const queued = (typeof _getQueue === 'function') ? _getQueue(cid).length : 0;
+  if (queued > 0) {
+    parts.push(`<span class="conv-task-chip is-queued">${escapeHtml(t('chat.status.pending_short'))} ${queued}</span>`);
+  }
+  if (typeof window.planRail === 'object' && window.planRail
+      && typeof window.planRail.planFor === 'function') {
+    const plan = window.planRail.planFor(cid);
+    if (plan && plan.total > 0) {
+      const failed = plan.failed > 0;
+      const blocked = !failed && plan.blocked > 0;
+      const active = !failed && !blocked && plan.active > 0;
+      const cls = failed ? ' is-failed' : blocked ? ' is-blocked' : active ? ' is-active' : ' is-plan';
+      const label = t('chat.task_plan_label', { done: plan.done, total: plan.total });
+      const display = label && label !== 'chat.task_plan_label' ? label : `${plan.done}/${plan.total}`;
+      parts.push(`<span class="conv-task-chip${cls}">${escapeHtml(display)}</span>`);
+    }
+  }
+  if (!parts.length) return '';
+  return `<div class="conv-task-line">${parts.join('')}</div>`;
+}
+
+// 单项刷新任务状态行（state_changed / 队列 / plan 事件变化时由
+// _updateConvSidebarBadge 顺带调用）。
+function _refreshConvTaskLine(cid) {
+  if (!cid) return;
+  const item = document.querySelector(`.conv-item[data-cid="${cid}"]`);
+  if (!item) return;
+  item.querySelector('.conv-task-line')?.remove();
+  const line = _convTaskStatusLine(cid);
+  if (!line) return;
+  const meta = item.querySelector('.conv-item-meta');
+  if (meta) meta.insertAdjacentHTML('afterend', line);
+  else item.insertAdjacentHTML('beforeend', line);
 }
 
 /** ZCode 式相对时间（「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
@@ -8338,7 +8493,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const spaceDraftHtml = spaceDraft ? _renderSpaceDraftButtonHtml(spaceDraft) : '';
   const welcomeCarryHtml = (role === 'assistant' && message.welcome_carry)
     ? _renderWelcomeCarryHtml(_parseWelcomeCarry(message.welcome_carry), message.welcome_resume || '')
-    : '';
+    : (role === 'assistant' && message.welcome_pending === true)
+      ? _renderWelcomePendingHtml(message.welcome_resume || '')
+      : '';
 
   const attachmentCid = message.attachment_cid || message.attachments_cid || opts.cid || currentCid;
   // Attachments render on user bubbles AND on P3394 peer bubbles — an
@@ -8367,6 +8524,21 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     : '';
   const teachingReceiptsHtml = role === 'assistant'
     ? _renderTeachingReceiptsHtml(message.teaching_receipts)
+    : '';
+  // 9.1 统一框架 · 中间区「Evidence 结果块」（恢复自 e88275e1）：来源引用 +
+  // 教学回执统一收进一个默认展开的「证据」块（数量角标 = 引用数 + 回执数），
+  // 放在正文之前，与 Artifact / Receipt 同一视觉语言。
+  const evidenceRefCount = Array.isArray(message.references) ? message.references.length : 0;
+  const evidenceReceiptCount = role === 'assistant' && Array.isArray(message.teaching_receipts)
+    ? message.teaching_receipts.length : 0;
+  const evidenceHtml = (referencesHtml || teachingReceiptsHtml)
+    ? _compactResultBlockHtml({
+        label: t('chat.result_block.evidence'),
+        icon: 'link',
+        count: evidenceRefCount + evidenceReceiptCount,
+        open: true,
+        bodyHtml: `${referencesHtml}${teachingReceiptsHtml}`,
+      })
     : '';
   const recallCitationsHtml = role === 'assistant'
     ? _renderRecallCitationsHtml(message.recall_citations)
@@ -8418,7 +8590,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${p3394BadgeHtml}${referencesHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${p3394BadgeHtml}${evidenceHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${attachmentsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
@@ -9016,6 +9188,48 @@ async function _resolveWakeRequest(card, request, cid, decision) {
     _convLog.warn('wake decision failed', (err && err.message) || String(err));
     try { await uiAlert(t('p3394.wake.failed')); } catch (_) {}
   }
+}
+
+// 9.1 统一框架 · 中间区紧凑结果块（恢复自 e88275e1）：
+// 静态版结果块 HTML（用于 appendChatMessage 的字符串组合路径），供 Evidence /
+// Receipt 等内联内容使用；动态挂载用 _mountCompactResultBlock。
+function _compactResultBlockHtml(opts = {}) {
+  const icon = _uiIconHtml(opts.icon || 'box', 'chat-result-block-icon-svg');
+  const countHtml = opts.count ? `<span class="chat-result-block-count">${escapeHtml(String(opts.count))}</span>` : '';
+  return `<details class="chat-result-block${opts.open ? ' is-open' : ''}"${opts.open ? ' open' : ''}>
+    <summary class="chat-result-block-head">
+      <span class="chat-result-block-icon">${icon || ''}</span>
+      <span class="chat-result-block-label">${escapeHtml(opts.label || '')}</span>
+      ${countHtml}
+      <span class="chat-result-block-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'chat-result-block-caret-svg') || ''}</span>
+    </summary>
+    <div class="chat-result-block-body">${opts.bodyHtml || ''}</div>
+  </details>`;
+}
+
+function _mountCompactResultBlock(host, opts = {}) {
+  if (!host) return null;
+  const details = document.createElement('details');
+  details.className = 'chat-result-block';
+  if (opts.open) {
+    details.open = true;
+    details.classList.add('is-open');
+  }
+  const icon = _uiIconHtml(opts.icon || 'box', 'chat-result-block-icon-svg');
+  const countHtml = opts.count ? `<span class="chat-result-block-count">${escapeHtml(String(opts.count))}</span>` : '';
+  details.innerHTML = `
+    <summary class="chat-result-block-head">
+      <span class="chat-result-block-icon">${icon || ''}</span>
+      <span class="chat-result-block-label">${escapeHtml(opts.label || '')}</span>
+      ${countHtml}
+      <span class="chat-result-block-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'chat-result-block-caret-svg') || ''}</span>
+    </summary>
+    <div class="chat-result-block-body"></div>
+  `;
+  host.appendChild(details);
+  // 图标占位统一由 icons.js 水合机制填充。
+  if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(details);
+  return details.querySelector('.chat-result-block-body');
 }
 
 function _mountMarketplaceInstallRequests(host, msgDiv, message, opts) {
@@ -12667,6 +12881,49 @@ function _finishStreamingMsg(cid) {
   // forget: _dispatchNextQueued is async (ontology_group token expansion
   // needs an IPC round-trip); this call site never awaited it.
   Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
+  // Backend-run handoff guard: the send-stream can finalize while a CogSeed
+  // Backend (Mate / local-CLI) task for this cid is still executing (the bus
+  // goes quiescent in the dispatch gap, or the task runs entirely outside the
+  // bus). Re-check once shortly after finalize so an in-flight Backend turn
+  // is picked up again instead of silently dropping off the UI. Aborts and
+  // failures are safe here: the backend task is cancelled/terminal by then,
+  // so the re-check finds nothing to re-establish.
+  _scheduleBackendRunRediscovery(cid);
+}
+
+// One-shot re-check that re-establishes the running placeholder for a
+// conversation whose primary send-stream already finalized but whose CogSeed
+// Backend task is still executing. This is what makes a long continued task
+// stay visible (indicator + live process rail) after the user switches away
+// and back, instead of looking "stopped" with the agent reply gone.
+let _backendRediscoveryTimers = new Map(); // cid → timeout id
+
+function _scheduleBackendRunRediscovery(cid) {
+  if (!cid) return;
+  const existing = _backendRediscoveryTimers.get(cid);
+  if (existing) clearTimeout(existing);
+  _backendRediscoveryTimers.set(cid, setTimeout(() => {
+    _backendRediscoveryTimers.delete(cid);
+    if (isConvPending(cid) || cid !== currentCid) return;
+    void _rediscoverBackendRun(cid);
+  }, 2000));
+}
+
+async function _rediscoverBackendRun(cid) {
+  if (!cid || isConvPending(cid)) return;
+  try {
+    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/runtime`);
+    const data = await res.json();
+    if (!data || data.ok === false) return;
+    const processing = data.processing === true || data.backend_active === true
+      || (Array.isArray(data.in_flight) && data.in_flight.length > 0)
+      || (Array.isArray(data.active_turns) && data.active_turns.length > 0);
+    if (!processing || isConvPending(cid)) return;
+    // Re-establish the run: pending state, streaming placeholder, group event
+    // observer (untilIdle — ends when the Backend task's terminal projection
+    // clears backendTurns and the bus goes quiescent) and history polling.
+    _observeConversationRunFromPlanAction(cid, { attachExisting: true, allowWithController: true });
+  } catch (_) { /* best effort — no rediscovery */ }
 }
 
 // Scroll the given message to the top of the visible chat area.
