@@ -252,6 +252,11 @@ function switchSkillsCognitionPage(page) {
     _skillsCognitionState.assetCategoryFilter = 'personal';
   }
   _cognitionSetPageVisibility(next);
+  // 切页回到顶部。滚动容器是共享的 .skills-cognition-main（develop 的滚动模型），
+  // 不重置的话从别的页滚一段再切过来会直接落在半中间——页头、指标、筛选条全在
+  // 视口上方，用户以为这一页就是从中间开始的。
+  const cognitionMain = document.getElementById('skills-cognition-main');
+  if (cognitionMain) cognitionMain.scrollTop = 0;
   if (next === 'inbox') renderSkillsCognitionInbox();
   if (next === 'sources') renderSkillsCognitionSources();
   if (next === 'proofs') void loadCognitionProofs();

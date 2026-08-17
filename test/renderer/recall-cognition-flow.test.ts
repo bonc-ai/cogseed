@@ -2759,6 +2759,32 @@ describe('Recall cognition renderer flow', () => {
   });
 
   /**
+   * 切页要回到顶部。滚动容器是共享的 `.skills-cognition-main`，不重置的话从
+   * 别的页滚一段再切过来会落在半中间——页头、指标、筛选条全在视口上方，用户
+   * 以为这一页就是从中间开始的。
+   */
+  it('scrolls back to the top when the cognition page changes', () => {
+    const context = loadSkillsRenderer();
+    const main = { scrollTop: 640 };
+    const pageBodies = [{ hidden: false, dataset: { cognitionPageBody: 'sources' } }];
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-main' ? main : null),
+      querySelectorAll: (selector: string) => (selector === '[data-cognition-page-body]' ? pageBodies : []),
+      querySelector: () => null,
+    };
+    context.renderSkillsCognitionInbox = () => {};
+    context.renderSkillsCognitionSources = () => {};
+    context.renderSkillsCognitionProofs = () => {};
+    context.renderSkillsCognitionCaptures = () => {};
+    context.renderSkillsCognitionAssets = () => {};
+    context.renderSkillsCognitionGovernance = () => {};
+
+    context.switchSkillsCognitionPage('captures');
+
+    expect(main.scrollTop).toBe(0);
+  });
+
+  /**
    * 候选归属于具体的沉淀任务。展开某条沉淀记录时只能看到**这条任务自己的**
    * 候选——候选被内联到任务详情里之后，不收窄就等于让 UI 宣称一个渲染并不
    * 保证的归属关系：展开任务 A 会看到任务 B 的候选，capture ↔ candidate 的

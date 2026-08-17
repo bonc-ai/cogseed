@@ -153,8 +153,16 @@
    组件，消除此前三种并存的标题样式。 */
 .recall-capture-block { max-width: 1480px; margin: 0 auto 22px; }
 .recall-capture-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
-.recall-capture-section-head strong { color: var(--fg, #111827); font-size: 14px; }
+.recall-capture-section-head strong { color: var(--fg, #111827); font-size: 15px; letter-spacing: -.01em; }
 .recall-capture-section-head > span { color: var(--muted-fg, #6b7280); font-size: 11px; text-align: right; }
+/* 区块内部的小标题必须明显低一级，否则「执行时机」「自动沉淀设置」和它们的
+   父标题「自动沉淀」同重，看不出是下级——"合成一块"就只在 DOM 上成立。 */
+.recall-capture-block .cognition-inbox-band-head strong,
+.recall-capture-block .recall-capture-control-summary h2 { font-size: 12px; font-weight: 600; color: var(--muted-fg, #4b5563); }
+.recall-capture-block .recall-capture-control-summary { min-height: 40px; }
+.recall-capture-block .cognition-capture-modes { margin-bottom: 14px; }
+/* 区块之间拉开距离，让"三块"这件事在视觉上先于块内细节被读到。 */
+.recall-capture-block + .recall-capture-block { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border, #e5e7eb); }
 /* 去向说明。刻意不编号——编号会和下面的段落标题抢层级，用户会以为要照着做。 */
 .recall-capture-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 1480px; margin: 0 auto 20px; padding: 10px 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, var(--card, #fff)); color: var(--fg, #374151); font-size: 12px; }
 .recall-capture-chain i { color: var(--muted-fg, #9ca3af); font-style: normal; }
