@@ -147,3 +147,22 @@ describe('作用域白名单的三态', () => {
       .toThrow('invalid ability asset scope policy');
   });
 });
+
+import { scopeIncludes } from '../../../../src/main/features/recall/scope-policy';
+
+describe('scopeIncludes general 通配（2026-08-17 KSTAR 收敛 spec P0）', () => {
+  it('general scope 匹配任意 purpose——KSTAR purpose=review 不再排空 general 资产', () => {
+    // 实机 72% 资产 scope=general；KSTAR 投影 purpose 硬编码 'review'，
+    // 旧行为 scopeIncludes('general','review')=false → 36% 投影为空。
+    expect(scopeIncludes('general', 'review')).toBe(true);
+    expect(scopeIncludes('general', 'code')).toBe(true);
+    expect(scopeIncludes('general', '写一份城市资料')).toBe(true);
+  });
+
+  it('specific scope 仍按原语义匹配', () => {
+    expect(scopeIncludes('review', 'review')).toBe(true);
+    expect(scopeIncludes('review', 'code')).toBe(false);
+    expect(scopeIncludes('report,general', 'review')).toBe(true); // general 在列表中即通配
+    expect(scopeIncludes('*', 'anything')).toBe(true);
+  });
+});

@@ -3918,6 +3918,26 @@ async function runActorTurnBody(
   if (!cliAgent) {
     if (isCommander) {
       try {
+        // KSTAR × 能力资产复用收敛（2026-08-17 spec）：一个任务只产生一次
+        // 权威能力资产选择。requirement 的 confirmed projection 是权威选择
+        // 结果——若本回合未显式携带 committedProjectionId（宿主自动路径在
+        // 任务开启时即 confirm 投影，不经过 projection-decision 控制消息），
+        // 则从当前 requirement 的 lifecycle 兜底读取，让投影真正进入
+        // Commander prompt（此前 requirement.projectionId 从未被消费，
+        // 同一任务会跑两遍 listAbilityAssets + ranking）。无投影/无效时
+        // buildRecallTurnPromptContext 自然回退 automatic projection。
+        let committedProjectionId = item.committedProjectionId;
+        if (!committedProjectionId && !item.internalControl) {
+          try {
+            const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+            const lifecycle = await readKstarTaskLifecycle(uid, cid);
+            if (lifecycle.projection?.status === 'confirmed') {
+              committedProjectionId = lifecycle.projection.id;
+            }
+          } catch {
+            // 生命周期读取失败不阻断回合——回退 automatic projection。
+          }
+        }
         const recallContext = await buildRecallTurnPromptContext(uid, {
           cid,
           taskRunId: item.turnId,
@@ -3929,7 +3949,7 @@ async function runActorTurnBody(
           ...(turnAttachmentMetadata.attachmentTypes.length
             ? { fileKinds: turnAttachmentMetadata.attachmentTypes }
             : {}),
-          ...(item.committedProjectionId ? { committedProjectionId: item.committedProjectionId } : {}),
+          ...(committedProjectionId ? { committedProjectionId } : {}),
           ...(item.forecastId ? { forecastId: item.forecastId } : {}),
         });
         if (recallContext.promptBlock) {
