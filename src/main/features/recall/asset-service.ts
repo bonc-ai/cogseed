@@ -467,6 +467,7 @@ export async function mergeAbilityAssetEvidence(
   userId: string,
   assetId: string,
   newRefs: Array<Pick<CognitionSourceRef, 'kind' | 'id'> | CognitionSourceRef>,
+
   metadata: { reason: string; actor: AbilityAssetActor },
 ): Promise<RecallAbilityAssetRecord> {
   const current = await readAbilityAsset(userId, assetId);
@@ -493,6 +494,7 @@ export async function mergeAbilityAssetEvidence(
 function mergeRefsDedup(
   left: RecallAbilityAssetRecord['evidenceRefs'],
   right: CognitionSourceRef[],
+
 ): RecallAbilityAssetRecord['evidenceRefs'] {
   const seen = new Set<string>();
   // 入参可能携带宽松引用（仅 kind/id）；按现有语义去重并原样写回。

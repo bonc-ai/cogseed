@@ -389,7 +389,10 @@ function setView(view, cid, opts = {}) {
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('spaces-btn')?.classList.toggle('active', view === 'spaces');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
-  document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
+  // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。
+  if (typeof window.setChipSettingsActive === 'function') {
+    window.setChipSettingsActive(view === 'settings');
+  }
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
   document.querySelectorAll('.conv-item').forEach(it => {
     it.classList.toggle('active', view === 'conversation' && it.dataset.cid === cid);

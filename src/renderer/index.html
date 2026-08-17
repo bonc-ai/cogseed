@@ -49,13 +49,11 @@
         </div>
       </div>
       <div class="sidebar-footer-actions">
-        <!-- Hub 账号常驻入口（方案 A）：account-chip.js 渲染。初始 hidden，
-             拿到 status DTO 后按登录状态显示；status 拿不到则保持隐藏。 -->
+        <!-- 左下角融合入口（用户状态 + 设置）：account-chip.js 渲染。初始 hidden，
+             拿到 status DTO 后按登录状态显示；status 拿不到则降级为「设置」形态
+             （面板仅含本地功能），保证设置入口永不丢失——侧栏折叠态下同样
+             常驻（压缩为图标按钮，hover 仍可展开面板，见 style.css）。 -->
         <div class="sidebar-footer-account" id="hub-account-chip-root" hidden></div>
-        <button class="sidebar-footer-btn" id="settings-btn" data-i18n-title="sidebar.settings_title" title="Settings">
-          <span data-ui-icon="settings" data-ui-icon-class="sidebar-footer-icon"></span>
-          <span data-i18n="sidebar.settings">Settings</span>
-        </button>
       </div>
       <div class="sidebar-resize-handle" id="sidebar-resize-handle"
            role="separator" aria-orientation="vertical"
@@ -1038,6 +1036,7 @@
             <button class="settings-tab" data-settings-tab="account" data-i18n="settings.tab.account">账号</button>
             <button class="settings-tab" data-settings-tab="usage" data-i18n="settings.tab.usage">账号与用量</button>
             <button class="settings-tab" data-settings-tab="general" data-i18n="settings.tab.general">通用</button>
+            <button class="settings-tab" data-settings-tab="security" data-i18n="settings.tab.security">安全与信任</button>
           </div>
 
           <div class="settings-body">
@@ -1096,6 +1095,11 @@
             </div>
 
             <!-- ───────────────────────── 通用 ───────────────────────── -->
+            <div class="settings-tab-pane" data-settings-pane="security" hidden>
+              <div class="settings-section-head" data-i18n="settings.security.section">安全与信任</div>
+              <div id="settings-security-body"></div>
+            </div>
+
             <div class="settings-tab-pane" data-settings-pane="general" hidden>
               <div class="settings-group">
                 <div class="settings-group-head">

@@ -33,9 +33,9 @@ export function resolveBuildIdentity(options: {
       builtAt: text(env.ORKAS_BUILD_TIME),
     };
   }
-  if (options.packagedInfoPath) {
+  const readBuildInfo = (filePath: string): BuildIdentity | null => {
     try {
-      const raw = (options.readFile || ((p) => fs.readFileSync(p, 'utf8')))(options.packagedInfoPath);
+      const raw = (options.readFile || ((p) => fs.readFileSync(p, 'utf8')))(filePath);
       const parsed = JSON.parse(raw);
       return {
         channel: channelOf(parsed?.channel),
@@ -43,8 +43,26 @@ export function resolveBuildIdentity(options: {
         dirty: dirtyOf(parsed?.dirty),
         builtAt: text(parsed?.builtAt),
       };
-    } catch { /* missing/malformed build metadata */ }
+    } catch { return null; /* missing/malformed build metadata */ }
+  };
+  if (options.packagedInfoPath) {
+    const fromPath = readBuildInfo(options.packagedInfoPath);
+    if (fromPath) return fromPath;
   }
+  // 打包环境兜底：gate.ts / client.ts 等 feature 调用点不带参调用，env 里也没有
+  // ORKAS_BUILD_*（electron-builder 产物没有 run.sh 注入环境变量）。此时从
+  // app 资源根读打包时写入的 .build/build-info.json，保证 packaged-dev 渠道、
+  // Hub API 默认地址与发布 Gate 判定正确。dev 源码模式由 run.sh 的环境变量
+  // 分支先行命中，不走到这里。
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const { app } = require('electron') as { app?: { isPackaged: boolean; getAppPath: () => string } };
+    if (app && app.isPackaged) {
+      const candidate = require('node:path').join(app.getAppPath(), '.build', 'build-info.json');
+      const fromApp = readBuildInfo(candidate);
+      if (fromApp) return fromApp;
+    }
+  } catch { /* not running under electron */ }
   return { channel: 'unknown', commit: '', dirty: null, builtAt: '' };
 }
 

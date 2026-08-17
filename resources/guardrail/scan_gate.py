@@ -248,7 +248,30 @@ def evaluate(engine_dir: str, target: str) -> dict[str, Any]:
     }
 
 
+def _apply_memory_guard() -> None:
+    """Ceiling the scanner's address space.
+
+    The scanner only reads files; nothing legitimate needs more than a few MiB.
+    A hostile skill cannot make it run code, but a pathological one could make
+    the PARSERS balloon (deeply nested YAML/JSON). The 60s timeout is the
+    primary backstop in the adapter; this caps the damage a runaway parse can
+    do to the user's machine before the timeout fires. POSIX only — on Windows
+    the timeout remains the sole guard, which is why this is best-effort and
+    never fatal.
+    """
+    try:
+        import resource  # POSIX only
+    except ImportError:
+        return
+    try:
+        limit = 512 * 1024 * 1024  # 512 MiB address space
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+    except Exception:  # noqa: BLE001 - a restricted env must not break scanning
+        return
+
+
 def main() -> int:
+    _apply_memory_guard()
     if len(sys.argv) < 3:
         sys.stdout.write(json.dumps(_fail("usage: scan_gate.py <engine-dir> <target-dir>")))
         return 0

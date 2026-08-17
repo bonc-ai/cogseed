@@ -43,11 +43,13 @@ describe('renderer lazy feature loader', () => {
     expect(appended.map((script) => script.src)).toEqual([
       './modules/model-authorization.js',
       './modules/settings.js',
+      './modules/hub-account.js',
       './vendor/qrcode-generator/qrcode.js',
       './modules/messaging-settings.js',
       './modules/touchpoint-settings-model.js',
       './modules/touchpoint-settings.js',
       './modules/memory.js',
+      './modules/settings-security.js',
     ]);
     expect(appended.every((script) => script.async === false)).toBe(true);
   });
@@ -73,6 +75,7 @@ describe('renderer lazy feature loader', () => {
     await skills.context.loadRendererFeature('skills');
     expect(skills.appended.map((script) => script.src)).toEqual([
       './modules/recall-information-architecture.js',
+      './modules/import-check-modal.js',
       './modules/skills.js',
       './modules/skills-bindings.js',
     ]);

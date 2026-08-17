@@ -13,7 +13,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { userMarketplaceSkillDir, userSkillsDir } from '../paths';
+import {
+  agentPrivateSkillsDir,
+  userMarketplaceAgentSkillsDir,
+  userMarketplaceSkillDir,
+  userSkillsDir,
+} from '../paths';
+import { safeId } from '../storage';
 import { isScannerSkill, scannerTrustedForLoad } from './scanner_trust';
 import { validateSkillDir } from '../quality';
 import { createLogger } from '../logger';
@@ -248,12 +254,26 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
       staleReason: 'payload_unreadable', receipt: null,
     };
   }
+  return _reverifyDeep(uid, skillId, skillDir);
+}
 
+/**
+ * Shared deep re-verification body. `agentId` non-undefined means an
+ * agent-private skill: the receipt key is namespaced `agentId__skillId` so a
+ * private skill that shadows a standalone id verifies ITS OWN bytes instead of
+ * the other tree's (see skill_trust._receiptFile).
+ */
+async function _reverifyDeep(
+  uid: string,
+  skillId: string,
+  skillDir: string,
+  agentId?: string,
+): Promise<ReverifyResult> {
   const scannerExempt = _scannerVerdict(uid, skillId, skillDir);
   if (scannerExempt) return scannerExempt;
 
-  const { stale, reason } = isReceiptStale(uid, skillId, skillDir);
-  const cached = stale ? null : readReceipt(uid, skillId);
+  const { stale, reason } = isReceiptStale(uid, skillId, skillDir, agentId);
+  const cached = stale ? null : readReceipt(uid, skillId, agentId);
   // A local-only receipt does not satisfy a deep check, even when the hash still
   // matches. Treated as stale so the full scan runs once and upgrades the receipt
   // in place; otherwise a `local` verdict — written by the sync path, or by a
@@ -368,7 +388,7 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
     ...(topRule ? { topRule } : {}),
     ...(topLevel ? { topLevel } : {}),
     ...(nseapDeclaration ? { nseapDeclaration } : {}),
-  });
+  }, agentId);
 
   if (reason === 'payload_changed') {
     log.warn('installed skill content changed since last scan; deep-rescanned', {
@@ -637,6 +657,92 @@ export async function partitionSkillsByTrustDeep(
         skillId, decision: verdict.decision, staleReason: verdict.staleReason,
       });
       withheld.push({ skillId, reason: verdict.staleReason });
+    }
+  }
+  return { loadable, withheld };
+}
+
+/**
+ * Resolve an agent-private skill directory. Mirrors `_resolveSkillDir` for the
+ * two private roots: marketplace agent bundle skills and the legacy
+ * agent-private tree.
+ */
+function _resolveAgentPrivateSkillDir(uid: string, agentId: string, skillId: string): string | null {
+  for (const dir of [
+    path.join(userMarketplaceAgentSkillsDir(uid, agentId), skillId),
+    path.join(agentPrivateSkillsDir(uid, agentId), skillId),
+  ]) {
+    if (fs.existsSync(path.join(dir, 'SKILL.md'))) return dir;
+  }
+  return null;
+}
+
+/**
+ * Deep re-verification for an agent-private skill, keyed by `(agentId, skillId)`
+ * so it never verifies a same-named standalone install instead of its own tree.
+ */
+export async function reverifyAgentPrivateSkillDeep(
+  uid: string,
+  agentId: string,
+  skillId: string,
+): Promise<ReverifyResult> {
+  if (!safeId(skillId) || !safeId(agentId)) {
+    return {
+      skillId, decision: 'unknown', rescanned: false,
+      staleReason: 'payload_unreadable', receipt: null,
+    };
+  }
+  const skillDir = _resolveAgentPrivateSkillDir(uid, agentId, skillId);
+  if (!skillDir) {
+    return {
+      skillId, decision: 'unknown', rescanned: false,
+      staleReason: 'payload_unreadable', receipt: null,
+    };
+  }
+  return _reverifyDeep(uid, skillId, skillDir, agentId);
+}
+
+/** Trust predicate for the registry's private-skill branch. */
+export async function isAgentPrivateSkillTrustedForLoadDeep(
+  uid: string,
+  agentId: string,
+  skillId: string,
+): Promise<{ trusted: boolean; decision: ReverifyResult['decision']; staleReason: StaleReason | null }> {
+  const result = await reverifyAgentPrivateSkillDeep(uid, agentId, skillId);
+  return {
+    trusted: result.decision !== 'blocked',
+    decision: result.decision,
+    staleReason: result.staleReason,
+  };
+}
+
+/**
+ * Partition agent-private skills by trust, sequentially (same subprocess
+ * rationale as `partitionSkillsByTrustDeep`). Fail-open on verification error:
+ * a transient IO problem must not strip an agent's bundled skills.
+ */
+export async function partitionAgentPrivateSkillsByTrustDeep(
+  uid: string,
+  agentId: string,
+  skillIds: readonly string[],
+): Promise<{ loadable: string[]; withheld: Array<{ skillId: string; reason: StaleReason | null }> }> {
+  const loadable: string[] = [];
+  const withheld: Array<{ skillId: string; reason: StaleReason | null }> = [];
+  for (const skillId of skillIds) {
+    try {
+      const verdict = await isAgentPrivateSkillTrustedForLoadDeep(uid, agentId, skillId);
+      if (verdict.trusted) loadable.push(skillId);
+      else {
+        log.warn('withholding tampered agent-private skill', {
+          agentId, skillId, decision: verdict.decision, staleReason: verdict.staleReason,
+        });
+        withheld.push({ skillId, reason: verdict.staleReason });
+      }
+    } catch (err) {
+      log.warn('agent-private deep trust check failed; allowing load', {
+        agentId, skillId, error: (err as Error).message,
+      });
+      loadable.push(skillId);
     }
   }
   return { loadable, withheld };

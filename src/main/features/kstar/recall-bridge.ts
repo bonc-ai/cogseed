@@ -27,6 +27,7 @@ export async function saveKstarCandidateProposals(
       value: proposal.judgment,
       // suggestedAction 收窄到 Recall 的受限行动集合（宽松来源按 'create' 兜底）。
       suggestedAction: (proposal.suggestedAction || 'create') as RecallCandidateAction,
+
       ...(proposal.summary ? { summary: proposal.summary } : {}),
       ...(proposal.uncertainty ? { uncertainty: proposal.uncertainty } : {}),
       suggestedType: proposal.suggestedType,
