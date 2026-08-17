@@ -191,7 +191,11 @@ export async function precipitateRequirementLevel(
   ).filter((review): review is KstarReviewRecord => Boolean(review));
 
   const proposals = aggregateRequirementProposals({ requirement, episodes, reviews });
-  if (proposals.length === 0) {
+  // 「关于我」独立资产（方案 C 2026-08-17）：确定性扫描会话用户消息的长期
+  // 偏好陈述，产 personal 候选。与 lesson 候选合并沉淀（可能两者都无）。
+  const personalProposals = await buildPersonalProposals(userId, requirement, episodes);
+  const allProposals = [...proposals, ...personalProposals];
+  if (allProposals.length === 0) {
     return { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [] };
   }
 
@@ -205,7 +209,7 @@ export async function precipitateRequirementLevel(
     const direct = await precipitateDirectExperienceFromSource(userId, {
       id: requirement.id,
       ...(workspaceId ? { workspaceId } : {}),
-    }, proposals);
+    }, allProposals);
     createdAssetIds = direct.createdAssetIds;
     candidateIds = direct.candidateIds;
     mergedIntoIds = direct.mergedIntoIds;
@@ -218,5 +222,39 @@ export async function precipitateRequirementLevel(
       error: (error as Error).message,
     });
   }
-  return { proposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds };
+  return { proposals: allProposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds };
+}
+
+/** 读会话用户消息 → 确定性检测长期偏好 → 产 personal 候选。失败静默降级
+ *  （不影响既有 lesson 沉淀）。 */
+async function buildPersonalProposals(
+  userId: string,
+  requirement: KstarRequirementRecord,
+  episodes: KstarEpisodeRecord[],
+): Promise<KstarCandidateProposal[]> {
+  try {
+    if (!requirement.conversationId) return [];
+    const { getMessages } = await import('../chats');
+    const messages = await getMessages(userId, requirement.conversationId, 2_000);
+    const userMessages = messages
+      .filter((m) => m && m.from === 'user' && typeof m.text === 'string' && m.text.trim())
+      .map((m) => ({ text: String(m.text) }));
+    if (!userMessages.length) return [];
+    const { extractPersonalStatements, personalStatementsToProposals } = await import('./personal-asset-precipitation');
+    const statements = extractPersonalStatements(userMessages);
+    if (!statements.length) return [];
+    // 证据引用：本任务的 episodes。
+    const { normalizeCognitionSourceRefs } = await import('../recall/source-service');
+    const sourceRefs = normalizeCognitionSourceRefs(
+      episodes.map((episode) => ({ kind: 'execution' as const, id: episode.id, title: 'KSTAR requirement episode' })),
+    );
+    return personalStatementsToProposals(statements, sourceRefs);
+  } catch (error) {
+    log.warn('kstar personal asset precipitation degraded', {
+      userId,
+      requirementId: requirement.id,
+      error: (error as Error).message,
+    });
+    return [];
+  }
 }
