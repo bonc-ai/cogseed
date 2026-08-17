@@ -161,8 +161,17 @@ describe('spawn-command · node fallback (WorkBuddy codebuddy without system nod
   });
 
   it('detects node presence on the spawn PATH', () => {
-    const envWithNode = { ...process.env, PATH: path.dirname(process.execPath) };
-    expect(hasNodeOnPath(envWithNode, 'darwin')).toBe(true);
+    // The sanctioned test runner executes under Electron-as-Node, so
+    // dirname(process.execPath) contains no `node` file — point PATH at a
+    // real node binary instead of assuming the runtime's own directory.
+    const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spawn-node-path-'));
+    try {
+      fs.writeFileSync(path.join(nodeDir, 'node'), '');
+      const envWithNode = { PATH: nodeDir };
+      expect(hasNodeOnPath(envWithNode, 'darwin')).toBe(true);
+    } finally {
+      fs.rmSync(nodeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
     const envWithoutNode = { PATH: '/nonexistent-a:/nonexistent-b' };
     expect(hasNodeOnPath(envWithoutNode, 'darwin')).toBe(false);
   });
@@ -178,13 +187,18 @@ describe('spawn-command · node fallback (WorkBuddy codebuddy without system nod
 
   it('runs a node-shebang script directly when node is on the spawn PATH', () => {
     const script = makeTempScript('#!/usr/bin/env node\nconsole.log("x");\n');
-    const envWithNode = buildCliSpawnEnv(script, {
-      ...process.env,
-      PATH: path.dirname(process.execPath),
-    });
-    const resolved = resolveCliCommand(script, ['--version'], 'darwin', envWithNode);
-    expect(resolved.command).toBe(script);
-    expect(resolved.envPatch).toBeUndefined();
+    // Same Electron-as-Node caveat as above: provide an explicit node binary
+    // so the "node present" branch is deterministic on every runner.
+    const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spawn-node-dir-'));
+    try {
+      fs.writeFileSync(path.join(nodeDir, 'node'), '');
+      const envWithNode = buildCliSpawnEnv(script, { PATH: nodeDir });
+      const resolved = resolveCliCommand(script, ['--version'], 'darwin', envWithNode);
+      expect(resolved.command).toBe(script);
+      expect(resolved.envPatch).toBeUndefined();
+    } finally {
+      fs.rmSync(nodeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
   });
 
   it('leaves native executables unchanged even without node on PATH', () => {
