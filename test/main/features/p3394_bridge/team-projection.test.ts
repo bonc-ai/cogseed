@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const TEST_UID = 'u-projection';
+let testUid = '';
 let prevWorkspaceRoot: string | undefined;
 let testVariant = '';
 
@@ -14,6 +14,9 @@ describe('P3394 node -> AI team projection', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-proj-'));
     prevWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
     process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+    // Agent 目录缓存按用户隔离；每例使用唯一 uid，避免上一个用例的缓存
+    // 继续参与下一例的 existing-agent 查重。
+    testUid = 'u-projection-' + Math.random().toString(36).slice(2, 10);
     // 每次运行唯一变体：投影状态文件按变体目录隔离，杜绝跨测试/跨运行污染。
     testVariant = 'p3394-proj-test-' + Math.random().toString(36).slice(2, 10);
     process.env.ORKAS_RUNTIME_VARIANT = testVariant;
@@ -30,7 +33,7 @@ describe('P3394 node -> AI team projection', () => {
 
   it('projects a local hermes node into the AI team with the external badge runtime', async () => {
     const users = await import('../../../../src/main/features/users');
-    users.activateUser(TEST_UID);
+    users.activateUser(testUid);
     const mod = await import('../../../../src/main/features/p3394_bridge/team-projection');
     const result = await mod.projectP3394NodeToTeam({
       nodeId: 'hermes',
@@ -63,9 +66,28 @@ describe('P3394 node -> AI team projection', () => {
     expect(p3394Agents).toHaveLength(1);
   });
 
+  it('repairs a stale projection after its Agent record is deleted', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(testUid);
+    const mod = await import('../../../../src/main/features/p3394_bridge/team-projection');
+    const agents = await import('../../../../src/main/features/agents');
+    const first = await mod.projectP3394NodeToTeam({
+      nodeId: 'claude', alias: 'ClaudeCode', endpoints: ['http://127.0.0.1:8444'],
+    });
+    expect(first.projected).toBe(true);
+    await agents.deleteCustomAgent(first.agent_id!);
+
+    const repaired = await mod.projectP3394NodeToTeam({
+      nodeId: 'claude', alias: 'ClaudeCode', endpoints: ['http://127.0.0.1:8444'],
+    });
+    expect(repaired.projected).toBe(true);
+    expect(repaired.agent_id).not.toBe(first.agent_id);
+    expect((await agents.listAgents()).filter((agent) => agent.runtime?.kind === 'p3394-gateway')).toHaveLength(1);
+  });
+
   it('skips non-local nodes and endpoint-less cloud clients', async () => {
     const users = await import('../../../../src/main/features/users');
-    users.activateUser(TEST_UID);
+    users.activateUser(testUid);
     const mod = await import('../../../../src/main/features/p3394_bridge/team-projection');
     const lan = await mod.projectP3394NodeToTeam({ nodeId: 'lan-agent', endpoints: ['http://192.168.1.5:9000'] });
     expect(lan.projected).toBe(false);
@@ -82,7 +104,7 @@ describe('P3394 node -> AI team projection', () => {
 
   it('projects an unknown self-built gateway node with a generic description', async () => {
     const users = await import('../../../../src/main/features/users');
-    users.activateUser(TEST_UID);
+    users.activateUser(testUid);
     const mod = await import('../../../../src/main/features/p3394_bridge/team-projection');
     const result = await mod.projectP3394NodeToTeam({ nodeId: 'my-custom-agent', alias: '我的自研智能体', endpoints: ['http://127.0.0.1:9200'] });
     expect(result.projected).toBe(true);

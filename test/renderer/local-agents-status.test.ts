@@ -20,6 +20,7 @@ function loadStatusHint() {
   vm.runInContext(source, context, { filename: 'local-agents.js' });
   return {
     hint: windowObject.getLocalCliUnavailableHint as (entry: Record<string, unknown> | undefined) => string,
+    externalTypes: windowObject.getExternalDefaultCliTypes as () => string[],
     calls,
   };
 }
@@ -37,12 +38,18 @@ describe('external-agent unavailable status copy', () => {
     });
   });
 
+  it('exposes the stable external-agent product contract (six CLIs, incl. opencode)', () => {
+    const { externalTypes } = loadStatusHint();
+    expect(externalTypes()).toEqual(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
+  });
+
   it('ships the three recovery messages in every renderer locale', () => {
     for (const locale of ['en', 'zh', 'ja', 'pt']) {
       const table = JSON.parse(fs.readFileSync(path.join(rendererRoot, `locales/${locale}.json`), 'utf8'));
       expect(table['agent.cli_not_found']).toBeTruthy();
       expect(table['agent.cli_version_unknown']).toBeTruthy();
       expect(table['agent.cli_version_too_old']).toContain('{version}');
+      expect(table['agent_modal.ext_cli_scanning']).toBeTruthy();
     }
   });
 });

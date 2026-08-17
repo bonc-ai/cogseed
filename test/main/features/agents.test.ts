@@ -503,9 +503,21 @@ describe('agents › normalizeAgent', () => {
     const a = await loadAgents();
     const norm = a.normalizeAgent({
       agent_id: 'x', name: 'N',
-      runtime: { kind: 'p3394-gateway', cli: 'hermes' },
+      runtime: {
+        kind: 'p3394-gateway',
+        cli: 'hermes',
+        model: 'hermes-model',
+        custom_args: ['--debug'],
+        cli_provider_id: 'cp:hermes-local',
+      },
     } as any, 'custom');
-    expect(norm?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'hermes' });
+    expect(norm?.runtime).toEqual({
+      kind: 'p3394-gateway',
+      cli: 'hermes',
+      model: 'hermes-model',
+      custom_args: ['--debug'],
+      cli_provider_id: 'cp:hermes-local',
+    });
     expect(a.isP3394GatewayAgent(norm)).toBe(true);
     expect(a.isCliAgent(norm)).toBe(false);
   });
