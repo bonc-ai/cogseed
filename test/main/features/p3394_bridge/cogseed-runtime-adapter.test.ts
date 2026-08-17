@@ -579,3 +579,125 @@ describe('P3394CogseedRuntimeAdapter R-09 状态文件损坏恢复', () => {
     expect(parsed.tasks.some((task) => task.mate_task_id === 'mate-task-phantom')).toBe(false);
   });
 });
+
+describe('P3394CogseedRuntimeAdapter R-04 多 Agent 任务账本隔离', () => {
+  it('同一会话下不同 Agent 的任务记录各自保留 agentId', async () => {
+    const { adapterModule, controllerModule } = await load();
+    const controller = controllerModule.createMateRuntimeController({ runtime: fakeRuntime() });
+    const adapter = new adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller, pollIntervalMs: 20 });
+    await adapter.openSession({ session_id: 'ses-multi-agent', agent_id: 'agent-a' });
+    await adapter.deliver(envelope({
+      session_id: 'ses-multi-agent', task_id: 'tsk-agent-a', message_id: 'msg-a',
+      recipients: [{ agent_id: 'agent-a' }],
+    }) as never);
+    // 同一会话切换到 agent-b 再投递。
+    await adapter.openSession({ session_id: 'ses-multi-agent', agent_id: 'agent-b' });
+    await adapter.deliver(envelope({
+      session_id: 'ses-multi-agent', task_id: 'tsk-agent-b', message_id: 'msg-b',
+      recipients: [{ agent_id: 'agent-b' }],
+    }) as never);
+
+    const taskStore = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const snapshot = await adapter.snapshot('ses-multi-agent');
+    const tasks = (snapshot.state as { tasks: Array<{ task_id: string }> }).tasks;
+    expect(tasks).toHaveLength(2);
+    const agentIds = new Set<string>();
+    for (const entry of tasks) {
+      const record = await taskStore.readMateTask(UID, entry.task_id);
+      expect(record).not.toBeNull();
+      if (record?.agentId) agentIds.add(record.agentId);
+    }
+    expect(agentIds).toEqual(new Set(['agent-a', 'agent-b']));
+  });
+
+  it('一个 Agent 的 admission 失败不产生任务，也不影响另一 Agent 的账本', async () => {
+    const { adapterModule, controllerModule } = await load();
+    const failing = failingController(controllerModule.createMateRuntimeController({ runtime: fakeRuntime() }), 'start');
+    const failingAdapter = new adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: failing });
+    await failingAdapter.openSession({ session_id: 'ses-fail-agent', agent_id: 'agent-a' });
+    await expect(failingAdapter.deliver(envelope({
+      session_id: 'ses-fail-agent', task_id: 'tsk-fail-agent', message_id: 'msg-fail',
+      recipients: [{ agent_id: 'agent-a' }],
+    }) as never)).rejects.toThrow('injected start failure');
+
+    const real = controllerModule.createMateRuntimeController({ runtime: fakeRuntime() });
+    const realAdapter = new adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: real, pollIntervalMs: 20 });
+    await realAdapter.openSession({ session_id: 'ses-ok-agent', agent_id: 'agent-b' });
+    await realAdapter.deliver(envelope({
+      session_id: 'ses-ok-agent', task_id: 'tsk-ok-agent', message_id: 'msg-ok',
+      recipients: [{ agent_id: 'agent-b' }],
+    }) as never);
+
+    const taskStore = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const tasks = await taskStore.listMateTasks(UID);
+    // 失败路径零残留：账本里只有 agent-b 的一个任务。
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].agentId).toBe('agent-b');
+  });
+});
+
+describe('P3394CogseedRuntimeAdapter R-07 Recall 执行账本治理', () => {
+  it('失败任务 close 进入 Recall 执行账本，且重复 close 不重复记录', async () => {
+    const { adapterModule, controllerModule, executionModule } = await load();
+    const controller = controllerModule.createMateRuntimeController({ runtime: fakeRuntime('x', 'fail') });
+    const adapter = new adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller, pollIntervalMs: 20 });
+    await adapter.openSession({ session_id: 'ses-recall-fail', agent_id: 'cogseed-agent' });
+    const { task_id } = await adapter.deliver(envelope({ session_id: 'ses-recall-fail', task_id: 'tsk-recall-fail' }) as never);
+    let terminal = '';
+    for await (const event of adapter.stream(task_id)) {
+      if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
+        terminal = event.kind;
+        break;
+      }
+    }
+    expect(terminal).toBe('failed');
+
+    const snapshot = await adapter.snapshot('ses-recall-fail');
+    const mateTaskId = (snapshot.state as { tasks: Array<{ task_id: string }> }).tasks[0].task_id;
+    const taskStore = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const task = await taskStore.readMateTask(UID, mateTaskId);
+    const executionId = task!.executionId || `mate-exec-${mateTaskId.slice('mate-task-'.length)}`;
+
+    await adapter.closeSession('ses-recall-fail');
+    const first = await executionModule.read(UID, executionId);
+    expect(first.status).toBe('failed');
+
+    // 重复 close：Recall 记录幂等，不重复写。
+    await adapter.closeSession('ses-recall-fail').catch(() => {});
+    const second = await executionModule.read(UID, executionId);
+    expect(second.status).toBe('failed');
+    expect(second.executionId).toBe(first.executionId);
+  });
+
+  it('取消任务 close 进入 Recall 执行账本（status=cancelled），且不污染其他任务', async () => {
+    const { adapterModule, controllerModule, executionModule } = await load();
+    // hold：任务保持 running，供 cancel 打断。
+    const controller = controllerModule.createMateRuntimeController({ runtime: fakeRuntime('long delta', 'hold') });
+    const adapter = new adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller, pollIntervalMs: 20 });
+    await adapter.openSession({ session_id: 'ses-recall-cancel', agent_id: 'cogseed-agent' });
+    const { task_id } = await adapter.deliver(envelope({ session_id: 'ses-recall-cancel', task_id: 'tsk-recall-cancel' }) as never);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await adapter.cancel(task_id);
+
+    let terminal = '';
+    for await (const event of adapter.stream(task_id)) {
+      if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
+        terminal = event.kind;
+        break;
+      }
+    }
+    expect(terminal).toBe('cancelled');
+
+    const snapshot = await adapter.snapshot('ses-recall-cancel');
+    const mateTaskId = (snapshot.state as { tasks: Array<{ task_id: string }> }).tasks[0].task_id;
+    const taskStore = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const task = await taskStore.readMateTask(UID, mateTaskId);
+    const executionId = task!.executionId || `mate-exec-${mateTaskId.slice('mate-task-'.length)}`;
+
+    await adapter.closeSession('ses-recall-cancel');
+    const record = await executionModule.read(UID, executionId);
+    expect(record.status).toBe('cancelled');
+    // 会话映射在 close 后释放，cancelled 任务不再被引用。
+    await expect(adapter.snapshot('ses-recall-cancel')).rejects.toThrow('p3394_session_not_found');
+  });
+});

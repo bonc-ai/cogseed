@@ -70,4 +70,27 @@ describe('P3394 control operations (S-07)', () => {
     if (!result.ok) expect(result.error).toMatchObject({ reason: 'peer_not_found' });
     expect(cancelSpy).not.toHaveBeenCalled();
   });
+
+  it('控制操作集合严格枚举：非 cancel 的 control 信封零副作用（S-07 复核）', async () => {
+    const { executor, cancelSpy, bridge } = harness();
+    // kind=control + performative=inform：不在控制操作集合，不调 runtime、不建会话、无 control.cancel 审计。
+    const inform = executor.execute(cancelEnvelope({
+      message_id: 'msg-ctrl-3', idempotency_key: 'idem-ctrl-3', performative: 'inform',
+    }));
+    expect(inform.ok).toBe(true);
+    if (inform.ok) expect(inform.executed).toBe(false);
+    await vi.waitFor(() => expect(cancelSpy).not.toHaveBeenCalled());
+    expect(executor.sessions.list()).toHaveLength(0);
+    expect(bridge.audit.list().some((record) => record.event === 'control.cancel')).toBe(false);
+    expect(bridge.audit.list().filter((record) => record.status === 'rejected')).toHaveLength(0);
+
+    // kind=control + performative=cancel 但无 task_id：无目标可取消，不调 runtime。
+    const noTarget = executor.execute(cancelEnvelope({
+      message_id: 'msg-ctrl-4', idempotency_key: 'idem-ctrl-4', task_id: undefined as never,
+    }));
+    expect(noTarget.ok).toBe(true);
+    if (noTarget.ok) expect(noTarget.executed).toBe(false);
+    await vi.waitFor(() => expect(cancelSpy).not.toHaveBeenCalled());
+    expect(executor.sessions.list()).toHaveLength(0);
+  });
 });

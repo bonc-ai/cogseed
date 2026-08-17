@@ -87,4 +87,41 @@ describe('P3394 session routing (R-01: explicit session_id wins, goal never subs
     expect(executor.sessions.list()).toHaveLength(1);
     expect(executor.sessions.require('sess-dup').task_ids).toEqual(['tsk-dup']);
   });
+
+  it('未授权 sender/recipient 的 task 在内核准入即拒绝，不创建 Session（R-01 权限集成）', async () => {
+    const bridge = new P3394BridgeKernel();
+    bridge.registry.register({ identity: { agent_id: 'model-node', display_name: 'Model' }, manifest: manifest('model-node'), node_kind: 'model_runtime' });
+    bridge.registry.register({ identity: { agent_id: 'cap-node', display_name: 'Cap' }, manifest: manifest('cap-node'), node_kind: 'capability' });
+    bridge.registry.register({ identity: { agent_id: 'peer-a', display_name: 'Peer' }, manifest: manifest('peer-a') });
+    bridge.registry.register({ identity: { agent_id: 'local-agent', display_name: 'Local' }, manifest: manifest('local-agent') });
+    const executor = new P3394BridgeExecutor({ bridge, runtime: new P3394InMemoryRuntimeAdapter() });
+
+    // 未授权 sender（model_runtime 节点）发起 task：内核拒绝，不创建 Session。
+    const rejectedSender = executor.execute({
+      ...envelope('sess-auth-1', 'goal', 'tsk-auth-1', 'msg-auth-1'),
+      sender: { agent_id: 'model-node' },
+    });
+    expect(rejectedSender.ok).toBe(false);
+    if (!rejectedSender.ok) expect(rejectedSender.error).toMatchObject({ reason: 'sender_not_authorized' });
+    expect(executor.sessions.list()).toHaveLength(0);
+    expect(executor.tasks.list()).toHaveLength(0);
+
+    // 未授权 recipient（task 只发往 capability 节点）：内核拒绝，不创建 Session。
+    const rejectedRecipient = executor.execute({
+      ...envelope('sess-auth-2', 'goal', 'tsk-auth-2', 'msg-auth-2'),
+      recipients: [{ agent_id: 'cap-node' }],
+    });
+    expect(rejectedRecipient.ok).toBe(false);
+    if (!rejectedRecipient.ok) expect(rejectedRecipient.error).toMatchObject({ reason: 'capability_not_authorized' });
+    expect(executor.sessions.list()).toHaveLength(0);
+
+    // 对照：授权通过的 task 正常创建 Session 并进入执行。
+    expect(executor.execute(envelope('sess-auth-3', 'goal', 'tsk-auth-3', 'msg-auth-3')).ok).toBe(true);
+    await executor.awaitForward('tsk-auth-3');
+    expect(executor.sessions.list()).toHaveLength(1);
+    expect(executor.sessions.require('sess-auth-3').state).toBe('active');
+    // 两个被拒任务没有产生任何审计之外的副作用。
+    const auditRejects = bridge.audit.list().filter((record) => record.status === 'rejected');
+    expect(auditRejects.map((record) => record.event).sort()).toEqual(['capability.authorize', 'sender.authorize']);
+  });
 });
