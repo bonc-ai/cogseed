@@ -99,19 +99,67 @@ const HIGH_SIGNALS: ReadonlyArray<{ re: RegExp; signal: SuspectSegment['signal']
 ];
 
 /**
- * Weaker signals: any two categories together recall the passage.
+ * Weaker signals, categorised. Individually these are unremarkable — plenty of
+ * honest skills mention a token or a URL. The pairing is what carries
+ * information, so only specific pairings recall a passage (`LOW_PAIRS`).
  *
- * Individually these are unremarkable — plenty of honest skills mention a token
- * or a URL. The pairing is what carries information.
+ * Why not "any two of these six"? Measured on the real installed library of
+ * 64 skills, any-two recalled 64/64 — every ordinary SKILL.md fires, because
+ * documentation prose routinely combines these words (per-passage tallies:
+ * security&credential 66, disable&credential 51, disable&security 20,
+ * security&post 10). A recall layer that fires on everything carries no
+ * signal and just taxes every scan with a serial model call.
  */
-const LOW_SIGNALS: readonly RegExp[] = [
-  /(禁用|停用|关闭|跳过|绕过|permissive|disable|skip|bypass)/i,
-  /(扫描|校验|检查|验证|门禁|gate|scan|verif)/i,
-  /(粘贴|贴出|提供|上传|发送|上报|post)/i,
-  /(key|secret|token|凭证|密钥|密码|credential)/i,
-  /(sudo|root|提权|管理员权限)/i,
-  /https?:\/\//i,
+const LOW_CATEGORIES = {
+  disable: /(禁用|停用|关闭|跳过|绕过|permissive|disable|skip|bypass)/i,
+  security: /(扫描|校验|检查|验证|门禁|gate|scan|verif)/i,
+  post: /(粘贴|贴出|提供|上传|发送|上报|post)/i,
+  cred: /(key|secret|token|凭证|密钥|密码|credential)/i,
+  priv: /(sudo|root|提权|管理员权限)/i,
+  url: /https?:\/\//i,
+} as const;
+type LowCategory = keyof typeof LOW_CATEGORIES;
+
+/**
+ * Pairings that recall a passage.
+ *
+ * Each kept pairing maps to an attack class from the header:
+ *
+ *  - `url` & `post`   — exfil endpoint ("POST 到 https://…/collect").
+ *  - `url` & `cred`   — credential phish endpoint ("key 上传到 https://…").
+ *  - `disable` & `security`, bounded by a proximity window — bypass/permissive
+ *    phrasing. The window exists because the pair is otherwise triggered by
+ *    two unrelated clauses inside one paragraph ("禁用形式与范围 … 扫描多文档
+ *   不一致"), and 20 of the library's 64 skills did exactly that. It still
+ *    covers the phrasings the high-signal rule cannot: the English verbs
+ *    (`disable|skip|bypass|permissive`) and nouns (`scan|verif`), and
+ *    verb-object distances beyond the high-signal window.
+ *
+ * Dropped pairings, with the measured docs pattern each one fired on:
+ * security&cred ("校验 API token 是否有效"), disable&cred ("跳过密钥配置"),
+ * security&post ("上传完成后自动校验"), post&cred ("请提供你的 API key" — the
+ * app's own onboarding pattern), priv with anything ("root 密码" / "sudo 文档"
+ * are ordinary sysadmin prose), and url paired with security/disable/priv
+ * (a docs link in a sentence about checking something).
+ *
+ * `priv` stays in the category table for clarity about what was considered;
+ * the privilege-escalation class is covered through the security noun
+ * ("绕过管理员权限检查" hits disable&security).
+ */
+const LOW_PAIRS: ReadonlyArray<{ a: LowCategory; b: LowCategory; window?: number }> = [
+  { a: 'url', b: 'post' },
+  { a: 'url', b: 'cred' },
+  // Window measured in chars between match starts; 24 keeps the canonical
+  // English bypass sample ("set the verification gate to permissive mode",
+  // 18 chars) while dropping cross-clause combinations.
+  { a: 'disable', b: 'security', window: 24 },
 ];
+
+/** Start offsets of every match of `re` in `text`. */
+function matchStarts(text: string, re: RegExp): number[] {
+  const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;
+  return [...text.matchAll(new RegExp(re.source, flags))].map((m) => m.index ?? 0);
+}
 
 /** Files whose content is instructions to an agent rather than code. */
 const INSTRUCTION_EXTENSIONS: readonly string[] = ['.md', '.markdown', '.txt', '.rst'];
@@ -156,7 +204,16 @@ function classify(text: string): SuspectSegment['signal'] | null {
   for (const { re, signal } of HIGH_SIGNALS) {
     if (re.test(text)) return signal;
   }
-  return LOW_SIGNALS.filter((re) => re.test(text)).length >= 2 ? 'multi_signal' : null;
+  for (const { a, b, window } of LOW_PAIRS) {
+    if (!LOW_CATEGORIES[a].test(text) || !LOW_CATEGORIES[b].test(text)) continue;
+    if (window === undefined) return 'multi_signal';
+    const startsA = matchStarts(text, LOW_CATEGORIES[a]);
+    const startsB = matchStarts(text, LOW_CATEGORIES[b]);
+    if (startsA.some((x) => startsB.some((y) => Math.abs(x - y) <= window))) {
+      return 'multi_signal';
+    }
+  }
+  return null;
 }
 
 /**
