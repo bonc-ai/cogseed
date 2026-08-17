@@ -448,7 +448,7 @@
             <div class="skills-cognition-tab-group" role="presentation">
               <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-inbox" data-cognition-page="inbox">
                 <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="clipboard-list"></span></span>
-                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.inbox">待我处理</strong><small data-i18n="cognition.inbox_desc">处理需要你判断与确认的事项</small></span>
+                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.inbox">待我处理</strong><small data-i18n="cognition.inbox_desc">只处理需要你判断与确认的事项</small></span>
               </button>
               <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets">
                 <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="archive"></span></span>
@@ -493,6 +493,30 @@
           <section class="skills-cognition-page" id="skills-cognition-captures" role="tabpanel" aria-labelledby="skills-cognition-tab-captures" data-cognition-page-body="captures" hidden>
             <div id="skills-cognition-captures-body"></div>
             <div id="skills-cognition-capture-review-body"></div>
+          </section>
+          <!-- 候选详情：一条候选的整页决定面。作用范围冲突这类事项要用户一次
+               看清"内容是什么 + 该在什么范围生效 + 为什么轮到我决定"，折叠行
+               放不下这三件事。动作全部落在既有 recall.candidates.* 通道。 -->
+          <section class="skills-cognition-page" id="skills-cognition-candidate" role="tabpanel" aria-labelledby="skills-cognition-tab-candidate" data-cognition-page-body="candidate" hidden>
+            <div id="skills-cognition-candidate-body"></div>
+          </section>
+          <!-- 认知树：正式资产的成长投影，读 recall.tree.read。树只呈现资产
+               节点——任务接续快照、Session、运行记录属于支撑对象，不长叶片，
+               这条契约在 tree-service 里就成立，渲染层不再另作判断。 -->
+          <section class="skills-cognition-page" id="skills-cognition-tree" role="tabpanel" aria-labelledby="skills-cognition-tab-tree" data-cognition-page-body="tree" hidden>
+            <div id="skills-cognition-tree-body"></div>
+          </section>
+          <!-- 非资产分流：任务状态被带走，但不进四类资产和认知树。快照本体的
+               读通道（task_continuation）尚未接到 IPC，页面先给完整说明与入口，
+               数据区显示明确空态，不塞示例数据。 -->
+          <section class="skills-cognition-page" id="skills-cognition-nonasset" role="tabpanel" aria-labelledby="skills-cognition-tab-nonasset" data-cognition-page-body="nonasset" hidden>
+            <div id="skills-cognition-nonasset-body"></div>
+          </section>
+          <!-- Skill 更新候选：系统提出更新，用户只决定是否接受。版本与回滚点
+               来自 cognition.skills.summary；diff 正文与"接受限域更新"的决策
+               通道尚缺，相应区域显示待接入而不是编造内容。 -->
+          <section class="skills-cognition-page" id="skills-cognition-skillupdate" role="tabpanel" aria-labelledby="skills-cognition-tab-skillupdate" data-cognition-page-body="skillupdate" hidden>
+            <div id="skills-cognition-skillupdate-body"></div>
           </section>
           <section class="skills-cognition-page" id="skills-cognition-assets" role="tabpanel" aria-labelledby="skills-cognition-tab-assets" data-cognition-page-body="assets" hidden>
             <div id="skills-cognition-assets-summary"></div>

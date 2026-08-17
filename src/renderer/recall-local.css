@@ -111,6 +111,116 @@
    "真的没事"和"页面没渲染出来"。 */
 .cognition-inbox-empty { display: grid; gap: 6px; padding: 40px 16px; }
 .cognition-inbox-empty strong { color: var(--fg, #111827); font-size: 14px; }
+/* 三条分组带：需要确认 / 可以稍后 / 教学回执。组头必须自解释——同一个收件箱里
+   "系统认为必须打扰你"和"顺手告诉你一声"是两种承诺，只靠卡片颜色分不出来。 */
+.cognition-inbox-band { display: grid; gap: 10px; margin-top: 18px; }
+.cognition-inbox-band-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.cognition-inbox-band-head > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cognition-inbox-band-head strong { color: var(--fg, #111827); font-size: 13px; }
+.cognition-inbox-band-head > span { color: var(--muted-fg, #6b7280); font-size: 11px; text-align: right; }
+.skills-cognition-status.is-confirm { background: color-mix(in srgb, var(--warning, #d97706) 11%, transparent); color: var(--warning, #92400e); }
+.skills-cognition-status.is-later { background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, transparent); color: var(--primary-text, #06734f); }
+.skills-cognition-status.is-teaching { background: color-mix(in srgb, var(--info, #2563eb) 10%, transparent); color: var(--info, #1d4ed8); }
+/* 待办行：标题区说清这是什么事，决策动作独立摆在右侧。整行可点时用户无法在
+   "打开"和"拒绝"之间做区分，只能先进详情页再退回来。 */
+.cognition-inbox-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--fg, #111827) 6%, transparent); }
+.cognition-inbox-row-main { display: grid; gap: 3px; min-width: 0; }
+.cognition-inbox-row-main strong { color: var(--fg, #111827); font-size: 12px; font-weight: 600; line-height: 1.5; }
+.cognition-inbox-row-main span { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
+.cognition-inbox-row-actions { display: flex; flex: none; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+/* 辅助页页头右上角的返回按钮。这些页不在 tab 条里占位，四个 tab 全是未选中
+   态，用户没有可依赖的返回路径。 */
+.cognition-task-hero-aside { display: flex; flex: none; align-items: center; gap: 8px; }
+/* 沉淀时机的三张模式卡。互斥语义——选中的那张给主色按钮，其余给普通按钮；
+   不用开关样式，开关会让人以为可以同时开两种。 */
+.cognition-capture-modes { display: grid; gap: 10px; margin-bottom: 18px; }
+.cognition-capture-mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.cognition-capture-mode { display: grid; gap: 8px; align-content: start; }
+.cognition-capture-mode.is-active { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 34%, var(--border, #e5e7eb)); background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, var(--card, #fff)); }
+.cognition-capture-mode-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.cognition-capture-mode-top strong { color: var(--fg, #111827); font-size: 13px; }
+.cognition-capture-mode .panel-sub { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+/* 管理来源页底的边界声明。用 attention 的外观但不是告警——它是一条常驻契约。 */
+.cognition-source-boundary { margin-top: 20px; }
+/* 统计条里可点的那两格（需授权 / 失败记录）。其余三格保持纯统计的样子——
+   让不可点的东西看起来可点，比不能点更糟。 */
+.recall-workbench-summary-action { display: flex; align-items: baseline; gap: 8px; padding: 14px 16px; border: 0; border-left: 1px solid var(--border, #e5e7eb); background: transparent; text-align: left; cursor: pointer; }
+.recall-workbench-summary-action:first-child { border-left: 0; }
+.recall-workbench-summary-action:hover { background: color-mix(in srgb, var(--fg, #111827) 4%, transparent); }
+.recall-workbench-summary-action strong { color: var(--fg, #111827); font-size: 22px; }
+.recall-workbench-summary-action span { color: var(--muted-fg, #6b7280); font-size: 12px; }
+/* 被定位到的来源组。短暂高亮而不是持久选中：它回答"你要找的是这一组"，
+   看到之后就该让位给内容。 */
+.recall-source-group.is-located { outline: 2px solid color-mix(in srgb, var(--primary, #0E9F6E) 45%, transparent); outline-offset: 3px; border-radius: 10px; }
+/* 候选详情 / Skill 更新候选共用的两栏：左边做决定，右边给依据。 */
+.cognition-candidate-layout { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr); gap: 14px; align-items: start; }
+.cognition-candidate-main { display: grid; gap: 12px; }
+.cognition-candidate-main h2 { margin: 0; color: var(--fg, #111827); font-size: 17px; line-height: 1.4; }
+.cognition-candidate-quote { margin: 0; padding: 12px 14px; border-left: 3px solid color-mix(in srgb, var(--primary, #0E9F6E) 40%, transparent); border-radius: 0 8px 8px 0; background: color-mix(in srgb, var(--primary, #0E9F6E) 5%, transparent); color: var(--fg, #374151); font-size: 13px; line-height: 1.65; }
+.cognition-candidate-field { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; gap: 12px; }
+.cognition-candidate-field.is-wide { grid-template-columns: 92px minmax(0, 1fr); align-items: start; }
+.cognition-candidate-field > span { color: var(--muted-fg, #6b7280); font-size: 12px; }
+.cognition-candidate-field input,
+.cognition-candidate-field select,
+.cognition-candidate-field textarea { width: 100%; padding: 7px 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 7px; background: var(--card, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; }
+.cognition-candidate-field textarea { min-height: 72px; resize: vertical; line-height: 1.6; }
+.cognition-candidate-actions { margin-top: 4px; }
+.cognition-candidate-side { display: grid; gap: 8px; align-content: start; }
+.cognition-candidate-side h3 { margin: 0; color: var(--fg, #111827); font-size: 12px; }
+.cognition-candidate-side ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.cognition-candidate-side li { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+/* 认知树：四条分支 + 关系区 + 图例。叶片深浅直接映射 maturity，不自己发明分级。 */
+.cognition-tree-layout { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(0, 1fr) minmax(260px, .5fr); gap: 14px; align-items: start; }
+.cognition-tree-canvas { display: grid; gap: 12px; min-width: 0; }
+.cognition-tree-branch-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.cognition-tree-branch-head strong { color: var(--fg, #111827); font-size: 13px; }
+.cognition-tree-branch-head b { display: grid; min-width: 24px; height: 24px; place-items: center; border-radius: 999px; background: color-mix(in srgb, var(--primary, #0E9F6E) 9%, transparent); color: var(--primary-text, #06734f); font-size: 11px; }
+.cognition-tree-leaves { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.cognition-tree-leaf { display: flex; align-items: flex-start; gap: 9px; padding: 9px 11px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); text-align: left; cursor: pointer; }
+.cognition-tree-leaf:hover { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 32%, var(--border, #e5e7eb)); }
+.cognition-tree-leaf-body { display: grid; gap: 2px; min-width: 0; }
+.cognition-tree-leaf-body strong { color: var(--fg, #111827); font-size: 12px; font-weight: 600; line-height: 1.45; }
+.cognition-tree-leaf-body small { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.cognition-tree-dot { flex: none; width: 10px; height: 10px; margin-top: 3px; border-radius: 50%; background: var(--muted-fg, #6b7280); }
+.cognition-tree-leaf.is-light .cognition-tree-dot,
+.cognition-tree-dot.is-light { background: color-mix(in srgb, var(--primary, #0E9F6E) 38%, var(--card, #fff)); }
+.cognition-tree-leaf.is-deep .cognition-tree-dot,
+.cognition-tree-dot.is-deep { background: var(--primary, #0E9F6E); }
+.cognition-tree-dot.is-bud { background: var(--warning, #d97706); }
+.cognition-tree-dot.is-none { background: color-mix(in srgb, var(--muted-fg, #6b7280) 45%, transparent); }
+.cognition-tree-relation { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 7px 0; border-top: 1px solid color-mix(in srgb, var(--fg, #111827) 6%, transparent); color: var(--fg, #374151); font-size: 12px; }
+.cognition-tree-relation em { color: var(--muted-fg, #6b7280); font-size: 11px; font-style: normal; }
+.cognition-tree-relation i { color: var(--muted-fg, #6b7280); font-style: normal; }
+.cognition-tree-legend { display: grid; gap: 12px; align-content: start; }
+.cognition-tree-legend-row { display: flex; align-items: flex-start; gap: 9px; }
+.cognition-tree-legend-row strong { display: block; color: var(--fg, #111827); font-size: 12px; }
+.cognition-tree-legend-row span { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
+.cognition-tree-legend .panel-sub { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+/* 我的资产页底的认知树入口。 */
+.ability-asset-tree-entry { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 1480px; margin: 0 auto 18px; padding: 13px 16px; border: 1px solid var(--border, #e5e7eb); border-radius: 9px; background: var(--card, #fff); }
+.ability-asset-tree-entry strong { color: var(--fg, #111827); font-size: 13px; }
+.ability-asset-tree-entry .panel-sub { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
+/* 非资产分流的链路条。 */
+.cognition-nonasset-steps { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cognition-nonasset-step { display: grid; gap: 3px; flex: 1 1 150px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
+.cognition-nonasset-step strong { color: var(--fg, #111827); font-size: 12px; }
+.cognition-nonasset-step span { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
+.cognition-nonasset-layout { display: grid; max-width: 1480px; margin: 14px auto 0; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 14px; align-items: start; }
+/* 使用与证明的分层筛选与两张说明卡。说明卡不是装饰：用户最容易犯的错就是把
+   「被正确带入」读成「有效」，这一页的全部意义就是把这两件事分开。 */
+.cognition-proof-filters { max-width: 1480px; margin: 0 auto 14px; }
+.cognition-proof-notes { display: grid; max-width: 1480px; margin: 16px auto 0; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.cognition-proof-notes h3 { margin: 0 0 6px; color: var(--fg, #111827); font-size: 12px; }
+.cognition-proof-notes .panel-sub { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+/* 我的资产详情里的三格事实（作用范围 / 默认使用 / 版本）。 */
+.cognition-asset-facts { margin: 0 0 14px; }
+@media (max-width: 1080px) {
+  .cognition-candidate-layout,
+  .cognition-tree-layout,
+  .cognition-nonasset-layout { grid-template-columns: minmax(0, 1fr); }
+  .cognition-candidate-field,
+  .cognition-candidate-field.is-wide { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+}
 .cognition-governance-workbench { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(320px, .8fr) minmax(0, 1.2fr); gap: 14px; align-items: start; }
 .cognition-governance-history-card,
 .cognition-governance-control-card { min-width: 0; padding: 0; overflow: hidden; border-radius: 10px; }
@@ -432,9 +542,11 @@
 .recall-workbench-page-head h2 { margin: 0; color: var(--fg, #111827); font-size: 19px; }
 .recall-workbench-page-head p,
 .recall-workbench-section-head p { margin: 5px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.5; }
+/* 管理来源的统计条现在是 5 格（来源类型 / 当前可见 / 可用 / 需授权 / 失败记录）。
+   auto-fit 而不是写死列数：其他调用方仍是 3 格，写死会把它们撑坏。 */
 .recall-workbench-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 0;
   margin-bottom: 24px;
   border-block: 1px solid var(--border, #e5e7eb);

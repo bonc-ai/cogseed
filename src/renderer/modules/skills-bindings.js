@@ -356,6 +356,16 @@ function _initSkillsCognitionBindings() {
 
     const pageLink = event.target.closest('[data-cognition-page-link]');
     if (pageLink) {
+      // 跨页跳转可以顺带带上落点。「使用与证明」的「查看资产」按钮同时挂了
+      // page-link 和 ability-asset-id：这个分支在下面那个资产分支之前命中并
+      // return，不在这里取 id 的话，用户点过去只是换了一页，要看的那条资产
+      // 仍然没被选中——证明链就此断在最后一步。
+      const targetAssetId = pageLink.dataset.abilityAssetId || '';
+      if (targetAssetId) {
+        _skillsCognitionState.selectedAssetId = targetAssetId;
+        const targetAsset = (_skillsCognitionState.assets || []).find((item) => item.id === targetAssetId);
+        if (targetAsset) _skillsCognitionState.assetCategoryFilter = targetAsset.category || targetAsset.type || '';
+      }
       switchSkillsCognitionPage(pageLink.dataset.cognitionPageLink || 'inbox');
       return;
     }
@@ -702,9 +712,95 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    // 候选现在有独立详情页：带着 id 进去，而不是把用户扔回沉淀活动列表里
+    // 自己找。取不到 id 才退回列表——那说明调用方没给，进详情页只会是空壳。
     const openCandidate = event.target.closest('[data-cognition-open-candidate]');
     if (openCandidate) {
-      switchSkillsCognitionPage('captures');
+      const candidateId = openCandidate.dataset.cognitionOpenCandidate || '';
+      if (!candidateId) {
+        switchSkillsCognitionPage('captures');
+        return;
+      }
+      _skillsCognitionState.selectedCandidateId = candidateId;
+      switchSkillsCognitionPage('candidate');
+      return;
+    }
+
+    // 「使用与证明」的分层筛选。纯前端过滤既有事实链，不重新取数——换一层看
+    // 法不该让用户等一次网络往返。
+    const proofFilter = event.target.closest('[data-cognition-proof-filter]');
+    if (proofFilter) {
+      const next = proofFilter.dataset.cognitionProofFilter || 'all';
+      if (next === _skillsCognitionState.proofFilter) return;
+      _skillsCognitionState.proofFilter = next;
+      _skillsCognitionState.selectedProofEventId = '';
+      renderSkillsCognitionProofs();
+      return;
+    }
+
+    // Skill 版本回滚走真实通道（cognition.skills.rollback）。回滚会改变下一次
+    // 匹配任务实际使用的版本，所以先确认——这一步不可由一次误点完成。
+    const skillRollback = event.target.closest('[data-cognition-skill-rollback]');
+    if (skillRollback) {
+      const skillId = skillRollback.dataset.cognitionSkillRollback || '';
+      const version = skillRollback.dataset.cognitionSkillVersion || '';
+      if (!skillId || !version || skillRollback.dataset.busy === '1') return;
+      const message = _cognitionText(
+        'cognition.skillupdate_rollback_confirm',
+        '回滚后，下一次匹配任务将使用 v{v}；更高版本仍然保留，历史结果不会被修改。确认回滚？',
+      ).replace('{v}', version);
+      if (typeof uiConfirm !== 'function' || !(await uiConfirm(message))) return;
+      skillRollback.dataset.busy = '1'; skillRollback.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('cognition.skills.rollback', { skillId, version });
+        if (!result?.ok) throw new Error(result?.error || 'skill rollback failed');
+        if (typeof uiToast === 'function') {
+          uiToast(_cognitionText('cognition.skillupdate_rollback_done', '已回滚到 v{v}').replace('{v}', version), { variant: 'success' });
+        }
+        const current = _skillsCognitionState.skillUpdate || {};
+        await loadCognitionSkillUpdate(current.assetId, skillId);
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        skillRollback.dataset.busy = '0'; skillRollback.disabled = false;
+      }
+      return;
+    }
+
+    const treeReload = event.target.closest('[data-cognition-tree-reload]');
+    if (treeReload) {
+      void loadCognitionTree({ rebuild: true });
+      return;
+    }
+
+    // 管理来源统计条上的「需授权 / 失败记录」→ 定位到出问题的那一组。数出了
+    // 问题却点不进去，用户就得自己从五组来源里逐条翻找那一条坏的。
+    const sourceLocate = event.target.closest('[data-cognition-source-locate]');
+    if (sourceLocate) {
+      const kind = sourceLocate.dataset.cognitionSourceLocate;
+      const selector = kind === 'auth'
+        ? '[data-cognition-source-group="auth"]'
+        : '[data-cognition-source-group-failed]';
+      const target = document.querySelector(selector);
+      if (!target) return;
+      // 折叠组要先展开，否则滚过去看到的还是一行收起的摘要。
+      if (target.tagName === 'DETAILS') target.open = true;
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.classList.add('is-located');
+      setTimeout(() => target.classList.remove('is-located'), 1600);
+      return;
+    }
+
+    // 「版本与治理」里带候选的资产 → Skill 更新候选页。资产必须真的生成过
+    // Skill 才有版本可比，所以 skillId 取不到就不跳：跳过去只会是一页空壳。
+    const openSkillUpdate = event.target.closest('[data-cognition-open-skill-update]');
+    if (openSkillUpdate) {
+      const assetId = openSkillUpdate.dataset.cognitionOpenSkillUpdate || '';
+      const asset = (_skillsCognitionState.assets || []).find((item) => item.id === assetId);
+      const skillId = asset?.generatedSkillId || '';
+      if (!skillId) return;
+      switchSkillsCognitionPage('skillupdate');
+      void loadCognitionSkillUpdate(assetId, skillId);
       return;
     }
 

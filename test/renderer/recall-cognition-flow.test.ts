@@ -1013,7 +1013,9 @@ describe('Recall cognition renderer flow', () => {
     for (const status of ['未沉淀', '等待中', '处理中', '待审核', '已形成 2 条记忆', '沉淀失败']) {
       expect(host.innerHTML).toContain(status);
     }
-    expect(host.innerHTML).not.toContain('>可用</span>');
+    // 条目徽标必须是沉淀阶段，不能退回来源的原始「可用」。匹配整个徽标而不是
+    // 裸文字：统计条现在也有一格叫「可用」，裸文字会把它一起误判。
+    expect(host.innerHTML).not.toContain('class="skills-cognition-status is-ready">可用</span>');
   });
 
   it('renders a four-stage Recall pipeline and hides empty optional panels', async () => {
@@ -1216,9 +1218,53 @@ describe('Recall cognition renderer flow', () => {
     expect(inbox.innerHTML).toContain('规则缺少作用边界');
     expect(inbox.innerHTML).toContain('data-cognition-open-asset="asset-rule"');
     expect(inbox.innerHTML).not.toContain('当前无需处理');
-    // 需确认的分组排在低打扰分组前面。
-    expect(inbox.innerHTML.indexOf('cognition-inbox-confirm'))
-      .toBeLessThan(inbox.innerHTML.indexOf('cognition-inbox-later'));
+    // 需确认的分组带排在低打扰分组带前面。
+    expect(inbox.innerHTML.indexOf('cognition-inbox-band is-confirm'))
+      .toBeLessThan(inbox.innerHTML.indexOf('cognition-inbox-band is-later'));
+    // 每条分组带都要自报性质与打扰规则：只靠卡片颜色，用户分不出"必须打扰你"
+    // 和"顺手告诉你一声"。
+    expect(inbox.innerHTML).toContain('会影响后续使用');
+    expect(inbox.innerHTML).toContain('只在冲突、扩权或高影响变化时打扰你');
+    expect(inbox.innerHTML).toContain('不阻塞工作');
+    // 主动作按 kind 措辞：点进去是要做决定，不是去围观。
+    expect(inbox.innerHTML).toContain('查看建议');
+    expect(inbox.innerHTML).toContain('确认范围');
+  });
+
+  /**
+   * 候选类待办在行内就能「稍后 / 拒绝」，走的是与沉淀活动页候选行同一套
+   * `data-recall-candidate-action`，所以不需要第二份事件绑定。
+   *
+   * 资产类待办**不给**这两个动作：暂停、撤销这类资产级动作有影响面，必须在
+   * 「版本与治理」里看过影响再执行，不能在收件箱一键触发。
+   */
+  it('offers inline defer/reject on candidate rows only', () => {
+    const context = loadSkillsRenderer();
+    const inbox = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-inbox-body' ? inbox : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      sources: [], recallCandidates: [], teachingSignals: [], assets: [],
+      captureCounts: { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 },
+      captureModel: { configured: true, authorizationRequired: false },
+      inboxItems: [
+        {
+          id: 'candidate:cand-1', kind: 'candidate_pending_review', urgency: 'low_disturbance',
+          title: '把评审口径整理为方法', assetType: 'skill_method', candidateId: 'cand-1',
+        },
+        {
+          id: 'rule-boundary:asset-rule', kind: 'rule_boundary_missing', urgency: 'confirm',
+          title: '保持决策可追溯', assetType: 'rule', assetId: 'asset-rule',
+        },
+      ],
+    })})`, context);
+
+    context.renderSkillsCognitionInbox();
+
+    expect(inbox.innerHTML).toContain('data-recall-candidate-action="defer" data-recall-candidate-id="cand-1"');
+    expect(inbox.innerHTML).toContain('data-recall-candidate-action="reject" data-recall-candidate-id="cand-1"');
+    expect(inbox.innerHTML).not.toContain('data-recall-candidate-id="asset-rule"');
   });
 
   /**
@@ -2310,5 +2356,279 @@ describe('Recall cognition renderer flow', () => {
     ]);
     expect(button.disabled).toBe(false);
     expect(button.dataset.busy).toBe('0');
+  });
+
+  /**
+   * 「使用与证明」的分层筛选是这一页的核心表达：被引用 / 传递已证明 /
+   * 效果已验证 / Evidence 不足是四层不同强度的结论，不是四种平级标签。
+   *
+   * 两处必须钉死：筛选真的过滤事实链（不是只改个高亮），以及指标卡走全量——
+   * 计数跟着筛选一起变，用户会以为记录被删了。
+   */
+  it('filters the proof chain by layer while keeping the metrics on the full set', async () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-proofs-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      assets: [{ id: 'a-1', category: 'rule', type: 'rule', title: '外发材料口径', status: 'active', maturity: 'seed' }],
+      selectedProofEventId: '', proofFilter: 'all',
+    })})`, context);
+    context.window.cogseed = {
+      invoke: async (channel: string) => (channel === 'recall.timeline.list'
+        ? { ok: true, items: [
+          { id: 'e-use', kind: 'usage_recorded', occurredAt: '2026-08-14T10:00:00.000Z', refs: { assetId: 'a-1' } },
+          { id: 'e-transfer', kind: 'transfer_completed', status: 'succeeded', occurredAt: '2026-08-15T10:00:00.000Z', refs: { assetId: 'a-1' } },
+          { id: 'e-effect', kind: 'effectiveness_recorded', status: 'better', occurredAt: '2026-08-16T10:00:00.000Z', refs: { assetId: 'a-1' } },
+          { id: 'e-degraded', kind: 'transfer_completed', status: 'degraded', occurredAt: '2026-08-13T10:00:00.000Z', refs: { assetId: 'a-1' } },
+        ] }
+        : { ok: true, receipts: [] }),
+    };
+
+    await context.renderSkillsCognitionProofs();
+    const everything = host.innerHTML;
+    expect(everything).toContain('data-cognition-proof-filter="effective"');
+    expect(everything).toContain('data-recall-proof-event="e-use"');
+    expect(everything).toContain('data-recall-proof-event="e-effect"');
+    // 两张说明卡把「被正确带入」和「有效」分开——这一页的全部意义所在。
+    expect(everything).toContain('传递证明回答什么');
+    expect(everything).toContain('效果证明回答什么');
+
+    vm.runInContext(`_skillsCognitionState.proofFilter = 'effective';`, context);
+    await context.renderSkillsCognitionProofs();
+    // 只剩效果已验证那一条，其余事实被真的滤掉。
+    expect(host.innerHTML).toContain('data-recall-proof-event="e-effect"');
+    expect(host.innerHTML).not.toContain('data-recall-proof-event="e-use"');
+    expect(host.innerHTML).not.toContain('data-recall-proof-event="e-transfer"');
+    // 指标卡仍报全量 4 条：跟着筛选一起变会让用户以为记录被删了。
+    expect(host.innerHTML).toContain('<strong>4</strong>');
+  });
+
+  it('distinguishes an empty layer from having no proof at all', async () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-proofs-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      assets: [{ id: 'a-1', category: 'rule', type: 'rule', title: '外发材料口径', status: 'active', maturity: 'seed' }],
+      selectedProofEventId: '', proofFilter: 'effective',
+    })})`, context);
+    context.window.cogseed = {
+      invoke: async (channel: string) => (channel === 'recall.timeline.list'
+        ? { ok: true, items: [{ id: 'e-use', kind: 'usage_recorded', occurredAt: '2026-08-14T10:00:00.000Z', refs: { assetId: 'a-1' } }] }
+        : { ok: true, receipts: [] }),
+    };
+
+    await context.renderSkillsCognitionProofs();
+
+    expect(host.innerHTML).toContain('这一层还没有记录');
+    expect(host.innerHTML).not.toContain('还没有资产被真正带入过任务');
+    // 筛选条要留着，否则用户没法切回全部。
+    expect(host.innerHTML).toContain('data-cognition-proof-filter="all"');
+  });
+
+  /**
+   * 候选详情的「确认并限域」必须真的先落范围再晋升。
+   *
+   * 这条守的是"看起来能点"和"真的改了范围"之间的差别：如果它直接走 promote，
+   * 用户在这一页改的类型和作用范围会被静默丢掉，资产按候选的原始建议入库，
+   * 而界面刚刚才让他相信自己限定了范围。
+   */
+  it('renders the candidate detail with the fields save-and-promote actually reads', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-candidate-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      selectedCandidateId: 'cand-scope',
+      recallCandidates: [{
+        id: 'cand-scope', status: 'pending_review', judgment: '评审结论必须标注 Evidence 等级',
+        summary: '评审口径', suggestedType: 'rule', suggestedScope: '', risk: 'high',
+        sourceRefs: [{ kind: 'conversation', id: 'conv-1' }],
+        evidenceRefs: [{ kind: 'conversation', id: 'conv-1' }],
+      }],
+    })})`, context);
+
+    context.renderSkillsCognitionCandidateDetail();
+
+    // 表单字段必须与 save-and-promote 读取的选择器一一对上，否则改动落不进去。
+    for (const field of ['data-recall-edit-type', 'data-recall-edit-scope', 'data-recall-edit-summary', 'data-recall-edit-judgment', 'data-recall-edit-evidence']) {
+      expect(host.innerHTML).toContain(field);
+    }
+    // 容器要带 candidate id：绑定用 closest('[data-recall-candidate-id]') 找字段。
+    expect(host.innerHTML).toContain('data-recall-candidate-id="cand-scope"');
+    expect(host.innerHTML).toContain('data-recall-candidate-action="save-and-promote"');
+    expect(host.innerHTML).toContain('data-recall-candidate-action="defer"');
+    expect(host.innerHTML).toContain('data-recall-candidate-action="reject"');
+    // 「为什么需要你确认」只列这条候选真实具备的理由。
+    expect(host.innerHTML).toContain('高风险');
+    expect(host.innerHTML).toContain('没有范围的规则不会被带入任何任务');
+  });
+
+  it('tells the user a candidate is gone instead of rendering an empty form', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-candidate-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      selectedCandidateId: 'gone', recallCandidates: [],
+    })})`, context);
+
+    context.renderSkillsCognitionCandidateDetail();
+
+    expect(host.innerHTML).toContain('这条候选已不在待处理列表中');
+    expect(host.innerHTML).not.toContain('data-recall-candidate-action="save-and-promote"');
+  });
+
+  /**
+   * 认知树的叶片深浅直接映射 maturity，且每片叶都能点回它对应的资产。
+   *
+   * 一棵点不动的树只是装饰画：用户看到一片浅叶的第一反应就是"这条为什么还没
+   * 验证"，那时他需要的是那条资产本身。
+   */
+  it('maps tree leaves to maturity and links each one back to its asset', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-tree-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      recallCandidates: [{ id: 'c1', status: 'pending_review' }],
+      tree: {
+        nodes: [
+          { id: 'asset:a-deep', type: 'asset', assetType: 'rule', label: '外发材料口径', status: 'active', maturity: 'effectiveness_validated', version: '3' },
+          { id: 'asset:a-light', type: 'asset', assetType: 'rule', label: '决策保留来源', status: 'active', maturity: 'seed', version: '1' },
+        ],
+        edges: [{ from: 'asset:a-light', to: 'asset:a-deep', type: 'asset_relation', kind: 'refines' }],
+      },
+    })})`, context);
+
+    context.renderSkillsCognitionTree();
+
+    expect(host.innerHTML).toContain('cognition-tree-leaf is-deep');
+    expect(host.innerHTML).toContain('cognition-tree-leaf is-light');
+    // 叶片可点回资产：id 去掉 `asset:` 前缀后就是资产 id。
+    expect(host.innerHTML).toContain('data-cognition-open-asset="a-deep"');
+    expect(host.innerHTML).toContain('data-cognition-open-asset="a-light"');
+    // 关系边用用户读得懂的说法，不露出内部枚举。
+    expect(host.innerHTML).toContain('细化自');
+    expect(host.innerHTML).not.toContain('refines');
+    // 候选是芽，不在树上——图例要说清它们的去向，否则用户以为它们消失了。
+    expect(host.innerHTML).toContain('候选尚未成为正式资产');
+  });
+
+  it('says the tree is empty rather than drawing growth that has not happened', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-tree-body' ? host : null),
+    };
+    vm.runInContext('Object.assign(_skillsCognitionState, { tree: { nodes: [], edges: [] } })', context);
+
+    context.renderSkillsCognitionTree();
+
+    expect(host.innerHTML).toContain('树上还没有叶片');
+    expect(host.innerHTML).not.toContain('cognition-tree-leaf');
+  });
+
+  /**
+   * 缺后端契约的两页必须**说出**自己缺什么，而不是编一份看起来像真的内容。
+   *
+   * 这是这两页存在的意义：入口和说明先立住，用户知道这个能力存在、也知道它
+   * 还没接通；一份假快照或假 diff 会让人以为接续/更新已经生效。
+   */
+  it('states the missing channel on the non-asset page instead of faking a snapshot', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-nonasset-body' ? host : null),
+    };
+
+    context.renderSkillsCognitionNonAsset();
+
+    expect(host.innerHTML).toContain('快照读取通道尚未接入');
+    expect(host.innerHTML).toContain('不生成认知树叶片');
+    // 分流链路是产品契约，可以照说；但不能出现具体的示例快照内容。
+    expect(host.innerHTML).toContain('生成任务接续快照');
+  });
+
+  it('keeps the skill update action disabled while its decide channel is missing', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-skillupdate-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      assets: [{ id: 'a-method', type: 'skill_method', category: 'skill_method', title: '产品评审方法', status: 'active', maturity: 'seed', version: '1.4' }],
+      skillUpdate: {
+        assetId: 'a-method', skillId: 'sk-1', version: '1.4', pendingCandidateCount: 1,
+        versions: [{ version: '1.4', canRollback: false }, { version: '1.3', canRollback: true }],
+        workspaceRefs: [{ id: 'r1' }, { id: 'r2' }],
+      },
+    })})`, context);
+
+    context.renderSkillsCognitionSkillUpdate();
+
+    // 真事实照给：当前版本、回滚点、影响空间数都来自读模型。
+    expect(host.innerHTML).toContain('v1.4');
+    expect(host.innerHTML).toContain('v1.3');
+    expect(host.innerHTML).toContain('影响 2 个引用空间');
+    // 缺的两处说清楚，且「接受」保持 disabled——不给假 toast。
+    expect(host.innerHTML).toContain('没有 diff 正文的读取通道');
+    expect(host.innerHTML).toContain('disabled');
+    expect(host.innerHTML).toContain('还没有接受通道');
+    // 回滚有真实通道（cognition.skills.rollback），所以可回滚的版本给真按钮：
+    // 列出退路却不能走，等于告诉用户"你有退路"再让他自己去别处找门。
+    expect(host.innerHTML).toContain('data-cognition-skill-rollback="sk-1" data-cognition-skill-version="1.3"');
+    // 当前版本不给回滚按钮——回滚到自己没有意义。
+    expect(host.innerHTML).not.toContain('data-cognition-skill-version="1.4"');
+  });
+
+  /**
+   * 「使用与证明」的「查看资产」同时挂了 page-link 和 ability-asset-id。
+   * page-link 分支在委托里先命中并 return，因此必须在那里把资产选中——
+   * 否则用户点过去只是换了一页，要看的那条资产仍然没被选中，证明链断在
+   * 最后一步。
+   */
+  it('selects the asset a cross-page link points at, not just the page', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const state: any = { assets: [{ id: 'a-1', category: 'rule', type: 'rule' }], selectedAssetId: '', assetCategoryFilter: '' };
+    const switched: string[] = [];
+    const context: any = {
+      console,
+      document: {
+        getElementById: () => ({ dataset: {} }),
+        querySelectorAll: () => [],
+        querySelector: () => null,
+        addEventListener() {},
+      },
+      window: { addEventListener() {}, cogseed: { invoke: async () => ({ ok: true }) } },
+      _skillsCognitionState: state,
+      _cognitionText: (_key: string, fallback: string) => fallback,
+      switchSkillsCognitionPage: (page: string) => switched.push(page),
+      renderSkillsCognitionAssets() {},
+      renderSkillsCognitionGovernance() {},
+      renderSkillsCognitionCaptures() {},
+      renderSkillsCognitionCandidates() {},
+      loadSkillsCognitionSnapshot: async () => {},
+      setTimeout,
+    };
+    context.document.getElementById = (id: string) => (id === 'panel-recall'
+      ? { dataset: {}, addEventListener: (name: string, handler: any) => { if (name === 'click') clickHandler = handler; } }
+      : null);
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    const button = { dataset: { cognitionPageLink: 'assets', abilityAssetId: 'a-1' } };
+    await clickHandler!({ target: { closest: (selector: string) => (
+      selector === '[data-cognition-page-link]' ? button : null) } });
+
+    expect(switched).toEqual(['assets']);
+    expect(state.selectedAssetId).toBe('a-1');
+    expect(state.assetCategoryFilter).toBe('rule');
   });
 });

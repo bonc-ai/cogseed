@@ -26,6 +26,9 @@ const _skillsCognitionState = {
   inboxItems: [],
   /** 「使用与证明」右侧回执面板对应的那条使用事件。 */
   selectedProofEventId: '',
+  /** 「使用与证明」当前看的是哪一层结论：全部 / 已引用 / 传递已证明 /
+   *  效果已验证 / Evidence 不足。纯前端过滤，事实本身不变。 */
+  proofFilter: 'all',
   recallCandidates: [],
   sources: [],
   teachingSignals: [],
@@ -49,6 +52,15 @@ const _skillsCognitionState = {
   visibleAssetHistoryId: '',
   assetChainById: {},
   visibleAssetChainId: '',
+  /** 「候选详情」当前打开的那一条。列表页仍用 selectedCaptureId 选沉淀任务，
+   *  两者是不同维度，不能共用一个字段。 */
+  selectedCandidateId: '',
+  /** 认知树（recall.tree.read）。按需加载：进树页才拉，不进快照的九路并行——
+   *  它只服务一个入口，放进快照会让每次刷新都多付一次读盘。 */
+  tree: null,
+  /** 「Skill 更新候选」当前打开的那一条的读模型（cognition.skills.summary
+   *  + recall.workspaceRefs.list）。同样按需加载。 */
+  skillUpdate: null,
   dashboard: null,
   loadedAt: 0,
   loading: false,
@@ -62,14 +74,21 @@ function _cognitionText(key, fallback) {
 /**
  * 四个任务页共用的内容层页头。顶层标题回答“这是什么模块”，这里回答
  * “来到这一页要完成什么”；数字只接收调用方从现有读模型算出的真实值。
+ *
+ * 辅助页（管理来源 / 沉淀活动 / 候选详情 / 认知树 / 非资产分流 / Skill 更新
+ * 候选）用同一个页头，并额外传 `backPage`：它们不在 tab 条里占位，四个 tab
+ * 全部处于未选中态，用户没有可依赖的返回路径。
  */
-function _renderCognitionTaskHero({ eyebrowKey, eyebrow, titleKey, title, hintKey, hint, metrics = [] }) {
+function _renderCognitionTaskHero({ eyebrowKey, eyebrow, titleKey, title, hintKey, hint, metrics = [], backPage = '', backKey = '', back = '' }) {
   const metricHtml = metrics.length
     ? `<div class="cognition-task-metrics">${metrics.map((metric) => `<div class="cognition-task-metric"><strong>${escapeHtml(String(metric.value))}</strong><span>${escapeHtml(_cognitionText(metric.key, metric.label))}</span></div>`).join('')}</div>`
     : '';
+  const backHtml = backPage
+    ? `<div class="cognition-task-hero-aside"><button type="button" class="btn btn-sm" data-cognition-page-link="${escapeHtml(backPage)}">${escapeHtml(_cognitionText(backKey || 'cognition.back_to_inbox', back || '返回待处理'))}</button></div>`
+    : '';
   return `<header class="cognition-task-hero">
     <span class="cognition-task-eyebrow">${escapeHtml(_cognitionText(eyebrowKey, eyebrow))}</span>
-    <div class="cognition-task-hero-row"><div><h2>${escapeHtml(_cognitionText(titleKey, title))}</h2><p>${escapeHtml(_cognitionText(hintKey, hint))}</p></div>${metricHtml}</div>
+    <div class="cognition-task-hero-row"><div><h2>${escapeHtml(_cognitionText(titleKey, title))}</h2><p>${escapeHtml(_cognitionText(hintKey, hint))}</p></div>${metricHtml}${backHtml}</div>
   </header>`;
 }
 
@@ -218,7 +237,13 @@ function switchSkillsCognitionPage(page) {
     ontology: 'assets',
   };
   const requested = aliases[page] || page;
-  const allowed = new Set(['inbox', 'captures', 'assets', 'sources', 'proofs', 'governance']);
+  // 四个任务视图 + 两个页头辅助入口 + 四个从它们进入的详情页。详情页不进
+  // tab 条：它们都是"从某一条记录点进去"的下一层，占了 tab 位反而会让用户
+  // 以为那是第五、第六个并列的任务。
+  const allowed = new Set([
+    'inbox', 'captures', 'assets', 'sources', 'proofs', 'governance',
+    'candidate', 'tree', 'nonasset', 'skillupdate',
+  ]);
   const next = allowed.has(requested) ? requested : 'inbox';
   _skillsCognitionState.page = next;
   if (next === 'assets' && !_skillsCognitionState.assetCategoryFilter && !_skillsCognitionState.selectedAssetId) {
@@ -231,6 +256,15 @@ function switchSkillsCognitionPage(page) {
   if (next === 'captures') renderSkillsCognitionCaptures();
   if (next === 'assets') renderSkillsCognitionAssets();
   if (next === 'governance') renderSkillsCognitionGovernance();
+  if (next === 'candidate') renderSkillsCognitionCandidateDetail();
+  if (next === 'nonasset') renderSkillsCognitionNonAsset();
+  if (next === 'skillupdate') renderSkillsCognitionSkillUpdate();
+  if (next === 'tree') {
+    // 每次进树都重投一次：树是资产关系的投影，资产在别的页改过之后不重投就是
+    // 一棵停在上次的树，而用户正是带着"我刚确认的那条长出来没有"进来的。
+    renderSkillsCognitionTree();
+    void loadCognitionTree({ rebuild: true });
+  }
 }
 
 function _renderCognitionLoading(host) {
@@ -328,6 +362,29 @@ function _abilityAssetMaturityLabel(maturity, status) {
     return _cognitionText('cognition.maturity_confirmed_unverified', '已确认，尚未验证');
   }
   return maturity || status || _cognitionText('cognition.unknown', '未知');
+}
+
+/**
+ * 「默认使用」：这条资产在下一个匹配任务里会不会被自动带入。
+ *
+ * 措辞必须跟着 `resolveDefaultUsePolicy`（asset-semantics.ts）的同作用域档位
+ * 走，不能自己另立一套说法——用户读到"自动带入"就会据此安排工作，说法和真实
+ * 策略分叉一次，他就再也不会信这一行。
+ *
+ * 这里只描述**同作用域**的行为：跨作用域一律要确认，那是范围问题，不是这条
+ * 资产的属性，写进来只会让这一格永远显示"要确认"。
+ */
+function _abilityAssetDefaultUseLabel(asset) {
+  if (!asset || asset.status !== 'active') {
+    return _cognitionText('cognition.asset_default_use_never', '不会带入');
+  }
+  if (asset.maturity === 'transfer_validated' || asset.maturity === 'effectiveness_validated') {
+    return _cognitionText('cognition.asset_default_use_auto', '任务匹配时自动带入');
+  }
+  if (asset.maturity === 'bud') {
+    return _cognitionText('cognition.asset_default_use_prompt', '任务匹配时建议带入');
+  }
+  return _cognitionText('cognition.asset_default_use_never', '不会带入');
 }
 
 // lifecycleStatus 有三个值，只有 user_confirmed_unverified 代表真实用户确认。
@@ -712,12 +769,31 @@ function renderSkillsCognitionSources() {
   const sourceItems = visibleGroups.flatMap(_cognitionPrimarySourceItems);
   const total = sourceItems.length;
   const ready = sourceItems.filter((item) => item.status === 'ready').length;
-  const needsAttention = sourceItems.filter((item) => item.status === 'failed' || item.status === 'paused').length;
+  // 「需授权」和「失败」拆开：合成一个"需关注"时，用户看到数字也不知道该去
+  // 重新授权还是去重试——这是两条完全不同的修复路径。授权失效由服务端已经
+  // 给出的 nextAction / statusReason 判断，渲染层不自己猜。
+  const needsAuthorization = sourceItems.filter((item) => item.nextAction === 'reconnect'
+    || item.statusReason === 'connector_error'
+    || item.statusReason === 'connector_disconnected').length;
+  const failedItems = sourceItems.filter((item) => item.status === 'failed'
+    && item.nextAction !== 'reconnect').length;
+  // 「需授权」和「失败记录」不是只读数字：数出问题却点不进去，用户就得自己
+  // 从五组来源里逐条翻找那一条坏的。这两格计数 > 0 时是按钮，点了把对应的
+  // 来源组滚进视野并高亮。其余三格是纯统计，保持不可点——让不可点的东西看
+  // 起来可点，比不能点更糟。
+  const statCell = ([key, fallback, value, filter]) => {
+    const label = escapeHtml(_cognitionText(key, fallback));
+    const count = escapeHtml(String(value));
+    if (!filter || !value) return `<div><strong>${count}</strong><span>${label}</span></div>`;
+    return `<button type="button" class="recall-workbench-summary-action" data-cognition-source-locate="${escapeHtml(filter)}"><strong>${count}</strong><span>${label}</span></button>`;
+  };
   const summary = visibleGroups.length ? [
-    ['cognition.source_visible_items', '当前可见', total],
-    ['cognition.source_ready_groups', '可用来源', ready],
-    ['cognition.source_degraded_groups', '需关注', needsAttention],
-  ].map(([key, fallback, value]) => `<div><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(_cognitionText(key, fallback))}</span></div>`).join('') : '';
+    ['cognition.source_kind_count', '来源类型', visibleGroups.length, ''],
+    ['cognition.source_visible_items', '当前可见', total, ''],
+    ['cognition.source_ready_groups', '可用', ready, ''],
+    ['cognition.source_needs_auth', '需授权', needsAuthorization, 'auth'],
+    ['cognition.source_failed_records', '失败记录', failedItems, 'failed'],
+  ].map(statCell).join('') : '';
   const body = visibleGroups.length ? visibleGroups.map((group) => {
     const items = _cognitionPrimarySourceItems(group);
     const rows = items.length ? items.map((item) => {
@@ -742,17 +818,39 @@ function renderSkillsCognitionSources() {
       </article>`;
     }).join('') : `<div class="recall-workbench-empty">${escapeHtml(_cognitionText('cognition.source_no_items', '当前没有可显示的数据'))}</div>`;
     const groupReason = _cognitionSourceReason(group.reason);
-    const groupHead = `<div><h2>${escapeHtml(_cognitionSourceLabel(group.kind))}</h2><p>${escapeHtml(groupReason || _cognitionText(`cognition.source_hint_${group.kind}`, ''))}</p></div><span class="skills-cognition-status is-${escapeHtml(group.status || 'empty')}">${escapeHtml(String(items.length))} · ${escapeHtml(_cognitionSourceStatusLabel(group.status))}</span>`;
-    if (group.kind === 'execution_evaluation') {
-      return `<details class="recall-source-group recall-source-group-advanced"><summary class="recall-workbench-section-head">${groupHead}</summary><div class="recall-source-items">${rows}</div></details>`;
+    // 授权失效时把「重新授权」提为组级主动作：它是这一组唯一能让数据重新流动
+    // 的操作，藏在某一条目行里用户找不到。
+    const groupNeedsAuth = items.some((item) => item.nextAction === 'reconnect'
+      || item.statusReason === 'connector_error'
+      || item.statusReason === 'connector_disconnected');
+    const groupAction = groupNeedsAuth
+      ? `<button type="button" class="btn btn-sm btn-primary" data-cognition-source-action="reconnect" data-cognition-source-kind="${escapeHtml(group.kind)}" data-cognition-source-id="${escapeHtml(items.find((item) => item.nextAction === 'reconnect' || item.statusReason === 'connector_error' || item.statusReason === 'connector_disconnected')?.id || '')}">${escapeHtml(_cognitionText('cognition.source_action_reauthorize', '重新授权'))}</button>`
+      : '';
+    const groupHead = `<div><h2>${escapeHtml(_cognitionSourceLabel(group.kind))}</h2><p>${escapeHtml(groupReason || _cognitionText(`cognition.source_hint_${group.kind}`, ''))}</p></div><span class="skills-cognition-status is-${escapeHtml(groupNeedsAuth ? 'failed' : (group.status || 'empty'))}">${escapeHtml(String(items.length))} · ${escapeHtml(groupNeedsAuth ? _cognitionText('cognition.source_auth_expired', '授权失效') : _cognitionSourceStatusLabel(group.status))}</span>${groupAction}`;
+    // 「执行与评价」过去折在 details 里当高级项。授权失效时它是这一页唯一的
+    // 红色告警，折叠会把用户唯一需要处理的事藏起来，所以有问题就展开。
+    // 统计条要能把用户送到出问题的那一组，所以组上标出它属于哪一类异常。
+    const groupHasFailure = items.some((item) => item.status === 'failed' && item.nextAction !== 'reconnect');
+    const locate = `${groupNeedsAuth ? ' data-cognition-source-group="auth"' : ''}${groupHasFailure ? ' data-cognition-source-group-failed="1"' : ''}`;
+    if (group.kind === 'execution_evaluation' && !groupNeedsAuth) {
+      return `<details class="recall-source-group recall-source-group-advanced"${locate}><summary class="recall-workbench-section-head">${groupHead}</summary><div class="recall-source-items">${rows}</div></details>`;
     }
-    return `<section class="recall-source-group"><div class="recall-workbench-section-head">${groupHead}</div><div class="recall-source-items">${rows}</div></section>`;
+    return `<section class="recall-source-group"${locate}><div class="recall-workbench-section-head">${groupHead}</div><div class="recall-source-items">${rows}</div></section>`;
   }).join('') : `<div class="recall-workbench-empty-state">
     <strong>${escapeHtml(_cognitionText('cognition.sources_empty', '尚未发现可接入的数据来源'))}</strong>
     <span>${escapeHtml(_cognitionText('cognition.pipeline_next_conversation', '下一步：完成一轮会话，系统会自动整理内容'))}</span>
     <button type="button" class="btn btn-sm" data-cognition-page-link="captures">${escapeHtml(_cognitionText('cognition.capture_tasks', '沉淀任务'))}</button>
   </div>`;
-  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>${escapeHtml(_cognitionText('cognition.manage_sources', '管理来源'))}</h2><p>${escapeHtml(_cognitionText('cognition.sources_page_hint', '会话、文件、执行、教学信号与已授权系统'))}</p></div></div>${_renderCognitionSourceStatus()}${summary ? `<div class="recall-workbench-summary">${summary}</div>` : ''}<div class="recall-source-groups">${body}</div>`;
+  const hero = _renderCognitionTaskHero({
+    eyebrowKey: 'cognition.sources_eyebrow', eyebrow: 'SOURCES',
+    titleKey: 'cognition.sources_title', title: '只从你授权的范围中发现认知',
+    hintKey: 'cognition.sources_page_hint', hint: '五类来源分别管理授权、可用性和最近读取；来源不是正式认知资产。',
+    backPage: 'inbox',
+  });
+  // 页底这句是这一页的边界声明：来源可读不等于内容会进资产。少了它，用户会
+  // 把「授权一个目录」理解成「把整个目录写进记忆」。
+  const boundary = `<div class="recall-overview-attention cognition-source-boundary"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.source_boundary', '来源内容不会直接写入正式资产'))}</h2><span>${escapeHtml(_cognitionText('cognition.source_boundary_hint', '普通内容先成为候选；只有用户教学信号可在限定范围内形成可撤销回执。'))}</span></div></div>`;
+  host.innerHTML = `${hero}${_renderCognitionSourceStatus()}${summary ? `<div class="recall-workbench-summary">${summary}</div>` : ''}<div class="recall-source-groups">${body}</div>${boundary}`;
 }
 
 function _renderCognitionCaptureStatus() {
@@ -1025,7 +1123,8 @@ function _renderCaptureSettings() {
     || (model.configured
       ? _cognitionText('cognition.capture_model_default', '默认模型')
       : _cognitionText('cognition.capture_model_unconfigured', '尚未配置模型'));
-  const policies = ['smart', 'nightly', 'manual'].map((policy) => `<button type="button" class="recall-capture-policy${settings.executionPolicy === policy ? ' is-active' : ''}" data-recall-capture-policy="${policy}" aria-pressed="${settings.executionPolicy === policy ? 'true' : 'false'}" ${settings.enabled ? '' : 'disabled'}>${escapeHtml(_capturePolicyLabel(policy))}</button>`).join('');
+  // 执行时机的选择归页面上方的三张模式卡（`_renderCaptureModeCards`），这里
+  // 只留参数：同一个选择出现在两处，用户改完一处会怀疑另一处没跟上。
   const reviewPolicy = settings.reviewPolicy === 'manual' ? 'manual' : 'auto';
   const reviewPolicies = ['auto', 'manual'].map((policy) => `<button type="button" class="recall-capture-policy${reviewPolicy === policy ? ' is-active' : ''}" data-recall-review-policy="${policy}" aria-pressed="${reviewPolicy === policy ? 'true' : 'false'}" ${settings.enabled ? '' : 'disabled'}>${escapeHtml(_cognitionText(`cognition.capture_review_policy_${policy}`, policy === 'auto' ? '自动入库' : '集中确认'))}</button>`).join('');
   const quietMinutes = Number.isInteger(settings.quietMinutes) ? settings.quietMinutes : 10;
@@ -1052,12 +1151,49 @@ function _renderCaptureSettings() {
         <label class="recall-capture-master"><input type="checkbox" data-recall-capture-enabled ${settings.enabled ? 'checked' : ''}><span>${escapeHtml(enabledLabel)}</span></label>
       </div>
       <div class="recall-capture-control-grid">
-      <div class="recall-capture-control-field"><label>${escapeHtml(_cognitionText('cognition.capture_execution_policy', '执行时机'))}</label><div class="recall-capture-policy-group" role="group">${policies}</div></div>
       <div class="recall-capture-control-field"><label>${escapeHtml(_cognitionText('cognition.capture_review_policy', '写入方式'))}</label><div class="recall-capture-policy-group is-review" role="group">${reviewPolicies}</div><span>${escapeHtml(_cognitionText(`cognition.capture_review_policy_${reviewPolicy}_hint`, reviewPolicy === 'auto' ? '提取完成后，合格内容会自动写入记忆，可在记忆内容中查看或撤回。' : '先整理候选，确认后才会写入记忆。'))}</span></div>
       <div class="recall-capture-control-field recall-capture-quiet-window" ${settings.executionPolicy === 'smart' ? '' : 'hidden'}><label>${escapeHtml(_cognitionText('cognition.capture_quiet_period', '静默等待'))}</label><select data-recall-capture-quiet-minutes ${settings.enabled ? '' : 'disabled'}>${quietOptions}</select><span>${escapeHtml(_cognitionText('cognition.capture_quiet_hint', '期间继续对话会重新计时'))}</span></div>
       <div class="recall-capture-control-field recall-capture-night-window" ${settings.executionPolicy === 'nightly' ? '' : 'hidden'}><label>${escapeHtml(_cognitionText('cognition.capture_nightly_window', '夜间窗口'))}</label><div><input type="time" data-recall-capture-night-start value="${escapeHtml(settings.nightlyStart)}" ${settings.enabled ? '' : 'disabled'}><span>–</span><input type="time" data-recall-capture-night-end value="${escapeHtml(settings.nightlyEnd)}" ${settings.enabled ? '' : 'disabled'}></div><label class="recall-capture-check"><input type="checkbox" data-recall-capture-catch-up ${settings.catchUpMissed ? 'checked' : ''} ${settings.enabled ? '' : 'disabled'}>${escapeHtml(_cognitionText('cognition.capture_catch_up', '错过后空闲补跑'))}</label></div>
       </div>
     </div>
+  </section>`;
+}
+
+/**
+ * 三种沉淀时机的并列呈现：任务结束后发现 / 本地夜间整理 / 主动整理。
+ *
+ * 它们**互斥**——`executionPolicy` 同时只有一个值，所以这里不用开关（switch）
+ * 的样子：开关会让用户以为可以同时开两种，然后发现点了夜间就把智能关掉了。
+ * 卡片仍复用 `data-recall-capture-policy`，与设置面板同一套 data 属性，事件
+ * 绑定不需要再写一遍。
+ *
+ * 「主动整理」选中后由 `_renderManualConversationPicker` 展开会话圈选，不在
+ * 卡片里再实现一次。
+ */
+function _renderCaptureModeCards() {
+  const settings = _skillsCognitionState.captureSettings || {};
+  const active = settings.executionPolicy || 'smart';
+  const modes = [
+    ['smart', 'cognition.capture_mode_smart', '任务结束后发现',
+      'cognition.capture_mode_smart_desc', '任务完成或出现用户纠正时，在本机分析有意义的变化。'],
+    ['nightly', 'cognition.capture_mode_nightly', '本地夜间整理',
+      'cognition.capture_mode_nightly_desc', '仅在你启用后运行；设备休眠时延迟到下一个可运行的窗口。'],
+    ['manual', 'cognition.capture_mode_manual', '主动整理',
+      'cognition.capture_mode_manual_desc', '按会话圈选历史记录，读取前会再次确认范围。'],
+  ];
+  const cards = modes.map(([policy, titleKey, title, descKey, desc]) => {
+    const isActive = active === policy;
+    const control = policy === 'manual'
+      ? `<button type="button" class="btn btn-sm${isActive ? ' btn-primary' : ''}" data-recall-capture-policy="manual" ${settings.enabled === false ? 'disabled' : ''}>${escapeHtml(_cognitionText('cognition.capture_mode_pick_sessions', '选择会话'))}</button>`
+      : `<button type="button" class="btn btn-sm${isActive ? ' btn-primary' : ''}" data-recall-capture-policy="${policy}" aria-pressed="${isActive ? 'true' : 'false'}" ${settings.enabled === false ? 'disabled' : ''}>${escapeHtml(isActive ? _cognitionText('cognition.capture_mode_on', '使用中') : _cognitionText('cognition.capture_mode_use', '改用这种'))}</button>`;
+    return `<section class="skills-cognition-card cognition-capture-mode${isActive ? ' is-active' : ''}">
+      <div class="cognition-capture-mode-top"><strong>${escapeHtml(_cognitionText(titleKey, title))}</strong>${control}</div>
+      <p class="panel-sub">${escapeHtml(_cognitionText(descKey, desc))}</p>
+    </section>`;
+  }).join('');
+  return `<section class="cognition-capture-modes">
+    <div class="cognition-inbox-band-head"><div><strong>${escapeHtml(_cognitionText('cognition.capture_execution_policy', '执行时机'))}</strong></div><span>${escapeHtml(_cognitionText('cognition.capture_mode_exclusive', '三种时机同时只有一种生效'))}</span></div>
+    <div class="cognition-capture-mode-grid">${cards}</div>
   </section>`;
 }
 
@@ -1175,14 +1311,30 @@ function renderSkillsCognitionCaptures() {
         <span class="recall-capture-task-time">${escapeHtml(_cognitionDate(capture.updatedAt))}</span>
       </button>${_captureTaskDetail(capture)}
     </article>`;
-  }).join('') : `<div class="recall-capture-empty"><strong>${escapeHtml(_cognitionText('cognition.capture_tasks_empty', '暂无沉淀任务'))}</strong><span>${escapeHtml(_cognitionText('cognition.capture_tasks_empty_hint', '完成一轮会话后，系统会在静默期结束后创建沉淀任务。'))}</span></div>`;
+  }).join('') : `<div class="recall-capture-empty"><strong>${escapeHtml(
+    // 空态要区分"真的一条都没有"和"这个筛选下没有"：同一句"暂无沉淀任务"会让
+    // 用户以为筛选没生效，然后反复点回全部确认。
+    _skillsCognitionState.captureFilter === 'all'
+      ? _cognitionText('cognition.capture_tasks_empty', '暂无沉淀任务')
+      : _cognitionText('cognition.capture_tasks_filter_empty', '当前筛选下没有沉淀活动'),
+  )}</strong><span>${escapeHtml(
+    _skillsCognitionState.captureFilter === 'all'
+      ? _cognitionText('cognition.capture_tasks_empty_hint', '完成一轮会话后，系统会在静默期结束后创建沉淀任务。')
+      : _cognitionText('cognition.capture_tasks_filter_empty_hint', '换一个筛选，或回到「全部」查看所有沉淀活动。'),
+  )}</span></div>`;
   const more = _skillsCognitionState.captureNextCursor
     ? `<button type="button" class="btn btn-sm recall-capture-load-more" data-recall-capture-load-more>${escapeHtml(_cognitionText('common.load_more', '加载更多'))}</button>`
     : '';
   // 沉淀进度、失败任务、最近沉淀状态都归这里——它们是后台加工进度，不是
   // "需要我决定"的事，所以从落地页移了过来。
   const processing = `${_renderCognitionPipelineStatus()}${_renderCognitionOverviewAttention({ includeProcessing: true })}`;
-  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>${escapeHtml(_cognitionText('cognition.capture_activity', '沉淀活动'))}</h2><p>${escapeHtml(_cognitionText('cognition.capture_activity_hint', '自动发现与整理；只有经用户确认的内容才能成为正式资产。'))}</p></div></div>${processing}${_renderCaptureSettings()}${_renderManualConversationPicker()}<section class="recall-capture-task-workbench"><div class="recall-capture-filter-bar">${filters}</div><div class="recall-capture-task-list">${rows}</div>${more}</section>${_renderCognitionCaptureStatus()}`;
+  const hero = _renderCognitionTaskHero({
+    eyebrowKey: 'cognition.capture_eyebrow', eyebrow: 'CAPTURE ACTIVITY',
+    titleKey: 'cognition.capture_activity_title', title: '自动发现，按影响程度请求你介入',
+    hintKey: 'cognition.capture_activity_hint', hint: '自动发现与整理；只有经用户确认的内容才能成为正式资产。',
+    backPage: 'inbox',
+  });
+  host.innerHTML = `${hero}${processing}${_renderCaptureModeCards()}${_renderCaptureSettings()}${_renderManualConversationPicker()}<section class="recall-capture-task-workbench"><div class="recall-capture-filter-bar">${filters}</div><div class="recall-capture-task-list">${rows}</div>${more}</section>${_renderCognitionCaptureStatus()}`;
   renderSkillsCognitionCandidates();
 }
 
@@ -1220,6 +1372,63 @@ async function updateRecallCaptureSettings(patch) {
   if (!result?.ok) throw new Error(result?.error || 'recall capture settings update failed');
   _skillsCognitionState.captureSettings = result.settings;
   renderSkillsCognitionCaptures();
+}
+
+/**
+ * 认知树按需加载。
+ *
+ * 不并进 `loadSkillsCognitionSnapshot` 的九路读：树只服务一个入口，放进快照
+ * 会让每次进认知资产都多付一次读盘，而绝大多数进入根本不看树。
+ *
+ * `options.rebuild` 走 `recall.tree.rebuild`——树是资产关系的投影，资产变过
+ * 之后需要重投一次，否则用户会看到一棵停在昨天的树。
+ */
+async function loadCognitionTree(options = {}) {
+  _skillsCognitionState.tree = { loading: true };
+  if (_skillsCognitionState.page === 'tree') renderSkillsCognitionTree();
+  try {
+    const channel = options.rebuild ? 'recall.tree.rebuild' : 'recall.tree.read';
+    const result = await window.cogseed.invoke(channel, {});
+    if (!result?.ok) throw new Error(result?.error || 'cognition tree read failed');
+    const tree = result.tree || {};
+    _skillsCognitionState.tree = {
+      nodes: Array.isArray(tree.nodes) ? tree.nodes : [],
+      edges: Array.isArray(tree.edges) ? tree.edges : [],
+      updatedAt: tree.updatedAt || '',
+    };
+  } catch (error) {
+    _skillsCognitionState.tree = { error: (error && error.message) || String(error) };
+  }
+  if (_skillsCognitionState.page === 'tree') renderSkillsCognitionTree();
+}
+
+/**
+ * 「Skill 更新候选」按需加载：版本与回滚点来自 `cognition.skills.summary`，
+ * 影响到的空间来自 `recall.workspaceRefs.list`。
+ *
+ * 两路都可能失败，但失败方式不同：summary 拿不到这一页就没有主体，属于错误；
+ * workspaceRefs 拿不到只是影响面数不出来，降级成 0 比整页报错更有用。
+ */
+async function loadCognitionSkillUpdate(assetId, skillId) {
+  _skillsCognitionState.skillUpdate = { loading: true, assetId, skillId };
+  if (_skillsCognitionState.page === 'skillupdate') renderSkillsCognitionSkillUpdate();
+  try {
+    const summary = await window.cogseed.invoke('cognition.skills.summary', { skillId });
+    if (!summary?.ok) throw new Error(summary?.error || 'skill cognition summary failed');
+    let workspaceRefs = [];
+    if (assetId) {
+      try {
+        const refs = await window.cogseed.invoke('recall.workspaceRefs.list', { assetId });
+        if (refs?.ok) workspaceRefs = Array.isArray(refs.references) ? refs.references : [];
+      } catch (error) {
+        _skillsLog.warn('workspace refs read degraded', { error: (error && error.message) || String(error) });
+      }
+    }
+    _skillsCognitionState.skillUpdate = { ...(summary.summary || {}), assetId, skillId, workspaceRefs };
+  } catch (error) {
+    _skillsCognitionState.skillUpdate = { error: (error && error.message) || String(error), assetId, skillId };
+  }
+  if (_skillsCognitionState.page === 'skillupdate') renderSkillsCognitionSkillUpdate();
 }
 
 /** 每一类待办的用户可读标题。服务端只给 kind，措辞归渲染层。 */
@@ -1260,8 +1469,55 @@ function _cognitionInboxKindHint(kind) {
 }
 
 /**
+ * 每一类待办的主动作措辞。
+ *
+ * 「查看」对需要裁决的事项是错的说法——用户点进去是要做决定，不是去围观。
+ * 措辞按 kind 给，取不到就退回「查看」。
+ */
+function _cognitionInboxKindAction(kind) {
+  const labels = {
+    rule_boundary_missing: ['cognition.inbox_action_set_scope', '确认范围'],
+    rule_scope_changed: ['cognition.inbox_action_review_scope', '确认范围'],
+    classification_conflict: ['cognition.inbox_action_resolve', '裁定分类'],
+    sensitivity_escalated: ['cognition.inbox_action_review_sensitivity', '确认扩权'],
+    sensitivity_unclassified: ['cognition.inbox_action_classify', '分级'],
+    evidence_insufficient: ['cognition.inbox_action_add_evidence', '补证据'],
+    source_unavailable: ['cognition.inbox_action_handle_source', '处理来源'],
+    template_updated: ['cognition.inbox_action_review_change', '确认改动'],
+    skill_creation_suggested: ['cognition.inbox_action_review_suggestion', '查看建议'],
+    skill_upgrade_suggested: ['cognition.inbox_action_review_upgrade', '查看更新'],
+    candidate_pending_review: ['cognition.inbox_action_review_candidate', '查看候选'],
+  };
+  const entry = labels[kind];
+  return entry ? _cognitionText(entry[0], entry[1]) : _cognitionText('common.view', '查看');
+}
+
+/**
+ * 一条待办右侧的决策动作。
+ *
+ * 候选类待办直接给「稍后 / 拒绝」，用的是 `data-recall-candidate-action`——
+ * 与沉淀活动页的候选行同一套 data 属性，所以事件绑定不需要再写一遍。资产类
+ * 待办只给打开入口：暂停、撤销这类资产级动作有影响面，必须在「版本与治理」
+ * 里看过影响再执行，不能在收件箱一键触发。
+ */
+function _renderCognitionInboxRowActions(entry) {
+  const primaryLabel = _cognitionInboxKindAction(entry.kind);
+  const open = entry.assetId
+    ? `<button type="button" class="btn btn-sm btn-primary" data-cognition-open-asset="${escapeHtml(entry.assetId)}">${escapeHtml(primaryLabel)}</button>`
+    : entry.candidateId
+      ? `<button type="button" class="btn btn-sm btn-primary" data-cognition-open-candidate="${escapeHtml(entry.candidateId)}">${escapeHtml(primaryLabel)}</button>`
+      : '';
+  if (!entry.candidateId) return open;
+  const candidateId = escapeHtml(entry.candidateId);
+  return `${open}<button type="button" class="btn btn-sm" data-recall-candidate-action="defer" data-recall-candidate-id="${candidateId}">${escapeHtml(_cognitionText('cognition.status_deferred', '稍后'))}</button><button type="button" class="btn btn-sm" data-recall-candidate-action="reject" data-recall-candidate-id="${candidateId}">${escapeHtml(_cognitionText('cognition.candidate_reject', '拒绝'))}</button>`;
+}
+
+/**
  * 按 kind 分组渲染待办。同一类事情合成一个面板，用户一次处理一类，而不是
  * 面对一条一条互不相干的行。
+ *
+ * 行本身不再是一整块按钮：决策动作摆在行右侧，标题区只负责说清这是什么事。
+ * 整行可点时用户无法在"打开"和"拒绝"之间做区分，只能先进详情页再退回来。
  */
 function _renderCognitionInboxGroups(urgency) {
   const items = (Array.isArray(_skillsCognitionState.inboxItems) ? _skillsCognitionState.inboxItems : [])
@@ -1275,20 +1531,34 @@ function _renderCognitionInboxGroups(urgency) {
   }
   return [...grouped.entries()].map(([kind, bucket]) => {
     const rows = bucket.slice(0, 8).map((entry) => {
-      const target = entry.assetId
-        ? `data-cognition-open-asset="${escapeHtml(entry.assetId)}"`
-        : entry.candidateId
-          ? `data-cognition-open-candidate="${escapeHtml(entry.candidateId)}"`
-          : '';
       const meta = [entry.assetType ? _abilityAssetCategoryLabel(entry.assetType) : '', entry.detail || '']
         .filter(Boolean).join(' · ');
-      return `<button type="button" class="skills-cognition-list-card" ${target}><strong>${escapeHtml(entry.title || entry.id)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</button>`;
+      const actions = _renderCognitionInboxRowActions(entry);
+      return `<div class="cognition-inbox-row"><div class="cognition-inbox-row-main"><strong>${escapeHtml(entry.title || entry.id)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</div>${actions ? `<div class="cognition-inbox-row-actions">${actions}</div>` : ''}</div>`;
     }).join('');
     const more = bucket.length > 8
       ? `<div class="skills-cognition-muted">${escapeHtml(_cognitionText('cognition.inbox_more', '另有 {n} 项未显示').replace('{n}', String(bucket.length - 8)))}</div>`
       : '';
     return `<section class="skills-cognition-card recall-overview-panel cognition-inbox-group is-${escapeHtml(urgency)}"><div class="skills-cognition-card-head"><h2>${escapeHtml(_cognitionInboxKindLabel(kind))}</h2><b>${escapeHtml(String(bucket.length))}</b></div><p class="cognition-inbox-hint">${escapeHtml(_cognitionInboxKindHint(kind))}</p>${rows}${more}</section>`;
   }).join('');
+}
+
+/**
+ * 待办的三条分组带：需要确认 / 可以稍后 / 教学回执。
+ *
+ * 分组本身要自解释——同一个收件箱里，"系统认为必须打扰你"和"顺手告诉你一声"
+ * 是两种承诺，不给组头用户就只能靠卡片颜色猜。徽标说的是这一组的性质，副说明
+ * 说的是这一组的打扰规则。
+ */
+function _renderCognitionInboxBand(band) {
+  if (!band.body) return '';
+  return `<section class="cognition-inbox-band is-${escapeHtml(band.tone)}">
+    <div class="cognition-inbox-band-head">
+      <div><strong>${escapeHtml(_cognitionText(band.titleKey, band.title))}</strong><span class="skills-cognition-status is-${escapeHtml(band.tone)}">${escapeHtml(_cognitionText(band.badgeKey, band.badge))}</span></div>
+      <span>${escapeHtml(_cognitionText(band.hintKey, band.hint))}</span>
+    </div>
+    <div class="recall-overview-activity-grid">${band.body}</div>
+  </section>`;
 }
 
 /**
@@ -1317,8 +1587,10 @@ function _renderCognitionOverviewAttention(options) {
   if (!failedTasks && !sourceIssues && !modelRequired) return '';
   const issues = [
     modelRequired ? `<button type="button" class="recall-overview-attention-row" data-recall-capture-settings><span>${escapeHtml(modelIssue)}</span><b>${escapeHtml(_cognitionText('cognition.capture_configure_action', '配置模型'))}</b></button>` : '',
-    failedTasks ? `<button type="button" class="recall-overview-attention-row" data-cognition-page-link="captures"><span>${escapeHtml(_cognitionText('cognition.overview_failed_tasks', '{count} 个沉淀任务需要重试').replace('{count}', String(failedTasks)))}</span><b>${escapeHtml(_cognitionText('common.view', '查看'))}</b></button>` : '',
-    sourceIssues ? `<button type="button" class="recall-overview-attention-row" data-cognition-page-link="sources"><span>${escapeHtml(_cognitionText('cognition.overview_source_issues', '{count} 个数据来源需要处理').replace('{count}', String(sourceIssues)))}</span><b>${escapeHtml(_cognitionText('common.view', '查看'))}</b></button>` : '',
+    // 这两行都是"去修"，不是"去看"：说「查看」会让用户以为点进去只是读一份
+    // 报告，于是把真正需要动手的事一直搁着。
+    failedTasks ? `<button type="button" class="recall-overview-attention-row" data-cognition-page-link="captures"><span>${escapeHtml(_cognitionText('cognition.overview_failed_tasks', '{count} 个沉淀任务需要重试').replace('{count}', String(failedTasks)))}</span><b>${escapeHtml(_cognitionText('common.handle', '处理'))}</b></button>` : '',
+    sourceIssues ? `<button type="button" class="recall-overview-attention-row" data-cognition-page-link="sources"><span>${escapeHtml(_cognitionText('cognition.overview_source_issues', '{count} 个数据来源需要处理').replace('{count}', String(sourceIssues)))}</span><b>${escapeHtml(_cognitionText('common.handle', '处理'))}</b></button>` : '',
   ].filter(Boolean).join('');
   return `<section class="recall-overview-attention"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.overview_attention', '需要处理'))}</h2><span>${escapeHtml(_cognitionText('cognition.overview_attention_hint', '解决后沉淀链路会自动继续'))}</span></div><div>${issues}</div></section>`;
 }
@@ -1401,7 +1673,9 @@ function _renderTeachingSignalStatus() {
       : '';
     return `<div class="skills-cognition-capture-row"><div><strong>${escapeHtml(signal.summary || signal.id)}</strong><span>${escapeHtml(signal.scope || '')} · ${escapeHtml(_cognitionDate(signal.createdAt))}</span></div><span class="skills-cognition-status is-${escapeHtml(signal.status || '')}">${escapeHtml(status)}</span>${action}</div>`;
   }).join('') : _renderCognitionEmpty(_cognitionText('cognition.teaching_empty', '明确的记住、偏好、避免或纠正会在这里留下可撤销回执'));
-  return `<section class="skills-cognition-flow-band recall-overview-panel recall-overview-teaching"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.teaching_title', '教学信号'))}</h2><span>${escapeHtml(_cognitionText('cognition.teaching_hint', '已记住的内容立即生效，长期资产仍需审核'))}</span></div><div class="skills-cognition-capture-list">${rows}</div></section>`;
+  // 组头归外层的「教学回执」分组带，这里不再自带一个——两层标题会让用户以为
+  // 这是收件箱之外的另一块内容。
+  return `<section class="skills-cognition-card recall-overview-panel recall-overview-teaching"><div class="skills-cognition-capture-list">${rows}</div></section>`;
 }
 
 /**
@@ -1458,7 +1732,7 @@ function renderSkillsCognitionInbox() {
   const hero = _renderCognitionTaskHero({
     eyebrowKey: 'cognition.inbox_eyebrow', eyebrow: 'TO REVIEW',
     titleKey: 'cognition.inbox_title', title: '只把需要你决定的事放在这里',
-    hintKey: 'cognition.inbox_page_hint', hint: '先处理会阻塞沉淀或资产使用的事项，其余内容保持低打扰。',
+    hintKey: 'cognition.inbox_page_hint', hint: '先处理会阻塞沉淀或资产使用的事项，其余候选保持低打扰。',
     metrics: [
       { value: confirmCount, key: 'cognition.inbox_confirm_now', label: '需要确认' },
       { value: laterCount, key: 'cognition.inbox_can_wait', label: '可以稍后' },
@@ -1466,12 +1740,32 @@ function renderSkillsCognitionInbox() {
     ],
   });
   // 需要主动确认的排在前面；普通候选低打扰地跟在后面。分级来自服务端 gate，
-  // 渲染层不自己判断哪件事更急。
-  const confirmPanels = `${_renderCognitionInboxGroups('confirm')}${failedHtml}`;
-  const laterPanels = `${_renderCognitionInboxGroups('low_disturbance')}${teachingSignals.length ? _renderTeachingSignalStatus() : ''}`;
+  // 渲染层不自己判断哪件事更急。教学回执是第三条独立带：它已经按用户的明确
+  // 表达生效了，混在「可以稍后」里会让人以为它还等着自己拍板。
+  const confirmBand = _renderCognitionInboxBand({
+    tone: 'confirm',
+    titleKey: 'cognition.inbox_confirm_now', title: '需要确认',
+    badgeKey: 'cognition.inbox_confirm_badge', badge: '会影响后续使用',
+    hintKey: 'cognition.inbox_confirm_hint', hint: '只在冲突、扩权或高影响变化时打扰你',
+    body: `${_renderCognitionInboxGroups('confirm')}${failedHtml}`,
+  });
+  const laterBand = _renderCognitionInboxBand({
+    tone: 'later',
+    titleKey: 'cognition.inbox_can_wait', title: '可以稍后',
+    badgeKey: 'cognition.inbox_later_badge', badge: '不阻塞工作',
+    hintKey: 'cognition.inbox_later_hint', hint: '普通候选不会弹窗',
+    body: _renderCognitionInboxGroups('low_disturbance'),
+  });
+  const teachingBand = _renderCognitionInboxBand({
+    tone: 'teaching',
+    titleKey: 'cognition.inbox_teaching_receipts', title: '教学回执',
+    badgeKey: 'cognition.inbox_teaching_badge', badge: '已按你的明确表达处理',
+    hintKey: 'cognition.inbox_teaching_hint', hint: '可撤销，不需要重复确认',
+    body: teachingSignals.length ? _renderTeachingSignalStatus() : '',
+  });
   const attention = _renderCognitionOverviewAttention();
   const notices = `${loadFailureHtml}${warningHtml}`;
-  const emptyHtml = (!attention && !confirmPanels && !laterPanels)
+  const emptyHtml = (!attention && !confirmBand && !laterBand && !teachingBand)
     ? `<div class="skills-cognition-empty cognition-inbox-empty"><strong>${escapeHtml(_cognitionText('cognition.inbox_empty', '当前无需处理'))}</strong><span>${escapeHtml(_cognitionText('cognition.inbox_empty_hint', '需要你决定的事项会出现在这里；系统自动整理的进度在「沉淀活动」里查看。'))}</span></div>`
     : '';
   host.innerHTML = `
@@ -1479,8 +1773,9 @@ function renderSkillsCognitionInbox() {
       ${hero}
       ${notices ? `<div class="recall-overview-notices">${notices}</div>` : ''}
       ${attention}
-      ${confirmPanels ? `<div class="recall-overview-activity-grid cognition-inbox-confirm">${confirmPanels}</div>` : ''}
-      ${laterPanels ? `<div class="recall-overview-activity-grid cognition-inbox-later">${laterPanels}</div>` : ''}
+      ${confirmBand}
+      ${laterBand}
+      ${teachingBand}
       ${emptyHtml}
     </div>`;
 }
@@ -1627,27 +1922,69 @@ async function renderSkillsCognitionProofs() {
   const titleById = new Map(assets.map((asset) => [asset.id, _abilityAssetDisplayTitle(asset)]));
 
   // 只保留"用过/证明过"的事实；治理事件属于「版本与治理」，不在这一页。
+  const proofItems = items.filter((item) => _COGNITION_PROOF_KINDS.has(item.kind)
+    && item.refs && item.refs.assetId);
+  // 筛选是这一页的分层表达：「被引用」「传递已证明」「效果已验证」「Evidence
+  // 不足」不是四种标签，而是四层不同强度的结论。用户来这一页往往只想回答其中
+  // 一层——"到底哪几条真的验证过"——把四层混在一条时间线里他就得自己数。
+  //
+  // 分层直接由既有的 kind + status 推出，不新增字段：Evidence 不足这一层横跨
+  // 两种事件（带入降级、效果无法归因），所以它按 status 判定而不是按 kind。
+  const proofFilters = [
+    ['all', 'cognition.proofs_filter_all', '全部', () => true],
+    ['used', 'cognition.proofs_filter_used', '已引用',
+      (item) => item.kind === 'usage_recorded' || item.kind === 'projection_confirmed'],
+    ['transferred', 'cognition.proofs_filter_transferred', '传递已证明',
+      (item) => item.kind === 'transfer_completed' && item.status === 'succeeded'],
+    ['effective', 'cognition.proofs_filter_effective', '效果已验证',
+      (item) => item.kind === 'effectiveness_recorded' && item.status === 'better'],
+    ['insufficient', 'cognition.proofs_filter_insufficient', 'Evidence 不足',
+      (item) => item.status === 'degraded' || item.status === 'insufficient_evidence'],
+  ];
+  const activeFilter = proofFilters.some(([id]) => id === _skillsCognitionState.proofFilter)
+    ? _skillsCognitionState.proofFilter : 'all';
+  const matches = proofFilters.find(([id]) => id === activeFilter)[3];
   const byAsset = new Map();
-  for (const item of items) {
-    if (!_COGNITION_PROOF_KINDS.has(item.kind)) continue;
-    const assetId = item.refs && item.refs.assetId;
-    if (!assetId) continue;
+  for (const item of proofItems) {
+    if (!matches(item)) continue;
+    const assetId = item.refs.assetId;
     if (!byAsset.has(assetId)) byAsset.set(assetId, []);
     byAsset.get(assetId).push(item);
   }
   const proofEvents = [...byAsset.values()].flat();
+  // 计数用未筛选的全量：指标卡说的是"这一页总共有多少事实"，跟着筛选一起变
+  // 会让用户以为记录被删了。
+  const allProofEvents = proofItems;
+  const allAssetIds = new Set(proofItems.map((item) => item.refs.assetId));
+  const filterBar = `<div class="recall-capture-filter-bar cognition-proof-filters">${proofFilters
+    .map(([id, key, fallback, test]) => {
+      const count = id === 'all' ? proofItems.length : proofItems.filter(test).length;
+      return `<button type="button" class="recall-capture-filter${activeFilter === id ? ' is-active' : ''}" data-cognition-proof-filter="${id}" aria-pressed="${activeFilter === id ? 'true' : 'false'}"><span>${escapeHtml(_cognitionText(key, fallback))}</span><b>${escapeHtml(String(count))}</b></button>`;
+    }).join('')}</div>`;
+  // 两张说明卡回答"这两种证明各自能说明什么"。它们不是装饰：用户最容易犯的
+  // 错就是把「被正确带入」读成「有效」，这一页的全部意义就是把这两件事分开。
+  const proofNotes = `<div class="cognition-proof-notes">
+    <section class="skills-cognition-card"><h3>${escapeHtml(_cognitionText('cognition.proofs_note_transfer', '传递证明回答什么'))}</h3><p class="panel-sub">${escapeHtml(_cognitionText('cognition.proofs_note_transfer_body', '目标会话是否正确收到、理解并开始使用指定资产。它不说明结果好坏。'))}</p></section>
+    <section class="skills-cognition-card"><h3>${escapeHtml(_cognitionText('cognition.proofs_note_effect', '效果证明回答什么'))}</h3><p class="panel-sub">${escapeHtml(_cognitionText('cognition.proofs_note_effect_body', '在可归因的条件下，资产是否改善了任务结果；没有评价时保持“尚未验证”。'))}</p></section>
+  </div>`;
   const hero = _renderCognitionTaskHero({
     eyebrowKey: 'cognition.proofs_eyebrow', eyebrow: 'USE & EVIDENCE',
     titleKey: 'cognition.proofs_title', title: '先看在哪里用，再看是否真的有效',
     hintKey: 'cognition.proofs_page_hint', hint: '使用、迁移与效果分层展示；没有效果证明时，不会把“被使用”说成“已验证”。',
     metrics: [
-      { value: byAsset.size, key: 'cognition.proofs_assets_covered', label: '涉及资产' },
-      { value: proofEvents.length, key: 'cognition.proofs_event_count', label: '使用与证明记录' },
-      { value: proofEvents.filter((item) => item.kind === 'effectiveness_recorded').length, key: 'cognition.proofs_effect_count', label: '效果评价' },
+      { value: allAssetIds.size, key: 'cognition.proofs_assets_covered', label: '涉及资产' },
+      { value: allProofEvents.length, key: 'cognition.proofs_event_count', label: '使用与证明记录' },
+      { value: allProofEvents.filter((item) => item.kind === 'effectiveness_recorded').length, key: 'cognition.proofs_effect_count', label: '效果评价' },
     ],
   });
-  if (!byAsset.size) {
+  if (!allProofEvents.length) {
     host.innerHTML = `${hero}<div class="skills-cognition-empty cognition-task-empty">${escapeHtml(_cognitionText('cognition.proofs_empty', '还没有资产被真正带入过任务。资产被使用后，这里会显示它在哪里用过、结果如何。'))}</div>`;
+    return;
+  }
+  // 全量非空但当前筛选为空是另一回事：说「还没有资产被带入过」会让用户以为
+  // 记录不见了，实际只是这一层证明还没有。
+  if (!byAsset.size) {
+    host.innerHTML = `${hero}${filterBar}<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.proofs_filter_empty', '这一层还没有记录'))}</strong><span>${escapeHtml(_cognitionText('cognition.proofs_filter_empty_hint', '换一个筛选，或回到「全部」查看这条资产的完整使用链。'))}</span></div>${proofNotes}`;
     return;
   }
 
@@ -1691,7 +2028,7 @@ async function renderSkillsCognitionProofs() {
       <div class="recall-proof-timeline">${rows}</div>
     </section>`;
   }).join('');
-  host.innerHTML = `${hero}<div class="recall-proof-list">${sections}</div>`;
+  host.innerHTML = `${hero}${filterBar}<div class="recall-proof-list">${sections}</div>${proofNotes}`;
 }
 
 function renderSkillsCognitionCandidates() {
@@ -1722,6 +2059,298 @@ function renderSkillsCognitionCandidates() {
     const editForm = editing ? `<div class="skills-cognition-detail-block recall-candidate-editor"><label>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}<textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label><label>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}<input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label><label>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}<input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}"></label><label>${escapeHtml(_cognitionText('cognition.type', '类型'))}<select data-recall-edit-type>${['personal','rule','template','skill_method'].map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('')}</select></label><label>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}<textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label><div class="skills-cognition-actions"><button class="btn btn-sm btn-primary" data-recall-candidate-action="save-and-promote" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_modify_and_save', '修改后保存'))}</button><button class="btn btn-sm" data-recall-candidate-action="cancel-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.cancel', '取消'))}</button></div></div>` : '';
     return `<article class="skills-cognition-record cognition-candidate-row recall-collapsible" data-recall-candidate-id="${escapeHtml(candidate.id)}"><details class="recall-collapsible-body"><summary class="skills-cognition-record-head recall-collapsible-summary"><span class="recall-collapsible-title"><h2>${escapeHtml(_abilityCandidateDisplayTitle(candidate))}</h2><span class="skills-cognition-meta">${escapeHtml(_abilityAssetCategoryLabel(candidate.suggestedType))} · ${escapeHtml(_abilityAssetScopeLabel(candidate.suggestedScope))}</span></span><span class="skills-cognition-status is-${escapeHtml(candidate.status || '')}">${escapeHtml(_cognitionStatusLabel(candidate.status))}</span></summary><p>${escapeHtml(candidate.judgment || '')}</p>${candidate.value ? `<p class="skills-cognition-meta">${escapeHtml(candidate.value)}</p>` : ''}<div class="skills-cognition-meta">${escapeHtml(_abilityAssetCategoryLabel(candidate.suggestedType))} · ${escapeHtml(_abilityAssetScopeLabel(candidate.suggestedScope))}</div>${candidate.failureMessage ? `<div class="skills-cognition-error">${escapeHtml(candidate.failureMessage)}</div>` : ''}<div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(candidate.evidenceRefs || candidate.sourceRefs)}</div></div>${editForm}<div class="skills-cognition-actions">${actions.map((action) => `<button class="btn btn-sm ${action === primaryAction ? 'btn-primary' : ''}" data-recall-candidate-action="${escapeHtml(action)}" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(action === 'promote' ? _cognitionText('cognition.capture_save_to_recall', '保存到 Recall') : action === 'keep-current' ? _cognitionText('cognition.candidate_keep_current', '保持当前版本') : action === 'reject' ? _cognitionText('cognition.candidate_reject', '拒绝') : action === 'ignore' ? _cognitionText('cognition.capture_ignore', '忽略') : action === 'defer' ? _cognitionText('cognition.status_deferred', '稍后') : _cognitionText('skills.edit', '编辑'))}</button>`).join('')}</div></details></article>`;
   }).join('')}</div></section>`;
+}
+
+/**
+ * 「候选详情」：一条候选的整页决定面。
+ *
+ * 为什么值得单独一页而不是继续用折叠行：作用范围冲突这类事项要用户同时看清
+ * 三件事——内容是什么、它该在什么范围生效、为什么轮到我决定。折叠行里第三件
+ * 事没有位置，用户只能凭标题猜，于是要么全盘接受要么全盘拒绝。
+ *
+ * 表单字段沿用编辑态的 `data-recall-edit-*` 与 `data-recall-candidate-action`，
+ * 所以「确认并限域」直接走既有的 save-and-promote（先落范围与类型，再晋升），
+ * 事件绑定一行都不用加。
+ */
+function renderSkillsCognitionCandidateDetail() {
+  const host = document.getElementById('skills-cognition-candidate-body');
+  if (!host) return;
+  const candidates = Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [];
+  const candidate = candidates.find((item) => item.id === _skillsCognitionState.selectedCandidateId);
+  const hero = _renderCognitionTaskHero({
+    eyebrowKey: 'cognition.candidate_eyebrow', eyebrow: 'CANDIDATE',
+    titleKey: 'cognition.candidate_detail_title', title: '确认内容，也确认它该在什么范围生效',
+    hintKey: 'cognition.candidate_detail_hint', hint: '确认后会创建正式资产的第一个版本，并保留来源与撤销入口。',
+    backPage: 'inbox',
+  });
+  if (!candidate) {
+    host.innerHTML = `${hero}<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.candidate_detail_missing', '这条候选已不在待处理列表中'))}</strong><span>${escapeHtml(_cognitionText('cognition.candidate_detail_missing_hint', '它可能已经被确认、拒绝或过期。回到「待我处理」查看当前待办。'))}</span></div>`;
+    return;
+  }
+  const typeOptions = ['personal', 'rule', 'template', 'skill_method']
+    .map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('');
+  // 「为什么需要你确认」只列这条候选真实具备的理由，不铺满四条通用说辞——
+  // 每条都对得上一个字段，用户才可能相信这不是模板话术。
+  const reasons = [
+    candidate.risk === 'high'
+      ? _cognitionText('cognition.candidate_reason_high_risk', '这条被判为高风险变更，确认前不会自动生效。')
+      : '',
+    !String(candidate.suggestedScope || '').trim()
+      ? _cognitionText('cognition.candidate_reason_no_scope', '它还没有作用范围；没有范围的规则不会被带入任何任务。')
+      : '',
+    Array.isArray(candidate.applicableWhen) && candidate.applicableWhen.length
+      ? _cognitionText('cognition.candidate_reason_applicable', '它提出了适用条件，确认后会按这些条件匹配任务。')
+      : '',
+    Array.isArray(candidate.forbiddenWhen) && candidate.forbiddenWhen.length
+      ? _cognitionText('cognition.candidate_reason_forbidden', '它提出了禁止条件，确认后这些场景会被排除。')
+      : '',
+    candidate.targetAssetId
+      ? _cognitionText('cognition.candidate_reason_target', '它会改动一条已有资产，而不是新建。')
+      : _cognitionText('cognition.candidate_reason_new_asset', '确认后会创建 v1，并保留来源与撤销入口。'),
+  ].filter(Boolean);
+  const evidenceRefs = Array.isArray(candidate.evidenceRefs) && candidate.evidenceRefs.length
+    ? candidate.evidenceRefs : (candidate.sourceRefs || []);
+  const uncertainty = String(candidate.uncertainty || '').trim();
+  host.innerHTML = `${hero}<div class="cognition-candidate-layout" data-recall-candidate-id="${escapeHtml(candidate.id)}">
+    <article class="skills-cognition-card cognition-candidate-main">
+      <div class="meta-line skills-cognition-meta">
+        <span class="skills-cognition-status is-${escapeHtml(candidate.status || '')}">${escapeHtml(_cognitionStatusLabel(candidate.status))}</span>
+        <span>${escapeHtml(_abilityAssetCategoryLabel(candidate.suggestedType))}</span>
+        ${candidate.risk ? `<span>${escapeHtml(_cognitionText(`cognition.candidate_risk_${candidate.risk}`, `风险：${candidate.risk}`))}</span>` : ''}
+      </div>
+      <h2>${escapeHtml(_abilityCandidateDisplayTitle(candidate))}</h2>
+      <blockquote class="cognition-candidate-quote">${escapeHtml(candidate.judgment || '')}</blockquote>
+      ${candidate.value ? `<p class="skills-cognition-meta">${escapeHtml(candidate.value)}</p>` : ''}
+      <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.type', '类型'))}</span><select data-recall-edit-type>${typeOptions}</select></label>
+      <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.candidate_scope_label', '作用范围'))}</span><input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}" placeholder="${escapeHtml(_cognitionText('cognition.candidate_scope_placeholder', '例如：仅产品工作空间'))}"></label>
+      <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}</span><input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label>
+      <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}</span><textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label>
+      <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</span><textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label>
+      <div class="skills-cognition-actions cognition-candidate-actions">
+        <button type="button" class="btn btn-sm btn-primary" data-recall-candidate-action="save-and-promote" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_confirm_scoped', '确认并限域'))}</button>
+        <button type="button" class="btn btn-sm" data-recall-candidate-action="defer" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.status_deferred', '稍后'))}</button>
+        <button type="button" class="btn btn-sm btn-danger" data-recall-candidate-action="reject" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_reject', '拒绝'))}</button>
+      </div>
+    </article>
+    <aside class="skills-cognition-card cognition-candidate-side">
+      <h3>${escapeHtml(_cognitionText('cognition.candidate_why_confirm', '为什么需要你确认'))}</h3>
+      <ul>${reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>
+      <h3>${escapeHtml(_cognitionText('cognition.candidate_evidence_basis', '来源依据'))}</h3>
+      ${evidenceRefs.length
+    ? `<div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(evidenceRefs)}</div>`
+    : `<p class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.candidate_no_evidence', '没有可追溯的证据引用；确认前建议先补证。'))}</p>`}
+      ${uncertainty ? `<h3>${escapeHtml(_cognitionText('cognition.candidate_uncertainty', '尚不确定的部分'))}</h3><p class="skills-cognition-meta">${escapeHtml(uncertainty)}</p>` : ''}
+    </aside>
+  </div>`;
+}
+
+/**
+ * 「认知树」：正式资产的成长投影，数据来自 `recall.tree.read`。
+ *
+ * 树只呈现资产节点——任务接续快照、Session、运行记录属于支撑对象，不长叶片。
+ * 这条契约在 tree-service 就成立（节点类型只有 asset），渲染层不再另作判断，
+ * 也不按会话量或 Token 数造出"成长"。
+ *
+ * 叶片深浅直接映射 `maturity`，不自己发明分级：
+ *   seed / bud                → 已确认，效果尚未验证（浅）
+ *   transfer_validated        → 已证明能被正确带走（浅，但已迈出一步）
+ *   effectiveness_validated   → 真实复用并形成有效 Evidence（深）
+ */
+function renderSkillsCognitionTree() {
+  const host = document.getElementById('skills-cognition-tree-body');
+  if (!host) return;
+  const hero = _renderCognitionTaskHero({
+    eyebrowKey: 'cognition.tree_eyebrow', eyebrow: 'COGNITION TREE',
+    titleKey: 'cognition.tree_title', title: '一棵树，显示属于你的认知如何成长',
+    hintKey: 'cognition.tree_page_hint', hint: '树只呈现正式资产的真实状态，不按会话量或 Token 数虚假生长。',
+    backPage: 'assets', backKey: 'cognition.back_to_assets', back: '返回我的资产',
+  });
+  const tree = _skillsCognitionState.tree;
+  if (tree?.error) {
+    host.innerHTML = `${hero}<div class="skills-cognition-warning"><span>${escapeHtml(tree.error)}</span><button class="btn btn-sm" data-cognition-tree-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`;
+    return;
+  }
+  if (!tree || tree.loading) {
+    host.innerHTML = `${hero}<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`;
+    return;
+  }
+  const nodes = Array.isArray(tree.nodes) ? tree.nodes : [];
+  const edges = Array.isArray(tree.edges) ? tree.edges : [];
+  // 候选是"芽"：它们还不是资产，所以不在树的节点里，但图例要说清它们的位置，
+  // 否则用户会以为待确认的东西凭空消失了。
+  const budCount = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
+    .filter((candidate) => candidate.status === 'pending_review').length;
+  if (!nodes.length) {
+    host.innerHTML = `${hero}<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span></div>`;
+    return;
+  }
+  const deep = nodes.filter((node) => node.maturity === 'effectiveness_validated');
+  const light = nodes.filter((node) => node.maturity !== 'effectiveness_validated');
+  const relationLabel = (kind) => _cognitionText(`cognition.tree_relation_${kind}`, ({
+    refines: '细化自', depends_on: '依赖', replaces: '取代', conflicts_with: '与之冲突', related_to: '相关',
+  })[kind] || kind);
+  const labelById = new Map(nodes.map((node) => [node.id, node.label]));
+  const branches = ['personal', 'rule', 'template', 'skill_method'].map((assetType) => {
+    const branchNodes = nodes.filter((node) => node.assetType === assetType);
+    if (!branchNodes.length) return '';
+    const leaves = branchNodes.map((node) => {
+      const isDeep = node.maturity === 'effectiveness_validated';
+      const assetId = String(node.id || '').replace(/^asset:/, '');
+      return `<button type="button" class="cognition-tree-leaf${isDeep ? ' is-deep' : ' is-light'}" data-cognition-open-asset="${escapeHtml(assetId)}" title="${escapeHtml(_abilityAssetMaturityLabel(node.maturity, node.status))}">
+        <span class="cognition-tree-dot" aria-hidden="true"></span>
+        <span class="cognition-tree-leaf-body"><strong>${escapeHtml(node.label || assetId)}</strong><small>${escapeHtml([_abilityAssetMaturityLabel(node.maturity, node.status), node.version ? `v${node.version}` : ''].filter(Boolean).join(' · '))}</small></span>
+      </button>`;
+    }).join('');
+    return `<section class="skills-cognition-card cognition-tree-branch">
+      <div class="cognition-tree-branch-head"><strong>${escapeHtml(_abilityAssetCategoryLabel(assetType))}</strong><b>${escapeHtml(String(branchNodes.length))}</b></div>
+      <div class="cognition-tree-leaves">${leaves}</div>
+    </section>`;
+  }).join('');
+  // 关系只在有边时才出现。空的关系区会让用户以为系统还没算完。
+  const relations = edges.length
+    ? `<section class="skills-cognition-card cognition-tree-relations">
+        <div class="cognition-tree-branch-head"><strong>${escapeHtml(_cognitionText('cognition.tree_relations', '资产之间的关系'))}</strong><b>${escapeHtml(String(edges.length))}</b></div>
+        ${edges.slice(0, 30).map((edge) => `<div class="cognition-tree-relation"><span>${escapeHtml(labelById.get(edge.from) || edge.from)}</span><i aria-hidden="true">→</i><em>${escapeHtml(relationLabel(edge.kind))}</em><i aria-hidden="true">→</i><span>${escapeHtml(labelById.get(edge.to) || edge.to)}</span></div>`).join('')}
+      </section>`
+    : '';
+  const legend = `<aside class="skills-cognition-card cognition-tree-legend">
+    <div><strong>${escapeHtml(_cognitionText('cognition.tree_growth', '当前成长'))}</strong><p class="panel-sub">${escapeHtml(_cognitionText('cognition.tree_growth_hint', '{deep} 片叶已完成效果验证，{light} 片仍在等待真实复用。')
+    .replace('{deep}', String(deep.length)).replace('{light}', String(light.length)))}</p></div>
+    <div class="cognition-tree-legend-row"><span class="cognition-tree-dot is-bud" aria-hidden="true"></span><div><strong>${escapeHtml(_cognitionText('cognition.tree_legend_bud', '待确认芽点'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_legend_bud_hint', '候选尚未成为正式资产，因此不在树上。').concat(budCount ? ` (${budCount})` : ''))}</span></div></div>
+    <div class="cognition-tree-legend-row"><span class="cognition-tree-dot is-light" aria-hidden="true"></span><div><strong>${escapeHtml(_cognitionText('cognition.tree_legend_light', '浅色叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_legend_light_hint', '你已确认，但使用效果尚未验证。'))}</span></div></div>
+    <div class="cognition-tree-legend-row"><span class="cognition-tree-dot is-deep" aria-hidden="true"></span><div><strong>${escapeHtml(_cognitionText('cognition.tree_legend_deep', '深色叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_legend_deep_hint', '已在真实任务中复用并形成有效 Evidence。'))}</span></div></div>
+    <div class="cognition-tree-legend-row"><span class="cognition-tree-dot is-none" aria-hidden="true"></span><div><strong>${escapeHtml(_cognitionText('cognition.tree_legend_nonasset', '任务状态不长叶'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_legend_nonasset_hint', '接续快照、Session 与运行记录属于支撑对象。'))}</span></div></div>
+    <button type="button" class="btn btn-sm" data-cognition-page-link="nonasset">${escapeHtml(_cognitionText('cognition.tree_open_nonasset', '查看非资产分流'))}</button>
+  </aside>`;
+  host.innerHTML = `${hero}<div class="cognition-tree-layout"><div class="cognition-tree-canvas">${branches}${relations}</div>${legend}</div>`;
+}
+
+/**
+ * 「非资产分流」：任务状态被带走，但不会被误当成长期能力。
+ *
+ * 分流链路是产品契约，说明可以直接给；但快照本体（goal / stage / nextStep /
+ * refs / 有效期）目前**没有面向渲染层的读通道**——`features/task_continuation.ts`
+ * 有完整模型和 `readContinuationSnapshot`，却没有对应 IPC。
+ *
+ * TODO(P5): 增加 `recall.continuation.list/read` 通道后，把下面的空态换成真实
+ * 快照卡。在此之前这里显示"通道尚未接入"，不用示例数据冒充——一份看起来像
+ * 真的假快照会让用户以为接续已经生效。
+ */
+function renderSkillsCognitionNonAsset() {
+  const host = document.getElementById('skills-cognition-nonasset-body');
+  if (!host) return;
+  const hero = _renderCognitionTaskHero({
+    eyebrowKey: 'cognition.nonasset_eyebrow', eyebrow: 'NON-ASSET ROUTING',
+    titleKey: 'cognition.nonasset_title', title: '任务状态被带走，但不会被误当成长期能力',
+    hintKey: 'cognition.nonasset_hint', hint: '当前进度、待办、临时约束和最新产物进入任务接续快照，不进入四类资产和认知树。',
+    backPage: 'tree', backKey: 'cognition.back_to_tree', back: '返回认知树',
+  });
+  const steps = [
+    ['cognition.nonasset_step_source', '来源', 'cognition.nonasset_step_source_desc', '会话、文件与执行记录'],
+    ['cognition.nonasset_step_detect', '识别', 'cognition.nonasset_step_detect_desc', '发现内容属于当前任务状态'],
+    ['cognition.nonasset_step_route', '分流', 'cognition.nonasset_step_route_desc', '生成任务接续快照'],
+    ['cognition.nonasset_step_ref', '空间引用', 'cognition.nonasset_step_ref_desc', '保存目标、阶段与下一步'],
+    ['cognition.nonasset_step_resume', '新会话接续', 'cognition.nonasset_step_resume_desc', '按最小上下文投影使用'],
+  ].map(([key, title, descKey, desc], index) => `<div class="cognition-nonasset-step"><strong>${escapeHtml(_cognitionText(key, title))}</strong><span>${escapeHtml(_cognitionText(descKey, desc))}</span></div>${index < 4 ? '<i class="cognition-pipeline-arrow" aria-hidden="true">→</i>' : ''}`).join('');
+  const outcomes = [
+    ['cognition.nonasset_outcome_count', '不增加四类资产数量。'],
+    ['cognition.nonasset_outcome_leaf', '不生成认知树叶片。'],
+    ['cognition.nonasset_outcome_scope', '只在目标空间和已授权会话中使用。'],
+    ['cognition.nonasset_outcome_expiry', '到期后可更新或失效。'],
+  ].map(([key, text]) => `<li>${escapeHtml(_cognitionText(key, text))}</li>`).join('');
+  host.innerHTML = `${hero}
+    <section class="skills-cognition-flow-band cognition-nonasset-route"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.nonasset_route', '分流链路'))}</h2><span>${escapeHtml(_cognitionText('cognition.nonasset_route_hint', '这条链路不经过四类资产，也不写认知树'))}</span></div><div class="cognition-nonasset-steps">${steps}</div></section>
+    <div class="cognition-nonasset-layout">
+      <article class="skills-cognition-card">
+        <div class="cognition-tree-branch-head"><strong>${escapeHtml(_cognitionText('cognition.nonasset_snapshots', '任务接续快照'))}</strong></div>
+        <div class="skills-cognition-empty"><strong>${escapeHtml(_cognitionText('cognition.nonasset_pending_channel', '快照读取通道尚未接入'))}</strong><span>${escapeHtml(_cognitionText('cognition.nonasset_pending_channel_hint', '接续快照已经在后台生成并被新会话使用；这一页要显示它的目标、阶段与关联引用，还需要一个面向界面的读取通道。'))}</span></div>
+      </article>
+      <aside class="skills-cognition-card cognition-candidate-side">
+        <h3>${escapeHtml(_cognitionText('cognition.nonasset_outcomes', '分流结果'))}</h3>
+        <ul>${outcomes}</ul>
+      </aside>
+    </div>`;
+}
+
+/**
+ * 「Skill 更新候选」：系统主动提出更新，用户只决定是否接受。
+ *
+ * 能给真事实的部分照给：当前版本、回滚点、影响到的空间数、待决候选数，全部
+ * 来自 `cognition.skills.summary` 与 `recall.workspaceRefs.list`。
+ *
+ * TODO(P5): 两处还缺后端契约，因此显示"待接入"而不是编内容——
+ *   1. 候选的 diff 正文：`CognitionCandidateView` 只有 `diffAvailable` 布尔，
+ *      没有读 diff 内容的口子；
+ *   2. 「接受限域更新」：`cognition.candidates.decide` 硬校验
+ *      `source === 'personal_ontology'`，skill_evolution 候选没有决策通道。
+ * 按钮保留但禁用并说明原因——把入口藏掉会让人以为这个能力不存在。
+ */
+function renderSkillsCognitionSkillUpdate() {
+  const host = document.getElementById('skills-cognition-skillupdate-body');
+  if (!host) return;
+  const hero = _renderCognitionTaskHero({
+    eyebrowKey: 'cognition.skillupdate_eyebrow', eyebrow: 'SKILL UPDATE',
+    titleKey: 'cognition.skillupdate_title', title: '系统提出更新，你只决定是否接受',
+    hintKey: 'cognition.skillupdate_hint', hint: '显示版本、依据、影响与回滚点；不会因为一次异常静默改写 Skill。',
+    backPage: 'governance', backKey: 'cognition.back_to_governance', back: '返回版本与治理',
+  });
+  const summary = _skillsCognitionState.skillUpdate;
+  if (summary?.error) {
+    host.innerHTML = `${hero}<div class="skills-cognition-warning"><span>${escapeHtml(summary.error)}</span></div>`;
+    return;
+  }
+  if (!summary || summary.loading) {
+    host.innerHTML = `${hero}<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`;
+    return;
+  }
+  const asset = (Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [])
+    .find((item) => item.id === summary.assetId);
+  const versions = Array.isArray(summary.versions) ? summary.versions : [];
+  const rollbackPoints = versions.filter((version) => version.canRollback).map((version) => `v${version.version}`);
+  const workspaceRefs = Array.isArray(summary.workspaceRefs) ? summary.workspaceRefs : [];
+  const facts = [
+    ['cognition.skillupdate_current', '当前版本', summary.version ? `v${summary.version}` : '—'],
+    ['cognition.skillupdate_pending', '待决候选', String(summary.pendingCandidateCount ?? 0)],
+    ['cognition.skillupdate_spaces', '影响空间', String(workspaceRefs.length)],
+  ].map(([key, fallback, value]) => `<div><dt>${escapeHtml(_cognitionText(key, fallback))}</dt><dd>${escapeHtml(value)}</dd></div>`).join('');
+  // 回滚点不只是一行说明：`cognition.skills.rollback` 是真实通道，所以每个可
+  // 回滚的版本直接给按钮。列出退路却不能走，等于告诉用户"你有退路"然后让他
+  // 自己去别处找门。
+  const rollbackHtml = versions.filter((version) => version.canRollback).length
+    ? versions.filter((version) => version.canRollback).map((version) => `<button type="button" class="btn btn-sm" data-cognition-skill-rollback="${escapeHtml(summary.skillId || '')}" data-cognition-skill-version="${escapeHtml(String(version.version || ''))}">${escapeHtml(_cognitionText('cognition.skillupdate_rollback_to', '回滚到 v{v}').replace('{v}', String(version.version || '')))}</button>`).join('')
+    : `<span class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.skillupdate_impact_no_rollback', '当前没有可回滚的历史版本。'))}</span>`;
+  const pendingNote = _cognitionText('cognition.skillupdate_diff_pending', '这次更新改了哪几条，还取不到：候选目前只告诉界面“有没有 diff”，没有 diff 正文的读取通道。');
+  const acceptNote = _cognitionText('cognition.skillupdate_accept_pending', 'Skill 类候选还没有接受通道，暂时只能在技能库里查看与回滚。');
+  host.innerHTML = `${hero}<div class="cognition-candidate-layout">
+    <article class="skills-cognition-card cognition-candidate-main">
+      <div class="cognition-tree-branch-head"><strong>${escapeHtml(asset ? _abilityAssetDisplayTitle(asset) : (summary.skillId || ''))}</strong><span class="skills-cognition-status is-pending">${escapeHtml(_cognitionText('cognition.skillupdate_awaiting', '待决定'))}</span></div>
+      <dl class="cognition-governance-facts">${facts}</dl>
+      <div class="skills-cognition-detail-block">
+        <strong>${escapeHtml(_cognitionText('cognition.skillupdate_changes', '本次改动'))}</strong>
+        <div class="skills-cognition-empty">${escapeHtml(pendingNote)}</div>
+      </div>
+      <div class="skills-cognition-detail-block">
+        <strong>${escapeHtml(_cognitionText('cognition.skillupdate_rollback', '回滚点'))}</strong>
+        <div class="skills-cognition-actions">${rollbackHtml}</div>
+      </div>
+      <div class="skills-cognition-actions">
+        <button type="button" class="btn btn-sm btn-primary" disabled title="${escapeHtml(acceptNote)}">${escapeHtml(_cognitionText('cognition.skillupdate_accept', '接受限域更新'))}</button>
+        <button type="button" class="btn btn-sm" data-cognition-page-link="governance">${escapeHtml(_cognitionText('cognition.candidate_keep_current', '保持当前版本'))}</button>
+      </div>
+      <p class="skills-cognition-meta">${escapeHtml(acceptNote)}</p>
+    </article>
+    <aside class="skills-cognition-card cognition-candidate-side">
+      <h3>${escapeHtml(_cognitionText('cognition.skillupdate_impact', '影响预览'))}</h3>
+      <ul>
+        <li>${escapeHtml(_cognitionText('cognition.skillupdate_impact_spaces', '影响 {n} 个引用空间。').replace('{n}', String(workspaceRefs.length)))}</li>
+        <li>${escapeHtml(_cognitionText('cognition.skillupdate_impact_next', '接受后，下次匹配任务默认使用新版本。'))}</li>
+        <li>${escapeHtml(rollbackPoints.length
+    ? _cognitionText('cognition.skillupdate_impact_rollback', '旧版本 {v} 保留为回滚点。').replace('{v}', rollbackPoints.join('、'))
+    : _cognitionText('cognition.skillupdate_impact_no_rollback', '当前没有可回滚的历史版本。'))}</li>
+        <li>${escapeHtml(_cognitionText('cognition.skillupdate_impact_history', '不会修改历史结果。'))}</li>
+      </ul>
+    </aside>
+  </div>`;
 }
 
 /**
@@ -2001,8 +2630,11 @@ function renderSkillsCognitionAssets() {
     <button type="button" class="ability-asset-summary-card${active}" data-ability-asset-category="${escapeHtml(category)}"><span>${escapeHtml(_cognitionText(key, fallback))}</span><strong>${escapeHtml(String(_abilityAssetSummary(items, category)))}</strong><small>${escapeHtml(_cognitionText(descKey, descFallback))}</small></button>
   `;
   }).join('');
+  // 认知树入口挂在四类卡片旁边：树回答的是"这些资产长成什么样了"，它是
+  // 「我拥有什么」的另一种看法，不是第五个任务。
+  const treeEntry = `<div class="ability-asset-tree-entry"><div><strong>${escapeHtml(_cognitionText('cognition.tree_entry_title', '一棵树展示所有已确认资产的成长状态'))}</strong><p class="panel-sub">${escapeHtml(_cognitionText('cognition.tree_entry_hint', '候选是芽，已确认是浅叶，真实验证后成为深叶；任务接续快照不会长成叶片。'))}</p></div><button type="button" class="btn btn-sm" data-cognition-page-link="tree">${escapeHtml(_cognitionText('cognition.tree_open', '打开认知树'))}</button></div>`;
   const summaryMarkup = `<div class="ability-asset-summary-grid">${summary}</div>`;
-  const summaryContent = `${assetsHero}${summaryMarkup}`;
+  const summaryContent = `${assetsHero}${summaryMarkup}${treeEntry}`;
   if (summaryHost) summaryHost.innerHTML = summaryContent;
   const isPersonalCategory = _skillsCognitionState.assetCategoryFilter === 'personal';
   // 「关于我」是四类资产之一，不再是独立任务页：选中 personal 分类时在本页
@@ -2122,6 +2754,11 @@ function renderSkillsCognitionAssets() {
         <div class="asset-detail-head"><div><h2>${escapeHtml(selectedDisplayTitle)}</h2><p>${escapeHtml(_abilityAssetCategoryLabel(selectedCategory))}</p></div><div class="asset-detail-head-actions"><span class="skills-cognition-status is-${escapeHtml(selected.status || '')}">${escapeHtml(_abilityAssetMaturityLabel(selected.maturity, selected.status))}</span>${assetMore}</div></div>
         <div class="asset-detail-body">
           ${skillDraftFeedback}
+          <dl class="cognition-governance-facts cognition-asset-facts">
+            <div><dt>${escapeHtml(_cognitionText('cognition.governance_scope', '作用范围'))}</dt><dd>${escapeHtml(_abilityAssetScopeLabel(selected.scope || 'general'))}</dd></div>
+            <div><dt>${escapeHtml(_cognitionText('cognition.asset_default_use', '默认使用'))}</dt><dd>${escapeHtml(_abilityAssetDefaultUseLabel(selected))}</dd></div>
+            <div><dt>${escapeHtml(_cognitionText('cognition.governance_version', '版本'))}</dt><dd>${selected.version ? `v${escapeHtml(selected.version)}` : '—'}</dd></div>
+          </dl>
           ${selectedContentSummaryBlock}
           ${writeOrigin ? `<div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.asset_write_origin', '写入来源'))}</strong><p>${escapeHtml(writeOrigin)}</p></div>` : ''}
           <div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.relation_refs', '关联引用'))}</strong><p>${escapeHtml(relationText)}</p></div>
@@ -2157,7 +2794,7 @@ function renderSkillsCognitionGovernance() {
     metrics: [
       { value: items.length, key: 'cognition.governance_total', label: '全部资产' },
       { value: items.filter((asset) => asset.status === 'active').length, key: 'cognition.governance_active', label: '正常使用' },
-      { value: items.filter((asset) => asset.status !== 'active').length, key: 'cognition.governance_attention', label: '非正常状态' },
+      { value: items.filter((asset) => asset.status !== 'active').length, key: 'cognition.governance_attention', label: '需要关注' },
     ],
   });
   if (!items.length) {
@@ -2168,13 +2805,24 @@ function renderSkillsCognitionGovernance() {
     || items.find((asset) => asset.status === 'active')
     || items[0];
   _skillsCognitionState.selectedAssetId = selected.id;
+  // 「有候选」不是一种资产状态，而是"这条资产还有一个没决定的更新"。它由待办
+  // 读模型给出（与 gate 同源），不在这里从 assets 自行推算。
+  const upgradeAssetIds = new Set((Array.isArray(_skillsCognitionState.inboxItems) ? _skillsCognitionState.inboxItems : [])
+    .filter((entry) => entry?.kind === 'skill_upgrade_suggested' && entry.assetId)
+    .map((entry) => entry.assetId));
   const rows = items.map((asset) => {
     const category = asset.category || asset.type;
     const selectedClass = asset.id === selected.id ? ' is-selected' : '';
+    // 「有候选」在行上只做标识，不做入口：整行已经是一个选择按钮，往里再嵌
+    // 一个可点元素既是无效 HTML，也会被外层的行选择处理器先吃掉。真正的入口
+    // 放在右侧详情面板里——那里才是看清影响之后再决定的地方。
+    const statusHtml = upgradeAssetIds.has(asset.id)
+      ? `<span class="skills-cognition-status is-pending">${escapeHtml(_cognitionText('cognition.governance_has_candidate', '有候选'))}</span>`
+      : `<span class="skills-cognition-status is-${escapeHtml(asset.status || '')}">${escapeHtml(_abilityAssetMaturityLabel(asset.maturity, asset.status))}</span>`;
     return `<button type="button" class="cognition-governance-asset-row${selectedClass}" data-cognition-governance-select="${escapeHtml(asset.id)}">
       <span><strong>${escapeHtml(_abilityAssetDisplayTitle(asset))}</strong><small>${escapeHtml(_abilityAssetCategoryLabel(category))} · ${escapeHtml(_abilityAssetScopeLabel(asset.scope || 'general'))}</small></span>
       <span class="cognition-governance-version">${asset.version ? `v${escapeHtml(asset.version)}` : '—'}</span>
-      <span class="skills-cognition-status is-${escapeHtml(asset.status || '')}">${escapeHtml(_abilityAssetMaturityLabel(asset.maturity, asset.status))}</span>
+      ${statusHtml}
     </button>`;
   }).join('');
   const actions = _recallAssetActions(selected.status);
@@ -2184,6 +2832,23 @@ function renderSkillsCognitionGovernance() {
   const destructiveActions = actions.filter((action) => ['delete', 'revoke', 'purge'].includes(action)).map((action) => renderAction(action, true)).join('');
   const workspaceRefs = Array.isArray(selected.workspaceRefs) ? selected.workspaceRefs.filter(Boolean) : [];
   const writeOrigin = _abilityAssetWriteOriginLabel(selected.lifecycleStatus);
+  // 「查看更新候选」只在这条资产真的有待决更新、且真的生成过 Skill 时出现：
+  // 没有 skillId 就没有版本可比，点进去只会是一页空壳。
+  const upgradeEntry = upgradeAssetIds.has(selected.id) && selected.generatedSkillId
+    ? `<button type="button" class="btn btn-sm" data-cognition-open-skill-update="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.governance_open_update', '查看更新候选'))}</button>`
+    : '';
+  // 回滚点：用户问"我还能退回到哪一版"。版本历史是按需加载的，没展开过就还
+  // 不知道——那时显示「展开版本历史后可见」并给出口，而不是显示「—」让人
+  // 以为无路可退。历史已在手时列出真实可回滚的版本号。
+  const history = _skillsCognitionState.assetHistoryById?.[selected.id];
+  const knownVersions = Array.isArray(history?.versions) ? history.versions : null;
+  const rollbackPoints = knownVersions
+    ? (knownVersions
+      .map((version) => String(version.version || ''))
+      .filter((version) => version && version !== String(selected.version || ''))
+      .map((version) => `v${escapeHtml(version)}`).join('、')
+      || escapeHtml(_cognitionText('cognition.governance_no_rollback', '没有可回滚的历史版本')))
+    : `<button type="button" class="btn btn-sm" data-cognition-governance-action="versions" data-cognition-governance-asset="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.governance_show_rollback', '展开版本历史'))}</button>`;
   host.innerHTML = `${hero}<div class="cognition-governance-workbench">
     <section class="skills-cognition-card cognition-governance-history-card">
       <div class="cognition-governance-panel-head"><div><h2>${escapeHtml(_cognitionText('cognition.governance_assets_versions', '资产与当前版本'))}</h2><p>${escapeHtml(_cognitionText('cognition.governance_assets_versions_hint', '选择一项，查看它的状态、版本与可执行动作。'))}</p></div><span>${escapeHtml(String(items.length))}</span></div>
@@ -2191,9 +2856,9 @@ function renderSkillsCognitionGovernance() {
     </section>
     <section class="skills-cognition-card cognition-governance-control-card">
       <div class="cognition-governance-selected-head"><div><h2>${escapeHtml(_abilityAssetDisplayTitle(selected))}</h2><p>${escapeHtml(_abilityAssetCategoryLabel(selected.category || selected.type))} · ${escapeHtml(_cognitionText('cognition.governance_version', '版本'))} ${selected.version ? `v${escapeHtml(selected.version)}` : '—'}</p></div><span class="skills-cognition-status is-${escapeHtml(selected.status || '')}">${escapeHtml(_abilityAssetMaturityLabel(selected.maturity, selected.status))}</span></div>
-      <dl class="cognition-governance-facts"><div><dt>${escapeHtml(_cognitionText('cognition.governance_scope', '作用范围'))}</dt><dd>${escapeHtml(_abilityAssetScopeLabel(selected.scope || 'general'))}</dd></div><div><dt>${escapeHtml(_cognitionText('cognition.asset_write_origin', '写入来源'))}</dt><dd>${escapeHtml(writeOrigin || '—')}</dd></div><div><dt>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</dt><dd>${escapeHtml(workspaceRefs.length ? workspaceRefs.join('、') : _cognitionText('cognition.no_refs', '未记录引用'))}</dd></div></dl>
-      ${usageActions ? `<section class="cognition-governance-action-group"><h3>${escapeHtml(_cognitionText('cognition.governance_use_control', '使用控制'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_use_control_hint', '暂停或归档不会删除资产及其历史记录。'))}</p><div>${usageActions}</div></section>` : ''}
-      ${recordActions ? `<section class="cognition-governance-action-group"><h3>${escapeHtml(_cognitionText('cognition.governance_history_control', '版本与证明'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_history_control_hint', '查看历史版本、回滚入口，以及这条资产的使用履历。'))}</p><div>${recordActions}</div></section>` : ''}
+      <dl class="cognition-governance-facts"><div><dt>${escapeHtml(_cognitionText('cognition.governance_scope', '作用范围'))}</dt><dd>${escapeHtml(_abilityAssetScopeLabel(selected.scope || 'general'))}</dd></div><div><dt>${escapeHtml(_cognitionText('cognition.asset_write_origin', '写入来源'))}</dt><dd>${escapeHtml(writeOrigin || '—')}</dd></div><div><dt>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</dt><dd>${escapeHtml(workspaceRefs.length ? workspaceRefs.join('、') : _cognitionText('cognition.no_refs', '未记录引用'))}</dd></div><div><dt>${escapeHtml(_cognitionText('cognition.governance_rollback_points', '回滚点'))}</dt><dd>${rollbackPoints}</dd></div></dl>
+      ${usageActions ? `<section class="cognition-governance-action-group"><h3>${escapeHtml(_cognitionText('cognition.governance_impact_preview', '影响预览'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_impact_preview_hint', '暂停后，新任务不再默认带入；已完成任务、版本和 Evidence 均保留。归档后仍可检索，但不出现在常用资产中。'))}</p><div>${usageActions}</div></section>` : ''}
+      ${recordActions ? `<section class="cognition-governance-action-group"><h3>${escapeHtml(_cognitionText('cognition.governance_history_control', '版本与证明'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_history_control_hint', '查看历史版本、回滚入口，以及这条资产的使用履历。'))}</p><div>${recordActions}${upgradeEntry}</div></section>` : ''}
       ${destructiveActions ? `<section class="cognition-governance-action-group is-danger"><h3>${escapeHtml(_cognitionText('cognition.governance_asset_body', '资产本体'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_asset_body_hint', '删除、撤回使用与彻底清除影响不同，执行前会再次确认。'))}</p><div>${destructiveActions}</div></section>` : ''}
       ${_renderRecallAssetHistory(selected.id)}
       ${_renderRecallAssetChain(selected.id)}
