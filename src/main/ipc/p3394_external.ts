@@ -27,6 +27,11 @@ export const p3394ExternalHandlers = {
     const binPath = typeof args?.binPath === 'string' ? args.binPath.trim() : undefined;
     const result = await startExternalGateway({ cli, ...(alias ? { alias } : {}), ...(binPath ? { binPath } : {}) });
     if (result.ok === false) return { ok: false, error: result.error };
+    // 用户显式重新外接该 CLI → 解除投影抑制（允许再次自动投影）。
+    try {
+      const { unsuppressNodeProjection } = await import('../features/p3394_bridge/team-projection');
+      unsuppressNodeProjection(cli);
+    } catch { /* best effort */ }
     return { ok: true, gateway: result.value };
   },
   'p3394.external.stop': async (args: { cli?: unknown }) => {

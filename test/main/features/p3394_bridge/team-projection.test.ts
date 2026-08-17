@@ -130,6 +130,36 @@ describe('P3394 node -> AI team projection', () => {
     expect(self.reason).toBe('skip_local');
   });
 
+  it('does not auto-recreate a deleted agent whose node is suppressed (gateway still alive)', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(testUid);
+    const mod = await import('../../../../src/main/features/p3394_bridge/team-projection');
+    const agents = await import('../../../../src/main/features/agents');
+    // 首次投影创建 agent，然后用户删除 → 节点被抑制（模拟 agents.delete 联动）。
+    const first = await mod.projectP3394NodeToTeam({
+      nodeId: 'codex', alias: 'Codex', endpoints: ['http://127.0.0.1:9301'],
+    });
+    expect(first.projected).toBe(true);
+    expect(await agents.deleteCustomAgent(first.agent_id!)).toBe(true);
+    mod.suppressNodeProjection('codex');
+
+    // 孤儿网关仍在线 hello → 不得自动重建同名 agent。
+    const again = await mod.projectP3394NodeToTeam({
+      nodeId: 'codex', alias: 'Codex', endpoints: ['http://127.0.0.1:9301'],
+    });
+    expect(again.projected).toBe(false);
+    expect(again.reason).toBe('suppressed');
+    expect((await agents.listAgents()).filter((agent) => agent.runtime?.kind === 'p3394-gateway')).toHaveLength(0);
+
+    // 用户显式重新外接 → 解除抑制 → 允许再次投影（复用新建记录）。
+    mod.unsuppressNodeProjection('codex');
+    const reopened = await mod.projectP3394NodeToTeam({
+      nodeId: 'codex', alias: 'Codex', endpoints: ['http://127.0.0.1:9301'],
+    });
+    expect(reopened.projected).toBe(true);
+    expect(reopened.agent_id).not.toBe(first.agent_id);
+  });
+
   it('projects an unknown self-built gateway node with a generic description', async () => {
     const users = await import('../../../../src/main/features/users');
     users.activateUser(testUid);
