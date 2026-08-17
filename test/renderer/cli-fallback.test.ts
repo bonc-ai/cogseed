@@ -22,7 +22,7 @@ interface InvokeLog {
   payload: unknown;
 }
 
-function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => unknown)>, opts: { recipient?: unknown; newChatRecipient?: unknown } = {}) {
+function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => unknown)>, opts: { recipient?: unknown; newChatRecipient?: unknown; hasConfiguredModel?: boolean } = {}) {
   const invokeLog: InvokeLog[] = [];
   const toasts: Array<{ message: string; opts: unknown }> = [];
   const recipientByCid: Record<string, unknown> = {};
@@ -40,6 +40,7 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     _newChatRecipient: newChatRecipient,
     _COMMANDER: { kind: 'commander', id: '', name: '' },
     DRAFT_CID: 'main_chat',
+    ensureModelConfigured: (o?: unknown) => opts.hasConfiguredModel !== false,
     _activeRecipient: (target: string) => {
       if (target === 'new-chat') return newChatRecipient;
       return opts.recipient === undefined ? { kind: 'commander' } : opts.recipient;
@@ -116,7 +117,8 @@ describe('commander CLI fallback', () => {
 
     expect(applied).toBe(true);
     expect(created).toHaveLength(1);
-    expect((created[0] as any).runtime).toEqual({ kind: 'cli', cli: 'codex' });
+    // 无模型直调走 P3394 外接网关类型（与「外接」tab 一致，不经 CogSeed 模型）。
+    expect((created[0] as any).runtime).toEqual({ kind: 'p3394-gateway', cli: 'codex' });
     expect(recipientByCid['cid-2']).toMatchObject({ kind: 'agent', id: 'agent-codex-new' });
   });
 
@@ -141,9 +143,88 @@ describe('commander CLI fallback', () => {
     expect(created).toHaveLength(1);
     // The on-the-fly agent is created with the WorkBuddy brand, not mislabeled OpenCode.
     expect((created[0] as any).name).toBe('WorkBuddy');
-    expect((created[0] as any).runtime).toEqual({ kind: 'cli', cli: 'workbuddy' });
+    expect((created[0] as any).runtime).toEqual({ kind: 'p3394-gateway', cli: 'workbuddy' });
     expect(recipientByCid['cid-wb']).toMatchObject({ kind: 'agent', id: 'agent-wb-new' });
     expect(toasts[0].message).toContain('WorkBuddy');
+  });
+
+  it('reuses an existing P3394-gateway external agent instead of creating one', async () => {
+    const created: unknown[] = [];
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: '' },
+      'localAgents.list': {
+        entries: [{ type: 'openclaw', available: true, auth: { loggedIn: true } }],
+      },
+      'agents.list': {
+        agents: [
+          // 用户已通过「外接」tab 接入的 p3394-gateway 类型 agent → 直接复用。
+          { agent_id: 'agent-openclaw-ext', name: 'OpenClaw', runtime: { kind: 'p3394-gateway', cli: 'openclaw' } },
+        ],
+      },
+      'agents.create': (payload: unknown) => { created.push(payload); return { agent: null }; },
+    });
+
+    const applied = await sandbox._maybeApplyCliFallback('cid-ext');
+
+    expect(applied).toBe(true);
+    expect(created).toHaveLength(0);
+    expect(recipientByCid['cid-ext']).toMatchObject({ kind: 'agent', id: 'agent-openclaw-ext' });
+  });
+
+  it('auto-picks openclaw when it is the only usable CLI (no model configured)', async () => {
+    const created: unknown[] = [];
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: '' },
+      'localAgents.list': {
+        entries: [{ type: 'openclaw', available: true, auth: { loggedIn: true } }],
+      },
+      'agents.list': { agents: [] },
+      'agents.create': (payload: unknown) => {
+        created.push(payload);
+        return { agent: { agent_id: 'agent-openclaw-new', name: 'OpenClaw', runtime: { kind: 'p3394-gateway', cli: 'openclaw' } } };
+      },
+    });
+
+    const applied = await sandbox._maybeApplyCliFallback('cid-ocl');
+
+    expect(applied).toBe(true);
+    expect(created).toHaveLength(1);
+    expect((created[0] as any).runtime).toEqual({ kind: 'p3394-gateway', cli: 'openclaw' });
+    expect(recipientByCid['cid-ocl']).toMatchObject({ kind: 'agent', id: 'agent-openclaw-new' });
+  });
+
+  it('does NOT fall back (no model) when the recipient is already an external agent', async () => {
+    // 无模型 + recipient 已手动选中 p3394-gateway 外接智能体 → 直接放行，
+    // 不覆盖 recipient、不引导配置。这是「首次启动不配模型直调外接」的核心。
+    const invokeLog: { channel: string }[] = [];
+    const { sandbox, recipientByCid } = buildSandbox(
+      {
+        'model.hasConfigured': { configured: false },
+      },
+      {
+        recipient: { kind: 'agent', id: 'agent-ext-1', name: 'Codex' },
+      },
+    );
+    // 记录 invoke 以便断言没有走 prefs.getCliFallback / localAgents.list。
+    const origInvoke = sandbox.window.orkas.invoke;
+    sandbox.window.orkas.invoke = async (channel: string, payload: unknown) => {
+      invokeLog.push({ channel });
+      return origInvoke(channel, payload);
+    };
+
+    const ok = await sandbox._ensureModelOrCliFallback('cid-ext-1');
+
+    expect(ok).toBe(true);
+    const fallbackChannels = invokeLog.filter((c) => (
+      c.channel === 'prefs.getCliFallback'
+      || c.channel === 'localAgents.list'
+      || c.channel === 'agents.list'
+      || c.channel === 'agents.create'
+    ));
+    expect(fallbackChannels).toHaveLength(0);
+    expect(recipientByCid['cid-ext-1']).toBeUndefined();
   });
 
   it('honours an explicit fallback preference over auto-pick', async () => {

@@ -11299,10 +11299,11 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
       // keychain-stored sessions, so an available CLI is still a valid
       // fallback backend (it will surface its own login error if not logged in).
       // CLI whitelist mirrors onboarding's connectable list (claude / codex /
-      // opencode / workbuddy) so a CLI connected in the walkthrough is
-      // selectable here. CLIs whose local proxy is confirmed down, or that were
-      // explicitly excluded (failed at runtime), are skipped.
-      const FALLBACK_CLIS = ['claude', 'codex', 'opencode', 'workbuddy'];
+      // opencode / workbuddy) plus the P3394-managed external CLIs (openclaw /
+      // hermes) so a CLI connected in the walkthrough — or via the 外接 tab —
+      // is selectable here. CLIs whose local proxy is confirmed down, or that
+      // were explicitly excluded (failed at runtime), are skipped.
+      const FALLBACK_CLIS = ['claude', 'codex', 'opencode', 'workbuddy', 'openclaw', 'hermes'];
       const usable = (e) => e && e.available
         && FALLBACK_CLIS.includes(e.type)
         && !excluded(e.type)
@@ -11321,8 +11322,13 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   let agent = null;
   try {
     const listRes = await window.orkas.invoke('agents.list', {});
+    // 优先复用已存在的外部智能体：既匹配 kind:'cli'（旧式直跑），也匹配
+    // kind:'p3394-gateway'（外接 tab 接入的受管网关）——无模型时两者都
+    // 不经 CogSeed 模型，直接经本机 CLI 执行。
     agent = (listRes && listRes.agents || []).find(
-      (a) => a && a.runtime && a.runtime.kind === 'cli' && a.runtime.cli === cli,
+      (a) => a && a.runtime
+        && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway')
+        && a.runtime.cli === cli,
     );
   } catch (_) { /* agents list unavailable */ }
 
@@ -11331,12 +11337,14 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   if (!agent) {
     try {
       const name = cli === 'claude' ? 'Claude' : (cli === 'codex' ? 'Codex' : (cli === 'opencode' ? 'OpenCode' : 'WorkBuddy'));
+      // P3394 外接网关类型：与「外接」tab 的接入方式一致（经 bridge 与
+      // 受管网关协作），无模型时可直调；CLI 自身账号/API 运行。
       const res = await window.orkas.invoke('agents.create', {
         name,
         description: `本机 ${name} 命令行，作为 AI 团队成员执行任务`,
         icon: 'code',
         color: 'sage',
-        runtime: { kind: 'cli', cli },
+        runtime: { kind: 'p3394-gateway', cli },
         category: 'general',
       });
       if (res && res.agent) agent = res.agent;
@@ -11450,13 +11458,23 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
 /**
  * 发送前的模型守卫 + 无模型降级：
  * - 有已配置模型 → true（正常发送）。
- * - 无模型 → 尝试把 recipient 自动切换到本机已登录 CLI agent（_maybeApplyCliFallback），
- *   成功则放行（后端按 CLI agent 路由执行）；无可用 CLI 才返回 false（引导用户配置）。
+ * - 无模型 → 若当前 recipient 已经是外部智能体（CLI / P3394 外接网关）
+ *   则直接放行——外部智能体经本机 CLI 执行，不依赖 CogSeed 模型配置，
+ *   首次启动不配置模型也能直接调用；仅当 recipient 是 commander 时才走
+ *   _maybeApplyCliFallback 自动切换。无可用 CLI 才返回 false（引导配置）。
  * 仅用于主对话（new-chat / conversation）的 Commander 场景；技能/agent 编辑聊天
  * 等仍走 ensureModelConfigured 原逻辑。
  */
 async function _ensureModelOrCliFallback(cid) {
   if (ensureModelConfigured({ silent: true })) return true;
+  // 无模型：recipient 已是外部智能体（CLI / P3394 外接网关）→ 直接放行。
+  const recipient = _activeRecipient(cid === DRAFT_CID ? 'new-chat' : 'conversation');
+  if (recipient && recipient.kind === 'agent' && recipient.id) {
+    _convLog.info('[cli-fallback] no-model send to external agent, skipping fallback', {
+      cid, recipient: recipient.id,
+    });
+    return true;
+  }
   const ok = await _maybeApplyCliFallback(cid);
   _convLog.info('[cli-fallback] ensureModelOrCliFallback', { cid, ok, recipient: _activeRecipient('conversation') });
   if (ok) return true;
