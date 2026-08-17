@@ -10556,7 +10556,7 @@ async function handleNewChatSubmit() {
     await uiAlert(t('oss.task_required'));
     return;
   }
-  if (!(await _ensureModelOrCliFallback(DRAFT_CID))) return;
+  if (!(await _ensureModelOrCliFallback(DRAFT_CID, raw))) return;
   const references = _referenceSnapshotsForQuotes(quotes);
   const requestText = raw || t('chat.reference_default_prompt');
   const useSelections = (typeof consumeChatUseSelections === 'function')
@@ -10744,7 +10744,7 @@ async function handleChatSubmit() {
     _clearDraft(currentCid);
     return;
   }
-  if (!(await _ensureModelOrCliFallback(currentCid))) return;
+  if (!(await _ensureModelOrCliFallback(currentCid, raw))) return;
   const cid = currentCid;
   const quotes = _getQuotes(cid).slice();
   const references = _referenceSnapshotsForQuotes(quotes);
@@ -11459,13 +11459,15 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
  * 发送前的模型守卫 + 无模型降级：
  * - 有已配置模型 → true（正常发送）。
  * - 无模型 → 若当前 recipient 已经是外部智能体（CLI / P3394 外接网关）
- *   则直接放行——外部智能体经本机 CLI 执行，不依赖 CogSeed 模型配置，
- *   首次启动不配置模型也能直接调用；仅当 recipient 是 commander 时才走
+ *   则直接放行；若消息文本以 `@<token>` 开头且该 token 命中本机外部
+ *   智能体（手动输入 @ 智能体名 的场景），同样放行——外部智能体经本机
+ *   CLI 执行，不依赖 CogSeed 模型配置，首次启动不配置模型也能直接调用。
+ *   仅当目标确实需要模型（commander 且无 @ 外部智能体）时才走
  *   _maybeApplyCliFallback 自动切换。无可用 CLI 才返回 false（引导配置）。
  * 仅用于主对话（new-chat / conversation）的 Commander 场景；技能/agent 编辑聊天
  * 等仍走 ensureModelConfigured 原逻辑。
  */
-async function _ensureModelOrCliFallback(cid) {
+async function _ensureModelOrCliFallback(cid, rawText) {
   if (ensureModelConfigured({ silent: true })) return true;
   // 无模型：recipient 已是外部智能体（CLI / P3394 外接网关）→ 直接放行。
   const recipient = _activeRecipient(cid === DRAFT_CID ? 'new-chat' : 'conversation');
@@ -11475,12 +11477,45 @@ async function _ensureModelOrCliFallback(cid) {
     });
     return true;
   }
+  // 手动输入 `@智能体名 消息`：leading mention 命中本机外部智能体 → 放行。
+  // （recipient 仍为 commander，由后端 router 解析 @mention 路由到 agent；
+  // 外部智能体不经 CogSeed 模型，直接走本机 CLI。）
+  if (await _mentionTargetsExternalAgent(rawText)) {
+    _convLog.info('[cli-fallback] no-model send with external @mention, skipping fallback', { cid });
+    return true;
+  }
   const ok = await _maybeApplyCliFallback(cid);
   _convLog.info('[cli-fallback] ensureModelOrCliFallback', { cid, ok, recipient: _activeRecipient('conversation') });
   if (ok) return true;
   // 无模型也无可用 CLI：走原提示（弹框 + 跳设置）。
   ensureModelConfigured();
   return false;
+}
+
+/** True when the leading `@<token>` in the raw text resolves to a local
+ *  external agent (CLI or P3394-gateway). Matches by display name /
+ *  agent_id (case + whitespace insensitive), mirroring the backend
+ *  router's name-key normalization. Unknown tokens → false. */
+async function _mentionTargetsExternalAgent(rawText) {
+  const text = String(rawText || '').trim();
+  if (!text) return false;
+  const m = _LEADING_MENTION_RE.exec(text);
+  if (!m) return false;
+  const key = String(m[1] || '').toLowerCase().replace(/\s+/g, '');
+  if (!key) return false;
+  let agents = [];
+  try {
+    const res = await window.orkas.invoke('agents.list', {});
+    agents = (res && res.agents) || [];
+  } catch (_) { return false; }
+  return agents.some((a) => {
+    if (!a || !a.runtime) return false;
+    const kind = a.runtime.kind;
+    if (kind !== 'cli' && kind !== 'p3394-gateway') return false;
+    const nameKey = String(a.name || '').toLowerCase().replace(/\s+/g, '');
+    const idKey = String(a.agent_id || '').toLowerCase();
+    return nameKey === key || idKey === key;
+  });
 }
 
 // No usable local CLI backend: guide the user instead of failing with a bare
@@ -13137,7 +13172,7 @@ function createChatController(config) {
     _qSave(id, q);
     renderQueue();
   }
-  function _qDispatchNext() {
+  async function _qDispatchNext() {
     if (!features.queue) return;
     const id = config.getCurrentId(); if (!id) return;
     if (pending) return;
@@ -13145,7 +13180,12 @@ function createChatController(config) {
     if (!q.length) return;
     // Preserve edit-chat queue entries when credentials/configuration become
     // unavailable while another response is running.
-    if (!ensureModelConfigured()) return;
+    if (!ensureModelConfigured()) {
+      // 队列项以 @ 外部智能体开头（无模型直调）→ 放行，交给 send 的同款门。
+      const next0 = q[0];
+      const text0 = (next0 && next0.content) || '';
+      if (!await _mentionTargetsExternalAgent(text0)) return;
+    }
     const next = q.shift();
     _qSave(id, q);
     renderQueue();
@@ -13338,8 +13378,14 @@ function createChatController(config) {
     // drains and auto-seed sends (e.g. skills.js 'autoSeed').
     // 无模型自动降级：若该会话已降级到本机 CLI agent（_cliFallbackApplied === id），
     // CLI 用自己的凭据执行，不需要 CogSeed 的 API 模型 → 放行。
+    // 手动输入 `@外部智能体 消息`（recipient 仍是 commander，由后端 router
+    // 解析 @mention 路由到外部智能体）→ 同样放行：外部智能体不经 CogSeed 模型。
     if (!(_cliFallbackApplied === id) && !ensureModelConfigured()) {
-      return { started: false, aborted: false, errored: false, reason: 'model_not_configured' };
+      if (await _mentionTargetsExternalAgent(content)) {
+        _convLog.info('[cli-fallback] controller send with external @mention, skipping model gate', { id });
+      } else {
+        return { started: false, aborted: false, errored: false, reason: 'model_not_configured' };
+      }
     }
     if (hooks.beforeSend) {
       const transformed = await hooks.beforeSend(content, id);

@@ -48,6 +48,8 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     _renderRecipientChip: () => {},
     uiToast: (message: string, opts: unknown) => { toasts.push({ message, opts }); },
     _convLog: { info: () => {}, warn: () => {}, error: () => {} },
+    // conversation.js 中该正则定义在抽取段起点之前，这里按源码镜像补上。
+    _LEADING_MENTION_RE: /^@([A-Za-z0-9_一-鿿-]+)\s?/u,
     window: {
       orkas: {
         invoke: async (channel: string, payload: unknown) => {
@@ -225,6 +227,37 @@ describe('commander CLI fallback', () => {
     ));
     expect(fallbackChannels).toHaveLength(0);
     expect(recipientByCid['cid-ext-1']).toBeUndefined();
+  });
+
+  it('lets a manual @external-agent mention through with no model configured', async () => {
+    // 手动输入 `@Codex 消息`（recipient 仍是 commander）：leading mention
+    // 命中本机 p3394-gateway 外部智能体 → 无模型也放行，不弹 API Key。
+    const { sandbox } = buildSandbox({
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+        ],
+      },
+    });
+
+    expect(await sandbox._mentionTargetsExternalAgent('@Codex 帮我写个测试')).toBe(true);
+    // 大小写/空白不敏感，匹配 agent_id 也行。
+    expect(await sandbox._mentionTargetsExternalAgent('@agent-codex-1 hi')).toBe(true);
+    // 未知 token / 无 mention → false。
+    expect(await sandbox._mentionTargetsExternalAgent('@nobody hi')).toBe(false);
+    expect(await sandbox._mentionTargetsExternalAgent('随便聊聊')).toBe(false);
+  });
+
+  it('does NOT let a manual @commander mention through with no model configured', async () => {
+    const { sandbox } = buildSandbox({
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+        ],
+      },
+    });
+    expect(await sandbox._mentionTargetsExternalAgent('@commander 你好')).toBe(false);
+    expect(await sandbox._mentionTargetsExternalAgent('@指挥官 你好')).toBe(false);
   });
 
   it('honours an explicit fallback preference over auto-pick', async () => {
