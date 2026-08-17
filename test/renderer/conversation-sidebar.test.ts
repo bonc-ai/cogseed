@@ -271,6 +271,10 @@ describe('conversation sidebar task row actions', () => {
     };
     context._projectsCache = [{ project_id: 'p1', name: 'Project One' }];
     context._projectsExpanded = { p1: true };
+    // 9.1 框架：backfill 后由 renderConversationList 刷新主列表（projects-list
+    // 独立容器已随侧边栏重构移除），记录调用以验证渲染入口被触发。
+    context.renderConversationListCalled = false;
+    context.renderConversationList = () => { context.renderConversationListCalled = true; };
     context.renderProjectsSection = function renderProjectsSection() {
       const rows = context.conversations
         .filter((c: any) => c && c.project_id === 'p1')
@@ -334,7 +338,7 @@ describe('conversation sidebar task row actions', () => {
       '/api/conversations/list?mode=project&project_id=p1&offset=10',
     ]);
     expect(context.conversations.map((c: any) => c.conversation_id)).toContain('p1-11');
-    expect(projectsContainer.innerHTML).toContain('Project task 11');
+    expect(context.renderConversationListCalled).toBe(true);
   });
 
   it('does not append a stale project page after a local sidebar change', async () => {

@@ -580,6 +580,18 @@ function boundedRequiredText(value: unknown, field: string, max: number): string
   return text;
 }
 
+/** Optional-model-field tolerance: missing, empty, or WRONG-TYPED values are
+ *  dropped (undefined) instead of killing the whole candidate — models
+ *  occasionally emit `uncertainty: 0.5` or a nested object where a string is
+ *  expected. Core fields (judgment/value/summary/scope) stay strict. */
+function optionalText(value: unknown, max: number): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string') return undefined;
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text || text.length > max) return undefined;
+  return text;
+}
+
 function parseCandidateType(value: unknown): AbilityAssetType {
   if (value === 'personal' || value === 'rule' || value === 'template' || value === 'skill_method') return value;
   throw new CaptureFailure('invalid_model_output', 'invalid suggestedType');
@@ -665,12 +677,8 @@ function parseOneCandidate(rawCandidate: unknown, validLabels: Set<string>): Par
     }
     return label;
   }))];
-  const uncertainty = candidate.uncertainty === undefined || candidate.uncertainty === ''
-    ? undefined
-    : boundedRequiredText(candidate.uncertainty, 'uncertainty', 1_000);
-  const targetAssetId = candidate.targetAssetId === undefined || candidate.targetAssetId === ''
-    ? undefined
-    : boundedRequiredText(candidate.targetAssetId, 'targetAssetId', 160);
+  const uncertainty = optionalText(candidate.uncertainty, 1_000);
+  const targetAssetId = optionalText(candidate.targetAssetId, 160);
   if (targetAssetId && !safeId(targetAssetId)) throw new CaptureFailure('invalid_model_output', 'invalid targetAssetId');
   const valueProvided = Object.prototype.hasOwnProperty.call(candidate, 'value');
   const actionProvided = Object.prototype.hasOwnProperty.call(candidate, 'suggestedAction');

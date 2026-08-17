@@ -53,7 +53,8 @@ describe('new chat home surface', () => {
     const css = read('src/renderer/style.css');
 
     expect(css).toMatch(/#panel-new-chat\s*{[\s\S]*?position:\s*relative;/);
-    expect(css).toContain('.new-chat-center > .oss-entry');
+    // oss 能力条已随首页重构移除（LiuTingting），不再断言 .oss-entry；
+    // 保留 center 容器约束。
     expect(css).toContain('.new-chat-external-agent-btn');
     expect(css).toMatch(/\.new-chat-input-area \.chat-rich-editor\s*{[\s\S]*?min-height:\s*80px;[\s\S]*?font-size:\s*16px;/);
     expect(css).toMatch(/\.new-chat-input-area \.chat-input-rich-wrap textarea\.chat-rich-source\s*{[\s\S]*?position:\s*absolute;[\s\S]*?width:\s*1px;[\s\S]*?opacity:\s*0;[\s\S]*?pointer-events:\s*none;/);

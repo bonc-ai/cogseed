@@ -143,6 +143,18 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
     expect(r.invalid_refs.agents).toEqual(['__gone_base__']);
   });
 
+  it('base_agent 映射兼容 p3394-gateway 外接 CLI（Hermes）——源码契约', () => {
+    // Hermes 的外接 runtime.kind 是 'p3394-gateway'（经 P3394 网关协作），
+    // 不是 'cli'。baseAgentToAgentId 若只认 'cli'，空间 base_agents 选了
+    // Hermes 也映射不到成员 → effective_agents 缺它 → 空间会话 @ tab 看不到
+    // （回归：2026-08-17 实机）。此处做源码级契约保护。
+    const source = fs.readFileSync(path.join(__dirname, '../../../src/main/features/spaces.ts'), 'utf8');
+    const start = source.indexOf('function baseAgentToAgentId');
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, start + 1200);
+    expect(body).toContain("a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'");
+  });
+
   it('extra 与 bundle 重复的 id 去重（保留模板优先序）', () => {
     const space = makeSpace({
       template_id: 'student',
