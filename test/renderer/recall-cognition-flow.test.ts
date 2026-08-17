@@ -917,7 +917,12 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).not.toContain('data-recall-candidate-action="promote"');
   });
 
-  it('collapses empty source groups and keeps an empty candidate pool visible', () => {
+  /**
+   * 五类来源全部保留，空的也列出来——它们是后端明确定义的 kind，不是"有数据
+   * 才存在的东西"。藏掉空的那几类，用户就不知道系统还能从哪里发现认知。
+   * 但一条内容都没有时不摆全零统计条，而是给一句整页的下一步。
+   */
+  it('keeps every source kind listed while nothing has been collected yet', () => {
     const context = loadSkillsRenderer();
     const sourceHost = { innerHTML: '' };
     const candidateHost = { innerHTML: '' };
@@ -933,6 +938,8 @@ describe('Recall cognition renderer flow', () => {
         { kind: 'conversation', status: 'empty', count: 0, items: [] },
         { kind: 'artifact_file', status: 'empty', count: 0, items: [] },
         { kind: 'execution_evaluation', status: 'empty', count: 0, items: [] },
+        { kind: 'user_teaching_signal', status: 'empty', count: 0, items: [] },
+        { kind: 'authorized_external_system', status: 'empty', count: 0, items: [] },
       ],
       candidates: [],
       recallCandidates: [],
@@ -945,8 +952,12 @@ describe('Recall cognition renderer flow', () => {
 
     expect(sourceHost.innerHTML).toContain('尚未发现可接入的数据来源');
     expect(sourceHost.innerHTML).toContain('data-cognition-page-link="captures"');
+    // 全零统计条是噪音，此时不摆。
     expect(sourceHost.innerHTML).not.toContain('recall-workbench-summary');
-    expect(sourceHost.innerHTML).not.toContain('class="recall-source-group"');
+    // 但五类分组要在，且每一类说清什么会产生它——而不是统一一句"没有数据"。
+    expect(sourceHost.innerHTML).toContain('class="recall-source-group"');
+    expect(sourceHost.innerHTML).toContain('还没有已完成的会话');
+    expect(sourceHost.innerHTML).toContain('还没有已连接的外部系统');
     expect(candidateHost.innerHTML).toContain('③ 候选池');
     expect(candidateHost.innerHTML).toContain('当前没有待确认候选');
   });
@@ -1177,10 +1188,12 @@ describe('Recall cognition renderer flow', () => {
       'recall.views.list', 'recall.projections.list', 'personalOntology.groups.list',
       'cognition.candidates.list', 'cognition.receipts.list',
     ]));
-    for (const label of ['会话', 'Artifact 与文件', '执行与评价', '用户教学信号']) {
+    // 五类来源都列出来，空的那一类也在——它是后端定义的 kind，不是"有数据才
+    // 存在的东西"；空态另说清什么会产生它。
+    for (const label of ['会话', 'Artifact 与文件', '执行与评价', '用户教学信号', '授权外部系统']) {
       expect(sources.innerHTML).toContain(label);
     }
-    expect(sources.innerHTML).not.toContain('授权外部系统');
+    expect(sources.innerHTML).toContain('还没有已连接的外部系统');
     expect(captures.innerHTML).toContain('2. 提取内容');
     expect(captures.innerHTML).toContain('<b>1. 选择会话</b><em>4</em>');
     expect(captures.innerHTML).not.toContain('<b>1. 选择会话</b><em>7</em>');
@@ -1389,7 +1402,7 @@ describe('Recall cognition renderer flow', () => {
       },
     };
 
-    await context.renderSkillsCognitionProofs();
+    await context.loadCognitionProofs();
 
     // 默认全部收起，与「版本与治理」一致：详情要用户主动点开。
     expect(host.innerHTML).not.toContain('CRR-018');
@@ -1416,7 +1429,7 @@ describe('Recall cognition renderer flow', () => {
 
     // 切到没有回执的那条：必须明说"没有回执"，不能显示上一张回执的内容。
     vm.runInContext("_skillsCognitionState.selectedProofEventId = 'ev-no-receipt';", context);
-    await context.renderSkillsCognitionProofs();
+    await context.loadCognitionProofs();
     expect(host.innerHTML).toContain('没有留下复用回执');
     expect(host.innerHTML).not.toContain('CRR-018');
     expect(host.innerHTML).not.toContain('完整旧会话');
@@ -1444,7 +1457,7 @@ describe('Recall cognition renderer flow', () => {
       },
     };
 
-    await context.renderSkillsCognitionProofs();
+    await context.loadCognitionProofs();
 
     expect(host.innerHTML).not.toContain('这次复用是否有用？');
     expect(host.innerHTML).not.toContain('data-recall-proof-feedback=');
@@ -2629,18 +2642,24 @@ describe('Recall cognition renderer flow', () => {
       assets: [{ id: 'a-1', category: 'rule', type: 'rule', title: '外发材料口径', status: 'active', maturity: 'seed' }],
       selectedProofEventId: '', proofFilter: 'all',
     })})`, context);
+    let fetches = 0;
     context.window.cogseed = {
-      invoke: async (channel: string) => (channel === 'recall.timeline.list'
-        ? { ok: true, items: [
-          { id: 'e-use', kind: 'usage_recorded', occurredAt: '2026-08-14T10:00:00.000Z', refs: { assetId: 'a-1' } },
-          { id: 'e-transfer', kind: 'transfer_completed', status: 'succeeded', occurredAt: '2026-08-15T10:00:00.000Z', refs: { assetId: 'a-1' } },
-          { id: 'e-effect', kind: 'effectiveness_recorded', status: 'valid', outcome: 'better', occurredAt: '2026-08-16T10:00:00.000Z', refs: { assetId: 'a-1' } },
-          { id: 'e-degraded', kind: 'transfer_completed', status: 'degraded', occurredAt: '2026-08-13T10:00:00.000Z', refs: { assetId: 'a-1' } },
-        ] }
-        : { ok: true, receipts: [] }),
+      invoke: async (channel: string) => {
+        if (channel === 'recall.timeline.list') {
+          fetches += 1;
+          return { ok: true, items: [
+            { id: 'e-use', kind: 'usage_recorded', occurredAt: '2026-08-14T10:00:00.000Z', refs: { assetId: 'a-1' } },
+            { id: 'e-transfer', kind: 'transfer_completed', status: 'succeeded', occurredAt: '2026-08-15T10:00:00.000Z', refs: { assetId: 'a-1' } },
+            { id: 'e-effect', kind: 'effectiveness_recorded', status: 'valid', outcome: 'better', occurredAt: '2026-08-16T10:00:00.000Z', refs: { assetId: 'a-1' } },
+            { id: 'e-degraded', kind: 'transfer_completed', status: 'degraded', occurredAt: '2026-08-13T10:00:00.000Z', refs: { assetId: 'a-1' } },
+          ] };
+        }
+        return { ok: true, receipts: [] };
+      },
     };
 
-    await context.renderSkillsCognitionProofs();
+    await context.loadCognitionProofs();
+    expect(fetches).toBe(1);
     const everything = host.innerHTML;
     expect(everything).toContain('data-cognition-proof-filter="effective"');
     expect(everything).toContain('data-recall-proof-event="e-use"');
@@ -2650,7 +2669,10 @@ describe('Recall cognition renderer flow', () => {
     expect(everything).toContain('效果证明回答什么');
 
     vm.runInContext(`_skillsCognitionState.proofFilter = 'effective';`, context);
-    await context.renderSkillsCognitionProofs();
+    context.renderSkillsCognitionProofs();
+    // 切一层筛选只是本地状态变化，必须只重画、不重新走 IPC。之前每次展开或
+    // 切筛选都把整页清成 loading 再等两次往返，用户看到的就是闪。
+    expect(fetches).toBe(1);
     // 只剩效果已验证那一条，其余事实被真的滤掉。
     expect(host.innerHTML).toContain('data-recall-proof-event="e-effect"');
     expect(host.innerHTML).not.toContain('data-recall-proof-event="e-use"');
@@ -2675,7 +2697,7 @@ describe('Recall cognition renderer flow', () => {
         : { ok: true, receipts: [] }),
     };
 
-    await context.renderSkillsCognitionProofs();
+    await context.loadCognitionProofs();
 
     expect(host.innerHTML).toContain('这一层还没有记录');
     expect(host.innerHTML).not.toContain('还没有资产被真正带入过任务');

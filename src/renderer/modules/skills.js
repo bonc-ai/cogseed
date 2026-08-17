@@ -29,6 +29,11 @@ const _skillsCognitionState = {
   /** 「使用与证明」当前看的是哪一层结论：全部 / 已引用 / 传递已证明 /
    *  效果已验证 / Evidence 不足。纯前端过滤，事实本身不变。 */
   proofFilter: 'all',
+  /** 「使用与证明」已取到的事实链与回执。缓存它是为了让展开/切筛选这类纯本地
+   *  状态变化只重画、不重新走 IPC——否则每点一次都要把整页清成 loading 再等
+   *  两次往返，看起来就是闪。 */
+  proofData: null,
+  proofLoadFailed: false,
   recallCandidates: [],
   sources: [],
   teachingSignals: [],
@@ -245,7 +250,7 @@ function switchSkillsCognitionPage(page) {
   _cognitionSetPageVisibility(next);
   if (next === 'inbox') renderSkillsCognitionInbox();
   if (next === 'sources') renderSkillsCognitionSources();
-  if (next === 'proofs') renderSkillsCognitionProofs();
+  if (next === 'proofs') void loadCognitionProofs();
   if (next === 'captures') renderSkillsCognitionCaptures();
   if (next === 'assets') renderSkillsCognitionAssets();
   if (next === 'governance') renderSkillsCognitionGovernance();
@@ -606,8 +611,35 @@ function _cognitionSourceItemMeta(item, groupKind) {
   const parts = [];
   const subtype = item.title && item.subtype ? _cognitionText(`cognition.source_subtype_${item.subtype}`, '') : '';
   if (subtype && subtype !== _cognitionSourceLabel(groupKind)) parts.push(subtype);
-  if (item.sourceVersion) parts.push(_cognitionDate(item.sourceVersion));
+  // `sourceVersion` 是**来源自身的版本时间**（会话的 updatedAt 之类），不是
+  // "系统最近一次读取它"的时间——后端没有 lastReadAt 这种字段。这里过去把它
+  // 裸着当日期摆出来，紧挨在状态旁边，读起来就成了「最近读取」。加上标签，
+  // 让它只声称自己确实是的那件事。
+  if (item.sourceVersion) {
+    parts.push(`${_cognitionText('cognition.source_version_at', '来源更新于')} ${_cognitionDate(item.sourceVersion)}`);
+  }
   return parts.join(' · ');
+}
+
+/**
+ * 某一类来源为空时说清**什么会产生它**，而不是统一一句「当前没有可显示的数据」。
+ *
+ * 五类采集端在 source-catalog 里都已接好（conversation / artifact_file /
+ * execution_evaluation / user_teaching_signal / authorized_external_system 各有
+ * 自己的 collector），所以空=确实还没有内容，不是没接入。但"没有内容"的原因
+ * 各不相同：会话要先聊、文件要先选、外部系统要先连——一句通用空话会让用户以为
+ * 这一类坏了或者还没做。
+ */
+function _cognitionSourceEmptyHint(kind) {
+  const hints = {
+    conversation: ['cognition.source_empty_conversation', '还没有已完成的会话。完成一轮问答后，它会出现在这里。'],
+    artifact_file: ['cognition.source_empty_artifact_file', '还没有被选入的文件或会话产物。在会话里选用文件后，它会出现在这里。'],
+    execution_evaluation: ['cognition.source_empty_execution', '还没有任务执行记录。跑过任务后，执行与评价会出现在这里。'],
+    user_teaching_signal: ['cognition.source_empty_teaching', '还没有教学信号。你明确说「记住」「以后这样做」时，会在这里留下可撤销的回执。'],
+    authorized_external_system: ['cognition.source_empty_external', '还没有已连接的外部系统。在「连接」里接入后，它才会作为来源出现。'],
+  };
+  const entry = hints[kind];
+  return entry ? _cognitionText(entry[0], entry[1]) : _cognitionText('cognition.source_no_items', '当前没有可显示的数据');
 }
 
 function _cognitionSourceStatusLabel(status) {
@@ -823,7 +855,11 @@ function renderSkillsCognitionSources() {
     return;
   }
   const groups = Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [];
-  const visibleGroups = groups.filter((group) => _cognitionPrimarySourceItems(group).length > 0 || group.status === 'failed');
+  // 五类来源全部保留，空的也列出来。它们是后端明确定义的 kind（source-catalog
+  // 里各有自己的 collector），不是"有数据才存在的东西"——把空的那几类藏掉，
+  // 用户就不知道系统还能从哪里发现认知，也无从判断"我该去接一个连接器"。
+  // 每一类的空态由 `_cognitionSourceEmptyHint` 说清什么会产生它。
+  const visibleGroups = groups;
   const sourceItems = visibleGroups.flatMap(_cognitionPrimarySourceItems);
   const total = sourceItems.length;
   const ready = sourceItems.filter((item) => item.status === 'ready').length;
@@ -845,11 +881,15 @@ function renderSkillsCognitionSources() {
     if (!filter || !value) return `<div><strong>${count}</strong><span>${label}</span></div>`;
     return `<button type="button" class="recall-workbench-summary-action" data-cognition-source-locate="${escapeHtml(filter)}"><strong>${count}</strong><span>${label}</span></button>`;
   };
-  const summary = visibleGroups.length ? [
-    ['cognition.source_kind_count', '来源类型', visibleGroups.length, ''],
+  // 一条内容都没有时不摆一排 0：全零统计条只是噪音，此时该说的是下一步。
+  const summary = sourceItems.length ? [
+    ['cognition.source_kind_count', '来源类型', groups.length, ''],
     ['cognition.source_visible_items', '当前可见', total, ''],
     ['cognition.source_ready_groups', '可用', ready, ''],
-    ['cognition.source_needs_auth', '需授权', needsAuthorization, 'auth'],
+    // 后端没有 authorizationStatus 字段，这一格是从 nextAction/statusReason
+    // 推出来的。所以说的是**操作**（要重新连接）而不是**状态**（授权失效）——
+    // 推断值不该被说成事实。
+    ['cognition.source_needs_reconnect', '需重新连接', needsAuthorization, 'auth'],
     ['cognition.source_failed_records', '失败记录', failedItems, 'failed'],
   ].map(statCell).join('') : '';
   const body = visibleGroups.length ? visibleGroups.map((group) => {
@@ -875,39 +915,44 @@ function renderSkillsCognitionSources() {
         <span class="skills-cognition-status is-${escapeHtml(visibleStatus)}">${escapeHtml(visibleStatusLabel)}</span>
         ${openConversation || actions ? `<div class="recall-source-item-actions">${openConversation}${actions}</div>` : ''}
       </article>`;
-    }).join('') : `<div class="recall-workbench-empty">${escapeHtml(_cognitionText('cognition.source_no_items', '当前没有可显示的数据'))}</div>`;
+    }).join('') : `<div class="recall-workbench-empty">${escapeHtml(_cognitionSourceEmptyHint(group.kind))}</div>`;
     const groupReason = _cognitionSourceReason(group.reason);
     // 授权失效时把「重新授权」提为组级主动作：它是这一组唯一能让数据重新流动
     // 的操作，藏在某一条目行里用户找不到。
-    const groupNeedsAuth = items.some((item) => item.nextAction === 'reconnect'
+    // 同上：这是"需要重新连接"的推断，不是"授权失效"的断言。
+    const groupNeedsReconnect = items.some((item) => item.nextAction === 'reconnect'
       || item.statusReason === 'connector_error'
       || item.statusReason === 'connector_disconnected');
-    const groupAction = groupNeedsAuth
-      ? `<button type="button" class="btn btn-sm btn-primary" data-cognition-source-action="reconnect" data-cognition-source-kind="${escapeHtml(group.kind)}" data-cognition-source-id="${escapeHtml(items.find((item) => item.nextAction === 'reconnect' || item.statusReason === 'connector_error' || item.statusReason === 'connector_disconnected')?.id || '')}">${escapeHtml(_cognitionText('cognition.source_action_reauthorize', '重新授权'))}</button>`
+    const groupAction = groupNeedsReconnect
+      ? `<button type="button" class="btn btn-sm btn-primary" data-cognition-source-action="reconnect" data-cognition-source-kind="${escapeHtml(group.kind)}" data-cognition-source-id="${escapeHtml(items.find((item) => item.nextAction === 'reconnect' || item.statusReason === 'connector_error' || item.statusReason === 'connector_disconnected')?.id || '')}">${escapeHtml(_cognitionText('cognition.source_action_reconnect_now', '重新连接'))}</button>`
       : '';
     // 组状态用 develop 的 _cognitionSourceGroupStatus 统一推导（它会把执行与
     // 评价的失败/超时/已取消分开计数），只有"授权失效"这一种由本地判断覆盖：
     // 它对应的修复动作和其它失败不同，必须单独说出来。
     const groupStatus = _cognitionSourceGroupStatus(group, items);
-    const headStatus = groupNeedsAuth ? 'failed' : groupStatus.status;
-    const headLabel = groupNeedsAuth
-      ? `${items.length} · ${_cognitionText('cognition.source_auth_expired', '授权失效')}`
+    const headStatus = groupNeedsReconnect ? 'failed' : groupStatus.status;
+    const headLabel = groupNeedsReconnect
+      ? `${items.length} · ${_cognitionText('cognition.source_reconnect_required', '需要重新连接')}`
       : groupStatus.label;
     const groupHead = `<div><h2>${escapeHtml(_cognitionSourceLabel(group.kind))}</h2><p>${escapeHtml(groupReason || _cognitionText(`cognition.source_hint_${group.kind}`, ''))}</p></div><span class="skills-cognition-status is-${escapeHtml(headStatus)}">${escapeHtml(headLabel)}</span>${groupAction}`;
     // 「执行与评价」过去折在 details 里当高级项。授权失效时它是这一页唯一的
     // 红色告警，折叠会把用户唯一需要处理的事藏起来，所以有问题就展开。
     // 统计条要能把用户送到出问题的那一组，所以组上标出它属于哪一类异常。
     const groupHasFailure = items.some((item) => item.status === 'failed' && item.nextAction !== 'reconnect');
-    const locate = `${groupNeedsAuth ? ' data-cognition-source-group="auth"' : ''}${groupHasFailure ? ' data-cognition-source-group-failed="1"' : ''}`;
-    if (group.kind === 'execution_evaluation' && !groupNeedsAuth) {
+    const locate = `${groupNeedsReconnect ? ' data-cognition-source-group="auth"' : ''}${groupHasFailure ? ' data-cognition-source-group-failed="1"' : ''}`;
+    if (group.kind === 'execution_evaluation' && !groupNeedsReconnect) {
       return `<details class="recall-source-group recall-source-group-advanced"${locate}><summary class="recall-workbench-section-head">${groupHead}</summary><div class="recall-source-items">${rows}</div></details>`;
     }
     return `<section class="recall-source-group"${locate}><div class="recall-workbench-section-head">${groupHead}</div><div class="recall-source-items">${rows}</div></section>`;
-  }).join('') : `<div class="recall-workbench-empty-state">
+  }).join('') : '';
+  // 五类一条内容都没有时，除了每一类各自的空态，还要给一句整页的下一步。
+  // 五段"还没有…"排在一起只说明了现状，没告诉用户先做哪件事。
+  const nothingAtAll = !sourceItems.length;
+  const pageEmptyState = nothingAtAll ? `<div class="recall-workbench-empty-state">
     <strong>${escapeHtml(_cognitionText('cognition.sources_empty', '尚未发现可接入的数据来源'))}</strong>
     <span>${escapeHtml(_cognitionText('cognition.pipeline_next_conversation', '下一步：完成一轮会话，系统会自动整理内容'))}</span>
     <button type="button" class="btn btn-sm" data-cognition-page-link="captures">${escapeHtml(_cognitionText('cognition.capture_tasks', '沉淀任务'))}</button>
-  </div>`;
+  </div>` : '';
   const hero = _renderCognitionTaskHero({
     eyebrowKey: 'cognition.sources_eyebrow', eyebrow: 'SOURCES',
     titleKey: 'cognition.sources_title', title: '只从你授权的范围中发现认知',
@@ -917,7 +962,7 @@ function renderSkillsCognitionSources() {
   // 页底这句是这一页的边界声明：来源可读不等于内容会进资产。少了它，用户会
   // 把「授权一个目录」理解成「把整个目录写进记忆」。
   const boundary = `<div class="recall-overview-attention cognition-source-boundary"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.source_boundary', '来源内容不会直接写入正式资产'))}</h2><span>${escapeHtml(_cognitionText('cognition.source_boundary_hint', '普通内容先成为候选；只有用户教学信号可在限定范围内形成可撤销回执。'))}</span></div></div>`;
-  host.innerHTML = `${hero}${_renderCognitionSourceStatus()}${summary ? `<div class="recall-workbench-summary">${summary}</div>` : ''}<div class="recall-source-groups">${body}</div>${boundary}`;
+  host.innerHTML = `${hero}${_renderCognitionSourceStatus()}${summary ? `<div class="recall-workbench-summary">${summary}</div>` : ''}<div class="recall-source-groups">${body}</div>${pageEmptyState}${boundary}`;
 }
 
 function _renderCognitionCaptureStatus() {
@@ -1573,6 +1618,31 @@ function _cognitionInboxKindHint(kind) {
 }
 
 /**
+ * 这一条待办到底要你做什么——写成一句祈使句，放在行的主位。
+ *
+ * 与 `_cognitionInboxKindAction`（按钮上的动作词）分工：那个是"点下去会发生
+ * 什么"，这个是"这一行在问你什么"。两者都要有，因为同一条资产可能同时挂着
+ * 几件不同的事，只有资产标题的话它们长得一模一样。
+ */
+function _cognitionInboxKindAsk(kind) {
+  const asks = {
+    sensitivity_unclassified: ['cognition.inbox_ask_classify', '补充敏感级分类'],
+    sensitivity_escalated: ['cognition.inbox_ask_sensitivity', '确认这次敏感级提升'],
+    rule_boundary_missing: ['cognition.inbox_ask_boundary', '为这条规则补充适用边界'],
+    rule_scope_changed: ['cognition.inbox_ask_scope', '确认作用范围的改动'],
+    classification_conflict: ['cognition.inbox_ask_conflict', '裁定它属于哪一类'],
+    evidence_insufficient: ['cognition.inbox_ask_evidence', '补充可追溯的证据'],
+    source_unavailable: ['cognition.inbox_ask_source', '处理失效的证据来源'],
+    template_updated: ['cognition.inbox_ask_template', '确认模板正文的改动'],
+    skill_creation_suggested: ['cognition.inbox_ask_skill_create', '决定是否生成为 Skill'],
+    skill_upgrade_suggested: ['cognition.inbox_ask_skill_upgrade', '决定是否更新已装的 Skill'],
+    candidate_pending_review: ['cognition.inbox_ask_candidate', '确认是否成为正式资产'],
+  };
+  const entry = asks[kind];
+  return entry ? _cognitionText(entry[0], entry[1]) : _cognitionInboxKindLabel(kind);
+}
+
+/**
  * 每一类待办的主动作措辞。
  *
  * 「查看」对需要裁决的事项是错的说法——用户点进去是要做决定，不是去围观。
@@ -1638,7 +1708,12 @@ function _renderCognitionInboxGroups(urgency) {
       const meta = [entry.assetType ? _abilityAssetCategoryLabel(entry.assetType) : '', entry.detail || '']
         .filter(Boolean).join(' · ');
       const actions = _renderCognitionInboxRowActions(entry);
-      return `<div class="cognition-inbox-row"><div class="cognition-inbox-row-main"><strong>${escapeHtml(entry.title || entry.id)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</div>${actions ? `<div class="cognition-inbox-row-actions">${actions}</div>` : ''}</div>`;
+      // 行内必须说清**这一条要你做什么**。同一条资产可以同时挂几个待办（比如
+      // 既缺敏感分级、又缺作用边界），它们紧急度不同、会落在不同的分组带里。
+      // 若行上只有资产标题，用户看到同一个标题出现两次，读到的是"系统重复了
+      // 一条"，而不是"同一条资产有两件事没处理"。
+      const ask = _cognitionInboxKindAsk(entry.kind);
+      return `<div class="cognition-inbox-row"><div class="cognition-inbox-row-main"><strong>${escapeHtml(ask)}</strong><span class="cognition-inbox-row-subject">${escapeHtml(entry.title || entry.id)}</span>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</div>${actions ? `<div class="cognition-inbox-row-actions">${actions}</div>` : ''}</div>`;
     }).join('');
     const more = bucket.length > 8
       ? `<div class="skills-cognition-muted">${escapeHtml(_cognitionText('cognition.inbox_more', '另有 {n} 项未显示').replace('{n}', String(bucket.length - 8)))}</div>`
@@ -2071,12 +2146,15 @@ function _renderProofEventDetail(asset, event, receipt) {
   return `<div class="recall-proof-detail">${_renderProofChainStrip(asset, event, receipt)}${receiptBlock}${rating}${ratedSummary}</div>`;
 }
 
-async function renderSkillsCognitionProofs() {
+/**
+ * 取「使用与证明」这一页的数据。**取数与重画分开**：展开一条记录、切一层筛选
+ * 都只是本地状态变化，不该把整页清成 loading 再等两次 IPC 往返——那正是点开
+ * 一条 Evidence 不足看到的闪动。只有进入本页、以及写入过评价（成熟度会变）时
+ * 才重取。
+ */
+async function loadCognitionProofs() {
   const host = document.getElementById('skills-cognition-proofs-body');
-  if (!host) return;
-  _renderCognitionLoading(host);
-  let items = [];
-  let receipts = [];
+  if (!_skillsCognitionState.proofData && host) _renderCognitionLoading(host);
   try {
     // 回执与时间线一起取。回执取不到不该让整页打不开——它是逐项核对用的补充，
     // 缺了仍能看见"在哪里用过、结果如何"。
@@ -2084,13 +2162,34 @@ async function renderSkillsCognitionProofs() {
       window.cogseed.invoke('recall.timeline.list', { limit: 500 }),
       window.cogseed.invoke('cognition.receipts.list', { limit: 200 }).catch(() => null),
     ]);
-    items = Array.isArray(timelineResult && timelineResult.items) ? timelineResult.items : [];
-    receipts = Array.isArray(receiptResult && receiptResult.receipts) ? receiptResult.receipts : [];
+    _skillsCognitionState.proofData = {
+      items: Array.isArray(timelineResult && timelineResult.items) ? timelineResult.items : [],
+      receipts: Array.isArray(receiptResult && receiptResult.receipts) ? receiptResult.receipts : [],
+    };
+    _skillsCognitionState.proofLoadFailed = false;
   } catch (error) {
     _skillsLog.warn('recall timeline load failed', { error: (error && error.message) || String(error) });
+    // 取数失败时保留上一份数据：把已经看到的证明链换成一句错误，比让用户
+    // 盯着一页空白更糟——他会以为记录没了。
+    _skillsCognitionState.proofLoadFailed = !_skillsCognitionState.proofData;
+  }
+  renderSkillsCognitionProofs();
+}
+
+function renderSkillsCognitionProofs() {
+  const host = document.getElementById('skills-cognition-proofs-body');
+  if (!host) return;
+  if (_skillsCognitionState.proofLoadFailed) {
     _renderCognitionError(host);
     return;
   }
+  const cached = _skillsCognitionState.proofData;
+  if (!cached) {
+    _renderCognitionLoading(host);
+    return;
+  }
+  const items = cached.items;
+  const receipts = cached.receipts;
   // 回执按 receiptId 索引：事件的 refs.usageReceiptId 就是它，属于显式关联，
   // 不做时间窗反查。
   const receiptById = new Map(receipts.filter((entry) => entry && entry.receiptId).map((entry) => [String(entry.receiptId), entry]));

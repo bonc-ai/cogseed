@@ -141,6 +141,9 @@
 .cognition-inbox-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--fg, #111827) 6%, transparent); }
 .cognition-inbox-row-main { display: grid; gap: 3px; min-width: 0; }
 .cognition-inbox-row-main strong { color: var(--fg, #111827); font-size: 12px; font-weight: 600; line-height: 1.5; }
+/* 主位是"要你做什么"，资产名退为副行——同一条资产可能挂着几件不同的事，只有
+   资产名时它们长得一模一样，读起来像系统重复发了一条。 */
+.cognition-inbox-row-subject { color: var(--fg, #374151); font-size: 11px; line-height: 1.5; }
 .cognition-inbox-row-main span { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
 .cognition-inbox-row-actions { display: flex; flex: none; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 /* 辅助页页头右上角的返回按钮。这些页不在 tab 条里占位，四个 tab 全是未选中

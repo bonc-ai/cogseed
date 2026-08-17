@@ -392,7 +392,8 @@ function _initSkillsCognitionBindings() {
         if (!result?.ok) throw new Error(result?.error || 'effectiveness feedback failed');
         // 评价会推进成熟度，所以整份快照都要重取，不能只重画本页。
         await loadSkillsCognitionSnapshot();
-        await renderSkillsCognitionProofs();
+        // 评价推进了成熟度，事实链变了，这里必须重取而不是重画。
+        await loadCognitionProofs();
       } catch (error) {
         if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
       } finally {
