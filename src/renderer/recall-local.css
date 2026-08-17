@@ -946,7 +946,13 @@
   opacity: 0.68;
 }
 
-@media (max-width: 560px) {
+/* 这里曾经遗留一个未闭合的 `@media (max-width: 560px) {`：a785e631 删除引用
+   页脚 UI 时删掉了它的内容和右花括号，却留下开括号。后果不是少几条小屏样式，
+   而是**它把本文件剩下的 60 多条规则全部吞进了 560px 媒体查询**——包括「使用
+   与证明」的逐条展开、六段链条、回执与评价面板。桌面宽度下这些规则一条都不
+   生效，所以那一页看上去像没做完：事件行退回浏览器默认 <button> 外观（灰底、
+   按内容宽度），排成参差的阶梯块。
+   CSS 不会因此报错，全量测试也测不到——只有量真实计算样式才看得见。 */
 /* 证明。迁移与效果分两层：一层说「有没有真的被用上」，一层说「用了好不好」。 */
 .cognition-chain-proofs { padding: 12px 0; border-top: 1px solid var(--border, #e5e7eb); }
 .cognition-chain-proofs > strong { display: block; margin-bottom: 5px; font-size: 12px; }
