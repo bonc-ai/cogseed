@@ -191,7 +191,9 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
     });
     parentChannel.setLocalManifest(manifestOf('parent-node'));
     const replies: Array<Record<string, unknown>> = [];
+    const receivedTaskIds: string[] = [];
     parentChannel.subscribe((envelope) => {
+      if (envelope.kind === 'task') receivedTaskIds.push(envelope.message_id);
       replies.push(envelope as unknown as Record<string, unknown>);
       executor.execute(envelope);
     });
@@ -274,7 +276,22 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
     expect(fs.existsSync(stateFile)).toBe(true);
     const resultFile2 = path.join(tmpDir, 'child-result-2.json');
     const reverseResult2 = path.join(tmpDir, 'child-reverse-result-2.json');
-    const child2 = spawn(process.execPath, [tsxCli, fixture], {
+    // S-05 三方同框：模拟上次进程遗留的 outbox submitted 信封（未确认出站），
+    // 重启后由 replayOutbox 重放——与游标续读恢复（R-08）同框。
+    const outboxLegacyFile = path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName, 'p3394-outbox.jsonl');
+    fs.mkdirSync(path.dirname(outboxLegacyFile), { recursive: true });
+    const legacyMessageId = 'msg-outbox-legacy-1';
+    fs.appendFileSync(outboxLegacyFile, JSON.stringify({ at: new Date().toISOString(), message_id: legacyMessageId, status: 'submitted' }) + '\n');
+    fs.appendFileSync(outboxLegacyFile, JSON.stringify({
+      at: new Date().toISOString(), message_id: legacyMessageId, kind: 'envelope', peer: 'parent-node',
+      envelope: {
+        spec_version: 'p3394/1.0', message_id: legacyMessageId, session_id: 'ses-outbox-legacy-1', task_id: 'tsk-outbox-legacy-1',
+        kind: 'task', performative: 'request', sender: { agent_id: 'child-node' }, recipients: [{ agent_id: 'parent-node' }],
+        payload: { parts: [{ type: 'text', text: 'legacy outbox task after restart' }] },
+        extensions: { reply_endpoint: `http://127.0.0.1:${parentPort}`, reply_token: 'parent-token' },
+        idempotency_key: 'idem-outbox-legacy-1',
+      },
+    }) + '\n');    const child2 = spawn(process.execPath, [tsxCli, fixture], {
       env: {
         ...process.env,
         P3394_CHILD_PORT: String(childPort),
@@ -286,6 +303,8 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
         ORKAS_WORKSPACE_ROOT: tmpDir,
         // R-08 跨进程恢复注入：前 1 次事件外发失败 → recoverable → sweep 恢复。
         P3394_CHILD_FAIL_DELIVERY: '1',
+        // S-05 三方同框：重启后重放 outbox 遗留的 submitted 信封。
+        P3394_CHILD_REPLAY_OUTBOX: '1',
         P3394_CHILD_PARENT_ENDPOINT: `http://127.0.0.1:${parentPort}`,
         P3394_CHILD_PARENT_TOKEN: 'parent-token',
         P3394_CHILD_REVERSE_RESULT: reverseResult2,
@@ -297,10 +316,18 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
     child2.stderr.setEncoding('utf8');
     child2.stderr.on('data', (chunk: string) => { child2Err += chunk; });
     let ready2 = false;
+    let outboxReplayLine = '';
     child2.stdout.setEncoding('utf8');
-    child2.stdout.on('data', (chunk: string) => { if (chunk.includes('CHILD_READY')) ready2 = true; });
+    child2.stdout.on('data', (chunk: string) => {
+      if (chunk.includes('CHILD_READY')) ready2 = true;
+      if (chunk.includes('CHILD_OUTBOX_REPLAY')) outboxReplayLine += chunk;
+    });
     await waitFor(() => ready2 || child2.exitCode !== null, 15_000);
     expect(ready2, 'child2 stderr: ' + child2Err).toBe(true);
+    // 重启后 outbox 遗留重放完成：遗留信封送达 parent。
+    await waitFor(() => outboxReplayLine.includes('CHILD_OUTBOX_REPLAY'), 15_000);
+    const replayOutcome = JSON.parse(outboxReplayLine.replace('CHILD_OUTBOX_REPLAY ', '').trim()) as { replayed: number };
+    expect(replayOutcome.replayed).toBe(1);
 
     // 同 session 的第二任务：重启后的节点恢复会话/任务映射并正常执行。
     await dialer.send({
@@ -323,6 +350,8 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
     // 重启后长任务事件流同样完整。
     const deltaTexts2 = (result2.actions ?? []).filter((action) => action.kind === 'delta').map((action) => action.text).filter((text): text is string => !!text);
     expect(deltaTexts2).toEqual(['child answer one', 'child answer two', 'child answer three']);
+    // S-05 三方同框：outbox 遗留重放已送达 parent（与游标续读恢复同框）。
+    expect(receivedTaskIds).toContain('msg-outbox-legacy-1');
     await waitFor(() => fs.existsSync(reverseResult2), 15_000);
     const exitCode2 = await waitExit(child2, 8000);
     expect(exitCode2, 'child2 stderr: ' + child2Err).toBe(0);

@@ -84,12 +84,24 @@ async function waitFor(probe: () => boolean, timeoutMs = 5000): Promise<void> {
   }
 }
 
-/** 两个 delta 后 completed 的假 runtime；40ms 间隔给断线留出确定窗口。 */
+/** delta → artifact → completed 的假 runtime；40ms 间隔给断线留出确定窗口。 */
 function cursorRuntime() {
   return {
     shutdown: async () => {},
     run: vi.fn(async function* () {
       yield { type: 'event', status: 'running', text: 'working...', metadata: {} };
+      yield {
+        type: 'event',
+        status: 'running',
+        text: '',
+        metadata: {
+          kernel_event: 'artifact',
+          uri: 'p3394-object:sha256:' + 'a'.repeat(64),
+          digest: 'a'.repeat(64),
+          name: 'report.md',
+          media_type: 'text/markdown',
+        },
+      };
       await new Promise((resolve) => setTimeout(resolve, 40));
       yield { type: 'result', status: 'completed', text: 'recovered answer', metadata: {} };
     }),
@@ -277,8 +289,10 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
     const after = fx.receivedEvents.map((event) => event.sequence);
     expect(after.slice(0, before.length)).toEqual(before);
     expect(new Set(after).size).toBe(after.length);
-    expect(fx.receivedEvents.map((event) => event.kind)).toEqual(expect.arrayContaining(['started', 'delta', 'completed']));
+    expect(fx.receivedEvents.map((event) => event.kind)).toEqual(expect.arrayContaining(['started', 'delta', 'artifact', 'completed']));
     expect(fx.receivedEvents[fx.receivedEvents.length - 1].kind).toBe('completed');
+    // artifact 事件在断线前后经由同一条事件流只送达一次（不因恢复重发）。
+    expect(fx.receivedEvents.filter((event) => event.kind === 'artifact')).toHaveLength(1);
     expect(runtime.run).toHaveBeenCalledTimes(1);
     await fx.closeAll();
   });

@@ -15,7 +15,9 @@
  *       P3394_CHILD_STATE（可选：adapter 会话/任务映射持久化，供进程重启恢复）/
  *       P3394_CHILD_FAIL_DELIVERY（可选 N：前 N 次 onEvent 抛错，模拟对端
  *       断线 → executor 标记 recoverable → 恢复控制器 sweep 续读完成，R-08
- *       跨进程恢复注入）
+ *       跨进程恢复注入）/
+ *       P3394_CHILD_REPLAY_OUTBOX（可选 1：启动后重放 outbox 遗留的
+ *       submitted/sent 信封——跨进程重启后的出站恢复，S-05 三方同框）
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -175,6 +177,13 @@ async function main(): Promise<void> {
   });
   await channel.listen();
   process.stdout.write('CHILD_READY\n');
+
+  // S-05 跨进程出站恢复：启动后重放 outbox 遗留的 submitted/sent 信封
+  // （对端按 idempotency_key 幂等，不重复执行）。
+  if (process.env.P3394_CHILD_REPLAY_OUTBOX === '1') {
+    const outcome = await outboundHub.replayOutbox();
+    process.stdout.write('CHILD_OUTBOX_REPLAY ' + JSON.stringify(outcome) + '\n');
+  }
 
   /** C-09/C-07：本节点主动向父进程发起一次任务，携带 reply_endpoint/reply_token。
    *  出站走事务 outbox（sendAndWait：submitted → sent → completed），
