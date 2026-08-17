@@ -75,6 +75,9 @@ export class P3394OutboundHub {
         endpoints: [...(peer.endpoints ?? [])],
         // Registry expected_identity → dial-time identity verification.
         ...(peer.expected_identity ? { expected_identity: peer.expected_identity } : {}),
+        // Per-peer outbound credential (dial_token, optional) — the outbound
+        // hub must be able to reach authenticated peers.
+        ...(peer.dial_token ? { bearerToken: peer.dial_token } : {}),
       },
     });
   }
@@ -147,9 +150,11 @@ export class P3394OutboundHub {
         replayed += 1;
         log.info('P3394 outbox replayed', { peer: record.peer, message_id: record.message_id });
       } catch (error) {
-        outboxMarkFailed(record.message_id, error instanceof Error ? error.message : String(error));
+        // Replay is a recovery attempt, not a terminal delivery decision. Keep
+        // submitted/sent in the replay set so a temporarily unavailable peer
+        // can be retried on the next bridge recovery cycle.
         failed += 1;
-        log.warn('P3394 outbox replay failed', { peer: record.peer, message_id: record.message_id, error: error instanceof Error ? error.message : String(error) });
+        log.warn('P3394 outbox replay deferred', { peer: record.peer, message_id: record.message_id, error: error instanceof Error ? error.message : String(error) });
       }
     }
     return { replayed, failed };

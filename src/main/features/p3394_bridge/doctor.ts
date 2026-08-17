@@ -4,6 +4,47 @@ import { validateP3394BridgeManifest } from './manifest';
 export interface P3394DoctorCheck { name: string; status: 'pass' | 'fail' | 'warn'; reason?: string }
 export interface P3394DoctorReport { ok: boolean; checks: P3394DoctorCheck[] }
 
+/**
+ * V-01：运行中桥的 wiring 事实。app-wiring 把这些事实收集后交给
+ * buildP3394WiringDoctorInput，Doctor 由此反映真实 listener/binding 状态
+ * 而不是"未上报"。
+ */
+export interface P3394WiringDoctorFacts {
+  manifest?: unknown;
+  agentHomeExists: boolean;
+  registryPersisted: boolean;
+  runtimeAdapterBound: boolean;
+  /** 入站信封的 extensions.epoch 会进入内核 replay protector。 */
+  replayProtectionBound: boolean;
+  idempotencyBound: boolean;
+  auditJournalBound: boolean;
+  policyBound: boolean;
+  channelAdapterBound: boolean;
+  objectStorePresent: boolean;
+  channelCapabilitiesMissing: string[];
+  resourceLimitsMissing: string[];
+  autoReplyEnabled: boolean;
+}
+
+/** 把运行中桥的事实映射成完整 Doctor 输入（纯函数，便于测试）。 */
+export function buildP3394WiringDoctorInput(facts: P3394WiringDoctorFacts): P3394DoctorInput {
+  return {
+    manifest: facts.manifest,
+    agentHomeExists: facts.agentHomeExists,
+    registryPersisted: facts.registryPersisted,
+    runtimeAdapterBound: facts.runtimeAdapterBound,
+    replayProtectionBound: facts.replayProtectionBound,
+    idempotencyBound: facts.idempotencyBound,
+    auditJournalBound: facts.auditJournalBound,
+    policyBound: facts.policyBound,
+    channelAdapterBound: facts.channelAdapterBound,
+    objectStorePresent: facts.objectStorePresent,
+    channelCapabilitiesMissing: facts.channelCapabilitiesMissing,
+    resourceLimitsMissing: facts.resourceLimitsMissing,
+    autoReplyEnabled: facts.autoReplyEnabled,
+  };
+}
+
 export interface P3394DoctorInput {
   manifest?: unknown;
   /** True when the local peer registry has been persisted/loaded (Agent Home). */
@@ -20,6 +61,14 @@ export interface P3394DoctorInput {
   autoReplyEnabled?: boolean;
   /** Missing required channel capabilities (empty array = all present). */
   channelCapabilitiesMissing?: string[];
+  /** Whether replay protection and idempotency are wired into the bridge. */
+  replayProtectionBound?: boolean;
+  idempotencyBound?: boolean;
+  /** Whether the audit journal and authorization policy are wired. */
+  auditJournalBound?: boolean;
+  policyBound?: boolean;
+  /** Missing resource controls such as frame, queue, rate and concurrency limits. */
+  resourceLimitsMissing?: string[];
 }
 
 export function runP3394BridgeDoctor(input: P3394DoctorInput = {}): P3394DoctorReport {
@@ -99,6 +148,23 @@ export function runP3394BridgeDoctor(input: P3394DoctorInput = {}): P3394DoctorR
     checks.push({ name: 'auto-reply', status: 'warn', reason: '§11 auto reply state not reported' });
   } else {
     checks.push({ name: 'auto-reply', status: input.autoReplyEnabled ? 'pass' : 'warn', reason: input.autoReplyEnabled ? '§11 result auto reply-back enabled' : '§11 result auto reply-back disabled' });
+  }
+
+  const booleanBindings: Array<[string, boolean | undefined, string]> = [
+    ['replay-protection', input.replayProtectionBound, 'replay protection binding not reported'],
+    ['idempotency', input.idempotencyBound, 'idempotency binding not reported'],
+    ['audit-journal', input.auditJournalBound, 'audit journal binding not reported'],
+    ['policy', input.policyBound, 'authorization policy binding not reported'],
+  ];
+  for (const [name, value, missingReason] of booleanBindings) {
+    checks.push({ name, status: value === undefined ? 'warn' : value ? 'pass' : 'fail', ...(value === undefined ? { reason: missingReason } : value ? {} : { reason: name + ' is not bound' }) });
+  }
+  if (input.resourceLimitsMissing === undefined) {
+    checks.push({ name: 'resource-limits', status: 'warn', reason: 'resource limit checks not reported' });
+  } else if (input.resourceLimitsMissing.length > 0) {
+    checks.push({ name: 'resource-limits', status: 'fail', reason: 'missing resource limits: ' + input.resourceLimitsMissing.join(', ') });
+  } else {
+    checks.push({ name: 'resource-limits', status: 'pass' });
   }
 
   return { ok: checks.every((c) => c.status !== 'fail'), checks };

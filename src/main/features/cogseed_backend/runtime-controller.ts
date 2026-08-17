@@ -169,6 +169,13 @@ async function mapRuntimeEvent(
         ...(typeof event.metadata?.isError === 'boolean' ? { isError: event.metadata.isError } : {}),
       });
       await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
+    } else if (kernelEvent === 'artifact') {
+      const artifact: Record<string, unknown> = {};
+      for (const key of ['uri', 'digest', 'name', 'media_type'] as const) {
+        if (typeof event.metadata?.[key] === 'string') artifact[key] = event.metadata[key];
+      }
+      const stored = await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'artifact', artifact);
+      await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
     } else if (event.text) {
       const stored = await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'model.delta', { text: event.text });
       await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);

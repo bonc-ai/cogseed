@@ -12,6 +12,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createLogger } from '../../logger';
+import { sanitizeLogTextForUpload } from '../../util/log-sanitize';
 import { p3394StateFile } from './runtime-paths';
 import type { P3394Envelope } from './envelope';
 
@@ -64,7 +65,8 @@ export function outboxMarkCompleted(messageId: string): void {
 }
 
 export function outboxMarkFailed(messageId: string, error: string): void {
-  appendEvent({ at: new Date().toISOString(), message_id: messageId, status: 'failed', error: String(error).slice(0, 300) });
+  // 错误串可能携带 Bearer/key=value 等位置化 secret，落盘前统一脱敏。
+  appendEvent({ at: new Date().toISOString(), message_id: messageId, status: 'failed', error: sanitizeLogTextForUpload(String(error)).slice(0, 300) });
 }
 
 /** 重放集：submitted / sent 状态的记录（按 message_id 折叠最新状态），

@@ -495,14 +495,15 @@ function mergeRefsDedup(
   right: CognitionSourceRef[],
 ): RecallAbilityAssetRecord['evidenceRefs'] {
   const seen = new Set<string>();
-  const out: RecallAbilityAssetRecord['evidenceRefs'] = [];
+  // 入参可能携带宽松引用（仅 kind/id）；按现有语义去重并原样写回。
+  const out: Array<RecallAbilityAssetRecord['evidenceRefs'][number] | { kind: string; id: string }> = [];
   for (const ref of [...left, ...right]) {
     const key = `${ref.kind}:${ref.id}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(ref);
   }
-  return out;
+  return out as RecallAbilityAssetRecord['evidenceRefs'];
 }
 
 const STATUS_AUDIT_ACTION: Record<RecallAbilityAssetRecord['status'], AbilityAssetAuditRecord['action']> = {

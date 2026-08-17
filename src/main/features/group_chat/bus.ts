@@ -1722,7 +1722,7 @@ export interface ProjectedGroupProcessInput {
   agentId: string;
   turnId: string;
   kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
-    | 'tool.started' | 'tool.finished' | 'task.completed' | 'task.failed'
+    | 'tool.started' | 'tool.finished' | 'artifact' | 'task.completed' | 'task.failed'
     | 'task.cancelled' | 'task.recoverable';
   data: Record<string, unknown>;
 }
