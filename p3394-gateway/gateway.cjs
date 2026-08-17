@@ -39,7 +39,10 @@
  *   COGSEED_ENDPOINT          回复发回的 CogSeed 端点（默认 http://127.0.0.1:8444）
  *   COGSEED_TOKEN             回发 CogSeed 的 Bearer 令牌
  *   P3394_ADVERTISE_ENDPOINT  向 CogSeed 自报的本端地址（默认 http://127.0.0.1:<port>）
- *   P3394_AGENT               预设名：hermes/claude/codex/opencode/gemini/aider/openclaw/workbuddy（默认 hermes）
+ *   P3394_AGENT               智能体名：内置预设（hermes/claude/codex/opencode/
+ *                              gemini/aider/openclaw/workbuddy）或任意名字
+ *                              （未知名默认：身份=名字、CLI=同名命令、
+ *                              参数={message}，复杂参数用 P3394_AGENT_CLI_ARGS）
  *   P3394_AGENT_ID            本节点的 agent_id（默认随预设）
  *   P3394_AGENT_ALIAS         本节点自报的显示名（默认空 = 用 agent_id）
  *   P3394_AGENT_MODE          oneshot（默认）| sscli
@@ -77,6 +80,8 @@ const SEND_TASK_RETRIES = Math.max(1, Number(process.env.P3394_SEND_TASK_RETRIES
 const replyWaiters = new Map(); // message_id → 处理回信的函数
 
 // 预设：市面上常见智能体的 CLI 模板（oneshot 非交互模式，stdout 输出最终回复）。
+// 预设只是便捷模板，不是接入白名单——任何 P3394_AGENT 名字都可启动，
+// 未知名默认：身份=名字、CLI=同名命令、参数={message}（见下方解析逻辑）。
 const PRESETS = {
   hermes:   { cli: 'hermes',  args: '-z {message} --cli',       id: 'hermes' },
   claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude' },
@@ -88,20 +93,19 @@ const PRESETS = {
   workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy' },
 };
 const PRESET_NAME = (process.env.P3394_AGENT || 'hermes').trim().toLowerCase();
+// 预设只是便捷模板，不是白名单：P3394 面向任意智能体/任意程序，任何名字
+// 都可接入。未知名字的默认语义：身份 = 该名字；CLI = 同名命令；
+// 参数 = 把消息作为唯一参数（复杂参数用 P3394_AGENT_CLI_ARGS 自定义）。
 const preset = PRESETS[PRESET_NAME] || null;
-if (!preset) {
-  console.error('[p3394-gateway] 未知 P3394_AGENT=' + PRESET_NAME + '，可用预设：' + Object.keys(PRESETS).join(', '));
-  process.exit(2);
-}
-const AGENT_ID = (process.env.P3394_AGENT_ID || preset.id).trim();
+const AGENT_ID = (process.env.P3394_AGENT_ID || (preset ? preset.id : PRESET_NAME)).trim();
 const AGENT_ALIAS = (process.env.P3394_AGENT_ALIAS || '').trim();
 const AGENT_MODE = (process.env.P3394_AGENT_MODE || 'oneshot').trim().toLowerCase();
 if (AGENT_MODE !== 'oneshot' && AGENT_MODE !== 'sscli') {
   console.error('[p3394-gateway] 未知 P3394_AGENT_MODE=' + AGENT_MODE + '（oneshot | sscli）');
   process.exit(2);
 }
-const CLI = (process.env.P3394_AGENT_CLI || preset.cli).trim();
-const CLI_ARGS = (process.env.P3394_AGENT_CLI_ARGS || preset.args).trim();
+const CLI = (process.env.P3394_AGENT_CLI || (preset ? preset.cli : PRESET_NAME)).trim();
+const CLI_ARGS = (process.env.P3394_AGENT_CLI_ARGS || (preset ? preset.args : '{message}')).trim();
 const TIMEOUT_MS = Number(process.env.P3394_AGENT_TIMEOUT_MS || 10 * 60 * 1000);
 const NODE_KIND = (process.env.P3394_NODE_KIND || 'agent').trim();
 if (!['agent', 'sub_agent', 'task_agent', 'capability', 'model_runtime'].includes(NODE_KIND)) {

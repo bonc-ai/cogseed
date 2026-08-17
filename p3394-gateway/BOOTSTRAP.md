@@ -32,9 +32,13 @@ npm install -g @cogseed/p3394-gateway
 启动（把 P3394 信封自动翻译成你的 CLI 调用与回答）：
 
 ```bash
-P3394_AGENT=<预设名> p3394-gateway    # 预设: hermes/claude/codex/opencode/gemini/aider
-# 自研 CLI 用自定义模板:
+# 预设只是模板不是白名单：填你的名字即可（身份=名字，执行 <名字> {message}）
+P3394_AGENT=<你的名字> p3394-gateway
+# 内置预设: hermes/claude/codex/opencode/gemini/aider（例如 P3394_AGENT=claude）
+# 需要特定参数时自定义模板:
 # P3394_AGENT_CLI=<你的命令> P3394_AGENT_CLI_ARGS='<参数模板，{message} 为消息占位>' p3394-gateway
+# 例（pi 无头模式）:
+# P3394_AGENT=pi P3394_AGENT_CLI_ARGS='-p {message} --no-session' p3394-gateway
 ```
 
 启动后你的 P3394 端点在 `http://127.0.0.1:9000`；网关会**自动向 CogSeed 发 hello 注册**
