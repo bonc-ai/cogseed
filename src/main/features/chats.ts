@@ -2705,6 +2705,18 @@ export async function handoffWelcomeReply(
       await appendVisible(userId, conversationId, userMsg, ['user', 'commander']);
     }
 
+    // B+ fast import: when the session's extraction is still running in the
+    // background, mark the reply so the renderer shows a "正在提炼"
+    // placeholder panel; the sessionImport.events stream later delivers the
+    // real carry details to swap in.
+    let pendingExtraction = false;
+    try {
+      const { getExtractionState, isExtractionPending } = await import('./session_import/extraction-background');
+      pendingExtraction = isExtractionPending(await getExtractionState(userId, conversationId));
+    } catch {
+      pendingExtraction = false;
+    }
+
     const reply: GroupMessage = {
       id: genId12(),
       ts: nowIso(),
@@ -2712,6 +2724,7 @@ export async function handoffWelcomeReply(
       to: ['user'],
       text: data.text,
       model_text: data.modelText,
+      ...(pendingExtraction ? { welcome_pending: true } : {}),
       ...(data.carry.length ? { welcome_carry: JSON.stringify(data.carry) } : {}),
       // Full resume bundle for「查看依据」右栏 + 「带着这些继续」Action Plan。
       welcome_resume: JSON.stringify({

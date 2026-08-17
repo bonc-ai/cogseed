@@ -62,40 +62,7 @@ describe('9.1 unified framework · compact result blocks (middle)', () => {
   });
 });
 
-describe('9.1 unified framework · bottom zone (continue + risk)', () => {
-  it('renders a continue button next to the send button in the composer', () => {
-    expect(indexSource).toContain('id="chat-continue-btn"');
-    expect(indexSource).toContain('data-i18n="chat.continue"');
-    const sendPos = indexSource.indexOf('id="chat-send-btn"');
-    const continuePos = indexSource.indexOf('id="chat-continue-btn"');
-    expect(continuePos).toBeGreaterThan(-1);
-    expect(sendPos).toBeGreaterThan(continuePos);
-  });
-
-  it('binds the continue button to send the localized continue prompt', () => {
-    expect(conversationSource).toContain("getElementById('chat-continue-btn')");
-    expect(conversationSource).toContain("t('chat.continue_prompt')");
-    expect(conversationSource).toContain('await sendInCurrentConversation(content)');
-    // 主会话控制器 bindInput=false，继续按钮必须单独接线而非挂在通用控制器。
-    expect(conversationSource).toContain('function _bindChatContinueButton');
-  });
-
-  it('turns the continue button into a retry button when the last exchange failed', () => {
-    expect(conversationSource).toContain('function _chatContinueButtonState');
-    expect(conversationSource).toContain("dataset.failed === '1'");
-    expect(conversationSource).toContain('_retryFailedAssistantMessage(state.failedMsgEl, null)');
-    expect(conversationSource).toContain("continueBtn.classList.toggle('is-retry', isRetry)");
-    expect(indexSource).toContain('data-role="continue-label"');
-  });
-
-  it('shows continue only while the executor is idle', () => {
-    const start = conversationSource.indexOf('function _updateConvSendUI');
-    const end = conversationSource.indexOf('\n/** Show / hide a banner', start);
-    const sendUi = conversationSource.slice(start, end);
-    expect(sendUi).toContain('continueBtn.hidden = pending');
-    expect(sendUi).toContain('continueBtn.disabled = pending');
-  });
-
+describe('9.1 unified framework · bottom zone', () => {
   it('uses the wake-pending host for the composer pending area', () => {
     expect(conversationSource).toContain('chat-wake-pending-host');
     expect(styleSource).toContain('.chat-wake-pending-host');
@@ -132,8 +99,6 @@ describe('9.1 unified framework · left zone (tasks & sessions)', () => {
 describe('9.1 unified framework · locale coverage', () => {
   it('defines the active keys in all four renderer languages', () => {
     const keys = [
-      'chat.continue',
-      'chat.continue_prompt',
       'chat.retry_btn',
       'chat.status.running',
       'chat.task_plan_label',

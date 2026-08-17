@@ -1042,48 +1042,76 @@ if (typeof window !== 'undefined') {
     document.addEventListener('DOMContentLoaded', () => {
       _initAllMentionMirrors();
       _initChatInputReserveObserver();
-      _bindChatContinueButton();
+      _initSessionImportEvents();
     }, { once: true });
   } else {
     _initAllMentionMirrors();
     _initChatInputReserveObserver();
-    _bindChatContinueButton();
+    _initSessionImportEvents();
   }
 }
 
-// 9.1 统一框架 · 底部「继续」（恢复自 9.1 会话区域框架）：主会话的一次性
-// 绑定。主会话控制器（_makeConvChatController）的 features.bindInput=false，
-// 输入接线由主会话自己接管，所以「继续」不能在通用控制器里绑，必须单独接
-// 一次。按钮按当前会话状态决定动作（智能继续）：
-//   - 最后一条消息失败（failed/failure_kind）→ 重试该消息（复用既有
-//     _retryFailedAssistantMessage 路径，带 retry_message_id）；
-//   - 其余（被中断 / 有计划未完成 / 普通空闲）→ 发送「请继续」续跑提示，
-//     走 sendInCurrentConversation，与手输同一条发送管线。
-function _chatContinueButtonState() {
-  const container = document.getElementById('chat-history');
-  const msgs = container ? Array.from(container.querySelectorAll('.chat-message')) : [];
-  const last = msgs[msgs.length - 1];
-  const lastFailed = !!last
-    && !last.classList.contains('user')
-    && (last.dataset.failed === '1' || !!last.dataset.failureKind || !!last.dataset.failureCode);
-  return { kind: lastFailed ? 'retry' : 'continue', failedMsgEl: lastFailed ? last : null };
+// ── B+ fast import: background extraction events ──────────────────────────
+// `sessionImport.events` fires when a background extraction finishes. We
+// swap the "正在提炼" placeholder welcome panel for the real carry details
+// (and toast the user) — the user opened the conversation while extraction
+// was still running, so the assets arrive after the welcome reply.
+let _sessionImportEventsBound = false;
+let _sessionImportEventsHandle = null;
+
+function _initSessionImportEvents() {
+  if (_sessionImportEventsBound) return;
+  _sessionImportEventsBound = true;
+  if (!window.cogseed || typeof window.cogseed.stream !== 'function') return;
+  try {
+    _sessionImportEventsHandle = window.cogseed.stream('sessionImport.events', {}, (ev) => {
+      const event = ev && ev.event ? ev.event : ev;
+      if (!event || !event.cid) return;
+      if (event.type === 'extraction_done') _handleExtractionDone(event);
+      else if (event.type === 'extraction_failed') _handleExtractionFailed(event);
+    });
+    if (_sessionImportEventsHandle && typeof _sessionImportEventsHandle.catch === 'function') {
+      _sessionImportEventsHandle.catch(() => { /* 流断开静默，下次启动重连 */ });
+    }
+  } catch (_) { /* 无事件通道时静默降级（导入仍正常，只是不实时提示） */ }
 }
 
-function _bindChatContinueButton() {
-  const btn = document.getElementById('chat-continue-btn');
-  if (!btn || btn.dataset.bound === '1') return;
-  btn.dataset.bound = '1';
-  btn.addEventListener('click', async () => {
-    if (!currentCid || isConvPending(currentCid)) return;
-    if (typeof ensureModelConfigured === 'function' && !ensureModelConfigured()) return;
-    const state = _chatContinueButtonState();
-    if (state.kind === 'retry' && state.failedMsgEl) {
-      try { await _retryFailedAssistantMessage(state.failedMsgEl, null); } catch (_) {}
-      return;
+function _handleExtractionDone(event) {
+  const { cid, welcome } = event;
+  if (cid === currentCid) _upgradeWelcomePanel(cid, welcome);
+  if (typeof uiToast === 'function') {
+    uiToast(t('chat.welcome_extraction_done', '导入会话已完成提炼，可查看携带明细'), { variant: 'success', timeoutMs: 5000 });
+  }
+}
+
+function _handleExtractionFailed(event) {
+  const { cid } = event;
+  if (cid === currentCid) {
+    const panel = document.querySelector(`.chat-message[data-cid="${cid}"] .welcome-carry.is-pending`);
+    if (panel) {
+      panel.classList.remove('is-pending');
+      const badge = panel.querySelector('.welcome-carry-pending-badge');
+      if (badge) badge.textContent = t('chat.welcome_extraction_failed', '提炼失败');
     }
-    const content = t('chat.continue_prompt');
-    try { await sendInCurrentConversation(content); } catch (_) { /* 与普通发送一致的容错 */ }
+  }
+  if (typeof uiToast === 'function') {
+    uiToast(t('chat.welcome_extraction_failed_toast', '导入会话提炼失败，可稍后在设置中检查模型配置'), { variant: 'warning', timeoutMs: 5000 });
+  }
+}
+
+/** 提炼完成：用事件携带的 welcome 数据替换「正在提炼」占位面板。 */
+function _upgradeWelcomePanel(cid, welcome) {
+  const panel = document.querySelector(`.chat-message[data-cid="${cid}"] .welcome-carry.is-pending`);
+  if (!panel || !welcome) return;
+  const carry = Array.isArray(welcome.carry) ? welcome.carry : [];
+  const resumeJson = JSON.stringify({
+    restatement: welcome.restatement || '',
+    carry,
+    boundary: welcome.boundary || '',
+    plan: Array.isArray(welcome.plan) ? welcome.plan : [],
+    summary: welcome.summary || '',
   });
+  panel.outerHTML = _renderWelcomeCarryHtml(carry, resumeJson);
 }
 
 // ─── Recipient chip — per-cid for conversations, ephemeral for new-chat ──
@@ -1768,6 +1796,22 @@ function _renderWelcomeCarryHtml(carry, resumeJson) {
   </div>`;
 }
 
+/** B+ 快速导入：后台提炼尚未完成时，欢迎回复渲染「正在提炼」占位条。
+ *  提炼完成事件（sessionImport.events → extraction_done）携带真实
+ *  welcome 数据，renderer 用 _renderWelcomeCarryHtml 原地替换。 */
+function _renderWelcomePendingHtml(resumeJson) {
+  const resumeAttr = (typeof resumeJson === 'string' && resumeJson.trim())
+    ? ` data-welcome-resume="${escapeHtml(resumeJson)}"`
+    : '';
+  return `<div class="welcome-carry is-pending"${resumeAttr}>
+    <div class="welcome-carry-head">
+      <b>${escapeHtml(t('chat.welcome_carry_title', '准备携带'))}</b>
+      <span class="welcome-carry-pending-badge">${escapeHtml(t('chat.welcome_extracting', '正在提炼…'))}</span>
+    </div>
+    <div class="welcome-carry-scope">${escapeHtml(t('chat.welcome_extracting_hint', '正在后台提炼认知资产，完成后自动更新携带明细。'))}</div>
+  </div>`;
+}
+
 /** 资产 id → 名字映射（惰性加载一次，草稿卡友好显示用）。加载完成后
  *  自动刷新页面上已渲染的草稿卡（无论从哪个入口进入会话都会生效）。 */
 let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
@@ -2031,6 +2075,12 @@ function onEnterConversationView() {
     if (pendingState?.loadingEl?.isConnected) {
       _replayBufferedGroupEvents(currentCid);
     }
+  } else if (currentCid && typeof _rediscoverBackendRun === 'function') {
+    // The send-stream already finalized (bus went quiescent) but a CogSeed
+    // Backend task for this conversation may still be executing. Re-check
+    // once on view enter so an in-flight Backend turn is picked up again
+    // (running indicator + live process rail) instead of looking stopped.
+    void _rediscoverBackendRun(currentCid);
   }
   // Quote preview is per-cid; rerender so a quote captured in another conv
   // doesn't bleed into this one (and a quote left in this conv reappears
@@ -2338,7 +2388,13 @@ async function _syncPendingActorsFromRuntime(cid, opts = {}) {
     : [];
   const hasActiveTurnsField = Array.isArray(data.active_turns);
   const activeTurns = _normaliseActiveTurns(data.active_turns);
-  const processing = data.processing === true || inFlight.length > 0 || activeTurns.length > 0;
+  // backend_active: a CogSeed Backend (Mate / local-CLI) task for this cid
+  // is still executing outside the group-chat bus. Treat it as processing —
+  // otherwise the recovery poll would finalize the run while the turn is
+  // genuinely still working (imported-session continuation dispatches long
+  // work there), making the conversation look "stopped".
+  const processing = data.processing === true || data.backend_active === true
+    || inFlight.length > 0 || activeTurns.length > 0;
   if (window.ConversationInfo) {
     try { window.ConversationInfo.refreshFiles(cid, { silent: true }); } catch (_) {}
   }
@@ -3289,6 +3345,7 @@ function _groupMsgToLegacy(gm) {
     ...(gm.recall_projection_card ? { recall_projection_card: gm.recall_projection_card } : {}),
     ...(typeof gm.welcome_carry === 'string' && gm.welcome_carry ? { welcome_carry: gm.welcome_carry } : {}),
     ...(typeof gm.welcome_resume === 'string' && gm.welcome_resume ? { welcome_resume: gm.welcome_resume } : {}),
+    ...(gm.welcome_pending === true ? { welcome_pending: true } : {}),
     ...(gm.imported_seed === true ? { imported_seed: true } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
@@ -8436,7 +8493,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const spaceDraftHtml = spaceDraft ? _renderSpaceDraftButtonHtml(spaceDraft) : '';
   const welcomeCarryHtml = (role === 'assistant' && message.welcome_carry)
     ? _renderWelcomeCarryHtml(_parseWelcomeCarry(message.welcome_carry), message.welcome_resume || '')
-    : '';
+    : (role === 'assistant' && message.welcome_pending === true)
+      ? _renderWelcomePendingHtml(message.welcome_resume || '')
+      : '';
 
   const attachmentCid = message.attachment_cid || message.attachments_cid || opts.cid || currentCid;
   // Attachments render on user bubbles AND on P3394 peer bubbles — an
@@ -12822,6 +12881,49 @@ function _finishStreamingMsg(cid) {
   // forget: _dispatchNextQueued is async (ontology_group token expansion
   // needs an IPC round-trip); this call site never awaited it.
   Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
+  // Backend-run handoff guard: the send-stream can finalize while a CogSeed
+  // Backend (Mate / local-CLI) task for this cid is still executing (the bus
+  // goes quiescent in the dispatch gap, or the task runs entirely outside the
+  // bus). Re-check once shortly after finalize so an in-flight Backend turn
+  // is picked up again instead of silently dropping off the UI. Aborts and
+  // failures are safe here: the backend task is cancelled/terminal by then,
+  // so the re-check finds nothing to re-establish.
+  _scheduleBackendRunRediscovery(cid);
+}
+
+// One-shot re-check that re-establishes the running placeholder for a
+// conversation whose primary send-stream already finalized but whose CogSeed
+// Backend task is still executing. This is what makes a long continued task
+// stay visible (indicator + live process rail) after the user switches away
+// and back, instead of looking "stopped" with the agent reply gone.
+let _backendRediscoveryTimers = new Map(); // cid → timeout id
+
+function _scheduleBackendRunRediscovery(cid) {
+  if (!cid) return;
+  const existing = _backendRediscoveryTimers.get(cid);
+  if (existing) clearTimeout(existing);
+  _backendRediscoveryTimers.set(cid, setTimeout(() => {
+    _backendRediscoveryTimers.delete(cid);
+    if (isConvPending(cid) || cid !== currentCid) return;
+    void _rediscoverBackendRun(cid);
+  }, 2000));
+}
+
+async function _rediscoverBackendRun(cid) {
+  if (!cid || isConvPending(cid)) return;
+  try {
+    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/runtime`);
+    const data = await res.json();
+    if (!data || data.ok === false) return;
+    const processing = data.processing === true || data.backend_active === true
+      || (Array.isArray(data.in_flight) && data.in_flight.length > 0)
+      || (Array.isArray(data.active_turns) && data.active_turns.length > 0);
+    if (!processing || isConvPending(cid)) return;
+    // Re-establish the run: pending state, streaming placeholder, group event
+    // observer (untilIdle — ends when the Backend task's terminal projection
+    // clears backendTurns and the bus goes quiescent) and history polling.
+    _observeConversationRunFromPlanAction(cid, { attachExisting: true, allowWithController: true });
+  } catch (_) { /* best effort — no rediscovery */ }
 }
 
 // Scroll the given message to the top of the visible chat area.
@@ -15149,22 +15251,6 @@ function _updateConvSendUI(cid) {
   sendBtn.title = pending ? t('chat.stop_reply') : t('chat.send_title');
   if (input) {
     input.placeholder = pending ? t('chat.input_placeholder_queue') : t('chat.input_placeholder');
-  }
-  // 9.1 统一框架 · 底部「继续」（恢复自 9.1 会话区域框架）：非运行态且
-  // 执行方可用时显示；运行中隐藏（此时发送按钮已是「停止」，继续与停止
-  // 并存会误导）。文案按状态切换：最后一条失败 → 「重试」，否则「继续」。
-  const continueBtn = document.getElementById('chat-continue-btn');
-  if (continueBtn) {
-    continueBtn.hidden = pending;
-    continueBtn.disabled = pending;
-    if (!pending) {
-      const continueState = _chatContinueButtonState();
-      const isRetry = continueState.kind === 'retry';
-      const labelEl = continueBtn.querySelector('[data-role="continue-label"]');
-      if (labelEl) labelEl.textContent = isRetry ? t('chat.retry_btn') : t('chat.continue');
-      continueBtn.title = isRetry ? t('chat.retry_btn') : t('chat.continue');
-      continueBtn.classList.toggle('is-retry', isRetry);
-    }
   }
   if (!pending) input?.focus();
 }

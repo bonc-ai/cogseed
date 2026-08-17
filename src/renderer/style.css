@@ -4981,6 +4981,24 @@ body.model-not-configured .main-content { flex-direction: column; }
   flex-direction: column;
   gap: 6px;
 }
+/* B+ 快速导入：后台提炼进行中的占位条（绿色呼吸提示，与常规欢迎面板同款）。 */
+.welcome-carry.is-pending {
+  border-style: dashed;
+  animation: welcome-carry-pending 1.6s ease-in-out infinite;
+}
+@keyframes welcome-carry-pending {
+  0%, 100% { border-color: color-mix(in srgb, var(--primary) 30%, var(--border)); }
+  50% { border-color: color-mix(in srgb, var(--primary) 65%, var(--border)); }
+}
+.welcome-carry-pending-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--primary-text, #0a7a55);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
 .welcome-carry-head {
   display: flex;
   align-items: center;
@@ -24267,6 +24285,8 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .cw-import-row.is-running{background:#FFF8E6;border-color:#F1C75B;animation:cw-import-pulse 1.2s ease-in-out infinite}
 @keyframes cw-import-pulse{0%,100%{background:#FFF8E6}50%{background:#FFEFC7}}
+.cw-import-row.is-pending{background:#EAF3EE;border-color:#9CC3AE;animation:cw-import-pending 1.4s ease-in-out infinite}
+@keyframes cw-import-pending{0%,100%{background:#EAF3EE}50%{background:#D7E9E0}}
 .cw-import-row.is-ok{background:var(--surface-2,#EDF3EF);border-color:var(--border-strong,rgba(24,84,60,.2))}
 .cw-import-row.is-degraded{background:#FBF3E0;border-color:#E3C56B}
 .cw-import-row.is-exists{background:var(--surface-2,#EDF3EF);border-color:var(--border-strong,rgba(24,84,60,.2))}
@@ -24321,6 +24341,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 .cw-done-tag{
   flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:0.04em;
   color:#9A6B00;background:#F3E2B0;border-radius:999px;padding:3px 9px;
+}
+/* 后台提炼中标记：绿色（区别于黄色「未提炼」）。 */
+.cw-done-tag.is-pending{
+  color:var(--primary-text,#0A7A55);background:var(--primary-soft,#E2F5EC);
 }
 /* 已存在的会话标记：绿色（区别于黄色「未提炼」）。 */
 .cw-done-tag.is-exists{
