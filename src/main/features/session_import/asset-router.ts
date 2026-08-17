@@ -12,7 +12,7 @@
  *   2. `routeCognitions` — the stage-4 mapping itself. The three extracted
  *      cognition buckets map 1:1 onto Recall's AbilityAssetType:
  *        personal  → suggestedType 'personal'   (关于我)
- *        rules     → suggestedType 'rule'       (规则与判断)
+ *        rules     → suggestedType 'rule'       (规则与偏好)
  *        templates → suggestedType 'template'   (模板与范例)
  *      Each becomes a *pending* candidate the user later confirms in the
  *      Recall review page — imported entities (the conversation) are direct,

@@ -20,10 +20,19 @@ import { allowsSilentDefaultInjection } from './policy';
 import { validatePromotionByAssetType } from './promotion';
 import { evaluateAssetRuntimeEligibility } from './runtime';
 import type { FormalAbilityAsset, FormalAssetType } from './types';
+import type { AssetVersionDiff } from './version-diff';
 
 export type CognitionInboxKind =
   /** 已确认拥有的方法，还没落成可执行 Skill。 */
   | 'skill_creation_suggested'
+  /** 方法在生成 Skill 之后又改过内容：已装的 Skill 落后于资产。 */
+  | 'skill_upgrade_suggested'
+  /** 系统线改了规则的作用范围：它从此会进出一批不同的任务。 */
+  | 'rule_scope_changed'
+  /** 系统线改了模板正文。 */
+  | 'template_updated'
+  /** 敏感级被升高：能去的地方变多了，属于扩权。 */
+  | 'sensitivity_escalated'
   /** 规则没有作用边界：无边界的规则不该被默认带入任何任务。 */
   | 'rule_boundary_missing'
   /** 同一条判断被归到了两个不同的资产类型，必须由用户裁定。 */
@@ -69,12 +78,21 @@ export interface CognitionInboxInput {
   candidates: readonly CognitionInboxCandidate[];
   /** 当前不可用（失效/暂停/撤权）的来源 id。 */
   unavailableSourceIds: ReadonlySet<string>;
+  /**
+   * assetId → 该资产最近一次真正改了内容的版本变更。缺省 = 没有版本历史可读，
+   * 变更类待办整体不产出（而不是当成"没变过"去猜）。
+   */
+  latestDiffs?: ReadonlyMap<string, AssetVersionDiff>;
   /** Skill 安装状态读取失败的资产。未知状态不能当成未生成。 */
   skillStateUnknownAssetIds?: ReadonlySet<string>;
 }
 
 const URGENCY: Record<CognitionInboxKind, CognitionInboxUrgency> = {
   skill_creation_suggested: 'confirm',
+  skill_upgrade_suggested: 'confirm',
+  rule_scope_changed: 'confirm',
+  template_updated: 'low_disturbance',
+  sensitivity_escalated: 'confirm',
   rule_boundary_missing: 'low_disturbance',
   classification_conflict: 'confirm',
   evidence_insufficient: 'low_disturbance',
@@ -85,11 +103,15 @@ const URGENCY: Record<CognitionInboxKind, CognitionInboxUrgency> = {
 
 /** 排序权重：先要人点头的，再低打扰的；同级按 kind 稳定排序。 */
 const KIND_ORDER: CognitionInboxKind[] = [
+  'sensitivity_escalated',
   'classification_conflict',
+  'rule_scope_changed',
   'sensitivity_unclassified',
   'source_unavailable',
+  'skill_upgrade_suggested',
   'skill_creation_suggested',
   'rule_boundary_missing',
+  'template_updated',
   'evidence_insufficient',
   'candidate_pending_review',
 ];
@@ -125,6 +147,57 @@ export function buildCognitionInbox(input: CognitionInboxInput): CognitionInboxI
       items.push(item('skill_creation_suggested', `skill:${asset.assetId}`, asset.title, {
         assetType: asset.assetType,
         assetId: asset.assetId,
+      }));
+    }
+
+    // ── 变更类待办 ────────────────────────────────────────────────────
+    //
+    // 判断依据是最近一次版本变更，且**只报系统线改的**。用户自己刚改过的边界
+    // 不需要再回来问他一遍——他就是那个改的人。反过来，自动抽取线和 KStar
+    // 沉淀线改的内容，用户从来没看见过，那才是需要知情的。
+    //
+    // 这条规则顺带解决了"永不消失的待办"：没有已读状态可存，但用户一旦自己
+    // 编辑或确认过这条资产（产生一次 user 版本），它就自动从待办里退场。
+    const diff = input.latestDiffs?.get(asset.assetId);
+    const systemChanged = diff !== undefined && diff.actor !== 'user';
+
+    if (diff && systemChanged) {
+      if (diff.kinds.includes('sensitivity_escalated')) {
+        const escalation = diff.changes.find((change) => change.kind === 'sensitivity_escalated');
+        items.push(item('sensitivity_escalated', `sensitivity-up:${asset.assetId}`, asset.title, {
+          assetType: asset.assetType,
+          assetId: asset.assetId,
+          ...(escalation ? { detail: `${escalation.before} → ${escalation.after}` } : {}),
+        }));
+      }
+      if (asset.assetType === 'rule'
+        && (diff.kinds.includes('boundary') || diff.kinds.includes('scope'))) {
+        const boundary = diff.changes.find((change) => change.kind === 'boundary' || change.kind === 'scope');
+        items.push(item('rule_scope_changed', `rule-scope:${asset.assetId}`, asset.title, {
+          assetType: asset.assetType,
+          assetId: asset.assetId,
+          ...(boundary ? { detail: `${boundary.before} → ${boundary.after}` } : {}),
+        }));
+      }
+      if (asset.assetType === 'template' && diff.kinds.includes('statement')) {
+        items.push(item('template_updated', `template:${asset.assetId}`, asset.title, {
+          assetType: asset.assetType,
+          assetId: asset.assetId,
+          ...(diff.reason ? { detail: diff.reason } : {}),
+        }));
+      }
+    }
+
+    // Skill 升版：方法在生成 Skill 之后又改了内容，已装的 Skill 就落后了。
+    // 这一条不看 actor——就算是用户自己改的方法，那个已经装好的 Skill 也不会
+    // 跟着自己变，仍然需要他决定要不要重新生成。
+    if (asset.assetType === 'skill_method' && asset.payload.kind === 'skill_method'
+      && asset.payload.generatedSkillId && diff
+      && (diff.kinds.includes('statement') || diff.kinds.includes('boundary'))) {
+      items.push(item('skill_upgrade_suggested', `skill-upgrade:${asset.assetId}`, asset.title, {
+        assetType: asset.assetType,
+        assetId: asset.assetId,
+        detail: `${diff.fromVersion} → ${diff.toVersion}`,
       }));
     }
 
