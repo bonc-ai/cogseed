@@ -47,6 +47,7 @@ async function createAsset() {
     summary: 'Use decision logs for architecture changes',
     suggestedType: 'rule',
     suggestedScope: 'review,project',
+    spaceId: 'workspace-a',
     sourceRefs: [{ kind: 'execution', id: 'exec-a' }],
   });
   const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
@@ -61,6 +62,7 @@ async function createAssetWith(input: { judgment: string; summary: string; sourc
     summary: input.summary,
     suggestedType: 'rule',
     suggestedScope: 'global',
+    spaceId: 'workspace-a',
     sourceRefs: [{
       kind: 'conversation',
       id: input.sourceId,

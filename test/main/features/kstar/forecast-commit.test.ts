@@ -75,6 +75,7 @@ async function seedForecastBoundary(options: { confirmed: boolean }) {
     summary: 'OAuth callback validation',
     suggestedType: 'rule',
     suggestedScope: 'review',
+    spaceId: 'workspace-a',
     sourceRefs: [{ kind: 'execution', id: 'exec-oauth' }],
   });
   const promoted = await candidates.promoteRecallCandidate('user-a', savedCandidate.id, {

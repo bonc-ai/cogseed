@@ -48,6 +48,7 @@ async function createConfirmedProjection() {
 async function createPreviewProjection() {
   const { projection, refs, candidates } = await modules();
   const candidate = await candidates.saveRecallCandidate('user-a', {
+      spaceId: 'workspace-a',
     judgment: 'Keep decision logs for architecture changes.',
     summary: 'Use decision logs for architecture changes',
     suggestedType: 'rule',
