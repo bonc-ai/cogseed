@@ -4390,5 +4390,12 @@
   "cognition.maturity_transfer_validated": "移行済み検証",
   "cognition.asset_write_origin_system": "システム沈殿",
   "conversation_info.carried.permission.default": "通常",
-  "common.id_masked": "…"
+  "common.id_masked": "…",
+  "skills.secpanel_nseap": "NSEAP 宣言",
+  "skills.secpanel_nseap_unavailable": "NSEAP 宣言を利用できません",
+  "skills.secpanel_nseap_mismatch": "NSEAP 宣言が一致しません",
+  "skills.secpanel_nseap_needs_input": "NSEAP 宣言に入力が必要です",
+  "skills.secpanel_nseap_warnings": "NSEAP 警告",
+  "skills.secpanel_nseap_more": "他 {n} 件は非表示",
+  "skills.secpanel_nseap_note": "NSEAP 宣言はホストが検証します"
 }

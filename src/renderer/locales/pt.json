@@ -4390,5 +4390,12 @@
   "cognition.maturity_transfer_validated": "Validação transferida",
   "cognition.asset_write_origin_system": "Precipitado pelo sistema",
   "conversation_info.carried.permission.default": "Padrão",
-  "common.id_masked": "…"
+  "common.id_masked": "…",
+  "skills.secpanel_nseap": "Declaração NSEAP",
+  "skills.secpanel_nseap_unavailable": "Declaração NSEAP indisponível",
+  "skills.secpanel_nseap_mismatch": "Declaração NSEAP incompatível",
+  "skills.secpanel_nseap_needs_input": "Declaração NSEAP precisa de entrada",
+  "skills.secpanel_nseap_warnings": "Avisos NSEAP",
+  "skills.secpanel_nseap_more": "{n} mais não exibidos",
+  "skills.secpanel_nseap_note": "Declaração NSEAP verificada pelo host"
 }
