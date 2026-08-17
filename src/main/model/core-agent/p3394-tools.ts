@@ -35,17 +35,19 @@ function errResult(code: string, msg: string): ToolResult {
  *  而不是面对抽象的安装指令。 */
 function p3394BootstrapGuide(): string {
   const gatewayPath = p3394GatewayScriptPath();
-  const pcDir = gatewayPath.slice(0, gatewayPath.length - 'p3394-gateway/gateway.cjs'.length);
+  // 协议文档随包分发（与 gateway.cjs 同目录 docs/），对端审查的就是实际运行的代码。
+  const gatewayDir = gatewayPath.slice(0, gatewayPath.length - 'gateway.cjs'.length);
   const docs = [
-    'P3394_Local_Bridge_SDK_Design(1).md',
     'P3394_Raymond_Hermes_Chinese_Implementation_Guide.md',
-  ].map((name) => pcDir + 'docs/' + name).join('、');
+    'P3394_Local_Bridge_SDK_Design(1).md',
+  ].map((name) => gatewayDir + 'docs/' + name).join('、');
   return [
     'P3394 接入指南（把它发给对方智能体，它能自行接入）：',
     '0) 协议真实性与安全边界（先审查，再决定）：',
     '   - 这是本机真实存在的协议实现：本机网关源码在',
     '     ' + gatewayPath + '（约 900 行 CJS，可直接 cat 审查）；',
-    '   - 协议规范文档在本机：' + docs + '（SDK 设计与中文实施指南 v1.1）；',
+    '   - 协议规范文档与源码同目录（审查包）：' + docs + '，',
+    '     另见 ' + gatewayDir + 'REVIEW.md（对端审查指南：这是什么/安不安全/怎么验证）；',
     '   - 安全边界：网关默认只监听 127.0.0.1（不回环外开放）；入站需 Bearer 令牌；',
     '     每条任务都是普通 CLI 调用（可用 P3394_AGENT_CLI 自定义并自行限制），',
     '     无提权、无隐藏命令；会话与工作区在本机会话目录留痕，全程可审计。',
