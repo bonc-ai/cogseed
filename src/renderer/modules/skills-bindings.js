@@ -244,6 +244,11 @@ function _initSkillsCognitionBindings() {
     }
   };
 
+  const renderActiveAssetSurface = () => {
+    if (_skillsCognitionState.page === 'governance') renderSkillsCognitionGovernance();
+    else renderSkillsCognitionAssets();
+  };
+
   const runRecallAssetAction = async (control, actionName, assetId) => {
     if (!actionName || !assetId || control.dataset.busy === '1') return;
     control.dataset.busy = '1'; control.disabled = true;
@@ -252,22 +257,29 @@ function _initSkillsCognitionBindings() {
         _skillsCognitionState.assetHistoryById ||= {};
         _skillsCognitionState.visibleAssetHistoryId = assetId;
         _skillsCognitionState.assetHistoryById[assetId] = { loading: true };
-        renderSkillsCognitionAssets();
-        const result = await window.cogseed.invoke('recall.assets.versions', { assetId });
+        renderActiveAssetSurface();
+        // diff 与版本一起取：只有版本号和时间的话，"回滚到此版本"对用户就是
+        // 盲赌——他只能靠时间戳猜哪一版是他要的。diff 取不到不该让版本面板
+        // 打不开，所以单独兜底。
+        const [result, diffResult] = await Promise.all([
+          window.cogseed.invoke('recall.assets.versions', { assetId }),
+          window.cogseed.invoke('cognition.assets.diff', { assetId }).catch(() => null),
+        ]);
         if (!result?.ok) throw new Error(result?.error || 'recall asset versions failed');
         _skillsCognitionState.assetHistoryById[assetId] = {
           loading: false,
           versions: result.versions || [],
           audit: result.audit || [],
+          diffs: diffResult?.ok ? (diffResult.diffs || []) : [],
         };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
         return;
       }
       if (actionName === 'chain') {
         _skillsCognitionState.assetChainById ||= {};
         _skillsCognitionState.visibleAssetChainId = assetId;
         _skillsCognitionState.assetChainById[assetId] = { loading: true };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
         const [chainResult, usageResult, proofResult] = await Promise.all([
           window.cogseed.invoke('recall.cognitionChain.read', { assetId }),
           // 使用记录与证明取不到都不该让整个履历打不开——它们是补充，
@@ -282,7 +294,7 @@ function _initSkillsCognitionBindings() {
           usage: usageResult?.usage || [],
           proofs: proofResult?.proofs || [],
         };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
         return;
       }
       // 不可逆或有时限的动作必须先确认。归档与恢复不确认：它们随时可撤销，
@@ -323,12 +335,12 @@ function _initSkillsCognitionBindings() {
       _skillsCognitionState.assetHistoryById ||= {};
       if (actionName === 'versions') {
         _skillsCognitionState.assetHistoryById[assetId] = { loading: false, error: (error && error.message) || String(error) };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
       }
       if (actionName === 'chain') {
         _skillsCognitionState.assetChainById ||= {};
         _skillsCognitionState.assetChainById[assetId] = { loading: false, error: (error && error.message) || String(error) };
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
       }
       if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
     } finally {
@@ -354,6 +366,41 @@ function _initSkillsCognitionBindings() {
   };
 
   panel.addEventListener('click', async (event) => {
+    // ── 使用与证明 ──────────────────────────────────────────────────
+    const proofEvent = event.target.closest('[data-recall-proof-event]');
+    if (proofEvent) {
+      // 再点一次收起，和版本面板的开合一致。
+      const next = proofEvent.dataset.recallProofEvent || '';
+      _skillsCognitionState.selectedProofEventId = _skillsCognitionState.selectedProofEventId === next ? '' : next;
+      renderSkillsCognitionProofs();
+      return;
+    }
+    const proofFeedback = event.target.closest('[data-recall-proof-feedback]');
+    if (proofFeedback) {
+      if (proofFeedback.dataset.busy === '1') return;
+      const feedback = proofFeedback.dataset.recallProofFeedback;
+      const proofId = proofFeedback.dataset.recallProofFeedbackProof;
+      const taskRunId = proofFeedback.dataset.recallProofFeedbackTask;
+      // 评价必须落到一条具体的证明或任务上。两者都没有时不该发请求——
+      // 一次无法归属的评价写进去，之后没人能说清它评的是哪次复用。
+      if (!feedback || (!proofId && !taskRunId)) return;
+      proofFeedback.dataset.busy = '1'; proofFeedback.disabled = true;
+      try {
+        const result = proofId
+          ? await window.cogseed.invoke('recall.proofs.effectiveness.feedback', { transferProofId: proofId, feedback })
+          : await window.cogseed.invoke('recall.proofs.effectiveness.feedbackForTask', { taskRunId, feedback });
+        if (!result?.ok) throw new Error(result?.error || 'effectiveness feedback failed');
+        // 评价会推进成熟度，所以整份快照都要重取，不能只重画本页。
+        await loadSkillsCognitionSnapshot();
+        await renderSkillsCognitionProofs();
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        proofFeedback.dataset.busy = '0'; proofFeedback.disabled = false;
+      }
+      return;
+    }
+
     const reload = event.target.closest('[data-cognition-reload]');
     if (reload) {
       if (reload.dataset.busy === '1') return;
@@ -372,6 +419,16 @@ function _initSkillsCognitionBindings() {
 
     const pageLink = event.target.closest('[data-cognition-page-link]');
     if (pageLink) {
+      // 跨页跳转可以顺带带上落点。「使用与证明」的「查看资产」按钮同时挂了
+      // page-link 和 ability-asset-id：这个分支在下面那个资产分支之前命中并
+      // return，不在这里取 id 的话，用户点过去只是换了一页，要看的那条资产
+      // 仍然没被选中——证明链就此断在最后一步。
+      const targetAssetId = pageLink.dataset.abilityAssetId || '';
+      if (targetAssetId) {
+        _skillsCognitionState.selectedAssetId = targetAssetId;
+        const targetAsset = (_skillsCognitionState.assets || []).find((item) => item.id === targetAssetId);
+        if (targetAsset) _skillsCognitionState.assetCategoryFilter = targetAsset.category || targetAsset.type || '';
+      }
       switchSkillsCognitionPage(pageLink.dataset.cognitionPageLink || 'inbox');
       return;
     }
@@ -433,6 +490,14 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const governanceAction = event.target.closest('[data-cognition-governance-action]');
+    if (governanceAction) {
+      const actionName = governanceAction.dataset.cognitionGovernanceAction || '';
+      const assetId = governanceAction.dataset.cognitionGovernanceAsset || '';
+      if (actionName && assetId) await runRecallAssetAction(governanceAction, actionName, assetId);
+      return;
+    }
+
     const assetRollback = event.target.closest('[data-recall-asset-rollback]');
     if (assetRollback) {
       const assetId = assetRollback.dataset.recallAssetRollback || '';
@@ -443,7 +508,7 @@ function _initSkillsCognitionBindings() {
 
     if (event.target.closest('[data-recall-asset-history-close]')) {
       _skillsCognitionState.visibleAssetHistoryId = '';
-      renderSkillsCognitionAssets();
+      renderActiveAssetSurface();
       return;
     }
 
@@ -460,7 +525,7 @@ function _initSkillsCognitionBindings() {
         const list = _skillsCognitionState.assets || [];
         const index = list.findIndex((item) => item.id === assetId);
         if (index >= 0) list[index] = result.asset;
-        renderSkillsCognitionAssets();
+        renderActiveAssetSurface();
         uiToast(_cognitionText(
           confirmed ? 'cognition.cross_scope_confirmed_done' : 'cognition.cross_scope_withdrawn_done',
           confirmed ? '已允许跨作用域使用' : '已撤回跨作用域许可',
@@ -475,7 +540,16 @@ function _initSkillsCognitionBindings() {
 
     if (event.target.closest('[data-recall-asset-chain-close]')) {
       _skillsCognitionState.visibleAssetChainId = '';
-      renderSkillsCognitionAssets();
+      renderActiveAssetSurface();
+      return;
+    }
+
+    const governanceAsset = event.target.closest('[data-cognition-governance-select]');
+    if (governanceAsset) {
+      _skillsCognitionState.selectedAssetId = governanceAsset.dataset.cognitionGovernanceSelect || '';
+      _skillsCognitionState.visibleAssetHistoryId = '';
+      _skillsCognitionState.visibleAssetChainId = '';
+      renderSkillsCognitionGovernance();
       return;
     }
 
@@ -711,9 +785,105 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    // 候选现在有独立详情页：带着 id 进去，而不是把用户扔回沉淀活动列表里
+    // 自己找。取不到 id 才退回列表——那说明调用方没给，进详情页只会是空壳。
     const openCandidate = event.target.closest('[data-cognition-open-candidate]');
     if (openCandidate) {
       const candidateId = openCandidate.dataset.cognitionOpenCandidate || '';
+      if (!candidateId) {
+        switchSkillsCognitionPage('captures');
+        return;
+      }
+      _skillsCognitionState.selectedCandidateId = candidateId;
+      switchSkillsCognitionPage('candidate');
+      return;
+    }
+
+    // 「使用与证明」的分层筛选。纯前端过滤既有事实链，不重新取数——换一层看
+    // 法不该让用户等一次网络往返。
+    const proofFilter = event.target.closest('[data-cognition-proof-filter]');
+    if (proofFilter) {
+      const next = proofFilter.dataset.cognitionProofFilter || 'all';
+      if (next === _skillsCognitionState.proofFilter) return;
+      _skillsCognitionState.proofFilter = next;
+      _skillsCognitionState.selectedProofEventId = '';
+      renderSkillsCognitionProofs();
+      return;
+    }
+
+    // Skill 版本回滚走真实通道（cognition.skills.rollback）。回滚会改变下一次
+    // 匹配任务实际使用的版本，所以先确认——这一步不可由一次误点完成。
+    const skillRollback = event.target.closest('[data-cognition-skill-rollback]');
+    if (skillRollback) {
+      const skillId = skillRollback.dataset.cognitionSkillRollback || '';
+      const version = skillRollback.dataset.cognitionSkillVersion || '';
+      if (!skillId || !version || skillRollback.dataset.busy === '1') return;
+      const message = _cognitionText(
+        'cognition.skillupdate_rollback_confirm',
+        '回滚后，下一次匹配任务将使用 v{v}；更高版本仍然保留，历史结果不会被修改。确认回滚？',
+      ).replace('{v}', version);
+      if (typeof uiConfirm !== 'function' || !(await uiConfirm(message))) return;
+      skillRollback.dataset.busy = '1'; skillRollback.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('cognition.skills.rollback', { skillId, version });
+        if (!result?.ok) throw new Error(result?.error || 'skill rollback failed');
+        if (typeof uiToast === 'function') {
+          uiToast(_cognitionText('cognition.skillupdate_rollback_done', '已回滚到 v{v}').replace('{v}', version), { variant: 'success' });
+        }
+        const current = _skillsCognitionState.skillUpdate || {};
+        await loadCognitionSkillUpdate(current.assetId, skillId);
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        skillRollback.dataset.busy = '0'; skillRollback.disabled = false;
+      }
+      return;
+    }
+
+    const treeReload = event.target.closest('[data-cognition-tree-reload]');
+    if (treeReload) {
+      void loadCognitionTree({ rebuild: true });
+      return;
+    }
+
+    // 管理来源统计条上的「需授权 / 失败记录」→ 定位到出问题的那一组。数出了
+    // 问题却点不进去，用户就得自己从五组来源里逐条翻找那一条坏的。
+    const sourceLocate = event.target.closest('[data-cognition-source-locate]');
+    if (sourceLocate) {
+      const kind = sourceLocate.dataset.cognitionSourceLocate;
+      const selector = kind === 'auth'
+        ? '[data-cognition-source-group="auth"]'
+        : '[data-cognition-source-group-failed]';
+      const target = document.querySelector(selector);
+      if (!target) return;
+      // 折叠组要先展开，否则滚过去看到的还是一行收起的摘要。
+      if (target.tagName === 'DETAILS') target.open = true;
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.classList.add('is-located');
+      setTimeout(() => target.classList.remove('is-located'), 1600);
+      return;
+    }
+
+    // 「版本与治理」里带候选的资产 → Skill 更新候选页。资产必须真的生成过
+    // Skill 才有版本可比，所以 skillId 取不到就不跳：跳过去只会是一页空壳。
+    const openSkillUpdate = event.target.closest('[data-cognition-open-skill-update]');
+    if (openSkillUpdate) {
+      const assetId = openSkillUpdate.dataset.cognitionOpenSkillUpdate || '';
+      const asset = (_skillsCognitionState.assets || []).find((item) => item.id === assetId);
+      const skillId = asset?.generatedSkillId || '';
+      if (!skillId) return;
+      switchSkillsCognitionPage('skillupdate');
+      void loadCognitionSkillUpdate(assetId, skillId);
+      return;
+    }
+
+    // develop 侧的候选溯源能力：从一条候选找回它所属的沉淀任务，必要时翻页
+    // 继续拉取，再滚动到那一行。合并时它没有被丢掉，而是从"点候选的默认去向"
+    // 降级成候选详情页里的一个显式入口——v0.7 里点候选要进的是决定面，而
+    // "这条候选是哪次沉淀产生的"是另一个问题，值得单独一次点击。
+    const locateCandidateCapture = event.target.closest('[data-cognition-locate-candidate-capture]');
+    if (locateCandidateCapture) {
+      const candidateId = locateCandidateCapture.dataset.cognitionLocateCandidateCapture || '';
       if (!candidateId) return;
       const candidate = (_skillsCognitionState.recallCandidates || [])
         .find((item) => item && item.id === candidateId);
