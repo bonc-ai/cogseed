@@ -97,11 +97,31 @@ async function loadedExistingAssets(
   return { existing, receipts };
 }
 
+/** 用回执「并集」判定覆盖：任一资产被任一真实回执覆盖即算本次迁移证明成立。
+ *
+ *  单回执全覆盖（chen 版本）要求一张回执的 reusedRefs 覆盖全部 assetVersions
+ *  ——多回合任务每回合注入不同资产时，回执分散、无单张覆盖全部 → 永不升档且
+ *  无任何信号（B4 观测）。并集判定与「以回执为准」的产品决定一致：真实加载
+ *  并生成回执的资产就是升档事实，不管它们散在几张回执里。保留 chen 的
+ *  boundary='real' 过滤（collectLoadedAssetsFromReceipts）与 asset-reference
+ *  解析（abilityAssetReferenceMatches 支持 asset:aa@v2 版本引用）。 */
 function findReceiptCoveringAssets(
   receipts: ReadonlyArray<{ receiptId: string; executionId: string; reusedRefs: string[] }>,
   assetVersions: readonly { assetId: string; version: string }[],
 ): { receiptId: string; executionId: string; reusedRefs: string[] } | undefined {
-  return receipts.find((receipt) => abilityAssetReferencesCover(receipt.reusedRefs, assetVersions));
+  if (!assetVersions.length || !receipts.length) return undefined;
+  const covered = new Set<string>();
+  for (const receipt of receipts) {
+    for (const ref of receipt.reusedRefs) {
+      for (const expected of assetVersions) {
+        if (abilityAssetReferencesCover([ref], [expected])) covered.add(expected.assetId);
+      }
+    }
+  }
+  if (!assetVersions.every((asset) => covered.has(asset.assetId))) return undefined;
+  // 全部资产被覆盖：返回第一张回执作为代表（receiptId 用于证明记录；
+  // executionId 让 completeTransferProofWithReceipt 能回读并复核这张回执）。
+  return receipts[0];
 }
 
 export async function handleRecallTaskTerminal(event: RecallTaskTerminalEvent): Promise<TerminalProofResult> {

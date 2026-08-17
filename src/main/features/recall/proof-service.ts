@@ -12,7 +12,7 @@ import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } f
 import type { RecallJsonRecord } from './types';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from './source-service';
 import { readReceipt, type ContextReuseReceipt } from '../p3394/context-reuse-receipt';
-import { abilityAssetReferencesCover } from './asset-reference';
+import { abilityAssetReferenceMatches } from './asset-reference';
 
 const log = createLogger('recall.proofs');
 
@@ -31,9 +31,15 @@ function receiptProvesTransfer(
   receipt: ContextReuseReceipt,
   assetVersions: readonly { assetId: string; version: string }[],
 ): boolean {
+  // 回执合法 + 至少覆盖一个证明资产（追溯绑定）。并集覆盖性（全部资产被
+  // 多张回执共同覆盖）由宿主终态路径 terminal-proof.findReceiptCoveringAssets
+  // 判定——多回合任务每回合注入不同资产时回执分散，单张全覆盖会永不升档
+  // （B4 观测）。本函数只要求"指得回某一次真实加载"。
   return receipt.boundary === 'real'
     && receipt.status !== 'rejected'
-    && abilityAssetReferencesCover(receipt.reusedRefs, assetVersions);
+    && (receipt.reusedRefs || []).some((ref) => assetVersions.some((asset) => (
+      abilityAssetReferenceMatches(ref, asset)
+    )));
 }
 
 async function findValidTransferReceipt(
