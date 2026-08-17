@@ -14,11 +14,11 @@ async function elevateToTransferVerified(assetId: string) {
 }
 
 async function modules() { const [candidates, assets, refs, projection] = await Promise.all([import('../../../../src/main/features/recall/candidate-service'), import('../../../../src/main/features/recall/asset-service'), import('../../../../src/main/features/recall/workspace-refs'), import('../../../../src/main/features/recall/context-projection')]); return { candidates, assets, refs, projection }; }
-async function createAsset() { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', suggestedScope: 'review,project', sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+async function createAsset(spaceId?: string) { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', suggestedScope: 'review,project', ...(spaceId ? { spaceId } : {}), sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
   await elevateToTransferVerified(promoted.asset.id);
   return promoted; }
 
-async function createAssetWith(input: { judgment: string; summary: string; scope?: string; sourceId: string }) {
+async function createAssetWith(input: { judgment: string; summary: string; scope?: string; sourceId: string; spaceId?: string }) {
   const { candidates } = await modules();
   const candidate = await candidates.saveRecallCandidate('user-a', {
     judgment: input.judgment,
@@ -27,6 +27,7 @@ async function createAssetWith(input: { judgment: string; summary: string; scope
     applicableWhen: ['正式评审与架构决策时'],
     forbiddenWhen: ['内部快速对齐'],
     suggestedScope: input.scope || 'review',
+    ...(input.spaceId ? { spaceId: input.spaceId } : {}),
     sourceRefs: [{ kind: 'execution', id: input.sourceId }],
   });
   const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
@@ -39,6 +40,7 @@ async function createAutomaticAssetWith(input: {
   summary: string;
   sourceId: string;
   sourceKind?: 'conversation' | 'artifact_file';
+  spaceId?: string;
 }) {
   const { candidates } = await modules();
   const sourceKind = input.sourceKind || 'conversation';
@@ -49,6 +51,7 @@ async function createAutomaticAssetWith(input: {
     applicableWhen: ['正式评审与架构决策时'],
     forbiddenWhen: ['内部快速对齐'],
     suggestedScope: 'global',
+    ...(input.spaceId ? { spaceId: input.spaceId } : {}),
     sourceRefs: [{
       kind: sourceKind,
       id: input.sourceId,
@@ -80,6 +83,7 @@ describe('Recall context projection scope policy', () => {
       applicableWhen: ['正式评审与架构决策时'],
       forbiddenWhen: ['内部快速对齐'],
       suggestedScope: 'review',
+      spaceId: 'workspace-a',
       sourceRefs: [{ kind: 'execution', id: sourceId }],
     });
     const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
@@ -127,7 +131,7 @@ describe('Recall context projection scope policy', () => {
 
 describe('RecallView and ContextProjection', () => {
   it('previews workspace-scoped active assets and explains omitted assets', async () => {
-    const { asset } = await createAsset();
+    const { asset } = await createAsset('workspace-a');
     const { refs, assets, projection } = await modules();
     await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
     const otherCandidate = await (await modules()).candidates.saveRecallCandidate('user-a', { judgment: 'Only use archived data with confirmation.', suggestedType: 'rule', suggestedScope: 'archive', sourceRefs: [{ kind: 'memory', id: 'mem-b' }] });
@@ -143,9 +147,9 @@ describe('RecallView and ContextProjection', () => {
 
 
   it('semantic-ranks only assets already allowed by workspace and exact scope', async () => {
-    const oauth = await createAssetWith({ judgment: 'Review OAuth callback and token exchange security.', summary: 'OAuth review workflow', scope: 'review', sourceId: 'exec-oauth' });
-    const database = await createAssetWith({ judgment: 'Plan database migrations with rollback windows.', summary: 'Database migration rule', scope: 'review', sourceId: 'exec-db' });
-    const scopeMismatch = await createAssetWith({ judgment: 'OAuth client secret rotation checklist.', summary: 'OAuth secret rotation', scope: 'security', sourceId: 'exec-oauth-scope' });
+    const oauth = await createAssetWith({ judgment: 'Review OAuth callback and token exchange security.', summary: 'OAuth review workflow', scope: 'review', sourceId: 'exec-oauth', spaceId: 'workspace-a' });
+    const database = await createAssetWith({ judgment: 'Plan database migrations with rollback windows.', summary: 'Database migration rule', scope: 'review', sourceId: 'exec-db', spaceId: 'workspace-a' });
+    const scopeMismatch = await createAssetWith({ judgment: 'OAuth client secret rotation checklist.', summary: 'OAuth secret rotation', scope: 'security', sourceId: 'exec-oauth-scope', spaceId: 'workspace-a' });
     const { refs, projection } = await modules();
     for (const asset of [oauth.asset, database.asset, scopeMismatch.asset]) {
       await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: asset.scope });
@@ -177,11 +181,13 @@ describe('RecallView and ContextProjection', () => {
       judgment: 'Review OAuth callback and token exchange security.',
       summary: 'OAuth review workflow',
       sourceId: 'conversation-oauth',
+      spaceId: 'workspace-a',
     });
     const database = await createAutomaticAssetWith({
       judgment: 'Plan database migrations with rollback windows.',
       summary: 'Database migration rule',
       sourceId: 'conversation-database',
+      spaceId: 'workspace-a',
     });
     const { projection } = await modules();
 
@@ -239,6 +245,32 @@ describe('RecallView and ContextProjection', () => {
     }, fakeSemanticOptions)).resolves.toBeUndefined();
   });
 
+  it('space conversations auto-inject from the GLOBAL pool (资产池全局共享，含其它空间资产)', async () => {
+    const own = await createAutomaticAssetWith({
+      judgment: 'Review OAuth callback and token exchange security in workspace-a.',
+      summary: 'OAuth review workflow',
+      sourceId: 'conversation-oauth-own',
+      spaceId: 'workspace-a',
+    });
+    const foreign = await createAutomaticAssetWith({
+      judgment: 'Review OAuth callback and token exchange security in workspace-b.',
+      summary: 'OAuth review workflow B',
+      sourceId: 'conversation-oauth-foreign',
+      spaceId: 'workspace-b',
+    });
+    const { projection } = await modules();
+
+    const auto = await projection.createAutomaticContextProjection('user-a', {
+      taskRunId: 'turn-oauth-space',
+      taskText: 'Audit OAuth login callback handling',
+      workspaceId: 'workspace-a',
+    }, fakeSemanticOptions);
+
+    // 全局池共享：本空间与他空间资产都可自动注入；tab 显示才按空间过滤
+    expect(auto?.assetIds).toContain(own.asset.id);
+    expect(auto?.assetIds).toContain(foreign.asset.id);
+  });
+
   it('does not create an automatic projection when semantic matching fails or no asset reaches the threshold', async () => {
     await createAutomaticAssetWith({
       judgment: 'Plan database migrations with rollback windows.',
@@ -260,8 +292,8 @@ describe('RecallView and ContextProjection', () => {
   });
 
   it('deduplicates manual edits and rejects invalid revision combinations', async () => {
-    const first = await createAssetWith({ judgment: 'First review rule.', summary: 'First', scope: 'review', sourceId: 'exec-first' });
-    const second = await createAssetWith({ judgment: 'Second review rule.', summary: 'Second', scope: 'review', sourceId: 'exec-second' });
+    const first = await createAssetWith({ judgment: 'First review rule.', summary: 'First', scope: 'review', sourceId: 'exec-first', spaceId: 'workspace-a' });
+    const second = await createAssetWith({ judgment: 'Second review rule.', summary: 'Second', scope: 'review', sourceId: 'exec-second', spaceId: 'workspace-a' });
     const { refs, projection } = await modules();
     await refs.addWorkspaceAssetReference('user-a', { assetId: first.asset.id, workspaceId: 'workspace-a', scope: 'review' });
     await refs.addWorkspaceAssetReference('user-a', { assetId: second.asset.id, workspaceId: 'workspace-a', scope: 'review' });
@@ -280,9 +312,9 @@ describe('RecallView and ContextProjection', () => {
   });
 
   it('rejects unknown inactive and workspace-ineligible manual additions', async () => {
-    const first = await createAssetWith({ judgment: 'First review rule.', summary: 'First', scope: 'review', sourceId: 'exec-first' });
-    const inactive = await createAssetWith({ judgment: 'Paused review rule.', summary: 'Paused', scope: 'review', sourceId: 'exec-paused' });
-    const scopeMismatch = await createAssetWith({ judgment: 'Security-only rule.', summary: 'Security', scope: 'security', sourceId: 'exec-security' });
+    const first = await createAssetWith({ judgment: 'First review rule.', summary: 'First', scope: 'review', sourceId: 'exec-first', spaceId: 'workspace-a' });
+    const inactive = await createAssetWith({ judgment: 'Paused review rule.', summary: 'Paused', scope: 'review', sourceId: 'exec-paused', spaceId: 'workspace-a' });
+    const scopeMismatch = await createAssetWith({ judgment: 'Security-only rule.', summary: 'Security', scope: 'security', sourceId: 'exec-security', spaceId: 'workspace-a' });
     const { refs, assets, projection } = await modules();
     await refs.addWorkspaceAssetReference('user-a', { assetId: first.asset.id, workspaceId: 'workspace-a', scope: 'review' });
     await refs.addWorkspaceAssetReference('user-a', { assetId: inactive.asset.id, workspaceId: 'workspace-a', scope: 'review' });
@@ -299,7 +331,7 @@ describe('RecallView and ContextProjection', () => {
   });
 
   it('allows removing every task asset without deleting formal assets', async () => {
-    const first = await createAssetWith({ judgment: 'First review rule.', summary: 'First', scope: 'review', sourceId: 'exec-first' });
+    const first = await createAssetWith({ judgment: 'First review rule.', summary: 'First', scope: 'review', sourceId: 'exec-first', spaceId: 'workspace-a' });
     const { refs, projection } = await modules();
     await refs.addWorkspaceAssetReference('user-a', { assetId: first.asset.id, workspaceId: 'workspace-a', scope: 'review' });
     const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-empty', workspaceId: 'workspace-a', purpose: 'review' });
@@ -314,7 +346,7 @@ describe('RecallView and ContextProjection', () => {
   });
 
   it('rejects edits to confirmed deferred rejected and expired projections', async () => {
-    const { asset } = await createAsset();
+    const { asset } = await createAsset('workspace-a');
     const { projection } = await modules();
     const confirmedPreview = await projection.previewContextProjection('user-a', { taskRunId: 'task-lock', purpose: 'review' });
     await projection.confirmContextProjection('user-a', confirmedPreview.id);
@@ -339,7 +371,7 @@ describe('RecallView and ContextProjection', () => {
   });
 
   it('confirms a non-expired projection once and rejects expired projections', async () => {
-    const { asset } = await createAsset();
+    const { asset } = await createAsset('workspace-a');
     const { refs, projection } = await modules();
     await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
     const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed', expiresAt: '2099-01-01T00:00:00.000Z' });
@@ -731,7 +763,7 @@ describe('Recall retrieval refinement', () => {
 
 describe('committed projection knowledge boundary', () => {
   it('freezes asset ids and exact versions when a preview is confirmed', async () => {
-    const { asset } = await createAsset();
+    const { asset } = await createAsset('workspace-a');
     const { refs, projection } = await modules();
     await refs.addWorkspaceAssetReference('user-a', {
       assetId: asset.id,
@@ -752,7 +784,7 @@ describe('committed projection knowledge boundary', () => {
   });
 
   it('rejects confirmation when a selected asset version changed', async () => {
-    const { asset } = await createAsset();
+    const { asset } = await createAsset('workspace-a');
     const { refs, assets, projection } = await modules();
     await refs.addWorkspaceAssetReference('user-a', {
       assetId: asset.id,
@@ -772,5 +804,125 @@ describe('committed projection knowledge boundary', () => {
 
     await expect(projection.confirmContextProjection('user-a', preview.id))
       .rejects.toMatchObject({ code: 'projection_asset_version_changed' });
+  });
+
+  it('includes a space-attributed asset in its own workspace without an explicit workspace reference', async () => {
+    const { candidates, projection, refs } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Space-owned OAuth lesson injects in its own space.',
+      summary: 'Space-owned lesson',
+      suggestedType: 'rule',
+      applicableWhen: ['正式评审与架构决策时'],
+      forbiddenWhen: ['内部快速对齐'],
+      suggestedScope: 'review',
+      spaceId: 'workspace-a',
+      sourceRefs: [{ kind: 'execution', id: 'exec-space-owned' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    await elevateToTransferVerified(promoted.asset.id);
+    // 去掉 promote 自动挂载的 ref，验证"空间归属资产免登记卡"的兜底
+    await refs.removeWorkspaceAssetReference('user-a', `war-${promoted.asset.id}-workspace-a`);
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-space-owned', workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed',
+    });
+    expect(preview.assetIds).toContain(promoted.asset.id);
+    expect(preview.omittedRefs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: promoted.asset.id, reason: 'workspace_not_referenced' }),
+    ]));
+  });
+
+  it('includes assets from OTHER workspaces in a space conversation (资产池全局共享)', async () => {
+    const { candidates, projection, refs } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Workspace-B lesson is part of the shared pool for workspace-a.',
+      summary: 'Shared pool lesson',
+      suggestedType: 'rule',
+      applicableWhen: ['正式评审与架构决策时'],
+      forbiddenWhen: ['内部快速对齐'],
+      suggestedScope: 'review',
+      spaceId: 'workspace-b',
+      sourceRefs: [{ kind: 'execution', id: 'exec-foreign' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    await elevateToTransferVerified(promoted.asset.id);
+    await refs.removeWorkspaceAssetReference('user-a', `war-${promoted.asset.id}-workspace-b`);
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-foreign', workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed',
+    });
+    // 设计：引用=全局池共享（含其它空间产生的资产）；tab 显示才按空间过滤
+    expect(preview.assetIds).toContain(promoted.asset.id);
+    expect(preview.omittedRefs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: promoted.asset.id, reason: 'workspace_not_referenced' }),
+    ]));
+  });
+
+  it('real-world shape: scope=space / scope=general assets pass the purpose gate in previews', async () => {
+    const { candidates, projection, refs } = await modules();
+    // 真实资产形态：suggestedScope='space'（发布公告五段式、信息架构四层法）
+    const spaceAsset = await candidates.saveRecallCandidate('user-a', {
+      judgment: '发布类公告应包含：背景、变更点、影响范围、生效时间、联系方式五段。',
+      summary: '发布公告五段式',
+      suggestedType: 'rule',
+      suggestedScope: 'space',
+      spaceId: 'workspace-a',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-space' }],
+    });
+    const spacePromoted = await candidates.promoteRecallCandidate('user-a', spaceAsset.id, { actor: 'user' });
+    await elevateToTransferVerified(spacePromoted.asset.id);
+    await refs.removeWorkspaceAssetReference('user-a', `war-${spacePromoted.asset.id}-workspace-a`);
+    // 真实资产形态：scope='general'（KSTAR gap 资产，无空间归属）
+    const generalAsset = await candidates.saveRecallCandidate('user-a', {
+      judgment: '编号/短码缺少项目上下文时应先向用户确认所指目标。',
+      summary: '待修正经验：短码缺上下文',
+      suggestedType: 'rule',
+      suggestedScope: 'general',
+      sourceRefs: [{ kind: 'execution', id: 'exec-general' }],
+    });
+    const generalPromoted = await candidates.promoteRecallCandidate('user-a', generalAsset.id, { actor: 'user' });
+    await elevateToTransferVerified(generalPromoted.asset.id);
+
+    // 空间会话（purpose='review'）：space 资产 + general 资产都进候选（全局池共享）
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-real-shape', workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed',
+    });
+    expect(preview.assetIds).toContain(spacePromoted.asset.id);
+    expect(preview.assetIds).toContain(generalPromoted.asset.id);
+    expect(preview.omittedRefs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: spacePromoted.asset.id, reason: 'scope_mismatch' }),
+      expect.objectContaining({ assetId: generalPromoted.asset.id, reason: 'scope_mismatch' }),
+    ]));
+
+    // 非空间会话（workspaceId 为空）：general 资产同样可进（全池候选）
+    const globalPreview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-real-shape-global', purpose: 'review', authorization: 'user_confirmed',
+    });
+    expect(globalPreview.assetIds).toContain(generalPromoted.asset.id);
+  });
+
+  it('a disabled workspace reference still blocks a space-attributed asset', async () => {
+    const { candidates, projection, refs } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Disabled lesson stays out.',
+      summary: 'Disabled lesson',
+      suggestedType: 'rule',
+      applicableWhen: ['正式评审与架构决策时'],
+      forbiddenWhen: ['内部快速对齐'],
+      suggestedScope: 'review',
+      spaceId: 'workspace-a',
+      sourceRefs: [{ kind: 'execution', id: 'exec-disabled' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    await elevateToTransferVerified(promoted.asset.id);
+    await refs.updateWorkspaceAssetReference('user-a', `war-${promoted.asset.id}-workspace-a`, { enabled: false });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-disabled', workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed',
+    });
+    expect(preview.assetIds).not.toContain(promoted.asset.id);
+    expect(preview.omittedRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: promoted.asset.id, reason: 'workspace_disabled' }),
+    ]));
   });
 });
