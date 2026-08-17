@@ -11156,6 +11156,7 @@ function _makeConvChatController(cid, options = {}) {
         // Bridge the controller's abort into the existing pendingConvs
         // state shape so legacy code (abortConvStream, sidebar badge,
         // polling recovery) keeps working untouched.
+        if (msgEl) msgEl.dataset.cid = id;
         pendingConvs.set(id, {
           loadingEl: msgEl,
           needsIndicator: false,
@@ -11858,6 +11859,10 @@ function _observeConversationRunFromPlanAction(cid, opts = {}) {
     msgEl = existing.loadingEl || (cid === currentCid
       ? _createStreamingAssistantMessage(container, { hiddenUntilActor: true })
       : null);
+    // Stamp the owning cid on the live bubble so the activity clock can
+    // re-seed from pendingConvs.startedAtMs after a view switch-back (the
+    // previous bubble was detached by the other view's history reset).
+    if (msgEl) msgEl.dataset.cid = cid;
     if (!allowWithController) {
       _convChatCtrls.set(cid, ctrl);
     }
@@ -12670,7 +12675,20 @@ function _streamingUpdateActivity(msg, text) {
   if (!msg || msg.dataset.activityDone === '1') return;
   const row = msg.querySelector('[data-role="activity"]');
   if (!row) return;
-  if (!msg.dataset.activityStart) msg.dataset.activityStart = String(Date.now());
+  if (!msg.dataset.activityStart) {
+    // Seed the clock from the STABLE per-cid run start (pendingConvs survives
+    // view switch-backs, unlike the bubble DOM). Without this, a bubble
+    // recreated after switching away mid-run restarts its elapsed clock from
+    // ~0:00 and the user sees the timer "pause then jump" to the real total
+    // only after the turn finalizes. Falls back to now when no run is tracked.
+    const cid = msg.dataset.cid;
+    const state = (typeof pendingConvs !== 'undefined' && pendingConvs.get)
+      ? pendingConvs.get(cid)
+      : null;
+    msg.dataset.activityStart = String(
+      (state && state.startedAtMs) || Date.now(),
+    );
+  }
   const textEl = row.querySelector('[data-role="activity-text"]');
   const label = String(text || '').replace(/\s+/g, ' ').trim();
   if (textEl) {
