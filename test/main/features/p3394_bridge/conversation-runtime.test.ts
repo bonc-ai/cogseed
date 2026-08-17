@@ -268,5 +268,46 @@ describe('P3394ConversationRuntimeAdapter (path B: daily conversation flow)', ()
     await adapterRestart.deliver(envelope({ session_id: 'ses-thread-a', task_id: 'tsk-a3', message_id: 'msg-a3', idempotency_key: 'idem-a3' }) as never);
     expect(busRestart.calls[0].cid).toBe(cidA);
   });
+
+  it('出站会话绑定：bindSession 后对端回复路由回发起对话，不新建 [P3394] peer 独立对话', async () => {
+    const bus = new FakeBus();
+    const conversations: Array<{ uid: string; cid: string; title: string }> = [];
+    const peerActors: Array<{ uid: string; cid: string; actor: Record<string, unknown> }> = [];
+    const adapter = new P3394ConversationRuntimeAdapter({
+      userId: () => UID,
+      bus,
+      displayNameFor: (id) => (id === 'pi' ? 'pi' : undefined),
+      ensureConversation: async (uid, cid, title) => { conversations.push({ uid, cid, title }); },
+      ensurePeerActor: async (uid, cid, actor) => { peerActors.push({ uid, cid, actor }); },
+    });
+
+    // 出站侧：当前对话 'gconv-main-1' 发起协作 → 把 session 绑定到该对话。
+    adapter.bindSession('ses-out-pi', 'gconv-main-1');
+
+    // 对端回复（同一 session）入站 → 路由回绑定对话，不创建独立对话。
+    await adapter.deliver(envelope({
+      session_id: 'ses-out-pi',
+      task_id: 'tsk-out-pi',
+      message_id: 'msg-out-pi',
+      idempotency_key: 'idem-out-pi',
+      sender: { agent_id: 'pi' },
+    }) as never);
+    expect(bus.calls[0].cid).toBe('gconv-main-1');
+    // 独立对话未被创建：ensureConversation 用的是绑定对话。
+    expect(conversations.every((entry) => entry.cid === 'gconv-main-1')).toBe(true);
+    // peer actor 注册到绑定对话（pong 以 pi 身份出现在当前对话）。
+    expect(peerActors.some((entry) => entry.cid === 'gconv-main-1' && entry.actor.id === 'p3394_pi')).toBe(true);
+
+    // 未绑定的入站会话（Pi 主动发起）仍走 stableCid 独立对话。
+    await adapter.deliver(envelope({
+      session_id: 'ses-in-pi-active',
+      task_id: 'tsk-in-pi',
+      message_id: 'msg-in-pi',
+      idempotency_key: 'idem-in-pi',
+      sender: { agent_id: 'pi' },
+    }) as never);
+    expect(bus.calls[1].cid).toMatch(/^p3394-/);
+    expect(bus.calls[1].cid).not.toBe('gconv-main-1');
+  });
 });
 

@@ -57,6 +57,9 @@ export interface P3394AppBridgeHandle {
   token: string;
   channel: P3394HttpChannel;
   registry: P3394PeerRegistry;
+  /** 出站会话绑定：conversation 模式下把 session 绑定到发起对话，对端
+   *  回复路由回同一对话（不新建 [P3394] peer 独立对话）。 */
+  bindSessionCid?: (sessionId: string, cid: string) => void;
   close: () => Promise<void>;
 }
 
@@ -335,6 +338,14 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
     token,
     channel,
     registry: bridge.registry,
+    // conversation 模式下出站会话绑定（对端回复回当前对话）。
+    ...(adapter instanceof P3394ConversationRuntimeAdapter
+      ? {
+          bindSessionCid: (sessionId: string, cid: string) => {
+            (adapter as P3394ConversationRuntimeAdapter).bindSession(sessionId, cid);
+          },
+        }
+      : {}),
     close: async () => {
       clearInterval(recoveryTimer);
       await channel.close();
@@ -396,6 +407,11 @@ export function maybeStartP3394Bridge(): P3394AppBridgeHandle | null {
 export function getP3394BridgeInfo(): { endpoint: string; token: string } | null {
   if (!activeHandle) return null;
   return { endpoint: activeHandle.endpoint, token: activeHandle.token };
+}
+
+/** 当前桥 handle（出站会话绑定等）。桥未启动返回 null。 */
+export function getP3394BridgeHandle(): P3394AppBridgeHandle | null {
+  return activeHandle;
 }
 
 /**

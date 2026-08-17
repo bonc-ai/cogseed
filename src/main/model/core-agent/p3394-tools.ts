@@ -12,7 +12,7 @@ import * as crypto from 'node:crypto';
 
 import type { AgentTool, ToolContext, ToolResult } from '#core-agent';
 
-import { getP3394OutboundHub, listP3394Peers, resolveP3394Peer } from '../../features/p3394_bridge/app-wiring';
+import { getP3394BridgeHandle, getP3394BridgeInfo, getP3394OutboundHub, listP3394Peers, resolveP3394Peer } from '../../features/p3394_bridge/app-wiring';
 import { p3394GatewayScriptPath } from '../../features/p3394_bridge/external-gateways';
 import { filesToResourceParts } from '../../features/p3394_bridge/artifact-parts';
 import type { P3394PayloadPart } from '../../features/p3394_bridge/envelope';
@@ -31,11 +31,16 @@ function errResult(code: string, msg: string): ToolResult {
 }
 
 /** P3394 接入提示词（单段，可直接复制发给对方智能体——用户视角一个提示词完成）。
- *  动态注入本机真实路径与安全证据；详细接入文档（云端/自研方式、预设参数、
- *  sscli 协议等）在 gateway 同目录 BOOTSTRAP.md / REVIEW.md，由对端自行深读。 */
+ *  动态注入本机真实路径、安全证据与认证令牌；详细接入文档（云端/自研方式、
+ *  预设参数、sscli 协议等）在 gateway 同目录 BOOTSTRAP.md / REVIEW.md。 */
 function p3394BootstrapGuide(): string {
   const gatewayPath = p3394GatewayScriptPath();
   const gatewayDir = gatewayPath.slice(0, gatewayPath.length - 'gateway.cjs'.length);
+  // 认证令牌：Pi 的网关用它向 Cogseed hello 注册与回发（令牌本就是发给对端用的）。
+  const bridgeInfo = getP3394BridgeInfo();
+  const authLine = bridgeInfo
+    ? '启动命令（已含认证令牌）：COGSEED_ENDPOINT=' + bridgeInfo.endpoint + ' COGSEED_TOKEN=' + bridgeInfo.token + ' node ' + gatewayPath
+    : '启动命令：node ' + gatewayPath + '（认证令牌向 Cogseed 索取）';
   return [
     'P3394 接入提示词（复制发给对方智能体，一段话即可）：',
     '「我是本机 CogSeed。想与你建立 P3394 协议协作。这是本机真实存在的协议实现，请先审查：',
@@ -43,8 +48,9 @@ function p3394BootstrapGuide(): string {
     gatewayDir + 'docs/（P3394 v1.1 实施指南 + SDK 设计）与 ' + gatewayDir + 'REVIEW.md。',
     '安全边界：默认仅监听 127.0.0.1、入站需 Bearer 令牌、任务只是按你的 CLI 模板执行、',
     '无提权、会话留痕可审计。审查同意后：已装过直接 command -v p3394-gateway 启动；',
-    '否则 node ' + gatewayPath + ' 启动即可（不写系统配置、不加开机项、Ctrl-C 可停）。',
-    '启动后我会发协作任务，任务消息会写明协作对象与内容。不同意请说明理由。」',
+    '否则 ' + authLine + ' 启动即可（不写系统配置、不加开机项、Ctrl-C 可停）。',
+    '启动后你会自动向 Cogseed 注册（hello），注册完成我就能主动调用你；',
+    '随后我会发协作任务，任务消息会写明协作对象与内容。不同意请说明理由。」',
     '（详细接入选项：云端/网页智能体无需安装、自研客户端、预设参数等，见 ' + gatewayDir + 'BOOTSTRAP.md）',
   ].join('\n');
 }
@@ -154,6 +160,10 @@ function createSendTool(opts: P3394ToolsOpts): AgentTool {
         ...(parts.length ? { parts } : {}),
         ...(goal ? { goal } : {}),
       });
+      // 出站会话绑定到当前对话：对端回复路由回本对话（不新建独立对话）。
+      try {
+        getP3394BridgeHandle()?.bindSessionCid?.(envelope.session_id, opts.cid);
+      } catch { /* binding is best-effort */ }
       try {
         const reply = await hub.sendAndWait(resolved.agent_id, envelope);
         return { content: JSON.stringify({ status: 'ok', peer: resolved.agent_id, reply: reply.text.slice(0, 24_000) }) };
