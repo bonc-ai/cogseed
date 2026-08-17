@@ -191,7 +191,11 @@ export async function precipitateRequirementLevel(
   ).filter((review): review is KstarReviewRecord => Boolean(review));
 
   const proposals = aggregateRequirementProposals({ requirement, episodes, reviews });
-  if (proposals.length === 0) {
+  // 「关于我」独立资产（方案 C 2026-08-17）：确定性扫描会话用户消息的长期
+  // 偏好陈述，产 personal 候选。与 lesson 候选合并沉淀（可能两者都无）。
+  const personalProposals = await buildPersonalProposals(userId, requirement, episodes);
+  const allProposals = [...proposals, ...personalProposals];
+  if (allProposals.length === 0) {
     return { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [] };
   }
 
@@ -205,7 +209,7 @@ export async function precipitateRequirementLevel(
     const direct = await precipitateDirectExperienceFromSource(userId, {
       id: requirement.id,
       ...(workspaceId ? { workspaceId } : {}),
-    }, proposals);
+    }, allProposals);
     createdAssetIds = direct.createdAssetIds;
     candidateIds = direct.candidateIds;
     mergedIntoIds = direct.mergedIntoIds;
@@ -218,5 +222,73 @@ export async function precipitateRequirementLevel(
       error: (error as Error).message,
     });
   }
-  return { proposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds };
+  return { proposals: allProposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds };
+}
+
+/** 读会话用户消息 → 确定性检测长期偏好 → 产 personal 候选。失败静默降级
+ *  （不影响既有 lesson 沉淀）。 */
+async function buildPersonalProposals(
+  userId: string,
+  requirement: KstarRequirementRecord,
+  episodes: KstarEpisodeRecord[],
+): Promise<KstarCandidateProposal[]> {
+  try {
+    if (!requirement.conversationId) return [];
+    const { getMessages } = await import('../chats');
+    const messages = await getMessages(userId, requirement.conversationId, 2_000);
+    const userMessages = messages
+      .filter((m) => m && m.from === 'user' && typeof m.text === 'string' && m.text.trim())
+      .map((m) => ({ text: String(m.text) }));
+    if (!userMessages.length) return [];
+    const { extractPersonalStatements, personalStatementsToProposals } = await import('./personal-asset-precipitation');
+    const statements = extractPersonalStatements(userMessages);
+    if (!statements.length) return [];
+    // 防跨类型重复（2026-08-17）：同一偏好可能已被沉淀为 rule/template
+    // （模型提炼）或 capture personal（用户原话）——若偏好句与全库已有
+    // 资产/候选语义命中（0.85），不再产 personal 候选，避免「关于我」与
+    // 其他三类出现重复。查重失败（embedding 不可用）则保守产候选（宁可
+    // 重复也不漏——统一晋升出口的语义查重仍会兜底）。
+    const { findSemanticDuplicate } = await import('../recall/similarity');
+    const [candidates, assets] = await Promise.all([
+      import('../recall/candidate-service').then((m) => m.listRecallCandidates(userId)).catch(() => []),
+      import('../recall/asset-service').then((m) => m.listAbilityAssets(userId)).catch(() => []),
+    ]);
+    const candidateTexts = candidates
+      .filter((c) => c.status === 'observed' || c.status === 'weak_observation' || c.status === 'pending_review' || c.status === 'deferred' || c.status === 'failed' || c.status === 'confirmed')
+      .map((c) => ({ id: c.id, text: String(c.judgment || '') }));
+    const assetTexts = assets
+      .filter((a) => a.status !== 'deleted' && a.status !== 'purged' && a.status !== 'revoked')
+      .map((a) => ({ id: a.id, text: String(a.statement || a.title || '') }));
+    const deduped: string[] = [];
+    for (const statement of statements) {
+      const outcome = await findSemanticDuplicate(userId, {
+        text: statement,
+        candidateTexts,
+        assetTexts,
+        excludeIds: new Set(),
+      });
+      if (outcome.status === 'match') continue; // 已有相同/近似表达，不重复产
+      // 第二层：语义查重对"同主题不同措辞"失效（实测 <0.85）——主题词重叠
+      // 兜底：偏好句与已有 rule/template 共享核心名词（如"周报"）→ 已有
+      // 其他类型表达了同主题 → 不产 personal（避免「关于我」与三类重复）。
+      const { sharesTheme } = await import('./personal-asset-precipitation');
+      const sameTheme = [...candidateTexts, ...assetTexts].some((item) => sharesTheme(statement, item.text));
+      if (sameTheme) continue;
+      deduped.push(statement);
+    }
+    if (!deduped.length) return [];
+    // 证据引用：本任务的 episodes。
+    const { normalizeCognitionSourceRefs } = await import('../recall/source-service');
+    const sourceRefs = normalizeCognitionSourceRefs(
+      episodes.map((episode) => ({ kind: 'execution' as const, id: episode.id, title: 'KSTAR requirement episode' })),
+    );
+    return personalStatementsToProposals(deduped, sourceRefs);
+  } catch (error) {
+    log.warn('kstar personal asset precipitation degraded', {
+      userId,
+      requirementId: requirement.id,
+      error: (error as Error).message,
+    });
+    return [];
+  }
 }

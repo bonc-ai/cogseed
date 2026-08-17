@@ -221,10 +221,13 @@ describe('recall projection card renderer', () => {
   });
 
   it('conversation renderer mounts Recall projection cards carried by assistant messages', () => {
+    // 9.1 重构：挂载函数在独立模块 recall-projection-card.js（window.
+    // mountRecallProjectionCard），conversation.js 负责透传 recall_
+    // projection_card 字段（gm. 前缀的群消息归一化对象）。
     const source = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/conversation.js'), 'utf8');
-    expect(source).toContain('message.recall_projection_card');
-    expect(source).toContain('window.mountRecallProjectionCard');
-    expect(source).toContain('recallProjectionFallback.hidden = true');
+    expect(source).toContain('gm.recall_projection_card');
+    const cardSource = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/recall-projection-card.js'), 'utf8');
+    expect(cardSource).toContain('window.mountRecallProjectionCard');
   });
 
 });

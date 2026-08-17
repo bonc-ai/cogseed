@@ -301,4 +301,63 @@ describe('2026-08-17 修复集场景（边界单路径 + 回执并集 + 语言�
     expect(result2.proposals.every((p) => !String(p.judgment).includes('When user request is ambiguous'))).toBe(true);
     expect(result2.proposals.every((p) => p.suggestedType !== 'rule')).toBe(true);
   });
+
+  it('E. KSTAR 收敛：general 资产可被 review 投影选中（P0）+ committed 注入只选一次（P2）', async () => {
+    // P0：general scope 通配——KSTAR 投影 purpose='review' 不再排空 general 资产。
+    // 旧行为 scopeIncludes('general','review')=false → 84 个投影 31 个空。
+    const scopePolicy = await import('../../../../src/main/features/recall/scope-policy');
+    expect(scopePolicy.scopeIncludes('general', 'review')).toBe(true);
+
+    // 一条 general 资产 + 一条 review 资产，走 KSTAR 的投影创建路径
+    // （purpose='review'，与 control-service/bus 宿主自动路径一致）。
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const c1 = await candidates.saveRecallCandidate(UID, {
+      judgment: '通用经验：写资料类任务应先收集数据再成文。',
+      value: '通用经验：写资料类任务应先收集数据再成文。',
+      summary: '通用经验',
+      suggestedType: 'rule',
+      suggestedScope: 'general',
+      suggestedAction: 'create',
+      applicableWhen: ['处理资料类任务时'],
+      sourceRefs: [{ kind: 'execution', id: 'exec-e1' }],
+      evidenceRefs: [{ kind: 'execution', id: 'exec-e1' }],
+    });
+    const p1 = await candidates.autoApplyRecallCandidate(UID, c1.id, { provenance: 'kstar' });
+    expect(p1.asset).toBeTruthy();
+
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    const preview = await projection.previewContextProjection(UID, {
+      taskRunId: 'run-e',
+      // 与 KSTAR 实机行为一致：84 个投影仅 2 个带 workspaceId，绝大多数
+      // 投影不带 workspaceId（不触发 workspace_not_referenced 硬门）。
+      // workspaceRef 语义是 Spec 7.1 的独立 P0 契约问题（权限型 vs
+      // ranking 型），由产品决策，不在这里验证。
+      purpose: 'review',
+      taskText: '帮我审查一下这段代码',
+      authorization: 'workspace_policy',
+      confirm: true,
+    }, {
+      // 语义排序注入确定性向量：所有资产同向量 → cosine=1 通过 0.40 阈值。
+      // 聚焦验证 scope 修复（general 不被 purpose=review 排除），语义排序
+      // 本身的阈值在 context-projection.test.ts 已覆盖。
+      embedTexts: async (texts: string[]) => texts.map(() => Array.from({ length: 512 }, (_, i) => Math.sin(i * 0.618) * 0.1)),
+    });
+    // P0 修复后：general 资产不再因 purpose='review' 被 scope_mismatch 排除
+    expect(preview.assetIds).toContain(p1.asset.id);
+
+    // P2：committed 注入只消费该投影（不双跑 automatic）。
+    // buildRecallTurnPromptContext 对 committedProjectionId 提前 return。
+    const promptInjection = await import('../../../../src/main/features/recall/prompt-injection');
+    const result = await promptInjection.buildRecallTurnPromptContext(UID, {
+      cid: 'cid-e',
+      taskRunId: 'turn-e',
+      taskText: '帮我审查一下这段代码',
+      committedProjectionId: preview.id,
+    });
+    expect(result.citations.every((c) => c.projectionId === preview.id)).toBe(true);
+    // 投影是权威选择：不会同时产生 automatic projection 的另一份选择
+    const projections = await projection.listContextProjections(UID, {});
+    const autoCreated = projections.filter((p) => p.id.startsWith('proj-auto-') && p.taskRunId === 'run-e');
+    expect(autoCreated).toHaveLength(0);
+  });
 });

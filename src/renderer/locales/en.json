@@ -4858,5 +4858,14 @@
   "sidebar.new_task_ph": "Describe the task, press Enter to create…",
   "sidebar.home": "Home",
   "cognition.maturity_transfer_validated": "Transfer validated",
-  "cognition.asset_write_origin_system": "System precipitated"
+  "cognition.asset_write_origin_system": "System precipitated",
+  "conversation_info.carried.permission.default": "Standard",
+  "common.id_masked": "…",
+  "skills.secpanel_nseap": "NSEAP declaration",
+  "skills.secpanel_nseap_unavailable": "NSEAP declaration unavailable",
+  "skills.secpanel_nseap_mismatch": "NSEAP declaration mismatch",
+  "skills.secpanel_nseap_needs_input": "NSEAP declaration needs input",
+  "skills.secpanel_nseap_warnings": "NSEAP warnings",
+  "skills.secpanel_nseap_more": "{n} more not shown",
+  "skills.secpanel_nseap_note": "NSEAP declaration verified by host"
 }
