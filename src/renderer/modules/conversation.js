@@ -11288,6 +11288,46 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
     }
   } catch (_) { /* probe is best-effort — fall through with no exclusions */ }
 
+  // ── Validate an explicit preference against live detection ─────────────
+  // A stored preference (prefs.setCliFallback — the onboarding connect step
+  // writes the first connected CLI here; settings lets the user pin one) can
+  // point at a CLI that is no longer usable: binary missing, or installed but
+  // not signed in per the file-based check. Dispatching to it is a guaranteed
+  // failure — often a long non-TTY hang while the CLI asks for login. Honor
+  // the preference only while it is actually usable; otherwise prefer a
+  // signed-in CLI. When nothing is signed in, keep the preference anyway (the
+  // file check can miss keychain-stored sessions, and the auto-switch path
+  // backstops a runtime failure).
+  if (cli && !excluded(cli)) {
+    try {
+      const listRes = await window.orkas.invoke('localAgents.list', { force: false });
+      const entries = (listRes && listRes.entries) || [];
+      const FALLBACK_CLIS = ['claude', 'codex', 'opencode', 'workbuddy'];
+      const prefEntry = entries.find((e) => e && e.type === cli);
+      if (!prefEntry || !prefEntry.available) {
+        // Preference points at a missing / broken CLI → ignore it (auto-pick).
+        _convLog.info('[cli-fallback] preferred CLI unavailable, ignoring preference', { preferred: cli });
+        cli = '';
+      } else if (!(prefEntry.auth && prefEntry.auth.loggedIn)) {
+        // Preference installed but NOT signed in per the file-based check.
+        // Prefer a signed-in fallback CLI instead of dispatching an unlogged
+        // one; the user's real goal is "run my message".
+        const signedInOther = entries.find((e) => e && e.available
+          && e.type !== cli && FALLBACK_CLIS.includes(e.type)
+          && !excluded(e.type) && !proxyUnreachable[e.type]
+          && e.auth && e.auth.loggedIn);
+        if (signedInOther) {
+          _convLog.info('[cli-fallback] preferred CLI not signed in, using signed-in CLI', { preferred: cli, cli: signedInOther.type });
+          cli = signedInOther.type;
+        }
+        // else: keep the preference — file-based auth may miss keychain
+        // sessions; the auto-switch path backstops a runtime failure.
+      }
+      // Preference signed-in / usable → keep it (user choice wins, including
+      // a dead local proxy: the CLI's own run error surfaces the proxy hint).
+    } catch (_) { /* detection unavailable — keep preference */ }
+  }
+
   if (!cli || excluded(cli)) {
     // 无显式偏好，或偏好 CLI 已被排除（运行失败 / 代理不可达）→ 自动挑选下一个可用 CLI。
     // 显式偏好被排除时不悄悄回退到偏好——它已被证明不可用，直接换。
@@ -11440,6 +11480,24 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
     }
     return;
   }
+  // Persist the working pick as the new preference so the next conversation /
+  // reload does not retry the failed preference first (it would repeat the
+  // same long hang + failure). Best-effort — never blocks the switch, and a
+  // deliberate settings choice is only overwritten when it proved unusable.
+  try {
+    const listRes = await window.orkas.invoke('agents.list', {});
+    const newRecipient = _recipientByCid[cid] || null;
+    const a = newRecipient && (listRes && listRes.agents || []).find(
+      (x) => x && String(x.agent_id) === String(newRecipient.id),
+    );
+    if (a && a.runtime && a.runtime.kind === 'cli') {
+      const cur = await window.orkas.invoke('prefs.getCliFallback');
+      if (cur && typeof cur.cli === 'string' && cur.cli && String(cur.cli) !== String(a.runtime.cli)) {
+        await window.orkas.invoke('prefs.setCliFallback', { cli: String(a.runtime.cli) });
+        _convLog.info('[cli-fallback] persisted auto-switch as new fallback preference', { from: failedCli, to: String(a.runtime.cli) });
+      }
+    }
+  } catch (_) { /* best effort */ }
   _convLog.info('[cli-fallback] auto-switched CLI', { cid, from: failedCli });
   if (typeof uiToast === 'function') {
     const label = failedCli === 'claude' ? 'Claude' : (failedCli === 'codex' ? 'Codex' : (failedCli === 'opencode' ? 'OpenCode' : 'WorkBuddy'));
