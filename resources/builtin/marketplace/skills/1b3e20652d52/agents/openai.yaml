@@ -1,34 +1,29 @@
-# Runtime agent declaration for customer-profile-presales.
-# Field-positions only — the skill declares what it needs; the Agent/Gateway layer injects
-# real tools, identity and tokens. Skill holds no tokens, makes no direct resource calls.
-agent:
-  name: customer-profile-presales
-  skill_class: execution
-  session_role: master_task_skill
-  owns_session: true
-  promotion_ceiling: staged
-  production_release_allowed: false
-  tools:
-    - name: read_customer_profile
-      binding: gateway_only
-      operation: read
-      purpose: ontology_grounded_read
-    - name: read_sales_qa_library
-      binding: gateway_only
-      operation: read
-      purpose: objection_card_lookup
-    - name: read_frozen_caliber
-      binding: gateway_only
-      operation: read
-      purpose: caliber_source_of_truth
-    - name: read_template_system
-      binding: gateway_only
-      operation: read
-      purpose: deck_version_and_slot_map
-  governance:
-    hitl_required_for: [confirm, generate_deck]
-    binding_resolved_by: agent_layer
-    audit_emitted_by: runtime
-    audit_append_only: true
-    direct_resource_access: false
-    access_via_gateway_only: true
+{
+ "interface": {
+  "display_name": "客户画像售前",
+  "short_description": "根据客户画像（谁、行业、层级、关系、痛）产出定制售前打法：模板选型、30 秒开场、场景清单、差异化、异议应答与信息颗粒度、承诺分级；输出暂存级作战草案。",
+  "default_prompt": "Use $客户画像售前 and follow its evidence, approval, and output contract."
+ },
+ "policy": {
+  "allow_implicit_invocation": true
+ },
+ "nseap_runtime": {
+  "executor": "codex_skill_interpreter",
+  "binding_status": "target_state_not_run",
+  "skill_entrypoint": "../SKILL.md",
+  "schema_ref": "../schemas.json",
+  "permissions": {
+   "direct_resource_access": false,
+   "external_actions": "deny_without_explicit_approval",
+   "formal_asset_write": false,
+   "candidate_write_only": true
+  },
+  "governance": {
+   "level": "L5",
+   "risk_route": "Full",
+   "promotion_ceiling": "staged",
+   "production_release_allowed": false,
+   "independent_review": "pending"
+  }
+ }
+}

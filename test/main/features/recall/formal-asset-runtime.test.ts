@@ -21,19 +21,29 @@ describe('asset runtime gate', () => {
       .toMatchObject({ eligible: true, mode: 'preferred' });
   });
 
-  // 静默默认注入是另一个问题："能用到什么程度" vs "能不能在用户没挑时自己进去"。
-  it('refuses silent default injection below Transfer Verified', () => {
+  // 静默默认注入以「适合度」为准（产品决策）：seed/未验证资产只要
+  // status/scope/forbidden/applicable 都适合即可注入（未验证由注入标注
+  // 承担，不阻断使用——否则自进化闭环断裂、沉淀永远用不上）。
+  it('allows silent default injection by fitness regardless of maturity', () => {
     const bud = evaluateAssetRuntimeEligibility(
       { ...active, maturity: 'bud' },
       { silentDefaultInjection: true },
     );
-    expect(bud.eligible).toBe(false);
-    expect(bud.reasons).toContain('maturity_below_default_use');
+    expect(bud.eligible).toBe(true);
+    expect(bud.mode).toBe('default_allowed');
 
     expect(evaluateAssetRuntimeEligibility(
       { ...active, maturity: 'transfer_validated' },
       { silentDefaultInjection: true },
     ).eligible).toBe(true);
+
+    // 适合度否决仍然生效：applicableWhen 声明却对不上任务 → 不注入。
+    const notApplicable = evaluateAssetRuntimeEligibility(
+      { ...active, maturity: 'seed', applicableWhen: ['写代码'] },
+      { silentDefaultInjection: true, taskText: '写一份城市资料' },
+    );
+    expect(notApplicable.eligible).toBe(false);
+    expect(notApplicable.reasons).toContain('not_applicable_context');
   });
 
   it('lets governance status veto any maturity', () => {
@@ -76,10 +86,28 @@ describe('asset runtime gate', () => {
   it('honours the target agent allow-list only when declared', () => {
     const asset = { ...active, maturity: 'transfer_validated' as const, targetAgents: ['agent-a'] };
     expect(evaluateAssetRuntimeEligibility(asset, { agentId: 'agent-a' }).eligible).toBe(true);
+    expect(evaluateAssetRuntimeEligibility(asset).reasons).toContain('target_agent_not_allowed');
     const wrong = evaluateAssetRuntimeEligibility(asset, { agentId: 'agent-b' });
     expect(wrong.eligible).toBe(false);
     expect(wrong.reasons).toContain('target_agent_not_allowed');
     expect(evaluateAssetRuntimeEligibility({ ...active, maturity: 'transfer_validated' }, { agentId: 'agent-b' }).eligible).toBe(true);
+  });
+
+  it('applies structured scope policy through the same runtime gate', () => {
+    const asset = {
+      ...active,
+      maturity: 'transfer_validated' as const,
+      scopePolicy: { agentIds: ['agent-a'], projectIds: ['project-a'], fileKinds: ['pdf'] },
+    };
+    expect(evaluateAssetRuntimeEligibility(asset, {
+      agentId: 'agent-a', projectId: 'project-a', fileKinds: ['pdf'],
+    }).eligible).toBe(true);
+    expect(evaluateAssetRuntimeEligibility(asset, {
+      agentId: 'agent-a', projectId: 'project-a', fileKinds: ['pdf', 'image'],
+    }).reasons).toContain('scope_mismatch');
+    expect(evaluateAssetRuntimeEligibility(asset, {
+      agentId: 'agent-a', fileKinds: ['pdf'],
+    }).reasons).toContain('scope_mismatch');
   });
 
   // 缺失的敏感级不等于 L0：目的地声明了上限就必须先分级。
@@ -110,7 +138,12 @@ describe('asset runtime gate', () => {
   it('keeps cross-scope no looser than same-scope', () => {
     const asset = { ...active, maturity: 'transfer_validated' as const };
     expect(evaluateAssetRuntimeEligibility(asset, { scope: 'review' }).mode).toBe('default_allowed');
-    // 跨作用域降级为需确认 → 不能静默默认注入。
+    // 跨作用域仍需用户确认（crossScopeConfirmedAt）→ 不静默注入（适合度含作用域维度）。
     expect(evaluateAssetRuntimeEligibility(asset, { scope: 'other', silentDefaultInjection: true }).eligible).toBe(false);
+    // 声明过跨作用域确认 → 可注入。
+    expect(evaluateAssetRuntimeEligibility(
+      { ...asset, crossScopeConfirmedAt: '2026-08-16T00:00:00.000Z' },
+      { scope: 'other', silentDefaultInjection: true },
+    ).eligible).toBe(true);
   });
 });

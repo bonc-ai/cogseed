@@ -50,7 +50,8 @@ export type RecallCaptureCandidateQualityReason =
   | 'missing_user_evidence'
   | 'candidate_too_short'
   | 'value_not_explanatory'
-  | 'candidate_not_reusable';
+  | 'candidate_not_reusable'
+  | 'platitude_no_specifics';
 
 export type RecallCaptureAutomaticIneligibilityReason =
   | RecallCaptureCandidateQualityReason
@@ -178,6 +179,9 @@ function collectSignals(messages: readonly RecallCaptureScreeningMessage[]): Rec
   if (messages.some((message) => (message.artifacts?.length || 0) > 0)) signals.push('artifact');
   return [...new Set(signals)];
 }
+
+/** 套话模式：报告完成/成功，本身不携带可复用知识（需配合具体信号判定）。 */
+const PLATITUDE_PATTERN = /(认真完成|按时交付|已完成|完成得不错|顺利完成任务|成功完成|task completed|successfully (completed|delivered|finished)|well done|good (job|work))/i;
 
 function collectTextSignals(text: string): RecallCaptureValueSignal[] {
   return SIGNAL_PATTERNS
@@ -463,7 +467,7 @@ export function assessRecallCandidateClassification(
     // PRD 3.1 要求 RuleAsset 确认适用与禁止范围。自动线目前拿不到这两个值，
     // 如何处置由 Q1 决定，这里先如实记录，不阻断（避免在决策前改变产能）。
     const hasBoundary = (boundaries.applicableWhen?.length || 0) > 0
-      || (boundaries.forbiddenWhen?.length || 0) > 0;
+      && (boundaries.forbiddenWhen?.length || 0) > 0;
     if (!hasBoundary) pushUnique(advisoryReasons, 'rule_missing_boundary');
   }
 
@@ -501,6 +505,15 @@ export function assessRecallCaptureCandidateQuality(
   const hasArtifactEvidence = evidenceMessages.some((message) => (message.artifacts?.length || 0) > 0);
   if (!candidateSignals.length && !hasArtifactEvidence && combinedLength < 40) {
     reasons.push('candidate_not_reusable');
+  }
+
+  // 套话闸门（保守版）：judgment 是报告完成/成功的套话，且没有任何具体
+  // 信号 → 无复用价值。只拦"纯套话"，不做复述任务判定（模板 judgment
+  // 天然含任务词，覆盖率判定误伤面大——上一版已回退）。
+  // reusable_outcome（报告完成）与套话天然重叠，不计入有效信号。
+  if (PLATITUDE_PATTERN.test(normalized(candidate.judgment))
+    && !collectTextSignals(candidate.judgment).some((signal) => signal !== 'reusable_outcome')) {
+    reasons.push('platitude_no_specifics');
   }
 
   const uniqueReasons = [...new Set(reasons)];

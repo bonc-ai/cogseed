@@ -11,18 +11,46 @@ import { recordRecallUsage } from './usage-service';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from './source-service';
+import { readReceipt, type ContextReuseReceipt } from '../p3394/context-reuse-receipt';
+import { abilityAssetReferencesCover } from './asset-reference';
 
 const log = createLogger('recall.proofs');
 
 export type TransferProofStatus = 'prepared' | 'succeeded' | 'degraded' | 'rejected';
 export type EffectivenessOutcome = 'better' | 'no_improvement' | 'worse' | 'insufficient_evidence' | 'invalid' | 'rework';
-export interface TransferProofRecord extends RecallJsonRecord { projectionId: string; executionId: string; expectedResultSnapshot: string; assetVersions: Array<{ assetId: string; version: string }>; status: TransferProofStatus; receiptId?: string; observedTransfer?: string; wakeRequestId?: string; createdAt: string; completedAt?: string; }
+export interface TransferProofRecord extends RecallJsonRecord { projectionId: string; executionId: string; expectedResultSnapshot: string; assetVersions: Array<{ assetId: string; version: string }>; status: TransferProofStatus; receiptId?: string; receiptExecutionId?: string; observedTransfer?: string; wakeRequestId?: string; createdAt: string; completedAt?: string; }
 export interface EffectivenessProofRecord extends RecallJsonRecord { transferProofId: string; outcome: EffectivenessOutcome; status: 'valid' | 'invalid'; observedResult: string; evidenceRefs: CognitionSourceRef[]; recommendedAction?: 'pause' | 'narrow_scope' | 'rework' | 'rollback_to_version'; createdAt: string; }
 function text(value: unknown, field: string, max: number): string { if (typeof value !== 'string') throw new Error(`invalid ${field}`); const out = value.replace(/\s+/g, ' ').trim(); if (!out || out.length > max) throw new Error(`invalid ${field}`); return out; }
-function asTransfer(value: RecallJsonRecord): TransferProofRecord { if (typeof value.projectionId !== 'string' || typeof value.executionId !== 'string' || typeof value.expectedResultSnapshot !== 'string' || !Array.isArray(value.assetVersions) || typeof value.status !== 'string' || typeof value.createdAt !== 'string' || (value.wakeRequestId !== undefined && typeof value.wakeRequestId !== 'string')) throw new Error('malformed transfer proof'); return value as TransferProofRecord; }
+function asTransfer(value: RecallJsonRecord): TransferProofRecord { if (typeof value.projectionId !== 'string' || typeof value.executionId !== 'string' || typeof value.expectedResultSnapshot !== 'string' || !Array.isArray(value.assetVersions) || typeof value.status !== 'string' || typeof value.createdAt !== 'string' || (value.receiptExecutionId !== undefined && typeof value.receiptExecutionId !== 'string') || (value.wakeRequestId !== undefined && typeof value.wakeRequestId !== 'string')) throw new Error('malformed transfer proof'); return value as TransferProofRecord; }
 function asEffectiveness(value: RecallJsonRecord): EffectivenessProofRecord {
   if (typeof value.transferProofId !== 'string' || typeof value.outcome !== 'string' || typeof value.status !== 'string' || typeof value.observedResult !== 'string' || !Array.isArray(value.evidenceRefs)) throw new Error('malformed effectiveness proof');
   return { ...value, evidenceRefs: normalizeCognitionSourceRefs(value.evidenceRefs) } as EffectivenessProofRecord;
+}
+
+function receiptProvesTransfer(
+  receipt: ContextReuseReceipt,
+  assetVersions: readonly { assetId: string; version: string }[],
+): boolean {
+  return receipt.boundary === 'real'
+    && receipt.status !== 'rejected'
+    && abilityAssetReferencesCover(receipt.reusedRefs, assetVersions);
+}
+
+async function findValidTransferReceipt(
+  userId: string,
+  receiptExecutionId: string | undefined,
+  receiptId: string | undefined,
+  assetVersions: readonly { assetId: string; version: string }[],
+): Promise<ContextReuseReceipt | undefined> {
+  if (!receiptExecutionId || !receiptId) return undefined;
+  try {
+    const receipt = await readReceipt(userId, receiptExecutionId);
+    return receipt.receiptId === receiptId && receiptProvesTransfer(receipt, assetVersions)
+      ? receipt
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 
@@ -48,17 +76,33 @@ export async function findTransferProof(userId: string, projectionId: string, ex
   return (await listTransferProofs(userId)).find((proof) => proof.projectionId === projectionId && proof.executionId === executionId);
 }
 
-export async function prepareTransferProof(userId: string, input: { projectionId: string; executionId: string; expectedResultSnapshot: string; wakeRequestId?: string }): Promise<TransferProofRecord> {
+export async function prepareTransferProof(userId: string, input: { projectionId: string; executionId: string; expectedResultSnapshot: string; assetIds?: string[]; wakeRequestId?: string }): Promise<TransferProofRecord> {
   const projection = await readContextProjection(userId, input.projectionId);
   if (projection.status !== 'confirmed') throw new Error('transfer proof requires a confirmed projection');
-  const assetVersions = await Promise.all(projection.assetIds.map(async (assetId) => { const asset = await readAbilityAsset(userId, assetId); return { assetId, version: asset.version }; }));
+  // 资产事实默认取投影冻结清单；调用方可覆盖为"真实加载"的资产（以回执为准）。
+  const assetIds = input.assetIds && input.assetIds.length ? input.assetIds : projection.assetIds;
+  const assetVersions = await Promise.all(assetIds.map(async (assetId) => { const asset = await readAbilityAsset(userId, assetId); return { assetId, version: asset.version }; }));
   const now = new Date().toISOString();
   const record: TransferProofRecord = { schemaVersion: 1, ownerId: userId, id: `tp-${genId12()}`, projectionId: projection.id, executionId: text(input.executionId, 'execution id', 160), expectedResultSnapshot: text(input.expectedResultSnapshot, 'expected result snapshot', 4000), assetVersions, status: 'prepared', ...(input.wakeRequestId ? { wakeRequestId: text(input.wakeRequestId, 'wake request id', 160) } : {}), createdAt: now };
   await writeRecallJsonRecord(userId, 'transfer-proofs', record.id, record);
   return record;
 }
-export async function completeTransferProof(userId: string, proofId: string, input: { status: Exclude<TransferProofStatus, 'prepared'>; receiptId?: string; observedTransfer: string }): Promise<TransferProofRecord> {
-  const updated = await updateRecallJsonRecord(userId, 'transfer-proofs', proofId, (raw) => { if (!raw) throw new Error('transfer proof not found'); const current = asTransfer(raw); if (current.status !== 'prepared') throw new Error('transfer proof is already complete'); if (input.status !== 'succeeded' && input.status !== 'degraded' && input.status !== 'rejected') throw new Error('invalid transfer proof status'); return { ...current, status: input.status, ...(input.receiptId ? { receiptId: text(input.receiptId, 'receipt id', 160) } : {}), observedTransfer: text(input.observedTransfer, 'observed transfer', 4000), completedAt: new Date().toISOString() }; });
+async function completeTransferProofRecord(
+  userId: string,
+  proofId: string,
+  input: {
+    status: Exclude<TransferProofStatus, 'prepared'>;
+    observedTransfer: string;
+    receipt?: ContextReuseReceipt;
+  },
+): Promise<TransferProofRecord> {
+  const existing = await readRecallJsonRecord(userId, 'transfer-proofs', proofId);
+  if (!existing) throw new Error('transfer proof not found');
+  const current = asTransfer(existing);
+  if (input.receipt && !receiptProvesTransfer(input.receipt, current.assetVersions)) {
+    throw new Error('transfer receipt does not prove all projected assets');
+  }
+  const updated = await updateRecallJsonRecord(userId, 'transfer-proofs', proofId, (raw) => { if (!raw) throw new Error('transfer proof not found'); const current = asTransfer(raw); if (current.status !== 'prepared') throw new Error('transfer proof is already complete'); if (input.status !== 'succeeded' && input.status !== 'degraded' && input.status !== 'rejected') throw new Error('invalid transfer proof status'); return { ...current, status: input.status, ...(input.receipt ? { receiptId: text(input.receipt.receiptId, 'receipt id', 160), receiptExecutionId: text(input.receipt.executionId, 'receipt execution id', 160) } : {}), observedTransfer: text(input.observedTransfer, 'observed transfer', 4000), completedAt: new Date().toISOString() }; });
   const proof = asTransfer(updated);
   if (proof.status === 'succeeded') {
     const projection = await readContextProjection(userId, proof.projectionId);
@@ -66,13 +110,13 @@ export async function completeTransferProof(userId: string, proofId: string, inp
     // 资产，形成可追溯 Action Plan 或可观察行为，**并生成 Receipt**」。没有回执
     // 就只证明了任务跑完，没证明这条资产被正确带入——不升档。
     // 使用记录照常写：它记的是"这次运行引用过它"，与够不够格升档无关。
-    const receiptProvesTransfer = Boolean(proof.receiptId);
+    const validReceipt = await findValidTransferReceipt(userId, proof.receiptExecutionId, proof.receiptId, proof.assetVersions);
     for (const item of proof.assetVersions) {
-      const advanced = receiptProvesTransfer ? maturityForTransferOutcome(proof.status) : undefined;
+      const advanced = validReceipt ? maturityForTransferOutcome(proof.status) : undefined;
       if (advanced) await setAbilityAssetMaturity(userId, item.assetId, advanced);
       await recordRecallUsage(userId, { assetId: item.assetId, assetVersion: item.version, taskRunId: projection.taskRunId, projectionId: projection.id, ...(projection.workspaceId ? { workspaceId: projection.workspaceId } : {}), outcome: proof.status });
     }
-    if (!receiptProvesTransfer) {
+    if (!validReceipt) {
       log.info('transfer proof completed without a reuse receipt; maturity unchanged', {
         proofId: proof.id,
         projectionId: proof.projectionId,
@@ -82,13 +126,54 @@ export async function completeTransferProof(userId: string, proofId: string, inp
   }
   return proof;
 }
+
+/** Complete a transfer without claiming that a ContextReuseReceipt belongs to it.
+ *  This is the only completion path exposed through renderer IPC. A successful
+ *  task without a trusted receipt remains useful usage history, but cannot
+ *  advance formal-asset maturity. */
+export async function completeTransferProof(
+  userId: string,
+  proofId: string,
+  input: { status: Exclude<TransferProofStatus, 'prepared'>; observedTransfer: string },
+): Promise<TransferProofRecord> {
+  return completeTransferProofRecord(userId, proofId, input);
+}
+
+/** Bind a transfer proof to the exact immutable receipt execution selected by
+ *  the host terminal path. This function is intentionally not exposed through
+ *  renderer IPC: receipt ids alone are globally discoverable history and do
+ *  not prove that an old receipt belongs to the current transfer. */
+export async function completeTransferProofWithReceipt(
+  userId: string,
+  proofId: string,
+  input: {
+    status: Exclude<TransferProofStatus, 'prepared'>;
+    receiptExecutionId: string;
+    observedTransfer: string;
+  },
+): Promise<TransferProofRecord> {
+  const receiptExecutionId = text(input.receiptExecutionId, 'receipt execution id', 160);
+  const receipt = await readReceipt(userId, receiptExecutionId);
+  return completeTransferProofRecord(userId, proofId, {
+    status: input.status,
+    observedTransfer: input.observedTransfer,
+    receipt,
+  });
+}
 export async function evaluateEffectivenessProof(userId: string, input: { transferProofId: string; outcome: EffectivenessOutcome; observedResult: string; evidenceRefs: unknown[] }): Promise<EffectivenessProofRecord> {
   const raw = await readRecallJsonRecord(userId, 'transfer-proofs', input.transferProofId); if (!raw) throw new Error('transfer proof not found'); const transfer = asTransfer(raw); if (transfer.status !== 'succeeded') throw new Error('effectiveness proof requires a successful transfer');
+  if (!await findValidTransferReceipt(userId, transfer.receiptExecutionId, transfer.receiptId, transfer.assetVersions)) throw new Error('effectiveness proof requires a verified transfer receipt');
   if (!['better','no_improvement','worse','insufficient_evidence','invalid','rework'].includes(input.outcome)) throw new Error('invalid effectiveness outcome');
   const refs = normalizeCognitionSourceRefs(input.evidenceRefs);
-  const valid = input.outcome !== 'invalid';
-  const recommendedAction = input.outcome === 'worse' ? 'pause' : input.outcome === 'rework' ? 'rework' : undefined;
-  const record: EffectivenessProofRecord = { schemaVersion: 1, ownerId: userId, id: `ep-${genId12()}`, transferProofId: transfer.id, outcome: input.outcome, status: valid ? 'valid' : 'invalid', observedResult: text(input.observedResult, 'observed result', 4000), evidenceRefs: refs, ...(recommendedAction ? { recommendedAction } : {}), createdAt: new Date().toISOString() };
+  // A positive click is useful feedback, but without a traceable comparison it
+  // is not proof that the asset improved the outcome. Preserve the record and
+  // downgrade its conclusion instead of silently promoting maturity.
+  const outcome = input.outcome === 'better' && refs.length === 0
+    ? 'insufficient_evidence'
+    : input.outcome;
+  const valid = outcome !== 'invalid';
+  const recommendedAction = outcome === 'worse' ? 'pause' : outcome === 'rework' ? 'rework' : undefined;
+  const record: EffectivenessProofRecord = { schemaVersion: 1, ownerId: userId, id: `ep-${genId12()}`, transferProofId: transfer.id, outcome, status: valid ? 'valid' : 'invalid', observedResult: text(input.observedResult, 'observed result', 4000), evidenceRefs: refs, ...(recommendedAction ? { recommendedAction } : {}), createdAt: new Date().toISOString() };
   await writeRecallJsonRecord(userId, 'effectiveness-proofs', record.id, record);
   const effectivenessMaturity = maturityForEffectivenessOutcome(record.outcome, record.status === 'valid');
   if (effectivenessMaturity) {

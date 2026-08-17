@@ -73,7 +73,7 @@ describe('Hub account IPC release gate', () => {
     mocks.getHubStatus.mockResolvedValueOnce({
       signed_in: true,
       account_id: 'cogseed_acc_1',
-      auth_provider: 'github',
+      auth_provider: 'web',
       bound: true,
       device_id: 'dev_1',
       account_status: 'active',

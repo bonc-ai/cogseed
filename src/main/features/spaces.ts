@@ -55,14 +55,19 @@ export interface Space {
   sustained_outcome?: string;
   /** 空间「目标+规则」说明书（承接原项目 ORKAS.md；commander 写、空间内 agent 读）。 */
   instructions?: string;
-  /** 基础 Agent（承接空间内任务的默认执行体；扩展点：后续接入其他 coding agent）。 */
+  /** 基础 Agent（承接空间内任务的默认执行体；扩展点：后续接入其他 coding agent）。
+   *  兼容保留：多选场景下为 base_agents 首项。 */
   base_agent?: string;
+  /** 承接空间内任务的 Agent 列表（cli type；多选）。base_agent 与其首项保持同步。 */
+  base_agents: string[];
   /** 上架 Gate 状态缓存（'passed' = 最近一次评估通过；实时判断走 evaluateWorkspaceGate）。 */
   gate_status?: SpaceGateStatus;
   /** 空间绑定的 Main Skill（引用不复制；AssetRef 契约与 main-skill-baseline 对齐）。 */
   main_skill_ref?: SpaceAssetRef;
   /** 空间对正式资产的版本引用绑定（默认 review_required；PRD §3.4.2）。 */
   asset_reference_bindings?: SpaceAssetReferenceBinding[];
+  /** 置顶时间（侧栏/空间中心置顶排序用；缺失 = 未置顶）。 */
+  pinned_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -191,15 +196,15 @@ export function parseTemplateFileBundle(text: string): RoleTemplateBundle {
 /** 空间 → 资源派生（纯函数，同步）。
  *  @param space  空间（可部分：primary_template_id/extra_skills/extra_agents）
  *  @param valid  当前用户可见资源的 id 集合（调用方从 listSkills/listAgents 构造）
- *  @param opts   可选：baseAgentAgentId = 空间 base_agent（cli type）对应的团队成员
- *                agent_id（调用方负责把 cli type 映射到 agent_id；纯函数不做 IO）。
- *                base_agent 是「承接空间任务的默认执行体」，与指挥官同层，必须进
+ *  @param opts   可选：baseAgentAgentIds = 空间 base_agents（cli type）对应的团队成员
+ *                agent_id 列表（调用方负责把 cli type 映射到 agent_id；纯函数不做 IO）。
+ *                base_agents 是「承接空间任务的默认执行体们」，与指挥官同层，必须进
  *                effective_agents，否则空间里 @ 不到、任务派发不到。
- *  @returns effective = 模板 bundle ∪ extra ∪ base agent 过滤失效去重保序；失效 id 归 invalid_refs。 */
+ *  @returns effective = 模板 bundle ∪ extra ∪ base agents 过滤失效去重保序；失效 id 归 invalid_refs。 */
 export function resolveSpaceResources(
   space: Pick<Space, 'primary_template_id' | 'secondary_template_ids' | 'extra_skills' | 'extra_agents'> & { template_id?: string },
   valid: { skills?: ReadonlySet<string>; agents?: ReadonlySet<string> },
-  opts?: { baseAgentAgentId?: string },
+  opts?: { baseAgentAgentIds?: string[] },
 ): SpaceResources {
   const validSkills = valid.skills ?? new Set<string>();
   const validAgents = valid.agents ?? new Set<string>();
@@ -235,10 +240,12 @@ export function resolveSpaceResources(
   }
 
   const unionSkills = [...bundleSkills, ...(space.extra_skills ?? [])];
-  // base_agent（cli type）已由调用方映射为团队成员 agent_id：与模板 bundle /
+  // base_agents（cli type）已由调用方映射为团队成员 agent_id：与模板 bundle /
   // extra_agents 并列参与有效集过滤，重复（已勾进 extra）自动去重。
   const unionAgents = [...bundleAgents, ...(space.extra_agents ?? [])];
-  if (opts?.baseAgentAgentId) unionAgents.push(opts.baseAgentAgentId);
+  for (const id of opts?.baseAgentAgentIds ?? []) {
+    if (id) unionAgents.push(id);
+  }
 
   const effectiveSkills: string[] = [];
   const invalidSkills: string[] = [];
@@ -296,8 +303,17 @@ function _normaliseSpace(raw: any): Space | null {
     instructions: typeof raw.instructions === 'string' && raw.instructions ? raw.instructions : undefined,
     gate_status: isGateStatus(raw.gate_status) ? raw.gate_status : 'not_checked',
     base_agent: typeof raw.base_agent === 'string' && raw.base_agent ? raw.base_agent : undefined,
+    base_agents: (() => {
+      // 多选列表；旧数据只有 base_agent 时以其兜底，保证首项一致
+      const list = Array.isArray(raw.base_agents)
+        ? raw.base_agents.filter((x): x is string => typeof x === 'string' && !!x)
+        : [];
+      if (list.length) return list;
+      return typeof raw.base_agent === 'string' && raw.base_agent ? [raw.base_agent] : [];
+    })(),
     main_skill_ref: normaliseAssetRef(raw.main_skill_ref),
     asset_reference_bindings: normaliseBindings(raw.asset_reference_bindings),
+    pinned_at: typeof raw.pinned_at === 'string' && raw.pinned_at ? raw.pinned_at : undefined,
     created_at: typeof raw.created_at === 'string' ? raw.created_at : '',
     updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : '',
   };
@@ -406,7 +422,7 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
     const s = await _readSpace(uid, sid);
     if (!s) continue;
     const res = resolveSpaceResources(s, valid, {
-      baseAgentAgentId: baseAgentToAgentId(agents, s.base_agent),
+      baseAgentAgentIds: (s.base_agents ?? []).map((t) => baseAgentToAgentId(agents, t)).filter((x): x is string => !!x),
     });
     // 最近活跃会话（列表「最近」展示 + 最近使用排序；chats 动态引入避免模块加载链）
     let lastConv: { title?: string; updated_at?: string; created_at?: string } | undefined;
@@ -452,6 +468,7 @@ export async function createSpace(
     sustained_outcome?: string;
     instructions?: string;
     base_agent?: string;
+    base_agents?: string[];
     main_skill_ref?: SpaceAssetRef;
     asset_reference_bindings?: SpaceAssetReferenceBinding[];
   },
@@ -468,6 +485,8 @@ export async function createSpace(
   // 归一化：template_id 兼容，primary 优先
   const primary = opts.primary_template_id || opts.template_id || undefined;
   const secondary = (opts.secondary_template_ids || []).filter(Boolean).slice(0, 2);
+  const baseAgents = (opts.base_agents || (typeof opts.base_agent === 'string' && opts.base_agent ? [opts.base_agent] : []))
+    .filter(Boolean).slice(0, 8);
   const space: Space = {
     space_id: genSpaceId(),
     name,
@@ -480,7 +499,8 @@ export async function createSpace(
     space_type: opts.space_type ?? 'complex_project',
     sustained_outcome: opts.sustained_outcome || undefined,
     instructions: opts.instructions || undefined,
-    base_agent: typeof opts.base_agent === 'string' && opts.base_agent ? opts.base_agent : undefined,
+    base_agent: baseAgents[0] || undefined,
+    base_agents: baseAgents,
     gate_status: 'not_checked',
     main_skill_ref: normaliseAssetRef(opts.main_skill_ref),
     asset_reference_bindings: normaliseBindings(opts.asset_reference_bindings),
@@ -664,9 +684,11 @@ export async function updateSpace(
     sustained_outcome?: string | null;
     instructions?: string | null;
     base_agent?: string | null;
+    base_agents?: string[] | null;
     gate_status?: SpaceGateStatus | null;
     main_skill_ref?: SpaceAssetRef | null;
     asset_reference_bindings?: SpaceAssetReferenceBinding[] | null;
+    pinned_at?: string | null;
   },
 ): Promise<{ ok: true; space: Space } | { ok: false; error: SpaceError }> {
   const cur = await _readSpace(uid, spaceId);
@@ -704,6 +726,14 @@ export async function updateSpace(
   if (opts.base_agent !== undefined) {
     cur.base_agent = opts.base_agent === null || !opts.base_agent ? undefined : opts.base_agent;
   }
+  // 多选列表：更新时同步 base_agent 为首项（保持兼容字段一致）
+  if (opts.base_agents !== undefined) {
+    const list = opts.base_agents === null
+      ? []
+      : opts.base_agents.filter((x): x is string => typeof x === 'string' && !!x).slice(0, 8);
+    cur.base_agents = list;
+    cur.base_agent = list[0] || undefined;
+  }
   if (opts.gate_status !== undefined) {
     if (opts.gate_status === null) cur.gate_status = 'not_checked';
     else if (isGateStatus(opts.gate_status)) cur.gate_status = opts.gate_status;
@@ -715,6 +745,9 @@ export async function updateSpace(
   if (opts.asset_reference_bindings !== undefined) {
     cur.asset_reference_bindings =
       opts.asset_reference_bindings === null ? undefined : normaliseBindings(opts.asset_reference_bindings);
+  }
+  if (opts.pinned_at !== undefined) {
+    cur.pinned_at = opts.pinned_at === null || !opts.pinned_at ? undefined : opts.pinned_at;
   }
   cur.updated_at = nowIso();
   await _writeSpace(uid, cur);
@@ -793,10 +826,12 @@ export async function deleteSpace(
   const cur = await _readSpace(uid, spaceId);
   if (!cur) return { ok: false, error: 'not_found' };
   // 1. 解绑该空间下所有会话（尽力而为；任一失败只告警不阻断删除）
+  const convCids: string[] = [];
   try {
     const chats = await import('./chats');
     const convs = await chats.listSpaceConversations(uid, spaceId);
     for (const c of convs) {
+      convCids.push(c.conversation_id);
       try {
         await chats.setConversationSpace(uid, c.conversation_id, null);
       } catch (err) {
@@ -817,6 +852,21 @@ export async function deleteSpace(
     await fsp.rm(spaceContentDir(uid, spaceId), { recursive: true, force: true });
   } catch (err) {
     log.warn(`drop space content dir user=${uid} sid=${spaceId}: ${(err as Error).message}`);
+  }
+  // 3. 兜底清理公共仓库残留：空间会话的附件/网页产物若因未迁移仍落在全局
+  //    cloud/chat_attachments|chat_artifacts/<cid>/，随空间删除一并清掉，杜绝孤儿文件。
+  if (convCids.length) {
+    try {
+      const { chatAttachmentDir, chatArtifactCidDir } = await import('../paths');
+      for (const cid of convCids) {
+        const attDir = chatAttachmentDir(uid, cid);
+        if (fs.existsSync(attDir)) { try { await fsp.rm(attDir, { recursive: true, force: true }); } catch { /* best-effort */ } }
+        const artDir = chatArtifactCidDir(uid, cid);
+        if (fs.existsSync(artDir)) { try { await fsp.rm(artDir, { recursive: true, force: true }); } catch { /* best-effort */ } }
+      }
+    } catch (err) {
+      log.warn(`cleanup global attachments user=${uid} sid=${spaceId}: ${(err as Error).message}`);
+    }
   }
   log.info(`deleted space user=${uid} sid=${spaceId}`);
   return { ok: true };
@@ -964,7 +1014,7 @@ export async function resolveSpaceResourcesForUser(uid: string, space: Space): P
     skills: new Set(skills.map((s) => s.id)),
     agents: new Set(agents.map((a) => a.agent_id)),
   }, {
-    baseAgentAgentId: baseAgentToAgentId(agents, space.base_agent),
+    baseAgentAgentIds: (space.base_agents ?? []).map((t) => baseAgentToAgentId(agents, t)).filter((x): x is string => !!x),
   });
 }
 

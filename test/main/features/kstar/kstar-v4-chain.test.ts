@@ -316,6 +316,19 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
     }
   });
 
+  it('7b. cancelled (user-aborted) terminal also schedules the auto-close window', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    closure._setAutoCloseQuietMsForTest(5_000);
+
+    const cid = newCid();
+    await seedRequirementWithLesson(cid, '写一份 500 字资料', 'N 字资料类请求：交付开头注明实际字数');
+    // 模拟用户中止：cancelled 终态后窗口应被调度（任务不悬挂）。
+    await closure.scheduleAutoClose('user-a', cid);
+    const state = await store.readConversationTaskState('user-a', cid);
+    expect(state?.pendingAutoCloseAt).toBeTruthy();
+  });
+
   it('8. runtime timer auto-closes when the window expires (no restart needed)', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const store = await import('../../../../src/main/features/kstar/requirement-store');

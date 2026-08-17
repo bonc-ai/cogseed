@@ -1,19 +1,28 @@
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
+import { lessonLanguageMismatches } from '../../util/language';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
 
 /** 从经验内容提炼标题核心（交互规范附录 A 风格：标题体现内容）。
- *  去掉常见引导前缀，取第一句主干，限 24 字。 */
+ *  去掉常见引导前缀，取第一句主干，限 24 字。
+ *  "当…时/对于…/遇到…"引导整体移除（含"时"边界）——旧实现对"当任务
+ *  要求生成基于用户具体数据的文档（如资产简介）时"只移除前 12 字符，
+ *  留下"数据的文档（如资产简介）时"残片。 */
 export function lessonTitleCore(text: string): string {
-  const t = String(text || '')
+  let t = String(text || '')
     .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^(处理|对于|遇到|当|在)[^，。；,.;:：]{0,12}[，,。；;]?/, '')
-    .replace(/^(可|应|须|要|建议|注意|务必|先|再)[^，。；,.;:：]{0,3}/, '')
-    .replace(/^(“|『|「)/, '')
+    .trim();
+  // "遇到同类情况时，应注意修正："是"待修正经验"模板引导，整体移除。
+  t = t.replace(/^(?:遇到同类情况时，)?(?:应|须|要)?注意修正[:：]/, '')
+    // 引导前缀（"当X时，"/"对于X，"/"处理X时，"等）惰性匹配到标点移除。
+    .replace(/^(?:当|对于|遇到|处理|在处理|在)[^，。；,.;:：]*?(?:时|后|中|之前|以后)?[，,。；;]/, '')
+    // 纯助动词引导（"可以/应该/需要"）——"先/再"是流程内容词（"先X再Y"），不移除。
+    .replace(/^(?:可|应|须|要|建议|务必|注意)[^，。；,.;:：]{0,2}/, '')
+    .replace(/^(?:“|『|「)/, '')
     .replace(/([，。；,.;:：])[\s\S]*$/, '$1')
     .trim();
   if (!t) return '通用经验';
-  return t.length <= 24 ? t : `${t.slice(0, 24)}…`;
+  // 40 字截断：24 字太短，标题核心经常被截成无意义残片（用户反馈）。
+  return t.length <= 40 ? t : `${t.slice(0, 40)}…`;
 }
 
 export function scopeForTask(task: string): string {
@@ -23,7 +32,7 @@ export function scopeForTask(task: string): string {
   // NOTE: `file`/`文件` are weak words — "文件不存在时返回默认值" is CODE
   // logic, not a document/report task; matching them to 'report' mislabels
   // refactor/code tasks and breaks retrieval. Strong document words only.
-  if (/report|summary|document|报告|总结|文档/i.test(task)) return 'report';
+  if (/report|summary|document|报告|总结/i.test(task)) return 'report';
   if (/code|function|bug|test|代码|函数|缺陷|测试/i.test(task)) return 'code';
   if (/review|audit|审查|审计|检查|评审/i.test(task)) return 'review';
   if (/product|decision|architecture|产品|决策|架构/i.test(task)) return 'product';
@@ -126,6 +135,11 @@ export function proposeKstarCandidates(
     report: '报告类任务', code: '代码类任务', review: '审查类任务',
     product: '产品类任务', general: '通用',
   } as Record<string, string>)[scope] ?? scope;
+  // 语言硬闸（消费方防御）：lesson 可能来自历史 review 或用户确认路径，不
+  // 一定经过出生点拦截。主导脚本与任务不匹配的 lesson 一律不产候选——宁可
+  // 回退确定性模板，也不让英文经验（中文任务）进候选池。
+  const lessonFor = (lesson: string | undefined): string | undefined =>
+    lesson && lessonLanguageMismatches(episode.t.userGoal, lesson) ? undefined : lesson;
   // 规则类候选的适用范围：PRD 3.1 把"确认适用与禁止范围"列为 RuleAsset 的
   // 最低门槛，没有边界的规则只能停在候选池。KStar 唯一有证据支撑的边界是
   // "这条教训是在哪类任务上学到的"——就只声明这一条，不编造禁止范围。
@@ -133,7 +147,7 @@ export function proposeKstarCandidates(
     suggestedType === 'rule' ? { applicableWhen: [`处理${scopeLabel}时`] } : {}
   );
   if (verifiedWorkflow && signalAvailable) {
-    const lesson = review.lesson?.trim();
+    const lesson = lessonFor(review.lesson?.trim());
     const core = lessonTitleCore(lesson || episode.t.userGoal);
     proposals.push({
       // A model-reasoned lesson (cause + reusable guidance) wins over the
@@ -157,7 +171,7 @@ export function proposeKstarCandidates(
   }
 
   const type = review.confidence >= 0.7 ? gapType(review) : null;
-  const gapLesson = review.lesson?.trim();
+  const gapLesson = lessonFor(review.lesson?.trim());
   // 没有推理出的 lesson 就不产缺口候选。此前会退回
   // `遇到同类情况时，应注意修正：${review.reason}`，而 review.reason 在推断出来的
   // 复盘里往往是一句诊断（"expected 'oi' but actual was …"）——把诊断当认知写进

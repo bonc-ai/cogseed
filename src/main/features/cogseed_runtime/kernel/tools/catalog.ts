@@ -1,6 +1,6 @@
 import type { RuntimeModelToolDefinition } from '../model-adapter';
 
-export type RuntimeToolName = 'stat_file' | 'read_file' | 'search_files' | 'grep_files' | 'write_file' | 'edit_file' | 'bash' | 'run_skill' | 'list_connector_tools' | 'call_connector_tool' | 'search_mate_kb' | 'read_mate_kb' | 'office_read' | 'office_create' | 'office_edit' | 'office_render' | 'browser_open' | 'browser_snapshot' | 'browser_click' | 'browser_type' | 'browser_screenshot' | 'mate_delegate' | 'mate_tasks' | 'mate_cancel' | 'mate_retry_step' | 'mate_skip_step' | 'mate_resume_workflow' | 'mate_workflow' | 'messaging_list_targets' | 'messaging_send';
+export type RuntimeToolName = 'stat_file' | 'read_file' | 'search_files' | 'grep_files' | 'write_file' | 'edit_file' | 'bash' | 'run_skill' | 'list_connector_tools' | 'call_connector_tool' | 'search_mate_kb' | 'read_mate_kb' | 'office_read' | 'office_create' | 'office_edit' | 'office_render' | 'browser_open' | 'browser_snapshot' | 'browser_click' | 'browser_type' | 'browser_screenshot' | 'mate_delegate' | 'mate_tasks' | 'mate_cancel' | 'mate_retry_step' | 'mate_skip_step' | 'mate_resume_workflow' | 'mate_workflow' | 'messaging_list_targets' | 'messaging_send' | 'p3394_send';
 
 export interface RuntimeToolCatalogEntry {
   name: RuntimeToolName;
@@ -132,6 +132,7 @@ export const TOOL_CATALOG = Object.freeze<readonly RuntimeToolCatalogEntry[]>([
   { name: 'mate_workflow', summary: 'Read the current CogSeed workflow run and step statuses.', kind: 'host', parameters: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'messaging_list_targets', summary: 'List configured Feishu/Lark bots and which can proactively message the configured owner (self); read-only sanitized diagnostics.', kind: 'host', parameters: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'messaging_send', summary: 'Send a text message to the configured owner (self) through an explicit or default-routed Feishu/Lark bot, after the user approves a confirmation dialog.', kind: 'host', parameters: { type: 'object', properties: { instance_id: { type: 'string', description: 'Optional bot instance id. Omit it to use the configured default delivery bot.' }, target: { type: 'string', const: 'self' }, text: { type: 'string', minLength: 1, maxLength: 12000 } }, required: ['target', 'text'], additionalProperties: false } },
+  { name: 'p3394_send', summary: 'Send a P3394 task to a registered peer Agent (e.g. hermes) and wait for its reply — agent-to-agent collaboration.', kind: 'host', parameters: { type: 'object', properties: { peer: { type: 'string', description: 'Registered peer agent id (e.g. hermes).' }, message: { type: 'string', minLength: 1, maxLength: 20000 } }, required: ['peer', 'message'], additionalProperties: false } },
 ]);
 
 export function getRuntimeToolCatalog(): readonly RuntimeToolCatalogEntry[] {
@@ -141,9 +142,13 @@ export function getRuntimeToolCatalog(): readonly RuntimeToolCatalogEntry[] {
 /** Capability that unlocks the Commander-only proactive messaging tools. */
 export const MESSAGING_PROACTIVE_CAPABILITY = 'messaging.proactive';
 
-const CAPABILITY_GATED_TOOLS: ReadonlySet<RuntimeToolName> = new Set([
-  'messaging_list_targets',
-  'messaging_send',
+/** Capability that unlocks the P3394 agent-interop outbound tool. */
+export const P3394_INTEROP_CAPABILITY = 'p3394.interop';
+
+const CAPABILITY_GATED_TOOLS: ReadonlyMap<RuntimeToolName, string> = new Map([
+  ['messaging_list_targets', MESSAGING_PROACTIVE_CAPABILITY],
+  ['messaging_send', MESSAGING_PROACTIVE_CAPABILITY],
+  ['p3394_send', P3394_INTEROP_CAPABILITY],
 ]);
 
 /**
@@ -157,9 +162,10 @@ export function filterRuntimeToolCatalogByCapabilities(
   capabilities: readonly string[] | undefined,
 ): readonly RuntimeToolCatalogEntry[] {
   const granted = new Set(capabilities ?? []);
-  return catalog.filter((entry) => (
-    !CAPABILITY_GATED_TOOLS.has(entry.name) || granted.has(MESSAGING_PROACTIVE_CAPABILITY)
-  ));
+  return catalog.filter((entry) => {
+    const required = CAPABILITY_GATED_TOOLS.get(entry.name);
+    return !required || granted.has(required);
+  });
 }
 
 export function isRuntimeToolName(name: string): name is RuntimeToolName {

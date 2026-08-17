@@ -1,0 +1,29 @@
+{
+ "interface": {
+  "display_name": "电商比价调研",
+  "short_description": "多平台比价（淘宝/京东/拼多多/抖音），输出价格带分布、促销节奏与定价建议。",
+  "default_prompt": "Use $ecommerce-price-research and follow its evidence, approval, and output contract."
+ },
+ "policy": {
+  "allow_implicit_invocation": true
+ },
+ "nseap_runtime": {
+  "executor": "codex_skill_interpreter",
+  "binding_status": "target_state_not_run",
+  "skill_entrypoint": "../SKILL.md",
+  "schema_ref": "../schemas.json",
+  "permissions": {
+   "direct_resource_access": false,
+   "external_actions": "deny_without_explicit_approval",
+   "formal_asset_write": false,
+   "candidate_write_only": true
+  },
+  "governance": {
+   "level": "L5",
+   "risk_route": "Full",
+   "promotion_ceiling": "staged",
+   "production_release_allowed": false,
+   "independent_review": "pending"
+  }
+ }
+}

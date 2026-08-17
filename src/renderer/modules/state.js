@@ -310,17 +310,21 @@ function bindStaticHandlers() {
   });
 
   // Sidebar nav
+  // 首页保持进入新建会话页（panel-new-chat）；「新任务」独立按钮已移除。
   document.getElementById('new-chat-btn').addEventListener('click', () => _setViewFromSidebar('new-chat'));
-  document.getElementById('new-task-btn')?.addEventListener('click', () => {
-    if (typeof openNewTask === 'function') openNewTask();
-    else _setViewFromSidebar('new-chat');
-  });
   document.getElementById('auto-btn')?.addEventListener('click', () => _setViewFromSidebar('auto'));
   document.getElementById('recall-btn')?.addEventListener('click', () => _setViewFromSidebar('recall'));
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connections'));
   document.getElementById('spaces-btn')?.addEventListener('click', () => _setViewFromSidebar('spaces'));
   document.getElementById('workspace-btn')?.addEventListener('click', () => _setViewFromSidebar('workspace'));
   document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
+
+  // Sidebar conv tabs（ZCode 式「空间 | 最近任务」）
+  document.querySelectorAll('#sidebar-conv-tabs [data-conv-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (typeof _setSidebarConvTab === 'function') _setSidebarConvTab(btn.dataset.convTab);
+    });
+  });
 
   // Global search trigger + Cmd+K
   _bindGlobalSearch();

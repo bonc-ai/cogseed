@@ -687,6 +687,14 @@ export async function send(
       ...(recall_projection_card ? { recall_projection_card } : {}),
       ...(kstar_review_card ? { kstar_review_card } : {}),
     });
+    // 一次性引用语义：持久化 task_references 随本条消息消费后即从会话移除，
+    // 下一条消息不再自动携带（本消息的引用已在 enqueue 时快照，不受影响）。
+    try {
+      const chats = await import('../chats');
+      await chats.updateConversation(userId, cid, { task_references: [] });
+    } catch (clearErr) {
+      log.warn(`clear task_references failed user=${userId} cid=${cid}: ${(clearErr as Error).message}`);
+    }
     return { ok: true, msg };
   } catch (err) {
     log.error(`send failed user=${userId} cid=${cid}: ${(err as Error).message}`);

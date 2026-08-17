@@ -46,6 +46,8 @@ async function createAsset() {
     judgment: 'Keep architecture decisions in a decision log before changing runtime boundaries.',
     summary: 'Use decision logs for architecture changes',
     suggestedType: 'rule',
+    applicableWhen: ['Architecture review and runtime-boundary changes'],
+    forbiddenWhen: ['Informal brainstorming without a decision'],
     suggestedScope: 'review,project',
     sourceRefs: [{ kind: 'execution', id: 'exec-a' }],
   });
@@ -60,6 +62,8 @@ async function createAssetWith(input: { judgment: string; summary: string; sourc
     judgment: input.judgment,
     summary: input.summary,
     suggestedType: 'rule',
+    applicableWhen: ['OAuth', 'database', 'architecture review', 'rules'],
+    forbiddenWhen: ['Unrelated casual conversation'],
     suggestedScope: 'global',
     sourceRefs: [{
       kind: 'conversation',
@@ -358,7 +362,7 @@ describe('confirmed Recall projection prompt injection', () => {
         scope: 'global',
         evidenceRefs: [{ kind: 'execution', id: 'exec-blocked' }],
         reviewDecisionId: 'legacy-untracked',
-        lifecycleStatus: 'user_confirmed_unverified',
+        lifecycleStatus: 'automatically_extracted_unverified',
         status: 'paused',
         maturity: 'seed',
         version: '1',

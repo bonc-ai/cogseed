@@ -73,7 +73,7 @@ describe('CogSeed Runtime tool runtime MVP', () => {
       'office_read', 'office_create', 'office_edit', 'office_render',
       'browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot',
       'mate_delegate', 'mate_tasks', 'mate_cancel', 'mate_retry_step', 'mate_skip_step', 'mate_resume_workflow', 'mate_workflow',
-      'messaging_list_targets', 'messaging_send',
+      'messaging_list_targets', 'messaging_send', 'p3394_send',
     ]);
     expect(JSON.stringify(getRuntimeToolCatalog())).not.toMatch(/group|chat|memory/i);
   });

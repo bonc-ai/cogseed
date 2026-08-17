@@ -511,7 +511,7 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).toContain('<h2>Second Method Bud</h2>');
     expect(body.innerHTML).toContain('data-ability-asset-id="candidate:B"');
     expect(body.innerHTML).not.toContain('<h2>First Rule</h2>');
-    expect(body.innerHTML).toContain('搜索认知资产');
+    expect(body.innerHTML).toContain('搜索能力资产');
     expect(body.innerHTML).not.toContain('Asset ID');
     expect(body.innerHTML).not.toContain('Owner');
     expect(body.innerHTML).not.toContain('source-b');
@@ -553,7 +553,7 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).not.toContain('ability-assets-tree-page');
     expect(body.innerHTML).not.toContain('cognition-tree-leaf');
     expect(body.innerHTML).toContain('ability-assets-management');
-    expect(body.innerHTML).toContain('搜索认知资产');
+    expect(body.innerHTML).toContain('搜索能力资产');
   });
 
 

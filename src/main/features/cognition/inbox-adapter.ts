@@ -36,7 +36,9 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
   ]);
 
   // skill_method 的 generatedSkillId 不在资产记录上，得问一次已安装 Skill。
-  // 读失败按"还没生成"处理：漏报一条建议，好过谎称已经生成。
+  // 读失败时不能当成"还没生成"，否则会给用户一个可能重复创建 Skill 的假建议。
+  // 资产本身仍保留给来源失效、敏感级等其他治理检查。
+  const skillStateUnknownAssetIds = new Set<string>();
   const withSkillState = await Promise.all(assets.map(async (asset) => {
     if (asset.assetType !== 'skill_method' || asset.payload.kind !== 'skill_method') return asset;
     let generatedSkillId: string | undefined;
@@ -45,6 +47,8 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
       log.warn('inbox installed skill read degraded', {
         userId, assetId: asset.assetId, error: (error as Error).message,
       });
+      skillStateUnknownAssetIds.add(asset.assetId);
+      return asset;
     }
     return generatedSkillId
       ? { ...asset, payload: { ...asset.payload, generatedSkillId } }
@@ -82,5 +86,6 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
     })),
     unavailableSourceIds,
     latestDiffs,
+    skillStateUnknownAssetIds,
   });
 }

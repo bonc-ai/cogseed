@@ -8,6 +8,7 @@ import { isConnectorUsable, type ConnectorStatus } from '../connectors/types';
 import { listContextsTreeForUser, type ContextNode } from '../contexts';
 import * as executionRecords from '../execution-records';
 import type { GroupMessage } from '../group_chat/visibility';
+import { isRecallAssistantMessage, isRecallConversationMessage } from './conversation-message-policy';
 import {
   clearCognitionSourceFailure,
   listCognitionSourceControls,
@@ -50,6 +51,8 @@ export interface CognitionCatalogSource extends CognitionSourceRef {
   kind: CognitionCatalogKind;
   status: CognitionSourceLifecycleStatus;
   availability: CognitionSourceAvailability;
+  /** Session-only preflight used by the manual capture picker. */
+  captureReady?: boolean;
   statusReason?: string;
   actions: CognitionSourceAction[];
   nextAction: CognitionSourceNextAction;
@@ -67,12 +70,19 @@ export interface CognitionSourceGroup {
 interface DiscoveredSource extends CognitionSourceRef {
   kind: CognitionCatalogKind;
   status: CognitionSourceLifecycleStatus;
+  captureReady?: boolean;
   statusReason?: string;
+}
+
+interface SourceAdapterQuery {
+  limit: number;
+  conversationId?: string;
+  disabledConversationIds?: ReadonlySet<string>;
 }
 
 type SourceAdapter = (
   userId: string,
-  query: Required<Pick<ListCognitionSourcesQuery, 'limit'>> & Pick<ListCognitionSourcesQuery, 'conversationId'>,
+  query: SourceAdapterQuery,
 ) => Promise<DiscoveredSource[]>;
 
 function stableId(prefix: string, ...parts: string[]): string {
@@ -108,17 +118,16 @@ export function cognitionContextFileSourceId(relativePath: string): string {
   return stableId('ctx', relativePath);
 }
 
+export function cognitionConnectorSourceId(instanceId: string): string {
+  return stableId('ext', instanceId);
+}
+
 export function cognitionEvaluationSourceId(executionId: string): string {
   return stableId('eval', executionId);
 }
 
 function usefulMessage(message: GroupMessage): boolean {
-  return !message.deleted_at
-    && !message.dispatch
-    && !message.system_kind
-    && !message.failure_kind
-    && typeof message.text === 'string'
-    && Boolean(message.text.trim());
+  return isRecallConversationMessage(message);
 }
 
 async function selectedConversations(
@@ -140,10 +149,12 @@ async function loadRecentMessages(
   userId: string,
   conversationId: string | undefined,
   limit: number,
+  disabledConversationIds: ReadonlySet<string> = new Set(),
 ): Promise<Array<{ conversation: chats.Conversation; message: GroupMessage }>> {
   const conversations = await selectedConversations(userId, conversationId);
   const rows: Array<{ conversation: chats.Conversation; message: GroupMessage }> = [];
   for (const conversation of conversations) {
+    if (disabledConversationIds.has(conversation.conversation_id)) continue;
     const remaining = limit - rows.length;
     if (remaining <= 0) break;
     const fetchLimit = Math.min(2_000, Math.max(50, remaining * 4));
@@ -161,18 +172,64 @@ function conversationStatus(conversation: chats.Conversation): Pick<DiscoveredSo
     : { status: 'ready' };
 }
 
+/** A manual capture must never offer an unfinished conversation as runnable.
+ * Keep this as a small metadata preflight: message bodies are not returned in
+ * the catalog, and the capture service still performs the authoritative check
+ * immediately before creating a task. */
+async function conversationCaptureReadiness(userId: string, conversationId: string): Promise<boolean | undefined> {
+  try {
+    const readinessFrom = (input: GroupMessage[]): boolean | undefined => {
+      const messages = input
+        .filter(usefulMessage)
+        .sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
+      let lastUserIndex = -1;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index].from === 'user') {
+          lastUserIndex = index;
+          break;
+        }
+      }
+      if (lastUserIndex < 0) return undefined;
+      return messages.slice(lastUserIndex + 1).some(isRecallAssistantMessage);
+    };
+    const recent = await chats.getMessages(userId, conversationId, 50);
+    const recentReadiness = readinessFrom(recent);
+    if (recentReadiness !== undefined) return recentReadiness;
+    const messages = (await chats.getMessages(userId, conversationId, 2_000))
+      .filter(usefulMessage)
+      .sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
+    return readinessFrom(messages) ?? false;
+  } catch {
+    // An unreadable source remains actionable through the normal source error
+    // path; do not claim that it is complete based on missing data.
+    return undefined;
+  }
+}
+
 async function conversationSources(userId: string, query: Parameters<SourceAdapter>[1]): Promise<DiscoveredSource[]> {
   const conversations = await selectedConversations(userId, query.conversationId);
-  const sessions = conversations.slice(0, query.limit).map((conversation) => discovered({
-    kind: 'conversation',
-    subtype: 'session',
-    scope: 'conversation',
-    id: conversation.conversation_id,
-    title: conversation.title,
-    sourceVersion: conversation.updated_at,
-  }, conversationStatus(conversation).status, conversationStatus(conversation).statusReason));
+  const sessions = await Promise.all(conversations.slice(0, query.limit).map(async (conversation) => {
+    const status = conversationStatus(conversation);
+    const source = discovered({
+      kind: 'conversation',
+      subtype: 'session',
+      scope: 'conversation',
+      id: conversation.conversation_id,
+      title: conversation.title,
+      sourceVersion: conversation.updated_at,
+    }, status.status, status.statusReason);
+    const captureReady = conversation.processing || query.disabledConversationIds?.has(conversation.conversation_id)
+      ? undefined
+      : await conversationCaptureReadiness(userId, conversation.conversation_id);
+    return captureReady === undefined ? source : { ...source, captureReady };
+  }));
   if (sessions.length >= query.limit) return sessions;
-  const messages = await loadRecentMessages(userId, query.conversationId, query.limit - sessions.length);
+  const messages = await loadRecentMessages(
+    userId,
+    query.conversationId,
+    query.limit - sessions.length,
+    query.disabledConversationIds,
+  );
   return [
     ...sessions,
     ...messages.map(({ conversation, message }) => discovered({
@@ -232,6 +289,7 @@ async function artifactFileSources(userId: string, query: Parameters<SourceAdapt
     userId,
     query.conversationId,
     Math.min(2_000, Math.max(100, (query.limit - contexts.length) * 20)),
+    query.disabledConversationIds,
   );
   const items = [...contexts];
   const seen = new Set(items.map((item) => item.id));
@@ -315,7 +373,7 @@ const adapters: Record<CognitionCatalogKind, SourceAdapter> = {
         kind: 'authorized_external_system',
         subtype: 'connector_record',
         scope: 'external',
-        id: stableId('ext', instance.id),
+        id: cognitionConnectorSourceId(instance.id),
         title: instance.display_name || instance.id,
         sourceVersion: String(instance.tools_cached_at || 0),
         ...(isConnectorUsable(instance.status) ? { authorizationRef: stableId('auth', instance.id) } : {}),
@@ -401,7 +459,7 @@ function groupStatus(items: CognitionCatalogSource[]): CognitionSourceGroupStatu
 async function discoverSelectedSources(
   userId: string,
   kind: CognitionCatalogKind,
-  query: Parameters<SourceAdapter>[1],
+  query: SourceAdapterQuery,
 ): Promise<DiscoveredSource[]> {
   const items = await adapters[kind](userId, query);
   const unique = new Map<string, DiscoveredSource>();
@@ -427,12 +485,16 @@ export async function listCognitionSources(
     cognitionSourceRefKey({ kind: control.kind, id: control.sourceId }),
     control,
   ]));
+  const disabledConversationIds = new Set(controls
+    .filter((control) => control.kind === 'conversation' && control.availability !== 'active')
+    .map((control) => control.sourceId));
 
   return Promise.all(selected.map(async (kind): Promise<CognitionSourceGroup> => {
     try {
       const discoveredItems = await discoverSelectedSources(userId, kind, {
         limit,
         ...(query.conversationId ? { conversationId: query.conversationId } : {}),
+        disabledConversationIds,
       });
       if (!query.conversationId) {
         const discoveredKeys = new Set(discoveredItems.map(cognitionSourceRefKey));
@@ -475,10 +537,14 @@ async function resolveCognitionSource(
   sourceId: string,
 ): Promise<CognitionSourceRef & { kind: CognitionCatalogKind }> {
   if (!COGNITION_CATALOG_KINDS.includes(kind) || !safeId(sourceId)) throw new Error('invalid cognition source');
-  const items = await discoverSelectedSources(userId, kind, { limit: 100 });
+  const controls = await listCognitionSourceControls(userId);
+  const disabledConversationIds = new Set(controls
+    .filter((control) => control.kind === 'conversation' && control.availability !== 'active')
+    .map((control) => control.sourceId));
+  const items = await discoverSelectedSources(userId, kind, { limit: 100, disabledConversationIds });
   const discoveredSource = items.find((item) => item.id === sourceId);
   if (discoveredSource) return discoveredSource;
-  const control = (await listCognitionSourceControls(userId)).find((item) => item.kind === kind && item.sourceId === sourceId);
+  const control = controls.find((item) => item.kind === kind && item.sourceId === sourceId);
   if (control) return controlSourceRef(control);
   throw new Error('cognition source not found');
 }

@@ -9,12 +9,14 @@ beforeEach(() => { vi.resetModules(); tmpDir = fs.mkdtempSync(path.join(os.tmpdi
 afterEach(() => { if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT; else process.env.ORKAS_WORKSPACE_ROOT = previousRoot; fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
 const UID = 'user-chain';
+const RULE_BOUNDARY = { applicableWhen: ['performing delivery work'], forbiddenWhen: ['outside delivery work'] };
 
 async function seedAsset(statement: string, tag: string) {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
   const candidate = await candidates.saveRecallCandidate(UID, {
     judgment: statement,
     suggestedType: 'rule',
+    ...RULE_BOUNDARY,
     suggestedScope: 'delivery',
     sourceRefs: [{ kind: 'conversation', id: `conv-${tag}` }, { kind: 'execution', id: `exec-${tag}` }],
   });

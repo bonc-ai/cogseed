@@ -85,8 +85,8 @@ beforeEach(async () => {
         suggestedScope: 'project',
         // PRD 3.1 把适用/禁止范围列为 RuleAsset 的最低准入门槛，抽取提示词
         // 现在要求规则候选一并给出——没有边界的规则只能停在候选池。
-        applicableWhen: ['部署数据库结构迁移前'],
-        forbiddenWhen: ['只读查询变更'],
+        applicableWhen: ['schema migration'],
+        forbiddenWhen: ['read-only query changes'],
         suggestedAction: 'create',
         evidence: ['m1', 'm2'],
       }],
@@ -127,7 +127,7 @@ const semanticOptions = {
 };
 
 describe('Recall selected-conversation closed loop', () => {
-  it('writes a selected historical snapshot automatically even under global manual review', async () => {
+  it('keeps historical selection manual until explicit extraction and confirmation', async () => {
     const { capture, candidates, assets, promptInjection, settings } = await modules();
     await settings.updateRecallCaptureSettings(USER_ID, { reviewPolicy: 'manual' });
 
@@ -138,40 +138,51 @@ describe('Recall selected-conversation closed loop', () => {
     expect(first).toMatchObject({
       id: concurrent.id,
       conversationId: CONVERSATION_ID,
-      status: 'queued',
+      status: 'waiting_manual',
       executionPolicy: 'manual',
       visibility: 'visible',
-      autoWrite: true,
     });
     expect(mocks.runModel).not.toHaveBeenCalled();
 
+    const queued = await capture.runRecallCaptureNow(USER_ID, first.id);
+    expect(queued).toMatchObject({ status: 'queued' });
     const extracted = await capture.runRecallCapture(USER_ID, first.id);
     expect(extracted).toMatchObject({
-      status: 'completed',
-      autoWrite: true,
+      status: 'review_ready',
       candidateIds: [expect.any(String)],
     });
-    expect(extracted.status).not.toBe('review_ready');
     expect(mocks.runModel).toHaveBeenCalledTimes(1);
 
     const [candidateId] = extracted.candidateIds;
     const candidate = await candidates.readRecallCandidate(USER_ID, candidateId);
     expect(candidate).toMatchObject({
-      status: 'confirmed',
+      status: 'pending_review',
       suggestedType: 'rule',
       suggestedAction: 'create',
-      promotedAssetId: expect.stringMatching(/^aa-/),
+    });
+    const promoted = await capture.promoteRecallCaptureCandidate(USER_ID, candidateId);
+    expect(promoted).toMatchObject({
+      candidate: {
+        status: 'confirmed',
+        promotedAssetId: expect.stringMatching(/^aa-/),
+      },
+      decision: { decision_id: expect.stringMatching(/^rd_/) },
+      receipt: {
+        assetId: expect.stringMatching(/^aa-/),
+        assetType: 'rule',
+        lifecycleStatus: 'user_confirmed_unverified',
+      },
     });
     const [asset] = await assets.listAbilityAssets(USER_ID);
     expect(asset).toMatchObject({
-      id: candidate.promotedAssetId,
+      id: promoted.candidate.promotedAssetId,
       type: 'rule',
       version: '1',
-      lifecycleStatus: 'automatically_extracted_unverified',
+      lifecycleStatus: 'user_confirmed_unverified',
     });
 
     const duplicate = await capture.startHistoricalRecallCapture(USER_ID, CONVERSATION_ID);
-    expect(duplicate).toEqual(extracted);
+    expect(duplicate).toEqual(await capture.readRecallCapture(USER_ID, first.id));
     expect((await assets.listAbilityAssets(USER_ID)).map((item) => item.id)).toEqual([asset.id]);
     expect(mocks.runModel).toHaveBeenCalledTimes(1);
 
@@ -192,14 +203,15 @@ describe('Recall selected-conversation closed loop', () => {
 
     // 一键提取写入的资产是 seed 档（系统写入、无人确认）。按 PRD 3.6，
     // 它还没有"被正确带入过"的证明，所以**不进静默默认注入**——用户主动带入
-    // 一次、拿到 ContextReuseReceipt 升到 transfer_validated 之后才会自动出现。
+    // 注入以「适合度」为准（产品决策）：seed 资产只要语义匹配即可注入
+    // （未验证由 prompt 块内的 lifecycle 标注承担）——不用等升档。
     const beforeProof = await promptInjection.buildRecallTurnPromptContext(USER_ID, {
       cid: 'new-conversation-relevant',
       taskRunId: 'new-turn-relevant',
       taskText: 'How should we validate a schema migration rollback before deployment?',
       workspaceId: 'workspace-closed-loop',
     }, semanticOptions);
-    expect(beforeProof.promptBlock).not.toContain('Always prepare and test a rollback plan');
+    expect(beforeProof.promptBlock).toContain('Always prepare and test a rollback plan');
 
     // 真实使用一次：手动投影 → 落回执 → 终态 → TransferProof 带 receiptId。
     const assetsSvc = await import('../../../../src/main/features/recall/asset-service');

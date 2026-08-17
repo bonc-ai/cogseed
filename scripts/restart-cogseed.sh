@@ -13,18 +13,18 @@ APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VARIANT="cogseed"
 RUN_LOG="/tmp/cogseed-agent-${VARIANT}-run.log"
 DATA_LOGS="$HOME/.cogseed/runtime-variants/${VARIANT}/data/logs"
-
-variant_pids() {
-  pgrep -f "orkas-runtime-variant=${VARIANT}" 2>/dev/null || true
-}
+ELECTRON_APP="$APP_DIR/node_modules/electron/dist/CogSeed.app/Contents/MacOS/Electron"
 
 worktree_pids() {
-  local pid
-  for pid in $(variant_pids); do
-    if ps -p "$pid" -o command= 2>/dev/null | grep -qF "$APP_DIR"; then
-      printf '%s\n' "$pid"
-    fi
-  done
+  local pid command
+  while read -r pid command; do
+    [ -n "$pid" ] || continue
+    case "$command" in
+      *"$APP_DIR/node_modules/.bin/electron ."|*"$APP_DIR/node_modules/.bin/electron . --orkas-runtime-variant=${VARIANT}"*|"$ELECTRON_APP"|"$ELECTRON_APP ."|"$ELECTRON_APP $APP_DIR --orkas-runtime-variant=${VARIANT}"*)
+        printf '%s\n' "$pid"
+        ;;
+    esac
+  done < <(ps -ax -o pid= -o command=)
 }
 
 stop() {

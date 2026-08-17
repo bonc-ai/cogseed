@@ -128,7 +128,12 @@ export interface ProjectionSemanticOptions {
 export interface AutomaticProjectionInput {
   taskRunId: string;
   taskText: string;
+  agentId?: string;
+  roleId?: string;
+  projectId?: string;
   workspaceId?: string;
+  conversationKind?: string;
+  fileKinds?: string[];
 }
 
 export interface BuildRecallViewResult {
@@ -369,7 +374,10 @@ function asProjection(value: RecallJsonRecord): ContextProjectionRecord {
  *  remain. It is deliberately low — admission is primarily governed by the
  *  Top-N slots plus a relative-significance gate (see applySemanticSelection),
  *  not by this absolute cutoff. */
-export const DEFAULT_MIN_MATCH_SCORE = 0.25;
+// 绝对下限（噪声门）：0.25 → 0.40（2026-08-16 实机校准）。
+// 0.25 时"智慧家居论文"任务召回了 8 条弱相关经验（0.34-0.49），无关
+// 经验淹没任务上下文；0.40 砍掉 0.34-0.38 的弱相关，保留语义明确近邻。
+export const DEFAULT_MIN_MATCH_SCORE = 0.40;
 /** Relative gate: an asset scoring below this fraction of the batch's best
  *  semantic score is dropped even inside Top-N, so a weak pool cannot force
  *  irrelevant assets into the injection just because slots remain. */
@@ -612,14 +620,23 @@ export async function createAutomaticContextProjection(
     const runtime = evaluateAssetRuntimeEligibility({
       status: asset.status,
       maturity: asset.maturity,
+      lifecycleStatus: asset.lifecycleStatus,
       scope: asset.scope,
       ...(asset.crossScopeConfirmedAt ? { crossScopeConfirmedAt: asset.crossScopeConfirmedAt } : {}),
+      ...(asset.scopePolicy ? { scopePolicy: asset.scopePolicy } : {}),
       ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
       ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
       ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
     }, {
       silentDefaultInjection: true,
+      purpose: taskText,
       ...(taskText ? { taskText } : {}),
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.roleId ? { roleId: input.roleId } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(input.conversationKind ? { conversationKind: input.conversationKind } : {}),
+      ...(input.fileKinds ? { fileKinds: input.fileKinds } : {}),
     });
     if (!runtime.eligible) {
       omittedRefs.push({ assetId: asset.id, reason: RUNTIME_OMISSION_REASON[runtime.reasons[0]] || 'source_unavailable' });

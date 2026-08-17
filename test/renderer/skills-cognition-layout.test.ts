@@ -3,10 +3,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf-8');
+const skillsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
 const recallCss = [
   fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8'),
   fs.readFileSync(path.join(__dirname, '../../src/renderer/recall-local.css'), 'utf-8'),
 ].join('\n');
+const recallLocalCss = fs.readFileSync(path.join(__dirname, '../../src/renderer/recall-local.css'), 'utf-8');
 
 /**
  * 取出一个顶层函数的函数体文本。断言"某个面板出现在哪个视图里"必须限定到
@@ -80,7 +82,9 @@ describe('Recall cognition workspace layout', () => {
       expect(html).not.toContain(`data-cognition-page="${excluded}"`);
       expect(html).not.toContain(`data-cognition-page-body="${excluded}"`);
     }
-    expect(html).toContain('id="skills-cognition-capture-review-body"');
+    // The review host is rendered after the history picker so the primary flow
+    // reads: select history -> review candidate pool -> inspect task log.
+    expect(skillsSource).toContain('id="skills-cognition-capture-review-body"');
   });
 
   it('does not ship the removed hidden Recall page implementations', () => {
@@ -193,6 +197,7 @@ describe('Recall cognition workspace layout', () => {
     const headerStart = html.indexOf('class="skills-cognition-header"');
     const headerHtml = html.slice(headerStart, html.indexOf('</header>', headerStart));
     expect(headerHtml).toContain('cognition-aux-entry');
+    expect(headerHtml).toContain('class="skills-cognition-header-actions"');
     expect(headerHtml).not.toContain('role="tab"');
   });
 
@@ -242,7 +247,7 @@ describe('Recall cognition workspace layout', () => {
     const surfaceHtml = html.slice(surfaceStart, surfaceEnd);
     expect(surfaceHtml).toContain('class="skills-cognition-header"');
     expect(surfaceHtml).toContain('class="skills-cognition-workspace"');
-    expect(surfaceHtml).toContain('class="skills-cognition-main"');
+    expect(surfaceHtml).toContain('class="skills-cognition-main" id="skills-cognition-main" tabindex="0"');
     expect(surfaceHtml).toContain('id="skills-cognition-tabs"');
     expect(surfaceHtml).toContain('id="skills-cognition-assets"');
   });
@@ -269,6 +274,13 @@ describe('Recall cognition workspace layout', () => {
     expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.skills-cognition-tab-group\s*\{[^}]*display:\s*flex;/);
   });
 
+  it('keeps the main Recall content scrollable without a competing page-level scroller', () => {
+    expect(recallLocalCss).toMatch(/\.skills-cognition-main\s*\{[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*scroll;[^}]*overscroll-behavior:\s*auto;/s);
+    expect(recallLocalCss).toMatch(/\.skills-cognition-page\s*\{[^}]*min-height:\s*100%;[^}]*height:\s*auto;[^}]*overflow:\s*visible;/s);
+    expect(recallLocalCss).toContain('#skills-cognition-assets { overflow: visible; }');
+    expect(fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8')).toContain('Find scrollable');
+  });
+
 
   it('keeps the Recall workspace rules outside narrow-screen media queries', () => {
     const css = recallCss;
@@ -293,16 +305,23 @@ describe('Recall cognition workspace layout', () => {
     expect(css).toContain('height: fit-content');
   });
 
-  it('uses one page scroller for My assets so nested panes cannot trap wheel gestures', () => {
+  it('bounds the template and asset panes while handing edge scrolling back to the page', () => {
     const css = recallCss;
     const desktopStart = css.indexOf('@media (min-width: 901px)');
     const desktopEnd = css.indexOf('@media (max-width: 900px)', desktopStart);
     const desktopRules = css.slice(desktopStart, desktopEnd);
-    expect(desktopRules).toContain('#skills-cognition-assets { overflow-x: hidden; overflow-y: auto; }');
-    expect(desktopRules).toContain('#skills-cognition-assets-body { height: auto; min-height: 0; }');
-    expect(desktopRules).toMatch(/\.ability-asset-list-body\s*\{[\s\S]*overflow:\s*visible;/);
-    expect(desktopRules).toMatch(/\.ability-asset-detail\s*\{[\s\S]*height:\s*auto;[\s\S]*overflow:\s*visible;/);
-    expect(desktopRules).not.toContain('overscroll-behavior: contain');
+    expect(html).toContain('class="panel skills-embedded-panel recall-personal-ontology-frame"');
+    expect(recallCss).toMatch(/\.recall-personal-ontology-frame\s*\{[^}]*height:\s*clamp\(420px, calc\(100dvh - 300px\), 580px\);[^}]*overflow:\s*hidden;/s);
+    expect(recallCss).toMatch(/@media \(max-width: 720px\)[\s\S]*?\.recall-personal-ontology-frame\s*\{[^}]*height:\s*max\(360px, calc\(100dvh - 160px\)\);[^}]*max-height:\s*680px;/);
+    expect(recallCss).toMatch(/\.recall-personal-ontology-frame \.personal-onto-modal\s*\{[^}]*max-height:\s*min\(720px, calc\(100dvh - 48px\)\);[^}]*overflow/s);
+    expect(recallCss).toMatch(/\.recall-personal-ontology-frame \.personal-onto-library-list\s*\{[^}]*max-height:\s*none;[^}]*overscroll-behavior:\s*auto;/s);
+    expect(recallCss).toMatch(/#skills-cognition-assets\s*\{[^}]*overflow-x:\s*hidden;[^}]*overscroll-behavior:\s*auto;/s);
+    expect(desktopRules).toContain('#skills-cognition-assets-body { height: clamp(420px, calc(100dvh - 250px), 620px); min-height: 0; }');
+    expect(desktopRules).toMatch(/\.ability-asset-list-body\s*\{[\s\S]*overflow-y:\s*auto;/);
+    expect(desktopRules).toMatch(/\.ability-asset-detail\s*\{[\s\S]*height:\s*100%;/);
+    expect(desktopRules).toContain('overscroll-behavior: auto');
+    expect(desktopRules).toContain('scrollbar-gutter: stable');
+    expect(recallLocalCss).toMatch(/\.recall-personal-ontology-frame \.personal-onto-nav,[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior:\s*auto;/);
   });
 
   it('uses a task-oriented cognition header and removes the personal tag surface', () => {
@@ -318,6 +337,11 @@ describe('Recall cognition workspace layout', () => {
     expect(recallCss).not.toContain('.ability-personal-memory-');
     expect(skills).not.toContain("window.cogseed.invoke('personalOntology.profile.summary'");
     expect(skills).not.toContain('data-personal-ontology-manage');
+  });
+
+  it('bounds expanded execution and evaluation source records inside their own scroller', () => {
+    expect(recallLocalCss).toMatch(/\.recall-source-group-advanced \.recall-source-items\s*\{[^}]*max-height:\s*clamp\(240px, calc\(100dvh - 300px\), 420px\);[^}]*overflow-y:\s*auto;[^}]*overscroll-behavior:\s*auto;/s);
+    expect(recallLocalCss).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.recall-source-group-advanced \.recall-source-items\s*\{\s*max-height:\s*clamp\(220px, calc\(100dvh - 260px\), 320px\);/);
   });
 
   /**

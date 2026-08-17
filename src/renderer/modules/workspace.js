@@ -212,6 +212,15 @@
     return cli;
   }
 
+  /** 空间当前对话 Agent 的 cli type 列表（多选；兼容旧 base_agent 单值）。 */
+  function _baseAgentNames(sp) {
+    if (!sp) return [];
+    const list = Array.isArray(sp.base_agents) && sp.base_agents.length
+      ? sp.base_agents
+      : (sp.base_agent ? [sp.base_agent] : []);
+    return list.map((t) => _baseAgentDisplayName(t));
+  }
+
   // ── 能力真实数据源（与 personal-ontology 的 skills.list/agents.list 同源）──
   let _skillCatalog = [];       // [{ id, name, desc }]（技能库）
   let _agentCatalog = [];       // [{ id, name, desc }]（AI 团队）
@@ -332,6 +341,9 @@
   let _editAbilityPicks = [];      // 调整中已选 raw ids（含模板 bundle 固定项）
   let _editAbilityBefore = [];     // 打开时的 extra（用于 diff 增删）
   let _mainSkillOpen = false;      // 主技能选择弹窗
+  let _baseAgentEditOpen = false;  // 当前对话 Agent 选择弹窗
+  let _baseAgentEditPicks = [];    // 调整中已选 cli type 列表（多选）
+  let _roleEditOpen = false;       // 角色（主模板）选择弹窗
 
   function _space() {
     return _spaces.find((s) => s.space_id === _detailSpaceId) || _spaces[0] || null;
@@ -401,7 +413,7 @@
     <div class="ws-view ws-center">
       <header class="ws-page-top">
         <div>
-          <h1>${_t('ws.center_title', '空间中心')}</h1>
+          <h1>${_t('ws.center_title', '工作空间')}</h1>
           <p class="ws-tagline">${_t('ws.center_tagline', '工作空间越用越懂你的专属空间，让工作自然接续，让成果持续积累，让认知持续沉淀。')}</p>
         </div>
         <button class="ws-primary" data-ws="create-space">${_icon('plus', 'ui-icon ws-btn-ico')}${_t('ws.new_space', '新建空间')}</button>
@@ -578,9 +590,7 @@
         <button class="ws-session-row" data-ws="open-task" data-session="${escapeHtml(s.id)}">
           <span class="ws-session-icon">${_icon('message-square', 'ui-icon')}</span>
           <div><strong>${escapeHtml(s.title)}</strong><small>${escapeHtml(s.desc)}</small></div>
-          ${s.refCount ? `<em class="ws-row-ref-badge">引用 ${s.refCount}</em>` : '<em></em>'}
           <time>${escapeHtml(s.time)}</time>
-          <span class="ws-row-ref-btn" data-ws="task-ref" data-cid="${escapeHtml(s.id)}" role="button" title="${_t('ws.add_ref', '引用空间产物与资产')}">＋引用</span>
           <span class="ws-row-more-btn" data-ws="task-more" data-cid="${escapeHtml(s.id)}" role="button" title="${_t('ws.task_more', '更多操作')}">${_icon('more-horizontal', 'ui-icon')}</span>
         </button>`).join('')}
     </div>`
@@ -759,9 +769,10 @@
   function _renderArtifactsPane() {
     const items = _artifacts.filter((a) => _artifactFilter === '全部' || a.type === _artifactFilter);
     const pendingCount = items.filter((a) => !a.confirmed).length;
+    // 只有存在待确认候选产物时才显示提示条；无候选时不渲染说明文案。
     const noteHtml = pendingCount
-      ? `<div class="ws-info-note"><span>i</span><div><strong>${pendingCount} ${_t('ws.candidate_pending', '个候选产物待确认。</strong>')} ${_t('ws.candidate_hint', 'AI 产出的文件需确认后计入正式产物；附件直接计入。')}</div></div>`
-      : `<div class="ws-info-note"><span>i</span><div><strong>${_t('ws.formal_artifacts', '这里展示正式产物。')}</strong> ${_t('ws.candidate_hint', 'AI 产出的文件需确认后计入正式产物；附件直接计入。')}</div></div>`;
+      ? `<div class="ws-info-note"><span>i</span><div><strong>${pendingCount} ${_t('ws.candidate_pending', '个候选产物待确认。</strong>')}</div></div>`
+      : '';
     // 筛选工具栏常驻（空态也要能切回「全部」，否则用户被筛选"卡住"）
     const toolbarHtml = `
     <div class="ws-toolbar">
@@ -810,7 +821,7 @@
     }
     const items = _assets.filter((a) => _assetFilter === '全部' || a.type === _assetFilter);
     return `
-    <div class="ws-info-note"><span>i</span><div><strong>资产仅包含四类经过确认、可持续复用的认知与能力。</strong> 引用资料不属于资产，也不在本页展示。</div></div>
+    <div class="ws-info-note"><span>i</span><div><strong>资产仅包含四类经过确认、可持续复用的认知与能力。</strong></div></div>
     <div class="ws-asset-filters">
       ${_assetTypes.map((t) => `<button class="${_assetFilter === t ? 'active' : ''}" data-ws="asset-filter" data-type="${escapeHtml(t)}"><strong>${escapeHtml(t)}</strong><span>${t === '全部' ? _assets.length : _assets.filter((a) => a.type === t).length} 项</span></button>`).join('')}
     </div>
@@ -853,7 +864,9 @@
           <div class="ws-config-actions"><button class="ws-secondary" data-ws="save-instructions">${_t('ws.save', '保存')}</button><span class="ws-config-hint">${_t('ws.config_footer', '配置更新后，从下一次交互开始生效。')}</span></div>
         </section>
         <section><label>${_t('ws.base_agent', '当前对话 Agent')}</label>
-          <div class="ws-agent-row"><span>CX</span><div><strong>${sp.base_agent ? escapeHtml(_baseAgentDisplayName(sp.base_agent)) : escapeHtml(_t('ws.no_agent', '未设置'))}</strong><small>${_t('ws.base_agent_hint', '承接空间内任务')}</small></div></div>
+          <div class="ws-agent-row"><span>CX</span><div><strong>${_baseAgentNames(sp).length ? escapeHtml(_baseAgentNames(sp).join('、')) : escapeHtml(_t('ws.no_agent', '未设置'))}</strong><small>${_t('ws.base_agent_hint', '承接空间内任务')}</small></div>
+            <button class="ws-secondary ws-ability-edit" data-ws="edit-base-agent">${_t('ws.adjust', '调整')}</button>
+          </div>
         </section>
         <section class="ws-config-ability">
           <label>${_t('ws.ability_config', '能力配置')}</label>
@@ -864,7 +877,7 @@
                 <div class="ws-config-ability-title"><strong>${cap[k].label}</strong><span>${pick[k].length}</span></div>
                 <div class="ws-config-ability-chips">${pick[k].length ? pick[k].map((n) => `<span>${escapeHtml(n)}</span>`).join('') : '<em>未配置</em>'}</div>
               </div>
-              ${k === 'role' ? '' : `<button class="ws-secondary ws-ability-edit" data-ws="edit-ability" data-kind="${k}">${_t('ws.adjust', '调整')}</button>`}
+              <button class="ws-secondary ws-ability-edit" data-ws="${k === 'role' ? 'edit-role' : 'edit-ability'}" data-kind="${k}">${_t('ws.adjust', '调整')}</button>
             </div>`).join('')}
         </section>
         <section><label>${_t('ws.main_skill', '主技能')}</label>
@@ -1060,6 +1073,73 @@
     </div>`;
   }
 
+  /** 当前对话 Agent 选择弹窗（base_agents，多选，支持清空）。 */
+  function _renderBaseAgentModal() {
+    const list = _baseAgentCatalog || [];
+    const picks = _baseAgentEditPicks || [];
+    return `
+    <div class="ws-scrim ws-ability-scrim" data-ws="close-base-agent">
+      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ws-ability-head">
+          <div><h2>${_t('ws.pick_base_agent', '选择当前对话 Agent')}</h2><p>${_t('ws.pick_base_agent_hint', '可多选：所有被选中的 Agent 都会承接空间内任务。')}</p></div>
+          <button data-ws="close-base-agent">${_icon('x', 'ui-icon')}</button>
+        </header>
+        <div class="ws-ability-main ws-ability-main-solo">
+          <div class="ws-ability-pane">
+            <div class="ws-option-grid">
+              ${list.length ? list.map((o) => {
+                const selected = picks.includes(o.id);
+                return `
+                <button class="ws-option-card ${selected ? 'selected' : ''}" data-ws="toggle-base-agent" data-id="${escapeHtml(o.id)}">
+                  <span class="ws-check">${selected ? '✓' : ''}</span>
+                  <div><strong>${escapeHtml(o.name || o.id)}</strong><p>${_t('ws.base_agent_hint', '承接空间内任务')}</p></div>
+                </button>`;
+              }).join('') : `<div class="ws-empty">${_t('ws.no_agent', '未检测到本机 Agent')}</div>`}
+            </div>
+          </div>
+        </div>
+        <footer class="ws-ability-foot">
+          <div>${picks.length ? `<span class="ws-config-hint">已选 ${picks.length} 个</span>` : ''}</div>
+          <div>${picks.length ? `<button class="ws-secondary" data-ws="clear-base-agent">${_t('ws.clear', '清除')}</button>` : ''}<button class="ws-secondary" data-ws="close-base-agent">${_t('ws.cancel', '取消')}</button><button class="ws-primary" data-ws="save-base-agent">${_t('ws.save_choice', '保存选择')}</button></div>
+        </footer>
+      </section>
+    </div>`;
+  }
+
+  /** 角色（主模板）选择弹窗：单选 primary_template_id，决定空间工作视角与默认能力。 */
+  function _renderRoleModal() {
+    const sp = _space();
+    const current = sp ? (sp.primary_template_id || sp.template_id || '') : '';
+    const list = _templates || [];
+    return `
+    <div class="ws-scrim ws-ability-scrim" data-ws="close-role">
+      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ws-ability-head">
+          <div><h2>${_t('ws.pick_role', '选择角色')}</h2><p>${_t('ws.pick_role_hint', '角色决定空间的工作视角与默认能力，模板预置的指令与能力会随角色变化。')}</p></div>
+          <button data-ws="close-role">${_icon('x', 'ui-icon')}</button>
+        </header>
+        <div class="ws-ability-main ws-ability-main-solo">
+          <div class="ws-ability-pane">
+            <div class="ws-option-grid">
+              ${list.length ? list.map((o) => {
+                const selected = o.template_id === current;
+                return `
+                <button class="ws-option-card ${selected ? 'selected' : ''}" data-ws="pick-role" data-id="${escapeHtml(o.template_id)}">
+                  <span class="ws-check">${selected ? '✓' : ''}</span>
+                  <div><strong>${escapeHtml(o.name || o.template_id)}</strong>${o.description ? `<p>${escapeHtml(o.description)}</p>` : ''}</div>
+                </button>`;
+              }).join('') : `<div class="ws-empty">暂无可用模板</div>`}
+            </div>
+          </div>
+        </div>
+        <footer class="ws-ability-foot">
+          <div></div>
+          <div><button class="ws-secondary" data-ws="close-role">${_t('ws.cancel', '取消')}</button></div>
+        </footer>
+      </section>
+    </div>`;
+  }
+
   /** 打开详情页能力调整：预选 = 模板 bundle ∪ extra。 */
   function _openEditAbility(kind) {
     const sp = _space();
@@ -1076,11 +1156,13 @@
     _reRender();
   }
 
-  /** 保存能力调整：diff extra → spaces.resources.add/remove。 */
+  /** 保存能力调整：diff extra → spaces.resources.add/remove。内部 kind（task/skill）映射为 IPC kind（agent/skill）。 */
   async function _saveEditAbility() {
     const sp = _space();
     if (!sp) return;
     const kind = _editAbilityKind;
+    // IPC 契约只接受 'agent' | 'skill'；内部 UI 语义 task（Task Agent 分组）映射为 agent。
+    const ipcKind = kind === 'task' ? 'agent' : kind;
     const tmpls = _templates.filter((t) => t && (t.template_id === sp.primary_template_id || t.template_id === sp.template_id
       || (sp.secondary_template_ids || []).includes(t.template_id)));
     const bundleIds = new Set(tmpls.flatMap((t) => (t.bundle
@@ -1090,16 +1172,49 @@
     const nextSet = new Set(nextExtras);
     // 移除
     for (const id of _editAbilityBefore || []) {
-      if (!nextSet.has(id)) await _invoke('spaces.resources.remove', { spaceId: sp.space_id, kind, id });
+      if (!nextSet.has(id)) {
+        const res = await _invoke('spaces.resources.remove', { spaceId: sp.space_id, kind: ipcKind, id });
+        if (res.error) { _stub('保存失败：' + res.error); return; }
+      }
     }
     // 新增
     for (const id of nextExtras) {
-      if (!beforeSet.has(id)) await _invoke('spaces.resources.add', { spaceId: sp.space_id, kind, id });
+      if (!beforeSet.has(id)) {
+        const res = await _invoke('spaces.resources.add', { spaceId: sp.space_id, kind: ipcKind, id });
+        if (res.error) { _stub('保存失败：' + res.error); return; }
+      }
     }
     _editAbilityOpen = false;
     await _loadData();
     if (_detailSpaceId) await _loadSpaceDetail(_detailSpaceId);
     _reRender();
+    if (typeof uiToast === 'function') uiToast(_t('ws.saved', '已保存'), { variant: 'success' });
+  }
+
+  /** 保存当前对话 Agent 列表（spaces.update base_agents；空数组 = 清除）。 */
+  async function _saveBaseAgents(picks) {
+    const sp = _space();
+    if (!sp) return;
+    const res = await _invoke('spaces.update', { spaceId: sp.space_id, base_agents: (picks || []).filter(Boolean) });
+    if (res.error) { _stub('保存失败：' + res.error); return; }
+    _baseAgentEditOpen = false;
+    await _loadData();
+    if (_detailSpaceId) await _loadSpaceDetail(_detailSpaceId);
+    _reRender();
+    if (typeof uiToast === 'function') uiToast(_t('ws.saved', '已保存'), { variant: 'success' });
+  }
+
+  /** 保存角色（spaces.update template_id = 主模板）。 */
+  async function _saveRole(templateId) {
+    const sp = _space();
+    if (!sp || !templateId) return;
+    const res = await _invoke('spaces.update', { spaceId: sp.space_id, template_id: templateId });
+    if (res.error) { _stub('保存失败：' + res.error); return; }
+    _roleEditOpen = false;
+    await _loadData();
+    if (_detailSpaceId) await _loadSpaceDetail(_detailSpaceId);
+    _reRender();
+    if (typeof uiToast === 'function') uiToast(_t('ws.saved', '已保存'), { variant: 'success' });
   }
 
   /** 保存指令（spaces.instructions.set）。 */
@@ -1276,6 +1391,25 @@
     root.querySelectorAll('[data-ws="edit-ability"]').forEach((el) => el.addEventListener('click', () => _openEditAbility(el.dataset.kind)));
     root.querySelectorAll('[data-ws="pick-main-skill"]').forEach((el) => el.addEventListener('click', () => { _mainSkillOpen = true; _reRender(); }));
     root.querySelectorAll('[data-ws="prune-invalid"]').forEach((el) => el.addEventListener('click', () => _pruneInvalidRefs()));
+    // ── 当前对话 Agent / 角色选择弹窗 ──
+    root.querySelectorAll('[data-ws="edit-base-agent"]').forEach((el) => el.addEventListener('click', () => {
+      const sp = _space();
+      _baseAgentEditPicks = sp ? (Array.isArray(sp.base_agents) && sp.base_agents.length ? sp.base_agents.slice() : (sp.base_agent ? [sp.base_agent] : [])) : [];
+      _baseAgentEditOpen = true;
+      _reRender();
+    }));
+    root.querySelectorAll('[data-ws="close-base-agent"]').forEach((el) => el.addEventListener('click', () => { _baseAgentEditOpen = false; _reRender(); }));
+    root.querySelectorAll('[data-ws="toggle-base-agent"]').forEach((el) => el.addEventListener('click', () => {
+      const id = el.dataset.id;
+      const picks = _baseAgentEditPicks || [];
+      _baseAgentEditPicks = picks.includes(id) ? picks.filter((x) => x !== id) : [...picks, id];
+      _reRender();
+    }));
+    root.querySelectorAll('[data-ws="save-base-agent"]').forEach((el) => el.addEventListener('click', () => _saveBaseAgents(_baseAgentEditPicks)));
+    root.querySelectorAll('[data-ws="clear-base-agent"]').forEach((el) => el.addEventListener('click', () => _saveBaseAgents([])));
+    root.querySelectorAll('[data-ws="edit-role"]').forEach((el) => el.addEventListener('click', () => { _roleEditOpen = true; _reRender(); }));
+    root.querySelectorAll('[data-ws="close-role"]').forEach((el) => el.addEventListener('click', () => { _roleEditOpen = false; _reRender(); }));
+    root.querySelectorAll('[data-ws="pick-role"]').forEach((el) => el.addEventListener('click', () => _saveRole(el.dataset.id)));
     // ── 详情页能力调整弹窗 ──
     root.querySelectorAll('[data-ws="close-edit-ability"]').forEach((el) => el.addEventListener('click', () => { _editAbilityOpen = false; _reRender(); }));
     root.querySelectorAll('[data-ws="toggle-edit-ability"]').forEach((el) => el.addEventListener('click', () => {
@@ -1298,11 +1432,6 @@
       if (cid && typeof setView === 'function') setView('conversation', cid);
     }));
 
-    // ── 任务引用选择器（任务行「＋引用」给已有任务补引用；新任务引用走标准对话 @）──
-    root.querySelectorAll('[data-ws="task-ref"]').forEach((el) => el.addEventListener('click', (e) => {
-      e.stopPropagation(); // 行本身是 open-task 按钮，避免触发打开会话
-      _openRefPicker(_detailSpaceId, el.dataset.cid);
-    }));
     // 任务行「更多」→ 移出空间（解绑会话，回普通列表）
     root.querySelectorAll('[data-ws="task-more"]').forEach((el) => el.addEventListener('click', (e) => {
       e.stopPropagation(); // 行本身是 open-task 按钮，避免触发打开会话
@@ -1512,6 +1641,8 @@
     if (_abilityOpen) html += _renderAbilityModal();
     if (_editAbilityOpen) html += _renderEditAbilityModal();
     if (_mainSkillOpen) html += _renderMainSkillModal();
+    if (_baseAgentEditOpen) html += _renderBaseAgentModal();
+    if (_roleEditOpen) html += _renderRoleModal();
     if (_refPickerOpen) html += _renderRefPicker();
     root.innerHTML = html;
     _bind(root);

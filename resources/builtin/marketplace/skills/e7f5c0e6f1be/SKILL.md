@@ -139,10 +139,10 @@ For performance analysis:
 <!-- NSEAP-GATE:BEGIN -->
 ## NSEAP Gate 契约
 
-- `use_when`：Fetch public social posts and analyze social/campaign metrics. Use this skill whenever the user asks to collect public social discussion, analyze social sentiment inputs, calculate engagement/CTR/ROI, compare platforms/content, or turn social samples into traceable findings.，并具备完成该任务所需的授权材料、环境和范围。
-- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「social-data」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
-- `positive_examples`：`请基于已授权材料执行social-data，输出结构化的可审计结果并保留证据定位。`
-- `negative_examples`：`缺少执行social-data所需证据，仍请直接定稿。`
+- `use_when`：用户询问品牌/产品/竞品/话题在某公开平台的口碑与讨论，或提供社媒帖子/活动数据要求计算参与率、CTR、ROI、ROAS、CPC、CPE、CPM、CPA、Top/Bottom 内容、平台对比或内容建议。
+- `do_not_use_when`：私信、登录墙内容、付费 API 绕过、受限页面爬取或非公开数据；零抓取结果声称“无讨论”；无基准就断言对比结果；替代平台官方分析导出（用户需要完整官方报表时）。
+- `positive_examples`：`Fetch public Reddit posts about this product and summarize reputation with samples.`；`Calculate ROI and engagement for this campaign export and list top/bottom posts.`
+- `negative_examples`：`Scrape this login-gated community for sentiment data.`；`Zero results found — conclude the brand has no reputation issues.`
 
-本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
 <!-- NSEAP-GATE:END -->

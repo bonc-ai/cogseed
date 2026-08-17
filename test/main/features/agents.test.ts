@@ -488,12 +488,26 @@ describe('agents › normalizeAgent', () => {
       { kind: 'wat' },
       { kind: 'cli' },          // missing cli name
       { kind: 'cli', cli: '' }, // empty cli name
+      { kind: 'p3394-gateway' },
+      { kind: 'p3394-gateway', cli: '' },
     ]) {
       const norm = a.normalizeAgent({ agent_id: 'x', name: 'N', runtime: bad } as any, 'custom');
       expect(norm).toBeTruthy();
       expect('runtime' in (norm as any)).toBe(false);
       expect(a.isCliAgent(norm)).toBe(false);
+      expect(a.isP3394GatewayAgent(norm)).toBe(false);
     }
+  });
+
+  it('normalizes a p3394-gateway runtime (P3394 external agent)', async () => {
+    const a = await loadAgents();
+    const norm = a.normalizeAgent({
+      agent_id: 'x', name: 'N',
+      runtime: { kind: 'p3394-gateway', cli: 'hermes' },
+    } as any, 'custom');
+    expect(norm?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'hermes' });
+    expect(a.isP3394GatewayAgent(norm)).toBe(true);
+    expect(a.isCliAgent(norm)).toBe(false);
   });
 
   it('normalizes in_process runtime but does not flag as CLI', async () => {
@@ -749,8 +763,11 @@ describe('agents › extractAgentFieldBlocks', () => {
       .blocks[0].icon).toBe('spreadsheet');
     expect('icon' in a.extractAgentFieldBlocks('<agent><icon>not-a-real-icon</icon></agent>')
       .blocks[0]).toBe(false);
-    expect('icon' in a.extractAgentFieldBlocks('<agent><icon>crown</icon></agent>')
+    // 指挥官默认图标(cogseed)不允许被 agent 占用；crown 已回归可选
+    expect('icon' in a.extractAgentFieldBlocks('<agent><icon>cogseed</icon></agent>')
       .blocks[0]).toBe(false);
+    expect(a.extractAgentFieldBlocks('<agent><icon>crown</icon></agent>')
+      .blocks[0].icon).toBe('crown');
   });
 
   it('parses each block independently — a malformed sub-tag in one does not affect the other', async () => {

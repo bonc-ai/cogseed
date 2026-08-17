@@ -15,6 +15,11 @@
  */
 
 import { resolveAssetUsePolicy, type AbilityAssetUsePolicy, type AssetPolicyInput } from './policy';
+import {
+  isAssetScopeAllowed,
+  type AssetScopeContext,
+  type RecallAbilityAssetScopePolicy,
+} from '../scope-policy';
 
 /** 准入模式。比布尔值多一档，因为 PRD 3.6 区分「只能主动选」和「可默认注入」。 */
 export type AssetRuntimeMode =
@@ -40,17 +45,16 @@ export type AssetRuntimeBlockReason =
 
 export interface AssetRuntimeCandidate extends AssetPolicyInput {
   scope: string;
+  scopePolicy?: RecallAbilityAssetScopePolicy;
   applicableWhen?: readonly string[];
   forbiddenWhen?: readonly string[];
   targetAgents?: readonly string[];
   sensitivity?: string;
 }
 
-export interface AssetRuntimeContext {
+export interface AssetRuntimeContext extends AssetScopeContext {
   /** 目的地作用域。undefined = 不限定，视为同作用域。 */
   scope?: string;
-  /** 本次运行的 Agent 标识。资产声明了 targetAgents 时用它比对。 */
-  agentId?: string;
   /** 目的地能接受的最高敏感级。声明了就必须比对。 */
   maxSensitivity?: string;
   sensitivityRank?: Readonly<Record<string, number>>;
@@ -98,6 +102,8 @@ export function evaluateAssetRuntimeEligibility(
   // 来源撤权后停止新的读取与默认注入（PRD 3.4）。
   if (context.sourceAvailable === false) reasons.push('source_unavailable');
 
+  if (!isAssetScopeAllowed(asset.scopePolicy, context)) reasons.push('scope_mismatch');
+
   // 禁止范围命中即出局，优先于适用范围——"哪里不能用"比"哪里能用"更强。
   if (matchesAnyCondition(asset.forbiddenWhen, context.taskText)) reasons.push('forbidden_context');
 
@@ -107,8 +113,8 @@ export function evaluateAssetRuntimeEligibility(
 
   // 注入白名单（PRD 3.5 target_agents）。缺失 = 没限制过，不拦；
   // 一旦声明，未列出的 Agent 就不得注入。
-  if ((asset.targetAgents?.length || 0) > 0 && context.agentId
-    && !asset.targetAgents!.includes(context.agentId)) {
+  if ((asset.targetAgents?.length || 0) > 0
+    && (!context.agentId || !asset.targetAgents!.includes(context.agentId))) {
     reasons.push('target_agent_not_allowed');
   }
 
@@ -121,20 +127,33 @@ export function evaluateAssetRuntimeEligibility(
     }
   }
 
+  // 静默默认注入以「适合度」为准，不以成熟度为硬门槛：
+  // - 适合度 = status / scope / forbidden / applicable / target_agent /
+  //   sensitivity（上方已全部检查）+ 调用方的语义匹配分（投影双信号门槛）。
+  // - 成熟度（置信度）不再是注入与否的依据——未验证资产（seed）的诚实性
+  //   由注入标注承担（prompt 块里带 lifecycle 提示，模型知道这是系统自评、
+  //   参考不盲从），而不是把资产完全排除（旧逻辑下 seed 永远无法被使用、
+  //   自进化闭环断裂——沉淀了却永远用不上）。
+  // - applicableWhen 声明却对不上当前任务：不适合 → 不注入（适合度维度）。
+  if (context.silentDefaultInjection === true) {
+    if (declaredApplicable && !applicableMatched) {
+      reasons.push('not_applicable_context');
+    }
+    // 适合度含作用域维度：跨作用域且无确认 → 不注入（不比同作用域宽松）。
+    if (!sameScope && !asset.crossScopeConfirmedAt) {
+      reasons.push('scope_mismatch');
+    }
+    if (reasons.length) return { eligible: false, mode: 'blocked', reasons, usePolicy };
+    const mode: AssetRuntimeMode = asset.maturity === 'effectiveness_validated'
+      ? 'preferred'
+      : 'default_allowed';
+    return { eligible: true, mode, reasons: [], usePolicy };
+  }
+
+  // 非静默路径（用户主动选择）保留原语义：maturity 只影响使用策略提示。
   if (usePolicy === 'never' && asset.status === 'active') {
-    // status 已经解释过的不重复记——never 在这里专指"成熟度还不够"。
     reasons.push('maturity_below_default_use');
   }
-
-  // 静默默认注入这条路，PRD 3.6 只放行 Transfer Verified 及以上。
-  const silentBlocked = context.silentDefaultInjection === true && usePolicy !== 'auto';
-  if (silentBlocked && !reasons.includes('maturity_below_default_use')) {
-    reasons.push('maturity_below_default_use');
-  }
-  if (context.silentDefaultInjection === true && declaredApplicable && !applicableMatched) {
-    reasons.push('not_applicable_context');
-  }
-
   if (reasons.length) return { eligible: false, mode: 'blocked', reasons, usePolicy };
 
   const mode: AssetRuntimeMode = usePolicy === 'auto'

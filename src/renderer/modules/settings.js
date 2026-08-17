@@ -1236,7 +1236,7 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
     () => _settingsOpenCustomProviderModal(provider),
   ));
   detailActions?.appendChild(_settingsCustomProviderActionButton(
-    enabled ? 'x-circle' : 'check-circle',
+    enabled ? 'x' : 'check',
     enabled ? t('settings.custom_providers.disable') : t('settings.custom_providers.enable'),
     'btn btn-sm',
     () => _settingsSetCustomProviderEnabled(provider, !enabled),
@@ -1259,7 +1259,7 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
         info.innerHTML = `<strong>${escapeHtml(model.id)}</strong><span>${escapeHtml(t('settings.custom_providers.context_badge', { value: _settingsFormatTokenLimit(model.contextWindow) }))}</span><span>${escapeHtml(t('settings.custom_providers.output_badge', { value: _settingsFormatTokenLimit(model.maxTokens) }))}</span>`;
         const rowActions = document.createElement('div');
         rowActions.className = 'settings-custom-provider-detail-model-actions';
-        rowActions.appendChild(_settingsCustomProviderActionButton('plug', t('settings.custom_providers.test_model'), 'icon-btn', () => _settingsTestCustomProviderModel(provider, model)));
+        rowActions.appendChild(_settingsCustomProviderActionButton('zap', t('settings.custom_providers.test_model'), 'icon-btn', () => _settingsTestCustomProviderModel(provider, model)));
         rowActions.appendChild(_settingsCustomProviderActionButton('edit-pencil', t('settings.custom_providers.edit_model'), 'icon-btn', () => _settingsOpenCustomProviderModelEditor(provider, model)));
         rowActions.appendChild(_settingsCustomProviderActionButton('trash', t('settings.custom_providers.remove_model'), 'icon-btn danger', () => _settingsRemoveCustomProviderModel(provider, model.id)));
         row.appendChild(info);
@@ -2434,9 +2434,6 @@ function _settingsRenderEntryRow(entry, idx) {
   primary.className = 'entry-primary';
   primary.innerHTML = `
     <span class="entry-provider">${escapeHtml(entry.providerLabel || entry.provider)}</span>
-    <span class="entry-sep">·</span>
-    <div class="ai-select ai-select-compact entry-model-select"></div>
-    <span class="entry-account-chip" title="${escapeHtml(t('settings.entries.account_title'))}">@ ${escapeHtml(entry.profileLabel || '')}</span>
   `;
   main.appendChild(primary);
 
@@ -2444,7 +2441,8 @@ function _settingsRenderEntryRow(entry, idx) {
   // deleting + re-adding. auth.listModels is the complete whitelist; a saved
   // model that left the catalog remains visible only as a remediation row and
   // is never injected back into these options.
-  const modelEl = primary.querySelector('.entry-model-select');
+  const modelEl = document.createElement('div');
+  modelEl.className = 'ai-select ai-select-compact entry-model-select';
   const initialModelState = _settingsEntryModelState(entry, []);
   const modelUnavailable = initialModelState.unavailable;
   const modelSel = _aiSelectMount(modelEl, {
@@ -2488,11 +2486,80 @@ function _settingsRenderEntryRow(entry, idx) {
   }
   meta.appendChild(badge);
 
-  if (entry.profileMasked) {
-    const mask = document.createElement('span');
-    mask.className = 'account-mask';
-    mask.textContent = entry.profileMasked;
-    meta.appendChild(mask);
+  // API-key profiles get an editable capsule: masked with dots by default,
+  // the eye button reveals the real key, typing + blur/Enter saves it.
+  if (entry.profileType !== 'oauth' && entry.profileType !== 'managed') {
+    // Dot mask is long enough to fill at least a third of the capsule.
+    const STAR_MASK = '••••••••••••••••••••••••••••••••';
+    const capsule = document.createElement('div');
+    capsule.className = 'entry-api-key-capsule';
+    capsule.setAttribute('draggable', 'false');
+    capsule.innerHTML = `
+      <input class="entry-api-key-input" type="password" value="${STAR_MASK}" autocomplete="off" spellcheck="false" />
+      <button type="button" class="entry-api-key-toggle" title="${escapeHtml(t('settings.entries.api_key_show'))}" aria-label="${escapeHtml(t('settings.entries.api_key_show'))}">${_settingsIconHtml('eye', 'ui-icon')}</button>
+    `;
+    meta.appendChild(capsule);
+
+    const input = capsule.querySelector('.entry-api-key-input');
+    const toggle = capsule.querySelector('.entry-api-key-toggle');
+    let revealed = false;
+    let revealedKey = '';
+
+    const hideKey = () => {
+      revealed = false;
+      revealedKey = '';
+      input.type = 'password';
+      input.value = STAR_MASK;
+      const label = t('settings.entries.api_key_show');
+      toggle.title = label;
+      toggle.setAttribute('aria-label', label);
+    };
+
+    toggle.addEventListener('click', async () => {
+      if (revealed) { hideKey(); return; }
+      const res = await window.cogseed.invoke('auth.revealApiKey', { profileId: entry.profileId });
+      const key = res && res.ok ? String(res.apiKey || '') : '';
+      if (!key) {
+        await uiAlert((res && res.error) || t('settings.entries.api_key_reveal_failed'));
+        return;
+      }
+      revealed = true;
+      revealedKey = key;
+      input.type = 'text';
+      input.value = key;
+      const label = t('settings.entries.api_key_hide');
+      toggle.title = label;
+      toggle.setAttribute('aria-label', label);
+    });
+
+    // Interacting with the capsule must not start the row's drag-reorder.
+    capsule.addEventListener('mousedown', (e) => e.stopPropagation());
+
+    const commitKey = async () => {
+      const value = String(input.value || '').trim();
+      if (value === STAR_MASK) { hideKey(); return; }
+      if (!value) { hideKey(); return; }
+      if (revealed && value === revealedKey) { hideKey(); return; }
+      const up = await window.cogseed.invoke('auth.updateApiKey', { profileId: entry.profileId, apiKey: value });
+      if (!up || !up.ok) {
+        await uiAlert((up && up.error) || t('settings.entries.api_key_update_failed'));
+        hideKey();
+        return;
+      }
+      hideKey();
+      await _settingsReload();
+    };
+
+    input.addEventListener('focus', () => {
+      // Typing replaces the dot mask instead of appending to it.
+      if (!revealed && input.value === STAR_MASK) input.value = '';
+    });
+    input.addEventListener('blur', () => { void commitKey(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Enter') input.blur();
+      if (e.key === 'Escape') { hideKey(); input.blur(); }
+    });
   }
   main.appendChild(meta);
 
@@ -2534,6 +2601,9 @@ function _settingsRenderEntryRow(entry, idx) {
   delBtn.textContent = t('common.delete');
   delBtn.onclick = () => _settingsRemoveEntry(entry);
   actions.appendChild(delBtn);
+
+  // Model picker sits to the left of the settings (gear) button.
+  actions.prepend(modelEl);
 
   row.appendChild(actions);
 

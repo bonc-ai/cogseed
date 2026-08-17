@@ -83,6 +83,8 @@ export interface CognitionInboxInput {
    * 变更类待办整体不产出（而不是当成"没变过"去猜）。
    */
   latestDiffs?: ReadonlyMap<string, AssetVersionDiff>;
+  /** Skill 安装状态读取失败的资产。未知状态不能当成未生成。 */
+  skillStateUnknownAssetIds?: ReadonlySet<string>;
 }
 
 const URGENCY: Record<CognitionInboxKind, CognitionInboxUrgency> = {
@@ -140,7 +142,8 @@ export function buildCognitionInbox(input: CognitionInboxInput): CognitionInboxI
 
   for (const asset of activeAssets) {
     if (asset.assetType === 'skill_method' && asset.payload.kind === 'skill_method'
-      && !asset.payload.generatedSkillId) {
+      && !asset.payload.generatedSkillId
+      && !input.skillStateUnknownAssetIds?.has(asset.assetId)) {
       items.push(item('skill_creation_suggested', `skill:${asset.assetId}`, asset.title, {
         assetType: asset.assetType,
         assetId: asset.assetId,

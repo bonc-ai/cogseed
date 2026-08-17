@@ -45,6 +45,7 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
     | 'maturity_downgraded' | 'pause_recommended' | 'rework_recommended'
     | 'recommendation_cleared'
     | 'cross_scope_confirmed' | 'cross_scope_withdrawn'
+    | 'maturity_advanced'
     // 修正归档错误，**不是**靠证据挣来的升档。审计里要分得开，否则日后
     // 回看会以为这条资产做过 transfer proof。
     | 'maturity_corrected';
@@ -299,6 +300,14 @@ export async function createAbilityAsset(
     JSON.stringify(input.evidenceRefs),
     input.learningSignal ? JSON.stringify(input.learningSignal) : undefined,
   ]);
+  // 显式生命周期校验：asAsset 会把缺失值静默 coerce 成
+  // user_confirmed_unverified——那会让下面 expectedLifecycle 门形同虚设
+  // （user actor 传缺失值也能"伪造用户确认"通过）。
+  if (input.lifecycleStatus !== 'user_confirmed_unverified'
+    && input.lifecycleStatus !== 'automatically_extracted_unverified'
+    && input.lifecycleStatus !== 'system_precipitated_unverified') {
+    throw new Error('invalid ability asset lifecycle status');
+  }
   const validated = asAsset(input);
   if (validated.ownerId !== userId) throw new Error('ability asset owner mismatch');
   if (!safeId(validated.candidateId) || !/^rd_[A-Za-z0-9_-]{8,64}$/.test(validated.reviewDecisionId)) {
@@ -336,6 +345,12 @@ export async function createSystemAbilityAsset(
 ): Promise<RecallAbilityAssetRecord> {
   if (!safeId(userId) || !safeId(input.id) || !safeId(input.candidateId || '')) throw new Error('invalid system ability asset identity');
   if (typeof reason !== 'string' || !reason.trim() || reason.length > 1_000) throw new Error('invalid system ability asset reason');
+  // 系统资产只能带自动生命周期（诚实标注：未经用户确认）；asAsset 的
+  // 缺失值 coerce 在这里同样被显式校验挡下。
+  if (input.lifecycleStatus !== 'automatically_extracted_unverified'
+    && input.lifecycleStatus !== 'system_precipitated_unverified') {
+    throw new Error('system asset requires an automatic lifecycle status');
+  }
   const validated = asAsset(input);
   if (validated.ownerId !== userId) throw new Error('ability asset owner mismatch');
   const stored = asAsset(await updateRecallJsonRecord(
@@ -443,6 +458,51 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
     if (clearedRecommendation) await appendAudit(userId, asset.id, 'recommendation_cleared', { note: action.reason, actor: action.actor });
   }
   return asset;
+}
+
+/** 证据并入资产（内容变化即 bump 版本 + 快照 + 审计）。
+ *  调用方：候选语义去重融合路径（candidate-service 无权限直接访问
+ *  appendVersion/appendAudit 内部函数）。 */
+export async function mergeAbilityAssetEvidence(
+  userId: string,
+  assetId: string,
+  newRefs: Array<Pick<CognitionSourceRef, 'kind' | 'id'> | CognitionSourceRef>,
+  metadata: { reason: string; actor: AbilityAssetActor },
+): Promise<RecallAbilityAssetRecord> {
+  const current = await readAbilityAsset(userId, assetId);
+  if (!current) throw new Error('recall ability asset not found');
+  const merged = mergeRefsDedup(current.evidenceRefs || [], normalizeCognitionSourceRefs(newRefs));
+  const changed = merged.length !== (current.evidenceRefs || []).length
+    || merged.some((ref, i) => JSON.stringify(ref) !== JSON.stringify((current.evidenceRefs || [])[i]));
+  if (!changed) return current;
+  const updated = asAsset(await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const cur = asAsset(raw);
+    return {
+      ...cur,
+      evidenceRefs: merged,
+      version: nextVersion(cur.version),
+      updatedAt: new Date().toISOString(),
+    };
+  }));
+  await appendVersion(userId, updated, metadata);
+  await appendAudit(userId, assetId, 'updated', metadata);
+  return updated;
+}
+
+function mergeRefsDedup(
+  left: RecallAbilityAssetRecord['evidenceRefs'],
+  right: CognitionSourceRef[],
+): RecallAbilityAssetRecord['evidenceRefs'] {
+  const seen = new Set<string>();
+  const out: RecallAbilityAssetRecord['evidenceRefs'] = [];
+  for (const ref of [...left, ...right]) {
+    const key = `${ref.kind}:${ref.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ref);
+  }
+  return out;
 }
 
 const STATUS_AUDIT_ACTION: Record<RecallAbilityAssetRecord['status'], AbilityAssetAuditRecord['action']> = {
@@ -619,18 +679,31 @@ export async function migrateLegacyUserFacingTitles(userId: string): Promise<num
     const nextStatement = gap ? `遇到同类情况时，应注意修正：${gap[1].trim()}` : undefined;
     if (!nextTitle && !nextStatement) continue;
     try {
+      // 版本递增 + 内容快照 + 审计，与 updateAbilityAsset 同一机制。
+      // （不能直接调 updateAbilityAsset：system actor 要求自动评审交接
+      //  reviewDecisionId，而迁移是维护性更新非评审产物。）旧实现直接
+      //  改写 title/statement 不 bump 版本，导致冻结快照与实时内容分叉
+      //  （确认投影永远注入旧英文标题）。
       await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
         if (!raw) throw new Error('recall ability asset not found');
         const current = asAsset(raw);
         if (nextTitle) current.title = nextTitle;
         if (nextStatement) current.statement = nextStatement;
+        current.version = nextVersion(current.version);
         current.updatedAt = new Date().toISOString();
         return current;
       });
-      await appendAudit(userId, asset.id, 'updated', {
-        actor: 'system',
-        note: 'legacy English title → user-facing Chinese (2026-08-15)',
-      });
+      const migratedAsset = await readAbilityAsset(userId, asset.id);
+      if (migratedAsset) {
+        await appendVersion(userId, migratedAsset, {
+          reason: 'legacy English title → user-facing Chinese (2026-08-15)',
+          actor: 'system',
+        });
+        await appendAudit(userId, asset.id, 'updated', {
+          note: 'legacy English title → user-facing Chinese (2026-08-15)',
+          actor: 'system',
+        });
+      }
       migrated += 1;
     } catch (err) {
       log.warn(`ability asset title migration skipped id=${asset.id}: ${(err as Error).message}`);
@@ -835,12 +908,34 @@ export async function listAbilityAssetAudit(userId: string, assetId: string): Pr
 }
 
 export async function setAbilityAssetMaturity(userId: string, assetId: string, maturity: RecallAbilityAssetRecord['maturity']): Promise<RecallAbilityAssetRecord> {
+  if (!ABILITY_ASSET_MATURITIES.has(maturity)) {
+    throw new Error('invalid ability asset maturity');
+  }
+  const rank: Record<RecallAbilityAssetRecord['maturity'], number> = {
+    seed: 0,
+    bud: 1,
+    transfer_validated: 2,
+    effectiveness_validated: 3,
+  };
+  let previous: RecallAbilityAssetRecord['maturity'] | undefined;
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
+    if (rank[maturity] < rank[current.maturity]) {
+      throw new Error('ability asset maturity cannot move backwards');
+    }
+    if (maturity === current.maturity) return current;
+    previous = current.maturity;
     return { ...current, maturity, updatedAt: new Date().toISOString() };
   });
-  return asAsset(updated);
+  const asset = asAsset(updated);
+  if (previous) {
+    await appendAudit(userId, asset.id, 'maturity_advanced', {
+      note: `${previous}->${asset.maturity}`,
+      actor: 'system',
+    });
+  }
+  return asset;
 }
 
 /**

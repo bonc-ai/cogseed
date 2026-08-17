@@ -319,6 +319,40 @@ describe('auth › multi-profile store (addApiKey / removeCredential / renamePro
   });
 });
 
+describe('auth › revealApiKey / updateApiKey', () => {
+  it('revealApiKey returns the full key only for api_key profiles', async () => {
+    const a = await import('../../../src/main/features/auth');
+    const { profileId } = await a.addApiKey('anthropic', 'sk-secret-full-1234', 'work');
+    const reveal = await a.revealApiKey(profileId);
+    expect(reveal.apiKey).toBe('sk-secret-full-1234');
+    expect(await a.revealApiKey('anthropic:missing')).toEqual({ apiKey: '' });
+    await expect(a.revealApiKey('')).rejects.toThrow(/profileId required/);
+  });
+
+  it('updateApiKey replaces the stored key and keeps list entries masked', async () => {
+    const a = await import('../../../src/main/features/auth');
+    const { profileId } = await a.addApiKey('anthropic', 'sk-old-key-xxxxxx', 'work');
+    await a.addEntry({ provider: 'anthropic', model: 'claude-opus-4-8', profileId });
+
+    const before = await a.revealApiKey(profileId);
+    expect(before.apiKey).toBe('sk-old-key-xxxxxx');
+
+    const res = await a.updateApiKey(profileId, 'sk-new-key-yyyyyy');
+    expect(res.profileId).toBe(profileId);
+    expect((await a.revealApiKey(profileId)).apiKey).toBe('sk-new-key-yyyyyy');
+    // listEntries keeps the masked form — no raw key leaks on the list path.
+    const { entries } = await a.listEntries();
+    expect(entries[0]?.profileMasked).not.toContain('sk-new-key-yyyyyy');
+  });
+
+  it('updateApiKey rejects empty keys and unknown profiles', async () => {
+    const a = await import('../../../src/main/features/auth');
+    const { profileId } = await a.addApiKey('anthropic', 'sk-valid-xxxxxxxx', 'work');
+    await expect(a.updateApiKey(profileId, '   ')).rejects.toThrow(/api key required/);
+    await expect(a.updateApiKey('anthropic:nope', 'sk-x-xxxxxxxx')).rejects.toThrow(/profile not found/);
+  });
+});
+
 describe('auth › listProviders grouping', () => {
   it('returns providers in catalog order regardless of insertion order', async () => {
     const a = await import('../../../src/main/features/auth');

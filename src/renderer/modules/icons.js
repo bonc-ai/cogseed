@@ -66,6 +66,7 @@
     send: '<path d="M22 2 11 13"></path><path d="m22 2-7 20-4-9-9-4 20-7z"></path>',
     stop: '<rect x="6" y="6" width="12" height="12" rx="2"></rect>',
     'chevron-down': '<path d="m6 9 6 6 6-6"></path>',
+    'chevron-up': '<path d="m6 15 6-6 6 6"></path>',
     'chevron-right': '<path d="m9 6 6 6-6 6"></path>',
     'chevron-left': '<path d="m15 6-6 6 6 6"></path>',
     'thumbs-up': '<path d="M7 10v12"></path><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"></path>',
@@ -125,6 +126,8 @@
     // Hub account surface icons (lucide-style, matching the library above).
     user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>',
     monitor: '<rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path>',
+    layout: '<rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect>',
+    'credit-card': '<rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M2 10h20"></path>',
     'smartphone': '<rect x="7" y="2.5" width="10" height="19" rx="2.5"></rect><path d="M12 18h.01"></path>',
     shield: '<path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z"></path>',
     'shield-check': '<path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z"></path><path d="m9 12 2 2 4-4"></path>',
