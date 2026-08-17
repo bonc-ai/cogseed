@@ -219,3 +219,20 @@ KStar personal 候选带着 `LONG_TERM_EVIDENCE` 命中（"我以后周报都要
 - [ ] "今天写诗"不产 personal（防误判）
 - [ ] 后续周报任务注入该 personal 资产
 - [ ] 现有 rule/template 沉淀行为无回归
+
+---
+
+## 更新（2026-08-17 19:02）：方案收敛决策
+
+**方案 B 已回退**（revert `3daa7049` → `08ade5ea`），理由：与方案 C 重复——同一偏好
+会同时写入 USER.md（B）和 personal 候选（C），造成存储/注入/治理/展示四重重复。
+
+**最终形态：只保留方案 C**（`a438f86c`）：
+- 「关于我」唯一载体 = personal 正式资产（确定性扫描用户消息 → 候选 → 待我处理
+  确认 → 四视图管理）
+- USER.md 保持**用户手动**管理（记忆功能），KStar 不自动写
+- 注入走 personal 资产语义召回
+- capture 线保留其既有 personal 抽取（语义查重 0.85 与 C 合并，无双写）
+
+**已删除**：`personal-profile-sync.ts` + 其测试 + review-inference/types 的
+lessonPersonal 字段（模型提名机制不再需要——C 是纯确定性，不依赖模型）。
