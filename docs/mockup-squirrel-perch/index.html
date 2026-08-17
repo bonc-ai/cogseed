@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>模型图 · 松鼠趴在对话框上（cogseed-squirrel-perch）</title>
+<style>
+  :root {
+    --bg: #FBFDFC;
+    --surface: #ffffff;
+    --surface-2: #EDF3EF;
+    --surface-3: #DCE5DF;
+    --text: #14281E;
+    --text-2: #3E5A4C;
+    --text-3: #6B7F74;
+    --border: #E3EBE6;
+    --border-strong: #CBDCD2;
+    --primary: #0E9F6E;
+    --primary-hover: #0A7A55;
+    --primary-soft: #E2F5EC;
+    --primary-text: #0A7A55;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+    background: #E9EFEB;
+    color: var(--text);
+    overflow: auto;
+    padding: 12px;
+  }
+
+  /* ---------- 模型图控制条（仅 mockup 用，真实应用里不存在） ---------- */
+  .mockup-bar {
+    position: sticky;
+    top: 0;
+    z-index: 999;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 6px 20px rgba(20,40,30,0.10);
+    font-size: 13px;
+  }
+  .mockup-bar .label { font-weight: 600; color: var(--text-2); }
+  .mockup-bar .hint { color: var(--text-3); }
+  .mockup-bar button {
+    padding: 5px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .mockup-bar button:hover { border-color: var(--primary); color: var(--primary-text); }
+  .mockup-bar button.on {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+  }
+  .mockup-bar select {
+    padding: 4px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--surface);
+    font-size: 12.5px;
+    color: var(--text);
+  }
+
+  /* ---------- 应用窗口 ---------- */
+  .app-window {
+    width: 1280px;
+    max-width: 100%;
+    height: 820px;
+    margin: 0 auto;
+    display: flex;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(20,40,30,0.18);
+    position: relative;
+  }
+
+  /* 侧边栏 */
+  .sidebar {
+    width: 260px;
+    flex: 0 0 auto;
+    background: var(--surface-2);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 14px 10px;
+    gap: 8px;
+  }
+  .brand-row { display: flex; align-items: center; gap: 8px; padding: 2px 8px 10px; }
+  .brand-mark { width: 22px; height: 22px; border-radius: 6px; background: var(--primary); color: #fff; display:flex; align-items:center; justify-content:center; font-size: 12px; font-weight: 700; }
+  .brand-name { font-weight: 600; font-size: 14px; }
+  .sidebar-btn {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 10px; border-radius: 8px;
+    border: none; background: transparent; color: var(--text-2);
+    font-size: 13px; cursor: pointer; text-align: left;
+  }
+  .sidebar-btn .ic { width: 16px; height: 16px; border-radius: 4px; background: var(--surface-3); flex: 0 0 auto; }
+  .sidebar-btn.primary { background: var(--primary); color: #fff; font-weight: 500; }
+  .sidebar-btn.primary .ic { background: rgba(255,255,255,0.25); }
+  .sidebar-btn.active { background: var(--surface); color: var(--primary-text); font-weight: 500; box-shadow: 0 1px 3px rgba(20,40,30,0.08); }
+  .sidebar-btn:not(.primary):not(.active):hover { background: var(--surface-3); }
+  .sidebar-sep { height: 1px; background: var(--border); margin: 6px 4px; }
+  .conv-item { display:flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; }
+  .conv-item.active { background: var(--surface); box-shadow: 0 1px 3px rgba(20,40,30,0.08); }
+  .conv-item .t { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv-item .s { color: var(--text-3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar-footer { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px 6px; }
+  .avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--primary-soft); border: 1px solid var(--border-strong); }
+  .sidebar-footer .name { font-size: 12.5px; color: var(--text-2); }
+
+  /* 聊天主面板 */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+
+  .chat-header {
+    flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 13px 20px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .chat-header-title { font-size: 15px; font-weight: 600; display:flex; align-items:center; gap:8px; }
+  .chat-header-title .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); }
+  .chat-header-sub { font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
+  .chat-header-actions { display: flex; gap: 6px; }
+  .icon-btn {
+    width: 30px; height: 30px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-2); cursor: pointer;
+  }
+  .icon-btn:hover { border-color: var(--primary); color: var(--primary-text); }
+  .icon-btn .ic { width: 14px; height: 14px; background: var(--surface-3); border-radius: 3px; }
+  .icon-btn.on .ic { background: var(--primary); }
+
+  /* 消息区 */
+  #chat-history {
+    flex: 1;
+    overflow: hidden;
+    padding: 22px 32px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .chat-message { display: flex; flex-direction: column; max-width: 72%; min-width: 0; }
+  .chat-message.user { align-self: flex-end; align-items: flex-end; }
+  .chat-message.assistant { align-self: flex-start; align-items: flex-start; }
+  .chat-bubble {
+    padding: 11px 16px;
+    border-radius: 18px;
+    font-size: 13.5px;
+    line-height: 1.6;
+    word-break: break-word;
+  }
+  .chat-message.user .chat-bubble {
+    background: rgba(245,247,246,0.92);
+    border: 1px solid rgba(30,41,59,0.06);
+    border-radius: 20px;
+    color: var(--text);
+  }
+  .chat-message.assistant .chat-bubble {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 6px;
+    box-shadow: 0 2px 6px rgba(20,71,55,0.05);
+    color: var(--text);
+  }
+  .chat-msg-meta { display: flex; align-items: center; gap: 6px; margin: 0 4px 4px; font-size: 11px; color: var(--text-3); }
+  .chat-msg-meta .ava { width: 16px; height: 16px; border-radius: 50%; background: var(--primary-soft); border: 1px solid var(--border-strong); }
+  .code-inline {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 5px;
+    color: var(--primary-text);
+  }
+
+  /* 输入区（对话框）：模型里松鼠挂在它上面 */
+  .chat-input-wrapper {
+    flex: 0 0 auto;
+    padding: 18px 32px 26px;
+    z-index: 10;
+  }
+  .chat-input-area {
+    position: relative;   /* ← 松鼠的定位锚点（真实应用里已有 position:relative） */
+    max-width: 82%;
+    margin: 0 auto;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    padding: 10px 18px 12px;
+    box-shadow: 0 4px 24px rgba(15,18,24,0.06);
+  }
+  .chat-input-area .fake-input {
+    min-height: 60px;
+    font-size: 13.5px;
+    color: var(--text-3);
+    line-height: 1.55;
+    padding: 6px;
+    border: none; outline: none; background: transparent;
+  }
+  .chat-bottom-bar { display: flex; align-items: center; gap: 8px; padding: 6px 4px 0; }
+  .chat-bottom-bar .ic-btn {
+    width: 28px; height: 28px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-3); font-size: 14px; cursor: pointer;
+  }
+  .recipient-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px;
+    background: var(--primary-soft); border: 1px solid rgba(14,159,110,0.25);
+    color: var(--primary-text); font-size: 12px; font-weight: 500;
+  }
+  .send-btn {
+    margin-left: auto;
+    width: 32px; height: 32px; border-radius: 9px;
+    border: none; background: var(--primary); color: #fff;
+    font-size: 15px; cursor: pointer; display:flex; align-items:center; justify-content:center;
+  }
+
+  /* ---------- 松鼠"趴"法（与参考站 https://101.36.66.129/login/ 一致） ----------
+     .auth-squirrel { position:absolute; right:-14px; bottom:calc(100% - 24px);
+       z-index:2; width:148px; pointer-events:none; user-select:none; }
+     即：松鼠底边压住锚点容器上沿 24px，右缘探出 14px，身体在容器上方 —— 看起来"趴"在边上。
+  */
+  .squirrel-perch {
+    position: absolute;
+    bottom: calc(100% - 17px); /* 上移10px 后下移3px；数值越大越贴近输入框 */
+    z-index: 2;
+    width: 99px; /* 应用当前尺寸：参考值 148px 的 2/3 */
+    height: auto;
+    pointer-events: none;
+    user-select: none;
+    filter: drop-shadow(0 5px 10px rgba(20, 40, 30, 0.16));
+    transition: all .25s ease;
+  }
+  /* 位置 A：输入框右上角（右缘探出 10px = 参考 14px 左移 4px） */
+  .squirrel-perch[data-pos="a"] { right: -10px; }
+  /* 位置 B：输入框左上角（镜像） */
+  .squirrel-perch[data-pos="b"] { left: -10px; transform: scaleX(-1); }
+
+  /* 尺寸档位 */
+  .squirrel-perch[size="s"] { width: 72px; }
+  .squirrel-perch[size="m"] { width: 99px; }
+  .squirrel-perch[size="l"] { width: 125px; }
+</style>
+</head>
+<body>
+
+  <div class="mockup-bar">
+    <span class="label">模型图 · 松鼠趴对话框</span>
+    <span class="hint">调整位置/大小后重新截图预览即可</span>
+    <span class="label" style="margin-left:8px">位置：</span>
+    <button data-pos="a" class="on">A · 输入框右上角（参考站同款）</button>
+    <button data-pos="b">B · 输入框左上角（镜像）</button>
+    <span class="label" style="margin-left:8px">大小：</span>
+    <button data-size="s">小</button>
+    <button data-size="m" class="on">中</button>
+    <button data-size="l">大</button>
+  </div>
+
+  <div class="app-window">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="brand-row">
+        <span class="brand-mark">C</span>
+        <span class="brand-name">CogSeed</span>
+      </div>
+      <button class="sidebar-btn primary"><span class="ic"></span> 新建任务</button>
+      <button class="sidebar-btn"><span class="ic"></span> 空间中心</button>
+      <button class="sidebar-btn"><span class="ic"></span> 自动化</button>
+      <button class="sidebar-btn"><span class="ic"></span> 认知资产</button>
+      <button class="sidebar-btn"><span class="ic"></span> 连接</button>
+      <div class="sidebar-sep"></div>
+      <div class="conv-item active"><span class="t">Commander · 产品方案讨论</span><span class="s">好的，我整理一下方案要点…</span></div>
+      <div class="conv-item"><span class="t">技能设计 · skill-creator</span><span class="s">SKILL.md 的 frontmatter 已通过校验</span></div>
+      <div class="conv-item"><span class="t">论文复现 · Reproduce-LLM</span><span class="s">manifest 已生成，共 42 个文件</span></div>
+      <div class="conv-item"><span class="t">今天的工作安排</span><span class="s">三项任务已完成两项</span></div>
+      <div class="sidebar-footer">
+        <span class="avatar"></span>
+        <span class="name">blue@cogseed</span>
+      </div>
+    </aside>
+
+    <!-- 聊天主面板 -->
+    <main class="main" id="panel-conversation">
+      <div class="chat-header">
+        <div>
+          <div class="chat-header-title"><span class="dot"></span> Commander · 产品方案讨论</div>
+          <div class="chat-header-sub">3 个技能 · 本地模型 · 记忆已开启</div>
+        </div>
+        <div class="chat-header-actions">
+          <button class="icon-btn on"><span class="ic"></span></button>
+          <button class="icon-btn"><span class="ic"></span></button>
+          <button class="icon-btn"><span class="ic"></span></button>
+        </div>
+      </div>
+
+      <div id="chat-history">
+        <div class="chat-message user">
+          <div class="chat-msg-meta">今天 10:24</div>
+          <div class="chat-bubble">我想让桌面上的小松鼠图标趴在我的对话框上面，像官网上登录页那样，你觉得放哪里好看？</div>
+        </div>
+        <div class="chat-message assistant">
+          <div class="chat-msg-meta"><span class="ava"></span> Commander · 刚刚</div>
+          <div class="chat-bubble">参考站用的是 <span class="code-inline">position:absolute; right:-14px; bottom:calc(100% - 24px); z-index:2; pointer-events:none</span>，让松鼠底边压住卡片上沿 24px、右缘探出 14px，身体悬在卡片上方，看起来就像趴在边上。给对话框套用同样的锚点即可，纯 CSS，不挡输入也不挡滚动。</div>
+        </div>
+        <div class="chat-message user">
+          <div class="chat-msg-meta">今天 10:25</div>
+          <div class="chat-bubble">可以，那先出个模型图我看看效果。</div>
+        </div>
+      </div>
+
+      <!-- 输入区（对话框） -->
+      <div class="chat-input-wrapper">
+        <div class="chat-input-area">
+          <!-- 松鼠：挂在输入框上沿，位置/大小由上方控制条切换 -->
+          <img class="squirrel-perch" data-pos="a" size="m"
+               src="cogseed-squirrel-perch.png" alt=""
+               aria-hidden="true" decoding="async" draggable="false" />
+          <div class="fake-input">输入消息，@ 选择智能体、技能、连接器…</div>
+          <div class="chat-bottom-bar">
+            <button class="ic-btn">＋</button>
+            <span class="recipient-chip">Commander</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script>
+  (function () {
+    var clean = new URLSearchParams(location.search).get('clean') === '1';
+    if (clean) document.querySelector('.mockup-bar').style.display = 'none';
+    var img = document.querySelector('.squirrel-perch');
+    var posBtns = document.querySelectorAll('[data-pos]');
+    var sizeBtns = document.querySelectorAll('[data-size]');
+    posBtns.forEach(function (b) {
+      b.addEventListener('click', function () {
+        posBtns.forEach(function (x) { x.classList.remove('on'); });
+        b.classList.add('on');
+        img.dataset.pos = b.dataset.pos;
+      });
+    });
+    sizeBtns.forEach(function (b) {
+      b.addEventListener('click', function () {
+        sizeBtns.forEach(function (x) { x.classList.remove('on'); });
+        b.classList.add('on');
+        img.setAttribute('size', b.dataset.size);
+      });
+    });
+  })();
+</script>
+</body>
+</html>

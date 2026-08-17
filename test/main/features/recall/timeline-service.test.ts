@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { appendRecallJsonlRecord } from '../../../../src/main/features/recall/store';
 
 let tmp: string;
 let previous: string | undefined;
+const RULE_BOUNDARY = { applicableWhen: ['reviewing governed work'], forbiddenWhen: ['outside the review scope'] };
 
 beforeEach(() => {
   vi.resetModules();
@@ -37,6 +39,7 @@ async function promoteAsset(userId: string, statement: string, scope = 'review')
   const candidate = await candidates.saveRecallCandidate(userId, {
     judgment: statement,
     suggestedType: 'rule',
+    ...RULE_BOUNDARY,
     suggestedScope: scope,
     sourceRefs: [{ kind: 'memory', id: `mem-${scope}` }],
   });
@@ -65,14 +68,18 @@ describe('Recall asset proof timeline', () => {
     const prepared = await proofs.prepareTransferProof('user-a', { projectionId: confirmed.id, executionId: 'exec-a', expectedResultSnapshot: 'Decision includes evidence.' });
 
     vi.setSystemTime(new Date('2026-08-06T00:05:00.000Z'));
-    await proofs.completeTransferProof('user-a', prepared.id, { status: 'succeeded', receiptId: 'receipt-a', observedTransfer: 'Evidence guidance was applied.' });
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    const receipt = await receipts.prepareReceipt('user-a', { executionId: 'receipt-exec-a', targetSessionId: 'timeline-session-a', reusedRefs: [`asset:${asset.id}@v2`], omittedRefs: [], permissionMode: 'read-only', allowedScopes: ['cognition:inherited'], boundary: 'real' }, { sessionId: 'timeline-session-a' });
+    await proofs.completeTransferProofWithReceipt('user-a', prepared.id, { status: 'succeeded', receiptExecutionId: receipt.executionId, observedTransfer: 'Evidence guidance was applied.' });
 
     vi.setSystemTime(new Date('2026-08-06T00:06:00.000Z'));
     await proofs.evaluateEffectivenessProof('user-a', { transferProofId: prepared.id, outcome: 'better', observedResult: 'Review quality improved.', evidenceRefs: [{ kind: 'artifact', id: 'artifact-a' }] });
 
     const items = await timeline.listAbilityAssetTimeline('user-a', asset.id);
     expect(items.map((item) => item.kind)).toEqual([
+      'asset_updated',
       'effectiveness_recorded',
+      'asset_updated',
       'transfer_completed',
       'usage_recorded',
       'projection_confirmed',
@@ -87,7 +94,7 @@ describe('Recall asset proof timeline', () => {
     expect(items.every((item) => item.refs?.assetId === asset.id)).toBe(true);
     expect(items.find((item) => item.kind === 'projection_confirmed')).toMatchObject({ refs: { projectionId: confirmed.id, taskRunId: 'task-a' } });
     expect(items.find((item) => item.kind === 'transfer_prepared')).toMatchObject({ refs: { projectionId: confirmed.id, taskRunId: 'task-a', transferProofId: prepared.id } });
-    expect(items.find((item) => item.kind === 'transfer_completed')).toMatchObject({ status: 'succeeded', refs: { usageReceiptId: 'receipt-a' } });
+    expect(items.find((item) => item.kind === 'transfer_completed')).toMatchObject({ status: 'succeeded', refs: { usageReceiptId: receipt.receiptId } });
     expect(items.find((item) => item.kind === 'effectiveness_recorded')).toMatchObject({ status: 'valid', refs: { transferProofId: prepared.id } });
     expect(items.map((item) => item.occurredAt)).toEqual([...items.map((item) => item.occurredAt)].sort().reverse());
   });
@@ -101,8 +108,11 @@ describe('Recall asset proof timeline', () => {
     const confirmed = await projection.confirmContextProjection('user-a', preview.id);
     expect(confirmed.assetIds).toEqual([unrelated.id]);
     const prepared = await proofs.prepareTransferProof('user-a', { projectionId: confirmed.id, executionId: 'exec-research', expectedResultSnapshot: 'Research result.' });
-    await proofs.completeTransferProof('user-a', prepared.id, { status: 'succeeded', observedTransfer: 'Research guidance applied.' });
-    await proofs.evaluateEffectivenessProof('user-a', { transferProofId: prepared.id, outcome: 'better', observedResult: 'Research improved.', evidenceRefs: [] });
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    const receipt = await receipts.prepareReceipt('user-a', { executionId: 'receipt-exec-research', targetSessionId: 'timeline-session-research', reusedRefs: [`asset:${unrelated.id}@v1`], omittedRefs: [], permissionMode: 'read-only', allowedScopes: ['cognition:inherited'], boundary: 'real' }, { sessionId: 'timeline-session-research' });
+    await proofs.completeTransferProofWithReceipt('user-a', prepared.id, { status: 'succeeded', receiptExecutionId: receipt.executionId, observedTransfer: 'Research guidance applied.' });
+    const evaluation = await proofs.evaluateEffectivenessProof('user-a', { transferProofId: prepared.id, outcome: 'better', observedResult: 'Research improved.', evidenceRefs: [] });
+    expect(evaluation.outcome).toBe('insufficient_evidence');
 
     const items = await timeline.listAbilityAssetTimeline('user-a', target.id);
     expect(items.map((item) => item.kind)).toEqual(['asset_created', 'asset_version']);
@@ -126,5 +136,27 @@ describe('Recall asset proof timeline', () => {
       summary: 'evidence_revoked:memory:mem-review',
     }));
     expect(items.filter((item) => item.kind === 'asset_revoked')).toEqual([]);
+  });
+
+  it('keeps newer and unknown audit actions from breaking the timeline', async () => {
+    const { assets, timeline } = await modules();
+    const asset = await promoteAsset('user-a', 'Keep the source boundary visible.', 'review');
+
+    await assets.setAbilityAssetCrossScopeConfirmation('user-a', asset.id, true, {
+      actor: 'user',
+      reason: 'allow this review scope',
+    });
+    await appendRecallJsonlRecord('user-a', 'ability-asset-audit', asset.id, {
+      schemaVersion: 1,
+      ownerId: 'user-a',
+      id: `${asset.id}-future-action`,
+      assetId: asset.id,
+      action: 'future_governance_action',
+      at: new Date().toISOString(),
+    } as any);
+
+    const items = await timeline.listAbilityAssetTimeline('user-a', asset.id);
+    expect(items.some((item) => item.kind === 'asset_updated')).toBe(true);
+    expect(items.every((item) => item.id && item.kind && item.occurredAt)).toBe(true);
   });
 });

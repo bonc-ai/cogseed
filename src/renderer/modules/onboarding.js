@@ -211,8 +211,16 @@ function _csObShellHtml() {
               <div class="eyebrow">Start with real work</div>
               <h2>开始一次真实工作</h2>
               <p>CogSeed会先检查这台Mac上可用的Agent、最近任务和真实执行方式。此时不会读取任何Session正文。</p>
-              <button class="btn primary first-run-primary" id="first-begin" data-csnext="1"><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg><span>开始一次真实工作</span></button>
-              <button class="btn ghost first-run-secondary" id="first-known-user">我已经使用过CogSeed</button>
+              <div class="first-run-consent">
+                <label class="first-run-consent-check">
+                  <input type="checkbox" id="first-consent" />
+                  <span data-i18n-key="onboarding.legal_consent_prefix">我已阅读并同意</span>
+                </label>
+                <button type="button" class="first-run-legal-link" data-open-external-url="https://cogseed-open.bonc.com.cn/#view=privacy" data-i18n-key="onboarding.legal_privacy">隐私政策</button>
+                <span class="first-run-consent-and" data-i18n-key="onboarding.legal_consent_and">和</span>
+                <button type="button" class="first-run-legal-link" data-open-external-url="https://cogseed-open.bonc.com.cn/#view=terms" data-i18n-key="onboarding.legal_terms">用户协议</button>
+              </div>
+              <button class="btn primary first-run-primary" id="first-begin" data-csnext="1" disabled><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg><span>开始一次真实工作</span></button>
               <div class="first-run-scan" id="first-run-scan">
                 <div class="first-scan-row"><i><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"></path><path d="M20.054 15.987H3.946"></path></svg></i><div><strong>本机Agent</strong><p id="first-agent-copy">正在检查可用状态</p></div><span class="status" id="first-agent-status">检测中</span></div>
                 <div class="first-scan-row"><i><svg class="icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></i><div><strong>最近工作</strong><p id="first-history-copy">尚未读取任何内容</p></div><span class="status" id="first-history-status">未读取</span></div>
@@ -1252,11 +1260,18 @@ function _csRenderTeam(localClis) {
       hints.push('模型走本地代理连接，使用时需保持代理运行；或「连接并存储 API」改为直连');
     }
     const hintHtml = `<small>${_csEsc(hints.join(' · '))}</small>`;
-    const action = `<div class="cs-team-actions">
+    // 只有一个动作可选时不用 <select>（原生单选项下拉体验差，点开看不出变化），
+    // 直接渲染为只读文本 + 执行按钮；有两个选项（可存储 API）才用下拉框。
+    const action = canStoreApi
+      ? `<div class="cs-team-actions">
         <select class="cs-team-action-select" data-app-type="${_csEsc(appType)}">
           <option value="connect-only">只连接</option>
-          ${canStoreApi ? '<option value="connect-store">连接并存储 API</option>' : ''}
+          <option value="connect-store">连接并存储 API</option>
         </select>
+        <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
+      </div>`
+      : `<div class="cs-team-actions">
+        <span class="cs-team-connect-only" data-app-type="${_csEsc(appType)}">只连接</span>
         <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
       </div>`;
 
@@ -2960,11 +2975,45 @@ function _csBuild() {
     b.addEventListener('click', () => _csGoStep(Number(b.dataset.csnext)));
   });
 
-  // 首次引导第一步：「我已经使用过CogSeed」= 跳过本次引导，直接完成并进首页。
-  shell.querySelector('#first-known-user')?.addEventListener('click', () => {
-    _obLog.info('first-run: user chose to skip onboarding');
-    void _csFinish();
+  // 首次引导第一步（“我已经使用过CogSeed”跳过入口已移除：新用户默认未使用过）。
+
+  // 第一步页脚：隐私政策 / 用户协议 → 官网（系统浏览器打开，官网更新即同步）。
+  // 链接文案跟随 App 语言（onboarding 其余文案为产品稿，不做 i18n）。
+  shell.querySelectorAll('.first-run-legal-link').forEach((link) => {
+    const i18nKey = link.dataset.i18nKey;
+    if (i18nKey && typeof t === 'function') {
+      const localized = t(i18nKey);
+      if (localized && localized !== i18nKey) link.textContent = localized;
+    }
+    link.addEventListener('click', () => {
+      const url = link.dataset.openExternalUrl || '';
+      if (!url) return;
+      if (window.cogseed && typeof window.cogseed.invoke === 'function') {
+        window.cogseed.invoke('auth.openExternal', { url }).catch(() => {});
+      } else if (url.startsWith('http')) {
+        window.open(url, '_blank');
+      }
+    });
   });
+
+  // 第一步同意勾选：隐私政策 / 用户协议需勾选后才能进入下一步；
+  // 其余 i18n 文案（「我已阅读并同意」「和」）一并填充（链接文本由上面的
+  // .first-run-legal-link 循环统一处理）。
+  shell.querySelectorAll('.first-run-consent-check [data-i18n-key], .first-run-consent-and').forEach((el) => {
+    const i18nKey = el.dataset.i18nKey;
+    if (!i18nKey || typeof t !== 'function') return;
+    const localized = t(i18nKey);
+    if (localized && localized !== i18nKey) el.textContent = localized;
+  });
+  const consentBox = shell.querySelector('#first-consent');
+  const firstBegin = shell.querySelector('#first-begin');
+  if (consentBox && firstBegin) {
+    const syncConsent = () => {
+      firstBegin.disabled = !consentBox.checked;
+    };
+    consentBox.addEventListener('change', syncConsent);
+    syncConsent();
+  }
 
   shell.querySelector('#cs-team-refresh')?.addEventListener('click', () => _csLoadTeam(true));
   shell.querySelector('#cs-agent-refresh')?.addEventListener('click', () => _csLoadAgents(true));

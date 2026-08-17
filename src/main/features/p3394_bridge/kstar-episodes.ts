@@ -6,10 +6,13 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createLogger } from '../../logger';
+import { createLogger, redact } from '../../logger';
 import { p3394StateFile, variantRoot } from './runtime-paths';
 
 const log = createLogger('p3394-bridge:kstar-episodes');
+
+/** Episode 可追溯性关联 id：脱敏后从原值恢复（与审计 journal 同一原则）。 */
+const EPISODE_CORRELATION_KEYS = new Set(['session_id', 'task_id', 'agent_id']);
 
 export const P3394_KSTAR_EPISODE_SCHEMA_VERSION = 1 as const;
 
@@ -74,8 +77,18 @@ export function recordP3394Episode(
     created_at: episode.created_at ?? now,
     completed_at: now,
   };
+  // M-06/S-04：episode 落盘前统一 canonical 脱敏（secret 键掩码 + 位置化
+  // secret 扫描），防止 actions[].error / result 带出原始 token；关联 id
+  // 保持可追溯。
+  const sanitized = redact(record) as P3394KstarEpisode;
+  for (const key of EPISODE_CORRELATION_KEYS) {
+    const original = record[key as keyof P3394KstarEpisode];
+    if (typeof original === 'string') {
+      (sanitized as unknown as Record<string, unknown>)[key] = original;
+    }
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(record, null, 2));
+  fs.writeFileSync(file, JSON.stringify(sanitized, null, 2));
   log.info('P3394 KSTAR episode recorded', { file, status: episode.status });
   return file;
 }

@@ -17,7 +17,7 @@
     "Submission requires explicit user confirmation and human approval remains in Feishu."
   ],
   "category": "office",
-  "icon": "target",
+  "icon": "calculator",
   "color": "gold",
   "runtime": {
     "kind": "in_process"
@@ -28,5 +28,5 @@
   "output_format": "markdown",
   "skill_list": [],
   "created_at": "2026-08-01T00:00:00",
-  "updated_at": "2026-08-02T00:00:00"
+  "updated_at": "2026-08-17T00:00:00"
 }

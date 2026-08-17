@@ -16,6 +16,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as net from 'node:net';
 import type { LocalCliType } from './registry.js';
 import { createLogger } from '../../logger.js';
 
@@ -275,4 +276,66 @@ export function readCliModelEndpoint(
   if (!baseUrl && !configAvailable) return null;
   const isLocalProxy = /(?:127\.0\.0\.1|localhost|0\.0\.0\.0|::1)/i.test(baseUrl);
   return { baseUrl, isLocalProxy, configAvailable, authMode };
+}
+
+/** Parse `http(s)://host:port/...` into { host, port } for TCP probing.
+ *  Returns null for non-URL / non-http(s) values (treat as not probeable). */
+function _parseHttpEndpoint(baseUrl: string): { host: string; port: number } | null {
+  if (!baseUrl) return null;
+  let u: URL;
+  try { u = new URL(baseUrl); } catch { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  const port = u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80);
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) return null;
+  return { host: u.hostname, port };
+}
+
+/** TCP-reachability probe for a CLI's configured model endpoint.
+ *  Returns:
+ *    - `true`  — TCP connect succeeded (a listener answered on host:port).
+ *    - `false` — connect failed (ECONNREFUSED / timeout / DNS) → the endpoint
+ *                (typically a local proxy like CC Switch) is NOT running.
+ *    - `null`  — endpoint unreadable or not http(s) → unknown, don't judge.
+ *  Short timeout so a dead listener surfaces fast without stalling fallback. */
+export function probeModelEndpointReachable(
+  cli: LocalCliType,
+  home = os.homedir(),
+  timeoutMs = 800,
+): Promise<boolean | null> {
+  const ep = readCliModelEndpoint(cli, home);
+  if (!ep || !ep.baseUrl) return Promise.resolve(null);
+  const parsed = _parseHttpEndpoint(ep.baseUrl);
+  if (!parsed) return Promise.resolve(null);
+  // Only probe local endpoints. A remote endpoint may be up but slow / rate
+  // limited; we never want to label the user's CLI "unusable" off a remote
+  // connect failure. Local proxies are the case that matters (CC Switch etc.)
+  // and a refused local port is a definitive "not running".
+  if (!/^(?:127\.0\.0\.1|localhost|0\.0\.0\.0|::1)$/i.test(parsed.host)) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const done = (ok: boolean | null) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.connect({ host: parsed.host, port: parsed.port });
+  });
+}
+
+/** Same probe over all supported CLIs, keyed by cli type. */
+export async function probeAllModelEndpointsReachable(
+  clis: readonly LocalCliType[],
+  home = os.homedir(),
+): Promise<Record<string, boolean | null>> {
+  const out: Record<string, boolean | null> = {};
+  for (const cli of clis) {
+    out[cli] = await probeModelEndpointReachable(cli, home);
+  }
+  return out;
 }

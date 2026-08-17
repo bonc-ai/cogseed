@@ -19,6 +19,7 @@
 
 import type { CognitionSourceRef } from './source-service';
 import type { RecallAbilityAssetRecord } from './candidate-service';
+import { abilityAssetReferenceMatches, parseAbilityAssetReference } from './asset-reference';
 
 /** 用户层的五段命名。刻意不叫 pack / receipt——那是实现名，
  *  用户看到的是「进入了哪些智能体」「实际用过几次」。 */
@@ -78,11 +79,6 @@ function segment(
   };
 }
 
-/** 回执里的资产引用形如 `asset:<id>@v<version>`，可能带 `:reason` 后缀。 */
-function refMentionsAsset(ref: string, assetId: string): boolean {
-  return ref === `asset:${assetId}` || ref.startsWith(`asset:${assetId}@`);
-}
-
 /** 状态在履历里怎么说。用用户能懂的词，且不把 deleted/purged 说成「撤销」——
  *  撤销是用户否定了这条判断，删除是把它拿走，两件事。 */
 const STATUS_LABEL: Record<RecallAbilityAssetRecord['status'], string> = {
@@ -133,19 +129,21 @@ export async function traceCognitionChainByAsset(
   // rejected 的那次是「本来要带、最后被拒了」，算进「实际带入」会虚报。
   // prepared 算——它表示这一轮确实把认知带进去了；用得好不好是 proof 的事，不是这里。
   const uses = allReceipts.filter((r) => (
-    r.status !== 'rejected' && r.reusedRefs.some((ref) => refMentionsAsset(ref, assetId))
+    r.boundary === 'real'
+    && r.status !== 'rejected'
+    && r.reusedRefs.some((ref) => abilityAssetReferenceMatches(ref, { assetId }))
   ));
   const withheld: ChainWithheldEntry[] = [];
   for (const receipt of allReceipts) {
     for (const ref of receipt.omittedRefs) {
-      if (!refMentionsAsset(ref, assetId)) continue;
+      if (!abilityAssetReferenceMatches(ref, { assetId })) continue;
       // 引用形如 `asset:<id>@v<n>:<reason>`——前两段是固定的 `asset` 与 `<id>@v<n>`，
       // 之后的全部才是原因（原因本身允许含冒号）。
       //
       // 早先这里写的是 `slice(3) || pop()`：这个格式 split 出来只有三段，slice(3)
       // 恒为空，一直靠 pop() 兜底才碰巧对。而 pop() 在「没带原因」的引用上会把
       // `<id>@v<n>` 当成原因返回——用户会看到一句 aa-xxxx@v1 冒充的解释。
-      const reason = ref.split(':').slice(2).join(':') || 'unknown';
+      const reason = parseAbilityAssetReference(ref)?.reason || 'unknown';
       withheld.push({ reason, at: receipt.createdAt });
     }
   }

@@ -524,22 +524,34 @@ export async function purgeByCid(userId: string, cid: string): Promise<number> {
     chatArtifactCidDirForConversation(userId, safeConvId), // 全局根
   ]);
   let count = 0;
+  const deletedArtifactIds = new Set<string>();
   const deleted: Array<{ artifactId: string; rel: string }> = [];
   for (const dir of dirs) {
     try {
       if (fs.existsSync(dir)) {
+        const dirDeletedArtifactIds = new Set<string>();
+        const dirDeleted: Array<{ artifactId: string; rel: string }> = [];
+        let dirCount = 0;
         try {
           const artifactIds = fs.readdirSync(dir).filter((n) => !n.startsWith('.'));
-          count += artifactIds.length;
+          dirCount = artifactIds.length;
           for (const artifactId of artifactIds) {
+            if (/^[A-Za-z0-9_-]{1,64}$/.test(artifactId)) dirDeletedArtifactIds.add(artifactId);
             const artifactRoot = path.join(dir, artifactId);
-            for (const rel of listArtifactFilesRel(artifactRoot)) deleted.push({ artifactId, rel });
+            for (const rel of listArtifactFilesRel(artifactRoot)) dirDeleted.push({ artifactId, rel });
           }
         }
         catch { /* ignore */ }
         fs.rmSync(dir, { recursive: true, force: true });
+        count += dirCount;
+        for (const artifactId of dirDeletedArtifactIds) deletedArtifactIds.add(artifactId);
+        deleted.push(...dirDeleted);
       }
     } catch (err) { log.warn(`purgeByCid(${cid}): ${(err as Error).message}`); }
+  }
+  if (deletedArtifactIds.size) {
+    const { recordRemovedArtifacts } = await import('./recall/source-removal');
+    await recordRemovedArtifacts(userId, safeConvId, [...deletedArtifactIds]);
   }
   for (const item of deleted) notifyArtifactDeleted(userId, safeConvId, item.artifactId, item.rel);
   return count;

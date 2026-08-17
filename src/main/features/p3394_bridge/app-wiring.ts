@@ -30,6 +30,9 @@ import { P3394OutboundHub } from './outbound-hub';
 import { P3394PeerRegistry, type P3394Locality, type P3394NodeKind } from './registry';
 import { recordP3394Episode } from './kstar-episodes';
 import { projectP3394NodeToTeam } from './team-projection';
+import { buildP3394WiringDoctorInput, runP3394BridgeDoctor, type P3394DoctorReport } from './doctor';
+import { loadP3394EventCursors, persistP3394EventCursors, recordP3394EventCursor } from './event-cursor-store';
+import { P3394RecoveryController } from './recovery-controller';
 import * as groupChatBus from '../group_chat/bus';
 
 const log = createLogger('p3394-bridge:app-wiring');
@@ -37,12 +40,26 @@ const log = createLogger('p3394-bridge:app-wiring');
 /** Default loopback port when COGSEED_P3394_PORT is not set. */
 export const P3394_DEFAULT_PORT = 8444;
 
+/**
+ * 启动门（SDK §5.4）：桥承诺的语义必须被所选 channel 完整承载，
+ * 必需能力缺失 → 拒绝启动（fail-loud，绝不静默降级）。
+ */
+export const P3394_REQUIRED_CHANNEL_CAPABILITIES = {
+  cancellation: true,
+  durable_tasks: true,
+  multi_party_sessions: true,
+  identity_proofs: ['bearer-token'],
+};
+
 export interface P3394AppBridgeHandle {
   endpoint: string;
   port: number;
   token: string;
   channel: P3394HttpChannel;
   registry: P3394PeerRegistry;
+  /** 出站会话绑定：conversation 模式下把 session 绑定到发起对话，对端
+   *  回复路由回同一对话（不新建 [P3394] peer 独立对话）。 */
+  bindSessionCid?: (sessionId: string, cid: string) => void;
   close: () => Promise<void>;
 }
 
@@ -149,10 +166,19 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
   const channel = new P3394HttpChannel('cogseed-app', {
     listen: { host: listenHost, port },
     authToken: token,
+    // C-04：认证失败进入内核审计（可追溯；入站速率限制兜底审计量）。
+    audit: (record) => {
+      bridge.audit.append({ ...record, actor_id: 'http-listener' });
+    },
   });
   channel.setLocalManifest(manifestOf('cogseed'));
 
   outboundHub = new P3394OutboundHub({ listPeers: () => bridge.registry.list() });
+
+  // 事件游标（R-06/S-05）：记录最后确认写入 resultFile 的事件序列，
+  // 断线恢复按游标续读，不重放已确认事件。
+  const eventCursors = loadP3394EventCursors();
+  let cursorEventsSincePersist = 0;
 
   const executor = new P3394BridgeExecutor({
     bridge,
@@ -184,8 +210,34 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
     onEvent: (sessionId, event) => {
       const line = JSON.stringify({ at: new Date().toISOString(), session_id: sessionId, event });
       fs.appendFileSync(resultFile, line + '\n');
+      recordP3394EventCursor(eventCursors, event.task_id, event.sequence);
+      cursorEventsSincePersist += 1;
+      if (
+        event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled'
+        || cursorEventsSincePersist >= 10
+      ) {
+        persistP3394EventCursors(eventCursors);
+        cursorEventsSincePersist = 0;
+      }
     },
   });
+
+  // 自动恢复（C-03/R-06/S-05）：transport 失败 → recoverable → 定时 sweep
+  // 按持久化游标 resumeForward 续读；尝试受控制器 maxAttempts 封顶。
+  const recoveryController = new P3394RecoveryController(executor, {
+    cursorFor: (taskId) => eventCursors.get(taskId) ?? 0,
+    onAttempt: (taskId, ok, error) => {
+      log.info('P3394 recovery attempt', { task_id: taskId, ok, ...(error ? { error } : {}) });
+    },
+  });
+  const recoveryTimer = setInterval(() => {
+    void recoveryController.sweep().then((result) => {
+      if (result.recovered.length > 0 || result.pending.length > 0) {
+        log.info('P3394 recovery sweep', result);
+      }
+    });
+  }, 30_000);
+  if (typeof recoveryTimer.unref === 'function') recoveryTimer.unref();
   channel.subscribe((envelope) => {
     // 自举接入：本机已通过 Bearer 认证但尚未注册的 sender，自报身份即注册
     // （minimal manifest）。这样任何本机智能体/自研 Agent 无需预配置即可入网。
@@ -286,17 +338,22 @@ function buildBridge(port: number, token: string, conversation: boolean): P3394A
     token,
     channel,
     registry: bridge.registry,
-    close: async () => { await channel.close(); },
+    // conversation 模式下出站会话绑定（对端回复回当前对话）。
+    ...(adapter instanceof P3394ConversationRuntimeAdapter
+      ? {
+          bindSessionCid: (sessionId: string, cid: string) => {
+            (adapter as P3394ConversationRuntimeAdapter).bindSession(sessionId, cid);
+          },
+        }
+      : {}),
+    close: async () => {
+      clearInterval(recoveryTimer);
+      await channel.close();
+    },
   };
   // 启动门（SDK §5.4）：桥承诺的语义必须被所选 channel 完整承载，
   // 必需能力缺失 → 拒绝启动（fail-loud，绝不静默降级）。
-  const requiredChannelCapabilities = {
-    cancellation: true,
-    durable_tasks: true,
-    multi_party_sessions: true,
-    identity_proofs: ['bearer-token'],
-  };
-  const missingCapabilities = missingP3394ChannelCapabilities(channel.descriptor, requiredChannelCapabilities);
+  const missingCapabilities = missingP3394ChannelCapabilities(channel.descriptor, P3394_REQUIRED_CHANNEL_CAPABILITIES);
   if (missingCapabilities.length > 0) {
     log.error('P3394 bridge refused to start: channel cannot carry required semantics', {
       missing: missingCapabilities,
@@ -350,6 +407,52 @@ export function maybeStartP3394Bridge(): P3394AppBridgeHandle | null {
 export function getP3394BridgeInfo(): { endpoint: string; token: string } | null {
   if (!activeHandle) return null;
   return { endpoint: activeHandle.endpoint, token: activeHandle.token };
+}
+
+/** 当前桥 handle（出站会话绑定等）。桥未启动返回 null。 */
+export function getP3394BridgeHandle(): P3394AppBridgeHandle | null {
+  return activeHandle;
+}
+
+/**
+ * V-01：把真实 wiring/listener 状态自动注入 Doctor。桥未启动时只返回
+ * 全 warn 报告（不虚报绑定）；启动后逐项反映：
+ *
+ * - manifest：本节点 CogSeed Manifest；
+ * - registry / agent-home：本地状态文件与数据根是否存在；
+ * - runtime-adapter / replay / idempotency / audit / policy：内核默认装配，
+ *   入站 extensions.epoch 已接入 replay protector；
+ * - channel-adapter / channel-capabilities：按 live descriptor 复核启动门；
+ * - resource-limits：HTTP body 上限 + 统一入站速率已接入；
+ * - auto-reply：按 COGSEED_P3394_AUTO_REPLY。
+ */
+export function runP3394WiringDoctor(): P3394DoctorReport {
+  if (!activeHandle) return runP3394BridgeDoctor({});
+  const manifestOf = (id: string) => {
+    const result = buildP3394BridgeManifest({
+      agent_id: id, name: id, description_zh: '', description_en: '', workflow: '', category: 'general',
+    } as never);
+    return result.ok ? result.manifest : undefined;
+  };
+  const missingCapabilities = missingP3394ChannelCapabilities(
+    activeHandle.channel.descriptor,
+    P3394_REQUIRED_CHANNEL_CAPABILITIES,
+  );
+  return runP3394BridgeDoctor(buildP3394WiringDoctorInput({
+    manifest: manifestOf('cogseed'),
+    agentHomeExists: fs.existsSync(variantRoot()),
+    registryPersisted: fs.existsSync(p3394StateFile('p3394-peers.json')),
+    runtimeAdapterBound: true,
+    replayProtectionBound: true,
+    idempotencyBound: true,
+    auditJournalBound: true,
+    policyBound: true,
+    channelAdapterBound: true,
+    objectStorePresent: true,
+    channelCapabilitiesMissing: missingCapabilities,
+    resourceLimitsMissing: [],
+    autoReplyEnabled: process.env.COGSEED_P3394_AUTO_REPLY !== '0',
+  }));
 }
 
 /** Resolve a p3394_send peer argument: agent id / alias first, then a

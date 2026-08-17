@@ -45,6 +45,7 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
     | 'maturity_downgraded' | 'pause_recommended' | 'rework_recommended'
     | 'recommendation_cleared'
     | 'cross_scope_confirmed' | 'cross_scope_withdrawn'
+    | 'maturity_advanced'
     // 修正归档错误，**不是**靠证据挣来的升档。审计里要分得开，否则日后
     // 回看会以为这条资产做过 transfer proof。
     | 'maturity_corrected';
@@ -465,12 +466,13 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
 export async function mergeAbilityAssetEvidence(
   userId: string,
   assetId: string,
-  newRefs: RecallAbilityAssetRecord['evidenceRefs'],
+  newRefs: Array<Pick<CognitionSourceRef, 'kind' | 'id'> | CognitionSourceRef>,
+
   metadata: { reason: string; actor: AbilityAssetActor },
 ): Promise<RecallAbilityAssetRecord> {
   const current = await readAbilityAsset(userId, assetId);
   if (!current) throw new Error('recall ability asset not found');
-  const merged = mergeRefsDedup(current.evidenceRefs || [], newRefs);
+  const merged = mergeRefsDedup(current.evidenceRefs || [], normalizeCognitionSourceRefs(newRefs));
   const changed = merged.length !== (current.evidenceRefs || []).length
     || merged.some((ref, i) => JSON.stringify(ref) !== JSON.stringify((current.evidenceRefs || [])[i]));
   if (!changed) return current;
@@ -491,17 +493,19 @@ export async function mergeAbilityAssetEvidence(
 
 function mergeRefsDedup(
   left: RecallAbilityAssetRecord['evidenceRefs'],
-  right: RecallAbilityAssetRecord['evidenceRefs'],
+  right: CognitionSourceRef[],
+
 ): RecallAbilityAssetRecord['evidenceRefs'] {
   const seen = new Set<string>();
-  const out: RecallAbilityAssetRecord['evidenceRefs'] = [];
+  // 入参可能携带宽松引用（仅 kind/id）；按现有语义去重并原样写回。
+  const out: Array<RecallAbilityAssetRecord['evidenceRefs'][number] | { kind: string; id: string }> = [];
   for (const ref of [...left, ...right]) {
     const key = `${ref.kind}:${ref.id}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(ref);
   }
-  return out;
+  return out as RecallAbilityAssetRecord['evidenceRefs'];
 }
 
 const STATUS_AUDIT_ACTION: Record<RecallAbilityAssetRecord['status'], AbilityAssetAuditRecord['action']> = {
@@ -907,12 +911,34 @@ export async function listAbilityAssetAudit(userId: string, assetId: string): Pr
 }
 
 export async function setAbilityAssetMaturity(userId: string, assetId: string, maturity: RecallAbilityAssetRecord['maturity']): Promise<RecallAbilityAssetRecord> {
+  if (!ABILITY_ASSET_MATURITIES.has(maturity)) {
+    throw new Error('invalid ability asset maturity');
+  }
+  const rank: Record<RecallAbilityAssetRecord['maturity'], number> = {
+    seed: 0,
+    bud: 1,
+    transfer_validated: 2,
+    effectiveness_validated: 3,
+  };
+  let previous: RecallAbilityAssetRecord['maturity'] | undefined;
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
+    if (rank[maturity] < rank[current.maturity]) {
+      throw new Error('ability asset maturity cannot move backwards');
+    }
+    if (maturity === current.maturity) return current;
+    previous = current.maturity;
     return { ...current, maturity, updatedAt: new Date().toISOString() };
   });
-  return asAsset(updated);
+  const asset = asAsset(updated);
+  if (previous) {
+    await appendAudit(userId, asset.id, 'maturity_advanced', {
+      note: `${previous}->${asset.maturity}`,
+      actor: 'system',
+    });
+  }
+  return asset;
 }
 
 /**

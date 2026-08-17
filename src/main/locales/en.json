@@ -19,6 +19,7 @@
   "chat.reply_interrupted": "The previous response was interrupted when the app exited. Durable progress was kept; send a message to continue.",
   "chat.turn_limit_reached": "Reached the automatic step limit for this run and stopped. Send your message again to continue.",
   "cli_agent.missing": "⚠️ Agent “{name}” needs the local CLI “{cli}” which isn’t installed. Install it and retry, or switch the agent to another type.",
+  "cli_agent.local_proxy_unreachable": "“{name}” cannot run: {cli} is configured to route through a local proxy ({url}), but that proxy is not currently running. Start the proxy tool (e.g. CC Switch), or switch {cli} back to a direct endpoint / signed-in account in its own config, then try again.",
   "cli_agent.not_found": "⚠️ Agent “{name}” cannot run: local CLI “{cli}” was not found. Install it or configure its path, then try again.",
   "cli_agent.run_failed_detail": "“{name}” stopped before completing the task. Confirm that its CLI is signed in and working, then try again.",
   "cli_agent.session_expired_detail": "The external session for “{name}” expired. Try again to start a new session.",

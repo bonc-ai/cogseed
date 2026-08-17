@@ -84,6 +84,8 @@ export interface KstarRequirementRecord extends KstarJsonRecord {
   schemaVersion: 1;
   taskId: string;
   conversationId: string;
+  /** 工作空间归属（空间会话即空间 id）；store 层校验并落盘（requirement-store:161/288）。 */
+  workspaceId?: string;
   userMessageIds: string[];
   episodeIds: string[];
   status: KstarRequirementStatus;

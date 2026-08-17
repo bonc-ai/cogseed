@@ -464,8 +464,12 @@ export function assessRecallCandidateClassification(
   }
 
   if (candidate.suggestedType === 'rule') {
-    // PRD 3.1 要求 RuleAsset 确认适用与禁止范围。自动线目前拿不到这两个值，
-    // 如何处置由 Q1 决定，这里先如实记录，不阻断（避免在决策前改变产能）。
+    // PRD 3.1 要求 RuleAsset 确认适用与禁止范围。自动线（capture 模型常只给
+    // 一边、KStar 聚合只声明有证据支撑的适用边界）拿不到双向边界是常态——
+    // 适用或禁止任一存在即算有边界，缺的一边由用户复核时补（Q1 决策）。
+    // 注意：收紧为「两者都必须存在」（&&）会让 KStar 沉淀的 rule（只带
+    // applicableWhen）全部被系统线阻断——实机 26 个 rule 资产均为单边界，
+    // 证明单边界是既有设计，不是疏漏。
     const hasBoundary = (boundaries.applicableWhen?.length || 0) > 0
       || (boundaries.forbiddenWhen?.length || 0) > 0;
     if (!hasBoundary) pushUnique(advisoryReasons, 'rule_missing_boundary');

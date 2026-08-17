@@ -6,6 +6,35 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   return rows;
 }
 
+const chatsMock = vi.hoisted(() => ({
+  getConversation: vi.fn(async () => null),
+}));
+const convWsMock = vi.hoisted(() => ({
+  getConversationWorkspacePath: vi.fn(async () => '/tmp/space-ws/slug'),
+}));
+const agentsMock = vi.hoisted(() => ({
+  getAgentCliProjectDirInfo: vi.fn(async () => null),
+}));
+const userWsMock = vi.hoisted(() => ({
+  getWorkspacePath: vi.fn(() => '/tmp/root-ws'),
+}));
+vi.mock('../../../../src/main/features/chats', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/features/chats')>()),
+  getConversation: chatsMock.getConversation,
+}));
+vi.mock('../../../../src/main/features/group_chat/conv_workspace', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/features/group_chat/conv_workspace')>()),
+  getConversationWorkspacePath: convWsMock.getConversationWorkspacePath,
+}));
+vi.mock('../../../../src/main/features/agents', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/features/agents')>()),
+  getAgentCliProjectDirInfo: agentsMock.getAgentCliProjectDirInfo,
+}));
+vi.mock('../../../../src/main/features/user_workspace', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/features/user_workspace')>()),
+  getWorkspacePath: userWsMock.getWorkspacePath,
+}));
+
 describe('CogSeed Backend local CLI execution adapter', () => {
   it('maps runner events into Runtime envelopes and persists the external CLI session', async () => {
     const setSessionId = vi.fn(async () => {});
@@ -101,5 +130,88 @@ describe('CogSeed Backend local CLI execution adapter', () => {
     expect(prompts[0]).toContain('Only this continuation.');
     expect(clearSession).toHaveBeenCalled();
     expect(events.at(-1)).toMatchObject({ type: 'result', status: 'completed', text: 'fresh continuation' });
+  });
+
+  it('defaults a space conversation working dir into the space workspace dir (spaces/<sid>/workspace/<slug>)', async () => {
+    chatsMock.getConversation.mockResolvedValue({
+      conversation_id: 'cid-space',
+      space_id: 'sp_space_1',
+      project_id: undefined,
+    } as any);
+    const runCli = vi.fn(async (input: any) => {
+      input.onEvent({ type: 'done', status: 'completed', output: 'ok', sessionId: 'cli-session-space' });
+      return { runId: 'run-space', status: 'completed', output: 'ok', sessionId: 'cli-session-space' };
+    });
+    const { createMateLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createMateLocalCliExecutionAdapter({
+      runCli,
+      getSessionId: vi.fn(async () => null),
+      setSessionId: vi.fn(async () => {}),
+      clearSession: vi.fn(async () => {}),
+    } as any);
+
+    await collect(adapter.run({
+      userId: 'cli-adapter-user',
+      conversationId: 'cid-space',
+      agentId: 'agent-cli-adapter',
+      agentName: 'CLI Agent',
+      requestId: 'req-cli-space',
+      taskId: 'mate-task-cli-space',
+      sessionId: 'mate-session-cli-space',
+      runtimeSessionId: 'mruntime-cli-space',
+      task: 'Space task.',
+      context: [],
+      localCli: { cli: 'claude' },
+    }, { signal: new AbortController().signal }));
+
+    expect(convWsMock.getConversationWorkspacePath).toHaveBeenCalledWith('cli-adapter-user', 'cid-space');
+    expect(runCli).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/tmp/space-ws/slug' }));
+  });
+
+  it('keeps an explicit agent custom project dir ahead of the space workspace dir', async () => {
+    convWsMock.getConversationWorkspacePath.mockClear();
+    chatsMock.getConversation.mockResolvedValue({
+      conversation_id: 'cid-space-custom',
+      space_id: 'sp_space_1',
+      project_id: undefined,
+    } as any);
+    agentsMock.getAgentCliProjectDirInfo.mockResolvedValue({
+      agent_id: 'agent-cli-adapter',
+      is_coding: true,
+      mode: 'custom',
+      path: '/tmp/custom-repo',
+      effective_path: '/tmp/custom-repo',
+      workspace_path: '/tmp/root-ws',
+      custom_path: '/tmp/custom-repo',
+      exists: true,
+    } as any);
+    const runCli = vi.fn(async (input: any) => {
+      input.onEvent({ type: 'done', status: 'completed', output: 'ok', sessionId: 'cli-session-custom' });
+      return { runId: 'run-custom', status: 'completed', output: 'ok', sessionId: 'cli-session-custom' };
+    });
+    const { createMateLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createMateLocalCliExecutionAdapter({
+      runCli,
+      getSessionId: vi.fn(async () => null),
+      setSessionId: vi.fn(async () => {}),
+      clearSession: vi.fn(async () => {}),
+    } as any);
+
+    await collect(adapter.run({
+      userId: 'cli-adapter-user',
+      conversationId: 'cid-space-custom',
+      agentId: 'agent-cli-adapter',
+      agentName: 'CLI Agent',
+      requestId: 'req-cli-custom',
+      taskId: 'mate-task-cli-custom',
+      sessionId: 'mate-session-cli-custom',
+      runtimeSessionId: 'mruntime-cli-custom',
+      task: 'Custom dir task.',
+      context: [],
+      localCli: { cli: 'claude' },
+    }, { signal: new AbortController().signal }));
+
+    expect(convWsMock.getConversationWorkspacePath).not.toHaveBeenCalled();
+    expect(runCli).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/tmp/custom-repo' }));
   });
 });

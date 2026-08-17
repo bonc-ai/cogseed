@@ -228,7 +228,8 @@ body.sidebar-collapsed .sidebar-logo {
   justify-content: center;
 }
 body.sidebar-collapsed .logo-text,
-body.sidebar-collapsed #sidebar-search-btn { display: none; }
+body.sidebar-collapsed #sidebar-search-btn,
+body.sidebar-collapsed .logo-icon { display: none; }
 /* hydrateUiIcons 会给 [data-ui-icon] 强制 inline style display:inline-flex，
    会覆盖 hidden 属性——因此展开图标默认显式隐藏（!important 压过 inline style）。 */
 .sb-expand-ico { display: none !important; }
@@ -5068,6 +5069,23 @@ body.model-not-configured .main-content { flex-direction: column; }
   transform: translateY(-2px);
 }
 
+/* 松鼠趴卧（复刻官网登录页 .auth-squirrel）——首页与会话输入框共用：
+   底边压住输入框上沿 17px（参考值 24px 上移 10px 后下移 1px、再下移 2px；
+   数值越大越贴近输入框）、右缘探出 10px（较参考值 14px 左移 4px）、身体
+   悬在输入框上方；pointer-events:none 不挡输入/滚动。宽度为参考值 148px
+   的 2/3。 */
+.chat-input-squirrel {
+  position: absolute;
+  right: -10px;
+  bottom: calc(100% - 17px);
+  z-index: 2;
+  width: 99px; /* 148 * 2/3 ≈ 98.7 → 99 */
+  height: auto;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 5px 10px rgba(20, 40, 30, 0.16));
+}
+
 .new-chat-input-area textarea {
   flex: 0 1 auto;
   width: 100%;
@@ -5510,6 +5528,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   overflow: auto;
   display: flex;
   flex-direction: column;
+  padding: 12px 14px 16px;
 }
 .conversation-info-empty {
   flex: 1;
@@ -5934,14 +5953,12 @@ body.model-not-configured .main-content { flex-direction: column; }
   color: var(--primary);
 }
 
-/* 接续准备依据（导入会话欢迎「查看依据」→ 右栏 carried 顶部）。 */
+/* 接续准备依据（导入会话欢迎「查看依据」→ 右栏 carried 顶部）。
+   无边框无背景：与「本次携带」内容平齐，去掉大边框与深绿竖线。 */
 .conversation-info-resume {
   display: grid;
   gap: 10px;
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
-  border-radius: 10px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 5%, var(--surface-1, #fff)), var(--surface-1, #fff));
+  padding: 0;
 }
 .conversation-info-resume-restatement {
   font-size: 12.5px;
@@ -6079,18 +6096,15 @@ body.model-not-configured .main-content { flex-direction: column; }
   color: var(--primary-text);
 }
 
-/* 接续准备 · 复述引用块 */
+/* 接续准备 · 复述引用块（无边框无背景，与「本次携带」平齐） */
 .conversation-info-resume-restatement {
-  border-left: 3px solid var(--primary);
-  background: color-mix(in srgb, var(--primary) 6%, var(--surface-1, #fff));
-  border-radius: 6px;
-  padding: 9px 11px;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 12.5px;
+  line-height: 1.65;
   color: var(--text);
 }
 
-/* 携带明细：每类一个小卡片（图标 + 名称 + 计数徽章 + 明细列表） */
+/* 携带明细：每个小部分保留轻卡片边框（关于我 / 我的能力 / 接续快照），
+   去掉外面的大边框。 */
 .conversation-info-resume-carry { display: grid; gap: 8px; }
 .conversation-info-resume-carry-row {
   border: 1px solid var(--border);
@@ -6133,11 +6147,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .conversation-info-resume-carry-items {
   margin: 0;
-  padding: 6px 0 0;
+  padding: 4px 0 0;
   list-style: none;
   display: grid;
   gap: 3px;
-  border-top: 1px dashed var(--border);
 }
 .conversation-info-resume-carry-items li {
   display: flex;
@@ -6160,8 +6173,6 @@ body.model-not-configured .main-content { flex-direction: column; }
 .conversation-info-resume-boundary {
   font-size: 11px;
   color: var(--text-muted);
-  border-top: 1px dashed var(--border);
-  padding-top: 8px;
 }
 
 /* 本次运行：执行卡片（Codex 风格头像 + 状态徽章 + 元信息行） */
@@ -16983,6 +16994,15 @@ body.model-not-configured .main-content { flex-direction: column; }
   display: block;
   pointer-events: none;
 }
+/* 字母头像（外接 CLI agent：名称前两字母）。.avatar-circle 的 line-height:0
+   会裁掉文字，这里恢复为 1 让字母正常显示并垂直居中。 */
+.avatar-circle .avatar-letter {
+  display: block;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  user-select: none;
+}
 /* 头像用原图(品牌 logo 等)：完整显示不裁剪(原图自带透明留白) */
 .avatar-circle .avatar-img {
   display: block;
@@ -24209,12 +24229,15 @@ body.model-not-configured .main-content { flex-direction: column; }
 .cw-done-hint svg{width:16px;height:16px;flex-shrink:0;margin-top:1px;color:#9A6B00}
 .cw-done-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
 .cw-done-row{
-  display:flex;align-items:center;gap:12px;padding:12px 14px;
+  display:flex;align-items:center;gap:12px;padding:12px 14px;flex-wrap:wrap;
   border:1px solid var(--border,rgba(24,84,60,.09));
   border-radius:var(--radius-sm,10px);background:var(--surface,#fff);
 }
 .cw-done-row.is-degraded{background:#FBF3E0;border-color:#E3C56B}
 .cw-done-row .cw-done-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cw-done-reason{
+  width:100%;font-size:11px;color:#9A6B00;line-height:1.5;
+}
 .cw-done-tag{
   flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:0.04em;
   color:#9A6B00;background:#F3E2B0;border-radius:999px;padding:3px 9px;

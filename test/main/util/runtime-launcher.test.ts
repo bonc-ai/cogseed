@@ -28,7 +28,12 @@ describe('source runtime launchers', () => {
     expect(windows).not.toContain('Usage: run.cmd [--variant');
     expect(packageMeta.orkasSourceRuntimeVariant).toBe('cogseed');
     expect(restart).toContain('DATA_LOGS="$HOME/.cogseed/runtime-variants/${VARIANT}/data/logs"');
+    expect(restart).toContain('ELECTRON_APP="$APP_DIR/node_modules/electron/dist/CogSeed.app/Contents/MacOS/Electron"');
     expect(restart).toContain('worktree_pids()');
+    expect(restart).toContain('*"$APP_DIR/node_modules/.bin/electron ."');
+    expect(restart).toContain('*"$APP_DIR/node_modules/.bin/electron . --orkas-runtime-variant=${VARIANT}"*');
+    expect(restart).toContain('|"$ELECTRON_APP"|"$ELECTRON_APP ."|');
+    expect(restart).toContain('"$ELECTRON_APP $APP_DIR --orkas-runtime-variant=${VARIANT}"*');
     expect(restart).toContain('if [ -n "$(worktree_pids)" ]; then');
     expect(restart).toContain('if [ -z "$(worktree_pids)" ]; then');
     expect(legacyRestart).toContain('exec "$APP_DIR/scripts/restart-cogseed.sh" "$@"');

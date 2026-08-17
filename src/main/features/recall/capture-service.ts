@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -62,13 +62,13 @@ import {
   type RecallCaptureFilterReason,
   type RecallCaptureValueSignal,
 } from './capture-value-screening';
+import { isRecallAssistantMessage, isRecallConversationMessage } from './conversation-message-policy';
 
 const log = createLogger('recall.capture');
 const CAPTURE_COLLECTION = 'captures';
 const MAX_CAPTURE_MESSAGES = 32;
 const MAX_CAPTURE_TEXT_CHARS = 22_000;
 const MAX_MODEL_CANDIDATES = 3;
-
 async function prepareSkillDraftForPromotedAsset(
   userId: string,
   promoted: { candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord },
@@ -470,9 +470,13 @@ function captureId(conversationId: string, anchorMessageId: string): string {
   return `rcap-${digest}`;
 }
 
-function manualConversationCaptureId(conversationId: string, finishedMessageId: string): string {
+function manualConversationCaptureId(
+  conversationId: string,
+  finishedMessageId: string,
+  retryNonce = '',
+): string {
   const digest = createHash('sha256')
-    .update(`${conversationId}\0manual-history\0${finishedMessageId}`)
+    .update(`${conversationId}\0manual-history\0${finishedMessageId}\0${retryNonce}`)
     .digest('hex')
     .slice(0, 24);
   return `rcap-${digest}`;
@@ -497,15 +501,6 @@ function nightlyScheduleAfterQuiet(
 function timestampMs(value: string): number {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function isCaptureMessage(message: GroupMessage): boolean {
-  return !message.deleted_at
-    && !message.dispatch
-    && !message.system_kind
-    && !message.failure_kind
-    && typeof message.text === 'string'
-    && Boolean(message.text.trim());
 }
 
 function truncateText(value: string, max: number): string {
@@ -542,7 +537,7 @@ export function selectCaptureMessages(
     : messages;
   const secondAlignedStart = Math.floor(startedAtMs / 1_000) * 1_000;
   const inRun = boundedMessages.filter((message) => {
-    if (!isCaptureMessage(message)) return false;
+    if (!isRecallConversationMessage(message)) return false;
     const at = timestampMs(message.ts);
     if (anchorIndex >= 0) return at <= finishedAtMs;
     return at >= secondAlignedStart && at <= finishedAtMs;
@@ -567,7 +562,7 @@ export function selectCaptureMessages(
       label: `m${index + 1}`,
       id: message.id,
       ts: message.ts,
-      role: message.from === 'user' ? 'user' : 'assistant',
+      role: isRecallAssistantMessage(message) ? 'assistant' : 'user',
       text: truncateText(message.text, cap),
       artifacts: (message.artifacts || []).slice(0, 10).map((artifact) => ({
         id: artifact.id,
@@ -804,7 +799,9 @@ async function extractCaptureViaCli(
     `## Conversation JSON\n${input}`;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  const relayAbort = (): void => controller.abort();
+  signal?.addEventListener('abort', relayAbort, { once: true });
+  if (signal?.aborted) controller.abort();
   try {
     const result = await runCliAgent({
       uid: userId,
@@ -830,15 +827,79 @@ async function extractCaptureViaCli(
     }
     return result.output.trim();
   } finally {
-    clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', relayAbort);
   }
+}
+
+/** Older builds used the historical-selection entry point as an automatic
+ * write path. Once that task was persisted as `queued + autoWrite`, a restart
+ * could silently extract and write it without the user clicking "立即执行".
+ * Convert only an untouched legacy wait; tasks that already have candidates or
+ * are in a write/extract stage remain recoverable on their existing path.
+ */
+function isLegacyHistoricalAutomaticWait(capture: RecallCaptureRecord): boolean {
+  return capture.status === 'queued'
+    && capture.executionPolicy === 'manual'
+    && capture.autoWrite === true
+    && capture.candidateIds.length === 0
+    && capture.writingCandidateId === undefined
+    && capture.stage === undefined
+    && capture.startedAt === undefined;
+}
+
+async function migrateLegacyHistoricalAutomaticWait(
+  userId: string,
+  capture: RecallCaptureRecord,
+): Promise<RecallCaptureRecord> {
+  if (!isLegacyHistoricalAutomaticWait(capture)) return capture;
+  const now = new Date().toISOString();
+  return updateCapture(userId, capture.id, (current) => {
+    if (!isLegacyHistoricalAutomaticWait(current)) return current;
+    return {
+      ...current,
+      status: 'waiting_manual',
+      visibility: 'visible',
+      screeningStatus: 'qualified',
+      screeningSignals: ['manual_selection'],
+      screenedAt: current.screenedAt || now,
+      scheduledFor: undefined,
+      resumeStatus: undefined,
+      autoWrite: undefined,
+      errorCode: undefined,
+      recoveredAt: undefined,
+      updatedAt: now,
+    };
+  });
 }
 
 export async function readRecallCapture(userId: string, id: string): Promise<RecallCaptureRecord> {
   if (!safeId(id)) throw new Error('invalid recall capture id');
   const record = await readRecallJsonRecord(userId, CAPTURE_COLLECTION, id);
   if (!record) throw new Error('recall capture not found');
-  return asCapture(record);
+  let capture = asCapture(record);
+  capture = await migrateLegacyHistoricalAutomaticWait(userId, capture);
+  // Older builds returned an error from runNow before persisting the source
+  // failure, leaving a task in `queued` with a permanent source error. Migrate
+  // that impossible combination on read so it cannot be scheduled or rendered
+  // as if extraction were still pending. The source/candidates are untouched.
+  if (capture.status === 'queued'
+    && (capture.errorCode === 'source_removed' || capture.errorCode === 'source_paused')) {
+    const now = new Date().toISOString();
+    return asCapture(await updateRecallJsonRecord(userId, CAPTURE_COLLECTION, id, (current) => {
+      if (!current) return record;
+      const latest = asCapture(current);
+      if (latest.status !== 'queued'
+        || (latest.errorCode !== 'source_removed' && latest.errorCode !== 'source_paused')) return latest;
+      return {
+        ...latest,
+        status: 'paused',
+        stage: undefined,
+        resumeStatus: 'queued',
+        updatedAt: now,
+      };
+    }));
+  }
+  return capture;
 }
 
 function candidateUnavailableForWorkflow(error: unknown): boolean {
@@ -895,7 +956,10 @@ function captureNextAction(
   if (workflowStatus === 'waiting_manual') return 'run_now';
   if (workflowStatus === 'scheduled') return 'wait_nightly';
   if (workflowStatus === 'queued' || workflowStatus === 'extracting' || workflowStatus === 'writing') return 'wait_processing';
-  if (workflowStatus === 'paused') return 'resume';
+  // A removed source cannot be resumed locally: reading it again would only
+  // requeue the task and immediately fail. Keep the task visible for audit and
+  // let the user reconnect/select a new source before creating another task.
+  if (workflowStatus === 'paused') return capture.errorCode === 'source_removed' ? 'none' : 'resume';
   if (workflowStatus === 'review_ready') return 'review_candidates';
   if (workflowStatus === 'configuration_required') return 'configure_model';
   if (workflowStatus === 'failed') return 'retry';
@@ -947,14 +1011,15 @@ function captureActions(
   linkedAssetIds: string[],
 ): RecallCaptureAction[] {
   const actions: RecallCaptureAction[] = [];
-  if (['waiting_quiet', 'waiting_manual', 'scheduled', 'paused'].includes(capture.status)) {
+  if (['waiting_quiet', 'waiting_manual', 'scheduled'].includes(capture.status)
+    || (capture.status === 'paused' && capture.errorCode !== 'source_removed')) {
     actions.push('run_now');
   }
   if (['waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting'].includes(capture.status)
     && !(capture.status === 'extracting' && capture.stage === 'candidate_save')) {
     actions.push('pause');
   }
-  if (capture.status === 'paused') actions.push('resume');
+  if (capture.status === 'paused' && capture.errorCode !== 'source_removed') actions.push('resume');
   if (workflowStatus === 'configuration_required') actions.push('configure_model', 'retry');
   else if (workflowStatus === 'failed') actions.push('retry');
   if (workflowStatus === 'review_ready') actions.push('review_candidates');
@@ -1306,7 +1371,7 @@ async function loadStoredPromptMessages(
   capture: RecallCaptureRecord,
 ): Promise<CapturePromptMessage[]> {
   const allMessages = await chats.getMessages(userId, capture.conversationId, 2_000);
-  const byId = new Map(allMessages.filter(isCaptureMessage).map((message) => [message.id, message]));
+  const byId = new Map(allMessages.filter(isRecallConversationMessage).map((message) => [message.id, message]));
   const selected = capture.messageIds.map((id) => byId.get(id)).filter((message): message is GroupMessage => Boolean(message));
   if (!selected.length || selected[0].from !== 'user') {
     throw new CaptureFailure('source_unavailable', 'capture messages are unavailable');
@@ -1487,10 +1552,8 @@ export async function runRecallCapture(
 
   try {
     if (signal?.aborted) return settleInterruptedCapture(userId, id);
-    if (!hasConfiguredModel().configured && !process.env.ANTHROPIC_API_KEY) {
-      throw new CaptureFailure('model_not_configured', 'model configuration is required');
-    }
-    if (getConfiguredModelOAuthExpiredMessage()) {
+    if ((hasConfiguredModel().configured || process.env.ANTHROPIC_API_KEY)
+      && getConfiguredModelOAuthExpiredMessage()) {
       throw new CaptureFailure('model_auth_required', 'model authorization is required');
     }
     capture = await setCaptureStage(userId, id, 'recall_view');
@@ -1642,20 +1705,31 @@ export async function runRecallCapture(
         throw new CaptureFailure('model_failed', 'model runner could not be built');
       }
       let result: Awaited<ReturnType<typeof runner.run>>;
+      const modelController = new AbortController();
+      const relayAbort = (): void => modelController.abort();
+      signal?.addEventListener('abort', relayAbort, { once: true });
+      if (signal?.aborted) modelController.abort();
       try {
         result = await runner.run({
           message: extractionInput(conversation.title, promptMessages, recallView),
-          signal,
+          signal: modelController.signal,
           thinkingLevel: 'off',
           cacheRetention: 'none',
         });
       } catch {
+        if (signal?.aborted) return settleInterruptedCapture(userId, id);
         throw new CaptureFailure('model_failed', 'model extraction failed');
+      } finally {
+        signal?.removeEventListener('abort', relayAbort);
       }
       if (signal?.aborted) return settleInterruptedCapture(userId, id);
       if (result.meta.aborted) throw new CaptureFailure('model_failed', 'model extraction was aborted');
       if (result.meta.error) {
-        const code = result.meta.error.kind === 'auth' ? 'model_auth_required' : 'model_failed';
+        const code = result.meta.error.kind === 'auth'
+          ? 'model_auth_required'
+          : result.meta.error.kind === 'timeout'
+            ? 'model_timeout'
+            : 'model_failed';
         throw new CaptureFailure(code, result.meta.error.message);
       }
       extractionText = result.text.trim();
@@ -1668,12 +1742,10 @@ export async function runRecallCapture(
         new Set(promptMessages.map((message) => message.label)),
       );
     } catch (error) {
-      // TEMP DEBUG: log the raw model output + failure detail to diagnose
-      // persistent invalid_model_output (remove after root cause fixed).
-      log.warn('recall capture parse failed (debug)', {
+      // Keep model output out of logs: it may contain user-authored content.
+      log.warn('recall capture parse failed', {
         capture_id: id,
         conversation_id: capture.conversationId,
-        rawOutput: String(extractionText || '').slice(0, 2000),
         error: error instanceof CaptureFailure ? error.message : String((error as Error)?.message || error),
       });
       throw error;
@@ -1895,7 +1967,6 @@ export async function runRecallCapture(
 const scheduledCaptures = new Map<string, ScheduledBootBackgroundTask>();
 const captureScheduleAdmissions = new Set<string>();
 const manualCaptureRequests = new Map<string, Promise<RecallCaptureRecord>>();
-const historicalAutoStartRequests = new Map<string, Promise<RecallCaptureRecord>>();
 let captureSchedulingEnabled = true;
 
 function cancelScheduledCapture(userId: string, id: string): void {
@@ -1930,7 +2001,7 @@ async function activateScheduledCapture(userId: string, id: string): Promise<Rec
     } catch {
       return rescheduleCheck();
     }
-    const latestMessage = allMessages.filter(isCaptureMessage).at(-1);
+    const latestMessage = allMessages.filter(isRecallConversationMessage).at(-1);
     const capturedLastMessageId = stored.messageIds.at(-1);
     const activityChanged = Boolean(latestMessage && latestMessage.id !== capturedLastMessageId);
     if (activityChanged || stored.waitingCompletionReason === 'activity_changed') {
@@ -2045,7 +2116,9 @@ function scheduleKnownRecallCapture(userId: string, capture: RecallCaptureRecord
         : undefined)
   ), delayMs, {
     resourceClass: 'model',
-    preferIdle: true,
+    // A user-triggered manual capture is an explicit request to start now.
+    // Automatic quiet/nightly captures continue to yield to active work.
+    preferIdle: capture.executionPolicy !== 'manual',
   });
   scheduledCaptures.set(key, task);
   void task.promise.finally(() => {
@@ -2352,7 +2425,7 @@ async function queueManualRecallCaptureRequest(
   if (!conversation) throw new Error('conversation not found');
 
   const messages = await chats.getMessages(userId, conversationId, 2_000);
-  const eligible = messages.filter(isCaptureMessage);
+  const eligible = messages.filter(isRecallConversationMessage);
   const firstUser = eligible.find((message) => message.from === 'user');
   const finished = eligible.at(-1);
   if (!firstUser || !finished) throw new Error('conversation has no completed exchange');
@@ -2371,23 +2444,37 @@ async function queueManualRecallCaptureRequest(
   const settings = await readRecallCaptureSettings(userId);
   if (!settings.enabled) throw new Error('recall capture is disabled');
 
-  const id = manualConversationCaptureId(conversationId, finished.id);
-  const exact = await readRecallJsonRecord(userId, CAPTURE_COLLECTION, id);
+  const baseId = manualConversationCaptureId(conversationId, finished.id);
+  let id = baseId;
+  const exact = await readRecallJsonRecord(userId, CAPTURE_COLLECTION, baseId);
   if (exact) {
-    const stored = asCapture(exact);
+    const stored = await migrateLegacyHistoricalAutomaticWait(userId, asCapture(exact));
     if (stored.status === 'waiting_manual') return stored;
-    if (!canConvertToWaitingManual(stored)) return stored;
-    cancelScheduledCapture(userId, stored.id);
-    const now = new Date().toISOString();
-    return updateCapture(userId, stored.id, (current) => makeWaitingManual(current, finished.ts, now));
+    // Preserve a completed task that already owns candidates. A second manual
+    // selection is only a re-extraction when the prior extraction produced no
+    // candidates; otherwise it would hide the existing review work behind a
+    // duplicate capture record.
+    if (stored.status === 'completed' && stored.candidateIds.length > 0) return stored;
+    const canRetryAfterExtraction = ['no_candidate', 'completed'].includes(stored.status);
+    if (!canRetryAfterExtraction) {
+      if (!canConvertToWaitingManual(stored)) return stored;
+      cancelScheduledCapture(userId, stored.id);
+      const now = new Date().toISOString();
+      return updateCapture(userId, stored.id, (current) => makeWaitingManual(current, finished.ts, now));
+    }
+    id = manualConversationCaptureId(conversationId, finished.id, randomUUID());
   }
 
-  const covering = (await listAllRecallCaptures(userId)).find((capture) => (
-    capture.conversationId === conversationId
-    && capture.status !== 'cancelled'
-    && !(capture.status === 'no_candidate' && capture.visibility === 'internal')
-    && capture.messageIds.includes(finished.id)
-  ));
+  let covering: RecallCaptureRecord | undefined;
+  for (const candidate of await listAllRecallCaptures(userId)) {
+    if (candidate.conversationId !== conversationId || !candidate.messageIds.includes(finished.id)) continue;
+    const migrated = await migrateLegacyHistoricalAutomaticWait(userId, candidate);
+    if (migrated.status === 'cancelled') continue;
+    if (['no_candidate', 'completed'].includes(migrated.status)) continue;
+    if (migrated.status === 'no_candidate' && migrated.visibility === 'internal') continue;
+    covering = migrated;
+    break;
+  }
   if (covering) {
     if (covering.status === 'waiting_manual') return covering;
     if (!canConvertToWaitingManual(covering)) return covering;
@@ -2450,167 +2537,17 @@ export function queueManualRecallCaptureFromConversation(
   return request;
 }
 
-function canQueueHistoricalAuto(capture: RecallCaptureRecord): boolean {
-  return !['extracting', 'writing', 'review_ready', 'completed', 'no_candidate'].includes(capture.status)
-    && capture.writingCandidateId === undefined
-    && capture.stage === undefined
-    && capture.startedAt === undefined;
-}
-
-function makeHistoricalAutoQueued(
-  capture: RecallCaptureRecord,
-  finishedAt: string,
-  now: string,
-): RecallCaptureRecord {
-  if (!canQueueHistoricalAuto(capture)) return capture;
-  return {
-    ...capture,
-    status: 'queued',
-    visibility: 'visible',
-    screeningStatus: 'qualified',
-    screeningSignals: ['manual_selection'],
-    screenedAt: capture.screenedAt || now,
-    filterReason: undefined,
-    waitingCompletionReason: undefined,
-    stage: undefined,
-    executionPolicy: 'manual',
-    quietMinutes: undefined,
-    scheduledFor: undefined,
-    nightlyStart: undefined,
-    nightlyEnd: undefined,
-    catchUpMissed: undefined,
-    resumeStatus: undefined,
-    lastActivityAt: finishedAt,
-    autoWrite: true,
-    errorCode: undefined,
-    recoveredAt: undefined,
-    startedAt: undefined,
-    finishedAt: undefined,
-    durationMs: undefined,
-    modelUsage: undefined,
-    updatedAt: now,
-  };
-}
-
-async function queueHistoricalAutoRecallCaptureRequest(
-  userId: string,
-  conversationId: string,
-): Promise<RecallCaptureRecord> {
-  const sourceControl = await readCognitionSourceControl(userId, {
-    kind: 'conversation',
-    id: conversationId,
-  });
-  if (sourceControl && sourceControl.availability !== 'active') {
-    throw new Error(sourceControl.availability === 'removed'
-      ? 'conversation source was removed from Recall'
-      : 'conversation source is paused');
-  }
-  const conversation = await chats.getConversation(userId, conversationId);
-  if (!conversation) throw new Error('conversation not found');
-  const messages = await chats.getMessages(userId, conversationId, 2_000);
-  const eligible = messages.filter(isCaptureMessage);
-  const firstUser = eligible.find((message) => message.from === 'user');
-  const finished = eligible.at(-1);
-  if (!firstUser || !finished) throw new Error('conversation has no completed exchange');
-  const selected = selectCaptureMessages(
-    messages,
-    0,
-    Number.MAX_SAFE_INTEGER,
-    firstUser.id,
-    finished.id,
-  );
-  if (!selected.length || selected.at(-1)?.role !== 'assistant') {
-    throw new Error('conversation is still waiting for a response');
-  }
-
-  const settings = await readRecallCaptureSettings(userId);
-  if (!settings.enabled) throw new Error('recall capture is disabled');
-
-  const id = manualConversationCaptureId(conversationId, finished.id);
-  const now = new Date().toISOString();
-  const exact = await readRecallJsonRecord(userId, CAPTURE_COLLECTION, id);
-  if (exact) {
-    const stored = asCapture(exact);
-    if (stored.status === 'queued' && stored.autoWrite === true) {
-      scheduleRecallCapture(userId, stored.id);
-      return stored;
-    }
-    if (stored.status === 'completed' || stored.status === 'no_candidate' || stored.status === 'review_ready') return stored;
-    if (stored.status === 'extracting' || stored.status === 'writing') return stored;
-    const queued = await updateCapture(userId, stored.id, (current) => makeHistoricalAutoQueued(current, finished.ts, now));
-    if (queued.status === 'queued') scheduleRecallCapture(userId, queued.id);
-    return queued;
-  }
-
-  const covering = (await listAllRecallCaptures(userId)).find((capture) => (
-    capture.conversationId === conversationId
-    && capture.status !== 'cancelled'
-    && capture.messageIds.includes(finished.id)
-  ));
-  if (covering) {
-    if (covering.status === 'completed' || covering.status === 'no_candidate' || covering.status === 'review_ready'
-      || covering.status === 'extracting' || covering.status === 'writing') return covering;
-    cancelScheduledCapture(userId, covering.id);
-    const queued = await updateCapture(userId, covering.id, (current) => makeHistoricalAutoQueued(current, finished.ts, now));
-    if (queued.status === 'queued') scheduleRecallCapture(userId, queued.id);
-    return queued;
-  }
-
-  const record: RecallCaptureRecord = {
-    schemaVersion: 1,
-    taxonomyVersion: 2,
-    ownerId: userId,
-    id,
-    conversationId,
-    conversationTitle: conversation.title,
-    terminalRunId: `historical-${id.slice('rcap-'.length)}`,
-    anchorMessageId: firstUser.id,
-    messageIds: selected.map((message) => message.id),
-    status: 'queued',
-    visibility: 'visible',
-    screeningStatus: 'qualified',
-    screeningSignals: ['manual_selection'],
-    screenedAt: now,
-    executionPolicy: 'manual',
-    lastActivityAt: finished.ts,
-    autoWrite: true,
-    attempt: 1,
-    candidateIds: [],
-    createdAt: now,
-    updatedAt: now,
-  };
-  const stored = asCapture(await updateRecallJsonRecord(
-    userId,
-    CAPTURE_COLLECTION,
-    id,
-    (current) => current || record,
-  ));
-  if (stored.status === 'queued') scheduleRecallCapture(userId, stored.id);
-  log.info('historical automatic recall capture task created', {
-    conversation_id: conversationId,
-    capture_id: stored.id,
-    message_count: stored.messageIds.length,
-  });
-  return stored;
-}
-
+/**
+ * Backwards-compatible name for the old historical-auto IPC channel.
+ * Selecting a past conversation must never invoke the model or write an
+ * asset. It only creates the visible `waiting_manual` task; the explicit
+ * `runNow` action is the sole admission point for extraction.
+ */
 export function startHistoricalRecallCapture(
   userId: string,
   conversationId: string,
 ): Promise<RecallCaptureRecord> {
-  if (!safeId(conversationId)) return Promise.reject(new Error('invalid conversation id'));
-  const key = `${userId}:${conversationId}`;
-  const inFlight = historicalAutoStartRequests.get(key);
-  if (inFlight) return inFlight;
-
-  let request: Promise<RecallCaptureRecord>;
-  request = queueHistoricalAutoRecallCaptureRequest(userId, conversationId).finally(() => {
-    if (historicalAutoStartRequests.get(key) === request) {
-      historicalAutoStartRequests.delete(key);
-    }
-  });
-  historicalAutoStartRequests.set(key, request);
-  return request;
+  return queueManualRecallCaptureFromConversation(userId, conversationId);
 }
 
 export async function promoteRecallCaptureCandidate(
@@ -2803,9 +2740,30 @@ export async function runRecallCaptureNow(userId: string, id: string): Promise<R
     id: stored.conversationId,
   });
   if (sourceControl && sourceControl.availability !== 'active') {
-    throw new Error(sourceControl.availability === 'removed'
-      ? 'conversation source was removed from Recall'
-      : 'conversation source is paused');
+    const errorCode = sourceControl.availability === 'removed' ? 'source_removed' : 'source_paused';
+    const paused = await updateCapture(userId, id, (current) => {
+      // Another worker may have claimed the task between the read and this
+      // preflight. Never overwrite an active extraction or a terminal result.
+      if (['extracting', 'writing', 'review_ready', 'completed', 'no_candidate', 'cancelled'].includes(current.status)) {
+        return current;
+      }
+      const now = new Date().toISOString();
+      const resumableStatus: NonNullable<RecallCaptureRecord['resumeStatus']> = [
+        'waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued',
+      ].includes(current.status)
+        ? current.status as NonNullable<RecallCaptureRecord['resumeStatus']>
+        : 'queued';
+      return {
+        ...current,
+        status: 'paused',
+        stage: undefined,
+        resumeStatus: resumableStatus,
+        errorCode,
+        updatedAt: now,
+      };
+    });
+    cancelScheduledCapture(userId, id);
+    return paused;
   }
   if (stored.status === 'waiting_completion') {
     throw new Error('recall capture conversation is not complete');
@@ -2845,7 +2803,7 @@ export async function recoverRecallCaptures(userId: string): Promise<number> {
   const captures = await listAllRecallCaptures(userId);
   let recovered = 0;
   for (const item of captures) {
-    let capture = item;
+    let capture = await migrateLegacyHistoricalAutomaticWait(userId, item);
     if (capture.status === 'writing') {
       const recoveredAt = new Date().toISOString();
       capture = await updateCapture(userId, capture.id, (current) => ({
@@ -2872,7 +2830,7 @@ export async function recoverRecallCaptures(userId: string): Promise<number> {
     if (capture.status === 'waiting_completion' && !capture.waitingCompletionReason) {
       try {
         const latestMessage = (await chats.getMessages(userId, capture.conversationId, 2_000))
-          .filter(isCaptureMessage)
+          .filter(isRecallConversationMessage)
           .at(-1);
         if (latestMessage && latestMessage.id !== capture.messageIds.at(-1)) {
           const recoveredAt = new Date().toISOString();
@@ -2953,7 +2911,6 @@ export function startRecallCaptureOrchestrator(
     scheduledCaptures.clear();
     captureScheduleAdmissions.clear();
     manualCaptureRequests.clear();
-    historicalAutoStartRequests.clear();
     captureControlRequests.clear();
   };
 }

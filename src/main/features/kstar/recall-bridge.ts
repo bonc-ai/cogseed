@@ -1,13 +1,18 @@
+import { safeId } from '../../storage';
 import {
   saveRecallCandidate,
+  type RecallCandidateAction,
   type RecallCandidateRecord,
 } from '../recall/candidate-service';
 import type { KstarCandidateProposal } from './types';
 
-/** Save proposals into Recall's pending review queue. Promotion is intentionally not part of this bridge. */
+/** Save proposals into Recall's pending review queue. Promotion is intentionally not part of this bridge.
+ *  `spaceId`：任务/需求的工作空间归属（空间会话时即空间 id），透传给候选，
+ *  保证任务级沉淀的候选/资产带空间归属（空间资产 tab 显示 + 注入过滤命中）。 */
 export async function saveKstarCandidateProposals(
   userId: string,
   proposals: KstarCandidateProposal[],
+  options: { spaceId?: string } = {},
 ): Promise<RecallCandidateRecord[]> {
   const candidates: RecallCandidateRecord[] = [];
   for (const proposal of proposals.slice(0, 3)) {
@@ -19,9 +24,10 @@ export async function saveKstarCandidateProposals(
       // 不传时 value 默认成 summary（标题），promote 会把标题残片拼进
       // statement（已观测：'可复用经验：数据的文档…' 污染资产正文）。
       // 注意新建路径防呆：显式 value 必须配显式 suggestedAction，否则 weak。
-      // KstarCandidateProposal 不再携带 suggestedAction——suggestedAction 由
-      // saveRecallCandidate 默认派生（create），此处显式传 value 已满足 reviewReady。
       value: proposal.judgment,
+      // suggestedAction 收窄到 Recall 的受限行动集合（宽松来源按 'create' 兜底）。
+      suggestedAction: (proposal.suggestedAction || 'create') as RecallCandidateAction,
+
       ...(proposal.summary ? { summary: proposal.summary } : {}),
       ...(proposal.uncertainty ? { uncertainty: proposal.uncertainty } : {}),
       suggestedType: proposal.suggestedType,
@@ -31,6 +37,7 @@ export async function saveKstarCandidateProposals(
       ...(proposal.forbiddenWhen ? { forbiddenWhen: proposal.forbiddenWhen } : {}),
       ...(proposal.learningSignal ? { learningSignal: proposal.learningSignal } : {}),
       ...(proposal.learningProvenance ? { learningProvenance: proposal.learningProvenance } : {}),
+      ...(options.spaceId && safeId(options.spaceId) ? { spaceId: options.spaceId } : {}),
     }));
   }
   return candidates;

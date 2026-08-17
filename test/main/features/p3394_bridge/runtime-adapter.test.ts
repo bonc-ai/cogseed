@@ -11,6 +11,9 @@ describe('P3394 runtime adapter contract', () => {
     const events = [];
     for await (const event of adapter.stream('task-1')) events.push(event.kind);
     expect(events).toEqual(['started', 'completed']);
+    const resumed = [];
+    for await (const event of adapter.stream('task-1', 1)) resumed.push({ sequence: event.sequence, kind: event.kind });
+    expect(resumed).toEqual([{ sequence: 2, kind: 'completed' }]);
     expect(await adapter.snapshot('session-1')).toEqual({ session_id: 'session-1', native_session_id: 'native-session-1', at: 'now' });
     await adapter.cancel('task-1');
     const afterCancel = [];
