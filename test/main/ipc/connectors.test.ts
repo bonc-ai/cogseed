@@ -19,6 +19,7 @@ afterEach(() => {
   vi.doUnmock('../../../src/main/features/connectors');
   vi.doUnmock('../../../src/main/features/component_enabled');
   vi.doUnmock('../../../src/main/features/connectors/availability');
+  vi.doUnmock('../../../src/main/features/recall/source-removal');
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -167,5 +168,63 @@ describe('ipc/connectors renderer DTO', () => {
     expect(refreshTools).toHaveBeenCalledWith('u-ipc', 'custom-secret');
     expect(out.tools).toEqual(degraded.tools_cache);
     expect(out.instance.status).toMatchObject({ kind: 'degraded', message: 'fetch failed' });
+  });
+
+  it('records source removal only after the connector was actually removed', async () => {
+    const instance = baseInstance({
+      kind: 'streamable-http',
+      url: 'https://example.com/mcp',
+      headers: {},
+    });
+    const recordRemovedConnector = vi.fn(async () => ({ removedSourceIds: ['source-a'], failedSourceIds: [] }));
+    vi.doMock('../../../src/main/features/connectors', () => ({
+      isValidInstanceId: vi.fn(() => true),
+      getInstance: vi.fn(() => instance),
+      removeInstance: vi.fn(async () => true),
+    }));
+    vi.doMock('../../../src/main/features/component_enabled', () => ({
+      isConnectorEnabled: vi.fn(() => true),
+      setConnectorEnabled: vi.fn(),
+    }));
+    vi.doMock('../../../src/main/features/connectors/availability', () => ({
+      catalogWithAvailability: vi.fn((catalog) => catalog),
+      isConnectorRuntimeEnabled: vi.fn(() => true),
+    }));
+    vi.doMock('../../../src/main/features/recall/source-removal', () => ({ recordRemovedConnector }));
+
+    const { invokeHandlers } = await import('../../../src/main/ipc/connectors');
+    const out = await invokeHandlers['connectors.remove']({ id: instance.id }, { userId: 'u-ipc' });
+
+    expect(recordRemovedConnector).toHaveBeenCalledWith('u-ipc', instance);
+    expect(out).toMatchObject({ removed: true, sourceRemoval: { removedSourceIds: ['source-a'] } });
+  });
+
+  it('does not record source removal when connector deletion fails', async () => {
+    const instance = baseInstance({
+      kind: 'streamable-http',
+      url: 'https://example.com/mcp',
+      headers: {},
+    });
+    const recordRemovedConnector = vi.fn();
+    vi.doMock('../../../src/main/features/connectors', () => ({
+      isValidInstanceId: vi.fn(() => true),
+      getInstance: vi.fn(() => instance),
+      removeInstance: vi.fn(async () => false),
+    }));
+    vi.doMock('../../../src/main/features/component_enabled', () => ({
+      isConnectorEnabled: vi.fn(() => true),
+      setConnectorEnabled: vi.fn(),
+    }));
+    vi.doMock('../../../src/main/features/connectors/availability', () => ({
+      catalogWithAvailability: vi.fn((catalog) => catalog),
+      isConnectorRuntimeEnabled: vi.fn(() => true),
+    }));
+    vi.doMock('../../../src/main/features/recall/source-removal', () => ({ recordRemovedConnector }));
+
+    const { invokeHandlers } = await import('../../../src/main/ipc/connectors');
+    const out = await invokeHandlers['connectors.remove']({ id: instance.id }, { userId: 'u-ipc' });
+
+    expect(out).toEqual({ removed: false });
+    expect(recordRemovedConnector).not.toHaveBeenCalled();
   });
 });

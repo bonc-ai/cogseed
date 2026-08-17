@@ -112,8 +112,8 @@ export function allowsSilentDefaultInjection(
  *  在系统里长出第二种拼法。
  *
  *  注意：这里只回答"这个结论对应哪一档"，**不回答"够不够格推进"**。
- *  PRD 3.6 的 Transfer Verified 还要求 ContextReuseReceipt 落库，
- *  那道闸门在 PR-E 补上（当前 terminal-proof 不传 receiptId）。 */
+ *  PRD 3.6 的 Transfer Verified 还要求 ContextReuseReceipt 落库；调用方必须
+ *  在推进成熟度前验证 receiptId，不能只凭任务成功状态升档。 */
 export function maturityForTransferOutcome(status: string): FormalAssetMaturity | undefined {
   return status === 'succeeded' ? 'transfer_validated' : undefined;
 }

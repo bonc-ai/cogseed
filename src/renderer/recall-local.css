@@ -1,14 +1,15 @@
 /* Recall cognition console. */
 .skills-cognition-console { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 0; padding: 0; box-sizing: border-box; background: var(--card, #fff); }
 .skills-cognition-header { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 20px; border-bottom: 1px solid var(--border, #e5e7eb); box-sizing: border-box; }
-.skills-cognition-header > div { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
+.skills-cognition-header > div:not(.skills-cognition-header-actions) { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
+.skills-cognition-header-actions { display: flex; min-width: 0; align-items: center; flex: none; gap: 8px; margin-left: auto; }
 .skills-cognition-header h1 { margin: 0; font-size: 16px; line-height: 1.3; }
 .skills-cognition-header p { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; }
 .skills-cognition-tabs { display: flex; flex: none; align-items: center; gap: 8px; min-width: 0; min-height: 48px; padding: 6px 20px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--border, #e5e7eb); background: color-mix(in srgb, var(--card, #fff) 96%, var(--fg, #111827) 4%); }
 .skills-cognition-tab { display: flex; align-items: center; gap: 9px; width: auto; min-width: max-content; min-height: 34px; margin: 0; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; font-size: 13px; text-align: left; white-space: nowrap; }
 .skills-cognition-tab:hover { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, transparent); }
 .skills-cognition-tab.is-active { color: var(--fg, #111827); background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, var(--card, #fff)); box-shadow: inset 0 -2px 0 var(--primary, #0E9F6E); font-weight: 600; }
-.skills-cognition-page { height: 100%; min-height: 0; overflow: auto; padding: 18px 24px 28px; background: var(--card, #fff); }
+.skills-cognition-page { min-height: 100%; height: auto; box-sizing: border-box; overflow: visible; padding: 18px 24px 28px; background: var(--card, #fff); }
 /* style.css 里 .skills-cognition-page 是 display:flex，会压掉 UA [hidden] 的 display:none，
    导致六个 tab 页全部同时显示（点 tab 无反应、看着像同一个页面）。这里显式补覆盖。 */
 .skills-cognition-page[hidden] { display: none; }
@@ -66,6 +67,12 @@
 .recall-overview-pipeline .skills-cognition-band-head > span { flex: 1 1 auto; text-align: right; }
 .cognition-pipeline-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0; overflow: hidden; border: 1px solid color-mix(in srgb, var(--fg, #111827) 7%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, var(--card, #fff)); }
 .cognition-pipeline-row .skills-cognition-source-state { justify-content: space-between; min-height: 46px; padding: 7px 12px; border: 0; border-radius: 0; background: transparent; }
+.cognition-pipeline-note { margin: -4px 0 12px; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.45; }
+.cognition-pipeline-row .cognition-pipeline-state { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'label count' 'hint hint'; align-items: center; width: 100%; min-width: 0; gap: 3px 8px; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.cognition-pipeline-row .cognition-pipeline-state:hover { background: color-mix(in srgb, var(--primary, #0E9F6E) 7%, transparent); }
+.cognition-pipeline-state b { grid-area: label; overflow-wrap: anywhere; }
+.cognition-pipeline-state em { grid-area: count; }
+.cognition-pipeline-state small { grid-area: hint; overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 10px; line-height: 1.35; }
 .cognition-pipeline-row .skills-cognition-source-state em { color: var(--fg, #111827); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .cognition-pipeline-arrow { color: var(--muted-fg, #6b7280); font-size: 13px; font-style: normal; }
 .recall-overview-activity-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: stretch; }
@@ -155,6 +162,7 @@
 .recall-manual-conversation-main strong { overflow: hidden; color: var(--fg, #111827); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .recall-manual-conversation-main small { color: var(--muted-fg, #6b7280); font-size: 10px; }
 .recall-capture-task-workbench { padding-top: 18px; }
+.recall-capture-task-log-head { margin-bottom: 12px; }
 .recall-capture-filter-bar { display: flex; gap: 6px; margin-bottom: 14px; overflow-x: auto; }
 .recall-capture-filter { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap; }
 .recall-capture-filter:hover { color: var(--fg, #111827); background: var(--surface-subtle, #f7f8fa); }
@@ -205,8 +213,22 @@
 .recall-capture-load-more { display: block; margin: 14px auto 0; }
 .recall-capture-review { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border, #e5e7eb); }
 .recall-capture-review .recall-workbench-section-head { margin-bottom: 12px; }
-.recall-capture-review-head-actions { display: flex; align-items: center; gap: 8px; }
+.recall-capture-review-head-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.recall-candidate-selection-count { color: var(--muted-fg, #6b7280); font-size: 11px; white-space: nowrap; }
+.recall-candidate-pool-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--surface-subtle, #fafbfc); color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-candidate-pool-toolbar label { display: inline-flex; align-items: center; gap: 7px; color: var(--fg, #374151); font-weight: 600; }
+.recall-candidate-pool-toolbar input,
+.recall-candidate-select input { accent-color: var(--primary, #0E9F6E); }
 .recall-capture-review .skills-cognition-record-list { display: grid; gap: 8px; }
+.recall-candidate-pool-empty { padding: 28px 16px; border-top: 1px solid var(--border, #e5e7eb); color: var(--muted-fg, #6b7280); font-size: 12px; text-align: center; }
+.cognition-candidate-row { padding: 0; overflow: hidden; }
+.recall-candidate-pool-row { display: flex; min-height: 34px; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--border, #eef0f3); background: var(--card, #fff); }
+.recall-candidate-pool-row > div { flex: none; }
+.recall-candidate-select { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-fg, #6b7280); font-size: 11px; cursor: pointer; }
+.recall-candidate-select-placeholder { display: inline-flex; width: 14px; align-items: center; justify-content: center; color: var(--warning, #92400e); font-size: 13px; font-weight: 700; }
+.recall-candidate-source { min-width: 0; overflow: hidden; color: var(--muted-fg, #6b7280); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.cognition-candidate-row.is-bulk-selected { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 35%, var(--border, #e1e5ea)); }
+.cognition-candidate-row > .recall-collapsible-body { padding: 12px; }
 /* 认知卡片可折叠（交互规范：默认收起，展开看内容/证据/操作）。 */
 .recall-collapsible-body { border-radius: inherit; }
 .recall-collapsible-body summary { cursor: pointer; list-style: none; }
@@ -270,6 +292,41 @@
 .skills-cognition-detail-block ul {
   margin: 6px 0 0;
   padding-left: 18px;
+}
+
+.recall-candidate-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.recall-candidate-editor label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted-fg, #6b7280);
+  font-weight: 600;
+}
+
+.recall-candidate-editor input,
+.recall-candidate-editor select,
+.recall-candidate-editor textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.recall-candidate-editor textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.recall-candidate-editor-wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 760px) {
+  .recall-candidate-editor { grid-template-columns: minmax(0, 1fr); }
+  .recall-candidate-editor-wide { grid-column: auto; }
 }
 
 .skills-cognition-muted {
@@ -352,8 +409,12 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
 }
+.skills-cognition-main:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary, #0E9F6E) 42%, transparent); outline-offset: -2px; }
 
 .recall-workbench-page-head {
   display: flex;
@@ -362,6 +423,9 @@
   gap: 18px;
   margin-bottom: 22px;
 }
+.recall-workbench-page-actions { display: flex; align-items: center; flex: none; gap: 8px; }
+.recall-candidate-pool-entry { display: inline-flex; align-items: center; gap: 7px; border-color: color-mix(in srgb, var(--primary, #0E9F6E) 28%, var(--border, #e5e7eb)); color: var(--primary, #0E9F6E); }
+.recall-candidate-pool-entry b { min-width: 18px; padding: 1px 5px; border-radius: 999px; background: color-mix(in srgb, var(--primary, #0E9F6E) 12%, transparent); color: var(--primary, #0E9F6E); font-size: 11px; font-weight: 700; text-align: center; }
 .recall-workbench-page-head h2 { margin: 0; color: var(--fg, #111827); font-size: 19px; }
 .recall-workbench-page-head p,
 .recall-workbench-section-head p { margin: 5px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.5; }
@@ -421,6 +485,13 @@
 .recall-source-group-advanced > summary::-webkit-details-marker { display: none; }
 .recall-source-group-advanced > summary::after { content: ''; width: 7px; height: 7px; margin-left: 4px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; color: var(--muted-fg, #6b7280); transform: rotate(45deg); transition: transform .16s ease; }
 .recall-source-group-advanced[open] > summary::after { transform: rotate(225deg); }
+.recall-source-group-advanced .recall-source-items {
+  max-height: clamp(240px, calc(100dvh - 300px), 420px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
 @media (max-width: 1100px) {
   .skills-cognition-surface .skills-cognition-tabs { flex-wrap: nowrap; gap: 4px; min-height: 44px; padding: 5px 10px; }
   .skills-cognition-tab-group { gap: 0; }
@@ -438,6 +509,7 @@
   .recall-workbench-summary > div:first-child { border-top: 0; }
   .recall-source-item { grid-template-columns: minmax(0, 1fr) auto; }
   .recall-source-item-actions { grid-column: 1 / -1; }
+  .recall-source-group-advanced .recall-source-items { max-height: clamp(220px, calc(100dvh - 260px), 320px); }
 }
 
 .skills-cognition-record-list {
@@ -523,26 +595,59 @@
   --personal-onto-radius-sm: 6px;
   --personal-onto-shadow: none;
   position: relative;
+  overflow-x: hidden;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
 }
 .recall-personal-ontology-section { margin-bottom: 24px; }
 .recall-personal-ontology-frame {
-  height: min(580px, calc(100vh - 220px));
-  min-height: 480px;
+  width: 100%;
+  height: clamp(420px, calc(100dvh - 300px), 580px);
+  min-width: 0;
+  min-height: 0;
+  max-height: 580px;
   overflow: hidden;
   border: 1px solid var(--border, #e5e7eb);
   border-radius: 8px;
   background: var(--card, #fff);
   color: var(--fg, #111827);
 }
+.recall-personal-ontology-frame .personal-onto-layout,
+.recall-personal-ontology-frame .personal-onto-sidebar,
+.recall-personal-ontology-frame .personal-onto-main { min-width: 0; min-height: 0; }
 .recall-personal-ontology-frame .personal-onto-sidebar { width: 260px; }
+.recall-personal-ontology-frame .personal-onto-nav,
+.recall-personal-ontology-frame .personal-onto-main-body {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
 .recall-personal-ontology-frame .personal-onto-main-header { min-height: 46px; padding: 12px 18px; }
 .recall-personal-ontology-frame .personal-onto-main-title { font-size: 14px; }
-.recall-personal-ontology-frame .personal-onto-main-body { padding: 16px 18px; }
+.recall-personal-ontology-frame .personal-onto-main-body { min-width: 0; min-height: 0; padding: 16px 18px; }
+.recall-personal-ontology-frame .personal-onto-modal {
+  display: flex;
+  max-height: min(720px, calc(100dvh - 48px));
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.recall-personal-ontology-frame .personal-onto-modal-body { min-height: 0; overflow: hidden; }
+.recall-personal-ontology-frame .personal-onto-library-modal .personal-onto-modal-body { display: flex; flex-direction: column; }
+.recall-personal-ontology-frame .personal-onto-library-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
 .recall-formal-assets-section { min-width: 0; }
 .recall-personal-memory-head { padding-top: 18px; border-top: 1px solid var(--border, #e5e7eb); }
 .ability-assets-workbench.is-asset-management-only { gap: 0; }
-.ability-assets-management { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr); gap: 14px; align-items: start; }
+.ability-assets-management { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr); min-width: 0; min-height: 0; gap: 14px; align-items: start; }
 .ability-asset-list, .ability-asset-detail, .ability-assets-empty { border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); overflow: hidden; }
+.ability-asset-list, .ability-asset-detail { min-width: 0; min-height: 0; }
 .ability-asset-list-head { padding: 12px; border-bottom: 1px solid var(--border, #e5e7eb); }
 .ability-asset-list-row { width: 100%; grid-template-columns: minmax(0, 1fr) auto; text-align: left; cursor: pointer; }
 .ability-asset-list-row.is-selected { background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, transparent); }
@@ -619,8 +724,8 @@
 .recall-capture-task-error.recall-skill-draft-state b { margin-bottom: 5px; }
 .ability-assets-empty { padding: 36px 18px; color: var(--muted-fg, #6b7280); text-align: center; }
 @media (min-width: 901px) {
-  #skills-cognition-assets { overflow-x: hidden; overflow-y: auto; }
-  #skills-cognition-assets-body { height: min(620px, calc(100vh - 184px)); min-height: 520px; }
+  #skills-cognition-assets { overflow: visible; }
+  #skills-cognition-assets-body { height: clamp(420px, calc(100dvh - 250px), 620px); min-height: 0; }
   .ability-assets-workbench {
     grid-template-rows: auto minmax(0, 1fr);
     height: 100%;
@@ -641,27 +746,34 @@
   .ability-asset-list-body {
     flex: 1 1 auto;
     min-height: 0;
+    overflow-x: hidden;
     overflow-y: auto;
-    overscroll-behavior: contain;
+    overscroll-behavior: auto;
     scrollbar-gutter: stable;
   }
   .ability-asset-detail {
     height: 100%;
     min-height: 0;
     align-self: stretch;
+    overflow-x: hidden;
     overflow-y: auto;
-    overscroll-behavior: contain;
+    overscroll-behavior: auto;
+    scrollbar-gutter: stable;
   }
 }
 @media (max-width: 900px) {
   .ability-asset-summary-grid, .ability-assets-management { grid-template-columns: 1fr; }
   #skills-cognition-assets-body { min-height: 0; }
+  .ability-assets-management { align-items: stretch; }
+  .ability-asset-list { display: flex; max-height: min(320px, 42dvh); flex-direction: column; }
+  .ability-asset-list-body { min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; scrollbar-gutter: stable; }
+  .ability-asset-detail { max-height: min(480px, 58dvh); overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; scrollbar-gutter: stable; }
 }
 @media (max-width: 720px) {
-  .recall-personal-ontology-frame { height: auto; min-height: 0; overflow: visible; }
-  .recall-personal-ontology-frame .personal-onto-layout { display: grid; height: auto; }
-  .recall-personal-ontology-frame .personal-onto-sidebar { width: 100%; max-height: 320px; border-right: 0; border-bottom: 1px solid var(--border, #e5e7eb); }
-  .recall-personal-ontology-frame .personal-onto-main { min-height: 420px; }
+  .recall-personal-ontology-frame { height: max(360px, calc(100dvh - 160px)); max-height: 680px; }
+  .recall-personal-ontology-frame .personal-onto-layout { display: grid; grid-template-rows: minmax(148px, 34%) minmax(0, 1fr); height: 100%; }
+  .recall-personal-ontology-frame .personal-onto-sidebar { width: 100%; max-height: none; border-right: 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+  .recall-personal-ontology-frame .personal-onto-main { min-height: 0; }
 }
 @media (max-width: 620px) {
   .recall-skill-draft-state { align-items: stretch; flex-direction: column; }

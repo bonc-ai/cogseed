@@ -585,7 +585,7 @@ describe('Recall cognition renderer flow', () => {
 
     vm.runInContext(`_skillsCognitionState.selectedCaptureId = 'rcap-empty'`, context);
     context.renderSkillsCognitionCaptures();
-    expect(host.innerHTML).toContain('未发现有明确长期价值的用户信息，未写入记忆');
+    expect(host.innerHTML).toContain('已提取，未形成候选');
     expect(host.innerHTML).not.toContain('data-recall-capture-action="view-candidates"');
   });
 
@@ -683,7 +683,8 @@ describe('Recall cognition renderer flow', () => {
       sources: [{
         kind: 'conversation', status: 'ready', count: 12,
         items: [
-          { id: 'conv-new', title: '准备演示的讨论', subtype: 'session', sourceVersion: '2026-08-06T19:00:00.000Z' },
+          { id: 'conv-new', title: '准备演示的讨论', subtype: 'session', captureReady: true, sourceVersion: '2026-08-06T19:00:00.000Z' },
+          { id: 'conv-incomplete', title: '尚未完成问答的讨论', subtype: 'session', captureReady: false, sourceVersion: '2026-08-06T18:45:00.000Z' },
           { id: 'conv-source-paused', title: '来源已暂停的讨论', subtype: 'session', availability: 'paused', sourceVersion: '2026-08-06T18:30:00.000Z' },
           { id: 'conv-source-removed', title: '来源已移除的讨论', subtype: 'session', availability: 'removed', sourceVersion: '2026-08-06T18:20:00.000Z' },
           { id: 'conv-manual', title: '已经加入的讨论', subtype: 'session', sourceVersion: '2026-08-06T18:00:00.000Z' },
@@ -729,11 +730,11 @@ describe('Recall cognition renderer flow', () => {
 
     context.renderSkillsCognitionCaptures();
 
-    expect(host.innerHTML).toContain('提取历史会话');
+    expect(host.innerHTML).toContain('① 选择历史会话');
     expect(host.innerHTML).toContain('准备演示的讨论');
-    expect(host.innerHTML).toContain('点击后立即提取；仅明确且可复用的内容会自动写入记忆。');
+    expect(host.innerHTML).toContain('入口：点击“开始提取”；完成后还需确认候选，才会进入能力资产。');
     expect(host.innerHTML).toContain('data-recall-manual-add="conv-new"');
-    expect(host.innerHTML).toContain('提取并写入记忆');
+    expect(host.innerHTML).toContain('开始提取');
     expect(host.innerHTML).toContain('data-recall-manual-add="conv-source-paused" disabled');
     expect(host.innerHTML).toContain('data-recall-manual-add="conv-source-removed" disabled');
     expect(host.innerHTML).toContain('已暂停');
@@ -750,9 +751,17 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('去重试');
     expect(host.innerHTML).toContain('data-recall-manual-open="rcap-paused"');
     expect(host.innerHTML).toContain('去恢复');
-    expect(host.innerHTML).toContain('正在提取');
-    expect(host.innerHTML).toContain('已写入记忆');
-    expect(host.innerHTML).toContain('无需写入');
+    expect(host.innerHTML).toContain('skills-cognition-status is-waiting" aria-live="polite">等待提炼');
+    expect(host.innerHTML).toContain('已入库');
+    expect(host.innerHTML).toContain('已提取，未形成候选');
+    expect(host.innerHTML).toContain('data-recall-manual-add="conv-empty"');
+    expect(host.innerHTML).not.toContain('data-recall-manual-add="conv-empty" disabled');
+    expect(host.innerHTML).toContain('data-recall-manual-add="conv-completed"');
+    expect(host.innerHTML).not.toContain('data-recall-manual-add="conv-completed" disabled');
+    expect(host.innerHTML).toContain('再次提取');
+    expect(host.innerHTML).toContain('data-recall-manual-add="conv-incomplete" disabled');
+    expect(host.innerHTML).toContain('暂不可提取');
+    expect(host.innerHTML).toContain('② 沉淀任务记录');
     expect(host.innerHTML).toContain('data-recall-manual-add="conv-processing" disabled');
     expect(host.innerHTML).not.toContain('data-recall-manual-create');
     expect(host.innerHTML).toContain('recall-capture-quiet-window" hidden');
@@ -806,8 +815,8 @@ describe('Recall cognition renderer flow', () => {
 
     expect(host.innerHTML).toContain('data-recall-manual-add="conv-new-reply"');
     expect(host.innerHTML).not.toContain('data-recall-manual-add="conv-new-reply" disabled');
-    expect(host.innerHTML).toContain('提取并写入记忆');
-    expect(host.innerHTML).not.toContain('已写入记忆');
+    expect(host.innerHTML).toContain('开始提取');
+    expect(host.innerHTML).not.toContain('class="skills-cognition-status is-completed">已入库');
   });
 
   it('offers one-click saving when more than one candidate needs review', () => {
@@ -828,6 +837,36 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('data-recall-candidate-promote-all');
     expect(host.innerHTML).toContain('全部保存');
     expect(host.innerHTML).not.toContain('暂缓');
+  });
+
+  it('aggregates candidates from multiple capture tasks into one selectable pool', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-capture-review-body' ? host : null,
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      selectedCaptureId: 'capture-a',
+      captures: [
+        { id: 'capture-a', conversationId: 'conversation-a', conversationTitle: '需求讨论 A', candidateIds: ['cand-a'] },
+        { id: 'capture-b', conversationId: 'conversation-b', conversationTitle: '需求讨论 B', candidateIds: ['cand-b'] },
+      ],
+      recallCandidates: [
+        { id: 'cand-a', status: 'pending_review', summary: '候选 A', judgment: '判断 A', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
+        { id: 'cand-b', status: 'pending_review', summary: '候选 B', judgment: '判断 B', suggestedType: 'template', suggestedScope: 'project', sourceRefs: [] },
+      ],
+    })})`, context);
+
+    context.renderSkillsCognitionCandidates();
+
+    expect(host.innerHTML).toContain('③ 候选池');
+    expect(host.innerHTML).toContain('候选 A');
+    expect(host.innerHTML).toContain('候选 B');
+    expect(host.innerHTML).toContain('来源：需求讨论 A');
+    expect(host.innerHTML).toContain('来源：需求讨论 B');
+    expect(host.innerHTML).toContain('data-recall-candidate-select="cand-a"');
+    expect(host.innerHTML).toContain('data-recall-candidate-select="cand-b"');
+    expect(vm.runInContext('_skillsCognitionState.selectedRecallCandidateIds', context)).toEqual(['cand-a', 'cand-b']);
   });
 
   it('connects candidate editing to the modify-and-save confirmation path', () => {
@@ -873,7 +912,7 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).not.toContain('data-recall-candidate-action="promote"');
   });
 
-  it('collapses empty source groups and hides an empty review section', () => {
+  it('collapses empty source groups and keeps an empty candidate pool visible', () => {
     const context = loadSkillsRenderer();
     const sourceHost = { innerHTML: '' };
     const candidateHost = { innerHTML: '' };
@@ -903,7 +942,8 @@ describe('Recall cognition renderer flow', () => {
     expect(sourceHost.innerHTML).toContain('data-cognition-page-link="captures"');
     expect(sourceHost.innerHTML).not.toContain('recall-workbench-summary');
     expect(sourceHost.innerHTML).not.toContain('class="recall-source-group"');
-    expect(candidateHost.innerHTML).toBe('');
+    expect(candidateHost.innerHTML).toContain('③ 候选池');
+    expect(candidateHost.innerHTML).toContain('当前没有待确认候选');
   });
 
   it('renders primary sources with lifecycle reasons, next actions, and controls', () => {
@@ -978,6 +1018,30 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).not.toContain('msg-hidden');
     expect(host.innerHTML).not.toContain('eval-hidden');
     expect(host.innerHTML).not.toContain('Invalid Date');
+  });
+
+  it('shows execution totals and failure breakdown without calling every record failed', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-sources-body' ? host : null,
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      sources: [{
+        kind: 'execution_evaluation', status: 'failed', count: 3,
+        items: [
+          { id: 'exec-ready', subtype: 'execution', status: 'ready', actions: [] },
+          { id: 'exec-failed', subtype: 'execution', status: 'failed', statusReason: 'execution_failed', actions: [] },
+          { id: 'exec-cancelled', subtype: 'execution', status: 'failed', statusReason: 'execution_cancelled', actions: [] },
+        ],
+      }],
+    })})`, context);
+
+    context.renderSkillsCognitionSources();
+
+    expect(host.innerHTML).toContain('3 条记录 · 1 条失败 · 1 条已取消');
+    expect(host.innerHTML).not.toContain('3 · 失败');
+    expect(host.innerHTML).toContain('is-paused">已取消</span>');
   });
 
   it('shows conversation sources at their latest capture pipeline stage', () => {
@@ -1110,11 +1174,13 @@ describe('Recall cognition renderer flow', () => {
       expect(sources.innerHTML).toContain(label);
     }
     expect(sources.innerHTML).not.toContain('授权外部系统');
-    expect(captures.innerHTML).toContain('已整理会话');
-    expect(captures.innerHTML).toContain('<b>数据来源</b><em>4</em>');
-    expect(captures.innerHTML).not.toContain('<b>数据来源</b><em>7</em>');
+    expect(captures.innerHTML).toContain('2. 提取内容');
+    expect(captures.innerHTML).toContain('<b>1. 选择会话</b><em>4</em>');
+    expect(captures.innerHTML).not.toContain('<b>1. 选择会话</b><em>7</em>');
+    expect(captures.innerHTML).toContain('3. 确认候选');
+    expect(captures.innerHTML).toContain('只有确认后的内容才会出现在“能力资产”');
     expect(captures.innerHTML).toContain('待审核');
-    expect(captures.innerHTML).toContain('<b>能力资产</b><em>1</em>');
+    expect(captures.innerHTML).toContain('<b>4. 能力资产</b><em>1</em>');
     expect(captures.innerHTML).toContain('已恢复处理');
     expect(captures.innerHTML).toContain('data-recall-capture-action="view-candidates"');
     expect(inbox.innerHTML).toContain('以后保持决策可追溯');
@@ -1269,6 +1335,21 @@ describe('Recall cognition renderer flow', () => {
     expect(inbox.innerHTML).toContain('data-cognition-reload');
   });
 
+  it('does not treat an inbox read failure as an empty inbox for initial routing', () => {
+    const context = loadSkillsRenderer();
+    vm.runInContext(`Object.assign(_skillsCognitionState, {
+      inboxItems: [],
+      recallCandidates: [],
+      teachingSignals: [],
+      sources: [],
+      captureCounts: { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 },
+      captureModel: { configured: true, authorizationRequired: false },
+      loadErrors: ['inboxItems'],
+    })`, context);
+
+    expect(context._cognitionInboxIsEmpty()).toBe(false);
+  });
+
   it('keeps the last successful Recall data when a refresh partially fails', async () => {
     const context = loadSkillsRenderer();
     const inbox = { innerHTML: '' };
@@ -1344,6 +1425,114 @@ describe('Recall cognition renderer flow', () => {
     expect(payloads[1].statuses).toEqual(['failed']);
   });
 
+  it('forwards wheel movement to the Recall page when an inner panel cannot scroll', () => {
+    let wheelHandler: ((event: any) => void) | undefined;
+    let prevented = false;
+    class FakeElement {
+      closest() { return null; }
+    }
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => void) => {
+        if (type === 'wheel') wheelHandler = handler;
+      },
+    };
+    const main: any = { scrollTop: 0, scrollHeight: 1800, clientHeight: 600 };
+    const context: any = {
+      Element: FakeElement,
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : id === 'skills-cognition-main' ? main : null,
+        querySelectorAll: () => [],
+      },
+      window: { addEventListener() {} },
+      _skillsCognitionState: {},
+      initSkillsCognitionConsole() {},
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    expect(wheelHandler).toBeTypeOf('function');
+    wheelHandler!({
+      target: new FakeElement(),
+      deltaY: 360,
+      ctrlKey: false,
+      defaultPrevented: false,
+      preventDefault: () => { prevented = true; },
+    });
+
+    expect(main.scrollTop).toBe(360);
+    expect(prevented).toBe(true);
+  });
+
+  it('discovers generic nested scrollers and hands wheel movement to the page at either edge', () => {
+    let wheelHandler: ((event: any) => void) | undefined;
+    let prevented = 0;
+    class FakeElement {
+      nodeType = 1;
+      parentElement: FakeElement | null = null;
+      style: { overflowY: string };
+      scrollTop: number;
+      scrollHeight: number;
+      clientHeight: number;
+
+      constructor({ overflowY = 'visible', scrollTop = 0, scrollHeight = 0, clientHeight = 0 } = {}) {
+        this.style = { overflowY };
+        this.scrollTop = scrollTop;
+        this.scrollHeight = scrollHeight;
+        this.clientHeight = clientHeight;
+      }
+    }
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => void) => {
+        if (type === 'wheel') wheelHandler = handler;
+      },
+    };
+    const main = new FakeElement({ overflowY: 'scroll', scrollTop: 0, scrollHeight: 1800, clientHeight: 600 });
+    const genericNestedPanel = new FakeElement({ overflowY: 'auto', scrollTop: 100, scrollHeight: 900, clientHeight: 300 });
+    const child = new FakeElement();
+    child.parentElement = genericNestedPanel;
+    genericNestedPanel.parentElement = main;
+    const context: any = {
+      Element: FakeElement,
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : id === 'skills-cognition-main' ? main : null,
+        querySelectorAll: () => [],
+      },
+      window: {
+        addEventListener() {},
+        getComputedStyle: (element: FakeElement) => element.style,
+      },
+      _skillsCognitionState: {},
+      initSkillsCognitionConsole() {},
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    const wheel = (deltaY: number) => wheelHandler!({
+      target: child,
+      deltaY,
+      ctrlKey: false,
+      defaultPrevented: false,
+      preventDefault: () => { prevented += 1; },
+    });
+
+    wheel(120);
+    expect(main.scrollTop).toBe(0);
+    expect(prevented).toBe(0);
+
+    genericNestedPanel.scrollTop = 600;
+    wheel(120);
+    expect(main.scrollTop).toBe(120);
+    expect(prevented).toBe(1);
+
+    genericNestedPanel.scrollTop = 0;
+    main.scrollTop = 300;
+    wheel(-100);
+    expect(main.scrollTop).toBe(200);
+    expect(prevented).toBe(2);
+  });
+
   it('revokes an overview teaching signal through IPC and refreshes the snapshot', async () => {
     let clickHandler: ((event: any) => Promise<void>) | undefined;
     const calls: Array<[string, unknown]> = [];
@@ -1392,6 +1581,58 @@ describe('Recall cognition renderer flow', () => {
     expect(refreshes).toBe(1);
     expect(button.disabled).toBe(false);
     expect(button.dataset.busy).toBe('0');
+  });
+
+  it('opens an inbox candidate on its matching capture task', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    let switchedPage = '';
+    let loads = 0;
+    let scrolled = 0;
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    const button: any = { dataset: { cognitionOpenCandidate: 'cand-a' } };
+    const taskRow: any = {
+      dataset: { recallCaptureSelect: 'capture-a' },
+      scrollIntoView: () => { scrolled += 1; },
+    };
+    const state: any = {
+      captures: [{ id: 'capture-a', candidateIds: ['cand-a'], terminalRunId: 'run-a' }],
+      recentCaptures: [],
+      recallCandidates: [{ id: 'cand-a', taskRunId: 'run-a', status: 'pending_review' }],
+      captureFilter: 'failed',
+      captureNextCursor: 'next',
+      selectedCaptureId: '',
+    };
+    const target = {
+      closest: (selector: string) => selector === '[data-cognition-open-candidate]' ? button : null,
+    };
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : null,
+        querySelectorAll: (selector: string) => selector === '[data-recall-capture-select]' ? [taskRow] : [],
+      },
+      window: { addEventListener() {} },
+      _skillsCognitionState: state,
+      switchSkillsCognitionPage: (page: string) => { switchedPage = page; },
+      loadRecallCaptureTasks: async () => { loads += 1; },
+      setTimeout: (callback: () => void) => { callback(); return 1; },
+      initSkillsCognitionConsole() {},
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target });
+
+    expect(loads).toBe(0);
+    expect(state.captureFilter).toBe('all');
+    expect(state.captureNextCursor).toBeNull();
+    expect(state.selectedCaptureId).toBe('capture-a');
+    expect(switchedPage).toBe('captures');
+    expect(scrolled).toBe(1);
   });
 
   it('routes capture task controls through the matching IPC action and refreshes the task list', async () => {
@@ -1858,7 +2099,7 @@ describe('Recall cognition renderer flow', () => {
       dataset: { recallManualAdd: 'conv-b' },
       disabled: false,
     };
-    const actionLabel = { textContent: '提取并写入记忆' };
+    const actionLabel = { textContent: '加入沉淀任务' };
     button.querySelector = (selector: string) => selector === '.recall-manual-conversation-action' ? actionLabel : null;
     let showedBusyState = false;
     const target = {
@@ -1878,9 +2119,9 @@ describe('Recall cognition renderer flow', () => {
         addEventListener() {},
         cogseed: {
           invoke: async (channel: string, input: unknown) => {
-            showedBusyState = button.disabled === true && actionLabel.textContent === '正在提取';
+            showedBusyState = button.disabled === true && actionLabel.textContent === '正在创建任务';
             calls.push([channel, input]);
-            return { ok: true, capture: { id: `rcap-${calls.length}`, status: 'queued', autoWrite: true } };
+            return { ok: true, capture: { id: `rcap-${calls.length}`, status: 'waiting_manual' } };
           },
         },
       },
@@ -1907,7 +2148,7 @@ describe('Recall cognition renderer flow', () => {
     expect(state.selectedCaptureId).toBe('rcap-1');
     expect(refreshes).toBe(2);
     expect(showedBusyState).toBe(true);
-    expect(actionLabel.textContent).toBe('提取并写入记忆');
+    expect(actionLabel.textContent).toBe('加入沉淀任务');
     expect(button.disabled).toBe(false);
     expect(button.dataset.busy).toBe('0');
   });
