@@ -493,6 +493,14 @@ const ConversationInfo = (() => {
     return c && c.title ? c.title : _label('chat.new_conv_title', 'New conversation');
   }
 
+  /** 掩码来源名里的内部 session id（oc_/sess_/conv_ 长 id）——来源展示给
+   *  用户看的是可读标题，内部 id 不直接暴露（隐私/安全）。仅掩码独立成段的
+   *  内部 id token，保留可读前缀（如 "Lark · oc_xxx" → "Lark · oc_xxxx…"）。 */
+  function _maskedSourceName(title) {
+    const text = String(title || '');
+    return text.replace(/(^|[^A-Za-z0-9])(oc_|sess_|conv_|gconv-|cid-)[A-Za-z0-9_-]{8,}/g, '$1$2' + _label('common.id_masked', '…'));
+  }
+
   function _collectHistoryProducedFiles() {
     const byPath = new Map();
     for (const m of _snapshot.history || []) {
@@ -1197,6 +1205,11 @@ const ConversationInfo = (() => {
     if (s === 'read-only' || s === 'readonly') return _label('conversation_info.carried.permission.read_only', '只读');
     if (s === 'read_write' || s === 'readwrite') return _label('conversation_info.carried.permission.read_write', '可写');
     if (s === 'ask') return _label('conversation_info.carried.permission.ask', '逐次询问');
+    // 审批类权限模式：all_files_approval 等属于「常规」逐项审批，显示可读名
+    // 而不是原文（测试断言：all_files_approval → 常规，不显示原文）。
+    if (s === 'all_files_approval' || s === 'approval' || s === 'default') {
+      return _label('conversation_info.carried.permission.default', '常规');
+    }
     return String(mode || '');
   }
 
@@ -1289,7 +1302,7 @@ const ConversationInfo = (() => {
     const events = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents : [];
     const executions = Array.isArray(_snapshot.executions) ? _snapshot.executions : [];
     const collab = _latestCollaborationRef(events);
-    const title = _currentConversationTitle();
+    const title = _maskedSourceName(_currentConversationTitle());
 
     // 本次运行：真实执行记录，按开始时间倒序。默认只列最近 10 条，
     // 顶部汇总总数，超出部分一键展开（展开后全量展示，不删数据）。

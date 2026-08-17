@@ -54,6 +54,14 @@ export interface MaterializeResult {
   created: boolean;
   seeded: boolean;
   degraded: boolean;
+  /** Index of the seed message in the conversation message file (0-based), so
+   *  a background extraction can rewrite it in place later. -1 when nothing
+   *  was seeded (already-imported / unseeded path). */
+  seedMsgIndex: number;
+  /** Conversation title / project binding — the background extraction task
+   *  needs both to rewrite the seed and build the continuation snapshot. */
+  title: string;
+  projectId: string | null;
 }
 
 /** Deterministic, collision-safe conversation id for an imported session, so
@@ -98,9 +106,13 @@ function buildTitle(input: MaterializeInput): string {
 function buildSeed(input: MaterializeInput): { text: string; modelText: string } {
   const summary = input.extraction.sessionSummary.trim();
   const src = sourceDisplayName(input.source);
-  const banner = input.extraction.degraded
-    ? `[从 ${src} 导入 · 未能自动提炼，以下为原始开头]`
-    : `[从 ${src} 导入 · 已提炼]`;
+  // 后台提炼（B+）：materialize 先落占位 seed，提炼完成后由后台任务原地更新。
+  const pending = input.extraction.reason === 'extraction_pending';
+  const banner = pending
+    ? `[从 ${src} 导入 · 正在提炼]`
+    : input.extraction.degraded
+      ? `[从 ${src} 导入 · 未能自动提炼，以下为原始开头]`
+      : `[从 ${src} 导入 · 已提炼]`;
   const text = `${banner}\n\n${summary}`;
   const modelText =
     `以下是用户从 ${src} 导入的一段历史会话的提炼简报。` +
@@ -162,6 +174,9 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
       created: false,
       seeded: false,
       degraded: !!input.extraction.degraded,
+      seedMsgIndex: -1,
+      title: conv.title,
+      projectId: conv.project_id ?? null,
     };
   }
 
@@ -177,26 +192,30 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
     // 显示（接续准备面板替代）。前端据此跳过气泡渲染。
     imported_seed: true,
   };
-  await appendJsonlAtomic<GroupMessage>(msgFile, seed);
+  const append = await appendJsonlAtomic<GroupMessage>(msgFile, seed);
+  const seedMsgIndex = append.msgIndex;
 
   // Build a TaskContinuationSnapshot so the imported session can be resumed
   // without re-explaining: goal / stage / next are derived from the real
   // extracted summary (never fabricated). Best-effort — failure must not
-  // block the import itself.
-  try {
-    const { buildContinuationSnapshot } = await import('../task_continuation');
-    await buildContinuationSnapshot({
-      userId: input.userId,
-      conversationId: conv.conversation_id,
-      projectId: conv.project_id ?? null,
-      sessionSummary: input.extraction.sessionSummary,
-      title: conv.title,
-    });
-  } catch (snapErr) {
-    log.warn('failed to build continuation snapshot', {
-      conversationId: conv.conversation_id,
-      error: (snapErr as Error)?.message || String(snapErr),
-    });
+  // block the import itself. When extraction is deferred to the background
+  // (B+), skip this — the background task rebuilds it with the real summary.
+  if (input.extraction.reason !== 'extraction_pending') {
+    try {
+      const { buildContinuationSnapshot } = await import('../task_continuation');
+      await buildContinuationSnapshot({
+        userId: input.userId,
+        conversationId: conv.conversation_id,
+        projectId: conv.project_id ?? null,
+        sessionSummary: input.extraction.sessionSummary,
+        title: conv.title,
+      });
+    } catch (snapErr) {
+      log.warn('failed to build continuation snapshot', {
+        conversationId: conv.conversation_id,
+        error: (snapErr as Error)?.message || String(snapErr),
+      });
+    }
   }
 
   // Touch updated_at so the conversation sorts to the top of the sidebar list.
@@ -211,5 +230,8 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
     created: true,
     seeded: true,
     degraded: !!input.extraction.degraded,
+    seedMsgIndex,
+    title: conv.title,
+    projectId: conv.project_id ?? null,
   };
 }

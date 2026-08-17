@@ -273,7 +273,22 @@ describe('session_import › skill-import (Claude skills → skill library)', ()
 });
 
 describe('session_import › full pipeline (importClaudeSession)', () => {
-  it('reads → extracts → materializes → routes, end to end', async () => {
+  /** B+ fast import: import returns before extraction; poll the persisted
+   *  extraction state until it settles (done/failed). */
+  async function waitForExtraction(userId: string, cid: string, timeoutMs = 4000) {
+    const { getExtractionState } = await import(
+      '../../../src/main/features/session_import/extraction-background'
+    );
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const state = await getExtractionState(userId, cid);
+      if (state && state.status !== 'pending') return state;
+      if (Date.now() > deadline) throw new Error('background extraction did not settle');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  it('fast import materializes immediately; background extraction finishes the pipeline', async () => {
     // Stage the fake Claude transcript file the reader will read.
     const projectsRoot = path.join(os.homedir(), '.claude', 'projects', 'enc-proj');
     fs.mkdirSync(projectsRoot, { recursive: true });
@@ -295,14 +310,21 @@ describe('session_import › full pipeline (importClaudeSession)', () => {
     const chats = await import('../../../src/main/features/chats');
     const recall = await import('../../../src/main/features/recall/candidate-service');
 
+    // B+ fast import: the click returns instantly (extractionPending), no
+    // model call, no cognitions yet.
     const res = await importClaudeSession({ userId: TEST_UID, filePath });
     expect(res.ok).toBe(true);
-    expect(res.degraded).toBe(false);
-    expect(res.cognitions.rule).toBe(1);
+    expect(res.extractionPending).toBe(true);
+    expect(res.cognitions).toEqual({ personal: 0, rule: 0, template: 0 });
 
-    // Conversation exists and is seeded.
+    // Conversation exists immediately, seeded with the placeholder banner.
     const msgs = await chats.getMessages(TEST_UID, res.conversationId!);
-    expect(msgs[0].text).toContain('CI 缓存 key');
+    expect(msgs[0].text).toContain('正在提炼');
+
+    // Background extraction settles and rewrites the seed with the real brief.
+    await waitForExtraction(TEST_UID, res.conversationId!);
+    const after = await chats.getMessages(TEST_UID, res.conversationId!);
+    expect(after[0].text).toContain('CI 缓存 key');
 
     // Cognition landed in the candidate pool as a rule.
     const rules = (await recall.listRecallCandidates(TEST_UID))
@@ -313,7 +335,7 @@ describe('session_import › full pipeline (importClaudeSession)', () => {
     fs.rmSync(filePath, { force: true });
   });
 
-  it('degraded extraction still materializes but routes no cognitions', async () => {
+  it('failed background extraction keeps the placeholder seed and routes nothing', async () => {
     const projectsRoot = path.join(os.homedir(), '.claude', 'projects', 'enc-proj2');
     fs.mkdirSync(projectsRoot, { recursive: true });
     const filePath = path.join(projectsRoot, 'pipe-deg.jsonl');
@@ -325,14 +347,18 @@ describe('session_import › full pipeline (importClaudeSession)', () => {
     const { importClaudeSession } = await import('../../../src/main/features/session_import/asset-router');
     const chats = await import('../../../src/main/features/chats');
 
+    // B+: import no longer waits on (or fails on) the extraction call — the
+    // click always succeeds instantly; the failure surfaces in the background.
     const res = await importClaudeSession({ userId: TEST_UID, filePath });
-    expect(res.ok).toBe(false);
-    expect(res.degraded).toBe(true);
-    expect(res.cognitions).toEqual({ personal: 0, rule: 0, template: 0 });
+    expect(res.ok).toBe(true);
+    expect(res.extractionPending).toBe(true);
 
-    // Still importable: conversation exists with the honest degraded banner.
+    const state = await waitForExtraction(TEST_UID, res.conversationId!);
+    expect(state.status).toBe('failed');
+
+    // The seed stays the honest placeholder (never claims a fake brief).
     const msgs = await chats.getMessages(TEST_UID, res.conversationId!);
-    expect(msgs[0].text).toContain('未能自动提炼');
+    expect(msgs[0].text).toContain('正在提炼');
 
     fs.rmSync(filePath, { force: true });
   });
@@ -381,7 +407,7 @@ describe('session_import › prefetch (read+extract cache)', () => {
     fs.rmSync(filePath, { force: true });
   });
 
-  it('without prefetch, import runs extract inline — identical result', async () => {
+  it('without a settled prefetch, import returns instantly and extracts in the background', async () => {
     const filePath = stageClaudeSession('enc-cold', 'cold.jsonl');
     let extractCalls = 0;
     __nextChat = () => {
@@ -392,7 +418,21 @@ describe('session_import › prefetch (read+extract cache)', () => {
     const mod = await import('../../../src/main/features/session_import/asset-router');
     const res = await mod.importClaudeSession({ userId: TEST_UID, filePath });
     expect(res.ok).toBe(true);
-    expect(extractCalls).toBe(1); // cold path pays for the extract inline — same outcome, not sped up.
+    expect(res.extractionPending).toBe(true);
+    // 快速路径：点击返回时模型调用尚未发生（B+ 不再内联等提炼）。
+    expect(extractCalls).toBe(0);
+
+    // 后台提炼完成（消费同一 transcript，调用一次模型）。
+    const { getExtractionState } = await import(
+      '../../../src/main/features/session_import/extraction-background'
+    );
+    const deadline = Date.now() + 4000;
+    let state = await getExtractionState(TEST_UID, res.conversationId!);
+    while ((!state || state.status === 'pending') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      state = await getExtractionState(TEST_UID, res.conversationId!);
+    }
+    expect(extractCalls).toBe(1); // background pass ran once
 
     fs.rmSync(filePath, { force: true });
   });

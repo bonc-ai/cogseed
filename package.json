@@ -1,6 +1,6 @@
 {
   "name": "cogseed",
-  "version": "2026.7.21",
+  "version": "2026.7.21.3",
   "private": true,
   "description": "CogSeed desktop — personal cognition asset workspace",
   "main": "bootstrap.cjs",
@@ -42,6 +42,7 @@
     "prepack": "node scripts/ensure-dev-dependencies.cjs",
     "test:resources:setup": "node scripts/setup-python-test-env.mjs",
     "audit:workspace": "node scripts/audit-local-workspace.mjs",
+    "diagnose:agents": "node scripts/diagnose-local-agents.mjs",
     "package:dev:mac": "node scripts/package-dev-mac.cjs",
     "verify:package:dev:mac": "node scripts/verify-packaged-dev.cjs",
     "audit:branch": "node scripts/audit-branch-diff.mjs",

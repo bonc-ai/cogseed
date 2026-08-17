@@ -115,6 +115,18 @@ function _initSkillsCognitionBindings() {
   };
 
   panel.addEventListener('input', (event) => {
+    const manualSearch = event.target.closest('[data-recall-manual-search]');
+    if (manualSearch) {
+      _skillsCognitionState.manualSearchQuery = manualSearch.value || '';
+      renderSkillsCognitionCaptures();
+      const next = document.querySelector('[data-recall-manual-search]');
+      if (next) {
+        next.focus();
+        const end = next.value.length;
+        if (typeof next.setSelectionRange === 'function') next.setSelectionRange(end, end);
+      }
+      return;
+    }
     const search = event.target.closest('.asset-search');
     if (!search) return;
     _skillsCognitionState.assetSearchQuery = search.value || '';
@@ -392,7 +404,8 @@ function _initSkillsCognitionBindings() {
         if (!result?.ok) throw new Error(result?.error || 'effectiveness feedback failed');
         // 评价会推进成熟度，所以整份快照都要重取，不能只重画本页。
         await loadSkillsCognitionSnapshot();
-        await renderSkillsCognitionProofs();
+        // 评价推进了成熟度，事实链变了，这里必须重取而不是重画。
+        await loadCognitionProofs();
       } catch (error) {
         if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
       } finally {
@@ -893,6 +906,22 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    // 管理来源：五类概览卡就地展开条目，不新增二级页——这一页先回答"系统能从
+    // 哪五类地方发现认知"，条目是钻进去之后的事。
+    const sourceExpand = event.target.closest('[data-cognition-source-expand]');
+    if (sourceExpand) {
+      const kind = sourceExpand.dataset.cognitionSourceExpand || '';
+      if (!kind) return;
+      const open = Array.isArray(_skillsCognitionState.expandedSourceKinds)
+        ? _skillsCognitionState.expandedSourceKinds
+        : [];
+      _skillsCognitionState.expandedSourceKinds = open.includes(kind)
+        ? open.filter((item) => item !== kind)
+        : [...open, kind];
+      renderSkillsCognitionSources();
+      return;
+    }
+
     const treeReload = event.target.closest('[data-cognition-tree-reload]');
     if (treeReload) {
       void loadCognitionTree({ rebuild: true });
@@ -909,11 +938,20 @@ function _initSkillsCognitionBindings() {
         : '[data-cognition-source-group-failed]';
       const target = document.querySelector(selector);
       if (!target) return;
-      // 折叠组要先展开，否则滚过去看到的还是一行收起的摘要。
-      if (target.tagName === 'DETAILS') target.open = true;
-      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      target.classList.add('is-located');
-      setTimeout(() => target.classList.remove('is-located'), 1600);
+      // 卡片收着的话先展开：用户点这一格是要看"到底哪几条出了问题"，滚过去只
+      // 看到一张收起的卡等于没回答。展开会重画，所以要重新查一次节点再滚。
+      const kindToOpen = target.querySelector('[data-cognition-source-expand]')?.dataset.cognitionSourceExpand || '';
+      const open = Array.isArray(_skillsCognitionState.expandedSourceKinds)
+        ? _skillsCognitionState.expandedSourceKinds
+        : [];
+      if (kindToOpen && !open.includes(kindToOpen)) {
+        _skillsCognitionState.expandedSourceKinds = [...open, kindToOpen];
+        renderSkillsCognitionSources();
+      }
+      const located = document.querySelector(selector) || target;
+      located.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      located.classList.add('is-located');
+      setTimeout(() => located.classList.remove('is-located'), 1600);
       return;
     }
 

@@ -245,7 +245,12 @@ async function runPass(userId: string, systemPrompt: string, content: string): P
       disableTools: true,
     });
     if (!res.ok || !res.text) {
-      log.warn('extraction model pass failed', { error: res.error });
+      // chatWithModel 对「未配置模型」是返回 {ok:false,error} 而非抛错，
+      // 这里同样按「未配置模型」降级到 CLI 提炼，否则提取永远失败。
+      const msg = String((res && res.error) || '');
+      const noModel = /未配置模型|no model configured|model.*not.*configured/i.test(msg);
+      if (noModel) return runCliExtractionPass(userId, systemPrompt, content);
+      log.warn('extraction model pass failed', { error: msg });
       return null;
     }
     return res.text;

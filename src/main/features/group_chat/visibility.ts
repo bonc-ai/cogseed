@@ -144,6 +144,11 @@ export interface GroupMessage {
    *  session summary for the model (model_text) but is hidden from the user
    *  UI — the resume welcome panel replaces its display. */
   imported_seed?: boolean;
+  /** True on the commander welcome reply when the session's background
+   *  extraction is still running (B+ fast import). The renderer shows a
+   *  "正在提炼" placeholder panel and swaps in the real carry details when
+   *  the `sessionImport.events` stream reports `extraction_done`. */
+  welcome_pending?: boolean;
   /** Attachment filenames (only meaningful for user messages). */
   attachments?: string[];
   /** Structured composer selections captured at send time. The text still

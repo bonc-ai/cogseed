@@ -586,9 +586,10 @@ function _cwRenderSessionList() {
 }
 
 function _cwRowHtml(item, cls, status) {
+  const busy = cls === 'is-running' || cls === 'is-pending';
   return `
     <div class="cw-import-row ${cls}" data-cw-import-row>
-      <span class="cw-import-state">${_cwIcon(cls === 'is-running' ? 'loading' : (cls === 'is-ok' || cls === 'is-exists' ? 'check' : 'clock'))}</span>
+      <span class="cw-import-state">${_cwIcon(busy ? 'loading' : (cls === 'is-ok' || cls === 'is-exists' ? 'check' : 'clock'))}</span>
       <div class="cw-import-copy"><b>${_cwEsc(item.title)}</b><small>${_cwEsc(_cwSourceLabel(item.source))} · ${_cwEsc(item.meta || '')}</small></div>
       <span class="cw-state-label">${status}</span>
     </div>`;
@@ -607,6 +608,7 @@ async function _cwRunImport() {
   _cw.failed = [];
   _cw.cognitions = 0;
   _cw.degradedCount = 0;
+  _cw.pendingExtractCount = 0;
   _cwRenderFoot();
 
   items.forEach((item) => { item.status = 'waiting'; });
@@ -673,6 +675,17 @@ async function _cwRunImport() {
         if (item.source === 'claude' && res.cognitions) {
           _cw.cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
         }
+        // B+ 快速导入：会话已立即落盘，提炼在后台进行——行直接标记
+        // 「已准备 · 提炼中」，不阻塞后续导入与完成面板。
+        if (res.extractionPending) {
+          item.status = 'pending-extract';
+          item.pendingExtract = true;
+          _cw.pendingExtractCount += 1;
+          if (row) {
+            row.outerHTML = _cwRowHtml(item, 'is-pending', '已准备 · 提炼中');
+            row = list.querySelectorAll('[data-cw-import-row]')[i];
+          }
+        } else
         // `degraded` means the distillation model call did not run (no usable
         // model provider configured, or the call failed), so the conversation
         // was seeded with the raw opening instead of a distilled brief and no
@@ -728,17 +741,19 @@ async function _cwRunImport() {
     if (newCount) summaryParts.push(`新生成 ${newCount} 份`);
     if (existsCount) summaryParts.push(`已存在 ${existsCount} 份`);
     if (_cw.degradedCount) summaryParts.push(`未提炼 ${_cw.degradedCount} 份`);
+    if (_cw.pendingExtractCount) summaryParts.push(`提炼中 ${_cw.pendingExtractCount} 份`);
     body.innerHTML = `
       <div class="cw-section-intro">
         <h3>接续任务已准备好</h3>
         <p>提炼目标、当前进展、已确认约束与下一步，不复制无关会话内容。</p>
         <div class="cw-privacy-note">${_cwIcon('lock')}原 Agent 内容不会被修改</div>
       </div>
-      <div class="cw-success-panel show">${_cwIcon('check-circle')}<div><h4>${summaryParts.length ? summaryParts.join(' · ') : `已生成 ${okCount} 份可接续任务`}</h4><p>打开后先查看任务摘要与准备带入的内容，再决定是否在新会话或目标 Agent 中继续。</p></div></div>
+      <div class="cw-success-panel show">${_cwIcon('check-circle')}<div><h4>${summaryParts.length ? summaryParts.join(' · ') : `已生成 ${okCount} 份可接续任务`}</h4><p>打开后先查看任务摘要与准备带入的内容，再决定是否在新会话或目标 Agent 中继续。${_cw.pendingExtractCount ? '提炼在后台进行，完成后会话内会自动更新携带明细。' : ''}</p></div></div>
       ${_cw.imported.length ? `<div class="cw-done-list">${_cw.imported.map((item) => `
         <div class="cw-done-row${item.degraded ? ' is-degraded' : ''}">
           <span class="cw-done-title">${_cwEsc(item.title)}</span>
           ${item.existing ? '<span class="cw-done-tag is-exists">已存在</span>' : ''}
+          ${item.pendingExtract ? '<span class="cw-done-tag is-pending">提炼中</span>' : ''}
           ${item.degraded ? `<span class="cw-done-tag" title="${_cwEsc(item.degradedReason || '未提炼')}">未提炼</span>` : ''}
           ${item.degraded && item.degradedReason ? `<small class="cw-done-reason">${_cwEsc(item.degradedReason)}</small>` : ''}
           <button type="button" class="cw-btn small" data-cw-open-cid="${_cwEsc(item.cid)}">打开</button>

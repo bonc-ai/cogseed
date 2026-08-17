@@ -4969,6 +4969,35 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
   },
 
+  // B+ fast import: background extraction completion. The renderer subscribes
+  // once on boot and uses these events to swap a conversation's "正在提炼"
+  // placeholder for the real carry details (and toast the user).
+  'sessionImport.events': async function* (_payload, _ctx, signal) {
+    const buf: Array<{ type: 'extraction_done' | 'extraction_failed'; cid: string; welcome?: unknown; reason?: string }> = [];
+    let wake: (() => void) | null = null;
+    let cancelled = signal.aborted;
+    const onAbort = () => { cancelled = true; const w = wake; wake = null; w?.(); };
+    if (!cancelled) signal.addEventListener('abort', onAbort, { once: true });
+    const { subscribeExtractionEvents } = await import('../features/session_import/extraction-background');
+    const unsub = subscribeExtractionEvents((ev) => {
+      buf.push(ev);
+      const w = wake; wake = null; w?.();
+    });
+    try {
+      while (!cancelled) {
+        while (buf.length) {
+          const ev = buf.shift()!;
+          yield { type: 'event', event: ev };
+        }
+        if (cancelled) break;
+        await new Promise<void>((resolve) => { wake = resolve; });
+      }
+    } finally {
+      try { unsub(); } catch { /* ignore */ }
+      try { signal.removeEventListener?.('abort', onAbort); } catch { /* ignore */ }
+    }
+  },
+
   'skills.chat.sendStream': async function* ({ id, content, model_text, attachments }, ctx, signal) {
     if (!skills.isValidSkillId(id)) {
       yield { type: 'error', text: 'invalid skill id' };

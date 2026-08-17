@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { MateTaskRecord } from '../../../../src/main/features/cogseed_backend/types';
 
 const loggerMocks = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -507,11 +508,55 @@ describe('group_chat facade › runtimeStatus orphan recovery', () => {
       processing_since: null,
       in_flight: [],
       active_turns: [],
+      backend_active: false,
     });
 
     const healed = await s.readState(TEST_UID, TEST_CID);
     expect(healed.status).toBe('idle');
     expect(healed.in_flight).toEqual([]);
+  });
+
+  it('keeps processing=true while a CogSeed Backend task for the conversation is active', async () => {
+    // Backend (Mate / local-CLI) tasks run outside the group-chat bus: the
+    // bus is quiescent while they execute, so runtimeStatus must surface them
+    // or the renderer finalizes the run early (imported-session continuation
+    // dispatches long work there).
+    const { mateTaskFile } = await import('../../../../src/main/features/cogseed_backend/paths');
+    const { MATE_AGENT_BACKEND_SCHEMA_VERSION } = await import('../../../../src/main/features/cogseed_backend/types');
+    const taskId = 'mate-task-runtime-status-active';
+    const nowIso = new Date().toISOString();
+    const task: MateTaskRecord = {
+      schemaVersion: MATE_AGENT_BACKEND_SCHEMA_VERSION,
+      taskId,
+      sessionId: 'mate-session-runtime-status',
+      runtimeSessionId: 'mruntime-session-runtime-status',
+      executionId: 'mate-exec-runtime-status',
+      requestId: 'req-runtime-status-active',
+      ownerId: TEST_UID,
+      status: 'running',
+      task: 'continue the imported session',
+      conversationId: TEST_CID,
+      agentId: 'agent-backend-a',
+      executionKind: 'cogseed-native',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    const taskFile = mateTaskFile(TEST_UID, taskId);
+    fs.mkdirSync(path.dirname(taskFile), { recursive: true });
+    fs.writeFileSync(taskFile, JSON.stringify(task));
+
+    const facade = await import('../../../../src/main/features/group_chat');
+    const runtime = await facade.runtimeStatus(TEST_UID, TEST_CID);
+    expect(runtime.backend_active).toBe(true);
+    expect(runtime.processing).toBe(true);
+    expect(runtime.in_flight).toContain('agent-backend-a');
+    expect(runtime.active_turns.some((t) => t.turn_id === taskId && t.actor === 'agent-backend-a')).toBe(true);
+
+    // Once the task reaches a terminal status, the conversation is idle again.
+    fs.writeFileSync(taskFile, JSON.stringify({ ...task, status: 'completed', terminalAt: nowIso }));
+    const idle = await facade.runtimeStatus(TEST_UID, TEST_CID);
+    expect(idle.backend_active).toBe(false);
+    expect(idle.processing).toBe(false);
   });
 });
 

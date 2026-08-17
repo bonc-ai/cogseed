@@ -1601,6 +1601,37 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(st.coding_project_dir).toBe(expected);
   });
 
+  it('materialises the space workspace dir before CLI dispatch (chat-only space conv must not spawn ENOENT)', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'workbuddy' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const spaces = await import('../../../../src/main/features/spaces');
+    const chats = await import('../../../../src/main/features/chats');
+    const convWs = await import('../../../../src/main/features/group_chat/conv_workspace');
+    const created = await spaces.createSpace(TEST_UID, { name: '纯对话空间' });
+    if (!created.ok) throw new Error('create space failed');
+    const conv = await chats.createConversation(TEST_UID, { title: '纯对话任务', spaceId: created.space.space_id });
+
+    // 派发前空间工作区目录不存在（conv_workspace 惰性 mkdir：只对话不产出的会话零足迹）
+    const expected = await convWs.getConversationWorkspacePath(TEST_UID, conv.conversation_id);
+    expect(fs.existsSync(expected)).toBe(false);
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    await bus.enqueue({
+      uid: TEST_UID, cid: conv.conversation_id, fromActorId: 'user',
+      text: `@${AGENT_NAME} 看一下这个项目`,
+    });
+    await waitForQuiescent(TEST_UID, conv.conversation_id);
+
+    // CLI 派发后目录必须已创建——否则 child_process.spawn 因 cwd 缺失抛 ENOENT
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(expected);
+    expect(fs.statSync(expected).isDirectory()).toBe(true);
+  });
+
   it('re-points a stale non-explicit coding_project_dir (userWorkSpace root) to the space workspace dir', async () => {
     const paths = await import('../../../../src/main/paths');
     const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
@@ -1971,5 +2002,46 @@ describe('group_chat bus › processItemsAreRoutingOnly (abort promotion guard)'
     expect(bus.processItemsAreRoutingOnly([toolEvent('read_file')])).toBe(false);
     expect(bus.processItemsAreRoutingOnly([{ type: 'progress', text: 'x' }])).toBe(false);
     expect(bus.processItemsAreRoutingOnly([])).toBe(false);
+  });
+});
+
+describe('group_chat bus › parseContinuationJudgement (kstar routing judge)', () => {
+  async function judge(): Promise<typeof import('../../../../src/main/features/group_chat/bus')> {
+    return import('../../../../src/main/features/group_chat/bus');
+  }
+
+  it('accepts the canonical tagged shape', async () => {
+    const bus = await judge();
+    expect(bus.parseContinuationJudgement('<kstar-judge>{"is_task":true,"continuation":false}</kstar-judge>'))
+      .toEqual({ isTask: true, continuation: false });
+    expect(bus.parseContinuationJudgement('<kstar-judge>{"is_task":false,"continuation":true}</kstar-judge>'))
+      .toEqual({ isTask: false, continuation: true });
+  });
+
+  it('accepts bare JSON and prose-wrapped JSON', async () => {
+    const bus = await judge();
+    expect(bus.parseContinuationJudgement('{"is_task":true,"continuation":true}'))
+      .toEqual({ isTask: true, continuation: true });
+    expect(bus.parseContinuationJudgement('Sure: {"is_task":false,"continuation":false} here.'))
+      .toEqual({ isTask: false, continuation: false });
+  });
+
+  it('accepts the wrapped {"kstar-judge":{...}} shape models actually emit', async () => {
+    const bus = await judge();
+    // 实测模型输出：把标签名误解成 JSON key
+    expect(bus.parseContinuationJudgement('{"kstar-judge":{"is_task":true,"continuation":false}}'))
+      .toEqual({ isTask: true, continuation: false });
+    expect(bus.parseContinuationJudgement('{"kstar_judge":{"is_task":true,"continuation":true}}'))
+      .toEqual({ isTask: true, continuation: true });
+  });
+
+  it('returns null for absent/malformed judgements', async () => {
+    const bus = await judge();
+    expect(bus.parseContinuationJudgement(undefined)).toBeNull();
+    expect(bus.parseContinuationJudgement('')).toBeNull();
+    expect(bus.parseContinuationJudgement('just prose')).toBeNull();
+    expect(bus.parseContinuationJudgement('{"is_task":"yes"}')).toBeNull();
+    expect(bus.parseContinuationJudgement('{"kstar-judge":{"continuation":true}}')).toBeNull();
+    expect(bus.parseContinuationJudgement('not json {')).toBeNull();
   });
 });

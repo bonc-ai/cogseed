@@ -1,12 +1,30 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import {
   bindAbort,
   killProcessTree,
   levelOrInfo,
   LineSplitter,
+  spawnCli,
   StderrTail,
 } from '../../../../src/main/features/local_agents/backends/base';
+
+const TMP_DIRS: string[] = [];
+function tmpDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TMP_DIRS.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  while (TMP_DIRS.length) {
+    const dir = TMP_DIRS.pop()!;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe('local_agents/backends/base', () => {
   it('keeps only the bounded stderr tail', () => {
@@ -106,5 +124,37 @@ describe('local_agents/backends/base', () => {
     });
 
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+  });
+});
+
+describe('local_agents/backends/base › spawnCli', () => {
+  it('creates the cwd directory before spawning when it does not exist', async () => {
+    const root = tmpDir('orkas-spawncli-');
+    const missingCwd = path.join(root, 'cloud', 'spaces', 'sp_abc123', 'workspace', '任务甲');
+    expect(fs.existsSync(missingCwd)).toBe(false);
+
+    const child = spawnCli('/bin/echo', ['hi'], missingCwd);
+    const [code] = await new Promise<[number | null, string]>((resolve) => {
+      let out = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (c: string) => { out += c; });
+      child.on('close', (c) => resolve([c, out]));
+    });
+
+    expect(code).toBe(0);
+    // The missing cwd was materialised so the CLI could start in it.
+    expect(fs.statSync(missingCwd).isDirectory()).toBe(true);
+  });
+
+  it('leaves an already-existing cwd untouched', () => {
+    const root = tmpDir('orkas-spawncli-');
+    const cwd = path.join(root, 'existing');
+    fs.mkdirSync(cwd, { recursive: true });
+    const marker = path.join(cwd, 'marker.txt');
+    fs.writeFileSync(marker, 'x');
+
+    spawnCli('/bin/echo', ['hi'], cwd);
+
+    expect(fs.statSync(marker).isFile()).toBe(true);
   });
 });
