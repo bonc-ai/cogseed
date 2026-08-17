@@ -198,6 +198,9 @@ export function spawnCli(
     childEnv[key] = value;
   }
   const launch = resolveCliCommand(binPath, args, process.platform, childEnv);
+  for (const [key, value] of Object.entries(launch.envPatch || {})) {
+    childEnv[key] = value;
+  }
   const child = spawn(launch.command, launch.args, {
     cwd,
     env: childEnv,
