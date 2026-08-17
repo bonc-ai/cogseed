@@ -5104,6 +5104,13 @@ body.model-not-configured .main-content { flex-direction: column; }
   filter: drop-shadow(0 5px 10px rgba(20, 40, 30, 0.16));
 }
 
+/* 内联确认卡（如删除文件确认）挂在会话末尾时，右缘与输入框右缘对齐——松鼠
+   悬在输入框上方恰好压住卡片右侧的确认/取消按钮。确认卡存在期间隐藏松鼠，
+   保证按钮完整可见可点（指针事件本就穿透，这里解决视觉遮挡）。 */
+#panel-conversation:has(.delete-confirm-card) .chat-input-squirrel {
+  display: none;
+}
+
 .new-chat-input-area textarea {
   flex: 0 1 auto;
   width: 100%;
