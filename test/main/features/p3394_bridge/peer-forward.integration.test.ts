@@ -123,9 +123,9 @@ beforeAll(async () => {
   fs.writeFileSync(cliA, '#!/bin/sh\necho "A-CLI received: $*"\n', { mode: 0o755 });
   fs.writeFileSync(cliB, '#!/bin/sh\necho "B-CLI received: $*"\n', { mode: 0o755 });
 
-  // 真实 Bridge。
+  // 真实 Bridge（async：监听失败换端口重试后返回 handle）。
   const { maybeStartP3394Bridge } = await import('../../../../src/main/features/p3394_bridge/app-wiring');
-  bridgeHandle = maybeStartP3394Bridge();
+  bridgeHandle = await maybeStartP3394Bridge();
 
   [portA, portB] = [await freePort(), await freePort()];
   startGateway(portA, 'node-a', cliA);
