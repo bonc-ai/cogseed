@@ -40,6 +40,12 @@ if [ -n "${ORKAS_WORKSPACE_ROOT:-}" ]; then
 fi
 export ORKAS_RUNTIME_VARIANT="cogseed"
 
+# Hub 联调默认值：默认连接测试 Hub 账号服务（https://cogseed-open.bonc.com.cn）。
+# 3000 端口已对公网关闭，请勿再直连 http://101.36.66.129:3000。
+# 需要连本地服务时，显式导出同名变量即可覆盖：
+#   COGSEED_HUB_API_BASE=http://localhost:3000 ./run.sh
+export COGSEED_HUB_API_BASE="${COGSEED_HUB_API_BASE:-https://cogseed-open.bonc.com.cn}"
+
 if [ ! -f "$APP_DIR/package.json" ]; then
   echo "[CogSeed] $APP_DIR/package.json not found; check the project directory layout." >&2
   exit 1
@@ -95,7 +101,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
       OPEN_ENV_ARGS+=(--env "ORKAS_HUB_API_BASE=$ORKAS_HUB_API_BASE")
     fi
     # Hub 账号发布 Gate 显式开关（gate.ts 的 env override）。
-    # 源码开发模式默认关；本地联调登录功能时用 COGSEED_HUB_ENABLED=true 启动。
+    # 发布 Gate 已默认打开；如需强制关闭可设 COGSEED_HUB_ENABLED=false。
     if [ -n "${COGSEED_HUB_ENABLED:-}" ]; then
       OPEN_ENV_ARGS+=(--env "COGSEED_HUB_ENABLED=$COGSEED_HUB_ENABLED")
     fi

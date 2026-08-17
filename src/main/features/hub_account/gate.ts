@@ -4,16 +4,17 @@ import { HubApiError } from './client';
 
 export const HUB_ACCOUNT_RELEASE_CONFIG_KEY = 'hub_account.release_enabled';
 
-// GitHub OAuth 登录已撤除，官网账号密码登录随内部测试包开放。
-clientConfig.registerDefault<boolean>(HUB_ACCOUNT_RELEASE_CONFIG_KEY, false, { effect: 'immediate' });
+// 发布 Gate 默认打开：所有通道（dev / packaged-dev / release）默认放行登录。
+// 服务端 client_config 可显式下发 false 关闭（回滚口径）；本地可用
+// COGSEED_HUB_ENABLED 环境变量强制覆盖。
+clientConfig.registerDefault<boolean>(HUB_ACCOUNT_RELEASE_CONFIG_KEY, true, { effect: 'immediate' });
 
 /**
- * 登录入口的通道默认值：内部测试包（packaged-dev）默认打开，
- * 正式 release 与源码开发默认关闭（发布口径保持 Keep Disabled 可关）。
+ * 登录入口的通道默认值：发布 Gate 默认打开，所有通道返回 true。
  * 纯函数，便于测试。
  */
-export function hubReleaseDefaultEnabled(channel: string): boolean {
-  return channel === 'packaged-dev';
+export function hubReleaseDefaultEnabled(_channel: string): boolean {
+  return true;
 }
 
 export function isHubAccountReleaseEnabled(): boolean {

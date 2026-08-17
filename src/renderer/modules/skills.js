@@ -5645,6 +5645,9 @@ let _skillEditSkillId = null;
 // installed as an external package, or the install failed). Cleared once the
 // import produces real content or finalizes as a package.
 let _importDraftId = null;
+// W5: 刚展示过统一导入检查弹窗的技能 id——其编辑会话的 Done 预检跳过一次，
+// 避免"导入弹窗确认后，Done 又弹一次 NSEAP 预检"的双弹窗。
+let _importCheckPopupShownFor = null;
 
 function _updateEditButtonLabel() {
   const btn = document.getElementById('skill-edit-btn');
@@ -5720,7 +5723,10 @@ async function toggleSkillEditMode(opts = {}) {
       const precheck = await window.cogseed.invoke('skills.checkNseapDeclaration', {
         id: _skillEditSkillId,
       });
-      const lines = _nseapDeclarationLines(precheck?.nseapDeclaration);
+      const lines = _importCheckPopupShownFor === _skillEditSkillId
+        ? [] // 刚在统一导入弹窗里展示过——不再重复弹预检
+        : _nseapDeclarationLines(precheck?.nseapDeclaration);
+      _importCheckPopupShownFor = null;
       if (lines.length) {
         const choice = typeof uiChoice === 'function'
           ? await uiChoice({
@@ -5884,7 +5890,12 @@ function _ensureSkillChatController() {
       async onFinal(ev, msgEl, id) {
         // Authoring wrote real files → this import produced a genuine custom
         // skill; commit it so backing out no longer prompts/discards.
+        const committedImport = !!_importDraftId && (!!(ev?.written?.length) || !!(ev?.created?.length));
         if (ev?.written?.length || ev?.created?.length) _importDraftId = null;
+        // W5: URL 导入首次落盘 → 跑准入并弹统一的"导入检查结果"弹窗（仅一次）。
+        if (committedImport) {
+          _showUrlImportCheckResult(_skillEditSkillId || id).catch(() => {});
+        }
         if (_pendingSkillImportReplacementId) {
           const nextId = _pendingSkillImportReplacementId;
           _pendingSkillImportReplacementId = null;
@@ -6405,15 +6416,25 @@ async function _saveSkillFromDirWithQuality({ msgEl, srcDir, force, tracking }) 
     const data = await res.json();
     if (!data.ok) {
       _setSkillModalBusy(false);
-      if (data.report && typeof showValidationReport === 'function') {
+      if (data.report && typeof window.showImportCheckResult === 'function') {
         const titleName = data.skillId || srcDir.split(/[\\/]/).filter(Boolean).pop() || srcDir;
-        // Report-only: an EXTREME violation is not overridable, so no force
-        // action is offered. Previously a "force import" button re-invoked
-        // this with force:true, which skipped the main-process red-flag gate
-        // for everything except the runner-convention rule.
-        await showValidationReport({
-          title: _qualityImportRejectedTitle(titleName),
-          report: data.report,
+        // W5: 统一弹窗——拒绝时用"已拦截/不可用"状态，发现列表来自质量报告，
+        // 无强制安装动作（EXTREME 不可覆盖，与主进程一致）。
+        const findings = (data.report.violations || []).map((v) => ({
+          level: v && v.level ? v.level : 'LOW',
+          text: (typeof window.importCheckFindingText === 'function'
+            ? window.importCheckFindingText(v.rule)
+            : '') || (v && v.suggested_fix) || (v && v.rule) || '',
+          loc: (v && v.field) || '',
+        }));
+        await window.showImportCheckResult({
+          skillName: titleName,
+          source: 'folder',
+          state: data.securityUnavailable ? 'unavailable' : 'blocked',
+          ...(data.securityScan && typeof data.securityScan.score === 'number'
+            ? { score: data.securityScan.score } : {}),
+          surface: _importCheckSurface(data.securityScan),
+          findings,
         });
         _skillCreateTrackResult(tracking, 'blocked', {
           forced: false,
@@ -6450,7 +6471,17 @@ async function _saveSkillFromDirWithQuality({ msgEl, srcDir, force, tracking }) 
       skill_count: _skillCreateCountFromResponse(data),
       forced: !!force,
     });
-    await _afterSkillCreated(createdId, true, _skillImportAutoSeedFromResponse(data));
+    // W5: 统一弹窗——通过/有提示/不可用三态；删除则不再进入详情页。
+    const importAction = await _showImportCheckModal({
+      skillName: createdId,
+      source: 'folder',
+      skillId: createdId,
+      scan: data.securityPass || data.securityScan || null,
+      unavailable: !!data.securityUnavailable,
+    });
+    if (importAction !== 'delete') {
+      await _afterSkillCreated(createdId, true, _skillImportAutoSeedFromResponse(data));
+    }
   } catch (e) {
     msgEl.textContent = t('skills.network_error_plain');
     msgEl.className = 'form-msg err';
@@ -6493,6 +6524,213 @@ async function _afterSkillCreated(sid, isNew, autoSeed) {
         return _ensureSkillsSourceExpanded();
       }
     }).catch(() => {});
+  }
+}
+
+// ─── 导入检查结果弹窗（W5：文件夹 / URL 统一）───────────────────────────
+async function _importCheckQualityFindings(skillId) {
+  if (typeof readQualityReport !== 'function') return [];
+  try {
+    const report = await readQualityReport('skill', skillId);
+    const violations = Array.isArray(report?.violations) ? report.violations : [];
+    return violations.map((v) => ({
+      level: v && v.level ? v.level : 'LOW',
+      text: (typeof window.importCheckFindingText === 'function'
+        ? window.importCheckFindingText(v.rule)
+        : '') || (v && v.suggested_fix) || (v && v.rule) || '',
+      loc: (v && v.field) || '',
+    }));
+  } catch (_) { return []; }
+}
+
+function _importCheckSurface(scan) {
+  const s = scan && scan.attackSurface;
+  if (!s) return null;
+  return {
+    egressPoints: s.egressPoints ?? 0,
+    dynamicExecPoints: s.dynamicExecPoints ?? 0,
+    persistencePoints: s.persistencePoints ?? 0,
+  };
+}
+
+function _importCheckStateFrom(scan, unavailable) {
+  if (unavailable) return 'unavailable';
+  const o = scan && scan.outcome;
+  if (o === 'restricted') return 'risk';
+  if (o === 'blocked') return 'blocked';
+  if (o === 'pass') return 'pass';
+  return 'unavailable';
+}
+
+/**
+ * 展示统一的导入检查弹窗并处理动作。
+ * 返回最终动作（'done'/'keep'/'draft'/'view'/'close'/'delete'）；recheck 在内部
+ * 循环（重跑准入并原地更新），export 在内部下载脱敏 JSON 后保持弹窗打开。
+ */
+async function _showImportCheckModal({ skillName, source, skillId, scan, unavailable }) {
+  if (typeof window.showImportCheckResult !== 'function') return 'close';
+  const findings = await _importCheckQualityFindings(skillId);
+  // NSEAP 声明预检并入统一弹窗（low 级发现行），编辑会话的 Done 预检随后跳过一次。
+  try {
+    const precheck = await window.cogseed.invoke('skills.checkNseapDeclaration', { id: skillId });
+    for (const line of _nseapDeclarationLines(precheck?.nseapDeclaration)) {
+      findings.push({ level: 'LOW', text: line.replace(/^•\s*/, ''), loc: 'NSEAP' });
+    }
+  } catch (_) { /* advisory only */ }
+  _importCheckPopupShownFor = skillId;
+  for (;;) {
+    const action = await window.showImportCheckResult({
+      skillName,
+      source,
+      state: _importCheckStateFrom(scan, unavailable),
+      ...(scan && typeof scan.score === 'number' ? { score: scan.score } : {}),
+      surface: _importCheckSurface(scan),
+      findings,
+    });
+    if (action === 'recheck') {
+      try {
+        const r = await window.cogseed.invoke('skills.admit', { skillId });
+        const a = r && r.admission;
+        scan = a && a.scan ? a.scan : scan;
+        unavailable = !a || a.outcome === 'unknown';
+      } catch (_) { unavailable = true; }
+      continue;
+    }
+    if (action === 'delete') {
+      try {
+        await apiFetch(`/api/skills/${encodeURIComponent(skillId)}`, { method: 'DELETE' });
+      } catch (_) { /* best effort */ }
+      _skillsCache = null;
+      await loadSkills();
+      return 'delete';
+    }
+    if (action === 'export') {
+      const blob = new Blob([JSON.stringify({
+        skillName, source,
+        outcome: scan && scan.outcome,
+        score: scan && scan.score,
+        attackSurface: scan && scan.attackSurface,
+        findings,
+      }, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `import-check-${String(skillName || 'skill').replace(/[^a-zA-Z0-9_-]/g, '_')}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      continue;
+    }
+    return action;
+  }
+}
+
+async function _showUrlImportCheckResult(skillId) {
+  try {
+    const r = await window.cogseed.invoke('skills.admit', { skillId });
+    const a = r && r.admission;
+    await _showImportCheckModal({
+      skillName: skillId, source: 'url', skillId,
+      scan: a && a.scan, unavailable: !a || a.outcome === 'unknown',
+    });
+  } catch (_) {
+    await _showImportCheckModal({ skillName: skillId, source: 'url', skillId, scan: null, unavailable: true });
+  }
+}
+
+async function _afterImportedSkill(data) {
+  closeSkillModal();
+  _skillsCache = null;
+  await loadSkills();
+  setView('skills');
+
+  const skills = Array.isArray(data?.skills) ? data.skills : (data?.skill ? [data.skill] : []);
+  const ids = skills.map((s) => String(s?.id || '')).filter(Boolean);
+  const names = skills.map((s) => String(s?.name || s?.id || '')).filter(Boolean).join('、');
+
+  const warnings = [];
+  if (typeof readQualityReport === 'function') {
+    for (const id of ids) {
+      try {
+        const report = await readQualityReport('skill', id);
+        const violations = Array.isArray(report?.violations) ? report.violations : [];
+        for (const v of violations) {
+          if (!v) continue;
+          warnings.push(`• ${String(v.rule || '')}${v.field ? ` · ${String(v.field)}` : ''}`);
+        }
+      } catch (_) { /* report is best-effort */ }
+    }
+  }
+
+  const nseapWarnings = ids.flatMap((id) => {
+    const cached = (_skillsCache || []).find((s) => String(s?.id || '') === id);
+    return _nseapDeclarationLines(cached?.security?.nseapDeclaration);
+  });
+
+  const seen = new Set();
+  const uniqueWarnings = warnings
+    .filter((w) => {
+      if (seen.has(w)) return false;
+      seen.add(w);
+      return true;
+    })
+    .slice(0, 8);
+  const seenNseap = new Set();
+  const uniqueNseapWarnings = nseapWarnings
+    .filter((w) => {
+      if (seenNseap.has(w)) return false;
+      seenNseap.add(w);
+      return true;
+    })
+    .slice(0, 8);
+
+  const lines = [t('skills.import_review_body', { count: ids.length })];
+  if (names) lines.push(`\n${names}`);
+  // W5: surface the deep-scan verdict the import already produced. The copy
+  // existed since the security-import work but had no consumer; a restricted
+  // or degraded scan is exactly the one thing the author should know before
+  // keeping the import, and it stays one quiet line — never a second dialog.
+  const scanOutcome = data && (data.securityPass?.outcome || data.securityScan?.outcome);
+  const scanDegraded = !!(data && (data.securityPass?.rulesDegraded || data.securityScan?.rulesDegraded));
+  if (scanOutcome === 'restricted') {
+    lines.push(`\n${scanDegraded ? t('skills.security_import_degraded') : t('skills.security_import_restricted')}`);
+  }
+  if (uniqueWarnings.length) {
+    lines.push(`\n${t('skills.import_review_issues')}\n${uniqueWarnings.join('\n')}`);
+  }
+  if (uniqueNseapWarnings.length) {
+    lines.push(`\n${t('skills.import_review_nseap_issues')}\n${uniqueNseapWarnings.join('\n')}`);
+  }
+  if (!uniqueWarnings.length && !uniqueNseapWarnings.length) {
+    lines.push(`\n${t('skills.import_review_no_issues')}`);
+  }
+
+  const choice = typeof uiChoice === 'function'
+    ? await uiChoice({
+      title: t('skills.import_review_title'),
+      message: lines.join('\n'),
+      choices: [
+        { id: 'keep', label: t('skills.import_review_keep'), style: 'primary' },
+        { id: 'discard', label: t('skills.import_review_discard'), style: 'danger' },
+      ],
+    })
+    : 'keep';
+
+  if (choice !== 'discard') return;
+
+  await Promise.allSettled(ids.map((id) => apiFetch(`/api/skills/${id}`, { method: 'DELETE' })));
+  _skillsCache = null;
+  await loadSkills();
+}
+
+function editSelectedSkill() {
+  if (!_selectedSkill || _selectedSkill.source !== 'custom') return;
+  // Custom skills are edited via the inline AI chat (already visible on the right)
+  const input = document.getElementById('skills-chat-input');
+  if (input) {
+    input.focus();
+    // Scroll chat into view if needed
+    input.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }
 }
 

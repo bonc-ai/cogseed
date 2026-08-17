@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>左下角「用户状态 + 设置」融合交互设计稿</title>
+<style>
+  :root {
+    --bg: #FBFDFC;
+    --surface: #ffffff;
+    --surface-2: #EDF3EF;
+    --surface-3: #DCE5DF;
+    --text: #14281E;
+    --text-2: #3E5A4C;
+    --muted: #6E8578;
+    --border: rgba(24, 84, 60, 0.09);
+    --border-strong: rgba(24, 84, 60, 0.18);
+    --primary: #0E9F6E;
+    --primary-hover: #0A7A55;
+    --primary-soft: #E2F5EC;
+    --primary-text: #0A7A55;
+    --success: #16a34a;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --danger-soft: #fef2f2;
+    --radius-lg: 20px;
+    --radius-md: 14px;
+    --radius-sm: 10px;
+    --shadow-pop: 0 12px 32px rgba(20, 40, 30, 0.16), 0 2px 8px rgba(20, 40, 30, 0.08);
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  body.dark {
+    --bg: #101613;
+    --surface: #161f1a;
+    --surface-2: #1d2a24;
+    --surface-3: #26352e;
+    --text: #e8f0eb;
+    --text-2: #b9c9c0;
+    --muted: #8ba195;
+    --primary-soft: rgba(14, 159, 110, 0.16);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #EDF0EE;
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    transition: background .2s;
+  }
+  body.dark { background: #0b100d; }
+  svg.icon { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* ── 原型控制条（仅设计稿用，不是产品 UI 的一部分）──────────────── */
+  .proto-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-2);
+    z-index: 5;
+    position: relative;
+  }
+  .proto-controls .group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    padding: 3px;
+  }
+  .proto-controls button {
+    border: none;
+    background: transparent;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text-2);
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .proto-controls button.on { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+  .proto-controls .sep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 4px; }
+  .proto-controls .hint { color: var(--muted); }
+
+  /* ── 舞台布局：模拟主窗口 ───────────────────────────────────────── */
+  .stage {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    padding: 14px;
+    gap: 14px;
+  }
+  .sidebar {
+    width: 258px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: 0 6px 24px rgba(20, 40, 30, 0.06);
+  }
+  .main {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 13px;
+    box-shadow: 0 6px 24px rgba(20, 40, 30, 0.06);
+  }
+
+  /* ── 侧栏内容（近似产品样式，仅用于衬托左下角）────────────────── */
+  .sidebar-logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px 8px;
+    font-weight: 700;
+    font-size: 15px;
+  }
+  .logo-dot { width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(135deg, var(--primary), #34d399); }
+  .search-fake {
+    margin: 6px 12px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 12px;
+    background: var(--surface);
+  }
+  .search-fake kbd { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+  .side-actions { display: flex; flex-direction: column; gap: 2px; padding: 0 12px 8px; }
+  .side-btn {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text-2);
+    cursor: default;
+    font-family: inherit;
+  }
+  .side-btn.primary { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+  .conv-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 12px 12px;
+    border-top: 1px solid var(--border);
+    min-height: 0;
+  }
+  .conv-tabs { display: flex; gap: 4px; padding: 8px 12px 4px; border-top: 1px solid var(--border); }
+  .conv-tab {
+    border: none;
+    background: transparent;
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: default;
+    font-family: inherit;
+  }
+  .conv-tab.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
+  .conv-item {
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-item.on { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+  .conv-item.sm { font-size: 11.5px; color: var(--muted); }
+
+  /* ══ 核心：融合后的左下角（用户状态 + 设置） ═══════════════════════ */
+  .footer-zone {
+    position: relative;          /* 面板绝对定位基准 */
+    flex: none;
+    padding: 6px 12px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  /* 触发热区可视化（原型演示用；产品中透明不可见） */
+  .footer-zone .zone-outline {
+    position: absolute;
+    inset: 0;
+    border: 1.5px dashed rgba(217, 119, 6, 0.55);
+    border-radius: 8px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .15s;
+  }
+  body.show-zone .footer-zone .zone-outline { opacity: 1; }
+  body.show-zone .panel { outline: 1.5px dashed rgba(14, 159, 110, 0.55); outline-offset: 2px; }
+
+  /* 唯一常驻入口：用户状态栏（融合了原 settings-btn） */
+  .status-bar {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-height: 40px;
+    padding: 5px 8px;
+    border: none;
+    background: transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    color: var(--text-2);
+    transition: background .15s;
+  }
+  .status-bar:hover, .status-bar:focus-visible { background: var(--surface-2); }
+  .footer-zone.is-open .status-bar { background: var(--primary-soft); color: var(--primary-text); }
+  .status-bar:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+  .sb-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-3);
+    color: var(--muted);
+  }
+  .sb-avatar.is-gradient {
+    background: linear-gradient(135deg, #0E9F6E, #34d399);
+    color: #fff;
+    font-weight: 700;
+    font-size: 12px;
+  }
+  .sb-meta { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+  .sb-name { font-size: 12.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sb-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sb-sub.is-accent { color: var(--primary-text); }
+  .sb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex: none; }
+  .sb-dot.warn { background: var(--warn); }
+  .sb-dot.off { background: var(--muted); opacity: .5; }
+  .sb-chev { color: var(--muted); transition: transform .15s; }
+  .footer-zone.is-open .sb-chev { transform: rotate(180deg); }
+  .sb-pin { color: var(--muted); }
+  .footer-zone.is-pinned .sb-pin { color: var(--primary-text); }
+
+  /* 面板：向上展开，与状态栏无缝衔接（无缝 ⇒ hover 不闪断，无需桥接补丁） */
+  .panel {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: calc(100% - 6px);    /* 与状态栏重叠 6px，视觉连成一体 */
+    z-index: 120;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-pop);
+    padding: 8px 6px 14px;
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+    pointer-events: none;
+    transition: opacity .16s ease, transform .16s ease;
+    transform-origin: bottom center;
+  }
+  .footer-zone.is-open .panel { opacity: 1; transform: none; pointer-events: auto; }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 9px 10px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: default;
+  }
+  .panel-head.is-clickable { cursor: pointer; }
+  .panel-head.is-clickable:hover { background: var(--surface-2); }
+  .panel-head-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-3);
+    color: var(--muted);
+  }
+  .panel-head-avatar.is-gradient {
+    background: linear-gradient(135deg, #0E9F6E, #34d399);
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .panel-head-id { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .panel-head-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel-head-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
+
+  .panel-note {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 9px;
+    font-size: 11.5px;
+    color: var(--warn);
+    background: rgba(217, 119, 6, 0.08);
+    border-radius: 8px;
+    margin: 2px 3px 8px;
+  }
+  .panel-note svg.icon { width: 13px; height: 13px; }
+
+  .panel-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 7px 9px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    color: var(--text-2);
+    font-size: 12.5px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .13s;
+  }
+  .panel-item:hover, .panel-item:focus-visible { background: var(--surface-2); }
+  .panel-item:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+  .panel-item.is-active { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+  .panel-item.is-danger { color: var(--danger); }
+  .panel-item.is-danger:hover { background: var(--danger-soft); }
+  .panel-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); margin-left: auto; flex: none; }
+  .panel-item .kbd { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+  .panel-sep { height: 1px; background: var(--border); margin: 5px 9px; }
+
+  /* ── 说明卡片 ───────────────────────────────────────────────────── */
+  .specs {
+    width: 300px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+  }
+  .spec-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--text-2);
+    line-height: 1.6;
+  }
+  .spec-card h3 {
+    margin: 0 0 6px;
+    font-size: 12.5px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .spec-card h3 .tag {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 99px;
+    background: var(--primary-soft);
+    color: var(--primary-text);
+  }
+  .spec-card ul { margin: 0; padding-left: 16px; }
+  .spec-card li { margin: 3px 0; }
+  .spec-card code { font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  .spec-card .risk { color: var(--danger); font-weight: 600; }
+  .spec-card .ok { color: var(--success); font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="proto-controls">
+    <span style="font-weight:600;color:var(--text)">设计稿控制</span>
+    <span class="sep"></span>
+    <span class="hint">账号状态</span>
+    <div class="group" id="modeGroup">
+      <button data-mode="signedIn" class="on">已登录</button>
+      <button data-mode="signedOut">未登录</button>
+      <button data-mode="degraded">服务不可用</button>
+    </div>
+    <span class="sep"></span>
+    <button id="zoneBtn">显示 hover 热区</button>
+    <button id="dotBtn">设置红点提示</button>
+    <button id="darkBtn">暗色模式</button>
+    <span class="sep"></span>
+    <span class="hint">未登录点击状态栏</span>
+    <div class="group" id="signedOutClickGroup">
+      <button data-soclick="pin" class="on">钉住面板</button>
+      <button data-soclick="login">直接登录</button>
+    </div>
+    <span class="sep"></span>
+    <span class="hint">把鼠标放到左下角状态栏上试试 ↑（未登录也会展开）</span>
+  </div>
+
+  <div class="stage">
+    <aside class="sidebar">
+      <div class="sidebar-logo"><span class="logo-dot"></span>CogSeed</div>
+      <div class="search-fake">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        搜索<kbd>⌘K</kbd>
+      </div>
+      <div class="side-actions">
+        <button class="side-btn"><svg class="icon" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新建任务</button>
+        <button class="side-btn primary"><svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>首页</button>
+        <button class="side-btn"><svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>工作空间</button>
+        <button class="side-btn"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>自动化</button>
+      </div>
+      <div class="conv-tabs">
+        <button class="conv-tab">空间</button>
+        <button class="conv-tab on">最近任务</button>
+      </div>
+      <div class="conv-list" id="convList">
+        <div class="conv-item on">关于侧边栏信息架构的讨论</div>
+        <div class="conv-item sm">今天 14:02</div>
+        <div class="conv-item">整理本周学习笔记</div>
+        <div class="conv-item sm">昨天 21:37</div>
+        <div class="conv-item">Python 爬虫脚本调试</div>
+        <div class="conv-item sm">昨天 10:15</div>
+        <div class="conv-item">竞品调研：桌面 Agent 交互</div>
+        <div class="conv-item sm">周一</div>
+        <div class="conv-item">需求评审：侧边栏改造</div>
+        <div class="conv-item sm">上周五</div>
+      </div>
+
+      <!-- ══ 左下角：融合后的「用户状态栏」（hover / focus / 点击 展开面板）══ -->
+      <div class="footer-zone" id="footerZone">
+        <div class="zone-outline"></div>
+        <button type="button" class="status-bar" id="statusBar" aria-haspopup="menu" aria-expanded="false"></button>
+        <div class="panel" id="panel" role="menu" hidden></div>
+      </div>
+    </aside>
+
+    <main class="main" id="mainHint">主内容区（占位）</main>
+
+    <aside class="specs">
+      <div class="spec-card">
+        <h3>方案概览 <span class="tag">融合 v2</span></h3>
+        <ul>
+          <li>左下角只保留 <b>一条用户状态栏</b>，原独立「设置」按钮并入其展开面板。</li>
+          <li>鼠标悬停状态栏 → 面板<b>向上展开</b>，<b>未登录 / 已登录 / Hub 不可用</b>三种状态行为一致；面板与状态栏<b>无缝衔接</b>（重叠 6px），移动鼠标不闪断。</li>
+          <li>单击状态栏 = <b>钉住面板</b>（再点收起）；登录动作放进面板内（顶部开关可切换「未登录单击 = 直接登录」）。</li>
+        </ul>
+      </div>
+      <div class="spec-card">
+        <h3>交互规格</h3>
+        <ul>
+          <li>展开：hover 进入 <code>150ms</code> 后弹出（防路过误触）；focus / Enter 同样展开。</li>
+          <li>收起：离开「状态栏 + 面板」整体 <code>220ms</code> 后收起，期间回移则取消；已钉住不收起。</li>
+          <li>键盘：<code>Tab</code> 可在面板项间移动，<code>Esc</code> 关闭；会话列表滚动时自动关闭。</li>
+          <li>无障碍：复用 <code>aria-haspopup / aria-expanded</code> 语义。</li>
+        </ul>
+      </div>
+      <div class="spec-card">
+        <h3>可行性结论</h3>
+        <ul>
+          <li><span class="ok">✓ 完全可行</span>：现有账号 chip 已具备「向上弹出菜单」的全部基建（定位、动画、z-index 120、外部点击/Esc 关闭），只需扩面板内容 + 换 hover 触发。</li>
+          <li><span class="risk">必须处理</span>：Hub 服务不可用时状态栏仍要保留「设置」入口（右下角第三种状态可看降级形态）。</li>
+          <li>设置项的 active 高亮与红点提示迁移到面板项上。</li>
+        </ul>
+      </div>
+      <div class="spec-card">
+        <h3>改动范围（实现时）</h3>
+        <ul>
+          <li><code>index.html</code>：移除独立 <code>#settings-btn</code>。</li>
+          <li><code>account-chip.js</code>：hover/pin/降级三态 + 设置项并入菜单。</li>
+          <li><code>style.css</code>：面板样式 + 状态栏 active/红点迁移。</li>
+          <li><code>state.js / boot.js</code>：设置视图入口与高亮指向新结构。</li>
+          <li>新增少量 locale 文案（帮助/反馈等）。</li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+  var mode = 'signedIn';        // signedIn | signedOut | degraded
+  var signedOutClickMode = 'pin'; // 未登录点击状态栏：pin = 钉住面板（登录在面板内）| login = 直接登录
+  var showDot = false;
+  var isOpen = false;           // 面板展开（hover/focus/钉住任一成立）
+  var isPinned = false;
+  var isHovering = false;       // 指针在 zone 内
+  var isFocusing = false;       // 焦点在 zone 内
+  var openTimer = null;
+  var closeTimer = null;
+
+  var zone = document.getElementById('footerZone');
+  var bar = document.getElementById('statusBar');
+  var panel = document.getElementById('panel');
+  var mainHint = document.getElementById('mainHint');
+
+  var ICONS = {
+    settings: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    user: '<svg class="icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+    chevDown: '<svg class="icon" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>',
+    pin: '<svg class="icon" viewBox="0 0 24 24"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.5-4.5V7a1.5 1.5 0 0 0-1.5-1.5H8A1.5 1.5 0 0 0 6.5 7v5.5z"/></svg>',
+    info: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+    monitor: '<svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+    logout: '<svg class="icon" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
+    help: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    warn: '<svg class="icon" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+  };
+
+  function toast(msg) {
+    mainHint.innerHTML = msg;
+  }
+
+  /* ── 按状态渲染状态栏 ── */
+  function renderBar() {
+    var inner;
+    if (mode === 'signedIn') {
+      inner =
+        '<span class="sb-avatar is-gradient">N</span>' +
+        '<span class="sb-meta"><span class="sb-name">niubaokang</span>' +
+        '<span class="sb-sub">cogseed_acc_***3f2k</span></span>' +
+        '<span class="sb-dot"></span>' +
+        (isPinned ? '<span class="sb-pin">' + ICONS.pin + '</span>' : '') +
+        '<span class="sb-chev">' + ICONS.chevDown + '</span>';
+    } else if (mode === 'signedOut') {
+      inner =
+        '<span class="sb-avatar">' + ICONS.user + '</span>' +
+        '<span class="sb-meta"><span class="sb-name">登录 CogSeed Hub</span>' +
+        '<span class="sb-sub is-accent">登录后可多端同步</span></span>' +
+        '<span class="sb-dot off"></span>' +
+        '<span class="sb-chev">' + ICONS.chevDown + '</span>';
+    } else {
+      inner =
+        '<span class="sb-avatar">' + ICONS.user + '</span>' +
+        '<span class="sb-meta"><span class="sb-name">设置</span>' +
+        '<span class="sb-sub">Hub 暂不可用 · 本地功能正常</span></span>' +
+        '<span class="sb-dot warn"></span>' +
+        '<span class="sb-chev">' + ICONS.chevDown + '</span>';
+    }
+    bar.innerHTML = inner;
+  }
+
+  /* ── 按状态渲染面板 ── */
+  function renderPanel() {
+    var dot = showDot ? '<span class="dot" aria-hidden="true"></span>' : '';
+    var settingsItem =
+      '<button type="button" class="panel-item' + (mode !== 'degraded' && false ? '' : '') + '" data-action="settings">' +
+      ICONS.settings + '设置' + dot + '<span class="kbd">⌘,</span></button>';
+
+    var html = '';
+    if (mode === 'signedIn') {
+      html =
+        '<div class="panel-head is-clickable" data-action="account">' +
+        '<span class="panel-head-avatar is-gradient">N</span>' +
+        '<div class="panel-head-id"><span class="panel-head-name">niubaokang</span>' +
+        '<span class="panel-head-sub">cogseed_acc_***3f2k · 已绑定本地</span></div>' +
+        '</div>' +
+        settingsItem +
+        '<button type="button" class="panel-item" data-action="overview">' + ICONS.info + '账号概览</button>' +
+        '<button type="button" class="panel-item" data-action="devices">' + ICONS.monitor + '我的设备</button>' +
+        '<div class="panel-sep"></div>' +
+        '<button type="button" class="panel-item is-danger" data-action="signout">' + ICONS.logout + '退出登录</button>';
+    } else if (mode === 'signedOut') {
+      html =
+        '<div class="panel-head is-clickable" data-action="signin">' +
+        '<span class="panel-head-avatar">' + ICONS.user + '</span>' +
+        '<div class="panel-head-id"><span class="panel-head-name">登录 CogSeed Hub</span>' +
+        '<span class="panel-head-sub">点击开始 · 浏览器授权 · 多端同步</span></div>' +
+        '</div>' +
+        settingsItem +
+        '<button type="button" class="panel-item" data-action="help">' + ICONS.help + '帮助与反馈</button>';
+    } else {
+      html =
+        '<div class="panel-note">' + ICONS.warn + 'Hub 服务暂不可达，账号功能已隐藏</div>' +
+        settingsItem +
+        '<button type="button" class="panel-item" data-action="help">' + ICONS.help + '帮助与反馈</button>';
+    }
+    panel.innerHTML = html;
+
+    panel.querySelectorAll('[data-action]').forEach(function (el) {
+      el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        onPanelAction(el.dataset.action);
+      });
+    });
+  }
+
+  function onPanelAction(action) {
+    var map = {
+      settings: '原型：切换到「设置」视图',
+      overview: '原型：打开 设置 › 账号（概览）',
+      devices: '原型：打开 设置 › 账号（我的设备）',
+      account: '原型：打开 设置 › 账号',
+      signout: '原型：确认后退出登录',
+      signin: '原型：打开浏览器授权页登录',
+      help: '原型：打开帮助与反馈'
+    };
+    toast(map[action] || action);
+    closePanel(true);
+  }
+
+  /* ── 展开 / 收起调度 ── */
+  function recompute() {
+    var shouldOpen = isHovering || isFocusing || isPinned;
+    if (shouldOpen) scheduleOpen();
+    else scheduleClose();
+  }
+  function scheduleOpen() {
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+    if (isOpen || openTimer) return;
+    openTimer = setTimeout(function () {
+      openTimer = null;
+      isOpen = true;
+      panel.hidden = false;
+      zone.classList.add('is-open');
+      bar.setAttribute('aria-expanded', 'true');
+    }, 150);
+  }
+  function scheduleClose() {
+    if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+    if (!isOpen || closeTimer) return;
+    closeTimer = setTimeout(function () {
+      closeTimer = null;
+      isOpen = false;
+      zone.classList.remove('is-open');
+      bar.setAttribute('aria-expanded', 'false');
+      panel.hidden = true;
+    }, 220);
+  }
+  function closePanel(alsoUnpin) {
+    isHovering = false;
+    isFocusing = false;
+    if (alsoUnpin && isPinned) { isPinned = false; zone.classList.remove('is-pinned'); renderBar(); }
+    if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+    isOpen = false;
+    zone.classList.remove('is-open');
+    bar.setAttribute('aria-expanded', 'false');
+    panel.hidden = true;
+  }
+
+  /* ── hover 热区：整个 footer-zone（状态栏 + 面板 + 衔接区）── */
+  zone.addEventListener('mouseenter', function () { isHovering = true; recompute(); });
+  zone.addEventListener('mouseleave', function () { isHovering = false; recompute(); });
+
+  /* ── 键盘焦点 ── */
+  zone.addEventListener('focusin', function () { isFocusing = true; recompute(); });
+  zone.addEventListener('focusout', function (e) {
+    if (!zone.contains(e.relatedTarget)) { isFocusing = false; recompute(); }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && isOpen) { closePanel(true); bar.focus(); }
+  });
+
+  /* ── 点击状态栏：三态统一 = 钉住切换；未登录可切换为单击直接登录 ── */
+  bar.addEventListener('click', function () {
+    if (mode === 'signedOut' && signedOutClickMode === 'login') {
+      closePanel(true);
+      toast('原型：打开浏览器授权页登录');
+      return;
+    }
+    isPinned = !isPinned;
+    zone.classList.toggle('is-pinned', isPinned);
+    renderBar();
+    recompute();
+  });
+
+  /* ── 会话列表滚动时关闭（与真实实现一致的细节）── */
+  document.getElementById('convList').addEventListener('scroll', function () {
+    if (isOpen && !isPinned) closePanel(false);
+  });
+
+  /* ── 原型控制 ── */
+  document.getElementById('modeGroup').addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-mode]');
+    if (!btn) return;
+    mode = btn.dataset.mode;
+    document.querySelectorAll('#modeGroup button').forEach(function (b) { b.classList.toggle('on', b === btn); });
+    isPinned = false;
+    zone.classList.remove('is-pinned');
+    closePanel(true);
+    renderBar();
+    renderPanel();
+    toast(mode === 'signedIn' ? '已登录态：hover 状态栏看融合面板' : mode === 'signedOut' ? '未登录态：hover 同样展开（登录在面板内）' : '降级态：Hub 不可用时设置入口仍保留');
+  });
+  document.getElementById('zoneBtn').addEventListener('click', function () {
+    document.body.classList.toggle('show-zone');
+    this.classList.toggle('on', document.body.classList.contains('show-zone'));
+  });
+  document.getElementById('dotBtn').addEventListener('click', function () {
+    showDot = !showDot;
+    this.classList.toggle('on', showDot);
+    renderPanel();
+  });
+  document.getElementById('darkBtn').addEventListener('click', function () {
+    document.body.classList.toggle('dark');
+    this.classList.toggle('on', document.body.classList.contains('dark'));
+  });
+  document.getElementById('signedOutClickGroup').addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-soclick]');
+    if (!btn) return;
+    signedOutClickMode = btn.dataset.soclick;
+    document.querySelectorAll('#signedOutClickGroup button').forEach(function (b) { b.classList.toggle('on', b === btn); });
+    toast('未登录点击状态栏：' + (signedOutClickMode === 'login' ? '直接进入登录流程' : '钉住 / 收起面板（登录在面板内）'));
+  });
+
+  /* ── 初始化 ── */
+  renderBar();
+  renderPanel();
+  toast('三态一致：把鼠标悬停到左下角状态栏（未登录也展开），点击钉住面板');
+})();
+</script>
+</body>
+</html>

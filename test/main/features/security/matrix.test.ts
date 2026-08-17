@@ -421,3 +421,55 @@ describe('security matrix › guardrail is shipped', () => {
     }
   });
 });
+
+// ── Row 7: generation admission (W1) ───────────────────────────────────────
+//
+// The self-generation path (commander `<skill>` container) lands content with
+// `status: 'approved'`; W1 front-loads the same scan+receipt the import paths
+// perform, before the create is reported as done. This row pins that the
+// generation gate and the shared gate agree — a fifth entry point must not
+// invent its own threshold.
+
+describe('security matrix › generation admission (commander container)', () => {
+  let seq = 0;
+  async function createViaCommander(files: Record<string, string>, name: string) {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'mx-gen-ws-'));
+    tmps.push(ws);
+    process.env.ORKAS_WORKSPACE_ROOT = ws;
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('u1');
+    const skills = await import('../../../../src/main/features/skills');
+    return skills.applySkillContainerFromCommander({
+      skillId: undefined,
+      metadata: undefined,
+      files: Object.entries(files).map(([rel, content]) => ({ path: rel, content })),
+    });
+  }
+
+  need(pythonOk)('clean → created with a deep receipt', async () => {
+    const name = `gen-clean-${(seq += 1)}`;
+    // NSEAP-shaped clean: the generation gate escalates missing trigger /
+    // anti-trigger semantics to a `risk` receipt (authoring defect, not a
+    // security verdict). This row pins the SECURITY agreement with the shared
+    // gate, so the fixture carries the trigger semantics that make it clean on
+    // both axes.
+    const clean = CLEAN(name);
+    clean['SKILL.md'] += '\nuse_when: pasted text needs tidying.\ndo_not_use_when: input is already clean Markdown.\n';
+    const r = await createViaCommander(clean, name);
+    expect(r.ok).toBe(true);
+    expect(r.kind).toBe('created');
+    const trust = await import('../../../../src/main/features/skill_trust');
+    const receipt = trust.readReceipt('u1', name);
+    expect(receipt?.decision).toBe('pass');
+    expect(receipt?.scanner).toBe('deep');
+  }, 200_000);
+
+  need(pythonOk)('high → refused, no skill left behind', async () => {
+    const name = `gen-high-${(seq += 1)}`;
+    const r = await createViaCommander(HIGH(name), name);
+    expect(r.ok).toBe(false);
+    const paths = await import('../../../../src/main/paths');
+    const dir = paths.userSkillsDir('u1');
+    expect(fs.existsSync(path.join(dir, name))).toBe(false);
+  }, 200_000);
+});

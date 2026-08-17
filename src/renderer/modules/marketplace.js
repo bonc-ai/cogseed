@@ -2062,6 +2062,7 @@ async function _mpInstall(kind, id, itemOverride = null) {
       ...(acceptSecurityRisk ? { acceptSecurityRisk: true } : {}),
     });
     if (!r || r.ok === false) throw _mpInstallErrorFromResponse(r);
+    return r;
   };
   const markInstalled = async () => {
     _mpMarkInstalled(kind, item);
@@ -2070,8 +2071,20 @@ async function _mpInstall(kind, id, itemOverride = null) {
     if (typeof loadSkills === 'function' && kind === 'skill') await loadSkills(true);
   };
   try {
-    await invokeInstall();
+    const r = await invokeInstall();
     await markInstalled();
+    // W5: one quiet notice when the install succeeded with a restricted
+    // (Medium) verdict. Non-blocking toast only — the full risk card lives on
+    // the skill's security panel, and adding a dialog here would train users
+    // to click through it.
+    if (typeof uiToast === 'function' && r && r.securityScan && r.securityScan.outcome === 'restricted') {
+      uiToast(
+        r.securityScan.rulesDegraded
+          ? t('skills.security_import_degraded')
+          : t('skills.security_import_restricted'),
+        { variant: 'warning', timeoutMs: 8000 },
+      );
+    }
     // Success: no toast — the button flips to "Installed" + state set above is the signal.
     // (Failure still alerts because the user otherwise has no way to know why nothing happened.)
   } catch (err) {

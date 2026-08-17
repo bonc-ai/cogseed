@@ -516,6 +516,20 @@
 .ws-option-card strong { margin-right: 7px; color: #3d4942; font-size: 11px; }
 .ws-option-card em { padding: 2px 5px; border-radius: 5px; color: #177e4d; background: #e6f5ec; font-size: 9px; font-style: normal; }
 .ws-option-card p { margin: 5px 0 0; color: #808a84; font-size: 10px; line-height: 1.55; }
+/* ── 角色 tab：主/副区分（新建空间能力弹窗）── */
+.ws-role-group-label { margin: 14px 0 8px; color: #657169; font-size: 11px; font-weight: 650; }
+.ws-role-group-label:first-child { margin-top: 0; }
+.ws-option-card.is-primary { border-color: #20a965; background: #f0faf5; }
+.ws-option-card.is-secondary { border-color: #79c49e; background: #f7fbf9; }
+.ws-option-card .ws-role-badge { padding: 2px 6px; border-radius: 99px; color: #177e4d; background: #e6f5ec; font-size: 9px; font-style: normal; font-weight: 650; }
+.ws-option-card .ws-role-badge.is-primary { color: #fff; background: #20a965; }
+.ws-option-card.is-primary strong { color: #146b41; }
+.ws-role-primary-btn { position: absolute; right: 10px; top: 10px; padding: 3px 8px; border: 1px solid #c4e3d2; border-radius: 6px; color: #177e4d; background: #fff; font-size: 9px; cursor: pointer; }
+.ws-role-primary-btn:hover { border-color: #20a965; background: #eef9f3; }
+.ws-option-card.is-secondary { position: relative; }
+.ws-option-card.is-secondary > div { padding-right: 58px; }
+.ws-chip-tag { margin-right: 4px; padding: 1px 4px; border-radius: 4px; color: #fff; background: #20a965; font-size: 8px; font-style: normal; font-weight: 650; }
+.ws-config-ability-chips span .ws-chip-tag, .ws-chips i .ws-chip-tag { display: inline-block; }
 .ws-ability-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 60px; padding: 0 22px; border-top: 1px solid var(--ws-line); background: #fbfdfc; }
 
 /* ── 加载 / 空态 / 错误态 ── */

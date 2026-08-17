@@ -54,7 +54,10 @@ import {
 import { enabledPackageSkillRoots, packageSkillRoots, readPackagesRegistry } from '../../features/packages';
 import { companionSkillsRootIfPopulated, companionPackageForDir } from '../../features/package_skills';
 import { getActiveUserId } from '../../features/users';
-import { partitionSkillsByTrustDeep } from '../../features/skill_reverify';
+import {
+  partitionAgentPrivateSkillsByTrustDeep,
+  partitionSkillsByTrustDeep,
+} from '../../features/skill_reverify';
 import { getLanguage, getGlobalSkillRootsEnabled } from '../../features/config';
 import { descriptionLang, getCurrentLang } from '../../i18n';
 // `pickDescription` is loaded lazily — see CLAUDE.md §3: any static import
@@ -949,16 +952,11 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
 
   const actorAgentId = (opts.agentId || '').trim();
   if (actorAgentId) {
-    // NOT trust-withheld yet, and passing these through
-    // `_withholdUntrustedSpecs` would be WRONG rather than merely incomplete:
-    // `reverifySkill` resolves a skill dir as `userMarketplaceSkillDir(uid, id)`,
-    // but these specs come from `userMarketplaceAgentSkillsDir(uid, agentId)` /
-    // `agentPrivateSkillsDir(uid, agentId)`. For a private skill id that also
-    // exists as a standalone install, the check would verify the wrong bytes;
-    // for one that does not, it resolves to a missing dir and fails open.
-    // Private skills need a receipt keyed by (agentId, skillId) — see
-    // `docs/skill-安全体系-第二期-实施方案.md` §5 step 3b, which also adds the
-    // install-time scan they currently lack.
+    // W3: agent-private skills now carry (agentId, skillId)-keyed receipts and
+    // are trust-filtered here exactly like the public tiers. Only `blocked`
+    // withholds — risk/unknown load, and a verification error fails open (the
+    // same direction as `_withholdUntrustedSpecs`): a transient IO problem must
+    // not strip an agent's bundled skills.
     const existingIds = new Set(rendered.map((s) => s.id));
     let privateIndex = 0;
     for (const { root, specs: privateList } of await loadAgentPrivateSkillSpecs(uid, actorAgentId)) {
@@ -966,10 +964,22 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
         .filter((s) => !s.ownerAgent || s.ownerAgent === actorAgentId)
         .filter((s) => !existingIds.has(s.id));
       if (!privateSpecs.length) continue;
+      const trustedIds = await (async () => {
+        try {
+          const { withheld } = await partitionAgentPrivateSkillsByTrustDeep(
+            uid, actorAgentId, privateSpecs.map((s) => s.id),
+          );
+          return new Set(privateSpecs.map((s) => s.id).filter((id) => !withheld.some((w) => w.skillId === id)));
+        } catch {
+          return new Set(privateSpecs.map((s) => s.id));
+        }
+      })();
+      const kept = privateSpecs.filter((s) => trustedIds.has(s.id));
+      if (!kept.length) continue;
       rootEntries.push({ label: privateIndex === 0 ? 'agent' : `agent${privateIndex + 1}`, root });
       privateIndex++;
-      for (const s of privateSpecs) existingIds.add(s.id);
-      rendered = [...rendered, ...privateSpecs];
+      for (const s of kept) existingIds.add(s.id);
+      rendered = [...rendered, ...kept];
     }
   }
 
