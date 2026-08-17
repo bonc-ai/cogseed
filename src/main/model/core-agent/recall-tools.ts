@@ -13,7 +13,8 @@ import type { AgentTool } from '#core-agent';
 import { createLogger } from '../../logger';
 import * as kbEmbed from '../../features/kb_embed';
 import { cosineScore } from '../../features/recall/similarity';
-import { listAbilityAssets, type RecallAbilityAssetRecord } from '../../features/recall/asset-service';
+import { listAbilityAssets } from '../../features/recall/asset-service';
+import type { RecallAbilityAssetRecord } from '../../features/recall/candidate-service';
 import { logErrorRef, maskId } from '../../util/log-redact';
 
 const log = createLogger('recall-tools');
