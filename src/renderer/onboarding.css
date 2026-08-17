@@ -96,13 +96,18 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .first-run-promise strong{display:block;font-size:10px}
 #cs-onboarding .first-run-promise span{display:block;margin-top:3px;color:var(--cs-muted);font-size:9px;line-height:1.5}
 #cs-onboarding .first-run-footnote{margin-top:30px;color:var(--cs-muted);font-size:9px}
+#cs-onboarding .first-run-consent{display:flex;align-items:center;justify-content:center;flex-wrap:nowrap;white-space:nowrap;gap:5px;margin-top:16px;color:var(--cs-muted);font-size:9px;line-height:1}
+#cs-onboarding .first-run-consent-check{display:inline-flex;align-items:center;gap:5px;cursor:pointer;color:var(--cs-muted);font-size:9px;white-space:nowrap}
+#cs-onboarding .first-run-consent-check input{width:12px;height:12px;margin:0;accent-color:var(--cs-ink);cursor:pointer}
+#cs-onboarding .first-run-legal-link{background:none;border:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:3px;transition:color .15s}
+#cs-onboarding .first-run-legal-link:hover{color:var(--cs-ink-soft)}
+#cs-onboarding .first-run-consent-and{opacity:.6}
 #cs-onboarding .first-run-start{border-left:1px solid var(--cs-line);background:#fafcfb;padding:68px 42px;display:flex;align-items:center}
 #cs-onboarding .first-run-card{width:100%;background:#fff;border:1px solid var(--cs-line);border-radius:8px;padding:25px;box-shadow:0 12px 34px rgba(29,61,45,.08)}
 #cs-onboarding .first-run-card .eyebrow{margin-bottom:10px}
 #cs-onboarding .first-run-card h2{font-size:22px;margin:0}
 #cs-onboarding .first-run-card>p{font-size:10px;color:var(--cs-muted);line-height:1.6;margin:8px 0 0}
 #cs-onboarding .first-run-primary{width:100%;height:44px;justify-content:center;margin-top:22px}
-#cs-onboarding .first-run-secondary{width:100%;justify-content:center;margin-top:8px}
 #cs-onboarding .first-run-scan{display:none;margin-top:18px;border-top:1px solid var(--cs-line);padding-top:7px}
 #cs-onboarding .first-run-scan.show{display:block}
 #cs-onboarding .first-scan-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:9px;align-items:center;padding:10px 0;border-bottom:1px solid #edf2ef}
