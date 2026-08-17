@@ -957,11 +957,22 @@ const commitTasks = new Map<string, Promise<{ draft: RecallSkillDraftReadyPrevie
 type RecallSkillDraftSkillOps = Pick<typeof skills,
   'createCustomSkill' | 'deleteCustomSkill' | 'getCustomSkill' | 'writeCustomSkillFileChecked'>;
 
+/** W1 generation-gate seam: admits the authored skill before the draft is
+ *  marked installed. Defaults to the real deep-scan admission; unit tests
+ *  inject a stub so a recall commit does not spawn Python. */
+type RecallSkillAdmitFn = (userId: string, skillId: string) => Promise<{
+  outcome: 'pass' | 'restricted' | 'blocked' | 'unknown';
+}>;
+
 export function confirmRecallSkillDraft(
   userId: string,
   assetId: string,
   expectedDraftHash: string,
   skillOps: RecallSkillDraftSkillOps = skills,
+  admit: RecallSkillAdmitFn = async (_userId: string, skillId: string) => {
+    const { admitCustomSkill } = await import('../security/custom-skill-admission');
+    return admitCustomSkill(_userId, skillId);
+  },
 ): Promise<{ draft: RecallSkillDraftReadyPreview; skill: { id: string; name: string } }> {
   if (!safeId(assetId)) return Promise.reject(new Error('invalid recall asset id'));
   const key = `${userId}:${assetId}:${expectedDraftHash}`;
@@ -996,6 +1007,19 @@ export function confirmRecallSkillDraft(
       for (const file of record.files) {
         const result = skillOps.writeCustomSkillFileChecked(created.id, file.path, file.content);
         if (!result.ok) throw new Error(`skill validation failed for ${file.path}`);
+      }
+      // W1 generation gate: the recalled skill is admitted before the draft
+      // record flips to `installed`. A refusal or an unavailable scanner
+      // throws, and the catch below deletes the half-created skill — fail
+      // closed, same contract as the other import paths.
+      const admission = await admit(userId, created.id);
+      if (admission.outcome === 'blocked' || admission.outcome === 'unknown') {
+        const gateError = new Error(admission.outcome === 'unknown'
+          ? 'security check unavailable for recalled skill'
+          : 'security check rejected recalled skill');
+        (gateError as { securityBlocked?: boolean }).securityBlocked = admission.outcome === 'blocked';
+        (gateError as { securityUnavailable?: boolean }).securityUnavailable = admission.outcome === 'unknown';
+        throw gateError;
       }
       const now = new Date().toISOString();
       const installed = asDraft(await updateRecallJsonRecord(userId, DRAFT_COLLECTION, assetId, (current) => {

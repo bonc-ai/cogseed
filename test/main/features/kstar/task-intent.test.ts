@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectTaskIntent, taskIntentHint } from '../../../../src/main/features/kstar/task-intent';
+import { detectTaskIntent, isClosingIntent, taskIntentHint } from '../../../../src/main/features/kstar/task-intent';
 
 describe('KStar host task-intent detection (layer 1)', () => {
   it('detects ordinary task-shaped requests without formal phrasing', () => {
@@ -52,5 +52,22 @@ describe('KStar host task-intent detection (layer 1)', () => {
     // Boundary task-shaped messages are NOT filtered by the fast path.
     expect(isObviouslyTrivial('帮我看看这个文件哪里不对')).toBe(false);
     expect(isObviouslyTrivial('审查一下 bus.ts 的守卫实现')).toBe(false);
+  });
+
+  it('isClosingIntent flags explicit task-completion messages', () => {
+    expect(isClosingIntent('完成')).toBe(true);
+    expect(isClosingIntent('完成了')).toBe(true);
+    expect(isClosingIntent('搞定')).toBe(true);
+    expect(isClosingIntent('结束了')).toBe(true);
+    expect(isClosingIntent('就这样')).toBe(true);
+    expect(isClosingIntent('done')).toBe(true);
+    expect(isClosingIntent('Done!')).toBe(true);
+    // Non-closing messages are not flagged.
+    expect(isClosingIntent('帮我完成这个报告')).toBe(false);
+    expect(isClosingIntent('完成了多少')).toBe(false);
+    expect(isClosingIntent('你好')).toBe(false);
+    expect(isClosingIntent('谢谢')).toBe(false);
+    expect(isClosingIntent(undefined)).toBe(false);
+    expect(isClosingIntent('')).toBe(false);
   });
 });

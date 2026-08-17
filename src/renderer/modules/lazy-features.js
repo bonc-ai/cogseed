@@ -15,6 +15,7 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/touchpoint-settings-model.js' },
     { src: './modules/touchpoint-settings.js' },
     { src: './modules/memory.js' },
+    { src: './modules/settings-security.js' },
   ],
   marketplace: [
     { src: './modules/marketplace.js' },
@@ -33,6 +34,7 @@ const _rendererFeatureManifest = Object.freeze({
   ],
   skills: [
     { src: './modules/recall-information-architecture.js' },
+    { src: './modules/import-check-modal.js' },
     { src: './modules/skills.js' },
     { src: './modules/skills-bindings.js' },
   ],

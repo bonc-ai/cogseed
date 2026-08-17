@@ -243,11 +243,23 @@ body.sidebar-collapsed .sidebar-actions .sidebar-btn {
   padding: 10px 0;
 }
 body.sidebar-collapsed .sidebar-actions .sidebar-btn > span:not(.sidebar-btn-icon),
-body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn > span:not(.sidebar-footer-icon),
-body.sidebar-collapsed .sidebar-footer-account,
 body.sidebar-collapsed .sidebar-conversation-nav,
 body.sidebar-collapsed .sidebar-resize-handle { display: none; }
-body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-content: center; padding: 10px 0; }
+/* 融合入口折叠态：状态栏压缩为头像图标按钮（隐藏文字/状态点/箭头），
+   hover 仍向上展开完整面板，设置入口不丢失。 */
+body.sidebar-collapsed .sidebar-footer-actions { padding: 6px 6px 10px; }
+body.sidebar-collapsed .sidebar-footer-account { display: block; }
+body.sidebar-collapsed .hub-chip {
+  justify-content: center;
+  padding: 7px 0;
+  border-radius: var(--radius-sm);
+}
+body.sidebar-collapsed .hub-chip-meta,
+body.sidebar-collapsed .hub-chip-dot,
+body.sidebar-collapsed .hub-chip-chev,
+body.sidebar-collapsed .hub-chip-pin { display: none; }
+/* 折叠时面板宽度锚定最小值（侧栏只有 48px），仍向上完整展开。 */
+body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 
 @container (max-width: 230px) {
   /* Keep the brand text visible on the narrow rail — only shrink it.
@@ -306,12 +318,6 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
 .sidebar-search-command-icon {
   width: 11px;
   height: 11px;
-}
-
-.sidebar-footer-icon {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
 }
 
 /* ── Global search overlay (Cmd+K) ─────────────────────────────────────── */
@@ -689,8 +695,8 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
    The primary class is kept for semantic grouping only. */
 .sidebar-btn.primary {}
 
-/* Sidebar footer actions — 设置 / Hub 账号 等次要入口下沉到这里，留出顶部
-   空间给主业务。方案 A：账号区在上（常驻可见），设置在下。*/
+/* Sidebar footer actions — 左下角融合入口（用户状态 + 设置，见
+   account-chip.js）：单一状态栏常驻，hover / 点击钉住时向上展开面板。 */
 .sidebar-footer-actions {
   display: flex;
   flex-direction: column;
@@ -700,32 +706,6 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   border-top: 1px solid rgba(24, 84, 60, 0.06);
   background: transparent;
   flex-shrink: 0;
-}
-.sidebar-footer-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 32px;
-  padding: 6px 8px;
-  border: none;
-  background: transparent;
-  color: #4b5563;
-  font-size: 12px;
-  font-weight: 500;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.13s, color 0.13s;
-  font-family: inherit;
-}
-.sidebar-footer-btn:hover  { background: var(--surface-2); color: var(--text); }
-.sidebar-footer-btn.active { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
-.sidebar-footer-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ── 左下角 Hub 账号常驻入口（方案 A，modules/account-chip.js）─────────── */
@@ -821,7 +801,18 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   height: 14px;
   flex: none;
   color: var(--muted);
+  transition: transform 0.15s ease;
 }
+.hub-chip-pin {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted);
+}
+/* 融合面板展开 / 钉住时入口的状态反馈 */
+.sidebar-footer-account.is-open .hub-chip { background: var(--primary-soft); color: var(--primary-text); }
+.sidebar-footer-account.is-open .hub-chip-chev { transform: rotate(180deg); }
+.sidebar-footer-account.is-pinned .hub-chip-pin { color: var(--primary-text); }
 
 /* 静态 UI 优化：已登录行常驻浅底、渐变首字母头像、未登录副标题主色 */
 .hub-chip.is-signed-row { background: var(--primary-soft); }
@@ -835,17 +826,19 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
 }
 .hub-chip-sub.is-accent { color: var(--primary-text); font-family: inherit; }
 
-/* 账号菜单弹层（左下角向上弹出） */
+/* 账号 + 设置融合面板（左下角 hover 向上展开）。
+   bottom: calc(100% - 6px) 与入口重叠 6px，指针在入口与面板间移动
+   不经过任何空隙，hover 开合不会闪断；底部内边距相应加大。 */
 .hub-chip-menu {
   position: absolute;
   left: 4px;
   right: 4px;
-  bottom: calc(100% + 4px);
+  bottom: calc(100% - 6px);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: 0 12px 32px rgba(20, 40, 30, 0.16), 0 2px 8px rgba(20, 40, 30, 0.08);
-  padding: 6px;
+  padding: 6px 6px 14px;
   z-index: 120;
   transform-origin: bottom left;
   animation: hub-chip-pop 0.15s ease;
@@ -862,6 +855,9 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
   margin-bottom: 4px;
   border-bottom: 1px solid var(--border);
 }
+/* 未登录态：头卡整体是登录入口（点击开始浏览器授权登录）。 */
+.hub-chip-menu-head.is-clickable { cursor: pointer; border-radius: 8px; }
+.hub-chip-menu-head.is-clickable:hover { background: var(--surface-2); }
 .hub-chip-menu-id {
   display: flex;
   flex-direction: column;
@@ -905,102 +901,26 @@ body.sidebar-collapsed .sidebar-footer-actions .sidebar-footer-btn { justify-con
 .hub-chip-menu-item-icon { width: 15px; height: 15px; flex: none; }
 .hub-chip-menu-item.is-danger { color: var(--danger); }
 .hub-chip-menu-item.is-danger:hover { background: var(--danger-soft, #fef2f2); }
-#settings-btn.has-dot .sidebar-footer-label::after {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--warn);
-  margin-left: 6px;
-  vertical-align: middle;
-}
-#settings-btn.has-dot.is-red .sidebar-footer-label::after {
-  background: var(--danger);
-}
-#settings-btn.has-dot.is-orange .sidebar-footer-label::after {
-  background: var(--warn);
-}
-#settings-btn {
-  position: relative;
-  flex: 1 1 auto;
-  width: 100%;
-  padding-right: 8px;
-}
-#settings-btn.has-sidebar-alert {
-  padding-right: 104px;
-}
-#settings-btn::after {
-  content: attr(data-sidebar-status);
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  box-sizing: border-box;
-  min-width: 56px;
-  max-width: 92px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 18px;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: var(--surface-2);
-  color: var(--text-2);
-  pointer-events: none;
-}
-#settings-btn:not([data-sidebar-status])::after,
-#settings-btn[data-sidebar-status=""]::after {
-  display: none;
-}
-#settings-btn.is-red::after {
-  background: rgba(220, 38, 38, 0.10);
-  color: var(--danger-hover);
-}
-#settings-btn.is-orange::after {
-  background: rgba(217, 119, 6, 0.12);
-  color: #b45309;
-}
-#settings-btn.is-syncing::after {
-  background: var(--primary-soft);
-  color: var(--primary-text);
-}
-.sidebar-settings-alerts {
-  position: absolute;
-  width: 1px;
+/* 设置项 active：当前视图是 settings 时高亮（boot.js 同步）。 */
+.hub-chip-menu-item.is-active { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+.hub-chip-menu-sep {
   height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
+  background: var(--border);
+  margin: 5px 9px;
 }
-.sidebar-settings-alerts:empty { display: none; }
-.sidebar-settings-alert {
-  flex: 0 0 auto;
-  min-width: 0;
-  max-width: 74px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 18px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* 降级形态：Hub 不可用时的说明条 */
+.hub-chip-menu-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  margin: 0 3px 6px;
+  font-size: 11.5px;
+  color: var(--warn);
+  background: rgba(217, 119, 6, 0.08);
+  border-radius: 8px;
 }
-.sidebar-settings-alert.is-red {
-  background: rgba(220, 38, 38, 0.10);
-  color: var(--danger-hover);
-}
-.sidebar-settings-alert.is-orange {
-  background: rgba(217, 119, 6, 0.12);
-  color: #b45309;
-}
-.sidebar-settings-alert.is-syncing {
-  background: var(--primary-soft);
-  color: var(--primary-text);
-}
+.hub-chip-menu-note-icon { width: 13px; height: 13px; flex: none; }
 
 .sidebar-conversation-nav {
   flex: 1;
@@ -25294,6 +25214,177 @@ body.model-not-configured .main-content { flex-direction: column; }
   animation: autoTimeAdjustResultFadeIn 0.3s ease-out;
 }
 
+/* ── 安全与信任设置页（v2）────────────────────────────────────────────── */
+#settings-security-body { max-width: 880px; }
+.sec-loading { padding: 28px 0; color: var(--text-3); font-size: 13px; }
+.sec-empty { padding: 18px 16px; text-align: center; color: var(--text-3); font-size: 13px; }
+
+/* Hero */
+.sec-hero {
+  display: flex; gap: 16px; align-items: flex-start;
+  background: var(--panel, #fff); border: 1px solid var(--border);
+  border-radius: 14px; padding: 18px 20px; margin-bottom: 16px;
+}
+.sec-hero-icon {
+  width: 40px; height: 40px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--success-soft); border: 1px solid transparent;
+}
+.sec-hero-icon.warn { background: #fef3c7; }
+.sec-hero-icon.bad { background: var(--danger-soft, #fee2e2); }
+.sec-hero-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--success); }
+.sec-hero-icon.warn .sec-hero-dot { background: #d97706; }
+.sec-hero-icon.bad .sec-hero-dot { background: var(--danger); }
+.sec-hero-main { flex: 1; min-width: 0; }
+.sec-hero-title { font-size: 15.5px; font-weight: 650; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sec-hero-desc { font-size: 12.5px; color: var(--text-2); margin-top: 4px; }
+.sec-hero-meta { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: var(--text-3); }
+.sec-hero-meta b { color: var(--text-2); font-weight: 600; }
+
+/* 状态胶囊/标签 */
+.sec-tag, .sec-pill {
+  font-size: 11px; font-weight: 500; padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+}
+.sec-tag.ok, .sec-pill.ok { background: var(--success-soft); color: var(--success); }
+.sec-tag.warn, .sec-pill.warn { background: #fef3c7; color: #b45309; }
+.sec-tag.bad, .sec-pill.bad { background: var(--danger-soft, #fee2e2); color: var(--danger); }
+.sec-pill.muted { background: #f1f5f3; color: var(--text-3); }
+
+/* 组件卡片 */
+.sec-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+@media (max-width: 760px) { .sec-grid { grid-template-columns: 1fr; } }
+.sec-card {
+  background: var(--panel, #fff); border: 1px solid var(--border);
+  border-radius: 14px; padding: 14px 15px 12px;
+}
+.sec-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sec-card-name { font-size: 13.5px; font-weight: 600; flex: 1; }
+.sec-card-row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 4px 0; color: var(--text-2); }
+.sec-card-row span:last-child { color: var(--text); font-variant-numeric: tabular-nums; }
+.sec-card-note { font-size: 11.5px; color: var(--text-3); margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-strong); }
+
+/* 记录表 */
+.sec-section-head { display: flex; justify-content: space-between; align-items: flex-end; margin: 20px 0 10px; flex-wrap: wrap; gap: 6px; }
+.sec-section-title { font-size: 14.5px; font-weight: 650; }
+.sec-section-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.sec-table-wrap { background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.sec-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sec-table th {
+  text-align: left; font-weight: 500; color: var(--text-3); font-size: 12px;
+  padding: 10px 15px; border-bottom: 1px solid var(--border); background: #f7faf8;
+}
+.sec-table td { padding: 10px 15px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.sec-table tbody tr:last-child td { border-bottom: none; }
+.sec-id { display: flex; align-items: center; gap: 9px; }
+.sec-dot {
+  width: 26px; height: 26px; border-radius: 8px; background: var(--primary-soft);
+  color: var(--primary-text); font-size: 12px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center; flex: none;
+}
+.sec-id-name { font-weight: 550; }
+.sec-id-sub { font-size: 11.5px; color: var(--text-3); }
+.sec-score { display: flex; align-items: center; gap: 8px; }
+.sec-score-bar { width: 60px; height: 5px; border-radius: 999px; background: #edf2ef; overflow: hidden; }
+.sec-score-bar i { display: block; height: 100%; border-radius: 999px; background: var(--primary); }
+.sec-score-bar i.mid { background: #d97706; }
+.sec-score-bar i.low { background: var(--danger); }
+.sec-score-num { color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.sec-time { color: var(--text-3); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.sec-table-foot {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 11px 15px; border-top: 1px solid var(--border); background: #fafcfb;
+}
+.sec-hint { font-size: 12px; color: var(--text-3); }
+
+/* 操作 + 选择器 + 保护说明 */
+.sec-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.sec-btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.sec-btn-primary:hover { background: #0a7a55; }
+.sec-link {
+  background: none; border: none; cursor: pointer; font-family: inherit;
+  font-size: 12.5px; color: var(--primary-text); padding: 4px 2px;
+}
+.sec-link:hover { text-decoration: underline; }
+.sec-link:disabled { color: var(--text-3); cursor: default; text-decoration: none; }
+.sec-picker {
+  display: none; margin-top: 12px; background: var(--panel, #fff);
+  border: 1px solid var(--border); border-radius: 14px; padding: 12px;
+}
+.sec-picker.open { display: block; }
+.sec-picker-input {
+  width: 100%; padding: 8px 12px; font-size: 13px; font-family: inherit;
+  border: 1px solid var(--border-strong); border-radius: 9px; margin-bottom: 10px;
+  color: var(--text); background: #fafcfb; outline: none;
+}
+.sec-picker-input:focus { border-color: var(--primary); }
+.sec-picker-list { max-height: 240px; overflow-y: auto; }
+.sec-picker-item {
+  display: flex; align-items: center; gap: 12px; padding: 8px 6px;
+  border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.sec-picker-item:last-child { border-bottom: none; }
+.sec-picker-name { font-weight: 550; min-width: 150px; }
+.sec-picker-sub { flex: 1; color: var(--text-3); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sec-protect {
+  margin-top: 20px; padding: 13px 16px; border-radius: 12px;
+  background: #f7faf8; border: 1px solid var(--border);
+  font-size: 12.5px; color: var(--text-2); display: flex; gap: 10px; align-items: flex-start;
+}
+.sec-lock {
+  width: 8px; height: 8px; border-radius: 2px; background: var(--text-3);
+  margin-top: 5px; flex: none; opacity: .6;
+}
+
+/* ── 导入检查结果弹窗（W5，文件夹/URL 统一）────────────────────────── */
+.imp-modal { max-width: 500px; padding: 24px 26px 20px; }
+.imp-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; display: flex; gap: 8px; align-items: center; }
+.imp-src-badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: #F1F5F3; color: var(--text-3); }
+.imp-close { margin-left: 8px; }
+.imp-status { display: flex; gap: 12px; align-items: flex-start; border-radius: 14px; padding: 14px 16px; margin-bottom: 14px; }
+.imp-status.ok { background: var(--success-soft); }
+.imp-status.warn { background: #fef3c7; }
+.imp-status.bad { background: var(--danger-soft, #fee2e2); }
+.imp-status.muted { background: #F1F5F3; }
+.imp-status-icon { width: 34px; height: 34px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; flex: none; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.imp-status.ok .imp-status-icon { color: var(--success); }
+.imp-status.warn .imp-status-icon { color: #d97706; }
+.imp-status.bad .imp-status-icon { color: var(--danger); }
+.imp-status.muted .imp-status-icon { color: var(--text-3); }
+.imp-status-icon svg { width: 17px; height: 17px; }
+.imp-status-main { flex: 1; min-width: 0; }
+.imp-status-title { font-size: 14px; font-weight: 650; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.imp-score-chip { font-size: 12px; font-weight: 600; padding: 1px 9px; border-radius: 999px; background: #fff; }
+.imp-status.ok .imp-score-chip { color: var(--success); }
+.imp-status.warn .imp-score-chip { color: #d97706; }
+.imp-status.bad .imp-score-chip { color: var(--danger); }
+.imp-status-desc { font-size: 12.5px; margin-top: 4px; }
+.imp-status.ok .imp-status-desc { color: #14532d; }
+.imp-status.warn .imp-status-desc { color: #92400e; }
+.imp-status.bad .imp-status-desc { color: #7f1d1d; }
+.imp-status.muted .imp-status-desc { color: var(--text-2); }
+.imp-surface { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.imp-surface-chip { font-size: 11.5px; color: var(--text-2); background: #F7FAF8; border: 1px solid var(--border); border-radius: 8px; padding: 3px 10px; }
+.imp-surface-chip b { font-weight: 650; color: var(--text); }
+.imp-findings-title { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin: 0 0 8px; }
+.imp-findings { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 14px; }
+.imp-finding { display: flex; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.imp-finding:last-child { border-bottom: none; }
+.imp-finding-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 6px; flex: none; }
+.imp-finding-dot.extreme { background: var(--danger); }
+.imp-finding-dot.medium { background: #d97706; }
+.imp-finding-dot.low { background: var(--text-3); }
+.imp-finding-text { flex: 1; color: var(--text-2); }
+.imp-finding-loc { color: var(--text-3); font-size: 11.5px; flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-findings-more { padding: 8px 12px; font-size: 12px; color: var(--text-3); background: #FAFCFB; }
+.imp-foot { display: flex; align-items: center; gap: 10px; }
+.imp-spacer { flex: 1; }
+.imp-btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.imp-btn-primary:hover { background: #0A7A55; color: #fff; }
+.imp-btn-danger { color: var(--danger); border-color: rgba(220,38,38,.25); }
+.imp-btn-danger:hover { border-color: var(--danger); color: var(--danger); }
+.imp-btn-ghost { border-color: transparent; background: none; color: var(--text-3); }
+.imp-btn-ghost:hover { color: var(--text-2); }
+.imp-note { font-size: 11.5px; color: var(--text-3); margin-top: 12px; text-align: center; }
 /* ── 继续之前的工作：三步弹窗（对齐 CogSeed_继续之前的工作_三步弹窗交互原型_v0.1）──
  * 覆盖/补充 continue-work 的呈现：来源卡片（缩写圆标+状态点）、会话分组
  * （今天/昨天）、source-pill、进度 X/N、导入行状态、成功面板。业务逻辑不变。 */

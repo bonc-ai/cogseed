@@ -140,6 +140,11 @@ export function scopeTokenMatches(haystackTokens: string[], needle: string): boo
 export function scopeIncludes(scope: string, text: string): boolean {
   const terms = scope.split(',').map((term) => term.trim()).filter(Boolean);
   if (terms.includes('*')) return true;
+  // general（通用）是显式通配：general 资产适用于任意 purpose/任务，不应被
+  // 特定 purpose（如 KSTAR 硬编码的 'review'）过滤掉。实机 72% 资产为
+  // general scope，KSTAR 投影 purpose='review' 时 36% 投影因此为空
+  // （2026-08-17 观测：84 个投影 31 个 assets=0）。
+  if (terms.includes('general')) return true;
   if (terms.some((term) => matchesScopeToken(text, term))) return true;
   const textTokens = splitScopeTerms(text);
   return splitScopeTerms(scope).some((token) => scopeTokenMatches(textTokens, token));

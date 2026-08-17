@@ -35,6 +35,15 @@ const TASK_SIGNALS = [
   /(report|review|analy|fix|implement|build|create|write|design|refactor|optimize|migrate|deploy|test|verify|investigat|debug|summar|draft|prepare|audit|evaluate|research|plan|document)/i,
 ];
 
+/** Closing intent: the user says the open task is DONE. Deterministic and
+ *  checked BEFORE the trivial filter so "完成/搞定/结束" closes the open
+ *  task via the finish path (requirement precipitation runs) instead of
+ *  being treated as a new task or ignored as small talk. */
+const CLOSING_PATTERNS = [
+  /^(完成|搞定|结束|完结|收工|完工|做完|干完|办完|就这样|可以了|好了|行吧)(了|啦|吧|！|!|。|~|～|,|，|\.)*$/i,
+  /^(done|finished|finish|complete|completed|that'?s (it|all)|all done|wrap (it )?up|we'?re done)[!。.]*$/i,
+];
+
 const MIN_TASK_TEXT = 12;
 
 export interface TaskIntentResult {
@@ -42,6 +51,13 @@ export interface TaskIntentResult {
   isTask: boolean;
   /** Short human-readable reason (for the hint line). */
   reason?: string;
+}
+
+/** True when the message expresses that the current task is finished. */
+export function isClosingIntent(text: string | undefined): boolean {
+  const trimmed = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!trimmed) return false;
+  return CLOSING_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
 /** Fast deterministic filter: is this message OBVIOUSLY trivial (greeting,

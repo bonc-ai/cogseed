@@ -43,11 +43,13 @@ describe('renderer lazy feature loader', () => {
     expect(appended.map((script) => script.src)).toEqual([
       './modules/model-authorization.js',
       './modules/settings.js',
+      './modules/hub-account.js',
       './vendor/qrcode-generator/qrcode.js',
       './modules/messaging-settings.js',
       './modules/touchpoint-settings-model.js',
       './modules/touchpoint-settings.js',
       './modules/memory.js',
+      './modules/settings-security.js',
     ]);
     expect(appended.every((script) => script.async === false)).toBe(true);
   });
@@ -73,6 +75,7 @@ describe('renderer lazy feature loader', () => {
     await skills.context.loadRendererFeature('skills');
     expect(skills.appended.map((script) => script.src)).toEqual([
       './modules/recall-information-architecture.js',
+      './modules/import-check-modal.js',
       './modules/skills.js',
       './modules/skills-bindings.js',
     ]);
@@ -87,15 +90,16 @@ describe('renderer lazy feature loader', () => {
   });
 
   it('loads the workspace surface on demand and uses its lightweight resource catalog', async () => {
+    // 9.1 重构：spaces surface 更名为 workspace（lazy-features manifest 用
+    // workspace key + workspace.js；spaces.js 已废弃且无引用）。
     const { context, appended } = loadFeatureLoader();
-    await context.loadRendererFeature('spaces');
-    expect(appended.map((script) => script.src)).toEqual(['./modules/spaces.js']);
+    await context.loadRendererFeature('workspace');
+    expect(appended.map((script) => script.src)).toEqual(['./modules/workspace.js']);
 
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/spaces.js'), 'utf8');
-    expect(source).toContain("_invoke('spaces.resources.catalog')");
-    expect(source).not.toContain("_invoke('skills.list')");
-    expect(source).toContain("_t('common.loading'");
-    expect(source).toContain('data-spaces-retry');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/workspace.js'), 'utf8');
+    expect(source).toContain("_invoke('skills.list')");
+    expect(source).toContain("_invoke('agents.list')");
+    expect(source).toContain('renderWorkspace');
   });
 
   it('retries a required script while reusing scripts that already loaded', async () => {

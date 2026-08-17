@@ -53,6 +53,7 @@ import { partitionSkillsByTrustDeep, topViolationOf, isConventionRule } from './
 import { listReceipts, skillPayloadHash, writeInstallReceipt, type SecurityReceipt } from './skill_trust';
 import { scanVerdictBlocksInstall } from './security/sentry-adapter';
 import { scanSkillDir, type SentryScanResult } from './security/sentry-adapter';
+import type { CustomAdmissionResult } from './security/custom-skill-admission';
 import { findOuterTagRanges } from '../util/markdown-prose-code';
 import {
   validateSkillFile,
@@ -1751,7 +1752,7 @@ async function _recordImportReceipt(skillId: string, skillDir: string, scan: Sen
       violationCount: report.violations.length,
       ...(top?.rule ? { topRule: top.rule } : {}),
       ...(top?.level ? { topLevel: top.level } : {}),
-    });
+    }, undefined, skillDir);
   } catch (err) {
     log.warn('failed to record import receipt', { skillId, error: (err as Error).message });
   }
@@ -3175,6 +3176,15 @@ export interface SkillContainerResult {
   validation_warnings?: { path: string; report: QualityReport }[];
   /** Total-failure cause when `ok: false`. Already localized via `t()`. */
   error?: string;
+  /** Deep-scan result from the generation admission gate (W1). Present on
+   *  `created` and on security refusals so callers can surface what was
+   *  found without re-scanning. */
+  securityScan?: SentryScanResult;
+  /** True when the admission gate could not run its deep scan (python
+   *  missing, timeout). The skill is kept — authored content is not
+   *  deleted for an infrastructure gap — but stays unreceipted, and the
+   *  load gate retries the scan on first use. */
+  securityUnavailable?: boolean;
 }
 
 /** Apply a parsed `<skill>` container from commander. Routes to edit when
@@ -3289,6 +3299,35 @@ async function _applySkillContainerCreate(
     writeSkillOrkasMetaSync(customSkillDir(name), metadataSidecar);
   }
   if (written.length) log.info(`commander created skill=${name} files=${written.length}`);
+
+  // W1 generation gate: admit the authored tree exactly like imported
+  // content, before the create is reported as done. A refusal deletes the
+  // half-created skill so no unverified asset lingers; `unknown` keeps the
+  // authored content (an infrastructure gap must not eat user work) but is
+  // surfaced so the load gate's retry and the UI stay honest.
+  let admission: CustomAdmissionResult | undefined;
+  try {
+    const admissionMod = await import('./security/custom-skill-admission');
+    // The commander path authors through skill-creator, whose contract promises
+    // NSEAP trigger/anti-trigger semantics on every new skill — so shape
+    // findings escalate to a `risk` receipt here. Foreign-format imports keep
+    // the advisory reading (see the module docs).
+    admission = await admissionMod.admitCustomSkill(getActiveUserId(), name, { escalateNseap: true });
+  } catch (err) {
+    log.warn('commander skill admission failed', { skill: name, error: (err as Error).message });
+  }
+  if (admission?.outcome === 'blocked') {
+    await deleteCustomSkill(name);
+    log.warn('commander skill create blocked by security admission', {
+      skill: name,
+      rules: admission.scan?.blockingRules || admission.scan?.localRedLines || [],
+    });
+    return {
+      ok: false,
+      error: t('skills.errors.security_blocked'),
+      securityScan: admission.scan ?? undefined,
+    };
+  }
   return {
     ok: true,
     kind: 'created',
@@ -3297,6 +3336,8 @@ async function _applySkillContainerCreate(
     written,
     ...(rejected.length ? { rejected } : {}),
     ...(validationWarnings.length ? { validation_warnings: validationWarnings } : {}),
+    ...(admission?.outcome === 'unknown' ? { securityUnavailable: true } : {}),
+    ...(admission?.scan ? { securityScan: admission.scan } : {}),
   };
 }
 
@@ -3386,6 +3427,32 @@ async function _applySkillContainerEdit(
   const post = await getSkillForEdit(resolvedId);
   if (written.length) log.info(`commander updated skill=${skillId}${resolvedId !== skillId ? ` -> ${resolvedId}` : ''} files=${written.length}`);
   const ok = files.length > 0 || metadataOk;
+
+  // D6 (W5 extension): edits are re-admitted in the background — the version
+  // written just now gets its own receipt. UX-first contract, same as the
+  // reconcile gate: a refusal NEVER deletes or blocks the edit (the content is
+  // the user's own work) — it writes a `blocked` receipt so the load gate
+  // withholds the tree at first use, and the response carries the verdict so
+  // the commander can tell the user one line about it. Shape escalation stays
+  // off for edits (source-preserving, same rule as foreign imports).
+  let securityBlocked = false;
+  let securityUnavailable = false;
+  let securityScan: SentryScanResult | undefined;
+  if (ok) {
+    try {
+      const admissionMod = await import('./security/custom-skill-admission');
+      const admission = await admissionMod.admitCustomSkill(
+        getActiveUserId(), resolvedId, { recordBlockedReceipt: true },
+      );
+      securityBlocked = admission.outcome === 'blocked';
+      securityUnavailable = admission.outcome === 'unknown';
+      securityScan = admission.scan ?? undefined;
+    } catch (err) {
+      log.warn('commander skill edit admission failed', {
+        skill: resolvedId, error: (err as Error).message,
+      });
+    }
+  }
   return {
     ok,
     kind: 'updated',
@@ -3395,6 +3462,9 @@ async function _applySkillContainerEdit(
     ...(rejected.length ? { rejected } : {}),
     ...(validationFailed.length ? { validation_failed: validationFailed } : {}),
     ...(validationWarnings.length ? { validation_warnings: validationWarnings } : {}),
+    ...(securityBlocked ? { securityBlocked: true } : {}),
+    ...(securityUnavailable ? { securityUnavailable: true } : {}),
+    ...(securityScan ? { securityScan } : {}),
   };
 }
 

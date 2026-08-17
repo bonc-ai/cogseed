@@ -65,6 +65,7 @@ import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
 import * as skills from '../features/skills';
 import * as skillReverify from '../features/skill_reverify';
+import * as skillTrust from '../features/skill_trust';
 import * as marketplace from '../features/marketplace';
 import * as notificationPermissions from '../features/notification_permissions';
 import * as marketplaceBiz from '../features/marketplace_biz';
@@ -3039,6 +3040,44 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { nseapDeclaration };
   },
 
+  /** Deep re-verify one installed skill and persist the verdict. Backs the
+   *  "重新检查" action on the skills panel. */
+  'skills.trust.reverify': async ({ skillId } = {}, ctx) => {
+    if (!skills.isValidSkillId(skillId)) throw new Error('invalid skill id');
+    return { result: await skillReverify.reverifySkillDeep(ctx.userId, skillId) };
+  },
+
+  /** Receipts on record, for a trust/audit surface. */
+  'skills.trust.list': async (_args, ctx) => {
+    return { receipts: skillTrust.listReceipts(ctx.userId) };
+  },
+
+  /** W5/W6: run the generation admission gate on one custom skill and return
+   *  a renderer-safe verdict for the unified import-check popup. Source-
+   *  preserving: no NSEAP escalation, no refusal receipt — the caller decides
+   *  what to do with the verdict (the import paths already rolled back or
+   *  kept content in main). */
+  'skills.admit': async ({ skillId }, ctx) => {
+    if (!skills.isValidSkillId(skillId)) throw new Error('invalid skill id');
+    const { admitCustomSkill } = await import('../features/security/custom-skill-admission');
+    const admission = await admitCustomSkill(ctx.userId, skillId);
+    return {
+      admission: {
+        outcome: admission.outcome,
+        reason: admission.reason ?? null,
+        escalatedNseap: admission.escalatedNseap,
+        ...(admission.scan ? { scan: admission.scan } : {}),
+      },
+    };
+  },
+
+  /** Guardrail status snapshot for the 安全与信任 settings page. Coarse
+   *  status/version data only — no findings text, no paths. */
+  'skills.security.status': async () => {
+    const { guardrailStatus } = await import('../features/security/guardrail-status');
+    return { status: guardrailStatus() };
+  },
+
   'skills.writeFile': async ({ id, file, content }) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     if (!file) throw new Error('missing file');
@@ -3083,7 +3122,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'skills.createFromDir': async ({ name, description, srcDir, force }) => {
     const r = await skills.createFromDir(name ?? null, description ?? null, String(srcDir || ''), { force: force === true });
     if (!r.ok) return r;
-    return { skill: r.skill, skills: r.skills, seedModelText: r.seedModelText, seedMessage: r.seedMessage };
+    // Forward the scan evidence on success too: the unified import-check
+    // popup shows the verdict for folder imports, and a pass with no visible
+    // evidence is indistinguishable from no check at all.
+    return {
+      skill: r.skill, skills: r.skills, seedModelText: r.seedModelText, seedMessage: r.seedMessage,
+      ...(r.securityPass ? { securityPass: r.securityPass } : {}),
+      ...(r.securityScan ? { securityScan: r.securityScan } : {}),
+      ...(r.securityBlocked === true ? { securityBlocked: true } : {}),
+      ...(r.securityUnavailable === true ? { securityUnavailable: true } : {}),
+    };
   },
 
   'skills.discardImportDraft': async ({ id }) => {
@@ -3216,7 +3264,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
-  'marketplace.installAgent': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force }) => {
+  'marketplace.installAgent': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
@@ -3230,10 +3278,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ...(typeof minVersion === 'string' ? { minVersion } : {}),
       ...(typeof min_pc_version === 'string' ? { min_pc_version } : {}),
       ...(typeof minPcVersion === 'string' ? { minPcVersion } : {}),
-    }, { force: force === true, name: typeof name === 'string' ? name : undefined });
+    }, { force: force === true, name: typeof name === 'string' ? name : undefined, acceptSecurityRisk: acceptSecurityRisk === true });
   },
 
-  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force }) => {
+  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
@@ -3247,7 +3295,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ...(typeof minVersion === 'string' ? { minVersion } : {}),
       ...(typeof min_pc_version === 'string' ? { min_pc_version } : {}),
       ...(typeof minPcVersion === 'string' ? { minPcVersion } : {}),
-    }, { force: force === true, name: typeof name === 'string' ? name : undefined });
+    }, { force: force === true, name: typeof name === 'string' ? name : undefined, acceptSecurityRisk: acceptSecurityRisk === true });
   },
 
   // Uninstall is non-dev: wipes the local install copy + manifest entry. Does NOT touch the
@@ -5139,6 +5187,11 @@ export function register(): void {
         marketplaceMinAppVersion?: string;
         marketplaceCurrentAppVersion?: string;
         qualityReport?: unknown;
+        securityBlocked?: boolean;
+        securityUnavailable?: boolean;
+        securityOverridable?: boolean;
+        securityScan?: unknown;
+        securityRuleIds?: string[];
       } = {
         ok: false,
         error: normalized.error,
@@ -5157,6 +5210,16 @@ export function register(): void {
         out.marketplaceAppUpdateRequired = true;
         out.marketplaceMinAppVersion = installInfo.minAppVersion || '';
         out.marketplaceCurrentAppVersion = installInfo.currentAppVersion || '';
+      }
+      // Security verdict fields, mirrored so the renderer's risk card can fire.
+      // Dropped here by a refactor once before; the card code below it kept
+      // reading these fields and silently never matched.
+      if (installInfo.securityBlocked === true) out.securityBlocked = true;
+      if (installInfo.securityUnavailable === true) out.securityUnavailable = true;
+      if (installInfo.securityOverridable === true) out.securityOverridable = true;
+      if (installInfo.securityScan) out.securityScan = installInfo.securityScan;
+      if (Array.isArray(installInfo.securityRuleIds) && installInfo.securityRuleIds.length) {
+        out.securityRuleIds = installInfo.securityRuleIds;
       }
       return out;
     }

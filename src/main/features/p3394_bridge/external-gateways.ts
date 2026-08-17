@@ -136,6 +136,7 @@ export function p3394GatewayScriptPath(): string {
 
 function gatewayScriptPath(): string {
   return p3394GatewayScriptPath();
+
 }
 
 /**
