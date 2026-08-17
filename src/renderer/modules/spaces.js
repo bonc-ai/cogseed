@@ -189,7 +189,8 @@
       el.addEventListener('click', () => _openDetail(el.dataset.spaceId));
     });
     container.querySelectorAll('.spaces-tpl-entry-card[data-tpl-id]').forEach((el) => {
-      el.addEventListener('click', () => _openCreateModal(el.dataset.tplId));
+      // 旧入口：点击模板卡原为 _openCreateModal（已废弃）；现由 workspace.js 模板卡接管。
+      void el;
     });
   }
 
@@ -217,9 +218,8 @@
   /** 从场景入口一键创建空间（名称 = 场景名，模板预填）。 */
   async function _createFromScenario(scenario) {
     // 如果场景已有建议主模板 → 直接创建（名称 = 场景名 + 数字后缀防重名）
-    // 自定义场景 → 打开创建弹窗让用户自选
-    if (scenario.scenario_id === 'custom') { _openCreateModal(); return; }
-    if (!scenario.suggested_primary_template_id) { _openCreateModal(); return; }
+    // 自定义场景/无主模板场景 → 无法走一键创建（旧逻辑打开 _openCreateModal，已废弃）
+    if (scenario.scenario_id === 'custom' || !scenario.suggested_primary_template_id) { return; }
     let name = scenario.name;
     for (let i = 1; i <= 50; i++) {
       const res = await _invoke('spaces.create', {
@@ -239,11 +239,11 @@
     }
   }
 
-  /** 旧兼容：供创建弹窗内模板选择用（保留但不再作为入口卡）。 */
-  function _templateName(templateId) {
-    const tpl = _templates.find((t) => t.template_id === templateId);
-    return tpl ? tpl.name : null;
-  }
+  // ── 死代码说明 ─────────────────────────────────────────────────────────────
+  // 本模块（renderSpaces / spaces-view）已被 workspace.js（空间中心）整体取代：
+  // index.html 无 spaces-view 容器、boot.js 的 view 分支只加载 workspace.js，
+  // 因此 renderSpaces 从未被调用，以下「新建空间」旧弹窗相关代码一并废弃。
+  // （lazy-features.test.ts 仍按旧映射断言加载本文件，属已知滞后测试。）
 
   function _renderGallery() {
     const view = document.getElementById('spaces-view');
@@ -272,7 +272,7 @@
     view.querySelectorAll('.marketplace-chip').forEach((el) => {
       el.addEventListener('click', () => { _filter = el.dataset.chip; _renderGallery(); });
     });
-    document.getElementById('spaces-new-btn').addEventListener('click', () => _openCreateModal());
+    // 「新建空间」按钮原打开 _openCreateModal（已废弃）；现由 workspace.js 新建弹窗接管。
     _renderGrid(document.getElementById('spaces-grid'));
   }
 
@@ -599,85 +599,6 @@
     const res = await _invoke('spaces.update', { spaceId: space.space_id, name: name.trim() });
     if (res.error) { _notifyFail(_t('spaces.rename_fail', '重命名失败'), res.error); return; }
     await _refreshDetail();
-  }
-
-  // ── create modal ─────────────────────────────────────────────────────────
-  function _openCreateModal(preselectTemplateId) {
-    const overlay = document.getElementById('spaces-modal');
-    if (!overlay) return;
-    const tplGrid = document.getElementById('spaces-modal-templates');
-    const cards = ['', ..._templates].map((t) => {
-      if (!t) {
-        return `<label class="spaces-tpl-card" data-template="">
-          <span class="spaces-tpl-tag"></span>
-          <span class="spaces-tpl-name">${_t('spaces.blank_tpl', '空白空间')}</span>
-          <span class="spaces-tpl-desc">${_t('spaces.blank_tpl_desc', '不套模板：全资源可用，手动拼装')}</span>
-        </label>`;
-      }
-      const nSkills = (t.bundle?.skill_ids || []).length;
-      const nAgents = (t.bundle?.agent_ids || []).length;
-      return `<label class="spaces-tpl-card" data-template="${escapeHtml(t.template_id)}">
-        <span class="spaces-tpl-tag"></span>
-        <span class="spaces-tpl-name">${escapeHtml(t.name)}</span>
-        <span class="spaces-tpl-desc">${escapeHtml(t.description || '')}</span>
-        <span class="spaces-tpl-bundle">${_t('spaces.tpl_bundle', '自带')} ${nSkills} ${_t('spaces.skills_unit', '技能')} · ${nAgents} ${_t('spaces.agents_unit', '智能体')}</span>
-      </label>`;
-    }).join('');
-    tplGrid.innerHTML = cards;
-    // 按点击顺序选中：第 1 个为主模板，第 2/3 个为副模板（1 主 + 最多 2 副）
-    // 预选（角色模板 tab 点卡进入）：第 1 个即主模板
-    const selected = preselectTemplateId ? [preselectTemplateId] : [];
-    const cardEls = tplGrid.querySelectorAll('.spaces-tpl-card');
-    const refreshTplSelection = () => {
-      cardEls.forEach((el) => {
-        const idx = selected.indexOf(el.dataset.template);
-        el.classList.toggle('is-selected', idx >= 0);
-        el.classList.toggle('is-primary', idx === 0);
-        el.classList.toggle('is-secondary', idx > 0);
-        const tag = el.querySelector('.spaces-tpl-tag');
-        if (tag) {
-          tag.textContent = idx === 0 ? _t('spaces.tpl_primary', '主') : idx > 0 ? _t('spaces.tpl_secondary', '副') : '';
-          tag.classList.toggle('is-visible', idx >= 0);
-        }
-      });
-    };
-    cardEls.forEach((el) => {
-      el.addEventListener('click', () => {
-        const tpl = el.dataset.template || '';
-        const idx = selected.indexOf(tpl);
-        if (idx >= 0) {
-          selected.splice(idx, 1);
-        } else {
-          if (selected.length >= 3) return; // 1 主 + 2 副
-          selected.push(tpl);
-        }
-        refreshTplSelection();
-      });
-    });
-    if (selected.length) refreshTplSelection(); // 预选模板时立即标"主"
-    const nameInput = document.getElementById('spaces-modal-name');
-    nameInput.value = '';
-    nameInput.focus();
-    overlay.style.display = 'flex';
-
-    const close = () => { overlay.style.display = 'none'; };
-    document.getElementById('spaces-modal-cancel').onclick = close;
-    document.getElementById('spaces-modal-create').onclick = async () => {
-      const name = nameInput.value.trim();
-      if (!name) { nameInput.focus(); return; }
-      const primary = selected[0] || undefined;
-      const secondary = selected.slice(1, 3);
-      const res = await _invoke('spaces.create', {
-        name,
-        ...(primary ? { primary_template_id: primary } : {}),
-        ...(secondary.length ? { secondary_template_ids: secondary } : {}),
-      });
-      if (res.error) { _notifyFail(_t('spaces.create_fail', '创建失败'), res.error); return; }
-      close();
-      await _loadData();
-      _filter = 'scenarios';
-      _openDetail(res.space.space_id);
-    };
   }
 
   // ── entry ────────────────────────────────────────────────────────────────

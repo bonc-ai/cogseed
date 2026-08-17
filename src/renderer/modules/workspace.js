@@ -297,10 +297,10 @@
       if (rx !== ry) return rx - ry;
       return x.name < y.name ? -1 : x.name > y.name ? 1 : 0;
     });
-    // 已选值不在候选里（如装了新 CLI 或选了被卸载的）→ 回落首项
-    if (!_baseAgentCatalog.some((a) => a.id === _createBaseAgent)) {
-      _createBaseAgent = _baseAgentCatalog.length ? _baseAgentCatalog[0].id : '';
-    }
+    // 已选值不在候选里（如装了新 CLI 或选了被卸载的）→ 过滤掉；空选时回落首项
+    const validAgentIds = new Set(_baseAgentCatalog.map((a) => a.id));
+    _createBaseAgents = (_createBaseAgents || []).filter((id) => validAgentIds.has(id));
+    if (!_createBaseAgents.length && _baseAgentCatalog.length) _createBaseAgents = [_baseAgentCatalog[0].id];
     _loaded = true;
     _loadError = '';
     // 详情默认指向第一个空间
@@ -321,7 +321,8 @@
   let _createName = '';            // 弹窗内已填空间名称（_reRender 时保留）
   let _createInstruction = '';     // 弹窗内已填默认目标/指令（_reRender 时保留）
   let _createTemplate = null;      // 弹窗套用的模板 template_id
-  let _createBaseAgent = '';      // 弹窗选中的基础 Agent（cli type；探测结果首项为默认）
+  let _createBaseAgents = [];     // 弹窗选中的基础 Agent 列表（cli type；多选，探测结果首项为默认）
+  let _createAgentOpen = false;   // 新建空间弹窗内的基础 Agent 多选弹窗
   let _abilityKind = 'role';       // 能力弹窗当前 tab：role | task | skill
   let _abilityOpen = false;
   // ── 任务引用选择器（@ 引用空间产物与资产）──────────────────────────────────
@@ -841,9 +842,11 @@
 
   function _renderConfigDrawer(sp) {
     const cap = { role: { label: '角色', icon: 'users' }, task: { label: 'Task Agent', icon: 'terminal' }, skill: { label: 'Skill', icon: 'sparkles' } };
-    // 角色 = 主/副模板名；task/skill = 模板 bundle ∪ extra（与后端 resolveSpaceResources 并集语义一致）
-    const tmpls = _templates.filter((t) => t.template_id === sp.primary_template_id || t.template_id === sp.template_id
-      || (sp.secondary_template_ids || []).includes(t.template_id));
+    // 角色 = 主/副模板名（主在前，副在后）；task/skill = 模板 bundle ∪ extra（与后端 resolveSpaceResources 并集语义一致）
+    const tmpls = [sp.primary_template_id || sp.template_id, ...(sp.secondary_template_ids || [])]
+      .filter(Boolean)
+      .map((id) => _templates.find((t) => t.template_id === id))
+      .filter((t) => !!t);
     const bundleSkills = new Set(tmpls.flatMap((t) => (t.bundle ? t.bundle.skill_ids : [])));
     const bundleAgents = new Set(tmpls.flatMap((t) => (t.bundle ? t.bundle.agent_ids : [])));
     const pick = {
@@ -875,7 +878,7 @@
               <div class="ws-config-ability-icon">${_icon(cap[k].icon, 'ui-icon')}</div>
               <div class="ws-config-ability-content">
                 <div class="ws-config-ability-title"><strong>${cap[k].label}</strong><span>${pick[k].length}</span></div>
-                <div class="ws-config-ability-chips">${pick[k].length ? pick[k].map((n) => `<span>${escapeHtml(n)}</span>`).join('') : '<em>未配置</em>'}</div>
+                <div class="ws-config-ability-chips">${pick[k].length ? pick[k].map((n, i) => `<span>${k === 'role' && i === 0 ? '<b class="ws-chip-tag">主</b>' : ''}${escapeHtml(n)}</span>`).join('') : '<em>未配置</em>'}</div>
               </div>
               <button class="ws-secondary ws-ability-edit" data-ws="${k === 'role' ? 'edit-role' : 'edit-ability'}" data-kind="${k}">${_t('ws.adjust', '调整')}</button>
             </div>`).join('')}
@@ -905,6 +908,11 @@
       task: { label: 'Task Agent', picked: _resolveCatalog('task', _abilityPicks.task) },
       skill: { label: 'Skill', picked: _resolveCatalog('skill', _abilityPicks.skill) },
     };
+    // 基础 Agent 已选显示名（注册名优先，未知回退 cli 显示名）
+    const _createAgentNames = (_createBaseAgents || []).map((id) => {
+      const a = _baseAgentCatalog.find((x) => x.id === id);
+      return a ? a.name : _baseAgentDisplayName(id);
+    }).filter(Boolean);
     return `
     <div class="ws-scrim" data-ws="close-create">
       <section class="ws-dialog" role="dialog" aria-modal="true" data-ws="noop">
@@ -916,10 +924,10 @@
           <div class="ws-form-grid">
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
               <input data-ws="create-name" value="${escapeHtml(_createName)}" placeholder="${_t('ws.space_name_ph', '请输入空间名称')}" maxlength="60" autocomplete="off" spellcheck="false" /></label>
-            <label><span>${_t('ws.base_agent', '基础 Agent')} <em>${_t('ws.base_agent_hint', '负责承接任务')}</em></span>
-              <select data-ws="create-agent">${_baseAgentCatalog.length
-                ? _baseAgentCatalog.map((a) => `<option value="${escapeHtml(a.id)}"${_createBaseAgent === a.id ? ' selected' : ''}>${escapeHtml(a.name)}</option>`).join('')
-                : `<option value="" disabled>${_baseAgentProbeError ? escapeHtml('探测失败：' + _baseAgentProbeError) : escapeHtml(_t('ws.no_agent', '未检测到本机 Agent'))}</option>`}</select></label>
+            <label class="full"><span>${_t('ws.base_agent', '基础 Agent')} <em>${_t('ws.base_agent_hint', '负责承接任务')}</em></span>
+              <div class="ws-agent-row"><span>CX</span><div><strong>${_createAgentNames.length ? escapeHtml(_createAgentNames.join('、')) : (_baseAgentProbeError ? escapeHtml('探测失败：' + _baseAgentProbeError) : (_baseAgentCatalog.length ? '未选择' : escapeHtml(_t('ws.no_agent', '未检测到本机 Agent'))))}</strong><small>${_t('ws.base_agent_hint', '承接空间内任务')}</small></div>
+                <button class="ws-secondary ws-ability-edit" data-ws="edit-create-agent">${_t('ws.adjust', '调整')}</button>
+              </div></label>
             <label class="full instruction"><span>${_t('ws.default_goal', '默认目标/指令')} <em>0 / 500</em></span>
               <textarea data-ws="create-instruction" maxlength="500" placeholder="${_t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等')}">${escapeHtml(_createInstruction)}</textarea></label>
           </div>
@@ -932,7 +940,7 @@
                 <div class="ws-cap-icon">${_icon(k === 'role' ? 'users' : k === 'task' ? 'terminal' : 'sparkles', 'ui-icon')}</div>
                 <div class="ws-cap-main">
                   <div class="ws-cap-top"><strong>${cap[k].label}</strong><span>${cap[k].picked.length}</span></div>
-                  <div class="ws-chips">${cap[k].picked.length ? cap[k].picked.map((o) => `<i>${escapeHtml(o.name)}</i>`).join('') : '<i>未选择</i>'}</div>
+                  <div class="ws-chips">${cap[k].picked.length ? cap[k].picked.map((o, i) => `<i>${k === 'role' && i === 0 ? '<b class="ws-chip-tag">主</b>' : ''}${escapeHtml(o.name)}</i>`).join('') : '<i>未选择</i>'}</div>
                 </div>
                 <button class="ws-secondary" data-ws="open-ability" data-kind="${k}">${_t('ws.adjust', '调整')}</button>
               </div>`).join('')}
@@ -949,17 +957,51 @@
     </div>`;
   }
 
+  // ── 弹窗：基础 Agent 多选（新建空间内；与空间设置「当前对话 Agent」同款交互）──
+
+  function _renderCreateAgentModal() {
+    const list = _baseAgentCatalog || [];
+    const picks = _createBaseAgents || [];
+    return `
+    <div class="ws-scrim ws-ability-scrim" data-ws="close-create-agent">
+      <section class="ws-ability-dialog" role="dialog" aria-modal="true" data-ws="noop">
+        <header class="ws-ability-head">
+          <div><h2>${_t('ws.pick_base_agent', '选择基础 Agent')}</h2><p>${_t('ws.pick_base_agent_hint', '可多选：所有被选中的 Agent 都会承接空间内任务。')}</p></div>
+          <button data-ws="close-create-agent">${_icon('x', 'ui-icon')}</button>
+        </header>
+        <div class="ws-ability-main ws-ability-main-solo">
+          <div class="ws-ability-pane">
+            <div class="ws-option-grid">
+              ${list.length ? list.map((o) => {
+                const selected = picks.includes(o.id);
+                return `
+                <button class="ws-option-card ${selected ? 'selected' : ''}" data-ws="toggle-create-agent" data-id="${escapeHtml(o.id)}">
+                  <span class="ws-check">${selected ? '✓' : ''}</span>
+                  <div><strong>${escapeHtml(o.name || o.id)}</strong><p>${_t('ws.base_agent_hint', '承接空间内任务')}</p></div>
+                </button>`;
+              }).join('') : `<div class="ws-empty">${_t('ws.no_agent', '未检测到本机 Agent')}</div>`}
+            </div>
+          </div>
+        </div>
+        <footer class="ws-ability-foot">
+          <div>${picks.length ? `<span class="ws-config-hint">已选 ${picks.length} 个</span>` : ''}</div>
+          <div>${picks.length ? `<button class="ws-secondary" data-ws="clear-create-agent">${_t('ws.clear', '清除')}</button>` : ''}<button class="ws-secondary" data-ws="close-create-agent">${_t('ws.cancel', '取消')}</button><button class="ws-primary" data-ws="save-create-agent">${_t('ws.save_choice', '保存选择')}</button></div>
+        </footer>
+      </section>
+    </div>`;
+  }
+
   // ── 弹窗：能力选择 ────────────────────────────────────────────────────────
 
   function _renderAbilityModal() {
     const kindLabels = { role: '角色', task: 'Task Agent', skill: 'Skill' };
     const kind = _abilityKind;
     const list = _abilityCatalog(kind) || [];
-    const tpl = _templates.find((t) => t.template_id === _createTemplate) || null;
-    // 模板 bundle 内置项：固定开启、不可移除（后端派生，无排除机制）
+    // 模板 bundle 内置项：全部已选角色（主+副）模板的 bundle 并集，固定开启、不可移除
+    const roleTmpls = _templates.filter((t) => (_abilityPicks.role || []).includes(t.template_id));
     const bundleIds = new Set([
-      ...((tpl && tpl.bundle ? tpl.bundle.agent_ids : []) || []),
-      ...((tpl && tpl.bundle ? tpl.bundle.skill_ids : []) || []),
+      ...roleTmpls.flatMap((t) => (t.bundle ? t.bundle.agent_ids : [])),
+      ...roleTmpls.flatMap((t) => (t.bundle ? t.bundle.skill_ids : [])),
     ]);
     const picked = _abilityPicks[kind] || [];
     return `
@@ -975,17 +1017,19 @@
           </nav>
           <div class="ws-ability-pane">
             ${kind === 'role' ? `<div class="ws-ability-limit-hint">${_t('ws.role_limit_hint', '最多选择 3 个角色模板（1 主 + 2 副），首个作为主角色。')}</div>` : ''}
-            <div class="ws-option-grid">
+            ${kind === 'role'
+              ? _renderRoleOptionGrid(list, picked)
+              : `<div class="ws-option-grid">
               ${list.map((o) => {
                 const selected = picked.includes(o.id);
-                const bundled = kind !== 'role' && bundleIds.has(o.id);
+                const bundled = bundleIds.has(o.id);
                 return `
                 <button class="ws-option-card ${selected ? 'selected' : ''}" data-ws="toggle-ability" data-kind="${kind}" data-id="${escapeHtml(o.id)}" ${bundled ? 'data-bundled="1"' : ''}>
                   <span class="ws-check">${selected ? '✓' : ''}</span>
                   <div><strong>${escapeHtml(o.name)}</strong>${bundled ? '<em>模板内置</em>' : ''}<p>${escapeHtml(o.desc)}</p></div>
                 </button>`;
               }).join('')}
-            </div>
+            </div>`}
           </div>
         </div>
         <footer class="ws-ability-foot">
@@ -994,6 +1038,32 @@
         </footer>
       </section>
     </div>`;
+  }
+
+  /** 角色 tab 专用网格：已选按 picks 顺序（第 1 个 = 主角色）展示并带「主/副」徽标，
+   *  副角色卡提供「设为主」按钮；未选角色列在其后。卡片用 div 承载（内含按钮，
+   *  避免 button 嵌套），点击卡片 = 勾选/取消，与 task/skill 交互一致。 */
+  function _renderRoleOptionGrid(list, picked) {
+    const pickedSet = new Set(picked);
+    const byId = new Map(list.map((o) => [o.id, o]));
+    const pickedItems = picked.map((id) => byId.get(id)).filter(Boolean);
+    const availItems = list.filter((o) => !pickedSet.has(o.id));
+    if (!pickedItems.length && !availItems.length) return '<div class="ws-empty">暂无可用模板</div>';
+    const card = (o, idx) => {
+      const isPicked = idx >= 0;
+      const isPrimary = isPicked && idx === 0;
+      return `
+      <div class="ws-option-card ${isPicked ? 'selected' : ''} ${isPrimary ? 'is-primary' : isPicked ? 'is-secondary' : ''}" data-ws="toggle-ability" data-kind="role" data-id="${escapeHtml(o.id)}">
+        <span class="ws-check">${isPicked ? '✓' : ''}</span>
+        <div><strong>${escapeHtml(o.name)}</strong>${isPicked ? `<em class="ws-role-badge${isPrimary ? ' is-primary' : ''}">${isPrimary ? '主角色' : '副角色'}</em>` : ''}<p>${escapeHtml(o.desc)}</p></div>
+        ${isPicked && !isPrimary ? `<button type="button" class="ws-role-primary-btn" data-ws="make-primary" data-id="${escapeHtml(o.id)}">${_t('ws.make_primary', '设为主')}</button>` : ''}
+      </div>`;
+    };
+    const pickedHtml = pickedItems.map((o, i) => card(o, i)).join('');
+    const availHtml = availItems.map((o) => card(o, -1)).join('');
+    return `
+      ${pickedHtml ? `<div class="ws-role-group-label">${_t('ws.role_picked_group', '已选（第 1 个为主角色）')}</div><div class="ws-option-grid">${pickedHtml}</div>` : ''}
+      ${availHtml ? `<div class="ws-role-group-label">${_t('ws.role_avail_group', '全部角色模板')}</div><div class="ws-option-grid">${availHtml}</div>` : ''}`;
   }
 
   // ── 空间设置抽屉配套：能力调整 / 主技能 / 失效清理 / 重命名 ─────────────
@@ -1506,13 +1576,26 @@
     root.querySelectorAll('[data-ws="confirm-create"]').forEach((el) => el.addEventListener('click', () => _createSpace()));
     root.querySelectorAll('[data-ws="toggle-ability"]').forEach((el) => el.addEventListener('click', () => _toggleAbility(el)));
     root.querySelectorAll('[data-ws="save-ability"]').forEach((el) => el.addEventListener('click', () => { _abilityOpen = false; _reRender(); }));
+    root.querySelectorAll('[data-ws="make-primary"]').forEach((el) => el.addEventListener('click', (e) => {
+      e.stopPropagation(); // 按钮嵌在角色卡片内，避免触发卡片 toggle
+      _makeRolePrimary(el.dataset.id);
+    }));
     // 表单输入持久化（调整能力会 _reRender，避免已填名称/指令被重置）
     const cnInput = root.querySelector('[data-ws="create-name"]');
     if (cnInput) cnInput.addEventListener('input', () => { _createName = cnInput.value; });
     const ciInput = root.querySelector('[data-ws="create-instruction"]');
     if (ciInput) ciInput.addEventListener('input', () => { _createInstruction = ciInput.value; });
-    const caSel = root.querySelector('[data-ws="create-agent"]');
-    if (caSel) caSel.addEventListener('change', () => { _createBaseAgent = caSel.value; });
+    // 基础 Agent 多选弹窗（新建空间内；勾选即时生效，保存=关闭）
+    root.querySelectorAll('[data-ws="edit-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = true; _reRender(); }));
+    root.querySelectorAll('[data-ws="close-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = false; _reRender(); }));
+    root.querySelectorAll('[data-ws="toggle-create-agent"]').forEach((el) => el.addEventListener('click', () => {
+      const id = el.dataset.id;
+      const picks = _createBaseAgents || [];
+      _createBaseAgents = picks.includes(id) ? picks.filter((x) => x !== id) : [...picks, id];
+      _reRender();
+    }));
+    root.querySelectorAll('[data-ws="save-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = false; _reRender(); }));
+    root.querySelectorAll('[data-ws="clear-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createBaseAgents = []; _reRender(); }));
 
     // 所有「功能待接入」桩（创建/能力选择已接真，走 confirm-create/toggle-ability/save-ability）
     root.querySelectorAll('[data-ws^="stub-"]').forEach((el) => el.addEventListener('click', () => _stub(_stubLabel(el))));
@@ -1530,16 +1613,20 @@
       _reRender();
       return;
     }
-    // 角色模板最多 3 个（1 主 + 2 副）：已选模板计 1 个角色，其余可再勾 2 个。
-    if (kind === 'role') {
-      const tpl = _templates.find((t) => t.template_id === _createTemplate) || null;
-      const roleCount = (tpl ? 1 : 0) + picks.length;
-      if (roleCount >= 3) {
-        if (typeof uiToast === 'function') uiToast(_t('ws.role_limit', '角色最多选择 3 个（1 主 + 2 副）'), { variant: 'warning', timeoutMs: 3200 });
-        return;
-      }
+    // 角色模板最多 3 个（1 主 + 2 副）：picks 有序，第 1 个为主，其余为副。
+    if (kind === 'role' && picks.length >= 3) {
+      if (typeof uiToast === 'function') uiToast(_t('ws.role_limit', '角色最多选择 3 个（1 主 + 2 副）'), { variant: 'warning', timeoutMs: 3200 });
+      return;
     }
     _abilityPicks[kind] = [...picks, id];
+    _reRender();
+  }
+
+  /** 角色「设为主」：把该角色移到 picks 首位（原主角色自动降为副，顺序即主→副）。 */
+  function _makeRolePrimary(id) {
+    const picks = _abilityPicks.role || [];
+    if (!id || picks[0] === id) return;
+    _abilityPicks.role = [id, ...picks.filter((x) => x !== id)].slice(0, 3);
     _reRender();
   }
 
@@ -1548,14 +1635,15 @@
     const name = String(_createName || '').trim();
     if (!name) { _stub('请填写空间名称'); return; }
     const instructions = String(_createInstruction || '').trim();
-    const tpl = _templates.find((t) => t.template_id === _createTemplate) || null;
-    // 角色 = 选中的角色模板（主模板优先；多余作副模板 ≤2）
+    // 角色 picks 有序：第 1 个 = 主角色，其余 ≤2 为副角色（弹窗内可「设为主」调整）
     const roles = _abilityPicks.role || [];
-    const primary = _createTemplate || roles[0] || undefined;
-    const secondary = roles.filter((r) => r !== primary).slice(0, 2);
-    // 模板 bundle 内置（后端 resolveSpaceResources 派生，无需 extra 存储）
-    const bundleSkills = new Set(tpl && tpl.bundle ? tpl.bundle.skill_ids : []);
-    const bundleAgents = new Set(tpl && tpl.bundle ? tpl.bundle.agent_ids : []);
+    const primary = roles[0] || undefined;
+    const secondary = roles.slice(1, 3);
+    // 模板 bundle 内置：全部已选角色（主+副）模板的 bundle 并集
+    // （后端 resolveSpaceResources 派生，无需 extra 存储）
+    const roleTmpls = _templates.filter((t) => roles.includes(t.template_id));
+    const bundleSkills = new Set(roleTmpls.flatMap((t) => (t.bundle ? t.bundle.skill_ids : [])));
+    const bundleAgents = new Set(roleTmpls.flatMap((t) => (t.bundle ? t.bundle.agent_ids : [])));
     // 额外勾选（超出 bundle）创建后写入 extra_*
     const extraSkills = (_abilityPicks.skill || []).filter((id) => !bundleSkills.has(id));
     const extraAgents = (_abilityPicks.task || []).filter((id) => !bundleAgents.has(id));
@@ -1568,7 +1656,7 @@
         ...(primary ? { primary_template_id: primary } : {}),
         ...(secondary.length ? { secondary_template_ids: secondary } : {}),
         ...(instructions ? { instructions } : {}),
-        ...(_createBaseAgent ? { base_agent: _createBaseAgent } : {}),
+        ...(_createBaseAgents && _createBaseAgents.length ? { base_agents: _createBaseAgents } : {}),
       });
       if (!res.error && res.space) { space = res.space; break; }
       if (res.error === 'name_dup') { name0 = `${name} ${i + 2}`; continue; }
@@ -1581,6 +1669,7 @@
     for (const id of extraAgents) await _invoke('spaces.resources.add', { spaceId: space.space_id, kind: 'agent', id });
     _createOpen = false;
     _abilityOpen = false;
+    _createAgentOpen = false;
     await _loadData();
     // 新空间进侧栏缓存（否则该空间建了会话后侧栏组名显示不了）
     if (typeof window.invalidateSidebarSpaces === 'function') window.invalidateSidebarSpaces();
@@ -1601,17 +1690,19 @@
 
   function _openCreate(tplId) {
     _createTemplate = tplId || null;
-    // 从模板创建：预选模板 bundle 的 skill/agent（角色 bundle 无字段，默认空，可手动叠加）
+    // 从模板创建：模板本身即主角色（picks[0]），bundle 的 skill/agent 一并预选；
+    // 角色 picks 有序：第 1 个 = 主角色，其余 = 副角色（与 _createSpace 分配一致）。
     const tpl = _templates.find((t) => t.template_id === _createTemplate) || null;
     _createName = tpl ? tpl.name : '';
     _createInstruction = tpl ? (tpl.description || '') : '';
     _abilityPicks = {
-      role: [],
+      role: tpl ? [tpl.template_id] : [],
       task: (tpl && tpl.bundle ? tpl.bundle.agent_ids : []) || [],
       skill: (tpl && tpl.bundle ? tpl.bundle.skill_ids : []) || [],
     };
     _createOpen = true;
     _abilityOpen = false;
+    _createAgentOpen = false;
     _reRender();
   }
 
@@ -1630,6 +1721,7 @@
     _abilityPicks = { role: roles.slice(0, 3), task: [], skill: [] };
     _createOpen = true;
     _abilityOpen = false;
+    _createAgentOpen = false;
     _reRender();
   }
 
@@ -1638,6 +1730,7 @@
     if (!root) return;
     let html = _render();
     if (_createOpen) html += _renderCreateModal();
+    if (_createAgentOpen) html += _renderCreateAgentModal();
     if (_abilityOpen) html += _renderAbilityModal();
     if (_editAbilityOpen) html += _renderEditAbilityModal();
     if (_mainSkillOpen) html += _renderMainSkillModal();
