@@ -12200,9 +12200,6 @@ body.model-not-configured .main-content { flex-direction: column; }
 .agent-ext-missing-title { font-weight: 600; margin-bottom: 2px; }
 .agent-ext-missing-item { margin-top: 2px; }
 .agent-ext-missing-name { font-weight: 600; }
-  border-left: 3px solid var(--warning, #b45309);
-  border-radius: 4px;
-}
 
 #agent-config {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;

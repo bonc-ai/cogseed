@@ -223,7 +223,10 @@ describe('renderer lazy feature loader', () => {
 
     expect(source).not.toContain('setTimeout(() => { loadLocalCliEntries');
     expect(source).toContain('async function mountExternalCliSelect');
-    expect(source).toContain('const entries = await loadLocalCliEntries({ force: true })');
+    // 探测只在选择器打开时发生（loadExternalPanelData 封装了
+    // detectAll + 托管网关状态，force: true 在打开时重扫）。
+    expect(source).toContain('const { entries, gateways } = await loadExternalPanelData({ force: true });');
+    expect(source).toContain('loadExternalPanelData');
   });
 
   it('re-probes local CLI runtimes when an Agent detail selector is rendered', () => {
