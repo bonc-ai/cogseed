@@ -18,7 +18,7 @@ import {
 } from './requirement-store';
 import type { KstarConversationTaskStateRecord, KstarRequirementRecord, KstarTaskRecord } from './requirement-types';
 
-export type KstarTaskCandidateBridge = (userId: string, proposals: KstarCandidateProposal[]) => Promise<RecallCandidateRecord[]>;
+export type KstarTaskCandidateBridge = (userId: string, proposals: KstarCandidateProposal[], options?: { spaceId?: string }) => Promise<RecallCandidateRecord[]>;
 
 export interface DrainKstarTaskStateOptions {
   candidateBridge?: KstarTaskCandidateBridge;
@@ -189,7 +189,12 @@ export async function drainKstarTaskState(
   const closedRequirements = requirements.filter((requirement) => requirement.status === 'closed');
   const proposals = await dedupeProposals(userId, closedRequirements);
   const bridge = options.candidateBridge || saveKstarCandidateProposals;
-  const candidates = proposals.length ? await bridge(userId, proposals) : [];
+  // 任务级沉淀带空间归属：任务/需求记录的工作空间（空间会话即空间 id）
+  // 透传给候选，否则该路径沉淀的资产无 spaceId（tab 不显示、注入不命中）。
+  const spaceId: string | undefined = task.workspaceId || requirements.find((r) => r.workspaceId)?.workspaceId;
+  const candidates = proposals.length
+    ? await bridge(userId, proposals, spaceId ? { spaceId } : undefined)
+    : [];
   const closedTask: KstarTaskRecord = {
     ...task,
     status: 'closed',

@@ -1546,6 +1546,29 @@ export async function promoteRecallCandidate(
         throw new Error('candidate action does not create or change an asset');
       }
     }
+    // 空间归属自动挂载：资产带 spaceId（来源会话/任务的空间）时自动补
+    // workspace-ref（资产 × 空间绑定）。手动投影/预览/确认路径
+    // （buildRecallView / isAssetEligibleForProjection）要求空间会话的资产
+    // 存在该空间的 workspace-ref，否则出现"资产 tab 可见但引用不到"。
+    // 统一在此收口（幂等；KStar 直接沉淀线在 direct-experience-assets
+    // 里的挂载保留，重复挂载无害）。挂载失败不阻断确认——资产本身已成立。
+    if (stored?.spaceId && safeId(stored.spaceId)) {
+      try {
+        const { addWorkspaceAssetReference } = await import('./workspace-refs');
+        await addWorkspaceAssetReference(userId, {
+          assetId: stored.id,
+          workspaceId: stored.spaceId,
+          scope: candidate.suggestedScope,
+        });
+      } catch (error) {
+        log.warn('recall workspace reference auto-binding degraded', {
+          userId,
+          candidateId,
+          assetId: stored.id,
+          error: (error as Error).message,
+        });
+      }
+    }
     receipt = await persistHandoffReceipt(userId, candidate.id, handoffReceipt(stored, decision.decision_id));
     decision = await recordReviewDecisionOutcome(
       userId,

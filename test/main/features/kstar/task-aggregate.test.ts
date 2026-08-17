@@ -265,4 +265,20 @@ describe('KSTAR task aggregation', () => {
       taskId: nextState!.currentTaskId, goalText: '设计发票导出', userMessageIds: ['msg-switch'], status: 'open',
     });
   });
+
+  it('passes the task workspace id through the candidate bridge (space attribution)', async () => {
+    const { store, task } = await seedClosedTask();
+    const aggregate = await import('../../../../src/main/features/kstar/task-aggregate');
+    await store.replaceKstarTask('user-a', { ...task, workspaceId: 'sp_space_1' });
+
+    let seen: { spaceId?: string } | undefined;
+    const result = await aggregate.drainKstarTaskState('user-a', 'cid-a', {
+      candidateBridge: async (_userId, _proposals, options) => {
+        seen = options;
+        return [fakeCandidate('cand-space')];
+      },
+    });
+    expect(result?.candidates).toEqual([fakeCandidate('cand-space')]);
+    expect(seen).toEqual({ spaceId: 'sp_space_1' });
+  });
 });

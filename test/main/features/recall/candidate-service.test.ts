@@ -1120,4 +1120,29 @@ describe('Recall candidate/asset › 空间归属（spaceId）管线', () => {
     expect(promoted.asset.spaceId).toBeUndefined();
     expect((await assets.listAbilityAssetsForSpace('user-a', 'sp_any')).some((a) => a.id === promoted.asset.id)).toBe(false);
   });
+
+  it('promote 空间归属候选 → 自动补 workspace-ref（资产×空间绑定，注入可命中）', async () => {
+    const candidates = await service();
+    const refs = await import('../../../../src/main/features/recall/workspace-refs');
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: '空间内绘画沉淀：配色规范应遵循品牌色。',
+      summary: '品牌配色规范',
+      suggestedType: 'rule' as const,
+      suggestedScope: 'space',
+      spaceId: 'sp_space_a',
+      sourceRefs: [{ kind: 'memory' as const, id: 'mem-space-ref' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    expect(promoted.asset.spaceId).toBe('sp_space_a');
+    const all = await refs.listWorkspaceAssetReferences('user-a');
+    expect(all).toEqual([expect.objectContaining({
+      assetId: promoted.asset.id,
+      workspaceId: 'sp_space_a',
+      scope: 'space',
+      enabled: true,
+    })]);
+    // 幂等：重复 promote（already-applied 路径）不产生重复 ref
+    await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    expect(await refs.listWorkspaceAssetReferences('user-a')).toHaveLength(1);
+  });
 });
