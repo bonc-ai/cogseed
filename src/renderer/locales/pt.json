@@ -4307,7 +4307,7 @@
   "cognition.governance_page_hint": "Pausar, parar o uso padrão, revogar referências, excluir e limpar o histórico são ações diferentes. Revise o impacto primeiro.",
   "cognition.governance_total": "Todos os ativos",
   "cognition.governance_active": "Em uso normal",
-  "cognition.governance_attention": "Outro estado",
+  "cognition.governance_attention": "Precisa de atenção",
   "cognition.governance_assets_versions": "Ativos e versões atuais",
   "cognition.governance_assets_versions_hint": "Selecione um item para ver estado, versão e ações disponíveis.",
   "cognition.governance_use_control": "Controles de uso",

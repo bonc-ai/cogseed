@@ -4307,7 +4307,7 @@
   "cognition.governance_page_hint": "一時停止、既定利用の停止、参照撤回、削除、履歴消去は別の操作です。影響を確認してから実行します。",
   "cognition.governance_total": "全資産",
   "cognition.governance_active": "通常利用中",
-  "cognition.governance_attention": "その他の状態",
+  "cognition.governance_attention": "要注意",
   "cognition.governance_assets_versions": "資産と現在のバージョン",
   "cognition.governance_assets_versions_hint": "項目を選び、状態、バージョン、実行可能な操作を確認します。",
   "cognition.governance_use_control": "利用制御",

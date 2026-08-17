@@ -4614,7 +4614,7 @@
   "cognition.governance_page_hint": "Pausing, stopping default use, revoking references, deleting content, and purging history are different actions. Review the impact first.",
   "cognition.governance_total": "All assets",
   "cognition.governance_active": "In normal use",
-  "cognition.governance_attention": "Other status",
+  "cognition.governance_attention": "Needs attention",
   "cognition.governance_assets_versions": "Assets and current versions",
   "cognition.governance_assets_versions_hint": "Choose one to inspect its status, version, and available actions.",
   "cognition.governance_use_control": "Use controls",

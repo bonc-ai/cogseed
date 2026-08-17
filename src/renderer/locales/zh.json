@@ -4614,7 +4614,7 @@
   "cognition.governance_page_hint": "暂停、停止默认使用、撤销引用、删除资产与清除历史是不同动作；先看影响，再执行。",
   "cognition.governance_total": "全部资产",
   "cognition.governance_active": "正常使用",
-  "cognition.governance_attention": "非正常状态",
+  "cognition.governance_attention": "需要关注",
   "cognition.governance_assets_versions": "资产与当前版本",
   "cognition.governance_assets_versions_hint": "选择一项，查看它的状态、版本与可执行动作。",
   "cognition.governance_use_control": "使用控制",
