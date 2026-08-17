@@ -4,6 +4,15 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+// 语义查重不依赖真实 embedding 模型（测试环境无关性）：按文本哈希生成
+// 确定性 512 维向量——不同文本向量不同 → 查重走 no_match 正常晋升。
+vi.mock('../../../../src/main/features/kb_embed', () => ({
+  embedQuery: async (text: string) => {
+    const digest = createHash('sha256').update(text).digest();
+    return Array.from({ length: 512 }, (_, i) => (digest[i % 32] / 255 - 0.5) * 0.2);
+  },
+}));
+
 let tmpDir: string;
 let previousRoot: string | undefined;
 

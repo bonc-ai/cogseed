@@ -19,6 +19,6 @@ describe('P3394 bridge security primitives', () => {
   it('redacts secrets from audit metadata', () => {
     const journal = new P3394AuditJournal();
     journal.append({ event: 'send', actor_id: 'agent-a', status: 'accepted', metadata: { token: 'raw', nested: { api_key: 'secret', ok: true } } });
-    expect(journal.list()[0].metadata).toEqual({ token: '[REDACTED]', nested: { api_key: '[REDACTED]', ok: true } });
+    expect(journal.list()[0].metadata).toEqual({ token: '***REDACTED***', nested: { api_key: '***REDACTED***', ok: true } });
   });
 });

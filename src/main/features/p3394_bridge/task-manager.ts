@@ -8,7 +8,7 @@
  * the session tracks task ids, this manager tracks per-task state.
  */
 
-export type P3394BridgeTaskState = 'submitted' | 'working' | 'input-required' | 'completed' | 'failed' | 'cancelled';
+export type P3394BridgeTaskState = 'submitted' | 'working' | 'input-required' | 'recoverable' | 'completed' | 'failed' | 'cancelled';
 
 export interface P3394BridgeTask {
   task_id: string;
@@ -21,9 +21,10 @@ export interface P3394BridgeTask {
 }
 
 const TASK_TRANSITIONS: Record<P3394BridgeTaskState, P3394BridgeTaskState[]> = {
-  submitted: ['working', 'completed', 'failed', 'cancelled'],
-  working: ['input-required', 'completed', 'failed', 'cancelled'],
-  'input-required': ['working', 'completed', 'failed', 'cancelled'],
+  submitted: ['working', 'recoverable', 'completed', 'failed', 'cancelled'],
+  working: ['input-required', 'recoverable', 'completed', 'failed', 'cancelled'],
+  'input-required': ['working', 'recoverable', 'completed', 'failed', 'cancelled'],
+  recoverable: ['working', 'completed', 'failed', 'cancelled'],
   completed: [],
   failed: [],
   cancelled: [],
@@ -54,6 +55,11 @@ export class P3394BridgeTaskManager {
     return this.settle(taskId, 'input-required');
   }
 
+  /** Marks transport loss as recoverable without declaring Runtime failure. */
+  markRecoverable(taskId: string): P3394BridgeTask {
+    return this.settle(taskId, 'recoverable');
+  }
+
   /** Advances the task with transition validation; terminal re-settlement
    *  with the SAME terminal state is idempotent. */
   settle(taskId: string, state: P3394BridgeTaskState): P3394BridgeTask {
@@ -70,6 +76,16 @@ export class P3394BridgeTaskManager {
   get(taskId: string): P3394BridgeTask | null {
     const t = this.tasks.get(taskId);
     return t ? { ...t } : null;
+  }
+
+  /** Snapshot of all tasks (recovery controller / doctor consumption). */
+  list(): P3394BridgeTask[] {
+    return [...this.tasks.values()].map((t) => ({ ...t }));
+  }
+
+  /** Tasks waiting for transport recovery (state === 'recoverable'). */
+  listRecoverable(): P3394BridgeTask[] {
+    return this.list().filter((t) => t.state === 'recoverable');
   }
 
   require(taskId: string): P3394BridgeTask {

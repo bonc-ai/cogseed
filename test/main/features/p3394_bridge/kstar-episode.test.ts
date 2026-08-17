@@ -36,4 +36,34 @@ describe('p3394 KSTAR episodes', () => {
     expect(record.aar).toContain('目标：协作审查');
     expect(record.completed_at).toBeTruthy();
   });
+
+  it('redacts raw secrets from episode actions/result while keeping correlation ids (M-06/S-04)', () => {
+    const file = recordP3394Episode({
+      session_id: 'ses-kstar-leak',
+      task_id: 'tsk-kstar-leak',
+      goal: 'g',
+      agent_id: 'hermes',
+      status: 'failed',
+      actions: [
+        {
+          sequence: 1,
+          kind: 'failed',
+          at: new Date().toISOString(),
+          error: 'call failed with Authorization: Bearer abcDEF1234567890 and access_token=qqq',
+        },
+      ],
+      result: 'token=secret123',
+    });
+    const text = fs.readFileSync(file, 'utf8');
+    expect(text).not.toContain('abcDEF1234567890');
+    expect(text).not.toContain('secret123');
+    expect(text).toContain('Bearer ***');
+    expect(text).toContain('access_token=***');
+    expect(text).toContain('token=***');
+    // 关联 id 保持可追溯。
+    const record = JSON.parse(text);
+    expect(record.session_id).toBe('ses-kstar-leak');
+    expect(record.task_id).toBe('tsk-kstar-leak');
+    expect(record.agent_id).toBe('hermes');
+  });
 });

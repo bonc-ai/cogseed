@@ -86,10 +86,28 @@ describe('asset runtime gate', () => {
   it('honours the target agent allow-list only when declared', () => {
     const asset = { ...active, maturity: 'transfer_validated' as const, targetAgents: ['agent-a'] };
     expect(evaluateAssetRuntimeEligibility(asset, { agentId: 'agent-a' }).eligible).toBe(true);
+    expect(evaluateAssetRuntimeEligibility(asset).reasons).toContain('target_agent_not_allowed');
     const wrong = evaluateAssetRuntimeEligibility(asset, { agentId: 'agent-b' });
     expect(wrong.eligible).toBe(false);
     expect(wrong.reasons).toContain('target_agent_not_allowed');
     expect(evaluateAssetRuntimeEligibility({ ...active, maturity: 'transfer_validated' }, { agentId: 'agent-b' }).eligible).toBe(true);
+  });
+
+  it('applies structured scope policy through the same runtime gate', () => {
+    const asset = {
+      ...active,
+      maturity: 'transfer_validated' as const,
+      scopePolicy: { agentIds: ['agent-a'], projectIds: ['project-a'], fileKinds: ['pdf'] },
+    };
+    expect(evaluateAssetRuntimeEligibility(asset, {
+      agentId: 'agent-a', projectId: 'project-a', fileKinds: ['pdf'],
+    }).eligible).toBe(true);
+    expect(evaluateAssetRuntimeEligibility(asset, {
+      agentId: 'agent-a', projectId: 'project-a', fileKinds: ['pdf', 'image'],
+    }).reasons).toContain('scope_mismatch');
+    expect(evaluateAssetRuntimeEligibility(asset, {
+      agentId: 'agent-a', fileKinds: ['pdf'],
+    }).reasons).toContain('scope_mismatch');
   });
 
   // 缺失的敏感级不等于 L0：目的地声明了上限就必须先分级。

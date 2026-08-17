@@ -1,6 +1,7 @@
 import { safeId } from '../../storage';
 import {
   saveRecallCandidate,
+  type RecallCandidateAction,
   type RecallCandidateRecord,
 } from '../recall/candidate-service';
 import type { KstarCandidateProposal } from './types';
@@ -24,7 +25,8 @@ export async function saveKstarCandidateProposals(
       // statement（已观测：'可复用经验：数据的文档…' 污染资产正文）。
       // 注意新建路径防呆：显式 value 必须配显式 suggestedAction，否则 weak。
       value: proposal.judgment,
-      suggestedAction: proposal.suggestedAction || 'create',
+      // suggestedAction 收窄到 Recall 的受限行动集合（宽松来源按 'create' 兜底）。
+      suggestedAction: (proposal.suggestedAction || 'create') as RecallCandidateAction,
       ...(proposal.summary ? { summary: proposal.summary } : {}),
       ...(proposal.uncertainty ? { uncertainty: proposal.uncertainty } : {}),
       suggestedType: proposal.suggestedType,

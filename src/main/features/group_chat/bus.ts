@@ -205,9 +205,11 @@ import { SenderEpochStore } from "../p3394/sender-epoch-store";
 import {
   buildDispatchedAssetsPromptBlock,
   buildRecallTurnPromptContext,
+  evaluateRecallAssetRuntimeEligibility,
   type RecallPromptCitation,
 } from "../recall/prompt-injection";
 import { readAbilityAsset } from "../recall/asset-service";
+import type { AssetRuntimeContext } from "../recall/formal-assets/runtime";
 import { recordRecallUsage } from "../recall/usage-service";
 
 const log = createLogger("group_chat.bus");
@@ -1720,7 +1722,7 @@ export interface ProjectedGroupProcessInput {
   agentId: string;
   turnId: string;
   kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
-    | 'tool.started' | 'tool.finished' | 'task.completed' | 'task.failed'
+    | 'tool.started' | 'tool.finished' | 'artifact' | 'task.completed' | 'task.failed'
     | 'task.cancelled' | 'task.recoverable';
   data: Record<string, unknown>;
 }
@@ -3494,6 +3496,7 @@ async function runActorTurnBody(
   // re-reading the conv index per tool call.
   let turnProjectId: string | undefined;
   let turnSpaceId: string | undefined;
+  let turnConversationKind: string | undefined;
   try {
     const { getConversation } = await import("../chats");
     const _conv = await getConversation(uid, cid);
@@ -3501,6 +3504,8 @@ async function runActorTurnBody(
     if (typeof _pid === "string" && _pid) turnProjectId = _pid;
     const _sid = (_conv as any)?.space_id;
     if (typeof _sid === "string" && _sid) turnSpaceId = _sid;
+    const _kind = (_conv as any)?.kind;
+    if (typeof _kind === "string" && _kind) turnConversationKind = _kind;
   } catch {
     /* default scope */
   }
@@ -3736,7 +3741,8 @@ async function runActorTurnBody(
   if (isCommander) {
     // 空间模式会话（kind=space_builder）：用户↔构建师的一对一引导对话。
     // 构建师不派活不写文件——零额外工具，数据全部走 Runtime injection 快照。
-    const convKind = await getConversationKindSafe(uid, cid);
+    const convKind = turnConversationKind || await getConversationKindSafe(uid, cid);
+    turnConversationKind = convKind;
     // Deterministic host routing: a task-shaped USER message opens the
     // governed KStar task + auto-confirmed projection HERE, before the model
     // turn — the Commander no longer has to emit kstar_control correctly
@@ -3781,6 +3787,14 @@ async function runActorTurnBody(
         item.msgId,
         () => commanderResolvedRuntime,
         item.sourceMessageText,
+        {
+          ...(turnProjectId ? { projectId: turnProjectId } : {}),
+          ...(turnSpaceId ? { workspaceId: turnSpaceId } : {}),
+          ...(convKind ? { conversationKind: convKind } : {}),
+          ...(turnAttachmentMetadata.attachmentTypes.length
+            ? { fileKinds: turnAttachmentMetadata.attachmentTypes }
+            : {}),
+        },
         () => segState.flush(),
         () => {
           terminalHandoffCompleted = true;
@@ -3908,7 +3922,13 @@ async function runActorTurnBody(
           cid,
           taskRunId: item.turnId,
           taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
-          ...((turnSpaceId ?? turnProjectId) ? { workspaceId: turnSpaceId ?? turnProjectId } : {}),
+          agentId: actor.id,
+          ...(turnProjectId ? { projectId: turnProjectId } : {}),
+          ...(turnSpaceId ? { workspaceId: turnSpaceId } : {}),
+          ...(turnConversationKind ? { conversationKind: turnConversationKind } : {}),
+          ...(turnAttachmentMetadata.attachmentTypes.length
+            ? { fileKinds: turnAttachmentMetadata.attachmentTypes }
+            : {}),
           ...(item.committedProjectionId ? { committedProjectionId: item.committedProjectionId } : {}),
           ...(item.forecastId ? { forecastId: item.forecastId } : {}),
         });
@@ -3962,7 +3982,17 @@ async function runActorTurnBody(
     } else if (item.dispatchedAssetIds?.length) {
       // Commander-granted assets only — no host-side Recall selection.
       try {
-        const dispatched = await buildDispatchedAssetsPromptBlock(uid, item.dispatchedAssetIds);
+        const dispatched = await buildDispatchedAssetsPromptBlock(uid, item.dispatchedAssetIds, {
+          ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
+          taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
+          purpose: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
+          ...(turnProjectId ? { projectId: turnProjectId } : {}),
+          ...(turnSpaceId ? { workspaceId: turnSpaceId } : {}),
+          ...(turnConversationKind ? { conversationKind: turnConversationKind } : {}),
+          ...(turnAttachmentMetadata.attachmentTypes.length
+            ? { fileKinds: turnAttachmentMetadata.attachmentTypes }
+            : {}),
+        });
         if (dispatched.promptBlock) {
           systemPrompt = `${systemPrompt}\n\n${dispatched.promptBlock}`;
         }
@@ -8519,6 +8549,7 @@ async function ensureKstarTaskForDispatch(
 async function resolveDispatchedAbilityAssets(
   uid: string,
   value: unknown,
+  context: AssetRuntimeContext,
 ): Promise<{ ok: true; assetIds: string[] } | { ok: false; error: string }> {
   if (value === undefined) return { ok: true, assetIds: [] };
   if (!Array.isArray(value)) {
@@ -8539,8 +8570,13 @@ async function resolveDispatchedAbilityAssets(
     } catch {
       return { ok: false, error: `unknown ability asset: ${rawId}` };
     }
-    if (!asset || asset.status !== "active") {
-      return { ok: false, error: `ability asset is not active: ${rawId}` };
+    if (!asset) return { ok: false, error: `unknown ability asset: ${rawId}` };
+    const gate = await evaluateRecallAssetRuntimeEligibility(uid, asset, context);
+    if (!gate.eligible) {
+      return {
+        ok: false,
+        error: `ability asset is not allowed for this dispatch: ${rawId} (${gate.reasons.join(", ")})`,
+      };
     }
     granted.push(asset.id);
   }
@@ -8819,6 +8855,7 @@ async function buildCommanderExtraTools(
   currentSourceMessageId?: string,
   resolvedRuntime: () => ChatResolvedRuntime | null = () => null,
   currentSourceMessageText?: string,
+  currentRecallScope: Pick<AssetRuntimeContext, 'projectId' | 'workspaceId' | 'conversationKind' | 'fileKinds'> = {},
   // Called right before a VISIBLE agent dispatch runs (dispatch_to / named
   // run_worker), so the commander's accumulated reasoning so far is flushed as
   // its own bubble and the post-handback synthesis starts a fresh one. Not
@@ -9353,8 +9390,6 @@ async function buildCommanderExtraTools(
       } catch (error) {
         return _toolError((error as Error).message);
       }
-      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets);
-      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       if (!toRaw) {
         return {
           content: JSON.stringify({ ok: false, error: "`to` is required" }),
@@ -9398,6 +9433,13 @@ async function buildCommanderExtraTools(
         name: dispatchAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+        ...currentRecallScope,
+        agentId: dispatchActor.id,
+        purpose: message,
+        taskText: message,
+      });
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       // Layer 2 routing uplift: dispatch IS a task — auto-track + auto-project
       // when no KStar task is open (advisory; never blocks the dispatch).
       const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
@@ -9579,8 +9621,6 @@ async function buildCommanderExtraTools(
       } catch (error) {
         return _toolError((error as Error).message);
       }
-      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets);
-      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       if (!toRaw) return _toolError("`to` is required");
       if (!message) return _toolError("`message` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
@@ -9600,6 +9640,13 @@ async function buildCommanderExtraTools(
         name: handoffAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+        ...currentRecallScope,
+        agentId: handoffActor.id,
+        purpose: message,
+        taskText: message,
+      });
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       // Layer 2 routing uplift: named hand-off is a formal task. The
       // auto-track flag is captured so the forecast gate is waived ONLY for
       // the dispatch that actually created the task (ONCE semantics).
@@ -9925,8 +9972,6 @@ async function buildCommanderExtraTools(
       } catch (error) {
         return _toolError((error as Error).message);
       }
-      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets);
-      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       if (!task) return _toolError("`task` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
       if (blocked) return blocked;
@@ -9947,6 +9992,12 @@ async function buildCommanderExtraTools(
           name: "Worker",
           joined_at: nowIso(),
         };
+        const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+          ...currentRecallScope,
+          purpose: task,
+          taskText: task,
+        });
+        if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
         const prepared = await prepareNestedDispatchForTool(
           state,
           workerActor,
@@ -10013,6 +10064,13 @@ async function buildCommanderExtraTools(
         name: namedAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+        ...currentRecallScope,
+        agentId: namedActor.id,
+        purpose: task,
+        taskText: task,
+      });
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       // Layer 2 routing uplift: named worker is a formal task.
       const autoTask = await ensureKstarTaskForDispatch(uid, cid, task, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(

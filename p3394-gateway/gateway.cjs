@@ -20,8 +20,15 @@
  *   - Agent 运行期间写入 workspace/out/ 的文件随回复作为 resource part
  *     回传（digest 校验）——Artifact 端到端传递。
  *
- * 安装（对端机器上，一行）：
- *   npm install -g @cogseed/p3394-gateway
+ * 安装/获取（对端机器上；本地优先，有就直接用、不要从 NPM 拉）：
+ *   1) 已全局安装过：command -v p3394-gateway 有输出 → 直接用 p3394-gateway；
+ *   2) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：
+ *      开发仓库 <仓库根>/p3394-gateway/gateway.cjs；
+ *      macOS 已安装应用
+ *      /Applications/CogSeed*.app/Contents/Resources/app.asar.unpacked/p3394-gateway/gateway.cjs；
+ *      Windows <安装目录>/resources/app.asar.unpacked/p3394-gateway/gateway.cjs；
+ *      找到后 node <该路径> 启动即等同于装了包；
+ *   3) 以上都没有才：npm install -g @cogseed/p3394-gateway（发布中，失败回退 2）。
  * 启动（默认适配 Hermes）：
  *   COGSEED_ENDPOINT=http://127.0.0.1:8444 COGSEED_TOKEN=<token> p3394-gateway
  *
@@ -32,7 +39,10 @@
  *   COGSEED_ENDPOINT          回复发回的 CogSeed 端点（默认 http://127.0.0.1:8444）
  *   COGSEED_TOKEN             回发 CogSeed 的 Bearer 令牌
  *   P3394_ADVERTISE_ENDPOINT  向 CogSeed 自报的本端地址（默认 http://127.0.0.1:<port>）
- *   P3394_AGENT               预设名：hermes/claude/codex/opencode/gemini/aider/openclaw/workbuddy（默认 hermes）
+ *   P3394_AGENT               智能体名：内置预设（hermes/claude/codex/opencode/
+ *                              gemini/aider/openclaw/workbuddy）或任意名字
+ *                              （未知名默认：身份=名字、CLI=同名命令、
+ *                              参数={message}，复杂参数用 P3394_AGENT_CLI_ARGS）
  *   P3394_AGENT_ID            本节点的 agent_id（默认随预设）
  *   P3394_AGENT_ALIAS         本节点自报的显示名（默认空 = 用 agent_id）
  *   P3394_AGENT_MODE          oneshot（默认）| sscli
@@ -61,8 +71,17 @@ const isLoopbackHost = GATEWAY_HOST === '127.0.0.1' || GATEWAY_HOST === 'localho
 const ADVERTISE_ENDPOINT = (process.env.P3394_ADVERTISE_ENDPOINT || 'http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT).replace(/\/$/, '');
 // ECS 心跳：定期向 CogSeed 报告在线（默认 60s；0 关闭）。
 const HEARTBEAT_MS = Number(process.env.P3394_HEARTBEAT_MS ?? 60 * 1000);
+// V-04 反向入口：P3394_SEND_TASK 非空时，启动后向 CogSeed 发起一次任务，
+// 等待自动回发结果、打印后退出（Hermes → CogSeed → Hermes 闭环）。
+const SEND_TASK = (process.env.P3394_SEND_TASK || '').trim();
+const SEND_TASK_TIMEOUT_MS = Number(process.env.P3394_SEND_TASK_TIMEOUT_MS || 30 * 1000);
+// V-04 断线重试：发送失败（连接拒绝/非 2xx）按退避重试，默认 2 次额外尝试。
+const SEND_TASK_RETRIES = Math.max(1, Number(process.env.P3394_SEND_TASK_RETRIES || 2));
+const replyWaiters = new Map(); // message_id → 处理回信的函数
 
 // 预设：市面上常见智能体的 CLI 模板（oneshot 非交互模式，stdout 输出最终回复）。
+// 预设只是便捷模板，不是接入白名单——任何 P3394_AGENT 名字都可启动，
+// 未知名默认：身份=名字、CLI=同名命令、参数={message}（见下方解析逻辑）。
 const PRESETS = {
   hermes:   { cli: 'hermes',  args: '-z {message} --cli',       id: 'hermes' },
   claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude' },
@@ -74,20 +93,19 @@ const PRESETS = {
   workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy' },
 };
 const PRESET_NAME = (process.env.P3394_AGENT || 'hermes').trim().toLowerCase();
+// 预设只是便捷模板，不是白名单：P3394 面向任意智能体/任意程序，任何名字
+// 都可接入。未知名字的默认语义：身份 = 该名字；CLI = 同名命令；
+// 参数 = 把消息作为唯一参数（复杂参数用 P3394_AGENT_CLI_ARGS 自定义）。
 const preset = PRESETS[PRESET_NAME] || null;
-if (!preset) {
-  console.error('[p3394-gateway] 未知 P3394_AGENT=' + PRESET_NAME + '，可用预设：' + Object.keys(PRESETS).join(', '));
-  process.exit(2);
-}
-const AGENT_ID = (process.env.P3394_AGENT_ID || preset.id).trim();
+const AGENT_ID = (process.env.P3394_AGENT_ID || (preset ? preset.id : PRESET_NAME)).trim();
 const AGENT_ALIAS = (process.env.P3394_AGENT_ALIAS || '').trim();
 const AGENT_MODE = (process.env.P3394_AGENT_MODE || 'oneshot').trim().toLowerCase();
 if (AGENT_MODE !== 'oneshot' && AGENT_MODE !== 'sscli') {
   console.error('[p3394-gateway] 未知 P3394_AGENT_MODE=' + AGENT_MODE + '（oneshot | sscli）');
   process.exit(2);
 }
-const CLI = (process.env.P3394_AGENT_CLI || preset.cli).trim();
-const CLI_ARGS = (process.env.P3394_AGENT_CLI_ARGS || preset.args).trim();
+const CLI = (process.env.P3394_AGENT_CLI || (preset ? preset.cli : PRESET_NAME)).trim();
+const CLI_ARGS = (process.env.P3394_AGENT_CLI_ARGS || (preset ? preset.args : '{message}')).trim();
 const TIMEOUT_MS = Number(process.env.P3394_AGENT_TIMEOUT_MS || 10 * 60 * 1000);
 const NODE_KIND = (process.env.P3394_NODE_KIND || 'agent').trim();
 if (!['agent', 'sub_agent', 'task_agent', 'capability', 'model_runtime'].includes(NODE_KIND)) {
@@ -736,6 +754,14 @@ const server = http.createServer((req, res) => {
         return;
       }
       json(res, 200, { ok: true, message_id: envelope.message_id });
+      // V-04 反向闭环：本端发起的任务回信（reply_to 命中 waiter）直接交给
+      // 等待方，不进入 CLI 执行路径。
+      if (envelope.reply_to && replyWaiters.has(envelope.reply_to)) {
+        const waiter = replyWaiters.get(envelope.reply_to);
+        replyWaiters.delete(envelope.reply_to);
+        waiter(envelope);
+        return;
+      }
       // cancel 控制帧必须绕过串行队列立即处理，否则会被正在运行的长任务阻塞。
       if (envelope.kind === 'control' && envelope.performative === 'cancel') {
         handleCancel(envelope);
@@ -761,11 +787,72 @@ server.listen(PORT, GATEWAY_HOST, () => {
   console.log('[p3394-gateway] ' + AGENT_ID + ' P3394 endpoint on http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT + ' · mode: ' + AGENT_MODE);
   console.log('[p3394-gateway] replies to ' + COGSEED_ENDPOINT + ' · preset: ' + PRESET_NAME + (PRESET_NAME === 'codex' ? ' · runtime: Codex Desktop app-server (' + CODEX_APP_SERVER + ')' : ' · CLI: ' + CLI + ' ' + CLI_ARGS));
   registerWithCogseed();
+  if (SEND_TASK) sendTaskOneShot(SEND_TASK);
   if (HEARTBEAT_MS > 0) {
     const timer = setInterval(sendHeartbeat, HEARTBEAT_MS);
     timer.unref();
   }
 });
+
+/**
+ * V-04 反向闭环：本网关（对端 Agent）主动向 CogSeed 发起一次任务，
+ * 信封携带本端 reply_endpoint/reply_token；CogSeed 执行完自动回发结果，
+ * 网关命中 waiter 后打印回复并退出。
+ *
+ * 断线恢复：发送失败（CogSeed 未起/连接拒绝/非 2xx）按退避重试
+ * （P3394_SEND_TASK_RETRIES 次，间隔 1.2s * attempt）；总等待受
+ * SEND_TASK_TIMEOUT_MS 封顶，超时以非零码退出。
+ */
+function sendTaskOneShot(text, attempt = 1) {
+  const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const task = {
+    spec_version: 'p3394/1.0',
+    message_id: 'msg-task-' + nonce,
+    session_id: 'ses-task-' + nonce,
+    task_id: 'tsk-' + nonce,
+    kind: 'task',
+    performative: 'request',
+    sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+    recipients: [{ agent_id: 'cogseed' }],
+    payload: { parts: [{ type: 'text', text: text.slice(0, MAX_MESSAGE_LEN) }], metadata: { goal: text.slice(0, 200) } },
+    extensions: { reply_endpoint: ADVERTISE_ENDPOINT, reply_token: AUTH_TOKEN },
+    idempotency_key: 'idem-task-' + nonce,
+  };
+  replyWaiters.set(task.message_id, (reply) => {
+    const replyText = envelopeText(reply);
+    console.log('[p3394-gateway] task reply from ' + (reply.sender && reply.sender.agent_id) + ': ' + replyText.slice(0, 120));
+    process.stdout.write(replyText + '\n');
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.error('[p3394-gateway] send-task timeout waiting for reply');
+    process.exit(1);
+  }, SEND_TASK_TIMEOUT_MS);
+  const url = new URL(COGSEED_ENDPOINT + '/p3394/envelope');
+  const headers = { 'Content-Type': 'application/json' };
+  if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
+  const body = JSON.stringify({ envelope: task });
+  const retry = (why) => {
+    if (attempt < SEND_TASK_RETRIES) {
+      console.error('[p3394-gateway] send-task ' + why + ', retrying (' + attempt + '/' + SEND_TASK_RETRIES + ')');
+      setTimeout(() => sendTaskOneShot(text, attempt + 1), 1200 * attempt);
+      return true;
+    }
+    console.error('[p3394-gateway] send-task ' + why + ' after ' + attempt + ' attempt(s)');
+    process.exit(1);
+    return false;
+  };
+  const req = http.request(url, { method: 'POST', headers }, (res) => {
+    res.resume();
+    if (!(res.statusCode >= 200 && res.statusCode < 300)) {
+      retry('rejected ' + res.statusCode);
+    }
+  });
+  req.on('error', (error) => {
+    retry('failed: ' + error.message);
+  });
+  req.end(body);
+}
 
 /** ECS 心跳：轻量 control 信封（inform），刷新 CogSeed 注册表里的 last_seen。 */
 function sendHeartbeat() {

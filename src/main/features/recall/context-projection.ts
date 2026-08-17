@@ -128,7 +128,12 @@ export interface ProjectionSemanticOptions {
 export interface AutomaticProjectionInput {
   taskRunId: string;
   taskText: string;
+  agentId?: string;
+  roleId?: string;
+  projectId?: string;
   workspaceId?: string;
+  conversationKind?: string;
+  fileKinds?: string[];
 }
 
 export interface BuildRecallViewResult {
@@ -632,14 +637,23 @@ export async function createAutomaticContextProjection(
     const runtime = evaluateAssetRuntimeEligibility({
       status: asset.status,
       maturity: asset.maturity,
+      lifecycleStatus: asset.lifecycleStatus,
       scope: asset.scope,
       ...(asset.crossScopeConfirmedAt ? { crossScopeConfirmedAt: asset.crossScopeConfirmedAt } : {}),
+      ...(asset.scopePolicy ? { scopePolicy: asset.scopePolicy } : {}),
       ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
       ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
       ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
     }, {
       silentDefaultInjection: true,
+      purpose: taskText,
       ...(taskText ? { taskText } : {}),
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.roleId ? { roleId: input.roleId } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(input.conversationKind ? { conversationKind: input.conversationKind } : {}),
+      ...(input.fileKinds ? { fileKinds: input.fileKinds } : {}),
     });
     if (!runtime.eligible) {
       omittedRefs.push({ assetId: asset.id, reason: RUNTIME_OMISSION_REASON[runtime.reasons[0]] || 'source_unavailable' });

@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import * as http from 'node:http';
+import * as fs from 'node:fs';
 import { AddressInfo } from 'node:net';
 import { P3394OutboundHub, p3394EnvelopeReplyText } from '../../../../src/main/features/p3394_bridge/outbound-hub';
+import { outboxListForReplay, outboxRecordSubmitted } from '../../../../src/main/features/p3394_bridge/outbound-outbox';
+import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runtime-paths';
 import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
 import type { P3394PeerRecord } from '../../../../src/main/features/p3394_bridge/registry';
 
 function envelope(overrides: Record<string, unknown> = {}): P3394Envelope {
   return {
+    spec_version: 'p3394/1.0',
     message_id: 'msg-out-1',
     session_id: 'ses-out-1',
     task_id: 'tsk-out-1',
@@ -45,12 +49,14 @@ const MANIFEST = {
 
 describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
   let servers: http.Server[] = [];
+  const replayFile = p3394StateFile('p3394-outbox.jsonl');
   let endpoints: string[] = [];
 
   afterEach(async () => {
     for (const server of servers) server.close();
     servers = [];
     endpoints = [];
+    try { fs.unlinkSync(replayFile); } catch { /* absent */ }
   });
 
   function startPeer(): Promise<string> {
@@ -101,6 +107,37 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     const result = await sendPromise;
     expect(result.text).toBe('hello cogseed, reply here');
     expect(p3394EnvelopeReplyText(replyEnvelope())).toBe('hello cogseed, reply here');
+  });
+
+  it('replays a submitted envelope after the peer becomes available', async () => {
+    const pending = envelope({ message_id: 'msg-recover-1', session_id: 'ses-recover-1', task_id: 'tsk-recover-1', idempotency_key: 'idem-recover-1' });
+    outboxRecordSubmitted(pending, 'hermes');
+    expect(outboxListForReplay()).toHaveLength(1);
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [], manifest: MANIFEST as never, endpoints: [endpoint], updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer]);
+    const result = await hub.replayOutbox();
+    expect(result).toEqual({ replayed: 1, failed: 0 });
+    expect(outboxListForReplay()).toMatchObject([{ message_id: 'msg-recover-1', status: 'sent' }]);
+  });
+
+  it('keeps a failed replay eligible after a temporary peer outage', async () => {
+    const pending = envelope({ message_id: 'msg-deferred-1', session_id: 'ses-deferred-1', task_id: 'tsk-deferred-1', idempotency_key: 'idem-deferred-1' });
+    outboxRecordSubmitted(pending, 'hermes');
+    const unavailable = hubFor([]);
+    await expect(unavailable.replayOutbox()).resolves.toEqual({ replayed: 0, failed: 1 });
+    expect(outboxListForReplay()).toMatchObject([{ message_id: 'msg-deferred-1', status: 'submitted' }]);
+
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [], manifest: MANIFEST as never, endpoints: [endpoint], updated_at: new Date().toISOString(),
+    };
+    await expect(hubFor([peer]).replayOutbox()).resolves.toEqual({ replayed: 1, failed: 0 });
+    expect(outboxListForReplay()).toMatchObject([{ message_id: 'msg-deferred-1', status: 'sent' }]);
   });
 
   it('rejects unknown peers and peers without endpoints', async () => {

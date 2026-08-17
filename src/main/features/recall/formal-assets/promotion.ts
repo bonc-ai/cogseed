@@ -49,7 +49,7 @@ export interface PromotionValidation {
 }
 
 /** 晋升前的分类型校验。`actor` 决定 rule 的边界要求：用户确认路径可以
- *  在评审时补边界，系统线拿不到人，缺边界就不该产出正式 RuleAsset。 */
+ *  先形成未验证资产并在待办中补边界；系统线拿不到人，缺边界就不能晋升。 */
 export function validatePromotionByAssetType(
   candidate: PromotionCandidateInput,
   options: { actor?: 'user' | 'system' } = {},
@@ -75,8 +75,8 @@ export function validatePromotionByAssetType(
     .filter((reason) => reason !== 'rule_missing_boundary');
 
   // PRD 3.1 给 RuleAsset 的最低门槛写明「用户确认来源、作用域、适用与禁止
-  // 范围」。系统线没有人可确认，缺边界时只能停在候选——把 undefined 当成
-  // 「无限制」写进正式资产，等于凭空给了一条没有边界的规则。
+  // 范围」。系统线没有人可确认，缺边界时只能停在候选；用户确认线保留提示，
+  // 资产以 User Confirmed / Unverified 落库，后续由低打扰待办补齐边界。
   const missingBoundary = classification.advisoryReasons.includes('rule_missing_boundary');
   if (missingBoundary) {
     if (options.actor === 'system') reasons.push('rule_boundary_required');

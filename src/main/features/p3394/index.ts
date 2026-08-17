@@ -41,6 +41,7 @@ export * from '../p3394_bridge/websocket-channel';
 export * from '../p3394_bridge/external-adapters';
 export * from '../p3394_bridge/cogseed-runtime-adapter';
 export * from '../p3394_bridge/executor';
+export * from '../p3394_bridge/recovery-controller';
 export * from '../p3394_bridge/http-channel';
 export * from '../p3394_bridge/channel-testkit';
 export * from '../p3394_bridge/reduced-profiles';

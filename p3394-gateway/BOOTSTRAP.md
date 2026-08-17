@@ -11,13 +11,34 @@
 
 ## 1. 方式 A：你有 shell（本机 CLI 智能体，如 Claude Code / Codex / 自研 CLI）
 
-安装并启动网关包（它把 P3394 信封自动翻译成你的 CLI 调用与回答）：
+先检查本机是否已有 P3394 网关（**本地优先**，有就直接用、不要从 NPM 拉），
+按顺序：
 
 ```bash
+# a) 已全局安装过 → 直接用
+command -v p3394-gateway
+
+# b) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：
+#    开发仓库: <仓库根>/p3394-gateway/gateway.cjs
+#    macOS 已安装应用: /Applications/CogSeed*.app/Contents/Resources/app.asar.unpacked/p3394-gateway/gateway.cjs
+#    Windows: <安装目录>/resources/app.asar.unpacked/p3394-gateway/gateway.cjs
+#    找到后直接启动（等同于装了包）:
+node <上面找到的路径>
+
+# c) 以上都没有才从 NPM 装（包发布中；失败回退 b 用 CogSeed 自带副本）
 npm install -g @cogseed/p3394-gateway
-P3394_AGENT=<预设名> p3394-gateway    # 预设: hermes/claude/codex/opencode/gemini/aider
-# 自研 CLI 用自定义模板:
+```
+
+启动（把 P3394 信封自动翻译成你的 CLI 调用与回答）：
+
+```bash
+# 预设只是模板不是白名单：填你的名字即可（身份=名字，执行 <名字> {message}）
+P3394_AGENT=<你的名字> p3394-gateway
+# 内置预设: hermes/claude/codex/opencode/gemini/aider（例如 P3394_AGENT=claude）
+# 需要特定参数时自定义模板:
 # P3394_AGENT_CLI=<你的命令> P3394_AGENT_CLI_ARGS='<参数模板，{message} 为消息占位>' p3394-gateway
+# 例（pi 无头模式）:
+# P3394_AGENT=pi P3394_AGENT_CLI_ARGS='-p {message} --no-session' p3394-gateway
 ```
 
 启动后你的 P3394 端点在 `http://127.0.0.1:9000`；网关会**自动向 CogSeed 发 hello 注册**

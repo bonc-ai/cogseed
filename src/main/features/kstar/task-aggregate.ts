@@ -1,10 +1,6 @@
 import { nowIso, safeId } from '../../storage';
 import type { RecallCandidateRecord } from '../recall/candidate-service';
-import { readContextProjection } from '../recall/context-projection';
-import { readWorldModelForecast } from '../recall/world-model';
-import { readKstarEpisode } from './episode-store';
 import type { KstarCandidateProposal } from './types';
-import { saveKstarCandidateProposals } from './recall-bridge';
 import { closeKstarRequirement } from './requirement-closure';
 import {
   createKstarRequirementRecord,
@@ -18,7 +14,9 @@ import {
 } from './requirement-store';
 import type { KstarConversationTaskStateRecord, KstarRequirementRecord, KstarTaskRecord } from './requirement-types';
 
-export type KstarTaskCandidateBridge = (userId: string, proposals: KstarCandidateProposal[], options?: { spaceId?: string }) => Promise<RecallCandidateRecord[]>;
+/** 沉淀路径已收口：KStar 候选统一走 requirement 级路径，本类型保留仅为
+ *  兼容调用方契约（drain 不再实际产候选）。 */
+export type KstarTaskCandidateBridge = (userId: string, proposals: KstarCandidateProposal[]) => Promise<RecallCandidateRecord[]>;
 
 export interface DrainKstarTaskStateOptions {
   candidateBridge?: KstarTaskCandidateBridge;
@@ -29,101 +27,6 @@ export interface KstarTaskAggregateResult {
   closedRequirements: KstarRequirementRecord[];
   proposals: KstarCandidateProposal[];
   candidates: RecallCandidateRecord[];
-}
-
-function normalizedSeed(value: string): string {
-  return value.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-function sameAssetVersions(left: Record<string, string>, right: Record<string, string>): boolean {
-  const leftEntries = Object.entries(left).sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
-  const rightEntries = Object.entries(right).sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
-  return leftEntries.length === rightEntries.length
-    && leftEntries.every(([assetId, version], index) => (
-      rightEntries[index]?.[0] === assetId && rightEntries[index]?.[1] === version
-    ));
-}
-
-async function proposalFromRequirement(
-  userId: string,
-  requirement: KstarRequirementRecord,
-): Promise<KstarCandidateProposal | null> {
-  const seed = requirement.aar?.candidateSeed?.replace(/\s+/g, ' ').trim();
-  const review = requirement.prmReview;
-  const projectionId = requirement.projectionId;
-  const forecastId = requirement.forecastId;
-  const episodeId = requirement.episodeIds.at(-1);
-  if (!seed || !review || !projectionId || !forecastId || !episodeId || review.evidenceRefs.length === 0) return null;
-
-  const [forecast, projection, episode] = await Promise.all([
-    readWorldModelForecast(userId, forecastId),
-    readContextProjection(userId, projectionId).catch(() => null),
-    readKstarEpisode(userId, episodeId),
-  ]);
-  if (
-    !forecast
-    || forecast.provenanceComplete !== true
-    || forecast.projectionId !== projectionId
-    || forecast.requirementId !== requirement.id
-    || !projection
-    || projection.status !== 'confirmed'
-    || !projection.assetVersions
-    || !forecast.assetVersions
-    || !sameAssetVersions(forecast.assetVersions, projection.assetVersions)
-    || !episode
-    || episode.projectionId !== projectionId
-    || episode.forecastId !== forecastId
-  ) return null;
-
-  return {
-    judgment: seed,
-    summary: `KSTAR requirement lesson: ${requirement.title}`.slice(0, 200),
-    uncertainty: 'Generated from a closed Requirement PRM/AAR and still requires user confirmation.',
-    suggestedType: review.attribution === 'template_gap'
-      ? 'template'
-      : review.attribution === 'skill_gap'
-        ? 'skill_method'
-        : review.attribution === 'rule_gap'
-          ? 'rule'
-          : 'personal',
-    suggestedScope: 'general',
-    sourceRefs: review.evidenceRefs,
-    learningSignal: {
-      ...(review.expectedResult ? { expectedResult: review.expectedResult } : {}),
-      ...(review.actualResult ? { actualResult: review.actualResult } : {}),
-      deltaR: review.deltaR,
-      deltaA: review.deltaA,
-      outcome: review.outcome,
-      confidence: review.confidence,
-      source: 'review',
-    },
-    learningProvenance: {
-      projectionId,
-      forecastId,
-      episodeId,
-      ruleRefs: forecast.ruleRefs || [],
-      attribution: review.attribution,
-      ...(review.actionDelta ? { actionDelta: review.actionDelta } : {}),
-      ...(review.resultDelta ? { resultDelta: review.resultDelta } : {}),
-    },
-  };
-}
-
-async function dedupeProposals(
-  userId: string,
-  requirements: KstarRequirementRecord[],
-): Promise<KstarCandidateProposal[]> {
-  const seen = new Set<string>();
-  const proposals: KstarCandidateProposal[] = [];
-  for (const requirement of requirements) {
-    const proposal = await proposalFromRequirement(userId, requirement);
-    if (!proposal) continue;
-    const key = normalizedSeed(proposal.judgment);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    proposals.push(proposal);
-  }
-  return proposals.slice(0, 3);
 }
 
 export async function startPendingTopicSwitchTask(
@@ -187,14 +90,16 @@ export async function drainKstarTaskState(
 
   const requirements = await listKstarRequirementsForTask(userId, task.id);
   const closedRequirements = requirements.filter((requirement) => requirement.status === 'closed');
-  const proposals = await dedupeProposals(userId, closedRequirements);
-  const bridge = options.candidateBridge || saveKstarCandidateProposals;
-  // 任务级沉淀带空间归属：任务/需求记录的工作空间（空间会话即空间 id）
-  // 透传给候选，否则该路径沉淀的资产无 spaceId（tab 不显示、注入不命中）。
-  const spaceId: string | undefined = task.workspaceId || requirements.find((r) => r.workspaceId)?.workspaceId;
-  const candidates = proposals.length
-    ? await bridge(userId, proposals, spaceId ? { spaceId } : undefined)
-    : [];
+  // 沉淀路径收口（2026-08-17）：KStar 候选沉淀统一走 requirement 级路径
+  // （task-level-precipitation → precipitateRequirementLevel，控制服务在
+  // finish/切换/自动闭环时触发，lesson 门控 + 语言硬闸 + 语义查重完整）。
+  // 本 drain 函数只保留任务/会话状态关闭职责，不再产候选——此前它用
+  // aar.candidateSeed（= review.reason 诊断文本）经 recall-bridge 进池，
+  // 与 requirement 级路径（= review.lesson）对同一 review 各产一条，
+  // 指纹不同去重拦不住（reason ≠ lesson），语义查重也未必命中（0.85）。
+  // 保留空数组字段以维持 KstarTaskAggregateResult 形状与调用方契约。
+  const proposals: KstarCandidateProposal[] = [];
+  const candidates: RecallCandidateRecord[] = [];
   const closedTask: KstarTaskRecord = {
     ...task,
     status: 'closed',

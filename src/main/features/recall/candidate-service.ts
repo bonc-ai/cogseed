@@ -105,6 +105,10 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   expiresAt: string;
   taskRunId?: string;
   targetAssetId?: string;
+  /** Automatic semantic deduplication provenance. These links are audit hints,
+   *  not lifecycle states: the candidate still ends in a normal state. */
+  mergedInto?: string;
+  mergedIntoAssetId?: string;
   failureCode?: 'asset_write_failed' | 'source_unavailable' | 'candidate_expired' | 'evidence_insufficient';
   failureMessage?: string;
   failedAt?: string;
@@ -309,6 +313,10 @@ function requireAssetLifecycleStatus(value: unknown): RecallAbilityAssetLifecycl
 function normalizeCandidateStatus(value: unknown): RecallCandidateStatus {
   if (value === 'pending') return 'pending_review';
   if (value === 'promoted') return 'confirmed';
+  // A short-lived implementation wrote an undeclared `superseded` state for
+  // semantic duplicates. Migrate it on read so one legacy record cannot make
+  // the whole candidate list fail to load.
+  if (value === 'superseded') return 'ignored';
   if (value === 'observed' || value === 'weak_observation' || value === 'pending_review'
     || value === 'deferred' || value === 'confirmed' || value === 'rejected'
     || value === 'ignored' || value === 'expired' || value === 'failed'
@@ -669,6 +677,12 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
         sourceRefs: mergeSourceRefs(candidate.sourceRefs, sourceRefs),
         evidenceRefs: mergeSourceRefs(candidate.evidenceRefs, evidenceRefs),
         risk: maxCandidateRisk(candidate.risk, risk),
+        ...(candidateBoundaries.applicableWhen !== undefined
+          ? { applicableWhen: candidateBoundaries.applicableWhen }
+          : {}),
+        ...(candidateBoundaries.forbiddenWhen !== undefined
+          ? { forbiddenWhen: candidateBoundaries.forbiddenWhen }
+          : {}),
         ...(shouldReopen ? {
           status: reviewReady ? 'pending_review' : 'weak_observation',
           cooldownUntil: undefined,
@@ -747,6 +761,10 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
   const risk = input.risk === undefined ? currentCandidate.risk : requireCandidateRisk(input.risk);
   const learningSignal = normalizeLearningSignal(input.learningSignal);
   const learningProvenance = normalizeLearningProvenance(input.learningProvenance);
+  const candidateBoundaries = readAbilityAssetSemantics({
+    ...(input.applicableWhen !== undefined ? { applicableWhen: input.applicableWhen } : {}),
+    ...(input.forbiddenWhen !== undefined ? { forbiddenWhen: input.forbiddenWhen } : {}),
+  });
   assertNotForbiddenToPersist([
     judgment,
     value,
@@ -756,6 +774,8 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
     JSON.stringify(evidenceRefs),
     learningSignal ? JSON.stringify(learningSignal) : undefined,
     learningProvenance ? JSON.stringify(learningProvenance) : undefined,
+    ...(candidateBoundaries.applicableWhen || []),
+    ...(candidateBoundaries.forbiddenWhen || []),
   ]);
   const duplicates = await listRecallCandidates(userId);
   const hasExplicitValue = Object.prototype.hasOwnProperty.call(input, 'value');
@@ -792,6 +812,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
       evidenceRefs,
       suggestedAction,
       risk,
+      ...candidateBoundaries,
       expiresAt,
       ...(taskRunId ? { taskRunId } : {}),
       ...(targetAssetId ? { targetAssetId } : {}),
@@ -891,7 +912,13 @@ export async function autoApplyRecallCandidate(
   userId: string,
   candidateId: string,
   opts: { semanticDedup?: boolean; provenance?: RecallPromotionProvenance } = {},
-): Promise<{ candidate: RecallCandidateRecord; asset?: RecallAbilityAssetRecord; mergedIntoAssetId?: string; updateCandidate?: RecallCandidateRecord }> {
+): Promise<{
+  candidate: RecallCandidateRecord;
+  asset?: RecallAbilityAssetRecord;
+  mergedIntoAssetId?: string;
+  mergedIntoCandidateId?: string;
+  updateCandidate?: RecallCandidateRecord;
+}> {
   // 两条系统线共用这个出口，来源要一路带到 lifecycleStatus，否则 KStar
   // 自进化沉淀会被记成会话自动抽取。缺省按 capture 线处理。
   const provenance: RecallPromotionProvenance = opts.provenance || 'capture';
@@ -945,21 +972,19 @@ async function loadDedupPools(userId: string): Promise<{
   ]);
   return {
     candidateTexts: candidates
-      .filter((c) => c.status !== 'rejected' && c.status !== 'ignored')
+      .filter((c) => c.status === 'observed' || c.status === 'weak_observation'
+        || c.status === 'pending_review' || c.status === 'deferred' || c.status === 'failed')
       .map((c) => ({ id: c.id, text: String(c.judgment || '') })),
     assetTexts: assets
-      .filter((a) => a.status !== 'deleted' && a.status !== 'purged')
+      .filter((a) => a.status !== 'deleted' && a.status !== 'purged' && a.status !== 'revoked')
       .map((a) => ({ id: a.id, text: String(a.statement || a.title || '') })),
   };
 }
 
-/** 晋升前资产语义查重 + 质量融合（设计 §4.7/§4.9）。
- *  - 未命中语义重复 → 走原 autoApplyRecallCandidate（行为与现状一致）
- *  - 命中资产 → 按质量融合：已有更高→证据并入；新更高/互补→生成 update 候选
- *  - capture 线 `automaticallyApplyReviewableCandidates` 与 KStar 封装共用此出口。 */
-/** 晋升前资产语义查重 + 质量融合（设计 §4.7/§4.9）。
+/** 晋升前资产语义查重（设计 §4.7/§4.9）。
  *  返回 null 表示无语义重复 → 调用方继续正常 promote。
- *  命中资产 → 按质量融合（update 候选 / 证据并入）；命中候选 → 证据合并。 */
+ *  命中正式资产时只生成 update 候选，不能在没有 ReviewDecision 和交接回执的
+ *  情况下直接改资产；命中候选时合并证据并正常结束重复候选。 */
 async function semanticDedupBeforePromote(
   userId: string,
   candidate: RecallCandidateRecord,
@@ -967,6 +992,7 @@ async function semanticDedupBeforePromote(
   candidate: RecallCandidateRecord;
   asset?: RecallAbilityAssetRecord;
   mergedIntoAssetId?: string;
+  mergedIntoCandidateId?: string;
   updateCandidate?: RecallCandidateRecord;
 } | null> {
   const { findSemanticDuplicate } = await import('./similarity');
@@ -989,77 +1015,65 @@ async function semanticDedupBeforePromote(
   if (match.kind === 'asset') {
     const asset = await readAbilityAssetSafe(userId, match.id);
     if (!asset) return null;
-    // 质量融合：比较 incoming 候选 vs 已有资产
-    const { assetQualityScore, QUALITY_GAP } = await import('./similarity');
-    const incoming = {
-      text: String(candidate.judgment || ''),
-      id: candidate.id,
-      kind: 'candidate' as const,
-      evidenceCount: (candidate.evidenceRefs || []).length,
-      sourceKinds: new Set((candidate.sourceRefs || []).map((r) => String((r as { kind?: string }).kind || ''))),
-      ageMs: Date.now() - Date.parse(candidate.createdAt || new Date().toISOString()),
-      maturity: 'seed',
+    const updateCandidate = await updateRecallCandidate(userId, candidate.id, {
+      judgment: candidate.judgment,
+      value: candidate.value,
+      summary: candidate.summary,
+      uncertainty: candidate.uncertainty,
+      suggestedType: candidate.suggestedType,
+      suggestedScope: candidate.suggestedScope,
+      suggestedAction: 'update',
       risk: candidate.risk,
-      structureBonus: hasStructureMarkers(String(candidate.judgment || '')),
-    };
-    const existing = {
-      text: String(asset.statement || asset.title || ''),
-      id: asset.id,
-      kind: 'asset' as const,
-      evidenceCount: (asset.evidenceRefs || []).length,
-      sourceKinds: new Set((asset.evidenceRefs || []).map((r) => String((r as { kind?: string }).kind || ''))),
-      ageMs: Date.now() - Date.parse(asset.updatedAt || asset.createdAt || new Date().toISOString()),
-      maturity: asset.maturity,
-      risk: 'low',
-      structureBonus: hasStructureMarkers(String(asset.statement || '')),
-    };
-    const scoreIn = assetQualityScore(incoming);
-    const scoreEx = assetQualityScore(existing);
-    if (scoreIn - scoreEx >= QUALITY_GAP) {
-      // 新候选质量更高 → update 候选（不静默覆盖已生效资产）
-      const updateCandidate = await updateRecallCandidate(userId, candidate.id, {
-        judgment: candidate.judgment,
-        value: candidate.value,
-        summary: candidate.summary,
-        suggestedType: candidate.suggestedType,
-        suggestedScope: candidate.suggestedScope,
-        suggestedAction: 'update',
-        targetAssetId: asset.id,
-        sourceRefs: candidate.sourceRefs,
-        evidenceRefs: candidate.evidenceRefs,
-      });
-      return { candidate: updateCandidate, updateCandidate };
-    }
-    // 已有资产质量更高或相当 → 证据并入资产，候选标记 mergedIntoAssetId
-    const mergedAsset = await appendAssetEvidence(userId, asset, candidate);
-    await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => {
-      const cur = current ? asCandidate(current) : candidate;
-      return { ...cur, mergedIntoAssetId: asset.id, status: 'confirmed' };
+      targetAssetId: asset.id,
+      sourceRefs: candidate.sourceRefs,
+      evidenceRefs: candidate.evidenceRefs,
+      expiresAt: candidate.expiresAt,
+      taskRunId: candidate.taskRunId,
+      ...(candidate.applicableWhen !== undefined
+        ? { applicableWhen: candidate.applicableWhen }
+        : asset.applicableWhen !== undefined ? { applicableWhen: asset.applicableWhen } : {}),
+      ...(candidate.forbiddenWhen !== undefined
+        ? { forbiddenWhen: candidate.forbiddenWhen }
+        : asset.forbiddenWhen !== undefined ? { forbiddenWhen: asset.forbiddenWhen } : {}),
     });
-    const mergedCandidate = await readRecallCandidate(userId, candidate.id);
-    return { candidate: mergedCandidate, asset: mergedAsset, mergedIntoAssetId: asset.id };
+    await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => ({
+      ...(current || updateCandidate),
+      mergedIntoAssetId: asset.id,
+    }));
+    const linked = await readRecallCandidate(userId, candidate.id);
+    return { candidate: linked, updateCandidate: linked, mergedIntoAssetId: asset.id };
   }
   // 命中候选：证据并入已有候选（语义合并），候选标记 mergedInto
   const existingCandidate = await readRecallCandidate(userId, match.id).catch(() => undefined);
   if (existingCandidate) {
     const merged = await updateRecallJsonRecord(userId, 'candidates', existingCandidate.id, (current) => {
       const cur = current ? asCandidate(current) : existingCandidate;
-      const mergedRefs = mergeSourceRefs(cur.evidenceRefs || [], candidate.evidenceRefs || []);
+      const mergedSources = mergeSourceRefs(cur.sourceRefs || [], candidate.sourceRefs || []);
+      const mergedEvidence = mergeSourceRefs(cur.evidenceRefs || [], candidate.evidenceRefs || []);
       const upgraded = cur.status === 'weak_observation' || cur.status === 'observed' ? 'pending_review' : cur.status;
-      return { ...cur, evidenceRefs: mergedRefs, sourceRefs: mergedRefs, status: upgraded };
+      return { ...cur, evidenceRefs: mergedEvidence, sourceRefs: mergedSources, status: upgraded };
     });
     await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => {
       const cur = current ? asCandidate(current) : candidate;
-      return { ...cur, mergedInto: existingCandidate.id, status: 'superseded' };
+      return { ...cur, mergedInto: existingCandidate.id };
     });
-    return { candidate: asCandidate(merged), mergedIntoAssetId: existingCandidate.id };
+    const ignored = await decideWithoutAsset(
+      userId,
+      candidate.id,
+      'ignore',
+      'ignored',
+      `semantic duplicate of candidate ${existingCandidate.id}`,
+      'system',
+    );
+    return {
+      candidate: ignored,
+      mergedIntoCandidateId: asCandidate(merged).id,
+      // Compatibility for callers that historically collected every dedup
+      // target in one list. New code should prefer mergedIntoCandidateId.
+      mergedIntoAssetId: existingCandidate.id,
+    };
   }
   return null;
-}
-
-/** 结构标记：内容含"何时/适用/例外/步骤/不适用"等可执行结构加分。 */
-function hasStructureMarkers(text: string): boolean {
-  return /(何时|适用|不适用|例外|步骤|触发|仅限|禁止|when|except|step)/i.test(String(text || ''));
 }
 
 async function readAbilityAssetSafe(userId: string, assetId: string): Promise<RecallAbilityAssetRecord | undefined> {
@@ -1321,8 +1335,29 @@ export async function promoteRecallCandidate(
   }
   const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
   const relationContract = readAbilityAssetRelationContract(options as Record<string, unknown>);
-  const semantics = readAbilityAssetSemantics(options as unknown as Record<string, unknown>);
-  // 条件是评审时新写下的自由文本，不走 saveRecallCandidate 那道闸，这里补上。
+  const optionSemantics = readAbilityAssetSemantics(options as unknown as Record<string, unknown>);
+  const preflight = await readRecallCandidate(userId, candidateId);
+  let targetSemantics: AbilityAssetSemantics = {};
+  if (preflight.targetAssetId && candidateActionNeedsTarget(preflight.suggestedAction)) {
+    const target = await readAbilityAsset(userId, preflight.targetAssetId);
+    targetSemantics = readAbilityAssetSemantics(target as unknown as Record<string, unknown>);
+  }
+  const semantics: AbilityAssetSemantics = {
+    ...(optionSemantics.applicableWhen !== undefined
+      ? { applicableWhen: optionSemantics.applicableWhen }
+      : preflight.applicableWhen !== undefined
+        ? { applicableWhen: preflight.applicableWhen }
+        : targetSemantics.applicableWhen !== undefined ? { applicableWhen: targetSemantics.applicableWhen } : {}),
+    ...(optionSemantics.forbiddenWhen !== undefined
+      ? { forbiddenWhen: optionSemantics.forbiddenWhen }
+      : preflight.forbiddenWhen !== undefined
+        ? { forbiddenWhen: preflight.forbiddenWhen }
+        : targetSemantics.forbiddenWhen !== undefined ? { forbiddenWhen: targetSemantics.forbiddenWhen } : {}),
+    ...(optionSemantics.sensitivity !== undefined
+      ? { sensitivity: optionSemantics.sensitivity }
+      : targetSemantics.sensitivity !== undefined ? { sensitivity: targetSemantics.sensitivity } : {}),
+  };
+  // 条件是评审时新写下的自由文本，不一定走 saveRecallCandidate 那道闸，这里补上。
   assertNotForbiddenToPersist([
     ...(semantics.applicableWhen || []),
     ...(semantics.forbiddenWhen || []),
@@ -1334,7 +1369,6 @@ export async function promoteRecallCandidate(
   // KStar 线、用户确认、失败重试都能走到这里，所以校验必须钉在这一处，
   // 而不是只在抽取管线里做一次。
   {
-    const preflight = await readRecallCandidate(userId, candidateId);
     // 同一句话被分成两类，说明至少一边分错了。扫一遍候选池：只看同文本、
     // 未被否决的条目，收集它们的类型。
     const sameText = comparableJudgmentText(preflight.judgment);
@@ -1354,9 +1388,8 @@ export async function promoteRecallCandidate(
       suggestedType: preflight.suggestedType,
       suggestedScope: preflight.suggestedScope,
       suggestedAction: preflight.suggestedAction,
-      // 评审时新写的边界优先，其次用候选自带的（抽取阶段提出的）。
-      applicableWhen: semantics.applicableWhen || preflight.applicableWhen,
-      forbiddenWhen: semantics.forbiddenWhen || preflight.forbiddenWhen,
+      applicableWhen: semantics.applicableWhen,
+      forbiddenWhen: semantics.forbiddenWhen,
       ...(conflictingTypes.length ? { conflictingTypes } : {}),
     }, { actor: options.actor });
     if (!validation.ok) {
@@ -1532,7 +1565,9 @@ export async function promoteRecallCandidate(
           title: candidate.summary || candidate.judgment.slice(0, 120),
           statement: candidate.judgment,
           scope: candidate.suggestedScope,
-          evidenceRefs: candidate.evidenceRefs,
+          // An update adds evidence to the chain; it must not erase the
+          // evidence already supporting the target asset.
+          evidenceRefs: mergeSourceRefs(target.evidenceRefs, candidate.evidenceRefs),
           ...(ontologyRefs?.length ? { ontologyRefs } : {}),
           ...relationContract,
           ...semantics,

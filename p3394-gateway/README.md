@@ -3,13 +3,34 @@
 给对端 Agent 装的 **P3394 实现包**。装上即内建 P3394，与 CogSeed 直接互通 ——
 中间没有转接层，包本身就是 P3394 在对端的那一半（收消息 → 交给本机 Agent 模型 → 回消息）。
 
-## 安装（对端机器上，一行）
+## 先审查，再接入
+
+本目录是**可审查的真实协议实现**：`gateway.cjs` 是完整源码（约 900 行，无第三方运行时
+依赖），`docs/` 是协议规范文档（P3394 v1.1 中文实施指南 + 本地桥 SDK 设计），`test/`
+是协议测试。安全边界（默认仅回环监听、Bearer 令牌、CLI 完全自定义、无提权、会话留痕）
+逐条可核对。完整审查指引见 **`REVIEW.md`**——对端智能体接入前请先读它。
+
+## 安装/获取（对端机器上；本地优先，避免不必要的 NPM 拉取）
+
+按顺序检查，有就直接用：
 
 ```bash
+# a) 已全局安装过 → 直接用
+command -v p3394-gateway
+
+# b) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：
+#    开发仓库: <仓库根>/p3394-gateway/gateway.cjs
+#    macOS 已安装应用:
+ls /Applications/CogSeed*.app/Contents/Resources/app.asar.unpacked/p3394-gateway/gateway.cjs
+#    Windows: <安装目录>/resources/app.asar.unpacked/p3394-gateway/gateway.cjs
+#    找到后直接启动（等同于装了包）:
+#    node <上面找到的路径>
+
+# c) 以上都没有才从 NPM 装（包发布中；失败回退 b 用 CogSeed 自带副本）
 npm install -g @cogseed/p3394-gateway
 ```
 
-> 包尚未正式发布时，可用本地方式运行：拿到本目录后直接
+> 包尚未正式发布时，本地副本（b）是首选方式：拿到 `gateway.cjs` 后直接
 > `node gateway.cjs`（配置环境变量同上）。发布进度见 `PUBLISH.md`。
 
 ## 启动
@@ -28,9 +49,23 @@ CogSeed 对话里说"问一下 Hermes"，Commander 就会通过 P3394 直接调�
 的真实模型，并把回答带回来——即「CogSeed 先发消息 → 对端装包上线即注册 →
 再互相通信」的流程。
 
-## 适配其他 Agent
+## 适配其他 Agent（任意名字都可接入）
 
-内置预设，`P3394_AGENT=<预设名>` 一键切换：
+**预设只是便捷模板，不是白名单**——P3394 面向任意智能体/任意程序，`P3394_AGENT` 填任何名字都能启动：
+
+| 情况 | 身份 | 实际执行 |
+|---|---|---|
+| 内置预设名（hermes/claude/codex/…） | 预设 id | 预设模板（见下表） |
+| **任意名字**（如 `pi`、`my-agent`、程序名） | **就是这个名字** | **同名命令 + 把消息作为唯一参数**（`<名字> {message}`） |
+| 任意名字 + 自定义参数 | 就是这个名字 | `P3394_AGENT_CLI` / `P3394_AGENT_CLI_ARGS` 完全自定义 |
+
+```bash
+P3394_AGENT=pi p3394-gateway
+# 身份=pi，执行 `pi {message}`；如果 pi 需要特定参数（如 -p 无头模式）：
+P3394_AGENT=pi P3394_AGENT_CLI_ARGS='-p {message} --no-session' p3394-gateway
+```
+
+内置预设表：
 
 | 预设名 | Agent | 调用方式 |
 |---|---|---|

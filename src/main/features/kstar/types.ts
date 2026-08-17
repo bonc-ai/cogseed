@@ -134,6 +134,7 @@ export interface KstarCandidateProposal {
   judgment: string;
   summary?: string;
   uncertainty?: string;
+  suggestedAction?: 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   /** 适用范围。规则类候选必须带（PRD 3.1 的 RuleAsset 最低门槛）。

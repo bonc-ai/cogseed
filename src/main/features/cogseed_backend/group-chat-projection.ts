@@ -120,7 +120,8 @@ function processItem(event: MateProjectionEvent): ProjectionProcessItem | null {
   }
   if (event.type === 'tool.started' || event.type === 'tool.finished'
     || event.type === 'task.started' || event.type === 'task.failed'
-    || event.type === 'task.cancelled' || event.type === 'task.recoverable') {
+    || event.type === 'task.cancelled' || event.type === 'task.recoverable'
+    || event.type === 'artifact') {
     return { type: 'event', event: { stream: event.type, ...(Object.keys(event.payload).length ? { data: event.payload } : {}) } };
   }
   return null;

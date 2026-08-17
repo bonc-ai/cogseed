@@ -14,7 +14,8 @@ async function elevateToTransferVerified(assetId: string) {
 }
 
 async function modules() { const [candidates, assets, refs, projection] = await Promise.all([import('../../../../src/main/features/recall/candidate-service'), import('../../../../src/main/features/recall/asset-service'), import('../../../../src/main/features/recall/workspace-refs'), import('../../../../src/main/features/recall/context-projection')]); return { candidates, assets, refs, projection }; }
-async function createAsset(spaceId?: string) { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', suggestedScope: 'review,project', ...(spaceId ? { spaceId } : {}), sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+async function createAsset(spaceId?: string) { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', applicableWhen: ['Formal review with traceable evidence'], forbiddenWhen: ['Informal discussion without a review decision'], suggestedScope: 'review,project', ...(spaceId ? { spaceId } : {}), sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+
   await elevateToTransferVerified(promoted.asset.id);
   return promoted; }
 
@@ -41,6 +42,7 @@ async function createAutomaticAssetWith(input: {
   sourceId: string;
   sourceKind?: 'conversation' | 'artifact_file';
   spaceId?: string;
+  applicableWhen?: string[];
 }) {
   const { candidates } = await modules();
   const sourceKind = input.sourceKind || 'conversation';
@@ -48,7 +50,7 @@ async function createAutomaticAssetWith(input: {
     judgment: input.judgment,
     summary: input.summary,
     suggestedType: 'rule',
-    applicableWhen: ['正式评审与架构决策时'],
+    applicableWhen: input.applicableWhen || ['OAuth'],
     forbiddenWhen: ['内部快速对齐'],
     suggestedScope: 'global',
     ...(input.spaceId ? { spaceId: input.spaceId } : {}),
@@ -134,7 +136,7 @@ describe('RecallView and ContextProjection', () => {
     const { asset } = await createAsset('workspace-a');
     const { refs, assets, projection } = await modules();
     await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
-    const otherCandidate = await (await modules()).candidates.saveRecallCandidate('user-a', { judgment: 'Only use archived data with confirmation.', suggestedType: 'rule', suggestedScope: 'archive', sourceRefs: [{ kind: 'memory', id: 'mem-b' }] });
+    const otherCandidate = await (await modules()).candidates.saveRecallCandidate('user-a', { judgment: 'Only use archived data with confirmation.', suggestedType: 'rule', applicableWhen: ['Archive restoration and audit'], forbiddenWhen: ['Live operational changes'], suggestedScope: 'archive', sourceRefs: [{ kind: 'memory', id: 'mem-b' }] });
     const other = await (await modules()).candidates.promoteRecallCandidate('user-a', otherCandidate.id, { actor: 'user' });
     await assets.pauseAbilityAsset('user-a', other.asset.id, { actor: 'user', reason: 'not ready' });
 
@@ -188,6 +190,7 @@ describe('RecallView and ContextProjection', () => {
       summary: 'Database migration rule',
       sourceId: 'conversation-database',
       spaceId: 'workspace-a',
+      applicableWhen: ['Database migration planning'],
     });
     const { projection } = await modules();
 
@@ -276,6 +279,7 @@ describe('RecallView and ContextProjection', () => {
       judgment: 'Plan database migrations with rollback windows.',
       summary: 'Database migration rule',
       sourceId: 'conversation-database',
+      applicableWhen: ['Database migration planning'],
     });
     const { projection } = await modules();
 
@@ -660,6 +664,10 @@ describe('Recall retrieval refinement', () => {
       judgment,
       summary: judgment.slice(0, 60),
       suggestedType: type,
+      ...(type === 'rule' ? {
+        applicableWhen: ['OAuth review and callback validation'],
+        forbiddenWhen: ['Unrelated casual conversation'],
+      } : {}),
       suggestedScope: scope,
       sourceRefs: [{ kind: 'execution', id: sourceId }],
     });

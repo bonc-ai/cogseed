@@ -131,7 +131,8 @@ export type MateTaskEventType =
   | 'task.completed'
   | 'task.failed'
   | 'task.cancelled'
-  | 'task.recoverable';
+  | 'task.recoverable'
+  | 'artifact';
 
 export interface MateTaskEvent {
   schemaVersion: typeof MATE_AGENT_BACKEND_SCHEMA_VERSION;

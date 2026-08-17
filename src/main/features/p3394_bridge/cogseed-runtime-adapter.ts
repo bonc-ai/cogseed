@@ -60,6 +60,8 @@ export interface P3394CogseedRuntimeAdapterDeps {
   streamTimeoutMs?: number;
   /** Optional persistence file for the session/task id mappings (Agent Home). */
   stateFile?: string;
+  /** Event-store read seam（R-08 失败注入；默认接真实 event-store）。 */
+  readEvents?: (userId: string, taskId: string, afterSequence: number, limit: number) => Promise<MateTaskEvent[]>;
 }
 
 export interface P3394CogseedAdapterState {
@@ -108,6 +110,7 @@ export class P3394CogseedRuntimeAdapter implements P3394RuntimeAdapter {
   private readonly taskMap = new Map<string, string>();
   /** p3394 task_id → p3394 session_id. */
   private readonly taskSessionMap = new Map<string, string>();
+  private readonly readEvents: NonNullable<P3394CogseedRuntimeAdapterDeps['readEvents']>;
 
   constructor(deps: P3394CogseedRuntimeAdapterDeps = {}) {
     this.userId = deps.userId ?? getActiveUserId;
@@ -116,24 +119,34 @@ export class P3394CogseedRuntimeAdapter implements P3394RuntimeAdapter {
     this.pollIntervalMs = deps.pollIntervalMs ?? P3394_COGSEED_ADAPTER_DEFAULTS.pollIntervalMs;
     this.streamTimeoutMs = deps.streamTimeoutMs ?? P3394_COGSEED_ADAPTER_DEFAULTS.streamTimeoutMs;
     this.stateFile = deps.stateFile ?? null;
+    this.readEvents = deps.readEvents ?? readMateTaskEvents;
     if (this.stateFile) this.loadStateSync();
   }
 
   /** Restores session/task mappings after a restart (tolerant of absence). */
   private loadStateSync(): void {
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.stateFile!, 'utf8')) as P3394CogseedAdapterState;
-      if (parsed.schemaVersion !== 1) return;
-      for (const item of parsed.sessions) {
+      const parsed = JSON.parse(fs.readFileSync(this.stateFile!, 'utf8')) as Partial<P3394CogseedAdapterState> | null;
+      if (!parsed || parsed.schemaVersion !== 1) {
+        log.warn('P3394 adapter state file ignored', { reason: 'unsupported schema or shape' });
+        return;
+      }
+      // 畸形条目直接跳过，避免把 undefined/非字符串 id 变成幽灵映射。
+      for (const item of parsed.sessions ?? []) {
+        if (typeof item.p3394_session_id !== 'string' || typeof item.mate_session_id !== 'string') continue;
         this.sessionMap.set(item.p3394_session_id, item.mate_session_id);
-        if (item.agent_id) this.sessionAgentMap.set(item.p3394_session_id, item.agent_id);
+        if (typeof item.agent_id === 'string') this.sessionAgentMap.set(item.p3394_session_id, item.agent_id);
       }
-      for (const item of parsed.tasks) {
+      for (const item of parsed.tasks ?? []) {
+        if (typeof item.p3394_task_id !== 'string' || typeof item.mate_task_id !== 'string') continue;
         this.taskMap.set(item.p3394_task_id, item.mate_task_id);
-        this.taskSessionMap.set(item.p3394_task_id, item.p3394_session_id);
+        this.taskSessionMap.set(item.p3394_task_id, typeof item.p3394_session_id === 'string' ? item.p3394_session_id : '');
       }
-    } catch {
+    } catch (error) {
       // Missing or malformed state file: start with an empty mapping.
+      log.warn('P3394 adapter state file unreadable; starting with empty mappings', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -225,22 +238,24 @@ export class P3394CogseedRuntimeAdapter implements P3394RuntimeAdapter {
     return { task_id: p3394TaskId };
   }
 
-  async *stream(taskId: string): AsyncIterable<P3394RuntimeEvent> {
+  async *stream(taskId: string, afterSequence = 0): AsyncIterable<P3394RuntimeEvent> {
     const mateTaskId = this.taskMap.get(taskId);
     if (!mateTaskId) throw new Error('p3394_task_not_found');
     const userId = this.userId();
     const sessionId = this.taskSessionMap.get(taskId);
-    let lastSequence = 0;
-    let sequence = 0;
+    const startSequence = Math.max(0, Math.floor(Number(afterSequence) || 0));
+    let lastSequence = startSequence;
+    let sequence = startSequence;
     const deadline = Date.now() + this.streamTimeoutMs;
 
     for (;;) {
-      const events = await readMateTaskEvents(userId, mateTaskId, lastSequence, 200);
+      const events = await this.readEvents(userId, mateTaskId, lastSequence, 200);
       for (const event of events) {
         lastSequence = event.sequence;
+        if (event.sequence <= startSequence) continue;
         const mapped = mapMateTaskEvent(event);
         if (mapped) {
-          sequence += 1;
+          sequence = Math.max(sequence, event.sequence);
           yield { ...mapped, sequence, task_id: taskId };
         }
       }
@@ -333,6 +348,13 @@ function mapMateTaskEvent(event: MateTaskEvent): Omit<P3394RuntimeEvent, 'sequen
       return { kind: 'delta', data: { tool: 'started', name: typeof event.payload.name === 'string' ? event.payload.name : undefined } };
     case 'tool.finished':
       return { kind: 'delta', data: { tool: 'finished', name: typeof event.payload.name === 'string' ? event.payload.name : undefined } };
+    case 'artifact': {
+      const data: Record<string, unknown> = {};
+      for (const key of ['uri', 'digest', 'name', 'media_type'] as const) {
+        if (typeof event.payload[key] === 'string') data[key] = event.payload[key];
+      }
+      return { kind: 'artifact', data };
+    }
     default:
       return null;
   }
