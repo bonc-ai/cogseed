@@ -240,13 +240,16 @@
   }
 
   async function _loadData() {
-    const [spacesRes, templatesRes, scenariosRes, skillsRes, agentsRes, cliRes] = await Promise.all([
+    // `localAgents.list` probes every installed CLI binary on this machine
+    // (spawns `--version` per CLI, up to seconds on a hung probe). It must
+    // NOT gate the workspace view: load the fast, index-backed data first and
+    // fold in the CLI probe result when it arrives.
+    const [spacesRes, templatesRes, scenariosRes, skillsRes, agentsRes] = await Promise.all([
       _invoke('spaces.list'),
       _invoke('spaces.templates.list'),
       _invoke('spaces.scenarios.list'),
       _invoke('skills.list'),
       _invoke('agents.list'),
-      _invoke('localAgents.list'),
     ]);
     if (spacesRes.error && templatesRes.error) {
       _loadError = (spacesRes.error || '') + ' / ' + (templatesRes.error || '');
@@ -267,6 +270,20 @@
           runtime: (a && a.runtime) || null,
         }))
       : [];
+    _loaded = true;
+    _loadError = '';
+    // 详情默认指向第一个空间
+    if (_detailSpaceId === null && _spaces.length) _detailSpaceId = _spaces[0].space_id;
+    // ── 后台探测本机 CLI，完成后并入基础 Agent 候选并刷新视图 ──
+    _mergeCliProbeResult({});
+    void _invoke('localAgents.list').then((cliRes) => {
+      _mergeCliProbeResult(cliRes);
+      _reRender();
+    });
+  }
+
+  /** 合并 localAgents.list 探测结果到基础 Agent 候选（team CLI 优先、探测去重）。 */
+  function _mergeCliProbeResult(cliRes) {
     // 基础 Agent 候选 = AI 团队里的外接 CLI agent（注册名优先，如 ClaudeCode）
     //                 + 本机探测到但团队里还没注册的 CLI（如 Hermes），按 cli type 去重。
     // 与 AI 团队面板「基础 Agent」分组同源，不显示指挥官（指挥官默认隐形）。
@@ -303,10 +320,6 @@
     const validAgentIds = new Set(_baseAgentCatalog.map((a) => a.id));
     _createBaseAgents = (_createBaseAgents || []).filter((id) => validAgentIds.has(id));
     if (!_createBaseAgents.length && _baseAgentCatalog.length) _createBaseAgents = [_baseAgentCatalog[0].id];
-    _loaded = true;
-    _loadError = '';
-    // 详情默认指向第一个空间
-    if (_detailSpaceId === null && _spaces.length) _detailSpaceId = _spaces[0].space_id;
   }
 
   // ── state ─────────────────────────────────────────────────────────────────

@@ -336,7 +336,14 @@ export type LocalCliEntry = {
   auth?: { loggedIn: boolean; mode: 'oauth' | 'api' | 'unknown' };
 };
 
-const CACHE_TTL_MS = 60_000;
+/**
+ * Detection cache TTL. CLI install/version state is effectively static within
+ * a session — a 60s TTL made the workspace view re-probe every CLI binary on
+ * any cold load (>1min since the last visit), which could stall the view for
+ * seconds when a probe hangs (hermes without TTY, codex spawn errors). 5min
+ * keeps the view snappy while still picking up new installs within a session.
+ */
+const CACHE_TTL_MS = 5 * 60_000;
 let cache: { at: number; entries: LocalCliEntry[] } | null = null;
 
 /**
@@ -388,7 +395,10 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
       : null;
   for (const versionArgs of versionProbes) {
     if (version) break;
-    version = await detectVersion(resolved, 5000, versionArgs);
+    // Short per-probe timeout: a healthy CLI answers --version in <100ms;
+    // 2s covers slow cold starts without letting a hung binary (hermes
+    // without TTY, GUI-launched codex) stall the workspace view for 5s.
+    version = await detectVersion(resolved, 2_000, versionArgs);
   }
   if (!version && type === 'hermes') {
     version = await detectHermesInstallVersion(resolved);
