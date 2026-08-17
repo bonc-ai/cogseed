@@ -38,8 +38,8 @@ import {
   spaceChatIndexFile,
   spaceChatsDir,
   spaceSessionsDir,
-  spaceChatAttachmentsDir,
   spaceChatArtifactsDir,
+  chatAttachmentDir,
 } from '../paths';
 import { readJsonSync, safeId, writeJsonSync } from '../storage';
 import { createLogger } from '../logger';
@@ -305,8 +305,16 @@ function migrateProjectToSpace(uid: string, pid: string, sid: string, stats: Pro
   try { fs.rmSync(srcIndex, { force: true }); } catch { /* best effort */ }
 
   // 3. sessions / 附件 / 产物（按 cid 唯一，多项目不冲突）。
+  //    附件（聊天上传）与主流 coding agent 一致落全局 cloud/chat_attachments/<cid>/，
+  //    不进空间目录；sessions / 网页产物（AI 产出）仍进空间目录。
   stats.sessions_moved += moveDirSafe(uid, projectSessionsDir(uid, pid), spaceSessionsDir(uid, sid), stats.warnings);
-  stats.attachments_moved += moveDirSafe(uid, projectChatAttachmentsDir(uid, pid), spaceChatAttachmentsDir(uid, sid), stats.warnings);
+  let attNames: string[] = [];
+  try { attNames = fs.readdirSync(projectChatAttachmentsDir(uid, pid)); } catch { attNames = []; }
+  for (const name of attNames) {
+    if (name.startsWith('.')) continue;
+    const fromAbs = path.join(projectChatAttachmentsDir(uid, pid), name);
+    stats.attachments_moved += moveDirSafe(uid, fromAbs, chatAttachmentDir(uid, name), stats.warnings);
+  }
   stats.artifacts_moved += moveDirSafe(uid, projectChatArtifactsDir(uid, pid), spaceChatArtifactsDir(uid, sid), stats.warnings);
 
   // 只有真有会话被迁才算「项目已迁移」，空项目/force 重跑（源已空）不计数。

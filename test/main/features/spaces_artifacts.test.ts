@@ -211,3 +211,51 @@ describe('spaces › 严格落位（子目录 / 宽扩展名 / 双目录 artifac
     expect(entry?.confirmed).toBe(true);
   });
 });
+
+describe('spaces › 附件落位与主流 coding agent 一致（上传不进空间文件夹）', () => {
+  it('空间会话的聊天上传附件解析到全局 cloud/chat_attachments/，网页产物仍落空间目录', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const layout = await import('../../../src/main/util/project-layout');
+    const created = await spaces.createSpace(UID, { name: '主流一致空间' });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(UID, { title: '任务', spaceId: sid });
+
+    // 附件：即使透传 spaceHint，也解析到全局目录（空间文件夹只放产物）
+    expect(layout.chatAttachmentDirForConversation(UID, conv.conversation_id, null, sid))
+      .toBe(path.join(tmpDir, UID, 'cloud', 'chat_attachments', conv.conversation_id));
+    expect(layout.chatAttachmentRelPath(UID, conv.conversation_id, 'a.pdf', null, sid))
+      .toBe(`cloud/chat_attachments/${conv.conversation_id}/a.pdf`);
+    // 网页交互产物（AI 产出）仍收进空间目录
+    expect(layout.chatArtifactCidDirForConversation(UID, conv.conversation_id, null, sid))
+      .toBe(path.join(tmpDir, UID, 'cloud', 'spaces', sid, 'chat_artifacts', conv.conversation_id));
+  });
+
+  it('历史已迁入空间目录的附件反向迁回全局（空间文件夹只留产物）', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const arts = await import('../../../src/main/features/spaces_artifacts');
+    const created = await spaces.createSpace(UID, { name: '反向迁移空间' });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(UID, { title: '任务', spaceId: sid });
+
+    // 模拟旧版数据：附件在空间目录、网页产物在全局
+    const spaceAtt = path.join(tmpDir, UID, 'cloud', 'spaces', sid, 'chat_attachments', conv.conversation_id);
+    fs.mkdirSync(spaceAtt, { recursive: true });
+    fs.writeFileSync(path.join(spaceAtt, '旧上传.pdf'), 'x');
+    const globalArt = path.join(tmpDir, UID, 'cloud', 'chat_artifacts', conv.conversation_id);
+    fs.mkdirSync(globalArt, { recursive: true });
+    fs.writeFileSync(path.join(globalArt, 'index.html'), 'x');
+
+    await arts.migrateSpaceAttachments(UID, sid);
+
+    // 附件：空间 → 全局
+    expect(fs.existsSync(path.join(tmpDir, UID, 'cloud', 'chat_attachments', conv.conversation_id, '旧上传.pdf'))).toBe(true);
+    expect(fs.existsSync(path.join(spaceAtt, '旧上传.pdf'))).toBe(false);
+    // 网页产物：全局 → 空间
+    expect(fs.existsSync(path.join(tmpDir, UID, 'cloud', 'spaces', sid, 'chat_artifacts', conv.conversation_id, 'index.html'))).toBe(true);
+    expect(fs.existsSync(path.join(globalArt, 'index.html'))).toBe(false);
+  });
+});

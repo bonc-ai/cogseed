@@ -82,7 +82,9 @@ function _migrateDirEntry(srcDir: string, dstDir: string): number {
   return moved;
 }
 
-/** 空间附件/网页产物迁移：遍历空间会话，把全局目录搬进空间目录。幂等。返回迁移的目录数。 */
+/** 空间附件/网页产物迁移：与主流 coding agent 一致——聊天上传附件留在全局
+ *  cloud/chat_attachments/（不进空间目录），历史迁入空间目录的附件反向搬回
+ *  全局；网页交互产物是 AI 产出（产物），继续收进空间目录。幂等。返回迁移的目录数。 */
 export async function migrateSpaceAttachments(uid: string, spaceId: string): Promise<number> {
   if (!safeId(spaceId)) return 0;
   let conversations: Array<{ conversation_id: string }> = [];
@@ -91,7 +93,9 @@ export async function migrateSpaceAttachments(uid: string, spaceId: string): Pro
   for (const c of conversations) {
     const cid = c.conversation_id;
     if (!cid) continue;
-    moved += _migrateDirEntry(chatAttachmentDir(uid, cid), spaceChatAttachmentDir(uid, spaceId, cid));
+    // 附件（聊天上传）→ 全局（空间文件夹保持"只放产物"，与主流一致）
+    moved += _migrateDirEntry(spaceChatAttachmentDir(uid, spaceId, cid), chatAttachmentDir(uid, cid));
+    // 网页交互产物（AI 产出）→ 空间目录
     moved += _migrateDirEntry(chatArtifactCidDir(uid, cid), spaceChatArtifactCidDir(uid, spaceId, cid));
   }
   if (moved > 0) {
