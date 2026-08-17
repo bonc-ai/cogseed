@@ -144,6 +144,8 @@ export interface KstarCandidateProposal {
   sourceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
   learningProvenance?: KstarLearningProvenance;
+  /** 提案的显式行动建议（'create' 等）；新建路径防呆：显式 value 必须配显式 suggestedAction，否则 weak。 */
+  suggestedAction?: string;
 }
 
 export interface KstarExtractionRunRecord extends KstarJsonRecord {
