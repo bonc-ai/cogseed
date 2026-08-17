@@ -26,10 +26,10 @@ const en = JSON.parse(fs.readFileSync(path.join(root, 'src/renderer/locales/en.j
   });
 
   it('uses the consolidated 6-entry navigation labels', () => {
-    expect(zh['sidebar.new_chat']).toBe('新建会话');
+    expect(zh['sidebar.new_chat']).toBe('新建任务');
     expect(zh['sidebar.recall']).toBe('认知资产');
     expect(zh['sidebar.connections']).toBe('连接');
-    expect(en['sidebar.new_chat']).toBe('New session');
+    expect(en['sidebar.new_chat']).toBe('New task');
     expect(en['sidebar.recall']).toBe('Cognitive assets');
     expect(en['sidebar.connections']).toBe('Connections');
   });

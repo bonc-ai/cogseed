@@ -2095,6 +2095,7 @@ async function _enqueueBody(
     // English and Chinese forms resolve to the same id. Lowercase keys
     // match router's `_normalizeNameKey`.
     agentNameToId.set("commander", COMMANDER_ID);
+    agentNameToId.set("cogseed", COMMANDER_ID);
     agentNameToId.set("指挥官", COMMANDER_ID);
     agentNameToId.set("user", USER_ID);
     agentNameToId.set("用户", USER_ID);
@@ -6324,7 +6325,7 @@ async function resolveDispatchTarget(
   toRaw: string,
 ): Promise<string | null> {
   const key = toRaw.toLowerCase().replace(/\s+/g, "");
-  if (key === "commander" || key === "指挥官") return COMMANDER_ID;
+  if (key === "commander" || key === "cogseed" || key === "指挥官") return COMMANDER_ID;
   if (key === "user" || key === "用户") return USER_ID;
   try {
     const all = await agentsFeat.listAgents();
@@ -9316,7 +9317,7 @@ async function buildCommanderExtraTools(
         to: {
           type: "string",
           description:
-            "Target actor — agent name or agent_id; the aliases `commander` / `user` / 指挥官 / 用户 are also accepted.",
+            "Target actor — agent name or agent_id; the aliases `commander` / `cogseed` / `user` / 指挥官 / 用户 are also accepted.",
         },
         message: {
           type: "string",
@@ -10811,11 +10812,29 @@ async function _runCliAgentTurn(opts: {
     // Backend errors remain available to runner diagnostics, but they are
     // internal implementation details and may contain paths, stderr, or
     // protocol prose. User copy is derived from structured terminal state.
-    const detail = resumeRejected
+    let detail = resumeRejected
       ? t("cli_agent.session_expired_detail", vars)
       : result.status === "timeout"
         ? t("cli_agent.timeout_detail", vars)
         : t("cli_agent.run_failed_detail", vars);
+    // 本地代理未运行 → 给出明确的根因提示。很多用户把 CLI（Codex / Claude 等）
+    // 配成走本地代理（CC Switch 等），代理没开时 CLI 必然失败。探测本地代理
+    // 端口不可达时，报错直接说明，而不是笼统的「未能完成任务」。
+    try {
+      const { readCliModelEndpoint, probeModelEndpointReachable } = await import("../local_agents/active_config.js");
+      const cli = runtime.cli as string;
+      const ep = readCliModelEndpoint(cli as never);
+      if (ep && ep.isLocalProxy) {
+        const reachable = await probeModelEndpointReachable(cli as never);
+        if (reachable === false) {
+          detail = t("cli_agent.local_proxy_unreachable", {
+            name: opts.agent.name || runtime.cli,
+            cli: runtime.cli,
+            url: ep.baseUrl,
+          });
+        }
+      }
+    } catch { /* probe is best-effort — fall through to the generic detail */ }
     return {
       text: resultText || accText,
       error: detail,

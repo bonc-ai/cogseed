@@ -125,7 +125,9 @@ function applyAvatarToElement(el, iconId, colorId, seed) {
 
 /** Generate an avatar HTML fragment. Used by cards, the detail view,
  *  chat rows, and the settings page.
- *  opts: { size=28, seed='', clickable=false, extraClass='', dataAttrs={} } */
+ *  opts: { size=28, seed='', clickable=false, extraClass='', dataAttrs={}, letter='' }
+ *  When `letter` is provided the avatar shows up to two letters instead of an
+ *  icon (used for external CLI agents: e.g. "Claude" → "Cl"). */
 function renderAvatarHtml(iconId, colorId, opts = {}) {
   const a = resolveAvatar(iconId, colorId, opts.seed || '');
   const size = opts.size || 28;
@@ -138,10 +140,17 @@ function renderAvatarHtml(iconId, colorId, opts = {}) {
   const innerSize = Math.round(size * 0.55);
   // 图片图标占满整个头像圆(原图自带透明留白)
   const imgSize = a.iconImage ? size : innerSize;
-  const inner = a.iconImage
-    ? `<img class="avatar-img" src="${a.iconImage}" width="${imgSize}" height="${imgSize}" alt="" draggable="false" />`
-    : a.iconSvg
-      ? a.iconSvg.replace('<svg ', `<svg width="${innerSize}" height="${innerSize}" `)
-      : '';
+  let inner;
+  if (opts.letter) {
+    // 字母头像：名称前两字母，字号随头像尺寸缩放
+    const fontSize = Math.round(size * 0.42);
+    inner = `<span class="avatar-letter" style="font-size:${fontSize}px;line-height:1">${String(opts.letter).slice(0, 2)}</span>`;
+  } else {
+    inner = a.iconImage
+      ? `<img class="avatar-img" src="${a.iconImage}" width="${imgSize}" height="${imgSize}" alt="" draggable="false" />`
+      : a.iconSvg
+        ? a.iconSvg.replace('<svg ', `<svg width="${innerSize}" height="${innerSize}" `)
+        : '';
+  }
   return `<span class="${cls.join(' ')}" style="--avatar-bg:${a.bg};--avatar-fg:${a.fg};width:${size}px;height:${size}px" ${data}>${inner}</span>`;
 }

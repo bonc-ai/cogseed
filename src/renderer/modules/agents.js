@@ -41,7 +41,7 @@ function _agentUiIconHtml(name, className) {
 
 // Mirror of `agents.ts::RESERVED_AGENT_NAMES` so the renderer can fail fast
 // without a round-trip. Server is still authoritative — this is just UX.
-const _RESERVED_AGENT_NAMES = new Set(['指挥官', '总指挥', 'コマンダー', '司令官', 'commander']);
+const _RESERVED_AGENT_NAMES = new Set(['指挥官', '总指挥', 'コマンダー', '司令官', 'commander', 'cogseed']);
 /** Look up the localized "External · <Brand>" label for an agent runtime
  *  type. The external badge (formerly "CLI · X") is the single
  *  user-facing tag for cli-runtime agents — name surfaces consistently
@@ -802,7 +802,13 @@ function renderAgentsGrid(agents) {
     const descClass = desc ? 'agent-card-desc' : 'agent-card-desc is-empty';
     const descText = desc || t('agents.placeholder_unset');
     const moreBtn = (isMock || isCommander) ? '' : `<button type="button" class="agent-card-more" data-agent-more title="${moreTitle}" aria-label="${moreTitle}">⋯</button>`;
-    const avatarHtml = renderAvatarHtml(a.icon, a.color, { size: 32, seed: a.agent_id, extraClass: 'agent-card-avatar' });
+    const avatarHtml = renderAvatarHtml(a.icon, a.color, {
+      size: 32,
+      seed: a.agent_id,
+      extraClass: 'agent-card-avatar',
+      // 外接 CLI agent：头像内容换成该 agent 名称前两个字母（如 Claude → "Cl"）
+      letter: _isExternalCliAgent(a) ? (a.name || '') : '',
+    });
     // CLI brand chip on the bottom row, shared with the play button.
     const cliChip = (a.runtime && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'))
       ? `<span class="agent-card-chip is-cli is-cli-${escapeHtml(a.runtime.cli)}">${escapeHtml(_cliBadgeLabel(a.runtime.cli))}</span>`
