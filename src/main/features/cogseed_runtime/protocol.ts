@@ -77,7 +77,7 @@ export interface RuntimeHelloResponse {
 
 /** Capability grants a Runtime run can carry. Only `messaging.proactive`
  *  exists today; it enables the Commander-only Feishu/Lark send tools. */
-export const RUNTIME_CAPABILITIES = Object.freeze(['messaging.proactive'] as const);
+export const RUNTIME_CAPABILITIES = Object.freeze(['messaging.proactive', 'p3394.interop'] as const);
 
 export type RuntimeCapability = (typeof RUNTIME_CAPABILITIES)[number];
 
@@ -90,6 +90,7 @@ export const RUNTIME_HOST_TOOL_NAMES = Object.freeze([
   'browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot',
   'mate_delegate', 'mate_tasks', 'mate_cancel', 'mate_retry_step', 'mate_skip_step', 'mate_resume_workflow', 'mate_workflow',
   'messaging_list_targets', 'messaging_send',
+  'p3394_send',
 ] as const);
 
 export type RuntimeHostToolName = typeof RUNTIME_HOST_TOOL_NAMES[number];

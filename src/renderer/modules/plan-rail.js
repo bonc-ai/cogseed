@@ -243,6 +243,23 @@
         updatedAt: plan.updatedAt,
       };
     },
+    // 9.1 统一框架 · 左侧「任务与Session」：按会话读计划进度（无计划返回 null）。
+    planFor(cid) {
+      if (!cid) return null;
+      const plan = _plans.get(String(cid));
+      if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) return null;
+      const counts = _counts(plan.steps, plan.phase);
+      return {
+        cid: String(cid),
+        phase: plan.phase,
+        total: plan.steps.length,
+        done: counts.done,
+        active: counts.active,
+        failed: counts.failed,
+        blocked: counts.blocked,
+        updatedAt: plan.updatedAt,
+      };
+    },
   };
 
   if (!window.planRail) window.planRail = api;

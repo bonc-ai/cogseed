@@ -127,7 +127,54 @@ describe('Recall terminal transfer proof handler', () => {
     expect((await proofs.listTransferProofs('user-a')).some((p) => p.receiptId)).toBe(true);
   });
 
-  it('ignores a receipt that does not cover this projection\'s assets', async () => {
+  it('advances receipt-covered assets even when they differ from the committed projection (receipt-first)', async () => {
+    const { asset, projection } = await confirmedProjection('run-receipt-first');
+    const { candidates } = await modules();
+    // 另一条真实资产：本次运行真的注入了它，但它不在提交投影的冻结清单里。
+    const other = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Live-loaded asset outside the committed projection.',
+      summary: 'Live-loaded asset',
+      suggestedType: 'rule',
+      suggestedScope: 'review',
+      sourceRefs: [{ kind: 'execution', id: 'exec-run-receipt-first' }],
+    });
+    const { asset: otherAsset } = await candidates.promoteRecallCandidate('user-a', other.id, { actor: 'user' });
+    const { terminalProof, assets } = await modules();
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    const targetSessionId = 'gconv-cid-a';
+    // 回执只覆盖 otherAsset——提交投影里的 asset 本轮并未被注入。
+    await receipts.prepareReceipt('user-a', {
+      executionId: 'turn-t-receipt-first',
+      targetSessionId,
+      reusedRefs: [otherAsset.id],
+      omittedRefs: [],
+      permissionMode: 'read-only',
+      allowedScopes: ['cognition:projection'],
+      boundary: 'real',
+    }, { sessionId: targetSessionId });
+
+    const result = await terminalProof.handleRecallTaskTerminal({
+      run_id: 'run-receipt-first',
+      user_id: 'user-a',
+      conversation_id: 'cid-a',
+      status: 'completed' as const,
+      projection_id: projection.id,
+      reuse_turn_ids: ['t-receipt-first'],
+      started_at_ms: 1,
+      finished_at_ms: 2,
+    });
+
+    expect(result).toMatchObject({ handled: true, proof: { status: 'succeeded' } });
+    expect(result.handled && result.proof.receiptId).toBeTruthy();
+    // 以回执为准：真实加载并生成回执的资产升档……
+    const advanced = (await assets.listAbilityAssets('user-a')).find((a) => a.id === otherAsset.id);
+    expect(advanced?.maturity).toBe('transfer_validated');
+    // ……提交投影里本轮没被加载的资产不升档（投影只是治理记录，不是证明锚点）。
+    const untouched = (await assets.listAbilityAssets('user-a')).find((a) => a.id === asset.id);
+    expect(untouched?.maturity).not.toBe('transfer_validated');
+  });
+
+  it('ignores a receipt that covers no existing asset', async () => {
     const { asset, projection } = await confirmedProjection('run-unrelated');
     const { terminalProof, assets } = await modules();
     const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');

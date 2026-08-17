@@ -398,7 +398,7 @@ describe('chat_attachments › adoptDraftAttachments', () => {
     expect(fs.existsSync(draftAttDir(DRAFT))).toBe(true);
     expect(fs.existsSync(cloudAttDir(DRAFT))).toBe(false);
 
-    const r = m.adoptDraftAttachments(UID, DRAFT, CID);
+    const r = await m.adoptDraftAttachments(UID, DRAFT, CID);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.count).toBe(2);
@@ -409,7 +409,7 @@ describe('chat_attachments › adoptDraftAttachments', () => {
 
   it('returns count=0 without error when draft dir is absent', async () => {
     const m = await loadMod();
-    const r = m.adoptDraftAttachments(UID, DRAFT, CID);
+    const r = await m.adoptDraftAttachments(UID, DRAFT, CID);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.count).toBe(0);
@@ -418,7 +418,7 @@ describe('chat_attachments › adoptDraftAttachments', () => {
   it('rejects same src == dst', async () => {
     const m = await loadMod();
     await m.uploadAttachment(UID, DRAFT, 'a.txt', Buffer.from('x'));
-    const r = m.adoptDraftAttachments(UID, DRAFT, DRAFT);
+    const r = await m.adoptDraftAttachments(UID, DRAFT, DRAFT);
     expect(r.ok).toBe(false);
   });
 
@@ -426,7 +426,7 @@ describe('chat_attachments › adoptDraftAttachments', () => {
     const m = await loadMod();
     await m.uploadAttachment(UID, CID, 'kept.txt', Buffer.from('kept'));
     await m.uploadAttachment(UID, DRAFT, 'new.txt', Buffer.from('fresh'));
-    const r = m.adoptDraftAttachments(UID, DRAFT, CID);
+    const r = await m.adoptDraftAttachments(UID, DRAFT, CID);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(fs.existsSync(path.join(cloudAttDir(CID), 'kept.txt'))).toBe(true);

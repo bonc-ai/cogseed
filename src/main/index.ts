@@ -105,6 +105,7 @@ import {
   configureBootAdmission,
   noteBootUserActivity,
   registerDeferred,
+  registerImmediate,
   runBootPhases,
 } from './util/boot_init';
 import { getBootDeviceProfile } from './util/boot-device-profile';
@@ -155,6 +156,9 @@ setFetchImplementation((input, init) => net.fetch(input as Parameters<typeof net
 import { prompts } from './prompts/loader';
 import * as ipc from './ipc';
 import * as users from './features/users';
+import { maybeStartP3394Bridge, stopP3394Bridge, type P3394AppBridgeHandle } from './features/p3394_bridge/app-wiring';
+
+let p3394AppBridge: P3394AppBridgeHandle | null = null;
 import * as skillsFeature from './features/skills';
 import * as agentsFeature from './features/agents';
 import * as contextsFeature from './features/contexts';
@@ -1146,6 +1150,11 @@ if (!gotLock) {
     app.once('before-quit', stopAutoCloseRecovery);
     const stopGroupChatRecallTerminalProofs = startGroupChatRecallTerminalProofs();
     app.once('before-quit', stopGroupChatRecallTerminalProofs);
+    app.once('before-quit', () => {
+      void stopP3394Bridge().catch(() => {});
+      // 受管 P3394 外接网关：应用退出时一并停止（桥下线后它们已无回发目标）。
+      void import('./features/p3394_bridge/external-gateways').then((m) => m.stopAllExternalGateways()).catch(() => {});
+    });
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
       ipc.broadcastToRenderer('client-config:changed', { keys });
     });
@@ -1177,6 +1186,11 @@ if (!gotLock) {
       preferIdle: true,
       maxSliceMs: 20_000,
     });
+    // P3394 bridge (opt-in): starts a loopback HTTP channel bound to the real
+    // runtime controller when COGSEED_P3394_PORT is set; no-op otherwise.
+    registerImmediate('p3394:bridge', () => {
+      p3394AppBridge = maybeStartP3394Bridge();
+    }, 'serial');
     createWindow();
     await consumeColdLaunchConnectorCallback();
 

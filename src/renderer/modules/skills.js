@@ -271,21 +271,28 @@ function _abilityCandidateDisplayTitle(candidate) {
   const judgment = String(candidate.judgment || '').trim();
   const isLegacyEnglish = /^(Reusable experience lesson|KSTAR rule gap candidate|Verified multi-tool workflow|Reusable workflow lesson)/.test(summary);
   if (isLegacyEnglish && judgment) return _abilityTitleFromContent(judgment);
+  // 旧模板标题（'可复用经验：XX（通用）'）剥离前缀与 scope 后缀——存量
+  // 候选的 summary 是模板时代生成的，剥离后标题=内容，消除列表雷同。
+  const stripped = summary
+    .replace(/^(?:可复用经验|待修正经验|已验证的工作流程)[：:]\s*/, '')
+    .replace(/（[^）]*）$/, '')
+    .trim();
+  if (stripped && stripped !== summary) return stripped;
   return summary || _abilityTitleFromContent(judgment) || candidate.id || '';
 }
 
-// 从经验内容提炼标题核心：去掉引导前缀，取第一句主干，限 24 字。
+// 从经验内容提炼标题核心：去掉引导前缀，取第一句主干，限 40 字。
+// 与主进程 lessonTitleCore 同规则（渲染层是兜底路径）。
 function _abilityTitleFromContent(text) {
-  const t = String(text || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^(处理|对于|遇到|当|在)[^，。；,.;:：]{0,12}[，,。；;]?/, '')
-    .replace(/^(可|应|须|要|建议|注意|务必|先|再)[^，。；,.;:：]{0,3}/, '')
-    .replace(/^(“|『|「)/, '')
+  let t = String(text || '').replace(/\s+/g, ' ').trim();
+  t = t.replace(/^(?:遇到同类情况时，)?(?:应|须|要)?注意修正[:：]/, '')
+    .replace(/^(?:当|对于|遇到|处理|在处理|在)[^，。；,.;:：]*?(?:时|后|中|之前|以后)?[，,。；;]/, '')
+    .replace(/^(?:可|应|须|要|建议|务必|注意)[^，。；,.;:：]{0,2}/, '')
+    .replace(/^(?:“|『|「)/, '')
     .replace(/([，。；,.;:：])[\s\S]*$/, '$1')
     .trim();
   if (!t) return '通用经验';
-  return t.length <= 24 ? t : `${t.slice(0, 24)}…`;
+  return t.length <= 40 ? t : `${t.slice(0, 40)}…`;
 }
 
 // 成熟度的用户侧表达按 PRD 3.6「资产成熟度与默认使用契约」的五档写法。
@@ -295,6 +302,7 @@ function _abilityTitleFromContent(text) {
 // 由 lifecycleStatus 表达，不该在成熟度轴上再分一档。
 function _abilityAssetMaturityLabel(maturity, status) {
   if (status === 'paused') return _cognitionText('cognition.asset_status_paused', '已暂停');
+
   if (status === 'revoked') return _cognitionText('cognition.maturity_revoked', '已撤销');
   if (status === 'candidate') return _cognitionText('cognition.maturity_candidate', '待确认');
   if (maturity === 'effectiveness_validated' || maturity === 'stable') {
@@ -310,9 +318,14 @@ function _abilityAssetMaturityLabel(maturity, status) {
 // lifecycleStatus 有三个值，只有 user_confirmed_unverified 代表真实用户确认。
 // 其余两个（会话自动抽取 / KStar 自进化沉淀）都不得显示成「确认入库」。
 function _abilityAssetWriteOriginLabel(lifecycleStatus) {
-  return lifecycleStatus === 'user_confirmed_unverified'
-    ? _cognitionText('cognition.asset_write_origin_user', '确认入库')
-    : _cognitionText('cognition.asset_write_origin_auto', '自动入库');
+  if (lifecycleStatus === 'automatically_extracted_unverified') {
+    return _cognitionText('cognition.asset_write_origin_auto', '自动入库');
+  }
+  if (lifecycleStatus === 'system_precipitated_unverified') {
+    return _cognitionText('cognition.asset_write_origin_system', '系统沉淀');
+  }
+  return _cognitionText('cognition.asset_write_origin_user', '确认入库');
+
 }
 
 function _abilityAssetSummary(items, category) {
@@ -879,7 +892,7 @@ function _captureAssetReceiptDetail(capture) {
   const rows = receipts.map((receipt) => {
     const type = receipt.assetType ? _abilityAssetCategoryLabel(receipt.assetType) : notRecorded;
     const version = receipt.version || notRecorded;
-    const scope = receipt.scope || notRecorded;
+    const scope = receipt.scope ? _abilityAssetScopeLabel(receipt.scope) : notRecorded;
     const decision = receipt.reviewDecisionId || notRecorded;
     return `<article class="recall-capture-asset-receipt">
       <div class="recall-capture-asset-receipt-head"><span><b>asset_id</b><code>${escapeHtml(receipt.assetId)}</code></span><em>${escapeHtml(type)}</em></div>

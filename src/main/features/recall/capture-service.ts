@@ -632,47 +632,64 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
     throw new CaptureFailure('invalid_model_output', 'invalid candidate count');
   }
 
-  return candidates.map((rawCandidate): ParsedCandidate => {
-    if (!rawCandidate || typeof rawCandidate !== 'object' || Array.isArray(rawCandidate)) {
-      throw new CaptureFailure('invalid_model_output', 'candidate must be an object');
-    }
-    const candidate = rawCandidate as Record<string, unknown>;
-    if (!Array.isArray(candidate.evidence) || !candidate.evidence.length) {
-      throw new CaptureFailure('invalid_model_output', 'candidate evidence is required');
-    }
-    const evidence = [...new Set(candidate.evidence.map((label) => {
-      if (typeof label !== 'string' || !validLabels.has(label)) {
-        throw new CaptureFailure('invalid_model_output', 'unknown evidence label');
+  // 逐候选容错：LLM 输出里单个候选字段非法（如 suggestedType: "method"）
+  // 只丢弃该候选，保留其余合法候选——旧行为一个坏候选毁掉整批提取。
+  const parsedOut: ParsedCandidate[] = [];
+  for (const rawCandidate of candidates) {
+    try {
+      parsedOut.push(parseOneCandidate(rawCandidate, validLabels));
+    } catch (error) {
+      if (error instanceof CaptureFailure) {
+        log.warn('recall capture candidate skipped (malformed)', {
+          reason: error.message,
+        });
+        continue;
       }
-      return label;
-    }))];
-    const uncertainty = candidate.uncertainty === undefined || candidate.uncertainty === ''
-      ? undefined
-      : boundedRequiredText(candidate.uncertainty, 'uncertainty', 1_000);
-    const targetAssetId = candidate.targetAssetId === undefined || candidate.targetAssetId === ''
-      ? undefined
-      : boundedRequiredText(candidate.targetAssetId, 'targetAssetId', 160);
-    if (targetAssetId && !safeId(targetAssetId)) throw new CaptureFailure('invalid_model_output', 'invalid targetAssetId');
-    const valueProvided = Object.prototype.hasOwnProperty.call(candidate, 'value');
-    const actionProvided = Object.prototype.hasOwnProperty.call(candidate, 'suggestedAction');
-    return {
-      judgment: boundedRequiredText(candidate.judgment, 'judgment', 4_000),
-      value: valueProvided ? boundedRequiredText(candidate.value, 'value', 1_000) : '',
-      valueProvided,
-      summary: boundedRequiredText(candidate.summary, 'summary', 1_000),
-      ...(uncertainty ? { uncertainty } : {}),
-      suggestedType: parseCandidateType(candidate.suggestedType),
-      suggestedScope: boundedRequiredText(candidate.suggestedScope, 'suggestedScope', 500),
-      // 规则的适用/禁止范围。模型给不出就留空——晋升闸门会据此把候选留在
-      // 池子里等人补，而不是当作「无限制」写进正式资产。
+      throw error;
+    }
+  }
+  return parsedOut;
+}
+
+function parseOneCandidate(rawCandidate: unknown, validLabels: Set<string>): ParsedCandidate {
+  if (!rawCandidate || typeof rawCandidate !== 'object' || Array.isArray(rawCandidate)) {
+    throw new CaptureFailure('invalid_model_output', 'candidate must be an object');
+  }
+  const candidate = rawCandidate as Record<string, unknown>;
+  if (!Array.isArray(candidate.evidence) || !candidate.evidence.length) {
+    throw new CaptureFailure('invalid_model_output', 'candidate evidence is required');
+  }
+  const evidence = [...new Set(candidate.evidence.map((label) => {
+    if (typeof label !== 'string' || !validLabels.has(label)) {
+      throw new CaptureFailure('invalid_model_output', 'unknown evidence label');
+    }
+    return label;
+  }))];
+  const uncertainty = candidate.uncertainty === undefined || candidate.uncertainty === ''
+    ? undefined
+    : boundedRequiredText(candidate.uncertainty, 'uncertainty', 1_000);
+  const targetAssetId = candidate.targetAssetId === undefined || candidate.targetAssetId === ''
+    ? undefined
+    : boundedRequiredText(candidate.targetAssetId, 'targetAssetId', 160);
+  if (targetAssetId && !safeId(targetAssetId)) throw new CaptureFailure('invalid_model_output', 'invalid targetAssetId');
+  const valueProvided = Object.prototype.hasOwnProperty.call(candidate, 'value');
+  const actionProvided = Object.prototype.hasOwnProperty.call(candidate, 'suggestedAction');
+  return {
+    judgment: boundedRequiredText(candidate.judgment, 'judgment', 4_000),
+    value: valueProvided ? boundedRequiredText(candidate.value, 'value', 1_000) : '',
+    valueProvided,
+    summary: boundedRequiredText(candidate.summary, 'summary', 1_000),
+    ...(uncertainty ? { uncertainty } : {}),
+    suggestedType: parseCandidateType(candidate.suggestedType),
       ...parseCandidateBoundaries(candidate),
-      ...(candidate.suggestedAction === undefined ? {} : { suggestedAction: parseCandidateAction(candidate.suggestedAction) }),
-      actionProvided,
-      ...(candidate.risk === undefined ? {} : { risk: parseCandidateRisk(candidate.risk) }),
-      ...(targetAssetId ? { targetAssetId } : {}),
-      evidence,
-    };
-  });
+    suggestedScope: boundedRequiredText(candidate.suggestedScope, 'suggestedScope', 500),
+    ...(candidate.suggestedAction === undefined ? {} : { suggestedAction: parseCandidateAction(candidate.suggestedAction) }),
+    actionProvided,
+    ...(candidate.risk === undefined ? {} : { risk: parseCandidateRisk(candidate.risk) }),
+    ...(targetAssetId ? { targetAssetId } : {}),
+    evidence,
+  };
+
 }
 
 /** 读模型给出的边界短语。非数组/空串一律忽略，宁可留空也不编造边界。 */
@@ -2433,6 +2450,11 @@ async function queueManualRecallCaptureRequest(
   if (exact) {
     const stored = await migrateLegacyHistoricalAutomaticWait(userId, asCapture(exact));
     if (stored.status === 'waiting_manual') return stored;
+    // Preserve a completed task that already owns candidates. A second manual
+    // selection is only a re-extraction when the prior extraction produced no
+    // candidates; otherwise it would hide the existing review work behind a
+    // duplicate capture record.
+    if (stored.status === 'completed' && stored.candidateIds.length > 0) return stored;
     const canRetryAfterExtraction = ['no_candidate', 'completed'].includes(stored.status);
     if (!canRetryAfterExtraction) {
       if (!canConvertToWaitingManual(stored)) return stored;

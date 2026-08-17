@@ -20,25 +20,29 @@
       <div class="sidebar-logo">
         <img class="logo-icon" src="../resources/icons/logo.png" alt="" draggable="false" />
         <div class="logo-text" data-i18n="brand.name">CogSeed</div>
+        <div class="sidebar-top-tools">
+          <button class="sidebar-icon-btn" id="sidebar-search-btn" data-i18n-title="sidebar.search_title" title="Global search (Cmd/Ctrl+K)">
+            <span data-ui-icon="search" data-ui-icon-class="sidebar-top-tool-icon"></span>
+          </button>
+          <button class="sidebar-icon-btn" id="sidebar-collapse-btn" data-i18n-title="sidebar.collapse_title" title="收起侧边栏">
+            <span data-ui-icon="panel" data-ui-icon-class="sidebar-top-tool-icon sb-collapse-ico"></span>
+            <span data-ui-icon="panel" data-ui-icon-class="sidebar-top-tool-icon sb-expand-ico" hidden></span>
+          </button>
+        </div>
       </div>
-      <button class="sidebar-search-btn" id="sidebar-search-btn" data-i18n-title="sidebar.search_title" title="Global search (Cmd/Ctrl+K)">
-        <span data-ui-icon="search" data-ui-icon-class="sidebar-search-icon"></span>
-        <span class="sidebar-search-label" data-i18n="sidebar.search">Search</span>
-        <span class="sidebar-search-kbd">
-          <span data-ui-icon="command" data-ui-icon-class="ui-icon sidebar-search-command-icon"></span><span>K</span>
-        </span>
-      </button>
       <div class="sidebar-actions">
-        <button class="sidebar-btn" id="new-task-btn"><span data-ui-icon="plus" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_task">新建任务</span></button>
-        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.home">首页</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
+        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
         <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
       </div>
       <div class="sidebar-conversation-nav">
+        <div class="sidebar-conv-tabs" id="sidebar-conv-tabs" role="tablist">
+          <button type="button" class="sidebar-conv-tab" role="tab" data-conv-tab="spaces" data-i18n="sidebar.spaces_section">空间</button>
+          <button type="button" class="sidebar-conv-tab is-active" role="tab" aria-selected="true" data-conv-tab="recent" data-i18n="sidebar.recent_tasks">最近任务</button>
+        </div>
         <div class="sidebar-section sidebar-conversations-section">
-          <div class="sidebar-section-title" data-i18n="sidebar.conversations">Conversations</div>
           <div class="conversation-list" id="conversation-list">
             <div class="conv-empty" data-i18n="sidebar.conv_empty">No conversations yet</div>
           </div>
@@ -76,7 +80,6 @@
         <div class="new-chat-center">
           <div class="new-chat-header">
             <h1 class="new-chat-greeting" id="new-chat-greeting"></h1>
-            <p class="new-chat-subtitle" data-i18n="new_chat.subtitle"></p>
           </div>
           <div class="new-chat-input-wrapper">
             <div class="new-chat-input-area">
@@ -120,8 +123,10 @@
           <!-- Quick-scenario chip row. Each chip pre-fills the textarea with
                its template (per PC/docs/design/README §Surface B) and moves
                the caret to the first [...] placeholder. Wired by
-               _initEmptyStateScenarios() in conversation.js. -->
-          <div class="new-chat-scenarios" id="new-chat-scenarios">
+               _initEmptyStateScenarios() in conversation.js. Single-line
+               WorkBuddy-style row: horizontal scroll, fold toggle on the right. -->
+          <div class="new-chat-scenarios-wrap" id="new-chat-scenarios-wrap">
+            <div class="new-chat-scenarios" id="new-chat-scenarios">
             <button type="button" class="new-chat-scenario-chip is-space-builder" data-scenario="space_builder">
               <span data-ui-icon="layout-grid" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.space_builder">Space Mode</span>
@@ -154,23 +159,7 @@
               <span data-ui-icon="code" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.rnd">Build app</span>
             </button>
-          </div>
-          <!-- Open-source-driven「还能帮你做这些」capability strip. Task cards are
-               rendered + wired by modules/oss.js::initOssEntry() (data from the
-               curated marketplace projects catalog). Cards only show the task +
-               "由 X 开源驱动"; repo/star/driver detail lives in the marketplace
-               「开源项目」专区. -->
-          <div class="oss-entry" id="oss-entry" style="display:none">
-            <div class="oss-entry-head">
-              <span data-ui-icon="sparkles" data-ui-icon-class="oss-entry-spark"></span>
-              <span class="oss-entry-title" data-i18n="oss.title">You can also ask for these</span>
-              <span class="oss-entry-sub" data-i18n="oss.subtitle">Just describe what you need — CogSeed sets up the right tools.</span>
-              <button type="button" class="oss-entry-more" id="oss-entry-more">
-                <span data-i18n="oss.more">More capabilities</span>
-                <span data-ui-icon="arrow-right" data-ui-icon-class="oss-entry-more-arrow"></span>
-              </button>
             </div>
-            <div class="oss-entry-grid" id="oss-entry-grid"></div>
           </div>
         </div>
       </section>
@@ -278,6 +267,14 @@
                     <span class="chip-label"></span>
                     <span class="chip-close" data-i18n-title="chat.chip_remove_title" title="Remove">×</span>
                   </div>
+                  <!-- 9.1 统一框架 · 底部「继续/重试」：按当前会话状态决定动作——
+                       最后一条失败→重试该消息；被中断/有计划未完成→发送续跑提示。
+                       由 conversation.js 按会话状态显隐并切换文案。 -->
+                  <button type="button" class="chat-continue-btn" id="chat-continue-btn"
+                          data-i18n-title="chat.continue" title="Continue" hidden>
+                    <span data-ui-icon="play" data-ui-icon-class="chat-continue-icon"></span>
+                    <span data-role="continue-label" data-i18n="chat.continue">继续</span>
+                  </button>
                   <button id="chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
                     <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
                     <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
@@ -291,45 +288,19 @@
           </div>
           <aside class="conversation-info-panel" id="conversation-info-panel" hidden>
             <div class="conversation-info-header">
-              <div class="conversation-info-title" data-i18n="conversation_info.title">Conversation info</div>
+              <div class="conversation-info-heading-wrap">
+                <div class="conversation-info-title" data-i18n="conversation_info.title">运行上下文</div>
+                <div class="conversation-info-subtitle" data-i18n="conversation_info.subtitle">本次最小上下文 · 来源 · 权限 · 运行证明 · 协作参与者</div>
+              </div>
               <button type="button" class="conversation-info-icon-btn conversation-info-close" id="conversation-info-close"
                       data-i18n-title="common.close" data-i18n-aria-label="common.close"
                       title="Close" aria-label="Close">
                 <span data-ui-icon="x" data-ui-icon-class="conversation-info-icon-svg"></span>
               </button>
             </div>
-            <!-- Tabs: each carries an icon + label + count chip filled by
-                 ConversationInfo._renderBody() from the snapshot. Active tab
-                 chrome (underline + bold + soft-primary chip) handled in CSS
-                 via .is-active. -->
-            <div class="conversation-info-tabs" role="tablist">
-              <button type="button" class="conversation-info-tab is-active" data-info-tab="files">
-                <span data-ui-icon="folder" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_files">Files</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-files"></span>
-              </button>
-              <button type="button" class="conversation-info-tab" data-info-tab="attachments">
-                <span data-ui-icon="paperclip" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_attachments">Attachments</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-attachments"></span>
-              </button>
-              <button type="button" class="conversation-info-tab" data-info-tab="collaboration">
-                <span data-ui-icon="layout-dashboard" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_collaboration">Collaboration</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-collaboration"></span>
-              </button>
-              <button type="button" class="conversation-info-tab" data-info-tab="protocol">
-                <span data-ui-icon="route" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_protocol">Protocol</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-protocol"></span>
-              </button>
-              <!-- 9.1 会话区域统一框架 · 右侧「本次携带」：本次 Context、来源与
-                   边界、运行证明（复用现有 snapshot / protocolEvents，不新增 IPC）。 -->
-              <button type="button" class="conversation-info-tab" data-info-tab="carried">
-                <span data-ui-icon="list-ordered" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_carried">Carried</span>
-              </button>
-            </div>
+            <!-- 9.1 统一框架 · 右侧「运行上下文」：单列五段分节（本次 Context / 来源 /
+                 权限 / 运行证明 / 协作参与者），由 conversation-info.js 的
+                 _renderRunContext() 渲染，懒加载展开全文。 -->
             <div class="conversation-info-body" id="conversation-info-body"></div>
           </aside>
           <!-- Markdown viewer / editor drawer. Hosts the shared mountMdViewEdit
@@ -1152,6 +1123,7 @@
             </div>
 
             <!-- ───────────────────────── 配置 ───────────────────────── -->
+
             <div class="settings-tab-pane" data-settings-pane="credentials" hidden>
               <div class="settings-section-note" data-i18n="settings.section.models_note">API keys and OAuth tokens are stored locally only — never synced or sent off-device.</div>
 
@@ -1201,6 +1173,7 @@
                   </div>
                 </div>
               </div>
+
 
               <div class="settings-group settings-cli-fallback-group">
                 <div class="settings-group-head">
@@ -1422,19 +1395,14 @@
         </div>
       </div>
 
-      <!-- External panel: bind a local CLI as the runtime. CLI selector
-           appears first; name + description are pre-filled from the chosen
-           CLI's defaults but stay editable. claude / codex get a
-           project-directory setting on the detail page after creation. -->
+      <!-- External panel (P3394 way): a picked CLI joins through a managed
+           p3394-gateway — one protocol for ANY external agent (Hermes,
+           Claude Code, Codex, OpenClaw, WorkBuddy, user-built agents). -->
       <div class="skill-modal-panel" data-agent-panel="external">
         <div class="form-row">
           <label data-i18n="agent_modal.ext_cli_label">Agent</label>
           <div class="ai-select" id="agent-modal-ext-cli-select"></div>
-        </div>
-        <div class="form-row" id="agent-ext-provider-row" hidden>
-          <label data-i18n="agent_modal.ext_provider_label">Model provider</label>
-          <div class="ai-select" id="agent-modal-ext-provider-select"></div>
-          <div class="form-hint" data-i18n="agent_modal.ext_provider_hint">Optional. Leave empty to use the CLI's own configuration.</div>
+          <div class="form-hint" data-i18n="agent_modal.ext_p3394_hint">Connect over the P3394 protocol — CogSeed starts a local gateway and registers the agent as a collaboration node.</div>
         </div>
         <div class="form-row">
           <label data-i18n="agent_modal.ext_name">Name</label>

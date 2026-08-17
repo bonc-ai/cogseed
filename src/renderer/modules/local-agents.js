@@ -122,6 +122,21 @@ let _extCliSelectApi = null;
  * Idempotent: re-mounting just resets options + value so a re-open of
  * the modal picks up newly-installed CLIs.
  */
+let _externalGateways = [];
+
+/** Load managed P3394 gateway status for the External tab. */
+async function loadExternalGateways({ force = false } = {}) {
+  if (_externalGateways.length && !force) return _externalGateways;
+  try {
+    const res = await window.cogseed.invoke('p3394.external.list', { force });
+    _externalGateways = Array.isArray(res?.gateways) ? res.gateways : [];
+  } catch (e) {
+    _localAgentsLog.warn('p3394.external.list failed', e);
+    _externalGateways = [];
+  }
+  return _externalGateways;
+}
+
 async function mountExternalCliSelect(onChange) {
   const mount = document.getElementById('agent-modal-ext-cli-select');
   if (!mount) return null;
@@ -129,14 +144,20 @@ async function mountExternalCliSelect(onChange) {
   // on every open so the renderer's longer-lived cache cannot preserve a
   // stale "not installed" result for the rest of the app session.
   const entries = await loadLocalCliEntries({ force: true });
+  const gateways = await loadExternalGateways({ force: true });
   const available = entries.filter(e => e.available);
   const noneLabel = t('agent_modal.ext_cli_none');
+  const runningLabel = t('agent_modal.ext_cli_running');
   const options = [
     { value: EXT_CLI_NONE, label: noneLabel },
-    ...available.map(e => ({
-      value: e.type,
-      label: `${(getCliDefaults(e.type)?.name) || e.type}${e.version ? ` (${e.version})` : ''}`,
-    })),
+    ...available.map(e => {
+      const gw = gateways.find(g => g && g.cli === e.type);
+      const status = gw && gw.running ? runningLabel : '';
+      return {
+        value: e.type,
+        label: `${(getCliDefaults(e.type)?.name) || e.type}${e.version ? ` (${e.version})` : ''}${status ? ' ' + status : ''}`,
+      };
+    }),
   ];
   const handleChange = (v) => {
     const cli = (!v || v === EXT_CLI_NONE) ? null : v;
@@ -171,6 +192,7 @@ function setExternalCliValue(cliType) {
 }
 
 window.loadLocalCliEntries = loadLocalCliEntries;
+window.loadExternalGateways = loadExternalGateways;
 window.getCliDefaults = getCliDefaults;
 window.cliIsCodingAgent = cliIsCodingAgent;
 window.getLocalCliUnavailableHint = getLocalCliUnavailableHint;

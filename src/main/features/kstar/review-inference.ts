@@ -1,5 +1,6 @@
 import { createLogger } from '../../logger';
 import { buildRunner } from '../../model/core-agent/runner';
+import { dominantScript, lessonLanguageMismatches } from '../../util/language';
 import { hasConfiguredModel } from '../auth';
 import type { SaveKstarReviewInput } from './review-service';
 import { reconcileWorldModel } from '../recall/world-model-reconciliation';
@@ -193,7 +194,7 @@ function inferenceSystemPrompt(): string {
     'Do not invent tests, files, feedback, or external outcomes. Mark needsConfirmation=true for subjective or ambiguous success.',
     'lesson is OPTIONAL but valuable: it captures a REUSABLE experience discovered DURING execution — a pattern, pitfall, or method the executor would apply differently next time. This is separate from deltaR: even a fully successful task (met_expected, deltaR 0) can yield a lesson, e.g. "merge-conflict type assertions (as X) hide runtime errors — prefer explicit discriminant checks".',
     'Only write a lesson when it is genuinely reusable and non-trivial (a specific pattern/pitfall/method, not "the task was completed"). Omit lesson when the execution was routine with nothing to carry forward.',
-    'Write the lesson (and reason) in the SAME language as the task goal and conversation: a Chinese task yields a Chinese lesson; an English task yields an English lesson. This keeps precipitated assets readable and retrievable for the user.',
+    'HARD RULE — language: write the lesson (and reason) in the SAME language as the task goal and conversation. A Chinese task MUST yield a Chinese lesson; an English task MUST yield an English lesson. A lesson in a different language is discarded entirely by a deterministic gate — never produce it. This keeps precipitated assets readable and retrievable for the user.',
   ].join('\n');
 }
 
@@ -262,6 +263,19 @@ export async function inferKstarReview(
         });
         const text = await runModel({ systemPrompt: inferenceSystemPrompt(), message });
         const parsed = parseKstarReviewInference(text);
+        // 语言硬闸（确定性，不依赖模型自觉）：提示词已要求 lesson 与任务同语言，
+        // 但模型会不遵守（实机观测：中文任务产出英文 lesson 两次）。主导脚本
+        // 不匹配的 lesson 直接丢弃——宁可没有 lesson（回退确定性模板），也不让
+        // 无法被用户读懂的英文经验进候选池。
+        const lesson = parsed.lesson && lessonLanguageMismatches(episode.t.userGoal, parsed.lesson)
+          ? (log.warn('kstar review lesson dropped for language mismatch', {
+              userId,
+              episodeId: episode.id,
+              taskLanguage: dominantScript(episode.t.userGoal),
+              lessonLanguage: dominantScript(parsed.lesson),
+              lessonPreview: parsed.lesson.slice(0, 120),
+            }), undefined)
+          : parsed.lesson;
         // Self-evolution: the review is Agent-implemented and auto-precipitated.
         // Low confidence does NOT pause for user confirmation — it stays
         // 'inferred' and the confidence value feeds the precipitation gates
@@ -277,7 +291,7 @@ export async function inferKstarReview(
             actionDelta: reconciled.actionDelta,
             resultDelta: reconciled.resultDelta,
             reason: parsed.reason,
-            ...(parsed.lesson ? { lesson: parsed.lesson } : {}),
+            ...(lesson ? { lesson } : {}),
             confidence: parsed.confidence,
             evidenceRefs: episode.evidenceRefs,
           },

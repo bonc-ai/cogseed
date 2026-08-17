@@ -182,10 +182,14 @@ describe('KSTAR has one semantic core', () => {
     // Independent turn-routing / Forecast runners are removed; the post-execution
     // Review inference service (review-inference.ts) is intentionally excluded
     // from the runner assertion and stays covered by its own tests.
+    // auto-forecast.ts is the host-owned world model: it predicts through the
+    // SAME in-process core-agent runner the Commander uses (`model/core-agent/
+    // runner`), not an independent dispatch path — exempt for the same reason.
+    const sharedRunnerFiles = new Set(['review-inference.ts', 'auto-forecast.ts']);
     for (const file of readProductionFiles(kstarDir)) {
       expect(file.content, 'kstar production must not call the removed intent router')
         .not.toMatch(/routeRequirementIntent\s*\(/);
-      if (path.basename(file.path) === 'review-inference.ts') continue;
+      if (sharedRunnerFiles.has(path.basename(file.path))) continue;
       expect(file.content, 'kstar production must not build an independent runner')
         .not.toMatch(/buildRunner\s*\(/);
     }
