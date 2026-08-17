@@ -468,8 +468,12 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('recall-capture-quiet-window" hidden');
     expect(host.innerHTML).not.toContain('recall-capture-night-window" hidden');
     expect(host.innerHTML).not.toContain('anthropic · claude-test');
-    expect(host.innerHTML).toContain('data-recall-capture-filter="waiting"');
-    expect(host.innerHTML).not.toContain('data-recall-capture-filter="failed"');
+    // 筛选按用户处境收敛成五格：等待/排队/提取/写入在用户眼里都是"处理中"。
+    expect(host.innerHTML).toContain('data-recall-capture-filter="review"');
+    expect(host.innerHTML).toContain('data-recall-capture-filter="processing"');
+    expect(host.innerHTML).not.toContain('data-recall-capture-filter="waiting"');
+    // 五格是固定的处境分类，常显；按计数隐藏会让筛选条跳来跳去。
+    expect(host.innerHTML).toContain('data-recall-capture-filter="failed"');
     expect(host.innerHTML).toContain('产品讨论');
     expect(host.innerHTML).toContain('data-recall-capture-action="run-now"');
     expect(host.innerHTML).not.toContain('data-recall-capture-action="pause"');
@@ -586,7 +590,7 @@ describe('Recall cognition renderer flow', () => {
     context.renderSkillsCognitionCaptures();
     expect(host.innerHTML).toContain('已写入记忆：1 条，0 条未写入');
     expect(host.innerHTML).toContain('data-recall-capture-action="view-assets"');
-    expect(host.innerHTML).toContain('查看记忆');
+    expect(host.innerHTML).toContain('查看产出的资产');
 
     vm.runInContext(`_skillsCognitionState.selectedCaptureId = 'rcap-empty'`, context);
     context.renderSkillsCognitionCaptures();
@@ -735,9 +739,12 @@ describe('Recall cognition renderer flow', () => {
 
     context.renderSkillsCognitionCaptures();
 
-    expect(host.innerHTML).toContain('① 选择历史会话');
+    // 段落编号取消：页面结构靠标题层级表达，不再和去向说明抢层级。
+    expect(host.innerHTML).toContain('从历史会话沉淀');
+    expect(host.innerHTML).not.toContain('① 选择历史会话');
     expect(host.innerHTML).toContain('准备演示的讨论');
-    expect(host.innerHTML).toContain('入口：点击“开始提取”；完成后还需确认候选，才会进入能力资产。');
+    // 区块说明改由统一段头承担，行内不再各写一句。
+    expect(host.innerHTML).toContain('从历史会话沉淀');
     expect(host.innerHTML).toContain('data-recall-manual-add="conv-new"');
     expect(host.innerHTML).toContain('开始提取');
     expect(host.innerHTML).toContain('data-recall-manual-add="conv-source-paused" disabled');
@@ -766,7 +773,7 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('再次提取');
     expect(host.innerHTML).toContain('data-recall-manual-add="conv-incomplete" disabled');
     expect(host.innerHTML).toContain('暂不可提取');
-    expect(host.innerHTML).toContain('② 沉淀任务记录');
+    expect(host.innerHTML).toContain('沉淀记录');
     expect(host.innerHTML).toContain('data-recall-manual-add="conv-processing" disabled');
     expect(host.innerHTML).not.toContain('data-recall-manual-create');
     expect(host.innerHTML).toContain('recall-capture-quiet-window" hidden');
@@ -844,14 +851,19 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).not.toContain('暂缓');
   });
 
+  /**
+   * 候选池是**跨任务**的汇总，只在没有选中某条沉淀记录时成立（独立的池宿主）。
+   * 一旦展开了某条记录，候选必须收窄到那条任务自己的——否则 UI 会宣称一个渲染
+   * 并不保证的归属关系。两种情形各有一条测试。
+   */
   it('aggregates candidates from multiple capture tasks into one selectable pool', () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };
     context.document = {
-      getElementById: (id: string) => id === 'skills-cognition-capture-review-body' ? host : null,
+      getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? host : null,
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
-      selectedCaptureId: 'capture-a',
+      selectedCaptureId: '',
       captures: [
         { id: 'capture-a', conversationId: 'conversation-a', conversationTitle: '需求讨论 A', candidateIds: ['cand-a'] },
         { id: 'capture-b', conversationId: 'conversation-b', conversationTitle: '需求讨论 B', candidateIds: ['cand-b'] },
@@ -947,6 +959,8 @@ describe('Recall cognition renderer flow', () => {
       recentCaptures: [],
     })})`, context);
 
+    // 条目收在卡片展开态里（首屏是五类概览），断言条目内容前先展开全部。
+    vm.runInContext("_skillsCognitionState.expandedSourceKinds = ['conversation','artifact_file','execution_evaluation','user_teaching_signal','authorized_external_system'];", context);
     context.renderSkillsCognitionSources();
     context.renderSkillsCognitionCandidates();
 
@@ -955,7 +969,7 @@ describe('Recall cognition renderer flow', () => {
     // 全零统计条是噪音，此时不摆。
     expect(sourceHost.innerHTML).not.toContain('recall-workbench-summary');
     // 但五类分组要在，且每一类说清什么会产生它——而不是统一一句"没有数据"。
-    expect(sourceHost.innerHTML).toContain('class="recall-source-group"');
+    expect(sourceHost.innerHTML).toContain('recall-source-card');
     expect(sourceHost.innerHTML).toContain('还没有已完成的会话');
     expect(sourceHost.innerHTML).toContain('还没有已连接的外部系统');
     expect(candidateHost.innerHTML).toContain('③ 候选池');
@@ -1014,6 +1028,8 @@ describe('Recall cognition renderer flow', () => {
       }],
     })})`, context);
 
+    // 条目收在卡片展开态里（首屏是五类概览），断言条目内容前先展开全部。
+    vm.runInContext("_skillsCognitionState.expandedSourceKinds = ['conversation','artifact_file','execution_evaluation','user_teaching_signal','authorized_external_system'];", context);
     context.renderSkillsCognitionSources();
 
     for (const text of ['正在执行的会话', '排队文件', '失败文件', '暂停文件', '处理中', '待处理', '失败', '已暂停']) {
@@ -1029,8 +1045,11 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).not.toContain('data-cognition-source-action="remove"');
     expect(host.innerHTML).not.toContain('conversation</span>');
     expect(host.innerHTML).not.toContain('下一步：可用于会话沉淀和记忆检索');
-    expect(host.innerHTML).toContain('<details class="recall-source-group recall-source-group-advanced">');
-    expect(host.innerHTML).not.toContain('<details class="recall-source-group recall-source-group-advanced" open>');
+    // 五类现在是统一的概览卡，「执行与评价」不再单独做成折叠的高级项——
+    // 一类一个样式会让用户以为它是另一种东西。展开与否由 expandedSourceKinds
+    // 决定，五类一视同仁。
+    expect(host.innerHTML).not.toContain('recall-source-group-advanced');
+    expect(host.innerHTML).toContain('data-cognition-source-expand="execution_evaluation"');
     expect(host.innerHTML).not.toContain('msg-hidden');
     expect(host.innerHTML).not.toContain('eval-hidden');
     expect(host.innerHTML).not.toContain('Invalid Date');
@@ -1053,6 +1072,8 @@ describe('Recall cognition renderer flow', () => {
       }],
     })})`, context);
 
+    // 条目收在卡片展开态里（首屏是五类概览），断言条目内容前先展开全部。
+    vm.runInContext("_skillsCognitionState.expandedSourceKinds = ['conversation','artifact_file','execution_evaluation','user_teaching_signal','authorized_external_system'];", context);
     context.renderSkillsCognitionSources();
 
     expect(host.innerHTML).toContain('3 条记录 · 1 条失败 · 1 条已取消');
@@ -1088,6 +1109,8 @@ describe('Recall cognition renderer flow', () => {
       recentCaptures: [],
     })})`, context);
 
+    // 条目收在卡片展开态里（首屏是五类概览），断言条目内容前先展开全部。
+    vm.runInContext("_skillsCognitionState.expandedSourceKinds = ['conversation','artifact_file','execution_evaluation','user_teaching_signal','authorized_external_system'];", context);
     context.renderSkillsCognitionSources();
 
     for (const status of ['未沉淀', '等待中', '处理中', '待审核', '已形成 2 条记忆', '沉淀失败']) {
@@ -1176,6 +1199,8 @@ describe('Recall cognition renderer flow', () => {
 
     await context.loadSkillsCognitionSnapshot();
     context.renderSkillsCognitionCaptures();
+    // 条目收在卡片展开态里（首屏是五类概览），断言条目内容前先展开全部。
+    vm.runInContext("_skillsCognitionState.expandedSourceKinds = ['conversation','artifact_file','execution_evaluation','user_teaching_signal','authorized_external_system'];", context);
     context.renderSkillsCognitionSources();
 
     expect(calls.map(([channel]) => channel)).toEqual(expect.arrayContaining([
@@ -1194,15 +1219,11 @@ describe('Recall cognition renderer flow', () => {
       expect(sources.innerHTML).toContain(label);
     }
     expect(sources.innerHTML).toContain('还没有已连接的外部系统');
-    expect(captures.innerHTML).toContain('2. 提取内容');
-    expect(captures.innerHTML).toContain('<b>1. 选择会话</b><em>4</em>');
-    expect(captures.innerHTML).not.toContain('<b>1. 选择会话</b><em>7</em>');
-    expect(captures.innerHTML).toContain('3. 确认候选');
-    expect(captures.innerHTML).toContain('只有确认后的内容才会出现在“能力资产”');
+    expect(captures.innerHTML).toContain('recall-capture-chain');
+    expect(captures.innerHTML).not.toContain('2. 提取内容');
+    // 编号流程条换成一句去向说明，措辞随之改变。
+    expect(captures.innerHTML).toContain('recall-capture-chain');
     expect(captures.innerHTML).toContain('待审核');
-    expect(captures.innerHTML).toContain('<b>4. 能力资产</b><em>1</em>');
-    expect(captures.innerHTML).toContain('已恢复处理');
-    expect(captures.innerHTML).toContain('data-recall-capture-action="view-candidates"');
     expect(inbox.innerHTML).toContain('以后保持决策可追溯');
     expect(inbox.innerHTML).toContain('data-recall-teaching-revoke="teach-a"');
     expect(inbox.innerHTML).not.toContain('skills-cognition-stat-grid');
@@ -1585,7 +1606,7 @@ describe('Recall cognition renderer flow', () => {
         return payloads.length === 1 ? waiting.promise : failed.promise;
       },
     };
-    vm.runInContext(`_skillsCognitionState.captureFilter = 'waiting';`, context);
+    vm.runInContext(`_skillsCognitionState.captureFilter = 'processing';`, context);
     const older = context.loadRecallCaptureTasks();
     vm.runInContext(`_skillsCognitionState.captureFilter = 'failed';`, context);
     const newer = context.loadRecallCaptureTasks();
@@ -1597,7 +1618,7 @@ describe('Recall cognition renderer flow', () => {
 
     const captures = JSON.parse(vm.runInContext('JSON.stringify(_skillsCognitionState.captures)', context));
     expect(captures.map((capture: any) => capture.id)).toEqual(['failed-task']);
-    expect(payloads[0].statuses).not.toContain('configuration_required');
+    expect(payloads[0].statuses).toContain('waiting_quiet');
     expect(payloads[1].statuses).toEqual(['failed']);
   });
 
@@ -2735,6 +2756,61 @@ describe('Recall cognition renderer flow', () => {
 
     expect(switchedPage).toBe('candidate');
     expect(state.selectedCandidateId).toBe('cand-a');
+  });
+
+  /**
+   * 候选归属于具体的沉淀任务。展开某条沉淀记录时只能看到**这条任务自己的**
+   * 候选——候选被内联到任务详情里之后，不收窄就等于让 UI 宣称一个渲染并不
+   * 保证的归属关系：展开任务 A 会看到任务 B 的候选，capture ↔ candidate 的
+   * 关系在展示层被抹平。
+   */
+  it('scopes inline candidates to the selected capture task', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-capture-review-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      selectedCaptureId: 'cap-a',
+      captures: [
+        { id: 'cap-a', candidateIds: ['cand-a1'] },
+        { id: 'cap-b', candidateIds: ['cand-b1'] },
+      ],
+      recentCaptures: [],
+      recallCandidates: [
+        { id: 'cand-a1', status: 'pending_review', judgment: '任务 A 的候选', suggestedType: 'rule', suggestedScope: 'product' },
+        { id: 'cand-b1', status: 'pending_review', judgment: '任务 B 的候选', suggestedType: 'rule', suggestedScope: 'product' },
+      ],
+    })})`, context);
+
+    context.renderSkillsCognitionCandidates();
+
+    expect(host.innerHTML).toContain('data-recall-candidate-id="cand-a1"');
+    expect(host.innerHTML).not.toContain('data-recall-candidate-id="cand-b1"');
+    expect(host.innerHTML).not.toContain('任务 B 的候选');
+  });
+
+  it('falls back to every pending candidate when no capture task is selected', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-candidates-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      selectedCaptureId: '',
+      captures: [{ id: 'cap-a', candidateIds: ['cand-a1'] }],
+      recentCaptures: [],
+      recallCandidates: [
+        { id: 'cand-a1', status: 'pending_review', judgment: '任务 A 的候选', suggestedType: 'rule', suggestedScope: 'product' },
+        { id: 'cand-b1', status: 'pending_review', judgment: '无主候选', suggestedType: 'rule', suggestedScope: 'product' },
+      ],
+    })})`, context);
+
+    context.renderSkillsCognitionCandidates();
+
+    // 没有选中任务时是独立的候选池宿主，此时显示全部待确认候选才名副其实。
+    expect(host.innerHTML).toContain('data-recall-candidate-id="cand-a1"');
+    expect(host.innerHTML).toContain('data-recall-candidate-id="cand-b1"');
   });
 
   /**
