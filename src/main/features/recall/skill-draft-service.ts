@@ -10,6 +10,11 @@ import * as skills from '../skills';
 import { listAbilityAssets, readAbilityAsset } from './asset-service';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import { createAutomaticContextProjection } from './context-projection';
+import { createSkillBinding, readSkillBinding, recordSkillBindingDecision } from './skill-binding-service';
+import { listSkillVersions } from '../skills/version-store';
+import { captureSkillTree, snapshotSkillFiles } from '../skills/snapshot-service';
+import { diffSkillTrees } from '../skills/version-diff';
+import { applySkillTreeVersion } from '../skills/version-mutation-service';
 import {
   cognitionSourceRefKey,
   normalizeCognitionSourceRefsForWrite,
@@ -92,6 +97,8 @@ export interface RecallSkillDraftValidation {
   qualityReports: Array<{ path: string; report: ValidationReport }>;
 }
 
+export type RecallSkillDraftMode = 'install' | 'upgrade';
+
 export interface RecallSkillContextSnapshot {
   projectionId?: string;
   primaryAssetId: string;
@@ -128,6 +135,13 @@ export interface RecallSkillDraftFailedRecord extends RecallSkillDraftBase {
 
 export interface RecallSkillDraftReadyRecord extends RecallSkillDraftBase {
   status: 'draft' | 'installed';
+  mode: RecallSkillDraftMode;
+  reviewDecision?: 'deferred' | 'rejected' | 'accepted';
+  reviewDecisionAt?: string;
+  targetSkillId: string;
+  baseRevisionId?: string;
+  baseManifestHash?: string;
+  diff?: import('../skills/version-diff').SkillTreeDiff;
   skillName: string;
   description: string;
   proposal?: RecallSkillProposal;
@@ -169,6 +183,12 @@ export interface RecallSkillDraftReadyPreview {
   assetId: string;
   assetVersion: string;
   status: 'draft' | 'installed';
+  mode: RecallSkillDraftMode;
+  reviewDecision?: 'deferred' | 'rejected' | 'accepted';
+  targetSkillId: string;
+  baseRevisionId?: string;
+  baseManifestHash?: string;
+  diff?: import('../skills/version-diff').SkillTreeDiff;
   skillName: string;
   title: string;
   description: string;
@@ -433,9 +453,21 @@ function validateDraftFiles(files: RecallSkillDraftFile[]): RecallSkillDraftVali
   return { ok: issues.length === 0, target: 'level_a', label: 'level_a_structure', issues, qualityReports };
 }
 
-function draftHash(assetId: string, assetVersion: string, skillName: string, files: RecallSkillDraftFile[]): string {
+function draftHash(
+  assetId: string,
+  assetVersion: string,
+  skillName: string,
+  files: RecallSkillDraftFile[],
+  mode: RecallSkillDraftMode = 'install',
+  targetSkillId = skillName,
+  baseRevisionId?: string,
+  baseManifestHash?: string,
+): string {
+  const base = mode === 'upgrade'
+    ? { mode, targetSkillId, baseRevisionId: baseRevisionId || '', baseManifestHash: baseManifestHash || '' }
+    : {};
   return createHash('sha256')
-    .update(JSON.stringify({ assetId, assetVersion, skillName, files }))
+    .update(JSON.stringify({ assetId, assetVersion, skillName, files, ...base }))
     .digest('hex');
 }
 
@@ -535,7 +567,19 @@ function asDraft(value: RecallJsonRecord): RecallSkillDraftRecord {
     || !value.validation || typeof value.validation !== 'object' || Array.isArray(value.validation)
     || typeof value.draftHash !== 'string'
   ) throw new Error('malformed recall skill draft');
-  return { ...value, attempt, ...(recallContext ? { recallContext } : {}) } as RecallSkillDraftReadyRecord;
+  const mode: RecallSkillDraftMode = value.mode === 'upgrade' ? 'upgrade' : 'install';
+  const targetSkillId = typeof value.targetSkillId === 'string' && value.targetSkillId
+    ? value.targetSkillId
+    : (typeof value.installedSkillId === 'string' && value.installedSkillId
+      ? value.installedSkillId
+      : String(value.skillName));
+  return {
+    ...value,
+    mode,
+    targetSkillId,
+    attempt,
+    ...(recallContext ? { recallContext } : {}),
+  } as RecallSkillDraftReadyRecord;
 }
 
 function preview(record: RecallSkillDraftRecord): RecallSkillDraftPreview {
@@ -564,6 +608,12 @@ function preview(record: RecallSkillDraftRecord): RecallSkillDraftPreview {
     assetId: record.sourceAssetId,
     assetVersion: record.sourceAssetVersion,
     status: record.status,
+    mode: record.mode,
+    ...(record.reviewDecision ? { reviewDecision: record.reviewDecision } : {}),
+    targetSkillId: record.targetSkillId,
+    ...(record.baseRevisionId ? { baseRevisionId: record.baseRevisionId } : {}),
+    ...(record.baseManifestHash ? { baseManifestHash: record.baseManifestHash } : {}),
+    ...(record.diff ? { diff: record.diff } : {}),
     skillName: record.skillName,
     title: record.title,
     description: record.description,
@@ -807,13 +857,76 @@ export async function readRecallSkillDraft(userId: string, assetId: string): Pro
 }
 
 export async function readInstalledSkillForAsset(userId: string, assetId: string): Promise<string | undefined> {
-  const [draft, asset] = await Promise.all([
-    readRecallSkillDraft(userId, assetId),
-    readAbilityAsset(userId, assetId),
-  ]);
+  const binding = await readSkillBinding(userId, assetId);
+  if (binding && await skills.getCustomSkill(binding.skillId)) return binding.skillId;
+  const draft = await readRecallSkillDraft(userId, assetId);
   if (!isReadyRecord(draft) || draft.status !== 'installed' || !draft.installedSkillId) return undefined;
-  if (draft.sourceAssetVersion !== asset.version) return undefined;
-  return (await skills.getCustomSkill(draft.installedSkillId)) ? draft.installedSkillId : undefined;
+  const installed = await skills.getCustomSkill(draft.installedSkillId);
+  if (!installed) return undefined;
+  // Migrate the old installed-draft pointer without changing its skill id.
+  const versions = await listSkillVersions(userId, draft.installedSkillId);
+  const current = versions[0];
+  if (current?.files && current.manifestHash) {
+    try {
+      await createSkillBinding(userId, {
+        assetId,
+        skillId: draft.installedSkillId,
+        installedAssetVersion: draft.sourceAssetVersion,
+        currentSkillVersion: current.version,
+        currentRevisionId: current.revisionId,
+        currentManifestHash: current.manifestHash,
+        createdAt: draft.createdAt,
+        updatedAt: new Date().toISOString(),
+        decisions: [{ assetVersion: draft.sourceAssetVersion, action: 'installed', at: draft.updatedAt, skillVersion: current.version }],
+      });
+    } catch {
+      // Another reader may have completed the lazy migration.
+    }
+  }
+  return draft.installedSkillId;
+}
+
+export type RecallSkillFreshness = 'current' | 'upgrade_available' | 'missing' | 'unknown';
+
+export interface RecallSkillFreshnessView {
+  status: RecallSkillFreshness;
+  skillId?: string;
+  installedAssetVersion?: string;
+  currentAssetVersion: string;
+}
+
+/** Read the stable asset-to-Skill relationship without treating an old
+ * installed version as if the Skill were missing. */
+export async function readRecallSkillFreshness(
+  userId: string,
+  assetId: string,
+  currentAssetVersion: string,
+): Promise<RecallSkillFreshnessView> {
+  if (!safeId(assetId) || !currentAssetVersion.trim()) throw new Error('invalid recall skill freshness');
+  try {
+    const binding = await readSkillBinding(userId, assetId);
+    if (!binding) {
+      const installed = await readInstalledSkillForAsset(userId, assetId);
+      return installed
+        ? { status: 'unknown', skillId: installed, currentAssetVersion }
+        : { status: 'missing', currentAssetVersion };
+    }
+    const installed = await skills.getCustomSkill(binding.skillId);
+    if (!installed) return {
+      status: 'missing',
+      skillId: binding.skillId,
+      installedAssetVersion: binding.installedAssetVersion,
+      currentAssetVersion,
+    };
+    return {
+      status: binding.installedAssetVersion === currentAssetVersion ? 'current' : 'upgrade_available',
+      skillId: binding.skillId,
+      installedAssetVersion: binding.installedAssetVersion,
+      currentAssetVersion,
+    };
+  } catch {
+    return { status: 'unknown', currentAssetVersion };
+  }
 }
 
 const prepareTasks = new Map<string, Promise<RecallSkillDraftPreview>>();
@@ -888,7 +1001,16 @@ export async function prepareRecallSkillDraft(userId: string, assetId: string): 
       if (latestAsset.version !== asset.version || latestAsset.status !== 'active' || latestAsset.type !== 'skill_method') {
         throw new Error('recall skill asset changed; generate the draft again');
       }
-      const skillName = await availableSkillName(asset.title, asset.id);
+      let binding = await readSkillBinding(userId, asset.id);
+      if (!binding && existing?.status === 'installed' && existing.installedSkillId) {
+        // The read path lazily migrates the old pointer. Re-read the binding so
+        // this preparation uses the stable id rather than allocating a sibling.
+        await readInstalledSkillForAsset(userId, asset.id);
+        binding = await readSkillBinding(userId, asset.id);
+      }
+      const mode: RecallSkillDraftMode = binding ? 'upgrade' : 'install';
+      const targetSkillId = binding?.skillId || await availableSkillName(asset.title, asset.id);
+      const skillName = targetSkillId;
       const description = skillDescription(generated.proposal);
       const files = buildSkillFiles({
         skillName,
@@ -902,6 +1024,17 @@ export async function prepareRecallSkillDraft(userId: string, assetId: string): 
       if (!validation.ok) {
         throw new RecallSkillDraftFailure('level_a_validation_failed', safeFailureMessage('level_a_validation_failed'));
       }
+      let baseRevisionId = binding?.currentRevisionId;
+      let baseManifestHash = binding?.currentManifestHash;
+      let diff: import('../skills/version-diff').SkillTreeDiff | undefined;
+      if (mode === 'upgrade') {
+        const currentSkill = await skills.getCustomSkill(targetSkillId);
+        if (!currentSkill?.dir) throw new Error('bound Recall Skill is missing');
+        const currentSnapshot = await captureSkillTree(currentSkill.dir);
+        baseRevisionId ||= (await listSkillVersions(userId, targetSkillId))[0]?.revisionId;
+        baseManifestHash ||= currentSnapshot.manifestHash;
+        diff = diffSkillTrees(currentSnapshot.files, snapshotSkillFiles(files).files);
+      }
       const now = new Date().toISOString();
       const record = asDraft(await updateRecallJsonRecord(userId, DRAFT_COLLECTION, asset.id, (current) => {
         const previous = assertDraftRevision(current, expectedRevision);
@@ -912,6 +1045,11 @@ export async function prepareRecallSkillDraft(userId: string, assetId: string): 
           sourceAssetId: asset.id,
           sourceAssetVersion: asset.version,
           status: 'draft',
+          mode,
+          targetSkillId,
+          ...(baseRevisionId ? { baseRevisionId } : {}),
+          ...(baseManifestHash ? { baseManifestHash } : {}),
+          ...(diff ? { diff } : {}),
           skillName,
           title: asset.title,
           description,
@@ -927,7 +1065,7 @@ export async function prepareRecallSkillDraft(userId: string, assetId: string): 
           },
           files,
           validation,
-          draftHash: draftHash(asset.id, asset.version, skillName, files),
+          draftHash: draftHash(asset.id, asset.version, skillName, files, mode, targetSkillId, baseRevisionId, baseManifestHash),
           attempt,
           createdAt: previous?.createdAt || now,
           updatedAt: now,
@@ -950,6 +1088,46 @@ export async function prepareRecallSkillDraft(userId: string, assetId: string): 
   })().finally(() => prepareTasks.delete(key));
   prepareTasks.set(key, task);
   return task;
+}
+
+/** Record an explicit human decision for a generated draft without silently
+ * installing it. Deferred drafts stay in the queue; rejected asset versions
+ * are suppressed there but remain auditable, and a later version can propose
+ * a fresh upgrade. */
+export async function decideRecallSkillDraft(
+  userId: string,
+  assetId: string,
+  expectedDraftHash: string,
+  decision: 'defer' | 'reject',
+): Promise<RecallSkillDraftReadyPreview> {
+  if (!safeId(assetId) || !/^[a-f0-9]{64}$/.test(expectedDraftHash)) throw new Error('invalid recall skill decision');
+  const record = await readRecallSkillDraft(userId, assetId);
+  if (!isReadyRecord(record) || record.status !== 'draft') throw new Error('recall skill draft is not ready');
+  if (record.draftHash !== expectedDraftHash) throw new Error('recall skill draft changed; generate it again');
+  const now = new Date().toISOString();
+  const updated = asDraft(await updateRecallJsonRecord(userId, DRAFT_COLLECTION, assetId, (current) => {
+    const latest = current ? asDraft(current) : undefined;
+    if (!isReadyRecord(latest) || latest.status !== 'draft' || latest.draftHash !== expectedDraftHash) {
+      throw new Error('recall skill draft changed; generate it again');
+    }
+    return {
+      ...latest,
+      reviewDecision: decision === 'defer' ? 'deferred' : 'rejected',
+      reviewDecisionAt: now,
+      updatedAt: now,
+    };
+  })) as RecallSkillDraftReadyRecord;
+  const binding = await readSkillBinding(userId, assetId);
+  if (binding) {
+    await recordSkillBindingDecision(userId, assetId, {
+      assetVersion: record.sourceAssetVersion,
+      action: decision === 'defer' ? 'deferred' : 'rejected',
+      at: now,
+      draftHash: expectedDraftHash,
+      skillVersion: binding.currentSkillVersion,
+    });
+  }
+  return preview(updated) as RecallSkillDraftReadyPreview;
 }
 
 const commitTasks = new Map<string, Promise<{ draft: RecallSkillDraftReadyPreview; skill: { id: string; name: string } }>>();
@@ -986,7 +1164,16 @@ export function confirmRecallSkillDraft(
     if (record.files.some((file) => !file.contentHash || contentHash(file.content) !== file.contentHash)) {
       throw new Error('recall skill draft file hash mismatch; generate it again');
     }
-    if (draftHash(record.sourceAssetId, record.sourceAssetVersion, record.skillName, record.files) !== record.draftHash) {
+    if (draftHash(
+      record.sourceAssetId,
+      record.sourceAssetVersion,
+      record.skillName,
+      record.files,
+      record.mode,
+      record.targetSkillId,
+      record.baseRevisionId,
+      record.baseManifestHash,
+    ) !== record.draftHash) {
       throw new Error('recall skill draft changed; generate it again');
     }
     if (!record.validation.ok || !validateDraftFiles(record.files).ok) throw new Error('recall skill draft validation failed');
@@ -998,6 +1185,112 @@ export function confirmRecallSkillDraft(
     if (record.status === 'installed' && record.installedSkillId) {
       const installed = await skillOps.getCustomSkill(record.installedSkillId);
       if (installed) return { draft: preview(record) as RecallSkillDraftReadyPreview, skill: { id: installed.id, name: installed.name } };
+    }
+
+    // Production Recall writes use the version mutation service. The injected
+    // skillOps branch remains for the existing unit seams that intentionally
+    // test partial-file rollback without invoking the external scanner.
+    if (skillOps === skills) {
+      const targetSkillId = record.targetSkillId || record.skillName;
+      const binding = await readSkillBinding(userId, assetId);
+      const committed = await applySkillTreeVersion({
+        userId,
+        skillId: targetSkillId,
+        files: record.files,
+        operation: record.mode === 'upgrade' ? 'upgrade' : 'install',
+        source: {
+          kind: 'recall_asset',
+          assetId,
+          assetVersion: record.sourceAssetVersion,
+          draftHash: record.draftHash,
+        },
+        expectedManifestHash: record.mode === 'upgrade' ? record.baseManifestHash : undefined,
+        expectedCurrentRevisionId: record.mode === 'upgrade' ? record.baseRevisionId : undefined,
+        onVersionCommitted: async (version) => {
+          const now = new Date().toISOString();
+          const markDraftInstalled = async () => updateRecallJsonRecord(userId, DRAFT_COLLECTION, assetId, (current) => {
+            const latest = current ? asDraft(current) : undefined;
+            if (!isReadyRecord(latest) || latest.status !== 'draft' || latest.draftHash !== record.draftHash) {
+              throw new Error('recall skill draft changed; generate it again');
+            }
+            return {
+              ...latest,
+              status: 'installed',
+              installedSkillId: targetSkillId,
+              reviewDecision: 'accepted',
+              reviewDecisionAt: now,
+              updatedAt: now,
+            };
+          });
+          const restoreDraft = async () => updateRecallJsonRecord(userId, DRAFT_COLLECTION, assetId, (current) => {
+            const latest = current ? asDraft(current) : undefined;
+            if (!latest || latest.status !== 'installed' || latest.draftHash !== record.draftHash) return current;
+            return { ...record, updatedAt: new Date().toISOString() };
+          });
+
+          if (record.mode === 'upgrade' && !binding) {
+            throw new Error('recall skill binding is missing; generate the upgrade again');
+          }
+          // Persist the draft state first. If binding persistence fails, restore
+          // the draft so a failed directory transaction cannot look installed.
+          await markDraftInstalled();
+          if (record.mode === 'upgrade') {
+            try {
+              await recordSkillBindingDecision(userId, assetId, {
+                assetVersion: record.sourceAssetVersion,
+                action: 'upgraded',
+                at: now,
+                draftHash: record.draftHash,
+                skillVersion: version.version,
+              }, {
+                installedAssetVersion: record.sourceAssetVersion,
+                currentSkillVersion: version.version,
+                currentRevisionId: version.revisionId,
+                currentManifestHash: version.manifestHash || '',
+              });
+            } catch (error) {
+              await restoreDraft().catch(() => {});
+              throw error;
+            }
+          } else {
+            try {
+              await createSkillBinding(userId, {
+                assetId,
+                skillId: targetSkillId,
+                installedAssetVersion: record.sourceAssetVersion,
+                currentSkillVersion: version.version,
+                currentRevisionId: version.revisionId,
+                currentManifestHash: version.manifestHash || '',
+                createdAt: now,
+                updatedAt: now,
+                decisions: [{
+                  assetVersion: record.sourceAssetVersion,
+                  action: 'installed',
+                  at: now,
+                  draftHash: record.draftHash,
+                  skillVersion: version.version,
+                }],
+              });
+            } catch (error) {
+              await restoreDraft().catch(() => {});
+              throw error;
+            }
+          }
+        },
+      });
+      const installed = await skills.getCustomSkill(targetSkillId);
+      if (!installed) throw new Error('skill could not be read after version commit');
+      log.info('committed versioned Recall skill', {
+        asset_id: assetId,
+        skill_id: targetSkillId,
+        skill_version: committed.record.version,
+        operation: committed.record.operation,
+      });
+      return { draft: preview({
+        ...record,
+        status: 'installed',
+        installedSkillId: targetSkillId,
+      }) as RecallSkillDraftReadyPreview, skill: { id: installed.id, name: installed.name } };
     }
 
     let created: Awaited<ReturnType<typeof skills.createCustomSkill>> | null = null;
@@ -1034,6 +1327,8 @@ export function confirmRecallSkillDraft(
           ...latest,
           status: 'installed',
           installedSkillId: created!.id,
+          reviewDecision: 'accepted',
+          reviewDecisionAt: now,
           updatedAt: now,
         };
       })) as RecallSkillDraftReadyRecord;

@@ -7,6 +7,7 @@ import { mateRuntimeSessionToolResultsDir } from '../../../../paths';
 import { normalizeRuntimePath, ensureRuntimeAllowedRoots, isRuntimeTranscriptPath } from './permissions';
 import type { RuntimeToolName } from './catalog';
 import type { RuntimeToolPolicy } from '../types';
+import type { RuntimeSkillVersionPin } from '../../protocol';
 
 export interface RuntimeToolResult {
   content: string;
@@ -26,6 +27,7 @@ export interface RuntimeToolCallContext {
   pcDir: string;
   toolPolicy: RuntimeToolPolicy;
   allowedSkillIds?: readonly string[];
+  skillVersionPins?: readonly RuntimeSkillVersionPin[];
 }
 
 export interface RuntimeToolImplementation<TInput = Record<string, unknown>> {

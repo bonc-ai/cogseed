@@ -8,6 +8,9 @@ import { DEFAULT_RUNTIME_TOOL_POLICY } from '../../../../../src/main/features/co
 import type { RuntimeToolPolicy } from '../../../../../src/main/features/cogseed_runtime/kernel/types';
 import { getRuntimeToolCatalog } from '../../../../../src/main/features/cogseed_runtime/kernel/tools/catalog';
 import { createRuntimeToolRunner } from '../../../../../src/main/features/cogseed_runtime/kernel/tools/runner';
+import { captureSkillTree } from '../../../../../src/main/features/skills/snapshot-service';
+import { appendFullSkillVersion } from '../../../../../src/main/features/skills/version-store';
+import { ensureSkillRuntimeSnapshot } from '../../../../../src/main/features/skills/runtime-snapshot-service';
 
 const UID = 'runtime-tool-user';
 const SESSION = 'mruntime-tools';
@@ -23,6 +26,7 @@ function runner(
   maxInlineToolResultTokens?: number,
   policy: RuntimeToolPolicy = DEFAULT_RUNTIME_TOOL_POLICY,
   allowedSkillIds: string[] = [],
+  skillVersionPins: Array<{ skillId: string; version: string; manifestHash: string; revisionId?: string }> = [],
 ) {
   return createRuntimeToolRunner({
     userId: UID,
@@ -31,6 +35,7 @@ function runner(
     writableRoots: [root],
     toolPolicy: policy,
     allowedSkillIds,
+    skillVersionPins,
     ...(maxInlineToolResultTokens ? { maxInlineToolResultTokens } : {}),
   });
 }
@@ -270,6 +275,34 @@ describe('CogSeed Runtime tool runtime MVP', () => {
 
     expect(result.isError).toBeFalsy();
     expect(JSON.parse(result.content.trim())).toEqual({ ok: true, uid: UID, args: ['a', 'b'] });
+  });
+
+  it('continues to run the frozen Skill snapshot after the live Skill changes', async () => {
+    const root = makeRoot();
+    const skillDir = path.join(paths.userSkillsDir(UID), 'runtime-pinned');
+    fs.mkdirSync(path.join(skillDir, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: runtime-pinned\ndescription: test\n---\n');
+    fs.writeFileSync(path.join(skillDir, 'scripts', 'echo.js'), 'module.exports = async () => ({ ok: true });\n');
+    const snapshot = await captureSkillTree(skillDir);
+    const version = await appendFullSkillVersion(UID, 'runtime-pinned', {
+      operation: 'install',
+      files: snapshot.files,
+      source: { kind: 'manual_edit' },
+      security: { outcome: 'pass', findingCount: 0 },
+    });
+    await ensureSkillRuntimeSnapshot(UID, 'runtime-pinned', version);
+
+    const first = await runner(root, undefined, SKILL_POLICY, ['runtime-pinned'], [{
+      skillId: 'runtime-pinned', version: version.version, revisionId: version.revisionId, manifestHash: snapshot.manifestHash,
+    }]).run('run_skill', { skill_id: 'runtime-pinned', script: 'echo', cwd: root });
+    expect(first.isError).toBeFalsy();
+
+    fs.writeFileSync(path.join(skillDir, 'scripts', 'echo.js'), 'module.exports = async () => ({ ok: false, changed: true });\n');
+    const frozen = await runner(root, undefined, SKILL_POLICY, ['runtime-pinned'], [{
+      skillId: 'runtime-pinned', version: version.version, revisionId: version.revisionId, manifestHash: snapshot.manifestHash,
+    }]).run('run_skill', { skill_id: 'runtime-pinned', script: 'echo', cwd: root });
+    expect(frozen.isError).toBeFalsy();
+    expect(JSON.parse(frozen.content.trim())).toEqual({ ok: true });
   });
 
   it('spills oversized tool output into the local runtime tool-results store', async () => {

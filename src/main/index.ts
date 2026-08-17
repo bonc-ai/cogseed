@@ -1191,6 +1191,13 @@ if (!gotLock) {
     registerImmediate('p3394:bridge', () => {
       p3394AppBridge = maybeStartP3394Bridge();
     }, 'serial');
+    registerImmediate('skills:version-recovery', async () => {
+      const { recoverSkillVersionMutations } = await import('./features/skills/version-mutation-service');
+      const result = await recoverSkillVersionMutations(users.getActiveUserId());
+      if (result.finalized || result.restored || result.removed) {
+        log.info('skill version mutation recovery complete', result);
+      }
+    }, 'serial');
     createWindow();
     await consumeColdLaunchConnectorCallback();
 

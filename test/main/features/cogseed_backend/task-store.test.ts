@@ -117,4 +117,40 @@ describe('CogSeed task and session store', () => {
     expect(await store.listMateSessions(USER_B)).toEqual([]);
   });
 
+  it('freezes the current complete Skill versions when a task is created', async () => {
+    const versions = await import('../../../../src/main/features/skills/version-store');
+    const record = await versions.appendFullSkillVersion(USER_A, 'skill-versioned', {
+      operation: 'install',
+      files: [{ path: 'SKILL.md', content: '---\nname: skill-versioned\ndescription: test\n---\n' }],
+      source: { kind: 'manual_edit' },
+      security: { outcome: 'pass', findingCount: 0 },
+    });
+    const store = await backend();
+    const pinned = await store.createMateTask(USER_A, {
+      requestId: 'req-pinned-skill',
+      task: 'Use the versioned Skill.',
+      allowedSkillIds: ['skill-versioned'],
+    });
+    expect(pinned.task).toMatchObject({
+      skillVersionPinStatus: 'pinned',
+      skillVersionPins: [{
+        skillId: 'skill-versioned',
+        version: record.version,
+        revisionId: record.revisionId,
+        manifestHash: record.manifestHash,
+      }],
+    });
+    const runtimeSnapshots = await import('../../../../src/main/features/skills/runtime-snapshot-service');
+    const snapshotDir = runtimeSnapshots.skillRuntimeSnapshotDir(USER_A, 'skill-versioned', record.revisionId);
+    expect(fs.readFileSync(path.join(snapshotDir, 'SKILL.md'), 'utf8')).toContain('name: skill-versioned');
+
+    const partial = await store.createMateTask(USER_A, {
+      requestId: 'req-partial-skill-pins',
+      task: 'Use one versioned and one legacy Skill.',
+      allowedSkillIds: ['skill-versioned', 'skill-unversioned'],
+    });
+    expect(partial.task.skillVersionPinStatus).toBe('unpinned');
+    expect(partial.task.skillVersionPins).toHaveLength(1);
+  });
+
 });

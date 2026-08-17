@@ -30,6 +30,11 @@ describe('skills version-store', () => {
     await fs.writeFile(path.join(legacy, 'skill-a.json'), JSON.stringify([{ version: '0.1.0', at: '2026-01-01T00:00:00.000Z' }]), 'utf8');
     const mod = await import('../../../../src/main/features/skills/version-store');
     const list = await mod.listSkillVersions('u1', 'skill-a');
-    expect(list).toEqual([{ version: '0.1.0', at: '2026-01-01T00:00:00.000Z', canRollback: false }]);
+    expect(list).toEqual([expect.objectContaining({
+      version: '0.1.0',
+      at: '2026-01-01T00:00:00.000Z',
+      rollbackScope: 'skill_md_only',
+      canRollback: false,
+    })]);
   });
 });

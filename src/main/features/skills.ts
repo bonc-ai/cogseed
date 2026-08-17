@@ -68,6 +68,7 @@ import {
 } from './marketplace_biz';
 import { normalizeInstallVersion } from './marketplace_installs';
 import { NAME_DISPLAY_MAX_UNITS, nameDisplayWidth } from '../util/name-limit';
+import { captureSkillTree, normalizeSkillSnapshotPath } from './skills/snapshot-service';
 
 // Names hidden from the in-app skill source-tree view. Marketplace sidecars are tooling
 // metadata, not authored content — surfacing them confuses users and looks like noise.
@@ -2421,6 +2422,65 @@ export interface WriteSkillFileResult {
 }
 
 /**
+ * Recall-generated Skills have a stable asset binding. Route their edits
+ * through the same complete-tree version transaction as upgrades and
+ * rollbacks. The dynamic imports keep the legacy skills module usable during
+ * startup and avoid a static cycle through the Recall feature barrel.
+ */
+async function writeBoundRecallSkillFile(
+  skillId: string,
+  relpath: string,
+  content: string,
+  sidecarPatch: SkillOrkasMeta,
+): Promise<WriteSkillFileResult | undefined> {
+  const userId = getActiveUserId();
+  const bindings = await import('./recall/skill-binding-service');
+  const binding = (await bindings.listSkillBindings(userId)).find((item) => item.skillId === skillId);
+  if (!binding) return undefined;
+  const skill = await getCustomSkill(skillId);
+  if (!skill?.dir) return { ok: false, reason: 'missing_dir' };
+  let normalizedPath: string;
+  try {
+    normalizedPath = normalizeSkillSnapshotPath(relpath);
+  } catch {
+    return { ok: false, reason: 'invalid_path' };
+  }
+  const report = validateSkillFile({ relpath: normalizedPath, content });
+  void persistQualityReport({ uid: userId, kind: 'skill', id: skillId, report });
+  if (!report.ok) return { ok: false, report };
+  const current = await captureSkillTree(skill.dir);
+  const files = current.files
+    .filter((file) => file.path !== normalizedPath)
+    .map((file) => ({ path: file.path, content: file.content }));
+  files.push({ path: normalizedPath, content });
+  const versionStore = await import('./skills/version-store');
+  const mutation = await import('./skills/version-mutation-service');
+  const envelope = await versionStore.readSkillVersionEnvelope(userId, skillId);
+  await mutation.applySkillTreeVersion({
+    userId,
+    skillId,
+    files,
+    operation: 'manual_edit',
+    source: { kind: 'manual_edit', assetId: binding.assetId },
+    note: `Manual edit: ${normalizedPath}`,
+    expectedManifestHash: current.manifestHash,
+    expectedCurrentRevisionId: binding.currentRevisionId || envelope.currentRevisionId,
+    onVersionCommitted: async (record) => {
+      await bindings.refreshBindingsForSkill(userId, skillId, record.version, record.revisionId, record.manifestHash || '');
+      await bindings.updateSkillBinding(userId, binding.assetId, (existing) => ({
+        ...existing,
+        updatedAt: new Date().toISOString(),
+      }));
+    },
+  });
+  if (normalizedPath === 'SKILL.md' && _hasSkillSidecarPatch(sidecarPatch)) {
+    writeSkillOrkasMetaSync(skill.dir, sidecarPatch);
+  }
+  clearSkillImportDraftMarkerSync(skillId);
+  return { ok: true, report };
+}
+
+/**
  * Safely write content to `<skill_dir>/<relpath>` after running the quality
  * validator. Rejects:
  *   - path-escape attempts (`reason: 'invalid_path'`)
@@ -2530,6 +2590,8 @@ export async function writeSkillFileForEditChecked(
   const contentForWrite = isSkillMdWrite ? normalizeSkillMdForWrite(content, skillId) : content;
   const customDir = customSkillDir(skillId);
   if (fs.existsSync(customDir) && fs.statSync(customDir).isDirectory()) {
+    const versioned = await writeBoundRecallSkillFile(skillId, relpath, contentForWrite, sidecarPatch);
+    if (versioned) return versioned;
     return writeCustomSkillFileChecked(skillId, relpath, content);
   }
   if (isBuiltinSkill(skillId)) {
@@ -2546,6 +2608,63 @@ export async function writeSkillFileForEdit(
   content: string,
 ): Promise<boolean> {
   return (await writeSkillFileForEditChecked(skillId, relpath, content)).ok;
+}
+
+/** Batch variant used by the multi-file Skill edit protocol. Bound Recall
+ * Skills receive one complete-tree `manual_edit` version for the whole edit,
+ * while ordinary custom Skills keep their established per-file behavior. */
+export async function writeSkillFilesForEditChecked(
+  skillId: string,
+  files: Array<{ path: string; content: string }>,
+): Promise<WriteSkillFileResult[] | undefined> {
+  const userId = getActiveUserId();
+  const bindings = await import('./recall/skill-binding-service');
+  const binding = (await bindings.listSkillBindings(userId)).find((item) => item.skillId === skillId);
+  if (!binding) return undefined;
+  const skill = await getCustomSkill(skillId);
+  if (!skill?.dir) return files.map(() => ({ ok: false, reason: 'missing_dir' as const }));
+  const normalized: Array<{ path: string; content: string; sidecarPatch: SkillOrkasMeta }> = [];
+  const results: WriteSkillFileResult[] = [];
+  for (const file of files) {
+    const isSkillMd = file.path.toUpperCase() === 'SKILL.MD';
+    const sidecarPatch = isSkillMd
+      ? _skillSidecarPatchFromFrontmatter(splitSkillMd(file.content).meta)
+      : {};
+    const content = isSkillMd ? normalizeSkillMdForWrite(file.content, skillId) : file.content;
+    let relpath: string;
+    try { relpath = normalizeSkillSnapshotPath(file.path); }
+    catch { results.push({ ok: false, reason: 'invalid_path' }); continue; }
+    const report = validateSkillFile({ relpath, content });
+    void persistQualityReport({ uid: userId, kind: 'skill', id: skillId, report });
+    results.push({ ok: report.ok, report });
+    normalized.push({ path: relpath, content, sidecarPatch });
+  }
+  if (results.length !== files.length || results.some((result) => !result.ok)) return results;
+  const current = await captureSkillTree(skill.dir);
+  const nextByPath = new Map<string, { path: string; content: string }>(
+    current.files.map((file) => [file.path, { path: file.path, content: file.content }]),
+  );
+  for (const file of normalized) nextByPath.set(file.path, { path: file.path, content: file.content });
+  const versionStore = await import('./skills/version-store');
+  const mutation = await import('./skills/version-mutation-service');
+  const envelope = await versionStore.readSkillVersionEnvelope(userId, skillId);
+  await mutation.applySkillTreeVersion({
+    userId,
+    skillId,
+    files: Array.from(nextByPath.values()),
+    operation: 'manual_edit',
+    source: { kind: 'manual_edit', assetId: binding.assetId },
+    note: `Manual edit: ${normalized.map((file) => file.path).join(', ')}`,
+    expectedManifestHash: current.manifestHash,
+    expectedCurrentRevisionId: binding.currentRevisionId || envelope.currentRevisionId,
+    onVersionCommitted: async (record) => {
+      await bindings.refreshBindingsForSkill(userId, skillId, record.version, record.revisionId, record.manifestHash || '');
+    },
+  });
+  const skillMd = normalized.find((file) => file.path === 'SKILL.md');
+  if (skillMd && _hasSkillSidecarPatch(skillMd.sidecarPatch)) writeSkillOrkasMetaSync(skill.dir, skillMd.sidecarPatch);
+  clearSkillImportDraftMarkerSync(skillId);
+  return results;
 }
 
 interface SkillMetadataApplyResult {
@@ -3374,8 +3493,10 @@ async function _applySkillContainerEdit(
   const validationFailed: { path: string; report: QualityReport }[] = [];
   const validationWarnings: { path: string; report: QualityReport }[] = [];
   let touchedSkillMd = false;
-  for (const fb of files) {
-    const res = await writeSkillFileForEditChecked(skillId, fb.path, fb.content);
+  const managedBatch = await writeSkillFilesForEditChecked(skillId, files);
+  for (let index = 0; index < files.length; index += 1) {
+    const fb = files[index];
+    const res = managedBatch?.[index] || await writeSkillFileForEditChecked(skillId, fb.path, fb.content);
     if (res.ok) {
       written.push(fb.path);
       if (fb.path.toUpperCase() === 'SKILL.MD') touchedSkillMd = true;

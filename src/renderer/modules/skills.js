@@ -502,6 +502,19 @@ async function generateRecallSkillFromAsset(assetId) {
       fileCount: Number(draft.fileCount) || 0,
       workflowSteps: Array.isArray(draft.workflowSteps) ? draft.workflowSteps : [],
       validationOk: draft.validation?.ok === true,
+      ...(draft.mode ? { mode: draft.mode } : {}),
+      ...(draft.reviewDecision ? { reviewDecision: draft.reviewDecision } : {}),
+      ...(draft.targetSkillId ? { targetSkillId: draft.targetSkillId } : {}),
+      ...(draft.baseRevisionId ? { baseRevisionId: draft.baseRevisionId } : {}),
+      ...(draft.baseManifestHash ? { baseManifestHash: draft.baseManifestHash } : {}),
+      ...(draft.diff ? {
+        diffSummary: {
+          added: Number(draft.diff.added) || 0,
+          modified: Number(draft.diff.modified) || 0,
+          deleted: Number(draft.diff.deleted) || 0,
+          unchanged: Number(draft.diff.unchanged) || 0,
+        },
+      } : {}),
       ...(draft.recallContext ? {
         recallContext: {
           assetCount: Number(draft.recallContext.assetCount) || 0,
@@ -1512,6 +1525,15 @@ async function loadCognitionSkillUpdate(assetId, skillId) {
   try {
     const summary = await window.cogseed.invoke('cognition.skills.summary', { skillId });
     if (!summary?.ok) throw new Error(summary?.error || 'skill cognition summary failed');
+    let draft;
+    if (assetId) {
+      try {
+        const prepared = await window.cogseed.invoke('recall.skills.prepare', { assetId });
+        if (prepared?.ok && prepared.draft && prepared.draft.status === 'draft' && prepared.draft.mode === 'upgrade') draft = prepared.draft;
+      } catch (error) {
+        _skillsLog.warn('skill upgrade draft read degraded', { error: (error && error.message) || String(error) });
+      }
+    }
     let workspaceRefs = [];
     if (assetId) {
       try {
@@ -1521,11 +1543,23 @@ async function loadCognitionSkillUpdate(assetId, skillId) {
         _skillsLog.warn('workspace refs read degraded', { error: (error && error.message) || String(error) });
       }
     }
-    _skillsCognitionState.skillUpdate = { ...(summary.summary || {}), assetId, skillId, workspaceRefs };
+    _skillsCognitionState.skillUpdate = { ...(summary.summary || {}), assetId, skillId, workspaceRefs, ...(draft ? { draft } : {}) };
   } catch (error) {
     _skillsCognitionState.skillUpdate = { error: (error && error.message) || String(error), assetId, skillId };
   }
   if (_skillsCognitionState.page === 'skillupdate') renderSkillsCognitionSkillUpdate();
+}
+
+function _renderSkillTreeDiff(diff) {
+  if (!diff || !Array.isArray(diff.files)) {
+    return `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.skillupdate_diff_empty', '当前没有可显示的文件差异。'))}</div>`;
+  }
+  const summary = `${diff.added || 0} ${_cognitionText('cognition.skillupdate_diff_added', '新增')} · ${diff.modified || 0} ${_cognitionText('cognition.skillupdate_diff_modified', '修改')} · ${diff.deleted || 0} ${_cognitionText('cognition.skillupdate_diff_deleted', '删除')}`;
+  const files = diff.files.map((file) => {
+    const lines = Array.isArray(file.lines) ? file.lines.map((line) => `<div class="skill-diff-line is-${escapeHtml(line.type)}"><span>${line.type === 'added' ? '+' : line.type === 'deleted' ? '-' : ' '}</span><code>${escapeHtml(line.text || '')}</code></div>`).join('') : '';
+    return `<details class="skill-diff-file"><summary><strong>${escapeHtml(file.path || '')}</strong><span>${escapeHtml(file.status || '')}</span></summary>${file.truncated ? `<p class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.skillupdate_diff_truncated', '文件较大，仅显示摘要。'))}</p>` : ''}${lines}</details>`;
+  }).join('');
+  return `<div class="skill-diff-summary">${escapeHtml(summary)}</div><div class="skill-diff-files">${files || `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.skillupdate_diff_unchanged', '文件树没有变化。'))}</div>`}</div>`;
 }
 
 /** 每一类待办的用户可读标题。服务端只给 kind，措辞归渲染层。 */
@@ -2414,12 +2448,9 @@ function renderSkillsCognitionNonAsset() {
  * 能给真事实的部分照给：当前版本、回滚点、影响到的空间数、待决候选数，全部
  * 来自 `cognition.skills.summary` 与 `recall.workspaceRefs.list`。
  *
- * TODO(P5): 两处还缺后端契约，因此显示"待接入"而不是编内容——
- *   1. 候选的 diff 正文：`CognitionCandidateView` 只有 `diffAvailable` 布尔，
- *      没有读 diff 内容的口子；
- *   2. 「接受限域更新」：`cognition.candidates.decide` 硬校验
- *      `source === 'personal_ontology'`，skill_evolution 候选没有决策通道。
- * 按钮保留但禁用并说明原因——把入口藏掉会让人以为这个能力不存在。
+ * The Recall draft owns the real diff and the explicit accept/defer/reject
+ * decisions. Candidate projections remain read-only here, so the page never
+ * fabricates an update body or mutates a Skill outside the versioned flow.
  */
 function renderSkillsCognitionSkillUpdate() {
   const host = document.getElementById('skills-cognition-skillupdate-body');
@@ -2452,28 +2483,32 @@ function renderSkillsCognitionSkillUpdate() {
   // 回滚点不只是一行说明：`cognition.skills.rollback` 是真实通道，所以每个可
   // 回滚的版本直接给按钮。列出退路却不能走，等于告诉用户"你有退路"然后让他
   // 自己去别处找门。
-  const rollbackHtml = versions.filter((version) => version.canRollback).length
-    ? versions.filter((version) => version.canRollback).map((version) => `<button type="button" class="btn btn-sm" data-cognition-skill-rollback="${escapeHtml(summary.skillId || '')}" data-cognition-skill-version="${escapeHtml(String(version.version || ''))}">${escapeHtml(_cognitionText('cognition.skillupdate_rollback_to', '回滚到 v{v}').replace('{v}', String(version.version || '')))}</button>`).join('')
+  const rollbackCandidates = versions.filter((version) => version.canRollback && String(version.version || '') !== String(summary.version || ''));
+  const rollbackHtml = rollbackCandidates.length
+    ? rollbackCandidates.map((version) => `<button type="button" class="btn btn-sm" data-cognition-skill-rollback="${escapeHtml(summary.skillId || '')}" data-cognition-skill-version="${escapeHtml(String(version.version || ''))}">${escapeHtml(_cognitionText('cognition.skillupdate_rollback_to', '回滚到 v{v}').replace('{v}', String(version.version || '')))}</button>`).join('')
     : `<span class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.skillupdate_impact_no_rollback', '当前没有可回滚的历史版本。'))}</span>`;
-  const pendingNote = _cognitionText('cognition.skillupdate_diff_pending', '这次更新改了哪几条，还取不到：候选目前只告诉界面“有没有 diff”，没有 diff 正文的读取通道。');
-  const acceptNote = _cognitionText('cognition.skillupdate_accept_pending', 'Skill 类候选还没有接受通道，暂时只能在技能库里查看与回滚。');
+  const draft = summary.draft && summary.draft.status !== 'failed' ? summary.draft : null;
+  const diff = draft?.diff;
+  const pendingNote = _cognitionText('cognition.skillupdate_diff_pending', '升级草稿尚未生成，稍后重试即可。');
+  const acceptNote = draft?.draftHash ? '' : _cognitionText('cognition.skillupdate_accept_pending', '需要先生成升级草稿。');
+  const decision = draft?.reviewDecision || 'pending';
+  const decisionButtons = draft?.draftHash
+    ? `<button type="button" class="btn btn-sm btn-primary" data-cognition-skill-decision="accept" data-cognition-skill-asset="${escapeHtml(summary.assetId || '')}" data-cognition-skill-draft-hash="${escapeHtml(draft.draftHash)}">${escapeHtml(_cognitionText('cognition.skillupdate_accept', '接受升级'))}</button><button type="button" class="btn btn-sm" data-cognition-skill-decision="defer" data-cognition-skill-asset="${escapeHtml(summary.assetId || '')}" data-cognition-skill-draft-hash="${escapeHtml(draft.draftHash)}">${escapeHtml(_cognitionText('cognition.skillupdate_defer', '暂缓'))}</button><button type="button" class="btn btn-sm" data-cognition-skill-decision="reject" data-cognition-skill-asset="${escapeHtml(summary.assetId || '')}" data-cognition-skill-draft-hash="${escapeHtml(draft.draftHash)}">${escapeHtml(_cognitionText('cognition.skillupdate_reject', '拒绝本次升级'))}</button>`
+    : '';
   host.innerHTML = `${hero}<div class="cognition-candidate-layout">
     <article class="skills-cognition-card cognition-candidate-main">
       <div class="cognition-tree-branch-head"><strong>${escapeHtml(asset ? _abilityAssetDisplayTitle(asset) : (summary.skillId || ''))}</strong><span class="skills-cognition-status is-pending">${escapeHtml(_cognitionText('cognition.skillupdate_awaiting', '待决定'))}</span></div>
       <dl class="cognition-governance-facts">${facts}</dl>
-      <div class="skills-cognition-detail-block">
-        <strong>${escapeHtml(_cognitionText('cognition.skillupdate_changes', '本次改动'))}</strong>
-        <div class="skills-cognition-empty">${escapeHtml(pendingNote)}</div>
-      </div>
+      <div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.skillupdate_changes', '本次改动'))}</strong>${diff ? _renderSkillTreeDiff(diff) : `<div class="skills-cognition-empty">${escapeHtml(pendingNote)}</div>`}</div>
       <div class="skills-cognition-detail-block">
         <strong>${escapeHtml(_cognitionText('cognition.skillupdate_rollback', '回滚点'))}</strong>
         <div class="skills-cognition-actions">${rollbackHtml}</div>
       </div>
       <div class="skills-cognition-actions">
-        <button type="button" class="btn btn-sm btn-primary" disabled title="${escapeHtml(acceptNote)}">${escapeHtml(_cognitionText('cognition.skillupdate_accept', '接受限域更新'))}</button>
+        ${decisionButtons || `<span class="skills-cognition-meta">${escapeHtml(acceptNote)}</span>`}
         <button type="button" class="btn btn-sm" data-cognition-page-link="governance">${escapeHtml(_cognitionText('cognition.candidate_keep_current', '保持当前版本'))}</button>
       </div>
-      <p class="skills-cognition-meta">${escapeHtml(acceptNote)}</p>
+      <p class="skills-cognition-meta">${escapeHtml(decision === 'pending' ? _cognitionText('cognition.skillupdate_awaiting', '待决定') : decision)}</p>
     </article>
     <aside class="skills-cognition-card cognition-candidate-side">
       <h3>${escapeHtml(_cognitionText('cognition.skillupdate_impact', '影响预览'))}</h3>
@@ -2862,7 +2897,7 @@ function renderSkillsCognitionAssets() {
     : '';
   const skillAction = isRecallSkillAsset
     ? selected.generatedSkillId
-      ? `<button type="button" class="btn btn-sm btn-primary" data-cognition-open-skill="${escapeHtml(selected.generatedSkillId)}">${escapeHtml(_cognitionText('cognition.open_skill', '查看技能'))}</button>`
+      ? `<button type="button" class="btn btn-sm btn-primary" data-cognition-open-skill="${escapeHtml(selected.generatedSkillId)}">${escapeHtml(_cognitionText('cognition.open_skill', '查看技能'))}</button><button type="button" class="btn btn-sm" data-cognition-open-skill-update="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.governance_open_skill_versions', '版本与回退'))}</button>`
       : skillDraftReady
         ? `<button type="button" class="btn btn-sm btn-primary" data-recall-skill-import="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.add_to_skill_library', '加入技能库'))}</button>`
         : skillDraftNeedsModel
@@ -2968,10 +3003,10 @@ function renderSkillsCognitionGovernance() {
   const destructiveActions = actions.filter((action) => ['delete', 'revoke', 'purge'].includes(action)).map((action) => renderAction(action, true)).join('');
   const workspaceRefs = Array.isArray(selected.workspaceRefs) ? selected.workspaceRefs.filter(Boolean) : [];
   const writeOrigin = _abilityAssetWriteOriginLabel(selected.lifecycleStatus);
-  // 「查看更新候选」只在这条资产真的有待决更新、且真的生成过 Skill 时出现：
-  // 没有 skillId 就没有版本可比，点进去只会是一页空壳。
-  const upgradeEntry = upgradeAssetIds.has(selected.id) && selected.generatedSkillId
-    ? `<button type="button" class="btn btn-sm" data-cognition-open-skill-update="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.governance_open_update', '查看更新候选'))}</button>`
+  // 已绑定 Skill 的资产始终显示版本入口；有待决更新时把措辞升级为「查看更新候选」。
+  // 之前只在 inbox 有待办时显示，导致没有待决更新的 Skill 无法查看历史和回退。
+  const upgradeEntry = selected.generatedSkillId
+    ? `<button type="button" class="btn btn-sm" data-cognition-open-skill-update="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText(upgradeAssetIds.has(selected.id) ? 'cognition.governance_open_update' : 'cognition.governance_open_skill_versions', upgradeAssetIds.has(selected.id) ? '查看更新候选' : '版本与回退'))}</button>`
     : '';
   // 回滚点：用户问"我还能退回到哪一版"。版本历史是按需加载的，没展开过就还
   // 不知道——那时显示「展开版本历史后可见」并给出口，而不是显示「—」让人

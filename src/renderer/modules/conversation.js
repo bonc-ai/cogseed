@@ -12151,13 +12151,17 @@ function _formatToolDuration(ms) {
   return _formatProcessDuration(value);
 }
 
-function _runtimeDurationFromEvent(evt) {
-  if (!evt || typeof evt !== 'object' || evt.stream !== 'runtime') return '';
+function _runtimeDurationMsFromEvent(evt) {
+  if (!evt || typeof evt !== 'object' || evt.stream !== 'runtime') return null;
   const data = evt.data && typeof evt.data === 'object' ? evt.data : {};
   const duration = data.duration_ms ?? data.durationMs ?? data.elapsedMs;
   const n = Number(duration);
-  if (!Number.isFinite(n)) return '';
-  return _formatProcessDuration(n);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function _runtimeDurationFromEvent(evt) {
+  const duration = _runtimeDurationMsFromEvent(evt);
+  return duration === null ? '' : _formatProcessDuration(duration);
 }
 
 function _runtimeDurationFromProcessItem(item) {
@@ -14539,7 +14543,8 @@ function _formatEventLine(evt) {
   }
 
   if (stream === 'runtime') {
-    const duration = data?.duration_ms ?? data?.durationMs ?? data?.elapsedMs;
+    const duration = _runtimeDurationMsFromEvent(evt);
+    if (duration === null) return null;
     const parts = [t('chat.stream.runtime_total', { duration: _formatProcessDuration(duration) })];
     const timingParts = [
       ['provider_ms', 'chat.stream.runtime_model'],

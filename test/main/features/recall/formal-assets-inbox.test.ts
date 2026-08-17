@@ -234,6 +234,25 @@ describe('cognition inbox read model', () => {
       .map((entry) => entry.kind)).toEqual(['skill_creation_suggested']);
   });
 
+  it('does not repeat an upgrade after the binding catches up or the user rejects it', () => {
+    const generated = asset({
+      assetId: 'A-skill', assetType: 'skill_method',
+      payload: { kind: 'skill_method', generatedSkillId: 'skill-1' },
+    });
+    const changed = new Map([['A-skill', diff({
+      assetId: 'A-skill', actor: 'system', kinds: ['statement'], fromVersion: '1', toVersion: '2',
+    })]]);
+
+    expect(buildCognitionInbox(input({
+      assets: [generated], latestDiffs: changed,
+      skillUpgradeCurrentAssetIds: new Set(['A-skill']),
+    })).map((entry) => entry.kind)).not.toContain('skill_upgrade_suggested');
+    expect(buildCognitionInbox(input({
+      assets: [generated], latestDiffs: changed,
+      skillUpgradeRejectedAssetIds: new Set(['A-skill']),
+    })).map((entry) => entry.kind)).not.toContain('skill_upgrade_suggested');
+  });
+
   it('flags a system-side template rewrite at low disturbance', () => {
     const items = buildCognitionInbox(input({
       assets: [asset({ assetId: 'A-tpl', assetType: 'template', payload: { kind: 'template' } })],

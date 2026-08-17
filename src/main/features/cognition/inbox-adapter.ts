@@ -15,6 +15,7 @@ import { listFormalAssets } from '../recall/formal-assets';
 import { buildCognitionInbox, type CognitionInboxItem } from '../recall/formal-assets/inbox';
 import { latestAssetVersionDiff, type AssetVersionDiff } from '../recall/formal-assets/version-diff';
 import { readInstalledSkillForAsset } from '../recall/skill-draft-service';
+import { bindingHasDecision, bindingIsStale, readSkillBinding } from '../recall/skill-binding-service';
 import { listCognitionSources } from '../recall/source-catalog';
 
 const log = createLogger('cognition.inbox');
@@ -39,6 +40,8 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
   // 读失败时不能当成"还没生成"，否则会给用户一个可能重复创建 Skill 的假建议。
   // 资产本身仍保留给来源失效、敏感级等其他治理检查。
   const skillStateUnknownAssetIds = new Set<string>();
+  const skillUpgradeCurrentAssetIds = new Set<string>();
+  const skillUpgradeRejectedAssetIds = new Set<string>();
   const withSkillState = await Promise.all(assets.map(async (asset) => {
     if (asset.assetType !== 'skill_method' || asset.payload.kind !== 'skill_method') return asset;
     let generatedSkillId: string | undefined;
@@ -49,6 +52,19 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
       });
       skillStateUnknownAssetIds.add(asset.assetId);
       return asset;
+    }
+    try {
+      const binding = await readSkillBinding(userId, asset.assetId);
+      if (binding && !bindingIsStale(binding, asset.version)) {
+        skillUpgradeCurrentAssetIds.add(asset.assetId);
+      }
+      if (binding && bindingHasDecision(binding, asset.version, ['rejected'])) {
+        skillUpgradeRejectedAssetIds.add(asset.assetId);
+      }
+    } catch (error) {
+      log.warn('inbox skill binding read degraded', {
+        userId, assetId: asset.assetId, error: (error as Error).message,
+      });
     }
     return generatedSkillId
       ? { ...asset, payload: { ...asset.payload, generatedSkillId } }
@@ -87,5 +103,7 @@ export async function listCognitionInbox(userId: string): Promise<CognitionInbox
     unavailableSourceIds,
     latestDiffs,
     skillStateUnknownAssetIds,
+    skillUpgradeCurrentAssetIds,
+    skillUpgradeRejectedAssetIds,
   });
 }

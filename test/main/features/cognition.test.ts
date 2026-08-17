@@ -129,4 +129,50 @@ describe('cognition feature aggregate layer', () => {
     ]);
   });
 
+  it('exposes complete version metadata, file diffs, and rollback previews', async () => {
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(UID);
+    const versions = await import('../../../src/main/features/skills/version-store');
+    const cognition = await import('../../../src/main/features/cognition');
+    const first = await versions.appendFullSkillVersion(UID, 'skill-versioned', {
+      operation: 'install',
+      files: [
+        { path: 'SKILL.md', content: '---\nname: skill-versioned\ndescription: first\n---\n' },
+        { path: 'references/contract.md', content: 'first\n' },
+      ],
+      source: { kind: 'recall_asset', assetId: 'asset-a', assetVersion: '1' },
+      security: { outcome: 'pass', findingCount: 0 },
+    });
+    const second = await versions.appendFullSkillVersion(UID, 'skill-versioned', {
+      operation: 'upgrade',
+      files: [
+        { path: 'SKILL.md', content: '---\nname: skill-versioned\ndescription: second\n---\n' },
+        { path: 'references/contract.md', content: 'first\n' },
+        { path: 'references/example.md', content: 'new\n' },
+      ],
+      source: { kind: 'recall_asset', assetId: 'asset-a', assetVersion: '2' },
+      security: { outcome: 'pass', findingCount: 0 },
+      expectedCurrentRevisionId: first.revisionId,
+    });
+
+    await expect(cognition.getSkillCognitionSummary(UID, 'skill-versioned')).resolves.toMatchObject({
+      version: '2',
+      versions: [
+        { version: '2', revisionId: second.revisionId, operation: 'upgrade', rollbackScope: 'full_tree', canRollback: true },
+        { version: '1', revisionId: first.revisionId, operation: 'install', rollbackScope: 'full_tree', canRollback: true },
+      ],
+    });
+    await expect(cognition.diffSkillCognitionVersions(UID, 'skill-versioned', '1', '2')).resolves.toMatchObject({
+      added: 1, modified: 1, deleted: 0, unchanged: 1,
+    });
+    await expect(cognition.previewSkillCognitionRollback(UID, 'skill-versioned', '1')).resolves.toMatchObject({
+      currentVersion: '2',
+      currentRevisionId: second.revisionId,
+      targetVersion: '1',
+      targetRevisionId: first.revisionId,
+      rollbackScope: 'full_tree',
+      diff: { added: 0, modified: 1, deleted: 1, unchanged: 1 },
+    });
+  });
+
 });

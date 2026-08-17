@@ -85,6 +85,10 @@ export interface CognitionInboxInput {
   latestDiffs?: ReadonlyMap<string, AssetVersionDiff>;
   /** Skill 安装状态读取失败的资产。未知状态不能当成未生成。 */
   skillStateUnknownAssetIds?: ReadonlySet<string>;
+  /** 已安装 Skill 已经追上当前资产版本的资产，不应再次产生升级待办。 */
+  skillUpgradeCurrentAssetIds?: ReadonlySet<string>;
+  /** 用户已明确拒绝当前资产版本的升级，不应重复打扰。 */
+  skillUpgradeRejectedAssetIds?: ReadonlySet<string>;
 }
 
 const URGENCY: Record<CognitionInboxKind, CognitionInboxUrgency> = {
@@ -193,6 +197,8 @@ export function buildCognitionInbox(input: CognitionInboxInput): CognitionInboxI
     // 跟着自己变，仍然需要他决定要不要重新生成。
     if (asset.assetType === 'skill_method' && asset.payload.kind === 'skill_method'
       && asset.payload.generatedSkillId && diff
+      && !input.skillUpgradeCurrentAssetIds?.has(asset.assetId)
+      && !input.skillUpgradeRejectedAssetIds?.has(asset.assetId)
       && (diff.kinds.includes('statement') || diff.kinds.includes('boundary'))) {
       items.push(item('skill_upgrade_suggested', `skill-upgrade:${asset.assetId}`, asset.title, {
         assetType: asset.assetType,
