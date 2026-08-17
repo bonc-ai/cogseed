@@ -22,6 +22,7 @@ afterEach(() => {
 async function createAsset(input: { judgment: string; summary: string; causal?: boolean }) {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
   const candidate = await candidates.saveRecallCandidate('user-a', {
+      spaceId: 'workspace-a',
     judgment: input.judgment,
     summary: input.summary,
     suggestedType: input.causal ? 'rule' : 'skill_method',
@@ -50,6 +51,9 @@ describe('committed projection knowledge', () => {
     const projection = await import('../../../../src/main/features/recall/context-projection');
     const knowledge = await import('../../../../src/main/features/recall/projection-knowledge');
     await refs.addWorkspaceAssetReference('user-a', { assetId: selected.asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    // promote 自动挂载的 ref 用候选 scope（review）；测试要模拟"显式收窄到
+    // other"：先移除自动挂载，再手动挂 other。
+    await refs.removeWorkspaceAssetReference('user-a', `war-${unprojected.asset.id}-workspace-a`);
     await refs.addWorkspaceAssetReference('user-a', { assetId: unprojected.asset.id, workspaceId: 'workspace-a', scope: 'other' });
     const preview = await projection.previewContextProjection('user-a', {
       taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review',

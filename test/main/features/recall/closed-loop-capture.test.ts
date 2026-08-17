@@ -72,7 +72,7 @@ beforeEach(async () => {
   mocks.getConversation.mockResolvedValue({
     conversation_id: CONVERSATION_ID,
     title: 'Synthetic migration discussion',
-    project_id: 'workspace-closed-loop',
+    space_id: 'workspace-closed-loop',
   });
   mocks.buildRunner.mockResolvedValue({ runner: { run: mocks.runModel } });
   mocks.runModel.mockResolvedValue({

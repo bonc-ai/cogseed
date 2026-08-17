@@ -27,7 +27,6 @@ import {
   artifactDir,
   projectChatArtifactCidDir,
   projectArtifactDir,
-  spaceChatAttachmentDir,
   spaceChatArtifactCidDir,
   spaceArtifactDir,
   userAutoTasksDir,
@@ -272,13 +271,16 @@ export function projectSessionRoots(uid: string, cid: string): string[] {
 }
 
 export function chatAttachmentDirForConversation(uid: string, cid: string, projectHint?: string | null, spaceHint?: string | null): string {
-  if (spaceHint && safeId(spaceHint)) return spaceChatAttachmentDir(uid, spaceHint, cid);
+  // 与主流 coding agent 保持一致：聊天上传的附件不进空间文件夹（空间文件夹
+  // 只放 AI 产物），统一落全局 cloud/chat_attachments/<cid>/（项目作用域保留）。
+  // spaceHint 保留在签名中供调用方透传，但不再影响落位。
+  void spaceHint;
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid ? projectChatAttachmentDir(uid, pid, cid) : chatAttachmentDir(uid, cid);
 }
 
 export function chatAttachmentRelPath(uid: string, cid: string, name: string, projectHint?: string | null, spaceHint?: string | null): string {
-  if (spaceHint && safeId(spaceHint)) return `cloud/spaces/${spaceHint}/chat_attachments/${cid}/${name}`;
+  void spaceHint;
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid
     ? `cloud/projects/${pid}/chat_attachments/${cid}/${name}`

@@ -49,6 +49,7 @@ async function createAsset() {
     applicableWhen: ['Architecture review and runtime-boundary changes'],
     forbiddenWhen: ['Informal brainstorming without a decision'],
     suggestedScope: 'review,project',
+    spaceId: 'workspace-a',
     sourceRefs: [{ kind: 'execution', id: 'exec-a' }],
   });
   const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
@@ -65,6 +66,7 @@ async function createAssetWith(input: { judgment: string; summary: string; sourc
     applicableWhen: ['OAuth', 'database', 'architecture review', 'rules'],
     forbiddenWhen: ['Unrelated casual conversation'],
     suggestedScope: 'global',
+    spaceId: 'workspace-a',
     sourceRefs: [{
       kind: 'conversation',
       id: input.sourceId,

@@ -8488,25 +8488,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     if (bubble) _mountKstarResultReviewCard(bubble, message.kstar_review_card);
   }
 
-  if (message.recall_projection_card && typeof window.mountRecallProjectionCard === 'function') {
-    const bubble = msgDiv.querySelector('.chat-bubble');
-    if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
-      const recallProjectionHost = document.createElement('div');
-      const recallProjectionFallback = bubble.querySelector('.markdown-body');
-      bubble.appendChild(recallProjectionHost);
-      Promise.resolve(window.mountRecallProjectionCard(
-        recallProjectionHost,
-        message.recall_projection_card,
-        { cid: opts.cid || currentCid },
-      )).then(() => {
-        if (recallProjectionFallback && !recallProjectionHost.classList.contains('is-error')) {
-          recallProjectionFallback.hidden = true;
-        }
-      }).catch(() => {
-        // Keep the persisted text visible when the interactive card cannot mount.
-      });
-    }
-  }
+  // 预载卡片已按产品决策移除（2026-08-17）：引用资产走自动注入 + LLM 主动
+  // 检索工具（search_ability_assets），不再展示可交互的预载确认卡片。
+  // 历史消息里的 recall_projection_card 字段保留在数据中，仅以普通文本呈现。
 
   // Interactive web-app artifacts (assistant messages only) — sandboxed
   // `<iframe>` over the `chat-app://` protocol, appended after the form so it

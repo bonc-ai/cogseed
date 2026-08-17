@@ -1,3 +1,4 @@
+import { safeId } from '../../storage';
 import {
   saveRecallCandidate,
   type RecallCandidateAction,
@@ -5,10 +6,13 @@ import {
 } from '../recall/candidate-service';
 import type { KstarCandidateProposal } from './types';
 
-/** Save proposals into Recall's pending review queue. Promotion is intentionally not part of this bridge. */
+/** Save proposals into Recall's pending review queue. Promotion is intentionally not part of this bridge.
+ *  `spaceId`：任务/需求的工作空间归属（空间会话时即空间 id），透传给候选，
+ *  保证任务级沉淀的候选/资产带空间归属（空间资产 tab 显示 + 注入过滤命中）。 */
 export async function saveKstarCandidateProposals(
   userId: string,
   proposals: KstarCandidateProposal[],
+  options: { spaceId?: string } = {},
 ): Promise<RecallCandidateRecord[]> {
   const candidates: RecallCandidateRecord[] = [];
   for (const proposal of proposals.slice(0, 3)) {
@@ -32,6 +36,7 @@ export async function saveKstarCandidateProposals(
       ...(proposal.forbiddenWhen ? { forbiddenWhen: proposal.forbiddenWhen } : {}),
       ...(proposal.learningSignal ? { learningSignal: proposal.learningSignal } : {}),
       ...(proposal.learningProvenance ? { learningProvenance: proposal.learningProvenance } : {}),
+      ...(options.spaceId && safeId(options.spaceId) ? { spaceId: options.spaceId } : {}),
     }));
   }
   return candidates;

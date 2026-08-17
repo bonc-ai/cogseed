@@ -4302,24 +4302,31 @@ async function runActorTurnBody(
     // renders. The output text becomes finalText; failures populate
     // errText so the existing post-stream logic surfaces a ⚠️ bubble.
     //
-    // **CLI cwd = root workspace** (NOT the per-conv subdir used by the
-    // in-process branch). CLI session stores are cwd-hashed —
-    // `claude code` keeps sessions under `~/.claude/projects/<encoded-cwd>/`
-    // — so changing cwd between dispatches breaks `--resume <id>` with
-    // "No conversation found with session ID …". The per-conv subdir
-    // exists to group repeat-run artefacts from the in-process LLM's
-    // `write_file` tool; CLI agents have their own product-side
-    // conventions and don't need that scoping. Override here:
+    // **CLI cwd**：非空间会话保持根工作区（历史行为）。CLI session
+    // stores are cwd-hashed — `claude code` keeps sessions under
+    // `~/.claude/projects/<encoded-cwd>/` — so a cwd that changes between
+    // dispatches breaks `--resume <id>` with "No conversation found with
+    // session ID …"。空间会话则与内置智能体分支一致，cwd 进空间工作区
+    // （`spaces/<sid>/workspace/<slug>`）；slug 冻结在
+    // `state.workspace_dir`（conv_workspace 惰性派生一次后不再变），因此
+    // cwd 跨轮稳定，CLI resume 不受影响，同时保证空间隔离 + 空间产物扫描
+    // （spaces_artifacts 只扫空间会话工作区）能收到 CLI 产出。
     const userWorkspace = await import("../user_workspace");
-    const wsRoot = userWorkspace.getWorkspacePath(uid, turnProjectId);
-    // Coding agents (claude / codex) initialise the per-conversation
-    // `coding_project_dir` from the agent detail page's project-dir
-    // setting. Missing setting = effective workspace. Once a
-    // conversation has a dir, later turns keep using it; the agent can
-    // still ask the user to switch through the standard directory form.
-    // Non-coding CLIs always use the workspace. We defensively check
-    // the directory exists — if it vanished we fall back rather than
-    // failing the run.
+    let wsRoot: string;
+    if (turnSpaceId) {
+      const convWs = await import("./conv_workspace");
+      wsRoot = await convWs.getConversationWorkspacePath(uid, cid);
+    } else {
+      wsRoot = userWorkspace.getWorkspacePath(uid, turnProjectId);
+    }
+    // Coding agents (claude / codex / workbuddy) initialise the
+    // per-conversation `coding_project_dir` from the agent detail page's
+    // project-dir setting. Missing setting = effective workspace（空间会话
+    // 则为空间工作区目录）。Once a conversation has a dir, later turns
+    // keep using it; the agent can still ask the user to switch through
+    // the standard directory form. Non-coding CLIs always use the
+    // workspace. We defensively check the directory exists — if it
+    // vanished we fall back rather than failing the run.
     let cliWorkingDir = wsRoot;
     if (
       agentsFeat.cliIsCodingAgent(
@@ -4331,11 +4338,42 @@ async function runActorTurnBody(
         cliAgent,
         turnProjectId,
       );
-      cliWorkingDir = dirInfo.effective_path;
-      await _initializeCodingProjectDir(uid, cid, dirInfo);
+      // 空间会话：agent 详情页显式自定义目录（custom_path）仍优先；否则
+      // cwd = 空间工作区目录。
+      cliWorkingDir =
+        turnSpaceId && !dirInfo.custom_path ? wsRoot : dirInfo.effective_path;
+      await _initializeCodingProjectDir(uid, cid, {
+        ...dirInfo,
+        effective_path: cliWorkingDir,
+      });
       const st = await import("./state");
       const stateFile = await st.readState(uid, cid);
-      const projDir = stateFile.coding_project_dir;
+      let projDir = stateFile.coding_project_dir;
+      // 存量修复：空间会话的 coding_project_dir 若落在空间工作区之外
+      // （旧版固化的 userWorkSpace 根 / 换空间后的旧空间目录），且不是
+      // 用户显式选择 → 惰性重指空间工作区目录（与 conv_workspace 的惰性
+      // 迁移同思路，幂等）。空间工作区根 = wsRoot 的父目录
+      // （spaces/<sid>/workspace），避免在 bus 里动态 import paths。
+      if (
+        turnSpaceId &&
+        projDir &&
+        stateFile.coding_project_dir_explicit !== true
+      ) {
+        const spaceRoot = path.dirname(wsRoot);
+        const resolvedProj = path.resolve(projDir);
+        const inSpace =
+          resolvedProj === spaceRoot ||
+          resolvedProj.startsWith(spaceRoot + path.sep);
+        if (!inSpace) {
+          log.info(
+            `space conv coding_project_dir outside space root — re-pointing cid=${cid} sid=${turnSpaceId} ${projDir} -> ${cliWorkingDir}`,
+          );
+          await st.setCodingProjectDir(uid, cid, cliWorkingDir, {
+            explicit: false,
+          });
+          projDir = cliWorkingDir;
+        }
+      }
       if (projDir) {
         try {
           if (fs.statSync(projDir).isDirectory()) cliWorkingDir = projDir;

@@ -1567,6 +1567,84 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(st.coding_project_dir_explicit).toBe(true);
   });
 
+  it('routes a space conversation CLI cwd into the space workspace dir (spaces/<sid>/workspace/<slug>)', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'workbuddy' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const userWorkspace = await import('../../../../src/main/features/user_workspace');
+    const wsDir = userWorkspace.getWorkspacePath(TEST_UID);
+    const spaces = await import('../../../../src/main/features/spaces');
+    const chats = await import('../../../../src/main/features/chats');
+    const convWs = await import('../../../../src/main/features/group_chat/conv_workspace');
+    const created = await spaces.createSpace(TEST_UID, { name: '空间任务' });
+    if (!created.ok) throw new Error('create space failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(TEST_UID, { title: '空间任务', spaceId: sid });
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    await bus.enqueue({
+      uid: TEST_UID, cid: conv.conversation_id, fromActorId: 'user',
+      text: `@${AGENT_NAME} 看一下这个项目`,
+    });
+    await waitForQuiescent(TEST_UID, conv.conversation_id);
+
+    const expected = await convWs.getConversationWorkspacePath(TEST_UID, conv.conversation_id);
+    expect(expected).toContain(path.join('cloud', 'spaces', sid, 'workspace'));
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(expected);
+    expect(cliRunMock.calls[0].cwd).not.toBe(wsDir);
+    const st = await state.readState(TEST_UID, conv.conversation_id);
+    expect(st.coding_project_dir).toBe(expected);
+  });
+
+  it('re-points a stale non-explicit coding_project_dir (userWorkSpace root) to the space workspace dir', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'workbuddy' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const userWorkspace = await import('../../../../src/main/features/user_workspace');
+    const wsDir = userWorkspace.getWorkspacePath(TEST_UID);
+    const spaces = await import('../../../../src/main/features/spaces');
+    const chats = await import('../../../../src/main/features/chats');
+    const convWs = await import('../../../../src/main/features/group_chat/conv_workspace');
+    const created = await spaces.createSpace(TEST_UID, { name: '存量修复空间' });
+    if (!created.ok) throw new Error('create space failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(TEST_UID, { title: '存量任务', spaceId: sid });
+
+    // 先冻结 workspace_dir slug（与真实流程一致），再模拟旧版固化：
+    // coding_project_dir = 根工作区（非显式）
+    const expected = await convWs.getConversationWorkspacePath(TEST_UID, conv.conversation_id);
+    const stateFile = path.join(paths.userChatsDir(TEST_UID), conv.conversation_id, 'state.json');
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, JSON.stringify({
+      version: 1,
+      status: 'idle',
+      workspace_dir: path.basename(expected),
+      coding_project_dir: wsDir,
+    }));
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    await bus.enqueue({
+      uid: TEST_UID, cid: conv.conversation_id, fromActorId: 'user',
+      text: `@${AGENT_NAME} 看一下这个项目`,
+    });
+    await waitForQuiescent(TEST_UID, conv.conversation_id);
+
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(expected);
+    const st = await state.readState(TEST_UID, conv.conversation_id);
+    expect(st.coding_project_dir).toBe(expected);
+    expect(st.coding_project_dir_explicit).not.toBe(true);
+  });
+
   it('shows localized external-agent failure copy without raw backend diagnostics', async () => {
     const paths = await import('../../../../src/main/paths');
     const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');

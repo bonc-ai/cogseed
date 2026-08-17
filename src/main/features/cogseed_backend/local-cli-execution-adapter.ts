@@ -66,12 +66,18 @@ function promptFromInput(input: MateLocalCliExecutionInput): string {
 async function defaultWorkingDir(input: MateLocalCliExecutionInput): Promise<string> {
   const chats = await import('../chats');
   const conversation = await chats.getConversation(input.userId, input.conversationId);
-  const info = await getAgentCliProjectDirInfo(
-    input.userId,
-    input.agentId,
-    conversation?.project_id || undefined,
-  );
-  return info?.effective_path || getWorkspacePath(input.userId, conversation?.project_id || undefined);
+  const projectId = conversation?.project_id || undefined;
+  // 空间会话：cwd 进空间工作区（spaces/<sid>/workspace/<slug>），与内置
+  // 智能体 / group_chat CLI 分支一致 —— 保证空间隔离 + 空间产物扫描
+  // 能收到 CLI 产出。agent 详情页显式自定义目录仍优先。
+  const info = await getAgentCliProjectDirInfo(input.userId, input.agentId, projectId);
+  if (info?.custom_path && info.exists) return info.effective_path;
+  const sid = conversation ? (conversation as { space_id?: unknown }).space_id : undefined;
+  if (typeof sid === 'string' && sid) {
+    const { getConversationWorkspacePath } = await import('../group_chat/conv_workspace');
+    return getConversationWorkspacePath(input.userId, input.conversationId);
+  }
+  return info?.effective_path || getWorkspacePath(input.userId, projectId);
 }
 
 function resumeRejected(events: LocalEvent[]): boolean {
