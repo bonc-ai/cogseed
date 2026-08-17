@@ -32,9 +32,16 @@ function errResult(code: string, msg: string): ToolResult {
 /** P3394 自举接入指南（内嵌，引导时直接输出——不依赖外部包是否发布）。 */
 const P3394_BOOTSTRAP_GUIDE = [
   'P3394 接入指南（把它发给对方智能体，它能自行接入）：',
-  '1) 本机 CLI 智能体（Claude Code / Codex / 自研 CLI 等）：在对方机器执行',
-  '   npm install -g @cogseed/p3394-gateway 然后运行 p3394-gateway，',
-  '   预设 P3394_AGENT=hermes/claude/codex/opencode/gemini/aider，',
+  '1) 本机 CLI 智能体（Claude Code / Codex / 自研 CLI 等）：先检查本机是否已有',
+  '   P3394 网关（CogSeed 自带/已装），按顺序，有就直接用、不要从 NPM 拉：',
+  '   a) 已全局安装过：先跑 command -v p3394-gateway，有输出就直接用 p3394-gateway 启动；',
+  '   b) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：找 gateway.cjs——',
+  '      开发仓库在 <仓库根>/p3394-gateway/gateway.cjs；已安装的 macOS 应用在',
+  '      /Applications/CogSeed*.app/Contents/Resources/app.asar.unpacked/p3394-gateway/gateway.cjs',
+  '      （Windows: <安装目录>/resources/app.asar.unpacked/p3394-gateway/gateway.cjs）。',
+  '      找到后 node <该路径> 启动即等同于装了包；',
+  '   c) 以上都没有才：npm install -g @cogseed/p3394-gateway（包发布中；失败就回退 b 用 CogSeed 自带副本）。',
+  '   启动参数：预设 P3394_AGENT=hermes/claude/codex/opencode/gemini/aider，',
   '   自研 CLI 用 P3394_AGENT_CLI 与 P3394_AGENT_CLI_ARGS 自定义，',
   '   用 P3394_AGENT_ALIAS 自报显示名（CogSeed 对话里就显示这个名字）；',
   '   网关启动时会自动向 CogSeed 发 hello 注册（自报地址），注册完我就能主动调用它；',
@@ -85,8 +92,11 @@ function createSendTool(opts: P3394ToolsOpts): AgentTool {
       'one P3394 session (multi-turn continuity); a different goal opens a separate session (goal isolation). ' +
       "The reply is the peer's answer text; report it back to the user verbatim. " +
       'If the call fails (peer not registered or unreachable), do NOT retry blindly — tell the ' +
-      'user in plain language that the other Agent needs to install the P3394 package first: ' +
-      '"npm install -g @cogseed/p3394-gateway" and start it (see the error message for details).',
+      'user in plain language that the other Agent needs the P3394 gateway, which is BUNDLED ' +
+      'with CogSeed (no NPM needed): run `command -v p3394-gateway` on that machine, or use the ' +
+      'CogSeed bundled copy under …/app.asar.unpacked/p3394-gateway/gateway.cjs (dev repo: ' +
+      'p3394-gateway/gateway.cjs) and start it with node; only fall back to ' +
+      '"npm install -g @cogseed/p3394-gateway" when neither exists (see the error message for details).',
     inputSchema: {
       type: 'object',
       properties: {

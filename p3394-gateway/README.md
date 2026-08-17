@@ -3,13 +3,27 @@
 给对端 Agent 装的 **P3394 实现包**。装上即内建 P3394，与 CogSeed 直接互通 ——
 中间没有转接层，包本身就是 P3394 在对端的那一半（收消息 → 交给本机 Agent 模型 → 回消息）。
 
-## 安装（对端机器上，一行）
+## 安装/获取（对端机器上；本地优先，避免不必要的 NPM 拉取）
+
+按顺序检查，有就直接用：
 
 ```bash
+# a) 已全局安装过 → 直接用
+command -v p3394-gateway
+
+# b) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：
+#    开发仓库: <仓库根>/p3394-gateway/gateway.cjs
+#    macOS 已安装应用:
+ls /Applications/CogSeed*.app/Contents/Resources/app.asar.unpacked/p3394-gateway/gateway.cjs
+#    Windows: <安装目录>/resources/app.asar.unpacked/p3394-gateway/gateway.cjs
+#    找到后直接启动（等同于装了包）:
+#    node <上面找到的路径>
+
+# c) 以上都没有才从 NPM 装（包发布中；失败回退 b 用 CogSeed 自带副本）
 npm install -g @cogseed/p3394-gateway
 ```
 
-> 包尚未正式发布时，可用本地方式运行：拿到本目录后直接
+> 包尚未正式发布时，本地副本（b）是首选方式：拿到 `gateway.cjs` 后直接
 > `node gateway.cjs`（配置环境变量同上）。发布进度见 `PUBLISH.md`。
 
 ## 启动

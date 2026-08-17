@@ -20,8 +20,15 @@
  *   - Agent 运行期间写入 workspace/out/ 的文件随回复作为 resource part
  *     回传（digest 校验）——Artifact 端到端传递。
  *
- * 安装（对端机器上，一行）：
- *   npm install -g @cogseed/p3394-gateway
+ * 安装/获取（对端机器上；本地优先，有就直接用、不要从 NPM 拉）：
+ *   1) 已全局安装过：command -v p3394-gateway 有输出 → 直接用 p3394-gateway；
+ *   2) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：
+ *      开发仓库 <仓库根>/p3394-gateway/gateway.cjs；
+ *      macOS 已安装应用
+ *      /Applications/CogSeed*.app/Contents/Resources/app.asar.unpacked/p3394-gateway/gateway.cjs；
+ *      Windows <安装目录>/resources/app.asar.unpacked/p3394-gateway/gateway.cjs；
+ *      找到后 node <该路径> 启动即等同于装了包；
+ *   3) 以上都没有才：npm install -g @cogseed/p3394-gateway（发布中，失败回退 2）。
  * 启动（默认适配 Hermes）：
  *   COGSEED_ENDPOINT=http://127.0.0.1:8444 COGSEED_TOKEN=<token> p3394-gateway
  *
