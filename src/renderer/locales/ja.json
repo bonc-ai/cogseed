@@ -4388,5 +4388,7 @@
   "sidebar.new_task_ph": "タスク内容を入力して Enter で作成…",
   "sidebar.home": "ホーム",
   "cognition.maturity_transfer_validated": "移行済み検証",
-  "cognition.asset_write_origin_system": "システム沈殿"
+  "cognition.asset_write_origin_system": "システム沈殿",
+  "conversation_info.carried.permission.default": "通常",
+  "common.id_masked": "…"
 }

@@ -4695,5 +4695,7 @@
   "sidebar.new_task_ph": "输入任务描述，回车创建…",
   "sidebar.home": "首页",
   "cognition.maturity_transfer_validated": "已迁移验证",
-  "cognition.asset_write_origin_system": "系统沉淀"
+  "cognition.asset_write_origin_system": "系统沉淀",
+  "conversation_info.carried.permission.default": "常规",
+  "common.id_masked": "…"
 }

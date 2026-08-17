@@ -4388,5 +4388,7 @@
   "sidebar.new_task_ph": "Descreva a tarefa, Enter para criar…",
   "sidebar.home": "Início",
   "cognition.maturity_transfer_validated": "Validação transferida",
-  "cognition.asset_write_origin_system": "Precipitado pelo sistema"
+  "cognition.asset_write_origin_system": "Precipitado pelo sistema",
+  "conversation_info.carried.permission.default": "Padrão",
+  "common.id_masked": "…"
 }

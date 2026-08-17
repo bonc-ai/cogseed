@@ -4695,5 +4695,7 @@
   "sidebar.new_task_ph": "Describe the task, press Enter to create…",
   "sidebar.home": "Home",
   "cognition.maturity_transfer_validated": "Transfer validated",
-  "cognition.asset_write_origin_system": "System precipitated"
+  "cognition.asset_write_origin_system": "System precipitated",
+  "conversation_info.carried.permission.default": "Standard",
+  "common.id_masked": "…"
 }
