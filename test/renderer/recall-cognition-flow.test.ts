@@ -2966,7 +2966,7 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('生成任务接续快照');
   });
 
-  it('keeps the skill update action disabled while its decide channel is missing', () => {
+  it('shows the upgrade entry point while a draft is not yet available', () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };
     context.document = {
@@ -2987,10 +2987,9 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('v1.4');
     expect(host.innerHTML).toContain('v1.3');
     expect(host.innerHTML).toContain('影响 2 个引用空间');
-    // 缺的两处说清楚，且「接受」保持 disabled——不给假 toast。
-    expect(host.innerHTML).toContain('没有 diff 正文的读取通道');
-    expect(host.innerHTML).toContain('disabled');
-    expect(host.innerHTML).toContain('还没有接受通道');
+    // 没有草稿时明确说明原因；草稿准备完成后页面会显示真实 diff 和决策按钮。
+    expect(host.innerHTML).toContain('升级草稿尚未生成');
+    expect(host.innerHTML).toContain('需要先生成升级草稿');
     // 回滚有真实通道（cognition.skills.rollback），所以可回滚的版本给真按钮：
     // 列出退路却不能走，等于告诉用户"你有退路"再让他自己去别处找门。
     expect(host.innerHTML).toContain('data-cognition-skill-rollback="sk-1" data-cognition-skill-version="1.3"');

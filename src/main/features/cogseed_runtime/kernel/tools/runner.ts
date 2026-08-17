@@ -9,6 +9,7 @@ import type { MateConnectorManager } from '../../../cogseed_backend/connector-ma
 import type { MateKbManager } from '../../../cogseed_backend/mate-kb-store';
 import { mateRuntimeSessionToolResultsDir } from '../../../../paths';
 import type { RuntimeHostToolName } from '../../protocol';
+import type { RuntimeSkillVersionPin } from '../../protocol';
 import type { RuntimeHostToolClient } from './host-tools';
 
 export interface RuntimeToolRunnerOptions {
@@ -22,6 +23,7 @@ export interface RuntimeToolRunnerOptions {
   /** Main-process-derived capability grants; gates Commander-only tools. */
   capabilities?: readonly string[];
   allowedSkillIds?: readonly string[];
+  skillVersionPins?: readonly RuntimeSkillVersionPin[];
   maxInlineToolResultTokens?: number;
   connectorManager?: MateConnectorManager;
   kbManager?: MateKbManager;
@@ -49,6 +51,7 @@ export function createRuntimeToolRunner(options: RuntimeToolRunnerOptions): Runt
     pcDir: options.pcDir ?? process.cwd(),
     toolPolicy: options.toolPolicy,
     allowedSkillIds: options.allowedSkillIds ?? [],
+    skillVersionPins: options.skillVersionPins ?? [],
   };
   const capTokens = options.maxInlineToolResultTokens ?? DEFAULT_INLINE_RESULT_TOKENS;
   const toolResultsDir = mateRuntimeSessionToolResultsDir(options.userId, options.runtimeSessionId);

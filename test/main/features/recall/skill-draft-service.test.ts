@@ -221,6 +221,8 @@ describe('Recall skill draft service', () => {
           draftHash: preview.draftHash,
           fileCount: 15,
           validationOk: true,
+          mode: 'install',
+          targetSkillId: preview.skillName,
           recallContext: { assetCount: 1, sourceCount: 1 },
         }),
       }),
@@ -516,7 +518,7 @@ describe('Recall skill draft service', () => {
     await expect(service.confirmRecallSkillDraft(UID, asset.id, draft.draftHash)).rejects.toThrow(/file hash mismatch/i);
   });
 
-  it('keeps an installed old-version Skill and generates a separate current-version draft', async () => {
+  it('keeps the same installed Skill id and generates an upgrade draft', async () => {
     const service = await import('../../../../src/main/features/recall/skill-draft-service');
     const skills = await import('../../../../src/main/features/skills');
     const assets = await import('../../../../src/main/features/recall/asset-service');
@@ -524,19 +526,59 @@ describe('Recall skill draft service', () => {
     const firstDraft = await service.prepareRecallSkillDraft(UID, asset.id);
     if (firstDraft.status !== 'draft') throw new Error('expected first draft');
     const firstInstall = await service.confirmRecallSkillDraft(UID, asset.id, firstDraft.draftHash);
-    await assets.updateAbilityAsset(UID, asset.id, { statement: `${asset.statement} Use the approved release checklist.`, actor: 'user', reason: 'refresh release checklist' });
+    await expect(service.readRecallSkillFreshness(UID, asset.id, asset.version)).resolves.toMatchObject({
+      status: 'current', skillId: firstInstall.skill.id, installedAssetVersion: '1', currentAssetVersion: '1',
+    });
+    const updatedAsset = await assets.updateAbilityAsset(UID, asset.id, { statement: `${asset.statement} Use the approved release checklist.`, actor: 'user', reason: 'refresh release checklist' });
+    await expect(service.readRecallSkillFreshness(UID, asset.id, updatedAsset.version)).resolves.toMatchObject({
+      status: 'upgrade_available', skillId: firstInstall.skill.id, installedAssetVersion: '1', currentAssetVersion: '2',
+    });
 
-    expect(await service.readInstalledSkillForAsset(UID, asset.id)).toBeUndefined();
+    expect(await service.readInstalledSkillForAsset(UID, asset.id)).toBe(firstInstall.skill.id);
     const nextDraft = await service.prepareRecallSkillDraft(UID, asset.id);
     if (nextDraft.status !== 'draft') throw new Error('expected next draft');
     expect(nextDraft.assetVersion).toBe('2');
-    expect(nextDraft.skillName).not.toBe(firstInstall.skill.id);
+    expect(nextDraft.skillName).toBe(firstInstall.skill.id);
+    expect(nextDraft.mode).toBe('upgrade');
+    const cognitionAssets = await import('../../../../src/main/features/cognition/assets-adapter');
+    await expect(cognitionAssets.listCognitionAssets(UID, { category: 'skill_method' })).resolves.toEqual([
+      expect.objectContaining({
+        id: asset.id,
+        recallSkillDraft: expect.objectContaining({
+          mode: 'upgrade',
+          targetSkillId: firstInstall.skill.id,
+          diffSummary: expect.objectContaining({ modified: expect.any(Number) }),
+        }),
+      }),
+    ]);
+    await expect(service.decideRecallSkillDraft(UID, asset.id, nextDraft.draftHash, 'defer')).resolves.toMatchObject({
+      reviewDecision: 'deferred',
+    });
+    const bindings = await import('../../../../src/main/features/recall/skill-binding-service');
+    await expect(bindings.readSkillBinding(UID, asset.id)).resolves.toMatchObject({
+      decisions: expect.arrayContaining([expect.objectContaining({ assetVersion: '2', action: 'deferred' })]),
+    });
     expect(await skills.getCustomSkill(firstInstall.skill.id)).not.toBeNull();
 
     const nextInstall = await service.confirmRecallSkillDraft(UID, asset.id, nextDraft.draftHash);
-    expect(nextInstall.skill.id).not.toBe(firstInstall.skill.id);
+    expect(nextInstall.skill.id).toBe(firstInstall.skill.id);
     expect(await skills.getCustomSkill(firstInstall.skill.id)).not.toBeNull();
     expect(await skills.getCustomSkill(nextInstall.skill.id)).not.toBeNull();
+
+    const rollback = await (await import('../../../../src/main/features/skills/rollback-service')).rollbackSkillToVersion(UID, {
+      skillId: firstInstall.skill.id,
+      version: '1',
+    });
+    expect(rollback).toMatchObject({ ok: true, skillId: firstInstall.skill.id, restoredFromVersion: '1', rollbackScope: 'full_tree' });
+    const versions = await (await import('../../../../src/main/features/skills/version-store')).listSkillVersions(UID, firstInstall.skill.id);
+    expect(versions[0]).toMatchObject({ version: '3', operation: 'rollback', rollbackScope: 'full_tree', source: { restoredFromVersion: '1' } });
+    await expect(bindings.readSkillBinding(UID, asset.id)).resolves.toMatchObject({
+      installedAssetVersion: '2',
+      currentSkillVersion: '3',
+      currentRevisionId: versions[0].revisionId,
+      currentManifestHash: versions[0].manifestHash,
+    });
+    expect(fs.existsSync(path.join(tmpDir, UID, 'cloud', 'skills', firstInstall.skill.id, 'references', 'skill-spec.yaml'))).toBe(true);
   });
 
   it('rolls back a newly created skill when a checked file write fails', async () => {

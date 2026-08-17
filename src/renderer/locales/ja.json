@@ -4499,7 +4499,7 @@
   "cognition.skillupdate_spaces": "影響する空間",
   "cognition.skillupdate_awaiting": "判断待ち",
   "cognition.skillupdate_changes": "今回の変更",
-  "cognition.skillupdate_diff_pending": "What this update changes is not available yet: a candidate currently reports only whether a diff exists, with no channel to read the diff body.",
+  "cognition.skillupdate_diff_pending": "アップグレード案はまだ準備中です。しばらくしてから再試行してください。",
   "cognition.skillupdate_accept": "範囲を限定して更新を受け入れる",
   "cognition.skillupdate_accept_pending": "Skill candidates have no accept channel yet; for now you can review and roll back in the skill library.",
   "cognition.skillupdate_impact": "影響プレビュー",

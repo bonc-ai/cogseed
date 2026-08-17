@@ -165,6 +165,11 @@ const skillDraftMock = vi.hoisted(() => ({
     draft: { assetId, status: 'installed' },
     skill: { id: 'apply-recall-method', name: 'apply-recall-method' },
   })),
+  decideRecallSkillDraft: vi.fn(async (_uid: string, assetId: string, _draftHash: string, decision: string) => ({
+    assetId,
+    status: 'draft',
+    reviewDecision: decision === 'defer' ? 'deferred' : 'rejected',
+  })),
 }));
 
 vi.mock('electron', () => ({
@@ -324,6 +329,17 @@ describe('ipc › recall candidate governance', () => {
       draft: { status: 'failed', errorCode: 'model_not_configured', retryable: true },
     });
     expect(skillDraftMock.prepareRecallSkillDraft).toHaveBeenCalledWith(UID, 'aa-method');
+  });
+
+  it('routes explicit Recall Skill defer and reject decisions', async () => {
+    const draftHash = 'b'.repeat(64);
+    await expect(call('recall.skills.decide', { assetId: 'aa-method', draftHash, decision: 'defer' }))
+      .resolves.toMatchObject({ ok: true, draft: { reviewDecision: 'deferred' } });
+    await expect(call('recall.skills.decide', { assetId: 'aa-method', draftHash, decision: 'reject' }))
+      .resolves.toMatchObject({ ok: true, draft: { reviewDecision: 'rejected' } });
+    expect(skillDraftMock.decideRecallSkillDraft).toHaveBeenCalledWith(UID, 'aa-method', draftHash, 'reject');
+    await expect(call('recall.skills.decide', { assetId: 'aa-method', draftHash: 'bad', decision: 'defer' }))
+      .resolves.toMatchObject({ ok: false });
   });
 
   it('rejects invalid ids, enums, oversized text, and missing source refs before feature calls', async () => {

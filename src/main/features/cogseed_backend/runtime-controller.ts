@@ -26,6 +26,7 @@ export interface StartMateTaskInput {
   conversationId?: string;
   executionKind?: 'cogseed-native' | 'local-cli';
   allowedSkillIds?: string[];
+  skillVersionPins?: import('./types').MateTaskSkillVersionPin[];
   localCli?: MateLocalCliConfig;
   sessionId?: string;
   profileId?: string;
@@ -83,6 +84,7 @@ function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string;
     ...(input.agentId ? { agent_id: input.agentId } : {}),
     ...(input.executionKind ? { execution_kind: input.executionKind } : {}),
     ...(input.allowedSkillIds !== undefined ? { allowed_skill_ids: input.allowedSkillIds } : {}),
+    ...(input.skillVersionPins !== undefined ? { skill_version_pins: input.skillVersionPins } : {}),
     ...(input.runtimeSessionId ? { runtime_session_id: input.runtimeSessionId } : {}),
     ...(input.context ? { context: input.context } : {}),
     ...(input.attachments ? { attachments: input.attachments } : {}),
@@ -297,6 +299,7 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
         ...(retried.conversationId ? { conversationId: retried.conversationId } : {}),
         ...(retried.executionKind ? { executionKind: retried.executionKind } : {}),
         ...(retried.allowedSkillIds !== undefined ? { allowedSkillIds: retried.allowedSkillIds } : {}),
+        ...(retried.skillVersionPins !== undefined ? { skillVersionPins: retried.skillVersionPins } : {}),
         ...(retried.localCli ? { localCli: retried.localCli } : {}),
         ...(retried.profileId ? { profileId: retried.profileId } : {}),
         capabilities,
@@ -326,6 +329,7 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
           ...(reserved.conversationId ? { conversationId: reserved.conversationId } : {}),
           ...(reserved.executionKind ? { executionKind: reserved.executionKind } : {}),
           ...(reserved.allowedSkillIds !== undefined ? { allowedSkillIds: reserved.allowedSkillIds } : {}),
+          ...(reserved.skillVersionPins !== undefined ? { skillVersionPins: reserved.skillVersionPins } : {}),
           ...(reserved.localCli ? { localCli: reserved.localCli } : {}),
           ...(input.profileId || reserved.profileId ? { profileId: input.profileId || reserved.profileId } : {}),
           ...(input.context ? { context: input.context } : {}),

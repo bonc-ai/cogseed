@@ -4499,7 +4499,7 @@
   "cognition.skillupdate_spaces": "Espaços afetados",
   "cognition.skillupdate_awaiting": "Aguardando decisão",
   "cognition.skillupdate_changes": "O que mudou",
-  "cognition.skillupdate_diff_pending": "What this update changes is not available yet: a candidate currently reports only whether a diff exists, with no channel to read the diff body.",
+  "cognition.skillupdate_diff_pending": "O rascunho da atualização ainda não está pronto. Tente novamente em instantes.",
   "cognition.skillupdate_accept": "Aceitar atualização delimitada",
   "cognition.skillupdate_accept_pending": "Skill candidates have no accept channel yet; for now you can review and roll back in the skill library.",
   "cognition.skillupdate_impact": "Prévia de impacto",

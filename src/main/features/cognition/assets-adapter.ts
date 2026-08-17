@@ -74,6 +74,19 @@ export async function listCognitionAssets(
           fileCount: currentSkillDraft.files.length,
           workflowSteps: currentSkillDraft.proposal?.workflowSteps || [],
           validationOk: currentSkillDraft.validation.ok,
+          mode: currentSkillDraft.mode,
+          ...(currentSkillDraft.reviewDecision ? { reviewDecision: currentSkillDraft.reviewDecision } : {}),
+          targetSkillId: currentSkillDraft.targetSkillId,
+          ...(currentSkillDraft.baseRevisionId ? { baseRevisionId: currentSkillDraft.baseRevisionId } : {}),
+          ...(currentSkillDraft.baseManifestHash ? { baseManifestHash: currentSkillDraft.baseManifestHash } : {}),
+          ...(currentSkillDraft.diff ? {
+            diffSummary: {
+              added: currentSkillDraft.diff.added,
+              modified: currentSkillDraft.diff.modified,
+              deleted: currentSkillDraft.diff.deleted,
+              unchanged: currentSkillDraft.diff.unchanged,
+            },
+          } : {}),
           ...(currentSkillDraft.recallContext ? {
             recallContext: {
               assetCount: currentSkillDraft.recallContext.assetIds.length,

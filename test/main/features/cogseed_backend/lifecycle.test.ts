@@ -62,4 +62,41 @@ describe('CogSeed task lifecycle', () => {
     await lifecycle.transitionMateTask(USER, retried.taskId, 'cancelled');
     await expect(lifecycle.transitionMateTask(USER, retried.taskId, 'queued')).rejects.toThrow(/terminal|transition/i);
   });
+
+  it('keeps the original Skill version pins when retrying a task', async () => {
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const versions = await import('../../../../src/main/features/skills/version-store');
+    const version = await versions.appendFullSkillVersion(USER, 'skill-a', {
+      operation: 'install',
+      files: [{
+        path: 'SKILL.md',
+        content: '---\nname: skill-a\ndescription: lifecycle fixture\n---\n',
+      }],
+      source: { kind: 'manual_edit' },
+      security: { outcome: 'pass', findingCount: 0 },
+    });
+    const created = (await tasks.createMateTask(USER, {
+      requestId: 'req-lifecycle-pinned',
+      task: 'Run with the frozen Skill.',
+      allowedSkillIds: ['skill-a'],
+      skillVersionPins: [{
+        skillId: 'skill-a',
+        version: version.version,
+        revisionId: version.revisionId,
+        manifestHash: version.manifestHash!,
+      }],
+    })).task;
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    await lifecycle.transitionMateTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionMateTask(USER, created.taskId, 'running');
+    await lifecycle.markMateTaskRecoverable(USER, created.taskId, 'worker_exit');
+
+    // A retry must continue to use the frozen reference even if the legacy
+    // version envelope is unavailable during migration/recovery.
+    fs.rmSync(versions.skillVersionsPath(USER, 'skill-a'), { force: true });
+
+    const retried = await lifecycle.retryMateTask(USER, created.taskId, 'req-lifecycle-pinned-retry');
+    expect(retried.skillVersionPins).toEqual(created.skillVersionPins);
+    expect(retried.skillVersionPinStatus).toBe('pinned');
+  });
 });
