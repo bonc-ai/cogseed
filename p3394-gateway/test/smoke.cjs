@@ -551,6 +551,12 @@ async function main() {
     try { process.kill(lastPid, 0); psPidGone = false; } catch { /* ESRCH → 已回收 */ }
   }
   check('claude 常驻：取消终止常驻进程（pid 已回收）', lastPid > 0 && psPidGone);
+  // 取消后队列必须不卡死：被取消轮次的 deliver promise 若不被 reject，串行
+  // 队列会被挂起任务永久阻塞（回归：cancel 曾只置 turn=null 不 reject）。
+  const psMsg4 = { message_id: 'ps5', session_id: 's-persistent', task_id: 'pstk4', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'after cancel' }] }, idempotency_key: 'idem-ps4' };
+  await request(PERSISTENT_PORT, 'POST', '/p3394/envelope', { envelope: psMsg4 }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 's-persistent' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('after cancel')); i += 1) await sleep(100);
+  check('claude 常驻：取消后队列不卡死（新消息正常回复）', received.some((e) => e.session_id === 's-persistent' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('PERSISTENT-1:after cancel')));
   persistentGw.kill('SIGTERM');
 
   gateway.kill('SIGTERM');

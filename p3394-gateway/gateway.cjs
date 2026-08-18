@@ -1037,9 +1037,9 @@ class ClaudePersistentRuntime {
     entry.child = child;
     let stderrLog = '';
     child.stderr.on('data', (chunk) => {
+      // 常驻进程的 stderr 是 claude 的 ERROR/MCP 日志，转发进气泡会污染正文
+      // （工具调用的过程可见性由 stdout 的 stream_event 事件承担），只收集。
       if (stderrLog.length < 8 * 1024) stderrLog += chunk;
-      const visible = sanitizeStreamText(chunk.toString('utf8'));
-      if (visible) entry.turn?.onDelta?.(visible); // 进度/stderr 也实时可见
     });
     child.stdout.on('data', (chunk) => {
       entry.buf += chunk.toString('utf8');
@@ -1146,10 +1146,14 @@ class ClaudePersistentRuntime {
         resolve: (value) => { this.turnKeys.delete(cancelKey); resolve(value); },
         reject: (error) => { this.turnKeys.delete(cancelKey); reject(error); },
         timer: setTimeout(() => {
-          // 超时：挂死的轮次不能占着常驻进程，杀掉重建（上下文由 transcript 恢复）。
+          // 超时：挂死的轮次不能占着常驻进程，立即丢弃该会话并杀掉进程重建
+          // （上下文由 transcript 恢复）。不依赖 close 事件：否则窗口期内
+          // 下一次 deliver 可能复用濒死的进程写 stdin。
+          const turn = entry.turn;
           entry.turn = null;
           this.turnKeys.delete(cancelKey);
           try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+          this._dropSession(sessionId);
           reject(new Error('p3394_claude_timeout'));
         }, STREAM_JSON_TIMEOUT_MS),
         accumulated: '',
@@ -1172,9 +1176,14 @@ class ClaudePersistentRuntime {
     const entry = this.sessions.get(sessionId);
     if (!entry) return false;
     this.turnKeys.delete(taskId);
+    // 必须 reject 挂起的 turn：否则 handleEnvelope 的 deliver promise 永不
+    // settle，gateway 的串行队列（enqueue）会被这个挂起任务永久卡死，后续
+    // 所有消息都不再执行。错误回信由 handleCancel 的 cancelledTasks 抑制。
     if (entry.turn) {
       clearTimeout(entry.turn.timer);
+      const turn = entry.turn;
       entry.turn = null;
+      turn.reject(new Error('p3394_claude_cancelled'));
     }
     // 取消 = 终止该 session 的常驻进程：claude stream-json 无 interrupt
     // 输入，kill 最可靠；下一轮 deliver 重新 spawn（首轮带 transcript）。
