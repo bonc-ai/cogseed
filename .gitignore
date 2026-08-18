@@ -54,6 +54,7 @@ package.json.new
 # open-source repository — stripped at release time by
 # scripts/strip-closed-source-scanner.mjs.
 /resources/guardrail/skill-sentry/
+/resources/guardrail/skill-declaration-core/
 /resources/guardrail/nseap-security-core/
 
 # Generated at release time by scripts/pin-scanner-integrity.mjs. Describes the

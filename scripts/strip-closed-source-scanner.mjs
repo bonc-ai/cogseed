@@ -68,10 +68,13 @@ if (args.help) {
 }
 
 const guardrail = path.join(args.root, 'resources', 'guardrail');
-// 两棵闭源引擎树：skill-sentry（深度扫描器）+ nseap-security-core（NSEAP 核心）。
+// 闭源引擎树：skill-sentry（深度扫描器）+ nseap-security-core / 其品牌分支
+// 重命名后的 skill-declaration-core（NSEAP 核心）。沿用旧名是为了兼容
+// 不同 checkout 阶段的名字——任一存在即剥离。
 const CLOSED_SOURCE_TREES = [
   'skill-sentry',
   'nseap-security-core',
+  'skill-declaration-core',
 ];
 const marker = path.join(guardrail, 'SCANNER_ABSENT');
 
