@@ -134,7 +134,7 @@ async function _dispatchNextQueued(cid) {
   // Inline skill / connector tokens are expanded at dispatch time. Agent runs
   // are just "run <name>" text — no flag. Legacy queued rows may still carry a
   // separate `use` field; keep honoring it until old localStorage drains.
-  // Recipient prefix (`@<agent>`) is applied from the enqueue-time snapshot.
+  // Structured recipient routing is rebuilt from the enqueue-time snapshot.
   // Falling back to current chip is only for legacy queue rows persisted before
   // snapshots existed.
   let use = _queueItemUseSelection(next);
@@ -165,6 +165,9 @@ async function _dispatchNextQueued(cid) {
     ? next.content
     : applyRecipientPrefix(withUse, 'conversation', { recipientSnapshot: next.recipient });
   const extra = next.extra && typeof next.extra === 'object' ? { ...next.extra } : {};
+  if (!next.direct && typeof _recipientRoutingFields === 'function') {
+    Object.assign(extra, _recipientRoutingFields(next.recipient));
+  }
   if (!Array.isArray(extra.use_selections) && typeof _normalizeChatUseSelections === 'function') {
     const selections = _normalizeChatUseSelections([
       ...inlineUseSelections,
@@ -188,7 +191,12 @@ async function _dispatchNextQueued(cid) {
   Promise.resolve(sendInCurrentConversation(
     content,
     Object.keys(extra).length ? extra : undefined,
-    { from_queue: true, source_view: 'conversation', onStarted: removeStartedItem },
+    {
+      from_queue: true,
+      source_view: 'conversation',
+      agent_id: String(extra.recipient_agent_id || ''),
+      onStarted: removeStartedItem,
+    },
   )).catch(() => {});
 }
 

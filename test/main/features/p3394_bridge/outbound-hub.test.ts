@@ -34,6 +34,21 @@ function replyEnvelope(): P3394Envelope {
   } as never);
 }
 
+function streamEnvelope(text: string, sequence: number): P3394Envelope {
+  return envelope({
+    message_id: 'msg-out-stream-' + sequence,
+    kind: 'event',
+    performative: 'inform',
+    sender: { agent_id: 'hermes' },
+    recipients: [{ agent_id: 'cogseed' }],
+    payload: {
+      parts: [{ type: 'text', text }],
+      metadata: { stream_event: 'delta', stream_seq: sequence },
+    },
+    idempotency_key: 'idem-out-stream-' + sequence,
+  } as never);
+}
+
 const MANIFEST = {
   spec_version: 'p3394/1.0',
   identity: { agent_id: 'hermes', display_name: 'Hermes' },
@@ -107,6 +122,27 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     const result = await sendPromise;
     expect(result.text).toBe('hello cogseed, reply here');
     expect(p3394EnvelopeReplyText(replyEnvelope())).toBe('hello cogseed, reply here');
+  });
+
+  it('forwards stream events without resolving or executing the terminal waiter', async () => {
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer]);
+    const chunks: string[] = [];
+    const sendPromise = hub.sendAndWait('hermes', envelope(), (event) => chunks.push(event.text));
+    expect(hub.tryResolveReply(streamEnvelope('hello ', 1))).toBe(true);
+    expect(hub.tryResolveReply(streamEnvelope('hello ', 1))).toBe(true);
+    expect(hub.tryResolveReply(streamEnvelope('world', 2))).toBe(true);
+    expect(hub.tryResolveReply(replyEnvelope())).toBe(true);
+    const result = await sendPromise;
+    expect(chunks).toEqual(['hello ', 'world']);
+    expect(result.text).toBe('hello cogseed, reply here');
   });
 
   it('replays a submitted envelope after the peer becomes available', async () => {

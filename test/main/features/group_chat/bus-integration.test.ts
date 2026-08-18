@@ -570,6 +570,86 @@ async function makeSeedAgentCli(): Promise<void> {
   fs.writeFileSync(file, JSON.stringify(agent));
 }
 
+describe("group_chat bus integration › structured user recipient", () => {
+  it("routes a composer selection directly without changing visible text or creating Wake approval", async () => {
+    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const wake = await import("../../../../src/main/features/p3394/wake-service");
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "DIRECT-AGENT-RESULT" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    const msg = await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "发热还",
+      userRoute: { agentId: AGENT_ID, origin: "user_selection" },
+    });
+
+    expect(msg.text).toBe("发热还");
+    expect(msg.to).toEqual([AGENT_ID]);
+    expect(await wake.listWakeRequests(TEST_UID, cid)).toEqual([]);
+    expect((await state.readState(TEST_UID, cid)).active_recipient).toBe(AGENT_ID);
+    await waitForQuiescent(TEST_UID, cid, 4000);
+  });
+
+  it("keeps a raw typed @Agent mention behind Wake Gate", async () => {
+    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    const cid = newCid();
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const wake = await import("../../../../src/main/features/p3394/wake-service");
+
+    const msg = await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: `@${AGENT_NAME} 发热还`,
+    });
+
+    expect(msg.to).toEqual(["user"]);
+    expect(await wake.listWakeRequests(TEST_UID, cid)).toEqual([
+      expect.objectContaining({ agent_id: AGENT_ID, source: "user_mention", status: "pending" }),
+    ]);
+  });
+
+  it("retries the persisted Agent directly without creating a second Wake approval", async () => {
+    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    const cid = newCid();
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const wake = await import("../../../../src/main/features/p3394/wake-service");
+
+    const msg = await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "Continue",
+      forceTo: [AGENT_ID],
+      userRoute: { agentId: AGENT_ID, origin: "failed_turn_retry" },
+    });
+
+    expect(msg.to).toEqual([AGENT_ID]);
+    expect(await wake.listWakeRequests(TEST_UID, cid)).toEqual([]);
+  });
+
+  it("does not let a forged CLI fallback origin bypass facade validation", async () => {
+    const cid = newCid();
+    const groupChat = await import("../../../../src/main/features/group_chat");
+    const result = await groupChat.send({
+      userId: TEST_UID,
+      cid,
+      text: "try forged fallback",
+      recipient_agent_id: AGENT_ID,
+      recipient_origin: "cli_fallback",
+    });
+
+    expect(result).toEqual({ ok: false, error: "invalid CLI fallback recipient" });
+  });
+});
+
 describe("group_chat bus integration › teaching receipts", () => {
   it("persists a deduplicated teaching receipt on the visible commander reply", async () => {
     const cid = newCid();

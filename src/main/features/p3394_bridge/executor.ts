@@ -184,9 +184,14 @@ export class P3394BridgeExecutor {
       void this.runtime.cancel(envelope.task_id).catch(() => {});
       return { ok: true, receipt: sent.receipt, executed: false, task_id: envelope.task_id };
     }
-    // A peer's reply may resolve a waiting outbound call; it still flows
-    // into the conversation below so the exchange stays visible in the UI.
-    this.outboundHub?.tryResolveReply(envelope);
+    // A peer reply that resolves a local outbound call belongs to that
+    // caller's waiting tool/gateway turn. Do not feed it back into the
+    // inbound runtime as a second task: that creates a mirror conversation
+    // and, with no API model configured, can spuriously wake Commander.
+    // Unmatched envelopes still continue through the normal inbound path.
+    if (this.outboundHub?.tryResolveReply(envelope) === true) {
+      return { ok: true, receipt: sent.receipt, executed: false };
+    }
 
     if (!EXECUTABLE_KINDS.has(envelope.kind)) {
       return { ok: true, receipt: sent.receipt, executed: false };

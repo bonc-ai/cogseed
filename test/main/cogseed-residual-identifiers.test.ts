@@ -55,6 +55,7 @@ describe('CogSeed residual identifiers', () => {
     expect(agents).not.toContain('window.orkas.{invoke, stream}');
     const claude = read('CLAUDE.md');
     expect(claude).toContain('AGENTS.md');
+    expect(claude).not.toContain('window.orkas.{invoke, stream}');
   });
 
   it('uses a canonical cogseed temp prefix for local imports', async () => {
