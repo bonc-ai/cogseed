@@ -194,7 +194,7 @@
   // 空间详情/任务页的三 tab 数据（阶段 2 起接真实 IPC：spaces.conversations/artifacts/assets.list）
   let _sessions = [];        // 任务 = 空间下会话（listSpaceConversations）
   let _artifacts = [];       // 产物 = 附件 + artifact（listSpaceArtifacts）
-  let _assets = [];          // 资产 = asset_reference_bindings（listSpaceAssetBindings）
+  let _assets = [];          // 资产 tab = 本空间沉淀资产（recall.assets.listForSpace）
   let _detailLoadedFor = null;  // 已加载详情的 space_id（切空间才重载）
   const _assetTypes = ['全部', '个人身份与偏好', '决策规则与方法', '文档模板及项目事实', '可复用的技能'];
   // 基础 Agent 候选 = 本机真实安装的 CLI agent（localAgents.list 探测，非硬编码）
@@ -356,7 +356,7 @@
   let _refPickerTargetCid = null;  // null=新建任务待提交；cid=给已有任务补引用
   let _refSearch = '';
   let _artifactCatalog = [];       // 空间产物（spaces.artifacts.list）
-  let _assetCatalog = [];          // 空间资产（spaces.assets.list）
+  let _assetCatalog = [];          // 引用选择器资产（recall.assets.listForSpace）
   let _pendingRefs = [];           // 待提交/编辑的引用（TaskReference 形状）
   let _refBeforeRefs = [];         // 打开选择器时的已存引用（用于对比增删）
   // ── 空间设置抽屉（可编辑：指令 / 能力调整 / 主技能 / 失效清理）─────────────

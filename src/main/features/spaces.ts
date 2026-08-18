@@ -64,8 +64,6 @@ export interface Space {
   gate_status?: SpaceGateStatus;
   /** 空间绑定的 Main Skill（引用不复制；AssetRef 契约与 main-skill-baseline 对齐）。 */
   main_skill_ref?: SpaceAssetRef;
-  /** 空间对正式资产的版本引用绑定（默认 review_required；PRD §3.4.2）。 */
-  asset_reference_bindings?: SpaceAssetReferenceBinding[];
   /** 置顶时间（侧栏/空间中心置顶排序用；缺失 = 未置顶）。 */
   pinned_at?: string;
   created_at: string;
@@ -109,35 +107,22 @@ export type SpaceType = 'complex_project' | 'professional_work' | 'recurring_rou
  *  workbench/gate.ts::evaluateWorkspaceGate 实时判断为准（本字段只作缓存/标记）。 */
 export type SpaceGateStatus = 'not_checked' | 'passed' | 'failed';
 
-/** 空间对正式资产的引用策略（PRD §3.4.2）。 */
-export type AssetReferencePolicy = 'pinned' | 'review_required' | 'follow_latest_compatible';
-
-/** 能力资产引用（引用不复制；字段名与 workbench/main-skill-baseline 的 AssetRef 对齐）。 */
+/** 能力资产引用（引用不复制；字段名与 workbench/main-skill-baseline 的 AssetRef 对齐）。
+ *  仅服务 main_skill_ref（主技能）；历史 asset_reference_bindings（账本 A）已删除。 */
 export interface SpaceAssetRef {
   asset_id: string;
   version: string;
   content_hash?: string;
 }
 
-/** 空间资产引用绑定：一个正式资产版本 + 引用策略。 */
-export interface SpaceAssetReferenceBinding extends SpaceAssetRef {
-  policy: AssetReferencePolicy;
-  bound_at: string;
-  updated_at?: string;
-}
-
 const SPACE_TYPES: readonly SpaceType[] = ['complex_project', 'professional_work', 'recurring_routine', 'temporary_task'];
 const GATE_STATUSES: readonly SpaceGateStatus[] = ['not_checked', 'passed', 'failed'];
-const ASSET_POLICIES: readonly AssetReferencePolicy[] = ['pinned', 'review_required', 'follow_latest_compatible'];
 
 function isSpaceType(v: unknown): v is SpaceType {
   return typeof v === 'string' && (SPACE_TYPES as readonly string[]).includes(v);
 }
 function isGateStatus(v: unknown): v is SpaceGateStatus {
   return typeof v === 'string' && (GATE_STATUSES as readonly string[]).includes(v);
-}
-function isPolicy(v: unknown): v is AssetReferencePolicy {
-  return typeof v === 'string' && (ASSET_POLICIES as readonly string[]).includes(v);
 }
 
 /** 读时归一化能力资产引用；非法/缺关键字段 → undefined。 */
@@ -149,24 +134,6 @@ function normaliseAssetRef(raw: unknown): SpaceAssetRef | undefined {
   const out: SpaceAssetRef = { asset_id: r.asset_id, version: r.version };
   if (typeof r.content_hash === 'string' && r.content_hash) out.content_hash = r.content_hash;
   return out;
-}
-
-/** 读时归一化引用绑定数组；逐项过滤非法，缺 policy 默认 review_required。 */
-function normaliseBindings(raw: unknown): SpaceAssetReferenceBinding[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const out: SpaceAssetReferenceBinding[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue;
-    const ref = normaliseAssetRef(item);
-    if (!ref) continue;
-    const r = item as Record<string, unknown>;
-    const policy = isPolicy(r.policy) ? r.policy : 'review_required';
-    const bound_at = typeof r.bound_at === 'string' && r.bound_at ? r.bound_at : new Date().toISOString();
-    const b: SpaceAssetReferenceBinding = { ...ref, policy, bound_at };
-    if (typeof r.updated_at === 'string' && r.updated_at) b.updated_at = r.updated_at;
-    out.push(b);
-  }
-  return out.length ? out : undefined;
 }
 
 // ── Pure helpers ───────────────────────────────────────────────────────────
@@ -312,7 +279,6 @@ function _normaliseSpace(raw: any): Space | null {
       return typeof raw.base_agent === 'string' && raw.base_agent ? [raw.base_agent] : [];
     })(),
     main_skill_ref: normaliseAssetRef(raw.main_skill_ref),
-    asset_reference_bindings: normaliseBindings(raw.asset_reference_bindings),
     pinned_at: typeof raw.pinned_at === 'string' && raw.pinned_at ? raw.pinned_at : undefined,
     created_at: typeof raw.created_at === 'string' ? raw.created_at : '',
     updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : '',
@@ -479,7 +445,6 @@ export async function createSpace(
     base_agent?: string;
     base_agents?: string[];
     main_skill_ref?: SpaceAssetRef;
-    asset_reference_bindings?: SpaceAssetReferenceBinding[];
   },
 ): Promise<{ ok: true; space: Space } | { ok: false; error: SpaceError }> {
   const name = normName(opts.name);
@@ -512,7 +477,6 @@ export async function createSpace(
     base_agents: baseAgents,
     gate_status: 'not_checked',
     main_skill_ref: normaliseAssetRef(opts.main_skill_ref),
-    asset_reference_bindings: normaliseBindings(opts.asset_reference_bindings),
     created_at: nowIso(),
     updated_at: nowIso(),
   };
@@ -696,7 +660,6 @@ export async function updateSpace(
     base_agents?: string[] | null;
     gate_status?: SpaceGateStatus | null;
     main_skill_ref?: SpaceAssetRef | null;
-    asset_reference_bindings?: SpaceAssetReferenceBinding[] | null;
     pinned_at?: string | null;
   },
 ): Promise<{ ok: true; space: Space } | { ok: false; error: SpaceError }> {
@@ -750,10 +713,6 @@ export async function updateSpace(
   }
   if (opts.main_skill_ref !== undefined) {
     cur.main_skill_ref = opts.main_skill_ref === null ? undefined : normaliseAssetRef(opts.main_skill_ref);
-  }
-  if (opts.asset_reference_bindings !== undefined) {
-    cur.asset_reference_bindings =
-      opts.asset_reference_bindings === null ? undefined : normaliseBindings(opts.asset_reference_bindings);
   }
   if (opts.pinned_at !== undefined) {
     cur.pinned_at = opts.pinned_at === null || !opts.pinned_at ? undefined : opts.pinned_at;
@@ -913,75 +872,6 @@ export async function removeSpaceResource(
   cur.updated_at = nowIso();
   await _writeSpace(uid, cur);
   return { ok: true, resources: { extra_skills: cur.extra_skills, extra_agents: cur.extra_agents } };
-}
-
-/** 空间资产引用绑定展示（回填 title/type）。 */
-export interface SpaceAssetBindingView extends SpaceAssetReferenceBinding {
-  /** 回填：资产标题（来源 recall/asset-service.listAbilityAssets）。 */
-  title?: string;
-  /** 回填：资产类型（personal/rule/template/skill_method）。 */
-  asset_type?: string;
-}
-
-/** 绑定空间资产引用（路线 A：全局资产引用不复制所有权）。同 asset_id 幂等覆盖
- *  （更新 version/policy/updated_at）。policy 缺省 `follow_latest_compatible`
- *  （拍板决策 ④，UI 不暴露选择）。 */
-export async function bindSpaceAsset(
-  uid: string,
-  spaceId: string,
-  ref: { asset_id: string; version: string; content_hash?: string; policy?: AssetReferencePolicy },
-): Promise<{ ok: true; bindings: SpaceAssetReferenceBinding[] } | { ok: false; error: SpaceError | 'invalid_ref' }> {
-  const cur = await _readSpace(uid, spaceId);
-  if (!cur) return { ok: false, error: 'not_found' };
-  const normRef = normaliseAssetRef(ref);
-  if (!normRef) return { ok: false, error: 'invalid_ref' };
-  const policy = isPolicy(ref.policy) ? ref.policy : 'follow_latest_compatible';
-  const now = new Date().toISOString();
-  const bindings = cur.asset_reference_bindings ?? [];
-  const idx = bindings.findIndex((b) => b.asset_id === normRef.asset_id);
-  if (idx >= 0) {
-    bindings[idx] = { ...bindings[idx], ...normRef, policy, updated_at: now };
-  } else {
-    bindings.push({ ...normRef, policy, bound_at: now });
-  }
-  cur.asset_reference_bindings = bindings;
-  cur.updated_at = nowIso();
-  await _writeSpace(uid, cur);
-  return { ok: true, bindings };
-}
-
-/** 解绑空间资产引用（按 asset_id）。 */
-export async function unbindSpaceAsset(
-  uid: string,
-  spaceId: string,
-  assetId: string,
-): Promise<{ ok: true; bindings: SpaceAssetReferenceBinding[] } | { ok: false; error: SpaceError }> {
-  const cur = await _readSpace(uid, spaceId);
-  if (!cur) return { ok: false, error: 'not_found' };
-  const bindings = cur.asset_reference_bindings ?? [];
-  const next = bindings.filter((b) => b.asset_id !== assetId);
-  if (next.length !== bindings.length) {
-    cur.asset_reference_bindings = next.length ? next : undefined;
-    cur.updated_at = nowIso();
-    await _writeSpace(uid, cur);
-  }
-  return { ok: true, bindings: next };
-}
-
-/** 列出空间资产引用绑定，回填资产 title/type（用 recall/asset-service.listAbilityAssets）。 */
-export async function listSpaceAssetBindings(uid: string, spaceId: string): Promise<SpaceAssetBindingView[]> {
-  const cur = await _readSpace(uid, spaceId);
-  const bindings = cur?.asset_reference_bindings ?? [];
-  if (!bindings.length) return [];
-  let assets: RecallAbilityAssetRecord[] = [];
-  try {
-    assets = await import('./recall/asset-service').then((m) => m.listAbilityAssets(uid)).catch(() => []);
-  } catch { assets = []; }
-  const byId = new Map(assets.map((a) => [a.id, a]));
-  return bindings.map((b) => {
-    const a = byId.get(b.asset_id);
-    return a ? { ...b, title: a.title, asset_type: a.type } : { ...b };
-  });
 }
 
 /** 清理失效引用（裁决 S3）：按有效集合过滤，返回被移除的 id。 */

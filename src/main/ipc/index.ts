@@ -1243,8 +1243,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { skills: skillRows, agents: agentRows };
   },
 
-  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, asset_reference_bindings });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1380,18 +1380,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { rejected: result.rejected };
   },
 
-  'spaces.assets.list': async ({ spaceId } = {}, ctx) => {
-    if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    return { bindings: await spaces.listSpaceAssetBindings(ctx.userId, spaceId) };
-  },
-
-  'spaces.assets.bind': async ({ spaceId, ref } = {}, ctx) => {
-    if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await spaces.bindSpaceAsset(ctx.userId, spaceId, ref || {});
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { bindings: result.bindings };
-  },
-
   // ── 空间作用域（@ 选择器按空间能力过滤：agents ∪ skills = 模板 bundle ∪ extra）──
   // 语义与 runner 一致（S1）：空间缺失/空配置/全失效 → scope=null（全局可见不过滤）。
   'spaces.scope.resolve': async ({ spaceId } = {}, ctx) => {
@@ -1399,13 +1387,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('invalid spaceId');
     const scope = await spaces.resolveSpaceScope(ctx.userId, spaceId);
     return { scope }; // null = 全局；否则 { skills: string[]; agents: string[] }
-  },
-
-  'spaces.assets.unbind': async ({ spaceId, assetId } = {}, ctx) => {
-    if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await spaces.unbindSpaceAsset(ctx.userId, spaceId, assetId || '');
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { bindings: result.bindings };
   },
 
   // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
