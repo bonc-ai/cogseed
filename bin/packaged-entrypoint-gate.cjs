@@ -35,12 +35,6 @@ const INTERNAL_ENTRYPOINT_CONSUMERS = Object.freeze({
     'src/main/features/local_agents/bridge.ts',
     'src/main/features/local_agents/runner.ts',
   ]),
-  'cogseed-bridge.cjs': Object.freeze([
-    'bin/cogseed-bridge.cjs',
-  ]),
-  'cogseed-runtime-worker.cjs': Object.freeze([
-    'bin/cogseed-runtime-worker.cjs',
-  ]),
   'cogseed-pkg.cjs': Object.freeze([
     'src/main/features/packages.ts',
     'src/main/model/core-agent/local-tools.ts',

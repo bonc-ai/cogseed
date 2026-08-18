@@ -63,7 +63,7 @@ function createCurrentBundleFixture() {
       <key>CFBundleURLName</key>
       <string>com.cogseed.desktop.connectors</string>
       <key>CFBundleURLSchemes</key>
-      <array><string>cogseed</string><string>cogseed</string><string>cogseed</string></array>
+      <array><string>cogseed</string></array>
     </dict>
   </array>
 </dict>
@@ -106,7 +106,7 @@ describe('macOS source runtime bundle contract', () => {
       expect(sourceRuntime.sourceRuntimeBundleSpec(variant).protocolSchemes).toEqual([]);
     }
     expect(sourceRuntime.sourceRuntimeBundleSpec('cogseed').protocolSchemes)
-      .toEqual(['cogseed', 'cogseed', 'cogseed']);
+      .toEqual(['cogseed']);
   });
 
   it('preserves relative framework symlinks when copying the Electron app', () => {

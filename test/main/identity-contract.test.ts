@@ -34,7 +34,7 @@ describe('CogSeed-only identity contract', () => {
     const identity = await loadIdentity();
     expect(identity.normalizeRuntimeVariant('cogseed')).toBe('cogseed');
     expect(identity.normalizeRuntimeVariant(undefined)).toBe('cogseed');
-    expect(() => identity.normalizeRuntimeVariant('cogseed')).toThrow(/cogseed/i);
+    expect(() => identity.normalizeRuntimeVariant('legacy')).toThrow(/cogseed/i);
   });
 
   it('does not normalize legacy environment variables', async () => {

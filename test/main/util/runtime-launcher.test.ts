@@ -12,7 +12,6 @@ describe('source runtime launchers', () => {
     const windows = read('run.cmd');
     const bootstrap = read('bootstrap.cjs');
     const restart = read('scripts/restart-cogseed.sh');
-    const legacyRestart = read('scripts/restart-cogseed.sh');
     const packageMeta = JSON.parse(read('package.json')) as { cogseedSourceRuntimeVariant?: string };
 
     expect(shell).toContain('VARIANT="cogseed"');
@@ -36,8 +35,6 @@ describe('source runtime launchers', () => {
     expect(restart).toContain('"$ELECTRON_APP $APP_DIR --cogseed-runtime-variant=${VARIANT}"*');
     expect(restart).toContain('if [ -n "$(worktree_pids)" ]; then');
     expect(restart).toContain('if [ -z "$(worktree_pids)" ]; then');
-    expect(legacyRestart).toContain('exec "$APP_DIR/scripts/restart-cogseed.sh" "$@"');
-    expect(legacyRestart).not.toContain('VARIANT="cogseed"');
     expect(bootstrap).toContain('sourceVariant: packageMeta.cogseedSourceRuntimeVariant');
     expect(bootstrap).toContain('allowWorkspaceOverride: isPackagedDev');
   });

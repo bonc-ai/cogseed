@@ -235,12 +235,10 @@ describe('preload bridge', () => {
     expect(invalid.exposed.__cogseedI18nBoot).toBeNull();
   });
 
-  it('no longer exposes the legacy cogseed bridge alias', () => {
-    // 兼容别名已删除（2026-08-17）：window.cogseed 不再暴露，渲染层唯一桥
-    // 是 window.cogseed。
+  it('exposes only the canonical CogSeed bridge', () => {
     const { exposed } = loadPreload();
-    expect(exposed.cogseed).toBeUndefined();
     expect(exposed.cogseed).toBeDefined();
+    expect(Object.keys(exposed)).toEqual(expect.arrayContaining(['cogseed', '__cogseedI18nBoot']));
   });
 
   it('routes invokes through one envelope', async () => {

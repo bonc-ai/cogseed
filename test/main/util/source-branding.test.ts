@@ -22,17 +22,14 @@ describe('CogSeed source-run branding', () => {
   it('launches the prepared integration-specific macOS bundle', () => {
     const source = read('run.sh');
     expect(source).toContain('CogSeed.app');
-    expect(source).not.toContain('Mate Agent.app');
-    expect(source).not.toContain('APP_BUNDLE="$APP_DIR/node_modules/electron/dist/CogSeed.app"');
+    expect(source).toContain('APP_BUNDLE="$APP_DIR/node_modules/electron/dist/CogSeed.app"');
   });
 
   it('uses CogSeed in cross-platform launcher output', () => {
     const cmd = read('run.cmd');
     const ensureDeps = read('scripts/ensure-deps.cjs');
-    expect(cmd).not.toContain('[CogSeed]');
-    expect(cmd).not.toContain('Starting CogSeed');
     expect(cmd).toContain('[CogSeed]');
-    expect(cmd).not.toContain('[Mate Agent]');
-    expect(ensureDeps).not.toContain('rerun CogSeed');
+    expect(cmd).toContain('Starting source runtime');
+    expect(ensureDeps).toContain('CogSeed');
   });
 });

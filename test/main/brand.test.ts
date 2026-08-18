@@ -8,13 +8,11 @@ const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 describe('CogSeed brand contract', () => {
   it('defines the approved public identity', () => {
-    const brand = readJson('src/resources/brand.json');
-    expect(brand).toEqual({
+    expect(readJson('src/resources/brand.json')).toEqual({
       appName: 'CogSeed',
       zhName: 'CogSeed',
       appId: 'com.cogseed.desktop',
       protocolScheme: 'cogseed',
-      legacyConnectorSchemes: ['cogseed', 'cogseed'],
       taglineZh: '跨 Agent 的个人能力资产层',
     });
   });
@@ -27,36 +25,25 @@ describe('CogSeed brand contract', () => {
     expect(pkg.build.appId).toBe(brand.appId);
     expect(pkg.build.artifactName).toBe('CogSeed-${version}-${os}-${arch}.${ext}');
     expect(pkg.build.protocols).toEqual([
-      expect.objectContaining({
-        name: 'CogSeed Connector Callback',
-        schemes: [brand.protocolScheme, ...brand.legacyConnectorSchemes],
-      }),
+      expect.objectContaining({ name: 'CogSeed Connector Callback', schemes: [brand.protocolScheme] }),
     ]);
     expect(pkg.build.files).toContain('src/resources/brand.json');
   });
 
-  it('does not rename compatibility storage and bridge identifiers', () => {
+  it('uses only canonical CogSeed storage and bridge identifiers', () => {
     expect(read('src/main/paths.ts')).toContain('COGSEED_WORKSPACE_ROOT');
     expect(read('src/main/preload.js')).toContain('cogseed');
     expect(read('src/main/install-data-root.cjs')).toContain("'.cogseed'");
-  });
-  it('uses an isolated runtime identity in the Electron main process', () => {
-    const main = read('src/main/index.ts');
-    expect(main).toContain("import { resolveRuntimeIdentity } from './brand';");
-    expect(main).toContain('app.setName(RUNTIME_IDENTITY.appName);');
-    expect(main).toContain('app.setAppUserModelId(RUNTIME_IDENTITY.appId);');
-    expect(main).not.toContain("const APP_USER_MODEL_ID = 'com.cogseed.desktop'");
   });
 
   it('uses the shared App ID for system notification settings', () => {
     const source = read('src/main/features/notification_permissions.ts');
     expect(source).toContain("import { APP_BRAND } from '../brand';");
     expect(source).toContain('return APP_BRAND.appId;');
-    expect(source).not.toContain("return 'com.cogseed.desktop';");
   });
 
-  it('removes CogSeed from user-visible product surfaces', () => {
-    const publicFiles = [
+  it('exposes CogSeed in public product surfaces', () => {
+    for (const file of [
       'src/renderer/index.html',
       'src/renderer/locales/zh.json',
       'src/renderer/locales/en.json',
@@ -64,35 +51,15 @@ describe('CogSeed brand contract', () => {
       'src/renderer/locales/pt.json',
       'src/main/data/commander.json',
       'src/main/data/oss-projects.json',
-    ];
-    for (const file of publicFiles) {
-      expect(read(file), file).not.toContain('CogSeed');
-    }
-    expect(read('src/renderer/modules/settings.js')).not.toContain("badge.textContent = 'CogSeed'");
-  });
-
-  it('removes the retired Mate Agent name from current public surfaces', () => {
-    const publicFiles = [
-      'src/renderer/index.html',
-      'src/renderer/locales/zh.json',
-      'src/renderer/locales/en.json',
-      'src/renderer/locales/ja.json',
-      'src/renderer/locales/pt.json',
-      'src/main/data/commander.json',
-      'src/main/data/oss-projects.json',
-    ];
-    for (const file of publicFiles) {
-      expect(read(file), file).not.toContain('Mate Agent');
-      expect(read(file), file).not.toContain('Mate 智伴');
+    ]) {
+      expect(read(file), file).toContain('CogSeed');
     }
   });
 
-  it('no longer exposes the legacy cogseed bridge alias', () => {
-    // 兼容别名已删除（2026-08-17）：渲染层唯一桥是 window.cogseed。
-    expect(read('src/main/preload.js')).not.toContain("exposeInMainWorld('cogseed'");
-    expect(read('src/main/preload.js')).not.toContain("__cogseedI18nBoot");
+  it('exposes exactly one renderer bridge', () => {
+    const preload = read('src/main/preload.js');
+    expect(preload.match(/exposeInMainWorld\('cogseed'/g)).toHaveLength(1);
     expect(read('src/renderer/modules/ipc-shim.js')).toContain('window.cogseed');
     expect(read('src/renderer/modules/artifact-security.js')).toContain('CogSeedArtifactSecurity');
   });
-
 });

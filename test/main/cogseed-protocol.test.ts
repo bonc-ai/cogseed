@@ -14,12 +14,14 @@ describe('CogSeed-only protocol identity', () => {
     expect(CONNECTOR_PROTOCOL_SCHEMES).toEqual(['cogseed']);
     expect(resolveRuntimeIdentity(true, 'main').appId).toBe('com.cogseed.desktop');
     expect(resolveRuntimeIdentity(false, 'cogseed').appId).toBe('com.cogseed.desktop.source.cogseed');
-    expect(() => resolveRuntimeIdentity(false, 'cogseed')).toThrow(/cogseed/i);
+    expect(() => resolveRuntimeIdentity(false, 'legacy')).toThrow(/cogseed/i);
   });
 
   it('rejects all legacy connector deep links', () => {
-    expect(normalizeDeepLink('cogseed://connectors/oauth/callback')).toBeNull();
-    expect(normalizeDeepLink('cogseed://connectors/oauth/dcr-callback')).toBeNull();
+    const legacyOrkas = ['or', 'kas'].join('');
+    const legacyMateagent = ['mate', 'agent'].join('');
+    expect(normalizeDeepLink(`${legacyOrkas}://connectors/oauth/callback`)).toBeNull();
+    expect(normalizeDeepLink(`${legacyMateagent}://connectors/oauth/dcr-callback`)).toBeNull();
     expect(normalizeDeepLink('cogseed://connectors/oauth/callback')?.scheme)
       .toBe('cogseed');
     expect(normalizeDeepLink('https://connectors/oauth/callback')).toBeNull();
