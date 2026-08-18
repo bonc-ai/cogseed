@@ -1,3 +1,4 @@
+import { getRecallCandidateCapabilities } from './candidate-capabilities';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -258,7 +259,9 @@ export async function revokeUserTeachingSignal(userId: string, signalId: string)
   await Promise.all(updated.candidateIds.map(async (candidateId) => {
     try {
       const candidate = await readRecallCandidate(userId, candidateId);
-      if (candidate.status === 'pending_review' || candidate.status === 'deferred' || candidate.status === 'failed') {
+      // 教学信号被撤回时，凡是用户还能拒绝的候选都一并拒绝——判据取 capability，
+      // 否则 weak_observation 候选会被留在池子里，来源却已经没了。
+      if (getRecallCandidateCapabilities(candidate).canReject) {
         await rejectRecallCandidate(userId, candidateId, 'teaching_signal_revoked');
       }
     } catch {
