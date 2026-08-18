@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "143061a4fe4cbf3fbba9e9f4eb84c254c5069b43b86b69b45af0c01055573182",
+  "content_tree_sha256": "5d50c91400f58688a6ac59cb6bc6e1eee03d9a4622ecb72ff78d878f432890f2",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -1284,8 +1284,8 @@
     },
     {
       "path": "marketplace/skills/10c4addc39a1/quality-checklist.md",
-      "bytes": 8175,
-      "sha256": "2865771cc38442998cd29776acbcbd93105a0e23d03d7a8ba4aea887156567d1"
+      "bytes": 8373,
+      "sha256": "276cbd5aaf4c0701519d1dfa2f0ecb653477864be6c657da5fdfcd7e87778ebf"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/QUICKSTART.md",
@@ -1421,11 +1421,6 @@
       "path": "marketplace/skills/10c4addc39a1/scripts/build_docx.py",
       "bytes": 38430,
       "sha256": "d3ec1b6edf155a5bb034380c6c2d8ed6acbafdbebfd187ed810f85af4ede7717"
-    },
-    {
-      "path": "marketplace/skills/10c4addc39a1/scripts/check_skill.py",
-      "bytes": 5674,
-      "sha256": "25299cfffb4980a546a9d3131a0f1279309a4e8ed347ac5648f50655f3610153"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/scripts/inspect_docx.py",
