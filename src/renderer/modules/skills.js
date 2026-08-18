@@ -3931,15 +3931,15 @@ function initSkillsCognitionConsole() {
   if (!panel || panel.dataset.cognitionInitialized === '1') return;
   panel.dataset.cognitionInitialized = '1';
   _cognitionSetPageVisibility(_skillsCognitionState.page);
-  // 先把落地页画出来再取数：否则首屏是一块空白 body（页头和 tab 已经在，内容区
-  // 什么都没有），用户看不出是在加载还是坏了。此时快照未落地，画出来的就是
-  // loading 态。
-  _skillsCognitionState.loading = true;
+  // 先起取数、再画首屏。**顺序不能反**：`loading` 是 loadSkillsCognitionSnapshot
+  // 自己的重入锁，外部先把它置真，那个函数一进门就 `if (loading) return`，快照
+  // 永远不会加载、loadedAt 永远是 0，页面就永久停在「加载中」。
+  //
+  // loadSkillsCognitionSnapshot 在第一个 await 之前是同步的，会自己把 loading
+  // 置真；所以先调用它拿到 promise，再渲染，首屏拿到的就已经是 loading 态。
+  const snapshotLoad = loadSkillsCognitionSnapshot();
   _cognitionRenderCurrentPage();
-  // 落地页只在这里决定一次，且只在快照回来之后：待处理为空就默认进「我的
-  // 资产」。注意这不是"进了待我处理再弹走"——用户主动点 tab 走的是
-  // switchSkillsCognitionPage，那条路径不会改页，空的时候照常显示空状态。
-  loadSkillsCognitionSnapshot()
+  snapshotLoad
     .then(() => {
       if (_skillsCognitionState.page !== 'inbox') return;
       // G-9 产品决策：**默认永远停在「待我处理」，不自动跳页。**

@@ -4080,3 +4080,45 @@ describe('G-9 认知资产一级信息架构', () => {
     expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('inbox');
   });
 });
+
+/**
+ * 回归：首屏不得卡在「加载中」。
+ *
+ * G-1 曾在 initSkillsCognitionConsole 里先把 `_skillsCognitionState.loading`
+ * 置真、再调 loadSkillsCognitionSnapshot()，好让预渲染显示加载态。但 `loading`
+ * 是那个函数**自己的重入锁**——它一进门就 `if (loading) return`，于是快照永远
+ * 不加载、loadedAt 永远是 0、_cognitionSnapshotPending() 永远为真，认知资产页
+ * 永久停在「加载中」。实机复现过。
+ *
+ * 之前的用例全部直接设 state 再调 render，没有一条走过 init 这条真实路径，
+ * 所以这个死锁一路漏到实机。这条补上。
+ */
+describe('认知资产首屏加载不死锁', () => {
+  it('init 会真的把快照拉起来，loadedAt 落地后不再是加载态', async () => {
+    const context = loadSkillsRenderer();
+    const panel: any = { dataset: {}, addEventListener() {} };
+    context.document = {
+      getElementById: (id: string) => (id === 'panel-recall' ? panel : null),
+      querySelectorAll: () => [],
+    };
+    let invoked = 0;
+    context.window.cogseed = {
+      invoke: async () => { invoked += 1; return { ok: true, items: [], assets: [], sources: [], captures: [], signals: [], candidates: [], total: 0 }; },
+    };
+
+    context.initSkillsCognitionConsole();
+    // 同步阶段：加载已经在飞，且此刻应当是"从未落地 + 正在加载" → 显示加载中。
+    expect(vm.runInContext('_skillsCognitionState.loading', context)).toBe(true);
+    expect(context._cognitionSnapshotPending()).toBe(true);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // 关键断言：快照真的发出去了（重入锁没有把它挡掉）。
+    expect(invoked).toBeGreaterThan(0);
+    // 且落地之后不再是加载态——否则页面永久停在「加载中」。
+    expect(vm.runInContext('_skillsCognitionState.loadedAt', context)).toBeGreaterThan(0);
+    expect(vm.runInContext('_skillsCognitionState.loading', context)).toBe(false);
+    expect(context._cognitionSnapshotPending()).toBe(false);
+  });
+});
