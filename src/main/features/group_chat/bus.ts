@@ -892,7 +892,7 @@ async function p3394ProtocolProcessItem(input: {
     ? { person: "mate-user", org: "local", role: "owner" }
     : {
         person: input.item.fromActorId,
-        org: "mate-agent",
+        org: "cogseed",
         role: fromCommander ? "commander" : "agent",
       };
   // sessionId 必须是真实 <kind>-<tail>(gconv/gmember/gworker),不是裸 cid。
@@ -1498,6 +1498,26 @@ function _emitTaskRunTerminalIfQuiescent(
         : run.status || "failed";
   const listeners = [..._taskTerminalListeners];
   void (async () => {
+    // M-6: reuseTurnIds 只在内存。进程重启/崩溃后清单丢失，终态退回无回执
+    // 分支，该次运行的资产永不升档（回执文件本身已落盘 local/kstar/
+    // executions/turn-<turnId>/）。恢复：扫描本会话（targetSessionId=
+    // gconv-<cid>）且在本 run 开始之后落过的回执，按 turn- 前缀还原清单。
+    if (!run.reuseTurnIds?.length) {
+      try {
+        const { listReceipts } = await import('../p3394/context-reuse-receipt');
+        const receipts = await listReceipts(state.uid).catch(() => [] as Array<{ targetSessionId: string; executionId: string; createdAt: string }>);
+        const restored = receipts
+          .filter((receipt) => receipt.targetSessionId === `gconv-${state.cid}`
+            && Date.parse(receipt.createdAt) >= run.startedAtMs)
+          .map((receipt) => receipt.executionId)
+          .filter((executionId) => executionId.startsWith('turn-'))
+          .map((executionId) => executionId.slice('turn-'.length))
+          .filter(Boolean);
+        if (restored.length) run.reuseTurnIds = [...new Set(restored)];
+      } catch (err) {
+        log.warn(`task terminal receipt restore degraded cid=${state.cid}: ${(err as Error).message}`);
+      }
+    }
     const event: TaskTerminalEvent = {
       run_id: run.runId,
       user_id: state.uid,
@@ -1914,6 +1934,13 @@ export interface EnqueueParams {
   /** Override resolved recipients (commander emitting plan announcement
    *  uses this to force `to=[user]`). Otherwise router decides. */
   forceTo?: string[];
+  /** Trusted user route. The IPC/group facade validates composer selections;
+   * retry and edit flows derive their target from persisted history. It stays
+   * off the persisted message schema and bypasses raw-mention Wake approval. */
+  userRoute?: {
+    agentId: string;
+    origin: 'user_selection' | 'cli_fallback' | 'failed_turn_retry' | 'message_edit';
+  };
   /** Trusted external-channel inbound (P3394 bridge): keeps the
    * user-message abort-reset and task-run lifecycle semantics for a message
    * that persists under the peer agent's own actor identity. Only the
@@ -2081,7 +2108,15 @@ async function _enqueueBody(
   let to: string[] = [];
   let unknown: string[] = [];
   let userHasExplicitMention = false;
-  if (params.forceTo && params.forceTo.length) {
+  const structuredUserRoute = fromKind === 'user' && params.userRoute?.agentId
+    ? params.userRoute
+    : null;
+  if (structuredUserRoute) {
+    // The facade has already checked the Agent id and origin. Resolve this
+    // before parsing prose so the visible message remains exactly what the
+    // user wrote and can never be replaced by a default Commander route.
+    to = [structuredUserRoute.agentId];
+  } else if (params.forceTo && params.forceTo.length) {
     to = params.forceTo.slice();
   } else {
     // Build a global name → id map from the enabled agent registry so the
@@ -2216,6 +2251,7 @@ async function _enqueueBody(
     && !allowLegacyGroupChatFormalAgentExecutorForTest()
     && !userHasExplicitMention
     && !(params.forceTo?.length)
+    && !structuredUserRoute
     && to.length === 1
     && to[0] === floorRecipient
     && !RESERVED_IDS.has(floorRecipient)) {
@@ -2245,7 +2281,7 @@ async function _enqueueBody(
         admitted.push(recipientId);
         continue;
       }
-      if (recipientId === backendFollowupAgentId) {
+      if (recipientId === backendFollowupAgentId || (structuredUserRoute && recipientId === structuredUserRoute.agentId)) {
         admitted.push(recipientId);
         continue;
       }

@@ -1,6 +1,6 @@
 /**
  * IPC handlers for the connectors feature. Renderer reaches these via
- * `window.orkas.invoke('connectors.*', payload)`.
+ * `window.cogseed.invoke('connectors.*', payload)`.
  *
  *   connectors.catalog       → { catalog }
  *   connectors.list          → { instances }

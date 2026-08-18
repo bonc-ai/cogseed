@@ -5,6 +5,7 @@
  * proposed_updates（待评审，绝不自动修改认知资产）。
  */
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { createLogger, redact } from '../../logger';
 import { p3394StateFile, variantRoot } from './runtime-paths';
@@ -91,4 +92,58 @@ export function recordP3394Episode(
   fs.writeFileSync(file, JSON.stringify(sanitized, null, 2));
   log.info('P3394 KSTAR episode recorded', { file, status: episode.status });
   return file;
+}
+
+/** 读取全部已落盘的 P3394 episode（N-17 桥接：主 KStar 沉淀链按会话关联
+ *  读取外部智能体的协作样本，proposed_updates 作为额外证据注入）。
+ *  单个文件损坏跳过而不是整体抛错——一份读不出来的 episode 不该让整个
+ *  沉淀退化为空。 */
+export async function listP3394Episodes(): Promise<P3394KstarEpisode[]> {
+  const root = path.join(variantRoot(), 'p3394-kstar');
+  let sessionDirs: string[];
+  try {
+    sessionDirs = await fsp.readdir(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const out: P3394KstarEpisode[] = [];
+  for (const sessionDir of sessionDirs) {
+    const dir = path.join(root, sessionDir);
+    let taskFiles: string[];
+    try {
+      const stat = await fsp.stat(dir);
+      if (!stat.isDirectory()) continue;
+      taskFiles = await fsp.readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const taskFile of taskFiles) {
+      if (!taskFile.endsWith('.json')) continue;
+      try {
+        const raw = JSON.parse(await fsp.readFile(path.join(dir, taskFile), 'utf8')) as P3394KstarEpisode;
+        if (!raw || typeof raw !== 'object' || typeof raw.session_id !== 'string') continue;
+        out.push(raw);
+      } catch {
+        // 单个损坏跳过。
+      }
+    }
+  }
+  return out.sort((a, b) => String(a.completed_at || '').localeCompare(String(b.completed_at || '')));
+}
+
+/** 关联读取：给定群聊会话 id，返回该会话相关的 P3394 episode 的
+ *  proposed_updates（Learn-What 候选）。会话 id 与 P3394 session_id 是
+ *  不同命名空间，无法直接映射——这里按时间窗近似：取最近 N 分钟内的
+ *  episode 作为"协作上下文"（调用方决定窗口）。返回扁平数组。 */
+export async function collectP3394ProposedUpdates(sinceMs: number): Promise<unknown[]> {
+  const episodes = await listP3394Episodes();
+  const since = new Date(sinceMs).toISOString();
+  const updates: unknown[] = [];
+  for (const episode of episodes) {
+    if (episode.completed_at && episode.completed_at >= since) {
+      for (const update of episode.proposed_updates || []) updates.push(update);
+    }
+  }
+  return updates;
 }

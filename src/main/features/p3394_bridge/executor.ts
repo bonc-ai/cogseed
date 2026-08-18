@@ -51,6 +51,8 @@ export interface P3394BridgeExecutorDeps {
     result?: string;
     actions: Array<{ sequence: number; kind: string; at: string; text?: string; error?: string }>;
     created_at?: string;
+    /** Learn-What 候选（N-17）：只建议，不自动写回任何认知资产。 */
+    proposed_updates?: unknown[];
   }) => void;
   /** Sink for streamed runtime events (channel reply / caller hook). */
   onEvent?: (sessionId: string, event: P3394RuntimeEvent) => void | Promise<void>;
@@ -122,6 +124,41 @@ export class P3394BridgeExecutor {
   }
 
   /**
+   * N-17: Learn-What 候选（guide §5.4「每个完成的 Work Session 形成 KSTAR
+   * Episode → AAR → Learn-What」）。从终态动作轨迹机械生成结构化建议：
+   * 只建议、绝不自动写回任何认知资产（proposed_updates 的既有纪律）。
+   * 输出给主 KStar 沉淀链作为额外证据（见 task-level-precipitation 的
+   * p3394 桥接）。任何一步降级都返回 []，不让建议生成拖垮终态。
+   */
+  private proposedUpdatesFor(
+    goal: string,
+    status: 'completed' | 'failed' | 'cancelled',
+    result: string | undefined,
+    actions: Array<{ sequence: number; kind: string; at: string; text?: string; error?: string }>,
+  ): unknown[] {
+    try {
+      const summary = String(goal || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+      if (!summary) return [];
+      const actionKinds = [...new Set(actions.map((action) => action.kind).filter(Boolean))].slice(0, 20);
+      const outcome =
+        status === 'completed' ? '任务完成'
+          : status === 'failed' ? '任务失败' : '任务取消';
+      return [{
+        type: 'p3394_work_session',
+        goal: summary,
+        outcome,
+        ...(result ? { resultSummary: String(result).replace(/\s+/g, ' ').trim().slice(0, 300) } : {}),
+        ...(actionKinds.length ? { actionKinds } : {}),
+        // 机械摘要，人工评审前的占位结论——与 kstar-episodes.buildAar 同源。
+        review: '该会话被记录为外部智能体协作样本；沉淀与否由主 KStar 评审决定，本钩子不自动写回。',
+        source: 'p3394_bridge',
+      }];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Runs the inbound pipeline for one envelope. Validation/duplicate/replay
    * handling stays in the kernel; only accepted envelopes reach the runtime.
    */
@@ -152,8 +189,9 @@ export class P3394BridgeExecutor {
     const consumedReply = this.outboundHub?.tryResolveReply(envelope) ?? false;
     // S-03：对端回复只需解决出站等待方（tryResolveReply 已消费），不再作为
     // 新入站任务继续执行——否则同一回复既回给转发等待者、又被 executor 当
-    // 新任务注入对话并触发额外一轮执行（A→B peer-forward 的重复副作用）。
-    // 对话展示由调用方（runP3394GatewayTurn / sendAndWait 的转回）负责。
+    // 新任务注入对话并触发额外一轮执行（A→B peer-forward 的重复副作用），
+    // 无模型配置时还可能错误唤醒 Commander（镜像会话）。未匹配的信封仍
+    // 继续走正常入站路径。对话展示由调用方负责。
     if (consumedReply) {
       this.bridge.audit.append({
         event: 'inbound.reply.consumed',
@@ -161,6 +199,7 @@ export class P3394BridgeExecutor {
         status: 'accepted',
         metadata: { reply_to: envelope.reply_to, session_id: envelope.session_id },
       });
+
       return { ok: true, receipt: sent.receipt, executed: false };
     }
 
@@ -453,6 +492,7 @@ export class P3394BridgeExecutor {
               status: event.kind,
               result: lastDelta.slice(0, 24_000) || undefined,
               actions,
+              proposed_updates: this.proposedUpdatesFor(session.goal, event.kind, lastDelta.slice(0, 24_000) || undefined, actions),
             });
           } catch {
             // Session may have been closed concurrently; episode is best-effort.

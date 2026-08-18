@@ -234,7 +234,7 @@ function createWindow(): BrowserWindow {
       // preload sits next to index.ts in PC/src/main/ — just __dirname + 'preload.js'.
       preload: path.join(__dirname, 'preload.js'),
       devTools: dev,
-      additionalArguments: IS_PACKAGED_LAUNCH_SMOKE ? ['--orkas-packaged-launch-smoke'] : [],
+      additionalArguments: IS_PACKAGED_LAUNCH_SMOKE ? ['--cogseed-packaged-launch-smoke'] : [],
       // Enables Chromium's built-in PDF viewer (PDFium) inside iframes.
       // Required for `<iframe src="kb-file:///.../report.pdf">` in the KB
       // viewer. Has no effect on other plugin types since Electron strips

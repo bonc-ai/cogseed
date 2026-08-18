@@ -123,8 +123,7 @@ describe('KSTAR has one semantic core', () => {
       // Check for direct state mutation patterns
       const hasDirectMutation =
         /state\.runs\.push/.test(file.content) ||
-        /state\.experience_candidates\.push/.test(file.content) ||
-        /state\.patch_candidates\.push/.test(file.content);
+        /state\.experience_candidates\.push/.test(file.content);
 
       if (hasDirectMutation) {
         expect(

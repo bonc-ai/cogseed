@@ -1164,7 +1164,15 @@ const _quotesByCid = new Map();   // cid → Array<{ fromActor, fromName, msgId,
 function _normRecipient(next) {
   if (!next || (next.kind !== 'commander' && next.kind !== 'agent')) return null;
   if (next.kind === 'commander') return { ..._COMMANDER };
-  return { kind: 'agent', id: String(next.id || ''), name: String(next.name || next.id || '') };
+  const origin = next.origin === 'cli_fallback' || next.origin === 'active_floor'
+    ? next.origin
+    : undefined;
+  return {
+    kind: 'agent',
+    id: String(next.id || ''),
+    name: String(next.name || next.id || ''),
+    ...(origin ? { origin } : {}),
+  };
 }
 
 function _activeRecipient(target) {
@@ -1199,7 +1207,7 @@ function setChatRecipient(target, next, _opts = {}) {
     _projectChatRecipient = r;
   } else if (currentCid) {
     if (_opts.auto === true) {
-      if (r.kind === 'agent') _autoRecipientByCid.set(currentCid, r);
+      if (r.kind === 'agent') _autoRecipientByCid.set(currentCid, { ...r, origin: 'active_floor' });
       else _autoRecipientByCid.delete(currentCid);
     } else {
       _autoRecipientByCid.delete(currentCid);
@@ -1818,9 +1826,9 @@ let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
 async function _ensureSpaceAssetNames() {
   try {
     const [tplRes, skillRes, agentRes] = await Promise.all([
-      (window.cogseed || window.orkas).invoke('spaces.templates.list'),
-      (window.cogseed || window.orkas).invoke('skills.list'),
-      (window.cogseed || window.orkas).invoke('agents.list'),
+      window.cogseed.invoke('spaces.templates.list'),
+      window.cogseed.invoke('skills.list'),
+      window.cogseed.invoke('agents.list'),
     ]);
     _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.template_id, t.name || t.template_id]));
     _spaceAssetNames.skills = Object.fromEntries((skillRes.skills || []).map((s) => [s.id, s.name || s.id]));
@@ -1853,7 +1861,7 @@ async function _createSpaceFromDraft(draft) {
   if (Array.isArray(draft.extra_skill_ids)) payload.extra_skill_ids = draft.extra_skill_ids;
   if (Array.isArray(draft.extra_agent_ids)) payload.extra_agent_ids = draft.extra_agent_ids;
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.createFromDraft', { draft: payload });
+    const res = await window.cogseed.invoke('spaces.createFromDraft', { draft: payload });
     if (!res || res.error || !res.space) throw new Error((res && res.error) || 'create failed');
     // corrections：后端自动纠正/忽略的非法引用说明（LLM 幻觉 id → 按名称解析或丢弃）
     return { space: res.space, corrections: Array.isArray(res.corrections) ? res.corrections : [] };
@@ -1966,7 +1974,7 @@ document.addEventListener('click', async (e) => {
   // 这个会话，而是新建引导会话（僵尸会话陷阱：旧会话无产出也会一直吸附点击）。
   if (typeof currentCid === 'string' && currentCid) {
     try {
-      const doneRes = await (window.cogseed || window.orkas).invoke('conversations.completeSpaceBuilder', { cid: currentCid });
+      const doneRes = await window.cogseed.invoke('conversations.completeSpaceBuilder', { cid: currentCid });
       // 同步本地列表缓存：本次运行内再点「空间模式」不再复用该会话。
       if (doneRes && doneRes.conversation && Array.isArray(conversations)) {
         const idx = conversations.findIndex((c) => c && c.conversation_id === currentCid);
@@ -2815,7 +2823,20 @@ function _normaliseRecipientSnapshot(snapshot) {
   if (!r) return null;
   return {
     ...r,
+    ...(r.kind === 'agent'
+      ? { origin: r.origin === 'cli_fallback' || r.origin === 'active_floor' ? r.origin : 'user_selection' }
+      : {}),
     resetFloor: snapshot && snapshot.resetFloor === true,
+  };
+}
+
+function _recipientRoutingFields(snapshot) {
+  const snap = _normaliseRecipientSnapshot(snapshot);
+  if (!snap || snap.kind !== 'agent' || !snap.id) return {};
+  if (snap.origin !== 'user_selection' && snap.origin !== 'cli_fallback') return {};
+  return {
+    recipient_agent_id: snap.id,
+    recipient_origin: snap.origin,
   };
 }
 
@@ -2857,12 +2878,11 @@ function _applyRecipientPrefixWithSnapshot(raw, snapshot) {
     const sep = /^>/.test(text) ? '\n' : ' ';
     return '@commander' + sep + text;
   }
-  if (snap.kind !== 'agent' || !snap.id) return raw;
-  if (_LEADING_MENTION_RE.exec(text)) return text;
-  const display = _recipientPrefixName(snap);
-  if (!display) return raw;
-  const sep = /^>/.test(text) ? '\n' : ' ';
-  return '@' + String(display) + sep + text;
+  // Composer selections are sent as structured routing fields. Keep the
+  // user's visible text untouched; raw, manually typed @mentions still flow
+  // through the legacy mention parser and Wake Gate.
+  if (snap.kind === 'agent' && snap.id) return raw;
+  return raw;
 }
 
 function applyRecipientPrefix(raw, target, opts = {}) {
@@ -6303,7 +6323,7 @@ async function _openSpaceActionMenu(anchorBtn, sid) {
     {
       action: 'reveal',
       label: t('sidebar.space_open_folder', '在访达中显示'),
-      onClick: () => { try { (window.cogseed || window.orkas).invoke('spaces.openInFinder', { spaceId: sid }); } catch (err) { _convLog.warn('open space folder failed', err); } },
+      onClick: () => { try { window.cogseed.invoke('spaces.openInFinder', { spaceId: sid }); } catch (err) { _convLog.warn('open space folder failed', err); } },
     },
     {
       action: 'delete',
@@ -6349,7 +6369,7 @@ async function _openSpaceActionMenu(anchorBtn, sid) {
 /** 空间置顶/取消置顶（spaces.update pinned_at）。 */
 async function _toggleSpacePinned(sid, pinned) {
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.update', {
+    const res = await window.cogseed.invoke('spaces.update', {
       spaceId: sid,
       pinned_at: pinned ? new Date().toISOString() : null,
     });
@@ -6382,7 +6402,7 @@ async function _saveSpaceRename(sid, raw) {
   renderConversationList();
   if (!name || name === (_spaceById(sid) ? (_spaceById(sid).name || '') : '')) return;
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.update', { spaceId: sid, name });
+    const res = await window.cogseed.invoke('spaces.update', { spaceId: sid, name });
     if (!res || res.error) throw new Error((res && res.error) || 'rename failed');
   } catch (err) {
     _convLog.warn('space rename failed', err);
@@ -6401,7 +6421,7 @@ async function _deleteSpaceWithConfirm(sid) {
   try { ok = await uiConfirm(t('ws.delete_space_confirm', { name })); } catch (_) { ok = false; }
   if (!ok) return;
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.delete', { spaceId: sid });
+    const res = await window.cogseed.invoke('spaces.delete', { spaceId: sid });
     if (res && res.error) throw new Error(res.error);
   } catch (err) {
     _convLog.warn('space delete failed', err);
@@ -6416,7 +6436,7 @@ async function _deleteSpaceWithConfirm(sid) {
 /** 重新拉取侧栏空间列表（重命名/删除后同步名称）。 */
 async function _reloadSidebarSpaces() {
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.list', {});
+    const res = await window.cogseed.invoke('spaces.list', {});
     if (res && Array.isArray(res.spaces)) _sidebarSpaces = res.spaces;
   } catch (err) {
     _convLog.warn('reload sidebar spaces failed', err);
@@ -6639,7 +6659,7 @@ function _ensureSidebarSpaces() {
   if (_sidebarSpacesLoaded || _sidebarSpacesLoading) return _sidebarSpacesLoading || Promise.resolve();
   _sidebarSpacesLoading = (async () => {
     try {
-      const res = await (window.cogseed || window.orkas).invoke('spaces.list', {});
+      const res = await window.cogseed.invoke('spaces.list', {});
       _sidebarSpaces = Array.isArray(res && res.spaces) ? res.spaces : [];
     } catch (err) {
       _convLog.warn('load spaces for sidebar failed', err);
@@ -7481,6 +7501,9 @@ function _appendWelcomeThinkingPlaceholder(cid) {
 async function loadConversationHistory(cid, opts = {}) {
   const perfStartedAt = performance.now();
   const container = document.getElementById('chat-history');
+  // The composer is shared across conversations. Drop approval cards owned by
+  // the previous cid before the new transcript starts loading.
+  _wakeRequestHost(cid, { create: false });
   _cancelActiveUserMessageEdit({ focus: false });
   // 9.1 会话区域统一框架：切换会话时复位顶部执行计划轨道（plan-rail.js）。
   // 无该会话的 plan 时轨道自隐藏；历史恢复由 _renderPersistedProcess 喂入。
@@ -9028,9 +9051,15 @@ function _wakeRequestHost(cid, options = {}) {
   const wrap = document.querySelector('#panel-conversation .chat-input-wrapper');
   if (!wrap) return null;
   let host = wrap.querySelector('.chat-wake-pending-host');
+  if (host && host.dataset.cid !== cid) {
+    host.remove();
+    host = null;
+    try { _updateChatInputReserve(); } catch (_) {}
+  }
   if (!host && options.create !== false) {
     host = document.createElement('div');
     host.className = 'chat-wake-pending-host';
+    host.dataset.cid = cid;
     host.setAttribute('role', 'region');
     host.setAttribute('aria-live', 'polite');
     const anchor = wrap.querySelector('.chat-input-area');
@@ -9123,6 +9152,7 @@ function _mountWakeRequestCards(host, message, opts = {}) {
     if (opts.replace) _pruneWakeRequestHost(_wakeRequestHost(cid, { create: false }));
     return;
   }
+  if (host.dataset.cid !== cid) return;
   const requestsByKey = new Map();
   for (const request of message.wake_requests || []) {
     if (!request?.id || String(request.status || 'pending') !== 'pending') continue;
@@ -9150,8 +9180,7 @@ function _mountWakeRequestCards(host, message, opts = {}) {
     const key = _wakeRequestSemanticKey(request);
     const selector = `.chat-wake-request[data-wake-request-id="${CSS.escape(String(request.id))}"]`;
     const existing = host.querySelector(selector)
-      || host.querySelector(`.chat-wake-request[data-wake-request-key="${CSS.escape(key)}"]`)
-      || document.querySelector(selector);
+      || host.querySelector(`.chat-wake-request[data-wake-request-key="${CSS.escape(key)}"]`);
     if (existing) {
       _renderWakeRequestCard(existing, request, cid);
       continue;
@@ -9622,7 +9651,7 @@ function _injectUserTaskRefFeedback(userMsgEl, cid) {
   if (!userMsgEl || !cid || userMsgEl.dataset.taskRefFeedback === '1') return;
   userMsgEl.dataset.taskRefFeedback = '1';
   try {
-    (window.cogseed || window.orkas).invoke('conversations.taskRefs.list', { cid }).then((res) => {
+    window.cogseed.invoke('conversations.taskRefs.list', { cid }).then((res) => {
       try {
         if (!res || userMsgEl.isConnected === false) return;
         const refs = Array.isArray(res.references) ? res.references : [];
@@ -10783,8 +10812,8 @@ async function handleNewChatSubmit() {
     await uiAlert(t('oss.task_required'));
     return;
   }
-  const guard = await _ensureModelOrCliFallback(DRAFT_CID, raw);
-  if (!guard || !guard.ok) return;
+  if (!(await _ensureModelOrCliFallback(DRAFT_CID, 'new-chat', raw))) return;
+
   const references = _referenceSnapshotsForQuotes(quotes);
   // 无模型降级到 fallback CLI agent 时，若消息以旧 @ 前缀开头，换成
   // fallback agent 的名字（避免后端按旧 @ 解析失败回退 commander）。
@@ -10934,6 +10963,7 @@ async function handleNewChatSubmit() {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
+    ..._recipientRoutingFields(recipientSnapshot),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -10982,8 +11012,8 @@ async function handleChatSubmit() {
     _clearDraft(currentCid);
     return;
   }
-  const guard = await _ensureModelOrCliFallback(currentCid, raw);
-  if (!guard || !guard.ok) return;
+  if (!(await _ensureModelOrCliFallback(currentCid, 'conversation', raw))) return;
+
   const cid = currentCid;
   const quotes = _getQuotes(cid).slice();
   const references = _referenceSnapshotsForQuotes(quotes);
@@ -11064,6 +11094,7 @@ async function handleChatSubmit() {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
+    ..._recipientRoutingFields(recipientSnapshot),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -11618,19 +11649,19 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
     // so re-apply the fallback below instead of failing with "configure API" —
     // this keeps a connected CLI usable after any recipient change.
   }
-  if (!window.orkas || typeof window.orkas.invoke !== 'function') return false;
+  if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return false;
 
   if (!force) {
     let modelRes;
     try {
-      modelRes = await window.orkas.invoke('model.hasConfigured');
+      modelRes = await window.cogseed.invoke('model.hasConfigured');
     } catch (_) { return false; }
     if (modelRes && modelRes.configured) return false;
   }
 
   let cli = '';
   try {
-    const fb = await window.orkas.invoke('prefs.getCliFallback');
+    const fb = await window.cogseed.invoke('prefs.getCliFallback');
     cli = (fb && fb.cli) || '';
   } catch (_) { /* fall through to auto-pick */ }
 
@@ -11641,7 +11672,7 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   // is treated as usable so we never block a CLI off an unknown endpoint.
   let proxyUnreachable = {};
   try {
-    const epRes = await window.orkas.invoke('localAgents.cliEndpointInfo');
+    const epRes = await window.cogseed.invoke('localAgents.cliEndpointInfo');
     const eps = (epRes && epRes.endpoints) || {};
     for (const [type, ep] of Object.entries(eps)) {
       if (ep && ep.isLocalProxy && ep.reachable === false) proxyUnreachable[type] = true;
@@ -11660,7 +11691,7 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   // backstops a runtime failure).
   if (cli && !excluded(cli)) {
     try {
-      const listRes = await window.orkas.invoke('localAgents.list', { force: false });
+      const listRes = await window.cogseed.invoke('localAgents.list', { force: false });
       const entries = (listRes && listRes.entries) || [];
       const FALLBACK_CLIS = ['claude', 'codex', 'opencode', 'workbuddy'];
       const prefEntry = entries.find((e) => e && e.type === cli);
@@ -11692,7 +11723,7 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
     // 无显式偏好，或偏好 CLI 已被排除（运行失败 / 代理不可达）→ 自动挑选下一个可用 CLI。
     // 显式偏好被排除时不悄悄回退到偏好——它已被证明不可用，直接换。
     try {
-      const listRes = await window.orkas.invoke('localAgents.list', { force: false });
+      const listRes = await window.cogseed.invoke('localAgents.list', { force: false });
       const entries = (listRes && listRes.entries) || [];
       // Prefer a SIGNED-IN CLI (official account); fall back to the first
       // available one — the credential check is file-based and can miss
@@ -11721,10 +11752,8 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
 
   let agent = null;
   try {
-    const listRes = await window.orkas.invoke('agents.list', {});
-    // 优先复用已存在的外部智能体：既匹配 kind:'cli'（旧式直跑），也匹配
-    // kind:'p3394-gateway'（外接 tab 接入的受管网关）——无模型时两者都
-    // 不经 CogSeed 模型，直接经本机 CLI 执行。
+    const listRes = await window.cogseed.invoke('agents.list', {});
+
     agent = (listRes && listRes.agents || []).find(
       (a) => a && a.runtime
         && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway')
@@ -11737,9 +11766,8 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   if (!agent) {
     try {
       const name = cli === 'claude' ? 'Claude' : (cli === 'codex' ? 'Codex' : (cli === 'opencode' ? 'OpenCode' : 'WorkBuddy'));
-      // P3394 外接网关类型：与「外接」tab 的接入方式一致（经 bridge 与
-      // 受管网关协作），无模型时可直调；CLI 自身账号/API 运行。
-      const res = await window.orkas.invoke('agents.create', {
+      const res = await window.cogseed.invoke('agents.create', {
+
         name,
         description: `本机 ${name} 命令行，作为 AI 团队成员执行任务`,
         icon: 'code',
@@ -11754,14 +11782,23 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   }
   if (!agent) return false;
 
-  _recipientByCid[cid] = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
+  _recipientByCid[cid] = {
+    kind: 'agent',
+    id: String(agent.agent_id || ''),
+    name: String(agent.name || cli),
+    origin: 'cli_fallback',
+  };
   // new-chat（DRAFT_CID）场景：降级必须同步到 `_newChatRecipient` ——
-  // handleNewChatSubmit 的发送快照与 mention 注入都读 `_activeRecipient('new-chat')`
-  // （即 `_newChatRecipient`），只写 `_recipientByCid[DRAFT_CID]` 的话，后续
-  // `applyRecipientPrefix` 拿到的仍是 commander，消息不会带 `@Agent` 前缀，
-  // 后端仍按 to=commander 路由 → 又报「未配置模型」。
+  // handleNewChatSubmit 的结构化发送快照读 `_activeRecipient('new-chat')`
+  // （即 `_newChatRecipient`）。只写 `_recipientByCid[DRAFT_CID]` 的话，
+  // 后续请求不会携带 recipient_agent_id，仍会按 commander 路由。
   if (cid === DRAFT_CID && typeof _newChatRecipient !== 'undefined') {
-    _newChatRecipient = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
+    _newChatRecipient = {
+      kind: 'agent',
+      id: String(agent.agent_id || ''),
+      name: String(agent.name || cli),
+      origin: 'cli_fallback',
+    };
   }
   _cliFallbackApplied = cid;
   try { _renderRecipientChip('conversation'); } catch (_) {}
@@ -11816,7 +11853,7 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
   // 找出当前 recipient 对应的 CLI 类型。
   let failedCli = '';
   try {
-    const listRes = await window.orkas.invoke('agents.list', {});
+    const listRes = await window.cogseed.invoke('agents.list', {});
     const a = (listRes && listRes.agents || []).find((x) => x && String(x.agent_id) === String(recipient.id));
     if (a && a.runtime && a.runtime.kind === 'cli') failedCli = a.runtime.cli;
   } catch (_) { /* agents list unavailable */ }
@@ -11853,15 +11890,15 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
   // same long hang + failure). Best-effort — never blocks the switch, and a
   // deliberate settings choice is only overwritten when it proved unusable.
   try {
-    const listRes = await window.orkas.invoke('agents.list', {});
+    const listRes = await window.cogseed.invoke('agents.list', {});
     const newRecipient = _recipientByCid[cid] || null;
     const a = newRecipient && (listRes && listRes.agents || []).find(
       (x) => x && String(x.agent_id) === String(newRecipient.id),
     );
     if (a && a.runtime && a.runtime.kind === 'cli') {
-      const cur = await window.orkas.invoke('prefs.getCliFallback');
+      const cur = await window.cogseed.invoke('prefs.getCliFallback');
       if (cur && typeof cur.cli === 'string' && cur.cli && String(cur.cli) !== String(a.runtime.cli)) {
-        await window.orkas.invoke('prefs.setCliFallback', { cli: String(a.runtime.cli) });
+        await window.cogseed.invoke('prefs.setCliFallback', { cli: String(a.runtime.cli) });
         _convLog.info('[cli-fallback] persisted auto-switch as new fallback preference', { from: failedCli, to: String(a.runtime.cli) });
       }
     }
@@ -11887,23 +11924,14 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
  * 仅用于主对话（new-chat / conversation）的 Commander 场景；技能/agent 编辑聊天
  * 等仍走 ensureModelConfigured 原逻辑。
  */
-async function _ensureModelOrCliFallback(cid, rawText) {
-  if (ensureModelConfigured({ silent: true })) return { ok: true };
-  // 无模型：recipient 已是外部智能体（CLI / P3394 外接网关）→ 直接放行。
-  const recipient = _activeRecipient(cid === DRAFT_CID ? 'new-chat' : 'conversation');
-  if (recipient && recipient.kind === 'agent' && recipient.id) {
-    _convLog.info('[cli-fallback] no-model send to external agent, skipping fallback', {
-      cid, recipient: recipient.id,
-    });
-    return { ok: true, recipientId: recipient.id };
-  }
-  // 手动输入 `@智能体名 消息`：leading mention 命中本机外部智能体 → 放行。
-  // （recipient 仍为 commander，由后端 router 解析 @mention 路由到 agent；
-  // 外部智能体不经 CogSeed 模型，直接走本机 CLI。）
-  if (await _mentionTargetsExternalAgent(rawText)) {
-    _convLog.info('[cli-fallback] no-model send with external @mention, skipping fallback', { cid });
-    return { ok: true };
-  }
+async function _ensureModelOrCliFallback(cid, target = 'conversation', rawContent = '') {
+  const selected = _activeRecipient(target);
+  if (selected && selected.kind === 'agent' && selected.id) return true;
+  // A raw mention is an explicit dispatch request of its own. Let main parse
+  // and Wake-gate it; automatic CLI fallback must not replace its target.
+  if (_LEADING_MENTION_RE.test(String(rawContent || '').trim())) return true;
+  if (ensureModelConfigured({ silent: true })) return true;
+
   const ok = await _maybeApplyCliFallback(cid);
   const after = _activeRecipient(cid === DRAFT_CID ? 'new-chat' : 'conversation');
   const fallbackAgentId = (after && after.kind === 'agent' && after.id) ? after.id : '';
@@ -11947,7 +11975,7 @@ async function _cliFallbackGuideUser() {
   if (typeof uiToast !== 'function') return;
   let desktopApps = [];
   try {
-    const res = await window.orkas.invoke('localAgents.detectDesktopApps');
+    const res = await window.cogseed.invoke('localAgents.detectDesktopApps');
     desktopApps = (res && Array.isArray(res.apps)) ? res.apps : [];
   } catch (_) { /* detection is best-effort */ }
 
@@ -11968,37 +11996,31 @@ async function sendInConversation(cid, content, extra, options = {}) {
   if (!cid) return { started: false, aborted: false, errored: false, result: 'failure' };
   const startedAt = performance.now();
   const sendOptions = options && typeof options === 'object' ? options : {};
-  let statAgentId = String(sendOptions.agent_id || '');
+  const isInternalReplay = !!String(extra?.retry_message_id || extra?.edit_message_id || '').trim();
+  let statAgentId = String(sendOptions.agent_id || extra?.recipient_agent_id || '');
 
   // Commander CLI fallback: when no API-key model is configured and the
   // message targets the commander (no explicit agent), route this
   // conversation to the user's signed-in CLI agent so chat still works.
   // Cheap IPC checks; any failure falls through to the normal send path.
-  if (!statAgentId) {
+  if (!statAgentId && !isInternalReplay) {
     try {
       const recipient = _activeRecipient('conversation');
       const toCommander = !recipient || recipient.kind === 'commander';
       _convLog.info('[cli-fallback] sendInConversation check', { cid, statAgentId, recipientKind: recipient && recipient.kind, toCommander });
-      if (toCommander) {
+      if (toCommander && !_LEADING_MENTION_RE.test(String(content || '').trim())) {
         await _maybeApplyCliFallback(cid);
       }
-      // A successful fallback updates _recipientByCid but NOT sendOptions
-      // (it was snapshot before this helper ran). Mirror it back so the
-      // actual send is routed to the CLI agent, not the commander.
+      // A successful fallback updates the recipient. Mirror the validated
+      // snapshot into the request body so main can route without parsing a
+      // synthetic @mention from visible text.
       const after = _activeRecipient('conversation');
       if (after && after.kind === 'agent' && after.id) {
         sendOptions.agent_id = after.id;
         statAgentId = after.id;
-        // The server floor is set by parsing `@name` mentions, not by any
-        // agent_id field. When this send did not already carry a recipient
-        // prefix (direct sendInConversation callers bypass applyRecipientPrefix),
-        // inject the mention so the CLI agent actually holds the floor.
-        if (!_LEADING_MENTION_RE.exec(String(content || ''))) {
-          const display = _recipientPrefixName(after);
-          if (display) {
-            const sep = /^>/.test(String(content || '')) ? '\n' : ' ';
-            content = '@' + display + sep + content;
-          }
+        if (!extra?.recipient_agent_id) {
+          const routing = _recipientRoutingFields(after);
+          if (routing.recipient_agent_id) extra = { ...(extra || {}), ...routing };
         }
       }
     } catch (err) {
@@ -13820,17 +13842,14 @@ function createChatController(config) {
     // drains and auto-seed sends (e.g. skills.js 'autoSeed').
     // 无模型自动降级：若该会话已降级到本机 CLI agent（_cliFallbackApplied === id），
     // CLI 用自己的凭据执行，不需要 CogSeed 的 API 模型 → 放行。
-    // 手动输入 `@外部智能体 消息`（recipient 仍是 commander，由后端 router
-    // 解析 @mention 路由到外部智能体）→ 同样放行：外部智能体不经 CogSeed 模型。
-    // 注意：先用 silent 探测 + @mention 判定，确认确实需要模型时才触发
-    // 非 silent 的 ensureModelConfigured（弹窗+跳设置）——否则无模型时即使
-    // @ 外部智能体放行成功，跳转副作用也已经发生。
-    if (!(_cliFallbackApplied === id) && !ensureModelConfigured({ silent: true })) {
-      if (!(await _mentionTargetsExternalAgent(content))) {
-        ensureModelConfigured();
-        return { started: false, aborted: false, errored: false, reason: 'model_not_configured' };
-      }
-      _convLog.info('[cli-fallback] controller send with external @mention, skipping model gate', { id });
+    const hasStructuredAgent = !!String(extraBody?.recipient_agent_id || '').trim();
+    const isFailedTurnRetry = !!String(extraBody?.retry_message_id || '').trim();
+    const isMessageEdit = !!String(extraBody?.edit_message_id || '').trim();
+    const hasManualRecipientMention = _LEADING_MENTION_RE.test(content);
+    if (!hasStructuredAgent && !hasManualRecipientMention && !isFailedTurnRetry && !isMessageEdit
+      && !(_cliFallbackApplied === id) && !ensureModelConfigured()) {
+      return { started: false, aborted: false, errored: false, reason: 'model_not_configured' };
+
     }
     if (hooks.beforeSend) {
       const transformed = await hooks.beforeSend(content, id);

@@ -32,6 +32,7 @@ import { querySignals } from './expert_signals';
 import { buildRunner } from '../model/core-agent/runner';
 import { cloudSessionFileFor } from '../util/project-layout';
 import { getLanguage } from './config';
+import { hasConfiguredModel } from './auth';
 import { getLocaleMeta } from '../i18n';
 import { scheduleBootBackground, type ScheduledBootBackgroundTask } from '../util/boot_init';
 
@@ -248,6 +249,9 @@ export interface RunCycleOpts {
   isDirty?: (uid: string, agentId: string, sinceMs: number) => Promise<boolean>;
   /** Cooperative cancellation between catalog checks and agent reflections. */
   signal?: AbortSignal;
+  /** Override API-model admission (test seam). A custom `reflect` bypasses the
+   * production check unless this hook is supplied explicitly. */
+  modelAvailable?: () => boolean;
 }
 
 /** Run one reflection cycle: enumerate agents, pick eligible (capped),
@@ -261,6 +265,15 @@ export async function runOneCycle(uid: string, opts: RunCycleOpts = {}): Promise
   }
   if (!metacognition.isFeatureEnabled()) {
     log.debug('metacognition disabled, skipping cycle');
+    return 0;
+  }
+  const shouldCheckModel = opts.reflect === undefined || opts.modelAvailable !== undefined;
+  const modelAvailable = opts.modelAvailable ?? (() => hasConfiguredModel().configured);
+  if (shouldCheckModel && !modelAvailable()) {
+    // Reflection is a model-only maintenance surface. A local CLI can execute
+    // user chat, but it is not an interchangeable background reflection
+    // runner and must not inherit private transcripts implicitly.
+    log.debug('no configured API model, skipping reflection cycle');
     return 0;
   }
   fs.mkdirSync(userLocalConfigDir(uid), { recursive: true });

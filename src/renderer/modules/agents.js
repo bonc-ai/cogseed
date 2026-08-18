@@ -3656,7 +3656,7 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   let boundSkillIds = null;
   let scopeSpace = null;
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.scope.resolve', { spaceId });
+    const res = await window.cogseed.invoke('spaces.scope.resolve', { spaceId });
     const scope = res && res.scope;
     if (scope && Array.isArray(scope.agents) && Array.isArray(scope.skills)) {
       boundAgentIds = new Set(scope.agents);
@@ -4276,8 +4276,8 @@ function _sameTaskRefKey(r) {
 
 async function _loadArtifactPickerRows(spaceId) {
   const [artRes, convRes] = await Promise.all([
-    (window.cogseed || window.orkas).invoke('spaces.artifacts.list', { spaceId }).catch(() => ({})),
-    (window.cogseed || window.orkas).invoke('spaces.conversations.list', { spaceId }).catch(() => ({})),
+    window.cogseed.invoke('spaces.artifacts.list', { spaceId }).catch(() => ({})),
+    window.cogseed.invoke('spaces.conversations.list', { spaceId }).catch(() => ({})),
   ]);
   const titles = new Map();
   for (const c of (convRes && convRes.conversations) || []) {
@@ -4292,7 +4292,7 @@ async function _loadAssetPickerRows(spaceId) {
   // 不再用全局 recall.assets.list——用户明确要求空间资产）。
   if (!spaceId) return [];
   try {
-    const res = await (window.cogseed || window.orkas).invoke('recall.assets.listForSpace', { spaceId });
+    const res = await window.cogseed.invoke('recall.assets.listForSpace', { spaceId });
     return Array.isArray(res && res.assets)
       ? res.assets.map((a) => ({ asset_id: a.id, title: a.title, asset_type: a.type }))
       : [];
@@ -4435,7 +4435,7 @@ function _renderTaskRefChips(el, refs, cid) {
       const idx = Number(btn.dataset.index);
       try {
         if (c) {
-          await (window.cogseed || window.orkas).invoke('conversations.taskRefs.remove', { cid: c, index: idx });
+          await window.cogseed.invoke('conversations.taskRefs.remove', { cid: c, index: idx });
         } else {
           _pendingNewChatRefs = (_pendingNewChatRefs || []).filter((_, i) => i !== idx);
         }
@@ -4456,7 +4456,7 @@ function renderChatTaskRefChips() {
     else {
       (async () => {
         try {
-          const res = await (window.cogseed || window.orkas).invoke('conversations.taskRefs.list', { cid });
+          const res = await window.cogseed.invoke('conversations.taskRefs.list', { cid });
           const refs = Array.isArray(res && res.references) ? res.references : [];
           _renderTaskRefChips(convEl, refs, cid);
         } catch (_) { convEl.style.display = 'none'; }
@@ -4483,7 +4483,7 @@ async function commitNewChatTaskRefs(convId) {
   if (!convId || !refs.length) return;
   for (const r of refs.slice(0, 20)) {
     try {
-      await (window.cogseed || window.orkas).invoke('conversations.taskRefs.add', { cid: convId, reference: r });
+      await window.cogseed.invoke('conversations.taskRefs.add', { cid: convId, reference: r });
     } catch (err) {
       _agentsLog.warn('taskRefs.add for new chat failed', err);
     }
@@ -4496,7 +4496,7 @@ async function _commitTaskRef(reference, anchorId) {
     const cid = (typeof currentCid === 'string') ? currentCid : '';
     if (!cid) return false;
     try {
-      const res = await (window.cogseed || window.orkas).invoke('conversations.taskRefs.add', { cid, reference });
+      const res = await window.cogseed.invoke('conversations.taskRefs.add', { cid, reference });
       if (res && res.error) throw new Error(res.error);
     } catch (err) {
       _agentsLog.warn('taskRefs.add failed', err);

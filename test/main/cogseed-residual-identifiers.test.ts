@@ -47,11 +47,15 @@ describe('CogSeed residual identifiers', () => {
     expect(readme).toContain('.cogseed');
     expect(readme).toContain('mateagent://');
 
-    for (const file of ['AGENTS.md', 'CLAUDE.md']) {
-      const source = read(file);
-      expect(source, file).toContain('window.cogseed.{invoke, stream}');
-      expect(source, file).not.toContain('window.orkas.{invoke, stream}');
-    }
+    // AGENTS.md 是仓库规则单一事实源（含 window.cogseed 契约）；CLAUDE.md
+    // 按 2026-08-14 清理纪律降级为指针文件，不再重复规则——断言它指向
+    // AGENTS.md 而不是重复 window.cogseed 字样。
+    const agents = read('AGENTS.md');
+    expect(agents).toContain('window.cogseed.{invoke, stream}');
+    expect(agents).not.toContain('window.orkas.{invoke, stream}');
+    const claude = read('CLAUDE.md');
+    expect(claude).toContain('AGENTS.md');
+    expect(claude).not.toContain('window.orkas.{invoke, stream}');
   });
 
   it('uses a canonical cogseed temp prefix for local imports', async () => {

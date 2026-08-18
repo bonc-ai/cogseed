@@ -194,7 +194,42 @@ export async function precipitateRequirementLevel(
   // 「关于我」独立资产（方案 C 2026-08-17）：确定性扫描会话用户消息的长期
   // 偏好陈述，产 personal 候选。与 lesson 候选合并沉淀（可能两者都无）。
   const personalProposals = await buildPersonalProposals(userId, requirement, episodes);
-  const allProposals = [...proposals, ...personalProposals];
+  // N-17 桥接：外部智能体（P3394 网关节点）的协作样本——主 KStar 沉淀链
+  // 读 p3394-kstar/ 落盘的 episode，把 proposed_updates（Learn-What 候选，
+  // 只建议不写回）作为附加证据注入本任务的提案。窗口取任务最近一次闭合
+  // 之前 24h 内完成的 P3394 会话；失败静默降级（不影响既有沉淀）。
+  let allProposals = [...proposals, ...personalProposals];
+  try {
+    const { collectP3394ProposedUpdates } = await import('../p3394_bridge/kstar-episodes');
+    const p3394Updates = await collectP3394ProposedUpdates(Date.now() - 24 * 60 * 60 * 1_000);
+    if (p3394Updates.length && allProposals.length) {
+      const { normalizeCognitionSourceRefs } = await import('../recall/source-service');
+      const p3394Refs = normalizeCognitionSourceRefs(p3394Updates.slice(0, 20).map((update, index) => ({
+        kind: 'authorized_external_system',
+        subtype: 'connector_record',
+        scope: 'external',
+        id: `p3394-proposal-${Date.now().toString(36)}-${index}`,
+        ...(update && typeof update === 'object' && typeof (update as { goal?: unknown }).goal === 'string'
+          ? { title: String((update as { goal: unknown }).goal).slice(0, 160) }
+          : {}),
+      })));
+      allProposals = allProposals.map((proposal) => ({
+        ...proposal,
+        sourceRefs: [...(proposal.sourceRefs || []), ...p3394Refs],
+      }));
+      log.info('requirement precipitation bridged p3394 proposed updates', {
+        userId,
+        requirementId: requirement.id,
+        updateCount: p3394Updates.length,
+      });
+    }
+  } catch (error) {
+    log.warn('requirement precipitation p3394 bridge degraded', {
+      userId,
+      requirementId: requirement.id,
+      error: (error as Error).message,
+    });
+  }
   if (allProposals.length === 0) {
     return { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [] };
   }
