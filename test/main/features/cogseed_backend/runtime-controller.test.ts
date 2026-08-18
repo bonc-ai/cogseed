@@ -306,4 +306,74 @@ describe('CogSeed Runtime controller', () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
+  it('injects confirmed recall assets into the runtime context when a conversation is bound (M-1 / Decision 2)', async () => {
+    // Seed a confirmed projection for the conversation, exactly like the
+    // recall prompt-injection tests do.
+    const [candidates, refs, projection, storage, layout] = await Promise.all([
+      import('../../../../src/main/features/recall/candidate-service'),
+      import('../../../../src/main/features/recall/workspace-refs'),
+      import('../../../../src/main/features/recall/context-projection'),
+      import('../../../../src/main/storage'),
+      import('../../../../src/main/util/project-layout'),
+    ]);
+    const candidate = await candidates.saveRecallCandidate(USER, {
+      judgment: 'Keep runtime boundaries explicit before changing them.',
+      summary: 'Runtime boundary decision log',
+      suggestedType: 'rule',
+      suggestedScope: 'review,project',
+      sourceRefs: [{ kind: 'execution', id: 'exec-m1' }],
+    });
+    const asset = await candidates.promoteRecallCandidate(USER, candidate.id, { actor: 'user' });
+    await refs.addWorkspaceAssetReference(USER, { assetId: asset.asset.id, workspaceId: 'workspace-m1', scope: 'review' });
+    const preview = await projection.previewContextProjection(USER, {
+      taskRunId: 'task-m1', workspaceId: 'workspace-m1', purpose: 'review',
+    });
+    const confirmed = await projection.confirmContextProjection(USER, preview.id);
+    const messageFile = layout.conversationMessageFile(USER, 'cid-m1');
+    fs.mkdirSync(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: 'msg-m1', ts: new Date().toISOString(), from: 'commander', to: ['user'], text: 'preview',
+      recall_projection_card: { projectionId: confirmed.id },
+    });
+
+    const runtime = runtimeFrom([
+      { type: 'result', request_id: 'req-asset', runtime_session_id: 'mruntime-asset', status: 'completed', text: 'done' },
+    ]);
+    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = createMateRuntimeController({ runtime });
+
+    await controller.startMateTask(USER, {
+      requestId: 'req-asset',
+      task: 'Apply the remembered rule.',
+      conversationId: 'cid-m1',
+    });
+
+    await eventually(() => {
+      expect(runtime.inputs).toHaveLength(1);
+      const context = (runtime.inputs[0] as { context?: Array<{ type: string; content: string }> }).context ?? [];
+      const assetItem = context.find((item) => item.type === 'text' && item.content.includes('<confirmed-ability-assets>'));
+      expect(assetItem).toBeDefined();
+      expect(assetItem!.content).toContain('Runtime boundary decision log');
+    });
+  });
+
+  it('skips asset injection when no conversation is bound (soft degradation)', async () => {
+    const runtime = runtimeFrom([
+      { type: 'result', request_id: 'req-noasset', runtime_session_id: 'mruntime-noasset', status: 'completed', text: 'done' },
+    ]);
+    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = createMateRuntimeController({ runtime });
+
+    await controller.startMateTask(USER, {
+      requestId: 'req-noasset',
+      task: 'Run without conversation context.',
+    });
+
+    await eventually(() => {
+      expect(runtime.inputs).toHaveLength(1);
+      const context = (runtime.inputs[0] as { context?: Array<{ type: string; content: string }> }).context ?? [];
+      expect(context.some((item) => item.content.includes('<confirmed-ability-assets>'))).toBe(false);
+    });
+  });
+
 });

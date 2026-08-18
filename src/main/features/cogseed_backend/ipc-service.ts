@@ -184,6 +184,7 @@ function normalizeStartInput(payload: unknown): StartMateTaskInput {
   const context = boundedArray(raw.context, 'context', MAX_CONTEXT_ITEMS);
   const attachments = boundedArray(raw.attachments, 'attachments', MAX_ATTACHMENT_ITEMS);
   const workingDir = boundedString(raw.workingDir, 'workingDir', 2_000, false);
+  const conversationId = boundedString(raw.conversationId, 'conversationId', 160, false);
   return {
     requestId,
     task,
@@ -192,6 +193,7 @@ function normalizeStartInput(payload: unknown): StartMateTaskInput {
     ...(context ? { context } : {}),
     ...(attachments ? { attachments } : {}),
     ...(workingDir ? { workingDir } : {}),
+    ...(conversationId ? { conversationId } : {}),
   };
 }
 
