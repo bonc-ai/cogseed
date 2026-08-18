@@ -9,14 +9,15 @@
  *        → materialize into a continuable conversation (stage 3)
  *        → route extracted cognitions into Recall's candidate pool (stage 4).
  *
- *   2. `routeCognitions` — the stage-4 mapping itself. The three extracted
- *      cognition buckets map 1:1 onto Recall's AbilityAssetType:
- *        personal  → suggestedType 'personal'   (关于我)
- *        rules     → suggestedType 'rule'       (规则与偏好)
- *        templates → suggestedType 'template'   (模板与范例)
- *      Each becomes a *pending* candidate the user later confirms in the
- *      Recall review page — imported entities (the conversation) are direct,
- *      but model-inferred cognitions always go through human confirmation.
+ *   2. `routeCognitions` — the stage-4 mapping itself. The extracted
+ *      candidates carry a `suggestedType` in the four AbilityAssetType values
+ *      (personal | rule | template | skill_method) — the SAME extraction rule
+ *      the recall capture pipeline ("沉淀活动 → 从历史会话沉淀") uses — plus
+ *      the full candidate fields (value / risk / suggestedAction /
+ *      applicableWhen / forbiddenWhen). Each becomes a *pending* candidate the
+ *      user later confirms in the Recall review page — imported entities (the
+ *      conversation) are direct, but model-inferred cognitions always go
+ *      through human confirmation.
  *
  * ## Recall isolation boundary
  *
@@ -34,24 +35,25 @@
 
 import { createHash } from 'node:crypto';
 
-import { saveRecallCandidate } from '../recall/candidate-service';
+import { saveRecallCandidate, type RecallCandidateAction, type RecallCandidateRisk } from '../recall/candidate-service';
 import { readClaudeSessionTranscript } from '../local_agents/claude_sessions';
 import { listClaudeDesktopSessions } from '../local_agents/claude_desktop_sessions';
 import { parseClaudeTranscript, parseWorkbuddyTranscript, type NormalizedTranscript } from './transcript-normalize';
 import { readWorkbuddySessionTranscript } from '../local_agents/workbuddy_sessions';
-import { extractSession, type CognitionItem, type ExtractionResult } from './extractor';
+import { extractSession, type CognitionCandidate, type EmittedCognitionType, type ExtractionResult } from './extractor';
 import { materializeSession, type MaterializeResult } from './materialize';
 import { createLogger } from '../../logger';
 
 const log = createLogger('session-import:asset-router');
 
 /** Recall candidate types this feature emits (subset of AbilityAssetType). */
-type EmittedType = 'personal' | 'rule' | 'template';
+type EmittedType = EmittedCognitionType;
 
 export interface RoutedCognitionCounts {
   personal: number;
   rule: number;
   template: number;
+  skill_method: number;
 }
 
 export interface ImportSessionResult {
@@ -180,9 +182,7 @@ function placeholderExtraction(transcript: NormalizedTranscript): ExtractionResu
   return {
     ok: false,
     sessionSummary: summary || '从导入的会话开始',
-    personal: [],
-    rules: [],
-    templates: [],
+    candidates: [],
     degraded: true,
     reason: 'extraction_pending',
   };
@@ -303,42 +303,54 @@ function captureKeyFor(source: string, sourceId: string, type: EmittedType, text
   return `simport-${hash}`;
 }
 
-/** Route one cognition bucket into the candidate pool. Returns how many were
- *  written (existing/deduped ones still count as present). Best-effort per
- *  item: one bad item never aborts the batch. */
-async function routeBucket(
+/** Valid suggestedAction / risk values (the union types SaveRecallCandidateInput
+ *  accepts). Model output is untrusted, so out-of-range values are dropped
+ *  rather than asserted through. */
+const CANDIDATE_ACTIONS = new Set<RecallCandidateAction>(['create', 'update', 'limit_scope', 'pause', 'keep_current', 'reject']);
+const CANDIDATE_RISKS = new Set<RecallCandidateRisk>(['low', 'medium', 'high']);
+
+/** Route one cognition candidate into the candidate pool, carrying the full
+ *  field set the capture pipeline produces (value / risk / suggestedAction /
+ *  applicableWhen / forbiddenWhen), so an imported candidate and a
+ *  capture-derived candidate are indistinguishable downstream. Best-effort:
+ *  one bad item never aborts the batch. */
+async function routeCandidate(
   userId: string,
-  items: CognitionItem[],
-  type: EmittedType,
+  candidate: CognitionCandidate,
   conversationId: string,
   source: string,
   sourceId: string,
 ): Promise<number> {
-  let count = 0;
-  for (const item of items) {
-    const text = item.text.trim();
-    if (!text) continue;
-    try {
-      await saveRecallCandidate(userId, {
-        judgment: text,
-        summary: item.note?.trim() || undefined,
-        suggestedType: type,
-        suggestedScope: 'personal',
-        // Evidence points at the materialized conversation (kind:'conversation',
-        // subtype defaults to 'session'). Non-empty sourceRefs is required.
-        sourceRefs: [{ kind: 'conversation', id: conversationId, subtype: 'session' }],
-        captureKey: captureKeyFor(source, sourceId, type, text),
-      });
-      count += 1;
-    } catch (err) {
-      log.warn('failed to route cognition candidate', { type, error: String(err) });
-    }
+  const text = candidate.text.trim();
+  if (!text) return 0;
+  const action = candidate.suggestedAction?.trim() as RecallCandidateAction | undefined;
+  const risk = candidate.risk?.trim() as RecallCandidateRisk | undefined;
+  try {
+    await saveRecallCandidate(userId, {
+      judgment: text,
+      value: candidate.value?.trim() || undefined,
+      summary: candidate.note?.trim() || undefined,
+      uncertainty: candidate.uncertainty?.trim() || undefined,
+      suggestedType: candidate.suggestedType,
+      suggestedScope: candidate.suggestedScope?.trim() || 'personal',
+      ...(candidate.applicableWhen ? { applicableWhen: candidate.applicableWhen } : {}),
+      ...(candidate.forbiddenWhen ? { forbiddenWhen: candidate.forbiddenWhen } : {}),
+      ...(action && CANDIDATE_ACTIONS.has(action) ? { suggestedAction: action } : {}),
+      ...(risk && CANDIDATE_RISKS.has(risk) ? { risk } : {}),
+      // Evidence points at the materialized conversation (kind:'conversation',
+      // subtype defaults to 'session'). Non-empty sourceRefs is required.
+      sourceRefs: [{ kind: 'conversation', id: conversationId, subtype: 'session' }],
+      captureKey: captureKeyFor(source, sourceId, candidate.suggestedType, text),
+    });
+    return 1;
+  } catch (err) {
+    log.warn('failed to route cognition candidate', { type: candidate.suggestedType, error: String(err) });
+    return 0;
   }
-  return count;
 }
 
 /**
- * Route all three extracted cognition buckets into the Recall candidate pool.
+ * Route all extracted cognition candidates into the Recall candidate pool.
  * `conversationId` is the materialized conversation used as evidence.
  */
 export async function routeCognitions(
@@ -346,14 +358,14 @@ export async function routeCognitions(
   source: string,
   sourceId: string,
   conversationId: string,
-  buckets: { personal: CognitionItem[]; rules: CognitionItem[]; templates: CognitionItem[] },
+  candidates: CognitionCandidate[],
 ): Promise<RoutedCognitionCounts> {
-  const [personal, rule, template] = await Promise.all([
-    routeBucket(userId, buckets.personal, 'personal', conversationId, source, sourceId),
-    routeBucket(userId, buckets.rules, 'rule', conversationId, source, sourceId),
-    routeBucket(userId, buckets.templates, 'template', conversationId, source, sourceId),
-  ]);
-  return { personal, rule, template };
+  const counts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0, skill_method: 0 };
+  await Promise.all(candidates.map(async (candidate) => {
+    const written = await routeCandidate(userId, candidate, conversationId, source, sourceId);
+    if (written > 0) counts[candidate.suggestedType] += 1;
+  }));
+  return counts;
 }
 
 export interface ImportClaudeSessionInput {
@@ -385,7 +397,7 @@ async function commitPreparedSession(
   prepared: PreparedSession,
   titleHint?: string,
 ): Promise<ImportSessionResult> {
-  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0 };
+  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0, skill_method: 0 };
   const { source, transcript, extraction, truncated } = prepared;
 
   const materialize = await materializeSession({
@@ -405,13 +417,14 @@ async function commitPreparedSession(
       source,
       transcript.sourceId,
       materialize.conversationId,
-      { personal: extraction.personal, rules: extraction.rules, templates: extraction.templates },
+      extraction.candidates,
     );
   }
 
   log.info(
     `imported ${source} session=${transcript.sourceId} cid=${materialize.conversationId} ` +
-    `degraded=${!!extraction.degraded} cog=${cognitions.personal}/${cognitions.rule}/${cognitions.template}`,
+    `degraded=${!!extraction.degraded} ` +
+    `cog=${cognitions.personal}/${cognitions.rule}/${cognitions.template}/${cognitions.skill_method}`,
   );
 
   return {
@@ -427,7 +440,7 @@ async function commitPreparedSession(
 }
 
 export async function importClaudeSession(input: ImportClaudeSessionInput): Promise<ImportSessionResult> {
-  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0 };
+  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0, skill_method: 0 };
 
   // B+ fast import: a settled prefetch (extraction already in hand) commits
   // directly; otherwise the conversation materializes immediately and the
@@ -477,7 +490,7 @@ export interface ImportWorkbuddySessionInput {
  * WorkBuddy session become real, owned cognitive assets in CogSeed.
  */
 export async function importWorkbuddySession(input: ImportWorkbuddySessionInput): Promise<ImportSessionResult> {
-  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0 };
+  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0, skill_method: 0 };
 
   // B+ fast import (same split as importClaudeSession).
   const ready = await getPreparedIfReady('workbuddy', input.userId, input.filePath);
@@ -526,7 +539,7 @@ export interface ImportClaudeDesktopSessionInput {
 export async function importClaudeDesktopSession(
   input: ImportClaudeDesktopSessionInput,
 ): Promise<ImportSessionResult> {
-  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0 };
+  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0, skill_method: 0 };
 
   const scan = await listClaudeDesktopSessions();
   if (!scan.ok) {

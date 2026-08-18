@@ -82,6 +82,7 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .btn svg{width:15px;height:15px}
 #cs-onboarding .status{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border-radius:11px;font-size:9px;font-weight:750;white-space:nowrap;background:#eff2f1;color:#5f6d66}
 #cs-onboarding .status.green{background:var(--cs-forest-weak);color:var(--cs-forest-deep)}
+#cs-onboarding .status.red{background:#FBE9E5;color:#B23B2A}
 
 #cs-onboarding .first-run-shell{min-height:calc(100vh - 44px);display:grid;grid-template-columns:minmax(0,1.04fr) minmax(420px,.96fr);max-width:1180px;margin:0 auto}
 #cs-onboarding .first-run-story{padding:78px 68px 54px 42px;display:flex;flex-direction:column;justify-content:center}
@@ -420,15 +421,6 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-team-row{grid-template-columns:42px minmax(0,1fr) auto}
 #cs-onboarding .cs-team-row .cs-team-right{display:flex;align-items:center;gap:10px}
 #cs-onboarding .cs-team-actions{display:flex;align-items:center;gap:8px}
-#cs-onboarding .cs-team-action-select{padding:7px 12px;font-size:12px;border:1px solid var(--cs-line);
-  border-radius:6px;background:var(--cs-paper);color:var(--cs-ink);cursor:pointer;
-  transition:all .15s;outline:none;min-width:160px}
-/* 单选项（无可存储 API）时不用 <select>，纯文本占位与下拉框视觉一致 */
-#cs-onboarding .cs-team-connect-only{padding:7px 12px;font-size:12px;min-width:160px;
-  border:1px solid var(--cs-line);border-radius:6px;background:var(--cs-paper);
-  color:var(--cs-muted);text-align:center;user-select:none}
-#cs-onboarding .cs-team-action-select:hover{border-color:var(--cs-forest);background:var(--cs-paper-lift)}
-#cs-onboarding .cs-team-action-select:focus{border-color:var(--cs-forest);box-shadow:0 0 0 3px var(--cs-forest-ghost)}
 #cs-onboarding .cs-team-connect{padding:7px 16px;font-size:12px}
 #cs-onboarding .cs-team-connect.done{background:var(--cs-forest-weak);color:var(--cs-forest-deep);cursor:default}
 #cs-onboarding .cs-team-connect.done:hover{background:var(--cs-forest-weak)}

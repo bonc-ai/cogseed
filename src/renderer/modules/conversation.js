@@ -1149,10 +1149,21 @@ function _initSessionImportEvents() {
 }
 
 function _handleExtractionDone(event) {
-  const { cid, welcome } = event;
+  const { cid, welcome, cognitions } = event;
   if (cid === currentCid) _upgradeWelcomePanel(cid, welcome);
+  // 提炼完成 → 刷新右侧「运行上下文」：四类资产段的「正在提炼」状态结束，
+  // 计数随最新资产更新（候选确认后进入正式资产才会变化，刷新保持数据新鲜）。
+  if (cid === currentCid && window.ConversationInfo && typeof window.ConversationInfo.refresh === 'function') {
+    try { window.ConversationInfo.refresh(cid, { silent: true }); } catch (_) {}
+  }
   if (typeof uiToast === 'function') {
-    uiToast(t('chat.welcome_extraction_done', '导入会话已完成提炼，可查看携带明细'), { variant: 'success', timeoutMs: 5000 });
+    const total = cognitions
+      ? (cognitions.personal || 0) + (cognitions.rule || 0) + (cognitions.template || 0) + (cognitions.skill_method || 0)
+      : 0;
+    const msg = total > 0
+      ? t('chat.welcome_extraction_done_with_count', '导入会话已完成提炼：{count} 条认知候选可到认知沉淀确认', { count: total })
+      : t('chat.welcome_extraction_done', '导入会话已完成提炼，可查看携带明细');
+    uiToast(msg, { variant: 'success', timeoutMs: 5000 });
   }
 }
 
@@ -1164,6 +1175,10 @@ function _handleExtractionFailed(event) {
       panel.classList.remove('is-pending');
       const badge = panel.querySelector('.welcome-carry-pending-badge');
       if (badge) badge.textContent = t('chat.welcome_extraction_failed', '提炼失败');
+    }
+    // 失败同样结束「正在提炼」状态：刷新四类资产段。
+    if (window.ConversationInfo && typeof window.ConversationInfo.refresh === 'function') {
+      try { window.ConversationInfo.refresh(cid, { silent: true }); } catch (_) {}
     }
   }
   if (typeof uiToast === 'function') {

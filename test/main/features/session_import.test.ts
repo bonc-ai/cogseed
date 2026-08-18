@@ -85,14 +85,24 @@ describe('session_import › transcript-normalize', () => {
 });
 
 describe('session_import › extractor', () => {
-  it('parses strict JSON from a single pass', async () => {
+  it('parses strict JSON from a single pass (four-type candidates with full fields)', async () => {
     __nextChat = () => ({
       ok: true,
       text: JSON.stringify({
         summary: '完成了支付迁移，遗留退款回调未测。',
-        personal: [{ text: '偏好 TypeScript' }],
-        rules: ['提交前必须过 lint'],
-        templates: [],
+        candidates: [
+          { judgment: '偏好 TypeScript', suggestedType: 'personal' },
+          {
+            judgment: '提交前必须过 lint',
+            summary: '提交前 lint',
+            suggestedType: 'rule',
+            value: '减少 CI 失败返工',
+            risk: 'low',
+            applicableWhen: ['提交代码前'],
+            forbiddenWhen: ['紧急热修'],
+          },
+          { judgment: '支付回调用重试队列保证最终一致', suggestedType: 'skill_method', uncertainty: '单次出现' },
+        ],
       }),
     });
     const { extractSession } = await import('../../../src/main/features/session_import/extractor');
@@ -102,15 +112,50 @@ describe('session_import › extractor', () => {
     });
     expect(res.ok).toBe(true);
     expect(res.sessionSummary).toContain('支付迁移');
-    expect(res.personal[0].text).toBe('偏好 TypeScript');
-    expect(res.rules[0].text).toBe('提交前必须过 lint');
-    expect(res.templates).toEqual([]);
+    expect(res.candidates).toHaveLength(3);
+    expect(res.candidates[0]).toMatchObject({ text: '偏好 TypeScript', suggestedType: 'personal' });
+    expect(res.candidates[1]).toMatchObject({
+      text: '提交前必须过 lint',
+      note: '提交前 lint',
+      suggestedType: 'rule',
+      value: '减少 CI 失败返工',
+      risk: 'low',
+      applicableWhen: ['提交代码前'],
+      forbiddenWhen: ['紧急热修'],
+    });
+    expect(res.candidates[2]).toMatchObject({
+      text: '支付回调用重试队列保证最终一致',
+      suggestedType: 'skill_method',
+      uncertainty: '单次出现',
+    });
+  });
+
+  it('still parses the legacy three-bucket shape (personal/rules/templates)', async () => {
+    __nextChat = () => ({
+      ok: true,
+      text: JSON.stringify({
+        summary: 'S',
+        personal: [{ text: '偏好深色主题' }],
+        rules: ['提交前必须过 lint'],
+        templates: [],
+      }),
+    });
+    const { extractSession } = await import('../../../src/main/features/session_import/extractor');
+    const res = await extractSession(TEST_UID, {
+      source: 'claude', sourceId: 's', projectPath: '',
+      turns: [{ role: 'user', text: 'hi', ts: '' }],
+    });
+    expect(res.ok).toBe(true);
+    expect(res.candidates).toEqual([
+      { text: '偏好深色主题', suggestedType: 'personal' },
+      { text: '提交前必须过 lint', suggestedType: 'rule' },
+    ]);
   });
 
   it('strips code fences around the JSON', async () => {
     __nextChat = () => ({
       ok: true,
-      text: '好的，结果如下：\n```json\n{"summary":"S","personal":[],"rules":[],"templates":[]}\n```',
+      text: '好的，结果如下：\n```json\n{"summary":"S","candidates":[]}\n```',
     });
     const { extractSession } = await import('../../../src/main/features/session_import/extractor');
     const res = await extractSession(TEST_UID, {
@@ -119,6 +164,7 @@ describe('session_import › extractor', () => {
     });
     expect(res.ok).toBe(true);
     expect(res.sessionSummary).toBe('S');
+    expect(res.candidates).toEqual([]);
   });
 
   it('degrades honestly when the model output is unparseable', async () => {
@@ -132,7 +178,7 @@ describe('session_import › extractor', () => {
     expect(res.degraded).toBe(true);
     // Fallback seed = first user turn, so the session stays importable.
     expect(res.sessionSummary).toContain('第一句用户消息');
-    expect(res.personal).toEqual([]);
+    expect(res.candidates).toEqual([]);
   });
 
   it('degrades when the model call fails', async () => {
@@ -149,25 +195,39 @@ describe('session_import › extractor', () => {
 });
 
 describe('session_import › asset-router (cognitions → Recall candidate pool)', () => {
-  it('routes the three buckets to matching suggestedType candidates', async () => {
+  it('routes four-type candidates with the full field set to matching suggestedType', async () => {
     const { routeCognitions } = await import('../../../src/main/features/session_import/asset-router');
     const recall = await import('../../../src/main/features/recall/candidate-service');
 
     // A conversation id must be a safeId; use one materialize would produce.
     const cid = 'imp-claude-abc123';
-    const counts = await routeCognitions(TEST_UID, 'claude', 'sess-1', cid, {
-      personal: [{ text: '偏好 TypeScript' }],
-      rules: [{ text: '提交前必须过 lint', note: '用户强调过两次' }],
-      templates: [{ text: 'PR 描述用三段式' }],
-    });
-    expect(counts).toEqual({ personal: 1, rule: 1, template: 1 });
+    const counts = await routeCognitions(TEST_UID, 'claude', 'sess-1', cid, [
+      { text: '偏好 TypeScript', suggestedType: 'personal' },
+      {
+        text: '提交前必须过 lint',
+        note: '用户强调过两次',
+        suggestedType: 'rule',
+        value: '减少 CI 失败返工',
+        risk: 'low',
+        applicableWhen: ['提交代码前'],
+        forbiddenWhen: ['紧急热修'],
+      },
+      { text: 'PR 描述用三段式', suggestedType: 'template' },
+      { text: '支付回调用重试队列', suggestedType: 'skill_method' },
+    ]);
+    expect(counts).toEqual({ personal: 1, rule: 1, template: 1, skill_method: 1 });
 
     const candidates = await recall.listRecallCandidates(TEST_UID);
     const byType = (t: string) => candidates.filter((c: any) => c.suggestedType === t);
     expect(byType('personal')[0].judgment).toBe('偏好 TypeScript');
     expect(byType('rule')[0].judgment).toBe('提交前必须过 lint');
     expect(byType('rule')[0].summary).toBe('用户强调过两次');
+    expect(byType('rule')[0].value).toBe('减少 CI 失败返工');
+    expect(byType('rule')[0].risk).toBe('low');
+    expect(byType('rule')[0].applicableWhen).toEqual(['提交代码前']);
+    expect(byType('rule')[0].forbiddenWhen).toEqual(['紧急热修']);
     expect(byType('template')[0].judgment).toBe('PR 描述用三段式');
+    expect(byType('skill_method')[0].judgment).toBe('支付回调用重试队列');
     // Evidence points at the materialized conversation.
     expect(byType('personal')[0].sourceRefs[0].id).toBe(cid);
     expect(byType('personal')[0].sourceRefs[0].kind).toBe('conversation');
@@ -178,12 +238,12 @@ describe('session_import › asset-router (cognitions → Recall candidate pool)
     const recall = await import('../../../src/main/features/recall/candidate-service');
     const cid = 'imp-claude-dedup1';
 
-    await routeCognitions(TEST_UID, 'claude', 'sess-dup', cid, {
-      personal: [{ text: '偏好深色主题' }], rules: [], templates: [],
-    });
-    await routeCognitions(TEST_UID, 'claude', 'sess-dup', cid, {
-      personal: [{ text: '偏好深色主题' }], rules: [], templates: [],
-    });
+    await routeCognitions(TEST_UID, 'claude', 'sess-dup', cid, [
+      { text: '偏好深色主题', suggestedType: 'personal' },
+    ]);
+    await routeCognitions(TEST_UID, 'claude', 'sess-dup', cid, [
+      { text: '偏好深色主题', suggestedType: 'personal' },
+    ]);
 
     const personal = (await recall.listRecallCandidates(TEST_UID))
       .filter((c: any) => c.suggestedType === 'personal' && c.judgment === '偏好深色主题');
@@ -302,7 +362,10 @@ describe('session_import › full pipeline (importClaudeSession)', () => {
       ok: true,
       text: JSON.stringify({
         summary: 'CI 缓存 key 已修复，剩下并发任务待验证。',
-        personal: [], rules: [{ text: 'CI 必须绿灯才能合' }], templates: [],
+        candidates: [
+          { judgment: 'CI 必须绿灯才能合', suggestedType: 'rule' },
+          { judgment: '缓存 key 按平台分目录隔离', suggestedType: 'skill_method' },
+        ],
       }),
     });
 
@@ -315,7 +378,7 @@ describe('session_import › full pipeline (importClaudeSession)', () => {
     const res = await importClaudeSession({ userId: TEST_UID, filePath });
     expect(res.ok).toBe(true);
     expect(res.extractionPending).toBe(true);
-    expect(res.cognitions).toEqual({ personal: 0, rule: 0, template: 0 });
+    expect(res.cognitions).toEqual({ personal: 0, rule: 0, template: 0, skill_method: 0 });
 
     // Conversation exists immediately, seeded with the placeholder banner.
     const msgs = await chats.getMessages(TEST_UID, res.conversationId!);
@@ -474,7 +537,7 @@ describe('session_import › materialize', () => {
       extraction: {
         ok: true,
         sessionSummary: '上次进展：完成支付迁移，退款回调待测。',
-        personal: [], rules: [], templates: [],
+        candidates: [],
       },
     });
 
@@ -496,17 +559,109 @@ describe('session_import › materialize', () => {
     expect(msgs[0].model_text).toContain('继续协助');
   });
 
+  it('binds the original project directory as the conversation coding_project_dir', async () => {
+    const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
+    const { readState } = await import('../../../src/main/features/group_chat/state');
+
+    // Real project dir inside the test workspace.
+    const projectDir = path.join(os.homedir(), 'orig-project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'README.md'), '# project');
+
+    const result = await materializeSession({
+      userId: TEST_UID,
+      source: 'claude',
+      sourceId: 'sess-proj',
+      projectPath: projectDir,
+      extraction: { ok: true, sessionSummary: 'S', candidates: [] },
+    });
+
+    const st = await readState(TEST_UID, result.conversationId);
+    // 绑定的是 realpath 规范化后的路径（macOS /var → /private/var）。
+    expect(st.coding_project_dir).toBe(fs.realpathSync(projectDir));
+
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  it('skips the project-dir binding when the original directory is gone', async () => {
+    const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
+    const { readState } = await import('../../../src/main/features/group_chat/state');
+
+    const result = await materializeSession({
+      userId: TEST_UID,
+      source: 'claude',
+      sourceId: 'sess-proj-gone',
+      projectPath: path.join(os.homedir(), 'does-not-exist-12345'),
+      extraction: { ok: true, sessionSummary: 'S', candidates: [] },
+    });
+
+    const st = await readState(TEST_UID, result.conversationId);
+    expect(st.coding_project_dir).toBeUndefined();
+  });
+
+  it('skips binding when the original path is a system temp root (Claude cwd=$TMPDIR)', async () => {
+    const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
+    const { readState } = await import('../../../src/main/features/group_chat/state');
+
+    // $TMPDIR itself (macOS realpath /private/var/folders/.../T) must never be
+    // bound as a workspace — it would scan system temp files.
+    const tmpRoot = fs.realpathSync(os.tmpdir());
+    const result = await materializeSession({
+      userId: TEST_UID,
+      source: 'claude',
+      sourceId: 'sess-proj-tmp',
+      projectPath: tmpRoot,
+      extraction: { ok: true, sessionSummary: 'S', candidates: [] },
+    });
+
+    const st = await readState(TEST_UID, result.conversationId);
+    expect(st.coding_project_dir).toBeUndefined();
+  });
+
+  it('re-importing an unbound session backfills the project dir binding', async () => {
+    const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
+    const { readState } = await import('../../../src/main/features/group_chat/state');
+
+    const projectDir = path.join(os.homedir(), 'orig-backfill');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'README.md'), '# backfill');
+
+    // First import: no projectPath (legacy path) → no binding.
+    const first = await materializeSession({
+      userId: TEST_UID,
+      source: 'claude',
+      sourceId: 'sess-backfill',
+      extraction: { ok: true, sessionSummary: 'S1', candidates: [] },
+    });
+    let st = await readState(TEST_UID, first.conversationId);
+    expect(st.coding_project_dir).toBeUndefined();
+
+    // Re-import with the original project dir → already-seeded path backfills.
+    const second = await materializeSession({
+      userId: TEST_UID,
+      source: 'claude',
+      sourceId: 'sess-backfill',
+      projectPath: projectDir,
+      extraction: { ok: true, sessionSummary: 'S2', candidates: [] },
+    });
+    expect(second.created).toBe(false);
+    st = await readState(TEST_UID, second.conversationId);
+    expect(st.coding_project_dir).toBe(fs.realpathSync(projectDir));
+
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
   it('is idempotent — re-importing the same session does not duplicate or re-seed', async () => {
     const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
     const chats = await import('../../../src/main/features/chats');
 
     const first = await materializeSession({
       userId: TEST_UID, source: 'claude', sourceId: 'dup-1',
-      extraction: { ok: true, sessionSummary: 'S1', personal: [], rules: [], templates: [] },
+      extraction: { ok: true, sessionSummary: 'S1', candidates: [] },
     });
     const second = await materializeSession({
       userId: TEST_UID, source: 'claude', sourceId: 'dup-1',
-      extraction: { ok: true, sessionSummary: 'S2-different', personal: [], rules: [], templates: [] },
+      extraction: { ok: true, sessionSummary: 'S2-different', candidates: [] },
     });
 
     expect(second.conversationId).toBe(first.conversationId);
@@ -527,7 +682,7 @@ describe('session_import › materialize', () => {
       userId: TEST_UID, source: 'claude', sourceId: 'deg-1',
       extraction: {
         ok: false, degraded: true, reason: 'unparseable_json',
-        sessionSummary: '原始开头文本', personal: [], rules: [], templates: [],
+        sessionSummary: '原始开头文本', candidates: [],
       },
     });
     const msgs = await chats.getMessages(TEST_UID, res.conversationId);
@@ -546,7 +701,7 @@ describe('session_import › materialize', () => {
       extraction: {
         ok: true,
         sessionSummary: '<recommended_plugins> Here is a list of plugins that are available but not installed.',
-        personal: [], rules: [], templates: [],
+        candidates: [],
       },
     });
 

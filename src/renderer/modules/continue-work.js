@@ -169,9 +169,11 @@ function _cwRenderBody() {
   } else if (_cw.step === 2) {
     body.innerHTML = `
       <div class="cw-section-intro">
-        <h3>选择要接续的会话</h3>
+        <div class="cw-section-intro-head">
+          <h3>选择要接续的会话</h3>
+          <div class="cw-privacy-note">${_cwIcon('eye')}选择前只读取会话索引</div>
+        </div>
         <p>每个会话会生成一份任务接续摘要；原会话保持不变。</p>
-        <div class="cw-privacy-note">${_cwIcon('eye')}选择前只读取会话索引</div>
       </div>
       <div class="cw-source-tabs" data-cw-source-tabs></div>
       <div class="cw-session-toolbar">
@@ -445,7 +447,8 @@ async function _cwLoadSessions() {
             source: 'opencode',
             sessionId: s.id,
             title: s.title || '未命名会话',
-            meta: s.model && s.model.modelID ? s.model.modelID : (s.projectId || ''),
+            // 有项目 → 显示真实项目目录；global（无项目）→ 回退模型名。
+            meta: s.projectPath || (s.model && s.model.modelID) || s.projectId || '',
             time: s.timeCreated ? new Date(s.timeCreated).toISOString() : '',
           });
         }
@@ -673,7 +676,7 @@ async function _cwRunImport() {
         }
         _cw.imported.push(item);
         if (item.source === 'claude' && res.cognitions) {
-          _cw.cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
+          _cw.cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0) + (res.cognitions.skill_method || 0);
         }
         // B+ 快速导入：会话已立即落盘，提炼在后台进行——行直接标记
         // 「已准备 · 提炼中」，不阻塞后续导入与完成面板。

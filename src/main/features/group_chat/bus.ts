@@ -3572,6 +3572,14 @@ async function runActorTurnBody(
           (r) => typeof r === "string" && path.isAbsolute(r),
         )
       : [];
+    // 导入会话 / 详情页自定义：coding_project_dir（原始 Agent 项目目录）作为
+    // 工作区后，文件工具与 bash 的沙盒根必须包含它（extraRoots 可读可写），
+    // 否则 workingDir 指向原始目录但 read_file/write_file/bash 会被拒。
+    if (stateFile.coding_project_dir && path.isAbsolute(stateFile.coding_project_dir)) {
+      if (!turnToolExtraRoots.includes(stateFile.coding_project_dir)) {
+        turnToolExtraRoots.push(stateFile.coding_project_dir);
+      }
+    }
     turnSyncConflictResolution = Array.isArray(
       stateFile.sync_conflict_resolution?.conflicts,
     )

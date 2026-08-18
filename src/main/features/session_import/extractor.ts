@@ -8,13 +8,17 @@
  *                         seed message of the materialised conversation, so the
  *                         user can continue without carrying the raw history
  *                         (avoids blowing the context window).
- *   - `personal[]`      — "关于我" candidate facts (preferences, background)
- *   - `rules[]`         — "规则与偏好" candidate rules the user set/corrected
- *   - `templates[]`     — "模板与范例" reusable artifacts/formats observed
- *
- * The three cognition arrays map 1:1 onto Recall's AbilityAssetType values
- * ('personal' | 'rule' | 'template'), so the asset-router (stage 4) can hand
- * them straight to `saveRecallCandidate` with no translation layer.
+ *   - `candidates[]`    — reusable cognition candidates. Each carries a
+ *                         `suggestedType` in the four AbilityAssetType values
+ *                         ('personal' | 'rule' | 'template' | 'skill_method')
+ *                         plus the full candidate fields (value / risk /
+ *                         suggestedAction / applicableWhen / forbiddenWhen),
+ *                         using the SAME extraction rule as the recall capture
+ *                         pipeline ("沉淀活动 → 从历史会话沉淀"). The
+ *                         asset-router (stage 4) hands them straight to
+ *                         `saveRecallCandidate` with no translation layer, so
+ *                         imported and capture-derived candidates share one
+ *                         pool and one confirmation flow.
  *
  * Model access uses `chatWithModel` with `disableTools:true` — this is a pure
  * text summarisation call against whichever provider the user connected in the
@@ -24,6 +28,8 @@
  *   - The model is asked for strict JSON; we parse defensively (strip code
  *     fences, locate the outermost object) and degrade to "summary only, no
  *     cognitions" rather than throwing when the JSON is unusable.
+ *   - The legacy three-bucket shape ({personal, rules, templates}) is still
+ *     parsed when the model returns it, so old outputs/caches keep working.
  *   - Long transcripts are chunked under a token budget and summarised
  *     per-chunk, then the partial summaries are reduced into one final pass.
  */
@@ -39,6 +45,9 @@ import {
 import { EXTRACT_SYSTEM_PROMPT } from '../../prompts/session-extract';
 
 const log = createLogger('session-import:extractor');
+
+/** The four AbilityAssetType values emitted by this extractor. */
+export type EmittedCognitionType = 'personal' | 'rule' | 'template' | 'skill_method';
 
 /** How long a single CLI extraction pass may run before aborting. Local CLIs
  *  are slower than a raw model call (process spawn + model latency). */
@@ -128,20 +137,34 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-export interface CognitionItem {
-  /** One-line human-readable statement. */
+export interface CognitionCandidate {
+  /** The reusable content itself (judgment), one sentence or two. */
   text: string;
-  /** Optional short rationale / evidence phrase from the transcript. */
+  /** How it reduces future repetition or risk (value). */
+  value?: string;
+  /** Short title / summary. */
   note?: string;
+  suggestedType: EmittedCognitionType;
+  /** 'global' or the concrete project/domain it applies to. */
+  suggestedScope?: string;
+  /** Required for rule candidates: when it applies. */
+  applicableWhen?: string[];
+  /** Required for rule candidates: where it must not be used. */
+  forbiddenWhen?: string[];
+  /** create | update | limit_scope | pause | keep_current | reject. */
+  suggestedAction?: string;
+  /** low | medium | high. */
+  risk?: string;
+  /** Short excerpt from the transcript supporting the judgment. */
+  evidence?: string;
+  uncertainty?: string;
 }
 
 export interface ExtractionResult {
   ok: boolean;
   /** Seed brief for the continued conversation (may be a degraded fallback). */
   sessionSummary: string;
-  personal: CognitionItem[];
-  rules: CognitionItem[];
-  templates: CognitionItem[];
+  candidates: CognitionCandidate[];
   /** Set when we could not get usable structured output and fell back. */
   degraded?: boolean;
   reason?: string;
@@ -195,19 +218,89 @@ function extractJsonObject(raw: string): unknown | null {
   }
 }
 
-/** Coerce an unknown value into a CognitionItem[] defensively. */
-function toCognitionItems(value: unknown): CognitionItem[] {
+/** Normalize a suggestedType string to one of the four emitted types. */
+function normalizeType(value: unknown): EmittedCognitionType {
+  const t = String(value ?? '').trim().toLowerCase();
+  return t === 'rule' || t === 'template' || t === 'skill_method' ? t : 'personal';
+}
+
+/** Parse a string array field defensively: drop blanks, cap length. */
+function toStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter((item) => item.length > 0)
+    .slice(0, 10)
+    .map((item) => item.slice(0, 300));
+  return items.length ? items : undefined;
+}
+
+/** Read one candidate object's optional string field. */
+function optString(o: Record<string, unknown>, key: string): string | undefined {
+  const s = typeof o[key] === 'string' ? (o[key] as string).trim() : '';
+  return s || undefined;
+}
+
+/** Coerce an unknown value into a CognitionCandidate[] defensively. Handles
+ *  the new `candidates` array shape (objects with judgment/text + fields). */
+function toCandidates(value: unknown): CognitionCandidate[] {
   if (!Array.isArray(value)) return [];
-  const items: CognitionItem[] = [];
+  const items: CognitionCandidate[] = [];
   for (const entry of value) {
     if (typeof entry === 'string') {
       const text = entry.trim();
-      if (text) items.push({ text });
+      if (text) items.push({ text, suggestedType: 'personal' });
     } else if (entry && typeof entry === 'object') {
-      const text = String((entry as { text?: unknown }).text ?? '').trim();
+      const o = entry as Record<string, unknown>;
+      const text = String(o.judgment ?? o.text ?? '').trim();
       if (!text) continue;
-      const note = String((entry as { note?: unknown }).note ?? '').trim();
-      items.push(note ? { text, note } : { text });
+      const candidate: CognitionCandidate = {
+        text,
+        suggestedType: normalizeType(o.suggestedType),
+      };
+      const note = optString(o, 'note') ?? optString(o, 'summary');
+      if (note) candidate.note = note;
+      const value = optString(o, 'value');
+      if (value) candidate.value = value;
+      const scope = optString(o, 'suggestedScope');
+      if (scope) candidate.suggestedScope = scope;
+      const action = optString(o, 'suggestedAction');
+      if (action) candidate.suggestedAction = action;
+      const risk = optString(o, 'risk');
+      if (risk) candidate.risk = risk;
+      const evidence = optString(o, 'evidence');
+      if (evidence) candidate.evidence = evidence;
+      const uncertainty = optString(o, 'uncertainty');
+      if (uncertainty) candidate.uncertainty = uncertainty;
+      const applicableWhen = toStringArray(o.applicableWhen);
+      if (applicableWhen) candidate.applicableWhen = applicableWhen;
+      const forbiddenWhen = toStringArray(o.forbiddenWhen);
+      if (forbiddenWhen) candidate.forbiddenWhen = forbiddenWhen;
+      items.push(candidate);
+    }
+  }
+  return items;
+}
+
+/** Coerce a legacy three-bucket array (personal/rules/templates) into
+ *  candidates with a fixed type. Kept so old model outputs still parse. */
+function toLegacyCandidates(value: unknown, type: EmittedCognitionType): CognitionCandidate[] {
+  if (!Array.isArray(value)) return [];
+  const items: CognitionCandidate[] = [];
+  for (const entry of value) {
+    if (typeof entry === 'string') {
+      const text = entry.trim();
+      if (text) items.push({ text, suggestedType: type });
+    } else if (entry && typeof entry === 'object') {
+      const o = entry as Record<string, unknown>;
+      const text = String(o.text ?? o.judgment ?? '').trim();
+      if (!text) continue;
+      const candidate: CognitionCandidate = { text, suggestedType: type };
+      const note = optString(o, 'note') ?? optString(o, 'summary');
+      if (note) candidate.note = note;
+      const evidence = optString(o, 'evidence');
+      if (evidence) candidate.evidence = evidence;
+      items.push(candidate);
     }
   }
   return items;
@@ -215,9 +308,7 @@ function toCognitionItems(value: unknown): CognitionItem[] {
 
 interface RawExtraction {
   summary: string;
-  personal: CognitionItem[];
-  rules: CognitionItem[];
-  templates: CognitionItem[];
+  candidates: CognitionCandidate[];
 }
 
 function parseExtraction(raw: string): RawExtraction | null {
@@ -225,12 +316,15 @@ function parseExtraction(raw: string): RawExtraction | null {
   if (!obj || typeof obj !== 'object') return null;
   const o = obj as Record<string, unknown>;
   const summary = typeof o.summary === 'string' ? o.summary.trim() : '';
-  return {
-    summary,
-    personal: toCognitionItems(o.personal),
-    rules: toCognitionItems(o.rules),
-    templates: toCognitionItems(o.templates),
-  };
+  const candidates = toCandidates(o.candidates);
+  if (candidates.length) return { summary, candidates };
+  // Legacy three-bucket shape — accept it so old outputs still import.
+  const legacy = [
+    ...toLegacyCandidates(o.personal, 'personal'),
+    ...toLegacyCandidates(o.rules, 'rule'),
+    ...toLegacyCandidates(o.templates, 'template'),
+  ];
+  return { summary, candidates: legacy };
 }
 
 /** One model pass over a rendered transcript slice. */
@@ -279,9 +373,7 @@ export async function extractSession(
   const empty: ExtractionResult = {
     ok: false,
     sessionSummary: '',
-    personal: [],
-    rules: [],
-    templates: [],
+    candidates: [],
   };
 
   if (!transcript.turns.length) {
@@ -300,9 +392,7 @@ export async function extractSession(
     return {
       ok: true,
       sessionSummary: parsed.summary || fallbackSummary(transcript),
-      personal: parsed.personal,
-      rules: parsed.rules,
-      templates: parsed.templates,
+      candidates: parsed.candidates,
     };
   }
 
@@ -326,9 +416,7 @@ export async function extractSession(
     sessionSummary:
       partials.map((p) => p.summary).filter(Boolean).join('\n\n') ||
       fallbackSummary(transcript),
-    personal: dedupeItems(partials.flatMap((p) => p.personal)),
-    rules: dedupeItems(partials.flatMap((p) => p.rules)),
-    templates: dedupeItems(partials.flatMap((p) => p.templates)),
+    candidates: dedupeCandidates(partials.flatMap((p) => p.candidates)),
   };
 }
 
@@ -339,9 +427,7 @@ function fallback(transcript: NormalizedTranscript, reason: string): ExtractionR
   return {
     ok: false,
     sessionSummary: fallbackSummary(transcript),
-    personal: [],
-    rules: [],
-    templates: [],
+    candidates: [],
     degraded: true,
     reason,
   };
@@ -354,9 +440,9 @@ function fallbackSummary(transcript: NormalizedTranscript): string {
 }
 
 /** Case-insensitive dedupe on `text`. */
-function dedupeItems(items: CognitionItem[]): CognitionItem[] {
+function dedupeCandidates(items: CognitionCandidate[]): CognitionCandidate[] {
   const seen = new Set<string>();
-  const out: CognitionItem[] = [];
+  const out: CognitionCandidate[] = [];
   for (const item of items) {
     const key = item.text.toLocaleLowerCase();
     if (seen.has(key)) continue;

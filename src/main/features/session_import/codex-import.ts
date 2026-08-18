@@ -468,9 +468,7 @@ export async function importCodexSession(
   const extraction = {
     ok: true,
     sessionSummary,
-    personal: [],
-    rules: [],
-    templates: [],
+    candidates: [],
     degraded: false,
   };
 
