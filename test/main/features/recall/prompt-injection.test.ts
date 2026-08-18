@@ -182,6 +182,10 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(result.promptBlock).toContain('<confirmed-ability-assets>');
     expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.');
     expect(result.promptBlock).not.toContain('Plan database migrations with rollback windows.');
+    // M-3: 适用/禁用条件随注入带进 prompt，模型拿得到硬约束。
+    expect(result.promptBlock).toContain('applicable_when');
+    expect(result.promptBlock).toContain('forbidden_when');
+    expect(result.promptBlock).toContain('Unrelated casual conversation');
     expect(result.citations).toEqual([
       expect.objectContaining({
         assetId: oauth.asset.id,
@@ -281,6 +285,10 @@ describe('confirmed Recall projection prompt injection', () => {
     // unrelated asset must never leak in.
     expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.\\nOAuth review workflow');
     expect(result.promptBlock).not.toContain(unrelated.asset.statement);
+    // M-3: committed 投影同样带边界条件。
+    expect(result.promptBlock).toContain('applicable_when');
+    expect(result.promptBlock).toContain('forbidden_when');
+    expect(result.promptBlock).toContain('Unrelated casual conversation');
   });
 
   it('rejects committed injection when a frozen asset version changed', async () => {
@@ -383,6 +391,11 @@ describe('confirmed Recall projection prompt injection', () => {
       expect(result.promptBlock).toContain(asset.title);
       expect(result.promptBlock).not.toContain('Blocked asset');
       expect(result.assetIds).toEqual([asset.id]);
+      // M-3: 派发授权注入同样带边界条件（createAsset 带
+      // applicableWhen/forbiddenWhen）。
+      expect(result.promptBlock).toContain('applicable_when');
+      expect(result.promptBlock).toContain('forbidden_when');
+      expect(result.promptBlock).toContain('Informal brainstorming without a decision');
     });
 
     it('returns an empty block when nothing is granted', async () => {

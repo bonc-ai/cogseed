@@ -2140,7 +2140,7 @@ const ConversationInfo = (() => {
     if (now - _executionsRefreshAt < 2000) return;
     _executionsRefreshAt = now;
     try {
-      const res = await (window.cogseed || window.orkas).invoke('p3394.execution.list', {});
+      const res = await window.cogseed.invoke('p3394.execution.list', {});
       const list = (res && Array.isArray(res.executions))
         ? res.executions.filter((item) => item && item.conversationId === cid)
         : [];

@@ -96,6 +96,12 @@ describe('Recall asset proof timeline', () => {
     expect(items.find((item) => item.kind === 'transfer_prepared')).toMatchObject({ refs: { projectionId: confirmed.id, taskRunId: 'task-a', transferProofId: prepared.id } });
     expect(items.find((item) => item.kind === 'transfer_completed')).toMatchObject({ status: 'succeeded', refs: { usageReceiptId: receipt.receiptId } });
     expect(items.find((item) => item.kind === 'effectiveness_recorded')).toMatchObject({ status: 'valid', refs: { transferProofId: prepared.id } });
+    // N-5: usage 行不再把 usage 记录 id 伪装成回执 id——回执索引只认
+    // transfer_completed 行的 usageReceiptId；usage 行带 usage_id 供展示。
+    const usageRow = items.find((item) => item.kind === 'usage_recorded');
+    expect(usageRow).toBeDefined();
+    expect(usageRow!.refs).not.toHaveProperty('usageReceiptId');
+    expect(usageRow!.refs).toHaveProperty('usage_id');
     expect(items.map((item) => item.occurredAt)).toEqual([...items.map((item) => item.occurredAt)].sort().reverse());
   });
 

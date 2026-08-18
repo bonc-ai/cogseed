@@ -1573,7 +1573,7 @@ async function _csLoadOpencodeSessions(agentType) {
   if (!container) return;
 
   try {
-    const res = await window.orkas.invoke('sessionImport.listOpencodeSessions');
+    const res = await window.cogseed.invoke('sessionImport.listOpencodeSessions');
 
     if (!res.ok) {
       const errorMsg = res.error === 'not_installed'
@@ -2409,7 +2409,7 @@ async function _csLoadOpencodeMemory(agentType) {
   if (!container) return;
 
   try {
-    const res = await window.orkas.invoke('sessionImport.readOpencodeMemory');
+    const res = await window.cogseed.invoke('sessionImport.readOpencodeMemory');
     const present = res && res.present;
     const entries = (res && res.entries) || [];
 
@@ -2453,7 +2453,7 @@ async function _csLoadOpencodeTasks(agentType) {
   if (!container) return;
 
   try {
-    const res = await window.orkas.invoke('sessionImport.listOpencodeTodos');
+    const res = await window.cogseed.invoke('sessionImport.listOpencodeTodos');
     const todos = (res && res.todos) || [];
 
     if (!todos.length) {
@@ -2540,7 +2540,7 @@ async function _csImportOpencodeTodos(agentType) {
   if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
   if (resultBox) resultBox.innerHTML = '<div class="cs-state loading">正在导入所选任务…</div>';
   try {
-    const res = await window.orkas.invoke('sessionImport.importOpencodeTodos', { todoIds: selected });
+    const res = await window.cogseed.invoke('sessionImport.importOpencodeTodos', { todoIds: selected });
     const r = res || {};
     const parts = [`成功 ${r.imported || 0} 条`];
     if (r.skipped) parts.push(`跳过 ${r.skipped} 条`);

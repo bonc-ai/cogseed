@@ -515,6 +515,12 @@ function _initSkillsCognitionBindings() {
       if (!feedback || !proofId) return;
       proofFeedback.dataset.busy = '1'; proofFeedback.disabled = true;
       try {
+        // 只走 proof 通道（M-10）：`feedbackForTask` 的后端前置条件与它完全相同，
+        // 第二条路只会让用户吃到 `no successful transfer proof for task run`。
+        // origin/develop 的 M-4 曾在这里自动附一条指向本次证明自身的
+        // execution_evaluation 证据；本分支改为「带入正确」走取证面板，由用户写下
+        // 观察并勾选可回查的依据——自引用能让成熟度升上去，但升上去的
+        // effectiveness_validated 不再代表有可比依据。两者取后者。
         const result = await window.cogseed.invoke('recall.proofs.effectiveness.feedback', { transferProofId: proofId, feedback });
         // 后端这几种失败是内部契约语言，直接 alert 出去用户读不懂。按稳定 code
         // 翻成人话；渲染闸门正常时走不到这里，这是数据在渲染与点击之间发生

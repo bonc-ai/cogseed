@@ -71,36 +71,6 @@ function safePromptText(value: unknown, max: number): string {
     .slice(0, max);
 }
 
-/**
- * 适用/禁用条件的注入片段。
- *
- * **为什么必须带**：`forbidden_when` 是硬安全约束。晋升时 gate 校验了它、
- * 「我的资产」详情页显示了它，但此前三条注入路径的 record 里都没有——**唯独模型
- * 拿不到**。用户看到「禁止：无真实 Build 证据时不得宣称已发布」，以为这条约束
- * 在生效，实际上模型从来没读到过。
- *
- * 口径与出生继承那条路径（`inherited-cognition-prompt.ts::recordFor`）保持一致：
- * 条件**原样带上，由模型自己判断这次适不适用，系统不替它判定**。缺失表示
- * 「没提出过」，**不是**「无限制」，所以空数组不写字段而不是写一个空值——写空值
- * 会让模型把「没说」读成「已确认无限制」。
- */
-function conditionFields(
-  source: { applicableWhen?: string[]; forbiddenWhen?: string[]; sensitivity?: string } | undefined,
-): Record<string, unknown> {
-  const list = (value: string[] | undefined): string[] | undefined => {
-    if (!Array.isArray(value)) return undefined;
-    const items = value.map((item) => safePromptText(item, 500)).filter(Boolean).slice(0, 20);
-    return items.length ? items : undefined;
-  };
-  const applicableWhen = list(source?.applicableWhen);
-  const forbiddenWhen = list(source?.forbiddenWhen);
-  return {
-    ...(applicableWhen ? { applicable_when: applicableWhen } : {}),
-    ...(forbiddenWhen ? { forbidden_when: forbiddenWhen } : {}),
-    ...(source?.sensitivity ? { sensitivity: safePromptText(source.sensitivity, 80) } : {}),
-  };
-}
-
 function escapePromptData(value: unknown): string {
   return JSON.stringify(value)
     .replace(/[<>&]/g, (char) => ({ '<': '\\u003c', '>': '\\u003e', '&': '\\u0026' })[char] || char);
@@ -223,6 +193,11 @@ async function buildPromptContextForProjections(
         const scope = snapshot?.scope ?? liveAsset.scope;
         const version = confirmedVersion || liveAsset.version;
         const statement = snapshot?.statement ?? liveAsset.statement;
+        // M-3: 适用/禁用条件随注入带进 prompt（照 inherited-cognition-prompt.ts
+        // 的措辞——原样带上，由模型自己判断这次适不适用，系统不替它判定）。
+        // 与 statement 同源：优先投影冻结快照，缺失时回退 live asset。
+        const applicableWhen = snapshot?.applicableWhen ?? liveAsset.applicableWhen;
+        const forbiddenWhen = snapshot?.forbiddenWhen ?? liveAsset.forbiddenWhen;
         seenAssets.add(assetId);
         const match = matches.get(assetId);
         records.push({
@@ -237,9 +212,8 @@ async function buildPromptContextForProjections(
           scope: safePromptText(scope, 500),
           version: safePromptText(version, 40),
           statement: safePromptText(statement, MAX_STATEMENT_LENGTH),
-          // 条件跟着内容走：确认过的版本用它自己的快照，否则用实时资产。
-          // 与上面 title/type/scope/statement 的取值口径一致。
-          ...conditionFields(snapshot ?? liveAsset),
+          ...(applicableWhen?.length ? { applicable_when: applicableWhen.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
+          ...(forbiddenWhen?.length ? { forbidden_when: forbiddenWhen.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
           source_refs: evidenceRefs.slice(0, 20).map((ref) => ({ kind: ref.kind, id: ref.id })),
         });
         citations.push({
@@ -277,10 +251,6 @@ async function buildPromptContextForCommittedProjection(
   const projection = await readContextProjection(userId, projectionId);
   const abilityAssets: typeof knowledge.abilityAssets = [];
   const liveAssets = new Map<string, Awaited<ReturnType<typeof readAbilityAsset>>>();
-  // 适用/禁用条件不在冻结知识里——`WorldModelAbilityAsset` 没有这两个字段，而它
-  // 属于 world-model 的类型，不在这里扩。改为按冻结版本回读版本快照；快照缺失
-  // （老数据）时退回实时资产，宁可带一份可能漂移的硬约束，也不要一条都不带。
-  const conditionsById = new Map<string, { applicableWhen?: string[]; forbiddenWhen?: string[]; sensitivity?: string }>();
   for (const frozenAsset of knowledge.abilityAssets) {
     const liveAsset = await readAbilityAsset(userId, frozenAsset.id);
     const gate = await evaluateRecallAssetRuntimeEligibility(
@@ -291,13 +261,6 @@ async function buildPromptContextForCommittedProjection(
     if (!gate.eligible) continue;
     abilityAssets.push(frozenAsset);
     liveAssets.set(frozenAsset.id, liveAsset);
-    let frozenConditions: typeof liveAsset | undefined;
-    try {
-      frozenConditions = await readAbilityAssetVersionSnapshot(userId, frozenAsset.id, frozenAsset.version) as typeof liveAsset | undefined;
-    } catch {
-      frozenConditions = undefined;
-    }
-    conditionsById.set(frozenAsset.id, frozenConditions ?? liveAsset);
   }
   const records = [
     ...abilityAssets.map((asset) => ({
@@ -310,12 +273,16 @@ async function buildPromptContextForCommittedProjection(
       scope: safePromptText(asset.scope, 500),
       version: asset.version,
       statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
-      ...conditionFields(conditionsById.get(asset.id)),
+      // M-3: committed 投影同样带边界条件（优先 live asset 的治理态——
+      // 边界是运行时约束，与 governance 同源，不随快照冻结）。
+      ...(liveAssets.get(asset.id)?.applicableWhen?.length ? { applicable_when: liveAssets.get(asset.id)!.applicableWhen!.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
+      ...(liveAssets.get(asset.id)?.forbiddenWhen?.length ? { forbidden_when: liveAssets.get(asset.id)!.forbiddenWhen!.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
       source_refs: (liveAssets.get(asset.id)?.evidenceRefs || []).map((ref) => ({ kind: ref.kind, id: ref.id })),
     })),
     // Ontology (durable personal facts) rides along as personal ability
     // assets; it is not projection-selected, so it never contributes to
-    // citations.
+    // citations. Personal facts carry no applicable/forbidden boundary
+    // (M-3 只针对 rule/template 等有边界语义的资产)。
     ...knowledge.ontologyAssets.map((asset) => ({
       projection_id: knowledge.projectionId,
       asset_id: asset.id,
@@ -507,7 +474,10 @@ export async function buildDispatchedAssetsPromptBlock(
       scope: safePromptText(asset.scope, 500),
       version: asset.version,
       statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
-      ...conditionFields(asset),
+      // M-3: 派发授权注入同样带边界条件——这是被显式授予的资产，模型更要
+      // 知道它的适用/禁用范围。
+      ...(asset.applicableWhen?.length ? { applicable_when: asset.applicableWhen.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
+      ...(asset.forbiddenWhen?.length ? { forbidden_when: asset.forbiddenWhen.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
       source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
     });
     granted.push(asset.id);

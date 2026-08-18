@@ -48,8 +48,8 @@
   function page() { return document.getElementById('personal-context-page'); }
 
   function invoke(channel, payload) {
-    if (!window.orkas || typeof window.orkas.invoke !== 'function') return Promise.reject(new Error('IPC unavailable'));
-    return window.orkas.invoke(channel, payload || {});
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return Promise.reject(new Error('IPC unavailable'));
+    return window.cogseed.invoke(channel, payload || {});
   }
 
   function render() {

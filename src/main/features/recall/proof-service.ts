@@ -178,11 +178,29 @@ export async function completeTransferProofWithReceipt(
 ): Promise<TransferProofRecord> {
   const receiptExecutionId = text(input.receiptExecutionId, 'receipt execution id', 160);
   const receipt = await readReceipt(userId, receiptExecutionId);
-  return completeTransferProofRecord(userId, proofId, {
+  const proof = await completeTransferProofRecord(userId, proofId, {
     status: input.status,
     observedTransfer: input.observedTransfer,
     receipt,
   });
+  // M-5: 回执闭环。迁移证明以回执为锚点完成后，回执本身从 prepared 落成
+  // completed——回执状态与证明链同步，为将来收紧升档判定留好锚点
+  // （receiptProvesTransfer 当前只要求 boundary==='real' && 非 rejected，
+  // 不检查 completed，因此本闭环不改变升档行为）。失败只告警不阻断：
+  // 回执已 finalize（幂等）或损坏都不应让证明流程抛错。
+  if (proof.status === 'succeeded') {
+    try {
+      const { completeReceipt } = await import('../p3394/context-reuse-receipt');
+      await completeReceipt(userId, receiptExecutionId, { status: 'completed' });
+    } catch (error) {
+      log.warn('transfer receipt completion degraded', {
+        proofId: proof.id,
+        receiptExecutionId,
+        error: (error as Error).message,
+      });
+    }
+  }
+  return proof;
 }
 export async function evaluateEffectivenessProof(userId: string, input: { transferProofId: string; outcome: EffectivenessOutcome; observedResult: string; evidenceRefs: unknown[] }): Promise<EffectivenessProofRecord> {
   const raw = await readRecallJsonRecord(userId, 'transfer-proofs', input.transferProofId); if (!raw) throw new Error('transfer proof not found'); const transfer = asTransfer(raw); if (transfer.status !== 'succeeded') throw recallProofError('E_RECALL_TRANSFER_NOT_SUCCEEDED', 'effectiveness proof requires a successful transfer');
