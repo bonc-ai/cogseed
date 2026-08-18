@@ -48,6 +48,7 @@
   "agent_modal.desc_placeholder": "例: コミット前にコードをレビューし、ロジックバグとセキュリティ問題に注目する...",
   "agent_modal.ext_cli_label": "エージェント",
   "agent_modal.ext_cli_none": "未選択",
+  "agent_modal.ext_cli_scanning": "ローカル CLI をスキャン中…",
   "agent_modal.ext_desc": "概要",
   "agent_modal.ext_desc_placeholder": "（CLI 選択時に自動入力。上書き可能）",
   "agent_modal.ext_name": "名前",
@@ -1700,6 +1701,15 @@
   "p3394.wake.status.pending": "承認待ち",
   "p3394.wake.status.rejected": "拒否済み",
   "p3394.wake.title": "Agent の起動承認が必要です",
+  "p3394.slow.title": "外部エージェントの応答が遅いです",
+  "p3394.slow.body": "{name} は 2 分経っても応答を開始していません。エージェント自身の API やその他の問題で利用できない可能性があります。別のエージェントに切り替えますか？",
+  "p3394.slow.title_failed": "外部エージェントの実行に失敗しました",
+  "p3394.slow.body_failed": "{name} の実行に失敗しました。エージェント自身の API やその他の問題で利用できない可能性があります。別のエージェントに切り替えますか？",
+  "p3394.slow.switch": "切り替えて続行",
+  "p3394.slow.switching": "切り替え中：{from} → {to}、タスクを再送しました",
+  "p3394.slow.wait": "待ち続ける",
+  "p3394.slow.no_task": "再送できるタスクがありません。手入力して送信してください",
+  "p3394.slow.dropdown_label": "切り替え先",
   "personalOntology.batch_summary": "{n} 件確認済み：{fields}；フロー {m} 件",
   "personalOntology.blocked": "ブロック済み",
   "personalOntology.blocked_fix": "修正方法",
@@ -4129,6 +4139,7 @@
   "touchpoint_settings.template.preview.note": "承認者は Feishu でメモを追加できます",
   "touchpoint_settings.template.saved": "タッチポイントテンプレートと配信インスタンスを保存しました。",
   "agent_modal.ext_cli_running": "● P3394 接続済み",
+  "agent_modal.ext_cli_connected": "接続済み",
   "agent_modal.ext_p3394_hint": "P3394 プロトコルで接続：CogSeed がローカルゲートウェイを起動してノード登録し、会話から直接連携できます。",
   "agents.p3394_gateway_start_failed": "P3394 接続に失敗しました：{reason}（CLI のインストールと動作を確認してください）",
   "workspace.search_ph": "スペースを検索…",
@@ -4533,6 +4544,14 @@
   "sidebar.home": "ホーム",
   "cognition.maturity_transfer_validated": "移行済み検証",
   "cognition.asset_write_origin_system": "システム沈殿",
+  "agents": {},
+  "agent_modal": {
+    "ext_cli_missing_label": "このマシンで見つからなかったエージェント"
+  },
+  "agent": {
+    "cli_missing_workbuddy": "codebuddy CLI が見つかりません。WorkBuddy.app 内または ~/.local/bin に同梱されています（PATH 登録は不要）。WorkBuddy が CLI コンポーネント有効の状態でインストールされているか確認してください。"
+  },
   "conversation_info.carried.permission.default": "通常",
   "common.id_masked": "…"
 }
+

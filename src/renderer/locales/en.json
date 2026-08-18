@@ -48,6 +48,7 @@
   "agent_modal.desc_placeholder": "e.g. Review my code before commit, focus on logic bugs and security issues...",
   "agent_modal.ext_cli_label": "Agent",
   "agent_modal.ext_cli_none": "Not selected",
+  "agent_modal.ext_cli_scanning": "Scanning local CLIs…",
   "agent_modal.ext_desc": "Summary",
   "agent_modal.ext_desc_placeholder": "(auto-filled when a CLI is picked; can be overridden)",
   "agent_modal.ext_name": "Name",
@@ -1826,6 +1827,15 @@
   "p3394.wake.status.pending": "Awaiting approval",
   "p3394.wake.status.rejected": "Rejected",
   "p3394.wake.title": "Agent wake approval required",
+  "p3394.slow.title": "External agent responding slowly",
+  "p3394.slow.body": "{name} has not started replying after 2 minutes. This may be because the agent's own API or another issue is preventing it from working. Switch to another agent?",
+  "p3394.slow.title_failed": "External agent failed",
+  "p3394.slow.body_failed": "{name} failed to execute, possibly because the agent's own API or another issue is preventing it from working. Switch to another agent?",
+  "p3394.slow.switch": "Switch & continue",
+  "p3394.slow.switching": "Switching: {from} → {to}, task re-sent",
+  "p3394.slow.wait": "Keep waiting",
+  "p3394.slow.no_task": "No task text to re-send. Type it and send manually",
+  "p3394.slow.dropdown_label": "Switch to",
   "personalOntology.batch_summary": "{n} confirmed: {fields}; flow {m}",
   "personalOntology.blocked": "Blocked",
   "personalOntology.blocked_fix": "Suggested Fix",
@@ -4436,6 +4446,7 @@
   "touchpoint_settings.template.preview.note": "The approver can add a note in Feishu",
   "touchpoint_settings.template.saved": "Touchpoint template and instance routing saved.",
   "agent_modal.ext_cli_running": "● P3394 connected",
+  "agent_modal.ext_cli_connected": "Connected",
   "agent_modal.ext_p3394_hint": "Connect over the P3394 protocol: CogSeed starts a local gateway for the agent and registers it as a collaboration node, so it can be called directly in conversations.",
   "agents.p3394_gateway_start_failed": "P3394 connection failed: {reason} (make sure the agent CLI is installed and working)",
   "workspace.search_ph": "Search spaces…",
@@ -4859,6 +4870,14 @@
   "sidebar.home": "Home",
   "cognition.maturity_transfer_validated": "Transfer validated",
   "cognition.asset_write_origin_system": "System precipitated",
+  "agents": {},
+  "agent_modal": {
+    "ext_cli_missing_label": "Agents not found on this machine"
+  },
+  "agent": {
+    "cli_missing_workbuddy": "codebuddy CLI not found. It ships inside WorkBuddy.app or under ~/.local/bin — no PATH registration needed; please confirm WorkBuddy is installed with its CLI component enabled."
+  },
   "conversation_info.carried.permission.default": "Standard",
   "common.id_masked": "…"
 }
+

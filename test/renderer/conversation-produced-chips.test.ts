@@ -62,6 +62,7 @@ describe('conversation produced chips', () => {
     expect(source).toContain('function _mountMessageProducedFooter');
     // 9.1 统一框架：产物回执挂进 chat-result-block（_mountCompactResultBlock
     // 的 details/body），bubble 兜底（(body || bubble).appendChild(node)）。
+
     expect(source).toContain('(body || bubble).appendChild(node)');
     expect(source).toContain('<div class="chat-msg-produced-item${invalid ?');
     expect(source).toContain('class="chat-msg-produced-main"');

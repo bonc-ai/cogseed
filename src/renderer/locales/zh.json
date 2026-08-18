@@ -48,6 +48,7 @@
   "agent_modal.desc_placeholder": "例如：帮我在提交前审查代码，重点看逻辑漏洞和安全问题...",
   "agent_modal.ext_cli_label": "智能体",
   "agent_modal.ext_cli_none": "未选择",
+  "agent_modal.ext_cli_scanning": "正在扫描本机 CLI…",
   "agent_modal.ext_desc": "简介",
   "agent_modal.ext_desc_placeholder": "选择后自动填入，可修改",
   "agent_modal.ext_name": "名称",
@@ -1828,6 +1829,15 @@
   "p3394.wake.status.pending": "等待批准",
   "p3394.wake.status.rejected": "已拒绝",
   "p3394.wake.title": "需要批准唤醒 Agent",
+  "p3394.slow.title": "外接智能体响应缓慢",
+  "p3394.slow.body": "{name} 已超过 2 分钟未开始回复，可能因该智能体自身 API 或其他问题暂时无法正常使用。是否切换到其他智能体继续？",
+  "p3394.slow.title_failed": "外接智能体执行失败",
+  "p3394.slow.body_failed": "{name} 执行出错，可能因该智能体自身 API 或其他问题暂时无法正常使用。是否切换到其他智能体继续？",
+  "p3394.slow.switch": "切换并继续",
+  "p3394.slow.switching": "正在切换：{from} → {to}，已重新发起任务",
+  "p3394.slow.wait": "继续等待",
+  "p3394.slow.no_task": "没有可重新发送的任务文本，请手动输入后发送",
+  "p3394.slow.dropdown_label": "切换到",
   "personalOntology.batch_summary": "{n} 条已确认：{fields}；流水区 {m} 条",
   "personalOntology.blocked": "已阻断",
   "personalOntology.blocked_fix": "修复建议",
@@ -4438,6 +4448,7 @@
   "touchpoint_settings.template.preview.note": "审批人可在飞书中补充意见",
   "touchpoint_settings.template.saved": "触达模板和实例路由已保存。",
   "agent_modal.ext_cli_running": "● P3394 已接入",
+  "agent_modal.ext_cli_connected": "已连接",
   "agent_modal.ext_p3394_hint": "通过 P3394 协议接入：确认后 CogSeed 会为本机启动网关并把该智能体注册为协作节点，之后在对话里即可直接协作。",
   "agents.p3394_gateway_start_failed": "P3394 接入失败：{reason}（请确认该智能体 CLI 已安装且可用）",
   "workspace.search_ph": "搜索工作空间…",
@@ -4859,6 +4870,14 @@
   "sidebar.home": "首页",
   "cognition.maturity_transfer_validated": "已迁移验证",
   "cognition.asset_write_origin_system": "系统沉淀",
+  "agents": {},
+  "agent_modal": {
+    "ext_cli_missing_label": "本机未找到的智能体"
+  },
+  "agent": {
+    "cli_missing_workbuddy": "未找到 codebuddy CLI。它通常随 WorkBuddy.app 内置或位于 ~/.local/bin（无需手动注册 PATH）；请确认已安装 WorkBuddy 并启用其 CLI 组件。"
+  },
   "conversation_info.carried.permission.default": "常规",
   "common.id_masked": "…"
 }
+

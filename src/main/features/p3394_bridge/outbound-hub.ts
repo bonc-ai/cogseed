@@ -152,6 +152,44 @@ export class P3394OutboundHub {
     return reply;
   }
 
+  /**
+   * Delivery-only send: delivers an envelope to a registered peer and
+   * resolves on the delivery receipt — no reply is expected and no pending
+   * reply waiter is registered (P1-3).
+   *
+   * Why this exists: some outbound envelopes are terminal confirmations
+   * (the peer-forward relay carries the final result back to the original
+   * sender, an error relay, …). Older code routed those through sendAndWait,
+   * which registered a reply waiter keyed on session_id and held a `sent`
+   * outbox record until a reply arrived. The sender never replies to a
+   * terminal confirmation, so every such relay leaked a waiter for the full
+   * replyTimeoutMs AND stayed in the outbox replay set — the bridge re-sent
+   * it on every restart. sendOnce completes the outbox record as soon as the
+   * delivery receipt is observed, so nothing lingers and nothing replays.
+   */
+  async sendOnce(agentId: string, envelope: P3394Envelope): Promise<void> {
+    const peer = this.listPeers().find((candidate) => candidate.identity.agent_id === agentId && !candidate.disabled);
+    if (!peer) throw new Error('p3394_peer_not_registered');
+    // Same transactional outbox discipline as sendAndWait: persist the
+    // envelope before the wire write so a crash before delivery can replay it.
+    outboxRecordSubmitted(envelope, agentId);
+    try {
+      const channel = this.channelFor(peer);
+      await channel.dial(agentId);
+      await new P3394OutboundClient(channel).send(envelope);
+      outboxMarkSent(envelope.message_id);
+      // Delivery receipt IS the terminal confirmation for this envelope (no
+      // reply is expected). Complete the record so it leaves the replay set.
+      outboxMarkCompleted(envelope.message_id);
+    } catch (error) {
+      // Delivery failed: fail-closed. The record stays submitted/sent-in-progress
+      // (outboxMarkFailed) so recovery can retry; the caller sees the error.
+      outboxMarkFailed(envelope.message_id, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    log.info('P3394 outbound sendOnce (delivery receipt)', { peer: agentId, session_id: envelope.session_id, message_id: envelope.message_id });
+  }
+
   /** 桥启动重放：把 outbox 里 submitted/sent 的信封重发给对应 peer
    *  （at-least-once；对端按 idempotency_key 幂等）。不等待回复——
    *  回复到达时若没有 waiter，会照常进入会话流程。 */
@@ -183,10 +221,13 @@ export class P3394OutboundHub {
   tryResolveReply(envelope: P3394Envelope): boolean {
     const waiter = this.pending.get(envelope.session_id);
     if (!waiter) return false;
-    // Gate late replies from an earlier turn when a session is reused. Older
-    // gateways omit reply_to, so the check is only strict when the field is
-    // present on the wire.
-    if (envelope.reply_to && envelope.reply_to !== waiter.outboundMessageId) return false;
+    // 匹配粒度细化（S-03/S-04）：入站若带 reply_to，必须回指向本 waiter 期待
+    // 的出站消息才算"回复"；否则它是同 session 上的新 task/另一条消息，不应
+    // 被当回复消费（否则会被 executor 短路吞掉、不进 UI）。Older gateways
+    // omit reply_to, so the check is only strict when the field is present.
+    if (typeof envelope.reply_to === 'string' && envelope.reply_to && waiter.outboundMessageId !== envelope.reply_to) {
+      return false;
+    }
     const streamEvent = p3394EnvelopeStreamEvent(envelope);
     if (streamEvent) {
       if (streamEvent.sourceMessageId && streamEvent.sourceMessageId !== waiter.outboundMessageId) return false;
