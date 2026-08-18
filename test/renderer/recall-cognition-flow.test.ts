@@ -2824,6 +2824,71 @@ describe('Recall cognition renderer flow', () => {
     ]]);
   });
 
+  it('passes the selected personal-template field through candidate confirmation', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const calls: Array<[string, unknown]> = [];
+    const target = {
+      groupId: 'group-student',
+      templateId: 'student',
+      section: '学习背景',
+      fieldName: '专业与学习方向',
+    };
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    const card: any = {
+      querySelector: (selector: string) => selector === '[data-recall-profile-target]'
+        ? { value: encodeURIComponent(JSON.stringify(target)) }
+        : null,
+    };
+    const button: any = {
+      dataset: { recallCandidateAction: 'promote', recallCandidateId: 'cand-personal-target' },
+      disabled: false,
+      closest: (selector: string) => selector === '[data-recall-candidate-action]'
+        ? button
+        : selector === '[data-recall-candidate-id]' ? card : null,
+    };
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : null,
+        querySelectorAll: () => [],
+      },
+      window: {
+        addEventListener() {},
+        refreshPersonalOntology: async () => {},
+        cogseed: {
+          invoke: async (channel: string, input: unknown) => {
+            calls.push([channel, input]);
+            return { ok: true };
+          },
+        },
+      },
+      _skillsCognitionState: {
+        recallCandidates: [{ id: 'cand-personal-target', status: 'pending_review', suggestedType: 'personal' }],
+        writingRecallCandidateId: '',
+      },
+      _cognitionText: (_key: string, fallback: string) => fallback,
+      renderSkillsCognitionCaptures() {},
+      renderSkillsCognitionCandidates() {},
+      loadSkillsCognitionSnapshot: async () => {},
+      initSkillsCognitionConsole() {},
+      switchSkillsCognitionPage() {},
+      setTimeout,
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target: button });
+
+    expect(calls).toEqual([[
+      'recall.candidates.promote',
+      { candidateId: 'cand-personal-target', profileTarget: target },
+    ]]);
+  });
+
   it('requires an independent confirmation and acknowledges high-risk candidate promotion', async () => {
     let clickHandler: ((event: any) => Promise<void>) | undefined;
     const calls: Array<[string, unknown]> = [];

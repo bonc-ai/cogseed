@@ -222,6 +222,8 @@
 .cognition-candidate-field select,
 .cognition-candidate-field textarea { width: 100%; padding: 7px 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 7px; background: var(--card, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; }
 .cognition-candidate-field textarea { min-height: 72px; resize: vertical; line-height: 1.6; }
+.cognition-candidate-profile-target { align-items: start; }
+.cognition-candidate-profile-target small { grid-column: 2; margin-top: -5px; line-height: 1.45; }
 .cognition-candidate-actions { margin-top: 4px; }
 .cognition-candidate-side { display: grid; gap: 8px; align-content: start; }
 .cognition-candidate-side h3 { margin: 0; color: var(--fg, #111827); font-size: 12px; }
@@ -278,6 +280,7 @@
   .cognition-nonasset-layout { grid-template-columns: minmax(0, 1fr); }
   .cognition-candidate-field,
   .cognition-candidate-field.is-wide { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .cognition-candidate-profile-target small { grid-column: 1; }
 }
 .cognition-governance-workbench { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(320px, .8fr) minmax(0, 1.2fr); gap: 14px; align-items: start; }
 .cognition-governance-history-card,

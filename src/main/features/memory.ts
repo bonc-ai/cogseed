@@ -760,6 +760,44 @@ export function ensureCognitionMemoryEntry(
   };
 }
 
+/**
+ * Project one accepted Personal ability asset into USER.md.
+ *
+ * Keeping the asset id in record metadata makes retries idempotent and lets a
+ * later lifecycle operation detach the projection without fuzzy text matching.
+ */
+export function ensurePersonalProfileEntry(
+  userId: string,
+  sourceId: string,
+  content: string,
+): { ok: boolean; error?: string; record?: SourcedMemoryRecord } {
+  const trimmed = content.trim();
+  const threat = scanForInjection(trimmed);
+  if (threat) return { ok: false, error: `blocked: suspicious content (${threat})` };
+  const result = ensureSourcedMemoryRecord(
+    userProfileFile(userId),
+    sourceId,
+    trimmed,
+    USER_CHAR_LIMIT,
+  );
+  if (result.ok && result.record) notifyMemoryDirty('user');
+  return {
+    ok: result.ok,
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.record ? { record: result.record } : {}),
+  };
+}
+
+export function findPersonalProfileEntry(userId: string, sourceId: string): SourcedMemoryRecord | null {
+  return findSourcedMemoryRecord(userProfileFile(userId), sourceId);
+}
+
+export function detachPersonalProfileEntry(userId: string, sourceId: string): MemoryOpResult {
+  const result = detachMemorySource(userProfileFile(userId), sourceId, USER_CHAR_LIMIT);
+  if (result.ok && result.detachedSourceIds.length) notifyMemoryDirty('user');
+  return buildResult(userId, 'user', result.ok, result.error);
+}
+
 export function ensureCognitionMemoryEntryLocked(
   userId: string,
   sourceId: string,

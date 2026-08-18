@@ -2266,13 +2266,34 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await recallCandidates.batchPromoteRecallCandidates(ctx.userId, candidateIds)) };
   },
 
-  'recall.candidates.promote': async ({ candidateId, riskAcknowledged } = {}, ctx) => {
+  'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
-    const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, { riskAcknowledged: riskAcknowledged === true });
-    // 晋升后候选进 confirmed（终态）。回包必须带上新的 capability，否则渲染层
-    // 拿旧能力继续画"确认/晋升"按钮 —— 那正是 confirmed 假可操作的来源。
-    return { ok: true, ...promoted, ...(promoted.candidate ? { candidate: withRecallCandidateCapabilities(promoted.candidate) } : {}) };
+    if (profileTarget !== undefined) {
+      if (!profileTarget || typeof profileTarget !== 'object' || Array.isArray(profileTarget)
+        || !safeId(profileTarget.groupId)
+        || typeof profileTarget.section !== 'string' || !profileTarget.section.trim() || profileTarget.section.length > 200
+        || typeof profileTarget.fieldName !== 'string' || !profileTarget.fieldName.trim() || profileTarget.fieldName.length > 200
+        || (profileTarget.templateId !== undefined && !safeId(profileTarget.templateId))) {
+        throw new Error('invalid personal profile target');
+      }
+    }
+    const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, {
+      riskAcknowledged: riskAcknowledged === true,
+      ...(profileTarget ? {
+        profileTarget: {
+          groupId: profileTarget.groupId,
+          section: profileTarget.section.trim(),
+          fieldName: profileTarget.fieldName.trim(),
+          ...(profileTarget.templateId ? { templateId: profileTarget.templateId } : {}),
+        },
+      } : {}),
+    });
+    return {
+      ok: true,
+      ...promoted,
+      ...(promoted.candidate ? { candidate: withRecallCandidateCapabilities(promoted.candidate) } : {}),
+    };
   },
 
   // 资产读口统一走 canonical layer：出去的每一条必然是四类正式资产，
