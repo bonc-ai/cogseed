@@ -166,6 +166,7 @@ registerDeferred('marketplace:cleanup-staging', () => {
   }
 });
 import { withCommonHeaders } from './api_common';
+import { requireCogSeedApiBase } from './api_base';
 import { getLanguage } from './config';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
 import {
@@ -196,12 +197,9 @@ const MARKETPLACE_JSON_TIMEOUT_MS = 60_000;
 export { extractBundleSafely, safeRelPath };
 
 // ── server URL ────────────────────────────────────────────────────────────
-// The open-source build has exactly one server environment: global prod. Use the apex host
-// directly so marketplace POST calls do not first hit a www -> apex 301 redirect.
-const GLOBAL_PROD_API_BASE = 'https://cogseed.ai' + '/api';
-
+// Server access is explicit in CogSeed-only builds; no legacy or guessed domain is embedded.
 export function apiBase(): string {
-  return GLOBAL_PROD_API_BASE;
+  return requireCogSeedApiBase();
 }
 
 // ── envelope ──────────────────────────────────────────────────────────────

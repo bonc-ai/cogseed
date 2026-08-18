@@ -13,7 +13,7 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../../../../src/main/features/connectors/_server_bridge', () => ({
-  accountApiBase: () => 'http://account.example/api',
+  accountApiBase: () => 'https://account.example/api',
   tokenStore: {
     getDeviceId: () => 'dev-1',
     authHeaders: () => ({ user_id: 'uid-1', session_id: 'sid-1' }),
@@ -34,7 +34,7 @@ beforeEach(() => {
   prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevApi = process.env.COGSEED_API_BASE_URL;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
-  process.env.COGSEED_API_BASE_URL = 'http://account.example/api';
+  process.env.COGSEED_API_BASE_URL = 'https://account.example/api';
   vi.resetModules();
 });
 

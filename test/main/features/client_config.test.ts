@@ -48,7 +48,7 @@ describe('client_config', () => {
     electronMock.powerMonitor.on.mockClear();
     electronMock.powerMonitor.off.mockClear();
     delete process.env.COGSEED_ACCOUNT_API_BASE;
-    delete process.env.COGSEED_API_BASE_URL;
+    process.env.COGSEED_API_BASE_URL = 'https://config.example/api';
     delete process.env.COGSEED_PROFILE;
     delete process.env.COGSEED_CLIENT_CHANNEL;
     delete process.env.COGSEED_CHANNEL;
@@ -292,7 +292,7 @@ describe('client_config', () => {
       expect(result).toEqual({ updated: true });
 
       const url = new URL(requestedUrl);
-      expect(url.origin + url.pathname).toBe('https://cogseed.ai/api/config/client');
+      expect(url.origin + url.pathname).toBe('https://config.example/api/config/client');
       expect(url.searchParams.get('region')).toBe('global');
       expect(url.searchParams.has('platform')).toBe(false);
       expect(url.searchParams.has('version')).toBe(false);
