@@ -1,7 +1,7 @@
 /**
- * Adapter for the NSEAP security-core engine (`resources/guardrail/nseap-security-core`).
+ * Adapter for the skill declaration engine (`resources/guardrail/skill-declaration-core`).
  *
- * Runs the ECS Security 3.1/3.2 engine as a Python child process and maps its
+ * Runs the declaration engine as a Python child process and maps its
  * exit code onto a verdict the platform owns. Mirrors `sentry-adapter` in shape
  * on purpose: one more component on the same pipe, not a second architecture.
  *
@@ -32,7 +32,7 @@
  * ## The verdict is symbolic — the platform decides
  *
  * This module locates and runs the engine and translates its exit code. It does
- * not let the engine's output decide admission: `verdictFromExitCode` is the
+ * not let the engine's output decide admission: `declarationVerdictFromExitCode` is the
  * whole mapping and it lives here, in platform code. An unrecognised exit code
  * becomes `unknown`, never `pass`.
  *
@@ -52,18 +52,18 @@ import { createLogger } from '../../logger';
 import { packagedGuardrailDir } from '../../paths';
 import { marketplaceContentTreeHash } from '../../util/marketplace-tree-hash';
 
-const log = createLogger('security/nseap-core');
+const log = createLogger('security/skill-declaration');
 
 /** Hard ceiling on a single engine run. */
 const RUN_TIMEOUT_MS = 60_000;
 
 /** Directory name under `resources/guardrail/`. Hardcoded, never configurable. */
-const ENGINE_DIR_NAME = 'nseap-security-core';
+const ENGINE_DIR_NAME = 'skill-declaration-core';
 
 /** Pin file stored beside the engine tree, never inside it. */
-const PIN_FILE_NAME = 'nseap-security-core.INTEGRITY';
+const PIN_FILE_NAME = 'skill-declaration-core.INTEGRITY';
 
-export type NseapCoreIntegrity = 'verified' | 'tampered' | 'unpinned' | 'unreadable';
+export type DeclarationCoreIntegrity = 'verified' | 'tampered' | 'unpinned' | 'unreadable';
 
 /**
  * Validation mode, mirroring the engine's own two modes.
@@ -72,7 +72,7 @@ export type NseapCoreIntegrity = 'verified' | 'tampered' | 'unpinned' | 'unreada
  * deliberately NON-AUTHORITATIVE digest. `FORMAL_TEST` runs against a frozen
  * subject and requires a freeze id + subject digest.
  */
-export type NseapValidationMode = 'PREVALIDATION' | 'FORMAL_TEST';
+export type DeclarationValidationMode = 'PREVALIDATION' | 'FORMAL_TEST';
 
 /**
  * Platform-owned verdict.
@@ -81,22 +81,22 @@ export type NseapValidationMode = 'PREVALIDATION' | 'FORMAL_TEST';
  * strings, and mapping them at each call site would make admitting a new one an
  * omission rather than a decision.
  */
-export type NseapVerdict = 'pass' | 'pass_with_warnings' | 'needs_input' | 'blocked' | 'unknown';
+export type DeclarationVerdict = 'pass' | 'pass_with_warnings' | 'needs_input' | 'blocked' | 'unknown';
 
-export interface NseapFinding {
+export interface DeclarationFinding {
   ruleId: string;
   severity: string;
   message: string;
   path?: string;
 }
 
-export interface NseapResult {
-  verdict: NseapVerdict;
+export interface DeclarationResult {
+  verdict: DeclarationVerdict;
   /** Engine exit code, retained for diagnosis. */
   exitCode: number | null;
   /** The engine's own result string, when it produced a parseable report. */
   engineResult: string | null;
-  findings: NseapFinding[];
+  findings: DeclarationFinding[];
   /** Non-authoritative in PREVALIDATION; authoritative only for frozen subjects. */
   worktreeDigest: string | null;
   subjectDigest: string | null;
@@ -119,7 +119,7 @@ export interface NseapResult {
  * that a future engine build which does emit them degrades to "could not check"
  * instead of silently reading as `pass` by not matching anything.
  */
-export function verdictFromExitCode(code: number | null): NseapVerdict {
+export function declarationVerdictFromExitCode(code: number | null): DeclarationVerdict {
   switch (code) {
     case 0: return 'pass';                 // PASS / FROZEN / CONSISTENT / TEMPLATE_PROVIDED
     case 10: return 'pass_with_warnings';  // PASS_WITH_WARNINGS / VERSION_DEPRECATED
@@ -136,7 +136,7 @@ export function verdictFromExitCode(code: number | null): NseapVerdict {
 }
 
 /** Absolute path to the packaged engine, or undefined when this build omits it. */
-export function engineDir(): string | undefined {
+export function declarationEngineDir(): string | undefined {
   try {
     const dir = path.join(packagedGuardrailDir(), ENGINE_DIR_NAME);
     return fs.existsSync(path.join(dir, 'security_core', '__init__.py')) ? dir : undefined;
@@ -195,7 +195,7 @@ export function _resetPythonChoiceForTest(): void {
   _pythonChoice = undefined;
 }
 
-function unavailable(reason: string): NseapResult {
+function unavailable(reason: string): DeclarationResult {
   return {
     verdict: 'unknown',
     exitCode: null,
@@ -207,7 +207,7 @@ function unavailable(reason: string): NseapResult {
   };
 }
 
-function unavailableWithExitCode(reason: string, exitCode: number | null): NseapResult {
+function unavailableWithExitCode(reason: string, exitCode: number | null): DeclarationResult {
   return {
     verdict: 'unknown',
     exitCode,
@@ -226,8 +226,8 @@ function unavailableWithExitCode(reason: string, exitCode: number | null): Nseap
  * engine rather than the admission scanner. The pin is read from a sibling file
  * and checked with the same tree hash used at release time.
  */
-export function verifyNseapCoreIntegrity(dir: string): {
-  status: NseapCoreIntegrity;
+export function verifyDeclarationCoreIntegrity(dir: string): {
+  status: DeclarationCoreIntegrity;
   expected?: string;
   actual?: string;
 } {
@@ -247,16 +247,16 @@ export function verifyNseapCoreIntegrity(dir: string): {
   if (!actual) return { status: 'unreadable' };
   if (!expected) return { status: 'unpinned', actual };
   if (expected !== actual) {
-    log.warn('nseap engine integrity mismatch', { expected, actual });
+    log.warn('declaration engine integrity mismatch', { expected, actual });
     return { status: 'tampered', expected, actual };
   }
   return { status: 'verified', expected, actual };
 }
 
-function _findings(report: Record<string, unknown>): NseapFinding[] {
+function _findings(report: Record<string, unknown>): DeclarationFinding[] {
   const validation = report.validation as Record<string, unknown> | undefined;
   const raw = Array.isArray(validation?.findings) ? validation.findings : [];
-  const out: NseapFinding[] = [];
+  const out: DeclarationFinding[] = [];
   for (const f of raw) {
     if (!f || typeof f !== 'object') continue;
     const rec = f as Record<string, unknown>;
@@ -276,7 +276,7 @@ function _findings(report: Record<string, unknown>): NseapFinding[] {
  * Kept as a separate function so tests can cover the failure without needing a
  * hostile Python interpreter: a report is either JSON or it is not.
  */
-export function parseNseapReport(stdout: string): Record<string, unknown> | null {
+export function parseDeclarationReport(stdout: string): Record<string, unknown> | null {
   const text = String(stdout || '').trim();
   if (!text) return null;
   try {
@@ -293,10 +293,10 @@ export function parseNseapReport(stdout: string): Record<string, unknown> | null
  * most likely to regress: an exit code of 0 must not become `pass` when no
  * report was produced.
  */
-export function resultFromExitCodeAndReport(
+export function declarationResultFromExitCodeAndReport(
   code: number | null,
   report: Record<string, unknown> | null,
-): NseapResult {
+): DeclarationResult {
   if (!report || typeof report !== 'object' || Array.isArray(report)) {
     return unavailableWithExitCode('unparseable_report', code);
   }
@@ -307,7 +307,7 @@ export function resultFromExitCodeAndReport(
     return unavailableWithExitCode('unparseable_report', code);
   }
   return {
-    verdict: verdictFromExitCode(code),
+    verdict: declarationVerdictFromExitCode(code),
     exitCode: code,
     engineResult: typeof validation.result === 'string' ? validation.result : null,
     findings: _findings(report),
@@ -322,16 +322,16 @@ export function resultFromExitCodeAndReport(
  * Returns `unknown` rather than throwing for every failure path, so a caller can
  * always distinguish "the content is bad" from "the check did not run".
  */
-export async function validateSkillWithEngine(
+export async function validateSkillDeclaration(
   skillRoot: string,
-  mode: NseapValidationMode = 'PREVALIDATION',
-): Promise<NseapResult> {
-  const dir = engineDir();
+  mode: DeclarationValidationMode = 'PREVALIDATION',
+): Promise<DeclarationResult> {
+  const dir = declarationEngineDir();
   if (!dir) return unavailable('engine_absent');
 
-  const integrity = verifyNseapCoreIntegrity(dir);
+  const integrity = verifyDeclarationCoreIntegrity(dir);
   if (integrity.status !== 'verified') {
-    log.warn('nseap engine integrity check failed', {
+    log.warn('declaration engine integrity check failed', {
       status: integrity.status,
       expected: integrity.expected,
       actual: integrity.actual,
@@ -394,9 +394,9 @@ export async function validateSkillWithEngine(
     return unavailable(msg === 'timeout' ? 'timeout' : 'spawn_failed');
   }
 
-  const report = parseNseapReport(stdout);
+  const report = parseDeclarationReport(stdout);
   if (!report) {
     log.warn('engine report was not valid JSON', { exitCode: code });
   }
-  return resultFromExitCodeAndReport(code, report);
+  return declarationResultFromExitCodeAndReport(code, report);
 }

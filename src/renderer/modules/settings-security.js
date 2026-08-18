@@ -47,8 +47,8 @@
   function heroKind() {
     const st = state.status;
     if (!st) return 'bad';
-    if (st.scanner !== 'present' || st.scannerIntegrity === 'tampered' || st.nseapIntegrity === 'tampered') return 'bad';
-    if (st.scannerIntegrity !== 'verified' || st.nseapIntegrity !== 'verified') return 'warn';
+    if (st.scanner !== 'present' || st.scannerIntegrity === 'tampered' || st.declarationIntegrity === 'tampered') return 'bad';
+    if (st.scannerIntegrity !== 'verified' || st.declarationIntegrity !== 'verified') return 'warn';
     return 'ok';
   }
 
@@ -98,7 +98,7 @@
           <span>${esc(t('settings.security.scanner_label'))} <b>${esc(st.scanner === 'present' ? t('settings.security.scanner_present') : st.scanner === 'absent_by_build' ? t('settings.security.scanner_absent_build') : st.scanner === 'broken' ? t('settings.security.scanner_broken') : t('settings.security.status_unknown'))}</b></span>
           <span>${esc(t('settings.security.ruleset'))} <b>${esc(st.sentryRulesetVersion || '—')}</b></span>
           <span>${esc(t('settings.security.sentry_engine'))} <b>${esc(st.sentryEngineVersion ? `skill-sentry ${st.sentryEngineVersion}` : '—')}</b></span>
-          <span>${esc(t('settings.security.nseap_engine'))} <b>${esc(st.nseapEngineVersion ? `nseap-core ${st.nseapEngineVersion}` : '—')}</b></span>
+          <span>${esc(t('settings.security.declaration_engine'))} <b>${esc(st.declarationEngineVersion ? `declaration-core ${st.declarationEngineVersion}` : '—')}</b></span>
         </div>
       </div>
     </div>`;
@@ -108,8 +108,8 @@
     const st = state.status || {};
     const scannerOk = st.scanner === 'present';
     const sentryOk = st.scannerIntegrity === 'verified';
-    const nseapOk = st.nseapIntegrity === 'verified';
-    const cls = (ok) => (ok ? 'ok' : st.scannerIntegrity === 'tampered' || st.nseapIntegrity === 'tampered' ? 'bad' : 'warn');
+    const declarationOk = st.declarationIntegrity === 'verified';
+    const cls = (ok) => (ok ? 'ok' : st.scannerIntegrity === 'tampered' || st.declarationIntegrity === 'tampered' ? 'bad' : 'warn');
     return `<div class="sec-grid">
       <div class="sec-card">
         <div class="sec-card-head"><div class="sec-card-name">${esc(t('settings.security.scanner_label'))}</div>
@@ -126,11 +126,11 @@
         <div class="sec-card-note">${esc(t('settings.security.card_sentry_note'))}</div>
       </div>
       <div class="sec-card">
-        <div class="sec-card-head"><div class="sec-card-name">${esc(t('settings.security.nseap_engine'))}</div>
-          <span class="sec-pill ${cls(nseapOk)}">${esc(nseapOk ? t('settings.security.tag_ok') : t('settings.security.tag_attention'))}</span></div>
-        <div class="sec-card-row"><span>${esc(t('settings.security.integrity_label'))}</span><span>${esc(integrityText(st.nseapIntegrity))}</span></div>
-        <div class="sec-card-row"><span>${esc(t('settings.security.col_version'))}</span><span>${esc(st.nseapEngineVersion || '—')}</span></div>
-        <div class="sec-card-note">${esc(t('settings.security.card_nseap_note'))}</div>
+        <div class="sec-card-head"><div class="sec-card-name">${esc(t('settings.security.declaration_engine'))}</div>
+          <span class="sec-pill ${cls(declarationOk)}">${esc(declarationOk ? t('settings.security.tag_ok') : t('settings.security.tag_attention'))}</span></div>
+        <div class="sec-card-row"><span>${esc(t('settings.security.integrity_label'))}</span><span>${esc(integrityText(st.declarationIntegrity))}</span></div>
+        <div class="sec-card-row"><span>${esc(t('settings.security.col_version'))}</span><span>${esc(st.declarationEngineVersion || '—')}</span></div>
+        <div class="sec-card-note">${esc(t('settings.security.card_declaration_note'))}</div>
       </div>
     </div>`;
   }

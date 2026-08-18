@@ -223,13 +223,13 @@ export interface SkillListing {
       segments: Array<{ file: string; line: number; text: string; signal: string }>;
     };
     /**
-     * NSEAP declaration check: whether the skill's security manifest is coherent.
+     * Declaration check: whether the skill's security manifest is coherent.
      *
      * Forwarded as-is, ADVISORY ONLY. This must never influence `status` — that
      * verdict is the scan's, and a declaration gap is an authoring defect, not a
      * threat. Note the engine reads the manifest's own fields, not the skill's
      * code: a `pass` means the paperwork is self-consistent, never that the code
-     * was checked. See `skill_trust.SecurityReceipt.nseapDeclaration` for the
+     * was checked. See `skill_trust.SecurityReceipt.declarationCheck` for the
      * measured evidence behind that distinction.
      *
      * `absent` is forwarded rather than dropped here so the panel — not this
@@ -238,7 +238,7 @@ export interface SkillListing {
      * (checked, coherent) are different claims, and collapsing them at the
      * boundary would make the stronger one unrecoverable downstream.
      */
-    nseapDeclaration?: {
+    declarationCheck?: {
       status: 'pass' | 'pass_with_warnings' | 'needs_input' | 'mismatch' | 'absent' | 'unavailable';
       engineResult?: string;
       findings?: Array<{ ruleId: string; severity: string; message: string }>;
@@ -968,7 +968,7 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
         ...(receipt.scanner ? { scanner: receipt.scanner } : {}),
         ...(receipt.attackSurface ? { attackSurface: { ...receipt.attackSurface } } : {}),
         ...(receipt.instructionRisk ? { instructionRisk: receipt.instructionRisk } : {}),
-        ...(receipt.nseapDeclaration ? { nseapDeclaration: receipt.nseapDeclaration } : {}),
+        ...(receipt.declarationCheck ? { declarationCheck: receipt.declarationCheck } : {}),
         ...(receipt.userOverride ? { userOverride: receipt.userOverride } : {}),
       }
       : {};

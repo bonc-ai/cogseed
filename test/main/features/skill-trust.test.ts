@@ -601,7 +601,7 @@ describe('reverify › convention findings are not risk', () => {
   });
 });
 
-describe('skill_trust › nseap declaration check (advisory only)', () => {
+describe('skill_trust › declaration check (advisory only)', () => {
   /**
    * A declaration with the mandatory sections missing.
    *
@@ -773,8 +773,8 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     // `absent` must be distinct from `pass`: claiming a clean declaration check
     // for a file that does not exist would be a false statement, and every
     // skill shipped today is in this state.
-    expect(deep.receipt?.nseapDeclaration?.status).toBe('absent');
-    expect(deep.receipt?.nseapDeclaration?.findings).toBeUndefined();
+    expect(deep.receipt?.declarationCheck?.status).toBe('absent');
+    expect(deep.receipt?.declarationCheck?.findings).toBeUndefined();
   });
 
   it('does not change the verdict for an otherwise-clean skill', async () => {
@@ -787,14 +787,14 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     // promoted into a security badge.
     expect(deep.decision).toBe('pass');
     // And the evidence is still recorded rather than dropped.
-    expect(deep.receipt?.nseapDeclaration).toBeDefined();
+    expect(deep.receipt?.declarationCheck).toBeDefined();
   });
 
   it('records a status that is never the receipt decision vocabulary', async () => {
     mkSkill('vocab', { ...CLEAN, 'references/security-manifest.yaml': MANIFEST_INCOMPLETE });
 
     const deep = await reverifySkillDeep(UID, 'vocab');
-    const status = deep.receipt?.nseapDeclaration?.status;
+    const status = deep.receipt?.declarationCheck?.status;
 
     // A declaration defect must not be labelled `blocked` inside a security
     // record — that wording reads as a threat verdict.
@@ -816,7 +816,7 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     const deep = await reverifySkillDeep(UID, 'broken-manifest');
 
     expect(deep.decision).toBe('pass');
-    expect(deep.receipt?.nseapDeclaration?.status).toBeTruthy();
+    expect(deep.receipt?.declarationCheck?.status).toBeTruthy();
   });
 
   it('round-trips the declaration record through the receipt file', async () => {
@@ -827,7 +827,7 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     // not parsed on read would silently vanish for every later consumer.
     const reread = readReceipt(UID, 'persist');
 
-    expect(reread?.nseapDeclaration?.status).toBeTruthy();
+    expect(reread?.declarationCheck?.status).toBeTruthy();
   });
 
   /**
@@ -848,10 +848,10 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
       'utf8',
     );
 
-    // The advisory blocks the panel renders. `nseapDeclaration` is the one added
+    // The advisory blocks the panel renders. `declarationCheck` is the one added
     // last and the one this test exists for; the others are listed so that
     // dropping any of them fails here too.
-    for (const field of ['attackSurface', 'instructionRisk', 'nseapDeclaration', 'userOverride']) {
+    for (const field of ['attackSurface', 'instructionRisk', 'declarationCheck', 'userOverride']) {
       expect(src).toContain(`receipt.${field} ? { ${field}`);
     }
   });
@@ -871,8 +871,8 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     const noManifest = await reverifySkillDeep(UID, 'none');
     const withManifest = await reverifySkillDeep(UID, 'declared-2');
 
-    expect(noManifest.receipt?.nseapDeclaration?.status).toBe('absent');
-    expect(withManifest.receipt?.nseapDeclaration?.status).not.toBe('absent');
+    expect(noManifest.receipt?.declarationCheck?.status).toBe('absent');
+    expect(withManifest.receipt?.declarationCheck?.status).not.toBe('absent');
   });
 
   /**
@@ -904,7 +904,7 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     const deep = await reverifySkillDeep(UID, 'declared-but-leaky');
 
     // The declaration check saw nothing wrong: it never looked at scripts/.
-    expect(deep.receipt?.nseapDeclaration?.status).toBe('pass');
+    expect(deep.receipt?.declarationCheck?.status).toBe('pass');
     // And the layer that does read code is the one that acts on it. This is the
     // assertion that must survive any change to the line above.
     expect(deep.decision).toBe('blocked');

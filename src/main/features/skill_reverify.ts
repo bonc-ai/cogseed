@@ -47,7 +47,7 @@ export interface ReverifyResult {
 
 function _decisionOf(report: { ok: boolean; violations: Array<{ rule: string }> }): ReceiptDecision {
   if (!report.ok) return 'blocked';
-  // Convention-only findings are not risk. Without this, develop's NSEAP ruleset
+  // Convention-only findings are not risk. Without this, develop's shape ruleset
   // turns every skill that predates the standard into `risk`, and a badge that
   // flags the entire library teaches users to ignore it — which would leave the
   // genuine cases unread.
@@ -59,7 +59,7 @@ const _LEVEL_RANK: Record<string, number> = { EXTREME: 3, MEDIUM: 2, LOW: 1 };
 /**
  * Authoring-convention rules, which describe completeness rather than safety.
  *
- * NSEAP requires standard artifacts of every skill ("declare `use_when`", "add an
+ * The shape rules require standard artifacts of every skill ("declare `use_when`", "add an
  * output contract"). Those fire at MEDIUM across nearly the whole existing
  * library — measured, six of them on a fixture this suite calls CLEAN. A missing
  * contract is a real authoring gap and the quality report lists it in full, but it
@@ -369,7 +369,7 @@ async function _reverifyDeep(
     });
   }
 
-  // NSEAP declaration check — ADVISORY ONLY, and deliberately last.
+  // Declaration check — ADVISORY ONLY, and deliberately last.
   //
   // Nothing below may touch `decision`. The engine answers "does this skill's
   // security manifest match what the tree actually contains", which is not the
@@ -377,7 +377,7 @@ async function _reverifyDeep(
   // Letting it set `risk` would turn an unfinished declaration into a security
   // badge, and — since no shipped skill carries a manifest yet — would mark the
   // entire library at once, which is exactly how a badge stops being read.
-  const nseapDeclaration = await checkNseapDeclaration(skillDir, skillId);
+  const declarationCheck = await checkDeclaration(skillDir, skillId);
 
   const receipt = writeReceipt(uid, skillId, {
     payloadHash,
@@ -387,7 +387,7 @@ async function _reverifyDeep(
     ...deepEvidence,
     ...(topRule ? { topRule } : {}),
     ...(topLevel ? { topLevel } : {}),
-    ...(nseapDeclaration ? { nseapDeclaration } : {}),
+    ...(declarationCheck ? { declarationCheck } : {}),
   }, agentId);
 
   if (reason === 'payload_changed') {
@@ -400,7 +400,7 @@ async function _reverifyDeep(
 }
 
 /**
- * Run the NSEAP security-declaration check for one skill.
+ * Run the skill security-declaration check for one skill.
  *
  * Returns `undefined` when there is nothing worth recording, so the receipt does
  * not grow a field for every skill in the library.
@@ -419,20 +419,20 @@ async function _reverifyDeep(
  *  4. **It cannot throw.** Re-verification decides whether a skill may load; an
  *     advisory extra must never be able to break that.
  */
-export async function checkNseapDeclaration(
+export async function checkDeclaration(
   skillDir: string,
   skillId: string,
-): Promise<SecurityReceipt['nseapDeclaration'] | undefined> {
+): Promise<SecurityReceipt['declarationCheck'] | undefined> {
   try {
     // Cheap FS check before paying for a subprocess: the common case is absence.
     const manifest = path.join(skillDir, 'references', 'security-manifest.yaml');
     if (!fs.existsSync(manifest)) return { status: 'absent' };
 
-    const { validateSkillWithEngine } = await import('./security/nseap-core-adapter');
-    const r = await validateSkillWithEngine(skillDir, 'PREVALIDATION');
+    const { validateSkillDeclaration } = await import('./security/skill-declaration-adapter');
+    const r = await validateSkillDeclaration(skillDir, 'PREVALIDATION');
 
     if (r.verdict === 'unknown') {
-      log.warn('nseap declaration check unavailable', {
+      log.warn('declaration check unavailable', {
         skillId, reason: r.unavailableReason || 'unknown', exitCode: r.exitCode,
       });
       return { status: 'unavailable' };
@@ -454,7 +454,7 @@ export async function checkNseapDeclaration(
     };
   } catch (err) {
     // Never propagate: see property 4 above.
-    log.warn('nseap declaration check errored', {
+    log.warn('declaration check errored', {
       skillId, error: (err as Error).message,
     });
     return { status: 'unavailable' };
