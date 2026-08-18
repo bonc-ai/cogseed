@@ -110,6 +110,10 @@ const viewMock = vi.hoisted(() => ({
 }));
 const teachingMock = vi.hoisted(() => ({
   listUserTeachingSignals: vi.fn(async () => []),
+  // G-2：读口改走分页出口（items + total）。total 必须是截断前的真实条数，
+  // 所以这里刻意让 total 与 items.length 不相等——否则用例分不出实现是真的
+  // 读了 total，还是又拿 items.length 顶替。
+  listUserTeachingSignalPage: vi.fn(async () => ({ items: [], total: 42 })),
   revokeUserTeachingSignal: vi.fn(async (_uid: string, id: string) => ({ id, status: 'revoked' })),
 }));
 const projectionMock = vi.hoisted(() => ({
@@ -423,7 +427,10 @@ describe('ipc › recall candidate governance', () => {
     });
 
     await expect(call('recall.teaching.list', { conversationId: 'conv-a', status: 'active', limit: 5 }))
-      .resolves.toMatchObject({ ok: true, signals: [] });
+      .resolves.toMatchObject({ ok: true, signals: [], total: 42 });
+    expect(teachingMock.listUserTeachingSignalPage).toHaveBeenCalledWith(UID, {
+      conversationId: 'conv-a', status: 'active', limit: 5,
+    });
     await expect(call('recall.teaching.revoke', { signalId: 'teach-a' }))
       .resolves.toMatchObject({ ok: true, signal: { status: 'revoked' } });
     expect(teachingMock.revokeUserTeachingSignal).toHaveBeenCalledWith(UID, 'teach-a');

@@ -2053,6 +2053,77 @@ function renderSkillsCognitionInbox() {
   const host = document.getElementById('skills-cognition-inbox-body');
   if (!host) return;
   const d = _skillsCognitionState.dashboard || {};
+/**
+ * 「已处理历史」按需加载（cognition.reviewDecisions.list）。
+ *
+ * 不进快照九路并行：它只服务待我处理页里一个可折叠的带，进页才拉。
+ * `total` 与 `items.length` 分开存——limit 截断的是显示条数，不是处理过的条数。
+ */
+async function loadCognitionReviewHistory() {
+  _skillsCognitionState.reviewHistory = { loading: true };
+  if (_skillsCognitionState.page === 'inbox') renderSkillsCognitionInbox();
+  try {
+    const result = await window.cogseed.invoke('cognition.reviewDecisions.list', { limit: 20 });
+    if (!result?.ok) throw new Error(result?.error || 'review decision history read failed');
+    _skillsCognitionState.reviewHistory = {
+      items: Array.isArray(result.items) ? result.items : [],
+      total: Number.isFinite(result.total) ? result.total : (Array.isArray(result.items) ? result.items.length : 0),
+    };
+  } catch (error) {
+    _skillsCognitionState.reviewHistory = { error: (error && error.message) || String(error) };
+  }
+  if (_skillsCognitionState.page === 'inbox') renderSkillsCognitionInbox();
+}
+
+/** 决定类型的人话。契约里的七种全部覆盖，未知值原样显示——出现新类型时
+ *  露出它，好过悄悄归到"其它"里看不见。 */
+function _reviewDecisionLabel(type) {
+  return _cognitionText(`cognition.review_decision_${type}`, ({
+    accept: '已确认', modify: '修改后确认', defer: '稍后处理',
+    reject: '已拒绝', ignore: '已忽略', keep_current: '保持当前版本', trial: '试用',
+  })[type] || String(type || ''));
+}
+
+/**
+ * 「已处理历史」带。只渲染账本里真有的字段：决定类型、时间、被处理对象、
+ * 来源信号、结果（outcome）。**没有的不补**——账本里没有候选标题，就显示
+ * target_ref 本身，不去别处凑一个可能已经不存在的名字。
+ */
+function _renderCognitionReviewHistory() {
+  const state = _skillsCognitionState.reviewHistory;
+  if (!state || state.loading) {
+    return `<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`;
+  }
+  if (state.error) {
+    return `<div class="skills-cognition-warning"><span>${escapeHtml(state.error)}</span><button type="button" class="btn btn-sm" data-cognition-review-history-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`;
+  }
+  if (!state.items.length) {
+    return `<div class="skills-cognition-empty"><strong>${escapeHtml(_cognitionText('cognition.review_history_empty', '还没有处理记录'))}</strong><span>${escapeHtml(_cognitionText('cognition.review_history_empty_hint', '你确认、拒绝或稍后处理过的候选会按时间倒序出现在这里。'))}</span></div>`;
+  }
+  const rows = state.items.map((entry) => {
+    const outcome = entry.outcome === 'asset_created'
+      ? _cognitionText('cognition.review_outcome_asset', '已生成正式资产')
+      : entry.outcome === 'asset_failed'
+        ? _cognitionText('cognition.review_outcome_failed', '资产写入失败')
+        : '';
+    const meta = [
+      _cognitionDate(entry.timestamp),
+      entry.scope ? _cognitionText('cognition.review_scope', '作用域 {s}').replace('{s}', entry.scope) : '',
+      entry.actor === 'system' ? _cognitionText('cognition.review_actor_system', '系统自动') : '',
+      outcome,
+    ].filter(Boolean).join(' · ');
+    return `<div class="cognition-review-history-row">
+      <div><strong>${escapeHtml(entry.target_ref || entry.decision_id || '')}</strong><span class="skills-cognition-meta">${escapeHtml(meta)}</span></div>
+      <span class="skills-cognition-status is-completed">${escapeHtml(_reviewDecisionLabel(entry.decision_type))}</span>
+    </div>`;
+  }).join('');
+  const truncated = state.total > state.items.length
+    ? `<p class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.review_history_truncated', '共 {total} 条，显示最近 {shown} 条。')
+      .replace('{total}', String(state.total)).replace('{shown}', String(state.items.length)))}</p>`
+    : '';
+  return `<div class="cognition-review-history">${rows}</div>${truncated}`;
+}
+
   const candidates = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
     .filter((candidate) => candidate.status === 'pending_review' || candidate.status === 'failed');
   const warnings = Array.isArray(d.warnings) ? d.warnings : [];
@@ -2075,7 +2146,16 @@ function renderSkillsCognitionInbox() {
   const inboxItems = Array.isArray(_skillsCognitionState.inboxItems) ? _skillsCognitionState.inboxItems : [];
   const confirmCount = inboxItems.filter((entry) => entry?.urgency === 'confirm').length + failedCandidates.length;
   const laterCount = inboxItems.filter((entry) => entry?.urgency === 'low_disturbance').length;
-  const activeTeachingCount = teachingSignals.filter((signal) => signal?.status === 'active').length;
+  // 教学回执用后端真实 total，不用本次取回的条数——`recall.teaching.list` 有
+  // limit（默认 20、上限 100），拿 `.length` 当总数超过 limit 就是错的。
+  // 注意 total 是"全部教学回执"，这里要的是"生效中的"：所以只有在这一页没被
+  // 截断（取回条数 < total 说明截断了）时才敢按 active 过滤计数，否则如实用
+  // total 并在 label 上说清它是全部条数。
+  const teachingTruncated = Number.isFinite(_skillsCognitionState.totals?.teachingSignals)
+    && _skillsCognitionState.totals.teachingSignals > teachingSignals.length;
+  const activeTeachingCount = teachingTruncated
+    ? _skillsCognitionState.totals.teachingSignals
+    : teachingSignals.filter((signal) => signal?.status === 'active').length;
   const hero = _renderCognitionTaskHero({
     eyebrowKey: 'cognition.inbox_eyebrow', eyebrow: 'TO REVIEW',
     titleKey: 'cognition.inbox_title', title: '只把需要你决定的事放在这里',
@@ -2083,7 +2163,9 @@ function renderSkillsCognitionInbox() {
     metrics: [
       { value: confirmCount, key: 'cognition.inbox_confirm_now', label: '需要确认' },
       { value: laterCount, key: 'cognition.inbox_can_wait', label: '可以稍后' },
-      { value: activeTeachingCount, key: 'cognition.inbox_teaching_receipts', label: '教学回执' },
+      teachingTruncated
+        ? { value: activeTeachingCount, key: 'cognition.inbox_teaching_all', label: '教学回执（全部）' }
+        : { value: activeTeachingCount, key: 'cognition.inbox_teaching_receipts', label: '教学回执' },
     ],
   });
   // 需要主动确认的排在前面；普通候选低打扰地跟在后面。分级来自服务端 gate，
@@ -2108,6 +2190,16 @@ function renderSkillsCognitionInbox() {
     titleKey: 'cognition.inbox_teaching_receipts', title: '教学回执',
     badgeKey: 'cognition.inbox_teaching_badge', badge: '已按你的明确表达处理',
     hintKey: 'cognition.inbox_teaching_hint', hint: '可撤销，不需要重复确认',
+  // 「已处理历史」：原型 03 的第三个页签。做成带而不是页签——它和上面两条带
+  // 是同一个问题的两面（还需要我决定的 / 我已经决定过的），拆成页签会让用户
+  // 以为要切走才能看。
+  const historyBand = _renderCognitionInboxBand({
+    tone: 'history',
+    titleKey: 'cognition.inbox_processed', title: '已处理',
+    badgeKey: 'cognition.inbox_processed_badge', badge: '真实落账记录',
+    hintKey: 'cognition.inbox_processed_hint', hint: '按处理时间倒序，只显示已经落账的决定',
+    body: _renderCognitionReviewHistory(),
+  });
     body: teachingSignals.length ? _renderTeachingSignalStatus() : '',
   });
   const attention = _renderCognitionOverviewAttention();
@@ -3635,12 +3727,27 @@ function renderSkillsCognitionGovernance() {
   const items = Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [];
   const hero = _renderCognitionTaskHero({
     eyebrowKey: 'cognition.governance_eyebrow', eyebrow: 'VERSION & GOVERNANCE',
+/** 资产真实总数：后端 `cognition.assets.list` 的 `total`，取不到才退回本次条数。 */
+function _cognitionAssetTotal(items) {
+  const total = _skillsCognitionState.totals?.assets;
+  return Number.isFinite(total) ? total : (Array.isArray(items) ? items.length : 0);
+}
+
+/** 本次是否只取回了一部分。截断时不能拿手里这批算派生统计（按状态、按分类）
+ *  ——那些数字会随 limit 变化，用户看不出它们只统计了前 N 条。 */
+function _cognitionAssetsTruncated(items) {
+  const total = _skillsCognitionState.totals?.assets;
+  return Number.isFinite(total) && total > (Array.isArray(items) ? items.length : 0);
+}
+
     titleKey: 'cognition.governance_title', title: '每次变化都有版本，也有退路',
     hintKey: 'cognition.governance_page_hint', hint: '暂停、停止默认使用、撤销引用、删除资产与清除历史是不同动作；先看影响，再执行。',
     metrics: [
-      { value: items.length, key: 'cognition.governance_total', label: '全部资产' },
-      { value: items.filter((asset) => asset.status === 'active').length, key: 'cognition.governance_active', label: '正常使用' },
-      { value: items.filter((asset) => asset.status !== 'active').length, key: 'cognition.governance_attention', label: '需要关注' },
+      { value: _cognitionAssetTotal(items), key: 'cognition.governance_total', label: '全部资产' },
+      ...(_cognitionAssetsTruncated(items) ? [] : [
+        { value: items.filter((asset) => asset.status === 'active').length, key: 'cognition.governance_active', label: '正常使用' },
+        { value: items.filter((asset) => asset.status !== 'active').length, key: 'cognition.governance_attention', label: '需要关注' },
+      ]),
     ],
   });
   if (!items.length) {
@@ -3754,6 +3861,15 @@ async function loadSkillsCognitionSnapshot() {
   if (captureResultIsCurrent && captures.status === 'fulfilled' && captures.value?.ok) {
     const nextCaptures = captures.value.captures || [];
     const existingCaptures = _skillsCognitionState.captures || [];
+  // total 只在这次读成功时更新；读失败保留上一次的真值，不要退回 null 让界面
+  // 把"没读到"显示成"没有"。
+  const readTotal = (result, fallback) => (result.status === 'fulfilled' && result.value?.ok
+    && Number.isFinite(result.value.total) ? result.value.total : fallback);
+  _skillsCognitionState.totals = {
+    assets: readTotal(assets, _skillsCognitionState.totals?.assets ?? null),
+    teachingSignals: readTotal(teachingSignals, _skillsCognitionState.totals?.teachingSignals ?? null),
+    inboxItems: readTotal(inbox, _skillsCognitionState.totals?.inboxItems ?? null),
+  };
     if (existingCaptures.length > 25) {
       const merged = new Map(nextCaptures.map((capture) => [capture.id, capture]));
       for (const capture of existingCaptures) if (!merged.has(capture.id)) merged.set(capture.id, capture);
@@ -3812,8 +3928,16 @@ function initSkillsCognitionConsole() {
   loadSkillsCognitionSnapshot()
     .then(() => {
       if (_skillsCognitionState.page !== 'inbox') return;
-      if (!_cognitionInboxIsEmpty()) return;
-      switchSkillsCognitionPage('assets');
+      // G-9 产品决策：**默认永远停在「待我处理」，不自动跳页。**
+      //
+      // 认知资产首页要先回答"现在有什么需要我判断"。此前待办为空会静默切到
+      // 「我的资产」、一件东西都没有会静默切到空种子——用户点进来看到的不是
+      // 自己点的那一页，也不知道是被跳走了还是本来就在这儿。
+      //
+      // 现在两种空都由「待我处理」自己的空态承担并给出显式入口（首启引导 /
+      // 去我的资产），跳不跳由用户点。历史带在这里自己拉：留在本页不会走
+      // switchSkillsCognitionPage，不拉它就永远停在 loading。
+      void loadCognitionReviewHistory();
     })
     .catch(() => {});
 }

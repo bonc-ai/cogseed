@@ -2071,14 +2071,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
     if (status !== undefined && status !== 'active' && status !== 'revoked') throw new Error('invalid teaching status');
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid teaching limit');
-    return {
-      ok: true,
-      signals: await recallTeaching.listUserTeachingSignals(ctx.userId, {
-        ...(conversationId !== undefined ? { conversationId } : {}),
-        ...(status !== undefined ? { status } : {}),
-        ...(limit !== undefined ? { limit } : {}),
-      }),
-    };
+    // `signals` 保留原字段名（既有调用方按它读），另给 `total`——它是满足查询
+    // 条件的真实条数，不受 limit 影响。「待我处理」的「教学回执」指标此前取
+    // `signals.length`，超过 limit 就是个错数字，且错得不可见。
+    const page = await recallTeaching.listUserTeachingSignalPage(ctx.userId, {
+      ...(conversationId !== undefined ? { conversationId } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    });
+    return { ok: true, signals: page.items, total: page.total };
   },
 
   'recall.teaching.revoke': async ({ signalId } = {}, ctx) => {
@@ -2427,7 +2428,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.tree.rebuild': async (_args, ctx) => ({ ok: true, tree: await recallTree.rebuildCognitionTree(ctx.userId) }),
   'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
 
-  // 「使用与证明」视图：timeline-service 已按资产把使用、迁移证明、效果证明和
   // 「非资产分流」的读通道。接续快照是**非资产**对象（v0.2 §7.3）：任务状态被
   // 带到新会话，但不进四类资产、不长认知树叶片。此前只有按会话单读的
   // `readContinuationSnapshot`，没有面向界面的列表口，那一页只能摆空壳。
@@ -2450,6 +2450,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  // 「使用与证明」视图：timeline-service 已按资产把使用、迁移证明、效果证明和
   // 治理事件聚合成一条事实链，但此前没有 IPC 暴露，渲染层拿不到。
   'recall.timeline.forAsset': async ({ assetId } = {}, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');
@@ -2531,18 +2532,43 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cognition.assets.list': async ({ type, limit } = {}, ctx) => {
     if (type !== undefined && type !== 'skill' && type !== 'knowledge' && type !== 'ontology' && type !== 'evaluation') throw new Error('invalid cognition asset type');
     const n = limit === undefined ? undefined : Number(limit);
-    return { ok: true, assets: await cognition.listCognitionAssets(ctx.userId, {
+    // 不传 limit 拿全量再自己截：适配器本来就是先建完整数组、最后一步才 slice
+    // （assets-adapter.ts 末尾），所以 total 不额外付读盘代价。此前渲染层按
+    // `limit:500` 取回后拿 `.length` 当资产总数，超过 500 就静默错。
+    const all = await cognition.listCognitionAssets(ctx.userId, {
       ...(type !== undefined ? { type } : {}),
-      ...(Number.isFinite(n) && n > 0 ? { limit: Math.min(n, 500) } : {}),
-    }) };
+    });
+    const bounded = Number.isFinite(n) && (n as number) > 0 ? Math.min(n as number, 500) : undefined;
+    return { ok: true, assets: bounded ? all.slice(0, bounded) : all, total: all.length };
   },
 
   // 「待我处理」的唯一读口。判断规则在 formal-assets/inbox.ts，与晋升 gate、
   // Runtime gate 复用同一批函数——渲染层不再自己判断什么算待办。
-  'cognition.inbox.list': async (_args, ctx) => ({
-    ok: true,
-    items: await cognition.listCognitionInbox(ctx.userId),
-  }),
+  'cognition.inbox.list': async (_args, ctx) => {
+    // 待办读口本身不截断，所以 total 恒等于 items.length；仍显式返回，
+    // 让「items + total」在认知资产各读口上是同一个契约，渲染层不必按页
+    // 记住哪个口有 total、哪个没有。
+    const items = await cognition.listCognitionInbox(ctx.userId);
+    return { ok: true, items, total: items.length };
+  },
+
+  // 「已处理历史」：跨全部候选列出真实落账的审查决定，按处理时间倒序。
+  // 决定账本此前只有按 targetRef 的单读口（存储就是一个 targetRef 一个 jsonl），
+  // 回答不了"我一共处理过什么"，那一段历史在界面上完全看不到。
+  //
+  // 只读既有权威存储，不新增模型、不改候选状态机；`items + total` 与认知资产
+  // 其余读口同一契约。
+  'cognition.reviewDecisions.list': async ({ limit } = {}, ctx) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
+      throw new Error('invalid review decision limit');
+    }
+    return {
+      ok: true,
+      ...(await cognition.listRecentReviewDecisions(ctx.userId, {
+        ...(limit !== undefined ? { limit } : {}),
+      })),
+    };
+  },
 
   // 「版本与治理」问的是"这一版改了什么"。版本快照本来就存着全量内容，这里
   // 只做比对，不新增持久化。没有 diff 的话，"回滚到此版本"对用户就是盲赌。
