@@ -44,6 +44,7 @@
   let _pocTemplates = [];
   let _pocTemplatesLoaded = false;
   let _pocTemplatesLoadError = '';
+  let _pocProfile = { entries: [], loaded: false, loadError: '' };
   let _pocProjectNames = null; // Map(pid → name)，二期 D5 字段值 @项目 显示用（懒加载）
   let _pocSkillNames = null;  // Map(id → {name, desc})，模板库 bundle 展示用（懒加载）
   let _pocAgentNames = null;  // Map(id → {name, desc})
@@ -53,10 +54,85 @@
   let _pocRecallSyncAttempted = false;
   let _pocRecallSyncPromise = null;
   let _pocRecallSyncWarningSignature = '';
-  // 右栏只展示角色模板；旧候选审核仍由 Recall 正式资产页面负责。
-  let _pocSelected = { kind: 'template', id: null };
+  // 右栏展示会话沉淀出的基础画像和角色模板；旧候选审核仍由 Recall 正式资产页面负责。
+  let _pocSelected = { kind: 'profile', id: 'user-profile' };
   // 模板文件编辑器 { groupId, templateId, sections, content, view:'form'|'raw' }
   let _pocGroupEditor = null;
+
+  // PersonalOntology is stored as durable profile statements. Keep the
+  // storage contract flat, but present those statements as a small ontology
+  // in the UI so users can understand what kind of information was learned.
+  // This is deliberately deterministic and display-only: a statement that
+  // cannot be classified remains visible under "其他沉淀".
+  const _pocOntologySections = [
+    {
+      id: 'identity',
+      titleKey: 'personalOntology.ontology_identity',
+      title: '身份与角色',
+      descriptionKey: 'personalOntology.ontology_identity_hint',
+      description: '你是谁、承担什么角色以及所在的环境',
+      keywords: ['身份', '角色', '职业', '职位', '我是', '我是一名', '我叫', '来自', '居住', '公司', '团队', '程序员', '学生', '负责人', 'identity', 'role', 'job', 'profession', 'i am', 'i\'m'],
+    },
+    {
+      id: 'workstyle',
+      titleKey: 'personalOntology.ontology_workstyle',
+      title: '工作方式',
+      descriptionKey: 'personalOntology.ontology_workstyle_hint',
+      description: '你习惯如何思考、决策和推进事情',
+      keywords: ['工作方式', '做事', '习惯', '流程', '步骤', '先明确', '验收标准', '方法', '工作风格', 'workflow', 'work style', 'habit', 'process', 'method'],
+    },
+    {
+      id: 'communication',
+      titleKey: 'personalOntology.ontology_communication',
+      title: '沟通与交互偏好',
+      descriptionKey: 'personalOntology.ontology_communication_hint',
+      description: '你偏好的表达方式、界面和反馈节奏',
+      keywords: ['偏好', '喜欢', '沟通', '表达', '回复', '界面', '信息层次', '简洁', '结论', '语言', '交互', '沟通偏好', 'preference', 'prefer', 'communication', 'interface', 'concise', 'conclusion'],
+    },
+    {
+      id: 'goals',
+      titleKey: 'personalOntology.ontology_goals',
+      title: '目标与边界',
+      descriptionKey: 'personalOntology.ontology_goals_hint',
+      description: '你正在追求什么，以及明确不希望发生什么',
+      keywords: ['目标', '计划', '希望', '需要', '边界', '不要', '避免', '优先', '验收', '目标是', 'goal', 'plan', 'need', 'boundary', 'avoid', 'priority'],
+    },
+    {
+      id: 'environment',
+      titleKey: 'personalOntology.ontology_environment',
+      title: '关系与环境',
+      descriptionKey: 'personalOntology.ontology_environment_hint',
+      description: '与你协作的人、项目和使用环境',
+      keywords: ['同事', '家人', '客户', '朋友', '项目', '协作', '合作', '环境', '设备', '地点', '时区', '关系', 'team', 'project', 'collaboration', 'environment', 'device', 'location'],
+    },
+    {
+      id: 'other',
+      titleKey: 'personalOntology.ontology_other',
+      title: '其他沉淀',
+      descriptionKey: 'personalOntology.ontology_other_hint',
+      description: '暂时无法归入固定类别的个人信息',
+      keywords: [],
+    },
+  ];
+
+  function _pocClassifyProfileEntry(entry) {
+    const normalized = String(entry || '').trim().toLocaleLowerCase();
+    if (!normalized) return 'other';
+    const matched = _pocOntologySections.find((section) => (
+      section.id !== 'other' && section.keywords.some((keyword) => normalized.includes(String(keyword).toLocaleLowerCase()))
+    ));
+    return matched ? matched.id : 'other';
+  }
+
+  function _pocProfileSections() {
+    const grouped = new Map(_pocOntologySections.map((section) => [section.id, []]));
+    _pocProfile.entries.forEach((entry) => {
+      grouped.get(_pocClassifyProfileEntry(entry)).push(entry);
+    });
+    return _pocOntologySections
+      .map((section) => ({ ...section, entries: grouped.get(section.id) || [] }))
+      .filter((section) => section.entries.length > 0);
+  }
 
   async function _pocInvoke(channel, payload) {
     try {
@@ -77,6 +153,26 @@
     _pocTemplates = res.templates;
     _pocTemplatesLoadError = '';
     _pocTemplatesLoaded = true;
+    return true;
+  }
+
+  async function _pocLoadProfile() {
+    const res = await _pocInvoke('memory.list', { target: 'user' });
+    if (!res || res.ok === false || !Array.isArray(res.entries)) {
+      _pocProfile = {
+        entries: [],
+        loaded: true,
+        loadError: (res && res.error) || _t('personalOntology.load_error', '加载失败'),
+      };
+      return false;
+    }
+    _pocProfile = {
+      entries: res.entries
+        .map((entry) => String(entry || '').trim())
+        .filter(Boolean),
+      loaded: true,
+      loadError: '',
+    };
     return true;
   }
 
@@ -141,8 +237,9 @@
         const hasFailures = Array.isArray(res && res.failed) && res.failed.length > 0;
         if (!res || res.ok === false || hasFailures) _pocWarnRecallProfileSync(res);
         else _pocRecallSyncWarningSignature = '';
-        if (Number(res && res.written) > 0) {
+        if (Number(res && res.written) > 0 || Number(res && res.profileWritten) > 0) {
           _pocTemplatesLoaded = false;
+          _pocProfile = { entries: [], loaded: false, loadError: '' };
           _pocGroupEditor = null;
           await renderPersonalOntology();
         }
@@ -233,6 +330,31 @@
     return `<textarea class="memory-entry-textarea memory-group-editor-textarea" rows="14" data-poc-group-content>${escapeHtml(ed.content || '')}</textarea>`;
   }
 
+  // A role template is a narrower projection than the general personal
+  // profile. Keep confirmed statements visible while routing is unavailable
+  // or ambiguous, but never pretend they belong to a template field.
+  function _pocRenderTemplateProfileBridge(ed) {
+    if (!ed || !ed.loaded || ed.loadError || !_pocProfile.entries.length) return '';
+    const content = String(ed.content || '');
+    const pending = _pocProfile.entries.filter((entry) => !content.includes(entry));
+    if (!pending.length) return '';
+    return `<section class="personal-onto-template-profile-bridge" aria-label="${escapeHtml(_t('personalOntology.template_profile_bridge_title', '会话沉淀'))}">
+      <div class="personal-onto-template-profile-bridge-head">
+        <div>
+          <div class="personal-onto-template-profile-bridge-title">${escapeHtml(_t('personalOntology.template_profile_bridge_title', '会话沉淀'))}</div>
+          <div class="personal-onto-template-profile-bridge-hint">${escapeHtml(_t('personalOntology.template_profile_bridge_hint', '这些信息已确认，但暂未匹配到当前角色模板字段；不会自动填入错误字段。'))}</div>
+        </div>
+        <span class="personal-onto-template-profile-bridge-count">${escapeHtml(String(pending.length))}</span>
+      </div>
+      <div class="personal-onto-template-profile-bridge-list">
+        ${pending.map((entry) => `<div class="personal-onto-template-profile-bridge-entry">
+          <span class="personal-onto-profile-entry-icon">${_icon('file-text', 'ui-icon')}</span>
+          <span>${escapeHtml(entry)}</span>
+        </div>`).join('')}
+      </div>
+    </section>`;
+  }
+
   function _pocRenderGroupEditorHtml() {
     const ed = _pocGroupEditor;
     if (!ed) return '';
@@ -247,6 +369,7 @@
             <button type="button" class="btn btn-sm" data-poc-group-action="reload-group">${escapeHtml(_t('personalOntology.retry', '重试'))}</button>
           </div>`
         : (view === 'form' ? _pocRenderTemplateFormView(ed) : _pocRenderGroupRawView(ed));
+    const profileBridge = _pocRenderTemplateProfileBridge(ed);
     return `<div class="personal-onto-group-editor" data-poc-group-editor="${escapeHtml(ed.groupId)}" aria-busy="${ready ? 'false' : 'true'}">
       <div class="personal-onto-group-editor-head">
         <span class="personal-onto-group-editor-title">${escapeHtml(ed.title || ed.groupId)}</span>
@@ -256,6 +379,7 @@
         ${tab('form', _t('memory.group_form_view', '表单'))}
         ${tab('raw', _t('memory.group_raw_view', '原文'))}
       </div>
+      ${profileBridge}
       <div class="personal-onto-group-editor-body">
         ${body}
       </div>
@@ -307,6 +431,58 @@
     editor.content = res.content || '';
     editor.entriesBySection = _pocParseTemplateSections(editor.content);
     renderPersonalOntology();
+  }
+
+  function _pocRenderProfileView() {
+    if (_pocProfile.loadError) {
+      return `<div class="personal-onto-profile-error" role="alert">
+        <span>${escapeHtml(_t('personalOntology.profile_load_error', '个人画像加载失败'))}: ${escapeHtml(_pocProfile.loadError)}</span>
+      </div>`;
+    }
+    if (!_pocProfile.entries.length) {
+      return `<section class="personal-onto-profile-view personal-onto-ontology-view" aria-label="${escapeHtml(_t('personalOntology.ontology_title', '个人本体'))}">
+        <div class="personal-onto-ontology-intro">
+          <div class="personal-onto-ontology-heading">${escapeHtml(_t('personalOntology.ontology_title', '个人本体'))}</div>
+          <div class="personal-onto-ontology-hint">${escapeHtml(_t('personalOntology.ontology_hint', '从已确认的会话沉淀中归纳你的身份、工作方式和偏好'))}</div>
+        </div>
+        <div class="personal-onto-empty personal-onto-profile-empty">
+          ${escapeHtml(_t('personalOntology.profile_empty', '完成会话沉淀后，个人信息会显示在这里'))}
+        </div>
+      </section>`;
+    }
+    const sections = _pocProfileSections();
+    return `<section class="personal-onto-profile-view personal-onto-ontology-view" aria-label="${escapeHtml(_t('personalOntology.ontology_title', '个人本体'))}">
+      <div class="personal-onto-ontology-intro">
+        <div>
+          <div class="personal-onto-ontology-heading">${escapeHtml(_t('personalOntology.ontology_title', '个人本体'))}</div>
+          <div class="personal-onto-ontology-hint">${escapeHtml(_t('personalOntology.ontology_hint', '从已确认的会话沉淀中归纳你的身份、工作方式和偏好'))}</div>
+        </div>
+        <div class="personal-onto-profile-head">
+          <span class="personal-onto-profile-count">${escapeHtml(String(_pocProfile.entries.length))}</span>
+          <span class="muted">${escapeHtml(_t('personalOntology.profile_source', '会话沉淀'))}</span>
+        </div>
+      </div>
+      <div class="personal-onto-ontology-sections">
+        ${sections.map((section) => `<section class="personal-onto-ontology-section" data-poc-ontology-section="${escapeHtml(section.id)}">
+          <div class="personal-onto-ontology-section-head">
+            <div class="personal-onto-ontology-section-title-row">
+              <span class="personal-onto-profile-entry-icon">${_icon('user', 'ui-icon')}</span>
+              <div>
+                <div class="personal-onto-ontology-section-title">${escapeHtml(_t(section.titleKey, section.title))}</div>
+                <div class="personal-onto-ontology-section-description">${escapeHtml(_t(section.descriptionKey, section.description))}</div>
+              </div>
+            </div>
+            <span class="personal-onto-ontology-section-count">${escapeHtml(String(section.entries.length))}</span>
+          </div>
+          <div class="personal-onto-profile-list">
+            ${section.entries.map((entry) => `<div class="personal-onto-profile-entry">
+              <span class="personal-onto-profile-entry-icon">${_icon('file-text', 'ui-icon')}</span>
+              <span class="personal-onto-profile-entry-text">${escapeHtml(entry)}</span>
+            </div>`).join('')}
+          </div>
+        </section>`).join('')}
+      </div>
+    </section>`;
   }
 
   async function _pocRefreshGroupData() {
@@ -601,7 +777,19 @@
                 title="${escapeHtml(_t('personalOntology.template_uninstall_tip', '卸载（数据归档保留）'))}">${_icon('x', 'ui-icon')}</button>
       </div>`;
     }).join('');
-    nav.innerHTML = `<div class="personal-onto-nav-section">
+    const profileSelected = _pocSelected.kind === 'profile';
+    const profileCount = _pocProfile.entries.length;
+    const profileNav = `<div class="personal-onto-nav-section personal-onto-profile-nav-section">
+      <div class="personal-onto-nav-section-head">
+        <span>${escapeHtml(_t('personalOntology.profile_title', '个人画像'))}</span>
+        <span class="muted">${escapeHtml(String(profileCount))}</span>
+      </div>
+      <button type="button" class="personal-onto-nav-row${profileSelected ? ' is-active' : ''}" data-poc-nav="profile" data-poc-id="user-profile">
+        <span class="personal-onto-nav-file-icon">${_icon('user', 'ui-icon')}</span>
+        <span class="personal-onto-nav-row-text">${escapeHtml(_t('personalOntology.profile_source', '会话沉淀'))}</span>
+      </button>
+    </div>
+    <div class="personal-onto-nav-section">
       <div class="personal-onto-nav-section-head">
         <span>${escapeHtml(_t('personalOntology.nav_templates', '角色模板'))}</span>
         <span class="muted">${installedTmpls.length}</span>
@@ -615,6 +803,7 @@
         <span class="personal-onto-template-library-count">${uninstalledCount}</span>
       </button>
     </div>`;
+    nav.innerHTML = profileNav;
   }
 
   // ── 右栏渲染 ─────────────────────────────────────────────────────────────
@@ -623,6 +812,12 @@
     const bodyEl = document.getElementById('personal-onto-main-body');
     if (!headerEl || !bodyEl) return;
 
+    if (_pocSelected.kind === 'profile') {
+      headerEl.innerHTML = `<div class="personal-onto-main-title">${escapeHtml(_t('personalOntology.ontology_title', '个人本体'))}</div>
+        <div class="personal-onto-main-subtitle">${escapeHtml(_t('personalOntology.profile_title', '个人画像'))} · ${escapeHtml(_t('personalOntology.profile_source', '会话沉淀'))}</div>`;
+      bodyEl.innerHTML = _pocRenderProfileView();
+      return;
+    }
     if (_pocSelected.kind === 'template' && _pocGroupEditor) {
       headerEl.innerHTML = `<span class="personal-onto-main-title">${escapeHtml(_pocGroupEditor.title || _t('personalOntology.nav_templates', '角色模板'))}</span>`;
       bodyEl.innerHTML = _pocRenderGroupEditorHtml();
@@ -672,7 +867,11 @@
       el.addEventListener('click', async (e) => {
         const action = el.getAttribute('data-poc-nav');
         const id = el.getAttribute('data-poc-id');
-        if (action === 'template') { _pocOpenGroup(id); }
+        if (action === 'profile') {
+          _pocSelected = { kind: 'profile', id: 'user-profile' };
+          _pocGroupEditor = null;
+          renderPersonalOntology();
+        } else if (action === 'template') { _pocOpenGroup(id); }
         else if (action === 'template-library') {
           e.stopPropagation();
           _pocOpenTemplateLibrary();
@@ -826,10 +1025,10 @@
       return;
     }
 
-    if (!_pocTemplatesLoaded) {
+    if (!_pocTemplatesLoaded || !_pocProfile.loaded) {
       nav.innerHTML = '<div class="personal-onto-nav-empty muted">' + _t('personalOntology.loading', '加载中...') + '</div>';
       bodyEl.innerHTML = '<div class="personal-onto-empty">' + _t('personalOntology.loading', '加载中...') + '</div>';
-      await _pocLoadTemplates();
+      await Promise.all([_pocLoadTemplates(), _pocLoadProfile()]);
     }
 
     if (_pocTemplatesLoadError) {
@@ -839,6 +1038,17 @@
 
     try {
       const installed = _pocTemplates.filter((t) => t.installed && t.group_id);
+      // 「关于我」首先回答用户画像是什么。即使当前还没有沉淀内容，也应保留
+      // 画像空状态，不能因为安装了角色模板就自动跳到模板编辑器；否则会话沉淀
+      // 入口和数据来源都被模板盖住。只有画像本身读取失败时才降级到可用模板。
+      if (_pocSelected.kind === 'profile' && (!_pocProfile.loadError || !installed.length)) {
+        _pocGroupEditor = null;
+        _pocRenderNav();
+        _pocBindNav();
+        _pocRenderMain();
+        _pocSyncRecallProfileInBackground();
+        return;
+      }
       let selected = installed.find((t) => t.group_id === _pocSelected.id);
       if (!selected && installed.length) {
         selected = installed[0];
@@ -863,9 +1073,13 @@
     }
   }
 
-  function refreshPersonalOntology() {
+  function refreshPersonalOntology(options = {}) {
+    if (options && options.selectProfile) {
+      _pocSelected = { kind: 'profile', id: 'user-profile' };
+    }
     _pocTemplatesLoaded = false;
     _pocTemplatesLoadError = '';
+    _pocProfile = { entries: [], loaded: false, loadError: '' };
     _pocGroupEditor = null;
     _pocRecallSyncAttempted = false;
     return renderPersonalOntology();

@@ -18,7 +18,10 @@ function loadPersonalOntology(invoke: any) {
     style: {},
     querySelector: () => null,
     querySelectorAll: () => [],
-    addEventListener() {},
+    listeners: new Map<string, (...args: any[]) => any>(),
+    addEventListener(event: string, handler: (...args: any[]) => any) {
+      this.listeners.set(event, handler);
+    },
   });
   const elements = new Map([
     ['personal-onto-nav', element()],
@@ -42,7 +45,11 @@ function loadPersonalOntology(invoke: any) {
 }
 
 async function settleBackgroundWork() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  // Profile + template loading uses a Promise.all followed by an unawaited
+  // group read. Flush a few microtask turns so assertions observe the same
+  // settled DOM without making the loading-state test wait for its resolver.
+  for (let i = 0; i < 4; i += 1) await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 function loadShim(invoke: any) {
@@ -91,7 +98,8 @@ describe('personal ontology renderer integration', () => {
     expect(lazy).toContain("./modules/personal-ontology.js");
   });
 
-  it('keeps only role-template editing in the personal ontology surface', () => {
+  it('keeps the profile projection read-only and role-template editing on existing channels', () => {
+    expect(ontology).toContain("_pocInvoke('memory.list', { target: 'user' })");
     expect(ontology).toContain("_pocInvoke('personalOntology.profile.syncRecall'");
     expect(ontology).toContain("_pocInvoke('personalOntology.templates.list'");
     expect(ontology).toContain("_pocInvoke('personalOntology.templates.install'");
@@ -100,13 +108,16 @@ describe('personal ontology renderer integration', () => {
     expect(ontology).toContain("_pocGroupAction('personalOntology.groups.fields.append'");
     expect(ontology).not.toContain('personalOntology.candidates.');
     expect(ontology).not.toContain("'personalOntology.groups.create'");
+    expect(ontology).not.toContain("_pocInvoke('memory.add'");
+    expect(ontology).not.toContain("_pocInvoke('memory.replace'");
     expect(ontology).not.toContain('renderDestinationPanel');
     expect(ontology).not.toContain('showRejectReasonModal');
   });
 
-  it('shows only the role-template library when no template is installed', async () => {
+  it('shows the profile empty state and role-template library when no template is installed', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
+      if (channel === 'memory.list') return { ok: true, entries: [] };
       if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
       return { ok: true };
     });
@@ -115,10 +126,163 @@ describe('personal ontology renderer integration', () => {
     await sandbox.window.renderPersonalOntology();
     await settleBackgroundWork();
 
+    expect(elements.get('personal-onto-nav')?.innerHTML).toContain('个人画像');
     expect(elements.get('personal-onto-nav')?.innerHTML).toContain('角色模板库');
-    expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('角色模板库');
+    expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('完成会话沉淀后');
     expect(elements.get('personal-onto-nav')?.innerHTML).not.toContain('候选');
     expect(elements.get('personal-onto-nav')?.innerHTML).not.toContain('记忆分组');
+  });
+
+  it('shows conversation-extracted USER.md entries as the default personal profile', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'personalOntology.templates.list') {
+        return { ok: true, templates: [{ template_id: 'student', group_id: 'group-1', name: '学生', installed: true, sections: [] }] };
+      }
+      if (channel === 'memory.list') {
+        return { ok: true, entries: ['用户是一名拥有 10 年经验的程序员。'] };
+      }
+      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
+      return { ok: true };
+    });
+    const { sandbox, elements } = loadPersonalOntology(invoke);
+
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+
+    expect(invoke).toHaveBeenCalledWith('memory.list', { target: 'user' });
+    expect(elements.get('personal-onto-nav')?.innerHTML).toContain('个人画像');
+    expect(elements.get('personal-onto-main-header')?.innerHTML).toContain('个人画像');
+    expect(elements.get('personal-onto-main-header')?.innerHTML).toContain('个人本体');
+    expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('用户是一名拥有 10 年经验的程序员。');
+    expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('data-poc-ontology-section="identity"');
+    expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('身份与角色');
+    expect(invoke).not.toHaveBeenCalledWith('personalOntology.groups.read', expect.anything());
+  });
+
+  it('groups confirmed profile statements into a visible personal ontology without dropping unknown entries', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
+      if (channel === 'memory.list') {
+        return {
+          ok: true,
+          entries: [
+            '我的工作方式是先明确目标和验收标准，再开始实现。',
+            '我偏好界面简洁、信息层次清晰，先给结论再展开细节。',
+            '周末会整理本周的重要发现。',
+          ],
+        };
+      }
+      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
+      return { ok: true };
+    });
+    const { sandbox, elements } = loadPersonalOntology(invoke);
+
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+
+    const body = elements.get('personal-onto-main-body')?.innerHTML || '';
+    expect(body).toContain('data-poc-ontology-section="workstyle"');
+    expect(body).toContain('工作方式');
+    expect(body).toContain('data-poc-ontology-section="communication"');
+    expect(body).toContain('沟通与交互偏好');
+    expect(body).toContain('data-poc-ontology-section="other"');
+    expect(body).toContain('其他沉淀');
+    expect(body).toContain('周末会整理本周的重要发现。');
+  });
+
+  it('keeps unmatched confirmed profile entries visible inside a role template without duplicating matched fields', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'personalOntology.templates.list') {
+        return {
+          ok: true,
+          templates: [{
+            template_id: 'student', group_id: 'group-1', name: '学生', installed: true,
+            sections: [{ title: '学习背景', fields: [{ name: '教育阶段', values: [] }] }],
+          }],
+        };
+      }
+      if (channel === 'memory.list') {
+        return {
+          ok: true,
+          entries: ['我目前在读本科。', '我偏好先看结论，再看实现细节。'],
+        };
+      }
+      if (channel === 'personalOntology.groups.read') {
+        return { ok: true, content: '# 学习背景\n教育阶段: 我目前在读本科。' };
+      }
+      if (channel === 'projects.list') return { ok: true, projects: [] };
+      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
+      return { ok: true };
+    });
+    const { sandbox, elements } = loadPersonalOntology(invoke);
+    const nav = elements.get('personal-onto-nav') as any;
+    const templateButton: any = {
+      getAttribute: (name: string) => name === 'data-poc-nav' ? 'template' : name === 'data-poc-id' ? 'group-1' : null,
+      addEventListener(event: string, handler: (...args: any[]) => any) {
+        this.listeners.set(event, handler);
+      },
+      listeners: new Map<string, (...args: any[]) => any>(),
+    };
+    nav.querySelectorAll = (selector: string) => selector === '[data-poc-nav]' ? [templateButton] : [];
+
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+    const click = templateButton.listeners.get('click');
+    expect(click).toBeTypeOf('function');
+    await click({ stopPropagation() {} });
+    await settleBackgroundWork();
+
+    const body = elements.get('personal-onto-main-body')?.innerHTML || '';
+    const bridgeStart = body.indexOf('personal-onto-template-profile-bridge');
+    expect(bridgeStart).toBeGreaterThanOrEqual(0);
+    const bridge = body.slice(bridgeStart);
+    expect(bridge).toContain('我偏好先看结论，再看实现细节。');
+    expect(bridge).not.toContain('我目前在读本科。');
+    expect(body).toContain('这些信息已确认，但暂未匹配到当前角色模板字段');
+  });
+
+  it('reloads USER.md after a background Recall projection writes the profile', async () => {
+    let profileReads = 0;
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'personalOntology.templates.list') return { ok: true, templates: [] };
+      if (channel === 'memory.list') {
+        profileReads += 1;
+        return profileReads === 1
+          ? { ok: true, entries: [] }
+          : { ok: true, entries: ['用户偏好先看结论，再看实现细节。'] };
+      }
+      if (channel === 'personalOntology.profile.syncRecall') {
+        return { ok: true, written: 0, profileWritten: 1, failed: [] };
+      }
+      return { ok: true };
+    });
+    const { sandbox, elements } = loadPersonalOntology(invoke);
+
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+
+    expect(profileReads).toBe(2);
+    expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('用户偏好先看结论，再看实现细节。');
+  });
+
+  it('keeps installed role templates available when profile memory cannot be read', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'personalOntology.templates.list') {
+        return { ok: true, templates: [{ template_id: 'role-1', group_id: 'group-1', name: '默认角色', installed: true, sections: [] }] };
+      }
+      if (channel === 'memory.list') return { ok: false, error: 'profile offline' };
+      if (channel === 'personalOntology.groups.read') return { ok: true, content: '# 默认角色' };
+      if (channel === 'projects.list') return { ok: true, projects: [] };
+      if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
+      return { ok: true };
+    });
+    const { sandbox, elements } = loadPersonalOntology(invoke);
+
+    await sandbox.window.renderPersonalOntology();
+    await settleBackgroundWork();
+
+    expect(invoke).toHaveBeenCalledWith('personalOntology.groups.read', { groupId: 'group-1' });
+    expect(elements.get('personal-onto-main-header')?.innerHTML).toContain('默认角色');
   });
 
   it('shows a recoverable error instead of mistaking a template-list failure for an empty library', async () => {
@@ -136,11 +300,12 @@ describe('personal ontology renderer integration', () => {
     expect(elements.get('personal-onto-main-body')?.innerHTML).not.toContain('模板库为空');
   });
 
-  it('opens the first installed role template automatically', async () => {
+  it('keeps the empty personal profile visible before installed role templates', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'personalOntology.templates.list') {
         return { ok: true, templates: [{ template_id: 'role-1', group_id: 'group-1', name: '默认角色', installed: true, sections: [] }] };
       }
+      if (channel === 'memory.list') return { ok: true, entries: [] };
       if (channel === 'personalOntology.groups.read') return { ok: true, content: '# 默认角色' };
       if (channel === 'projects.list') return { ok: true, projects: [] };
       if (channel === 'personalOntology.profile.syncRecall') return { ok: true, written: 0, failed: [] };
@@ -151,9 +316,10 @@ describe('personal ontology renderer integration', () => {
     await sandbox.window.renderPersonalOntology();
     await settleBackgroundWork();
 
-    expect(invoke).toHaveBeenCalledWith('personalOntology.groups.read', { groupId: 'group-1' });
     expect(elements.get('personal-onto-nav')?.innerHTML).toContain('默认角色');
-    expect(elements.get('personal-onto-main-header')?.innerHTML).toContain('默认角色');
+    expect(elements.get('personal-onto-main-header')?.innerHTML).toContain('个人画像');
+    expect(elements.get('personal-onto-main-body')?.innerHTML).toContain('完成会话沉淀后');
+    expect(invoke).not.toHaveBeenCalledWith('personalOntology.groups.read', expect.anything());
   });
 
   it('keeps a template read-only while its content is still loading', async () => {
