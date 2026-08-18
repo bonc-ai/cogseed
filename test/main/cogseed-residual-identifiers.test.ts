@@ -40,7 +40,7 @@ describe('CogSeed residual identifiers', () => {
       expect(source, file).not.toContain('cd mate-agent');
     }
     const readme = read('README.md');
-    expect(readme).toContain('team-02/cogseed.git');
+    expect(readme).toContain('github.com/YOUR-ORG/cogseed.git');
     expect(readme).toContain('window.cogseed');
     expect(readme).toContain('npm test');
     expect(readme).toContain('CC Switch');
