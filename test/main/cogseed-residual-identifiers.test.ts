@@ -28,12 +28,22 @@ describe('CogSeed residual identifiers', () => {
     expect(pkg.build.protocols[0].schemes).toEqual(['cogseed']);
     expect(read('package-lock.json')).toContain('"name": "cogseed"');
 
-    for (const file of ['README.md', 'README.zh-CN.md', 'README-源码包说明.txt', '目录说明.md', 'docs/README.md']) {
+    const currentDocs = [
+      'README.md',
+      'README.zh-CN.md',
+      'README-源码包说明.txt',
+      '目录说明.md',
+    ];
+    for (const file of currentDocs) {
       const source = read(file);
       expect(source, file).toContain('CogSeed');
+      expect(source, file).not.toContain('team-02/mate-agent.git');
+      expect(source, file).not.toContain('cd mate-agent');
+      // 开源化清理：内网 GitLab 地址已替换为公开占位地址
+      expect(source, file).not.toContain('10.1.12.6');
     }
     const readme = read('README.md');
-    expect(readme).toContain('team-02/cogseed.git');
+    expect(readme).toContain('github.com/cogseed/cogseed.git');
     expect(readme).toContain('window.cogseed');
     expect(readme).toContain('npm test');
     expect(readme).toContain('.cogseed');

@@ -244,9 +244,7 @@ CogSeed 已经是当前正式产品身份。为保证已有安装、回调和本
 
 ## 文档
 
-- [`docs/README.md`](./docs/README.md) — 当前文档索引与开发口径
 - [`AGENTS.md`](./AGENTS.md) — 工程约束、数据边界和协作规则
-- [`docs/superpowers/specs/2026-08-11-cogseed-official-cutover-design.md`](./docs/superpowers/specs/2026-08-11-cogseed-official-cutover-design.md) — 正式切换设计
 
 ---
 

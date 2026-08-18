@@ -1,6 +1,10 @@
 {
   "schema": 1,
+<<<<<<< HEAD
   "content_tree_sha256": "c73571498b4bdd9988d29afbbb61a35b383fcd24b0a6e9a82bb3f43d013caf27",
+=======
+  "content_tree_sha256": "b554525313e0b545392edd8acc2a0828c6c7fca46fec151cbef59ccf4786aed8",
+>>>>>>> 6364dfd8 (chore(brand): 剥离开发过程文档/闭源引擎/敏感内容（开源化清理第一轮）)
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -6301,11 +6305,6 @@
       "path": "marketplace/skills/d470761b0a07/SKILL.md",
       "bytes": 19214,
       "sha256": "02c5643c9f9c021caa4d0520b15f3823f1f631c9bcd631bfcb85d5c915127f35"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/工业企业ECS售前模板_基于V3.4_v2.0.pdf",
-      "bytes": 2224643,
-      "sha256": "673a2dcfc493a711fd85012ce56b239c1d9602e97e23d38a4f316ec44d1c8ba3"
     },
     {
       "path": "marketplace/skills/d5041e397e79/_meta.json",
