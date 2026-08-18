@@ -4632,5 +4632,21 @@
   "cognition.maturity_transfer_validated": "Validação transferida",
   "cognition.asset_write_origin_system": "Precipitado pelo sistema",
   "conversation_info.carried.permission.default": "Padrão",
-  "common.id_masked": "…"
+  "common.id_masked": "…",
+  "cognition.candidate_state_needs_review": "A confirmar",
+  "cognition.candidate_state_weak_evidence": "Evidência fraca",
+  "cognition.candidate_state_deferred": "Adiado",
+  "cognition.candidate_state_confirmed": "Confirmado e precipitado",
+  "cognition.candidate_state_rejected": "Rejeitado",
+  "cognition.candidate_state_expired": "Expirado",
+  "cognition.candidate_state_superseded": "Substituído por uma versão mais recente",
+  "cognition.candidate_state_unknown": "Estado desconhecido",
+  "cognition.candidate_blocked_confirmed": "Já precipitado como ativo; alterações posteriores pertencem ao ativo formal",
+  "cognition.candidate_blocked_rejected": "Rejeitado; já não está na sua fila",
+  "cognition.candidate_blocked_ignored": "Ignorado; já não está na sua fila",
+  "cognition.candidate_blocked_expired": "Expirado e já não pode ser processado",
+  "cognition.candidate_blocked_superseded": "Substituído por uma versão mais recente",
+  "cognition.candidate_blocked_evidence": "Evidência insuficiente; adicione evidência antes de confirmar",
+  "cognition.candidate_blocked_high_risk": "Candidatos de alto risco precisam de confirmação individual e não podem ser guardados em lote",
+  "cognition.candidate_blocked_unknown": "Estado desconhecido; não é possível processar agora"
 }

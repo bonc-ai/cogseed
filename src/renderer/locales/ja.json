@@ -4632,5 +4632,21 @@
   "cognition.maturity_transfer_validated": "移行済み検証",
   "cognition.asset_write_origin_system": "システム沈殿",
   "conversation_info.carried.permission.default": "通常",
-  "common.id_masked": "…"
+  "common.id_masked": "…",
+  "cognition.candidate_state_needs_review": "要確認",
+  "cognition.candidate_state_weak_evidence": "根拠が弱い",
+  "cognition.candidate_state_deferred": "後で処理",
+  "cognition.candidate_state_confirmed": "確認して蓄積済み",
+  "cognition.candidate_state_rejected": "却下済み",
+  "cognition.candidate_state_expired": "失効",
+  "cognition.candidate_state_superseded": "新しい版に置き換え済み",
+  "cognition.candidate_state_unknown": "状態不明",
+  "cognition.candidate_blocked_confirmed": "すでに資産として蓄積済みです。以降の変更は正式資産で行ってください",
+  "cognition.candidate_blocked_rejected": "却下済みのため、対応待ちには表示されません",
+  "cognition.candidate_blocked_ignored": "無視済みのため、対応待ちには表示されません",
+  "cognition.candidate_blocked_expired": "失効しているため処理できません",
+  "cognition.candidate_blocked_superseded": "新しい版に置き換えられています",
+  "cognition.candidate_blocked_evidence": "根拠が不足しています。根拠を追加してから確認してください",
+  "cognition.candidate_blocked_high_risk": "高リスク候補は個別確認が必要で、一括登録できません",
+  "cognition.candidate_blocked_unknown": "状態が不明なため、現在は処理できません"
 }

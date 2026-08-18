@@ -3,6 +3,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 
+import { getRecallCandidateCapabilities } from '../../src/main/features/recall/candidate-capabilities';
+
+/** 候选桩的能力必须来自主进程的真实映射，否则测试会绿在一套假判据上。 */
+const CAPS = (status: string, risk?: 'low' | 'medium' | 'high') =>
+  getRecallCandidateCapabilities({ status: status as never, ...(risk ? { risk } : {}) });
 const skillsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf8');
 const bindingsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf8');
 
@@ -20,6 +25,15 @@ function extractFunction(source: string, name: string): string {
     }
   }
   throw new Error(`unterminated ${name}`);
+}
+
+/** 取出一段顶层 `const NAME = ...;` 声明（用于把真实实现注入 vm，不复制一份）。 */
+function extractConst(source: string, name: string): string {
+  const start = source.indexOf(`const ${name}`);
+  if (start < 0) throw new Error(`missing const ${name}`);
+  const end = source.indexOf('});', start);
+  if (end < 0) throw new Error(`unterminated const ${name}`);
+  return source.slice(start, end + 3);
 }
 
 function deferred<T>() {
@@ -839,8 +853,8 @@ describe('Recall cognition renderer flow', () => {
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
       recallCandidates: [
-        { id: 'cand-a', status: 'pending_review', summary: '第一条', judgment: '第一条判断', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
-        { id: 'cand-b', status: 'pending_review', summary: '第二条', judgment: '第二条判断', suggestedType: 'template', suggestedScope: 'project', sourceRefs: [] },
+        { id: 'cand-a', status: 'pending_review', capabilities: CAPS('pending_review'), summary: '第一条', judgment: '第一条判断', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
+        { id: 'cand-b', status: 'pending_review', capabilities: CAPS('pending_review'), summary: '第二条', judgment: '第二条判断', suggestedType: 'template', suggestedScope: 'project', sourceRefs: [] },
       ],
     })})`, context);
 
@@ -869,8 +883,8 @@ describe('Recall cognition renderer flow', () => {
         { id: 'capture-b', conversationId: 'conversation-b', conversationTitle: '需求讨论 B', candidateIds: ['cand-b'] },
       ],
       recallCandidates: [
-        { id: 'cand-a', status: 'pending_review', summary: '候选 A', judgment: '判断 A', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
-        { id: 'cand-b', status: 'pending_review', summary: '候选 B', judgment: '判断 B', suggestedType: 'template', suggestedScope: 'project', sourceRefs: [] },
+        { id: 'cand-a', status: 'pending_review', capabilities: CAPS('pending_review'), summary: '候选 A', judgment: '判断 A', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
+        { id: 'cand-b', status: 'pending_review', capabilities: CAPS('pending_review'), summary: '候选 B', judgment: '判断 B', suggestedType: 'template', suggestedScope: 'project', sourceRefs: [] },
       ],
     })})`, context);
 
@@ -894,7 +908,7 @@ describe('Recall cognition renderer flow', () => {
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
       recallCandidates: [{
-        id: 'cand-edit', status: 'pending_review', summary: '修改候选', judgment: '修改前内容',
+        id: 'cand-edit', status: 'pending_review', capabilities: CAPS('pending_review'), summary: '修改候选', judgment: '修改前内容',
         suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [{ kind: 'conversation', id: 'conv-a' }],
       }],
       editingRecallCandidateId: 'cand-edit',
@@ -915,7 +929,7 @@ describe('Recall cognition renderer flow', () => {
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
       recallCandidates: [{
-        id: 'cand-keep', status: 'pending_review', summary: '保留当前规则', judgment: '当前版本仍然适用',
+        id: 'cand-keep', status: 'pending_review', capabilities: CAPS('pending_review'), summary: '保留当前规则', judgment: '当前版本仍然适用',
         value: '避免不必要的版本变化', suggestedType: 'rule', suggestedScope: 'project',
         suggestedAction: 'keep_current', sourceRefs: [{ kind: 'conversation', id: 'conv-a' }],
       }],
@@ -1259,7 +1273,7 @@ describe('Recall cognition renderer flow', () => {
         updatedAt: '2026-08-08T12:00:00.000Z',
       }],
       recallCandidates: [
-        { id: 'candidate-a', status: 'pending_review' },
+        { id: 'candidate-a', status: 'pending_review', capabilities: CAPS('pending_review') },
         { id: 'candidate-b', status: 'failed' },
       ],
       assets: [{
@@ -1797,6 +1811,10 @@ describe('Recall cognition renderer flow', () => {
       initSkillsCognitionConsole() {},
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     expect(wheelHandler).toBeTypeOf('function');
@@ -1855,6 +1873,10 @@ describe('Recall cognition renderer flow', () => {
       initSkillsCognitionConsole() {},
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     const wheel = (deltaY: number) => wheelHandler!({
@@ -1920,6 +1942,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     expect(clickHandler).toBeTypeOf('function');
@@ -1958,7 +1984,7 @@ describe('Recall cognition renderer flow', () => {
     const state: any = {
       captures: [{ id: 'capture-a', candidateIds: ['cand-a'], terminalRunId: 'run-a' }],
       recentCaptures: [],
-      recallCandidates: [{ id: 'cand-a', taskRunId: 'run-a', status: 'pending_review' }],
+      recallCandidates: [{ id: 'cand-a', taskRunId: 'run-a', status: 'pending_review', capabilities: CAPS('pending_review') }],
       captureFilter: 'failed',
       captureNextCursor: 'next',
       selectedCaptureId: '',
@@ -1979,6 +2005,10 @@ describe('Recall cognition renderer flow', () => {
       initSkillsCognitionConsole() {},
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target });
@@ -2035,6 +2065,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target });
@@ -2091,6 +2125,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target });
@@ -2152,6 +2190,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target });
@@ -2200,6 +2242,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     expect(clickHandler).toBeTypeOf('function');
@@ -2237,6 +2283,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     expect(clickHandler).toBeTypeOf('function');
@@ -2281,6 +2331,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     expect(inputHandler).toBeTypeOf('function');
@@ -2355,6 +2409,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     expect(clickHandler).toBeTypeOf('function');
@@ -2433,6 +2491,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout: (callback: () => void) => { callback(); return 1; },
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     expect(clickHandler).toBeTypeOf('function');
@@ -2496,6 +2558,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     expect(clickHandler).toBeTypeOf('function');
@@ -2543,6 +2609,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target });
@@ -2570,9 +2640,9 @@ describe('Recall cognition renderer flow', () => {
       captures: [],
       selectedCaptureId: '',
       recallCandidates: [
-        { id: 'cand-a', status: 'pending_review' },
-        { id: 'cand-b', status: 'pending_review' },
-        { id: 'cand-risk', status: 'pending_review', risk: 'high' },
+        { id: 'cand-a', status: 'pending_review', capabilities: CAPS('pending_review') },
+        { id: 'cand-b', status: 'pending_review', capabilities: CAPS('pending_review') },
+        { id: 'cand-risk', status: 'pending_review', risk: 'high', capabilities: CAPS('pending_review', 'high') },
         { id: 'cand-c', status: 'confirmed' },
       ],
       writingRecallCandidateId: '',
@@ -2599,6 +2669,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target });
@@ -2649,7 +2723,7 @@ describe('Recall cognition renderer flow', () => {
       _skillsCognitionState: {
         captures: [],
         selectedCaptureId: '',
-        recallCandidates: [{ id: 'cand-personal', status: 'pending_review', suggestedType: 'personal' }],
+        recallCandidates: [{ id: 'cand-personal', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'personal' }],
         writingRecallCandidateId: '',
       },
       _cognitionText: (_key: string, fallback: string) => fallback,
@@ -2662,6 +2736,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target });
@@ -2713,7 +2791,7 @@ describe('Recall cognition renderer flow', () => {
         },
       },
       _skillsCognitionState: {
-        recallCandidates: [{ id: 'cand-personal', status: 'pending_review', suggestedType: 'personal' }],
+        recallCandidates: [{ id: 'cand-personal', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'personal' }],
         writingRecallCandidateId: '',
       },
       _cognitionText: (_key: string, fallback: string) => fallback,
@@ -2727,6 +2805,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target: button });
@@ -2772,7 +2854,7 @@ describe('Recall cognition renderer flow', () => {
         },
       },
       _skillsCognitionState: {
-        recallCandidates: [{ id: 'cand-risk', status: 'pending_review', risk: 'high' }],
+        recallCandidates: [{ id: 'cand-risk', status: 'pending_review', risk: 'high', capabilities: CAPS('pending_review', 'high') }],
         writingRecallCandidateId: '',
       },
       _cognitionText: (_key: string, fallback: string) => fallback,
@@ -2785,6 +2867,10 @@ describe('Recall cognition renderer flow', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target: button });
@@ -2887,7 +2973,7 @@ describe('Recall cognition renderer flow', () => {
       },
     };
     const button: any = { dataset: { cognitionOpenCandidate: 'cand-a' } };
-    const state: any = { recallCandidates: [{ id: 'cand-a', status: 'pending_review' }], selectedCandidateId: '' };
+    const state: any = { recallCandidates: [{ id: 'cand-a', status: 'pending_review', capabilities: CAPS('pending_review') }], selectedCandidateId: '' };
     const context: any = {
       document: {
         getElementById: (id: string) => (id === 'panel-recall' ? panel : null),
@@ -2900,6 +2986,10 @@ describe('Recall cognition renderer flow', () => {
       initSkillsCognitionConsole() {},
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target: { closest: (selector: string) => (
@@ -2955,8 +3045,8 @@ describe('Recall cognition renderer flow', () => {
       ],
       recentCaptures: [],
       recallCandidates: [
-        { id: 'cand-a1', status: 'pending_review', judgment: '任务 A 的候选', suggestedType: 'rule', suggestedScope: 'product' },
-        { id: 'cand-b1', status: 'pending_review', judgment: '任务 B 的候选', suggestedType: 'rule', suggestedScope: 'product' },
+        { id: 'cand-a1', status: 'pending_review', capabilities: CAPS('pending_review'), judgment: '任务 A 的候选', suggestedType: 'rule', suggestedScope: 'product' },
+        { id: 'cand-b1', status: 'pending_review', capabilities: CAPS('pending_review'), judgment: '任务 B 的候选', suggestedType: 'rule', suggestedScope: 'product' },
       ],
     })})`, context);
 
@@ -2978,8 +3068,8 @@ describe('Recall cognition renderer flow', () => {
       captures: [{ id: 'cap-a', candidateIds: ['cand-a1'] }],
       recentCaptures: [],
       recallCandidates: [
-        { id: 'cand-a1', status: 'pending_review', judgment: '任务 A 的候选', suggestedType: 'rule', suggestedScope: 'product' },
-        { id: 'cand-b1', status: 'pending_review', judgment: '无主候选', suggestedType: 'rule', suggestedScope: 'product' },
+        { id: 'cand-a1', status: 'pending_review', capabilities: CAPS('pending_review'), judgment: '任务 A 的候选', suggestedType: 'rule', suggestedScope: 'product' },
+        { id: 'cand-b1', status: 'pending_review', capabilities: CAPS('pending_review'), judgment: '无主候选', suggestedType: 'rule', suggestedScope: 'product' },
       ],
     })})`, context);
 
@@ -3006,7 +3096,7 @@ describe('Recall cognition renderer flow', () => {
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
       selectedCandidateId: 'cand-scope',
       recallCandidates: [{
-        id: 'cand-scope', status: 'pending_review', judgment: '评审结论必须标注 Evidence 等级',
+        id: 'cand-scope', status: 'pending_review', capabilities: CAPS('pending_review'), judgment: '评审结论必须标注 Evidence 等级',
         summary: '评审口径', suggestedType: 'rule', suggestedScope: '', risk: 'high',
         sourceRefs: [{ kind: 'conversation', id: 'conv-1' }],
         evidenceRefs: [{ kind: 'conversation', id: 'conv-1' }],
@@ -3058,7 +3148,7 @@ describe('Recall cognition renderer flow', () => {
       getElementById: (id: string) => (id === 'skills-cognition-tree-body' ? host : null),
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
-      recallCandidates: [{ id: 'c1', status: 'pending_review' }],
+      recallCandidates: [{ id: 'c1', status: 'pending_review', capabilities: CAPS('pending_review') }],
       tree: {
         nodes: [
           { id: 'asset:a-deep', type: 'asset', assetType: 'rule', label: '外发材料口径', status: 'active', maturity: 'effectiveness_validated', version: '3' },
@@ -3336,6 +3426,10 @@ describe('Recall cognition renderer flow', () => {
       ? { dataset: {}, addEventListener: (name: string, handler: any) => { if (name === 'click') clickHandler = handler; } }
       : null);
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     const button = { dataset: { cognitionPageLink: 'assets', abilityAssetId: 'a-1' } };
@@ -3455,6 +3549,10 @@ describe('认知资产动作的成功回执', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
     return {
       toasts,
@@ -3628,8 +3726,8 @@ describe('认知树 SVG 可视化', () => {
   it('即使有待确认候选，也不在树上画芽', () => {
     const { context, host } = treeContext(NODES, {
       recallCandidates: [
-        { id: 'cand-1', status: 'pending_review', suggestedType: 'rule' },
-        { id: 'cand-2', status: 'pending_review', suggestedType: 'personal' },
+        { id: 'cand-1', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'rule' },
+        { id: 'cand-2', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'personal' },
       ],
     });
 
@@ -3931,6 +4029,10 @@ describe('候选决定的端到端回流', () => {
       setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target: { closest: (s: string) => s === '[data-recall-candidate-action]' ? button : null } });
@@ -4184,6 +4286,10 @@ describe('候选「确认并限域」读取编辑字段', () => {
       initSkillsCognitionConsole() {}, setTimeout,
     };
     vm.createContext(context);
+    // bindings 依赖 skills.js 的能力读口（真实运行时两者同处全局作用域）。
+    // 注入真实实现而不是桩，批量勾选判据就不会在测试里分叉。
+    vm.runInContext(extractConst(skillsSource, 'RECALL_CANDIDATE_READ_ONLY_CAPABILITIES'), context);
+    vm.runInContext(extractFunction(skillsSource, '_recallCandidateCapabilities'), context);
     vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
 
     await clickHandler!({ target: { closest: (s: string) => (s === '[data-recall-candidate-action]' ? button : null) } });

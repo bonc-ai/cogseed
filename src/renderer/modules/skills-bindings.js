@@ -1282,7 +1282,9 @@ function _initSkillsCognitionBindings() {
         ? new Set(Array.isArray(_skillsCognitionState.selectedRecallCandidateIds) ? _skillsCognitionState.selectedRecallCandidateIds : [])
         : null;
       const candidateIds = (_skillsCognitionState.recallCandidates || [])
-        .filter((candidate) => candidate.status === 'pending_review' && candidate.risk !== 'high'
+        // 批量入库池取 capability，不取 raw status：否则 weak_observation 候选
+        // 全被过滤掉，selectedCount 恒为 0，按钮永远是灰的。
+        .filter((candidate) => _recallCandidateCapabilities(candidate).canBatchSelect
           && (!selectedIds || selectedIds.has(candidate.id)))
         .map((candidate) => candidate.id);
       const includesPersonal = (_skillsCognitionState.recallCandidates || []).some((candidate) =>
@@ -1430,7 +1432,7 @@ function _initSkillsCognitionBindings() {
     const candidateSelectAll = event.target.closest?.('[data-recall-candidate-select-all]');
     if (candidateSelectAll) {
       const ids = (_skillsCognitionState.recallCandidates || [])
-        .filter((candidate) => candidate.status === 'pending_review' && candidate.risk !== 'high')
+        .filter((candidate) => _recallCandidateCapabilities(candidate).canBatchSelect)
         .map((candidate) => candidate.id);
       _skillsCognitionState.selectedRecallCandidateIds = candidateSelectAll.checked ? ids : [];
       _skillsCognitionState.candidatePoolSelectionInitialized = true;

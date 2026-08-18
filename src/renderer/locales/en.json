@@ -4958,5 +4958,21 @@
   "cognition.maturity_transfer_validated": "Transfer validated",
   "cognition.asset_write_origin_system": "System precipitated",
   "conversation_info.carried.permission.default": "Standard",
-  "common.id_masked": "…"
+  "common.id_masked": "…",
+  "cognition.candidate_state_needs_review": "To confirm",
+  "cognition.candidate_state_weak_evidence": "Weak evidence",
+  "cognition.candidate_state_deferred": "Deferred",
+  "cognition.candidate_state_confirmed": "Confirmed and precipitated",
+  "cognition.candidate_state_rejected": "Rejected",
+  "cognition.candidate_state_expired": "Expired",
+  "cognition.candidate_state_superseded": "Superseded by a newer version",
+  "cognition.candidate_state_unknown": "Unknown state",
+  "cognition.candidate_blocked_confirmed": "Already precipitated into an asset; later changes belong to the formal asset",
+  "cognition.candidate_blocked_rejected": "Rejected; no longer in your queue",
+  "cognition.candidate_blocked_ignored": "Ignored; no longer in your queue",
+  "cognition.candidate_blocked_expired": "Expired and can no longer be processed",
+  "cognition.candidate_blocked_superseded": "Superseded by a newer version",
+  "cognition.candidate_blocked_evidence": "Evidence is too thin; add evidence before confirming",
+  "cognition.candidate_blocked_high_risk": "High-risk candidates need individual confirmation and cannot be bulk-stored",
+  "cognition.candidate_blocked_unknown": "Unknown state; cannot be processed right now"
 }

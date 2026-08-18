@@ -4958,5 +4958,21 @@
   "cognition.maturity_transfer_validated": "已迁移验证",
   "cognition.asset_write_origin_system": "系统沉淀",
   "conversation_info.carried.permission.default": "常规",
-  "common.id_masked": "…"
+  "common.id_masked": "…",
+  "cognition.candidate_state_needs_review": "待确认",
+  "cognition.candidate_state_weak_evidence": "证据较弱",
+  "cognition.candidate_state_deferred": "稍后处理",
+  "cognition.candidate_state_confirmed": "已确认并沉淀",
+  "cognition.candidate_state_rejected": "已拒绝",
+  "cognition.candidate_state_expired": "已失效",
+  "cognition.candidate_state_superseded": "已被更新版本替代",
+  "cognition.candidate_state_unknown": "状态未知",
+  "cognition.candidate_blocked_confirmed": "已确认并沉淀为资产，后续修改请在正式资产里进行",
+  "cognition.candidate_blocked_rejected": "已拒绝，不再进入待办",
+  "cognition.candidate_blocked_ignored": "已忽略，不再进入待办",
+  "cognition.candidate_blocked_expired": "已失效，无法继续处理",
+  "cognition.candidate_blocked_superseded": "已被更新版本替代",
+  "cognition.candidate_blocked_evidence": "证据不足，补充证据后才能确认",
+  "cognition.candidate_blocked_high_risk": "高风险候选需要单独确认，不能批量入库",
+  "cognition.candidate_blocked_unknown": "状态未知，暂时无法处理"
 }
