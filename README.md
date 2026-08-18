@@ -211,7 +211,7 @@ Local CLI execution is centralized in `src/main/features/local_agents/runner.ts`
 
 ### Connectors
 
-- Hosted connector authorization starts through the configured account service and returns through the application protocol callback.
+- Hosted connector authorization starts through the configured account service and returns through the application protocol callback (`cogseed://` deep link).
 - Token-bearing grant and transport state is encrypted before local persistence.
 - The model receives only currently connected, enabled, and session-eligible connectors.
 - Connector actions are discovered with `list_connector_tools` and invoked with `call_connector_tool`.

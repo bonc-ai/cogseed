@@ -1,6 +1,6 @@
 {
-  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
-  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only A-collaboration-create-delegate-v1",
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only A-collaboration-create-delegate-v1",
   "inputs": {
     "abort_reason": "Parity capture abort",
     "cid": "c-parity-a1",
@@ -43,7 +43,7 @@
     "nested": {
       "context": {
         "agent_outputs": {
-          "wstep-d475dff20040": {
+          "wstep-3b676c0118ec": {
             "actor_id": "agent-a",
             "created_at": "__TIMESTAMP__",
             "step_id": "wstep-1",
@@ -66,7 +66,7 @@
               }
             ],
             "created_at": "__TIMESTAMP__",
-            "id": "wgate-wstep-d475dff20040",
+            "id": "wgate-wstep-3b676c0118ec",
             "name": "dispatch_result_present",
             "run_id": "wf-1",
             "status": "passed",
@@ -93,7 +93,7 @@
           }
         ],
         "created_at": "__TIMESTAMP__",
-        "id": "wgate-wstep-d475dff20040",
+        "id": "wgate-wstep-3b676c0118ec",
         "name": "dispatch_result_present",
         "run_id": "wf-1",
         "status": "passed",
@@ -111,6 +111,7 @@
         "status": "running",
         "steps": [
           {
+            "access_mode": "write",
             "actor_id": "commander",
             "depends_on": [],
             "id": "wstep-2",
@@ -121,6 +122,7 @@
             "type": "dispatch"
           },
           {
+            "access_mode": "write",
             "actor_id": "agent-a",
             "depends_on": [
               "wf-ghost"
@@ -133,6 +135,7 @@
             "type": "dispatch"
           },
           {
+            "access_mode": "write",
             "actor_id": "agent-a",
             "actor_kind": "agent",
             "actor_name": "Agent A",
@@ -142,7 +145,7 @@
             ],
             "depends_on": [],
             "dispatch_intent": "Draft a short summary of the selected implementation path.",
-            "gate_result_id": "wgate-wstep-d475dff20040",
+            "gate_result_id": "wgate-wstep-3b676c0118ec",
             "id": "wstep-1",
             "objective": "Delegate drafting work",
             "result_summary": "Draft summary ready.",
@@ -159,6 +162,7 @@
         "version": 1
       },
       "step": {
+        "access_mode": "write",
         "actor_id": "agent-a",
         "actor_kind": "agent",
         "actor_name": "Agent A",
@@ -168,7 +172,7 @@
         ],
         "depends_on": [],
         "dispatch_intent": "Draft a short summary of the selected implementation path.",
-        "gate_result_id": "wgate-wstep-d475dff20040",
+        "gate_result_id": "wgate-wstep-3b676c0118ec",
         "id": "wstep-1",
         "objective": "Delegate drafting work",
         "result_summary": "Draft summary ready.",
@@ -193,6 +197,7 @@
       "status": "running",
       "steps": [
         {
+          "access_mode": "write",
           "actor_id": "commander",
           "depends_on": [],
           "id": "wstep-2",
@@ -203,6 +208,7 @@
           "type": "dispatch"
         },
         {
+          "access_mode": "write",
           "actor_id": "agent-a",
           "depends_on": [
             "wf-ghost"
@@ -239,6 +245,7 @@
       "status": "cancelled",
       "steps": [
         {
+          "access_mode": "write",
           "actor_id": "commander",
           "completed_at": "__TIMESTAMP__",
           "depends_on": [],
@@ -251,6 +258,7 @@
           "type": "dispatch"
         },
         {
+          "access_mode": "write",
           "actor_id": "agent-a",
           "completed_at": "__TIMESTAMP__",
           "depends_on": [
@@ -265,6 +273,7 @@
           "type": "dispatch"
         },
         {
+          "access_mode": "write",
           "actor_id": "agent-a",
           "actor_kind": "agent",
           "actor_name": "Agent A",
@@ -274,7 +283,7 @@
           ],
           "depends_on": [],
           "dispatch_intent": "Draft a short summary of the selected implementation path.",
-          "gate_result_id": "wgate-wstep-d475dff20040",
+          "gate_result_id": "wgate-wstep-3b676c0118ec",
           "id": "wstep-3",
           "objective": "Delegate drafting work",
           "result_summary": "Draft summary ready.",
@@ -350,8 +359,8 @@
         "payload": {
           "step_count": 2,
           "step_ids": [
-            "wstep-daef1d19c1ea",
-            "wstep-6a6c43826687"
+            "wstep-18e9bc4802e6",
+            "wstep-9fb967c2d9a2"
           ]
         },
         "run_id": "wf-1",
@@ -381,7 +390,7 @@
         "cid": "c-parity-a1",
         "context_id": "wctx-1",
         "created_at": "__TIMESTAMP__",
-        "gate_id": "wgate-wstep-d475dff20040",
+        "gate_id": "wgate-wstep-3b676c0118ec",
         "id": "wevt-4",
         "payload": {
           "checks_count": 1,
@@ -426,7 +435,7 @@
     "nested": {
       "context": {
         "agent_outputs": {
-          "wstep-d475dff20040": {
+          "wstep-3b676c0118ec": {
             "actor_id": "agent-a",
             "created_at": "__TIMESTAMP__",
             "step_id": "wstep-3",
@@ -449,7 +458,7 @@
               }
             ],
             "created_at": "__TIMESTAMP__",
-            "id": "wgate-wstep-d475dff20040",
+            "id": "wgate-wstep-3b676c0118ec",
             "name": "dispatch_result_present",
             "run_id": "wf-1",
             "status": "passed",
@@ -476,7 +485,7 @@
           }
         ],
         "created_at": "__TIMESTAMP__",
-        "id": "wgate-wstep-d475dff20040",
+        "id": "wgate-wstep-3b676c0118ec",
         "name": "dispatch_result_present",
         "run_id": "wf-1",
         "status": "passed",
@@ -494,6 +503,7 @@
         "status": "running",
         "steps": [
           {
+            "access_mode": "write",
             "actor_id": "commander",
             "depends_on": [],
             "id": "wstep-1",
@@ -504,6 +514,7 @@
             "type": "dispatch"
           },
           {
+            "access_mode": "write",
             "actor_id": "agent-a",
             "depends_on": [
               "wf-ghost"
@@ -516,6 +527,7 @@
             "type": "dispatch"
           },
           {
+            "access_mode": "write",
             "actor_id": "agent-a",
             "actor_kind": "agent",
             "actor_name": "Agent A",
@@ -525,7 +537,7 @@
             ],
             "depends_on": [],
             "dispatch_intent": "Draft a short summary of the selected implementation path.",
-            "gate_result_id": "wgate-wstep-d475dff20040",
+            "gate_result_id": "wgate-wstep-3b676c0118ec",
             "id": "wstep-3",
             "objective": "Delegate drafting work",
             "result_summary": "Draft summary ready.",
@@ -542,6 +554,7 @@
         "version": 1
       },
       "step": {
+        "access_mode": "write",
         "actor_id": "agent-a",
         "actor_kind": "agent",
         "actor_name": "Agent A",
@@ -551,7 +564,7 @@
         ],
         "depends_on": [],
         "dispatch_intent": "Draft a short summary of the selected implementation path.",
-        "gate_result_id": "wgate-wstep-d475dff20040",
+        "gate_result_id": "wgate-wstep-3b676c0118ec",
         "id": "wstep-3",
         "objective": "Delegate drafting work",
         "result_summary": "Draft summary ready.",
@@ -576,6 +589,7 @@
       "status": "running",
       "steps": [
         {
+          "access_mode": "write",
           "actor_id": "commander",
           "depends_on": [],
           "id": "wstep-1",
@@ -586,6 +600,7 @@
           "type": "dispatch"
         },
         {
+          "access_mode": "write",
           "actor_id": "agent-a",
           "depends_on": [
             "wf-ghost"
@@ -621,7 +636,7 @@
             }
           ],
           "created_at": "__TIMESTAMP__",
-          "id": "wgate-wstep-d475dff20040",
+          "id": "wgate-wstep-3b676c0118ec",
           "name": "dispatch_result_present",
           "run_id": "wf-1",
           "status": "passed",
@@ -656,8 +671,8 @@
           "payload": {
             "step_count": 2,
             "step_ids": [
-              "wstep-daef1d19c1ea",
-              "wstep-6a6c43826687"
+              "wstep-18e9bc4802e6",
+              "wstep-9fb967c2d9a2"
             ]
           },
           "run_id": "wf-1",
@@ -687,7 +702,7 @@
           "cid": "c-parity-a1",
           "context_id": "wctx-1",
           "created_at": "__TIMESTAMP__",
-          "gate_id": "wgate-wstep-d475dff20040",
+          "gate_id": "wgate-wstep-3b676c0118ec",
           "id": "wevt-4",
           "payload": {
             "checks_count": 1,
@@ -758,7 +773,7 @@
         {
           "actor_id": "agent-a",
           "completed_at": "__TIMESTAMP__",
-          "gate_result_id": "wgate-wstep-d475dff20040",
+          "gate_result_id": "wgate-wstep-3b676c0118ec",
           "id": "wstep-3",
           "result_summary": "Draft summary ready.",
           "source_tool": "dispatch_to",
