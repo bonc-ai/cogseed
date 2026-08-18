@@ -216,7 +216,7 @@
         <span>扫描器 <b id="m-scanner">可用</b></span>
         <span>规则包 <b id="m-rules">v1.0.0</b></span>
         <span>深扫引擎 <b id="m-sentry">skill-sentry 2.1.0</b></span>
-        <span>完整性引擎 <b id="m-nseap">nseap-core 1.3.0</b></span>
+        <span>完整性引擎 <b id="m-declaration">declaration-core 1.3.0</b></span>
       </div>
     </div>
   </div>
@@ -248,7 +248,7 @@
         <div class="card-name">完整性校验引擎</div>
         <span class="pill ok" id="c3-pill">正常</span>
       </div>
-      <div class="card-row"><span>引擎</span><span>nseap-core</span></div>
+      <div class="card-row"><span>引擎</span><span>declaration-core</span></div>
       <div class="card-row"><span>版本</span><span id="c3-ver">1.3.0</span></div>
       <div class="card-row"><span>完整性</span><span id="c3-int">已校验 ✓</span></div>
       <div class="card-note">核对技能安全声明的内部一致性。</div>
@@ -337,7 +337,7 @@
     ok: {
       heroT1: '系统保护已开启', heroT2: '所有安全检查正常', heroTag: '运行正常',
       heroDesc: '最近一次检查：今天 19:38。规则包为最新版本，扫描器完整性已校验。',
-      mScanner: '可用', mRules: 'v1.0.0', mSentry: 'skill-sentry 2.1.0', mNseap: 'nseap-core 1.3.0',
+      mScanner: '可用', mRules: 'v1.0.0', mSentry: 'skill-sentry 2.1.0', mDeclaration: 'declaration-core 1.3.0',
       icon: 'ok',
       c1: ['ok','可用','随应用内置','已校验 ✓','本机模式','检查技能代码中的危险模式、密钥与数据外发。'],
       c2: ['ok','正常','2.1.0','v1.0.0'],
@@ -346,7 +346,7 @@
     warn: {
       heroT1: '系统保护已开启', heroT2: '有 2 项需要留意', heroTag: '需要留意',
       heroDesc: '扫描器没有发布哈希可比对（未固定），且本机未启用隔离扫描。检查仍会执行，但结果可信度略低。',
-      mScanner: '可用', mRules: 'v1.0.0', mSentry: 'skill-sentry 2.1.0', mNseap: 'nseap-core 1.3.0',
+      mScanner: '可用', mRules: 'v1.0.0', mSentry: 'skill-sentry 2.1.0', mDeclaration: 'declaration-core 1.3.0',
       icon: 'warn',
       c1: ['warn','可用','随应用内置','未固定','非隔离','缺少发布哈希比对，仍可正常扫描。'],
       c2: ['ok','正常','2.1.0','v1.0.0'],
@@ -355,7 +355,7 @@
     bad: {
       heroT1: '系统保护已开启', heroT2: '发现 1 项异常', heroTag: '需要处理',
       heroDesc: '扫描器文件与发布哈希不一致，可能被修改。扫描仍会继续，但建议重新安装应用以恢复可信状态。',
-      mScanner: '异常', mRules: 'v1.0.0', mSentry: 'skill-sentry 2.1.0', mNseap: 'nseap-core 1.3.0',
+      mScanner: '异常', mRules: 'v1.0.0', mSentry: 'skill-sentry 2.1.0', mDeclaration: 'declaration-core 1.3.0',
       icon: 'bad',
       c1: ['bad','异常','随应用内置','被篡改','非隔离','与发布哈希不一致——建议重新安装应用。'],
       c2: ['ok','正常','2.1.0','v1.0.0'],
@@ -373,7 +373,7 @@
     document.getElementById('m-scanner').textContent = s.mScanner;
     document.getElementById('m-rules').textContent = s.mRules;
     document.getElementById('m-sentry').textContent = s.mSentry;
-    document.getElementById('m-nseap').textContent = s.mNseap;
+    document.getElementById('m-declaration').textContent = s.mDeclaration;
     const icon = document.getElementById('hero-icon');
     icon.className = 'hero-icon ' + s.icon;
     icon.innerHTML = s.icon === 'ok'

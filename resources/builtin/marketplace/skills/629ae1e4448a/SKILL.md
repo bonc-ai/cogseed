@@ -38,7 +38,7 @@ ABox 仅使用标明来源类型的项目事实或 synthetic 示例；示例不�
 1. 从冻结的用户目标和旅程提取产品对象、所有者、状态与合法转换。
 2. 明确成功、失败、拒绝、空状态、权限和回滚，不只描述理想主路径。
 3. 将需求绑定 Evidence、Decision、对象状态和可执行验收标准。
-4. 只有 `product_type=open_source` 且 `depends_on_nseap=true` 时路由 `ai-open-product-prd-writer`；其他场景使用通用 Define，不误调用专用 PRD Skill。
+4. 只有 `product_type=open_source` 且 `depends_on_skill_contract=true` 时路由 `ai-open-product-prd-writer`；其他场景使用通用 Define，不误调用专用 PRD Skill。
 5. 形成 Experiment Contract Gate 请求和 Spec Handoff 候选；owner 未批准时不冻结。
 
 阶段稳定输出：object_model、state_machine、requirements、acceptance_contract。输出同时包含事实/假设区分、Evidence/Decision 引用、

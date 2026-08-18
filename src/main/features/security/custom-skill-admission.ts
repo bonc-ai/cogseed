@@ -191,8 +191,8 @@ export async function admitCustomSkill(
   //    Excluded even under escalation:
   //    `shape_staged_ceiling_missing` / `shape_production_lock_missing` — the
   //    TS shape check only reads SKILL.md + `_meta.json`, while the skeleton
-  //    declares both hard caps in `references/skill-spec.yaml` (enforced by
-  //    the platform check_all_skills.py); escalating them would mark every
+  //    declares both hard caps in `references/skill-spec.yaml` (checked by
+  //    the registry gate); escalating them would mark every
   //    generated skill restricted for a declaration already made.
   //    `shape_tier` — informational tier label (Level A/B), not a
   //    finding.
