@@ -237,15 +237,15 @@ describe('commander CLI fallback', () => {
       },
     );
     // 记录 invoke 以便断言没有走 prefs.getCliFallback / localAgents.list。
-    const origInvoke = sandbox.window.orkas.invoke;
-    sandbox.window.orkas.invoke = async (channel: string, payload: unknown) => {
+    const origInvoke = sandbox.window.cogseed.invoke;
+    sandbox.window.cogseed.invoke = async (channel: string, payload: unknown) => {
       invokeLog.push({ channel });
       return origInvoke(channel, payload);
     };
 
-    const ok = await sandbox._ensureModelOrCliFallback('cid-ext-1');
+    const ok = await sandbox._ensureModelOrCliFallback('cid-ext-1', 'conversation', '');
 
-    expect(ok).toMatchObject({ ok: true });
+    expect(ok).toBe(true);
     const fallbackChannels = invokeLog.filter((c) => (
       c.channel === 'prefs.getCliFallback'
       || c.channel === 'localAgents.list'
@@ -302,8 +302,8 @@ describe('commander CLI fallback', () => {
     );
 
     // 直接测 send 门使用的判定路径（_ensureModelOrCliFallback 的 @mention 分支）。
-    const ok = await sandbox._ensureModelOrCliFallback('cid-send', '@ClaudeCode 帮我写个测试');
-    expect(ok).toMatchObject({ ok: true });
+    const ok = await sandbox._ensureModelOrCliFallback('cid-send', 'conversation', '@ClaudeCode 帮我写个测试');
+    expect(ok).toBe(true);
     expect(nonSilentModelGuardCalls).toHaveLength(0);
 
     // recipient 已是外部 agent 的路径同样零非 silent 调用。
@@ -311,8 +311,8 @@ describe('commander CLI fallback', () => {
       { 'agents.list': { agents: [] } },
       { hasConfiguredModel: false, recipient: { kind: 'agent', id: 'agent-claude-1', name: 'ClaudeCode' } },
     );
-    const ok2 = await sb2._ensureModelOrCliFallback('cid-recipient', '帮我写个测试');
-    expect(ok2).toMatchObject({ ok: true });
+    const ok2 = await sb2._ensureModelOrCliFallback('cid-recipient', 'conversation', '帮我写个测试');
+    expect(ok2).toBe(true);
     expect(calls2).toHaveLength(0);
   });
 

@@ -10818,8 +10818,10 @@ async function handleNewChatSubmit() {
   // 无模型降级到 fallback CLI agent 时，若消息以旧 @ 前缀开头，换成
   // fallback agent 的名字（避免后端按旧 @ 解析失败回退 commander）。
   let effectiveRaw = raw;
-  if (guard.fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw)) {
-    const fbName = _recipientPrefixName({ kind: 'agent', id: guard.fallbackAgentId });
+  const fbRecipient = _activeRecipient('new-chat');
+  const fallbackAgentId = (fbRecipient && fbRecipient.kind === 'agent' && fbRecipient.id) ? fbRecipient.id : '';
+  if (fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw)) {
+    const fbName = _recipientPrefixName({ kind: 'agent', id: fallbackAgentId });
     if (fbName) {
       effectiveRaw = '@' + fbName + ' ' + effectiveRaw.replace(/^@[A-Za-z0-9_一-鿿-]+\s?/u, '');
       _convLog.info('[cli-fallback] rewrote mention prefix to fallback agent', { cid: DRAFT_CID, fb: fbName });
@@ -11021,8 +11023,10 @@ async function handleChatSubmit() {
   // 智能体当前没有 agent 记录），必须把前缀换成 fallback agent 的名字——
   // 否则后端 router 按旧 @ 解析失败回退 commander → 弹「未配置模型」。
   let effectiveRaw = raw;
-  if (guard.fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw)) {
-    const fbName = _recipientPrefixName({ kind: 'agent', id: guard.fallbackAgentId });
+  const fbRecipient = _activeRecipient('conversation');
+  const fallbackAgentId = (fbRecipient && fbRecipient.kind === 'agent' && fbRecipient.id) ? fbRecipient.id : '';
+  if (fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw)) {
+    const fbName = _recipientPrefixName({ kind: 'agent', id: fallbackAgentId });
     if (fbName) {
       effectiveRaw = '@' + fbName + ' ' + effectiveRaw.replace(/^@[A-Za-z0-9_一-鿿-]+\s?/u, '');
       _convLog.info('[cli-fallback] rewrote mention prefix to fallback agent', { cid, fb: fbName });
@@ -11936,10 +11940,10 @@ async function _ensureModelOrCliFallback(cid, target = 'conversation', rawConten
   const after = _activeRecipient(cid === DRAFT_CID ? 'new-chat' : 'conversation');
   const fallbackAgentId = (after && after.kind === 'agent' && after.id) ? after.id : '';
   _convLog.info('[cli-fallback] ensureModelOrCliFallback', { cid, ok, recipient: _activeRecipient('conversation'), fallbackAgentId });
-  if (ok) return { ok: true, fallbackAgentId };
+  if (ok) return true;
   // 无模型也无可用 CLI：走原提示（弹框 + 跳设置）。
   ensureModelConfigured();
-  return { ok: false };
+  return false;
 }
 
 /** True when the leading `@<token>` in the raw text resolves to a local
@@ -11955,7 +11959,7 @@ async function _mentionTargetsExternalAgent(rawText) {
   if (!key) return false;
   let agents = [];
   try {
-    const res = await window.orkas.invoke('agents.list', {});
+    const res = await window.cogseed.invoke('agents.list', {});
     agents = (res && res.agents) || [];
   } catch (_) { return false; }
   return agents.some((a) => {

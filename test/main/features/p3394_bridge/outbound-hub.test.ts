@@ -170,7 +170,6 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     const result = await sendPromise;
     expect(result.text).toBe('hello cogseed, reply here');
   });
-  });
 
   it('forwards stream events without resolving or executing the terminal waiter', async () => {
 
@@ -192,7 +191,6 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     const result = await sendPromise;
     expect(chunks).toEqual(['hello ', 'world']);
     expect(result.text).toBe('hello cogseed, reply here');
-  });
   });
 
   it('replays a submitted envelope after the peer becomes available', async () => {
