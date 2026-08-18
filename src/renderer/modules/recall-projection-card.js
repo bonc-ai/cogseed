@@ -1,5 +1,9 @@
 // Task-level Recall projection card. Edits only the current projection draft;
 // it never mutates or deletes formal ability assets.
+//
+// 这张卡渲染的是**正式 Ability Asset**（context-projection 全程只有 assetId /
+// maturity），不是候选池对象。文案一律用「资产」：叫成「候选」会把 Candidate
+// 生命周期和 Asset 成熟度两层重新混掉，用户会以为这些东西还等着确认。
 (function () {
   function _escape(value) {
     if (typeof escapeHtml === 'function') return escapeHtml(value);
@@ -47,18 +51,31 @@
 
   function _assetRow(asset, editable) {
     const id = String(asset?.assetId || asset?.id || '');
-    const title = String(asset?.title || id);
-    const meta = [asset?.type, asset?.scope, asset?.version].filter(Boolean).join(' · ');
+    // 资产 id 是定位键，不是名字：解析不出标题时给语义占位。
+    const title = String(asset?.title || '').trim() || _label('recall.projection.asset_untitled', 'Untitled asset');
+    // 已确认投影注入的是确认时那一版，所以这里显示确认版本而不是 live 版本，
+    // 否则用户会以为运行中用的是他刚改出来的新版。
+    const shownVersion = asset?.confirmedVersion || asset?.version;
+    const meta = [asset?.type, asset?.scope, shownVersion ? `v${shownVersion}` : ''].filter(Boolean).join(' · ');
     const governance = [asset?.status && asset.status !== 'active' ? _assetStatusLabel(asset.status) : '', asset?.recommendedAction ? _assetRecommendationLabel(asset.recommendedAction) : ''].filter(Boolean).join(' · ');
     const reason = asset?.recommendationReason ? `<em>${_escape(asset.recommendationReason)}</em>` : '';
-    return `<div class="chat-recall-projection-asset" data-recall-projection-asset="${_escape(id)}"><div><strong>${_escape(title)}</strong>${meta ? `<small>${_escape(meta)}</small>` : ''}${governance ? `<small class="chat-recall-projection-governance">${_escape(governance)}</small>` : ''}${reason}</div>${editable ? `<button type="button" class="btn btn-sm" data-recall-projection-remove="${_escape(id)}">${_escape(_label('recall.projection.remove_task_asset', 'Remove candidate'))}</button>` : ''}</div>`;
+    // 版本钉住是有意的（不在用户背后换掉他确认过的内容），所以这里只告知，
+    // 不提供"就地升到新版"——已确认投影不可再改，新版本要靠下次重新选择。
+    const stale = asset?.stale
+      ? `<small class="chat-recall-projection-stale">${_escape(_label(
+          'recall.projection.asset_stale',
+          'Still running the confirmed v{confirmed}; the asset is now v{current}. It takes effect after you select it again.',
+          { confirmed: asset?.confirmedVersion || '', current: asset?.version || '' },
+        ))}</small>`
+      : '';
+    return `<div class="chat-recall-projection-asset${asset?.stale ? ' is-stale' : ''}" data-recall-projection-asset="${_escape(id)}"><div><strong>${_escape(title)}</strong>${meta ? `<small>${_escape(meta)}</small>` : ''}${governance ? `<small class="chat-recall-projection-governance">${_escape(governance)}</small>` : ''}${stale}${reason}</div>${editable ? `<button type="button" class="btn btn-sm" data-recall-projection-remove="${_escape(id)}">${_escape(_label('recall.projection.remove_task_asset', 'Remove asset'))}</button>` : ''}</div>`;
   }
 
   function _availableRow(asset) {
     const id = String(asset?.id || asset?.assetId || '');
     const title = String(asset?.title || id);
     const meta = [asset?.type, asset?.scope, asset?.version].filter(Boolean).join(' · ');
-    return `<div class="chat-recall-projection-available"><div><strong>${_escape(title)}</strong>${meta ? `<small>${_escape(meta)}</small>` : ''}</div><button type="button" class="btn btn-sm" data-recall-projection-add="${_escape(id)}">${_escape(_label('recall.projection.add_task_asset', 'Add candidate'))}</button></div>`;
+    return `<div class="chat-recall-projection-available"><div><strong>${_escape(title)}</strong>${meta ? `<small>${_escape(meta)}</small>` : ''}</div><button type="button" class="btn btn-sm" data-recall-projection-add="${_escape(id)}">${_escape(_label('recall.projection.add_task_asset', 'Add asset'))}</button></div>`;
   }
 
   function _render(host, card, available, opts, forecastFailure) {
@@ -68,21 +85,21 @@
     const availableRows = editable && Array.isArray(available) && available.length
       ? `<div class="chat-recall-projection-available-list">${available.map(_availableRow).join('')}</div>`
       : editable
-        ? `<div class="chat-recall-projection-empty">${_escape(_label('recall.projection.no_available_assets', 'No more candidates to add.'))}</div>`
+        ? `<div class="chat-recall-projection-empty">${_escape(_label('recall.projection.no_available_assets', 'No more assets to add.'))}</div>`
         : '';
     host.className = 'chat-recall-projection-card';
     host.dataset.projectionId = String(card?.projectionId || opts?.projectionId || '');
     const actions = forecastFailure
       ? `<div class="chat-recall-projection-forecast-failure" role="alert"><strong>${_escape(_label('recall.projection.forecast_failed', 'Forecast failed; task has not started.'))}</strong><small>${_escape(forecastFailure.message || '')}</small><button type="button" class="btn btn-sm" data-recall-projection-retry="1">${_escape(_label('recall.projection.retry_forecast', 'Retry forecast'))}</button></div>`
       : editable
-        ? `<div class="chat-recall-projection-actions"><button type="button" class="btn btn-primary btn-sm" data-recall-projection-confirm="1">${_escape(_label('recall.projection.confirm_assets', 'Confirm candidates'))}</button></div>`
+        ? `<div class="chat-recall-projection-actions"><button type="button" class="btn btn-primary btn-sm" data-recall-projection-confirm="1">${_escape(_label('recall.projection.confirm_assets', 'Confirm assets'))}</button></div>`
         : '';
-    host.innerHTML = `<div class="chat-recall-projection-head"><div><strong>${_escape(_label('recall.projection.title', 'Preload candidates'))}</strong><small>${_escape(card?.purpose || '')}</small></div><span class="chat-recall-projection-status">${_escape(_statusLabel(card?.status))}</span></div>
-      <div class="chat-recall-projection-summary">${_escape(_label('recall.projection.summary', '{count} preload candidates.', { count: assets.length }))}</div>
-      <div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.included_assets', 'Preload candidates'))}</div>${assets.length ? assets.map((asset) => _assetRow(asset, editable)).join('') : `<div class="chat-recall-projection-empty">${_escape(_label('recall.projection.no_included_assets', 'No preload candidates selected.'))}</div>`}</div>
-      ${editable ? `<div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.add_assets', 'Add candidate'))}</div>${availableRows}</div>` : `<div class="chat-recall-projection-locked">${_escape(_label('recall.projection.locked', 'These preload candidates are locked.'))}</div>`}
+    host.innerHTML = `<div class="chat-recall-projection-head"><div><strong>${_escape(_label('recall.projection.title', 'Preloaded assets'))}</strong><small>${_escape(card?.purpose || '')}</small></div><span class="chat-recall-projection-status">${_escape(_statusLabel(card?.status))}</span></div>
+      <div class="chat-recall-projection-summary">${_escape(_label('recall.projection.summary', '{count} preloaded assets.', { count: assets.length }))}</div>
+      <div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.included_assets', 'Preloaded assets'))}</div>${assets.length ? assets.map((asset) => _assetRow(asset, editable)).join('') : `<div class="chat-recall-projection-empty">${_escape(_label('recall.projection.no_included_assets', 'No preloaded assets selected.'))}</div>`}</div>
+      ${editable ? `<div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.add_assets', 'Add asset'))}</div>${availableRows}</div>` : `<div class="chat-recall-projection-locked">${_escape(_label('recall.projection.locked', 'These preloaded assets are locked.'))}</div>`}
       ${actions}
-      ${omitted.length ? `<div class="chat-recall-projection-omitted">${_escape(_label('recall.projection.omitted_count', '{count} candidates hidden', { count: omitted.length }))}</div>` : ''}`;
+      ${omitted.length ? `<div class="chat-recall-projection-omitted">${_escape(_label('recall.projection.omitted_count', '{count} assets hidden', { count: omitted.length }))}</div>` : ''}`;
   }
 
   async function _loadCard(projectionId) {

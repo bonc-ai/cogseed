@@ -10125,6 +10125,36 @@ body.model-not-configured .main-content { flex-direction: column; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* [asset:<id>] 引用卡：search_ability_assets 工具引用的经验资产，可点击跳认知资产详情 */
+.chat-asset-citation {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 240px;
+  margin: 0 2px;
+  padding: 1px 9px;
+  border: 1px solid rgba(14, 159, 110, 0.32);
+  border-radius: 99px;
+  background: rgba(14, 159, 110, 0.08);
+  color: #0b7a4f;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: baseline;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.chat-asset-citation:hover {
+  background: rgba(14, 159, 110, 0.14);
+  border-color: rgba(14, 159, 110, 0.55);
+}
+.chat-asset-citation:active {
+  transform: translateY(0.5px);
+}
 .chat-reference-title {
   margin-bottom: 4px;
   overflow: hidden;

@@ -16,6 +16,7 @@
  * 建议才需要主动确认。分级只影响呈现，不影响是否入列。
  */
 
+import { tryGetRecallCandidateCapabilities } from '../candidate-capabilities';
 import { allowsSilentDefaultInjection } from './policy';
 import { validatePromotionByAssetType } from './promotion';
 import { evaluateAssetRuntimeEligibility } from './runtime';
@@ -70,6 +71,7 @@ export interface CognitionInboxCandidate {
   status: string;
   judgment?: string;
   suggestedType?: string;
+  sourceRefs?: readonly unknown[];
   evidenceRefs?: readonly unknown[];
 }
 
@@ -268,7 +270,12 @@ export function buildCognitionInbox(input: CognitionInboxInput): CognitionInboxI
   // 同一条判断被归成两个类型：晋升 gate 会拦，但用户得先知道有这回事，
   // 否则两条候选会一直停在待确认里，谁也不知道为什么推不动。
   const byJudgment = new Map<string, Set<string>>();
-  const pending = input.candidates.filter((candidate) => candidate.status === 'pending_review');
+  // 待办口径 = capability 的 needsUserAction，不是 pending_review 单点。实机
+  // 候选多数是 weak_observation，只认 pending_review 会让「待我处理」显示 0，
+  // 而候选实际是可确认的。认不出的状态（旧数据）按不计待办处理。
+  const pending = input.candidates.filter(
+    (candidate) => tryGetRecallCandidateCapabilities(candidate)?.needsUserAction === true,
+  );
   for (const candidate of pending) {
     const key = comparableJudgment(candidate.judgment);
     if (!key || !candidate.suggestedType) continue;

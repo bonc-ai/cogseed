@@ -12,7 +12,12 @@ export interface ProjectionCardAssetSummary {
   status: RecallAbilityAssetRecord['status'];
   maturity: RecallAbilityAssetRecord['maturity'];
   scope: string;
+  /** 资产当前的版本（live）。 */
   version: string;
+  /** 用户确认这条投影时钉住的版本。注入用的是它，不是 `version`。 */
+  confirmedVersion?: string;
+  /** 已确认投影钉住的版本 ≠ 资产当前版本：修订过但还没进这次注入。 */
+  stale?: boolean;
   sourceRefCount: number;
   matchScore?: number;
   matchMethod?: RecallAssetMatchMethod;
@@ -44,6 +49,13 @@ export interface RecallProjectionCard {
   includedAssetIds: string[];
   omittedAssetRefs: OmittedAssetRef[];
   sourceRefs: CognitionSourceRef[];
+  /**
+   * 已确认投影里"资产已被改到新版本、但本次注入仍用确认时那一版"的资产。
+   *
+   * 版本钉住是有意的（prompt-injection 绝不在用户背后把新版本顶上去），所以
+   * 这里只做告知：不改注入内容，也不自动升版。空数组 = 没有漂移。
+   */
+  staleAssetIds: string[];
   availableActions: ProjectionCardAction[];
   createdAt: string;
   expiresAt?: string;
@@ -77,7 +89,11 @@ function summarize(projection: ContextProjectionRecord): ProjectionCardSummary {
   };
 }
 
-function toSummary(asset: RecallAbilityAssetRecord, match?: { matchScore: number; matchMethod: RecallAssetMatchMethod }): ProjectionCardAssetSummary {
+function toSummary(
+  asset: RecallAbilityAssetRecord,
+  match?: { matchScore: number; matchMethod: RecallAssetMatchMethod },
+  confirmedVersion?: string,
+): ProjectionCardAssetSummary {
   return {
     assetId: asset.id,
     title: asset.title,
@@ -86,6 +102,8 @@ function toSummary(asset: RecallAbilityAssetRecord, match?: { matchScore: number
     maturity: asset.maturity,
     scope: asset.scope,
     version: asset.version,
+    ...(confirmedVersion ? { confirmedVersion } : {}),
+    ...(confirmedVersion && confirmedVersion !== asset.version ? { stale: true } : {}),
     sourceRefCount: asset.evidenceRefs.length,
     ...(match ? { matchScore: match.matchScore, matchMethod: match.matchMethod } : {}),
   };
@@ -96,10 +114,14 @@ export async function buildProjectionCard(userId: string, projectionId: string):
   const assets = await listAbilityAssets(userId);
   const assetById = new Map(assets.map((asset) => [asset.id, asset]));
   const matchesByAsset = new Map((projection.assetMatches || []).map((match) => [match.assetId, match]));
+  // 版本漂移只对**已确认**投影有意义：preview 在确认那一刻才钉版本，
+  // 此前显示 live 版本就是对的。
+  const confirmedVersions = projection.status === 'confirmed' ? projection.assetVersions : undefined;
   const assetSummaries = projection.assetIds
     .map((assetId) => assetById.get(assetId))
     .filter((asset): asset is RecallAbilityAssetRecord => Boolean(asset))
-    .map((asset) => toSummary(asset, matchesByAsset.get(asset.id)));
+    .map((asset) => toSummary(asset, matchesByAsset.get(asset.id), confirmedVersions?.[asset.id]));
+  const staleAssetIds = assetSummaries.filter((summary) => summary.stale).map((summary) => summary.assetId);
 
   return {
     kind: 'recall_projection_card',
@@ -118,6 +140,7 @@ export async function buildProjectionCard(userId: string, projectionId: string):
     includedAssetIds: [...projection.assetIds],
     omittedAssetRefs: projection.omittedRefs,
     sourceRefs: projection.sourceRefs,
+    staleAssetIds,
     availableActions: actionsFor(projection.status),
     createdAt: projection.createdAt,
     ...(projection.expiresAt ? { expiresAt: projection.expiresAt } : {}),

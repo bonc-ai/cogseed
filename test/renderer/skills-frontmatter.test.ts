@@ -3,6 +3,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 
+import { getRecallCandidateCapabilities } from '../../src/main/features/recall/candidate-capabilities';
+
+/** 候选桩的能力取自主进程的真实映射，测试桩与 IPC DTO 用同一套判据。 */
+const CAPS = (status: string, risk?: 'low' | 'medium' | 'high') =>
+  getRecallCandidateCapabilities({ status: status as never, ...(risk ? { risk } : {}) });
+
 function loadSkillRendererHelpers() {
   const context: any = {
     console,
@@ -238,6 +244,7 @@ describe('skills renderer frontmatter parsing', () => {
     vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
       id: 'cand-pending',
       status: 'pending_review',
+      capabilities: CAPS('pending_review'),
       judgment: 'Keep local-first memory boundaries.',
       summary: 'Prefer local-first memory',
       suggestedType: 'personal',
@@ -290,6 +297,7 @@ describe('skills renderer frontmatter parsing', () => {
     vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
       id: 'cand-review',
       status: 'pending_review',
+      capabilities: CAPS('pending_review'),
       judgment: 'Keep every approval tied to source evidence.',
       summary: 'Traceable review rule',
       suggestedType: 'rule',
@@ -388,6 +396,7 @@ describe('skills renderer frontmatter parsing', () => {
     vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
       id: 'cand-compact',
       status: 'pending_review',
+      capabilities: CAPS('pending_review'),
       judgment: 'Add invariant checks.',
       summary: 'Tighten validation',
       suggestedType: 'rule',
