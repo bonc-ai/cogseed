@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const MARKER_FILENAME = '.migrated-runtime-variant-data.json';
+const IN_PROGRESS_MARKER_FILENAME = '.migrating-runtime-variant-data.json';
 const USER_ID_RE = /^[A-Za-z0-9_-]+$/;
 
 function migrateRuntimeVariantData(input) {
@@ -21,6 +22,22 @@ function migrateRuntimeVariantData(input) {
 
   const sourceRegistry = readRegistry(path.join(sourceData, 'users.json'));
   if (!sourceRegistry || sourceRegistry.users.length === 0) return { migrated: false, sourceUserIds: [] };
+
+  // 进行中标记：首次启动写入，成功迁移后删除。上次启动中途失败/崩溃留下
+  // 的标记让本次以"合并缺失文件"续传（copyMissingEntries 天然幂等可续传），
+  // 而不是把整树重新拷一遍；并发双实例启动时双方都走同一套只补缺失的合并
+  // 语义，不会互相覆盖已有文件。
+  const inProgressMarkerPath = path.join(destinationContainer, IN_PROGRESS_MARKER_FILENAME);
+  const inProgress = isFile(inProgressMarkerPath);
+  if (!inProgress) {
+    writeJsonAtomic(inProgressMarkerPath, {
+      migration: 'runtime-variant-data',
+      source_variant: sourceVariant,
+      source_container: sourceContainer,
+      pid: process.pid,
+      started_at: new Date().toISOString(),
+    });
+  }
 
   fs.mkdirSync(destinationData, { recursive: true });
   const destinationRegistry = readRegistry(path.join(destinationData, 'users.json')) || {
@@ -65,6 +82,7 @@ function migrateRuntimeVariantData(input) {
     migrated_at: new Date().toISOString(),
     source_user_ids: sourceUserIds,
   });
+  try { fs.rmSync(inProgressMarkerPath, { force: true }); } catch { /* 清理失败不阻塞：最终标记已写入 */ }
   return { migrated: true, sourceUserIds, activeUserId: mergedRegistry.dev_current_user_id };
 }
 

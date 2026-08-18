@@ -51,7 +51,7 @@ function replyEnvelope(): P3394Envelope {
   } as never);
 }
 
-function streamEnvelope(text: string, sequence: number): P3394Envelope {
+function streamEnvelope(text: string, sequence: number, kind: 'delta' | 'progress' = 'delta'): P3394Envelope {
   return envelope({
     message_id: 'msg-out-stream-' + sequence,
     kind: 'event',
@@ -60,7 +60,7 @@ function streamEnvelope(text: string, sequence: number): P3394Envelope {
     recipients: [{ agent_id: 'cogseed' }],
     payload: {
       parts: [{ type: 'text', text }],
-      metadata: { stream_event: 'delta', stream_seq: sequence },
+      metadata: { stream_event: kind, stream_seq: sequence },
     },
     idempotency_key: 'idem-out-stream-' + sequence,
   } as never);
@@ -193,6 +193,31 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     expect(result.text).toBe('hello cogseed, reply here');
   });
 
+  it('forwards progress frames to the process rail without resolving the waiter', async () => {
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer]);
+    const events: Array<{ kind: string; text: string }> = [];
+    const sendPromise = hub.sendAndWait('hermes', envelope(), (event) => events.push({ kind: event.kind, text: event.text }));
+    // openclaw 网关的过程日志帧（[skills]/[tools]）→ kind: progress。
+    expect(hub.tryResolveReply(streamEnvelope('[tools] run bash build', 1, 'progress'))).toBe(true);
+    expect(hub.tryResolveReply(streamEnvelope('[skills] web_search', 2, 'progress'))).toBe(true);
+    expect(hub.tryResolveReply(replyEnvelope())).toBe(true);
+    const result = await sendPromise;
+    expect(events).toEqual([
+      { kind: 'progress', text: '[tools] run bash build' },
+      { kind: 'progress', text: '[skills] web_search' },
+    ]);
+    // progress 帧不消费终态 waiter：终态回复仍正常 resolve。
+    expect(result.text).toBe('hello cogseed, reply here');
+  });
+
   it('replays a submitted envelope after the peer becomes available', async () => {
     const pending = envelope({ message_id: 'msg-recover-1', session_id: 'ses-recover-1', task_id: 'tsk-recover-1', idempotency_key: 'idem-recover-1' });
     outboxRecordSubmitted(pending, 'hermes');
@@ -290,6 +315,33 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     const drained = await hub.waitForSessionFree('ses-out-1', 80);
     expect(drained).toBe(false);
     expect(Date.now() - start).toBeGreaterThanOrEqual(60);
+
+    // 收尾：清掉 waiter，避免残留计时器。
+    const reply = replyEnvelope();
+    expect(await hub.tryResolveReply(reply)).toBe(true);
+    await sendPromise;
+  });
+
+  it('waitForSessionFree returns false immediately when the caller aborts', async () => {
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer], 5000);
+    const sendPromise = hub.sendAndWait('hermes', envelope());
+    expect(hub.isSessionBusy('ses-out-1')).toBe(true);
+
+    // 用户取消：等待必须立即放行，而不是拖满超时窗口。
+    const controller = new AbortController();
+    controller.abort();
+    const start = Date.now();
+    const drained = await hub.waitForSessionFree('ses-out-1', 5_000, controller.signal);
+    expect(drained).toBe(false);
+    expect(Date.now() - start).toBeLessThan(500);
 
     // 收尾：清掉 waiter，避免残留计时器。
     const reply = replyEnvelope();

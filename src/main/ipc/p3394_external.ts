@@ -6,7 +6,6 @@
  *  - p3394.external.list   → detected CLIs + managed gateway status
  *  - p3394.external.start  → start the managed P3394 gateway for a CLI
  *  - p3394.external.stop   → stop a managed gateway
- *  - p3394.peers.list      → unified registry snapshot (all registered nodes)
  *  - p3394.peers.revoke    → remove a registered node (registry + projection
  *                            + its managed gateway)
  *  - p3394.peers.toggle    → disable/enable a registered node
@@ -66,9 +65,9 @@ export const p3394ExternalHandlers = {
     return { ok: true };
   },
   // ── 统一注册表管理（已注册节点）────────────────────────────────────
-  'p3394.peers.list': async () => {
-    return { ok: true, peers: listP3394Peers() };
-  },
+  // 注：不再提供独立的 p3394.peers.list —— 注册表快照已随
+  // p3394.external.list 一次往返带回（peers 字段），渲染端只消费那一个
+  // 通道，避免双通道两套缓存。
   'p3394.peers.revoke': async (args: { agentId?: unknown }) => {
     const agentId = typeof args?.agentId === 'string' ? args.agentId.trim() : '';
     if (!agentId) return { ok: false, error: 'p3394_peer_id_required' };

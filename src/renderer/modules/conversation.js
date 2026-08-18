@@ -11925,6 +11925,12 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
   // 后台会话失败时 currentCid 可能指向别的会话）。
   let recipient = _recipientByCid[cid] || null;
   if (!recipient || recipient.kind !== 'agent' || !recipient.id) return;
+  // 只对"无 API Key 降级链"选中的 agent 自动切换（origin: cli_fallback）。
+  // 用户手动选择的外接智能体（外接 tab / 显式 @，无 origin）失败时不做自动
+  // 切换：p3394 网关失败通常是网关/节点侧瞬时故障（gateway-turn 的
+  // recoverGateway 自愈已重试过），自动切走会破坏"同一外接智能体自我恢复"，
+  // 且用户刚切走网关又恢复，产生抖动。
+  if (recipient.origin !== 'cli_fallback') return;
   // 找出当前 recipient 对应的 CLI 类型。
   let failedCli = '';
   try {

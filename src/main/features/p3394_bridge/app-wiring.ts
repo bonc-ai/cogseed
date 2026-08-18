@@ -31,7 +31,7 @@ import { P3394OutboundHub } from './outbound-hub';
 import { P3394PeerRegistry, type P3394Locality, type P3394NodeKind } from './registry';
 import type { P3394Envelope } from './envelope';
 import { recordP3394Episode } from './kstar-episodes';
-import { projectP3394NodeToTeam, projectedTeamAgentId, removeProjection } from './team-projection';
+import { projectP3394NodeToTeam, projectedTeamAgentId, removeProjection, suppressNodeProjection } from './team-projection';
 import { buildP3394WiringDoctorInput, runP3394BridgeDoctor, type P3394DoctorReport } from './doctor';
 import { loadP3394EventCursors, persistP3394EventCursors, recordP3394EventCursor } from './event-cursor-store';
 import { P3394RecoveryController } from './recovery-controller';
@@ -844,9 +844,13 @@ export async function sweepP3394Peers(): Promise<{ revoked: string[] }> {
   return { revoked };
 }
 
-/** 用户主动移除一个已注册 P3394 节点：清注册表 + 清投影映射 + 停掉映射到
- *  该节点的托管网关（否则网关会继续心跳重新注册，移除就失效）。移除后该
- *  节点若再次 hello 会像首次一样重新自注册（投影抑制由"重新外接"流程解除）。 */
+/** 用户主动移除一个已注册 P3394 节点：停掉映射到该节点的托管网关（否则
+ *  网关会继续心跳 hello 重新注册，移除就失效）→ 清注册表 + 清投影映射 →
+ *  记入投影抑制表。顺序不能反过来：先 revoke 注册表的话，仍在心跳/hello
+ *  的网关会立刻重新自注册（且已排队的 watchdog 重启 timer 若在 stop 之前
+ *  触发，也会把同名节点复活）。投影抑制保证残留的网关进程（SIGKILL 兜底
+ *  失败/孤儿）持续 hello 时只注册为 peer、不再自动投影重建同名 agent；
+ *  用户显式重新外接（p3394.external.start）时解除抑制。 */
 export async function revokeP3394Peer(
   agentId: string,
 ): Promise<{ ok: true; removed: string } | { ok: false; error: string }> {
@@ -855,8 +859,8 @@ export async function revokeP3394Peer(
   if (id === 'cogseed') return { ok: false, error: 'p3394_cannot_revoke_self' };
   const exists = activeHandle.registry.list().some((p) => p.identity.agent_id === id);
   if (!exists) return { ok: false, error: 'p3394_peer_not_registered' };
-  activeHandle.registry.revoke(id);
-  removeProjection(id);
+  // 1) 先停托管网关：stopExternalGateway 内部 detachWatch 会取消 watchdog
+  //    重启 timer，进程确认退出后才返回（SIGKILL 兜底）。
   try {
     const { listExternalGateways, p3394ExternalGatewayIdFor, stopExternalGateway } = await import('./external-gateways');
     const gateways = listExternalGateways()
@@ -865,6 +869,11 @@ export async function revokeP3394Peer(
       await stopExternalGateway(g.cli).catch(() => {});
     }
   } catch { /* best effort — 网关停止失败不阻塞移除 */ }
+  // 2) 再清注册表与投影映射。
+  activeHandle.registry.revoke(id);
+  removeProjection(id);
+  // 3) 投影抑制：残留/孤儿网关进程的 hello 不再自动重建同名 agent。
+  suppressNodeProjection(id);
   log.info('P3394 peer revoked (user)', { agent_id: id });
   return { ok: true, removed: id };
 }

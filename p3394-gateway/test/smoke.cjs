@@ -280,8 +280,9 @@ async function main() {
   check('sscli delta 总量上限：刷屏帧流被截断（转发量远小于 CLI 输出 600KB）', floodDone && floodChars < 600 * 1000 && floodChars <= 512 * 1024 + 16 * 1024);
   floodGw.kill('SIGTERM');
 
-  // openclaw 特殊处理：CLI 无中间分片、最终 JSON 信封在 stderr 末尾——增量转发
-  // 会把原始 JSON 灌进气泡。断言：openclaw 走一次性回发，不产生任何 delta 帧。
+  // openclaw 特殊处理：CLI 无中间分片、正文只能等末尾 JSON 信封一次性落地——
+  // 其 stderr 的 [skills]/[tools] 过程日志逐行回发为 stream progress 帧（process
+  // rail 可见工具调用），但最终 JSON 信封不转发、也不产生任何正文 delta 帧。
   const ocAgent = path.join(tmp, 'fake-openclaw-agent.cjs');
   fs.writeFileSync(ocAgent, [
     "'use strict';",
@@ -296,7 +297,10 @@ async function main() {
   const ocMsg = { message_id: 'ocm1', session_id: 's-oc', task_id: 'oct1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'openclaw' }], payload: { parts: [{ type: 'text', text: 'hi' }] }, idempotency_key: 'idem-oc1' };
   await request(OC_PORT, 'POST', '/p3394/envelope', { envelope: ocMsg }, GATEWAY_TOKEN);
   await sleep(1000);
-  check('openclaw 一次性回发：不产生 stream delta 帧', !received.some((e) => e.kind === 'event' && e.session_id === 's-oc'));
+  const ocEvents = received.filter((e) => e.kind === 'event' && e.session_id === 's-oc');
+  check('openclaw 过程日志以 progress 帧回发（process rail 可见工具调用）', ocEvents.some((e) => e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress' && (e.payload.parts[0].text || '').includes('[skills] loading skill')));
+  check('openclaw 过程日志不含最终 JSON 信封', !ocEvents.some((e) => (e.payload.parts[0].text || '').includes('should-not-stream')));
+  check('openclaw 一次性回发：不产生 stream delta 帧', !ocEvents.some((e) => e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta'));
   check('openclaw 一次性回发：终态回复正常', received.some((e) => e.session_id === 's-oc' && (e.payload.parts[0].text || '').includes('OC-REPLY-ONE-SHOT')));
   ocGw.kill('SIGTERM');
 
@@ -442,7 +446,9 @@ async function main() {
   ].join('\n'));
   const STREAM_JSON_PORT = GATEWAY_PORT + 50;
   const streamJsonLog = path.join(tmp, 'stream-json-argv.log');
-  const streamJsonEnv = { ...process.env, P3394_GATEWAY_PORT: String(STREAM_JSON_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'stream-json-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'claude', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: streamJsonAgent + ' {message}', P3394_HEARTBEAT_MS: '0', FAKE_STREAMJSON_LOG: streamJsonLog };
+  // 本用例验证"每轮 spawn"的 stream-json 包装器语义（跨轮 transcript 回放）：
+  // 常驻双工模式（默认开）是另一条路径，单独用例覆盖。显式回退。
+  const streamJsonEnv = { ...process.env, P3394_GATEWAY_PORT: String(STREAM_JSON_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'stream-json-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'claude', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: streamJsonAgent + ' {message}', P3394_HEARTBEAT_MS: '0', COGSEED_P3394_CLAUDE_PERSISTENT: '0', FAKE_STREAMJSON_LOG: streamJsonLog };
   const streamJsonGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: streamJsonEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let streamJsonGwLog = '';
   streamJsonGw.stdout.on('data', (c) => { streamJsonGwLog += c; });
@@ -474,6 +480,79 @@ async function main() {
   check('stream-json：第二轮终态回复仍正常', received.filter((e) => e.session_id === 's-stream-json' && e.kind === 'message').length >= 2);
   streamJsonGw.kill('SIGTERM');
 
+  // ── claude stream-json 常驻模式（默认开）：一个进程处理多轮，stdin 收
+  // user 消息、stdout 推事件，进程内自动延续上下文。fake CLI 读 stdin：
+  // 每收到一行 user 消息输出一轮 delta+assistant+result；把 spawn 次数与
+  // pid 记到日志/文件，断言第二轮复用进程、不再带 [会话历史] 前缀。 ──
+  const persistentAgent = path.join(tmp, 'fake-persistent-agent.cjs');
+  const persistentPidFile = path.join(tmp, 'persistent-pid.txt');
+  const persistentLog = path.join(tmp, 'persistent-argv.log');
+  fs.writeFileSync(persistentAgent, [
+    "'use strict';",
+    "const fs = require('fs');",
+    "fs.appendFileSync(process.env.FAKE_PERSISTENT_PID, String(process.pid) + '\\n');",
+    "fs.appendFileSync(process.env.FAKE_PERSISTENT_LOG, JSON.stringify(process.argv) + '\\n');",
+    "process.stdout.write(JSON.stringify({type:'system',subtype:'init',session_id:'fake-ses'}) + '\\n');",
+    "const readline = require('readline');",
+    "const rl = readline.createInterface({ input: process.stdin });",
+    "let round = 0;",
+    "rl.on('line', (line) => {",
+    "  let msg;",
+    "  try { msg = JSON.parse(line); } catch { return; }",
+    "  if (!msg || msg.type !== 'user') return;",
+    "  round += 1;",
+    "  const text = String(msg.message && msg.message.content && msg.message.content[0] && msg.message.content[0].text || '');",
+    "  process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:'PERSISTENT-' + round + ':'}}}) + '\\n');",
+    "  if (round === 3) return; // 第三轮挂起（模拟长任务），等 cancel 终止进程",
+    "  setTimeout(() => {",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(0, 40)}}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'PERSISTENT-' + round + ':' + text.slice(0, 40)}]}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'result',is_error:false,session_id:'fake-ses',stop_reason:'end_turn'}) + '\\n');",
+    "  }, 150);",
+    "});",
+  ].join('\n'));
+  const PERSISTENT_PORT = GATEWAY_PORT + 70;
+  const persistentEnv = { ...process.env, P3394_GATEWAY_PORT: String(PERSISTENT_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'persistent-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'claude', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: persistentAgent, P3394_HEARTBEAT_MS: '0', FAKE_PERSISTENT_PID: persistentPidFile, FAKE_PERSISTENT_LOG: persistentLog };
+  const persistentGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: persistentEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let persistentGwLog = '';
+  persistentGw.stdout.on('data', (c) => { persistentGwLog += c; });
+  persistentGw.stderr.on('data', (c) => { persistentGwLog += c; });
+  await sleep(900);
+  check('claude 常驻：默认启用（runtime: claude-persistent）', persistentGwLog.includes('runtime: claude-persistent'));
+  const psMsg = { message_id: 'ps1', session_id: 's-persistent', task_id: 'pstk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'first round' }] }, idempotency_key: 'idem-ps1' };
+  await request(PERSISTENT_PORT, 'POST', '/p3394/envelope', { envelope: psMsg }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 's-persistent' && e.kind === 'message'); i += 1) await sleep(100);
+  const psDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 's-persistent' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta').map((e) => (e.payload.parts[0].text || '')).join('');
+  check('claude 常驻：第一轮 delta 实时回发', psDeltas.includes('PERSISTENT-1'));
+  check('claude 常驻：第一轮终态 = 累积文本', received.some((e) => e.session_id === 's-persistent' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('PERSISTENT-1:first round')));
+  // 第二轮：进程必须复用（pid 只记一次、argv 只记一次），且不带 [会话历史]
+  // 前缀（进程内上下文自动延续）。
+  const psMsg2 = { message_id: 'ps2', session_id: 's-persistent', task_id: 'pstk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'follow up' }] }, idempotency_key: 'idem-ps2' };
+  await request(PERSISTENT_PORT, 'POST', '/p3394/envelope', { envelope: psMsg2 }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && received.filter((e) => e.session_id === 's-persistent' && e.kind === 'message').length < 2; i += 1) await sleep(100);
+  let psPids = [];
+  let psArgvs = [];
+  try { psPids = fs.readFileSync(persistentPidFile, 'utf8').split('\n').filter(Boolean); } catch {}
+  try { psArgvs = fs.readFileSync(persistentLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch {}
+  check('claude 常驻：多轮复用同一进程（只 spawn 一次）', psPids.length === 1 && psArgvs.length === 1);
+  check('claude 常驻：第二轮不带 [会话历史] 前缀', !JSON.stringify(psArgvs[0] || []).includes('[会话历史]'));
+  check('claude 常驻：第二轮终态仍正常', received.some((e) => e.session_id === 's-persistent' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('PERSISTENT-2:follow up')));
+  // 取消：常驻进程必须被终止（pid 回收），且会话被丢弃。
+  const psMsg3 = { message_id: 'ps3', session_id: 's-persistent', task_id: 'pstk3', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'long task' }] }, idempotency_key: 'idem-ps3' };
+  await request(PERSISTENT_PORT, 'POST', '/p3394/envelope', { envelope: psMsg3 }, GATEWAY_TOKEN);
+  await sleep(400);
+  const psCtl = { message_id: 'ps4', session_id: 's-persistent', task_id: 'pstk3', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'idem-ps-ctl' };
+  await request(PERSISTENT_PORT, 'POST', '/p3394/envelope', { envelope: psCtl }, GATEWAY_TOKEN);
+  await sleep(400);
+  check('claude 常驻：取消回执', received.some((e) => e.session_id === 's-persistent' && (e.payload.parts[0].text || '') === '[已取消]'));
+  let psPidGone = true;
+  const lastPid = Number(psPids[0] || 0);
+  if (lastPid > 0) {
+    try { process.kill(lastPid, 0); psPidGone = false; } catch { /* ESRCH → 已回收 */ }
+  }
+  check('claude 常驻：取消终止常驻进程（pid 已回收）', lastPid > 0 && psPidGone);
+  persistentGw.kill('SIGTERM');
+
   gateway.kill('SIGTERM');
   cogseedServer.close();
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -481,6 +560,12 @@ async function main() {
     console.error('FAILED: ' + failures.join(', '));
     console.error(gatewayLog);
     console.error(sscliGwLog);
+    console.error('=== streamJsonGwLog ===');
+    console.error(streamJsonGwLog);
+    console.error('=== persistentGwLog ===');
+    console.error(persistentGwLog);
+    try { console.error('=== psPids: ' + fs.readFileSync(persistentPidFile, 'utf8')); } catch {}
+    try { console.error('=== psArgvs: ' + fs.readFileSync(persistentLog, 'utf8')); } catch {}
     process.exit(1);
   }
   console.log('ALL PASS');

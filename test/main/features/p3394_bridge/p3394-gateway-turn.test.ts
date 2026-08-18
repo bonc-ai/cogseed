@@ -69,6 +69,26 @@ describe('P3394 gateway turn runner', () => {
     hub.waitForSessionFree.mockResolvedValue(true);
   });
 
+  it('routes openclaw-style progress frames to the process rail and still lands the final text', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    // openclaw 网关：运行中只发 progress 帧（[skills]/[tools] 过程日志），
+    // 正文由终态回复一次性落地。progress 不得置 streamed，否则正文会被吞掉。
+    hub.sendAndWait.mockImplementation(async (_nodeId, _envelope, onStream) => {
+      onStream?.({ text: '[tools] run bash build', kind: 'progress', envelope: {} as never, sequence: 1 });
+      onStream?.({ text: '[skills] web_search', kind: 'progress', envelope: {} as never, sequence: 2 });
+      return { text: 'final openclaw reply' };
+    });
+    const processes: Array<{ type: string; text: string }> = [];
+    const result = await runP3394GatewayTurn({ ...baseInput, onProcess: (event) => { processes.push(event as never); } });
+
+    expect(result).toEqual({ text: 'final openclaw reply' });
+    // 过程日志进 process rail（progress 事件），每条一行。
+    expect(processes.filter((e) => e.type === 'progress' && e.text === '[tools] run bash build')).toHaveLength(1);
+    expect(processes.filter((e) => e.type === 'progress' && e.text === '[skills] web_search')).toHaveLength(1);
+    // 正文不因 progress 帧丢失：终态回复仍以 delta 一次性落地。
+    expect(processes.filter((e) => e.type === 'delta' && e.text === 'final openclaw reply')).toHaveLength(1);
+  });
+
   it('waits for a busy session to drain instead of failing on p3394_session_conflict', async () => {
     mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
     // 第一次 sendAndWait：同一会话上一轮仍在途 → 冲突；等待会话排空后重发成功。
@@ -85,6 +105,47 @@ describe('P3394 gateway turn runner', () => {
     expect(processes.some((event) => event.type === 'progress' && /上一轮对话尚未完成/.test(event.text))).toBe(true);
   });
 
+  it('rebuilds the envelope with a fresh message id when retrying after a conflict', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    // 每次 buildEnvelope 都返回新 message_id（幂等键随之更新），session_id 保持稳定。
+    let call = 0;
+    mocks.buildP3394OutboundEnvelope.mockImplementation(() => {
+      call += 1;
+      return {
+        spec_version: 'p3394/1.0', message_id: 'msg-rebuilt-' + call, session_id: 'ses-1', task_id: 'tsk-rebuilt-' + call,
+        kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }],
+        payload: { parts: [{ type: 'text', text: 'hi' }] }, idempotency_key: 'idem-rebuilt-' + call,
+      };
+    });
+    hub.sendAndWait
+      .mockRejectedValueOnce(new Error('p3394_session_conflict'))
+      .mockResolvedValueOnce({ text: 'hermes second reply' });
+
+    const result = await runP3394GatewayTurn({ ...baseInput, onProcess: () => {} });
+
+    expect(result).toEqual({ text: 'hermes second reply' });
+    expect(call).toBe(2);
+    const firstEnvelope = hub.sendAndWait.mock.calls[0][1] as { message_id: string; session_id: string };
+    const secondEnvelope = hub.sendAndWait.mock.calls[1][1] as { message_id: string; session_id: string };
+    // 重试不能用同一个信封：message_id/幂等键必须全新，session_id 保持稳定。
+    expect(secondEnvelope.message_id).not.toBe(firstEnvelope.message_id);
+    expect(secondEnvelope.session_id).toBe(firstEnvelope.session_id);
+  });
+
+  it('bails out with aborted when the user cancels while waiting for the busy session', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    const controller = new AbortController();
+    hub.sendAndWait.mockRejectedValue(new Error('p3394_session_conflict'));
+    // 等待期间用户取消：waitForSessionFree 立即放行（abort），turn 必须返回
+    // aborted 而不是继续等/再发。
+    hub.waitForSessionFree.mockImplementation(async () => { controller.abort(); return true; });
+
+    const result = await runP3394GatewayTurn({ ...baseInput, signal: controller.signal });
+
+    expect(result).toEqual({ text: '', aborted: true });
+    expect(hub.sendAndWait).toHaveBeenCalledTimes(1);
+  });
+
   it('reports the original conflict when the busy session never drains', async () => {
     mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
     hub.sendAndWait.mockRejectedValue(new Error('p3394_session_conflict'));
@@ -95,6 +156,17 @@ describe('P3394 gateway turn runner', () => {
     expect(result.failureCode).toBe('p3394_send_failed');
     expect(result.infrastructureFailure).toBe(true);
     expect(hub.sendAndWait).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails fast with p3394_cli_not_found when the CLI is not installed (no binary path)', async () => {
+    mocks.detectOne.mockResolvedValueOnce({ type: 'hermes', path: null, version: null, available: false, error: 'not_found' });
+
+    const result = await runP3394GatewayTurn(baseInput);
+
+    expect(result.failureCode).toBe('p3394_cli_not_found');
+    expect(result.failureKind).toBe('runtime');
+    expect(mocks.startExternalGateway).not.toHaveBeenCalled();
+    expect(hub.sendAndWait).not.toHaveBeenCalled();
   });
 
   it('returns the node reply when the peer is already online', async () => {

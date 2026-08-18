@@ -70,9 +70,20 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     }
     input.onProcess?.({ type: 'progress', text: '正在唤起 ' + (input.agent.name || nodeId) + ' 的 P3394 网关…' });
     const detected = await detectOne(input.cli as never);
+    // 区分「未安装」与「网关未起」：二进制缺失（not_found，path 为空）时
+    // 直接快速失败——启动网关只会得到 spawn ENOENT / 15s 注册超时。探测
+    // 失败但路径存在（version_unknown 等）仍照常尝试，让网关去实测。
+    if (!detected || !detected.path) {
+      return {
+        text: '',
+        error: '节点未接入：未在本机检测到 ' + input.cli + ' 命令。请先安装/配置该 CLI 后再试。',
+        failureKind: 'runtime',
+        failureCode: 'p3394_cli_not_found',
+      };
+    }
     const started = await startExternalGateway({
       cli: input.cli,
-      ...(detected.path ? { binPath: detected.path } : {}),
+      binPath: detected.path,
       ...(input.agent.name ? { alias: input.agent.name } : {}),
     });
     if (started.ok === false) {
@@ -95,21 +106,39 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
 
   input.onCoordinatorActivity?.({ kind: 'activity' });
   input.onProcess?.({ type: 'progress', text: '正在通过 P3394 与 ' + (input.agent.name || nodeId) + ' 协作…' });
-  const envelope = buildP3394OutboundEnvelope(nodeId, prompt, input.cid + ':turn:' + Date.now().toString(36), {
+  // 信封按需重建：message_id/idempotency_key 每次发送都必须是新的（重试时
+  // 复用旧信封会被对端按幂等去重，吞掉本条消息的语义）；session_id 由
+  // sessionForGoal(scopeKey=cid, peer) 决定，天然保持稳定，用户可见的会话
+  // 连续性不受影响。
+  const buildEnvelope = () => buildP3394OutboundEnvelope(nodeId, prompt, input.cid + ':turn:' + Date.now().toString(36), {
     scopeKey: input.cid,
   });
+  let envelope = buildEnvelope();
   let streamed = false;
   // 同一 (cid, peer, goal) 会复用稳定的 P3394 会话（session-store），outbound
   // hub 同一时刻只允许该会话一条在途信封。若上一条 turn 还没收到回复，本条
   // sendAndWait 会抛 p3394_session_conflict —— 不能立刻判死（用户看到的就是
-  // "第二条消息不回复/失败"），应等待上一轮排空后再发。等待上限与 hub 的
-  // 回复超时同量级，上一轮挂死时最多等到这里再报错。
+  // "第二条消息不回复/失败"），应等待上一轮排空后再发。等待上限独立封顶
+  // （hub 回复超时是 5 分钟，排队不该让用户空等这么久），且与用户的 abort
+  // 联动：取消立即返回，不拖满等待窗口。
+  const SESSION_CONFLICT_WAIT_CAP_MS = 60_000;
   const send = async (): Promise<{ text: string }> => {
     let waited = false;
     for (;;) {
+      if (input.signal?.aborted) {
+        const abortError = new Error('p3394_aborted');
+        (abortError as Error & { aborted?: boolean }).aborted = true;
+        throw abortError;
+      }
       try {
         const reply = await hub.sendAndWait(nodeId, envelope, (event) => {
           if (input.signal?.aborted) return;
+          // progress 帧（openclaw 的 [skills]/[tools] 过程日志等）→ process
+          // rail；不置 streamed，正文仍由终态回复一次性落地。
+          if (event.kind === 'progress') {
+            input.onProcess?.({ type: 'progress', text: event.text });
+            return;
+          }
           streamed = true;
           input.onProcess?.({ type: 'delta', text: event.text });
         });
@@ -120,8 +149,14 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
           // 上一条同会话 turn 仍在途：提示用户正在排队，等其排空后重发。
           waited = true;
           input.onProcess?.({ type: 'progress', text: '上一轮对话尚未完成，正在等待后继续…' });
-          const drained = await hub.waitForSessionFree(envelope.session_id);
+          const drained = await hub.waitForSessionFree(envelope.session_id, SESSION_CONFLICT_WAIT_CAP_MS, input.signal);
+          if (input.signal?.aborted) {
+            const abortError = new Error('p3394_aborted');
+            (abortError as Error & { aborted?: boolean }).aborted = true;
+            throw abortError;
+          }
           if (!drained) throw firstError; // 上一轮一直未回（达到上限）→ 按原冲突处理
+          envelope = buildEnvelope(); // 重发前换新信封（幂等键/消息 id 全新）
           continue;
         }
         throw firstError;
@@ -138,6 +173,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       if (!recoverable || !presetNodeId) throw firstError;
       const recoveryError = await recoverGateway();
       if (recoveryError) return recoveryError;
+      envelope = buildEnvelope(); // 网关重启后重发：换新信封，避免旧幂等键
       result = await send();
     }
     // Legacy/oneshot gateways have no stream frames; preserve their original

@@ -17,6 +17,21 @@ ELECTRON_APP="$APP_DIR/node_modules/electron/dist/CogSeed.app/Contents/MacOS/Ele
 
 worktree_pids() {
   local pid command
+  # ps 在 C/POSIX locale 下会把命令里的非 ASCII 路径（如中文目录）转义成
+  # `M-xx` 字节序列，与下面基于 $APP_DIR 原始 UTF-8 的 glob 匹配永远失败 →
+  # 「no running runtime」误判、重启停不掉旧实例。统一用 UTF-8 locale 让 ps
+  # 输出原始字节；macOS 默认提供 en_US.UTF-8（不可用时退回原样）。
+  # 注意：不要用 `locale -a | grep -q` 探测——set -o pipefail 下 grep -q 匹配
+  # 即关闭管道，locale -a 收到 SIGPIPE（141）导致整条管道误判失败。
+  local ps_cmd=(ps -ax -o pid= -o command=)
+  local locale_list locale_has_utf8=false
+  locale_list="$(locale -a 2>/dev/null || true)"
+  case "$locale_list" in
+    *en_US.UTF-8*) locale_has_utf8=true ;;
+  esac
+  if [ "$locale_has_utf8" = true ]; then
+    ps_cmd=(env LC_ALL=en_US.UTF-8 ps -ax -o pid= -o command=)
+  fi
   while read -r pid command; do
     [ -n "$pid" ] || continue
     case "$command" in
@@ -30,7 +45,7 @@ worktree_pids() {
         printf '%s\n' "$pid"
         ;;
     esac
-  done < <(ps -ax -o pid= -o command=)
+  done < <("${ps_cmd[@]}")
 }
 
 stop() {

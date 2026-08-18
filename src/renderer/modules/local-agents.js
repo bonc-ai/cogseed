@@ -173,48 +173,43 @@ async function loadExternalGateways({ force = false } = {}) {
  *  tab selector consumes one IPC round-trip instead of two (localAgents.list
  *  + p3394.external.list each re-running detectAll). The response also
  *  carries the registry snapshot (`peers`) so the "connected nodes" area
- *  renders from the same probe. */
+ *  renders from the same probe.
+ *
+ *  In-flight dedup: 切到「外接」tab 时 CLI 选择器与"已接入节点"管理区几乎
+ *  同时请求同一份数据，未去重会让 force 探测重复执行两次完整的 detectAll。
+ *  这里把并发调用合并到同一个 promise 上（force 语义由首个调用决定）。 */
+let _externalPanelDataInflight = null;
 async function loadExternalPanelData({ force = false } = {}) {
   if (_externalPanelData && !force) return _externalPanelData;
-  try {
-    const res = await window.cogseed.invoke('p3394.external.list', { force });
-    _externalPanelData = {
-      entries: Array.isArray(res?.entries) ? res.entries : [],
-      gateways: Array.isArray(res?.gateways) ? res.gateways : [],
-      // cli → 已绑定 agent 名字列表（同 CLI 允许多个外接 agent）。渲染端用
-      // 它给「外接」tab 打「已连接」标记，提示当前实例已有该本地 CLI 的成员。
-      bound: (res && typeof res.bound === 'object' && res.bound !== null) ? res.bound : {},
-      // 统一注册表快照：全部已注册 P3394 节点（含在线状态/能力/端点）。
-      peers: Array.isArray(res?.peers) ? res.peers : [],
-    };
-  } catch (e) {
-    _localAgentsLog.warn('p3394.external.list failed', e);
-    _externalPanelData = { entries: [], gateways: [], bound: {}, peers: [] };
-  }
-  return _externalPanelData;
-}
-
-let _p3394PeersCache = null;
-
-/** Registry snapshot of all registered P3394 nodes (id / display name /
- *  capabilities / node kind / locality / endpoints / online / disabled). */
-async function loadP3394Peers({ force = false } = {}) {
-  if (_p3394PeersCache && !force) return _p3394PeersCache;
-  try {
-    const res = await window.cogseed.invoke('p3394.peers.list');
-    _p3394PeersCache = Array.isArray(res?.peers) ? res.peers : [];
-  } catch (e) {
-    _localAgentsLog.warn('p3394.peers.list failed', e);
-    _p3394PeersCache = [];
-  }
-  return _p3394PeersCache;
+  if (_externalPanelDataInflight) return _externalPanelDataInflight;
+  _externalPanelDataInflight = (async () => {
+    try {
+      const res = await window.cogseed.invoke('p3394.external.list', { force });
+      _externalPanelData = {
+        entries: Array.isArray(res?.entries) ? res.entries : [],
+        gateways: Array.isArray(res?.gateways) ? res.gateways : [],
+        // cli → 已绑定 agent 名字列表（同 CLI 允许多个外接 agent）。渲染端用
+        // 它给「外接」tab 打「已连接」标记，提示当前实例已有该本地 CLI 的成员。
+        bound: (res && typeof res.bound === 'object' && res.bound !== null) ? res.bound : {},
+        // 统一注册表快照：全部已注册 P3394 节点（含在线状态/能力/端点）。
+        peers: Array.isArray(res?.peers) ? res.peers : [],
+      };
+      return _externalPanelData;
+    } catch (e) {
+      _localAgentsLog.warn('p3394.external.list failed', e);
+      _externalPanelData = { entries: [], gateways: [], bound: {}, peers: [] };
+      return _externalPanelData;
+    } finally {
+      _externalPanelDataInflight = null;
+    }
+  })();
+  return _externalPanelDataInflight;
 }
 
 /** User action: remove a registered node (registry + projection + its
  *  managed gateway). Resolves to the IPC result. */
 async function revokeP3394Peer(agentId) {
   const res = await window.cogseed.invoke('p3394.peers.revoke', { agentId });
-  _p3394PeersCache = null;
   _externalPanelData = null;
   return res;
 }
@@ -222,7 +217,6 @@ async function revokeP3394Peer(agentId) {
 /** User action: disable/enable a registered node. */
 async function toggleP3394Peer(agentId, disabled) {
   const res = await window.cogseed.invoke('p3394.peers.toggle', { agentId, disabled });
-  _p3394PeersCache = null;
   _externalPanelData = null;
   return res;
 }
@@ -343,7 +337,6 @@ function setExternalCliValue(cliType) {
 window.loadLocalCliEntries = loadLocalCliEntries;
 window.loadExternalGateways = loadExternalGateways;
 window.loadExternalPanelData = loadExternalPanelData;
-window.loadP3394Peers = loadP3394Peers;
 window.revokeP3394Peer = revokeP3394Peer;
 window.toggleP3394Peer = toggleP3394Peer;
 window.getExternalDefaultCliTypes = () => [...EXTERNAL_DEFAULT_CLI_TYPES];

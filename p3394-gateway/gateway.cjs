@@ -208,15 +208,16 @@ if (!['agent', 'sub_agent', 'task_agent', 'capability', 'model_runtime'].include
 const PROFILES = (process.env.P3394_PROFILES || 'p3394-session/1.0,p3394-artifact/1.0').split(',').map((s) => s.trim()).filter(Boolean);
 
 // oneshot 模式的增量输出：CLI 运行过程中印出的可见输出实时回发为 stream delta
-// 帧（CogSeed 气泡随之增长），不必等工具+回复全部跑完。openclaw **整体排除**：
-// 它既不以增量方式在 stdout 输出（stdout 为空）、也不在 stderr 输出可读的
-// 过程文字——其最终 JSON 回复信封就写在 stderr 末尾，增量转发只会把原始 JSON
-// 灌进气泡；stderr 里的 [skills]/[tools] 日志也只适合上 debug rail，不适合进
-// 正文。其余预设转发 stdout+stderr。
+// 帧（CogSeed 气泡随之增长），不必等工具+回复全部跑完。openclaw 特殊处理：
+// 它不以增量方式在 stdout 输出（stdout 为空），正文只能等其末尾的 JSON 回复
+// 信封一次性落地；但其 stderr 里的 [skills]/[tools] 过程日志（工具调用等）
+// 逐行实时回发为 stream progress 帧，让 CogSeed 的 process rail 能看到协作
+// 过程，而不是 17 秒一片空白。最终 JSON 信封本身不转发（它是回复正文来源，
+// 灌进气泡会污染正文）。其余预设转发 stdout+stderr 为 delta。
 // P3394_DISABLE_ONESHOT_STREAM=1 整体关闭。
 const ONESHOT_STREAM = String(process.env.P3394_DISABLE_ONESHOT_STREAM || '').trim() !== '1';
 const ONESHOT_STREAM_CHILD = ONESHOT_STREAM && PRESET_NAME !== 'openclaw';
-const MANIFEST_STREAMING = AGENT_MODE === 'sscli' || PRESET_NAME === 'codex' || ONESHOT_STREAM_CHILD;
+const MANIFEST_STREAMING = AGENT_MODE === 'sscli' || PRESET_NAME === 'codex' || ONESHOT_STREAM_CHILD || PRESET_NAME === 'openclaw';
 
 const MANIFEST = {
   spec_version: 'p3394/1.0',
@@ -469,7 +470,7 @@ function sanitizeStreamText(raw) {
 // ── oneshot 模式：每消息 spawn CLI（可取消） ──
 const activeTasks = new Map(); // task_id → child
 const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
-function runAgent(message, taskId, onStream) {
+function runAgent(message, taskId, onStream, onProgress) {
   return new Promise((resolve, reject) => {
     const args = CLI_ARGS.split(' ').map((part) => part.replace('{message}', message));
     const child = spawn(CLI, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -488,6 +489,28 @@ function runAgent(message, taskId, onStream) {
       streamedChars += visible.length;
       onStream(visible);
     };
+    // openclaw --json：正文一次性出（末尾 JSON 信封），过程日志在 stderr。
+    // 把非 JSON 信封的 stderr 行逐行回发为 progress（process rail 可见工具
+    // 调用），进入 pretty-printed JSON 回复信封块（trim 后以 `{` 开头）后
+    // 停止转发，直到 `}` 结尾的行把信封收尾——JSON 是回复正文来源，不能灌进
+    // 气泡。行可能跨 chunk，用残行缓冲拼接。
+    let ocPendingLine = '';
+    let ocJsonDepth = 0;
+    const forwardOpenclawProgress = (line) => {
+      const trimmed = String(line || '').trim();
+      if (!trimmed) return;
+      if (ocJsonDepth > 0) {
+        if (/}\s*$/.test(trimmed)) ocJsonDepth = 0;
+        return;
+      }
+      if (trimmed.startsWith('{')) { ocJsonDepth = 1; return; }
+      if (!onProgress) return;
+      if (streamedChars >= STREAM_CAP_CHARS) return;
+      const visible = sanitizeStreamText(line);
+      if (!visible) return;
+      streamedChars += visible.length;
+      onProgress(visible);
+    };
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 3000).unref();
@@ -495,7 +518,17 @@ function runAgent(message, taskId, onStream) {
       reject(new Error('p3394_agent_timeout'));
     }, TIMEOUT_MS);
     child.stdout.on('data', (chunk) => { if (out.length < MAX_REPLY_BYTES * 4) out += chunk; if (ONESHOT_STREAM_CHILD) forwardStream(chunk.toString('utf8')); });
-    child.stderr.on('data', (chunk) => { if (errOut.length < 8 * 1024) errOut += chunk; if (ONESHOT_STREAM_CHILD) forwardStream(chunk.toString('utf8')); });
+    child.stderr.on('data', (chunk) => {
+      if (errOut.length < 8 * 1024) errOut += chunk;
+      if (PRESET_NAME === 'openclaw') {
+        ocPendingLine += chunk.toString('utf8');
+        const lines = ocPendingLine.split(/\r?\n/);
+        ocPendingLine = lines.pop() || '';
+        for (const line of lines) forwardOpenclawProgress(line);
+      } else if (ONESHOT_STREAM_CHILD) {
+        forwardStream(chunk.toString('utf8'));
+      }
+    });
     child.on('error', (error) => { clearTimeout(timer); if (taskId) activeTasks.delete(taskId); reject(error); });
     child.on('close', (code) => {
       clearTimeout(timer);
@@ -541,7 +574,7 @@ function cancelTask(taskId) {
 const oneshotRuntime = {
   name: 'oneshot',
   async openSession() { /* transcript 负责连续性，无需握手 */ },
-  async deliver(sessionId, messageId, text, opts, onDelta) {
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     const transcript = readTranscriptTail(sessionId);
@@ -549,7 +582,7 @@ const oneshotRuntime = {
     // 注册可取消键用 task_id（cancel 控制帧按 task_id 匹配）；无 task_id 时
     // 回退到 message_id，保证单消息用例仍可取消。
     const cancelKey = (opts && opts.taskId) || messageId;
-    const rawReply = await runAgent(prompt, cancelKey, onDelta);
+    const rawReply = await runAgent(prompt, cancelKey, onDelta, onProgress);
     const reply = rawReply.length > MAX_REPLY_BYTES ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : rawReply;
     appendTranscript(sessionId, 'in', text);
     appendTranscript(sessionId, 'out', reply);
@@ -591,6 +624,7 @@ class CodexAppServerRuntime {
     this.buf = '';
     this.pending = new Map();
     this.threads = new Map();
+    this.activeTurns = new Map(); // task_id（无则 message_id）→ { threadId }
     this.seq = 0;
   }
   _send(message) {
@@ -627,15 +661,38 @@ class CodexAppServerRuntime {
   }
   async start() {
     if (this.child) return;
+    // 并发去重：预热（server.listen 回调）与首轮 deliver 可能同时触发
+    // start()，没有这层会让同一个 gateway 双 spawn 两个 app-server。
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = this._doStart().finally(() => { this.startPromise = null; });
+    return this.startPromise;
+  }
+  async _doStart() {
+    if (this.child) return;
+    // spawn 失败（app-server 二进制缺失等）必须处理 'error' 事件：不监听
+    // 会让 gateway 进程直接崩（uncaught 'error'），而且 initialize 会挂到
+    // TIMEOUT_MS 才失败。这里快速失败并清空状态，deliver 侧拿到明确错误。
+    let spawnError = null;
     this.child = spawn(CODEX_APP_SERVER, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child.on('error', (error) => {
+      spawnError = error;
+      this._failPending(new Error('p3394_codex_app_server_spawn_failed: ' + error.message));
+      this.child = null;
+    });
     this.child.stdout.on('data', (chunk) => {
       this.buf += chunk.toString(); const lines = this.buf.split('\n'); this.buf = lines.pop();
       for (const line of lines) if (line.trim()) this._onLine(line.trim());
     });
     this.child.stderr.on('data', (chunk) => { if (String(chunk).includes('ERROR')) console.error('[p3394-gateway] codex app-server: ' + String(chunk).trim().slice(-500)); });
-    this.child.on('close', () => { for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(new Error('p3394_codex_app_server_exited')); } this.pending.clear(); this.child = null; });
+    this.child.on('close', () => { this._failPending(new Error('p3394_codex_app_server_exited')); this.child = null; });
     await this._request('initialize', { clientInfo: { name: 'p3394-gateway', version: '1.0' }, capabilities: { experimentalApi: true } });
+    if (spawnError) throw spawnError;
     this._send({ jsonrpc: '2.0', method: 'initialized', params: {} });
+  }
+  _failPending(error) {
+    for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
+    this.pending.clear();
+    this.activeTurns.clear();
   }
   get name() { return 'codex'; }
   async openSession() { /* codex 的 thread 在 deliver 里惰性创建 */ }
@@ -652,15 +709,51 @@ class CodexAppServerRuntime {
       this.threads.set(sessionId, threadId);
     }
     const id = ++this.seq;
+    // 可取消键与其余 runtime 一致：task_id 优先（cancel 控制帧按 task_id
+    // 匹配），无 task_id 回退 message_id。
+    const cancelKey = (opts && opts.taskId) || messageId;
     const promise = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete('turn:' + threadId); reject(new Error('p3394_codex_turn_timeout')); }, TIMEOUT_MS);
-      this.pending.set('turn:' + threadId, { resolve, reject, timer, deltas: [], onDelta });
+      const timer = setTimeout(() => {
+        this.pending.delete('turn:' + threadId);
+        this.activeTurns.delete(cancelKey);
+        reject(new Error('p3394_codex_turn_timeout'));
+      }, TIMEOUT_MS);
+      // 包装 resolve/reject 以便 turn 结束时同步摘除 activeTurns 登记。
+      this.pending.set('turn:' + threadId, {
+        resolve: (value) => { this.activeTurns.delete(cancelKey); resolve(value); },
+        reject: (error) => { this.activeTurns.delete(cancelKey); reject(error); },
+        timer,
+        deltas: [],
+        onDelta,
+      });
     });
+    this.activeTurns.set(cancelKey, { threadId });
     this._send({ jsonrpc: '2.0', id, method: 'turn/start', params: { threadId, input: [{ type: 'text', text: text + note + hint, text_elements: [] }] } });
     return promise;
   }
-  cancel() { /* app-server cancellation is version-specific; process remains reusable */ }
-  close() { if (this.child) { this.child.kill('SIGTERM'); this.child = null; } }
+  /** 终止在途 turn（app-server v2 协议 turn/interrupt）。不 kill 共享的
+   *  app-server 进程——进程保持可复用，只中断目标线程的在途 turn。 */
+  cancel(taskId) {
+    const entry = this.activeTurns.get(taskId);
+    if (!entry) return false;
+    this.activeTurns.delete(taskId);
+    // 先摘掉本端 pending 的 turn 等待：随后的 turn/completed 无 entry 会被
+    // 忽略，避免中断后 partial deltas 被当作正常回复回发。
+    const pendingEntry = this.pending.get('turn:' + entry.threadId);
+    if (pendingEntry) {
+      clearTimeout(pendingEntry.timer);
+      this.pending.delete('turn:' + entry.threadId);
+      pendingEntry.reject(new Error('p3394_codex_turn_cancelled'));
+    }
+    try {
+      this._send({ jsonrpc: '2.0', method: 'turn/interrupt', params: { threadId: entry.threadId } });
+    } catch { /* best effort */ }
+    return true;
+  }
+  close() {
+    this.activeTurns.clear();
+    if (this.child) { this.child.kill('SIGTERM'); this.child = null; }
+  }
 }
 const codexAppServerRuntime = new CodexAppServerRuntime();
 
@@ -908,6 +1001,199 @@ class StreamJsonRuntime {
 }
 const streamJsonRuntime = new StreamJsonRuntime();
 
+// ── claude stream-json 常驻模式 ─────────────────────────────────────
+// claude 支持 `--input-format stream-json` 双工流式：一个常驻进程经 stdin
+// 收 user 消息、stdout 推 stream-json 事件，进程内自动延续同一 session 的
+// 上下文。相比每轮 spawn（实测 TTFB 8-12s，CLI 启动占大头），常驻化把
+// 启动成本摊到整个会话生命周期，热态每轮只剩 LLM 首 token。
+// 每个 P3394 session 一个 claude 进程（进程级隔离，避免多会话上下文
+// 串扰——resume 切换实测不可靠），空闲回收；gateway 重启后该 session 的
+// 首轮用 transcript 重建上下文（与每轮 spawn 语义一致，不丢历史）。
+// COGSEED_P3394_CLAUDE_PERSISTENT=0 可整体回退到每轮 spawn。
+const CLAUDE_PERSISTENT_ENABLED = String(process.env.COGSEED_P3394_CLAUDE_PERSISTENT ?? '1').trim() !== '0';
+const CLAUDE_IDLE_RECLAIM_MS = Number(process.env.P3394_CLAUDE_IDLE_RECLAIM_MS || 10 * 60 * 1000);
+
+class ClaudePersistentRuntime {
+  constructor() {
+    this.sessions = new Map(); // p3394 sessionId → { child, buf, turn, idleTimer }
+    this.turnKeys = new Map(); // cancelKey(task_id) → sessionId
+  }
+  get name() { return 'claude-persistent'; }
+  async openSession() { /* 常驻进程在 deliver 时惰性 spawn */ }
+
+  _args() {
+    // CLI_ARGS（'-p {message}'）去掉 {message} 占位，追加双工流式参数。
+    // streamJsonArgs 已含 --output-format stream-json（claude preset），
+    // 缺失时才补，避免重复参数。
+    const base = CLI_ARGS.split(' ').map((part) => part.trim()).filter((part) => part && part !== '{message}');
+    const extra = (preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : [];
+    const hasOutputFormat = extra.some((part) => part === '--output-format');
+    return [...base, '--input-format', 'stream-json', ...(hasOutputFormat ? [] : ['--output-format', 'stream-json']), ...extra];
+  }
+
+  _spawn(sessionId) {
+    const entry = { sessionId, child: null, buf: '', turn: null, idleTimer: null };
+    const child = spawn(CLI, this._args(), { stdio: ['pipe', 'pipe', 'pipe'] });
+    entry.child = child;
+    let stderrLog = '';
+    child.stderr.on('data', (chunk) => {
+      if (stderrLog.length < 8 * 1024) stderrLog += chunk;
+      const visible = sanitizeStreamText(chunk.toString('utf8'));
+      if (visible) entry.turn?.onDelta?.(visible); // 进度/stderr 也实时可见
+    });
+    child.stdout.on('data', (chunk) => {
+      entry.buf += chunk.toString('utf8');
+      const lines = entry.buf.split('\n');
+      entry.buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        this._onLine(entry, line);
+      }
+    });
+    child.on('error', (error) => {
+      const turn = entry.turn;
+      entry.turn = null;
+      if (turn) { clearTimeout(turn.timer); turn.reject(new Error('p3394_claude_spawn_failed: ' + error.message)); }
+    });
+    child.on('close', (code) => {
+      const turn = entry.turn;
+      entry.turn = null;
+      if (turn) {
+        clearTimeout(turn.timer);
+        turn.reject(new Error('agent exited ' + code + (stderrLog ? ': ' + sanitizeStreamText(stderrLog.slice(-300)) : '')));
+      }
+      this._dropSession(sessionId);
+    });
+    this.sessions.set(sessionId, entry);
+    return entry;
+  }
+
+  /** 解析一行 stream-json 事件。常驻模式与每轮 spawn 的差异：assistant
+   *  完整帧不代表轮结束（工具调用后会有多段），以 result 事件收尾。 */
+  _onLine(entry, line) {
+    let ev;
+    try { ev = JSON.parse(line); } catch { return; }
+    if (!entry.turn) return; // 无在途轮次的事件（如并发残留）一律忽略
+    const turn = entry.turn;
+    if (ev && ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
+      && ev.event.delta && typeof ev.event.delta.text === 'string') {
+      const t = ev.event.delta.text;
+      if (t) {
+        turn.accumulated += t;
+        turn.onDelta && turn.onDelta(t);
+      }
+      return;
+    }
+    if (ev && ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
+      // 完整 assistant 帧：仅在无 delta 累积时作为终态文本回退（claude 短答
+      // 可能只有这一帧没有 content_block_delta）。
+      const full = ev.message.content
+        .filter((c) => c && c.type === 'text' && typeof c.text === 'string')
+        .map((c) => c.text)
+        .join('');
+      if (full) turn.lastAssistantText = full;
+      return;
+    }
+    if (ev && ev.type === 'result') {
+      clearTimeout(turn.timer);
+      entry.turn = null;
+      this._armIdleReclaim(entry.sessionId, entry);
+      if (ev.is_error) turn.reject(new Error(ev.error || 'p3394_claude_turn_failed'));
+      else turn.resolve((turn.accumulated || turn.lastAssistantText || '').trim());
+    }
+  }
+
+  _armIdleReclaim(sessionId, entry) {
+    if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
+    entry.idleTimer = setTimeout(() => {
+      entry.idleTimer = null;
+      // 空闲回收：无在途轮次且超时 → 关进程释放内存（下次 deliver 重建）。
+      if (!entry.turn) {
+        try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+        this._dropSession(sessionId);
+      }
+    }, CLAUDE_IDLE_RECLAIM_MS);
+    entry.idleTimer.unref();
+  }
+
+  _dropSession(sessionId) {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    this.sessions.delete(sessionId);
+    if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
+    for (const [key, sid] of this.turnKeys) {
+      if (sid === sessionId) this.turnKeys.delete(key);
+    }
+  }
+
+  async deliver(sessionId, messageId, text, opts, onDelta) {
+    const note = (opts && opts.artifactNote) || '';
+    const hint = (opts && opts.peerCallHint) || '';
+    const cancelKey = (opts && opts.taskId) || messageId;
+    let entry = this.sessions.get(sessionId);
+    const fresh = !entry || entry.child.exitCode !== null || !entry.child.stdin.writable;
+    if (fresh) {
+      // 新进程（首次/上次进程已退出/被取消）：首轮回放 transcript，保证
+      // 跨 gateway 重启与进程重建后的上下文不丢（常驻进程内后续轮自动延续）。
+      entry = this._spawn(sessionId);
+    }
+    if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
+    const transcript = readTranscriptTail(sessionId);
+    const prompt = (fresh && transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
+    this.turnKeys.set(cancelKey, sessionId);
+    return new Promise((resolve, reject) => {
+      entry.turn = {
+        resolve: (value) => { this.turnKeys.delete(cancelKey); resolve(value); },
+        reject: (error) => { this.turnKeys.delete(cancelKey); reject(error); },
+        timer: setTimeout(() => {
+          // 超时：挂死的轮次不能占着常驻进程，杀掉重建（上下文由 transcript 恢复）。
+          entry.turn = null;
+          this.turnKeys.delete(cancelKey);
+          try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+          reject(new Error('p3394_claude_timeout'));
+        }, STREAM_JSON_TIMEOUT_MS),
+        accumulated: '',
+        lastAssistantText: '',
+        onDelta,
+      };
+      try {
+        entry.child.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } }) + '\n');
+      } catch (error) {
+        clearTimeout(entry.turn.timer);
+        entry.turn = null;
+        this.turnKeys.delete(cancelKey);
+        reject(new Error('p3394_claude_write_failed: ' + (error && error.message ? error.message : String(error))));
+      }
+    });
+  }
+  cancel(taskId) {
+    const sessionId = this.turnKeys.get(taskId);
+    if (!sessionId) return false;
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return false;
+    this.turnKeys.delete(taskId);
+    if (entry.turn) {
+      clearTimeout(entry.turn.timer);
+      entry.turn = null;
+    }
+    // 取消 = 终止该 session 的常驻进程：claude stream-json 无 interrupt
+    // 输入，kill 最可靠；下一轮 deliver 重新 spawn（首轮带 transcript）。
+    try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+    this._dropSession(sessionId);
+    return true;
+  }
+  close() {
+    for (const entry of this.sessions.values()) {
+      if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
+      if (entry.turn) { clearTimeout(entry.turn.timer); entry.turn = null; }
+      try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+    }
+    this.sessions.clear();
+    this.turnKeys.clear();
+  }
+}
+const claudePersistentRuntime = new ClaudePersistentRuntime();
+
 /** 运行时后端选择 —— sscli 主导：显式声明 sscli 的 agent 优先走
  *  p3394-sscli/1.0 常驻协议（原生 delta 流式）；声明了 stream-json 输出且
  *  未原生讲协议的 CLI（如 claude -p）走流式包装器（同一 sscli 语义）；
@@ -916,7 +1202,12 @@ const streamJsonRuntime = new StreamJsonRuntime();
  *  只是在这里多注册一个分支。 */
 function runtimeFor() {
   if (AGENT_MODE === 'sscli') {
-    if (preset && preset.streamJson) return streamJsonRuntime;
+    if (preset && preset.streamJson) {
+      // claude 常驻双工流式（默认开；COGSEED_P3394_CLAUDE_PERSISTENT=0
+      // 回退到每轮 spawn 的 stream-json 包装器）。
+      if (PRESET_NAME === 'claude' && CLAUDE_PERSISTENT_ENABLED) return claudePersistentRuntime;
+      return streamJsonRuntime;
+    }
     return sscliRuntime;
   }
   if (PRESET_NAME === 'codex') return codexAppServerRuntime;
@@ -975,7 +1266,7 @@ function postReply(envelope, replyText, resourceParts) {
 /** Sends a best-effort incremental reply. Stream frames are deliberately
  * separate event envelopes so the terminal reply remains the only frame that
  * resolves the outbound request. */
-function postStreamEvent(envelope, text, sequence) {
+function postStreamEvent(envelope, text, sequence, kind) {
   const ext = (envelope && envelope.extensions) || {};
   // H-01：流式帧回发与终态回发（postReply）同规则——只信任回环/受信配置
   // （COGSEED_ENDPOINT）。对端可控的 reply_endpoint 若不校验，攻击者发一条
@@ -998,7 +1289,7 @@ function postStreamEvent(envelope, text, sequence) {
       reply_to: envelope.message_id,
       payload: {
         parts: [{ type: 'text', text }],
-        metadata: { stream_event: 'delta', stream_seq: sequence, stream_source_message_id: envelope.message_id },
+        metadata: { stream_event: kind || 'delta', stream_seq: sequence, stream_source_message_id: envelope.message_id },
       },
       idempotency_key: 'idem-stream-' + nonce,
     },
@@ -1034,16 +1325,33 @@ function postStreamEvent(envelope, text, sequence) {
  * the visible response live (roughly 12 updates/second at most). */
 function createStreamEmitter(envelope) {
   let buffer = '';
+  let progressBuffer = '';
   let sequence = 0;
   let timer = null;
+  let progressTimer = null;
   let streamedChars = 0;
   let chain = Promise.resolve();
-  const flush = () => {
-    if (!buffer) return;
-    const text = buffer;
-    buffer = '';
+  const flush = (kind) => {
+    const text = kind === 'progress' ? progressBuffer : buffer;
+    if (!text) return;
+    if (kind === 'progress') progressBuffer = '';
+    else buffer = '';
     sequence += 1;
-    chain = chain.then(() => postStreamEvent(envelope, text, sequence));
+    chain = chain.then(() => postStreamEvent(envelope, text, sequence, kind));
+  };
+  const armFlush = (kind) => {
+    const isProgress = kind === 'progress';
+    const length = isProgress ? progressBuffer.length : buffer.length;
+    if (length >= 512) {
+      if (isProgress) { if (progressTimer) { clearTimeout(progressTimer); progressTimer = null; } }
+      else { if (timer) { clearTimeout(timer); timer = null; } }
+      flush(kind);
+    } else if (isProgress ? !progressTimer : !timer) {
+      const t = setTimeout(() => { if (isProgress) progressTimer = null; else timer = null; flush(kind); }, 80);
+      t.unref();
+      if (isProgress) progressTimer = t;
+      else timer = t;
+    }
   };
   return {
     push(text) {
@@ -1053,17 +1361,21 @@ function createStreamEmitter(envelope) {
       if (streamedChars >= STREAM_TOTAL_CAP_CHARS) return;
       streamedChars += text.length;
       buffer += text;
-      if (buffer.length >= 512) {
-        if (timer) { clearTimeout(timer); timer = null; }
-        flush();
-      } else if (!timer) {
-        timer = setTimeout(() => { timer = null; flush(); }, 80);
-        timer.unref();
-      }
+      armFlush('delta');
+    },
+    // openclaw 过程日志（[skills]/[tools] 等）→ progress 帧，process rail 展示。
+    pushProgress(text) {
+      if (typeof text !== 'string' || !text) return;
+      if (streamedChars >= STREAM_TOTAL_CAP_CHARS) return;
+      streamedChars += text.length;
+      progressBuffer += (progressBuffer && !/\n$/.test(progressBuffer) ? '\n' : '') + text;
+      armFlush('progress');
     },
     async finish() {
       if (timer) { clearTimeout(timer); timer = null; }
-      flush();
+      if (progressTimer) { clearTimeout(progressTimer); progressTimer = null; }
+      flush('delta');
+      flush('progress');
       // 整体截止：delta 通道是 best-effort，异常慢（对端不响应）时必须在
       // 有限时间内让位给终态回发，不能无限拖住 handleEnvelope。
       await Promise.race([
@@ -1089,15 +1401,20 @@ function enqueue(task) {
 
 /** 取消控制帧（guide §9.2）：绕过串行队列，立即终止运行中的任务。
  *  统一分发给全部运行时：oneshot 子进程（activeTasks）/ stream-json 子进程
- *  （StreamJsonRuntime.active）/ sscli 常驻进程（JSONL cancel），各端都是
- *  幂等 no-op，未持有该 task 的端直接返回。cancel 键统一用 task_id。 */
+ *  （StreamJsonRuntime.active）/ codex app-server 在途 turn / sscli 常驻进程
+ *  （JSONL cancel）。各端都以 task_id 为 cancel 键注册运行中的任务（无
+ *  task_id 时回退 message_id），未持有该 task 的端直接返回 false。任一 runtime
+ *  命中即记入 cancelledTasks——被 kill 的子进程/turn 之后的非零退出/拒绝会在
+ *  handleEnvelope 里被抑制，不再补发错误回信（否则用户会同时看到取消回执与
+ *  一条 [p3394_gateway_error] 或半截回复）。 */
 function handleCancel(envelope) {
   const taskId = envelope.task_id;
   if (!taskId) {
     postReply(envelope, '[已取消]');
     return;
   }
-  const killed = cancelTask(taskId) || streamJsonRuntime.cancel(taskId);
+  const killed = cancelTask(taskId) || streamJsonRuntime.cancel(taskId) || codexAppServerRuntime.cancel(taskId) || claudePersistentRuntime.cancel(taskId);
+  if (killed) cancelledTasks.add(taskId);
   sscliRuntime.cancel(taskId);
   console.log('[p3394-gateway] cancel task ' + taskId + (killed ? ' (killed)' : ' (nothing running)'));
   postReply(envelope, '[已取消]');
@@ -1160,7 +1477,7 @@ async function handleEnvelope(envelope) {
     await runtime.openSession(sessionId, goal, dir);
     // taskId 随 opts 传给运行时：oneshot / stream-json 子进程按 task_id 注册
     // 可取消键，使 cancel 控制帧（按 task_id 匹配）能真正终止运行中的 CLI。
-    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: dir, taskId: envelope.task_id, artifactNote, peerCallHint: PEER_CALL_HINT }, (delta) => stream.push(delta));
+    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: dir, taskId: envelope.task_id, artifactNote, peerCallHint: PEER_CALL_HINT }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
     await stream.finish();
     const reply = rawReply.length > MAX_REPLY_BYTES ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : rawReply;
     // Agent 运行期间写入 workspace/out/ 的文件 → 随回复回传（Artifact 端到端）
@@ -1366,6 +1683,8 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     // 跑成孤儿）、sscli 常驻子进程、codex app-server。
     sscliRuntime.close();
     codexAppServerRuntime.close();
+    streamJsonRuntime.close();
+    claudePersistentRuntime.close();
     oneshotRuntime.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 3000).unref();
@@ -1376,6 +1695,14 @@ server.listen(PORT, GATEWAY_HOST, () => {
   console.log('[p3394-gateway] ' + AGENT_ID + ' P3394 endpoint on http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT + ' · mode: ' + AGENT_MODE);
   console.log('[p3394-gateway] runtime: ' + runtimeFor().name);
   console.log('[p3394-gateway] replies to ' + COGSEED_ENDPOINT + ' · preset: ' + PRESET_NAME + (PRESET_NAME === 'codex' ? ' · runtime: Codex Desktop app-server (' + CODEX_APP_SERVER + ')' : ' · CLI: ' + CLI + ' ' + CLI_ARGS));
+  // codex 预热：gateway 一启动就把 app-server 拉起来（冷启动实测 ~8s，
+  // 首轮对话才 spawn 会让用户干等）。fire-and-forget，失败静默——首次
+  // deliver 会再走 start() 兜底。
+  if (PRESET_NAME === 'codex') {
+    codexAppServerRuntime.start().catch((error) => {
+      console.error('[p3394-gateway] codex app-server warmup failed: ' + (error && error.message ? error.message : String(error)));
+    });
+  }
   registerWithCogseed();
   if (SEND_TASK) sendTaskOneShot(SEND_TASK);
   if (HEARTBEAT_MS > 0) {

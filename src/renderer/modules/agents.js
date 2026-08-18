@@ -2677,8 +2677,13 @@ async function _renderExternalPanelPeers() {
   if (!slot) return;
   let peers = [];
   try {
+    // 共享本次 tab 进入时的探测结果（_refreshExternalCliSelector 已用
+    // force 重扫过一次，且 loadExternalPanelData 内部有 in-flight 去重），
+    // 这里不再单独 force——否则每次点击节点操作后的整表单重渲染都会
+    // 再跑一遍完整 detectAll。节点增删后缓存已被 revoke/toggle 置空，
+    // 下一次渲染自然重探。
     const data = (typeof loadExternalPanelData === 'function')
-      ? await loadExternalPanelData({ force: true })
+      ? await loadExternalPanelData()
       : null;
     peers = Array.isArray(data && data.peers) ? data.peers : [];
   } catch (err) {
