@@ -1378,8 +1378,9 @@ describe('Recall cognition renderer flow', () => {
    * 1. 事件与回执之间走**显式 id**（transfer_completed 的 refs.usageReceiptId
    *    就是回执 id）。绝不能按时间就近匹配——靠时间猜出来的"这两条大概是同
    *    一次"，在一个专门用来证明的面板里是最不该出现的东西。
-   * 2. 没有可归属的证明或任务时不给评价按钮。一次无法归属的评价写进去之后，
-   *    没人能说清它评的是哪次复用。
+   * 2. 没有可归属的、已成功且已绑回执的迁移证明时不给评价按钮。一次无法归属
+   *    的评价写进去之后，没人能说清它评的是哪次复用；而挂一个注定失败的按钮
+   *    比不挂更糟——用户点下去只会拿到一句内部契约语言。
    */
   it('binds a receipt to a use by explicit id, never by proximity in time', async () => {
     const context = loadSkillsRenderer();
@@ -1629,8 +1630,9 @@ describe('Recall cognition renderer flow', () => {
 
     await context.loadCognitionProofs();
 
-    expect(host.innerHTML).not.toContain('这次复用是否有用？');
     expect(host.innerHTML).not.toContain('data-recall-proof-feedback=');
+    expect(host.innerHTML).not.toContain('data-recall-proof-feedback-task');
+    expect(host.innerHTML).toContain('还没有形成迁移证明');
   });
 
   it('keeps the overview attention area hidden when Recall is healthy', () => {
@@ -3095,7 +3097,7 @@ describe('Recall cognition renderer flow', () => {
   });
 
   /**
-   * 缺后端契约的两页必须**说出**自己缺什么，而不是编一份看起来像真的内容。
+   * 「非资产分流」的四种状态各自说清自己是什么。
    *
    * 这一页整页的意义是"任务状态确实被记下来了"，所以 loading 与 empty 绝不能
    * 长得一样——空态说的是"还没有快照"，加载态说的是"正在找"，把两者混同用户
@@ -3111,15 +3113,13 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => (id === 'skills-cognition-nonasset-body' ? host : null),
     };
+    vm.runInContext(`_skillsCognitionState.continuation = ${JSON.stringify(state)};`, context);
 
     context.renderSkillsCognitionNonAsset();
-    vm.runInContext(`_skillsCognitionState.continuation = ${JSON.stringify(state)};`, context);
 
     expect(host.innerHTML).toContain(expected);
     // 分流链路是产品契约，四种状态下都照说。
     expect(host.innerHTML).toContain('生成任务接续快照');
-  });
-
     expect(host.innerHTML).toContain('不生成认知树叶片');
   });
 
@@ -3270,6 +3270,8 @@ describe('Recall cognition renderer flow', () => {
 
     expect(host.innerHTML).toContain('列表里的阶段');
     expect(host.innerHTML).not.toContain('read failed');
+  });
+
   it('shows the upgrade entry point while a draft is not yet available', () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };

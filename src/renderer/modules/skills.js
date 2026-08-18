@@ -300,7 +300,7 @@ function _cognitionRenderCurrentPage(options = {}) {
     // 每次进树都重投一次：树是资产关系的投影，资产在别的页改过之后不重投就是
     // 一棵停在上次的树，而用户正是带着"我刚确认的那条长出来没有"进来的。
     renderSkillsCognitionTree();
-    void loadCognitionTree({ rebuild: true });
+    if (options.enter) void loadCognitionTree({ rebuild: true });
   }
 }
 
@@ -310,6 +310,23 @@ function _renderCognitionLoading(host) {
 
 function _renderCognitionError(host) {
   if (host) host.innerHTML = `<div class="skills-cognition-error">${escapeHtml(_cognitionText('cognition.load_failed', '认知资产数据加载失败'))}</div>`;
+}
+
+/**
+ * 共享快照是否还没落地过——五个吃 `loadSkillsCognitionSnapshot` 的页面据此
+ * 显示"正在加载"而不是空态。
+ *
+ * **为什么不是单看 `loading`**：动作回流和轮询也会把 `loading` 置真，那时页面
+ * 已经有真实内容，再切回骨架会让内容闪一下，比不显示更糟。只有"从未加载过 +
+ * 正在加载"这一种情况才需要说正在加载。
+ *
+ * **为什么必须有**：`initSkillsCognitionConsole` 先让面板可见、再异步取数，
+ * 中间这段时间 body 是空的；用户在取数完成前切 tab，渲染出来的是空态——
+ * 「还没有资产」和「还没加载完」在界面上长得一模一样，用户无从判断是系统
+ * 坏了还是自己真的没有资产。
+ */
+function _cognitionSnapshotPending() {
+  return !_skillsCognitionState.loadedAt && !!_skillsCognitionState.loading;
 }
 
 function _renderCognitionEmpty(text) {
@@ -920,6 +937,7 @@ function renderSkillsCognitionSources() {
   // 五类来源全部保留，空的也列出来。它们是后端明确定义的 kind（source-catalog
   // 里各有自己的 collector），不是"有数据才存在的东西"——把空的那几类藏掉，
   // 用户就不知道系统还能从哪里发现认知，也无从判断"我该去接一个连接器"。
+  if (_cognitionSnapshotPending()) { _renderCognitionLoading(host); return; }
   // 每一类的空态由 `_cognitionSourceEmptyHint` 说清什么会产生它。
   const visibleGroups = groups;
   const sourceItems = visibleGroups.flatMap(_cognitionPrimarySourceItems);
@@ -1509,6 +1527,7 @@ function renderSkillsCognitionCaptures() {
   const conversationTitles = new Map((Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [])
     .filter((source) => source.kind === 'conversation')
     .flatMap((source) => source.items || [])
+  if (_cognitionSnapshotPending()) { _renderCognitionLoading(host); return; }
     .map((item) => [item.id, item.title || item.id]));
   const counts = _skillsCognitionState.captureCounts || {};
   // 五格常显，不按计数隐藏：它们是固定的处境分类（全部/待我确认/处理中/已完成/
@@ -2093,9 +2112,19 @@ function renderSkillsCognitionInbox() {
   });
   const attention = _renderCognitionOverviewAttention();
   const notices = `${loadFailureHtml}${warningHtml}`;
-  const emptyHtml = (!attention && !confirmBand && !laterBand && !teachingBand)
-    ? `<div class="skills-cognition-empty cognition-inbox-empty"><strong>${escapeHtml(_cognitionText('cognition.inbox_empty', '当前无需处理'))}</strong><span>${escapeHtml(_cognitionText('cognition.inbox_empty_hint', '需要你决定的事项会出现在这里；系统自动整理的进度在「沉淀活动」里查看。'))}</span></div>`
-    : '';
+  // 空态只看"还需要我决定的"三条带；已处理历史不参与——有历史不代表有待办，
+  // 把它算进去会让「当前无需处理」永远不出现。
+  //
+  // 两种空是两件事，给的下一步也不同：
+  //   一件东西都没有 → 首启引导（该从哪儿开始）
+  //   有资产但没待办 → 「当前无需处理」+ 一个**显式**去我的资产的入口
+  // 后者以前是静默跳页，现在把这一跳交还给用户。
+  const inboxIsEmpty = !attention && !confirmBand && !laterBand && !teachingBand;
+  const emptyHtml = !inboxIsEmpty
+    ? ''
+    : _cognitionIsFirstRun()
+      ? _cognitionSeedMarkup()
+      : `<div class="skills-cognition-empty cognition-inbox-empty"><strong>${escapeHtml(_cognitionText('cognition.inbox_empty', '当前无需处理'))}</strong><span>${escapeHtml(_cognitionText('cognition.inbox_empty_hint', '需要你决定的事项会出现在这里；系统自动整理的进度在「沉淀活动」里查看。'))}</span><div class="skills-cognition-actions"><button type="button" class="btn btn-sm btn-primary" data-cognition-page-link="assets">${escapeHtml(_cognitionText('cognition.inbox_empty_go_assets', '去看我的资产'))}</button></div></div>`;
   host.innerHTML = `
     <div class="skills-cognition-overview">
       ${hero}
@@ -2108,6 +2137,7 @@ function renderSkillsCognitionInbox() {
     </div>`;
 }
 
+  if (_cognitionSnapshotPending()) { _renderCognitionLoading(host); return; }
 // 「使用与证明」：回答"这些资产究竟在哪里用过、真的起作用了吗"。
 // 事实全部来自 timeline-service 已聚合的一条链（usage / transfer proof /
 // effectiveness proof / receipt），这里只翻译成用户能理解的说法，不造事实。
@@ -2863,7 +2893,68 @@ function renderSkillsCognitionTree() {
     <div class="cognition-tree-legend-row"><span class="cognition-tree-dot is-none" aria-hidden="true"></span><div><strong>${escapeHtml(_cognitionText('cognition.tree_legend_nonasset', '任务状态不长叶'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_legend_nonasset_hint', '接续快照、Session 与运行记录属于支撑对象。'))}</span></div></div>
     <button type="button" class="btn btn-sm" data-cognition-page-link="nonasset">${escapeHtml(_cognitionText('cognition.tree_open_nonasset', '查看非资产分流'))}</button>
   </aside>`;
-  host.innerHTML = `${hero}<div class="cognition-tree-layout"><div class="cognition-tree-canvas">${branches}${relations}</div>${legend}</div>`;
+  // SVG 是概览，下面的分类卡是完整可点列表——两者都保留。只留图的话，叶子多了
+  // 就点不准也读不全；只留卡片则回不到"这是一棵树"的整体感。
+  const canvas = `<section class="skills-cognition-card cognition-tree-figure">${_renderCognitionTreeCanvas(nodes)}</section>`;
+  host.innerHTML = `${hero}<div class="cognition-tree-layout"><div class="cognition-tree-canvas">${canvas}${branches}${relations}</div>${legend}</div>`;
+}
+
+/**
+ * 是否处于「一件东西都没有」的首启状态。
+ *
+ * 判据取全部五类真实读模型：正式资产、候选、沉淀任务、教学信号、待办。任何一类
+ * 非空都不是首启——用户已经在系统里留下过东西，该看到的是那一类自己的空态
+ * （「本页暂无待确认」和「你还没开始用」是两句不同的话）。
+ *
+ * **读取失败不算空账户**，与 `_cognitionInboxIsEmpty` 同一条纪律：把一次读盘
+ * 失败显示成"你什么都没有"，用户会以为资产丢了。快照还没落地时同理不算。
+ */
+function _cognitionIsFirstRun() {
+  if (!_skillsCognitionState.loadedAt) return false;
+  if ((Array.isArray(_skillsCognitionState.loadErrors) ? _skillsCognitionState.loadErrors : []).length) return false;
+  const nonEmpty = (value) => Array.isArray(value) && value.length > 0;
+  if (nonEmpty(_skillsCognitionState.assets)) return false;
+  if (nonEmpty(_skillsCognitionState.recallCandidates)) return false;
+  if (nonEmpty(_skillsCognitionState.captures)) return false;
+  if (nonEmpty(_skillsCognitionState.recentCaptures)) return false;
+  if (nonEmpty(_skillsCognitionState.teachingSignals)) return false;
+  if (nonEmpty(_skillsCognitionState.inboxItems)) return false;
+  // 处理过东西就不是首启——哪怕现在手里是空的。用户可能把候选全拒了、或把
+  // 资产都删了，那也是"用过"，再给一句"你的认知种子已经准备好"是错的。
+  // 历史还没读回来时（null / loading）不据此判断，避免首屏闪一下引导页。
+  const history = _skillsCognitionState.reviewHistory;
+  if (history && !history.loading && !history.error && Number(history.total) > 0) return false;
+  return true;
+}
+
+/**
+ * 「空种子」首启引导（原型 02）。
+ *
+ * **不是独立页**：G-9 定下"默认永远停在待我处理、不自动跳页"之后，它作为
+ * 「待我处理」空态的首启变体渲染（一件东西都没有时）。曾短暂存在过一个独立的
+ * `seed` 页，落地不再跳转后它就没有入口了——留着就是死路由，已删除。
+ *
+ * 两个入口都落在**真实能力**上，不照搬原型的措辞：
+ *   - 「选择历史会话」→ 沉淀活动页的历史会话选择器，真实通道
+ *     `recall.captures.historicalAutoStart`。
+ *   - 「去开始一次任务」→ 侧栏既有的新建任务入口。
+ *
+ * 原型 02 的主按钮写的是「继续最近任务」。**没有做**：认知资产侧没有"最近任务"
+ * 这个读模型，要么去翻会话列表（跨模块），要么编一个。给一个指不准地方的按钮
+ * 比少一个按钮更糟。
+ */
+function _cognitionSeedMarkup() {
+  return `<div class="cognition-seed-wrap">
+    <div class="cognition-seed-art" aria-hidden="true"><span class="cognition-seed-soil"></span><span class="cognition-seed-core"></span><span class="cognition-seed-sprout"></span></div>
+    <span class="cognition-task-eyebrow">${escapeHtml(_cognitionText('cognition.seed_eyebrow', 'YOUR FIRST SEED'))}</span>
+    <h2>${escapeHtml(_cognitionText('cognition.seed_title', '你的认知种子已经准备好'))}</h2>
+    <p>${escapeHtml(_cognitionText('cognition.seed_hint', '从一次真实工作开始。系统会先带着当前任务状态接续工作，再把真正稳定、值得复用的内容整理成候选；未经你确认，不会写入正式资产。'))}</p>
+    <div class="skills-cognition-actions cognition-seed-actions">
+      <button type="button" class="btn btn-primary" data-cognition-page-link="captures">${escapeHtml(_cognitionText('cognition.seed_pick_history', '选择历史会话'))}</button>
+      <button type="button" class="btn" data-cognition-seed-new-task>${escapeHtml(_cognitionText('cognition.seed_new_task', '去开始一次任务'))}</button>
+    </div>
+    <p class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.seed_note', '无需先创建角色或理解本体。第一片叶子只在你确认一项正式资产之后出现。'))}</p>
+  </div>`;
 }
 
 /**
@@ -2894,6 +2985,72 @@ function renderSkillsCognitionNonAsset() {
   const outcomes = [
     ['cognition.nonasset_outcome_count', '不增加四类资产数量。'],
     ['cognition.nonasset_outcome_leaf', '不生成认知树叶片。'],
+/**
+ * 认知树的有机可视化（v0.9.1 原型 01）。
+ *
+ * **只画契约里真有的东西**（`CognitionTreeNode`：assetType / label / maturity /
+ * version / status），三处刻意没有照搬原型：
+ *
+ *  1. **树上不画"芽"。** 原型在枝头画了 3 个橙色候选点，但候选不是资产，
+ *     `CognitionTreeNodeId` 是 `asset:${string}`、`type` 恒为 `'asset'`，树里
+ *     根本没有候选节点。要画就得让渲染层自己把候选摆上去——那是在图上编造一个
+ *     后端不认的状态。候选的位置由图例说明（这是 G-8，等树契约 v2 的产品决策）。
+ *  2. **树干不画版本年轮。** 原型树干上有个 "v3"。版本是**每个资产各自**的
+ *     （`node.version`），不存在"这棵树的版本"，画一个就是凭空造一个聚合量。
+ *     版本落在每片叶子的 tooltip 里。
+ *  3. **空枝照画。** 四类是后端固定的 assetType，不是"有数据才存在的东西"。
+ *     一根光秃的枝条如实表达"这一类你还没有"，藏掉则会让用户以为系统只有三类。
+ *
+ * 布局是**确定性**的：位置只由 assetType 和该类内的下标算出，不用随机、不用
+ * 时间戳。否则每次重画叶子都会跳位置，用户会以为树变了。
+ */
+function _renderCognitionTreeCanvas(nodes) {
+  // 四根主枝：起点挂在树干上，终点是枝尖。角度写死是为了确定性布局。
+  const BRANCHES = [
+    { type: 'personal', x1: 356, y1: 300, x2: 150, y2: 196, anchor: 'end' },
+    { type: 'rule', x1: 364, y1: 306, x2: 574, y2: 208, anchor: 'start' },
+    { type: 'template', x1: 356, y1: 232, x2: 198, y2: 96, anchor: 'end' },
+    { type: 'skill_method', x1: 366, y1: 222, x2: 546, y2: 88, anchor: 'start' },
+  ];
+  const MAX_LEAVES = 9;
+  const branches = BRANCHES.map((branch) => {
+    const branchNodes = nodes.filter((node) => node.assetType === branch.type);
+    const shown = branchNodes.slice(0, MAX_LEAVES);
+    const limb = `<path d="M${branch.x1} ${branch.y1} Q${(branch.x1 + branch.x2) / 2} ${branch.y1 - 34} ${branch.x2} ${branch.y2}" stroke="#8a6547" stroke-width="9" fill="none" stroke-linecap="round"/>`;
+    const leaves = shown.map((node, index) => {
+      // 沿枝条 0.42→0.98 均匀分布，垂直方向交替偏移，避免叠在一条线上。
+      const t = shown.length === 1 ? 0.72 : 0.42 + (0.56 * index) / (shown.length - 1);
+      const cx = branch.x1 + (branch.x2 - branch.x1) * t;
+      const cy = branch.y1 + (branch.y2 - branch.y1) * t - 12 * Math.sin(Math.PI * t);
+      const offset = index % 2 === 0 ? -13 : 13;
+      const deep = node.maturity === 'effectiveness_validated';
+      const dimmed = node.status && node.status !== 'active';
+      const assetId = String(node.id || '').replace(/^asset:/, '');
+      const tip = [node.label || assetId, _abilityAssetMaturityLabel(node.maturity, node.status), node.version ? `v${node.version}` : '']
+        .filter(Boolean).join(' · ');
+      // 叶子可点（走既有 data-cognition-open-asset 委托），但**不可聚焦**：
+      // SVG <g> 加 tabindex 会做出一个能 Tab 到、却按 Enter 没反应的焦点陷阱。
+      // 键盘与读屏的完整入口是下面那组分类卡（真 <button>），信息不缺。
+      return `<g class="cognition-tree-svg-leaf${deep ? ' is-deep' : ' is-light'}${dimmed ? ' is-dimmed' : ''}" data-cognition-open-asset="${escapeHtml(assetId)}">`
+        + `<title>${escapeHtml(tip)}</title>`
+        + `<ellipse cx="${cx.toFixed(1)}" cy="${(cy + offset).toFixed(1)}" rx="15" ry="8.5" transform="rotate(${offset < 0 ? -22 : 16} ${cx.toFixed(1)} ${(cy + offset).toFixed(1)})"/>`
+        + '</g>';
+    }).join('');
+    // 超出的不省略计数：说"还有 N 片"比默默截断诚实，完整列表在下面的分类卡里。
+    const overflow = branchNodes.length > MAX_LEAVES
+      ? `<text x="${branch.x2}" y="${branch.y2 + 30}" text-anchor="${branch.anchor === 'end' ? 'start' : 'end'}" class="cognition-tree-svg-overflow">+${branchNodes.length - MAX_LEAVES}</text>`
+      : '';
+    const label = `<text x="${branch.x2 + (branch.anchor === 'end' ? -6 : 6)}" y="${branch.y2 - 14}" text-anchor="${branch.anchor}" class="cognition-tree-svg-label">${escapeHtml(_abilityAssetCategoryLabel(branch.type))} · ${branchNodes.length}</text>`;
+    return limb + leaves + label + overflow;
+  }).join('');
+  return `<svg class="cognition-tree-svg" viewBox="0 0 720 400" role="img" aria-label="${escapeHtml(_cognitionText('cognition.tree_canvas_label', '认知树'))}">
+    <ellipse cx="360" cy="372" rx="150" ry="15" class="cognition-tree-svg-ground"/>
+    <path d="M352 366c10-62 6-104 12-152 6-42 16-72 32-106" stroke="#8a6547" stroke-width="26" fill="none" stroke-linecap="round"/>
+    <path d="M350 366c-30 4-54 12-76 26M362 366c24 4 47 12 70 26" stroke="#a07c60" stroke-width="7" fill="none" stroke-linecap="round"/>
+    ${branches}
+  </svg>`;
+}
+
     ['cognition.nonasset_outcome_scope', '只在目标空间和已授权会话中使用。'],
     ['cognition.nonasset_outcome_expiry', '到期后可更新或失效。'],
   ].map(([key, text]) => `<li>${escapeHtml(_cognitionText(key, text))}</li>`).join('');
@@ -3395,6 +3552,7 @@ function renderSkillsCognitionAssets() {
   // 列表里的每一条都是正式资产，治理动作与写入来源一律可显示。
   const writeOrigin = _abilityAssetWriteOriginLabel(selected.lifecycleStatus);
   const assetManagementActions = _recallAssetActions(selected.status);
+  if (_cognitionSnapshotPending()) { _renderCognitionLoading(host); return; }
   const assetMoreLabel = _cognitionText('common.more', '更多');
   const assetMoreIcon = typeof uiIconHtml === 'function' ? uiIconHtml('more-horizontal') : '<span aria-hidden="true">...</span>';
   const assetMore = assetManagementActions.length
@@ -3585,6 +3743,7 @@ async function loadSkillsCognitionSnapshot() {
   const captureResultIsCurrent = !captureRequestWasInFlight
     && snapshotCaptureRequestId === _skillsCognitionCaptureRequestId
     && snapshotCaptureFilter === _skillsCognitionState.captureFilter;
+  if (_cognitionSnapshotPending()) { _renderCognitionLoading(host); return; }
   if (dashboard.status === 'fulfilled' && dashboard.value?.ok) _skillsCognitionState.dashboard = dashboard.value.dashboard;
   if (recallCandidates.status === 'fulfilled' && recallCandidates.value?.ok) _skillsCognitionState.recallCandidates = recallCandidates.value.candidates || [];
   if (assets.status === 'fulfilled' && assets.value?.ok) {
@@ -3772,6 +3931,11 @@ function _skillSecurityBadgeHtml(s) {
   }
   // A degraded-rules pass gets the risk styling rather than the clean one: the
   // colour is the only part most users read, so it must not say "fine" when the
+  // 先把落地页画出来再取数：否则首屏是一块空白 body（页头和 tab 已经在，内容区
+  // 什么都没有），用户看不出是在加载还是坏了。此时快照未落地，画出来的就是
+  // loading 态。
+  _skillsCognitionState.loading = true;
+  _cognitionRenderCurrentPage();
   // check behind it was weakened. A `local`-only pass is the same situation by a
   // different route — the deep scanner never ran, and that subset clears content
   // the full ruleset blocks — so it is toned down too. `deep` and older receipts
