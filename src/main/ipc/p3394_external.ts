@@ -6,13 +6,19 @@
  *  - p3394.external.list   → detected CLIs + managed gateway status
  *  - p3394.external.start  → start the managed P3394 gateway for a CLI
  *  - p3394.external.stop   → stop a managed gateway
+ *  - p3394.peers.revoke    → remove a registered node (registry + projection
+ *                            + its managed gateway)
+ *  - p3394.peers.toggle    → disable/enable a registered node
  *
  * The renderer never spawns gateways directly; all lifecycle goes through
  * features/p3394_bridge/external-gateways.ts.
  */
 
 import { detectAll } from '../features/local_agents/registry.js';
-import { listExternalGateways, startExternalGateway, stopExternalGateway } from '../features/p3394_bridge/external-gateways';
+import {
+  listExternalGateways, startExternalGateway, stopExternalGateway,
+} from '../features/p3394_bridge/external-gateways';
+import { listP3394Peers, revokeP3394Peer, setP3394PeerEnabled } from '../features/p3394_bridge/app-wiring';
 import { listAgents } from '../features/agents';
 
 export const p3394ExternalHandlers = {
@@ -33,7 +39,9 @@ export const p3394ExternalHandlers = {
         }
       }
     } catch { /* best effort — 标记缺失不阻塞外接 */ }
-    return { ok: true, entries, gateways, bound };
+    // P3：一次往返带回注册表快照（在线状态/能力/端点），「外接」tab 据此
+    // 渲染"已接入节点"管理区，不再单独拉 p3394.peers.list。
+    return { ok: true, entries, gateways, bound, peers: listP3394Peers() };
   },
   'p3394.external.start': async (args: { cli?: unknown; alias?: unknown; binPath?: unknown }) => {
     const cli = typeof args?.cli === 'string' ? args.cli.trim() : '';
@@ -55,5 +63,19 @@ export const p3394ExternalHandlers = {
     const result = await stopExternalGateway(cli);
     if (result.ok === false) return { ok: false, error: result.error };
     return { ok: true };
+  },
+  // ── 统一注册表管理（已注册节点）────────────────────────────────────
+  // 注：不再提供独立的 p3394.peers.list —— 注册表快照已随
+  // p3394.external.list 一次往返带回（peers 字段），渲染端只消费那一个
+  // 通道，避免双通道两套缓存。
+  'p3394.peers.revoke': async (args: { agentId?: unknown }) => {
+    const agentId = typeof args?.agentId === 'string' ? args.agentId.trim() : '';
+    if (!agentId) return { ok: false, error: 'p3394_peer_id_required' };
+    return revokeP3394Peer(agentId);
+  },
+  'p3394.peers.toggle': async (args: { agentId?: unknown; disabled?: unknown }) => {
+    const agentId = typeof args?.agentId === 'string' ? args.agentId.trim() : '';
+    if (!agentId) return { ok: false, error: 'p3394_peer_id_required' };
+    return setP3394PeerEnabled(agentId, args?.disabled === true);
   },
 };

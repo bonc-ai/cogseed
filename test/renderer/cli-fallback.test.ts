@@ -674,6 +674,73 @@ describe('commander CLI fallback', () => {
     expect(recipientByCid['cid-switch2']).toMatchObject({ kind: 'agent', id: 'agent-claude-1' });
   });
 
+  it('auto-switches a failed P3394 gateway fallback to another available CLI', async () => {
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: 'codex' },
+      'localAgents.list': {
+        entries: [
+          { type: 'codex', available: true, auth: { loggedIn: true } },
+          { type: 'claude', available: true, auth: { loggedIn: true } },
+        ],
+      },
+      'localAgents.cliEndpointInfo': {
+        endpoints: { codex: null, claude: null, opencode: null, workbuddy: null },
+      },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+        ],
+      },
+    });
+
+    await sandbox._maybeApplyCliFallback('cid-p3394-switch');
+    await sandbox._maybeAutoSwitchCliOnFailure('cid-p3394-switch', {
+      failureKind: 'runtime',
+      failureCode: 'p3394_reply_timeout',
+      aborted: false,
+    });
+
+    expect(recipientByCid['cid-p3394-switch']).toMatchObject({ kind: 'agent', id: 'agent-claude-1' });
+  });
+
+  it('does NOT auto-switch a user-selected external agent on a P3394 gateway failure', async () => {
+    // 用户手动选择（外接 tab / 显式 @）的 p3394-gateway agent 无 cli_fallback
+    // origin。它失败时不应被自动切走：网关失败通常是节点侧瞬时故障（自愈
+    // recoverGateway 已重试），自动切换会破坏"同一外接智能体自我恢复"并抖动。
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: 'hermes' },
+      'localAgents.list': {
+        entries: [
+          { type: 'hermes', available: true, auth: { loggedIn: true } },
+          { type: 'claude', available: true, auth: { loggedIn: true } },
+        ],
+      },
+      'localAgents.cliEndpointInfo': {
+        endpoints: { hermes: null, claude: null, opencode: null, workbuddy: null },
+      },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-hermes-1', name: 'Hermes', runtime: { kind: 'p3394-gateway', cli: 'hermes' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+        ],
+      },
+    });
+    const userPick = { kind: 'agent', id: 'agent-hermes-1', name: 'Hermes' }; // 无 origin（用户手动选择）
+    sandbox._recipientByCid['cid-user-pick'] = userPick;
+
+    await sandbox._maybeAutoSwitchCliOnFailure('cid-user-pick', {
+      failureKind: 'runtime',
+      failureCode: 'p3394_reply_timeout',
+      aborted: false,
+    });
+
+    // recipient 原样保留——不自动切走，不重发。
+    expect(recipientByCid['cid-user-pick']).toEqual(userPick);
+  });
+
   it('persists the auto-switch as the new fallback preference', async () => {
     // codex（偏好）运行失败 → 切到 claude 后，把偏好持久化为 claude，
     // 这样下一个会话/重启不会再次先试失败的 codex。
