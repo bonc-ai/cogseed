@@ -2,7 +2,7 @@
 /**
  * p3394-gateway smoke test — 自测：假 CogSeed 服务 + 假 Agent CLI，
  * 验证 manifest / 收件 / 转发模型 / 回发 / 幂等 / 鉴权 / 会话连续性 /
- * Artifact 传递 / cancel 控制帧 / SSCLI 模式 / 启动注册。
+ * Artifact 传递 / cancel 控制帧 / 并发 / oneshot 增量输出 / SSCLI 模式 / 启动注册。
  * 运行：node test/smoke.cjs
  */
 'use strict';
@@ -19,6 +19,9 @@ const GATEWAY_PORT = 19001;
 const COGSEED_PORT = 19002;
 const GATEWAY_TOKEN = 'gw-test-token';
 const COGSEED_TOKEN = 'cogseed-test-token';
+// 假 CogSeed 按 COGSEED_TOKEN 校验 Bearer，所有网关实例（含各子网关）的
+// `{ ...process.env, ... }` env 都必须自带配置 token，否则回发被 401。
+process.env.COGSEED_TOKEN = COGSEED_TOKEN;
 
 // ── 假 Agent CLI（oneshot）：echo 收到的 prompt、计数、可选睡眠、可选回写 out 工件 ──
 const fakeCli = path.join(tmp, 'fake-agent.cjs');
@@ -35,17 +38,25 @@ fs.writeFileSync(fakeCli, [
   "  const m = msg.match(/(\\S*workspace\\/in\\/\\S+)/);",
   "  if (m) { const outDir = require('path').dirname(m[1]).replace(/in$/, 'out'); try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(require('path').join(outDir, 'result.txt'), 'OUT-ARTIFACT-' + n); } catch {} }",
   "}",
-  "if (msg.includes('SLEEP-5000')) { setTimeout(finish, 5000); } else { finish(); }",
+  "const sleepMs = (msg.match(/SLEEP-(\\d+)/) || [])[1];",
+  "if (sleepMs) { setTimeout(finish, Number(sleepMs)); } else { finish(); }",
 ].join('\n'));
 const countFile = path.join(tmp, 'cli-count.txt');
 
-// ── 假 CogSeed 服务：记录收到的回复 envelope ──
+// ── 假 CogSeed 服务：按 COGSEED_TOKEN 校验 Bearer（模拟真实桥的入站鉴权），
+// 记录收到的回复 envelope。恶意 reply_endpoint/reply_token 用例因此能验证
+// 网关的"端点+token 成对回退"：声明不可信时帧必须带配置 token 才到达这里。 ──
 const received = [];
 const cogseedServer = http.createServer((req, res) => {
   if (req.url && req.url.startsWith('/p3394/envelope') && req.method === 'POST') {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
+      if (req.headers.authorization !== 'Bearer ' + COGSEED_TOKEN) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+        return;
+      }
       try { received.push(JSON.parse(body).envelope); } catch {}
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, message_id: 'ok' }));
@@ -115,6 +126,9 @@ async function main() {
   // 启动即注册
   check('启动 hello 注册（自报 endpoint + 能力）', received.some((e) => e.kind === 'control' && e.sender.agent_id === 'hermes' && Array.isArray(e.extensions && e.extensions.endpoints) && e.extensions.endpoints[0] === 'http://127.0.0.1:' + GATEWAY_PORT && Array.isArray(e.extensions.capabilities)));
 
+  // 统一后端选择：默认（未声明 sscli）→ oneshot 万能兜底。
+  check('后端选择：默认 preset 走 oneshot 兜底', gatewayLog.includes('runtime: oneshot'));
+
   // 鉴权
   const noAuth = await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: {} }, 'wrong');
   check('错误 token → 401', noAuth.status === 401);
@@ -154,6 +168,138 @@ async function main() {
   const expectedDigest = sha256('OUT-ARTIFACT-' + 3);
   check('回复携带 out/ 工件（resource part + 正确 digest）', !!outPart && outPart.name === 'result.txt' && String(outPart.digest).toLowerCase().replace(/^sha256:/, '') === expectedDigest);
 
+  // oneshot 并发：上了长任务后，新的一条快速消息不应被串行队列阻塞——
+  // 每条消息 spawn 独立 CLI 进程，应立刻并行执行。
+  const concLong = { message_id: 'mc1', session_id: 's-conc-long', task_id: 'tc1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'SLEEP-3000 conc-along' }] }, idempotency_key: 'idemc1' };
+  const concQuick = { message_id: 'mc2', session_id: 's-conc-quick', task_id: 'tc2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'conc-quick' }] }, idempotency_key: 'idemc2' };
+  await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: concLong }, GATEWAY_TOKEN);
+  await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: concQuick }, GATEWAY_TOKEN);
+  await sleep(700);
+  const quickRepliedEarly = received.some((e) => e.session_id === 's-conc-quick' && (e.payload.parts[0].text || '').includes('FAKE-REPLY: conc-quick'));
+  const longStillRunning = !received.some((e) => e.session_id === 's-conc-long' && (e.payload.parts[0].text || '').includes('FAKE-REPLY:'));
+  check('oneshot 并发：长任务未结束时快速消息已回（不排队）', quickRepliedEarly && longStillRunning);
+  await sleep(3000);
+  check('长任务随后正常回发', received.some((e) => e.session_id === 's-conc-long' && (e.payload.parts[0].text || '').includes('FAKE-REPLY:') && (e.payload.parts[0].text || '').includes('SLEEP-3000')));
+
+  // oneshot 增量输出：CLI 运行中逐段输出的可见内容实时以 stream delta 帧回发，
+  // 不必等工具+回复全部跑完。用分段输出的假 CLI：任务 ~620ms 才结束，但
+  // PART-A/PART-B 应在此之前就以 delta 帧到达 CogSeed。
+  const streamAgent = path.join(tmp, 'fake-stream-agent.cjs');
+  fs.writeFileSync(streamAgent, [
+    "'use strict';",
+    "setTimeout(() => { process.stdout.write('PART-A'); }, 60);",
+    "setTimeout(() => { process.stdout.write('\\nPART-B'); }, 320);",
+    "setTimeout(() => { process.stdout.write('\\nFAKE-STREAM-REPLY'); process.exit(0); }, 620);",
+  ].join('\n'));
+  const STREAM_PORT = GATEWAY_PORT + 40;
+  const streamEnv = { ...process.env, P3394_GATEWAY_PORT: String(STREAM_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'stream-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: streamAgent, P3394_HEARTBEAT_MS: '0' };
+  const streamGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: streamEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  await sleep(900);
+  // 恶意 reply_endpoint（SSRF/数据外泄回归测试）：对端可控的 reply_endpoint
+  // 若被流式回发路径信任，delta 帧会 POST 到攻击者地址（evil.invalid 无法
+  // 解析 → 帧丢失），只有回退到受信 COGSEED_ENDPOINT 时下方 delta 断言才成立。
+  // 终态回复本就走 postReply 校验，因此必须用 delta 帧本身做判别。
+  const streamMsg = { message_id: 'stm1', session_id: 's-stream', task_id: 'stk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'stream me' }] }, idempotency_key: 'idem-stream1', extensions: { reply_endpoint: 'http://evil.invalid:9999', reply_token: 'attacker-token' } };
+  await request(STREAM_PORT, 'POST', '/p3394/envelope', { envelope: streamMsg }, GATEWAY_TOKEN);
+  // 轮询到首条 delta 帧即停：PART-A（~60ms 写入，80ms 合并器冲刷）远早于
+  // FAKE-STREAM-REPLY（~620ms），因此能证明"运行中已实时回发、非等全部完成"。
+  for (let i = 0; i < 20 && !received.some((e) => e.kind === 'event' && e.session_id === 's-stream'); i += 1) await sleep(50);
+  check('oneshot 增量输出：运行中已实时回发 delta 帧（非等全部完成）', received.some((e) => e.kind === 'event' && e.session_id === 's-stream' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta'));
+  await sleep(900);
+  check('oneshot 增量输出：delta 帧包含逐段可见输出', received.some((e) => e.kind === 'event' && e.session_id === 's-stream' && (e.payload.parts[0].text || '').includes('PART-A')));
+  check('oneshot 增量输出：终态回复仍正常回发', received.some((e) => e.session_id === 's-stream' && (e.payload.parts[0].text || '').includes('FAKE-STREAM-REPLY')));
+  streamGw.kill('SIGTERM');
+
+  // 流式回发通道有界性：对端"连接建立但不响应"（半开/事件循环卡死）时，
+  // 单帧 POST 超时 + finish 整体截止必须让终态回复仍能及时发出——否则
+  // handleEnvelope 卡在 await stream.finish()，对端永远等不到回复。
+  // silent server 只吞流式 event 帧（不响应，模拟挂起），正常回 200 给终态。
+  const silentGot = [];
+  const silentServer = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      let envelope = null;
+      try { envelope = JSON.parse(body).envelope; } catch { /* fallthrough */ }
+      if (envelope) silentGot.push(envelope);
+      if (envelope && envelope.kind === 'event') return; // 流式帧：故意不响应
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  const SILENT_PORT = COGSEED_PORT + 70;
+  await new Promise((resolve) => silentServer.listen(SILENT_PORT, '127.0.0.1', resolve));
+  const SILENT_GW_PORT = GATEWAY_PORT + 60;
+  const silentGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(SILENT_GW_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'silent-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: streamAgent, P3394_HEARTBEAT_MS: '0', P3394_STREAM_POST_TIMEOUT_MS: '300', P3394_STREAM_FINISH_DEADLINE_MS: '800' };
+  const silentGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: silentGwEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  await sleep(900);
+  // reply_endpoint 指向 silent 端口（回环 → 受信），流式帧全被吞掉且无响应。
+  const silentMsg = { message_id: 'sim1', session_id: 's-silent', task_id: 'sitk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'stream to silent peer' }] }, idempotency_key: 'idem-silent1', extensions: { reply_endpoint: 'http://127.0.0.1:' + SILENT_PORT } };
+  await request(SILENT_GW_PORT, 'POST', '/p3394/envelope', { envelope: silentMsg }, GATEWAY_TOKEN);
+  let silentReplied = false;
+  for (let i = 0; i < 40 && !silentReplied; i += 1) {
+    await sleep(100);
+    silentReplied = silentGot.some((e) => e.kind === 'message' && e.session_id === 's-silent' && (e.payload.parts[0].text || '').includes('FAKE-STREAM-REPLY'));
+  }
+  const silentEventCount = silentGot.filter((e) => e.kind === 'event' && e.session_id === 's-silent').length;
+  check('流式通道挂起不阻塞终态：对端不响应时终态回复仍按时回发', silentReplied);
+  check('流式通道有界：挂起帧不无限重发（event 帧数量有限）', silentEventCount > 0 && silentEventCount <= 6);
+  silentGw.kill('SIGTERM');
+  silentServer.close();
+
+  // sscli 流式 delta 总量上限：失控的常驻 CLI 无限刷 delta 时，帧流必须被
+  // STREAM_TOTAL_CAP_CHARS 截断而不是无限 POST（oneshot 侧另有 256KB 双保险）。
+  const floodAgent = path.join(tmp, 'fake-flood-agent.cjs');
+  fs.writeFileSync(floodAgent, [
+    "'use strict';",
+    "const readline = require('readline');",
+    "const rl = readline.createInterface({ input: process.stdin });",
+    "rl.on('line', (raw) => {",
+    "  let op; try { op = JSON.parse(raw); } catch { return; }",
+    "  if (op.op === 'hello') process.stdout.write(JSON.stringify({ ok: true, protocol: 'p3394-sscli/1.0', runtime: 'fake-flood', request_id: op.request_id }) + '\\n');",
+    "  else if (op.op === 'open_session') process.stdout.write(JSON.stringify({ ok: true, request_id: op.request_id }) + '\\n');",
+    "  else if (op.op === 'deliver') {",
+    "    for (let i = 0; i < 600; i += 1) process.stdout.write(JSON.stringify({ event: 'delta', request_id: op.request_id, text: 'F'.repeat(1000) }) + '\\n');",
+    "    process.stdout.write(JSON.stringify({ event: 'completed', request_id: op.request_id }) + '\\n');",
+    "  } else process.stdout.write(JSON.stringify({ ok: true, request_id: op.request_id }) + '\\n');",
+    "});",
+  ].join('\n'));
+  const FLOOD_PORT = GATEWAY_PORT + 70;
+  const floodEnv = { ...process.env, P3394_GATEWAY_PORT: String(FLOOD_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'flood-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: floodAgent, P3394_HEARTBEAT_MS: '0' };
+  const floodGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: floodEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  await sleep(900);
+  const floodMsg = { message_id: 'fl1', session_id: 's-flood', task_id: 'fltk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'flood me' }] }, idempotency_key: 'idem-flood1' };
+  await request(FLOOD_PORT, 'POST', '/p3394/envelope', { envelope: floodMsg }, GATEWAY_TOKEN);
+  let floodDone = false;
+  for (let i = 0; i < 60 && !floodDone; i += 1) {
+    await sleep(100);
+    floodDone = received.some((e) => e.session_id === 's-flood' && (e.payload.parts[0].text || '').includes('[输出过长已截断]'));
+  }
+  const floodDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 's-flood' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta');
+  const floodChars = floodDeltas.reduce((sum, e) => sum + (e.payload.parts[0].text || '').length, 0);
+  check('sscli delta 总量上限：刷屏帧流被截断（转发量远小于 CLI 输出 600KB）', floodDone && floodChars < 600 * 1000 && floodChars <= 512 * 1024 + 16 * 1024);
+  floodGw.kill('SIGTERM');
+
+  // openclaw 特殊处理：CLI 无中间分片、最终 JSON 信封在 stderr 末尾——增量转发
+  // 会把原始 JSON 灌进气泡。断言：openclaw 走一次性回发，不产生任何 delta 帧。
+  const ocAgent = path.join(tmp, 'fake-openclaw-agent.cjs');
+  fs.writeFileSync(ocAgent, [
+    "'use strict';",
+    "setTimeout(() => { process.stderr.write('[skills] loading skill\\n'); }, 50);",
+    "setTimeout(() => { process.stderr.write('{\"partial\":\"should-not-stream\"}\\n'); }, 120);",
+    "setTimeout(() => { process.stdout.write(JSON.stringify({ payloads: [{ text: 'OC-REPLY-ONE-SHOT' }], meta: {} })); process.exit(0); }, 250);",
+  ].join('\n'));
+  const OC_PORT = GATEWAY_PORT + 50;
+  const ocEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'openclaw', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: ocAgent + ' {message}', P3394_HEARTBEAT_MS: '0' };
+  const ocGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: ocEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  await sleep(900);
+  const ocMsg = { message_id: 'ocm1', session_id: 's-oc', task_id: 'oct1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'openclaw' }], payload: { parts: [{ type: 'text', text: 'hi' }] }, idempotency_key: 'idem-oc1' };
+  await request(OC_PORT, 'POST', '/p3394/envelope', { envelope: ocMsg }, GATEWAY_TOKEN);
+  await sleep(1000);
+  check('openclaw 一次性回发：不产生 stream delta 帧', !received.some((e) => e.kind === 'event' && e.session_id === 's-oc'));
+  check('openclaw 一次性回发：终态回复正常', received.some((e) => e.session_id === 's-oc' && (e.payload.parts[0].text || '').includes('OC-REPLY-ONE-SHOT')));
+  ocGw.kill('SIGTERM');
+
   // cancel 控制帧：长任务被终止，只回取消回执
   const cancelEnv = { message_id: 'm7', session_id: 's7', task_id: 'tsk-cancel-1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'SLEEP-5000 long task' }] }, idempotency_key: 'idem7' };
   await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: cancelEnv }, GATEWAY_TOKEN);
@@ -163,6 +309,44 @@ async function main() {
   await sleep(800);
   check('cancel 控制帧 → 取消回执', received.some((e) => e.session_id === 's7' && (e.payload.parts[0].text || '') === '[已取消]'));
   check('被取消任务不再补发错误回信', !received.some((e) => e.session_id === 's7' && (e.payload.parts[0].text || '').includes('p3394_gateway_error')));
+
+  // cancel 必须真正终止运行中的 oneshot CLI 子进程（统一 deliver 接口回归：
+  // 子进程曾按 message_id 注册、cancel 按 task_id 查找，真实取消落空导致
+  // 进程跑完才退）。用写 PID 的假 CLI 验证进程在取消后被回收。
+  const cancelPidFile = path.join(tmp, 'cancel-pid.txt');
+  const pidCli = path.join(tmp, 'fake-pid-agent.cjs');
+  fs.writeFileSync(pidCli, [
+    "'use strict';",
+    "const fs = require('fs');",
+    "fs.writeFileSync(process.env.FAKE_CLI_PID_FILE, String(process.pid));",
+    "const msg = process.argv[2] || '';",
+    "const sleepMs = (msg.match(/SLEEP-(\\d+)/) || [])[1];",
+    "setTimeout(() => { process.stdout.write('FAKE-REPLY: ' + msg); process.exit(0); }, Number(sleepMs || 100));",
+  ].join('\n'));
+  const PID_GW_PORT = GATEWAY_PORT + 80;
+  const pidGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(PID_GW_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'pid-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: pidCli + ' {message}', FAKE_CLI_PID_FILE: cancelPidFile, P3394_HEARTBEAT_MS: '0' };
+  const pidGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: pidGwEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  await sleep(900);
+  const pidTask = { message_id: 'pm1', session_id: 's-pid', task_id: 'tsk-pid-1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'SLEEP-8000 long' }] }, idempotency_key: 'idem-pid1' };
+  await request(PID_GW_PORT, 'POST', '/p3394/envelope', { envelope: pidTask }, GATEWAY_TOKEN);
+  // 等假 CLI 写入 pid（它启动即写，随后进入 8s 睡眠）。
+  let childPid = 0;
+  for (let i = 0; i < 30 && !childPid; i += 1) {
+    await sleep(100);
+    try { const raw = fs.readFileSync(cancelPidFile, 'utf8'.trim()); const n = Number(raw); if (n > 0) childPid = n; } catch {}
+  }
+  const pidCtl = { message_id: 'pc1', session_id: 's-pid', task_id: 'tsk-pid-1', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'idem-pid-ctl' };
+  await request(PID_GW_PORT, 'POST', '/p3394/envelope', { envelope: pidCtl }, GATEWAY_TOKEN);
+  // 取消后短时间内进程应已被回收：kill(pid, 0) 报 ESRCH（或进程已退出）。
+  let pidGone = false;
+  for (let i = 0; i < 20 && !pidGone; i += 1) {
+    await sleep(100);
+    try { process.kill(childPid, 0); } catch { pidGone = true; }
+  }
+  check('cancel 真正终止子进程：取消后 CLI pid 已被回收', childPid > 0 && pidGone);
+  // 8s 睡眠任务被取消后不应在窗口期回发终态回复。
+  check('cancel 后 8s 长任务不再回发终态', !received.some((e) => e.session_id === 's-pid' && (e.payload.parts[0].text || '').includes('FAKE-REPLY: SLEEP-8000')));
+  pidGw.kill('SIGTERM');
 
   // 幂等
   const beforeCount = Number(fs.readFileSync(countFile, 'utf8'));
@@ -227,6 +411,8 @@ async function main() {
   sscliGw.stdout.on('data', (c) => { sscliGwLog += c; });
   sscliGw.stderr.on('data', (c) => { sscliGwLog += c; });
   await sleep(900);
+  // 后端选择：声明 P3394_AGENT_MODE=sscli → sscli 主导（常驻 JSONL 协议）。
+  check('后端选择：声明 sscli → 走 sscli 主导', sscliGwLog.includes('runtime: sscli'));
   const sscliEnv1 = { message_id: 'sm1', session_id: 'ss1', task_id: 'st1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'sscli hello' }] }, idempotency_key: 'sscli-idem1' };
   await request(SSCLI_PORT, 'POST', '/p3394/envelope', { envelope: sscliEnv1 }, GATEWAY_TOKEN);
   for (let i = 0; i < 50 && !received.some((e) => e.session_id === 'ss1'); i += 1) await sleep(100);
@@ -239,6 +425,54 @@ async function main() {
   check('SSCLI 协议：hello/open_session/deliver 已交换', sscliOps.some((o) => o.op === 'hello') && sscliOps.some((o) => o.op === 'open_session') && sscliOps.some((o) => o.op === 'deliver'));
   check('SSCLI 会话复用：open_session 只发一次', sscliOps.filter((o) => o.op === 'open_session').length === 1);
   sscliGw.kill('SIGTERM');
+
+  // ── Stream-json 包装器（sscli 主导）：模拟 claude -p --output-format
+  // stream-json 事件流 → 逐 token delta 实时回发 + 终态回复不重复。 ──
+  const streamJsonAgent = path.join(tmp, 'fake-stream-json-agent.cjs');
+  fs.writeFileSync(streamJsonAgent, [
+    "'use strict';",
+    "const fs = require('fs');",
+    "if (process.env.FAKE_STREAMJSON_LOG) fs.appendFileSync(process.env.FAKE_STREAMJSON_LOG, JSON.stringify(process.argv) + '\\n');",
+    "process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:'HELLO '}}}) + '\\n');",
+    "setTimeout(() => { process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:'STREAM'}}}) + '\\n'); }, 200);",
+    "setTimeout(() => {",
+    "  process.stdout.write(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'HELLO STREAM'}]}}) + '\\n');",
+    "  process.stdout.write(JSON.stringify({type:'result',subtype:'success'}) + '\\n');",
+    "}, 400);",
+  ].join('\n'));
+  const STREAM_JSON_PORT = GATEWAY_PORT + 50;
+  const streamJsonLog = path.join(tmp, 'stream-json-argv.log');
+  const streamJsonEnv = { ...process.env, P3394_GATEWAY_PORT: String(STREAM_JSON_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'stream-json-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'claude', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: streamJsonAgent + ' {message}', P3394_HEARTBEAT_MS: '0', FAKE_STREAMJSON_LOG: streamJsonLog };
+  const streamJsonGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: streamJsonEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let streamJsonGwLog = '';
+  streamJsonGw.stdout.on('data', (c) => { streamJsonGwLog += c; });
+  streamJsonGw.stderr.on('data', (c) => { streamJsonGwLog += c; });
+  await sleep(900);
+  check('后端选择：claude + sscli → stream-json 流式包装器', streamJsonGwLog.includes('runtime: stream-json'));
+  const sjMsg = { message_id: 'sj1', session_id: 's-stream-json', task_id: 'sjtk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'stream me' }] }, idempotency_key: 'idem-streamjson1' };
+  await request(STREAM_JSON_PORT, 'POST', '/p3394/envelope', { envelope: sjMsg }, GATEWAY_TOKEN);
+  // 分时断言 1：假 CLI 终态在 ~400ms 才出，第一段 delta 应在此之前就作为
+  // stream delta 帧到达 CogSeed —— 证明真·运行中实时流式，非等全部完成。
+  await sleep(300);
+  const earlyDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 's-stream-json' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta').map((e) => (e.payload.parts[0].text || '')).join('');
+  const terminalNotYet = !received.some((e) => e.session_id === 's-stream-json' && e.kind === 'message');
+  check('stream-json：终态前已实时回发 delta 帧', earlyDeltas.includes('HELLO ') && terminalNotYet);
+  // 分时断言 2：收尾后终态回复 = 累积文本且不重复（assistant 帧不去重追加）。
+  await sleep(700);
+  const sjReplies = received.filter((e) => e.session_id === 's-stream-json' && e.kind === 'message');
+  check('stream-json：终态回复 = 累积文本且不重复', sjReplies.some((e) => (e.payload.parts[0].text || '').trim() === 'HELLO STREAM'));
+
+  // 分时断言 3：跨轮上下文——同一 session 第二条消息应回放 [会话历史]（与
+  // oneshot 同构，否则 claude -p 每轮失忆）。argv 记在 FAKE_STREAMJSON_LOG。
+  const sjMsg2 = { message_id: 'sj2', session_id: 's-stream-json', task_id: 'sjtk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'follow up' }] }, idempotency_key: 'idem-streamjson2' };
+  await request(STREAM_JSON_PORT, 'POST', '/p3394/envelope', { envelope: sjMsg2 }, GATEWAY_TOKEN);
+  await sleep(900);
+  let sjArgvs = [];
+  try { sjArgvs = fs.readFileSync(streamJsonLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch {}
+  const sjHist = sjArgvs.slice(-1)[0] || [];
+  check('stream-json：第二轮回放 [会话历史] 且含首条消息', JSON.stringify(sjHist).includes('[会话历史]') && JSON.stringify(sjHist).includes('stream me'));
+  check('stream-json：第二轮终态回复仍正常', received.filter((e) => e.session_id === 's-stream-json' && e.kind === 'message').length >= 2);
+  streamJsonGw.kill('SIGTERM');
 
   gateway.kill('SIGTERM');
   cogseedServer.close();

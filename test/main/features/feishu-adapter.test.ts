@@ -681,3 +681,71 @@ describe('Feishu sender enrichment', () => {
     );
   });
 });
+
+describe('Feishu inbound dispatch resilience', () => {
+  it('a never-settling identity lookup cannot block the message from business dispatch', async () => {
+    // lark SDK 默认 axios 客户端不设请求超时：身份查询一旦挂起（网络卡死/
+    // 半开连接）就永不返回。入站路径必须对前置身份查询设 deadline——到点
+    // 退化为 id-only envelope 继续进入 onInbound 业务调度。
+    const never = new Promise(() => {});
+    const userGet = vi.fn(() => never);
+    const chatGet = vi.fn(() => never);
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      contact: { v3: { user: { get: userGet } } },
+      im: {
+        v1: {
+          chat: { get: chatGet },
+          message: { create: vi.fn() },
+          messageReaction: {
+            create: vi.fn(async () => ({ code: 0, data: { reaction_id: 'reaction-1' } })),
+            delete: vi.fn(async () => ({ code: 0 })),
+          },
+        },
+      },
+    };
+    const Client = vi.fn(function Client() { return client; });
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const EventDispatcher = vi.fn(function EventDispatcher() { return dispatcher; });
+    const WSClient = vi.fn(function WSClient() { return { start: vi.fn(async () => {}), close: vi.fn() }; });
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client,
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher,
+      LoggerLevel: { error: 'error' },
+      WSClient,
+    }));
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+    // 测试把 deadline 压到 20ms，避免用例真实等待 5s。
+    (adapter as unknown as { preDispatchDeadlineMs: number }).preDispatchDeadlineMs = 20;
+    const onInbound = vi.fn(async () => ({ accepted: true, duplicate: false }));
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onInbound, onStatus: vi.fn(async () => {}) };
+    const base = {
+      platform: 'feishu_lark' as const,
+      instanceId: 'feishu-bot-1',
+      externalMessageId: 'om_stuck_1',
+      externalChatId: 'oc_1',
+      externalUserId: 'ou_1',
+      text: 'hello',
+      isGroup: true,
+      mentionPresent: true,
+      receivedAt: new Date().toISOString(),
+    };
+    await (adapter as unknown as { handleInboundWithReaction(envelope: unknown): Promise<void> }).handleInboundWithReaction(base);
+    // 身份查询仍在挂起，但消息已进入业务调度：onInbound 必然被调用，且
+    // envelope 保持 id-only（名字/群名未填充也不阻塞）。
+    expect(onInbound).toHaveBeenCalledTimes(1);
+    const dispatched = onInbound.mock.calls[0][0];
+    expect(dispatched).toMatchObject(base);
+    expect(dispatched.externalUserName).toBeUndefined();
+    expect(dispatched.externalChatTitle).toBeUndefined();
+    expect(userGet).toHaveBeenCalledTimes(1);
+    // 顺序身份查询：user 查询先挂起，整体被 deadline 截断，chat 查询不会轮到。
+    expect(chatGet).not.toHaveBeenCalled();
+  });
+});

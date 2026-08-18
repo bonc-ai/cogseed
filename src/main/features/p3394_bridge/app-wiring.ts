@@ -31,7 +31,7 @@ import { P3394OutboundHub } from './outbound-hub';
 import { P3394PeerRegistry, type P3394Locality, type P3394NodeKind } from './registry';
 import type { P3394Envelope } from './envelope';
 import { recordP3394Episode } from './kstar-episodes';
-import { projectP3394NodeToTeam, projectedTeamAgentId } from './team-projection';
+import { projectP3394NodeToTeam, projectedTeamAgentId, removeProjection } from './team-projection';
 import { buildP3394WiringDoctorInput, runP3394BridgeDoctor, type P3394DoctorReport } from './doctor';
 import { loadP3394EventCursors, persistP3394EventCursors, recordP3394EventCursor } from './event-cursor-store';
 import { P3394RecoveryController } from './recovery-controller';
@@ -42,6 +42,13 @@ const log = createLogger('p3394-bridge:app-wiring');
 
 /** Default loopback port when COGSEED_P3394_PORT is not set. */
 export const P3394_DEFAULT_PORT = 8444;
+
+/** 僵尸 peer 自动清理阈值：节点超过该时长无任何活动（hello/心跳/入站）
+ *  即在健康 sweep 中从注册表自动移除（并清理团队投影映射）。托管网关
+ *  心跳 30s 一次，节点只要活着就远低于该阈值；30 分钟足够宽松，启动期
+ *  与"派发时才拉起网关"的自愈流程互不干扰。可用 COGSEED_P3394_PEER_TTL_MS
+ *  覆盖（测试/调参）。 */
+export const P3394_PEER_TTL_MS = Number(process.env.COGSEED_P3394_PEER_TTL_MS || 30 * 60 * 1000);
 
 /**
  * 启动门（SDK §5.4）：桥承诺的语义必须被所选 channel 完整承载，
@@ -298,6 +305,9 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
         log.info('P3394 recovery sweep', result);
       }
     });
+    // Peer 健康 sweep：长期无活动的节点自动清理（僵尸防堆积），与任务恢复
+    // 共用同一个低频定时器，不额外起定时器。
+    void sweepP3394Peers();
   }, 30_000);
   if (typeof recoveryTimer.unref === 'function') recoveryTimer.unref();
   channel.subscribe(async (envelope) => {
@@ -787,4 +797,91 @@ export async function stopP3394Bridge(): Promise<void> {
 /** Outbound hub for host tools (p3394_send); null when the bridge is off. */
 export function getP3394OutboundHub(): P3394OutboundHub | null {
   return outboundHub;
+}
+
+/**
+ * Peer 健康 sweep（稳定）：清理"长期无任何活动"且没有存活托管网关进程的
+ * 注册节点，避免僵尸 peer 在注册表里无限堆积、团队目录越滚越大。
+ *
+ * 保守规则：
+ *  - 跳过 cogseed 自身与用户显式停用的节点（disabled 是用户选择，保留）；
+ *  - 跳过仍有托管网关进程存活已映射到该节点的 cli（网关可能刚拉起还没
+ *    心跳，或静默故障——清注册表前应先给它机会心跳/重注册），避免启动期
+ *    误删导致 churn；
+ *  - 只清注册表条目 + 对应团队投影映射，不删 AI 团队 agent 卡片：下次
+ *    派发时 p3394-gateway-turn 的 recoverGateway 会自动拉起网关重新注册，
+ *    卡片即重新可用（自愈，不漏可用入口）。
+ *
+ * 返回本次清理的 agent_id 列表（幂等，可直接反复调用）。
+ */
+export async function sweepP3394Peers(): Promise<{ revoked: string[] }> {
+  if (!activeHandle) return { revoked: [] };
+  const peers = activeHandle.registry.list();
+  const staleIds = new Set(activeHandle.registry.listStale(P3394_PEER_TTL_MS));
+  let liveGatewayNodeIds = new Set<string>();
+  try {
+    const { listExternalGateways, p3394ExternalGatewayIdFor } = await import('./external-gateways');
+    for (const g of listExternalGateways()) {
+      if (g.running) liveGatewayNodeIds.add(g.agent_id ?? p3394ExternalGatewayIdFor(g.cli) ?? '');
+    }
+    liveGatewayNodeIds = new Set([...liveGatewayNodeIds].filter(Boolean));
+  } catch { /* 网关模块不可用 → 放弃"存活网关"豁免，仅凭 stale 判定 */ }
+
+  const revoked: string[] = [];
+  for (const peer of peers) {
+    const agentId = peer.identity.agent_id;
+    if (agentId === 'cogseed') continue;
+    if (peer.disabled) continue;
+    if (!staleIds.has(agentId)) continue;
+    if (liveGatewayNodeIds.has(agentId)) continue;
+    activeHandle.registry.revoke(agentId);
+    removeProjection(agentId);
+    revoked.push(agentId);
+  }
+  if (revoked.length > 0) {
+    log.info('P3394 stale peers auto-removed', { revoked, ttlMs: P3394_PEER_TTL_MS });
+  }
+  return { revoked };
+}
+
+/** 用户主动移除一个已注册 P3394 节点：清注册表 + 清投影映射 + 停掉映射到
+ *  该节点的托管网关（否则网关会继续心跳重新注册，移除就失效）。移除后该
+ *  节点若再次 hello 会像首次一样重新自注册（投影抑制由"重新外接"流程解除）。 */
+export async function revokeP3394Peer(
+  agentId: string,
+): Promise<{ ok: true; removed: string } | { ok: false; error: string }> {
+  const id = String(agentId || '').trim();
+  if (!activeHandle) return { ok: false, error: 'p3394_bridge_unavailable' };
+  if (id === 'cogseed') return { ok: false, error: 'p3394_cannot_revoke_self' };
+  const exists = activeHandle.registry.list().some((p) => p.identity.agent_id === id);
+  if (!exists) return { ok: false, error: 'p3394_peer_not_registered' };
+  activeHandle.registry.revoke(id);
+  removeProjection(id);
+  try {
+    const { listExternalGateways, p3394ExternalGatewayIdFor, stopExternalGateway } = await import('./external-gateways');
+    const gateways = listExternalGateways()
+      .filter((g) => (g.agent_id && g.agent_id === id) || p3394ExternalGatewayIdFor(g.cli) === id);
+    for (const g of gateways) {
+      await stopExternalGateway(g.cli).catch(() => {});
+    }
+  } catch { /* best effort — 网关停止失败不阻塞移除 */ }
+  log.info('P3394 peer revoked (user)', { agent_id: id });
+  return { ok: true, removed: id };
+}
+
+/** 用户停用/启用一个已注册 P3394 节点。停用节点 resolve()/findByCapability()
+ *  直接拒绝（不可被 @ 派发），但保留注册信息；再次启用即恢复。 */
+export function setP3394PeerEnabled(
+  agentId: string,
+  disabled: boolean,
+): { ok: true; agent_id: string; disabled: boolean } | { ok: false; error: string } {
+  const id = String(agentId || '').trim();
+  if (!activeHandle) return { ok: false, error: 'p3394_bridge_unavailable' };
+  if (id === 'cogseed') return { ok: false, error: 'p3394_cannot_toggle_self' };
+  const peer = activeHandle.registry.list().find((p) => p.identity.agent_id === id);
+  if (!peer) return { ok: false, error: 'p3394_peer_not_registered' };
+  if (disabled) activeHandle.registry.disable(id);
+  else activeHandle.registry.enable(id);
+  log.info('P3394 peer toggled', { agent_id: id, disabled });
+  return { ok: true, agent_id: id, disabled };
 }

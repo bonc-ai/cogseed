@@ -99,13 +99,34 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     scopeKey: input.cid,
   });
   let streamed = false;
+  // 同一 (cid, peer, goal) 会复用稳定的 P3394 会话（session-store），outbound
+  // hub 同一时刻只允许该会话一条在途信封。若上一条 turn 还没收到回复，本条
+  // sendAndWait 会抛 p3394_session_conflict —— 不能立刻判死（用户看到的就是
+  // "第二条消息不回复/失败"），应等待上一轮排空后再发。等待上限与 hub 的
+  // 回复超时同量级，上一轮挂死时最多等到这里再报错。
   const send = async (): Promise<{ text: string }> => {
-    const reply = await hub.sendAndWait(nodeId, envelope, (event) => {
-      if (input.signal?.aborted) return;
-      streamed = true;
-      input.onProcess?.({ type: 'delta', text: event.text });
-    });
-    return { text: reply.text.trim() };
+    let waited = false;
+    for (;;) {
+      try {
+        const reply = await hub.sendAndWait(nodeId, envelope, (event) => {
+          if (input.signal?.aborted) return;
+          streamed = true;
+          input.onProcess?.({ type: 'delta', text: event.text });
+        });
+        return { text: reply.text.trim() };
+      } catch (firstError) {
+        const message = firstError instanceof Error ? firstError.message : String(firstError);
+        if (message === 'p3394_session_conflict' && !waited) {
+          // 上一条同会话 turn 仍在途：提示用户正在排队，等其排空后重发。
+          waited = true;
+          input.onProcess?.({ type: 'progress', text: '上一轮对话尚未完成，正在等待后继续…' });
+          const drained = await hub.waitForSessionFree(envelope.session_id);
+          if (!drained) throw firstError; // 上一轮一直未回（达到上限）→ 按原冲突处理
+          continue;
+        }
+        throw firstError;
+      }
+    }
   };
   try {
     let result: { text: string };

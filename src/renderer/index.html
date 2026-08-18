@@ -1468,6 +1468,12 @@
           <label data-i18n="agent_modal.ext_desc">Summary</label>
           <textarea id="agent-ext-desc-input" rows="4" data-i18n-placeholder="agent_modal.ext_desc_placeholder" placeholder="(auto-filled when a CLI is picked; can be overridden)"></textarea>
         </div>
+        <!-- P3394 已接入节点（统一注册表管理区）：当前已注册的全部 P3394
+             节点（含自研网关/远端 peer），在线状态 + 移除/停用。 -->
+        <div class="form-row form-row-ext-peers">
+          <label data-i18n="agent_modal.ext_peers_label">Connected P3394 nodes</label>
+          <div id="agent-ext-peers"></div>
+        </div>
       </div>
 
       <div class="form-msg" id="agent-form-msg"></div>

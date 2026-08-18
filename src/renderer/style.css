@@ -17189,6 +17189,30 @@ body.model-not-configured .main-content { flex-direction: column; }
 .agents-detail-gateway-dot.is-off { background: #b4b4b4; box-shadow: 0 0 0 3px rgba(180,180,180,.15); }
 .agents-detail-gateway-text { font-size: 12px; color: var(--cs-ink-soft, #666); }
 
+/* P3394 已接入节点（外接 tab 统一注册表管理区） */
+.agents-ext-peers-empty { font-size: 12px; color: var(--cs-ink-soft, #666); padding: 6px 2px; }
+.agents-ext-peer-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+  margin-bottom: 6px; background: rgba(20, 71, 55, 0.02);
+}
+.agents-ext-peer-row.is-disabled { opacity: 0.62; }
+.agents-ext-peer-name { font-size: 13px; font-weight: 600; min-width: 0; }
+.agents-ext-peer-state { font-size: 12px; color: var(--cs-ink-soft, #666); }
+.agents-ext-peer-kind {
+  font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: #E2F5EC; color: #0A7A55; white-space: nowrap;
+}
+.agents-ext-peers-meta { font-size: 11px; color: var(--cs-ink-soft, #666); }
+.agents-ext-peer-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.agents-ext-peer-actions .btn.is-danger {
+  color: #dc2626; border-color: rgba(220, 38, 38, 0.35);
+}
+.agents-ext-peer-actions .btn.is-danger:hover {
+  background: rgba(220, 38, 38, 0.08);
+}
+.form-row-ext-peers { margin-top: 4px; }
+
 .agents-detail-project-dir { max-width: 100%; }
 .agent-project-dir-card {
   display: flex;

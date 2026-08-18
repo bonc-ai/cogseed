@@ -249,6 +249,54 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     await expect(hub.sendAndWait('hermes', envelope())).rejects.toThrow('p3394_reply_timeout');
   });
 
+  it('reports a busy session and waits for it to drain (second-turn queueing)', async () => {
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer], 5000);
+    const sendPromise = hub.sendAndWait('hermes', envelope());
+
+    // 上一轮信封在途：同 session 视为 busy，且第二次 sendAndWait 会冲突。
+    expect(hub.isSessionBusy('ses-out-1')).toBe(true);
+    await expect(hub.sendAndWait('hermes', envelope())).rejects.toThrow('p3394_session_conflict');
+
+    // 等上一轮排空：回复到达前 waitForSessionFree 未结束，到达后立刻放行。
+    const waitPromise = hub.waitForSessionFree('ses-out-1');
+    expect(await hub.tryResolveReply(replyEnvelope())).toBe(true);
+    expect(await sendPromise).toMatchObject({ text: 'hello cogseed, reply here' });
+    expect(await waitPromise).toBe(true);
+    expect(hub.isSessionBusy('ses-out-1')).toBe(false);
+  });
+
+  it('waitForSessionFree returns false when the session never drains within the cap', async () => {
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer], 5000);
+    const sendPromise = hub.sendAndWait('hermes', envelope());
+    expect(hub.isSessionBusy('ses-out-1')).toBe(true);
+
+    const start = Date.now();
+    const drained = await hub.waitForSessionFree('ses-out-1', 80);
+    expect(drained).toBe(false);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(60);
+
+    // 收尾：清掉 waiter，避免残留计时器。
+    const reply = replyEnvelope();
+    expect(await hub.tryResolveReply(reply)).toBe(true);
+    await sendPromise;
+  });
+
   it('P1-3: sendOnce delivers and completes the outbox record — no pending waiter, no replay residue', async () => {
     const endpoint = await startPeer();
     const peer: P3394PeerRecord = {

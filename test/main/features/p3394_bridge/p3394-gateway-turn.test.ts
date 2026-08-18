@@ -42,6 +42,7 @@ const baseInput = {
 
 const hub = {
   sendAndWait: vi.fn(async () => ({ text: 'hermes reply' })),
+  waitForSessionFree: vi.fn(async () => true),
 };
 
 describe('P3394 gateway turn runner', () => {
@@ -53,6 +54,7 @@ describe('P3394 gateway turn runner', () => {
     mocks.p3394ExternalGatewayIdFor.mockReset();
     mocks.startExternalGateway.mockReset();
     hub.sendAndWait.mockReset();
+    hub.waitForSessionFree.mockReset();
     mocks.detectOne.mockResolvedValue({ type: 'hermes', path: '/usr/local/bin/hermes', version: '1.0.0', available: true });
     mocks.getP3394OutboundHub.mockReturnValue(hub);
     mocks.listP3394Peers.mockResolvedValue([]);
@@ -64,6 +66,35 @@ describe('P3394 gateway turn runner', () => {
     mocks.p3394ExternalGatewayIdFor.mockImplementation((cli: string) => (cli === 'hermes' || cli === 'claude' || cli === 'codex' ? cli : null));
     mocks.startExternalGateway.mockResolvedValue({ ok: true, value: { cli: 'hermes', agent_id: 'hermes', alias: 'Hermes', bin: '/bin/echo', port: 9100, pid: 42, started_at: new Date().toISOString(), running: true } });
     hub.sendAndWait.mockResolvedValue({ text: 'hermes reply' });
+    hub.waitForSessionFree.mockResolvedValue(true);
+  });
+
+  it('waits for a busy session to drain instead of failing on p3394_session_conflict', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    // 第一次 sendAndWait：同一会话上一轮仍在途 → 冲突；等待会话排空后重发成功。
+    hub.sendAndWait
+      .mockRejectedValueOnce(new Error('p3394_session_conflict'))
+      .mockResolvedValueOnce({ text: 'hermes second reply' });
+    const processes: Array<{ type: string; text: string }> = [];
+    const result = await runP3394GatewayTurn({ ...baseInput, onProcess: (event) => { processes.push(event as never); } });
+
+    expect(result).toEqual({ text: 'hermes second reply' });
+    expect(hub.sendAndWait).toHaveBeenCalledTimes(2);
+    expect(hub.waitForSessionFree).toHaveBeenCalledTimes(1);
+    // 排队等待时给用户进度提示，而不是静默判死。
+    expect(processes.some((event) => event.type === 'progress' && /上一轮对话尚未完成/.test(event.text))).toBe(true);
+  });
+
+  it('reports the original conflict when the busy session never drains', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    hub.sendAndWait.mockRejectedValue(new Error('p3394_session_conflict'));
+    hub.waitForSessionFree.mockResolvedValue(false); // 上一轮一直未回，等待超限
+
+    const result = await runP3394GatewayTurn(baseInput);
+
+    expect(result.failureCode).toBe('p3394_send_failed');
+    expect(result.infrastructureFailure).toBe(true);
+    expect(hub.sendAndWait).toHaveBeenCalledTimes(1);
   });
 
   it('returns the node reply when the peer is already online', async () => {

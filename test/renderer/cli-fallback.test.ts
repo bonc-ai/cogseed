@@ -674,6 +674,37 @@ describe('commander CLI fallback', () => {
     expect(recipientByCid['cid-switch2']).toMatchObject({ kind: 'agent', id: 'agent-claude-1' });
   });
 
+  it('auto-switches a failed P3394 gateway fallback to another available CLI', async () => {
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: 'codex' },
+      'localAgents.list': {
+        entries: [
+          { type: 'codex', available: true, auth: { loggedIn: true } },
+          { type: 'claude', available: true, auth: { loggedIn: true } },
+        ],
+      },
+      'localAgents.cliEndpointInfo': {
+        endpoints: { codex: null, claude: null, opencode: null, workbuddy: null },
+      },
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+        ],
+      },
+    });
+
+    await sandbox._maybeApplyCliFallback('cid-p3394-switch');
+    await sandbox._maybeAutoSwitchCliOnFailure('cid-p3394-switch', {
+      failureKind: 'runtime',
+      failureCode: 'p3394_reply_timeout',
+      aborted: false,
+    });
+
+    expect(recipientByCid['cid-p3394-switch']).toMatchObject({ kind: 'agent', id: 'agent-claude-1' });
+  });
+
   it('persists the auto-switch as the new fallback preference', async () => {
     // codex（偏好）运行失败 → 切到 claude 后，把偏好持久化为 claude，
     // 这样下一个会话/重启不会再次先试失败的 codex。

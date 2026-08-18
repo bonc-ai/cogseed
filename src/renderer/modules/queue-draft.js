@@ -165,7 +165,11 @@ async function _dispatchNextQueued(cid) {
     ? next.content
     : applyRecipientPrefix(withUse, 'conversation', { recipientSnapshot: next.recipient });
   const extra = next.extra && typeof next.extra === 'object' ? { ...next.extra } : {};
-  if (!next.direct && typeof _recipientRoutingFields === 'function') {
+  // 显式 @提及 本身就是路由目标，不能被入队时快照的结构化路由字段覆盖——
+  // 与即时发送路径的规则一致。否则「切换并继续」重建的 @新目标 在队列重放
+  // 时会被旧接收者（失败的智能体）的 recipient_agent_id 劫持，仍路由回失败的那个。
+  const queueHasLeadingMention = /^@([A-Za-z0-9_一-鿿-]+)\s?/u.test(String(next.content || '').trim());
+  if (!next.direct && !queueHasLeadingMention && typeof _recipientRoutingFields === 'function') {
     Object.assign(extra, _recipientRoutingFields(next.recipient));
   }
   if (!Array.isArray(extra.use_selections) && typeof _normalizeChatUseSelections === 'function') {

@@ -474,8 +474,11 @@ async function _validateUserRoute(
     // A fallback route is only valid for a local CLI Agent and only while the
     // API model is unavailable. This prevents a forged renderer payload from
     // silently bypassing normal model selection or Wake approval.
-    if (agent.runtime?.kind !== 'cli') throw new Error('invalid CLI fallback recipient');
-    const cli = agent.runtime.cli;
+    const runtime = agent.runtime;
+    if (!runtime || (runtime.kind !== 'cli' && runtime.kind !== 'p3394-gateway')) {
+      throw new Error('invalid CLI fallback recipient');
+    }
+    const cli = runtime.cli;
     const { hasConfiguredModel } = await import('../auth');
     if (hasConfiguredModel().configured) throw new Error('CLI fallback is not active');
     const { detectAll } = await import('../local_agents/registry');

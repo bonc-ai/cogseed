@@ -186,4 +186,38 @@ describe('P3394 peer and alias registry', () => {
     expect(registry.revoke('agent-a').ok).toBe(true);
     expect(registry.resolve('@helper')).toMatchObject({ ok: false, error: { reason: 'peer_not_found' } });
   });
+
+  it('re-enables a disabled peer and restores resolution (peer management toggle)', () => {
+    const registry = new P3394PeerRegistry();
+    registry.register({ identity: { agent_id: 'cell-c', display_name: 'C' }, manifest: manifest('cell-c') });
+    expect(registry.disable('cell-c').ok).toBe(true);
+    expect(registry.resolve('cell-c')).toMatchObject({ ok: false, error: { reason: 'peer_disabled' } });
+    expect(registry.enable('cell-c').ok).toBe(true);
+    expect(registry.resolve('cell-c')).toMatchObject({ ok: true, value: { identity: { agent_id: 'cell-c' } } });
+    // enabling an unknown peer fails explicitly; enabling a non-disabled peer is a no-op success
+    expect(registry.enable('unknown-id')).toMatchObject({ ok: false, error: { reason: 'peer_not_found' } });
+    expect(registry.enable('cell-c')).toMatchObject({ ok: true, value: { disabled: false } });
+    expect(registry.resolve('cell-c')).toMatchObject({ ok: true, value: { identity: { agent_id: 'cell-c' } } });
+  });
+
+  it('lists stale peers older than the TTL window (peer health sweep)', () => {
+    const registry = new P3394PeerRegistry();
+    const t0 = '2026-08-20T00:00:00.000Z';
+    const ttlMs = 30 * 60 * 1000; // 30 分钟
+    registry.register({ identity: { agent_id: 'old-c', display_name: 'C' }, manifest: manifest('old-c'), now: t0 });
+    registry.register({ identity: { agent_id: 'old-d', display_name: 'D' }, manifest: manifest('old-d'), now: t0 });
+    registry.register({ identity: { agent_id: 'half-a', display_name: 'A' }, manifest: manifest('half-a'), now: t0 });
+    registry.register({ identity: { agent_id: 'edge', display_name: 'E' }, manifest: manifest('edge'), now: t0 });
+    registry.touch('edge', '2026-08-20T00:29:00.000Z');       // 恰好在 TTL 边缘（29min）
+    registry.touch('half-a', '2026-08-20T00:29:30.000Z');     // 已注册且心跳过
+    // now = 00:59（29 分钟前的心跳节点 age 29.5min < TTL → 不算 stale）
+    const stale = registry.listStale(ttlMs, '2026-08-20T00:59:00.000Z');
+    expect(stale.sort()).toEqual(['old-c', 'old-d']);         // half-a/edge 都还在窗口内
+    // now = 01:01：half-a/edge age 均 > TTL → 全列为 stale
+    const staleLater = registry.listStale(ttlMs, '2026-08-20T01:01:00.000Z');
+    expect(staleLater.sort()).toEqual(['edge', 'half-a', 'old-c', 'old-d']);
+    // ttl=0：now 晚于所有 last_seen → 全部立即 stale
+    expect(registry.listStale(0, '2026-08-20T01:01:00.000Z').sort())
+      .toEqual(['edge', 'half-a', 'old-c', 'old-d']);
+  });
 });
