@@ -4,13 +4,13 @@ import type {
   RuntimeModelRequest,
   RuntimeModelToolCall,
 } from '../cogseed_runtime/kernel/model-adapter';
-import { resolveMateApiKeyProfile, type MateProviderProfile } from './provider-profiles';
+import { resolveCogSeedApiKeyProfile, type CogSeedProviderProfile } from './provider-profiles';
 
-export type MateFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+export type CogSeedFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
-export interface MateOpenAICompatibleProviderOptions {
-  resolveProfile?: (userId: string, profileId?: string) => Promise<MateProviderProfile>;
-  fetchImpl?: MateFetch;
+export interface CogSeedOpenAICompatibleProviderOptions {
+  resolveProfile?: (userId: string, profileId?: string) => Promise<CogSeedProviderProfile>;
+  fetchImpl?: CogSeedFetch;
 }
 
 interface PendingToolCall {
@@ -135,13 +135,13 @@ async function* sseDataFrames(body: ReadableStream<Uint8Array>): AsyncGenerator<
   }
 }
 
-export function createMateOpenAICompatibleProvider(
-  options: MateOpenAICompatibleProviderOptions = {},
+export function createCogSeedOpenAICompatibleProvider(
+  options: CogSeedOpenAICompatibleProviderOptions = {},
 ): RuntimeModelProvider {
-  const resolveProfile = options.resolveProfile ?? resolveMateApiKeyProfile;
+  const resolveProfile = options.resolveProfile ?? resolveCogSeedApiKeyProfile;
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  return async function* streamMateOpenAICompatibleProvider(input) {
+  return async function* streamCogSeedOpenAICompatibleProvider(input) {
     const profile = await resolveProfile(input.userId, input.modelProfile);
     const payload = {
       model: profile.model,
@@ -216,9 +216,9 @@ function readNumberValue(record: Record<string, unknown> | null, key: string): n
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-export interface MateAnthropicProviderOptions {
-  resolveProfile?: (userId: string, profileId?: string) => Promise<MateProviderProfile>;
-  fetchImpl?: MateFetch;
+export interface CogSeedAnthropicProviderOptions {
+  resolveProfile?: (userId: string, profileId?: string) => Promise<CogSeedProviderProfile>;
+  fetchImpl?: CogSeedFetch;
 }
 
 /**
@@ -226,13 +226,13 @@ export interface MateAnthropicProviderOptions {
  * (x-api-key) and Claude Pro/Max OAuth access tokens (sk-ant-oat* → Bearer
  * plus the Claude Code beta headers pi-ai sends).
  */
-export function createMateAnthropicProvider(
-  options: MateAnthropicProviderOptions = {},
+export function createCogSeedAnthropicProvider(
+  options: CogSeedAnthropicProviderOptions = {},
 ): RuntimeModelProvider {
-  const resolveProfile = options.resolveProfile ?? resolveMateApiKeyProfile;
+  const resolveProfile = options.resolveProfile ?? resolveCogSeedApiKeyProfile;
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  return async function* streamMateAnthropicProvider(input) {
+  return async function* streamCogSeedAnthropicProvider(input) {
     const profile = await resolveProfile(input.userId, input.modelProfile);
     if (profile.protocol !== 'anthropic') {
       throw new Error('CogSeed Anthropic provider requires an anthropic-protocol profile');
@@ -359,9 +359,9 @@ function geminiStreamUrl(baseUrl: string, model: string): string {
   return `${versioned}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
 }
 
-export interface MateGeminiProviderOptions {
-  resolveProfile?: (userId: string, profileId?: string) => Promise<MateProviderProfile>;
-  fetchImpl?: MateFetch;
+export interface CogSeedGeminiProviderOptions {
+  resolveProfile?: (userId: string, profileId?: string) => Promise<CogSeedProviderProfile>;
+  fetchImpl?: CogSeedFetch;
 }
 
 /**
@@ -369,13 +369,13 @@ export interface MateGeminiProviderOptions {
  * x-goog-api-key; tool calls arrive as functionCall parts whose args are
  * already a JSON object (no partial accumulation needed).
  */
-export function createMateGeminiProvider(
-  options: MateGeminiProviderOptions = {},
+export function createCogSeedGeminiProvider(
+  options: CogSeedGeminiProviderOptions = {},
 ): RuntimeModelProvider {
-  const resolveProfile = options.resolveProfile ?? resolveMateApiKeyProfile;
+  const resolveProfile = options.resolveProfile ?? resolveCogSeedApiKeyProfile;
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  return async function* streamMateGeminiProvider(input) {
+  return async function* streamCogSeedGeminiProvider(input) {
     const profile = await resolveProfile(input.userId, input.modelProfile);
     if (profile.protocol !== 'gemini') {
       throw new Error('CogSeed Gemini provider requires a gemini-protocol profile');
@@ -458,9 +458,9 @@ function endpointForResponses(baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/responses`;
 }
 
-export interface MateOpenAIResponsesProviderOptions {
-  resolveProfile?: (userId: string, profileId?: string) => Promise<MateProviderProfile>;
-  fetchImpl?: MateFetch;
+export interface CogSeedOpenAIResponsesProviderOptions {
+  resolveProfile?: (userId: string, profileId?: string) => Promise<CogSeedProviderProfile>;
+  fetchImpl?: CogSeedFetch;
 }
 
 /**
@@ -471,13 +471,13 @@ export interface MateOpenAIResponsesProviderOptions {
  * response.output_item.done; usage lands on response.completed (input_tokens
  * includes cached tokens — subtract them for the non-cached figure).
  */
-export function createMateOpenAIResponsesProvider(
-  options: MateOpenAIResponsesProviderOptions = {},
+export function createCogSeedOpenAIResponsesProvider(
+  options: CogSeedOpenAIResponsesProviderOptions = {},
 ): RuntimeModelProvider {
-  const resolveProfile = options.resolveProfile ?? resolveMateApiKeyProfile;
+  const resolveProfile = options.resolveProfile ?? resolveCogSeedApiKeyProfile;
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  return async function* streamMateOpenAIResponsesProvider(input) {
+  return async function* streamCogSeedOpenAIResponsesProvider(input) {
     const profile = await resolveProfile(input.userId, input.modelProfile);
     if (profile.protocol !== 'openai-responses') {
       throw new Error('CogSeed OpenAI Responses provider requires an openai-responses-protocol profile');
@@ -609,9 +609,9 @@ export function createMateOpenAIResponsesProvider(
 
 // ── Multi-protocol dispatcher ────────────────────────────────────────────
 
-export interface MateRuntimeProviderOptions {
-  resolveProfile?: (userId: string, profileId?: string) => Promise<MateProviderProfile>;
-  fetchImpl?: MateFetch;
+export interface CogSeedRuntimeProviderOptions {
+  resolveProfile?: (userId: string, profileId?: string) => Promise<CogSeedProviderProfile>;
+  fetchImpl?: CogSeedFetch;
 }
 
 /**
@@ -619,16 +619,16 @@ export interface MateRuntimeProviderOptions {
  * to the wire-protocol implementation that matches it. Sub-providers share
  * the same resolveProfile/fetchImpl so injected test doubles apply uniformly.
  */
-export function createMateRuntimeProvider(
-  options: MateRuntimeProviderOptions = {},
+export function createCogSeedRuntimeProvider(
+  options: CogSeedRuntimeProviderOptions = {},
 ): RuntimeModelProvider {
-  const resolveProfile = options.resolveProfile ?? resolveMateApiKeyProfile;
+  const resolveProfile = options.resolveProfile ?? resolveCogSeedApiKeyProfile;
   const shared = { resolveProfile, fetchImpl: options.fetchImpl };
-  const openai = createMateOpenAICompatibleProvider(shared);
-  const openaiResponses = createMateOpenAIResponsesProvider(shared);
-  const anthropic = createMateAnthropicProvider(shared);
-  const gemini = createMateGeminiProvider(shared);
-  return async function* streamMateRuntimeProvider(input) {
+  const openai = createCogSeedOpenAICompatibleProvider(shared);
+  const openaiResponses = createCogSeedOpenAIResponsesProvider(shared);
+  const anthropic = createCogSeedAnthropicProvider(shared);
+  const gemini = createCogSeedGeminiProvider(shared);
+  return async function* streamCogSeedRuntimeProvider(input) {
     const profile = await resolveProfile(input.userId, input.modelProfile);
     if (profile.protocol === 'openai-responses') yield* openaiResponses(input);
     else if (profile.protocol === 'anthropic') yield* anthropic(input);

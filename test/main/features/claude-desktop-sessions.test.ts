@@ -11,7 +11,7 @@ import {
 const tmpDirs: string[] = [];
 
 function mkHome(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-claude-desktop-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-claude-desktop-'));
   tmpDirs.push(dir);
   return dir;
 }

@@ -62,9 +62,10 @@ async function seedCache(skillId: string, files: Record<string, string>): Promis
 }
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-quarantine-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-quarantine-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_API_BASE_URL = 'https://marketplace.test/api';
   fetchMock.mockReset();
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
@@ -72,8 +73,9 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  delete process.env.COGSEED_API_BASE_URL;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.resetModules();
 });

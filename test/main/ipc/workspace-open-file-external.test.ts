@@ -31,8 +31,8 @@ const TEST_UID = 'uOpenProducedFile';
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-open-produced-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   vi.clearAllMocks();
   const users = await import('../../../src/main/features/users');
@@ -42,7 +42,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -50,7 +50,7 @@ async function invoke(pathValue: string): Promise<any> {
   const electron = await import('electron') as any;
   const { register } = await import('../../../src/main/ipc/index');
   register();
-  const registered = electron.ipcMain.handle.mock.calls.find(([name]: [string]) => name === 'orkas.invoke');
+  const registered = electron.ipcMain.handle.mock.calls.find(([name]: [string]) => name === 'cogseed.invoke');
   expect(registered).toBeTruthy();
   return registered[1](
     { sender: trustedIpcSender() },

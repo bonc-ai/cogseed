@@ -6,11 +6,11 @@
  * commander auto-authors a usage SKILL.md so it has curated instructions for
  * the package's binaries instead of only a bare name list in `$env_summary`.
  * That companion lives here, OUTSIDE the verbatim `local/packages/<pkg>/` tree
- * (which orkas-pkg.cjs must never write Orkas files into) and OUTSIDE cloud/
+ * (which cogseed-pkg.cjs must never write CogSeed files into) and OUTSIDE cloud/
  * (a machine-specific CLI wrapper must not sync to a device that lacks the
  * package). See `Common/docs/plans/cli-package-companion-skill.md`.
  *
- * Write-side lives in `bin/orkas-pkg.cjs` (`skill-write` / pruned on `remove`),
+ * Write-side lives in `bin/cogseed-pkg.cjs` (`skill-write` / pruned on `remove`),
  * symmetric with the `_registry.json` split. This module is READ-only: it
  * never creates, edits, or deletes companion files.
  *

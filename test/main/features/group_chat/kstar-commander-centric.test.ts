@@ -37,12 +37,12 @@ beforeEach(async () => {
   vi.resetModules();
   modelCalls.length = 0;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-kstar-commander-centric-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  previousFlag = process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
-  previousHostRouting = process.env.ORKAS_KSTAR_HOST_ROUTING;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-  process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = '1';
-  process.env.ORKAS_KSTAR_HOST_ROUTING = '1';
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  previousFlag = process.env.COGSEED_COMMANDER_CENTRIC_KSTAR;
+  previousHostRouting = process.env.COGSEED_KSTAR_HOST_ROUTING;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_COMMANDER_CENTRIC_KSTAR = '1';
+  process.env.COGSEED_KSTAR_HOST_ROUTING = '1';
   const users = await import('../../../../src/main/features/users');
   users.activateUser('user-a');
   // Host-routing judge: task-shaped messages are tasks (never continuations);
@@ -63,12 +63,12 @@ beforeEach(async () => {
 afterEach(async () => {
   const groupChat = await import('../../../../src/main/features/group_chat');
   for (const cid of cids.splice(0)) await groupChat.dropConv('user-a', cid).catch(() => undefined);
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
-  if (previousFlag === undefined) delete process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
-  else process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = previousFlag;
-  if (previousHostRouting === undefined) delete process.env.ORKAS_KSTAR_HOST_ROUTING;
-  else process.env.ORKAS_KSTAR_HOST_ROUTING = previousHostRouting;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousFlag === undefined) delete process.env.COGSEED_COMMANDER_CENTRIC_KSTAR;
+  else process.env.COGSEED_COMMANDER_CENTRIC_KSTAR = previousFlag;
+  if (previousHostRouting === undefined) delete process.env.COGSEED_KSTAR_HOST_ROUTING;
+  else process.env.COGSEED_KSTAR_HOST_ROUTING = previousHostRouting;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.resetModules();
 });

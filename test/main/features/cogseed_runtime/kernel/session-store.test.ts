@@ -18,13 +18,13 @@ afterEach(() => {
 });
 
 describe('native Runtime session store', () => {
-  it('creates a native header under local/mate_runtime/sessions', async () => {
+  it('creates a native header under local/cogseed_runtime/sessions', async () => {
     const sid = 'mruntime-native1';
     await createNativeRuntimeSession(UID, sid, '2026-08-04T00:00:00');
     await createNativeRuntimeSession(UID, sid, '2026-08-04T00:00:01');
 
-    const file = paths.mateRuntimeSessionFile(UID, sid);
-    expect(file).toBe(path.join(paths.userLocalRoot(UID), 'mate_runtime', 'sessions', `${sid}.jsonl`));
+    const file = paths.cogseedRuntimeSessionFile(UID, sid);
+    expect(file).toBe(path.join(paths.userLocalRoot(UID), 'cogseed_runtime', 'sessions', `${sid}.jsonl`));
     expect(fs.existsSync(file)).toBe(true);
     expect(fs.existsSync(paths.userSessionFile(UID, sid))).toBe(false);
 
@@ -32,7 +32,7 @@ describe('native Runtime session store', () => {
     expect(session.header).toEqual({
       type: 'session_header',
       version: 1,
-      kernel: 'mate-agent-native',
+      kernel: 'cogseed-agent-native',
       runtime_session_id: sid,
       created_at: '2026-08-04T00:00:00',
     });
@@ -49,7 +49,7 @@ describe('native Runtime session store', () => {
       {
         type: 'session_header',
         version: 1,
-        kernel: 'mate-agent-native',
+        kernel: 'cogseed-agent-native',
         runtime_session_id: sid,
         created_at: '2026-08-04T00:00:00',
       },
@@ -72,7 +72,7 @@ describe('native Runtime session store', () => {
       {
         type: 'session_header',
         version: 1,
-        kernel: 'mate-agent-native',
+        kernel: 'cogseed-agent-native',
         runtime_session_id: sid,
         created_at: '2026-08-04T00:00:00',
       },
@@ -92,7 +92,7 @@ describe('native Runtime session store', () => {
 
     expect(first).toEqual({ claimed: true });
     expect(second).toEqual({ claimed: false, existingRunId: 'run-a', status: 'running' });
-    expect(runtimeRequestLedgerFile(UID)).toBe(path.join(paths.mateRuntimeRoot(UID), 'request-ledger.json'));
+    expect(runtimeRequestLedgerFile(UID)).toBe(path.join(paths.cogseedRuntimeRoot(UID), 'request-ledger.json'));
     expect(fs.existsSync(runtimeRequestLedgerFile(UID))).toBe(true);
   });
 
@@ -121,13 +121,13 @@ describe('native Runtime session store', () => {
 
   it('rejects malformed native turn records while reading history', async () => {
     const sid = 'mruntime-malformed-turn';
-    const file = paths.mateRuntimeSessionFile(UID, sid);
+    const file = paths.cogseedRuntimeSessionFile(UID, sid);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, [
       JSON.stringify({
         type: 'session_header',
         version: 1,
-        kernel: 'mate-agent-native',
+        kernel: 'cogseed-agent-native',
         runtime_session_id: sid,
         created_at: '2026-08-04T00:00:00',
       }),
@@ -139,12 +139,12 @@ describe('native Runtime session store', () => {
 
   it('rejects repeated native headers while reading history', async () => {
     const sid = 'mruntime-repeated-header';
-    const file = paths.mateRuntimeSessionFile(UID, sid);
+    const file = paths.cogseedRuntimeSessionFile(UID, sid);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const header = {
       type: 'session_header',
       version: 1,
-      kernel: 'mate-agent-native',
+      kernel: 'cogseed-agent-native',
       runtime_session_id: sid,
       created_at: '2026-08-04T00:00:00',
     };
@@ -164,7 +164,7 @@ describe('native Runtime session store', () => {
 
   it('refuses to treat legacy core-agent-shaped mruntime files as native history', async () => {
     const sid = 'mruntime-legacy';
-    const file = paths.mateRuntimeSessionFile(UID, sid);
+    const file = paths.cogseedRuntimeSessionFile(UID, sid);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ role: 'user', content: 'legacy core-agent line' }) + '\n');
 

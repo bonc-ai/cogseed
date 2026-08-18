@@ -14,7 +14,7 @@ export function buildPythonCandidates({ appRoot, platform = process.platform, ar
   const bundledPython = platform === 'win32'
     ? pathApi.resolve(runtimeRoot, 'python.exe')
     : pathApi.resolve(runtimeRoot, 'bin', 'python3');
-  return unique([env.ORKAS_TEST_PYTHON, venvPython, bundledPython, 'python3', 'python']);
+  return unique([env.COGSEED_TEST_PYTHON, venvPython, bundledPython, 'python3', 'python']);
 }
 
 export function defaultExists(candidate) {

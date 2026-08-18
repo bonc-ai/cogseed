@@ -1,5 +1,5 @@
 /**
- * SkillRegistry — `SkillLoader`s over Orkas's skill roots, shared by every
+ * SkillRegistry — `SkillLoader`s over CogSeed's skill roots, shared by every
  * core-agent chat request.
  *
  * Two loader tiers (see CLAUDE.md §6 and
@@ -28,7 +28,7 @@
  * between CRUD events. `features/skills.ts` can call `invalidateSkills()`
  * after a create/update/delete to force a re-scan before the next chat.
  * The open loader is additionally rebuilt whenever its computed dir-set
- * changes (package installs happen out-of-process via bin/orkas-pkg.cjs,
+ * changes (package installs happen out-of-process via bin/cogseed-pkg.cjs,
  * so the dir list is recomputed — cheap registry JSON read — per call).
  *
  * The `Source` label is computed in this layer (root-path + install metadata),
@@ -350,7 +350,7 @@ function agentPrivateSkillRoots(uid: string, agentId: string): string[] {
   // NOTE: self-evolved skills (`agentEvolvedSkillsDir`, cloud/agents/<id>/skills)
   // are deliberately NOT here. core-agent's evolution SkillStore.buildIndex()
   // injects them into the system prompt itself, so rendering them here too would
-  // double-inject. This path is only the Orkas-side prompt block (marketplace
+  // double-inject. This path is only the CogSeed-side prompt block (marketplace
   // agent skills + author-published private_skills).
   return [
     userMarketplaceAgentSkillsDir(uid, agentId),
@@ -553,7 +553,7 @@ async function getLoader(): Promise<SkillLoaderInstance> {
 
 // OPEN-tier loader (external packages + global roots). Rebuilt whenever the
 // computed dir-set changes — package installs happen out-of-process
-// (bin/orkas-pkg.cjs), so the dir list is recomputed per call; the registry
+// (bin/cogseed-pkg.cjs), so the dir list is recomputed per call; the registry
 // JSON read behind `enabledPackageSkillRoots` is tiny. Per-dir mtime
 // caching inside SkillLoader still avoids re-scanning unchanged dirs.
 let _openLoader: { signature: string; loader: SkillLoaderInstance } | null = null;
@@ -1233,13 +1233,13 @@ export interface BridgeSkillRow {
 }
 
 /**
- * Trusted + external-package listing for the orkas-bridge (external CLI
- * agents calling back into Orkas — plan §D). The CLI gets the trusted tier
+ * Trusted + external-package listing for the cogseed-bridge (external CLI
+ * agents calling back into CogSeed — plan §D). The CLI gets the trusted tier
  * (custom / marketplace) plus enabled external packages — but
  * NEVER global roots (`~/.claude/skills`, `~/.codex/skills`). claude / codex
  * read their own global skill dirs natively, so re-exposing those through the
  * bridge would double every global skill (one native entry + one bridge
- * entry). External packages live under the Orkas data dir, which no CLI
+ * entry). External packages live under the CogSeed data dir, which no CLI
  * scans — they are the bridge's actual value-add. Display-name dedupe
  * matches `getSystemPromptBlock` (trusted shadows external). The disabled-id
  * filter is the caller's job (bridge.ts passes the component-enabled set).
@@ -1248,7 +1248,7 @@ export async function listSkillsForBridge(uid: string): Promise<BridgeSkillRow[]
   const loader = await getLoader();
   const lang = descriptionLang(getLanguage());
   const pick = await getPickDescription();
-  // Agent-private skills never reach external CLI agents — the orkas-bridge
+  // Agent-private skills never reach external CLI agents — the cogseed-bridge
   // serves the CLI actor, never the in-process owning agent.
   // Trust-withheld before anything else: the CLI agent is as much a consumer of
   // this listing as the in-process prompt is, so a tampered skill must not

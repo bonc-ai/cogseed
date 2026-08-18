@@ -5,7 +5,7 @@
  * 均为 asset_id + version，绝不复制资产正文。能力包由已确认资产与空间绑定
  * 组装；目标 Agent 加载后先输出任务理解 + Action Plan（FR-REU-02）。
  *
- * 存储：`<uid>/cloud/mate_agent/capability-packs/<pack_id>.json`（可同步，
+ * 存储：`<uid>/cloud/cogseed/capability-packs/<pack_id>.json`（可同步，
  * 复用证明需跨入口追溯；内容仅为引用，无敏感副本）。
  */
 
@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../../logger';
 import { readJson, writeJson, nowIso, safeId } from '../../storage';
-import { mateAgentCapabilityPacksDir } from '../../paths';
+import { cogseedAgentCapabilityPacksDir } from '../../paths';
 import { maskId } from '../../util/log-redact';
 
 const log = createLogger('capability-pack');
@@ -135,7 +135,7 @@ export async function buildCapabilityPack(
 }
 
 export function capabilityPackPath(uid: string, packId: string): string {
-  return path.join(mateAgentCapabilityPacksDir(uid), `${packId}.json`);
+  return path.join(cogseedAgentCapabilityPacksDir(uid), `${packId}.json`);
 }
 
 export async function readCapabilityPack(uid: string, packId: string): Promise<MinimumCapabilityPack | null> {

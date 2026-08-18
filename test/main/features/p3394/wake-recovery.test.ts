@@ -36,15 +36,15 @@ const cid = "wake-recovery-cid";
 const agentId = "agent-recovery";
 
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "orkas-wake-recovery-"));
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "cogseed-wake-recovery-"));
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   control.failWakeWrites = 0;
   vi.resetModules();
 });
 
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
-  delete process.env.ORKAS_WORKSPACE_ROOT;
+  delete process.env.COGSEED_WORKSPACE_ROOT;
   vi.resetModules();
 });
 

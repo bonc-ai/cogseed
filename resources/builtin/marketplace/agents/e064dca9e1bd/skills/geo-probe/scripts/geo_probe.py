@@ -1,6 +1,6 @@
 """geo-probe — GEO visibility probe, split into deterministic halves.
 
-A Python skill cannot reach Orkas's in-process provider_catalog, so the AGENT
+A Python skill cannot reach CogSeed's in-process provider_catalog, so the AGENT
 supplies the model answers (it calls its own model / web_search per query).
 This skill does the two deterministic halves:
 
@@ -78,7 +78,7 @@ def _topic_terms(page: dict, limit: int = 3) -> list[str]:
 
 def context_terms(crawl_obj: dict, brand: str, domain: str, limit: int = 10) -> list[str]:
     """Distinctive page-vocabulary terms used to disambiguate the brand from a
-    homonym (e.g. 'Orkas' the AI product vs 'orcas' the whale): a brand-token
+    homonym (e.g. 'CogSeed' the AI product vs 'orcas' the whale): a brand-token
     hit only counts as a real product mention if the answer also carries one of
     these terms (or cites the domain)."""
     page, _ = _data_page(crawl_obj)
@@ -144,9 +144,9 @@ def score_answers(payload: dict) -> dict:
         if mode == "retrieval":
             retrieval_n += 1
         # Word-boundary match only: a raw `domain in text` substring test counted
-        # the domain as cited when it merely prefixed a longer host (orkas.ai is a
-        # substring of orkas.airlines.com), inflating citation_rate. _mentions already
-        # accepts orkas.ai/path, (orkas.ai) and trailing-dot forms.
+        # the domain as cited when it merely prefixed a longer host (cogseed.ai is a
+        # substring of cogseed.airlines.com), inflating citation_rate. _mentions already
+        # accepts cogseed.ai/path, (cogseed.ai) and trailing-dot forms.
         m_dom = _mentions(text, domain)
         m_brand = _mentions(text, brand)
         corroborated = any(_mentions(text, t) for t in context) if context else None
@@ -155,7 +155,7 @@ def score_answers(payload: dict) -> dict:
             cited_n += 1
         elif m_brand:
             # With context terms, a brand token needs corroboration or it is a
-            # likely homonym (e.g. "Orkas" -> orcas/whales) -> ambiguous, excluded.
+            # likely homonym (e.g. "CogSeed" -> orcas/whales) -> ambiguous, excluded.
             if (not context) or corroborated:
                 kind = "mentioned"
                 mentioned_n += 1

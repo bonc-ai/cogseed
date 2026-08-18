@@ -29,20 +29,20 @@ GOOD_HTML = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Orkas — local-first AI agents</title>
+  <title>CogSeed — local-first AI agents</title>
   <meta name="description" content="Direct a team of AI agents by chat.">
   <meta name="robots" content="index,follow">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta property="og:title" content="Orkas">
+  <meta property="og:title" content="CogSeed">
   <meta property="og:image" content="/res/og.jpg">
-  <link rel="canonical" href="https://orkas.ai/">
+  <link rel="canonical" href="https://cogseed.ai/">
   <link rel="alternate" hreflang="zh" href="/zh/">
-  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Organization","name":"Orkas"}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Organization","name":"CogSeed"}</script>
   <script>var scriptsentinel = "delveintothis";</script>
   <style>.x{content:"stylesentinel"}</style>
 </head>
 <body>
-  <h1>Orkas is an open-source local-first desktop AI client</h1>
+  <h1>CogSeed is an open-source local-first desktop AI client</h1>
   <h2>Sub heading here</h2>
   <p>This canonical link looks like rel=canonical but is body text.</p>
   <img src="/a.png" alt="described">
@@ -50,7 +50,7 @@ GOOD_HTML = """<!doctype html>
   <a href="/about">about</a>
   <a href="https://other.example/x">external</a>
   <a href="#frag">frag</a>
-  <a href="mailto:hi@orkas.ai">mail</a>
+  <a href="mailto:hi@cogseed.ai">mail</a>
 </body>
 </html>"""
 
@@ -62,32 +62,32 @@ NOINDEX_HTML = """<html><head>
 
 class ExtractTest(unittest.TestCase):
     def setUp(self):
-        self.f = extract_fields(GOOD_HTML, "https://orkas.ai/", status=200)
+        self.f = extract_fields(GOOD_HTML, "https://cogseed.ai/", status=200)
 
     def test_core_meta_fields(self):
-        self.assertEqual(self.f["title"], "Orkas — local-first AI agents")
+        self.assertEqual(self.f["title"], "CogSeed — local-first AI agents")
         self.assertEqual(self.f["meta_description"], "Direct a team of AI agents by chat.")
         self.assertEqual(self.f["lang"], "en")
         self.assertEqual(self.f["charset"], "utf-8")
         self.assertEqual(self.f["viewport"], "width=device-width, initial-scale=1")
-        self.assertEqual(self.f["og_title"], "Orkas")
+        self.assertEqual(self.f["og_title"], "CogSeed")
 
     def test_canonical_only_from_link_not_body_text(self):
         # Matching: the real <link rel="canonical"> is resolved absolute.
-        self.assertEqual(self.f["canonical"], "https://orkas.ai/")
+        self.assertEqual(self.f["canonical"], "https://cogseed.ai/")
         # Look-alike: the <p> mentioning "canonical" must not change it.
 
     def test_og_image_resolved_absolute(self):
         self.assertEqual(self.f["og_image"], "/res/og.jpg")  # raw content kept; resolution is audit-side
 
     def test_headings(self):
-        self.assertEqual(self.f["h1s"], ["Orkas is an open-source local-first desktop AI client"])
+        self.assertEqual(self.f["h1s"], ["CogSeed is an open-source local-first desktop AI client"])
         self.assertEqual(self.f["h1_count"], 1)
         self.assertEqual(self.f["h2_count"], 1)
         self.assertEqual(self.f["heading_order"], [1, 2])
 
     def test_links_split_by_origin(self):
-        self.assertIn("https://orkas.ai/about", self.f["internal_links"])
+        self.assertIn("https://cogseed.ai/about", self.f["internal_links"])
         self.assertIn("https://other.example/x", self.f["external_links"])
         # Look-alikes excluded: #frag and mailto: are neither internal nor external.
         self.assertEqual(self.f["external_link_count"], 1)
@@ -103,7 +103,7 @@ class ExtractTest(unittest.TestCase):
 
     def test_hreflang(self):
         self.assertEqual(self.f["hreflang_tags"],
-                         [{"hreflang": "zh", "href": "https://orkas.ai/zh/"}])
+                         [{"hreflang": "zh", "href": "https://cogseed.ai/zh/"}])
 
     def test_indexable_when_index_follow(self):
         # Look-alike guard: robots "index,follow" must NOT be read as noindex.
@@ -123,25 +123,25 @@ class ExtractTest(unittest.TestCase):
 
 class NoindexTest(unittest.TestCase):
     def test_noindex_detected_from_meta_only(self):
-        f = extract_fields(NOINDEX_HTML, "https://orkas.ai/hidden", status=200)
+        f = extract_fields(NOINDEX_HTML, "https://cogseed.ai/hidden", status=200)
         self.assertTrue(f["noindex"])
         self.assertFalse(f["is_indexable"])
 
     def test_404_not_indexable_even_without_noindex(self):
-        f = extract_fields(GOOD_HTML, "https://orkas.ai/", status=404)
+        f = extract_fields(GOOD_HTML, "https://cogseed.ai/", status=404)
         self.assertFalse(f["is_indexable"])
 
 
 class MalformedTest(unittest.TestCase):
     def test_unclosed_tags_do_not_crash(self):
         bad = "<html><head><title>x<body><h1>y<p>z<img src=q><a href=/p>l"
-        f = extract_fields(bad, "https://orkas.ai/")
+        f = extract_fields(bad, "https://cogseed.ai/")
         self.assertIsInstance(f["title"], str)
-        self.assertIn("https://orkas.ai/p", f["internal_links"])
+        self.assertIn("https://cogseed.ai/p", f["internal_links"])
 
     def test_invalid_jsonld_skipped(self):
         html = '<html><head><script type="application/ld+json">{not valid json}</script></head><body></body></html>'
-        f = extract_fields(html, "https://orkas.ai/")
+        f = extract_fields(html, "https://cogseed.ai/")
         self.assertFalse(f["has_structured_data"])
         self.assertEqual(f["structured_data_types"], [])
 
@@ -153,11 +153,11 @@ class FileModeTest(unittest.TestCase):
         p = os.path.join(d, "page.html")
         with open(p, "w", encoding="utf-8") as fh:
             fh.write(GOOD_HTML)
-        out = crawl_file(p, base_url="https://orkas.ai/")
+        out = crawl_file(p, base_url="https://cogseed.ai/")
         page = out["pages"][0]
         self.assertEqual(page["source"], "file")
-        self.assertEqual(page["title"], "Orkas — local-first AI agents")
-        self.assertEqual(page["canonical"], "https://orkas.ai/")
+        self.assertEqual(page["title"], "CogSeed — local-first AI agents")
+        self.assertEqual(page["canonical"], "https://cogseed.ai/")
         self.assertEqual(out["site"]["source"], "file")
 
 
@@ -209,7 +209,7 @@ class ProxyTargetSsrfTest(unittest.TestCase):
 
     def test_allows_fakeip(self):
         self._resolves_to(["198.18.0.34"])
-        assert_proxy_target_safe("orkas.ai", 443)  # must not raise
+        assert_proxy_target_safe("cogseed.ai", 443)  # must not raise
 
     def test_allows_public(self):
         self._resolves_to(["8.8.8.8"])
@@ -320,7 +320,7 @@ class RedirectLimitTest(unittest.TestCase):
                 "final_url": url,
                 "status": 301,
                 "headers": {},
-                "location": "https://orkas.ai/next",
+                "location": "https://cogseed.ai/next",
                 "html": "",
                 "truncated": False,
                 "content_type": "",
@@ -328,7 +328,7 @@ class RedirectLimitTest(unittest.TestCase):
             }
         crawl._fetch_once = always_redirect
         with self.assertRaises(URLSafetyError) as ctx:
-            fetch("https://orkas.ai/", max_redirects=2)
+            fetch("https://cogseed.ai/", max_redirects=2)
         self.assertIn("too many redirects", str(ctx.exception))
 
 

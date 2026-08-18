@@ -1,7 +1,7 @@
 ---
 name: package-installer
-description_zh: 安装用户给出的 GitHub 仓库或本地 git 目录作为 Orkas 外部包，并接入其中的技能或命令行工具；适合"安装这个 GitHub 项目""把 /path/to/repo 接入 Orkas 外部包""更新或移除已安装的外部包"；触发词：外部包、安装包、GitHub 项目、本地 repo、更新包、移除包、package installer
-description_en: Install a user-supplied GitHub repository or local git directory as an Orkas external package and wire up its skills or CLI tools; For: "install this GitHub project", "connect /path/to/repo as an Orkas external package", "update or remove an installed external package"; Triggers: external package, install package, GitHub project, local repo, update package, remove package, package installer
+description_zh: 安装用户给出的 GitHub 仓库或本地 git 目录作为 CogSeed 外部包，并接入其中的技能或命令行工具；适合"安装这个 GitHub 项目""把 /path/to/repo 接入 CogSeed 外部包""更新或移除已安装的外部包"；触发词：外部包、安装包、GitHub 项目、本地 repo、更新包、移除包、package installer
+description_en: Install a user-supplied GitHub repository or local git directory as an CogSeed external package and wire up its skills or CLI tools; For: "install this GitHub project", "connect /path/to/repo as an CogSeed external package", "update or remove an installed external package"; Triggers: external package, install package, GitHub project, local repo, update package, remove package, package installer
 category: "general"
 ---
 
@@ -12,11 +12,11 @@ directory the user provides) as external packages. The project is cloned
 verbatim into the per-user packages directory — never edit, normalize, or
 reorganize its files.
 
-Run the Orkas CLI command below through the command execution tool; Orkas
+Run the CogSeed CLI command below through the command execution tool; CogSeed
 handles this runner form directly on Windows:
 
 ```text
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/orkas-pkg.cjs" <command> [args]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/cogseed-pkg.cjs" <command> [args]
 ```
 
 Commands: `install <git-url> [--name <name>] [--consent-deps]`,
@@ -59,7 +59,7 @@ a successful CLI install — the user already approved installing it. Skip for
 2. Write the skill via stdin (the file lands outside the package tree):
 
    ```bash
-   "$ORKAS_NODE" "$ORKAS_PC_DIR/bin/orkas-pkg.cjs" skill-write <name> <<'SKILL'
+   "$COGSEED_NODE" "$COGSEED_PC_DIR/bin/cogseed-pkg.cjs" skill-write <name> <<'SKILL'
    ---
    name: <human name>
    description: <one line: what it does + when to use it>

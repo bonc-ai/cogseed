@@ -5,8 +5,8 @@
 ## 输出位置
 
 ```
-候选池：$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/candidates.md
-阻断项：$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/blocked_items.md
+候选池：$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/local/ontology_candidates/candidates.md
+阻断项：$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/local/ontology_candidates/blocked_items.md
 ```
 
 两个环境变量在执行环境里已经存在，直接用；不要写死某个具体路径。目录不存在时先创建。

@@ -17,7 +17,7 @@ const SESSION = 'mruntime-tools';
 let tmpRoot = '';
 
 function makeRoot(): string {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-runtime-tools-'));
+  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-tools-'));
   return tmpRoot;
 }
 
@@ -77,7 +77,7 @@ describe('CogSeed Runtime tool runtime MVP', () => {
       'read_mate_kb',
       'office_read', 'office_create', 'office_edit', 'office_render',
       'browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot',
-      'mate_delegate', 'mate_tasks', 'mate_cancel', 'mate_retry_step', 'mate_skip_step', 'mate_resume_workflow', 'mate_workflow',
+      'cogseed_delegate', 'cogseed_tasks', 'cogseed_cancel', 'cogseed_retry_step', 'cogseed_skip_step', 'cogseed_resume_workflow', 'cogseed_workflow',
       'messaging_list_targets', 'messaging_send', 'p3394_send',
     ]);
     expect(JSON.stringify(getRuntimeToolCatalog())).not.toMatch(/group|chat|memory/i);
@@ -155,7 +155,7 @@ describe('CogSeed Runtime tool runtime MVP', () => {
 
   it('rejects symlink escapes through the path sandbox', async () => {
     const root = makeRoot();
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-runtime-outside-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-outside-'));
     const secret = path.join(outside, 'secret.txt');
     const link = path.join(root, 'linked-secret.txt');
     fs.writeFileSync(secret, 'SECRET');
@@ -219,7 +219,7 @@ describe('CogSeed Runtime tool runtime MVP', () => {
 
   it('rejects write_file symlink escapes and outside paths', async () => {
     const root = makeRoot();
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-runtime-write-outside-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-write-outside-'));
     const secret = path.join(outside, 'secret.txt');
     const link = path.join(root, 'linked-secret.txt');
     fs.writeFileSync(secret, 'ORIGINAL');
@@ -259,7 +259,7 @@ describe('CogSeed Runtime tool runtime MVP', () => {
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: runtime-echo\ndescription: test\n---\n');
     fs.writeFileSync(
       path.join(skillDir, 'scripts', 'echo.js'),
-      'module.exports = async ({ args }) => ({ ok: true, uid: process.env.ORKAS_UID, args });\n',
+      'module.exports = async ({ args }) => ({ ok: true, uid: process.env.COGSEED_UID, args });\n',
     );
 
     const denied = await runner(root).run('run_skill', { skill_id: 'runtime-echo', script: 'echo', args: ['a'] });
@@ -315,7 +315,7 @@ describe('CogSeed Runtime tool runtime MVP', () => {
     expect(read.isError).toBeFalsy();
     expect(read.content).toContain('<persisted-output');
     expect(read.persistedOutput?.ref).toMatch(/^read_file\.[a-f0-9]{64}$/);
-    expect(read.persistedOutput?.path.startsWith(paths.mateRuntimeSessionToolResultsDir(UID, SESSION))).toBe(true);
+    expect(read.persistedOutput?.path.startsWith(paths.cogseedRuntimeSessionToolResultsDir(UID, SESSION))).toBe(true);
     expect(fs.existsSync(read.persistedOutput!.path)).toBe(true);
   });
 });

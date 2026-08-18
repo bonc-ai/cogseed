@@ -28,7 +28,7 @@ Heuristic content/GEO-readiness analysis of the visible text from `seo-crawl`. N
 ## How to call
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" seo-content content -- --input <crawl.json> [--out <content.json>]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" seo-content content -- --input <crawl.json> [--out <content.json>]
 ```
 
 `--input` seo-crawl JSON (omit/`-` for stdin); `--out` optional file.

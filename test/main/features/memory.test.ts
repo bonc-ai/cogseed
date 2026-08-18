@@ -7,14 +7,14 @@ let tmpDir: string;
 let prevWs: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-memory-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-memory-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -72,7 +72,7 @@ describe('memory › loadEntries', () => {
   it('隔离损坏的机器 metadata，不把隐藏头注入模型上下文', async () => {
     const mem = await loadMemory();
     const f = path.join(tmpDir, 'corrupt.md');
-    fs.writeFileSync(f, '<!-- mate-agent-memory:v1 {broken} -->\nshould not load');
+    fs.writeFileSync(f, '<!-- cogseed-agent-memory:v1 {broken} -->\nshould not load');
 
     expect(mem.loadEntries(f)).toEqual([]);
   });
@@ -81,8 +81,8 @@ describe('memory › loadEntries', () => {
     const mem = await loadMemory();
     const unknownVersion = path.join(tmpDir, 'unknown-version.md');
     const embeddedMarker = path.join(tmpDir, 'embedded-marker.md');
-    fs.writeFileSync(unknownVersion, '<!-- mate-agent-memory:v2 {} -->\nshould not load');
-    fs.writeFileSync(embeddedMarker, 'ordinary text\n<!-- mate-agent-memory:future {} -->');
+    fs.writeFileSync(unknownVersion, '<!-- cogseed-agent-memory:v2 {} -->\nshould not load');
+    fs.writeFileSync(embeddedMarker, 'ordinary text\n<!-- cogseed-agent-memory:future {} -->');
 
     expect(mem.loadEntries(unknownVersion)).toEqual([]);
     expect(mem.loadEntries(embeddedMarker)).toEqual([]);
@@ -162,9 +162,9 @@ describe('memory › saveEntries', () => {
     const mem = await loadMemory();
     const f = path.join(tmpDir, 'reserved.md');
     expect(() => mem.saveEntries(f, [{ text: 'A§B' }], 1000)).toThrow('reserved_separator');
-    expect(() => mem.saveEntries(f, [{ text: '<!-- mate-agent-memory:v1 {} -->' }], 1000))
+    expect(() => mem.saveEntries(f, [{ text: '<!-- cogseed-agent-memory:v1 {} -->' }], 1000))
       .toThrow('reserved_metadata_marker');
-    expect(() => mem.saveEntries(f, [{ text: '<!-- mate-agent-memory:v2 {} -->' }], 1000))
+    expect(() => mem.saveEntries(f, [{ text: '<!-- cogseed-agent-memory:v2 {} -->' }], 1000))
       .toThrow('reserved_metadata_marker');
   });
 });
@@ -251,9 +251,9 @@ describe('memory › addEntry', () => {
   it('所有入口都拒绝保留分隔符与 metadata marker', async () => {
     const mem = await loadMemory();
     expect(mem.addEntry('u1', 'memory', 'A§B')).toMatchObject({ ok: false, error: 'reserved_separator' });
-    expect(mem.addEntry('u1', { agent: 'agent-1' }, '<!-- mate-agent-memory:v1 x'))
+    expect(mem.addEntry('u1', { agent: 'agent-1' }, '<!-- cogseed-agent-memory:v1 x'))
       .toMatchObject({ ok: false, error: 'reserved_metadata_marker' });
-    expect(mem.addEntry('u1', 'memory', '<!-- mate-agent-memory:future x'))
+    expect(mem.addEntry('u1', 'memory', '<!-- cogseed-agent-memory:future x'))
       .toMatchObject({ ok: false, error: 'reserved_metadata_marker' });
     mem.addEntry('u1', { agent: 'agent-1' }, 'safe');
     expect(mem.replaceAgentEntry('u1', 'agent-1', 'safe', 'A§B'))
@@ -864,7 +864,7 @@ describe('memory › role-template tags survive edits', () => {
   it('A-1: hand-edited entry (sha mismatch) degrades to readable legacy instead of being silently deleted', async () => {
     const mem = await loadMemory();
     await mem.addRoleTemplateMemoryEntry('u1', 'user', 'student', '喜欢大白话解释');
-    const file = path.join(process.env.ORKAS_WORKSPACE_ROOT!, 'u1', 'cloud', 'memory', 'USER.md');
+    const file = path.join(process.env.COGSEED_WORKSPACE_ROOT!, 'u1', 'cloud', 'memory', 'USER.md');
     let raw = fs.readFileSync(file, 'utf8');
     raw = raw.replace('喜欢大白话解释', '喜欢大白话解释（改）'); // 模拟用户手改
     fs.writeFileSync(file, raw);

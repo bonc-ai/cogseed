@@ -52,7 +52,7 @@ describe('Office built-in tools', () => {
   let onFileWritten: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-office-tools-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-office-tools-'));
     h.workspace = path.join(tmpDir, 'workspace with spaces');
     h.attachments = path.join(tmpDir, 'attachments');
     fs.mkdirSync(h.workspace, { recursive: true });

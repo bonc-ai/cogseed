@@ -8,14 +8,14 @@ let previous: string | undefined;
 
 beforeEach(() => {
   vi.resetModules();
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-tree-'));
-  previous = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmp;
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-tree-'));
+  previous = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmp;
 });
 
 afterEach(() => {
-  if (previous === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previous;
+  if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previous;
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 

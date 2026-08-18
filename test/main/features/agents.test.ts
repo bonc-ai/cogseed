@@ -31,9 +31,9 @@ const TEST_UID = 'u1';
 const CANONICAL_EXPENSE_AGENT_ID = 'c045605cb916';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-agents-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-agents-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);
@@ -44,7 +44,7 @@ afterEach(async () => {
     const reports = await import('../../../src/main/quality/report');
     await reports.drainReportWrites();
   } finally {
-    process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+    process.env.COGSEED_WORKSPACE_ROOT = prevWs;
     streamImpl.current = null;
     fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
@@ -343,7 +343,7 @@ describe('agents › normalizeAgent', () => {
       category: '',
       interface_contract: {
         version: 1,
-        role: 'orkas_core',
+        role: 'cogseed_core',
         runtime: { kind: 'in_process' },
         io: { input: 'task_message', output: 'final_message' },
         governance: {
@@ -543,12 +543,12 @@ describe('agents › normalizeAgent', () => {
     });
   });
 
-  it('derives an Orkas Core interface contract for legacy in-process agents', async () => {
+  it('derives an CogSeed Core interface contract for legacy in-process agents', async () => {
     const a = await loadAgents();
     const norm = a.normalizeAgent({ agent_id: 'x', name: 'N' }, 'custom');
     expect(norm?.interface_contract).toEqual({
       version: 1,
-      role: 'orkas_core',
+      role: 'cogseed_core',
       runtime: { kind: 'in_process' },
       io: { input: 'task_message', output: 'final_message' },
       governance: {
@@ -590,7 +590,7 @@ describe('agents › normalizeAgent', () => {
       runtime: { kind: 'cli', cli: 'codex' },
       interface_contract: {
         version: 1,
-        role: 'orkas_core',
+        role: 'cogseed_core',
         runtime: { kind: 'in_process' },
         governance: { uses_mate_skills: true },
       },
@@ -1582,7 +1582,7 @@ describe('agents › updateCustomAgent', () => {
       runtime: { kind: 'cli', cli: 'claude' },
       interface_contract: {
         version: 1,
-        role: 'orkas_core',
+        role: 'cogseed_core',
         runtime: { kind: 'in_process' },
       },
     } as any);

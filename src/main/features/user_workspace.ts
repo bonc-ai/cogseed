@@ -221,7 +221,7 @@ export function getWorkspacePath(userId: string, projectId?: string): string {
 }
 
 /**
- * Native file pickers should always be seeded with a safe Orkas-owned default
+ * Native file pickers should always be seeded with a safe CogSeed-owned default
  * path. The historical marker file is ignored now; keeping the function name
  * avoids churn in IPC call sites while preventing macOS from restoring a
  * process-wide last-used Photos/Desktop/Library location.

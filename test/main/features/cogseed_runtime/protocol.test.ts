@@ -5,7 +5,7 @@ import * as path from 'node:path';
 
 import * as paths from '../../../../src/main/paths';
 import {
-  MATE_AGENT_RUNTIME_PROTOCOL_VERSION,
+  COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
   buildRuntimePrompt,
   normalizeRuntimeRunRequest,
 } from '../../../../src/main/features/cogseed_runtime/protocol';
@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 function tmpRoot(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-runtime-protocol-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-protocol-'));
   cleanup.push(dir);
   return dir;
 }
@@ -40,7 +40,7 @@ describe('CogSeed Runtime protocol normalization', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.error);
-    expect(result.request.protocol_version).toBe(MATE_AGENT_RUNTIME_PROTOCOL_VERSION);
+    expect(result.request.protocol_version).toBe(COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION);
     expect(result.request.request_id).toMatch(/^req-/);
     expect(result.request.runtime_session_id).toMatch(/^mruntime-/);
     expect(result.request.execution_kind).toBe('cogseed-native');
@@ -178,7 +178,7 @@ describe('CogSeed Runtime protocol normalization', () => {
 
   it('rejects local CogSeed Runtime session transcript paths even when the caller passes a broad root', () => {
     const uid = 'runtime-protocol-local-runtime-transcript';
-    const runtimeSessionFile = paths.mateRuntimeSessionFile(uid, 'mruntime-secret');
+    const runtimeSessionFile = paths.cogseedRuntimeSessionFile(uid, 'mruntime-secret');
     fs.mkdirSync(path.dirname(runtimeSessionFile), { recursive: true });
     fs.writeFileSync(runtimeSessionFile, '{"role":"assistant","content":"runtime secret"}\n');
     cleanup.push(paths.userRoot(uid));

@@ -10,8 +10,8 @@ export function p3394EpochStreamKey(senderActorId: string, recipientSessionId: s
 }
 
 function workspaceRoot(): string {
-  const root = process.env.ORKAS_WORKSPACE_ROOT || '';
-  if (!root) throw new Error('ORKAS_WORKSPACE_ROOT not set');
+  const root = process.env.COGSEED_WORKSPACE_ROOT || '';
+  if (!root) throw new Error('COGSEED_WORKSPACE_ROOT not set');
   return root;
 }
 function epochFile(uid: string): string {

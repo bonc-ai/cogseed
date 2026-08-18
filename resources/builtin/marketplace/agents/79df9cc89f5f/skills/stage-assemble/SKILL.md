@@ -14,9 +14,9 @@ How to execute a validated, currently authorized `project/plan.json` into one fi
 ## Script calls used here
 
 ```bash
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op concat --inputs project/parts/a.mp4,project/parts/b.mp4 --output project/render/primary.mp4
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op mix --input project/render/primary.mp4 --audio-segments @project/audio_segments.json --output project/render/mixed.mp4
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op normalize_loudness --input project/render/draft.mp4 --output project/render/video.mp4
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op concat --inputs project/parts/a.mp4,project/parts/b.mp4 --output project/render/primary.mp4
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op mix --input project/render/primary.mp4 --audio-segments @project/audio_segments.json --output project/render/mixed.mp4
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op normalize_loudness --input project/render/draft.mp4 --output project/render/video.mp4
 ```
 
 When this document says `stage-edit edit_video --op ...`, call the matching `bin/run-skill.cjs` command above with the relevant paths. For compose/transcription work, call `video_studio` directly. Do not call deprecated direct tools.
@@ -69,7 +69,7 @@ The plan plus project-scoped production control is the checkpoint. On a re-run, 
 Before showing the draft, run the QA pass and write `project/render_report.json` with these sections:
 
 - **technical_probe** — `stage-edit edit_video --op probe` the draft (real duration / resolution / fps / audio present); confirm it matches the plan's aspect + total.
-- **promise_preservation** — run `"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op promise_check --plan project/plan.json --probe-produced`. At gate D this probes each primary segment's `produced_path` and computes the REAL primary-track footage/generated-video ratio vs. `motion_min_ratio` plus the `source_required` invariant. A `compose_led` plan uses a zero real-motion floor because native composition QA owns its HTML animation contract. Missing/unreadable produced media or a fail means **"slideshow / promise broken" — do not deliver**. Send it back (below). Do not eyeball this; let the numbers decide.
+- **promise_preservation** — run `"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op promise_check --plan project/plan.json --probe-produced`. At gate D this probes each primary segment's `produced_path` and computes the REAL primary-track footage/generated-video ratio vs. `motion_min_ratio` plus the `source_required` invariant. A `compose_led` plan uses a zero real-motion floor because native composition QA owns its HTML animation contract. Missing/unreadable produced media or a fail means **"slideshow / promise broken" — do not deliver**. Send it back (below). Do not eyeball this; let the numbers decide.
 - **visual_spotcheck** — extract ~4 frames across the draft (`stage-edit edit_video --op extract_frame`) and read them for upside-down / garbled-caption / empty / wrong-product frames. Read them yourself if you are multimodal; if you cannot see images, record the spot-check as `unverified` and proceed — do not invent what the frames show.
 - **audio_spotcheck** — the `op="normalize_loudness"` measured loudness numbers + the narration coverage result from step 2 (uncovered tail / silent lead-in).
 - **transcript_comparison** (when there is narration) — optionally transcribe the draft with `video_studio` `op: "speech.transcribe"`, then confirm the spoken words match the planned narration lines.

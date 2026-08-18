@@ -37,7 +37,7 @@ const REDACTED_TRANSCRIPT_PATH = '[redacted-transcript-path]';
 const REDACTED_ABSOLUTE_PATH = '[redacted-absolute-path]';
 
 const TRANSCRIPT_PATH_PATTERN =
-  /(?:(?:[A-Za-z]:[\\/]|\/)[^\s`"'<>]*?)?(?:(?:cloud\/(?:projects\/[^\s`"'<>/]+\/)?(?:chats|sessions)\/[^\s`"'<>]*?\.jsonl)|(?:local\/(?:mate_runtime\/)?sessions\/[^\s`"'<>]*?\.jsonl))/g;
+  /(?:(?:[A-Za-z]:[\\/]|\/)[^\s`"'<>]*?)?(?:(?:cloud\/(?:projects\/[^\s`"'<>/]+\/)?(?:chats|sessions)\/[^\s`"'<>]*?\.jsonl)|(?:local\/(?:cogseed_runtime\/)?sessions\/[^\s`"'<>]*?\.jsonl))/g;
 const UNIX_FILESYSTEM_ROOTS = [
   'Users',
   'home',

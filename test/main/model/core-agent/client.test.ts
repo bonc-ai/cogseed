@@ -30,9 +30,9 @@ let tmpDir: string;
 let prevWs: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-core-client-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-core-client-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   loggerMocks.debug.mockClear();
   loggerMocks.info.mockClear();
@@ -41,8 +41,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -52,10 +52,10 @@ describe('core-agent client skill sandbox env', () => {
 
     expect(client.buildSkillSandboxEnv()).toMatchObject({
       ELECTRON_RUN_AS_NODE: '1',
-      ORKAS_PC_DIR: process.cwd(),
-      ORKAS_WORKSPACE_ROOT: path.resolve(tmpDir),
-      ORKAS_VENV_ROOT: path.join(path.resolve(tmpDir), 'venv'),
-      ORKAS_PYTHON_VENV_ROOT: path.join(path.resolve(tmpDir), 'venv', 'python'),
+      COGSEED_PC_DIR: process.cwd(),
+      COGSEED_WORKSPACE_ROOT: path.resolve(tmpDir),
+      COGSEED_VENV_ROOT: path.join(path.resolve(tmpDir), 'venv'),
+      COGSEED_PYTHON_VENV_ROOT: path.join(path.resolve(tmpDir), 'venv', 'python'),
       UV_CACHE_DIR: path.join(path.resolve(tmpDir), 'venv', 'python', 'cache', 'uv'),
       PIP_CACHE_DIR: path.join(path.resolve(tmpDir), 'venv', 'python', 'cache', 'pip'),
     });
@@ -65,10 +65,10 @@ describe('core-agent client skill sandbox env', () => {
     const client = await import('../../../../src/main/model/core-agent/client');
 
     expect(client.buildSkillSandboxEnv('u1', 'agent-a')).toMatchObject({
-      ORKAS_UID: 'u1',
-      ORKAS_AGENT_ID: 'agent-a',
+      COGSEED_UID: 'u1',
+      COGSEED_AGENT_ID: 'agent-a',
     });
-    expect(client.buildSkillSandboxEnv('u1', '../agent-a')).not.toHaveProperty('ORKAS_AGENT_ID');
+    expect(client.buildSkillSandboxEnv('u1', '../agent-a')).not.toHaveProperty('COGSEED_AGENT_ID');
   });
 
   it('stops waiting for a wedged event stream when the abort signal fires', async () => {

@@ -80,7 +80,7 @@ describe('P3394UnixSocketChannel real transport', () => {
       });
       setTimeout(() => process.exit(2), 4000);
     `;
-    const child = spawn(process.env.ORKAS_TEST_NODE || process.execPath, ['--input-type=commonjs', '--eval', childScript], {
+    const child = spawn(process.env.COGSEED_TEST_NODE || process.execPath, ['--input-type=commonjs', '--eval', childScript], {
       env: { ...process.env, P3394_REQUEST_PATH: requestPath, P3394_REPLY_PATH: replyPath },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

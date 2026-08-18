@@ -2,12 +2,12 @@
  * MCP-spec OAuth (Dynamic Client Registration) client.
  *
  * For providers that host their own OAuth authorization server per the MCP authorization spec
- * (Notion, Atlassian, Cloudflare suite, …). Orkas has no pre-registered OAuth App at the
+ * (Notion, Atlassian, Cloudflare suite, …). CogSeed has no pre-registered OAuth App at the
  * provider — PC self-registers at first connect via DCR (RFC 7591) and drives the initial
  * OAuth handshake from the PC side.
  *
  * The Server-bridge in `oauth.ts` handles a different class of providers (GitHub Copilot MCP
- * today) where Orkas registered an OAuth App and Server holds the secret. The two flows live
+ * today) where CogSeed registered an OAuth App and Server holds the secret. The two flows live
  * side-by-side and `manager.ts::connectViaOAuth` dispatches by `catalog.auth_mode`.
  *
  * Server serves `/api/connectors/oauth/dcr-callback` as a stable HTTPS redirect_uri (DCR
@@ -37,7 +37,7 @@ const log = createLogger('connectors:oauth-dcr');
 const FLOW_TIMEOUT_MS = 10 * 60 * 1000;
 const DCR_HTTP_TIMEOUT_MS = 60_000;
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
-const CLIENT_NAME = 'Orkas';
+const CLIENT_NAME = 'CogSeed';
 
 interface PendingDcrFlow {
   catalogId: string;
@@ -333,7 +333,7 @@ export async function startMcpDcrOAuth(
   });
 }
 
-/** Called by the protocol handler when `orkas://connectors/oauth/dcr-callback?...` arrives. */
+/** Called by the protocol handler when `cogseed://connectors/oauth/dcr-callback?...` arrives. */
 export async function handleDcrCallbackUrl(rawUrl: string): Promise<void> {
   log.info('DCR callback url received', { path: rawUrl.split('?')[0] });
   if (!_pending) {

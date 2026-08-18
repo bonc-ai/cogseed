@@ -15,7 +15,7 @@
  * accepts the immediately previous per-instance `crypto-vault` `secrets_enc` format and upgrades
  * it in place.
  *
- * **Secret owner = Orkas-account OAuth user_id (when logged in), else local uid**. Same OAuth
+ * **Secret owner = CogSeed-account OAuth user_id (when logged in), else local uid**. Same OAuth
  * user_id on every device the user signs into → cross-device decryption after cloud sync.
  * Open-source / not-logged-in falls back to local uid (file then sits in cloud/config/ but the
  * sync engine is inactive without an account, so it stays machine-private de facto). See

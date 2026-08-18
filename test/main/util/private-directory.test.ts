@@ -9,8 +9,8 @@ let trustedRoot = '';
 let outsideRoot = '';
 
 beforeEach(() => {
-  trustedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-private-root-'));
-  outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-private-outside-'));
+  trustedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-private-root-'));
+  outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-private-outside-'));
 });
 
 afterEach(() => {

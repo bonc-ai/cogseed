@@ -5,7 +5,7 @@ import * as path from 'node:path';
 
 // Read-side contract tests for the CLI-package companion-skill domain
 // (`<uid>/local/package_skills/`). Companion files are written out-of-process
-// by bin/orkas-pkg.cjs skill-write; this suite pins the discovery + registry
+// by bin/cogseed-pkg.cjs skill-write; this suite pins the discovery + registry
 // join + env-summary de-dup invariants the open-tier loader depends on.
 
 let tmpDir: string;
@@ -43,14 +43,14 @@ const CLI_PKG = {
 };
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-pkgskills-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-pkgskills-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

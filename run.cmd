@@ -14,15 +14,15 @@ echo [CogSeed] Unknown argument: !ARG! 1>&2
 goto usage_error
 
 :args_done
-if defined ORKAS_RUNTIME_VARIANT if not "%ORKAS_RUNTIME_VARIANT%"=="cogseed" (
-  echo [CogSeed] This worktree is locked to the cogseed runtime; ORKAS_RUNTIME_VARIANT=%ORKAS_RUNTIME_VARIANT% is not allowed. 1>&2
+if defined COGSEED_RUNTIME_VARIANT if not "%COGSEED_RUNTIME_VARIANT%"=="cogseed" (
+  echo [CogSeed] This worktree is locked to the cogseed runtime; COGSEED_RUNTIME_VARIANT=%COGSEED_RUNTIME_VARIANT% is not allowed. 1>&2
   exit /b 2
 )
-if defined ORKAS_WORKSPACE_ROOT (
-  echo [CogSeed] This worktree manages its own cogseed data root; inherited ORKAS_WORKSPACE_ROOT is not allowed. 1>&2
+if defined COGSEED_WORKSPACE_ROOT (
+  echo [CogSeed] This worktree manages its own cogseed data root; inherited COGSEED_WORKSPACE_ROOT is not allowed. 1>&2
   exit /b 2
 )
-set "ORKAS_RUNTIME_VARIANT=cogseed"
+set "COGSEED_RUNTIME_VARIANT=cogseed"
 
 if not exist "%APP_DIR%\package.json" (
   echo [CogSeed] %APP_DIR%\package.json not found; check the project directory layout. 1>&2
@@ -31,12 +31,12 @@ if not exist "%APP_DIR%\package.json" (
 
 echo [CogSeed] Starting source runtime: !VARIANT!
 
-set "ORKAS_BUILD_CHANNEL=dev"
-for /f "delims=" %%G in ('git -C "%APP_DIR%" rev-parse HEAD 2^>nul') do set "ORKAS_BUILD_COMMIT=%%G"
-set "ORKAS_BUILD_DIRTY=0"
-for /f "delims=" %%G in ('git -C "%APP_DIR%" status --porcelain 2^>nul') do set "ORKAS_BUILD_DIRTY=1"
-for /f "delims=" %%G in ('powershell -NoLogo -NoProfile -Command "[DateTime]::UtcNow.ToString('o')"') do set "ORKAS_BUILD_TIME=%%G"
-echo [CogSeed] Build identity: !ORKAS_BUILD_CHANNEL! !ORKAS_BUILD_COMMIT! dirty=!ORKAS_BUILD_DIRTY!
+set "COGSEED_BUILD_CHANNEL=dev"
+for /f "delims=" %%G in ('git -C "%APP_DIR%" rev-parse HEAD 2^>nul') do set "COGSEED_BUILD_COMMIT=%%G"
+set "COGSEED_BUILD_DIRTY=0"
+for /f "delims=" %%G in ('git -C "%APP_DIR%" status --porcelain 2^>nul') do set "COGSEED_BUILD_DIRTY=1"
+for /f "delims=" %%G in ('powershell -NoLogo -NoProfile -Command "[DateTime]::UtcNow.ToString('o')"') do set "COGSEED_BUILD_TIME=%%G"
+echo [CogSeed] Build identity: !COGSEED_BUILD_CHANNEL! !COGSEED_BUILD_COMMIT! dirty=!COGSEED_BUILD_DIRTY!
 
 node --version >nul 2>nul
 if errorlevel 1 (
@@ -62,7 +62,7 @@ call node "%APP_DIR%\scripts\prepare-source-runtime.cjs" --variant=!VARIANT!
 if errorlevel 1 exit /b 1
 
 pushd "%APP_DIR%"
-call npm run start:electron -- --orkas-runtime-variant=!VARIANT!
+call npm run start:electron -- --cogseed-runtime-variant=!VARIANT!
 set "RC=%ERRORLEVEL%"
 popd
 exit /b %RC%

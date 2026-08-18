@@ -10,11 +10,11 @@ describe('marketplace projects catalog', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.resetModules();
-    delete process.env.ORKAS_API_BASE_URL;
+    delete process.env.COGSEED_API_BASE_URL;
   });
 
   it('falls back to bundled projects when the Server catalog is unavailable', async () => {
-    process.env.ORKAS_API_BASE_URL = 'https://marketplace.test/api';
+    process.env.COGSEED_API_BASE_URL = 'https://marketplace.test/api';
     vi.stubGlobal('fetch', vi.fn(async () => new Response('not found', { status: 404 })));
 
     const marketplace = await loadMarketplace();
@@ -27,7 +27,7 @@ describe('marketplace projects catalog', () => {
   });
 
   it('applies category, search, and pagination to the bundled fallback', async () => {
-    process.env.ORKAS_API_BASE_URL = 'https://marketplace.test/api';
+    process.env.COGSEED_API_BASE_URL = 'https://marketplace.test/api';
     vi.stubGlobal('fetch', vi.fn(async () => new Response('not found', { status: 404 })));
 
     const marketplace = await loadMarketplace();
@@ -39,7 +39,7 @@ describe('marketplace projects catalog', () => {
   });
 
   it('uses Server results when the catalog request succeeds', async () => {
-    process.env.ORKAS_API_BASE_URL = 'https://marketplace.test/api';
+    process.env.COGSEED_API_BASE_URL = 'https://marketplace.test/api';
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       code: 0,
       list: [{ id: 'server-project', name: 'Server Project' }],
@@ -58,7 +58,7 @@ describe('marketplace projects catalog', () => {
   });
 
   it('sends If-None-Match and replays the cached list on a 304', async () => {
-    process.env.ORKAS_API_BASE_URL = 'https://marketplace.test/api';
+    process.env.COGSEED_API_BASE_URL = 'https://marketplace.test/api';
     const fetchMock = vi.fn(async (_url: unknown, init: RequestInit) => {
       const headers = (init.headers || {}) as Record<string, string>;
       if (!headers['If-None-Match']) {

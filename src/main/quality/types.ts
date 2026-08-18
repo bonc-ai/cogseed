@@ -44,7 +44,7 @@ export interface ValidationReport {
  *  embedded code-block extraction first, etc.). */
 export type ScanKind =
   | 'skill_md'      // SKILL.md (frontmatter + embedded code blocks)
-  | 'skill_meta'    // Orkas _meta.json sidecar
+  | 'skill_meta'    // CogSeed _meta.json sidecar
   | 'script'        // executable file under scripts/ (.py / .sh / .ts / ...)
   | 'agent_json'    // agent.json spec
   | 'other';        // README / assets — skipped

@@ -6,7 +6,7 @@ import * as path from 'node:path';
 // Same setup shape as turn_buffer.test.ts — WS_ROOT swap + activateUser
 // must run before any expert_signals import (storage caches active uid).
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sig-turn-hooks-'));
-process.env.ORKAS_WORKSPACE_ROOT = TMP;
+process.env.COGSEED_WORKSPACE_ROOT = TMP;
 fs.writeFileSync(path.join(TMP, 'users.json'),
   JSON.stringify({ current_user_id: '99999993', users: [{ user_id: '99999993', created_at: new Date().toISOString() }] }));
 const UID = '99999993';

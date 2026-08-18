@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe('CogSeed Runtime local run store', () => {
-  it('writes metadata and events under local/mate_runtime/runs', async () => {
+  it('writes metadata and events under local/cogseed_runtime/runs', async () => {
     const uid = 'runtime-store-user';
     const runId = 'run_abc123';
 
@@ -34,8 +34,8 @@ describe('CogSeed Runtime local run store', () => {
       text: 'started',
     });
 
-    expect(runtimeRunEventsFile(uid, runId)).toBe(path.join(paths.userLocalRoot(uid), 'mate_runtime', 'runs', runId, 'events.jsonl'));
-    expect(fs.existsSync(path.join(paths.userLocalRoot(uid), 'mate_runtime', 'runs', runId, 'meta.json'))).toBe(true);
+    expect(runtimeRunEventsFile(uid, runId)).toBe(path.join(paths.userLocalRoot(uid), 'cogseed_runtime', 'runs', runId, 'events.jsonl'));
+    expect(fs.existsSync(path.join(paths.userLocalRoot(uid), 'cogseed_runtime', 'runs', runId, 'meta.json'))).toBe(true);
     expect(await readRuntimeRunEvents(uid, runId)).toEqual([
       expect.objectContaining({ type: 'event', request_id: 'req-abc123', status: 'started' }),
     ]);

@@ -20,7 +20,7 @@ describe('local_agents/backends/hermes', () => {
     expect(acpMock.defs[0]).toMatchObject({
       logName: 'local-agents:hermes',
       argv: ['acp'],
-      clientName: 'orkas',
+      clientName: 'cogseed',
       extraEnv: { HERMES_YOLO_MODE: '1' },
     });
   });

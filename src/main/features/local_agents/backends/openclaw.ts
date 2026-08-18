@@ -176,7 +176,7 @@ export function buildOpenclawArgs(opts: Pick<BackendRunOptions, 'model' | 'resum
   //   --message    prompt body (argv, NOT stdin)
   // Optional: --agent <name> selects a pre-registered agent; --timeout
   //   overrides the 600s default. Keep it aligned with the outer watchdog
-  //   so the CLI does not self-timeout before Orkas' long-task cap.
+  //   so the CLI does not self-timeout before CogSeed' long-task cap.
   const args = ['agent', '--local', '--json', '--session-id', sessionId];
   if (opts.model) args.push('--agent', opts.model);
   if (opts.customArgs && opts.customArgs.length) args.push(...opts.customArgs);

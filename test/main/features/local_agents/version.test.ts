@@ -11,7 +11,7 @@ import {
 } from '../../../../src/main/features/local_agents/version';
 
 const isWindows = process.platform === 'win32';
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 function writeVersionCli(tmpDir: string, name: string, output: string, stderr = false): string {
   const binPath = path.join(tmpDir, isWindows ? `${name}.cmd` : name);
@@ -89,7 +89,7 @@ describe('local_agents/version › detectVersion', () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-detect-version-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-detect-version-'));
   });
 
   afterEach(() => {

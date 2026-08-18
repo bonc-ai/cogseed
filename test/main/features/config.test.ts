@@ -12,7 +12,7 @@ vi.mock('electron', () => ({
 }));
 
 // Point WS_ROOT at a fresh tmp dir for each test, BEFORE loading paths /
-// config / i18n. paths.ts reads `ORKAS_WORKSPACE_ROOT` at module load time
+// config / i18n. paths.ts reads `COGSEED_WORKSPACE_ROOT` at module load time
 // and calls `ensureTopLevelLayout()`, so we must set the env + reset modules
 // to pick up a clean dir each time. We also activate a deterministic uid so
 // `readPreferences`/`writePreferences` can resolve `<uid>/cloud/config/`.
@@ -20,8 +20,8 @@ let tmpDir: string;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-config-'));
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-config-'));
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const electron = await import('electron');
   (electron.app.getLocale as unknown as { mockReturnValue: (v: string) => void }).mockReturnValue('');
@@ -31,7 +31,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
-  delete process.env.ORKAS_WORKSPACE_ROOT;
+  delete process.env.COGSEED_WORKSPACE_ROOT;
 });
 
 async function load() {
@@ -166,7 +166,7 @@ describe('features/config › getLanguage', () => {
     i18n.setCurrentLang('zh');
     expect(appConfig.getLanguage()).toBe('en');
     expect(i18n.getCurrentLang()).toBe('en');
-    expect(process.env.ORKAS_ACCEPT_LANGUAGE).toMatch(/^en-US/);
+    expect(process.env.COGSEED_ACCEPT_LANGUAGE).toMatch(/^en-US/);
   });
 
   it('detects system language when no user preference exists', async () => {
@@ -176,7 +176,7 @@ describe('features/config › getLanguage', () => {
 
     expect(appConfig.getLanguage()).toBe('zh');
     expect(i18n.getCurrentLang()).toBe('zh');
-    expect(process.env.ORKAS_ACCEPT_LANGUAGE).toMatch(/^zh-CN/);
+    expect(process.env.COGSEED_ACCEPT_LANGUAGE).toMatch(/^zh-CN/);
   });
 
   it('returns persisted value', async () => {
@@ -204,6 +204,6 @@ describe('features/config › getLanguage', () => {
 
     expect(appConfig.getLanguageForUser('u2')).toBe('ja');
     expect(i18n.getCurrentLang()).toBe('ja');
-    expect(process.env.ORKAS_ACCEPT_LANGUAGE).toMatch(/^ja-JP/);
+    expect(process.env.COGSEED_ACCEPT_LANGUAGE).toMatch(/^ja-JP/);
   });
 });

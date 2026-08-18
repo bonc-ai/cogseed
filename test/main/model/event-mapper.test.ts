@@ -409,7 +409,7 @@ describe('event-mapper › tool_start / tool_end emit a single structured event'
         id: 'c2-new',
         result: marker,
         persistedOutput: {
-          path: '/Users/x/.orkas/data/u1/local/tool-results/u1-conv-cid/bash.0123456789abcdef.txt',
+          path: '/Users/x/.cogseed/data/u1/local/tool-results/u1-conv-cid/bash.0123456789abcdef.txt',
           size: 71234,
           ref: 'bash.0123456789abcdef',
         },
@@ -418,7 +418,7 @@ describe('event-mapper › tool_start / tool_end emit a single structured event'
     ]);
     const endEvent = out.find((e) => e.type === 'event' && e.event?.data?.phase === 'end');
     expect(endEvent.event.data.result_path)
-      .toBe('/Users/x/.orkas/data/u1/local/tool-results/u1-conv-cid/bash.0123456789abcdef.txt');
+      .toBe('/Users/x/.cogseed/data/u1/local/tool-results/u1-conv-cid/bash.0123456789abcdef.txt');
     expect(endEvent.event.data.result_size).toBe(71234);
     expect(endEvent.event.data.output).toBeUndefined();
   });
@@ -429,9 +429,9 @@ describe('event-mapper › tool_start / tool_end emit a single structured event'
     // renderer's click-to-expand uses `result_path` to IPC-read the
     // full body off disk.
     const marker =
-      `<persisted-output tool="bash" size="71234" path="/Users/x/.orkas/data/u1/local/tool-results/u1-conv-cid/bash.abc123.txt">\n` +
+      `<persisted-output tool="bash" size="71234" path="/Users/x/.cogseed/data/u1/local/tool-results/u1-conv-cid/bash.abc123.txt">\n` +
       `first 2000 chars …\n\n... [69234 chars omitted] ...\n\nlast 500 chars\n` +
-      `[Full content saved to: /Users/x/.orkas/data/u1/local/tool-results/u1-conv-cid/bash.abc123.txt. Use read_file(path) to retrieve verbatim.]\n` +
+      `[Full content saved to: /Users/x/.cogseed/data/u1/local/tool-results/u1-conv-cid/bash.abc123.txt. Use read_file(path) to retrieve verbatim.]\n` +
       `</persisted-output>`;
     const out = await collect([
       { type: 'tool_start', name: 'bash', id: 'c2', input: { command: 'curl big' } },
@@ -440,7 +440,7 @@ describe('event-mapper › tool_start / tool_end emit a single structured event'
     ]);
     const endEvent = out.find((e) => e.type === 'event' && e.event?.data?.phase === 'end');
     expect(endEvent.event.data.result_path)
-      .toBe('/Users/x/.orkas/data/u1/local/tool-results/u1-conv-cid/bash.abc123.txt');
+      .toBe('/Users/x/.cogseed/data/u1/local/tool-results/u1-conv-cid/bash.abc123.txt');
     expect(endEvent.event.data.result_size).toBe(71234);
     // When spilled, we do NOT also stuff `output` — the renderer's
     // click handler exclusively goes through the IPC path. Avoids

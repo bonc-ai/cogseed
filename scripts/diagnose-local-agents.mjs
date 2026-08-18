@@ -63,12 +63,12 @@ export const BIN_NAMES = Object.freeze({
 
 /** 覆盖二进制路径的环境变量。 */
 export const ENV_KEYS = Object.freeze({
-  claude: 'ORKAS_CLAUDE_PATH',
-  codex: 'ORKAS_CODEX_PATH',
-  openclaw: 'ORKAS_OPENCLAW_PATH',
-  opencode: 'ORKAS_OPENCODE_PATH',
-  hermes: 'ORKAS_HERMES_PATH',
-  workbuddy: 'ORKAS_WORKBUDDY_PATH',
+  claude: 'COGSEED_CLAUDE_PATH',
+  codex: 'COGSEED_CODEX_PATH',
+  openclaw: 'COGSEED_OPENCLAW_PATH',
+  opencode: 'COGSEED_OPENCODE_PATH',
+  hermes: 'COGSEED_HERMES_PATH',
+  workbuddy: 'COGSEED_WORKBUDDY_PATH',
 });
 
 /** 每种 CLI 的版本探测命令（按兼容顺序）。 */
@@ -824,21 +824,21 @@ export function inspectShellProfiles(home = os.homedir(), env = process.env) {
 /** 候选数据根目录：带 users.json 才算有效。 */
 export function candidateDataRoots(home = os.homedir(), env = process.env, platform = process.platform) {
   const candidates = [];
-  if (env.ORKAS_WORKSPACE_ROOT) candidates.push(path.resolve(env.ORKAS_WORKSPACE_ROOT));
+  if (env.COGSEED_WORKSPACE_ROOT) candidates.push(path.resolve(env.COGSEED_WORKSPACE_ROOT));
   if (platform === 'win32') {
     const localAppData = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
     const appData = env.APPDATA || path.join(home, 'AppData', 'Roaming');
-    // Electron userData 的常见位置（产品名 CogSeed / Orkas）
+    // Electron userData 的常见位置（产品名 CogSeed / CogSeed）
     for (const base of [appData, localAppData]) {
       candidates.push(path.join(base, 'CogSeed', 'data'));
-      candidates.push(path.join(base, 'Orkas', 'data'));
+      candidates.push(path.join(base, 'CogSeed', 'data'));
     }
   } else {
     candidates.push(path.join(home, '.cogseed', 'data'));
-    candidates.push(path.join(home, '.orkas', 'data'));
+    candidates.push(path.join(home, '.cogseed', 'data'));
   }
   // 展开 runtime-variants/<variant>/data
-  const variantRoots = [path.join(home, '.cogseed', 'runtime-variants'), path.join(home, '.orkas', 'runtime-variants')];
+  const variantRoots = [path.join(home, '.cogseed', 'runtime-variants'), path.join(home, '.cogseed', 'runtime-variants')];
   for (const root of variantRoots) {
     let entries = [];
     try { entries = fs.readdirSync(root); } catch { continue; }

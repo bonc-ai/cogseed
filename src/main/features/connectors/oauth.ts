@@ -4,12 +4,12 @@
  * Flow:
  *   1. PC `startOAuth(catalog_id)` → opens system browser to
  *      `<accountApiBase>/connectors/oauth/<provider>/start?d=<device_id>&lang=<lang>`
- *   2. Server picks `client_id` / `client_secret` (Orkas-registered OAuth App; **NOT** in PC
+ *   2. Server picks `client_id` / `client_secret` (CogSeed-registered OAuth App; **NOT** in PC
  *      binary), redirects browser through the provider consent screen.
  *   3. Provider callback lands on the Server's `<base>/connectors/oauth/<provider>/callback`,
  *      Server runs the token exchange, stores `{provider, tokens}` against a one-time
  *      `exchange_code` (short TTL, `device_id`-bound), 302s the browser through a landing page
- *      that deep-links `orkas://connectors/oauth/callback?exchange_code=...`.
+ *      that deep-links `cogseed://connectors/oauth/callback?exchange_code=...`.
  *   4. PC's protocol handler routes the deep link here → POST
  *      `<base>/connectors/oauth/exchange` → gets `{provider, access_token, refresh_token,
  *      expires_in, scopes, account_label}`. For GitHub, Server keeps the rotating refresh grant
@@ -23,7 +23,7 @@
  * refresh through the generic proxy path.
  *
  * The public build never creates an HTTP callback listener. Authorization returns through the
- * production HTTPS bridge and the connector-only `orkas://` receiver.
+ * production HTTPS bridge and the connector-only `cogseed://` receiver.
  */
 import { shell } from 'electron';
 
@@ -233,7 +233,7 @@ export async function startOAuth(
   });
 }
 
-/** Open Google's desktop Picker so the user can explicitly grant Orkas access to an existing
+/** Open Google's desktop Picker so the user can explicitly grant CogSeed access to an existing
  *  spreadsheet under the narrow `drive.file` scope. Google requires this Picker flow to request
  *  `drive.file` by itself (`trigger_onepick=true`), so it is separate from the normal connector
  *  sign-in flow that also asks for `openid email` for account labeling. */
@@ -267,7 +267,7 @@ export async function startGoogleSheetsPicker(fileIds?: string[]): Promise<Googl
   });
 }
 
-/** Called by the protocol handler when `orkas://connectors/oauth/callback?...` arrives. */
+/** Called by the protocol handler when `cogseed://connectors/oauth/callback?...` arrives. */
 export async function handleCallbackUrl(rawUrl: string): Promise<void> {
   log.info('connector callback url received', { path: rawUrl.split('?')[0] });
   if (!_pending) {

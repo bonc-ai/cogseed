@@ -50,11 +50,11 @@ describe('Bing Webmaster stdio REST adapter', () => {
   });
 
   it('list_sites maps Url -> siteUrl, strips __type, and sends the bearer token (no siteUrl query)', async () => {
-    const fetchMock = mockFetchOnce({ d: [{ __type: 'Site:#Bing', Url: 'https://orkas.ai/', IsVerified: true }] });
+    const fetchMock = mockFetchOnce({ d: [{ __type: 'Site:#Bing', Url: 'https://cogseed.ai/', IsVerified: true }] });
     const adapter = loadAdapter();
 
     await expect(adapter.callTool('list_sites', {})).resolves.toEqual({
-      sites: [{ siteUrl: 'https://orkas.ai/', raw: { Url: 'https://orkas.ai/', IsVerified: true } }],
+      sites: [{ siteUrl: 'https://cogseed.ai/', raw: { Url: 'https://cogseed.ai/', IsVerified: true } }],
       rowCount: 1,
     });
     expect(fetchMock).toHaveBeenCalledWith(
@@ -72,14 +72,14 @@ describe('Bing Webmaster stdio REST adapter', () => {
     });
     const adapter = loadAdapter();
 
-    const res = await adapter.callTool('query_traffic_stats', { siteUrl: 'https://orkas.ai/' });
+    const res = await adapter.callTool('query_traffic_stats', { siteUrl: 'https://cogseed.ai/' });
     expect(res).toEqual({
-      siteUrl: 'https://orkas.ai/',
+      siteUrl: 'https://cogseed.ai/',
       rowCount: 1,
       rows: [{ Date: '2023-11-14', Clicks: 10, Impressions: 100 }],
     });
     expect(fetchMock.mock.calls[0][0]).toBe(
-      'https://www.bing.com/webmaster/api.svc/json/GetRankAndTrafficStats?siteUrl=https%3A%2F%2Forkas.ai%2F',
+      'https://www.bing.com/webmaster/api.svc/json/GetRankAndTrafficStats?siteUrl=https%3A%2F%2Fcogseed.ai%2F',
     );
   });
 
@@ -87,21 +87,21 @@ describe('Bing Webmaster stdio REST adapter', () => {
     mockFetchOnce({ d: { Stats: [{ Query: 'ai agent', Clicks: 3 }] } });
     const adapter = loadAdapter();
 
-    await expect(adapter.callTool('query_keyword_stats', { siteUrl: 'https://orkas.ai/' })).resolves.toEqual({
-      siteUrl: 'https://orkas.ai/',
+    await expect(adapter.callTool('query_keyword_stats', { siteUrl: 'https://cogseed.ai/' })).resolves.toEqual({
+      siteUrl: 'https://cogseed.ai/',
       rowCount: 1,
       rows: [{ Query: 'ai agent', Clicks: 3 }],
     });
   });
 
   it('tolerates a bare array with no d envelope', async () => {
-    mockFetchOnce([{ Page: 'https://orkas.ai/x', Clicks: 1 }]);
+    mockFetchOnce([{ Page: 'https://cogseed.ai/x', Clicks: 1 }]);
     const adapter = loadAdapter();
 
-    await expect(adapter.callTool('query_page_stats', { siteUrl: 'https://orkas.ai/' })).resolves.toEqual({
-      siteUrl: 'https://orkas.ai/',
+    await expect(adapter.callTool('query_page_stats', { siteUrl: 'https://cogseed.ai/' })).resolves.toEqual({
+      siteUrl: 'https://cogseed.ai/',
       rowCount: 1,
-      rows: [{ Page: 'https://orkas.ai/x', Clicks: 1 }],
+      rows: [{ Page: 'https://cogseed.ai/x', Clicks: 1 }],
     });
   });
 

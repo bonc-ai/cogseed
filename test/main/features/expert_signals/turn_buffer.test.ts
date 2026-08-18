@@ -6,7 +6,7 @@ import * as path from 'node:path';
 // Module-level setup mirrors storage.test.ts — WS_ROOT swap + activateUser
 // must run before any expert_signals import (storage caches active uid).
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sig-skill-buffer-'));
-process.env.ORKAS_WORKSPACE_ROOT = TMP;
+process.env.COGSEED_WORKSPACE_ROOT = TMP;
 fs.writeFileSync(path.join(TMP, 'users.json'),
   JSON.stringify({ current_user_id: '99999991', users: [{ user_id: '99999991', created_at: new Date().toISOString() }] }));
 const UID = '99999991';

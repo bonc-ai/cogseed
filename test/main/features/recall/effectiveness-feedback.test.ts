@@ -5,8 +5,8 @@ import * as path from 'node:path';
 
 let tmp: string; let previous: string | undefined;
 const RULE_BOUNDARY = { applicableWhen: ['reviewing governed work'], forbiddenWhen: ['outside the review scope'] };
-beforeEach(() => { vi.resetModules(); tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-recall-feedback-')); previous = process.env.ORKAS_WORKSPACE_ROOT; process.env.ORKAS_WORKSPACE_ROOT = tmp; });
-afterEach(() => { if (previous === undefined) delete process.env.ORKAS_WORKSPACE_ROOT; else process.env.ORKAS_WORKSPACE_ROOT = previous; fs.rmSync(tmp, { recursive: true, force: true }); });
+beforeEach(() => { vi.resetModules(); tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-recall-feedback-')); previous = process.env.COGSEED_WORKSPACE_ROOT; process.env.COGSEED_WORKSPACE_ROOT = tmp; });
+afterEach(() => { if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT; else process.env.COGSEED_WORKSPACE_ROOT = previous; fs.rmSync(tmp, { recursive: true, force: true }); });
 
 async function modules() { const [candidates, refs, projection, proofs, feedback, assets] = await Promise.all([import('../../../../src/main/features/recall/candidate-service'), import('../../../../src/main/features/recall/workspace-refs'), import('../../../../src/main/features/recall/context-projection'), import('../../../../src/main/features/recall/proof-service'), import('../../../../src/main/features/recall/effectiveness-feedback'), import('../../../../src/main/features/recall/asset-service')]); return { candidates, refs, projection, proofs, feedback, assets }; }
 async function successfulTransfer() { const { candidates, refs, projection, proofs } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Record decision evidence.', suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: 'review', spaceId: 'workspace-a', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] }); const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' }); await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' }); const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review' }); const confirmed = await projection.confirmContextProjection('user-a', preview.id); const prepared = await proofs.prepareTransferProof('user-a', { projectionId: confirmed.id, executionId: 'run-a', expectedResultSnapshot: 'Expected result.' }); const receipt = await realReceipt(asset.id, 'receipt-feedback-a'); await proofs.completeTransferProofWithReceipt('user-a', prepared.id, { status: 'succeeded', receiptExecutionId: receipt.executionId, observedTransfer: 'done' }); return { prepared, asset }; }
@@ -20,7 +20,7 @@ async function successfulAttemptTransfer() {
   await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
   const preview = await projection.previewContextProjection('user-a', { taskRunId: 'logical-task-a', workspaceId: 'workspace-a', purpose: 'review' });
   const confirmed = await projection.confirmContextProjection('user-a', preview.id);
-  const prepared = await proofs.prepareTransferProof('user-a', { projectionId: confirmed.id, executionId: 'mate-attempt-a', expectedResultSnapshot: 'Expected result.' });
+  const prepared = await proofs.prepareTransferProof('user-a', { projectionId: confirmed.id, executionId: 'cogseed-attempt-a', expectedResultSnapshot: 'Expected result.' });
   const receipt = await realReceipt(asset.id, 'receipt-feedback-attempt');
   await proofs.completeTransferProofWithReceipt('user-a', prepared.id, { status: 'succeeded', receiptExecutionId: receipt.executionId, observedTransfer: 'done' });
   return prepared;

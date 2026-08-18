@@ -1,5 +1,5 @@
 // ─── Marketplace (full-page panel: grid + detail sub-views) ───
-// Browse + install official agents / skills from the Orkas Server. Entered via the "More"
+// Browse + install official agents / skills from the CogSeed Server. Entered via the "More"
 // button on the agents / skills tabs (#agents-more-btn / #skills-more-btn — wired in state.js).
 //
 // Two sub-views inside panel-marketplace (mirrors the agents / skills panel shape):
@@ -33,7 +33,7 @@ let _mpReturnView = 'agents';
 // chip strip painted *synchronously* — no IPC roundtrip latency. localStorage is sync and
 // available before window.cogseed IPC is ready; the in-memory variable is the hot path; the
 // async preload below refreshes localStorage in the background.
-const MP_CATEGORIES_LS_KEY = 'orkas:mp:categories';
+const MP_CATEGORIES_LS_KEY = 'cogseed:mp:categories';
 let _mpCategoriesCache = (() => {
   try {
     const raw = localStorage.getItem(MP_CATEGORIES_LS_KEY);
@@ -300,7 +300,7 @@ function _mpMaybeRefreshCategoriesForCodes(codes) {
 // installed state; users see all cards flash "Install" first. The cache is updated after
 // each successful install/uninstall + after every successful background
 // `agents.list` / `skills.list` refresh.
-const MP_INSTALLED_LS_KEY = 'orkas:mp:installed';
+const MP_INSTALLED_LS_KEY = 'cogseed:mp:installed';
 function _mpLoadInstalledFromLs() {
   try {
     const raw = localStorage.getItem(MP_INSTALLED_LS_KEY);

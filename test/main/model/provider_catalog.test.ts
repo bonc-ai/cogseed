@@ -389,7 +389,7 @@ describe('provider_catalog › labels and docs', () => {
 });
 
 describe('provider_catalog › EXTERNAL_API_PROVIDERS', () => {
-  it('列出所有走 Orkas 自建适配层的 provider（pi-ai 不认识）', () => {
+  it('列出所有走 CogSeed 自建适配层的 provider（pi-ai 不认识）', () => {
     // EXTERNAL_API_PROVIDERS 是 `listProviders` / `runner.ts::buildRunner` /
     // `auth.ts::testConnection` 的分发依据——名单必须和 CATALOG 里真实
     // 标记为"外部"的 provider 严格一致，否则会出现"能选但调用报

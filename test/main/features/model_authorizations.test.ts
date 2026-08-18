@@ -9,8 +9,8 @@ let previousRoot: string | undefined;
 
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-authorizations-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(UID);
@@ -21,8 +21,8 @@ afterEach(async () => {
     const auth = await import('../../../src/main/features/auth');
     auth.__setAuthorizationStoreSaveForTests(undefined);
   } catch { /* module may not have loaded */ }
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(root, { recursive: true, force: true });
 });
 

@@ -136,7 +136,7 @@ describe('features/connectors/oauth-dcr', () => {
     expect(opened.searchParams.get('code_challenge_method')).toBe('S256');
     expect(opened.searchParams.get('code_challenge')).toBeTruthy();
     expect(opened.searchParams.get('state')).toBeTruthy();
-    await handleDcrCallbackUrl('orkas://connectors/oauth/dcr-callback?status=cancelled');
+    await handleDcrCallbackUrl('cogseed://connectors/oauth/dcr-callback?status=cancelled');
   });
 
   it('discovers providers that publish path-based protected-resource and auth-server metadata', async () => {
@@ -179,7 +179,7 @@ describe('features/connectors/oauth-dcr', () => {
     expect(opened.searchParams.get('client_id')).toBe('atl-client-1');
     expect(opened.searchParams.get('resource')).toBe('https://mcp.atlassian.example/v1/mcp/authv2');
     expect(fetchMock.mock.calls.some(([url]) => String(url) === 'https://auth.atlassian.example/.well-known/oauth-authorization-server')).toBe(false);
-    await handleDcrCallbackUrl('orkas://connectors/oauth/dcr-callback?status=cancelled');
+    await handleDcrCallbackUrl('cogseed://connectors/oauth/dcr-callback?status=cancelled');
   });
 
   it('falls back to MCP-host authorization metadata when the advertised auth-server host omits it', async () => {
@@ -223,7 +223,7 @@ describe('features/connectors/oauth-dcr', () => {
     expect(opened.href.startsWith('https://access.stripe.example/mcp/oauth2/authorize?')).toBe(true);
     expect(opened.searchParams.get('client_id')).toBe('stripe-client-1');
     expect(opened.searchParams.get('resource')).toBe('https://mcp.stripe.example');
-    await handleDcrCallbackUrl('orkas://connectors/oauth/dcr-callback?status=cancelled');
+    await handleDcrCallbackUrl('cogseed://connectors/oauth/dcr-callback?status=cancelled');
   });
 
   it('uses client_secret_basic when the provider does not support client_secret_post', async () => {
@@ -288,7 +288,7 @@ describe('features/connectors/oauth-dcr', () => {
     });
     openedState = new URL(String(electronMock.openExternal.mock.calls[0][0])).searchParams.get('state') || '';
 
-    await handleDcrCallbackUrl('orkas://connectors/oauth/dcr-callback?exchange_code=exchange-1');
+    await handleDcrCallbackUrl('cogseed://connectors/oauth/dcr-callback?exchange_code=exchange-1');
     const result = await pending;
     expect(result.grant).toMatchObject({
       access_token: 'airtable-access-local',
@@ -339,7 +339,7 @@ describe('features/connectors/oauth-dcr', () => {
       expect(electronMock.openExternal).toHaveBeenCalledTimes(1);
     });
 
-    await handleDcrCallbackUrl('orkas://connectors/oauth/dcr-callback?exchange_code=exchange-1');
+    await handleDcrCallbackUrl('cogseed://connectors/oauth/dcr-callback?exchange_code=exchange-1');
     await expect(pending).rejects.toThrow(/state mismatch/);
     expect(fetchMock.mock.calls.some(([url]) => String(url) === 'https://auth.notion.example/token')).toBe(false);
   });
@@ -389,7 +389,7 @@ describe('features/connectors/oauth-dcr', () => {
     });
     openedState = new URL(String(electronMock.openExternal.mock.calls[0][0])).searchParams.get('state') || '';
 
-    await handleDcrCallbackUrl('orkas://connectors/oauth/dcr-callback?exchange_code=exchange-1');
+    await handleDcrCallbackUrl('cogseed://connectors/oauth/dcr-callback?exchange_code=exchange-1');
     const result = await pending;
 
     expect(result.grant).toMatchObject({
@@ -444,7 +444,7 @@ describe('features/connectors/oauth-dcr', () => {
 
     const opened = new URL(String(electronMock.openExternal.mock.calls[0][0]));
     expect(opened.searchParams.get('resource')).toBe('https://gitlab.example/api/v4/mcp');
-    await handleDcrCallbackUrl('orkas://connectors/oauth/dcr-callback?status=cancelled');
+    await handleDcrCallbackUrl('cogseed://connectors/oauth/dcr-callback?status=cancelled');
   });
 
   it('refreshes stale DCR grants with resource and persists rotated refresh_token fields', async () => {

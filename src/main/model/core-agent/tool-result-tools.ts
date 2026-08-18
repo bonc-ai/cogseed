@@ -12,7 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { AgentTool, ToolContext } from '#core-agent';
-import { estimateToolResultTokens } from '../../util/tool-result-cap';
+import { esticogseedToolResultTokens } from '../../util/tool-result-cap';
 
 export const TOOL_RESULT_CHUNK_DEFAULT_TOKENS = 1_000;
 export const TOOL_RESULT_CHUNK_MAX_TOKENS = 2_000;
@@ -50,7 +50,7 @@ function createSearchTool(opts: ToolResultToolsOpts): AgentTool {
       const ref = String(input.ref || '').trim();
       const query = String(input.query || '').trim();
       if (!ref || !query) return error('E_BAD_INPUT', '`ref` and `query` are required.');
-      if (estimateToolResultTokens(query) > 256) {
+      if (esticogseedToolResultTokens(query) > 256) {
         return error('E_BAD_INPUT', '`query` must be a narrow search expression under 256 estimated tokens.');
       }
       const resolved = resolveToolResultRef(opts.toolResultsDir, ref);
@@ -64,7 +64,7 @@ function createSearchTool(opts: ToolResultToolsOpts): AgentTool {
       if (budget < 128) return budgetError();
 
       const output = searchResultFile(resolved.path, ref, query, budget);
-      commitRead(ledger, key, estimateToolResultTokens(output));
+      commitRead(ledger, key, esticogseedToolResultTokens(output));
       return { content: output };
     },
   };
@@ -119,7 +119,7 @@ function createReadChunkTool(opts: ToolResultToolsOpts): AgentTool {
       const emptyEnvelope =
         `<tool-result-chunk ref="${escapeAttr(ref)}" total_chars="${totalChars}" covered="${cursor}-${cursor}" next_cursor="done">\n\n` +
         `</tool-result-chunk>`;
-      const payloadBudget = budget - estimateToolResultTokens(emptyEnvelope);
+      const payloadBudget = budget - esticogseedToolResultTokens(emptyEnvelope);
       if (payloadBudget < 64) return budgetError();
       // The cursor/end attributes grow with the selected payload, so reserving
       // an envelope built with `covered="cursor-cursor"` can be one or two
@@ -140,11 +140,11 @@ function createReadChunkTool(opts: ToolResultToolsOpts): AgentTool {
       let hi = payloadCandidate.length;
       while (lo < hi) {
         const mid = Math.ceil((lo + hi) / 2);
-        if (estimateToolResultTokens(render(payloadCandidate.slice(0, mid))) <= budget) lo = mid;
+        if (esticogseedToolResultTokens(render(payloadCandidate.slice(0, mid))) <= budget) lo = mid;
         else hi = mid - 1;
       }
       const output = render(payloadCandidate.slice(0, lo));
-      commitRead(ledger, key, estimateToolResultTokens(output));
+      commitRead(ledger, key, esticogseedToolResultTokens(output));
       return { content: output };
     },
   };
@@ -233,8 +233,8 @@ function searchResultFile(filePath: string, ref: string, query: string, budget: 
     const range = selected[i];
     const wrapper = `<match covered="${range.start}-${range.end}">\n\n</match>`;
     const remaining = budget
-      - estimateToolResultTokens([...pieces, closing].join('\n'))
-      - estimateToolResultTokens(wrapper);
+      - esticogseedToolResultTokens([...pieces, closing].join('\n'))
+      - esticogseedToolResultTokens(wrapper);
     if (remaining < 64) break;
     const excerpt = prefixWithinTokenBudget(excerpts[i], remaining);
     if (!excerpt) break;
@@ -331,12 +331,12 @@ function error(code: string, message: string): { content: string; isError: true 
 }
 
 function prefixWithinTokenBudget(text: string, maxTokens: number): string {
-  if (estimateToolResultTokens(text) <= maxTokens) return text;
+  if (esticogseedToolResultTokens(text) <= maxTokens) return text;
   let lo = 0;
   let hi = text.length;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    if (estimateToolResultTokens(text.slice(0, mid)) <= maxTokens) lo = mid;
+    if (esticogseedToolResultTokens(text.slice(0, mid)) <= maxTokens) lo = mid;
     else hi = mid - 1;
   }
   return text.slice(0, lo);

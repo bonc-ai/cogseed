@@ -2,7 +2,7 @@
  * Video-generation API key management for BYO providers.
  *
  * This is only the local credential/configuration layer. It deliberately does
- * not expose any Orkas-managed video provider or Server proxy.
+ * not expose any CogSeed-managed video provider or Server proxy.
  */
 
 import {

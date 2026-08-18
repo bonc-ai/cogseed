@@ -26,10 +26,10 @@ let previousBridgeDisabled: string | undefined;
 
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'execution-integration-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  previousBridgeDisabled = process.env.ORKAS_BRIDGE_DISABLED;
-  process.env.ORKAS_WORKSPACE_ROOT = root;
-  process.env.ORKAS_BRIDGE_DISABLED = '1';
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  previousBridgeDisabled = process.env.COGSEED_BRIDGE_DISABLED;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
+  process.env.COGSEED_BRIDGE_DISABLED = '1';
   vi.resetModules();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
@@ -44,10 +44,10 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
-  if (previousBridgeDisabled === undefined) delete process.env.ORKAS_BRIDGE_DISABLED;
-  else process.env.ORKAS_BRIDGE_DISABLED = previousBridgeDisabled;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
+  if (previousBridgeDisabled === undefined) delete process.env.COGSEED_BRIDGE_DISABLED;
+  else process.env.COGSEED_BRIDGE_DISABLED = previousBridgeDisabled;
   fs.rmSync(root, { recursive: true, force: true });
 });
 

@@ -173,7 +173,7 @@ export async function resolveProxyRouteForUrl(
       ? { kind: 'direct' }
       : { kind: 'proxy', url: envProxy };
   }
-  if (process.env.ORKAS_NO_AUTO_PROXY === '1') return { kind: 'direct' };
+  if (process.env.COGSEED_NO_AUTO_PROXY === '1') return { kind: 'direct' };
   try {
     let resolveProxy = resolveProxyOverride;
     if (!resolveProxy) {
@@ -207,42 +207,42 @@ export async function buildChildProxyEnvironment(
   const envConfig = envProxyConfig();
   if (envConfig.httpProxy || envConfig.httpsProxy) {
     return {
-      ORKAS_PROXY_MODE: 'env',
-      ...(envConfig.httpProxy ? { ORKAS_PROXY_HTTP_URL: envConfig.httpProxy } : {}),
-      ...(envConfig.httpsProxy ? { ORKAS_PROXY_HTTPS_URL: envConfig.httpsProxy } : {}),
-      ORKAS_PROXY_NO_PROXY: envConfig.noProxy,
+      COGSEED_PROXY_MODE: 'env',
+      ...(envConfig.httpProxy ? { COGSEED_PROXY_HTTP_URL: envConfig.httpProxy } : {}),
+      ...(envConfig.httpsProxy ? { COGSEED_PROXY_HTTPS_URL: envConfig.httpsProxy } : {}),
+      COGSEED_PROXY_NO_PROXY: envConfig.noProxy,
       ...(envConfig.httpProxy ? { HTTP_PROXY: envConfig.httpProxy } : {}),
       ...(envConfig.httpsProxy ? { HTTPS_PROXY: envConfig.httpsProxy } : {}),
       NO_PROXY: envConfig.noProxy,
       NODE_USE_ENV_PROXY: '1',
     };
   }
-  if (!targetUrl || process.env.ORKAS_NO_AUTO_PROXY === '1') return {};
+  if (!targetUrl || process.env.COGSEED_NO_AUTO_PROXY === '1') return {};
 
   try {
     const route = await resolveProxyRouteForUrl(targetUrl, resolveProxyOverride);
-    if (route.kind === 'direct') return { ORKAS_PROXY_MODE: 'direct' };
+    if (route.kind === 'direct') return { COGSEED_PROXY_MODE: 'direct' };
     if (route.kind === 'unsupported') {
       log.warn('child proxy route could not be resolved', {
         target: (() => { try { return new URL(targetUrl).origin; } catch { return 'invalid'; } })(),
       });
       return {
-        ORKAS_PROXY_MODE: 'unsupported',
-        ORKAS_PROXY_UNSUPPORTED: 'route_resolution_failed',
+        COGSEED_PROXY_MODE: 'unsupported',
+        COGSEED_PROXY_UNSUPPORTED: 'route_resolution_failed',
       };
     }
     const bridge = bridgeOverride ? await bridgeOverride() : await ensureChildFetchBridge();
     return {
-      ORKAS_PROXY_MODE: 'system-fetch',
-      ORKAS_PROXY_BRIDGE_URL: bridge.url,
-      ORKAS_PROXY_BRIDGE_TOKEN: bridge.token,
+      COGSEED_PROXY_MODE: 'system-fetch',
+      COGSEED_PROXY_BRIDGE_URL: bridge.url,
+      COGSEED_PROXY_BRIDGE_TOKEN: bridge.token,
     };
   } catch (err) {
     log.warn('child fetch bridge setup failed', {
       target: (() => { try { return new URL(targetUrl).origin; } catch { return 'invalid'; } })(),
       error: logErrorSummary(err),
     });
-    return { ORKAS_PROXY_MODE: 'unsupported', ORKAS_PROXY_UNSUPPORTED: 'bridge_setup_failed' };
+    return { COGSEED_PROXY_MODE: 'unsupported', COGSEED_PROXY_UNSUPPORTED: 'bridge_setup_failed' };
   }
 }
 
@@ -285,7 +285,7 @@ export async function startChildFetchBridge(
   const token = randomBytes(32).toString('base64url');
   const server = createServer({ maxHeaderSize: 128 * 1024 }, async (req, res) => {
     if (req.method !== 'POST' || req.url !== '/v1/fetch'
-      || !validBridgeToken(req.headers['x-orkas-proxy-token'], token)) {
+      || !validBridgeToken(req.headers['x-cogseed-proxy-token'], token)) {
       res.writeHead(404).end();
       return;
     }
@@ -303,7 +303,7 @@ export async function startChildFetchBridge(
       if (!res.writableEnded) cancelUpstream();
     });
     try {
-      const meta = decodeBridgeMeta<ChildFetchRequestMeta>(req.headers['x-orkas-fetch-meta']);
+      const meta = decodeBridgeMeta<ChildFetchRequestMeta>(req.headers['x-cogseed-fetch-meta']);
       const target = new URL(meta.url);
       if (target.protocol !== 'http:' && target.protocol !== 'https:') {
         throw new Error('bridge target must use HTTP(S)');
@@ -326,7 +326,7 @@ export async function startChildFetchBridge(
         statusText: response.statusText,
         headers: Array.from(response.headers.entries()),
       };
-      res.writeHead(200, { 'x-orkas-fetch-meta': encodeBridgeMeta(responseMeta) });
+      res.writeHead(200, { 'x-cogseed-fetch-meta': encodeBridgeMeta(responseMeta) });
       if (!response.body) {
         res.end();
       } else {
@@ -341,7 +341,7 @@ export async function startChildFetchBridge(
     } catch (err) {
       if (!res.headersSent) {
         log.warn('child fetch bridge request failed', logErrorSummary(err));
-        res.writeHead(502, { 'x-orkas-bridge-error': 'upstream_fetch_failed' });
+        res.writeHead(502, { 'x-cogseed-bridge-error': 'upstream_fetch_failed' });
         res.end();
       } else {
         res.destroy();
@@ -397,7 +397,7 @@ function ensureFetchRouter(): void {
   _fetchRouter = ((input: Parameters<FetchLike>[0], init?: Parameters<FetchLike>[1]) => {
     return (_fetchDelegate as FetchLike)(input, init);
   }) as FetchLike;
-  Object.defineProperty(_fetchRouter, '__orkasProxyFetchRouter', { value: true });
+  Object.defineProperty(_fetchRouter, '__cogseedProxyFetchRouter', { value: true });
   globalThis.fetch = _fetchRouter;
 }
 
@@ -516,8 +516,8 @@ export async function installSystemProxyDispatcher(
 ): Promise<boolean> {
   ensureFetchRouter();
   if (_envActive) return false;
-  if (process.env.ORKAS_NO_AUTO_PROXY === '1') {
-    log.info('auto system-proxy routing disabled (ORKAS_NO_AUTO_PROXY=1)');
+  if (process.env.COGSEED_NO_AUTO_PROXY === '1') {
+    log.info('auto system-proxy routing disabled (COGSEED_NO_AUTO_PROXY=1)');
     return false;
   }
   try {

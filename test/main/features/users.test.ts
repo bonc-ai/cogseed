@@ -21,16 +21,16 @@ function readUsersJson(): any {
 }
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-users-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-users-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevAuth = process.env.CORE_AGENT_AUTH_DIR;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   delete process.env.CORE_AGENT_AUTH_DIR;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (prevAuth === undefined) delete process.env.CORE_AGENT_AUTH_DIR;
   else process.env.CORE_AGENT_AUTH_DIR = prevAuth;
   fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -13,7 +13,7 @@ import {
   killProcessTree,
 } from "../src/sandbox/executor.js";
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 const IS_WINDOWS = process.platform === "win32";
 const NATIVE_SHELL_STARTUP_BUDGET_MS = IS_WINDOWS ? 15_000 : 5_000;
 const NATIVE_SHELL_TEST_TIMEOUT_MS = IS_WINDOWS ? 25_000 : 10_000;
@@ -362,24 +362,24 @@ describe("augmentPath", () => {
 
   describe("Windows shell selection", () => {
     it("defaults Windows to PowerShell instead of a POSIX-incompatible cmd -c path", () => {
-      const previous = process.env.ORKAS_WINDOWS_SHELL;
-      delete process.env.ORKAS_WINDOWS_SHELL;
+      const previous = process.env.COGSEED_WINDOWS_SHELL;
+      delete process.env.COGSEED_WINDOWS_SHELL;
       try {
         expect(defaultShellForPlatform("win32")).toBe("powershell.exe");
       } finally {
-        if (previous === undefined) delete process.env.ORKAS_WINDOWS_SHELL;
-        else process.env.ORKAS_WINDOWS_SHELL = previous;
+        if (previous === undefined) delete process.env.COGSEED_WINDOWS_SHELL;
+        else process.env.COGSEED_WINDOWS_SHELL = previous;
       }
     });
 
     it("honors an explicit Windows shell override", () => {
-      const previous = process.env.ORKAS_WINDOWS_SHELL;
-      process.env.ORKAS_WINDOWS_SHELL = "pwsh.exe";
+      const previous = process.env.COGSEED_WINDOWS_SHELL;
+      process.env.COGSEED_WINDOWS_SHELL = "pwsh.exe";
       try {
         expect(defaultShellForPlatform("win32")).toBe("pwsh.exe");
       } finally {
-        if (previous === undefined) delete process.env.ORKAS_WINDOWS_SHELL;
-        else process.env.ORKAS_WINDOWS_SHELL = previous;
+        if (previous === undefined) delete process.env.COGSEED_WINDOWS_SHELL;
+        else process.env.COGSEED_WINDOWS_SHELL = previous;
       }
     });
 
@@ -390,7 +390,7 @@ describe("augmentPath", () => {
     });
 
     it("routes explicit cmd /c commands to cmd even when PowerShell is the default shell", () => {
-      const command = 'cmd /c dir "%USERPROFILE%\\.orkas\\skills" 2>nul || echo missing';
+      const command = 'cmd /c dir "%USERPROFILE%\\.cogseed\\skills" 2>nul || echo missing';
       const inv = buildShellInvocation("powershell.exe", command, "win32");
       expect(inv.kind).toBe("cmd");
       expect(inv.command).toBe("cmd.exe");
@@ -398,7 +398,7 @@ describe("augmentPath", () => {
     });
 
     it("passes PowerShell commands through without bash-syntax rewriting", () => {
-      const command = '$ORKAS_NODE "$ORKAS_PC_DIR/bin/run-skill.cjs" calculator eval';
+      const command = '$COGSEED_NODE "$COGSEED_PC_DIR/bin/run-skill.cjs" calculator eval';
       const inv = buildShellInvocation("powershell.exe", command, "win32");
       expect(inv.kind).toBe("powershell");
       expect(inv.args).toEqual([
@@ -413,9 +413,9 @@ describe("augmentPath", () => {
     });
 
     it("keeps explicit Git Bash-style shells POSIX-shaped on Windows", () => {
-      const inv = buildShellInvocation("bash.exe", "echo $ORKAS_UID", "win32");
+      const inv = buildShellInvocation("bash.exe", "echo $COGSEED_UID", "win32");
       expect(inv.kind).toBe("posix");
-      expect(inv.args).toEqual(["-lc", "echo $ORKAS_UID"]);
+      expect(inv.args).toEqual(["-lc", "echo $COGSEED_UID"]);
     });
   });
 
@@ -464,11 +464,11 @@ describe("augmentPath", () => {
 describe("decodeProcessOutput", () => {
   it("falls back to GB18030 for Chinese Windows console output", () => {
     const gbkVersion = Buffer.from([0xb0, 0xe6, 0xb1, 0xbe]);
-    expect(decodeProcessOutput(gbkVersion, "win32", { ORKAS_UI_LANG: "zh" })).toBe("版本");
+    expect(decodeProcessOutput(gbkVersion, "win32", { COGSEED_UI_LANG: "zh" })).toBe("版本");
   });
 
   it("keeps valid UTF-8 output unchanged on Windows", () => {
     const utf8 = Buffer.from("版本", "utf8");
-    expect(decodeProcessOutput(utf8, "win32", { ORKAS_UI_LANG: "zh" })).toBe("版本");
+    expect(decodeProcessOutput(utf8, "win32", { COGSEED_UI_LANG: "zh" })).toBe("版本");
   });
 });

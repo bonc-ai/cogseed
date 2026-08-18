@@ -7,11 +7,11 @@ describe('P3394 EpochStore', () => {
   let root: string;
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'epoch-'));
-    process.env.ORKAS_WORKSPACE_ROOT = root;
+    process.env.COGSEED_WORKSPACE_ROOT = root;
   });
   afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });
-    delete process.env.ORKAS_WORKSPACE_ROOT;
+    delete process.env.COGSEED_WORKSPACE_ROOT;
   });
 
   it('current 初始为 0', async () => {

@@ -1,6 +1,6 @@
 {
-  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
-  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only A-collaboration-retry-skip-resume-v1",
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only A-collaboration-retry-skip-resume-v1",
   "inputs": {
     "actions": [
       "fail",
@@ -82,8 +82,8 @@
         "payload": {
           "step_count": 2,
           "step_ids": [
-            "wstep-8d674292832b",
-            "wstep-1f25c9963e01"
+            "wstep-bd8a70c24a0d",
+            "wstep-fce2b7edfd81"
           ]
         },
         "run_id": "wf-1",
@@ -129,6 +129,9 @@
         "context_id": "wctx-1",
         "created_at": "__TIMESTAMP__",
         "id": "wevt-5",
+        "payload": {
+          "attempt": 1
+        },
         "run_id": "wf-1",
         "step_id": "wstep-1",
         "summary": "Retryable step",
@@ -160,6 +163,7 @@
       }
     ],
     "failed": {
+      "access_mode": "write",
       "actor_id": "agent-a",
       "depends_on": [],
       "id": "wstep-1",
@@ -182,6 +186,7 @@
       "status": "running",
       "steps": [
         {
+          "access_mode": "write",
           "actor_id": "agent-a",
           "depends_on": [],
           "id": "wstep-1",
@@ -192,6 +197,7 @@
           "type": "dispatch"
         },
         {
+          "access_mode": "write",
           "actor_id": "agent-b",
           "depends_on": [],
           "id": "wstep-2",
@@ -217,6 +223,7 @@
       "status": "running",
       "steps": [
         {
+          "access_mode": "write",
           "actor_id": "agent-a",
           "depends_on": [],
           "id": "wstep-1",
@@ -227,6 +234,7 @@
           "type": "dispatch"
         },
         {
+          "access_mode": "write",
           "actor_id": "agent-b",
           "completed_at": "__TIMESTAMP__",
           "depends_on": [],
@@ -243,6 +251,7 @@
       "version": 1
     },
     "retried": {
+      "access_mode": "write",
       "actor_id": "agent-a",
       "depends_on": [],
       "id": "wstep-1",
@@ -253,6 +262,7 @@
       "type": "dispatch"
     },
     "skipped": {
+      "access_mode": "write",
       "actor_id": "agent-b",
       "completed_at": "__TIMESTAMP__",
       "depends_on": [],

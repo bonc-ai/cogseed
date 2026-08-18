@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AgentTool, ToolContext } from '#core-agent';
 import {
-  estimateToolResultTokens,
+  esticogseedToolResultTokens,
   persistToolResult,
   toolResultRefForPath,
 } from '../../../../src/main/util/tool-result-cap';
@@ -28,7 +28,7 @@ describe('persisted tool-result retrieval', () => {
   let ctx: ToolContext;
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-result-tools-'));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-result-tools-'));
     const content = [
       'alpha preface',
       'needle first important observation',
@@ -80,7 +80,7 @@ describe('persisted tool-result retrieval', () => {
     expect(result.content).toContain('covered="0-');
     expect(result.content).toMatch(/next_cursor="\d+"/);
     expect(result.content).toContain('</tool-result-chunk>');
-    expect(estimateToolResultTokens(result.content)).toBeLessThanOrEqual(2_000);
+    expect(esticogseedToolResultTokens(result.content)).toBeLessThanOrEqual(2_000);
   });
 
   it('searches and reads correctly across a 64KB UTF-8 scan boundary', async () => {

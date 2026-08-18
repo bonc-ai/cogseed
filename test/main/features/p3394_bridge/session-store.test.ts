@@ -4,9 +4,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { clearSessionForTest, listSessions, normalizeGoal, sessionFor, sessionForGoal } from '../../../../src/main/features/p3394_bridge/session-store';
 
-// isolate: the session store writes under ORKAS_RUNTIME_VARIANT; point it at a scratch variant
+// isolate: the session store writes under COGSEED_RUNTIME_VARIANT; point it at a scratch variant
 const SCRATCH_VARIANT = 'p3394-session-test-' + Math.random().toString(36).slice(2, 8);
-process.env.ORKAS_RUNTIME_VARIANT = SCRATCH_VARIANT;
+process.env.COGSEED_RUNTIME_VARIANT = SCRATCH_VARIANT;
 
 describe('p3394 session store', () => {
   beforeEach(() => {

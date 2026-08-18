@@ -10,7 +10,7 @@ import { makeAcpBackend } from './_acp.js';
 export const hermesBackend = makeAcpBackend({
   logName: 'local-agents:hermes',
   argv: ['acp'],
-  clientName: 'orkas',
+  clientName: 'cogseed',
   agentType: 'hermes',
   recordTranscript: true,
   extraEnv: {

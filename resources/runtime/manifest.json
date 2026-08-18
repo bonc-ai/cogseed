@@ -2,9 +2,9 @@
   "schema": 1,
   "lockedAt": "2026-06-18",
   "selectionPolicy": {
-    "python": "Pin CPython 3.12 as Orkas' conservative skill/runtime baseline for broad third-party wheel compatibility. 3.12.13 is the Python.org 3.12 security release available in python-build-standalone 20260610. Move to a newer Python minor only after package smoke tests pass on macOS, Windows, and Linux.",
+    "python": "Pin CPython 3.12 as CogSeed' conservative skill/runtime baseline for broad third-party wheel compatibility. 3.12.13 is the Python.org 3.12 security release available in python-build-standalone 20260610. Move to a newer Python minor only after package smoke tests pass on macOS, Windows, and Linux.",
     "uv": "Pin the upstream uv release used to create and install Python package venvs. 0.11.21 was the latest astral-sh/uv GitHub release checked on 2026-06-18. Move only with manifest digest refresh and package install smoke tests.",
-    "node": "Pin Node.js 24.x Active LTS as the baseline for Node-based skills/packages (bash `node`/`npm`/`npx` and orkas-pkg `npm install`). Newest LTS chosen so libraries requiring high node versions are covered; official nodejs.org binaries bundle npm/npx. 24.17.0 was the latest v24 LTS on nodejs.org dist/latest-v24.x checked on 2026-06-22. Libraries needing an even newer major are out of scope for the built-in single version. Move only after package install/run smoke tests pass on macOS and Windows.",
+    "node": "Pin Node.js 24.x Active LTS as the baseline for Node-based skills/packages (bash `node`/`npm`/`npx` and cogseed-pkg `npm install`). Newest LTS chosen so libraries requiring high node versions are covered; official nodejs.org binaries bundle npm/npx. 24.17.0 was the latest v24 LTS on nodejs.org dist/latest-v24.x checked on 2026-06-22. Libraries needing an even newer major are out of scope for the built-in single version. Move only after package install/run smoke tests pass on macOS and Windows.",
     "sources": [
       "https://www.python.org/downloads/release/python-31213/",
       "https://github.com/astral-sh/python-build-standalone/releases/tag/20260610",

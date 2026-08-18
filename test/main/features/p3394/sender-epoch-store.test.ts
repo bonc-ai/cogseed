@@ -8,12 +8,12 @@ describe('P3394 SenderEpochStore', () => {
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'sender-epoch-'));
-    process.env.ORKAS_WORKSPACE_ROOT = root;
+    process.env.COGSEED_WORKSPACE_ROOT = root;
   });
 
   afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });
-    delete process.env.ORKAS_WORKSPACE_ROOT;
+    delete process.env.COGSEED_WORKSPACE_ROOT;
   });
 
   it('starts at one, increments, and persists', async () => {

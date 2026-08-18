@@ -44,7 +44,7 @@ export type ToolResultInlineLedger = {
 };
 
 /** Backward-compatible ASCII-sized threshold used by CLI tests/callers. The
- * actual spill decision is token-aware through `estimateToolResultTokens`. */
+ * actual spill decision is token-aware through `esticogseedToolResultTokens`. */
 export const PERSIST_THRESHOLD = DEFAULT_INLINE_RESULT_TOKENS * 4;
 
 export const PERSISTED_PREVIEW_TOKENS = 600;
@@ -133,7 +133,7 @@ export function capToolResult(
 
   const content = result.content || '';
   const len = content.length;
-  const estimatedTokens = estimateToolResultTokens(content);
+  const estimatedTokens = esticogseedToolResultTokens(content);
   const exceedsPerResultBudget = estimatedTokens > opts.maxInlineTokens;
   const exceedsRoundBudget = !exceedsPerResultBudget && !claimRoundInlineBudget(ctx, estimatedTokens);
   if (!exceedsPerResultBudget && !exceedsRoundBudget) return result;
@@ -212,7 +212,7 @@ function claimRoundInlineBudget(ctx: ToolContext, estimatedTokens: number): bool
 
 // ── Core helpers ─────────────────────────────────────────────────────────
 
-export function estimateToolResultTokens(text: string): number {
+export function esticogseedToolResultTokens(text: string): number {
   const { cjk, other } = countTokenCharacters(text);
   return Math.ceil(cjk * 1.5 + other / 4);
 }
@@ -372,7 +372,7 @@ export function maybeSpillToolResult(opts: {
 }): { output: string; outputPath?: string } {
   const { toolResultsDir, toolName, output } = opts;
   const maxInlineTokens = opts.maxInlineTokens ?? DEFAULT_INLINE_RESULT_TOKENS;
-  if (!output || estimateToolResultTokens(output) <= maxInlineTokens) {
+  if (!output || esticogseedToolResultTokens(output) <= maxInlineTokens) {
     return { output };
   }
   try {
@@ -410,7 +410,7 @@ export function buildPersistedOutputMarker(
 ): string {
   return buildPersistedOutputMarkerFromPreview(absPath, toolName, content, {
     sizeChars: content.length,
-    estimatedTokens: estimateToolResultTokens(content),
+    estimatedTokens: esticogseedToolResultTokens(content),
     isError,
     sourceTruncated: false,
   });
@@ -442,7 +442,7 @@ export function buildPersistedOutputMarkerFromPreview(
 }
 
 export function buildBoundedPreview(content: string, maxTokens: number): string {
-  if (estimateToolResultTokens(content) <= maxTokens) return content;
+  if (esticogseedToolResultTokens(content) <= maxTokens) return content;
   const headBudget = Math.max(1, Math.floor(maxTokens * 0.72));
   const tailBudget = Math.max(1, maxTokens - headBudget);
   const head = prefixWithinTokenBudget(content, headBudget);
@@ -456,7 +456,7 @@ function prefixWithinTokenBudget(text: string, maxTokens: number): string {
   let hi = text.length;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    if (estimateToolResultTokens(text.slice(0, mid)) <= maxTokens) lo = mid;
+    if (esticogseedToolResultTokens(text.slice(0, mid)) <= maxTokens) lo = mid;
     else hi = mid - 1;
   }
   return text.slice(0, lo);
@@ -467,7 +467,7 @@ function suffixWithinTokenBudget(text: string, maxTokens: number): string {
   let hi = text.length;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    if (estimateToolResultTokens(text.slice(text.length - mid)) <= maxTokens) lo = mid;
+    if (esticogseedToolResultTokens(text.slice(text.length - mid)) <= maxTokens) lo = mid;
     else hi = mid - 1;
   }
   return text.slice(text.length - lo);

@@ -8,11 +8,11 @@ let root = '';
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'recall-skill-bindings-'));
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
 });
 
 afterEach(async () => {
-  delete process.env.ORKAS_WORKSPACE_ROOT;
+  delete process.env.COGSEED_WORKSPACE_ROOT;
   await fs.rm(root, { recursive: true, force: true });
 });
 

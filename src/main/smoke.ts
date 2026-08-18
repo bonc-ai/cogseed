@@ -22,10 +22,10 @@ async function section(name: string, fn: () => void | Promise<void>): Promise<vo
 }
 
 (async () => {
-  const smokeRoot = process.env.ORKAS_WORKSPACE_ROOT
+  const smokeRoot = process.env.COGSEED_WORKSPACE_ROOT
     ? ''
-    : fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-smoke-root-'));
-  if (smokeRoot) process.env.ORKAS_WORKSPACE_ROOT = smokeRoot;
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-smoke-root-'));
+  if (smokeRoot) process.env.COGSEED_WORKSPACE_ROOT = smokeRoot;
 
   try {
     const paths = await import('./paths');

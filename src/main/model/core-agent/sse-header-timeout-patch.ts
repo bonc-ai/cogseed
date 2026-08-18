@@ -2,7 +2,7 @@
  * Ignore provider-local SSE response-header aborts.
  *
  * pi-ai's SSE transport owns a short "wait for response headers" AbortController
- * that can fire before a long-running model produces its first event. Orkas has
+ * that can fire before a long-running model produces its first event. CogSeed has
  * its own user-abort and idle-watchdog signals around the whole turn; those must
  * still work. This patch only suppresses aborts whose reason is the provider's
  * SSE header-timeout marker.
@@ -10,7 +10,7 @@
 import { createLogger } from '../../logger';
 
 const log = createLogger('sse-header-timeout-patch');
-const PATCHED = Symbol.for('orkas.sseHeaderTimeoutAbortPatch');
+const PATCHED = Symbol.for('cogseed.sseHeaderTimeoutAbortPatch');
 const SSE_HEADER_TIMEOUT_RE =
   /\bsse response headers timed out(?: after \d+ms)?\b/i;
 
@@ -31,7 +31,7 @@ export function installSseHeaderTimeoutPatch(): void {
   const originalAbort = proto.abort;
   const patchedAbort: PatchedAbort = function patchedAbort(this: AbortController, reason?: unknown): void {
     if (isSseHeaderTimeoutAbortReason(reason)) {
-      log.info('ignored provider SSE response-header timeout abort; waiting for stream or Orkas watchdog');
+      log.info('ignored provider SSE response-header timeout abort; waiting for stream or CogSeed watchdog');
       return;
     }
     return originalAbort.call(this, reason);

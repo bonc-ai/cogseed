@@ -8,10 +8,10 @@ const UID = 'wake-domain-user';
 afterEach(() => fs.rmSync(paths.userRoot(UID), { recursive: true, force: true }));
 
 it('routes an approved Mate wake through an injected dispatcher without Group Chat enqueue', async () => {
-  const pending = await evaluateWake(UID, { conversationId: 'mate-coord-domain', executionDomain: 'mate', executionScopeId: 'mate-coord-domain', agentId: 'agent-1', agentName: 'Agent', source: 'dispatch_to', sourceActorId: 'parent', objective: 'continue', dispatchPayload: { text: 'continue' } });
+  const pending = await evaluateWake(UID, { conversationId: 'cogseed-coord-domain', executionDomain: 'cogseed', executionScopeId: 'cogseed-coord-domain', agentId: 'agent-1', agentName: 'Agent', source: 'dispatch_to', sourceActorId: 'parent', objective: 'continue', dispatchPayload: { text: 'continue' } });
   expect(pending.approved).toBe(false); if (pending.approved) return;
   const dispatcher = { dispatch: vi.fn(async () => {}) };
   const result = await decideWakeRequest(UID, { requestId: pending.request.id, decision: 'approve' }, { dispatcher, validateTarget: async () => true });
   expect(result).toMatchObject({ ok: true, dispatched: true });
-  expect(dispatcher.dispatch).toHaveBeenCalledWith(UID, expect.objectContaining({ execution_domain: 'mate', execution_scope_id: 'mate-coord-domain' }), expect.anything());
+  expect(dispatcher.dispatch).toHaveBeenCalledWith(UID, expect.objectContaining({ execution_domain: 'cogseed', execution_scope_id: 'cogseed-coord-domain' }), expect.anything());
 });

@@ -75,14 +75,14 @@ const META_FILENAME = '__cogseed-meta.json';
 // Reserved virtual path prefix served by the protocol handler (the runtime
 // bridge script), never read from disk; `create_artifact` rejects files under
 // it so an artifact can't shadow the real bridge.
-export const RESERVED_PREFIXES = Object.freeze(['__orkas/', '__cogseed/']);
+export const RESERVED_PREFIXES = Object.freeze(['__cogseed/', '__cogseed/']);
 export const BRIDGE_RELPATH = '__cogseed/bridge.js';
 
 const COMPACTED_HISTORY_MARKERS = [
   '[old tool input string compacted:',
   '[old nested tool input ',
-  '__orkas_context_note',
-  '__orkas_compacted_tool_use',
+  '__cogseed_context_note',
+  '__cogseed_compacted_tool_use',
 ];
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -246,7 +246,7 @@ export const BRIDGE_JS = `(function(){
  * Write a new artifact bundle for (uid, cid, agentId). Validates the file set
  * (must include exactly one top-level `index.html`; per-file + total + count
  * caps; extension allowlist; UTF-8 for utf8-encoded text files; relpath
- * safety; no `__orkas/` or `__cogseed-meta.json` clobber), writes atomically
+ * safety; no `__cogseed/` or `__cogseed-meta.json` clobber), writes atomically
  * (temp dir → rename), and stamps `__cogseed-meta.json`.
  */
 export function createArtifact(
@@ -478,7 +478,7 @@ export function resolveArtifactFilePath(
   }
   if (RESERVED_PREFIXES.some((prefix) => rel.startsWith(prefix))) {
     // Only `__cogseed/bridge.js` exists, and the handler serves it before
-    // reaching here; anything else under `__orkas/` is nothing.
+    // reaching here; anything else under `__cogseed/` is nothing.
     return { ok: false, code: 'not_found', error: 'not found' };
   }
   const ext = extOf(rel);

@@ -6,7 +6,7 @@ import * as path from 'node:path';
 let tmp: string;
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-forecast-'));
-  process.env.ORKAS_WORKSPACE_ROOT = tmp;
+  process.env.COGSEED_WORKSPACE_ROOT = tmp;
   const { activateUser } = await import('../../../../src/main/features/users');
   activateUser('user-a');
 });

@@ -35,13 +35,13 @@ export const STRATEGIES_CHAR_LIMIT = 4000;   // ~1300 tokens — strategies is a
 
 // ── Feature gate (single source of truth) ────────────────────────────────
 // Master switch for metacognition / self-evolution. Two layers ANDed together:
-//   1. env `ORKAS_METACOGNITION='0'` — dev/CI kill switch, hard off.
+//   1. env `COGSEED_METACOGNITION='0'` — dev/CI kill switch, hard off.
 //   2. user preference `preferences.json::metacognition_enabled` — UI setting;
 //      undefined (never written) → treated as on, preserving historical default.
 // runner.ts and reflection-orchestrator.ts both read from here; don't sprinkle the
 // env check around again.
 export function isFeatureEnabled(): boolean {
-  if (process.env.ORKAS_METACOGNITION === '0') return false;
+  if (process.env.COGSEED_METACOGNITION === '0') return false;
   // Lazy-require to break a potential cycle: features/config -> features/avatars
   // -> ... is light, but metacognition is called early during startup; play
   // safe and use require so it lands in the module cache.

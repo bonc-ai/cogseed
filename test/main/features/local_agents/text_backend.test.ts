@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import { makeTextBackend } from '../../../../src/main/features/local_agents/backends/_text';
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 describe('local_agents/backends/_text', () => {
   it('streams stdout, emits stderr lines, and reports completion', async () => {

@@ -9,7 +9,7 @@ let tmpDir: string;
 let root: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-protocol-path-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-protocol-path-'));
   root = path.join(tmpDir, 'contexts');
   fs.mkdirSync(root);
   fs.writeFileSync(path.join(root, 'doc.md'), 'ok');

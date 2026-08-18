@@ -39,7 +39,7 @@ describe('util/chat-media-url', () => {
   });
 
   it('changes generated-media URLs when the file at the same path changes', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-chat-media-version-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-chat-media-version-'));
     const file = path.join(dir, 'preview.png');
     try {
       fs.writeFileSync(file, 'old');

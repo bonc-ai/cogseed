@@ -6,21 +6,21 @@
  * Spawned via the per-run MCP config that `features/local_agents/bridge.ts`
  * writes; never started by hand. Everything it can do is brokered:
  *
- *   orkas_list_skills / orkas_read_skill     → bridge socket → main process
- *   orkas_run_skill                          → bridge allow-list → run-skill.cjs
- *   orkas_list_connector_tools /
- *   orkas_call_connector_tool                → bridge socket (permission-gated host-side)
- *   orkas_kb_list / orkas_kb_search /
- *   orkas_kb_read                            → bridge socket
+ *   cogseed_list_skills / cogseed_read_skill     → bridge socket → main process
+ *   cogseed_run_skill                          → bridge allow-list → run-skill.cjs
+ *   cogseed_list_connector_tools /
+ *   cogseed_call_connector_tool                → bridge socket (permission-gated host-side)
+ *   cogseed_kb_list / cogseed_kb_search /
+ *   cogseed_kb_read                            → bridge socket
  *
  * Env (injected by bridge.ts into the MCP server config or parent CLI env):
- *   ORKAS_BRIDGE_ENV_FILE — optional 0600 JSON env file containing the
+ *   COGSEED_BRIDGE_ENV_FILE — optional 0600 JSON env file containing the
  *                         secret-bearing values below
- *   ORKAS_BRIDGE_SOCKET — unix socket / named pipe back to the CogSeed main
+ *   COGSEED_BRIDGE_SOCKET — unix socket / named pipe back to the CogSeed main
  *                         process for this run
- *   ORKAS_BRIDGE_TOKEN  — per-run auth token (dies with the run)
- *   ORKAS_PC_DIR        — PC root for SDK + run-skill resolution
- *   ORKAS_NODE / ORKAS_WORKSPACE_ROOT / ORKAS_UID / ELECTRON_RUN_AS_NODE
+ *   COGSEED_BRIDGE_TOKEN  — per-run auth token (dies with the run)
+ *   COGSEED_PC_DIR        — PC root for SDK + run-skill resolution
+ *   COGSEED_NODE / COGSEED_WORKSPACE_ROOT / COGSEED_UID / ELECTRON_RUN_AS_NODE
  *                       — the standard skill-sandbox set
  *
  * CommonJS + absolute-path requires (the process cwd is the CLI agent's
@@ -34,7 +34,7 @@ const fs = require('node:fs');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 
-const ENV_FILE = process.env.ORKAS_BRIDGE_ENV_FILE;
+const ENV_FILE = process.env.COGSEED_BRIDGE_ENV_FILE;
 if (ENV_FILE) {
   try {
     const parsed = JSON.parse(fs.readFileSync(ENV_FILE, 'utf8'));
@@ -47,16 +47,16 @@ if (ENV_FILE) {
       }
     }
   } catch (err) {
-    process.stderr.write(`cogseed-bridge: failed to read ORKAS_BRIDGE_ENV_FILE: ${(err && err.message) || err}\n`);
+    process.stderr.write(`cogseed-bridge: failed to read COGSEED_BRIDGE_ENV_FILE: ${(err && err.message) || err}\n`);
     process.exit(64);
   }
 }
 
-const PC_DIR = process.env.ORKAS_PC_DIR;
-const SOCKET = process.env.ORKAS_BRIDGE_SOCKET;
-const TOKEN = process.env.ORKAS_BRIDGE_TOKEN;
+const PC_DIR = process.env.COGSEED_PC_DIR;
+const SOCKET = process.env.COGSEED_BRIDGE_SOCKET;
+const TOKEN = process.env.COGSEED_BRIDGE_TOKEN;
 if (!PC_DIR || !SOCKET || !TOKEN) {
-  process.stderr.write('cogseed-bridge: ORKAS_PC_DIR / ORKAS_BRIDGE_SOCKET / ORKAS_BRIDGE_TOKEN env required\n');
+  process.stderr.write('cogseed-bridge: COGSEED_PC_DIR / COGSEED_BRIDGE_SOCKET / COGSEED_BRIDGE_TOKEN env required\n');
   process.exit(64);
 }
 
@@ -149,10 +149,10 @@ function assertSafeScriptBase(scriptBase) {
 function runSkillLocally(skillRef, scriptBase, args, skillDir) {
   assertSafeScriptBase(scriptBase);
   return new Promise((resolve) => {
-    const node = process.env.ORKAS_NODE || process.execPath;
+    const node = process.env.COGSEED_NODE || process.execPath;
     const runner = path.join(PC_DIR, 'bin', 'run-skill.cjs');
     const child = spawn(node, [runner, skillRef, scriptBase, '--', ...args], {
-      env: { ...process.env, ORKAS_RUN_SKILL_DIR: skillDir },
+      env: { ...process.env, COGSEED_RUN_SKILL_DIR: skillDir },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -190,7 +190,7 @@ function errorResult(err) {
 const server = new McpServer({ name: 'cogseed', version: '1.0.0' });
 
 server.tool(
-  'orkas_list_skills',
+  'cogseed_list_skills',
   'List the skills available through CogSeed bridge (platform, custom, and enabled external packages). Returns id, name, source, and a short description per skill.',
   {},
   async () => {
@@ -202,9 +202,9 @@ server.tool(
 );
 
 server.tool(
-  'orkas_read_skill',
+  'cogseed_read_skill',
   'Read the full SKILL.md of one CogSeed skill by id or display name. Follow the returned instructions to use the skill.',
-  { id: z.string().describe('Skill id or display name from orkas_list_skills') },
+  { id: z.string().describe('Skill id or display name from cogseed_list_skills') },
   async ({ id }) => {
     try {
       const result = await rpc('skills.read', { id });
@@ -214,7 +214,7 @@ server.tool(
 );
 
 server.tool(
-  'orkas_run_skill',
+  'cogseed_run_skill',
   'Run a script that an CogSeed skill ships under its scripts/ directory. Equivalent to the skill-runner invocation CogSeed agents use. Returns exit code, stdout, and stderr.',
   {
     skill: z.string().describe('Skill id or display name'),
@@ -231,7 +231,7 @@ server.tool(
 );
 
 server.tool(
-  'orkas_list_connector_tools',
+  'cogseed_list_connector_tools',
   'List the user\'s connected CogSeed connectors (Slack, Notion, Gmail, custom MCP servers, …) and the tools each exposes. Calls may require the user to approve a permission prompt in CogSeed.',
   {},
   async () => {
@@ -243,7 +243,7 @@ server.tool(
 );
 
 server.tool(
-  'orkas_call_connector_tool',
+  'cogseed_call_connector_tool',
   'Call one tool on a connected CogSeed connector. The user is asked for permission in CogSeed before the call runs; a denial returns an error you should relay, not retry.',
   {
     connector_id: z.string(),
@@ -260,7 +260,7 @@ server.tool(
 
 
 server.tool(
-  'orkas_dispatch_to',
+  'cogseed_dispatch_to',
   'Dispatch one named Agent through CogSeed and return its full result to you. This is a real platform dispatch; use it instead of claiming a delegation_id in text. Input `to` is the Agent name or id; `message` is the task.',
   {
     to: z.string().describe('Target Agent name or id'),
@@ -275,7 +275,7 @@ server.tool(
 );
 
 server.tool(
-  'orkas_hand_off_to',
+  'cogseed_hand_off_to',
   'Hand the conversation to one named Agent through CogSeed. This is a real platform hand-off; the Agent answer is delivered as its own bubble. Use as the last action, and do not summarize the result afterward.',
   {
     to: z.string().describe('Target Agent name or id'),
@@ -290,7 +290,7 @@ server.tool(
 );
 
 server.tool(
-  'orkas_run_worker',
+  'cogseed_run_worker',
   'Run a private worker or optional named Agent through CogSeed and return the full result. This is a real platform worker run; use it for bounded sub-tasks you will synthesize.',
   {
     task: z.string().describe('Sub-task text'),
@@ -305,7 +305,7 @@ server.tool(
 );
 
 server.tool(
-  'orkas_kb_list',
+  'cogseed_kb_list',
   'List Library files and indexing status before deciding what to search or read. Returns relative paths, scope, kind, status, chunk count, and size.',
   {
     scope: z.enum(['all', 'project', 'global']).optional().describe('List scope. Default all when a project is active, otherwise global.'),
@@ -322,8 +322,8 @@ server.tool(
 );
 
 server.tool(
-  'orkas_kb_search',
-  'Semantic search over the user\'s Orkas knowledge base (their curated Library files).',
+  'cogseed_kb_search',
+  'Semantic search over the user\'s CogSeed knowledge base (their curated Library files).',
   {
     query: z.string().describe('Free-text query; natural language works'),
     k: z.number().int().min(1).max(30).optional().describe('Top-k result count, default 8'),
@@ -341,11 +341,11 @@ server.tool(
 );
 
 server.tool(
-  'orkas_kb_read',
-  'Read source text from a knowledge-base file found via orkas_kb_search.',
+  'cogseed_kb_read',
+  'Read source text from a knowledge-base file found via cogseed_kb_search.',
   {
-    path: z.string().describe('Library-relative file path as returned by orkas_kb_search hits'),
-    scope: z.enum(['all', 'project', 'global']).optional().describe('Read scope. Prefer the scope returned by orkas_kb_search.'),
+    path: z.string().describe('Library-relative file path as returned by cogseed_kb_search hits'),
+    scope: z.enum(['all', 'project', 'global']).optional().describe('Read scope. Prefer the scope returned by cogseed_kb_search.'),
     chunk: z.number().int().min(1).optional().describe('1-based chunk index; omit for the full body'),
     window: z.number().int().min(0).optional().describe('Include ±window neighbour chunks around `chunk`'),
   },
@@ -363,6 +363,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`orkas-bridge fatal: ${(err && err.stack) || err}\n`);
+  process.stderr.write(`cogseed-bridge fatal: ${(err && err.stack) || err}\n`);
   process.exit(1);
 });

@@ -8,10 +8,10 @@ describe('build identity', () => {
   it('prefers launch environment values over packaged metadata', () => {
     const identity = resolveBuildIdentity({
       env: {
-        ORKAS_BUILD_CHANNEL: 'dev',
-        ORKAS_BUILD_COMMIT: 'abcdef123456',
-        ORKAS_BUILD_DIRTY: '1',
-        ORKAS_BUILD_TIME: '2026-07-30T10:00:00.000Z',
+        COGSEED_BUILD_CHANNEL: 'dev',
+        COGSEED_BUILD_COMMIT: 'abcdef123456',
+        COGSEED_BUILD_DIRTY: '1',
+        COGSEED_BUILD_TIME: '2026-07-30T10:00:00.000Z',
       },
       packagedInfoPath: '/pack/build-info.json',
       readFile: () => JSON.stringify({ channel: 'release', commit: 'ignored' }),

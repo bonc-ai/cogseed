@@ -66,7 +66,7 @@ describe('connectors renderer cache', () => {
       _persistConnectorsRenderCache();
     `, context);
 
-    const raw = storage.get('orkas.connectors.renderCache.v2.u-cache');
+    const raw = storage.get('cogseed.connectors.renderCache.v2.u-cache');
     expect(raw).toBeTruthy();
     const parsed = JSON.parse(raw!);
     expect(parsed.version).toBe(2);
@@ -75,7 +75,7 @@ describe('connectors renderer cache', () => {
 
   it('drops errored connector instances while hydrating cached state', () => {
     const { context, storage } = loadConnectorsRenderer();
-    storage.set('orkas.connectors.renderCache.v2.u-cache', JSON.stringify({
+    storage.set('cogseed.connectors.renderCache.v2.u-cache', JSON.stringify({
       version: 2,
       updated_at: Date.now(),
       catalog: [{ id: 'github', display_name: 'GitHub' }],
@@ -97,12 +97,12 @@ describe('connectors renderer cache', () => {
 
   it('purges stale connector render cache versions', () => {
     const { context, storage } = loadConnectorsRenderer();
-    storage.set('orkas.connectors.renderCache.v1.u-cache', JSON.stringify({
+    storage.set('cogseed.connectors.renderCache.v1.u-cache', JSON.stringify({
       version: 1,
       updated_at: Date.now(),
       instances: [{ id: 'github', status: { kind: 'error', message: 'Authorization expired' } }],
     }));
-    storage.set('orkas.connectors.renderCache.v2.u-cache', JSON.stringify({
+    storage.set('cogseed.connectors.renderCache.v2.u-cache', JSON.stringify({
       version: 2,
       updated_at: Date.now(),
       instances: [{ id: 'notion', status: { kind: 'connected', since: 1 } }],
@@ -111,8 +111,8 @@ describe('connectors renderer cache', () => {
 
     vm.runInContext('_purgeLegacyConnectorsRenderCaches();', context);
 
-    expect(storage.has('orkas.connectors.renderCache.v1.u-cache')).toBe(false);
-    expect(storage.has('orkas.connectors.renderCache.v2.u-cache')).toBe(true);
+    expect(storage.has('cogseed.connectors.renderCache.v1.u-cache')).toBe(false);
+    expect(storage.has('cogseed.connectors.renderCache.v2.u-cache')).toBe(true);
     expect(storage.has('some.other.key')).toBe(true);
   });
 });

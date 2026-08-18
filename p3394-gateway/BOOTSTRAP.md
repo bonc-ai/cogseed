@@ -25,8 +25,9 @@ command -v p3394-gateway
 #    找到后直接启动（等同于装了包）:
 node <上面找到的路径>
 
-# c) 以上都没有才从 NPM 装（包发布中；失败回退 b 用 CogSeed 自带副本）
-npm install -g @cogseed/p3394-gateway
+# c) 需要全局命令时，从当前仓库源码安装：
+cd <仓库根>/p3394-gateway
+npm install -g .
 ```
 
 启动（把 P3394 信封自动翻译成你的 CLI 调用与回答）：

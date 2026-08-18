@@ -187,7 +187,7 @@ export function wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, bo
 </html>`;
 }
 
-export function estimateOfficePreviewHeight(kind: OfficePreviewKind, fragment: string): number | undefined {
+export function esticogseedOfficePreviewHeight(kind: OfficePreviewKind, fragment: string): number | undefined {
   if (kind !== 'spreadsheet') return undefined;
   const sectionRe = /<section class="office-sheet">[\s\S]*?<\/section>/g;
   const sections = fragment.match(sectionRe) || [];
@@ -217,7 +217,7 @@ export async function officeBufferToPreviewHtml(
   } else {
     fragment = pptxBufferToHtml(buf);
   }
-  const previewHeight = estimateOfficePreviewHeight(kind, fragment);
+  const previewHeight = esticogseedOfficePreviewHeight(kind, fragment);
   return {
     html: wrapOfficePreviewHtml(kind, title, fragment),
     kind,

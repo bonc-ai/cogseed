@@ -31,11 +31,11 @@ def bing_result(clicks, impressions, position=None):
 
 
 BASE_PAGE = {
-    "url": "https://x.com/", "status_code": 200, "title": "Orkas — AI desktop client",
+    "url": "https://x.com/", "status_code": 200, "title": "CogSeed — AI desktop client",
     "meta_description": "desc", "canonical": "https://x.com/", "noindex": False, "is_indexable": True,
-    "h1s": ["Orkas is an AI client"], "h2_count": 6, "og_title": "Orkas", "og_image": "/og.jpg",
+    "h1s": ["CogSeed is an AI client"], "h2_count": 6, "og_title": "CogSeed", "og_image": "/og.jpg",
     "structured_data_types": ["Organization", "WebSite"], "word_count": 1500,
-    "text_sample": "Orkas is a local-first AI client. " * 50,
+    "text_sample": "CogSeed is a local-first AI client. " * 50,
 }
 
 
@@ -256,7 +256,7 @@ class SimTest(unittest.TestCase):
     def test_sim_thresholds(self):
         from monitor import _sim
         # one extra token: |∩|=5, |∪|=6 → 5/6
-        self.assertAlmostEqual(_sim("Orkas is an AI client", "Orkas is an AI client today"),
+        self.assertAlmostEqual(_sim("CogSeed is an AI client", "CogSeed is an AI client today"),
                                0.8333, places=3)
         self.assertEqual(_sim("", ""), 1.0)        # both empty → identical
         self.assertEqual(_sim("a", ""), 0.0)       # one empty → no overlap
@@ -272,7 +272,7 @@ class H1AndScoreDriftTest(unittest.TestCase):
 
     def test_h1_minor_edit_vs_rewrite_vs_removal(self):
         # minor edit (sim 5/6 ≥ 0.5), nothing else changed → no drift at all
-        minor = make_snapshot(crawl(dict(BASE_PAGE, h1s=["Orkas is an AI client today"])), 90, 88)
+        minor = make_snapshot(crawl(dict(BASE_PAGE, h1s=["CogSeed is an AI client today"])), 90, 88)
         self.assertEqual(compare(self.base, minor)["drift_findings"], [])
         # disjoint rewrite (sim 0) → h1_changed, medium
         major = make_snapshot(crawl(dict(BASE_PAGE, h1s=["Completely unrelated heading"])), 90, 88)

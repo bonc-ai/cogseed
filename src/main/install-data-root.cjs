@@ -9,16 +9,16 @@
  *      automatically by `paths.ts::DEFAULT_USER_WORKSPACE` via the
  *      `WS_ROOT/../userWorkSpace` sibling convention).
  *
- *      - macOS / Linux: `~/.cogseed` (legacy `~/.orkas` is migrated before use)
- *      - Windows: drive recorded in `%LOCALAPPDATA%\Orkas\install-pin.json`
+ *      - macOS / Linux: `~/.cogseed` (only the canonical `~/.cogseed` root is used)
+ *      - Windows: drive recorded in `%LOCALAPPDATA%\CogSeed\install-pin.json`
  *        (chosen on first launch — lowest-letter non-system fixed drive,
  *        fallback `C:`). The pin file lives in LocalAppData
  *        (machine-private), not Roaming (cross-machine), because it
  *        records a drive choice on THIS machine.
  *
  *   2. `initializeInstallDataRoot()` resolves the variant container, runs
- *      the one-shot legacy source migration for `main` only, and sets
- *      `process.env.COGSEED_WORKSPACE_ROOT` and legacy `process.env.ORKAS_WORKSPACE_ROOT`. **This MUST be a `.cjs` file
+ *      the canonical runtime container and sets
+ *      `process.env.COGSEED_WORKSPACE_ROOT`. **This MUST be a `.cjs` file
  *      called from `bootstrap.cjs` BEFORE `tsx/cjs` is registered:** any
  *      TypeScript module that touches `paths.ts` reads `WS_ROOT` from the
  *      env var at module-load time, and TS import hoisting would otherwise
@@ -26,7 +26,7 @@
  *      could set it. CJS require has no hoisting; doing this in
  *      bootstrap.cjs's pre-tsx phase keeps the contract simple.
  *
- *      A caller may opt into a pre-set `COGSEED_WORKSPACE_ROOT` (or legacy `ORKAS_WORKSPACE_ROOT`) only for
+ *      A caller may opt into a pre-set `COGSEED_WORKSPACE_ROOT` only for
  *      controlled packaged-dev verification. Normal source and packaged
  *      startup reject inherited roots so one app identity cannot silently
  *      attach to another identity's data.
@@ -39,8 +39,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
-const SOURCE_RUNTIME_VARIANTS = Object.freeze(['cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
+const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'cogseed', 'messaging', 'optimization']);
+const SOURCE_RUNTIME_VARIANTS = Object.freeze(['cognition', 'expense', 'cogseed', 'messaging', 'optimization']);
 
 // Early-boot diagnostics buffer. This file runs before logger.ts can be
 // loaded (logger imports paths.ts, which depends on the env var THIS file
@@ -63,7 +63,7 @@ function validateRuntimeVariant(value) {
   const variant = typeof value === 'string' ? value.trim() : '';
   if (!RUNTIME_VARIANTS.includes(variant)) {
     throw new Error(
-      `invalid ORKAS_RUNTIME_VARIANT ${JSON.stringify(value)}; expected ${RUNTIME_VARIANTS.join('|')}`,
+      `invalid COGSEED_RUNTIME_VARIANT ${JSON.stringify(value)}; expected ${RUNTIME_VARIANTS.join('|')}`,
     );
   }
   return variant;
@@ -77,15 +77,15 @@ function selectRuntimeVariant(options = {}) {
   const values = [];
   for (const arg of argv) {
     if (typeof arg !== 'string') continue;
-    if (arg === '--orkas-runtime-variant') {
-      throw new Error('--orkas-runtime-variant requires =main|cognition|expense|mate|messaging|optimization');
+    if (arg === '--cogseed-runtime-variant') {
+      throw new Error('--cogseed-runtime-variant requires =main|cognition|expense|cogseed|messaging|optimization');
     }
-    if (arg.startsWith('--orkas-runtime-variant=')) {
-      values.push(arg.slice('--orkas-runtime-variant='.length));
+    if (arg.startsWith('--cogseed-runtime-variant=')) {
+      values.push(arg.slice('--cogseed-runtime-variant='.length));
     }
   }
   if (values.length > 1 && new Set(values).size > 1) {
-    throw new Error('conflicting --orkas-runtime-variant values');
+    throw new Error('conflicting --cogseed-runtime-variant values');
   }
 
   const cliVariant = values[0];
@@ -94,7 +94,7 @@ function selectRuntimeVariant(options = {}) {
     : undefined;
   if (cliVariant && inheritedVariant && cliVariant !== inheritedVariant) {
     throw new Error(
-      `runtime variant conflict: argument=${cliVariant}, ORKAS_RUNTIME_VARIANT=${inheritedVariant}`,
+      `runtime variant conflict: argument=${cliVariant}, COGSEED_RUNTIME_VARIANT=${inheritedVariant}`,
     );
   }
 
@@ -127,7 +127,7 @@ function resolveVariantContainer(baseContainer, variant) {
   return normalized === 'main' ? base : path.join(base, 'runtime-variants', normalized);
 }
 
-function resolveInstallContainer(variant = process.env.ORKAS_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT) {
+function resolveInstallContainer(variant = process.env.COGSEED_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT) {
   const base = process.platform === 'win32'
     ? resolveWindowsContainer()
     : path.join(os.homedir(), '.cogseed');
@@ -142,7 +142,7 @@ function localAppDataDir() {
 }
 
 function pinFilePath() {
-  return path.join(localAppDataDir(), 'Orkas', 'install-pin.json');
+  return path.join(localAppDataDir(), 'CogSeed', 'install-pin.json');
 }
 
 function readPin() {
@@ -202,7 +202,7 @@ function writePin(container) {
 }
 
 function pinIsLive(pin) {
-  // The pin records a container path like "D:\.orkas". Consider it live
+  // The pin records a container path like "D:\.cogseed". Consider it live
   // if the drive root is reachable. The container directory itself may
   // not yet exist (first-launch race: pin written, process killed before
   // mkdir of <container>/data) — drive-level reachability is the right
@@ -245,12 +245,12 @@ function resolveWindowsContainer() {
 }
 
 function containerFor(drive) {
-  return path.join(drive + '\\', '.orkas');
+  return path.join(drive + '\\', '.cogseed');
 }
 
 function hasExistingInstall(drive) {
   try {
-    return fs.existsSync(path.join(drive + '\\', '.orkas', 'data'));
+    return fs.existsSync(path.join(drive + '\\', '.cogseed', 'data'));
   } catch {
     return false;
   }
@@ -259,19 +259,6 @@ function hasExistingInstall(drive) {
 function normalizeDrive(s) {
   const m = String(s).toUpperCase().match(/^([A-Z]:)/);
   return m ? m[1] : 'C:';
-}
-
-function legacyContainerForCanonical(container) {
-  const normalized = path.resolve(container);
-  const cogseedDev = path.join(os.homedir(), '.cogseed-dev');
-  const cogseed = path.join(os.homedir(), '.cogseed');
-  if (normalized === path.resolve(cogseedDev) || normalized.startsWith(path.resolve(cogseedDev) + path.sep)) {
-    return path.join(os.homedir(), '.orkas-dev', path.relative(cogseedDev, normalized));
-  }
-  if (normalized === path.resolve(cogseed) || normalized.startsWith(path.resolve(cogseed) + path.sep)) {
-    return path.join(os.homedir(), '.orkas', path.relative(cogseed, normalized));
-  }
-  return container.replace(/\.cogseed-dev(?=\\|\/|$)/, '.orkas-dev').replace(/\.cogseed(?=\\|\/|$)/, '.orkas');
 }
 
 function listFixedDrivesWin() {
@@ -308,11 +295,11 @@ function listFixedDrivesWin() {
 // a controlled verification launch. Normal app startup must derive its root
 // from the already-locked runtime identity.
 function initializeInstallDataRoot(
-  variantValue = process.env.ORKAS_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT,
+  variantValue = process.env.COGSEED_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT,
   options = {},
 ) {
   const variant = validateRuntimeVariant(variantValue);
-  const inheritedWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT || process.env.ORKAS_WORKSPACE_ROOT;
+  const inheritedWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
   if (inheritedWorkspaceRoot) {
     if (options.allowWorkspaceOverride !== true) {
       throw new Error('inherited COGSEED_WORKSPACE_ROOT is not allowed for normal app startup');
@@ -322,8 +309,6 @@ function initializeInstallDataRoot(
     fs.mkdirSync(workspaceRoot, { recursive: true });
     process.env.COGSEED_RUNTIME_CONTAINER = container;
     process.env.COGSEED_WORKSPACE_ROOT = workspaceRoot;
-    process.env.ORKAS_RUNTIME_CONTAINER = container;
-    process.env.ORKAS_WORKSPACE_ROOT = workspaceRoot;
     return Object.freeze({
       variant,
       container,
@@ -334,63 +319,11 @@ function initializeInstallDataRoot(
 
   const container = resolveInstallContainer(variant);
 
-  try {
-    const { migrateLegacyInstallRoots } = require('./cogseed-install-migration.cjs');
-    migrateLegacyInstallRoots({
-      canonicalRoot: container,
-      legacyRoot: legacyContainerForCanonical(container),
-      env: process.env,
-    });
-  } catch (err) {
-    throw new Error(`CogSeed legacy data root migration failed: ${err.message}`);
-  }
-
-  // The source runtime was renamed from `mate` to `cogseed`. Those variants
-  // intentionally have separate roots, so the rename must carry the user's
-  // existing profile trees forward before the first `cogseed` boot. The
-  // migration is additive, keeps the old root intact, and is guarded by a
-  // marker outside the data tree so it can never repeat unexpectedly.
-  if (variant === 'cogseed') {
-    try {
-      const { migrateRuntimeVariantData } = require('./util/migrate-runtime-variant-data.cjs');
-      const baseContainer = path.dirname(path.dirname(container));
-      const legacyContainer = path.join(baseContainer, 'runtime-variants', 'mate');
-      const result = migrateRuntimeVariantData({
-        sourceContainer: legacyContainer,
-        destinationContainer: container,
-        sourceVariant: 'mate',
-      });
-      if (result.migrated) {
-        _earlyWarn(
-          `[install-data-root] migrated source runtime data mate -> cogseed users=${result.sourceUserIds.length} active=${result.activeUserId || 'none'}\n`,
-        );
-      }
-    } catch (err) {
-      _earlyWarn(`[install-data-root] source runtime variant migration failed: ${err.message}\n`);
-    }
-  }
-
-  // Migration is best-effort: a failure here should not block boot. The
-  // source-run `<repoRoot>/data` is left in place for retry;
-  // `<container>/data` is still mkdir'd below so paths.ts has a usable
-  // WS_ROOT either way.
-  try {
-    if (variant === 'main') {
-      const { migrateSourceDataRoot } = require('./util/migrate-source-data-root.cjs');
-      migrateSourceDataRoot(container);
-    }
-  } catch (err) {
-    _earlyWarn(
-      `[install-data-root] source-run data migration failed: ${err.message}\n`,
-    );
-  }
 
   const ws = path.join(container, 'data');
   fs.mkdirSync(ws, { recursive: true });
   process.env.COGSEED_RUNTIME_CONTAINER = container;
   process.env.COGSEED_WORKSPACE_ROOT = ws;
-  process.env.ORKAS_RUNTIME_CONTAINER = container;
-  process.env.ORKAS_WORKSPACE_ROOT = ws;
   return Object.freeze({ variant, container, workspaceRoot: ws, overridden: false });
 }
 

@@ -1,10 +1,10 @@
 import { nowIso } from '../../storage';
-import { appendMateTaskEvent } from './event-store';
-import { assertMateTaskId, assertMateUserId } from './paths';
-import { createMateTask, readMateTask, updateMateTask } from './task-store';
-import type { MateTaskRecord, MateTaskStatus } from './types';
+import { appendCogSeedTaskEvent } from './event-store';
+import { assertCogSeedTaskId, assertCogSeedUserId } from './paths';
+import { createCogSeedTask, readCogSeedTask, updateCogSeedTask } from './task-store';
+import type { CogSeedTaskRecord, CogSeedTaskStatus } from './types';
 
-const TRANSITIONS: Readonly<Record<MateTaskStatus, readonly MateTaskStatus[]>> = {
+const TRANSITIONS: Readonly<Record<CogSeedTaskStatus, readonly CogSeedTaskStatus[]>> = {
   created: ['queued', 'cancelled', 'recoverable'],
   queued: ['running', 'cancelled', 'recoverable'],
   running: ['waiting_user', 'completed', 'failed', 'cancelled', 'recoverable'],
@@ -15,7 +15,7 @@ const TRANSITIONS: Readonly<Record<MateTaskStatus, readonly MateTaskStatus[]>> =
   recoverable: ['queued'],
 };
 
-function eventType(status: MateTaskStatus): 'task.queued' | 'task.started' | 'task.completed' | 'task.failed' | 'task.cancelled' | 'task.recoverable' {
+function eventType(status: CogSeedTaskStatus): 'task.queued' | 'task.started' | 'task.completed' | 'task.failed' | 'task.cancelled' | 'task.recoverable' {
   if (status === 'queued') return 'task.queued';
   if (status === 'running') return 'task.started';
   if (status === 'completed') return 'task.completed';
@@ -24,45 +24,45 @@ function eventType(status: MateTaskStatus): 'task.queued' | 'task.started' | 'ta
   return 'task.failed';
 }
 
-function isTerminal(status: MateTaskStatus): boolean {
+function isTerminal(status: CogSeedTaskStatus): boolean {
   return status === 'completed' || status === 'cancelled';
 }
 
-export async function transitionMateTask(
+export async function transitionCogSeedTask(
   userId: string,
   taskId: string,
-  nextStatus: MateTaskStatus,
+  nextStatus: CogSeedTaskStatus,
   payload: Record<string, unknown> = {},
-): Promise<MateTaskRecord> {
-  assertMateUserId(userId);
-  assertMateTaskId(taskId);
-  const current = await readMateTask(userId, taskId);
+): Promise<CogSeedTaskRecord> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(taskId);
+  const current = await readCogSeedTask(userId, taskId);
   if (!current) throw new Error('CogSeed task not found');
   if (current.status === nextStatus) return current;
   if (isTerminal(current.status) || !TRANSITIONS[current.status].includes(nextStatus)) {
     throw new Error(`invalid CogSeed task transition ${current.status} -> ${nextStatus}`);
   }
-  const updated = await updateMateTask(userId, taskId, (task) => ({
+  const updated = await updateCogSeedTask(userId, taskId, (task) => ({
     ...task,
     status: nextStatus,
     updatedAt: nowIso(),
     ...(isTerminal(nextStatus) ? { terminalAt: nowIso() } : {}),
   }));
-  await appendMateTaskEvent(userId, taskId, updated.sessionId, eventType(nextStatus), payload);
+  await appendCogSeedTaskEvent(userId, taskId, updated.sessionId, eventType(nextStatus), payload);
   return updated;
 }
 
-export async function markMateTaskRecoverable(userId: string, taskId: string, errorCode: string): Promise<MateTaskRecord> {
-  return transitionMateTask(userId, taskId, 'recoverable', { errorCode });
+export async function markCogSeedTaskRecoverable(userId: string, taskId: string, errorCode: string): Promise<CogSeedTaskRecord> {
+  return transitionCogSeedTask(userId, taskId, 'recoverable', { errorCode });
 }
 
-export async function retryMateTask(userId: string, taskId: string, requestId: string): Promise<MateTaskRecord> {
-  const previous = await readMateTask(userId, taskId);
+export async function retryCogSeedTask(userId: string, taskId: string, requestId: string): Promise<CogSeedTaskRecord> {
+  const previous = await readCogSeedTask(userId, taskId);
   if (!previous) throw new Error('CogSeed task not found');
   if (previous.status !== 'recoverable' && previous.status !== 'failed') {
     throw new Error('CogSeed task is not retryable');
   }
-  return (await createMateTask(userId, {
+  return (await createCogSeedTask(userId, {
     requestId,
     task: previous.task,
     sessionId: previous.sessionId,

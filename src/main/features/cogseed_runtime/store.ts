@@ -1,8 +1,8 @@
 import * as fs from 'node:fs/promises';
 
 import {
-  mateRuntimeRunEventsFile,
-  mateRuntimeRunMetaFile,
+  cogseedRuntimeRunEventsFile,
+  cogseedRuntimeRunMetaFile,
 } from '../../paths';
 import { appendJsonl, readJson, safeId, writeJson } from '../../storage';
 import type { RuntimeEventEnvelope, RuntimeStatus } from './protocol';
@@ -23,11 +23,11 @@ function assertRuntimeRunId(runId: string): string {
 }
 
 export function runtimeRunMetaFile(uid: string, runId: string): string {
-  return mateRuntimeRunMetaFile(uid, assertRuntimeRunId(runId));
+  return cogseedRuntimeRunMetaFile(uid, assertRuntimeRunId(runId));
 }
 
 export function runtimeRunEventsFile(uid: string, runId: string): string {
-  return mateRuntimeRunEventsFile(uid, assertRuntimeRunId(runId));
+  return cogseedRuntimeRunEventsFile(uid, assertRuntimeRunId(runId));
 }
 
 export async function writeRuntimeRunMeta(uid: string, runId: string, meta: RuntimeRunMeta): Promise<void> {

@@ -420,7 +420,7 @@ function initModelChip() {
     // model-guard broadcasts the fresh entries in the event detail; without
     // consuming them the chip would keep re-rendering the stale boot-time
     // list, so a model configured in settings never shows up until restart.
-    window.addEventListener('orkas:model-entries-changed', (e) => {
+    window.addEventListener('cogseed:model-entries-changed', (e) => {
       if (e && e.detail && Array.isArray(e.detail.entries)) {
         _modelChipEntries = e.detail.entries;
         _modelChipRenderAll();

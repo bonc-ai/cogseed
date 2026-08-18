@@ -7,7 +7,7 @@
  * be reported as damaged by Gatekeeper. Ad-hoc signing gives the bundle a
  * complete signature structure so users can still right-click and open it.
  *
- * Set ORKAS_SKIP_ADHOC_CODESIGN=1 for deliberately unsigned packages.
+ * Set COGSEED_SKIP_ADHOC_CODESIGN=1 for deliberately unsigned packages.
  */
 'use strict';
 
@@ -175,7 +175,7 @@ function pruneTokenizersPackages(nodeModules, targetPlatform, targetArch) {
 
 function pruneBetterSqlite3BuildArtifacts(nodeModules) {
   // @electron/rebuild compiles better-sqlite3's optional test extension next
-  // to the production binding. It is not loaded by Orkas and must not become
+  // to the production binding. It is not loaded by CogSeed and must not become
   // an undeclared native payload merely because npmRebuild ran during pack.
   removeIfExists(path.join(
     nodeModules,
@@ -477,14 +477,14 @@ function verifyPackedRuntimePayload(context, appPath, targetPlatform, targetArch
   // verifyRuntimeRoot → verifyRuntimeDir → runtimeCompanionFiles (runtime-gate.cjs),
   // which the remote extracted; it also keeps marker/pip-shim/arch/dir-allowlist checks.
   const options = {
-    ...(context.__orkasTestWhisperContract ? { whisperContract: context.__orkasTestWhisperContract } : {}),
-    ...(context.__orkasTestWindowsVcContract ? { windowsVcContract: context.__orkasTestWindowsVcContract } : {}),
+    ...(context.__cogseedTestWhisperContract ? { whisperContract: context.__cogseedTestWhisperContract } : {}),
+    ...(context.__cogseedTestWindowsVcContract ? { windowsVcContract: context.__cogseedTestWindowsVcContract } : {}),
   };
   const verified = verifyRuntimeRoot(runtimeRoot, targetPlatform, targetArch, options);
   if (targetPlatform === 'win32') {
     verified.push(verifyWindowsVcAppLocalFiles(context.appOutDir, targetArch, options));
     verified.push(verifyWindowsVcImportClosure(context.appOutDir, targetArch, {
-      ...(context.__orkasTestWindowsVcContract ? { allowMinimalPe: true, allowNoVcImports: true } : {}),
+      ...(context.__cogseedTestWindowsVcContract ? { allowMinimalPe: true, allowNoVcImports: true } : {}),
     }));
   }
   return verified;
@@ -492,10 +492,10 @@ function verifyPackedRuntimePayload(context, appPath, targetPlatform, targetArch
 
 function verifyPackedResourcePayload(context, appPath, targetPlatform) {
   const resourcesDir = appResourcesDir(context, appPath);
-  const builtinRoot = context.__orkasTestBuiltinRoot || path.join(resourcesDir, 'builtin');
+  const builtinRoot = context.__cogseedTestBuiltinRoot || path.join(resourcesDir, 'builtin');
   const verified = [
     verifyEmbeddingModelRoot(path.join(resourcesDir, 'embedding-model')),
-    verifyBuiltinRoot(builtinRoot, context.__orkasTestBuiltinRoot ? { allowIgnoredJunk: true } : {}),
+    verifyBuiltinRoot(builtinRoot, context.__cogseedTestBuiltinRoot ? { allowIgnoredJunk: true } : {}),
   ];
   if (targetPlatform === 'darwin') {
     verified.push(verifyMacLocalizedMetadataRoot(resourcesDir, { allowElectronResources: true }));
@@ -505,7 +505,7 @@ function verifyPackedResourcePayload(context, appPath, targetPlatform) {
 
 function verifyPackedEntrypointPayload(context, appPath) {
   return verifyPackagedEntrypointPayload(
-    context.__orkasTestEntrypointRoot || appUnpackedRoot(context, appPath),
+    context.__cogseedTestEntrypointRoot || appUnpackedRoot(context, appPath),
     {
       projectRoot: path.join(__dirname, '..'),
     },
@@ -548,7 +548,7 @@ function writeNativeGateMarker(context, targetPlatform, targetArch, verified) {
     checkedAt: new Date().toISOString(),
   };
   fs.writeFileSync(
-    path.join(context.appOutDir, '.orkas-native-deps-verified.json'),
+    path.join(context.appOutDir, '.cogseed-native-deps-verified.json'),
     `${JSON.stringify(marker, null, 2)}\n`,
   );
 }
@@ -581,7 +581,7 @@ function genericPublishUrl(context) {
 function updaterCacheDirName(context) {
   const fromBuilder = context?.packager?.appInfo?.updaterCacheDirName;
   if (typeof fromBuilder === 'string' && fromBuilder.trim()) return fromBuilder.trim();
-  return 'orkas-updater';
+  return 'cogseed-updater';
 }
 
 function writeMacAppUpdateConfig(context, appPath) {
@@ -635,12 +635,12 @@ async function afterPack(context) {
 
   if (targetPlatform !== 'darwin') return;
 
-  if (process.env.ORKAS_SKIP_ADHOC_CODESIGN === '1') {
-    console.log('[codesign-adhoc] disabled by ORKAS_SKIP_ADHOC_CODESIGN=1; leaving app unsigned');
+  if (process.env.COGSEED_SKIP_ADHOC_CODESIGN === '1') {
+    console.log('[codesign-adhoc] disabled by COGSEED_SKIP_ADHOC_CODESIGN=1; leaving app unsigned');
     return;
   }
 
-  if (process.env.ORKAS_FORCE_ADHOC_CODESIGN !== '1' && (process.env.CSC_LINK || process.env.CSC_NAME)) {
+  if (process.env.COGSEED_FORCE_ADHOC_CODESIGN !== '1' && (process.env.CSC_LINK || process.env.CSC_NAME)) {
     console.log('[codesign-adhoc] formal signing env detected; skipping ad-hoc signing');
     return;
   }

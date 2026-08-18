@@ -140,7 +140,7 @@ function schemaIssues(error: z.ZodError): ContractIssue[] {
     selector: `composition-manifest.json#${issue.path.join('.') || 'root'}`,
     message: issue.message,
     fixHint: 'Use the canonical composition-manifest.json v1 field names and value types.',
-    source: 'orkas-native-composition-manifest',
+    source: 'cogseed-native-composition-manifest',
   }));
 }
 
@@ -157,7 +157,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
         selector: `composition-manifest.json#scenes.${index}.id`,
         sceneId: scene.id,
         message: `Scene id "${scene.id}" is duplicated.`,
-        source: 'orkas-native-composition-manifest',
+        source: 'cogseed-native-composition-manifest',
       });
     }
     ids.add(scene.id);
@@ -168,7 +168,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
         selector: `composition-manifest.json#scenes.${index}`,
         sceneId: scene.id,
         message: `Scene "${scene.id}" leaves an uncovered timeline gap from ${previousEnd}s to ${scene.start}s.`,
-        source: 'orkas-native-composition-manifest',
+        source: 'cogseed-native-composition-manifest',
       });
     }
     if (scene.start < previousEnd - 0.001) {
@@ -178,7 +178,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
         selector: `composition-manifest.json#scenes.${index}`,
         sceneId: scene.id,
         message: `Scene "${scene.id}" starts before the previous scene ends.`,
-        source: 'orkas-native-composition-manifest',
+        source: 'cogseed-native-composition-manifest',
       });
     }
     if (scene.start + scene.duration > manifest.composition.duration + 0.05) {
@@ -188,7 +188,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
         selector: `composition-manifest.json#scenes.${index}`,
         sceneId: scene.id,
         message: `Scene "${scene.id}" ends after the composition duration.`,
-        source: 'orkas-native-composition-manifest',
+        source: 'cogseed-native-composition-manifest',
       });
     }
     previousEnd = Math.max(previousEnd, scene.start + scene.duration);
@@ -199,7 +199,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
       severity: 'error',
       selector: 'composition-manifest.json#scenes',
       message: `Scene timeline ends at ${previousEnd}s but composition duration is ${manifest.composition.duration}s.`,
-      source: 'orkas-native-composition-manifest',
+      source: 'cogseed-native-composition-manifest',
     });
   }
   for (const [index, track] of manifest.audio.tracks.entries()) {
@@ -209,7 +209,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
         severity: 'error',
         selector: `composition-manifest.json#audio.tracks.${index}.id`,
         message: `Audio track id "${track.id}" is duplicated.`,
-        source: 'orkas-native-composition-manifest',
+        source: 'cogseed-native-composition-manifest',
       });
     }
     trackIds.add(track.id);
@@ -224,7 +224,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
         severity: 'error',
         selector: `composition-manifest.json#audio.tracks.${index}.src`,
         message: `Audio track "${track.id}" must use a composition-local relative path.`,
-        source: 'orkas-native-composition-manifest',
+        source: 'cogseed-native-composition-manifest',
       });
     }
     if (track.start + track.duration > manifest.composition.duration + 0.15) {
@@ -233,7 +233,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
         severity: 'error',
         selector: `composition-manifest.json#audio.tracks.${index}`,
         message: `Audio track "${track.id}" extends beyond the composition duration.`,
-        source: 'orkas-native-composition-manifest',
+        source: 'cogseed-native-composition-manifest',
       });
     }
   }
@@ -244,7 +244,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
       severity: 'error',
       selector: 'composition-manifest.json#audio',
       message: 'Audio owner "composition" requires at least one declarative audio track.',
-      source: 'orkas-native-composition-manifest',
+      source: 'cogseed-native-composition-manifest',
     });
   }
   if (manifest.audio.owner === 'composition'
@@ -255,7 +255,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
       severity: 'error',
       selector: 'composition-manifest.json#audio',
       message: 'Narrated scenes require a declarative narration audio track.',
-      source: 'orkas-native-composition-manifest',
+      source: 'cogseed-native-composition-manifest',
     });
   }
   if (manifest.audio.owner !== 'composition' && manifest.audio.tracks.length > 0) {
@@ -264,7 +264,7 @@ function validateManifestSemantics(manifest: CompositionManifest): ContractIssue
       severity: 'error',
       selector: 'composition-manifest.json#audio',
       message: `Audio tracks are not allowed when audio owner is "${manifest.audio.owner}".`,
-      source: 'orkas-native-composition-manifest',
+      source: 'cogseed-native-composition-manifest',
     });
   }
   return issues;
@@ -453,7 +453,7 @@ export async function ensureCompositionManifest(
         severity: 'error',
         selector: 'composition-manifest.json',
         message: manifestLoad.error,
-        source: 'orkas-native-composition-manifest',
+        source: 'cogseed-native-composition-manifest',
       });
       return {
         ok: false,
@@ -483,14 +483,14 @@ export async function ensureCompositionManifest(
     severity: 'error',
     selector: 'design-contract.json',
     message: contractLoad.error,
-    source: 'orkas-native-composition-manifest',
+    source: 'cogseed-native-composition-manifest',
   });
   if (sceneMapLoad.error) inputIssues.push({
     code: 'SCENE_MAP_PARSE_FAILED',
     severity: 'error',
     selector: 'scene-map.json',
     message: sceneMapLoad.error,
-    source: 'orkas-native-composition-manifest',
+    source: 'cogseed-native-composition-manifest',
   });
   if (!contractLoad.exists && !sceneMapLoad.exists) {
     return {
@@ -505,7 +505,7 @@ export async function ensureCompositionManifest(
         selector: 'composition-manifest.json',
         message: 'composition-manifest.json is required; legacy migration also needs design-contract.json or scene-map.json.',
         fixHint: 'Call composition.prepare after writing the approved composition manifest.',
-        source: 'orkas-native-composition-manifest',
+        source: 'cogseed-native-composition-manifest',
       }],
       legacyContract: contractLoad.value,
       legacySceneMap: sceneMapLoad.value,
@@ -518,7 +518,7 @@ export async function ensureCompositionManifest(
     selector: 'composition-manifest.json',
     message: 'Generated canonical composition-manifest.json v1 from legacy design-contract.json/scene-map.json.',
     fixHint: 'Use composition-manifest.json as the only structural timeline source for future edits.',
-    source: 'orkas-native-composition-manifest',
+    source: 'cogseed-native-composition-manifest',
   };
   let wroteManifest = false;
   if (parsed.manifest && inputIssues.length === 0 && opts.writeGenerated !== false) {
@@ -695,7 +695,7 @@ export function reconcileCompositionHtml(
       severity: 'error',
       selector: '[data-composition-id]',
       message: 'Cannot reconcile composition metadata because the protected root is missing.',
-      source: 'orkas-native-composition-reconcile',
+      source: 'cogseed-native-composition-reconcile',
     });
     return { ok: false, html, changed: false, issues };
   }
@@ -718,7 +718,7 @@ export function reconcileCompositionHtml(
         selector: `[data-scene-id="${scene.id}"]`,
         sceneId: scene.id,
         message: `Cannot reconcile timing because scene "${scene.id}" is missing from HTML.`,
-        source: 'orkas-native-composition-reconcile',
+        source: 'cogseed-native-composition-reconcile',
       });
       continue;
     }
@@ -758,7 +758,7 @@ export function reconcileCompositionHtml(
         severity: 'error',
         selector: '[data-composition-id]',
         message: 'Cannot reconcile declarative audio because the composition root is not closed.',
-        source: 'orkas-native-composition-reconcile',
+        source: 'cogseed-native-composition-reconcile',
       });
     }
   }
@@ -809,7 +809,7 @@ export function buildCompositionScaffold(manifest: CompositionManifest): string 
   </style>
 </head>
 <body>
-  <!-- ORKAS-GENERATED-SCAFFOLD: keep composition/clip/audio attributes declarative. -->
+  <!-- COGSEED-GENERATED-SCAFFOLD: keep composition/clip/audio attributes declarative. -->
   <main id="composition-root" data-composition-id="${escapeHtml(composition.id)}" data-start="0" data-duration="${composition.duration}" data-width="${composition.width}" data-height="${composition.height}">
 ${clips}
 ${audio}
@@ -819,7 +819,7 @@ ${audio}
       window.__timelines = window.__timelines || {};
       const tl = gsap.timeline({ paused: true });
       window.__timelines[${JSON.stringify(composition.id)}] = tl;
-      window.__ORKAS_COMPOSITION_TIMELINE__ = tl;
+      window.__COGSEED_COMPOSITION_TIMELINE__ = tl;
 ${visibilityTimeline}
       // Add deterministic scene motion to tl. Do not control audio/video imperatively.
     })();

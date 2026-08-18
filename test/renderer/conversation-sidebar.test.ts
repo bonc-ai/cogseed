@@ -1222,7 +1222,7 @@ describe('conversation process read_file resource labels', () => {
         phase: 'start',
         name: 'read_file',
         arguments: {
-          path: '/Users/test/.orkas/data/u1/local/marketplace/agents/4430ca181349/agent.json',
+          path: '/Users/test/.cogseed/data/u1/local/marketplace/agents/4430ca181349/agent.json',
         },
       },
     });
@@ -1238,13 +1238,13 @@ describe('conversation process read_file resource labels', () => {
         phase: 'start',
         name: 'read_file',
         arguments: {
-          path: '/Users/user/.orkas/data/u1/local/system/skills/agent-creator/SKILL.md',
+          path: '/Users/user/.cogseed/data/u1/local/system/skills/agent-creator/SKILL.md',
         },
       },
     });
 
     expect(line).toContain('Skill: agent-creator · SKILL.md');
-    expect(line).not.toContain('/Users/user/.orkas');
+    expect(line).not.toContain('/Users/user/.cogseed');
   });
 
   it('uses system skill metadata instead of a persisted-output marker on completion', () => {
@@ -1274,7 +1274,7 @@ describe('conversation process read_file resource labels', () => {
         phase: 'start',
         name: 'read_file',
         arguments: {
-          path: '/Users/user/.orkas/data/u1/local/marketplace/agents/79df9cc89f5f/skills/stage-plan/SKILL.md',
+          path: '/Users/user/.cogseed/data/u1/local/marketplace/agents/79df9cc89f5f/skills/stage-plan/SKILL.md',
         },
       },
     });

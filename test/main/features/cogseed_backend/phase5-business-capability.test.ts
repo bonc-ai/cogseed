@@ -9,15 +9,15 @@ let workspaceRoot: string;
 let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
-  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-phase5-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = workspaceRoot;
+  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-phase5-'));
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = workspaceRoot;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
@@ -69,52 +69,52 @@ function fakeVectorStore() {
 describe('Phase 5 business capability parity', () => {
   it('enforces connector actor/session scope and caps oversized connector results', async () => {
     const store = await import('../../../../src/main/features/cogseed_backend/connector-store');
-    const { createMateConnectorManager } = await import('../../../../src/main/features/cogseed_backend/connector-manager');
+    const { createCogSeedConnectorManager } = await import('../../../../src/main/features/cogseed_backend/connector-manager');
     const hidden = fakeConnectorConnection({ payload: 'x'.repeat(40_000) });
-    await store.createMateConnector(USER_A, { id: 'mate-connector-visible', displayName: 'Visible', transport });
-    await store.createMateConnector(USER_A, { id: 'mate-connector-hidden', displayName: 'Hidden', transport });
-    const manager = createMateConnectorManager({ connectionFactory: (id) => id.endsWith('visible') ? hidden : fakeConnectorConnection() });
-    const capabilityScope = { userId: USER_A, actorId: 'gmember-phase5', sessionId: 'gconv-phase5', allowedConnectorIds: ['mate-connector-visible'] };
+    await store.createCogSeedConnector(USER_A, { id: 'cogseed-connector-visible', displayName: 'Visible', transport });
+    await store.createCogSeedConnector(USER_A, { id: 'cogseed-connector-hidden', displayName: 'Hidden', transport });
+    const manager = createCogSeedConnectorManager({ connectionFactory: (id) => id.endsWith('visible') ? hidden : fakeConnectorConnection() });
+    const capabilityScope = { userId: USER_A, actorId: 'gmember-phase5', sessionId: 'gconv-phase5', allowedConnectorIds: ['cogseed-connector-visible'] };
 
     await expect(manager.listAllTools(USER_A, { scope: capabilityScope })).resolves.toEqual([
-      expect.objectContaining({ connectorId: 'mate-connector-visible', name: 'search' }),
-      expect.objectContaining({ connectorId: 'mate-connector-visible', name: 'delete' }),
+      expect.objectContaining({ connectorId: 'cogseed-connector-visible', name: 'search' }),
+      expect.objectContaining({ connectorId: 'cogseed-connector-visible', name: 'delete' }),
     ]);
-    await expect(manager.callTool(USER_A, 'mate-connector-hidden', 'search', {}, { scope: capabilityScope })).rejects.toThrow(/scope|visible/i);
-    const result = await manager.callTool(USER_A, 'mate-connector-visible', 'search', {}, { scope: capabilityScope });
-    expect(result).toMatchObject({ truncated: true, tool: 'mate-connector-visible.search' });
+    await expect(manager.callTool(USER_A, 'cogseed-connector-hidden', 'search', {}, { scope: capabilityScope })).rejects.toThrow(/scope|visible/i);
+    const result = await manager.callTool(USER_A, 'cogseed-connector-visible', 'search', {}, { scope: capabilityScope });
+    expect(result).toMatchObject({ truncated: true, tool: 'cogseed-connector-visible.search' });
     expect(String((result as { content?: string }).content)).toContain('[truncated]');
     expect(String((result as { content?: string }).content).length).toBeLessThan(25_000);
   });
 
   it('exposes KB list/search/read compatibility semantics with source scope and bounded chunks', async () => {
-    const { createMateKbManager } = await import('../../../../src/main/features/cogseed_backend/mate-kb-store');
-    const manager = createMateKbManager({ vectorStoreFactory: () => fakeVectorStore() });
+    const { createCogSeedKbManager } = await import('../../../../src/main/features/cogseed_backend/cogseed-kb-store');
+    const manager = createCogSeedKbManager({ vectorStoreFactory: () => fakeVectorStore() });
     const content = `connector notes\n${'context '.repeat(1_000)}`;
-    await manager.indexText(USER_A, { sourceId: 'mate-source-notes', title: 'Notes', content });
-    const capabilityScope = { userId: USER_A, actorId: 'gmember-phase5', sessionId: 'gconv-phase5', allowedKbSourceIds: ['mate-source-notes'] };
+    await manager.indexText(USER_A, { sourceId: 'cogseed-source-notes', title: 'Notes', content });
+    const capabilityScope = { userId: USER_A, actorId: 'gmember-phase5', sessionId: 'gconv-phase5', allowedKbSourceIds: ['cogseed-source-notes'] };
 
     await expect(manager.list(USER_A, { scope: capabilityScope })).resolves.toEqual([
-      expect.objectContaining({ scope: 'mate', path: 'mate-source-notes', status: 'ready', kind: 'text' }),
+      expect.objectContaining({ scope: 'cogseed', path: 'cogseed-source-notes', status: 'ready', kind: 'text' }),
     ]);
     const search = await manager.searchCompatible(USER_A, { query: 'connector', scope: capabilityScope, maxChars: 120 });
-    expect(search).toEqual([expect.objectContaining({ scope: 'mate', path: 'mate-source-notes', chunk: 0 })]);
+    expect(search).toEqual([expect.objectContaining({ scope: 'cogseed', path: 'cogseed-source-notes', chunk: 0 })]);
     expect(String(search[0].content).length).toBeLessThanOrEqual(120);
-    const read = await manager.readCompatible(USER_A, { path: 'mate-source-notes', chunk: 0, scope: capabilityScope, maxChars: 120 });
-    expect(read).toMatchObject({ scope: 'mate', path: 'mate-source-notes', chunk: 0, totalChunks: expect.any(Number) });
+    const read = await manager.readCompatible(USER_A, { path: 'cogseed-source-notes', chunk: 0, scope: capabilityScope, maxChars: 120 });
+    expect(read).toMatchObject({ scope: 'cogseed', path: 'cogseed-source-notes', chunk: 0, totalChunks: expect.any(Number) });
     expect(read.content.length).toBeLessThanOrEqual(120);
-    await expect(manager.readCompatible(USER_B, { path: 'mate-source-notes', scope: { userId: USER_B, allowedKbSourceIds: ['mate-source-notes'] } })).rejects.toThrow(/not found|scope/i);
+    await expect(manager.readCompatible(USER_B, { path: 'cogseed-source-notes', scope: { userId: USER_B, allowedKbSourceIds: ['cogseed-source-notes'] } })).rejects.toThrow(/not found|scope/i);
   });
 
   it('provides specialized Office facades and registers created output plus previews', async () => {
-    const { createMateOfficeAdapter } = await import('../../../../src/main/features/cogseed_backend/office-adapter');
+    const { createCogSeedOfficeAdapter } = await import('../../../../src/main/features/cogseed_backend/office-adapter');
     const dir = fs.mkdtempSync(path.join(workspaceRoot, 'office-'));
     const runOfficeCli = vi.fn(async (args: string[], _opts: any) => {
       if (args[0] === 'create') fs.writeFileSync(args[1], 'created');
       if (args.includes('screenshot')) fs.writeFileSync(args[args.indexOf('-o') + 1], 'png');
       return { code: 0, stdout: args[0] === 'view' ? 'preview' : '', stderr: '' };
     });
-    const adapter = createMateOfficeAdapter({ officeCliAvailable: () => true, runOfficeCli, closeOfficeFile: vi.fn(async () => undefined) });
+    const adapter = createCogSeedOfficeAdapter({ officeCliAvailable: () => true, runOfficeCli, closeOfficeFile: vi.fn(async () => undefined) });
     const result = await adapter.createDocx({ path: path.join(dir, 'report.docx'), paragraphs: [{ text: 'Hello' }], preview: true }, { ...scope(), readOnlyRoots: [dir], writableRoots: [dir], workingDir: dir });
     expect(result.isError).toBeFalsy();
     expect(runOfficeCli).toHaveBeenCalledWith(['create', path.join(dir, 'report.docx'), '--force'], expect.anything());
@@ -125,21 +125,21 @@ describe('Phase 5 business capability parity', () => {
     const outputPath = path.join(dir, 'report.docx');
     expect(fs.existsSync(outputPath)).toBe(true);
 
-    const { mateCapabilityArtifactRegistry } = await import('../../../../src/main/features/cogseed_backend/capability-artifact-lifecycle');
-    const artifacts = await mateCapabilityArtifactRegistry.list({ userId: USER_A, runtimeSessionId: 'mruntime-phase5' });
+    const { cogseedCapabilityArtifactRegistry } = await import('../../../../src/main/features/cogseed_backend/capability-artifact-lifecycle');
+    const artifacts = await cogseedCapabilityArtifactRegistry.list({ userId: USER_A, runtimeSessionId: 'mruntime-phase5' });
     const outputArtifact = artifacts.find((artifact) => artifact.kind === 'office-output');
     const previewArtifact = artifacts.find((artifact) => artifact.kind === 'office-preview');
     expect(outputArtifact).toMatchObject({ artifactId: parsed.artifactId, path: outputPath, owned: false });
     expect(previewArtifact).toMatchObject({ artifactId: parsed.previewArtifactId, owned: true });
     expect(previewArtifact && fs.existsSync(previewArtifact.path)).toBe(true);
 
-    await mateCapabilityArtifactRegistry.cleanup({ userId: USER_A, runtimeSessionId: 'mruntime-phase5' });
+    await cogseedCapabilityArtifactRegistry.cleanup({ userId: USER_A, runtimeSessionId: 'mruntime-phase5' });
     expect(fs.existsSync(outputPath)).toBe(true);
     expect(previewArtifact && fs.existsSync(previewArtifact.path)).toBe(false);
   });
 
   it('rejects unsafe post-click navigation and cleans auto browser artifacts on dispose', async () => {
-    const { createMateBrowserManager } = await import('../../../../src/main/features/cogseed_backend/browser-manager');
+    const { createCogSeedBrowserManager } = await import('../../../../src/main/features/cogseed_backend/browser-manager');
     const scripts: string[] = [];
     const win: any = {
       url: 'https://example.com', destroyed: false,
@@ -160,7 +160,7 @@ describe('Phase 5 business capability parity', () => {
       isDestroyed: () => win.destroyed,
       destroy: vi.fn(() => { win.destroyed = true; }),
     };
-    const manager = createMateBrowserManager({ createWindow: vi.fn(() => win) });
+    const manager = createCogSeedBrowserManager({ createWindow: vi.fn(() => win) });
     const browserScope = { ...scope(), writableRoots: [], readOnlyRoots: [] };
     await manager.open(browserScope, 'https://example.com');
     await manager.snapshot(browserScope);

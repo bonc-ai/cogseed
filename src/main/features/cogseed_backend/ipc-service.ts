@@ -1,105 +1,105 @@
-import { readMateTaskEvents } from './event-store';
-import { retryMateTask } from './lifecycle';
-import { recoverMateTasks } from './recovery';
-import type { MateRuntimeController, ResumeMateTaskInput, StartMateTaskInput } from './runtime-controller';
-import { assertMateConnectorId, assertMateKbSourceId, assertMateRequestId, assertMateSessionId, assertMateTaskId, assertMateUserId } from './paths';
-import { listMateConnectors } from './connector-store';
-import { mateConnectorManager } from './connector-manager';
-import { mateKbManager } from './mate-kb-store';
-import { listMateSessions, listMateTasks, readMateSession, readMateTask } from './task-store';
-import { readMateCoordination } from './coordinator';
-import { mateCollaborationStore } from './collaboration-store-adapter';
-import { resolveMateSessionIdentity } from './actor-session-facade';
+import { readCogSeedTaskEvents } from './event-store';
+import { retryCogSeedTask } from './lifecycle';
+import { recoverCogSeedTasks } from './recovery';
+import type { CogSeedRuntimeController, ResumeCogSeedTaskInput, StartCogSeedTaskInput } from './runtime-controller';
+import { assertCogSeedConnectorId, assertCogSeedKbSourceId, assertCogSeedRequestId, assertCogSeedSessionId, assertCogSeedTaskId, assertCogSeedUserId } from './paths';
+import { listCogSeedConnectors } from './connector-store';
+import { cogseedConnectorManager } from './connector-manager';
+import { cogseedKbManager } from './cogseed-kb-store';
+import { listCogSeedSessions, listCogSeedTasks, readCogSeedSession, readCogSeedTask } from './task-store';
+import { readCogSeedCoordination } from './coordinator';
+import { cogseedCollaborationStore } from './collaboration-store-adapter';
+import { resolveCogSeedSessionIdentity } from './actor-session-facade';
 import type { WorkflowRun } from '../collaboration_control/types';
 import type { CollaborationScope } from '../collaboration_control/ports';
-import type { MateSessionRecord, MateTaskEvent, MateTaskRecord, MateTaskStatus } from './types';
+import type { CogSeedSessionRecord, CogSeedTaskEvent, CogSeedTaskRecord, CogSeedTaskStatus } from './types';
 
 const MAX_TASK_CHARS = 64_000;
 const MAX_PROFILE_ID_CHARS = 300;
 const MAX_CONTEXT_ITEMS = 100;
 const MAX_ATTACHMENT_ITEMS = 100;
 
-interface MateIpcController extends Pick<MateRuntimeController, 'startMateTask' | 'cancelMateTask' | 'retryMateTask' | 'resumeMateTask' | 'runtimeStatus' | 'restartRuntime'> {}
+interface CogSeedIpcController extends Pick<CogSeedRuntimeController, 'startCogSeedTask' | 'cancelCogSeedTask' | 'retryCogSeedTask' | 'resumeCogSeedTask' | 'runtimeStatus' | 'restartRuntime'> {}
 
-async function resolveMateRuntimeController(deps: MateIpcServiceDeps): Promise<MateIpcController> {
-  return deps.controller ?? (await import('./runtime-controller')).mateRuntimeController;
+async function resolveCogSeedRuntimeController(deps: CogSeedIpcServiceDeps): Promise<CogSeedIpcController> {
+  return deps.controller ?? (await import('./runtime-controller')).cogseedRuntimeController;
 }
 
-export interface MateIpcServiceDeps {
-  controller?: MateIpcController;
-  readTask?: typeof readMateTask;
-  retryTask?: typeof retryMateTask;
-  readEvents?: typeof readMateTaskEvents;
-  listSessions?: typeof listMateSessions;
-  readSession?: typeof readMateSession;
-  listTasks?: typeof listMateTasks;
-  readCoordination?: typeof readMateCoordination;
+export interface CogSeedIpcServiceDeps {
+  controller?: CogSeedIpcController;
+  readTask?: typeof readCogSeedTask;
+  retryTask?: typeof retryCogSeedTask;
+  readEvents?: typeof readCogSeedTaskEvents;
+  listSessions?: typeof listCogSeedSessions;
+  readSession?: typeof readCogSeedSession;
+  listTasks?: typeof listCogSeedTasks;
+  readCoordination?: typeof readCogSeedCoordination;
   readWorkflowRun?: (scope: CollaborationScope, runId: string) => Promise<WorkflowRun | null>;
 }
 
-export interface MateTaskEventsInput {
+export interface CogSeedTaskEventsInput {
   taskId: string;
   afterSequence?: number;
   limit?: number;
 }
 
-export interface MateTaskRetryInput {
+export interface CogSeedTaskRetryInput {
   taskId: string;
   requestId: string;
 }
 
 
-export type MateRendererTaskAction = 'retry' | 'skip' | 'resume' | 'abort';
+export type CogSeedRendererTaskAction = 'retry' | 'skip' | 'resume' | 'abort';
 
-export interface MateRendererActionSet {
+export interface CogSeedRendererActionSet {
   retry: boolean;
   skip: boolean;
   resume: boolean;
   abort: boolean;
 }
 
-export interface MateRendererSessionSummary {
+export interface CogSeedRendererSessionSummary {
   sessionId: string;
   createdAt: string;
   updatedAt: string;
   taskCount: number;
   activeTaskCount: number;
-  latestStatus: MateTaskStatus | 'idle';
+  latestStatus: CogSeedTaskStatus | 'idle';
   hasRecovery: boolean;
 }
 
-export interface MateRendererTaskSummary {
+export interface CogSeedRendererTaskSummary {
   taskId: string;
   sessionId: string;
   requestId: string;
   parentTaskId?: string;
   coordinationId?: string;
-  status: MateTaskStatus;
+  status: CogSeedTaskStatus;
   title: string;
   createdAt: string;
   updatedAt: string;
   skillVersionPinStatus?: 'pinned' | 'unpinned';
-  actions: MateRendererActionSet;
+  actions: CogSeedRendererActionSet;
 }
 
-export interface MateRendererActorSummary {
+export interface CogSeedRendererActorSummary {
   actorId: string;
   role: 'commander' | 'member_agent' | 'child_agent';
   sessionId: string;
   taskId?: string;
-  status: MateTaskStatus | 'idle';
+  status: CogSeedTaskStatus | 'idle';
 }
 
-export interface MateRendererTimelineEvent {
+export interface CogSeedRendererTimelineEvent {
   eventId: string;
   taskId: string;
   sequence: number;
-  type: MateTaskEvent['type'];
+  type: CogSeedTaskEvent['type'];
   createdAt: string;
   summary: string;
 }
 
-export interface MateRendererWorkflowSummary {
+export interface CogSeedRendererWorkflowSummary {
   coordinationId?: string;
   workflowRunId?: string;
   status?: WorkflowRun['status'];
@@ -116,22 +116,22 @@ export interface MateRendererWorkflowSummary {
   }>;
 }
 
-export interface MateRendererCollaborationSnapshot {
+export interface CogSeedRendererCollaborationSnapshot {
   schemaVersion: 1;
   sessionId: string;
   updatedAt: string;
-  session: MateRendererSessionSummary;
-  task: MateRendererTaskSummary | null;
-  actors: MateRendererActorSummary[];
-  tasks: MateRendererTaskSummary[];
-  workflow: MateRendererWorkflowSummary;
+  session: CogSeedRendererSessionSummary;
+  task: CogSeedRendererTaskSummary | null;
+  actors: CogSeedRendererActorSummary[];
+  tasks: CogSeedRendererTaskSummary[];
+  workflow: CogSeedRendererWorkflowSummary;
   recovery: {
     recoverable: boolean;
     taskIds: string[];
     lastEventAt?: string;
   };
-  timeline: MateRendererTimelineEvent[];
-  actions: MateRendererActionSet;
+  timeline: CogSeedRendererTimelineEvent[];
+  actions: CogSeedRendererActionSet;
 }
 
 function rejectHiddenBackendFields(payload: Record<string, unknown>): void {
@@ -167,17 +167,17 @@ function boundedArray(value: unknown, field: string, max: number): unknown[] | u
 
 function optionalSessionId(value: unknown): string | undefined {
   const text = boundedString(value, 'sessionId', 120, false);
-  return text ? assertMateSessionId(text) : undefined;
+  return text ? assertCogSeedSessionId(text) : undefined;
 }
 
 function optionalProfileId(value: unknown): string | undefined {
   return boundedString(value, 'profileId', MAX_PROFILE_ID_CHARS, false);
 }
 
-function normalizeStartInput(payload: unknown): StartMateTaskInput {
+function normalizeStartInput(payload: unknown): StartCogSeedTaskInput {
   const raw = asObject(payload);
   rejectHiddenBackendFields(raw);
-  const requestId = assertMateRequestId(boundedString(raw.requestId, 'requestId', 120) ?? '');
+  const requestId = assertCogSeedRequestId(boundedString(raw.requestId, 'requestId', 120) ?? '');
   const task = boundedString(raw.task, 'task', MAX_TASK_CHARS) ?? '';
   const sessionId = optionalSessionId(raw.sessionId);
   const profileId = optionalProfileId(raw.profileId);
@@ -198,24 +198,24 @@ function normalizeStartInput(payload: unknown): StartMateTaskInput {
 }
 
 function normalizeTaskId(payload: unknown): string {
-  if (typeof payload === 'string') return assertMateTaskId(payload.trim());
+  if (typeof payload === 'string') return assertCogSeedTaskId(payload.trim());
   const raw = asObject(payload);
-  return assertMateTaskId(boundedString(raw.taskId, 'taskId', 120) ?? '');
+  return assertCogSeedTaskId(boundedString(raw.taskId, 'taskId', 120) ?? '');
 }
 
-function normalizeRetryInput(payload: unknown): MateTaskRetryInput {
+function normalizeRetryInput(payload: unknown): CogSeedTaskRetryInput {
   const raw = asObject(payload);
   rejectHiddenBackendFields(raw);
   return {
-    taskId: assertMateTaskId(boundedString(raw.taskId, 'taskId', 120) ?? ''),
-    requestId: assertMateRequestId(boundedString(raw.requestId, 'requestId', 120) ?? ''),
+    taskId: assertCogSeedTaskId(boundedString(raw.taskId, 'taskId', 120) ?? ''),
+    requestId: assertCogSeedRequestId(boundedString(raw.requestId, 'requestId', 120) ?? ''),
   };
 }
 
-function normalizeEventsInput(payload: unknown): MateTaskEventsInput {
+function normalizeEventsInput(payload: unknown): CogSeedTaskEventsInput {
   const raw = typeof payload === 'string' ? { taskId: payload } : asObject(payload);
   return {
-    taskId: assertMateTaskId(boundedString(raw.taskId, 'taskId', 120) ?? ''),
+    taskId: assertCogSeedTaskId(boundedString(raw.taskId, 'taskId', 120) ?? ''),
     afterSequence: Math.max(0, Math.floor(Number(raw.afterSequence) || 0)),
     limit: Math.max(1, Math.min(Math.floor(Number(raw.limit) || 200), 500)),
   };
@@ -223,7 +223,7 @@ function normalizeEventsInput(payload: unknown): MateTaskEventsInput {
 
 
 
-const TERMINAL_TASK_STATUSES = new Set<MateTaskStatus>(['completed', 'failed', 'cancelled']);
+const TERMINAL_TASK_STATUSES = new Set<CogSeedTaskStatus>(['completed', 'failed', 'cancelled']);
 
 function redactRendererText(value: unknown, max = 240): string {
   const text = typeof value === 'string' ? value : '';
@@ -234,7 +234,7 @@ function redactRendererText(value: unknown, max = 240): string {
     .slice(0, max);
 }
 
-function taskActions(status: MateTaskStatus, hasWorkflowStep = false): MateRendererActionSet {
+function taskActions(status: CogSeedTaskStatus, hasWorkflowStep = false): CogSeedRendererActionSet {
   return {
     retry: status === 'failed' || status === 'cancelled',
     skip: hasWorkflowStep && !TERMINAL_TASK_STATUSES.has(status),
@@ -243,7 +243,7 @@ function taskActions(status: MateTaskStatus, hasWorkflowStep = false): MateRende
   };
 }
 
-function taskSummary(task: MateTaskRecord, hasWorkflowStep = false): MateRendererTaskSummary {
+function taskSummary(task: CogSeedTaskRecord, hasWorkflowStep = false): CogSeedRendererTaskSummary {
   return {
     taskId: task.taskId,
     sessionId: task.sessionId,
@@ -259,7 +259,7 @@ function taskSummary(task: MateTaskRecord, hasWorkflowStep = false): MateRendere
   };
 }
 
-function sessionSummary(session: MateSessionRecord, tasks: MateTaskRecord[]): MateRendererSessionSummary {
+function sessionSummary(session: CogSeedSessionRecord, tasks: CogSeedTaskRecord[]): CogSeedRendererSessionSummary {
   const latest = [...tasks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
   return {
     sessionId: session.sessionId,
@@ -272,7 +272,7 @@ function sessionSummary(session: MateSessionRecord, tasks: MateTaskRecord[]): Ma
   };
 }
 
-function rendererSafeEventSummary(event: MateTaskEvent): string {
+function rendererSafeEventSummary(event: CogSeedTaskEvent): string {
   switch (event.type) {
     case 'task.created': return 'Task created.';
     case 'task.queued': return 'Task queued.';
@@ -285,7 +285,7 @@ function rendererSafeEventSummary(event: MateTaskEvent): string {
   }
 }
 
-function timelineSummary(event: MateTaskEvent): MateRendererTimelineEvent {
+function timelineSummary(event: CogSeedTaskEvent): CogSeedRendererTimelineEvent {
   return {
     eventId: event.eventId,
     taskId: event.taskId,
@@ -300,124 +300,124 @@ function normalizeProjectionInput(payload: unknown): { sessionId?: string; taskI
   const raw = typeof payload === 'string' ? { sessionId: payload } : asObject(payload);
   const sessionId = raw.sessionId === undefined
     ? undefined
-    : resolveMateSessionIdentity(boundedString(raw.sessionId, 'sessionId', 120) ?? '').canonicalSessionId;
-  const taskId = raw.taskId === undefined ? undefined : assertMateTaskId(boundedString(raw.taskId, 'taskId', 120) ?? '');
+    : resolveCogSeedSessionIdentity(boundedString(raw.sessionId, 'sessionId', 120) ?? '').canonicalSessionId;
+  const taskId = raw.taskId === undefined ? undefined : assertCogSeedTaskId(boundedString(raw.taskId, 'taskId', 120) ?? '');
   if (!sessionId && !taskId) throw new Error('sessionId or taskId required');
   return { ...(sessionId ? { sessionId } : {}), ...(taskId ? { taskId } : {}) };
 }
 
-function normalizeActionInput(payload: unknown): { action: MateRendererTaskAction; taskId?: string; requestId?: string; reason?: string } {
+function normalizeActionInput(payload: unknown): { action: CogSeedRendererTaskAction; taskId?: string; requestId?: string; reason?: string } {
   const raw = asObject(payload);
-  const action = boundedString(raw.action, 'action', 20) as MateRendererTaskAction;
+  const action = boundedString(raw.action, 'action', 20) as CogSeedRendererTaskAction;
   if (!['retry', 'skip', 'resume', 'abort'].includes(action)) throw new Error('invalid CogSeed task action');
-  const taskId = raw.taskId === undefined ? undefined : assertMateTaskId(boundedString(raw.taskId, 'taskId', 120) ?? '');
-  const requestId = raw.requestId === undefined ? undefined : assertMateRequestId(boundedString(raw.requestId, 'requestId', 120) ?? '');
+  const taskId = raw.taskId === undefined ? undefined : assertCogSeedTaskId(boundedString(raw.taskId, 'taskId', 120) ?? '');
+  const requestId = raw.requestId === undefined ? undefined : assertCogSeedRequestId(boundedString(raw.requestId, 'requestId', 120) ?? '');
   const reason = boundedString(raw.reason, 'reason', 500, false);
   return { action, ...(taskId ? { taskId } : {}), ...(requestId ? { requestId } : {}), ...(reason ? { reason } : {}) };
 }
 
-export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
-  const readTask = deps.readTask ?? readMateTask;
-  const retryTask = deps.retryTask ?? retryMateTask;
-  const readEvents = deps.readEvents ?? readMateTaskEvents;
-  const listSessions = deps.listSessions ?? listMateSessions;
-  const readSession = deps.readSession ?? readMateSession;
-  const listTasks = deps.listTasks ?? listMateTasks;
-  const readCoordination = deps.readCoordination ?? readMateCoordination;
-  const readWorkflowRun = deps.readWorkflowRun ?? ((scope, runId) => mateCollaborationStore.readRun(scope, runId));
+export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
+  const readTask = deps.readTask ?? readCogSeedTask;
+  const retryTask = deps.retryTask ?? retryCogSeedTask;
+  const readEvents = deps.readEvents ?? readCogSeedTaskEvents;
+  const listSessions = deps.listSessions ?? listCogSeedSessions;
+  const readSession = deps.readSession ?? readCogSeedSession;
+  const listTasks = deps.listTasks ?? listCogSeedTasks;
+  const readCoordination = deps.readCoordination ?? readCogSeedCoordination;
+  const readWorkflowRun = deps.readWorkflowRun ?? ((scope, runId) => cogseedCollaborationStore.readRun(scope, runId));
 
   return {
-    async start(userId: string, payload: unknown): Promise<MateRendererTaskSummary> {
-      assertMateUserId(userId);
-      const controller = await resolveMateRuntimeController(deps);
-      return taskSummary(await controller.startMateTask(userId, normalizeStartInput(payload)));
+    async start(userId: string, payload: unknown): Promise<CogSeedRendererTaskSummary> {
+      assertCogSeedUserId(userId);
+      const controller = await resolveCogSeedRuntimeController(deps);
+      return taskSummary(await controller.startCogSeedTask(userId, normalizeStartInput(payload)));
     },
 
-    async read(userId: string, payload: unknown): Promise<MateRendererTaskSummary> {
-      assertMateUserId(userId);
+    async read(userId: string, payload: unknown): Promise<CogSeedRendererTaskSummary> {
+      assertCogSeedUserId(userId);
       const taskId = normalizeTaskId(payload);
       const task = await readTask(userId, taskId);
       if (!task) throw new Error('CogSeed task not found');
       return taskSummary(task);
     },
 
-    async cancel(userId: string, payload: unknown): Promise<MateRendererTaskSummary> {
-      assertMateUserId(userId);
-      const controller = await resolveMateRuntimeController(deps);
-      return taskSummary(await controller.cancelMateTask(userId, normalizeTaskId(payload)));
+    async cancel(userId: string, payload: unknown): Promise<CogSeedRendererTaskSummary> {
+      assertCogSeedUserId(userId);
+      const controller = await resolveCogSeedRuntimeController(deps);
+      return taskSummary(await controller.cancelCogSeedTask(userId, normalizeTaskId(payload)));
     },
 
-    async abort(userId: string, payload: unknown): Promise<MateRendererTaskSummary> {
+    async abort(userId: string, payload: unknown): Promise<CogSeedRendererTaskSummary> {
       return this.cancel(userId, payload);
     },
 
-    async retry(userId: string, payload: unknown): Promise<MateRendererTaskSummary> {
-      assertMateUserId(userId);
+    async retry(userId: string, payload: unknown): Promise<CogSeedRendererTaskSummary> {
+      assertCogSeedUserId(userId);
       const input = normalizeRetryInput(payload);
-      const controller = await resolveMateRuntimeController(deps);
-      const task = deps.retryTask ? await retryTask(userId, input.taskId, input.requestId) : await controller.retryMateTask(userId, input.taskId, input.requestId);
+      const controller = await resolveCogSeedRuntimeController(deps);
+      const task = deps.retryTask ? await retryTask(userId, input.taskId, input.requestId) : await controller.retryCogSeedTask(userId, input.taskId, input.requestId);
       return taskSummary(task);
     },
 
-    async resume(userId: string, payload: unknown): Promise<MateRendererTaskSummary> {
-      assertMateUserId(userId);
+    async resume(userId: string, payload: unknown): Promise<CogSeedRendererTaskSummary> {
+      assertCogSeedUserId(userId);
       const raw = asObject(payload);
       rejectHiddenBackendFields(raw);
       const context = boundedArray(raw.context, 'context', MAX_CONTEXT_ITEMS);
       const attachments = boundedArray(raw.attachments, 'attachments', MAX_ATTACHMENT_ITEMS);
       const workingDir = boundedString(raw.workingDir, 'workingDir', 2_000, false);
       const profileId = optionalProfileId(raw.profileId);
-      const input: ResumeMateTaskInput = {
-        requestId: assertMateRequestId(boundedString(raw.requestId, 'requestId', 120) ?? ''),
+      const input: ResumeCogSeedTaskInput = {
+        requestId: assertCogSeedRequestId(boundedString(raw.requestId, 'requestId', 120) ?? ''),
         continuation: boundedString(raw.continuation, 'continuation', MAX_TASK_CHARS) ?? '',
         ...(profileId ? { profileId } : {}),
         ...(context ? { context } : {}),
         ...(attachments ? { attachments } : {}),
         ...(workingDir ? { workingDir } : {}),
       };
-      const controller = await resolveMateRuntimeController(deps);
-      const task = await controller.resumeMateTask(userId, assertMateTaskId(boundedString(raw.taskId, 'taskId', 120) ?? ''), input);
+      const controller = await resolveCogSeedRuntimeController(deps);
+      const task = await controller.resumeCogSeedTask(userId, assertCogSeedTaskId(boundedString(raw.taskId, 'taskId', 120) ?? ''), input);
       return taskSummary(task);
     },
 
     async kbIndex(userId: string, payload: unknown) {
-      assertMateUserId(userId);
+      assertCogSeedUserId(userId);
       const raw = asObject(payload);
-      const sourceId = assertMateKbSourceId(boundedString(raw.sourceId, 'sourceId', 200) ?? '');
+      const sourceId = assertCogSeedKbSourceId(boundedString(raw.sourceId, 'sourceId', 200) ?? '');
       const title = boundedString(raw.title, 'title', 500) ?? '';
       const content = boundedString(raw.content, 'content', 5_000_000) ?? '';
-      return mateKbManager.indexText(userId, { sourceId, title, content });
+      return cogseedKbManager.indexText(userId, { sourceId, title, content });
     },
 
     async kbSearch(userId: string, payload: unknown) {
-      assertMateUserId(userId);
+      assertCogSeedUserId(userId);
       const raw = asObject(payload);
       const query = boundedString(raw.query, 'query', 2_000) ?? '';
-      return mateKbManager.search(userId, query, { k: Math.max(1, Math.min(Math.floor(Number(raw.k) || 10), 50)) });
+      return cogseedKbManager.search(userId, query, { k: Math.max(1, Math.min(Math.floor(Number(raw.k) || 10), 50)) });
     },
 
     async kbRead(userId: string, payload: unknown) {
-      assertMateUserId(userId);
+      assertCogSeedUserId(userId);
       const raw = asObject(payload);
-      return mateKbManager.readSource(userId, assertMateKbSourceId(boundedString(raw.sourceId, 'sourceId', 200) ?? ''));
+      return cogseedKbManager.readSource(userId, assertCogSeedKbSourceId(boundedString(raw.sourceId, 'sourceId', 200) ?? ''));
     },
 
     async kbSources(userId: string) {
-      assertMateUserId(userId);
-      return mateKbManager.listSources(userId);
+      assertCogSeedUserId(userId);
+      return cogseedKbManager.listSources(userId);
     },
 
     async connectors(userId: string) {
-      assertMateUserId(userId);
-      const records = await listMateConnectors(userId);
+      assertCogSeedUserId(userId);
+      const records = await listCogSeedConnectors(userId);
       return records.map(({ transport: _transport, ...publicRecord }) => publicRecord);
     },
 
     async connectorTools(userId: string, payload: unknown) {
-      assertMateUserId(userId);
+      assertCogSeedUserId(userId);
       const raw = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
-      const connectorId = typeof raw.connectorId === 'string' ? assertMateConnectorId(raw.connectorId) : undefined;
-      return connectorId ? mateConnectorManager.listTools(userId, connectorId) : mateConnectorManager.listAllTools(userId);
+      const connectorId = typeof raw.connectorId === 'string' ? assertCogSeedConnectorId(raw.connectorId) : undefined;
+      return connectorId ? cogseedConnectorManager.listTools(userId, connectorId) : cogseedConnectorManager.listAllTools(userId);
     },
 
     async sessions(userId: string) {
@@ -429,16 +429,16 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
     },
 
 
-    async sessionListProjection(userId: string): Promise<MateRendererSessionSummary[]> {
-      assertMateUserId(userId);
+    async sessionListProjection(userId: string): Promise<CogSeedRendererSessionSummary[]> {
+      assertCogSeedUserId(userId);
       const [sessions, tasks] = await Promise.all([listSessions(userId), listTasks(userId)]);
       return sessions.map((session) => sessionSummary(session, tasks.filter((task) => task.sessionId === session.sessionId)));
     },
 
-    async sessionProjection(userId: string, payload: unknown): Promise<{ session: MateRendererSessionSummary | null; collaboration: MateRendererCollaborationSnapshot | null }> {
-      assertMateUserId(userId);
+    async sessionProjection(userId: string, payload: unknown): Promise<{ session: CogSeedRendererSessionSummary | null; collaboration: CogSeedRendererCollaborationSnapshot | null }> {
+      assertCogSeedUserId(userId);
       const { sessionId } = normalizeProjectionInput(payload);
-      const session = await readSession(userId, assertMateSessionId(sessionId ?? ''));
+      const session = await readSession(userId, assertCogSeedSessionId(sessionId ?? ''));
       if (!session) return { session: null, collaboration: null };
       const tasks = await listTasks(userId);
       const directTasks = tasks.filter((task) => task.sessionId === session.sessionId);
@@ -448,8 +448,8 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
       return { session: sessionSummary(session, directTasks), collaboration };
     },
 
-    async collaborationSnapshot(userId: string, payload: unknown): Promise<MateRendererCollaborationSnapshot> {
-      assertMateUserId(userId);
+    async collaborationSnapshot(userId: string, payload: unknown): Promise<CogSeedRendererCollaborationSnapshot> {
+      assertCogSeedUserId(userId);
       const input = normalizeProjectionInput(payload);
       const allTasks = await listTasks(userId);
       let selected = input.taskId ? await readTask(userId, input.taskId) : null;
@@ -460,8 +460,8 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
       const session = await readSession(userId, selected.sessionId);
       if (!session) throw new Error('CogSeed session not found');
 
-      const related: MateTaskRecord[] = [];
-      const visit = (task: MateTaskRecord) => {
+      const related: CogSeedTaskRecord[] = [];
+      const visit = (task: CogSeedTaskRecord) => {
         if (related.some((item) => item.taskId === task.taskId)) return;
         related.push(task);
         for (const child of allTasks.filter((candidate) => candidate.parentTaskId === task.taskId)) visit(child);
@@ -469,7 +469,7 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
       visit(selected);
       const coordination = selected.coordinationId ? await readCoordination(userId, selected.coordinationId) : null;
       const workflowRun = coordination?.workflowRunId
-        ? await readWorkflowRun({ ownerId: userId, domain: 'mate', scopeId: coordination.coordinationId }, coordination.workflowRunId)
+        ? await readWorkflowRun({ ownerId: userId, domain: 'cogseed', scopeId: coordination.coordinationId }, coordination.workflowRunId)
         : null;
       const workflowStepIds = new Set(workflowRun?.steps.map((step) => step.result_ref).filter(Boolean) ?? []);
       const tasks = related.map((task) => taskSummary(task, workflowStepIds.has(task.taskId)));
@@ -477,7 +477,7 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
       const sessionView = sessionSummary(session, directSessionTasks);
       const eventLists = await Promise.all(related.map((task) => readEvents(userId, task.taskId, 0, 200)));
       const timeline = eventLists.flat().map(timelineSummary).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.sequence - b.sequence).slice(-500);
-      const actors: MateRendererActorSummary[] = [
+      const actors: CogSeedRendererActorSummary[] = [
         { actorId: 'commander', role: 'commander', sessionId: selected.sessionId, taskId: selected.taskId, status: selected.status },
         ...related.filter((task) => task.taskId !== selected.taskId).map((task) => ({
           actorId: `member:${task.taskId}`,
@@ -488,7 +488,7 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
         })),
       ];
       const recoveryEvents = timeline.filter((event) => event.type === 'task.recoverable');
-      const workflow: MateRendererWorkflowSummary = {
+      const workflow: CogSeedRendererWorkflowSummary = {
         ...(coordination?.coordinationId ? { coordinationId: coordination.coordinationId } : {}),
         ...(coordination?.workflowRunId ? { workflowRunId: coordination.workflowRunId } : {}),
         ...(workflowRun?.status ? { status: workflowRun.status } : {}),
@@ -524,47 +524,47 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
       };
     },
 
-    async action(userId: string, payload: unknown): Promise<MateRendererCollaborationSnapshot> {
-      assertMateUserId(userId);
+    async action(userId: string, payload: unknown): Promise<CogSeedRendererCollaborationSnapshot> {
+      assertCogSeedUserId(userId);
       const input = normalizeActionInput(payload);
       if (!input.taskId) throw new Error('taskId required');
       if (input.action === 'skip') throw new Error('CogSeed workflow skip requires a workflow step scope');
-      const controller = await resolveMateRuntimeController(deps);
-      if (input.action === 'abort') await controller.cancelMateTask(userId, input.taskId);
+      const controller = await resolveCogSeedRuntimeController(deps);
+      if (input.action === 'abort') await controller.cancelCogSeedTask(userId, input.taskId);
       else if (!input.requestId) throw new Error('requestId required');
-      else if (input.action === 'retry') await controller.retryMateTask(userId, input.taskId, input.requestId);
-      else if (input.action === 'resume') await controller.resumeMateTask(userId, input.taskId, { requestId: input.requestId, continuation: input.reason || 'Resume task.' });
+      else if (input.action === 'retry') await controller.retryCogSeedTask(userId, input.taskId, input.requestId);
+      else if (input.action === 'resume') await controller.resumeCogSeedTask(userId, input.taskId, { requestId: input.requestId, continuation: input.reason || 'Resume task.' });
       return this.collaborationSnapshot(userId, { taskId: input.taskId });
     },
 
     async runtimeStatus(userId: string) {
-      assertMateUserId(userId);
-      const controller = await resolveMateRuntimeController(deps);
+      assertCogSeedUserId(userId);
+      const controller = await resolveCogSeedRuntimeController(deps);
       return controller.runtimeStatus();
     },
 
     async restartRuntime(userId: string) {
-      assertMateUserId(userId);
-      const controller = await resolveMateRuntimeController(deps);
+      assertCogSeedUserId(userId);
+      const controller = await resolveCogSeedRuntimeController(deps);
       const restarted = await controller.restartRuntime();
-      const recovery = await recoverMateTasks(userId);
+      const recovery = await recoverCogSeedTasks(userId);
       return { ...restarted, recovery };
     },
 
     async recover(userId: string) {
-      assertMateUserId(userId);
-      return recoverMateTasks(userId);
+      assertCogSeedUserId(userId);
+      return recoverCogSeedTasks(userId);
     },
 
-    async events(userId: string, payload: unknown): Promise<{ events: MateTaskEvent[]; afterSequence: number }> {
-      assertMateUserId(userId);
+    async events(userId: string, payload: unknown): Promise<{ events: CogSeedTaskEvent[]; afterSequence: number }> {
+      assertCogSeedUserId(userId);
       const input = normalizeEventsInput(payload);
       const events = await readEvents(userId, input.taskId, input.afterSequence, input.limit);
       return { events, afterSequence: input.afterSequence ?? 0 };
     },
 
-    async *streamEvents(userId: string, payload: unknown, signal?: AbortSignal): AsyncGenerator<{ type: 'event'; event: MateTaskEvent }, void, unknown> {
-      assertMateUserId(userId);
+    async *streamEvents(userId: string, payload: unknown, signal?: AbortSignal): AsyncGenerator<{ type: 'event'; event: CogSeedTaskEvent }, void, unknown> {
+      assertCogSeedUserId(userId);
       const input = normalizeEventsInput(payload);
       const events = await readEvents(userId, input.taskId, input.afterSequence, input.limit);
       for (const event of events) {
@@ -575,4 +575,4 @@ export function createMateIpcService(deps: MateIpcServiceDeps = {}) {
   };
 }
 
-export const mateIpcService = createMateIpcService();
+export const cogseedIpcService = createCogSeedIpcService();

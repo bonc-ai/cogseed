@@ -23,7 +23,7 @@ const {
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-packaged-resource-gate-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-packaged-resource-gate-'));
 });
 
 afterEach(() => {

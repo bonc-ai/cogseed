@@ -47,11 +47,11 @@ describe('codex bridge overrides', () => {
       // Real serverEnv shape: env-file pointer + run-as-node + paths, with the
       // secret token/socket present to prove they are filtered out of argv.
       env: {
-        ORKAS_BRIDGE_ENV_FILE: '/runs/r1/cogseed-bridge-env.json',
+        COGSEED_BRIDGE_ENV_FILE: '/runs/r1/cogseed-bridge-env.json',
         ELECTRON_RUN_AS_NODE: '1',
-        ORKAS_PC_DIR: '/pc',
-        ORKAS_BRIDGE_TOKEN: 'tok',
-        ORKAS_BRIDGE_SOCKET: '/tmp/b.sock',
+        COGSEED_PC_DIR: '/pc',
+        COGSEED_BRIDGE_TOKEN: 'tok',
+        COGSEED_BRIDGE_SOCKET: '/tmp/b.sock',
       },
     });
     expect(overrides[0]).toBe('-c');
@@ -59,12 +59,12 @@ describe('codex bridge overrides', () => {
     expect(overrides[3]).toBe('mcp_servers.cogseed.args=["/pc/bin/cogseed-bridge.cjs"]');
     // Non-secret env IS injected — Codex does not inherit the parent env, so
     // without these the bridge MCP server exits "env required".
-    expect(overrides).toContain('mcp_servers.cogseed.env.ORKAS_BRIDGE_ENV_FILE="/runs/r1/cogseed-bridge-env.json"');
+    expect(overrides).toContain('mcp_servers.cogseed.env.COGSEED_BRIDGE_ENV_FILE="/runs/r1/cogseed-bridge-env.json"');
     expect(overrides).toContain('mcp_servers.cogseed.env.ELECTRON_RUN_AS_NODE="1"');
-    expect(overrides).toContain('mcp_servers.cogseed.env.ORKAS_PC_DIR="/pc"');
+    expect(overrides).toContain('mcp_servers.cogseed.env.COGSEED_PC_DIR="/pc"');
     // Token/socket must never reach argv.
-    expect(overrides.join('\n')).not.toContain('ORKAS_BRIDGE_TOKEN');
-    expect(overrides.join('\n')).not.toContain('ORKAS_BRIDGE_SOCKET');
+    expect(overrides.join('\n')).not.toContain('COGSEED_BRIDGE_TOKEN');
+    expect(overrides.join('\n')).not.toContain('COGSEED_BRIDGE_SOCKET');
     expect(overrides.join('\n')).not.toContain('tok');
     expect(overrides.join('\n')).not.toContain('/tmp/b.sock');
   });
@@ -73,11 +73,11 @@ describe('codex bridge overrides', () => {
     const overrides = buildCodexBridgeOverrides({
       command: 'C:\\Program Files\\node.exe',
       args: ['C:\\pc\\bin\\cogseed-bridge.cjs'],
-      env: { ORKAS_PC_DIR: 'C:\\Program Files\\CogSeed' },
+      env: { COGSEED_PC_DIR: 'C:\\Program Files\\CogSeed' },
     });
     expect(overrides[1]).toBe('mcp_servers.cogseed.command="C:\\\\Program Files\\\\node.exe"');
     // Non-secret env values are TOML-escaped the same way.
-    expect(overrides).toContain('mcp_servers.cogseed.env.ORKAS_PC_DIR="C:\\\\Program Files\\\\CogSeed"');
+    expect(overrides).toContain('mcp_servers.cogseed.env.COGSEED_PC_DIR="C:\\\\Program Files\\\\CogSeed"');
   });
 
   it('carries the bridge prompt as developerInstructions, null otherwise', () => {

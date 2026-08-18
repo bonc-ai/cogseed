@@ -20,8 +20,8 @@ const modelCalls: any[] = [];
 
 vi.mock('electron', () => ({
   ipcMain: {
-    handle: (c: string, f: any) => { if (c === 'orkas.invoke') invokeHandler = f; },
-    on: (c: string, f: any) => { if (c === 'orkas.streamStart') streamStartHandler = f; },
+    handle: (c: string, f: any) => { if (c === 'cogseed.invoke') invokeHandler = f; },
+    on: (c: string, f: any) => { if (c === 'cogseed.streamStart') streamStartHandler = f; },
   },
   shell: { openExternal: vi.fn(), showItemInFolder: vi.fn() },
   BrowserWindow: { getFocusedWindow: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
@@ -38,7 +38,7 @@ const UID = 'asideToolUser';
 
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aside-tools-'));
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   invokeHandler = null;
   streamStartHandler = null;
   modelCalls.length = 0;
@@ -59,7 +59,7 @@ beforeEach(async () => {
   (await import('../../../src/main/ipc/index')).register();
 });
 afterEach(() => {
-  delete process.env.ORKAS_WORKSPACE_ROOT;
+  delete process.env.COGSEED_WORKSPACE_ROOT;
   fs.rmSync(root, { recursive: true, force: true });
   vi.resetModules();
 });

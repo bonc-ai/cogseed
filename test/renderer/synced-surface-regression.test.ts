@@ -76,7 +76,7 @@ describe('synced PC surface regressions', () => {
     expect(css).toContain('.agents-grid-subtitle');
   });
 
-  it('keeps the external-agent entry copy aligned with Orkas AI coding tools wording', () => {
+  it('keeps the external-agent entry copy aligned with CogSeed AI coding tools wording', () => {
     const html = read('src/renderer/index.html');
     const en = read('src/renderer/locales/en.json');
     const zh = read('src/renderer/locales/zh.json');
@@ -141,7 +141,7 @@ describe('synced PC surface regressions', () => {
     }
   });
 
-  it('restores user-owned speech key configuration without exposing managed Orkas voice', () => {
+  it('restores user-owned speech key configuration without exposing managed CogSeed voice', () => {
     const html = read('src/renderer/index.html');
     const settings = read('src/renderer/modules/settings.js');
     const auth = read('src/main/features/auth.ts');
@@ -168,8 +168,8 @@ describe('synced PC surface regressions', () => {
     expect(ipc).toContain("'ttsAuth.list'");
     expect(ttsAuth).toContain("id: 'doubao'");
     expect(ttsAuth).toContain("id: 'openai'");
-    expect(ttsAuth).not.toContain('ORKAS_VOICE');
-    expect(ttsAuth).not.toContain('Orkas · Voice');
+    expect(ttsAuth).not.toContain('COGSEED_VOICE');
+    expect(ttsAuth).not.toContain('CogSeed · Voice');
   });
 
   it('keeps Settings local execution modes and edits the commander avatar from AI Team', () => {

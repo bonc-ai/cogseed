@@ -8,7 +8,7 @@ export interface TccSensitivePathResult {
 }
 
 function enabled(): boolean {
-  return process.platform === 'darwin' || process.env.ORKAS_TCC_GUARD_FORCE === '1';
+  return process.platform === 'darwin' || process.env.COGSEED_TCC_GUARD_FORCE === '1';
 }
 
 function norm(p: string): string {

@@ -120,7 +120,7 @@ export interface ConnectorInstance {
   oauth_grant?: OAuthGrant;
   /** DCR-issued client identity for MCP-spec auth (`auth_mode === 'mcp_dcr'`). The public build
    *  stores this with the grant inside the encrypted local registry and never uploads it to the
-   *  Orkas account service. */
+   *  CogSeed account service. */
   dcr_client?: DcrClientCredentials;
   created_at: string;
   updated_at: string;
@@ -172,7 +172,7 @@ export type TransportTemplate =
 // ── OAuth ───────────────────────────────────────────────────────────────
 // Two auth_modes for catalog entries:
 //
-//  - 'server_bridge'  — Orkas company pre-registered an OAuth App at the provider. Server holds
+//  - 'server_bridge'  — CogSeed company pre-registered an OAuth App at the provider. Server holds
 //    client_id/secret, runs the full OAuth handshake server-side, returns a token via deep-link.
 //    Used when the provider doesn't ship a public MCP authorization server (e.g. GitHub Copilot
 //    MCP today). Carries `oauth.provider_id` pointing at the Server's
@@ -219,7 +219,7 @@ export interface OAuthGrant {
   refresh_token: string | null;
   /** Server-owned grant reference. Used by providers with rotating refresh tokens. */
   server_grant_id?: string;
-  /** True when the refresh token is intentionally held by Orkas Server, not this PC. */
+  /** True when the refresh token is intentionally held by CogSeed Server, not this PC. */
   server_managed?: boolean;
   /** Unix ms when `access_token` expires; null when provider doesn't say. */
   expires_at: number | null;

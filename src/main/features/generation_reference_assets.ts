@@ -151,7 +151,7 @@ async function compressAndUploadReference(
 ): Promise<string> {
   const headers = tokenStore.authHeaders();
   if (!headers.user_id || !headers.session_id) {
-    throw new Error(`Orkas sign-in required to upload local reference ${kind}s to COS temp`);
+    throw new Error(`CogSeed sign-in required to upload local reference ${kind}s to COS temp`);
   }
 
   throwIfAborted(opts.signal);
@@ -244,7 +244,7 @@ async function prepareVideo(
   }
 
   const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orkas-ref-video-'));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cogseed-ref-video-'));
   const outPath = path.join(tmpDir, 'reference.mp4');
   try {
     emitProgress(opts.onProgress, 'reference_compress', `Compressing reference video ${opts.index}/${opts.total}`, {

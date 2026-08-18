@@ -17,7 +17,7 @@ function baseAgent(overrides: Record<string, any> = {}) {
     enabled: true,
     interface_contract: {
       version: 1,
-      role: 'orkas_core',
+      role: 'cogseed_core',
       runtime: { kind: 'in_process' },
       io: { input: 'task_message', output: 'final_message' },
       governance: {
@@ -60,8 +60,8 @@ describe('P3394 protocol MVP', () => {
       normative_interface: 'handle_message',
     });
     expect(manifest.channels).toEqual(expect.arrayContaining([
-      expect.objectContaining({ channel: 'group_chat', principal_source: 'mate_user' }),
-      expect.objectContaining({ channel: 'cli', id: 'codex', principal_source: 'orkas_runtime' }),
+      expect.objectContaining({ channel: 'group_chat', principal_source: 'cogseed_user' }),
+      expect.objectContaining({ channel: 'cli', id: 'codex', principal_source: 'cogseed_runtime' }),
     ]));
     expect(manifest.session.ownership.role).toBe('participant_only');
     expect(manifest.capability.declarations.map((d) => d.name)).toEqual(expect.arrayContaining([
@@ -192,8 +192,8 @@ describe('P3394 protocol MVP', () => {
   });
 
   it('lists persisted P3394 process events for a conversation', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-p3394-protocol-'));
-    process.env.ORKAS_WORKSPACE_ROOT = root;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-protocol-'));
+    process.env.COGSEED_WORKSPACE_ROOT = root;
     try {
       const protocol = await import('../../../../src/main/features/p3394/protocol');
       const paths = await import('../../../../src/main/paths');
@@ -208,7 +208,7 @@ describe('P3394 protocol MVP', () => {
         id: 'msg-agent', from: 'agent-writer', text: 'done', turn_id: 'turn-1',
         process: [
           { type: 'event', event: { stream: 'runtime', data: { phase: 'end' } } },
-          { type: 'event', event: { stream: 'p3394', data: { phase: 'normalized', ok: true, role: 'orkas_core' } } },
+          { type: 'event', event: { stream: 'p3394', data: { phase: 'normalized', ok: true, role: 'cogseed_core' } } },
         ],
       });
 
@@ -222,12 +222,12 @@ describe('P3394 protocol MVP', () => {
           agent_id: 'agent-writer',
           turn_id: 'turn-1',
           index: 1,
-          data: { phase: 'normalized', ok: true, role: 'orkas_core' },
+          data: { phase: 'normalized', ok: true, role: 'cogseed_core' },
         },
       ]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
-      delete process.env.ORKAS_WORKSPACE_ROOT;
+      delete process.env.COGSEED_WORKSPACE_ROOT;
     }
   });
 

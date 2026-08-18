@@ -46,7 +46,7 @@ DEFAULT_LIMIT = 5
 DEFAULT_TIMEOUT = 30.0          # per request; academic APIs can be slow, but must not hang the loop
 MAX_AUTHORS = 10
 MAX_BYTES = 5_000_000
-USER_AGENT = "OrkasDeepResearch/1.0 (research skill; stdlib)"
+USER_AGENT = "CogSeedDeepResearch/1.0 (research skill; stdlib)"
 
 _WS_RE = re.compile(r"\s+")
 _TAG_RE = re.compile(r"<[^>]+>")

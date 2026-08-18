@@ -14,14 +14,14 @@
  *     importWorkbuddySession() → REAL read → parse → extract → materialize
  *     → route of an actual on-disk session file.
  *
- * It is gated behind ORKAS_WORKBUDDY_LIVE=1 so the normal suite never spends
+ * It is gated behind COGSEED_WORKBUDDY_LIVE=1 so the normal suite never spends
  * credits or touches the real install. Run with:
  *
- *   ORKAS_WORKBUDDY_LIVE=1 node scripts/run-tests.mjs run \
+ *   COGSEED_WORKBUDDY_LIVE=1 node scripts/run-tests.mjs run \
  *     test/main/features/local_agents/workbuddy_live_smoke.test.ts
  *
  * HOME stays REAL (so the reader/scanner see the real ~/.workbuddy), but
- * ORKAS_WORKSPACE_ROOT is redirected to a temp dir so the import writes into
+ * COGSEED_WORKSPACE_ROOT is redirected to a temp dir so the import writes into
  * a throwaway workspace and never pollutes real user data.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -29,20 +29,20 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const LIVE = process.env.ORKAS_WORKBUDDY_LIVE === '1';
+const LIVE = process.env.COGSEED_WORKBUDDY_LIVE === '1';
 const d = LIVE ? describe : describe.skip;
 
 let tmpWorkspace: string;
 let prevWs: string | undefined;
 
 beforeAll(() => {
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-wb-live-ws-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpWorkspace;
+  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-wb-live-ws-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpWorkspace;
 });
 
 afterAll(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   try { fs.rmSync(tmpWorkspace, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
@@ -59,7 +59,7 @@ d('WorkBuddy live smoke — UI surfacing: localAgents.list marks workbuddy avail
     expect(wb).toBeTruthy();
     // Must survive maskUnsupported — this is what the UI filter keys on.
     expect(wb.available).toBe(true);
-    expect(wb.errorDetail).not.toBe('backend not yet implemented in Orkas');
+    expect(wb.errorDetail).not.toBe('backend not yet implemented in CogSeed');
   }, 60_000);
 });
 

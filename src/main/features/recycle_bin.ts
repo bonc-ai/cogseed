@@ -698,7 +698,7 @@ async function skillTitle(uid: string, batchId: string | undefined, skillId: str
 
 async function savedAppTitle(uid: string, batchId: string | undefined, appId: string): Promise<string> {
   if (!appId) return '';
-  const obj = await readDisplayJson(uid, batchId, `cloud/saved_apps/${appId}/__orkas-meta.json`);
+  const obj = await readDisplayJson(uid, batchId, `cloud/saved_apps/${appId}/__cogseed-meta.json`);
   return titleFromJson(obj, ['title']) || appId;
 }
 
@@ -707,7 +707,7 @@ async function artifactTitle(uid: string, batchId: string | undefined, cid: stri
   const obj = await readDisplayJson(
     uid,
     batchId,
-    pid ? `cloud/projects/${pid}/chat_artifacts/${cid}/${artifactId}/__orkas-meta.json` : `cloud/chat_artifacts/${cid}/${artifactId}/__orkas-meta.json`,
+    pid ? `cloud/projects/${pid}/chat_artifacts/${cid}/${artifactId}/__cogseed-meta.json` : `cloud/chat_artifacts/${cid}/${artifactId}/__cogseed-meta.json`,
   );
   return titleFromJson(obj, ['title']) || artifactId;
 }
@@ -844,7 +844,7 @@ async function buildRecycleDisplayItems(
     if (safeId(agentId)) agentRoots.add(agentId);
     const skillId = /^cloud\/skills\/([^/]+)\/SKILL\.md$/.exec(relPath)?.[1] || '';
     if (safeId(skillId)) skillRoots.add(skillId);
-    const appId = /^cloud\/saved_apps\/([^/]+)\/__orkas-meta\.json$/.exec(relPath)?.[1] || '';
+    const appId = /^cloud\/saved_apps\/([^/]+)\/__cogseed-meta\.json$/.exec(relPath)?.[1] || '';
     if (safeId(appId)) appRoots.add(appId);
   }
 
@@ -930,7 +930,7 @@ async function buildRecycleDisplayItems(
     add({
       category: 'saved_app',
       id: appId,
-      path: `cloud/saved_apps/${appId}/__orkas-meta.json`,
+      path: `cloud/saved_apps/${appId}/__cogseed-meta.json`,
       title: await savedAppTitle(uid, batchId, appId),
     });
   }
@@ -994,7 +994,7 @@ async function buildRecycleDisplayItems(
         title: await artifactTitle(uid, batchId, cid, artifactId) || artifactId || fallback,
         detail: compactDetail([
           safeId(cid) ? await conversationTitle(uid, batchId, metadata, cid) : '',
-          parts.slice(3).filter((p) => p !== '__orkas-meta.json').join('/'),
+          parts.slice(3).filter((p) => p !== '__cogseed-meta.json').join('/'),
         ]),
       });
       continue;
@@ -1041,7 +1041,7 @@ async function buildRecycleDisplayItems(
           detail: compactDetail([
             safeId(cid) ? await conversationTitle(uid, batchId, metadata, cid, pid) : '',
             project,
-            parts.slice(5).filter((p) => p !== '__orkas-meta.json').join('/'),
+            parts.slice(5).filter((p) => p !== '__cogseed-meta.json').join('/'),
           ]),
         });
       } else if (parts[2] === 'auto_tasks') {
@@ -1137,7 +1137,7 @@ async function buildRecycleDisplayItems(
           id: appId,
           path: relPath,
           title: await savedAppTitle(uid, batchId, appId),
-          detail: parts.slice(2).filter((p) => p !== '__orkas-meta.json').join('/') || undefined,
+          detail: parts.slice(2).filter((p) => p !== '__cogseed-meta.json').join('/') || undefined,
         });
       }
       continue;

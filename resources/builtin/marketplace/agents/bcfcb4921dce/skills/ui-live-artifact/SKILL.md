@@ -18,7 +18,7 @@ Choose the mode before creating files:
 
 - `static_html`: one-off HTML design or mockup. No refresh contract.
 - `live_ready_html`: HTML plus data/provenance contract that can later be wired to refresh, but no live runtime registration happens now.
-- `connected_live`: only when Orkas exposes an actual connector/runtime for the requested source in the current context.
+- `connected_live`: only when CogSeed exposes an actual connector/runtime for the requested source in the current context.
 
 If the request is ambiguous, ask one short question: "Should this be refreshable/live, or just a static HTML design?"
 
@@ -38,7 +38,7 @@ Do not ask for secrets. If a connector is not available, ask the user to connect
 
 For `live_ready_html`, create or describe these files when a file deliverable is requested:
 
-- `index.html`: rendered preview that works now in the Orkas embedded artifact surface.
+- `index.html`: rendered preview that works now in the CogSeed embedded artifact surface.
 - `template.html`: optional source template when the user wants future refresh wiring.
 - `data.json`: compact normalized preview data only.
 - `artifact.json`: optional metadata for title, description, refresh mode, view type, and safe source descriptors.
@@ -68,7 +68,7 @@ The preview must still be a good UIDesigner artifact:
 
 ## Connector Boundaries
 
-- Use available Orkas connector tools or local files when they exist.
+- Use available CogSeed connector tools or local files when they exist.
 - Do not call raw third-party APIs when a platform connector/wrapper should own auth.
 - Do not store OAuth tokens, API keys, cookies, auth headers, raw HTTP envelopes, or secret-like metadata in generated files.
 - If no connector exists, produce `live_ready_html` with sample/exported data and note the missing integration.

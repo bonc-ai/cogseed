@@ -5,8 +5,8 @@ import * as path from 'node:path';
 import { writeTextAtomicSync } from '../storage';
 
 export const ENTRY_SEPARATOR = '\n§\n';
-const RECORD_HEADER_NAMESPACE = '<!-- mate-agent-memory:';
-const RECORD_HEADER_PREFIX = '<!-- mate-agent-memory:v1 ';
+const RECORD_HEADER_NAMESPACE = '<!-- cogseed-agent-memory:';
+const RECORD_HEADER_PREFIX = '<!-- cogseed-agent-memory:v1 ';
 const RECORD_HEADER_SUFFIX = ' -->';
 const SAFE_RECORD_ID = /^mem_[a-f0-9]{16}$/;
 const SAFE_SOURCE_ID = /^[A-Za-z0-9_-]{1,80}$/;

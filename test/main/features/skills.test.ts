@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 // skills.ts pulls path constants + the module-level _skillListCache at load.
-// Reset ORKAS_WORKSPACE_ROOT + module graph per test for isolation.
+// Reset COGSEED_WORKSPACE_ROOT + module graph per test for isolation.
 
 // Swap the LLM stream impl per test — same pattern as chats.test.ts /
 // agents.test.ts so streamSendToSkillChat tests can feed synthetic finals.
@@ -27,10 +27,10 @@ let prevHome: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-skills-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-skills-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevHome = process.env.HOME;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   process.env.HOME = tmpDir;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
@@ -42,8 +42,8 @@ afterEach(async () => {
     const reports = await import('../../../src/main/quality/report');
     await reports.drainReportWrites();
   } finally {
-    if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-    else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+    if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
     streamImpl.current = null;
@@ -1094,14 +1094,14 @@ describe('skills › createFromDir', () => {
         'ProgramFiles(x86)': 'D:\\Program Files (x86)',
         ProgramW6432: 'D:\\Program Files',
       },
-      sourceRoot: 'D:\\Code\\Orkas\\PC',
-      workspaceRoot: 'D:\\.orkas\\data',
+      sourceRoot: 'D:\\Code\\CogSeed\\PC',
+      workspaceRoot: 'D:\\.cogseed\\data',
       homeDir: 'D:\\Users\\Alice',
     };
 
     expect(s._isBlacklistedImportSourceForTest('d:\\WINDOWS\\System32', options).blocked).toBe(true);
     expect(s._isBlacklistedImportSourceForTest('d:\\program files\\Vendor', options).blocked).toBe(true);
-    expect(s._isBlacklistedImportSourceForTest('d:\\CODE\\ORKAS\\pc\\src', options).blocked).toBe(true);
+    expect(s._isBlacklistedImportSourceForTest('d:\\CODE\\COGSEED\\pc\\src', options).blocked).toBe(true);
     expect(s._isBlacklistedImportSourceForTest('d:\\users\\alice\\.SSH', options).blocked).toBe(true);
     expect(s._isBlacklistedImportSourceForTest('D:\\Users\\Alice', options).blocked).toBe(true);
 
@@ -1707,7 +1707,7 @@ describe('skills › writeCustomSkillFile (path safety)', () => {
     expect(s.writeCustomSkillFile('ghost', 'note.md', 'x')).toBe(false);
   });
 
-  it('normalizes SKILL.md writes to Orkas-supported frontmatter fields', async () => {
+  it('normalizes SKILL.md writes to CogSeed-supported frontmatter fields', async () => {
     writeCustomSkill('alpha', 'name: "alpha"\ndescription_en: "old"\ncategory: "general"', 'old body');
     const s = await loadSkills();
     const result = s.writeCustomSkillFileChecked('alpha', 'SKILL.md', [
@@ -2370,7 +2370,7 @@ describe('skills › import security gate', () => {
    * `/private/tmp` is the one explicitly allowed exception.
    */
   function writeSkill(name: string, files: Record<string, string>): string {
-    const dir = fs.mkdtempSync(path.join('/private/tmp', `orkas-imp-${name}-`));
+    const dir = fs.mkdtempSync(path.join('/private/tmp', `cogseed-imp-${name}-`));
     for (const [rel, content] of Object.entries(files)) {
       const p = path.join(dir, rel);
       fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -2460,7 +2460,7 @@ describe('skills › import chat seeding', () => {
     + '# Tidy\n\nNormalize punctuation and collapse blank lines. No file, network, or shell access.\n';
 
   function srcDir(name: string, files: Record<string, string>): string {
-    const dir = fs.mkdtempSync(path.join('/private/tmp', `orkas-seed-${name}-`));
+    const dir = fs.mkdtempSync(path.join('/private/tmp', `cogseed-seed-${name}-`));
     for (const [rel, content] of Object.entries(files)) {
       const p = path.join(dir, rel);
       fs.mkdirSync(path.dirname(p), { recursive: true });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { MATE_AGENT_RUNTIME_PROTOCOL_VERSION, type RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
+import { COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, type RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
 import { createDefaultNativeRuntimeExecutor } from '../../../../src/main/features/cogseed_runtime/runtime-executor';
 import type { RuntimeModelProvider } from '../../../../src/main/features/cogseed_runtime/kernel/model-adapter';
 
@@ -10,7 +10,7 @@ const runtimeRoot = path.resolve(__dirname, '../../../../src/main/features/cogse
 
 function request(): RuntimeRunRequest {
   return {
-    protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION,
+    protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
     type: 'run',
     request_id: 'req-native-only',
     runtime_session_id: 'mruntime-native-only',
@@ -34,7 +34,7 @@ describe('CogSeed Runtime native-only production boundary', () => {
     const executor = fs.readFileSync(path.join(runtimeRoot, 'runtime-executor.ts'), 'utf8');
 
     expect(worker).not.toMatch(/core-executor|coreExecutor|createSelectedRuntimeExecutor/);
-    expect(executor).not.toMatch(/RuntimeKernelMode|coreExecutor|createSelectedRuntimeExecutor|ORKAS_MATE_RUNTIME_KERNEL/);
+    expect(executor).not.toMatch(/RuntimeKernelMode|coreExecutor|createSelectedRuntimeExecutor|COGSEED_COGSEED_RUNTIME_KERNEL/);
     expect(fs.existsSync(path.join(runtimeRoot, 'core-executor.ts'))).toBe(false);
   });
 

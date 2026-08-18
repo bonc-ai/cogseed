@@ -50,13 +50,13 @@ function mkSkill(files: Record<string, string>): string {
   return dir;
 }
 
-beforeEach(() => { savedGuardrail = process.env.ORKAS_GUARDRAIL_DIR; });
+beforeEach(() => { savedGuardrail = process.env.COGSEED_GUARDRAIL_DIR; });
 
 afterEach(() => {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
   dirs = [];
-  if (savedGuardrail === undefined) delete process.env.ORKAS_GUARDRAIL_DIR;
-  else process.env.ORKAS_GUARDRAIL_DIR = savedGuardrail;
+  if (savedGuardrail === undefined) delete process.env.COGSEED_GUARDRAIL_DIR;
+  else process.env.COGSEED_GUARDRAIL_DIR = savedGuardrail;
 });
 
 describe('security override › every refusal is waivable', () => {
@@ -93,7 +93,7 @@ describe('security override › every refusal is waivable', () => {
   it('offers an override when the check could not run', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'broken-guardrail-'));
     dirs.push(root);
-    process.env.ORKAS_GUARDRAIL_DIR = root;
+    process.env.COGSEED_GUARDRAIL_DIR = root;
     const scan = await scanSkillDir(mkSkill({ 'scripts/ok.py': CLEAN }), 'thirdparty');
 
     expect(scan.outcome).toBe('unknown');

@@ -9,34 +9,34 @@ let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-interactive-session-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe('CogSeed interactive Agent session contract', () => {
   it('reuses one durable member session per conversation and Agent', async () => {
-    const { createMateTask } = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const { createCogSeedTask } = await import('../../../../src/main/features/cogseed_backend/task-store');
 
-    const first = await createMateTask(USER, {
+    const first = await createCogSeedTask(USER, {
       requestId: 'req-interactive-first',
       task: 'First approved turn',
       conversationId: 'cid-interactive',
       agentId: 'agent-alpha',
     } as any);
-    const second = await createMateTask(USER, {
+    const second = await createCogSeedTask(USER, {
       requestId: 'req-interactive-second',
       task: 'Second approved turn',
       conversationId: 'cid-interactive',
       agentId: 'agent-alpha',
     } as any);
-    const otherAgent = await createMateTask(USER, {
+    const otherAgent = await createCogSeedTask(USER, {
       requestId: 'req-interactive-other',
       task: 'Other Agent turn',
       conversationId: 'cid-interactive',
@@ -44,8 +44,8 @@ describe('CogSeed interactive Agent session contract', () => {
     } as any);
 
     expect(first.task.sessionId).toBe(second.task.sessionId);
-    expect(first.task.sessionId).toMatch(/^mate-session-/);
-    expect(otherAgent.task.sessionId).toMatch(/^mate-session-/);
+    expect(first.task.sessionId).toMatch(/^cogseed-session-/);
+    expect(otherAgent.task.sessionId).toMatch(/^cogseed-session-/);
     expect(otherAgent.task.sessionId).not.toBe(first.task.sessionId);
     expect(first.task).toMatchObject({ conversationId: 'cid-interactive', agentId: 'agent-alpha' });
   });

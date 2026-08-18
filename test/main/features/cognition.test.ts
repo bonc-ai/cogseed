@@ -12,14 +12,14 @@ let prevRoot: string | undefined;
 const UID = 'uCognition';
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-cognition-'));
-  prevRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-cognition-'));
+  prevRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevRoot;
+  process.env.COGSEED_WORKSPACE_ROOT = prevRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.resetModules();
 });

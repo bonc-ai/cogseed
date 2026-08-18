@@ -3,11 +3,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createMateOfficeAdapter } from '../../../../src/main/features/cogseed_backend/office-adapter';
+import { createCogSeedOfficeAdapter } from '../../../../src/main/features/cogseed_backend/office-adapter';
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
-function root() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-office-')); dirs.push(dir); return dir; }
+function root() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-office-')); dirs.push(dir); return dir; }
 
 function setup() {
   const runOfficeCli = vi.fn(async (args: string[], opts: any) => {
@@ -16,7 +16,7 @@ function setup() {
     return { code: 0, stdout: args[0] === 'view' ? '[/body/p[1]] Hello' : '', stderr: '' };
   });
   const closeOfficeFile = vi.fn(async () => {});
-  return { adapter: createMateOfficeAdapter({ officeCliAvailable: () => true, runOfficeCli, closeOfficeFile }), runOfficeCli, closeOfficeFile };
+  return { adapter: createCogSeedOfficeAdapter({ officeCliAvailable: () => true, runOfficeCli, closeOfficeFile }), runOfficeCli, closeOfficeFile };
 }
 
 describe('CogSeed Office adapter', () => {
@@ -45,7 +45,7 @@ describe('CogSeed Office adapter', () => {
   });
 
   it('reports missing engine without touching a file', async () => {
-    const adapter = createMateOfficeAdapter({ officeCliAvailable: () => false, runOfficeCli: vi.fn(), closeOfficeFile: vi.fn() });
+    const adapter = createCogSeedOfficeAdapter({ officeCliAvailable: () => false, runOfficeCli: vi.fn(), closeOfficeFile: vi.fn() });
     await expect(adapter.run('office_read', { path: '/tmp/a.docx' }, { userId: 'u', requestId: 'req-a', runtimeSessionId: 'mruntime-a', readOnlyRoots: ['/tmp'], writableRoots: [] })).resolves.toMatchObject({ isError: true, content: expect.stringContaining('E_OFFICE_ENGINE_MISSING') });
   });
 });

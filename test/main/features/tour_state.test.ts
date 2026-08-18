@@ -13,15 +13,15 @@ let previousRoot: string | undefined;
 
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'tour-state-test-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(UID_A);
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(root, { recursive: true, force: true });
 });
 

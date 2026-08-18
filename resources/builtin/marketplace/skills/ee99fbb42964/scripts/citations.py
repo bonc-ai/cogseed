@@ -1,6 +1,6 @@
 """deep-research citations — the deterministic anti-fabrication half of the engine.
 
-A Python skill cannot reach Orkas's in-process model or web tools, so the AGENT
+A Python skill cannot reach CogSeed's in-process model or web tools, so the AGENT
 gathers sources (web_search / web_fetch) and drafts claims-with-citations; this
 skill does the deterministic verification the model must not be trusted to do on
 itself:

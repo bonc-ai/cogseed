@@ -34,7 +34,7 @@ const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 function acceptLanguage(): string {
-  return process.env.ORKAS_ACCEPT_LANGUAGE || "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7";
+  return process.env.COGSEED_ACCEPT_LANGUAGE || "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7";
 }
 
 export type SearchProvider = "brave" | "bing";
@@ -205,7 +205,7 @@ type CacheState = {
 };
 
 function resolveCacheFile(): string {
-  // Embedders (e.g. Orkas) can pin this to their workspace.
+  // Embedders (e.g. CogSeed) can pin this to their workspace.
   // CORE_AGENT_STATE_DIR is the preferred new env; fall back to the
   // existing CORE_AGENT_AUTH_DIR for zero-config compat — core-agent
   // already writes there and its parent is the only workspace the
@@ -345,7 +345,7 @@ export const WEB_SEARCH_DEFAULT_COUNT = DEFAULT_COUNT;
 export const WEB_SEARCH_MAX_COUNT = MAX_COUNT;
 
 /** Public web_search execution — exposes the keyless Brave/Bing pipeline so
- *  embedders (e.g. Orkas's overriding `web_search` tool) can fall back to
+ *  embedders (e.g. CogSeed's overriding `web_search` tool) can fall back to
  *  it when the user hasn't configured a paid search API. Returns the same
  *  `{ content, isError }` shape as the AgentTool execute callback. */
 export async function runBuiltinWebSearch(

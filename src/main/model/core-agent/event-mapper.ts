@@ -1,6 +1,6 @@
 /**
  * Event mapper — translates core-agent `AgentRunEvent` objects into the
- * Orkas `StreamEvent` shape that `features/*` + the renderer already
+ * CogSeed `StreamEvent` shape that `features/*` + the renderer already
  * consume (see `main/model/client.ts`'s StreamEvent export, and the
  * `_IPC_ROUTES` + renderer `process` handling in renderer/app.js).
  *
@@ -324,7 +324,7 @@ function _tryAgentUnderRoot(abs: string, root: string): string | null {
 }
 
 /**
- * Consume a core-agent event stream and yield Orkas-shape events.
+ * Consume a core-agent event stream and yield CogSeed-shape events.
  * Does NOT yield the terminal `{type:'done'}` — the caller appends that
  * in its own `finally` (same pattern as the openclaw client).
  */

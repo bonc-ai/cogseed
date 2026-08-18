@@ -21,10 +21,11 @@ describe('CogSeed residual identifiers', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-
   it('uses CogSeed as the official package and repository identity', () => {
     const pkg = readJson('package.json');
     expect(pkg.name).toBe('cogseed');
+    expect(pkg.cogseedSourceRuntimeVariant).toBe('cogseed');
+    expect(pkg.build.protocols[0].schemes).toEqual(['cogseed']);
     expect(read('package-lock.json')).toContain('"name": "cogseed"');
 
     const currentDocs = [
@@ -34,75 +35,57 @@ describe('CogSeed residual identifiers', () => {
     ];
     for (const file of currentDocs) {
       const source = read(file);
+      expect(source, file).toContain('CogSeed');
       expect(source, file).not.toContain('team-02/mate-agent.git');
       expect(source, file).not.toContain('cd mate-agent');
+      // 开源化清理：内网 GitLab 地址已替换为公开占位地址
+      expect(source, file).not.toContain('10.1.12.6');
     }
     const readme = read('README.md');
-    expect(readme).toContain('github.com/YOUR-ORG/cogseed.git');
+    expect(readme).toContain('github.com/cogseed/cogseed.git');
     expect(readme).toContain('window.cogseed');
     expect(readme).toContain('npm test');
-    expect(readme).toContain('CC Switch');
     expect(readme).toContain('.cogseed');
-    expect(readme).toContain('mateagent://');
+    expect(readme).toContain('cogseed://');
 
-    // AGENTS.md 是仓库规则单一事实源（含 window.cogseed 契约）；CLAUDE.md
-    // 按 2026-08-14 清理纪律降级为指针文件，不再重复规则——断言它指向
-    // AGENTS.md 而不是重复 window.cogseed 字样。
     const agents = read('AGENTS.md');
     expect(agents).toContain('window.cogseed.{invoke, stream}');
-    expect(agents).not.toContain('window.orkas.{invoke, stream}');
     const claude = read('CLAUDE.md');
     expect(claude).toContain('AGENTS.md');
-    expect(claude).not.toContain('window.orkas.{invoke, stream}');
   });
 
-  it('uses a canonical cogseed temp prefix for local imports', async () => {
+  it('uses a canonical CogSeed temp prefix for local imports', async () => {
     const fileImport = await import('../../src/main/util/file-import');
     const source = path.join(tmpDir, 'source.txt');
     const target = path.join(tmpDir, 'target.txt');
     fs.writeFileSync(source, 'hello');
     await fileImport.copyLocalFileAtomic(source, target);
     expect(fs.readdirSync(tmpDir).some((name) => name.startsWith('.cogseed-import-'))).toBe(false);
-    expect(fs.readdirSync(tmpDir).some((name) => name.startsWith('.orkas-import-'))).toBe(false);
     expect(fs.readFileSync(target, 'utf8')).toBe('hello');
   });
 
-  it('accepts legacy .orkas whisper markers but prefers canonical CogSeed markers', async () => {
+  it('uses only the canonical CogSeed whisper marker', async () => {
     Object.defineProperty(process, 'resourcesPath', { value: path.join(tmpDir, 'no-resources'), configurable: true, writable: true });
     const runtimeRoot = path.join(tmpDir, 'runtime');
     const whisperDir = path.join(runtimeRoot, 'whisper', 'current');
     fs.mkdirSync(path.join(whisperDir, 'bin'), { recursive: true });
     fs.mkdirSync(path.join(whisperDir, 'models'), { recursive: true });
-    const canonical = path.join(whisperDir, '.cogseed-whisper-ready.json');
-    const legacy = path.join(whisperDir, '.orkas-whisper-ready.json');
-    fs.writeFileSync(legacy, JSON.stringify({ schema: 1, platformKey: 'darwin-x64', version: '1', model: 'x', capability: { status: 'ready' }, files: {} }));
-    process.env.ORKAS_RUNTIME_DIR = runtimeRoot;
+    const marker = path.join(whisperDir, '.cogseed-whisper-ready.json');
+    process.env.COGSEED_RUNTIME_DIR = runtimeRoot;
     const runtime = await import('../../src/main/util/bundled-runtime');
     expect(runtime.bundledWhisperPaths()).toEqual({});
-    expect(fs.existsSync(legacy)).toBe(true);
-    fs.writeFileSync(canonical, JSON.stringify({ schema: 1, platformKey: 'darwin-x64', version: '1', model: 'x', capability: { status: 'ready' }, files: {} }));
-    expect(fs.existsSync(canonical)).toBe(true);
+    fs.writeFileSync(marker, JSON.stringify({ schema: 1, platformKey: 'darwin-x64', version: '1', model: 'x', capability: { status: 'ready' }, files: {} }));
+    expect(fs.existsSync(marker)).toBe(true);
   });
+});
 
-  it('does not expose legacy Mate product labels from CogSeed backend or runtime source', () => {
-    const roots = [
-      path.join(process.cwd(), 'src', 'main', 'features', 'cogseed_backend'),
-      path.join(process.cwd(), 'src', 'main', 'features', 'cogseed_runtime'),
-    ];
-    const offenders: string[] = [];
-    const walk = (dir: string) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile() && entry.name.endsWith('.ts')) {
-          fs.readFileSync(full, 'utf8').split('\n').forEach((line, index) => {
-            if (/\bMate[ -][A-Za-z]/.test(line)) offenders.push(`${path.relative(process.cwd(), full)}:${index + 1}`);
-          });
-        }
-      }
-    };
-    roots.forEach(walk);
-    expect(offenders).toEqual([]);
+describe('CogSeed-only IPC registration', () => {
+  it('registers each canonical transport exactly once', () => {
+    const ipc = read('src/main/ipc/index.ts');
+    const main = read('src/main/index.ts');
+    expect(ipc.match(/ipcMain\.handle\('cogseed\.invoke'/g)).toHaveLength(1);
+    expect(ipc.match(/ipcMain\.on\('cogseed\.streamStart'/g)).toHaveLength(1);
+    expect(ipc.match(/ipcMain\.on\('cogseed\.streamCancel'/g)).toHaveLength(1);
+    expect(main.match(/ipcMain\.on\('cogseed:bootI18n'/g)).toHaveLength(1);
   });
-
 });

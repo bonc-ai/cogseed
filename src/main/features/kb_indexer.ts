@@ -52,8 +52,8 @@ export const EMBED_MAX_CHARS = 400;
  *  at sentence boundaries — preserves local context across the cut. Cross-
  *  paragraph chunks don't overlap (different topics shouldn't bleed). */
 export const EMBED_OVERLAP = 50;
-const EXTRACT_TIMEOUT_MS = envTimeoutMs('ORKAS_LIBRARY_EXTRACT_TIMEOUT_MS', 5 * 60 * 1000);
-const EMBED_TIMEOUT_MS = envTimeoutMs('ORKAS_LIBRARY_EMBED_TIMEOUT_MS', 5 * 60 * 1000);
+const EXTRACT_TIMEOUT_MS = envTimeoutMs('COGSEED_LIBRARY_EXTRACT_TIMEOUT_MS', 5 * 60 * 1000);
+const EMBED_TIMEOUT_MS = envTimeoutMs('COGSEED_LIBRARY_EMBED_TIMEOUT_MS', 5 * 60 * 1000);
 
 type LibraryVectorizeBatch = Record<string, never>;
 interface LibraryVectorizeSummary {

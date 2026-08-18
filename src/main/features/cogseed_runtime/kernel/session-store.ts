@@ -2,15 +2,15 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import {
-  mateRuntimeRoot,
-  mateRuntimeSessionFile,
+  cogseedRuntimeRoot,
+  cogseedRuntimeSessionFile,
 } from '../../../paths';
 import { appendJsonl, safeId, writeJson } from '../../../storage';
 
 export interface NativeRuntimeSessionHeader {
   type: 'session_header';
   version: 1;
-  kernel: 'mate-agent-native';
+  kernel: 'cogseed-agent-native';
   runtime_session_id: string;
   created_at: string;
 }
@@ -44,7 +44,7 @@ type RuntimeRequestClaimResult =
   | { claimed: true }
   | { claimed: false; existingRunId: string; status: RequestLedgerEntry['status'] };
 
-const NATIVE_RUNTIME_KERNEL = 'mate-agent-native';
+const NATIVE_RUNTIME_KERNEL = 'cogseed-agent-native';
 const LEGACY_RUNTIME_SESSION_ERROR = 'legacy core-agent runtime session cannot be read as native history';
 const VALID_TURN_ROLES = new Set(['user', 'assistant', 'tool', 'system']);
 const VALID_LEDGER_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);
@@ -52,7 +52,7 @@ const ledgerTails = new Map<string, Promise<unknown>>();
 const sessionCreateTails = new Map<string, Promise<unknown>>();
 
 export function runtimeRequestLedgerFile(uid: string): string {
-  return path.join(mateRuntimeRoot(uid), 'request-ledger.json');
+  return path.join(cogseedRuntimeRoot(uid), 'request-ledger.json');
 }
 
 export async function claimRuntimeRequest(
@@ -97,7 +97,7 @@ export async function createNativeRuntimeSession(
 ): Promise<void> {
   assertRuntimeSessionId(runtimeSessionId);
 
-  const file = mateRuntimeSessionFile(uid, runtimeSessionId);
+  const file = cogseedRuntimeSessionFile(uid, runtimeSessionId);
   return withSessionCreateQueue(file, async () => {
     try {
       await readNativeRuntimeSession(uid, runtimeSessionId);
@@ -131,7 +131,7 @@ export async function appendNativeSessionRecord(
   assertRuntimeSessionId(runtimeSessionId);
   assertNativeTurnRecord(record);
   await readNativeRuntimeSession(uid, runtimeSessionId);
-  await appendJsonl(mateRuntimeSessionFile(uid, runtimeSessionId), record);
+  await appendJsonl(cogseedRuntimeSessionFile(uid, runtimeSessionId), record);
 }
 
 export async function readNativeRuntimeSession(
@@ -140,7 +140,7 @@ export async function readNativeRuntimeSession(
 ): Promise<NativeRuntimeSessionReadResult> {
   assertRuntimeSessionId(runtimeSessionId);
 
-  const file = mateRuntimeSessionFile(uid, runtimeSessionId);
+  const file = cogseedRuntimeSessionFile(uid, runtimeSessionId);
   const text = await fs.readFile(file, 'utf8');
   return parseNativeSessionRecords(text, runtimeSessionId);
 }

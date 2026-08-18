@@ -77,7 +77,7 @@ function _trackAgentRunResultTelemetry(cid, evData) {
   void evData;
 }
 
-function _maybeShowOrkasCreditGuidance(rawError, source) {
+function _maybeShowCogSeedCreditGuidance(rawError, source) {
   void rawError;
   void source;
 }
@@ -3591,7 +3591,7 @@ const CHAT_ATTACH_ACCEPT = [
 const CHAT_IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
 const CHAT_VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.m4v', '.ogv'];
 const CHAT_AUDIO_EXTS = ['.mp3', '.wav', '.ogg', '.opus', '.m4a', '.aac', '.flac'];
-const ORKAS_FILE_DRAG_MIME = 'application/x-orkas-file';
+const COGSEED_FILE_DRAG_MIME = 'application/x-cogseed-file';
 
 function _chatFileIconHtml(name, kind) {
   if (typeof window !== 'undefined' && typeof window.fileKindIconHtml === 'function') return window.fileKindIconHtml(name, kind);
@@ -3993,14 +3993,14 @@ function _chatAttachInternalDragItems(dataTransfer) {
   if (!dataTransfer || !dataTransfer.types) return [];
   let hasInternal = false;
   for (let i = 0; i < dataTransfer.types.length; i++) {
-    if (dataTransfer.types[i] === ORKAS_FILE_DRAG_MIME) {
+    if (dataTransfer.types[i] === COGSEED_FILE_DRAG_MIME) {
       hasInternal = true;
       break;
     }
   }
   if (!hasInternal) return [];
   let raw = '';
-  try { raw = dataTransfer.getData(ORKAS_FILE_DRAG_MIME); }
+  try { raw = dataTransfer.getData(COGSEED_FILE_DRAG_MIME); }
   catch (_) { return []; }
   if (!raw) return [];
   try {
@@ -4912,7 +4912,7 @@ function _bindChatDropAttach(wrapSelector, getCid) {
     const types = e.dataTransfer && e.dataTransfer.types;
     if (!types) return false;
     for (let i = 0; i < types.length; i++) {
-      if (types[i] === 'Files' || types[i] === ORKAS_FILE_DRAG_MIME) return true;
+      if (types[i] === 'Files' || types[i] === COGSEED_FILE_DRAG_MIME) return true;
     }
     return false;
   };
@@ -11522,7 +11522,7 @@ function _notifyAgentRunFinished(agentId, payload = {}) {
   const id = String(agentId || '');
   if (!id || typeof window === 'undefined') return;
   try {
-    window.dispatchEvent(new CustomEvent('orkas-agent-run-finished', {
+    window.dispatchEvent(new CustomEvent('cogseed-agent-run-finished', {
       detail: { agent_id: id, ...payload },
     }));
   } catch (_) {}

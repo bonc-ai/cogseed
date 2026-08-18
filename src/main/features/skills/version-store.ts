@@ -65,13 +65,13 @@ export interface AppendFullSkillVersionInput {
 }
 
 function versionsDir(uid: string): string {
-  const root = process.env.ORKAS_WORKSPACE_ROOT
+  const root = process.env.COGSEED_WORKSPACE_ROOT
     || path.dirname(path.dirname(userLocalRoot(uid)));
   return path.join(root, uid, 'local', 'skills', 'versions');
 }
 
 function legacyVersionsDir(uid: string): string {
-  const root = process.env.ORKAS_WORKSPACE_ROOT
+  const root = process.env.COGSEED_WORKSPACE_ROOT
     || path.dirname(path.dirname(userLocalRoot(uid)));
   return path.join(root, uid, 'local', 'kstar', 'versions');
 }

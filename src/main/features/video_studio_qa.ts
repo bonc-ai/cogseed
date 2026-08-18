@@ -377,7 +377,7 @@ export function normalizeDraftInspectIssueSeverities(issues: Issue[]): Issue[] {
       || /(?:background|\bbg\b|decor|glow|particle|arc|orb|texture)/.test(selector);
     const semanticVisual = BLOCKING_VISUAL_CODES.has(code)
       && (code !== 'ELEMENT_OUT_OF_CANVAS' || !decorative);
-    const nativeHeuristic = issue.source === 'orkas-native-inspect';
+    const nativeHeuristic = issue.source === 'cogseed-native-inspect';
     const trustworthyNativeFinding = nativeHeuristic
       && issue.confidence === 'high'
       && issue.activeScene !== false
@@ -575,7 +575,7 @@ function addDesignContractAdvisories(
       selector: sourceSelector,
       message: `Design contract is missing low-cost aesthetic budget fields: ${missingSections.join(', ')}.`,
       fixHint: 'Add compact aesthetic, layout, type, color, motion, and scene-variation budgets before writing HTML.',
-      source: 'orkas-native-design-contract',
+      source: 'cogseed-native-design-contract',
     });
   }
 
@@ -599,7 +599,7 @@ function addDesignContractAdvisories(
       selector: `${sourceSelector}.aesthetic`,
       message: `Aesthetic thesis is too thin for distinctive HTML generation: ${missingAesthetic.join(', ')} missing.`,
       fixHint: 'Name the subject-specific visual world, signature device, risk, and rejected generic move.',
-      source: 'orkas-native-design-contract',
+      source: 'cogseed-native-design-contract',
     });
   }
 
@@ -612,7 +612,7 @@ function addDesignContractAdvisories(
       selector: `${sourceSelector}.aesthetic`,
       message: 'Aesthetic thesis uses generic style language without a concrete signature device.',
       fixHint: 'Replace generic descriptors with a visual behavior that belongs to this brief.',
-      source: 'orkas-native-design-contract',
+      source: 'cogseed-native-design-contract',
     });
   }
 
@@ -626,7 +626,7 @@ function addDesignContractAdvisories(
       selector: `${sourceSelector}.visual_direction`,
       message: `Visual direction is missing HyperFrames-style pre-authoring fields: ${missingVisualDirection.join(', ')}.`,
       fixHint: 'Name the design tradition, rejected lazy defaults, video-scale rule, depth-layer rule, motion-verb rule, and rhythm pattern before HTML authoring.',
-      source: 'orkas-native-design-contract',
+      source: 'cogseed-native-design-contract',
     });
   }
 
@@ -640,7 +640,7 @@ function addDesignContractAdvisories(
       selector: `${sourceSelector}.typography_tokens`,
       message: `Typography tokens do not clearly name readable video roles: ${missingRoles.join(', ')}.`,
       fixHint: 'Use role-based type tokens with video-size floors, not only font names or mood words.',
-      source: 'orkas-native-design-contract',
+      source: 'cogseed-native-design-contract',
     });
   }
 
@@ -654,7 +654,7 @@ function addDesignContractAdvisories(
       selector: `${sourceSelector}.scenes`,
       message: `Scene art direction is missing background/midground/foreground depth layers for ${scenesMissingDepth.map(sceneLabel).join(', ')}.`,
       fixHint: 'Give each non-trivial scene a topic-derived background field, dominant midground hero, and foreground accent/metadata layer.',
-      source: 'orkas-native-design-contract',
+      source: 'cogseed-native-design-contract',
     });
   }
 
@@ -669,7 +669,7 @@ function addDesignContractAdvisories(
       selector: `${sourceSelector}.scenes`,
       message: `Scene art direction is missing motion verbs/choreography for ${scenesMissingMotionVerbs.map(sceneLabel).join(', ')}.`,
       fixHint: 'Assign concrete verbs such as draw, lock, drift, slam, count up, or reveal to primary scene elements before writing GSAP.',
-      source: 'orkas-native-design-contract',
+      source: 'cogseed-native-design-contract',
     });
   }
 
@@ -688,7 +688,7 @@ function addDesignContractAdvisories(
         selector: `${sourceSelector}.scenes`,
         message: `Three or more consecutive scenes use the same layout grammar "${key}".`,
         fixHint: 'Vary at least one of framing, focal zone, diagram grammar, or transition family.',
-        source: 'orkas-native-design-contract',
+        source: 'cogseed-native-design-contract',
       });
       break;
     }
@@ -702,7 +702,7 @@ function addDesignContractAdvisories(
       selector: `${sourceSelector}.color_tokens`,
       message: 'Color tokens appear to come from a single narrow hue family.',
       fixHint: 'Keep brand colors, but add purposeful neutral/supporting accents for hierarchy, data meaning, or scene variation.',
-      source: 'orkas-native-design-contract',
+      source: 'cogseed-native-design-contract',
     });
   }
 }
@@ -1087,7 +1087,7 @@ export async function runContractHtmlQa(
 ): Promise<Record<string, unknown>> {
   const issues: Issue[] = metaIssues.map((issue) => ({
     ...issue,
-    source: issue.source || 'orkas-native-contract-html',
+    source: issue.source || 'cogseed-native-contract-html',
   }));
   const contract = contractLoad.value;
   const sceneMap = sceneMapLoad.value;
@@ -1100,7 +1100,7 @@ export async function runContractHtmlQa(
       severity: 'error',
       selector: contractSelector,
       message: 'A validated composition contract is required before drafting model-authored HTML.',
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   } else if (contractLoad.error || !isRecord(contract)) {
     issues.push({
@@ -1108,7 +1108,7 @@ export async function runContractHtmlQa(
       severity: 'error',
       selector: contractSelector,
       message: `Could not parse ${contractSelector}: ${contractLoad.error || 'not a JSON object'}`,
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   if (sceneMapLoad.exists && (sceneMapLoad.error || !isRecord(sceneMap))) {
@@ -1117,7 +1117,7 @@ export async function runContractHtmlQa(
       severity: 'error',
       selector: timelineSelector,
       message: `Could not parse ${timelineSelector}: ${sceneMapLoad.error || 'not a JSON object'}`,
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   if (htmlUsesGsap(meta.html) && !htmlHasLocalGsapVendorScript(meta.html)) {
@@ -1126,7 +1126,7 @@ export async function runContractHtmlQa(
       severity: 'error',
       selector: 'index.html',
       message: 'index.html uses gsap but does not load ./assets/vendor/gsap.min.js.',
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   if (htmlUsesGsap(meta.html) && !htmlHasRegisteredGsapTimeline(meta.html)) {
@@ -1136,7 +1136,7 @@ export async function runContractHtmlQa(
       selector: 'index.html',
       message: 'GSAP is used but no timeline is registered on window.__timelines[compositionId], so deterministic frame seeking would repeat or freeze frames.',
       fixHint: 'Create one paused gsap.timeline and assign it to window.__timelines using the exact data-composition-id.',
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   if (htmlUsesGsap(meta.html) && !htmlHasPausedGsapTimeline(meta.html)) {
@@ -1146,7 +1146,7 @@ export async function runContractHtmlQa(
       selector: 'index.html',
       message: 'GSAP timeline creation must include paused:true so the renderer, not wall-clock time, controls every frame.',
       fixHint: 'Use gsap.timeline({ paused: true }) and position tweens with explicit timeline times.',
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   const imperativeMedia = htmlImperativeMediaControl(meta.html);
@@ -1157,7 +1157,7 @@ export async function runContractHtmlQa(
       selector: 'index.html',
       message: `Composition scripts use renderer-owned media operations: ${imperativeMedia.join(', ')}.`,
       fixHint: 'Declare audio/video with data-start/data-duration/data-track-index; the renderer owns play, pause, and seeking.',
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   if (htmlUsesGsap(meta.html) && htmlUsesSeekUnsafeTimelineCallback(meta.html)) {
@@ -1167,7 +1167,7 @@ export async function runContractHtmlQa(
       selector: 'index.html',
       message: 'GSAP timeline callbacks such as tl.call() or function-valued tl.add() are not deterministic under frame seeking.',
       fixHint: 'Replace callback-driven scene switching with positioned set/to/fromTo opacity or autoAlpha tweens.',
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   addDesignContractAdvisories(
@@ -1187,7 +1187,7 @@ export async function runContractHtmlQa(
         severity: 'error',
         selector: contractSelector,
         message: `Composition contract sources disagree on ${key}: ${contractCanvas[key]} vs ${sceneMapCanvas[key]}.`,
-        source: 'orkas-native-contract-html',
+        source: 'cogseed-native-contract-html',
       });
     }
   }
@@ -1203,7 +1203,7 @@ export async function runContractHtmlQa(
         severity: 'error',
         selector: '[data-composition-id]',
         message: `index.html root ${key}=${rootCanvas[key]} but the canonical composition contract expects ${expected[key]}.`,
-        source: 'orkas-native-contract-html',
+        source: 'cogseed-native-contract-html',
       });
     }
   }
@@ -1220,7 +1220,7 @@ export async function runContractHtmlQa(
       selector: 'index.html',
       message: `HTML is missing data-scene-id hooks for: ${missingSceneIds.slice(0, 8).join(', ')}.`,
       fixHint: 'Put data-scene-id on each scene root so preview and design QA can report scene-specific findings.',
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   if (duplicateSceneIds.length) {
@@ -1229,7 +1229,7 @@ export async function runContractHtmlQa(
       severity: 'error',
       selector: 'index.html',
       message: `data-scene-id should identify one scene root; duplicate ids: ${duplicateSceneIds.slice(0, 8).join(', ')}.`,
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   if (scenes.length && Number(semanticHooks.role_hook_count || 0) === 0) {
@@ -1239,7 +1239,7 @@ export async function runContractHtmlQa(
       selector: 'index.html',
       message: 'HTML has no data-role hooks for title, body, label, focal visual, or supporting visual elements.',
       fixHint: 'Add compact data-role markers to important elements; they improve scene-specific QA without changing layout.',
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   const matchedSceneCount = Number(semanticHooks.matched_scene_count || 0);
@@ -1253,7 +1253,7 @@ export async function runContractHtmlQa(
       selector: 'index.html',
       message: 'Every semantic scene root starts with display:none, but no script activates display. Opacity animation alone would render blank frames.',
       fixHint: 'Set each active scene root to display:block/flex/grid before animating opacity, or avoid display:none on timeline-driven scene roots.',
-      source: 'orkas-native-contract-html',
+      source: 'cogseed-native-contract-html',
     });
   }
   const duration = expected.duration || meta.durationSec;
@@ -1267,7 +1267,7 @@ export async function runContractHtmlQa(
         severity: 'error',
         selector: sceneMapLoad.exists ? timelineSelector : contractSelector,
         message: `Scene "${sceneLabel(scene, index)}" needs numeric start plus positive duration or end.`,
-        source: 'orkas-native-contract-html',
+        source: 'cogseed-native-contract-html',
       });
       return;
     }
@@ -1277,7 +1277,7 @@ export async function runContractHtmlQa(
         severity: 'error',
         selector: sceneMapLoad.exists ? timelineSelector : contractSelector,
         message: `Scene "${sceneLabel(scene, index)}" ends beyond the composition duration.`,
-        source: 'orkas-native-contract-html',
+        source: 'cogseed-native-contract-html',
       });
     }
     if (prevEnd >= 0 && start < prevEnd - 0.15) {
@@ -1286,7 +1286,7 @@ export async function runContractHtmlQa(
         severity: 'error',
         selector: sceneMapLoad.exists ? timelineSelector : contractSelector,
         message: `Scene "${sceneLabel(scene, index)}" starts before the prior scene ends.`,
-        source: 'orkas-native-contract-html',
+        source: 'cogseed-native-contract-html',
       });
     }
     prevEnd = Math.max(prevEnd, start + sceneDuration);
@@ -1302,7 +1302,7 @@ export async function runContractHtmlQa(
           severity: 'error',
           selector: 'index.html',
           message: `Scene "${sceneLabel(scene, index)}" declares on-screen copy not found in index.html: "${shortText(text, 100)}".`,
-          source: 'orkas-native-contract-html',
+          source: 'cogseed-native-contract-html',
         });
       }
     }
@@ -1337,7 +1337,7 @@ export async function runSourceAlignmentQa(sceneMapLoad: JsonLoad, shotlistLoad:
       severity: 'error',
       selector: 'shotlist.json',
       message: `Could not parse shotlist.json: ${shotlistLoad.error}`,
-      source: 'orkas-native-source-alignment',
+      source: 'cogseed-native-source-alignment',
     });
   }
   if (!sceneMapLoad.exists || sceneMapLoad.error || !scenes.length) {
@@ -1346,7 +1346,7 @@ export async function runSourceAlignmentQa(sceneMapLoad: JsonLoad, shotlistLoad:
       severity: 'error',
       selector: timelineSelector,
       message: `shotlist.json exists, but ${timelineSelector} has no scenes to map approved beats.`,
-      source: 'orkas-native-source-alignment',
+      source: 'cogseed-native-source-alignment',
     });
   }
   const alignment = isRecord(sceneMapLoad.value) && isRecord(sceneMapLoad.value.source_alignment)
@@ -1366,7 +1366,7 @@ export async function runSourceAlignmentQa(sceneMapLoad: JsonLoad, shotlistLoad:
       severity: 'error',
       selector: timelineSelector,
       message: 'The approved shotlist has shot ids, but every manifest scene has an empty source_shots mapping.',
-      source: 'orkas-native-source-alignment',
+      source: 'cogseed-native-source-alignment',
     });
   }
   if (unknownShotRefs.length) {
@@ -1375,7 +1375,7 @@ export async function runSourceAlignmentQa(sceneMapLoad: JsonLoad, shotlistLoad:
       severity: 'error',
       selector: timelineSelector,
       message: `Manifest source_shots reference unknown approved shot ids: ${unknownShotRefs.slice(0, 8).join(', ')}.`,
-      source: 'orkas-native-source-alignment',
+      source: 'cogseed-native-source-alignment',
     });
   }
   if (shots.length > scenes.length && !mergeReason && mappedShotCount.size < shots.length) {
@@ -1384,7 +1384,7 @@ export async function runSourceAlignmentQa(sceneMapLoad: JsonLoad, shotlistLoad:
       severity: 'error',
       selector: timelineSelector,
       message: `shotlist has ${shots.length} shots but the canonical manifest has ${scenes.length} scenes. Add source_alignment.merge_reason or per-scene source_shots when intentionally merging beats.`,
-      source: 'orkas-native-source-alignment',
+      source: 'cogseed-native-source-alignment',
     });
   }
   const missingShotIds = [...shotIds].filter((id) => !mappedShotCount.has(id));
@@ -1394,7 +1394,7 @@ export async function runSourceAlignmentQa(sceneMapLoad: JsonLoad, shotlistLoad:
       severity: 'error',
       selector: timelineSelector,
       message: `Approved shot ids are not represented by source_shots: ${missingShotIds.slice(0, 8).join(', ')}. Map them or declare source_alignment.merge_reason.`,
-      source: 'orkas-native-source-alignment',
+      source: 'cogseed-native-source-alignment',
     });
   }
   const errorCount = issues.filter((issue) => issue.severity === 'error').length;
@@ -1426,7 +1426,7 @@ export async function runDeliveryRequirementsQa(
       severity: 'error',
       selector: `shotlist.json#${field}`,
       message: `Gate B shotlist must declare ${field}.`,
-      source: 'orkas-native-delivery-requirements',
+      source: 'cogseed-native-delivery-requirements',
     });
     return value.toLowerCase();
   };
@@ -1438,12 +1438,12 @@ export async function runDeliveryRequirementsQa(
   if (!(Number.isFinite(targetDuration) && targetDuration > 0)) {
     issues.push({
       code: 'DELIVERY_TARGET_DURATION_MISSING', severity: 'error', selector: 'shotlist.json#target_duration_seconds',
-      message: 'Gate B shotlist must declare a positive target_duration_seconds.', source: 'orkas-native-delivery-requirements',
+      message: 'Gate B shotlist must declare a positive target_duration_seconds.', source: 'cogseed-native-delivery-requirements',
     });
   } else if (Math.abs(meta.durationSec - targetDuration) > 0.15) {
     issues.push({
       code: 'DELIVERY_TARGET_DURATION_MISMATCH', severity: 'error', selector: 'composition-manifest.json#composition.duration',
-      message: `Composition duration ${meta.durationSec}s does not match the approved ${targetDuration}s delivery target.`, source: 'orkas-native-delivery-requirements',
+      message: `Composition duration ${meta.durationSec}s does not match the approved ${targetDuration}s delivery target.`, source: 'cogseed-native-delivery-requirements',
     });
   }
   const sceneMap = isRecord(sceneMapLoad.value) ? sceneMapLoad.value : {};
@@ -1452,7 +1452,7 @@ export async function runDeliveryRequirementsQa(
   if (videoLanguage && manifestLanguage && videoLanguage !== manifestLanguage) {
     issues.push({
       code: 'DELIVERY_LANGUAGE_MISMATCH', severity: 'error', selector: 'composition-manifest.json#composition.language',
-      message: `Composition language ${manifestLanguage} does not match approved video_language ${videoLanguage}.`, source: 'orkas-native-delivery-requirements',
+      message: `Composition language ${manifestLanguage} does not match approved video_language ${videoLanguage}.`, source: 'cogseed-native-delivery-requirements',
     });
   }
   if (captionMode && !/^(?:none|off|disabled)$/.test(captionMode)) {
@@ -1462,7 +1462,7 @@ export async function runDeliveryRequirementsQa(
       .some((stat) => stat?.isFile());
     if (!hasBurnedInCaptions && !hasSidecar) issues.push({
       code: 'DELIVERY_CAPTIONS_MISSING', severity: 'error', selector: 'index.html',
-      message: `caption_mode=${captionMode} requires burned-in data-role="caption" elements or a captions sidecar file.`, source: 'orkas-native-delivery-requirements',
+      message: `caption_mode=${captionMode} requires burned-in data-role="caption" elements or a captions sidecar file.`, source: 'cogseed-native-delivery-requirements',
     });
   }
   const audio = isRecord(sceneMap.audio) ? sceneMap.audio : {};
@@ -1470,13 +1470,13 @@ export async function runDeliveryRequirementsQa(
   if (/^(?:required|yes|on|music)$/.test(musicMode) && !tracks.some((track) => track.kind === 'music')) {
     issues.push({
       code: 'DELIVERY_MUSIC_MISSING', severity: 'error', selector: 'composition-manifest.json#audio.tracks',
-      message: 'music_mode requires a declarative music track, but none is present.', source: 'orkas-native-delivery-requirements',
+      message: 'music_mode requires a declarative music track, but none is present.', source: 'cogseed-native-delivery-requirements',
     });
   }
   if (audioMode && /^(?:narration|voice|voiceover|tts)$/.test(audioMode) && !tracks.some((track) => track.kind === 'narration')) {
     issues.push({
       code: 'DELIVERY_NARRATION_MISSING', severity: 'error', selector: 'composition-manifest.json#audio.tracks',
-      message: `audio_mode=${audioMode} requires a narration track.`, source: 'orkas-native-delivery-requirements',
+      message: `audio_mode=${audioMode} requires a narration track.`, source: 'cogseed-native-delivery-requirements',
     });
   }
   const errorCount = issues.filter((issue) => issue.severity === 'error').length;
@@ -1509,7 +1509,7 @@ export async function runAudioTimingQa(
       severity: 'error',
       selector: narrationPath,
       message: `Narration audio is declared but the file does not exist: ${narrationPath}.`,
-      source: 'orkas-native-audio-timing',
+      source: 'cogseed-native-audio-timing',
     });
   }
   if (!narrationRequired && ownsNarration && (!meta.audioTracks.length || !narrationFileExists)) {
@@ -1518,7 +1518,7 @@ export async function runAudioTimingQa(
       severity: 'error',
       selector: meta.audioTracks.length ? narrationPath || contractSelector : 'index.html',
       message: 'The canonical manifest declares composition-owned narration, but the composition has no usable narration audio track.',
-      source: 'orkas-native-audio-timing',
+      source: 'cogseed-native-audio-timing',
     });
   }
   if (narrationRequired && (!ownsNarration || !meta.audioTracks.length || !narrationFileExists)) {
@@ -1527,7 +1527,7 @@ export async function runAudioTimingQa(
       severity: 'error',
       selector: ownsNarration ? narrationPath || contractSelector : contractSelector,
       message: 'The canonical manifest contains standalone narration text, but its narration audio has not been materialized. Run composition.materialize_narration before preview, draft, or export.',
-      source: 'orkas-native-audio-timing',
+      source: 'cogseed-native-audio-timing',
     });
   }
   if ((ownsNarration || meta.audioTracks.length > 0) && !sceneMapLoad.exists) {
@@ -1536,7 +1536,7 @@ export async function runAudioTimingQa(
       severity: 'error',
       selector: timelineSelector,
       message: 'Narrated compositions require canonical scene mappings so voiceover-to-visual alignment is auditable.',
-      source: 'orkas-native-audio-timing',
+      source: 'cogseed-native-audio-timing',
     });
   }
   if (sceneMapLoad.exists && sceneMapLoad.error) {
@@ -1545,7 +1545,7 @@ export async function runAudioTimingQa(
       severity: 'error',
       selector: timelineSelector,
       message: `Could not parse ${timelineSelector}: ${sceneMapLoad.error}`,
-      source: 'orkas-native-audio-timing',
+      source: 'cogseed-native-audio-timing',
     });
   }
   if (narrationMapLoad.exists && narrationMapLoad.error) {
@@ -1554,7 +1554,7 @@ export async function runAudioTimingQa(
       severity: 'error',
       selector: 'narration-map.json',
       message: `Could not parse narration-map.json: ${narrationMapLoad.error}`,
-      source: 'orkas-native-audio-timing',
+      source: 'cogseed-native-audio-timing',
     });
   }
   if (ownsNarration && scenes.length) {
@@ -1570,7 +1570,7 @@ export async function runAudioTimingQa(
         severity: 'error',
         selector: timelineSelector,
         message: `${missing.length} scene(s) have no narration, narration_ref, or source_shots mapping.`,
-        source: 'orkas-native-audio-timing',
+        source: 'cogseed-native-audio-timing',
       });
     }
   }
@@ -1588,7 +1588,7 @@ export async function runAudioTimingQa(
           severity: 'error',
           selector: timelineSelector,
           message: `Scene "${sceneLabel(scene, scenes.indexOf(scene))}" references narration line(s) not found in narration-map.json: ${missingRefs.join(', ')}.`,
-          source: 'orkas-native-audio-timing',
+          source: 'cogseed-native-audio-timing',
         });
         continue;
       }
@@ -1604,7 +1604,7 @@ export async function runAudioTimingQa(
           severity: 'error',
           selector: timelineSelector,
           message: `Scene "${sceneLabel(scene, scenes.indexOf(scene))}" starts at ${round2(actualStart)}s but narration-map starts at ${round2(expectedStart)}s (${round2(startDrift)}s drift).`,
-          source: 'orkas-native-audio-timing',
+          source: 'cogseed-native-audio-timing',
         });
       }
       if (expectedEnd > actualEnd + 1.25) {
@@ -1613,7 +1613,7 @@ export async function runAudioTimingQa(
           severity: 'error',
           selector: timelineSelector,
           message: `Scene "${sceneLabel(scene, scenes.indexOf(scene))}" ends at ${round2(actualEnd)}s but referenced narration line(s) run until ${round2(expectedEnd)}s.`,
-          source: 'orkas-native-audio-timing',
+          source: 'cogseed-native-audio-timing',
         });
       }
     }
@@ -1626,7 +1626,7 @@ export async function runAudioTimingQa(
       message: refScenesWithoutInlineTiming.length
         ? 'Scenes use narration_ref but narration-map.json has no lines and not every referenced scene has inline narration text with a numeric time window. Add project/composition/narration-map.json or inline per-scene narration text and timing before Gate D.'
         : 'Scenes use narration_ref but narration-map.json has no lines, so draft QA falls back to coarse inline narration timing checks.',
-      source: 'orkas-native-audio-timing',
+      source: 'cogseed-native-audio-timing',
     });
   }
 
@@ -1646,7 +1646,7 @@ export async function runAudioTimingQa(
           severity: 'error',
           selector: timelineSelector,
           message: `Scene "${sceneLabel(scene, scenes.indexOf(scene))}" starts at ${round2(actualStart)}s but estimated narration timing is ${round2(expectedStart)}s (${round2(drift)}s drift).`,
-          source: 'orkas-native-audio-timing',
+          source: 'cogseed-native-audio-timing',
         });
       }
       cursorChars += sceneNarrationText(scene).length;
@@ -1657,7 +1657,7 @@ export async function runAudioTimingQa(
       severity: 'warning',
       selector: timelineSelector,
       message: 'Scenes use narration references or source_shots without inline narration text, so draft QA can verify mapping presence but cannot estimate timing drift.',
-      source: 'orkas-native-audio-timing',
+      source: 'cogseed-native-audio-timing',
     });
   }
 
@@ -2111,7 +2111,7 @@ export async function compareVisualBaseline(
       severity: 'warning',
       selector: baselineAbsPath,
       message: `Visual baseline could not be parsed: ${loaded.error || 'samples array missing'}.`,
-      source: 'orkas-native-visual-regression',
+      source: 'cogseed-native-visual-regression',
     });
     return { ok: true, skipped: true, status: 'baseline_invalid', baseline_path: baselineAbsPath, changed: false, issues };
   }
@@ -2145,7 +2145,7 @@ export async function compareVisualBaseline(
       severity: 'warning',
       selector: baselineAbsPath,
       message: 'Visual baseline has no sample labels matching the current preview/draft plan.',
-      source: 'orkas-native-visual-regression',
+      source: 'cogseed-native-visual-regression',
     });
   }
   const changedLabels = comparisons.filter((item) => item.changed === true).map((item) => String(item.label));
@@ -2155,7 +2155,7 @@ export async function compareVisualBaseline(
       severity: 'warning',
       selector: baselineAbsPath,
       message: `Visual baseline changed at: ${changedLabels.slice(0, 8).join(', ')}. Review intentionally; this advisory does not trigger an automatic rerender.`,
-      source: 'orkas-native-visual-regression',
+      source: 'cogseed-native-visual-regression',
     });
   }
   return {
@@ -2238,7 +2238,7 @@ export function summarizeVideoFrameQa(
       code: 'VIDEO_SAMPLE_FRAMES_MISSING',
       severity: 'error',
       message: 'No sampled evidence frames were captured for draft video QA.',
-      source: 'orkas-native-video-qa',
+      source: 'cogseed-native-video-qa',
     });
   }
   const expectedMinimum = opts.minimumSamples
@@ -2248,7 +2248,7 @@ export function summarizeVideoFrameQa(
       code: 'VIDEO_SAMPLE_COVERAGE_INSUFFICIENT',
       severity: 'error',
       message: `Captured ${samples.length} distinct evidence frame(s); this composition requires at least ${expectedMinimum}.`,
-      source: 'orkas-native-video-qa',
+      source: 'cogseed-native-video-qa',
     });
   }
   if (opts.requireSemanticCoverage && opts.expectedSceneIds?.length) {
@@ -2259,7 +2259,7 @@ export function summarizeVideoFrameQa(
         code: 'VIDEO_SCENE_EVIDENCE_MISSING',
         severity: 'error',
         message: `No semantic evidence frame was captured for scene(s): ${missingSceneIds.slice(0, 12).join(', ')}.`,
-        source: 'orkas-native-video-qa',
+        source: 'cogseed-native-video-qa',
       });
     }
   }
@@ -2269,7 +2269,7 @@ export function summarizeVideoFrameQa(
         code: sample.label === 'first-frame' ? 'EMPTY_HOOK_FRAME' : 'BLANK_SAMPLE_FRAME',
         severity: 'error',
         message: `Sample "${sample.label}" at ${sample.time_seconds}s appears blank or nearly flat (brightness=${sample.brightness}, contrast=${sample.contrast}).`,
-        source: 'orkas-native-video-qa',
+        source: 'cogseed-native-video-qa',
       });
     }
     if (opts.requireSemanticCoverage && sample.expected_scene_id) {
@@ -2280,7 +2280,7 @@ export function summarizeVideoFrameQa(
           severity: 'error',
           sceneId: sample.expected_scene_id,
           message: `Sample "${sample.label}" at ${sample.time_seconds}s does not show expected scene "${sample.expected_scene_id}".`,
-          source: 'orkas-native-video-qa',
+          source: 'cogseed-native-video-qa',
         });
       }
     }
@@ -2292,7 +2292,7 @@ export function summarizeVideoFrameQa(
           code: 'HOOK_PROMISE_NOT_VISIBLE',
           severity: 'error',
           message: 'The first frame must expose a visible data-role="title" and readable promise text.',
-          source: 'orkas-native-video-qa',
+          source: 'cogseed-native-video-qa',
         });
       }
     }
@@ -2305,7 +2305,7 @@ export function summarizeVideoFrameQa(
       severity: 'error',
       sceneId: samples[i].expected_scene_id,
       message: `Sample "${samples[i].label}" reports a different visible scene from "${samples[i - 1].label}" but captured identical pixels after retry.`,
-      source: 'orkas-native-video-qa',
+      source: 'cogseed-native-video-qa',
     });
   }
   let runStart = 0;
@@ -2319,7 +2319,7 @@ export function summarizeVideoFrameQa(
         code: 'FROZEN_FRAME_RUN',
         severity: 'warning',
         message: `${runLen} sampled frames are identical across ${round2(span)}s. Review the contact sheet for intentionally static or unsampled local motion.`,
-        source: 'orkas-native-video-qa',
+        source: 'cogseed-native-video-qa',
       });
     }
     runStart = i;

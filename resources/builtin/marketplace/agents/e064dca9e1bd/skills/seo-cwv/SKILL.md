@@ -22,12 +22,12 @@ Measure Core Web Vitals with the free PageSpeed Insights API. Field data (CrUX, 
 
 ## Preconditions
 
-- Network access to `googleapis.com` (honors HTTP(S)_PROXY automatically). Optional free API key via `--key` or `ORKAS_PAGESPEED_KEY` (keyless works but is rate-limited). Python 3.9+ stdlib only. PSI is slow (synthetic run) — default timeout 60s.
+- Network access to `googleapis.com` (honors HTTP(S)_PROXY automatically). Optional free API key via `--key` or `COGSEED_PAGESPEED_KEY` (keyless works but is rate-limited). Python 3.9+ stdlib only. PSI is slow (synthetic run) — default timeout 60s.
 
 ## How to call
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" seo-cwv cwv -- <url> [--strategy mobile|desktop] [--key <k>] [--out <cwv.json>]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" seo-cwv cwv -- <url> [--strategy mobile|desktop] [--key <k>] [--out <cwv.json>]
 ```
 
 ## Expected output

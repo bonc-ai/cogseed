@@ -37,7 +37,7 @@ function _loadMathJaxRuntime() {
     const script = document.createElement('script');
     script.src = './vendor/mathjax/tex-chtml.js';
     script.async = true;
-    script.dataset.orkasMathjax = '1';
+    script.dataset.cogseedMathjax = '1';
     script.onload = () => resolve();
     script.onerror = () => reject(new Error('failed to load MathJax runtime'));
     (document.head || document.documentElement).appendChild(script);

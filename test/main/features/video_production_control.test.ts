@@ -60,7 +60,7 @@ function request(): Record<string, unknown> {
 }
 
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-video-production-control-'));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-video-production-control-'));
   planPath = path.join(root, 'plan.json');
   statePath = path.join(root, 'state.json');
   writePlan();

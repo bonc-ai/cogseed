@@ -35,13 +35,7 @@ const INTERNAL_ENTRYPOINT_CONSUMERS = Object.freeze({
     'src/main/features/local_agents/bridge.ts',
     'src/main/features/local_agents/runner.ts',
   ]),
-  'orkas-bridge.cjs': Object.freeze([
-    'bin/orkas-bridge.cjs',
-  ]),
-  'mate-runtime-worker.cjs': Object.freeze([
-    'bin/mate-runtime-worker.cjs',
-  ]),
-  'orkas-pkg.cjs': Object.freeze([
+  'cogseed-pkg.cjs': Object.freeze([
     'src/main/features/packages.ts',
     'src/main/model/core-agent/local-tools.ts',
   ]),
@@ -170,7 +164,7 @@ function verifyBuildFilesConfig(build) {
 function verifyRuntimeConsumerReferences(projectRoot) {
   const catalogRefs = [];
   const activeGoogleIds = [];
-  const catalogPattern = /\$\{ORKAS_PC_DIR\}\/bin\/([A-Za-z0-9._-]+\.cjs)/g;
+  const catalogPattern = /\$\{COGSEED_PC_DIR\}\/bin\/([A-Za-z0-9._-]+\.cjs)/g;
   const activeGooglePattern = /requiredGoogleEntry\(['"]([A-Za-z0-9._-]+)['"]\)/g;
   for (const relativeFile of CONNECTOR_CATALOG_SOURCE_FILES) {
     const file = path.join(projectRoot, ...relativeFile.split('/'));
@@ -191,7 +185,7 @@ function verifyRuntimeConsumerReferences(projectRoot) {
       }
       const next = googleSource.indexOf('\n  {', start + idMarker.length);
       const block = googleSource.slice(start, next < 0 ? googleSource.length : next);
-      const adapter = block.match(/\$\{ORKAS_PC_DIR\}\/bin\/([A-Za-z0-9._-]+\.cjs)/)?.[1];
+      const adapter = block.match(/\$\{COGSEED_PC_DIR\}\/bin\/([A-Za-z0-9._-]+\.cjs)/)?.[1];
       if (!adapter) {
         throw new Error(`[packaged-entrypoint-gate] active Google connector has no local bin adapter: ${id}`);
       }

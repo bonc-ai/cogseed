@@ -83,7 +83,7 @@ function ensurePackageFromRegistry(packageName, requiredFiles = []) {
   }
 
   console.log(`[prepare-win-native-deps] ensuring ${packageName}@${version}`);
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-win-native-deps-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-win-native-deps-'));
   try {
     const tarball = npmPack(tmpDir, `${packageName}@${version}`);
     removeTree(targetDir);
@@ -115,7 +115,7 @@ function expectedState(electronVersion) {
 }
 
 function removeLegacyMarker() {
-  removeTree(path.join(PC_DIR, 'node_modules', '.orkas-native-prepared'));
+  removeTree(path.join(PC_DIR, 'node_modules', '.cogseed-native-prepared'));
 }
 
 function removeDirectories(parentDir, shouldRemove, fsImpl = fs) {

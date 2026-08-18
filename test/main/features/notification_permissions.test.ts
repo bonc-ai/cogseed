@@ -46,9 +46,9 @@ describe('system notification permission helpers', () => {
   });
 
   it('builds platform notification-settings deep links', () => {
-    expect(systemNotificationSettingsUrl('darwin', 'com.mateagent.desktop'))
-      .toBe('x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.mateagent.desktop');
-    expect(systemNotificationSettingsUrl('win32', 'com.mateagent.desktop')).toBe('ms-settings:notifications');
-    expect(systemNotificationSettingsUrl('linux', 'com.mateagent.desktop')).toBeNull();
+    expect(systemNotificationSettingsUrl('darwin', 'com.cogseed.desktop'))
+      .toBe('x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.cogseed.desktop');
+    expect(systemNotificationSettingsUrl('win32', 'com.cogseed.desktop')).toBe('ms-settings:notifications');
+    expect(systemNotificationSettingsUrl('linux', 'com.cogseed.desktop')).toBeNull();
   });
 });

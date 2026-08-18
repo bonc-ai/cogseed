@@ -40,7 +40,7 @@ function loadModelOutputTracker() {
     const calls = [];
     function _convTrackError(action, data) { calls.push({ action, data }); }
     function _groupActorLabel(actorId) { return actorId === 'commander' ? 'Commander' : ''; }
-    function _maybeShowOrkasCreditGuidance() {}
+    function _maybeShowCogSeedCreditGuidance() {}
     ${source}
     ({ track: _handleModelOutputErrorForUi, calls });
   `, {});

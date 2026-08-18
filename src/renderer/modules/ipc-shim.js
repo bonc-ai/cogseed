@@ -201,36 +201,36 @@ function _monitorIpcError(kind, channel, data) {
   } catch (_) {}
 }
 
-function _hasOrkasInvoke() {
+function _hasCogSeedInvoke() {
   return !!(window.cogseed && typeof window.cogseed.invoke === 'function');
 }
 
-function _hasOrkasStream() {
+function _hasCogSeedStream() {
   return !!(window.cogseed && typeof window.cogseed.stream === 'function');
 }
 
-const _mateProjectionCache = new Map();
-const _mateProjectionInflight = new Map();
-let _mateProjectionInvokeOverride = null;
+const _cogseedProjectionCache = new Map();
+const _cogseedProjectionInflight = new Map();
+let _cogseedProjectionInvokeOverride = null;
 
-function _mateProjectionInvoke(channel, payload) {
-  if (_mateProjectionInvokeOverride) return _mateProjectionInvokeOverride(channel, payload);
-  if (!_hasOrkasInvoke()) return Promise.reject(new Error('ipc bridge unavailable'));
+function _cogseedProjectionInvoke(channel, payload) {
+  if (_cogseedProjectionInvokeOverride) return _cogseedProjectionInvokeOverride(channel, payload);
+  if (!_hasCogSeedInvoke()) return Promise.reject(new Error('ipc bridge unavailable'));
   return window.cogseed.invoke(channel, payload);
 }
 
-function _mateProjectionEntry(key, loader, onUpdate) {
-  const snapshot = _mateProjectionCache.has(key) ? _mateProjectionCache.get(key) : null;
-  let refresh = _mateProjectionInflight.get(key);
+function _cogseedProjectionEntry(key, loader, onUpdate) {
+  const snapshot = _cogseedProjectionCache.has(key) ? _cogseedProjectionCache.get(key) : null;
+  let refresh = _cogseedProjectionInflight.get(key);
   if (!refresh) {
     refresh = Promise.resolve().then(async () => {
       const next = await loader();
-      _mateProjectionCache.set(key, next);
+      _cogseedProjectionCache.set(key, next);
       return next;
     }).finally(() => {
-      _mateProjectionInflight.delete(key);
+      _cogseedProjectionInflight.delete(key);
     });
-    _mateProjectionInflight.set(key, refresh);
+    _cogseedProjectionInflight.set(key, refresh);
   }
   if (typeof onUpdate === 'function') {
     refresh.then((next) => { try { onUpdate(next); } catch (_) {} }).catch(() => {});
@@ -238,36 +238,36 @@ function _mateProjectionEntry(key, loader, onUpdate) {
   return { snapshot, refresh };
 }
 
-function _mateProjectionSessionList(options) {
-  return _mateProjectionEntry('mate:sessions', async () => {
-    const result = await _mateProjectionInvoke('mate_agent.session.list', {});
+function _cogseedProjectionSessionList(options) {
+  return _cogseedProjectionEntry('cogseed:sessions', async () => {
+    const result = await _cogseedProjectionInvoke('cogseed.session.list', {});
     if (!result || result.ok === false) throw new Error((result && result.error) || 'load failed');
     return Array.isArray(result.sessions) ? result.sessions : (Array.isArray(result) ? result : []);
   }, options && options.onUpdate);
 }
 
-function _mateProjectionSessionReference(sessionId) {
+function _cogseedProjectionSessionReference(sessionId) {
   const id = String(sessionId || '').trim();
   if (!id) return id;
-  if (/^(?:mate-session-|gconv-|gmember-)/.test(id)) return id;
+  if (/^(?:cogseed-session-|gconv-|gmember-)/.test(id)) return id;
   return `gconv-${id}`;
 }
 
-function _mateProjectionSession(sessionId, options) {
-  const reference = _mateProjectionSessionReference(sessionId);
-  const key = `mate:session:${reference}`;
-  return _mateProjectionEntry(key, async () => {
-    const result = await _mateProjectionInvoke('mate_agent.session.read', { sessionId: reference });
+function _cogseedProjectionSession(sessionId, options) {
+  const reference = _cogseedProjectionSessionReference(sessionId);
+  const key = `cogseed:session:${reference}`;
+  return _cogseedProjectionEntry(key, async () => {
+    const result = await _cogseedProjectionInvoke('cogseed.session.read', { sessionId: reference });
     if (!result || result.ok === false) throw new Error((result && result.error) || 'load failed');
     return result;
   }, options && options.onUpdate);
 }
 
-window.mateAgentProjection = window.mateAgentProjection || {
-  setInvoker(fn) { _mateProjectionInvokeOverride = typeof fn === 'function' ? fn : null; },
-  sessions(options) { return _mateProjectionSessionList(options || {}); },
-  session(sessionId, options) { return _mateProjectionSession(sessionId, options || {}); },
-  collaboration(sessionId, options) { return _mateProjectionSession(sessionId, options || {}); },
+window.cogseedProjection = window.cogseedProjection || {
+  setInvoker(fn) { _cogseedProjectionInvokeOverride = typeof fn === 'function' ? fn : null; },
+  sessions(options) { return _cogseedProjectionSessionList(options || {}); },
+  session(sessionId, options) { return _cogseedProjectionSession(sessionId, options || {}); },
+  collaboration(sessionId, options) { return _cogseedProjectionSession(sessionId, options || {}); },
 };
 
 function _isStreamCancel(err) {
@@ -333,7 +333,7 @@ function _streamResponse(channel, payload, signal) {
  * (e.g. `{ cid }` for per-conversation attachments).
  */
 async function _uploadBinary(channel, options, extraParams) {
-  if (!_hasOrkasInvoke()) {
+  if (!_hasCogSeedInvoke()) {
     return _mockJsonResponse({ ok: false, error: 'ipc bridge unavailable' });
   }
 
@@ -416,7 +416,7 @@ function apiFetch(url, options) {
 
   // Streaming: go through window.cogseed.stream + ReadableStream body.
   if (opts.stream) {
-    if (!_hasOrkasStream()) {
+    if (!_hasCogSeedStream()) {
       return Promise.resolve(_mockJsonResponse({ ok: false, error: 'ipc stream bridge unavailable' }));
     }
     const payload = { ...query, ...body, ...params };
@@ -428,7 +428,7 @@ function apiFetch(url, options) {
     ? { ...params, updates: body, ...query }
     : { ...query, ...body, ...params };
 
-  if (!_hasOrkasInvoke()) {
+  if (!_hasCogSeedInvoke()) {
     return Promise.resolve(_mockJsonResponse({ ok: false, error: 'ipc bridge unavailable' }));
   }
 

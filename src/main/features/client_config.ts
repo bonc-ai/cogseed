@@ -13,6 +13,7 @@ import { createLogger } from '../logger';
 import { fetchWithRetry } from '../util/retry';
 import { desktopPlatform } from '../system_info';
 import { withCommonHeaders } from './api_common';
+import { requireCogSeedApiBase } from './api_base';
 import { PUBLIC_PROVIDER_MODELS, type ProviderModelEntry } from '../model/public_model_catalog';
 
 export type { ProviderModelEntry } from '../model/public_model_catalog';
@@ -51,7 +52,6 @@ type ElectronPowerMonitorLike = {
 
 const log = createLogger('client-config');
 const REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
-const PROD_DEFAULT = 'https://orkas.ai/api';
 
 let started = false;
 let inFlight: Promise<ConfigRefreshResult> | null = null;
@@ -384,7 +384,7 @@ export function clientConfigPlatform(platform = process.platform): string {
 }
 
 function apiBase(_app: ElectronAppLike): string {
-  return PROD_DEFAULT;
+  return requireCogSeedApiBase();
 }
 
 function buildUrl(app: ElectronAppLike): string {

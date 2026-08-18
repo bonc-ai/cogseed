@@ -75,7 +75,7 @@ function _isAppCompatible(minAppVersion: string): boolean {
 function _isInstallRowAppCompatible(row: ({ id?: string } & MinAppVersionSource), kind: 'agent' | 'skill'): boolean {
   const min = minAppVersionFrom(row);
   if (!min || _isAppCompatible(min)) return true;
-  log.info(`skip ${kind} ${row.id || ''}; requires Orkas >= ${min} (current ${_currentAppVersion() || 'unknown'})`);
+  log.info(`skip ${kind} ${row.id || ''}; requires CogSeed >= ${min} (current ${_currentAppVersion() || 'unknown'})`);
   return false;
 }
 
@@ -910,7 +910,7 @@ async function _ensureAgentSkillDependencies(
       _assertApprovedDependencySkill(skillId, meta);
       const minAppVersion = _normalizeMinAppVersion(meta);
       if (!_isAppCompatible(minAppVersion)) {
-        throw new Error(`dependency skill ${skillId} requires Orkas >= ${minAppVersion} (current ${_currentAppVersion() || 'unknown'})`);
+        throw new Error(`dependency skill ${skillId} requires CogSeed >= ${minAppVersion} (current ${_currentAppVersion() || 'unknown'})`);
       }
       row = {
         id: skillId,
@@ -1249,7 +1249,7 @@ async function _pullAgentLocked(uid: string, row: AgentInstall, opts: Marketplac
     await addAgentInstall(uid, current);
   }
   if (!_isAppCompatible(minAppVersion)) {
-    throw new Error(`agent ${row.id} requires Orkas >= ${minAppVersion} (current ${_currentAppVersion() || 'unknown'})`);
+    throw new Error(`agent ${row.id} requires CogSeed >= ${minAppVersion} (current ${_currentAppVersion() || 'unknown'})`);
   }
   const privateSkillsZip = await _fetchAgentPrivateSkillsBundle(row.id, current.agent_skills_bundle_url || '', opts);
   await _ensureAgentSkillDependencies(
@@ -1349,7 +1349,7 @@ async function _pullSkillLocked(uid: string, row: SkillInstall, opts: Marketplac
   const zip = parseMarketplaceBundle(downloaded.buffer);
   const minAppVersion = _normalizeMinAppVersion(current);
   if (!_isAppCompatible(minAppVersion)) {
-    throw new Error(`skill ${row.id} requires Orkas >= ${minAppVersion} (current ${_currentAppVersion() || 'unknown'})`);
+    throw new Error(`skill ${row.id} requires CogSeed >= ${minAppVersion} (current ${_currentAppVersion() || 'unknown'})`);
   }
 
   const dir = userMarketplaceSkillDir(uid, row.id);

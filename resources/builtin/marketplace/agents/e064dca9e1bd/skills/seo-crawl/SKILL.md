@@ -31,7 +31,7 @@ Fetch one URL and return the raw on-page signals the SEO/GEO audits consume. Thi
 ## How to call
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" seo-crawl crawl -- <url> [--timeout 20] [--user-agent "<ua>"] [--no-robots]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" seo-crawl crawl -- <url> [--timeout 20] [--user-agent "<ua>"] [--no-robots]
 ```
 
 - `<url>` (required): absolute http(s) URL.

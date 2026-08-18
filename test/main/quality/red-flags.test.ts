@@ -176,7 +176,7 @@ describe('quality › red-flags › no_cross_agent_private_read', () => {
 
   it('flags path into cloud/agents/<other>/meta', () => {
     const v = scanRedFlags({
-      content: 'cat $HOME/.orkas/data/u/cloud/agents/abc/meta/COMPETENCE.md',
+      content: 'cat $HOME/.cogseed/data/u/cloud/agents/abc/meta/COMPETENCE.md',
       kind: 'script', field: 'scripts/x.sh',
     });
     expect(v.map((x) => x.rule)).toContain('no_cross_agent_private_read');

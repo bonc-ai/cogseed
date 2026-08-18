@@ -9,7 +9,7 @@
  * 幂等语义：同 event_id 已存在时 appendAssetEvent 幂等返回（appended=false），
  * 调用方可在重试路径依赖该语义，不会产生重复事件。
  *
- * 存储：`<uid>/cloud/mate_agent/asset-events/<asset_id>.jsonl`（append-only，
+ * 存储：`<uid>/cloud/cogseed/asset-events/<asset_id>.jsonl`（append-only，
  * 每资产一个文件；appendJsonlAtomic 提供每文件 Mutex + 单调 msgIndex）。
  * 机器私有数据不得写入（cloud 可同步——资产事件本身是用户可同步事实）。
  */
@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../../logger';
 import { appendJsonlAtomic, readJsonl, nowIso } from '../../storage';
-import { mateAgentAssetEventsDir } from '../../paths';
+import { cogseedAgentAssetEventsDir } from '../../paths';
 import { maskId } from '../../util/log-redact';
 
 const log = createLogger('asset-events');
@@ -97,7 +97,7 @@ function hashEventPayload(input: AppendAssetEventInput): string {
 }
 
 export function assetEventLogPath(uid: string, assetId: string): string {
-  return path.join(mateAgentAssetEventsDir(uid), `${assetId}.jsonl`);
+  return path.join(cogseedAgentAssetEventsDir(uid), `${assetId}.jsonl`);
 }
 
 /** 事件是否已存在（幂等检查；事件文件按资产分区、量小，读一次可接受）。 */

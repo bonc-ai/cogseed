@@ -37,7 +37,7 @@ function writePe(root: string, relativePath: string, machine = 0x8664): string {
 }
 
 function windowsFixture(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-native-gate-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-native-gate-'));
   tempDirs.push(root);
   const packageJson = path.join(
     root,

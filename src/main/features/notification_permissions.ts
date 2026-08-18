@@ -7,7 +7,7 @@
  * Settings UI never mistakes "supported" for "allowed".
  *
  * The status is device-local. It must never be written into the cloud-synced
- * user preference that controls whether Orkas wants to send notifications.
+ * user preference that controls whether CogSeed wants to send notifications.
  */
 
 import { execFile } from 'node:child_process';
@@ -137,7 +137,7 @@ function macAddonPath(): string {
 
 async function queryMacPermission(): Promise<SystemNotificationPermissionState> {
   try {
-    // This must run inside Orkas itself. Reading com.apple.ncprefs is both
+    // This must run inside CogSeed itself. Reading com.apple.ncprefs is both
     // unreliable on current macOS releases and loses the process identity
     // that UNUserNotificationCenter uses for the per-app authorization row.
     // eslint-disable-next-line @typescript-eslint/no-require-imports

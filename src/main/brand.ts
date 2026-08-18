@@ -5,15 +5,12 @@ export const APP_BRAND = Object.freeze({
   zhName: brand.zhName,
   appId: brand.appId,
   protocolScheme: brand.protocolScheme,
-  legacyConnectorSchemes: brand.legacyConnectorSchemes,
   taglineZh: brand.taglineZh,
 });
 
 export const CONNECTOR_PROTOCOL_SCHEMES = Object.freeze([
   APP_BRAND.protocolScheme,
-  ...APP_BRAND.legacyConnectorSchemes,
 ] as const);
-
 
 export type NormalizedDeepLink = Readonly<{ scheme: string; href: string; url: URL }>;
 
@@ -25,10 +22,7 @@ export function normalizeDeepLink(rawUrl: string): NormalizedDeepLink | null {
     return null;
   }
   const scheme = parsed.protocol.replace(/:$/, '');
-  if (!(CONNECTOR_PROTOCOL_SCHEMES as readonly string[]).includes(scheme)) return null;
-  if (scheme !== APP_BRAND.protocolScheme) {
-    parsed = new URL(rawUrl.replace(/^[^:]+:/, `${APP_BRAND.protocolScheme}:`));
-  }
+  if (scheme !== APP_BRAND.protocolScheme) return null;
   return Object.freeze({ scheme: APP_BRAND.protocolScheme, href: parsed.href, url: parsed });
 }
 
@@ -37,7 +31,6 @@ export const RUNTIME_VARIANTS = Object.freeze([
   'cognition',
   'expense',
   'cogseed',
-  'mate',
   'messaging',
   'optimization',
 ] as const);
@@ -76,12 +69,6 @@ const SOURCE_IDENTITIES: Readonly<Record<RuntimeVariant, RuntimeIdentity>> = Obj
     appId: `${APP_BRAND.appId}.source.cogseed`,
     protocolOwner: true,
   }),
-  mate: Object.freeze({
-    variant: 'mate',
-    appName: `${APP_BRAND.appName} [Legacy Mate]`,
-    appId: `${APP_BRAND.appId}.source.mate`,
-    protocolOwner: false,
-  }),
   messaging: Object.freeze({
     variant: 'messaging',
     appName: `${APP_BRAND.appName} [Messaging]`,
@@ -100,7 +87,7 @@ export function parseRuntimeVariant(value: string | undefined): RuntimeVariant {
   const variant = String(value || '').trim();
   if (!(RUNTIME_VARIANTS as readonly string[]).includes(variant)) {
     throw new Error(
-      `invalid ORKAS_RUNTIME_VARIANT ${JSON.stringify(value)}; expected ${RUNTIME_VARIANTS.join('|')}`,
+      `invalid COGSEED_RUNTIME_VARIANT ${JSON.stringify(value)}; expected ${RUNTIME_VARIANTS.join('|')}`,
     );
   }
   return variant as RuntimeVariant;
@@ -108,7 +95,7 @@ export function parseRuntimeVariant(value: string | undefined): RuntimeVariant {
 
 export function resolveRuntimeIdentity(
   isPackaged: boolean,
-  value: string | undefined = process.env.ORKAS_RUNTIME_VARIANT,
+  value: string | undefined = process.env.COGSEED_RUNTIME_VARIANT,
 ): RuntimeIdentity {
   if (isPackaged) {
     if (value && value !== 'main') {

@@ -65,15 +65,15 @@ async function releaseExclusiveWindowsLock(child: ChildProcessWithoutNullStreams
 }
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-global-recycle-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-global-recycle-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -402,7 +402,7 @@ describe('global recycle bin', () => {
     const pid = 'p_library1';
     const relProjectFile = `cloud/projects/${pid}/files/specs/overview.md`;
     const relSkill = 'cloud/skills/skill_alpha/SKILL.md';
-    const relSavedApp = 'cloud/saved_apps/app_alpha/__orkas-meta.json';
+    const relSavedApp = 'cloud/saved_apps/app_alpha/__cogseed-meta.json';
     const abs = (relPath: string) => path.join(paths.userCloudRoot(UID), ...relPath.slice('cloud/'.length).split('/'));
     const projectFile = paths.projectMetaFile(UID, pid);
 

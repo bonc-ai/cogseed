@@ -78,7 +78,7 @@ After any gate submission, post-gate revision request, or visual-revision error:
 Always invoke the resolver through the standard Skill Runner. Never execute it by referencing an installed Marketplace path directly.
 
 ```bash
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" \
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" \
   gate-control resolve-transition -- \
   --line compose \
   --artifact composition \

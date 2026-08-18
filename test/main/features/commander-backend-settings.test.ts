@@ -8,31 +8,31 @@ let prevWs: string | undefined;
 const TEST_UID = 'u-commander-backend';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-commander-backend-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-commander-backend-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 
 describe('commander backend settings', () => {
-  it('defaults to Orkas Core Agent when no preference exists', async () => {
+  it('defaults to CogSeed Core Agent when no preference exists', async () => {
     const config = await import('../../../src/main/features/config');
     expect(config.getCommanderBackendSettings()).toEqual({
-      backend: 'orkas-core-agent',
+      backend: 'cogseed-core-agent',
       authEntryId: null,
       localCli: null,
     });
   });
 
-  it('normalizes legacy Hermes commander preferences back to Orkas Core Agent', async () => {
+  it('normalizes legacy Hermes commander preferences back to CogSeed Core Agent', async () => {
     const config = await import('../../../src/main/features/config');
     config.writePreferences({
       commander_backend: {
@@ -42,7 +42,7 @@ describe('commander backend settings', () => {
       } as never,
     });
     expect(config.getCommanderBackendSettings()).toEqual({
-      backend: 'orkas-core-agent',
+      backend: 'cogseed-core-agent',
       authEntryId: null,
       localCli: null,
     });

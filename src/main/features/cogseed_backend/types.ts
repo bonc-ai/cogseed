@@ -1,27 +1,27 @@
-export const MATE_AGENT_BACKEND_SCHEMA_VERSION = 1 as const;
+export const COGSEED_AGENT_BACKEND_SCHEMA_VERSION = 1 as const;
 
-export type MateActorRole = 'commander' | 'member' | 'child' | 'reviewer';
-export type MateSessionKind = 'generic' | 'commander' | 'member';
-export type MateSessionLifecycleState = 'active' | 'left' | 'aborted' | 'terminal';
+export type CogSeedActorRole = 'commander' | 'member' | 'child' | 'reviewer';
+export type CogSeedSessionKind = 'generic' | 'commander' | 'member';
+export type CogSeedSessionLifecycleState = 'active' | 'left' | 'aborted' | 'terminal';
 
-export interface MateActorRecord {
+export interface CogSeedActorRecord {
   actorId: string;
-  actorRole: MateActorRole;
+  actorRole: CogSeedActorRole;
   displayName: string;
   sessionId: string;
-  lifecycleState: MateSessionLifecycleState;
+  lifecycleState: CogSeedSessionLifecycleState;
   joinedAt: string;
   leftAt?: string;
 }
 
-export interface MateSessionLineage {
+export interface CogSeedSessionLineage {
   parentTaskId?: string;
   retryOfTaskId?: string;
   coordinationId?: string;
   coordinationDepth?: number;
 }
 
-export type MateTaskStatus =
+export type CogSeedTaskStatus =
   | 'created'
   | 'queued'
   | 'running'
@@ -31,9 +31,9 @@ export type MateTaskStatus =
   | 'cancelled'
   | 'recoverable';
 
-export type MateTaskExecutionKind = 'cogseed-native' | 'local-cli';
+export type CogSeedTaskExecutionKind = 'cogseed-native' | 'local-cli';
 
-export interface MateLocalCliConfig {
+export interface CogSeedLocalCliConfig {
   cli: string;
   agentName?: string;
   model?: string;
@@ -44,15 +44,15 @@ export interface MateLocalCliConfig {
   viaP3394Gateway?: boolean;
 }
 
-export interface MateTaskSkillVersionPin {
+export interface CogSeedTaskSkillVersionPin {
   skillId: string;
   version: string;
   manifestHash: string;
   revisionId?: string;
 }
 
-export interface MateTaskRecord {
-  schemaVersion: typeof MATE_AGENT_BACKEND_SCHEMA_VERSION;
+export interface CogSeedTaskRecord {
+  schemaVersion: typeof COGSEED_AGENT_BACKEND_SCHEMA_VERSION;
   taskId: string;
   sessionId: string;
   runtimeSessionId: string;
@@ -61,15 +61,15 @@ export interface MateTaskRecord {
   runtimeWorkerId?: string;
   requestId: string;
   ownerId: string;
-  status: MateTaskStatus;
+  status: CogSeedTaskStatus;
   task: string;
   conversationId?: string;
   agentId?: string;
-  executionKind?: MateTaskExecutionKind;
+  executionKind?: CogSeedTaskExecutionKind;
   allowedSkillIds?: string[];
-  skillVersionPins?: MateTaskSkillVersionPin[];
+  skillVersionPins?: CogSeedTaskSkillVersionPin[];
   skillVersionPinStatus?: 'pinned' | 'unpinned';
-  localCli?: MateLocalCliConfig;
+  localCli?: CogSeedLocalCliConfig;
   profileId?: string;
   retryOfTaskId?: string;
   lastResumeRequestId?: string;
@@ -82,41 +82,41 @@ export interface MateTaskRecord {
   errorCode?: string;
 }
 
-export interface MateSessionRecord {
-  schemaVersion: typeof MATE_AGENT_BACKEND_SCHEMA_VERSION;
+export interface CogSeedSessionRecord {
+  schemaVersion: typeof COGSEED_AGENT_BACKEND_SCHEMA_VERSION;
   sessionId: string;
   runtimeSessionId: string;
   ownerId: string;
   createdAt: string;
   updatedAt: string;
   /** Canonical CogSeed session classification. Legacy records are hydrated as generic/commander. */
-  sessionKind: MateSessionKind;
-  actorRole: MateActorRole;
+  sessionKind: CogSeedSessionKind;
+  actorRole: CogSeedActorRole;
   actorId?: string;
   conversationId?: string;
   /** Formal product Agent identity. Member sessions hydrate this from actorId. */
   agentId?: string;
-  /** Public Orkas-compatible id, retained only as an alias; storage remains CogSeed-owned. */
+  /** Public CogSeed-compatible id, retained only as an alias; storage remains CogSeed-owned. */
   compatibilitySessionId?: string;
   commanderSessionId?: string;
   displayName?: string;
-  lifecycleState: MateSessionLifecycleState;
+  lifecycleState: CogSeedSessionLifecycleState;
   joinedAt?: string;
   leftAt?: string;
-  roster?: MateActorRecord[];
-  lineage?: MateSessionLineage;
+  roster?: CogSeedActorRecord[];
+  lineage?: CogSeedSessionLineage;
   activeTaskId?: string;
 }
 
-export interface MateCommanderSession extends MateSessionRecord {
+export interface CogSeedCommanderSession extends CogSeedSessionRecord {
   sessionKind: 'commander';
   actorRole: 'commander';
   actorId: 'commander';
   conversationId: string;
-  roster: MateActorRecord[];
+  roster: CogSeedActorRecord[];
 }
 
-export interface MateMemberSession extends MateSessionRecord {
+export interface CogSeedMemberSession extends CogSeedSessionRecord {
   sessionKind: 'member';
   actorRole: 'member' | 'child' | 'reviewer';
   actorId: string;
@@ -125,15 +125,15 @@ export interface MateMemberSession extends MateSessionRecord {
   displayName: string;
 }
 
-export interface MateRequestClaim {
-  schemaVersion: typeof MATE_AGENT_BACKEND_SCHEMA_VERSION;
+export interface CogSeedRequestClaim {
+  schemaVersion: typeof COGSEED_AGENT_BACKEND_SCHEMA_VERSION;
   requestId: string;
   taskId: string;
   ownerId: string;
   createdAt: string;
 }
 
-export type MateTaskEventType =
+export type CogSeedTaskEventType =
   | 'task.created'
   | 'task.queued'
   | 'task.started'
@@ -146,20 +146,20 @@ export type MateTaskEventType =
   | 'task.recoverable'
   | 'artifact';
 
-export interface MateTaskEvent {
-  schemaVersion: typeof MATE_AGENT_BACKEND_SCHEMA_VERSION;
+export interface CogSeedTaskEvent {
+  schemaVersion: typeof COGSEED_AGENT_BACKEND_SCHEMA_VERSION;
   eventId: string;
   taskId: string;
   sessionId: string;
   sequence: number;
-  type: MateTaskEventType;
+  type: CogSeedTaskEventType;
   createdAt: string;
   payload: Record<string, unknown>;
 }
 
 
-export interface MateCoordinationRecord {
-  schemaVersion: typeof MATE_AGENT_BACKEND_SCHEMA_VERSION;
+export interface CogSeedCoordinationRecord {
+  schemaVersion: typeof COGSEED_AGENT_BACKEND_SCHEMA_VERSION;
   coordinationId: string;
   ownerId: string;
   parentTaskId: string;

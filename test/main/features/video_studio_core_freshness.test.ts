@@ -22,7 +22,7 @@ const { outputs, buildTo, pcDir } = requireCjs('../../../scripts/build-video-stu
 describe('video-studio bundled skill cores', () => {
   it('committed lib/*_core.cjs bundles match a fresh build of _shared/scripts/src', async () => {
     expect(outputs.length).toBeGreaterThan(0);
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-core-freshness-'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-core-freshness-'));
     try {
       const built = await buildTo((item) => path.join(tmp, path.basename(item.outfile)));
       const stale: string[] = [];

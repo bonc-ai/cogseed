@@ -10,7 +10,7 @@ category: creation
 
 Use this as the design-lead layer for VideoStudio COMPOSE work. It shapes `project/composition/composition-manifest.json::art_direction` and the model-authored HTML/SVG motion graphics in `index.html`.
 
-This skill does not pick the video production line, replace `video-craft`, or relax Orkas renderer constraints. If there is a conflict, renderer determinism, safe zones, legibility, audio ownership, and user-approved creative direction win.
+This skill does not pick the video production line, replace `video-craft`, or relax CogSeed renderer constraints. If there is a conflict, renderer determinism, safe zones, legibility, audio ownership, and user-approved creative direction win.
 
 ## Required generation references
 

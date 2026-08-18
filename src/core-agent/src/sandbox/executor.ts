@@ -137,7 +137,7 @@ export function killProcessTree(
 type OutputEncodingEnv = {
   LANG?: string;
   LC_ALL?: string;
-  ORKAS_UI_LANG?: string;
+  COGSEED_UI_LANG?: string;
   [key: string]: string | undefined;
 };
 
@@ -171,7 +171,7 @@ function inferShellKind(shell: string, platform: NodeJS.Platform = process.platf
 
 export function defaultShellForPlatform(platform: NodeJS.Platform = process.platform): string {
   if (platform === "win32") {
-    return process.env.ORKAS_WINDOWS_SHELL || "powershell.exe";
+    return process.env.COGSEED_WINDOWS_SHELL || "powershell.exe";
   }
   return "/bin/sh";
 }
@@ -293,7 +293,7 @@ function decodedTextScore(text: string): number {
 }
 
 function windowsFallbackEncodings(env: OutputEncodingEnv = process.env): string[] {
-  const lang = String(env.ORKAS_UI_LANG || env.LC_ALL || env.LANG || "").toLowerCase();
+  const lang = String(env.COGSEED_UI_LANG || env.LC_ALL || env.LANG || "").toLowerCase();
   const preferred = lang.startsWith("ja")
     ? ["shift_jis"]
     : lang.startsWith("ko")
@@ -463,9 +463,9 @@ export function buildSandboxEnv(
     ...(injected ?? {}),
   };
 
-  if (env.ORKAS_PATH_PREPEND) {
+  if (env.COGSEED_PATH_PREPEND) {
     const delimiter = platform === "win32" ? ";" : ":";
-    env.PATH = `${env.ORKAS_PATH_PREPEND}${delimiter}${env.PATH}`;
+    env.PATH = `${env.COGSEED_PATH_PREPEND}${delimiter}${env.PATH}`;
   }
 
   return env;
@@ -723,7 +723,7 @@ export class SandboxExecutor {
 
   /**
    * Launch a command detached, with stdout+stderr appended to `logPath`.
-   * Same env construction (PATH augmentation + ORKAS_PATH_PREPEND) and
+   * Same env construction (PATH augmentation + COGSEED_PATH_PREPEND) and
    * blocked-command policy as `execute`, but no timeout and no output
    * buffering — the process intentionally outlives the agent turn (long
    * builds, renders, downloads). The caller reports `pid` + `logPath` to

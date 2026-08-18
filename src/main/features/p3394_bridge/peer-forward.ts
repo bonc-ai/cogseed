@@ -77,7 +77,7 @@ export type P3394PeerForwardResult =
   | { ok: false; error: string };
 
 /** Node ids that address this bridge itself and must never be forward targets. */
-const SELF_NODE_IDS = new Set(['cogseed', 'mate', 'orkas']);
+const SELF_NODE_IDS = new Set(['cogseed', 'cogseed', 'cogseed']);
 
 /** Default forward-hop budget (a forwarded envelope carries extensions.hop_count,
  *  incremented each leg). Guards against A↔B ping-pong loops. */

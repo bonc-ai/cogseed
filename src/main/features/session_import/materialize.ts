@@ -1,7 +1,7 @@
 /**
  * Session materialization (stage 3).
  *
- * Turns an extraction result into a real Orkas conversation the user can open
+ * Turns an extraction result into a real CogSeed conversation the user can open
  * from the sidebar and continue chatting in. The raw imported history is NOT
  * copied; instead a single compact "seed" message carries the summary, so the
  * continued conversation starts with a clean, bounded context.

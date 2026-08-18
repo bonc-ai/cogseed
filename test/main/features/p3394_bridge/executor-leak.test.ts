@@ -16,7 +16,7 @@ import { recordP3394Episode } from '../../../../src/main/features/p3394_bridge/k
 import type { P3394RuntimeAdapter, P3394RuntimeEvent, P3394RuntimeSessionBinding, P3394RuntimeSnapshot } from '../../../../src/main/features/p3394_bridge/runtime-adapter';
 
 const SCRATCH_VARIANT = 'p3394-leak-test-' + Math.random().toString(36).slice(2, 8);
-process.env.ORKAS_RUNTIME_VARIANT = SCRATCH_VARIANT;
+process.env.COGSEED_RUNTIME_VARIANT = SCRATCH_VARIANT;
 
 function manifest(id: string) {
   const result = buildP3394BridgeManifest({

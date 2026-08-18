@@ -62,7 +62,7 @@ export function buildP3394CapabilityProfile(agent: Agent): P3394CapabilityProfil
   if (runtimeKind === 'local-cli') capabilities.push('local-cli');
 
   const skillScope = dedupeStrings(agent.skill_list);
-  if (Array.isArray(agent.skill_list)) capabilities.push('mate-skill-scope');
+  if (Array.isArray(agent.skill_list)) capabilities.push('cogseed-skill-scope');
 
   const profile: P3394CapabilityProfile = {
     agent_id: identityResult.identity.agent_id,

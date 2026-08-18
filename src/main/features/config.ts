@@ -33,18 +33,18 @@ export interface CommanderAvatar {
   color: string;
 }
 
-export type CommanderBackendKind = 'orkas-core-agent';
+export type CommanderBackendKind = 'cogseed-core-agent';
 
 export interface CommanderBackendSettings {
   backend: CommanderBackendKind;
-  /** Optional auth entry override for Orkas Core Agent. Missing/null uses the existing priority chain. */
+  /** Optional auth entry override for CogSeed Core Agent. Missing/null uses the existing priority chain. */
   authEntryId?: string | null;
   /** Reserved for legacy preference compatibility. The commander no longer uses local CLI backends. */
   localCli?: null;
 }
 
 export const DEFAULT_COMMANDER_BACKEND_SETTINGS: CommanderBackendSettings = Object.freeze({
-  backend: 'orkas-core-agent' as const,
+  backend: 'cogseed-core-agent' as const,
   authEntryId: null,
   localCli: null,
 });
@@ -58,7 +58,7 @@ export interface UserPreferences {
   /** Metacognition-level agent self-evolution toggle. undefined / any
    * non-false value → treated as enabled (preserving the historical
    * default); explicit false → disabled. The env var
-   * `ORKAS_METACOGNITION='0'` remains a higher-priority kill switch.
+   * `COGSEED_METACOGNITION='0'` remains a higher-priority kill switch.
    * Reads go through `features/metacognition.isFeatureEnabled`. */
   metacognition_enabled?: boolean;
   /** Thinking strength for chat model calls: 'auto' (model default),
@@ -68,7 +68,7 @@ export interface UserPreferences {
    * to commander open-tier skill search. Missing means enabled, preserving
    * the historical open-source behavior. */
   global_skill_roots_enabled?: boolean;
-  /** Commander role backend binding. Missing means Orkas Core Agent with the existing auth priority chain. */
+  /** Commander role backend binding. Missing means CogSeed Core Agent with the existing auth priority chain. */
   commander_backend?: CommanderBackendSettings;
   /** Per-field update clocks used by cloud-sync to merge independent
    * preference changes without treating the whole JSON file as one blob. */
@@ -133,7 +133,7 @@ function normalizeCommanderBackendSettings(value: unknown, strict = false): Comm
   if (!value || typeof value !== 'object') return { ...DEFAULT_COMMANDER_BACKEND_SETTINGS };
   const raw = value as Partial<CommanderBackendSettings> & Record<string, unknown>;
   const backend = raw.backend;
-  if (backend !== 'orkas-core-agent') {
+  if (backend !== 'cogseed-core-agent') {
     if (strict) throw new Error('invalid commander backend');
     return { ...DEFAULT_COMMANDER_BACKEND_SETTINGS };
   }
@@ -246,7 +246,7 @@ export function setThinkingLevel(level: unknown): ThinkingLevelPreference {
 // Defaults to ON: never-written = undefined → treated as true, matching
 // historical behavior. Only an explicit false disables it. Reads go
 // through features/metacognition.isFeatureEnabled, which additionally
-// layers the env `ORKAS_METACOGNITION='0'` kill switch on top.
+// layers the env `COGSEED_METACOGNITION='0'` kill switch on top.
 
 export function getMetacognitionEnabled(): boolean {
   const v = readPreferences().metacognition_enabled;
@@ -270,7 +270,7 @@ export function setGlobalSkillRootsEnabled(enabled: boolean): boolean {
 
 // ── Native task notifications ───────────────────────────────────────────
 // Defaults to ON. Notification permission/support remain OS-owned; this is
-// the user's Orkas-level preference and gates the single notification outlet.
+// the user's CogSeed-level preference and gates the single notification outlet.
 
 export function getTaskNotificationsEnabled(): boolean {
   return readPreferences().task_notifications_enabled !== false;

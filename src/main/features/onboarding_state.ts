@@ -28,14 +28,14 @@ export interface OnboardingState {
 /**
  * True only when the walkthrough has been explicitly marked complete.
  *
- * Dev override: setting `ORKAS_ONBOARDING_ALWAYS=1` forces this to always
+ * Dev override: setting `COGSEED_ONBOARDING_ALWAYS=1` forces this to always
  * report "not completed", so the walkthrough re-appears on every launch /
  * window reload regardless of the persisted marker. This mirrors the
- * `ORKAS_METACOGNITION` env-override convention and is purely a local
+ * `COGSEED_METACOGNITION` env-override convention and is purely a local
  * testing aid — it is off by default, so shipped behavior stays "show once".
  */
 export function getOnboardingCompleted(): boolean {
-  if (process.env.ORKAS_ONBOARDING_ALWAYS === '1') {
+  if (process.env.COGSEED_ONBOARDING_ALWAYS === '1') {
     return false;
   }
 

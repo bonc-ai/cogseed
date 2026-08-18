@@ -27,14 +27,14 @@ const CID = 'cid-chain';
 
 beforeEach(async () => {
   vi.resetModules();
-  tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'orkas-asset-runtime-chain-'));
-  previous = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmp;
+  tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'cogseed-asset-runtime-chain-'));
+  previous = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmp;
 });
 
 afterEach(async () => {
-  if (previous === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previous;
+  if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previous;
   await fs.rm(tmp, { recursive: true, force: true });
 });
 

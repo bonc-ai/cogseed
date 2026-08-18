@@ -14,7 +14,7 @@ let tmpDir: string;
 let file: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-readtracker-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-readtracker-'));
   file = path.join(tmpDir, 'a.txt');
   fs.writeFileSync(file, 'hello world', 'utf8');
 });

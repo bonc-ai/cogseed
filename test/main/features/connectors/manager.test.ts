@@ -196,7 +196,7 @@ function discordGrant() {
     expires_at: Date.now() + 60 * 60 * 1000,
     scopes: ['identify', 'guilds', 'bot', 'applications.commands'],
     token_type: 'Bearer',
-    account_label: 'Orkas',
+    account_label: 'CogSeed',
     server_managed: true,
     server_grant_id: 'discord-grant-1',
   };
@@ -299,9 +299,9 @@ function futureCatalogInstance() {
 }
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-connectors-manager-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-connectors-manager-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   vi.clearAllMocks();
   resetMockBehaviors();
@@ -309,8 +309,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -383,13 +383,13 @@ describe('features/connectors/manager authorization recovery', () => {
       expect.objectContaining({ name: 'github_search_repositories' }),
     ]);
 
-    await manager.callTool(TEST_UID, 'github', 'github_search_repositories', { query: 'orkas' });
+    await manager.callTool(TEST_UID, 'github', 'github_search_repositories', { query: 'cogseed' });
 
     expect(mocks.mcp.connect).toHaveBeenCalledTimes(1);
     expect(mocks.mcp.listTools).toHaveBeenCalledTimes(1);
     expect(mocks.mcp.callTool).toHaveBeenCalledWith(
       'github_search_repositories',
-      { query: 'orkas' },
+      { query: 'cogseed' },
     );
   });
 

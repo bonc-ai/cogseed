@@ -8,9 +8,9 @@ import { createTouchpointIntent } from '../../../../src/main/features/touchpoint
 import type { TouchpointIntent } from '../../../../src/main/features/touchpoints/types';
 
 vi.hoisted(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = '/tmp/mate-touchpoint-ledger-test';
+  process.env.COGSEED_WORKSPACE_ROOT = '/tmp/cogseed-touchpoint-ledger-test';
 });
-const root = path.join(os.tmpdir(), 'mate-touchpoint-ledger-test');
+const root = path.join(os.tmpdir(), 'cogseed-touchpoint-ledger-test');
 const suffix = `${process.pid}-${Date.now()}`;
 const USER_IDS = {
   reserve: `touchpoint-reserve-${suffix}`,
@@ -49,7 +49,7 @@ import * as api from '../../../../src/main/features/touchpoints/ledger';
 
 describe('touchpoint ledger', () => {
   beforeEach(async () => {
-    process.env.ORKAS_WORKSPACE_ROOT = root;
+    process.env.COGSEED_WORKSPACE_ROOT = root;
     await fs.rm(root, { recursive: true, force: true });
     await fs.mkdir(root, { recursive: true });
   });

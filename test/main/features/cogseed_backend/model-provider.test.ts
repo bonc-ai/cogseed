@@ -1,26 +1,26 @@
 import { describe, expect, it } from 'vitest';
 
 import { createRuntimeModelAdapter, type RuntimeModelRequest } from '../../../../src/main/features/cogseed_runtime/kernel/model-adapter';
-import type { MateProviderProfile } from '../../../../src/main/features/cogseed_backend/provider-profiles';
+import type { CogSeedProviderProfile } from '../../../../src/main/features/cogseed_backend/provider-profiles';
 import {
-  createMateAnthropicProvider,
-  createMateGeminiProvider,
-  createMateOpenAICompatibleProvider,
-  createMateOpenAIResponsesProvider,
-  createMateRuntimeProvider,
+  createCogSeedAnthropicProvider,
+  createCogSeedGeminiProvider,
+  createCogSeedOpenAICompatibleProvider,
+  createCogSeedOpenAIResponsesProvider,
+  createCogSeedRuntimeProvider,
 } from '../../../../src/main/features/cogseed_backend/model-provider';
 
-const PROFILE: MateProviderProfile = {
-  profileId: 'openai-compatible:mate',
+const PROFILE: CogSeedProviderProfile = {
+  profileId: 'openai-compatible:cogseed',
   provider: 'openai-compatible',
-  model: 'mate-test-model',
+  model: 'cogseed-test-model',
   apiKey: 'sk-secret-value-must-not-leak',
   baseUrl: 'https://provider.test/v1',
   maxOutputTokens: 2048,
 };
 
 const REQUEST: RuntimeModelRequest = {
-  userId: 'mate-provider-user',
+  userId: 'cogseed-provider-user',
   requestId: 'req-provider',
   runtimeSessionId: 'mruntime-provider',
   message: 'Read the explicit file and summarize it.',
@@ -60,7 +60,7 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 describe('CogSeed OpenAI-compatible Model Provider', () => {
   it('posts a scoped streaming request and aggregates fragmented tool calls', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const provider = createMateOpenAICompatibleProvider({
+    const provider = createCogSeedOpenAICompatibleProvider({
       resolveProfile: async () => PROFILE,
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
@@ -100,7 +100,7 @@ describe('CogSeed OpenAI-compatible Model Provider', () => {
   });
 
   it('parses an SSE event split across arbitrary byte chunks', async () => {
-    const provider = createMateOpenAICompatibleProvider({
+    const provider = createCogSeedOpenAICompatibleProvider({
       resolveProfile: async () => PROFILE,
       fetchImpl: async () => sseResponse([
         'data: {\"choices\":[{',
@@ -115,7 +115,7 @@ describe('CogSeed OpenAI-compatible Model Provider', () => {
   });
 
   it('maps a provider response failure without exposing the API key', async () => {
-    const provider = createMateOpenAICompatibleProvider({
+    const provider = createCogSeedOpenAICompatibleProvider({
       resolveProfile: async () => PROFILE,
       fetchImpl: async () => new Response(`bad key ${PROFILE.apiKey}`, { status: 401 }),
     });
@@ -130,7 +130,7 @@ describe('CogSeed OpenAI-compatible Model Provider', () => {
   });
 
   it('rejects malformed tool arguments as a stable provider error', async () => {
-    const provider = createMateOpenAICompatibleProvider({
+    const provider = createCogSeedOpenAICompatibleProvider({
       resolveProfile: async () => PROFILE,
       fetchImpl: async () => sseResponse([
         'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_bad","type":"function","function":{"name":"read_file","arguments":"not-json"}}]}}]}\n\n',
@@ -150,7 +150,7 @@ describe('CogSeed OpenAI-compatible Model Provider', () => {
 
 // ── Anthropic / Gemini providers ─────────────────────────────────────────
 
-function anthropicProfile(overrides: Partial<MateProviderProfile> = {}): MateProviderProfile {
+function anthropicProfile(overrides: Partial<CogSeedProviderProfile> = {}): CogSeedProviderProfile {
   return {
     profileId: 'anthropic:default',
     provider: 'anthropic',
@@ -163,7 +163,7 @@ function anthropicProfile(overrides: Partial<MateProviderProfile> = {}): MatePro
   };
 }
 
-function geminiProfile(overrides: Partial<MateProviderProfile> = {}): MateProviderProfile {
+function geminiProfile(overrides: Partial<CogSeedProviderProfile> = {}): CogSeedProviderProfile {
   return {
     profileId: 'google:default',
     provider: 'google',
@@ -179,7 +179,7 @@ function geminiProfile(overrides: Partial<MateProviderProfile> = {}): MateProvid
 describe('CogSeed Anthropic Model Provider', () => {
   it('posts a Messages request and streams text + usage from SSE events', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const provider = createMateAnthropicProvider({
+    const provider = createCogSeedAnthropicProvider({
       resolveProfile: async () => anthropicProfile(),
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
@@ -222,7 +222,7 @@ describe('CogSeed Anthropic Model Provider', () => {
 
   it('authenticates Claude Pro/Max OAuth tokens with Bearer + Claude Code headers', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const provider = createMateAnthropicProvider({
+    const provider = createCogSeedAnthropicProvider({
       resolveProfile: async () => anthropicProfile({ apiKey: 'sk-ant-oat-oauth-token' }),
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
@@ -244,7 +244,7 @@ describe('CogSeed Anthropic Model Provider', () => {
   });
 
   it('aggregates tool-use input_json_delta fragments into a tool call', async () => {
-    const provider = createMateAnthropicProvider({
+    const provider = createCogSeedAnthropicProvider({
       resolveProfile: async () => anthropicProfile(),
       fetchImpl: async () => sseResponse([
         'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5}}}\n\n',
@@ -265,7 +265,7 @@ describe('CogSeed Anthropic Model Provider', () => {
   });
 
   it('fails with a provider auth error when the endpoint rejects the key, without leaking it', async () => {
-    const provider = createMateAnthropicProvider({
+    const provider = createCogSeedAnthropicProvider({
       resolveProfile: async () => anthropicProfile(),
       fetchImpl: async () => new Response('invalid key sk-ant-api03-secret-value', { status: 401 }),
     });
@@ -280,7 +280,7 @@ describe('CogSeed Anthropic Model Provider', () => {
   });
 
   it('rejects a stream that never reaches message_stop', async () => {
-    const provider = createMateAnthropicProvider({
+    const provider = createCogSeedAnthropicProvider({
       resolveProfile: async () => anthropicProfile(),
       fetchImpl: async () => sseResponse([
         'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n',
@@ -297,7 +297,7 @@ describe('CogSeed Anthropic Model Provider', () => {
 describe('CogSeed Gemini Model Provider', () => {
   it('posts a generateContent request and streams text, tool calls and usage', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const provider = createMateGeminiProvider({
+    const provider = createCogSeedGeminiProvider({
       resolveProfile: async () => geminiProfile(),
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
@@ -338,7 +338,7 @@ describe('CogSeed Gemini Model Provider', () => {
 
   it('does not duplicate the v1beta path segment for versioned custom base URLs', async () => {
     const calls: string[] = [];
-    const provider = createMateGeminiProvider({
+    const provider = createCogSeedGeminiProvider({
       resolveProfile: async () => geminiProfile({ baseUrl: 'https://gemini-relay.example/v1beta' }),
       fetchImpl: async (url) => {
         calls.push(String(url));
@@ -355,7 +355,7 @@ describe('CogSeed Gemini Model Provider', () => {
 describe('CogSeed multi-protocol Runtime Provider', () => {
   it('dispatches to the anthropic adapter for anthropic profiles', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const provider = createMateRuntimeProvider({
+    const provider = createCogSeedRuntimeProvider({
       resolveProfile: async () => anthropicProfile(),
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
@@ -371,7 +371,7 @@ describe('CogSeed multi-protocol Runtime Provider', () => {
 
   it('dispatches to the gemini adapter for gemini profiles', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const provider = createMateRuntimeProvider({
+    const provider = createCogSeedRuntimeProvider({
       resolveProfile: async () => geminiProfile(),
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
@@ -387,7 +387,7 @@ describe('CogSeed multi-protocol Runtime Provider', () => {
 
   it('dispatches to the openai-completions adapter for openai-compatible profiles', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const provider = createMateRuntimeProvider({
+    const provider = createCogSeedRuntimeProvider({
       resolveProfile: async () => PROFILE,
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
@@ -402,7 +402,7 @@ describe('CogSeed multi-protocol Runtime Provider', () => {
   });
 
 describe('CogSeed OpenAI Responses Model Provider', () => {
-  function responsesProfile(overrides: Partial<MateProviderProfile> = {}): MateProviderProfile {
+  function responsesProfile(overrides: Partial<CogSeedProviderProfile> = {}): CogSeedProviderProfile {
     return {
       profileId: 'openai:default',
       provider: 'openai',
@@ -417,7 +417,7 @@ describe('CogSeed OpenAI Responses Model Provider', () => {
 
   it('posts a Responses request and streams text + usage from SSE events', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const provider = createMateOpenAIResponsesProvider({
+    const provider = createCogSeedOpenAIResponsesProvider({
       resolveProfile: async () => responsesProfile(),
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
@@ -459,7 +459,7 @@ describe('CogSeed OpenAI Responses Model Provider', () => {
   });
 
   it('aggregates function_call arguments across delta / done / output_item.done events', async () => {
-    const provider = createMateOpenAIResponsesProvider({
+    const provider = createCogSeedOpenAIResponsesProvider({
       resolveProfile: async () => responsesProfile(),
       fetchImpl: async () => sseResponse([
         'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_7","name":"read_file","arguments":""}}\n\n',
@@ -481,7 +481,7 @@ describe('CogSeed OpenAI Responses Model Provider', () => {
   });
 
   it('rejects a stream that never completes and redacts the key on 401', async () => {
-    const truncated = createMateOpenAIResponsesProvider({
+    const truncated = createCogSeedOpenAIResponsesProvider({
       resolveProfile: async () => responsesProfile(),
       fetchImpl: async () => sseResponse(['data: {"type":"response.created","response":{"id":"resp_1"}}\n\n']),
     });
@@ -490,7 +490,7 @@ describe('CogSeed OpenAI Responses Model Provider', () => {
       { type: 'done' },
     ]);
 
-    const rejected = createMateOpenAIResponsesProvider({
+    const rejected = createCogSeedOpenAIResponsesProvider({
       resolveProfile: async () => responsesProfile(),
       fetchImpl: async () => new Response('bad key sk-secret-responses-key', { status: 401 }),
     });

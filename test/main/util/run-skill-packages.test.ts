@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 // run-skill.cjs resolution across the external-packages root (registry-
 // driven) + package-local dependency preference. Companion to
@@ -81,9 +81,9 @@ function runSkill(skillRef: string, scriptBase: string, args: string[] = [], ext
     encoding: 'utf8',
     env: {
       ...process.env,
-      ORKAS_WORKSPACE_ROOT: tmpDir,
-      ORKAS_PC_DIR: pcRoot,
-      ORKAS_UID: TEST_UID,
+      COGSEED_WORKSPACE_ROOT: tmpDir,
+      COGSEED_PC_DIR: pcRoot,
+      COGSEED_UID: TEST_UID,
       // Pin HOME into the sandbox tmp so the global-root scan
       // (~/.claude, ~/.codex) can't pick up skills from the developer machine.
       HOME: path.join(tmpDir, 'home'),
@@ -94,7 +94,7 @@ function runSkill(skillRef: string, scriptBase: string, args: string[] = [], ext
 }
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-run-skill-pkg-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-run-skill-pkg-'));
   tmpDirs.push(tmpDir);
   fs.mkdirSync(path.join(tmpDir, 'home'), { recursive: true });
 });
@@ -199,7 +199,7 @@ describe('run-skill.cjs › external packages root', () => {
     });
   });
 
-  it('honors ORKAS_RUN_SKILL_DIR without falling back to other roots', () => {
+  it('honors COGSEED_RUN_SKILL_DIR without falling back to other roots', () => {
     const allowed = path.join(tmpDir, TEST_UID, 'cloud', 'skills', 'allowed');
     const allowedScripts = path.join(allowed, 'scripts');
     fs.mkdirSync(allowedScripts, { recursive: true });
@@ -211,11 +211,11 @@ describe('run-skill.cjs › external packages root', () => {
     fs.writeFileSync(path.join(path.dirname(blockedScripts), 'SKILL.md'), '---\nname: blocked\ndescription: g\n---\n');
     fs.writeFileSync(path.join(blockedScripts, 'steal.sh'), 'printf \'{"ok":false,"where":"blocked"}\\n\'\n');
 
-    const ok = runSkill('allowed', 'ok', [], { ORKAS_RUN_SKILL_DIR: allowed });
+    const ok = runSkill('allowed', 'ok', [], { COGSEED_RUN_SKILL_DIR: allowed });
     expect(ok.status).toBe(0);
     expect(JSON.parse(ok.stdout.trim())).toEqual({ ok: true, where: 'allowed' });
 
-    const denied = runSkill('blocked', 'steal', [], { ORKAS_RUN_SKILL_DIR: allowed });
+    const denied = runSkill('blocked', 'steal', [], { COGSEED_RUN_SKILL_DIR: allowed });
     expect(denied.status).toBe(66);
     expect(denied.stderr).toContain('skill script not found');
     expect(denied.stderr).not.toContain(path.join('.codex', 'skills', 'blocked'));

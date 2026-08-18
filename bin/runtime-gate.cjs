@@ -367,9 +367,9 @@ function assertExecutableArch(file, targetPlatform, targetArch, options = {}) {
 
 function verifyRuntimeDir(kind, dir, key, spec, asset, targetPlatform, targetArch, options = {}) {
   const executable = relPath(dir, asset.executable);
-  const marker = readJsonFile(`${kind} runtime marker`, path.join(dir, '.orkas-runtime.json'));
+  const marker = readJsonFile(`${kind} runtime marker`, path.join(dir, '.cogseed-runtime.json'));
   if (!markerMatches(marker, kind, key, spec, asset)) {
-    throw new Error(`[native-deps-gate] runtime marker mismatch for ${kind}/${key}: ${path.join(dir, '.orkas-runtime.json')}`);
+    throw new Error(`[native-deps-gate] runtime marker mismatch for ${kind}/${key}: ${path.join(dir, '.cogseed-runtime.json')}`);
   }
   requiredFile(`${kind} runtime executable`, executable);
   for (const companion of runtimeCompanionFiles(kind, executable, targetPlatform, spec)) {
@@ -392,7 +392,7 @@ function verifyFfmpegRuntimeDir(runtimeRoot, targetPlatform, targetArch, options
     ffmpeg: path.join(dir, `ffmpeg${suffix}`),
     ffprobe: path.join(dir, `ffprobe${suffix}`),
   };
-  const markerFile = path.join(dir, '.orkas-ffmpeg-ready.json');
+  const markerFile = path.join(dir, '.cogseed-ffmpeg-ready.json');
   const marker = readJsonFile('ffmpeg runtime marker', markerFile);
   if (marker.schema !== 1 || marker.platformKey !== key) {
     throw new Error(`[native-deps-gate] ffmpeg runtime marker target mismatch for ${key}: ${markerFile}`);
@@ -435,7 +435,7 @@ function verifyWhisperRuntimeDir(runtimeRoot, targetPlatform, targetArch, option
   const dir = path.join(runtimeRoot, 'whisper', key);
   const markerFile = firstExistingFile('whisper runtime marker', [
     path.join(dir, '.cogseed-whisper-ready.json'),
-    path.join(dir, '.orkas-whisper-ready.json'),
+    path.join(dir, '.cogseed-whisper-ready.json'),
   ]);
   const marker = readJsonFile('whisper runtime marker', markerFile);
   if (marker.schema !== contract.schema
@@ -485,7 +485,7 @@ function verifyWindowsVcRuntimeDir(runtimeRoot, targetPlatform, targetArch, opti
     throw new Error(`[native-deps-gate] VC runtime is not configured for ${key}`);
   }
   const dir = path.join(runtimeRoot, 'vc', key);
-  const markerFile = path.join(dir, '.orkas-vc-runtime.json');
+  const markerFile = path.join(dir, '.cogseed-vc-runtime.json');
   const marker = readJsonFile('VC runtime marker', markerFile);
   if (marker.schema !== contract.schema
     || marker.platformKey !== key

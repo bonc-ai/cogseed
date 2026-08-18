@@ -66,7 +66,7 @@ describe('fetch-whisper', () => {
   });
 
   it('persists an unsupported-CPU capability state without changing verified file records', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-whisper-marker-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-whisper-marker-'));
     tempDirs.push(dir);
     const markerFile = path.join(dir, '.cogseed-whisper-ready.json');
     fs.writeFileSync(markerFile, JSON.stringify({ schema: 1, files: { cli: { bytes: 1 } }, capability: { status: 'ready' } }));
@@ -81,7 +81,7 @@ describe('fetch-whisper', () => {
   });
 
   it('retries transient Windows rename failures and removes the previous runtime', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-whisper-swap-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-whisper-swap-'));
     tempDirs.push(root);
     const temp = path.join(root, 'next');
     const dest = path.join(root, 'current');
@@ -114,7 +114,7 @@ describe('fetch-whisper', () => {
   });
 
   it('restores the previous runtime when the replacement cannot be renamed', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-whisper-rollback-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-whisper-rollback-'));
     tempDirs.push(root);
     const temp = path.join(root, 'next');
     const dest = path.join(root, 'current');
@@ -147,7 +147,7 @@ describe('fetch-whisper', () => {
   });
 
   it('recovers a previous interrupted swap before installing the next runtime', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-whisper-recover-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-whisper-recover-'));
     tempDirs.push(root);
     const temp = path.join(root, 'next');
     const dest = path.join(root, 'current');
@@ -167,7 +167,7 @@ describe('fetch-whisper', () => {
   });
 
   it('rolls back when Windows cannot remove the previous runtime backup', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-whisper-cleanup-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-whisper-cleanup-'));
     tempDirs.push(root);
     const temp = path.join(root, 'next');
     const dest = path.join(root, 'current');

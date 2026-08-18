@@ -1406,7 +1406,7 @@ function _bindAutoDropAttach() {
     if (!types) return false;
     for (let i = 0; i < types.length; i++) {
       if (types[i] === 'Files') return true;
-      if (typeof ORKAS_FILE_DRAG_MIME !== 'undefined' && types[i] === ORKAS_FILE_DRAG_MIME) return true;
+      if (typeof COGSEED_FILE_DRAG_MIME !== 'undefined' && types[i] === COGSEED_FILE_DRAG_MIME) return true;
     }
     return false;
   };

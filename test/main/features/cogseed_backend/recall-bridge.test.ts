@@ -3,20 +3,20 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const USER = 'mate-recall-user';
+const USER = 'cogseed-recall-user';
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-recall-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-recall-'));
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -25,26 +25,26 @@ describe('CogSeed Recall execution bridge', () => {
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
     const bridge = await import('../../../../src/main/features/cogseed_backend/recall-bridge');
-    const executionRecords = await import('../../../../src/main/features/cogseed_backend/mate-execution-store');
+    const executionRecords = await import('../../../../src/main/features/cogseed_backend/cogseed-execution-store');
 
-    const created = (await tasks.createMateTask(USER, {
+    const created = (await tasks.createCogSeedTask(USER, {
       requestId: 'req-recall',
       task: 'SECRET prompt text must not be copied to execution records',
     })).task;
-    await lifecycle.transitionMateTask(USER, created.taskId, 'queued');
-    await lifecycle.transitionMateTask(USER, created.taskId, 'running');
-    await lifecycle.transitionMateTask(USER, created.taskId, 'completed', { outputChars: 9 });
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'completed', { outputChars: 9 });
 
-    const latestTask = await tasks.readMateTask(USER, created.taskId);
-    const fact = await bridge.recordMateTaskRunForRecall(USER, created.taskId);
+    const latestTask = await tasks.readCogSeedTask(USER, created.taskId);
+    const fact = await bridge.recordCogSeedTaskRunForRecall(USER, created.taskId);
     const record = await executionRecords.read(USER, fact.executionId);
     const events = await executionRecords.readEvents(USER, fact.executionId);
 
-    expect(latestTask).toEqual(await tasks.readMateTask(USER, created.taskId));
+    expect(latestTask).toEqual(await tasks.readCogSeedTask(USER, created.taskId));
     expect(fact).toMatchObject({ taskId: created.taskId, sessionId: created.sessionId, status: 'completed' });
     expect(record).toMatchObject({
       executionId: fact.executionId,
-      kind: 'mate-agent',
+      kind: 'cogseed-agent',
       sessionId: created.sessionId,
       status: 'completed',
       boundary: 'real',
@@ -52,7 +52,7 @@ describe('CogSeed Recall execution bridge', () => {
     expect(JSON.stringify(record)).not.toContain('SECRET prompt text');
     expect(JSON.stringify(events)).not.toContain('SECRET prompt text');
     expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'mate.task', payload: expect.objectContaining({ taskId: created.taskId, runtimeSessionId: created.runtimeSessionId }) }),
+      expect.objectContaining({ type: 'cogseed.task', payload: expect.objectContaining({ taskId: created.taskId, runtimeSessionId: created.runtimeSessionId }) }),
       expect.objectContaining({ type: 'terminal', payload: expect.objectContaining({ status: 'completed' }) }),
     ]));
   });
@@ -74,17 +74,17 @@ describe('CogSeed Recall execution bridge', () => {
     });
     const { asset } = await candidates.promoteRecallCandidate(USER, candidate.id, { actor: 'user' });
     await refs.addWorkspaceAssetReference(USER, { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
-    const created = (await tasks.createMateTask(USER, { requestId: 'req-provenance', task: 'Use confirmed projection.' })).task;
+    const created = (await tasks.createCogSeedTask(USER, { requestId: 'req-provenance', task: 'Use confirmed projection.' })).task;
     const preview = await projection.previewContextProjection(USER, { taskRunId: created.taskId, workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed' });
     const confirmed = await projection.confirmContextProjection(USER, preview.id);
-    await lifecycle.transitionMateTask(USER, created.taskId, 'queued');
-    await lifecycle.transitionMateTask(USER, created.taskId, 'running');
-    await lifecycle.transitionMateTask(USER, created.taskId, 'completed', { outputChars: 7 });
-    await tasks.updateMateTask(USER, created.taskId, (current) => ({ ...current, executionId: 'mate-exec-provenance' }));
-    await tasks.updateMateTask(USER, created.taskId, (current) => ({ ...current, terminalAt: current.terminalAt || new Date().toISOString() }));
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'completed', { outputChars: 7 });
+    await tasks.updateCogSeedTask(USER, created.taskId, (current) => ({ ...current, executionId: 'cogseed-exec-provenance' }));
+    await tasks.updateCogSeedTask(USER, created.taskId, (current) => ({ ...current, terminalAt: current.terminalAt || new Date().toISOString() }));
 
-    const first = await bridge.recordMateTaskRunForRecall(USER, created.taskId);
-    const second = await bridge.recordMateTaskRunForRecall(USER, created.taskId);
+    const first = await bridge.recordCogSeedTaskRunForRecall(USER, created.taskId);
+    const second = await bridge.recordCogSeedTaskRunForRecall(USER, created.taskId);
     const transferProofs = await proofs.listTransferProofs(USER);
 
     expect(first).toMatchObject({ taskId: created.taskId, status: 'completed' });

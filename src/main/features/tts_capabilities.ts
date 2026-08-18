@@ -146,12 +146,12 @@ function profileRoute(profile: TtsProfile): TtsRouteCapability {
 }
 
 export async function listTtsCapabilities(_signal?: AbortSignal): Promise<TtsRouteCapability[]> {
-  const envBase = process.env.ORKAS_TTS_BASE_URL;
-  const envKey = process.env.ORKAS_TTS_API_KEY;
-  const envModel = process.env.ORKAS_TTS_MODEL;
+  const envBase = process.env.COGSEED_TTS_BASE_URL;
+  const envKey = process.env.COGSEED_TTS_API_KEY;
+  const envModel = process.env.COGSEED_TTS_MODEL;
   if (envBase && envKey && envModel) {
     const routeRef = 'env:tts';
-    const configured = String(process.env.ORKAS_TTS_VOICE || '').trim();
+    const configured = String(process.env.COGSEED_TTS_VOICE || '').trim();
     const voices = configured ? [configuredVoice(routeRef, configured)] : [];
     return [{
       routeRef,
@@ -163,7 +163,7 @@ export async function listTtsCapabilities(_signal?: AbortSignal): Promise<TtsRou
       voices,
       supports: {
         speed: true,
-        formats: [process.env.ORKAS_TTS_FORMAT || DEFAULT_TTS_FORMAT],
+        formats: [process.env.COGSEED_TTS_FORMAT || DEFAULT_TTS_FORMAT],
         languageContract: false,
       },
     }];

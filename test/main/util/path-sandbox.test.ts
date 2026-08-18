@@ -17,7 +17,7 @@ let attachmentFile: string;
 let outsideFile: string;
 
 beforeAll(() => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-sandbox-'));
+  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-sandbox-'));
   workspace = path.join(tmpRoot, 'ws');
   attachments = path.join(tmpRoot, 'attach');
   const outside = path.join(tmpRoot, 'outside');

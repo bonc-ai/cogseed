@@ -40,7 +40,7 @@
  * Note on `bash`: shell-side writes (`cat > foo.py`, `tee`, document
  * generators, etc.) still bypass write_file's conflict protection. Bash
  * auto-reports files created / modified under the current conversation
- * workspace, exposed to scripts as `ORKAS_OUTPUT_DIR`.
+ * workspace, exposed to scripts as `COGSEED_OUTPUT_DIR`.
  */
 
 import * as crypto from 'node:crypto';
@@ -261,9 +261,9 @@ const BASH_PRODUCED_SKIP_DIRS = new Set([
 ]);
 const BASH_PRODUCED_SKIP_FILES = new Set([
   '.DS_Store',
-  '.orkas-output-manifest',
+  '.cogseed-output-manifest',
 ]);
-const BASH_OUTPUT_MANIFEST_NAME = '.orkas-output-manifest';
+const BASH_OUTPUT_MANIFEST_NAME = '.cogseed-output-manifest';
 const BASH_OUTPUT_MANIFEST_MAX_BYTES = 256 * 1024;
 const BASH_OUTPUT_MANIFEST_MAX_FILES = 500;
 
@@ -589,8 +589,8 @@ function withBashOutputEnv(ctx: ToolContext, outputDir: string, manifestPath: st
   const original = ctx.state.sandboxEnv as Record<string, string> | undefined;
   ctx.state.sandboxEnv = {
     ...(original ?? {}),
-    ORKAS_OUTPUT_DIR: outputDir,
-    ORKAS_OUTPUT_MANIFEST: manifestPath,
+    COGSEED_OUTPUT_DIR: outputDir,
+    COGSEED_OUTPUT_MANIFEST: manifestPath,
   };
   return () => {
     if (original) ctx.state.sandboxEnv = original;
@@ -607,16 +607,16 @@ function withBashWritableRoots(ctx: ToolContext, roots: string[]): () => void {
   };
 }
 
-type OrkasCliInvocation = {
-  script: 'run-skill.cjs' | 'orkas-pkg.cjs';
+type CogSeedCliInvocation = {
+  script: 'run-skill.cjs' | 'cogseed-pkg.cjs';
   nodePath: string;
   scriptPath: string;
   args: string[];
   stdin?: string;
 };
 
-const ORKAS_DIRECT_CLI_SCRIPTS = new Set(['run-skill.cjs', 'orkas-pkg.cjs']);
-const ORKAS_DIRECT_OUTPUT_LIMIT = 1024 * 1024;
+const COGSEED_DIRECT_CLI_SCRIPTS = new Set(['run-skill.cjs', 'cogseed-pkg.cjs']);
+const COGSEED_DIRECT_OUTPUT_LIMIT = 1024 * 1024;
 
 function splitTrailingHeredoc(command: string): { command: string; stdin: string } | null {
   const open = /<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?\s*\r?\n/.exec(command);
@@ -744,10 +744,10 @@ function replaceKnownShellEnvTokens(
     .replace(/%([A-Za-z_][A-Za-z0-9_]*)%/g, (token, name) => replace(token, name));
 }
 
-function expandOrkasEnvToken(token: string, env: Record<string, string>): string {
+function expandCogSeedEnvToken(token: string, env: Record<string, string>): string {
   const known = {
-    ORKAS_NODE: shellEnvValue(env, 'ORKAS_NODE') || '',
-    ORKAS_PC_DIR: shellEnvValue(env, 'ORKAS_PC_DIR') || '',
+    COGSEED_NODE: shellEnvValue(env, 'COGSEED_NODE') || '',
+    COGSEED_PC_DIR: shellEnvValue(env, 'COGSEED_PC_DIR') || '',
   };
   return replaceKnownShellEnvTokens(token, known);
 }
@@ -760,15 +760,15 @@ function sameResolvedPath(a: string, b: string): boolean {
     : ra === rb;
 }
 
-function parseOrkasCliInvocation(
+function parseCogSeedCliInvocation(
   input: Record<string, unknown>,
   ctx: ToolContext,
-): OrkasCliInvocation | null {
+): CogSeedCliInvocation | null {
   if (input.run_in_background === true) return null;
   const rawCommand = String(input.command ?? '');
   const heredoc = splitTrailingHeredoc(rawCommand);
   // A PowerShell executable path needs the call operator (`&`). Standard
-  // Orkas CLI invocations are executed directly by the host, so accept that
+  // CogSeed CLI invocations are executed directly by the host, so accept that
   // prefix and keep the same cross-platform fast/safe path.
   const command = (heredoc?.command ?? rawCommand).replace(/^\s*&\s+/, '');
   if (hasUnquotedShellControlSyntax(command)) return null;
@@ -776,16 +776,16 @@ function parseOrkasCliInvocation(
   if (!words || words.length < 2) return null;
 
   const sandboxEnv = (ctx.state.sandboxEnv ?? {}) as Record<string, string>;
-  const nodePath = sandboxEnv.ORKAS_NODE;
-  const pcDir = sandboxEnv.ORKAS_PC_DIR;
+  const nodePath = sandboxEnv.COGSEED_NODE;
+  const pcDir = sandboxEnv.COGSEED_PC_DIR;
   if (!nodePath || !pcDir) return null;
 
-  const resolvedNode = expandOrkasEnvToken(words[0], sandboxEnv);
+  const resolvedNode = expandCogSeedEnvToken(words[0], sandboxEnv);
   if (!sameResolvedPath(resolvedNode, nodePath)) return null;
 
-  const scriptPath = expandOrkasEnvToken(words[1], sandboxEnv);
-  const script = path.basename(scriptPath) as OrkasCliInvocation['script'];
-  if (!ORKAS_DIRECT_CLI_SCRIPTS.has(script)) return null;
+  const scriptPath = expandCogSeedEnvToken(words[1], sandboxEnv);
+  const script = path.basename(scriptPath) as CogSeedCliInvocation['script'];
+  if (!COGSEED_DIRECT_CLI_SCRIPTS.has(script)) return null;
   if (!sameResolvedPath(scriptPath, path.join(pcDir, 'bin', script))) return null;
 
   return {
@@ -841,8 +841,8 @@ export function formatScriptProgress(p: Record<string, unknown>): string {
   return parts.length ? `${parts.join(' ')}${pct}${t}${elapsed}` : 'script progress';
 }
 
-async function executeDirectOrkasCli(
-  invocation: OrkasCliInvocation,
+async function executeDirectCogSeedCli(
+  invocation: CogSeedCliInvocation,
   input: Record<string, unknown>,
   ctx: ToolContext,
   workingDir: string,
@@ -858,15 +858,15 @@ async function executeDirectOrkasCli(
     const stdoutCapture = spoolDir
       ? new ProcessOutputCapture({
         spoolDir,
-        prefix: 'orkas-cli-stdout',
-        memoryBytes: ORKAS_DIRECT_OUTPUT_LIMIT,
+        prefix: 'cogseed-cli-stdout',
+        memoryBytes: COGSEED_DIRECT_OUTPUT_LIMIT,
       })
       : null;
     const stderrCapture = spoolDir
       ? new ProcessOutputCapture({
         spoolDir,
-        prefix: 'orkas-cli-stderr',
-        memoryBytes: ORKAS_DIRECT_OUTPUT_LIMIT,
+        prefix: 'cogseed-cli-stderr',
+        memoryBytes: COGSEED_DIRECT_OUTPUT_LIMIT,
       })
       : null;
     const stdoutChunks: Buffer[] = [];
@@ -992,10 +992,10 @@ async function executeDirectOrkasCli(
         return;
       }
       totalBytes += data.length;
-      if (totalBytes > ORKAS_DIRECT_OUTPUT_LIMIT) {
+      if (totalBytes > COGSEED_DIRECT_OUTPUT_LIMIT) {
         outputLimitExceeded = true;
         truncatedKind = kind;
-        const allowed = Math.max(0, data.length - (totalBytes - ORKAS_DIRECT_OUTPUT_LIMIT));
+        const allowed = Math.max(0, data.length - (totalBytes - COGSEED_DIRECT_OUTPUT_LIMIT));
         if (allowed > 0) {
           (kind === 'stdout' ? stdoutChunks : stderrChunks).push(data.subarray(0, allowed));
         }
@@ -1113,13 +1113,13 @@ async function executeCoreBashWithOutputTracking(
   } catch { /* IPC not available */ }
 
   try {
-    const direct = parseOrkasCliInvocation(input, ctx);
+    const direct = parseCogSeedCliInvocation(input, ctx);
     const macWriteSandboxActive = process.platform === 'darwin'
       && fs.existsSync('/usr/bin/sandbox-exec')
       && Array.isArray(ctx.state.sandboxAllowedDirs)
       && ctx.state.sandboxAllowedDirs.length > 0;
     const result = direct && !macWriteSandboxActive
-      ? await executeDirectOrkasCli(direct, input, ctx, workingDir)
+      ? await executeDirectCogSeedCli(direct, input, ctx, workingDir)
       : await coreBashTool.execute(input, ctx);
 
     // Update execution record with result
@@ -1518,7 +1518,7 @@ function bashNonFlagOperands(args: string[], flagsWithValue: Set<string> = BASH_
 function bashEnvForPathResolution(ctx: ToolContext, workingDir: string): Record<string, string> {
   return {
     ...(ctx.state.sandboxEnv as Record<string, string> | undefined),
-    ORKAS_OUTPUT_DIR: workingDir,
+    COGSEED_OUTPUT_DIR: workingDir,
     PWD: workingDir,
     HOME: process.env.HOME || process.env.USERPROFILE || '',
   };
@@ -2259,13 +2259,13 @@ function createBashTool(opts: LocalToolsOpts): AgentTool {
       'Use `$env:NAME` for environment variables, `;` for sequencing, and PowerShell-native ' +
       'pipelines. Do not use POSIX-only `&&`, heredocs, `source`/`export`, `/dev/null`, `head`, ' +
       'or `mktemp`. Invoke a quoted executable with `&`, for example ' +
-      '`& "$env:ORKAS_NODE" "$env:ORKAS_PC_DIR/bin/run-skill.cjs" ...`. '
+      '`& "$env:COGSEED_NODE" "$env:COGSEED_PC_DIR/bin/run-skill.cjs" ...`. '
     : '';
   const outputDirDescription = process.platform === 'win32'
-    ? 'Use the absolute `$env:ORKAS_OUTPUT_DIR` path for final generated outputs. ' +
-      'Complex scripts may append one final output path per line to `$env:ORKAS_OUTPUT_MANIFEST`. '
-    : 'Use the absolute `$ORKAS_OUTPUT_DIR` path for final generated outputs. ' +
-      'Complex scripts may append one final output path per line to `$ORKAS_OUTPUT_MANIFEST`. ';
+    ? 'Use the absolute `$env:COGSEED_OUTPUT_DIR` path for final generated outputs. ' +
+      'Complex scripts may append one final output path per line to `$env:COGSEED_OUTPUT_MANIFEST`. '
+    : 'Use the absolute `$COGSEED_OUTPUT_DIR` path for final generated outputs. ' +
+      'Complex scripts may append one final output path per line to `$COGSEED_OUTPUT_MANIFEST`. ';
 
   return {
     name: 'bash',
@@ -3216,7 +3216,7 @@ function createCreateArtifactTool(opts: LocalToolsOpts): AgentTool {
   return {
     name: 'create_artifact',
     description:
-      'Create an offline interactive HTML/CSS/JS artifact rendered live in chat. Use for calculators, dashboards, filters, simulations, quizzes, mini-games; prefer :::dashboard for static summaries. Input files: [{path, content, encoding?}], including top-level index.html; no network/CDN, use relative sibling files. Optional __orkas/bridge.js provides send(payload)/resize. Do not paste HTML after calling.',
+      'Create an offline interactive HTML/CSS/JS artifact rendered live in chat. Use for calculators, dashboards, filters, simulations, quizzes, mini-games; prefer :::dashboard for static summaries. Input files: [{path, content, encoding?}], including top-level index.html; no network/CDN, use relative sibling files. Optional __cogseed/bridge.js provides send(payload)/resize. Do not paste HTML after calling.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3227,7 +3227,7 @@ function createCreateArtifactTool(opts: LocalToolsOpts): AgentTool {
           items: {
             type: 'object',
             properties: {
-              path: { type: 'string', description: 'Forward-slash relative path, e.g. "index.html" or "assets/app.js". No "..", no leading "/", no dotfiles, no "__orkas/...".' },
+              path: { type: 'string', description: 'Forward-slash relative path, e.g. "index.html" or "assets/app.js". No "..", no leading "/", no dotfiles, no "__cogseed/...".' },
               content: { type: 'string', description: 'File contents. UTF-8 text by default; for a binary extension set "encoding":"base64" and pass base64.' },
               encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Default "utf8". Use "base64" for image / font / wasm files.' },
             },

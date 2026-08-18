@@ -22,7 +22,7 @@ describe('local_agents/backends/_acp › session params', () => {
         command: '/usr/bin/node',
         args: ['/app/bin/cogseed-bridge.cjs'],
         env: {
-          ORKAS_BRIDGE_ENV_FILE: '/tmp/bridge-env.json',
+          COGSEED_BRIDGE_ENV_FILE: '/tmp/bridge-env.json',
           ELECTRON_RUN_AS_NODE: '1',
         },
       },
@@ -30,11 +30,11 @@ describe('local_agents/backends/_acp › session params', () => {
     });
 
     expect(servers).toEqual([{
-      name: 'orkas',
+      name: 'cogseed',
       command: '/usr/bin/node',
       args: ['/app/bin/cogseed-bridge.cjs'],
       env: [
-        { name: 'ORKAS_BRIDGE_ENV_FILE', value: '/tmp/bridge-env.json' },
+        { name: 'COGSEED_BRIDGE_ENV_FILE', value: '/tmp/bridge-env.json' },
         { name: 'ELECTRON_RUN_AS_NODE', value: '1' },
       ],
     }]);

@@ -9,7 +9,7 @@ import * as cliSessions from '../local_agents/sessions';
 import { getAgentCliProjectDirInfo } from '../agents';
 import { getWorkspacePath } from '../user_workspace';
 import type { RuntimeEventEnvelope } from '../cogseed_runtime/protocol';
-import type { MateLocalCliConfig } from './types';
+import type { CogSeedLocalCliConfig } from './types';
 
 const RESUME_REJECTED_PATTERNS = [
   /session\s+(?:not\s+found|expired|invalid|does\s+not\s+exist)/i,
@@ -18,7 +18,7 @@ const RESUME_REJECTED_PATTERNS = [
   /failed\s+to\s+resume/i,
 ];
 
-export interface MateLocalCliExecutionInput {
+export interface CogSeedLocalCliExecutionInput {
   userId: string;
   conversationId: string;
   agentId: string;
@@ -31,22 +31,22 @@ export interface MateLocalCliExecutionInput {
   context?: unknown[];
   attachments?: unknown[];
   workingDir?: string;
-  localCli: MateLocalCliConfig;
+  localCli: CogSeedLocalCliConfig;
 }
 
-export interface MateLocalCliExecutionAdapter {
-  run(input: MateLocalCliExecutionInput, opts?: { signal?: AbortSignal | null }): AsyncIterable<RuntimeEventEnvelope>;
+export interface CogSeedLocalCliExecutionAdapter {
+  run(input: CogSeedLocalCliExecutionInput, opts?: { signal?: AbortSignal | null }): AsyncIterable<RuntimeEventEnvelope>;
 }
 
-export interface MateLocalCliExecutionAdapterDeps {
+export interface CogSeedLocalCliExecutionAdapterDeps {
   runCli?: (opts: RunCliAgentOpts) => Promise<RunCliAgentResult>;
   getSessionId?: typeof cliSessions.getSessionId;
   setSessionId?: typeof cliSessions.setSessionId;
   clearSession?: typeof cliSessions.clearForAgent;
-  resolveWorkingDir?: (input: MateLocalCliExecutionInput) => Promise<string>;
+  resolveWorkingDir?: (input: CogSeedLocalCliExecutionInput) => Promise<string>;
 }
 
-function promptFromInput(input: MateLocalCliExecutionInput): string {
+function promptFromInput(input: CogSeedLocalCliExecutionInput): string {
   const parts = [input.task.trim()];
   const textContext = (input.context || [])
     .filter((item): item is { type: 'text'; content: string; label?: string } => (
@@ -64,7 +64,7 @@ function promptFromInput(input: MateLocalCliExecutionInput): string {
   return parts.join('\n').trim();
 }
 
-async function defaultWorkingDir(input: MateLocalCliExecutionInput): Promise<string> {
+async function defaultWorkingDir(input: CogSeedLocalCliExecutionInput): Promise<string> {
   const chats = await import('../chats');
   const conversation = await chats.getConversation(input.userId, input.conversationId);
   const projectId = conversation?.project_id || undefined;
@@ -96,7 +96,7 @@ function resumeRejected(events: LocalEvent[]): boolean {
 }
 
 function mapNonTerminalEvent(
-  input: MateLocalCliExecutionInput,
+  input: CogSeedLocalCliExecutionInput,
   event: LocalEvent,
 ): RuntimeEventEnvelope | null {
   const base = { request_id: input.requestId, runtime_session_id: input.runtimeSessionId };
@@ -127,7 +127,7 @@ function mapNonTerminalEvent(
   return null;
 }
 
-function terminalEnvelope(input: MateLocalCliExecutionInput, result: RunCliAgentResult): RuntimeEventEnvelope {
+function terminalEnvelope(input: CogSeedLocalCliExecutionInput, result: RunCliAgentResult): RuntimeEventEnvelope {
   const base = { request_id: input.requestId, runtime_session_id: input.runtimeSessionId };
   if (result.status === 'completed') {
     return { type: 'result', ...base, status: 'completed', text: result.output || '' };
@@ -144,9 +144,9 @@ function terminalEnvelope(input: MateLocalCliExecutionInput, result: RunCliAgent
   };
 }
 
-export function createMateLocalCliExecutionAdapter(
-  deps: MateLocalCliExecutionAdapterDeps = {},
-): MateLocalCliExecutionAdapter {
+export function createCogSeedLocalCliExecutionAdapter(
+  deps: CogSeedLocalCliExecutionAdapterDeps = {},
+): CogSeedLocalCliExecutionAdapter {
   const runCli = deps.runCli ?? runLocalAgent;
   const getSessionId = deps.getSessionId ?? cliSessions.getSessionId;
   const setSessionId = deps.setSessionId ?? cliSessions.setSessionId;
@@ -216,7 +216,7 @@ export function createMateLocalCliExecutionAdapter(
   };
 }
 
-export const mateLocalCliExecutionAdapter = createMateLocalCliExecutionAdapter();
+export const cogseedLocalCliExecutionAdapter = createCogSeedLocalCliExecutionAdapter();
 
 /**
  * P3394 外接智能体的执行（wake 路径）：经 runP3394GatewayTurn 走托管
@@ -225,7 +225,7 @@ export const mateLocalCliExecutionAdapter = createMateLocalCliExecutionAdapter()
  * 产物仍以 RuntimeEventEnvelope 流返回，保持 task/event/recall 语义。
  */
 async function* runViaP3394Gateway(
-  input: MateLocalCliExecutionInput,
+  input: CogSeedLocalCliExecutionInput,
   opts: { signal?: AbortSignal | null } = {},
 ): AsyncIterable<RuntimeEventEnvelope> {
   const base = { request_id: input.requestId, runtime_session_id: input.runtimeSessionId };
