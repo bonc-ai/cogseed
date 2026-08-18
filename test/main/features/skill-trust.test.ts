@@ -326,6 +326,14 @@ describe('skill trust › shallow variants stay out of production', () => {
     const selfFile = path.resolve(
       __dirname, '../../../src/main/features/skill_reverify.ts',
     );
+    // The one deliberate exception: `model/core-agent/skill-registry.ts` runs
+    // `partitionSkillsByTrust` as the synchronous tier of its two-tier gate
+    // (receipt hash + local structural rules on the prompt-build path), with
+    // the deep pass deferred to a background refresh that writes deep receipts.
+    // Every other sync caller remains a silent security downgrade.
+    const twoTierGateFile = path.resolve(
+      __dirname, '../../../src/main/model/core-agent/skill-registry.ts',
+    );
 
     const offenders: string[] = [];
     const walk = (dir: string): void => {
@@ -346,6 +354,9 @@ describe('skill trust › shallow variants stay out of production', () => {
           for (const m of text.matchAll(re)) {
             const rest = text.slice(m.index ?? 0);
             if (rest.startsWith(`${name}Deep`)) continue;
+            const allowedGateCall =
+              name === 'partitionSkillsByTrust' && path.resolve(full) === twoTierGateFile;
+            if (allowedGateCall) continue;
             offenders.push(`${path.relative(roots[0], full)}: ${name}`);
           }
         }
