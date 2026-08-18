@@ -892,7 +892,7 @@ async function p3394ProtocolProcessItem(input: {
     ? { person: "mate-user", org: "local", role: "owner" }
     : {
         person: input.item.fromActorId,
-        org: "mate-agent",
+        org: "cogseed",
         role: fromCommander ? "commander" : "agent",
       };
   // sessionId 必须是真实 <kind>-<tail>(gconv/gmember/gworker),不是裸 cid。

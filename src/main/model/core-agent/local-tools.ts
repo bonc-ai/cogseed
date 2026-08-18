@@ -3297,8 +3297,8 @@ function createCreateArtifactTool(opts: LocalToolsOpts): AgentTool {
         content:
           `Artifact "${r.title}" created (id ${r.artifactId}) — it is now shown to the user inside this reply, so do NOT paste its HTML in your message. ` +
           `To receive what the user does in it, the app calls ` +
-          `parent.postMessage({ __orkasArtifact: true, type: "submit", payload: <json-serialisable value> }, "*") ` +
-          `(or, with <script src="__orkas/bridge.js"></script>, window.orkasArtifact.send(payload)); ` +
+          `parent.postMessage({ __cogseedArtifact: true, type: "submit", payload: <json-serialisable value> }, "*") ` +
+          `(or, with <script src="__cogseed/bridge.js"></script>, window.cogseedArtifact.send(payload)); ` +
           `that becomes the user's next message to you.`,
       };
     },
