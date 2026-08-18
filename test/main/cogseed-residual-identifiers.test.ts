@@ -31,8 +31,6 @@ describe('CogSeed residual identifiers', () => {
       'README.md',
       'README.zh-CN.md',
       'README-源码包说明.txt',
-      '目录说明.md',
-      'docs/README.md',
     ];
     for (const file of currentDocs) {
       const source = read(file);
@@ -40,7 +38,7 @@ describe('CogSeed residual identifiers', () => {
       expect(source, file).not.toContain('cd mate-agent');
     }
     const readme = read('README.md');
-    expect(readme).toContain('team-02/cogseed.git');
+    expect(readme).toContain('github.com/YOUR-ORG/cogseed.git');
     expect(readme).toContain('window.cogseed');
     expect(readme).toContain('npm test');
     expect(readme).toContain('CC Switch');

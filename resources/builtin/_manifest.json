@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "278ff66a3eb1ba9ed78c59859159023e27c890f4fa8dbf27c082490863d5e10b",
+  "content_tree_sha256": "5d50c91400f58688a6ac59cb6bc6e1eee03d9a4622ecb72ff78d878f432890f2",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -69,8 +69,8 @@
     },
     {
       "path": "marketplace/agents/6a960be83f33/agent.json",
-      "bytes": 1174,
-      "sha256": "22aa917d100a18c5e81d61614c609d0475c46a97c912efbe937d1a85849159fe"
+      "bytes": 1152,
+      "sha256": "31e454d4c5f5a8f413b3fb541e85bb648e86f61e07b9aae26c2d9093bc5dd158"
     },
     {
       "path": "marketplace/agents/736cc1ac94b4/agent.json",
@@ -954,8 +954,8 @@
     },
     {
       "path": "marketplace/skills/0c2d02c7e68d/SKILL.md",
-      "bytes": 27666,
-      "sha256": "d448a631ed7df0caeadb00142f3eaadf4d306f942db89e35ba129a8e66a847f6"
+      "bytes": 27691,
+      "sha256": "3f25641adf5cb27d28a3fe5f8bc8c0527759609b24df3f737d8150e51f972e3d"
     },
     {
       "path": "marketplace/skills/0d95910c7f2f/_meta.json",
@@ -1284,8 +1284,8 @@
     },
     {
       "path": "marketplace/skills/10c4addc39a1/quality-checklist.md",
-      "bytes": 8175,
-      "sha256": "2865771cc38442998cd29776acbcbd93105a0e23d03d7a8ba4aea887156567d1"
+      "bytes": 8373,
+      "sha256": "276cbd5aaf4c0701519d1dfa2f0ecb653477864be6c657da5fdfcd7e87778ebf"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/QUICKSTART.md",
@@ -1421,11 +1421,6 @@
       "path": "marketplace/skills/10c4addc39a1/scripts/build_docx.py",
       "bytes": 38430,
       "sha256": "d3ec1b6edf155a5bb034380c6c2d8ed6acbafdbebfd187ed810f85af4ede7717"
-    },
-    {
-      "path": "marketplace/skills/10c4addc39a1/scripts/check_skill.py",
-      "bytes": 5674,
-      "sha256": "25299cfffb4980a546a9d3131a0f1279309a4e8ed347ac5648f50655f3610153"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/scripts/inspect_docx.py",
@@ -6188,126 +6183,6 @@
       "sha256": "d0d5aa6d3691790d0719476ae43448cb8b9c93178bf252a1932df8b0577e36bd"
     },
     {
-      "path": "marketplace/skills/d470761b0a07/_meta.json",
-      "bytes": 70,
-      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/agents/openai.yaml",
-      "bytes": 928,
-      "sha256": "52eeee5e60ea51d193cdf8dd2b72ee8358ab30cd77948d465418381a8b26a8e5"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/data/cases.json",
-      "bytes": 1736,
-      "sha256": "403e22d78dc8a7289a9f69b88214fa187e91dd8146a67e85078955beedb01dfc"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/ECS售前模板-项目交接说明.md",
-      "bytes": 8632,
-      "sha256": "3fa6db2adadae729837c4c9c7baf57bbdf34cd5e1762315ff74085280fc23433"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/ECS售前模板制作任务说明.md",
-      "bytes": 5102,
-      "sha256": "34b914ff41117d0ab1cac614c583eb9c695a3e7ce718cebb37a5b1f76cf6927c"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/evals/evals.json",
-      "bytes": 14404,
-      "sha256": "04e60e5d698d81e2ad6783c2a6fa55196e67cda2a47dc23a352f46db6a18ba17"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/evals/forecast_model.md",
-      "bytes": 251,
-      "sha256": "32e9804ecd1e0c32e144cb6dde3d0a056e21943222ed376e56132591a2bcbe7a"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/evals/outcome_evaluation.md",
-      "bytes": 259,
-      "sha256": "5705a49820a75a095536673eaa93532b256cdb89342feb9239d686832252ecef"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/evals/regression_tests.md",
-      "bytes": 444,
-      "sha256": "364cc357b1e9335143e8abe3cce7b6dfdfa3007eb250a5adc09e0483391148c2"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/evals/replay_dataset.md",
-      "bytes": 254,
-      "sha256": "4076c724587c0c912e66274197c30264ccbc00f4e33da3235229772f58908e05"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/eval-cases.yaml",
-      "bytes": 225,
-      "sha256": "93cf87b0e9cc9dd323e3192f36de4810252eccccb5d9ffc594bbccd58c95ff6f"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/failure-modes.md",
-      "bytes": 1131,
-      "sha256": "c1be0a2590090cf467680dd687edb96ad85f774b2b279e6aa9f289ccfd72e65f"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/governance-boundaries.md",
-      "bytes": 569,
-      "sha256": "0f048cc6359f12d0faff77bc5dd53b492178a90013788ed43c567f3c5439ce9b"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/input-contract.md",
-      "bytes": 827,
-      "sha256": "37b601a12989f3afc1f23dc9a0dca2da79307e209ff6d3af33df396b15066721"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/kstar-evolution.md",
-      "bytes": 588,
-      "sha256": "e8828cea8b9c2eb9df02c795e42baa9f01227ffd6d49dbb4ed5de887602e3a27"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/ontology-mapping.md",
-      "bytes": 306,
-      "sha256": "3f15eaeb38e0c38239802b6ddf917d33dd045645994621cb570c129a3896e84e"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/output-contract.md",
-      "bytes": 417,
-      "sha256": "b6566dc05be352a387c972c91aac2107be65b44ef3e0e8ad3d855cdcbd38475f"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/rbox_rules.md",
-      "bytes": 7217,
-      "sha256": "52c66c833b2982143b1a6ca20a71e754b876b80c7cd6c46b7968e8cb75fdd6c4"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/skill-spec.yaml",
-      "bytes": 615,
-      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/validation-contract.md",
-      "bytes": 558,
-      "sha256": "e0fe7f9a6250947380c9ed4a6a316afc8cd481bceff8efd55ec48a523ecde71a"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/references/本体可视化-ECS售前.html",
-      "bytes": 41245,
-      "sha256": "414b931702d1a46353b74ebe23bcbaea80fd3534c2b1aaded7a0044e023fc158"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/schemas.json",
-      "bytes": 2794,
-      "sha256": "d8ad108a3eb31a6468eb856e32d7e205c97ff7247e7a1f501f5a94b52e6d71c8"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/SKILL.md",
-      "bytes": 19214,
-      "sha256": "02c5643c9f9c021caa4d0520b15f3823f1f631c9bcd631bfcb85d5c915127f35"
-    },
-    {
-      "path": "marketplace/skills/d470761b0a07/工业企业ECS售前模板_基于V3.4_v2.0.pdf",
-      "bytes": 2224643,
-      "sha256": "673a2dcfc493a711fd85012ce56b239c1d9602e97e23d38a4f316ec44d1c8ba3"
-    },
-    {
       "path": "marketplace/skills/d5041e397e79/_meta.json",
       "bytes": 73,
       "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
@@ -7663,9 +7538,7 @@
         "icon": "megaphone",
         "color": "gold",
         "updated_at": "2026-08-17T00:00:00",
-        "skill_list": [
-          "d470761b0a07"
-        ],
+        "skill_list": [],
         "embedded_skills": []
       },
       {
@@ -8322,12 +8195,6 @@
         "name": "repo-exploration",
         "version": "0.2.1-review.3",
         "updated_at": "2026-08-11T00:00:00"
-      },
-      {
-        "id": "d470761b0a07",
-        "name": "ECS售前交流材料",
-        "version": "1.1.0",
-        "updated_at": "2026-08-16T12:00:00+08:00"
       },
       {
         "id": "d5041e397e79",

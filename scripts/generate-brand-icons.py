@@ -29,7 +29,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'src' / 'resources' / 'icons'
 
-DEFAULT_SOURCE = Path('/Users/sudai/Desktop/微信图片_20260813194423_1297_537.png')
+# 无内置默认源：源图是设计交付资产，路径随机器变化，必须由调用方显式传入。
 
 # App icon background: opaque light warm-white (r,g,b all >= 239 so the asset
 # contract can distinguish it from the transparent page logo).
@@ -154,7 +154,7 @@ def write_svg(path: Path) -> None:
 
 
 def main() -> None:
-    source = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SOURCE
+    source = Path(sys.argv[1]) if len(sys.argv) > 1 else None
     if not source.is_file():
         raise SystemExit(
             f'brand icon source not found: {source}\n'
