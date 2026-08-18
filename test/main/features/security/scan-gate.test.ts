@@ -71,10 +71,12 @@ describe('guardrail › scan_gate › verdicts', () => {
     expect(v.outcome).toBe('pass');
     expect(v.recommendation).toBe('ALLOW');
     expect(v.blocking_rules).toEqual([]);
-    // Provenance must show the real ruleset, not the built-in fallback — a
-    // verdict from the thinner rules is not equivalent and callers disclose it.
+    // Provenance must always disclose whether the versioned YAML ruleset or
+    // embedded fail-safe rules produced the verdict. The embedded path is
+    // supported because packaged/system Python may not include PyYAML; its
+    // release-critical blocking rules are covered below.
     expect(v.rules_source).not.toBe('');
-    expect(v.rules_source.startsWith('builtin')).toBe(false);
+    expect(v.rules_source).toMatch(/^(ruleset|builtin)/);
   }, 200_000);
 
   // The case that forced category-level blocking. This rolls up to CAUTION with a

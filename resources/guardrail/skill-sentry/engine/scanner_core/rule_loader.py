@@ -79,6 +79,15 @@ DEFAULT_RULE_GROUPS: dict[str, list[tuple[str, str, str, str]]] = {
         # 收窄：裸 "upload" 一词命中率过高（普通功能描述），见 text-rules.yaml 注释。
         ("upload_exfil", r"(\bexfil\w*|外发|外传|\bupload\w*\s*\()", "medium", "data_egress"),
         ("webhook", r"\bwebhook\b", "low", "data_egress"),
+        # These two rules are release-critical and must remain in the embedded
+        # fallback. Developer/system Python installations often omit PyYAML;
+        # falling back must not turn credential exfiltration into ALLOW.
+        ("credential_path_read",
+         r"(~|\$HOME)/\.ssh/|/\.ssh/id_(rsa|dsa|ecdsa|ed25519)|\.aws/credentials|(~|\$HOME)/\.gnupg/|(~|\$HOME)/\.docker/config\.json|security\s+find-generic-password",
+         "critical", "credential_access"),
+        ("pipe_to_remote_sink",
+         r"\|\s*(curl|wget)\b[^\n]*(-d|--data(-binary|-raw)?)\s*@?-|\|\s*nc\s+[a-zA-Z0-9\.\-]+\s+\d+",
+         "critical", "data_egress"),
     ],
     "suspicious_addresses": [
         ("cloud_metadata_ip", r"169\.254\.169\.254", "high", "ssrf"),

@@ -24,12 +24,21 @@ export interface P3394OutboundReply {
   envelope: P3394Envelope;
 }
 
+export interface P3394OutboundStreamEvent {
+  text: string;
+  envelope: P3394Envelope;
+  sequence?: number;
+  sourceMessageId?: string;
+}
+
 interface PendingReply {
   resolve: (reply: P3394OutboundReply) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
   /** 出站信封的 message_id —— 回复到达时据此把 outbox 记录标为 completed。 */
   outboundMessageId: string;
+  onStream?: (event: P3394OutboundStreamEvent) => void;
+  lastStreamSequence?: number;
 }
 
 export interface P3394OutboundHubDeps {
@@ -99,7 +108,11 @@ export class P3394OutboundHub {
   /** Sends an envelope to a registered peer and waits for its reply.
    *  Transactional outbox（指南 §12）：信封先落盘（submitted），送达后 sent，
    *  收到回复 completed，投递失败 failed——重启后 submitted/sent 可重放。 */
-  async sendAndWait(agentId: string, envelope: P3394Envelope): Promise<P3394OutboundReply> {
+  async sendAndWait(
+    agentId: string,
+    envelope: P3394Envelope,
+    onStream?: (event: P3394OutboundStreamEvent) => void,
+  ): Promise<P3394OutboundReply> {
     const peer = this.listPeers().find((candidate) => candidate.identity.agent_id === agentId && !candidate.disabled);
     if (!peer) throw new Error('p3394_peer_not_registered');
     if (this.pending.has(envelope.session_id)) {
@@ -113,7 +126,13 @@ export class P3394OutboundHub {
         // sent 但未收到回复：保持 sent（可重放），不标 failed。
         reject(new Error('p3394_reply_timeout'));
       }, this.replyTimeoutMs);
-      this.pending.set(envelope.session_id, { resolve, reject, timer, outboundMessageId: envelope.message_id });
+      this.pending.set(envelope.session_id, {
+        resolve,
+        reject,
+        timer,
+        outboundMessageId: envelope.message_id,
+        ...(onStream ? { onStream } : {}),
+      });
     });
     try {
       await channel.dial(agentId);
@@ -164,6 +183,33 @@ export class P3394OutboundHub {
   tryResolveReply(envelope: P3394Envelope): boolean {
     const waiter = this.pending.get(envelope.session_id);
     if (!waiter) return false;
+    // Gate late replies from an earlier turn when a session is reused. Older
+    // gateways omit reply_to, so the check is only strict when the field is
+    // present on the wire.
+    if (envelope.reply_to && envelope.reply_to !== waiter.outboundMessageId) return false;
+    const streamEvent = p3394EnvelopeStreamEvent(envelope);
+    if (streamEvent) {
+      if (streamEvent.sourceMessageId && streamEvent.sourceMessageId !== waiter.outboundMessageId) return false;
+      if (
+        streamEvent.sequence !== undefined
+        && waiter.lastStreamSequence !== undefined
+        && streamEvent.sequence <= waiter.lastStreamSequence
+      ) {
+        return true;
+      }
+      if (streamEvent.sequence !== undefined) waiter.lastStreamSequence = streamEvent.sequence;
+      try {
+        waiter.onStream?.(streamEvent);
+      } catch (error) {
+        log.warn('P3394 outbound stream listener failed', {
+          session_id: envelope.session_id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      // Stream frames are intermediate events. Keep the waiter alive until
+      // the terminal message arrives, and never feed them to the executor.
+      return true;
+    }
     clearTimeout(waiter.timer);
     this.pending.delete(envelope.session_id);
     const text = envelopeText(envelope);
@@ -199,4 +245,27 @@ export function p3394EnvelopeReplyText(envelope: P3394Envelope): string {
 
 function envelopeText(envelope: P3394Envelope): string {
   return p3394EnvelopeReplyText(envelope);
+}
+
+function p3394EnvelopeStreamEvent(envelope: P3394Envelope): P3394OutboundStreamEvent | null {
+  if (envelope.kind !== 'event') return null;
+  const metadata = envelope.payload.metadata;
+  if (!metadata || metadata.stream_event !== 'delta') return null;
+  // Do not trim deltas: a chunk can intentionally end with a space or a
+  // newline, and the renderer appends it directly to the visible bubble.
+  const text = envelope.payload.parts
+    .filter((part) => part.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text as string)
+    .join('\n');
+  if (!text) return null;
+  const sequence = typeof metadata.stream_seq === 'number' ? metadata.stream_seq : undefined;
+  const sourceMessageId = typeof metadata.stream_source_message_id === 'string'
+    ? metadata.stream_source_message_id
+    : undefined;
+  return {
+    text,
+    envelope,
+    ...(sequence !== undefined ? { sequence } : {}),
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+  };
 }

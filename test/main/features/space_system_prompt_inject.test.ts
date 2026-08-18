@@ -47,13 +47,19 @@ vi.mock('../../../src/main/model/client', () => ({
 
 let tmpDir: string;
 let prevWs: string | undefined;
+let prevAnthropicKey: string | undefined;
 const UID = 'u1';
 
 beforeEach(async () => {
   capturedChatOptions = [];
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-space-inject-'));
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  prevAnthropicKey = process.env.ANTHROPIC_API_KEY;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  // buildRunner's prompt assembly is intentionally behind the model-auth
+  // gate. These tests inspect the assembled prompt without making a request,
+  // so supply the supported development fallback explicitly.
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-test-placeholder';
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(UID);
@@ -62,6 +68,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await drainMainRuntimeForTest();
   process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  if (prevAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+  else process.env.ANTHROPIC_API_KEY = prevAnthropicKey;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

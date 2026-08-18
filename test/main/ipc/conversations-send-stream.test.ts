@@ -113,6 +113,61 @@ async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void>
 }
 
 describe('ipc › conversations.sendStream', () => {
+  it('forwards a validated structured Agent selection to the group-chat facade', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sender = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
+    const run = streamStartHandler(
+      { sender },
+      {
+        requestId: 'selected-agent-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: '发热还',
+          recipient_agent_id: 'agent-codex-1',
+          recipient_origin: 'user_selection',
+        },
+      },
+    );
+
+    await groupChatMock.sendStarted;
+    expect(groupChatMock.sendCalls).toEqual([{
+      userId: TEST_UID,
+      cid: 'c123abc',
+      text: '发热还',
+      recipient_agent_id: 'agent-codex-1',
+      recipient_origin: 'user_selection',
+    }]);
+
+    groupChatMock.quiescent = true;
+    groupChatMock.releaseSend?.();
+    await run;
+  });
+
+  it('rejects malformed structured Agent routes before dispatch', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sent = vi.fn();
+    await streamStartHandler(
+      { sender: trustedIpcSender({ isDestroyed: () => false, send: sent }) },
+      {
+        requestId: 'invalid-agent-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: 'hello',
+          recipient_agent_id: '../agent',
+          recipient_origin: 'cli_fallback',
+        },
+      },
+    );
+
+    expect(groupChatMock.sendCalls).toEqual([]);
+    expect(sent).toHaveBeenCalledWith(
+      'stream:invalid-agent-request',
+      expect.objectContaining({ type: 'error', text: 'invalid recipient route' }),
+    );
+  });
+
   it('routes a failed-message retry to the smart retry path instead of a normal send', async () => {
     if (!streamStartHandler) throw new Error('stream handler not registered');
     const sender = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
