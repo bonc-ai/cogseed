@@ -1,5 +1,5 @@
 {
-  "eval_suite_id": "eval.skill.cogseed.research.reproducibility.nseap.v1",
+  "eval_suite_id": "eval.skill.cogseed.research.reproducibility.v1",
   "skill_id": "skill.cogseed.research.reproducibility",
   "status": "synthetic_structure_cases_not_run",
   "evidence_policy": {

@@ -1,5 +1,5 @@
 {
-  "eval_suite_id": "eval.skill.cogseed.project.status-review.nseap.v1",
+  "eval_suite_id": "eval.skill.cogseed.project.status-review.v1",
   "skill_id": "skill.cogseed.project.status-review",
   "status": "synthetic_structure_cases_not_run",
   "evidence_policy": {

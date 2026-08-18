@@ -37,8 +37,8 @@ description: "把成果映射到能力与架构选项，明确非功能、权衡
 - 权限不足或出现敏感数据：停止对应读取/动作并请求授权。
 - 预算耗尽：保留中间证据、未完成步骤和恢复指针。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要“把成果映射到能力与架构选项，明确非功能、权衡、POC、运维和非目标。”，并具备完成“从已确认成果与约束推导所需能力和验收信号”与“提出至少两个可行选项，比较构建/采购、成本、风险和可逆性”所需的授权材料、环境和范围。
 - `do_not_use_when`：无法完成前置检查“从已确认成果与约束推导所需能力和验收信号”；执行“提出至少两个可行选项，比较构建/采购、成本、风险和可逆性”所需的材料、环境或授权不可用；任务不属于“solution-design”职责；或请求违反专属判断规则“不得让单一技术方案先于需求成为既定结论”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
@@ -52,7 +52,7 @@ description: "把成果映射到能力与架构选项，明确非功能、权衡
 - 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
 - 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
 - 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->
 
 ## 详细方法
 

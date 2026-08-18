@@ -54,8 +54,8 @@ description: "设计North Star、输入、产品健康、AI质量与商业指标
 - 数据互相冲突：并列冲突及适用条件，不自行裁决为单一事实。
 - 预算耗尽：返回当前证据、未完成步骤和可安全续跑点。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要“把产品价值主张转成可计算、可解释、可行动并能防止局部优化的指标体系。”，并已提供或授权“用户价值与业务模式”与“核心用户旅程和产品阶段”等最小业务输入。
 - `do_not_use_when`：缺少或未授权“用户价值与业务模式”；“核心用户旅程和产品阶段”的对象、范围或版本无法确认；任务不属于“product-metrics”职责；或请求违反专属判断规则“North Star是客户获得价值的单一指标，不等于收入、OKR或指标列表。”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
@@ -69,7 +69,7 @@ description: "设计North Star、输入、产品健康、AI质量与商业指标
 - 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
 - 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
 - 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->
 
 ## 详细方法
 

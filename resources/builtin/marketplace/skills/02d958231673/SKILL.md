@@ -23,8 +23,8 @@ description: "商品文案撰写：从卖点提炼到详情页文案（主图文
 ## 输出
 标题（≤30 字）+ 主图文案 5 条 + 详情页文案 + 合规自查
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要把商品参数转化为高转化文案：新品上架（标题+主图文案+详情页）、老品优化（点击率/转化率优化）或广告投放素材，且已具备商品功能、材质、参数、用户评价与竞品卖点材料。
 - `do_not_use_when`：任务不是文案创作（如定价策略、库存管理、供应链决策）；缺少商品基础材料却要求直接定稿；要求虚构商品参数、用户评价或合规资质；要求绕过广告法违禁词/极限词检查。
@@ -32,4 +32,4 @@ description: "商品文案撰写：从卖点提炼到详情页文案（主图文
 - `negative_examples`：`我没有商品资料，你直接编一个详情页发出去。`；`把价格定到 9.9 并写成“全网最低价”，不用管广告法。`
 
 本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

@@ -236,8 +236,8 @@ Keep the user-facing flow natural:
 - Show evidence and uncertainty.
 - Keep advanced JSON/schema details behind expandable status or summary unless the user asks.
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：用户想运行、复现、验证或检查研究论文关联的 GitHub 项目（“帮我跑一下这篇论文的项目”“复现最小实验”“先跑通官方 example”），且愿意提供论文选区、仓库 URL、commit 与本地工作区。
 - `do_not_use_when`：用户没有明确论文/仓库/commit 任何一项时直接开跑；任务只是阅读论文、写综述或改代码；未获用户确认就执行外部命令；要求执行无 trace 的任意命令。
@@ -245,4 +245,4 @@ Keep the user-facing flow natural:
 - `negative_examples`：`Just run the repo without telling me which commit or workspace.`；`Reproduce the results and fix the paper's claims if they're wrong.`
 
 本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

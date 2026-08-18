@@ -1,5 +1,5 @@
 {
-  "eval_suite_id": "eval.skill.cogseed.research.question-refinement.nseap.v1",
+  "eval_suite_id": "eval.skill.cogseed.research.question-refinement.v1",
   "skill_id": "skill.cogseed.research.question-refinement",
   "status": "synthetic_structure_cases_not_run",
   "evidence_policy": {

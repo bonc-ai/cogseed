@@ -403,8 +403,8 @@ ecs-presales-agent/
 > - [ ] 执行流程：给定行业+场景+会议类型，能无歧义输出PPT结构
 > - [ ] 输出格式：三种输出（PPT结构清单 / 四What映射 / 填写指导）均可推导
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要准备 ECS 售前交流材料：按行业类型（制造/能源/电信/医疗/金融/政务）、客户场景（合规审计/运营分析/流程自动化）和会议目的（首次拜访/跟进演示/POC 汇报）确定 PPT 框架、行业本体选型（ISA-95/TM Forum/HL7 FHIR/FIBO/NSEAP Meta）与四 What 映射。
 - `do_not_use_when`：PPT 美化排版、具体客户案例内容撰写、公司介绍段落生成；用户未提供行业/场景/会议目的时直接出框架；把四 What 叙事当事实数据；超越本体覆盖范围编造行业标准。
@@ -412,4 +412,4 @@ ecs-presales-agent/
 - `negative_examples`：`直接帮我写好这份 PPT 的美化排版。`；`我还没说行业和场景，你先出个通用框架。`
 
 本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

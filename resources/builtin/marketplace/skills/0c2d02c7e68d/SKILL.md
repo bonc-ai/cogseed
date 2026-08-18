@@ -552,8 +552,8 @@ REASON [为什么——不遵守会发生什么？背后的因果逻辑是什么
 > - [ ] 已联系到可以确认 R-Box 的领域专家（或确认 FDE 自确认角色）
 > - [ ] 完成抽取后，过完工标准 5-Gate 才算本体定稿
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：用户提供规程/标准/手册/专家访谈记录/历史事故案例，要求抽取 T-Box 概念体系、R-Box 因果规则（含 REASON）或 A-Box 历史实例；触发词如“帮我从这份文档里抽 T-Box”“这些规程里有哪些因果规则”“帮我建 R-Box”。
 - `do_not_use_when`：用户只需要摘要/翻译/改写文档而非建本体；输入是成熟度框架但场景需要字段级实时判断（先要操作规程）；产品架构图但场景边界不清；任务是审批发布/声明业务价值/认证合规达标；假设案例用于验证规则有效性（不进 A-Box）；R-Box 规则 REASON 未经领域专家逐条确认不得视为有效。
@@ -561,4 +561,4 @@ REASON [为什么——不遵守会发生什么？背后的因果逻辑是什么
 - `negative_examples`：`把这份文档翻译成英文。`；`基于假设案例直接建 A-Box，不用专家确认 REASON。`
 
 本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

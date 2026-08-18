@@ -1,5 +1,5 @@
 {
-  "eval_suite_id": "eval.skill.cogseed.student.daily-priority.nseap.v1",
+  "eval_suite_id": "eval.skill.cogseed.student.daily-priority.v1",
   "skill_id": "skill.cogseed.student.daily-priority",
   "status": "synthetic_structure_cases_not_run",
   "evidence_policy": {
