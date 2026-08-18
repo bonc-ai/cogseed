@@ -61,6 +61,7 @@ PYTHONPATH="$PWD/resources/guardrail/skill-declaration-core/vendor:$PWD/resource
 
 ## 4. 打包契约（不得破坏）
 
-- `package.json` extraResources：`resources/guardrail → guardrail`（matrix.test.ts 锁）。
-- `scripts/strip-closed-source-scanner.mjs`：开源构建删 skill-sentry + 写 `SCANNER_ABSENT`，保留 `scan_gate.py`。
-- `skill-sentry.INTEGRITY` / `SCANNER_ABSENT` 均 gitignored，发布时生成。
+- `package.json` extraResources：`resources/guardrail → guardrail`（matrix.test.ts 锁）。内部/开发构建整树随包（两引擎 + SYNC.md）。
+- `scripts/strip-closed-source-scanner.mjs`：开源构建剥离四块——`skill-sentry/`、`skill-declaration-core/`（含其 `.INTEGRITY`）、`SYNC.md`、`resources/test/skill-sentry/`；写入 `SCANNER_ABSENT`；保留 `scan_gate.py`。
+- `skill-sentry.INTEGRITY` / `SCANNER_ABSENT` 均 gitignored，发布时生成；`skill-declaration-core.INTEGRITY` 由 strip 移除。
+- 公开仓库导出清单必须显式排除上述四块（gitignore 对已跟踪文件不生效，导出时按清单剔除；见 .gitignore 尾部注释）。
