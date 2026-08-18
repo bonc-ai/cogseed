@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "5d50c91400f58688a6ac59cb6bc6e1eee03d9a4622ecb72ff78d878f432890f2",
+  "content_tree_sha256": "c2c0fbf707d80ed1b77b9b7857ddb2dd0f5b9c2fef58c7224afa526b839d5187",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -7049,8 +7049,8 @@
     },
     {
       "path": "marketplace/skills/f51578fae310/references/rbox_rules.md",
-      "bytes": 10743,
-      "sha256": "7e6b02da31eb5a9b2047153464c3ef17286cab8e288863c4c6b9b33e87fdeffa"
+      "bytes": 10650,
+      "sha256": "7803fba21fef0efced36c56857dbfaee8579532dd92da4a1e1fae9ab42790e5f"
     },
     {
       "path": "marketplace/skills/f51578fae310/references/skill-spec.yaml",
