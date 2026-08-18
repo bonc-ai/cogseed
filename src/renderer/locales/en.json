@@ -4870,6 +4870,7 @@
   "cognition.governance_asset_body_hint": "Delete, withdraw and purge differ in what they leave behind; each asks again before it runs.",
   "hub.chip.menu.templates": "Templates",
   "hub.chip.menu.usage": "Quota",
+  "hub.chip.menu.collapse": "Collapse panel",
   "new_chat.subtitle": "What should the team work on? Describe a task, or pick a template.",
   "sidebar.new_task": "New task",
   "sidebar.new_task_ph": "Describe the task, press Enter to create…",

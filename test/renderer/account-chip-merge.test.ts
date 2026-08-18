@@ -1,5 +1,5 @@
 // account-chip.js（左下角融合入口）的交互行为测试：
-// hover 延迟展开 / 无缝衔接不闪断 / 钉住语义 / 设置项路由 / 降级形态。
+// 点击展开 / 再击收起 / 收起按钮 / 外部点击与 Esc 关闭 / 设置项路由 / 降级形态。
 // 与 renderer 一样是经典脚本，用 node:vm + 轻量 DOM fake 执行真实源码。
 import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -8,9 +8,7 @@ import * as vm from 'node:vm';
 
 const root = path.join(__dirname, '../..');
 
-const OPEN_MS = 150;
-const CLOSE_MS = 220;
-const settle = (ms = 300) => new Promise((resolve) => setTimeout(resolve, ms));
+const settle = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class FakeClassList {
   private classes = new Set<string>();
@@ -112,7 +110,6 @@ function loadAccountChip(statusFixture: Record<string, unknown> | null, invokeIm
   rootEl.hidden = true; // index.html 初始 hidden
   elements.set('hub-account-chip-root', rootEl);
   elements.set('panel-settings', new FakeElement(['panel', 'active']));
-  elements.set('conversation-list', new FakeElement());
 
   const documentListeners = new Map<string, Array<(event?: any) => void>>();
   const document = {
@@ -182,49 +179,69 @@ const SIGNED_IN = {
   hub_reachable: true,
 };
 
-describe('account-chip merged footer entry', () => {
-  it('opens the merged panel on hover after the delay and closes it on leave', async () => {
+describe('account-chip merged footer entry (click toggle)', () => {
+  it('opens the merged panel on click and closes on a second click', async () => {
     const { rootEl } = loadAccountChip(SIGNED_IN);
     await settle(50); // 启动 status 刷新完成
 
-    rootEl.dispatch('mouseenter');
-    await settle(OPEN_MS + 60);
+    rootEl.chip!.click();
     expect(rootEl.menu!.hidden).toBe(false);
+    expect(rootEl.chip!.getAttribute('aria-expanded')).toBe('true');
+    expect(rootEl.classList.contains('is-open')).toBe(true);
+    await settle(20);
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.settings');
     expect(rootEl.menu!.innerHTML).toContain('hub.account.sign_out');
-    expect(rootEl.chip!.getAttribute('aria-expanded')).toBe('true');
+    expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.collapse');
 
-    rootEl.dispatch('mouseleave');
-    await settle(CLOSE_MS + 60);
+    rootEl.chip!.click();
     expect(rootEl.menu!.hidden).toBe(true);
     expect(rootEl.chip!.getAttribute('aria-expanded')).toBe('false');
+    expect(rootEl.classList.contains('is-open')).toBe(false);
   });
 
-  it('pins on click so the panel survives hover-out; a second click unpins and closes', async () => {
+  it('closes on an outside click', async () => {
+    const { rootEl, document } = loadAccountChip(SIGNED_IN);
+    await settle(50);
+
+    rootEl.chip!.click();
+    expect(rootEl.menu!.hidden).toBe(false);
+
+    document.dispatch('click', { target: new FakeElement() });
+    expect(rootEl.menu!.hidden).toBe(true);
+    expect(rootEl.classList.contains('is-open')).toBe(false);
+  });
+
+  it('closes on Escape', async () => {
+    const { rootEl, document } = loadAccountChip(SIGNED_IN);
+    await settle(50);
+
+    rootEl.chip!.click();
+    expect(rootEl.menu!.hidden).toBe(false);
+
+    document.dispatch('keydown', { key: 'Escape' });
+    expect(rootEl.menu!.hidden).toBe(true);
+  });
+
+  it('closes via the collapse button at the bottom of the panel', async () => {
     const { rootEl } = loadAccountChip(SIGNED_IN);
     await settle(50);
 
-    rootEl.dispatch('mouseenter');
-    await settle(OPEN_MS + 60);
     rootEl.chip!.click();
-    expect(rootEl.classList.contains('is-pinned')).toBe(true);
+    await settle(20);
+    const collapse = rootEl.menu!.querySelector('[data-chip-action="collapse"]')!;
+    expect(collapse).not.toBeNull();
 
-    rootEl.dispatch('mouseleave');
-    await settle(CLOSE_MS + 60);
-    expect(rootEl.menu!.hidden).toBe(false); // 钉住：离开仍展开
-
-    rootEl.chip!.click();
-    expect(rootEl.classList.contains('is-pinned')).toBe(false);
-    await settle(CLOSE_MS + 60);
+    collapse.click();
     expect(rootEl.menu!.hidden).toBe(true);
+    expect(rootEl.classList.contains('is-open')).toBe(false);
   });
 
-  it('routes the merged settings item to window.setView("settings")', async () => {
+  it('routes the merged settings item to window.setView("settings") and closes', async () => {
     const { rootEl, setView, activateSettingsTab } = loadAccountChip(SIGNED_IN);
     await settle(50);
 
-    rootEl.dispatch('mouseenter');
-    await settle(OPEN_MS + 60);
+    rootEl.chip!.click();
+    await settle(20);
     const item = rootEl.menu!.querySelector('[data-chip-action="settings"]')!;
     item.click();
 
@@ -237,8 +254,8 @@ describe('account-chip merged footer entry', () => {
     const { context, rootEl } = loadAccountChip(SIGNED_IN);
     await settle(50);
 
-    rootEl.dispatch('mouseenter');
-    await settle(OPEN_MS + 60);
+    rootEl.chip!.click();
+    await settle(20);
     context.window.setChipSettingsActive(true);
     const item = rootEl.menu!.querySelector('[data-chip-action="settings"]')!;
     expect(item.classList.contains('is-active')).toBe(true);
@@ -255,11 +272,12 @@ describe('account-chip merged footer entry', () => {
     expect(rootEl.innerHTML).toContain('hub.chip.degraded_name');
     expect(rootEl.innerHTML).not.toContain('hub.chip.sign_in');
 
-    rootEl.dispatch('mouseenter');
-    await settle(OPEN_MS + 60);
+    rootEl.chip!.click();
     expect(rootEl.menu!.hidden).toBe(false);
+    await settle(20);
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.hub_unavailable');
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.settings');
+    expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.collapse');
     expect(rootEl.menu!.innerHTML).not.toContain('hub.account.sign_out');
   });
 
@@ -274,39 +292,25 @@ describe('account-chip merged footer entry', () => {
     expect(rootEl.hidden).toBe(false);
     expect(rootEl.innerHTML).toContain('hub.chip.degraded_name');
 
-    rootEl.dispatch('mouseenter');
-    await settle(OPEN_MS + 60);
+    rootEl.chip!.click();
+    await settle(20);
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.settings');
+    expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.collapse');
   });
 
-  it('closes and unpins on an outside click', async () => {
-    const { rootEl, document } = loadAccountChip(SIGNED_IN);
-    await settle(50);
-
-    rootEl.dispatch('mouseenter');
-    await settle(OPEN_MS + 60);
-    rootEl.chip!.click(); // 钉住
-    expect(rootEl.classList.contains('is-pinned')).toBe(true);
-
-    document.dispatch('click', { target: new FakeElement() });
-    expect(rootEl.classList.contains('is-pinned')).toBe(false);
-    expect(rootEl.menu!.hidden).toBe(true);
-  });
-
-  it('opens the panel on hover when signed out; click pins instead of logging in', async () => {
+  it('opens on click when signed out; sign-in lives in the panel head card', async () => {
     const { rootEl, invoke } = loadAccountChip({ signed_in: false, account_id: '', bound: false, hub_reachable: true });
     await settle(50);
 
-    // 未登录态 hover 同样展开，面板含设置项与登录头卡。
-    rootEl.dispatch('mouseenter');
-    await settle(OPEN_MS + 60);
+    // 未登录态单击同样展开，面板含设置项、登录头卡与收起按钮。
+    rootEl.chip!.click();
     expect(rootEl.menu!.hidden).toBe(false);
+    await settle(20);
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.settings');
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.sign_in');
+    expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.collapse');
 
-    // 单击状态栏 = 钉住，不再直接触发登录。
-    rootEl.chip!.click();
-    expect(rootEl.classList.contains('is-pinned')).toBe(true);
+    // 单击入口只负责展开/收起，不直接触发登录。
     expect(invoke).not.toHaveBeenCalledWith('hub-account.start_login', {});
 
     // 登录动作在面板头卡内。
@@ -319,16 +323,14 @@ describe('account-chip merged footer entry', () => {
     const { rootEl } = loadAccountChip({ signed_in: false, account_id: '', bound: false, hub_reachable: true });
     await settle(50);
 
-    rootEl.dispatch('mouseenter');
-    await settle(OPEN_MS + 60);
+    rootEl.chip!.click();
+    await settle(20);
     const head = rootEl.menu!.querySelector('[data-chip-action="sign-in"]')!;
-    head.click(); // 进入 signing-in，面板被重建隐藏
+    head.click(); // 进入 signing-in，面板关闭、入口重建
     await settle(20);
     expect(rootEl.menu!.hidden).toBe(true);
 
-    rootEl.dispatch('mouseleave');
-    rootEl.dispatch('mouseenter');
-    await settle(OPEN_MS + 60);
-    expect(rootEl.menu!.hidden).toBe(true); // 登录中 hover 不展开
+    rootEl.chip!.click(); // 登录中点击不展开
+    expect(rootEl.menu!.hidden).toBe(true);
   });
 });

@@ -285,7 +285,7 @@ body.sidebar-collapsed .sidebar-actions .sidebar-btn > span:not(.sidebar-btn-ico
 body.sidebar-collapsed .sidebar-conversation-nav,
 body.sidebar-collapsed .sidebar-resize-handle { display: none; }
 /* 融合入口折叠态：状态栏压缩为头像图标按钮（隐藏文字/状态点/箭头），
-   hover 仍向上展开完整面板，设置入口不丢失。 */
+   点击仍向上展开完整面板，设置入口不丢失。 */
 body.sidebar-collapsed .sidebar-footer-actions { padding: 6px 6px 10px; }
 body.sidebar-collapsed .sidebar-footer-account { display: block; }
 body.sidebar-collapsed .hub-chip {
@@ -295,8 +295,7 @@ body.sidebar-collapsed .hub-chip {
 }
 body.sidebar-collapsed .hub-chip-meta,
 body.sidebar-collapsed .hub-chip-dot,
-body.sidebar-collapsed .hub-chip-chev,
-body.sidebar-collapsed .hub-chip-pin { display: none; }
+body.sidebar-collapsed .hub-chip-chev { display: none; }
 /* 折叠时面板宽度锚定最小值（侧栏只有 48px），仍向上完整展开。 */
 body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 
@@ -735,7 +734,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .sidebar-btn.primary {}
 
 /* Sidebar footer actions — 左下角融合入口（用户状态 + 设置，见
-   account-chip.js）：单一状态栏常驻，hover / 点击钉住时向上展开面板。 */
+   account-chip.js）：单一状态栏常驻，单击展开 / 再击收起，面板向上展开。 */
 .sidebar-footer-actions {
   display: flex;
   flex-direction: column;
@@ -842,16 +841,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: var(--muted);
   transition: transform 0.15s ease;
 }
-.hub-chip-pin {
-  width: 14px;
-  height: 14px;
-  flex: none;
-  color: var(--muted);
-}
-/* 融合面板展开 / 钉住时入口的状态反馈 */
+/* 融合面板展开时入口的状态反馈 */
 .sidebar-footer-account.is-open .hub-chip { background: var(--primary-soft); color: var(--primary-text); }
 .sidebar-footer-account.is-open .hub-chip-chev { transform: rotate(180deg); }
-.sidebar-footer-account.is-pinned .hub-chip-pin { color: var(--primary-text); }
 
 /* 静态 UI 优化：已登录行常驻浅底、渐变首字母头像、未登录副标题主色 */
 .hub-chip.is-signed-row { background: var(--primary-soft); }
@@ -865,9 +857,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .hub-chip-sub.is-accent { color: var(--primary-text); font-family: inherit; }
 
-/* 账号 + 设置融合面板（左下角 hover 向上展开）。
-   bottom: calc(100% - 6px) 与入口重叠 6px，指针在入口与面板间移动
-   不经过任何空隙，hover 开合不会闪断；底部内边距相应加大。 */
+/* 账号 + 设置融合面板（左下角点击向上展开）。
+   bottom: calc(100% - 6px) 与入口重叠 6px，视觉上连成一体；
+   底部内边距相应加大。 */
 .hub-chip-menu {
   position: absolute;
   left: 4px;
@@ -947,6 +939,27 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   background: var(--border);
   margin: 5px 9px;
 }
+/* 「收起面板」按钮：面板底部整条居中，点击 = 收起（等价于再次点击入口）。 */
+.hub-chip-menu-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 9px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--primary-text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.13s, color 0.13s;
+}
+.hub-chip-menu-collapse:hover { background: var(--primary-soft); color: var(--primary-hover); }
+.hub-chip-menu-collapse:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.hub-chip-menu-collapse-icon { width: 14px; height: 14px; flex: none; }
 /* 降级形态：Hub 不可用时的说明条 */
 .hub-chip-menu-note {
   display: flex;

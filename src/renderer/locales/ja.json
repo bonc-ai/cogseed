@@ -4496,6 +4496,7 @@
   "cognition.governance_asset_body_hint": "削除・使用の撤回・完全消去は残るものが異なります。実行前に再度確認します。",
   "hub.chip.menu.templates": "テンプレート",
   "hub.chip.menu.usage": "クォータ",
+  "hub.chip.menu.collapse": "パネルを閉じる",
   "new_chat.subtitle": "チームに何をしてほしいですか？タスクを直接入力するか、テンプレートを選んでください。",
   "sidebar.new_task": "新しいタスク",
   "sidebar.new_task_ph": "タスク内容を入力して Enter で作成…",

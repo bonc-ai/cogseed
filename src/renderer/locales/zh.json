@@ -1386,6 +1386,7 @@
   "hub.chip.degraded_sub": "Hub 暂不可用 · 本地功能正常",
   "hub.chip.menu.templates": "模板",
   "hub.chip.menu.usage": "额度",
+  "hub.chip.menu.collapse": "收起面板",
   "hub.chip.sign_in": "登录 Hub",
   "hub.chip.signed_out_sub": "云端同步 · 额度 · 社区",
   "hub.chip.signing_in": "正在登录…",

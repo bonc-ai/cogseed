@@ -4496,6 +4496,7 @@
   "cognition.governance_asset_body_hint": "Excluir, retirar de uso e limpar por completo deixam coisas diferentes para trás; cada um pede confirmação.",
   "hub.chip.menu.templates": "Modelos",
   "hub.chip.menu.usage": "Cota",
+  "hub.chip.menu.collapse": "Recolher painel",
   "new_chat.subtitle": "Em que a equipe deve trabalhar? Descreva uma tarefa ou escolha um modelo.",
   "sidebar.new_task": "Nova tarefa",
   "sidebar.new_task_ph": "Descreva a tarefa, Enter para criar…",
