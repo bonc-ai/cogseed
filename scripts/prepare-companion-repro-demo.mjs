@@ -75,7 +75,7 @@ for (const rel of ['README.md', 'requirements.txt', 'examples/minimal_repro.py',
 }
 const commit = hash.digest('hex').slice(0, 12);
 const paperSelection = 'The minimal experiment evaluates whether the reference implementation can produce the expected output artifact on a small deterministic fixture before attempting full-scale reproduction.';
-const repoUrl = 'https://github.com/mate-agent/demo-tiny-paper-repro';
+const repoUrl = 'https://github.com/cogseed-agent/demo-tiny-paper-repro';
 const userIntent = 'Run the minimal experiment on this Mac and verify that artifacts/result.json is produced with status ok.';
 
 const payload = {

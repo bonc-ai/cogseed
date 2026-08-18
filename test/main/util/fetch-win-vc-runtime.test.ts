@@ -72,7 +72,7 @@ function fixture(): {
   destination: string;
   sevenZipExtract: (archiveFile: string, output: string) => void;
 } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-vc-runtime-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-vc-runtime-'));
   tempDirs.push(root);
   const archive = path.join(root, 'VC_redist.x64.exe');
   const destination = path.join(root, 'runtime', 'vc', 'win32-x64');
@@ -125,7 +125,7 @@ describe('fetch-win-vc-runtime', () => {
   });
 
   it('uses the Windows built-in CAB extractor without requiring a second runtime', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-vc-expand-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-vc-expand-'));
     tempDirs.push(root);
     const archive = path.join(root, 'attached.cab');
     const destination = path.join(root, 'expanded');
@@ -159,11 +159,11 @@ describe('fetch-win-vc-runtime', () => {
 
     expect(fetchVc.ready(destination, contract)).toBe(true);
     expect(fs.readdirSync(destination).sort()).toEqual([
-      '.orkas-vc-runtime.json',
+      '.cogseed-vc-runtime.json',
       'NOTICE.txt',
       ...Object.keys(files),
     ].sort());
-    const marker = JSON.parse(fs.readFileSync(path.join(destination, '.orkas-vc-runtime.json'), 'utf8'));
+    const marker = JSON.parse(fs.readFileSync(path.join(destination, '.cogseed-vc-runtime.json'), 'utf8'));
     expect(marker.deployment).toBe('application-local');
     expect(marker.sourceSha256).toBe(contract.source.sha256);
   });

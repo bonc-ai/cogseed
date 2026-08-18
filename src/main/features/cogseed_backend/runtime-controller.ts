@@ -1,26 +1,26 @@
 import {
-  mateAgentRuntime,
-  type MateAgentRuntimeFacade,
-  type MateAgentRuntimeInput,
+  cogseedAgentRuntime,
+  type CogSeedAgentRuntimeFacade,
+  type CogSeedAgentRuntimeInput,
 } from '../cogseed_runtime';
 import type { RuntimeEventEnvelope } from '../cogseed_runtime/protocol';
 import { genId12 } from '../../storage';
 import { createLogger } from '../../logger';
 import { logErrorRef } from '../../util/log-redact';
-import { appendMateTaskEvent } from './event-store';
-import { markMateTaskRecoverable, retryMateTask as retryStoredMateTask, transitionMateTask } from './lifecycle';
-import { createMateTask, listMateTasks, readMateTask, updateMateTask } from './task-store';
+import { appendCogSeedTaskEvent } from './event-store';
+import { markCogSeedTaskRecoverable, retryCogSeedTask as retryStoredCogSeedTask, transitionCogSeedTask } from './lifecycle';
+import { createCogSeedTask, listCogSeedTasks, readCogSeedTask, updateCogSeedTask } from './task-store';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
 import { buildRuntimeAssetContext } from './runtime-asset-context';
-import { readMateSession } from './session-store';
-import type { MateTaskRecord } from './types';
-import type { MateGroupChatProjectionInput, MateProjectionEvent } from './group-chat-projection';
-import type { MateLocalCliExecutionAdapter } from './local-cli-execution-adapter';
-import type { MateLocalCliConfig } from './types';
+import { readCogSeedSession } from './session-store';
+import type { CogSeedTaskRecord } from './types';
+import type { CogSeedGroupChatProjectionInput, CogSeedProjectionEvent } from './group-chat-projection';
+import type { CogSeedLocalCliExecutionAdapter } from './local-cli-execution-adapter';
+import type { CogSeedLocalCliConfig } from './types';
 
 const log = createLogger('cogseed-backend:runtime-controller');
 
-export interface StartMateTaskInput {
+export interface StartCogSeedTaskInput {
   requestId: string;
   task: string;
   /** Product Agent identity passed to Runtime tools; never use this as a model profile id. */
@@ -28,8 +28,8 @@ export interface StartMateTaskInput {
   conversationId?: string;
   executionKind?: 'cogseed-native' | 'local-cli';
   allowedSkillIds?: string[];
-  skillVersionPins?: import('./types').MateTaskSkillVersionPin[];
-  localCli?: MateLocalCliConfig;
+  skillVersionPins?: import('./types').CogSeedTaskSkillVersionPin[];
+  localCli?: CogSeedLocalCliConfig;
   sessionId?: string;
   profileId?: string;
   context?: unknown[];
@@ -44,7 +44,7 @@ export interface StartMateTaskInput {
   capabilities?: string[];
 }
 
-export interface ResumeMateTaskInput {
+export interface ResumeCogSeedTaskInput {
   requestId: string;
   continuation: string;
   profileId?: string;
@@ -56,30 +56,30 @@ export interface ResumeMateTaskInput {
   coordinationDepth?: number;
 }
 
-export interface MateRuntimeStatus {
-  backend: 'mate';
+export interface CogSeedRuntimeStatus {
+  backend: 'cogseed';
   activeTaskCount: number;
   activeTaskIds: string[];
 }
 
-export interface MateRuntimeController {
-  startMateTask(userId: string, input: StartMateTaskInput): Promise<MateTaskRecord>;
-  retryMateTask(userId: string, taskId: string, requestId: string): Promise<MateTaskRecord>;
-  resumeMateTask(userId: string, taskId: string, input: ResumeMateTaskInput): Promise<MateTaskRecord>;
-  cancelMateTask(userId: string, taskId: string): Promise<MateTaskRecord>;
-  cancelConversationTasks(userId: string, conversationId: string): Promise<MateTaskRecord[]>;
-  runtimeStatus(): Promise<MateRuntimeStatus>;
+export interface CogSeedRuntimeController {
+  startCogSeedTask(userId: string, input: StartCogSeedTaskInput): Promise<CogSeedTaskRecord>;
+  retryCogSeedTask(userId: string, taskId: string, requestId: string): Promise<CogSeedTaskRecord>;
+  resumeCogSeedTask(userId: string, taskId: string, input: ResumeCogSeedTaskInput): Promise<CogSeedTaskRecord>;
+  cancelCogSeedTask(userId: string, taskId: string): Promise<CogSeedTaskRecord>;
+  cancelConversationTasks(userId: string, conversationId: string): Promise<CogSeedTaskRecord[]>;
+  runtimeStatus(): Promise<CogSeedRuntimeStatus>;
   restartRuntime(): Promise<{ restarted: true }>;
 }
 
-export interface MateRuntimeControllerOptions {
-  runtime?: MateAgentRuntimeFacade;
+export interface CogSeedRuntimeControllerOptions {
+  runtime?: CogSeedAgentRuntimeFacade;
   cancelChildrenForParent?: (userId: string, parentTaskId: string) => Promise<void>;
-  projectTaskEvent?: (input: MateGroupChatProjectionInput) => Promise<unknown>;
-  localCliAdapter?: MateLocalCliExecutionAdapter;
+  projectTaskEvent?: (input: CogSeedGroupChatProjectionInput) => Promise<unknown>;
+  localCliAdapter?: CogSeedLocalCliExecutionAdapter;
 }
 
-function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string; capabilities?: string[] }): MateAgentRuntimeInput {
+function asRuntimeInput(input: StartCogSeedTaskInput & { runtimeSessionId?: string; capabilities?: string[] }): CogSeedAgentRuntimeInput {
   return {
     task: input.task,
     request_id: input.requestId,
@@ -96,7 +96,7 @@ function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string;
   };
 }
 
-function terminal(task: MateTaskRecord): boolean {
+function terminal(task: CogSeedTaskRecord): boolean {
   return task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
 }
 
@@ -108,12 +108,12 @@ function terminal(task: MateTaskRecord): boolean {
  */
 async function resolveConversationIdForTask(
   userId: string,
-  task: MateTaskRecord,
-  input: StartMateTaskInput,
+  task: CogSeedTaskRecord,
+  input: StartCogSeedTaskInput,
 ): Promise<string | undefined> {
   if (input.conversationId) return input.conversationId;
   try {
-    const session = await readMateSession(userId, task.sessionId);
+    const session = await readCogSeedSession(userId, task.sessionId);
     return session?.conversationId || undefined;
   } catch {
     return undefined;
@@ -122,9 +122,9 @@ async function resolveConversationIdForTask(
 
 async function projectTaskEventBestEffort(
   userId: string,
-  task: MateTaskRecord,
-  event: MateProjectionEvent,
-  projectTaskEvent: (input: MateGroupChatProjectionInput) => Promise<unknown>,
+  task: CogSeedTaskRecord,
+  event: CogSeedProjectionEvent,
+  projectTaskEvent: (input: CogSeedGroupChatProjectionInput) => Promise<unknown>,
 ): Promise<void> {
   if (!task.conversationId || !task.agentId) return;
   try {
@@ -143,38 +143,38 @@ async function projectTaskEventBestEffort(
 
 async function mapRuntimeEvent(
   userId: string,
-  task: MateTaskRecord,
+  task: CogSeedTaskRecord,
   event: RuntimeEventEnvelope,
-  projectTaskEvent: (input: MateGroupChatProjectionInput) => Promise<unknown>,
-): Promise<MateTaskRecord> {
-  const latest = await readMateTask(userId, task.taskId);
+  projectTaskEvent: (input: CogSeedGroupChatProjectionInput) => Promise<unknown>,
+): Promise<CogSeedTaskRecord> {
+  const latest = await readCogSeedTask(userId, task.taskId);
   const runtimeRunId = typeof event.metadata?.runtime_run_id === 'string' ? event.metadata.runtime_run_id : undefined;
   if (runtimeRunId && latest && latest.runtimeRunId !== runtimeRunId) {
-    await updateMateTask(userId, task.taskId, (current) => ({ ...current, runtimeRunId }));
+    await updateCogSeedTask(userId, task.taskId, (current) => ({ ...current, runtimeRunId }));
   }
   if (latest && terminal(latest)) return latest;
   if (event.type === 'result' && event.status === 'completed') {
-    const completed = await transitionMateTask(userId, task.taskId, 'completed', { outputChars: String(event.text || '').length });
+    const completed = await transitionCogSeedTask(userId, task.taskId, 'completed', { outputChars: String(event.text || '').length });
     await projectTaskEventBestEffort(userId, completed, {
-      eventId: `mate-event-terminal-${task.taskId}`,
+      eventId: `cogseed-event-terminal-${task.taskId}`,
       type: 'task.completed',
       payload: { text: String(event.text || '') },
     }, projectTaskEvent);
     return completed;
   }
   if (event.type === 'error' && event.status === 'cancelled') {
-    const cancelled = await transitionMateTask(userId, task.taskId, 'cancelled', {});
+    const cancelled = await transitionCogSeedTask(userId, task.taskId, 'cancelled', {});
     await projectTaskEventBestEffort(userId, cancelled, {
-      eventId: `mate-event-terminal-${task.taskId}`,
+      eventId: `cogseed-event-terminal-${task.taskId}`,
       type: 'task.cancelled',
       payload: {},
     }, projectTaskEvent);
     return cancelled;
   }
   if (event.type === 'error' && event.status === 'failed') {
-    const failed = await transitionMateTask(userId, task.taskId, 'failed', { errorCode: 'runtime_failed' });
+    const failed = await transitionCogSeedTask(userId, task.taskId, 'failed', { errorCode: 'runtime_failed' });
     await projectTaskEventBestEffort(userId, failed, {
-      eventId: `mate-event-terminal-${task.taskId}`,
+      eventId: `cogseed-event-terminal-${task.taskId}`,
       type: 'task.failed',
       payload: {},
     }, projectTaskEvent);
@@ -183,12 +183,12 @@ async function mapRuntimeEvent(
   if (event.type === 'event' && event.status === 'running') {
     const kernelEvent = event.metadata?.kernel_event;
     if (kernelEvent === 'tool_call') {
-      const stored = await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'tool.started', {
+      const stored = await appendCogSeedTaskEvent(userId, task.taskId, task.sessionId, 'tool.started', {
         ...(typeof event.metadata?.name === 'string' ? { name: event.metadata.name } : {}),
       });
       await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
     } else if (kernelEvent === 'tool_result') {
-      const stored = await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'tool.finished', {
+      const stored = await appendCogSeedTaskEvent(userId, task.taskId, task.sessionId, 'tool.finished', {
         ...(typeof event.metadata?.name === 'string' ? { name: event.metadata.name } : {}),
         ...(typeof event.metadata?.isError === 'boolean' ? { isError: event.metadata.isError } : {}),
       });
@@ -198,35 +198,35 @@ async function mapRuntimeEvent(
       for (const key of ['uri', 'digest', 'name', 'media_type'] as const) {
         if (typeof event.metadata?.[key] === 'string') artifact[key] = event.metadata[key];
       }
-      const stored = await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'artifact', artifact);
+      const stored = await appendCogSeedTaskEvent(userId, task.taskId, task.sessionId, 'artifact', artifact);
       await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
     } else if (event.text) {
-      const stored = await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'model.delta', { text: event.text });
+      const stored = await appendCogSeedTaskEvent(userId, task.taskId, task.sessionId, 'model.delta', { text: event.text });
       await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
     }
   }
-  return (await readMateTask(userId, task.taskId)) ?? task;
+  return (await readCogSeedTask(userId, task.taskId)) ?? task;
 }
 
-export function createMateRuntimeController(options: MateRuntimeControllerOptions = {}): MateRuntimeController {
-  const runtime = options.runtime ?? mateAgentRuntime;
+export function createCogSeedRuntimeController(options: CogSeedRuntimeControllerOptions = {}): CogSeedRuntimeController {
+  const runtime = options.runtime ?? cogseedAgentRuntime;
   const activeRuns = new Map<string, AbortController>();
-  const runtimeWorkerId = 'mate-worker-' + genId12();
+  const runtimeWorkerId = 'cogseed-worker-' + genId12();
   const resumeClaims = new Set<string>();
   const projectTaskEvent = options.projectTaskEvent ?? (async (input) => {
-    const { mateGroupChatProjection } = await import('./group-chat-projection');
-    return mateGroupChatProjection.project(input);
+    const { cogseedGroupChatProjection } = await import('./group-chat-projection');
+    return cogseedGroupChatProjection.project(input);
   });
-  let defaultLocalCliAdapter: MateLocalCliExecutionAdapter | null = null;
-  const localCliAdapter = async (): Promise<MateLocalCliExecutionAdapter> => {
+  let defaultLocalCliAdapter: CogSeedLocalCliExecutionAdapter | null = null;
+  const localCliAdapter = async (): Promise<CogSeedLocalCliExecutionAdapter> => {
     if (options.localCliAdapter) return options.localCliAdapter;
     if (!defaultLocalCliAdapter) {
-      defaultLocalCliAdapter = (await import('./local-cli-execution-adapter')).mateLocalCliExecutionAdapter;
+      defaultLocalCliAdapter = (await import('./local-cli-execution-adapter')).cogseedLocalCliExecutionAdapter;
     }
     return defaultLocalCliAdapter;
   };
 
-  async function consumeRuntime(userId: string, task: MateTaskRecord, input: StartMateTaskInput & { runtimeSessionId?: string }, controller: AbortController): Promise<void> {
+  async function consumeRuntime(userId: string, task: CogSeedTaskRecord, input: StartCogSeedTaskInput & { runtimeSessionId?: string }, controller: AbortController): Promise<void> {
     let current = task;
     try {
       const stream = task.executionKind === 'local-cli'
@@ -251,11 +251,11 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
         if (terminal(current)) break;
       }
     } catch {
-      const latest = await readMateTask(userId, task.taskId);
+      const latest = await readCogSeedTask(userId, task.taskId);
       if (latest && !terminal(latest)) {
-        const recoverable = await markMateTaskRecoverable(userId, task.taskId, 'runtime_worker_error');
+        const recoverable = await markCogSeedTaskRecoverable(userId, task.taskId, 'runtime_worker_error');
         await projectTaskEventBestEffort(userId, recoverable, {
-          eventId: `mate-event-recoverable-${task.taskId}`,
+          eventId: `cogseed-event-recoverable-${task.taskId}`,
           type: 'task.recoverable',
           payload: {},
         }, projectTaskEvent);
@@ -266,16 +266,16 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
     }
   }
 
-  async function launchTask(userId: string, initial: MateTaskRecord, input: StartMateTaskInput & { runtimeSessionId?: string }): Promise<MateTaskRecord> {
+  async function launchTask(userId: string, initial: CogSeedTaskRecord, input: StartCogSeedTaskInput & { runtimeSessionId?: string }): Promise<CogSeedTaskRecord> {
     let task = initial;
-    if (!task.runtimeWorkerId) task = await updateMateTask(userId, task.taskId, (current) => ({ ...current, runtimeWorkerId }));
+    if (!task.runtimeWorkerId) task = await updateCogSeedTask(userId, task.taskId, (current) => ({ ...current, runtimeWorkerId }));
     if (task.status === 'created' || task.status === 'recoverable') {
-      task = await transitionMateTask(userId, task.taskId, 'queued');
+      task = await transitionCogSeedTask(userId, task.taskId, 'queued');
     }
     if (task.status === 'queued') {
-      task = await transitionMateTask(userId, task.taskId, 'running');
+      task = await transitionCogSeedTask(userId, task.taskId, 'running');
       await projectTaskEventBestEffort(userId, task, {
-        eventId: `mate-event-started-${task.taskId}`,
+        eventId: `cogseed-event-started-${task.taskId}`,
         type: 'task.started',
         payload: {},
       }, projectTaskEvent);
@@ -286,13 +286,13 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
     return task;
   }
 
-  async function cancelTask(userId: string, taskId: string): Promise<MateTaskRecord> {
-    const task = await readMateTask(userId, taskId);
+  async function cancelTask(userId: string, taskId: string): Promise<CogSeedTaskRecord> {
+    const task = await readCogSeedTask(userId, taskId);
     if (!task) throw new Error('CogSeed task not found');
     if (terminal(task)) return task;
-    const cancelled = await transitionMateTask(userId, taskId, 'cancelled', {});
+    const cancelled = await transitionCogSeedTask(userId, taskId, 'cancelled', {});
     await projectTaskEventBestEffort(userId, cancelled, {
-      eventId: `mate-event-terminal-${taskId}`,
+      eventId: `cogseed-event-terminal-${taskId}`,
       type: 'task.cancelled',
       payload: {},
     }, projectTaskEvent);
@@ -303,11 +303,11 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
   }
 
   return {
-    async startMateTask(userId, input) {
-      const created = await createMateTask(userId, input);
+    async startCogSeedTask(userId, input) {
+      const created = await createCogSeedTask(userId, input);
       if (!created.created) return created.task;
       const capabilities = await resolveRuntimeCapabilities(userId, created.task.requestId, created.task.runtimeSessionId);
-      const launchInput: StartMateTaskInput & { runtimeSessionId?: string } = { ...input, capabilities };
+      const launchInput: StartCogSeedTaskInput & { runtimeSessionId?: string } = { ...input, capabilities };
       const conversationId = await resolveConversationIdForTask(userId, created.task, input);
       if (conversationId) {
         const assetContext = await buildRuntimeAssetContext(userId, conversationId);
@@ -318,8 +318,8 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
       return launchTask(userId, created.task, launchInput);
     },
 
-    async retryMateTask(userId, taskId, requestId) {
-      const retried = await retryStoredMateTask(userId, taskId, requestId);
+    async retryCogSeedTask(userId, taskId, requestId) {
+      const retried = await retryStoredCogSeedTask(userId, taskId, requestId);
       if (retried.status !== 'created') return retried;
       const capabilities = await resolveRuntimeCapabilities(userId, retried.requestId, retried.runtimeSessionId);
       return launchTask(userId, retried, {
@@ -336,8 +336,8 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
       });
     },
 
-    async resumeMateTask(userId, taskId, input) {
-      const current = await readMateTask(userId, taskId);
+    async resumeCogSeedTask(userId, taskId, input) {
+      const current = await readCogSeedTask(userId, taskId);
       if (!current) throw new Error('CogSeed task not found');
       if (current.status === 'completed' || current.status === 'cancelled') return current;
       if (current.status !== 'recoverable') throw new Error('CogSeed task is not resumable');
@@ -346,12 +346,12 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
       if (resumeClaims.has(taskId)) return current;
       resumeClaims.add(taskId);
       try {
-        const reserved = await updateMateTask(userId, taskId, (task) => {
+        const reserved = await updateCogSeedTask(userId, taskId, (task) => {
           if (task.status !== 'recoverable') throw new Error('CogSeed task is not resumable');
           if (task.lastResumeRequestId === input.requestId) return task;
           return { ...task, lastResumeRequestId: input.requestId };
         });
-        const resumeInput: StartMateTaskInput & { runtimeSessionId?: string } = {
+        const resumeInput: StartCogSeedTaskInput & { runtimeSessionId?: string } = {
           requestId: input.requestId,
           task: continuation,
           runtimeSessionId: reserved.runtimeSessionId,
@@ -381,21 +381,21 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
       }
     },
 
-    async cancelMateTask(userId, taskId) {
+    async cancelCogSeedTask(userId, taskId) {
       return cancelTask(userId, taskId);
     },
 
     async cancelConversationTasks(userId, conversationId) {
-      const active = (await listMateTasks(userId)).filter((task) => (
+      const active = (await listCogSeedTasks(userId)).filter((task) => (
         task.conversationId === conversationId && !terminal(task)
       ));
-      const cancelled: MateTaskRecord[] = [];
+      const cancelled: CogSeedTaskRecord[] = [];
       for (const task of active) cancelled.push(await cancelTask(userId, task.taskId));
       return cancelled;
     },
 
     async runtimeStatus() {
-      return { backend: 'mate', activeTaskCount: activeRuns.size, activeTaskIds: Array.from(activeRuns.keys()) };
+      return { backend: 'cogseed', activeTaskCount: activeRuns.size, activeTaskIds: Array.from(activeRuns.keys()) };
     },
 
     async restartRuntime() {
@@ -407,14 +407,14 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
 }
 
 
-export const mateRuntimeController: MateRuntimeController = (() => {
-  let controller: MateRuntimeController;
-  controller = createMateRuntimeController({
+export const cogseedRuntimeController: CogSeedRuntimeController = (() => {
+  let controller: CogSeedRuntimeController;
+  controller = createCogSeedRuntimeController({
     cancelChildrenForParent: async (userId, parentTaskId) => {
-      const { createMateCoordinator } = await import('./coordinator');
-      const coordinator = createMateCoordinator({
-        startTask: (uid, input) => controller.startMateTask(uid, input),
-        cancelTask: (uid, taskId) => controller.cancelMateTask(uid, taskId),
+      const { createCogSeedCoordinator } = await import('./coordinator');
+      const coordinator = createCogSeedCoordinator({
+        startTask: (uid, input) => controller.startCogSeedTask(uid, input),
+        cancelTask: (uid, taskId) => controller.cancelCogSeedTask(uid, taskId),
       });
       await coordinator.cancelChildrenForParent(userId, parentTaskId);
     },

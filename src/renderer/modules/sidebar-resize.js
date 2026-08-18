@@ -12,7 +12,7 @@
 (() => {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-  const STORAGE_KEY = 'orkas:sidebar-width';
+  const STORAGE_KEY = 'cogseed:sidebar-width';
   const MIN_WIDTH = 180;
   const MAX_WIDTH = 480;
   const DEFAULT_WIDTH = 260;

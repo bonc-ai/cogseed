@@ -142,8 +142,8 @@ interface AuditReceipt {
 // AssetViewProjection：不独立存储，从账本按 asset_id 重放派生（derive on read）
 ```
 
-- [ ] **Step 1:** `appendAssetEvent(uid, event)`：`appendJsonlAtomic` 追加到 `<uid>/cloud/mate_agent/asset-events/<asset_id>.jsonl`；事件去重（同 event_id 已存在 → 幂等返回）。
-- [ ] **Step 2:** `createAuditReceipt(uid, event)`：Receipt 落盘 `<uid>/cloud/mate_agent/audit-receipts/<receipt_id>.json`；失败不阻塞事件已提交（事件是提交点）。
+- [ ] **Step 1:** `appendAssetEvent(uid, event)`：`appendJsonlAtomic` 追加到 `<uid>/cloud/cogseed/asset-events/<asset_id>.jsonl`；事件去重（同 event_id 已存在 → 幂等返回）。
+- [ ] **Step 2:** `createAuditReceipt(uid, event)`：Receipt 落盘 `<uid>/cloud/cogseed/audit-receipts/<receipt_id>.json`；失败不阻塞事件已提交（事件是提交点）。
 - [ ] **Step 3:** `replayAssetView(uid, assetId)`：从账本重放 → 当前状态/版本/成熟度；供资产列表与认知树消费同一事实源。
 - [ ] **Step 4（接入点核对先行）:** 先读 `ability-assets.ts` / `kstar-store.ts` 现有写路径与 `test/main/features/p3394/kstar-kb.test.ts` / `ability-asset-store.test.ts` 保护网，**确认接入点后**再将事件账本接入 create/update/setStatus：**先事件 → 再 Receipt → 再返回视图**；事件写入失败 → 抛错，界面保持原状态（PRD 原则 14）。不得破坏 KB promotion 幂等性与既有资产测试。
 - [ ] **Step 5（测试）:** 追加幂等（同 event_id 两次）；失败注入（只读目录 → append 失败 → 资产状态不变、返回失败）；重放一致性（树/列表同源，AC-S3-17）；Receipt 字段完整；**既有 KSTAR/KB 测试全绿（回归保护网）**。
@@ -243,7 +243,7 @@ interface MinimumCapabilityPack {
 
 **Files:** 新增 `src/main/features/p3394/cost-telemetry.ts`、`src/main/features/p3394/index.ts`、对应测试
 
-- [ ] **Step 1:** `cost-telemetry.ts`：模型调用计数（provider/model/input_tokens/output_tokens/耗时/操作类型：extract|capability_pack|action_plan|kstar_eval）；本地聚合文件 `<uid>/local/mate_agent/cost-telemetry/<month>.jsonl`（机器私有，不标脏同步）。
+- [ ] **Step 1:** `cost-telemetry.ts`：模型调用计数（provider/model/input_tokens/output_tokens/耗时/操作类型：extract|capability_pack|action_plan|kstar_eval）；本地聚合文件 `<uid>/local/cogseed/cost-telemetry/<month>.jsonl`（机器私有，不标脏同步）。
 - [ ] **Step 2:** 接入 Task 5 与 KSTAR 评价调用点（Task 5 Step 4 已埋点，此处统一聚合）；**匿名、仅计数与量级**（AGENTS.md 遥测纪律）。
 - [ ] **Step 3:** 月汇总 + 单任务成本报告（供 D-5 预算阈值比对）；超过阈值触发 Scope Cut 建议（不自动断服务）。
 - [ ] **Step 4（测试）:** 埋点字段完整性、月度聚合正确、异常缺失字段不炸链路。

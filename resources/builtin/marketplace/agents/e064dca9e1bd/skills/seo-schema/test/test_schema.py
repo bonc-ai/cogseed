@@ -57,9 +57,9 @@ class GenerateTest(unittest.TestCase):
         self.assertEqual(out["@context"], "https://schema.org")
 
     def test_generate_with_overrides(self):
-        out = generate("WebSite", {"name": "Orkas", "url": "https://orkas.ai"})
-        self.assertEqual(out["name"], "Orkas")
-        self.assertEqual(out["url"], "https://orkas.ai")
+        out = generate("WebSite", {"name": "CogSeed", "url": "https://cogseed.ai"})
+        self.assertEqual(out["name"], "CogSeed")
+        self.assertEqual(out["url"], "https://cogseed.ai")
 
     def test_generate_unknown_raises(self):
         with self.assertRaises(ValueError):

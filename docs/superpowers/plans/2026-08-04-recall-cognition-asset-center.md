@@ -6,7 +6,7 @@
 
 **Architecture:** Keep existing source systems authoritative: `skills`, `memory`, `personal_ontology_*`, `p3394`, and `execution-records`. Add a focused cognition domain layer that normalizes source data into stable view models; IPC remains validation-only; the renderer consumes only cognition IPC shapes. The old evolution backend was archived with the Meta Skill Engine line. Skills/Cognition retains lightweight skill version history and rollback through `src/main/features/skills/version-store.ts` and `src/main/features/skills/rollback-service.ts`.
 
-**Tech Stack:** Electron main process TypeScript, classic renderer JavaScript/HTML/CSS, `window.orkas.invoke`, Vitest via `npm run test:js`, full verification via `npm test`.
+**Tech Stack:** Electron main process TypeScript, classic renderer JavaScript/HTML/CSS, `window.cogseed.invoke`, Vitest via `npm run test:js`, full verification via `npm test`.
 
 ---
 

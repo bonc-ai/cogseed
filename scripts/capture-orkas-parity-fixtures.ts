@@ -6,9 +6,9 @@ import { execFileSync } from 'node:child_process';
 async function main(): Promise<void> {
 const repoRoot = process.cwd();
 const sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'orkas-parity-fixtures-'));
+const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cogseed-parity-fixtures-'));
 const realTempRoot = await fs.realpath(tempRoot);
-process.env.ORKAS_WORKSPACE_ROOT = path.join(tempRoot, 'data');
+process.env.COGSEED_WORKSPACE_ROOT = path.join(tempRoot, 'data');
 
 const users = await import('../src/main/features/users.ts');
 const collaboration = await import('../src/main/features/group_chat/collaboration.ts');
@@ -77,7 +77,7 @@ function canonicalize(value: unknown, state = { ids: new Map<string, string>(), 
 function fixture(name: string, inputs: unknown, expected: unknown, notes: string[]): Record<string, unknown> {
   return {
     source_revision: sourceRevision,
-    capture_command: `node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only ${name}`,
+    capture_command: `node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only ${name}`,
     inputs: canonicalize(inputs),
     canonicalization_notes: [
       'timestamps are replaced with __TIMESTAMP__',
@@ -206,7 +206,7 @@ async function captureFamilyD(): Promise<void> {
   await writeFixture('family-d', 'D-tool-office-render-v1.json', fixture('D-tool-office-render-v1', { targets: ['document.docx', 'sheet.xlsx', 'slide.pptx', 'unknown.bin'] }, { officeArgs, render_preview_bounded: true }, ['Office argument validation is captured without invoking an external Office renderer.']));
   await writeFixture('family-d', 'D-tool-browser-snapshot-v1.json', fixture('D-tool-browser-snapshot-v1', { commands: browser.map((item) => item.command) }, { browser }, ['Browser guard classification is deterministic and does not access private storage.']));
   await writeFixture('family-d', 'D-tool-connector-kb-v1.json', fixture('D-tool-connector-kb-v1', { enabled_connectors: ['connector-enabled'], disabled_connectors: ['connector-disabled'], user_id: uid }, { exposed_connectors: ['connector-enabled'], user_scoped: true, kb_scope: `user:${uid}` }, ['Connector/KB calls are represented by the enabled/user-scope boundary, not a live network call.']));
-  await writeFixture('family-d', 'D-tool-catalog-v1.json', fixture('D-tool-catalog-v1', { requested: ['read_file', 'office_render', 'browser_snapshot', 'mate_delegate', 'not-a-tool'] }, { toolNames, recognized: ['read_file', 'office_render', 'browser_snapshot', 'mate_delegate'], rejected: ['not-a-tool'] }, ['The runtime catalog is the single tool exposure source.']));
+  await writeFixture('family-d', 'D-tool-catalog-v1.json', fixture('D-tool-catalog-v1', { requested: ['read_file', 'office_render', 'browser_snapshot', 'cogseed_delegate', 'not-a-tool'] }, { toolNames, recognized: ['read_file', 'office_render', 'browser_snapshot', 'cogseed_delegate'], rejected: ['not-a-tool'] }, ['The runtime catalog is the single tool exposure source.']));
 }
 
 async function captureFamilyE(): Promise<void> {
@@ -240,10 +240,10 @@ async function captureFamilyG(): Promise<void> {
   const snapshot = await collaboration.readActiveCollaborationSnapshot(uid, cid);
   const protocolResult = protocol.normalizeRuntimeRunRequest(uid, { protocol_version: 2, type: 'run', request_id: 'req-g1', runtime_session_id: 'mruntime-g1', user_id: uid, task: 'Render a panel', context: [], attachments: [], working_dir: path.join(tempRoot, 'allowed') }, { allowedRoots: [path.join(tempRoot, 'allowed')] });
   await writeFixture('family-g', 'G-ipc-collaboration-panel-v1.json', fixture('G-ipc-collaboration-panel-v1', { cid, run_id: run.run.id }, { renderer_safe_snapshot: snapshot, fields: snapshot ? Object.keys(snapshot).sort() : [] }, ['IPC-facing projection is represented by the collaboration snapshot; volatile ids/timestamps are canonicalized.']));
-  await writeFixture('family-g', 'G-ipc-mate-session-v1.json', fixture('G-ipc-mate-session-v1', { uid, runtime_session_id: 'mruntime-g1' }, { normalized_request: protocolResult }, ['The runtime protocol normalizer provides the user-scoped session request boundary.']));
-  const wake = await wakeService.evaluateWake(uid, { conversationId: cid, agentId: 'agent-a', agentName: 'Agent A', source: 'dispatch_to', sourceActorId: 'commander', objective: 'Wake for panel update', dispatchPayload: { text: 'Update the panel projection.' }, executionDomain: 'mate' });
+  await writeFixture('family-g', 'G-ipc-cogseed-session-v1.json', fixture('G-ipc-cogseed-session-v1', { uid, runtime_session_id: 'mruntime-g1' }, { normalized_request: protocolResult }, ['The runtime protocol normalizer provides the user-scoped session request boundary.']));
+  const wake = await wakeService.evaluateWake(uid, { conversationId: cid, agentId: 'agent-a', agentName: 'Agent A', source: 'dispatch_to', sourceActorId: 'commander', objective: 'Wake for panel update', dispatchPayload: { text: 'Update the panel projection.' }, executionDomain: 'cogseed' });
   const decision = wake.request ? await wakeController.decideWakeRequest(uid, { requestId: wake.request.id, decision: 'reject', reason: 'fixture rejection' }) : null;
-  await writeFixture('family-g', 'G-ipc-wake-v1.json', fixture('G-ipc-wake-v1', { cid, source: 'dispatch_to', execution_domain: 'mate' }, { evaluated: wake, rejected: decision, listed: await wakeService.listWakeRequests(uid, cid) }, ['Approval state transitions are captured with a synthetic rejected decision and no external dispatch.']));
+  await writeFixture('family-g', 'G-ipc-wake-v1.json', fixture('G-ipc-wake-v1', { cid, source: 'dispatch_to', execution_domain: 'cogseed' }, { evaluated: wake, rejected: decision, listed: await wakeService.listWakeRequests(uid, cid) }, ['Approval state transitions are captured with a synthetic rejected decision and no external dispatch.']));
 }
 
 async function captureFamilyH(): Promise<void> {

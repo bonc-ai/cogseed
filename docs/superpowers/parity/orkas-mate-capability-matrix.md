@@ -1,8 +1,8 @@
-# Orkas Capability Inventory and Golden Fixture Matrix
+# CogSeed Capability Inventory and Golden Fixture Matrix
 
-> Phase 0 deliverable for the Mate Agent Orkas parity program.
+> Phase 0 deliverable for the Mate Agent CogSeed parity program.
 >
-> Goal: enumerate the Orkas surfaces we intend to match, identify the current Mate anchor for each, and define the golden-fixture families that Phase 0 must capture before any Phase 1 parity implementation begins.
+> Goal: enumerate the CogSeed surfaces we intend to match, identify the current Mate anchor for each, and define the golden-fixture families that Phase 0 must capture before any Phase 1 parity implementation begins.
 
 ## Scope
 
@@ -36,19 +36,19 @@ The parity worktree must stay clean except for approved parity docs and fixture 
 
 ## Capability matrix
 
-| Capability | Orkas surface(s) to inventory | Current Mate anchor(s) | Current status | Golden fixture families |
+| Capability | CogSeed surface(s) to inventory | Current Mate anchor(s) | Current status | Golden fixture families |
 |---|---|---|---|---|
-| Commander orchestration | `src/main/features/group_chat/collaboration.ts`, `src/main/features/group_chat/bus.ts`, `src/main/features/group_chat/plan_executor.ts`, `src/main/features/group_chat/router.ts` | `src/main/features/mate_agent_backend/coordinator.ts`, `src/main/features/collaboration_control/engine.ts`, `src/main/features/group_chat/collaboration-store-adapter.ts` | `adapter_ready` | A, C, E |
-| `gconv` / `gmember` session semantics | `src/main/features/group_chat/state.ts`, `src/main/features/group_chat/conv_workspace.ts`, `src/main/features/group_chat/router.ts` | `src/main/features/mate_agent_backend/session-store.ts`, `src/main/features/mate_agent_backend/runtime-controller.ts`, `src/main/features/p3394/session-source.ts` | `contract_only` | B, F |
-| Visibility policy and projection | `src/main/features/group_chat/visibility.ts`, `src/main/features/group_chat/bus.ts` | `src/main/features/group_chat/bus.ts`, `src/main/features/collaboration_control/engine.ts`, `src/main/features/mate_agent_backend/collaboration-store-adapter.ts` | `adapter_ready` | B, G, H |
+| Commander orchestration | `src/main/features/group_chat/collaboration.ts`, `src/main/features/group_chat/bus.ts`, `src/main/features/group_chat/plan_executor.ts`, `src/main/features/group_chat/router.ts` | `src/main/features/cogseed_backend/coordinator.ts`, `src/main/features/collaboration_control/engine.ts`, `src/main/features/group_chat/collaboration-store-adapter.ts` | `adapter_ready` | A, C, E |
+| `gconv` / `gmember` session semantics | `src/main/features/group_chat/state.ts`, `src/main/features/group_chat/conv_workspace.ts`, `src/main/features/group_chat/router.ts` | `src/main/features/cogseed_backend/session-store.ts`, `src/main/features/cogseed_backend/runtime-controller.ts`, `src/main/features/p3394/session-source.ts` | `contract_only` | B, F |
+| Visibility policy and projection | `src/main/features/group_chat/visibility.ts`, `src/main/features/group_chat/bus.ts` | `src/main/features/group_chat/bus.ts`, `src/main/features/collaboration_control/engine.ts`, `src/main/features/cogseed_backend/collaboration-store-adapter.ts` | `adapter_ready` | B, G, H |
 | Group Chat bus scheduling / quiescence / retry / abort | `src/main/features/group_chat/bus.ts` | `src/main/features/group_chat/bus.ts`, `src/main/features/group_chat/collaboration.ts`, `src/main/features/collaboration_control/engine.ts` | `adapter_ready` | A, C, E |
 | Plan executor behavior | `src/main/features/group_chat/plan_executor.ts` | `src/main/features/group_chat/plan_executor.ts`, `src/main/features/collaboration_control/lifecycle.ts`, `src/main/features/collaboration_control/dependency-reconciler.ts` | `adapter_ready` | A, C, E |
-| Core Agent tool catalog parity | `src/main/model/core-agent/tool-catalog.ts`, `src/main/model/core-agent/runner.ts`, `src/main/model/core-agent/file-tools.ts`, `src/main/model/core-agent/connector-meta-tools.ts`, `src/main/model/core-agent/kb-tools.ts`, `src/main/model/core-agent/office-tools.ts`, `src/main/model/core-agent/browser-automation-guard.ts` | `src/main/features/mate_agent_runtime/kernel/tools/catalog.ts`, `src/main/features/mate_agent_runtime/kernel/tools/runner.ts`, `src/main/features/mate_agent_runtime/kernel/tools/host-tools.ts`, `src/main/features/mate_agent_backend/host-tool-router.ts` | `adapter_ready` | D |
-| Connector / KB / Office / Browser capability parity | `src/main/model/core-agent/connector-meta-tools.ts`, `src/main/model/core-agent/kb-tools.ts`, `src/main/model/core-agent/office-tools.ts`, `src/main/model/core-agent/browser-automation-guard.ts` | `src/main/features/mate_agent_backend/connector-manager.ts`, `src/main/features/mate_agent_backend/mate-kb-store.ts`, `src/main/features/mate_agent_backend/office-adapter.ts`, `src/main/features/mate_agent_backend/browser-manager.ts` | `adapter_ready` | D, H |
-| Historical session migration | `src/main/features/group_chat/state.ts`, `src/main/features/group_chat/router.ts`, `src/main/features/group_chat/collaboration.ts`, session-related IPC | `src/main/features/mate_agent_backend/session-store.ts`, `src/main/features/mate_agent_backend/recovery.ts`, `src/main/features/mate_agent_runtime/store.ts` | `contract_only` | F |
+| Core Agent tool catalog parity | `src/main/model/core-agent/tool-catalog.ts`, `src/main/model/core-agent/runner.ts`, `src/main/model/core-agent/file-tools.ts`, `src/main/model/core-agent/connector-meta-tools.ts`, `src/main/model/core-agent/kb-tools.ts`, `src/main/model/core-agent/office-tools.ts`, `src/main/model/core-agent/browser-automation-guard.ts` | `src/main/features/cogseed_runtime/kernel/tools/catalog.ts`, `src/main/features/cogseed_runtime/kernel/tools/runner.ts`, `src/main/features/cogseed_runtime/kernel/tools/host-tools.ts`, `src/main/features/cogseed_backend/host-tool-router.ts` | `adapter_ready` | D |
+| Connector / KB / Office / Browser capability parity | `src/main/model/core-agent/connector-meta-tools.ts`, `src/main/model/core-agent/kb-tools.ts`, `src/main/model/core-agent/office-tools.ts`, `src/main/model/core-agent/browser-automation-guard.ts` | `src/main/features/cogseed_backend/connector-manager.ts`, `src/main/features/cogseed_backend/cogseed-kb-store.ts`, `src/main/features/cogseed_backend/office-adapter.ts`, `src/main/features/cogseed_backend/browser-manager.ts` | `adapter_ready` | D, H |
+| Historical session migration | `src/main/features/group_chat/state.ts`, `src/main/features/group_chat/router.ts`, `src/main/features/group_chat/collaboration.ts`, session-related IPC | `src/main/features/cogseed_backend/session-store.ts`, `src/main/features/cogseed_backend/recovery.ts`, `src/main/features/cogseed_runtime/store.ts` | `contract_only` | F |
 | Renderer / IPC parity | `src/main/ipc/index.ts`, `src/renderer/index.html`, `src/renderer/locales/*.json`, collaboration panels | `src/main/ipc/index.ts`, renderer tests under `test/renderer/*`, backend IPC tests under `test/main/ipc/*` | `contract_only` | G, H |
-| Recovery / observability / cancellation | `src/main/features/group_chat/bus.ts`, `src/main/features/group_chat/collaboration.ts`, `src/main/features/group_chat/plan_executor.ts`, selected `p3394` wake/recovery paths | `src/main/features/mate_agent_backend/recovery.ts`, `src/main/features/mate_agent_backend/lifecycle.ts`, `src/main/features/mate_agent_backend/runtime-controller.ts`, `src/main/features/mate_agent_backend/event-store.ts` | `adapter_ready` | A, C, E |
-| Wake / admission / coordination boundaries | `src/main/features/p3394/wake-controller.ts`, `src/main/features/p3394/wake-service.ts`, `src/main/features/p3394/wake-dispatcher.ts` | `src/main/features/mate_agent_backend/p3394-admission.ts`, `src/main/features/mate_agent_backend/p3394-wake-dispatcher.ts`, `src/main/features/mate_agent_backend/coordinator.ts` | `adapter_ready` | A, E, H |
+| Recovery / observability / cancellation | `src/main/features/group_chat/bus.ts`, `src/main/features/group_chat/collaboration.ts`, `src/main/features/group_chat/plan_executor.ts`, selected `p3394` wake/recovery paths | `src/main/features/cogseed_backend/recovery.ts`, `src/main/features/cogseed_backend/lifecycle.ts`, `src/main/features/cogseed_backend/runtime-controller.ts`, `src/main/features/cogseed_backend/event-store.ts` | `adapter_ready` | A, C, E |
+| Wake / admission / coordination boundaries | `src/main/features/p3394/wake-controller.ts`, `src/main/features/p3394/wake-service.ts`, `src/main/features/p3394/wake-dispatcher.ts` | `src/main/features/cogseed_backend/p3394-admission.ts`, `src/main/features/cogseed_backend/p3394-wake-dispatcher.ts`, `src/main/features/cogseed_backend/coordinator.ts` | `adapter_ready` | A, E, H |
 
 ## Golden fixture families
 
@@ -79,7 +79,7 @@ Phase 0 is complete only when all of the following are true:
 2. Each golden fixture family has at least one capture candidate and a deterministic canonicalizer rule.
 3. The matrix has been reviewed and approved before any Phase 1 implementation begins.
 4. The parity worktree remains clean except for approved parity docs and fixture artifacts.
-5. No ordinary parity code path directly imports forbidden Orkas Group Chat/Core Agent business modules.
+5. No ordinary parity code path directly imports forbidden CogSeed Group Chat/Core Agent business modules.
 
 ## Next action after approval
 

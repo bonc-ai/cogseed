@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 
 import { classifyBashCommand } from '../../../../util/bash-risk';
 import { capToolResult, DEFAULT_INLINE_RESULT_TOKENS, type WrapOpts } from '../../../../util/tool-result-cap';
-import { mateRuntimeSessionToolResultsDir, userRoot } from '../../../../paths';
+import { cogseedRuntimeSessionToolResultsDir, userRoot } from '../../../../paths';
 import { normalizeRuntimePath } from './permissions';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
 
@@ -26,7 +26,7 @@ async function capRuntimeResult(
 ): Promise<RuntimeToolResult> {
   const capped = capToolResult(name, result as any, { state: {} } as any, {
     maxInlineTokens: opts.maxInlineTokens ?? DEFAULT_INLINE_RESULT_TOKENS,
-    toolResultsDir: mateRuntimeSessionToolResultsDir(opts.userId, opts.runtimeSessionId),
+    toolResultsDir: cogseedRuntimeSessionToolResultsDir(opts.userId, opts.runtimeSessionId),
   } satisfies WrapOpts);
   return capped as RuntimeToolResult;
 }
@@ -93,10 +93,10 @@ export async function runRuntimeBashTool(
   const cwd = resolveCwd(input.working_dir, ctx);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    ORKAS_NODE: process.execPath,
-    ORKAS_PC_DIR: ctx.pcDir,
-    ORKAS_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
-    ORKAS_UID: ctx.userId,
+    COGSEED_NODE: process.execPath,
+    COGSEED_PC_DIR: ctx.pcDir,
+    COGSEED_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
+    COGSEED_UID: ctx.userId,
     ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || '1',
   };
 

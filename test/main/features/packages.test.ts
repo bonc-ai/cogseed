@@ -4,8 +4,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 // Read-side contract tests for the external-packages domain. The registry
-// file is written out-of-process by bin/orkas-pkg.cjs (integration-tested in
-// test/main/util/orkas-pkg.test.ts); this suite pins the sanitiser + root
+// file is written out-of-process by bin/cogseed-pkg.cjs (integration-tested in
+// test/main/util/cogseed-pkg.test.ts); this suite pins the sanitiser + root
 // resolution invariants the skill loader and bash PATH injection depend on.
 
 let tmpDir: string;
@@ -28,14 +28,14 @@ function mkPkgDir(...segments: string[]): string {
 }
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-packages-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-packages-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
@@ -168,7 +168,7 @@ describe('packages › runPackageCommand guards', () => {
     expect((await runPackageCommand(TEST_UID, 'enable', 'has/slash')).error).toBe('invalid package name');
   });
 
-  it('routes enable and disable through orkas-pkg and updates the registry', async () => {
+  it('routes enable and disable through cogseed-pkg and updates the registry', async () => {
     writeRegistry({
       version: 1,
       packages: [{
@@ -195,7 +195,7 @@ describe('packages › runPackageCommand guards', () => {
 
   it('bounds helper output and settles a timeout without waiting for process close', async () => {
     const { runPackageProcessForTest } = await loadPackages();
-    const node = process.env.ORKAS_TEST_NODE || process.execPath;
+    const node = process.env.COGSEED_TEST_NODE || process.execPath;
     const noisy = await runPackageProcessForTest(node, [
       '-e',
       "process.stdout.write('x'.repeat(256)); setInterval(() => {}, 1000)",
@@ -214,7 +214,7 @@ describe('packages › runPackageCommand guards', () => {
   it.runIf(process.platform === 'win32')('terminates a package command and its Windows descendants', async () => {
     const { runPackageProcessForTest } = await loadPackages();
     const sentinel = path.join(tmpDir, 'orphan-package-wrote.txt');
-    const node = process.env.ORKAS_TEST_NODE || process.execPath;
+    const node = process.env.COGSEED_TEST_NODE || process.execPath;
     const grandchildScript = [
       "const fs = require('node:fs');",
       `setTimeout(() => fs.writeFileSync(${JSON.stringify(sentinel)}, 'orphaned'), 700);`,

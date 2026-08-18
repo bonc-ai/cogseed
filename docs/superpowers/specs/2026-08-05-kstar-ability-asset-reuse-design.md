@@ -16,7 +16,7 @@ ExperienceCandidate
   -> maturity and human-governed recommendations
 ```
 
-The implementation will preserve the current KSTAR engine/compatibility boundary, retain Markdown knowledge promotion as a human-readable evidence projection, and add Mate-domain integration in addition to the existing Group Chat path.
+The implementation will preserve the current KSTAR engine/compatibility boundary, retain Markdown knowledge promotion as a human-readable evidence projection, and add CogSeed-domain integration in addition to the existing Group Chat path.
 
 This feature is governed learning, not autonomous self-modification. The system may discover, record, match, project, and recommend. It must not silently change user assets or agent behavior.
 
@@ -31,7 +31,7 @@ The current codebase already provides:
 - optional Notion synchronization;
 - KSTAR engine, adapter, compatibility DTOs, store, migration, and recovery;
 - Group Chat dispatch integration and P3394 Wake routing;
-- Mate-native Runtime and task lifecycle on the independent backend branch.
+- CogSeed-native Runtime and task lifecycle on the independent backend branch.
 - `ContextReuseReceipt`, which is the existing execution-time receipt for governed context reuse, including permission mode, allowed scopes, and redaction.
 - `BehaviorContrast`, which is the existing baseline/treatment evidence mechanism for comparing execution outcomes.
 
@@ -145,7 +145,7 @@ export interface AbilityProjection {
   id: string;
   asset_id: string;
   asset_version: number;
-  domain: 'group_chat' | 'mate';
+  domain: 'group_chat' | 'cogseed';
   user_id: string;
   conversation_id?: string;
   task_id?: string;

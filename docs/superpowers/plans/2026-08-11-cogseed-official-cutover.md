@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use $superpower-executing-plans to execute this plan task-by-task with review checkpoints. Steps use checkbox (`- [ ]`) syntax and must be updated as work progresses.
 
-**Goal:** Make CogSeed the official repository/product identity, publish PRD- and code-accurate README documentation, preserve one-cycle Mate/Orkas compatibility, and prepare an exact `main` mirror of the verified `develop` release.
+**Goal:** Make CogSeed the official repository/product identity, publish PRD- and code-accurate README documentation, preserve one-cycle Mate/CogSeed compatibility, and prepare an exact `main` mirror of the verified `develop` release.
 
 **Architecture:** Treat `src/resources/identity.json` and `src/main/brand.ts` as the canonical identity sources. Update only current/public surfaces to CogSeed, while keeping legacy aliases in explicit migration, protocol-normalization, wrapper, fixture, and historical-document boundaries. The implementation branch lands through an MR into `develop`; release operations then archive the old `main`, mirror the final `develop` SHA to `main`, and rename the GitLab project path.
 
@@ -35,12 +35,12 @@ Add tests that assert:
 
 ```ts
 expect(identity.IDENTITY.runtimeVariant).toBe('cogseed');
-expect(identity.IDENTITY.legacyRuntimeVariants).toEqual(['mate']);
-expect(protocolSchemes()).toEqual(['cogseed', 'mateagent', 'orkas']);
+expect(identity.IDENTITY.legacyRuntimeVariants).toEqual(['cogseed']);
+expect(protocolSchemes()).toEqual(['cogseed', 'cogseed', 'cogseed']);
 expect(read('package.json')).toContain('"name": "cogseed"');
 ```
 
-Add a residual scan helper that fails on `Mate Agent`, `MateAgent`, `mate-agent`, or current `Orkas` branding outside the explicit allowlist of compatibility/historical files.
+Add a residual scan helper that fails on `Mate Agent`, `CogSeedAgent`, `cogseed-agent`, or current `CogSeed` branding outside the explicit allowlist of compatibility/historical files.
 
 - [ ] **Step 3: Run the focused tests and verify the expected failures**
 
@@ -80,7 +80,7 @@ Set the root package metadata to:
 }
 ```
 
-Keep `orkasSourceRuntimeVariant` as `cogseed` and preserve the package imports/build metadata already aligned with the current Electron app.
+Keep `cogseedSourceRuntimeVariant` as `cogseed` and preserve the package imports/build metadata already aligned with the current Electron app.
 
 - [ ] **Step 2: Regenerate only the package-lock root identity**
 
@@ -110,9 +110,9 @@ Keep the one-cycle compatibility arrays:
 
 ```json
 {
-  "legacyProtocolSchemes": ["mateagent", "orkas"],
-  "legacyDataRootNames": [".orkas"],
-  "legacyRuntimeVariants": ["mate"]
+  "legacyProtocolSchemes": ["cogseed", "cogseed"],
+  "legacyDataRootNames": [".cogseed"],
+  "legacyRuntimeVariants": ["cogseed"]
 }
 ```
 
@@ -157,7 +157,7 @@ expect(read('README.md')).toContain('window.cogseed');
 expect(read('README.md')).toContain('npm test');
 expect(read('README.md')).toContain('CC Switch');
 expect(read('README.md')).toContain('.cogseed');
-expect(read('README.md')).toContain('mateagent'); // compatibility section only
+expect(read('README.md')).toContain('cogseed'); // compatibility section only
 ```
 
 - [ ] **Step 2: Rewrite `README.md` as the canonical project overview**
@@ -196,10 +196,10 @@ git commit -m "docs: publish the CogSeed project README"
 ### Task 4: Clean current public branding while preserving compatibility wrappers
 
 **Files:**
-- Modify: exact files returned by `git grep -I -l 'Mate Agent\|MateAgent\|mate-agent' -- ':!docs/superpowers/specs/**' ':!docs/superpowers/plans/**'`
-- Modify: `/Users/sudai/.config/codex/worktrees/Mate Agent/cogseed-official-cutover/bin/orkas-bridge.cjs`
-- Modify: `/Users/sudai/.config/codex/worktrees/Mate Agent/cogseed-official-cutover/bin/mate-runtime-worker.cjs`
-- Modify: `/Users/sudai/.config/codex/worktrees/Mate Agent/cogseed-official-cutover/scripts/restart-mate.sh`
+- Modify: exact files returned by `git grep -I -l 'Mate Agent\|CogSeedAgent\|cogseed-agent' -- ':!docs/superpowers/specs/**' ':!docs/superpowers/plans/**'`
+- Modify: `/Users/sudai/.config/codex/worktrees/Mate Agent/cogseed-official-cutover/bin/cogseed-bridge.cjs`
+- Modify: `/Users/sudai/.config/codex/worktrees/Mate Agent/cogseed-official-cutover/bin/cogseed-runtime-worker.cjs`
+- Modify: `/Users/sudai/.config/codex/worktrees/Mate Agent/cogseed-official-cutover/scripts/restart-cogseed.sh`
 - Modify: `/Users/sudai/.config/codex/worktrees/Mate Agent/cogseed-official-cutover/test/main/cogseed-residual-identifiers.test.ts`
 
 - [ ] **Step 1: Classify every residual old-name occurrence**
@@ -207,7 +207,7 @@ git commit -m "docs: publish the CogSeed project README"
 Run:
 
 ```bash
-git grep -n -I -E 'Mate Agent|MateAgent|mate-agent|\bOrkas\b|\bORKAS\b' -- ':!docs/superpowers/specs/**' ':!docs/superpowers/plans/**'
+git grep -n -I -E 'Mate Agent|CogSeedAgent|cogseed-agent|\bCogSeed\b|\bCOGSEED\b' -- ':!docs/superpowers/specs/**' ':!docs/superpowers/plans/**'
 ```
 
 Classify each occurrence as `current-public`, `compatibility`, `historical`, or `fixture`. Do not replace a compatibility/historical occurrence mechanically.
@@ -270,7 +270,7 @@ Run:
 
 ```bash
 scripts/restart-cogseed.sh
-ps -Ao pid,lstart,command | grep -- '--orkas-runtime-variant=cogseed' | grep -v grep
+ps -Ao pid,lstart,command | grep -- '--cogseed-runtime-variant=cogseed' | grep -v grep
 ```
 
 Inspect:
@@ -286,7 +286,7 @@ Expected: app root is the cutover worktree, `cogseed` is the protocol owner, ren
 Run:
 
 ```bash
-git grep -n 'mate-agent.git\|github.com/Orkas-AI/Orkas\|cd mate-agent\|name": "orkas"' -- README* README-源码包说明.txt 目录说明.md docs package.json package-lock.json || true
+git grep -n 'cogseed-agent.git\|github.com/CogSeed-AI/CogSeed\|cd cogseed-agent\|name": "cogseed"' -- README* README-源码包说明.txt 目录说明.md docs package.json package-lock.json || true
 ```
 
 Expected: no current README/package clone or package-name claim points to the old repository.

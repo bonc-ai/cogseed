@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use $superpower-subagents (recommended) or $superpower-executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax via update_plan.
 
-**Goal:** Make CogSeed the canonical internal product identity while automatically migrating legacy Orkas/Mate data and preserving one release of protocol, bridge, environment, runtime, artifact, and entrypoint compatibility.
+**Goal:** Make CogSeed the canonical internal product identity while automatically migrating legacy CogSeed/Mate data and preserving one release of protocol, bridge, environment, runtime, artifact, and entrypoint compatibility.
 
 **Architecture:** Keep `bootstrap.cjs` as the package main and introduce a CJS-only identity contract plus pre-tsx install migration. Canonical code uses CogSeed names; centralized compatibility adapters normalize legacy identifiers at the process boundary. Business IPC channels and user data schemas remain unchanged unless they are purely product identity fields.
 
@@ -27,12 +27,12 @@ Assert the canonical values and aliases:
 ```ts
 expect(identity.appId).toBe('com.cogseed.desktop');
 expect(identity.protocolScheme).toBe('cogseed');
-expect(identity.legacyProtocolSchemes).toEqual(['mateagent', 'orkas']);
+expect(identity.legacyProtocolSchemes).toEqual(['cogseed', 'cogseed']);
 expect(identity.dataRootName).toBe('.cogseed');
-expect(identity.legacyDataRootNames).toEqual(['.orkas']);
+expect(identity.legacyDataRootNames).toEqual(['.cogseed']);
 expect(identity.runtimeVariant).toBe('cogseed');
-expect(identity.legacyRuntimeVariants).toEqual(['mate']);
-expect(normalizeRuntimeVariant('mate')).toBe('cogseed');
+expect(identity.legacyRuntimeVariants).toEqual(['cogseed']);
+expect(normalizeRuntimeVariant('cogseed')).toBe('cogseed');
 expect(normalizeRuntimeVariant('cogseed')).toBe('cogseed');
 ```
 
@@ -99,8 +99,8 @@ writeMigrationMarker({ canonicalRoot, manifest, sourceKind })
 
 Rules:
 
-- production root `.orkas` → `.cogseed`;
-- packaged-dev/source-dev `.orkas-dev` → `.cogseed-dev`;
+- production root `.cogseed` → `.cogseed`;
+- packaged-dev/source-dev `.cogseed-dev` → `.cogseed-dev`;
 - copy/clone preserves source on all platforms;
 - canonical temporary directory is sibling of destination;
 - verify file count, critical hashes, and secret files before atomic rename;
@@ -126,7 +126,7 @@ Old variables with conflicting new values must fail with a stable error code.
 npm run test:js -- test/main/cogseed-install-migration.test.ts test/main/identity-contract.test.ts test/main/util/runtime-launcher.test.ts
 ```
 
-Expected: all migration cases pass, including interruption/re-entry, both roots, `.orkas-dev`, Windows pin paths, and source retention.
+Expected: all migration cases pass, including interruption/re-entry, both roots, `.cogseed-dev`, Windows pin paths, and source retention.
 
 - [ ] **Step 5: Commit the bootstrap migration checkpoint**
 
@@ -153,14 +153,14 @@ Assert canonical generation and legacy consumption:
 ```ts
 expect(APP_BRAND.appId).toBe('com.cogseed.desktop');
 expect(APP_BRAND.protocolScheme).toBe('cogseed');
-expect(CONNECTOR_PROTOCOL_SCHEMES).toEqual(['cogseed', 'mateagent', 'orkas']);
-expect(normalizeDeepLink('orkas://connectors/oauth/callback').scheme).toBe('cogseed');
-expect(normalizeDeepLink('mateagent://connectors/oauth/callback').scheme).toBe('cogseed');
+expect(CONNECTOR_PROTOCOL_SCHEMES).toEqual(['cogseed', 'cogseed', 'cogseed']);
+expect(normalizeDeepLink('cogseed://connectors/oauth/callback').scheme).toBe('cogseed');
+expect(normalizeDeepLink('cogseed://connectors/oauth/callback').scheme).toBe('cogseed');
 ```
 
 - [ ] **Step 2: Implement canonical App ID and protocol identity**
 
-Package/source identities become `com.cogseed.desktop[.source.<variant>]`. Register `cogseed`, `mateagent`, and `orkas` during compatibility. New URL generation uses only `cogseed://`.
+Package/source identities become `com.cogseed.desktop[.source.<variant>]`. Register `cogseed`, `cogseed`, and `cogseed` during compatibility. New URL generation uses only `cogseed://`.
 
 - [ ] **Step 3: Verify platform paths**
 
@@ -181,7 +181,7 @@ npm run test:js -- test/main/cogseed-protocol.test.ts test/main/brand.test.ts te
 - Modify: `src/main/ipc/index.ts`
 - Modify: `src/main/index.ts`
 - Create: `src/main/cogseed-transport-compat.ts` or equivalent main-only adapter
-- Bulk modify renderer modules from `window.orkas` to `window.cogseed`
+- Bulk modify renderer modules from `window.cogseed` to `window.cogseed`
 - Create: `test/main/cogseed-transport-compat.test.ts`
 - Modify: renderer preload/IPC tests
 
@@ -191,14 +191,14 @@ Assert canonical exposure and legacy forwarding:
 
 ```ts
 expect(preload).toContain("contextBridge.exposeInMainWorld('cogseed'");
-expect(preload).toContain("contextBridge.exposeInMainWorld('orkas'");
+expect(preload).toContain("contextBridge.exposeInMainWorld('cogseed'");
 expect(preload).toContain("ipcRenderer.invoke('cogseed.invoke'");
 expect(compat.invoke('recall.sources.list', payload)).toEqual(canonicalResult);
 ```
 
 - [ ] **Step 2: Implement canonical preload API**
 
-Expose one frozen API object under `window.cogseed`. Expose a legacy proxy under `window.orkas` that calls the same functions. Add `__cogseedI18nBoot` and a read-only `__orkasI18nBoot` alias.
+Expose one frozen API object under `window.cogseed`. Expose a legacy proxy under `window.cogseed` that calls the same functions. Add `__cogseedI18nBoot` and a read-only `__cogseedI18nBoot` alias.
 
 - [ ] **Step 3: Implement canonical main transport and aliases**
 
@@ -206,7 +206,7 @@ Canonical transport names are `cogseed.invoke`, `cogseed.stream`, `cogseed:bootI
 
 - [ ] **Step 4: Migrate renderer call sites**
 
-Replace renderer runtime references with `window.cogseed`. Add a static test that production renderer modules contain no `window.orkas` outside the explicit compatibility test/adapter allowlist.
+Replace renderer runtime references with `window.cogseed`. Add a static test that production renderer modules contain no `window.cogseed` outside the explicit compatibility test/adapter allowlist.
 
 - [ ] **Step 5: Run bridge/IPC tests and commit**
 
@@ -243,7 +243,7 @@ window.cogseedArtifact
 CogSeedArtifactSecurity
 ```
 
-Legacy artifacts continue to read/serve old identifiers through one shared implementation. Reserved-path rejection covers both prefixes. Artifact iframes never receive `window.cogseed` or `window.orkas`.
+Legacy artifacts continue to read/serve old identifiers through one shared implementation. Reserved-path rejection covers both prefixes. Artifact iframes never receive `window.cogseed` or `window.cogseed`.
 
 - [ ] **Step 3: Run artifact security tests**
 
@@ -265,7 +265,7 @@ git commit -m "feat: migrate artifact protocol to CogSeed with legacy support"
 **Files:**
 - Modify: `src/main/features/local_agents/backends/codex.ts`
 - Modify: Claude/local-agent bridge config builders and shared `BridgeRunConfig`
-- Modify: `bin/orkas-bridge.cjs` → create `bin/cogseed-bridge.cjs` plus wrapper
+- Modify: `bin/cogseed-bridge.cjs` → create `bin/cogseed-bridge.cjs` plus wrapper
 - Modify: bridge env/config paths and runner wiring
 - Modify: local-agent prompts and tests
 
@@ -277,7 +277,7 @@ Assert Codex initialize, MCP config keys, server info, prompt, and bridge env us
 expect(initialize.clientInfo).toMatchObject({ name: 'cogseed', title: 'CogSeed' });
 expect(overrides.join('\n')).toContain('mcp_servers.cogseed');
 expect(prompt).toContain('runs inside CogSeed');
-expect(prompt).not.toContain('runs inside Orkas');
+expect(prompt).not.toContain('runs inside CogSeed');
 ```
 
 - [ ] **Step 2: Implement canonical local-agent identity**
@@ -288,15 +288,15 @@ New runs generate `cogseed` MCP names/config keys/env; old wrapper and old env v
 
 ```bash
 npm run test:js -- test/main/features/local_agents/bridge_args.test.ts test/main/features/local_agents/bridge_e2e.test.ts test/main/features/local_agents/codex-execution-e2e.test.ts
- git add src/main/features/local_agents bin/cogseed-bridge.cjs bin/orkas-bridge.cjs test/main/features/local_agents
+ git add src/main/features/local_agents bin/cogseed-bridge.cjs bin/cogseed-bridge.cjs test/main/features/local_agents
  git commit -m "feat: expose CogSeed MCP identity to local agents"
 ```
 
 ## Task 7: Rename runtime/backend modules and worker entrypoints
 
 **Files:**
-- Rename: `src/main/features/mate_agent_runtime/` → `src/main/features/cogseed_runtime/`
-- Rename: `src/main/features/mate_agent_backend/` → `src/main/features/cogseed_backend/`
+- Rename: `src/main/features/cogseed_runtime/` → `src/main/features/cogseed_runtime/`
+- Rename: `src/main/features/cogseed_backend/` → `src/main/features/cogseed_backend/`
 - Rename corresponding test directories
 - Rename/create: `bin/cogseed-runtime-worker.cjs` plus legacy wrapper
 - Rename/create: `scripts/restart-cogseed.sh` plus legacy wrapper
@@ -335,11 +335,11 @@ git add src/main/features bin scripts test/main/features test/main/util test/sta
 
 - [ ] **Step 1: Write failing security marker/residual tests**
 
-Cover both `.cogseed` canonical and `.orkas` legacy protected paths, marker reads/writes, import temp cleanup, `smoke-cogseed-*`, and instruction files.
+Cover both `.cogseed` canonical and `.cogseed` legacy protected paths, marker reads/writes, import temp cleanup, `smoke-cogseed-*`, and instruction files.
 
 - [ ] **Step 2: Update security rules and markers**
 
-Canonical writes use `.cogseed-*`; reads/cleanup accept one-version `.orkas-*`. `MARKETPLACE_INSTALL_SCRIPT_RE` must reject direct scripts under both roots.
+Canonical writes use `.cogseed-*`; reads/cleanup accept one-version `.cogseed-*`. `MARKETPLACE_INSTALL_SCRIPT_RE` must reject direct scripts under both roots.
 
 - [ ] **Step 3: Update AGENTS/CLAUDE hard constraints**
 
@@ -437,7 +437,7 @@ Verify the process path contains `cogseed-full-identity-migration`, the bundle i
 
 - [ ] **Step 5: Verify migration fixtures on both platforms**
 
-Run the fixture matrix on macOS in CI/local and Windows in the platform runner. Confirm source `.orkas` remains unchanged after migration and canonical `.cogseed` is authoritative.
+Run the fixture matrix on macOS in CI/local and Windows in the platform runner. Confirm source `.cogseed` remains unchanged after migration and canonical `.cogseed` is authoritative.
 
 - [ ] **Step 6: Commit final verification artifacts**
 

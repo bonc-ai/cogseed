@@ -228,15 +228,15 @@ scripts/restart-cogseed.sh
 
 ---
 
-## Mate Agent / Orkas 迁移兼容
+## Mate Agent / CogSeed 迁移兼容
 
 CogSeed 已经是当前正式产品身份。为保证已有安装、回调和本地数据平滑迁移，以下旧入口保留一个发布周期：
 
-- `mateagent://` 与 `orkas://` deep link 会归一化为 `cogseed://`。
-- `ORKAS_*` 环境变量会映射到 canonical `COGSEED_*` 配置。
-- `.orkas` / `.orkas-dev` 数据根会通过只复制、校验和 marker 机制迁移到 `.cogseed` / `.cogseed-dev`。
-- `mate` runtime variant 仅作为 deprecated legacy identity。
-- `bin/orkas-bridge.cjs` 与 `bin/mate-runtime-worker.cjs` 仅是兼容 wrapper。
+- `cogseed://` 与 `cogseed://` deep link 会归一化为 `cogseed://`。
+- `COGSEED_*` 环境变量会映射到 canonical `COGSEED_*` 配置。
+- `.cogseed` / `.cogseed-dev` 数据根会通过只复制、校验和 marker 机制迁移到 `.cogseed` / `.cogseed-dev`。
+- `cogseed` runtime variant 仅作为 deprecated legacy identity。
+- `bin/cogseed-bridge.cjs` 与 `bin/cogseed-runtime-worker.cjs` 仅是兼容 wrapper。
 
 新代码、新文档和新生成的 URL 必须使用 CogSeed 标识。旧兼容入口将在迁移观察周期结束后单独删除。
 
@@ -252,7 +252,7 @@ CogSeed 已经是当前正式产品身份。为保证已有安装、回调和本
 
 ## Attribution
 
-CogSeed 延续并改造了既有开源 Agent Runtime、协作和工具链实现，也参考了 Orkas、Hermes-Agent、OpenClaw 等项目。历史来源名称仅用于准确 attribution 和兼容迁移，不代表当前产品名称。
+CogSeed 延续并改造了既有开源 Agent Runtime、协作和工具链实现，也参考了 CogSeed、Hermes-Agent、OpenClaw 等项目。历史来源名称仅用于准确 attribution 和兼容迁移，不代表当前产品名称。
 
 ## License
 

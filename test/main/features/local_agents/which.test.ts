@@ -12,7 +12,7 @@ describe('local_agents/which › whichBin', () => {
   let savedPathExt: string | undefined;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-which-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-which-'));
     savedPath = process.env.PATH;
     savedPathExt = process.env.PATHEXT;
   });

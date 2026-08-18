@@ -185,7 +185,7 @@ python3 resources/guardrail/scan_gate.py resources/guardrail/skill-sentry <任�
 - PyYAML 实测：打包 python 3.12.13 `import yaml` → ModuleNotFoundError；系统 python 3.9.6 → 6.0.3。
 - 上游对比（`diff -rq` 实测）：两引擎共享文件字节一致、无规则漂移；skill-sentry vendored 为严格子集（缺 tests/ 20 文件、runtime_trust/tests/ 2、docs/ 8）；nseap vendored 多 `vendor/`+`SKILL.md`（仓库自有加固，同步须 merge 非 replace）。
 - 打包：guardrail 不进 `_manifest.json`，走 `package.json` extraResources；`bin/packaged-resource-gate.cjs` 有 `guardrail-scanner-contract`；`matrix.test.ts` 锁 extraResources。
-- `run-python-tests.mjs` 覆盖 resources/builtin + resources/test，不扫 guardrail；`bundledPythonExecutable` 支持 `ORKAS_BUNDLED_PYTHON/ORKAS_PYTHON` 环境覆盖。
+- `run-python-tests.mjs` 覆盖 resources/builtin + resources/test，不扫 guardrail；`bundledPythonExecutable` 支持 `COGSEED_BUNDLED_PYTHON/COGSEED_PYTHON` 环境覆盖。
 - `check_all_skills.py` 只做 NSEAP 结构合规（6 项机检），不检恶意代码——与 skill-sentry 两套门不可互相替代。
 - 守卫 64/64：实测脚本输出（HANDOFF §8.0 的 stash 问题已随 `e56749d0` 解决，无遗留）。
 

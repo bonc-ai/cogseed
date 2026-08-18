@@ -51,7 +51,7 @@ type ElectronPowerMonitorLike = {
 
 const log = createLogger('client-config');
 const REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
-const PROD_DEFAULT = 'https://orkas.ai/api';
+const PROD_DEFAULT = 'https://cogseed.ai/api';
 
 let started = false;
 let inFlight: Promise<ConfigRefreshResult> | null = null;

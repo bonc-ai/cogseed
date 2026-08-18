@@ -49,7 +49,7 @@
 | ② 来源 | 来源可读名 + 工作区文件/附件计数 + 最近文件 chips（懒加载全文=文件树+附件） | snapshot files/attachments |
 | ③ 权限 | 最近一次执行权限模式 + 边界 + 安全说明 | execution.permissionMode / boundary |
 | ④ 运行证明 | 协议事件统计（懒加载全文=协议检查器） | `/protocol-events` |
-| ⑤ 协作参与者 | 任务目标 + 状态 + 参与者/步骤数（懒加载全文=协作概览） | mate projection / collaboration |
+| ⑤ 协作参与者 | 任务目标 + 状态 + 参与者/步骤数（懒加载全文=协作概览） | cogseed projection / collaboration |
 
 关键辅助函数（**用户语言红线**，勿回退为技术原文）：
 
@@ -81,7 +81,7 @@ conversation-info.js（右侧五段面板）
   ├─ p3394.execution.list（IPC）→ executions（含 permissionMode/boundary/receiptId）
   ├─ p3394.contextReuseReceipt.read（IPC，点击回执时按 executionId 读）
   ├─ /protocol-events（HTTP）→ 协议事件
-  └─ mateAgentProjection.session(cid) → collaboration 参与者
+  └─ cogseedAgentProjection.session(cid) → collaboration 参与者
 ```
 
 ## 4. 关键文件

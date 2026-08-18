@@ -7,13 +7,13 @@ import type {
 import { readNativeRuntimeSession } from './session-store';
 import { createRuntimeSessionRunner, type RuntimeSessionRunnerDeps } from './session-runner';
 
-export interface MateAgentKernel {
+export interface CogSeedAgentKernel {
   run(request: RuntimeKernelRequest, options?: RuntimeKernelRunOptions): AsyncIterable<RuntimeKernelEvent>;
   cancel(requestId: string): Promise<void>;
   getSession(userId: string, runtimeSessionId: string): Promise<RuntimeKernelSessionSummary>;
 }
 
-export interface MateAgentKernelDeps extends Partial<RuntimeSessionRunnerDeps> {}
+export interface CogSeedAgentKernelDeps extends Partial<RuntimeSessionRunnerDeps> {}
 
 async function* unsupportedNativeRun(request: RuntimeKernelRequest): AsyncIterable<RuntimeKernelEvent> {
   yield {
@@ -25,7 +25,7 @@ async function* unsupportedNativeRun(request: RuntimeKernelRequest): AsyncIterab
   };
 }
 
-export function createMateAgentKernel(deps: MateAgentKernelDeps = {}): MateAgentKernel {
+export function createCogSeedAgentKernel(deps: CogSeedAgentKernelDeps = {}): CogSeedAgentKernel {
   const runner = deps.modelAdapter && deps.toolRunner
     ? createRuntimeSessionRunner({
       modelAdapter: deps.modelAdapter,

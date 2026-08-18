@@ -10,7 +10,7 @@ let previousHome: string | undefined;
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-skills-versioning-'));
   previousHome = process.env.HOME;
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   process.env.HOME = root;
   const users = await import('../../../src/main/features/users');
   users.activateUser(USER);
@@ -19,7 +19,7 @@ beforeEach(async () => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
-  delete process.env.ORKAS_WORKSPACE_ROOT;
+  delete process.env.COGSEED_WORKSPACE_ROOT;
   fs.rmSync(root, { recursive: true, force: true });
 });
 

@@ -37,7 +37,7 @@ export interface P3394LiteManifest {
     id: string;
     scope: string;
     channel: 'group_chat' | 'cli';
-    principal_source: 'mate_user' | 'orkas_runtime';
+    principal_source: 'cogseed_user' | 'cogseed_runtime';
     security: { inbound: { mode: 'implicit' } };
   }>;
   service_principal: { schema: { person: string; org: string; role: string } };
@@ -179,7 +179,7 @@ const RELATIONSHIP_SPEECH_ACTS: Record<P3394Relationship, 'unrestricted' | P3394
 function agentContract(agent: Agent): AgentInterfaceContract {
   return agent.interface_contract || {
     version: 1,
-    role: agent.runtime?.kind === 'cli' ? 'external_expert' : 'orkas_core',
+    role: agent.runtime?.kind === 'cli' ? 'external_expert' : 'cogseed_core',
     runtime: agent.runtime?.kind === 'cli' ? { kind: 'cli', cli: agent.runtime.cli } : { kind: 'in_process' },
     io: { input: 'task_message', output: 'final_message' },
     governance: {
@@ -198,7 +198,7 @@ export function buildP3394Level2Manifest(agent: Agent): P3394LiteManifest {
     id: agent.agent_id,
     scope: 'cogseed://group_chat/',
     channel: 'group_chat',
-    principal_source: 'mate_user',
+    principal_source: 'cogseed_user',
     security: { inbound: { mode: 'implicit' } },
   }];
   if (contract.runtime.kind === 'cli') {
@@ -206,7 +206,7 @@ export function buildP3394Level2Manifest(agent: Agent): P3394LiteManifest {
       id: contract.runtime.cli,
       scope: '$PATH',
       channel: 'cli',
-      principal_source: 'orkas_runtime',
+      principal_source: 'cogseed_runtime',
       security: { inbound: { mode: 'implicit' } },
     });
   }
@@ -216,7 +216,7 @@ export function buildP3394Level2Manifest(agent: Agent): P3394LiteManifest {
     agent_id: agent.agent_id,
     name: agent.name || agent.agent_id,
     channels,
-    service_principal: { schema: { person: 'mate user or agent uri', org: 'workspace', role: 'runtime role' } },
+    service_principal: { schema: { person: 'cogseed user or agent uri', org: 'workspace', role: 'runtime role' } },
     channel_adapter: { responsibilities: ADAPTER_RESPONSIBILITIES },
     handle_message: { canonical_form: 'umf-lite', input_forms: ['task_message'] },
     relationships: [

@@ -7,16 +7,16 @@
 
 ## 1. Objective
 
-Complete the public and repository-level cutover from Mate Agent / Orkas naming to **CogSeed**, publish a README grounded in the current PRDs and implementation, and make GitLab `main` an exact mirror of the fully verified `develop` branch.
+Complete the public and repository-level cutover from Mate Agent / CogSeed naming to **CogSeed**, publish a README grounded in the current PRDs and implementation, and make GitLab `main` an exact mirror of the fully verified `develop` branch.
 
 The cutover has four externally visible outcomes:
 
 1. CogSeed is the only current product and repository name.
 2. The canonical GitLab project path becomes `team-02/cogseed`.
-3. Root documentation describes the actual CogSeed product and architecture rather than inherited Orkas marketing copy.
+3. Root documentation describes the actual CogSeed product and architecture rather than inherited CogSeed marketing copy.
 4. Remote `main` points to the exact same commit as the final remote `develop`.
 
-Legacy Mate/Orkas runtime inputs remain supported for one release cycle as deprecated compatibility aliases. They are not current product identities and must not be used by new code or generated documentation.
+Legacy Mate/CogSeed runtime inputs remain supported for one release cycle as deprecated compatibility aliases. They are not current product identities and must not be used by new code or generated documentation.
 
 ## 2. Confirmed Decisions
 
@@ -26,14 +26,14 @@ Legacy Mate/Orkas runtime inputs remain supported for one release cycle as depre
 - Before replacing `main`, preserve its old tip in `archive/pre-cogseed-main-2026-08-11`.
 - `main` will be replaced with `develop` using a lease-protected force update, so both remote refs resolve to the same commit.
 - GitLab project display name becomes `CogSeed`; project path becomes `cogseed`.
-- The old GitLab path `mate-agent` may redirect temporarily if GitLab provides a redirect, but no checked-in current documentation may depend on that redirect.
+- The old GitLab path `cogseed-agent` may redirect temporarily if GitLab provides a redirect, but no checked-in current documentation may depend on that redirect.
 - Legacy compatibility remains for one release cycle:
-  - `mateagent://` and `orkas://` deep links
-  - `ORKAS_*` environment variables
-  - `.orkas` and `.orkas-dev` data-root migration
-  - `mate` runtime variant normalization
-  - `bin/orkas-bridge.cjs`
-  - `bin/mate-runtime-worker.cjs`
+  - `cogseed://` and `cogseed://` deep links
+  - `COGSEED_*` environment variables
+  - `.cogseed` and `.cogseed-dev` data-root migration
+  - `cogseed` runtime variant normalization
+  - `bin/cogseed-bridge.cjs`
+  - `bin/cogseed-runtime-worker.cjs`
 - Historical specs, migration fixtures, compatibility tests, and source-attribution text retain old names when those names are semantically required.
 
 ## 3. Branch and Release Topology
@@ -83,7 +83,7 @@ The canonical current identity is:
 | Canonical environment prefix | `COGSEED_` |
 | Source runtime variant | `cogseed` |
 
-Current public or generated surfaces must not present `Mate Agent`, `MateAgent`, `mate-agent`, or `Orkas` as the product name. The rename includes:
+Current public or generated surfaces must not present `Mate Agent`, `CogSeedAgent`, `cogseed-agent`, or `CogSeed` as the product name. The rename includes:
 
 - root README files and clone commands
 - package name and package-lock root package metadata
@@ -106,7 +106,7 @@ Old names may remain only in clearly bounded locations:
 
 - `src/resources/identity.json` legacy arrays
 - identity/deep-link normalizers
-- `.orkas` data migration code
+- `.cogseed` data migration code
 - deprecated wrapper entrypoints
 - compatibility fixtures and tests
 - historical migration/design documents
@@ -125,12 +125,12 @@ New code must use the CogSeed canonical entrypoint.
 
 New code must not:
 
-- create new `ORKAS_*` settings when a `COGSEED_*` equivalent exists
-- generate `mateagent://` or `orkas://` URLs
-- create new `.orkas` storage paths
-- launch the `mate` variant
+- create new `COGSEED_*` settings when a `COGSEED_*` equivalent exists
+- generate `cogseed://` or `cogseed://` URLs
+- create new `.cogseed` storage paths
+- launch the `cogseed` variant
 - import deprecated wrapper entrypoints directly
-- describe the current product as Mate Agent or Orkas
+- describe the current product as Mate Agent or CogSeed
 
 ## 6. README Information Architecture
 
@@ -181,7 +181,7 @@ New code must not:
    - MR workflow into protected `develop`.
 
 7. **Migration compatibility**
-   - Old `.orkas` data is copied and verified into `.cogseed`.
+   - Old `.cogseed` data is copied and verified into `.cogseed`.
    - Old protocols and environment variables are accepted temporarily.
    - New output always uses CogSeed identifiers.
 
@@ -259,7 +259,7 @@ Additional gates cover:
 - data-root migration
 - deprecated wrapper boundaries
 - README clone URL and architecture claims
-- absence of accidental public Mate Agent / Orkas branding
+- absence of accidental public Mate Agent / CogSeed branding
 
 ### 9.2 Runtime verification
 
@@ -271,11 +271,11 @@ scripts/restart-cogseed.sh
 
 Verify:
 
-- process argument is `--orkas-runtime-variant=cogseed`
+- process argument is `--cogseed-runtime-variant=cogseed`
 - app root matches the cutover worktree
 - app ID is `com.cogseed.desktop.source.cogseed`
 - logs are written beneath `.cogseed/runtime-variants/cogseed/data/logs/`
-- `cogseed://`, `mateagent://`, and `orkas://` register as expected
+- `cogseed://`, `cogseed://`, and `cogseed://` register as expected
 - renderer boot completes
 - model authorization can preview CC Switch credentials
 - Claude Code and Codex session import entrypoints remain available
@@ -303,9 +303,9 @@ archive/pre-cogseed-main-2026-08-11 → old origin/main SHA
 Rollback steps:
 
 1. Restore `main` from the archive branch with a lease-protected update.
-2. If necessary, restore the GitLab path from `cogseed` to `mate-agent`.
+2. If necessary, restore the GitLab path from `cogseed` to `cogseed-agent`.
 3. Keep `develop` forward-moving; fix defects through a new branch and MR rather than rewriting `develop`.
-4. Do not move user data back to `.orkas`; the retained old root is a compatibility backup, not an active write target.
+4. Do not move user data back to `.cogseed`; the retained old root is a compatibility backup, not an active write target.
 
 ## 11. Success Criteria
 

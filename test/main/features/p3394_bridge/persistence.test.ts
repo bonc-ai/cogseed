@@ -147,9 +147,9 @@ describe('P3394 Phase 1 persistence hardening', () => {
 
 describe('P3394 adapter mapping persistence', () => {
   it('restores session/task mappings in a fresh adapter instance after restart', async () => {
-    const previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-    process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+    process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const { P3394CogseedRuntimeAdapter } = await import('../../../../src/main/features/p3394_bridge/cogseed-runtime-adapter');
     const UID = 'p3394-persist-adapter-user';
     const stateFile = tmpFile('adapter-state');
@@ -157,7 +157,7 @@ describe('P3394 adapter mapping persistence', () => {
       yield { type: 'result', status: 'completed', text: 'done', metadata: {} };
     } };
     try {
-      const controller = createMateRuntimeController({ runtime });
+      const controller = createCogSeedRuntimeController({ runtime });
       const adapter = new P3394CogseedRuntimeAdapter({ userId: () => UID, controller, pollIntervalMs: 20, stateFile });
       const binding = await adapter.openSession({ session_id: 'ses-persist-1', agent_id: 'cogseed-agent' });
       const { task_id } = await adapter.deliver({
@@ -168,7 +168,7 @@ describe('P3394 adapter mapping persistence', () => {
       expect(fs.existsSync(stateFile)).toBe(true);
 
       // Fresh adapter on the same state file reuses the CogSeed session.
-      const controller2 = createMateRuntimeController({ runtime });
+      const controller2 = createCogSeedRuntimeController({ runtime });
       const adapter2 = new P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controller2, pollIntervalMs: 20, stateFile });
       const binding2 = await adapter2.openSession({ session_id: 'ses-persist-1', agent_id: 'cogseed-agent' });
       expect(binding2.native_session_id).toBe(binding.native_session_id);
@@ -183,8 +183,8 @@ describe('P3394 adapter mapping persistence', () => {
       const tasks = (snapshot.state as { tasks: unknown[] }).tasks;
       expect(tasks.length).toBe(2);
     } finally {
-      if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-      else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+      if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+      else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
     }
   });
 });

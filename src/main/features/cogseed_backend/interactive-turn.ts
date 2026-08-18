@@ -1,17 +1,17 @@
-import type { MateRuntimeController } from './runtime-controller';
+import type { CogSeedRuntimeController } from './runtime-controller';
 import {
   buildCogSeedAgentRuntimeContext,
   resolveCogSeedAgentExecutionContext,
   type CogSeedAgentExecutionContext,
 } from './agent-execution-context';
-import { getOrCreateMateAgentSession } from './session-store';
-import { readLatestMateTaskForAgent } from './task-store';
-import { assertMateAgentId, assertMateConversationId, assertMateRequestId, assertMateUserId } from './paths';
-import type { MateTaskRecord } from './types';
+import { getOrCreateCogSeedAgentSession } from './session-store';
+import { readLatestCogSeedTaskForAgent } from './task-store';
+import { assertCogSeedAgentId, assertCogSeedConversationId, assertCogSeedRequestId, assertCogSeedUserId } from './paths';
+import type { CogSeedTaskRecord } from './types';
 
 const MAX_VISIBLE_CONTEXT_CHARS = 12_000;
 
-export interface StartMateInteractiveFollowupInput {
+export interface StartCogSeedInteractiveFollowupInput {
   conversationId: string;
   agentId: string;
   requestId: string;
@@ -21,8 +21,8 @@ export interface StartMateInteractiveFollowupInput {
   workingDir?: string;
 }
 
-export interface StartMateInteractiveFollowupDeps {
-  runtimeController?: Pick<MateRuntimeController, 'startMateTask'>;
+export interface StartCogSeedInteractiveFollowupDeps {
+  runtimeController?: Pick<CogSeedRuntimeController, 'startCogSeedTask'>;
   resolveExecutionContext?: (
     userId: string,
     agentId: string,
@@ -30,19 +30,19 @@ export interface StartMateInteractiveFollowupDeps {
   ) => Promise<CogSeedAgentExecutionContext>;
 }
 
-export async function startMateInteractiveFollowup(
+export async function startCogSeedInteractiveFollowup(
   userId: string,
-  input: StartMateInteractiveFollowupInput,
-  deps: StartMateInteractiveFollowupDeps = {},
-): Promise<MateTaskRecord> {
-  assertMateUserId(userId);
-  const conversationId = assertMateConversationId(input.conversationId);
-  const agentId = assertMateAgentId(input.agentId);
-  const requestId = assertMateRequestId(input.requestId);
+  input: StartCogSeedInteractiveFollowupInput,
+  deps: StartCogSeedInteractiveFollowupDeps = {},
+): Promise<CogSeedTaskRecord> {
+  assertCogSeedUserId(userId);
+  const conversationId = assertCogSeedConversationId(input.conversationId);
+  const agentId = assertCogSeedAgentId(input.agentId);
+  const requestId = assertCogSeedRequestId(input.requestId);
   const task = String(input.task || '').trim();
   if (!task) throw new Error('CogSeed follow-up task is required');
-  const session = await getOrCreateMateAgentSession(userId, conversationId, agentId);
-  const parent = await readLatestMateTaskForAgent(userId, conversationId, agentId);
+  const session = await getOrCreateCogSeedAgentSession(userId, conversationId, agentId);
+  const parent = await readLatestCogSeedTaskForAgent(userId, conversationId, agentId);
   const resolveContext = deps.resolveExecutionContext ?? resolveCogSeedAgentExecutionContext;
   const executionContext = await resolveContext(userId, agentId, conversationId);
   const context: unknown[] = [...buildCogSeedAgentRuntimeContext(executionContext)];
@@ -54,8 +54,8 @@ export async function startMateInteractiveFollowup(
       content: visibleContext.slice(0, MAX_VISIBLE_CONTEXT_CHARS),
     });
   }
-  const controller = deps.runtimeController ?? (await import('./runtime-controller')).mateRuntimeController;
-  return controller.startMateTask(userId, {
+  const controller = deps.runtimeController ?? (await import('./runtime-controller')).cogseedRuntimeController;
+  return controller.startCogSeedTask(userId, {
     requestId,
     task,
     conversationId,

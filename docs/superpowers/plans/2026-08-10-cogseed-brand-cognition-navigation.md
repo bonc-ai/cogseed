@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the existing renderer routes, contexts backend, Recall feature namespace, Commander actor, IPC channels, App ID, protocol schemes, and data paths. Change only renderer-visible navigation labels/entries, reuse the existing contexts view from Settings, keep the target worktree’s already-completed Evolution Console frontend removal, and centralize the public brand name through `src/resources/brand.json` plus the existing brand reader.
 
-**Tech Stack:** Electron main process, classic renderer JavaScript/HTML/CSS, JSON locales, `window.orkas.invoke`, npm/electron-builder metadata, Vitest through `npm run test:js`, full verification through `npm test`.
+**Tech Stack:** Electron main process, classic renderer JavaScript/HTML/CSS, JSON locales, `window.cogseed.invoke`, npm/electron-builder metadata, Vitest through `npm run test:js`, full verification through `npm test`.
 
 ---
 
@@ -55,7 +55,7 @@
   - Keep `build.appId`, `brand.protocolScheme`, and `brand.legacyConnectorScheme` unchanged.
 - Modify `run.sh`, `run.cmd`, and `bootstrap.cjs`
   - Update visible launcher prefixes, error messages, bundle display name, and source-runtime app bundle path to CogSeed where the product name is user-visible.
-  - Keep `ORKAS_RUNTIME_VARIANT=mate`, the mate data root, and compatibility environment variables unchanged.
+  - Keep `COGSEED_RUNTIME_VARIANT=cogseed`, the cogseed data root, and compatibility environment variables unchanged.
 - Modify `README.md`, `docs/README.md`, and user-facing product docs only for current product naming; retain an explicit historical compatibility note when a Mate Agent reference is needed.
 - Modify `test/main/brand.test.ts`, `test/main/util/source-branding.test.ts`, and any package/launcher tests to assert CogSeed public identity and preserved compatibility identifiers.
 
@@ -244,9 +244,9 @@ Set the public values while preserving compatibility fields:
 {
   "appName": "CogSeed",
   "zhName": "CogSeed",
-  "appId": "com.mateagent.desktop",
-  "protocolScheme": "mateagent",
-  "legacyConnectorScheme": "orkas",
+  "appId": "com.cogseed.desktop",
+  "protocolScheme": "cogseed",
+  "legacyConnectorScheme": "cogseed",
   "taglineZh": "跨 Agent 的个人能力资产层"
 }
 ```
@@ -255,7 +255,7 @@ Keep all consumers reading through `APP_BRAND`; do not add literal CogSeed const
 
 - [ ] **Step 2: Update package and launcher-visible names**
 
-Change the user-visible package/build fields to CogSeed, including the product name, description, protocol display name, artifact name, launcher prefixes, and macOS bundle path. Keep `build.appId` and protocol schemes unchanged. Keep runtime variant `mate` and mate data-root paths unchanged.
+Change the user-visible package/build fields to CogSeed, including the product name, description, protocol display name, artifact name, launcher prefixes, and macOS bundle path. Keep `build.appId` and protocol schemes unchanged. Keep runtime variant `cogseed` and cogseed data-root paths unchanged.
 
 - [ ] **Step 3: Update documentation and public locale strings**
 
@@ -268,13 +268,13 @@ Change the brand contract tests to assert:
 ```ts
 expect(brand.appName).toBe('CogSeed');
 expect(brand.zhName).toBe('CogSeed');
-expect(brand.appId).toBe('com.mateagent.desktop');
-expect(brand.protocolScheme).toBe('mateagent');
-expect(brand.legacyConnectorScheme).toBe('orkas');
+expect(brand.appId).toBe('com.cogseed.desktop');
+expect(brand.protocolScheme).toBe('cogseed');
+expect(brand.legacyConnectorScheme).toBe('cogseed');
 expect(pkg.build.productName).toBe('CogSeed');
 ```
 
-Keep the existing tests that protect `.orkas`, `window.orkas`, and the shared App ID.
+Keep the existing tests that protect `.cogseed`, `window.cogseed`, and the shared App ID.
 
 - [ ] **Step 5: Run brand tests**
 
@@ -340,11 +340,11 @@ Expected: zero failed tests; real external CLI tests may remain explicitly skipp
 From `/Users/sudai/.config/codex/worktrees/Mate Agent/remove-meta-skill-evolution-b-prime`:
 
 ```bash
-scripts/restart-mate.sh
-ps -Ao pid,lstart,command | grep -- '--orkas-runtime-variant=mate' | grep -v grep
+scripts/restart-cogseed.sh
+ps -Ao pid,lstart,command | grep -- '--cogseed-runtime-variant=cogseed' | grep -v grep
 ```
 
-Expected: the Electron command line contains `remove-meta-skill-evolution-b-prime`, not `/Users/sudai/Documents/Mate Agent`. Check `/Users/sudai/.orkas/runtime-variants/mate/data/logs/2026-08-10.log` and `/tmp/mate-agent-mate-run.log` for CogSeed startup output.
+Expected: the Electron command line contains `remove-meta-skill-evolution-b-prime`, not `/Users/sudai/Documents/Mate Agent`. Check `/Users/sudai/.cogseed/runtime-variants/cogseed/data/logs/2026-08-10.log` and `/tmp/cogseed-agent-cogseed-run.log` for CogSeed startup output.
 
 - [ ] **Step 5: Review final diff and commit state**
 

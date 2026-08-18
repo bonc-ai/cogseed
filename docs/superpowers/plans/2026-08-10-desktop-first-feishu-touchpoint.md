@@ -108,15 +108,15 @@
 ## Task 6: 重做 renderer 应用壳和“今日”页面
 
 **Files:**
-- Create: `src/renderer/modules/mate-workbench.js`
-- Create: `src/renderer/modules/mate-workbench-view.js`
-- Create: `src/renderer/modules/mate-workbench-actions.js`
+- Create: `src/renderer/modules/cogseed-workbench.js`
+- Create: `src/renderer/modules/cogseed-workbench-view.js`
+- Create: `src/renderer/modules/cogseed-workbench-actions.js`
 - Modify: `src/renderer/index.html`
 - Modify: `src/renderer/style.css`
 - Modify: `src/renderer/modules/state.js`
 - Modify: `src/renderer/modules/icons.js`
 - Modify: `src/renderer/modules/i18n.js`
-- Test: `test/renderer/mate-workbench-view.test.js`
+- Test: `test/renderer/cogseed-workbench-view.test.js`
 
 - [ ] 将默认导航从旧的个人本体/设置入口改为今日、对话、行动、认知、触点；保留既有功能的深链兼容但不保留旧布局。
 - [ ] 以共享 layout、surface、status、timeline、decision、task 和 empty-state 类构建页面，不新增重复 card/button 体系。
@@ -128,8 +128,8 @@
 ## Task 7: 重做认知与触点页面
 
 **Files:**
-- Create: `src/renderer/modules/cognition/mate-cognition.js`
-- Create: `src/renderer/modules/cognition/mate-cognition-view.js`
+- Create: `src/renderer/modules/cognition/cogseed-cognition.js`
+- Create: `src/renderer/modules/cognition/cogseed-cognition-view.js`
 - Create: `src/renderer/modules/touchpoints/touchpoint-center.js`
 - Create: `src/renderer/modules/touchpoints/touchpoint-feishu.js`
 - Modify: `src/renderer/modules/personal-ontology.js`
@@ -138,7 +138,7 @@
 - Modify: `src/renderer/index.html`
 - Modify: `src/renderer/style.css`
 - Test: `test/renderer/touchpoint-center.test.js`
-- Test: `test/renderer/mate-cognition-view.test.js`
+- Test: `test/renderer/cogseed-cognition-view.test.js`
 
 - [ ] 认知页按对象、事实、证据和状态展示，支持确认、编辑、拒绝、遗忘，并回到统一命令。
 - [ ] 触点页展示身份、授权资源、主动联系规则、送达诊断和历史，不展示 token 或内部 connector 原始状态。
@@ -180,7 +180,7 @@
 ## Task 10: 真实环境验收与回归
 
 **Files:**
-- Modify: `scripts/restart-mate.sh`
+- Modify: `scripts/restart-cogseed.sh`
 - Create: `scripts/verify-feishu-touchpoint.mjs`
 - Create: `docs/superpowers/runbooks/feishu-touchpoint-real-mode.md`
 - Test: `test/main/features/touchpoints/real-mode-contract.test.ts`
@@ -188,6 +188,6 @@
 - [ ] 运行 `npm run typecheck`。
 - [ ] 运行个人上下文、messaging、touchpoint 和 renderer 聚焦测试。
 - [ ] 运行 `npm test`，对既有环境相关失败逐项分类，不把环境失败归因于新代码。
-- [ ] 运行 `scripts/restart-mate.sh`，检查 `~/.orkas/runtime-variants/messaging/data/logs/<date>.log` 和 `/tmp/mate-agent-messaging-run.log`。
+- [ ] 运行 `scripts/restart-cogseed.sh`，检查 `~/.cogseed/runtime-variants/messaging/data/logs/<date>.log` 和 `/tmp/cogseed-agent-messaging-run.log`。
 - [ ] 在真实 Feishu profile 下验证 OAuth、资源读取、首次回填、简报投递、卡片动作、任务审批、结果回报、撤销授权和离线排队。
 - [ ] 验收失败必须显示具体阶段、请求相关 id、bridge 状态和恢复动作，日志不包含 token 或消息正文。

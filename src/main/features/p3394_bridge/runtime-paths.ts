@@ -3,13 +3,13 @@
  *
  * Shared by app-wiring / session-store / kstar-episodes so every piece of the
  * bridge lands in the same per-variant directory. The variant name comes from
- * the app launcher (--orkas-runtime-variant) or the classic env fallback.
+ * the app launcher (--cogseed-runtime-variant) or the classic env fallback.
  */
 import * as os from 'node:os';
 import * as path from 'node:path';
 
 export function variantRoot(): string {
-  const variant = process.env.ORKAS_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT || 'cogseed';
+  const variant = process.env.COGSEED_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT || 'cogseed';
   return path.join(os.homedir(), '.cogseed', 'runtime-variants', variant);
 }
 

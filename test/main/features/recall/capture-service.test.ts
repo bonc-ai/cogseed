@@ -119,9 +119,9 @@ const reviewableCandidateContract = {
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-recall-capture-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-recall-capture-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   mocks.configured = true;
   mocks.oauthExpired = null;
   mocks.getMessages.mockReset().mockResolvedValue(messages);
@@ -159,8 +159,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

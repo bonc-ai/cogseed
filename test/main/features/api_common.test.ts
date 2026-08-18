@@ -32,14 +32,14 @@ describe('api_common client metadata cache', () => {
 
     const first = apiCommon.commonHeaders();
     mocks.getCurrentLang.mockReturnValue('zh');
-    first['Orkas-App-Version'] = 'mutated-by-caller';
+    first['CogSeed-App-Version'] = 'mutated-by-caller';
     const second = apiCommon.commonHeaders();
 
     expect(second).toMatchObject({
-      'Orkas-App-Version': '2.0.0',
-      'Orkas-Platform': 'mac',
-      'Orkas-OS-Version': '15.5',
-      'Orkas-Channel': 'open',
+      'CogSeed-App-Version': '2.0.0',
+      'CogSeed-Platform': 'mac',
+      'CogSeed-OS-Version': '15.5',
+      'CogSeed-Channel': 'open',
       'Accept-Language': 'zh',
     });
     expect(mocks.getVersion).toHaveBeenCalledTimes(1);

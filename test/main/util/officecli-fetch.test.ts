@@ -5,12 +5,12 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-officecli-fetch-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-officecli-fetch-'));
 });
 
 afterEach(() => {

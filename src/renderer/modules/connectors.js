@@ -87,15 +87,15 @@ function _connectorsRenderCacheKey() {
   const uid = (typeof currentUserId === 'string' && currentUserId)
     ? currentUserId
     : ((typeof globalThis.currentUserId === 'string' && globalThis.currentUserId) ? globalThis.currentUserId : 'local');
-  return `orkas.connectors.renderCache.v${_CONNECTORS_RENDER_CACHE_VERSION}.${uid}`;
+  return `cogseed.connectors.renderCache.v${_CONNECTORS_RENDER_CACHE_VERSION}.${uid}`;
 }
 
 function _purgeLegacyConnectorsRenderCaches() {
   if (_connectorsLegacyCachePurged) return;
   _connectorsLegacyCachePurged = true;
   try {
-    const prefix = 'orkas.connectors.renderCache.v';
-    const currentPrefix = `orkas.connectors.renderCache.v${_CONNECTORS_RENDER_CACHE_VERSION}.`;
+    const prefix = 'cogseed.connectors.renderCache.v';
+    const currentPrefix = `cogseed.connectors.renderCache.v${_CONNECTORS_RENDER_CACHE_VERSION}.`;
     const doomed = [];
     for (let i = 0; i < localStorage.length; i += 1) {
       const key = localStorage.key(i);

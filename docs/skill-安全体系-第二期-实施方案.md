@@ -74,7 +74,7 @@ reconcile 不在其中。agent 侧同理：`_pullAgentLocked` 也不调 `validat
 
 | 出口 | 位置 | 消费方 |
 |---|---|---|
-| `listSkillsForBridge` | `skill-registry.ts:1091` | CLI agent（orkas-bridge） |
+| `listSkillsForBridge` | `skill-registry.ts:1091` | CLI agent（cogseed-bridge） |
 | `listSkillSpecs` | `skill-registry.ts:1258` | bus 算 runtime skill list |
 | `listSkillSpecsForAgentMetadata` | `skill-registry.ts:1285` | agent 元数据 / 编辑面 |
 | `searchOpenTierSkills` | `skill-registry.ts:643` | 按需搜索（`trustedIds` 只用于去重，不扣留） |
@@ -126,7 +126,7 @@ Quarantine 修的是一个**时间窗口**：install 先解压到最终位置
 
 所以扣留检查加在同一个 guard 里即可，`bin/run-skill.cjs` 保持不动。
 Runtime worker 侧另有一条路
-（`mate_agent_runtime/kernel/tools/skill-tools.ts:92`），需要单独接。
+（`cogseed_runtime/kernel/tools/skill-tools.ts:92`），需要单独接。
 
 ---
 

@@ -1,17 +1,17 @@
 import { safeId } from '../../storage';
 import type {
-  MateActorRole,
-  MateMemberSession,
-  MateSessionKind,
-  MateSessionLineage,
-  MateSessionRecord,
+  CogSeedActorRole,
+  CogSeedMemberSession,
+  CogSeedSessionKind,
+  CogSeedSessionLineage,
+  CogSeedSessionRecord,
 } from './types';
 
-export interface MateSessionIdentity {
+export interface CogSeedSessionIdentity {
   externalSessionId: string;
   canonicalSessionId: string;
-  sessionKind: MateSessionKind;
-  actorRole: MateActorRole;
+  sessionKind: CogSeedSessionKind;
+  actorRole: CogSeedActorRole;
   actorId?: string;
   conversationId?: string;
 }
@@ -21,19 +21,19 @@ function assertSafePart(value: string, label: string): string {
   return value;
 }
 
-export function buildMateCommanderSessionId(conversationId: string): string {
-  return `mate-session-gconv-${assertSafePart(conversationId, 'conversation id')}`;
+export function buildCogSeedCommanderSessionId(conversationId: string): string {
+  return `cogseed-session-gconv-${assertSafePart(conversationId, 'conversation id')}`;
 }
 
-export function buildMateMemberSessionId(conversationId: string, actorId: string): string {
-  return `mate-session-gmember-${assertSafePart(conversationId, 'conversation id')}-${assertSafePart(actorId, 'actor id')}`;
+export function buildCogSeedMemberSessionId(conversationId: string, actorId: string): string {
+  return `cogseed-session-gmember-${assertSafePart(conversationId, 'conversation id')}-${assertSafePart(actorId, 'actor id')}`;
 }
 
-export function buildMateCommanderCompatibilityId(conversationId: string): string {
+export function buildCogSeedCommanderCompatibilityId(conversationId: string): string {
   return `gconv-${assertSafePart(conversationId, 'conversation id')}`;
 }
 
-export function buildMateMemberCompatibilityId(conversationId: string, actorId: string): string {
+export function buildCogSeedMemberCompatibilityId(conversationId: string, actorId: string): string {
   return `gmember-${assertSafePart(conversationId, 'conversation id')}-${assertSafePart(actorId, 'actor id')}`;
 }
 
@@ -49,18 +49,18 @@ function parseMemberAlias(sessionId: string): { conversationId: string; actorId:
 }
 
 function parseCanonicalMember(sessionId: string): { conversationId: string; actorId: string } {
-  const alias = `gmember-${sessionId.slice('mate-session-gmember-'.length)}`;
+  const alias = `gmember-${sessionId.slice('cogseed-session-gmember-'.length)}`;
   return parseMemberAlias(alias);
 }
 
-export function resolveMateSessionIdentity(sessionId: string): MateSessionIdentity {
+export function resolveCogSeedSessionIdentity(sessionId: string): CogSeedSessionIdentity {
   const externalSessionId = assertSafePart(String(sessionId || ''), 'session id');
   if (externalSessionId.startsWith('gconv-')) {
     const conversationId = assertSafePart(externalSessionId.slice('gconv-'.length), 'conversation id');
     if (!conversationId) throw new Error('invalid CogSeed gconv session id');
     return {
       externalSessionId,
-      canonicalSessionId: buildMateCommanderSessionId(conversationId),
+      canonicalSessionId: buildCogSeedCommanderSessionId(conversationId),
       sessionKind: 'commander',
       actorRole: 'commander',
       actorId: 'commander',
@@ -71,15 +71,15 @@ export function resolveMateSessionIdentity(sessionId: string): MateSessionIdenti
     const { conversationId, actorId } = parseMemberAlias(externalSessionId);
     return {
       externalSessionId,
-      canonicalSessionId: buildMateMemberSessionId(conversationId, actorId),
+      canonicalSessionId: buildCogSeedMemberSessionId(conversationId, actorId),
       sessionKind: 'member',
       actorRole: 'member',
       actorId,
       conversationId,
     };
   }
-  if (externalSessionId.startsWith('mate-session-gconv-')) {
-    const conversationId = assertSafePart(externalSessionId.slice('mate-session-gconv-'.length), 'conversation id');
+  if (externalSessionId.startsWith('cogseed-session-gconv-')) {
+    const conversationId = assertSafePart(externalSessionId.slice('cogseed-session-gconv-'.length), 'conversation id');
     if (!conversationId) throw new Error('invalid CogSeed commander session id');
     return {
       externalSessionId,
@@ -90,7 +90,7 @@ export function resolveMateSessionIdentity(sessionId: string): MateSessionIdenti
       conversationId,
     };
   }
-  if (externalSessionId.startsWith('mate-session-gmember-')) {
+  if (externalSessionId.startsWith('cogseed-session-gmember-')) {
     const { conversationId, actorId } = parseCanonicalMember(externalSessionId);
     return {
       externalSessionId,
@@ -101,7 +101,7 @@ export function resolveMateSessionIdentity(sessionId: string): MateSessionIdenti
       conversationId,
     };
   }
-  if (externalSessionId.startsWith('mate-session-')) {
+  if (externalSessionId.startsWith('cogseed-session-')) {
     return {
       externalSessionId,
       canonicalSessionId: externalSessionId,
@@ -112,10 +112,10 @@ export function resolveMateSessionIdentity(sessionId: string): MateSessionIdenti
   throw new Error('invalid CogSeed session id');
 }
 
-export function hydrateMateSessionRecord(
-  row: Partial<MateSessionRecord> & Pick<MateSessionRecord, 'sessionId' | 'runtimeSessionId' | 'ownerId' | 'createdAt' | 'updatedAt'>,
-): MateSessionRecord {
-  const identity = resolveMateSessionIdentity(row.compatibilitySessionId || row.sessionId);
+export function hydrateCogSeedSessionRecord(
+  row: Partial<CogSeedSessionRecord> & Pick<CogSeedSessionRecord, 'sessionId' | 'runtimeSessionId' | 'ownerId' | 'createdAt' | 'updatedAt'>,
+): CogSeedSessionRecord {
+  const identity = resolveCogSeedSessionIdentity(row.compatibilitySessionId || row.sessionId);
   return {
     ...row,
     sessionId: row.sessionId || identity.canonicalSessionId,
@@ -131,15 +131,15 @@ export function hydrateMateSessionRecord(
       : {}),
     lifecycleState: row.lifecycleState || 'active',
     ...(row.roster ? { roster: row.roster } : identity.sessionKind === 'commander' ? { roster: [] } : {}),
-  } as MateSessionRecord;
+  } as CogSeedSessionRecord;
 }
 
 export function taskLineageFromSession(
-  session: Pick<MateSessionRecord, 'sessionId' | 'lineage'>,
-): MateSessionLineage & { sessionId: string } {
+  session: Pick<CogSeedSessionRecord, 'sessionId' | 'lineage'>,
+): CogSeedSessionLineage & { sessionId: string } {
   return { sessionId: session.sessionId, ...(session.lineage || {}) };
 }
 
-export function isMateMemberSession(session: MateSessionRecord): session is MateMemberSession {
+export function isCogSeedMemberSession(session: CogSeedSessionRecord): session is CogSeedMemberSession {
   return session.sessionKind === 'member' && typeof session.actorId === 'string' && typeof session.commanderSessionId === 'string';
 }

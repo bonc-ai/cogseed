@@ -36,7 +36,7 @@ vi.mock("../../../../src/main/features/p3394/wake-service", () => ({
   resetWakeApproval: mocks.resetWakeApproval,
 }));
 vi.mock("../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher", () => ({
-  mateWakeDispatcher: { dispatch: mocks.cogseedDispatch },
+  cogseedWakeDispatcher: { dispatch: mocks.cogseedDispatch },
 }));
 vi.mock("../../../../src/main/features/group_chat/state", () => ({
   COMMANDER_ID: "commander",

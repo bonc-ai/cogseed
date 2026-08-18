@@ -190,7 +190,7 @@ function dispatchManageClick(
 
 function mockExpenseHost(preload: ReturnType<typeof loadPreload>): void {
   preload.ipcRenderer.invoke.mockImplementation(async (channel: string) => {
-    if (channel === 'orkas.expenseWorkbenchHost.prepareOpen') {
+    if (channel === 'cogseed.expenseWorkbenchHost.prepareOpen') {
       return {
         ok: true,
         open_ticket: OPEN_TICKET,
@@ -198,7 +198,7 @@ function mockExpenseHost(preload: ReturnType<typeof loadPreload>): void {
         expires_at: '2026-08-04T00:00:15.000Z',
       };
     }
-    if (channel === 'orkas.expenseWorkbenchHost.open') {
+    if (channel === 'cogseed.expenseWorkbenchHost.open') {
       return {
         ok: true,
         host_capability: HOST_CAPABILITY,
@@ -235,11 +235,11 @@ describe('preload bridge', () => {
     expect(invalid.exposed.__cogseedI18nBoot).toBeNull();
   });
 
-  it('no longer exposes the legacy orkas bridge alias', () => {
-    // 兼容别名已删除（2026-08-17）：window.orkas 不再暴露，渲染层唯一桥
+  it('no longer exposes the legacy cogseed bridge alias', () => {
+    // 兼容别名已删除（2026-08-17）：window.cogseed 不再暴露，渲染层唯一桥
     // 是 window.cogseed。
     const { exposed } = loadPreload();
-    expect(exposed.orkas).toBeUndefined();
+    expect(exposed.cogseed).toBeUndefined();
     expect(exposed.cogseed).toBeDefined();
   });
 
@@ -265,8 +265,8 @@ describe('preload bridge', () => {
     await expect(api.expenseWorkbench.open(EXPENSE_AGENT_ID))
       .rejects.toThrow('authorization is missing');
     expect(ipcRenderer.invoke.mock.calls.some(([channel]) => (
-      channel === 'orkas.expenseWorkbenchHost.prepareOpen'
-      || channel === 'orkas.expenseWorkbenchHost.open'
+      channel === 'cogseed.expenseWorkbenchHost.prepareOpen'
+      || channel === 'cogseed.expenseWorkbenchHost.open'
     ))).toBe(false);
   });
 
@@ -277,7 +277,7 @@ describe('preload bridge', () => {
     await expect(preload.api.expenseWorkbench.prepareOpen(EXPENSE_AGENT_ID, 'agent_detail'))
       .rejects.toThrow('trusted user action');
     expect(preload.ipcRenderer.invoke).not.toHaveBeenCalledWith(
-      'orkas.expenseWorkbenchHost.prepareOpen',
+      'cogseed.expenseWorkbenchHost.prepareOpen',
       expect.anything(),
     );
   });
@@ -373,7 +373,7 @@ describe('preload bridge', () => {
     await expect(preload.api.expenseWorkbench.prepareOpen('ordinary-agent', 'agent_detail'))
       .rejects.toThrow('trusted user action');
     expect(preload.ipcRenderer.invoke).not.toHaveBeenCalledWith(
-      'orkas.expenseWorkbenchHost.prepareOpen',
+      'cogseed.expenseWorkbenchHost.prepareOpen',
       expect.anything(),
     );
   });

@@ -15,14 +15,14 @@ function sockPath(prefix: string): string {
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-interop-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -131,7 +131,7 @@ async function setupCursorFixture(
   const bridgeB = new m.bridgeModule.P3394BridgeKernel();
   bridgeB.registry.register({ identity: { agent_id: 'node-a', display_name: 'A' }, manifest: manifest(m.manifestModule, 'node-a') });
   bridgeB.registry.register({ identity: { agent_id: 'node-b', display_name: 'B' }, manifest: manifest(m.manifestModule, 'node-b') });
-  const controllerB = m.controllerModule.createMateRuntimeController({ runtime });
+  const controllerB = m.controllerModule.createCogSeedRuntimeController({ runtime });
   const adapterB = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controllerB, pollIntervalMs: 10 });
   const channelBIn = new m.socketModule.P3394UnixSocketChannel(prefix + '-b-in', { socketPath: inbound, token: 'tok' });
   let channelBOut = new m.socketModule.P3394UnixSocketChannel(prefix + '-b-out-1', { socketPath: outbound, token: 'tok' });
@@ -202,7 +202,7 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
       };
       yield { type: 'result', status: 'completed', text: 'node-b answer', metadata: {} };
     }) };
-    const controllerB = m.controllerModule.createMateRuntimeController({ runtime: runtimeB });
+    const controllerB = m.controllerModule.createCogSeedRuntimeController({ runtime: runtimeB });
     const adapterB = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controllerB, pollIntervalMs: 20 });
 
     const channelBIn = new m.socketModule.P3394UnixSocketChannel('node-b-in', { socketPath: inbound, token: 'tok' });
@@ -333,7 +333,7 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
     const runtimeB = { shutdown: async () => {}, run: vi.fn(async function* () {
       yield { type: 'result', status: 'completed', text: 'once', metadata: {} };
     }) };
-    const controllerB = m.controllerModule.createMateRuntimeController({ runtime: runtimeB });
+    const controllerB = m.controllerModule.createCogSeedRuntimeController({ runtime: runtimeB });
     const adapterB = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controllerB, pollIntervalMs: 20 });
     const channelB = new m.socketModule.P3394UnixSocketChannel('node-b', { socketPath: inbound, token: 'tok' });
     const executorB = new m.executorModule.P3394BridgeExecutor({ bridge: bridgeB, runtime: adapterB });
@@ -363,7 +363,7 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
     const runtimeB = { shutdown: async () => {}, run: vi.fn(async function* () {
       yield { type: 'result', status: 'completed', text: 'once after recovery', metadata: {} };
     }) };
-    const controllerB = m.controllerModule.createMateRuntimeController({ runtime: runtimeB });
+    const controllerB = m.controllerModule.createCogSeedRuntimeController({ runtime: runtimeB });
     const adapterB = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controllerB, pollIntervalMs: 20 });
     const channelB1 = new m.socketModule.P3394UnixSocketChannel('node-b-1', { socketPath: inbound, token: 'tok', reconnectBaseMs: 30 });
     const executorB = new m.executorModule.P3394BridgeExecutor({ bridge: bridgeB, runtime: adapterB });
@@ -405,7 +405,7 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
         yield { type: 'event', status: 'running', text: 'still going', metadata: {} };
       }
     }) };
-    const controllerB = m.controllerModule.createMateRuntimeController({ runtime: runtimeB });
+    const controllerB = m.controllerModule.createCogSeedRuntimeController({ runtime: runtimeB });
     const adapterB = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controllerB, pollIntervalMs: 20 });
     const channelB = new m.socketModule.P3394UnixSocketChannel('node-b', { socketPath: inbound, token: 'tok' });
     const executorB = new m.executorModule.P3394BridgeExecutor({ bridge: bridgeB, runtime: adapterB });
@@ -438,7 +438,7 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
     const runtimeB = { shutdown: async () => {}, run: vi.fn(async function* () {
       yield { type: 'result', status: 'completed', text: 'done', metadata: {} };
     }) };
-    const controllerB = m.controllerModule.createMateRuntimeController({ runtime: runtimeB });
+    const controllerB = m.controllerModule.createCogSeedRuntimeController({ runtime: runtimeB });
     const adapterB = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controllerB, pollIntervalMs: 20 });
     const channelB = new m.socketModule.P3394UnixSocketChannel('node-b', { socketPath: inbound, token: 'tok' });
     const executorB = new m.executorModule.P3394BridgeExecutor({ bridge: bridgeB, runtime: adapterB });
@@ -465,16 +465,16 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
     const snapshot = await adapterB.snapshot('ses-interop-1');
     const tasks = snapshot.state as { tasks: Array<{ task_id: string }> };
     expect(tasks.tasks.length).toBeGreaterThan(0);
-    const mateTaskId = tasks.tasks[0].task_id;
+    const cogseedTaskId = tasks.tasks[0].task_id;
 
     await executorB.closeSession('ses-interop-1');
     expect(executorB.sessions.require('ses-interop-1').state).toBe('closed');
     expect(executorB.kstar.list()).toHaveLength(1);
     await expect(adapterB.snapshot('ses-interop-1')).rejects.toThrow('p3394_session_not_found');
 
-    const executionModule = await import('../../../../src/main/features/cogseed_backend/mate-execution-store');
+    const executionModule = await import('../../../../src/main/features/cogseed_backend/cogseed-execution-store');
     const taskStore = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const taskRecord = await taskStore.readMateTask(UID, mateTaskId);
+    const taskRecord = await taskStore.readCogSeedTask(UID, cogseedTaskId);
     const record = await executionModule.read(UID, taskRecord!.executionId!);
     expect(record.status).toBe('completed');
 
@@ -489,7 +489,7 @@ describe('P3394 peer-to-peer interoperability (Phase 5)', () => {
     bridgeB.registry.register({ identity: { agent_id: 'node-a', display_name: 'A' }, manifest: manifest(m.manifestModule, 'node-a') });
     bridgeB.registry.register({ identity: { agent_id: 'node-b', display_name: 'B' }, manifest: manifest(m.manifestModule, 'node-b') });
     const runtimeB = { shutdown: async () => {}, run: vi.fn(async function* () {}) };
-    const controllerB = m.controllerModule.createMateRuntimeController({ runtime: runtimeB });
+    const controllerB = m.controllerModule.createCogSeedRuntimeController({ runtime: runtimeB });
     const adapterB = new m.adapterModule.P3394CogseedRuntimeAdapter({ userId: () => UID, controller: controllerB, pollIntervalMs: 20 });
     const channelB = new m.socketModule.P3394UnixSocketChannel('node-b', { socketPath: inbound, token: 'tok' });
     const seen: string[] = [];

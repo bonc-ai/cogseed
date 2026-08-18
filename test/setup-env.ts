@@ -1,10 +1,10 @@
 /**
- * Vitest setup: force `ORKAS_WORKSPACE_ROOT` to a per-run tmp dir before
+ * Vitest setup: force `COGSEED_WORKSPACE_ROOT` to a per-run tmp dir before
  * any test module (and therefore `src/main/paths.ts`) is imported.
  *
  * Why this is a hard requirement, not a "nice to have":
  * `paths.ts` resolves `WS_ROOT` as a *top-level module constant* from
- * `process.env.ORKAS_WORKSPACE_ROOT` at import time, and dozens of derived
+ * `process.env.COGSEED_WORKSPACE_ROOT` at import time, and dozens of derived
  * paths (`USERS_FILE`, `userRoot(uid)`, ...) close over it. Whichever test
  * imports `paths` (or anything that transitively loads it) *first* freezes
  * `WS_ROOT`. If that first import happens before the test's own
@@ -13,7 +13,7 @@
  * then clobbers the developer's real `users.json` and spawns a new uid
  * skeleton under `PC/data/`.
  *
- * The same applies to an `ORKAS_WORKSPACE_ROOT` inherited from the parent
+ * The same applies to an `COGSEED_WORKSPACE_ROOT` inherited from the parent
  * shell, which is why the assignment below is unconditional rather than a
  * fallback — see the comment there.
  *
@@ -61,7 +61,7 @@ if (process.platform === 'win32') {
   };
   electronLog.transports.file.level = false;
   const mutableFs = require('node:fs') as typeof fs & Record<PropertyKey, unknown>;
-  const retryMarker = Symbol.for('orkas.test.windows-temp-rm-retry');
+  const retryMarker = Symbol.for('cogseed.test.windows-temp-rm-retry');
   if (!mutableFs[retryMarker]) {
     const originalRmSync = mutableFs.rmSync.bind(mutableFs);
     const containsDirectoriesOnly = (root: string): boolean => {
@@ -116,13 +116,13 @@ if (process.platform === 'win32') {
 }
 
 // Unconditional. An inherited value is exactly the case that must not win:
-// `index.ts` exports `ORKAS_WORKSPACE_ROOT` into the app's own environment, so
-// every process Orkas spawns — including a coding agent asked to work on this
+// `index.ts` exports `COGSEED_WORKSPACE_ROOT` into the app's own environment, so
+// every process CogSeed spawns — including a coding agent asked to work on this
 // repo — inherits the live data root. Honouring it here froze `WS_ROOT` to
-// `~/.orkas/data` and let the suite write signals, uid skeletons, and a
+// `~/.cogseed/data` and let the suite write signals, uid skeletons, and a
 // rewritten `current_user_id` straight into the user's real profile.
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-vitest-'));
-process.env.ORKAS_WORKSPACE_ROOT = tmpRoot;
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-vitest-'));
+process.env.COGSEED_WORKSPACE_ROOT = tmpRoot;
 
 // Same inheritance, sharper edge: `users.activateUser()` pins
 // `CORE_AGENT_AUTH_DIR` to the active user's `<uid>/local/config/`, and the

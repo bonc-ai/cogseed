@@ -319,14 +319,14 @@ function localRedLines(skillDir: string): string[] {
 /**
  * Root of the guardrail bundle.
  *
- * `ORKAS_GUARDRAIL_DIR` lets a private deployment keep the closed-source scanner
+ * `COGSEED_GUARDRAIL_DIR` lets a private deployment keep the closed-source scanner
  * outside the repository tree — that is the whole point of the override, so an
  * open-source checkout can omit the component while a private build points at
  * it. Falls back to the packaged location, which is what every current build
  * uses.
  */
 function guardrailRoot(): string {
-  const override = (process.env.ORKAS_GUARDRAIL_DIR || '').trim();
+  const override = (process.env.COGSEED_GUARDRAIL_DIR || '').trim();
   return override || packagedGuardrailDir();
 }
 
@@ -362,7 +362,7 @@ export function scannerAvailability(): ScannerAvailability {
 }
 
 /**
- * The shared decision script, run by this adapter and by `bin/orkas-pkg.cjs`.
+ * The shared decision script, run by this adapter and by `bin/cogseed-pkg.cjs`.
  *
  * One script rather than one threshold per caller. The package CLI is a separate
  * Node process that cannot import this module, so the alternative was a second
@@ -435,7 +435,7 @@ function scannerAbsent(): SentryScanResult {
  * `Unknown` rather than `Blocked`. Threshold tightening still happens below.
  */
 // The scan driver now lives on disk at `resources/guardrail/scan_gate.py` so
-// that bin/orkas-pkg.cjs runs the same decision logic. See gateScript().
+// that bin/cogseed-pkg.cjs runs the same decision logic. See gateScript().
 
 
 /**

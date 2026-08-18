@@ -108,7 +108,7 @@ describe('CogSeed Runtime native execution loop', () => {
     }]);
     expect(model.seen[1].message).toContain('TOOL: alpha=42');
 
-    const sessionText = fs.readFileSync(paths.mateRuntimeSessionFile(UID, SESSION), 'utf8');
+    const sessionText = fs.readFileSync(paths.cogseedRuntimeSessionFile(UID, SESSION), 'utf8');
     expect(sessionText).toContain('Use explicit inputs only.');
     expect(sessionText).toContain('TOOL: alpha=42');
     expect(sessionText).toContain('Answer after tool.');

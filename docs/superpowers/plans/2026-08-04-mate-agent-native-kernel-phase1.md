@@ -4,7 +4,7 @@
 
 **Goal:** Add the first Mate Agent Native Kernel layer: stable kernel types, default config, a local-only Runtime session store, request-id ledger, and import-boundary tests without changing UI or replacing the current core-agent executor.
 
-**Architecture:** Create `src/main/features/mate_agent_runtime/kernel/` with a narrow `index.ts` factory and internal `types.ts`, `config.ts`, and `session-store.ts`. Phase 1 does not execute models or tools; it creates the native data contract and storage boundary that later phases will use.
+**Architecture:** Create `src/main/features/cogseed_runtime/kernel/` with a narrow `index.ts` factory and internal `types.ts`, `config.ts`, and `session-store.ts`. Phase 1 does not execute models or tools; it creates the native data contract and storage boundary that later phases will use.
 
 **Tech Stack:** Electron main TypeScript, existing `paths.ts`, `storage.ts`, JSONL files, Vitest via `npm run test:js`.
 
@@ -12,19 +12,19 @@
 
 ## File Structure
 
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/types.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/types.ts`
   - Owns Native Kernel request/event/session/policy types. Must not import `#core-agent`.
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/config.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/config.ts`
   - Owns default kernel config, concurrency config, and tool policy defaults.
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/session-store.ts`
-  - Owns native Runtime session header/history and request ledger under `<uid>/local/mate_runtime/`.
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/index.ts`
-  - Exposes `createMateAgentKernel` factory and prevents deep imports from becoming the app-level contract.
-- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/types-config.test.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/session-store.ts`
+  - Owns native Runtime session header/history and request ledger under `<uid>/local/cogseed_runtime/`.
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/index.ts`
+  - Exposes `createCogSeedAgentKernel` factory and prevents deep imports from becoming the app-level contract.
+- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/types-config.test.ts`
   - Verifies default policy/config and no forbidden fields.
-- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/session-store.test.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/session-store.test.ts`
   - Verifies local-only session storage, headers, ledger idempotency, legacy session handling, and concurrency safety.
-- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/import-boundary.test.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/import-boundary.test.ts`
   - Verifies kernel files do not import `features/group_chat`, `#core-agent`, or `model/client`.
 
 ---
@@ -32,13 +32,13 @@
 ### Task 1: Kernel Types and Config
 
 **Files:**
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/types.ts`
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/config.ts`
-- Test: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/types-config.test.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/types.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/config.ts`
+- Test: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/types-config.test.ts`
 
 - [x] **Step 1: Write the failing test**
 
-Create `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/types-config.test.ts`:
+Create `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/types-config.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -47,13 +47,13 @@ import {
   DEFAULT_RUNTIME_CONCURRENCY,
   DEFAULT_RUNTIME_KERNEL_CONFIG,
   DEFAULT_RUNTIME_TOOL_POLICY,
-} from '../../../../../src/main/features/mate_agent_runtime/kernel/config';
+} from '../../../../../src/main/features/cogseed_runtime/kernel/config';
 
 import type {
   RuntimeKernelEvent,
   RuntimeKernelRequest,
   RuntimeToolPolicy,
-} from '../../../../../src/main/features/mate_agent_runtime/kernel/types';
+} from '../../../../../src/main/features/cogseed_runtime/kernel/types';
 
 describe('Mate Agent Runtime native kernel config', () => {
   it('starts from least-privilege tool policy', () => {
@@ -113,14 +113,14 @@ describe('Mate Agent Runtime native kernel config', () => {
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/types-config.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/types-config.test.ts --maxWorkers=1
 ```
 
 Expected: FAIL with module-not-found for `kernel/config` or `kernel/types`.
 
 - [x] **Step 3: Add `types.ts`**
 
-Create `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/types.ts`:
+Create `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/types.ts`:
 
 ```ts
 import type { RuntimeAttachment, RuntimeContextItem } from '../protocol';
@@ -176,7 +176,7 @@ export interface RuntimeKernelRunOptions {
 export interface RuntimeKernelSessionSummary {
   runtimeSessionId: string;
   version: number;
-  kernel: 'mate-agent-native';
+  kernel: 'cogseed-agent-native';
   recordCount: number;
   lastRequestId?: string;
 }
@@ -184,7 +184,7 @@ export interface RuntimeKernelSessionSummary {
 
 - [x] **Step 4: Add `config.ts`**
 
-Create `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/config.ts`:
+Create `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/config.ts`:
 
 ```ts
 import type { RuntimeToolPolicy } from './types';
@@ -224,7 +224,7 @@ export const DEFAULT_RUNTIME_TOOL_POLICY: RuntimeToolPolicy = Object.freeze({
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/types-config.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/types-config.test.ts --maxWorkers=1
 ```
 
 Expected: PASS.
@@ -232,12 +232,12 @@ Expected: PASS.
 ### Task 2: Native Runtime Session Store
 
 **Files:**
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/session-store.ts`
-- Test: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/session-store.test.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/session-store.ts`
+- Test: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/session-store.test.ts`
 
 - [x] **Step 1: Write the failing test**
 
-Create `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/session-store.test.ts`:
+Create `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/session-store.test.ts`:
 
 ```ts
 import { afterEach, describe, expect, it } from 'vitest';
@@ -251,7 +251,7 @@ import {
   createNativeRuntimeSession,
   readNativeRuntimeSession,
   runtimeRequestLedgerFile,
-} from '../../../../../src/main/features/mate_agent_runtime/kernel/session-store';
+} from '../../../../../src/main/features/cogseed_runtime/kernel/session-store';
 
 const UID = 'native-kernel-session-user';
 
@@ -260,12 +260,12 @@ afterEach(() => {
 });
 
 describe('native Runtime session store', () => {
-  it('creates a native header under local/mate_runtime/sessions', async () => {
+  it('creates a native header under local/cogseed_runtime/sessions', async () => {
     const sid = 'mruntime-native1';
     await createNativeRuntimeSession(UID, sid, '2026-08-04T00:00:00');
 
-    const file = paths.mateRuntimeSessionFile(UID, sid);
-    expect(file).toBe(path.join(paths.userLocalRoot(UID), 'mate_runtime', 'sessions', `${sid}.jsonl`));
+    const file = paths.cogseedRuntimeSessionFile(UID, sid);
+    expect(file).toBe(path.join(paths.userLocalRoot(UID), 'cogseed_runtime', 'sessions', `${sid}.jsonl`));
     expect(fs.existsSync(file)).toBe(true);
     expect(fs.existsSync(paths.userSessionFile(UID, sid))).toBe(false);
 
@@ -273,7 +273,7 @@ describe('native Runtime session store', () => {
     expect(session.header).toEqual({
       type: 'session_header',
       version: 1,
-      kernel: 'mate-agent-native',
+      kernel: 'cogseed-agent-native',
       runtime_session_id: sid,
       created_at: '2026-08-04T00:00:00',
     });
@@ -314,7 +314,7 @@ describe('native Runtime session store', () => {
 
   it('refuses to treat legacy core-agent-shaped mruntime files as native history', async () => {
     const sid = 'mruntime-legacy';
-    const file = paths.mateRuntimeSessionFile(UID, sid);
+    const file = paths.cogseedRuntimeSessionFile(UID, sid);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ role: 'user', content: 'legacy core-agent line' }) + '\n');
 
@@ -328,29 +328,29 @@ describe('native Runtime session store', () => {
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/session-store.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/session-store.test.ts --maxWorkers=1
 ```
 
 Expected: FAIL with module-not-found for `kernel/session-store`.
 
 - [x] **Step 3: Add native session store implementation**
 
-Create `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/session-store.ts` with these exports:
+Create `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/session-store.ts` with these exports:
 
 ```ts
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import {
-  mateRuntimeRoot,
-  mateRuntimeSessionFile,
+  cogseedRuntimeRoot,
+  cogseedRuntimeSessionFile,
 } from '../../../paths';
 import { appendJsonl, readJson, safeId, writeJson } from '../../../storage';
 
 export interface NativeRuntimeSessionHeader {
   type: 'session_header';
   version: 1;
-  kernel: 'mate-agent-native';
+  kernel: 'cogseed-agent-native';
   runtime_session_id: string;
   created_at: string;
 }
@@ -398,7 +398,7 @@ function assertRunId(runId: string): string {
 }
 
 export function runtimeRequestLedgerFile(uid: string): string {
-  return path.join(mateRuntimeRoot(uid), 'request-ledger.json');
+  return path.join(cogseedRuntimeRoot(uid), 'request-ledger.json');
 }
 
 async function readLedger(uid: string): Promise<Record<string, RequestLedgerEntry>> {
@@ -433,7 +433,7 @@ export async function claimRuntimeRequest(
 
 export async function createNativeRuntimeSession(uid: string, runtimeSessionId: string, createdAt: string): Promise<void> {
   assertRuntimeSessionId(runtimeSessionId);
-  const file = mateRuntimeSessionFile(uid, runtimeSessionId);
+  const file = cogseedRuntimeSessionFile(uid, runtimeSessionId);
   try {
     await fs.access(file);
     await readNativeRuntimeSession(uid, runtimeSessionId);
@@ -444,7 +444,7 @@ export async function createNativeRuntimeSession(uid: string, runtimeSessionId: 
   const header: NativeRuntimeSessionHeader = {
     type: 'session_header',
     version: 1,
-    kernel: 'mate-agent-native',
+    kernel: 'cogseed-agent-native',
     runtime_session_id: runtimeSessionId,
     created_at: createdAt,
   };
@@ -455,16 +455,16 @@ export async function appendNativeSessionRecord(uid: string, runtimeSessionId: s
   assertRuntimeSessionId(runtimeSessionId);
   assertRuntimeRequestId(record.request_id);
   await readNativeRuntimeSession(uid, runtimeSessionId);
-  await appendJsonl(mateRuntimeSessionFile(uid, runtimeSessionId), record);
+  await appendJsonl(cogseedRuntimeSessionFile(uid, runtimeSessionId), record);
 }
 
 export async function readNativeRuntimeSession(uid: string, runtimeSessionId: string): Promise<NativeRuntimeSessionReadResult> {
   assertRuntimeSessionId(runtimeSessionId);
-  const file = mateRuntimeSessionFile(uid, runtimeSessionId);
+  const file = cogseedRuntimeSessionFile(uid, runtimeSessionId);
   const text = await fs.readFile(file, 'utf8');
   const records = text.split('\n').filter(Boolean).map((line) => JSON.parse(line)) as NativeRuntimeSessionRecord[];
   const header = records[0] as NativeRuntimeSessionHeader | undefined;
-  if (!header || header.type !== 'session_header' || header.kernel !== 'mate-agent-native') {
+  if (!header || header.type !== 'session_header' || header.kernel !== 'cogseed-agent-native') {
     throw new Error('legacy core-agent runtime session cannot be read as native history');
   }
   return { header, records };
@@ -476,7 +476,7 @@ export async function readNativeRuntimeSession(uid: string, runtimeSessionId: st
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/session-store.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/session-store.test.ts --maxWorkers=1
 ```
 
 Expected: PASS.
@@ -484,21 +484,21 @@ Expected: PASS.
 ### Task 3: Kernel Factory Boundary
 
 **Files:**
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/index.ts`
-- Test: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/import-boundary.test.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/index.ts`
+- Test: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/import-boundary.test.ts`
 
 - [x] **Step 1: Write the failing boundary test**
 
-Create `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/import-boundary.test.ts`:
+Create `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/import-boundary.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { createMateAgentKernel } from '../../../../../src/main/features/mate_agent_runtime/kernel';
+import { createCogSeedAgentKernel } from '../../../../../src/main/features/cogseed_runtime/kernel';
 
-const kernelRoot = path.join(process.cwd(), 'src/main/features/mate_agent_runtime/kernel');
+const kernelRoot = path.join(process.cwd(), 'src/main/features/cogseed_runtime/kernel');
 
 function tsFiles(dir: string): string[] {
   const out: string[] = [];
@@ -512,7 +512,7 @@ function tsFiles(dir: string): string[] {
 
 describe('native Runtime kernel import boundary', () => {
   it('exposes a single factory entrypoint', () => {
-    const kernel = createMateAgentKernel();
+    const kernel = createCogSeedAgentKernel();
     expect(typeof kernel.run).toBe('function');
     expect(typeof kernel.cancel).toBe('function');
     expect(typeof kernel.getSession).toBe('function');
@@ -536,14 +536,14 @@ describe('native Runtime kernel import boundary', () => {
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/import-boundary.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/import-boundary.test.ts --maxWorkers=1
 ```
 
 Expected: FAIL with module-not-found for `kernel/index.ts`.
 
 - [x] **Step 3: Add factory entrypoint**
 
-Create `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/index.ts`:
+Create `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/index.ts`:
 
 ```ts
 import type {
@@ -554,13 +554,13 @@ import type {
 } from './types';
 import { readNativeRuntimeSession } from './session-store';
 
-export interface MateAgentKernel {
+export interface CogSeedAgentKernel {
   run(request: RuntimeKernelRequest, options?: RuntimeKernelRunOptions): AsyncIterable<RuntimeKernelEvent>;
   cancel(requestId: string): Promise<void>;
   getSession(userId: string, runtimeSessionId: string): Promise<RuntimeKernelSessionSummary>;
 }
 
-export interface MateAgentKernelDeps {}
+export interface CogSeedAgentKernelDeps {}
 
 async function* unsupportedNativeRun(request: RuntimeKernelRequest): AsyncIterable<RuntimeKernelEvent> {
   yield {
@@ -572,7 +572,7 @@ async function* unsupportedNativeRun(request: RuntimeKernelRequest): AsyncIterab
   };
 }
 
-export function createMateAgentKernel(_deps: MateAgentKernelDeps = {}): MateAgentKernel {
+export function createCogSeedAgentKernel(_deps: CogSeedAgentKernelDeps = {}): CogSeedAgentKernel {
   return {
     run: unsupportedNativeRun,
     async cancel(_requestId: string): Promise<void> {},
@@ -595,7 +595,7 @@ export function createMateAgentKernel(_deps: MateAgentKernelDeps = {}): MateAgen
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/import-boundary.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/import-boundary.test.ts --maxWorkers=1
 ```
 
 Expected: PASS.
@@ -610,7 +610,7 @@ Expected: PASS.
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel --maxWorkers=1
 ```
 
 Expected: all Phase 1 kernel tests pass.
@@ -620,7 +620,7 @@ Expected: all Phase 1 kernel tests pass.
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime --maxWorkers=1
 ```
 
 Expected: all Runtime tests pass, including Phase 0 worker/protocol tests.
@@ -652,7 +652,7 @@ Expected: full JS and resource suites pass. If local resource failures occur, re
 Before claiming Phase 1 complete, run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime --maxWorkers=1
 npm run typecheck
 npm test
 ```

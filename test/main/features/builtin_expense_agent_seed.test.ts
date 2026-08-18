@@ -15,13 +15,13 @@ let prevBuiltin: string | undefined;
 const EXPENSE_AGENT_ID = 'c045605cb916';
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-expense-agent-seed-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  prevBuiltin = process.env.ORKAS_BUILTIN_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-expense-agent-seed-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  prevBuiltin = process.env.COGSEED_BUILTIN_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   // Point the packaged builtin root at the real resources/builtin tree so the
   // seed exercise matches what ships in the repo.
-  process.env.ORKAS_BUILTIN_ROOT = path.resolve(
+  process.env.COGSEED_BUILTIN_ROOT = path.resolve(
     __dirname, '../../../resources/builtin',
   );
   postJsonMock.mockReset();
@@ -29,10 +29,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
-  if (prevBuiltin === undefined) delete process.env.ORKAS_BUILTIN_ROOT;
-  else process.env.ORKAS_BUILTIN_ROOT = prevBuiltin;
+  if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  if (prevBuiltin === undefined) delete process.env.COGSEED_BUILTIN_ROOT;
+  else process.env.COGSEED_BUILTIN_ROOT = prevBuiltin;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.resetModules();
 });

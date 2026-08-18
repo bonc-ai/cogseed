@@ -157,14 +157,14 @@ describe('seed text composition', () => {
     const task = makeTask(
       { type: 'daily', hour: 9, minute: 0 },
       {
-        content: '查看 Orkas 项目最近 24h 新增的 issue。包括新建和回复。',
+        content: '查看 CogSeed 项目最近 24h 新增的 issue。包括新建和回复。',
         recipient: { kind: 'agent', id: 'agent_codex', name: 'Codex' },
         skill: { id: 'deep-research', name: '深度研究' },
         connector: { id: 'github', name: 'GitHub' },
       },
     );
     const text = _buildSeedTextForTest(task);
-    expect(text).toBe('@Codex 使用 GitHub 连接器：使用 深度研究 技能：查看 Orkas 项目最近 24h 新增的 issue。包括新建和回复。');
+    expect(text).toBe('@Codex 使用 GitHub 连接器：使用 深度研究 技能：查看 CogSeed 项目最近 24h 新增的 issue。包括新建和回复。');
     expect(text).not.toContain('connectors.use_prefix');
     expect(text).not.toContain('skills.use_prefix');
   });

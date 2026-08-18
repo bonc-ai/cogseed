@@ -9,7 +9,7 @@
 import json, os, shutil, sys, hashlib, glob
 
 PKG = '/tmp/cogseed-review3/role_packages'
-DEST = os.path.expanduser('~/mate-agent/resources/builtin/marketplace/skills')
+DEST = os.path.expanduser('~/cogseed-agent/resources/builtin/marketplace/skills')
 APPLY = '--apply' in sys.argv
 
 def gen_id(role, name):

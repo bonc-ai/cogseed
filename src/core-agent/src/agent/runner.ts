@@ -27,7 +27,7 @@ import {
   ACTIVE_CHECKPOINT_SUMMARY_MAX_TOKENS,
   HISTORY_SUMMARY_MAX_TOKENS,
   Session,
-  estimateTextTokens,
+  esticogseedTextTokens,
   mergeUsage,
 } from "./session.js";
 import type { AgentRunParams, AgentRunResult, AgentRunMeta, AgentRunEvent, AgentRunTimings } from "./types.js";
@@ -39,7 +39,7 @@ const RETRY_AFTER_MAX_DELAY_MS = 120_000;
 const RETRY_JITTER_RATIO = 0.2;
 const TOOL_HEARTBEAT_TIMEOUT_GRACE_MS = 30_000;
 export const COMPACTED_HISTORY_PLACEHOLDER_ERROR_CODE = "E_COMPACTED_HISTORY_PLACEHOLDER";
-const LEGACY_COMPACTED_TOOL_USE_INPUT_KEY = "__orkas_compacted_tool_use";
+const LEGACY_COMPACTED_TOOL_USE_INPUT_KEY = "__cogseed_compacted_tool_use";
 const TOOL_LOOP_LIMIT_SUMMARY_MAX_TOKENS = 1_200;
 export const RUN_CONVERGENCE_SOFT_RATIO = 0.8;
 export const RUN_CONVERGENCE_ELAPSED_MS = 8 * 60 * 1000;
@@ -135,7 +135,7 @@ function mergeOptionalUsage(a?: Usage, b?: Usage): Usage | undefined {
   return a ?? b;
 }
 
-function estimateRequestInputTokens(
+function esticogseedRequestInputTokens(
   session: Session,
   systemPrompt: string,
   toolDefs: unknown[],
@@ -143,10 +143,10 @@ function estimateRequestInputTokens(
 ): number {
   let toolText = "";
   try { toolText = JSON.stringify(toolDefs); } catch { toolText = String(toolDefs); }
-  return session.estimateModelTokens()
-    + estimateTextTokens(systemPrompt)
-    + estimateTextTokens(toolText)
-    + estimateTextTokens(turnEphemeral || "")
+  return session.esticogseedModelTokens()
+    + esticogseedTextTokens(systemPrompt)
+    + esticogseedTextTokens(toolText)
+    + esticogseedTextTokens(turnEphemeral || "")
     + 256;
 }
 
@@ -200,7 +200,7 @@ function errorCodeForMeta(err: unknown): string | undefined {
  *  conservative default. This is the READ-TOOL cap only — the group-chat layer
  *  applies a separate, lower cap to agent/worker dispatch tools. */
 function parallelToolCap(): number {
-  const raw = Number.parseInt(process.env.ORKAS_MAX_TOOL_CONCURRENCY ?? "", 10);
+  const raw = Number.parseInt(process.env.COGSEED_MAX_TOOL_CONCURRENCY ?? "", 10);
   return Number.isFinite(raw) && raw > 0 ? raw : 8;
 }
 
@@ -663,13 +663,13 @@ export class AgentRunner {
     disableTools?: boolean;
     /** Restrict learned-skill index to this subset (undefined = all). */
     skillAllowlist?: string[];
-    /** Fires after skill_manage(create) with the new skill id — Orkas
+    /** Fires after skill_manage(create) with the new skill id — CogSeed
      * uses this to keep the bound agent's `skill_list` in sync. */
     onSkillCreated?: (id: string) => void;
     /** Fires once per turn for each learned-skill id rendered into the
      * system-prompt's `## Available Learned Skills` block (System B in
      * the host's signal-attribution vocabulary). Pure callback — exceptions
-     * are swallowed; emission is best-effort. Orkas bridges this to its
+     * are swallowed; emission is best-effort. CogSeed bridges this to its
      * `onSkillAdvertised` ChatOptions hook with `system: 'B'`. */
     onLearnedSkillAdvertised?: (id: string) => void;
     /** Called after session compaction with the generated summary text. */
@@ -1335,7 +1335,7 @@ export class AgentRunner {
           1_024,
           contextWindow - maxOutputTokens - REQUEST_INPUT_SAFETY_TOKENS,
         );
-        const requestTokensBeforeToolResults = estimateRequestInputTokens(
+        const requestTokensBeforeToolResults = esticogseedRequestInputTokens(
           this.session,
           systemPrompt,
           toolDefs,
@@ -1637,12 +1637,12 @@ export class AgentRunner {
         // fills (PC: buildRunner from the resolved model); only an unknown model
         // hits the 200K fallback. ContextOverflowError (caught below) still
         // recovers if a single turn blows past the threshold.
-        const sessionTokensBefore = this.session.estimateModelTokens();
+        const sessionTokensBefore = this.session.esticogseedModelTokens();
         // Look the window up by the model the stream ACTUALLY used: rotating-
         // provider can fail over to a different-window candidate mid-run, and the
         // host fills the catalog for every candidate (PC buildRunner). Fall back
         // to the primary's window, then the 200K default for an unknown model.
-        const tokensBefore = estimateRequestInputTokens(this.session, systemPrompt, toolDefs, params.turnEphemeral);
+        const tokensBefore = esticogseedRequestInputTokens(this.session, systemPrompt, toolDefs, params.turnEphemeral);
         if (tokensBefore > usableInputTokens * CONTEXT_COMPACTION_TRIGGER_RATIO) {
           // Compaction keeps the recent tail verbatim and replaces only the
           // OLDER messages with a short summary. If the kept tail alone already
@@ -1653,7 +1653,7 @@ export class AgentRunner {
           // summary). Skip that no-progress pass; later turns push the big
           // result out of the kept window and real compaction resumes (and a
           // genuine overflow is still caught by ContextOverflowError below).
-          const keptTailTokens = Math.min(this.session.estimateKeptTailTokens(), sessionTokensBefore);
+          const keptTailTokens = Math.min(this.session.esticogseedKeptTailTokens(), sessionTokensBefore);
           const wouldFree = sessionTokensBefore - keptTailTokens;
           const compactionLog = {
             phase: "context_window",
@@ -1686,7 +1686,7 @@ export class AgentRunner {
             const legacyCompactionDurationMs = Math.max(0, Date.now() - legacyCompactionStartedAt);
             timings.compactionMs += legacyCompactionDurationMs;
             if (compactResult.usage) lastUsage = mergeUsage(lastUsage, compactResult.usage);
-            const tokensAfter = estimateRequestInputTokens(this.session, systemPrompt, toolDefs, params.turnEphemeral);
+            const tokensAfter = esticogseedRequestInputTokens(this.session, systemPrompt, toolDefs, params.turnEphemeral);
             log.info("context compaction done", {
               ...compactionLog,
               tokensAfter,
@@ -1808,7 +1808,7 @@ export class AgentRunner {
               phase: "context_overflow",
               sessionId: this.session.getSessionId(),
               model: modelId,
-              tokensBefore: estimateRequestInputTokens(
+              tokensBefore: esticogseedRequestInputTokens(
                 this.session,
                 systemPrompt,
                 [...this.tools.values()].map(toToolDefinition),
@@ -1836,7 +1836,7 @@ export class AgentRunner {
           const overflowCompactionStartedAt = Date.now();
           try {
             const overflowToolDefs = [...this.tools.values()].map(toToolDefinition);
-            const tokensBefore = estimateRequestInputTokens(
+            const tokensBefore = esticogseedRequestInputTokens(
               this.session,
               systemPrompt,
               overflowToolDefs,
@@ -1854,7 +1854,7 @@ export class AgentRunner {
             const overflowCompactionDurationMs = Math.max(0, Date.now() - overflowCompactionStartedAt);
             timings.compactionMs += overflowCompactionDurationMs;
             if (overflowResult.usage) lastUsage = mergeUsage(lastUsage, overflowResult.usage);
-            const tokensAfter = estimateRequestInputTokens(
+            const tokensAfter = esticogseedRequestInputTokens(
               this.session,
               systemPrompt,
               overflowToolDefs,
@@ -2006,7 +2006,7 @@ export class AgentRunner {
       : "";
     if (historyCandidate && this.claimCompactionCandidate(compactionControl, historyFingerprint)) {
       const historyCompactionStartedAt = Date.now();
-      const tokensBefore = this.session.estimateModelTokens();
+      const tokensBefore = this.session.esticogseedModelTokens();
       const historyLog = {
         phase: "history_summary",
         sessionId: this.session.getSessionId(),
@@ -2115,7 +2115,7 @@ export class AgentRunner {
       : "";
     if (activeCandidate && this.claimCompactionCandidate(compactionControl, activeFingerprint)) {
       const activeCompactionStartedAt = Date.now();
-      const modelViewTokensBefore = this.session.estimateModelTokens();
+      const modelViewTokensBefore = this.session.esticogseedModelTokens();
       const activeLog = {
         phase: "active_checkpoint",
         sessionId: this.session.getSessionId(),
@@ -2166,7 +2166,7 @@ export class AgentRunner {
         if (!initialSummary.text.trim()) throw new Error("active checkpoint summary was empty");
         let summaryText = initialSummary.text;
         let summaryUsage = initialSummary.usage;
-        const originalSummaryTextTokens = estimateTextTokens(summaryText);
+        const originalSummaryTextTokens = esticogseedTextTokens(summaryText);
         let summaryTextTokens = originalSummaryTextTokens;
         let shrinkApplied = false;
 
@@ -2190,7 +2190,7 @@ export class AgentRunner {
               cacheRetention,
             });
             summaryUsage = mergeOptionalUsage(summaryUsage, shrunk.usage);
-            const shrunkTokens = estimateTextTokens(shrunk.text);
+            const shrunkTokens = esticogseedTextTokens(shrunk.text);
             if (shrunk.text.trim() && shrunkTokens < summaryTextTokens) {
               summaryText = shrunk.text;
               summaryTextTokens = shrunkTokens;
@@ -2239,7 +2239,7 @@ export class AgentRunner {
           summaryText,
           activeCandidate.checkpointThroughMessageIndex,
         );
-        const appliedCheckpointTokens = estimateTextTokens(appliedSummary);
+        const appliedCheckpointTokens = esticogseedTextTokens(appliedSummary);
         const durationMs = Math.max(0, Date.now() - activeCompactionStartedAt);
         compactionControl.epochs++;
         onCompaction?.();
@@ -2648,7 +2648,7 @@ async function runToolWithWatchdog(opts: {
       content:
         `Recoverable historical-placeholder input detected for ${call.name}. ` +
         `The ${call.name} tool is still available; this is not a tool limitation, permission issue, or preview/download limit. ` +
-        `The provided arguments contain Orkas compacted-history marker ${compactedInputMarker}, which is only a preview of an already executed old tool call and is not valid new tool input. ` +
+        `The provided arguments contain CogSeed compacted-history marker ${compactedInputMarker}, which is only a preview of an already executed old tool call and is not valid new tool input. ` +
         "Reconstruct fresh full arguments by reading the current file or regenerating the complete content, then retry the same tool if it is still needed.",
       isError: true,
     };
@@ -2782,8 +2782,8 @@ function findCompactedToolInputMarker(value: unknown): string | null {
     }
     if (entry && typeof entry === "object") {
       const record = entry as Record<string, unknown>;
-      if (Object.prototype.hasOwnProperty.call(record, "__orkas_context_note")) {
-        return "__orkas_context_note";
+      if (Object.prototype.hasOwnProperty.call(record, "__cogseed_context_note")) {
+        return "__cogseed_context_note";
       }
       if (Object.prototype.hasOwnProperty.call(record, LEGACY_COMPACTED_TOOL_USE_INPUT_KEY)) {
         return LEGACY_COMPACTED_TOOL_USE_INPUT_KEY;

@@ -5,7 +5,7 @@
  * code (`features/chats`, `features/skills`, `features/agents`,
  * `features/contexts_organizer`) can stay unchanged — the dispatcher in
  * `model/client.ts` routes between the two backends based on
- * `process.env.ORKAS_MODEL_BACKEND`.
+ * `process.env.COGSEED_MODEL_BACKEND`.
  *
  * Compared to the openclaw client, this one is all in-process:
  *   - No subprocess spawn
@@ -126,19 +126,19 @@ export async function* stopStreamOnAbort<T>(
 /**
  * Env vars injected into the sandbox child process so skill scripts can
  * run under Electron-as-Node:
- *   - `ORKAS_NODE` = Electron binary path (runs as stock Node because of
+ *   - `COGSEED_NODE` = Electron binary path (runs as stock Node because of
  *     `ELECTRON_RUN_AS_NODE=1` in the child env)
- *   - `ORKAS_PC_DIR` = PC root, rewritten to `app.asar.unpacked` in
+ *   - `COGSEED_PC_DIR` = PC root, rewritten to `app.asar.unpacked` in
  *     packaged mode so `bin/run-skill.cjs` + tsx + skills resolve on real disk
- *   - `ORKAS_WORKSPACE_ROOT` = canonical data root so `run-skill.cjs` can
+ *   - `COGSEED_WORKSPACE_ROOT` = canonical data root so `run-skill.cjs` can
  *     find installed per-user skills under `<uid>/local/marketplace/skills`
- *   - `ORKAS_PYTHON` / `ORKAS_UV` / `ORKAS_BUNDLED_NODE` = optional bundled
- *     runtimes under resources/runtime. `ORKAS_NODE` intentionally remains
- *     Electron-as-Node for Orkas internal scripts; package CLIs use bundled
- *     Node via PATH / `ORKAS_BUNDLED_NODE`.
- *   - `ORKAS_VENV_ROOT` = shared machine-local dependency env root under
+ *   - `COGSEED_PYTHON` / `COGSEED_UV` / `COGSEED_BUNDLED_NODE` = optional bundled
+ *     runtimes under resources/runtime. `COGSEED_NODE` intentionally remains
+ *     Electron-as-Node for CogSeed internal scripts; package CLIs use bundled
+ *     Node via PATH / `COGSEED_BUNDLED_NODE`.
+ *   - `COGSEED_VENV_ROOT` = shared machine-local dependency env root under
  *     data/venv, plus uv/pip/npm cache dirs there so package installs survive
- *     app updates and are reused across Orkas accounts on this device
+ *     app updates and are reused across CogSeed accounts on this device
  *   - `ELECTRON_RUN_AS_NODE` = makes the Electron binary boot as Node
  *
  * Injected via `AgentRunParams.sandboxEnv` → `ToolContext.state.sandboxEnv`
@@ -156,9 +156,9 @@ function buildSkillSandboxEnvStatic(): Record<string, string> {
     ? paths.PC_ROOT.replace(/\bapp\.asar\b/, 'app.asar.unpacked')
     : paths.PC_ROOT;
   _skillSandboxEnvStatic = {
-    ORKAS_NODE: process.execPath,
-    ORKAS_PC_DIR: pcDir,
-    ORKAS_WORKSPACE_ROOT: paths.WS_ROOT,
+    COGSEED_NODE: process.execPath,
+    COGSEED_PC_DIR: pcDir,
+    COGSEED_WORKSPACE_ROOT: paths.WS_ROOT,
     ELECTRON_RUN_AS_NODE: '1',
   };
   return _skillSandboxEnvStatic;
@@ -167,12 +167,12 @@ function buildSkillSandboxEnvStatic(): Record<string, string> {
 /**
  * Per-turn sandbox env = cached static part + uid-derived dynamic part
  * (never cached module-level — CLAUDE.md §4):
- *   - `ORKAS_UID` = the turn's user id, so `bin/orkas-pkg.cjs` (and other
+ *   - `COGSEED_UID` = the turn's user id, so `bin/cogseed-pkg.cjs` (and other
  *     bash-driven CLIs) resolve the right per-user data tree without
  *     parsing users.json.
- *   - `ORKAS_AGENT_ID` = the current acting agent id, so `bin/run-skill.cjs`
+ *   - `COGSEED_AGENT_ID` = the current acting agent id, so `bin/run-skill.cjs`
  *     can resolve agent-private installed skills from the per-user data tree.
-   *   - `ORKAS_PATH_PREPEND` = bundled runtime bins plus enabled external
+   *   - `COGSEED_PATH_PREPEND` = bundled runtime bins plus enabled external
    *     package CLI dirs (`.bin`, package-local bin fallbacks) when present.
    *     Composed into PATH by the sandbox executor (see core-agent
    *     sandbox/executor.ts) so the augmented brew/system PATH is preserved.
@@ -186,9 +186,9 @@ function safeAgentEnvId(agentId?: string): string {
 
 export function buildSkillSandboxEnv(userId?: string, agentId?: string): Record<string, string> {
   const env = { ...buildSkillSandboxEnvStatic(), ...bundledRuntimeEnv() };
-  env.ORKAS_UI_LANG = getCurrentLang();
-  env.ORKAS_VENV_ROOT = paths.VENV_ROOT;
-  env.ORKAS_PYTHON_VENV_ROOT = paths.PYTHON_VENV_ROOT;
+  env.COGSEED_UI_LANG = getCurrentLang();
+  env.COGSEED_VENV_ROOT = paths.VENV_ROOT;
+  env.COGSEED_PYTHON_VENV_ROOT = paths.PYTHON_VENV_ROOT;
   env.UV_CACHE_DIR = paths.PYTHON_VENV_UV_CACHE_DIR;
   env.PIP_CACHE_DIR = paths.PYTHON_VENV_PIP_CACHE_DIR;
   env.NPM_CONFIG_CACHE = paths.NODE_NPM_CACHE_DIR;
@@ -208,9 +208,9 @@ export function buildSkillSandboxEnv(userId?: string, agentId?: string): Record<
     }
   } catch { /* shared venv shims are created on demand */ }
   if (userId) {
-    env.ORKAS_UID = userId;
+    env.COGSEED_UID = userId;
     const safeAgentId = safeAgentEnvId(agentId);
-    if (safeAgentId) env.ORKAS_AGENT_ID = safeAgentId;
+    if (safeAgentId) env.COGSEED_AGENT_ID = safeAgentId;
     try {
       // Lazy require keeps module-load order safe (client.ts loads before
       // some features in boot paths) and avoids a static feature import in
@@ -226,7 +226,7 @@ export function buildSkillSandboxEnv(userId?: string, agentId?: string): Record<
     } catch { /* packages feature unavailable → no shim PATH this turn */ }
   }
   if (pathEntries.length) {
-    env.ORKAS_PATH_PREPEND = pathEntries.join(process.platform === 'win32' ? ';' : ':');
+    env.COGSEED_PATH_PREPEND = pathEntries.join(process.platform === 'win32' ? ';' : ':');
   }
   return env;
 }
@@ -1567,7 +1567,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       }
     }
 
-    // The event mapper yields Orkas-shape events and handles the
+    // The event mapper yields CogSeed-shape events and handles the
     // terminal final/error synthesis. We re-yield every event it produces,
     // resetting the idle timer on each one.
     let eventCount = 0;

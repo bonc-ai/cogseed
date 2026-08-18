@@ -14,7 +14,7 @@ describe('CogSeed brand contract', () => {
       zhName: 'CogSeed',
       appId: 'com.cogseed.desktop',
       protocolScheme: 'cogseed',
-      legacyConnectorSchemes: ['mateagent', 'orkas'],
+      legacyConnectorSchemes: ['cogseed', 'cogseed'],
       taglineZh: '跨 Agent 的个人能力资产层',
     });
   });
@@ -36,26 +36,26 @@ describe('CogSeed brand contract', () => {
   });
 
   it('does not rename compatibility storage and bridge identifiers', () => {
-    expect(read('src/main/paths.ts')).toContain('ORKAS_WORKSPACE_ROOT');
-    expect(read('src/main/preload.js')).toContain('orkas');
-    expect(read('src/main/install-data-root.cjs')).toContain("'.orkas'");
+    expect(read('src/main/paths.ts')).toContain('COGSEED_WORKSPACE_ROOT');
+    expect(read('src/main/preload.js')).toContain('cogseed');
+    expect(read('src/main/install-data-root.cjs')).toContain("'.cogseed'");
   });
   it('uses an isolated runtime identity in the Electron main process', () => {
     const main = read('src/main/index.ts');
     expect(main).toContain("import { resolveRuntimeIdentity } from './brand';");
     expect(main).toContain('app.setName(RUNTIME_IDENTITY.appName);');
     expect(main).toContain('app.setAppUserModelId(RUNTIME_IDENTITY.appId);');
-    expect(main).not.toContain("const APP_USER_MODEL_ID = 'com.orkas.desktop'");
+    expect(main).not.toContain("const APP_USER_MODEL_ID = 'com.cogseed.desktop'");
   });
 
   it('uses the shared App ID for system notification settings', () => {
     const source = read('src/main/features/notification_permissions.ts');
     expect(source).toContain("import { APP_BRAND } from '../brand';");
     expect(source).toContain('return APP_BRAND.appId;');
-    expect(source).not.toContain("return 'com.orkas.desktop';");
+    expect(source).not.toContain("return 'com.cogseed.desktop';");
   });
 
-  it('removes Orkas from user-visible product surfaces', () => {
+  it('removes CogSeed from user-visible product surfaces', () => {
     const publicFiles = [
       'src/renderer/index.html',
       'src/renderer/locales/zh.json',
@@ -66,9 +66,9 @@ describe('CogSeed brand contract', () => {
       'src/main/data/oss-projects.json',
     ];
     for (const file of publicFiles) {
-      expect(read(file), file).not.toContain('Orkas');
+      expect(read(file), file).not.toContain('CogSeed');
     }
-    expect(read('src/renderer/modules/settings.js')).not.toContain("badge.textContent = 'Orkas'");
+    expect(read('src/renderer/modules/settings.js')).not.toContain("badge.textContent = 'CogSeed'");
   });
 
   it('removes the retired Mate Agent name from current public surfaces', () => {
@@ -87,10 +87,10 @@ describe('CogSeed brand contract', () => {
     }
   });
 
-  it('no longer exposes the legacy orkas bridge alias', () => {
+  it('no longer exposes the legacy cogseed bridge alias', () => {
     // 兼容别名已删除（2026-08-17）：渲染层唯一桥是 window.cogseed。
-    expect(read('src/main/preload.js')).not.toContain("exposeInMainWorld('orkas'");
-    expect(read('src/main/preload.js')).not.toContain("__orkasI18nBoot");
+    expect(read('src/main/preload.js')).not.toContain("exposeInMainWorld('cogseed'");
+    expect(read('src/main/preload.js')).not.toContain("__cogseedI18nBoot");
     expect(read('src/renderer/modules/ipc-shim.js')).toContain('window.cogseed');
     expect(read('src/renderer/modules/artifact-security.js')).toContain('CogSeedArtifactSecurity');
   });

@@ -2,7 +2,7 @@
 
 ## 1. Goal
 
-把当前 Mate Agent 内嵌调用的 Orkas/Core Agent 执行能力收归为 **Mate Agent Runtime**，保持现有 Mate Agent 表层体验不变，同时建立独立的后端会话、上下文、记忆和执行边界。
+把当前 Mate Agent 内嵌调用的 CogSeed/Core Agent 执行能力收归为 **Mate Agent Runtime**，保持现有 Mate Agent 表层体验不变，同时建立独立的后端会话、上下文、记忆和执行边界。
 
 目标关系：
 
@@ -28,8 +28,8 @@ Mate Agent 的会话和 Runtime 的会话不再共享同一个 `cid`、`session_
 
 - 产品/UI 继续叫 **Mate Agent**。
 - `Mate Agent Runtime` 是我们拥有的后端执行边界。
-- 现有 `src/main/model/core-agent/` 可作为 Runtime 的内部执行实现，但业务层不再把它当作外部 Orkas agent 直接调用。
-- 新增 `features/mate_agent_runtime/` facade，统一负责 worker 生命周期、协议、请求路由和 session 边界。
+- 现有 `src/main/model/core-agent/` 可作为 Runtime 的内部执行实现，但业务层不再把它当作外部 CogSeed agent 直接调用。
+- 新增 `features/cogseed_runtime/` facade，统一负责 worker 生命周期、协议、请求路由和 session 边界。
 - 旧 `#core-agent` 动态 import 在迁移期间只允许出现在 Runtime adapter/worker 内；renderer、IPC 和业务 feature 不直接依赖它。
 
 ## 4. Runtime process boundary
@@ -97,7 +97,7 @@ Mate Agent 继续使用现有数据域：
 Runtime 使用独立的 machine-private 数据域：
 
 ```text
-<container>/data/<uid>/local/mate_runtime/
+<container>/data/<uid>/local/cogseed_runtime/
 ├── sessions/
 ├── conversations/
 ├── memory/
@@ -142,7 +142,7 @@ Runtime 不读取：
 现有 renderer IPC channel 保持不变。main 中的业务 handler 继续负责参数校验，但发送/执行路径改为调用：
 
 ```text
-features/mate_agent_runtime/client.ts
+features/cogseed_runtime/client.ts
 ```
 
 该 client 负责：
@@ -170,7 +170,7 @@ features/mate_agent_runtime/client.ts
 - Runtime worker 不从环境变量推断 Mate Agent 当前 `cid`。
 - 所有 attachment/context file path 必须通过现有 path sandbox 校验。
 - worker stdin/stdout 只承载协议；不得把原始 prompt、secret 或完整 transcript 写入日志。
-- Runtime session store 只能访问自己的 `local/mate_runtime` root。
+- Runtime session store 只能访问自己的 `local/cogseed_runtime` root。
 - agent/tool 权限由 Runtime request 的 agent profile 决定；不能因调用来自 Mate Agent 就自动获得 group commander 权限。
 
 ## 9. Migration and compatibility

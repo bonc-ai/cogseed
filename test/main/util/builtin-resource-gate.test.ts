@@ -44,7 +44,7 @@ const contentManifest = require('../../../src/main/util/builtin-content-manifest
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-builtin-gate-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-builtin-gate-'));
 });
 
 afterEach(() => {

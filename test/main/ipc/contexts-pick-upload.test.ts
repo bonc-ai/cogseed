@@ -35,9 +35,9 @@ let prevWs: string | undefined;
 const TEST_UID = 'uContextPickUpload';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-context-pick-upload-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-context-pick-upload-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   vi.clearAllMocks();
   const users = await import('../../../src/main/features/users');
@@ -45,7 +45,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -57,7 +57,7 @@ async function invoke(channel: string, payload: any): Promise<any> {
   const electron = await import('electron') as any;
   const { register } = await import('../../../src/main/ipc/index');
   register();
-  const call = electron.ipcMain.handle.mock.calls.find(([name]: [string]) => name === 'orkas.invoke');
+  const call = electron.ipcMain.handle.mock.calls.find(([name]: [string]) => name === 'cogseed.invoke');
   expect(call).toBeTruthy();
   const handler = call[1];
   return handler({ sender: trustedIpcSender() }, { channel, payload });
@@ -67,7 +67,7 @@ describe('contexts.pickAndUpload', () => {
   it('rejects dot-prefixed and unsupported files returned by the native picker', async () => {
     const sourceDir = path.join(tmpDir, 'source');
     fs.mkdirSync(sourceDir, { recursive: true });
-    const hidden = path.join(sourceDir, '.orkas-native-deps-verified.json');
+    const hidden = path.join(sourceDir, '.cogseed-native-deps-verified.json');
     const unsupported = path.join(sourceDir, 'tool.exe');
     const visible = path.join(sourceDir, 'note.md');
     fs.writeFileSync(hidden, '{}', 'utf8');
@@ -90,20 +90,20 @@ describe('contexts.pickAndUpload', () => {
     ]).toContain(path.resolve(defaultPath));
     expect(res.ok).toBe(true);
     expect(res.files).toEqual(expect.arrayContaining([
-      expect.objectContaining({ ok: false, name: '.orkas-native-deps-verified.json', reason: 'hidden' }),
+      expect.objectContaining({ ok: false, name: '.cogseed-native-deps-verified.json', reason: 'hidden' }),
       expect.objectContaining({ ok: false, name: 'tool.exe', reason: 'ext' }),
       expect.objectContaining({ ok: true, name: 'note.md', path: 'note.md' }),
     ]));
-    expect(fs.existsSync(path.join(contextsRoot(), '.orkas-native-deps-verified.json'))).toBe(false);
+    expect(fs.existsSync(path.join(contextsRoot(), '.cogseed-native-deps-verified.json'))).toBe(false);
     expect(fs.existsSync(path.join(contextsRoot(), 'tool.exe'))).toBe(false);
     expect(fs.readFileSync(path.join(contextsRoot(), 'note.md'), 'utf8')).toBe('# note');
   });
 
   it.runIf(process.platform === 'darwin')('does not seed the native picker with a macOS media-library workspace', async () => {
     const prevHome = process.env.HOME;
-    const prevGuard = process.env.ORKAS_TCC_GUARD_FORCE;
+    const prevGuard = process.env.COGSEED_TCC_GUARD_FORCE;
     try {
-      process.env.ORKAS_TCC_GUARD_FORCE = '1';
+      process.env.COGSEED_TCC_GUARD_FORCE = '1';
       const fakeHome = path.join(tmpDir, 'fake-home');
       const pictures = path.join(fakeHome, 'Pictures');
       fs.mkdirSync(pictures, { recursive: true });
@@ -133,8 +133,8 @@ describe('contexts.pickAndUpload', () => {
     } finally {
       if (prevHome === undefined) delete process.env.HOME;
       else process.env.HOME = prevHome;
-      if (prevGuard === undefined) delete process.env.ORKAS_TCC_GUARD_FORCE;
-      else process.env.ORKAS_TCC_GUARD_FORCE = prevGuard;
+      if (prevGuard === undefined) delete process.env.COGSEED_TCC_GUARD_FORCE;
+      else process.env.COGSEED_TCC_GUARD_FORCE = prevGuard;
     }
   });
 });

@@ -47,7 +47,7 @@
 | `absent_by_build` | 开源版本无此组件 | 构建标记声明不含扫描器 |
 | `broken` | 应该在但坏了 | 标记说有，实际找不到 |
 
-`enginePath()` 改为读 `ORKAS_GUARDRAIL_DIR`（缺省仍是 `packagedGuardrailDir()`），让私有扫描器可装在仓库外。
+`enginePath()` 改为读 `COGSEED_GUARDRAIL_DIR`（缺省仍是 `packagedGuardrailDir()`），让私有扫描器可装在仓库外。
 
 关键区分：`absent_by_build` 是**已知的产品形态**，`broken` 是**故障**。二者当前都落到 `engine_missing`，但应有不同后果——把故障当正常形态会掩盖真实问题。
 

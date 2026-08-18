@@ -7,7 +7,7 @@ allowed_tools: [read]
 
 # Sample Defensive Skill
 
-本样本复现 Mate-Agent 官方语料里实测到的四类误报模式，用于锁定
+本样本复现 CogSeed-Agent 官方语料里实测到的四类误报模式，用于锁定
 「防御代码不得被判为攻击代码」这一回归契约：
 
 1. `scripts/url_safety.py` 的 **docstring** 里写了它所拒绝的元数据地址；

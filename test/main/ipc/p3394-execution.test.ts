@@ -8,7 +8,7 @@ type InvokeFn = (event: unknown, req: { channel: string; payload?: unknown }) =>
 let invokeHandler: InvokeFn | null = null;
 
 vi.mock('electron', () => ({
-  ipcMain: { handle: (channel: string, fn: InvokeFn) => { if (channel === 'orkas.invoke') invokeHandler = fn; }, on: vi.fn() },
+  ipcMain: { handle: (channel: string, fn: InvokeFn) => { if (channel === 'cogseed.invoke') invokeHandler = fn; }, on: vi.fn() },
   shell: { openExternal: vi.fn(async () => undefined), showItemInFolder: vi.fn() },
   BrowserWindow: { getFocusedWindow: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
   dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
@@ -22,7 +22,7 @@ let root = '';
 const UID = 'p3394ExecutionIpcUser';
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-execution-ipc-'));
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   invokeHandler = null;
   vi.resetModules();
   vi.doMock('../../../src/main/ipc/local_agents', () => ({ invokeHandlers: {} }));
@@ -34,7 +34,7 @@ beforeEach(async () => {
 afterEach(async () => {
   const p3394 = await import('../../../src/main/features/p3394');
   p3394._setBehaviorContrastExecutorForTest(null);
-  delete process.env.ORKAS_WORKSPACE_ROOT;
+  delete process.env.COGSEED_WORKSPACE_ROOT;
   fs.rmSync(root, { recursive: true, force: true });
   vi.resetModules();
 });

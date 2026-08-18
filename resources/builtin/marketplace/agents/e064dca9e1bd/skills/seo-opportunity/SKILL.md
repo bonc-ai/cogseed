@@ -30,7 +30,7 @@ Build a one-diagnosis keyword/GEO opportunity pool. This skill is deterministic 
 ## How to call
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" seo-opportunity opportunity -- --crawl <crawl.json> [--gsc <gsc-query.json>] [--gsc-pages <gsc-page.json>] [--bing <bing-query.json>] [--bing-pages <bing-page.json>] [--geo-probe <geo-probe.json>] [--out <opportunities.json>]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" seo-opportunity opportunity -- --crawl <crawl.json> [--gsc <gsc-query.json>] [--gsc-pages <gsc-page.json>] [--bing <bing-query.json>] [--bing-pages <bing-page.json>] [--geo-probe <geo-probe.json>] [--out <opportunities.json>]
 ```
 
 All optional inputs are skipped if missing or unreadable. Results are a snapshot for this run only.

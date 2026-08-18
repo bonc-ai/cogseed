@@ -67,7 +67,7 @@ workflow.
 ### academic
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" deep-research academic -- --op search --query "<q>" [--sources arxiv,openalex,crossref,semanticscholar] [--limit 5] [--timeout 30]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" deep-research academic -- --op search --query "<q>" [--sources arxiv,openalex,crossref,semanticscholar] [--limit 5] [--timeout 30]
 ```
 
 `data` has `results` (normalized `{id, source, title, text, authors, date, doi, url}`,
@@ -80,8 +80,8 @@ allow-list and honors `HTTP(S)_PROXY`.
 ### caps
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" deep-research caps -- --op plan --input <payload.json>
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" deep-research caps -- --op account --input <payload.json>
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" deep-research caps -- --op plan --input <payload.json>
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" deep-research caps -- --op account --input <payload.json>
 ```
 
 - `plan` input `{ "subquestions": [".."], "depth"?: 0, "caps"?: {..overrides..} }` →
@@ -97,7 +97,7 @@ allow-list and honors `HTTP(S)_PROXY`.
 ### compress
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" deep-research compress -- --input <payload.json> [--max-chars 12000]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" deep-research compress -- --input <payload.json> [--max-chars 12000]
 ```
 
 Input `{ "query": "the sub-question", "sources": [ { "id", "url", "title", "text" } ],
@@ -110,7 +110,7 @@ whole sources pass through de-duplicated (`score: null`).
 ### citations
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" deep-research citations -- --op verify --input <payload.json>
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" deep-research citations -- --op verify --input <payload.json>
 ```
 
 - `--op verify` (default): full per-citation verification + supported/unsupported

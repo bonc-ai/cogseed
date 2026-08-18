@@ -86,7 +86,7 @@ rbox:
         when: "候选将被写入任何共享存储"
       action:
         type: block
-        instruction: 只写入 $ORKAS_WORKSPACE_ROOT/$ORKAS_UID/ 下的本地数据目录
+        instruction: 只写入 $COGSEED_WORKSPACE_ROOT/$COGSEED_UID/ 下的本地数据目录
       severity: blocking
       confidence: 1.0
       review_required: true
@@ -236,7 +236,7 @@ rbox:
     - id: R_OUTPUT_02
       type: mandatory
       name: 环境变量拼路径
-      description: 用 $ORKAS_WORKSPACE_ROOT/$ORKAS_UID 环境变量拼出真实路径，不猜测、不写死具体用户路径；目录不存在时自动创建
+      description: 用 $COGSEED_WORKSPACE_ROOT/$COGSEED_UID 环境变量拼出真实路径，不猜测、不写死具体用户路径；目录不存在时自动创建
       applies_to:
         classes: [PersonalOntologyCandidate]
       condition:
@@ -244,8 +244,8 @@ rbox:
       action:
         type: path
         instruction: |
-          候选池：$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/candidates.md
-          阻断项：$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/blocked_items.md
+          候选池：$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/local/ontology_candidates/candidates.md
+          阻断项：$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/local/ontology_candidates/blocked_items.md
       severity: blocking
       confidence: 1.0
       review_required: true

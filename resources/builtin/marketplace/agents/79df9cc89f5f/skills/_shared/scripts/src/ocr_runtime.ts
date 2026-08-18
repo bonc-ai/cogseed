@@ -104,7 +104,7 @@ function isFile(p: string): boolean {
 // to repeat per call. Once a venv verifies, remember it via a sentinel keyed by
 // OCR_RUNTIME_KEY (versions + platform), so version bumps re-verify naturally.
 function sentinelPath(venv: string): string {
-  return path.join(venv, '.orkas-ocr-verified');
+  return path.join(venv, '.cogseed-ocr-verified');
 }
 
 function sentinelMatches(venv: string): boolean {
@@ -198,8 +198,8 @@ async function ensureRuntime(onProgress?: ProgressFn): Promise<RuntimeResult> {
   }
 
   const env = runtimeEnv();
-  const uv = env.ORKAS_UV;
-  const bundledPython = env.ORKAS_PYTHON;
+  const uv = env.COGSEED_UV;
+  const bundledPython = env.COGSEED_PYTHON;
   if (!uv || !bundledPython) {
     onProgress?.({ phase: 'ocr_runtime_missing', message: 'Bundled Python/uv runtime is unavailable' });
     return {
@@ -727,7 +727,7 @@ def main():
         pdf = pdfium.PdfDocument(src)
         page_nums = parse_pages(args.get("pages") or "", len(pdf))
         scale = float(args.get("scale") or 2)
-        with tempfile.TemporaryDirectory(prefix="orkas-ocr-") as td:
+        with tempfile.TemporaryDirectory(prefix="cogseed-ocr-") as td:
             for pno in page_nums:
                 page = pdf.get_page(pno - 1)
                 try:

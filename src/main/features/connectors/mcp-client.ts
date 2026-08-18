@@ -48,7 +48,7 @@ async function _loadSdk(): Promise<SdkBundle> {
   return _sdk;
 }
 
-const CLIENT_INFO = { name: 'orkas-pc', version: '0.1.0' };
+const CLIENT_INFO = { name: 'cogseed-pc', version: '0.1.0' };
 const DEFAULT_STDIO_CONNECT_TIMEOUT_MS = 3 * 60 * 1000;
 const DEFAULT_HTTP_CONNECT_TIMEOUT_MS = 30 * 1000;
 const DEFAULT_LIST_TOOLS_TIMEOUT_MS = 30 * 1000;
@@ -63,10 +63,10 @@ function resolveBoundedTimeout(raw: string | undefined, fallback: number): numbe
 
 function resolveMcpConnectTimeoutMs(kind: Transport['kind']): number {
   const specific = kind === 'stdio'
-    ? process.env.ORKAS_MCP_STDIO_CONNECT_TIMEOUT_MS
-    : process.env.ORKAS_MCP_HTTP_CONNECT_TIMEOUT_MS;
+    ? process.env.COGSEED_MCP_STDIO_CONNECT_TIMEOUT_MS
+    : process.env.COGSEED_MCP_HTTP_CONNECT_TIMEOUT_MS;
   const fallback = kind === 'stdio' ? DEFAULT_STDIO_CONNECT_TIMEOUT_MS : DEFAULT_HTTP_CONNECT_TIMEOUT_MS;
-  return resolveBoundedTimeout(specific || process.env.ORKAS_MCP_CONNECT_TIMEOUT_MS, fallback);
+  return resolveBoundedTimeout(specific || process.env.COGSEED_MCP_CONNECT_TIMEOUT_MS, fallback);
 }
 
 export interface McpRequestOptions {
@@ -97,7 +97,7 @@ export class McpConnection {
         id: this.id,
         command: path.basename(this.transport.command),
         argCount: this.transport.args.length,
-        proxyMode: proxyEnv.ORKAS_PROXY_MODE || 'unmanaged',
+        proxyMode: proxyEnv.COGSEED_PROXY_MODE || 'unmanaged',
       });
       transport = new sdk.StdioClientTransport({
         command: this.transport.command,

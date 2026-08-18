@@ -35,14 +35,14 @@ function freePort(): Promise<number> {
 }
 
 beforeAll(async () => {
-  previousVariant = process.env.ORKAS_RUNTIME_VARIANT;
-  previousWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_RUNTIME_VARIANT = VARIANT;
+  previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
+  previousWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_RUNTIME_VARIANT = VARIANT;
   // paths.ts 要求：index.ts 启动时设置；测试环境需显式给出隔离工作区。
-  process.env.ORKAS_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-boot-ws-'));
+  process.env.COGSEED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-boot-ws-'));
   process.env.COGSEED_P3394_PORT = String(await freePort());
   process.env.COGSEED_P3394_TOKEN = 'boot-recover-token';
-  // 非 conversation 模式：走 mate-task runtime（测试确定性）。
+  // 非 conversation 模式：走 cogseed-task runtime（测试确定性）。
   process.env.COGSEED_P3394_CONVERSATION = '0';
 
   const { activateUser } = await import('../../../../src/main/features/users');
@@ -61,10 +61,10 @@ beforeAll(async () => {
 afterAll(async () => {
   await stopExternalGateway('hermes').catch(() => {});
   await bridgeHandle?.close().catch(() => {});
-  if (previousVariant === undefined) delete process.env.ORKAS_RUNTIME_VARIANT;
-  else process.env.ORKAS_RUNTIME_VARIANT = previousVariant;
-  if (previousWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWs;
+  if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
+  else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
+  if (previousWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWs;
   delete process.env.COGSEED_P3394_PORT;
   delete process.env.COGSEED_P3394_TOKEN;
   delete process.env.COGSEED_P3394_CONVERSATION;

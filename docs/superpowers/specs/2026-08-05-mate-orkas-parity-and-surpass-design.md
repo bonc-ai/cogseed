@@ -1,14 +1,14 @@
-# Mate Agent Orkas Parity and Surpass Design
+# Mate Agent CogSeed Parity and Surpass Design
 
 ## 1. Decision
 
-Mate Agent will reach full capability parity with the Orkas collaboration and agent surfaces while remaining a Mate-owned backend. The implementation will use a strangler/compatibility architecture, with recorded golden-fixture comparison on critical paths.
+Mate Agent will reach full capability parity with the CogSeed collaboration and agent surfaces while remaining a CogSeed-owned backend. The implementation will use a strangler/compatibility architecture, with recorded golden-fixture comparison on critical paths.
 
 This means:
 
 - Mate owns its runtime, tasks, sessions, events, storage, visibility, scheduler, tools, and renderer projections.
-- Orkas behavior is treated as a reference contract, not as a runtime business dependency.
-- Mate may reuse generic infrastructure and pure semantics where permitted, but must not directly import Orkas Group Chat/Core Agent business layers or read Orkas data files as live state.
+- CogSeed behavior is treated as a reference contract, not as a runtime business dependency.
+- Mate may reuse generic infrastructure and pure semantics where permitted, but must not directly import CogSeed Group Chat/Core Agent business layers or read CogSeed data files as live state.
 - A feature is not considered complete merely because its normal path works; parity requires state, event, visibility, cancellation, recovery, and migration coverage.
 - After parity, Mate adds measurable improvements in recovery, scheduling, isolation, observability, and conflict handling.
 
@@ -16,17 +16,17 @@ This means:
 
 ### 2.1 Capability goals
 
-Mate will provide Mate-native equivalents for:
+Mate will provide CogSeed-native equivalents for:
 
-- Orkas Group Chat Commander behavior.
+- CogSeed Group Chat Commander behavior.
 - `gconv` / `gmember`-style commander and member session semantics.
 - Visibility slices and event delivery rules.
 - Group Chat bus scheduling behavior.
 - The complete approved Core Agent tool catalog through Mate adapters.
-- Connector, KB, Office, and Browser business capabilities with Mate-owned stores and lifecycle control.
-- Explicit historical Orkas/Mate session migration with preview, journal, resume, and rollback.
+- Connector, KB, Office, and Browser business capabilities with CogSeed-owned stores and lifecycle control.
+- Explicit historical CogSeed/Mate session migration with preview, journal, resume, and rollback.
 - Renderer and IPC parity for collaboration, task, approval, artifact, browser, and migration surfaces.
-- Orkas plan-executor semantics represented by the common collaboration control plane and Mate-specific scheduler/dispatcher adapters.
+- CogSeed plan-executor semantics represented by the common collaboration control plane and CogSeed-specific scheduler/dispatcher adapters.
 
 ### 2.2 Surpass goals
 
@@ -45,7 +45,7 @@ After parity, Mate will exceed the reference behavior with:
 
 ### 2.3 Non-goals
 
-- Directly coupling Mate runtime code to `features/group_chat`, `model/core-agent`, Renderer implementation modules, or Orkas data paths.
+- Directly coupling Mate runtime code to `features/group_chat`, `model/core-agent`, Renderer implementation modules, or CogSeed data paths.
 - Adding an HTTP server or a second application communication channel.
 - Allowing Runtime Worker code to create Electron objects or arbitrary child processes.
 - Replacing the existing approved child-process choke points.
@@ -60,9 +60,9 @@ The current Coordinator is intentionally bounded:
 
 - maximum direct children: 4;
 - maximum delegation depth: 1;
-- parent-driven `mate_delegate` dispatch;
-- `mate_tasks` status reads;
-- `mate_cancel` cancellation;
+- parent-driven `cogseed_delegate` dispatch;
+- `cogseed_tasks` status reads;
+- `cogseed_cancel` cancellation;
 - workflow-level retry, skip, resume, and inspection controls.
 
 The parity program extends this baseline; it does not discard the already-verified runtime isolation or host capability boundaries. This baseline currently exists as pre-specification working-tree changes, so Phase 0 is not accepted until those changes are reviewed, committed as dedicated baseline commit(s), and the worktree used for parity implementation is clean except for approved parity documents and fixtures.
@@ -71,7 +71,7 @@ The parity program extends this baseline; it does not discard the already-verifi
 
 ```mermaid
 flowchart TD
-    A[Recorded Orkas golden fixtures] --> B[Parity contract tests]
+    A[Recorded CogSeed golden fixtures] --> B[Parity contract tests]
     B --> C[Mate compatibility facades]
 
     C --> D[Mate Commander]
@@ -99,31 +99,31 @@ flowchart TD
 
 ### 4.1 Canonical Mate model
 
-The canonical model is Mate-owned and versioned independently from Orkas:
+The canonical model is CogSeed-owned and versioned independently from CogSeed:
 
-- `MateCommanderSession`
-- `MateActorRole`
-- `MateActor`
-- `MateMemberSession`
-- `MateConversation`
-- `MateTask`
-- `MateWorkflow`
-- `MateWorkflowStep`
-- `MateVisibilitySlice`
-- `MateEvent`
-- `MateToolCall`
-- `MateMigrationJournal`
+- `CogSeedCommanderSession`
+- `CogSeedActorRole`
+- `CogSeedActor`
+- `CogSeedMemberSession`
+- `CogSeedConversation`
+- `CogSeedTask`
+- `CogSeedWorkflow`
+- `CogSeedWorkflowStep`
+- `CogSeedVisibilitySlice`
+- `CogSeedEvent`
+- `CogSeedToolCall`
+- `CogSeedMigrationJournal`
 
-`MateActorRole` is the canonical role enum and includes `commander`, `member`, `child`, and `reviewer`. Reviewer is a scoped `MateActor` role, not a separate execution or storage path.
+`CogSeedActorRole` is the canonical role enum and includes `commander`, `member`, `child`, and `reviewer`. Reviewer is a scoped `CogSeedActor` role, not a separate execution or storage path.
 
-Orkas fields are mapped into this model by explicit adapters. The mapping must preserve user scope, actor identity, causal lineage, and terminal status without reusing Orkas identifiers as Mate storage keys.
+CogSeed fields are mapped into this model by explicit adapters. The mapping must preserve user scope, actor identity, causal lineage, and terminal status without reusing CogSeed identifiers as Mate storage keys.
 
 ### 4.2 Capability parity matrix
 
 Create:
 
 ```text
-docs/superpowers/parity/orkas-mate-capability-matrix.md
+docs/superpowers/parity/cogseed-cogseed-capability-matrix.md
 ```
 
 The canonical matrix is a Phase 0 deliverable, is capped at 300 non-empty lines, and must keep one auditable row per capability. Supporting fixture inventories may live in linked files when more detail is required; they do not replace the canonical row. Phase 0 ends with an explicit human review checkpoint, and Phase 1 must not begin until the matrix is approved.
@@ -131,7 +131,7 @@ The canonical matrix is a Phase 0 deliverable, is capped at 300 non-empty lines,
 Every row records:
 
 - capability;
-- reference Orkas entry points and behavior fixtures;
+- reference CogSeed entry points and behavior fixtures;
 - Mate canonical model and adapter;
 - current implementation status;
 - known differences;
@@ -173,13 +173,13 @@ It does not directly execute model calls. Model execution remains behind the Mat
 Map the reference session concepts as follows:
 
 ```text
-Orkas gconv       -> Mate commander session
-Orkas gmember     -> Mate member session / actor task
-Orkas child task  -> Mate task + runtime session
-Orkas plan state  -> Mate workflow run + workflow events
+CogSeed gconv       -> Mate commander session
+CogSeed gmember     -> Mate member session / actor task
+CogSeed child task  -> Mate task + runtime session
+CogSeed plan state  -> Mate workflow run + workflow events
 ```
 
-The compatibility facade preserves public semantic fields where required, but storage paths, ids, locks, and event journals remain Mate-owned.
+The compatibility facade preserves public semantic fields where required, but storage paths, ids, locks, and event journals remain CogSeed-owned.
 
 Session lifecycle must cover:
 
@@ -196,7 +196,7 @@ Session lifecycle must cover:
 
 ### 6.1 Visibility policy
 
-Every read or event projection must be evaluated against a `MateVisibilityPolicy`. A visibility slice contains only the actor's permitted:
+Every read or event projection must be evaluated against a `CogSeedVisibilityPolicy`. A visibility slice contains only the actor's permitted:
 
 - messages;
 - workflow steps;
@@ -254,7 +254,7 @@ Duplicate scheduling paths are forbidden. All task dispatch goes through the Mat
 
 ### 7.1 Dispatch model
 
-The parent Agent may still call `mate_delegate`, but delegation becomes a scheduler request rather than an immediate untracked spawn.
+The parent Agent may still call `cogseed_delegate`, but delegation becomes a scheduler request rather than an immediate untracked spawn.
 
 ```mermaid
 flowchart TD
@@ -277,7 +277,7 @@ flowchart TD
 Split scheduler state by durability and machine ownership. Syncable workflow truth lives in cloud:
 
 ```text
-<uid>/cloud/mate_agent/coordinations/<coordinationId>/
+<uid>/cloud/cogseed/coordinations/<coordinationId>/
 ├── run.json
 ├── context.json
 ├── events.jsonl
@@ -287,7 +287,7 @@ Split scheduler state by durability and machine ownership. Syncable workflow tru
 Machine-local scheduling state lives in local and is never marked dirty for cloud sync:
 
 ```text
-<uid>/local/mate_agent/coordinations/<coordinationId>/
+<uid>/local/cogseed/coordinations/<coordinationId>/
 ├── queue.json
 └── leases.json
 ```
@@ -312,7 +312,7 @@ Machine-local scheduling state lives in local and is never marked dirty for clou
 
 ### 7.4 Current-to-target migration
 
-The current bounded Coordinator remains as the compatibility facade. It will call the durable scheduler for new work while preserving `mate_delegate`, `mate_tasks`, and `mate_cancel` tool names.
+The current bounded Coordinator remains as the compatibility facade. It will call the durable scheduler for new work while preserving `cogseed_delegate`, `cogseed_tasks`, and `cogseed_cancel` tool names.
 
 The target scheduler adds:
 
@@ -353,7 +353,7 @@ Every tool must enforce:
 
 Office and Browser remain Main-side adapters behind the Worker reverse host-tool JSONL protocol. The Worker never receives Electron objects, raw cookies, localStorage, arbitrary Node modules, or unapproved process handles.
 
-Connector and KB adapters use Mate-owned storage and account/secret facades. Shared utilities may be reused only when they do not import Orkas business features or read business data outside the approved path choke points.
+Connector and KB adapters use CogSeed-owned storage and account/secret facades. Shared utilities may be reused only when they do not import CogSeed business features or read business data outside the approved path choke points.
 
 ## 9. Historical migration
 
@@ -379,7 +379,7 @@ Migration must be resumable and idempotent. It must never execute a historical t
 
 ## 10. Renderer and IPC
 
-Renderer surfaces consume Mate projections through the existing `window.orkas` allow-list IPC. New APIs require matching Main handlers and renderer shims. No HTTP endpoint is introduced.
+Renderer surfaces consume Mate projections through the existing `window.cogseed` allow-list IPC. New APIs require matching Main handlers and renderer shims. No HTTP endpoint is introduced.
 
 Required projection surfaces:
 
@@ -447,7 +447,7 @@ Each capability requires:
 
 ### 12.2 Recorded golden-fixture comparison
 
-Critical Orkas flows are captured during Phase 0 from existing public Orkas entry points using synthetic, non-secret inputs, reviewed, and committed as immutable deterministic golden fixtures with source revision and capture-command metadata. The ordinary parity harness reads those fixtures and runs only the Mate implementation; it does not live-import Orkas Group Chat/Core Agent business modules or read Orkas data files. A canonicalizer removes non-semantic ids/timestamps and compares:
+Critical CogSeed flows are captured during Phase 0 from existing public CogSeed entry points using synthetic, non-secret inputs, reviewed, and committed as immutable deterministic golden fixtures with source revision and capture-command metadata. The ordinary parity harness reads those fixtures and runs only the Mate implementation; it does not live-import CogSeed Group Chat/Core Agent business modules or read CogSeed data files. A canonicalizer removes non-semantic ids/timestamps and compares:
 
 - returned result;
 - terminal state;
@@ -488,8 +488,8 @@ The Phase 0 matrix assigns applicable metrics and exact fixture/benchmark comman
 
 - review and commit the current pre-specification Mate baseline as dedicated commit(s);
 - require a clean parity worktree before fixture capture;
-- inventory Orkas capability surfaces;
-- capture immutable golden fixtures through existing public Orkas entry points and record source revision/capture commands;
+- inventory CogSeed capability surfaces;
+- capture immutable golden fixtures through existing public CogSeed entry points and record source revision/capture commands;
 - create the canonicalizer and the capped canonical parity matrix;
 - record current Mate gaps and proposed surpass metrics;
 - freeze current behavior with tests;
@@ -518,7 +518,7 @@ The Phase 0 matrix assigns applicable metrics and exact fixture/benchmark comman
 
 ### Phase 4: Tool catalog parity
 
-- inventory all approved Orkas Core Agent tools;
+- inventory all approved CogSeed Core Agent tools;
 - implement Mate schemas and adapters;
 - preserve connector umbrella exposure;
 - add tool contract and scope tests.
@@ -569,7 +569,7 @@ The Phase 0 matrix assigns applicable metrics and exact fixture/benchmark comman
 
 | Risk | Mitigation |
 |---|---|
-| Orkas behavior is implicit in implementation details | Reviewed immutable golden fixtures and canonical comparison |
+| CogSeed behavior is implicit in implementation details | Reviewed immutable golden fixtures and canonical comparison |
 | Two state machines diverge | One Mate control engine plus adapters |
 | Session migration duplicates work | Migration journal and tool-call decision records |
 | Visibility leaks data | Main-side policy and negative tests |
@@ -583,10 +583,10 @@ The Phase 0 matrix assigns applicable metrics and exact fixture/benchmark comman
 The parity program is complete only when:
 
 - every matrix row is `behavior_parity` or `surpasses`;
-- critical flows pass recorded Orkas golden-fixture/Mate comparison;
+- critical flows pass recorded CogSeed golden-fixture/Mate comparison;
 - historical migration passes preview, resume, rollback, and no-duplicate execution tests;
 - all Mate tasks route through the Mate Scheduler/Dispatcher;
 - all Mate events route through the Mate Event Bus;
-- no Mate production source or ordinary parity-harness code directly imports forbidden Orkas Group Chat/Core Agent business layers; Phase 0 fixture capture uses existing public entry points only;
+- no Mate production source or ordinary parity-harness code directly imports forbidden CogSeed Group Chat/Core Agent business layers; Phase 0 fixture capture uses existing public entry points only;
 - `git diff --check`, typecheck, focused tests, smokes, full JS tests, and resource tests pass;
 - surpass metrics are recorded with reproducible benchmarks or fault-injection tests.

@@ -237,11 +237,11 @@ const cidsToDrop = new Set<string>();
 const AGENT_NAME = '软件工程师';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bus-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  prevWakeGate = process.env.ORKAS_P3394_WAKE_GATE;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-  process.env.ORKAS_P3394_WAKE_GATE = '0';
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bus-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  prevWakeGate = process.env.COGSEED_P3394_WAKE_GATE;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_P3394_WAKE_GATE = '0';
   vi.resetModules();
   cliRunMock.calls.length = 0;
   cliRunMock.nextResult = null;
@@ -257,7 +257,7 @@ beforeEach(async () => {
   users.activateUser(TEST_UID);
 
   // Point the workspace at the `<tmpDir>/workspace` path these fixtures
-  // already assume. Produced-file finalization is scoped to the roots Orkas
+  // already assume. Produced-file finalization is scoped to the roots CogSeed
   // manages, so deliverables must live somewhere the workspace actually
   // resolves to — otherwise the gate assertions below pass because the files
   // sit outside the boundary rather than because a review gate held them.
@@ -292,9 +292,9 @@ afterEach(async () => {
     // Some skipped/failed setup paths may not have loaded the bus module yet.
   }
   await drainMainRuntimeForTest();
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
-  if (prevWakeGate === undefined) delete process.env.ORKAS_P3394_WAKE_GATE;
-  else process.env.ORKAS_P3394_WAKE_GATE = prevWakeGate;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  if (prevWakeGate === undefined) delete process.env.COGSEED_P3394_WAKE_GATE;
+  else process.env.COGSEED_P3394_WAKE_GATE = prevWakeGate;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -441,8 +441,8 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     await attachments.uploadAttachment(
       TEST_UID,
       cid,
-      'orkas-1.0.5-update.md',
-      Buffer.from('# Orkas 1.0.5\nAttachment index keeps old files discoverable.', 'utf8'),
+      'cogseed-1.0.5-update.md',
+      Buffer.from('# CogSeed 1.0.5\nAttachment index keeps old files discoverable.', 'utf8'),
     );
 
     await bus.enqueue({
@@ -455,7 +455,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
 
     const call = streamProbe.messages.find((m) => m.includes('please check the old md again')) || '';
     expect(call).toContain('<conversation-attachments');
-    expect(call).toContain('name="orkas-1.0.5-update.md"');
+    expect(call).toContain('name="cogseed-1.0.5-update.md"');
     expect(call).toContain('kind="text"');
     expect(call).toContain('total_chars=');
   });
@@ -541,7 +541,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     ]));
   });
 
-  it('ignores legacy Hermes commander backend config and runs the Orkas commander', async () => {
+  it('ignores legacy Hermes commander backend config and runs the CogSeed commander', async () => {
     const config = await import('../../../../src/main/features/config');
     config.writePreferences({
       commander_backend: {
@@ -562,7 +562,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(cliRunMock.calls).toHaveLength(0);
     expect(streamProbe.messages.some((message) => message.includes('普通问题'))).toBe(true);
     expect(config.getCommanderBackendSettings()).toEqual({
-      backend: 'orkas-core-agent',
+      backend: 'cogseed-core-agent',
       authEntryId: null,
       localCli: null,
     });
@@ -661,7 +661,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
   });
 
   it('P3394 Wake Gate keeps an unapproved mentioned agent out of the roster and runtime', async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = '1';
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const state = await import('../../../../src/main/features/group_chat/state');
     const wake = await import('../../../../src/main/features/p3394/wake-service');
@@ -686,7 +686,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
   });
 
   it('P3394 external inbound never wakes a named agent directly (no bypass; Commander mediates)', async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = '1';
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const state = await import('../../../../src/main/features/group_chat/state');
     const wake = await import('../../../../src/main/features/p3394/wake-service');
@@ -709,11 +709,11 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(await wake.listWakeRequests(TEST_UID, cid)).toHaveLength(0);
   });
   it('P3394 approval admits the original intent through CogSeed Backend without using the Agent id as a model profile', async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = '1';
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const wake = await import('../../../../src/main/features/p3394/wake-service');
     const controller = await import('../../../../src/main/features/p3394/wake-controller');
-    const mateTasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const cogseedTasks = await import('../../../../src/main/features/cogseed_backend/task-store');
 
     const deferred = await bus.enqueue({
       uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
@@ -729,7 +729,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(result.ok).toBe(true);
     await waitForQuiescent(TEST_UID, TEST_CID);
 
-    const tasks = await mateTasks.listMateTasks(TEST_UID);
+    const tasks = await cogseedTasks.listCogSeedTasks(TEST_UID);
     expect(tasks).toEqual(expect.arrayContaining([
       expect.objectContaining({
         task: expect.stringContaining('完成审批后的任务'),
@@ -743,7 +743,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
   });
 
   it('routes a no-mention user follow-up for the active formal Agent into CogSeed instead of the Group Chat model loop', async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = '1';
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const state = await import('../../../../src/main/features/group_chat/state');
     const wake = await import('../../../../src/main/features/p3394/wake-service');
@@ -752,7 +752,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     await state.setActiveRecipient(TEST_UID, TEST_CID, AGENT_ID);
     (bus as any)._setInteractiveFollowupStarterForTest(async (input: any) => {
       followups.push(input);
-      return { taskId: 'mate-task-followup', status: 'running' };
+      return { taskId: 'cogseed-task-followup', status: 'running' };
     });
 
     try {
@@ -780,7 +780,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
   });
 
   it('P3394 Wake Gate blocks an unapproved plan-step dispatch', async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = '1';
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const state = await import('../../../../src/main/features/group_chat/state');
     const wake = await import('../../../../src/main/features/p3394/wake-service');
@@ -1372,7 +1372,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
   });
 
   it('P3394 Wake Gate blocks commander dispatch_to before a named Agent starts', async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = '1';
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const state = await import('../../../../src/main/features/group_chat/state');
     const wake = await import('../../../../src/main/features/p3394/wake-service');
@@ -1728,7 +1728,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
       phase: 'normalized',
       ok: true,
       agent_id: AGENT_ID,
-      role: 'orkas_core',
+      role: 'cogseed_core',
       relationship: 'owner',
       speech_act: 'request',
       message_type: 'agent.handle_message.request',

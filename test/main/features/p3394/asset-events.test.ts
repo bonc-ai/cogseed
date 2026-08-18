@@ -11,14 +11,14 @@ let prevWs: string | undefined;
 
 beforeEach(async () => {
   testRoot = fs.mkdtempSync(path.join(os.tmpdir(), ROOT_PREFIX));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = testRoot;
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = testRoot;
   vi.resetModules(); // paths.ts 的 WS_ROOT 是模块加载时求值常量
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
 });
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(testRoot, { recursive: true, force: true });
 });
 

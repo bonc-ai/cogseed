@@ -6,7 +6,7 @@ import { trustedIpcSender } from '../../helpers/trusted-ipc-sender';
 
 let invokeHandler: any = null;
 vi.mock('electron', () => ({
-  ipcMain: { handle: (c: string, f: any) => { if (c === 'orkas.invoke') invokeHandler = f; }, on: vi.fn() },
+  ipcMain: { handle: (c: string, f: any) => { if (c === 'cogseed.invoke') invokeHandler = f; }, on: vi.fn() },
   shell: { openExternal: vi.fn(), showItemInFolder: vi.fn() },
   BrowserWindow: { getFocusedWindow: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
   dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
@@ -23,7 +23,7 @@ const ASSET_ID = 'asset-continuity';
 
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-ipc-'));
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   invokeHandler = null;
   vi.resetModules();
   vi.doMock('../../../src/main/ipc/local_agents', () => ({ invokeHandlers: {} }));
@@ -32,7 +32,7 @@ beforeEach(async () => {
   (await import('../../../src/main/ipc/index')).register();
 });
 afterEach(() => {
-  delete process.env.ORKAS_WORKSPACE_ROOT;
+  delete process.env.COGSEED_WORKSPACE_ROOT;
   fs.rmSync(root, { recursive: true, force: true });
   vi.resetModules();
 });

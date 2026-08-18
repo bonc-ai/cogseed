@@ -50,11 +50,11 @@ Do not use for:
 
 4. Use scripts only when useful:
    - Fetch public samples (anonymous by default):
-     `$ORKAS_NODE $ORKAS_PC_DIR/bin/run-skill.cjs social-data fetch -- <platform> <keywords> [options]`
+     `$COGSEED_NODE $COGSEED_PC_DIR/bin/run-skill.cjs social-data fetch -- <platform> <keywords> [options]`
    - Calculate metrics from JSON:
-     `$ORKAS_NODE $ORKAS_PC_DIR/bin/run-skill.cjs social-data calculate_metrics -- data.json`
+     `$COGSEED_NODE $COGSEED_PC_DIR/bin/run-skill.cjs social-data calculate_metrics -- data.json`
    - Analyze performance from JSON:
-     `$ORKAS_NODE $ORKAS_PC_DIR/bin/run-skill.cjs social-data analyze_performance -- data.json`
+     `$COGSEED_NODE $COGSEED_PC_DIR/bin/run-skill.cjs social-data analyze_performance -- data.json`
 
 5. Return traceable conclusions.
    - Tie claims back to item URLs, post IDs, comments, or user-provided rows.

@@ -112,7 +112,7 @@ function materialize(files: Record<string, string>, prefix = 'mx-'): string {
 // W6: exercise the gate the way production does — vendored PyYAML on
 // PYTHONPATH (skill-sentry/vendor). A bare interpreter falls back to the thin
 // builtin rules, which both weakens verdicts (payloads scoring `pass`) and drifts
-// away from what sentry-adapter / orkas-pkg actually run. Keep the injection
+// away from what sentry-adapter / cogseed-pkg actually run. Keep the injection
 // identical to those callers so this matrix stays a true regression spine.
 const GATE_ENV = {
   ...process.env,
@@ -171,7 +171,7 @@ describe('security matrix › local folder import', () => {
   async function importDir(files: Record<string, string>) {
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'mx-imp-ws-'));
     tmps.push(ws);
-    process.env.ORKAS_WORKSPACE_ROOT = ws;
+    process.env.COGSEED_WORKSPACE_ROOT = ws;
     const users = await import('../../../../src/main/features/users');
     users.activateUser('u1');
     const skills = await import('../../../../src/main/features/skills');
@@ -222,11 +222,11 @@ describe('security matrix › package CLI (install + update)', () => {
   function install(source: string, name: string) {
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'mx-pkg-ws-'));
     tmps.push(ws);
-    const r = spawnSync(process.execPath, [path.join(REPO, 'bin', 'orkas-pkg.cjs'), 'install', source, '--name', name], {
+    const r = spawnSync(process.execPath, [path.join(REPO, 'bin', 'cogseed-pkg.cjs'), 'install', source, '--name', name], {
       cwd: REPO,
       encoding: 'utf8',
       timeout: 300_000,
-      env: { ...process.env, ORKAS_WORKSPACE_ROOT: ws, ORKAS_UID: 'u1', ORKAS_PC_DIR: REPO },
+      env: { ...process.env, COGSEED_WORKSPACE_ROOT: ws, COGSEED_UID: 'u1', COGSEED_PC_DIR: REPO },
     });
     const text = (r.status === 0 ? r.stdout : r.stderr) || '';
     const at = text.indexOf('{');
@@ -270,9 +270,9 @@ describe('security matrix › package CLI (install + update)', () => {
     const src = repo(CLEAN('pkg-upd'), 'upd');
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'mx-pkg-upd-'));
     tmps.push(ws);
-    const env = { ...process.env, ORKAS_WORKSPACE_ROOT: ws, ORKAS_UID: 'u1', ORKAS_PC_DIR: REPO };
+    const env = { ...process.env, COGSEED_WORKSPACE_ROOT: ws, COGSEED_UID: 'u1', COGSEED_PC_DIR: REPO };
     const cli = (...args: string[]) => spawnSync(
-      process.execPath, [path.join(REPO, 'bin', 'orkas-pkg.cjs'), ...args],
+      process.execPath, [path.join(REPO, 'bin', 'cogseed-pkg.cjs'), ...args],
       { cwd: REPO, encoding: 'utf8', timeout: 300_000, env },
     );
 
@@ -306,7 +306,7 @@ describe('security matrix › load-time re-verification', () => {
   async function afterInstallEdit(files: Record<string, string>) {
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'mx-load-ws-'));
     tmps.push(ws);
-    process.env.ORKAS_WORKSPACE_ROOT = ws;
+    process.env.COGSEED_WORKSPACE_ROOT = ws;
     const users = await import('../../../../src/main/features/users');
     users.activateUser('u1');
     const paths = await import('../../../../src/main/paths');
@@ -387,19 +387,19 @@ describe('security matrix › scanner unavailable', () => {
 
     const r = spawnSync(
       process.execPath,
-      [path.join(REPO, 'bin', 'orkas-pkg.cjs'), 'install', dir, '--name', 'mxnoscan'],
+      [path.join(REPO, 'bin', 'cogseed-pkg.cjs'), 'install', dir, '--name', 'mxnoscan'],
       {
         cwd: REPO,
         encoding: 'utf8',
         timeout: 300_000,
         env: {
           ...env,
-          ORKAS_WORKSPACE_ROOT: ws,
-          ORKAS_UID: 'u1',
-          ORKAS_PC_DIR: REPO,
-          // Not ORKAS_PYTHON: that one selects the interpreter for dependency
+          COGSEED_WORKSPACE_ROOT: ws,
+          COGSEED_UID: 'u1',
+          COGSEED_PC_DIR: REPO,
+          // Not COGSEED_PYTHON: that one selects the interpreter for dependency
           // installs and must not be able to redirect the security gate.
-          ORKAS_GUARDRAIL_PYTHON: '/nonexistent/python3',
+          COGSEED_GUARDRAIL_PYTHON: '/nonexistent/python3',
         },
       },
     );
@@ -448,7 +448,7 @@ describe('security matrix › generation admission (commander container)', () =>
   async function createViaCommander(files: Record<string, string>, name: string) {
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'mx-gen-ws-'));
     tmps.push(ws);
-    process.env.ORKAS_WORKSPACE_ROOT = ws;
+    process.env.COGSEED_WORKSPACE_ROOT = ws;
     const users = await import('../../../../src/main/features/users');
     users.activateUser('u1');
     const skills = await import('../../../../src/main/features/skills');

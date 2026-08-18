@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { buildAar, episodeFilePath, recordP3394Episode } from '../../../../src/main/features/p3394_bridge/kstar-episodes';
 
 const SCRATCH_VARIANT = 'p3394-kstar-test-' + Math.random().toString(36).slice(2, 8);
-process.env.ORKAS_RUNTIME_VARIANT = SCRATCH_VARIANT;
+process.env.COGSEED_RUNTIME_VARIANT = SCRATCH_VARIANT;
 
 describe('p3394 KSTAR episodes', () => {
   it('builds a mechanical AAR from goal/status/result', () => {

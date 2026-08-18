@@ -146,7 +146,7 @@ export const claudeBackend: LocalBackend = {
           //     warnings, --verbose debug noise — direct-terminal users
           //     see these every run; previously we dropped them
           //     silently after session_id was captured, which is the
-          //     "Orkas shows less than the terminal" symptom users
+          //     "CogSeed shows less than the terminal" symptom users
           //     reported. Raw-line renders as a kind-meta row in the
           //     process rail.
           if (!sessionId) opts.onEvent({ type: 'text-delta', text: trimmed + '\n' });
@@ -272,7 +272,7 @@ export function buildClaudeArgs(opts: Pick<BackendRunOptions, 'model' | 'resumeS
   ];
   if (opts.model) args.push('--model', opts.model);
   if (opts.resumeSessionId) args.push('--resume', opts.resumeSessionId);
-  // orkas-bridge: ADD the per-run MCP server alongside the user's own MCP
+  // cogseed-bridge: ADD the per-run MCP server alongside the user's own MCP
   // config (no --strict-mcp-config — their servers must keep working), and
   // tell the agent the bridge exists via an appended system prompt.
   if (opts.bridge) {

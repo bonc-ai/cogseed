@@ -64,7 +64,7 @@ for (const [key, value] of Object.entries(providerEnv || {})) {
 }
 ```
 
-**关键点：** `providerEnv` 的值覆盖继承的 `process.env`，实现了"Orkas 选择优先于 CC Switch 配置"的行为。
+**关键点：** `providerEnv` 的值覆盖继承的 `process.env`，实现了"CogSeed 选择优先于 CC Switch 配置"的行为。
 
 ### 方案建议
 

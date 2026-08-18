@@ -64,13 +64,13 @@ Use analysis mode when the user provides social post data, campaign exports, ad 
 Calculate core campaign metrics:
 
 ```bash
-$ORKAS_NODE $ORKAS_PC_DIR/bin/run-skill.cjs social-data calculate_metrics -- data.json
+$COGSEED_NODE $COGSEED_PC_DIR/bin/run-skill.cjs social-data calculate_metrics -- data.json
 ```
 
 Analyze metrics, benchmark comparison, and recommendations:
 
 ```bash
-$ORKAS_NODE $ORKAS_PC_DIR/bin/run-skill.cjs social-data analyze_performance -- data.json
+$COGSEED_NODE $COGSEED_PC_DIR/bin/run-skill.cjs social-data analyze_performance -- data.json
 ```
 
 ## Interpretation

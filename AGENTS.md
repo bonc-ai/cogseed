@@ -7,7 +7,7 @@ Prompt context only: keep hard constraints, short rationale, and traps already h
 CogSeed desktop companion agent (Electron). Main is TypeScript under `src/main`, renderer is vanilla HTML/CSS/JS under `src/renderer`.
 
 - Quick gates: `npm run typecheck` (tsc --noEmit), `npm test` (js + resources), `./run.sh` to start.
-- This repo has sibling worktrees (`mate-agent-parallel-1/2` next to the main checkout, each on its own `dev/niubaokang*` branch). Align all of them after mainline merges; parallel sessions may edit the same files.
+- This repo has sibling worktrees (`cogseed-agent-parallel-1/2` next to the main checkout, each on its own `dev/niubaokang*` branch). Align all of them after mainline merges; parallel sessions may edit the same files.
 - Repo docs: `README.md` / `README.zh-CN.md`; feature planning and handoff docs live under `docs/` (runtime-variants, touchpoint-v2, skill 安全体系, etc.).
 
 ## Boundary

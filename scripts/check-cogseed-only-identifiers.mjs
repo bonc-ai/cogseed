@@ -4,33 +4,47 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const root = path.resolve(import.meta.dirname, '..');
-const forbidden = [
-  /\bORKAS_[A-Z0-9_]+\b/g,
-  /\bOrkas\b/g,
-  /\borkas(?:[.:_/-]|\b)/g,
-  /\bMATE_AGENT[A-Z0-9_]*\b/g,
-  /\bMateAgent[A-Za-z0-9_]*\b/g,
-  /\bmateAgent[A-Za-z0-9_]*\b/g,
-  /\bmate_agent(?:[.:_/-]|\b)/g,
-  /\bmate-agent(?:[.:_/-]|\b)/g,
-  /\bmateagent(?:[.:_/-]|\b)/g,
-  /\bMATE_RUNTIME[A-Z0-9_]*\b/g,
-  /\bMateRuntime[A-Za-z0-9_]*\b/g,
-  /\bmateRuntime[A-Za-z0-9_]*\b/g,
-  /\bmate-runtime(?:[.:_/-]|\b)/g,
+const oldA = ['or', 'kas'].join('');
+const oldB = ['ma', 'te'].join('');
+const upperA = oldA.toUpperCase();
+const titleA = oldA[0].toUpperCase() + oldA.slice(1);
+const upperB = oldB.toUpperCase();
+const titleB = oldB[0].toUpperCase() + oldB.slice(1);
+const esc = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const patterns = [
+  new RegExp(`\\b${esc(upperA)}_[A-Z0-9_]+\\b`, 'g'),
+  new RegExp(`\\b${esc(titleA)}\\b`, 'g'),
+  new RegExp(`\\b${esc(oldA)}(?:[.:_/-]|\\b)`, 'g'),
+  new RegExp(`\\b${esc(upperB)}_AGENT[A-Z0-9_]*\\b`, 'g'),
+  new RegExp(`${esc(titleB)}Agent[A-Za-z0-9_]*`, 'g'),
+  new RegExp(`${esc(oldB)}Agent[A-Za-z0-9_]*`, 'g'),
+  new RegExp(`\\b${esc(oldB)}_agent(?:[.:_/-]|\\b)`, 'g'),
+  new RegExp(`\\b${esc(oldB)}-agent(?:[.:_/-]|\\b)`, 'g'),
+  new RegExp(`\\b${esc(oldB)}agent(?:[.:_/-]|\\b)`, 'g'),
+  new RegExp(`\\b${esc(upperB)}_RUNTIME[A-Z0-9_]*\\b`, 'g'),
+  new RegExp(`${esc(titleB)}Runtime[A-Za-z0-9_]*`, 'g'),
+  new RegExp(`${esc(oldB)}Runtime[A-Za-z0-9_]*`, 'g'),
+  new RegExp(`\\b${esc(oldB)}-runtime(?:[.:_/-]|\\b)`, 'g'),
 ];
 
-const files = execFileSync('git', ['ls-files', '-z'], { cwd: root }).toString().split('\0').filter(Boolean);
+const files = execFileSync('git', ['ls-files', '-z'], { cwd: root })
+  .toString().split('\0').filter(Boolean);
 const findings = [];
 for (const rel of files) {
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    if (pattern.test(rel)) {
+      findings.push(`${rel}: tracked path contains a legacy product identifier`);
+      break;
+    }
+  }
   const abs = path.join(root, rel);
   let bytes;
   try { bytes = fs.readFileSync(abs); } catch { continue; }
   if (bytes.includes(0)) continue;
-  const text = bytes.toString('utf8');
-  const lines = text.split(/\r?\n/);
+  const lines = bytes.toString('utf8').split(/\r?\n/);
   lines.forEach((line, index) => {
-    for (const pattern of forbidden) {
+    for (const pattern of patterns) {
       pattern.lastIndex = 0;
       if (pattern.test(line)) {
         findings.push(`${rel}:${index + 1}: ${line.trim().slice(0, 240)}`);

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createMateIpcService } from '../../../../src/main/features/cogseed_backend/ipc-service';
+import { createCogSeedIpcService } from '../../../../src/main/features/cogseed_backend/ipc-service';
 
 const session = {
   schemaVersion: 1 as const,
-  sessionId: 'mate-session-root',
+  sessionId: 'cogseed-session-root',
   runtimeSessionId: 'mruntime-root',
   ownerId: 'renderer-user',
   createdAt: '2026-08-05T00:00:00.000Z',
@@ -13,22 +13,22 @@ const session = {
 
 const parentTask = {
   schemaVersion: 1 as const,
-  taskId: 'mate-task-root',
+  taskId: 'cogseed-task-root',
   sessionId: session.sessionId,
   runtimeSessionId: session.runtimeSessionId,
   requestId: 'req-root',
   ownerId: 'renderer-user',
   status: 'recoverable' as const,
   task: 'Coordinate the release plan.',
-  coordinationId: 'mate-coord-root',
+  coordinationId: 'cogseed-coord-root',
   createdAt: '2026-08-05T00:00:00.000Z',
   updatedAt: '2026-08-05T00:01:00.000Z',
 };
 
 const childTask = {
   schemaVersion: 1 as const,
-  taskId: 'mate-task-child',
-  sessionId: 'mate-session-child',
+  taskId: 'cogseed-task-child',
+  sessionId: 'cogseed-session-child',
   runtimeSessionId: 'mruntime-child',
   requestId: 'req-child',
   ownerId: 'renderer-user',
@@ -43,7 +43,7 @@ const childTask = {
 const events = [
   {
     schemaVersion: 1 as const,
-    eventId: 'mate-event-1',
+    eventId: 'cogseed-event-1',
     taskId: parentTask.taskId,
     sessionId: parentTask.sessionId,
     sequence: 1,
@@ -53,7 +53,7 @@ const events = [
   },
   {
     schemaVersion: 1 as const,
-    eventId: 'mate-event-2',
+    eventId: 'cogseed-event-2',
     taskId: parentTask.taskId,
     sessionId: parentTask.sessionId,
     sequence: 2,
@@ -65,7 +65,7 @@ const events = [
 
 describe('CogSeed renderer-safe projections', () => {
   it('projects sessions without owner/runtime identifiers and includes task counts', async () => {
-    const service = createMateIpcService({
+    const service = createCogSeedIpcService({
       listSessions: vi.fn(async () => [session]),
       listTasks: vi.fn(async () => [parentTask, childTask]),
     } as any);
@@ -87,9 +87,9 @@ describe('CogSeed renderer-safe projections', () => {
 
 
   it('accepts a gconv compatibility id and reads the canonical CogSeed session', async () => {
-    const canonicalSession = { ...session, sessionId: 'mate-session-gconv-conversation-a' };
+    const canonicalSession = { ...session, sessionId: 'cogseed-session-gconv-conversation-a' };
     const readSession = vi.fn(async (_userId: string, sessionId: string) => sessionId === canonicalSession.sessionId ? canonicalSession : null);
-    const service = createMateIpcService({
+    const service = createCogSeedIpcService({
       readSession,
       listTasks: vi.fn(async () => []),
     } as any);
@@ -104,18 +104,18 @@ describe('CogSeed renderer-safe projections', () => {
 
 
   it('returns an empty projection when a conversation has no CogSeed session yet', async () => {
-    const service = createMateIpcService({
+    const service = createCogSeedIpcService({
       readSession: vi.fn(async () => null),
     } as any);
 
-    await expect(service.session('renderer-user', { sessionId: 'gconv-conversation-without-mate' })).resolves.toEqual({
+    await expect(service.session('renderer-user', { sessionId: 'gconv-conversation-without-cogseed' })).resolves.toEqual({
       session: null,
       collaboration: null,
     });
   });
 
   it('builds a collaboration snapshot with actor roster, child tree, recovery timeline, and redacted event summaries', async () => {
-    const service = createMateIpcService({
+    const service = createCogSeedIpcService({
       readTask: vi.fn(async (_userId: string, taskId: string) => taskId === parentTask.taskId ? parentTask : taskId === childTask.taskId ? childTask : null),
       listTasks: vi.fn(async () => [parentTask, childTask]),
       listSessions: vi.fn(async () => [session]),

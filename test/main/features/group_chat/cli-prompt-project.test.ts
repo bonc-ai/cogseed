@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 // A CLI agent dispatched into a project must receive that project's
-// ORKAS.md. Before this was wired, `_buildCliPrompt` never took a projectId,
+// COGSEED.md. Before this was wired, `_buildCliPrompt` never took a projectId,
 // so standing instructions (e.g. "the repo is at ~/Documents/GitHub/X")
 // silently never reached the CLI and it guessed the repo from cwd instead.
 
@@ -12,17 +12,17 @@ let tmpDir: string;
 let prevWs: string | undefined;
 const TEST_UID = 'uCliProj';
 const CID = 'c_cli_proj';
-const REPO_LINE = 'Orkas 代码仓库路径:`~/Documents/GitHub/AITeamRelease`。';
+const REPO_LINE = 'CogSeed 代码仓库路径:`~/Documents/GitHub/AITeamRelease`。';
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-cli-prompt-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-cli-prompt-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -39,7 +39,7 @@ const ITEM = {
   turnId: 't1',
   msgId: 'm1',
   fromActorId: 'user',
-  llmPayload: '<msg from="user">查一下 Orkas 仓库当前的版本分支</msg>',
+  llmPayload: '<msg from="user">查一下 CogSeed 仓库当前的版本分支</msg>',
 } as any;
 
 async function buildPrompt(spaceId?: string): Promise<string> {
@@ -53,7 +53,7 @@ async function makeSpace(instructions?: string): Promise<string> {
   const users = await import('../../../../src/main/features/users');
   users.activateUser(TEST_UID);
   const spaces = await import('../../../../src/main/features/spaces');
-  const r = await spaces.createSpace(TEST_UID, { name: '迭代Orkas' });
+  const r = await spaces.createSpace(TEST_UID, { name: '迭代CogSeed' });
   if (!r.ok) throw new Error('space setup failed');
   if (instructions !== undefined) {
     await spaces.writeSpaceInstructions(TEST_UID, r.space.space_id, instructions);
@@ -63,7 +63,7 @@ async function makeSpace(instructions?: string): Promise<string> {
 
 describe('CLI prompt › space instructions', () => {
   it('injects instructions when the conversation is scoped to a space', async () => {
-    const sid = await makeSpace(`本项目用于迭代 Orkas。\n\n- ${REPO_LINE}`);
+    const sid = await makeSpace(`本项目用于迭代 CogSeed。\n\n- ${REPO_LINE}`);
     const prompt = await buildPrompt(sid);
 
     expect(prompt).toContain('## Space instructions (user-authored)');

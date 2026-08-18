@@ -4,7 +4,7 @@
  * The Hub service is a separate backend (own domain / base URL), not the
  * marketplace API base. Development defaults to `http://localhost:3000`
  * (the Hub service dev server); production URL comes from the
- * `ORKAS_HUB_API_BASE` env override until the platform owner assigns a
+ * `COGSEED_HUB_API_BASE` env override until the platform owner assigns a
  * public domain (then it can also be moved to remote config).
  *
  * Every endpoint returns the Hub envelope `{ ok: true, data }`; failures
@@ -34,7 +34,7 @@ export const RELEASE_HUB_API_BASE = 'https://cogseed-open.bonc.com.cn';
 
 /**
  * 按环境变量与构建通道解析 Hub 服务地址。
- * 优先级：COGSEED_HUB_API_BASE > ORKAS_HUB_API_BASE > 通道默认值。
+ * 优先级：COGSEED_HUB_API_BASE > COGSEED_HUB_API_BASE > 通道默认值。
  * 纯函数，便于测试。
  */
 export function resolveHubApiBase(envOverride: string | undefined, channel: string): string {
@@ -46,9 +46,9 @@ export function resolveHubApiBase(envOverride: string | undefined, channel: stri
 }
 
 /** Resolve the Hub service base URL. `COGSEED_HUB_API_BASE` is preferred for
- * 联调，`ORKAS_HUB_API_BASE` is kept as the legacy override. */
+ * 联调，`COGSEED_HUB_API_BASE` is kept as the legacy override. */
 export function hubApiBase(): string {
-  const env = process.env.COGSEED_HUB_API_BASE || process.env.ORKAS_HUB_API_BASE;
+  const env = process.env.COGSEED_HUB_API_BASE || process.env.COGSEED_HUB_API_BASE;
   const { channel } = resolveBuildIdentity();
   return resolveHubApiBase(env, channel);
 }

@@ -688,11 +688,11 @@ Add an internal rollout gate in `control-tool.ts`:
 
 ```ts
 export function isCommanderCentricKstarEnabled(): boolean {
-  return process.env.ORKAS_COMMANDER_CENTRIC_KSTAR === '1';
+  return process.env.COGSEED_COMMANDER_CENTRIC_KSTAR === '1';
 }
 ```
 
-Task 3 tests set the variable to `1`; production remains on the old path until Task 4 removes pre-routing. Task 4 changes the function to `process.env.ORKAS_COMMANDER_CENTRIC_KSTAR !== '0'`, making Commander-centric behavior the default while retaining a kill switch that does not restore deleted legacy routing.
+Task 3 tests set the variable to `1`; production remains on the old path until Task 4 removes pre-routing. Task 4 changes the function to `process.env.COGSEED_COMMANDER_CENTRIC_KSTAR !== '0'`, making Commander-centric behavior the default while retaining a kill switch that does not restore deleted legacy routing.
 
 Factory contract:
 
@@ -822,7 +822,7 @@ Remove all of the following behavior:
 
 User routing remains the ordinary group-chat rule (`user -> Commander` unless the explicit floor/mention chooses another actor). KStar bookkeeping failures can no longer suppress a normal Commander turn because there is no KStar write before that turn.
 
-Enable the new path by changing `isCommanderCentricKstarEnabled` to return true unless `ORKAS_COMMANDER_CENTRIC_KSTAR` is exactly `0`. The disabled state omits `kstar_control`; it never reinstates the deleted router or message gate.
+Enable the new path by changing `isCommanderCentricKstarEnabled` to return true unless `COGSEED_COMMANDER_CENTRIC_KSTAR` is exactly `0`. The disabled state omits `kstar_control`; it never reinstates the deleted router or message gate.
 
 - [x] **Step 4: Remove automatic routing APIs while retaining attachment helpers**
 
@@ -1728,7 +1728,7 @@ Expected: only design/plan and files named in this plan, plus test-driven fixes 
 ## Rollback Boundaries
 
 - Each task ends in an independently revertible commit.
-- Task 3 enables the new tool only when `ORKAS_COMMANDER_CENTRIC_KSTAR=1`; Task 4 flips the default so only exact `0` disables it.
+- Task 3 enables the new tool only when `COGSEED_COMMANDER_CENTRIC_KSTAR=1`; Task 4 flips the default so only exact `0` disables it.
 - The kill switch disables new `kstar_control` injection only; it must not re-enable the deleted pre-router or independent Forecast runner.
 - Legacy state readers remain for one compatibility release even after new writes stop.
 

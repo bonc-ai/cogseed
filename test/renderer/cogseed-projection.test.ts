@@ -14,7 +14,7 @@ function loadProjection(invokeImpl: (...args: any[]) => Promise<any>) {
   vm.createContext(sandbox);
   const source = readFileSync(resolve(__dirname, '../../src/renderer/modules/ipc-shim.js'), 'utf8');
   vm.runInContext(source, sandbox, { filename: 'ipc-shim.js' });
-  return sandbox.window.mateAgentProjection;
+  return sandbox.window.cogseedAgentProjection;
 }
 
 describe('Mate renderer projection cache', () => {
@@ -27,17 +27,17 @@ describe('Mate renderer projection cache', () => {
     const first = projection.sessions({ onUpdate: (value: unknown) => updates.push(value) });
     expect(first.snapshot).toBeNull();
     await Promise.resolve();
-    resolveRefresh({ ok: true, sessions: [{ sessionId: 'mate-session-1' }] });
+    resolveRefresh({ ok: true, sessions: [{ sessionId: 'cogseed-session-1' }] });
     await first.refresh;
-    expect(updates).toEqual([[{ sessionId: 'mate-session-1' }]]);
+    expect(updates).toEqual([[{ sessionId: 'cogseed-session-1' }]]);
 
-    const secondInvoke = vi.fn(async () => ({ ok: true, sessions: [{ sessionId: 'mate-session-2' }] }));
+    const secondInvoke = vi.fn(async () => ({ ok: true, sessions: [{ sessionId: 'cogseed-session-2' }] }));
     projection.setInvoker(secondInvoke);
     const secondUpdates: unknown[] = [];
     const second = projection.sessions({ onUpdate: (value: unknown) => secondUpdates.push(value) });
-    expect(second.snapshot).toEqual([{ sessionId: 'mate-session-1' }]);
+    expect(second.snapshot).toEqual([{ sessionId: 'cogseed-session-1' }]);
     await second.refresh;
-    expect(secondUpdates).toEqual([[{ sessionId: 'mate-session-2' }]]);
+    expect(secondUpdates).toEqual([[{ sessionId: 'cogseed-session-2' }]]);
     expect(secondUpdates).toHaveLength(1);
   });
 
@@ -46,28 +46,28 @@ describe('Mate renderer projection cache', () => {
   it('normalizes a conversation id to the Mate commander compatibility session id', async () => {
     const invoke = vi.fn(async () => ({
       ok: true,
-      session: { sessionId: 'mate-session-gconv-conversation-a' },
+      session: { sessionId: 'cogseed-session-gconv-conversation-a' },
       collaboration: null,
     }));
     const projection = loadProjection(invoke);
 
     await projection.session('conversation-a').refresh;
 
-    expect(invoke).toHaveBeenCalledWith('mate_agent.session.read', { sessionId: 'gconv-conversation-a' });
+    expect(invoke).toHaveBeenCalledWith('cogseed.session.read', { sessionId: 'gconv-conversation-a' });
   });
 
   it('deduplicates concurrent refreshes for one collaboration snapshot key', async () => {
     const invoke = vi.fn(async () => ({
       ok: true,
-      session: { sessionId: 'mate-session-1' },
-      collaboration: { sessionId: 'mate-session-1', task: { taskId: 'mate-task-1' } },
+      session: { sessionId: 'cogseed-session-1' },
+      collaboration: { sessionId: 'cogseed-session-1', task: { taskId: 'cogseed-task-1' } },
     }));
     const projection = loadProjection(invoke);
     const a: unknown[] = [];
     const b: unknown[] = [];
 
-    const first = projection.session('mate-session-1', { onUpdate: (value: unknown) => a.push(value) });
-    const second = projection.collaboration('mate-session-1', { onUpdate: (value: unknown) => b.push(value) });
+    const first = projection.session('cogseed-session-1', { onUpdate: (value: unknown) => a.push(value) });
+    const second = projection.collaboration('cogseed-session-1', { onUpdate: (value: unknown) => b.push(value) });
     expect(first.refresh).toBe(second.refresh);
     await first.refresh;
     expect(invoke).toHaveBeenCalledTimes(1);

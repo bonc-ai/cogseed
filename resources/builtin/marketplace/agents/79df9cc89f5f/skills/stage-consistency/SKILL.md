@@ -8,7 +8,7 @@ category: creation
 
 # stage-consistency
 
-How to keep characters, settings, and style **consistent across many generated shots** (and across scenes in a long story). This is the depth layer on top of the generation line: the generation line makes clips; this skill makes the SAME character look the same in every clip. Host-neutral — describe the outcome; use generic built-in capabilities for generation/retrieval (Orkas: `generate_image`, `generate_video`, `kb_*`) and VideoStudio skill scripts for media extraction (`stage-edit edit_video --op extract_frame` via `bin/run-skill.cjs`).
+How to keep characters, settings, and style **consistent across many generated shots** (and across scenes in a long story). This is the depth layer on top of the generation line: the generation line makes clips; this skill makes the SAME character look the same in every clip. Host-neutral — describe the outcome; use generic built-in capabilities for generation/retrieval (CogSeed: `generate_image`, `generate_video`, `kb_*`) and VideoStudio skill scripts for media extraction (`stage-edit edit_video --op extract_frame` via `bin/run-skill.cjs`).
 
 ## 1. Character bible (extract once, lock the look)
 

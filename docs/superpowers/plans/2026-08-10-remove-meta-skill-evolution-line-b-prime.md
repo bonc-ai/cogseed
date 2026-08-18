@@ -6,7 +6,7 @@
 
 **Architecture:** First create an archive worktree that preserves the current `develop` state. In the active worktree, delete the standalone Evolution Console UI, delete `src/main/features/evolution/`, remove the `packages/nseap-meta-skill-engine` workspace and all build/packaging hooks, and make P3394 run without a bundled KSTAR engine by default. Preserve only the user-facing Skills/Cognition version-history and rollback behavior by moving that logic into `src/main/features/skills/` so it no longer depends on Meta Skill Engine or the evolution feature namespace.
 
-**Tech Stack:** Electron main process TypeScript, classic renderer JavaScript, `window.orkas.invoke`, npm workspaces, Vitest through `npm run test:js` / `npm test`, shell launchers `run.sh` and `run.cmd`.
+**Tech Stack:** Electron main process TypeScript, classic renderer JavaScript, `window.cogseed.invoke`, npm workspaces, Vitest through `npm run test:js` / `npm test`, shell launchers `run.sh` and `run.cmd`.
 
 ---
 
@@ -90,7 +90,7 @@
   - Remove `metaSkillEnginePackageDir()`.
 - Modify: `src/main/features/p3394/kstar-factory.ts`
   - Stop constructing a default command from `packages/nseap-meta-skill-engine/dist/index.js`.
-  - Only create a KSTAR adapter when `ORKAS_KSTAR_ENGINE_COMMAND` and `ORKAS_KSTAR_ENGINE_ARGS` are explicitly configured.
+  - Only create a KSTAR adapter when `COGSEED_KSTAR_ENGINE_COMMAND` and `COGSEED_KSTAR_ENGINE_ARGS` are explicitly configured.
   - Return `null` in degraded mode when external engine configuration is absent.
 - Modify: `test/main/features/p3394/kstar-factory.test.ts`
   - Assert that no env configuration returns `null` and logs degraded/unavailable.
@@ -107,7 +107,7 @@
   - Run `npm install --package-lock-only` after package changes.
 - Modify: `run.sh` and `run.cmd`
   - Remove auto-build and auto-injection logic for bundled Meta Skill Engine.
-  - Preserve support for user-provided `ORKAS_KSTAR_ENGINE_*` env vars by passing them through when present.
+  - Preserve support for user-provided `COGSEED_KSTAR_ENGINE_*` env vars by passing them through when present.
 - Modify: `bin/packaged-resource-gate.cjs`
   - Remove `packages/nseap-meta-skill-engine` from `EXTRA_RESOURCES_CONTRACT`.
 - Modify: `scripts/verify-packaged-dev.cjs`
@@ -189,11 +189,11 @@ let root = '';
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-version-store-'));
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
 });
 
 afterEach(async () => {
-  delete process.env.ORKAS_WORKSPACE_ROOT;
+  delete process.env.COGSEED_WORKSPACE_ROOT;
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -619,10 +619,10 @@ In `test/main/features/p3394/kstar-factory.test.ts`, change the default-config t
 Add or keep a test with explicit env:
 
 ```ts
-process.env.ORKAS_KSTAR_ENGINE_COMMAND = 'node';
-process.env.ORKAS_KSTAR_ENGINE_ARGS = JSON.stringify(['/opt/kstar/dist/index.js', '--stdio']);
-process.env.ORKAS_KSTAR_ENGINE_CWD = '/opt/kstar';
-process.env.ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR = '/opt/kstar/ontologies';
+process.env.COGSEED_KSTAR_ENGINE_COMMAND = 'node';
+process.env.COGSEED_KSTAR_ENGINE_ARGS = JSON.stringify(['/opt/kstar/dist/index.js', '--stdio']);
+process.env.COGSEED_KSTAR_ENGINE_CWD = '/opt/kstar';
+process.env.COGSEED_KSTAR_ENGINE_ONTOLOGY_DIR = '/opt/kstar/ontologies';
 ```
 
 Expected adapter config for the explicit-env test:
@@ -646,15 +646,15 @@ In `src/main/features/p3394/kstar-factory.ts`:
 
 ```ts
 function configuredEngineConfig(): Pick<CreateKstarAdapterOptions, 'engineCommand' | 'engineArgs' | 'engineCwd' | 'engineEnv'> | null {
-  const command = process.env.ORKAS_KSTAR_ENGINE_COMMAND;
-  const argsRaw = process.env.ORKAS_KSTAR_ENGINE_ARGS;
+  const command = process.env.COGSEED_KSTAR_ENGINE_COMMAND;
+  const argsRaw = process.env.COGSEED_KSTAR_ENGINE_ARGS;
   if (!command || !argsRaw) return null;
   return {
     engineCommand: command,
     engineArgs: JSON.parse(argsRaw),
-    engineCwd: process.env.ORKAS_KSTAR_ENGINE_CWD,
-    engineEnv: process.env.ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR
-      ? { NSEAP_ONTOLOGY_DIR: process.env.ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR }
+    engineCwd: process.env.COGSEED_KSTAR_ENGINE_CWD,
+    engineEnv: process.env.COGSEED_KSTAR_ENGINE_ONTOLOGY_DIR
+      ? { NSEAP_ONTOLOGY_DIR: process.env.COGSEED_KSTAR_ENGINE_ONTOLOGY_DIR }
       : undefined,
   };
 }
@@ -680,9 +680,9 @@ and ends before:
 cd "$APP_DIR"
 ```
 
-Then change the macOS `ARGS` construction so it passes KSTAR args only when `ORKAS_KSTAR_ENGINE_COMMAND` is already set by the environment.
+Then change the macOS `ARGS` construction so it passes KSTAR args only when `COGSEED_KSTAR_ENGINE_COMMAND` is already set by the environment.
 
-In `run.cmd`, delete the block that sets `KSTAR_ENGINE_DIR`, `KSTAR_ENGINE_ENTRY`, and default `ORKAS_KSTAR_ENGINE_*` values from `packages\nseap-meta-skill-engine`.
+In `run.cmd`, delete the block that sets `KSTAR_ENGINE_DIR`, `KSTAR_ENGINE_ENTRY`, and default `COGSEED_KSTAR_ENGINE_*` values from `packages\nseap-meta-skill-engine`.
 
 - [ ] **Step 8.5: Remove package scripts and resources**
 
@@ -786,7 +786,7 @@ At the top of `docs/superpowers/handover-meta-skill-console.md`, add:
 In `docs/README.md`, replace claims that `packages/nseap-meta-skill-engine/` is the current unique KSTAR core with text saying:
 
 ```md
-The previous repository-owned Meta Skill Engine line was archived out of the active worktree on 2026-08-10. P3394 now runs without a bundled KSTAR engine by default; an external engine may be configured with `ORKAS_KSTAR_ENGINE_COMMAND` and `ORKAS_KSTAR_ENGINE_ARGS`.
+The previous repository-owned Meta Skill Engine line was archived out of the active worktree on 2026-08-10. P3394 now runs without a bundled KSTAR engine by default; an external engine may be configured with `COGSEED_KSTAR_ENGINE_COMMAND` and `COGSEED_KSTAR_ENGINE_ARGS`.
 ```
 
 - [ ] **Step 10.3: Update source package note**
@@ -893,7 +893,7 @@ Expected: all tests pass. If sqlite ABI fails, run `npm run rebuild:sqlite:elect
 Run:
 
 ```bash
-scripts/restart-mate.sh
+scripts/restart-cogseed.sh
 ```
 
 Expected: command exits successfully and starts the `messaging` runtime in the background.
@@ -904,8 +904,8 @@ Run:
 
 ```bash
 TODAY="$(date +%Y-%m-%d)"
-tail -n 120 "$HOME/.orkas/runtime-variants/messaging/data/logs/$TODAY.log"
-tail -n 120 /tmp/mate-agent-messaging-run.log
+tail -n 120 "$HOME/.cogseed/runtime-variants/messaging/data/logs/$TODAY.log"
+tail -n 120 /tmp/cogseed-agent-messaging-run.log
 ```
 
 Expected:

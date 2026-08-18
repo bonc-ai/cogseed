@@ -1,10 +1,10 @@
 /**
- * Orkas — Electron main entry.
+ * CogSeed — Electron main entry.
  *
  * Boot sequence:
  *   1. `bootstrap.cjs` resolves the install
- *      container (`~/.orkas` on macOS/Linux; on Windows a drive recorded
- *      in `%LOCALAPPDATA%\Orkas\install-pin.json`), runs the one-shot
+ *      container (`~/.cogseed` on macOS/Linux; on Windows a drive recorded
+ *      in `%LOCALAPPDATA%\CogSeed\install-pin.json`), runs the one-shot
  *      `PC/data` → `<container>/data` migration, and sets
  *      `COGSEED_WORKSPACE_ROOT` before tsx loads this module. Source variants
  *      use separate containers; packaged builds use the stable main path.
@@ -124,7 +124,7 @@ import { getBootDeviceProfile } from './util/boot-device-profile';
 import * as storage from './storage';
 import { initLogger, createLogger } from './logger';
 initLogger();
-const log = createLogger('orkas');
+const log = createLogger('cogseed');
 const marketplaceBootLog = createLogger('marketplace_boot');
 
 // Replay any pin / migration warnings buffered by install-data-root
@@ -141,7 +141,7 @@ import { installSdkTimeoutPatch } from './model/core-agent/sdk-timeout-patch';
 installSdkTimeoutPatch();
 
 // Keep SSE as the preferred model transport, but do not let a provider-local
-// response-header failfast preempt Orkas' own turn-level abort/watchdog policy.
+// response-header failfast preempt CogSeed' own turn-level abort/watchdog policy.
 import { installSseHeaderTimeoutPatch } from './model/core-agent/sse-header-timeout-patch';
 installSseHeaderTimeoutPatch();
 
@@ -471,7 +471,7 @@ function registerIpc(): void {
     }
   };
   ipcMain.on('cogseed:bootI18n', handleBootI18n);
-  ipcMain.on('orkas:bootI18n', handleBootI18n);
+  ipcMain.on('cogseed:bootI18n', handleBootI18n);
 
   // Renderer reports throttled keyboard/pointer/wheel activity. Background
   // boot work uses this only as an admission hint; no interaction payload is
@@ -1011,7 +1011,7 @@ function registerChatMediaProtocol(): void {
 // "My Apps" bundles. Both are read-only and every disk request is filtered
 // through a feature resolver (safe ids / safe relpath / traversal guard /
 // served-extension allowlist / regular-file check). The reserved virtual
-// relpath `__orkas/bridge.js` is served from the in-memory `BRIDGE_JS`
+// relpath `__cogseed/bridge.js` is served from the in-memory `BRIDGE_JS`
 // constant, not from disk. Fixed hosts sidestep URL-parser divergence the same
 // way `chat-media://cid/...` does. `Access-Control-Allow-Origin: *` is set
 // defensively — `chat-app://` URLs are only issuable from inside this app.

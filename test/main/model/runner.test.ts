@@ -12,17 +12,17 @@ let prevWs: string | undefined;
 let prevAnthropicKey: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-runner-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runner-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevAnthropicKey = process.env.ANTHROPIC_API_KEY;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   delete process.env.ANTHROPIC_API_KEY;
   vi.resetModules();
 });
 
 afterEach(() => {
   vi.doUnmock('@earendil-works/pi-ai/oauth');
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (prevAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
   else process.env.ANTHROPIC_API_KEY = prevAnthropicKey;
   fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -39,7 +39,7 @@ const child = spawn(electronBin, [vitestBin, ...forwardedArgs], {
     // Electron's process.execPath: if they replace the child environment and
     // drop ELECTRON_RUN_AS_NODE, macOS launches another GUI app. Preserve the
     // outer npm/node executable as the explicit test-helper runtime.
-    ORKAS_TEST_NODE: process.execPath,
+    COGSEED_TEST_NODE: process.execPath,
   },
 });
 

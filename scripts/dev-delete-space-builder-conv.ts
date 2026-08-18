@@ -12,11 +12,11 @@ async function main() {
     console.error('usage: npx tsx scripts/dev-delete-space-builder-conv.ts <uid> <cid>');
     process.exit(2);
   }
-  // 先初始化数据根（设置 ORKAS_WORKSPACE_ROOT），再加载依赖 paths 的模块。
+  // 先初始化数据根（设置 COGSEED_WORKSPACE_ROOT），再加载依赖 paths 的模块。
   // require（非 import）避免静态提升导致顺序颠倒。
   const { initializeInstallDataRoot } = require('../src/main/install-data-root.cjs');
-  const variant = process.env.ORKAS_RUNTIME_VARIANT || 'mate';
-  process.env.ORKAS_RUNTIME_VARIANT = variant;
+  const variant = process.env.COGSEED_RUNTIME_VARIANT || 'cogseed';
+  process.env.COGSEED_RUNTIME_VARIANT = variant;
   initializeInstallDataRoot(variant, { allowWorkspaceOverride: false });
 
   const { createAppRecycleBatchForConversation } = require('../src/main/features/recycle_bin');

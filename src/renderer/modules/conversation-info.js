@@ -17,7 +17,7 @@ const ConversationInfo = (() => {
   let _activitySeq = 0;
   let _fileSeq = 0;
   let _attachmentSeq = 0;
-  let _mateProjectionSeq = 0;
+  let _cogseedProjectionSeq = 0;
   const _locallyDeletedPaths = new Set();
   let _loading = false;
   let _loadingSource = '';
@@ -46,7 +46,7 @@ const ConversationInfo = (() => {
     runtime: null,
     actors: [],
     collaboration: null,
-    mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' },
+    cogseed: { session: null, collaboration: null, sessions: [], loading: false, error: '' },
     wakeRequests: [],
     protocolEvents: [],
     protocolError: '',
@@ -323,89 +323,89 @@ const ConversationInfo = (() => {
     };
   }
 
-  function _setMateProjectionState(next, seq) {
-    if (seq !== _mateProjectionSeq || (_cid && next && next.sessionId && next.sessionId !== _cid)) return;
-    const mate = next || { session: null, collaboration: null, sessions: [], loading: false, error: '' };
+  function _setCogSeedProjectionState(next, seq) {
+    if (seq !== _cogseedProjectionSeq || (_cid && next && next.sessionId && next.sessionId !== _cid)) return;
+    const cogseed = next || { session: null, collaboration: null, sessions: [], loading: false, error: '' };
     _snapshot = {
       ..._snapshot,
-      mate: {
-        session: mate.session || null,
-        collaboration: mate.collaboration || null,
-        sessions: Array.isArray(mate.sessions) ? mate.sessions : _snapshot.mate.sessions,
-        loading: !!mate.loading,
-        error: mate.error ? String(mate.error) : '',
+      cogseed: {
+        session: cogseed.session || null,
+        collaboration: cogseed.collaboration || null,
+        sessions: Array.isArray(cogseed.sessions) ? cogseed.sessions : _snapshot.cogseed.sessions,
+        loading: !!cogseed.loading,
+        error: cogseed.error ? String(cogseed.error) : '',
       },
-      collaboration: mate.collaboration || _snapshot.collaboration,
+      collaboration: cogseed.collaboration || _snapshot.collaboration,
     };
     if (_activeTab === 'collaboration') _renderBody();
   }
 
-  function _renderMateProjectionError(message) {
-    return `<div class="conversation-info-empty is-small is-error">${escapeHtml(_label('conversation_info.mate.load_failed', 'Could not load Mate overview: {reason}', { reason: message }))}</div>`;
+  function _renderCogSeedProjectionError(message) {
+    return `<div class="conversation-info-empty is-small is-error">${escapeHtml(_label('conversation_info.cogseed.load_failed', 'Could not load Mate overview: {reason}', { reason: message }))}</div>`;
   }
 
-  function _renderMateActions(task, actions) {
+  function _renderCogSeedActions(task, actions) {
     if (!task) return '';
     const buttons = [];
-    if (actions && actions.retry) buttons.push(`<button type="button" class="conversation-info-mate-action" data-mate-action="retry" data-mate-task-id="${escapeHtml(task.taskId)}" data-mate-request-id="${escapeHtml(task.requestId)}">${escapeHtml(_label('common.retry', 'Retry'))}</button>`);
-    if (actions && actions.resume) buttons.push(`<button type="button" class="conversation-info-mate-action" data-mate-action="resume" data-mate-task-id="${escapeHtml(task.taskId)}" data-mate-request-id="${escapeHtml(task.requestId)}">${escapeHtml(_label('common.resume', 'Resume'))}</button>`);
-    if (actions && actions.abort) buttons.push(`<button type="button" class="conversation-info-mate-action is-danger" data-mate-action="abort" data-mate-task-id="${escapeHtml(task.taskId)}">${escapeHtml(_label('common.abort', 'Abort'))}</button>`);
-    return buttons.length ? `<div class="conversation-info-mate-actions">${buttons.join('')}</div>` : '';
+    if (actions && actions.retry) buttons.push(`<button type="button" class="conversation-info-cogseed-action" data-cogseed-action="retry" data-cogseed-task-id="${escapeHtml(task.taskId)}" data-cogseed-request-id="${escapeHtml(task.requestId)}">${escapeHtml(_label('common.retry', 'Retry'))}</button>`);
+    if (actions && actions.resume) buttons.push(`<button type="button" class="conversation-info-cogseed-action" data-cogseed-action="resume" data-cogseed-task-id="${escapeHtml(task.taskId)}" data-cogseed-request-id="${escapeHtml(task.requestId)}">${escapeHtml(_label('common.resume', 'Resume'))}</button>`);
+    if (actions && actions.abort) buttons.push(`<button type="button" class="conversation-info-cogseed-action is-danger" data-cogseed-action="abort" data-cogseed-task-id="${escapeHtml(task.taskId)}">${escapeHtml(_label('common.abort', 'Abort'))}</button>`);
+    return buttons.length ? `<div class="conversation-info-cogseed-actions">${buttons.join('')}</div>` : '';
   }
 
-  function _renderMateOverview() {
-    const mate = _snapshot.mate || {};
-    const session = mate.session || null;
+  function _renderCogSeedOverview() {
+    const cogseed = _snapshot.cogseed || {};
+    const session = cogseed.session || null;
     if (!session) {
-      if (mate.loading) return `<div class="conversation-info-empty">${escapeHtml(_label('common.loading', 'Loading…'))}</div>`;
-      if (mate.error) return _renderMateProjectionError(mate.error);
-      return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.mate.empty', 'No Mate collaboration snapshot yet.'))}</div>`;
+      if (cogseed.loading) return `<div class="conversation-info-empty">${escapeHtml(_label('common.loading', 'Loading…'))}</div>`;
+      if (cogseed.error) return _renderCogSeedProjectionError(cogseed.error);
+      return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.cogseed.empty', 'No Mate collaboration snapshot yet.'))}</div>`;
     }
-    const collaboration = session.collaboration || mate.collaboration || null;
+    const collaboration = session.collaboration || cogseed.collaboration || null;
     const task = collaboration && collaboration.task ? collaboration.task : null;
     const actors = collaboration && Array.isArray(collaboration.actors) ? collaboration.actors : [];
     const timeline = collaboration && Array.isArray(collaboration.timeline) ? collaboration.timeline : [];
     const workflow = collaboration && collaboration.workflow ? collaboration.workflow : { childTaskIds: [], steps: [] };
-    const actionSummary = task && task.actions ? _renderMateActions(task, task.actions) : '';
+    const actionSummary = task && task.actions ? _renderCogSeedActions(task, task.actions) : '';
     const stepRows = Array.isArray(workflow.steps) && workflow.steps.length
-      ? `<div class="conversation-info-mate-steps">${workflow.steps.map((step) => `<div class="conversation-info-mate-step"><div class="conversation-info-mate-step-title">${escapeHtml(step.title || step.stepId || '')}</div><div class="conversation-info-mate-step-meta">${escapeHtml(step.status || '')}${step.actorId ? ` · ${escapeHtml(step.actorId)}` : ''}${Array.isArray(step.dependsOn) && step.dependsOn.length ? ` · ${escapeHtml(step.dependsOn.join(', '))}` : ''}</div>${step.resultSummary ? `<div class="conversation-info-mate-step-summary">${escapeHtml(step.resultSummary)}</div>` : ''}</div>`).join('')}</div>`
-      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.mate.no_steps', 'No workflow steps yet.'))}</div>`;
+      ? `<div class="conversation-info-cogseed-steps">${workflow.steps.map((step) => `<div class="conversation-info-cogseed-step"><div class="conversation-info-cogseed-step-title">${escapeHtml(step.title || step.stepId || '')}</div><div class="conversation-info-cogseed-step-meta">${escapeHtml(step.status || '')}${step.actorId ? ` · ${escapeHtml(step.actorId)}` : ''}${Array.isArray(step.dependsOn) && step.dependsOn.length ? ` · ${escapeHtml(step.dependsOn.join(', '))}` : ''}</div>${step.resultSummary ? `<div class="conversation-info-cogseed-step-summary">${escapeHtml(step.resultSummary)}</div>` : ''}</div>`).join('')}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.cogseed.no_steps', 'No workflow steps yet.'))}</div>`;
     const actorRows = actors.length
-      ? `<div class="conversation-info-mate-actors">${actors.map((actor) => `<div class="conversation-info-mate-actor"><div class="conversation-info-mate-actor-role">${escapeHtml(actor.role || '')}</div><div class="conversation-info-mate-actor-meta">${escapeHtml(actor.actorId || '')}${actor.taskId ? ` · ${escapeHtml(actor.taskId)}` : ''}${actor.status ? ` · ${escapeHtml(actor.status)}` : ''}</div></div>`).join('')}</div>`
-      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.mate.no_actors', 'No actors yet.'))}</div>`;
+      ? `<div class="conversation-info-cogseed-actors">${actors.map((actor) => `<div class="conversation-info-cogseed-actor"><div class="conversation-info-cogseed-actor-role">${escapeHtml(actor.role || '')}</div><div class="conversation-info-cogseed-actor-meta">${escapeHtml(actor.actorId || '')}${actor.taskId ? ` · ${escapeHtml(actor.taskId)}` : ''}${actor.status ? ` · ${escapeHtml(actor.status)}` : ''}</div></div>`).join('')}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.cogseed.no_actors', 'No actors yet.'))}</div>`;
     const timelineRows = timeline.length
-      ? `<div class="conversation-info-mate-timeline">${timeline.slice(-8).map((event) => `<div class="conversation-info-mate-timeline-item"><div class="conversation-info-mate-timeline-head">${escapeHtml(event.type || '')} · ${escapeHtml(event.createdAt || '')}</div><div class="conversation-info-mate-timeline-body">${escapeHtml(event.summary || '')}</div></div>`).join('')}</div>`
-      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.mate.no_timeline', 'No recovery timeline yet.'))}</div>`;
+      ? `<div class="conversation-info-cogseed-timeline">${timeline.slice(-8).map((event) => `<div class="conversation-info-cogseed-timeline-item"><div class="conversation-info-cogseed-timeline-head">${escapeHtml(event.type || '')} · ${escapeHtml(event.createdAt || '')}</div><div class="conversation-info-cogseed-timeline-body">${escapeHtml(event.summary || '')}</div></div>`).join('')}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.cogseed.no_timeline', 'No recovery timeline yet.'))}</div>`;
     const childIds = Array.isArray(workflow.childTaskIds) && workflow.childTaskIds.length
-      ? `<div class="conversation-info-mate-child-tree">${workflow.childTaskIds.map((id) => `<span class="conversation-info-mate-child-chip">${escapeHtml(id)}</span>`).join('')}</div>`
+      ? `<div class="conversation-info-cogseed-child-tree">${workflow.childTaskIds.map((id) => `<span class="conversation-info-cogseed-child-chip">${escapeHtml(id)}</span>`).join('')}</div>`
       : '';
-    return `<section class="conversation-info-collaboration-section conversation-info-mate-overview">
-      <div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.mate.section_title', 'Mate Collaboration Overview'))}</div>
-      <div class="conversation-info-mate-meta">${escapeHtml(session.sessionId)} · ${escapeHtml(session.latestStatus || 'idle')} · ${escapeHtml(_label('conversation_info.mate.task_count', '{count} tasks', { count: session.taskCount || 0 }))}</div>
-      <div class="conversation-info-mate-task-title">${escapeHtml(task && task.title ? task.title : _label('conversation_info.mate.no_task', 'No active task.'))}</div>
+    return `<section class="conversation-info-collaboration-section conversation-info-cogseed-overview">
+      <div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.cogseed.section_title', 'Mate Collaboration Overview'))}</div>
+      <div class="conversation-info-cogseed-meta">${escapeHtml(session.sessionId)} · ${escapeHtml(session.latestStatus || 'idle')} · ${escapeHtml(_label('conversation_info.cogseed.task_count', '{count} tasks', { count: session.taskCount || 0 }))}</div>
+      <div class="conversation-info-cogseed-task-title">${escapeHtml(task && task.title ? task.title : _label('conversation_info.cogseed.no_task', 'No active task.'))}</div>
       ${actionSummary}
       ${childIds}
-      <div class="conversation-info-mate-grid">
-        <div class="conversation-info-mate-card"><div class="conversation-info-mate-card-title">${escapeHtml(_label('conversation_info.mate.actors', 'Actors'))}</div>${actorRows}</div>
-        <div class="conversation-info-mate-card"><div class="conversation-info-mate-card-title">${escapeHtml(_label('conversation_info.mate.steps', 'Workflow'))}</div>${stepRows}</div>
-        <div class="conversation-info-mate-card"><div class="conversation-info-mate-card-title">${escapeHtml(_label('conversation_info.mate.timeline', 'Recovery Timeline'))}</div>${timelineRows}</div>
+      <div class="conversation-info-cogseed-grid">
+        <div class="conversation-info-cogseed-card"><div class="conversation-info-cogseed-card-title">${escapeHtml(_label('conversation_info.cogseed.actors', 'Actors'))}</div>${actorRows}</div>
+        <div class="conversation-info-cogseed-card"><div class="conversation-info-cogseed-card-title">${escapeHtml(_label('conversation_info.cogseed.steps', 'Workflow'))}</div>${stepRows}</div>
+        <div class="conversation-info-cogseed-card"><div class="conversation-info-cogseed-card-title">${escapeHtml(_label('conversation_info.cogseed.timeline', 'Recovery Timeline'))}</div>${timelineRows}</div>
       </div>
     </section>`;
   }
 
-  async function _primeMateProjection(cid, opts = {}) {
-    if (!cid || !window.mateAgentProjection || typeof window.mateAgentProjection.session !== 'function') return null;
-    const seq = ++_mateProjectionSeq;
-    const entry = window.mateAgentProjection.session(cid, {
+  async function _primeCogSeedProjection(cid, opts = {}) {
+    if (!cid || !window.cogseedAgentProjection || typeof window.cogseedAgentProjection.session !== 'function') return null;
+    const seq = ++_cogseedProjectionSeq;
+    const entry = window.cogseedAgentProjection.session(cid, {
       onUpdate: (value) => {
-        if (seq !== _mateProjectionSeq || cid !== _cid) return;
+        if (seq !== _cogseedProjectionSeq || cid !== _cid) return;
         const next = value || null;
         _snapshot = {
           ..._snapshot,
-          mate: {
+          cogseed: {
             session: next,
             collaboration: next && next.collaboration ? next.collaboration : null,
-            sessions: _snapshot.mate.sessions,
+            sessions: _snapshot.cogseed.sessions,
             loading: false,
             error: '',
           },
@@ -415,15 +415,15 @@ const ConversationInfo = (() => {
       },
     });
     if (entry && entry.snapshot) {
-      _setMateProjectionState({ session: entry.snapshot, collaboration: entry.snapshot && entry.snapshot.collaboration ? entry.snapshot.collaboration : null, sessions: _snapshot.mate.sessions, loading: true, error: '' }, seq);
+      _setCogSeedProjectionState({ session: entry.snapshot, collaboration: entry.snapshot && entry.snapshot.collaboration ? entry.snapshot.collaboration : null, sessions: _snapshot.cogseed.sessions, loading: true, error: '' }, seq);
     } else {
-      _setMateProjectionState({ session: null, collaboration: null, sessions: _snapshot.mate.sessions, loading: true, error: '' }, seq);
+      _setCogSeedProjectionState({ session: null, collaboration: null, sessions: _snapshot.cogseed.sessions, loading: true, error: '' }, seq);
     }
     try {
       await entry.refresh;
     } catch (err) {
-      if (seq !== _mateProjectionSeq || cid !== _cid) return null;
-      _setMateProjectionState({ session: null, collaboration: null, sessions: _snapshot.mate.sessions, loading: false, error: (err && err.message) || String(err) }, seq);
+      if (seq !== _cogseedProjectionSeq || cid !== _cid) return null;
+      _setCogSeedProjectionState({ session: null, collaboration: null, sessions: _snapshot.cogseed.sessions, loading: false, error: (err && err.message) || String(err) }, seq);
     }
     return entry;
   }
@@ -1003,17 +1003,17 @@ const ConversationInfo = (() => {
   }
 
   function _renderCollaborationOverview() {
-    const mateState = _snapshot.mate || {};
-    if (!_snapshot.collaboration && !mateState.session && !mateState.loading && !mateState.error && !_deriveAgentActivityRows(_snapshot).length && !_collectCollaborationAttentionItems().length) {
+    const cogseedState = _snapshot.cogseed || {};
+    if (!_snapshot.collaboration && !cogseedState.session && !cogseedState.loading && !cogseedState.error && !_deriveAgentActivityRows(_snapshot).length && !_collectCollaborationAttentionItems().length) {
       return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.collaboration.empty', 'No active collaboration yet.'))}</div>`;
     }
     const collaboration = _snapshot.collaboration || null;
     const runtime = _snapshot.runtime || {};
     const attentionItems = _collectCollaborationAttentionItems();
-    const mateHtml = (mateState.session || mateState.loading || mateState.error)
-      ? _safeSection(() => _renderMateOverview(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)
+    const cogseedHtml = (cogseedState.session || cogseedState.loading || cogseedState.error)
+      ? _safeSection(() => _renderCogSeedOverview(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)
       : '';
-    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${mateHtml}${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}</div>`;
+    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${cogseedHtml}${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}</div>`;
   }
 
   function _protocolEventData(event) {
@@ -1028,7 +1028,7 @@ const ConversationInfo = (() => {
 
   function _protocolRoleLabel(role) {
     const value = String(role || '');
-    if (value === 'orkas_core') return _label('conversation_info.protocol.role.orkas_core', 'Orkas Core');
+    if (value === 'cogseed_core') return _label('conversation_info.protocol.role.cogseed_core', 'CogSeed Core');
     if (value === 'external_expert') return _label('conversation_info.protocol.role.external_expert', 'External Expert');
     return value || _label('conversation_info.protocol.unknown', 'Unknown');
   }
@@ -1076,13 +1076,13 @@ const ConversationInfo = (() => {
     const total = events.length;
     const success = events.filter((event) => _protocolResult(event) === 'success').length;
     const error = total - success;
-    const core = events.filter((event) => _protocolEventData(event).role === 'orkas_core').length;
+    const core = events.filter((event) => _protocolEventData(event).role === 'cogseed_core').length;
     const external = events.filter((event) => _protocolEventData(event).role === 'external_expert').length;
     return `<div class="conversation-info-protocol-summary">
       <div class="conversation-info-protocol-stat is-primary"><span>${escapeHtml(_label('conversation_info.protocol.stat_total', 'Calls'))}</span><strong>${total}</strong></div>
       <div class="conversation-info-protocol-stat"><span>${escapeHtml(_protocolResultLabel('success'))}</span><strong>${success}</strong></div>
       <div class="conversation-info-protocol-stat ${error ? 'is-error' : ''}"><span>${escapeHtml(_protocolResultLabel('error'))}</span><strong>${error}</strong></div>
-      <div class="conversation-info-protocol-stat"><span>${escapeHtml(_protocolRoleLabel('orkas_core'))}</span><strong>${core}</strong></div>
+      <div class="conversation-info-protocol-stat"><span>${escapeHtml(_protocolRoleLabel('cogseed_core'))}</span><strong>${core}</strong></div>
       <div class="conversation-info-protocol-stat"><span>${escapeHtml(_protocolRoleLabel('external_expert'))}</span><strong>${external}</strong></div>
     </div>`;
   }
@@ -1493,12 +1493,12 @@ const ConversationInfo = (() => {
       const keepResume = !!(_snapshot.resumeEvidence && _resumeEvidenceCid === target);
       _snapshot = {
         ...snapshot,
-        mate: _snapshot.mate || { session: null, collaboration: null, sessions: [], loading: false, error: '' },
+        cogseed: _snapshot.cogseed || { session: null, collaboration: null, sessions: [], loading: false, error: '' },
         resumeEvidence: keepResume ? _snapshot.resumeEvidence : null,
       };
       if (!keepResume) _resumeEvidenceCid = '';
       _error = '';
-      void _primeMateProjection(target, { render: silent }).catch(() => {});
+      void _primeCogSeedProjection(target, { render: silent }).catch(() => {});
     } catch (err) {
       if (seq !== _seq || target !== _cid) return;
       _error = (err && err.message) || String(err);
@@ -1573,7 +1573,7 @@ const ConversationInfo = (() => {
     _open = false;
     _resumeEvidenceCid = '';
     _carriedRunsExpanded = false;
-    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '' };
+    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, cogseed: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '' };
     _protocolFilters.agent = '';
     _protocolFilters.role = '';
     _protocolFilters.result = '';
@@ -1992,19 +1992,19 @@ const ConversationInfo = (() => {
             });
           return;
         }
-        const mateAction = ev.target.closest('[data-mate-action]');
-        if (mateAction && _snapshot.mate && _snapshot.mate.session) {
+        const cogseedAction = ev.target.closest('[data-cogseed-action]');
+        if (cogseedAction && _snapshot.cogseed && _snapshot.cogseed.session) {
           ev.preventDefault();
           ev.stopPropagation();
-          const action = mateAction.dataset.mateAction;
-          const taskId = mateAction.dataset.mateTaskId || '';
-          const requestId = mateAction.dataset.mateRequestId || '';
+          const action = cogseedAction.dataset.cogseedAction;
+          const taskId = cogseedAction.dataset.cogseedTaskId || '';
+          const requestId = cogseedAction.dataset.cogseedRequestId || '';
           if (action === 'abort' && taskId) {
-            void window.cogseed.invoke('mate_agent.task.abort', { taskId }).then(() => refresh(_cid));
+            void window.cogseed.invoke('cogseed.task.abort', { taskId }).then(() => refresh(_cid));
           } else if (action === 'retry' && taskId && requestId) {
-            void window.cogseed.invoke('mate_agent.task.retry', { taskId, requestId }).then(() => refresh(_cid));
+            void window.cogseed.invoke('cogseed.task.retry', { taskId, requestId }).then(() => refresh(_cid));
           } else if (action === 'resume' && taskId && requestId) {
-            void window.cogseed.invoke('mate_agent.task.resume', { taskId, requestId, continuation: (_snapshot.mate.session && _snapshot.mate.session.collaboration && _snapshot.mate.session.collaboration.task && _snapshot.mate.session.collaboration.task.title) || 'Resume task.' }).then(() => refresh(_cid));
+            void window.cogseed.invoke('cogseed.task.resume', { taskId, requestId, continuation: (_snapshot.cogseed.session && _snapshot.cogseed.session.collaboration && _snapshot.cogseed.session.collaboration.task && _snapshot.cogseed.session.collaboration.task.title) || 'Resume task.' }).then(() => refresh(_cid));
           }
           return;
         }
@@ -2061,7 +2061,7 @@ const ConversationInfo = (() => {
         const name = (file.querySelector('.conversation-info-file-name')?.textContent || _baseName(path)).trim();
         try {
           ev.dataTransfer.effectAllowed = 'copy';
-          ev.dataTransfer.setData('application/x-orkas-file', JSON.stringify({ path, name }));
+          ev.dataTransfer.setData('application/x-cogseed-file', JSON.stringify({ path, name }));
           ev.dataTransfer.setData('text/plain', path);
         } catch (_) { /* best-effort */ }
       });

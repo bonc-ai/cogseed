@@ -330,7 +330,7 @@ export const codexBackend: LocalBackend = {
 
       // Anything else — surface as a log event. Bucketed noise
       // (CODEX_DROP_TO_DEBUG) goes at level=debug so it's visible only
-      // with ORKAS_LOG_LEVEL=debug; everything genuinely unknown goes
+      // with COGSEED_LOG_LEVEL=debug; everything genuinely unknown goes
       // at level=info so users see what the binary is doing instead
       // of staring at a quiet rail. Trimmed to keep rail rows short.
       const lvl: 'debug' | 'info' = CODEX_DROP_TO_DEBUG.has(method) ? 'debug' : 'info';
@@ -532,7 +532,7 @@ function buildCodexArgs(opts: BackendRunOptions): string[] {
   // with a sanitized env (PATH/HOME only) — it does NOT inherit this Codex
   // process's env — so the non-secret bridge env must be injected via `-c
   // mcp_servers.cogseed.env.*`. The token/socket are NOT here; they live in
-  // the 0600 file that ORKAS_BRIDGE_ENV_FILE points at, so they never hit argv.
+  // the 0600 file that COGSEED_BRIDGE_ENV_FILE points at, so they never hit argv.
   if (opts.bridge) args.push(...buildCodexBridgeOverrides(opts.bridge.server));
   if (opts.customArgs && opts.customArgs.length) args.push(...opts.customArgs);
   return args;
@@ -540,8 +540,8 @@ function buildCodexArgs(opts: BackendRunOptions): string[] {
 
 /** Secret-bearing bridge env keys that must never be serialized into argv.
  *  They reach cogseed-bridge.cjs through the 0600 file referenced by
- *  ORKAS_BRIDGE_ENV_FILE, which IS injected (it is just a path). */
-const CODEX_BRIDGE_SECRET_ENV_KEYS = new Set(['ORKAS_BRIDGE_TOKEN', 'ORKAS_BRIDGE_SOCKET']);
+ *  COGSEED_BRIDGE_ENV_FILE, which IS injected (it is just a path). */
+const CODEX_BRIDGE_SECRET_ENV_KEYS = new Set(['COGSEED_BRIDGE_TOKEN', 'COGSEED_BRIDGE_SOCKET']);
 
 /** `-c mcp_servers.cogseed.*` override args from the bridge server entry.
  *  Values are TOML: strings quoted, args as an inline array. The non-secret

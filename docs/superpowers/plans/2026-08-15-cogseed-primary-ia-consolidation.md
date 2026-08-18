@@ -4,7 +4,7 @@
 > **状态：** 待实施
 > **依据：** `CogSeed_60秒Aha一级导航与认知资产交互规范_doc-v0.2_Review.md` §3、§7、§10
 > **范围：** 仅一级信息架构（一级导航 + 入口/子入口重组）。60秒Aha路由、Token平台/额度后端、多Agent会话、低负担确认的深层交互**不在本期**，只以依赖和backlog形式标注。
-> **应用：** 真实应用 `mate-agent/`（renderer 为 vanilla HTML/CSS/JS classic scripts）。
+> **应用：** 真实应用 `cogseed-agent/`（renderer 为 vanilla HTML/CSS/JS classic scripts）。
 
 ---
 

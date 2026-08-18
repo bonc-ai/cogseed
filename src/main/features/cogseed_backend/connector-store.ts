@@ -5,30 +5,30 @@ import { fileEditLock } from '../../util/locks';
 import * as localSecrets from '../../util/local-secret-store';
 import type { ToolSchema, Transport } from '../connectors/types';
 import {
-  assertMateConnectorId,
-  assertMateUserId,
-  mateConnectorFile,
-  mateConnectorSecretFile,
-  mateConnectorsDirectory,
+  assertCogSeedConnectorId,
+  assertCogSeedUserId,
+  cogseedConnectorFile,
+  cogseedConnectorSecretFile,
+  cogseedConnectorsDirectory,
 } from './paths';
 
-export const MATE_CONNECTOR_SCHEMA_VERSION = 1 as const;
-export type MateConnectorStatus = 'disconnected' | 'connected' | 'error';
+export const COGSEED_CONNECTOR_SCHEMA_VERSION = 1 as const;
+export type CogSeedConnectorStatus = 'disconnected' | 'connected' | 'error';
 
-export interface MateConnectorRecord {
-  schemaVersion: typeof MATE_CONNECTOR_SCHEMA_VERSION;
+export interface CogSeedConnectorRecord {
+  schemaVersion: typeof COGSEED_CONNECTOR_SCHEMA_VERSION;
   id: string;
   displayName: string;
   transport: Transport;
   enabledSubtools: string[] | null;
   toolsCache: ToolSchema[];
   toolsCachedAt: number;
-  status: MateConnectorStatus;
+  status: CogSeedConnectorStatus;
   createdAt: string;
   updatedAt: string;
 }
 
-interface MateConnectorMetadata extends Omit<MateConnectorRecord, 'transport'> {
+interface CogSeedConnectorMetadata extends Omit<CogSeedConnectorRecord, 'transport'> {
   transportKind: Transport['kind'];
 }
 
@@ -37,7 +37,7 @@ function isEnoent(error: unknown): boolean {
 }
 
 function secretContext(userId: string, id: string): localSecrets.LocalSecretContext {
-  return { namespace: 'mate.connectors.transport', ownerId: userId, recordId: id };
+  return { namespace: 'cogseed.connectors.transport', ownerId: userId, recordId: id };
 }
 
 function validateTransport(value: unknown): Transport {
@@ -54,21 +54,21 @@ function validateTransport(value: unknown): Transport {
   throw new Error('unsupported CogSeed connector transport');
 }
 
-function validateMetadata(userId: string, value: unknown, expectedId: string): MateConnectorMetadata {
+function validateMetadata(userId: string, value: unknown, expectedId: string): CogSeedConnectorMetadata {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed CogSeed connector metadata');
   const row = value as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_CONNECTOR_SCHEMA_VERSION || row.id !== expectedId || typeof row.displayName !== 'string') throw new Error('malformed CogSeed connector metadata');
-  assertMateConnectorId(expectedId);
+  if (row.schemaVersion !== COGSEED_CONNECTOR_SCHEMA_VERSION || row.id !== expectedId || typeof row.displayName !== 'string') throw new Error('malformed CogSeed connector metadata');
+  assertCogSeedConnectorId(expectedId);
   if (row.transportKind !== 'stdio' && row.transportKind !== 'streamable-http') throw new Error('malformed CogSeed connector metadata');
   if (!Array.isArray(row.toolsCache) || (row.enabledSubtools !== null && !Array.isArray(row.enabledSubtools))) throw new Error('malformed CogSeed connector metadata');
   if (typeof row.status !== 'string' || !['disconnected', 'connected', 'error'].includes(row.status)) throw new Error('malformed CogSeed connector metadata');
   if (typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') throw new Error('malformed CogSeed connector metadata');
   void userId;
-  return row as unknown as MateConnectorMetadata;
+  return row as unknown as CogSeedConnectorMetadata;
 }
 
-async function readMetadata(userId: string, id: string): Promise<MateConnectorMetadata> {
-  try { return validateMetadata(userId, JSON.parse(await fs.readFile(mateConnectorFile(userId, id), 'utf8')), id); }
+async function readMetadata(userId: string, id: string): Promise<CogSeedConnectorMetadata> {
+  try { return validateMetadata(userId, JSON.parse(await fs.readFile(cogseedConnectorFile(userId, id), 'utf8')), id); }
   catch (error) {
     if (isEnoent(error)) throw new Error('CogSeed connector not found');
     if (error instanceof SyntaxError) throw new Error('malformed CogSeed connector metadata');
@@ -76,59 +76,59 @@ async function readMetadata(userId: string, id: string): Promise<MateConnectorMe
   }
 }
 
-export async function createMateConnector(userId: string, input: { id: string; displayName: string; transport: Transport; enabledSubtools?: string[] | null }): Promise<MateConnectorRecord> {
-  assertMateUserId(userId);
-  const id = assertMateConnectorId(input.id);
+export async function createCogSeedConnector(userId: string, input: { id: string; displayName: string; transport: Transport; enabledSubtools?: string[] | null }): Promise<CogSeedConnectorRecord> {
+  assertCogSeedUserId(userId);
+  const id = assertCogSeedConnectorId(input.id);
   const displayName = String(input.displayName || '').trim();
   if (!displayName || displayName.length > 200) throw new Error('invalid CogSeed connector display name');
   const transport = validateTransport(input.transport);
   const now = nowIso();
-  const metadata: MateConnectorMetadata = { schemaVersion: MATE_CONNECTOR_SCHEMA_VERSION, id, displayName, transportKind: transport.kind, enabledSubtools: input.enabledSubtools === undefined ? null : (input.enabledSubtools === null ? null : Array.from(new Set((input.enabledSubtools || []).map(String)))), toolsCache: [], toolsCachedAt: 0, status: 'disconnected', createdAt: now, updatedAt: now };
+  const metadata: CogSeedConnectorMetadata = { schemaVersion: COGSEED_CONNECTOR_SCHEMA_VERSION, id, displayName, transportKind: transport.kind, enabledSubtools: input.enabledSubtools === undefined ? null : (input.enabledSubtools === null ? null : Array.from(new Set((input.enabledSubtools || []).map(String)))), toolsCache: [], toolsCachedAt: 0, status: 'disconnected', createdAt: now, updatedAt: now };
   const secret = localSecrets.encryptLocalSecret(secretContext(userId, id), JSON.stringify(transport));
-  await fileEditLock(mateConnectorFile(userId, id)).runExclusive(async () => {
-    await writeJson(mateConnectorFile(userId, id), metadata);
-    await writeJson(mateConnectorSecretFile(userId, id), { schemaVersion: MATE_CONNECTOR_SCHEMA_VERSION, encryptedTransport: secret });
+  await fileEditLock(cogseedConnectorFile(userId, id)).runExclusive(async () => {
+    await writeJson(cogseedConnectorFile(userId, id), metadata);
+    await writeJson(cogseedConnectorSecretFile(userId, id), { schemaVersion: COGSEED_CONNECTOR_SCHEMA_VERSION, encryptedTransport: secret });
   });
   return { ...metadata, transport };
 }
 
-export async function readMateConnector(userId: string, id: string): Promise<MateConnectorRecord> {
-  assertMateUserId(userId);
-  const connectorId = assertMateConnectorId(id);
+export async function readCogSeedConnector(userId: string, id: string): Promise<CogSeedConnectorRecord> {
+  assertCogSeedUserId(userId);
+  const connectorId = assertCogSeedConnectorId(id);
   const metadata = await readMetadata(userId, connectorId);
   let secret: { encryptedTransport?: unknown };
-  try { secret = JSON.parse(await fs.readFile(mateConnectorSecretFile(userId, connectorId), 'utf8')); }
+  try { secret = JSON.parse(await fs.readFile(cogseedConnectorSecretFile(userId, connectorId), 'utf8')); }
   catch (error) { if (isEnoent(error)) throw new Error('CogSeed connector transport secret not found'); throw error; }
   if (typeof secret.encryptedTransport !== 'string') throw new Error('malformed CogSeed connector transport secret');
   const transport = validateTransport(JSON.parse(localSecrets.decryptLocalSecret(secretContext(userId, connectorId), secret.encryptedTransport)));
   return { ...metadata, transport };
 }
 
-export async function listMateConnectors(userId: string): Promise<MateConnectorRecord[]> {
-  assertMateUserId(userId);
+export async function listCogSeedConnectors(userId: string): Promise<CogSeedConnectorRecord[]> {
+  assertCogSeedUserId(userId);
   let entries: import('node:fs').Dirent[];
-  try { entries = await fs.readdir(mateConnectorsDirectory(userId), { withFileTypes: true }); }
+  try { entries = await fs.readdir(cogseedConnectorsDirectory(userId), { withFileTypes: true }); }
   catch (error) { if (isEnoent(error)) return []; throw error; }
-  const out: MateConnectorRecord[] = [];
-  for (const entry of entries) if (entry.isFile() && entry.name.endsWith('.json')) out.push(await readMateConnector(userId, entry.name.slice(0, -5)));
+  const out: CogSeedConnectorRecord[] = [];
+  for (const entry of entries) if (entry.isFile() && entry.name.endsWith('.json')) out.push(await readCogSeedConnector(userId, entry.name.slice(0, -5)));
   return out.sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
-export async function updateMateConnectorTools(userId: string, id: string, toolsCache: ToolSchema[], status: MateConnectorStatus): Promise<MateConnectorRecord> {
-  const current = await readMateConnector(userId, id);
-  const metadata: MateConnectorMetadata = { schemaVersion: MATE_CONNECTOR_SCHEMA_VERSION, id: current.id, displayName: current.displayName, transportKind: current.transport.kind, enabledSubtools: current.enabledSubtools, toolsCache, toolsCachedAt: Date.now(), status, createdAt: current.createdAt, updatedAt: nowIso() };
-  await writeJson(mateConnectorFile(userId, current.id), metadata);
+export async function updateCogSeedConnectorTools(userId: string, id: string, toolsCache: ToolSchema[], status: CogSeedConnectorStatus): Promise<CogSeedConnectorRecord> {
+  const current = await readCogSeedConnector(userId, id);
+  const metadata: CogSeedConnectorMetadata = { schemaVersion: COGSEED_CONNECTOR_SCHEMA_VERSION, id: current.id, displayName: current.displayName, transportKind: current.transport.kind, enabledSubtools: current.enabledSubtools, toolsCache, toolsCachedAt: Date.now(), status, createdAt: current.createdAt, updatedAt: nowIso() };
+  await writeJson(cogseedConnectorFile(userId, current.id), metadata);
   return { ...metadata, transport: current.transport };
 }
 
 
-export async function updateMateConnectorEnabledSubtools(userId: string, id: string, enabledSubtools: string[] | null): Promise<MateConnectorRecord> {
-  assertMateUserId(userId);
-  const connectorId = assertMateConnectorId(id);
-  const current = await readMateConnector(userId, connectorId);
+export async function updateCogSeedConnectorEnabledSubtools(userId: string, id: string, enabledSubtools: string[] | null): Promise<CogSeedConnectorRecord> {
+  assertCogSeedUserId(userId);
+  const connectorId = assertCogSeedConnectorId(id);
+  const current = await readCogSeedConnector(userId, connectorId);
   const normalized = enabledSubtools === null ? null : Array.from(new Set(enabledSubtools.map(String).filter(Boolean)));
-  const metadata: MateConnectorMetadata = {
-    schemaVersion: MATE_CONNECTOR_SCHEMA_VERSION,
+  const metadata: CogSeedConnectorMetadata = {
+    schemaVersion: COGSEED_CONNECTOR_SCHEMA_VERSION,
     id: current.id,
     displayName: current.displayName,
     transportKind: current.transport.kind,
@@ -139,13 +139,13 @@ export async function updateMateConnectorEnabledSubtools(userId: string, id: str
     createdAt: current.createdAt,
     updatedAt: nowIso(),
   };
-  await fileEditLock(mateConnectorFile(userId, connectorId)).runExclusive(async () => writeJson(mateConnectorFile(userId, connectorId), metadata));
+  await fileEditLock(cogseedConnectorFile(userId, connectorId)).runExclusive(async () => writeJson(cogseedConnectorFile(userId, connectorId), metadata));
   return { ...metadata, transport: current.transport };
 }
 
-export async function deleteMateConnector(userId: string, id: string): Promise<void> {
-  assertMateUserId(userId);
-  const connectorId = assertMateConnectorId(id);
-  await fs.rm(mateConnectorFile(userId, connectorId), { force: true });
-  await fs.rm(mateConnectorSecretFile(userId, connectorId), { force: true });
+export async function deleteCogSeedConnector(userId: string, id: string): Promise<void> {
+  assertCogSeedUserId(userId);
+  const connectorId = assertCogSeedConnectorId(id);
+  await fs.rm(cogseedConnectorFile(userId, connectorId), { force: true });
+  await fs.rm(cogseedConnectorSecretFile(userId, connectorId), { force: true });
 }

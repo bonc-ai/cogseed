@@ -128,22 +128,22 @@
 ### Task 7: Mate Runtime capability 与 host-router 双门禁
 
 **Files:**
-- Create: `src/main/features/mate_agent_backend/messaging-capability-policy.ts`
-- Create: `src/main/features/mate_agent_backend/messaging-host-adapter.ts`
-- Modify: `src/main/features/mate_agent_backend/runtime-controller.ts`
-- Modify: `src/main/features/mate_agent_backend/host-tool-router.ts`
-- Modify: `src/main/features/mate_agent_runtime/protocol.ts`
-- Modify: `src/main/features/mate_agent_runtime/index.ts`
-- Modify: `src/main/features/mate_agent_runtime/kernel/types.ts`
-- Modify: `src/main/features/mate_agent_runtime/runtime-executor.ts`
-- Modify: `src/main/features/mate_agent_runtime/kernel/tools/catalog.ts`
-- Modify: `src/main/features/mate_agent_runtime/kernel/tools/runner.ts`
-- Test: `test/main/features/mate_agent_backend/host-tool-router.test.ts`
-- Test: `test/main/features/mate_agent_backend/runtime-controller.test.ts`
-- Test: `test/main/features/mate_agent_runtime/protocol.test.ts`
-- Test: `test/main/features/mate_agent_runtime/runtime-executor.test.ts`
-- Test: `test/main/features/mate_agent_runtime/kernel/tool-runtime.test.ts`
-- Test: `test/main/features/mate_agent_runtime/kernel/execution-loop.test.ts`
+- Create: `src/main/features/cogseed_backend/messaging-capability-policy.ts`
+- Create: `src/main/features/cogseed_backend/messaging-host-adapter.ts`
+- Modify: `src/main/features/cogseed_backend/runtime-controller.ts`
+- Modify: `src/main/features/cogseed_backend/host-tool-router.ts`
+- Modify: `src/main/features/cogseed_runtime/protocol.ts`
+- Modify: `src/main/features/cogseed_runtime/index.ts`
+- Modify: `src/main/features/cogseed_runtime/kernel/types.ts`
+- Modify: `src/main/features/cogseed_runtime/runtime-executor.ts`
+- Modify: `src/main/features/cogseed_runtime/kernel/tools/catalog.ts`
+- Modify: `src/main/features/cogseed_runtime/kernel/tools/runner.ts`
+- Test: `test/main/features/cogseed_backend/host-tool-router.test.ts`
+- Test: `test/main/features/cogseed_backend/runtime-controller.test.ts`
+- Test: `test/main/features/cogseed_runtime/protocol.test.ts`
+- Test: `test/main/features/cogseed_runtime/runtime-executor.test.ts`
+- Test: `test/main/features/cogseed_runtime/kernel/tool-runtime.test.ts`
+- Test: `test/main/features/cogseed_runtime/kernel/execution-loop.test.ts`
 
 - [ ] 先写 commander/member/generic catalog 和 host-router 负向测试。
 - [ ] 扩展 protocol/runtime kernel request 传递主进程生成的 `capabilities`，并让 tool runner 按 capability 返回过滤后的 catalog。
@@ -157,5 +157,5 @@
 
 - [ ] 运行所有聚焦测试，再运行完整 `npm test`，不使用 `npx vitest`。
 - [ ] 运行 `git diff --check`，检查 `git status --short`，确认无 secret/open_id/chat_id 泄露。
-- [ ] 执行 `scripts/restart-mate.sh`，检查 messaging runtime 日志和 `/tmp/mate-agent-messaging-run.log`。
+- [ ] 执行 `scripts/restart-cogseed.sh`，检查 messaging runtime 日志和 `/tmp/cogseed-agent-messaging-run.log`。
 - [ ] 在真实 Feishu 配置存在时验证目标发现、确认、本人收信、平台回执，以及拒绝/abort 不发送；缺少真实环境时明确报告。

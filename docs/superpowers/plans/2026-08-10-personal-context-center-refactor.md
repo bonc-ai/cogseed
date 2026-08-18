@@ -799,14 +799,14 @@ Expected: exit code 0.
 - [ ] **Step 3: Restart the messaging runtime.**
 
 ```bash
-scripts/restart-mate.sh
+scripts/restart-cogseed.sh
 ```
 
 Then inspect:
 
 ```bash
-ls -t ~/.orkas/runtime-variants/messaging/data/logs/*.log | head -1
-sed -n '1,240p' /tmp/mate-agent-messaging-run.log
+ls -t ~/.cogseed/runtime-variants/messaging/data/logs/*.log | head -1
+sed -n '1,240p' /tmp/cogseed-agent-messaging-run.log
 ```
 
 Expected: the messaging runtime starts without new personal-context, IPC, or renderer bootstrap errors.

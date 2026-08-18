@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
-import { MATE_AGENT_RUNTIME_PROTOCOL_VERSION, type RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
+import { COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, type RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
 import { createRuntimeWorkerService, type RuntimeWorkerChild } from '../../../../src/main/features/cogseed_runtime/worker-process';
 
 function fakeChild(onMessage: (message: any, child: RuntimeWorkerChild) => void): RuntimeWorkerChild & { sent: any[] } {
@@ -25,13 +25,13 @@ it('dispatches worker host calls with the normalized pending request', async () 
   const service = createRuntimeWorkerService({
     hostToolHandler: async (call, context) => { requestSeen = context.request; return { content: `host:${call.name}` }; },
     spawnWorker: () => fakeChild((msg, child) => {
-      if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['mate-host-tools-v1'] });
+      if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['cogseed-host-tools-v1'] });
       if (msg.type === 'run') write(child, { type: 'host_tool_call', request_id: msg.request_id, runtime_session_id: msg.runtime_session_id, call_id: 'host-call-1', name: 'office_read', input: { path: '/tmp/a.docx' } });
       if (msg.type === 'host_tool_result') write(child, { type: 'result', request_id: msg.request_id, runtime_session_id: msg.runtime_session_id, status: 'completed', text: msg.content });
     }),
   });
   const request: RuntimeRunRequest = {
-    protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION, type: 'run', request_id: 'req-host-protocol', runtime_session_id: 'mruntime-host-protocol', user_id: 'host-user', task: 'host', context: [], attachments: [],
+    protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, type: 'run', request_id: 'req-host-protocol', runtime_session_id: 'mruntime-host-protocol', user_id: 'host-user', task: 'host', context: [], attachments: [],
   };
   const events = [];
   for await (const event of service.run(request)) events.push(event);

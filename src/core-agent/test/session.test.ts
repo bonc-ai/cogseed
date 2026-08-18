@@ -155,18 +155,18 @@ describe("Session", () => {
     expect(summaryToolUses[1].input).toEqual({ command });
 
     const serialized = JSON.stringify(summaryToolUses.map((u) => u.input));
-    expect(serialized).not.toContain("__orkas_compacted_tool_use");
+    expect(serialized).not.toContain("__cogseed_compacted_tool_use");
     expect(serialized).not.toContain("old tool input string compacted");
   });
 
-  it("estimateModelTokens uses the provider view without tool result compaction", () => {
+  it("esticogseedModelTokens uses the provider view without tool result compaction", () => {
     const session = new Session();
     session.addAssistantMessage([{ type: "tool_use", id: "call-big", name: "bash", input: {} }]);
     session.addToolResult("call-big", "a".repeat(20_000), undefined, false);
     session.addAssistantMessage([{ type: "text", text: "seen" }]);
 
-    expect(session.estimateTokens()).toBeGreaterThan(4_000);
-    expect(session.estimateModelTokens()).toBeGreaterThan(4_000);
+    expect(session.esticogseedTokens()).toBeGreaterThan(4_000);
+    expect(session.esticogseedModelTokens()).toBeGreaterThan(4_000);
   });
 
   it("tracked completed history keeps only user input and final assistant output in the model view", () => {
@@ -262,7 +262,7 @@ describe("Session", () => {
     const before = JSON.stringify(session.getSerializedContextState());
     const projected = session.previewHistorySummaryTokens("Projected summary", candidate.turnIds);
 
-    expect(projected).toBeLessThan(session.estimateModelTokens());
+    expect(projected).toBeLessThan(session.esticogseedModelTokens());
     expect(JSON.stringify(session.getSerializedContextState())).toBe(before);
     expect(session.getPendingHistoryArchive()?.turnIds).toEqual(candidate.turnIds);
   });
@@ -414,7 +414,7 @@ describe("Session", () => {
     const beforeRaw = JSON.stringify(session.getMessages());
     const projected = session.previewActiveCheckpointTokens("Projected active summary", candidate.checkpointThroughMessageIndex);
 
-    expect(projected).toBeLessThan(session.estimateModelTokens());
+    expect(projected).toBeLessThan(session.esticogseedModelTokens());
     expect(JSON.stringify(session.getSerializedContextState())).toBe(beforeState);
     expect(JSON.stringify(session.getMessages())).toBe(beforeRaw);
   });
@@ -427,7 +427,7 @@ describe("Session", () => {
       session.addToolResult(`call-${i}`, `result-${i}\n${"x".repeat(15_000)}`, undefined, false);
     }
     // Before any checkpoint the whole raw process is counted → trigger is hot.
-    const rawBefore = session.estimateActiveProcessTokens();
+    const rawBefore = session.esticogseedActiveProcessTokens();
     expect(rawBefore).toBeGreaterThan(ACTIVE_PROCESS_TRIGGER_TOKENS);
 
     const candidate = session.getPendingActiveCheckpoint();
@@ -438,7 +438,7 @@ describe("Session", () => {
     // only the retained tail (+summary), so it drops well below the trigger and
     // the checkpoint does not immediately re-fire (this is the fix: previously the
     // estimate stayed at the cumulative raw size and kept the trigger hot).
-    const liveAfter = session.estimateActiveProcessTokens();
+    const liveAfter = session.esticogseedActiveProcessTokens();
     expect(liveAfter).toBeLessThan(rawBefore);
     expect(liveAfter).toBeLessThan(ACTIVE_PROCESS_TRIGGER_TOKENS);
     expect(session.getPendingActiveCheckpoint()).toBeNull();
@@ -756,22 +756,22 @@ describe("Session", () => {
     expect(flat.some((c) => (c as { type?: string }).type === "tool_result" && (c as { toolUseId?: string }).toolUseId === "call-Z")).toBe(true);
   });
 
-  // estimateKeptTailTokens powers the runner's "skip a no-progress compaction"
+  // esticogseedKeptTailTokens powers the runner's "skip a no-progress compaction"
   // guard: it must report the tokens of exactly the tail compact() preserves.
-  it("estimateKeptTailTokens counts only the tail compact() would keep", () => {
+  it("esticogseedKeptTailTokens counts only the tail compact() would keep", () => {
     const session = new Session();
     for (let i = 0; i < 8; i++) {
       session.addUserMessage(`older message number ${i} with several words`);
       session.addAssistantMessage([{ type: "text", text: `older response ${i}` }]);
     }
-    const tail = session.estimateKeptTailTokens();
-    const all = session.estimateTokens();
+    const tail = session.esticogseedKeptTailTokens();
+    const all = session.esticogseedTokens();
     // The kept tail is at most the last 4 messages — a strict subset of 16.
     expect(tail).toBeGreaterThan(0);
     expect(tail).toBeLessThan(all);
   });
 
-  it("estimateKeptTailTokens ~= total when a huge result dominates the kept tail", () => {
+  it("esticogseedKeptTailTokens ~= total when a huge result dominates the kept tail", () => {
     const session = new Session();
     session.addUserMessage("kick off");                                              // 0 (older)
     session.addAssistantMessage([{ type: "text", text: "starting" }]);               // 1
@@ -779,8 +779,8 @@ describe("Session", () => {
     session.addToolResult("call-read", "x".repeat(400_000), undefined, false);       // 3 (huge, cap-exempt)
     session.addAssistantMessage([{ type: "text", text: "read it" }]);                // 4
 
-    const tail = session.estimateKeptTailTokens();
-    const all = session.estimateTokens();
+    const tail = session.esticogseedKeptTailTokens();
+    const all = session.esticogseedTokens();
     // The huge read_file result sits in the kept tail (last 4), so a compaction
     // would free almost nothing (only message 0). The runner's guard reads this
     // as "no progress" and skips the wasteful summary pass.
@@ -796,30 +796,30 @@ describe("Session", () => {
     expect(session.length).toBe(0);
   });
 
-  // estimateTokens: CJK-aware heuristic. Anchors the fix for the latent
+  // esticogseedTokens: CJK-aware heuristic. Anchors the fix for the latent
   // under-estimation bug that let the runner's 82% compaction guard skip
   // pure-Chinese sessions even when they were well over budget.
-  it("estimateTokens: ASCII follows the ~4 chars/token rule", () => {
+  it("esticogseedTokens: ASCII follows the ~4 chars/token rule", () => {
     const session = new Session();
     session.addUserMessage("a".repeat(4000));
     // 4000 non-CJK / 4 = 1000
-    expect(session.estimateTokens()).toBe(1000);
+    expect(session.esticogseedTokens()).toBe(1000);
   });
 
-  it("estimateTokens: CJK counts ~1.5 tokens per char, not 0.25", () => {
+  it("esticogseedTokens: CJK counts ~1.5 tokens per char, not 0.25", () => {
     const session = new Session();
     // 1000 Chinese chars — old impl returned ~250, real tokenizer gives ~1000-1500
     session.addUserMessage("中".repeat(1000));
-    const est = session.estimateTokens();
+    const est = session.esticogseedTokens();
     expect(est).toBeGreaterThanOrEqual(1400);
     expect(est).toBeLessThanOrEqual(1600);
   });
 
-  it("estimateTokens: mixed CJK + ASCII sums both buckets", () => {
+  it("esticogseedTokens: mixed CJK + ASCII sums both buckets", () => {
     const session = new Session();
     // 100 CJK + 400 ASCII → 100*1.5 + 400/4 = 150 + 100 = 250
     session.addUserMessage("中".repeat(100) + "a".repeat(400));
-    expect(session.estimateTokens()).toBe(250);
+    expect(session.esticogseedTokens()).toBe(250);
   });
 });
 

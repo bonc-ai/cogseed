@@ -67,7 +67,7 @@ describe('prompts › PromptManager (custom root)', () => {
   let mgr: PromptManager;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-prompts-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-prompts-'));
     mgr = new PromptManager(tmpDir);
   });
 

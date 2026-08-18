@@ -1,7 +1,7 @@
 # KStar 路由提升实机验证场景
 
 > 日期：2026-08-14
-> 实例：source Electron（Mate-Backend-Test worktree，variant=cogseed，重启后 PID 92661）
+> 实例：source Electron（CogSeed-Backend-Test worktree，variant=cogseed，重启后 PID 92661）
 > 数据根：`~/.cogseed/runtime-variants/cogseed/data`（uid 78967691）
 > 基线提交：`373e93a9`（路由提升层 1 + 层 2）
 > 目的：验证**常规用户措辞**也能进入 KStar 治理线（投影 + 预测 + R̂/R 比较 + 沉淀）

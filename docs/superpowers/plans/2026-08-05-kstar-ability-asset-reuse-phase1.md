@@ -14,7 +14,7 @@
 
 ## Scope guard
 
-This plan implements Phase 1 only, and every task completion must also pass a cross-cutting `zero live-import Orkas business layers` check for the code touched by that task:
+This plan implements Phase 1 only, and every task completion must also pass a cross-cutting `zero live-import CogSeed business layers` check for the code touched by that task:
 
 - AbilityAsset domain types and pure transitions;
 - shared KSTAR locking for candidate/asset consistency;
@@ -63,10 +63,10 @@ Run:
 ```bash
 git diff --check
 npm run typecheck
-npm run test:js -- test/main/features/p3394 test/main/features/mate_agent_backend test/main/features/mate_agent_runtime test/main/ipc
+npm run test:js -- test/main/features/p3394 test/main/features/cogseed_backend test/main/features/cogseed_runtime test/main/ipc
 npm test
-node scripts/smoke-mate-agent-native.mjs
-node scripts/smoke-mate-agent-host-capabilities.mjs
+node scripts/smoke-cogseed-agent-native.mjs
+node scripts/smoke-cogseed-agent-host-capabilities.mjs
 ```
 
 Expected: all commands exit 0; the baseline includes the previously verified independent-backend WIP but no AbilityAsset production files. Current uncommitted count, using `git status --porcelain` and counting untracked entries, is 44 (23 M + 20 ?? + 1 D).
@@ -106,7 +106,7 @@ Expected: a new baseline commit containing only the already-verified independent
 
 ### Task 1: Define the AbilityAsset domain and pure transitions
 
-**Completion gate:** the task is not done until the touched code passes its targeted tests and a zero live-import Orkas business layers check for the affected paths.
+**Completion gate:** the task is not done until the touched code passes its targeted tests and a zero live-import CogSeed business layers check for the affected paths.
 
 **Files:**
 - Create: `src/main/features/p3394/ability-assets.ts`
@@ -192,7 +192,7 @@ The Phase 0 approval checkpoint must name the approver in the plan before Phase 
 
 ### Task 2: Share the KSTAR lock and add the versioned asset store
 
-**Completion gate:** the task is not done until the touched code passes its targeted tests and a zero live-import Orkas business layers check for the affected paths.
+**Completion gate:** the task is not done until the touched code passes its targeted tests and a zero live-import CogSeed business layers check for the affected paths.
 
 **Files:**
 - Create: `src/main/features/p3394/kstar-lock.ts`
@@ -301,7 +301,7 @@ git commit -m "feat: add locked KSTAR ability asset store"
 
 ### Task 3: Link candidates and implement idempotent promotion
 
-**Completion gate:** the task is not done until the touched code passes its targeted tests and a zero live-import Orkas business layers check for the affected paths.
+**Completion gate:** the task is not done until the touched code passes its targeted tests and a zero live-import CogSeed business layers check for the affected paths.
 
 **Files:**
 - Create: `src/main/features/p3394/ability-asset-promotion.ts`
@@ -417,7 +417,7 @@ git commit -m "feat: promote KSTAR candidates to ability assets"
 
 ### Task 4: Add Phase 1 IPC compatibility surface
 
-**Completion gate:** the task is not done until the touched code passes its targeted tests and a zero live-import Orkas business layers check for the affected paths.
+**Completion gate:** the task is not done until the touched code passes its targeted tests and a zero live-import CogSeed business layers check for the affected paths.
 
 **Files:**
 - Modify: `src/main/ipc/index.ts`
@@ -489,7 +489,7 @@ git commit -m "feat: expose KSTAR ability asset IPC"
 
 ### Task 5: Phase 1 verification and handoff
 
-**Completion gate:** the task is not done until the touched code passes its targeted tests and a zero live-import Orkas business layers check for the affected paths.
+**Completion gate:** the task is not done until the touched code passes its targeted tests and a zero live-import CogSeed business layers check for the affected paths.
 
 **Files:**
 - No production files; verification and audit only.

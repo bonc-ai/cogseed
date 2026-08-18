@@ -1,13 +1,13 @@
-# Orkas Golden Fixture Catalog
+# CogSeed Golden Fixture Catalog
 
-> Phase 0 companion to `docs/superpowers/parity/orkas-mate-capability-matrix.md`.
+> Phase 0 companion to `docs/superpowers/parity/cogseed-cogseed-capability-matrix.md`.
 >
 > Purpose: define the concrete synthetic scenarios we will capture as immutable golden fixtures before Phase 1 implementation begins.
 
 ## Capture rules
 
 1. Use synthetic, non-secret inputs only.
-2. Capture through existing public Orkas entry points and IPC surfaces, not through internal data files.
+2. Capture through existing public CogSeed entry points and IPC surfaces, not through internal data files.
 3. Record the source revision or commit hash alongside every fixture set.
 4. Canonicalize ids, timestamps, file paths, and non-semantic ordering before storing expected output.
 5. Store each fixture family in a small, dedicated file or directory so review remains manageable.
@@ -47,7 +47,7 @@ Each fixture record should contain:
 - `src/main/features/group_chat/collaboration.ts`
 - `src/main/features/group_chat/bus.ts`
 - `src/main/features/group_chat/plan_executor.ts`
-- `src/main/features/mate_agent_backend/coordinator.ts`
+- `src/main/features/cogseed_backend/coordinator.ts`
 
 **Scenario:**
 - Create a commander session for one user.
@@ -170,7 +170,7 @@ Each fixture record should contain:
 **Source surfaces:**
 - `src/main/model/core-agent/file-tools.ts`
 - `src/main/model/core-agent/local-tools.ts`
-- `src/main/features/mate_agent_runtime/kernel/tools/file-tools.ts`
+- `src/main/features/cogseed_runtime/kernel/tools/file-tools.ts`
 
 **Expected assertions:**
 - safe ids and sandboxed paths are accepted;
@@ -183,7 +183,7 @@ Each fixture record should contain:
 
 **Source surfaces:**
 - `src/main/model/core-agent/office-tools.ts`
-- `src/main/features/mate_agent_backend/office-adapter.ts`
+- `src/main/features/cogseed_backend/office-adapter.ts`
 
 **Expected assertions:**
 - Office read returns structured text/elements;
@@ -196,8 +196,8 @@ Each fixture record should contain:
 
 **Source surfaces:**
 - `src/main/model/core-agent/browser-automation-guard.ts`
-- `src/main/features/mate_agent_backend/browser-manager.ts`
-- `src/main/features/mate_agent_backend/browser-adapter.ts`
+- `src/main/features/cogseed_backend/browser-manager.ts`
+- `src/main/features/cogseed_backend/browser-adapter.ts`
 
 **Expected assertions:**
 - snapshot output is bounded and redacted;
@@ -220,10 +220,10 @@ Each fixture record should contain:
 **Purpose:** capture restart and recovery behavior for running tasks.
 
 **Source surfaces:**
-- `src/main/features/mate_agent_backend/runtime-controller.ts`
-- `src/main/features/mate_agent_backend/recovery.ts`
-- `src/main/features/mate_agent_backend/event-store.ts`
-- `src/main/features/mate_agent_backend/task-store.ts`
+- `src/main/features/cogseed_backend/runtime-controller.ts`
+- `src/main/features/cogseed_backend/recovery.ts`
+- `src/main/features/cogseed_backend/event-store.ts`
+- `src/main/features/cogseed_backend/task-store.ts`
 
 **Expected assertions:**
 - completed tasks are not rerun after restart;
@@ -243,7 +243,7 @@ Each fixture record should contain:
 
 ### F1. `F-legacy-session-migration-v1`
 
-**Purpose:** capture migration from a legacy conversation/session shape into the Mate-native model.
+**Purpose:** capture migration from a legacy conversation/session shape into the CogSeed-native model.
 
 **Expected assertions:**
 - ids are remapped deterministically;
@@ -274,7 +274,7 @@ Each fixture record should contain:
 - only renderer-safe fields are exposed;
 - locale text remains deterministic.
 
-### G2. `G-ipc-mate-session-v1`
+### G2. `G-ipc-cogseed-session-v1`
 
 **Purpose:** capture Mate session list/read projections.
 
@@ -312,7 +312,7 @@ Each fixture record should contain:
 
 ### H3. `H-no-forbidden-import-v1`
 
-**Purpose:** ensure ordinary parity code does not import forbidden Orkas business modules.
+**Purpose:** ensure ordinary parity code does not import forbidden CogSeed business modules.
 
 **Expected assertions:**
 - the parity implementation and harness rely on adapter/facade boundaries only;

@@ -845,15 +845,15 @@ interface ConversationRepairRun {
 }
 
 function _repairIndexTails(): Map<string, Promise<ConversationRepairRun>> {
-  const g = globalThis as typeof globalThis & { __orkasChatRepairIndexTails?: Map<string, Promise<ConversationRepairRun>> };
-  if (!g.__orkasChatRepairIndexTails) g.__orkasChatRepairIndexTails = new Map();
-  return g.__orkasChatRepairIndexTails;
+  const g = globalThis as typeof globalThis & { __cogseedChatRepairIndexTails?: Map<string, Promise<ConversationRepairRun>> };
+  if (!g.__cogseedChatRepairIndexTails) g.__cogseedChatRepairIndexTails = new Map();
+  return g.__cogseedChatRepairIndexTails;
 }
 
 function _conversationWriteTails(): Map<string, Promise<void>> {
-  const g = globalThis as typeof globalThis & { __orkasChatWriteTails?: Map<string, Promise<void>> };
-  if (!g.__orkasChatWriteTails) g.__orkasChatWriteTails = new Map();
-  return g.__orkasChatWriteTails;
+  const g = globalThis as typeof globalThis & { __cogseedChatWriteTails?: Map<string, Promise<void>> };
+  if (!g.__cogseedChatWriteTails) g.__cogseedChatWriteTails = new Map();
+  return g.__cogseedChatWriteTails;
 }
 
 async function _withConversationWrite<T>(userId: string, fn: () => Promise<T>): Promise<T> {

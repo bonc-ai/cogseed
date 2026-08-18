@@ -152,7 +152,7 @@ zh/en/ja/pt 四语言同步：
 ## 验证
 
 - `npm test` 全绿。
-- 按工作区约定重启 messaging 运行时（`scripts/restart-mate.sh`），实测：
+- 按工作区约定重启 messaging 运行时（`scripts/restart-cogseed.sh`），实测：
   - 双栏渲染、四渠道切换、禁用项不可交互。
   - 飞书扫码启动/取消；企微弹窗打开、扫码完成、postMessage 校验、取消清理。
   - Telegram Token 保存后实例为启用状态（而非 enabled:false）。

@@ -1,6 +1,6 @@
 # CogSeed（P3394）生产级技术架构设计
 
-> 基于 PRD doc-v1.6（Review-3）与 Mate Agent (Orkas) Electron 代码库现状的融合架构。
+> 基于 PRD doc-v1.6（Review-3）与 Mate Agent (CogSeed) Electron 代码库现状的融合架构。
 > Harness Engineering 视角：**模型是引擎（engine），CogSeed 是整车（harness）——"模型是大家的，认知是你的"。**
 
 | 项 | 值 |
@@ -95,7 +95,7 @@ CogSeed 作为"个人认知资产 harness"，六组件映射如下——**每一
 │                                                            │
 │  ┌─────────────┐   IPC (invoke/stream)   ┌──────────────┐  │
 │  │  Renderer   │◄────────────────────────►│  Main 域     │  │
-│  │ vanilla JS  │   window.orkas.{invoke,  │  features/   │  │
+│  │ vanilla JS  │   window.cogseed.{invoke,  │  features/   │  │
 │  │ 无 bundler  │   stream} 白名单         │  ipc/ 校验层  │  │
 │  └─────────────┘                          └──────┬───────┘  │
 │                                                   │          │
@@ -116,10 +116,10 @@ CogSeed 作为"个人认知资产 harness"，六组件映射如下——**每一
 **强制约束（违反即架构违规，全部来自 AGENTS.md）：**
 
 1. 无 HTTP server、无占用端口、主进程无本地鉴权层；
-2. Renderer 访问只经 `window.orkas.{invoke, stream}` 白名单；preload.js 保持 `.js`；
+2. Renderer 访问只经 `window.cogseed.{invoke, stream}` 白名单；preload.js 保持 `.js`；
 3. `#core-agent` 只能动态 `import()`，静态导入破坏 SDK 超时补丁时序；
 4. `sdk-timeout-patch.ts` 在 index.ts 中 logger 初始化后、feature 导入前执行；
-5. 本地 CLI Agent 只能经 `local_agents/runner.ts` spawn；Runtime worker 只能经 `mate_agent_runtime/worker-process.ts` spawn，且内部工具执行只走 `kernel/tools/` 的 shell-tools.ts / skill-tools.ts → `bin/run-skill.cjs` 两个 choke point；MCP stdio 只经 `connectors/mcp-client.ts`；
+5. 本地 CLI Agent 只能经 `local_agents/runner.ts` spawn；Runtime worker 只能经 `cogseed_runtime/worker-process.ts` spawn，且内部工具执行只走 `kernel/tools/` 的 shell-tools.ts / skill-tools.ts → `bin/run-skill.cjs` 两个 choke point；MCP stdio 只经 `connectors/mcp-client.ts`；
 6. 文件类工具入口必须 `util/path-sandbox.isPathAllowed`；工具结果走 `util/tool-result-cap`；
 7. 新 core-agent 工具必须注册进 `tool-catalog.ts::TOOL_CATALOG`；工具描述放 SDK `tools[]`，不放 prompt 重复清单；
 8. 启动期异步工作走 `util/boot_init.ts`；
@@ -144,7 +144,7 @@ CogSeed 作为"个人认知资产 harness"，六组件映射如下——**每一
 │ L0 渲染层（renderer/）vanilla JS + CSS，无 bundler             │
 │    spaces.js · onboarding.js · 认知树 · 候选卡 · 复用证明       │
 └──────────────────────────┬───────────────────────────────────┘
-                           │ window.orkas.{invoke,stream}（白名单）
+                           │ window.cogseed.{invoke,stream}（白名单）
 ┌──────────────────────────▼───────────────────────────────────┐
 │ L1 IPC 适配层（ipc/）                                          │
 │    校验参数（zod 或手工 safeId 检查）→ 调用 features → 返回      │
@@ -160,7 +160,7 @@ CogSeed 作为"个人认知资产 harness"，六组件映射如下——**每一
 ┌──────────────────────────▼───────────────────────────────────┐
 │ L3 基础设施与支撑（storage · paths · logger · locks ·          │
 │    path-sandbox · log-redact · boot_init · tool-result-cap ·  │
-│    execution-records · mate_agent_runtime worker）             │
+│    execution-records · cogseed_runtime worker）             │
 └──────────────────────────┬───────────────────────────────────┘
 ┌──────────────────────────▼───────────────────────────────────┐
 │ L4 存储（<container>/data/<uid>/{cloud,local}/）               │
@@ -263,7 +263,7 @@ CogSeed 作为"个人认知资产 harness"，六组件映射如下——**每一
   任一失败 → 界面保持原状态 + 提示重试（不展示"已保存/已发芽"）
 ```
 
-- 事件账本 = `<uid>/cloud/mate_agent/<domain>-events.jsonl`（append-only，原子追加；`storage.ts::appendJsonlAtomic` 已有）。
+- 事件账本 = `<uid>/cloud/cogseed/<domain>-events.jsonl`（append-only，原子追加；`storage.ts::appendJsonlAtomic` 已有）。
 - 树/列表/历史/关系视图必须消费同一账本（FR-TREE-03），禁止各维护独立状态。
 - 失败注入测试：事件写入失败 → Receipt 失败 → 视图不更新（测试策略见 §12）。
 
@@ -324,21 +324,21 @@ TaskContinuationSnapshot {
 ```
 <container>/data/<uid>/
 ├── users.json / logs/                        # 顶层仅允许这些
-├── cloud/mate_agent/                         # 可同步的用户私有状态
+├── cloud/cogseed/                         # 可同步的用户私有状态
 │   ├── tasks/ task-events/ sessions/ requests/
 │   ├── execution-records/                    # 执行记录 + 事件 + artifacts
 │   ├── connectors/                           # 连接器元数据
 │   ├── coordinations/                        # 协调/联邦
 │   ├── kb/sources/                           # 知识库源文件
 │   └── <domain>-events.jsonl                 # 资产事件账本（新增）
-├── local/mate_agent/                         # 机器私有
+├── local/cogseed/                         # 机器私有
 │   ├── connectors/                           # 含 token 的 grant 数据（secrets_enc）
 │   ├── kb/vector/                            # sqlite 向量库
 │   └── worker-state/                         # last-recovery.json 等
 ├── local/kstar/
 │   ├── baselines/<baseline_id>.json          # 已实现
 │   └── episodes/ / candidates/               # 已实现（kstar-store/episode-store）
-└── cloud/mate_agent/artifacts/...            # 现有 artifact 体系
+└── cloud/cogseed/artifacts/...            # 现有 artifact 体系
 ```
 
 **规则**：uid 是单路径段不解析；不得缓存 uid 派生路径为模块常量（运行时取）；`cloud/` 是可同步状态、`local/` 是机器私有状态——**机器私有数据（baseline、向量库、worker-state）绝不标脏同步**。
@@ -361,7 +361,7 @@ TaskContinuationSnapshot {
 
 ### 7.1 并发模型
 
-- **单进程 + async 单线程**执行模型（Electron 主进程）；CPU 重活（ONNX 向量化等）走 `mate_agent_runtime` worker 子进程隔离（禁止 worker_threads 多 ONNX session）。
+- **单进程 + async 单线程**执行模型（Electron 主进程）；CPU 重活（ONNX 向量化等）走 `cogseed_runtime` worker 子进程隔离（禁止 worker_threads 多 ONNX session）。
 - 文件级互斥：`util/locks`（fileEditLock）+ `async-mutex`（已依赖）；JSONL 追加天然串行（单进程内 append 顺序即事件顺序）。
 - 跨文件事务：事件账本 → Receipt → 视图投影三步，**以"事件写入成功"为提交点**；视图投影失败可重建（幂等）。
 
@@ -537,7 +537,7 @@ TaskContinuationSnapshot {
 
 - **开发模式**：`./run.sh` → tsx hook 直跑 src/（改码即生效）；`npm test` / `npm run typecheck` 门禁；
 - **生产模式**：electron-builder 打包 asar；`scripts/package-dev-mac.cjs` 已有 dev 打包验证通道；
-- **runtime-variants**：`ORKAS_WORKSPACE_ROOT` 指向 `~/.orkas/runtime-variants/<variant>/data/`；重启脚本 `scripts/restart-mate.sh`；
+- **runtime-variants**：`COGSEED_WORKSPACE_ROOT` 指向 `~/.cogseed/runtime-variants/<variant>/data/`；重启脚本 `scripts/restart-cogseed.sh`；
 - **发布前置**（PRD §0.4）：Release Owner 任命 + 安全/合规 + 可追溯构建（Build/Commit/Tag）+ Known Issues；缺失任一不得公开发布二进制；
 - **签名/公证**：macOS 签名与公证是发布 Gate（Tech Lead 评估）。
 

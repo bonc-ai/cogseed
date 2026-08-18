@@ -396,7 +396,7 @@ export function buildMinimaxPortalProvider(region: MiniMaxRegion): OAuthProvider
  * multiple times (pi-ai's registry uses id as key).
  *
  * **Registry consistency**: pi-ai is an ESM-only package, but the
- * Orkas main process is transpiled at runtime via `tsx/cjs`. We've
+ * CogSeed main process is transpiled at runtime via `tsx/cjs`. We've
  * previously hit weird behavior where `register` succeeded yet
  * `getOAuthProvider` returned undefined (likely an ESM/CJS interop
  * issue producing two registry instances). After registering, we

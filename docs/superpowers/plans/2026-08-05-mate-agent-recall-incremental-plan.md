@@ -6,7 +6,7 @@
 
 **Architecture:** 保留现有模块作为权威来源和执行基础设施；新增 `src/main/features/recall/` 作为 Recall 编排层和正式 AbilityAsset 业务域。现有 `features/cognition/` 继续负责 Asset Center 的展示聚合，但不再把适配出来的旧数据误认为正式资产。所有 Recall 用户状态写入 `<uid>/cloud/recall/`，IPC 只校验参数并调用 feature，Renderer 只消费稳定 DTO。
 
-**Tech Stack:** Electron main process TypeScript；JSON/JSONL、现有 `storage.ts` 和文件锁；`window.orkas.invoke`；vanilla Renderer classic scripts；Vitest via `npm run test:js`；全量测试 via `npm test`。
+**Tech Stack:** Electron main process TypeScript；JSON/JSONL、现有 `storage.ts` 和文件锁；`window.cogseed.invoke`；vanilla Renderer classic scripts；Vitest via `npm run test:js`；全量测试 via `npm test`。
 
 ---
 

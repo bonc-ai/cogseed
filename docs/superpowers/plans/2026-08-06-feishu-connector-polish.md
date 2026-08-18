@@ -14,7 +14,7 @@
 - 存量实例权限不升级：新 API 调用失败一律静默降级（catch + `log.warn` 一次），不得抛出或阻塞消息流——与 adapters.ts `addProcessingReaction` 现有模式一致。
 - `InboundEnvelope` 只加可选字段（`synthetic?`）；`AdapterCallbacks` 只加可选回调（`resolveDelivery?`），不得破坏现有实现。
 - 合并参数固定：600ms 窗口 / 8 条 / 4000 字符 / ≥3500 字符自适应 2000ms。
-- 测试沿用临时目录模式：`beforeEach` 设 `ORKAS_WORKSPACE_ROOT` 到 `fs.mkdtempSync` 目录 + `vi.resetModules()` + 动态 import。
+- 测试沿用临时目录模式：`beforeEach` 设 `COGSEED_WORKSPACE_ROOT` 到 `fs.mkdtempSync` 目录 + `vi.resetModules()` + 动态 import。
 - 不引入新 npm 依赖；不改 IPC/渲染层。
 - git 作者统一「牛保康 <niubaokang@local>」（仓库已配置）。
 
@@ -44,16 +44,16 @@ let tmpDir = '';
 let previousRoot: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-ledger-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ledger-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

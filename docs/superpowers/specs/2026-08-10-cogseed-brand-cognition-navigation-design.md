@@ -23,7 +23,7 @@
 - 不改 `src/main/features/recall/` 目录名。
 - 不改 `src/main/features/evolution/` 目录名；该工作树已经删除独立 Evolution Console，但保留技能版本/回滚所需的后端能力。
 - 不改历史 IPC channel 名称，包括 `recall.*`、`contexts.*` 和其他已有通道。
-- 不改 `mateagent` 协议 scheme、`orkas` legacy scheme、App ID、数据目录和已有用户数据格式。
+- 不改 `cogseed` 协议 scheme、`cogseed` legacy scheme、App ID、数据目录和已有用户数据格式。
 - 不做旧安装目录或数据目录迁移。
 - 不删除资料库后端能力，只移动 renderer 的用户入口。
 - 不把 `commander` 内部角色改名为 `new-session`。
@@ -88,9 +88,9 @@ AI 团队
 以下值保持不变：
 
 ```text
-mateagent
-orkas
-com.mateagent.desktop
+cogseed
+cogseed
+com.cogseed.desktop
 recall
 commander
 contexts
@@ -123,5 +123,5 @@ contexts
 - 一级导航显示“新建会话”和“认知资产”。
 - Recall 内页显示 CogSeed、总览、认知沉淀、能力资产。
 - 用户可见品牌为 CogSeed。
-- `mateagent` / `orkas` 协议兼容，App ID、数据目录和内部 IPC 不变。
+- `cogseed` / `cogseed` 协议兼容，App ID、数据目录和内部 IPC 不变。
 - JavaScript 与 Python 资源测试全部通过。

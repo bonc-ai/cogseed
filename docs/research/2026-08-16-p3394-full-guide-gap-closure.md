@@ -3,7 +3,7 @@
 对照 `P3394_Local_Bridge_SDK_Design`（SDK primer）与
 `P3394_Raymond_Hermes_Chinese_Implementation_Guide`（实施指南）逐章审计后，
 在 `dev/p3394-bridge-runtime` 分支补齐的差距。全部在
-`mate-agent-p3394-bridge` worktree 内实现、测试并真机验证。
+`cogseed-agent-p3394-bridge` worktree 内实现、测试并真机验证。
 
 ## 本轮补齐项
 

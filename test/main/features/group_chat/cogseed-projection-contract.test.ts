@@ -10,10 +10,10 @@ describe('CogSeed to Group Chat projection contract', () => {
   it('projects process events and one terminal Agent message without executing through the Group Chat bus', async () => {
     const processEvents: unknown[] = [];
     const terminalMessages: unknown[] = [];
-    const { createMateGroupChatProjection } = await import(
+    const { createCogSeedGroupChatProjection } = await import(
       '../../../../src/main/features/cogseed_backend/group-chat-projection'
     );
-    const projection = createMateGroupChatProjection({
+    const projection = createCogSeedGroupChatProjection({
       conversationExists: vi.fn(async () => true),
       appendProcessEvent: vi.fn(async (input: unknown) => { processEvents.push(input); }),
       appendTerminalMessage: vi.fn(async (input: unknown) => { terminalMessages.push(input); }),
@@ -22,15 +22,15 @@ describe('CogSeed to Group Chat projection contract', () => {
       userId: 'projection-user',
       conversationId: 'cid-projection',
       agentId: 'agent-projection',
-      taskId: 'mate-task-projection',
-      sessionId: 'mate-session-gmember-cid-projection-agent-projection',
+      taskId: 'cogseed-task-projection',
+      sessionId: 'cogseed-session-gmember-cid-projection-agent-projection',
     };
     const events = [
-      { eventId: 'mate-event-delta', type: 'model.delta', payload: { text: 'working' } },
-      { eventId: 'mate-event-tool-start', type: 'tool.started', payload: { name: 'read_file' } },
-      { eventId: 'mate-event-tool-finish', type: 'tool.finished', payload: { name: 'read_file' } },
-      { eventId: 'mate-event-complete', type: 'task.completed', payload: { text: 'final answer' } },
-      { eventId: 'mate-event-failed-late', type: 'task.failed', payload: { error: 'late failure' } },
+      { eventId: 'cogseed-event-delta', type: 'model.delta', payload: { text: 'working' } },
+      { eventId: 'cogseed-event-tool-start', type: 'tool.started', payload: { name: 'read_file' } },
+      { eventId: 'cogseed-event-tool-finish', type: 'tool.finished', payload: { name: 'read_file' } },
+      { eventId: 'cogseed-event-complete', type: 'task.completed', payload: { text: 'final answer' } },
+      { eventId: 'cogseed-event-failed-late', type: 'task.failed', payload: { error: 'late failure' } },
     ];
 
     for (const event of events) await projection.project({ ...base, event } as any);

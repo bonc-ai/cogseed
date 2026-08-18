@@ -8,7 +8,7 @@
  * - 调用建议只生成本次使用记录，不产生新版本；
  * - 入口受 `p3394.skilllifecycle` flag 控制（关闭时主进程与渲染层双读同一配置）。
  *
- * 存储：`<uid>/cloud/mate_agent/skill-lifecycle/<skill_id>.jsonl`（append-only）。
+ * 存储：`<uid>/cloud/cogseed/skill-lifecycle/<skill_id>.jsonl`（append-only）。
  */
 
 import * as path from 'node:path';
@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../../logger';
 import { appendJsonlAtomic, readJsonl, nowIso, safeId } from '../../storage';
-import { mateAgentSkillLifecycleDir } from '../../paths';
+import { cogseedAgentSkillLifecycleDir } from '../../paths';
 import { maskId } from '../../util/log-redact';
 import { isP3394FlagEnabled } from '../p3394/flags';
 
@@ -79,7 +79,7 @@ function assertNoChangeReason(v: unknown): asserts v is NoChangeReason {
 }
 
 export function skillLifecyclePath(uid: string, skillId: string): string {
-  return path.join(mateAgentSkillLifecycleDir(uid), `${skillId}.jsonl`);
+  return path.join(cogseedAgentSkillLifecycleDir(uid), `${skillId}.jsonl`);
 }
 
 /**

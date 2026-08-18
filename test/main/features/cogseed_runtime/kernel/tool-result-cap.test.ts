@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import * as paths from '../../../../../src/main/paths';
-import { DEFAULT_RUNTIME_TOOL_POLICY, MATE_RUNTIME_TOOL_POLICY } from '../../../../../src/main/features/cogseed_runtime/kernel/config';
+import { DEFAULT_RUNTIME_TOOL_POLICY, COGSEED_RUNTIME_TOOL_POLICY } from '../../../../../src/main/features/cogseed_runtime/kernel/config';
 import { createRuntimeToolRunner } from '../../../../../src/main/features/cogseed_runtime/kernel/tools/runner';
 
 const UID = 'runtime-cap-user';
@@ -18,12 +18,12 @@ afterEach(() => {
 
 describe('CogSeed Runtime result cap boundary', () => {
   it('caps connector umbrella results before returning them to the model', async () => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-runtime-cap-'));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-cap-'));
     const runner = createRuntimeToolRunner({
       userId: UID,
       runtimeSessionId: SESSION,
       allowedRoots: [root],
-      toolPolicy: MATE_RUNTIME_TOOL_POLICY,
+      toolPolicy: COGSEED_RUNTIME_TOOL_POLICY,
       maxInlineToolResultTokens: 10,
       connectorManager: {
         listAllTools: async () => Array.from({ length: 30 }, (_, index) => ({
@@ -40,12 +40,12 @@ describe('CogSeed Runtime result cap boundary', () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('<persisted-output');
-    expect(result.persistedOutput?.path.startsWith(paths.mateRuntimeSessionToolResultsDir(UID, SESSION))).toBe(true);
+    expect(result.persistedOutput?.path.startsWith(paths.cogseedRuntimeSessionToolResultsDir(UID, SESSION))).toBe(true);
     expect(fs.existsSync(result.persistedOutput!.path)).toBe(true);
   });
 
   it('caps CogSeed KB results before returning them to the model', async () => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-runtime-cap-'));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-cap-'));
     const runner = createRuntimeToolRunner({
       userId: UID,
       runtimeSessionId: SESSION,
@@ -61,6 +61,6 @@ describe('CogSeed Runtime result cap boundary', () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('<persisted-output');
-    expect(result.persistedOutput?.path.startsWith(paths.mateRuntimeSessionToolResultsDir(UID, SESSION))).toBe(true);
+    expect(result.persistedOutput?.path.startsWith(paths.cogseedRuntimeSessionToolResultsDir(UID, SESSION))).toBe(true);
   });
 });

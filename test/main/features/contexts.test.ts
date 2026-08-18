@@ -41,9 +41,9 @@ vi.mock('../../../src/main/features/search', () => ({
 }));
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-contexts-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-contexts-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   kbEnqueueCalls.length = 0;
   searchCalls.length = 0;
   vi.resetModules();
@@ -53,7 +53,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await drainMainRuntimeForTest();
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -103,7 +103,7 @@ describe('contexts › path safety', () => {
 
   it('uploadContextFile rejects dot-prefixed target', async () => {
     const c = await loadContexts();
-    const r = c.uploadContextFile('.orkas-native-deps-verified.json', Buffer.from('{}'));
+    const r = c.uploadContextFile('.cogseed-native-deps-verified.json', Buffer.from('{}'));
     expect(r.ok).toBe(false);
     expect((r as any).error).toMatch(/hidden/i);
   });

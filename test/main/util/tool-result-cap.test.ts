@@ -11,7 +11,7 @@ import {
   TOOL_RESULT_REF_HASH_HEX,
   TOOL_RESULT_INLINE_LEDGER_STATE_KEY,
   buildPersistedOutputMarker,
-  estimateToolResultTokens,
+  esticogseedToolResultTokens,
   maybeSpillToolResult,
   persistToolResult,
   sweepToolResults,
@@ -28,7 +28,7 @@ function stubTool(name: string, result: ToolResult): AgentTool {
 }
 
 const ctx: ToolContext = { state: {} };
-const makeTmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-tool-cap-'));
+const makeTmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-tool-cap-'));
 const cleanup = (dir: string) => fs.rmSync(dir, { recursive: true, force: true });
 
 describe('tool-result-cap configuration', () => {
@@ -40,8 +40,8 @@ describe('tool-result-cap configuration', () => {
   });
 
   it('counts CJK more aggressively than ASCII', () => {
-    expect(estimateToolResultTokens('汉'.repeat(1_000))).toBe(1_500);
-    expect(estimateToolResultTokens('a'.repeat(1_000))).toBe(250);
+    expect(esticogseedToolResultTokens('汉'.repeat(1_000))).toBe(1_500);
+    expect(esticogseedToolResultTokens('a'.repeat(1_000))).toBe(250);
   });
 });
 
@@ -300,7 +300,7 @@ describe('persisted result helpers', () => {
     );
     expect(marker).toContain('ref="web_fetch.0123456789abcdef"');
     expect(marker).toContain('chars omitted; full result is stored');
-    expect(estimateToolResultTokens(marker)).toBeLessThan(1_000);
+    expect(esticogseedToolResultTokens(marker)).toBeLessThan(1_000);
   });
 });
 

@@ -47,7 +47,7 @@
  * ─────────────────────────
  * We deliberately **do not** use `err instanceof AuthError` etc here. pi-ai
  * is loaded through the ESM branch (dynamic `import('#core-agent')`) while
- * Orkas main is CJS — which causes `core-agent/src/shared/errors.js` to be
+ * CogSeed main is CJS — which causes `core-agent/src/shared/errors.js` to be
  * loaded **twice**, once per module system. Two class identities, so
  * `instanceof` silently returns false across the boundary. Every signal we
  * need lives in `err.status` / `err.message` / `err.cause.*` anyway, so we

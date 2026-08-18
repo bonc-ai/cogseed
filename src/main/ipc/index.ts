@@ -2,13 +2,13 @@
  * IPC wiring — replaces `bridge/routes.py` for the Electron era.
  *
  * Two channel families:
- *   - `orkas.invoke` (request/response): renderer → main with a logical
+ *   - `cogseed.invoke` (request/response): renderer → main with a logical
  *     channel name + payload; main returns `{ ok, ...result }` or
  *     `{ ok: false, error }`.
- *   - `orkas.streamStart` (server-push events): renderer registers a
+ *   - `cogseed.streamStart` (server-push events): renderer registers a
  *     unique `requestId`, main pushes each event via `webContents.send`
  *     on channel `stream:<requestId>`, terminated by `{ type: 'done' }`.
- *     `orkas.streamCancel` aborts an in-flight stream.
+ *     `cogseed.streamCancel` aborts an in-flight stream.
  *
  * Handler tables below are the full router — add a new logical channel by
  * dropping it into `invokeHandlers` or `streamHandlers`.
@@ -103,7 +103,7 @@ import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
 import * as chatExecutionCapability from '../features/chat_execution_capability';
-import * as mateAgentBackend from '../features/cogseed_backend';
+import * as cogseedAgentBackend from '../features/cogseed_backend';
 import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
@@ -900,25 +900,25 @@ async function ensureKstarWakeProjectionConfirmed(
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
-  'mate_agent.task.start': async (payload, ctx) => mateAgentBackend.mateIpcService.start(ctx.userId, payload),
-  'mate_agent.task.read': async (payload, ctx) => mateAgentBackend.mateIpcService.read(ctx.userId, payload),
-  'mate_agent.task.cancel': async (payload, ctx) => mateAgentBackend.mateIpcService.cancel(ctx.userId, payload),
-  'mate_agent.task.abort': async (payload, ctx) => mateAgentBackend.mateIpcService.abort(ctx.userId, payload),
-  'mate_agent.task.retry': async (payload, ctx) => mateAgentBackend.mateIpcService.retry(ctx.userId, payload),
-  'mate_agent.task.resume': async (payload, ctx) => mateAgentBackend.mateIpcService.resume(ctx.userId, payload),
-  'mate_agent.task.action': async (payload, ctx) => mateAgentBackend.mateIpcService.action(ctx.userId, payload),
-  'mate_agent.task.events': async (payload, ctx) => mateAgentBackend.mateIpcService.events(ctx.userId, payload),
-  'mate_agent.connector.list': async (_payload, ctx) => mateAgentBackend.mateIpcService.connectors(ctx.userId),
-  'mate_agent.kb.index': async (payload, ctx) => mateAgentBackend.mateIpcService.kbIndex(ctx.userId, payload),
-  'mate_agent.kb.search': async (payload, ctx) => mateAgentBackend.mateIpcService.kbSearch(ctx.userId, payload),
-  'mate_agent.kb.read': async (payload, ctx) => mateAgentBackend.mateIpcService.kbRead(ctx.userId, payload),
-  'mate_agent.kb.sources': async (_payload, ctx) => mateAgentBackend.mateIpcService.kbSources(ctx.userId),
-  'mate_agent.connector.tools': async (payload, ctx) => mateAgentBackend.mateIpcService.connectorTools(ctx.userId, payload),
-  'mate_agent.session.list': async (_payload, ctx) => ({ sessions: await mateAgentBackend.mateIpcService.sessions(ctx.userId) }),
-  'mate_agent.session.read': async (payload, ctx) => mateAgentBackend.mateIpcService.session(ctx.userId, payload),
-  'mate_agent.runtime.status': async (_payload, ctx) => mateAgentBackend.mateIpcService.runtimeStatus(ctx.userId),
-  'mate_agent.runtime.restart': async (_payload, ctx) => mateAgentBackend.mateIpcService.restartRuntime(ctx.userId),
-  'mate_agent.runtime.recover': async (_payload, ctx) => mateAgentBackend.mateIpcService.recover(ctx.userId),
+  'cogseed.task.start': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.start(ctx.userId, payload),
+  'cogseed.task.read': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.read(ctx.userId, payload),
+  'cogseed.task.cancel': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.cancel(ctx.userId, payload),
+  'cogseed.task.abort': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.abort(ctx.userId, payload),
+  'cogseed.task.retry': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.retry(ctx.userId, payload),
+  'cogseed.task.resume': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.resume(ctx.userId, payload),
+  'cogseed.task.action': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.action(ctx.userId, payload),
+  'cogseed.task.events': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.events(ctx.userId, payload),
+  'cogseed.connector.list': async (_payload, ctx) => cogseedAgentBackend.cogseedIpcService.connectors(ctx.userId),
+  'cogseed.kb.index': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.kbIndex(ctx.userId, payload),
+  'cogseed.kb.search': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.kbSearch(ctx.userId, payload),
+  'cogseed.kb.read': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.kbRead(ctx.userId, payload),
+  'cogseed.kb.sources': async (_payload, ctx) => cogseedAgentBackend.cogseedIpcService.kbSources(ctx.userId),
+  'cogseed.connector.tools': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.connectorTools(ctx.userId, payload),
+  'cogseed.session.list': async (_payload, ctx) => ({ sessions: await cogseedAgentBackend.cogseedIpcService.sessions(ctx.userId) }),
+  'cogseed.session.read': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.session(ctx.userId, payload),
+  'cogseed.runtime.status': async (_payload, ctx) => cogseedAgentBackend.cogseedIpcService.runtimeStatus(ctx.userId),
+  'cogseed.runtime.restart': async (_payload, ctx) => cogseedAgentBackend.cogseedIpcService.restartRuntime(ctx.userId),
+  'cogseed.runtime.recover': async (_payload, ctx) => cogseedAgentBackend.cogseedIpcService.recover(ctx.userId),
 
   // Execution log handlers
   'executionLog.readAll': async () => {
@@ -3188,7 +3188,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'skills.pickImportDir': async () => {
     // Runs in main; show a native directory picker attached to the focused
-    // BrowserWindow so the dialog is modal to Orkas.
+    // BrowserWindow so the dialog is modal to CogSeed.
     const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
     const opts: Electron.OpenDialogOptions = {
       properties: ['openDirectory'],
@@ -3672,11 +3672,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Metacognition-level agent self-evolution toggle. Stored at
   // preferences.json::metacognition_enabled; the actual gate's single
   // source of truth is features/metacognition.isFeatureEnabled (with the
-  // env kill switch on top). The env var `ORKAS_METACOGNITION='0'` always
+  // env kill switch on top). The env var `COGSEED_METACOGNITION='0'` always
   // overrides the UI setting.
   'prefs.getMetacognition': async () => ({
     enabled: appConfig.getMetacognitionEnabled(),
-    envForcedOff: process.env.ORKAS_METACOGNITION === '0',
+    envForcedOff: process.env.COGSEED_METACOGNITION === '0',
   }),
   'prefs.setMetacognition': async ({ enabled }) => {
     return { enabled: appConfig.setMetacognitionEnabled(!!enabled) };
@@ -4258,7 +4258,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // ── External packages management (plan §A; UI is read + manage only) ────
   // Install stays on the commander/CLI path (it needs the clone + dependency
-  // consent flow). The registry's single-writer is bin/orkas-pkg.cjs.
+  // consent flow). The registry's single-writer is bin/cogseed-pkg.cjs.
   'packages.list': async (_payload: unknown, ctx: { userId: string }) => {
     const pkgs = await import('../features/packages');
     return { ok: true as const, packages: pkgs.listPackagesForUi(ctx.userId) };
@@ -4808,8 +4808,8 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
   },
 
-  'mate_agent.task.events': async function* (payload, ctx, signal) {
-    yield* mateAgentBackend.mateIpcService.streamEvents(ctx.userId, payload, signal);
+  'cogseed.task.events': async function* (payload, ctx, signal) {
+    yield* cogseedAgentBackend.cogseedIpcService.streamEvents(ctx.userId, payload, signal);
   },
 
   'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, edit_message_id }, ctx, signal) {
@@ -5347,7 +5347,7 @@ export function register(): void {
     }
   };
   ipcMain.handle('cogseed.invoke', handleInvoke);
-  ipcMain.handle('orkas.invoke', handleInvoke);
+  ipcMain.handle('cogseed.invoke', handleInvoke);
 
   const handleStreamStart = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) return;
@@ -5392,7 +5392,7 @@ export function register(): void {
     }
   };
   ipcMain.on('cogseed.streamStart', handleStreamStart);
-  ipcMain.on('orkas.streamStart', handleStreamStart);
+  ipcMain.on('cogseed.streamStart', handleStreamStart);
 
   const handleStreamCancel = (event, rawRequestId: unknown) => {
     if (!isTrustedIpcSender(event.sender)) return;
@@ -5417,5 +5417,5 @@ export function register(): void {
     try { state.controller.abort(); } catch (_) { /* already aborted */ }
   };
   ipcMain.on('cogseed.streamCancel', handleStreamCancel);
-  ipcMain.on('orkas.streamCancel', handleStreamCancel);
+  ipcMain.on('cogseed.streamCancel', handleStreamCancel);
 }

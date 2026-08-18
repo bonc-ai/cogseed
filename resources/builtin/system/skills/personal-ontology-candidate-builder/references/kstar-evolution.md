@@ -57,5 +57,5 @@ Skill: `personal-ontology-candidate-builder`  ·  Level: `L3`  ·  Owner: `Mate 
 
 ## 运行台账
 
-- 候选与阻断：`$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/`（candidates.md / blocked_items.md / kstar_episodes.md）。
+- 候选与阻断：`$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/local/ontology_candidates/`（candidates.md / blocked_items.md / kstar_episodes.md）。
 - 台账为人读 markdown，追加不覆盖。

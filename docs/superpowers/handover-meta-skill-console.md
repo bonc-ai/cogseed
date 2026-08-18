@@ -38,7 +38,7 @@ Meta-Skill 进化控制台，替换原技能库演化能力。技术栈换写（
    故新建纯库入口 `packages/.../src/engine.ts`（只 re-export，不启动服务器），
    `engine-loader.ts` 动态 import `dist/engine.js`。**不是 `dist/index.js`**（那个末尾会启动 stdio 服务器）。
 2. **LLM 接入**：`llm-bridge.ts` 把 core-agent 的 `buildRunner`+`runReflection` 包成引擎的 `LlmComplete`；
-   模型/profile 由 buildRunner 内部解析 = 跟 Orkas agent 同步；空返回/抛错降级并标 `degraded`，不产假结果。
+   模型/profile 由 buildRunner 内部解析 = 跟 CogSeed agent 同步；空返回/抛错降级并标 `degraded`，不产假结果。
 3. **跨 ESM/CJS 边界**：只共享结构、不共享类型 import（`EvolutionRun`/`EvalRecord` 等在 PC 侧本地同构声明）。
 4. **数据落点**：派生机器态 → `<uid>/local/kstar/{evolution,evals,versions,exports}`；
    用户资产（SKILL.md、本体源、绑定）→ `<uid>/cloud/skills/<id>/`。
@@ -59,7 +59,7 @@ Meta-Skill 进化控制台，替换原技能库演化能力。技术栈换写（
 - **任务 26 手动验证**（需运行环境，未自动化）：`npm run engine:build` 后 `./run.sh`，
   逐页操作、断网看降级提示。**改渲染层后重启前须清 Electron 缓存**
   （`rm -rf "$HOME/Library/Application Support/Mate Agent"/{Code Cache,GPUCache,DawnWebGPUCache,DawnGraphiteCache}`），
-  否则加载旧脚本/样式。应用容器根 `$HOME/.orkas/data/`，日志 `$HOME/.orkas/data/logs/<date>.log`。
+  否则加载旧脚本/样式。应用容器根 `$HOME/.cogseed/data/`，日志 `$HOME/.cogseed/data/logs/<date>.log`。
 - 原型只读解包（如需对照）：`/tmp/meta-skill-proto-inspect/meta-skill-4版/`。
 
 ## 六、未做（有意排除）

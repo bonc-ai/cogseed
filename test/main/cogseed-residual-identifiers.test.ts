@@ -36,8 +36,8 @@ describe('CogSeed residual identifiers', () => {
     ];
     for (const file of currentDocs) {
       const source = read(file);
-      expect(source, file).not.toContain('team-02/mate-agent.git');
-      expect(source, file).not.toContain('cd mate-agent');
+      expect(source, file).not.toContain('team-02/cogseed-agent.git');
+      expect(source, file).not.toContain('cd cogseed-agent');
     }
     const readme = read('README.md');
     expect(readme).toContain('team-02/cogseed.git');
@@ -45,17 +45,17 @@ describe('CogSeed residual identifiers', () => {
     expect(readme).toContain('npm test');
     expect(readme).toContain('CC Switch');
     expect(readme).toContain('.cogseed');
-    expect(readme).toContain('mateagent://');
+    expect(readme).toContain('cogseed://');
 
     // AGENTS.md 是仓库规则单一事实源（含 window.cogseed 契约）；CLAUDE.md
     // 按 2026-08-14 清理纪律降级为指针文件，不再重复规则——断言它指向
     // AGENTS.md 而不是重复 window.cogseed 字样。
     const agents = read('AGENTS.md');
     expect(agents).toContain('window.cogseed.{invoke, stream}');
-    expect(agents).not.toContain('window.orkas.{invoke, stream}');
+    expect(agents).not.toContain('window.cogseed.{invoke, stream}');
     const claude = read('CLAUDE.md');
     expect(claude).toContain('AGENTS.md');
-    expect(claude).not.toContain('window.orkas.{invoke, stream}');
+    expect(claude).not.toContain('window.cogseed.{invoke, stream}');
   });
 
   it('uses a canonical cogseed temp prefix for local imports', async () => {
@@ -65,20 +65,20 @@ describe('CogSeed residual identifiers', () => {
     fs.writeFileSync(source, 'hello');
     await fileImport.copyLocalFileAtomic(source, target);
     expect(fs.readdirSync(tmpDir).some((name) => name.startsWith('.cogseed-import-'))).toBe(false);
-    expect(fs.readdirSync(tmpDir).some((name) => name.startsWith('.orkas-import-'))).toBe(false);
+    expect(fs.readdirSync(tmpDir).some((name) => name.startsWith('.cogseed-import-'))).toBe(false);
     expect(fs.readFileSync(target, 'utf8')).toBe('hello');
   });
 
-  it('accepts legacy .orkas whisper markers but prefers canonical CogSeed markers', async () => {
+  it('accepts legacy .cogseed whisper markers but prefers canonical CogSeed markers', async () => {
     Object.defineProperty(process, 'resourcesPath', { value: path.join(tmpDir, 'no-resources'), configurable: true, writable: true });
     const runtimeRoot = path.join(tmpDir, 'runtime');
     const whisperDir = path.join(runtimeRoot, 'whisper', 'current');
     fs.mkdirSync(path.join(whisperDir, 'bin'), { recursive: true });
     fs.mkdirSync(path.join(whisperDir, 'models'), { recursive: true });
     const canonical = path.join(whisperDir, '.cogseed-whisper-ready.json');
-    const legacy = path.join(whisperDir, '.orkas-whisper-ready.json');
+    const legacy = path.join(whisperDir, '.cogseed-whisper-ready.json');
     fs.writeFileSync(legacy, JSON.stringify({ schema: 1, platformKey: 'darwin-x64', version: '1', model: 'x', capability: { status: 'ready' }, files: {} }));
-    process.env.ORKAS_RUNTIME_DIR = runtimeRoot;
+    process.env.COGSEED_RUNTIME_DIR = runtimeRoot;
     const runtime = await import('../../src/main/util/bundled-runtime');
     expect(runtime.bundledWhisperPaths()).toEqual({});
     expect(fs.existsSync(legacy)).toBe(true);

@@ -29,4 +29,4 @@ export const DEFAULT_RUNTIME_TOOL_POLICY = Object.freeze({
   connectors: 'none',
 } as const satisfies RuntimeToolPolicy);
 
-export const MATE_RUNTIME_TOOL_POLICY = Object.freeze({ ...DEFAULT_RUNTIME_TOOL_POLICY, connectors: 'enabled' } as const satisfies RuntimeToolPolicy);
+export const COGSEED_RUNTIME_TOOL_POLICY = Object.freeze({ ...DEFAULT_RUNTIME_TOOL_POLICY, connectors: 'enabled' } as const satisfies RuntimeToolPolicy);

@@ -3,8 +3,8 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 
 async function main(): Promise<void> {
-const dataRoot = path.join(process.env.HOME || '', '.orkas', 'data');
-process.env.ORKAS_WORKSPACE_ROOT = dataRoot;
+const dataRoot = path.join(process.env.HOME || '', '.cogseed', 'data');
+process.env.COGSEED_WORKSPACE_ROOT = dataRoot;
 
 const users = JSON.parse(await fs.readFile(path.join(dataRoot, 'users.json'), 'utf8')) as {
   current_user_id?: string;

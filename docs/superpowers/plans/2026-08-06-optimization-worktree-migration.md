@@ -2,7 +2,7 @@
 
 > **供代理执行者使用：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans`，按任务逐项执行本计划；步骤使用复选框（`- [ ]`）追踪进度。
 
-**目标：** 将 `mate-agent-optimization` 中全部未提交改动迁移到 `dev/niubaokang` 分支上的 `mate-agent-dev` 工作树，且不得覆盖该工作树已有的改动。
+**目标：** 将 `cogseed-agent-optimization` 中全部未提交改动迁移到 `dev/niubaokang` 分支上的 `cogseed-agent-dev` 工作树，且不得覆盖该工作树已有的改动。
 
 **方案：** `dev/niubaokang` 已比 optimization 分支多 7 个提交，因此只迁移 optimization 工作树中的脏补丁。对无重叠的文件使用 Git 三方补丁应用；保留 dev 中已存在的等价改动；再为 `style.css` 追加仅存在于 optimization 中的群聊消息编辑样式，并复制其中两个新增测试文件。
 
@@ -10,8 +10,8 @@
 
 ## 全局约束
 
-- 目标工作树：`/Users/an/东方国信项目/开源companion agent/mate-agent-dev`，分支为 `dev/niubaokang`。
-- 源工作树：`/Users/an/东方国信项目/开源companion agent/mate-agent-optimization`，分支为 `codex/mate-agent-optimization`。
+- 目标工作树：`/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev`，分支为 `dev/niubaokang`。
+- 源工作树：`/Users/an/东方国信项目/开源companion agent/cogseed-agent-optimization`，分支为 `codex/cogseed-agent-optimization`。
 - 不得删除、重置、提交或以其他方式修改源工作树。
 - 对双方都修改的文件，必须保留 dev 工作树当前的改动。
 - `src/renderer/style.css` 必须同时保留侧栏品牌样式和群聊消息编辑样式。
@@ -22,7 +22,7 @@
 ### 任务 1：迁移不重叠的 optimization 改动
 
 **文件：**
-- 修改：`/Users/an/东方国信项目/开源companion agent/mate-agent-optimization` 中仅由 optimization 修改的所有已跟踪文件。
+- 修改：`/Users/an/东方国信项目/开源companion agent/cogseed-agent-optimization` 中仅由 optimization 修改的所有已跟踪文件。
 - 保留：`src/main/features/marketplace_reconcile.ts`
 - 保留：`src/renderer/modules/model-authorization.js`
 - 保留：`src/renderer/style.css`
@@ -30,7 +30,7 @@
 - 保留：`test/renderer/model-authorization-ui.test.ts`
 
 **接口：**
-- 输入：通过 `git -C mate-agent-optimization diff --binary` 生成的未提交补丁。
+- 输入：通过 `git -C cogseed-agent-optimization diff --binary` 生成的未提交补丁。
 - 输出：目标 dev 工作树获得全部不重叠的源改动。
 
 - [ ] **步骤 1：记录当前工作树状态与补丁哈希**
@@ -38,10 +38,10 @@
 运行：
 
 ```bash
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-dev' status --short --branch
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-dev' diff --binary | shasum -a 256
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-optimization' status --short --branch
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-optimization' diff --binary | shasum -a 256
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev' status --short --branch
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev' diff --binary | shasum -a 256
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-optimization' status --short --branch
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-optimization' diff --binary | shasum -a 256
 ```
 
 预期：两个工作树均有未提交改动；dev 跟踪 `origin/dev/niubaokang`；optimization 保持不变。
@@ -51,15 +51,15 @@ git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-optimizati
 运行：
 
 ```bash
-cd '/Users/an/东方国信项目/开源companion agent/mate-agent-optimization'
-git diff --binary > /tmp/mate-agent-optimization.patch
+cd '/Users/an/东方国信项目/开源companion agent/cogseed-agent-optimization'
+git diff --binary > /tmp/cogseed-agent-optimization.patch
 git diff --binary -- . \
   ':!src/main/features/marketplace_reconcile.ts' \
   ':!src/renderer/modules/model-authorization.js' \
   ':!src/renderer/style.css' \
   ':!test/main/features/marketplace_reconcile.test.ts' \
   ':!test/renderer/model-authorization-ui.test.ts' \
-  > /tmp/mate-agent-optimization-nonoverlap.patch
+  > /tmp/cogseed-agent-optimization-nonoverlap.patch
 ```
 
 预期：不重叠补丁包含源工作树的全部修改，但不包含上述五个重叠文件。
@@ -69,7 +69,7 @@ git diff --binary -- . \
 运行：
 
 ```bash
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-dev' apply --3way --whitespace=nowarn /tmp/mate-agent-optimization-nonoverlap.patch
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev' apply --3way --whitespace=nowarn /tmp/cogseed-agent-optimization-nonoverlap.patch
 ```
 
 预期：命令以退出码 0 完成，且源工作树没有任何改动。
@@ -79,7 +79,7 @@ git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-dev' apply
 运行：
 
 ```bash
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-dev' diff --check
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev' diff --check
 ```
 
 预期：无输出，退出码为 0。
@@ -101,8 +101,8 @@ git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-dev' diff 
 运行：
 
 ```bash
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-dev' diff -- src/renderer/style.css
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-optimization' diff -- src/renderer/style.css
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev' diff -- src/renderer/style.css
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-optimization' diff -- src/renderer/style.css
 ```
 
 预期：两个补丁均包含相同的侧栏样式块；只有 optimization 包含 `.chat-msg-header-user` 附近的群聊消息编辑样式块。
@@ -136,10 +136,10 @@ git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-optimizati
 运行：
 
 ```bash
-cp '/Users/an/东方国信项目/开源companion agent/mate-agent-optimization/test/main/features/group_chat/message-edit.test.ts' \
-  '/Users/an/东方国信项目/开源companion agent/mate-agent-dev/test/main/features/group_chat/message-edit.test.ts'
-cp '/Users/an/东方国信项目/开源companion agent/mate-agent-optimization/test/renderer/conversation-message-edit.test.ts' \
-  '/Users/an/东方国信项目/开源companion agent/mate-agent-dev/test/renderer/conversation-message-edit.test.ts'
+cp '/Users/an/东方国信项目/开源companion agent/cogseed-agent-optimization/test/main/features/group_chat/message-edit.test.ts' \
+  '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev/test/main/features/group_chat/message-edit.test.ts'
+cp '/Users/an/东方国信项目/开源companion agent/cogseed-agent-optimization/test/renderer/conversation-message-edit.test.ts' \
+  '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev/test/renderer/conversation-message-edit.test.ts'
 ```
 
 预期：dev 中新增两个测试文件，同时保留已有的 `test/renderer/sidebar-branding.test.ts`。
@@ -150,7 +150,7 @@ cp '/Users/an/东方国信项目/开源companion agent/mate-agent-optimization/t
 
 ```bash
 rg -n 'container-type: inline-size|chat-message-edit-btn|chat-message-edit-composer' \
-  '/Users/an/东方国信项目/开源companion agent/mate-agent-dev/src/renderer/style.css'
+  '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev/src/renderer/style.css'
 ```
 
 预期：三个选择器均存在。
@@ -177,7 +177,7 @@ rg -n 'container-type: inline-size|chat-message-edit-btn|chat-message-edit-compo
 运行：
 
 ```bash
-cd '/Users/an/东方国信项目/开源companion agent/mate-agent-dev'
+cd '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev'
 npx vitest run \
   test/main/features/group_chat/message-edit.test.ts \
   test/renderer/conversation-message-edit.test.ts \
@@ -197,7 +197,7 @@ npx vitest run \
 运行：
 
 ```bash
-cd '/Users/an/东方国信项目/开源companion agent/mate-agent-dev'
+cd '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev'
 npm run typecheck
 ```
 
@@ -208,8 +208,8 @@ npm run typecheck
 运行：
 
 ```bash
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-optimization' diff --binary | shasum -a 256
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-optimization' status --short --branch
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-optimization' diff --binary | shasum -a 256
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-optimization' status --short --branch
 ```
 
 预期：SHA-256 为 `ebf30d06d8d091eb70c540b6daa0ff74294f780a9d8b75ebd051dd4910cb03a3`，且源工作树保留原始未提交状态。
@@ -219,9 +219,9 @@ git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-optimizati
 运行：
 
 ```bash
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-dev' diff --check
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-dev' status --short --branch
-git -C '/Users/an/东方国信项目/开源companion agent/mate-agent-dev' diff --stat
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev' diff --check
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev' status --short --branch
+git -C '/Users/an/东方国信项目/开源companion agent/cogseed-agent-dev' diff --stat
 ```
 
 预期：没有空白错误；当前分支仍为 `dev/niubaokang`；不产生提交，也不执行推送。

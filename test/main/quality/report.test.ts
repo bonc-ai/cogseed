@@ -19,17 +19,17 @@ describe('quality report persistence lifecycle', () => {
   let previousWorkspace: string | undefined;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-quality-report-'));
-    previousWorkspace = process.env.ORKAS_WORKSPACE_ROOT;
-    process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-quality-report-'));
+    previousWorkspace = process.env.COGSEED_WORKSPACE_ROOT;
+    process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
     vi.resetModules();
   });
 
   afterEach(async () => {
     const reports = await import('../../../src/main/quality/report');
     await reports.drainReportWrites();
-    if (previousWorkspace === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-    else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspace;
+    if (previousWorkspace === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspace;
     fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 

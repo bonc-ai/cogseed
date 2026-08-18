@@ -2,8 +2,8 @@ import * as fs from 'node:fs/promises';
 
 import { appendJsonlAtomic, genId12, nowIso } from '../../storage';
 import { fileEditLock } from '../../util/locks';
-import { assertMateTaskId, assertMateUserId, mateTaskEventsFile } from './paths';
-import { MATE_AGENT_BACKEND_SCHEMA_VERSION, type MateTaskEvent, type MateTaskEventType } from './types';
+import { assertCogSeedTaskId, assertCogSeedUserId, cogseedTaskEventsFile } from './paths';
+import { COGSEED_AGENT_BACKEND_SCHEMA_VERSION, type CogSeedTaskEvent, type CogSeedTaskEventType } from './types';
 
 const MAX_EVENT_PAYLOAD_CHARS = 16_384;
 
@@ -20,20 +20,20 @@ function validatePayload(payload: Record<string, unknown>): Record<string, unkno
   return JSON.parse(encoded) as Record<string, unknown>;
 }
 
-function validateEvent(userId: string, taskId: string, value: unknown): MateTaskEvent {
+function validateEvent(userId: string, taskId: string, value: unknown): CogSeedTaskEvent {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed CogSeed event');
   const row = value as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_AGENT_BACKEND_SCHEMA_VERSION || row.taskId !== taskId) throw new Error('malformed CogSeed event');
-  if (typeof row.eventId !== 'string' || !row.eventId.startsWith('mate-event-')) throw new Error('malformed CogSeed event');
-  if (typeof row.sessionId !== 'string' || !row.sessionId.startsWith('mate-session-')) throw new Error('malformed CogSeed event');
+  if (row.schemaVersion !== COGSEED_AGENT_BACKEND_SCHEMA_VERSION || row.taskId !== taskId) throw new Error('malformed CogSeed event');
+  if (typeof row.eventId !== 'string' || !row.eventId.startsWith('cogseed-event-')) throw new Error('malformed CogSeed event');
+  if (typeof row.sessionId !== 'string' || !row.sessionId.startsWith('cogseed-session-')) throw new Error('malformed CogSeed event');
   if (typeof row.sequence !== 'number' || !Number.isInteger(row.sequence) || row.sequence < 1) throw new Error('malformed CogSeed event');
   if (typeof row.type !== 'string' || typeof row.createdAt !== 'string') throw new Error('malformed CogSeed event');
   validatePayload(row.payload as Record<string, unknown>);
-  return row as unknown as MateTaskEvent;
+  return row as unknown as CogSeedTaskEvent;
 }
 
-async function readAllEvents(userId: string, taskId: string): Promise<MateTaskEvent[]> {
-  const file = mateTaskEventsFile(userId, taskId);
+async function readAllEvents(userId: string, taskId: string): Promise<CogSeedTaskEvent[]> {
+  const file = cogseedTaskEventsFile(userId, taskId);
   let text: string;
   try { text = await fs.readFile(file, 'utf8'); }
   catch (error) {
@@ -41,7 +41,7 @@ async function readAllEvents(userId: string, taskId: string): Promise<MateTaskEv
     throw error;
   }
   const lines = text.split('\n');
-  const events: MateTaskEvent[] = [];
+  const events: CogSeedTaskEvent[] = [];
   for (const [index, raw] of lines.entries()) {
     if (!raw && index === lines.length - 1) continue;
     if (!raw.trim()) throw new Error(`malformed CogSeed event at line ${index + 1}`);
@@ -56,22 +56,22 @@ async function readAllEvents(userId: string, taskId: string): Promise<MateTaskEv
   return events;
 }
 
-export async function appendMateTaskEvent(
+export async function appendCogSeedTaskEvent(
   userId: string,
   taskId: string,
   sessionId: string,
-  type: MateTaskEventType,
+  type: CogSeedTaskEventType,
   payload: Record<string, unknown>,
-): Promise<MateTaskEvent> {
-  assertMateUserId(userId);
-  assertMateTaskId(taskId);
-  if (!sessionId.startsWith('mate-session-')) throw new Error('invalid CogSeed session id');
-  const file = mateTaskEventsFile(userId, taskId);
+): Promise<CogSeedTaskEvent> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(taskId);
+  if (!sessionId.startsWith('cogseed-session-')) throw new Error('invalid CogSeed session id');
+  const file = cogseedTaskEventsFile(userId, taskId);
   return fileEditLock(file).runExclusive(async () => {
     const prior = await readAllEvents(userId, taskId);
-    const event: MateTaskEvent = {
-      schemaVersion: MATE_AGENT_BACKEND_SCHEMA_VERSION,
-      eventId: `mate-event-${genId12()}`,
+    const event: CogSeedTaskEvent = {
+      schemaVersion: COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
+      eventId: `cogseed-event-${genId12()}`,
       taskId,
       sessionId,
       sequence: prior.length + 1,
@@ -84,14 +84,14 @@ export async function appendMateTaskEvent(
   });
 }
 
-export async function readMateTaskEvents(
+export async function readCogSeedTaskEvents(
   userId: string,
   taskId: string,
   afterSequence = 0,
   limit = 200,
-): Promise<MateTaskEvent[]> {
-  assertMateUserId(userId);
-  assertMateTaskId(taskId);
+): Promise<CogSeedTaskEvent[]> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(taskId);
   const after = Math.max(0, Math.floor(Number(afterSequence) || 0));
   const max = Math.max(1, Math.min(Math.floor(Number(limit) || 1), 500));
   return (await readAllEvents(userId, taskId)).filter((event) => event.sequence > after).slice(0, max);

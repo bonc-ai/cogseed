@@ -10,7 +10,7 @@
  * Env vars only override defaults for development:
  *   COGSEED_P3394_PORT          (default 8444)
  *   COGSEED_P3394_TOKEN         (default: generated at boot)
- *   COGSEED_P3394_CONVERSATION  ('0' switches to the mate-task runtime)
+ *   COGSEED_P3394_CONVERSATION  ('0' switches to the cogseed-task runtime)
  */
 
 import * as fs from 'node:fs';
@@ -191,7 +191,7 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
   }
 
   // Default: messages enter the normal conversation flow and are visible in
-  // the UI. COGSEED_P3394_CONVERSATION=0 switches to the mate-task backend.
+  // the UI. COGSEED_P3394_CONVERSATION=0 switches to the cogseed-task backend.
   const adapter = conversation
     ? new P3394ConversationRuntimeAdapter({
         userId: () => userId,

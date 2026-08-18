@@ -25,16 +25,16 @@ function deferred<T>(): Deferred<T> {
 }
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-messaging-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-messaging-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -126,10 +126,10 @@ describe('messaging policy', () => {
 
   it('removes only exact verified bot mention tokens', async () => {
     const { stripBotMention } = await import('../../../src/main/features/messaging/policy');
-    expect(stripBotMention('@mate-bot hello @alice', ['@mate-bot'])).toBe('hello @alice');
-    expect(stripBotMention('@mate-bothello @alice', ['@mate-bot'])).toBe('@mate-bothello @alice');
-    expect(stripBotMention('@mate.bot+ hello @alice', ['@mate.bot+'])).toBe('hello @alice');
-    expect(stripBotMention('@mate-bot hello @alice')).toBe('@mate-bot hello @alice');
+    expect(stripBotMention('@cogseed-bot hello @alice', ['@cogseed-bot'])).toBe('hello @alice');
+    expect(stripBotMention('@cogseed-bothello @alice', ['@cogseed-bot'])).toBe('@cogseed-bothello @alice');
+    expect(stripBotMention('@cogseed.bot+ hello @alice', ['@cogseed.bot+'])).toBe('hello @alice');
+    expect(stripBotMention('@cogseed-bot hello @alice')).toBe('@cogseed-bot hello @alice');
   });
 });
 

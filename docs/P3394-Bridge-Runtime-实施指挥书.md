@@ -1,8 +1,8 @@
 # CogSeed P3394 Bridge Runtime 实施指挥书
 
-版本：v1.0  
-日期：2026-08-14  
-适用仓库：CogSeed desktop mate-agent  运行分支：dev/p3394-bridge-runtime  
+版本：v1.0
+日期：2026-08-14
+适用仓库：CogSeed desktop cogseed-agent  运行分支：dev/p3394-bridge-runtime
 状态：实施基线，后续任务、代码评审和验收均以本文为准
 
 ## 0. 文档用途

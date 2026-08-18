@@ -12,7 +12,7 @@
 
 ## Current baseline and constraints
 
-- Worktree: `/Users/sudai/Documents/Mate-Backend-Test`
+- Worktree: `/Users/sudai/Documents/CogSeed-Backend-Test`
 - Current branch: `local/test-merge-cogseed-single-backend`
 - Existing uncommitted fixes must be preserved and folded into the implementation:
   - `src/main/features/cogseed_backend/p3394-wake-dispatcher.ts`
@@ -42,7 +42,7 @@
 
 - [ ] **Step 1: Add the direct wake identity test.**
 
-Assert that a legacy `hand_off_to` request with `workflow_step_id` plus a plain conversation `execution_scope_id` calls `startMateTask` with:
+Assert that a legacy `hand_off_to` request with `workflow_step_id` plus a plain conversation `execution_scope_id` calls `startCogSeedTask` with:
 
 ```ts
 {
@@ -105,7 +105,7 @@ agentId?: string;
 
 - [ ] **Step 2: Add a stable session lookup.**
 
-Add a user-scoped lookup keyed by `(conversationId, agentId)` that returns the existing `MateSessionRecord` or creates one with:
+Add a user-scoped lookup keyed by `(conversationId, agentId)` that returns the existing `CogSeedSessionRecord` or creates one with:
 
 ```text
 sessionKind: 'member'
@@ -118,7 +118,7 @@ Do not use a module-level cache as the source of truth. Persist the mapping unde
 
 - [ ] **Step 3: Thread mapping through task creation.**
 
-`StartMateTaskInput` must accept `conversationId` and `agentId`. `createMateTask` must persist both on the task and use the mapped `sessionId` when provided. `agentId` must be sent to Runtime as `agent_id`; `profileId` remains exclusively a model/API profile.
+`StartCogSeedTaskInput` must accept `conversationId` and `agentId`. `createCogSeedTask` must persist both on the task and use the mapped `sessionId` when provided. `agentId` must be sent to Runtime as `agent_id`; `profileId` remains exclusively a model/API profile.
 
 - [ ] **Step 4: Add duplicate/retry semantics.**
 
@@ -214,7 +214,7 @@ npm run test:js -- \
 
 - [ ] **Step 2: Distinguish coordination workflow from legacy interactive handoff.**
 
-Only a request with a valid `mate-coord-*` scope and a persisted workflow run may enter the coordination dispatcher. A legacy `workflow_step_id` paired with a plain conversation scope must start a direct CogSeed task.
+Only a request with a valid `cogseed-coord-*` scope and a persisted workflow run may enter the coordination dispatcher. A legacy `workflow_step_id` paired with a plain conversation scope must start a direct CogSeed task.
 
 - [ ] **Step 3: Commit interactive routing state atomically after Backend admission.**
 
@@ -498,7 +498,7 @@ Tests must mock the Backend dispatcher and assert formal Agent turns do not call
 - [ ] **Step 4: Run architecture scans.**
 
 ```bash
-rg -n "groupChatWakeDispatcher|kstar-adapter|kstar-factory|getKstarAdapter|KstarAdapter|meta-skill-engine-mcp|ORKAS_KSTAR_ENGINE|--orkas-kstar-engine" src/main bootstrap.cjs package.json scripts test
+rg -n "groupChatWakeDispatcher|kstar-adapter|kstar-factory|getKstarAdapter|KstarAdapter|meta-skill-engine-mcp|COGSEED_KSTAR_ENGINE|--cogseed-kstar-engine" src/main bootstrap.cjs package.json scripts test
 ```
 
 Expected: no production references; only explicit negative-test strings may remain in the boundary test itself.
@@ -537,7 +537,7 @@ Expected: 0 failures.
 
 ```bash
 npm test
-node scripts/smoke-mate-agent-host-capabilities.mjs
+node scripts/smoke-cogseed-agent-host-capabilities.mjs
 ```
 
 Expected: JS and Python resource suites pass; smoke prints `{"ok":true,"hostCalls":3}`.
@@ -568,7 +568,7 @@ Confirm `/tmp/cogseed-agent-cogseed-run.log` contains the current worktree path 
 
 ```bash
 LOG="$HOME/.cogseed/runtime-variants/cogseed/data/logs/$(date +%Y-%m-%d).log"
-grep -Ei "p3394|wake|mate-task|runtime|projection|active_recipient|kstar-factory|kstar-adapter|meta-skill-engine-mcp|adapter unavailable|groupChatWakeDispatcher" "$LOG"
+grep -Ei "p3394|wake|cogseed-task|runtime|projection|active_recipient|kstar-factory|kstar-adapter|meta-skill-engine-mcp|adapter unavailable|groupChatWakeDispatcher" "$LOG"
 ```
 
 Expected positive evidence:

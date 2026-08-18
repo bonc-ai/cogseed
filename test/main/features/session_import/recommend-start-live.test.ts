@@ -2,12 +2,12 @@
  * REAL recommendation smoke test (gated). Runs recommendStartingPoint()
  * against the actual sessions on this machine and prints the ranked result
  * so we can eyeball that the "复杂项目" pick + template suggestion are real,
- * not fabricated. Gated behind ORKAS_WORKBUDDY_LIVE=1 (reuses the same flag
+ * not fabricated. Gated behind COGSEED_WORKBUDDY_LIVE=1 (reuses the same flag
  * as the WorkBuddy live smoke, since both need real on-disk sessions).
  */
 import { describe, it, expect } from 'vitest';
 
-const LIVE = process.env.ORKAS_WORKBUDDY_LIVE === '1';
+const LIVE = process.env.COGSEED_WORKBUDDY_LIVE === '1';
 const d = LIVE ? describe : describe.skip;
 
 d('recommendStartingPoint — real ranking on this machine', () => {

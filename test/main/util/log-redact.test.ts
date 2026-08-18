@@ -12,11 +12,11 @@ describe('log-redact', () => {
 
   it('strips query and hash secrets from URLs', () => {
     expect(safeUrlAction('app://auth/callback?exchange_code=secret&state=s')).toBe('app://auth/callback');
-    expect(safeUrlAction('https://orkas.ai/views/login/login.html#d=device&state=s')).toBe('https://orkas.ai/views/login/login.html');
+    expect(safeUrlAction('https://cogseed.ai/views/login/login.html#d=device&state=s')).toBe('https://cogseed.ai/views/login/login.html');
   });
 
   it('does not echo non-url arguments such as local paths', () => {
-    expect(safeUrlAction('/Users/test/Orkas?token=secret')).toBe('<non-url>');
+    expect(safeUrlAction('/Users/test/CogSeed?token=secret')).toBe('<non-url>');
   });
 
   it('summarizes errors without logging message text', () => {

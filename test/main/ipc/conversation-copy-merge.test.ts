@@ -26,7 +26,7 @@ const mergeConversations = vi.fn(async () => ({
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: InvokeFn) => {
-      if (channel === 'orkas.invoke') invokeHandler = fn;
+      if (channel === 'cogseed.invoke') invokeHandler = fn;
     },
     on: vi.fn(),
   },

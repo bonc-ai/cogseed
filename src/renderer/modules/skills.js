@@ -4454,7 +4454,7 @@ function _packageActionBusyLabel(command) {
 }
 
 // Per-card busy overlay shown while an external-package action (update /
-// enable / disable / remove) runs — these spawn orkas-pkg.cjs (git pull +
+// enable / disable / remove) runs — these spawn cogseed-pkg.cjs (git pull +
 // optional dep install) and can take several seconds. Without it the card
 // sits inert with no feedback. Cleared by the post-action re-render on
 // success, or in `_runOpenPackageAction`'s finally on the error path.
@@ -5850,7 +5850,7 @@ function _bindSkillEditAttachments() {
   if (area) {
     area.addEventListener('dragover', (e) => {
       const hasFiles = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length;
-      const hasInternal = e.dataTransfer && Array.from(e.dataTransfer.types || []).includes(ORKAS_FILE_DRAG_MIME);
+      const hasInternal = e.dataTransfer && Array.from(e.dataTransfer.types || []).includes(COGSEED_FILE_DRAG_MIME);
       if (!hasFiles && !hasInternal) return;
       e.preventDefault();
       area.classList.add('drag-over');

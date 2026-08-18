@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ttsMock = vi.hoisted(() => ({
-  estimateNarrationDuration: vi.fn(),
+  esticogseedNarrationDuration: vi.fn(),
   generateSpeech: vi.fn(),
 }));
 
@@ -25,7 +25,7 @@ vi.mock('../../../../src/main/util/media_probe', () => ({
 vi.mock('../../../../src/main/features/tts', () => ({
   hasConfiguredTtsProvider: () => true,
   configuredTtsBackendId: () => 'mock-voice',
-  estimateNarrationDuration: ttsMock.estimateNarrationDuration,
+  esticogseedNarrationDuration: ttsMock.esticogseedNarrationDuration,
   assessEstimatedNarrationFit: (input: any) => {
     const scale = input.durationScale || 1;
     const estimatedSec = Math.round(input.estimate.estimatedSec * scale * 100) / 100;
@@ -323,14 +323,14 @@ function approvalSubmission(
 }
 
 beforeEach(async () => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-video-state-tool-')));
+  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-video-state-tool-')));
   workspace = path.join(root, 'workspace');
   fs.mkdirSync(workspace, { recursive: true });
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = path.join(root, 'data');
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = path.join(root, 'data');
   vi.resetModules();
-  ttsMock.estimateNarrationDuration.mockReset();
-  ttsMock.estimateNarrationDuration.mockImplementation((text: string) => ({
+  ttsMock.esticogseedNarrationDuration.mockReset();
+  ttsMock.esticogseedNarrationDuration.mockImplementation((text: string) => ({
     estimatedSec: 5,
     unit: 'words',
     units: text.split(/\s+/).filter(Boolean).length,
@@ -348,8 +348,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   vi.restoreAllMocks();
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -2141,7 +2141,7 @@ describe('VideoStudio production-state tool protocol', () => {
     });
     // A paid matching artifact must still be measured/recovered if a later
     // estimator version would call the text too long.
-    ttsMock.estimateNarrationDuration.mockImplementation((text: string) => ({
+    ttsMock.esticogseedNarrationDuration.mockImplementation((text: string) => ({
       estimatedSec: 6,
       unit: 'words',
       units: text.split(/\s+/).filter(Boolean).length,
@@ -2198,7 +2198,7 @@ describe('VideoStudio production-state tool protocol', () => {
     };
     const tool = toolMod.createVideoStudioTool(opts);
     const ctx = { workingDir: workspace, state: {} } as any;
-    ttsMock.estimateNarrationDuration.mockImplementation((text: string) => ({
+    ttsMock.esticogseedNarrationDuration.mockImplementation((text: string) => ({
       estimatedSec: text.includes('longer') ? 63.01 : 56,
       unit: 'words',
       units: text.includes('longer') ? 101 : 98,
@@ -2349,7 +2349,7 @@ describe('VideoStudio production-state tool protocol', () => {
       manifest.scenes[0].narration_text = originalNarration;
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 
-      ttsMock.estimateNarrationDuration.mockImplementation((text: string) => ({
+      ttsMock.esticogseedNarrationDuration.mockImplementation((text: string) => ({
         estimatedSec: text.includes('twenty') ? 5 : 4,
         unit: 'words',
         units: text.includes('twenty') ? 118 : 98,

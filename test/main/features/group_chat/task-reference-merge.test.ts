@@ -17,9 +17,9 @@ let previousWorkspace: string | undefined;
 const UID = 'taskref-merge-user';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-taskref-merge-'));
-  previousWorkspace = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-taskref-merge-'));
+  previousWorkspace = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
@@ -33,7 +33,7 @@ afterEach(async () => {
       await bus.dropConv(UID, cid);
     }
   } catch (_) {}
-  process.env.ORKAS_WORKSPACE_ROOT = previousWorkspace;
+  process.env.COGSEED_WORKSPACE_ROOT = previousWorkspace;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

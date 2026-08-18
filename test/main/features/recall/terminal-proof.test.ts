@@ -8,13 +8,13 @@ let previous: string | undefined;
 const RULE_BOUNDARY = { applicableWhen: ['reviewing governed work'], forbiddenWhen: ['outside the review scope'] };
 beforeEach(() => {
   vi.resetModules();
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-recall-terminal-proof-'));
-  previous = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmp;
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-recall-terminal-proof-'));
+  previous = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmp;
 });
 afterEach(() => {
-  if (previous === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previous;
+  if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previous;
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -247,18 +247,18 @@ describe('Recall terminal transfer proof handler', () => {
   });
 
 
-  it('completes a Mate-shaped terminal event through the shared notification source', async () => {
-    const { projection } = await confirmedProjection('mate-run-a');
-    await attachCard('mate-cid-a', projection.id);
+  it('completes a CogSeed-shaped terminal event through the shared notification source', async () => {
+    const { projection } = await confirmedProjection('cogseed-run-a');
+    await attachCard('cogseed-cid-a', projection.id);
     const { proofs } = await modules();
     const source = await import('../../../../src/main/features/task_notification_terminal_source');
     const bridge = await import('../../../../src/main/features/group_chat/recall-terminal-proof');
     const stop = bridge.startGroupChatRecallTerminalProofs();
     try {
       source.publishTaskNotificationTerminal({
-        run_id: 'mate-run-a',
+        run_id: 'cogseed-run-a',
         user_id: 'user-a',
-        conversation_id: 'mate-cid-a',
+        conversation_id: 'cogseed-cid-a',
         status: 'completed',
         started_at_ms: 10,
         finished_at_ms: 20,
@@ -266,7 +266,7 @@ describe('Recall terminal transfer proof handler', () => {
 
       await eventually(async () => {
         await expect(proofs.listTransferProofs('user-a')).resolves.toEqual([
-          expect.objectContaining({ projectionId: projection.id, executionId: 'mate-run-a', status: 'succeeded' }),
+          expect.objectContaining({ projectionId: projection.id, executionId: 'cogseed-run-a', status: 'succeeded' }),
         ]);
       });
     } finally {
@@ -280,18 +280,18 @@ describe('Recall terminal transfer proof handler', () => {
     const result = await terminalProof.handleRecallTaskTerminal({
       run_id: 'logical-run-a',
       user_id: 'user-a',
-      conversation_id: 'mate-cid-a',
+      conversation_id: 'cogseed-cid-a',
       status: 'completed',
       started_at_ms: 1,
       finished_at_ms: 2,
       projection_id: projection.id,
       logical_run_id: 'logical-run-a',
-      execution_id: 'mate-attempt-a',
+      execution_id: 'cogseed-attempt-a',
     });
 
-    expect(result).toMatchObject({ handled: true, proof: { projectionId: projection.id, executionId: 'mate-attempt-a', status: 'succeeded' } });
+    expect(result).toMatchObject({ handled: true, proof: { projectionId: projection.id, executionId: 'cogseed-attempt-a', status: 'succeeded' } });
     expect(await proofs.listTransferProofs('user-a')).toEqual([
-      expect.objectContaining({ projectionId: projection.id, executionId: 'mate-attempt-a' }),
+      expect.objectContaining({ projectionId: projection.id, executionId: 'cogseed-attempt-a' }),
     ]);
   });
 
@@ -323,13 +323,13 @@ describe('Recall terminal transfer proof handler', () => {
     const result = await terminalProof.handleRecallTaskTerminal({
       run_id: 'wrong-run',
       user_id: 'user-a',
-      conversation_id: 'mate-cid-b',
+      conversation_id: 'cogseed-cid-b',
       status: 'completed',
       started_at_ms: 1,
       finished_at_ms: 2,
       projection_id: projection.id,
       logical_run_id: 'wrong-run',
-      execution_id: 'mate-attempt-b',
+      execution_id: 'cogseed-attempt-b',
     });
 
     expect(result).toEqual({ handled: false, reason: 'no_confirmed_projection' });

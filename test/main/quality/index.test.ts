@@ -77,7 +77,7 @@ describe('quality › validateSkillFile', () => {
   it('blocks protected skill-root placeholders and allows the standard runner', () => {
     const direct = validateSkillFile({
       relpath: 'SKILL.md',
-      content: '---\nname: x\ndescription: x\n---\n$ORKAS_NODE <this_skill_dir>/scripts/run.js --yes\n',
+      content: '---\nname: x\ndescription: x\n---\n$COGSEED_NODE <this_skill_dir>/scripts/run.js --yes\n',
     });
     expect(direct.violations.map((v) => v.rule)).toContain('skill_script_requires_runner');
 
@@ -88,7 +88,7 @@ describe('quality › validateSkillFile', () => {
         'name: x',
         'description: x',
         '---',
-        '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" x run -- --yes',
+        '"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" x run -- --yes',
       ].join('\n'),
     });
     expect(standard.ok).toBe(true);

@@ -1,9 +1,9 @@
 /**
  * Built-in catalog of connector entries.
  *
- * Every entry uses OAuth 2.0 by default — Server-bridge flow with an `orkas://` deep-link
+ * Every entry uses OAuth 2.0 by default — Server-bridge flow with an `cogseed://` deep-link
  * callback (see `oauth.ts` header). The catalog declares the provider id + default scopes;
- * the actual `client_id` / `client_secret` live on the Orkas Server and never touch the PC
+ * the actual `client_id` / `client_secret` live on the CogSeed Server and never touch the PC
  * binary.
  *
  * **About the access_token → MCP server hop**: each catalog entry pairs a `transport_template`
@@ -42,7 +42,7 @@ export const CONNECTOR_CATALOG: CatalogEntry[] = [
     category: 'productivity',
     description_zh: '查找、阅读和更新 Notion 页面、数据库与内容块。',
     description_en: 'Find, read, and update Notion pages, databases, and blocks.',
-    // DCR — Notion hosts an MCP-spec OAuth authorization server. No Orkas-side pre-registered
+    // DCR — Notion hosts an MCP-spec OAuth authorization server. No CogSeed-side pre-registered
     // integration; PC self-registers at first connect via RFC 7591. See features/connectors/
     // oauth-dcr.ts. Server's only role is the HTTPS callback intermediate (no Notion-specific
     // code on Server).
@@ -231,8 +231,8 @@ export const CONNECTOR_CATALOG: CatalogEntry[] = [
     required_oauth_scopes: ['webmaster.read'],
     transport_template: {
       kind: 'stdio',
-      command: '${ORKAS_NODE}',
-      args: ['${ORKAS_PC_DIR}/bin/bing-webmaster-mcp-server.cjs'],
+      command: '${COGSEED_NODE}',
+      args: ['${COGSEED_PC_DIR}/bin/bing-webmaster-mcp-server.cjs'],
       oauth_env_key: 'BING_ACCESS_TOKEN',
       proxy_target_url: 'https://www.bing.com/webmaster/api.svc/json',
     },

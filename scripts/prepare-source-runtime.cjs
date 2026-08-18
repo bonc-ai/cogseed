@@ -6,12 +6,12 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const brand = require('../src/resources/brand.json');
 
-const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
+const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'cogseed', 'cogseed', 'messaging', 'optimization']);
 const LABELS = Object.freeze({
   main: 'Main',
   cognition: 'Cognition',
   expense: 'Expense',
-  mate: '',
+  cogseed: '',
   messaging: 'Messaging',
   optimization: 'Optimization',
 });
@@ -33,7 +33,7 @@ function sourceRuntimeIdentity(value) {
     variant: value,
     appName: LABELS[value] ? `${brand.appName} [${LABELS[value]}]` : brand.appName,
     appId: `${brand.appId}.source.${value}`,
-    protocolOwner: value === 'mate',
+    protocolOwner: value === 'cogseed',
   });
 }
 
@@ -75,7 +75,7 @@ function currentAppFromPathFile(distDir, pathFile) {
 
 function findSourceApp(distDir, pathFile) {
   // Remove canonical and one-cycle bundle aliases left by older source builds.
-  for (const name of ['Electron.app', 'Orkas.app', 'Mate Agent.app', `${brand.appName}.app`, `${brand.appName} [Mate].app`]) {
+  for (const name of ['Electron.app', 'CogSeed.app', 'Mate Agent.app', `${brand.appName}.app`, `${brand.appName} [Mate].app`]) {
     const candidate = path.join(distDir, name);
     if (fs.existsSync(candidate)) return candidate;
   }
@@ -256,7 +256,7 @@ function parseVariant(argv) {
   return sourceRuntimeIdentity(values[0]).variant;
 }
 
-function parseMateWorktreeVariant(argv) {
+function parseCogSeedWorktreeVariant(argv) {
   const variant = parseVariant(argv);
   if (variant !== 'cogseed') {
     throw new Error('this source worktree is locked to the cogseed runtime variant');
@@ -266,7 +266,7 @@ function parseMateWorktreeVariant(argv) {
 
 function main() {
   try {
-    const result = prepareSourceRuntimeBundle({ variant: parseMateWorktreeVariant(process.argv.slice(2)) });
+    const result = prepareSourceRuntimeBundle({ variant: parseCogSeedWorktreeVariant(process.argv.slice(2)) });
     if (result.appBundle) console.log(`[CogSeed] Prepared source runtime bundle: ${result.appName}`);
   } catch (error) {
     console.error(`[CogSeed] ${error instanceof Error ? error.message : String(error)}`);
@@ -284,6 +284,6 @@ module.exports = {
   bundleIsCurrent,
   copyRuntimeBundle,
   parseVariant,
-  parseMateWorktreeVariant,
+  parseCogSeedWorktreeVariant,
   prepareSourceRuntimeBundle,
 };

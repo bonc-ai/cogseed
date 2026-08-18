@@ -3,9 +3,9 @@
  * plus the Hub account login callback.
  *
  * Accepted URLs:
- *   - orkas://connectors/oauth/callback
- *   - orkas://connectors/oauth/dcr-callback
- *   - orkas://account/callback   (Hub account login; see features/hub_account)
+ *   - cogseed://connectors/oauth/callback
+ *   - cogseed://connectors/oauth/dcr-callback
+ *   - cogseed://account/callback   (Hub account login; see features/hub_account)
  *
  * OAuth redirects always land on the public HTTPS Server first. Its landing page then opens one
  * of the URLs above so the exact app instance that started the flow can finish the exchange. This

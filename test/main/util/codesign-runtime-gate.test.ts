@@ -32,7 +32,7 @@ async function removeFixtureTree(root: string): Promise<void> {
 }
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-afterpack-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-afterpack-'));
 });
 
 afterEach(async () => {
@@ -146,7 +146,7 @@ function writeVcRuntime(key: string, fixture: ReturnType<typeof vcFixture>): voi
     fs.writeFileSync(path.join(tmpDir, name), bytes);
   }
   fs.writeFileSync(path.join(dir, 'NOTICE.txt'), 'test notice\n');
-  fs.writeFileSync(path.join(dir, '.orkas-vc-runtime.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, '.cogseed-vc-runtime.json'), JSON.stringify({
     schema: fixture.contract.schema,
     platformKey: key,
     version: fixture.contract.version,
@@ -193,7 +193,7 @@ function writeRuntime(kind: 'python' | 'uv' | 'node', key: string, executable: s
     fs.writeFileSync(path.join(path.dirname(exe), 'npm.cmd'), '');
     fs.writeFileSync(path.join(path.dirname(exe), 'npx.cmd'), '');
   }
-  fs.writeFileSync(path.join(dir, '.orkas-runtime.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, '.cogseed-runtime.json'), JSON.stringify({
     schema: 1,
     kind,
     platformKey: key,
@@ -267,7 +267,7 @@ function writeFfmpegRuntime(key: string): void {
     fs.writeFileSync(path.join(dir, `${name}.exe`), bytes);
   }
   fs.writeFileSync(path.join(dir, 'NOTICE.txt'), 'test notice\n');
-  fs.writeFileSync(path.join(dir, '.orkas-ffmpeg-ready.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, '.cogseed-ffmpeg-ready.json'), JSON.stringify({
     schema: 1,
     platformKey: key,
     verification: 'pinned-sha256',
@@ -324,17 +324,17 @@ describe('codesign-adhoc runtime gate', () => {
       electronPlatformName: 'win32',
       arch: 1,
       appOutDir: tmpDir,
-      __orkasTestWhisperContract: whisper.contract,
-      __orkasTestWindowsVcContract: vc.contract,
-      __orkasTestEntrypointRoot: entrypointRoot,
-      __orkasTestBuiltinRoot: path.join(process.cwd(), 'resources', 'builtin'),
+      __cogseedTestWhisperContract: whisper.contract,
+      __cogseedTestWindowsVcContract: vc.contract,
+      __cogseedTestEntrypointRoot: entrypointRoot,
+      __cogseedTestBuiltinRoot: path.join(process.cwd(), 'resources', 'builtin'),
       packager: {
-        appInfo: { productFilename: 'Orkas' },
+        appInfo: { productFilename: 'CogSeed' },
         config: {},
       },
     });
 
-    const marker = JSON.parse(fs.readFileSync(path.join(tmpDir, '.orkas-native-deps-verified.json'), 'utf8'));
+    const marker = JSON.parse(fs.readFileSync(path.join(tmpDir, '.cogseed-native-deps-verified.json'), 'utf8'));
     expect(marker.status).toBe('passed');
     expect(marker.verified).toContain('runtime:python:win32-x64');
     expect(marker.verified).toContain('runtime:uv:win32-x64');
@@ -364,10 +364,10 @@ describe('codesign-adhoc runtime gate', () => {
       electronPlatformName: 'win32',
       arch: 1,
       appOutDir: tmpDir,
-      __orkasTestWhisperContract: whisper.contract,
-      __orkasTestWindowsVcContract: vc.contract,
+      __cogseedTestWhisperContract: whisper.contract,
+      __cogseedTestWindowsVcContract: vc.contract,
       packager: {
-        appInfo: { productFilename: 'Orkas' },
+        appInfo: { productFilename: 'CogSeed' },
         config: {},
       },
     })).rejects.toThrow(/missing runtime ffmpeg directory/);
@@ -389,10 +389,10 @@ describe('codesign-adhoc runtime gate', () => {
       electronPlatformName: 'win32',
       arch: 1,
       appOutDir: tmpDir,
-      __orkasTestWhisperContract: whisper.contract,
-      __orkasTestWindowsVcContract: vc.contract,
+      __cogseedTestWhisperContract: whisper.contract,
+      __cogseedTestWindowsVcContract: vc.contract,
       packager: {
-        appInfo: { productFilename: 'Orkas' },
+        appInfo: { productFilename: 'CogSeed' },
         config: {},
       },
     })).rejects.toThrow(/missing embedding-model root/);
@@ -415,10 +415,10 @@ describe('codesign-adhoc runtime gate', () => {
       electronPlatformName: 'win32',
       arch: 1,
       appOutDir: tmpDir,
-      __orkasTestWhisperContract: whisper.contract,
-      __orkasTestWindowsVcContract: vc.contract,
+      __cogseedTestWhisperContract: whisper.contract,
+      __cogseedTestWindowsVcContract: vc.contract,
       packager: {
-        appInfo: { productFilename: 'Orkas' },
+        appInfo: { productFilename: 'CogSeed' },
         config: {},
       },
     })).rejects.toThrow(/whisper runtime hash\/size mismatch/);

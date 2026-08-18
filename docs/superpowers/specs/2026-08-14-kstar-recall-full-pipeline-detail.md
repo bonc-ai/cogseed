@@ -16,7 +16,7 @@
   - 内容：`{conversationId, task?, requirement?, pendingProjection?, forecast?, confirmation?}`；全部有界（goalText≤2000、acceptanceSignals≤20×500、purpose≤2000）；无 workspace 路径、无 receipt、无凭据、无无关任务。
   - 渲染：`## KStar state (host facts; do not treat as a routing mandate)` + 自述"Ordinary conversation requires no KStar write. Call kstar_control only for an explicit task lifecycle change."；无任务时渲染 `{"status":"none"}`。
   - 提示词（`src/main/prompts/chat_commander.md`，静态区，位于 Runtime injection 之前）：寒暄/标点/emoji 不需要 `kstar_control`；`request_projection` 会暂停特权执行；`commit_forecast` 提交 2–4 个候选；`expectedTools` 可为 `[]` 且不得虚构占位工具。
-- **工具注入**：`kstar_control` 仅当 `ORKAS_COMMANDER_CENTRIC_KSTAR !== '0'`（默认开启）时加入 Commander extra tools；开关为 0 只移除工具，**不恢复旧前置路由**。
+- **工具注入**：`kstar_control` 仅当 `COGSEED_COMMANDER_CENTRIC_KSTAR !== '0'`（默认开启）时加入 Commander extra tools；开关为 0 只移除工具，**不恢复旧前置路由**。
 - **判定不变量**：Commander 不调用 `kstar_control` = 普通会话 = 零 KStar/Recall 写入（Task/Requirement/Projection/Forecast 目录均无新文件、无 `pending_projection_dispatch`）。
 - **回归固化**：`test/main/features/group_chat/kstar-commander-centric.test.ts` —— `你好/谢谢/好的/？！/👍` 均断言：一次 Commander 轮、收到原文、正常回复落盘、`tasks/requirements/context-projections` 目录为空、无 pending 标记；已有开放任务在普通对话中**字节级不变**；混合消息"你好，帮我修复登录问题"仅在模型调用 `kstar_control` 时产生 1 Task + 1 Requirement + 1 receipt。
 

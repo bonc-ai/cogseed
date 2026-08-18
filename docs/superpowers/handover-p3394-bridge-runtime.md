@@ -1,9 +1,9 @@
 # P3394 Bridge Runtime / Cognitive Cell 交接文档
 
-日期：2026-08-14  
-当前分支：`dev/p3394-bridge-runtime`  
-工作树：`/Users/sudai/Documents/Mate-Backend-P3394-Bridge`  
-基线：`origin/develop @ 01d6db5e`  
+日期：2026-08-14
+当前分支：`dev/p3394-bridge-runtime`
+工作树：`/Users/sudai/Documents/CogSeed-Backend-P3394-Bridge`
+基线：`origin/develop @ 01d6db5e`
 当前状态：本地分支领先 `origin/develop` 12 个提交，工作区干净，尚未推送。
 
 ---
@@ -50,7 +50,7 @@
 P3394 LLM Agent Interface Standard 中文实施指南
 ```
 
-指南版本：1.1  
+指南版本：1.1
 指南日期：2026-08-12
 
 指南的目标是让 Raymond、Forge、CogSeed、Hermes、Pydantic AI、LangChain/LangGraph、AG2 和第三方 Agent Framework 通过同一套 Bridge 互操作：
@@ -214,7 +214,7 @@ src/main/features/p3394_bridge/
 | UMF Envelope | 已实现 | `envelope.ts` 提供 `p3394/1.0` 类型、payload parts/metadata、边界校验和机器可读错误 |
 | Agent Identity | 已实现 | agent_id、alias、display_name；禁止 alias 等于 agent_id；禁止 agent_id 作为 model profile |
 | Manifest | 已实现 | runtime、capability、local channel、session/security/conformance 字段 |
-| Capability Profile | 已实现 | native/local-cli、handle_message、local-cli、mate-skill-scope |
+| Capability Profile | 已实现 | native/local-cli、handle_message、local-cli、cogseed-skill-scope |
 | Peer Registry | 已实现 | 本地内存 registry、identity/alias resolve、冲突、disable/revoke、session alias 优先级 |
 | Agent Home | 已实现 | uid/agent/session 路径逻辑边界、workspace/artifacts/checkpoints/kstar 路径 |
 | Idempotency | 已实现 | sender + key 复合幂等边界 |
@@ -565,7 +565,7 @@ P3394 Bridge ≠ Legacy KSTAR Engine
 ## 9. 交接验证命令
 
 ```bash
-cd /Users/sudai/Documents/Mate-Backend-P3394-Bridge
+cd /Users/sudai/Documents/CogSeed-Backend-P3394-Bridge
 
 npm run test:js -- \
   test/main/features/p3394_bridge \

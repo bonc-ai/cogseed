@@ -40,7 +40,7 @@ import type { LLMProvider } from '#core-agent';
 import type { Model } from '@earendil-works/pi-ai';
 import { curatedModelsFor } from '../provider_catalog';
 
-// core-agent is an ESM package and the Orkas main process is CJS, so
+// core-agent is an ESM package and the CogSeed main process is CJS, so
 // **static import is not allowed**. Reuse the dynamic-import + lazy cache
 // pattern from runner.ts / session-store.ts.
 type CA = typeof import('#core-agent');

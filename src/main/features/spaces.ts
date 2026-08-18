@@ -53,7 +53,7 @@ export interface Space {
   space_type?: SpaceType;
   /** 持续目标/工作领域（一个空间一个；PRD §0.6.5 规则 2）。 */
   sustained_outcome?: string;
-  /** 空间「目标+规则」说明书（承接原项目 ORKAS.md；commander 写、空间内 agent 读）。 */
+  /** 空间「目标+规则」说明书（承接原项目 COGSEED.md；commander 写、空间内 agent 读）。 */
   instructions?: string;
   /** 基础 Agent（承接空间内任务的默认执行体；扩展点：后续接入其他 coding agent）。
    *  兼容保留：多选场景下为 base_agents 首项。 */

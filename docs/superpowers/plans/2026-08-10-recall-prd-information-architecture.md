@@ -941,13 +941,13 @@ Expected: exit code `0`; no backend data or IPC contract regressions.
 Run:
 
 ```bash
-scripts/restart-mate.sh
+scripts/restart-cogseed.sh
 ```
 
 Confirm startup in:
 
-- `/tmp/mate-agent-mate-run.log`
-- `/Users/sudai/.orkas/runtime-variants/mate/data/logs/<date>.log`
+- `/tmp/cogseed-agent-cogseed-run.log`
+- `/Users/sudai/.cogseed/runtime-variants/cogseed/data/logs/<date>.log`
 
 Expected: app boot, renderer boot, and no startup error.
 

@@ -8,8 +8,8 @@ require('./proxy-bootstrap.cjs');
 // project-level allowlist that third-party OAuth clients can't get on without enrollment in
 // the Workspace Developer Preview Program. The underlying Gmail REST API
 // (`gmail.googleapis.com`, GA since 2014) has no such gate, so we wrap it ourselves. The
-// catalog entry's transport_template references this script via the `${ORKAS_NODE}` +
-// `${ORKAS_PC_DIR}/bin/gmail-mcp-server.cjs` placeholder pair, which `apply-template.ts`
+// catalog entry's transport_template references this script via the `${COGSEED_NODE}` +
+// `${COGSEED_PC_DIR}/bin/gmail-mcp-server.cjs` placeholder pair, which `apply-template.ts`
 // resolves to Electron's binary path running with `ELECTRON_RUN_AS_NODE=1` so we don't
 // require the user to have node on PATH.
 //

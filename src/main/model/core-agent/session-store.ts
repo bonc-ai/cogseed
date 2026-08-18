@@ -34,8 +34,8 @@ import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 
 import {
-  mateRuntimeSessionFile,
-  mateRuntimeSessionToolResultsDir,
+  cogseedRuntimeSessionFile,
+  cogseedRuntimeSessionToolResultsDir,
   sessionToolResultsDir,
   userLocalSessionFile,
 } from '../../paths';
@@ -127,7 +127,7 @@ export function resolveSessionPath(userId: string, sessionId: string): string {
       `(gconv | gmember | gworker | mruntime | skill | agent | extract-img | reflect | memory-extract | anon | aside | cli)`,
     );
   }
-  if (sessionKindOf(sessionId) === 'mruntime') return mateRuntimeSessionFile(userId, sessionId);
+  if (sessionKindOf(sessionId) === 'mruntime') return cogseedRuntimeSessionFile(userId, sessionId);
   return isEphemeralSessionId(sessionId)
     ? userLocalSessionFile(userId, sessionId)
     : cloudSessionFileFor(userId, sessionId);
@@ -140,7 +140,7 @@ export function sessionFileFor(sessionId: string): string {
 export function toolResultsDirForSession(userId: string, sessionId: string): string {
   // Validate the id with the same router that owns the session jsonl path.
   resolveSessionPath(userId, sessionId);
-  if (sessionKindOf(sessionId) === 'mruntime') return mateRuntimeSessionToolResultsDir(userId, sessionId);
+  if (sessionKindOf(sessionId) === 'mruntime') return cogseedRuntimeSessionToolResultsDir(userId, sessionId);
   return isEphemeralSessionId(sessionId)
     ? sessionToolResultsDir(userId, sessionId)
     : cloudSessionToolResultsDirFor(userId, sessionId);

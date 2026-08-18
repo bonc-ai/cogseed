@@ -17,9 +17,9 @@
 
 - 单进程 Electron 应用。
 - Main 是 Node 后端，Renderer 只使用原生 HTML/CSS/JS。
-- 进程间通信只走 IPC 和 `window.orkas.invoke / stream`。
+- 进程间通信只走 IPC 和 `window.cogseed.invoke / stream`。
 - `#core-agent` 通过动态 import 加载，不做静态引入。
-- 本体运行基座仍然是 Orkas；CogSeed 是对外产品品牌。
+- 本体运行基座仍然是 CogSeed；CogSeed 是对外产品品牌。
 - P3394 负责 Wake、KSTAR、Verification、Experience 的治理闭环。
 
 ## 3. 开发关系总图
@@ -28,7 +28,7 @@
 用户
   ↓
 Renderer (HTML / CSS / JS)
-  ↓  window.orkas.invoke / stream
+  ↓  window.cogseed.invoke / stream
 src/main/preload.js
   ↓  contextBridge allow-list
 src/main/ipc/index.ts
@@ -55,7 +55,7 @@ src/main/ipc/index.ts
 | 层级 | 代码位置 | 主要职责 | 说明 |
 |---|---|---|---|
 | Renderer | `src/renderer/*` | 展示界面、收集输入、触发交互 | 不直接访问主进程内部实现 |
-| Preload | `src/main/preload.js` | 暴露 `window.orkas` 安全接口 | 只保留 allow-list |
+| Preload | `src/main/preload.js` | 暴露 `window.cogseed` 安全接口 | 只保留 allow-list |
 | IPC | `src/main/ipc/index.ts` | 参数校验和路由分发 | 不放业务逻辑 |
 | 会话层 | `src/main/features/group_chat/*` | 消息、参与者、调度、任务流转 | 是主对话和派发入口 |
 | 治理层 | `src/main/features/p3394/*` | Wake、KSTAR、Experience、审批 | 负责门禁和闭环 |
@@ -68,14 +68,14 @@ src/main/ipc/index.ts
 ### 阶段 1：先把边界固定
 
 1. 确认品牌名、应用名、协议名和图标资源一致。
-2. 保持 `.orkas`、`window.orkas`、`#core-agent` 等内部兼容标识不乱改。
+2. 保持 `.cogseed`、`window.cogseed`、`#core-agent` 等内部兼容标识不乱改。
 3. 保证 Renderer 仍然只走 IPC。
 
 ### 阶段 2：把后端选择做成显式配置
 
 1. 在 `config.ts` 里统一保存 Commander 后端偏好。
 2. 通过 IPC 暴露读取、设置和检测能力。
-3. 默认仍保持 Orkas Core Agent，Hermes 作为可选后端。
+3. 默认仍保持 CogSeed Core Agent，Hermes 作为可选后端。
 
 ### 阶段 3：把唤醒门禁做扎实
 

@@ -86,4 +86,4 @@ Mate Runtime 通过 host-tool choke point 接入。canonical catalog 增加两�
 
 覆盖 owner 配置迁移、QR 写入、手动设置/清除、recipient type 初次发送与恢复重试、旧 ledger 兼容、终态 waiter、确认拒绝/超时/中止、Core Commander gate、Runtime catalog/runner/host router 双门禁，以及普通飞书回复/卡片/reaction 回归。
 
-完成后运行仓库标准 `npm test`，按要求执行 `scripts/restart-mate.sh`，检查 messaging runtime 日志，并在存在真实飞书配置时验证目标发现、确认、本人收信和成功回执。
+完成后运行仓库标准 `npm test`，按要求执行 `scripts/restart-cogseed.sh`，检查 messaging runtime 日志，并在存在真实飞书配置时验证目标发现、确认、本人收信和成功回执。

@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-将当前绑定在 `features/group_chat/collaboration.ts`、P3394 wake/controller 和 Group Chat bus 中的协作控制语义抽成通用 `features/collaboration_control/`，同时保留现有 Orkas Group Chat 行为，并让 Mate Agent 通过独立 adapter 使用相同的 Workflow、DAG、Gate、Conflict、Retry/Skip/Resume/Abort、event replay 和 recovery 语义。
+将当前绑定在 `features/group_chat/collaboration.ts`、P3394 wake/controller 和 Group Chat bus 中的协作控制语义抽成通用 `features/collaboration_control/`，同时保留现有 CogSeed Group Chat 行为，并让 Mate Agent 通过独立 adapter 使用相同的 Workflow、DAG、Gate、Conflict、Retry/Skip/Resume/Abort、event replay 和 recovery 语义。
 
 迁移采用 strangler pattern：先抽内核和 ports，再让 Group Chat 走兼容 adapter，最后接入 Mate；在双 adapter 验证完成前不删除 Group Chat。
 
@@ -24,7 +24,7 @@ flowchart TD
   W --> G["Group Chat Adapter"]
   W --> M["Mate Adapter"]
   G --> B["group_chat/bus.enqueue"]
-  M --> R["MateRuntimeController"]
+  M --> R["CogSeedRuntimeController"]
   C --> K["KSTAR Evidence Observer"]
 ```
 
@@ -112,7 +112,7 @@ src/main/features/group_chat/collaboration.ts
 Mate 使用自己的路径：
 
 ```text
-<uid>/cloud/mate_agent/coordinations/<coordinationId>/
+<uid>/cloud/cogseed/coordinations/<coordinationId>/
 ├── run.json
 ├── context.json
 └── events.jsonl
@@ -121,19 +121,19 @@ Mate 使用自己的路径：
 Adapter：
 
 ```text
-src/main/features/mate_agent_backend/collaboration-store-adapter.ts
-src/main/features/mate_agent_backend/collaboration-dispatcher.ts
+src/main/features/cogseed_backend/collaboration-store-adapter.ts
+src/main/features/cogseed_backend/collaboration-dispatcher.ts
 ```
 
 Dispatcher 映射：
 
 ```text
-dispatchStep → mateRuntimeController.startMateTask
-cancelExecution → mateRuntimeController.cancelMateTask
-readExecution → readMateTask + Mate Event Store
+dispatchStep → cogseedRuntimeController.startCogSeedTask
+cancelExecution → cogseedRuntimeController.cancelCogSeedTask
+readExecution → readCogSeedTask + Mate Event Store
 ```
 
-现有 `mate_delegate`、`mate_tasks`、`mate_cancel` 保持模型工具兼容，内部逐步切换到通用 engine。
+现有 `cogseed_delegate`、`cogseed_tasks`、`cogseed_cancel` 保持模型工具兼容，内部逐步切换到通用 engine。
 
 ## 6. P3394
 

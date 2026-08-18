@@ -479,7 +479,7 @@ describe('ConversationInfo P3394 Protocol Inspector', () => {
       protocolResponse: {
         ok: true,
         protocol_events: [
-          { message_id: 'msg-1', agent_id: 'agent-writer', data: { ok: true, role: 'orkas_core' } },
+          { message_id: 'msg-1', agent_id: 'agent-writer', data: { ok: true, role: 'cogseed_core' } },
         ],
       },
     });
@@ -502,7 +502,7 @@ describe('ConversationInfo P3394 Protocol Inspector', () => {
           index: 0,
           data: {
             ok: true,
-            role: 'orkas_core',
+            role: 'cogseed_core',
             runtime_kind: 'in_process',
             relationship: 'peer',
             speech_act: 'delegate',
@@ -544,7 +544,7 @@ describe('ConversationInfo P3394 Protocol Inspector', () => {
     expect(result.html).toContain('data-protocol-filter="result"');
     expect(result.html).toContain('agent-writer');
     expect(result.html).toContain('agent-codex');
-    expect(result.html).toContain('Orkas Core');
+    expect(result.html).toContain('CogSeed Core');
     expect(result.html).toContain('External Expert');
     expect(result.html).toContain('Success');
     expect(result.html).toContain('Error');
@@ -559,9 +559,9 @@ describe('ConversationInfo P3394 Protocol Inspector', () => {
       history: [],
       files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
       protocolEvents: [
-        { message_id: 'msg-1', agent_id: 'agent-writer', data: { ok: true, role: 'orkas_core', runtime_kind: 'in_process' } },
+        { message_id: 'msg-1', agent_id: 'agent-writer', data: { ok: true, role: 'cogseed_core', runtime_kind: 'in_process' } },
         { message_id: 'msg-2', agent_id: 'agent-codex', data: { ok: false, role: 'external_expert', runtime_kind: 'cli', error: 'failed' } },
-        { message_id: 'msg-3', agent_id: 'agent-reviewer', data: { ok: true, role: 'orkas_core', runtime_kind: 'in_process' } },
+        { message_id: 'msg-3', agent_id: 'agent-reviewer', data: { ok: true, role: 'cogseed_core', runtime_kind: 'in_process' } },
       ],
     }, async (context) => {
       context.window.ConversationInfo.setProtocolFilters({ agent: 'agent-codex', role: 'external_expert', result: 'error' });
@@ -586,7 +586,7 @@ describe('ConversationInfo P3394 Protocol Inspector', () => {
       activeTab: 'protocol',
       history: [],
       files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
-      protocolEvents: [{ message_id: 'msg-1', agent_id: 'agent-writer', data: { ok: true, role: 'orkas_core' } }],
+      protocolEvents: [{ message_id: 'msg-1', agent_id: 'agent-writer', data: { ok: true, role: 'cogseed_core' } }],
     }, async (context) => {
       context.window.ConversationInfo.setProtocolFilters({ result: 'error' });
     });

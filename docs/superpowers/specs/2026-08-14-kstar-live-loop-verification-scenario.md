@@ -1,7 +1,7 @@
 # KStar 完整闭环实机验证场景
 
 > 日期：2026-08-14
-> 实例：source Electron（Mate-Backend-Test worktree，variant=cogseed，PID 89535）
+> 实例：source Electron（CogSeed-Backend-Test worktree，variant=cogseed，PID 89535）
 > 数据根：`~/.cogseed/runtime-variants/cogseed/data`（uid 78967691）
 > 目的：验证"我们的线"（KStar Commander-Centric 沉淀线）全节点实机执行与效果
 > 前置：本实例运行 2026-08-14 22:56 重启后的新代码（含检索修复/双信号/推理归因/五类来源/直接沉淀）

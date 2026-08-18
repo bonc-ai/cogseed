@@ -108,7 +108,7 @@ git status --short
 
 Expected:
 
-- Repository root is `/Users/an/东方国信项目/开源companion agent/mate-agent`.
+- Repository root is `/Users/an/东方国信项目/开源companion agent/cogseed-agent`.
 - Work is on a `dev/*` branch, never directly on protected `develop`.
 - Record any drift from `22ae9d78` and inspect intervening changes before editing.
 - Preserve all unrelated changes, especially the current `AGENTS.md` update and `docs/GitLab-MR指南-实习生版.md` if still present.
@@ -779,7 +779,7 @@ Verify:
 
 - No raw key appears in tests, logs, HTML snapshots, or comments.
 - IPC handlers contain validation/delegation only.
-- No `window.orkas` additions.
+- No `window.cogseed` additions.
 - No Renderer npm import, TypeScript, JSX, or cache-busting query string.
 - No product/brand/path literals were added to prompt files.
 - No unrelated formatting churn.
@@ -906,7 +906,7 @@ Use this exact prompt in the new conversation:
 
 ```text
 请执行这个计划文件：
-/Users/an/东方国信项目/开源companion agent/mate-agent/docs/superpowers/plans/2026-08-13-model-authorization-settings-hardening.md
+/Users/an/东方国信项目/开源companion agent/cogseed-agent/docs/superpowers/plans/2026-08-13-model-authorization-settings-hardening.md
 
 严格按任务顺序执行，先读取完整计划和当前 AGENTS.md，然后核对仓库根目录、分支、HEAD、工作树和基线测试。使用 superpowers:executing-plans 与 superpowers:test-driven-development；完成前使用 superpowers:verification-before-completion。不要处理计划外的模型 abort 风暴，不要读取或打印任何明文密钥，不要覆盖现有未提交文件，不要推送或创建 MR。实现完成后按项目要求运行专项测试、npm run typecheck、npm test、scripts/restart-cogseed.sh，并检查两处启动日志和真实模型设置界面。
 ```

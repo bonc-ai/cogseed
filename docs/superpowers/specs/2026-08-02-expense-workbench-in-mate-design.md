@@ -17,7 +17,7 @@
 - 在现有 Agent 详情页为声明了管理界面的 Agent 提供“管理”入口；本次只有报销 Agent 声明 `expense_workbench` 管理界面。
 - 在 Mate 内提供现有工作台的七个功能区：报销助手、报销申请、预审会话、工作台、人工复核、连接配置、审计记录。
 - 复用现有报销工作台的交互语义和页面层级，避免做一个只显示状态的简化替代品。
-- 所有 renderer 请求都经 `window.orkas.invoke` 或 `window.orkas.stream`，由 main 校验并调用受限报销适配器。
+- 所有 renderer 请求都经 `window.cogseed.invoke` 或 `window.cogseed.stream`，由 main 校验并调用受限报销适配器。
 - 保证 Mate 和报销项目使用同一份受控业务数据；版本冲突、材料授权、人工确认和 `needs_review` 语义继续由报销领域核心决定。
 - 迁移完成后，用户不需要启动浏览器或本地报销 Web 服务即可完成 Mate 内的报销工作台流程。
 
@@ -31,7 +31,7 @@
 
 ## 现状与迁移约束
 
-报销工作台当前位于报销项目的 `src/expense_reimbursement/api/admin_templates/`，由 `index.html`、`admin.css` 和 `admin.js` 组成，约 3,200 行，包含七个页面区块和大量 API 交互。Mate renderer 使用 classic scripts，不能引入 JSX、TypeScript 或新的 renderer npm 依赖；现有 IPC 入口是 `window.orkas.invoke` / `window.orkas.stream`。
+报销工作台当前位于报销项目的 `src/expense_reimbursement/api/admin_templates/`，由 `index.html`、`admin.css` 和 `admin.js` 组成，约 3,200 行，包含七个页面区块和大量 API 交互。Mate renderer 使用 classic scripts，不能引入 JSX、TypeScript 或新的 renderer npm 依赖；现有 IPC 入口是 `window.cogseed.invoke` / `window.cogseed.stream`。
 
 报销项目目前同时拥有旧会话命令和新版 `application-*` 命令。迁移后的控制页只能使用统一的新版应用契约，不再复制或复活旧 `new` / `answer` / `status` / `report` 会话协议。涉及草稿的请求必须携带宿主读取的 `expected_version`，材料必须来自当前用户已授权的材料清单及明确的材料类别。
 

@@ -68,7 +68,7 @@ fork/adapt 边界敏感逻辑
 - Runtime 不读取 `cloud/sessions/gconv-*` / `gmember-*`
 - Runtime 只接受明确传入的 `task`、`context`、`attachments`
 - Runtime 结果可以投影回 Mate Agent，但不做 transcript 双向同步
-- Runtime 数据继续放在 `<uid>/local/mate_runtime/`
+- Runtime 数据继续放在 `<uid>/local/cogseed_runtime/`
 
 ### 2.3 可以抄，但不能继承旧假设
 
@@ -105,7 +105,7 @@ fork/adapt 边界敏感逻辑
 建议新增内核目录：
 
 ```text
-src/main/features/mate_agent_runtime/kernel/
+src/main/features/cogseed_runtime/kernel/
 ├── types.ts
 ├── session-store.ts
 ├── session-runner.ts
@@ -136,7 +136,7 @@ src/main/features/mate_agent_runtime/kernel/
 现有文件保留为 Runtime 外壳：
 
 ```text
-src/main/features/mate_agent_runtime/
+src/main/features/cogseed_runtime/
 ├── protocol.ts
 ├── store.ts
 ├── worker-process.ts
@@ -210,7 +210,7 @@ RuntimeProcessEvents
 ### 建议文件
 
 ```text
-src/main/features/mate_agent_runtime/kernel/types.ts
+src/main/features/cogseed_runtime/kernel/types.ts
 ```
 
 ### 核心类型
@@ -257,16 +257,16 @@ export interface RuntimeKernelEvent {
 ### 建议文件
 
 ```text
-src/main/features/mate_agent_runtime/kernel/session-store.ts
+src/main/features/cogseed_runtime/kernel/session-store.ts
 ```
 
 ### 数据目录
 
 ```text
-<uid>/local/mate_runtime/sessions/<mruntime-id>.jsonl
-<uid>/local/mate_runtime/sessions/<mruntime-id>.context.json
-<uid>/local/mate_runtime/runs/<run-id>/meta.json
-<uid>/local/mate_runtime/runs/<run-id>/events.jsonl
+<uid>/local/cogseed_runtime/sessions/<mruntime-id>.jsonl
+<uid>/local/cogseed_runtime/sessions/<mruntime-id>.context.json
+<uid>/local/cogseed_runtime/runs/<run-id>/meta.json
+<uid>/local/cogseed_runtime/runs/<run-id>/events.jsonl
 ```
 
 ### 可以参考/抄改
@@ -311,8 +311,8 @@ src/main/util/locks.ts
 ### 建议文件
 
 ```text
-src/main/features/mate_agent_runtime/kernel/prompt-assembler.ts
-src/main/features/mate_agent_runtime/kernel/context/assembler.ts
+src/main/features/cogseed_runtime/kernel/prompt-assembler.ts
+src/main/features/cogseed_runtime/kernel/context/assembler.ts
 ```
 
 ### 输入
@@ -371,7 +371,7 @@ Runtime prompt 应短小、可审计、稳定：
 ### 建议文件
 
 ```text
-src/main/features/mate_agent_runtime/kernel/model-adapter.ts
+src/main/features/cogseed_runtime/kernel/model-adapter.ts
 ```
 
 ### 可以复用
@@ -434,12 +434,12 @@ Runtime 自己决定能用哪些工具，而不是继承 core-agent 的完整工
 ### 建议文件
 
 ```text
-src/main/features/mate_agent_runtime/kernel/tools/catalog.ts
-src/main/features/mate_agent_runtime/kernel/tools/permissions.ts
-src/main/features/mate_agent_runtime/kernel/tools/runner.ts
-src/main/features/mate_agent_runtime/kernel/tools/file-tools.ts
-src/main/features/mate_agent_runtime/kernel/tools/shell-tools.ts
-src/main/features/mate_agent_runtime/kernel/tools/skill-tools.ts
+src/main/features/cogseed_runtime/kernel/tools/catalog.ts
+src/main/features/cogseed_runtime/kernel/tools/permissions.ts
+src/main/features/cogseed_runtime/kernel/tools/runner.ts
+src/main/features/cogseed_runtime/kernel/tools/file-tools.ts
+src/main/features/cogseed_runtime/kernel/tools/shell-tools.ts
+src/main/features/cogseed_runtime/kernel/tools/skill-tools.ts
 ```
 
 ### 第一版工具白名单
@@ -511,18 +511,18 @@ Runtime 有自己的 memory/context，不默认继承 Mate Agent memory、KB 或
 ### 建议文件
 
 ```text
-src/main/features/mate_agent_runtime/kernel/memory/store.ts
-src/main/features/mate_agent_runtime/kernel/memory/injector.ts
-src/main/features/mate_agent_runtime/kernel/memory/extractor.ts
-src/main/features/mate_agent_runtime/kernel/context/store.ts
-src/main/features/mate_agent_runtime/kernel/context/importer.ts
+src/main/features/cogseed_runtime/kernel/memory/store.ts
+src/main/features/cogseed_runtime/kernel/memory/injector.ts
+src/main/features/cogseed_runtime/kernel/memory/extractor.ts
+src/main/features/cogseed_runtime/kernel/context/store.ts
+src/main/features/cogseed_runtime/kernel/context/importer.ts
 ```
 
 ### 数据目录
 
 ```text
-<uid>/local/mate_runtime/memory/
-<uid>/local/mate_runtime/contexts/
+<uid>/local/cogseed_runtime/memory/
+<uid>/local/cogseed_runtime/contexts/
 ```
 
 ### 规则
@@ -565,10 +565,10 @@ messages → model → tool call → tool result → model → final result
 ### 建议文件
 
 ```text
-src/main/features/mate_agent_runtime/kernel/execution-loop.ts
-src/main/features/mate_agent_runtime/kernel/session-runner.ts
-src/main/features/mate_agent_runtime/kernel/cancellation.ts
-src/main/features/mate_agent_runtime/kernel/errors.ts
+src/main/features/cogseed_runtime/kernel/execution-loop.ts
+src/main/features/cogseed_runtime/kernel/session-runner.ts
+src/main/features/cogseed_runtime/kernel/cancellation.ts
+src/main/features/cogseed_runtime/kernel/errors.ts
 ```
 
 ### 职责
@@ -622,7 +622,7 @@ src/main/features/mate_agent_runtime/kernel/errors.ts
 ### 当前文件
 
 ```text
-src/main/features/mate_agent_runtime/core-executor.ts
+src/main/features/cogseed_runtime/core-executor.ts
 ```
 
 ### 迁移策略
@@ -644,7 +644,7 @@ kernel/session-runner.ts → primary path
 
 ### 验收标准
 
-- `features/mate_agent_runtime/` 中只有 `core-executor.ts` 可以 import `../../model/client`
+- `features/cogseed_runtime/` 中只有 `core-executor.ts` 可以 import `../../model/client`
 - 新 kernel 模块不 import `#core-agent`
 - fallback 由 feature flag 控制
 - fallback 和 native kernel 输出同一 Runtime JSONL event contract
@@ -666,7 +666,7 @@ kernel/session-runner.ts → primary path
 验收命令：
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime test/main/util/packaged-entrypoint-gate.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime test/main/util/packaged-entrypoint-gate.test.ts --maxWorkers=1
 npm run typecheck
 npm test
 ```
@@ -881,7 +881,7 @@ Runtime 权限来自 Runtime request 的 agent profile / policy，不继承 grou
 Runtime 写入只允许：
 
 ```text
-<uid>/local/mate_runtime/
+<uid>/local/cogseed_runtime/
 ```
 
 除非通过明确 result projection 把最终结果写回 Mate Agent 会话。
@@ -927,7 +927,7 @@ Runtime 写入只允许：
 每阶段至少运行：
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime --maxWorkers=1
 npm run typecheck
 ```
 
@@ -945,7 +945,7 @@ npm test
 
 ### 风险 2：Runtime 重新继承 group chat 语义
 
-控制：测试禁止 `features/mate_agent_runtime/kernel` import `features/group_chat`；protocol 禁止 `cid`。
+控制：测试禁止 `features/cogseed_runtime/kernel` import `features/group_chat`；protocol 禁止 `cid`。
 
 ### 风险 3：工具权限扩大
 
@@ -965,7 +965,7 @@ npm test
 
 1. Runtime 默认不再调用 `streamChatWithModel`。
 2. Runtime native kernel 不 import `#core-agent`。
-3. Runtime session、memory、context、runs 全部在 `<uid>/local/mate_runtime/`。
+3. Runtime session、memory、context、runs 全部在 `<uid>/local/cogseed_runtime/`。
 4. Runtime tools 由 Mate Agent Runtime catalog 控制。
 5. Runtime 不读取 Mate Agent 完整 conversation JSONL。
 6. Runtime 不接 `group_chat.bus`。
@@ -1030,7 +1030,7 @@ Native Kernel 上线必须保留可操作回滚路径。回滚分三层：
 环境变量或配置项：
 
 ```text
-ORKAS_MATE_RUNTIME_KERNEL=core
+COGSEED_COGSEED_RUNTIME_KERNEL=core
 ```
 
 语义：
@@ -1044,7 +1044,7 @@ ORKAS_MATE_RUNTIME_KERNEL=core
 用户配置建议存于 local domain：
 
 ```text
-<uid>/local/mate_runtime/config.json
+<uid>/local/cogseed_runtime/config.json
 ```
 
 字段：
@@ -1088,7 +1088,7 @@ interface RuntimeExecutionOptions {
 
 ## 15. 补充：早期 Runtime 数据兼容策略
 
-当前 Phase 0 已经会产生 `<uid>/local/mate_runtime/` 下的数据。Native Kernel 不能假设这些数据不存在。
+当前 Phase 0 已经会产生 `<uid>/local/cogseed_runtime/` 下的数据。Native Kernel 不能假设这些数据不存在。
 
 ### 15.1 兼容原则
 
@@ -1104,7 +1104,7 @@ interface RuntimeExecutionOptions {
 {
   "type": "session_header",
   "version": 1,
-  "kernel": "mate-agent-native",
+  "kernel": "cogseed-agent-native",
   "runtime_session_id": "mruntime-...",
   "created_at": "2026-08-04T00:00:00"
 }
@@ -1130,7 +1130,7 @@ native session store 只创建新格式；遇到 legacy 文件直接拒绝 nativ
 Native Kernel 默认配置集中定义在：
 
 ```text
-src/main/features/mate_agent_runtime/kernel/config.ts
+src/main/features/cogseed_runtime/kernel/config.ts
 ```
 
 建议初始值：
@@ -1245,8 +1245,8 @@ attachments[]
 建议先用 Markdown，便于人工审查：
 
 ```text
-<uid>/local/mate_runtime/memory/runtime.md
-<uid>/local/mate_runtime/memory/agents/<agent-id>.md
+<uid>/local/cogseed_runtime/memory/runtime.md
+<uid>/local/cogseed_runtime/memory/agents/<agent-id>.md
 ```
 
 结构：
@@ -1332,7 +1332,7 @@ export const DEFAULT_RUNTIME_CONCURRENCY = Object.freeze({
 常规 CI 不打真实模型。新增 opt-in smoke：
 
 ```bash
-ORKAS_RUNTIME_LIVE_MODEL_SMOKE=1 npm run test:js -- test/main/features/mate_agent_runtime/live-model-smoke.test.ts --maxWorkers=1
+COGSEED_RUNTIME_LIVE_MODEL_SMOKE=1 npm run test:js -- test/main/features/cogseed_runtime/live-model-smoke.test.ts --maxWorkers=1
 ```
 
 要求：
@@ -1355,19 +1355,19 @@ ORKAS_RUNTIME_LIVE_MODEL_SMOKE=1 npm run test:js -- test/main/features/mate_agen
 Native Kernel 对外只暴露统一工厂：
 
 ```text
-src/main/features/mate_agent_runtime/kernel/index.ts
+src/main/features/cogseed_runtime/kernel/index.ts
 ```
 
 接口：
 
 ```ts
-export interface MateAgentKernel {
+export interface CogSeedAgentKernel {
   run(request: RuntimeKernelRequest, options?: RuntimeKernelRunOptions): AsyncIterable<RuntimeKernelEvent>;
   cancel(requestId: string): Promise<void>;
   getSession(runtimeSessionId: string): Promise<RuntimeKernelSessionSummary>;
 }
 
-export function createMateAgentKernel(deps: MateAgentKernelDeps): MateAgentKernel;
+export function createCogSeedAgentKernel(deps: CogSeedAgentKernelDeps): CogSeedAgentKernel;
 ```
 
 其他 Runtime 外壳模块只 import `kernel/index.ts`，不直接 import kernel 内部深层文件，测试除外。

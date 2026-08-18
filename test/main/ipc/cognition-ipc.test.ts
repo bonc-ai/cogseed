@@ -11,7 +11,7 @@ const TEST_UID = 'uCognitionIpc';
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: InvokeFn) => {
-      if (channel === 'orkas.invoke') invokeHandler = fn;
+      if (channel === 'cogseed.invoke') invokeHandler = fn;
     },
     on: vi.fn(),
   },
@@ -88,7 +88,7 @@ vi.mock('../../../src/main/features/cognition/capture-draft', () => ({
 }));
 
 beforeEach(async () => {
-  process.env.ORKAS_WORKSPACE_ROOT = os.tmpdir();
+  process.env.COGSEED_WORKSPACE_ROOT = os.tmpdir();
   invokeHandler = null;
   vi.resetModules();
   vi.clearAllMocks();

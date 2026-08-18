@@ -6,19 +6,19 @@
 
 ## Goal
 
-Make CogSeed the only supported product identity in the repository and runtime. Remove the Orkas and Mate compatibility layers rather than translating them at startup or accepting them as aliases.
+Make CogSeed the only supported product identity in the repository and runtime. Remove the CogSeed and Mate compatibility layers rather than translating them at startup or accepting them as aliases.
 
 ## Hard boundaries
 
 This is intentionally a breaking cutover:
 
-- Old `orkas://` and `mateagent://` deep links stop working.
-- `ORKAS_*` environment variables stop working; only `COGSEED_*` is accepted.
-- Old `.orkas` / `.orkas-dev` roots are not migrated automatically.
-- Old `orkas.*`, `mate_agent.*`, and `window.mateAgentProjection` interfaces are removed.
+- Old `cogseed://` and `cogseed://` deep links stop working.
+- `COGSEED_*` environment variables stop working; only `COGSEED_*` is accepted.
+- Old `.cogseed` / `.cogseed-dev` roots are not migrated automatically.
+- Old `cogseed.*`, `cogseed.*`, and `window.cogseedAgentProjection` interfaces are removed.
 - Old storage, IPC, DOM MIME, localStorage, event, prompt, and protocol prefixes are renamed to CogSeed forms.
-- Legacy `orkas-*` / `mate-*` wrappers are removed from the shipped surface.
-- The remote API base is no longer `https://orkas.ai/api`; runtime configuration requires `COGSEED_API_BASE_URL`.
+- Legacy `cogseed-*` / `cogseed-*` wrappers are removed from the shipped surface.
+- The remote API base is no longer `https://cogseed.ai/api`; runtime configuration requires `COGSEED_API_BASE_URL`.
 
 No destructive deletion of an existing user's files is performed by the application. The application simply stops discovering legacy roots; users must manually back up or migrate old data before upgrading.
 
@@ -43,16 +43,16 @@ No destructive deletion of an existing user's files is performed by the applicat
 1. **Identity and bootstrap**
    - Simplify `resources/identity.json` and `main/brand.ts` to canonical fields only.
    - Remove legacy normalization, runtime aliases, migration markers, and old protocol registration.
-   - Rename package metadata fields from `orkas*` to `cogseed*` where they are internal metadata.
+   - Rename package metadata fields from `cogseed*` to `cogseed*` where they are internal metadata.
 
 2. **Environment and paths**
-   - Rename every production/test/script `ORKAS_*` reference to `COGSEED_*`.
+   - Rename every production/test/script `COGSEED_*` reference to `COGSEED_*`.
    - Rename internal data namespaces and runtime directories that are product prefixes.
    - Keep no fallback reads from legacy environment variables or roots.
 
 3. **IPC and renderer bridge**
    - Register only `cogseed.invoke`, `cogseed.streamStart`, and `cogseed.streamCancel`.
-   - Rename `mate_agent.*` channels and remove the old projection object.
+   - Rename `cogseed.*` channels and remove the old projection object.
    - Update renderer storage keys, DOM MIME, custom events, CSS/data attributes, and locale keys.
 
 4. **CLI and shipped wrappers**
@@ -75,7 +75,7 @@ No destructive deletion of an existing user's files is performed by the applicat
 - Startup with a legacy-only environment fails with a clear `COGSEED_* required` error instead of silently normalizing it.
 - A legacy deep link is rejected as an unsupported scheme.
 - A legacy IPC channel returns `unknown channel` because no alias is registered.
-- Existing `.orkas` data is not read or copied.
+- Existing `.cogseed` data is not read or copied.
 - Missing `COGSEED_API_BASE_URL` produces a clear configuration error for remote config and Marketplace operations.
 
 ## Verification gates
@@ -88,7 +88,7 @@ Before completion:
 - `npm run builtin:manifest:check`
 - P3394 gateway smoke tests
 - Full JS suite with the embedding model available
-- Repository-wide residual scan for Orkas/Mate identifiers
+- Repository-wide residual scan for CogSeed/Mate identifiers
 - Renderer invoke/stream channel parity scan
 - Package metadata and electron-builder file-list inspection
 

@@ -12,7 +12,7 @@ describe('source runtime launchers', () => {
     const windows = read('run.cmd');
     const bootstrap = read('bootstrap.cjs');
     const restart = read('scripts/restart-cogseed.sh');
-    const legacyRestart = read('scripts/restart-mate.sh');
+    const legacyRestart = read('scripts/restart-cogseed.sh');
     const packageMeta = JSON.parse(read('package.json')) as { cogseedSourceRuntimeVariant?: string };
 
     expect(shell).toContain('VARIANT="cogseed"');
@@ -37,13 +37,13 @@ describe('source runtime launchers', () => {
     expect(restart).toContain('if [ -n "$(worktree_pids)" ]; then');
     expect(restart).toContain('if [ -z "$(worktree_pids)" ]; then');
     expect(legacyRestart).toContain('exec "$APP_DIR/scripts/restart-cogseed.sh" "$@"');
-    expect(legacyRestart).not.toContain('VARIANT="mate"');
+    expect(legacyRestart).not.toContain('VARIANT="cogseed"');
     expect(bootstrap).toContain('sourceVariant: packageMeta.cogseedSourceRuntimeVariant');
     expect(bootstrap).toContain('allowWorkspaceOverride: isPackagedDev');
   });
 
   it('rejects every shell argument or environment attempt to override cogseed', () => {
-    for (const variant of ['main', 'cognition', 'expense', 'mate', 'optimization']) {
+    for (const variant of ['main', 'cognition', 'expense', 'cogseed', 'optimization']) {
       const result = spawnSync('bash', [path.join(root, 'run.sh'), `--variant=${variant}`], {
         encoding: 'utf8',
         env: { ...process.env, COGSEED_RUNTIME_VARIANT: '' },
@@ -79,7 +79,7 @@ describe('source runtime launchers', () => {
 
     expect(sources).not.toMatch(/\bpkill\b/);
     expect(sources).not.toMatch(/\btaskkill\b/i);
-    expect(sources).not.toContain('ORKAS_ALLOW_MULTI_INSTANCE');
+    expect(sources).not.toContain('COGSEED_ALLOW_MULTI_INSTANCE');
     expect(sources).toContain('app.requestSingleInstanceLock()');
     expect(main).toContain("app.setPath('userData', path.join(container, 'electron-user-data'));\n");
     expect(main.indexOf("app.setPath('userData'")).toBeLessThan(

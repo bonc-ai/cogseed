@@ -11,15 +11,15 @@ import {
 } from '../../../../src/main/model/core-agent/session-store';
 
 describe('CogSeed Runtime session routing', () => {
-  it('routes mruntime sessions into the local mate_runtime root', () => {
+  it('routes mruntime sessions into the local cogseed_runtime root', () => {
     const uid = 'runtime-routing-user';
     const sid = 'mruntime-alpha_123';
 
-    expect(paths.mateRuntimeRoot(uid)).toBe(path.join(paths.userLocalRoot(uid), 'mate_runtime'));
-    expect(paths.mateRuntimeSessionsDir(uid)).toBe(path.join(paths.userLocalRoot(uid), 'mate_runtime', 'sessions'));
-    expect(paths.mateRuntimeSessionFile(uid, sid)).toBe(path.join(paths.userLocalRoot(uid), 'mate_runtime', 'sessions', `${sid}.jsonl`));
-    expect(resolveSessionPath(uid, sid)).toBe(paths.mateRuntimeSessionFile(uid, sid));
-    expect(toolResultsDirForSession(uid, sid)).toBe(path.join(paths.userLocalRoot(uid), 'mate_runtime', 'sessions', `${sid}.tool-results`));
+    expect(paths.cogseedRuntimeRoot(uid)).toBe(path.join(paths.userLocalRoot(uid), 'cogseed_runtime'));
+    expect(paths.cogseedRuntimeSessionsDir(uid)).toBe(path.join(paths.userLocalRoot(uid), 'cogseed_runtime', 'sessions'));
+    expect(paths.cogseedRuntimeSessionFile(uid, sid)).toBe(path.join(paths.userLocalRoot(uid), 'cogseed_runtime', 'sessions', `${sid}.jsonl`));
+    expect(resolveSessionPath(uid, sid)).toBe(paths.cogseedRuntimeSessionFile(uid, sid));
+    expect(toolResultsDirForSession(uid, sid)).toBe(path.join(paths.userLocalRoot(uid), 'cogseed_runtime', 'sessions', `${sid}.tool-results`));
   });
 
   it('treats mruntime as local-only and memory-isolated', () => {

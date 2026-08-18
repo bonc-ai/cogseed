@@ -1,7 +1,7 @@
 # KStar 教训沉淀实机验证场景（高质量跨门槛）
 
 > 日期：2026-08-15
-> 实例：source Electron（Mate-Backend-Test，variant=cogseed）
+> 实例：source Electron（CogSeed-Backend-Test，variant=cogseed）
 > 代码：`f99d59ea`（statement 富化 + lesson 持久化）
 > 目的：验证**带教训的沉淀**——一次真实任务让 Agent 遇到缺口 → review 产生偏离/gap → 沉淀的资产是"推理出的教训"（非模板句、五类证据、可直接复用）
 

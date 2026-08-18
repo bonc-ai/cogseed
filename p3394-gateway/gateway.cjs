@@ -938,7 +938,7 @@ const server = http.createServer((req, res) => {
       // 空等 3 分钟超时）：桥自身节点 id 不可作为转发目标；也不可转发
       // 给自己。桥对这些情况的响应是 200-ack + 异步失败（不回传错误），
       // 所以必须在本地拦截。
-      if (peer === 'cogseed' || peer === 'mate' || peer === 'orkas') {
+      if (peer === 'cogseed' || peer === 'cogseed' || peer === 'cogseed') {
         json(res, 502, { ok: false, error: 'p3394_call_forward_rejected: p3394_forward_invalid_target (bridge self node)' });
         return;
       }

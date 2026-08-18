@@ -11,28 +11,28 @@
 
 当前用户可见品牌已经是 CogSeed，但内部仍存在上一代身份：
 
-- App ID：`com.mateagent.desktop`
-- URL scheme：`mateagent`、`orkas`
-- 数据根：`.orkas`、`.orkas-dev`
-- 环境变量：`ORKAS_*`
-- renderer bridge：`window.orkas`
-- IPC transport：`orkas.invoke`、`orkas:bootI18n` 等
-- runtime variant：`mate`
-- feature 目录：`mate_agent_runtime`、`mate_agent_backend`
-- 可执行入口：`mate-runtime-worker.cjs`、`orkas-bridge.cjs`、`orkas-pkg.cjs`
-- artifact iframe 协议：`__orkasArtifact`、`window.orkasArtifact`、`OrkasArtifactSecurity`、`__orkas/bridge.js`、`__orkas-meta.json`
-- local-agent MCP 身份：`clientInfo.name=orkas`、`mcp_servers.orkas`、`runs inside Orkas`
-- 安全规则与运行时 marker：`.orkas/.../marketplace`、`.orkas-runtime.json`、`.orkas-whisper-ready.json`、`.orkas-import-*.tmp`
+- App ID：`com.cogseed.desktop`
+- URL scheme：`cogseed`、`cogseed`
+- 数据根：`.cogseed`、`.cogseed-dev`
+- 环境变量：`COGSEED_*`
+- renderer bridge：`window.cogseed`
+- IPC transport：`cogseed.invoke`、`cogseed:bootI18n` 等
+- runtime variant：`cogseed`
+- feature 目录：`cogseed_runtime`、`cogseed_backend`
+- 可执行入口：`cogseed-runtime-worker.cjs`、`cogseed-bridge.cjs`、`cogseed-pkg.cjs`
+- artifact iframe 协议：`__cogseedArtifact`、`window.cogseedArtifact`、`CogSeedArtifactSecurity`、`__cogseed/bridge.js`、`__cogseed-meta.json`
+- local-agent MCP 身份：`clientInfo.name=cogseed`、`mcp_servers.cogseed`、`runs inside CogSeed`
+- 安全规则与运行时 marker：`.cogseed/.../marketplace`、`.cogseed-runtime.json`、`.cogseed-whisper-ready.json`、`.cogseed-import-*.tmp`
 
 本设计将 CogSeed 变为唯一 canonical 内部身份，同时保证现有安装可在一次升级中自动迁移数据，并在一个发布版本内继续接受旧协议、旧 bridge、旧环境变量和旧入口文件。
 
 ## 2. 目标
 
 1. 新安装和新代码只使用 CogSeed canonical 标识。
-2. 首次启动自动把旧 `.orkas` 数据迁移到 `.cogseed`。
+2. 首次启动自动把旧 `.cogseed` 数据迁移到 `.cogseed`。
 3. 旧数据迁移可重入、可验证、失败不损坏源数据。
-4. 旧 `mateagent://`、`orkas://` 深链在兼容期继续工作。
-5. renderer 全部改用 `window.cogseed`，`window.orkas` 仅作为一版代理。
+4. 旧 `cogseed://`、`cogseed://` 深链在兼容期继续工作。
+5. renderer 全部改用 `window.cogseed`，`window.cogseed` 仅作为一版代理。
 6. IPC transport 前缀、启动变量、runtime variant、模块目录和入口文件全部改为 CogSeed。
 7. 业务域通道（如 `recall.*`、`skills.*`、`contexts.*`）不因品牌迁移改名。
 8. 下一版本能够通过删除集中兼容层完成旧身份清理，而无需再次迁移业务代码。
@@ -78,25 +78,25 @@ workspace id
 兼容期继续接受：
 
 ```text
-com.mateagent.desktop（仅作为旧安装来源/迁移识别）
-mateagent://
-orkas://
-~/.orkas
-~/.orkas-dev
-%LOCALAPPDATA%/Orkas/install-pin.json
-window.orkas
-orkas.invoke
-orkas:bootI18n
-ORKAS_*
-variant=mate
-bin/mate-runtime-worker.cjs
-bin/orkas-bridge.cjs
-bin/orkas-pkg.cjs
-scripts/restart-mate.sh
-__orkasArtifact / window.orkasArtifact / OrkasArtifactSecurity
-__orkas/bridge.js / __orkas-meta.json
-mcp_servers.orkas / clientInfo.name=orkas
-.orkas-runtime.json / .orkas-whisper-ready.json / .orkas-import-*.tmp
+com.cogseed.desktop（仅作为旧安装来源/迁移识别）
+cogseed://
+cogseed://
+~/.cogseed
+~/.cogseed-dev
+%LOCALAPPDATA%/CogSeed/install-pin.json
+window.cogseed
+cogseed.invoke
+cogseed:bootI18n
+COGSEED_*
+variant=cogseed
+bin/cogseed-runtime-worker.cjs
+bin/cogseed-bridge.cjs
+bin/cogseed-pkg.cjs
+scripts/restart-cogseed.sh
+__cogseedArtifact / window.cogseedArtifact / CogSeedArtifactSecurity
+__cogseed/bridge.js / __cogseed-meta.json
+mcp_servers.cogseed / clientInfo.name=cogseed
+.cogseed-runtime.json / .cogseed-whisper-ready.json / .cogseed-import-*.tmp
 ```
 
 兼容入口不得成为新代码的依赖：
@@ -146,14 +146,14 @@ Electron loads bootstrap.cjs
 
 1. 解析 canonical CogSeed container。
 2. 如果 canonical container 已存在且含有效 migration marker，直接使用。
-3. 如果 canonical container 不存在、legacy `.orkas` 存在，执行生产数据迁移。
-4. packaged-dev/source-dev 同理把 `.orkas-dev` 迁移到 `.cogseed-dev`，使用独立 marker，禁止与生产 root 混用。
+3. 如果 canonical container 不存在、legacy `.cogseed` 存在，执行生产数据迁移。
+4. packaged-dev/source-dev 同理把 `.cogseed-dev` 迁移到 `.cogseed-dev`，使用独立 marker，禁止与生产 root 混用。
 5. 如果新旧目录都不存在，创建新的 CogSeed container。
 6. 如果 canonical 与对应 legacy 目录都存在但没有 marker，canonical 目录为 authoritative；不自动合并，写冲突诊断并提示人工处理，避免覆盖两个活跃数据集。
 
 #### 迁移算法
 
-为兑现“兼容期保留 legacy root、旧版本仍可读取原 `.orkas`”的回滚承诺，**同卷和跨卷均不得 rename 或移动 legacy root**。所有平台使用 copy/clone + verify + canonical rename：
+为兑现“兼容期保留 legacy root、旧版本仍可读取原 `.cogseed`”的回滚承诺，**同卷和跨卷均不得 rename 或移动 legacy root**。所有平台使用 copy/clone + verify + canonical rename：
 
 ```text
 legacy root
@@ -176,8 +176,8 @@ Canonical root 内写：
 ```json
 {
   "schema_version": 1,
-  "migration": "legacy-orkas-to-cogseed",
-  "source_kind": "orkas",
+  "migration": "legacy-cogseed-to-cogseed",
+  "source_kind": "cogseed",
   "completed_at": "ISO-8601",
   "file_count": 0,
   "critical_manifest_hash": "sha256",
@@ -193,14 +193,14 @@ marker 不包含用户名、token、路径原文或文件内容。
 - 不在半迁移的 canonical root 上启动业务层。
 - 清理未完成的临时目录或在下一次启动继续验证。
 - 启动失败返回可操作错误，日志只记录阶段、计数、哈希和粗粒度错误码。
-- 不在失败后继续向 `.orkas` 写数据，避免形成双写分叉。
+- 不在失败后继续向 `.cogseed` 写数据，避免形成双写分叉。
 
 ### 5.3 App ID 与协议
 
 - packaged App ID 改为 `com.cogseed.desktop`。
 - source variant 使用 `com.cogseed.desktop.source.<variant>`。
 - canonical protocol owner 注册 `cogseed`。
-- 同一 CogSeed app 在兼容期同时注册 `mateagent` 和 `orkas`。
+- 同一 CogSeed app 在兼容期同时注册 `cogseed` 和 `cogseed`。
 - 所有 URL 进入同一个 deep-link normalizer，先把 legacy scheme 映射为 `cogseed` 再解析业务 path。
 - renderer、Server callback 和 connector start URL 新生成值只使用 `cogseed://`。
 - 旧回调 URL 仍能被新应用消费，但不会再次生成。
@@ -222,7 +222,7 @@ Preload 只实现一份 frozen API：
 
 ```text
 contextBridge.exposeInMainWorld('cogseed', canonicalApi)
-contextBridge.exposeInMainWorld('orkas', legacyProxy)
+contextBridge.exposeInMainWorld('cogseed', legacyProxy)
 ```
 
 `legacyProxy`：
@@ -243,12 +243,12 @@ autogenerated cogseed stream event/cancel channels
 
 Main 在兼容期注册旧 transport alias，alias 立即调用 canonical handler。业务 channel 字符串保持不变。
 
-同步 i18n boot global 改为 `window.__cogseedI18nBoot`，同时提供 `window.__orkasI18nBoot` 兼容值。
+同步 i18n boot global 改为 `window.__cogseedI18nBoot`，同时提供 `window.__cogseedI18nBoot` 兼容值。
 
 
 ### 5.5 Artifact iframe 隔离协议
 
-Artifact iframe 不暴露 `window.cogseed`、`window.orkas` 或任意 IPC；它继续只通过经过验证的 `postMessage` 通道与宿主通信。Canonical artifact 协议改为：
+Artifact iframe 不暴露 `window.cogseed`、`window.cogseed` 或任意 IPC；它继续只通过经过验证的 `postMessage` 通道与宿主通信。Canonical artifact 协议改为：
 
 ```text
 postMessage sentinel     __cogseedArtifact: true
@@ -261,23 +261,23 @@ metadata file            __cogseed-meta.json
 兼容期必须继续支持已保存 artifact 中的旧协议：
 
 ```text
-__orkasArtifact
-window.orkasArtifact
-OrkasArtifactSecurity
-__orkas/bridge.js
-__orkas-meta.json
+__cogseedArtifact
+window.cogseedArtifact
+CogSeedArtifactSecurity
+__cogseed/bridge.js
+__cogseed-meta.json
 ```
 
 具体规则：
 
 - 新 artifact 只生成 canonical bridge path、sentinel、global 和 metadata 文件。
-- `chat-app://` handler 在兼容期同时服务 `__cogseed/bridge.js` 与 `__orkas/bridge.js`，两者使用同一个实现。
-- artifact resolver 优先读取 `__cogseed-meta.json`，缺失时读取 `__orkas-meta.json`；不得同时写两份 metadata。
+- `chat-app://` handler 在兼容期同时服务 `__cogseed/bridge.js` 与 `__cogseed/bridge.js`，两者使用同一个实现。
+- artifact resolver 优先读取 `__cogseed-meta.json`，缺失时读取 `__cogseed-meta.json`；不得同时写两份 metadata。
 - host message validator 接受新旧 sentinel，但两者必须经过完全相同的 `event.source === frame.contentWindow`、frame lookup、message type 和 payload validation。
-- `CogSeedArtifactSecurity` 是 canonical global；`OrkasArtifactSecurity` 仅代理同一个 frozen API。
-- `window.cogseedArtifact` 是 canonical iframe helper；`window.orkasArtifact` 仅为旧 artifact bridge 保留。
-- reserved-path security 同时保护 `__cogseed/`、`__cogseed-meta.json`、`__orkas/` 和 `__orkas-meta.json`，防止 artifact 文件覆盖宿主注入协议。
-- `AGENTS.md` / `CLAUDE.md` 的 artifact 安全约束同步改为“iframe 不暴露 `window.cogseed` 或 legacy `window.orkas`”。
+- `CogSeedArtifactSecurity` 是 canonical global；`CogSeedArtifactSecurity` 仅代理同一个 frozen API。
+- `window.cogseedArtifact` 是 canonical iframe helper；`window.cogseedArtifact` 仅为旧 artifact bridge 保留。
+- reserved-path security 同时保护 `__cogseed/`、`__cogseed-meta.json`、`__cogseed/` 和 `__cogseed-meta.json`，防止 artifact 文件覆盖宿主注入协议。
+- `AGENTS.md` / `CLAUDE.md` 的 artifact 安全约束同步改为“iframe 不暴露 `window.cogseed` 或 legacy `window.cogseed`”。
 
 ### 5.6 环境变量和 runtime variant
 
@@ -289,7 +289,7 @@ Canonical 环境变量使用 `COGSEED_*`。启动入口执行一次归一化：
 4. 归一化完成后，内部模块只读取 `COGSEED_*`。
 5. 启动子进程时只传新变量，除非目标是旧 wrapper。
 
-`mate` runtime variant 在兼容期归一化为 `cogseed`。新 source run、日志和 bundle identity 只生成 `cogseed`。
+`cogseed` runtime variant 在兼容期归一化为 `cogseed`。新 source run、日志和 bundle identity 只生成 `cogseed`。
 
 其他独立变体（`main`、`cognition`、`expense`、`messaging`、`optimization`）不在本轮改名；它们的 App ID 前缀切换到 `com.cogseed.desktop.source.*`。
 
@@ -312,8 +312,8 @@ Bridge config/env filenames        cogseed-mcp-config.json / cogseed-bridge-env.
 兼容规则：
 
 - 新 run 只生成 `mcp_servers.cogseed` 和 CogSeed prompt。
-- 旧 `orkas-bridge.cjs` wrapper 和 `ORKAS_BRIDGE_*` 在兼容期归一化到 canonical bridge。
-- 已保存的旧运行证据或测试 fixture 可以包含 `mcp_servers.orkas`，但 production builder、runner 和 prompt 不得继续生成旧名称。
+- 旧 `cogseed-bridge.cjs` wrapper 和 `COGSEED_BRIDGE_*` 在兼容期归一化到 canonical bridge。
+- 已保存的旧运行证据或测试 fixture 可以包含 `mcp_servers.cogseed`，但 production builder、runner 和 prompt 不得继续生成旧名称。
 - bridge server 的工具业务名称不因产品品牌迁移改变；只改 client/server identity、配置 key、环境变量和提示文本。
 - 覆盖 Codex、Claude Code 及所有共享 `BridgeRunConfig` 消费方，不能只修 `codex.ts` 的 initialize payload。
 
@@ -322,16 +322,16 @@ Bridge config/env filenames        cogseed-mcp-config.json / cogseed-bridge-env.
 进行真实路径重命名：
 
 ```text
-src/main/features/mate_agent_runtime/
+src/main/features/cogseed_runtime/
 → src/main/features/cogseed_runtime/
 
-src/main/features/mate_agent_backend/
+src/main/features/cogseed_backend/
 → src/main/features/cogseed_backend/
 
-test/main/features/mate_agent_runtime/
+test/main/features/cogseed_runtime/
 → test/main/features/cogseed_runtime/
 
-test/main/features/mate_agent_backend/
+test/main/features/cogseed_backend/
 → test/main/features/cogseed_backend/
 ```
 
@@ -349,10 +349,10 @@ test/main/features/mate_agent_backend/
 旧入口文件保留一版 wrapper：
 
 ```text
-mate-runtime-worker.cjs → require/exec cogseed-runtime-worker.cjs
-orkas-bridge.cjs        → require/exec cogseed-bridge.cjs
-orkas-pkg.cjs           → require/exec cogseed-pkg.cjs
-restart-mate.sh          → exec restart-cogseed.sh
+cogseed-runtime-worker.cjs → require/exec cogseed-runtime-worker.cjs
+cogseed-bridge.cjs        → require/exec cogseed-bridge.cjs
+cogseed-pkg.cjs           → require/exec cogseed-pkg.cjs
+restart-cogseed.sh          → exec restart-cogseed.sh
 ```
 
 wrapper 只允许转发，不含业务逻辑。
@@ -372,22 +372,22 @@ wrapper 只允许转发，不含业务逻辑。
 
 - `src/main/quality/rules/skill-runner.ts`
   - marketplace protected-path 正则 canonical 匹配 `.cogseed/data/.../local/marketplace/.../scripts/`；
-  - 兼容期同时识别 `.orkas/...`，防止旧路径绕过 runner 规则；
+  - 兼容期同时识别 `.cogseed/...`，防止旧路径绕过 runner 规则；
   - `SKILL_DIR`、`NODE`、`PYTHON`、`PC_DIR` 示例改为 `COGSEED_*`，旧变量只在兼容 matcher 中出现；
   - 新增 canonical 和 legacy 正/反例 fixture。
 - `src/main/util/file-import.ts`
   - 新临时文件前缀为 `.cogseed-import-*`；
-  - 清理/恢复逻辑兼容遗留 `.orkas-import-*`。
+  - 清理/恢复逻辑兼容遗留 `.cogseed-import-*`。
 - bundled runtime / fetch / gate
   - canonical marker 为 `.cogseed-runtime.json` 和 `.cogseed-whisper-ready.json`；
   - 兼容期读取旧 marker，新写入只产生 canonical marker；
   - codesign/runtime gate 测试同时覆盖新 marker 和旧 marker 读取。
 - smoke/package scripts
   - canonical 使用 `smoke-cogseed-*`、`cogseed-*`；
-  - 旧 `smoke-mate-*` 只允许作为 wrapper 或 legacy fixture。
+  - 旧 `smoke-cogseed-*` 只允许作为 wrapper 或 legacy fixture。
 - `AGENTS.md` 与 `CLAUDE.md`
   - renderer hard constraint 改为 `window.cogseed.{invoke, stream}`；
-  - 明确 `window.orkas` 只是一版兼容 alias，新代码禁止使用；
+  - 明确 `window.cogseed` 只是一版兼容 alias，新代码禁止使用；
   - Runtime worker choke point 改为 `features/cogseed_runtime/worker-process.ts`；
   - restart/log/data-root 示例改为 CogSeed canonical 路径，并注明旧路径只用于迁移测试。
 
@@ -395,12 +395,12 @@ wrapper 只允许转发，不含业务逻辑。
 
 | Surface | 新代码读取 | 新代码写入 | 旧入口兼容 |
 |---|---|---|---|
-| 数据根 | `.cogseed` | `.cogseed` | `.orkas` 仅迁移/备份读取 |
-| App protocol | `cogseed://` | `cogseed://` | `mateagent://`、`orkas://` 转发 |
-| Renderer API | `window.cogseed` | `window.cogseed` | `window.orkas` 代理 |
-| IPC transport | `cogseed.*` | `cogseed.*` | `orkas.*` alias |
-| Env | `COGSEED_*` | `COGSEED_*` | `ORKAS_*` 启动归一化 |
-| Runtime variant | `cogseed` | `cogseed` | `mate` 归一化 |
+| 数据根 | `.cogseed` | `.cogseed` | `.cogseed` 仅迁移/备份读取 |
+| App protocol | `cogseed://` | `cogseed://` | `cogseed://`、`cogseed://` 转发 |
+| Renderer API | `window.cogseed` | `window.cogseed` | `window.cogseed` 代理 |
+| IPC transport | `cogseed.*` | `cogseed.*` | `cogseed.*` alias |
+| Env | `COGSEED_*` | `COGSEED_*` | `COGSEED_*` 启动归一化 |
+| Runtime variant | `cogseed` | `cogseed` | `cogseed` 归一化 |
 | Worker entry | `cogseed-*` | `cogseed-*` | 旧文件 wrapper |
 
 不允许双写旧数据根或同时生成新旧协议 URL。
@@ -411,9 +411,9 @@ wrapper 只允许转发，不含业务逻辑。
 
 1. migration marker 数量和失败率已观察一个发布周期；
 2. 旧 scheme 使用率已降到可接受阈值；
-3. `window.orkas` deprecated 使用计数无关键调用；
+3. `window.cogseed` deprecated 使用计数无关键调用；
 4. 外部脚本已迁移到 CogSeed entrypoint；
-5. 旧 `.orkas` 保留策略和用户恢复文档已发布。
+5. 旧 `.cogseed` 保留策略和用户恢复文档已发布。
 
 兼容删除必须是单独 MR，不与功能开发混合。
 
@@ -450,12 +450,12 @@ wrapper 只允许转发，不含业务逻辑。
 覆盖：
 
 - renderer 只依赖 `window.cogseed`；
-- legacy `window.orkas` 等价转发；
+- legacy `window.cogseed` 等价转发；
 - canonical/legacy invoke、stream、cancel、push、sync boot；
 - allowlist 和 security boundary 不扩大；
 - artifact iframe 仍不暴露 bridge；
 - canonical `__cogseedArtifact` / `window.cogseedArtifact` / `CogSeedArtifactSecurity`；
-- legacy `__orkasArtifact` / `window.orkasArtifact` / `OrkasArtifactSecurity` 等价转发且不扩大 frame/source/payload 安全边界；
+- legacy `__cogseedArtifact` / `window.cogseedArtifact` / `CogSeedArtifactSecurity` 等价转发且不扩大 frame/source/payload 安全边界；
 - 新旧 bridge virtual path 和 metadata fallback；
 - local-agent `clientInfo`、MCP serverInfo、`mcp_servers.cogseed`、CogSeed prompt 和旧 bridge wrapper。
 
@@ -463,7 +463,7 @@ wrapper 只允许转发，不含业务逻辑。
 
 覆盖：
 
-- `cogseed` variant 和 `mate` alias；
+- `cogseed` variant 和 `cogseed` alias；
 - worker spawn 只通过 canonical choke point；
 - wrapper 无业务逻辑；
 - packaged resource gate 包含新入口和旧 wrapper；
@@ -479,14 +479,14 @@ wrapper 只允许转发，不含业务逻辑。
 
 建立 allowlist scan，至少覆盖：
 
-- `window.orkas`、`window.__orkasI18nBoot`
-- `__orkasArtifact`、`window.orkasArtifact`、`OrkasArtifactSecurity`、`__orkas/`、`__orkas-meta.json`
-- `orkas.invoke`、`orkas:`、`orkas://`、`Orkas` 大写产品名
-- `mcp_servers.orkas`、`clientInfo.name=orkas`、`runs inside Orkas`
-- `ORKAS_`
-- `.orkas`、`.orkas-dev`、`.orkas-import-*`、`.orkas-runtime.json`、`.orkas-whisper-ready.json`
-- `mate_agent`、`mate-agent`、`smoke-mate-`
-- `com.mateagent.desktop`
+- `window.cogseed`、`window.__cogseedI18nBoot`
+- `__cogseedArtifact`、`window.cogseedArtifact`、`CogSeedArtifactSecurity`、`__cogseed/`、`__cogseed-meta.json`
+- `cogseed.invoke`、`cogseed:`、`cogseed://`、`CogSeed` 大写产品名
+- `mcp_servers.cogseed`、`clientInfo.name=cogseed`、`runs inside CogSeed`
+- `COGSEED_`
+- `.cogseed`、`.cogseed-dev`、`.cogseed-import-*`、`.cogseed-runtime.json`、`.cogseed-whisper-ready.json`
+- `cogseed`、`cogseed-agent`、`smoke-cogseed-`
+- `com.cogseed.desktop`
 
 只有集中 compatibility、migration、legacy wrapper、legacy fixture、迁移说明和明确的历史文档允许出现。allowlist 按文件和具体 token 管理，不允许整个目录无条件豁免。
 
@@ -504,7 +504,7 @@ wrapper 只允许转发，不含业务逻辑。
 
 - 所有平台迁移均采用 copy/clone-preserving-source；legacy root 在本兼容版本内原路径保留，不自动删除。
 - migration marker 记录是否保留 legacy root。
-- 回滚到旧版本时，旧版本仍可读取原 `.orkas`。
+- 回滚到旧版本时，旧版本仍可读取原 `.cogseed`。
 - 新版本期间产生的新数据只在 `.cogseed`，回滚旧版本不会自动反向同步；回滚前需要明确提示可能看到旧快照。
 - 不设计双向持续同步，避免数据分叉和覆盖。
 
@@ -519,12 +519,12 @@ wrapper 只允许转发，不含业务逻辑。
 7. **大范围 rename 造成不可审查 diff**：分 checkpoint 提交，每阶段保持测试绿色。
 8. **artifact iframe 协议静默失效或边界扩大**：新旧 sentinel/path/global 使用同一 validator 和 reserved-path policy。
 9. **安全正则只匹配旧根或新根**：canonical + legacy 双 fixture，兼容期结束时单独删除 legacy matcher。
-10. **local-agent 对外仍宣称 Orkas**：对 clientInfo、serverInfo、MCP config key 和 prompt 建静态/协议测试。
+10. **local-agent 对外仍宣称 CogSeed**：对 clientInfo、serverInfo、MCP config key 和 prompt 建静态/协议测试。
 
 ## 11. 验收标准
 
 - 新安装仅创建 `.cogseed`。
-- 旧安装首次启动自动迁移 `.orkas`，不丢失用户数据和 secret 文件。
+- 旧安装首次启动自动迁移 `.cogseed`，不丢失用户数据和 secret 文件。
 - 新代码只写 `.cogseed`。
 - `cogseed://`、`window.cogseed`、`cogseed.*` IPC、`COGSEED_*` 和 `cogseed` runtime 全部成为 canonical。
 - 旧协议、bridge、env、variant 和入口在兼容期可用并产生 deprecated 信号。
@@ -532,8 +532,8 @@ wrapper 只允许转发，不含业务逻辑。
 - Runtime/Backend 真实目录和 imports 已改为 `cogseed_*`。
 - artifact 新协议完整使用 `__cogseedArtifact`、`window.cogseedArtifact`、`CogSeedArtifactSecurity`、`__cogseed/bridge.js` 和 `__cogseed-meta.json`，旧 artifact 在兼容期继续工作。
 - local-agent MCP client/server identity、config key、bridge env 和 prompt 全部使用 CogSeed canonical。
-- marketplace protected-path 安全规则同时拦截 `.cogseed` 和 legacy `.orkas` 安装脚本直调。
-- `.orkas-dev`、旧 runtime marker 和 import temp 文件均有迁移/兼容测试。
+- marketplace protected-path 安全规则同时拦截 `.cogseed` 和 legacy `.cogseed` 安装脚本直调。
+- `.cogseed-dev`、旧 runtime marker 和 import temp 文件均有迁移/兼容测试。
 - `AGENTS.md` 与 `CLAUDE.md` 已更新为 CogSeed canonical 开发约束。
 - allowlist 外不存在旧身份引用。
 - `npm run typecheck`、focused migration/identity tests、`npm test` 全部通过。

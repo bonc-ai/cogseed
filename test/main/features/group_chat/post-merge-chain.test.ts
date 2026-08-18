@@ -48,12 +48,12 @@ beforeEach(async () => {
   vi.resetModules();
   modelCalls.length = 0;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'post-merge-chain-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  prevFlag = process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
-  prevRouting = process.env.ORKAS_KSTAR_HOST_ROUTING;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-  process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = '1';
-  process.env.ORKAS_KSTAR_HOST_ROUTING = '1';
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  prevFlag = process.env.COGSEED_COMMANDER_CENTRIC_KSTAR;
+  prevRouting = process.env.COGSEED_KSTAR_HOST_ROUTING;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_COMMANDER_CENTRIC_KSTAR = '1';
+  process.env.COGSEED_KSTAR_HOST_ROUTING = '1';
   const users = await import('../../../../src/main/features/users');
   users.activateUser('user-a');
   const busModule = await import('../../../../src/main/features/group_chat/bus');
@@ -68,12 +68,12 @@ beforeEach(async () => {
 afterEach(async () => {
   const groupChat = await import('../../../../src/main/features/group_chat');
   for (const cid of cids.splice(0)) await groupChat.dropConv('user-a', cid).catch(() => undefined);
-  if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
-  if (prevFlag === undefined) delete process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
-  else process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = prevFlag;
-  if (prevRouting === undefined) delete process.env.ORKAS_KSTAR_HOST_ROUTING;
-  else process.env.ORKAS_KSTAR_HOST_ROUTING = prevRouting;
+  if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  if (prevFlag === undefined) delete process.env.COGSEED_COMMANDER_CENTRIC_KSTAR;
+  else process.env.COGSEED_COMMANDER_CENTRIC_KSTAR = prevFlag;
+  if (prevRouting === undefined) delete process.env.COGSEED_KSTAR_HOST_ROUTING;
+  else process.env.COGSEED_KSTAR_HOST_ROUTING = prevRouting;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.resetModules();
 });

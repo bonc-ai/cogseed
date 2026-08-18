@@ -189,7 +189,7 @@ export async function analyzeMedia(p: AnalyzeParams): Promise<AnalyzeResult> {
       return { ok: false, errorCode: 'E_ANALYZE_FAILED', message: 'could not probe video duration for frame sampling.' };
     }
     const times = sampleTimecodes(durationSec, p.intervalSec ?? 2.5, p.maxFrames ?? 16);
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'orkas-ocr-'));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'cogseed-ocr-'));
     try {
       let firstErr: { errorCode: string; message: string } | null = null;
       const extracted: Array<{ tSec: number; framePath: string }> = [];

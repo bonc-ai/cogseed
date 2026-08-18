@@ -1,6 +1,6 @@
 {
   "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
-  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only A-collaboration-abort-cascade-v1",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only A-collaboration-abort-cascade-v1",
   "inputs": {
     "active_children": [
       "wstep-1beb687e94d4",

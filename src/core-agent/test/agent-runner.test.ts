@@ -660,7 +660,7 @@ describe("AgentRunner", () => {
               content:
                 "[old tool input string compacted: original_size=13653 chars]\n" +
                 "preview_head:\n<!doctype html>",
-              __orkas_context_note:
+              __cogseed_context_note:
                 "Old write_file tool input compacted for repeated context; mode=full-preview, original_json_chars=14000.",
             },
           },
@@ -669,7 +669,7 @@ describe("AgentRunner", () => {
             id: "call_new_compacted",
             name: "write_file",
             input: {
-              __orkas_compacted_tool_use: {
+              __cogseed_compacted_tool_use: {
                 tool: "write_file",
                 mode: "full-preview",
                 original_json_chars: 14000,
@@ -735,7 +735,7 @@ describe("AgentRunner", () => {
       errorCode: "E_COMPACTED_HISTORY_PLACEHOLDER",
       errorSeverity: "recoverable",
     });
-    expect(String(newToolEnd?.result)).toContain("__orkas_compacted_tool_use");
+    expect(String(newToolEnd?.result)).toContain("__cogseed_compacted_tool_use");
 
     const toolResults = runner.getSession().getMessages().flatMap((msg) =>
       msg.content.filter((content) => content.type === "tool_result"),
@@ -2190,7 +2190,7 @@ describe("AgentRunner", () => {
 
   it("forwards AgentRunParams.sandboxEnv into ToolContext.state.sandboxEnv", async () => {
     // This is the plumbing that lets `main/model/core-agent/client.ts`
-    // inject ORKAS_NODE / ORKAS_PC_DIR / ELECTRON_RUN_AS_NODE per-call.
+    // inject COGSEED_NODE / COGSEED_PC_DIR / ELECTRON_RUN_AS_NODE per-call.
     // If this breaks, skill bash commands silently lose their env.
     const mockProvider = createMockProvider([
       {
@@ -2228,10 +2228,10 @@ describe("AgentRunner", () => {
 
     await runner.run({
       message: "capture it",
-      sandboxEnv: { ORKAS_NODE: "/fake/electron", ELECTRON_RUN_AS_NODE: "1" },
+      sandboxEnv: { COGSEED_NODE: "/fake/electron", ELECTRON_RUN_AS_NODE: "1" },
     });
 
-    expect(captured).toEqual({ ORKAS_NODE: "/fake/electron", ELECTRON_RUN_AS_NODE: "1" });
+    expect(captured).toEqual({ COGSEED_NODE: "/fake/electron", ELECTRON_RUN_AS_NODE: "1" });
   });
 
   it("loop_detection: force-stops after LOOP_HARD identical tool calls, nudging first", async () => {

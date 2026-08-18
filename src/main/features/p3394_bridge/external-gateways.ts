@@ -34,7 +34,7 @@ const log = createLogger('p3394-bridge:external-gateways');
 const watched = new Map<string, ChildProcess>();
 const watchedStartInput = new Map<string, { binPath?: string; alias?: string; bridgeInfo?: { endpoint: string; token: string } | null }>();
 const restartCounts = new Map<string, number>();
-const WATCHDOG_RESTART_DELAY_MS = Number(process.env.ORKAS_P3394_WATCHDOG_DELAY_MS || 5_000);
+const WATCHDOG_RESTART_DELAY_MS = Number(process.env.COGSEED_P3394_WATCHDOG_DELAY_MS || 5_000);
 const WATCHDOG_MAX_CONSECUTIVE_FAILURES = 3;
 /** 已排队的自动重启定时器（key 为 cli）。detachWatch / stop 必须取消它，
  *  否则「删除 agent → 网关 crash 时排队的 timer 到点复活网关 → hello →
@@ -203,13 +203,13 @@ function freePort(): Promise<number> {
   });
 }
 
-/** 本机 P3394 网关脚本的真实路径（本地优先：ORKAS_PC_DIR → 打包
+/** 本机 P3394 网关脚本的真实路径（本地优先：COGSEED_PC_DIR → 打包
  *  asar-unpacked → dev 仓库根）。对端引导用它给出可审查的具体路径。 */
 export function p3394GatewayScriptPath(): string {
   // 本地优先：CogSeed 自带 gateway（仓库 dev 根 / 打包 asar-unpacked），
   // 无需对端从 NPM 拉取。
-  if (process.env.ORKAS_PC_DIR) {
-    return path.join(process.env.ORKAS_PC_DIR, 'p3394-gateway', 'gateway.cjs');
+  if (process.env.COGSEED_PC_DIR) {
+    return path.join(process.env.COGSEED_PC_DIR, 'p3394-gateway', 'gateway.cjs');
   }
   if (app && app.isPackaged) {
     // Packaged builds: gateway lives as a real file under app.asar.unpacked

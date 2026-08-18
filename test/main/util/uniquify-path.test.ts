@@ -8,7 +8,7 @@ import { uniquifyPath, renderRenameSignal } from '../../../src/main/util/uniquif
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-uniquify-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-uniquify-'));
 });
 
 afterEach(() => {

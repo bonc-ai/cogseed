@@ -546,7 +546,7 @@ DemoDelivery      → 明确标记“演示投递”，不发送到真实飞书
 
 完成代码验证后：
 
-1. 运行 `scripts/restart-mate.sh`；
+1. 运行 `scripts/restart-cogseed.sh`；
 2. 查看 messaging runtime 启动日志；
 3. 检查 launcher 日志；
 4. 使用真实飞书应用完成 OAuth；
@@ -592,7 +592,7 @@ DemoDelivery      → 明确标记“演示投递”，不发送到真实飞书
 - 本地迁移备份放入用户 `local` 域，不参与云同步 dirty 标记；
 - API URL 通过现有 account/marketplace API-base helper 解析；
 - 不新增 npm 依赖；
-- 每次 messaging worktree 改动完成后，必须运行 `scripts/restart-mate.sh`，检查 messaging runtime 日志，再做真实环境验证。
+- 每次 messaging worktree 改动完成后，必须运行 `scripts/restart-cogseed.sh`，检查 messaging runtime 日志，再做真实环境验证。
 
 ## 15. 实现顺序
 

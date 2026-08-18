@@ -232,7 +232,7 @@ source_id + report_source_id + title + issuer + URL
 The gate must run **before** report-data validation or Word generation:
 
 ```bash
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" 本体分析对标 validate_research_bundle.py -- \
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" 本体分析对标 validate_research_bundle.py -- \
   --plan research/research-plan.json \
   --ledger research/web-research-ledger.json \
   --report-data report-data.json \
@@ -435,7 +435,7 @@ Use `templates/report-data.template.json`. Leave `research_assurance` as pending
 Direct validation of a pending/unpassed `research_assurance` must fail:
 
 ```bash
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" 本体分析对标 validate_report_data.py -- \
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" 本体分析对标 validate_report_data.py -- \
   report-data.json \
   --schema schemas/report-data.schema.json \
   --strict --out validation-report.json
@@ -448,7 +448,7 @@ Do not render until all hard errors are fixed. Warnings must be resolved or reco
 The recommended one-command run is:
 
 ```bash
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" 本体分析对标 run_skill.py -- \
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" 本体分析对标 run_skill.py -- \
   --input report-data.json \
   --research-dir research \
   --output-dir out \
@@ -507,7 +507,7 @@ Fix, regenerate, rerender, and reinspect until clean. Automated checks do not re
 Record the review:
 
 ```bash
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" 本体分析对标 record_visual_qa.py -- \
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" 本体分析对标 record_visual_qa.py -- \
   --render-dir out/render \
   --reviewer "reviewer-or-agent-id" --status passed
 ```

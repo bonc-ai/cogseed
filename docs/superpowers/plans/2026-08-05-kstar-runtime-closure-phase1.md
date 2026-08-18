@@ -28,8 +28,8 @@
 - `test/main/features/kstar/task-closure.test.ts`
 
 **Modify**
-- `src/main/features/mate_agent_runtime/index.ts` — collect bounded run events and invoke KSTAR closure after terminal persistence without changing the result stream.
-- `test/main/features/mate_agent_runtime/facade.test.ts` — prove completed/failed capture and non-fatal capture errors.
+- `src/main/features/cogseed_runtime/index.ts` — collect bounded run events and invoke KSTAR closure after terminal persistence without changing the result stream.
+- `test/main/features/cogseed_runtime/facade.test.ts` — prove completed/failed capture and non-fatal capture errors.
 - `src/main/index.ts` — start and stop the group terminal KSTAR subscriber beside the existing terminal notification subscriber.
 
 ## Design decisions locked by this plan
@@ -205,9 +205,9 @@ Expected: PASS.
 **Files:**
 - Create: `src/main/features/kstar/task-closure.ts`
 - Create: `src/main/features/kstar/index.ts`
-- Modify: `src/main/features/mate_agent_runtime/index.ts`
+- Modify: `src/main/features/cogseed_runtime/index.ts`
 - Test: `test/main/features/kstar/task-closure.test.ts`
-- Modify: `test/main/features/mate_agent_runtime/facade.test.ts`
+- Modify: `test/main/features/cogseed_runtime/facade.test.ts`
 
 - [x] **Step 1: Write failing closure/runtime tests**
 
@@ -216,7 +216,7 @@ Test `captureRuntimeKstarClosure` creates episode → review → extraction reco
 Add a failure injection:
 
 ```ts
-const runtime = createMateAgentRuntime({
+const runtime = createCogSeedAgentRuntime({
   worker,
   captureClosure: async () => { throw new Error('capture unavailable'); },
 });
@@ -226,7 +226,7 @@ expect((await readRuntimeRunMeta('user-a', runId))?.status).toBe('completed');
 
 - [x] **Step 2: Run tests and verify RED**
 
-Run: `npm run test:js -- test/main/features/kstar/task-closure.test.ts test/main/features/mate_agent_runtime/facade.test.ts`
+Run: `npm run test:js -- test/main/features/kstar/task-closure.test.ts test/main/features/cogseed_runtime/facade.test.ts`
 Expected: FAIL because the closure API and Runtime hook are missing.
 
 - [x] **Step 3: Implement closure and best-effort Runtime capture**
@@ -242,7 +242,7 @@ Each operation writes the episode first, then initial review, then pending Recal
 
 - [x] **Step 4: Run focused tests and verify GREEN**
 
-Run: `npm run test:js -- test/main/features/kstar/task-closure.test.ts test/main/features/mate_agent_runtime/facade.test.ts`
+Run: `npm run test:js -- test/main/features/kstar/task-closure.test.ts test/main/features/cogseed_runtime/facade.test.ts`
 Expected: PASS.
 
 ---
@@ -300,7 +300,7 @@ Run:
 npm run test:js -- \
   test/main/features/kstar \
   test/main/features/recall \
-  test/main/features/mate_agent_runtime/facade.test.ts \
+  test/main/features/cogseed_runtime/facade.test.ts \
   test/main/features/group_chat/bus-integration.test.ts
 ```
 

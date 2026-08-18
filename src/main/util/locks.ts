@@ -50,9 +50,9 @@ export const globalSlots: SemaphoreInterface = new Semaphore(10);
  *  calls unbounded by `globalSlots`. Lower than `globalSlots` because each
  *  nested run is itself a full LLM turn. Only the commander dispatches
  *  (workers/agents get no dispatch tools), so this is never acquired
- *  re-entrantly — no deadlock. Override with ORKAS_MAX_DISPATCH_CONCURRENCY. */
+ *  re-entrantly — no deadlock. Override with COGSEED_MAX_DISPATCH_CONCURRENCY. */
 const _dispatchCap = (() => {
-  const n = Number.parseInt(process.env.ORKAS_MAX_DISPATCH_CONCURRENCY ?? '', 10);
+  const n = Number.parseInt(process.env.COGSEED_MAX_DISPATCH_CONCURRENCY ?? '', 10);
   return Number.isFinite(n) && n > 0 ? n : 3;
 })();
 export const dispatchSlots: SemaphoreInterface = new Semaphore(_dispatchCap);

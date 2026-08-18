@@ -5,15 +5,15 @@ import { desktopPlatform, osVersion } from '../system_info';
 import { getCurrentLang } from '../i18n';
 
 export const CLIENT_HEADER_NAMES = {
-  appVersion: 'Orkas-App-Version',
-  platform: 'Orkas-Platform',
-  osVersion: 'Orkas-OS-Version',
-  arch: 'Orkas-Arch',
-  channel: 'Orkas-Channel',
+  appVersion: 'CogSeed-App-Version',
+  platform: 'CogSeed-Platform',
+  osVersion: 'CogSeed-OS-Version',
+  arch: 'CogSeed-Arch',
+  channel: 'CogSeed-Channel',
 } as const;
 
 function envAppVersion(): string {
-  const version = process.env.ORKAS_APP_VERSION || process.env.npm_package_version || '';
+  const version = process.env.COGSEED_APP_VERSION || process.env.npm_package_version || '';
   return typeof version === 'string' && version.trim() ? version.trim() : '';
 }
 
@@ -33,7 +33,7 @@ function stableHeadersContextKey(): string {
   try { appPath = electronApp?.getAppPath?.() || ''; } catch { /* pre-ready */ }
   return [
     appPath,
-    process.env.ORKAS_APP_VERSION || '',
+    process.env.COGSEED_APP_VERSION || '',
     process.env.npm_package_version || '',
   ].join('\u0000');
 }
@@ -53,7 +53,7 @@ function stableClientHeaders(): Readonly<Record<string, string>> {
   return stableHeadersCache;
 }
 
-/** Canonical client metadata for every Orkas business API call. */
+/** Canonical client metadata for every CogSeed business API call. */
 export function commonHeaders(): Record<string, string> {
   const headers: Record<string, string> = { ...stableClientHeaders() };
   try {

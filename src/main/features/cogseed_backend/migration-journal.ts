@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { safeId, writeJson } from '../../storage';
 import { fileEditLock } from '../../util/locks';
 import {
-  MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+  COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
   type MigrationCheckpointEntry,
   type MigrationDecision,
   type MigrationDecisionEntry,
@@ -103,7 +103,7 @@ export function assertMigrationScope(scope: unknown): MigrationScope {
 
 export function deriveMigrationJournalId(scope: MigrationScope): string {
   const normalized = assertMigrationScope(scope);
-  return `mate-migration-journal-${digest([
+  return `cogseed-migration-journal-${digest([
     normalized.userId,
     normalized.sourceSessionId,
     normalized.targetSessionId,
@@ -116,7 +116,7 @@ export function deriveMigrationJournalId(scope: MigrationScope): string {
 
 export function deriveMigrationEntryId(kind: MigrationJournalEntry['kind'], scope: MigrationScope, stableKey: unknown): string {
   const normalized = assertMigrationScope(scope);
-  return `mate-migration-entry-${kind}-${digest([
+  return `cogseed-migration-entry-${kind}-${digest([
     normalized.userId,
     normalized.sourceSessionId,
     normalized.targetSessionId,
@@ -139,7 +139,7 @@ export function deriveMigrationTargetId(
   const safeSourceRecordId = assertNonEmptyString(sourceRecordId, 'source record id');
   const safeTargetKind = assertNonEmptyString(targetKind, 'target kind');
   const safeSourceRecordType = assertNonEmptyString(sourceRecordType, 'source record type');
-  return `mate-migration-target-${digest([
+  return `cogseed-migration-target-${digest([
     normalized.userId,
     normalized.sourceSessionId,
     normalized.targetSessionId,
@@ -163,7 +163,7 @@ export function createMigrationPhaseEntry(
   const normalized = assertMigrationScope(scope);
   const createdAt = assertTimestamp(now, 'phase timestamp');
   const entry: MigrationPhaseEntry = {
-    schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+    schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
     entryId: deriveMigrationEntryId('phase', normalized, { phase, status, createdAt, details: details ?? null }),
     kind: 'phase',
     scope: normalized,
@@ -184,7 +184,7 @@ export function createMigrationMappingEntry(
   const createdAt = assertTimestamp(now, 'mapping timestamp');
   const safeMapping = validateMapping(mapping);
   return {
-    schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+    schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
     entryId: deriveMigrationEntryId('mapping', normalized, safeMapping),
     kind: 'mapping',
     scope: normalized,
@@ -202,7 +202,7 @@ export function createMigrationWarningEntry(
   const createdAt = assertTimestamp(now, 'warning timestamp');
   const safeWarning = validateWarning(warning);
   return {
-    schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+    schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
     entryId: deriveMigrationEntryId('warning', normalized, { createdAt, warning: safeWarning }),
     kind: 'warning',
     scope: normalized,
@@ -220,7 +220,7 @@ export function createMigrationDecisionEntry(
   const createdAt = assertTimestamp(now, 'decision timestamp');
   const safeDecision = validateDecision(decision);
   return {
-    schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+    schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
     entryId: deriveMigrationEntryId('decision', normalized, { createdAt, decision: safeDecision }),
     kind: 'decision',
     scope: normalized,
@@ -238,7 +238,7 @@ export function createMigrationCheckpointEntry(
   const createdAt = assertTimestamp(now, 'checkpoint timestamp');
   const safeWindow = validateRollbackWindow(rollbackWindow);
   return {
-    schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+    schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
     entryId: deriveMigrationEntryId('checkpoint', normalized, { createdAt, rollbackWindow: safeWindow }),
     kind: 'checkpoint',
     scope: normalized,
@@ -308,7 +308,7 @@ function validateRollbackWindow(rollbackWindow: unknown): MigrationRollbackWindo
 function validatePhaseEntry(entry: unknown): MigrationPhaseEntry {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('malformed migration phase entry');
   const row = entry as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_MIGRATION_JOURNAL_SCHEMA_VERSION || row.kind !== 'phase') throw new Error('malformed migration phase entry');
+  if (row.schemaVersion !== COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION || row.kind !== 'phase') throw new Error('malformed migration phase entry');
   const scope = assertMigrationScope(row.scope);
   const entryId = assertNonEmptyString(row.entryId, 'phase entry id');
   const createdAt = assertTimestamp(row.createdAt, 'phase createdAt');
@@ -318,7 +318,7 @@ function validatePhaseEntry(entry: unknown): MigrationPhaseEntry {
   if (!['pending', 'running', 'completed', 'failed', 'skipped'].includes(status)) throw new Error('malformed migration phase entry');
   const details = row.details === undefined ? undefined : assertPlainObject(row.details, 'phase details');
   return {
-    schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+    schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
     entryId,
     kind: 'phase',
     scope,
@@ -332,45 +332,45 @@ function validatePhaseEntry(entry: unknown): MigrationPhaseEntry {
 function validateMappingEntry(entry: unknown): MigrationMappingEntry {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('malformed migration mapping entry');
   const row = entry as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_MIGRATION_JOURNAL_SCHEMA_VERSION || row.kind !== 'mapping') throw new Error('malformed migration mapping entry');
+  if (row.schemaVersion !== COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION || row.kind !== 'mapping') throw new Error('malformed migration mapping entry');
   const scope = assertMigrationScope(row.scope);
   const entryId = assertNonEmptyString(row.entryId, 'mapping entry id');
   const createdAt = assertTimestamp(row.createdAt, 'mapping createdAt');
   const mapping = validateMapping(assertPlainObject(row.mapping, 'mapping'));
-  return { schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION, entryId, kind: 'mapping', scope, createdAt, mapping };
+  return { schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION, entryId, kind: 'mapping', scope, createdAt, mapping };
 }
 
 function validateWarningEntry(entry: unknown): MigrationWarningEntry {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('malformed migration warning entry');
   const row = entry as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_MIGRATION_JOURNAL_SCHEMA_VERSION || row.kind !== 'warning') throw new Error('malformed migration warning entry');
+  if (row.schemaVersion !== COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION || row.kind !== 'warning') throw new Error('malformed migration warning entry');
   const scope = assertMigrationScope(row.scope);
   const entryId = assertNonEmptyString(row.entryId, 'warning entry id');
   const createdAt = assertTimestamp(row.createdAt, 'warning createdAt');
   const warning = validateWarning(assertPlainObject(row.warning, 'warning'));
-  return { schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION, entryId, kind: 'warning', scope, createdAt, warning };
+  return { schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION, entryId, kind: 'warning', scope, createdAt, warning };
 }
 
 function validateDecisionEntry(entry: unknown): MigrationDecisionEntry {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('malformed migration decision entry');
   const row = entry as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_MIGRATION_JOURNAL_SCHEMA_VERSION || row.kind !== 'decision') throw new Error('malformed migration decision entry');
+  if (row.schemaVersion !== COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION || row.kind !== 'decision') throw new Error('malformed migration decision entry');
   const scope = assertMigrationScope(row.scope);
   const entryId = assertNonEmptyString(row.entryId, 'decision entry id');
   const createdAt = assertTimestamp(row.createdAt, 'decision createdAt');
   const decision = validateDecision(assertPlainObject(row.decision, 'decision'));
-  return { schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION, entryId, kind: 'decision', scope, createdAt, decision };
+  return { schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION, entryId, kind: 'decision', scope, createdAt, decision };
 }
 
 function validateCheckpointEntry(entry: unknown): MigrationCheckpointEntry {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('malformed migration checkpoint entry');
   const row = entry as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_MIGRATION_JOURNAL_SCHEMA_VERSION || row.kind !== 'checkpoint') throw new Error('malformed migration checkpoint entry');
+  if (row.schemaVersion !== COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION || row.kind !== 'checkpoint') throw new Error('malformed migration checkpoint entry');
   const scope = assertMigrationScope(row.scope);
   const entryId = assertNonEmptyString(row.entryId, 'checkpoint entry id');
   const createdAt = assertTimestamp(row.createdAt, 'checkpoint createdAt');
   const rollbackWindow = validateRollbackWindow(assertPlainObject(row.rollbackWindow, 'rollback window'));
-  return { schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION, entryId, kind: 'checkpoint', scope, createdAt, rollbackWindow };
+  return { schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION, entryId, kind: 'checkpoint', scope, createdAt, rollbackWindow };
 }
 
 function validateEntry(entry: unknown): MigrationJournalEntry {
@@ -479,7 +479,7 @@ function replayMigrationEntries(entries: MigrationJournalEntry[], scope: Migrati
   }
   const updatedAt = deduped.length > 0 ? deduped[deduped.length - 1].createdAt : createdAt;
   return {
-    schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+    schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
     journalId,
     scope,
     createdAt,
@@ -492,7 +492,7 @@ function replayMigrationEntries(entries: MigrationJournalEntry[], scope: Migrati
 function validateDocument(value: unknown): MigrationJournalDocument {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed migration journal');
   const row = value as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_MIGRATION_JOURNAL_SCHEMA_VERSION) throw new Error('unsupported migration journal schema');
+  if (row.schemaVersion !== COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION) throw new Error('unsupported migration journal schema');
   const scope = assertMigrationScope(row.scope);
   const journalId = assertNonEmptyString(row.journalId, 'journal id');
   const createdAt = assertTimestamp(row.createdAt, 'journal createdAt');
@@ -595,7 +595,7 @@ export function transformHistoricalMigrationRecord(input: MigrationTransformInpu
       warnings: [],
       decision,
       targetRecord: {
-        schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+        schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
         kind: 'historical_tool_call_decision',
         executable: false,
         action: 'skipped',
@@ -636,7 +636,7 @@ export function transformHistoricalMigrationRecord(input: MigrationTransformInpu
       warnings: [warning],
       decision,
       targetRecord: {
-        schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+        schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
         kind: 'unsupported_record_decision',
         executable: false,
         action: 'skipped',
@@ -653,7 +653,7 @@ export function transformHistoricalMigrationRecord(input: MigrationTransformInpu
     mapping,
     warnings: [],
     targetRecord: {
-      schemaVersion: MATE_MIGRATION_JOURNAL_SCHEMA_VERSION,
+      schemaVersion: COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION,
       kind: sourceRecord.sourceRecordType,
       sourceRecordId: sourceRecord.sourceRecordId,
       sourceRecordType: sourceRecord.sourceRecordType,

@@ -10,7 +10,7 @@
 - Unified `ExecutionRecord` model with all required fields:
   - `id`, `intent`, `why`, `resources`, `risk`, `status`
   - `startTime`, `endTime`, `output`, `rawCommand`, `errorMessage`
-- JSONL persistence at `~/.orkas/data/execution-log.jsonl`
+- JSONL persistence at `~/.cogseed/data/execution-log.jsonl`
 - Functions: `appendRecord`, `updateRecord`, `readAllRecords`, `readRecordsSince`, `cleanupOldRecords`
 - 7-day automatic retention policy
 - Best-effort error handling (never crashes if log write fails)
@@ -140,7 +140,7 @@ async function restoreRecentExecutions() {
 - [ ] Verify card updates to "已完成" or "失败" when done
 - [ ] Click "显示命令" to see raw command
 - [ ] Restart app and verify execution cards are restored
-- [ ] Check `~/.orkas/data/execution-log.jsonl` contains records
+- [ ] Check `~/.cogseed/data/execution-log.jsonl` contains records
 
 ### 4. Known Integration Points
 
@@ -193,16 +193,16 @@ async function restoreRecentExecutions() {
 
 ```bash
 # Check execution log file exists
-ls -lh ~/.orkas/data/execution-log.jsonl
+ls -lh ~/.cogseed/data/execution-log.jsonl
 
 # View recent execution records
-tail -5 ~/.orkas/data/execution-log.jsonl | jq .
+tail -5 ~/.cogseed/data/execution-log.jsonl | jq .
 
 # Count records by status
-cat ~/.orkas/data/execution-log.jsonl | jq -r '.status' | sort | uniq -c
+cat ~/.cogseed/data/execution-log.jsonl | jq -r '.status' | sort | uniq -c
 
 # Find failed executions
-cat ~/.orkas/data/execution-log.jsonl | jq 'select(.status == "failed")'
+cat ~/.cogseed/data/execution-log.jsonl | jq 'select(.status == "failed")'
 ```
 
 ## 🚀 Deployment Notes
@@ -213,7 +213,7 @@ This implementation is **backward compatible**:
 - No database migrations required (JSONL file is created on first write)
 
 To enable in production:
-1. Ensure `~/.orkas/data/` directory is writable
+1. Ensure `~/.cogseed/data/` directory is writable
 2. Add frontend event listeners (step 1 above)
 3. Test with a variety of bash commands
 4. Monitor log file size (should auto-cleanup after 7 days)

@@ -1,7 +1,7 @@
 # KStar 确定性宿主路由实机验证场景（最终版）
 
 > 日期：2026-08-15（00:22 重启）
-> 实例：source Electron（Mate-Backend-Test，variant=cogseed，PID 1626）
+> 实例：source Electron（CogSeed-Backend-Test，variant=cogseed，PID 1626）
 > 数据根：`~/.cogseed/runtime-variants/cogseed/data`（uid 78967691）
 > 代码：`9f20dfc2`（确定性宿主路由）+ 前序全部修复
 > 基线：forecasts=0，task-states=21

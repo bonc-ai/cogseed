@@ -129,7 +129,7 @@ describe('local_agents/backends/base', () => {
 
 describe('local_agents/backends/base › spawnCli', () => {
   it('creates the cwd directory before spawning when it does not exist', async () => {
-    const root = tmpDir('orkas-spawncli-');
+    const root = tmpDir('cogseed-spawncli-');
     const missingCwd = path.join(root, 'cloud', 'spaces', 'sp_abc123', 'workspace', '任务甲');
     expect(fs.existsSync(missingCwd)).toBe(false);
 
@@ -147,7 +147,7 @@ describe('local_agents/backends/base › spawnCli', () => {
   });
 
   it('leaves an already-existing cwd untouched', () => {
-    const root = tmpDir('orkas-spawncli-');
+    const root = tmpDir('cogseed-spawncli-');
     const cwd = path.join(root, 'existing');
     fs.mkdirSync(cwd, { recursive: true });
     const marker = path.join(cwd, 'marker.txt');

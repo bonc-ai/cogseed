@@ -79,7 +79,7 @@ import {
 } from '../../../src/main/model/core-agent/video-studio-tool';
 
 function tmpProject(label: string) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), `orkas-native-video-${label}-`));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `cogseed-native-video-${label}-`));
   const compositionDir = path.join(root, 'project', 'composition');
   fs.mkdirSync(compositionDir, { recursive: true });
   return {
@@ -188,11 +188,11 @@ function writeManifest(compositionDir: string, overrides: Record<string, unknown
 }
 
 const ENV_KEYS = [
-  'ORKAS_BUNDLED_FFMPEG',
-  'ORKAS_RUNTIME_DIR',
-  'ORKAS_WHISPER_CPP',
-  'ORKAS_WHISPER_CLI',
-  'ORKAS_WHISPER_MODEL',
+  'COGSEED_BUNDLED_FFMPEG',
+  'COGSEED_RUNTIME_DIR',
+  'COGSEED_WHISPER_CPP',
+  'COGSEED_WHISPER_CLI',
+  'COGSEED_WHISPER_MODEL',
 ] as const;
 const originalEnv = new Map<string, string | undefined>();
 for (const key of ENV_KEYS) originalEnv.set(key, process.env[key]);
@@ -704,7 +704,7 @@ describe('native VideoStudio draft QA parity', () => {
       '<script>',
       'const narration = new Audio("./assets/narration.mp3");',
       'narration.play();',
-      'window.__ORKAS_COMPOSITION_TIMELINE__.call(() => document.body.classList.add("active"), null, 1);',
+      'window.__COGSEED_COMPOSITION_TIMELINE__.call(() => document.body.classList.add("active"), null, 1);',
       '</script>',
     ].join('\n')}`, 'utf8');
 
@@ -1666,7 +1666,7 @@ describe('native VideoStudio draft QA parity', () => {
   });
 
   it('P1 bounds native-process output and settles timeout without waiting for close', async () => {
-    const node = process.env.ORKAS_TEST_NODE || process.execPath;
+    const node = process.env.COGSEED_TEST_NODE || process.execPath;
     const noisy = await runVideoProcessForTest(node, [
       '-e',
       "process.stdout.write('x'.repeat(256)); setInterval(() => {}, 1000)",
@@ -1686,7 +1686,7 @@ describe('native VideoStudio draft QA parity', () => {
   it.runIf(process.platform === 'win32')('P1 terminates a real Windows video subprocess tree', async () => {
     const p = tmpProject('video-process-tree');
     const sentinel = path.join(p.root, 'orphan-wrote.txt');
-    const node = process.env.ORKAS_TEST_NODE || process.execPath;
+    const node = process.env.COGSEED_TEST_NODE || process.execPath;
     const grandchildScript = [
       "const fs = require('node:fs');",
       `setTimeout(() => fs.writeFileSync(${JSON.stringify(sentinel)}, 'orphaned'), 700);`,
@@ -2011,15 +2011,15 @@ describe('native VideoStudio draft QA parity', () => {
     fs.writeFileSync(cli, 'test runtime');
     fs.writeFileSync(model, 'test model');
 
-    process.env.ORKAS_RUNTIME_DIR = runtimeRoot;
-    delete process.env.ORKAS_WHISPER_CPP;
-    delete process.env.ORKAS_WHISPER_CLI;
-    delete process.env.ORKAS_WHISPER_MODEL;
+    process.env.COGSEED_RUNTIME_DIR = runtimeRoot;
+    delete process.env.COGSEED_WHISPER_CPP;
+    delete process.env.COGSEED_WHISPER_CLI;
+    delete process.env.COGSEED_WHISPER_MODEL;
 
     expect(resolveSpeechTranscribeBackend()).toEqual({ cli, model, source: 'bundled' });
   });
 
-  it.runIf(process.platform === 'win32' && process.env.ORKAS_REAL_WHISPER_TEST === '1')(
+  it.runIf(process.platform === 'win32' && process.env.COGSEED_REAL_WHISPER_TEST === '1')(
     'Windows real bundled whisper transcribes within the performance budget', async () => {
       const p = tmpProject('bundled-whisper');
       const input = path.join(p.root, 'raw.mp4');
@@ -2032,11 +2032,11 @@ describe('native VideoStudio draft QA parity', () => {
       ], { encoding: 'utf8' });
       expect(generated.status, generated.stderr).toBe(0);
 
-      process.env.ORKAS_BUNDLED_FFMPEG = ffmpeg;
-      process.env.ORKAS_RUNTIME_DIR = runtimeRoot;
-      delete process.env.ORKAS_WHISPER_CPP;
-      delete process.env.ORKAS_WHISPER_CLI;
-      delete process.env.ORKAS_WHISPER_MODEL;
+      process.env.COGSEED_BUNDLED_FFMPEG = ffmpeg;
+      process.env.COGSEED_RUNTIME_DIR = runtimeRoot;
+      delete process.env.COGSEED_WHISPER_CPP;
+      delete process.env.COGSEED_WHISPER_CLI;
+      delete process.env.COGSEED_WHISPER_MODEL;
 
       const startedAt = Date.now();
       const res = await transcribeSpeech({ inputAbsPath: input, transcriptAbsPath: transcript });
@@ -2045,7 +2045,7 @@ describe('native VideoStudio draft QA parity', () => {
       expect(res, JSON.stringify(res)).toMatchObject({
         ok: true,
         op: 'speech.transcribe',
-        backend: 'orkas-native:whisper.cpp',
+        backend: 'cogseed-native:whisper.cpp',
         backend_source: 'bundled',
       });
       expect(fs.existsSync(transcript)).toBe(true);
@@ -2130,11 +2130,11 @@ describe('native VideoStudio draft QA parity', () => {
     fs.mkdirSync(path.dirname(model), { recursive: true });
     fs.writeFileSync(model, 'model');
 
-    process.env.ORKAS_BUNDLED_FFMPEG = fakeFfmpeg;
-    process.env.ORKAS_RUNTIME_DIR = runtimeRoot;
-    delete process.env.ORKAS_WHISPER_CPP;
-    delete process.env.ORKAS_WHISPER_CLI;
-    delete process.env.ORKAS_WHISPER_MODEL;
+    process.env.COGSEED_BUNDLED_FFMPEG = fakeFfmpeg;
+    process.env.COGSEED_RUNTIME_DIR = runtimeRoot;
+    delete process.env.COGSEED_WHISPER_CPP;
+    delete process.env.COGSEED_WHISPER_CLI;
+    delete process.env.COGSEED_WHISPER_MODEL;
 
     const res = await transcribeSpeech({ inputAbsPath: input });
 
@@ -2192,8 +2192,8 @@ describe('native VideoStudio draft QA parity', () => {
   it('S1 fails strict heavy high-quality renders fast on constrained machines', async () => {
     const p = tmpProject('heavy-render');
     writeHtml(p.compositionDir, 'Launch', { width: 1920, height: 1080, duration: 60 });
-    const previous = process.env.ORKAS_MOCK_RAM_GB;
-    process.env.ORKAS_MOCK_RAM_GB = '8';
+    const previous = process.env.COGSEED_MOCK_RAM_GB;
+    process.env.COGSEED_MOCK_RAM_GB = '8';
     try {
       const res = await renderComposition({
         compositionDirAbs: p.compositionDir,
@@ -2208,8 +2208,8 @@ describe('native VideoStudio draft QA parity', () => {
       });
       expect(fs.existsSync(p.outputPath)).toBe(false);
     } finally {
-      if (previous === undefined) delete process.env.ORKAS_MOCK_RAM_GB;
-      else process.env.ORKAS_MOCK_RAM_GB = previous;
+      if (previous === undefined) delete process.env.COGSEED_MOCK_RAM_GB;
+      else process.env.COGSEED_MOCK_RAM_GB = previous;
     }
   });
 
@@ -2244,11 +2244,11 @@ describe('native VideoStudio draft QA parity', () => {
   it('blocks only high-confidence native visual findings with active-scene evidence', () => {
     expect(normalizeDraftInspectIssueSeverities([
       {
-        code: 'TEXT_OVERFLOW', severity: 'warning', message: 'clipped', source: 'orkas-native-inspect',
+        code: 'TEXT_OVERFLOW', severity: 'warning', message: 'clipped', source: 'cogseed-native-inspect',
         confidence: 'high', activeScene: true, evidence: { overflow_pixels: { x: 12, y: 0 } },
       },
       {
-        code: 'LOW_CONTRAST', severity: 'warning', message: 'heuristic contrast', source: 'orkas-native-inspect',
+        code: 'LOW_CONTRAST', severity: 'warning', message: 'heuristic contrast', source: 'cogseed-native-inspect',
         confidence: 'medium', activeScene: true, evidence: { contrast_ratio: 2.8 },
       },
       { code: 'PALETTE_LARGE', severity: 'warning', message: 'palette' },

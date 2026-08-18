@@ -6,10 +6,10 @@ calibrate.py — 规则误报率标定工具（skill-sentry 的核心用法）
 为什么需要它
 ------------
 skill-sentry 的定位是**规则孵化场**：新规则先在真实语料上标定误报率，达标后才
-译进 Mate-Agent 的 `src/main/quality/`。原因很直接——在这里发现的误报只是数据，
+译进 CogSeed-Agent 的 `src/main/quality/`。原因很直接——在这里发现的误报只是数据，
 而 `quality/` 的 EXTREME 是硬拦截写入，同样的误报在那边就是真实的装不上事故。
 
-实测依据：2.1.0 校准前，43 个 Mate-Agent 官方 skill 里有 1 例误判
+实测依据：2.1.0 校准前，43 个 CogSeed-Agent 官方 skill 里有 1 例误判
 DO_NOT_INSTALL + 31 例误判 CAUTION，其中被判死的那个恰是**拦截** SSRF 的防御
 代码。若不先标定就移植，Must 6「低风险静默通过」直接失效。
 

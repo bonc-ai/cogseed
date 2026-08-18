@@ -889,7 +889,7 @@ async function p3394ProtocolProcessItem(input: {
   const relationship = fromUser ? "owner" : "peer";
   const speechAct = fromCommander ? "delegate" : "request";
   const principal = fromUser
-    ? { person: "mate-user", org: "local", role: "owner" }
+    ? { person: "cogseed-user", org: "local", role: "owner" }
     : {
         person: input.item.fromActorId,
         org: "cogseed",
@@ -965,7 +965,7 @@ async function p3394ProtocolProcessItem(input: {
               contract?.role ||
               (input.agent.runtime?.kind === "cli"
                 ? "external_expert"
-                : "orkas_core"),
+                : "cogseed_core"),
             relationship,
             speech_act: speechAct,
             error: error.body.reason_code,
@@ -991,7 +991,7 @@ async function p3394ProtocolProcessItem(input: {
             contract?.role ||
             (input.agent.runtime?.kind === "cli"
               ? "external_expert"
-              : "orkas_core"),
+              : "cogseed_core"),
           runtime_kind:
             contract?.runtime.kind ||
             (input.agent.runtime?.kind === "cli" ? "cli" : "in_process"),
@@ -1328,11 +1328,11 @@ export type TaskTerminalListener = (event: TaskTerminalEvent) => void;
  * loaders) MUST follow the same pattern. Plain `const x = new Map()` will
  * re-introduce the dual-instance bug class for that new state.
  */
-const _BUS_CIDS_KEY = Symbol.for("orkas.group_chat.bus._cids");
+const _BUS_CIDS_KEY = Symbol.for("cogseed.group_chat.bus._cids");
 const _cids: Map<string, CidState> = ((globalThis as any)[_BUS_CIDS_KEY] ??=
   new Map<string, CidState>());
 const _TASK_TERMINAL_LISTENERS_KEY = Symbol.for(
-  "orkas.group_chat.bus.task_terminal_listeners",
+  "cogseed.group_chat.bus.task_terminal_listeners",
 );
 const _taskTerminalListeners: Set<TaskTerminalListener> = ((globalThis as any)[
   _TASK_TERMINAL_LISTENERS_KEY
@@ -2638,8 +2638,8 @@ async function _enqueueBody(
       name,
     }));
     const starter: InteractiveFollowupStarter = _interactiveFollowupStarterForTest ?? (async (input) => {
-      const { startMateInteractiveFollowup } = await import('../cogseed_backend/interactive-turn');
-      return startMateInteractiveFollowup(input.userId, {
+      const { startCogSeedInteractiveFollowup } = await import('../cogseed_backend/interactive-turn');
+      return startCogSeedInteractiveFollowup(input.userId, {
         conversationId: input.conversationId,
         agentId: input.agentId,
         requestId: input.requestId,
@@ -3789,7 +3789,7 @@ async function runActorTurnBody(
       convKind !== "space_builder"
       && item.fromActorId === USER_ID
       && !item.internalControl
-      && process.env.ORKAS_KSTAR_HOST_ROUTING !== '0'
+      && process.env.COGSEED_KSTAR_HOST_ROUTING !== '0'
     ) {
       // 用户新消息到达：清除该会话的 pending 自动闭环（设计 §5）。
       // 之后 hostRouteTaskTurn 的 judge 判定 continuation 决定任务去留。
@@ -5986,7 +5986,7 @@ async function buildCommanderSystemPrompt(
       working_dir: workingDir,
       shell_hint:
         process.platform === "win32"
-          ? "On native Windows, command execution runs in PowerShell by default. Use `$env:NAME`, `;`, and PowerShell-native pipelines; do not use POSIX `&&`, heredocs, `head`, `mktemp`, or `/dev/null`. Invoke quoted executables with `&`, for example `& \"$env:ORKAS_NODE\" \"$env:ORKAS_PC_DIR/bin/run-skill.cjs\" ...`."
+          ? "On native Windows, command execution runs in PowerShell by default. Use `$env:NAME`, `;`, and PowerShell-native pipelines; do not use POSIX `&&`, heredocs, `head`, `mktemp`, or `/dev/null`. Invoke quoted executables with `&`, for example `& \"$env:COGSEED_NODE\" \"$env:COGSEED_PC_DIR/bin/run-skill.cjs\" ...`."
           : "",
       local_exec_state: permState,
       env_summary: envSummary,
@@ -10416,8 +10416,8 @@ export async function abort(uid: string, cid: string): Promise<void> {
   }
   try {
     const cancelBackend = _backendConversationCancellerForTest ?? (async (userId: string, conversationId: string) => {
-      const { mateRuntimeController } = await import('../cogseed_backend/runtime-controller');
-      return mateRuntimeController.cancelConversationTasks(userId, conversationId);
+      const { cogseedRuntimeController } = await import('../cogseed_backend/runtime-controller');
+      return cogseedRuntimeController.cancelConversationTasks(userId, conversationId);
     });
     await cancelBackend(uid, cid);
   } catch (err) {

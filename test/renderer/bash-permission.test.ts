@@ -54,7 +54,7 @@ function loadHarness(dialogResult: DialogResult, invokeImpl?: (channel: string, 
     Monitor: { event: monitorEvent },
     window: {
       Monitor: { event: monitorEvent },
-      __orkasBashPermissionDialogForTest: vi.fn(async (arg: any) => {
+      __cogseedBashPermissionDialogForTest: vi.fn(async (arg: any) => {
         dialogArgs.push(arg);
         return {
           choice: normalizedResult.choice,

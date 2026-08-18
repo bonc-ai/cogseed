@@ -8,7 +8,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../..');
 
 const catalogs = [
-  ['Orkas', 'src/main/data/avatars.json'],
+  ['CogSeed', 'src/main/data/avatars.json'],
 ] as const;
 
 function stableStringify(value: unknown): string {

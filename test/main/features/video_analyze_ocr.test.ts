@@ -80,7 +80,7 @@ describe('analyzeMedia › video ocr › batch contract', () => {
     const fs = await import('node:fs');
     const os = await import('node:os');
     const path = await import('node:path');
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-ocr-batch-test-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ocr-batch-test-'));
     fakeVideo = path.join(dir, 'clip.mp4');
     fs.writeFileSync(fakeVideo, 'not-a-real-video'); // probe/extract are mocked
   });

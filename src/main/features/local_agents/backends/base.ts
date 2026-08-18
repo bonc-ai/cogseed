@@ -92,7 +92,7 @@ export interface BackendRunOptions {
   /** Per-backend idle threshold override (ms). Read by `runner.ts`'s
    *  idle-heartbeat to decide when to emit `{type:'idle'}` events. When
    *  unset the runner uses its own default (90 s; configurable via
-   *  ORKAS_LOCAL_AGENT_IDLE_MS). Backends with no streaming (today:
+   *  COGSEED_LOCAL_AGENT_IDLE_MS). Backends with no streaming (today:
    *  openclaw) should pass a smaller value so users get an early "still
    *  alive" pulse instead of staring at a blank rail for the full run. */
   idleMs?: number;
@@ -103,7 +103,7 @@ export interface BackendRunOptions {
     sessionId: string; contextId?: string; readOnlyRoots: string[]; writableRoots: string[];
     permissionMode: string; receiptId: string;
   };
-  /** orkas-bridge injection (plan §D — set by runner.ts when a bridge
+  /** cogseed-bridge injection (plan §D — set by runner.ts when a bridge
    *  host is live for this run). Backends that support adding an MCP
    *  server pass the config through (claude: `--mcp-config`; codex:
    *  `-c mcp_servers.…` overrides); others ignore the field. The env
@@ -151,12 +151,12 @@ export class StderrTail {
 export function executionContextEnv(context: BackendRunOptions['executionContext']): Record<string, string> | undefined {
   if (!context) return undefined;
   return {
-    ORKAS_EXECUTION_SESSION_ID: context.sessionId,
-    ...(context.contextId ? { ORKAS_EXECUTION_CONTEXT_ID: context.contextId } : {}),
-    ORKAS_EXECUTION_RECEIPT_ID: context.receiptId,
-    ORKAS_PERMISSION_MODE: context.permissionMode,
-    ORKAS_ALLOWED_READ_ROOTS: JSON.stringify(context.readOnlyRoots),
-    ORKAS_ALLOWED_WRITE_ROOTS: JSON.stringify(context.writableRoots),
+    COGSEED_EXECUTION_SESSION_ID: context.sessionId,
+    ...(context.contextId ? { COGSEED_EXECUTION_CONTEXT_ID: context.contextId } : {}),
+    COGSEED_EXECUTION_RECEIPT_ID: context.receiptId,
+    COGSEED_PERMISSION_MODE: context.permissionMode,
+    COGSEED_ALLOWED_READ_ROOTS: JSON.stringify(context.readOnlyRoots),
+    COGSEED_ALLOWED_WRITE_ROOTS: JSON.stringify(context.writableRoots),
   };
 }
 
@@ -165,7 +165,7 @@ export function executionContextEnv(context: BackendRunOptions['executionContext
  *  `detached` (POSIX only) makes the child a process-group leader so
  *  `killProcessTree` can signal the WHOLE group, not just the CLI itself.
  *  Without it, killing the CLI on abort/timeout leaves its descendants
- *  (tool subprocesses, the orkas-bridge MCP child, a shell's forked last
+ *  (tool subprocesses, the cogseed-bridge MCP child, a shell's forked last
  *  command) orphaned but still holding the inherited stdout/stderr pipes
  *  — so the run's `close` event never fires until those descendants exit
  *  on their own, making abort/timeout appear to hang. We do NOT `unref`:

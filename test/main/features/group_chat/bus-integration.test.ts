@@ -19,7 +19,7 @@ vi.mock("../../../../src/main/logger", () => ({
 // Production wake dispatch is CogSeed-backend-only. This test double preserves
 // the bus assertions while exercising the same entry/event contract.
 vi.mock("../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher", () => ({
-  mateWakeDispatcher: {
+  cogseedWakeDispatcher: {
     dispatch: async (uid: string, request: any, context: any) => {
       const bus = await import("../../../../src/main/features/group_chat/bus");
       const state = await import("../../../../src/main/features/group_chat/state");
@@ -79,8 +79,8 @@ vi.mock("../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher", (
  * `streamChatWithModel` with a programmable script keyed by session id,
  * so a single conversation can drive multiple actor turns deterministically:
  *
- *   - Commander gets script entry for `orkas-<uid>-gconv-<cid>`
- *   - Agent X gets script entry for `orkas-<uid>-gmember-<cid>-<X>`
+ *   - Commander gets script entry for `cogseed-<uid>-gconv-<cid>`
+ *   - Agent X gets script entry for `cogseed-<uid>-gmember-<cid>-<X>`
  *
  * Each script entry is an array of stream events the mock yields in order.
  * After the script entry is consumed, the next call for that session
@@ -291,16 +291,16 @@ function newCid(): string {
 }
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "orkas-int-"));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  prevWakeGate = process.env.ORKAS_P3394_WAKE_GATE;
-  prevHostRouting = process.env.ORKAS_KSTAR_HOST_ROUTING;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-  process.env.ORKAS_P3394_WAKE_GATE = "0";
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cogseed-int-"));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  prevWakeGate = process.env.COGSEED_P3394_WAKE_GATE;
+  prevHostRouting = process.env.COGSEED_KSTAR_HOST_ROUTING;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_P3394_WAKE_GATE = "0";
   // Host routing off by default in bus tests: dispatch-mechanism tests are
   // not governance tests. The dedicated host-routing describe enables it.
-  process.env.ORKAS_KSTAR_HOST_ROUTING = "0";
-  process.env.ORKAS_LEGACY_RUN_WORKER_TEST = "0";
+  process.env.COGSEED_KSTAR_HOST_ROUTING = "0";
+  process.env.COGSEED_LEGACY_RUN_WORKER_TEST = "0";
   _resetScripts();
   _recordedCalls.length = 0;
   _recordedToolResults.length = 0;
@@ -357,8 +357,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (prevHostRouting === undefined) delete process.env.ORKAS_KSTAR_HOST_ROUTING;
-  else process.env.ORKAS_KSTAR_HOST_ROUTING = prevHostRouting;
+  if (prevHostRouting === undefined) delete process.env.COGSEED_KSTAR_HOST_ROUTING;
+  else process.env.COGSEED_KSTAR_HOST_ROUTING = prevHostRouting;
 
   // Drop conv state so workers terminate before the tmpDir is rm'd —
   // otherwise a half-finished worker writes after dir removal and we get
@@ -397,9 +397,9 @@ afterEach(async () => {
     /* ignore */
   }
   await drainMainRuntimeForTest();
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
-  if (prevWakeGate === undefined) delete process.env.ORKAS_P3394_WAKE_GATE;
-  else process.env.ORKAS_P3394_WAKE_GATE = prevWakeGate;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  if (prevWakeGate === undefined) delete process.env.COGSEED_P3394_WAKE_GATE;
+  else process.env.COGSEED_P3394_WAKE_GATE = prevWakeGate;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -572,7 +572,7 @@ async function makeSeedAgentCli(): Promise<void> {
 
 describe("group_chat bus integration › structured user recipient", () => {
   it("routes a composer selection directly without changing visible text or creating Wake approval", async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
@@ -598,7 +598,7 @@ describe("group_chat bus integration › structured user recipient", () => {
   });
 
   it("keeps a raw typed @Agent mention behind Wake Gate", async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const wake = await import("../../../../src/main/features/p3394/wake-service");
@@ -617,7 +617,7 @@ describe("group_chat bus integration › structured user recipient", () => {
   });
 
   it("retries the persisted Agent directly without creating a second Wake approval", async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const wake = await import("../../../../src/main/features/p3394/wake-service");
@@ -1093,8 +1093,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const cid = newCid();
     const state = await import('../../../../src/main/features/group_chat/state');
     const bus = await import('../../../../src/main/features/group_chat/bus');
-    const previous = process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
-    process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = '1';
+    const previous = process.env.COGSEED_COMMANDER_CENTRIC_KSTAR;
+    process.env.COGSEED_COMMANDER_CENTRIC_KSTAR = '1';
     try {
       _setScript(state.buildGconvSessionId(cid), [
         { type: '__capture_tool_definitions__' },
@@ -1111,8 +1111,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       // are all host-side now (routing + auto-forecast).
       expect(_recordedToolDefinitions.filter((tool) => tool.name === 'kstar_control')).toHaveLength(0);
     } finally {
-      if (previous === undefined) delete process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
-      else process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = previous;
+      if (previous === undefined) delete process.env.COGSEED_COMMANDER_CENTRIC_KSTAR;
+      else process.env.COGSEED_COMMANDER_CENTRIC_KSTAR = previous;
     }
   });
 
@@ -1125,8 +1125,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const cid = newCid();
     const state = await import('../../../../src/main/features/group_chat/state');
     const bus = await import('../../../../src/main/features/group_chat/bus');
-    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
-    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    const previous = process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
+    delete process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
     try {
       _setScript(state.buildGconvSessionId(cid), [
         { type: '__capture_tool_definitions__' },
@@ -1140,8 +1140,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       expect(tool?.inputSchema.properties.access_mode.enum).toContain('write');
       // Runtime enforcement, not schema: named/write run_worker is rejected in strict mode
     } finally {
-      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
-      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+      if (previous === undefined) delete process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
+      else process.env.COGSEED_LEGACY_RUN_WORKER_TEST = previous;
     }
   });
 
@@ -1149,8 +1149,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const cid = newCid();
     const state = await import('../../../../src/main/features/group_chat/state');
     const bus = await import('../../../../src/main/features/group_chat/bus');
-    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
-    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    const previous = process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
+    delete process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
     try {
       _setScript(state.buildGconvSessionId(cid), [
         { type: '__call_tool__', name: 'run_worker', input: { to: AGENT_NAME, task: 'write a report' } },
@@ -1166,8 +1166,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       expect(JSON.parse(result!.content).error).toMatch(/dispatch_to/);
       expect(_recordedCalls.filter((call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
     } finally {
-      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
-      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+      if (previous === undefined) delete process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
+      else process.env.COGSEED_LEGACY_RUN_WORKER_TEST = previous;
     }
   });
 
@@ -1175,8 +1175,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const cid = newCid();
     const state = await import('../../../../src/main/features/group_chat/state');
     const bus = await import('../../../../src/main/features/group_chat/bus');
-    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
-    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    const previous = process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
+    delete process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
     try {
       _setScript(state.buildGconvSessionId(cid), [
         { type: '__call_tool__', name: 'run_worker', input: { task: 'change files', access_mode: 'write', write_scopes: ['src'] } },
@@ -1190,8 +1190,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       expect(JSON.parse(result!.content).error).toMatch(/read-only/i);
       expect(_recordedCalls.filter((call) => call.sid.startsWith('gworker-'))).toHaveLength(0);
     } finally {
-      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
-      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+      if (previous === undefined) delete process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
+      else process.env.COGSEED_LEGACY_RUN_WORKER_TEST = previous;
     }
   });
 
@@ -1200,8 +1200,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const state = await import('../../../../src/main/features/group_chat/state');
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const collaboration = await import('../../../../src/main/features/group_chat/collaboration');
-    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
-    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    const previous = process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
+    delete process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
     try {
       _setScript(state.buildGconvSessionId(cid), [
         { type: '__call_tool__', name: 'run_worker', input: { task: 'count records only' } },
@@ -1217,8 +1217,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       expect(step?.access_mode).toBe('read');
       // write_scopes absent for anonymous without explicit scopes
     } finally {
-      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
-      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+      if (previous === undefined) delete process.env.COGSEED_LEGACY_RUN_WORKER_TEST;
+      else process.env.COGSEED_LEGACY_RUN_WORKER_TEST = previous;
     }
   });
 
@@ -4987,7 +4987,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   }, 15_000);
 
   it("approved wake-gated interactive hand-off preserves resume and wakes commander on handback", async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state =
       await import("../../../../src/main/features/group_chat/state");
@@ -5089,8 +5089,8 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     // The remainder of this legacy integration fixture intentionally drives
     // the historical in-process Agent test double so its scripted handback
     // assertions remain deterministic. Production cannot enable this bypass.
-    process.env.ORKAS_P3394_WAKE_GATE = "0";
-  process.env.ORKAS_LEGACY_RUN_WORKER_TEST = "0";
+    process.env.COGSEED_P3394_WAKE_GATE = "0";
+  process.env.COGSEED_LEGACY_RUN_WORKER_TEST = "0";
 
     _setScript(state.buildGmemberSessionId(cid, researcherId), [
       {
@@ -5276,7 +5276,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
       {
         type: "final",
-        text: "FORM-COMPLETE: report drafted for topic=Orkas, depth=deep.",
+        text: "FORM-COMPLETE: report drafted for topic=CogSeed, depth=deep.",
       },
     ]);
     _setScript(commanderSid, [
@@ -5291,7 +5291,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       cid,
       msgId: agentReply.id,
       formId: agentReply.form.form_id,
-      values: { topic: "Orkas", depth: "d" },
+      values: { topic: "CogSeed", depth: "d" },
     });
     expect(submitRes.ok).toBe(true);
     await groupChat.send({
@@ -5393,7 +5393,7 @@ describe("group_chat bus integration › Recall asset usage receipt", () => {
 
 describe("group_chat bus integration › deterministic host routing (task turn)", () => {
   it("opens a governed KStar task + confirmed projection for a task-shaped user message before the model turn", async () => {
-    process.env.ORKAS_KSTAR_HOST_ROUTING = "1";
+    process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
@@ -6191,7 +6191,7 @@ describe("group_chat bus integration › Task 5 anonymous resume", () => {
 
 describe("group_chat bus integration › Commander KSTAR dispatch narration", () => {
   it.skip("declares task, plan, and expected result only after wake authorization", async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
@@ -6255,7 +6255,7 @@ describe("group_chat bus integration › Commander KSTAR dispatch narration", ()
 
 describe("group_chat bus integration › wake-gated dispatch continuation", () => {
   it.skip("emits KSTAR provenance on the terminal event for an approved dispatch_to Agent", async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
@@ -6328,7 +6328,7 @@ describe("group_chat bus integration › wake-gated dispatch continuation", () =
   }, 12_000);
 
   it.skip("resumes Commander after an approved dispatch_to Agent completes without an explicit resume", async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
@@ -6400,7 +6400,7 @@ describe("group_chat bus integration › wake-gated dispatch continuation", () =
 
 describe("group_chat bus integration › Task 5 Wake rejection", () => {
   it("rejects a real wake-gated handoff only after cancelling its exact workflow step", async () => {
-    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    process.env.COGSEED_P3394_WAKE_GATE = "1";
     const cid = newCid();
     const state =
       await import("../../../../src/main/features/group_chat/state");

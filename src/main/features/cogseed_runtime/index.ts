@@ -58,7 +58,7 @@ function kstarEventFact(event: RuntimeEventEnvelope): RuntimeEventEnvelope | nul
   };
 }
 
-export interface MateAgentRuntimeInput {
+export interface CogSeedAgentRuntimeInput {
   task: string;
   request_id?: string;
   runtime_session_id?: string;
@@ -78,19 +78,19 @@ export interface RuntimeResultProjector {
   (uid: string, event: RuntimeEventEnvelope, request: RuntimeRunRequest): void | Promise<void>;
 }
 
-export interface MateAgentRuntimeOptions {
+export interface CogSeedAgentRuntimeOptions {
   worker?: RuntimeWorkerService;
   allowedRootsForUser?: (uid: string) => readonly string[];
   projectResult?: RuntimeResultProjector;
   captureClosure?: (input: RuntimeKstarClosureInput) => Promise<unknown>;
 }
 
-export interface MateAgentRuntimeFacade {
-  run(uid: string, raw: MateAgentRuntimeInput, opts?: { signal?: AbortSignal | null }): AsyncGenerator<RuntimeEventEnvelope, void, unknown>;
+export interface CogSeedAgentRuntimeFacade {
+  run(uid: string, raw: CogSeedAgentRuntimeInput, opts?: { signal?: AbortSignal | null }): AsyncGenerator<RuntimeEventEnvelope, void, unknown>;
   shutdown(): Promise<void>;
 }
 
-export function createMateAgentRuntime(options: MateAgentRuntimeOptions = {}): MateAgentRuntimeFacade {
+export function createCogSeedAgentRuntime(options: CogSeedAgentRuntimeOptions = {}): CogSeedAgentRuntimeFacade {
   const worker = options.worker || defaultRuntimeWorkerService;
   const allowedRootsForUser = options.allowedRootsForUser || ((uid: string) => {
     try { const root = getWorkspacePath(uid); return root ? [root] : []; }
@@ -100,7 +100,7 @@ export function createMateAgentRuntime(options: MateAgentRuntimeOptions = {}): M
   const captureClosure = options.captureClosure || captureRuntimeKstarClosure;
   const log = createLogger('cogseed-runtime');
 
-  async function* run(uid: string, raw: MateAgentRuntimeInput, opts: { signal?: AbortSignal | null } = {}): AsyncGenerator<RuntimeEventEnvelope, void, unknown> {
+  async function* run(uid: string, raw: CogSeedAgentRuntimeInput, opts: { signal?: AbortSignal | null } = {}): AsyncGenerator<RuntimeEventEnvelope, void, unknown> {
     const normalized = normalizeRuntimeRunRequest(uid, raw, { allowedRoots: allowedRootsForUser(uid) });
     if (normalized.ok === false) throw new Error(normalized.error);
     const request = normalized.request;
@@ -189,5 +189,5 @@ export function createMateAgentRuntime(options: MateAgentRuntimeOptions = {}): M
   return { run, shutdown: () => worker.shutdown() };
 }
 
-export const mateAgentRuntime = createMateAgentRuntime();
-export const runMateAgentRuntime = mateAgentRuntime.run;
+export const cogseedAgentRuntime = createCogSeedAgentRuntime();
+export const runCogSeedAgentRuntime = cogseedAgentRuntime.run;

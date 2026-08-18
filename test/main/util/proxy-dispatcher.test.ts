@@ -31,9 +31,9 @@ beforeEach(() => {
   _resetProxyRoutingForTests();
   globalThis.fetch = hostFetch;
   savedEnv = Object.fromEntries(proxyEnvKeys.map((key) => [key, process.env[key]]));
-  savedNoAutoProxy = process.env.ORKAS_NO_AUTO_PROXY;
+  savedNoAutoProxy = process.env.COGSEED_NO_AUTO_PROXY;
   clearProxyEnv();
-  delete process.env.ORKAS_NO_AUTO_PROXY;
+  delete process.env.COGSEED_NO_AUTO_PROXY;
 });
 
 afterEach(() => {
@@ -44,8 +44,8 @@ afterEach(() => {
     const value = savedEnv[key];
     if (value !== undefined) process.env[key] = value;
   }
-  if (savedNoAutoProxy === undefined) delete process.env.ORKAS_NO_AUTO_PROXY;
-  else process.env.ORKAS_NO_AUTO_PROXY = savedNoAutoProxy;
+  if (savedNoAutoProxy === undefined) delete process.env.COGSEED_NO_AUTO_PROXY;
+  else process.env.COGSEED_NO_AUTO_PROXY = savedNoAutoProxy;
 });
 
 describe('util/proxy-dispatcher environment configuration', () => {
@@ -128,9 +128,9 @@ describe('util/proxy-dispatcher child routes', () => {
       async () => 'PROXY 127.0.0.1:7890',
     ))
       .resolves.toEqual({
-        ORKAS_PROXY_MODE: 'system-fetch',
-        ORKAS_PROXY_BRIDGE_URL: 'http://127.0.0.1:45678/v1/fetch',
-        ORKAS_PROXY_BRIDGE_TOKEN: 'test-token',
+        COGSEED_PROXY_MODE: 'system-fetch',
+        COGSEED_PROXY_BRIDGE_URL: 'http://127.0.0.1:45678/v1/fetch',
+        COGSEED_PROXY_BRIDGE_TOKEN: 'test-token',
       });
     expect(bridge).toHaveBeenCalledOnce();
   });
@@ -145,8 +145,8 @@ describe('util/proxy-dispatcher child routes', () => {
       bridge,
       async () => 'SOCKS5 127.0.0.1:1080; DIRECT',
     )).resolves.toMatchObject({
-      ORKAS_PROXY_MODE: 'system-fetch',
-      ORKAS_PROXY_BRIDGE_URL: 'http://127.0.0.1:45678/v1/fetch',
+      COGSEED_PROXY_MODE: 'system-fetch',
+      COGSEED_PROXY_BRIDGE_URL: 'http://127.0.0.1:45678/v1/fetch',
     });
     expect(bridge).toHaveBeenCalledOnce();
   });
@@ -157,7 +157,7 @@ describe('util/proxy-dispatcher child routes', () => {
       'https://direct.example.com',
       bridge,
       async () => 'DIRECT',
-    )).resolves.toEqual({ ORKAS_PROXY_MODE: 'direct' });
+    )).resolves.toEqual({ COGSEED_PROXY_MODE: 'direct' });
     expect(bridge).not.toHaveBeenCalled();
   });
 
@@ -167,7 +167,7 @@ describe('util/proxy-dispatcher child routes', () => {
     const bridge = vi.fn(async () => ({ url: 'http://unused', token: 'unused' }));
     const childEnv = await buildChildProxyEnvironment('https://api.example.com', bridge);
     expect(childEnv).toMatchObject({
-      ORKAS_PROXY_MODE: 'env',
+      COGSEED_PROXY_MODE: 'env',
       HTTP_PROXY: 'http://http-proxy:8080',
       HTTPS_PROXY: 'http://https-proxy:8443',
       NODE_USE_ENV_PROXY: '1',
@@ -186,7 +186,7 @@ describe('util/proxy-dispatcher child fetch bridge', () => {
       });
     }) as unknown as typeof fetch;
     const bridge = await startChildFetchBridge(system);
-    // Requiring the bootstrap is side-effect free while ORKAS_PROXY_MODE is unset.
+    // Requiring the bootstrap is side-effect free while COGSEED_PROXY_MODE is unset.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { createBridgeFetch } = require('../../../bin/proxy-bootstrap.cjs') as {
       createBridgeFetch: (native: typeof fetch, url: string, token: string) => typeof fetch;
@@ -300,7 +300,7 @@ describe('util/proxy-dispatcher per-request system routing', () => {
 
   it('honors the auto-system-proxy kill switch', async () => {
     const system = vi.fn(async () => new Response('system')) as unknown as typeof fetch;
-    process.env.ORKAS_NO_AUTO_PROXY = '1';
+    process.env.COGSEED_NO_AUTO_PROXY = '1';
     expect(await installSystemProxyDispatcher(system)).toBe(false);
     expect(system).not.toHaveBeenCalled();
   });

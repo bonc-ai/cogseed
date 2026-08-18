@@ -10,15 +10,15 @@ let prevWs: string | undefined;
 
 beforeEach(() => {
   vi.doUnmock('node:fs');
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-system-skills-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-system-skills-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.restoreAllMocks();
   vi.resetModules();
@@ -240,8 +240,8 @@ describe('system creator skill contracts', () => {
     expect(md).toContain('Do **not** consult this skill for a plain "install this URL');
     expect(md).toContain('emit one `<skill>` container per source skill');
     expect(md).toContain('make the first source skill become the current import draft');
-    expect(md).toContain('Do not merge multiple source skills into one Orkas skill');
-    expect(md).toContain('Orkas-only metadata is emitted through metadata tags and stored in `_meta.json`');
+    expect(md).toContain('Do not merge multiple source skills into one CogSeed skill');
+    expect(md).toContain('CogSeed-only metadata is emitted through metadata tags and stored in `_meta.json`');
     expect(md).toContain('If files besides `SKILL.md` are present, inspect the file tree and read the likely source docs first');
     expect(md).toContain('Do **not** ask the user whether the imported document should be used as a reference or merged into the skill');
     expect(md).toContain('Do **not** show source provenance by default');

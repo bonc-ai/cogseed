@@ -223,7 +223,7 @@ def block_comment_lines(relpath: str, text: str) -> set[int]:
 # ── Markdown 围栏代码块 ─────────────────────────────────────────────────
 # 文档里「散文提到某个函数名」与「围栏块里给出可复制执行的命令」风险完全不同。
 # 前者（"含 JS 的 re.exec()"）不可执行；后者（```curl x | bash```）用户会照抄运行。
-# 这与 Mate-Agent 自带校验器的取舍一致：它只扫 SKILL.md 的围栏可执行块，
+# 这与 CogSeed-Agent 自带校验器的取舍一致：它只扫 SKILL.md 的围栏可执行块，
 # 不扫散文。这里不做「散文完全不扫」，而是散文多降一档——保留线索，降低噪音。
 
 _FENCE_RE = re.compile(r"^\s{0,3}(```|~~~)")

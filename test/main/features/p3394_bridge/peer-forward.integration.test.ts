@@ -103,14 +103,14 @@ function startGateway(port: number, agent: string, cli: string): ChildProcess {
 }
 
 beforeAll(async () => {
-  previousVariant = process.env.ORKAS_RUNTIME_VARIANT;
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_RUNTIME_VARIANT = VARIANT;
+  previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_RUNTIME_VARIANT = VARIANT;
   // paths.ts 要求：index.ts 启动时设置；测试环境需显式给出隔离工作区。
-  process.env.ORKAS_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-fwd-ws-'));
+  process.env.COGSEED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-fwd-ws-'));
   process.env.COGSEED_P3394_PORT = String(BRIDGE_PORT);
   process.env.COGSEED_P3394_TOKEN = BRIDGE_TOKEN;
-  // 非 conversation 模式：走 mate-task runtime（测试确定性）。
+  // 非 conversation 模式：走 cogseed-task runtime（测试确定性）。
   process.env.COGSEED_P3394_CONVERSATION = '0';
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-fwd-int-'));
   // paths.ts / buildBridge 要求：激活一个真实用户（创建目录骨架）。
@@ -137,10 +137,10 @@ afterAll(async () => {
     try { child.kill('SIGTERM'); } catch { /* already gone */ }
   }
   await bridgeHandle?.close().catch(() => {});
-  if (previousVariant === undefined) delete process.env.ORKAS_RUNTIME_VARIANT;
-  else process.env.ORKAS_RUNTIME_VARIANT = previousVariant;
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
+  else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   delete process.env.COGSEED_P3394_PORT;
   delete process.env.COGSEED_P3394_TOKEN;
   delete process.env.COGSEED_P3394_CONVERSATION;

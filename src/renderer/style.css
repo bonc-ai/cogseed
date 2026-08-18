@@ -3909,7 +3909,7 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 /* In-progress overlay for external-package actions (update/enable/disable/
-   remove). Covers the card while orkas-pkg.cjs runs so the action is
+   remove). Covers the card while cogseed-pkg.cjs runs so the action is
    perceivable. `.skill-card` is already position:relative. */
 .skill-card.is-busy { pointer-events: none; }
 .skill-card-busy {
@@ -20817,32 +20817,32 @@ body.model-not-configured .main-content { flex-direction: column; }
   .ew-config-banner .btn { width: 100%; }
 }
 
-/* Mate-native collaboration projection (Phase 8). */
-.conversation-info-mate-overview {
+/* CogSeed-native collaboration projection (Phase 8). */
+.conversation-info-cogseed-overview {
   border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.24));
   border-radius: 14px;
   padding: 12px;
   background: var(--surface-raised, rgba(20, 71, 55, 0.03));
 }
-.conversation-info-mate-meta,
-.conversation-info-mate-step-meta,
-.conversation-info-mate-actor-meta,
-.conversation-info-mate-timeline-head {
+.conversation-info-cogseed-meta,
+.conversation-info-cogseed-step-meta,
+.conversation-info-cogseed-actor-meta,
+.conversation-info-cogseed-timeline-head {
   color: var(--text-muted, #64748b);
   font-size: 12px;
 }
-.conversation-info-mate-task-title {
+.conversation-info-cogseed-task-title {
   margin-top: 6px;
   font-weight: 600;
   line-height: 1.35;
 }
-.conversation-info-mate-actions {
+.conversation-info-cogseed-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
 }
-.conversation-info-mate-action {
+.conversation-info-cogseed-action {
   border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.36));
   border-radius: 999px;
   background: var(--button-secondary-bg, transparent);
@@ -20851,50 +20851,50 @@ body.model-not-configured .main-content { flex-direction: column; }
   font-size: 12px;
   padding: 5px 10px;
 }
-.conversation-info-mate-action.is-danger {
+.conversation-info-cogseed-action.is-danger {
   color: var(--danger, #dc2626);
   border-color: color-mix(in srgb, var(--danger, #dc2626) 45%, transparent);
 }
-.conversation-info-mate-grid {
+.conversation-info-cogseed-grid {
   display: grid;
   grid-template-columns: 1fr;
   gap: 10px;
   margin-top: 12px;
 }
-.conversation-info-mate-card {
+.conversation-info-cogseed-card {
   border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.24));
   border-radius: 12px;
   padding: 10px;
   background: var(--surface, rgba(255, 255, 255, 0.4));
 }
-.conversation-info-mate-card-title {
+.conversation-info-cogseed-card-title {
   font-size: 12px;
   font-weight: 700;
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: .04em;
 }
-.conversation-info-mate-step,
-.conversation-info-mate-actor,
-.conversation-info-mate-timeline-item {
+.conversation-info-cogseed-step,
+.conversation-info-cogseed-actor,
+.conversation-info-cogseed-timeline-item {
   border-top: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.18));
   padding-top: 8px;
   margin-top: 8px;
 }
-.conversation-info-mate-step:first-child,
-.conversation-info-mate-actor:first-child,
-.conversation-info-mate-timeline-item:first-child {
+.conversation-info-cogseed-step:first-child,
+.conversation-info-cogseed-actor:first-child,
+.conversation-info-cogseed-timeline-item:first-child {
   border-top: 0;
   padding-top: 0;
   margin-top: 0;
 }
-.conversation-info-mate-child-tree {
+.conversation-info-cogseed-child-tree {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 10px;
 }
-.conversation-info-mate-child-chip {
+.conversation-info-cogseed-child-chip {
   border-radius: 999px;
   background: var(--chip-bg, rgba(148, 163, 184, 0.14));
   font-size: 11px;

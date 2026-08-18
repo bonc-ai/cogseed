@@ -4,17 +4,17 @@
 #
 # Usage:
 #   ./scripts/watch-signals.sh
-#   ORKAS_DATA=/custom/path ./scripts/watch-signals.sh
+#   COGSEED_DATA=/custom/path ./scripts/watch-signals.sh
 #
-# Tails `<ORKAS_DATA>/<uid>/local/signals/<yyyy-mm-dd>.jsonl` and pretty-
-# prints each new signal as a compact line. ORKAS_DATA defaults to
-# ~/.orkas/data.
+# Tails `<COGSEED_DATA>/<uid>/local/signals/<yyyy-mm-dd>.jsonl` and pretty-
+# prints each new signal as a compact line. COGSEED_DATA defaults to
+# ~/.cogseed/data.
 #
 # Requires: jq (brew install jq | apt install jq).
 
 set -u
 
-DATA_ROOT="${ORKAS_DATA:-$HOME/.orkas/data}"
+DATA_ROOT="${COGSEED_DATA:-$HOME/.cogseed/data}"
 USERS_FILE="$DATA_ROOT/users.json"
 
 # ── Preflight ──────────────────────────────────────────────────────────
@@ -27,7 +27,7 @@ fi
 
 if [[ ! -f "$USERS_FILE" ]]; then
   echo "ERROR: users.json not found at $USERS_FILE" >&2
-  echo "       Launch the app at least once, or set ORKAS_DATA=<your data root>." >&2
+  echo "       Launch the app at least once, or set COGSEED_DATA=<your data root>." >&2
   exit 1
 fi
 

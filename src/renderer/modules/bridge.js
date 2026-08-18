@@ -1,4 +1,4 @@
-// orkas-bridge permission prompts — when an external CLI agent (claude
+// cogseed-bridge permission prompts — when an external CLI agent (claude
 // code / codex) asks to call one of the user's connected services through
 // the bridge, main pushes `bridge:permission` and this module shows the
 // allow-once / always-allow / deny choice. No answer (user closes the

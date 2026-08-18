@@ -55,7 +55,7 @@ export type Message = {
   role: MessageRole;
   content: MessageContent[];
   /**
-   * Orkas-owned UI turn identity. Assigned by Session, persisted for healing /
+   * CogSeed-owned UI turn identity. Assigned by Session, persisted for healing /
    * restart, and stripped from provider-facing projections. Models never
    * create, read, or reconcile this field.
    */

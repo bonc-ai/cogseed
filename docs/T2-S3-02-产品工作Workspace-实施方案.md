@@ -84,7 +84,7 @@ Workspace Gate 若需要「技能安全」维度，直接调 `findLatestSkillVal
 
 - `<uid>/cloud/projects/<pid>/`，目录存在即真相，**无聚合索引**
 - `bindings.json` 严格作用域（`resolveProjectScope` 是唯一解析器）
-- `ORKAS.md` 用户所有、agent 只读
+- `COGSEED.md` 用户所有、agent 只读
 - 任务一文件一任务，`computeProgress` 派生不存储
 - 已有 `result_ref` / `origin_cid` / `depends_on`
 
@@ -223,7 +223,7 @@ export interface WorkspaceGateDecision {
 - 判定/投影类纯函数不得反向 import features
 - 执行与校验记录属机器私有 → `local/`；项目、任务、bindings 属可同步 → `cloud/`。不得把执行记录写入 `cloud/`
 - 不得缓存 uid 派生路径为模块级常量
-- 新增 `window.orkas.*` 必须有对应主进程 handler；渲染层为 classic script，新脚本需登记 `index.html`
+- 新增 `window.cogseed.*` 必须有对应主进程 handler；渲染层为 classic script，新脚本需登记 `index.html`
 - 可见文案走 `locales/*.json` + `t(...)`，动态文案在 `i18n-change` 重渲染
 - 日志用 `createLogger`，可恢复失败 `warn`、破坏不变量 `error`，敏感字段先脱敏
 

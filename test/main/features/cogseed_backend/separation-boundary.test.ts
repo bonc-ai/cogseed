@@ -68,15 +68,15 @@ describe('CogSeed complete backend separation boundary', () => {
     expect(adapter).not.toMatch(/\bspawn\s*\(|execFile\s*\(|fork\s*\(/);
   });
 
-  it('keeps CogSeed task, execution, session, and worker state paths under mate_agent', () => {
+  it('keeps CogSeed task, execution, session, and worker state paths under cogseed', () => {
     const paths = fs.readFileSync(path.resolve(process.cwd(), 'src/main/paths.ts'), 'utf8');
-    expect(paths).toContain("path.join(userCloudRoot(uid), 'mate_agent')");
-    expect(paths).toContain("path.join(userLocalRoot(uid), 'mate_agent')");
-    expect(paths).toContain('mateAgentExecutionRecordsDir');
+    expect(paths).toContain("path.join(userCloudRoot(uid), 'cogseed')");
+    expect(paths).toContain("path.join(userLocalRoot(uid), 'cogseed')");
+    expect(paths).toContain('cogseedAgentExecutionRecordsDir');
   });
 
-  it('does not expose a LegacyOrkasBackend or fallback selector in CogSeed production files', () => {
+  it('does not expose a LegacyCogSeedBackend or fallback selector in CogSeed production files', () => {
     const source = roots.flatMap(tsFiles).map((file) => fs.readFileSync(file, 'utf8')).join('\n');
-    expect(source).not.toMatch(/LegacyOrkasBackend|native\s*\|\s*core\s*\|\s*shadow/);
+    expect(source).not.toMatch(/LegacyCogSeedBackend|native\s*\|\s*core\s*\|\s*shadow/);
   });
 });

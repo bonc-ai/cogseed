@@ -12,7 +12,7 @@
 
 **Architecture:** The Agent spec declares an optional `management_surface` key. Mate's renderer uses it to expose the `expense_workbench` route, while the preload allow-list and main-process handlers constrain callable operations. Main validates the active user, canonical Agent, project configuration, material references, versions, and confirmation requirements before calling a machine-readable JSONL stdio bridge. Before launch, Mate verifies and copies the host-pinned reimbursement source closure and dependency files into a private trusted cache; the reimbursement component's `ApplicationService`, database, T/R/A-BOX, audit log, and security gates remain the only business source of truth.
 
-**Tech Stack:** Electron renderer classic JavaScript, existing Mate CSS/i18n/icon helpers, Electron contextBridge IPC, TypeScript main features, a byte-pinned Mate-hosted Python 3.12 runtime, a verified private source/dependency cache, JSONL stdio, and Vitest/pytest contract tests. The project `.venv` remains a standalone development/test environment and a candidate dependency source for verification, not Mate's executable runtime.
+**Tech Stack:** Electron renderer classic JavaScript, existing Mate CSS/i18n/icon helpers, Electron contextBridge IPC, TypeScript main features, a byte-pinned CogSeed-hosted Python 3.12 runtime, a verified private source/dependency cache, JSONL stdio, and Vitest/pytest contract tests. The project `.venv` remains a standalone development/test environment and a candidate dependency source for verification, not Mate's executable runtime.
 
 ---
 
@@ -37,7 +37,7 @@
 - Create: `src/main/features/expense_workbench/materials.ts` — project/material reference projection using existing attachment and path-sandbox helpers.
 - Create: `src/main/features/expense_workbench/settings.ts` — safe non-secret project and connection configuration operations.
 - Modify: `src/main/ipc/index.ts` — register the `expenseWorkbench.*` handler table.
-- Modify: `src/main/preload.js` only if a named convenience wrapper is required; generic `window.orkas.invoke` remains the canonical path.
+- Modify: `src/main/preload.js` only if a named convenience wrapper is required; generic `window.cogseed.invoke` remains the canonical path.
 
 ### Mate renderer
 
@@ -110,7 +110,7 @@ or:
 - [ ] Implement typed `ExpenseWorkbenchOperation`, `ExpenseWorkbenchRequest`, `ExpenseWorkbenchResult`, `ExpenseWorkbenchError`, and `ExpenseWorkbenchProjectConfig` types. Do not use `any` or `unknown` for public boundaries.
 - [ ] Implement the adapter through the repository's approved managed stdio dispatch entry point; do not call `child_process.spawn` from this feature. Launch only a complete runtime extracted from the application-pinned release archive with `-I -S -B -c`, point its fixed bootstrap only at the reverified private trusted cache, omit project/user `PYTHONPATH`, and never place the selected project root or its interpreter in the command, arguments, or working directory.
 - [ ] Implement a request queue keyed by active user plus validated project root, preserving response order and preventing concurrent writes to one reimbursement store. Ensure process cleanup on app shutdown and project switch.
-- [ ] Implement `materials.ts` to accept only Mate-issued attachment/material references, verify current conversation/application scope, and project metadata without exposing source paths to Python or renderer.
+- [ ] Implement `materials.ts` to accept only CogSeed-issued attachment/material references, verify current conversation/application scope, and project metadata without exposing source paths to Python or renderer.
 - [ ] Implement `settings.ts` so API keys remain in the existing secret facade; renderer receives only configured/unconfigured state and safe non-secret fields.
 - [ ] Run `npm test -- --runInBand test/main/features/expense_workbench_adapter.test.ts`; expected result is PASS.
 - [ ] Commit the adapter: `git add src/main/features/expense_workbench test/main/features/expense_workbench_adapter.test.ts && git commit -m "feat: add expense workbench main adapter"`.
@@ -126,7 +126,7 @@ or:
 - Test: `test/main/quality/builtin-expense-agent.test.ts`, `test/main/features/agents_management_surface.test.ts`
 
 - [ ] Add an optional `management_surface?: string` field to the normalized Agent type and validate against a small registered surface set. Unknown values are ignored with a warning; absence preserves existing Agent behavior.
-- [ ] Add `"management_surface": "expense_workbench"` to the reimbursement agent spec and update its description to identify the Mate-managed workbench without mentioning a browser URL.
+- [ ] Add `"management_surface": "expense_workbench"` to the reimbursement agent spec and update its description to identify the CogSeed-managed workbench without mentioning a browser URL.
 - [ ] Add a management button beside Use/Edit/Disable only when the loaded Agent has a valid surface. The button must be keyboard accessible, localized and absent for CodeX, Hermes and ordinary marketplace agents.
 - [ ] Add a hidden management panel host in `index.html`; opening it records the selected agent surface and hides only the Agent detail content. Closing it restores the previous detail view and scroll position.
 - [ ] Add tests proving surface metadata survives builtin seed/load normalization, invalid values do not create a button, and the reimbursement surface does create one.

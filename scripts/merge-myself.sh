@@ -12,7 +12,7 @@
 #   scripts/merge-myself.sh            # 完整合入流程（默认）
 #   scripts/merge-myself.sh --check    # 只检查，不合并（合入前预览）
 #
-# 前置：必须在主 checkout（mate-agent/，分支 dev/niubaokang）执行。
+# 前置：必须在主 checkout（cogseed-agent/，分支 dev/niubaokang）执行。
 set -euo pipefail
 
 # 自动定位到本仓库根（脚本可能在任意目录被调用）

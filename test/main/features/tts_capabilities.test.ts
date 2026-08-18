@@ -11,11 +11,11 @@ import {
 } from '../../../src/main/features/tts_capabilities';
 
 const envKeys = [
-  'ORKAS_TTS_BASE_URL',
-  'ORKAS_TTS_API_KEY',
-  'ORKAS_TTS_MODEL',
-  'ORKAS_TTS_VOICE',
-  'ORKAS_TTS_FORMAT',
+  'COGSEED_TTS_BASE_URL',
+  'COGSEED_TTS_API_KEY',
+  'COGSEED_TTS_MODEL',
+  'COGSEED_TTS_VOICE',
+  'COGSEED_TTS_FORMAT',
 ] as const;
 const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 
@@ -43,10 +43,10 @@ describe('TTS runtime capabilities', () => {
   });
 
   it('publishes only a stable voice_ref and keeps the provider voice id host-side', async () => {
-    process.env.ORKAS_TTS_BASE_URL = 'https://example.invalid/v1';
-    process.env.ORKAS_TTS_API_KEY = 'secret';
-    process.env.ORKAS_TTS_MODEL = 'tts-model';
-    process.env.ORKAS_TTS_VOICE = 'configured-voice';
+    process.env.COGSEED_TTS_BASE_URL = 'https://example.invalid/v1';
+    process.env.COGSEED_TTS_API_KEY = 'secret';
+    process.env.COGSEED_TTS_MODEL = 'tts-model';
+    process.env.COGSEED_TTS_VOICE = 'configured-voice';
 
     const routes = await listTtsCapabilities();
     expect(routes).toHaveLength(1);
@@ -66,10 +66,10 @@ describe('TTS runtime capabilities', () => {
   });
 
   it('rejects an arbitrary legacy voice before a provider request', async () => {
-    process.env.ORKAS_TTS_BASE_URL = 'https://example.invalid/v1';
-    process.env.ORKAS_TTS_API_KEY = 'secret';
-    process.env.ORKAS_TTS_MODEL = 'tts-model';
-    process.env.ORKAS_TTS_VOICE = 'configured-voice';
+    process.env.COGSEED_TTS_BASE_URL = 'https://example.invalid/v1';
+    process.env.COGSEED_TTS_API_KEY = 'secret';
+    process.env.COGSEED_TTS_MODEL = 'tts-model';
+    process.env.COGSEED_TTS_VOICE = 'configured-voice';
 
     await expect(resolveTtsSelection({ legacyVoice: 'zh-CN-YunxiNeural' })).resolves.toMatchObject({
       ok: false,
@@ -78,10 +78,10 @@ describe('TTS runtime capabilities', () => {
   });
 
   it('does not send HTTP or mark a charge when generateSpeech receives an unresolved voice', async () => {
-    process.env.ORKAS_TTS_BASE_URL = 'https://example.invalid/v1';
-    process.env.ORKAS_TTS_API_KEY = 'secret';
-    process.env.ORKAS_TTS_MODEL = 'tts-model';
-    process.env.ORKAS_TTS_VOICE = 'configured-voice';
+    process.env.COGSEED_TTS_BASE_URL = 'https://example.invalid/v1';
+    process.env.COGSEED_TTS_API_KEY = 'secret';
+    process.env.COGSEED_TTS_MODEL = 'tts-model';
+    process.env.COGSEED_TTS_VOICE = 'configured-voice';
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
 
@@ -101,10 +101,10 @@ describe('TTS runtime capabilities', () => {
   });
 
   it('resolves the exact signed route and voice pair', async () => {
-    process.env.ORKAS_TTS_BASE_URL = 'https://example.invalid/v1';
-    process.env.ORKAS_TTS_API_KEY = 'secret';
-    process.env.ORKAS_TTS_MODEL = 'tts-model';
-    process.env.ORKAS_TTS_VOICE = 'configured-voice';
+    process.env.COGSEED_TTS_BASE_URL = 'https://example.invalid/v1';
+    process.env.COGSEED_TTS_API_KEY = 'secret';
+    process.env.COGSEED_TTS_MODEL = 'tts-model';
+    process.env.COGSEED_TTS_VOICE = 'configured-voice';
 
     const [route] = await listTtsCapabilities();
     const result = await resolveTtsSelection({
@@ -122,10 +122,10 @@ describe('TTS runtime capabilities', () => {
   });
 
   it('rejects a signed language that the configured voice does not support', async () => {
-    process.env.ORKAS_TTS_BASE_URL = 'https://example.invalid/v1';
-    process.env.ORKAS_TTS_API_KEY = 'secret';
-    process.env.ORKAS_TTS_MODEL = 'tts-model';
-    process.env.ORKAS_TTS_VOICE = 'configured-voice';
+    process.env.COGSEED_TTS_BASE_URL = 'https://example.invalid/v1';
+    process.env.COGSEED_TTS_API_KEY = 'secret';
+    process.env.COGSEED_TTS_MODEL = 'tts-model';
+    process.env.COGSEED_TTS_VOICE = 'configured-voice';
 
     const [route] = await listTtsCapabilities();
     await expect(resolveTtsSelection({

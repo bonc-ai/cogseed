@@ -38,7 +38,7 @@
  *       auth store (~/.local/share/opencode/auth.json) — real data, read-only.
  *
  * `category='official'` rows are skipped: they're the built-in
- * Anthropic/OpenAI/Google endpoints, already covered by Orkas's own catalog.
+ * Anthropic/OpenAI/Google endpoints, already covered by CogSeed's own catalog.
  */
 
 import * as os from 'node:os';

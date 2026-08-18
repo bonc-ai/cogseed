@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - 不修改 `src/main/ipc/messaging.ts` 或 `src/main/features/messaging/**`。
-- 不修改 `window.orkas` IPC 名称、参数、消息平台状态机和频道顺序。
+- 不修改 `window.cogseed` IPC 名称、参数、消息平台状态机和频道顺序。
 - 不引入 npm 依赖；渲染器继续使用 classic scripts。
 - 全局 `:root` 主题变量保持不变；配色调整限定在 `.messaging-*` 命名空间。
 - 只有二维码容器保留白色背景以维持扫描对比度，其他消息平台主体背景使用现有浅绿主题 token 或 `color-mix`。
@@ -324,14 +324,14 @@ Expected: `tsc --noEmit` 退出码 `0`；CSS-only 改动不应引入 TypeScript 
 - [ ] **Step 3: 重启当前工作树的 Mate 客户端**
 
 ```bash
-scripts/restart-mate.sh
+scripts/restart-cogseed.sh
 ```
 
 Expected: 当前 worktree 的 Mate 运行实例被重启；随后检查：
 
 ```bash
-ls -t ~/.orkas/runtime-variants/messaging/data/logs/*.log | head -1
-rg -n "error|uncaught|messaging" /tmp/mate-agent-messaging-run.log ~/.orkas/runtime-variants/messaging/data/logs/*.log
+ls -t ~/.cogseed/runtime-variants/messaging/data/logs/*.log | head -1
+rg -n "error|uncaught|messaging" /tmp/cogseed-agent-messaging-run.log ~/.cogseed/runtime-variants/messaging/data/logs/*.log
 ```
 
 Expected: 启动日志存在，未出现本次改动引起的启动异常；仅将真实错误作为失败处理，不把正常消息平台状态日志误判为故障。

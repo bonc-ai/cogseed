@@ -9,7 +9,7 @@ import * as path from 'node:path';
 // bridge host. Pins the riskiest seam: SDK absolute-path requires + zod
 // schemas + the socket RPC roundtrip.
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 const TEST_UID = 'u-bridge-e2e';
 let tmpDir: string;
@@ -17,10 +17,10 @@ let prevWs: string | undefined;
 let prevHome: string | undefined;
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bridge-e2e-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bridge-e2e-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevHome = process.env.HOME;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   process.env.HOME = path.join(tmpDir, 'home');
   fs.mkdirSync(path.join(tmpDir, 'home'), { recursive: true });
   vi.resetModules();
@@ -29,7 +29,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -75,7 +75,7 @@ class McpStdioClient {
 }
 
 describe('cogseed-bridge.cjs › MCP stdio e2e', () => {
-  it('initializes, lists tools, and proxies orkas_list_skills through the socket', async () => {
+  it('initializes, lists tools, and proxies cogseed_list_skills through the socket', async () => {
     // Fixture skill in the trusted custom root.
     const skillDir = path.join(tmpDir, TEST_UID, 'cloud', 'skills', 'demo-skill');
     fs.mkdirSync(skillDir, { recursive: true });
@@ -90,9 +90,9 @@ describe('cogseed-bridge.cjs › MCP stdio e2e', () => {
       runId: `e2e${Date.now().toString(36)}`,
       configDir: path.join(tmpDir, 'rundir'),
       sandboxEnv: {
-        ORKAS_NODE: TEST_NODE,
-        ORKAS_PC_DIR: process.cwd(),
-        ORKAS_WORKSPACE_ROOT: tmpDir,
+        COGSEED_NODE: TEST_NODE,
+        COGSEED_PC_DIR: process.cwd(),
+        COGSEED_WORKSPACE_ROOT: tmpDir,
         ELECTRON_RUN_AS_NODE: '1',
       },
     });
@@ -109,16 +109,16 @@ describe('cogseed-bridge.cjs › MCP stdio e2e', () => {
       const tools = await client.request(2, 'tools/list', {});
       const names = tools.result.tools.map((t: any) => t.name);
       expect(names).toEqual(expect.arrayContaining([
-        'orkas_list_skills', 'orkas_read_skill', 'orkas_run_skill',
-        'orkas_list_connector_tools', 'orkas_call_connector_tool',
-        'orkas_kb_list', 'orkas_kb_search', 'orkas_kb_read',
+        'cogseed_list_skills', 'cogseed_read_skill', 'cogseed_run_skill',
+        'cogseed_list_connector_tools', 'cogseed_call_connector_tool',
+        'cogseed_kb_list', 'cogseed_kb_search', 'cogseed_kb_read',
       ]));
 
-      const call = await client.request(3, 'tools/call', { name: 'orkas_list_skills', arguments: {} });
+      const call = await client.request(3, 'tools/call', { name: 'cogseed_list_skills', arguments: {} });
       const text = call.result.content[0].text as string;
       expect(text).toContain('demo-skill');
 
-      const read = await client.request(4, 'tools/call', { name: 'orkas_read_skill', arguments: { id: 'demo-skill' } });
+      const read = await client.request(4, 'tools/call', { name: 'cogseed_read_skill', arguments: { id: 'demo-skill' } });
       expect(read.result.content[0].text).toContain('body');
     } finally {
       client.kill();

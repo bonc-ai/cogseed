@@ -205,7 +205,7 @@ async function _stampSettingsVersion() {
 }
 
 // One-shot rename of legacy brand-prefixed localStorage keys
-// (`orkas_*` / `orkas.*`). Rationale lives in
+// (`cogseed_*` / `cogseed.*`). Rationale lives in
 // plans/decouple-session-id-from-brand.md: avoid breaking another wave
 // of user view state / drafts the next time the brand is renamed. After
 // stamping, subsequent boots are no-ops. Placed at the very start of
@@ -214,10 +214,10 @@ function _migrateLegacyLocalStorageKeys() {
   try {
     if (localStorage.getItem('_ls_brand_migration_v1')) return;
     const fixedMap = {
-      'orkas_last_view':           'last_view',
-      'orkas_search_history':      'search_history',
-      'orkas.chat.recipientByCid': 'chat.recipientByCid',
-      'orkas.kb-picker.last-dir':  'kb-picker.last-dir',
+      'cogseed_last_view':           'last_view',
+      'cogseed_search_history':      'search_history',
+      'cogseed.chat.recipientByCid': 'chat.recipientByCid',
+      'cogseed.kb-picker.last-dir':  'kb-picker.last-dir',
     };
     for (const [oldK, newK] of Object.entries(fixedMap)) {
       const v = localStorage.getItem(oldK);
@@ -229,12 +229,12 @@ function _migrateLegacyLocalStorageKeys() {
     const toRename = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && (k.startsWith('orkas_queue_') || k.startsWith('orkas_draft_'))) {
+      if (k && (k.startsWith('cogseed_queue_') || k.startsWith('cogseed_draft_'))) {
         toRename.push(k);
       }
     }
     for (const k of toRename) {
-      const newK = k.replace(/^orkas_/, '');
+      const newK = k.replace(/^cogseed_/, '');
       const v = localStorage.getItem(k);
       if (v != null && localStorage.getItem(newK) == null) {
         localStorage.setItem(newK, v);

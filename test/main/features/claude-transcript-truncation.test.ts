@@ -10,7 +10,7 @@ const tmpDirs: string[] = [];
 
 /** The reader sandboxes to `~/.claude/projects`, so tests must relocate HOME. */
 function mkProjectsHome(): string {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-claude-tx-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-claude-tx-'));
   tmpDirs.push(home);
   process.env.HOME = home;
   const dir = path.join(home, '.claude', 'projects', 'proj');
@@ -124,7 +124,7 @@ describe('claude transcript streaming reader', () => {
 
   it('rejects reads outside the projects root', async () => {
     mkProjectsHome();
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-claude-out-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-claude-out-'));
     tmpDirs.push(outside);
     const file = path.join(outside, 'evil.jsonl');
     fs.writeFileSync(file, turn(1, 'user') + '\n');

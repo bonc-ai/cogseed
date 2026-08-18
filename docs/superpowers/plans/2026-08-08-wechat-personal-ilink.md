@@ -327,7 +327,7 @@ git commit -m "feat(messaging): registry 支持 wechat_personal 凭据校验与�
 
 - [ ] **Step 1: 写失败测试**
 
-`test/main/features/messaging-wechat-state.test.ts`（复用 messaging.test.ts 的 tmpDir/ORKAS_WORKSPACE_ROOT 夹具模式）：
+`test/main/features/messaging-wechat-state.test.ts`（复用 messaging.test.ts 的 tmpDir/COGSEED_WORKSPACE_ROOT 夹具模式）：
 
 ```ts
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -339,16 +339,16 @@ let tmpDir = '';
 let previousRoot: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-wechat-state-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-wechat-state-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -663,16 +663,16 @@ let tmpDir = '';
 let previousRoot: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-wechat-adapter-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-wechat-adapter-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -1363,16 +1363,16 @@ let tmpDir = '';
 let previousRoot: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-wechat-reg-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-wechat-reg-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -1930,10 +1930,10 @@ Expected: 全部 PASS
 - [ ] **Step 2: 真实环境验证（遵循 AGENTS.md 的 messaging 验证流程）**
 
 ```bash
-cd PC && ./scripts/restart-mate.sh
+cd PC && ./scripts/restart-cogseed.sh
 ```
 
-- 确认启动：`~/.orkas/runtime-variants/messaging/data/logs/<date>.log` 无报错；`/tmp/mate-agent-messaging-run.log` 正常
+- 确认启动：`~/.cogseed/runtime-variants/messaging/data/logs/<date>.log` 无报错；`/tmp/cogseed-agent-messaging-run.log` 正常
 - 在设置页 → 消息平台 → 个人微信 → 扫码绑定：二维码展示 → 手机微信扫码确认 → 状态走 `scanned → completed` → 实例出现在列表
 - 微信中与 ClawBot 对话发"你好"：确认入站日志（`messaging inbound envelope received`）与回复送达
 - 第二条消息验证 burst merge（连续两条快速消息合并为一轮回复）

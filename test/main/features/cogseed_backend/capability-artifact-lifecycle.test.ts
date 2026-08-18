@@ -7,22 +7,22 @@ let workspaceRoot: string;
 let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
-  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-artifacts-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = workspaceRoot;
+  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-artifacts-'));
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = workspaceRoot;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
 describe('CogSeed capability artifact lifecycle', () => {
   it('preserves the first artifact registered before a manifest exists', async () => {
-    const { createMateCapabilityArtifactRegistry } = await import('../../../../src/main/features/cogseed_backend/capability-artifact-lifecycle');
-    const registry = createMateCapabilityArtifactRegistry();
+    const { createCogSeedCapabilityArtifactRegistry } = await import('../../../../src/main/features/cogseed_backend/capability-artifact-lifecycle');
+    const registry = createCogSeedCapabilityArtifactRegistry();
     const scope = { userId: 'artifact-user', runtimeSessionId: 'mruntime-artifacts' };
 
     const outputPath = path.join(workspaceRoot, 'report.docx');

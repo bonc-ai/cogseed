@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createMateBrowserManager } from '../../../../src/main/features/cogseed_backend/browser-manager';
+import { createCogSeedBrowserManager } from '../../../../src/main/features/cogseed_backend/browser-manager';
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
@@ -32,7 +32,7 @@ function harness() {
     destroy: vi.fn(() => { win.destroyed = true; }),
   };
   const createWindow = vi.fn(() => win);
-  return { manager: createMateBrowserManager({ createWindow }), createWindow, win, scripts };
+  return { manager: createCogSeedBrowserManager({ createWindow }), createWindow, win, scripts };
 }
 
 describe('CogSeed browser manager', () => {
@@ -71,7 +71,7 @@ describe('CogSeed browser manager', () => {
   });
 
   it('writes screenshots only under writable roots and disposes the session', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-browser-')); dirs.push(dir);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-browser-')); dirs.push(dir);
     const h = harness(); await h.manager.open(scope(dir), 'https://example.com');
     const output = path.join(dir, 'shot.png');
     const shot = await h.manager.screenshot(scope(dir), output); expect(shot.isError).toBeFalsy();

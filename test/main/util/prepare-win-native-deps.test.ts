@@ -38,7 +38,7 @@ describe('prepare-win-native-deps Windows filesystem behavior', () => {
   });
 
   it('prunes only matching native package directories', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-win-native-prune-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-win-native-prune-'));
     fixtureDirs.push(root);
     for (const name of ['win32-x64', 'darwin-x64', 'linux-x64']) {
       fs.mkdirSync(path.join(root, name), { recursive: true });

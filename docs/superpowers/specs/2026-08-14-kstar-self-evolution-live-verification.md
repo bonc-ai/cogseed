@@ -1,7 +1,7 @@
 # KStar 自进化闭环实机验证场景（无确认版）
 
 > 日期：2026-08-14（23:43 重启）
-> 实例：source Electron（Mate-Backend-Test，variant=cogseed，PID 96127）
+> 实例：source Electron（CogSeed-Backend-Test，variant=cogseed，PID 96127）
 > 数据根：`~/.cogseed/runtime-variants/cogseed/data`（uid 78967691）
 > 代码：`76b42dde`（取消复盘确认）+ `5ab8d4ce`（kstar_control 调用示例）+ `5674d0d9`（ONCE 修复）+ `373e93a9`（路由提升）
 > 目的：验证**零用户确认**的完整自进化闭环（常规措辞 → 治理线 → 预测 → 执行 → 自动复盘 → 自动沉淀）

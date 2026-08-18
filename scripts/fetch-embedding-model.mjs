@@ -45,7 +45,7 @@ function allFilesPresent() {
 function download(url, outPath) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(outPath);
-    const req = https.get(url, { headers: { 'User-Agent': 'orkas-postinstall' } }, (res) => {
+    const req = https.get(url, { headers: { 'User-Agent': 'cogseed-postinstall' } }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         file.close();

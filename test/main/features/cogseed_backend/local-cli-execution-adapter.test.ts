@@ -51,8 +51,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       input.onEvent({ type: 'done', status: 'completed', output: 'final CLI answer', sessionId: 'cli-session-1' });
       return { runId: 'run-cli-1', status: 'completed', output: 'final CLI answer', sessionId: 'cli-session-1' };
     });
-    const { createMateLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
-    const adapter = createMateLocalCliExecutionAdapter({
+    const { createCogSeedLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createCogSeedLocalCliExecutionAdapter({
       runCli,
       getSessionId: vi.fn(async () => null),
       setSessionId,
@@ -66,8 +66,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       agentId: 'agent-cli-adapter',
       agentName: 'CLI Agent',
       requestId: 'req-cli-adapter',
-      taskId: 'mate-task-cli-adapter',
-      sessionId: 'mate-session-cli-adapter',
+      taskId: 'cogseed-task-cli-adapter',
+      sessionId: 'cogseed-session-cli-adapter',
       runtimeSessionId: 'mruntime-cli-adapter',
       task: 'Implement the change.',
       context: [{ type: 'text', content: 'Follow the persisted workflow.' }],
@@ -108,8 +108,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       input.onEvent({ type: 'done', status: 'completed', output: 'fresh continuation', sessionId: 'cli-session-new' });
       return { runId: 'run-new', status: 'completed', output: 'fresh continuation', sessionId: 'cli-session-new' };
     });
-    const { createMateLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
-    const adapter = createMateLocalCliExecutionAdapter({
+    const { createCogSeedLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createCogSeedLocalCliExecutionAdapter({
       runCli,
       getSessionId: vi.fn(async () => 'cli-session-old'),
       setSessionId: vi.fn(async () => {}),
@@ -123,8 +123,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       agentId: 'agent-cli-adapter',
       agentName: 'CLI Agent',
       requestId: 'req-cli-continuation',
-      taskId: 'mate-task-cli-continuation',
-      sessionId: 'mate-session-cli-continuation',
+      taskId: 'cogseed-task-cli-continuation',
+      sessionId: 'cogseed-session-cli-continuation',
       runtimeSessionId: 'mruntime-cli-continuation',
       task: 'Only this continuation.',
       context: [],
@@ -148,8 +148,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       input.onEvent({ type: 'done', status: 'completed', output: 'ok', sessionId: 'cli-session-space' });
       return { runId: 'run-space', status: 'completed', output: 'ok', sessionId: 'cli-session-space' };
     });
-    const { createMateLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
-    const adapter = createMateLocalCliExecutionAdapter({
+    const { createCogSeedLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createCogSeedLocalCliExecutionAdapter({
       runCli,
       getSessionId: vi.fn(async () => null),
       setSessionId: vi.fn(async () => {}),
@@ -162,8 +162,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       agentId: 'agent-cli-adapter',
       agentName: 'CLI Agent',
       requestId: 'req-cli-space',
-      taskId: 'mate-task-cli-space',
-      sessionId: 'mate-session-cli-space',
+      taskId: 'cogseed-task-cli-space',
+      sessionId: 'cogseed-session-cli-space',
       runtimeSessionId: 'mruntime-cli-space',
       task: 'Space task.',
       context: [],
@@ -195,8 +195,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       input.onEvent({ type: 'done', status: 'completed', output: 'ok', sessionId: 'cli-session-custom' });
       return { runId: 'run-custom', status: 'completed', output: 'ok', sessionId: 'cli-session-custom' };
     });
-    const { createMateLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
-    const adapter = createMateLocalCliExecutionAdapter({
+    const { createCogSeedLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createCogSeedLocalCliExecutionAdapter({
       runCli,
       getSessionId: vi.fn(async () => null),
       setSessionId: vi.fn(async () => {}),
@@ -209,8 +209,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       agentId: 'agent-cli-adapter',
       agentName: 'CLI Agent',
       requestId: 'req-cli-custom',
-      taskId: 'mate-task-cli-custom',
-      sessionId: 'mate-session-cli-custom',
+      taskId: 'cogseed-task-cli-custom',
+      sessionId: 'cogseed-session-cli-custom',
       runtimeSessionId: 'mruntime-cli-custom',
       task: 'Custom dir task.',
       context: [],
@@ -223,8 +223,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
 
   it('routes a viaP3394Gateway config through the managed gateway and maps the reply', async () => {
     gatewayTurnMock.runP3394GatewayTurn.mockResolvedValueOnce({ text: 'gateway reply text' });
-    const { createMateLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
-    const adapter = createMateLocalCliExecutionAdapter({ runCli: vi.fn() } as any);
+    const { createCogSeedLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createCogSeedLocalCliExecutionAdapter({ runCli: vi.fn() } as any);
 
     const events = await collect(adapter.run({
       userId: 'cli-adapter-user',
@@ -232,8 +232,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       agentId: 'agent-cli-adapter',
       agentName: 'ClaudeCode',
       requestId: 'req-cli-gateway',
-      taskId: 'mate-task-cli-gateway',
-      sessionId: 'mate-session-cli-gateway',
+      taskId: 'cogseed-task-cli-gateway',
+      sessionId: 'cogseed-session-cli-gateway',
       runtimeSessionId: 'mruntime-cli-gateway',
       task: 'Review this via gateway.',
       context: [],
@@ -253,8 +253,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
     gatewayTurnMock.runP3394GatewayTurn.mockResolvedValueOnce({
       text: '', failureCode: 'p3394_reply_timeout', error: 'timed out waiting for reply',
     });
-    const { createMateLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
-    const adapter = createMateLocalCliExecutionAdapter({ runCli: vi.fn() } as any);
+    const { createCogSeedLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createCogSeedLocalCliExecutionAdapter({ runCli: vi.fn() } as any);
 
     const events = await collect(adapter.run({
       userId: 'cli-adapter-user',
@@ -262,8 +262,8 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       agentId: 'agent-cli-adapter',
       agentName: 'ClaudeCode',
       requestId: 'req-cli-gw-fail',
-      taskId: 'mate-task-cli-gw-fail',
-      sessionId: 'mate-session-cli-gw-fail',
+      taskId: 'cogseed-task-cli-gw-fail',
+      sessionId: 'cogseed-session-cli-gw-fail',
       runtimeSessionId: 'mruntime-cli-gw-fail',
       task: 'Fail via gateway.',
       context: [],

@@ -737,13 +737,13 @@ forecast_projection_mismatch
 npm run typecheck
 npm test -- <定向用例由 scripts/run-tests.mjs 实际承载>
 npm test
-scripts/restart-mate.sh
+scripts/restart-cogseed.sh
 ```
 
 重启后检查：
 
 - `~/.cogseed/runtime-variants/messaging/data/logs/<date>.log`
-- `/tmp/mate-agent-messaging-run.log`
+- `/tmp/cogseed-agent-messaging-run.log`
 
 真实环境验证：
 

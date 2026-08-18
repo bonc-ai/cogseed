@@ -31,7 +31,7 @@
 import { chatWithModel } from '../../model/core-agent/client';
 import { createLogger } from '../../logger';
 import {
-  estimateTokens,
+  esticogseedTokens,
   renderTranscript,
   type NormalizedTranscript,
   type TranscriptTurn,
@@ -155,7 +155,7 @@ function chunkTurns(turns: TranscriptTurn[]): TranscriptTurn[][] {
   let currentTokens = 0;
 
   for (const turn of turns) {
-    const turnTokens = estimateTokens(turn.text);
+    const turnTokens = esticogseedTokens(turn.text);
     if (currentTokens + turnTokens > CHUNK_TOKEN_BUDGET && current.length) {
       chunks.push(current);
       current = [];

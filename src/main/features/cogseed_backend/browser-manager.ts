@@ -2,10 +2,10 @@ import * as fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 
-import { mateRuntimeSessionToolResultsDir } from '../../paths';
+import { cogseedRuntimeSessionToolResultsDir } from '../../paths';
 import { isPathAllowed } from '../../util/path-sandbox';
-import type { MateHostToolResult, MateHostToolScope } from './office-adapter';
-import { mateCapabilityArtifactRegistry, type MateCapabilityArtifactRegistry } from './capability-artifact-lifecycle';
+import type { CogSeedHostToolResult, CogSeedHostToolScope } from './office-adapter';
+import { cogseedCapabilityArtifactRegistry, type CogSeedCapabilityArtifactRegistry } from './capability-artifact-lifecycle';
 
 interface BrowserImageLike { toPNG(): Buffer }
 interface BrowserWebContentsLike {
@@ -17,36 +17,36 @@ interface BrowserWebContentsLike {
   stop?(): void;
   session?: { webRequest?: { onBeforeRequest(filter: { urls: string[] }, listener: (details: { url: string }, callback: (response: { cancel: boolean }) => void) => void): void } };
 }
-export interface MateBrowserWindowLike {
+export interface CogSeedBrowserWindowLike {
   loadURL(url: string): Promise<unknown>;
   getTitle?(): string;
   webContents: BrowserWebContentsLike;
   isDestroyed(): boolean;
   destroy(): void;
 }
-export interface MateBrowserWindowOptions {
+export interface CogSeedBrowserWindowOptions {
   show: false;
   webPreferences: { nodeIntegration: false; contextIsolation: true; sandbox: true; partition: string };
 }
 
-export interface MateBrowserManagerDeps {
-  createWindow?: (options: MateBrowserWindowOptions) => MateBrowserWindowLike | Promise<MateBrowserWindowLike>;
-  artifactRegistry?: MateCapabilityArtifactRegistry;
+export interface CogSeedBrowserManagerDeps {
+  createWindow?: (options: CogSeedBrowserWindowOptions) => CogSeedBrowserWindowLike | Promise<CogSeedBrowserWindowLike>;
+  artifactRegistry?: CogSeedCapabilityArtifactRegistry;
 }
 
 interface BrowserSession {
-  window: MateBrowserWindowLike;
+  window: CogSeedBrowserWindowLike;
   refs: Map<number, { tag: string; role?: string }>;
   blockedUrl?: string;
   ownedArtifacts: Set<string>;
 }
 
-export interface MateBrowserManager {
-  open(scope: MateHostToolScope, url: string, opts?: { signal?: AbortSignal | null }): Promise<MateHostToolResult>;
-  snapshot(scope: MateHostToolScope, maxChars?: number): Promise<MateHostToolResult>;
-  click(scope: MateHostToolScope, ref: number): Promise<MateHostToolResult>;
-  type(scope: MateHostToolScope, ref: number, text: string, submit?: boolean): Promise<MateHostToolResult>;
-  screenshot(scope: MateHostToolScope, outputPath?: string): Promise<MateHostToolResult>;
+export interface CogSeedBrowserManager {
+  open(scope: CogSeedHostToolScope, url: string, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult>;
+  snapshot(scope: CogSeedHostToolScope, maxChars?: number): Promise<CogSeedHostToolResult>;
+  click(scope: CogSeedHostToolScope, ref: number): Promise<CogSeedHostToolResult>;
+  type(scope: CogSeedHostToolScope, ref: number, text: string, submit?: boolean): Promise<CogSeedHostToolResult>;
+  screenshot(scope: CogSeedHostToolScope, outputPath?: string): Promise<CogSeedHostToolResult>;
   dispose(userId: string, runtimeSessionId: string): Promise<void>;
   disposeAll(): Promise<void>;
 }
@@ -56,7 +56,7 @@ const MAX_SNAPSHOT_CHARS = 50_000;
 const MAX_TYPE_CHARS = 20_000;
 
 function key(userId: string, runtimeSessionId: string) { return `${userId}\0${runtimeSessionId}`; }
-function fail(code: string, message: string): MateHostToolResult { return { content: `[${code}] ${message}`, isError: true }; }
+function fail(code: string, message: string): CogSeedHostToolResult { return { content: `[${code}] ${message}`, isError: true }; }
 
 function publicUrl(raw: string): URL | null {
   let parsed: URL;
@@ -74,23 +74,23 @@ const SNAPSHOT_SCRIPT = String.raw`(() => {
   const __MATE_BROWSER_SNAPSHOT__ = true;
   const visible = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return s.visibility !== 'hidden' && s.display !== 'none' && r.width > 0 && r.height > 0; };
   const candidates = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]')).filter(visible).slice(0, 300);
-  const elements = candidates.map((el, index) => { const ref = index + 1; el.setAttribute('data-mate-ref', String(ref)); return { ref, tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || undefined, label: (el.getAttribute('aria-label') || el.textContent || el.getAttribute('placeholder') || '').trim().slice(0, 500), type: (el.getAttribute('type') || '').toLowerCase(), value: ((el.getAttribute('type') || '').toLowerCase() === 'password' ? '' : ('value' in el ? String(el.value || '') : '')).slice(0, 1000) }; });
+  const elements = candidates.map((el, index) => { const ref = index + 1; el.setAttribute('data-cogseed-ref', String(ref)); return { ref, tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || undefined, label: (el.getAttribute('aria-label') || el.textContent || el.getAttribute('placeholder') || '').trim().slice(0, 500), type: (el.getAttribute('type') || '').toLowerCase(), value: ((el.getAttribute('type') || '').toLowerCase() === 'password' ? '' : ('value' in el ? String(el.value || '') : '')).slice(0, 1000) }; });
   return { url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 50000), elements };
 })()`;
 
-export function createMateBrowserManager(deps: MateBrowserManagerDeps = {}): MateBrowserManager {
+export function createCogSeedBrowserManager(deps: CogSeedBrowserManagerDeps = {}): CogSeedBrowserManager {
   const sessions = new Map<string, BrowserSession>();
   const createWindow = deps.createWindow ?? (async (options) => {
     const electron = await import('electron');
-    return new electron.BrowserWindow(options) as unknown as MateBrowserWindowLike;
+    return new electron.BrowserWindow(options) as unknown as CogSeedBrowserWindowLike;
   });
-  const artifactRegistry = deps.artifactRegistry ?? mateCapabilityArtifactRegistry;
+  const artifactRegistry = deps.artifactRegistry ?? cogseedCapabilityArtifactRegistry;
 
-  async function ensure(scope: MateHostToolScope): Promise<BrowserSession> {
+  async function ensure(scope: CogSeedHostToolScope): Promise<BrowserSession> {
     const id = key(scope.userId, scope.runtimeSessionId);
     const current = sessions.get(id);
     if (current && !current.window.isDestroyed()) return current;
-    const partition = `mate-runtime-${createHash('sha256').update(id).digest('hex').slice(0, 32)}`;
+    const partition = `cogseed-runtime-${createHash('sha256').update(id).digest('hex').slice(0, 32)}`;
     const window = await createWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition } });
     const state: BrowserSession = { window, refs: new Map(), ownedArtifacts: new Set() };
     window.webContents.setWindowOpenHandler?.(() => ({ action: 'deny' }));
@@ -102,12 +102,12 @@ export function createMateBrowserManager(deps: MateBrowserManagerDeps = {}): Mat
     return state;
   }
 
-  function current(scope: MateHostToolScope): BrowserSession | undefined {
+  function current(scope: CogSeedHostToolScope): BrowserSession | undefined {
     const state = sessions.get(key(scope.userId, scope.runtimeSessionId));
     return state && !state.window.isDestroyed() ? state : undefined;
   }
 
-  async function registerScreenshot(scope: MateHostToolScope, output: string, owned: boolean): Promise<string> {
+  async function registerScreenshot(scope: CogSeedHostToolScope, output: string, owned: boolean): Promise<string> {
     const artifactId = `browser-screenshot-${randomUUID()}`;
     if (artifactRegistry) await artifactRegistry.register({ userId: scope.userId, runtimeSessionId: scope.runtimeSessionId }, { kind: 'browser-screenshot', path: output, owned }).catch(() => undefined);
     return artifactId;
@@ -165,7 +165,7 @@ export function createMateBrowserManager(deps: MateBrowserManagerDeps = {}): Mat
       const state = current(scope); if (!state) return fail('E_BROWSER_SESSION', 'open a page before clicking');
       if (!Number.isInteger(ref) || !state.refs.has(ref)) return fail('E_BROWSER_REF', 'ref is not present in the latest snapshot');
       try {
-        const result = await state.window.webContents.executeJavaScript(`(() => { const el = document.querySelector('[data-mate-ref="${ref}"]'); if (!el) return {ok:false}; el.click(); return {ok:true,url:location.href,title:document.title}; })()`, true);
+        const result = await state.window.webContents.executeJavaScript(`(() => { const el = document.querySelector('[data-cogseed-ref="${ref}"]'); if (!el) return {ok:false}; el.click(); return {ok:true,url:location.href,title:document.title}; })()`, true);
         state.refs.clear();
         const finalUrl = String(result?.url || state.window.webContents.getURL());
         if (!publicUrl(finalUrl)) {
@@ -182,7 +182,7 @@ export function createMateBrowserManager(deps: MateBrowserManagerDeps = {}): Mat
       if (typeof text !== 'string' || text.length > MAX_TYPE_CHARS) return fail('E_BROWSER_INPUT', `text must be at most ${MAX_TYPE_CHARS} characters`);
       try {
         const encoded = JSON.stringify(text); const submitFlag = submit ? 'true' : 'false';
-        const result = await state.window.webContents.executeJavaScript(`(() => { const el = document.querySelector('[data-mate-ref="${ref}"]'); if (!el) return {ok:false}; const value=${encoded}; el.focus(); if ('value' in el) el.value=value; else el.textContent=value; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); if (${submitFlag}) { el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true})); if (el.form?.requestSubmit) el.form.requestSubmit(); } return {ok:true,url:location.href,title:document.title}; })()`, true);
+        const result = await state.window.webContents.executeJavaScript(`(() => { const el = document.querySelector('[data-cogseed-ref="${ref}"]'); if (!el) return {ok:false}; const value=${encoded}; el.focus(); if ('value' in el) el.value=value; else el.textContent=value; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); if (${submitFlag}) { el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true})); if (el.form?.requestSubmit) el.form.requestSubmit(); } return {ok:true,url:location.href,title:document.title}; })()`, true);
         if (!result?.ok) return fail('E_BROWSER_REF', 'element is no longer available');
         const finalUrl = String(result?.url || state.window.webContents.getURL());
         if (!publicUrl(finalUrl)) {
@@ -195,7 +195,7 @@ export function createMateBrowserManager(deps: MateBrowserManagerDeps = {}): Mat
     },
     async screenshot(scope, rawOutput) {
       const state = current(scope); if (!state) return fail('E_BROWSER_SESSION', 'open a page before taking a screenshot');
-      const output = rawOutput ? path.resolve(scope.workingDir ?? '.', rawOutput) : path.join(mateRuntimeSessionToolResultsDir(scope.userId, scope.runtimeSessionId), `browser-${Date.now().toString(36)}.png`);
+      const output = rawOutput ? path.resolve(scope.workingDir ?? '.', rawOutput) : path.join(cogseedRuntimeSessionToolResultsDir(scope.userId, scope.runtimeSessionId), `browser-${Date.now().toString(36)}.png`);
       if (rawOutput && (!scope.writableRoots.length || !isPathAllowed(output, scope.writableRoots))) return fail('E_PATH_OUT_OF_SCOPE', 'browser screenshot path is outside writable Runtime roots');
       if (path.extname(output).toLowerCase() !== '.png') return fail('E_BROWSER_INPUT', 'browser screenshot output must be .png');
       try {
@@ -221,4 +221,4 @@ export function createMateBrowserManager(deps: MateBrowserManagerDeps = {}): Mat
   };
 }
 
-export const mateBrowserManager = createMateBrowserManager();
+export const cogseedBrowserManager = createCogSeedBrowserManager();

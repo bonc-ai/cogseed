@@ -8,7 +8,7 @@ vi.mock('../../../../src/main/logger', () => ({
 }));
 
 // indexer.ts pulls path constants from paths.ts at module load. Each test sets
-// ORKAS_WORKSPACE_ROOT before resetting the module graph so a fresh tmp WS
+// COGSEED_WORKSPACE_ROOT before resetting the module graph so a fresh tmp WS
 // is in effect. Module-level `_cache` / `_locks` / `_flushTimers` are also
 // reset because vi.resetModules() re-imports indexer fresh.
 
@@ -17,16 +17,16 @@ let prevWs: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-indexer-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-indexer-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(TEST_UID);
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

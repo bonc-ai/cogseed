@@ -31,13 +31,13 @@ A skill is **an independent tool capability**, not a tutorial. When the LLM sees
 ## Hard rules (non-negotiable)
 
 - **Mutation only via lightweight metadata tags or `<<<skill-file>>>` blocks.** Use metadata tags for metadata-only changes (`name`, `description`, optional `description_zh`, optional `description_en`, `category`, and routing hints). Use `<<<skill-file>>>` for file content changes. Do NOT use `edit_file` / `write_file` / `bash` (with redirects) to mutate any file under the skill directory. Read for inspection is allowed; every write goes through the parsed protocol so skill rename / registry invalidation / progress events run correctly.
-- **Bundled scripts use the standard Skill Runner only.** Every command in SKILL.md that executes a bundled script must call `"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs"` with the skill name/id and script basename. Never construct, expose, or invoke a path under the skill installation directory; never rely on the caller's current working directory. Imported skills are adapted to this entrypoint before they are considered usable.
+- **Bundled scripts use the standard Skill Runner only.** Every command in SKILL.md that executes a bundled script must call `"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs"` with the skill name/id and script basename. Never construct, expose, or invoke a path under the skill installation directory; never rely on the caller's current working directory. Imported skills are adapted to this entrypoint before they are considered usable.
 - **Do NOT dump the container or any inner block as a workspace file.** The server parses them inline and persists to `<skill_dir>/<path>`.
 - **Explicit creation intent required.** Do not create a custom skill merely because the user provided a URL, file, repo, README, or tool docs. Create/import only when the user's wording names skill creation/import, asks to convert material into a skill, or is already inside a per-skill creation/edit flow. If intent is ambiguous, ask one short clarification or use the package installer for a plain install.
 - **Cross-skill writes are no longer supported.** Inside an inline edit chat, only the current skill's directory is writable. Do not try `<<<skill-file skill=...>>>` (deprecated).
 - **Do not hard-code other skill names inside skill content.** Skills are independent and names may change. In `SKILL.md`, references, scripts, examples, boundary text, and routing notes, do not tell the caller to invoke another skill by display name, directory name, or internal id. Describe only this skill's own capability and non-goals; put multi-skill routing in the main conversation LLM or an agent workflow.
-- **One `<skill>` container per skill being created/edited this turn.** Several are allowed when the user requested multiple distinct skills or when the source contains multiple existing `SKILL.md` files. Do not merge multiple source skills into one Orkas skill. End the turn after — do NOT call `dispatch_to`.
-- **Source-preservation default.** When the user supplies existing source content as the reference (URL, directory, attachment, pasted `SKILL.md`, scripts, references, examples, or a prior skill package), treat it as an already-working skill and preserve its core content. If the source clearly contains a `SKILL.md`, restore that skill as faithfully as possible. Only adapt Orkas-required metadata, command/tool compatibility, and obvious non-runtime clutter. Do NOT replace the source body, scripts, or reference files with a generic template unless the user explicitly asks for a rewrite.
+- **One `<skill>` container per skill being created/edited this turn.** Several are allowed when the user requested multiple distinct skills or when the source contains multiple existing `SKILL.md` files. Do not merge multiple source skills into one CogSeed skill. End the turn after — do NOT call `dispatch_to`.
+- **Source-preservation default.** When the user supplies existing source content as the reference (URL, directory, attachment, pasted `SKILL.md`, scripts, references, examples, or a prior skill package), treat it as an already-working skill and preserve its core content. If the source clearly contains a `SKILL.md`, restore that skill as faithfully as possible. Only adapt CogSeed-required metadata, command/tool compatibility, and obvious non-runtime clutter. Do NOT replace the source body, scripts, or reference files with a generic template unless the user explicitly asks for a rewrite.
 - **No silent defaults, no silent residue.** Before the final reply for any create / edit / import, run the category sanity pass and final resource audit below. Do not say "done" while the category is merely the fallback `general` or while unrelated installer / repository files remain in the skill directory.
 - **Output language follows the user's UI language** — every human-readable part of the SKILL.md you author (section titles, body prose, example labels, `## When to use` / `## How to call` / etc. — write them in the user's UI language, e.g. `## 何时使用` / `## 如何调用` for Chinese UI) plus the conversation prose around the `<skill>` container all go in the user's current UI language (per the "User language" directive in the system prompt; that directive's coverage applies even though this file reaches you as a `read_file` result). The SKILL.md `description` uses the same current UI language by default and keeps the three-part dispatch format. Only emit both `description_zh` and `description_en` when the user explicitly asks for multilingual/bilingual support. Code blocks, file paths, frontmatter field names (`name` / `description`), `<<<skill-file>>>` syntax, and skill_id strings stay as-is. The English used in this file (including the section names listed in "Quality bar — SKILL.md body" below) is illustrative shape, not literal text to copy.
 
@@ -165,11 +165,11 @@ description: ① 一句功能 ;② 适合"用户原话1""用户原话2";③ 触�
 </skill>
 ```
 
-For metadata-only edits, omit all `<<<skill-file>>>` blocks and emit only the changed metadata tags. For new skill creation, still include a full `SKILL.md` block because `name`, description, and body must be initialized together; emit `<category>` beside it so Orkas can store category in `_meta.json`.
+For metadata-only edits, omit all `<<<skill-file>>>` blocks and emit only the changed metadata tags. For new skill creation, still include a full `SKILL.md` block because `name`, description, and body must be initialized together; emit `<category>` beside it so CogSeed can store category in `_meta.json`.
 
 ## Quality bar — frontmatter
 
-**SKILL.md frontmatter has exactly two portable fields, both required**: `name` + `description`. **No** `description_zh` / `description_en` / `category` / `requires` / `external_deps` / `tags` / `version` in SKILL.md. Orkas-only metadata is emitted through metadata tags and stored in `_meta.json`; external dependencies go in the body's "External dependencies" section as plain text.
+**SKILL.md frontmatter has exactly two portable fields, both required**: `name` + `description`. **No** `description_zh` / `description_en` / `category` / `requires` / `external_deps` / `tags` / `version` in SKILL.md. CogSeed-only metadata is emitted through metadata tags and stored in `_meta.json`; external dependencies go in the body's "External dependencies" section as plain text.
 
 ### `name`
 
@@ -193,7 +193,7 @@ Example (Chinese): `抓取小红书 / Reddit / X / Bilibili / YouTube 上指定�
 
 Example (English): `Fetch posts matching given keywords on Xiaohongshu / Reddit / X / Bilibili / YouTube and produce sentiment/trend analysis; For: 'analyze the latest X discussion on Xiaohongshu', 'check Reddit sentiment for product Y'; Triggers: fetch, find, analyze, sentiment, buzz`
 
-### `category` — Orkas metadata bucket (required)
+### `category` — CogSeed metadata bucket (required)
 
 Pick one code from this fixed marketplace category list:
 
@@ -304,22 +304,22 @@ Add implementation-specific subsections only when they are needed:
 Single entry point template (write this in the body's "How to call" section):
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" <skill-id-or-name> <script-basename> -- [args...]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" <skill-id-or-name> <script-basename> -- [args...]
 ```
 
-**Do NOT prefix the command with `bash`** — the command execution tool runs `command` itself; a `bash` prefix tells the shell to execute the Electron binary as a script and produces "cannot execute binary file". The command starts with `"$ORKAS_NODE"`; keep both runner path parts quoted because app paths can contain spaces. The `<script-basename>` does NOT include the extension — only one file per basename per directory. Keep the standalone `--` before script arguments so runner options and script options cannot be confused.
+**Do NOT prefix the command with `bash`** — the command execution tool runs `command` itself; a `bash` prefix tells the shell to execute the Electron binary as a script and produces "cannot execute binary file". The command starts with `"$COGSEED_NODE"`; keep both runner path parts quoted because app paths can contain spaces. The `<script-basename>` does NOT include the extension — only one file per basename per directory. Keep the standalone `--` before script arguments so runner options and script options cannot be confused.
 
-Use this exact Orkas runner shape for cross-platform skill execution. It is handled by Orkas's direct CLI path; generic Unix shell pipelines remain OS/shell-specific and should not be the primary implementation of a new skill.
+Use this exact CogSeed runner shape for cross-platform skill execution. It is handled by CogSeed's direct CLI path; generic Unix shell pipelines remain OS/shell-specific and should not be the primary implementation of a new skill.
 
 The runner picks the runtime by file extension:
 - `.py` → `python3` (Windows automatically tries `py -3` → `python`). **Default language; broadest coverage**.
 - `.ts` / `.mjs` / `.js` → require + default export. **`.ts` scripts MUST `export default async function(args)`**, return JSON-serializable result, runner auto-`JSON.stringify`s it to stdout.
 - `.ps1` → PowerShell (`-NoProfile -ExecutionPolicy Bypass`) for Windows-native workflows.
 - `.cmd` / `.bat` → `cmd.exe` for Windows-native batch workflows.
-- `.sh` → `bash` / a POSIX-compatible shell. On native Windows this requires Git Bash (`ORKAS_GIT_BASH_PATH` or Git for Windows); do not choose it for newly authored Orkas skills.
+- `.sh` → `bash` / a POSIX-compatible shell. On native Windows this requires Git Bash (`COGSEED_GIT_BASH_PATH` or Git for Windows); do not choose it for newly authored CogSeed skills.
 - `.rb` → `ruby`.
 
-In subprocess mode, stdio is passed through, exit code propagated, the script handles argv / stdout / errors itself. The runner injects `ORKAS_SKILL_ID` / `ORKAS_SKILL_DIR` (pointing at the skill root) so the script can address its bundled resource files.
+In subprocess mode, stdio is passed through, exit code propagated, the script handles argv / stdout / errors itself. The runner injects `COGSEED_SKILL_ID` / `COGSEED_SKILL_DIR` (pointing at the skill root) so the script can address its bundled resource files.
 
 `.py` skeleton (recommended default):
 
@@ -350,7 +350,7 @@ Other languages: take params from argv, write JSON / text to stdout, non-zero ex
 - Scripts must NOT invoke other skills' scripts via bash.
 - Orchestration is the main conversation LLM / agent's job, not the skill's.
 
-If the source material the user gives is a multi-skill package: install each source `SKILL.md` as an independent skill. Preserve each sub-skill's own files and boundaries; do not consolidate them into a single "suite" skill. If the source has mutual dependencies, make each imported skill self-contained only where Orkas execution requires it — do not rewrite or merge just to simplify the package.
+If the source material the user gives is a multi-skill package: install each source `SKILL.md` as an independent skill. Preserve each sub-skill's own files and boundaries; do not consolidate them into a single "suite" skill. If the source has mutual dependencies, make each imported skill self-contained only where CogSeed execution requires it — do not rewrite or merge just to simplify the package.
 
 ## Three creation modes (per-skill inline edit chat)
 
@@ -388,7 +388,7 @@ All files in the directory have already been copied into this skill's directory.
 
 ### Modes B / C — Import optimization rules (NOT applicable to Mode A)
 
-**Mental model**: importing is **minimum-invasive restoration** — the original skill is already a working tool; keep it as the author wrote it. Only do three things: ① adapt the SKILL.md frontmatter to the portable `name` + `description` shape while moving Orkas-only metadata into metadata tags; ② make the smallest necessary command/tool compatibility adjustments; ③ delete obvious meta/build/dependency clutter unrelated to "being invoked by the LLM". **Forbidden**: rewriting the SKILL.md body / refactoring script skeletons / changing languages / moving file paths / dropping reference material because it is long.
+**Mental model**: importing is **minimum-invasive restoration** — the original skill is already a working tool; keep it as the author wrote it. Only do three things: ① adapt the SKILL.md frontmatter to the portable `name` + `description` shape while moving CogSeed-only metadata into metadata tags; ② make the smallest necessary command/tool compatibility adjustments; ③ delete obvious meta/build/dependency clutter unrelated to "being invoked by the LLM". **Forbidden**: rewriting the SKILL.md body / refactoring script skeletons / changing languages / moving file paths / dropping reference material because it is long.
 
 **Existing `SKILL.md` is canonical.**
 - Use the source `SKILL.md` as the starting file. Preserve its body text, section order, examples, references, and file links.
@@ -406,29 +406,29 @@ Rewrite the opening YAML block only as much as needed to this portable allowlist
   - If the original has `description_zh` / `description_en`, choose the current UI language by default and preserve that text as `description`; only emit both localized descriptions as metadata tags when the user explicitly asked for multilingual support.
   - Keep the three-part dispatch format when you author or repair the description. Do not add a second language just because the source has one side missing.
 
-Move Orkas-only metadata out of SKILL.md:
-- Emit `<category>` so Orkas stores category in `_meta.json`.
+Move CogSeed-only metadata out of SKILL.md:
+- Emit `<category>` so CogSeed stores category in `_meta.json`.
 - If preserving source localized descriptions is important, emit `<description_zh>` / `<description_en>` metadata tags; otherwise keep only the current-language `description`.
 - Do not persist source marketplace/install metadata as SKILL.md keys.
 
-Any other top-level frontmatter key must be removed from SKILL.md unless preserving it is explicitly required by the source runtime and there is no safer place for it. Source metadata may be used to fill the portable `description` or Orkas metadata tags.
+Any other top-level frontmatter key must be removed from SKILL.md unless preserving it is explicitly required by the source runtime and there is no safer place for it. Source metadata may be used to fill the portable `description` or CogSeed metadata tags.
 
 Final audit before claiming success: reread `SKILL.md` and verify the first YAML block has only `name` and `description`; verify category/routing advisories are covered by metadata tags when relevant. If not, rewrite `SKILL.md` again.
 
-The body outside the frontmatter is **kept verbatim** — don't rearrange or restate the author's sections. Even if the original is tutorial-style or a long README, do NOT compress it into the new-skill body structure — that's the template for writing from scratch in Mode A; it does NOT apply to imports. Only change command examples or tool names when the source platform's invocation literally cannot work in Orkas; keep the surrounding wording and examples intact.
+The body outside the frontmatter is **kept verbatim** — don't rearrange or restate the author's sections. Even if the original is tutorial-style or a long README, do NOT compress it into the new-skill body structure — that's the template for writing from scratch in Mode A; it does NOT apply to imports. Only change command examples or tool names when the source platform's invocation literally cannot work in CogSeed; keep the surrounding wording and examples intact.
 
 **Scripts, references, assets, configs, directory structure = preserved**:
 - Scripts keep their original language, original filename, and original path. Don't move them, rewrite unrelated cross-platform branches, or change languages. Make only the compatibility changes required by the standard Skill Runner: JS/MJS/TS entry scripts expose the runner default function while retaining direct-CLI behavior behind an explicit main-module guard when useful; subprocess languages keep their argv/stdout/exit-code contract. Rewrite every bundled-script command in SKILL.md to the standard runner form and remove all installation-path or current-working-directory assumptions.
 - `references/`, `assets/`, `examples/`, `prompts/`, `templates/`, `tests/`, and `test/` keep their original files and relative paths unless the user explicitly asks for a subset.
 - Config files (`config.json` / `.env.example` / any toml/yaml/ini) are kept only when SKILL.md / scripts read them, when they are user-editable runtime templates, or when they document required environment. Source-market / installer metadata is not a runtime config.
 - Directory structure (`src/` / `lib/` / `assets/` / sub-dir organization) kept as-is — do NOT consolidate everything into `scripts/`.
-- Nested command / sub-skill directories from another platform may be kept as runtime material when the top-level SKILL.md names how they participate (for example `/research`, `/research-deep`, `/research-report`). Do not treat their non-Orkas frontmatter as top-level marketplace metadata, but still audit every nested file and delete unrelated installer metadata.
+- Nested command / sub-skill directories from another platform may be kept as runtime material when the top-level SKILL.md names how they participate (for example `/research`, `/research-deep`, `/research-report`). Do not treat their non-CogSeed frontmatter as top-level marketplace metadata, but still audit every nested file and delete unrelated installer metadata.
 
 **Final resource audit is required.** Cleanup is evidence-based, not a filename-only allow / deny list.
 
 Audit protocol:
 1. After writing/importing, run a full tree inventory of the skill directory.
-2. Do not use `diff -qr <source> <skill_dir>` or "source and current are identical" as cleanup proof. Identical only proves the copy preserved the source; it says nothing about whether copied metadata / caches / installer files are needed by Orkas.
+2. Do not use `diff -qr <source> <skill_dir>` or "source and current are identical" as cleanup proof. Identical only proves the copy preserved the source; it says nothing about whether copied metadata / caches / installer files are needed by CogSeed.
 3. For every file other than `SKILL.md`, assign one status:
    - keep-runtime: read/executed by SKILL.md or scripts;
    - keep-reference: concise docs, examples, prompts, templates, assets, tests, or domain knowledge useful to the LLM;

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { mateRuntimeMemoryDir } from '../../../../paths';
+import { cogseedRuntimeMemoryDir } from '../../../../paths';
 import { nowIso, safeId } from '../../../../storage';
 import { redactTranscriptPathHints } from '../prompt-assembler';
 
@@ -31,11 +31,11 @@ export function sanitizeRuntimeMemoryText(text: string, maxChars = 4000): string
 }
 
 export function runtimeMemoryFile(uid: string): string {
-  return path.join(mateRuntimeMemoryDir(uid), 'runtime.md');
+  return path.join(cogseedRuntimeMemoryDir(uid), 'runtime.md');
 }
 
 export function runtimeAgentMemoryFile(uid: string, agentId: string): string {
-  return path.join(mateRuntimeMemoryDir(uid), 'agents', `${assertAgentId(agentId)}.md`);
+  return path.join(cogseedRuntimeMemoryDir(uid), 'agents', `${assertAgentId(agentId)}.md`);
 }
 
 function fileForScope(uid: string, agentId?: string): string {

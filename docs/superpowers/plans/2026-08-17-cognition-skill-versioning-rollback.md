@@ -462,10 +462,10 @@ it('does not change the source ability asset')
 步骤：
 
 - [x] 在任务创建时把已绑定、已版本化的 Recall custom Skill ID 解析为 `{ skillId, revisionId, version, manifestHash }`；Marketplace 和尚未建立基线的普通 Skill 继续使用现有 ID allowlist，不在本阶段伪造版本。
-- [x] 将引用保存到 `MateTaskRecord.skillVersionPins`，旧任务缺字段或 Skill 未版本化时保持当前兼容行为并标记 `unpinned`。
+- [x] 将引用保存到 `CogSeedTaskRecord.skillVersionPins`，旧任务缺字段或 Skill 未版本化时保持当前兼容行为并标记 `unpinned`。
 - [x] 为已冻结版本物化只读 runtime snapshot；路径必须位于用户 `local/skills/runtime-snapshots`，并由 manifest hash 校验。
 - [x] 协议只传 ID、revision 和 hash，不接受 Renderer 或模型提供绝对目录。
-- [x] `runRuntimeSkillTool` 根据已持久化引用设置 `ORKAS_RUN_SKILL_DIR`，利用现有 runner 的单目录限制执行冻结版本。
+- [x] `runRuntimeSkillTool` 根据已持久化引用设置 `COGSEED_RUN_SKILL_DIR`，利用现有 runner 的单目录限制执行冻结版本。
 - [x] 重试与恢复沿用原任务 refs；新任务才解析新版本。
 - [x] 版本升级或回退不能删除仍被非终态任务引用的 runtime snapshot；终态后的清理由单独、可恢复的保留策略完成。
 

@@ -458,7 +458,7 @@ async function _refreshAgentRuntimeStatsAfterRun(agentId) {
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('orkas-agent-run-finished', (event) => {
+  window.addEventListener('cogseed-agent-run-finished', (event) => {
     const detail = event && event.detail ? event.detail : {};
     _refreshAgentRuntimeStatsAfterRun(detail.agent_id).catch(() => {});
   });
@@ -617,9 +617,9 @@ async function loadAgents(forceRefresh, opts = {}) {
         // zh-Hans-CN works), so Chinese ends up clumped together and
         // Latin clumped together. We use vendor/pinyin-firstletter's
         // table to map e.g. '悲观' → 'bg' / 'Claude' → 'claude' /
-        // 'Orkas' → 'orkas' before comparing, yielding the user-expected
+        // 'CogSeed' → 'cogseed' before comparing, yielding the user-expected
         // mixed-script ordering ('agent < 悲(b) < 本(b) < claude < 乐(l)
-        // < orkas < 全(q)'). Without this, the backend's listAgents
+        // < cogseed < 全(q)'). Without this, the backend's listAgents
         // internal sort (by agent_id, a 12-char nanoid) feels random to
         // users. The override here fixes that.
         const sortedAgents = (data.agents || []).map((a) => ({
@@ -1834,7 +1834,7 @@ function _renderAgentDetail(agent, editing) {
   sourceEl.innerHTML = _renderSourceMetaHtml(agent);
   _renderAgentHeaderCategory(agent);
   // Runtime slot lives at the top of the body now (not the header):
-  // an always-editable dropdown so the user can flip Orkas ↔ local CLI
+  // an always-editable dropdown so the user can flip CogSeed ↔ local CLI
   // without entering edit mode. The header chip was removed because
   // it duplicated information the dropdown already exposes.
   _renderAgentDetailRuntime(agent);
@@ -2040,11 +2040,11 @@ function _renderAgentOutputFormatSection(agent, editing = false) {
 /** Render the runtime control in the detail body.
  *
  *  The runtime "kind" is locked at create time:
- *  - `in_process` (Orkas) agents → never show the selector here. The
+ *  - `in_process` (CogSeed) agents → never show the selector here. The
  *    runtime row stays hidden; user has no need to see it.
  *  - `cli` agents → show a selector with **CLI options only** (no
- *    Orkas / in_process option). User can swap which CLI backs the
- *    agent at any time, but can't revert to Orkas — that would
+ *    CogSeed / in_process option). User can swap which CLI backs the
+ *    agent at any time, but can't revert to CogSeed — that would
  *    invalidate the description and inputs which were authored
  *    specifically for a CLI runtime.
  *
@@ -2064,7 +2064,7 @@ async function _renderAgentDetailRuntime(agent) {
   }
 
   // Re-probe when the detail selector is rendered. A CLI can be installed
-  // while Orkas is already open, and the renderer cache otherwise keeps the
+  // while CogSeed is already open, and the renderer cache otherwise keeps the
   // old missing result indefinitely.
   const entries = (typeof loadLocalCliEntries === 'function')
     ? await loadLocalCliEntries({ force: true })
@@ -2076,7 +2076,7 @@ async function _renderAgentDetailRuntime(agent) {
 
   // Build CLI-only options: every detected CLI + the bound one if it's
   // missing (with a warning suffix so the user can flip away in one
-  // click). Orkas / in_process is intentionally absent — see fn doc.
+  // click). CogSeed / in_process is intentionally absent — see fn doc.
   const options = [];
   for (const e of available) {
     options.push({
@@ -3113,7 +3113,7 @@ function _bindAgentEditAttachments() {
   if (area) {
     area.addEventListener('dragover', (e) => {
       const hasFiles = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length;
-      const hasInternal = e.dataTransfer && Array.from(e.dataTransfer.types || []).includes(ORKAS_FILE_DRAG_MIME);
+      const hasInternal = e.dataTransfer && Array.from(e.dataTransfer.types || []).includes(COGSEED_FILE_DRAG_MIME);
       if (!hasFiles && !hasInternal) return;
       e.preventDefault();
       area.classList.add('drag-over');

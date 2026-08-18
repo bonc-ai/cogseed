@@ -1,8 +1,8 @@
 {
   "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
-  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only H-no-forbidden-import-v1",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only H-no-forbidden-import-v1",
   "inputs": {
-    "scanned": "src/main/features/mate_agent_runtime/**/*.ts"
+    "scanned": "src/main/features/cogseed_runtime/**/*.ts"
   },
   "canonicalization_notes": [
     "timestamps are replaced with __TIMESTAMP__",

@@ -8,8 +8,8 @@
     "auto_adopt_allowed": false
   },
   "output_location": {
-    "candidates_file": "$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/candidates.md",
-    "blocked_items_file": "$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/blocked_items.md",
+    "candidates_file": "$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/local/ontology_candidates/candidates.md",
+    "blocked_items_file": "$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/local/ontology_candidates/blocked_items.md",
     "note": "Both env vars are present in the execution environment. Never hardcode a path such as a specific user's Documents folder. Append new candidates; never overwrite unprocessed ones already in the file."
   },
   "candidates_md_format": {

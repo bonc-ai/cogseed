@@ -6,7 +6,7 @@ function baseAgent(overrides: Record<string, any> = {}) {
     workflow: '', category: 'writing', source: 'custom',
     created_at: '2026-07-25T00:00:00.000Z', updated_at: '2026-07-25T00:00:00.000Z', enabled: true,
     interface_contract: {
-      version: 1, role: 'orkas_core', runtime: { kind: 'in_process' },
+      version: 1, role: 'cogseed_core', runtime: { kind: 'in_process' },
       io: { input: 'task_message', output: 'final_message' },
       governance: { session_role: 'owner_capable', data_scope: 'visibility_slice_with_workspace', uses_mate_skills: true, records_process: true, records_tool_evidence: true },
     },

@@ -24,13 +24,13 @@ export function resolveBuildIdentity(options: {
   readFile?: (filePath: string) => string;
 } = {}): BuildIdentity {
   const env = options.env || process.env;
-  const envHasIdentity = !!(env.ORKAS_BUILD_CHANNEL || env.ORKAS_BUILD_COMMIT || env.ORKAS_BUILD_TIME || env.ORKAS_BUILD_DIRTY);
+  const envHasIdentity = !!(env.COGSEED_BUILD_CHANNEL || env.COGSEED_BUILD_COMMIT || env.COGSEED_BUILD_TIME || env.COGSEED_BUILD_DIRTY);
   if (envHasIdentity) {
     return {
-      channel: channelOf(env.ORKAS_BUILD_CHANNEL),
-      commit: text(env.ORKAS_BUILD_COMMIT),
-      dirty: dirtyOf(env.ORKAS_BUILD_DIRTY),
-      builtAt: text(env.ORKAS_BUILD_TIME),
+      channel: channelOf(env.COGSEED_BUILD_CHANNEL),
+      commit: text(env.COGSEED_BUILD_COMMIT),
+      dirty: dirtyOf(env.COGSEED_BUILD_DIRTY),
+      builtAt: text(env.COGSEED_BUILD_TIME),
     };
   }
   const readBuildInfo = (filePath: string): BuildIdentity | null => {
@@ -50,7 +50,7 @@ export function resolveBuildIdentity(options: {
     if (fromPath) return fromPath;
   }
   // 打包环境兜底：gate.ts / client.ts 等 feature 调用点不带参调用，env 里也没有
-  // ORKAS_BUILD_*（electron-builder 产物没有 run.sh 注入环境变量）。此时从
+  // COGSEED_BUILD_*（electron-builder 产物没有 run.sh 注入环境变量）。此时从
   // app 资源根读打包时写入的 .build/build-info.json，保证 packaged-dev 渠道、
   // Hub API 默认地址与发布 Gate 判定正确。dev 源码模式由 run.sh 的环境变量
   // 分支先行命中，不走到这里。

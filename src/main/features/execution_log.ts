@@ -5,7 +5,7 @@
 // ensures consistency when resuming conversations - users see the same intent,
 // resources, and risk information regardless of session state.
 //
-// Records are persisted to ~/.orkas/data/execution-log.jsonl (one JSON object
+// Records are persisted to ~/.cogseed/data/execution-log.jsonl (one JSON object
 // per line, append-only). Logs older than 7 days are automatically cleaned up.
 
 import * as fs from 'node:fs';

@@ -4,7 +4,7 @@
 
 **Goal:** Add Native Kernel Prompt / Context Assembler so Runtime prompts are explicit-only, transcript-safe, path-redacted, and independent from core-agent/group-chat prompt construction.
 
-**Architecture:** Build two pure/defensive layers under `src/main/features/mate_agent_runtime/kernel/`: `prompt-assembler.ts` formats a small stable system/user prompt from already-assembled context, while `context/assembler.ts` validates explicit context/attachments, pre-reads only sandboxed text files, assigns opaque file refs, and never exposes raw transcript/session paths. Production execution remains on `core-executor.ts`; this phase only creates native assembler components and tests.
+**Architecture:** Build two pure/defensive layers under `src/main/features/cogseed_runtime/kernel/`: `prompt-assembler.ts` formats a small stable system/user prompt from already-assembled context, while `context/assembler.ts` validates explicit context/attachments, pre-reads only sandboxed text files, assigns opaque file refs, and never exposes raw transcript/session paths. Production execution remains on `core-executor.ts`; this phase only creates native assembler components and tests.
 
 **Tech Stack:** Electron main TypeScript, existing `RuntimeKernelRequest` types, existing `path-sandbox.ts`, existing Runtime protocol transcript guard, Node `fs/promises`, Vitest via `npm run test:js`.
 
@@ -12,17 +12,17 @@
 
 ## File Structure
 
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/prompt-assembler.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/prompt-assembler.ts`
   - Pure prompt formatter. No file IO, no model/client import, no group-chat import.
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/context/assembler.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/context/assembler.ts`
   - Explicit context/attachment assembler. Performs file IO only for sandboxed text previews. Emits opaque file refs.
-- Modify: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/protocol.ts`
+- Modify: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/protocol.ts`
   - Export the transcript-path predicate for kernel defensive reuse without changing protocol behavior.
-- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/prompt-assembler.test.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/prompt-assembler.test.ts`
   - Prompt fixtures: empty context, text context, file refs, memory summary, transcript/path redaction.
-- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/context-assembler.test.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/context-assembler.test.ts`
   - Context assembler fixtures: explicit text, file preview, max-char truncation, sandbox denial, transcript denial, symlink denial, opaque refs.
-- Modify: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/import-boundary.test.ts`
+- Modify: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/import-boundary.test.ts`
   - Existing recursive scan should automatically cover new files; add an assertion if needed for prompt/context modules.
 
 ---
@@ -30,8 +30,8 @@
 ### Task 1: Prompt Assembler Pure Layer
 
 **Files:**
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/prompt-assembler.ts`
-- Test: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/prompt-assembler.test.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/prompt-assembler.ts`
+- Test: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/prompt-assembler.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -39,9 +39,9 @@ Create tests covering:
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_RUNTIME_TOOL_POLICY } from '../../../../../src/main/features/mate_agent_runtime/kernel/config';
-import { assembleRuntimePrompt, buildRuntimeSystemPrompt } from '../../../../../src/main/features/mate_agent_runtime/kernel/prompt-assembler';
-import type { RuntimeKernelRequest } from '../../../../../src/main/features/mate_agent_runtime/kernel/types';
+import { DEFAULT_RUNTIME_TOOL_POLICY } from '../../../../../src/main/features/cogseed_runtime/kernel/config';
+import { assembleRuntimePrompt, buildRuntimeSystemPrompt } from '../../../../../src/main/features/cogseed_runtime/kernel/prompt-assembler';
+import type { RuntimeKernelRequest } from '../../../../../src/main/features/cogseed_runtime/kernel/types';
 
 function request(overrides: Partial<RuntimeKernelRequest> = {}): RuntimeKernelRequest {
   return {
@@ -92,7 +92,7 @@ describe('native Runtime prompt assembler', () => {
 
   it('redacts transcript-shaped path hints from task/context text', () => {
     const prompt = assembleRuntimePrompt({
-      request: request({ task: 'Read cloud/chats/gconv-secret.jsonl and local/mate_runtime/sessions/mruntime-secret.jsonl' }),
+      request: request({ task: 'Read cloud/chats/gconv-secret.jsonl and local/cogseed_runtime/sessions/mruntime-secret.jsonl' }),
       context: {
         textSections: [{ id: 'ctx-1', text: 'Also see cloud/sessions/gmember-secret.jsonl' }],
         fileRefs: [],
@@ -116,7 +116,7 @@ describe('native Runtime prompt assembler', () => {
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/prompt-assembler.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/prompt-assembler.test.ts --maxWorkers=1
 ```
 
 Expected: FAIL with module-not-found.
@@ -169,7 +169,7 @@ Implementation rules:
 - Do not import `#core-agent`, `model/client`, or `features/group_chat`.
 - Do not include absolute file paths in prompt output.
 - Include only task, explicit text sections, opaque file refs/previews, optional memory summary.
-- Redact transcript-like strings matching cloud/local chats/sessions/mate_runtime JSONL path hints.
+- Redact transcript-like strings matching cloud/local chats/sessions/cogseed_runtime JSONL path hints.
 - Diagnostics must contain counts/lengths only, no raw prompt text.
 
 - [ ] **Step 3: Verify Task 1**
@@ -177,7 +177,7 @@ Implementation rules:
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/prompt-assembler.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/prompt-assembler.test.ts --maxWorkers=1
 npm run typecheck -- --pretty false
 ```
 
@@ -186,9 +186,9 @@ Expected: PASS.
 ### Task 2: Context Assembler Explicit File/Text Layer
 
 **Files:**
-- Modify: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/protocol.ts`
-- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/mate_agent_runtime/kernel/context/assembler.ts`
-- Test: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/context-assembler.test.ts`
+- Modify: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/protocol.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/src/main/features/cogseed_runtime/kernel/context/assembler.ts`
+- Test: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/context-assembler.test.ts`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -206,7 +206,7 @@ Create tests covering:
 Expected command:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/context-assembler.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/context-assembler.test.ts --maxWorkers=1
 ```
 
 Initial result: FAIL with module-not-found.
@@ -257,8 +257,8 @@ Implementation rules:
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/context-assembler.test.ts --maxWorkers=1
-npm run test:js -- test/main/features/mate_agent_runtime/protocol.test.ts test/main/features/mate_agent_runtime/kernel/context-assembler.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/context-assembler.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/protocol.test.ts test/main/features/cogseed_runtime/kernel/context-assembler.test.ts --maxWorkers=1
 npm run typecheck -- --pretty false
 ```
 
@@ -267,8 +267,8 @@ Expected: PASS.
 ### Task 3: Prompt + Context Integration Fixtures and Boundary
 
 **Files:**
-- Modify: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/import-boundary.test.ts`
-- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/mate_agent_runtime/kernel/prompt-context-integration.test.ts`
+- Modify: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/import-boundary.test.ts`
+- Create: `/Users/sudai/Documents/Mate Agent/test/main/features/cogseed_runtime/kernel/prompt-context-integration.test.ts`
 
 - [ ] **Step 1: Write integration tests**
 
@@ -278,7 +278,7 @@ Create a test that:
 - Calls `assembleRuntimeContext(...)`.
 - Calls `assembleRuntimePrompt(...)`.
 - Asserts final prompt includes task/text/file preview.
-- Asserts final prompt does not include absolute paths, `cid`, `gconv`, `cloud/chats`, `cloud/sessions`, or `local/mate_runtime/sessions`.
+- Asserts final prompt does not include absolute paths, `cid`, `gconv`, `cloud/chats`, `cloud/sessions`, or `local/cogseed_runtime/sessions`.
 
 Also ensure import-boundary test still scans new `kernel/context/*.ts` files and catches relative `group_chat` imports.
 
@@ -287,7 +287,7 @@ Also ensure import-boundary test still scans new `kernel/context/*.ts` files and
 Run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel/prompt-context-integration.test.ts test/main/features/mate_agent_runtime/kernel/import-boundary.test.ts --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel/prompt-context-integration.test.ts test/main/features/cogseed_runtime/kernel/import-boundary.test.ts --maxWorkers=1
 ```
 
 Expected: PASS after any minimal test/boundary adjustments.
@@ -300,7 +300,7 @@ Expected: PASS after any minimal test/boundary adjustments.
 - [ ] **Step 1: Run Phase 2 kernel tests**
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime/kernel --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime/kernel --maxWorkers=1
 ```
 
 Expected: all kernel tests pass.
@@ -308,7 +308,7 @@ Expected: all kernel tests pass.
 - [ ] **Step 2: Run full Runtime tests**
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime --maxWorkers=1
 ```
 
 Expected: all Runtime tests pass.
@@ -336,7 +336,7 @@ Expected: full JS/resource suites pass, or record exact unrelated local failures
 Before claiming Phase 2 complete, run:
 
 ```bash
-npm run test:js -- test/main/features/mate_agent_runtime --maxWorkers=1
+npm run test:js -- test/main/features/cogseed_runtime --maxWorkers=1
 npm run typecheck -- --pretty false
 npm test
 ```

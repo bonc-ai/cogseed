@@ -2,7 +2,7 @@
  * P3394 conversation-backed runtime adapter (Phase 2, path B).
  *
  * Routes inbound P3394 messages into CogSeed's normal daily conversation
- * flow (features/group_chat bus) instead of the separate mate-task backend:
+ * flow (features/group_chat bus) instead of the separate cogseed-task backend:
  *
  *   deliver → ensureConversation (chats index row, so the exchange is visible
  *             in the sidebar) → register the peer as its own conversation

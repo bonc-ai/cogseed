@@ -40,8 +40,8 @@ describe('public connector boundary', () => {
     ].join('\n');
 
     expect(bridge).toContain('return apiBase();');
-    expect(marketplace).toContain("const GLOBAL_PROD_API_BASE = 'https://orkas.ai' + '/api';");
-    expect(oauthSources).not.toMatch(/http:\/\/(?:localhost|127\.0\.0\.1)|ORKAS_API_BASE_URL|OAUTH_REDIRECT_BASE/);
+    expect(marketplace).toContain("const GLOBAL_PROD_API_BASE = 'https://cogseed.ai' + '/api';");
+    expect(oauthSources).not.toMatch(/http:\/\/(?:localhost|127\.0\.0\.1)|COGSEED_API_BASE_URL|OAUTH_REDIRECT_BASE/);
   });
 
   it('ships and boots a connector-only callback receiver', () => {
@@ -52,7 +52,7 @@ describe('public connector boundary', () => {
     expect(main).toContain('registerConnectorProtocol({ owner: RUNTIME_IDENTITY.protocolOwner });');
     expect(main).toContain('await consumeColdLaunchConnectorCallback();');
     expect(pkg.build.protocols).toEqual(expect.arrayContaining([
-      expect.objectContaining({ schemes: ['cogseed', 'mateagent', 'orkas'] }),
+      expect.objectContaining({ schemes: ['cogseed', 'cogseed', 'cogseed'] }),
     ]));
     expect(sourceLauncher).not.toContain('scripts/prepare-source-protocol.cjs');
   });

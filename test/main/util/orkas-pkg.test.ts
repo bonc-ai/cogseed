@@ -4,9 +4,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
-// Integration tests for bin/orkas-pkg.cjs — install/scan/registry/shim
+// Integration tests for bin/cogseed-pkg.cjs — install/scan/registry/shim
 // lifecycle against real local git repos (git clone accepts a local path
 // source, so no network involved). The registry written here is the
 // contract consumed by features/packages.ts + run-skill.cjs.
@@ -53,15 +53,15 @@ function makeRepo(name: string, files: Record<string, string>): string {
 
 function runPkgWithEnv(extraEnv: Record<string, string>, ...args: string[]) {
   const pcRoot = process.cwd();
-  const r = spawnSync(TEST_NODE, [path.join(pcRoot, 'bin', 'orkas-pkg.cjs'), ...args], {
+  const r = spawnSync(TEST_NODE, [path.join(pcRoot, 'bin', 'cogseed-pkg.cjs'), ...args], {
     cwd: pcRoot,
     encoding: 'utf8',
     env: {
       ...process.env,
       ...extraEnv,
-      ORKAS_WORKSPACE_ROOT: wsRoot,
-      ORKAS_UID: TEST_UID,
-      ORKAS_PC_DIR: pcRoot,
+      COGSEED_WORKSPACE_ROOT: wsRoot,
+      COGSEED_UID: TEST_UID,
+      COGSEED_PC_DIR: pcRoot,
     },
   });
   // git clone progress is inherited onto stderr, so the JSON payload is the
@@ -81,11 +81,11 @@ function runPkg(...args: string[]) {
 
 function runPkgInput(input: string, ...args: string[]) {
   const pcRoot = process.cwd();
-  const r = spawnSync(TEST_NODE, [path.join(pcRoot, 'bin', 'orkas-pkg.cjs'), ...args], {
+  const r = spawnSync(TEST_NODE, [path.join(pcRoot, 'bin', 'cogseed-pkg.cjs'), ...args], {
     cwd: pcRoot,
     encoding: 'utf8',
     input,
-    env: { ...process.env, ORKAS_WORKSPACE_ROOT: wsRoot, ORKAS_UID: TEST_UID, ORKAS_PC_DIR: pcRoot },
+    env: { ...process.env, COGSEED_WORKSPACE_ROOT: wsRoot, COGSEED_UID: TEST_UID, COGSEED_PC_DIR: pcRoot },
   });
   const text = (r.status === 0 ? r.stdout : r.stderr) || '';
   const start = text.indexOf('{');
@@ -103,7 +103,7 @@ function readRegistry(): any {
 }
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-pkg-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-pkg-'));
   tmpDirs.push(tmpDir);
   wsRoot = path.join(tmpDir, 'data');
   fs.mkdirSync(wsRoot, { recursive: true });
@@ -125,16 +125,16 @@ afterAll(() => {
   }
 });
 
-describe('orkas-pkg.cjs source invariants', () => {
+describe('cogseed-pkg.cjs source invariants', () => {
   it('hides dependency subprocess windows on Windows', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'bin', 'orkas-pkg.cjs'), 'utf8');
+    const source = fs.readFileSync(path.join(process.cwd(), 'bin', 'cogseed-pkg.cjs'), 'utf8');
     const body = source.match(/function run\(cmd, args, opts\) \{[\s\S]*?\n\}/)?.[0] ?? '';
 
     expect(body).toContain('windowsHide: true');
   });
 });
 
-describe.skipIf(!gitAvailable)('orkas-pkg.cjs', () => {
+describe.skipIf(!gitAvailable)('cogseed-pkg.cjs', () => {
   it('installs a skill-shaped repo verbatim and records skill roots', () => {
     const repo = makeRepo('skillpack', {
       'SKILL.md': '---\nname: skillpack\ndescription: top-level\n---\nbody',
@@ -191,8 +191,8 @@ describe.skipIf(!gitAvailable)('orkas-pkg.cjs', () => {
     const shim = path.join(pkgsDir(), '.bin', 'clitool');
     const content = fs.readFileSync(shim, 'utf8');
     expect(content).toContain(path.join(pkgsDir(), 'clitool', 'bin/cli.js'));
-    expect(content).toContain('ORKAS_BUNDLED_NODE');
-    expect(content).not.toContain('ORKAS_NODE');
+    expect(content).toContain('COGSEED_BUNDLED_NODE');
+    expect(content).not.toContain('COGSEED_NODE');
   });
 
   it('records package-local native executables and creates shims', () => {
@@ -225,7 +225,7 @@ describe.skipIf(!gitAvailable)('orkas-pkg.cjs', () => {
     expect(shim).toContain(path.join(pkgsDir(), 'nativepkg', 'npm/bin/native-tool'));
   });
 
-  it('installs Node deps under the user package tree with Orkas npm cache/prefix', () => {
+  it('installs Node deps under the user package tree with CogSeed npm cache/prefix', () => {
     const repo = makeRepo('npmpkg', {
       'package.json': JSON.stringify({
         name: 'npmpkg',
@@ -316,7 +316,7 @@ describe.skipIf(!gitAvailable)('orkas-pkg.cjs', () => {
     expect(fs.existsSync(path.join(pkgsDir(), '.bin', 'real-entry'))).toBe(false);
   });
 
-  it('uses ORKAS_UV and ORKAS_PYTHON for Python package dependency consent', () => {
+  it('uses COGSEED_UV and COGSEED_PYTHON for Python package dependency consent', () => {
     const repo = makeRepo('pyuv', {
       'pyproject.toml': [
         '[build-system]',
@@ -373,13 +373,13 @@ describe.skipIf(!gitAvailable)('orkas-pkg.cjs', () => {
       ].join('\n'));
       fs.chmodSync(fakeUv, 0o755);
     }
-    const env = { ORKAS_UV: fakeUv, ORKAS_PYTHON: fakePython };
+    const env = { COGSEED_UV: fakeUv, COGSEED_PYTHON: fakePython };
 
     const install = runPkgWithEnv(env, 'install', repo);
     expect(install.status).toBe(0);
     expect(install.json.deps_pending_consent).toHaveLength(1);
     expect(install.json.deps_pending_consent[0]).toContain(path.join(wsRoot, 'venv', 'python', 'packages', 'pyuv-'));
-    expect(install.json.deps_pending_consent[0]).toContain('$ORKAS_UV pip install --python');
+    expect(install.json.deps_pending_consent[0]).toContain('$COGSEED_UV pip install --python');
     expect(install.json.deps_pending_consent[0]).not.toContain(' -e ');
     expect(fs.existsSync(path.join(pkgsDir(), '.bin', 'real-entry'))).toBe(false);
 
@@ -515,11 +515,11 @@ describe.skipIf(!gitAvailable)('orkas-pkg.cjs', () => {
 });
 
 // External package installs are the least supervised path in the product: the
-// model issues `orkas-pkg install <git-url>` in bash, nobody reads the remote
+// model issues `cogseed-pkg install <git-url>` in bash, nobody reads the remote
 // tree, and promote makes it callable. It was also the only install path with no
 // deep scan — a payload the marketplace refused could be side-loaded from a git
 // URL. These pin the gate closed.
-describe('orkas-pkg security gate', () => {
+describe('cogseed-pkg security gate', () => {
   const CLEAN_SKILL = '---\nname: tidy\ndescription: Tidy pasted plain text into clean Markdown output.\n---\n'
     + '# Tidy\n\nNormalizes punctuation and collapses blank lines. No network, file, or shell access.\n';
   // `critical` credential_access + data_egress. Blocks on category alone; the
@@ -587,10 +587,10 @@ describe('orkas-pkg security gate', () => {
     const repo = makeRepo('clean-noscan', { 'skills/tidy/SKILL.md': CLEAN_SKILL });
 
     // Point the interpreter at something that is not a working python.
-    // ORKAS_GUARDRAIL_PYTHON, not ORKAS_PYTHON: the latter selects the
+    // COGSEED_GUARDRAIL_PYTHON, not COGSEED_PYTHON: the latter selects the
     // interpreter for *package dependency* installs and must not be able to
     // redirect the security gate.
-    const r = runPkgWithEnv({ ORKAS_GUARDRAIL_PYTHON: '/nonexistent/python3' }, 'install', repo, '--name', 'noscanpkg');
+    const r = runPkgWithEnv({ COGSEED_GUARDRAIL_PYTHON: '/nonexistent/python3' }, 'install', repo, '--name', 'noscanpkg');
 
     expect(r.status).not.toBe(0);
     expect(r.json?.security_outcome).toBe('unknown');

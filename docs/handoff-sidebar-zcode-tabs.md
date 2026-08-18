@@ -2,7 +2,7 @@
 
 > 交接时间：2026-08-16 18:5x
 > 交接人：Hermes（本窗口）
-> 仓库：`~/cog-seed`（develop 分支，**运行中的 app 就是这份代码**；`/Users/zhanghao/mate-agent` 是 GitHub 个人镜像，本次未动）
+> 仓库：`~/cog-seed`（develop 分支，**运行中的 app 就是这份代码**；`/Users/zhanghao/cogseed-agent` 是 GitHub 个人镜像，本次未动）
 > 状态：**代码已改完、typecheck 通过、真实环境验证通过**，未提交
 
 ## 一、需求背景
@@ -69,6 +69,6 @@ npx vitest run test/renderer/conversation-sidebar.test.ts
 
 ## 六、ZCode 参考图要点（留给新窗口）
 
-- 图1（完整侧栏）：顶部导航「自动化/技能/分组/项目」；「分组|项目」双 tab；视图切换（按项目/时间线）；排序方式（更新时间/创建时间）；任务列表（开发1 3小时、契约 3小时、开发方案对比分析 6小时）+「显示更多」；分组列表（Hub、mate-agent-dev...、Opensource-P3...、ZCode）；底部「任务」tab + 用户信息
+- 图1（完整侧栏）：顶部导航「自动化/技能/分组/项目」；「分组|项目」双 tab；视图切换（按项目/时间线）；排序方式（更新时间/创建时间）；任务列表（开发1 3小时、契约 3小时、开发方案对比分析 6小时）+「显示更多」；分组列表（Hub、cogseed-agent-dev...、Opensource-P3...、ZCode）；底部「任务」tab + 用户信息
 - 图2（tab 特写）：「#分组 | □项目」双 tab + 下面「项目」「任务」区块
 - 用户强调：ZCode 用「项目」概念，cogseed 用「空间」概念，**只参考布局**不照搬功能

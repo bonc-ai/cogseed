@@ -25,10 +25,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 
-const VARIANT = process.env.ORKAS_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT || 'cogseed';
+const VARIANT = process.env.COGSEED_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT || 'cogseed';
 const VARIANT_ROOT = path.join(os.homedir(), '.cogseed', 'runtime-variants', VARIANT);
-// logger/paths 依赖 ORKAS_WORKSPACE_ROOT；脚本默认落在真实 variant。
-process.env.ORKAS_WORKSPACE_ROOT = process.env.ORKAS_WORKSPACE_ROOT || VARIANT_ROOT;
+// logger/paths 依赖 COGSEED_WORKSPACE_ROOT；脚本默认落在真实 variant。
+process.env.COGSEED_WORKSPACE_ROOT = process.env.COGSEED_WORKSPACE_ROOT || VARIANT_ROOT;
 
 const GATEWAY_SCRIPT = path.resolve(__dirname, '..', 'p3394-gateway', 'gateway.cjs');
 const MAX_REPLY_BYTES = 32768;

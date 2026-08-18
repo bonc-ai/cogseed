@@ -8,8 +8,8 @@ let root: string;
 
 beforeEach(() => {
   vi.resetModules();
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-cache-clearable-'));
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-cache-clearable-'));
+  process.env.COGSEED_WORKSPACE_ROOT = root;
 });
 
 afterEach(() => {

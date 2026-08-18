@@ -119,9 +119,9 @@ export const bashTool: AgentTool = defineTool({
 
     if (input.run_in_background === true) {
       // Log file lands in the per-turn output dir when the host provides
-      // one (Orkas sets ORKAS_OUTPUT_DIR in the sandbox env), else cwd.
+      // one (CogSeed sets COGSEED_OUTPUT_DIR in the sandbox env), else cwd.
       const sandboxEnv = (ctx.state.sandboxEnv ?? {}) as Record<string, string>;
-      const baseDir = sandboxEnv.ORKAS_OUTPUT_DIR || ctx.workingDir || ".";
+      const baseDir = sandboxEnv.COGSEED_OUTPUT_DIR || ctx.workingDir || ".";
       const logPath = path.resolve(baseDir, `bg-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}.log`);
       const bg = sandbox.executeBackground(command, logPath);
       if (bg.error || bg.pid == null) {

@@ -1455,8 +1455,8 @@ Expected: 无错误（`src/main/ipc/messaging.ts` 改动需通过 tsc）。
 
 - [ ] **Step 3: 重启 messaging 运行时实测**
 
-Run: `scripts/restart-mate.sh`
-Expected: 启动成功；确认日志 `~/.orkas/runtime-variants/messaging/data/logs/<date>.log` 与 `/tmp/mate-agent-messaging-run.log` 无报错。
+Run: `scripts/restart-cogseed.sh`
+Expected: 启动成功；确认日志 `~/.cogseed/runtime-variants/messaging/data/logs/<date>.log` 与 `/tmp/cogseed-agent-messaging-run.log` 无报错。
 
 实测清单（人工/自动化确认后记录结论）：
 1. 设置 → 消息平台：左栏 8 渠道、两组分组、禁用项不可点击不可聚焦。

@@ -59,7 +59,7 @@ class TestTruePositivesPreserved:
 
 
 class TestKnownFalsePositivesFixed:
-    """锁定实测发现的误报模式，防止回归。每条都来自 Mate-Agent 官方语料。"""
+    """锁定实测发现的误报模式，防止回归。每条都来自 CogSeed-Agent 官方语料。"""
 
     def test_js_regex_exec_not_python_eval(self):
         # gsap.min.js: while ((m = re.exec(log)) !== null)

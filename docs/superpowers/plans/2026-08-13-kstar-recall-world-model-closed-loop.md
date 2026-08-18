@@ -1160,7 +1160,7 @@ Expected: no whitespace errors; only intended implementation files plus the user
 - [ ] **Step 5: Restart the messaging runtime**
 
 ```bash
-scripts/restart-mate.sh
+scripts/restart-cogseed.sh
 ```
 
 Confirm startup from:
@@ -1168,7 +1168,7 @@ Confirm startup from:
 ```bash
 DATE=$(date +%F)
 tail -n 200 "$HOME/.cogseed/runtime-variants/messaging/data/logs/$DATE.log"
-tail -n 200 /tmp/mate-agent-messaging-run.log
+tail -n 200 /tmp/cogseed-agent-messaging-run.log
 ```
 
 Expected: app starts without module/type/runtime initialization errors.

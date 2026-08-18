@@ -12,7 +12,7 @@
  * path granted on this machine has no meaning on another device, and the
  * grant is a security decision that must not silently propagate via sync.
  *
- * A hard deny-list (credential dirs, system dirs, the Orkas trees) can
+ * A hard deny-list (credential dirs, system dirs, the CogSeed trees) can
  * never be granted — same posture as skill-import blacklisting. The grant
  * stores the realpath so a later symlink swap can't widen scope, and the
  * sandbox's own `isPathAllowed` realpath check stays the final gate.
@@ -75,14 +75,14 @@ export function denyReason(dir: string): string | null {
 
   for (const root of [SRC_ROOT, WS_ROOT]) {
     const r = root && _canon(root);
-    if (r && (real === r || real.startsWith(r + path.sep))) return 'E_ORKAS_DIR';
+    if (r && (real === r || real.startsWith(r + path.sep))) return 'E_COGSEED_DIR';
   }
 
   const sensitive = [
     path.join(home, '.ssh'),
     path.join(home, '.gnupg'),
     path.join(home, '.aws'),
-    path.join(home, '.orkas'),
+    path.join(home, '.cogseed'),
     path.join(home, '.claude'),
     path.join(home, '.codex'),
   ];

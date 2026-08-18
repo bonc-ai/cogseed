@@ -6,7 +6,7 @@
 
 **Architecture:** 新增 `src/main/features/recall/` 作为正式 Recall 业务域；现有 `features/cognition/` 保留为资产中心的只读聚合/展示适配层，不再承担正式资产持久化。Recall 的用户私有状态写入 `<uid>/cloud/recall/`，使用现有 `storage.ts`、路径沙箱、锁和 dirty/sync 引擎；IPC 只做参数校验和委托，Renderer 只消费稳定 DTO。现有 `skills`、`memory`、`contexts`、`p3394`、`execution-records`、`projects/workspace`、`evolution` 继续作为来源或执行基础设施，不复制它们的权威数据。
 
-**Tech Stack:** Electron main process TypeScript；JSON/JSONL + `storage.ts` 原子写入；`window.orkas.invoke`；vanilla Renderer classic scripts；Vitest via `npm run test:js`；全量验证 via `npm test`。
+**Tech Stack:** Electron main process TypeScript；JSON/JSONL + `storage.ts` 原子写入；`window.cogseed.invoke`；vanilla Renderer classic scripts；Vitest via `npm run test:js`；全量验证 via `npm test`。
 
 ---
 

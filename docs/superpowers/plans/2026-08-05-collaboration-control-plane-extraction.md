@@ -20,7 +20,7 @@
 
 - [ ] Write fixture-based tests for run/step transitions, dependency readiness, blocking gates, active conflicts, retry, skip, resume, abort, and event replay.
 - [ ] Run the new tests and verify they initially fail because the generic control-plane API does not exist.
-- [ ] Add a static boundary test rejecting imports from `group_chat`, `mate_agent_backend`, renderer, IPC, or model inside the new control-plane directory.
+- [ ] Add a static boundary test rejecting imports from `group_chat`, `cogseed_backend`, renderer, IPC, or model inside the new control-plane directory.
 
 Run:
 
@@ -72,16 +72,16 @@ npm run test:js -- test/main/features/collaboration_control
 ## Task 5: Add Mate adapters
 
 **Files:**
-- Create: `src/main/features/mate_agent_backend/collaboration-store-adapter.ts`
-- Create: `src/main/features/mate_agent_backend/collaboration-dispatcher.ts`
-- Modify: `src/main/features/mate_agent_backend/coordinator.ts`
-- Modify: `src/main/features/mate_agent_backend/host-tool-router.ts`
+- Create: `src/main/features/cogseed_backend/collaboration-store-adapter.ts`
+- Create: `src/main/features/cogseed_backend/collaboration-dispatcher.ts`
+- Modify: `src/main/features/cogseed_backend/coordinator.ts`
+- Modify: `src/main/features/cogseed_backend/host-tool-router.ts`
 - Modify: `src/main/paths.ts`
-- Test: `test/main/features/mate_agent_backend/collaboration-adapter.test.ts`
+- Test: `test/main/features/cogseed_backend/collaboration-adapter.test.ts`
 
 - [ ] Store Mate workflow run/context/events only below the Mate coordination directory.
-- [ ] Dispatch and cancel through the shared `mateRuntimeController`.
-- [ ] Keep `mate_delegate`, `mate_tasks`, and `mate_cancel` tool names but route them through the engine.
+- [ ] Dispatch and cancel through the shared `cogseedRuntimeController`.
+- [ ] Keep `cogseed_delegate`, `cogseed_tasks`, and `cogseed_cancel` tool names but route them through the engine.
 - [ ] Add Mate tools for plan, retry, skip, resume, gate and conflict only after their engine methods are covered.
 
 ## Task 6: Split P3394 wake dispatch
@@ -89,7 +89,7 @@ npm run test:js -- test/main/features/collaboration_control
 **Files:**
 - Create: `src/main/features/p3394/wake-dispatcher.ts`
 - Create: `src/main/features/group_chat/p3394-wake-dispatcher.ts`
-- Create: `src/main/features/mate_agent_backend/p3394-wake-dispatcher.ts`
+- Create: `src/main/features/cogseed_backend/p3394-wake-dispatcher.ts`
 - Modify: `src/main/features/p3394/wake-controller.ts`
 - Modify: `src/main/features/p3394/wake-service.ts`
 - Modify: `src/main/ipc/index.ts`
@@ -103,9 +103,9 @@ npm run test:js -- test/main/features/collaboration_control
 ## Task 7: Instantiate P3394 admission for Mate
 
 **Files:**
-- Create: `src/main/features/mate_agent_backend/p3394-admission.ts`
-- Modify: `src/main/features/mate_agent_backend/host-tool-router.ts`
-- Test: `test/main/features/mate_agent_backend/p3394-admission.test.ts`
+- Create: `src/main/features/cogseed_backend/p3394-admission.ts`
+- Modify: `src/main/features/cogseed_backend/host-tool-router.ts`
+- Test: `test/main/features/cogseed_backend/p3394-admission.test.ts`
 
 - [ ] Supply Mate session, epoch and collaboration context sources to `P3394Controller`.
 - [ ] Enforce admission before Mate child dispatch and result handback.
@@ -114,9 +114,9 @@ npm run test:js -- test/main/features/collaboration_control
 ## Task 8: Recovery, compatibility removal and full verification
 
 **Files:**
-- Modify: `src/main/features/mate_agent_backend/recovery.ts`
+- Modify: `src/main/features/cogseed_backend/recovery.ts`
 - Modify: `src/main/features/group_chat/plan_executor.ts`
-- Modify: `scripts/smoke-mate-agent-host-capabilities.mjs`
+- Modify: `scripts/smoke-cogseed-agent-host-capabilities.mjs`
 - Test: `test/main/features/collaboration_control/recovery.test.ts`
 
 - [ ] Recover persisted running workflows by reconciling dispatcher execution status; do not resend completed steps.
@@ -127,8 +127,8 @@ npm run test:js -- test/main/features/collaboration_control
 ```bash
 git diff --check
 npm run typecheck
-npm run test:js -- test/main/features/collaboration_control test/main/features/group_chat test/main/features/p3394 test/main/features/mate_agent_backend
-node scripts/smoke-mate-agent-native.mjs
-node scripts/smoke-mate-agent-host-capabilities.mjs
+npm run test:js -- test/main/features/collaboration_control test/main/features/group_chat test/main/features/p3394 test/main/features/cogseed_backend
+node scripts/smoke-cogseed-agent-native.mjs
+node scripts/smoke-cogseed-agent-host-capabilities.mjs
 npm test
 ```

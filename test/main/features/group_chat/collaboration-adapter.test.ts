@@ -7,5 +7,5 @@ it('maps opaque control-plane scope to the existing Group Chat storage domain', 
   await store.withLock(scope, async () => store.readRun(scope, 'run-1'));
   expect(deps.withConversationLock).toHaveBeenCalledWith('u1', 'cid-1', expect.any(Function));
   expect(deps.readRun).toHaveBeenCalledWith('u1', 'cid-1', 'run-1');
-  expect(() => store.readRun({ ...scope, domain: 'mate' }, 'run-1')).toThrow(/group_chat domain/);
+  expect(() => store.readRun({ ...scope, domain: 'cogseed' }, 'run-1')).toThrow(/group_chat domain/);
 });

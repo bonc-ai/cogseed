@@ -1,7 +1,7 @@
 # KStar 教训沉淀实机验证场景 v2（真实缺口版）
 
 > 日期：2026-08-15（09:54 重启，合并 develop 后）
-> 实例：source Electron（Mate-Backend-Test，variant=cogseed，PID 7379）
+> 实例：source Electron（CogSeed-Backend-Test，variant=cogseed，PID 7379）
 > 代码：`0fadcce5`（合并 develop 48 提交）+ 前序全部修复
 > 目的：验证**带推理教训的新资产沉淀**——这是从"能运行"跨到"高质量"的关键实证
 

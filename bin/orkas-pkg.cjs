@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Orkas external-package installer CLI.
+ * CogSeed external-package installer CLI.
  *
  * Invoked by the LLM bash tool (guided by the `package-installer` system
  * skill) as:
- *   "$ORKAS_NODE" "$ORKAS_PC_DIR/bin/orkas-pkg.cjs" <command> [args...]
+ *   "$COGSEED_NODE" "$COGSEED_PC_DIR/bin/cogseed-pkg.cjs" <command> [args...]
  *
  * Commands:
  *   install <git-url-or-local-path> [--name <name>] [--consent-deps]
@@ -30,7 +30,7 @@
  *
  * Design constraints (docs/plans/open-ecosystem-architecture.md §A):
  *   - The package tree is hosted VERBATIM. Never rewrite SKILL.md, never
- *     normalize frontmatter, never write Orkas metadata inside the package.
+ *     normalize frontmatter, never write CogSeed metadata inside the package.
  *   - Dependency install (npm/pip) only runs with explicit consent: the
  *     `--consent-deps` flag on install, or the recorded `deps_consent`
  *     flag on update (D3: ask once per package, remember).
@@ -41,22 +41,22 @@
  * runs out-of-process under Electron-as-Node or stock node).
  *
  * Env inputs:
- *   ORKAS_UID             — active user id (set in the bash sandbox env).
+ *   COGSEED_UID             — active user id (set in the bash sandbox env).
  *                           Fallback: users.json dev_current_user_id /
  *                           current_user_id, then 'anonymous'.
- *   ORKAS_WORKSPACE_ROOT  — data root (ORKAS_WS_ROOT honoured as alias;
- *                           default ~/.orkas/data).
- *   ORKAS_PYTHON          — optional bundled Python executable used for
+ *   COGSEED_WORKSPACE_ROOT  — data root (COGSEED_WS_ROOT honoured as alias;
+ *                           default ~/.cogseed/data).
+ *   COGSEED_PYTHON          — optional bundled Python executable used for
  *                           Python package venv creation.
- *   ORKAS_UV              — optional bundled uv executable used for Python
+ *   COGSEED_UV              — optional bundled uv executable used for Python
  *                           package dependency installs.
- *   ORKAS_VENV_ROOT       — optional shared machine-local venv root.
- *                           Defaults to `<ORKAS_WORKSPACE_ROOT>/venv`.
+ *   COGSEED_VENV_ROOT       — optional shared machine-local venv root.
+ *                           Defaults to `<COGSEED_WORKSPACE_ROOT>/venv`.
  *                           Python envs/caches live under `python/`; npm
  *                           cache/prefix live under `node/`.
- *   ORKAS_BUNDLED_NODE    — optional bundled stock Node executable for
- *                           third-party package CLI shims. ORKAS_NODE is
- *                           reserved for Orkas internal Electron-as-Node.
+ *   COGSEED_BUNDLED_NODE    — optional bundled stock Node executable for
+ *                           third-party package CLI shims. COGSEED_NODE is
+ *                           reserved for CogSeed internal Electron-as-Node.
  */
 
 'use strict';
@@ -86,25 +86,25 @@ function die(exitCode, message, extra) {
 // ── Roots ────────────────────────────────────────────────────────────────
 
 function wsRoot() {
-  return process.env.ORKAS_WORKSPACE_ROOT
-    || process.env.ORKAS_WS_ROOT
-    || path.join(os.homedir(), '.orkas', 'data');
+  return process.env.COGSEED_WORKSPACE_ROOT
+    || process.env.COGSEED_WS_ROOT
+    || path.join(os.homedir(), '.cogseed', 'data');
 }
 
-function sharedVenvRoot() { return process.env.ORKAS_VENV_ROOT || path.join(wsRoot(), 'venv'); }
+function sharedVenvRoot() { return process.env.COGSEED_VENV_ROOT || path.join(wsRoot(), 'venv'); }
 function pythonVenvRoot() { return path.join(sharedVenvRoot(), 'python'); }
 function nodeVenvRoot() { return path.join(sharedVenvRoot(), 'node'); }
 function pythonVenvCacheEnv() {
   return {
-    ORKAS_VENV_ROOT: sharedVenvRoot(),
+    COGSEED_VENV_ROOT: sharedVenvRoot(),
     UV_CACHE_DIR: process.env.UV_CACHE_DIR || path.join(pythonVenvRoot(), 'cache', 'uv'),
     PIP_CACHE_DIR: process.env.PIP_CACHE_DIR || path.join(pythonVenvRoot(), 'cache', 'pip'),
   };
 }
 function nodePackageEnv() {
   return {
-    ORKAS_VENV_ROOT: sharedVenvRoot(),
-    // Package installs must remain inside the Orkas-managed data root. Desktop
+    COGSEED_VENV_ROOT: sharedVenvRoot(),
+    // Package installs must remain inside the CogSeed-managed data root. Desktop
     // launches can inherit machine/user npm settings (especially on Windows),
     // which otherwise redirect cache/prefix writes into global shared state.
     NPM_CONFIG_CACHE: path.join(nodeVenvRoot(), 'cache', 'npm'),
@@ -116,7 +116,7 @@ function nodePackageEnv() {
 }
 
 function resolveUid() {
-  const envUid = (process.env.ORKAS_UID || '').trim();
+  const envUid = (process.env.COGSEED_UID || '').trim();
   if (envUid && !envUid.includes('/') && !envUid.includes('\\')) return envUid;
   try {
     const users = JSON.parse(fs.readFileSync(path.join(wsRoot(), 'users.json'), 'utf8'));
@@ -130,7 +130,7 @@ function packagesDir(uid) { return path.join(wsRoot(), uid, 'local', 'packages')
 function registryFile(uid) { return path.join(packagesDir(uid), '_registry.json'); }
 function binDir(uid) { return path.join(packagesDir(uid), '.bin'); }
 // Companion usage skills for CLI-only packages live OUTSIDE the verbatim
-// packages tree (so this CLI never writes Orkas files into a cloned repo) and
+// packages tree (so this CLI never writes CogSeed files into a cloned repo) and
 // outside cloud/ (machine-specific, never synced). Read in main via
 // `features/package_skills.ts`. Keyed to the package by dir name.
 function packageSkillsDir(uid) { return path.join(wsRoot(), uid, 'local', 'package_skills'); }
@@ -162,7 +162,7 @@ async function withRegistryLock(uid, fn) {
   let fd = null;
   // `die()` calls process.exit, which skips `finally` — the exit hook is the
   // path that guarantees the lock never outlives the process (a leftover
-  // lock would block every orkas-pkg call for LOCK_STALE_MS).
+  // lock would block every cogseed-pkg call for LOCK_STALE_MS).
   const releaseLock = () => {
     if (fd !== null) { try { fs.closeSync(fd); } catch { /* already closed */ } fd = null; }
     try { fs.unlinkSync(lockPath); } catch { /* already gone */ }
@@ -177,7 +177,7 @@ async function withRegistryLock(uid, fn) {
         try { stale = Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS; } catch { stale = true; }
         if (!stale) {
           process.removeListener('exit', releaseLock); // not our lock — leave it
-          die(75, 'another orkas-pkg operation is in progress; retry shortly', { lock: lockPath });
+          die(75, 'another cogseed-pkg operation is in progress; retry shortly', { lock: lockPath });
         }
         try { fs.unlinkSync(lockPath); } catch { /* raced */ }
         fd = fs.openSync(lockPath, 'wx');
@@ -289,14 +289,14 @@ function commandFromEnv(value) {
 }
 
 function pythonCommand() {
-  const configured = commandFromEnv(process.env.ORKAS_PYTHON);
-  if (configured) return { cmd: configured, args: [], label: '$ORKAS_PYTHON' };
+  const configured = commandFromEnv(process.env.COGSEED_PYTHON);
+  if (configured) return { cmd: configured, args: [], label: '$COGSEED_PYTHON' };
   if (process.platform === 'win32') return { cmd: 'python', args: [], label: 'python' };
   return { cmd: 'python3', args: [], label: 'python3' };
 }
 
 function uvCommand() {
-  const configured = commandFromEnv(process.env.ORKAS_UV);
+  const configured = commandFromEnv(process.env.COGSEED_UV);
   if (configured) return configured;
   return null;
 }
@@ -451,7 +451,7 @@ function scanNativeBinEntries(pkgDir) {
  * Root of the packaged security guardrail (`resources/guardrail`).
  *
  * Resolved relative to this file so it works both from a source checkout
- * (`<repo>/bin/orkas-pkg.cjs` → `<repo>/resources/guardrail`) and from a
+ * (`<repo>/bin/cogseed-pkg.cjs` → `<repo>/resources/guardrail`) and from a
  * packaged app, where `bin/` lives inside the asar-unpacked app dir and the
  * guardrail is an extraResources destination next to it
  * (`.../Resources/app/bin` → `.../Resources/guardrail`).
@@ -460,7 +460,7 @@ function scanNativeBinEntries(pkgDir) {
  * engine as "check unavailable", never as "check passed".
  */
 function guardrailRoot() {
-  const override = (process.env.ORKAS_GUARDRAIL_DIR || '').trim();
+  const override = (process.env.COGSEED_GUARDRAIL_DIR || '').trim();
   const candidates = override ? [override] : [
     path.resolve(__dirname, '..', 'resources', 'guardrail'),
     path.resolve(__dirname, '..', '..', 'guardrail'),
@@ -482,7 +482,7 @@ function guardrailRoot() {
  * returns null when `scan_gate.py` itself is gone.
  */
 function scannerAbsentByBuild() {
-  const override = (process.env.ORKAS_GUARDRAIL_DIR || '').trim();
+  const override = (process.env.COGSEED_GUARDRAIL_DIR || '').trim();
   const candidates = override ? [override] : [
     path.resolve(__dirname, '..', 'resources', 'guardrail'),
     path.resolve(__dirname, '..', '..', 'guardrail'),
@@ -494,14 +494,14 @@ function scannerAbsentByBuild() {
 /**
  * Interpreter used to run the security gate.
  *
- * Deliberately NOT `pythonCommand()`. That one honours `$ORKAS_PYTHON`, which
+ * Deliberately NOT `pythonCommand()`. That one honours `$COGSEED_PYTHON`, which
  * exists so a caller can point dependency installs at a specific venv — a knob
  * for *package* Python. Letting it also select the scanner's interpreter would
  * make the security gate redirectable by the same environment variable the
  * package being scanned might influence, and any stub that is not a real
  * interpreter turns every install into a fail-closed refusal.
  *
- * `$ORKAS_GUARDRAIL_PYTHON` is a separate override so tests and unusual
+ * `$COGSEED_GUARDRAIL_PYTHON` is a separate override so tests and unusual
  * deployments can still point at a known-good interpreter explicitly.
  */
 function guardrailPythonCommand() {
@@ -511,7 +511,7 @@ function guardrailPythonCommand() {
   // should not break an install) and wrong here: an operator who pinned the
   // scanner's interpreter and got a typo must see a refusal, not a scan that
   // quietly ran on some other Python.
-  const raw = (process.env.ORKAS_GUARDRAIL_PYTHON || '').trim();
+  const raw = (process.env.COGSEED_GUARDRAIL_PYTHON || '').trim();
   if (raw) return { cmd: raw, args: [] };
   return { cmd: process.platform === 'win32' ? 'python' : 'python3', args: [] };
 }
@@ -520,7 +520,7 @@ function guardrailPythonCommand() {
  * Deep security scan of a staged package tree, before it is promoted.
  *
  * External package installs reach the machine through a model-issued
- * `orkas-pkg install <git-url>` in bash — no human reviews the contents, and the
+ * `cogseed-pkg install <git-url>` in bash — no human reviews the contents, and the
  * tree becomes callable as soon as it is promoted. That made this the least
  * supervised install path in the product while being the only one with no deep
  * scan at all: local folder imports and marketplace installs were both gated,
@@ -632,10 +632,10 @@ function describeDepCommands(pkgDir, pkgMeta) {
     const venv = packageVenvDir(pkgMeta);
     const uv = uvCommand();
     if (uv) {
-      const venvCmd = process.env.ORKAS_PYTHON
-        ? `$ORKAS_UV venv --python $ORKAS_PYTHON "${venv}"`
-        : `$ORKAS_UV venv "${venv}"`;
-      cmds.push(`${venvCmd} && $ORKAS_UV pip install --python "${venvPythonPath(venv)}" .`);
+      const venvCmd = process.env.COGSEED_PYTHON
+        ? `$COGSEED_UV venv --python $COGSEED_PYTHON "${venv}"`
+        : `$COGSEED_UV venv "${venv}"`;
+      cmds.push(`${venvCmd} && $COGSEED_UV pip install --python "${venvPythonPath(venv)}" .`);
     } else {
       cmds.push(`${pythonCommand().label} -m venv "${venv}" && "${venvPipPath(venv)}" install .`);
     }
@@ -664,7 +664,7 @@ function installDeps(pkgDir, pkgMeta) {
     if (uv) {
       if (!isDir(venv)) {
         const args = ['venv'];
-        if (process.env.ORKAS_PYTHON) args.push('--python', process.env.ORKAS_PYTHON);
+        if (process.env.COGSEED_PYTHON) args.push('--python', process.env.COGSEED_PYTHON);
         args.push(venv);
         runOrDie(uv, args, { cwd: pkgDir, env: cacheEnv }, 'uv venv');
       }
@@ -708,9 +708,9 @@ function regenerateShims(uid, registry) {
     const shPath = path.join(dir, w.name);
     if (w.runtime === 'node') {
       // Package CLIs should run under the bundled stock Node/npm toolchain, not
-      // ORKAS_NODE (Electron-as-Node), so runtime behavior matches installs.
-      fs.writeFileSync(shPath, `#!/bin/sh\nexec "\${ORKAS_BUNDLED_NODE:-node}" "${w.targetAbs}" "$@"\n`, { mode: 0o755 });
-      fs.writeFileSync(`${shPath}.cmd`, `@echo off\r\nif defined ORKAS_BUNDLED_NODE ("%ORKAS_BUNDLED_NODE%" "${w.targetAbs}" %*) else (node "${w.targetAbs}" %*)\r\n`);
+      // COGSEED_NODE (Electron-as-Node), so runtime behavior matches installs.
+      fs.writeFileSync(shPath, `#!/bin/sh\nexec "\${COGSEED_BUNDLED_NODE:-node}" "${w.targetAbs}" "$@"\n`, { mode: 0o755 });
+      fs.writeFileSync(`${shPath}.cmd`, `@echo off\r\nif defined COGSEED_BUNDLED_NODE ("%COGSEED_BUNDLED_NODE%" "${w.targetAbs}" %*) else (node "${w.targetAbs}" %*)\r\n`);
     } else {
       fs.writeFileSync(shPath, `#!/bin/sh\nexec "${w.targetAbs}" "$@"\n`, { mode: 0o755 });
       fs.writeFileSync(`${shPath}.cmd`, `@echo off\r\n"${w.targetAbs}" %*\r\n`);
@@ -820,7 +820,7 @@ function httpsDownload(url, dest) {
       // rejects it with 415; its default Accept already 302s to the tarball.
       const req = https.get(
         currentUrl,
-        { headers: { 'User-Agent': 'orkas-pkg' } },
+        { headers: { 'User-Agent': 'cogseed-pkg' } },
         (res) => {
           const code = res.statusCode || 0;
           if (code >= 300 && code < 400 && res.headers.location) {
@@ -899,7 +899,7 @@ async function fetchGithubTarballInto(cls, destDir) {
   const archive = `${destDir}.tgz-${process.pid}`;
   fs.rmSync(archive, { force: true });
   try {
-    process.stderr.write(`orkas-pkg: git not used — downloading ${cls.owner}/${cls.repo} tarball\n`);
+    process.stderr.write(`cogseed-pkg: git not used — downloading ${cls.owner}/${cls.repo} tarball\n`);
     await httpsDownload(githubTarballUrl(cls), archive);
     return extractGithubTarball(archive, destDir);
   } finally {
@@ -938,7 +938,7 @@ function cmdInstall(args) {
     if (pi !== -1) positional.splice(pi, 1);
   }
   const source = positional[0];
-  if (!source) die(64, 'usage: orkas-pkg.cjs install <git-url-or-local-path> [--name <name>] [--consent-deps]');
+  if (!source) die(64, 'usage: cogseed-pkg.cjs install <git-url-or-local-path> [--name <name>] [--consent-deps]');
   const consentDeps = flags.has('--consent-deps');
 
   const name = explicitName || deriveName(source);
@@ -950,7 +950,7 @@ function cmdInstall(args) {
   return withRegistryLock(uid, async () => {
     const finalDir = path.join(packagesDir(uid), name);
     if (isDir(finalDir)) {
-      die(73, `package "${name}" already exists — use \`orkas-pkg.cjs update ${name}\` or remove it first`);
+      die(73, `package "${name}" already exists — use \`cogseed-pkg.cjs update ${name}\` or remove it first`);
     }
 
     // Clone into a staging dir on the same filesystem, scan, then promote.
@@ -1103,7 +1103,7 @@ function cmdInstall(args) {
 
 function cmdConsentDeps(args) {
   const name = args[0];
-  if (!name || !PKG_NAME_RE.test(name)) die(64, 'usage: orkas-pkg.cjs consent-deps <name>');
+  if (!name || !PKG_NAME_RE.test(name)) die(64, 'usage: cogseed-pkg.cjs consent-deps <name>');
   const uid = resolveUid();
   return withRegistryLock(uid, () => {
     const registry = readRegistry(uid);
@@ -1132,7 +1132,7 @@ function cmdConsentDeps(args) {
 
 function cmdUpdate(args) {
   const name = args[0];
-  if (!name || !PKG_NAME_RE.test(name)) die(64, 'usage: orkas-pkg.cjs update <name>');
+  if (!name || !PKG_NAME_RE.test(name)) die(64, 'usage: cogseed-pkg.cjs update <name>');
   const uid = resolveUid();
   return withRegistryLock(uid, async () => {
     const registry = readRegistry(uid);
@@ -1254,7 +1254,7 @@ function cmdUpdate(args) {
 
 function cmdSetEnabled(args, enabled) {
   const name = args[0];
-  if (!name || !PKG_NAME_RE.test(name)) die(64, `usage: orkas-pkg.cjs ${enabled ? 'enable' : 'disable'} <name>`);
+  if (!name || !PKG_NAME_RE.test(name)) die(64, `usage: cogseed-pkg.cjs ${enabled ? 'enable' : 'disable'} <name>`);
   const uid = resolveUid();
   return withRegistryLock(uid, () => {
     const registry = readRegistry(uid);
@@ -1295,7 +1295,7 @@ function validateCompanionFrontmatter(content) {
  */
 function cmdSkillWrite(args) {
   const name = args[0];
-  if (!name || !PKG_NAME_RE.test(name)) die(64, 'usage: orkas-pkg.cjs skill-write <name>  (SKILL.md on stdin)');
+  if (!name || !PKG_NAME_RE.test(name)) die(64, 'usage: cogseed-pkg.cjs skill-write <name>  (SKILL.md on stdin)');
   const uid = resolveUid();
   let content = '';
   try {
@@ -1326,7 +1326,7 @@ function cmdSkillWrite(args) {
 
 function cmdRemove(args) {
   const name = args[0];
-  if (!name || !PKG_NAME_RE.test(name)) die(64, 'usage: orkas-pkg.cjs remove <name>');
+  if (!name || !PKG_NAME_RE.test(name)) die(64, 'usage: cogseed-pkg.cjs remove <name>');
   const uid = resolveUid();
   return withRegistryLock(uid, () => {
     const registry = readRegistry(uid);
@@ -1365,7 +1365,7 @@ function cmdList() {
 
 function cmdInfo(args) {
   const name = args[0];
-  if (!name) die(64, 'usage: orkas-pkg.cjs info <name>');
+  if (!name) die(64, 'usage: cogseed-pkg.cjs info <name>');
   const uid = resolveUid();
   const entry = readRegistry(uid).packages.find((p) => p && p.name === name);
   if (!entry) die(66, `package "${name}" is not installed`);
@@ -1385,12 +1385,12 @@ async function main() {
     case 'list': return cmdList();
     case 'info': return cmdInfo(rest);
     default:
-      die(64, 'usage: orkas-pkg.cjs <install|consent-deps|enable|disable|update|remove|skill-write|list|info> ...');
+      die(64, 'usage: cogseed-pkg.cjs <install|consent-deps|enable|disable|update|remove|skill-write|list|info> ...');
   }
 }
 
 if (require.main === module) {
-  main().catch((err) => die(1, 'orkas-pkg failed', { error: err && err.message }));
+  main().catch((err) => die(1, 'cogseed-pkg failed', { error: err && err.message }));
 } else {
   // Required from a test — expose the pure source-routing/fetch helpers without
   // running a command. (Run-as-CLI takes the branch above.)

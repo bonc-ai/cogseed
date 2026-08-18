@@ -24,8 +24,8 @@ git status --short
 
 ```bash
 git fetch origin develop
-git worktree add -b dev/p3394-bridge-runtime ../Mate-Backend-P3394-Bridge origin/develop
-cd ../Mate-Backend-P3394-Bridge
+git worktree add -b dev/p3394-bridge-runtime ../CogSeed-Backend-P3394-Bridge origin/develop
+cd ../CogSeed-Backend-P3394-Bridge
 npm install
 ```
 

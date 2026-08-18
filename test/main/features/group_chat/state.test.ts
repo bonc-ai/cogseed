@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { MateTaskRecord } from '../../../../src/main/features/cogseed_backend/types';
+import type { CogSeedTaskRecord } from '../../../../src/main/features/cogseed_backend/types';
 
 const loggerMocks = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -38,9 +38,9 @@ const TEST_UID = 'u1';
 const TEST_CID = 'cid01';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-state-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-state-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   loggerMocks.debug.mockClear();
   loggerMocks.info.mockClear();
@@ -58,7 +58,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -521,16 +521,16 @@ describe('group_chat facade › runtimeStatus orphan recovery', () => {
     // bus is quiescent while they execute, so runtimeStatus must surface them
     // or the renderer finalizes the run early (imported-session continuation
     // dispatches long work there).
-    const { mateTaskFile } = await import('../../../../src/main/features/cogseed_backend/paths');
-    const { MATE_AGENT_BACKEND_SCHEMA_VERSION } = await import('../../../../src/main/features/cogseed_backend/types');
-    const taskId = 'mate-task-runtime-status-active';
+    const { cogseedTaskFile } = await import('../../../../src/main/features/cogseed_backend/paths');
+    const { COGSEED_AGENT_BACKEND_SCHEMA_VERSION } = await import('../../../../src/main/features/cogseed_backend/types');
+    const taskId = 'cogseed-task-runtime-status-active';
     const nowIso = new Date().toISOString();
-    const task: MateTaskRecord = {
-      schemaVersion: MATE_AGENT_BACKEND_SCHEMA_VERSION,
+    const task: CogSeedTaskRecord = {
+      schemaVersion: COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
       taskId,
-      sessionId: 'mate-session-runtime-status',
+      sessionId: 'cogseed-session-runtime-status',
       runtimeSessionId: 'mruntime-session-runtime-status',
-      executionId: 'mate-exec-runtime-status',
+      executionId: 'cogseed-exec-runtime-status',
       requestId: 'req-runtime-status-active',
       ownerId: TEST_UID,
       status: 'running',
@@ -541,7 +541,7 @@ describe('group_chat facade › runtimeStatus orphan recovery', () => {
       createdAt: nowIso,
       updatedAt: nowIso,
     };
-    const taskFile = mateTaskFile(TEST_UID, taskId);
+    const taskFile = cogseedTaskFile(TEST_UID, taskId);
     fs.mkdirSync(path.dirname(taskFile), { recursive: true });
     fs.writeFileSync(taskFile, JSON.stringify(task));
 

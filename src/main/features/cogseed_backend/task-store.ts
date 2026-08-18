@@ -1,47 +1,47 @@
 import * as fs from 'node:fs/promises';
 
 import { genId12, nowIso, writeJson } from '../../storage';
-import { appendMateTaskEvent } from './event-store';
+import { appendCogSeedTaskEvent } from './event-store';
 import { fileEditLock } from '../../util/locks';
 import {
-  assertMateRequestId,
-  assertMateAgentId,
-  assertMateConversationId,
-  assertMateCoordinationId,
-  assertMateTaskId,
-  assertMateUserId,
-  mateRequestClaimFile,
-  mateTaskFile,
-  mateTasksDirectory,
+  assertCogSeedRequestId,
+  assertCogSeedAgentId,
+  assertCogSeedConversationId,
+  assertCogSeedCoordinationId,
+  assertCogSeedTaskId,
+  assertCogSeedUserId,
+  cogseedRequestClaimFile,
+  cogseedTaskFile,
+  cogseedTasksDirectory,
 } from './paths';
 import {
-  getOrCreateMateAgentSession,
-  getOrCreateMateSession,
-  readMateSession,
-  listMateSessions,
-  setMateSessionActiveTask,
+  getOrCreateCogSeedAgentSession,
+  getOrCreateCogSeedSession,
+  readCogSeedSession,
+  listCogSeedSessions,
+  setCogSeedSessionActiveTask,
 } from './session-store';
-import { resolveMateSessionIdentity } from './actor-session-facade';
+import { resolveCogSeedSessionIdentity } from './actor-session-facade';
 import {
-  MATE_AGENT_BACKEND_SCHEMA_VERSION,
-  type MateRequestClaim,
-  type MateSessionRecord,
-  type MateTaskRecord,
-  type MateLocalCliConfig,
-  type MateTaskSkillVersionPin,
+  COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
+  type CogSeedRequestClaim,
+  type CogSeedSessionRecord,
+  type CogSeedTaskRecord,
+  type CogSeedLocalCliConfig,
+  type CogSeedTaskSkillVersionPin,
 } from './types';
 import { listSkillVersions } from '../skills/version-store';
 import { ensureSkillRuntimeSnapshot } from '../skills/runtime-snapshot-service';
 
 export {
-  getOrCreateMateAgentSession,
-  getOrCreateMateSession,
-  readMateSession,
-  listMateSessions,
-  setMateSessionActiveTask,
+  getOrCreateCogSeedAgentSession,
+  getOrCreateCogSeedSession,
+  readCogSeedSession,
+  listCogSeedSessions,
+  setCogSeedSessionActiveTask,
 } from './session-store';
 
-export interface CreateMateTaskInput {
+export interface CreateCogSeedTaskInput {
   requestId: string;
   task: string;
   sessionId?: string;
@@ -49,12 +49,12 @@ export interface CreateMateTaskInput {
   agentId?: string;
   executionKind?: 'cogseed-native' | 'local-cli';
   allowedSkillIds?: string[];
-  skillVersionPins?: MateTaskSkillVersionPin[];
+  skillVersionPins?: CogSeedTaskSkillVersionPin[];
   skillVersionPinStatus?: 'pinned' | 'unpinned';
   /** Internal retry path: preserve the already-persisted reference even when
    * a legacy version envelope cannot be re-read during migration. */
   preserveSkillVersionPins?: boolean;
-  localCli?: MateLocalCliConfig;
+  localCli?: CogSeedLocalCliConfig;
   profileId?: string;
   retryOfTaskId?: string;
   coordinationId?: string;
@@ -62,28 +62,28 @@ export interface CreateMateTaskInput {
   coordinationDepth?: number;
 }
 
-export interface CreateMateTaskResult {
-  task: MateTaskRecord;
+export interface CreateCogSeedTaskResult {
+  task: CogSeedTaskRecord;
   created: boolean;
 }
 
 async function resolveSkillVersionPins(
   userId: string,
   allowedSkillIds: string[] | undefined,
-  requested: MateTaskSkillVersionPin[] | undefined,
+  requested: CogSeedTaskSkillVersionPin[] | undefined,
   preserveRequested: boolean,
-): Promise<MateTaskSkillVersionPin[] | undefined> {
+): Promise<CogSeedTaskSkillVersionPin[] | undefined> {
   if (!allowedSkillIds?.length && requested === undefined) return undefined;
   const allowed = new Set(allowedSkillIds || []);
   if (requested && requested.length > 128) throw new Error('too many Skill version pins');
   const skillIds = requested !== undefined
-    ? requested.map((pin) => assertMateAgentId(String(pin.skillId)))
+    ? requested.map((pin) => assertCogSeedAgentId(String(pin.skillId)))
     : allowedSkillIds || [];
   if (new Set(skillIds).size !== skillIds.length) throw new Error('duplicate Skill version pin');
   if (requested !== undefined && skillIds.some((skillId) => !allowed.has(skillId))) {
     throw new Error('skill version pin is outside the persisted Skill allowlist');
   }
-  const resolved: Array<MateTaskSkillVersionPin | undefined> = await Promise.all(skillIds.map(async (skillId, index): Promise<MateTaskSkillVersionPin | undefined> => {
+  const resolved: Array<CogSeedTaskSkillVersionPin | undefined> = await Promise.all(skillIds.map(async (skillId, index): Promise<CogSeedTaskSkillVersionPin | undefined> => {
     const versions = await listSkillVersions(userId, skillId);
     const requestedPin = requested?.[index];
     const current = requestedPin
@@ -102,41 +102,41 @@ async function resolveSkillVersionPins(
       version: current.version,
       manifestHash: current.manifestHash,
       revisionId: current.revisionId,
-    } satisfies MateTaskSkillVersionPin;
+    } satisfies CogSeedTaskSkillVersionPin;
   }));
-  return resolved.filter((pin): pin is MateTaskSkillVersionPin => !!pin);
+  return resolved.filter((pin): pin is CogSeedTaskSkillVersionPin => !!pin);
 }
 
 function isEnoent(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
 }
 
-function validateTask(userId: string, value: unknown, expectedTaskId?: string): MateTaskRecord {
+function validateTask(userId: string, value: unknown, expectedTaskId?: string): CogSeedTaskRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed CogSeed task');
   const row = value as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_AGENT_BACKEND_SCHEMA_VERSION) throw new Error('unsupported CogSeed task schema');
+  if (row.schemaVersion !== COGSEED_AGENT_BACKEND_SCHEMA_VERSION) throw new Error('unsupported CogSeed task schema');
   if (row.ownerId !== userId) throw new Error('CogSeed task owner mismatch');
   if (typeof row.taskId !== 'string') throw new Error('malformed CogSeed task');
-  assertMateTaskId(row.taskId);
+  assertCogSeedTaskId(row.taskId);
   if (expectedTaskId && row.taskId !== expectedTaskId) throw new Error('CogSeed task id mismatch');
   if (typeof row.sessionId !== 'string' || typeof row.runtimeSessionId !== 'string' || typeof row.requestId !== 'string') {
     throw new Error('malformed CogSeed task');
   }
   if (!row.runtimeSessionId.startsWith('mruntime-')) throw new Error('malformed CogSeed task');
-  if (row.executionId !== undefined && (typeof row.executionId !== 'string' || !row.executionId.startsWith('mate-exec-'))) throw new Error('malformed CogSeed task');
+  if (row.executionId !== undefined && (typeof row.executionId !== 'string' || !row.executionId.startsWith('cogseed-exec-'))) throw new Error('malformed CogSeed task');
   if (row.runtimeRunId !== undefined && (typeof row.runtimeRunId !== 'string' || !row.runtimeRunId.startsWith('run_'))) throw new Error('malformed CogSeed task');
-  if (row.runtimeWorkerId !== undefined && (typeof row.runtimeWorkerId !== 'string' || !row.runtimeWorkerId.startsWith('mate-worker-'))) throw new Error('malformed CogSeed task');
-  if (row.coordinationId !== undefined && (typeof row.coordinationId !== 'string' || !row.coordinationId.startsWith('mate-coord-'))) throw new Error('malformed CogSeed task');
-  if (row.parentTaskId !== undefined && (typeof row.parentTaskId !== 'string' || !row.parentTaskId.startsWith('mate-task-'))) throw new Error('malformed CogSeed task');
+  if (row.runtimeWorkerId !== undefined && (typeof row.runtimeWorkerId !== 'string' || !row.runtimeWorkerId.startsWith('cogseed-worker-'))) throw new Error('malformed CogSeed task');
+  if (row.coordinationId !== undefined && (typeof row.coordinationId !== 'string' || !row.coordinationId.startsWith('cogseed-coord-'))) throw new Error('malformed CogSeed task');
+  if (row.parentTaskId !== undefined && (typeof row.parentTaskId !== 'string' || !row.parentTaskId.startsWith('cogseed-task-'))) throw new Error('malformed CogSeed task');
   if (row.coordinationDepth !== undefined && (!Number.isInteger(row.coordinationDepth) || Number(row.coordinationDepth) < 1)) throw new Error('malformed CogSeed task');
-  if (row.conversationId !== undefined) assertMateConversationId(String(row.conversationId));
-  if (row.agentId !== undefined) assertMateAgentId(String(row.agentId));
+  if (row.conversationId !== undefined) assertCogSeedConversationId(String(row.conversationId));
+  if (row.agentId !== undefined) assertCogSeedAgentId(String(row.agentId));
   if (row.executionKind !== undefined && row.executionKind !== 'cogseed-native' && row.executionKind !== 'local-cli') {
     throw new Error('malformed CogSeed task');
   }
   if (row.allowedSkillIds !== undefined) {
     if (!Array.isArray(row.allowedSkillIds) || row.allowedSkillIds.length > 128) throw new Error('malformed CogSeed task');
-    for (const skillId of row.allowedSkillIds) assertMateAgentId(String(skillId));
+    for (const skillId of row.allowedSkillIds) assertCogSeedAgentId(String(skillId));
   }
   if (row.skillVersionPins !== undefined) {
     if (!Array.isArray(row.skillVersionPins) || row.skillVersionPins.length > 128) throw new Error('malformed CogSeed task');
@@ -145,7 +145,7 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('malformed CogSeed task');
       const pin = raw as Record<string, unknown>;
       const skillId = String(pin.skillId || '');
-      assertMateAgentId(skillId);
+      assertCogSeedAgentId(skillId);
       if (seen.has(skillId) || typeof pin.version !== 'string' || !pin.version.trim()
         || typeof pin.manifestHash !== 'string' || !/^[a-f0-9]{64}$/.test(pin.manifestHash)
         || (pin.revisionId !== undefined && typeof pin.revisionId !== 'string')) throw new Error('malformed CogSeed task');
@@ -169,30 +169,30 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
     }
   }
   if (row.executionKind === 'local-cli' && row.localCli === undefined) throw new Error('malformed CogSeed task');
-  assertMateRequestId(row.requestId);
-  if (row.lastResumeRequestId !== undefined) assertMateRequestId(String(row.lastResumeRequestId));
+  assertCogSeedRequestId(row.requestId);
+  if (row.lastResumeRequestId !== undefined) assertCogSeedRequestId(String(row.lastResumeRequestId));
   if (typeof row.task !== 'string' || typeof row.status !== 'string' || typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') {
     throw new Error('malformed CogSeed task');
   }
-  return row as unknown as MateTaskRecord;
+  return row as unknown as CogSeedTaskRecord;
 }
 
-function validateClaim(userId: string, requestId: string, value: unknown): MateRequestClaim {
+function validateClaim(userId: string, requestId: string, value: unknown): CogSeedRequestClaim {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed CogSeed request claim');
   const row = value as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_AGENT_BACKEND_SCHEMA_VERSION || row.ownerId !== userId || row.requestId !== requestId) {
+  if (row.schemaVersion !== COGSEED_AGENT_BACKEND_SCHEMA_VERSION || row.ownerId !== userId || row.requestId !== requestId) {
     throw new Error('malformed CogSeed request claim');
   }
   if (typeof row.taskId !== 'string' || typeof row.createdAt !== 'string') throw new Error('malformed CogSeed request claim');
-  assertMateTaskId(row.taskId);
-  return row as unknown as MateRequestClaim;
+  assertCogSeedTaskId(row.taskId);
+  return row as unknown as CogSeedRequestClaim;
 }
 
-export async function readMateTask(userId: string, taskId: string): Promise<MateTaskRecord | null> {
-  assertMateUserId(userId);
-  assertMateTaskId(taskId);
+export async function readCogSeedTask(userId: string, taskId: string): Promise<CogSeedTaskRecord | null> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(taskId);
   try {
-    const text = await fs.readFile(mateTaskFile(userId, taskId), 'utf8');
+    const text = await fs.readFile(cogseedTaskFile(userId, taskId), 'utf8');
     return validateTask(userId, JSON.parse(text), taskId);
   } catch (error) {
     if (isEnoent(error)) return null;
@@ -201,16 +201,16 @@ export async function readMateTask(userId: string, taskId: string): Promise<Mate
   }
 }
 
-export async function updateMateTask(
+export async function updateCogSeedTask(
   userId: string,
   taskId: string,
-  mutate: (current: MateTaskRecord) => MateTaskRecord | Promise<MateTaskRecord>,
-): Promise<MateTaskRecord> {
-  assertMateUserId(userId);
-  assertMateTaskId(taskId);
-  const file = mateTaskFile(userId, taskId);
+  mutate: (current: CogSeedTaskRecord) => CogSeedTaskRecord | Promise<CogSeedTaskRecord>,
+): Promise<CogSeedTaskRecord> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(taskId);
+  const file = cogseedTaskFile(userId, taskId);
   return fileEditLock(file).runExclusive(async () => {
-    const current = await readMateTask(userId, taskId);
+    const current = await readCogSeedTask(userId, taskId);
     if (!current) throw new Error('CogSeed task not found');
     const next = await mutate(current);
     const validated = validateTask(userId, next, taskId);
@@ -220,12 +220,12 @@ export async function updateMateTask(
 }
 
 
-export async function readMateTaskByRequestId(userId: string, requestId: string): Promise<MateTaskRecord | null> {
-  assertMateUserId(userId);
-  const claimFile = mateRequestClaimFile(userId, assertMateRequestId(requestId));
+export async function readCogSeedTaskByRequestId(userId: string, requestId: string): Promise<CogSeedTaskRecord | null> {
+  assertCogSeedUserId(userId);
+  const claimFile = cogseedRequestClaimFile(userId, assertCogSeedRequestId(requestId));
   try {
     const claim = validateClaim(userId, requestId, JSON.parse(await fs.readFile(claimFile, 'utf8')));
-    return readMateTask(userId, claim.taskId);
+    return readCogSeedTask(userId, claim.taskId);
   } catch (error) {
     if (isEnoent(error)) return null;
     if (error instanceof SyntaxError) throw new Error('malformed CogSeed request claim');
@@ -233,52 +233,52 @@ export async function readMateTaskByRequestId(userId: string, requestId: string)
   }
 }
 
-export async function listMateTasks(userId: string): Promise<MateTaskRecord[]> {
-  assertMateUserId(userId);
+export async function listCogSeedTasks(userId: string): Promise<CogSeedTaskRecord[]> {
+  assertCogSeedUserId(userId);
   let entries: import('node:fs').Dirent[];
-  try { entries = await fs.readdir(mateTasksDirectory(userId), { withFileTypes: true }); }
+  try { entries = await fs.readdir(cogseedTasksDirectory(userId), { withFileTypes: true }); }
   catch (error) { if (isEnoent(error)) return []; throw error; }
-  const tasks: MateTaskRecord[] = [];
+  const tasks: CogSeedTaskRecord[] = [];
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
     const taskId = entry.name.slice(0, -'.json'.length);
-    tasks.push(await readMateTask(userId, taskId).then((task) => { if (!task) throw new Error('CogSeed task disappeared during recovery'); return task; }));
+    tasks.push(await readCogSeedTask(userId, taskId).then((task) => { if (!task) throw new Error('CogSeed task disappeared during recovery'); return task; }));
   }
   return tasks.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
-export async function readLatestMateTaskForAgent(
+export async function readLatestCogSeedTaskForAgent(
   userId: string,
   conversationId: string,
   agentId: string,
-): Promise<MateTaskRecord | null> {
-  const safeConversationId = assertMateConversationId(conversationId);
-  const safeAgentId = assertMateAgentId(agentId);
-  const session = await getOrCreateMateAgentSession(userId, safeConversationId, safeAgentId);
+): Promise<CogSeedTaskRecord | null> {
+  const safeConversationId = assertCogSeedConversationId(conversationId);
+  const safeAgentId = assertCogSeedAgentId(agentId);
+  const session = await getOrCreateCogSeedAgentSession(userId, safeConversationId, safeAgentId);
   if (session.activeTaskId) {
-    const active = await readMateTask(userId, session.activeTaskId);
+    const active = await readCogSeedTask(userId, session.activeTaskId);
     if (active && active.conversationId === safeConversationId && active.agentId === safeAgentId) return active;
   }
-  return (await listMateTasks(userId)).find((task) => (
+  return (await listCogSeedTasks(userId)).find((task) => (
     task.conversationId === safeConversationId && task.agentId === safeAgentId
   )) ?? null;
 }
 
-export async function createMateTask(userId: string, input: CreateMateTaskInput): Promise<CreateMateTaskResult> {
-  assertMateUserId(userId);
-  const requestId = assertMateRequestId(String(input.requestId || ''));
+export async function createCogSeedTask(userId: string, input: CreateCogSeedTaskInput): Promise<CreateCogSeedTaskResult> {
+  assertCogSeedUserId(userId);
+  const requestId = assertCogSeedRequestId(String(input.requestId || ''));
   const task = String(input.task || '').trim();
   if (!task) throw new Error('CogSeed task is required');
   if (input.executionKind === 'local-cli' && !String(input.localCli?.cli || '').trim()) {
     throw new Error('CogSeed local CLI configuration is required');
   }
-  const claimFile = mateRequestClaimFile(userId, requestId);
+  const claimFile = cogseedRequestClaimFile(userId, requestId);
 
   return fileEditLock(claimFile).runExclusive(async () => {
     try {
       const claimText = await fs.readFile(claimFile, 'utf8');
       const claim = validateClaim(userId, requestId, JSON.parse(claimText));
-      const existing = await readMateTask(userId, claim.taskId);
+      const existing = await readCogSeedTask(userId, claim.taskId);
       if (!existing) throw new Error('CogSeed request claim references a missing task');
       return { task: existing, created: false };
     } catch (error) {
@@ -288,12 +288,12 @@ export async function createMateTask(userId: string, input: CreateMateTaskInput)
       }
     }
 
-    const requestedAgentId = input.agentId ? assertMateAgentId(String(input.agentId)) : undefined;
+    const requestedAgentId = input.agentId ? assertCogSeedAgentId(String(input.agentId)) : undefined;
     let requestedConversationId = input.conversationId
-      ? assertMateConversationId(String(input.conversationId))
+      ? assertCogSeedConversationId(String(input.conversationId))
       : undefined;
     if (input.sessionId) {
-      const identity = resolveMateSessionIdentity(input.sessionId);
+      const identity = resolveCogSeedSessionIdentity(input.sessionId);
       if (requestedConversationId && identity.conversationId && requestedConversationId !== identity.conversationId) {
         throw new Error('CogSeed task conversation/session mismatch');
       }
@@ -302,12 +302,12 @@ export async function createMateTask(userId: string, input: CreateMateTaskInput)
         throw new Error('CogSeed task Agent/session mismatch');
       }
     }
-    const session: MateSessionRecord = requestedAgentId && requestedConversationId
-      ? await getOrCreateMateAgentSession(userId, requestedConversationId, requestedAgentId)
-      : await getOrCreateMateSession(userId, input.sessionId);
+    const session: CogSeedSessionRecord = requestedAgentId && requestedConversationId
+      ? await getOrCreateCogSeedAgentSession(userId, requestedConversationId, requestedAgentId)
+      : await getOrCreateCogSeedSession(userId, input.sessionId);
     const createdAt = nowIso();
     const allowedSkillIds = input.allowedSkillIds !== undefined
-      ? Array.from(new Set(input.allowedSkillIds.map((item) => assertMateAgentId(String(item)))))
+      ? Array.from(new Set(input.allowedSkillIds.map((item) => assertCogSeedAgentId(String(item)))))
       : undefined;
     const skillVersionPins = await resolveSkillVersionPins(
       userId,
@@ -315,12 +315,12 @@ export async function createMateTask(userId: string, input: CreateMateTaskInput)
       input.skillVersionPins,
       input.preserveSkillVersionPins === true,
     );
-    const taskRecord: MateTaskRecord = {
-      schemaVersion: MATE_AGENT_BACKEND_SCHEMA_VERSION,
-      taskId: `mate-task-${genId12()}`,
+    const taskRecord: CogSeedTaskRecord = {
+      schemaVersion: COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
+      taskId: `cogseed-task-${genId12()}`,
       sessionId: session.sessionId,
       runtimeSessionId: session.runtimeSessionId,
-      executionId: 'mate-exec-' + genId12(),
+      executionId: 'cogseed-exec-' + genId12(),
       requestId,
       ownerId: userId,
       status: 'created',
@@ -345,24 +345,24 @@ export async function createMateTask(userId: string, input: CreateMateTaskInput)
         },
       } : {}),
       ...(input.profileId ? { profileId: String(input.profileId) } : {}),
-      ...(input.retryOfTaskId ? { retryOfTaskId: assertMateTaskId(String(input.retryOfTaskId)) } : {}),
-      ...(input.coordinationId ? { coordinationId: assertMateCoordinationId(String(input.coordinationId)) } : {}),
-      ...(input.parentTaskId ? { parentTaskId: assertMateTaskId(String(input.parentTaskId)) } : {}),
+      ...(input.retryOfTaskId ? { retryOfTaskId: assertCogSeedTaskId(String(input.retryOfTaskId)) } : {}),
+      ...(input.coordinationId ? { coordinationId: assertCogSeedCoordinationId(String(input.coordinationId)) } : {}),
+      ...(input.parentTaskId ? { parentTaskId: assertCogSeedTaskId(String(input.parentTaskId)) } : {}),
       ...(input.coordinationDepth !== undefined ? { coordinationDepth: (() => { const depth = Number(input.coordinationDepth); if (!Number.isInteger(depth) || depth < 1) throw new Error('invalid CogSeed coordination depth'); return depth; })() } : {}),
       createdAt,
       updatedAt: createdAt,
     };
-    const claim: MateRequestClaim = {
-      schemaVersion: MATE_AGENT_BACKEND_SCHEMA_VERSION,
+    const claim: CogSeedRequestClaim = {
+      schemaVersion: COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
       requestId,
       taskId: taskRecord.taskId,
       ownerId: userId,
       createdAt,
     };
-    await writeJson(mateTaskFile(userId, taskRecord.taskId), taskRecord);
+    await writeJson(cogseedTaskFile(userId, taskRecord.taskId), taskRecord);
     await writeJson(claimFile, claim);
-    await setMateSessionActiveTask(userId, session.sessionId, taskRecord.taskId);
-    await appendMateTaskEvent(userId, taskRecord.taskId, taskRecord.sessionId, 'task.created', { requestId });
+    await setCogSeedSessionActiveTask(userId, session.sessionId, taskRecord.taskId);
+    await appendCogSeedTaskEvent(userId, taskRecord.taskId, taskRecord.sessionId, 'task.created', { requestId });
     return { task: taskRecord, created: true };
   });
 }

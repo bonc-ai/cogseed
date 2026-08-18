@@ -44,7 +44,7 @@ function patchSdk(moduleName: string): void {
     log.warn('sdk patch skipped', { module: moduleName, reason: 'missing_default_class' });
     return;
   }
-  if ((Original as any).__orkasPatched) return;
+  if ((Original as any).__cogseedPatched) return;
 
   class Wrapped extends Original {
     constructor(opts: any = {}) {
@@ -55,7 +55,7 @@ function patchSdk(moduleName: string): void {
       super(merged);
     }
   }
-  (Wrapped as any).__orkasPatched = true;
+  (Wrapped as any).__cogseedPatched = true;
 
   Object.defineProperty(mod, 'default', { value: Wrapped, writable: true, configurable: true });
   for (const key of Object.keys(mod)) {

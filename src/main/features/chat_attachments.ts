@@ -974,7 +974,7 @@ export interface AttachmentManifest {
   images: Array<{ data: string; mediaType: ImageMimeType }>;
   /** Names of attachments we couldn't pack (missing / too big / load error). */
   skipped: Array<{ name: string; reason: string }>;
-  /** Current-turn attachment metadata for Orkas-managed server routing. */
+  /** Current-turn attachment metadata for CogSeed-managed server routing. */
   metadata: AttachmentRequestMetadata;
 }
 

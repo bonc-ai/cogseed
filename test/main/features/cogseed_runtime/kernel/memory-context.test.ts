@@ -62,12 +62,12 @@ afterEach(() => {
 });
 
 describe('CogSeed Runtime memory and context', () => {
-  it('stores runtime memory only under the local mate_runtime root and defaults to empty', async () => {
+  it('stores runtime memory only under the local cogseed_runtime root and defaults to empty', async () => {
     expect(await readRuntimeMemory(UID)).toBe('');
 
     await appendRuntimeMemoryEntry(UID, 'Prefer concise answers.');
 
-    expect(runtimeMemoryFile(UID)).toBe(path.join(paths.mateRuntimeMemoryDir(UID), 'runtime.md'));
+    expect(runtimeMemoryFile(UID)).toBe(path.join(paths.cogseedRuntimeMemoryDir(UID), 'runtime.md'));
     expect(await readRuntimeMemory(UID)).toContain('Prefer concise answers.');
     expect(fs.existsSync(path.join(paths.userCloudRoot(UID), 'memory', 'MEMORY.md'))).toBe(false);
   });
@@ -113,7 +113,7 @@ describe('CogSeed Runtime memory and context', () => {
     });
 
     expect(imported.path).toBe(runtimeContextImportFile(UID, 'ctx-explicit', 'notes.txt'));
-    expect(imported.path.startsWith(paths.mateRuntimeContextsDir(UID))).toBe(true);
+    expect(imported.path.startsWith(paths.cogseedRuntimeContextsDir(UID))).toBe(true);
     expect(fs.readFileSync(imported.path, 'utf8')).toBe('context notes');
 
     const transcript = paths.groupChatVisibilityFile(UID, 'gconv-secret', 'agent-a');

@@ -67,4 +67,4 @@ npm run rebuild:sqlite:electron
 
 ## 迁移兼容
 
-CogSeed 是当前正式身份。`mateagent://`、`orkas://`、`ORKAS_*` 和 `.orkas` 仅保留一个发布周期用于旧回调、环境和数据迁移；新代码和新文档必须使用 CogSeed canonical 标识。
+CogSeed 是当前正式身份。`cogseed://`、`cogseed://`、`COGSEED_*` 和 `.cogseed` 仅保留一个发布周期用于旧回调、环境和数据迁移；新代码和新文档必须使用 CogSeed canonical 标识。

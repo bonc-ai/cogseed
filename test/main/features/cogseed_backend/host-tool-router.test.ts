@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createMateHostToolRouter } from '../../../../src/main/features/cogseed_backend/host-tool-router';
+import { createCogSeedHostToolRouter } from '../../../../src/main/features/cogseed_backend/host-tool-router';
 
 const { resolveRuntimeCapabilities, runMessagingHostTool } = vi.hoisted(() => ({
   resolveRuntimeCapabilities: vi.fn(),
@@ -25,18 +25,18 @@ describe('CogSeed host tool router', () => {
   it('routes allowlisted capabilities with request scope and caps results', async () => {
     const office = { run: vi.fn(async () => ({ content: 'office-result' })) };
     const browser = { run: vi.fn(async () => ({ content: 'browser-result' })) };
-    const coordinator = { delegate: vi.fn(async () => ({ taskId: 'mate-task-child', status: 'running' })), tasks: vi.fn(), cancel: vi.fn() };
-    const router = createMateHostToolRouter({ office, browser, coordinator: coordinator as any });
+    const coordinator = { delegate: vi.fn(async () => ({ taskId: 'cogseed-task-child', status: 'running' })), tasks: vi.fn(), cancel: vi.fn() };
+    const router = createCogSeedHostToolRouter({ office, browser, coordinator: coordinator as any });
     await expect(router.handle({ type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-call-1', name: 'office_read', input: { path: '/tmp/a.docx' } }, context)).resolves.toEqual({ content: 'office-result' });
     await expect(router.handle({ type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-call-2', name: 'browser_snapshot', input: {} }, context)).resolves.toEqual({ content: 'browser-result' });
     expect(office.run).toHaveBeenCalledWith('office_read', { path: '/tmp/a.docx' }, expect.objectContaining({ userId: 'router-user', runtimeSessionId: 'mruntime-parent' }), expect.anything());
-    const child = await router.handle({ type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-call-3', name: 'mate_delegate', input: { task: 'child' } }, context);
-    expect(child.content).toContain('mate-task-child'); expect(coordinator.delegate).toHaveBeenCalledWith('router-user', 'req-parent', expect.objectContaining({ requestId: expect.stringMatching(/^req-/), task: 'child' }));
+    const child = await router.handle({ type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-call-3', name: 'cogseed_delegate', input: { task: 'child' } }, context);
+    expect(child.content).toContain('cogseed-task-child'); expect(coordinator.delegate).toHaveBeenCalledWith('router-user', 'req-parent', expect.objectContaining({ requestId: expect.stringMatching(/^req-/), task: 'child' }));
   });
 
   it('denies unknown host calls and caps oversized output', async () => {
     const office = { run: vi.fn(async () => ({ content: 'x'.repeat(30_000) })) };
-    const router = createMateHostToolRouter({ office: office as any });
+    const router = createCogSeedHostToolRouter({ office: office as any });
     const result = await router.handle({ type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-call-1', name: 'office_read', input: {} }, context);
     expect(result.content.length).toBeLessThan(25_000);
     const denied = await router.handle({ type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-call-1', name: 'not-allowed' as any, input: {} }, context);
@@ -48,7 +48,7 @@ describe('CogSeed host tool router', () => {
 
   it('denies messaging host tools when no Commander capability is derived', async () => {
     resolveRuntimeCapabilities.mockResolvedValue([]);
-    const router = createMateHostToolRouter({});
+    const router = createCogSeedHostToolRouter({});
     const denied = await router.handle({
       type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-m1',
       name: 'messaging_send', input: { target: 'self', text: 'hi' },
@@ -61,7 +61,7 @@ describe('CogSeed host tool router', () => {
   it('routes messaging host tools only for a derived Commander capability', async () => {
     resolveRuntimeCapabilities.mockResolvedValue(['messaging.proactive']);
     runMessagingHostTool.mockResolvedValue({ content: JSON.stringify({ status: 'sent', instance_id: 'bot-1' }) });
-    const router = createMateHostToolRouter({});
+    const router = createCogSeedHostToolRouter({});
     const result = await router.handle({
       type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-m2',
       name: 'messaging_send', input: { target: 'self', text: 'hello' },

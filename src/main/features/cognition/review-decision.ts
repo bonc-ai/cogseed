@@ -8,7 +8,7 @@
  * 2. 拒绝/暂缓抑制（FR-EXT-07）：同候选被 defer/reject 后，无新 Evidence
  *    不得重复提示——列表层通过本账本过滤（不侵入三个底层候选存储）。
  *
- * 存储：`<uid>/cloud/mate_agent/review-decisions/<candidate_id>.jsonl`
+ * 存储：`<uid>/cloud/cogseed/review-decisions/<candidate_id>.jsonl`
  * （append-only；每候选一文件；与资产事件账本同模式）。
  */
 
@@ -17,7 +17,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { createLogger } from '../../logger';
 import { appendJsonlAtomic, readJsonl, nowIso } from '../../storage';
-import { mateAgentReviewDecisionsDir } from '../../paths';
+import { cogseedAgentReviewDecisionsDir } from '../../paths';
 import { maskId } from '../../util/log-redact';
 
 const log = createLogger('review-decision');
@@ -84,7 +84,7 @@ export function isShortConfirmation(decision: string): boolean {
 export function reviewDecisionLogPath(uid: string, targetRef: string): string {
   // targetRef 可能是 `source:xxx` 形式——文件名仅取候选 id 段，防止路径注入
   const safeTail = targetRef.replace(/[^A-Za-z0-9._-]/g, '_');
-  return path.join(mateAgentReviewDecisionsDir(uid), `${safeTail}.jsonl`);
+  return path.join(cogseedAgentReviewDecisionsDir(uid), `${safeTail}.jsonl`);
 }
 
 /**

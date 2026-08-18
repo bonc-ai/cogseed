@@ -4,7 +4,7 @@
 
 **Goal:** Make CogSeed the only accepted and emitted product identity across runtime, storage, IPC, CLI, renderer, prompts, packaging, tests, and documentation.
 
-**Architecture:** Replace compatibility-at-the-edge with a single canonical identity contract. All runtime surfaces consume `COGSEED_*`, all app communication uses CogSeed-prefixed channels, and all persisted product namespaces use CogSeed names. A permanent residual-identifier gate prevents legacy Orkas/Mate product identifiers from returning.
+**Architecture:** Replace compatibility-at-the-edge with a single canonical identity contract. All runtime surfaces consume `COGSEED_*`, all app communication uses CogSeed-prefixed channels, and all persisted product namespaces use CogSeed names. A permanent residual-identifier gate prevents legacy CogSeed/Mate product identifiers from returning.
 
 **Tech Stack:** Electron, TypeScript, CommonJS bootstrap scripts, vanilla renderer JavaScript, Vitest, Node.js scripts, Python resource tests.
 
@@ -46,7 +46,7 @@ expect(identity.IDENTITY).toMatchObject({
   envPrefix: 'COGSEED',
 });
 expect(identity.protocolSchemes()).toEqual(['cogseed']);
-expect(() => identity.normalizeRuntimeVariant('mate')).toThrow();
+expect(() => identity.normalizeRuntimeVariant('cogseed')).toThrow();
 expect(identity.normalizeEnv({ COGSEED_WORKSPACE_ROOT: '/root' }))
   .toEqual({ COGSEED_WORKSPACE_ROOT: '/root' });
 ```
@@ -54,8 +54,8 @@ expect(identity.normalizeEnv({ COGSEED_WORKSPACE_ROOT: '/root' }))
 Add protocol rejection assertions:
 
 ```ts
-expect(normalizeDeepLink('orkas://connectors/oauth/callback')).toBeNull();
-expect(normalizeDeepLink('mateagent://connectors/oauth/callback')).toBeNull();
+expect(normalizeDeepLink('cogseed://connectors/oauth/callback')).toBeNull();
+expect(normalizeDeepLink('cogseed://connectors/oauth/callback')).toBeNull();
 expect(CONNECTOR_PROTOCOL_SCHEMES).toEqual(['cogseed']);
 ```
 
@@ -65,19 +65,19 @@ Create a tracked-file scanner that fails on product identifiers matching:
 
 ```js
 const forbiddenContent = [
-  /\bORKAS_[A-Z0-9_]+\b/g,
-  /\bOrkas\b/g,
-  /\borkas(?:[.:_/-]|\b)/g,
-  /\bMATE_AGENT[A-Z0-9_]*\b/g,
-  /\bMateAgent[A-Za-z0-9_]*\b/g,
-  /\bmateAgent[A-Za-z0-9_]*\b/g,
-  /\bmate_agent(?:[.:_/-]|\b)/g,
-  /\bmate-agent(?:[.:_/-]|\b)/g,
-  /\bmateagent(?:[.:_/-]|\b)/g,
-  /\bMATE_RUNTIME[A-Z0-9_]*\b/g,
-  /\bMateRuntime[A-Za-z0-9_]*\b/g,
-  /\bmateRuntime[A-Za-z0-9_]*\b/g,
-  /\bmate-runtime(?:[.:_/-]|\b)/g,
+  /\bCOGSEED_[A-Z0-9_]+\b/g,
+  /\bCogSeed\b/g,
+  /\bcogseed(?:[.:_/-]|\b)/g,
+  /\bCOGSEED_AGENT[A-Z0-9_]*\b/g,
+  /\bCogSeedAgent[A-Za-z0-9_]*\b/g,
+  /\bcogseedAgent[A-Za-z0-9_]*\b/g,
+  /\bcogseed(?:[.:_/-]|\b)/g,
+  /\bcogseed-agent(?:[.:_/-]|\b)/g,
+  /\bcogseed(?:[.:_/-]|\b)/g,
+  /\bCOGSEED_RUNTIME[A-Z0-9_]*\b/g,
+  /\bCogSeedRuntime[A-Za-z0-9_]*\b/g,
+  /\bcogseedRuntime[A-Za-z0-9_]*\b/g,
+  /\bcogseed-runtime(?:[.:_/-]|\b)/g,
 ];
 ```
 
@@ -185,20 +185,20 @@ git commit -m "refactor: collapse app identity to CogSeed only"
 Perform exact identifier replacements, including:
 
 ```text
-ORKAS_WORKSPACE_ROOT -> COGSEED_WORKSPACE_ROOT
-ORKAS_PC_DIR -> COGSEED_PC_DIR
-ORKAS_NODE -> COGSEED_NODE
-ORKAS_UID -> COGSEED_UID
-ORKAS_RUNTIME_VARIANT -> COGSEED_RUNTIME_VARIANT
-ORKAS_OUTPUT_DIR -> COGSEED_OUTPUT_DIR
-ORKAS_AGENT_ID -> COGSEED_AGENT_ID
-ORKAS_PYTHON -> COGSEED_PYTHON
-ORKAS_UV -> COGSEED_UV
-ORKAS_BUNDLED_* -> COGSEED_BUNDLED_*
-ORKAS_TTS_* -> COGSEED_TTS_*
-ORKAS_MCP_* -> COGSEED_MCP_*
-ORKAS_P3394_* -> COGSEED_P3394_*
-ORKAS_METACOGNITION -> COGSEED_METACOGNITION
+COGSEED_WORKSPACE_ROOT -> COGSEED_WORKSPACE_ROOT
+COGSEED_PC_DIR -> COGSEED_PC_DIR
+COGSEED_NODE -> COGSEED_NODE
+COGSEED_UID -> COGSEED_UID
+COGSEED_RUNTIME_VARIANT -> COGSEED_RUNTIME_VARIANT
+COGSEED_OUTPUT_DIR -> COGSEED_OUTPUT_DIR
+COGSEED_AGENT_ID -> COGSEED_AGENT_ID
+COGSEED_PYTHON -> COGSEED_PYTHON
+COGSEED_UV -> COGSEED_UV
+COGSEED_BUNDLED_* -> COGSEED_BUNDLED_*
+COGSEED_TTS_* -> COGSEED_TTS_*
+COGSEED_MCP_* -> COGSEED_MCP_*
+COGSEED_P3394_* -> COGSEED_P3394_*
+COGSEED_METACOGNITION -> COGSEED_METACOGNITION
 ```
 
 Apply the same rename to shell parameter expressions and PowerShell environment syntax.
@@ -208,22 +208,22 @@ Apply the same rename to shell parameter expressions and PowerShell environment 
 Rename product types and constants:
 
 ```text
-MateAgentKernel -> CogSeedKernel
-MateAgentKernelDeps -> CogSeedKernelDeps
-MATE_AGENT_RUNTIME_PROTOCOL_VERSION -> COGSEED_RUNTIME_PROTOCOL_VERSION
-MATE_RUNTIME_TOOL_POLICY -> COGSEED_RUNTIME_TOOL_POLICY
-MateTask* -> CogSeedTask*
-MateSession* -> CogSeedSession*
-MateConnector* -> CogSeedConnector*
-MateCapability* -> CogSeedCapability*
-mateAgentRuntime -> cogseedRuntime
+CogSeedAgentKernel -> CogSeedKernel
+CogSeedAgentKernelDeps -> CogSeedKernelDeps
+COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION -> COGSEED_RUNTIME_PROTOCOL_VERSION
+COGSEED_RUNTIME_TOOL_POLICY -> COGSEED_RUNTIME_TOOL_POLICY
+CogSeedTask* -> CogSeedTask*
+CogSeedSession* -> CogSeedSession*
+CogSeedConnector* -> CogSeedConnector*
+CogSeedCapability* -> CogSeedCapability*
+cogseedAgentRuntime -> cogseedRuntime
 ```
 
-Rename files such as `mate-control-service.ts`, `mate-execution-store.ts`, and `mate-kb-store.ts` to CogSeed equivalents and update imports.
+Rename files such as `cogseed-control-service.ts`, `cogseed-execution-store.ts`, and `cogseed-kb-store.ts` to CogSeed equivalents and update imports.
 
 - [ ] **Step 3: Rename persisted namespaces**
 
-Change path helpers and stored domains from `mate_agent` / `mate_runtime` to `cogseed`, including cloud/local task, session, connector, KB, audit, capability, and worker state paths. Do not retain fallback reads.
+Change path helpers and stored domains from `cogseed` / `cogseed_runtime` to `cogseed`, including cloud/local task, session, connector, KB, audit, capability, and worker state paths. Do not retain fallback reads.
 
 - [ ] **Step 4: Run typecheck and targeted runtime tests**
 
@@ -267,18 +267,18 @@ ipcMain.on('cogseed:bootI18n', handleBootI18n);
 Use canonical channel families:
 
 ```text
-mate_agent.task.* -> cogseed.task.*
-mate_agent.session.* -> cogseed.session.*
-mate_agent.runtime.* -> cogseed.runtime.*
-mate_agent.connector.* -> cogseed.backend.connector.*
-mate_agent.kb.* -> cogseed.backend.kb.*
+cogseed.task.* -> cogseed.task.*
+cogseed.session.* -> cogseed.session.*
+cogseed.runtime.* -> cogseed.runtime.*
+cogseed.connector.* -> cogseed.backend.connector.*
+cogseed.kb.* -> cogseed.backend.kb.*
 ```
 
 Update main handlers, preload allowlists, renderer calls, fixtures, and tests together.
 
-- [ ] **Step 3: Replace `window.mateAgentProjection`**
+- [ ] **Step 3: Replace `window.cogseedAgentProjection`**
 
-Expose and consume `window.cogseedProjection`; rename state fields and local helper names from `mate` to `cogseed` where they refer to this product backend.
+Expose and consume `window.cogseedProjection`; rename state fields and local helper names from `cogseed` to `cogseed` where they refer to this product backend.
 
 - [ ] **Step 4: Add rejection tests**
 
@@ -287,7 +287,7 @@ Assert that old IPC transports are absent from source and old logical channels r
 - [ ] **Step 5: Run IPC and renderer tests**
 
 ```bash
-node scripts/run-tests.mjs run test/main/ipc test/renderer/mate-agent-projection.test.ts test/renderer/conversation-info.test.ts
+node scripts/run-tests.mjs run test/main/ipc test/renderer/cogseed-agent-projection.test.ts test/renderer/conversation-info.test.ts
 ```
 
 Rename test files whose filenames carry the old product identity before committing.
@@ -302,9 +302,9 @@ git commit -m "refactor: expose only CogSeed IPC contracts"
 ### Task 5: Rename CLI tools and remove wrappers
 
 **Files:**
-- Rename: `bin/orkas-pkg.cjs` -> `bin/cogseed-pkg.cjs`
-- Delete: `bin/orkas-bridge.cjs`
-- Delete: `bin/mate-runtime-worker.cjs`
+- Rename: `bin/cogseed-pkg.cjs` -> `bin/cogseed-pkg.cjs`
+- Delete: `bin/cogseed-bridge.cjs`
+- Delete: `bin/cogseed-runtime-worker.cjs`
 - Modify: `bin/cogseed-bridge.cjs`
 - Modify: `bin/cogseed-runtime-worker.cjs`
 - Modify: `bin/run-skill.cjs`
@@ -314,15 +314,15 @@ git commit -m "refactor: expose only CogSeed IPC contracts"
 
 - [ ] **Step 1: Rename package CLI and tool names**
 
-Change `orkas_*` tool names to `cogseed_*`, for example:
+Change `cogseed_*` tool names to `cogseed_*`, for example:
 
 ```text
-orkas_list_skills -> cogseed_list_skills
-orkas_read_skill -> cogseed_read_skill
-orkas_run_skill -> cogseed_run_skill
-orkas_dispatch_to -> cogseed_dispatch_to
-orkas_hand_off_to -> cogseed_hand_off_to
-orkas_kb_search -> cogseed_kb_search
+cogseed_list_skills -> cogseed_list_skills
+cogseed_read_skill -> cogseed_read_skill
+cogseed_run_skill -> cogseed_run_skill
+cogseed_dispatch_to -> cogseed_dispatch_to
+cogseed_hand_off_to -> cogseed_hand_off_to
+cogseed_kb_search -> cogseed_kb_search
 ```
 
 Update tool catalogs, schemas, prompts, tests, and connector templates.
@@ -333,12 +333,12 @@ Remove legacy wrapper files from source, electron-builder `files`, scripts, diag
 
 - [ ] **Step 3: Rename temp markers and runtime files**
 
-Rename `.orkas-runtime.json`, `.orkas-whisper-ready.json`, `.orkas-ocr-verified`, temp prefixes, and package receipt/guard names to CogSeed forms. Do not read legacy markers.
+Rename `.cogseed-runtime.json`, `.cogseed-whisper-ready.json`, `.cogseed-ocr-verified`, temp prefixes, and package receipt/guard names to CogSeed forms. Do not read legacy markers.
 
 - [ ] **Step 4: Run CLI/package tests**
 
 ```bash
-node scripts/run-tests.mjs run test/main/util/orkas-pkg.test.ts test/main/util/orkas-pkg-tarball.test.ts test/main/model/local-tools.test.ts test/main/features/packages.test.ts
+node scripts/run-tests.mjs run test/main/util/cogseed-pkg.test.ts test/main/util/cogseed-pkg-tarball.test.ts test/main/model/local-tools.test.ts test/main/features/packages.test.ts
 node p3394-gateway/test/smoke.cjs
 ```
 
@@ -375,7 +375,7 @@ CogSeed-Arch
 CogSeed-Channel
 ```
 
-Update tests to reject `Orkas-*` headers.
+Update tests to reject `CogSeed-*` headers.
 
 - [ ] **Step 2: Require the CogSeed API base**
 
@@ -400,19 +400,19 @@ Use it for client config, Marketplace, server-managed OAuth, and account/server 
 Change:
 
 ```text
-application/x-orkas-file -> application/x-cogseed-file
-orkas-agent-run-finished -> cogseed-agent-run-finished
-orkas:model-entries-changed -> cogseed:model-entries-changed
-orkas:mp:* -> cogseed:mp:*
-orkas-core-agent -> cogseed-core-agent
-orkas_core -> cogseed_core
+application/x-cogseed-file -> application/x-cogseed-file
+cogseed-agent-run-finished -> cogseed-agent-run-finished
+cogseed:model-entries-changed -> cogseed:model-entries-changed
+cogseed:mp:* -> cogseed:mp:*
+cogseed-core-agent -> cogseed-core-agent
+cogseed_core -> cogseed_core
 ```
 
 Rename CSS/data attributes and internal helper names where they encode the product identity.
 
 - [ ] **Step 4: Clean prompts and locales**
 
-Replace `$ORKAS_OUTPUT_DIR` with `$COGSEED_OUTPUT_DIR`, `orkas-pkg.cjs` with `cogseed-pkg.cjs`, and remove old locale keys and user-visible labels. Keep external integration brands unchanged.
+Replace `$COGSEED_OUTPUT_DIR` with `$COGSEED_OUTPUT_DIR`, `cogseed-pkg.cjs` with `cogseed-pkg.cjs`, and remove old locale keys and user-visible labels. Keep external integration brands unchanged.
 
 - [ ] **Step 5: Run focused UI/API tests**
 
@@ -438,7 +438,7 @@ git commit -m "refactor: rename API and renderer identity to CogSeed"
 
 - [ ] **Step 1: Rename tracked paths carrying legacy product names**
 
-Use `git mv` for all non-archived paths whose filename contains `orkas`, `mate-agent`, `mate_agent`, or `mate-runtime`. Delete obsolete compatibility fixture files instead of preserving renamed copies when their only purpose was legacy acceptance.
+Use `git mv` for all non-archived paths whose filename contains `cogseed`, `cogseed-agent`, `cogseed`, or `cogseed-runtime`. Delete obsolete compatibility fixture files instead of preserving renamed copies when their only purpose was legacy acceptance.
 
 - [ ] **Step 2: Replace legacy product prose**
 

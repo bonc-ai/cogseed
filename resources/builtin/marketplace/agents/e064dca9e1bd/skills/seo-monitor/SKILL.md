@@ -28,12 +28,12 @@ Detect SEO/GEO regressions over time by snapshotting and diffing. Pure analysis 
 
 Set/refresh a baseline (store it in the project, e.g. `baseline.json`):
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" seo-monitor monitor -- --op snapshot --input <crawl.json> --health <N> --geo <N> --out baseline.json
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" seo-monitor monitor -- --op snapshot --input <crawl.json> --health <N> --geo <N> --out baseline.json
 ```
 
 Compare a fresh snapshot against the baseline:
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" seo-monitor monitor -- --op compare --baseline baseline.json --current current.json
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" seo-monitor monitor -- --op compare --baseline baseline.json --current current.json
 ```
 
 ## Expected output

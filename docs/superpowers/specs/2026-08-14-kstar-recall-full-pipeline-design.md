@@ -2,7 +2,7 @@
 
 **日期：** 2026-08-14
 **状态：** 已实现（`codex/commander-centric-kstar` @ `b7d4c8cf`，10 个 TDD 任务全部完成）；待 MR 合入 `develop` 后随主版本发布
-**适用范围：** Mate-Backend-Test 源码仓库；数据根 `<root>/<uid>/cloud|local/`（root = `~/.cogseed-dev` 开发版 / `~/.cogseed` 打包版 / `~/.cogseed/runtime-variants/<variant>` 源码 variant）
+**适用范围：** CogSeed-Backend-Test 源码仓库；数据根 `<root>/<uid>/cloud|local/`（root = `~/.cogseed-dev` 开发版 / `~/.cogseed` 打包版 / `~/.cogseed/runtime-variants/<variant>` 源码 variant）
 
 ---
 
@@ -41,7 +41,7 @@ flowchart TD
 | 层 | 模块 | 职责 |
 |---|---|---|
 | 入口 | `features/group_chat/bus.ts::enqueue` | 用户消息只入队一次；**不再有前置 KStar 路由**；Commander 系统提示注入只读 KStar facts |
-| 工具 | `features/kstar/control-tool.ts` | Commander-only `kstar_control`（schema 不暴露 userId/cid/tool 白名单）；rollout 开关 `ORKAS_COMMANDER_CENTRIC_KSTAR !== '0'` |
+| 工具 | `features/kstar/control-tool.ts` | Commander-only `kstar_control`（schema 不暴露 userId/cid/tool 白名单）；rollout 开关 `COGSEED_COMMANDER_CENTRIC_KSTAR !== '0'` |
 | 状态 | `features/kstar/control-service.ts` | 5 种 operation 规范化→SHA-256 幂等 receipt→状态转换→审计日志 |
 | 存储 | `features/kstar/requirement-store.ts`、`requirement-types.ts` | Task/Requirement/会话状态 JSONL（schemaVersion 1，含 `projectionIds`、`controlReceipts`、`projectionDecisions`） |
 | 投影 | `features/recall/context-projection.ts`、`projection-message.ts`、`projection-card.ts` | preview→confirmed/deferred/rejected/expired/revoked；资产/版本冻结；卡片投递 |

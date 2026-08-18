@@ -24,16 +24,16 @@ let previousWs: string | undefined;
 let variant = '';
 beforeAll(() => {
   variant = 'p3394-wd-' + Math.random().toString(36).slice(2, 8);
-  previousVariant = process.env.ORKAS_RUNTIME_VARIANT;
-  previousWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_RUNTIME_VARIANT = variant;
-  process.env.ORKAS_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-wd-ws-'));
+  previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
+  previousWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_RUNTIME_VARIANT = variant;
+  process.env.COGSEED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-wd-ws-'));
 });
 afterAll(() => {
-  if (previousVariant === undefined) delete process.env.ORKAS_RUNTIME_VARIANT;
-  else process.env.ORKAS_RUNTIME_VARIANT = previousVariant;
-  if (previousWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWs;
+  if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
+  else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
+  if (previousWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWs;
   try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variant), { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
@@ -107,8 +107,8 @@ describe('P3394 managed gateway watchdog (real processes)', () => {
     // 删除 agent 对应 `stopExternalGateway`（内部 detachWatch）：即使 crash
     // 时已排队的重启 timer 到点，网关也不得复活——否则 hello 触发投影
     // 重建同名 agent，「删除后无法再创建同名」。
-    const previousDelay = process.env.ORKAS_P3394_WATCHDOG_DELAY_MS;
-    process.env.ORKAS_P3394_WATCHDOG_DELAY_MS = '500'; // 缩短退避，快速验证
+    const previousDelay = process.env.COGSEED_P3394_WATCHDOG_DELAY_MS;
+    process.env.COGSEED_P3394_WATCHDOG_DELAY_MS = '500'; // 缩短退避，快速验证
     const token = 'ext-watchdog-detach-token';
     const registryFile = p3394StateFile('p3394-peers.json');
     try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
@@ -138,8 +138,8 @@ describe('P3394 managed gateway watchdog (real processes)', () => {
       await stopExternalGateway('hermes');
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
-      if (previousDelay === undefined) delete process.env.ORKAS_P3394_WATCHDOG_DELAY_MS;
-      else process.env.ORKAS_P3394_WATCHDOG_DELAY_MS = previousDelay;
+      if (previousDelay === undefined) delete process.env.COGSEED_P3394_WATCHDOG_DELAY_MS;
+      else process.env.COGSEED_P3394_WATCHDOG_DELAY_MS = previousDelay;
     }
   }, 45_000);
 });

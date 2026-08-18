@@ -6,14 +6,14 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 // Unit + offline coverage for the git-free GitHub install path in
-// bin/orkas-pkg.cjs: source classification (the parsing trap), tarball URL
+// bin/cogseed-pkg.cjs: source classification (the parsing trap), tarball URL
 // shape, tarball extraction/flatten/commit recovery, and the "no git +
 // non-GitHub → git required" routing. A real network install is gated behind
-// ORKAS_PKG_NET_TEST so CI stays offline.
+// COGSEED_PKG_NET_TEST so CI stays offline.
 
 const require = createRequire(import.meta.url);
-const PKG_PATH = path.join(process.cwd(), 'bin', 'orkas-pkg.cjs');
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const PKG_PATH = path.join(process.cwd(), 'bin', 'cogseed-pkg.cjs');
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 const pkg = require(PKG_PATH) as {
   classifySource: (s: string) => { kind: string; owner?: string; repo?: string; ref?: string };
   githubTarballUrl: (cls: { owner: string; repo: string; ref?: string }) => string;
@@ -27,7 +27,7 @@ const tarAvailable = spawnSync('tar', ['--version'], { encoding: 'utf8' }).statu
 const itWithTar = tarAvailable ? it : it.skip;
 
 let tmpDir: string;
-beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-pkg-tb-')); });
+beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-pkg-tb-')); });
 afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
 
 describe('classifySource', () => {
@@ -115,9 +115,9 @@ describe('install routing without git', () => {
       env: {
         // Empty PATH ⇒ `git --version` ENOENTs ⇒ gitAvailable() === false.
         PATH: emptyBin,
-        ORKAS_WORKSPACE_ROOT: wsRoot,
-        ORKAS_UID: 'u1',
-        ORKAS_PC_DIR: process.cwd(),
+        COGSEED_WORKSPACE_ROOT: wsRoot,
+        COGSEED_UID: 'u1',
+        COGSEED_PC_DIR: process.cwd(),
       },
     });
     expect(r.status).toBe(76);
@@ -126,9 +126,9 @@ describe('install routing without git', () => {
   });
 });
 
-// Real end-to-end install over the network. Opt-in only (ORKAS_PKG_NET_TEST).
+// Real end-to-end install over the network. Opt-in only (COGSEED_PKG_NET_TEST).
 // Its isolated PATH hides git while retaining a target-native tar executable.
-describe.skipIf(!process.env.ORKAS_PKG_NET_TEST)('install over the network without git', () => {
+describe.skipIf(!process.env.COGSEED_PKG_NET_TEST)('install over the network without git', () => {
   it('downloads a public GitHub repo as a tarball when git is unavailable', () => {
     const wsRoot = path.join(tmpDir, 'data');
     fs.mkdirSync(wsRoot, { recursive: true });
@@ -150,7 +150,7 @@ describe.skipIf(!process.env.ORKAS_PKG_NET_TEST)('install over the network witho
     // so a successful download+extract reaches the scan stage and exits 65.
     const r = spawnSync(TEST_NODE, [PKG_PATH, 'install', 'https://github.com/octocat/Hello-World'], {
       encoding: 'utf8',
-      env: { PATH: onlyTarBin, ORKAS_WORKSPACE_ROOT: wsRoot, ORKAS_UID: 'u1', ORKAS_PC_DIR: process.cwd() },
+      env: { PATH: onlyTarBin, COGSEED_WORKSPACE_ROOT: wsRoot, COGSEED_UID: 'u1', COGSEED_PC_DIR: process.cwd() },
     });
     // Proves the no-git tarball branch ran (not git clone).
     expect(r.stderr).toContain('downloading octocat/Hello-World tarball');
@@ -158,7 +158,7 @@ describe.skipIf(!process.env.ORKAS_PKG_NET_TEST)('install over the network witho
   });
 });
 
-describe('orkas-pkg source hardening (security fixes)', () => {
+describe('cogseed-pkg source hardening (security fixes)', () => {
   it('validGithubId accepts real ids and rejects traversal / odd chars', () => {
     for (const ok of ['owner', 'My-Repo', 'a.b_c', 'x1']) expect(pkg.validGithubId(ok)).toBe(true);
     for (const bad of ['..', 'a..b', 'a/b', 'a b', '', 'a;b', 'a:b']) expect(pkg.validGithubId(bad)).toBe(false);
@@ -185,7 +185,7 @@ describe('orkas-pkg source hardening (security fixes)', () => {
   });
 
   it('findSymlink reports the first repo-content symlink, skips top-level .git, null for a clean tree', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-sl-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-sl-'));
     const outside = `${root}-outside-target`;
     try {
       fs.mkdirSync(path.join(root, 'sub'), { recursive: true });

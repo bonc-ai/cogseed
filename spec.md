@@ -20,8 +20,8 @@
 
 ```bash
 # 带调试端口启动
-ORKAS_RUNTIME_VARIANT=cogseed open -n node_modules/electron/dist/CogSeed.app \
-  --args "$PWD" --orkas-runtime-variant=cogseed --remote-debugging-port=9222
+COGSEED_RUNTIME_VARIANT=cogseed open -n node_modules/electron/dist/CogSeed.app \
+  --args "$PWD" --cogseed-runtime-variant=cogseed --remote-debugging-port=9222
 # 再用 Runtime.evaluate 读 getComputedStyle / getBoundingClientRect
 ```
 

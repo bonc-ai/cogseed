@@ -15,7 +15,7 @@ import * as path from 'node:path';
 
 const UID = 'p3394-demo-user';
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-demo-'));
-process.env.ORKAS_WORKSPACE_ROOT = WORK;
+process.env.COGSEED_WORKSPACE_ROOT = WORK;
 const SOCK = path.join(WORK, 'node-b.sock'); // A -> B inbound
 const SOCK_BACK = path.join(WORK, 'node-a.sock'); // B -> A event stream
 const STATE = path.join(WORK, 'adapter-state.json');
@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   const { P3394BridgeExecutor } = await import('../src/main/features/p3394_bridge/executor');
   const { buildP3394BridgeManifest } = await import('../src/main/features/p3394_bridge/manifest');
   const { P3394CogseedRuntimeAdapter } = await import('../src/main/features/p3394_bridge/cogseed-runtime-adapter');
-  const { createMateRuntimeController } = await import('../src/main/features/cogseed_backend/runtime-controller');
+  const { createCogSeedRuntimeController } = await import('../src/main/features/cogseed_backend/runtime-controller');
   const { P3394UnixSocketChannel } = await import('../src/main/features/p3394_bridge/unix-socket-channel');
   const { P3394PeerRegistry } = await import('../src/main/features/p3394_bridge/registry');
   const { runP3394BridgeDoctor } = await import('../src/main/features/p3394_bridge/doctor');
@@ -56,7 +56,7 @@ async function main(): Promise<void> {
       yield { type: 'result', status: 'completed', text: 'node-b finished: summary delivered', metadata: {} };
     },
   };
-  const controller = createMateRuntimeController({ runtime });
+  const controller = createCogSeedRuntimeController({ runtime });
   const adapterB = new P3394CogseedRuntimeAdapter({ userId: () => UID, controller, pollIntervalMs: 50, stateFile: STATE });
 
   const channelB = new P3394UnixSocketChannel('node-b', { socketPath: SOCK, token: 'demo-token' });
@@ -131,9 +131,9 @@ async function main(): Promise<void> {
   const tasks = (snapshot.state as { tasks: Array<{ task_id: string }> }).tasks;
   await executorB.closeSession('ses-demo-1');
   line('kstar', 'session closed; kstar hook records: ' + executorB.kstar.list().length);
-  const { readMateTask } = await import('../src/main/features/cogseed_backend/task-store');
-  const { read } = await import('../src/main/features/cogseed_backend/mate-execution-store');
-  const firstTask = await readMateTask(UID, tasks[0].task_id);
+  const { readCogSeedTask } = await import('../src/main/features/cogseed_backend/task-store');
+  const { read } = await import('../src/main/features/cogseed_backend/cogseed-execution-store');
+  const firstTask = await readCogSeedTask(UID, tasks[0].task_id);
   const record = await read(UID, firstTask!.executionId!);
   line('kstar', 'Recall ledger: execution ' + record.executionId + ' status=' + record.status);
 
