@@ -38,6 +38,9 @@ if [ -n "${COGSEED_WORKSPACE_ROOT:-}" ]; then
   echo "[CogSeed] This worktree manages its own cogseed data root; inherited COGSEED_WORKSPACE_ROOT is not allowed." >&2
   exit 2
 fi
+# Do not inherit gateway-only Anthropic credentials into the app model layer.
+unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_MODEL
+
 export COGSEED_RUNTIME_VARIANT="cogseed"
 
 # Hub 联调默认值：默认连接测试 Hub 账号服务（https://cogseed-open.bonc.com.cn）。

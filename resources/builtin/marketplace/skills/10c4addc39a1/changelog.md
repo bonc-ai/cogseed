@@ -25,7 +25,7 @@
 - Complete Word generation.
 - Structural, accessibility, rendering, and page-by-page visual QA.
 - Positive pipeline tests and negative research-gate regressions.
-- NSEAP-style input/output, ontology, evaluation, failure-attribution, KSTAR, and governance contracts.
+- Contract-style input/output, ontology, evaluation, failure-attribution, KSTAR, and governance contracts.
 
 ### Evidence basis
 

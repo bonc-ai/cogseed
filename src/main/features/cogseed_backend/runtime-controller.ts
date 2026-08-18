@@ -322,7 +322,7 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
       const retried = await retryStoredCogSeedTask(userId, taskId, requestId);
       if (retried.status !== 'created') return retried;
       const capabilities = await resolveRuntimeCapabilities(userId, retried.requestId, retried.runtimeSessionId);
-      return launchTask(userId, retried, {
+      const retryInput: StartCogSeedTaskInput & { runtimeSessionId?: string } = {
         requestId,
         task: retried.task,
         ...(retried.agentId ? { agentId: retried.agentId } : {}),
@@ -333,7 +333,17 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
         ...(retried.localCli ? { localCli: retried.localCli } : {}),
         ...(retried.profileId ? { profileId: retried.profileId } : {}),
         capabilities,
-      });
+      };
+      // 重试和首次执行必须拿到同一批已确认资产。漏了这一段，同一个任务第一次
+      // 带认知资产、重试后反而没有——用户会以为资产失效了。start/resume 都注入。
+      const retryConversationId = await resolveConversationIdForTask(userId, retried, retryInput);
+      if (retryConversationId) {
+        const assetContext = await buildRuntimeAssetContext(userId, retryConversationId);
+        if (assetContext.length) {
+          retryInput.context = [...(retryInput.context ?? []), ...assetContext];
+        }
+      }
+      return launchTask(userId, retried, retryInput);
     },
 
     async resumeCogSeedTask(userId, taskId, input) {

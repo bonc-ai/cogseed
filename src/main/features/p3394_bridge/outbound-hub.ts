@@ -26,6 +26,8 @@ export interface P3394OutboundReply {
 
 export interface P3394OutboundStreamEvent {
   text: string;
+  /** 'delta' → 正文增量（可见气泡）；'progress' → process rail 过程日志（工具调用等）。 */
+  kind: 'delta' | 'progress';
   envelope: P3394Envelope;
   sequence?: number;
   sourceMessageId?: string;
@@ -217,6 +219,32 @@ export class P3394OutboundHub {
     return { replayed, failed };
   }
 
+  /** Whether a reply waiter is currently registered for this outbound session.
+   *  A stable session (per scope+peer+goal) has at most one in-flight envelope;
+   *  while it awaits its reply, a second sendAndWait on the same session throws
+   *  `p3394_session_conflict`. Callers that want to append another message to a
+   *  busy session can wait for it to drain instead of failing instantly. */
+  isSessionBusy(sessionId: string): boolean {
+    return this.pending.has(sessionId);
+  }
+
+  /** Bounded wait until the session's in-flight waiter drains (i.e. its reply
+   *  matched or its timeout released it). Resolves true when free, false on
+   *  timeout or abort. Used by the conversation turn path so a second message
+   *  to the same (conversation, agent, goal) session waits for the previous
+   *  turn to settle instead of failing with p3394_session_conflict. */
+  async waitForSessionFree(sessionId: string, timeoutMs: number = this.replyTimeoutMs, signal?: AbortSignal): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.pending.has(sessionId)) {
+      // 用户主动取消必须立即放行：等待中的调用方据此返回 aborted，
+      // 而不是把取消拖到超时窗口结束。
+      if (signal?.aborted) return false;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return true;
+  }
+
   /** Inbound-pipeline hook: resolves the waiting call when the reply arrives. */
   tryResolveReply(envelope: P3394Envelope): boolean {
     const waiter = this.pending.get(envelope.session_id);
@@ -291,7 +319,8 @@ function envelopeText(envelope: P3394Envelope): string {
 function p3394EnvelopeStreamEvent(envelope: P3394Envelope): P3394OutboundStreamEvent | null {
   if (envelope.kind !== 'event') return null;
   const metadata = envelope.payload.metadata;
-  if (!metadata || metadata.stream_event !== 'delta') return null;
+  const streamEvent = metadata && metadata.stream_event;
+  if (streamEvent !== 'delta' && streamEvent !== 'progress') return null;
   // Do not trim deltas: a chunk can intentionally end with a space or a
   // newline, and the renderer appends it directly to the visible bubble.
   const text = envelope.payload.parts
@@ -305,6 +334,7 @@ function p3394EnvelopeStreamEvent(envelope: P3394Envelope): P3394OutboundStreamE
     : undefined;
   return {
     text,
+    kind: streamEvent,
     envelope,
     ...(sequence !== undefined ? { sequence } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),

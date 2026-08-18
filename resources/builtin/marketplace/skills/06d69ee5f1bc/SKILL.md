@@ -37,8 +37,8 @@ description: "维护带定义、别名、禁用词、适用范围和审批记录
 - 权限不足或出现敏感数据：停止对应读取/动作并请求授权。
 - 预算耗尽：保留中间证据、未完成步骤和恢复指针。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要“维护带定义、别名、禁用词、适用范围和审批记录的术语表。”，并具备完成“从权威来源抽取核心术语、对象名、UI标签和缩写”与“为每项定义规范词、定义、允许别名、禁用形式和范围”所需的授权材料、环境和范围。
 - `do_not_use_when`：无法完成前置检查“从权威来源抽取核心术语、对象名、UI标签和缩写”；执行“为每项定义规范词、定义、允许别名、禁用形式和范围”所需的材料、环境或授权不可用；任务不属于“terminology”职责；或请求违反专属判断规则“产品对象名、UI标签和API字段不得随意同义改写”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
@@ -52,7 +52,7 @@ description: "维护带定义、别名、禁用词、适用范围和审批记录
 - 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
 - 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
 - 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->
 
 ## 详细方法
 

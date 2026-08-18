@@ -37,8 +37,8 @@ description: "从仓库规则、入口、依赖和调用关系建立与任务相
 - 权限不足或出现敏感数据：停止对应读取/动作并请求授权。
 - 预算耗尽：保留中间证据、未完成步骤和恢复指针。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要“从仓库规则、入口、依赖和调用关系建立与任务相关的代码地图，不盲目全量读取。”，并具备完成“先读取仓库指令、构建入口、测试命令和变更边界”与“用文件/符号搜索定位入口、数据流、接口、配置和相关历史”所需的授权材料、环境和范围。
 - `do_not_use_when`：无法完成前置检查“先读取仓库指令、构建入口、测试命令和变更边界”；执行“用文件/符号搜索定位入口、数据流、接口、配置和相关历史”所需的材料、环境或授权不可用；任务不属于“repo-exploration”职责；或请求违反专属判断规则“先搜索后读取，保持Context最小”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
@@ -52,7 +52,7 @@ description: "从仓库规则、入口、依赖和调用关系建立与任务相
 - 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
 - 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
 - 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->
 
 ## 详细方法
 

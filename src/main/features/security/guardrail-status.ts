@@ -3,7 +3,7 @@
  *
  * Composes the three existing integrity/availability sources into one
  * renderer-facing shape. This module owns nothing — it reads sentry-adapter's
- * availability, scanner_trust's pin verification, and nseap-core-adapter's
+ * availability, scanner_trust's pin verification, and skill-declaration-adapter's
  * engine integrity, so a change to any of those layers is reflected here
  * without a second copy of the logic.
  *
@@ -17,7 +17,7 @@ import { createLogger } from '../../logger';
 import { packagedGuardrailDir } from '../../paths';
 import { scannerAvailability, type ScannerAvailability } from './sentry-adapter';
 import { verifyScannerIntegrity, SCANNER_SKILL_ID } from '../scanner_trust';
-import { engineDir as nseapEngineDir, verifyNseapCoreIntegrity, type NseapCoreIntegrity } from './nseap-core-adapter';
+import { declarationEngineDir, verifyDeclarationCoreIntegrity, type DeclarationCoreIntegrity } from './skill-declaration-adapter';
 
 const log = createLogger('security/guardrail-status');
 
@@ -30,10 +30,10 @@ export interface GuardrailStatus {
   sentryEngineVersion: string;
   /** skill-sentry ruleset version, or '' when unreadable. */
   sentryRulesetVersion: string;
-  /** NSEAP security-core engine version, or '' when absent. */
-  nseapEngineVersion: string;
-  /** Integrity of the NSEAP engine tree against its pin. */
-  nseapIntegrity: NseapCoreIntegrity;
+  /** Skill declaration engine version, or '' when absent. */
+  declarationEngineVersion: string;
+  /** Integrity of the declaration engine tree against its pin. */
+  declarationIntegrity: DeclarationCoreIntegrity;
   /** True when this build intentionally ships without the closed scanner. */
   scannerAbsentByBuild: boolean;
 }
@@ -51,12 +51,12 @@ export function guardrailStatus(): GuardrailStatus {
   const scanner = scannerAvailability();
   const sentryDir = path.join(packagedGuardrailDir(), SCANNER_SKILL_ID);
   const sentryIntegrity = verifyScannerIntegrity(sentryDir).status;
-  const nseapDir = nseapEngineDir();
-  const nseapIntegrity = nseapDir
-    ? verifyNseapCoreIntegrity(nseapDir).status
+  const declarationDir = declarationEngineDir();
+  const declarationIntegrity = declarationDir
+    ? verifyDeclarationCoreIntegrity(declarationDir).status
     : 'unreadable' as const;
-  if (!nseapDir) {
-    log.warn('nseap engine absent when reading guardrail status');
+  if (!declarationDir) {
+    log.warn('declaration engine absent when reading guardrail status');
   }
   return {
     scanner,
@@ -64,8 +64,8 @@ export function guardrailStatus(): GuardrailStatus {
     sentryEngineVersion: _readVersionFile('skill-sentry', 'engine', 'VERSION'),
     sentryRulesetVersion: _readVersionFile('skill-sentry', 'engine', 'rulesets', 'v1.0.0', 'VERSION')
       || 'v1.0.0',
-    nseapEngineVersion: nseapDir ? _readVersionFile('nseap-security-core', 'VERSION') : '',
-    nseapIntegrity,
+    declarationEngineVersion: declarationDir ? _readVersionFile('skill-declaration-core', 'VERSION') : '',
+    declarationIntegrity,
     scannerAbsentByBuild: scanner === 'absent_by_build',
   };
 }

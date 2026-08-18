@@ -31,6 +31,9 @@ function renderFilesResult(snapshot: {
   receipts?: Record<string, any>;
   conversationTitle?: string;
   syncEnabled?: boolean;
+  assets?: any[];
+  extractionStatus?: any;
+  candidates?: any[];
   activeTab?: 'files' | 'attachments' | 'collaboration' | 'protocol' | 'carried';
   panelClosed?: boolean;
 }, afterMount?: (context: any) => Promise<void> | void): Promise<RenderFilesResult> {
@@ -121,6 +124,15 @@ function renderFilesResult(snapshot: {
             const receipt = (snapshot.receipts || {})[payload && payload.executionId];
             return receipt ? { ok: true, receipt } : { ok: false, error: 'not found' };
           }
+          if (channel === 'cognition.assets.list') {
+            return { ok: true, assets: snapshot.assets || [] };
+          }
+          if (channel === 'sessionImport.extractionStatus') {
+            return { ok: true, status: snapshot.extractionStatus || null };
+          }
+          if (channel === 'recall.candidates.list') {
+            return { ok: true, candidates: snapshot.candidates || [] };
+          }
           return { ok: false, error: 'unexpected channel' };
         },
       },
@@ -138,8 +150,8 @@ function renderFilesResult(snapshot: {
   // snapshot（collaboration/protocolEvents/executions）从未进入渲染状态——
   // 22 个测试因此全部渲染空态。这里显式模拟用户打开面板。
   context.window.ConversationInfo.open();
-  const tabIndex = snapshot.activeTab === 'attachments' ? 1 : snapshot.activeTab === 'collaboration' ? 2 : snapshot.activeTab === 'protocol' ? 3 : snapshot.activeTab === 'carried' ? 4 : 0;
-  (tabs[tabIndex] as any).onclick();
+  // Tab 条已移除（9.1 五段折叠面板重构），无需点击 tab 切换；
+  // 五段内容全部在 #conversation-info-body 的 innerHTML 中。
   if (snapshot.panelClosed === true) {
     getEl('conversation-info-toggle').onclick();
   }
@@ -152,10 +164,10 @@ function renderFilesResult(snapshot: {
         if (afterMount) return afterMount(context).then(() => resolve({
           html: getEl('conversation-info-body').innerHTML,
           counts: {
-            files: String(getEl('conversation-info-tab-count-files').textContent || ''),
-            attachments: String(getEl('conversation-info-tab-count-attachments').textContent || ''),
-            collaboration: String(getEl('conversation-info-tab-count-collaboration').textContent || ''),
-            protocol: String(getEl('conversation-info-tab-count-protocol').textContent || ''),
+            files: String(snapshot.files?.count ?? (Array.isArray(snapshot.files?.items) ? snapshot.files.items.length : 0)),
+            attachments: String(Array.isArray(snapshot.attachments) ? snapshot.attachments.length : 0),
+            collaboration: snapshot.collaboration ? '1' : '',
+            protocol: String(Array.isArray(snapshot.protocolEvents) ? snapshot.protocolEvents.length : (Array.isArray(snapshot.protocolResponse?.protocol_events) ? snapshot.protocolResponse.protocol_events.length : 0)),
           },
           urls,
           focusCalls,
@@ -164,10 +176,10 @@ function renderFilesResult(snapshot: {
         resolve({
           html: getEl('conversation-info-body').innerHTML,
           counts: {
-            files: String(getEl('conversation-info-tab-count-files').textContent || ''),
-            attachments: String(getEl('conversation-info-tab-count-attachments').textContent || ''),
-            collaboration: String(getEl('conversation-info-tab-count-collaboration').textContent || ''),
-            protocol: String(getEl('conversation-info-tab-count-protocol').textContent || ''),
+            files: String(snapshot.files?.count ?? (Array.isArray(snapshot.files?.items) ? snapshot.files.items.length : 0)),
+            attachments: String(Array.isArray(snapshot.attachments) ? snapshot.attachments.length : 0),
+            collaboration: snapshot.collaboration ? '1' : '',
+            protocol: String(Array.isArray(snapshot.protocolEvents) ? snapshot.protocolEvents.length : (Array.isArray(snapshot.protocolResponse?.protocol_events) ? snapshot.protocolResponse.protocol_events.length : 0)),
           },
           urls,
           focusCalls,
@@ -221,6 +233,153 @@ describe('ConversationInfo Collaboration tab shell', () => {
     expect(html).toContain('conversation_info.title');
     expect(html).not.toContain('data-info-tab="collaboration"');
     expect(html).not.toContain('data-info-tab="agent-activity"');
+  });
+
+  it('renders the four-type count grid (0 when nothing settled) and relation-linked assets, per conversation', async () => {
+    const result = await renderFilesResult({
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      assets: [
+        {
+          id: 'asset-x',
+          category: 'template',
+          title: 'PR 模板',
+          candidateRefs: ['cand-none'],
+          relationRefs: [{ type: 'conversation', id: 'c1' }],
+        },
+        {
+          id: 'asset-y',
+          category: 'personal',
+          title: '另一个会话的资产',
+          candidateRefs: ['cand-other'],
+          relationRefs: [{ type: 'conversation', id: 'c2' }],
+        },
+      ],
+      candidates: [],
+    });
+
+    // 四格计数框始终显示：本会话 template 沉淀 1，其余为 0。
+    expect(result.html).toContain('run-context-assets');
+    const cellCount = Array.from(result.html.matchAll(/<div class="run-context-asset">/g)).length;
+    expect(cellCount).toBe(4);
+    expect(result.html).toMatch(/<strong>1<\/strong>[\s\S]*<strong>0<\/strong>/);
+    expect(result.html).toContain('已沉淀资产');
+    expect(result.html).toContain('PR 模板');
+    // 只显示 relationRefs（type:'conversation'）指向本会话（c1）的资产。
+    expect(result.html).not.toContain('另一个会话的资产');
+    expect(result.html).toContain('已沉淀');
+  });
+
+  it('shows the extracting hint while background extraction is pending and hides it when done', async () => {
+    const pending = await renderFilesResult({
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      assets: [],
+      extractionStatus: { status: 'pending' },
+    });
+    expect(pending.html).toContain('run-context-extracting');
+    expect(pending.html).toContain('正在后台提炼认知资产');
+    // 提取中：四格计数框仍在（全部 0），不显示空态。
+    expect(pending.html).toContain('run-context-assets');
+    expect(pending.html).not.toContain('这个会话还没有沉淀认知');
+
+    const done = await renderFilesResult({
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      assets: [{ category: 'template', title: 'T1' }],
+      extractionStatus: { status: 'done', cognitions: { personal: 1, rule: 0, template: 1, skill_method: 0 } },
+    });
+    expect(done.html).not.toContain('run-context-extracting');
+    // 无候选、无本会话关系资产 → 空态（四格仍显示 0）。
+    expect(done.html).toContain('这个会话还没有沉淀认知');
+  });
+
+  it('renders this-conversation candidates with confirm/dismiss actions and filters out other conversations', async () => {
+    const result = await renderFilesResult({
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      candidates: [
+        {
+          id: 'cand-1',
+          status: 'pending_review',
+          judgment: '偏好 TypeScript',
+          value: '减少沟通成本',
+          suggestedType: 'personal',
+          sourceRefs: [{ kind: 'conversation', id: 'c1' }],
+        },
+        {
+          id: 'cand-2',
+          status: 'pending_review',
+          judgment: '提交前必须过 lint',
+          suggestedType: 'rule',
+          applicableWhen: ['提交代码前'],
+          forbiddenWhen: ['紧急热修'],
+          sourceRefs: [{ kind: 'conversation', id: 'c1' }],
+        },
+        {
+          id: 'cand-other',
+          status: 'pending_review',
+          judgment: '另一个会话的候选',
+          suggestedType: 'personal',
+          sourceRefs: [{ kind: 'conversation', id: 'c2' }],
+        },
+      ],
+    });
+
+    expect(result.html).toContain('待确认候选');
+    expect(result.html).toContain('偏好 TypeScript');
+    expect(result.html).toContain('提交前必须过 lint');
+    // 只渲染本会话（c1）的候选，其他会话的候选被过滤掉。
+    expect(result.html).not.toContain('另一个会话的候选');
+    // 确认 / 忽略按钮，以及规则边界。
+    expect(result.html).toContain('data-candidate-promote="cand-1"');
+    expect(result.html).toContain('data-candidate-ignore="cand-2"');
+    expect(result.html).toContain('提交代码前');
+    expect(result.html).toContain('紧急热修');
+  });
+
+  it('renders settled assets for confirmed candidates and relation-linked assets', async () => {
+    const result = await renderFilesResult({
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      candidates: [
+        {
+          id: 'cand-done',
+          status: 'confirmed',
+          judgment: '支付回调用重试队列',
+          promotedAssetId: 'asset-1',
+          suggestedType: 'skill_method',
+          sourceRefs: [{ kind: 'conversation', id: 'c1' }],
+        },
+      ],
+      assets: [
+        { id: 'asset-1', category: 'skill_method', title: '支付重试队列', candidateRefs: ['cand-done'] },
+      ],
+    });
+
+    expect(result.html).toContain('已沉淀资产');
+    expect(result.html).toContain('支付重试队列');
+    expect(result.html).toContain('已沉淀');
+    // 确认入库后：技能与方法计数格从 0 → 1。
+    const settledMarkup = result.html;
+    expect(settledMarkup).toContain('技能与方法');
+    expect(settledMarkup).toMatch(/技能与方法<\/span><strong>1<\/strong>/);
+  });
+
+  it('shows an empty state when the conversation has no cognition yet', async () => {
+    const result = await renderFilesResult({
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      candidates: [],
+    });
+
+    expect(result.html).toContain('这个会话还没有沉淀认知');
   });
 
   it('renders the Collaboration empty state in the drawer body', async () => {

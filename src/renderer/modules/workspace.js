@@ -8,7 +8,7 @@
 //   ✅ 创建空间 = spaces.create + spaces.resources.add（额外勾选写入 extra_*）
 //   ⏳ 空间详情「任务/产物/资产」数据源 = 后端尚无「空间→任务→产物/资产」聚合模型，暂用空态
 //   ⏳ 任务页发送/保存 = _stub() 留空，待后端接入
-// 与现有 spaces.js（项目/资源/本体布局）并存，互不影响。
+// 旧「情境空间」面板 spaces.js 已整体删除；本模块是工作空间唯一实现。
 (function () {
   function escapeHtml(s) {
     return String(s == null ? '' : s)
@@ -194,16 +194,20 @@
   // 空间详情/任务页的三 tab 数据（阶段 2 起接真实 IPC：spaces.conversations/artifacts/assets.list）
   let _sessions = [];        // 任务 = 空间下会话（listSpaceConversations）
   let _artifacts = [];       // 产物 = 附件 + artifact（listSpaceArtifacts）
-  let _assets = [];          // 资产 = asset_reference_bindings（listSpaceAssetBindings）
+  // 资产 = recall 按 spaceId 过滤出的认知资产（recall.assets.listForSpace，见 _loadData）。
+  // 注意**不是** space.json 里的 asset_reference_bindings——那条通道渲染层没有调用方。
+  // 这行注释此前写的是 bindings，导致「绑定后不生效」被误判成用户可见缺陷。
+  let _assets = [];
   let _detailLoadedFor = null;  // 已加载详情的 space_id（切空间才重载）
   const _assetTypes = ['全部', '个人身份与偏好', '决策规则与方法', '文档模板及项目事实', '可复用的技能'];
   // 基础 Agent 候选 = 本机真实安装的 CLI agent（localAgents.list 探测，非硬编码）
   let _baseAgentCatalog = [];     // [{ id: cliType, name: 显示名 }]
   let _baseAgentProbeError = '';  // 探测失败时的提示文案
+  let _cliProbeDone = false;      // 本次会话只探测一次本地 CLI（保存后不重探）
 
   /** CLI type → 显示名（与 onboarding 的 _csAgentNameForCli 同风格；未知原样返回）。 */
   function _baseAgentDisplayName(cli) {
-    if (cli === 'claude') return 'Claude';
+    if (cli === 'claude') return 'Claude Code';
     if (cli === 'codex') return 'Codex';
     if (cli === 'opencode') return 'OpenCode';
     if (cli === 'hermes') return 'Hermes';
@@ -212,13 +216,32 @@
     return cli;
   }
 
-  /** 空间当前对话 Agent 的 cli type 列表（多选；兼容旧 base_agent 单值）。 */
-  function _baseAgentNames(sp) {
+  /** 空间当前对话 Agent 的 cli type 原始列表（多选；兼容旧 base_agent 单值）。 */
+  function _baseAgentCliList(sp) {
     if (!sp) return [];
-    const list = Array.isArray(sp.base_agents) && sp.base_agents.length
+    return Array.isArray(sp.base_agents) && sp.base_agents.length
       ? sp.base_agents
       : (sp.base_agent ? [sp.base_agent] : []);
-    return list.map((t) => _baseAgentDisplayName(t));
+  }
+
+  /** 空间当前对话 Agent 的显示名列表。 */
+  function _baseAgentNames(sp) {
+    return _baseAgentCliList(sp).map((t) => _baseAgentDisplayName(t));
+  }
+
+  /** 可协作 AI 工具横排 tile（原型 v010-agent-strip 布局；外接 agent 头像与 AI 团队同源）。
+   *  fixed = 始终展示且锁定的 tile（如 CogSeed，不写入 base_agents）；cliIds = 已选 cli type。 */
+  function _baseAgentToolRow(cliIds, opts = {}) {
+    const fixed = (opts.fixed || []).map((f) => `
+    <button type="button" class="ws-tool-tile selected locked" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(f.id)}" disabled title="${escapeHtml(f.name)}"><span class="ws-tool-logo">${escapeHtml(f.letter || 'AG')}</span><span>${escapeHtml(f.name)}</span></button>`).join('');
+    const cards = (opts.catalog || []).map((o) => {
+      const selected = (cliIds || []).includes(o.id);
+      return `
+    <button type="button" class="ws-tool-tile ${selected ? 'selected' : ''}" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(o.id)}" title="${escapeHtml(o.name || o.id)}">${renderAvatarHtml(o.icon, o.color, { size: 38, seed: o.agent_id || o.id, letter: o.name || '' })}<span>${escapeHtml(o.name || o.id)}</span></button>`;
+    }).join('');
+    const body = fixed + cards;
+    const empty = body ? '' : `<span class="ws-tool-empty">${opts.emptyText || ''}</span>`;
+    return `<div class="ws-tool-row">${body}${empty}</div>`;
   }
 
   // ── 能力真实数据源（与 personal-ontology 的 skills.list/agents.list 同源）──
@@ -240,13 +263,16 @@
   }
 
   async function _loadData() {
-    const [spacesRes, templatesRes, scenariosRes, skillsRes, agentsRes, cliRes] = await Promise.all([
+    // `localAgents.list` probes every installed CLI binary on this machine
+    // (spawns `--version` per CLI, up to seconds on a hung probe). It must
+    // NOT gate the workspace view: load the fast, index-backed data first and
+    // fold in the CLI probe result when it arrives.
+    const [spacesRes, templatesRes, scenariosRes, skillsRes, agentsRes] = await Promise.all([
       _invoke('spaces.list'),
       _invoke('spaces.templates.list'),
       _invoke('spaces.scenarios.list'),
       _invoke('skills.list'),
       _invoke('agents.list'),
-      _invoke('localAgents.list'),
     ]);
     if (spacesRes.error && templatesRes.error) {
       _loadError = (spacesRes.error || '') + ' / ' + (templatesRes.error || '');
@@ -265,8 +291,33 @@
           desc: (a.description_zh || a.description_en || '').trim(),
           // 保留 runtime 供基础 Agent 合并使用（外接 CLI agent = 基础 Agent）
           runtime: (a && a.runtime) || null,
+          // 头像同源：与 AI 团队面板外接 agent 同一份 icon/color（renderAvatarHtml）
+          icon: (a && a.icon) || undefined,
+          color: (a && a.color) || undefined,
         }))
       : [];
+    _loaded = true;
+    _loadError = '';
+    // 详情默认指向第一个空间
+    if (_detailSpaceId === null && _spaces.length) _detailSpaceId = _spaces[0].space_id;
+    // ── 后台探测本机 CLI，完成后并入基础 Agent 候选并刷新视图 ──
+    // 只探测一次：保存空间/改名等后续 _loadData 不重探（CLI 安装状态
+    // 在会话内不变，主进程也有 5min 缓存），避免候选列表闪动。
+    if (_cliProbeDone) return;
+    _cliProbeDone = true;
+    _mergeCliProbeResult({});
+    void _invoke('localAgents.list').then((cliRes) => {
+      _mergeCliProbeResult(cliRes);
+      _reRender();
+    }).catch(() => {
+      // 探测 IPC 抛错：本次不标记完成，下次 _loadData 再试（避免
+      // 一次性失败导致整个会话都拿不到 CLI 候选）。
+      _cliProbeDone = false;
+    });
+  }
+
+  /** 合并 localAgents.list 探测结果到基础 Agent 候选（team CLI 优先、探测去重）。 */
+  function _mergeCliProbeResult(cliRes) {
     // 基础 Agent 候选 = AI 团队里的外接 CLI agent（注册名优先，如 ClaudeCode）
     //                 + 本机探测到但团队里还没注册的 CLI（如 Hermes），按 cli type 去重。
     // 与 AI 团队面板「基础 Agent」分组同源，不显示指挥官（指挥官默认隐形）。
@@ -275,7 +326,7 @@
     _baseAgentProbeError = '';
     const teamCli = (_agentCatalog || [])
       .filter((a) => a.runtime && a.runtime.cli && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'))
-      .map((a) => ({ id: a.runtime.cli, name: a.name }));
+      .map((a) => ({ id: a.runtime.cli, name: a.name, icon: a.icon, color: a.color, agent_id: a.id }));
     let probedCli = [];
     if (cliRes.error) {
       _baseAgentProbeError = String(cliRes.error);
@@ -299,14 +350,14 @@
       if (rx !== ry) return rx - ry;
       return x.name < y.name ? -1 : x.name > y.name ? 1 : 0;
     });
-    // 已选值不在候选里（如装了新 CLI 或选了被卸载的）→ 过滤掉；空选时回落首项
+    // 已选值不在候选里（如装了新 CLI 或选了被卸载的）→ 过滤掉；
+    // 空选且用户未手动选过 → 回落首项。用户手动改过选择时（含清空）
+    // 尊重用户意图，探测合并/后续刷新不再重置。
     const validAgentIds = new Set(_baseAgentCatalog.map((a) => a.id));
     _createBaseAgents = (_createBaseAgents || []).filter((id) => validAgentIds.has(id));
-    if (!_createBaseAgents.length && _baseAgentCatalog.length) _createBaseAgents = [_baseAgentCatalog[0].id];
-    _loaded = true;
-    _loadError = '';
-    // 详情默认指向第一个空间
-    if (_detailSpaceId === null && _spaces.length) _detailSpaceId = _spaces[0].space_id;
+    if (!_createAgentTouched && !_createBaseAgents.length && _baseAgentCatalog.length) {
+      _createBaseAgents = [_baseAgentCatalog[0].id];
+    }
   }
 
   // ── state ─────────────────────────────────────────────────────────────────
@@ -324,6 +375,7 @@
   let _createInstruction = '';     // 弹窗内已填默认目标/指令（_reRender 时保留）
   let _createTemplate = null;      // 弹窗套用的模板 template_id
   let _createBaseAgents = [];     // 弹窗选中的基础 Agent 列表（cli type；多选，探测结果首项为默认）
+  let _createAgentTouched = false; // 用户是否手动改过基础 Agent 选择（探测合并时尊重，不回落首项）
   let _createAgentOpen = false;   // 新建空间弹窗内的基础 Agent 多选弹窗
   let _abilityKind = 'role';       // 能力弹窗当前 tab：role | task | skill
   let _abilityOpen = false;
@@ -334,7 +386,7 @@
   let _refPickerTargetCid = null;  // null=新建任务待提交；cid=给已有任务补引用
   let _refSearch = '';
   let _artifactCatalog = [];       // 空间产物（spaces.artifacts.list）
-  let _assetCatalog = [];          // 空间资产（spaces.assets.list）
+  let _assetCatalog = [];          // 引用选择器资产（recall.assets.listForSpace）
   let _pendingRefs = [];           // 待提交/编辑的引用（TaskReference 形状）
   let _refBeforeRefs = [];         // 打开选择器时的已存引用（用于对比增删）
   // ── 空间设置抽屉（可编辑：指令 / 能力调整 / 主技能 / 失效清理）─────────────
@@ -924,11 +976,7 @@
       task: { label: 'Task Agent', picked: _resolveCatalog('task', _abilityPicksWithBundle('task')) },
       skill: { label: 'Skill', picked: _resolveCatalog('skill', _abilityPicksWithBundle('skill')) },
     };
-    // 基础 Agent 已选显示名（注册名优先，未知回退 cli 显示名）
-    const _createAgentNames = (_createBaseAgents || []).map((id) => {
-      const a = _baseAgentCatalog.find((x) => x.id === id);
-      return a ? a.name : _baseAgentDisplayName(id);
-    }).filter(Boolean);
+    // 基础 Agent 已选即 _createBaseAgents（cli type 列表），由 _baseAgentToolRow 直接渲染工具卡
     return `
     <div class="ws-scrim" data-ws="close-create">
       <section class="ws-dialog" role="dialog" aria-modal="true" data-ws="noop">
@@ -940,10 +988,15 @@
           <div class="ws-form-grid">
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
               <input data-ws="create-name" value="${escapeHtml(_createName)}" placeholder="${_t('ws.space_name_ph', '请输入空间名称')}" maxlength="60" autocomplete="off" spellcheck="false" /></label>
-            <label class="full"><span>${_t('ws.base_agent', '基础 Agent')} <em>${_t('ws.base_agent_hint', '负责承接任务')}</em></span>
-              <div class="ws-agent-row"><span>CX</span><div><strong>${_createAgentNames.length ? escapeHtml(_createAgentNames.join('、')) : (_baseAgentProbeError ? escapeHtml('探测失败：' + _baseAgentProbeError) : (_baseAgentCatalog.length ? '未选择' : escapeHtml(_t('ws.no_agent', '未检测到本机 Agent'))))}</strong><small>${_t('ws.base_agent_hint', '承接空间内任务')}</small></div>
-                <button class="ws-secondary ws-ability-edit" data-ws="edit-create-agent">${_t('ws.adjust', '调整')}</button>
-              </div></label>
+            <div class="ws-tool-strip">
+              <div class="ws-tool-strip-head"><strong>${_t('ws.base_agent', '可协作 AI 工具 Agent')}</strong><small>${_t('ws.base_agent_hint', '任务中可通过 @ 明确调用')}</small></div>
+              ${_baseAgentToolRow(_createBaseAgents, {
+                catalog: _baseAgentCatalog,
+                toggleAction: 'toggle-create-tool',
+                fixed: [{ id: 'cogseed', name: 'CogSeed', letter: 'CS' }],
+                emptyText: _baseAgentProbeError ? escapeHtml('探测失败：' + _baseAgentProbeError) : escapeHtml(_t('ws.no_agent', '未检测到本机 Agent')),
+              })}
+            </div>
             <label class="full instruction"><span>${_t('ws.default_goal', '默认目标/指令')} <em>0 / 500</em></span>
               <textarea data-ws="create-instruction" maxlength="500" placeholder="${_t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等')}">${escapeHtml(_createInstruction)}</textarea></label>
           </div>
@@ -1605,15 +1658,25 @@
     if (ciInput) ciInput.addEventListener('input', () => { _createInstruction = ciInput.value; });
     // 基础 Agent 多选弹窗（新建空间内；勾选即时生效，保存=关闭）
     root.querySelectorAll('[data-ws="edit-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = true; _reRender(); }));
+    // 可协作 AI 工具卡点选即切换（CogSeed 固定卡 disabled 不响应）
+    root.querySelectorAll('[data-ws="toggle-create-tool"]').forEach((el) => el.addEventListener('click', () => {
+      if (el.disabled) return;
+      const id = el.dataset.id;
+      const picks = _createBaseAgents || [];
+      _createBaseAgents = picks.includes(id) ? picks.filter((x) => x !== id) : [...picks, id];
+      _createAgentTouched = true;
+      _reRender();
+    }));
     root.querySelectorAll('[data-ws="close-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = false; _reRender(); }));
     root.querySelectorAll('[data-ws="toggle-create-agent"]').forEach((el) => el.addEventListener('click', () => {
       const id = el.dataset.id;
       const picks = _createBaseAgents || [];
       _createBaseAgents = picks.includes(id) ? picks.filter((x) => x !== id) : [...picks, id];
+      _createAgentTouched = true;
       _reRender();
     }));
     root.querySelectorAll('[data-ws="save-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = false; _reRender(); }));
-    root.querySelectorAll('[data-ws="clear-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createBaseAgents = []; _reRender(); }));
+    root.querySelectorAll('[data-ws="clear-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createBaseAgents = []; _createAgentTouched = true; _reRender(); }));
 
     // 所有「功能待接入」桩（创建/能力选择已接真，走 confirm-create/toggle-ability/save-ability）
     root.querySelectorAll('[data-ws^="stub-"]').forEach((el) => el.addEventListener('click', () => _stub(_stubLabel(el))));
@@ -1721,6 +1784,9 @@
     _createOpen = true;
     _abilityOpen = false;
     _createAgentOpen = false;
+    // 新建弹窗每次打开重置"已触碰"标记：探测合并的回落首项仅对
+    // 用户尚未手动选择时生效；已选的 _createBaseAgents 保留为默认候选。
+    _createAgentTouched = false;
     _reRender();
   }
 

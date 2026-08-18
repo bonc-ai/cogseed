@@ -169,8 +169,8 @@ Failure: `{"ok": false, "error": "<reason>"}` on stderr with a non-zero exit
 - References are de-duplicated by normalized URL and numbered in first-cited
   order; only `verified`/`weak` citations earn a reference.
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要深度研究检索/压缩/引用核验的确定性步骤：计算并强制抓取/成本预算上限、arXiv/Crossref/OpenAlex/PubMed 免密钥检索、按词面重叠去重压缩候选段落、核验模型起草的论断+引用是否真实存在且 DOI 规范。
 - `do_not_use_when`：撰写研究报告本身（写报告是模型的工作）；模型可以胜任的自由文本任务；无来源时仍强行产出引用列表；访问 https 允许列表之外的学术源。
@@ -178,4 +178,4 @@ Failure: `{"ok": false, "error": "<reason>"}` on stderr with a non-zero exit
 - `negative_examples`：`Write the research report for me in this skill.`；`Keep the citation even though the source was never fetched.`
 
 本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

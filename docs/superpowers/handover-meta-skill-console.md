@@ -28,7 +28,7 @@ Meta-Skill 进化控制台，替换原技能库演化能力。技术栈换写（
 | 渲染层 | `src/renderer/modules/evolution/{pages,console}.js` | classic script，无打包器/框架；入口全屏视图 `panel-evolution` |
 | IPC 层 | `src/main/ipc/index.ts` 的 `evolution.*` 通道 | 薄校验转发 |
 | Feature 层 | `src/main/features/evolution/`（详见该目录 README） | 编排 + core-agent 接线 + 数据读写 |
-| 引擎层 | `packages/nseap-meta-skill-engine`（ESM，进程内动态 import） | KSTAR 引擎、本体、评估、补丁 |
+| 引擎层 | `packages/meta-skill-engine`（ESM，进程内动态 import） | KSTAR 引擎、本体、评估、补丁 |
 
 **模块级细节见** `src/main/features/evolution/README.md`。
 
@@ -48,7 +48,7 @@ Meta-Skill 进化控制台，替换原技能库演化能力。技术栈换写（
 
 ## 四、验证证据（最新一次全量）
 
-- 引擎：`cd packages/nseap-meta-skill-engine && npx vitest run` → 64 通过
+- 引擎：`cd packages/meta-skill-engine && npx vitest run` → 64 通过
 - 主仓库全量：`node scripts/run-tests.mjs run` → **414 文件 / 5287 通过 / 9 跳过 / 0 失败**
 - 类型检查：`npx tsc --noEmit` → 0 错误
 - p3394 契约守护测试通过（现有通道未回归）

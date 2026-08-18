@@ -61,7 +61,7 @@
         <!-- 左下角融合入口（用户状态 + 设置）：account-chip.js 渲染。初始 hidden，
              拿到 status DTO 后按登录状态显示；status 拿不到则降级为「设置」形态
              （面板仅含本地功能），保证设置入口永不丢失——侧栏折叠态下同样
-             常驻（压缩为图标按钮，hover 仍可展开面板，见 style.css）。 -->
+             常驻（压缩为图标按钮，点击仍可展开面板，见 style.css）。 -->
         <div class="sidebar-footer-account" id="hub-account-chip-root" hidden></div>
       </div>
       <div class="sidebar-resize-handle" id="sidebar-resize-handle"
@@ -428,17 +428,17 @@
           <div class="skills-cognition-workspace">
           <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产任务视图" data-i18n-aria-label="cognition.task_views">
             <div class="skills-cognition-tab-group" role="presentation">
-              <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-inbox" data-cognition-page="inbox">
+              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-assets" data-cognition-page="assets">
+                <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="archive"></span></span>
+                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.my_assets">我的认知树</strong><small data-i18n="cognition.my_assets_desc">先看我拥有什么</small></span>
+              </button>
+              <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-inbox" tabindex="-1" data-cognition-page="inbox">
                 <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="clipboard-list"></span></span>
                 <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.inbox">待我处理</strong><small data-i18n="cognition.inbox_desc">只处理需要你判断与确认的事项</small></span>
               </button>
-              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets">
-                <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="archive"></span></span>
-                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.my_assets">我的资产</strong><small data-i18n="cognition.my_assets_desc">按四类资产查看与管理已有认知</small></span>
-              </button>
               <button type="button" id="skills-cognition-tab-proofs" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-proofs" tabindex="-1" data-cognition-page="proofs">
                 <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="shield-check"></span></span>
-                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.proofs">使用与证明</strong><small data-i18n="cognition.proofs_desc">了解资产在哪里使用以及是否有效</small></span>
+                <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.proofs">复用与证明</strong><small data-i18n="cognition.proofs_desc">看在哪里用、是否有效</small></span>
               </button>
               <button type="button" id="skills-cognition-tab-governance" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-governance" tabindex="-1" data-cognition-page="governance">
                 <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="list-ordered"></span></span>
@@ -447,58 +447,10 @@
             </div>
           </nav>
           <main class="skills-cognition-main" id="skills-cognition-main" tabindex="0" aria-label="认知资产内容">
-          <!-- 待我处理：只放"真的需要用户决定"的事项。加工进度（沉淀任务、
-               来源连接状态）不进这里——它们是后台进度，归右上角「沉淀活动」
-               「管理来源」。
-               落地规则只作用于"进入认知资产时默认停在哪个 tab"：没有待决策
-               项就默认落「我的资产」。用户主动点进本页时永远停在这里并显示
-               "当前无需处理"，不会被弹走——否则空状态永远见不到，用户也无从
-               确认"是真的没事，还是页面坏了"。 -->
-          <section class="skills-cognition-page" id="skills-cognition-inbox" role="tabpanel" aria-labelledby="skills-cognition-tab-inbox" data-cognition-page-body="inbox">
-            <div id="skills-cognition-inbox-body"></div>
-          </section>
-          <!-- 版本与治理：回答"我的资产发生过什么变化、我怎样保持控制"。
-               动作全部落在既有 IPC（recall.assets.versions / rollback / pause /
-               resume / revoke / archive / delete），这里不新增治理语义。 -->
-          <section class="skills-cognition-page" id="skills-cognition-governance" role="tabpanel" aria-labelledby="skills-cognition-tab-governance" data-cognition-page-body="governance" hidden>
-            <div id="skills-cognition-governance-body"></div>
-          </section>
-          <!-- 使用与证明：回答"这些资产究竟在哪里用过、真的起作用了吗"。
-               数据全部来自既有事实链（usage / transfer proof / effectiveness proof
-               / receipt），这里只做按资产的聚合展示，不新增事实。 -->
-          <section class="skills-cognition-page" id="skills-cognition-proofs" role="tabpanel" aria-labelledby="skills-cognition-tab-proofs" data-cognition-page-body="proofs" hidden>
-            <div id="skills-cognition-proofs-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-sources" role="tabpanel" aria-labelledby="skills-cognition-tab-sources" data-cognition-page-body="sources" hidden>
-            <div id="skills-cognition-sources-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-captures" role="tabpanel" aria-labelledby="skills-cognition-tab-captures" data-cognition-page-body="captures" hidden>
-            <div id="skills-cognition-captures-body"></div>
-          </section>
-          <!-- 候选详情：一条候选的整页决定面。作用范围冲突这类事项要用户一次
-               看清"内容是什么 + 该在什么范围生效 + 为什么轮到我决定"，折叠行
-               放不下这三件事。动作全部落在既有 recall.candidates.* 通道。 -->
-          <section class="skills-cognition-page" id="skills-cognition-candidate" role="tabpanel" aria-labelledby="skills-cognition-tab-candidate" data-cognition-page-body="candidate" hidden>
-            <div id="skills-cognition-candidate-body"></div>
-          </section>
-          <!-- 认知树：正式资产的成长投影，读 recall.tree.read。树只呈现资产
-               节点——任务接续快照、Session、运行记录属于支撑对象，不长叶片，
-               这条契约在 tree-service 里就成立，渲染层不再另作判断。 -->
-          <section class="skills-cognition-page" id="skills-cognition-tree" role="tabpanel" aria-labelledby="skills-cognition-tab-tree" data-cognition-page-body="tree" hidden>
-            <div id="skills-cognition-tree-body"></div>
-          </section>
-          <!-- 非资产分流：任务状态被带走，但不进四类资产和认知树。快照本体的
-               读通道（task_continuation）尚未接到 IPC，页面先给完整说明与入口，
-               数据区显示明确空态，不塞示例数据。 -->
-          <section class="skills-cognition-page" id="skills-cognition-nonasset" role="tabpanel" aria-labelledby="skills-cognition-tab-nonasset" data-cognition-page-body="nonasset" hidden>
-            <div id="skills-cognition-nonasset-body"></div>
-          </section>
-          <!-- Skill 更新候选：系统提出更新，用户只决定是否接受。版本与回滚点
-               来自 cognition.skills.summary；diff 正文与"接受限域更新"的决策
-               通道尚缺，相应区域显示待接入而不是编造内容。 -->
-          <section class="skills-cognition-page" id="skills-cognition-skillupdate" role="tabpanel" aria-labelledby="skills-cognition-tab-skillupdate" data-cognition-page-body="skillupdate" hidden>
-            <div id="skills-cognition-skillupdate-body"></div>
-          </section>
+          <!-- 我的认知树（第一个任务视图，进入认知资产默认停在这里）：一级页面
+               是种子/认知树（先看我拥有什么）；点树上的叶子进入二级页面——详细
+               的四类资产（四类卡 + 列表 + 详情，顶部返回认知树）；「关于我」
+               分类在二级页面展开个人本体。 -->
           <section class="skills-cognition-page" id="skills-cognition-assets" role="tabpanel" aria-labelledby="skills-cognition-tab-assets" data-cognition-page-body="assets" hidden>
             <div id="skills-cognition-assets-summary"></div>
             <!-- 「关于我」不再是独立任务页：它是四类资产之一，选中 personal
@@ -567,6 +519,58 @@
               <div id="skills-cognition-assets-body"></div>
             </section>
             <!-- 角色模板库弹窗同理：唯一一份跟着个人本体放在「关于我」tab。 -->
+          </section>
+          <!-- 待我处理：只放"真的需要用户决定"的事项。加工进度（沉淀任务、
+               来源连接状态）不进这里——它们是后台进度，归右上角「沉淀活动」
+               「管理来源」。
+               默认停在第一个任务视图「我的资产」（我的认知树）；本页永远只被
+               用户主动点进来，停在这里显示真实状态（"当前无需处理"或待决事项），
+               不会被弹走——否则空状态永远见不到，用户也无从确认"是真的没事，
+               还是页面坏了"。 -->
+          <section class="skills-cognition-page" id="skills-cognition-inbox" role="tabpanel" aria-labelledby="skills-cognition-tab-inbox" data-cognition-page-body="inbox">
+            <div id="skills-cognition-inbox-body"></div>
+          </section>
+          <!-- 版本与治理：回答"我的资产发生过什么变化、我怎样保持控制"。
+               动作全部落在既有 IPC（recall.assets.versions / rollback / pause /
+               resume / revoke / archive / delete），这里不新增治理语义。 -->
+          <section class="skills-cognition-page" id="skills-cognition-governance" role="tabpanel" aria-labelledby="skills-cognition-tab-governance" data-cognition-page-body="governance" hidden>
+            <div id="skills-cognition-governance-body"></div>
+          </section>
+          <!-- 使用与证明：回答"这些资产究竟在哪里用过、真的起作用了吗"。
+               数据全部来自既有事实链（usage / transfer proof / effectiveness proof
+               / receipt），这里只做按资产的聚合展示，不新增事实。 -->
+          <section class="skills-cognition-page" id="skills-cognition-proofs" role="tabpanel" aria-labelledby="skills-cognition-tab-proofs" data-cognition-page-body="proofs" hidden>
+            <div id="skills-cognition-proofs-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-sources" role="tabpanel" aria-labelledby="skills-cognition-tab-sources" data-cognition-page-body="sources" hidden>
+            <div id="skills-cognition-sources-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-captures" role="tabpanel" aria-labelledby="skills-cognition-tab-captures" data-cognition-page-body="captures" hidden>
+            <div id="skills-cognition-captures-body"></div>
+          </section>
+          <!-- 候选详情：一条候选的整页决定面。作用范围冲突这类事项要用户一次
+               看清"内容是什么 + 该在什么范围生效 + 为什么轮到我决定"，折叠行
+               放不下这三件事。动作全部落在既有 recall.candidates.* 通道。 -->
+          <section class="skills-cognition-page" id="skills-cognition-candidate" role="tabpanel" aria-labelledby="skills-cognition-tab-candidate" data-cognition-page-body="candidate" hidden>
+            <div id="skills-cognition-candidate-body"></div>
+          </section>
+          <!-- 认知树：正式资产的成长投影，读 recall.tree.read。树只呈现资产
+               节点——任务接续快照、Session、运行记录属于支撑对象，不长叶片，
+               这条契约在 tree-service 里就成立，渲染层不再另作判断。 -->
+          <section class="skills-cognition-page" id="skills-cognition-tree" role="tabpanel" aria-labelledby="skills-cognition-tab-tree" data-cognition-page-body="tree" hidden>
+            <div id="skills-cognition-tree-body"></div>
+          </section>
+          <!-- 非资产分流：任务状态被带走，但不进四类资产和认知树。快照本体的
+               读通道（task_continuation）尚未接到 IPC，页面先给完整说明与入口，
+               数据区显示明确空态，不塞示例数据。 -->
+          <section class="skills-cognition-page" id="skills-cognition-nonasset" role="tabpanel" aria-labelledby="skills-cognition-tab-nonasset" data-cognition-page-body="nonasset" hidden>
+            <div id="skills-cognition-nonasset-body"></div>
+          </section>
+          <!-- Skill 更新候选：系统提出更新，用户只决定是否接受。版本与回滚点
+               来自 cognition.skills.summary；diff 正文与"接受限域更新"的决策
+               通道尚缺，相应区域显示待接入而不是编造内容。 -->
+          <section class="skills-cognition-page" id="skills-cognition-skillupdate" role="tabpanel" aria-labelledby="skills-cognition-tab-skillupdate" data-cognition-page-body="skillupdate" hidden>
+            <div id="skills-cognition-skillupdate-body"></div>
           </section>
           </main>
           </div>
@@ -1467,6 +1471,12 @@
         <div class="form-row">
           <label data-i18n="agent_modal.ext_desc">Summary</label>
           <textarea id="agent-ext-desc-input" rows="4" data-i18n-placeholder="agent_modal.ext_desc_placeholder" placeholder="(auto-filled when a CLI is picked; can be overridden)"></textarea>
+        </div>
+        <!-- P3394 已接入节点（统一注册表管理区）：当前已注册的全部 P3394
+             节点（含自研网关/远端 peer），在线状态 + 移除/停用。 -->
+        <div class="form-row form-row-ext-peers">
+          <label data-i18n="agent_modal.ext_peers_label">Connected P3394 nodes</label>
+          <div id="agent-ext-peers"></div>
         </div>
       </div>
 

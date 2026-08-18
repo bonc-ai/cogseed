@@ -1,5 +1,5 @@
 {
-  "eval_suite_id": "eval.skill.cogseed.research.literature-evidence.nseap.v1",
+  "eval_suite_id": "eval.skill.cogseed.research.literature-evidence.v1",
   "skill_id": "skill.cogseed.research.literature-evidence",
   "status": "synthetic_structure_cases_not_run",
   "evidence_policy": {

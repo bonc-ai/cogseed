@@ -212,8 +212,8 @@ Handling:
 - You can save the report, generate an organizing script, or continue refining a specific subdirectory.
 ```
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：用户提供 2 个以上资料（链接/文件/片段）或本地目录，要求整理、分类、归档、研究笔记、知识卡、实体关系或整理报告；材料是用户已提供或明确指向的。
 - `do_not_use_when`：单篇文章精读、论文阅读或广义证据综述；翻译、润色、简历优化或课程知识框架；主动搜索新材料（除非用户明确提供搜索结果）；未经许可写入外部知识库或改动目录内文件。
@@ -221,4 +221,4 @@ Handling:
 - `negative_examples`：`Search the web for more materials and add them to my notes.`；`Rewrite my resume based on these files.`
 
 本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

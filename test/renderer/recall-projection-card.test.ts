@@ -53,9 +53,9 @@ describe('recall projection card renderer', () => {
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
     expect(host.innerHTML).toContain('Old asset');
-    expect(host.innerHTML).toContain('Remove candidate');
-    expect(host.innerHTML).toContain('Preload candidates');
-    expect(host.innerHTML).toContain('Add candidate');
+    expect(host.innerHTML).toContain('Remove asset');
+    expect(host.innerHTML).toContain('Preloaded assets');
+    expect(host.innerHTML).toContain('Add asset');
     expect(host.innerHTML).not.toContain('prediction');
     expect(host.innerHTML).not.toContain('R̂');
     expect(host.innerHTML).toContain('New asset');
@@ -123,8 +123,8 @@ describe('recall projection card renderer', () => {
 
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
-    expect(host.innerHTML).toContain('No preload candidates selected.');
-    expect(host.innerHTML).toContain('Add candidate');
+    expect(host.innerHTML).toContain('No preloaded assets selected.');
+    expect(host.innerHTML).toContain('Add asset');
     expect(host.innerHTML).toContain('New asset');
   });
 
@@ -158,7 +158,7 @@ describe('recall projection card renderer', () => {
     });
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
-    expect(host.innerHTML).toContain('Confirm candidates');
+    expect(host.innerHTML).toContain('Confirm assets');
     await host.handler({ target: { closest: (selector: string) => selector === '[data-recall-projection-confirm]' ? { dataset: { recallProjectionConfirm: '1' }, disabled: false } : null } });
 
     expect(calls).toContainEqual(['recall.projections.confirm', { projectionId: 'proj-a', cid: 'cid-a' }]);
@@ -175,7 +175,7 @@ describe('recall projection card renderer', () => {
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
     expect(host.innerHTML).toContain('Confirmed');
-    expect(host.innerHTML).not.toContain('Remove candidate');
+    expect(host.innerHTML).not.toContain('Remove asset');
     expect(host.innerHTML).not.toContain('Add asset to this task');
   });
 
@@ -207,7 +207,7 @@ describe('recall projection card renderer', () => {
     });
   });
 
-  it('uses localized candidate counts instead of the backend English summary text', async () => {
+  it('uses localized asset counts instead of the backend English summary text', async () => {
     const { context, host } = loadModule(async (channel) => {
       if (channel === 'recall.projections.card') return { ok: true, card: previewCard };
       if (channel === 'recall.projections.availableAssets') return { ok: true, assets: [] };
@@ -217,7 +217,7 @@ describe('recall projection card renderer', () => {
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
     expect(host.innerHTML).not.toContain('Found 1 asset');
-    expect(host.innerHTML).toContain('1 preload candidates.');
+    expect(host.innerHTML).toContain('1 preloaded assets.');
   });
 
   it('conversation renderer mounts Recall projection cards carried by assistant messages', () => {
@@ -230,4 +230,56 @@ describe('recall projection card renderer', () => {
     expect(cardSource).toContain('window.mountRecallProjectionCard');
   });
 
+});
+
+const staleCard = {
+  kind: 'recall_projection_card',
+  projectionId: 'proj-stale',
+  status: 'confirmed',
+  purpose: 'review',
+  draftState: 'terminal',
+  summary: { includedCount: 1, omittedCount: 0, sourceRefCount: 1, text: 'Found 1 asset' },
+  staleAssetIds: ['asset-drift'],
+  assetSummaries: [{
+    assetId: 'asset-drift', title: 'Drifted asset', type: 'rule', status: 'active',
+    maturity: 'leaf', scope: 'review', version: '2', confirmedVersion: '1', stale: true,
+  }],
+  availableActions: [],
+};
+
+describe('projection card surfaces a drifted confirmed version', () => {
+  it('shows the confirmed version and says the newer one needs re-selection', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: staleCard };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-stale' }, { cid: 'cid-stale' });
+
+    // 运行中用的是确认版本，所以显示 v1 而不是 live 的 v2。
+    expect(host.innerHTML).toContain('v1');
+    expect(host.innerHTML).toContain('Still running the confirmed v1');
+    expect(host.innerHTML).toContain('the asset is now v2');
+    expect(host.innerHTML).toContain('is-stale');
+    // 只告知，不提供"就地升级"——已确认投影不可再改。
+    expect(host.innerHTML).not.toContain('data-recall-projection-confirm');
+  });
+
+  it('says nothing about drift when the confirmed version is current', async () => {
+    const fresh = {
+      ...staleCard,
+      projectionId: 'proj-fresh',
+      staleAssetIds: [],
+      assetSummaries: [{ ...staleCard.assetSummaries[0], version: '1', confirmedVersion: '1', stale: undefined }],
+    };
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: fresh };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-fresh' }, { cid: 'cid-fresh' });
+
+    expect(host.innerHTML).not.toContain('Still running the confirmed');
+    expect(host.innerHTML).not.toContain('is-stale');
+  });
 });

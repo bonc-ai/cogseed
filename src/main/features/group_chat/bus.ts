@@ -2212,12 +2212,11 @@ async function _enqueueBody(
       if (scope) {
         const bound = new Set(scope.agents);
         const before = to;
-        // CLI-backed agents are exempt from project-scope filtering: they run
-        // on the local machine with their own credentials (no project API
-        // budget consumed), and the user picks them explicitly (composer chip,
-        // `@name` mention, or the no-model → CLI fallback). Dropping them here
-        // would route every CLI message back to the commander, which defeats
-        // the fallback and `@Codex`/`@Claude` mentions in a project-scoped chat.
+        // Externally executed CLI agents are exempt from project-scope
+        // filtering: direct CLIs and P3394-managed gateways both run with
+        // their own credentials, and the user picks them explicitly (composer
+        // chip, `@name` mention, or the no-model → CLI fallback). Dropping
+        // either runtime here would route the message back to the commander.
         const kept: string[] = [];
         for (const id of to) {
           if (RESERVED_IDS.has(id) || bound.has(id)) {
@@ -2226,7 +2225,7 @@ async function _enqueueBody(
           }
           try {
             const ag = await agentsFeat.getAgent(id);
-            if (ag && ag.runtime && ag.runtime.kind === 'cli') {
+            if (agentsFeat.isCliAgent(ag) || agentsFeat.isP3394GatewayAgent(ag)) {
               kept.push(id);
               continue;
             }
@@ -3573,6 +3572,14 @@ async function runActorTurnBody(
           (r) => typeof r === "string" && path.isAbsolute(r),
         )
       : [];
+    // 导入会话 / 详情页自定义：coding_project_dir（原始 Agent 项目目录）作为
+    // 工作区后，文件工具与 bash 的沙盒根必须包含它（extraRoots 可读可写），
+    // 否则 workingDir 指向原始目录但 read_file/write_file/bash 会被拒。
+    if (stateFile.coding_project_dir && path.isAbsolute(stateFile.coding_project_dir)) {
+      if (!turnToolExtraRoots.includes(stateFile.coding_project_dir)) {
+        turnToolExtraRoots.push(stateFile.coding_project_dir);
+      }
+    }
     turnSyncConflictResolution = Array.isArray(
       stateFile.sync_conflict_resolution?.conflicts,
     )
@@ -3952,6 +3959,12 @@ async function runActorTurnBody(
   // Commander-granted assets actually injected into a delegated turn, kept for
   // the same usage ledger the Commander injection uses (outcome 'dispatched').
   let dispatchedUsage: Array<{ assetId: string; assetVersion: string }> = [];
+  // 本回合是否落过 ContextReuseReceipt。三条注入路径（Commander 投影 / 派发
+  // 授权 / 出生继承）共用 `turn-<turnId>` 这一个回执键，谁先落谁建，后来的
+  // 拿到 'already exists' 就跳过——所以一个回合最多一张。回合收尾时按这个标记
+  // 把回执 complete 掉：只 prepare 不 complete 的话，回执永远停在 prepared，
+  // 「这次复用真的执行完了」这件事就从来没有被记下来过。
+  let turnReuseReceiptPrepared = false;
   if (!cliAgent) {
     if (isCommander) {
       try {
@@ -4003,7 +4016,7 @@ async function runActorTurnBody(
           const receiptRefs = recallCitations.map((c) => c.assetId);
           try {
             const { prepareReceipt } = await import('../p3394/context-reuse-receipt');
-            await prepareReceipt(
+            const prepared = await prepareReceipt(
               uid,
               {
                 executionId: `turn-${item.turnId}`,
@@ -4016,6 +4029,7 @@ async function runActorTurnBody(
               },
               { sessionId: `gconv-${cid}` },
             ).catch(() => undefined);
+            if (prepared) turnReuseReceiptPrepared = true;
             const turns = state.taskRun.reuseTurnIds || [];
             if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
           } catch {
@@ -4063,7 +4077,7 @@ async function runActorTurnBody(
           if (state.taskRun) {
             try {
               const { prepareReceipt } = await import('../p3394/context-reuse-receipt');
-              await prepareReceipt(
+              const prepared = await prepareReceipt(
                 uid,
                 {
                   executionId: `turn-${item.turnId}`,
@@ -4078,6 +4092,7 @@ async function runActorTurnBody(
                 },
                 { sessionId: `gmember-${cid}-${actor.id}` },
               ).catch(() => undefined);
+              if (prepared) turnReuseReceiptPrepared = true;
               const turns = state.taskRun.reuseTurnIds || [];
               if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
             } catch {
@@ -4123,7 +4138,7 @@ async function runActorTurnBody(
               state.taskRun.reuseTurnIds = [...turns, item.turnId];
             }
           }
-          await recordInheritedCognitionReuse(
+          const inheritedReceipt = await recordInheritedCognitionReuse(
             uid,
             cid,
             actor.id,
@@ -4134,6 +4149,7 @@ async function runActorTurnBody(
               truncatedByBudget(selection.selected, rendered),
             ),
           );
+          if (inheritedReceipt) turnReuseReceiptPrepared = true;
         }
       } catch (error) {
         // 继承注入失败不该让这一轮对话起不来——降级成这次不带继承认知。
@@ -5601,6 +5617,35 @@ async function runActorTurnBody(
     }
   }
 
+  // 回合收尾：把本回合的 ContextReuseReceipt 从 prepared 收成终态。
+  //
+  // **为什么必须做**：注入处只 prepare，从来没有人 complete，于是所有群聊回执
+  // 永远停在 prepared——「资产被带进去了」有记录，「这次复用真的执行完了」没有。
+  // 成熟度之所以还能升，只是因为升档判定放宽到「非 rejected 即可」；那层宽容
+  // 一旦收紧，整条证明链会静默断掉。
+  //
+  // **状态取值**：注入发生在回合开始，所以只要回合跑起来了，"加载"这件事就是
+  // 真的。回合本身失败/被中断，改变的是这次运行的质量，不是"有没有加载过"——
+  // 所以取 degraded 而不是 rejected。rejected 的语义是"这次复用被拒绝/无效"，
+  // 用在这里会让终态证明把本来算数的加载证据丢掉（collectLoadedAssetsFromReceipts
+  // 按 status==='rejected' 过滤）。任务级别的成败由 terminal-proof 另行判定。
+  if (turnReuseReceiptPrepared) {
+    try {
+      const { completeReceipt } = await import("../p3394/context-reuse-receipt");
+      await completeReceipt(uid, `turn-${item.turnId}`, {
+        status: aborted || errText ? "degraded" : "completed",
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      // 重试/并发把同一张回执收过一次是正常路径，不该刷 warn。
+      if (!message.includes("already finalized")) {
+        log.warn(
+          `reuse receipt not finalized cid=${cid} turn=${item.turnId}: ${message}`,
+        );
+      }
+    }
+  }
+
   // Expert-signals: drain skill_advertised / skill_invoked using the
   // persisted msg id as turn_id (per turn_id convention — see
   // PC/CLAUDE.md §4 constraint 9 + expert-signals plan §3.4). Silent
@@ -5818,14 +5863,17 @@ export async function _buildActiveSharedTaskContextBlockForTest(
  * 用上了、更不表示用了有帮助。DELIVERED / LOADED / USED / PROVED_USEFUL 是四件
  * 不同的事，这里只落得起第二件。
  */
+/** @returns 是否真的落下了一张 prepared 回执——回合收尾要据此决定是否 complete。
+ *  同一回合 Commander 投影可能已经建过 `turn-<turnId>`，这里拿到 'already
+ *  exists' 属正常路径，那张回执由建它的那一侧登记。 */
 async function recordInheritedCognitionReuse(
   uid: string,
   cid: string,
   agentId: string,
   turnId: string,
   facts: { reusedRefs: string[]; omittedRefs: string[] },
-): Promise<void> {
-  if (!facts.reusedRefs.length && !facts.omittedRefs.length) return;
+): Promise<boolean> {
+  if (!facts.reusedRefs.length && !facts.omittedRefs.length) return false;
   try {
     const [{ prepareReceipt }, { buildGmemberSessionId }] = await Promise.all([
       import("../p3394/context-reuse-receipt"),
@@ -5846,13 +5894,15 @@ async function recordInheritedCognitionReuse(
       },
       { sessionId: targetSessionId },
     );
+    return true;
   } catch (err) {
     const message = (err as Error).message;
     // 同一轮重试必然走到这里，属正常路径，不该刷 warn。
-    if (message.includes("already exists")) return;
+    if (message.includes("already exists")) return false;
     log.warn(
       `inherited cognition receipt not recorded agent=${agentId} cid=${cid}: ${message}`,
     );
+    return false;
   }
 }
 
@@ -10572,7 +10622,8 @@ async function _initializeCodingProjectDir(
   info: agentsFeat.AgentCliProjectDirInfo,
 ): Promise<void> {
   const cur = await readState(uid, cid);
-  if (cur.coding_project_dir) return;
+  if (cur.coding_project_dir_explicit === true) return;
+  if (cur.coding_project_dir && cur.coding_project_dir === info.effective_path) return;
   if (info.mode === "custom" && !info.exists) {
     log.info(
       `coding project_dir custom path missing cid=${cid} — awaiting user selection`,

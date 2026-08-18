@@ -119,10 +119,10 @@ def main(root):
         'tests/test_research_gate_failures.sh',
     ]
     missing = [x for x in required if not (root / x).exists()]
-    c(not missing, 'NSEAP + v0.1 Candidate research-gate artifacts', ', '.join(missing))
+    c(not missing, 'Skill contract + v0.1 Candidate research-gate artifacts', ', '.join(missing))
 
     fail = 0
-    print(f'NSEAP skill self-check · {root}\n')
+    print(f'Skill contract self-check · {root}\n')
     for ok, label, detail in checks:
         print(('✓' if ok else '✗'), label, ('— ' + detail if detail else ''))
         if not ok:

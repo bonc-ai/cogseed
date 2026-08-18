@@ -3,6 +3,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 
+import { getRecallCandidateCapabilities } from '../../src/main/features/recall/candidate-capabilities';
+
+/** 候选桩的能力取自主进程的真实映射，测试桩与 IPC DTO 用同一套判据。 */
+const CAPS = (status: string, risk?: 'low' | 'medium' | 'high') =>
+  getRecallCandidateCapabilities({ status: status as never, ...(risk ? { risk } : {}) });
+
 function loadSkillRendererHelpers() {
   const context: any = {
     console,
@@ -238,6 +244,7 @@ describe('skills renderer frontmatter parsing', () => {
     vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
       id: 'cand-pending',
       status: 'pending_review',
+      capabilities: CAPS('pending_review'),
       judgment: 'Keep local-first memory boundaries.',
       summary: 'Prefer local-first memory',
       suggestedType: 'personal',
@@ -290,6 +297,7 @@ describe('skills renderer frontmatter parsing', () => {
     vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
       id: 'cand-review',
       status: 'pending_review',
+      capabilities: CAPS('pending_review'),
       judgment: 'Keep every approval tied to source evidence.',
       summary: 'Traceable review rule',
       suggestedType: 'rule',
@@ -317,7 +325,8 @@ describe('skills renderer frontmatter parsing', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
-    vm.runInContext(`_skillsCognitionState.assets = [${JSON.stringify({
+    vm.runInContext(`_skillsCognitionState.assetSubview = 'assets';
+      _skillsCognitionState.assets = [${JSON.stringify({
       id: 'CA-RULE-writer',
       type: 'rule',
       category: 'rule',
@@ -353,7 +362,8 @@ describe('skills renderer frontmatter parsing', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
-    vm.runInContext(`_skillsCognitionState.assets = [${JSON.stringify({
+    vm.runInContext(`_skillsCognitionState.assetSubview = 'assets';
+      _skillsCognitionState.assets = [${JSON.stringify({
       id: 'CA-RULE-writer',
       type: 'rule',
       category: 'rule',
@@ -388,6 +398,7 @@ describe('skills renderer frontmatter parsing', () => {
     vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
       id: 'cand-compact',
       status: 'pending_review',
+      capabilities: CAPS('pending_review'),
       judgment: 'Add invariant checks.',
       summary: 'Tighten validation',
       suggestedType: 'rule',
@@ -410,7 +421,8 @@ describe('skills renderer frontmatter parsing', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
-    vm.runInContext(`_skillsCognitionState.assets = [{"id": "CA-RULE-P3394-001", "type": "rule", "category": "rule", "title": "P3394产品决策治理规则", "source": "Codex S-P3394-0731", "version": "v1.1", "status": "active", "maturity": "transfer_validated", "owner": "本机用户 ZL", "scope": "当前P3394项目", "workspaceRefs": ["产品工作 Workspace"], "receiptRefs": ["CRR-P3394-QODER-001"], "candidateRefs": [], "relationRefs": [], "reuseCount": 1, "candidateCount": 0}, {"id": "candidate:method-a", "type": "skill_method", "category": "skill_method", "title": "优化PRD回写Skill的来源分层", "source": "recall_candidate", "status": "candidate", "maturity": "bud", "owner": "local_user", "scope": "当前P3394项目", "workspaceRefs": [], "receiptRefs": [], "candidateRefs": ["cand-method-a"], "relationRefs": [], "reuseCount": 0, "candidateCount": 1}];`, context);
+    vm.runInContext(`_skillsCognitionState.assetSubview = 'assets';
+      _skillsCognitionState.assets = [{"id": "CA-RULE-P3394-001", "type": "rule", "category": "rule", "title": "P3394产品决策治理规则", "source": "Codex S-P3394-0731", "version": "v1.1", "status": "active", "maturity": "transfer_validated", "owner": "本机用户 ZL", "scope": "当前P3394项目", "workspaceRefs": ["产品工作 Workspace"], "receiptRefs": ["CRR-P3394-QODER-001"], "candidateRefs": [], "relationRefs": [], "reuseCount": 1, "candidateCount": 0}, {"id": "candidate:method-a", "type": "skill_method", "category": "skill_method", "title": "优化PRD回写Skill的来源分层", "source": "recall_candidate", "status": "candidate", "maturity": "bud", "owner": "local_user", "scope": "当前P3394项目", "workspaceRefs": [], "receiptRefs": [], "candidateRefs": ["cand-method-a"], "relationRefs": [], "reuseCount": 0, "candidateCount": 1}];`, context);
 
     context.renderSkillsCognitionAssets();
 
@@ -439,6 +451,7 @@ describe('skills renderer frontmatter parsing', () => {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
     vm.runInContext(`
+      _skillsCognitionState.assetSubview = 'assets';
       _skillsCognitionState.assets = [${JSON.stringify({
         id: 'CA-RULE-A',
         type: 'rule',
@@ -473,6 +486,7 @@ describe('skills renderer frontmatter parsing', () => {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
     vm.runInContext(`
+      _skillsCognitionState.assetSubview = 'assets';
       _skillsCognitionState.assets = [${JSON.stringify({
         id: 'CA-RULE-A',
         type: 'rule',
@@ -526,6 +540,7 @@ describe('skills renderer frontmatter parsing', () => {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
     vm.runInContext(`
+      _skillsCognitionState.assetSubview = 'assets';
       _skillsCognitionState.assets = [${JSON.stringify({
         id: 'CA-RULE-P3394-001',
         type: 'rule',
@@ -564,7 +579,8 @@ describe('skills renderer frontmatter parsing', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
-    vm.runInContext(`_skillsCognitionState.assets = [${JSON.stringify({
+    vm.runInContext(`_skillsCognitionState.assetSubview = 'assets';
+      _skillsCognitionState.assets = [${JSON.stringify({
       id: 'aa-governed',
       type: 'rule',
       category: 'rule',

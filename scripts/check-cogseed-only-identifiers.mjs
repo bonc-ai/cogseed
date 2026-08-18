@@ -27,31 +27,22 @@ const patterns = [
   new RegExp(`\\b${esc(oldB)}-runtime(?:[.:_/-]|\\b)`, 'g'),
 ];
 
-const files = execFileSync('git', ['ls-files', '-z'], { cwd: root })
-  .toString().split('\0').filter(Boolean);
+const files = execFileSync('git', ['ls-files', '-z'], { cwd: root }).toString().split('\0').filter(Boolean);
 const findings = [];
 for (const rel of files) {
   for (const pattern of patterns) {
     pattern.lastIndex = 0;
-    if (pattern.test(rel)) {
-      findings.push(`${rel}: tracked path contains a legacy product identifier`);
-      break;
-    }
+    if (pattern.test(rel)) { findings.push(`${rel}: tracked path contains a legacy product identifier`); break; }
   }
-  const abs = path.join(root, rel);
   let bytes;
-  try { bytes = fs.readFileSync(abs); } catch { continue; }
+  try { bytes = fs.readFileSync(path.join(root, rel)); } catch { continue; }
   if (bytes.includes(0)) continue;
-  const lines = bytes.toString('utf8').split(/\r?\n/);
-  lines.forEach((line, index) => {
+  for (const [index, line] of bytes.toString('utf8').split(/\r?\n/).entries()) {
     for (const pattern of patterns) {
       pattern.lastIndex = 0;
-      if (pattern.test(line)) {
-        findings.push(`${rel}:${index + 1}: ${line.trim().slice(0, 240)}`);
-        break;
-      }
+      if (pattern.test(line)) { findings.push(`${rel}:${index + 1}: ${line.trim().slice(0, 240)}`); break; }
     }
-  });
+  }
 }
 if (findings.length) {
   console.error(`[cogseed-only] forbidden legacy identifiers: ${findings.length}`);

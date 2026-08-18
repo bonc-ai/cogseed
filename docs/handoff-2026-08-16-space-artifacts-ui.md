@@ -56,7 +56,7 @@
 
 ## 二、已知预存失败(12 个测试,非本次引入,勿背锅)
 
-`space_system_prompt_inject`×2(No model configured 环境)、`conversation-sidebar`×1(Project task 11,handoff 标注)、`kstar-single-core`×1(已提交代码含 buildRunner)、`cogseed-residual-identifiers`×1(CLAUDE.md 断言)、`lazy-features`×2(测试滞后于已提交的 spaces→workspace 重构)、`modal-close-consistency`×1(5717 行已提交代码)、`skills-frontmatter`×2 + `skills-nseap-declaration`×2(locale 预存缺失)
+`space_system_prompt_inject`×2(No model configured 环境)、`conversation-sidebar`×1(Project task 11,handoff 标注)、`kstar-single-core`×1(已提交代码含 buildRunner)、`cogseed-residual-identifiers`×1(CLAUDE.md 断言)、`lazy-features`×2(测试滞后于已提交的 spaces→workspace 重构)、`modal-close-consistency`×1(5717 行已提交代码)、`skills-frontmatter`×2 + `skills-declaration-check`×2(locale 预存缺失)
 
 ## 三、测试的正确姿势(重要)
 

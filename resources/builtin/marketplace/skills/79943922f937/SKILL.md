@@ -25,8 +25,8 @@ description: "竞品店铺拆解：分析竞品店铺的选品结构、视觉风
 ## 输出
 对标报告（四维对比表 + 3 条可执行行动项）
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要对新店冷启动找对标、店铺增长停滞找差距或季度竞品监测：分析竞品店铺的选品结构、视觉风格、内容策略、价格带，输出可落地的对标报告，且已确认同品类/同价格带/同人群的竞品清单。
 - `do_not_use_when`：任务不是竞品店铺分析（如直接写推广计划、管理店铺后台）；竞品清单未确认或数据缺失却要求直接输出结论；要求编造竞品数据或涉及未授权抓取的付费数据。
@@ -34,4 +34,4 @@ description: "竞品店铺拆解：分析竞品店铺的选品结构、视觉风
 - `negative_examples`：`没有竞品清单，你随便找三家编个报告。`；`把竞品的付费会员数据挖出来写进报告。`
 
 本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

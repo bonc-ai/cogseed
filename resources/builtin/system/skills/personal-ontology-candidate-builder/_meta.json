@@ -1,14 +1,4 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-08-10T00:00:00",
-  "nseap": {
-    "standard_id": "nseap-skill-standard-v1",
-    "skill_class": "meta_skill",
-    "is_skill_of_skill": true,
-    "level": "L5",
-    "risk_route": "Full",
-    "promotion_ceiling": "staged",
-    "production_release_allowed": false,
-    "compliance_tier": null
-  }
+  "updated_at": "2026-08-10T00:00:00"
 }

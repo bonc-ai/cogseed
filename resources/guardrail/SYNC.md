@@ -34,12 +34,12 @@ node --import tsx scripts/pin-scanner-integrity.mjs       # 重生成 pin（发�
 node scripts/run-tests.mjs run test/main/features/security # TS 适配层回归
 ```
 
-## 2. nseap-security-core
+## 2. skill-declaration-core
 
 | 项 | 值 |
 |---|---|
 | 上游源 | `/Users/wu.j.y/Desktop/安全skill/security-skills/nseap-skill-security-core/` |
-| 仓库树 | `resources/guardrail/nseap-security-core/` |
+| 仓库树 | `resources/guardrail/skill-declaration-core/` |
 | 版本 | `VERSION`（当前 1.3.0；Ontology `ecs.security.skill@1.1.1`） |
 
 同步内容：上游 `security_core/`、`scripts/`、`ontologies/`、`fixtures/`、`tests/`、`exit-code-registry.yaml`、`pyproject.toml`、`README.md`、`VERSION`。
@@ -49,14 +49,14 @@ node scripts/run-tests.mjs run test/main/features/security # TS 适配层回归
 **同步后必跑：**
 
 ```bash
-PYTHONPATH="$PWD/resources/guardrail/nseap-security-core/vendor:$PWD/resources/guardrail/nseap-security-core" \
-  python3 resources/guardrail/nseap-security-core/tests/run_conformance_smoke.py
-# 引擎树有变更时重生成 nseap-security-core.INTEGRITY（先清 __pycache__）
+PYTHONPATH="$PWD/resources/guardrail/skill-declaration-core/vendor:$PWD/resources/guardrail/skill-declaration-core" \
+  python3 resources/guardrail/skill-declaration-core/tests/run_conformance_smoke.py
+# 引擎树有变更时重生成 skill-declaration-core.INTEGRITY（先清 __pycache__）
 ```
 
 ## 3. 上游还有、仓库未纳入的资产（有意不接）
 
-- `security-skills/skills/` 下 5 个 ecs-* Cursor Skills + `nseap-skill-creator` —— 说明已并入引擎 SKILL.md 与内置 skill-creator 参考资料；Creator 不接（产出协议不同层），`check_skill.py` 不接（TS 移植已是校验链）。
+- `security-skills/skills/` 下 5 个 ecs-* Cursor Skills + `nseap-skill-creator` —— 引擎 SKILL.md 保留用法约定；Creator 不接（产出协议不同层），`check_skill.py` 不接（TS 移植已是校验链）。
 - `skill-sentry/docs/`、`skill-sentry/.pytest_cache/` —— 过程资产。
 
 ## 4. 打包契约（不得破坏）

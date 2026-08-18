@@ -222,6 +222,8 @@
 .cognition-candidate-field select,
 .cognition-candidate-field textarea { width: 100%; padding: 7px 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 7px; background: var(--card, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; }
 .cognition-candidate-field textarea { min-height: 72px; resize: vertical; line-height: 1.6; }
+.cognition-candidate-profile-target { align-items: start; }
+.cognition-candidate-profile-target small { grid-column: 2; margin-top: -5px; line-height: 1.45; }
 .cognition-candidate-actions { margin-top: 4px; }
 .cognition-candidate-side { display: grid; gap: 8px; align-content: start; }
 .cognition-candidate-side h3 { margin: 0; color: var(--fg, #111827); font-size: 12px; }
@@ -258,6 +260,11 @@
 .ability-asset-tree-entry { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 1480px; margin: 0 auto 18px; padding: 13px 16px; border: 1px solid var(--border, #e5e7eb); border-radius: 9px; background: var(--card, #fff); }
 .ability-asset-tree-entry strong { color: var(--fg, #111827); font-size: 13px; }
 .ability-asset-tree-entry .panel-sub { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
+/* 我的认知树 tab：种子/树是一级页面，四类资产卡接在树内容下方。 */
+#skills-cognition-assets-summary .ability-asset-summary-grid { margin-top: 18px; }
+#skills-cognition-assets-summary .cognition-seed-wrap { padding-top: 34px; }
+/* 二级页面（四类资产 + 详情）的返回认知树头部：按钮靠右。 */
+.cognition-assets-subview-head { display: flex; justify-content: flex-end; max-width: 1480px; margin: 0 auto 12px; }
 /* 非资产分流的链路条。 */
 .cognition-nonasset-steps { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .cognition-nonasset-step { display: grid; gap: 3px; flex: 1 1 150px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
@@ -278,6 +285,7 @@
   .cognition-nonasset-layout { grid-template-columns: minmax(0, 1fr); }
   .cognition-candidate-field,
   .cognition-candidate-field.is-wide { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .cognition-candidate-profile-target small { grid-column: 1; }
 }
 .cognition-governance-workbench { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(320px, .8fr) minmax(0, 1.2fr); gap: 14px; align-items: start; }
 .cognition-governance-history-card,
@@ -1208,6 +1216,86 @@
 .recall-proof-rating { padding: 11px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
 .recall-proof-rating > strong { display: block; margin-bottom: 8px; color: var(--fg, #111827); font-size: 12px; }
 .recall-proof-rating-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 不能评价时这一区照样在，只是把按钮换成「为什么现在不能评」。样式刻意与
+   已评价态（.is-rated）一致而非做成告警——它不是错误，是链条还没走到那一步。 */
+.recall-proof-rating.is-blocked .recall-proof-rating-blocked { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+/* 「更好了」的取证步骤。它是唯一能把成熟度推到 effectiveness_validated 的
+   路径，所以给它一块能写字、能勾选依据的地方，而不是一个赞。 */
+.recall-proof-rating.is-evidence { display: grid; gap: 9px; }
+.recall-proof-evidence-hint { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+.recall-proof-evidence-note { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--bg, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; line-height: 1.6; resize: vertical; }
+.recall-proof-evidence-options { display: grid; gap: 6px; }
+.recall-proof-evidence-option { display: flex; align-items: baseline; gap: 7px; color: var(--fg, #111827); font-size: 12px; cursor: pointer; }
+.recall-proof-evidence-option code { color: var(--muted-fg, #6b7280); font-size: 10px; overflow-wrap: anywhere; }
+.recall-proof-evidence-none { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
 @media (max-width: 760px) {
   .recall-proof-detail { padding-left: 12px; }
 }
+
+/* 「空种子」首启页。整页一件东西都没有时才出现——它不是第五个任务视图，
+   而是一种状态。居中单栏：这一页只有一个问题要回答（我该从哪儿开始），
+   多栏排版会把两个入口读成两类并列功能。 */
+.cognition-seed-wrap { display: grid; justify-items: center; gap: 10px; max-width: 520px; margin: 0 auto; padding: 48px 20px; text-align: center; }
+.cognition-seed-wrap h2 { margin: 0; color: var(--fg, #111827); font-size: 20px; font-weight: 700; }
+.cognition-seed-wrap p { margin: 0; color: var(--muted-fg, #6b7280); font-size: 13px; line-height: 1.75; }
+.cognition-seed-actions { justify-content: center; margin-top: 8px; }
+/* 种子图形：土壤 + 种子 + 一片刚探头的芽。纯 CSS，不引图片资源。
+   它对应认知树的"还没有叶片"那一端，颜色沿用树的浅叶色。 */
+.cognition-seed-art { position: relative; width: 96px; height: 72px; margin-bottom: 6px; }
+.cognition-seed-soil { position: absolute; left: 0; right: 0; bottom: 0; height: 12px; border-radius: 999px; background: var(--border, #e5e7eb); }
+.cognition-seed-core { position: absolute; left: 50%; bottom: 8px; width: 16px; height: 20px; margin-left: -8px; border-radius: 50% 50% 46% 46%; background: #b98a5e; }
+.cognition-seed-sprout { position: absolute; left: 50%; bottom: 24px; width: 26px; height: 16px; margin-left: -4px; border-radius: 0 999px 999px 999px; background: color-mix(in srgb, var(--primary, #0E9F6E) 38%, var(--card, #fff)); transform: rotate(-16deg); transform-origin: left bottom; }
+@media (max-width: 760px) {
+  .cognition-seed-wrap { padding: 32px 16px; }
+}
+
+/* 认知树的有机可视化（v0.9.1 风格）：一片大叶 = 一类资产，颜色按该类"已验证
+   占比"分三档；芽 = 待确认候选（真实候选数据），橙色可点跳「待我处理」。
+   叶色只表达成熟度这一个真实字段，不自己发明分级。 */
+.cognition-tree-figure { padding: 6px 10px 10px; }
+.cognition-tree-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px 12px 4px; }
+.cognition-tree-panel-head h3 { margin: 0; color: var(--fg, #111827); font-size: 15px; }
+.cognition-tree-panel-head .panel-sub { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
+.cognition-tree-panel-actions { display: flex; flex-wrap: wrap; gap: 7px; flex: none; }
+.cognition-tree-svg { display: block; width: 100%; height: auto; max-height: 400px; }
+.cognition-tree-svg-ground { fill: var(--border, #e5e7eb); opacity: .7; }
+.cognition-tree-svg-roots { fill: var(--muted-fg, #6b7280); font-size: 11px; }
+.cognition-tree-svg-empty { fill: var(--muted-fg, #6b7280); font-size: 12px; font-weight: 600; }
+.cognition-tree-svg-leaf { cursor: pointer; }
+.cognition-tree-svg-leaf ellipse { transition: opacity .12s ease; }
+/* 大叶三档：无验证 → 浅；部分验证 → 中；全部验证 → 深。与当前成长面板的
+   is-light/is-deep 圆点同色系，图例和叶子对得上。 */
+.cognition-tree-svg-leaf.is-ratio-none ellipse { fill: color-mix(in srgb, var(--primary, #0E9F6E) 30%, var(--card, #fff)); }
+.cognition-tree-svg-leaf.is-ratio-mixed ellipse { fill: color-mix(in srgb, var(--primary, #0E9F6E) 62%, var(--card, #fff)); }
+.cognition-tree-svg-leaf.is-ratio-full ellipse { fill: var(--primary, #0E9F6E); }
+.cognition-tree-svg-leaf:hover ellipse { opacity: .8; }
+.cognition-tree-svg-leaf-label { fill: #155d46; font-size: 12.5px; font-weight: 700; }
+.cognition-tree-svg-leaf.is-ratio-mixed .cognition-tree-svg-leaf-label,
+.cognition-tree-svg-leaf.is-ratio-full .cognition-tree-svg-leaf-label { fill: #fff; }
+.cognition-tree-svg-bud { cursor: pointer; }
+.cognition-tree-svg-bud circle { fill: var(--warning, #d97706); stroke: #fff; stroke-width: 2; transition: opacity .12s ease; }
+.cognition-tree-svg-bud:hover circle { opacity: .8; }
+@media (max-width: 760px) {
+  .cognition-tree-svg { max-height: 280px; }
+}
+
+/* 当前成长面板（v0.9.1 右栏）：大数字 + 文案 + 四行统计 + 动作。四行数字
+   全部来自真实读模型，一行都不编。 */
+.cognition-tree-summary { display: grid; gap: 12px; align-content: start; }
+.cognition-tree-summary > h3 { margin: 0; color: var(--fg, #111827); font-size: 14px; }
+.cognition-tree-big-stat { color: var(--fg, #111827); font-size: 30px; font-weight: 780; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.cognition-tree-summary-text { margin: 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.65; }
+.cognition-tree-summary-list { display: grid; margin-top: 2px; border-top: 1px solid var(--border, #e5e7eb); }
+.cognition-tree-summary-row { display: flex; align-items: center; gap: 9px; padding: 11px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.cognition-tree-summary-row strong { color: var(--fg, #111827); font-size: 12px; font-weight: 600; }
+.cognition-tree-summary-row b { margin-left: auto; color: var(--fg, #111827); font-size: 13px; font-variant-numeric: tabular-nums; }
+.cognition-tree-summary-note { margin-left: auto; color: var(--muted-fg, #6b7280); font-size: 10px; text-align: right; }
+.cognition-tree-summary-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cognition-tree-nonasset-link { justify-self: start; margin-top: 2px; }
+
+/* 「已处理」历史带。与上面两条待办带同构，但状态徽章用完成色——它记录的是
+   已经落账的事实，不是还要做的事。 */
+.cognition-review-history { display: grid; gap: 6px; }
+.cognition-review-history-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 9px; border: 1px solid var(--border, #e5e7eb); border-radius: 7px; background: var(--card, #fff); }
+.cognition-review-history-row > div { display: grid; gap: 2px; min-width: 0; }
+.cognition-review-history-row strong { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }

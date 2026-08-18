@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import type { Space, SpaceAssetRef, SpaceAssetReferenceBinding } from '../../../src/main/features/spaces';
+import type { Space, SpaceAssetRef } from '../../../src/main/features/spaces';
 
 let tmpDir: string;
 let prevWs: string | undefined;
@@ -29,7 +29,6 @@ async function loadSpaces() {
 }
 
 const skillRef: SpaceAssetRef = { asset_id: 'sk-handoff', version: '1.0.0', content_hash: 'a'.repeat(64) };
-const binding: SpaceAssetReferenceBinding = { asset_id: 'sk-handoff', version: '1.0.0', policy: 'review_required', bound_at: '2026-08-10T00:00:00Z' };
 
 describe('spaces › P3394 字段（创建默认值）', () => {
   it('缺省 space_type=complex_project、gate_status=not_checked、其余字段缺省', async () => {
@@ -41,17 +40,15 @@ describe('spaces › P3394 字段（创建默认值）', () => {
     expect(r.space.gate_status).toBe('not_checked');
     expect(r.space.sustained_outcome).toBeUndefined();
     expect(r.space.main_skill_ref).toBeUndefined();
-    expect(r.space.asset_reference_bindings).toBeUndefined();
   });
 
-  it('创建时指定 space_type/sustained_outcome/main_skill_ref/asset_reference_bindings 正确落盘', async () => {
+  it('创建时指定 space_type/sustained_outcome/main_skill_ref 正确落盘', async () => {
     const { createSpace, getSpace } = await loadSpaces();
     const r = await createSpace(TEST_UID, {
       name: '交付空间',
       space_type: 'complex_project',
       sustained_outcome: '跨 Agent 项目交付',
       main_skill_ref: skillRef,
-      asset_reference_bindings: [binding],
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -59,7 +56,6 @@ describe('spaces › P3394 字段（创建默认值）', () => {
     expect(s?.space_type).toBe('complex_project');
     expect(s?.sustained_outcome).toBe('跨 Agent 项目交付');
     expect(s?.main_skill_ref).toEqual(skillRef);
-    expect(s?.asset_reference_bindings?.[0]).toEqual(binding);
   });
 
   it('非法 space_type → invalid_space_type；超长 sustained_outcome → too_long', async () => {
@@ -89,7 +85,6 @@ describe('spaces › P3394 字段（旧数据兼容读）', () => {
     delete old.sustained_outcome;
     delete old.gate_status;
     delete old.main_skill_ref;
-    delete old.asset_reference_bindings;
     fs.writeFileSync(f, JSON.stringify(old));
     const s = await getSpace(TEST_UID, r.space.space_id);
     expect(s?.space_type).toBe('complex_project');
@@ -100,7 +95,7 @@ describe('spaces › P3394 字段（旧数据兼容读）', () => {
     expect(raw.space_type).toBeUndefined();
   });
 
-  it('读时归一化：非法 main_skill_ref 被丢弃；bindings 缺 policy 默认 review_required', async () => {
+  it('读时归一化：非法 main_skill_ref 被丢弃', async () => {
     const { createSpace, getSpace } = await loadSpaces();
     const r = await createSpace(TEST_UID, { name: '归一化' });
     expect(r.ok).toBe(true);
@@ -109,22 +104,14 @@ describe('spaces › P3394 字段（旧数据兼容读）', () => {
     const f = spaceMetaFile(TEST_UID, r.space.space_id);
     const raw = JSON.parse(fs.readFileSync(f, 'utf8'));
     raw.main_skill_ref = { asset_id: 'sk-x' }; // 缺 version → 非法
-    raw.asset_reference_bindings = [
-      { asset_id: 'sk-a', version: '1.0.0', bound_at: '2026-08-10T00:00:00Z' }, // 缺 policy
-      { asset_id: 'sk-b' }, // 缺 version → 整项丢弃
-      'garbage',
-    ];
     fs.writeFileSync(f, JSON.stringify(raw));
     const s = await getSpace(TEST_UID, r.space.space_id);
     expect(s?.main_skill_ref).toBeUndefined();
-    expect(s?.asset_reference_bindings?.length).toBe(1);
-    expect(s?.asset_reference_bindings?.[0].policy).toBe('review_required');
-    expect(s?.asset_reference_bindings?.[0].asset_id).toBe('sk-a');
   });
 });
 
 describe('spaces › P3394 字段（update）', () => {
-  it('更新 gate_status / space_type / sustained_outcome / main_skill_ref / asset_reference_bindings', async () => {
+  it('更新 gate_status / space_type / sustained_outcome / main_skill_ref', async () => {
     const { createSpace, updateSpace } = await loadSpaces();
     const r = await createSpace(TEST_UID, { name: '更新测试' });
     expect(r.ok).toBe(true);
@@ -135,7 +122,6 @@ describe('spaces › P3394 字段（update）', () => {
       space_type: 'professional_work',
       sustained_outcome: '产品需求澄清',
       main_skill_ref: skillRef,
-      asset_reference_bindings: [binding],
     });
     expect(u1.ok).toBe(true);
     if (!u1.ok) return;

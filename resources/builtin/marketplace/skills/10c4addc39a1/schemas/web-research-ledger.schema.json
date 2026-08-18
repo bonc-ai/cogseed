@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nseap.example/schemas/ontology-analysis-web-research-ledger/v0.1",
+  "$id": "https://cogseed.example/schemas/ontology-analysis-web-research-ledger/v0.1",
   "title": "Web Research and Source Verification Ledger",
   "type": "object",
   "additionalProperties": false,

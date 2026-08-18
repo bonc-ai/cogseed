@@ -13,6 +13,8 @@ const ConversationInfo = (() => {
   let _cid = null;
   let _open = false;
   let _activeTab = 'files';
+  // 右侧「运行上下文」顶部横向 tab 的当前选中项：runs / source / proof / assets。
+  let _activeRunContextTab = 'runs';
   let _seq = 0;
   let _activitySeq = 0;
   let _fileSeq = 0;
@@ -50,6 +52,14 @@ const ConversationInfo = (() => {
     wakeRequests: [],
     protocolEvents: [],
     protocolError: '',
+    // 四类能力资产（关于我 / 规则与偏好 / 模板与范例 / 技能与方法）。
+    assets: [],
+    // 本会话相关的认知候选（recall.candidates.list 按 sourceRefs 过滤）：
+    // 待确认的显示「确认入库/忽略」，已确认的归入「已沉淀资产」。
+    candidates: [],
+    // 导入会话的后台提炼状态（sessionImport.extractionStatus）：四类资产段的
+    // 「正在提炼」提示与完成后自动刷新共用。
+    extraction: null,
   };
   const _protocolFilters = { agent: '', role: '', result: '' };
   const _CI_TEXT_EXTS = new Set([
@@ -263,7 +273,7 @@ const ConversationInfo = (() => {
 
   async function _load(cid) {
     const enc = encodeURIComponent(cid);
-    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, protocolData, executionsData] = await Promise.all([
+    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, protocolData, executionsData, assetsData, extractionData, candidatesData] = await Promise.all([
       _fetchJson(typeof _historyRequestUrl === 'function'
         ? _historyRequestUrl(cid)
         : `/api/conversations/${enc}/history?limit=10`),
@@ -286,6 +296,23 @@ const ConversationInfo = (() => {
           ? data.executions.filter((item) => item && item.conversationId === cid)
           : []
       )).catch(() => []),
+      // 四类能力资产（cognition.assets.list）：跨会话的个人能力资产，右侧「四类资产」段展示。
+      _invokeOrDefault('cognition.assets.list', { limit: 500 }, { ok: false }).then((data) => (
+        data && data.ok && Array.isArray(data.assets) ? data.assets : []
+      )).catch(() => []),
+      // 导入会话的后台提炼状态：pending 时四类资产段显示「正在提炼」，
+      // 完成后（sessionImport.events → extraction_done）由 conversation.js 触发刷新。
+      _invokeOrDefault('sessionImport.extractionStatus', { cid }, { ok: false }).then((data) => (
+        data && data.ok && data.status ? data.status : null
+      )).catch(() => null),
+      // 本会话相关的认知候选：候选带 sourceRefs（kind:'conversation', id:cid），
+      // 导入提取与沉淀活动产出的候选都指向它们来源的会话。
+      _invokeOrDefault('recall.candidates.list', {}, { ok: false }).then((data) => (
+        data && data.ok && Array.isArray(data.candidates)
+          ? data.candidates.filter((c) => c && Array.isArray(c.sourceRefs)
+              && c.sourceRefs.some((ref) => ref && ref.kind === 'conversation' && ref.id === cid))
+          : []
+      )).catch(() => []),
     ]);
     return {
       conversation: historyData.conversation || null,
@@ -305,6 +332,9 @@ const ConversationInfo = (() => {
       protocolEvents: Array.isArray(protocolData.events) ? protocolData.events : (Array.isArray(protocolData.protocol_events) ? protocolData.protocol_events : []),
       protocolError: protocolData.error ? String(protocolData.error) : '',
       executions: Array.isArray(executionsData) ? executionsData : [],
+      assets: Array.isArray(assetsData) ? assetsData : [],
+      extraction: extractionData || null,
+      candidates: Array.isArray(candidatesData) ? candidatesData : [],
     };
   }
 
@@ -337,7 +367,7 @@ const ConversationInfo = (() => {
       },
       collaboration: cogseed.collaboration || _snapshot.collaboration,
     };
-    if (_activeTab === 'collaboration') _renderBody();
+    _renderBody();
   }
 
   function _renderCogSeedProjectionError(message) {
@@ -379,6 +409,10 @@ const ConversationInfo = (() => {
     const childIds = Array.isArray(workflow.childTaskIds) && workflow.childTaskIds.length
       ? `<div class="conversation-info-cogseed-child-tree">${workflow.childTaskIds.map((id) => `<span class="conversation-info-cogseed-child-chip">${escapeHtml(id)}</span>`).join('')}</div>`
       : '';
+    // 内容全空（无任务 / 无参与者 / 无工作流 / 无时间线）时不渲染空态卡，避免「暂无」堆积。
+    if (!task && !actors.length && !timeline.length && !(workflow.steps && workflow.steps.length) && !childIds) {
+      return '';
+    }
     return `<section class="conversation-info-collaboration-section conversation-info-cogseed-overview">
       <div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.cogseed.section_title', 'Mate Collaboration Overview'))}</div>
       <div class="conversation-info-cogseed-meta">${escapeHtml(session.sessionId)} · ${escapeHtml(session.latestStatus || 'idle')} · ${escapeHtml(_label('conversation_info.cogseed.task_count', '{count} tasks', { count: session.taskCount || 0 }))}</div>
@@ -411,7 +445,7 @@ const ConversationInfo = (() => {
           },
           collaboration: next && next.collaboration ? next.collaboration : _snapshot.collaboration,
         };
-        if (_activeTab === 'collaboration' || opts.render === true) _renderBody();
+        _renderBody();
       },
     });
     if (entry && entry.snapshot) {
@@ -443,7 +477,7 @@ const ConversationInfo = (() => {
           ? activity.runtime.collaboration
           : _snapshot.collaboration,
       };
-      if (_activeTab === "collaboration" || opts.render === true) _renderBody();
+      _renderBody();
     } catch (err) {
       _infoLog.warn("agent activity refresh failed", { cid: target, error: err && err.message });
     }
@@ -651,6 +685,14 @@ const ConversationInfo = (() => {
       ))}</div>`;
     } else if (workspace.length) {
       workspaceHtml = `<div class="conversation-info-tree">${_renderTreeNode(_buildFileTree(workspace), 0)}</div>`;
+    } else if (_snapshot.fileRootExists === false) {
+      // 工作区目录被移动/删除（或从未创建）：区分「目录不存在」与「目录为空」，
+      // 提供「重新选择工作区目录」引导（用户取消则保持现状，可再次点击）。
+      workspaceHtml = `<div class="conversation-info-empty is-small">${escapeHtml(_label(
+        'conversation_info.files_workspace_missing',
+        '工作区目录已被移动或删除，文件列表暂不可用；对话中生成的产物仍可查看。'
+      ))}</div>
+      <button type="button" class="conversation-info-files-repick" data-files-repick-workspace>${escapeHtml(_label('conversation_info.files_workspace_repick', '重新选择工作区目录'))}</button>`;
     } else {
       workspaceHtml = `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_no_workspace', '暂无工作区文件'))}</div>`;
     }
@@ -668,6 +710,10 @@ const ConversationInfo = (() => {
       ? `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_truncated', 'Showing first {count} files', { count: _snapshot.filesCount || workspace.length }))}</div>`
       : '';
 
+    const workspacePathHtml = _snapshot.fileRoot
+      ? `<div class="ci-files-workspace-path" title="${escapeHtml(_snapshot.fileRoot)}">${_uiIcon('folder', 'ci-files-workspace-path-icon')}<span>${escapeHtml(_label('conversation_info.files_workspace_path_label', '当前工作区'))}：<code>${escapeHtml(_snapshot.fileRoot)}</code></span></div>`
+      : '';
+
     return `<div class="ci-files">
       <section class="ci-files-section">
         <div class="ci-files-section-title">${_uiIcon('file-text', '')}${escapeHtml(_label('conversation_info.files_produced', '产出'))}</div>
@@ -675,6 +721,7 @@ const ConversationInfo = (() => {
       </section>
       <section class="ci-files-section">
         <div class="ci-files-section-title">${_uiIcon('folder-open', '')}${escapeHtml(_label('conversation_info.files_workspace', '工作区'))}</div>
+        ${workspacePathHtml}
         ${workspaceHtml}
       </section>
       ${syncNotice}${trunc}
@@ -752,26 +799,7 @@ const ConversationInfo = (() => {
   // Tab count chips — filled from the same _snapshot as the body renderers.
   // Tasks count is `done/total`; files / attachments mirror visible rows.
   function _refreshTabCounts() {
-    const filesEl = document.getElementById('conversation-info-tab-count-files');
-    if (filesEl) {
-      const count = _collectVisibleFiles().length;
-      filesEl.textContent = count > 0 ? String(count) : '';
-    }
-    const attachEl = document.getElementById('conversation-info-tab-count-attachments');
-    if (attachEl) {
-      const count = _collectConversationAttachments().length;
-      attachEl.textContent = count > 0 ? String(count) : '';
-    }
-    const collaborationEl = document.getElementById('conversation-info-tab-count-collaboration');
-    if (collaborationEl) {
-      const count = _snapshot.collaboration ? 1 : 0;
-      collaborationEl.textContent = count > 0 ? String(count) : '';
-    }
-    const protocolEl = document.getElementById('conversation-info-tab-count-protocol');
-    if (protocolEl) {
-      const count = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents.length : 0;
-      protocolEl.textContent = count > 0 ? String(count) : '';
-    }
+    // no-op: tab 条已移除（9.1 五段折叠面板重构），保留函数避免外部调用报错
   }
 
   function _safeSection(renderFn, fallbackHtml) {
@@ -1004,16 +1032,28 @@ const ConversationInfo = (() => {
 
   function _renderCollaborationOverview() {
     const cogseedState = _snapshot.cogseed || {};
-    if (!_snapshot.collaboration && !cogseedState.session && !cogseedState.loading && !cogseedState.error && !_deriveAgentActivityRows(_snapshot).length && !_collectCollaborationAttentionItems().length) {
-      return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.collaboration.empty', 'No active collaboration yet.'))}</div>`;
-    }
     const collaboration = _snapshot.collaboration || null;
     const runtime = _snapshot.runtime || {};
     const attentionItems = _collectCollaborationAttentionItems();
+    const hasAgentActivity = _deriveAgentActivityRows(_snapshot).length > 0;
+    const hasAttention = attentionItems.length > 0;
+    const hasTask = !!collaboration && !!collaboration.objective;
+
+    // 完全无实质内容（无任务 / 无参与者 / 无待处理，且不在加载/报错中）：空态。
+    if (!hasTask && !hasAgentActivity && !hasAttention && !cogseedState.loading && !cogseedState.error) {
+      return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.collaboration.empty', 'No active collaboration yet.'))}</div>`;
+    }
+
+    const loadFailed = `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`;
+    const header = `<div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>`;
     const cogseedHtml = (cogseedState.session || cogseedState.loading || cogseedState.error)
-      ? _safeSection(() => _renderCogSeedOverview(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)
+      ? _safeSection(() => _renderCogSeedOverview(), loadFailed)
       : '';
-    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${cogseedHtml}${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}</div>`;
+    const taskHtml = hasTask ? _safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), loadFailed) : '';
+    const agentHtml = hasAgentActivity ? _safeSection(() => _renderCollaborationAgentActivitySection(), loadFailed) : '';
+    const attentionHtml = hasAttention ? _safeSection(() => _renderCollaborationAttentionSection(attentionItems), loadFailed) : '';
+
+    return `<div class="conversation-info-collaboration">${header}${cogseedHtml}${taskHtml}${agentHtml}${attentionHtml}</div>`;
   }
 
   function _protocolEventData(event) {
@@ -1398,6 +1438,272 @@ const ConversationInfo = (() => {
     return `<div class="conversation-info-resume-carry">${rows}</div>`;
   }
 
+  // 9.1 统一框架 · 右侧「运行上下文」单列五段折叠面板。
+  // 替代旧的 tab 互斥模式：五段垂直排列，每段是 <details> 可折叠，
+  // 聚焦段(默认段 ① )展开渲染全文，其余段折叠显示摘要。
+  // 各段数据源已就绪，不新增 IPC。
+  function _renderRunContext() {
+    var executions = Array.isArray(_snapshot.executions) ? _snapshot.executions : [];
+    var sorted = executions.slice().sort(function (a, b) {
+      var at = a && a.startedAt ? String(a.startedAt) : '';
+      var bt = b && b.startedAt ? String(b.startedAt) : '';
+      return bt.localeCompare(at);
+    });
+    var totalRuns = sorted.length;
+    var files = (typeof _collectVisibleFiles === 'function') ? _collectVisibleFiles() : [];
+    var attachments = Array.isArray(_snapshot.attachments) ? _snapshot.attachments : [];
+    var protocolEvents = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents : [];
+    var latestRun = sorted[0] || null;
+    var cogseedState = _snapshot.cogseed || {};
+    var hasCollab = !!(_snapshot.collaboration || cogseedState.session || cogseedState.loading);
+
+    // --- 段 1 本次运行：执行记录 + Context 引用 + 权限 ---
+    var contextSummary = totalRuns
+      ? _label('conversation_info.run_context.runs_count', '{count} 次执行', { count: totalRuns })
+      : _label('conversation_info.carried.runs_empty', '本会话暂无执行记录。');
+    var RUNS_VISIBLE_LIMIT = 10;
+    var visibleRuns = _carriedRunsExpanded ? sorted : sorted.slice(0, RUNS_VISIBLE_LIMIT);
+    var runsList = visibleRuns.length
+      ? '<div class="conversation-info-carried-runs">' + visibleRuns.map(_carriedRunHtml).join('') + '</div>'
+      : '';
+    var runsCountLine = totalRuns
+      ? '<div class="conversation-info-carried-runs-summary">' + escapeHtml(_label('conversation_info.carried.runs_total', '共 {count} 次运行', { count: totalRuns })) + '</div>'
+      : '';
+    var runsToggle = totalRuns > RUNS_VISIBLE_LIMIT
+      ? '<button type="button" class="conversation-info-carried-runs-toggle" data-carried-runs-toggle>' + escapeHtml(_label(_carriedRunsExpanded ? 'conversation_info.carried.runs_collapse' : 'conversation_info.carried.runs_expand', _carriedRunsExpanded ? '收起' : '展开全部')) + '</button>'
+      : '';
+    var runsHtml = totalRuns
+      ? runsCountLine + runsList + runsToggle
+      : '<div class="conversation-info-empty is-small">' + escapeHtml(_label('conversation_info.carried.runs_empty', '本会话暂无执行记录。')) + '</div>';
+    var collabRef = _latestCollaborationRef(protocolEvents);
+    var contextIds = [];
+    sorted.forEach(function (execution) {
+      if (execution && execution.contextId && !contextIds.includes(execution.contextId)) {
+        contextIds.push(String(execution.contextId));
+      }
+    });
+    var contextRows = [];
+    if (collabRef && collabRef.workflow_run_id) contextRows.push([_label('conversation_info.carried.run', '运行'), String(collabRef.workflow_run_id)]);
+    if (collabRef && collabRef.step_id) contextRows.push([_label('conversation_info.carried.step', '步骤'), String(collabRef.step_id)]);
+    if (contextIds.length) contextRows.push([_label('conversation_info.carried.context_id', 'Context ID'), contextIds.join(' · ')]);
+    var contextRefHtml = contextRows.length
+      ? '<dl class="conversation-info-carried-rows">' + contextRows.map(function (r) { return '<div><dt>' + escapeHtml(r[0]) + '</dt><dd>' + escapeHtml(r[1]) + '</dd></div>'; }).join('') + '</dl>'
+      : '';
+    var resumeEvidence = _snapshot.resumeEvidence;
+    var resumeHtml = resumeEvidence
+      ? '<section class="conversation-info-resume">' +
+        (resumeEvidence.restatement ? '<div class="conversation-info-resume-restatement">' + escapeHtml(resumeEvidence.restatement) + '</div>' : '') +
+        _renderResumeCarry(resumeEvidence.carry) +
+        '</section>'
+      : '';
+
+    // --- 段 2 来源与产物 ---
+    var sourceSummary = _label('conversation_info.run_context.source_count', '{files} 文件 · {attachments} 附件', { files: files.length, attachments: attachments.length });
+    var sourceTitle = _maskedSourceName(_currentConversationTitle());
+
+    // --- 权限（并入段 1 本次运行） ---
+    var permissionSummary = latestRun && latestRun.permissionMode
+      ? _carriedPermissionLabel(latestRun.permissionMode)
+      : _label('conversation_info.carried.permission', '只读');
+    var permissionRows = [];
+    if (latestRun && (latestRun.agentId || latestRun.cli || latestRun.kind)) {
+      permissionRows.push([_label('conversation_info.carried.executor', '执行方'), _carriedExecutorLabel(latestRun)]);
+    }
+    if (latestRun && latestRun.boundary) {
+      permissionRows.push([_label('conversation_info.carried.boundary_label', '边界'), _carriedBoundaryLabel(latestRun.boundary)]);
+    }
+    if (latestRun && latestRun.permissionMode) {
+      permissionRows.push([_label('conversation_info.carried.permission_label', '权限'), _carriedPermissionLabel(latestRun.permissionMode)]);
+    }
+    var permissionDetailHtml = permissionRows.length
+      ? '<dl class="conversation-info-carried-rows">' + permissionRows.map(function (r) { return '<div><dt>' + escapeHtml(r[0]) + '</dt><dd>' + escapeHtml(r[1]) + '</dd></div>'; }).join('') + '</dl>'
+      : '<div class="conversation-info-empty is-small">' + escapeHtml(_label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、扩权或正式资产变更会单独确认。')) + '</div>';
+    var permissionNote = latestRun && latestRun.permissionMode
+      ? _label('conversation_info.carried.permission_note', '本会话最近一次执行的权限模式：{mode}', { mode: _carriedPermissionLabel(latestRun.permissionMode) })
+      : _label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、扩权或正式资产变更会单独确认。');
+
+    // --- 段 3 运行与协作：运行证明 + 协作参与者 ---
+    var proofSummary = _label('conversation_info.run_context.protocol_count', '{count} 个协议事件', { count: protocolEvents.length });
+
+    var collabSummary = hasCollab
+      ? _label('conversation_info.run_context.collab_active', '有协作进行中')
+      : _label('conversation_info.run_context.collab_empty', '暂无协作');
+
+    // --- 四类资产 tab：本会话的认知沉淀（提取中 / 待确认候选 / 已沉淀资产） ---
+    // 注意：这里不展示全库资产计数——那是认知资产页「总览」的事。放在会话
+    // 运行上下文里，用户只会被误导成"这个会话有这些资产"（实测确认过）。
+    var assetsData = Array.isArray(_snapshot.assets) ? _snapshot.assets : [];
+    var extraction = _snapshot.extraction || null;
+    var extracting = !!(extraction && extraction.status === 'pending');
+    var sessionCognitionHtml = _renderSessionCognitionHtml(_cid, _snapshot.candidates, assetsData, extracting);
+
+    var runTab = _activeRunContextTab || 'runs';
+    var tabBtn = function (key, label) {
+      return '<button type="button" class="run-context-tab' + (runTab === key ? ' is-active' : '') + '" data-run-context-tab="' + key + '">' + escapeHtml(label) + '</button>';
+    };
+    var paneOpen = function (key) {
+      return '<div class="run-context-pane"' + (runTab === key ? '' : ' hidden') + ' data-run-context-pane="' + key + '">';
+    };
+
+    return '<div class="run-context">' +
+      '<div class="run-context-tabs" role="tablist">' +
+        tabBtn('runs', _label('conversation_info.run_context.section_runs', '本次运行')) +
+        tabBtn('source', _label('conversation_info.run_context.section_source', '来源与产物')) +
+        tabBtn('proof', _label('conversation_info.run_context.section_proof', '运行与协作')) +
+        tabBtn('assets', _label('conversation_info.run_context.section_assets', '四类资产')) +
+      '</div>' +
+      paneOpen('runs') +
+        resumeHtml +
+        runsHtml +
+        contextRefHtml +
+        permissionDetailHtml +
+        '<div class="conversation-info-carried-permission">' + _uiIcon('shield-check', 'conversation-info-carried-permission-icon') + '<span>' + escapeHtml(permissionNote) + '</span></div>' +
+      '</div>' +
+      paneOpen('source') +
+        '<dl class="conversation-info-carried-rows"><div><dt>' + escapeHtml(_label('conversation_info.carried.source', '来源')) + '</dt><dd>' + escapeHtml(sourceTitle) + '</dd></div></dl>' +
+        _renderFiles() +
+        _renderAttachments() +
+      '</div>' +
+      paneOpen('proof') +
+        '<div class="run-context-subsection">' +
+          '<div class="run-context-subsection-title">' + escapeHtml(_label('conversation_info.run_context.subsection_proof', '运行证明')) + '</div>' +
+          _renderProtocolInspector() +
+        '</div>' +
+        '<div class="run-context-subsection">' +
+          '<div class="run-context-subsection-title">' + escapeHtml(_label('conversation_info.run_context.subsection_collab', '协作参与者')) + '</div>' +
+          _renderCollaborationOverview() +
+        '</div>' +
+      '</div>' +
+      paneOpen('assets') +
+        sessionCognitionHtml +
+      '</div>' +
+    '</div>';
+  }
+
+  // ── 四类资产 tab · 本会话认知沉淀 ─────────────────────────────────────
+  // 回答用户「这个会话沉淀了什么认知」：提取中提示 → 待确认候选（确认入库 /
+  // 忽略）→ 已沉淀资产。候选来自 recall 候选池（导入提取与沉淀活动共用），
+  // 确认动作走与认知沉淀页相同的 promote 底层。
+  var _COG_TYPE_LABELS = {
+    personal: '关于我',
+    rule: '规则与偏好',
+    template: '模板与范例',
+    skill_method: '技能与方法',
+  };
+
+  function _cogTypeLabel(type) {
+    return _COG_TYPE_LABELS[type] || String(type || '');
+  }
+
+  /** 待确认候选卡片：类型 + 判断 + 价值 + 规则边界 + 确认/忽略。 */
+  function _candidateCardHtml(c) {
+    var head = '<div class="run-context-cog-card" data-candidate-id="' + escapeHtml(c.id) + '">' +
+      '<div class="run-context-cog-card-head">' +
+        '<span class="run-context-cog-type is-' + escapeHtml(c.suggestedType) + '">' + escapeHtml(_cogTypeLabel(c.suggestedType)) + '</span>' +
+        '<span class="run-context-cog-judgment">' + escapeHtml(c.judgment) + '</span>' +
+      '</div>';
+    var body = '';
+    if (c.value) {
+      body += '<div class="run-context-cog-value"><b>' + escapeHtml(_label('conversation_info.run_context.assets_value', '价值')) + '</b>' + escapeHtml(c.value) + '</div>';
+    }
+    if (c.suggestedType === 'rule') {
+      var bounds = [];
+      if (Array.isArray(c.applicableWhen) && c.applicableWhen.length) {
+        bounds.push('<span class="run-context-cog-bound is-applicable">' + escapeHtml(_label('conversation_info.run_context.assets_applicable', '适用')) + '：' + escapeHtml(c.applicableWhen.join('、')) + '</span>');
+      }
+      if (Array.isArray(c.forbiddenWhen) && c.forbiddenWhen.length) {
+        bounds.push('<span class="run-context-cog-bound is-forbidden">' + escapeHtml(_label('conversation_info.run_context.assets_forbidden', '不适用')) + '：' + escapeHtml(c.forbiddenWhen.join('、')) + '</span>');
+      }
+      if (bounds.length) body += '<div class="run-context-cog-bounds">' + bounds.join('') + '</div>';
+    }
+    var actions = '<div class="run-context-cog-actions">' +
+      '<button type="button" class="btn btn-sm btn-primary" data-candidate-promote="' + escapeHtml(c.id) + '">' + escapeHtml(_label('conversation_info.run_context.assets_confirm', '确认入库')) + '</button>' +
+      '<button type="button" class="btn btn-sm" data-candidate-ignore="' + escapeHtml(c.id) + '">' + escapeHtml(_label('conversation_info.run_context.assets_ignore', '忽略')) + '</button>' +
+    '</div>';
+    return head + body + actions + '</div>';
+  }
+
+  /** 已沉淀条目：confirmed 候选（有对应资产时显示资产标题）。 */
+  function _settledCandidateHtml(c, assetsById) {
+    var asset = c.promotedAssetId && assetsById[c.promotedAssetId];
+    var title = asset ? (asset.title || asset.summary || c.judgment) : c.judgment;
+    return '<div class="run-context-cog-settled" data-candidate-id="' + escapeHtml(c.id) + '">' +
+      '<span class="run-context-cog-type is-' + escapeHtml(c.suggestedType) + '">' + escapeHtml(_cogTypeLabel(c.suggestedType)) + '</span>' +
+      '<span class="run-context-cog-judgment">' + escapeHtml(title) + '</span>' +
+      '<span class="run-context-cog-settled-badge">' + escapeHtml(_label('conversation_info.run_context.assets_settled', '已沉淀')) + '</span>' +
+    '</div>';
+  }
+
+  /** 已沉淀条目：正式资产（relationRefs 指向本会话且未被候选区覆盖）。 */
+  function _settledAssetHtml(a) {
+    return '<div class="run-context-cog-settled" data-asset-id="' + escapeHtml(a.id) + '">' +
+      '<span class="run-context-cog-type is-' + escapeHtml(a.category || a.type) + '">' + escapeHtml(_cogTypeLabel(a.category || a.type)) + '</span>' +
+      '<span class="run-context-cog-judgment">' + escapeHtml(a.title || a.summary || '') + '</span>' +
+      '<span class="run-context-cog-settled-badge">' + escapeHtml(_label('conversation_info.run_context.assets_settled', '已沉淀')) + '</span>' +
+    '</div>';
+  }
+
+  /** 四类资产 tab · 本会话认知沉淀区（提取中 / 待确认 / 已沉淀 / 空态）。 */
+  function _renderSessionCognitionHtml(cid, candidates, assets, extracting) {
+    var pending = [];
+    var confirmed = [];
+    (Array.isArray(candidates) ? candidates : []).forEach(function (c) {
+      if (c.status === 'pending_review' || c.status === 'deferred') pending.push(c);
+      else if (c.status === 'confirmed') confirmed.push(c);
+    });
+    var assetsById = {};
+    (Array.isArray(assets) ? assets : []).forEach(function (a) { if (a && a.id) assetsById[a.id] = a; });
+    var confirmedById = {};
+    confirmed.forEach(function (c) { confirmedById[c.id] = true; });
+    // 本会话正式资产：relationRefs（字段是 type，不是 kind）指向本会话；
+    // 其候选已在 confirmed 区显示则跳过。
+    var extraAssets = (Array.isArray(assets) ? assets : []).filter(function (a) {
+      var refs = Array.isArray(a.relationRefs) ? a.relationRefs : [];
+      var linked = refs.some(function (r) { return r && r.type === 'conversation' && r.id === cid; });
+      if (!linked) return false;
+      var linkedCandidate = a.candidateRefs && a.candidateRefs[0];
+      return !(linkedCandidate && confirmedById[linkedCandidate]);
+    });
+
+    // 四格计数框（本会话视角）：关于我 / 规则与偏好 / 模板与范例 / 技能与方法。
+    // 始终显示——没确认或没沉淀出东西就是 0，确认入库后对应分类 +1，用户能
+    // 直观看到数字变化。不做全库计数，那是认知资产页「总览」的事。
+    var settledByType = { personal: 0, rule: 0, template: 0, skill_method: 0 };
+    confirmed.forEach(function (c) {
+      if (settledByType[c.suggestedType] != null) settledByType[c.suggestedType] += 1;
+    });
+    extraAssets.forEach(function (a) {
+      var t = a.category || a.type;
+      if (settledByType[t] != null) settledByType[t] += 1;
+    });
+    var assetCells = ['personal', 'rule', 'template', 'skill_method'].map(function (t) {
+      return '<div class="run-context-asset"><span>' + escapeHtml(_cogTypeLabel(t)) + '</span><strong>' + escapeHtml(String(settledByType[t])) + '</strong></div>';
+    }).join('');
+    var assetStrip = '<div class="run-context-assets">' + assetCells + '</div>';
+
+    var html = assetStrip;
+    if (extracting) {
+      html += '<div class="run-context-extracting"><span class="run-context-extracting-spinner"></span><span>' +
+        escapeHtml(_label('conversation_info.run_context.assets_extracting', '正在后台提炼认知资产，完成后自动更新。')) + '</span></div>';
+    }
+    if (pending.length) {
+      html += '<div class="run-context-cog-section-title">' + escapeHtml(_label('conversation_info.run_context.assets_candidates_title', '待确认候选')) +
+        ' <em>' + escapeHtml(String(pending.length)) + '</em></div>';
+      html += pending.map(_candidateCardHtml).join('');
+    }
+    if (confirmed.length || extraAssets.length) {
+      html += '<div class="run-context-cog-section-title">' + escapeHtml(_label('conversation_info.run_context.assets_settled_title', '已沉淀资产')) + '</div>';
+      html += confirmed.map(function (c) { return _settledCandidateHtml(c, assetsById); }).join('');
+      html += extraAssets.map(_settledAssetHtml).join('');
+    }
+    // 空态只在「没有在提取且确实没有内容」时显示——提取中由转圈提示代替。
+    if (!extracting && !pending.length && !confirmed.length && !extraAssets.length) {
+      html += '<div class="conversation-info-empty is-small">' +
+        escapeHtml(_label('conversation_info.run_context.assets_empty', '这个会话还没有沉淀认知。导入的会话会在后台自动提炼，提炼出的候选确认后沉淀为正式资产。')) + '</div>';
+    }
+    return html;
+  }
+
   function _renderBody() {
     _closeFileMenu();
     const body = document.getElementById('conversation-info-body');
@@ -1417,16 +1723,11 @@ const ConversationInfo = (() => {
       _refreshTabCounts();
       return;
     }
-    if (_activeTab === 'attachments') body.innerHTML = _renderAttachments();
-    else if (_activeTab === 'collaboration') body.innerHTML = _renderCollaborationOverview();
-    else if (_activeTab === 'protocol') body.innerHTML = _renderProtocolInspector();
-    else if (_activeTab === 'carried') body.innerHTML = _renderCarried();
-    else body.innerHTML = _renderFiles();
+    body.innerHTML = _renderRunContext();
     // Hydrate any data-ui-icon placeholders that the renderers emitted.
     if (typeof window !== 'undefined' && typeof window.hydrateUiIcons === 'function') {
       window.hydrateUiIcons(body);
     }
-    _refreshTabCounts();
   }
 
   function _syncChrome() {
@@ -1437,9 +1738,6 @@ const ConversationInfo = (() => {
       toggle.classList.toggle('is-active', _open);
       toggle.setAttribute('aria-expanded', _open ? 'true' : 'false');
     }
-    document.querySelectorAll('.conversation-info-tab').forEach((tab) => {
-      tab.classList.toggle('is-active', tab.dataset.infoTab === _activeTab);
-    });
   }
 
   function _beginLoading(source, seq) {
@@ -1516,7 +1814,7 @@ const ConversationInfo = (() => {
     const items = Array.isArray(opts.items) ? _normalizeAttachmentItems(opts.items) : null;
     if (items) {
       _snapshot = { ..._snapshot, attachments: items };
-      if (_activeTab === 'attachments') _renderBody();
+      _renderBody();
       return;
     }
 
@@ -1528,9 +1826,28 @@ const ConversationInfo = (() => {
         ..._snapshot,
         attachments: Array.isArray(data.items) ? data.items : [],
       };
-      if (_activeTab === 'attachments') _renderBody();
+      _renderBody();
     } catch (err) {
       _infoLog.warn('attachment refresh failed', { cid: target, error: err && err.message });
+    }
+  }
+
+  /** 工作区目录缺失引导：系统目录选择器重选 → 固化为本会话 coding_project_dir
+   *  → 刷新文件列表。用户取消（selectDirectory 返回 null）→ 保持现状。 */
+  async function _repickWorkspaceDirectory() {
+    if (!_cid) return;
+    const invoke = window && window.cogseed && typeof window.cogseed.invoke === 'function'
+      ? window.cogseed.invoke.bind(window.cogseed)
+      : null;
+    if (!invoke) return;
+    try {
+      const picked = await invoke('workspace.selectDirectory', {});
+      const dir = picked && picked.path;
+      if (!dir) return; // 用户取消
+      await invoke('workspace.setCodingProjectDir', { cid: _cid, dir });
+      await refreshFiles(_cid, { silent: true });
+    } catch (err) {
+      _infoLog.warn('workspace directory repick failed', { error: err && err.message });
     }
   }
 
@@ -1541,9 +1858,9 @@ const ConversationInfo = (() => {
     const silent = !!opts.silent;
     if (silent && _loadingSource === 'files') {
       _clearLoading('files', seq, { clearAnyForSource: true });
-      if (_activeTab === 'files') _renderBody();
+      _renderBody();
     }
-    if (!silent && _activeTab === 'files') {
+    if (!silent) {
       _error = '';
       _beginLoading('files', seq);
     }
@@ -1552,18 +1869,18 @@ const ConversationInfo = (() => {
       if (seq !== _fileSeq || target !== _cid) return;
       _snapshot = { ..._snapshot, ...partial };
       _error = '';
-      if (_activeTab === 'files') _renderBody();
+      _renderBody();
     } catch (err) {
       if (seq !== _fileSeq || target !== _cid) return;
       _infoLog.warn('file refresh failed', { cid: target, error: err && err.message });
       if (!silent) {
         _error = (err && err.message) || String(err);
-        if (_activeTab === 'files') _renderBody();
+        _renderBody();
       }
     } finally {
       if (seq === _fileSeq && target === _cid) {
         _clearLoading('files', seq, { clearAnyForSource: silent });
-        if (_activeTab === 'files') _renderBody();
+        _renderBody();
       }
     }
   }
@@ -1906,18 +2223,17 @@ const ConversationInfo = (() => {
       close.dataset.bound = '1';
       close.addEventListener('click', () => _setOpen(false));
     }
-    document.querySelectorAll('.conversation-info-tab').forEach((tab) => {
-      if (tab.dataset.bound === '1') return;
-      tab.dataset.bound = '1';
-      tab.addEventListener('click', () => {
-        _activeTab = tab.dataset.infoTab || 'files';
-        _syncChrome();
-        _renderBody();
-      });
-    });
     if (body && body.dataset.bound !== '1') {
       body.dataset.bound = '1';
       body.addEventListener('click', (ev) => {
+        const runContextTab = ev.target.closest('[data-run-context-tab]');
+        if (runContextTab) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          _activeRunContextTab = runContextTab.dataset.runContextTab || 'runs';
+          _renderBody();
+          return;
+        }
         const openInChat = ev.target.closest('.conversation-info-collaboration-open-in-chat');
         if (openInChat) {
           ev.preventDefault();
@@ -1940,6 +2256,14 @@ const ConversationInfo = (() => {
           void refresh(_cid);
           return;
         }
+        // 工作区目录缺失：引导重新选择（系统目录选择器；取消则保持现状）。
+        const workspaceRepick = ev.target.closest('[data-files-repick-workspace]');
+        if (workspaceRepick) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          void _repickWorkspaceDirectory();
+          return;
+        }
         const protocolRefresh = ev.target.closest('[data-protocol-refresh]');
         if (protocolRefresh) {
           ev.preventDefault();
@@ -1954,6 +2278,66 @@ const ConversationInfo = (() => {
           ev.stopPropagation();
           _carriedRunsExpanded = !_carriedRunsExpanded;
           _renderBody();
+          return;
+        }
+        // 四类资产 tab · 候选操作：确认入库（promote，与认知沉淀页同一底层）。
+        const candidatePromote = ev.target.closest('[data-candidate-promote]');
+        if (candidatePromote) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const candidateId = candidatePromote.dataset.candidatePromote || '';
+          if (!candidateId) return;
+          const invoke = window && window.cogseed && typeof window.cogseed.invoke === 'function'
+            ? window.cogseed.invoke.bind(window.cogseed)
+            : null;
+          if (!invoke) return;
+          candidatePromote.disabled = true;
+          invoke('recall.candidates.promote', { candidateId, riskAcknowledged: true })
+            .then((res) => {
+              if (res && res.ok) {
+                if (typeof uiToast === 'function') {
+                  uiToast(_label('conversation_info.run_context.assets_confirmed_toast', '已确认入库，可在四类资产中查看'), { variant: 'success', timeoutMs: 4000 });
+                }
+                void refresh(_cid);
+              } else {
+                candidatePromote.disabled = false;
+                if (typeof uiToast === 'function') {
+                  uiToast(_label('conversation_info.run_context.assets_confirm_failed', '确认失败，请重试'), { variant: 'warning', timeoutMs: 5000 });
+                }
+              }
+            })
+            .catch(() => {
+              candidatePromote.disabled = false;
+              if (typeof uiToast === 'function') {
+                uiToast(_label('conversation_info.run_context.assets_confirm_failed', '确认失败，请重试'), { variant: 'warning', timeoutMs: 5000 });
+              }
+            });
+          return;
+        }
+        // 四类资产 tab · 候选操作：忽略。
+        const candidateIgnore = ev.target.closest('[data-candidate-ignore]');
+        if (candidateIgnore) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const candidateId = candidateIgnore.dataset.candidateIgnore || '';
+          if (!candidateId) return;
+          const invoke = window && window.cogseed && typeof window.cogseed.invoke === 'function'
+            ? window.cogseed.invoke.bind(window.cogseed)
+            : null;
+          if (!invoke) return;
+          candidateIgnore.disabled = true;
+          invoke('recall.candidates.ignore', { candidateId })
+            .then((res) => {
+              if (res && res.ok) {
+                if (typeof uiToast === 'function') {
+                  uiToast(_label('conversation_info.run_context.assets_ignored_toast', '已忽略该候选'), { variant: 'info', timeoutMs: 4000 });
+                }
+                void refresh(_cid);
+              } else {
+                candidateIgnore.disabled = false;
+              }
+            })
+            .catch(() => { candidateIgnore.disabled = false; });
           return;
         }
         // 9.1 右侧「本次携带」：点击「查看回执」→ 读取该执行的
@@ -2000,11 +2384,11 @@ const ConversationInfo = (() => {
           const taskId = cogseedAction.dataset.cogseedTaskId || '';
           const requestId = cogseedAction.dataset.cogseedRequestId || '';
           if (action === 'abort' && taskId) {
-            void window.cogseed.invoke('cogseed.task.abort', { taskId }).then(() => refresh(_cid));
+            void window.cogseed.invoke('cogseed_agent.task.abort', { taskId }).then(() => refresh(_cid));
           } else if (action === 'retry' && taskId && requestId) {
-            void window.cogseed.invoke('cogseed.task.retry', { taskId, requestId }).then(() => refresh(_cid));
+            void window.cogseed.invoke('cogseed_agent.task.retry', { taskId, requestId }).then(() => refresh(_cid));
           } else if (action === 'resume' && taskId && requestId) {
-            void window.cogseed.invoke('cogseed.task.resume', { taskId, requestId, continuation: (_snapshot.cogseed.session && _snapshot.cogseed.session.collaboration && _snapshot.cogseed.session.collaboration.task && _snapshot.cogseed.session.collaboration.task.title) || 'Resume task.' }).then(() => refresh(_cid));
+            void window.cogseed.invoke('cogseed_agent.task.resume', { taskId, requestId, continuation: (_snapshot.cogseed.session && _snapshot.cogseed.session.collaboration && _snapshot.cogseed.session.collaboration.task && _snapshot.cogseed.session.collaboration.task.title) || 'Resume task.' }).then(() => refresh(_cid));
           }
           return;
         }
@@ -2108,7 +2492,6 @@ const ConversationInfo = (() => {
     _renderBody();
   }
   function openAndSetTab(tab) {
-    _activeTab = tab || 'files';
     _setOpen(true);
     _syncChrome();
     _renderBody();
@@ -2120,7 +2503,6 @@ const ConversationInfo = (() => {
     if (cid) _cid = cid;
     _resumeEvidenceCid = cid || _cid || '';
     _snapshot = { ..._snapshot, resumeEvidence: data || null };
-    _activeTab = 'carried';
     _open = true;
     _resetLoading(); // 依据已就绪，先渲染，避免旧 loading 状态遮挡
     _syncChrome();
@@ -2135,7 +2517,6 @@ const ConversationInfo = (() => {
   let _executionsRefreshAt = 0;
   async function refreshExecutions(cid) {
     if (!cid || cid !== _cid) return;
-    if (_activeTab !== 'carried') return;
     const now = Date.now();
     if (now - _executionsRefreshAt < 2000) return;
     _executionsRefreshAt = now;
@@ -2148,12 +2529,10 @@ const ConversationInfo = (() => {
       if (sig === _executionsSig) return;
       _executionsSig = sig;
       _snapshot = { ..._snapshot, executions: list };
-      if (_activeTab === 'carried') {
-        const body = document.getElementById('conversation-info-body');
-        if (body) {
-          body.innerHTML = _renderCarried();
-          if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(body);
-        }
+      const body = document.getElementById('conversation-info-body');
+      if (body) {
+        body.innerHTML = _renderRunContext();
+        if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(body);
       }
     } catch (_) { /* 刷新失败保持现状 */ }
   }

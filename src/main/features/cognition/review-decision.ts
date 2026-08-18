@@ -12,6 +12,7 @@
  * （append-only；每候选一文件；与资产事件账本同模式）。
  */
 
+import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -176,6 +177,66 @@ export async function listReviewDecisions(uid: string, targetRef: string): Promi
     latest.set(record.decision_id, record);
   }
   return [...latest.values()];
+}
+
+export interface ReviewDecisionHistoryPage {
+  items: ReviewDecision[];
+  /** 已落账决定的**真实**总数，不受 limit 影响。 */
+  total: number;
+}
+
+/**
+ * 「已处理历史」的读口：跨全部候选，按处理时间倒序。
+ *
+ * **为什么要单开一个**：`listReviewDecisions` 是按 `targetRef` 单读的（存储就是
+ * 一个 targetRef 一个 jsonl），回答不了"我一共处理过什么"。这里扫目录再合并，
+ * 与 `listContinuationSnapshots` 同一形态——决定账本没有聚合索引，也不为这一个
+ * 只读视图新建一份（多一份索引就多一处会和账本失步的状态）。
+ *
+ * **只读真实落账记录**：不补任何"应该有"的条目。每个文件内沿用
+ * `listReviewDecisions` 的去重口径（同一 decision_id 以账本中最后一条为准，
+ * 这样 outcome 回填后拿到的是终态），跨文件只做合并排序。
+ */
+export async function listRecentReviewDecisions(
+  uid: string,
+  options: { limit?: number } = {},
+): Promise<ReviewDecisionHistoryPage> {
+  const limit = Math.max(1, Math.min(200, Math.floor(Number(options.limit) || 50)));
+  let names: string[];
+  try {
+    names = await fs.readdir(cogseedAgentReviewDecisionsDir(uid));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { items: [], total: 0 };
+    throw error;
+  }
+  const perTarget = await Promise.all(names
+    .filter((name) => name.endsWith('.jsonl'))
+    .map(async (name) => {
+      try {
+        const records = await readJsonl<ReviewDecision>(
+          path.join(cogseedAgentReviewDecisionsDir(uid), name),
+          10000,
+        );
+        const latest = new Map<string, ReviewDecision>();
+        for (const record of records) {
+          if (!record || typeof record.decision_id !== 'string') continue;
+          latest.delete(record.decision_id);
+          latest.set(record.decision_id, record);
+        }
+        return [...latest.values()];
+      } catch (error) {
+        // 单个账本损坏不该让整页打不开——其余记录仍是既成事实。
+        log.warn('review decision history skipped a log', {
+          file: name, error: (error as Error).message,
+        });
+        return [] as ReviewDecision[];
+      }
+    }));
+  const all = perTarget
+    .flat()
+    .filter((record) => typeof record.timestamp === 'string')
+    .sort((left, right) => String(right.timestamp).localeCompare(String(left.timestamp)));
+  return { items: all.slice(0, limit), total: all.length };
 }
 
 /**

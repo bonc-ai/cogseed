@@ -19,6 +19,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 export function canonicalizePath(p: string): string {
@@ -41,6 +42,32 @@ export function canonicalizePath(p: string): string {
     }
     return missing.length ? path.join(existing, ...missing) : existing;
   }
+}
+
+/** True when `real` is a canonical system/temp root directory: binding such a
+ *  path as a conversation workspace is meaningless (it scans a pile of system
+ *  temp files) and can leak them into the UI. Matches $TMPDIR (macOS realpath
+ *  /private/var/folders/.../T), /tmp, /private/tmp, /var/tmp and the
+ *  filesystem root. Deliberately exact-match only: a *subdirectory* of the
+ *  temp root may be a real project the user works in, so it stays bindable.
+ *  Callers pass the canonical (realpath-ed) candidate. */
+export function isSystemTmpDir(real: string): boolean {
+  if (!real) return true;
+  if (real === path.parse(real).root) return true; // '/'
+  const tmpRoots = new Set([
+    path.resolve('/tmp'),
+    path.resolve('/private/tmp'),
+    path.resolve('/var/tmp'),
+    '/private/var/tmp',
+  ]);
+  if (tmpRoots.has(real)) return true;
+  try {
+    const tmpReal = canonicalizePath(os.tmpdir());
+    if (tmpReal && real === tmpReal) return true;
+  } catch {
+    // tmpdir resolution failed — conservative: don't block on it
+  }
+  return false;
 }
 
 

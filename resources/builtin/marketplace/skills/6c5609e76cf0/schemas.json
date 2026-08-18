@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "skill_id": "skill.cogseed.research.literature-evidence",
-  "schema_version": "nseap.skill-contract/1.0",
+  "schema_version": "cogseed.skill-contract/1.0",
   "input_schema": {
     "type": "object",
     "additionalProperties": false,

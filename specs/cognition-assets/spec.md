@@ -822,4 +822,4 @@ PRD 3.2 候选分流表 + PRD 8.x：一次 Episode 可同时产生 `OntologyDelt
 - 认知树的视觉与动效规范（另见《认知树成长与交互规范》）
 - 跨空间引用协议 WorkspaceContextBinding 的完整实现（PRD 3.4.3，本文只约束资产侧不得被复制所有权）
 - Raymond / Forge 等外部产品的 AssetPackage 传递
-- NSEAP / 社区蓝图相关的资产分发
+- 社区蓝图相关的资产分发

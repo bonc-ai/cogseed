@@ -1,5 +1,5 @@
 {
-  "eval_suite_id": "eval.skill.cogseed.docs.version-diff.nseap.v1",
+  "eval_suite_id": "eval.skill.cogseed.docs.version-diff.v1",
   "skill_id": "skill.cogseed.docs.version-diff",
   "status": "synthetic_structure_cases_not_run",
   "evidence_policy": {

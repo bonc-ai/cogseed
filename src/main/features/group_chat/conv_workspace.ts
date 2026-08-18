@@ -34,6 +34,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { isSystemTmpDir } from '../../util/path-sandbox';
 import { getWorkspacePath } from '../user_workspace';
 import { getConversation } from '../chats';
 import { readState, setWorkspaceDirOnce } from './state';
@@ -225,6 +226,30 @@ export async function getConversationWorkspacePath(uid: string, cid: string): Pr
     root = spaceWorkspaceDir(uid, spaceId);
   } else {
     root = getWorkspacePath(uid, projectId);
+  }
+
+  // 导入会话 / 详情页自定义：coding_project_dir（绝对路径，原始 Agent 项目
+  // 目录）优先——Agent 工具与文件列表都以它为准。目录已不存在时防御性
+  // 回退到会话工作区（工具不在缺失目录跑）；系统/临时目录（旧版误绑定
+  // $TMPDIR 等）同样回退，避免把系统临时文件当工作区。文件列表单独读
+  // coding_project_dir 向用户如实显示「已被移动或删除」并引导重新选择。
+  try {
+    const st0 = await readState(uid, cid);
+    if (st0.coding_project_dir_explicit === true
+      && st0.coding_project_dir
+      && path.isAbsolute(st0.coding_project_dir)) {
+      try {
+        if (fs.statSync(st0.coding_project_dir).isDirectory()
+          && !isSystemTmpDir(st0.coding_project_dir)) {
+          return st0.coding_project_dir;
+        }
+      } catch {
+        // dir gone — fall through to the default workspace for execution
+      }
+      log.warn(`coding_project_dir missing or system/tmp cid=${cid} dir=${st0.coding_project_dir} — using default workspace for execution`);
+    }
+  } catch {
+    // state unreadable — proceed with the default workspace path below
   }
 
   // Fast path: state already has a workspace_dir baked in.

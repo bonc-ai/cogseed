@@ -286,6 +286,19 @@
 .ws-agent-row strong { display: block; font-size: 11px; color: #465249; }
 .ws-agent-row small { display: block; margin-top: 1px; color: #969aa4; font-size: 9px; }
 .ws-agent-row .ws-ability-edit { margin-left: auto; }
+/* 可协作 AI 工具 Agent：复刻原型 v010-agent-strip（浅灰容器 + 品牌色 logo 方块 + 克制选中态） */
+.ws-tool-strip { grid-column: 1 / -1; padding: 14px; border: 1px solid #e0e8e3; border-radius: 11px; background: #f8faf9; }
+.ws-tool-strip-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.ws-tool-strip-head strong { color: #34463c; font-size: 12px; }
+.ws-tool-strip-head small { color: #89938d; font-size: 9px; }
+.ws-tool-row { display: flex; align-items: flex-start; gap: 12px; overflow-x: auto; }
+.ws-view .ws-tool-tile { display: grid; justify-items: center; gap: 6px; min-width: 66px; padding: 8px 7px; border: 1px solid transparent; border-radius: 9px; color: #536159; background: transparent; font-size: 9px; font-family: inherit; cursor: pointer; }
+/* 未选中保持原样；hover 只描边不白底；选中 = 仅浅绿方框描边，背景/文字不动 */
+.ws-view .ws-tool-tile:hover { border-color: #bfdbc9; }
+.ws-view .ws-tool-tile.selected { border-color: #79c49e; }
+.ws-view .ws-tool-tile.locked { cursor: default; }
+.ws-tool-logo { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; color: #fff; background: #2f8a5c; font-size: 11px; font-weight: 750; }
+.ws-tool-empty { font-size: 11px; color: #9aa39e; }
 .ws-config-ability { display: flex; flex-direction: column; gap: 8px; }
 .ws-config-ability-card { display: grid; grid-template-columns: 30px minmax(0,1fr) auto; gap: 9px; padding: 10px; border: 1px solid #e0e7e3; border-radius: 10px; background: #fff; }
 .ws-config-ability-card .ws-ability-edit { align-self: center; margin-left: 0; }

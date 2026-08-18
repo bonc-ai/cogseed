@@ -22,7 +22,7 @@ import * as readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
 
 import {
-  userChatsDir, userLocalConfigDir, projectChatsDir, projectChatIndexFile, spaceChatIndexFile, WS_ROOT,
+  userChatsDir, userLocalConfigDir, projectChatsDir, projectChatIndexFile, userSpacesDir, spaceChatIndexFile, WS_ROOT,
 } from '../paths';
 import {
   conversationLayout,
@@ -723,7 +723,32 @@ async function _readTargetRawConversation(
 
   const matches = (await _readIndexConversations(userId))
     .filter((row) => row.conversation_id === cid);
-  return _mergeConversationIndexRows(userId, matches, false);
+  if (matches.length) return _mergeConversationIndexRows(userId, matches, false);
+
+  // Space-owned conversations live in `cloud/spaces/<sid>/chats/_index.json`
+  // and are not part of the legacy global/project roots. Resolve them here so
+  // callers such as the group-chat CLI cwd selector can still recover the
+  // immutable `space_id` from a conversation id.
+  try {
+    const entries = await fsp.readdir(userSpacesDir(userId), { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const sid = entry.name.slice(0, -'.json'.length);
+      if (!safeId(sid)) continue;
+      const raw = await readJson(spaceChatIndexFile(userId, sid));
+      const rows = Array.isArray(raw) ? raw : raw && Array.isArray(raw.items) ? raw.items : [];
+      const found = rows
+        .map((row: unknown) => _normaliseConversation(row))
+        .find((row): row is Conversation => !!row && row.conversation_id === cid);
+      if (found) {
+        if (!found.space_id) found.space_id = sid;
+        return _mergeConversationIndexRows(userId, [found], false);
+      }
+    }
+  } catch {
+    // A missing/unreadable space index is equivalent to a missing conversation.
+  }
+  return [];
 }
 
 async function _writeJsonIfChanged(file: string, data: unknown): Promise<void> {

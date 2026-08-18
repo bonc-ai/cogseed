@@ -55,7 +55,7 @@ ABox 仅使用标明来源类型的项目事实或 synthetic 示例；示例不�
 
 ## Validation Contract
 
-输入输出必须通过本包 JSON Schema；包根 16 个 NSEAP 资产和 4 个机器增强资产
+输入输出必须通过本包 JSON Schema；包根 16 个标准资产和 4 个机器增强资产
 必须完整。状态、摘要、artifact refs、approval required、claims allowed/prohibited
 为必填。保护面失败容忍度为 0，未知失败保持 `pending`。
 
@@ -83,8 +83,8 @@ schema、governance、evidence。证据不足不得强行归因；unknown 必须
 
 递归护栏：对 Meta Skill 自身最多提出 1 个 patch、深度 1；只允许修改配置、阈值权重和策略开关。正式规则、HITL、审计、权限与发布边界为保护面。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：识别入口模式、当前阶段与首要不确定性，路由到七个阶段 Skill，停在人工 Gate。，并具备完成该任务所需的授权材料、环境和范围。
 - `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「AI产品阶段编排」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
@@ -92,4 +92,4 @@ schema、governance、evidence。证据不足不得强行归因；unknown 必须
 - `negative_examples`：`缺少执行AI产品阶段编排所需证据，仍请直接定稿。`
 
 本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

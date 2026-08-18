@@ -127,6 +127,53 @@ describe('Recall terminal transfer proof handler', () => {
     expect((await proofs.listTransferProofs('user-a')).some((p) => p.receiptId)).toBe(true);
   });
 
+  /**
+   * 回合收尾会把回执从 prepared 收成终态（bus.ts 的 completeReceipt）。
+   * 这条钉住终态回执仍然构成升档证据——否则"让回执真正闭合"这件事本身会
+   * 把升档链打断，那比停在 prepared 更糟。
+   *
+   * 三种终态的语义分工：
+   *   completed  回合正常收尾 → 算数
+   *   degraded   回合被中断/报错，但注入确实发生过 → 仍算数
+   *   rejected   这次复用被拒绝/无效 → 不算数（bus 不会写它，这里守住下游语义）
+   */
+  it.each([
+    ['completed', true],
+    ['degraded', true],
+    ['rejected', false],
+  ] as const)('treats a %s receipt as loading evidence: %s', async (status, shouldAdvance) => {
+    const { asset, projection } = await confirmedProjection(`run-${status}`);
+    const { terminalProof, assets } = await modules();
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+
+    const targetSessionId = 'gconv-cid-a';
+    await receipts.prepareReceipt('user-a', {
+      executionId: `turn-${status}`,
+      targetSessionId,
+      reusedRefs: [asset.id],
+      omittedRefs: [],
+      permissionMode: 'read-only',
+      allowedScopes: ['cognition:projection'],
+      boundary: 'real',
+    }, { sessionId: targetSessionId });
+    // 回合收尾做的就是这一步。
+    await receipts.completeReceipt('user-a', `turn-${status}`, { status });
+
+    await terminalProof.handleRecallTaskTerminal({
+      run_id: `run-${status}`,
+      user_id: 'user-a',
+      conversation_id: 'cid-a',
+      status: 'completed' as const,
+      projection_id: projection.id,
+      reuse_turn_ids: [status],
+      started_at_ms: 1,
+      finished_at_ms: 2,
+    });
+
+    const advanced = (await assets.listAbilityAssets('user-a')).find((a) => a.id === asset.id);
+    expect(advanced?.maturity === 'transfer_validated').toBe(shouldAdvance);
+  });
+
   it('advances receipt-covered assets even when they differ from the committed projection (receipt-first)', async () => {
     const { asset, projection } = await confirmedProjection('run-receipt-first');
     const { candidates } = await modules();

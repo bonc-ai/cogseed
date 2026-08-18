@@ -1226,4 +1226,8 @@ export * from './assets-adapter';
 export * from './inbox-adapter';
 export * from './version-diff-adapter';
 export * from './dashboard';
+// 「已处理历史」只需要这一个读口；决定的写入路径仍走 review-decision 自身，
+// 不从这里再导出写函数，避免它变成第二个可写入口。
+export { listRecentReviewDecisions } from './review-decision';
+export type { ReviewDecision, ReviewDecisionType, ReviewDecisionHistoryPage } from './review-decision';
 export * from './skill-summary';

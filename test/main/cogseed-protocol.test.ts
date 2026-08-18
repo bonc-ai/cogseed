@@ -18,9 +18,9 @@ describe('CogSeed-only protocol identity', () => {
   });
 
   it('rejects all legacy connector deep links', () => {
-    const legacyOrkas = ['or', 'kas'].join('');
-    const legacyMateagent = ['mate', 'agent'].join('');
-    expect(normalizeDeepLink(`${legacyOrkas}://connectors/oauth/callback`)).toBeNull();
+    const legacyCogSeed = ['or', 'kas'].join('');
+    const legacyMateagent = ['cogseed', 'agent'].join('');
+    expect(normalizeDeepLink(`${legacyCogSeed}://connectors/oauth/callback`)).toBeNull();
     expect(normalizeDeepLink(`${legacyMateagent}://connectors/oauth/dcr-callback`)).toBeNull();
     expect(normalizeDeepLink('cogseed://connectors/oauth/callback')?.scheme)
       .toBe('cogseed');

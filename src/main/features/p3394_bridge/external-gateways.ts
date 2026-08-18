@@ -138,6 +138,16 @@ export function p3394ExternalGatewayIdFor(cliType: string): string | null {
   return mapping ? mapping.id : null;
 }
 
+/** 托管网关的运行时模式（sscli 主导）：声明了的 CLI 走 sscli 路径——
+ *  claude 用 stream-json 包装器逐 token 流式（配合 --include-partial-messages
+ *  才真正出增量帧）；未声明的保持 oneshot 兜底。默认开启；发布时需要紧急
+ *  回退到全部 oneshot 时设 COGSEED_P3394_STREAM_JSON=0。后续新增支持
+ *  stream-json / 原生 p3394-sscli 的 CLI 只需在此登记。 */
+const streamJsonEnabled = String(process.env.COGSEED_P3394_STREAM_JSON ?? '1') !== '0';
+const CLI_TO_RUNTIME_MODE: Record<string, string | undefined> = streamJsonEnabled
+  ? { claude: 'sscli' }
+  : {};
+
 interface GatewayStateFile { schema_version: number; gateways: Array<Omit<P3394ExternalGatewayState, 'running'>> }
 
 const SCHEMA_VERSION = 1;
@@ -292,6 +302,8 @@ async function doStartExternalGateway(input: {
     // 检测到的 CLI 绝对路径优先于 PATH（GUI 启动的 app 看不到 shell PATH）。
     P3394_AGENT_CLI: String(input.binPath || '').trim() || mapping.id,
     P3394_HEARTBEAT_MS: '30000',
+    // sscli 主导：声明过的 CLI 走 sscli 路径（claude → stream-json 包装器）。
+    ...(CLI_TO_RUNTIME_MODE[cli] ? { P3394_AGENT_MODE: CLI_TO_RUNTIME_MODE[cli] } : {}),
   };
 
   let child: ChildProcess | null = null;

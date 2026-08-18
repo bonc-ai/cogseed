@@ -29,7 +29,7 @@ describe('floating layer ordering', () => {
     const css = readRendererCss();
     // 锚定行首主块（折叠态的 body.sidebar-collapsed .hub-chip-menu 在更前面）。
     const menuBlock = css.match(/^\.hub-chip-menu\s*\{[\s\S]*?\}/m)?.[0] || '';
-    // 与状态栏重叠 6px：hover 在入口与面板之间移动不经过空隙、不闪断。
+    // 与状态栏重叠 6px：面板与入口视觉连成一体。
     expect(menuBlock).toContain('bottom: calc(100% - 6px)');
     expect(menuBlock).toContain('z-index: 120');
     expect(menuBlock).toContain('padding: 6px 6px 14px');
@@ -43,11 +43,13 @@ describe('floating layer ordering', () => {
     expect(css).toContain('width: 236px');
   });
 
-  it('keeps open / pinned / active state styles for the merged footer panel', () => {
+  it('keeps open / collapse / active state styles for the merged footer panel', () => {
     const css = readRendererCss();
     expect(css).toMatch(/\.sidebar-footer-account\.is-open \.hub-chip\s*\{/);
     expect(css).toMatch(/\.sidebar-footer-account\.is-open \.hub-chip-chev\s*\{/);
-    expect(css).toMatch(/\.sidebar-footer-account\.is-pinned \.hub-chip-pin\s*\{/);
+    const collapseBlock = css.match(/\.hub-chip-menu-collapse\s*\{[\s\S]*?\}/)?.[0] || '';
+    expect(collapseBlock).toContain('justify-content: center');
+    expect(css).toMatch(/\.hub-chip-menu-collapse:hover\s*\{/);
     const activeBlock = css.match(/\.hub-chip-menu-item\.is-active\s*\{[\s\S]*?\}/)?.[0] || '';
     expect(activeBlock).toContain('background: var(--primary-soft)');
     expect(activeBlock).toContain('color: var(--primary-text)');

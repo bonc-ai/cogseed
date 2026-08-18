@@ -516,7 +516,7 @@ describe('skill trust › deep re-verification', () => {
 /**
  * Convention rules must not crowd out substantive findings.
  *
- * develop's NSEAP ruleset fires at MEDIUM on most of the existing library ("declare
+ * develop's shape ruleset fires at MEDIUM on most of the existing library ("declare
  * use_when", "add an output contract"). Those are completeness requirements, not
  * safety ones, and they arrive in scan order — so on a naive first-seen tie-break
  * they take `topRule` and the security badge ends up describing an authoring nit
@@ -525,10 +525,10 @@ describe('skill trust › deep re-verification', () => {
 describe('topViolationOf › convention rules lose ties', () => {
   // Imported inside each test: this file mocks `skill_reverify` for the tampering
   // suites, and a top-level static import would bypass that mock.
-  it('prefers a security finding over an NSEAP finding at the same level', async () => {
+  it('prefers a security finding over a shape finding at the same level', async () => {
     const { topViolationOf } = await import('../../../src/main/features/skill_reverify');
     const top = topViolationOf([
-      { rule: 'nseap_trigger_missing', level: 'MEDIUM' },
+      { rule: 'shape_trigger_missing', level: 'MEDIUM' },
       { rule: 'no_raw_ip_or_suspicious_tld_endpoint', level: 'MEDIUM' },
     ]);
 
@@ -540,7 +540,7 @@ describe('topViolationOf › convention rules lose ties', () => {
     const { topViolationOf } = await import('../../../src/main/features/skill_reverify');
     const top = topViolationOf([
       { rule: 'no_raw_ip_or_suspicious_tld_endpoint', level: 'MEDIUM' },
-      { rule: 'nseap_trigger_missing', level: 'MEDIUM' },
+      { rule: 'shape_trigger_missing', level: 'MEDIUM' },
     ]);
 
     expect(top?.rule).toBe('no_raw_ip_or_suspicious_tld_endpoint');
@@ -551,38 +551,38 @@ describe('topViolationOf › convention rules lose ties', () => {
   it('keeps severity above the convention adjustment', async () => {
     const { topViolationOf } = await import('../../../src/main/features/skill_reverify');
     expect(topViolationOf([
-      { rule: 'nseap_trigger_missing', level: 'EXTREME' },
+      { rule: 'shape_trigger_missing', level: 'EXTREME' },
       { rule: 'no_raw_ip_or_suspicious_tld_endpoint', level: 'MEDIUM' },
-    ])?.rule).toBe('nseap_trigger_missing');
+    ])?.rule).toBe('shape_trigger_missing');
 
     expect(topViolationOf([
-      { rule: 'nseap_trigger_missing', level: 'MEDIUM' },
+      { rule: 'shape_trigger_missing', level: 'MEDIUM' },
       { rule: 'skill_meta_category_missing', level: 'LOW' },
-    ])?.rule).toBe('nseap_trigger_missing');
+    ])?.rule).toBe('shape_trigger_missing');
   });
 
   // With nothing else present a convention rule IS the top finding; reporting
   // nothing would be a lie about an empty report.
   it('still reports a convention rule when it is the only finding', async () => {
     const { topViolationOf } = await import('../../../src/main/features/skill_reverify');
-    expect(topViolationOf([{ rule: 'nseap_trigger_missing', level: 'MEDIUM' }])?.rule)
-      .toBe('nseap_trigger_missing');
+    expect(topViolationOf([{ rule: 'shape_trigger_missing', level: 'MEDIUM' }])?.rule)
+      .toBe('shape_trigger_missing');
   });
 });
 
 /**
  * Convention findings must not read as security risk.
  *
- * develop's NSEAP ruleset requires standard artifacts of every skill and fires at
+ * develop's shape ruleset requires standard artifacts of every skill and fires at
  * MEDIUM on nearly all existing content — six findings on this file's own CLEAN
  * fixture. Reporting that as `risk` would mark the whole library, and a badge that
  * flags everything is one users learn to ignore, leaving the real cases unread.
  */
 describe('reverify › convention findings are not risk', () => {
-  it('decides pass for a skill whose only findings are NSEAP contracts', () => {
+  it('decides pass for a skill whose only findings are shape contracts', () => {
     mkSkill('conv', CLEAN);
 
-    // The fixture trips six nseap_* rules and nothing else.
+    // The fixture trips six shape_* rules and nothing else.
     const res = reverifySkill(UID, 'conv');
 
     expect(res.decision).toBe('pass');
@@ -601,7 +601,7 @@ describe('reverify › convention findings are not risk', () => {
   });
 });
 
-describe('skill_trust › nseap declaration check (advisory only)', () => {
+describe('skill_trust › declaration check (advisory only)', () => {
   /**
    * A declaration with the mandatory sections missing.
    *
@@ -773,8 +773,8 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     // `absent` must be distinct from `pass`: claiming a clean declaration check
     // for a file that does not exist would be a false statement, and every
     // skill shipped today is in this state.
-    expect(deep.receipt?.nseapDeclaration?.status).toBe('absent');
-    expect(deep.receipt?.nseapDeclaration?.findings).toBeUndefined();
+    expect(deep.receipt?.declarationCheck?.status).toBe('absent');
+    expect(deep.receipt?.declarationCheck?.findings).toBeUndefined();
   });
 
   it('does not change the verdict for an otherwise-clean skill', async () => {
@@ -787,14 +787,14 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     // promoted into a security badge.
     expect(deep.decision).toBe('pass');
     // And the evidence is still recorded rather than dropped.
-    expect(deep.receipt?.nseapDeclaration).toBeDefined();
+    expect(deep.receipt?.declarationCheck).toBeDefined();
   });
 
   it('records a status that is never the receipt decision vocabulary', async () => {
     mkSkill('vocab', { ...CLEAN, 'references/security-manifest.yaml': MANIFEST_INCOMPLETE });
 
     const deep = await reverifySkillDeep(UID, 'vocab');
-    const status = deep.receipt?.nseapDeclaration?.status;
+    const status = deep.receipt?.declarationCheck?.status;
 
     // A declaration defect must not be labelled `blocked` inside a security
     // record — that wording reads as a threat verdict.
@@ -816,7 +816,7 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     const deep = await reverifySkillDeep(UID, 'broken-manifest');
 
     expect(deep.decision).toBe('pass');
-    expect(deep.receipt?.nseapDeclaration?.status).toBeTruthy();
+    expect(deep.receipt?.declarationCheck?.status).toBeTruthy();
   });
 
   it('round-trips the declaration record through the receipt file', async () => {
@@ -827,7 +827,7 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     // not parsed on read would silently vanish for every later consumer.
     const reread = readReceipt(UID, 'persist');
 
-    expect(reread?.nseapDeclaration?.status).toBeTruthy();
+    expect(reread?.declarationCheck?.status).toBeTruthy();
   });
 
   /**
@@ -848,10 +848,10 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
       'utf8',
     );
 
-    // The advisory blocks the panel renders. `nseapDeclaration` is the one added
+    // The advisory blocks the panel renders. `declarationCheck` is the one added
     // last and the one this test exists for; the others are listed so that
     // dropping any of them fails here too.
-    for (const field of ['attackSurface', 'instructionRisk', 'nseapDeclaration', 'userOverride']) {
+    for (const field of ['attackSurface', 'instructionRisk', 'declarationCheck', 'userOverride']) {
       expect(src).toContain(`receipt.${field} ? { ${field}`);
     }
   });
@@ -871,8 +871,8 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     const noManifest = await reverifySkillDeep(UID, 'none');
     const withManifest = await reverifySkillDeep(UID, 'declared-2');
 
-    expect(noManifest.receipt?.nseapDeclaration?.status).toBe('absent');
-    expect(withManifest.receipt?.nseapDeclaration?.status).not.toBe('absent');
+    expect(noManifest.receipt?.declarationCheck?.status).toBe('absent');
+    expect(withManifest.receipt?.declarationCheck?.status).not.toBe('absent');
   });
 
   /**
@@ -904,7 +904,7 @@ describe('skill_trust › nseap declaration check (advisory only)', () => {
     const deep = await reverifySkillDeep(UID, 'declared-but-leaky');
 
     // The declaration check saw nothing wrong: it never looked at scripts/.
-    expect(deep.receipt?.nseapDeclaration?.status).toBe('pass');
+    expect(deep.receipt?.declarationCheck?.status).toBe('pass');
     // And the layer that does read code is the one that acts on it. This is the
     // assertion that must survive any change to the line above.
     expect(deep.decision).toBe('blocked');

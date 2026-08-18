@@ -6,4 +6,4 @@ Shared mapping: Stakeholder→Party; role→Role; Agent governance→Agent/Capab
 
 ABox stores report-generation episodes, evidence and review decisions. Real private records are excluded from the distributed package.
 
-source_refs: `materials::19-domain-framework`, `benchmarks::volumes-11-14`, `standard::NSEAP-Skill-v1.0`.
+source_refs: `materials::19-domain-framework`, `benchmarks::volumes-11-14`, `standard::skill-contract-v1.0`.

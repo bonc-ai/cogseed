@@ -4,7 +4,7 @@
 
 **Goal:** Remove the Meta Skill Engine / standalone Evolution Console line from the current worktree while preserving a lightweight Skills/Cognition version-history and rollback capability.
 
-**Architecture:** First create an archive worktree that preserves the current `develop` state. In the active worktree, delete the standalone Evolution Console UI, delete `src/main/features/evolution/`, remove the `packages/nseap-meta-skill-engine` workspace and all build/packaging hooks, and make P3394 run without a bundled KSTAR engine by default. Preserve only the user-facing Skills/Cognition version-history and rollback behavior by moving that logic into `src/main/features/skills/` so it no longer depends on Meta Skill Engine or the evolution feature namespace.
+**Architecture:** First create an archive worktree that preserves the current `develop` state. In the active worktree, delete the standalone Evolution Console UI, delete `src/main/features/evolution/`, remove the `packages/meta-skill-engine` workspace and all build/packaging hooks, and make P3394 run without a bundled KSTAR engine by default. Preserve only the user-facing Skills/Cognition version-history and rollback behavior by moving that logic into `src/main/features/skills/` so it no longer depends on Meta Skill Engine or the evolution feature namespace.
 
 **Tech Stack:** Electron main process TypeScript, classic renderer JavaScript, `window.cogseed.invoke`, npm workspaces, Vitest through `npm run test:js` / `npm test`, shell launchers `run.sh` and `run.cmd`.
 
@@ -79,7 +79,7 @@
 
 - Delete: `src/main/features/evolution/`
 - Delete: `test/main/features/evolution/`
-- Delete: `packages/nseap-meta-skill-engine/`
+- Delete: `packages/meta-skill-engine/`
 - Delete: engine-specific tests:
   - `test/static/meta-skill-engine-packaging.test.ts`
   - or rewrite it as a negative test that the package is not bundled.
@@ -89,7 +89,7 @@
 - Modify: `src/main/paths.ts`
   - Remove `metaSkillEnginePackageDir()`.
 - Modify: `src/main/features/p3394/kstar-factory.ts`
-  - Stop constructing a default command from `packages/nseap-meta-skill-engine/dist/index.js`.
+  - Stop constructing a default command from `packages/meta-skill-engine/dist/index.js`.
   - Only create a KSTAR adapter when `COGSEED_KSTAR_ENGINE_COMMAND` and `COGSEED_KSTAR_ENGINE_ARGS` are explicitly configured.
   - Return `null` in degraded mode when external engine configuration is absent.
 - Modify: `test/main/features/p3394/kstar-factory.test.ts`
@@ -101,7 +101,7 @@
 - Modify: `package.json`
   - Remove `npm run engine:build` from `postinstall`.
   - Remove scripts `engine:build`, `engine:test`, `engine:check`.
-  - Remove `extraResources` entry for `packages/nseap-meta-skill-engine`.
+  - Remove `extraResources` entry for `packages/meta-skill-engine`.
   - Remove `workspaces: ["packages/*"]` if `packages/` becomes empty.
 - Regenerate: `package-lock.json`
   - Run `npm install --package-lock-only` after package changes.
@@ -109,9 +109,9 @@
   - Remove auto-build and auto-injection logic for bundled Meta Skill Engine.
   - Preserve support for user-provided `COGSEED_KSTAR_ENGINE_*` env vars by passing them through when present.
 - Modify: `bin/packaged-resource-gate.cjs`
-  - Remove `packages/nseap-meta-skill-engine` from `EXTRA_RESOURCES_CONTRACT`.
+  - Remove `packages/meta-skill-engine` from `EXTRA_RESOURCES_CONTRACT`.
 - Modify: `scripts/verify-packaged-dev.cjs`
-  - Remove `['packages', 'nseap-meta-skill-engine', 'dist', 'index.js']` from `RESOURCE_REQUIRED`.
+  - Remove `['packages', 'meta-skill-engine', 'dist', 'index.js']` from `RESOURCE_REQUIRED`.
 - Modify docs:
   - `docs/superpowers/handover-meta-skill-console.md`
   - `docs/README.md`
@@ -152,7 +152,7 @@ Expected: worktree is created at `/Users/sudai/.config/codex/worktrees/Mate Agen
 Run:
 
 ```bash
-test -d "/Users/sudai/.config/codex/worktrees/Mate Agent/meta-skill-evolution-preserve/packages/nseap-meta-skill-engine"
+test -d "/Users/sudai/.config/codex/worktrees/Mate Agent/meta-skill-evolution-preserve/packages/meta-skill-engine"
 test -d "/Users/sudai/.config/codex/worktrees/Mate Agent/meta-skill-evolution-preserve/src/main/features/evolution"
 test -d "/Users/sudai/.config/codex/worktrees/Mate Agent/meta-skill-evolution-preserve/src/renderer/modules/evolution"
 ```
@@ -603,7 +603,7 @@ Expected: no missing module errors for `features/evolution`.
 ## Task 8: Remove bundled Meta Skill Engine from package, launchers, and P3394 defaults
 
 **Files:**
-- Delete: `packages/nseap-meta-skill-engine/`
+- Delete: `packages/meta-skill-engine/`
 - Modify: `package.json`
 - Regenerate: `package-lock.json`
 - Modify: `run.sh`
@@ -633,7 +633,7 @@ expect(McpConnection).toHaveBeenCalledWith('p3394-engine-default-user', expect.o
   command: 'node',
   args: ['/opt/kstar/dist/index.js', '--stdio'],
   cwd: '/opt/kstar',
-  env: { NSEAP_ONTOLOGY_DIR: '/opt/kstar/ontologies' },
+  env: { ONTOLOGY_DIR: '/opt/kstar/ontologies' },
 }));
 ```
 
@@ -654,7 +654,7 @@ function configuredEngineConfig(): Pick<CreateKstarAdapterOptions, 'engineComman
     engineArgs: JSON.parse(argsRaw),
     engineCwd: process.env.COGSEED_KSTAR_ENGINE_CWD,
     engineEnv: process.env.COGSEED_KSTAR_ENGINE_ONTOLOGY_DIR
-      ? { NSEAP_ONTOLOGY_DIR: process.env.COGSEED_KSTAR_ENGINE_ONTOLOGY_DIR }
+      ? { ONTOLOGY_DIR: process.env.COGSEED_KSTAR_ENGINE_ONTOLOGY_DIR }
       : undefined,
   };
 }
@@ -682,7 +682,7 @@ cd "$APP_DIR"
 
 Then change the macOS `ARGS` construction so it passes KSTAR args only when `COGSEED_KSTAR_ENGINE_COMMAND` is already set by the environment.
 
-In `run.cmd`, delete the block that sets `KSTAR_ENGINE_DIR`, `KSTAR_ENGINE_ENTRY`, and default `COGSEED_KSTAR_ENGINE_*` values from `packages\nseap-meta-skill-engine`.
+In `run.cmd`, delete the block that sets `KSTAR_ENGINE_DIR`, `KSTAR_ENGINE_ENTRY`, and default `COGSEED_KSTAR_ENGINE_*` values from `packages\meta-skill-engine`.
 
 - [ ] **Step 8.5: Remove package scripts and resources**
 
@@ -690,7 +690,7 @@ In `package.json`:
 
 1. Remove `&& npm run engine:build` from `postinstall`.
 2. Delete script keys `engine:build`, `engine:test`, `engine:check`.
-3. Delete the `extraResources` object whose `from` is `packages/nseap-meta-skill-engine`.
+3. Delete the `extraResources` object whose `from` is `packages/meta-skill-engine`.
 4. If `packages/` is empty after deletion, delete the root `workspaces` field.
 
 - [ ] **Step 8.6: Delete package and regenerate lockfile**
@@ -698,11 +698,11 @@ In `package.json`:
 Run:
 
 ```bash
-rm -rf packages/nseap-meta-skill-engine
+rm -rf packages/meta-skill-engine
 npm install --package-lock-only
 ```
 
-Expected: `package-lock.json` no longer contains `nseap-meta-skill-engine`.
+Expected: `package-lock.json` no longer contains `meta-skill-engine`.
 
 - [ ] **Step 8.7: Run focused P3394 factory tests**
 
@@ -731,7 +731,7 @@ Expected: passes with no bundled engine assumptions.
 In `bin/packaged-resource-gate.cjs`, remove this entry from `EXTRA_RESOURCES_CONTRACT`:
 
 ```js
-'packages/nseap-meta-skill-engine': 'meta-skill-engine-package-contract',
+'packages/meta-skill-engine': 'meta-skill-engine-package-contract',
 ```
 
 - [ ] **Step 9.2: Remove packaged-dev required resource**
@@ -739,7 +739,7 @@ In `bin/packaged-resource-gate.cjs`, remove this entry from `EXTRA_RESOURCES_CON
 In `scripts/verify-packaged-dev.cjs`, remove this item from `RESOURCE_REQUIRED`:
 
 ```js
-['packages', 'nseap-meta-skill-engine', 'dist', 'index.js'],
+['packages', 'meta-skill-engine', 'dist', 'index.js'],
 ```
 
 - [ ] **Step 9.3: Remove or rewrite packaging tests**
@@ -750,7 +750,7 @@ If `test/static/meta-skill-engine-packaging.test.ts` only asserts the engine is 
 rm -f test/static/meta-skill-engine-packaging.test.ts
 ```
 
-Update resource-gate and verify-packaged-dev tests so their expected resource lists no longer include `packages/nseap-meta-skill-engine`.
+Update resource-gate and verify-packaged-dev tests so their expected resource lists no longer include `packages/meta-skill-engine`.
 
 - [ ] **Step 9.4: Run packaging tests**
 
@@ -783,7 +783,7 @@ At the top of `docs/superpowers/handover-meta-skill-console.md`, add:
 
 - [ ] **Step 10.2: Remove current-engine claims from docs README**
 
-In `docs/README.md`, replace claims that `packages/nseap-meta-skill-engine/` is the current unique KSTAR core with text saying:
+In `docs/README.md`, replace claims that `packages/meta-skill-engine/` is the current unique KSTAR core with text saying:
 
 ```md
 The previous repository-owned Meta Skill Engine line was archived out of the active worktree on 2026-08-10. P3394 now runs without a bundled KSTAR engine by default; an external engine may be configured with `COGSEED_KSTAR_ENGINE_COMMAND` and `COGSEED_KSTAR_ENGINE_ARGS`.
@@ -791,7 +791,7 @@ The previous repository-owned Meta Skill Engine line was archived out of the act
 
 - [ ] **Step 10.3: Update source package note**
 
-In `README-源码包说明.txt`, remove the bullet that says the source package includes `packages/nseap-meta-skill-engine`.
+In `README-源码包说明.txt`, remove the bullet that says the source package includes `packages/meta-skill-engine`.
 
 - [ ] **Step 10.4: Update Recall/Cognition plans**
 
@@ -806,7 +806,7 @@ The old evolution backend was archived with the Meta Skill Engine line. Skills/C
 Run:
 
 ```bash
-git grep -n "packages/nseap-meta-skill-engine\|src/main/features/evolution\|Evolution Console\|进化控制台" -- docs README-源码包说明.txt
+git grep -n "packages/meta-skill-engine\|src/main/features/evolution\|Evolution Console\|进化控制台" -- docs README-源码包说明.txt
 ```
 
 Expected: remaining matches are explicitly archival, not current active-worktree instructions.
@@ -822,7 +822,7 @@ Expected: remaining matches are explicitly archival, not current active-worktree
 Run:
 
 ```bash
-git grep -n "nseap-meta-skill-engine\|engine:build\|engine:test\|engine:check\|src/main/features/evolution\|modules/evolution\|/api/evolution\|evolution\.dashboard\|panel-evolution\|evolution-btn\|topbar-evolution-toggle" -- ':!docs/superpowers/handover-meta-skill-console.md' ':!docs/superpowers/plans/2026-08-10-remove-meta-skill-evolution-line-b-prime.md'
+git grep -n "meta-skill-engine\|engine:build\|engine:test\|engine:check\|src/main/features/evolution\|modules/evolution\|/api/evolution\|evolution\.dashboard\|panel-evolution\|evolution-btn\|topbar-evolution-toggle" -- ':!docs/superpowers/handover-meta-skill-console.md' ':!docs/superpowers/plans/2026-08-10-remove-meta-skill-evolution-line-b-prime.md'
 ```
 
 Expected: no active-code matches. Archival docs may mention the removed line only as archived history.
@@ -832,7 +832,7 @@ Expected: no active-code matches. Archival docs may mention the removed line onl
 Run:
 
 ```bash
-node -e "const p=require('./package-lock.json'); const hits=Object.keys(p.packages||{}).filter(k=>k.includes('nseap-meta-skill-engine')); if(hits.length){console.error(hits); process.exit(1)}"
+node -e "const p=require('./package-lock.json'); const hits=Object.keys(p.packages||{}).filter(k=>k.includes('meta-skill-engine')); if(hits.length){console.error(hits); process.exit(1)}"
 ```
 
 Expected: exits `0`.
@@ -912,7 +912,7 @@ Expected:
 
 - App reaches ready state.
 - Logs do not contain missing module errors for `features/evolution`.
-- Logs do not contain `nseap-meta-skill-engine` build attempts.
+- Logs do not contain `meta-skill-engine` build attempts.
 - P3394 without external engine logs a degraded/unconfigured state only when the KSTAR adapter is requested.
 
 ---

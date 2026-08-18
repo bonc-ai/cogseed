@@ -136,8 +136,8 @@ For performance analysis:
 - ROI estimates based on engagement value are assumptions unless the user provides real revenue, conversion value, or lead value.
 - Benchmark values can become stale and should be treated as rough context, not a pass/fail truth.
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：用户询问品牌/产品/竞品/话题在某公开平台的口碑与讨论，或提供社媒帖子/活动数据要求计算参与率、CTR、ROI、ROAS、CPC、CPE、CPM、CPA、Top/Bottom 内容、平台对比或内容建议。
 - `do_not_use_when`：私信、登录墙内容、付费 API 绕过、受限页面爬取或非公开数据；零抓取结果声称“无讨论”；无基准就断言对比结果；替代平台官方分析导出（用户需要完整官方报表时）。
@@ -145,4 +145,4 @@ For performance analysis:
 - `negative_examples`：`Scrape this login-gated community for sentiment data.`；`Zero results found — conclude the brand has no reputation issues.`
 
 本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

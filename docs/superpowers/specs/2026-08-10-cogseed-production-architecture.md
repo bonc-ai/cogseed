@@ -25,7 +25,7 @@
 3. **先事件、后视图**：任何资产状态变化必须 AssetEvent → AuditReceipt → AssetViewProjection 三步落盘成功后才更新 UI；失败保持原状态（PRD 原则 14）。
 4. **TaskRun 版本冻结是并发与归因的基石**：Main Skill Baseline 先冻结、后执行、不可变；漂移即拒绝；历史与运行中 TaskRun 永不静默换版。
 5. **外部 Agent 是契约化边界，不是黑盒依赖**：统一 `ExecutionBoundary: real / degraded / test-double` 三态，所有外部调用有 Mock 双模，系统在纯 Mock 下可端到端运行。
-6. **本地优先、诚实降级**：无 NSEAP / 无 CogSeed 账号 / 无网络时个人主链路成立；`native_session → exported_evidence → reference_only` 能力分级，绝不冒充原生执行。
+6. **本地优先、诚实降级**：无资产治理后端 / 无 CogSeed 账号 / 无网络时个人主链路成立；`native_session → exported_evidence → reference_only` 能力分级，绝不冒充原生执行。
 7. **成本受控是设计约束而非事后补救**：首次 Aha 候选上限 3 条、提取走低成本模型通道、no_change 是合法结论、夜间整理限时限量。
 
 **8月19 保底工程含义**：一条真实任务、一条受支持来源路径、一个通过上架 Gate 的空间（复杂项目交付）、一个冻结的 Main Skill Baseline、一次目标端真实加载并产出 Action Plan 与 ContextReuseReceipt、任务结束后至少一项可审查的更新候选或"暂不更新"结论。**所有保底 Evidence 必须真实，禁止 Mock 冒充（PRD 11.3）。**
@@ -132,7 +132,7 @@ CogSeed 作为"个人认知资产 harness"，六组件映射如下——**每一
 |---|---|---|---|
 | 本地 CLI Agents（Codex / Claude Code 等） | 源 Agent 会话读取、目标 Agent 执行 | `local_agents/runner.ts`（仅 spawn 路径） | native_session → exported_evidence（粘贴/文件）→ reference_only（只读能力包） |
 | core-agent（内置） | LLM 调用与工具执行 | 动态 `import('#core-agent')` | 本地模型（Ollama 兼容端点）→ 候选降级为仅来源记录 |
-| NSEAP Backend | 云端夜间整理、组织资产治理（可选增强） | 明确为 Later，不进 8月19 承诺 | 本地主链路完全不依赖 |
+| 资产治理 Backend | 云端夜间整理、组织资产治理（可选增强） | 明确为 Later，不进 8月19 承诺 | 本地主链路完全不依赖 |
 | 免费/国内模型 API | 提取/候选低成本通道 | 现有 custom_providers / marketplace API-base 路由 | Feature Flag 控制，默认关闭 |
 
 ---

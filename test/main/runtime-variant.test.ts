@@ -119,4 +119,12 @@ describe('runtime variant isolation', () => {
     });
     expect(() => resolveRuntimeIdentity(true, 'cogseed')).toThrow(/only supports the main/);
   });
+
+  it('selects the development user pointer before boot activation', () => {
+    const indexSource = require('node:fs').readFileSync(path.join(__dirname, '../../src/main/index.ts'), 'utf8') as string;
+    const pointerSelection = indexSource.indexOf('users.setUseDevCurrentUserId(!app.isPackaged)');
+    const activation = indexSource.indexOf('users.initActiveUser()');
+    expect(pointerSelection).toBeGreaterThanOrEqual(0);
+    expect(pointerSelection).toBeLessThan(activation);
+  });
 });

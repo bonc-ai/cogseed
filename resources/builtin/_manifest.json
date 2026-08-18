@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "44075eac26294f44604618c336aacc3674f42bc6f08622555fe3de24bb6535f7",
+  "content_tree_sha256": "c73571498b4bdd9988d29afbbb61a35b383fcd24b0a6e9a82bb3f43d013caf27",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -589,18 +589,18 @@
     },
     {
       "path": "marketplace/skills/02d958231673/_meta.json",
-      "bytes": 347,
-      "sha256": "e5f6920a0144877d384039c827d02ad56580053a936cddd7598c6c6ffe0335d0"
+      "bytes": 70,
+      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
     },
     {
       "path": "marketplace/skills/02d958231673/agents/openai.yaml",
-      "bytes": 880,
-      "sha256": "91fcdef781b19726aabed70dfccda93cb9bf47b51d1990f77e207be1820ce85b"
+      "bytes": 874,
+      "sha256": "441461dcfa5ec268957294b83fcff7e922e5128c710caa0c4a0d60c425858ab4"
     },
     {
       "path": "marketplace/skills/02d958231673/evals/evals.json",
-      "bytes": 13098,
-      "sha256": "944d46d6cd83a4c4fdf48e1627d81dae5a7c7576925df0f0014ca88f78f66606"
+      "bytes": 13092,
+      "sha256": "5dfe12d5c575deb017d5d5e7e703b1d6528dc0de2393ad63bd67032b7517c8a7"
     },
     {
       "path": "marketplace/skills/02d958231673/evals/forecast_model.md",
@@ -659,8 +659,8 @@
     },
     {
       "path": "marketplace/skills/02d958231673/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/02d958231673/references/validation-contract.md",
@@ -669,28 +669,28 @@
     },
     {
       "path": "marketplace/skills/02d958231673/schemas.json",
-      "bytes": 2824,
-      "sha256": "58a5b524bbb6ea8be0d5b38ae1741cd989c3ba2b6197bd679da4afeb9cecec49"
+      "bytes": 2826,
+      "sha256": "ec4045b5dad71a5590238d75c9c5f5be5e4b14a10fe925fa7f2e72b7c85708ce"
     },
     {
       "path": "marketplace/skills/02d958231673/SKILL.md",
       "bytes": 2160,
-      "sha256": "f4f8a1c57830d5c2315b489424174d6f50b30ec4d49684d6f0622ff8fb322779"
+      "sha256": "d3bab2433fc90df24518f9888419708345dd43b68202b7ded833bc51d946bb65"
     },
     {
       "path": "marketplace/skills/058e3bb57bf5/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/058e3bb57bf5/agents/openai.yaml",
-      "bytes": 933,
-      "sha256": "80567042f46d51c822a2a359f67984d3e838847c70b767bee2d5f63df8809592"
+      "bytes": 927,
+      "sha256": "f317d92befca91757939a8d63ccd5326a193920a78913960d969a13bfd7f503c"
     },
     {
       "path": "marketplace/skills/058e3bb57bf5/evals/evals.json",
-      "bytes": 14703,
-      "sha256": "0f4e3706f3d34c73d68fa4511f2180ea2bb4814f55e44cedd536585ed6672947"
+      "bytes": 14697,
+      "sha256": "5dab9f4c522fafec0e048b39e6ca55822a851304a8389c0eeadfc31548d43e93"
     },
     {
       "path": "marketplace/skills/058e3bb57bf5/evals/forecast_model.md",
@@ -754,8 +754,8 @@
     },
     {
       "path": "marketplace/skills/058e3bb57bf5/references/skill-spec.yaml",
-      "bytes": 1763,
-      "sha256": "98431330d0a580ba9004d11a363d23789dc475376176aca7db3244fb4825405e"
+      "bytes": 1666,
+      "sha256": "35f817cab85c623dda32be13cf12bbb8777269e44cf678530ea4ee6fbeafd261"
     },
     {
       "path": "marketplace/skills/058e3bb57bf5/references/validation-contract.md",
@@ -764,28 +764,28 @@
     },
     {
       "path": "marketplace/skills/058e3bb57bf5/schemas.json",
-      "bytes": 3913,
-      "sha256": "01be2e6ad60b6216a5dec58fedd0ccb45483f75e7811e29283d732ffee7bdfbd"
+      "bytes": 3915,
+      "sha256": "0ffebb6d2414886736d15f6b8a2983da631a74c9c6c1bf248b44e76c499f89ad"
     },
     {
       "path": "marketplace/skills/058e3bb57bf5/SKILL.md",
       "bytes": 4423,
-      "sha256": "05d350a7306f911f6a2a69331ea17438f9b96761f07006605aa07b501ea5cdb5"
+      "sha256": "b5704f662227361c547630047279760f339394109f6c60a1bc946505c9789ed6"
     },
     {
       "path": "marketplace/skills/06d69ee5f1bc/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/06d69ee5f1bc/agents/openai.yaml",
-      "bytes": 918,
-      "sha256": "0136e176869c729efd88b500c759abcd83662132789459d726cd016dff4db314"
+      "bytes": 912,
+      "sha256": "96935d96c586f57b4b7e12d01d25b1d0d76dca4943407612c9c9d4a403d89970"
     },
     {
       "path": "marketplace/skills/06d69ee5f1bc/evals/evals.json",
-      "bytes": 14711,
-      "sha256": "cb5c1d7de1fc11f89cdeacd24796937690b14adaaaddfc827bec6c722dbd9957"
+      "bytes": 14705,
+      "sha256": "0e33a13e596790fea67da76f3d2d3b171547990d10e2daf145d2e7910239379c"
     },
     {
       "path": "marketplace/skills/06d69ee5f1bc/evals/forecast_model.md",
@@ -849,8 +849,8 @@
     },
     {
       "path": "marketplace/skills/06d69ee5f1bc/references/skill-spec.yaml",
-      "bytes": 1756,
-      "sha256": "4c5241a00fd4518f5ea8c4146d19bc34437eb9e5e096d334d4189264b147e2ef"
+      "bytes": 1659,
+      "sha256": "e3876a9cfb0e9f9b9fa0f698fc45cdb1b6de68d51283470525fde93c9b035bd0"
     },
     {
       "path": "marketplace/skills/06d69ee5f1bc/references/validation-contract.md",
@@ -859,28 +859,28 @@
     },
     {
       "path": "marketplace/skills/06d69ee5f1bc/schemas.json",
-      "bytes": 3923,
-      "sha256": "26ecbb12893f3e734f4ac9422b10105f2f766f01b3b477ccbccf6e96eddb44e4"
+      "bytes": 3925,
+      "sha256": "9f9688e81595427021809366e92c98ec80c67862499e4e5d920653eb5f95a9bd"
     },
     {
       "path": "marketplace/skills/06d69ee5f1bc/SKILL.md",
       "bytes": 4409,
-      "sha256": "dd13d13accdeacb9d867b64c23a403970feb775ff2ea0379c89a27363f53180e"
+      "sha256": "a5766a54b02a7cd75e0954cd54bff0f150dce8a5e7b381cb25ad4ec33d6fb9d8"
     },
     {
       "path": "marketplace/skills/0c2d02c7e68d/_meta.json",
-      "bytes": 355,
-      "sha256": "c3103736320fcf6fd72d06d20a04a09cb36c9cd2237fc357d8fab05569cb5ba3"
+      "bytes": 70,
+      "sha256": "6b9da6047ff83e9d63d8fd43c304bfad9bb324a842abca338f36e2373ebf9850"
     },
     {
       "path": "marketplace/skills/0c2d02c7e68d/agents/openai.yaml",
-      "bytes": 927,
-      "sha256": "d685605a0ec1b90d54d90d12da78f2ef8f5d1e52dada24cefdd9cff8d2c89245"
+      "bytes": 921,
+      "sha256": "5e9bff349fbee82130484fc9a7baf869dddae3930d4cd1cd7cd1994cd53ad07a"
     },
     {
       "path": "marketplace/skills/0c2d02c7e68d/evals/evals.json",
-      "bytes": 14335,
-      "sha256": "725cccd1841a8ae25e9e7bd7237d6639ca496280c474312a9c9c3b3ef8cd3b7d"
+      "bytes": 14329,
+      "sha256": "9689b01cbc596bcd73c33218b27d043c34657f8a0b31f047cc5a76ef74ffe805"
     },
     {
       "path": "marketplace/skills/0c2d02c7e68d/evals/forecast_model.md",
@@ -939,8 +939,8 @@
     },
     {
       "path": "marketplace/skills/0c2d02c7e68d/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/0c2d02c7e68d/references/validation-contract.md",
@@ -949,28 +949,28 @@
     },
     {
       "path": "marketplace/skills/0c2d02c7e68d/schemas.json",
-      "bytes": 2796,
-      "sha256": "07ce37df65cce3b092d3be77515907d28a1d256c03949cc79a4f9d70a68b5643"
+      "bytes": 2798,
+      "sha256": "90cef2a82253efe28b7d89bd71588637e9ae24bdeed348ab8b6b9420ab31e150"
     },
     {
       "path": "marketplace/skills/0c2d02c7e68d/SKILL.md",
       "bytes": 27666,
-      "sha256": "b76006ec3a0e1e24448522a9e766464f854f3057aa7416608ab3179541b317b4"
+      "sha256": "d448a631ed7df0caeadb00142f3eaadf4d306f942db89e35ba129a8e66a847f6"
     },
     {
       "path": "marketplace/skills/0d95910c7f2f/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/0d95910c7f2f/agents/openai.yaml",
-      "bytes": 931,
-      "sha256": "e32ea34faff92bd432b238caf0d224b29064be3ae4175bfa560bd5285d37aab7"
+      "bytes": 925,
+      "sha256": "6e40bf46b2e795ee8bb8776c408f7b6e1b095a17b0e9c063c8e89bcafbbf40b8"
     },
     {
       "path": "marketplace/skills/0d95910c7f2f/evals/evals.json",
-      "bytes": 14696,
-      "sha256": "858794bbcf95a040ca7f98e29319bab34f6cd53e38b694511a764b81a769bc91"
+      "bytes": 14690,
+      "sha256": "1c8c769aee75c3a1f3633ceaeb84c0324c6f67415c596911b255d3407c4e07cd"
     },
     {
       "path": "marketplace/skills/0d95910c7f2f/evals/forecast_model.md",
@@ -1034,8 +1034,8 @@
     },
     {
       "path": "marketplace/skills/0d95910c7f2f/references/skill-spec.yaml",
-      "bytes": 1766,
-      "sha256": "93c58f01a2b0d24d1c75e7aadedfe5cb40eafda667f6674ba3fa823261750a01"
+      "bytes": 1669,
+      "sha256": "4c1557b43bf9f46eb14dd0e17d9a0f3173b40acf6b4b49cd0d363a2a8c10f661"
     },
     {
       "path": "marketplace/skills/0d95910c7f2f/references/validation-contract.md",
@@ -1044,28 +1044,28 @@
     },
     {
       "path": "marketplace/skills/0d95910c7f2f/schemas.json",
-      "bytes": 3910,
-      "sha256": "2c96f589b153e53773f4c188e7f2674802f60033c1c0538795b7bffe9441cf46"
+      "bytes": 3912,
+      "sha256": "b954d05bed52bd59b811a457ef4a81e1b900317c1915ac4acb47e719cd7375a4"
     },
     {
       "path": "marketplace/skills/0d95910c7f2f/SKILL.md",
       "bytes": 4364,
-      "sha256": "a99d2c0eba64e71a88fee22a22f6d608b40538fdda25e9582f9a41ce496f4c3b"
+      "sha256": "68160d7a783b0ad5a4e358cc9712ead62766f53322d51896ddc9e5722516a191"
     },
     {
       "path": "marketplace/skills/0e847fc8685e/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/0e847fc8685e/agents/openai.yaml",
-      "bytes": 934,
-      "sha256": "c8fd6c0a946fc2e6ed650f25a50f3fc507f753a840f00c188de214a3659ebef0"
+      "bytes": 928,
+      "sha256": "effec91f54fb446ea1457eb91f9436b70274d1a4cbd73810ac1ff7ae76cc10c4"
     },
     {
       "path": "marketplace/skills/0e847fc8685e/evals/evals.json",
-      "bytes": 14965,
-      "sha256": "69826d5891e1ed98fde7fb504f80da26df8ba57b06a87456ba455f52ce0459e7"
+      "bytes": 14959,
+      "sha256": "0f31d77a2c27dd6d057a9b29893dc798ad0a786132941e56ebd6c26df38ff311"
     },
     {
       "path": "marketplace/skills/0e847fc8685e/evals/forecast_model.md",
@@ -1129,8 +1129,8 @@
     },
     {
       "path": "marketplace/skills/0e847fc8685e/references/skill-spec.yaml",
-      "bytes": 1767,
-      "sha256": "0376c5085993a6b789c9401a08370ffda2f69a98f8cbc5e5f503de15e5da6f5e"
+      "bytes": 1670,
+      "sha256": "af1f0fb39f50f5d5c23712298c472192e57860d2e6afbf05f0c432f56bb37b65"
     },
     {
       "path": "marketplace/skills/0e847fc8685e/references/validation-contract.md",
@@ -1139,18 +1139,18 @@
     },
     {
       "path": "marketplace/skills/0e847fc8685e/schemas.json",
-      "bytes": 3903,
-      "sha256": "8e3f5563f9cdec750e0d11d3d3f312f33c6d3372aad4243e75140740dd4f4b49"
+      "bytes": 3905,
+      "sha256": "6afa03836eec7b3665aedbe3c740ea8c8fdd66df373453a1a64ac1f14097c738"
     },
     {
       "path": "marketplace/skills/0e847fc8685e/SKILL.md",
       "bytes": 4358,
-      "sha256": "69b398103bfac7bed6ce8db50f1e473f4dd5acbda7c8c29d49bb4450a74126da"
+      "sha256": "c309cb851fa9bf10ac632eb1f3bfae5173065d1818aa41bf37375aeb7ca030a9"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/_meta.json",
-      "bytes": 355,
-      "sha256": "15eb18020e29ab2f255ce9c8ae67038166ca516c368d1b64b48dc055ab5c86c2"
+      "bytes": 70,
+      "sha256": "3525530a41cbc0a51dc4ea9c579496565fc5481f6eaeea6325170ac7c5e4277e"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/agents/openai.yaml",
@@ -1159,8 +1159,8 @@
     },
     {
       "path": "marketplace/skills/10c4addc39a1/changelog.md",
-      "bytes": 1624,
-      "sha256": "7df10db8628aed5ab39476d84de39f51f39f09c08e81adf3386f3820c901b91b"
+      "bytes": 1627,
+      "sha256": "22505058194b5168e4e0529da79fbea9333cfa530dbb8af051b72ccf8459f49f"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/config/report-profile.yaml",
@@ -1254,8 +1254,8 @@
     },
     {
       "path": "marketplace/skills/10c4addc39a1/fixtures/sample-report-data.json",
-      "bytes": 79242,
-      "sha256": "ae10a45c9756576cab285ffcd2ddf760962ca6bcf5c7007c1e3c1e6ead4b105f"
+      "bytes": 79243,
+      "sha256": "f3d2ccd940dcb16edb9a2000ad1f3489930683b0906c3073162176e471d998c1"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/input-template.md",
@@ -1264,8 +1264,8 @@
     },
     {
       "path": "marketplace/skills/10c4addc39a1/ontology/ontology-slice.yaml",
-      "bytes": 2047,
-      "sha256": "98432966b494c2856823c5a8b2328526af7194b4aa8515ae6ae38ff85bde8914"
+      "bytes": 2050,
+      "sha256": "c5298e0628d0440be90297af4ac091f44702ab36a400726629619d15acfac4d4"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/ontology/policy.yaml",
@@ -1339,8 +1339,8 @@
     },
     {
       "path": "marketplace/skills/10c4addc39a1/references/ontology-mapping.md",
-      "bytes": 881,
-      "sha256": "c48ee3e7495080c8a5846604516e276ff6ee21b799e29e9df28bc9f870a6f5db"
+      "bytes": 884,
+      "sha256": "ca597479452837a0b8aacd0112a7d31999862613645f7b170d8df1042c94e738"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/references/output-contract.md",
@@ -1364,8 +1364,8 @@
     },
     {
       "path": "marketplace/skills/10c4addc39a1/references/skill-spec.yaml",
-      "bytes": 543,
-      "sha256": "dd63ce829ba79f5cbab7f3c7308486e71b958a512d591de963bcf07e2e7df2e3"
+      "bytes": 511,
+      "sha256": "10d51f3822c30ab4a196416c843bc7a32066f3e49cb07d28a07426f7c9676542"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/references/source-and-citation-rules.md",
@@ -1389,23 +1389,23 @@
     },
     {
       "path": "marketplace/skills/10c4addc39a1/schemas.json",
-      "bytes": 2796,
-      "sha256": "07ce37df65cce3b092d3be77515907d28a1d256c03949cc79a4f9d70a68b5643"
+      "bytes": 2798,
+      "sha256": "90cef2a82253efe28b7d89bd71588637e9ae24bdeed348ab8b6b9420ab31e150"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/schemas/report-data.schema.json",
-      "bytes": 9247,
-      "sha256": "8a35b64cc4da5429b3e83fadbc89a867db3644957b59f602876c2c61fa81f62f"
+      "bytes": 9249,
+      "sha256": "c5a42669e2767c53b9008f2a16183bc3a68df7846d965bf18322a48ed25ea0d9"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/schemas/research-gate.schema.json",
-      "bytes": 5833,
-      "sha256": "9b3c81f994a771afaa8a0b6047b9133148646ae27d5dcf041ebb379a5029634e"
+      "bytes": 5835,
+      "sha256": "46b6b2f4c9fc454ea3de91a639ce2f9e0cc3523d1974bbf94c0999bee7343684"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/schemas/research-plan.schema.json",
-      "bytes": 5715,
-      "sha256": "32e50f86c2b15bc3c2470dde392cc7e27b418f13e5779f45da6240976228bfd0"
+      "bytes": 5717,
+      "sha256": "c524b715b31fda1e10dd58e924bba75abb521dac5b38cea56e0e7132e2ae7492"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/schemas/schemas.json",
@@ -1414,8 +1414,8 @@
     },
     {
       "path": "marketplace/skills/10c4addc39a1/schemas/web-research-ledger.schema.json",
-      "bytes": 13492,
-      "sha256": "f17b8894add5adb53ced2fe61a353616979ed3462af2f34533bc5c9bdd0289e2"
+      "bytes": 13494,
+      "sha256": "dc575afad9d55e5a018d53ae8e42be7237722a28f6e4d75227e362271c9fd911"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/scripts/build_docx.py",
@@ -1424,8 +1424,8 @@
     },
     {
       "path": "marketplace/skills/10c4addc39a1/scripts/check_skill.py",
-      "bytes": 5662,
-      "sha256": "32dac1047d4225e6662c6ae4c9b472165c5d02b956001256df63c981d6ad3143"
+      "bytes": 5674,
+      "sha256": "25299cfffb4980a546a9d3131a0f1279309a4e8ed347ac5648f50655f3610153"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/scripts/inspect_docx.py",
@@ -1460,7 +1460,7 @@
     {
       "path": "marketplace/skills/10c4addc39a1/SKILL.md",
       "bytes": 21970,
-      "sha256": "555fd0b60dfbb2e825ef740ae4354d5a9dfbc6e748699b17ccce1e8594fc628e"
+      "sha256": "89450e3dd0daec49bd360dd0af179b4a0f8a5f8c9d9ac8554c3506a1b25b9839"
     },
     {
       "path": "marketplace/skills/10c4addc39a1/templates/domain-brief.template.md",
@@ -1509,18 +1509,18 @@
     },
     {
       "path": "marketplace/skills/13ac643c3ef9/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/13ac643c3ef9/agents/openai.yaml",
-      "bytes": 930,
-      "sha256": "84b049ea6aa3d48c4e38dc9f7f688c529be4b63f4e6a7b7eb6cfc88bc93fa012"
+      "bytes": 924,
+      "sha256": "6d5efcf5919cfcdabdec7bd95e9ecc874562a38cbec4c20542e406e90b61462f"
     },
     {
       "path": "marketplace/skills/13ac643c3ef9/evals/evals.json",
-      "bytes": 14694,
-      "sha256": "042bbf05f98dc81564704e2e3ad89640a59d634ef74047b26895bfd2e25b5f85"
+      "bytes": 14688,
+      "sha256": "dcd05674bfddbb0b3c063029e41f395f7b338264d8ce581fb1173d1b7fa36278"
     },
     {
       "path": "marketplace/skills/13ac643c3ef9/evals/forecast_model.md",
@@ -1584,8 +1584,8 @@
     },
     {
       "path": "marketplace/skills/13ac643c3ef9/references/skill-spec.yaml",
-      "bytes": 1768,
-      "sha256": "135b9fe834d6b6ecb98297f9b595c3295fb3d281387061d2e57768747409f8e5"
+      "bytes": 1671,
+      "sha256": "33339acfbbf1807b6c2bf8a9c9f66ded6673b1530a51175b7f81d51c42c72903"
     },
     {
       "path": "marketplace/skills/13ac643c3ef9/references/validation-contract.md",
@@ -1594,28 +1594,28 @@
     },
     {
       "path": "marketplace/skills/13ac643c3ef9/schemas.json",
-      "bytes": 3935,
-      "sha256": "613f3fa372c240b611559278f301da4438370a4247aa3161ef4b61ffbc57d960"
+      "bytes": 3937,
+      "sha256": "40c9d29dee7219af8c080e5142c94db673cdac996ed0e0e3ee0a1ea04d8fb3c9"
     },
     {
       "path": "marketplace/skills/13ac643c3ef9/SKILL.md",
       "bytes": 4362,
-      "sha256": "29fe03db8c18e16326c7089c16dfb993faba9450cbb48b0d513d7e8f17384312"
+      "sha256": "51525423157992bfd09b90f7d0b43eb713c8432486b40a4fbdeafb28d803ebfd"
     },
     {
       "path": "marketplace/skills/15af984d02a5/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/15af984d02a5/agents/openai.yaml",
-      "bytes": 911,
-      "sha256": "8ef4036366244b094c95c8e698edc10bdfbb54e3d1e9fb1db4cf6328ea6863b5"
+      "bytes": 905,
+      "sha256": "b1563589abbc8cfab46daf538aeeb3594d4f940890154384f7194eb02a5c27ea"
     },
     {
       "path": "marketplace/skills/15af984d02a5/evals/evals.json",
-      "bytes": 14654,
-      "sha256": "2c5117fcdb9a66c5fa7a159cee7355f6ad789494c1bb976737b14b7729998d89"
+      "bytes": 14648,
+      "sha256": "96d805ff427b39964fda57c894c800865d66418eb9e8fc902652722d6b43958c"
     },
     {
       "path": "marketplace/skills/15af984d02a5/evals/forecast_model.md",
@@ -1679,8 +1679,8 @@
     },
     {
       "path": "marketplace/skills/15af984d02a5/references/skill-spec.yaml",
-      "bytes": 1755,
-      "sha256": "a1284fc493c7275a060a395ad66e7e188c4f840497a23c3d4a933d6b45a1cfbe"
+      "bytes": 1658,
+      "sha256": "cf21e0d8e957c615f1387ac35ed230ffb32aea69b52ccfc805c9b01c69011d8d"
     },
     {
       "path": "marketplace/skills/15af984d02a5/references/validation-contract.md",
@@ -1689,28 +1689,28 @@
     },
     {
       "path": "marketplace/skills/15af984d02a5/schemas.json",
-      "bytes": 3899,
-      "sha256": "6bc957a7e5ed7e6901a350f33ed509f4001f3fa0b8022e893002970711fb4cd7"
+      "bytes": 3901,
+      "sha256": "d211c9813cec306bed00bd34f9a5cf51ba2e687f97905554d28f4ab62562bf6e"
     },
     {
       "path": "marketplace/skills/15af984d02a5/SKILL.md",
       "bytes": 4465,
-      "sha256": "111494b4cb41090a8ac33739345e2c1fffa20b328eb977280b1baeaffd6eef52"
+      "sha256": "18f9f617325dba871ddf21f82dcca98ced5dc9279794ed4fad21255286a66d7e"
     },
     {
       "path": "marketplace/skills/17b2d5e85d87/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/17b2d5e85d87/agents/openai.yaml",
-      "bytes": 940,
-      "sha256": "da77bf7167aa8714a932c216c1aca91b7faa1929f8f5e0a5c414a4303dd211e2"
+      "bytes": 934,
+      "sha256": "3ccf8aae313a29cf23e22040e6ae1b0d18e598a4b1bbca5f06f137c0a366cc4e"
     },
     {
       "path": "marketplace/skills/17b2d5e85d87/evals/evals.json",
-      "bytes": 15137,
-      "sha256": "8e954851b1b51f5a5ae2c9a2f3cc1af55bba44177c69e6739042a8cd5e917394"
+      "bytes": 15131,
+      "sha256": "d583c2ec122ddc45910825f41a94050fdb9e7d5fe082ab7e8b15b403d1da6123"
     },
     {
       "path": "marketplace/skills/17b2d5e85d87/evals/forecast_model.md",
@@ -1774,8 +1774,8 @@
     },
     {
       "path": "marketplace/skills/17b2d5e85d87/references/skill-spec.yaml",
-      "bytes": 1768,
-      "sha256": "9871fbc8abb9dc64a29172fe8b5824cdba345a72cc7f8c351d9632856a0ba4cc"
+      "bytes": 1671,
+      "sha256": "b95c63eb541cbe677eb785e30e264e78fa07cd41efe652dcd803eb63f0f5c077"
     },
     {
       "path": "marketplace/skills/17b2d5e85d87/references/validation-contract.md",
@@ -1784,28 +1784,28 @@
     },
     {
       "path": "marketplace/skills/17b2d5e85d87/schemas.json",
-      "bytes": 3915,
-      "sha256": "c33859b9163ae55c4aac0055c316cb260248565295a7bf2a3116a7b6d658ef27"
+      "bytes": 3917,
+      "sha256": "adce70711c977d9c6486a4d9af5c56f92b4feff3de7be7c2a648278ee301718c"
     },
     {
       "path": "marketplace/skills/17b2d5e85d87/SKILL.md",
       "bytes": 4544,
-      "sha256": "cf96b62d66b172d1f27067fb516ec9df5d1941ed9f52ee32177625bb149c784e"
+      "sha256": "5def72542c52a5dd989456acb901b60728e074ade6072af2698bc480667f83fb"
     },
     {
       "path": "marketplace/skills/181e249741e9/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/181e249741e9/agents/openai.yaml",
-      "bytes": 921,
-      "sha256": "a75ae6525a8338d8b65d51c157e2915dc8e88cc492a4a1419aa378afb24cce5b"
+      "bytes": 915,
+      "sha256": "5814b631df322cb211e4249bd66d890837482d3224ce2beb5840ebfd2912e03d"
     },
     {
       "path": "marketplace/skills/181e249741e9/evals/evals.json",
-      "bytes": 14955,
-      "sha256": "567ee83a692c685a8c3b64cc319fde692afc14d1ad9cc58c5e09617ec399f769"
+      "bytes": 14949,
+      "sha256": "e1e0bbb7fbd91b6c2239138282e9548cf7eda6e82eb524b58417af06ad38b312"
     },
     {
       "path": "marketplace/skills/181e249741e9/evals/forecast_model.md",
@@ -1869,8 +1869,8 @@
     },
     {
       "path": "marketplace/skills/181e249741e9/references/skill-spec.yaml",
-      "bytes": 1765,
-      "sha256": "f603c361eee7cfc9a68184263f25d6ba0e74b54dae297362534f139693993722"
+      "bytes": 1668,
+      "sha256": "9a6d1a50fdda208c9cc625df7c40cf73fd6a8ca70420cf2460c3e49bc76759cf"
     },
     {
       "path": "marketplace/skills/181e249741e9/references/validation-contract.md",
@@ -1879,28 +1879,28 @@
     },
     {
       "path": "marketplace/skills/181e249741e9/schemas.json",
-      "bytes": 3909,
-      "sha256": "f2ed35d22fb242c1a1702956a43b14caf5ed94326d1ca023cc73869397d6b52e"
+      "bytes": 3911,
+      "sha256": "b74a675c1bb7ca82b975085cec52254dde51ac5b67f1ab1e082b6956346762c4"
     },
     {
       "path": "marketplace/skills/181e249741e9/SKILL.md",
       "bytes": 4456,
-      "sha256": "4e3096ca08a10ca0fa91134bf256c2f6346644580d1f59a1aa01d6b8341e0b4a"
+      "sha256": "b8061ef67b8901e6c33bfa0d34e8f5970e8a2a97b64ae1d63f2987c73201f6d3"
     },
     {
       "path": "marketplace/skills/1b3e20652d52/_meta.json",
-      "bytes": 346,
-      "sha256": "ee3f4b152baf94d2f696d7e54546929cdbd7eeb5a1d7dfd6e9986b010457c9b4"
+      "bytes": 70,
+      "sha256": "f9c8fa6acecff96043980a4e1fcbd82ff67858a9de86a6a42e1606c1b9622f00"
     },
     {
       "path": "marketplace/skills/1b3e20652d52/agents/openai.yaml",
-      "bytes": 1002,
-      "sha256": "b9e05666b93d8a0366ab00c1075e562922eb30eb68363b668490cdae436fe23b"
+      "bytes": 996,
+      "sha256": "f1e6e98eb16819d2efcf55075f15ad40716b88d03717776dd7c5b95a9a1621f0"
     },
     {
       "path": "marketplace/skills/1b3e20652d52/evals/evals.json",
-      "bytes": 16083,
-      "sha256": "4631099ee22945cf30e8a08ce86256b97b3a1136f3fb27591162e36ce7e9d986"
+      "bytes": 16077,
+      "sha256": "f446dc3e757cf1dfa3de3762a1b44d6ad90ea9ce36f33aba3b568d2209f38e1e"
     },
     {
       "path": "marketplace/skills/1b3e20652d52/evals/forecast_model.md",
@@ -1969,8 +1969,8 @@
     },
     {
       "path": "marketplace/skills/1b3e20652d52/references/skill-spec.yaml",
-      "bytes": 1349,
-      "sha256": "534d96a9ef19867a752aa46c29f0f09be91733259907639ab30d83082bd37019"
+      "bytes": 1314,
+      "sha256": "0ef47c1e2188759608ae53fdcc1c5307e9dea5248d2db49cc1769c8ac6b73a9a"
     },
     {
       "path": "marketplace/skills/1b3e20652d52/references/validation-contract.md",
@@ -1979,28 +1979,28 @@
     },
     {
       "path": "marketplace/skills/1b3e20652d52/schemas.json",
-      "bytes": 2796,
-      "sha256": "07ce37df65cce3b092d3be77515907d28a1d256c03949cc79a4f9d70a68b5643"
+      "bytes": 2798,
+      "sha256": "90cef2a82253efe28b7d89bd71588637e9ae24bdeed348ab8b6b9420ab31e150"
     },
     {
       "path": "marketplace/skills/1b3e20652d52/SKILL.md",
       "bytes": 6251,
-      "sha256": "517e677e4e6db4e20e2f85c7bac441e140f1b094f2b6c654e4c95e24bb13e4f4"
+      "sha256": "563968449c2023a183abd37b0ba678f969734d48650b768a28ed84afce3a1b39"
     },
     {
       "path": "marketplace/skills/2b7f7c8621d5/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/2b7f7c8621d5/agents/openai.yaml",
-      "bytes": 926,
-      "sha256": "bdef99aa20dba214a9aa6d4c0f88b9ca712a2f16b5ade7db588dab934d27b291"
+      "bytes": 920,
+      "sha256": "d10f2584696b31d73dcd89e972d95782559b58b0286585da2ca9f7723f022eef"
     },
     {
       "path": "marketplace/skills/2b7f7c8621d5/evals/evals.json",
-      "bytes": 15277,
-      "sha256": "71a042dcd5cc0f3b162c8603ea4b9607aa4030248a9aa551a89ce9450033d3fa"
+      "bytes": 15271,
+      "sha256": "f9febbab43947688a7a86b0b044ea678948183e7bd9ad9f4535af61f351e28df"
     },
     {
       "path": "marketplace/skills/2b7f7c8621d5/evals/forecast_model.md",
@@ -2064,8 +2064,8 @@
     },
     {
       "path": "marketplace/skills/2b7f7c8621d5/references/skill-spec.yaml",
-      "bytes": 1776,
-      "sha256": "088ef99cbd39416fda17524380c28ea8b8a0b5d1d7e3e9c0392d08b4ac475eb2"
+      "bytes": 1679,
+      "sha256": "402c6f3bbfd17edb17d73643dc5b09c58882085834c23fa4c15b380d866ecfc8"
     },
     {
       "path": "marketplace/skills/2b7f7c8621d5/references/validation-contract.md",
@@ -2074,18 +2074,18 @@
     },
     {
       "path": "marketplace/skills/2b7f7c8621d5/schemas.json",
-      "bytes": 3923,
-      "sha256": "87b537c28abff7a46a1aeaa684e5e0692324594cf1cd8fd5ad6c91c79124dbbc"
+      "bytes": 3925,
+      "sha256": "2347257c13a9211b6cac70521fd41cfb13fbf2af556e4a9f422f3a2979d7e7ed"
     },
     {
       "path": "marketplace/skills/2b7f7c8621d5/SKILL.md",
       "bytes": 4431,
-      "sha256": "1623dc6e91e241c83cc07e3d2aaac5fc550702d3e27c408da4b068f2e8073ef9"
+      "sha256": "ccc13e40868c83fff0449c0ffdf713a4be68d208a8ddebbc8bfca6583d3c9700"
     },
     {
       "path": "marketplace/skills/36867a076129/_meta.json",
-      "bytes": 347,
-      "sha256": "3888b8ecc107a400622026ca39f198e3b73403d401144b61a21969a87dc2419e"
+      "bytes": 70,
+      "sha256": "3525530a41cbc0a51dc4ea9c579496565fc5481f6eaeea6325170ac7c5e4277e"
     },
     {
       "path": "marketplace/skills/36867a076129/agents/openai.yaml",
@@ -2129,8 +2129,8 @@
     },
     {
       "path": "marketplace/skills/36867a076129/manifest.yaml",
-      "bytes": 1029,
-      "sha256": "abfffa621c6d30738abd70a2bab1fdb14adb80b56ce15e9504309487c2de9afd"
+      "bytes": 1023,
+      "sha256": "4d90c7290abbe7e796671d47504a2f428d8e3b8ed5b1bd6c51aefba1d111dce4"
     },
     {
       "path": "marketplace/skills/36867a076129/ontology/model.yaml",
@@ -2175,17 +2175,17 @@
     {
       "path": "marketplace/skills/36867a076129/references/skill-spec.yaml",
       "bytes": 3206,
-      "sha256": "277b698ca1b0aca9819df58eafc7dc596405bd47319eeb6dac7129a042be67b1"
+      "sha256": "02af74eb1508ba97b3a805f40edab2296a13b754d6c323b8c26feab960eba13d"
     },
     {
       "path": "marketplace/skills/36867a076129/references/validation-contract.md",
-      "bytes": 583,
-      "sha256": "7532269b5f8cfa59b59891d7c3b63cf5589a3a8104d0e87afc8ddbc35cd54cc7"
+      "bytes": 576,
+      "sha256": "3ff6a497887c98c73960a0d4185471d65a8c2e3893025682ec046fa1a566d4d4"
     },
     {
       "path": "marketplace/skills/36867a076129/schemas.json",
-      "bytes": 2790,
-      "sha256": "e94e003604071731eb7954ed44b6071df0547fc9c5bd1bccb9a8f67a7852a15e"
+      "bytes": 2792,
+      "sha256": "2cee2755c3c0893b8ac247866771add08276ea5a670a5aaf20bc25cc18bb12d1"
     },
     {
       "path": "marketplace/skills/36867a076129/schemas/input.schema.json",
@@ -2204,13 +2204,13 @@
     },
     {
       "path": "marketplace/skills/36867a076129/SKILL.md",
-      "bytes": 4728,
-      "sha256": "d7f43cbf206d10d58e98dbd7e6498f8c05715ce65fbf8236a2dcb457cbb6897a"
+      "bytes": 4727,
+      "sha256": "a44ec90c31458212bf277a0ad3a0bb62287461f5703f642d4f2d4af80efdafc9"
     },
     {
       "path": "marketplace/skills/396f58aeffd0/_meta.json",
-      "bytes": 347,
-      "sha256": "3888b8ecc107a400622026ca39f198e3b73403d401144b61a21969a87dc2419e"
+      "bytes": 70,
+      "sha256": "3525530a41cbc0a51dc4ea9c579496565fc5481f6eaeea6325170ac7c5e4277e"
     },
     {
       "path": "marketplace/skills/396f58aeffd0/agents/openai.yaml",
@@ -2254,8 +2254,8 @@
     },
     {
       "path": "marketplace/skills/396f58aeffd0/manifest.yaml",
-      "bytes": 1022,
-      "sha256": "7c7078a1fc12724fab68c9c1b2f6ec46c1c079dcd44b132f073675059869f9c0"
+      "bytes": 1016,
+      "sha256": "b6702d40e585c4b42c175db64d064f83c3cfb14111ebd00ed1a10d67e69b57bd"
     },
     {
       "path": "marketplace/skills/396f58aeffd0/ontology/model.yaml",
@@ -2300,17 +2300,17 @@
     {
       "path": "marketplace/skills/396f58aeffd0/references/skill-spec.yaml",
       "bytes": 3156,
-      "sha256": "49f2097042ee67e7b5784fea528879639323df6562a04332b2ccaf296ce8a643"
+      "sha256": "342be39316345b57afd98c3344c2bfeb315a8f531e07c66857621e947656204d"
     },
     {
       "path": "marketplace/skills/396f58aeffd0/references/validation-contract.md",
-      "bytes": 575,
-      "sha256": "8ba50d49d73b8d2dcae37a167715b2bfada6fa2c00acbe3669573e7f999bdab0"
+      "bytes": 568,
+      "sha256": "17770db0d8688abd5c7f5ab8950ed32c343e1ffbf805fca5729f519ddf98bfaf"
     },
     {
       "path": "marketplace/skills/396f58aeffd0/schemas.json",
-      "bytes": 2790,
-      "sha256": "e94e003604071731eb7954ed44b6071df0547fc9c5bd1bccb9a8f67a7852a15e"
+      "bytes": 2792,
+      "sha256": "2cee2755c3c0893b8ac247866771add08276ea5a670a5aaf20bc25cc18bb12d1"
     },
     {
       "path": "marketplace/skills/396f58aeffd0/schemas/input.schema.json",
@@ -2329,23 +2329,23 @@
     },
     {
       "path": "marketplace/skills/396f58aeffd0/SKILL.md",
-      "bytes": 4798,
-      "sha256": "8f3a81ce29e768a36af3f951ff92b02079dcd36d3edbddf7f72206095c003059"
+      "bytes": 4797,
+      "sha256": "3fc30070a7ba5be63f93401c6f4add042576babd19f4ded0c6b47d8a638ff0ab"
     },
     {
       "path": "marketplace/skills/3def7f0eb34a/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/3def7f0eb34a/agents/openai.yaml",
-      "bytes": 914,
-      "sha256": "9f4e5adc2c887de3c82109c75704b4bbb84f01a5b85263d6b7c5db08180ffa7a"
+      "bytes": 908,
+      "sha256": "663abf12341dc783f1cc1e44b0a7d0a4c2c812908e4d639ada79d83e9226ec2d"
     },
     {
       "path": "marketplace/skills/3def7f0eb34a/evals/evals.json",
-      "bytes": 14698,
-      "sha256": "8639f9965f1635ec4977d76ae8d898be7a75a8355f306f7c52946d64b39f3cd5"
+      "bytes": 14692,
+      "sha256": "c387962804ab33e3394b325f3f2214f7506b1e384007780870b2fd1c49b87432"
     },
     {
       "path": "marketplace/skills/3def7f0eb34a/evals/forecast_model.md",
@@ -2409,8 +2409,8 @@
     },
     {
       "path": "marketplace/skills/3def7f0eb34a/references/skill-spec.yaml",
-      "bytes": 1763,
-      "sha256": "2f1ce209e124ca8d1d334c8d12cba653431dfc92ac6a2a002fee4929203b7098"
+      "bytes": 1666,
+      "sha256": "ed1411756f16b8873def1f2fe4859b1ec328e2dc97eaa07365cd3b2769968112"
     },
     {
       "path": "marketplace/skills/3def7f0eb34a/references/validation-contract.md",
@@ -2419,28 +2419,28 @@
     },
     {
       "path": "marketplace/skills/3def7f0eb34a/schemas.json",
-      "bytes": 3899,
-      "sha256": "ccb6e2a298e52826bd20b36574bda574482f6c02e655ea278dda9c4bac94ddd1"
+      "bytes": 3901,
+      "sha256": "3a4e6ad14179b5b6e6c47661e222f7c05f6a4c5533ad22bf933357c9275ff192"
     },
     {
       "path": "marketplace/skills/3def7f0eb34a/SKILL.md",
       "bytes": 4337,
-      "sha256": "961d6ac5a58408b66dd636214949626b8e7c4a217c57eadf80cf6ec34b981518"
+      "sha256": "20cee4c0c115e204b30405efdb0296260ad8346f58a5ad83514819251832ba82"
     },
     {
       "path": "marketplace/skills/4334030f8314/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/4334030f8314/agents/openai.yaml",
-      "bytes": 920,
-      "sha256": "83fb10e65211e13425552e9407d1c676a8d05552ec8b85cb5085e0561b24983a"
+      "bytes": 914,
+      "sha256": "56856c44429fc7d14244c002f7f594ad99a7a33d7ff771f4be519b47ff9bc349"
     },
     {
       "path": "marketplace/skills/4334030f8314/evals/evals.json",
-      "bytes": 14633,
-      "sha256": "92273634d94bb9dee0145cc0cf91e19d61c042dff8c85ac9fa946ccc4a5d36d0"
+      "bytes": 14627,
+      "sha256": "bc3cdf24529523c9c58ae6282cd48efc976f7edab8da4bd3108e3aed71e55412"
     },
     {
       "path": "marketplace/skills/4334030f8314/evals/forecast_model.md",
@@ -2504,8 +2504,8 @@
     },
     {
       "path": "marketplace/skills/4334030f8314/references/skill-spec.yaml",
-      "bytes": 1763,
-      "sha256": "8585d71fd85321725097c7686fdd867be0e16e794bf52174add928cf1e7b6ca2"
+      "bytes": 1666,
+      "sha256": "c40a5453f9df2d1f71da3e7fc2f034d673ad97a784e8664c5c6b822aae309ce4"
     },
     {
       "path": "marketplace/skills/4334030f8314/references/validation-contract.md",
@@ -2514,28 +2514,28 @@
     },
     {
       "path": "marketplace/skills/4334030f8314/schemas.json",
-      "bytes": 3907,
-      "sha256": "7844056b6e41363f37ba6bd93bf6f8d4049e20e0ac89d267416064c4ac628a89"
+      "bytes": 3909,
+      "sha256": "0b1c8b82fcb2de6ce9d56dc12d3ebd3df84147bfd3d3b48ae359d0fccb0e9d52"
     },
     {
       "path": "marketplace/skills/4334030f8314/SKILL.md",
       "bytes": 4331,
-      "sha256": "e5814a3a832071692fe24f1996e8f14bf0054c2e957df477a3d4cb1469e1e775"
+      "sha256": "68ebd42c2f97b99646402e8a2b25b4b54ff4213fcc435c4fadd5859cab2466af"
     },
     {
       "path": "marketplace/skills/464e3f3416cf/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/464e3f3416cf/agents/openai.yaml",
-      "bytes": 931,
-      "sha256": "8f7320193393431c87f903187cbb8b431fcaee5fccf8c7c7619fd281aac1c430"
+      "bytes": 925,
+      "sha256": "14c390900848ee4cae6f821b1d6f069e8952edebe0b78957a49a2e0c9707bc2d"
     },
     {
       "path": "marketplace/skills/464e3f3416cf/evals/evals.json",
-      "bytes": 14832,
-      "sha256": "c6c8052d7ac868f5c485ff7498f41278b5a94ba19bc5ae6cfe2de802a38318ef"
+      "bytes": 14826,
+      "sha256": "8e77d77938e1291fc01fb34c37481c4b43900e748dee478336e2beaf84755f2a"
     },
     {
       "path": "marketplace/skills/464e3f3416cf/evals/forecast_model.md",
@@ -2599,8 +2599,8 @@
     },
     {
       "path": "marketplace/skills/464e3f3416cf/references/skill-spec.yaml",
-      "bytes": 1763,
-      "sha256": "75b8c66a620ac4dc68b4203f0abeec9356be70361eebd7ed630948ab9d09dda6"
+      "bytes": 1666,
+      "sha256": "9e258d2fb9d7a03c7aaab719eb31b94d70727127ad3534fa729536e263e8d1ef"
     },
     {
       "path": "marketplace/skills/464e3f3416cf/references/validation-contract.md",
@@ -2609,28 +2609,28 @@
     },
     {
       "path": "marketplace/skills/464e3f3416cf/schemas.json",
-      "bytes": 3913,
-      "sha256": "8b9197aab3f4848f89cf8b9b6cc05414609a44d93a6848ecb4ad9dc3ea07f146"
+      "bytes": 3915,
+      "sha256": "816fcae9bcca35f5c53998595adb2fd7105fe3be1794fec8a7d2cef281203257"
     },
     {
       "path": "marketplace/skills/464e3f3416cf/SKILL.md",
       "bytes": 4466,
-      "sha256": "7011cc18a1feb228743a76fd3ab68a123ff752894ace6e20a6e8ef8c0e4633ee"
+      "sha256": "9f9905cfb67dd2a331498366922d9c8fd7f7045f268b5a1789d5317394b0ea25"
     },
     {
       "path": "marketplace/skills/4a8054f512e9/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/4a8054f512e9/agents/openai.yaml",
-      "bytes": 935,
-      "sha256": "9dcff7c2b7411f419fc9d6d591a27682ba212337ee6243d493430689789ea681"
+      "bytes": 929,
+      "sha256": "8f181c28e016ed1d4e88b4f8a128b8d560c6d35789a7dae3f6a619f6f53f58c0"
     },
     {
       "path": "marketplace/skills/4a8054f512e9/evals/evals.json",
-      "bytes": 15108,
-      "sha256": "76fc0db744fa0632d3ae56dc95351854e489c8b52820e29a17a80d036ac50ffd"
+      "bytes": 15102,
+      "sha256": "0540054ea9e49d5282c6f6aa9c8e2a00a0b82905627c70638d6f317ef8dc85c9"
     },
     {
       "path": "marketplace/skills/4a8054f512e9/evals/forecast_model.md",
@@ -2694,8 +2694,8 @@
     },
     {
       "path": "marketplace/skills/4a8054f512e9/references/skill-spec.yaml",
-      "bytes": 1765,
-      "sha256": "ecfd921fd476f2f1ca08144f0eb8a7f2fa2d4e9a8835ce3e453b27fdc8aa8f9d"
+      "bytes": 1668,
+      "sha256": "5ca14ac1b6014cc32399e040f66db6095dd50270be6802d38a1d4b8530e7a737"
     },
     {
       "path": "marketplace/skills/4a8054f512e9/references/validation-contract.md",
@@ -2704,28 +2704,28 @@
     },
     {
       "path": "marketplace/skills/4a8054f512e9/schemas.json",
-      "bytes": 3901,
-      "sha256": "2906f0025971037b7f4803b697af011049d98203bec75dedb7638d61be4d0f5f"
+      "bytes": 3903,
+      "sha256": "7eec84f6e69eb16df44e124066676330b80e5fa9225906d985b89bf705fd79de"
     },
     {
       "path": "marketplace/skills/4a8054f512e9/SKILL.md",
       "bytes": 4414,
-      "sha256": "6d4799640eb3588227f6d911aa28387046b43e509de02edc5e51ddf7305afdbf"
+      "sha256": "c8cabc94486f4bb43e14262f6d1ccabe13130846743139efb01c970e9f0bb486"
     },
     {
       "path": "marketplace/skills/4bb1813c8335/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/4bb1813c8335/agents/openai.yaml",
-      "bytes": 918,
-      "sha256": "d8507c60734efc3bf74e659eef7f20fae7db126f05863cfce76e5c98436fce66"
+      "bytes": 912,
+      "sha256": "bad471252189b57549d5c02d49f7f9ed221864457ea604141af6c1c12c1dc28c"
     },
     {
       "path": "marketplace/skills/4bb1813c8335/evals/evals.json",
-      "bytes": 14704,
-      "sha256": "dc2b1367583d1709fe22e7d7d53cc6dc62b94585490fe26b9a21c0cfd105bce6"
+      "bytes": 14698,
+      "sha256": "e214bbce709461d93dd9fa3aa1d63809da21d43074d812d8f583d0a5349d9a74"
     },
     {
       "path": "marketplace/skills/4bb1813c8335/evals/forecast_model.md",
@@ -2789,8 +2789,8 @@
     },
     {
       "path": "marketplace/skills/4bb1813c8335/references/skill-spec.yaml",
-      "bytes": 1753,
-      "sha256": "25d77566e9336d5fd6bbff08b7191ec61391e32c6ee63804acb29fcc20c8ff48"
+      "bytes": 1656,
+      "sha256": "c48b27c147d1199e8e5213799344e56a5840ecb2b394f7a6a4c36c8bb0d54a6b"
     },
     {
       "path": "marketplace/skills/4bb1813c8335/references/validation-contract.md",
@@ -2799,28 +2799,28 @@
     },
     {
       "path": "marketplace/skills/4bb1813c8335/schemas.json",
-      "bytes": 3889,
-      "sha256": "9b60d8f17e7fa9cb547dd6d5af1f2841a83beadf4a7870930f1e2fb56051a108"
+      "bytes": 3891,
+      "sha256": "9c0831f0de3e563e6ec761c0ed34e64ce0c52e5e75c701dfcf677450b776ab62"
     },
     {
       "path": "marketplace/skills/4bb1813c8335/SKILL.md",
       "bytes": 4367,
-      "sha256": "ea50fd52fa7eec16184cfa087f2742f897b3e253162608cbac64fe95829c4833"
+      "sha256": "0ee8ade8b1344473e9ab1b104eaedb535c918e6f97c553c81e66e195d07bf8d4"
     },
     {
       "path": "marketplace/skills/4ff31e1cab6f/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/4ff31e1cab6f/agents/openai.yaml",
-      "bytes": 932,
-      "sha256": "be71ce7a36c2fa9c35de9fb1c047ee253002de9cec134d117d1aeaca9452fcf2"
+      "bytes": 926,
+      "sha256": "cecb20007d9e4b1e1edccaab36c22fcb88ba0944215c04872dccdb227bf9e939"
     },
     {
       "path": "marketplace/skills/4ff31e1cab6f/evals/evals.json",
-      "bytes": 14884,
-      "sha256": "476ef8b21d5480bed00d726eaa520ffef9216f97bdd885135e8e2153cb1ef4c6"
+      "bytes": 14878,
+      "sha256": "a3c618348a5259686e9687eb2244574c6912560bce4499d80a2cadb67b9256ce"
     },
     {
       "path": "marketplace/skills/4ff31e1cab6f/evals/forecast_model.md",
@@ -2884,8 +2884,8 @@
     },
     {
       "path": "marketplace/skills/4ff31e1cab6f/references/skill-spec.yaml",
-      "bytes": 1764,
-      "sha256": "408cc8d386c92914cffaeb70af23a9cce55ca11d94e9224980767cc01dd8b154"
+      "bytes": 1667,
+      "sha256": "86df25b66a3242c38b81c206a498d1272e8107f7f3025135ff6d432fd095864a"
     },
     {
       "path": "marketplace/skills/4ff31e1cab6f/references/validation-contract.md",
@@ -2894,18 +2894,18 @@
     },
     {
       "path": "marketplace/skills/4ff31e1cab6f/schemas.json",
-      "bytes": 3911,
-      "sha256": "4e645e68979d2b54da1cf91e1b9205a459a9060552562887c05cbcf0d7b22a81"
+      "bytes": 3913,
+      "sha256": "fc63054532f8f6503ff2881ae129fe54995a4ce71dd5d2d09b812dd4ae31cd2a"
     },
     {
       "path": "marketplace/skills/4ff31e1cab6f/SKILL.md",
       "bytes": 4430,
-      "sha256": "0fcbef34597e56fb0d1f63f0ad64efe88717b23bdf092c83070b9a76b7129739"
+      "sha256": "840c4e487b5569eeb049ee5303a15819e648c246ac07ea5468857304e1104a3d"
     },
     {
       "path": "marketplace/skills/56023303d185/_meta.json",
-      "bytes": 347,
-      "sha256": "3888b8ecc107a400622026ca39f198e3b73403d401144b61a21969a87dc2419e"
+      "bytes": 70,
+      "sha256": "3525530a41cbc0a51dc4ea9c579496565fc5481f6eaeea6325170ac7c5e4277e"
     },
     {
       "path": "marketplace/skills/56023303d185/agents/openai.yaml",
@@ -2949,8 +2949,8 @@
     },
     {
       "path": "marketplace/skills/56023303d185/manifest.yaml",
-      "bytes": 1025,
-      "sha256": "77cc24a9c8061e63eb1a4781c9c209ef50849dce29dd85dcc0768eaaa5e2f01a"
+      "bytes": 1019,
+      "sha256": "2f3cfe447a799c5d9f19a1dcd1add8b111a931688fbb8b43320a4306d0c9b4e9"
     },
     {
       "path": "marketplace/skills/56023303d185/ontology/model.yaml",
@@ -2995,17 +2995,17 @@
     {
       "path": "marketplace/skills/56023303d185/references/skill-spec.yaml",
       "bytes": 4257,
-      "sha256": "e53cf95240aab9da8bc5329e41a2770003da9bf8827b80942f04d30f2923d45c"
+      "sha256": "ca2dfb1473d08d74c9214afbf42bce913f2c04e703f196edca0ff2f1b1c733fd"
     },
     {
       "path": "marketplace/skills/56023303d185/references/validation-contract.md",
-      "bytes": 585,
-      "sha256": "596df534c023608188a57fbc2e194c3e6fb95919df9c617a86fcb13b757e4c6d"
+      "bytes": 578,
+      "sha256": "0433dac140916e04246ae94dee59b8e4b86e70535990556c4ac9995bbf622c89"
     },
     {
       "path": "marketplace/skills/56023303d185/schemas.json",
-      "bytes": 2790,
-      "sha256": "e94e003604071731eb7954ed44b6071df0547fc9c5bd1bccb9a8f67a7852a15e"
+      "bytes": 2792,
+      "sha256": "2cee2755c3c0893b8ac247866771add08276ea5a670a5aaf20bc25cc18bb12d1"
     },
     {
       "path": "marketplace/skills/56023303d185/schemas/input.schema.json",
@@ -3024,23 +3024,23 @@
     },
     {
       "path": "marketplace/skills/56023303d185/SKILL.md",
-      "bytes": 5063,
-      "sha256": "9bb062842c54d1b868b7335587d9c41ff0dcc96913ef76beee1c98c4af678005"
+      "bytes": 5062,
+      "sha256": "5c3492f9602ddc5770cbe83e1888c2f334ed45409c7c2eb6356cd8c2f732cf97"
     },
     {
       "path": "marketplace/skills/577787fb975e/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/577787fb975e/agents/openai.yaml",
-      "bytes": 813,
-      "sha256": "8674f77e526c6ad7b2f9e77bc64f7aaa7a8730086f8cba5f37a014c977335e6f"
+      "bytes": 807,
+      "sha256": "603045f21a19717dbdc35edac79cde902ddc4499300604817a4f15abdae805e4"
     },
     {
       "path": "marketplace/skills/577787fb975e/evals/evals.json",
-      "bytes": 13591,
-      "sha256": "068c1fe5a0aed6c9d58191f232e4bf2c238e3d455cded49ec1dfd5735db1fdd2"
+      "bytes": 13585,
+      "sha256": "531e653258231413897c97db660ee91a2c95e1e36e0ccac8ed63501ee1356400"
     },
     {
       "path": "marketplace/skills/577787fb975e/evals/forecast_model.md",
@@ -3104,8 +3104,8 @@
     },
     {
       "path": "marketplace/skills/577787fb975e/references/skill-spec.yaml",
-      "bytes": 1977,
-      "sha256": "4970dde7dd2b9d807015fee3f3507fe42827bf45ffcc257f3f41f78247b5d316"
+      "bytes": 1880,
+      "sha256": "23b6b69a5193fba0a0e826dee2cf17b2c86cc5c8ef97359a81ee51a3b193a001"
     },
     {
       "path": "marketplace/skills/577787fb975e/references/validation-contract.md",
@@ -3114,28 +3114,28 @@
     },
     {
       "path": "marketplace/skills/577787fb975e/schemas.json",
-      "bytes": 3908,
-      "sha256": "546590377501142083f4168068c533f3c1d00daf2c2dfa77e8a89ed9db38d4ed"
+      "bytes": 3910,
+      "sha256": "a2a2b14cd0430e816548886d70ba654180dcb92facd31076d2483a47c3edac23"
     },
     {
       "path": "marketplace/skills/577787fb975e/SKILL.md",
       "bytes": 4945,
-      "sha256": "0ba79e9732d98fecb75f644137f91bc05bb03e33cd339cef3e33d297c4477c1e"
+      "sha256": "aa774024619f2d31ff4c4f57e0b688f187a5d24c1b3b5f6678d7c4693822e8db"
     },
     {
       "path": "marketplace/skills/5a131fa3f845/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/5a131fa3f845/agents/openai.yaml",
-      "bytes": 832,
-      "sha256": "d398bab3914083c683392cce1094f95f87a237b231e6efc48503efa45d034a5e"
+      "bytes": 826,
+      "sha256": "69ba5e7f228f1f6267ff33bc15922a0155ada41e51e3a366717d163a821b9f37"
     },
     {
       "path": "marketplace/skills/5a131fa3f845/evals/evals.json",
-      "bytes": 14036,
-      "sha256": "d1b195affe2d828c7c1da9a6b42bf730243fa1730f32e041c43b631b69079f31"
+      "bytes": 14030,
+      "sha256": "0e13ac74dc7c069f2d24d8fa923a0bf2982cbc0fc3207f9bab2f66a52652eede"
     },
     {
       "path": "marketplace/skills/5a131fa3f845/evals/forecast_model.md",
@@ -3199,8 +3199,8 @@
     },
     {
       "path": "marketplace/skills/5a131fa3f845/references/skill-spec.yaml",
-      "bytes": 1914,
-      "sha256": "3601d54568bd74f23b10261584f0b5a99f1fe41f73c748dbefeffe11f9c8227b"
+      "bytes": 1817,
+      "sha256": "895f80222f6496dfa7a341cea523cd34795ebc5ae39aa7a951cfd3af806890cb"
     },
     {
       "path": "marketplace/skills/5a131fa3f845/references/validation-contract.md",
@@ -3209,18 +3209,18 @@
     },
     {
       "path": "marketplace/skills/5a131fa3f845/schemas.json",
-      "bytes": 3916,
-      "sha256": "180b8ca65968ab90ab027ebc440650df995748cd5dcd5a16f61d370be7c60541"
+      "bytes": 3918,
+      "sha256": "73145c619ba053bfb03a643641fce32949981d19f1b439c63f1d29f4b6a654a6"
     },
     {
       "path": "marketplace/skills/5a131fa3f845/SKILL.md",
       "bytes": 4992,
-      "sha256": "e2ebcd415dadcbc34ef9ce0647f3d6a853853f0eae967efdba2a3accf67fec2d"
+      "sha256": "962ac0781830216430a86866c9f3a5ff146bc8bc889573a60d1863f3a9f529ad"
     },
     {
       "path": "marketplace/skills/629ae1e4448a/_meta.json",
-      "bytes": 347,
-      "sha256": "3888b8ecc107a400622026ca39f198e3b73403d401144b61a21969a87dc2419e"
+      "bytes": 70,
+      "sha256": "3525530a41cbc0a51dc4ea9c579496565fc5481f6eaeea6325170ac7c5e4277e"
     },
     {
       "path": "marketplace/skills/629ae1e4448a/agents/openai.yaml",
@@ -3234,8 +3234,8 @@
     },
     {
       "path": "marketplace/skills/629ae1e4448a/evals/evals.json",
-      "bytes": 11349,
-      "sha256": "b1b07d87a1b911f61c31a275a6446e84d28f21e53936bd34c5a359f112076cbb"
+      "bytes": 11354,
+      "sha256": "e40c3335c90517bdac7a2d6001bfe66015678f4c2c06771d3b5756952327913f"
     },
     {
       "path": "marketplace/skills/629ae1e4448a/evals/forecast_model.md",
@@ -3264,8 +3264,8 @@
     },
     {
       "path": "marketplace/skills/629ae1e4448a/manifest.yaml",
-      "bytes": 1022,
-      "sha256": "f830d46d6eba46e58ece79f950af07adff719114423ab96eb5d50929ed0d595c"
+      "bytes": 1016,
+      "sha256": "ef43926603c022ee3c2236f1ed6c07ba1a92f5f20d19705d4cba2df58a924d20"
     },
     {
       "path": "marketplace/skills/629ae1e4448a/ontology/model.yaml",
@@ -3310,17 +3310,17 @@
     {
       "path": "marketplace/skills/629ae1e4448a/references/skill-spec.yaml",
       "bytes": 3202,
-      "sha256": "b4c7fc4814320aabf507e3bece54684d4773908d36676270b163d8afe8255f91"
+      "sha256": "884500529a1ea12523d5a2a2ca678a46cac918248bc566b471ecd65442579b22"
     },
     {
       "path": "marketplace/skills/629ae1e4448a/references/validation-contract.md",
-      "bytes": 585,
-      "sha256": "90401399eb43b9fc33ebbd7a15801cdcc76cb05e577b9bdc4fd9e167335db8c2"
+      "bytes": 578,
+      "sha256": "03c663a15feaef4c3b50c0b74ffa01a9aab3972c47bfb1cf2ea06fe24ef28947"
     },
     {
       "path": "marketplace/skills/629ae1e4448a/schemas.json",
-      "bytes": 2790,
-      "sha256": "e94e003604071731eb7954ed44b6071df0547fc9c5bd1bccb9a8f67a7852a15e"
+      "bytes": 2792,
+      "sha256": "2cee2755c3c0893b8ac247866771add08276ea5a670a5aaf20bc25cc18bb12d1"
     },
     {
       "path": "marketplace/skills/629ae1e4448a/schemas/input.schema.json",
@@ -3339,23 +3339,23 @@
     },
     {
       "path": "marketplace/skills/629ae1e4448a/SKILL.md",
-      "bytes": 4809,
-      "sha256": "f229bc9c0b9275c96d2ca7b25cd2cb075bf6d570951b67d3d4b6b7c6af0c2d2f"
+      "bytes": 4817,
+      "sha256": "3b076a22ecfdba406d6e15e0e0cc9da8a45ef92e795fb18e4f0dc685758dc2cf"
     },
     {
       "path": "marketplace/skills/6743aa0797a2/_meta.json",
-      "bytes": 347,
-      "sha256": "e5f6920a0144877d384039c827d02ad56580053a936cddd7598c6c6ffe0335d0"
+      "bytes": 70,
+      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
     },
     {
       "path": "marketplace/skills/6743aa0797a2/agents/openai.yaml",
-      "bytes": 935,
-      "sha256": "36fc8a8d381df3e7b7eaf94c9a8e002e0615d1e19026de983b4b93db0a8435f7"
+      "bytes": 929,
+      "sha256": "5c611f28579ff567e1db3cbc4d728e2d8c67b2011edb5f45339d5d4924d99705"
     },
     {
       "path": "marketplace/skills/6743aa0797a2/evals/evals.json",
-      "bytes": 14288,
-      "sha256": "0e4f9d20291d0244f5a7ba0dcd29741832a1b5b5bcd8bf97f21a45ca7474dacb"
+      "bytes": 14282,
+      "sha256": "7f3ec5593f8a963f88b7f6d17c0fc5615d1962bf0a9db1413f06714a6059cf85"
     },
     {
       "path": "marketplace/skills/6743aa0797a2/evals/forecast_model.md",
@@ -3419,8 +3419,8 @@
     },
     {
       "path": "marketplace/skills/6743aa0797a2/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/6743aa0797a2/references/validation-contract.md",
@@ -3429,28 +3429,28 @@
     },
     {
       "path": "marketplace/skills/6743aa0797a2/schemas.json",
-      "bytes": 2814,
-      "sha256": "4f67556e8c8a434e2be84da83279b5c013ce7a41eadc332edb27ebf59e6c9884"
+      "bytes": 2816,
+      "sha256": "a1c10a1d399abe55598027f5b616a00b3944b26ad32469d72112bf4dfe08e491"
     },
     {
       "path": "marketplace/skills/6743aa0797a2/SKILL.md",
       "bytes": 5891,
-      "sha256": "824bdaee91268a183cceeba9ebd8a773c44ea0f79c2863760fbefb0cda202bb9"
+      "sha256": "9d7ae3d31895296dd30cc5f3605ec91ddba8eab94ba74e9f50f0cba0684f9c74"
     },
     {
       "path": "marketplace/skills/6ba6255ee930/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/6ba6255ee930/agents/openai.yaml",
-      "bytes": 940,
-      "sha256": "65aa2cfa50faf95f1a107f9e6f27d8f2d20485ae710f77977d269d71c8398b96"
+      "bytes": 934,
+      "sha256": "d7e11b78ddbed120e0103e1a4e4952ebd43ec44a11e7d93d87156be1683742e1"
     },
     {
       "path": "marketplace/skills/6ba6255ee930/evals/evals.json",
-      "bytes": 14684,
-      "sha256": "ac7f846ac7caa5f1755555dc85df4a7ff8d3cccb05f8e45ae946856de2203ff8"
+      "bytes": 14678,
+      "sha256": "64ef87538544bd35276ab860740fdf297042b63f21a4d8792aa686b775b3cf27"
     },
     {
       "path": "marketplace/skills/6ba6255ee930/evals/forecast_model.md",
@@ -3514,8 +3514,8 @@
     },
     {
       "path": "marketplace/skills/6ba6255ee930/references/skill-spec.yaml",
-      "bytes": 1753,
-      "sha256": "65def60ca55d4f6eee98dbd0cddc907f65f0b931200d233924ce2de0cecaa3b4"
+      "bytes": 1656,
+      "sha256": "3bdc029ed10d1fcff0f86ef6276dc5f171459f37b9eb8992e32d85bb13d143db"
     },
     {
       "path": "marketplace/skills/6ba6255ee930/references/validation-contract.md",
@@ -3524,28 +3524,28 @@
     },
     {
       "path": "marketplace/skills/6ba6255ee930/schemas.json",
-      "bytes": 3912,
-      "sha256": "e40c703f6914a49de8739c70fdca45460ae6dd092c6b4667d2042b1260c4abcc"
+      "bytes": 3914,
+      "sha256": "b673d703d449bfbc8fc0e9f1830bf53a330bbfa690f23119fcc8e628a0a3afb1"
     },
     {
       "path": "marketplace/skills/6ba6255ee930/SKILL.md",
       "bytes": 4505,
-      "sha256": "d467985485feddc9825399ce6ee3399e417dca24ee7ca6b71b65eaa312e1e9c9"
+      "sha256": "cdc20751c7cc1e3b42eca0d0673e02e4a1c1d6f76b0bfe810f707f7d9c6b5d69"
     },
     {
       "path": "marketplace/skills/6c5609e76cf0/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/6c5609e76cf0/agents/openai.yaml",
-      "bytes": 932,
-      "sha256": "004817bb002ab2e1e4ffde511ce0b4d371422fb53d03c671d56a8dacd09abd61"
+      "bytes": 926,
+      "sha256": "0cb7e48e231cc64ff58cfbd7c590d89ea9d0b2fbf5d1e489032c8304f12c2541"
     },
     {
       "path": "marketplace/skills/6c5609e76cf0/evals/evals.json",
-      "bytes": 15014,
-      "sha256": "b686ac7e1250cdf60fe66051bb66089290fa9421782497a031059eb8f800ad82"
+      "bytes": 15008,
+      "sha256": "fb4b69516635339d5dd9bf802e27e89d1e954fc3652e9da3d3c63708ccc0f874"
     },
     {
       "path": "marketplace/skills/6c5609e76cf0/evals/forecast_model.md",
@@ -3609,8 +3609,8 @@
     },
     {
       "path": "marketplace/skills/6c5609e76cf0/references/skill-spec.yaml",
-      "bytes": 1776,
-      "sha256": "0bc3f022ee40f12d381bc3a00024730a0c98f32bfd17c6388701d7398d7d33c3"
+      "bytes": 1679,
+      "sha256": "3f626a1206c8154eb5d445aad2a13a32a1792d41a37ca68d8a0befd80f70a712"
     },
     {
       "path": "marketplace/skills/6c5609e76cf0/references/validation-contract.md",
@@ -3619,28 +3619,28 @@
     },
     {
       "path": "marketplace/skills/6c5609e76cf0/schemas.json",
-      "bytes": 3923,
-      "sha256": "13f3781cc3a7473b0958f051e0287e47f9d5bb4f758cc3f9c5aaffc4ea2a6f63"
+      "bytes": 3925,
+      "sha256": "2c401e11dab3fc86b83689c86f01044cd0bcae57b327b4c4cfdcc29c594cca6f"
     },
     {
       "path": "marketplace/skills/6c5609e76cf0/SKILL.md",
       "bytes": 4496,
-      "sha256": "831a7c96b6b9bc802983661671eb1837575f611fe195bc120b2da842fb647729"
+      "sha256": "987bd5a737f624c606ca08b3be30c2807de27be298b9f4cd84ea18ea0987017f"
     },
     {
       "path": "marketplace/skills/7432875f93bf/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/7432875f93bf/agents/openai.yaml",
-      "bytes": 824,
-      "sha256": "59350aa2f0db6856b79223c065a4469b956261ff96ec6aed36ae73ddc19b7575"
+      "bytes": 818,
+      "sha256": "8445ebab0a86dc9b0d770d3f472e7d04623aca984df6897030ebcae880fca260"
     },
     {
       "path": "marketplace/skills/7432875f93bf/evals/evals.json",
-      "bytes": 14174,
-      "sha256": "9bad302cd1636768663c922f2cbc33c9e63436aad1a4f55fd516371c5f8aa3cb"
+      "bytes": 14168,
+      "sha256": "2f1f6f1efcd06f33608a4ed386ec27c9cb3e1226c68d8f5d1fc8f0f50944d3fa"
     },
     {
       "path": "marketplace/skills/7432875f93bf/evals/forecast_model.md",
@@ -3704,8 +3704,8 @@
     },
     {
       "path": "marketplace/skills/7432875f93bf/references/skill-spec.yaml",
-      "bytes": 1987,
-      "sha256": "08661ab47a123e7f34403ad84114ba563cc91cc3babe7d8fd45ad6c1cee7a8a4"
+      "bytes": 1890,
+      "sha256": "08e7c0a4ba019d97dd1c9477cadd7bd2c4b0609cbf7c322a78393d6c54362879"
     },
     {
       "path": "marketplace/skills/7432875f93bf/references/validation-contract.md",
@@ -3714,28 +3714,28 @@
     },
     {
       "path": "marketplace/skills/7432875f93bf/schemas.json",
-      "bytes": 3918,
-      "sha256": "9c52b3fb58ab7e26da2d254c8049b99204827daa821ab3a4e5c80d0b803d9f69"
+      "bytes": 3920,
+      "sha256": "c7647e728f059dc491751aff3ad71253ffa298124545ec0678467a41423ab32f"
     },
     {
       "path": "marketplace/skills/7432875f93bf/SKILL.md",
       "bytes": 5264,
-      "sha256": "e6068d591871c4d2db103b3bcb2d0a935e0848ebf49a7cd9d17b7b298fe3190b"
+      "sha256": "88c579a2035bbabbe50b6b933bd28f2298d0f7321c31326d7a4dcb178f96ff24"
     },
     {
       "path": "marketplace/skills/78967e9cfe10/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/78967e9cfe10/agents/openai.yaml",
-      "bytes": 920,
-      "sha256": "fcc7ab1b2ea066345ab2812e73acf79ce5ee5c98f580d705db2773e9a477c314"
+      "bytes": 914,
+      "sha256": "da4e260b3ceff0b73feca508a6acc074cb3dddfa3ec83d89cf19b65fab3efa2c"
     },
     {
       "path": "marketplace/skills/78967e9cfe10/evals/evals.json",
-      "bytes": 15040,
-      "sha256": "3bcbec6df7a2746d973b90af3f29e09c7717fb6b9b81e58afd823e100b4eab74"
+      "bytes": 15034,
+      "sha256": "ae7b68e18a25b992d7d0f4a06484db4fa8733a51c0639f29f31ddb7fd8b1e584"
     },
     {
       "path": "marketplace/skills/78967e9cfe10/evals/forecast_model.md",
@@ -3799,8 +3799,8 @@
     },
     {
       "path": "marketplace/skills/78967e9cfe10/references/skill-spec.yaml",
-      "bytes": 1772,
-      "sha256": "e554e22f045d6f863c9e2746f5ce3bde8fde4d0941633c8f3f616edf949747c1"
+      "bytes": 1675,
+      "sha256": "5818558714dc3a60ad20875a56d3b9ce6b76a3bd2eb1bb6c84ef8dc6b94ae029"
     },
     {
       "path": "marketplace/skills/78967e9cfe10/references/validation-contract.md",
@@ -3809,28 +3809,28 @@
     },
     {
       "path": "marketplace/skills/78967e9cfe10/schemas.json",
-      "bytes": 3922,
-      "sha256": "d5e7bb8978ed1f5381cbdfde538b97193f8628a73733c9d601d26c931207235c"
+      "bytes": 3924,
+      "sha256": "814058fb833ba0cde8ee2273dae0e42b81a8867a18b2c1d5c09ffeb92a62cb74"
     },
     {
       "path": "marketplace/skills/78967e9cfe10/SKILL.md",
       "bytes": 4407,
-      "sha256": "ecc01a91c2bf0d3c318d93875d015c7a2bea3dd6dced1ee180e646f32e862496"
+      "sha256": "8f64514188adaf8c82a281048ab7d0c2682d07486636bbf626516603e676279e"
     },
     {
       "path": "marketplace/skills/79943922f937/_meta.json",
-      "bytes": 347,
-      "sha256": "e5f6920a0144877d384039c827d02ad56580053a936cddd7598c6c6ffe0335d0"
+      "bytes": 70,
+      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
     },
     {
       "path": "marketplace/skills/79943922f937/agents/openai.yaml",
-      "bytes": 887,
-      "sha256": "79184c22cb0ed12e460f23e0f08a81f488cc5925b56330a6ece2fad0cb6e10bc"
+      "bytes": 881,
+      "sha256": "4664c72af172cdb9f6a65c7e70afcc9056cd23627ca69c2122e6c9bffd114bf5"
     },
     {
       "path": "marketplace/skills/79943922f937/evals/evals.json",
-      "bytes": 13225,
-      "sha256": "0c6fae9a50ab1987c64b9deb6f904299d324823462179dc380f6b9b8a045e907"
+      "bytes": 13219,
+      "sha256": "2489441899570745201565291ab2ae976435a066b0a1457e4d62db2b35c4750e"
     },
     {
       "path": "marketplace/skills/79943922f937/evals/forecast_model.md",
@@ -3889,8 +3889,8 @@
     },
     {
       "path": "marketplace/skills/79943922f937/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/79943922f937/references/validation-contract.md",
@@ -3899,28 +3899,28 @@
     },
     {
       "path": "marketplace/skills/79943922f937/schemas.json",
-      "bytes": 2814,
-      "sha256": "8559024c0c58fe64dbf767090645608ac73ae681c5bf86db0eb9b6ccbc966254"
+      "bytes": 2816,
+      "sha256": "03a5e8bd3aff9b9cc992086cb7f7a36662faf167c64f7574590a9ec0c1ba55cd"
     },
     {
       "path": "marketplace/skills/79943922f937/SKILL.md",
       "bytes": 2078,
-      "sha256": "3f4e50e1fadc6bf6d89f17bf8e87688d9292c68ffd1f7681b8ec1e3a0f780743"
+      "sha256": "17e31a2335ce6297f6f445844ec3cab7a1876253b4081fc63dd3e915953d0fc3"
     },
     {
       "path": "marketplace/skills/86cea925e282/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/86cea925e282/agents/openai.yaml",
-      "bytes": 920,
-      "sha256": "37855ab3d31ec30d5d0162df7879a6517fbcf117379e6b4144132b095a96daee"
+      "bytes": 914,
+      "sha256": "44de162b2faece9dc459eb02b0ba93f6b773fe59e89569320134da6a66f161e7"
     },
     {
       "path": "marketplace/skills/86cea925e282/evals/evals.json",
-      "bytes": 14805,
-      "sha256": "6d9bc1384b8b6ff95588cbc438ff1868688e51787199cedb8d8179a70ab66315"
+      "bytes": 14799,
+      "sha256": "be3db39451862a3b910241dea22f22f5db1604613c8b042435372432a10f451f"
     },
     {
       "path": "marketplace/skills/86cea925e282/evals/forecast_model.md",
@@ -3984,8 +3984,8 @@
     },
     {
       "path": "marketplace/skills/86cea925e282/references/skill-spec.yaml",
-      "bytes": 1770,
-      "sha256": "b255e0217672825382d974e12b60cb573104ef88fd1c9ae1378d6a06003d09bd"
+      "bytes": 1673,
+      "sha256": "1ead8bf3a7a808a8ade5b3eca590b3d6b0cb209ae7d3ab4b9eae112de5a90226"
     },
     {
       "path": "marketplace/skills/86cea925e282/references/validation-contract.md",
@@ -3994,28 +3994,28 @@
     },
     {
       "path": "marketplace/skills/86cea925e282/schemas.json",
-      "bytes": 3917,
-      "sha256": "7a2cfc46d902010d1fb9d12a8172679023dbec191608c117c511a28fefccfb2d"
+      "bytes": 3919,
+      "sha256": "a28205ec16e516a42a0af265e0bc2ed291dfbe809993f9907449207ded4833ad"
     },
     {
       "path": "marketplace/skills/86cea925e282/SKILL.md",
       "bytes": 4397,
-      "sha256": "09b4b93c72781740278b70754684aa9a05eaa9215d3cd6140e44e9c8264cf6c3"
+      "sha256": "cdf5f864ef0c4e997e9ded76257f95b4822612c9929fa162e7eebefa343ee4ca"
     },
     {
       "path": "marketplace/skills/8ac59333bc31/_meta.json",
-      "bytes": 347,
-      "sha256": "e5f6920a0144877d384039c827d02ad56580053a936cddd7598c6c6ffe0335d0"
+      "bytes": 70,
+      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
     },
     {
       "path": "marketplace/skills/8ac59333bc31/agents/openai.yaml",
-      "bytes": 873,
-      "sha256": "38737814f7d8cb8ed9c58e4d66d5966100a3fe09e7b86d2f3d9bcd77e75a34a0"
+      "bytes": 867,
+      "sha256": "5edabd700b00be64aea6af44653856ab2373d36f333e0302af01ba34f93b9d9c"
     },
     {
       "path": "marketplace/skills/8ac59333bc31/evals/evals.json",
-      "bytes": 12725,
-      "sha256": "1e4f5c50ca31908501a53f806f822769805640e65018d63b174bb85fe3b1ad44"
+      "bytes": 12719,
+      "sha256": "c39f1fc0ec9fe3b39887ac9717b16853d187234c66b3a32743de712d5520c441"
     },
     {
       "path": "marketplace/skills/8ac59333bc31/evals/forecast_model.md",
@@ -4074,8 +4074,8 @@
     },
     {
       "path": "marketplace/skills/8ac59333bc31/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/8ac59333bc31/references/validation-contract.md",
@@ -4084,28 +4084,28 @@
     },
     {
       "path": "marketplace/skills/8ac59333bc31/schemas.json",
-      "bytes": 2818,
-      "sha256": "c9d575ad265fee496130f2b9d904506955497640e2bd16b7a68883d5c070b2f2"
+      "bytes": 2820,
+      "sha256": "e03f12a9302fb99abc525b47740bb150410b4584c3e7a0fccc2f7b75901ff14e"
     },
     {
       "path": "marketplace/skills/8ac59333bc31/SKILL.md",
       "bytes": 2169,
-      "sha256": "b9bfbb4c9e9e8b9ef56a2a9fe5d1b3c7768db055f1fbc0730ddc32cbdc129cdc"
+      "sha256": "1962be57a8d8a8ef751eaa237a7e8ab8ff0def202d25ec079a1aa0b765e591de"
     },
     {
       "path": "marketplace/skills/8d2f4b7c9a10/_meta.json",
-      "bytes": 347,
-      "sha256": "e5f6920a0144877d384039c827d02ad56580053a936cddd7598c6c6ffe0335d0"
+      "bytes": 70,
+      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
     },
     {
       "path": "marketplace/skills/8d2f4b7c9a10/agents/openai.yaml",
-      "bytes": 946,
-      "sha256": "6b2832dab22db41f99186fa177cec3c4d1e160b20fde48bacb50905a605c8ef8"
+      "bytes": 940,
+      "sha256": "fe7d639836a1252d36206902befca3fe4286bff3c5a39db910b855b65675672c"
     },
     {
       "path": "marketplace/skills/8d2f4b7c9a10/evals/evals.json",
-      "bytes": 14519,
-      "sha256": "94557467bd8331b9d75d523c5eb4644a301cd4f0f9f11f0818e68f5d4cb9acf7"
+      "bytes": 14513,
+      "sha256": "f10d638a9aaae9d17b9f518e87232c27a4e553af24eaa7851cfb1262baa65e43"
     },
     {
       "path": "marketplace/skills/8d2f4b7c9a10/evals/forecast_model.md",
@@ -4164,8 +4164,8 @@
     },
     {
       "path": "marketplace/skills/8d2f4b7c9a10/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/8d2f4b7c9a10/references/validation-contract.md",
@@ -4174,28 +4174,28 @@
     },
     {
       "path": "marketplace/skills/8d2f4b7c9a10/schemas.json",
-      "bytes": 2808,
-      "sha256": "54dce52272ac2af6b69b8669b597dfca37ef1a8a417fdd937abd3c1990320cdb"
+      "bytes": 2810,
+      "sha256": "3ced0b5a62a034167e9ab9d3601d43a7a403c57b13571cef978ade83209139a7"
     },
     {
       "path": "marketplace/skills/8d2f4b7c9a10/SKILL.md",
       "bytes": 9520,
-      "sha256": "d6b3636f58e9beef874744d5d435fae1cb961e5d09cff6f2805fa220e6717523"
+      "sha256": "832a4f0d3615ea7f4c0cd4995cc5a9bec9809fa1bf1267fdc8afef0f68fa733d"
     },
     {
       "path": "marketplace/skills/8f090a1b0c27/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/8f090a1b0c27/agents/openai.yaml",
-      "bytes": 928,
-      "sha256": "86e4ffa2c80322c6ebdfa8f4cd5d75e4863c6d2bb06a12dbbc0deacc7100ecd3"
+      "bytes": 922,
+      "sha256": "a29ae49c699ec2989ad8ba190be1db9cf218dc3f5424f39e89cd21cebaa5cf1e"
     },
     {
       "path": "marketplace/skills/8f090a1b0c27/evals/evals.json",
-      "bytes": 15013,
-      "sha256": "ece71bb441c2968d70369e7395aaa7e881c2707d9944dfae2a8efd20e6edc0ae"
+      "bytes": 15007,
+      "sha256": "2e5d220eb7cf2ee5b30b3d863db282dca645ab37d7627174fe99beec4ec02c4a"
     },
     {
       "path": "marketplace/skills/8f090a1b0c27/evals/forecast_model.md",
@@ -4259,8 +4259,8 @@
     },
     {
       "path": "marketplace/skills/8f090a1b0c27/references/skill-spec.yaml",
-      "bytes": 1770,
-      "sha256": "48bcb025ba99fd74eab3bc77fc3797e11c6571b6f4921da496ef348dfd5654d0"
+      "bytes": 1673,
+      "sha256": "1d7f26852c26087a221f2c9bed83ea878285401f5cc109831f172f04efb746db"
     },
     {
       "path": "marketplace/skills/8f090a1b0c27/references/validation-contract.md",
@@ -4269,28 +4269,28 @@
     },
     {
       "path": "marketplace/skills/8f090a1b0c27/schemas.json",
-      "bytes": 3920,
-      "sha256": "a19588db2d4c0bf921988200c942b2a61c281f730188e118cd9e7a97351b1c66"
+      "bytes": 3922,
+      "sha256": "9dd51b234dbb0574349735a4751246cf4507749385ab7bce825a4c97d7efe726"
     },
     {
       "path": "marketplace/skills/8f090a1b0c27/SKILL.md",
       "bytes": 4373,
-      "sha256": "0433496e2664c3fbb4d5a137df68462acdd1c30ceef180a5771aa30517b24bba"
+      "sha256": "8195304253e94be3e65e865cc3c0db0b247fa0d837b728a0d54117dfd0c9f4cc"
     },
     {
       "path": "marketplace/skills/90da4ae1fac4/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/90da4ae1fac4/agents/openai.yaml",
-      "bytes": 941,
-      "sha256": "6148c2e376faf46156d006b752173a841dc70452c2c6733a7637c965d40fdf99"
+      "bytes": 935,
+      "sha256": "9f6a0a4d714aa7c945043feea54883e770d4ab8e1775a57c8ae279b025ce5084"
     },
     {
       "path": "marketplace/skills/90da4ae1fac4/evals/evals.json",
-      "bytes": 15077,
-      "sha256": "fcc0ac792230c3422835b52e4dd17a611df11b9667f5ed9816692e7681a62f6d"
+      "bytes": 15071,
+      "sha256": "8682ed78b849be07df038b091ea0c42881b3adf066582453eddeff3d5f07b819"
     },
     {
       "path": "marketplace/skills/90da4ae1fac4/evals/forecast_model.md",
@@ -4354,8 +4354,8 @@
     },
     {
       "path": "marketplace/skills/90da4ae1fac4/references/skill-spec.yaml",
-      "bytes": 1771,
-      "sha256": "8a6721ca09c7f71c26ccb8457b36d91f058a28e4f81c454e4e2b00da203cbfcb"
+      "bytes": 1674,
+      "sha256": "8208468501e5b887899cb657314e57a8ce350290953b2cf4bc8e9dec26ba16a9"
     },
     {
       "path": "marketplace/skills/90da4ae1fac4/references/validation-contract.md",
@@ -4364,18 +4364,18 @@
     },
     {
       "path": "marketplace/skills/90da4ae1fac4/schemas.json",
-      "bytes": 3921,
-      "sha256": "6f1550b6b7ac341385a7d312f700061aa5bc43a87735f4760e024d471f729ede"
+      "bytes": 3923,
+      "sha256": "c7eaa2e1ec9fa99d763940002c7ab208aeda7638ba3df776631647c57c60872f"
     },
     {
       "path": "marketplace/skills/90da4ae1fac4/SKILL.md",
       "bytes": 4363,
-      "sha256": "3b42d52dfe589ffec563221cbff786a8b6e5db5be95c9887f8e7cfa1fffb1a89"
+      "sha256": "71d1afd91aec0adce9705c4a24e4780d61cc2f032d7f0d61415bdff765cbf079"
     },
     {
       "path": "marketplace/skills/910301a3f5be/_meta.json",
-      "bytes": 347,
-      "sha256": "3888b8ecc107a400622026ca39f198e3b73403d401144b61a21969a87dc2419e"
+      "bytes": 70,
+      "sha256": "3525530a41cbc0a51dc4ea9c579496565fc5481f6eaeea6325170ac7c5e4277e"
     },
     {
       "path": "marketplace/skills/910301a3f5be/agents/openai.yaml",
@@ -4419,8 +4419,8 @@
     },
     {
       "path": "marketplace/skills/910301a3f5be/manifest.yaml",
-      "bytes": 1024,
-      "sha256": "c971a86a7507e37b24c5fffdfac82eeaaaa44a51aed750b009da27f482015fb0"
+      "bytes": 1018,
+      "sha256": "664bb109e5ee8b6bea4244d335ee2a573cdd4f0baa504a4e3fc805f435c12640"
     },
     {
       "path": "marketplace/skills/910301a3f5be/ontology/model.yaml",
@@ -4465,17 +4465,17 @@
     {
       "path": "marketplace/skills/910301a3f5be/references/skill-spec.yaml",
       "bytes": 3200,
-      "sha256": "5bfe2f938690fa851a7a7f2cfc61e2d47e1c20ea7cee22bc4a601b8224895089"
+      "sha256": "eed8bd9eaaa7616589fab48a5f4480fbc58815228d4f0376ba15fe573cf09d35"
     },
     {
       "path": "marketplace/skills/910301a3f5be/references/validation-contract.md",
-      "bytes": 584,
-      "sha256": "8104fdc35674726b8e868db4b82fc783760a4ec8775b781e98cdb656da866b7c"
+      "bytes": 577,
+      "sha256": "769f4be29960c7eacc2c8e439b74805efbad1a26412e0328882d8a1098eb6512"
     },
     {
       "path": "marketplace/skills/910301a3f5be/schemas.json",
-      "bytes": 2790,
-      "sha256": "e94e003604071731eb7954ed44b6071df0547fc9c5bd1bccb9a8f67a7852a15e"
+      "bytes": 2792,
+      "sha256": "2cee2755c3c0893b8ac247866771add08276ea5a670a5aaf20bc25cc18bb12d1"
     },
     {
       "path": "marketplace/skills/910301a3f5be/schemas/input.schema.json",
@@ -4494,23 +4494,23 @@
     },
     {
       "path": "marketplace/skills/910301a3f5be/SKILL.md",
-      "bytes": 4699,
-      "sha256": "c17e32e62de98bc72bd3e79e2a260948480cfc922a6a5c3ea4a79bb0347eb4e0"
+      "bytes": 4698,
+      "sha256": "b688dd9cf57ef0a1c99abbe05d1923ca5efa9bf8c170b9b3f7cfa46ab706c9dc"
     },
     {
       "path": "marketplace/skills/93d7b28fb6b4/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/93d7b28fb6b4/agents/openai.yaml",
-      "bytes": 932,
-      "sha256": "1bf83b99deabe86ab6ae428c1bda1209b3a4f4385a5b1d22e6599d817d7d942f"
+      "bytes": 926,
+      "sha256": "f182382c564d870d057be86af98d496b1c321da0e41a6a1d14cbf03fa581ae24"
     },
     {
       "path": "marketplace/skills/93d7b28fb6b4/evals/evals.json",
-      "bytes": 15246,
-      "sha256": "20280fd1944fc9099d17a0c3859e529ebd23849c669f4ea87e72eb2b5f766085"
+      "bytes": 15240,
+      "sha256": "5647b072862bb6edb58ac0050e4164b318da33cbadb4b7e1c53c8633aafe254f"
     },
     {
       "path": "marketplace/skills/93d7b28fb6b4/evals/forecast_model.md",
@@ -4574,8 +4574,8 @@
     },
     {
       "path": "marketplace/skills/93d7b28fb6b4/references/skill-spec.yaml",
-      "bytes": 1779,
-      "sha256": "f58033f16c87cf031d22fb52c3539476c450b198f05963f807b93368123f008b"
+      "bytes": 1682,
+      "sha256": "3791a826e331b9c50b773e2798fd558a6d1ee252c112a53cdf1502bbb400a498"
     },
     {
       "path": "marketplace/skills/93d7b28fb6b4/references/validation-contract.md",
@@ -4584,28 +4584,28 @@
     },
     {
       "path": "marketplace/skills/93d7b28fb6b4/schemas.json",
-      "bytes": 3938,
-      "sha256": "07575919332d63575570f1d67a4c3a9864b4ac1679a7d1e29f72962992e79646"
+      "bytes": 3940,
+      "sha256": "e57534c9651eba798dac9f39a811fdc253bd4844a876dc288a0ad605eac6c648"
     },
     {
       "path": "marketplace/skills/93d7b28fb6b4/SKILL.md",
       "bytes": 4458,
-      "sha256": "bd2c2f71172441dc9234328e92ecfe5aa4970b7575578c18a7958c849d6034b6"
+      "sha256": "9bf032ff15de0ff2059eb87e51b45470364e942e3366269078ef38ad5dc3e95d"
     },
     {
       "path": "marketplace/skills/98e6c144f229/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/98e6c144f229/agents/openai.yaml",
-      "bytes": 929,
-      "sha256": "98cbf52d4035eeae48846e1a998320044000a1275b070c194efa6d227af6f988"
+      "bytes": 923,
+      "sha256": "9bf86e62e19c9d47ce6d8165e876f770f486a285dac28b61e254fb4292e50e3c"
     },
     {
       "path": "marketplace/skills/98e6c144f229/evals/evals.json",
-      "bytes": 14950,
-      "sha256": "a242325f9beb5d5cb7f01339dc87f067f3c5280da40d5274deec7eac11a4b9af"
+      "bytes": 14944,
+      "sha256": "730cc52ddf5bf126114a68d3d650b9afd0a32a5a827d69147dfd104ada5ee213"
     },
     {
       "path": "marketplace/skills/98e6c144f229/evals/forecast_model.md",
@@ -4669,8 +4669,8 @@
     },
     {
       "path": "marketplace/skills/98e6c144f229/references/skill-spec.yaml",
-      "bytes": 1772,
-      "sha256": "9f417c55a8152ef767b08e69d6fc5356ae6cd212c5106479600be342d05c402e"
+      "bytes": 1675,
+      "sha256": "af61882bbcd35a5beaa8aef7b742b34de1f814fb56a306fa88ca8b79ebfbe7f4"
     },
     {
       "path": "marketplace/skills/98e6c144f229/references/validation-contract.md",
@@ -4679,28 +4679,28 @@
     },
     {
       "path": "marketplace/skills/98e6c144f229/schemas.json",
-      "bytes": 3922,
-      "sha256": "fbd8ed57db85052334f59e004c2207b3b6fa7ee693f17a7845ee7dec30c45612"
+      "bytes": 3924,
+      "sha256": "6795efd6295d87e6d13d49f5ed2217da7cc50e401eebca1e6302bd0800018fc8"
     },
     {
       "path": "marketplace/skills/98e6c144f229/SKILL.md",
       "bytes": 4353,
-      "sha256": "54eff25373e659ec7b1adb95df66405767c5ace4653f90950c75020d7ec315a9"
+      "sha256": "4114a6765ff5e87df9903f07bea620f98386d30e4c143eadfc7a44c8273b65ed"
     },
     {
       "path": "marketplace/skills/991ac94fc4e1/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/991ac94fc4e1/agents/openai.yaml",
-      "bytes": 923,
-      "sha256": "c24595c7349a8dd2f5ce6def87a466f98807ce164c13f6ee056471b22ca0c930"
+      "bytes": 917,
+      "sha256": "f8a1f15e7f4d4154ce0a9789cceec0c7d6d577d921364d7bbe5a5c40e7b7eeb1"
     },
     {
       "path": "marketplace/skills/991ac94fc4e1/evals/evals.json",
-      "bytes": 14369,
-      "sha256": "07a186be6044ae5565e49496f3ae85d34cc9bcf6c9be7b23f508adc3b02aa116"
+      "bytes": 14363,
+      "sha256": "85e63110e4a4aef759f5b5b6bc6e2ef80aeb06addfa749417931c1719123add2"
     },
     {
       "path": "marketplace/skills/991ac94fc4e1/evals/forecast_model.md",
@@ -4764,8 +4764,8 @@
     },
     {
       "path": "marketplace/skills/991ac94fc4e1/references/skill-spec.yaml",
-      "bytes": 1755,
-      "sha256": "e0ee540063b3f5887be2314ca9eb665bd66e19934dd756920c0156c819f6657d"
+      "bytes": 1658,
+      "sha256": "3d0dff99335865c4446642d1c988dfdb5a53004aafd633c50d311f05cafe61df"
     },
     {
       "path": "marketplace/skills/991ac94fc4e1/references/validation-contract.md",
@@ -4774,28 +4774,28 @@
     },
     {
       "path": "marketplace/skills/991ac94fc4e1/schemas.json",
-      "bytes": 3914,
-      "sha256": "d933faa0f0595d4ed3c6d2bcbe9fee34d548a087aaf73c20122129f93dc9ead1"
+      "bytes": 3916,
+      "sha256": "eaf7de6d8f74f19606a76e4db7135d058c04108075d70ea8ac19917ec7ab01ba"
     },
     {
       "path": "marketplace/skills/991ac94fc4e1/SKILL.md",
       "bytes": 4368,
-      "sha256": "bee1ec4218b267ce08dd25b291805a5e8ac57291f897be9ddb5358c84e98eadc"
+      "sha256": "0582589f4591e880c7244a1f295340b4e1e3f88d7e2d0053a635a50ec5b9733b"
     },
     {
       "path": "marketplace/skills/9a2bc04da822/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/9a2bc04da822/agents/openai.yaml",
-      "bytes": 926,
-      "sha256": "fd32cb298c52e3df8ad08e038e1fda47a173d947795f21b0bb4aaff8a294509e"
+      "bytes": 920,
+      "sha256": "50a0634bb7753ec227b3529381ae90b828bc537b361f3f57303380a47950eb48"
     },
     {
       "path": "marketplace/skills/9a2bc04da822/evals/evals.json",
-      "bytes": 15083,
-      "sha256": "dc2eb7f6f1638b31a23b4aeabaf59f3f2694917e3b89db47f427eb0e111acad7"
+      "bytes": 15077,
+      "sha256": "feff20375e2e427156cfa5d94eed3f03cf263751ef72ce59fa51aeb10d5c5984"
     },
     {
       "path": "marketplace/skills/9a2bc04da822/evals/forecast_model.md",
@@ -4859,8 +4859,8 @@
     },
     {
       "path": "marketplace/skills/9a2bc04da822/references/skill-spec.yaml",
-      "bytes": 1767,
-      "sha256": "7602accdba9a60c9c1c5dad6bafbbd2a49c6d029cb3ce0cadbd093bc8e5b259c"
+      "bytes": 1670,
+      "sha256": "8fd476495db17196c723157a02125096032d6779604fcfb89041fbed83665403"
     },
     {
       "path": "marketplace/skills/9a2bc04da822/references/validation-contract.md",
@@ -4869,28 +4869,28 @@
     },
     {
       "path": "marketplace/skills/9a2bc04da822/schemas.json",
-      "bytes": 3911,
-      "sha256": "51ab2f816dbbe22dd60a426cee4d46fff3006b71ec6284adcd374865541389f7"
+      "bytes": 3913,
+      "sha256": "82807f874275d6e0bfde58a2cd68ae9f64d303bf5544074b66306893374da26c"
     },
     {
       "path": "marketplace/skills/9a2bc04da822/SKILL.md",
       "bytes": 4497,
-      "sha256": "aaec360670031bc83f249c693e725cca60b020e4c434b016b4610b4cdfa4aad0"
+      "sha256": "b09ef5f9ef575579e8ef54df3c96ebe0a84d2f95a625acf593cd4865c185a37a"
     },
     {
       "path": "marketplace/skills/9be6fda271a5/_meta.json",
-      "bytes": 347,
-      "sha256": "e5f6920a0144877d384039c827d02ad56580053a936cddd7598c6c6ffe0335d0"
+      "bytes": 70,
+      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
     },
     {
       "path": "marketplace/skills/9be6fda271a5/agents/openai.yaml",
-      "bytes": 967,
-      "sha256": "935fe07c876fd5279087c66b636ba5076baf7aa64a4dfe7675b838dd3a68c53f"
+      "bytes": 961,
+      "sha256": "de69e9ab010aaa4be487427632d357c1f818f52dd479c4150e6993bca41c4999"
     },
     {
       "path": "marketplace/skills/9be6fda271a5/evals/evals.json",
-      "bytes": 15020,
-      "sha256": "8819d5ff52a58c99f76f82755945759db3e52a8567b6a40ff0f263c74dd488f4"
+      "bytes": 15014,
+      "sha256": "a5759e0a425177f622e1f36544998bc773ccf31dd8a6eb214d0300368338b118"
     },
     {
       "path": "marketplace/skills/9be6fda271a5/evals/forecast_model.md",
@@ -4979,8 +4979,8 @@
     },
     {
       "path": "marketplace/skills/9be6fda271a5/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/9be6fda271a5/references/validation-contract.md",
@@ -4989,28 +4989,28 @@
     },
     {
       "path": "marketplace/skills/9be6fda271a5/schemas.json",
-      "bytes": 2822,
-      "sha256": "32876fb17ce09fe9b36818447497d0fb5780f798b86d58c492e8c78b24595c25"
+      "bytes": 2824,
+      "sha256": "8f8108e5474dad0e5e770e1b063c923e85b9e9384341cf07c2fb953abd37cc8f"
     },
     {
       "path": "marketplace/skills/9be6fda271a5/SKILL.md",
       "bytes": 9778,
-      "sha256": "228eedfdc3d5bae7900eefc01f3fc4e527eba6e28e5eae5de2ad3f5602bde640"
+      "sha256": "25c456ae2546ded7adfe3fc6e7420bae7821512804ea33e5594dc11fb4123cae"
     },
     {
       "path": "marketplace/skills/a31023dd51a0/_meta.json",
-      "bytes": 347,
-      "sha256": "3e3a6f4706a432fab206ec97b225bee2b2156f318fbfe8d1779a263e24c8ee89"
+      "bytes": 70,
+      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
     },
     {
       "path": "marketplace/skills/a31023dd51a0/agents/openai.yaml",
-      "bytes": 876,
-      "sha256": "a5477360e4844ae41365efe68dfc5323b333cfe66671828bd9f268e19c717cd9"
+      "bytes": 870,
+      "sha256": "4aef4750755cf551ca3d381ed9aeb354a850f6efc416ff342505e7c70b6b816d"
     },
     {
       "path": "marketplace/skills/a31023dd51a0/evals/evals.json",
-      "bytes": 13332,
-      "sha256": "c4689881ad3d8a88a319e6bf8d8c8e052bd888d7d3065bd5b64b61dfc0f8d9f1"
+      "bytes": 13326,
+      "sha256": "ab105c74f5181fe373132296b07283213315cdebb94c18628655e0c5e6b13337"
     },
     {
       "path": "marketplace/skills/a31023dd51a0/evals/forecast_model.md",
@@ -5069,8 +5069,8 @@
     },
     {
       "path": "marketplace/skills/a31023dd51a0/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/a31023dd51a0/references/validation-contract.md",
@@ -5079,28 +5079,28 @@
     },
     {
       "path": "marketplace/skills/a31023dd51a0/schemas.json",
-      "bytes": 2820,
-      "sha256": "85b239d253e48c071e2af54584684a4b073fedb82ba990416e0c835eeaba3e9b"
+      "bytes": 2822,
+      "sha256": "980210530629db22d3419816d6bda379fb0862973886f7e41698ec2b10435357"
     },
     {
       "path": "marketplace/skills/a31023dd51a0/SKILL.md",
       "bytes": 1887,
-      "sha256": "b7aeba62f0de07ef43b0d5aad6fb07dbd5a6ee72b70c77f65b5de472dcb41af2"
+      "sha256": "8d8a35164fbaf13922a289e2200db082bcdc4b6953cc1c2963c6bdb67a848c99"
     },
     {
       "path": "marketplace/skills/a5c864d6b267/_meta.json",
-      "bytes": 347,
-      "sha256": "e5f6920a0144877d384039c827d02ad56580053a936cddd7598c6c6ffe0335d0"
+      "bytes": 70,
+      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
     },
     {
       "path": "marketplace/skills/a5c864d6b267/agents/openai.yaml",
-      "bytes": 894,
-      "sha256": "1efdd495976f11f06a82cabe410801cab4d9dd6ede3326ea0953b72f8b69f8a1"
+      "bytes": 888,
+      "sha256": "af40e3c0881623dc1276501ecf80fd29e402c693c5091052185dff9925a8ce86"
     },
     {
       "path": "marketplace/skills/a5c864d6b267/evals/evals.json",
-      "bytes": 13537,
-      "sha256": "426879ffa243c72017c7066dd6d8fef50934fda6f47e10bf2059ce95c67aaf58"
+      "bytes": 13531,
+      "sha256": "4c83f0645512caa5b274f91370db8d83f159aaa87bb4cde983c910d39cf0076d"
     },
     {
       "path": "marketplace/skills/a5c864d6b267/evals/forecast_model.md",
@@ -5159,8 +5159,8 @@
     },
     {
       "path": "marketplace/skills/a5c864d6b267/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/a5c864d6b267/references/validation-contract.md",
@@ -5169,18 +5169,18 @@
     },
     {
       "path": "marketplace/skills/a5c864d6b267/schemas.json",
-      "bytes": 2834,
-      "sha256": "8052f270c58987ed426268a9c0e94a32859ac74b6c9fc1984ff76d5af2f06c17"
+      "bytes": 2836,
+      "sha256": "3ec2aa00700729ed9c4f015664274506cfee8eb5a9047590a224f6a7d6b1533e"
     },
     {
       "path": "marketplace/skills/a5c864d6b267/SKILL.md",
       "bytes": 1830,
-      "sha256": "afdd9bb42c71be1c90e781ce679b5a9373200dbf8b40083a5d76a37d53ce93e0"
+      "sha256": "b7fa24ced7fb9297ed3f6d7c3e70a4a727e3cfae878e43fc7772fffaecc620fa"
     },
     {
       "path": "marketplace/skills/a79d235e416b/_meta.json",
-      "bytes": 347,
-      "sha256": "3888b8ecc107a400622026ca39f198e3b73403d401144b61a21969a87dc2419e"
+      "bytes": 70,
+      "sha256": "3525530a41cbc0a51dc4ea9c579496565fc5481f6eaeea6325170ac7c5e4277e"
     },
     {
       "path": "marketplace/skills/a79d235e416b/agents/openai.yaml",
@@ -5224,8 +5224,8 @@
     },
     {
       "path": "marketplace/skills/a79d235e416b/manifest.yaml",
-      "bytes": 1026,
-      "sha256": "4f1d3623e412857fb6046a91b5ca6f4b7fcb725e192e33de1e99a230da275135"
+      "bytes": 1020,
+      "sha256": "872467d42fa6d514fc283f31489e6ea41e06d6dd638f2b3ee6cfbe62bad451e3"
     },
     {
       "path": "marketplace/skills/a79d235e416b/ontology/model.yaml",
@@ -5270,17 +5270,17 @@
     {
       "path": "marketplace/skills/a79d235e416b/references/skill-spec.yaml",
       "bytes": 3157,
-      "sha256": "4bf170f7f932b4fc6ffbfdc6055302589c4045102e52317903739f1858e611a3"
+      "sha256": "87e45a02b684ffb0fed03307a8ab7ad99227a0afa5e519fcb31b66621390a2c9"
     },
     {
       "path": "marketplace/skills/a79d235e416b/references/validation-contract.md",
-      "bytes": 574,
-      "sha256": "da558abbbaca6993976bc7f4bf3ff9b32e5f6c7bad89e9ef719bc68beb3e30eb"
+      "bytes": 567,
+      "sha256": "4e27bf0579de8a2b4f00f9fbc88f91d98814fd6ee458723e0820259fe6e2c539"
     },
     {
       "path": "marketplace/skills/a79d235e416b/schemas.json",
-      "bytes": 2790,
-      "sha256": "e94e003604071731eb7954ed44b6071df0547fc9c5bd1bccb9a8f67a7852a15e"
+      "bytes": 2792,
+      "sha256": "2cee2755c3c0893b8ac247866771add08276ea5a670a5aaf20bc25cc18bb12d1"
     },
     {
       "path": "marketplace/skills/a79d235e416b/schemas/input.schema.json",
@@ -5299,23 +5299,23 @@
     },
     {
       "path": "marketplace/skills/a79d235e416b/SKILL.md",
-      "bytes": 4665,
-      "sha256": "640fcf06969eec952263780608791705c68671a57dc0eda8c55f8d03fae58b81"
+      "bytes": 4664,
+      "sha256": "7b2eae793459805013a541b915fc738e27109a349ad2b6531a770235ab75c5a1"
     },
     {
       "path": "marketplace/skills/a827416958f6/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/a827416958f6/agents/openai.yaml",
-      "bytes": 816,
-      "sha256": "4c5f1141d2fd14e4d4492d0266e3ecd4a13bce1b73f7fc7751f0e1008aeb5876"
+      "bytes": 810,
+      "sha256": "7076efd973241c8d0da7b049cee9673b2c80b4a50ba4b7d1c9d9a9e6660f1176"
     },
     {
       "path": "marketplace/skills/a827416958f6/evals/evals.json",
-      "bytes": 13884,
-      "sha256": "660b7d90d79647204023dd5faec1fdd97ec74ec2fe9754a6205ffae1476b3418"
+      "bytes": 13878,
+      "sha256": "796383bb2db74c0aaa55e7a6230ee989e58e708069deef46eb86414be19f7343"
     },
     {
       "path": "marketplace/skills/a827416958f6/evals/forecast_model.md",
@@ -5379,8 +5379,8 @@
     },
     {
       "path": "marketplace/skills/a827416958f6/references/skill-spec.yaml",
-      "bytes": 1904,
-      "sha256": "2bfdc671cd852139691a6c588721a7566b118682d33b63c7ea0bbe5dbbc28e80"
+      "bytes": 1807,
+      "sha256": "43f95e264f497fd0f09ca1c0a614eb8f01be1186c45aa25925f012888b57d9b7"
     },
     {
       "path": "marketplace/skills/a827416958f6/references/validation-contract.md",
@@ -5389,28 +5389,28 @@
     },
     {
       "path": "marketplace/skills/a827416958f6/schemas.json",
-      "bytes": 3906,
-      "sha256": "675cb1e2f0e3bb984a5461f3feba9c77ae154bef88c336e75bdf71d35432acf1"
+      "bytes": 3908,
+      "sha256": "55ae6090887cf28d26529096cc403092293f53e29400d5547807a16447a236e7"
     },
     {
       "path": "marketplace/skills/a827416958f6/SKILL.md",
       "bytes": 4957,
-      "sha256": "5a7351802b932e0141d92fecfe156e633940cc04df18453515d641562e6ff325"
+      "sha256": "0c98bc9480324fd499e4ce1a8f2d6c922b180ca0da7cd6e195b5128431985254"
     },
     {
       "path": "marketplace/skills/a988c001dc65/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/a988c001dc65/agents/openai.yaml",
-      "bytes": 922,
-      "sha256": "f87f9cc99376105cee3f79523cef5981df68c334d82068ed30f230261e24cfa4"
+      "bytes": 916,
+      "sha256": "fbda0cf3faf56e7cf6ebd26898b40240a1b4bc87b7ff7efbc5dd89d8129a4c65"
     },
     {
       "path": "marketplace/skills/a988c001dc65/evals/evals.json",
-      "bytes": 14636,
-      "sha256": "356084589b0f5e6d72b9c0ca21fe4c651a8784fe4f5bfb5ec48591ccbc45e88b"
+      "bytes": 14630,
+      "sha256": "5c0cfade74d195d594cb8f6b1b7a09ff013a12a7e170540f1ef9791225cac6ab"
     },
     {
       "path": "marketplace/skills/a988c001dc65/evals/forecast_model.md",
@@ -5474,8 +5474,8 @@
     },
     {
       "path": "marketplace/skills/a988c001dc65/references/skill-spec.yaml",
-      "bytes": 1759,
-      "sha256": "08476a64a61a2c389732537da2197234c98b91ce0f63a4e1b2118c98d0430c3b"
+      "bytes": 1662,
+      "sha256": "e3b3b82fd056e829475d7a7d3c1083b4ff01fea06a1a0f2db065f899b8e04745"
     },
     {
       "path": "marketplace/skills/a988c001dc65/references/validation-contract.md",
@@ -5484,28 +5484,28 @@
     },
     {
       "path": "marketplace/skills/a988c001dc65/schemas.json",
-      "bytes": 3918,
-      "sha256": "6da7745db3d464e42b3aa456462b36a40046d3ff963d885744523a1df12ac7b1"
+      "bytes": 3920,
+      "sha256": "4f2d19f79b7351a0f137c9f19f5949f5b82133f3e81bf443ca4c487347b62390"
     },
     {
       "path": "marketplace/skills/a988c001dc65/SKILL.md",
       "bytes": 4402,
-      "sha256": "087a4de3cb2c175512b6d45eb082ed4715ef1716101262f1fc080c38429515fd"
+      "sha256": "ab4783c6f26eed0d9cfdf8334f90839441f591bcddd60e2229b95108e5eb44fc"
     },
     {
       "path": "marketplace/skills/aef5bf07573f/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/aef5bf07573f/agents/openai.yaml",
-      "bytes": 926,
-      "sha256": "9c5894e8e5eb0e62f54ebf5bc8d507c33a1c2820d7f95bf7a483c3d21532321f"
+      "bytes": 920,
+      "sha256": "30b876055259b43804f64907a183dfb243d0648f0ab87e18babc5c44f9f63ca1"
     },
     {
       "path": "marketplace/skills/aef5bf07573f/evals/evals.json",
-      "bytes": 14585,
-      "sha256": "ac86e4b4cbce099200c631892eb268c52c8f9978774d8b9a412ba1696c5ab54c"
+      "bytes": 14579,
+      "sha256": "12925fd9e2f6fe6601345c708fb85cfb5e591e1da77be4006317f53ab4323d1e"
     },
     {
       "path": "marketplace/skills/aef5bf07573f/evals/forecast_model.md",
@@ -5569,8 +5569,8 @@
     },
     {
       "path": "marketplace/skills/aef5bf07573f/references/skill-spec.yaml",
-      "bytes": 1763,
-      "sha256": "a2b19d38c35bebf20022fb52cf03c4153bc89f9001ab20fa6ba277ba780c3a02"
+      "bytes": 1666,
+      "sha256": "9e7804d7de2ec81cdae25acd8fbbdf9f457db3940c321a4daaf520f5cbe167cb"
     },
     {
       "path": "marketplace/skills/aef5bf07573f/references/validation-contract.md",
@@ -5579,28 +5579,28 @@
     },
     {
       "path": "marketplace/skills/aef5bf07573f/schemas.json",
-      "bytes": 3899,
-      "sha256": "1f9b8761c4b3be840dfdf2489a0c51a88b35df97cd2aeb527288e17ad6435d62"
+      "bytes": 3901,
+      "sha256": "cb6ef0ba1797fb5d334c46910501ea62fd123e9130e18a71fdad3b9ab15956ad"
     },
     {
       "path": "marketplace/skills/aef5bf07573f/SKILL.md",
       "bytes": 4346,
-      "sha256": "3b1d5833a72f0ecb138d72a51989fc4955fee7c50c82667014af742b442af814"
+      "sha256": "78357729d7c93ed2e1b5de6924339217cedc46497595262e5eb080440109de25"
     },
     {
       "path": "marketplace/skills/afae324569e2/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/afae324569e2/agents/openai.yaml",
-      "bytes": 838,
-      "sha256": "9fce70b87d5e08d4a28bbdb378d339176a630c4e63cecb7fb76cbf997a699574"
+      "bytes": 832,
+      "sha256": "335a5d6924bb437f420b8d008a2757b1aa21d474caa4c0e6df846fcad9c2437a"
     },
     {
       "path": "marketplace/skills/afae324569e2/evals/evals.json",
-      "bytes": 14486,
-      "sha256": "d516af5032c67980a01d293f5db8c6e71ed9cb08253829fc6d88ea5fe4703197"
+      "bytes": 14480,
+      "sha256": "9055ab3a7770c5aa61c4058094efab0510fd7e646938727a5e314ca198145916"
     },
     {
       "path": "marketplace/skills/afae324569e2/evals/forecast_model.md",
@@ -5664,8 +5664,8 @@
     },
     {
       "path": "marketplace/skills/afae324569e2/references/skill-spec.yaml",
-      "bytes": 1926,
-      "sha256": "72656cb0d7edd7feaf68053a087297fa562a7334690ba3b229008ab787589bcf"
+      "bytes": 1829,
+      "sha256": "e8ffc4977ed61674b55af17bf1ee2189e81fe66719b155684456eee3cb81fffb"
     },
     {
       "path": "marketplace/skills/afae324569e2/references/validation-contract.md",
@@ -5674,28 +5674,28 @@
     },
     {
       "path": "marketplace/skills/afae324569e2/schemas.json",
-      "bytes": 3928,
-      "sha256": "2d1ab26af7eb2d00713017f6fc43f91985d5916a023a2640b598f26977577b50"
+      "bytes": 3930,
+      "sha256": "228783376b66253f33e06cdaab6ee928702aee501db7fa10851c81cd1dcb41e4"
     },
     {
       "path": "marketplace/skills/afae324569e2/SKILL.md",
       "bytes": 5044,
-      "sha256": "3dbea18bd97f31fa79ab9334514de08e96b3fc571625cddbfaeb0bdd43f9739d"
+      "sha256": "54375961c72eda6528fb616a358b66286f6443b56d30478f620b875315511af7"
     },
     {
       "path": "marketplace/skills/bc0be37d6755/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/bc0be37d6755/agents/openai.yaml",
-      "bytes": 846,
-      "sha256": "4db12cdd1ee33a453c2f325cf1bd985b6ba90617687aadacd87cef3af14b6c7f"
+      "bytes": 840,
+      "sha256": "48feffa1721684bb7bcae412a6ec2d4ae13e9a40aca37751fedb79ffd405951a"
     },
     {
       "path": "marketplace/skills/bc0be37d6755/evals/evals.json",
-      "bytes": 14325,
-      "sha256": "a7883d5ea61f7514706bd6c349381cd079a6f580920f8937969917efdfa25450"
+      "bytes": 14319,
+      "sha256": "5848404802e0df2b29bd3831f2a814da6ae1ec602e5047cc4d1508336be7e9b1"
     },
     {
       "path": "marketplace/skills/bc0be37d6755/evals/forecast_model.md",
@@ -5759,8 +5759,8 @@
     },
     {
       "path": "marketplace/skills/bc0be37d6755/references/skill-spec.yaml",
-      "bytes": 1918,
-      "sha256": "6969da2832d1efbeefbc6ba1a0ace26e688f5908faed8a5e4eb072af192d6f49"
+      "bytes": 1821,
+      "sha256": "5f8869b977289f3b9c3896d20c0d05e4ca3c9c955e4c0668deb9d72a53ce14cb"
     },
     {
       "path": "marketplace/skills/bc0be37d6755/references/validation-contract.md",
@@ -5769,28 +5769,28 @@
     },
     {
       "path": "marketplace/skills/bc0be37d6755/schemas.json",
-      "bytes": 3920,
-      "sha256": "63d44c08348cd73f65da32b8aca7ebce893048a9e7868105fe4f96633b74cbdd"
+      "bytes": 3922,
+      "sha256": "0c24ef3735169f176282b27cd521822e2092bacd6e4dbcdc25e4485de5c72a51"
     },
     {
       "path": "marketplace/skills/bc0be37d6755/SKILL.md",
       "bytes": 4868,
-      "sha256": "deb0e22277ba253f8cc82bec64ff2d1c54fb606fc81aedc4f067fc42c1a250df"
+      "sha256": "b6ac5a207adf9683ca117edfdd6dfd90d7312141c0ea3c836f423a18c155f674"
     },
     {
       "path": "marketplace/skills/c07c2cab295d/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/c07c2cab295d/agents/openai.yaml",
-      "bytes": 922,
-      "sha256": "d691713037eb724f42cb0d7125e45a89eec7c8535e9e52c9d4189dd14885c7c0"
+      "bytes": 916,
+      "sha256": "36d0cdcc3baae073394d694a3d869de69ccaba96361e87b7daa2f7b659c27e0b"
     },
     {
       "path": "marketplace/skills/c07c2cab295d/evals/evals.json",
-      "bytes": 15578,
-      "sha256": "53076bb18873d5298acb3f65b40a9b5168253b5269a86a9bf86c6407cbbd6f2c"
+      "bytes": 15572,
+      "sha256": "36593fa83451e48acbed46c2ac4934f87154e48c873e8f53efaa0fe9ccfcf757"
     },
     {
       "path": "marketplace/skills/c07c2cab295d/evals/forecast_model.md",
@@ -5854,8 +5854,8 @@
     },
     {
       "path": "marketplace/skills/c07c2cab295d/references/skill-spec.yaml",
-      "bytes": 1782,
-      "sha256": "602daf96427fb449fac6318dad8f4aa6e913aa7b9e1d525517afebe7dc6018a0"
+      "bytes": 1685,
+      "sha256": "0acaa4a4391ed731111768e09848d49fc5b93a9f20975c31995c33edf8821624"
     },
     {
       "path": "marketplace/skills/c07c2cab295d/references/validation-contract.md",
@@ -5864,28 +5864,28 @@
     },
     {
       "path": "marketplace/skills/c07c2cab295d/schemas.json",
-      "bytes": 3949,
-      "sha256": "dba5b7daefc029c39198a5ad007754f6124f73c9711b138b832a61070df77335"
+      "bytes": 3951,
+      "sha256": "cd7c9063c7409caf9a17545e1fca485155f10de09b46dea3c7248ba0c952387c"
     },
     {
       "path": "marketplace/skills/c07c2cab295d/SKILL.md",
       "bytes": 4461,
-      "sha256": "25522d18a8e79dbd3e310f10df6e5d1bf2e77d72cb9996cd35f2dc50af668181"
+      "sha256": "414e585b3f71159d9aff5d9908d22cda8b27bf4a13bac50384e6851f92f3570b"
     },
     {
       "path": "marketplace/skills/c65fa3eae763/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/c65fa3eae763/agents/openai.yaml",
-      "bytes": 954,
-      "sha256": "3045c26660faa74d774d209c77b14fd740067582d8854ae06cd01f126a636188"
+      "bytes": 948,
+      "sha256": "908bc51a10e05bba7d89b298edcdfe6d828e8a7191da38efe79c3c22a2ee34bb"
     },
     {
       "path": "marketplace/skills/c65fa3eae763/evals/evals.json",
-      "bytes": 15238,
-      "sha256": "0d5398ab0598fc89c8e3e96b80ddc731387c8445c0495134ddcf2589c9f6d238"
+      "bytes": 15232,
+      "sha256": "d1087e239f700ca380375764169e6c392b517f95e3999dc37714493d6e3a247c"
     },
     {
       "path": "marketplace/skills/c65fa3eae763/evals/forecast_model.md",
@@ -5949,8 +5949,8 @@
     },
     {
       "path": "marketplace/skills/c65fa3eae763/references/skill-spec.yaml",
-      "bytes": 1775,
-      "sha256": "cf643b7326aab5c5504720dc0dd225ca29650327027c879a7d5a4f8ee80b5f12"
+      "bytes": 1678,
+      "sha256": "4e20a3827f567cb09d198baa07b94c4cc51ea7dad04f70b2aa1a696b6ca931dd"
     },
     {
       "path": "marketplace/skills/c65fa3eae763/references/validation-contract.md",
@@ -5959,18 +5959,18 @@
     },
     {
       "path": "marketplace/skills/c65fa3eae763/schemas.json",
-      "bytes": 3925,
-      "sha256": "e72f4de785ee183a0356cdc9258adf2702035acec718e5d2abb1a9c32dd6c8cc"
+      "bytes": 3927,
+      "sha256": "f79022d3cbca9e55e33c43dde0a2a40914ed838104a30a5bdce4411686f1175f"
     },
     {
       "path": "marketplace/skills/c65fa3eae763/SKILL.md",
       "bytes": 4486,
-      "sha256": "8f30254152966e5d057d2f8d1cbe07e3b0ef6d25d200a5d1c2c11ed7c2a2d815"
+      "sha256": "878681c2f991446f6bc6873ecf8a7753263f8bfe6f072efed1ea0f53d8ca9e83"
     },
     {
       "path": "marketplace/skills/d1e0d20f4b28/_meta.json",
-      "bytes": 347,
-      "sha256": "3888b8ecc107a400622026ca39f198e3b73403d401144b61a21969a87dc2419e"
+      "bytes": 70,
+      "sha256": "3525530a41cbc0a51dc4ea9c579496565fc5481f6eaeea6325170ac7c5e4277e"
     },
     {
       "path": "marketplace/skills/d1e0d20f4b28/agents/openai.yaml",
@@ -6014,8 +6014,8 @@
     },
     {
       "path": "marketplace/skills/d1e0d20f4b28/manifest.yaml",
-      "bytes": 1027,
-      "sha256": "2cb9ac64bcaa1f570689071a5dcb26ca9ec04f8b33db4d554a4a1b2bed85d1a4"
+      "bytes": 1021,
+      "sha256": "bd6da1d61589be7aced26a2ccd31330208b361dd46b2e488120ccc67093a4fdf"
     },
     {
       "path": "marketplace/skills/d1e0d20f4b28/ontology/model.yaml",
@@ -6060,17 +6060,17 @@
     {
       "path": "marketplace/skills/d1e0d20f4b28/references/skill-spec.yaml",
       "bytes": 3258,
-      "sha256": "f669bd657669bdb543ebc011ee1d5fb95de8b19f9c8a7d673fe3032edc93fdfa"
+      "sha256": "18ecabc0184b02449c4979ac83900de94773249139590591b264a50d76f38d54"
     },
     {
       "path": "marketplace/skills/d1e0d20f4b28/references/validation-contract.md",
-      "bytes": 586,
-      "sha256": "68fc16fb9e1838de0e175af35dc8c597dcb0dafa4b2b499ad78a9796dba7e9bb"
+      "bytes": 579,
+      "sha256": "2f3ed7ece13feb1769acf54d22c838762b72d7d3161f387b74521e8562cc1dd3"
     },
     {
       "path": "marketplace/skills/d1e0d20f4b28/schemas.json",
-      "bytes": 2790,
-      "sha256": "e94e003604071731eb7954ed44b6071df0547fc9c5bd1bccb9a8f67a7852a15e"
+      "bytes": 2792,
+      "sha256": "2cee2755c3c0893b8ac247866771add08276ea5a670a5aaf20bc25cc18bb12d1"
     },
     {
       "path": "marketplace/skills/d1e0d20f4b28/schemas/input.schema.json",
@@ -6089,23 +6089,23 @@
     },
     {
       "path": "marketplace/skills/d1e0d20f4b28/SKILL.md",
-      "bytes": 4760,
-      "sha256": "9c8ca4cb51e0bc8790ebc27b920397a66febdc0d31474d36edc5f0d2d483e8e7"
+      "bytes": 4759,
+      "sha256": "f80fdb0b24111f26738ec0b36039750e954c6adede39677569b9757cffe6d030"
     },
     {
       "path": "marketplace/skills/d3d406dffdbc/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/d3d406dffdbc/agents/openai.yaml",
-      "bytes": 944,
-      "sha256": "7897ff9e60193c839726c53db742912679f5125d560d9fc8fff4552736bec514"
+      "bytes": 938,
+      "sha256": "5dd67369eedd4e84ff13a5e837b60dd0c730c8057c87327c223d9fb83bdabf12"
     },
     {
       "path": "marketplace/skills/d3d406dffdbc/evals/evals.json",
-      "bytes": 14908,
-      "sha256": "bcf763e20c6c45c8f6ef2a02dedcfbfe44a40bed632977356bc6fbbe55402bfd"
+      "bytes": 14902,
+      "sha256": "f2a7633245bd3f142822bde576eabeb521e41082b6ce06353b3e2363ffd77faa"
     },
     {
       "path": "marketplace/skills/d3d406dffdbc/evals/forecast_model.md",
@@ -6169,8 +6169,8 @@
     },
     {
       "path": "marketplace/skills/d3d406dffdbc/references/skill-spec.yaml",
-      "bytes": 1773,
-      "sha256": "273bc9b6e8595a0898951db0dc6eb37e1761de4b4160279386b2e46484829b1a"
+      "bytes": 1676,
+      "sha256": "3fc3f786071bf4ead49d1148b1468e0ed8be07d709e2860314e9a2df745585d8"
     },
     {
       "path": "marketplace/skills/d3d406dffdbc/references/validation-contract.md",
@@ -6179,23 +6179,23 @@
     },
     {
       "path": "marketplace/skills/d3d406dffdbc/schemas.json",
-      "bytes": 3932,
-      "sha256": "52d473272081b4adc70c2923d9e1fa3711941864c8b4837f9822321806bad0ab"
+      "bytes": 3934,
+      "sha256": "ad17a2c21bcd9adb7c6be21bf2eb472bdba47dd4e4bf091ae799c490db5920cd"
     },
     {
       "path": "marketplace/skills/d3d406dffdbc/SKILL.md",
       "bytes": 4479,
-      "sha256": "0feb03c1ed48fecdc59c70563979df8608062ccfedd03bc53f58953fca7bee3e"
+      "sha256": "d0d5aa6d3691790d0719476ae43448cb8b9c93178bf252a1932df8b0577e36bd"
     },
     {
       "path": "marketplace/skills/d470761b0a07/_meta.json",
-      "bytes": 347,
-      "sha256": "e5f6920a0144877d384039c827d02ad56580053a936cddd7598c6c6ffe0335d0"
+      "bytes": 70,
+      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
     },
     {
       "path": "marketplace/skills/d470761b0a07/agents/openai.yaml",
-      "bytes": 934,
-      "sha256": "ed1e1c8cc6f1ecfa11c7f934c65493370b4e068de38d70d96a0935c3c3c30de3"
+      "bytes": 928,
+      "sha256": "52eeee5e60ea51d193cdf8dd2b72ee8358ab30cd77948d465418381a8b26a8e5"
     },
     {
       "path": "marketplace/skills/d470761b0a07/data/cases.json",
@@ -6214,8 +6214,8 @@
     },
     {
       "path": "marketplace/skills/d470761b0a07/evals/evals.json",
-      "bytes": 14410,
-      "sha256": "24fc6e7a55787b5503c3450777a6b2832ca1c7cf9f047e3b90027154517b4248"
+      "bytes": 14404,
+      "sha256": "04e60e5d698d81e2ad6783c2a6fa55196e67cda2a47dc23a352f46db6a18ba17"
     },
     {
       "path": "marketplace/skills/d470761b0a07/evals/forecast_model.md",
@@ -6279,8 +6279,8 @@
     },
     {
       "path": "marketplace/skills/d470761b0a07/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/d470761b0a07/references/validation-contract.md",
@@ -6294,13 +6294,13 @@
     },
     {
       "path": "marketplace/skills/d470761b0a07/schemas.json",
-      "bytes": 2792,
-      "sha256": "a5bf4461476c6764a115772bbf1936e8c9eff3b5b326c78993627036060e9ed5"
+      "bytes": 2794,
+      "sha256": "d8ad108a3eb31a6468eb856e32d7e205c97ff7247e7a1f501f5a94b52e6d71c8"
     },
     {
       "path": "marketplace/skills/d470761b0a07/SKILL.md",
       "bytes": 19214,
-      "sha256": "95bc15d45a8764579633f04692614fea5637b10e4075d763f4a3c3f721c99f20"
+      "sha256": "02c5643c9f9c021caa4d0520b15f3823f1f631c9bcd631bfcb85d5c915127f35"
     },
     {
       "path": "marketplace/skills/d470761b0a07/工业企业ECS售前模板_基于V3.4_v2.0.pdf",
@@ -6309,18 +6309,18 @@
     },
     {
       "path": "marketplace/skills/d5041e397e79/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/d5041e397e79/agents/openai.yaml",
-      "bytes": 913,
-      "sha256": "daf9f671d120a60dcb1fb5d742c6c4235fcc447eb991be356a9daeda5c011f00"
+      "bytes": 907,
+      "sha256": "506db63694c1634dbb70e24c1180e037de9193de9d1a1a5e4c8ce35795339c61"
     },
     {
       "path": "marketplace/skills/d5041e397e79/evals/evals.json",
-      "bytes": 14710,
-      "sha256": "891c7e2dcff20f95119818807485d1041df1c2e43f9c4370d4511e26a7f5bc63"
+      "bytes": 14704,
+      "sha256": "df10bf823e946fb88011eb98b781256be033efd2ae038bc186c2fbe7aae811b3"
     },
     {
       "path": "marketplace/skills/d5041e397e79/evals/forecast_model.md",
@@ -6384,8 +6384,8 @@
     },
     {
       "path": "marketplace/skills/d5041e397e79/references/skill-spec.yaml",
-      "bytes": 1764,
-      "sha256": "3144ece8ff7e1da7cfefe5bab5cb3b6f26ecd1dba98a27685276bfc254bfcdc1"
+      "bytes": 1667,
+      "sha256": "15d413c72e262707211569035ab9dd930a30ca6b4619b881621b0d80c13ecce4"
     },
     {
       "path": "marketplace/skills/d5041e397e79/references/validation-contract.md",
@@ -6394,28 +6394,28 @@
     },
     {
       "path": "marketplace/skills/d5041e397e79/schemas.json",
-      "bytes": 3914,
-      "sha256": "814cc677e0a90fd1a047f47129d1cef945928eaaddc4740415b3e1770125fd86"
+      "bytes": 3916,
+      "sha256": "90da9cb6130b8ddf6a3fcfe7834dc88b5a969d36ad69474cb427dfb09e8d40bf"
     },
     {
       "path": "marketplace/skills/d5041e397e79/SKILL.md",
       "bytes": 4258,
-      "sha256": "599b83f74e451665126227a5965d1e42a725243de7d3480e765428b508a55d11"
+      "sha256": "54766f0a80cc15f886581670c371efb40a0762e244c247342f39c3ce933956d1"
     },
     {
       "path": "marketplace/skills/d5d2fb6337fb/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/d5d2fb6337fb/agents/openai.yaml",
-      "bytes": 918,
-      "sha256": "a627b599486fdf3629a50a6e9945ab16171589fae4fb70ccadd7aeedc235e68a"
+      "bytes": 912,
+      "sha256": "fadd79992e04f4c21455852640c0b585e2f2549b6585793b8d1ba67f6db49391"
     },
     {
       "path": "marketplace/skills/d5d2fb6337fb/evals/evals.json",
-      "bytes": 14874,
-      "sha256": "84f2ab63074d97b0ecc1d2ff4cb37e0f7dd1d233f3212e15abfb7f97d7ce5853"
+      "bytes": 14868,
+      "sha256": "ef2fc7059f057756d20ea60c8cf998dcee96a29b180eb73ba66acfc3574fa97d"
     },
     {
       "path": "marketplace/skills/d5d2fb6337fb/evals/forecast_model.md",
@@ -6479,8 +6479,8 @@
     },
     {
       "path": "marketplace/skills/d5d2fb6337fb/references/skill-spec.yaml",
-      "bytes": 1768,
-      "sha256": "b63abe16104763675d2fab9efc8a01d65b1ddecef3c19a84e6f5bb5107bf5682"
+      "bytes": 1671,
+      "sha256": "f936ba22733d828ca5330b38a373fafa36cfd003d48054086284e6e8f693f49f"
     },
     {
       "path": "marketplace/skills/d5d2fb6337fb/references/validation-contract.md",
@@ -6489,28 +6489,28 @@
     },
     {
       "path": "marketplace/skills/d5d2fb6337fb/schemas.json",
-      "bytes": 3935,
-      "sha256": "cdbb9d3cb12008f40c697f1c0b43b05bda28a92e4c89d2b5acb2547fa6c00651"
+      "bytes": 3937,
+      "sha256": "e9c188651ae9a1017461f6d88c3a4008a18ae11ed1a81188fbc9edb532f48b21"
     },
     {
       "path": "marketplace/skills/d5d2fb6337fb/SKILL.md",
       "bytes": 4426,
-      "sha256": "ad513bb3a33a47d88fecbe6cfe85df00955f2edba7b962af4d8f9a99742b5021"
+      "sha256": "61ed2fc0e63552aa091eabac4a15be919d45474ccfbbc9022135a33c9ba87be5"
     },
     {
       "path": "marketplace/skills/e117a4a3afef/_meta.json",
-      "bytes": 349,
-      "sha256": "4e968d567e1fd754e00dc1e25d1a5843d664d87b6f858627527af7b11318381f"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/e117a4a3afef/agents/openai.yaml",
-      "bytes": 928,
-      "sha256": "bd45f3894ca06204e1d884c861b87816e74c516eb7ea74200676417050465511"
+      "bytes": 922,
+      "sha256": "8d1c13dfc854257d7c09b9d322804cb15c7065b5fca9947e091b4e2a95ff86cc"
     },
     {
       "path": "marketplace/skills/e117a4a3afef/evals/evals.json",
-      "bytes": 15111,
-      "sha256": "568923e2dcf20ac9ee0b0923c1cb323016dab9e75659484d55aeada56188d542"
+      "bytes": 15105,
+      "sha256": "c55325126db5e9538703f3a41a937cd6506ad61cfa2fd561424a89667b719eb5"
     },
     {
       "path": "marketplace/skills/e117a4a3afef/evals/forecast_model.md",
@@ -6574,8 +6574,8 @@
     },
     {
       "path": "marketplace/skills/e117a4a3afef/references/skill-spec.yaml",
-      "bytes": 1758,
-      "sha256": "d045978f2afc0547d48a4660b5b338d9cf46f18fdbc55dbc0168325f7357c109"
+      "bytes": 1661,
+      "sha256": "a9fb6a595c5c2f8a3c576b09a62002083b94e7c0228ff1080e0c982bc4a03860"
     },
     {
       "path": "marketplace/skills/e117a4a3afef/references/validation-contract.md",
@@ -6584,28 +6584,28 @@
     },
     {
       "path": "marketplace/skills/e117a4a3afef/schemas.json",
-      "bytes": 3908,
-      "sha256": "3995c3d3600ddc6bd87ed1649fbd5d5a9bd8561796ed2f994b34d21e3d0a50d3"
+      "bytes": 3910,
+      "sha256": "d0e6414549c18a860f13e2765a201fef9561ee8172ce34330057886dc5adcb21"
     },
     {
       "path": "marketplace/skills/e117a4a3afef/SKILL.md",
       "bytes": 4465,
-      "sha256": "d9f542ff9655d28d4cb8b6527191d2f7c192c4bee1776d7f7a1e8f5e2d8e0b76"
+      "sha256": "52866ea33d7af99ff1bd8f43a9d85fd758b502c410320cc0eb0b593008e70b98"
     },
     {
       "path": "marketplace/skills/e12403164f5f/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/e12403164f5f/agents/openai.yaml",
-      "bytes": 937,
-      "sha256": "bd030740b41f25138e35a5d1f26208798b60f57d65de78e51b9b38335d82d43c"
+      "bytes": 931,
+      "sha256": "1d37dc720c5227a7391f8ce79a80bca62a56e12d2730788e2ca5cdbbf1960e2a"
     },
     {
       "path": "marketplace/skills/e12403164f5f/evals/evals.json",
-      "bytes": 14894,
-      "sha256": "7d2c5d001b1d5748215d7e53251bd418822a3ff789fc55ef9a622ba98e30d056"
+      "bytes": 14888,
+      "sha256": "9f9628e3db5887ad97f52a4d7ae6891362d0708f5fff50ec4ba6509fb579a149"
     },
     {
       "path": "marketplace/skills/e12403164f5f/evals/forecast_model.md",
@@ -6669,8 +6669,8 @@
     },
     {
       "path": "marketplace/skills/e12403164f5f/references/skill-spec.yaml",
-      "bytes": 1759,
-      "sha256": "3d039e5642ac7b33299fb3d952ac0a653cb90c39f373a1bcd3241fce3a25f37e"
+      "bytes": 1662,
+      "sha256": "59f1f35c8b35d8efae0b8edf7cddbc13f9d58e35d6d430bb6ee42ec86bd215dc"
     },
     {
       "path": "marketplace/skills/e12403164f5f/references/validation-contract.md",
@@ -6679,28 +6679,28 @@
     },
     {
       "path": "marketplace/skills/e12403164f5f/schemas.json",
-      "bytes": 3909,
-      "sha256": "bbd201de79915257ba42de6df9682137c00245b9ed13912e4c242c5c15284f7a"
+      "bytes": 3911,
+      "sha256": "7b11b0439a24f13f8e16c1b6aa78d45fde769b6f3f9a527d3171b1e3d1b5c4c0"
     },
     {
       "path": "marketplace/skills/e12403164f5f/SKILL.md",
       "bytes": 4476,
-      "sha256": "3a69dc53c7831a26cd00683718283ab7dca4e1cb75b3709c2975d48b5e382ab6"
+      "sha256": "420a03833e5e191e051662ba4f7afb34a73cbc1cfc76e47ebaab6d40857a3ad2"
     },
     {
       "path": "marketplace/skills/e7f5c0e6f1be/_meta.json",
-      "bytes": 401,
-      "sha256": "c46b21b3fef23d67f40229edba0bdd49e870558cb25abc4b4308af7e3289f464"
+      "bytes": 124,
+      "sha256": "a33972d020ba9284e00a48291305e116e5beaad2cf619555c069e85bc168fb11"
     },
     {
       "path": "marketplace/skills/e7f5c0e6f1be/agents/openai.yaml",
-      "bytes": 957,
-      "sha256": "3d14c229636bda6ac5d3725223e8a610b5c69d4667ee527e55575a1ffa026949"
+      "bytes": 951,
+      "sha256": "e5effc5a33a032e3452462f627dccad2170909e3da3e7266c404b43333077ebc"
     },
     {
       "path": "marketplace/skills/e7f5c0e6f1be/evals/evals.json",
-      "bytes": 14895,
-      "sha256": "d3710380feab6a6511b39d6d5bf4b83eee94d8c3e1c70dc7b18c08a148c6e107"
+      "bytes": 14889,
+      "sha256": "44355e6685e597cc90edbf3cda01238f2c063df18abd14f8cf6048254f593285"
     },
     {
       "path": "marketplace/skills/e7f5c0e6f1be/evals/forecast_model.md",
@@ -6769,8 +6769,8 @@
     },
     {
       "path": "marketplace/skills/e7f5c0e6f1be/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/e7f5c0e6f1be/references/validation-contract.md",
@@ -6779,8 +6779,8 @@
     },
     {
       "path": "marketplace/skills/e7f5c0e6f1be/schemas.json",
-      "bytes": 2808,
-      "sha256": "3bde98f19385572feabf6706f38e924a750299846cc4e620d02fa8b61779b1b4"
+      "bytes": 2810,
+      "sha256": "b2a0924cd1be511111c4b6ef05b4a8b32c9e051c6618a66f832126aa62c13672"
     },
     {
       "path": "marketplace/skills/e7f5c0e6f1be/scripts/analyze_performance.py",
@@ -6805,22 +6805,22 @@
     {
       "path": "marketplace/skills/e7f5c0e6f1be/SKILL.md",
       "bytes": 7372,
-      "sha256": "a1877f54b026f11e4c639b3fe183aeb29d8a2255ea3eb9f2ad03f353afa9a75b"
+      "sha256": "ee9b3c86d02d708e91e3c23adb61dbcf3a99fb7034e7cb6f5d8aa57387e7a1ea"
     },
     {
       "path": "marketplace/skills/ee99fbb42964/_meta.json",
-      "bytes": 401,
-      "sha256": "88b42bf3e7e42eb0193b38efa4189656da3b04ae9caf1f14184fd416ae6bf187"
+      "bytes": 124,
+      "sha256": "8c00d2930cd862e732afaa93ab56372e74dea249cc1c20230f19ecd5309486de"
     },
     {
       "path": "marketplace/skills/ee99fbb42964/agents/openai.yaml",
-      "bytes": 988,
-      "sha256": "21119835454f32c9ff367839357c8c47808b9594385e4ceea2b17dc353e97d84"
+      "bytes": 982,
+      "sha256": "d7b6b7401c8fde7fec131b683d7d5203dcfe55e2c153bd538f0889e30099d18a"
     },
     {
       "path": "marketplace/skills/ee99fbb42964/evals/evals.json",
-      "bytes": 15371,
-      "sha256": "34493772d2fe0226dd53312a02179951b5b9deb3fb3f80bee0061c5ba9a07619"
+      "bytes": 15365,
+      "sha256": "bee962a5dca0b1f2a5a887f0d47392916e729677651b282650f9dc2adf9508d4"
     },
     {
       "path": "marketplace/skills/ee99fbb42964/evals/forecast_model.md",
@@ -6904,8 +6904,8 @@
     },
     {
       "path": "marketplace/skills/ee99fbb42964/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/ee99fbb42964/references/source-quality.md",
@@ -6919,8 +6919,8 @@
     },
     {
       "path": "marketplace/skills/ee99fbb42964/schemas.json",
-      "bytes": 2812,
-      "sha256": "506bd320a2c3db9ffde16a4f7b705b8b55445be6fb1b87f3f35d4f68d82cdf3b"
+      "bytes": 2814,
+      "sha256": "6884192abab84fd72a47395fc995ea2b7f5043b015b1874b0a2546077cab9bef"
     },
     {
       "path": "marketplace/skills/ee99fbb42964/scripts/academic.py",
@@ -6945,7 +6945,7 @@
     {
       "path": "marketplace/skills/ee99fbb42964/SKILL.md",
       "bytes": 10565,
-      "sha256": "25a9d52729f89925e44bf854dbb752e400d0a1aca2355a712345b0a1e43483db"
+      "sha256": "ef6dc78e7019c76bf9d95cf1ec942155765fa1504c12889e2e59611937825a6c"
     },
     {
       "path": "marketplace/skills/ee99fbb42964/test/test_academic.py",
@@ -6974,8 +6974,8 @@
     },
     {
       "path": "marketplace/skills/f45f8fe237c9/_meta.json",
-      "bytes": 347,
-      "sha256": "3888b8ecc107a400622026ca39f198e3b73403d401144b61a21969a87dc2419e"
+      "bytes": 70,
+      "sha256": "3525530a41cbc0a51dc4ea9c579496565fc5481f6eaeea6325170ac7c5e4277e"
     },
     {
       "path": "marketplace/skills/f45f8fe237c9/agents/openai.yaml",
@@ -7019,8 +7019,8 @@
     },
     {
       "path": "marketplace/skills/f45f8fe237c9/manifest.yaml",
-      "bytes": 1020,
-      "sha256": "514dd57b97f14d8a155bef2141d3b169c1a031c36e88c33b3edaae180ca1bba2"
+      "bytes": 1014,
+      "sha256": "34145bf3a8c3985a657dfbe18240f22a8ceb33243d9732a224be6f3f6378c0fe"
     },
     {
       "path": "marketplace/skills/f45f8fe237c9/ontology/model.yaml",
@@ -7065,17 +7065,17 @@
     {
       "path": "marketplace/skills/f45f8fe237c9/references/skill-spec.yaml",
       "bytes": 3125,
-      "sha256": "15ab77ff1c9f4a1ea8e9fd4f56c70f09fabbb9cfd75cf9ce23370e417a43c1e5"
+      "sha256": "9be5b8cf01df548558b3bb1e54b71261c4eda6e65b91a5b70852605551e7b63d"
     },
     {
       "path": "marketplace/skills/f45f8fe237c9/references/validation-contract.md",
-      "bytes": 571,
-      "sha256": "cd4bfd21afa2bc63f7d7d330cea74f509113e53b8d015d4b2c02bfb9a886862c"
+      "bytes": 564,
+      "sha256": "4e99387f2c0a469ea4f1f48a25b85592a990214b3ce262267a17ed438e0f1c95"
     },
     {
       "path": "marketplace/skills/f45f8fe237c9/schemas.json",
-      "bytes": 2790,
-      "sha256": "e94e003604071731eb7954ed44b6071df0547fc9c5bd1bccb9a8f67a7852a15e"
+      "bytes": 2792,
+      "sha256": "2cee2755c3c0893b8ac247866771add08276ea5a670a5aaf20bc25cc18bb12d1"
     },
     {
       "path": "marketplace/skills/f45f8fe237c9/schemas/input.schema.json",
@@ -7094,18 +7094,18 @@
     },
     {
       "path": "marketplace/skills/f45f8fe237c9/SKILL.md",
-      "bytes": 4594,
-      "sha256": "af35e5923a38d7ee5afd84bd9be2c9129ddc828dab43d40543f31869dfe76db2"
+      "bytes": 4593,
+      "sha256": "56cf48fa86a5d747e80aa0143b9f7e78c7b0196c792cd577129e9bd527a8fb2c"
     },
     {
       "path": "marketplace/skills/f51578fae310/_meta.json",
-      "bytes": 347,
-      "sha256": "3e3a6f4706a432fab206ec97b225bee2b2156f318fbfe8d1779a263e24c8ee89"
+      "bytes": 70,
+      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
     },
     {
       "path": "marketplace/skills/f51578fae310/agents/openai.yaml",
-      "bytes": 1002,
-      "sha256": "fb10c726693be01037afbd535d82101d16fc8c27baef658b533cbda4a991ff91"
+      "bytes": 996,
+      "sha256": "cf04f6500c993c0f7d7a152dedb627032d59ef8c37e198f86319dd66cfb348b1"
     },
     {
       "path": "marketplace/skills/f51578fae310/data/cases.json",
@@ -7114,8 +7114,8 @@
     },
     {
       "path": "marketplace/skills/f51578fae310/evals/evals.json",
-      "bytes": 16320,
-      "sha256": "0ae8f307bde34e53be1cbf57e50c82ee7132b9ab044d88a5af25a24fa0be2413"
+      "bytes": 16314,
+      "sha256": "2425df01e53fdb4337b7f653b290f457a6495d1c94ee9c9cd6a79b5ae03750cf"
     },
     {
       "path": "marketplace/skills/f51578fae310/evals/forecast_model.md",
@@ -7179,8 +7179,8 @@
     },
     {
       "path": "marketplace/skills/f51578fae310/references/skill-spec.yaml",
-      "bytes": 650,
-      "sha256": "075c806ce26bc8ea2b9e80c4eede977f806298ce35d3e947e966ef0ae9844833"
+      "bytes": 615,
+      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
     },
     {
       "path": "marketplace/skills/f51578fae310/references/validation-contract.md",
@@ -7189,13 +7189,13 @@
     },
     {
       "path": "marketplace/skills/f51578fae310/schemas.json",
-      "bytes": 2796,
-      "sha256": "07ce37df65cce3b092d3be77515907d28a1d256c03949cc79a4f9d70a68b5643"
+      "bytes": 2798,
+      "sha256": "90cef2a82253efe28b7d89bd71588637e9ae24bdeed348ab8b6b9420ab31e150"
     },
     {
       "path": "marketplace/skills/f51578fae310/SKILL.md",
       "bytes": 13966,
-      "sha256": "9d0575f19fde947942d5ae09015bada64a04309909826c54022f02ee7828cecb"
+      "sha256": "133b29842c0434fffa7b650423dfaf0370f83090bafcb2f0654af242005ac089"
     },
     {
       "path": "marketplace/skills/f51578fae310/本体可视化-运营商数据安全.html",
@@ -7204,18 +7204,18 @@
     },
     {
       "path": "marketplace/skills/ffaad9705891/_meta.json",
-      "bytes": 349,
-      "sha256": "a5943f96ae264e6b8158f26ea19ad06940a8e4ef9ece1a40d5afa2868c98c04a"
+      "bytes": 73,
+      "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
     },
     {
       "path": "marketplace/skills/ffaad9705891/agents/openai.yaml",
-      "bytes": 930,
-      "sha256": "c951b21e36079343bd22ed8c27816e19058646b118dad02029abdcb392b34d81"
+      "bytes": 924,
+      "sha256": "ce99072a188e7e083fe8a17f0a6e779aed9a281d7c5195822a68f6cac869d9b2"
     },
     {
       "path": "marketplace/skills/ffaad9705891/evals/evals.json",
-      "bytes": 14771,
-      "sha256": "576e3d4e90633f08829fab1c62e1bbb37b0967228e838d64581016a31803c73b"
+      "bytes": 14765,
+      "sha256": "eea7488b0eeea45c2b92898ccce4c5f0aed04106667bfcb1585b841e4d9c70dd"
     },
     {
       "path": "marketplace/skills/ffaad9705891/evals/forecast_model.md",
@@ -7279,8 +7279,8 @@
     },
     {
       "path": "marketplace/skills/ffaad9705891/references/skill-spec.yaml",
-      "bytes": 1758,
-      "sha256": "06983d508c29d80c64b9ede4a5628d9300045f4ebe5949c97ce4688dd8479bc6"
+      "bytes": 1661,
+      "sha256": "08bf5262f20064f73a176d5b350c9f1daa83c1f93bfe133debfc92c325871d44"
     },
     {
       "path": "marketplace/skills/ffaad9705891/references/validation-contract.md",
@@ -7289,13 +7289,13 @@
     },
     {
       "path": "marketplace/skills/ffaad9705891/schemas.json",
-      "bytes": 3925,
-      "sha256": "6f08a429cfa2479875a22399ad5f4f552ec54bb633b3fd22a22f37546b1ee113"
+      "bytes": 3927,
+      "sha256": "7c6caf8b6199fb36b26c73f1acc1f1e419c237ba085d23e72f456cacb03ff008"
     },
     {
       "path": "marketplace/skills/ffaad9705891/SKILL.md",
       "bytes": 4355,
-      "sha256": "b82e237178e6456dd683f8ae95cbfe022f076bdd984756c32cdbb8ca759a5c3b"
+      "sha256": "c7a42346ff1a68ff035b7ba286e822cc4bd5622764003fe89a4e6e89b4398320"
     },
     {
       "path": "system/skills/_system.json",
@@ -7304,8 +7304,8 @@
     },
     {
       "path": "system/skills/agent-creator/_meta.json",
-      "bytes": 341,
-      "sha256": "863ed7d8522396c0ebe30f2e94875cef5678c177a994c938eb0205929ce09973"
+      "bytes": 64,
+      "sha256": "b1b7fe0154854da2a048e38acd8eebb02b50cb3787bb59d31533c0a89d6a8486"
     },
     {
       "path": "system/skills/agent-creator/SKILL.md",
@@ -7314,8 +7314,8 @@
     },
     {
       "path": "system/skills/autotask-creator/_meta.json",
-      "bytes": 341,
-      "sha256": "863ed7d8522396c0ebe30f2e94875cef5678c177a994c938eb0205929ce09973"
+      "bytes": 64,
+      "sha256": "b1b7fe0154854da2a048e38acd8eebb02b50cb3787bb59d31533c0a89d6a8486"
     },
     {
       "path": "system/skills/autotask-creator/SKILL.md",
@@ -7324,8 +7324,8 @@
     },
     {
       "path": "system/skills/coding/_meta.json",
-      "bytes": 341,
-      "sha256": "8ecba70c63f18277e3e6752ed967bca043242f82160c75d7bdbf248376efac0f"
+      "bytes": 64,
+      "sha256": "b1b7fe0154854da2a048e38acd8eebb02b50cb3787bb59d31533c0a89d6a8486"
     },
     {
       "path": "system/skills/coding/SKILL.md",
@@ -7334,8 +7334,8 @@
     },
     {
       "path": "system/skills/package-installer/_meta.json",
-      "bytes": 341,
-      "sha256": "8ecba70c63f18277e3e6752ed967bca043242f82160c75d7bdbf248376efac0f"
+      "bytes": 64,
+      "sha256": "b1b7fe0154854da2a048e38acd8eebb02b50cb3787bb59d31533c0a89d6a8486"
     },
     {
       "path": "system/skills/package-installer/SKILL.md",
@@ -7344,8 +7344,8 @@
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/_meta.json",
-      "bytes": 341,
-      "sha256": "863ed7d8522396c0ebe30f2e94875cef5678c177a994c938eb0205929ce09973"
+      "bytes": 64,
+      "sha256": "b1b7fe0154854da2a048e38acd8eebb02b50cb3787bb59d31533c0a89d6a8486"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/agents/openai.yaml",
@@ -7434,8 +7434,8 @@
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/schemas.json",
-      "bytes": 4338,
-      "sha256": "4f813b22bb31bc99d5761385d496cc1b58923d3d62a56d53c7b20fe27f4f38c1"
+      "bytes": 4296,
+      "sha256": "67a8a0acc9de37eb673c0c26ebd7221cb4157677181a025389c1e38039746626"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/SKILL.md",
@@ -7444,58 +7444,18 @@
     },
     {
       "path": "system/skills/skill-creator/_meta.json",
-      "bytes": 341,
-      "sha256": "863ed7d8522396c0ebe30f2e94875cef5678c177a994c938eb0205929ce09973"
+      "bytes": 64,
+      "sha256": "b1b7fe0154854da2a048e38acd8eebb02b50cb3787bb59d31533c0a89d6a8486"
     },
     {
-      "path": "system/skills/skill-creator/references/nseap/artifact-tree.md",
-      "bytes": 1989,
-      "sha256": "ac8a7858f71fe1d1b5511a9915aff1e5f6b56a2e62de38b5dfdff162cb47f959"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/compliance-tiers.md",
-      "bytes": 2629,
-      "sha256": "9c563663a9cbee7206c5558e83a2bba6ba5fa82a2275e36ec3035a6e89908ec7"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/contracts.md",
-      "bytes": 2178,
-      "sha256": "ccb54aea86ac4e95c7ee01f07f0a40b1c830a27f476543efb696a6245a897411"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/governance-ontology-eval.md",
-      "bytes": 2760,
-      "sha256": "5787b02728cc336f60365485cabc7664573019e1d3601d03053fd82bdb6a1d9b"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/nine-elements.md",
-      "bytes": 2210,
-      "sha256": "b044a27d9c0d0a28e8f2a00f9a82413aabff9679a5a74c8f7827c5f38a019b33"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/non-claims.md",
-      "bytes": 2526,
-      "sha256": "5759621bec96e5980eed7a8956e3f6b96612c39a48d6590619181bb9bd37a622"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/schemas.md",
-      "bytes": 3968,
-      "sha256": "af4f7a554afc024e5dfa97b92e124f4e06bf84aadb7084608c048abb0401b1c0"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/skill-spec.yaml.template",
-      "bytes": 1744,
-      "sha256": "b47240306f6215266a6960ef6385957f1dec6ba8617e5044841e7cb9cd80182e"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/templates/ontology-slice.yaml.template",
-      "bytes": 1063,
-      "sha256": "fd45573b432bf6f11580a67abf119e63e7a3c9265417f97531d30bce54625ebe"
+      "path": "system/skills/skill-creator/references/skill-contract.md",
+      "bytes": 3260,
+      "sha256": "d44d56cc0622db1a0d34db934e62380bd25bf29d644d389ff43517f48e2b5d39"
     },
     {
       "path": "system/skills/skill-creator/SKILL.md",
-      "bytes": 50156,
-      "sha256": "dcc94cfc43237622d376b211097f71c80b4172782eae23d7a4920d1d06ff4fcb"
+      "bytes": 49540,
+      "sha256": "d06cfbb122d0f935a1b8b33aa80b5b8c5bf3420c3816d39ae0263701b19094e6"
     }
   ],
   "inventory": {

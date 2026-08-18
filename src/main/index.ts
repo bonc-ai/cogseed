@@ -543,6 +543,10 @@ async function runBootSelfCheck(): Promise<void> {
   // feature touches user-scoped paths (every feature goes through
   // `getActiveUserId()`).
   try {
+    // Source runtimes keep their development profile separate from the
+    // packaged account pointer. This must be selected before reading
+    // users.json so a runtime rename can restore its legacy dev profile.
+    users.setUseDevCurrentUserId(!app.isPackaged);
     const rec = users.initActiveUser();
     log.info('active user', { user_id: rec.user_id });
   } catch (err) {

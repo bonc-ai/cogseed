@@ -144,7 +144,7 @@ export interface SecurityReceipt {
     segments: Array<{ file: string; line: number; text: string; signal: string }>;
   };
   /**
-   * NSEAP security-declaration check, from the security-core engine.
+   * Skill security-declaration check, from the declaration engine.
    *
    * ADVISORY ONLY — this never changes `decision`.
    *
@@ -172,7 +172,7 @@ export interface SecurityReceipt {
    * Findings are capped and carry rule ids plus messages so a panel can explain
    * the gap; the engine's own verdict string is kept for diagnosis.
    */
-  nseapDeclaration?: {
+  declarationCheck?: {
     status: 'pass' | 'pass_with_warnings' | 'needs_input' | 'mismatch' | 'absent' | 'unavailable';
     /** The engine's own result string, when it produced a parseable report. */
     engineResult?: string;
@@ -408,7 +408,7 @@ function _readInstructionRisk(raw: unknown): { instructionRisk?: SecurityReceipt
 }
 
 /**
- * Validate a persisted NSEAP declaration record.
+ * Validate a persisted declaration check record.
  *
  * Status is whitelisted for the same reason as `instructionRisk`: the panel keys
  * its wording off this value, and an unrecognised status would render as neither
@@ -417,18 +417,18 @@ function _readInstructionRisk(raw: unknown): { instructionRisk?: SecurityReceipt
  * echoed to the UI, and an engine run on a pathological tree could otherwise
  * produce an unbounded list.
  */
-const _NSEAP_STATUSES = new Set([
+const _DECLARATION_STATUSES = new Set([
   'pass', 'pass_with_warnings', 'needs_input', 'mismatch', 'absent', 'unavailable',
 ]);
-const _NSEAP_FINDING_CAP = 20;
+const _DECLARATION_FINDING_CAP = 20;
 
-function _readNseapDeclaration(raw: unknown): { nseapDeclaration?: SecurityReceipt['nseapDeclaration'] } {
+function _readDeclarationCheck(raw: unknown): { declarationCheck?: SecurityReceipt['declarationCheck'] } {
   if (!raw || typeof raw !== 'object') return {};
   const r = raw as Record<string, unknown>;
-  if (typeof r.status !== 'string' || !_NSEAP_STATUSES.has(r.status)) return {};
-  const status = r.status as NonNullable<SecurityReceipt['nseapDeclaration']>['status'];
+  if (typeof r.status !== 'string' || !_DECLARATION_STATUSES.has(r.status)) return {};
+  const status = r.status as NonNullable<SecurityReceipt['declarationCheck']>['status'];
   const findings = Array.isArray(r.findings)
-    ? r.findings.slice(0, _NSEAP_FINDING_CAP).flatMap((entry) => {
+    ? r.findings.slice(0, _DECLARATION_FINDING_CAP).flatMap((entry) => {
       if (!entry || typeof entry !== 'object') return [];
       const e = entry as Record<string, unknown>;
       if (typeof e.ruleId !== 'string' || !e.ruleId) return [];
@@ -440,7 +440,7 @@ function _readNseapDeclaration(raw: unknown): { nseapDeclaration?: SecurityRecei
     })
     : [];
   return {
-    nseapDeclaration: {
+    declarationCheck: {
       status,
       ...(typeof r.engineResult === 'string' && r.engineResult
         ? { engineResult: r.engineResult.slice(0, 64) }
@@ -510,7 +510,7 @@ export function readReceipt(uid: string, skillId: string, agentId?: string): Sec
     // which reads as a stronger result than "unknown".
     ...(_readAttackSurface(raw.attackSurface)),
     ...(_readInstructionRisk(raw.instructionRisk)),
-    ...(_readNseapDeclaration(raw.nseapDeclaration)),
+    ...(_readDeclarationCheck(raw.declarationCheck)),
     ...(_readUserOverride(raw.userOverride)),
     ...(typeof raw.dependencyHash === 'string' && raw.dependencyHash
       ? { dependencyHash: raw.dependencyHash } : {}),
@@ -556,7 +556,7 @@ export function writeReceipt(
     rulesDegraded?: boolean;
     attackSurface?: SecurityReceipt['attackSurface'];
     instructionRisk?: SecurityReceipt['instructionRisk'];
-    nseapDeclaration?: SecurityReceipt['nseapDeclaration'];
+    declarationCheck?: SecurityReceipt['declarationCheck'];
     userOverride?: SecurityReceipt['userOverride'];
     dependencyHash?: string;
     permissionHash?: string;
@@ -582,7 +582,7 @@ export function writeReceipt(
     ...(input.rulesDegraded ? { rulesDegraded: true } : {}),
     ...(input.attackSurface ? { attackSurface: { ...input.attackSurface } } : {}),
     ...(input.instructionRisk ? { instructionRisk: input.instructionRisk } : {}),
-    ...(input.nseapDeclaration ? { nseapDeclaration: input.nseapDeclaration } : {}),
+    ...(input.declarationCheck ? { declarationCheck: input.declarationCheck } : {}),
     ...(input.userOverride ? { userOverride: input.userOverride } : {}),
     ...(input.dependencyHash ? { dependencyHash: input.dependencyHash } : {}),
     ...(input.permissionHash ? { permissionHash: input.permissionHash } : {}),
