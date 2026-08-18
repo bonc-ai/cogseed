@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "4761e38efbf1ab5d6996ca342edda9cc0447fb137094ea2b829b35c7e7f916f4",
+  "content_tree_sha256": "143061a4fe4cbf3fbba9e9f4eb84c254c5069b43b86b69b45af0c01055573182",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -954,8 +954,8 @@
     },
     {
       "path": "marketplace/skills/0c2d02c7e68d/SKILL.md",
-      "bytes": 27666,
-      "sha256": "d448a631ed7df0caeadb00142f3eaadf4d306f942db89e35ba129a8e66a847f6"
+      "bytes": 27691,
+      "sha256": "3f25641adf5cb27d28a3fe5f8bc8c0527759609b24df3f737d8150e51f972e3d"
     },
     {
       "path": "marketplace/skills/0d95910c7f2f/_meta.json",
