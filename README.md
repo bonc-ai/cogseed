@@ -1,259 +1,186 @@
-# CogSeed
+<p align="center">
+  <img src="./assets/cogseed-icon.png" width="160" alt="CogSeed product icon">
+</p>
 
-**跨 Agent 的个人能力资产层 · 本地优先的多智能体协作工作台**
+<h1 align="center">CogSeed</h1>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-blue)](#快速开始)
-[![Electron](https://img.shields.io/badge/Electron-desktop-47848F)](https://www.electronjs.org/)
+<p align="center">A local-first desktop workspace for coordinating AI agents and turning task experience into reusable personal capability assets.</p>
 
-CogSeed 把指挥官、专业 Agent、本地 CLI Agent、Skill、Connector、知识上下文和 Cognition Assets 放进同一个桌面工作台。用户提出目标后，Commander 通过结构化计划和分派调度不同成员执行；任务过程中形成的经验可以进入 Recall / Cognition 治理链路，经过确认、复用与效果证明后沉淀为跨 Agent 的个人能力资产。
+<p align="center">
+  <a href="./README.md">English</a> | <a href="./README.zh-CN.md">简体中文</a>
+</p>
 
-CogSeed 是本地优先的 Electron 应用。主进程承担 Node.js 后端职责，renderer 使用原生 HTML/CSS/JavaScript；应用内部通信只经过 preload 暴露的 `window.cogseed.{invoke, stream}` IPC API，不启动本地 HTTP 服务。
+<p align="center">
+  <img src="./assets/cogseed-homepage-hero-agent-continuity.png" width="1000" alt="CogSeed desktop workspace">
+</p>
 
----
+## Overview
 
-## 核心能力
+CogSeed brings tasks, workspaces, agents, skills, connectors, knowledge, and reusable cognition assets into one Electron desktop application. A Commander maintains the shared plan and delegates work through structured dispatch, while each agent receives only the context needed for its role.
 
-### Commander 与多 Agent 协作
+The application is local-first: the renderer reaches the Node.js main process through an explicit preload allow-list, local CLI agents run through controlled child-process adapters, and user data is separated into syncable and machine-local domains.
 
-- Commander 理解目标、维护共享计划，并通过结构化 `dispatch_to` 分派任务。
-- Agent 可以串行或并行工作，但每个 worker 只读取自己的可见性切片，而不是完整群聊记录。
-- 计划、消息、过程事件和终止状态都经过统一 group-chat bus，避免重复调度路径。
-- 用户可以在一个会话中观察成员状态、工具过程、产物和任务交接。
+## Highlights
 
-### 本地 CLI Agent
+| Capability | What it enables |
+|---|---|
+| Structured multi-agent coordination | Plan, delegate, observe, retry, and stop work through one group-chat execution path. |
+| Local CLI agent integration | Use Claude Code, Codex, OpenClaw, OpenCode, Hermes, or WorkBuddy from the same workspace. |
+| Continuity across tasks | Import supported local sessions and continue work with workspace context and execution evidence. |
+| Governed cognition assets | Review candidate experience, promote confirmed assets, and track reuse and effectiveness evidence. |
+| Connected tools and knowledge | Give supported agents controlled access to skills, MCP connectors, and indexed Library content. |
+| Local-first boundaries | Keep machine-private state, indexes, caches, and credentials behind explicit storage and security boundaries. |
 
-CogSeed 可以把本机已安装的编码 Agent 作为受控子进程接入协作流程，包括：
-
-- Claude Code
-- Codex
-- OpenCode
-- OpenClaw
-- Hermes
-
-CLI 调度集中经过 `src/main/features/local_agents/runner.ts`；不同 CLI 的会话恢复、工作目录、环境变量和文件变更证据由主进程统一管理。
-
-### Cognition Assets / Recall
-
-CogSeed 不只保存聊天记录，还维护可治理的个人能力资产：
-
-- 从会话、教学信号和 KSTAR review 中产生候选经验。
-- 只有用户确认后，候选才可提升为正式 Ability Asset。
-- 资产拥有稳定 ID、版本、scope policy、审计记录和暂停/恢复/撤销状态。
-- 已确认资产可投影到后续任务，并通过 Transfer Proof 证明是否实际进入执行。
-- 用户反馈和 Effectiveness Proof 用于判断复用效果，并可触发暂停或 rework 建议。
-
-### KSTAR 与 Personal Ontology
-
-- KSTAR 记录需求、执行事实、review 与能力缺口。
-- Recall bridge 把已确认投影和任务终止事实接回能力资产证明链路。
-- Personal Ontology 用于组织用户确认的概念、规则和长期知识关系。
-- 外部 KSTAR engine 只有在显式配置时才启用；未配置时应用保持降级可用。
-
-### Context、Knowledge Base 与记忆
-
-- 用户管理的 Context 源文件属于可同步的私有数据。
-- 派生索引、向量数据库和模型缓存保留在本机。
-- Agent 只能通过知识库工具访问 Context，不直接扫描 Context 数据目录。
-- Commander、Agent、项目和会话记忆由明确的数据域和权限边界管理。
-
-### Connectors、Messaging 与 CC Switch
-
-- Connector 使用 OAuth 或 MCP stdio 接入外部服务，并通过 umbrella meta-tools 暴露给模型。
-- Messaging 支持把外部消息接入正常群聊调度链路。
-- 模型授权支持 API Key、OAuth 和自定义端点。
-- 可从本机 CC Switch 数据库预览并导入支持的模型凭据；导入前会展示脱敏结果，原始 Key 不进入 renderer。
-- Claude Code 与 Codex 的历史会话、技能和记忆可以在 onboarding / continue-work 流程中导入。
-
----
-
-## 架构
+## Architecture
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│ Renderer: classic HTML / CSS / JavaScript                  │
-│ Settings · Conversations · Agents · Skills · Cognition     │
-└───────────────────────────┬─────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│ Renderer: classic HTML / CSS / JavaScript               │
+│ Tasks · Spaces · Automation · Assets · Connections      │
+└───────────────────────────┬─────────────────────────────┘
                             │ window.cogseed.invoke / stream
-┌───────────────────────────▼─────────────────────────────────┐
-│ Preload contextBridge allow-list                            │
-└───────────────────────────┬─────────────────────────────────┘
+┌───────────────────────────▼─────────────────────────────┐
+│ Preload: contextBridge allow-list                       │
+└───────────────────────────┬─────────────────────────────┘
                             │ Electron IPC
-┌───────────────────────────▼─────────────────────────────────┐
-│ Main process: IPC validation → feature workflows            │
-│ Storage · Group Chat · Recall · KSTAR · Connectors          │
-├─────────────────────────────────────────────────────────────┤
-│ In-process Core Agent       │ Isolated CogSeed Runtime      │
-│ Local CLI Agent runners     │ MCP stdio connectors          │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────▼─────────────────────────────┐
+│ Main process: IPC validation → feature workflows        │
+│ Group Chat · Recall · Knowledge Base · Connectors       │
+└──────────────┬────────────────┬────────────────┬────────┘
+               │                │                │
+               ▼                ▼                ▼
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│ Core Agent       │  │ Runtime worker   │  │ Child processes  │
+│ In-process       │  │ JSONL protocol   │  │ Local CLI / MCP  │
+└──────────────────┘  └──────────────────┘  └──────────────────┘
 ```
 
-主要目录：
+## Quick Install
 
-| 路径 | 职责 |
-|---|---|
-| `src/main/` | Electron 主进程、IPC、存储、模型适配和业务 feature |
-| `src/renderer/` | 原生 renderer UI、样式、本地化和交互逻辑 |
-| `src/core-agent/` | Core Agent 会话、provider、工具和执行循环 |
-| `src/main/features/cogseed_runtime/` | 隔离 Runtime host、worker 与 JSONL 协议 |
-| `src/main/features/cogseed_backend/` | 任务、调度、能力和协作后端 |
-| `src/main/features/recall/` | Cognition/Recall 捕获、候选、资产、投影和证明 |
-| `src/main/features/local_agents/` | Claude/Codex/OpenCode/OpenClaw/Hermes 集成 |
-| `resources/builtin/` | 平台 Agent、Skill 和 marketplace 种子内容 |
-| `test/` | 主进程、renderer、资源和跨层契约测试 |
-
-完整工程边界请阅读 [`AGENTS.md`](./AGENTS.md)。
-
----
-
-## 快速开始
-
-### 环境要求
-
-- Node.js 20+
-- npm（仓库锁定 `npm@11.11.0`）
-- Python 3
-- macOS 或 Windows 10+
-
-Linux 可用于部分源码开发和测试，但 macOS、Windows 是主要桌面目标平台。
-
-### 获取源码
+Clone the repository and install its dependencies:
 
 ```bash
-git clone http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/cogseed.git
-cd cogseed
+git clone http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/cog-seed
+cd cog-seed
 npm install
 ```
 
-`npm install` 会准备 Electron 原生依赖和嵌入模型。运行时、OfficeCLI、FFmpeg 和 Whisper 等资源由项目脚本按平台验证或准备。
+The repository pins `npm@11.11.0`. Installation and development startup prepare native Electron dependencies, the embedding model, and required platform resources. macOS and Windows are the primary desktop targets.
 
-### 启动
+## Quick Start
 
-macOS / Linux shell：
+Start CogSeed on macOS or a Linux development environment:
 
 ```bash
 ./run.sh
 ```
 
-Windows：
+On Windows:
 
 ```bat
 run.cmd
 ```
 
-源码启动器锁定 `cogseed` runtime variant，并使用独立的 App ID、Electron userData、单实例锁和数据目录。
+After the desktop workspace opens:
 
-### 配置模型
+1. Open **Connections → Models & Quota**.
+2. Add an API key or import a supported authorization from CC Switch.
+3. Test the connection and select an available model.
+4. Create a task and type `@` to select agents, skills, connectors, or Library files.
 
-启动后进入 **设置 → 模型授权**：
+## Local Agent Support
 
-1. 选择 OAuth、手动 API Key 或 CC Switch 导入。
-2. 测试授权并发现可用模型。
-3. 选择模型并设置默认模型。
-4. 按 Agent 或 Commander 需要绑定授权。
+CogSeed includes managed adapters for:
 
----
+- Claude Code
+- Codex
+- OpenClaw
+- OpenCode
+- Hermes
+- WorkBuddy
 
-## 数据与隐私
+Each CLI remains a separate local tool. CogSeed manages dispatch, working-directory context, session continuity, process events, cancellation, and file-change evidence through the centralized local-agent runner.
 
-macOS/Linux 的 canonical container 是：
+## Cognition and Recall
+
+Task experience can move through a reviewable cognition workflow:
+
+- Session and review signals produce candidate experience.
+- Candidates remain pending until the user confirms or rejects them.
+- Confirmed assets keep stable identity, version, scope, and audit information.
+- Reuse records and effectiveness evidence show whether an asset was carried into later work.
+- Personal ontology and related workspace references organize confirmed knowledge.
+
+## Tools, Knowledge, and Connections
+
+- Skills are available through the installed skill catalog and dedicated runtime runner.
+- MCP connectors expose connected services through list-and-call meta-tools rather than a flat tool list.
+- The Library stores user-managed context sources; derived indexes and vector data remain machine-local.
+- Agents access Library content through knowledge-base tools instead of scanning the context directory directly.
+- Model authorization supports API keys, supported OAuth flows, custom endpoints, and CC Switch import where configured.
+
+## Data and Security Boundaries
+
+User-scoped data is stored under:
 
 ```text
-~/.cogseed/
+<container>/data/<uid>/
+├── cloud/   syncable user-private state
+└── local/   machine-private state, caches, indexes, and installations
 ```
 
-源码 `cogseed` variant 使用：
+Key boundaries:
 
-```text
-~/.cogseed/runtime-variants/cogseed/
-├── data/
-├── electron-user-data/
-└── userWorkSpace/
-```
+- The renderer has no direct Node.js access.
+- Application communication uses the `window.cogseed` preload API and Electron IPC.
+- The main process does not expose a local HTTP server.
+- File tools enforce workspace and attachment path boundaries.
+- Runtime shell and skill execution pass through dedicated tool gateways.
+- Token-bearing connector and account data stays behind local secret-storage facades.
 
-用户数据位于：
+## Repository Layout
 
-```text
-<data>/<uid>/
-├── cloud/   # 可同步的用户私有状态
-└── local/   # 机器私有状态、缓存、索引和本地安装内容
-```
+| Path | Purpose |
+|---|---|
+| `src/main/` | Electron main process, IPC, storage, models, and feature workflows |
+| `src/renderer/` | Classic HTML, CSS, JavaScript, localization, and desktop UI |
+| `src/core-agent/` | Core Agent execution, providers, sessions, and tools |
+| `resources/builtin/` | Platform agents, skills, and marketplace seed content |
+| `resources/runtime/` | Verified bundled runtime manifests and platform assets |
+| `test/` | Main-process, renderer, resource, and cross-layer tests |
+| `docs/` | Architecture, implementation, handoff, and integration documentation |
 
-关键原则：
+## Development
 
-- API Key 和 token 通过本地 secret facade 加密保存。
-- renderer 不能直接访问 Node API，只能使用 `window.cogseed` allow-list。
-- CogSeed 不在主进程中启动本地 HTTP 服务。
-- Artifact iframe 不暴露 IPC，通过受验证的 `postMessage` 合约与宿主通信。
-- 模型调用使用用户选择的 provider/授权；不同 hosted 功能仍按账户和 entitlement 边界处理。
-
----
-
-## 开发与测试
-
-安装依赖：
-
-```bash
-npm install
-```
-
-类型检查：
+Run the TypeScript check:
 
 ```bash
 npm run typecheck
 ```
 
-完整测试：
+Run the complete test suite:
 
 ```bash
 npm test
 ```
 
-请使用 `npm test`，不要直接运行 `npx vitest`；测试脚本会管理 Electron/Node 原生 SQLite ABI 的切换和恢复。
+Use `npm test` rather than invoking Vitest directly because the repository test runner manages native SQLite ABI preparation and recovery.
 
-常用命令：
+Restart the development application after changes:
 
 ```bash
-npm run rebuild:sqlite:electron
-npm run rebuild:pty:electron
-npm run test:platform-native
 scripts/restart-cogseed.sh
 ```
 
-分支协作：
+## Documentation
 
-- 功能工作使用 `dev/*` 分支。
-- 所有改动通过 GitLab MR 进入受保护的 `develop`。
-- `main` 是正式发布镜像，不承载独立开发提交。
-
----
-
-## Mate Agent / Orkas 迁移兼容
-
-CogSeed 已经是当前正式产品身份。为保证已有安装、回调和本地数据平滑迁移，以下旧入口保留一个发布周期：
-
-- `mateagent://` 与 `orkas://` deep link 会归一化为 `cogseed://`。
-- `ORKAS_*` 环境变量会映射到 canonical `COGSEED_*` 配置。
-- `.orkas` / `.orkas-dev` 数据根会通过只复制、校验和 marker 机制迁移到 `.cogseed` / `.cogseed-dev`。
-- `mate` runtime variant 仅作为 deprecated legacy identity。
-- `bin/orkas-bridge.cjs` 与 `bin/mate-runtime-worker.cjs` 仅是兼容 wrapper。
-
-新代码、新文档和新生成的 URL 必须使用 CogSeed 标识。旧兼容入口将在迁移观察周期结束后单独删除。
-
----
-
-## 文档
-
-- [`docs/README.md`](./docs/README.md) — 当前文档索引与开发口径
-- [`AGENTS.md`](./AGENTS.md) — 工程约束、数据边界和协作规则
-- [`docs/superpowers/specs/2026-08-11-cogseed-official-cutover-design.md`](./docs/superpowers/specs/2026-08-11-cogseed-official-cutover-design.md) — 正式切换设计
-
----
-
-## Attribution
-
-CogSeed 延续并改造了既有开源 Agent Runtime、协作和工具链实现，也参考了 Orkas、Hermes-Agent、OpenClaw 等项目。历史来源名称仅用于准确 attribution 和兼容迁移，不代表当前产品名称。
+| Topic | Link |
+|---|---|
+| Engineering boundaries and contribution rules | [AGENTS.md](./AGENTS.md) |
+| Runtime variant isolation | [Runtime variants](./docs/runtime-variants.md) |
+| External messaging touchpoints | [Touchpoint v2 quick start](./docs/touchpoint-v2-quickstart.md) |
+| P3394 implementation evidence | [P3394 conformance matrix](./docs/P3394-Conformance-Matrix.md) |
 
 ## License
 
-[MIT](./LICENSE)
+CogSeed is available under the [MIT License](./LICENSE).
