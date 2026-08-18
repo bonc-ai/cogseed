@@ -5143,6 +5143,13 @@ body.model-not-configured .main-content { flex-direction: column; }
   filter: drop-shadow(0 5px 10px rgba(20, 40, 30, 0.16));
 }
 
+/* 内联确认卡（如删除文件确认）挂在会话末尾时，右缘与输入框右缘对齐——松鼠
+   悬在输入框上方恰好压住卡片右侧的确认/取消按钮。确认卡存在期间隐藏松鼠，
+   保证按钮完整可见可点（指针事件本就穿透，这里解决视觉遮挡）。 */
+#panel-conversation:has(.delete-confirm-card) .chat-input-squirrel {
+  display: none;
+}
+
 .new-chat-input-area textarea {
   flex: 0 1 auto;
   width: 100%;
@@ -5595,6 +5602,274 @@ body.model-not-configured .main-content { flex-direction: column; }
   flex-direction: column;
   padding: 12px 14px 16px;
 }
+
+.run-context {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.run-context-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.run-context-section[open] {
+  border-color: var(--border);
+}
+.run-context-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  list-style: none;
+  user-select: none;
+}
+.run-context-summary::-webkit-details-marker { display: none; }
+.run-context-summary::-moz-list-marker { display: none; }
+.run-context-summary-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.run-context-summary-icon svg,
+.run-context-summary-icon img {
+  width: 14px;
+  height: 14px;
+}
+.run-context-summary-label {
+  flex: 0 0 auto;
+}
+.run-context-summary-meta {
+  flex: 1 1 auto;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-context-detail {
+  padding: 0 10px 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.run-context-detail > :first-child {
+  margin-top: 0;
+}
+.run-context-pane .conversation-info-protocol-header,
+.run-context-pane .conversation-info-collaboration-header {
+  display: none;
+}
+.run-context-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.run-context-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  text-align: center;
+}
+.run-context-tab:hover {
+  color: var(--text);
+}
+.run-context-tab.is-active {
+  color: var(--text);
+  font-weight: 500;
+  border-bottom-color: var(--primary);
+}
+.run-context-pane {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.run-context-pane[hidden] {
+  display: none;
+}
+.run-context-subsection {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.run-context-subsection:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.run-context-subsection-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.run-context-extracting {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--border-strong, var(--border));
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface);
+}
+.run-context-extracting-spinner {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong, var(--border));
+  border-top-color: var(--primary);
+  animation: spin 0.8s linear infinite;
+}
+/* 四类资产 tab · 本会话认知沉淀：待确认候选与已沉淀资产 */
+.run-context-cog-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin: 14px 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.run-context-cog-section-title:first-of-type {
+  margin-top: 12px;
+}
+.run-context-cog-section-title em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--primary);
+}
+/* 四格计数框（本会话已沉淀资产数，未沉淀显示 0） */
+.run-context-assets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.run-context-asset {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.run-context-asset span {
+  font-size: 12px;
+  color: var(--muted);
+}
+.run-context-asset strong {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text);
+}
+.run-context-cog-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.run-context-cog-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.run-context-cog-type {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--muted);
+  background: var(--surface-2, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.run-context-cog-judgment {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  word-break: break-word;
+}
+.run-context-cog-value {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+  word-break: break-word;
+}
+.run-context-cog-value b {
+  margin-right: 4px;
+  font-weight: 500;
+  color: var(--text-secondary, var(--text));
+}
+.run-context-cog-bounds {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.run-context-cog-bound {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.run-context-cog-bound.is-applicable::before {
+  content: '✓ ';
+  color: var(--success, #16a34a);
+}
+.run-context-cog-bound.is-forbidden::before {
+  content: '✕ ';
+  color: var(--danger, #dc2626);
+}
+.run-context-cog-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+.run-context-cog-settled {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.run-context-cog-settled .run-context-cog-judgment {
+  flex: 1 1 auto;
+  font-size: 12px;
+}
+.run-context-cog-settled-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--success, #16a34a);
+  white-space: nowrap;
+}
+
 .conversation-info-empty {
   flex: 1;
   min-height: 160px;
@@ -24457,7 +24732,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .cw-body{flex:1;overflow-y:auto;padding:22px 24px 24px;min-height:320px}
 .cw-section-intro h3{font-size:15px;font-weight:650;color:var(--text,#14281E);margin:0 0 4px}
-.cw-section-intro p{font-size:12.5px;color:var(--muted,#6E8578);margin:0 0 16px;line-height:1.6}
+.cw-section-intro p{font-size:12.5px;color:var(--muted,#6E8578);margin:0 0 8px;line-height:1.6}
+.cw-section-intro-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:2px}
+.cw-section-intro-head h3{margin:0}
+.cw-section-intro-head .cw-privacy-note{margin-top:0}
 .cw-loading{padding:40px 20px;text-align:center;color:var(--muted,#6E8578);font-size:13px;
   display:flex;flex-direction:column;align-items:center;gap:12px}
 .cw-loading::before{content:'';width:22px;height:22px;border-radius:50%;
@@ -24534,7 +24812,7 @@ body.model-not-configured .main-content { flex-direction: column; }
 .cw-select-all:hover{border-color:var(--text-2,#3E5A4C);color:var(--text-2,#3E5A4C)}
 .cw-session-count{font-size:12px;color:var(--muted,#6E8578);white-space:nowrap}
 .cw-session-list{
-  max-height:360px;overflow-y:auto;border:1px solid var(--border,rgba(24,84,60,.09));
+  max-height:clamp(280px,calc(88vh - 360px),600px);overflow-y:auto;border:1px solid var(--border,rgba(24,84,60,.09));
   border-radius:var(--radius-md,14px);background:var(--surface,#fff);
 }
 .cw-session-row{
@@ -25977,4 +26255,57 @@ body.model-not-configured .main-content { flex-direction: column; }
 .conv-task-chip.is-failed {
   color: var(--danger);
   background: rgba(239, 68, 68, 0.10);
+}
+
+/* 工作区目录缺失引导：重新选择按钮（files tab 空态下方）。 */
+.conversation-info-files-repick {
+  margin-top: 8px;
+  padding: 6px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 99px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.conversation-info-files-repick:hover {
+  background: var(--surface-2);
+  border-color: var(--primary);
+  color: var(--primary-text, #0a7a55);
+}
+
+/* 工作区区块：当前工作区路径行（让用户一眼知道实际用的是哪个目录）。 */
+.ci-files-workspace-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 6px 9px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 11.5px;
+  color: var(--text-2);
+  min-width: 0;
+}
+.ci-files-workspace-path-icon {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.ci-files-workspace-path span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ci-files-workspace-path code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 4px;
 }

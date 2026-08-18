@@ -88,6 +88,26 @@ function _initSkillsStaticBindings() {
 
 _initSkillsStaticBindings();
 
+/**
+ * 从认知树点叶子跳转后的视口定位。
+ *
+ * 目标布局（用户主要看资产详情）：
+ *   屏幕最上面 → 四类资产卡（大框架：哪几类、各几条）
+ *   紧接着下面 → 资产详情
+ *
+ * 四类卡在 DOM 里位于树内容之后、资产工作台之前，所以滚动定位到四类卡即可：
+ * 视口顶部是四类卡，下方就是资产详情，不用滑过整棵树。
+ */
+function _scrollCognitionToAssetsWorkbench() {
+  setTimeout(() => {
+    const grid = document.querySelector('#skills-cognition-assets-summary .ability-asset-summary-grid');
+    const el = grid || document.getElementById('skills-cognition-assets-body');
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+  }, 0);
+}
+
 function _recallCaptureErrorMessage(error) {
   const raw = String(error && error.message ? error.message : error || '').trim();
   const messages = {
@@ -555,6 +575,18 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    // 「我的认知树」二级页面（四类资产 + 详情）的返回按钮：回到树视图。
+    const subviewTree = event.target.closest('[data-cognition-subview-tree]');
+    if (subviewTree) {
+      _skillsCognitionState.assetSubview = 'tree';
+      renderSkillsCognitionAssets();
+      setTimeout(() => {
+        const top = document.getElementById('skills-cognition-assets-summary');
+        if (top && typeof top.scrollIntoView === 'function') top.scrollIntoView({ block: 'start' });
+      }, 0);
+      return;
+    }
+
     const pageLink = event.target.closest('[data-cognition-page-link]');
     if (pageLink) {
       // 跨页跳转可以顺带带上落点。「使用与证明」的「查看资产」按钮同时挂了
@@ -567,7 +599,19 @@ function _initSkillsCognitionBindings() {
         const targetAsset = (_skillsCognitionState.assets || []).find((item) => item.id === targetAssetId);
         if (targetAsset) _skillsCognitionState.assetCategoryFilter = targetAsset.category || targetAsset.type || '';
       }
+      // 认知树的大叶（一类资产一片）同时挂 page-link 和 ability-asset-category：
+      // 点大叶 = 进入「我的认知树」的二级页面（四类资产 + 详情）并筛到那一类。
+      const targetCategory = pageLink.dataset.abilityAssetCategory || '';
+      if (targetCategory) {
+        _skillsCognitionState.assetCategoryFilter = targetCategory;
+        _skillsCognitionState.selectedAssetId = '';
+      }
+      // 带资产落点（叶子/查看资产）的跳转进入二级页面：树是这一页的一级视图，
+      // 点叶子要看的是详细的四类资产。
+      if (targetAssetId || targetCategory) _skillsCognitionState.assetSubview = 'assets';
       switchSkillsCognitionPage(pageLink.dataset.cognitionPageLink || 'inbox');
+      // 跳进二级页面后定位到四类资产卡（屏幕最上面），下方就是资产详情。
+      if (targetCategory || targetAssetId) _scrollCognitionToAssetsWorkbench();
       return;
     }
 
@@ -708,7 +752,11 @@ function _initSkillsCognitionBindings() {
       _skillsCognitionState.selectedAssetId = openAsset.dataset.cognitionOpenAsset || '';
       const selectedAsset = (_skillsCognitionState.assets || []).find((item) => item.id === _skillsCognitionState.selectedAssetId);
       if (selectedAsset) _skillsCognitionState.assetCategoryFilter = selectedAsset.category || selectedAsset.type || '';
+      // 点叶子进入二级页面（四类资产 + 详情），树是这一页的一级视图。
+      _skillsCognitionState.assetSubview = 'assets';
       switchSkillsCognitionPage('assets');
+      // 定位到四类资产卡（屏幕最上面），下方就是该资产的详情——用户主要看的是详情。
+      _scrollCognitionToAssetsWorkbench();
       return;
     }
 
@@ -718,6 +766,7 @@ function _initSkillsCognitionBindings() {
       if (!assetId) return;
       _skillsCognitionState.selectedAssetId = assetId;
       _skillsCognitionState.assetCategoryFilter = '';
+      _skillsCognitionState.assetSubview = 'assets';
       switchSkillsCognitionPage('assets');
       return;
     }

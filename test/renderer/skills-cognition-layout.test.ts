@@ -151,7 +151,10 @@ describe('Recall cognition workspace layout', () => {
     expect(skills).toContain('function _renderCognitionTaskHero');
     for (const [view, key] of [
       ['renderSkillsCognitionInbox', 'cognition.inbox_title'],
-      ['renderSkillsCognitionAssets', 'cognition.assets_title'],
+      // 「我的认知树」分两级：一级是种子/认知树（_renderCognitionTreeFirstPage），
+      // 二级是四类资产 + 详情（返回认知树入口在 renderSkillsCognitionAssets）。
+      ['_renderCognitionTreeFirstPage', 'cognition.tree_title'],
+      ['renderSkillsCognitionAssets', 'cognition.assets_back_to_tree'],
       ['renderSkillsCognitionProofs', 'cognition.proofs_title'],
       ['renderSkillsCognitionGovernance', 'cognition.governance_title'],
     ]) {
