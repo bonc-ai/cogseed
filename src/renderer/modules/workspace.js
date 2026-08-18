@@ -207,7 +207,7 @@
 
   /** CLI type → 显示名（与 onboarding 的 _csAgentNameForCli 同风格；未知原样返回）。 */
   function _baseAgentDisplayName(cli) {
-    if (cli === 'claude') return 'Claude';
+    if (cli === 'claude') return 'Claude Code';
     if (cli === 'codex') return 'Codex';
     if (cli === 'opencode') return 'OpenCode';
     if (cli === 'hermes') return 'Hermes';
@@ -216,13 +216,32 @@
     return cli;
   }
 
-  /** 空间当前对话 Agent 的 cli type 列表（多选；兼容旧 base_agent 单值）。 */
-  function _baseAgentNames(sp) {
+  /** 空间当前对话 Agent 的 cli type 原始列表（多选；兼容旧 base_agent 单值）。 */
+  function _baseAgentCliList(sp) {
     if (!sp) return [];
-    const list = Array.isArray(sp.base_agents) && sp.base_agents.length
+    return Array.isArray(sp.base_agents) && sp.base_agents.length
       ? sp.base_agents
       : (sp.base_agent ? [sp.base_agent] : []);
-    return list.map((t) => _baseAgentDisplayName(t));
+  }
+
+  /** 空间当前对话 Agent 的显示名列表。 */
+  function _baseAgentNames(sp) {
+    return _baseAgentCliList(sp).map((t) => _baseAgentDisplayName(t));
+  }
+
+  /** 可协作 AI 工具横排 tile（原型 v010-agent-strip 布局；外接 agent 头像与 AI 团队同源）。
+   *  fixed = 始终展示且锁定的 tile（如 CogSeed，不写入 base_agents）；cliIds = 已选 cli type。 */
+  function _baseAgentToolRow(cliIds, opts = {}) {
+    const fixed = (opts.fixed || []).map((f) => `
+    <button type="button" class="ws-tool-tile selected locked" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(f.id)}" disabled title="${escapeHtml(f.name)}"><span class="ws-tool-logo">${escapeHtml(f.letter || 'AG')}</span><span>${escapeHtml(f.name)}</span></button>`).join('');
+    const cards = (opts.catalog || []).map((o) => {
+      const selected = (cliIds || []).includes(o.id);
+      return `
+    <button type="button" class="ws-tool-tile ${selected ? 'selected' : ''}" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(o.id)}" title="${escapeHtml(o.name || o.id)}">${renderAvatarHtml(o.icon, o.color, { size: 38, seed: o.agent_id || o.id, letter: o.name || '' })}<span>${escapeHtml(o.name || o.id)}</span></button>`;
+    }).join('');
+    const body = fixed + cards;
+    const empty = body ? '' : `<span class="ws-tool-empty">${opts.emptyText || ''}</span>`;
+    return `<div class="ws-tool-row">${body}${empty}</div>`;
   }
 
   // ── 能力真实数据源（与 personal-ontology 的 skills.list/agents.list 同源）──
@@ -272,6 +291,9 @@
           desc: (a.description_zh || a.description_en || '').trim(),
           // 保留 runtime 供基础 Agent 合并使用（外接 CLI agent = 基础 Agent）
           runtime: (a && a.runtime) || null,
+          // 头像同源：与 AI 团队面板外接 agent 同一份 icon/color（renderAvatarHtml）
+          icon: (a && a.icon) || undefined,
+          color: (a && a.color) || undefined,
         }))
       : [];
     _loaded = true;
@@ -304,7 +326,7 @@
     _baseAgentProbeError = '';
     const teamCli = (_agentCatalog || [])
       .filter((a) => a.runtime && a.runtime.cli && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'))
-      .map((a) => ({ id: a.runtime.cli, name: a.name }));
+      .map((a) => ({ id: a.runtime.cli, name: a.name, icon: a.icon, color: a.color, agent_id: a.id }));
     let probedCli = [];
     if (cliRes.error) {
       _baseAgentProbeError = String(cliRes.error);
@@ -954,11 +976,7 @@
       task: { label: 'Task Agent', picked: _resolveCatalog('task', _abilityPicksWithBundle('task')) },
       skill: { label: 'Skill', picked: _resolveCatalog('skill', _abilityPicksWithBundle('skill')) },
     };
-    // 基础 Agent 已选显示名（注册名优先，未知回退 cli 显示名）
-    const _createAgentNames = (_createBaseAgents || []).map((id) => {
-      const a = _baseAgentCatalog.find((x) => x.id === id);
-      return a ? a.name : _baseAgentDisplayName(id);
-    }).filter(Boolean);
+    // 基础 Agent 已选即 _createBaseAgents（cli type 列表），由 _baseAgentToolRow 直接渲染工具卡
     return `
     <div class="ws-scrim" data-ws="close-create">
       <section class="ws-dialog" role="dialog" aria-modal="true" data-ws="noop">
@@ -970,10 +988,15 @@
           <div class="ws-form-grid">
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
               <input data-ws="create-name" value="${escapeHtml(_createName)}" placeholder="${_t('ws.space_name_ph', '请输入空间名称')}" maxlength="60" autocomplete="off" spellcheck="false" /></label>
-            <label class="full"><span>${_t('ws.base_agent', '基础 Agent')} <em>${_t('ws.base_agent_hint', '负责承接任务')}</em></span>
-              <div class="ws-agent-row"><span>CX</span><div><strong>${_createAgentNames.length ? escapeHtml(_createAgentNames.join('、')) : (_baseAgentProbeError ? escapeHtml('探测失败：' + _baseAgentProbeError) : (_baseAgentCatalog.length ? '未选择' : escapeHtml(_t('ws.no_agent', '未检测到本机 Agent'))))}</strong><small>${_t('ws.base_agent_hint', '承接空间内任务')}</small></div>
-                <button class="ws-secondary ws-ability-edit" data-ws="edit-create-agent">${_t('ws.adjust', '调整')}</button>
-              </div></label>
+            <div class="ws-tool-strip">
+              <div class="ws-tool-strip-head"><strong>${_t('ws.base_agent', '可协作 AI 工具 Agent')}</strong><small>${_t('ws.base_agent_hint', '任务中可通过 @ 明确调用')}</small></div>
+              ${_baseAgentToolRow(_createBaseAgents, {
+                catalog: _baseAgentCatalog,
+                toggleAction: 'toggle-create-tool',
+                fixed: [{ id: 'cogseed', name: 'CogSeed', letter: 'CS' }],
+                emptyText: _baseAgentProbeError ? escapeHtml('探测失败：' + _baseAgentProbeError) : escapeHtml(_t('ws.no_agent', '未检测到本机 Agent')),
+              })}
+            </div>
             <label class="full instruction"><span>${_t('ws.default_goal', '默认目标/指令')} <em>0 / 500</em></span>
               <textarea data-ws="create-instruction" maxlength="500" placeholder="${_t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等')}">${escapeHtml(_createInstruction)}</textarea></label>
           </div>
@@ -1635,6 +1658,15 @@
     if (ciInput) ciInput.addEventListener('input', () => { _createInstruction = ciInput.value; });
     // 基础 Agent 多选弹窗（新建空间内；勾选即时生效，保存=关闭）
     root.querySelectorAll('[data-ws="edit-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = true; _reRender(); }));
+    // 可协作 AI 工具卡点选即切换（CogSeed 固定卡 disabled 不响应）
+    root.querySelectorAll('[data-ws="toggle-create-tool"]').forEach((el) => el.addEventListener('click', () => {
+      if (el.disabled) return;
+      const id = el.dataset.id;
+      const picks = _createBaseAgents || [];
+      _createBaseAgents = picks.includes(id) ? picks.filter((x) => x !== id) : [...picks, id];
+      _createAgentTouched = true;
+      _reRender();
+    }));
     root.querySelectorAll('[data-ws="close-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = false; _reRender(); }));
     root.querySelectorAll('[data-ws="toggle-create-agent"]').forEach((el) => el.addEventListener('click', () => {
       const id = el.dataset.id;
