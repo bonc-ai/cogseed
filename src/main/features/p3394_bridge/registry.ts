@@ -261,6 +261,19 @@ export class P3394PeerRegistry {
     return { ok: true, value: { ...peer, aliases: [...peer.aliases] } };
   }
 
+  /** Re-enables a disabled peer (inverse of disable). Clears the disabled
+   *  flag so resolve()/findByCapability() admit it again. Persisted. */
+  enable(agentId: string): P3394RegistryResult<P3394PeerRecord> {
+    const peer = this.peers.get(agentId);
+    if (!peer) return fail('peer_not_found', 'agent_id', 'Peer is not registered.');
+    if (peer.disabled) {
+      peer.disabled = false;
+      peer.updated_at = this.now();
+      this.persist();
+    }
+    return { ok: true, value: { ...peer, aliases: [...peer.aliases] } };
+  }
+
   revoke(agentId: string): P3394RegistryResult<P3394PeerRecord> {
     const peer = this.peers.get(agentId);
     if (!peer) return fail('peer_not_found', 'agent_id', 'Peer is not registered.');
@@ -288,6 +301,19 @@ export class P3394PeerRegistry {
     peer.last_seen_at = now ?? new Date().toISOString();
     this.persist();
     return true;
+  }
+
+  /** 返回"长期无任何活动"的节点 agent_id 列表（peer 健康 sweep 用）。
+   *  判定：last_seen_at 缺失或距今超过 ttlMs。`nowIso` 可注入便于测试。 */
+  listStale(ttlMs: number, nowIso?: string): string[] {
+    const now = nowIso ? new Date(nowIso).getTime() : Date.now();
+    const out: string[] = [];
+    for (const peer of this.peers.values()) {
+      if (!peer.last_seen_at) { out.push(peer.identity.agent_id); continue; }
+      const last = new Date(peer.last_seen_at).getTime();
+      if (Number.isNaN(last) || now - last > ttlMs) out.push(peer.identity.agent_id);
+    }
+    return out;
   }
 
   /** Capability-based resolution (guide §7.2): the best enabled peer declaring

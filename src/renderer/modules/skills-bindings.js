@@ -88,6 +88,26 @@ function _initSkillsStaticBindings() {
 
 _initSkillsStaticBindings();
 
+/**
+ * 从认知树点叶子跳转后的视口定位。
+ *
+ * 目标布局（用户主要看资产详情）：
+ *   屏幕最上面 → 四类资产卡（大框架：哪几类、各几条）
+ *   紧接着下面 → 资产详情
+ *
+ * 四类卡在 DOM 里位于树内容之后、资产工作台之前，所以滚动定位到四类卡即可：
+ * 视口顶部是四类卡，下方就是资产详情，不用滑过整棵树。
+ */
+function _scrollCognitionToAssetsWorkbench() {
+  setTimeout(() => {
+    const grid = document.querySelector('#skills-cognition-assets-summary .ability-asset-summary-grid');
+    const el = grid || document.getElementById('skills-cognition-assets-body');
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+  }, 0);
+}
+
 function _recallCaptureErrorMessage(error) {
   const raw = String(error && error.message ? error.message : error || '').trim();
   const messages = {
@@ -555,6 +575,18 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    // 「我的认知树」二级页面（四类资产 + 详情）的返回按钮：回到树视图。
+    const subviewTree = event.target.closest('[data-cognition-subview-tree]');
+    if (subviewTree) {
+      _skillsCognitionState.assetSubview = 'tree';
+      renderSkillsCognitionAssets();
+      setTimeout(() => {
+        const top = document.getElementById('skills-cognition-assets-summary');
+        if (top && typeof top.scrollIntoView === 'function') top.scrollIntoView({ block: 'start' });
+      }, 0);
+      return;
+    }
+
     const pageLink = event.target.closest('[data-cognition-page-link]');
     if (pageLink) {
       // 跨页跳转可以顺带带上落点。「使用与证明」的「查看资产」按钮同时挂了
@@ -567,7 +599,19 @@ function _initSkillsCognitionBindings() {
         const targetAsset = (_skillsCognitionState.assets || []).find((item) => item.id === targetAssetId);
         if (targetAsset) _skillsCognitionState.assetCategoryFilter = targetAsset.category || targetAsset.type || '';
       }
+      // 认知树的大叶（一类资产一片）同时挂 page-link 和 ability-asset-category：
+      // 点大叶 = 进入「我的认知树」的二级页面（四类资产 + 详情）并筛到那一类。
+      const targetCategory = pageLink.dataset.abilityAssetCategory || '';
+      if (targetCategory) {
+        _skillsCognitionState.assetCategoryFilter = targetCategory;
+        _skillsCognitionState.selectedAssetId = '';
+      }
+      // 带资产落点（叶子/查看资产）的跳转进入二级页面：树是这一页的一级视图，
+      // 点叶子要看的是详细的四类资产。
+      if (targetAssetId || targetCategory) _skillsCognitionState.assetSubview = 'assets';
       switchSkillsCognitionPage(pageLink.dataset.cognitionPageLink || 'inbox');
+      // 跳进二级页面后定位到四类资产卡（屏幕最上面），下方就是资产详情。
+      if (targetCategory || targetAssetId) _scrollCognitionToAssetsWorkbench();
       return;
     }
 
@@ -708,7 +752,11 @@ function _initSkillsCognitionBindings() {
       _skillsCognitionState.selectedAssetId = openAsset.dataset.cognitionOpenAsset || '';
       const selectedAsset = (_skillsCognitionState.assets || []).find((item) => item.id === _skillsCognitionState.selectedAssetId);
       if (selectedAsset) _skillsCognitionState.assetCategoryFilter = selectedAsset.category || selectedAsset.type || '';
+      // 点叶子进入二级页面（四类资产 + 详情），树是这一页的一级视图。
+      _skillsCognitionState.assetSubview = 'assets';
       switchSkillsCognitionPage('assets');
+      // 定位到四类资产卡（屏幕最上面），下方就是该资产的详情——用户主要看的是详情。
+      _scrollCognitionToAssetsWorkbench();
       return;
     }
 
@@ -718,6 +766,7 @@ function _initSkillsCognitionBindings() {
       if (!assetId) return;
       _skillsCognitionState.selectedAssetId = assetId;
       _skillsCognitionState.assetCategoryFilter = '';
+      _skillsCognitionState.assetSubview = 'assets';
       switchSkillsCognitionPage('assets');
       return;
     }
@@ -1388,7 +1437,33 @@ function _initSkillsCognitionBindings() {
         let channel = actionName === 'promote' ? 'recall.candidates.promote' : actionName === 'reject' ? 'recall.candidates.reject' : actionName === 'ignore' ? 'recall.candidates.ignore' : actionName === 'keep-current' ? 'recall.candidates.keepCurrent' : actionName === 'defer' ? 'recall.candidates.defer' : actionName === 'resume' ? 'recall.candidates.resume' : '';
         let payload = { candidateId };
         const candidate = (_skillsCognitionState.recallCandidates || []).find((item) => item.id === candidateId);
+        // Buttons also carry the candidate id; start at the parent so the
+        // container is selected. Resolve the card only for actions that read
+        // card fields, keeping lightweight DOM adapters safe for simple actions.
+        const card = (candidate?.suggestedType === 'personal' || actionName === 'save-and-promote')
+          ? (() => {
+            const parent = recallAction.parentElement;
+            const fromParent = typeof parent?.closest === 'function'
+              ? parent.closest('[data-recall-candidate-id]') : null;
+            return fromParent || (typeof recallAction.closest === 'function'
+              ? recallAction.closest('[data-recall-candidate-id]') : null);
+          })()
+          : null;
+        const readProfileTarget = () => {
+          if (candidate?.suggestedType !== 'personal' || !card) return undefined;
+          const encoded = card.querySelector('[data-recall-profile-target]')?.value || '';
+          if (!encoded) return undefined;
+          try {
+            const target = JSON.parse(decodeURIComponent(encoded));
+            if (!target || !target.groupId || !target.section || !target.fieldName) return undefined;
+            return target;
+          } catch (_) {
+            return undefined;
+          }
+        };
+        const profileTarget = readProfileTarget();
         let riskAcknowledged = false;
+        if (actionName === 'promote' && profileTarget) payload = { candidateId, profileTarget };
         if (actionName === 'promote' || actionName === 'save-and-promote') {
           if (candidate?.risk === 'high') {
             const confirmed = typeof uiConfirm === 'function' && await uiConfirm({
@@ -1398,16 +1473,10 @@ function _initSkillsCognitionBindings() {
             });
             if (!confirmed) return;
             riskAcknowledged = true;
-            if (actionName === 'promote') payload = { candidateId, riskAcknowledged: true };
+            if (actionName === 'promote') payload = { candidateId, riskAcknowledged: true, ...(profileTarget ? { profileTarget } : {}) };
           }
         }
         if (actionName === 'save-and-promote') {
-          // **从父节点起找容器**：`closest()` 是从元素自身开始匹配的，而这些
-          // 动作按钮上同样带 `data-recall-candidate-id`（列表页与详情页都一样），
-          // 直接 `recallAction.closest(...)` 会取到按钮本身——按钮里没有任何
-          // 编辑字段，于是 judgment/suggestedType 全是空串，后端直接以
-          // `invalid recall candidate update` 打回。实机在「确认并限域」上复现。
-          const card = recallAction.parentElement?.closest('[data-recall-candidate-id]');
           if (!card || !candidate) throw new Error('recall candidate unavailable');
           channel = 'recall.candidates.update';
           const evidenceText = card.querySelector('[data-recall-edit-evidence]')?.value || '';
@@ -1428,7 +1497,11 @@ function _initSkillsCognitionBindings() {
         const result = await window.cogseed.invoke(channel, payload);
         if (!result?.ok) throw new Error(result?.error || 'recall candidate action failed');
         if (actionName === 'save-and-promote') {
-          const promoted = await window.cogseed.invoke('recall.candidates.promote', { candidateId, ...(riskAcknowledged ? { riskAcknowledged: true } : {}) });
+          const promoted = await window.cogseed.invoke('recall.candidates.promote', {
+            candidateId,
+            ...(riskAcknowledged ? { riskAcknowledged: true } : {}),
+            ...(profileTarget ? { profileTarget } : {}),
+          });
           if (!promoted?.ok) throw new Error(promoted?.error || 'recall candidate action failed');
         }
         _skillsCognitionState.editingRecallCandidateId = '';

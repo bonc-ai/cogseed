@@ -345,6 +345,31 @@ function initializeInstallDataRoot(
     throw new Error(`CogSeed legacy data root migration failed: ${err.message}`);
   }
 
+  // The source runtime was renamed from `mate` to `cogseed`. Those variants
+  // intentionally have separate roots, so the rename must carry the user's
+  // existing profile trees forward before the first `cogseed` boot. The
+  // migration is additive, keeps the old root intact, and is guarded by a
+  // marker outside the data tree so it can never repeat unexpectedly.
+  if (variant === 'cogseed') {
+    try {
+      const { migrateRuntimeVariantData } = require('./util/migrate-runtime-variant-data.cjs');
+      const baseContainer = path.dirname(path.dirname(container));
+      const legacyContainer = path.join(baseContainer, 'runtime-variants', 'mate');
+      const result = migrateRuntimeVariantData({
+        sourceContainer: legacyContainer,
+        destinationContainer: container,
+        sourceVariant: 'mate',
+      });
+      if (result.migrated) {
+        _earlyWarn(
+          `[install-data-root] migrated source runtime data mate -> cogseed users=${result.sourceUserIds.length} active=${result.activeUserId || 'none'}\n`,
+        );
+      }
+    } catch (err) {
+      _earlyWarn(`[install-data-root] source runtime variant migration failed: ${err.message}\n`);
+    }
+  }
+
   // Migration is best-effort: a failure here should not block boot. The
   // source-run `<repoRoot>/data` is left in place for retry;
   // `<container>/data` is still mkdir'd below so paths.ts has a usable

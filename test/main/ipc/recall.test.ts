@@ -252,6 +252,24 @@ describe('ipc › recall candidate governance', () => {
       },
     });
     expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenCalledWith(UID, 'cand-a', { riskAcknowledged: false });
+    await expect(call('recall.candidates.promote', {
+      candidateId: 'cand-personal',
+      profileTarget: {
+        groupId: 'group-student',
+        templateId: 'student',
+        section: '学习背景',
+        fieldName: '专业与学习方向',
+      },
+    })).resolves.toMatchObject({ ok: true });
+    expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenLastCalledWith(UID, 'cand-personal', {
+      riskAcknowledged: false,
+      profileTarget: {
+        groupId: 'group-student',
+        templateId: 'student',
+        section: '学习背景',
+        fieldName: '专业与学习方向',
+      },
+    });
     await expect(call('recall.candidates.ignore', { candidateId: 'cand-a', note: 'not reusable' })).resolves.toMatchObject({ ok: true, candidate: { status: 'ignored' } });
     expect(recallMock.ignoreRecallCandidate).toHaveBeenCalledWith(UID, 'cand-a', 'not reusable');
     await expect(call('recall.candidates.promoteBatch', { candidateIds: ['cand-a', 'cand-b'] })).resolves.toMatchObject({ ok: true, failed: [] });

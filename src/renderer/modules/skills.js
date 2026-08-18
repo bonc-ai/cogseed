@@ -20,7 +20,7 @@ const _GLOBAL_SKILL_GROUP_MIN = 2;
 
 
 const _skillsCognitionState = {
-  page: 'inbox',
+  page: 'assets',
   /** 「待我处理」的服务端读模型（cognition.inbox.list）。渲染层不自己判断
    *  什么算待办——判断在 formal-assets/inbox.ts，与 gate 同源。 */
   inboxItems: [],
@@ -52,6 +52,8 @@ const _skillsCognitionState = {
   captureFilter: 'all',
   captureSettings: null,
   captureModel: null,
+  /** 已安装个人角色模板的字段清单，供 Personal 候选确认时选择直接落点。 */
+  personalTemplates: [],
   captureSettingsExpanded: false,
   selectedCaptureId: '',
   // Candidate review is a cross-capture work queue. Keep selection in the
@@ -63,6 +65,10 @@ const _skillsCognitionState = {
   writingRecallCandidateId: '',
   assets: [],
   selectedAssetId: '',
+  /** 「我的认知树」tab 内的二级视图：'tree'（种子/认知树，一级页面）或
+   *  'assets'（详细的四类资产：四类卡 + 列表 + 详情，二级页面）。从树点
+   *  叶子进入 'assets'，返回按钮回到 'tree'。 */
+  assetSubview: 'tree',
   /** 正在编辑内容的正式资产 id（confirmed 候选之后的唯一修改出口）。 */
   editingAssetId: '',
   assetCategoryFilter: '',
@@ -268,6 +274,30 @@ function _captureLinkedAssetIds(capture) {
   return [...new Set(ids)];
 }
 
+function _renderPersonalProfileTarget(candidate) {
+  if (candidate?.suggestedType !== 'personal') return '';
+  const templates = (Array.isArray(_skillsCognitionState.personalTemplates)
+    ? _skillsCognitionState.personalTemplates : [])
+    .filter((template) => template && template.installed && template.group_id && Array.isArray(template.sections));
+  const options = ['<option value="">自动匹配模板字段</option>'];
+  for (const template of templates) {
+    for (const section of template.sections) {
+      for (const field of (Array.isArray(section.fields) ? section.fields : [])) {
+        const name = typeof field === 'string' ? field : field?.name;
+        if (!name) continue;
+        const value = encodeURIComponent(JSON.stringify({
+          groupId: template.group_id,
+          templateId: template.template_id,
+          section: section.title,
+          fieldName: name,
+        }));
+        options.push(`<option value="${escapeHtml(value)}">${escapeHtml(`${template.name} · ${section.title} · ${name}`)}</option>`);
+      }
+    }
+  }
+  return `<label class="cognition-candidate-field cognition-candidate-profile-target"><span>${escapeHtml(_cognitionText('cognition.personal_profile_target', '个人模板落点'))}</span><select data-recall-profile-target>${options.join('')}</select><small class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.personal_profile_target_hint', '不选择时由系统自动匹配；只写入已安装模板字段。'))}</small></label>`;
+}
+
 function _cognitionDate(value) {
   if (!value) return '';
   try {
@@ -316,7 +346,10 @@ function switchSkillsCognitionPage(page) {
   ]);
   const next = allowed.has(requested) ? requested : 'inbox';
   _skillsCognitionState.page = next;
-  if (next === 'assets' && !_skillsCognitionState.assetCategoryFilter && !_skillsCognitionState.selectedAssetId) {
+  // 进「我的认知树」的二级页面（四类资产 + 详情）时，没有明确落点才默认
+  // 「关于我」分类；一级页面（树视图）不设分类——树不按分类看。
+  if (next === 'assets' && _skillsCognitionState.assetSubview === 'assets'
+    && !_skillsCognitionState.assetCategoryFilter && !_skillsCognitionState.selectedAssetId) {
     _skillsCognitionState.assetCategoryFilter = 'personal';
   }
   _cognitionSetPageVisibility(next);
@@ -344,7 +377,12 @@ function _cognitionRenderCurrentPage(options = {}) {
     else renderSkillsCognitionProofs();
   }
   if (page === 'captures') renderSkillsCognitionCaptures();
-  if (page === 'assets') renderSkillsCognitionAssets();
+  if (page === 'assets') {
+    renderSkillsCognitionAssets();
+    // 我的认知树是第一任务视图：有资产时把树也拉起来（树是这一页的第一眼）。
+    // 首启/无资产时不需要树——种子本身就是这一页。
+    if (options.enter && (_skillsCognitionState.assets || []).length) void loadCognitionTree({ rebuild: true });
+  }
   if (page === 'governance') renderSkillsCognitionGovernance();
   if (page === 'candidate') renderSkillsCognitionCandidateDetail();
   if (page === 'nonasset') {
@@ -1775,6 +1813,7 @@ async function updateRecallCaptureSettings(patch) {
 async function loadCognitionTree(options = {}) {
   _skillsCognitionState.tree = { loading: true };
   if (_skillsCognitionState.page === 'tree') renderSkillsCognitionTree();
+  if (_skillsCognitionState.page === 'assets') renderSkillsCognitionAssets();
   try {
     const channel = options.rebuild ? 'recall.tree.rebuild' : 'recall.tree.read';
     const result = await window.cogseed.invoke(channel, {});
@@ -1789,6 +1828,7 @@ async function loadCognitionTree(options = {}) {
     _skillsCognitionState.tree = { error: (error && error.message) || String(error) };
   }
   if (_skillsCognitionState.page === 'tree') renderSkillsCognitionTree();
+  if (_skillsCognitionState.page === 'assets') renderSkillsCognitionAssets();
 }
 
 /**
@@ -2947,6 +2987,7 @@ function renderSkillsCognitionCandidates() {
       <label>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}<input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label>
       <label>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}<input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}"></label>
       <label>${escapeHtml(_cognitionText('cognition.type', '类型'))}<select data-recall-edit-type>${['personal','rule','template','skill_method'].map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('')}</select></label>
+      ${_renderPersonalProfileTarget(candidate)}
       <label>${escapeHtml(_cognitionText('cognition.applicable_when', '适用场景（一行一条）'))}<textarea data-recall-edit-applicable>${escapeHtml((candidate.applicableWhen || []).join('\n'))}</textarea></label>
       <label>${escapeHtml(_cognitionText('cognition.forbidden_when', '禁止场景（一行一条）'))}<textarea data-recall-edit-forbidden>${escapeHtml((candidate.forbiddenWhen || []).join('\n'))}</textarea></label>
       <label class="recall-candidate-editor-wide">${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}<textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label>
@@ -3020,6 +3061,7 @@ function renderSkillsCognitionCandidateDetail() {
       <blockquote class="cognition-candidate-quote">${escapeHtml(candidate.judgment || '')}</blockquote>
       ${candidate.value ? `<p class="skills-cognition-meta">${escapeHtml(candidate.value)}</p>` : ''}
       ${detailCapability.canEdit ? `<label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.type', '类型'))}</span><select data-recall-edit-type>${typeOptions}</select></label>
+      ${_renderPersonalProfileTarget(candidate)}
       <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.candidate_scope_label', '作用范围'))}</span><input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}" placeholder="${escapeHtml(_cognitionText('cognition.candidate_scope_placeholder', '例如：仅产品工作空间'))}"></label>
       <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}</span><input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label>
       <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}</span><textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label>
@@ -3059,101 +3101,123 @@ function renderSkillsCognitionCandidateDetail() {
  *   effectiveness_validated   → 真实复用并形成有效 Evidence（深）
  */
 /**
- * 认知树的有机可视化（v0.9.1 原型 01）。
+ * 认知树的有机可视化（v0.9.1 原型 01 风格）。
  *
- * **只画契约里真有的东西**（`CognitionTreeNode`：assetType / label / maturity /
- * version / status），三处刻意没有照搬原型：
+ * **树的视觉按 v0.9.1 对齐，但只画真实数据**：
  *
- *  1. **树上不画"芽"。** 原型在枝头画了 3 个橙色候选点，但候选不是资产，
- *     `CognitionTreeNodeId` 是 `asset:${string}`、`type` 恒为 `'asset'`，树里
- *     根本没有候选节点。要画就得让渲染层自己把候选摆上去——那是在图上编造一个
- *     后端不认的状态。候选的位置由图例说明（这是 G-8，等树契约 v2 的产品决策）。
- *  2. **树干不画版本年轮。** 原型树干上有个 "v3"。版本是**每个资产各自**的
- *     （`node.version`），不存在"这棵树的版本"，画一个就是凭空造一个聚合量。
- *     版本落在每片叶子的 tooltip 里。
- *  3. **空枝照画。** 四类是后端固定的 assetType，不是"有数据才存在的东西"。
+ *  1. **一片大叶 = 一类资产**（不是每资产一片小叶）。椭圆颜色按该类"已验证
+ *     占比"分三档（无验证 / 部分验证 / 全部验证），全部来自 `node.maturity`。
+ *     点大叶 → 跳到「我的资产」并按该类筛选；完整资产清单在下方分类卡。
+ *  2. **芽 = 待确认候选**。候选不是资产节点（`CognitionTreeNodeId` 是
+ *     `asset:${string}`），但候选列表本身是后端真实数据（recall.candidates
+ *     .list），按 `suggestedType` 归到对应枝上画橙色芽点，点击进入「待我处理」。
+ *     芽的数量、类别、标题全部来自真实候选，不是渲染层编造的状态。
+ *  3. **树干不画版本年轮。** 版本是**每个资产各自**的（`node.version`），
+ *     不存在"这棵树的版本"，画一个就是凭空造一个聚合量。版本在下方分类卡里。
+ *  4. **空枝照画。** 四类是后端固定的 assetType，不是"有数据才存在的东西"。
  *     一根光秃的枝条如实表达"这一类你还没有"，藏掉则会让用户以为系统只有三类。
  *
- * 布局是**确定性**的：位置只由 assetType 和该类内的下标算出，不用随机、不用
- * 时间戳。否则每次重画叶子都会跳位置，用户会以为树变了。
+ * 布局是**确定性**的：位置只由 assetType 和候选排序算出，不用随机、不用
+ * 时间戳。否则每次重画都会跳位置，用户会以为树变了。
  */
-function _renderCognitionTreeCanvas(nodes) {
+function _renderCognitionTreeCanvas(nodes, budsByType) {
   // 四根主枝：起点挂在树干上，终点是枝尖。角度写死是为了确定性布局。
   const BRANCHES = [
-    { type: 'personal', x1: 356, y1: 300, x2: 150, y2: 196, anchor: 'end' },
-    { type: 'rule', x1: 364, y1: 306, x2: 574, y2: 208, anchor: 'start' },
-    { type: 'template', x1: 356, y1: 232, x2: 198, y2: 96, anchor: 'end' },
-    { type: 'skill_method', x1: 366, y1: 222, x2: 546, y2: 88, anchor: 'start' },
+    { type: 'personal', x1: 356, y1: 300, x2: 150, y2: 196, rotate: -14 },
+    { type: 'rule', x1: 364, y1: 306, x2: 574, y2: 208, rotate: 13 },
+    { type: 'template', x1: 356, y1: 232, x2: 198, y2: 96, rotate: 18 },
+    { type: 'skill_method', x1: 366, y1: 222, x2: 546, y2: 88, rotate: -15 },
   ];
-  const MAX_LEAVES = 9;
+  // 椭圆里放不下的长名用简称（v0.9.1 同款），完整名在 tooltip 与分类卡里。
+  const SHORT_LABELS = {
+    personal: '关于我', rule: '规则偏好', template: '模板范例', skill_method: '技能方法',
+  };
   const branches = BRANCHES.map((branch) => {
     const branchNodes = nodes.filter((node) => node.assetType === branch.type);
-    const shown = branchNodes.slice(0, MAX_LEAVES);
+    const total = branchNodes.length;
+    const deepCount = branchNodes.filter((node) => node.maturity === 'effectiveness_validated').length;
     const limb = `<path d="M${branch.x1} ${branch.y1} Q${(branch.x1 + branch.x2) / 2} ${branch.y1 - 34} ${branch.x2} ${branch.y2}" stroke="#8a6547" stroke-width="9" fill="none" stroke-linecap="round"/>`;
-    const leaves = shown.map((node, index) => {
-      // 沿枝条 0.42→0.98 均匀分布，垂直方向交替偏移，避免叠在一条线上。
-      const t = shown.length === 1 ? 0.72 : 0.42 + (0.56 * index) / (shown.length - 1);
-      const cx = branch.x1 + (branch.x2 - branch.x1) * t;
-      const cy = branch.y1 + (branch.y2 - branch.y1) * t - 12 * Math.sin(Math.PI * t);
-      const offset = index % 2 === 0 ? -13 : 13;
-      const deep = node.maturity === 'effectiveness_validated';
-      const dimmed = node.status && node.status !== 'active';
-      const assetId = String(node.id || '').replace(/^asset:/, '');
-      const tip = [node.label || assetId, _abilityAssetMaturityLabel(node.maturity, node.status), node.version ? `v${node.version}` : '']
-        .filter(Boolean).join(' · ');
-      // 叶子可点（走既有 data-cognition-open-asset 委托），但**不可聚焦**：
+    let branchSvg;
+    if (total === 0) {
+      // 空枝照画：全称 + 0，如实表达"这一类你还没有"。
+      branchSvg = `<text x="${branch.x2}" y="${branch.y2 + 5}" text-anchor="middle" class="cognition-tree-svg-empty">${escapeHtml(_abilityAssetCategoryLabel(branch.type))} · 0</text>`;
+    } else {
+      const ratioClass = deepCount === 0 ? 'is-ratio-none'
+        : deepCount < total ? 'is-ratio-mixed' : 'is-ratio-full';
+      const tip = _cognitionText('cognition.tree_leaf_tip', '{label}：{total} 项，{deep} 项已验证')
+        .replace('{label}', _abilityAssetCategoryLabel(branch.type))
+        .replace('{total}', String(total))
+        .replace('{deep}', String(deepCount));
+      // 大叶可点（走既有 data-cognition-page-link 委托），但**不可聚焦**：
       // SVG <g> 加 tabindex 会做出一个能 Tab 到、却按 Enter 没反应的焦点陷阱。
-      // 键盘与读屏的完整入口是下面那组分类卡（真 <button>），信息不缺。
-      return `<g class="cognition-tree-svg-leaf${deep ? ' is-deep' : ' is-light'}${dimmed ? ' is-dimmed' : ''}" data-cognition-open-asset="${escapeHtml(assetId)}">`
+      // 键盘与读屏的完整入口是下方分类卡（真 <button>），信息不缺。
+      branchSvg = `<g class="cognition-tree-svg-leaf ${ratioClass}" data-cognition-page-link="assets" data-ability-asset-category="${escapeHtml(branch.type)}">`
         + `<title>${escapeHtml(tip)}</title>`
-        + `<ellipse cx="${cx.toFixed(1)}" cy="${(cy + offset).toFixed(1)}" rx="15" ry="8.5" transform="rotate(${offset < 0 ? -22 : 16} ${cx.toFixed(1)} ${(cy + offset).toFixed(1)})"/>`
+        + `<ellipse cx="${branch.x2}" cy="${branch.y2}" rx="54" ry="27" transform="rotate(${branch.rotate} ${branch.x2} ${branch.y2})"/>`
+        + `<text x="${branch.x2}" y="${branch.y2 + 4}" text-anchor="middle" class="cognition-tree-svg-leaf-label">${escapeHtml(SHORT_LABELS[branch.type])} · ${total}</text>`
+        + '</g>';
+    }
+    // 芽：待确认候选按 suggestedType 归枝。每枝最多画 2 个芽点，多的在
+    // tooltip 里说清数量；完整候选清单在「待我处理」。
+    const buds = budsByType[branch.type] || [];
+    const budSvg = buds.slice(0, 2).map((bud, index) => {
+      const t = 0.5 + index * 0.16;
+      const cx = branch.x1 + (branch.x2 - branch.x1) * t;
+      const cy = branch.y1 + (branch.y2 - branch.y1) * t - 10;
+      const label = _abilityCandidateDisplayTitle(bud);
+      const more = buds.length > 1
+        ? _cognitionText('cognition.tree_bud_more', '等 {n} 项').replace('{n}', String(buds.length))
+        : '';
+      const tip = _cognitionText('cognition.tree_bud_tip', '待确认：{label}').replace('{label}', label) + (more ? `（${more}）` : '');
+      return `<g class="cognition-tree-svg-bud" data-cognition-page-link="inbox">`
+        + `<title>${escapeHtml(tip)}</title>`
+        + `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="9"/>`
         + '</g>';
     }).join('');
-    // 超出的不省略计数：说"还有 N 片"比默默截断诚实，完整列表在下面的分类卡里。
-    const overflow = branchNodes.length > MAX_LEAVES
-      ? `<text x="${branch.x2}" y="${branch.y2 + 30}" text-anchor="${branch.anchor === 'end' ? 'start' : 'end'}" class="cognition-tree-svg-overflow">+${branchNodes.length - MAX_LEAVES}</text>`
-      : '';
-    const label = `<text x="${branch.x2 + (branch.anchor === 'end' ? -6 : 6)}" y="${branch.y2 - 14}" text-anchor="${branch.anchor}" class="cognition-tree-svg-label">${escapeHtml(_abilityAssetCategoryLabel(branch.type))} · ${branchNodes.length}</text>`;
-    return limb + leaves + label + overflow;
+    return limb + branchSvg + budSvg;
   }).join('');
-  return `<svg class="cognition-tree-svg" viewBox="0 0 720 400" role="img" aria-label="${escapeHtml(_cognitionText('cognition.tree_canvas_label', '认知树'))}">
-    <ellipse cx="360" cy="372" rx="150" ry="15" class="cognition-tree-svg-ground"/>
-    <path d="M352 366c10-62 6-104 12-152 6-42 16-72 32-106" stroke="#8a6547" stroke-width="26" fill="none" stroke-linecap="round"/>
-    <path d="M350 366c-30 4-54 12-76 26M362 366c24 4 47 12 70 26" stroke="#a07c60" stroke-width="7" fill="none" stroke-linecap="round"/>
+  return `<svg class="cognition-tree-svg" viewBox="0 0 720 430" role="img" aria-label="${escapeHtml(_cognitionText('cognition.tree_canvas_label', '认知树'))}">
+    <ellipse cx="360" cy="394" rx="150" ry="15" class="cognition-tree-svg-ground"/>
+    <path d="M352 388c10-62 6-104 12-152 6-42 16-72 32-106" stroke="#8a6547" stroke-width="26" fill="none" stroke-linecap="round"/>
+    <path d="M350 388c-30 4-54 12-76 26M362 388c24 4 47 12 70 26" stroke="#a07c60" stroke-width="7" fill="none" stroke-linecap="round"/>
     ${branches}
+    <text x="40" y="418" class="cognition-tree-svg-roots">${escapeHtml(_cognitionText('cognition.tree_roots', '根系：来源 · Owner · 作用域 · 权限'))}</text>
   </svg>`;
 }
 
-function renderSkillsCognitionTree() {
-  const host = document.getElementById('skills-cognition-tree-body');
-  if (!host) return;
-  const hero = _renderCognitionTaskHero({
-    eyebrowKey: 'cognition.tree_eyebrow', eyebrow: 'COGNITION TREE',
-    titleKey: 'cognition.tree_title', title: '一棵树，显示属于你的认知如何成长',
-    hintKey: 'cognition.tree_page_hint', hint: '树只呈现正式资产的真实状态，不按会话量或 Token 数虚假生长。',
-    backPage: 'assets', backKey: 'cognition.back_to_assets', back: '返回我的资产',
-  });
+/**
+ * 树的数据聚合：候选芽、树快照、成熟度计数。tab1（我的认知树，种子/树二态）
+ * 与独立树页共用同一份口径，避免两处各自数一遍还数出不同结果。
+ */
+function _cognitionTreeStats() {
+  // 候选是"芽"：它们还不是资产，不在树契约的节点里，但候选列表本身是后端
+  // 真实数据，按 suggestedType 归到对应枝上画芽点（见 _renderCognitionTreeCanvas）。
+  const pendingCandidates = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
+    .filter((candidate) => _recallCandidateCapabilities(candidate).countsAsPending);
+  const budCount = pendingCandidates.length;
+  // 芽只归到四类主枝上；归不进类的候选留在「待我处理」列表里，不硬塞到树枝。
+  const treeAssetTypes = new Set(['personal', 'rule', 'template', 'skill_method']);
+  const budsByType = {};
+  for (const candidate of pendingCandidates) {
+    const type = candidate.suggestedType || candidate.type || '';
+    if (!treeAssetTypes.has(type)) continue;
+    (budsByType[type] = budsByType[type] || []).push(candidate);
+  }
   const tree = _skillsCognitionState.tree;
-  if (tree?.error) {
-    host.innerHTML = `${hero}<div class="skills-cognition-warning"><span>${escapeHtml(tree.error)}</span><button class="btn btn-sm" data-cognition-tree-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`;
-    return;
-  }
-  if (!tree || tree.loading) {
-    host.innerHTML = `${hero}<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`;
-    return;
-  }
-  const nodes = Array.isArray(tree.nodes) ? tree.nodes : [];
-  const edges = Array.isArray(tree.edges) ? tree.edges : [];
-  // 候选是"芽"：它们还不是资产，所以不在树的节点里，但图例要说清它们的位置，
-  // 否则用户会以为待确认的东西凭空消失了。
-  const budCount = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
-    .filter((candidate) => _recallCandidateCapabilities(candidate).countsAsPending).length;
-  if (!nodes.length) {
-    host.innerHTML = `${hero}<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span></div>`;
-    return;
-  }
-  const deep = nodes.filter((node) => node.maturity === 'effectiveness_validated');
-  const light = nodes.filter((node) => node.maturity !== 'effectiveness_validated');
+  const nodes = Array.isArray(tree && tree.nodes) ? tree.nodes : [];
+  const edges = Array.isArray(tree && tree.edges) ? tree.edges : [];
+  const deepCount = nodes.filter((node) => node.maturity === 'effectiveness_validated').length;
+  const lightCount = nodes.length - deepCount;
+  return { pendingCandidates, budCount, budsByType, tree, nodes, edges, deepCount, lightCount };
+}
+
+/**
+ * 树的内容区（不含页头 hero）：树面板 + 分支卡 + 关系区 + 当前成长右栏。
+ * tab1（我的认知树）与独立树页渲染同一份内容，保证两处看到的是同一棵树。
+ * 调用方负责 tree.error / tree.loading / 空态分支，这里只画有节点的树。
+ */
+function _renderCognitionTreeContent(stats) {
+  const { nodes, edges, deepCount, lightCount, budCount, budsByType } = stats;
   const relationLabel = (kind) => _cognitionText(`cognition.tree_relation_${kind}`, ({
     refines: '细化自', depends_on: '依赖', replaces: '取代', conflicts_with: '与之冲突', related_to: '相关',
   })[kind] || kind);
@@ -3181,19 +3245,81 @@ function renderSkillsCognitionTree() {
         ${edges.slice(0, 30).map((edge) => `<div class="cognition-tree-relation"><span>${escapeHtml(labelById.get(edge.from) || edge.from)}</span><i aria-hidden="true">→</i><em>${escapeHtml(relationLabel(edge.kind))}</em><i aria-hidden="true">→</i><span>${escapeHtml(labelById.get(edge.to) || edge.to)}</span></div>`).join('')}
       </section>`
     : '';
-  const legend = `<aside class="skills-cognition-card cognition-tree-legend">
-    <div><strong>${escapeHtml(_cognitionText('cognition.tree_growth', '当前成长'))}</strong><p class="panel-sub">${escapeHtml(_cognitionText('cognition.tree_growth_hint', '{deep} 片叶已完成效果验证，{light} 片仍在等待真实复用。')
-    .replace('{deep}', String(deep.length)).replace('{light}', String(light.length)))}</p></div>
-    <div class="cognition-tree-legend-row"><span class="cognition-tree-dot is-bud" aria-hidden="true"></span><div><strong>${escapeHtml(_cognitionText('cognition.tree_legend_bud', '待确认芽点'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_legend_bud_hint', '候选尚未成为正式资产，因此不在树上。').concat(budCount ? ` (${budCount})` : ''))}</span></div></div>
-    <div class="cognition-tree-legend-row"><span class="cognition-tree-dot is-light" aria-hidden="true"></span><div><strong>${escapeHtml(_cognitionText('cognition.tree_legend_light', '浅色叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_legend_light_hint', '你已确认，但使用效果尚未验证。'))}</span></div></div>
-    <div class="cognition-tree-legend-row"><span class="cognition-tree-dot is-deep" aria-hidden="true"></span><div><strong>${escapeHtml(_cognitionText('cognition.tree_legend_deep', '深色叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_legend_deep_hint', '已在真实任务中复用并形成有效 Evidence。'))}</span></div></div>
-    <div class="cognition-tree-legend-row"><span class="cognition-tree-dot is-none" aria-hidden="true"></span><div><strong>${escapeHtml(_cognitionText('cognition.tree_legend_nonasset', '任务状态不长叶'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_legend_nonasset_hint', '接续快照、Session 与运行记录属于支撑对象。'))}</span></div></div>
-    <button type="button" class="btn btn-sm" data-cognition-page-link="nonasset">${escapeHtml(_cognitionText('cognition.tree_open_nonasset', '查看非资产分流'))}</button>
+  // 树面板：标题 + 右上角操作 + SVG 画布（v0.9.1 树首页结构）。
+  const budAction = budCount
+    ? `<button type="button" class="btn btn-sm" data-cognition-page-link="inbox">${escapeHtml(_cognitionText('cognition.tree_view_buds', '查看 {n} 个芽').replace('{n}', String(budCount)))}</button>`
+    : '';
+  const canvas = `<section class="skills-cognition-card cognition-tree-figure">
+    <div class="cognition-tree-panel-head"><div><h3>${escapeHtml(_cognitionText('cognition.tree_panel_title', '我的认知树'))}</h3><p class="panel-sub">${escapeHtml(_cognitionText('cognition.tree_panel_caption', '一位用户只有一棵树，四条主枝对应四类资产'))}</p></div><div class="cognition-tree-panel-actions">${budAction}</div></div>
+    ${_renderCognitionTreeCanvas(nodes, budsByType)}
+  </section>`;
+  // 当前成长面板（v0.9.1 右栏）：大数字 + 文案 + 四行统计 + 动作。四行数据
+  // 全部来自真实读模型（候选计数 / maturity / 接续快照），没有一行是编的。
+  const summary = `<aside class="skills-cognition-card cognition-tree-summary">
+    <h3>${escapeHtml(_cognitionText('cognition.tree_growth', '当前成长'))}</h3>
+    <div class="cognition-tree-big-stat">${escapeHtml(_cognitionText('cognition.tree_growth_big', '{n} 片深叶').replace('{n}', String(deepCount)))}</div>
+    <p class="cognition-tree-summary-text">${escapeHtml(_cognitionText('cognition.tree_growth_summary', '{deep} 项能力已在真实任务中复用并留下有效证据；{light} 项已确认但仍待验证。').replace('{deep}', String(deepCount)).replace('{light}', String(lightCount)))}</p>
+    <div class="cognition-tree-summary-list">
+      <div class="cognition-tree-summary-row"><span class="cognition-tree-dot is-bud" aria-hidden="true"></span><strong>${escapeHtml(_cognitionText('cognition.tree_summary_bud', '待确认的芽'))}</strong><b>${escapeHtml(String(budCount))}</b></div>
+      <div class="cognition-tree-summary-row"><span class="cognition-tree-dot is-light" aria-hidden="true"></span><strong>${escapeHtml(_cognitionText('cognition.tree_summary_light', '已确认，待验证'))}</strong><b>${escapeHtml(String(lightCount))}</b></div>
+      <div class="cognition-tree-summary-row"><span class="cognition-tree-dot is-deep" aria-hidden="true"></span><strong>${escapeHtml(_cognitionText('cognition.tree_summary_deep', '已验证资产'))}</strong><b>${escapeHtml(String(deepCount))}</b></div>
+      <div class="cognition-tree-summary-row"><span class="cognition-tree-dot is-none" aria-hidden="true"></span><strong>${escapeHtml(_cognitionText('cognition.tree_summary_nonasset', '任务快照不长叶'))}</strong><span class="cognition-tree-summary-note">${escapeHtml(_cognitionText('cognition.tree_legend_nonasset_hint', '接续快照、Session 与运行记录属于支撑对象。'))}</span></div>
+    </div>
+    <div class="cognition-tree-summary-actions">
+      <button type="button" class="btn btn-sm btn-primary" data-cognition-page-link="inbox">${escapeHtml(budCount ? _cognitionText('cognition.tree_action_inbox', '处理 {n} 项变化').replace('{n}', String(budCount)) : _cognitionText('cognition.tree_action_inbox_none', '没有待处理的变化'))}</button>
+      <button type="button" class="btn btn-sm" data-cognition-page-link="proofs">${escapeHtml(_cognitionText('cognition.tree_action_proofs', '查看复用效果'))}</button>
+    </div>
+    <button type="button" class="btn btn-sm btn-subtle cognition-tree-nonasset-link" data-cognition-page-link="nonasset">${escapeHtml(_cognitionText('cognition.tree_open_nonasset', '查看非资产分流'))}</button>
   </aside>`;
   // SVG 是概览，下面的分类卡是完整可点列表——两者都保留。只留图的话，叶子多了
   // 就点不准也读不全；只留卡片则回不到"这是一棵树"的整体感。
-  const canvas = `<section class="skills-cognition-card cognition-tree-figure">${_renderCognitionTreeCanvas(nodes)}</section>`;
-  host.innerHTML = `${hero}<div class="cognition-tree-layout"><div class="cognition-tree-canvas">${canvas}${branches}${relations}</div>${legend}</div>`;
+  return `<div class="cognition-tree-layout"><div class="cognition-tree-canvas">${canvas}${branches}${relations}</div>${summary}</div>`;
+}
+
+function renderSkillsCognitionTree() {
+  const host = document.getElementById('skills-cognition-tree-body');
+  if (!host) return;
+  const stats = _cognitionTreeStats();
+  const { tree, nodes, budCount, deepCount } = stats;
+  const heroBase = {
+    eyebrowKey: 'cognition.tree_eyebrow', eyebrow: 'COGNITION TREE',
+    titleKey: 'cognition.tree_title', title: '这棵树，就是你积累下来的能力',
+    hintKey: 'cognition.tree_page_hint', hint: '树只展示正式认知资产。待确认候选是芽，确认后成为浅叶，经过真实复用与证据验证后成为深叶。',
+    backPage: 'assets', backKey: 'cognition.back_to_assets', back: '返回我的认知树',
+  };
+  if (tree?.error) {
+    const hero = _renderCognitionTaskHero(heroBase);
+    host.innerHTML = `${hero}<div class="skills-cognition-warning"><span>${escapeHtml(tree.error)}</span><button class="btn btn-sm" data-cognition-tree-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`;
+    return;
+  }
+  if (!tree || tree.loading) {
+    const hero = _renderCognitionTaskHero(heroBase);
+    host.innerHTML = `${hero}<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`;
+    return;
+  }
+  const hero = _renderCognitionTaskHero({
+    ...heroBase,
+    metrics: [
+      { key: 'cognition.tree_metric_assets', label: '正式资产', value: nodes.length },
+      { key: 'cognition.tree_metric_inbox', label: '待我处理', value: budCount },
+      { key: 'cognition.tree_metric_proven', label: '稳定复用', value: deepCount },
+    ],
+  });
+  if (!nodes.length) {
+    const budEntry = budCount
+      ? `<div class="skills-cognition-actions"><button type="button" class="btn btn-sm btn-primary" data-cognition-page-link="inbox">${escapeHtml(_cognitionText('cognition.tree_empty_handle_buds', '去处理 {n} 个候选芽').replace('{n}', String(budCount)))}</button></div>`
+      : '';
+    // 空树分两种，给的话也不同：
+    //   一件东西都没有 → 首启种子引导（该从哪儿开始），与「待我处理」的
+    //     首启变体同源——从认知树进来的人先看到的是起点，不是一张空画布；
+    //   有资产但被清空/从未确认 → 「树上还没有叶片」，树的空态如实表达。
+    const emptyBody = _cognitionIsFirstRun()
+      ? _cognitionSeedMarkup()
+      : `<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span>${budEntry}</div>`;
+    host.innerHTML = `${hero}${emptyBody}`;
+    return;
+  }
+  host.innerHTML = `${hero}${_renderCognitionTreeContent(stats)}`;
 }
 
 /**
@@ -3725,6 +3851,48 @@ function _renderRecallAssetHistory(assetId) {
   return `<section class="recall-asset-version-panel"><div class="recall-asset-version-head"><strong>${escapeHtml(_cognitionText('cognition.version_history', '版本历史'))}</strong><button type="button" class="btn btn-sm recall-asset-version-close" data-recall-asset-history-close title="${escapeHtml(closeLabel)}" aria-label="${escapeHtml(closeLabel)}">${closeIcon}</button></div>${body}</section>`;
 }
 
+/**
+ * 「我的认知树」tab 的树视图（一级页面）：种子 ↔ 认知树。
+ *   一件东西都没有 → 认知种子（该从哪儿开始）；有资产 → 认知树（树的 hero
+ *   + 树面板 + 当前成长 + 分支卡 + 关系区）。这里不含四类卡与资产工作台——
+ *   它们是二级页面（点树上的叶子进入）的内容。
+ */
+function _renderCognitionTreeFirstPage(items) {
+  const treeHeroBase = {
+    eyebrowKey: 'cognition.tree_eyebrow', eyebrow: 'COGNITION TREE',
+    titleKey: 'cognition.tree_title', title: '这棵树，就是你积累下来的能力',
+    hintKey: 'cognition.tree_page_hint', hint: '树只展示正式认知资产。待确认候选是芽，确认后成为浅叶，经过真实复用与证据验证后成为深叶。',
+  };
+  if (_cognitionIsFirstRun()) return _cognitionSeedMarkup();
+  const stats = _cognitionTreeStats();
+  const { tree, nodes, budCount, deepCount } = stats;
+  if (tree?.error) {
+    return `<div class="skills-cognition-warning"><span>${escapeHtml(tree.error)}</span><button class="btn btn-sm" data-cognition-tree-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`;
+  }
+  if (!tree || tree.loading) {
+    // 树数据按需加载。无资产时不需要树——空树就是"还没有叶片"，直接给空态，
+    // 不显示一个会永远转下去的加载中（只有有资产才触发拉树）。
+    return items.length
+      ? `<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`
+      : `<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span></div>`;
+  }
+  if (!nodes.length) {
+    const budEntry = budCount
+      ? `<div class="skills-cognition-actions"><button type="button" class="btn btn-sm btn-primary" data-cognition-page-link="inbox">${escapeHtml(_cognitionText('cognition.tree_empty_handle_buds', '去处理 {n} 个候选芽').replace('{n}', String(budCount)))}</button></div>`
+      : '';
+    return `<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span>${budEntry}</div>`;
+  }
+  const hero = _renderCognitionTaskHero({
+    ...treeHeroBase,
+    metrics: [
+      { key: 'cognition.tree_metric_assets', label: '正式资产', value: nodes.length },
+      { key: 'cognition.tree_metric_inbox', label: '待我处理', value: budCount },
+      { key: 'cognition.tree_metric_proven', label: '稳定复用', value: deepCount },
+    ],
+  });
+  return `${hero}${_renderCognitionTreeContent(stats)}`;
+}
+
 function renderSkillsCognitionAssets() {
   const host = document.getElementById('skills-cognition-assets-body');
   if (!host) return;
@@ -3733,11 +3901,25 @@ function renderSkillsCognitionAssets() {
   const personalMemoryHead = document.getElementById('skills-cognition-formal-assets')
     ?.querySelector?.('.recall-personal-memory-head');
   const items = _skillsCognitionState.assets;
-  const assetsHero = _renderCognitionTaskHero({
-    eyebrowKey: 'cognition.assets_eyebrow', eyebrow: 'MY COGNITION',
-    titleKey: 'cognition.assets_title', title: '把拥有的认知按四类整理清楚',
-    hintKey: 'cognition.assets_page_hint', hint: '四类资产是“我拥有什么”，不是新的任务入口；选择分类后继续使用现有资产页与个人本体。',
-  });
+  const subview = _skillsCognitionState.assetSubview === 'assets' ? 'assets' : 'tree';
+
+  // ── 树视图（一级页面）：种子/认知树。四类卡与资产工作台属于二级页面，不进
+  // 这一层——从树点叶子才进入二级页面（subview = 'assets'）。 ──
+  if (subview === 'tree') {
+    if (summaryHost) {
+      summaryHost.hidden = false;
+      summaryHost.innerHTML = _renderCognitionTreeFirstPage(items);
+    }
+    if (host) host.hidden = true;
+    const ontology = document.getElementById('skills-cognition-personal-ontology');
+    if (ontology) ontology.hidden = true;
+    if (personalMemoryHead) personalMemoryHead.hidden = true;
+    return;
+  }
+
+  // ── 资产视图（二级页面）：返回认知树 + 四类资产卡 + 资产工作台 ──
+  if (summaryHost) summaryHost.hidden = true;
+  host.hidden = false;
   const categories = [
     ['personal', 'cognition.asset_category_personal', '关于我', 'cognition.asset_category_personal_desc', '长期角色与个人边界'],
     ['rule', 'cognition.asset_category_rule', '规则与偏好', 'cognition.asset_category_rule_desc', '可复用的决策约束'],
@@ -3750,12 +3932,9 @@ function renderSkillsCognitionAssets() {
     <button type="button" class="ability-asset-summary-card${active}" data-ability-asset-category="${escapeHtml(category)}"><span>${escapeHtml(_cognitionText(key, fallback))}</span><strong>${escapeHtml(String(_abilityAssetSummary(items, category)))}</strong><small>${escapeHtml(_cognitionText(descKey, descFallback))}</small></button>
   `;
   }).join('');
-  // 认知树入口挂在四类卡片旁边：树回答的是"这些资产长成什么样了"，它是
-  // 「我拥有什么」的另一种看法，不是第五个任务。
-  const treeEntry = `<div class="ability-asset-tree-entry"><div><strong>${escapeHtml(_cognitionText('cognition.tree_entry_title', '一棵树展示所有已确认资产的成长状态'))}</strong><p class="panel-sub">${escapeHtml(_cognitionText('cognition.tree_entry_hint', '候选是芽，已确认是浅叶，真实验证后成为深叶；任务接续快照不会长成叶片。'))}</p></div><button type="button" class="btn btn-sm" data-cognition-page-link="tree">${escapeHtml(_cognitionText('cognition.tree_open', '打开认知树'))}</button></div>`;
-  const summaryMarkup = `<div class="ability-asset-summary-grid">${summary}</div>`;
-  const summaryContent = `${assetsHero}${summaryMarkup}${treeEntry}`;
-  if (summaryHost) summaryHost.innerHTML = summaryContent;
+  // 二级页面头部：返回认知树 + 四类资产卡（大框架）。四类卡下方就是资产详情。
+  const subviewHead = `<div class="cognition-assets-subview-head"><button type="button" class="btn btn-sm" data-cognition-subview-tree>${escapeHtml(_cognitionText('cognition.assets_back_to_tree', '返回认知树'))}</button></div>`;
+  const assetHead = `${subviewHead}<div class="ability-asset-summary-grid">${summary}</div>`;
   const isPersonalCategory = _skillsCognitionState.assetCategoryFilter === 'personal';
   // 「关于我」是四类资产之一，不再是独立任务页：选中 personal 分类时在本页
   // 展开个人本体。骨架全仓只有这一处，渲染函数按 id 定位即可命中。
@@ -3768,7 +3947,7 @@ function renderSkillsCognitionAssets() {
       ? window.refreshPersonalOntology
       : window.renderPersonalOntology;
     if (typeof renderOntology === 'function') {
-      Promise.resolve(renderOntology()).catch((error) => {
+      Promise.resolve(renderOntology({ selectProfile: true })).catch((error) => {
         _skillsLog.warn('personal ontology render failed', { error: (error && error.message) || String(error) });
       });
     }
@@ -3788,14 +3967,14 @@ function renderSkillsCognitionAssets() {
     : categoryItems;
   const searchInput = `<input class="asset-search" value="${escapeHtml(_skillsCognitionState.assetSearchQuery || '')}" placeholder="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索能力资产'))}" aria-label="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索能力资产'))}">`;
   if (!items.length) {
-    host.innerHTML = `${summaryHost ? '' : summaryContent}<div class="ability-assets-workbench is-asset-management-only">
+    host.innerHTML = `${assetHead}<div class="ability-assets-workbench is-asset-management-only">
       <div class="ability-assets-empty">${escapeHtml(_cognitionText('cognition.no_ability_assets', '尚无正式资产。完成复用证明、确认带入正确并保存后，资产才会出现在这里。'))}</div>
     </div>`;
     return;
   }
   if (!filteredItems.length) {
     const selectedCategory = _abilityAssetCategoryLabel(_skillsCognitionState.assetCategoryFilter);
-    host.innerHTML = `${summaryHost ? '' : summaryContent}<div class="ability-assets-workbench is-asset-management-only">
+    host.innerHTML = `${assetHead}<div class="ability-assets-workbench is-asset-management-only">
       <div class="ability-assets-management">
         <section class="ability-asset-list"><div class="ability-asset-list-head">${searchInput}</div><div class="ability-assets-empty">${escapeHtml(searchQuery ? _cognitionText('cognition.asset_search_empty', '未找到匹配的能力资产') : _cognitionText('cognition.empty_asset_category', '该分类暂无能力资产'))}</div></section>
         <section class="ability-asset-detail"><div class="ability-assets-empty"><strong>${escapeHtml(selectedCategory)}</strong><br>${escapeHtml(_cognitionText('cognition.empty_asset_category_hint', '当候选被确认并保存为正式资产后，会出现在这里。'))}</div></section>
@@ -3864,7 +4043,7 @@ function renderSkillsCognitionAssets() {
       : skillDraftGenerating
         ? `<div class="reference-strip recall-skill-draft-state"><div><strong>${escapeHtml(_cognitionText('cognition.skill_draft_auto_generating', '正在生成 Skill…'))}</strong><p>${escapeHtml(_cognitionText('cognition.skill_draft_auto_hint', '正在整理相关记忆与来源。'))}</p></div>${skillAction}</div>`
         : '';
-  host.innerHTML = `${summaryHost ? '' : summaryContent}<div class="ability-assets-workbench is-asset-management-only">
+  host.innerHTML = `${assetHead}<div class="ability-assets-workbench is-asset-management-only">
     <div class="ability-assets-management">
       <section class="ability-asset-list">
         <div class="ability-asset-list-head">${searchInput}</div>
@@ -4009,6 +4188,8 @@ function renderSkillsCognitionGovernance() {
 function openRecallPersonalOntology() {
   _skillsCognitionState.assetCategoryFilter = 'personal';
   _skillsCognitionState.selectedAssetId = '';
+  // 个人本体在「我的认知树」的二级页面（四类资产 + 详情）里展开。
+  _skillsCognitionState.assetSubview = 'assets';
   switchSkillsCognitionPage('assets');
 }
 
@@ -4023,7 +4204,7 @@ async function loadSkillsCognitionSnapshot() {
   const capturePayload = { limit: 25 };
   const captureStatuses = _captureStatusesForFilter(snapshotCaptureFilter);
   if (captureStatuses.length) capturePayload.statuses = captureStatuses;
-  const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings, inbox] = await Promise.allSettled([
+  const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings, inbox, personalTemplates] = await Promise.allSettled([
     Promise.resolve().then(() => window.cogseed.invoke('cognition.dashboard.read')),
     Promise.resolve().then(() => window.cogseed.invoke('recall.candidates.list')),
     Promise.resolve().then(() => window.cogseed.invoke('cognition.assets.list', { limit: 500 })),
@@ -4033,6 +4214,7 @@ async function loadSkillsCognitionSnapshot() {
     Promise.resolve().then(() => window.cogseed.invoke('recall.teaching.list', { limit: 20 })),
     Promise.resolve().then(() => window.cogseed.invoke('recall.captures.settings.get')),
     Promise.resolve().then(() => window.cogseed.invoke('cognition.inbox.list')),
+    Promise.resolve().then(() => window.cogseed.invoke('personalOntology.templates.list')),
   ]);
   const captureResultIsCurrent = !captureRequestWasInFlight
     && snapshotCaptureRequestId === _skillsCognitionCaptureRequestId
@@ -4069,6 +4251,10 @@ async function loadSkillsCognitionSnapshot() {
   if (recentCaptures.status === 'fulfilled' && recentCaptures.value?.ok) _skillsCognitionState.recentCaptures = recentCaptures.value.captures || [];
   if (teachingSignals.status === 'fulfilled' && teachingSignals.value?.ok) _skillsCognitionState.teachingSignals = teachingSignals.value.signals || [];
   if (inbox.status === 'fulfilled' && inbox.value?.ok) _skillsCognitionState.inboxItems = inbox.value.items || [];
+  if (personalTemplates.status === 'fulfilled' && personalTemplates.value && personalTemplates.value.ok !== false) {
+    _skillsCognitionState.personalTemplates = Array.isArray(personalTemplates.value.templates)
+      ? personalTemplates.value.templates : [];
+  }
   _skillsCognitionState.captureSettings = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.settings : _skillsCognitionState.captureSettings;
   _skillsCognitionState.captureModel = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.model : _skillsCognitionState.captureModel;
   _skillsCognitionState.loadErrors = [
@@ -4118,17 +4304,15 @@ function initSkillsCognitionConsole() {
   _cognitionRenderCurrentPage();
   snapshotLoad
     .then(() => {
-      if (_skillsCognitionState.page !== 'inbox') return;
-      // G-9 产品决策：**默认永远停在「待我处理」，不自动跳页。**
-      //
-      // 认知资产首页要先回答"现在有什么需要我判断"。此前待办为空会静默切到
-      // 「我的资产」、一件东西都没有会静默切到空种子——用户点进来看到的不是
-      // 自己点的那一页，也不知道是被跳走了还是本来就在这儿。
-      //
-      // 现在两种空都由「待我处理」自己的空态承担并给出显式入口（首启引导 /
-      // 去我的资产），跳不跳由用户点。历史带在这里自己拉：留在本页不会走
-      // switchSkillsCognitionPage，不拉它就永远停在 loading。
-      void loadCognitionReviewHistory();
+      // 默认停在第一个任务视图「我的资产」（我的认知树）。若用户停在「待我
+      // 处理」，历史带在这里自己拉：进入本页时渲染先于取数完成，留在本页不会
+      // 走 switchSkillsCognitionPage，不拉它就永远停在 loading。
+      if (_skillsCognitionState.page === 'inbox') void loadCognitionReviewHistory();
+      // 我的认知树是第一任务视图且默认页：有资产时把树也拉起来，树是这一页
+      // 的第一眼（首启/无资产时种子本身就是这一页，不需要树）。
+      if (_skillsCognitionState.page === 'assets' && (_skillsCognitionState.assets || []).length) {
+        void loadCognitionTree({ rebuild: true });
+      }
     })
     .catch(() => {});
 }

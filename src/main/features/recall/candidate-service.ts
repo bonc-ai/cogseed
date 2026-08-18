@@ -59,6 +59,7 @@ import {
   RECALL_CANDIDATE_TERMINAL_ERROR_CODE,
   RecallCandidateStateError,
 } from './candidate-capabilities';
+import type { PersonalProfileSyncResult, PersonalProfileTarget } from './personal-profile-sync';
 
 export type RecallCandidateStatus =
   | 'observed'
@@ -215,6 +216,15 @@ export interface RecallAssetHandoffReceipt {
   reviewDecisionId: string;
 }
 
+export interface RecallCandidatePromotionResult {
+  candidate: RecallCandidateRecord;
+  asset: RecallAbilityAssetRecord;
+  decision: ReviewDecision;
+  receipt: RecallAssetHandoffReceipt;
+  /** Projection is best-effort and only present for Personal assets. */
+  profileProjection?: PersonalProfileSyncResult;
+}
+
 interface StoredRecallAssetHandoffReceipt extends RecallJsonRecord, RecallAssetHandoffReceipt {
   id: string;
   candidateId: string;
@@ -238,6 +248,8 @@ export interface PromoteRecallCandidateOptions extends AbilityAssetSemantics {
   riskAcknowledged?: boolean;
   /** R-Box causal rule; only activated when explicitly supplied by the user. */
   causalRule?: CausalRule;
+  /** Optional explicit personal-template destination selected during review. */
+  profileTarget?: PersonalProfileTarget;
 }
 
 const log = createLogger('recall.candidates');
@@ -269,6 +281,18 @@ export class SemanticDedupUnavailableError extends Error {
 }
 
 const MAX_SOURCE_SESSION_IDS = 50;
+
+function normalizePersonalProfileTarget(value: PersonalProfileTarget | undefined): PersonalProfileTarget | undefined {
+  if (value === undefined) return undefined;
+  if (!value || !safeId(value.groupId)) throw new Error('invalid personal profile target group');
+  const section = typeof value.section === 'string' ? value.section.trim() : '';
+  const fieldName = typeof value.fieldName === 'string' ? value.fieldName.trim() : '';
+  if (!section || section.length > 200) throw new Error('invalid personal profile target section');
+  if (!fieldName || fieldName.length > 200) throw new Error('invalid personal profile target field');
+  const templateId = value.templateId === undefined ? undefined : String(value.templateId).trim();
+  if (templateId !== undefined && !safeId(templateId)) throw new Error('invalid personal profile target template');
+  return { groupId: value.groupId, section, fieldName, ...(templateId ? { templateId } : {}) };
+}
 
 function sourceSessionIdsFrom(refs: CognitionSourceRef[]): string[] {
   const ids: string[] = [];
@@ -1397,11 +1421,12 @@ export async function promoteRecallCandidate(
   userId: string,
   candidateId: string,
   options: PromoteRecallCandidateOptions & AbilityAssetRelationContract = {},
-): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord; decision: ReviewDecision; receipt: RecallAssetHandoffReceipt }> {
+): Promise<RecallCandidatePromotionResult> {
   if (options.actor !== 'user' && options.actor !== 'system') {
     throw new Error('recall candidate promotion requires a user actor or system actor');
   }
   const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
+  const profileTarget = normalizePersonalProfileTarget(options.profileTarget);
   const relationContract = readAbilityAssetRelationContract(options as Record<string, unknown>);
   const optionSemantics = readAbilityAssetSemantics(options as unknown as Record<string, unknown>);
   const preflight = await readRecallCandidate(userId, candidateId);
@@ -1776,18 +1801,27 @@ export async function promoteRecallCandidate(
   if (!receipt) {
     throw new Error('immutable handoff receipt not found for promoted asset');
   }
-  // 新的 personal 资产要投影进已安装角色模板的字段。这一步过去只有渲染层在
-  // 打开「关于我」时触发，用户不进那个页面就永远不同步。资产已经落盘，投影
-  // 是单向增量视图，失败不能反过来把这次晋升变成错误——所以只 fire-and-forget
-  // 并记日志。schedulePersonalProfileSync 自带同用户在途去重。
+  // Personal 资产通过用户确认或自动沉淀策略落库后投影进 USER.md，并按需投影
+  // 到已安装角色模板。这些都是
+  // 第二个、单向增量视图：
+  // 它失败不能反过来把正式资产判成失败，但要在本次确认返回前完成，保证用户
+  // 点击确认后马上能在「关于我」看到结果。显式目标优先；没有目标时由路由器
+  // 自动匹配字段。schedulePersonalProfileSync 自带同用户在途去重。
+  let profileProjection: PersonalProfileSyncResult | undefined;
   if (asset.type === 'personal') {
-    void import('./personal-profile-sync')
-      .then((mod) => mod.schedulePersonalProfileSync(userId))
-      .catch((error) => log.warn('personal profile projection after promote degraded', {
+    try {
+      const { schedulePersonalProfileSync } = await import('./personal-profile-sync');
+      profileProjection = await schedulePersonalProfileSync(userId, {
+        assetId: asset.id,
+        ...(profileTarget ? { target: profileTarget } : {}),
+      });
+    } catch (error) {
+      log.warn('personal profile projection after promote degraded', {
         userId,
         assetId: asset.id,
         error: (error as Error).message,
-      }));
+      });
+    }
   }
-  return { candidate, asset, decision, receipt };
+  return { candidate, asset, decision, receipt, ...(profileProjection ? { profileProjection } : {}) };
 }

@@ -27,6 +27,10 @@ export interface OpencodeSession {
   title: string;
   /** Project ID this session belongs to */
   projectId: string | null;
+  /** Real project directory from the OpenCode `project.worktree` column
+   *  (global sessions have none). Used to bind the imported conversation's
+   *  workspace to the original project. */
+  projectPath?: string;
   /** Workspace ID */
   workspaceId: string | null;
   /** Message count in this session */
@@ -124,8 +128,10 @@ export function listOpencodeSessions(
         s.tokens_input,
         s.tokens_output,
         s.tokens_reasoning,
-        COUNT(m.id) as message_count
+        COUNT(m.id) as message_count,
+        p.worktree as project_worktree
       FROM session s
+      LEFT JOIN project p ON p.id = s.project_id
       LEFT JOIN message m ON m.session_id = s.id
       WHERE s.time_archived IS NULL OR s.time_archived = 0
       GROUP BY s.id
@@ -144,6 +150,7 @@ export function listOpencodeSessions(
       tokens_output: number;
       tokens_reasoning: number;
       message_count: number;
+      project_worktree: string | null;
     }>;
 
     const sessions: OpencodeSession[] = rows.map((r) => {
@@ -160,6 +167,10 @@ export function listOpencodeSessions(
         id: r.id,
         title: r.title || r.id,
         projectId: r.project_id,
+        // 真实项目目录：global project 的 worktree 是 '/'（无意义），过滤掉。
+        ...(r.project_worktree && r.project_worktree !== '/'
+          ? { projectPath: r.project_worktree }
+          : {}),
         workspaceId: r.workspace_id,
         messageCount: r.message_count,
         timeCreated: r.time_created,

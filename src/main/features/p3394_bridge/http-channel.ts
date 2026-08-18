@@ -78,6 +78,9 @@ export const P3394_HTTP_CHANNEL_DEFAULTS = {
 } as const;
 
 const MANIFEST_PATH = '/p3394/manifest';
+/** dial() 复用已协商 manifest 的 TTL：对端网关运行期 manifest 不变，60s 内
+ *  免重复协商；到期重协商以覆盖对端重启/身份变更边界。 */
+const NEGOTIATE_CACHE_TTL_MS = 60_000;
 const ENVELOPE_PATH = '/p3394/envelope';
 const HEALTH_PATH = '/p3394/health';
 const OBJECTS_PATH_PREFIX = '/p3394/objects/';
@@ -108,6 +111,8 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
   private server: http.Server | null = null;
   private activeEndpoint: string | null = null;
   private peerManifest: P3394BridgeManifest | null = null;
+  /** 最近一次协商成功时间（dial 短路复用用；毫秒时间戳）。 */
+  private lastNegotiatedAt = 0;
   private closed = false;
   /** Manifest presented by this node during negotiation. */
   private localManifest: P3394BridgeManifest | null = null;
@@ -311,9 +316,21 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
     return typeof header === 'string' && header === 'Bearer ' + expected;
   }
 
-  /** Channel contract dial; negotiation results are available via negotiate(). */
+  /** Channel contract dial; negotiation results are available via negotiate().
+   *  已协商且活动端点仍有效时短路复用（幂等）：对端 manifest 在网关运行期
+   *  不变，每轮 sendAndWait 都重新 GET manifest 是纯浪费（本地回环一次往返
+   *  + 多一个失败面）。TTL 覆盖对端重启/换身份等边界：到期自动重新协商。
+   *  端点集合变化由 outbound-hub 的 channelFor 重建 channel，不会走到这里。
+   *  注意：显式 negotiate() 保持每次都真实协商（failover 探测语义不变）。 */
   async dial(_peerId = ''): Promise<void> {
-    await this.negotiate();
+    const dialConfig = this.options.dial;
+    const canReuse = this.peerManifest && this.activeEndpoint && dialConfig
+      && dialConfig.endpoints.includes(this.activeEndpoint)
+      && Date.now() - this.lastNegotiatedAt < NEGOTIATE_CACHE_TTL_MS;
+    if (canReuse) return;
+    const result = await this.negotiate();
+    if (result.ok) this.lastNegotiatedAt = Date.now();
+    else this.lastNegotiatedAt = 0; // 协商失败 → 下次调用重试，不复用旧缓存
   }
 
   /** Negotiates with the dial endpoints: manifest + identity + capability check. */

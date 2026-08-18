@@ -648,6 +648,45 @@ describe("group_chat bus integration › structured user recipient", () => {
 
     expect(result).toEqual({ ok: false, error: "invalid CLI fallback recipient" });
   });
+
+  it("routes a no-model fallback to a P3394-managed external CLI Agent", async () => {
+    const cid = newCid();
+    const gatewayAgentId = "c1a0d3f5b7e9";
+    await seedAgent({
+      id: gatewayAgentId,
+      name: "ClaudeCode",
+      runtime: { kind: "p3394-gateway", cli: "claude" },
+    });
+
+    const auth = await import("../../../../src/main/features/auth");
+    vi.spyOn(auth, "hasConfiguredModel").mockReturnValue({ configured: false });
+    const registry = await import("../../../../src/main/features/local_agents/registry");
+    vi.spyOn(registry, "detectAll").mockResolvedValue([
+      {
+        type: "claude",
+        name: "Claude Code",
+        command: "claude",
+        available: true,
+        path: "/test/claude",
+        version: "test",
+        auth: { loggedIn: true, method: "oauth" },
+      },
+    ] as Awaited<ReturnType<typeof registry.detectAll>>);
+
+    const groupChat = await import("../../../../src/main/features/group_chat");
+    const result = await groupChat.send({
+      userId: TEST_UID,
+      cid,
+      text: "在吗",
+      recipient_agent_id: gatewayAgentId,
+      recipient_origin: "cli_fallback",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      msg: { text: "在吗", to: [gatewayAgentId] },
+    });
+  });
 });
 
 describe("group_chat bus integration › teaching receipts", () => {

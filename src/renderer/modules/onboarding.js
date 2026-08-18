@@ -1153,16 +1153,20 @@ async function _csDetectCodingClis() {
     const endpoints = (epRes && epRes.ok && epRes.endpoints) || {};
     const entries = (res && res.entries) || [];
     entries.forEach((e) => {
-      if (!e || !e.available) return;
+      if (!e) return;
       const cli = _csCodingCliForAppType(e.type);
-      if (cli) {
-        const ep = endpoints[cli];
-        found.set(cli, {
-          loggedIn: !!(e.auth && e.auth.loggedIn),
-          mode: (e.auth && e.auth.mode) || 'unknown',
-          ...(ep ? { endpoint: ep } : {}),
-        });
-      }
+      if (!cli) return;
+      const ep = endpoints[cli];
+      // 保留不可用 agent（available:false），引导里显示对应不可用原因；
+      // 不再静默过滤，用户能一眼看到「为什么连不上」。
+      found.set(cli, {
+        available: !!e.available,
+        error: e.error || '',
+        errorDetail: e.errorDetail || '',
+        loggedIn: !!(e.auth && e.auth.loggedIn),
+        mode: (e.auth && e.auth.mode) || 'unknown',
+        ...(ep ? { endpoint: ep } : {}),
+      });
     });
   } catch (err) {
     _obLog.warn('team CLI detect failed', { error: (err && err.message) || String(err) });
@@ -1236,44 +1240,43 @@ function _csRenderTeam(localClis) {
     const cliAuth = info && info.loggedIn
       ? (info.mode === 'api' ? 'API 登录' : (info.mode === 'oauth' ? '官方账号登录' : '已登录'))
       : '';
-    const status = `<span class="status green">可连接</span>`;
-    const hints = [
-      cliAuth
-        ? `执行 Agent → AI 团队（${cliAuth}，无需 Key 即可派发任务）`
-        : '执行 Agent → AI 团队（可派发任务）',
-    ];
-    // 「连接并存储 API」只在能读到 API Key 时才有意义：OAuth（账号）登录没有
-    // 可存储的 API Key（存 OAuth token 当 key 用会调用失败），未登录则无可读取凭据。
+    const available = !!(info && info.available);
+    // 可用：直接显示「可连接 + 执行」；不可用：把「可连接」换成对应原因。
+    const status = available
+      ? `<span class="status green">可连接</span>`
+      : `<span class="status red">${_csEsc(_csUnavailableReason(label, info))}</span>`;
+    const hints = [];
+    if (!available) {
+      hints.push(`请安装或更新后重新检测`);
+    } else if (cliAuth) {
+      hints.push(`执行 Agent → AI 团队（${cliAuth}，无需 Key 即可派发任务）`);
+    } else {
+      hints.push('执行 Agent → AI 团队（可派发任务）');
+    }
+    // 「连接并存储 API」下拉已移除：可用 agent 直接连接。登录态/代理提示保留。
     const ep = info && info.endpoint;
     const isOAuthLogin = !!(ep && ep.configAvailable && ep.authMode === 'oauth');
     const noReadableCred = !!(ep && !ep.configAvailable);
-    const canStoreApi = !!(ep && ep.configAvailable && ep.authMode === 'api');
-    if (isOAuthLogin) {
-      hints.push('官方账号登录，CLI 使用账号能力，无需存储 API');
-    } else if (noReadableCred) {
-      hints.push('未检测到可读取的 API 凭据，请先在 CLI 中登录或配置 API');
-    }
-    // Honest local-proxy hint: this CLI routes model calls through a local
-    // proxy (e.g. CC Switch). It still connects — but the proxy must be
-    // running when the agent is woken, unless the user stores a direct API.
-    if (ep && ep.isLocalProxy) {
-      hints.push('模型走本地代理连接，使用时需保持代理运行；或「连接并存储 API」改为直连');
+    if (available) {
+      if (isOAuthLogin) {
+        hints.push('官方账号登录，CLI 使用账号能力');
+      } else if (noReadableCred) {
+        hints.push('未检测到可读取的 API 凭据，请先在 CLI 中登录或配置 API');
+      }
+      // Honest local-proxy hint: this CLI routes model calls through a local
+      // proxy (e.g. CC Switch). It still connects — but the proxy must be
+      // running when the agent is woken.
+      if (ep && ep.isLocalProxy) {
+        hints.push('模型走本地代理连接，使用时需保持代理运行');
+      }
     }
     const hintHtml = `<small>${_csEsc(hints.join(' · '))}</small>`;
-    // 只有一个动作可选时不用 <select>（原生单选项下拉体验差，点开看不出变化），
-    // 直接渲染为只读文本 + 执行按钮；有两个选项（可存储 API）才用下拉框。
-    const action = canStoreApi
+    // 可用 → 执行按钮；不可用 → 无执行动作。
+    const action = available
       ? `<div class="cs-team-actions">
-        <select class="cs-team-action-select" data-app-type="${_csEsc(appType)}">
-          <option value="connect-only">只连接</option>
-          <option value="connect-store">连接并存储 API</option>
-        </select>
         <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
       </div>`
-      : `<div class="cs-team-actions">
-        <span class="cs-team-connect-only" data-app-type="${_csEsc(appType)}">只连接</span>
-        <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
-      </div>`;
+      : '';
 
     _csCliByAgent[appType] = _csCodingCliForAppType(appType);
     return `
@@ -1292,11 +1295,18 @@ function _csRenderTeam(localClis) {
   box.querySelectorAll('.cs-team-connect').forEach((btn) => {
     btn.addEventListener('click', () => {
       const appType = btn.dataset.appType;
-      const select = box.querySelector(`.cs-team-action-select[data-app-type="${appType}"]`);
-      const shouldStore = select && select.value === 'connect-store';
-      void _csConnectTeam(box, appType, shouldStore);
+      void _csConnectTeam(box, appType);
     });
   });
+}
+
+/** 不可用 agent 的用户可读原因（对应 registry detectOne 的 error 类型）。 */
+function _csUnavailableReason(label, info) {
+  const error = String((info && info.error) || '');
+  if (error === 'not_found') return `未检测到 ${label}（未安装）`;
+  if (error === 'version_too_old') return `${label} 版本过低，请升级后重试`;
+  if (error === 'version_unknown') return `无法识别 ${label} 版本`;
+  return `${label} 当前不可用`;
 }
 
 // Connect ONE local coding CLI into the AI team: add it as a real team member,

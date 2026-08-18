@@ -92,7 +92,11 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
 ## 运行模式与能力
 
 - **oneshot（默认）**：每消息 spawn 一次 CLI；网关按 `session_id` 维护会话
-  transcript 与工作区，多轮对话自动携带历史上下文。
+  transcript 与工作区，多轮对话自动携带历史上下文。运行期间 CLI 印到
+  stdout/stderr 的可见输出会实时以 **stream delta 帧** 回发 CogSeed（气泡边
+  输出边增长，不必等工具+回复跑完）；`openclaw` 预设整体排除（其 CLI 无中间
+  分片、最终 JSON 回复信封写在 stderr 末尾，保持一次性回发）。可用
+  `P3394_DISABLE_ONESHOT_STREAM=1` 关闭。
 - **sscli**：`P3394_AGENT_MODE=sscli` 常驻单个 CLI 进程，按 `p3394-sscli/1.0`
   JSONL 协议交换 hello / open_session / deliver / 事件 / cancel / heartbeat
   （指南 §9.2），适合支持结构化会话协议的 Agent Runtime。
@@ -135,6 +139,9 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
 | `P3394_AGENT_CLI` | 随预设 | 自定义 CLI（覆盖预设） |
 | `P3394_AGENT_CLI_ARGS` | 随预设 | CLI 参数模板，{message} 为消息占位（覆盖预设） |
 | `P3394_AGENT_TIMEOUT_MS` | 600000 | Agent 单次回答上限 |
+| `P3394_DISABLE_ONESHOT_STREAM` | 空 | `1` 关闭 oneshot 模式增量输出回发（默认开启） |
+| `P3394_STREAM_POST_TIMEOUT_MS` | 15000 | 流式回发单帧 POST 请求超时（对端不响应时保证终态回复不被拖死） |
+| `P3394_STREAM_FINISH_DEADLINE_MS` | 30000 | 流式回发 finish() 对整条 delta 链的整体截止（异常慢时让位给终态） |
 | `P3394_NODE_KIND` | agent | 注册节点类型：agent/sub_agent/task_agent/capability/model_runtime（注册进 CogSeed 统一节点注册表） |
 | `P3394_PROFILES` | p3394-session/1.0,p3394-artifact/1.0 | 自报支持的协议 profile（逗号分隔，随 hello/心跳上报） |
 

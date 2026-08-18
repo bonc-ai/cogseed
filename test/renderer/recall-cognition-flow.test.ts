@@ -81,7 +81,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? host : null,
     };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assetSubview: 'assets',
       assets: [{
         id: 'aa-method', type: 'skill_method', category: 'skill_method', title: 'PRD review method',
         source: 'recall_ability_asset', lifecycleStatus: 'automatically_extracted_unverified', version: '1', status: 'active', maturity: 'seed', scope: 'product',
@@ -128,7 +128,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? host : null,
     };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assetSubview: 'assets',
       assets: [{
         id: 'aa-video-method', type: 'skill_method', category: 'skill_method', title: depositedContent,
         source: 'recall_ability_asset', version: '1', status: 'active', maturity: 'seed', scope: '科普视频选题与脚本策划',
@@ -157,7 +157,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? host : null,
     };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assetSubview: 'assets',
       sources: [{
         kind: 'conversation', status: 'ready',
         items: [{ id: 'conv-source-id', title: '需求评审会话', subtype: 'session' }],
@@ -193,7 +193,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? host : null,
     };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assetSubview: 'assets',
       assets: [{
         id: 'aa-method', type: 'skill_method', category: 'skill_method', title: 'PRD review method',
         source: 'recall_ability_asset', version: '1', status: 'active', maturity: 'seed', scope: 'product',
@@ -231,7 +231,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? host : null,
     };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assetSubview: 'assets',
       assets: [{
         id: 'aa-method', type: 'skill_method', category: 'skill_method', title: 'PRD review method',
         source: 'recall_ability_asset', version: '1', status: 'active', maturity: 'seed', scope: 'product',
@@ -268,7 +268,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? host : null,
     };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assetSubview: 'assets',
       assets: [{
         id: 'aa-method', type: 'skill_method', category: 'skill_method', title: 'PRD review method',
         source: 'recall_ability_asset', version: '1', status: 'active', maturity: 'seed', scope: 'product',
@@ -303,7 +303,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? host : null,
     };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assetSubview: 'assets',
       assets: [{
         id: 'aa-method', type: 'skill_method', category: 'skill_method', title: 'PRD review method',
         source: 'recall_ability_asset', version: '1', status: 'active', maturity: 'seed', scope: 'product',
@@ -333,7 +333,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? host : null,
     };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assetSubview: 'assets',
       assets: [
         { id: 'aa-alpha', title: 'PRD review method', type: 'skill_method', category: 'skill_method', status: 'active', scope: 'product', relationRefs: [] },
         { id: 'aa-beta', title: 'Incident response', type: 'rule', category: 'rule', status: 'active', scope: 'operations', relationRefs: [] },
@@ -373,6 +373,7 @@ describe('Recall cognition renderer flow', () => {
       } as Record<string, any>)[id] || null,
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      assetSubview: 'assets',
       assets: [
         { id: 'personal-memory', title: '中文交付优先', type: 'personal', category: 'personal', source: 'recall_ability_asset', status: 'active', relationRefs: [] },
         { id: 'personal-scope', title: '只做认知资产治理', type: 'personal', category: 'personal', source: 'recall_ability_asset', status: 'active', relationRefs: [] },
@@ -386,9 +387,11 @@ describe('Recall cognition renderer flow', () => {
     expect(memoryHead.hidden).toBe(false);
     // 个人本体的 DOM 只在「关于我」tab，由 _renderAboutMePane 驱动。
     expect(renderPersonalOntology).not.toHaveBeenCalled();
-    expect(summaryHost.innerHTML).toContain('data-ability-asset-category="personal"');
+    // 四类卡在二级页面（资产视图）顶部：返回认知树 + 分类计数 + 资产列表。
+    expect(host.innerHTML).toContain('data-cognition-subview-tree');
+    expect(host.innerHTML).toContain('data-ability-asset-category="personal"');
     // 计数卡片写 2，列表就必须渲染出这 2 条。
-    expect(summaryHost.innerHTML).toContain('<strong>2</strong>');
+    expect(host.innerHTML).toContain('<strong>2</strong>');
     expect(host.innerHTML).toContain('中文交付优先');
     expect(host.innerHTML).toContain('只做认知资产治理');
   });
@@ -400,7 +403,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? host : null,
     };
-    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({ assetSubview: 'assets',
       assets: [{
         id: 'aa-method', type: 'skill_method', category: 'skill_method', title: 'PRD review method',
         source: 'recall_ability_asset', version: '1', status: 'active', maturity: 'seed', scope: 'product',
@@ -1260,6 +1263,7 @@ describe('Recall cognition renderer flow', () => {
     };
     context.document = { getElementById: (id: string) => hosts[id] || null };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      assetSubview: 'assets',
       sources: [{
         kind: 'conversation', status: 'ready', items: [
           { id: 'conv-active', title: '活跃会话', subtype: 'session', status: 'ready' },
@@ -2824,6 +2828,71 @@ describe('Recall cognition renderer flow', () => {
     ]]);
   });
 
+  it('passes the selected personal-template field through candidate confirmation', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const calls: Array<[string, unknown]> = [];
+    const target = {
+      groupId: 'group-student',
+      templateId: 'student',
+      section: '学习背景',
+      fieldName: '专业与学习方向',
+    };
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    const card: any = {
+      querySelector: (selector: string) => selector === '[data-recall-profile-target]'
+        ? { value: encodeURIComponent(JSON.stringify(target)) }
+        : null,
+    };
+    const button: any = {
+      dataset: { recallCandidateAction: 'promote', recallCandidateId: 'cand-personal-target' },
+      disabled: false,
+      closest: (selector: string) => selector === '[data-recall-candidate-action]'
+        ? button
+        : selector === '[data-recall-candidate-id]' ? card : null,
+    };
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : null,
+        querySelectorAll: () => [],
+      },
+      window: {
+        addEventListener() {},
+        refreshPersonalOntology: async () => {},
+        cogseed: {
+          invoke: async (channel: string, input: unknown) => {
+            calls.push([channel, input]);
+            return { ok: true };
+          },
+        },
+      },
+      _skillsCognitionState: {
+        recallCandidates: [{ id: 'cand-personal-target', status: 'pending_review', suggestedType: 'personal' }],
+        writingRecallCandidateId: '',
+      },
+      _cognitionText: (_key: string, fallback: string) => fallback,
+      renderSkillsCognitionCaptures() {},
+      renderSkillsCognitionCandidates() {},
+      loadSkillsCognitionSnapshot: async () => {},
+      initSkillsCognitionConsole() {},
+      switchSkillsCognitionPage() {},
+      setTimeout,
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target: button });
+
+    expect(calls).toEqual([[
+      'recall.candidates.promote',
+      { candidateId: 'cand-personal-target', profileTarget: target },
+    ]]);
+  });
+
   it('requires an independent confirmation and acknowledges high-risk candidate promotion', async () => {
     let clickHandler: ((event: any) => Promise<void>) | undefined;
     const calls: Array<[string, unknown]> = [];
@@ -3136,19 +3205,19 @@ describe('Recall cognition renderer flow', () => {
   });
 
   /**
-   * 认知树的叶片深浅直接映射 maturity，且每片叶都能点回它对应的资产。
+   * 认知树大叶的颜色直接映射该类"已验证占比"，且每片资产都能从分类卡点回。
    *
    * 一棵点不动的树只是装饰画：用户看到一片浅叶的第一反应就是"这条为什么还没
    * 验证"，那时他需要的是那条资产本身。
    */
-  it('maps tree leaves to maturity and links each one back to its asset', () => {
+  it('colors branch leaves by verified ratio and keeps every asset clickable in the branch cards', () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };
     context.document = {
       getElementById: (id: string) => (id === 'skills-cognition-tree-body' ? host : null),
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
-      recallCandidates: [{ id: 'c1', status: 'pending_review', capabilities: CAPS('pending_review') }],
+      recallCandidates: [{ id: 'c1', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'rule' }],
       tree: {
         nodes: [
           { id: 'asset:a-deep', type: 'asset', assetType: 'rule', label: '外发材料口径', status: 'active', maturity: 'effectiveness_validated', version: '3' },
@@ -3160,16 +3229,17 @@ describe('Recall cognition renderer flow', () => {
 
     context.renderSkillsCognitionTree();
 
-    expect(host.innerHTML).toContain('cognition-tree-leaf is-deep');
-    expect(host.innerHTML).toContain('cognition-tree-leaf is-light');
-    // 叶片可点回资产：id 去掉 `asset:` 前缀后就是资产 id。
+    // 大叶按"该类已验证占比"着色：rule 类 2 项中 1 项已验证 → 中档。
+    expect(host.innerHTML).toContain('is-ratio-mixed');
+    // 分类卡里的每片叶仍可点回它对应的资产（id 去掉 `asset:` 前缀后就是资产 id）。
     expect(host.innerHTML).toContain('data-cognition-open-asset="a-deep"');
     expect(host.innerHTML).toContain('data-cognition-open-asset="a-light"');
     // 关系边用用户读得懂的说法，不露出内部枚举。
     expect(host.innerHTML).toContain('细化自');
     expect(host.innerHTML).not.toContain('refines');
-    // 候选是芽，不在树上——图例要说清它们的去向，否则用户以为它们消失了。
-    expect(host.innerHTML).toContain('候选尚未成为正式资产');
+    // 候选是芽：真实候选数据按 suggestedType 归到对应枝上，点芽进「待我处理」。
+    expect(host.innerHTML).toContain('cognition-tree-svg-bud');
+    expect(host.innerHTML).toContain('data-cognition-page-link="inbox"');
   });
 
   it('says the tree is empty rather than drawing growth that has not happened', () => {
@@ -3420,6 +3490,7 @@ describe('Recall cognition renderer flow', () => {
       renderSkillsCognitionCaptures() {},
       renderSkillsCognitionCandidates() {},
       loadSkillsCognitionSnapshot: async () => {},
+      _scrollCognitionToAssetsWorkbench() {},
       setTimeout,
     };
     context.document.getElementById = (id: string) => (id === 'panel-recall'
@@ -3703,55 +3774,73 @@ describe('认知树 SVG 可视化', () => {
     return { context, host };
   }
 
-  it('按成熟度着色，并保留完整分类卡作为可点列表', () => {
+  it('按大叶验证占比着色，并保留完整分类卡作为可点列表', () => {
     const { context, host } = treeContext(NODES);
 
     context.renderSkillsCognitionTree();
 
     expect(host.innerHTML).toContain('cognition-tree-svg');
-    // 效果已验证 = 深叶；其余 = 浅叶。
-    expect(host.innerHTML).toContain('is-deep');
-    expect(host.innerHTML).toContain('is-light');
-    // 非 active 只降透明度，不是第三档成熟度。
-    expect(host.innerHTML).toContain('is-dimmed');
+    // 大叶按该类已验证占比分三档：rule（1 深 1 浅）→ 中档；personal（transfer
+    // 尚未效果验证）→ 浅档；模板与技能方法没有资产 → 空枝。
+    expect(host.innerHTML).toContain('is-ratio-mixed');
+    expect(host.innerHTML).toContain('is-ratio-none');
     // SVG 之外，原有的分类卡（真 button）仍在，键盘可达。
     expect(host.innerHTML).toContain('cognition-tree-leaf');
   });
 
+  /** 空树 + 一件东西都没有 = 首启：树页给种子引导，回答"该从哪儿开始"，
+   *  而不是一句干巴巴的"还没有叶片"。 */
+  it('shows the first-run seed on the tree when nothing exists yet', () => {
+    const { context, host } = treeContext([], { recallCandidates: [] });
+
+    context.renderSkillsCognitionTree();
+
+    expect(host.innerHTML).toContain('你的认知种子已经准备好');
+    expect(host.innerHTML).toContain('选择历史会话');
+    // 树页 metrics 如实显示 0，不假装有成长。
+    expect(host.innerHTML).toContain('正式资产');
+  });
+
   /**
-   * 树里根本没有候选节点（`CognitionTreeNodeId` 是 `asset:${string}`）。
-   * 要在枝头画芽，只能由渲染层自己把候选摆上去——那是在图上编造一个后端不认
-   * 的状态。这是 G-8，等树契约 v2 的产品决策。
+   * 芽 = 待确认候选。候选不是资产节点（`CognitionTreeNodeId` 是 `asset:${string}`），
+   * 但候选列表本身是后端真实数据（recall.candidates.list）：按 `suggestedType`
+   * 归到对应枝上画橙色芽点，点击进入「待我处理」。这是 v0.9.1 的产品决策——
+   * 树回答"我拥有什么"，待确认的候选也是拥有的入口，不是渲染层编造状态。
    */
-  it('即使有待确认候选，也不在树上画芽', () => {
+  it('候选以芽的形式画在对应枝上，点击进入待我处理', () => {
     const { context, host } = treeContext(NODES, {
       recallCandidates: [
-        { id: 'cand-1', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'rule' },
-        { id: 'cand-2', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'personal' },
+        { id: 'cand-1', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'rule', summary: '新增规则：状态不确定时使用待确认' },
+        { id: 'cand-2', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'personal', summary: '关于我：补充产品负责人角色' },
       ],
     });
 
     context.renderSkillsCognitionTree();
 
     const svg = host.innerHTML.slice(host.innerHTML.indexOf('<svg'), host.innerHTML.indexOf('</svg>'));
-    expect(svg).not.toContain('cand-1');
-    expect(svg).not.toContain('is-bud');
-    // 但图例仍要说清候选在哪儿，否则用户以为待确认的东西凭空消失了。
-    expect(host.innerHTML).toContain('待确认芽点');
+    // 两个候选按类别归到 rule / personal 两条枝上，画成芽点。
+    expect(svg).toContain('cognition-tree-svg-bud');
+    // 芽点可点进「待我处理」。
+    expect(svg).toContain('data-cognition-page-link="inbox"');
+    // tooltip 带候选标题（真实数据，不是编造的占位）。
+    expect(svg).toContain('待确认：新增规则：状态不确定时使用待确认');
   });
 
   /** 版本是每个资产各自的，不存在"这棵树的版本"。 */
-  it('树干不画聚合版本号，版本只落在叶子的 tooltip 里', () => {
+  it('树干不画聚合版本号，版本只落在分类卡里', () => {
     const { context, host } = treeContext(NODES);
 
     context.renderSkillsCognitionTree();
 
     const svg = host.innerHTML.slice(host.innerHTML.indexOf('<svg'), host.innerHTML.indexOf('</svg>'));
-    expect(svg).toContain('v2.0.0');
-    expect(svg).toContain('汇报区分提交与验收');
+    // 大叶只画类别与已验证占比，不画版本。
+    expect(svg).not.toContain('v2.0.0');
+    expect(svg).not.toContain('v1.2.0');
     // 没有任何一个不属于某片叶子的版本号。
     const trunkVersion = /<text[^>]*>\s*v[\d.]+\s*<\/text>/.test(svg);
     expect(trunkVersion).toBe(false);
+    // 版本在分类卡里（真按钮的 small 行）。
+    expect(host.innerHTML).toContain('v2.0.0');
   });
 
   /** 四类是后端固定的 assetType，空枝照画——藏掉会让用户以为系统只有三类。 */
@@ -3776,8 +3865,8 @@ describe('认知树 SVG 可视化', () => {
     expect(host.innerHTML).toBe(first);
   });
 
-  /** 叶子超出上限时说清"还有多少"，而不是默默截断。 */
-  it('叶子超过上限时给出 +N 而不是静默丢弃', () => {
+  /** 大叶 = 类别，数量没有上限；分类卡完整列出每一片资产，不截断。 */
+  it('分类卡完整列出所有资产，不因数量截断', () => {
     const many = Array.from({ length: 13 }, (_, i) => ({
       id: `asset:m-${i}`, type: 'asset', assetType: 'rule', label: `规则 ${i}`,
       status: 'active', maturity: 'bud', version: '1.0.0',
@@ -3787,8 +3876,12 @@ describe('认知树 SVG 可视化', () => {
     context.renderSkillsCognitionTree();
 
     const svg = host.innerHTML.slice(host.innerHTML.indexOf('<svg'), host.innerHTML.indexOf('</svg>'));
-    expect(svg).toContain('+4');
-    expect(svg).toContain('规则与偏好 · 13');
+    // 大叶 = 类别：13 条合成一片叶，无已验证 → 浅档，数量如实写在大叶上。
+    expect(svg).toContain('is-ratio-none');
+    expect(svg).toContain('规则偏好 · 13');
+    // 分类卡完整列出全部 13 条资产，不因数量静默丢弃（id 去掉 asset: 前缀）。
+    expect(host.innerHTML).toContain('data-cognition-open-asset="m-12"');
+    expect(host.innerHTML).toContain('data-cognition-open-asset="m-0"');
   });
 });
 
@@ -4089,9 +4182,9 @@ describe('候选决定的端到端回流', () => {
 /**
  * G-9 一级信息架构收敛。
  *
- * 决定：一级只有四个**任务视图**（待我处理 / 我的资产 / 使用与证明 / 版本与治理），
- * 默认永远停在待我处理，**不自动跳页**。管理来源与沉淀活动降级为页头辅助入口，
- * 功能不能消失。
+ * 决定：一级只有四个**任务视图**（我的认知树 / 待我处理 / 复用与证明 / 版本与治理），
+ * 默认停在第一个任务视图「我的认知树」，**不自动跳页**。管理来源与沉淀活动降级
+ * 为页头辅助入口，功能不能消失。
  */
 describe('G-9 认知资产一级信息架构', () => {
   function inbox(state: Record<string, unknown>) {
@@ -4150,7 +4243,7 @@ describe('G-9 认知资产一级信息架构', () => {
     const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
     const tabs = [...html.matchAll(/class="skills-cognition-tab[^"]*"[^>]*data-cognition-page="([a-z]+)"/g)]
       .map((match) => match[1]);
-    expect(tabs).toEqual(['inbox', 'assets', 'proofs', 'governance']);
+    expect(tabs).toEqual(['assets', 'inbox', 'proofs', 'governance']);
     // 辅助入口在页头，不在 tablist 里。
     const aux = [...html.matchAll(/class="btn btn-sm cognition-aux-entry"[^>]*data-cognition-page="([a-z]+)"/g)]
       .map((match) => match[1]);
@@ -4304,5 +4397,112 @@ describe('候选「确认并限域」读取编辑字段', () => {
     expect(update!.payload.sourceRefs).toEqual([{ kind: 'conversation', id: 'conv-1' }]);
     // 限域保存后要接着晋升
     expect(sent.some((call) => call.channel === 'recall.candidates.promote')).toBe(true);
+  });
+});
+
+/**
+ * 「我的认知树」tab 的种子/树二态（v0.9.1 第一页面）：
+ *   一件东西都没有 → 第一页面是认知种子（该从哪儿开始）；
+ *   有正式资产 → 第一页面是认知树（树的 hero + 树面板 + 当前成长）。
+ * 种子和树都保留：种子是树的起点状态，树是种子长成后的状态。
+ */
+describe('我的认知树 tab 的种子/树二态', () => {
+  function assetsContext(state: Record<string, unknown>) {
+    const context = loadSkillsRenderer();
+    const summaryHost = { innerHTML: '', hidden: false };
+    const bodyHost = { innerHTML: '', hidden: false };
+    context.document = {
+      getElementById: (id: string) => {
+        if (id === 'skills-cognition-assets-summary') return summaryHost;
+        if (id === 'skills-cognition-assets-body') return bodyHost;
+        return null;
+      },
+      querySelectorAll: () => [],
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      loadedAt: 1, loading: false, loadErrors: [],
+      assets: [], recallCandidates: [], captures: [], recentCaptures: [], teachingSignals: [], inboxItems: [],
+      reviewHistory: { items: [], total: 0 },
+      totals: { assets: null, teachingSignals: null, inboxItems: null },
+      ...state,
+    })})`, context);
+    return { context, summaryHost, bodyHost };
+  }
+
+  it('首启（一件东西都没有）时第一页面是认知种子', () => {
+    const { context, summaryHost } = assetsContext({});
+
+    context.renderSkillsCognitionAssets();
+
+    expect(summaryHost.innerHTML).toContain('你的认知种子已经准备好');
+    expect(summaryHost.innerHTML).toContain('选择历史会话');
+    // 首启时四类卡全 0，不摆一排空数字。
+    expect(summaryHost.innerHTML).not.toContain('ability-asset-summary-grid');
+  });
+
+  it('有正式资产时第一页面（树视图）是认知树，不含四类卡与工作台', () => {
+    const { context, summaryHost, bodyHost } = assetsContext({
+      assets: [{
+        id: 'a-1', type: 'rule', category: 'rule', title: '状态不确定时标记待确认',
+        source: 'recall_ability_asset', lifecycleStatus: 'confirmed', version: '1.0.0',
+        status: 'active', maturity: 'bud', scope: 'general',
+        workspaceRefs: [], receiptRefs: [], candidateRefs: [], relationRefs: [],
+      }],
+      tree: {
+        nodes: [{ id: 'asset:a-1', type: 'asset', assetType: 'rule', label: '状态不确定时标记待确认', status: 'active', maturity: 'bud', version: '1.0.0' }],
+        edges: [],
+      },
+    });
+
+    context.renderSkillsCognitionAssets();
+
+    // 一级页面 = 认知树（种子/树二态），四类卡与资产工作台属于二级页面。
+    expect(summaryHost.innerHTML).toContain('cognition-tree-svg');
+    expect(summaryHost.innerHTML).toContain('我的认知树');
+    expect(summaryHost.innerHTML).toContain('当前成长');
+    expect(summaryHost.innerHTML).not.toContain('ability-asset-summary-grid');
+    expect(bodyHost.hidden).toBe(true);
+  });
+
+  it('二级页面（资产视图）顶部是返回认知树 + 四类资产卡，下方是资产详情', () => {
+    const { context, summaryHost, bodyHost } = assetsContext({
+      assetSubview: 'assets',
+      assets: [{
+        id: 'a-1', type: 'rule', category: 'rule', title: '状态不确定时标记待确认',
+        source: 'recall_ability_asset', lifecycleStatus: 'confirmed', version: '1.0.0',
+        status: 'active', maturity: 'bud', scope: 'general',
+        workspaceRefs: [], receiptRefs: [], candidateRefs: [], relationRefs: [],
+      }],
+      tree: {
+        nodes: [{ id: 'asset:a-1', type: 'asset', assetType: 'rule', label: '状态不确定时标记待确认', status: 'active', maturity: 'bud', version: '1.0.0' }],
+        edges: [],
+      },
+    });
+
+    context.renderSkillsCognitionAssets();
+
+    expect(summaryHost.hidden).toBe(true);
+    expect(bodyHost.hidden).toBe(false);
+    // 返回认知树 + 四类资产卡（大框架）在二级页面最上面。
+    expect(bodyHost.innerHTML).toContain('data-cognition-subview-tree');
+    expect(bodyHost.innerHTML).toContain('ability-asset-summary-grid');
+    // 四类卡下方是资产工作台（列表 + 详情）。
+    expect(bodyHost.innerHTML).toContain('状态不确定时标记待确认');
+  });
+
+  it('有资产但树未加载时显示加载中，而不是把树画成空', () => {
+    const { context, summaryHost } = assetsContext({
+      assets: [{
+        id: 'a-1', type: 'rule', category: 'rule', title: '规则', source: 'recall_ability_asset',
+        lifecycleStatus: 'confirmed', version: '1.0.0', status: 'active', maturity: 'bud', scope: 'general',
+        workspaceRefs: [], receiptRefs: [], candidateRefs: [], relationRefs: [],
+      }],
+      tree: null,
+    });
+
+    context.renderSkillsCognitionAssets();
+
+    expect(summaryHost.innerHTML).toContain('加载中');
+    expect(summaryHost.innerHTML).not.toContain('树上还没有叶片');
   });
 });
