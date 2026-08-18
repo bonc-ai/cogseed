@@ -1,5 +1,4 @@
 skill_spec:
-  standard_id: "NSEAP-Skill-v1.0"
   skill_id: "skill.cogseed.fde.acceptance-evidence"
   name: "acceptance-evidence"
   version: "0.2.0-review.3"

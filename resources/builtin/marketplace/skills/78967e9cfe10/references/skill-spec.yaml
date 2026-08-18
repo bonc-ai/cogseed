@@ -1,5 +1,4 @@
 skill_spec:
-  standard_id: "NSEAP-Skill-v1.0"
   skill_id: "skill.cogseed.recruiting.feedback-summary"
   name: "feedback-summary"
   version: "0.2.0-review.3"

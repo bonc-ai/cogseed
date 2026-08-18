@@ -1,5 +1,4 @@
 skill_spec:
-  standard_id: NSEAP-Skill-v1.0
   skill_id: ontology-analysis-skill
   version: 0.1.0
   skill_class: ProductionProcessSkill

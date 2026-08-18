@@ -1,5 +1,4 @@
 skill_spec:
-  standard_id: "NSEAP-Skill-v1.0"
   skill_id: "skill.cogseed.project.milestone-plan"
   name: "milestone-plan"
   version: "0.2.0-review.3"

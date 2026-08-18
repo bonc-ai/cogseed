@@ -1,5 +1,4 @@
 skill_spec:
-  standard_id: "NSEAP-Skill-v1.0"
   skill_id: "skill.cogseed.engineering.debugging"
   name: "debugging"
   version: "0.2.0-review.3"

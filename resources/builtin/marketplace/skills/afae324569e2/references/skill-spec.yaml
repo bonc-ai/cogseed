@@ -1,5 +1,4 @@
 skill_spec:
-  standard_id: "NSEAP-Skill-v1.0"
   skill_id: "skill.cogseed.pm.competitor-market-research"
   name: "competitor-market-research"
   version: "0.2.0-review.3"

@@ -1,5 +1,4 @@
 skill_spec:
-  standard_id: "NSEAP-Skill-v1.0"
   skill_id: "skill.cogseed.fde.context-clarification"
   name: "context-clarification"
   version: "0.2.0-review.3"
