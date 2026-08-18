@@ -1818,9 +1818,9 @@ let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
 async function _ensureSpaceAssetNames() {
   try {
     const [tplRes, skillRes, agentRes] = await Promise.all([
-      (window.cogseed || window.orkas).invoke('spaces.templates.list'),
-      (window.cogseed || window.orkas).invoke('skills.list'),
-      (window.cogseed || window.orkas).invoke('agents.list'),
+      window.cogseed.invoke('spaces.templates.list'),
+      window.cogseed.invoke('skills.list'),
+      window.cogseed.invoke('agents.list'),
     ]);
     _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.template_id, t.name || t.template_id]));
     _spaceAssetNames.skills = Object.fromEntries((skillRes.skills || []).map((s) => [s.id, s.name || s.id]));
@@ -1853,7 +1853,7 @@ async function _createSpaceFromDraft(draft) {
   if (Array.isArray(draft.extra_skill_ids)) payload.extra_skill_ids = draft.extra_skill_ids;
   if (Array.isArray(draft.extra_agent_ids)) payload.extra_agent_ids = draft.extra_agent_ids;
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.createFromDraft', { draft: payload });
+    const res = await window.cogseed.invoke('spaces.createFromDraft', { draft: payload });
     if (!res || res.error || !res.space) throw new Error((res && res.error) || 'create failed');
     // corrections：后端自动纠正/忽略的非法引用说明（LLM 幻觉 id → 按名称解析或丢弃）
     return { space: res.space, corrections: Array.isArray(res.corrections) ? res.corrections : [] };
@@ -1966,7 +1966,7 @@ document.addEventListener('click', async (e) => {
   // 这个会话，而是新建引导会话（僵尸会话陷阱：旧会话无产出也会一直吸附点击）。
   if (typeof currentCid === 'string' && currentCid) {
     try {
-      const doneRes = await (window.cogseed || window.orkas).invoke('conversations.completeSpaceBuilder', { cid: currentCid });
+      const doneRes = await window.cogseed.invoke('conversations.completeSpaceBuilder', { cid: currentCid });
       // 同步本地列表缓存：本次运行内再点「空间模式」不再复用该会话。
       if (doneRes && doneRes.conversation && Array.isArray(conversations)) {
         const idx = conversations.findIndex((c) => c && c.conversation_id === currentCid);
@@ -6303,7 +6303,7 @@ async function _openSpaceActionMenu(anchorBtn, sid) {
     {
       action: 'reveal',
       label: t('sidebar.space_open_folder', '在访达中显示'),
-      onClick: () => { try { (window.cogseed || window.orkas).invoke('spaces.openInFinder', { spaceId: sid }); } catch (err) { _convLog.warn('open space folder failed', err); } },
+      onClick: () => { try { window.cogseed.invoke('spaces.openInFinder', { spaceId: sid }); } catch (err) { _convLog.warn('open space folder failed', err); } },
     },
     {
       action: 'delete',
@@ -6349,7 +6349,7 @@ async function _openSpaceActionMenu(anchorBtn, sid) {
 /** 空间置顶/取消置顶（spaces.update pinned_at）。 */
 async function _toggleSpacePinned(sid, pinned) {
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.update', {
+    const res = await window.cogseed.invoke('spaces.update', {
       spaceId: sid,
       pinned_at: pinned ? new Date().toISOString() : null,
     });
@@ -6382,7 +6382,7 @@ async function _saveSpaceRename(sid, raw) {
   renderConversationList();
   if (!name || name === (_spaceById(sid) ? (_spaceById(sid).name || '') : '')) return;
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.update', { spaceId: sid, name });
+    const res = await window.cogseed.invoke('spaces.update', { spaceId: sid, name });
     if (!res || res.error) throw new Error((res && res.error) || 'rename failed');
   } catch (err) {
     _convLog.warn('space rename failed', err);
@@ -6401,7 +6401,7 @@ async function _deleteSpaceWithConfirm(sid) {
   try { ok = await uiConfirm(t('ws.delete_space_confirm', { name })); } catch (_) { ok = false; }
   if (!ok) return;
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.delete', { spaceId: sid });
+    const res = await window.cogseed.invoke('spaces.delete', { spaceId: sid });
     if (res && res.error) throw new Error(res.error);
   } catch (err) {
     _convLog.warn('space delete failed', err);
@@ -6416,7 +6416,7 @@ async function _deleteSpaceWithConfirm(sid) {
 /** 重新拉取侧栏空间列表（重命名/删除后同步名称）。 */
 async function _reloadSidebarSpaces() {
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.list', {});
+    const res = await window.cogseed.invoke('spaces.list', {});
     if (res && Array.isArray(res.spaces)) _sidebarSpaces = res.spaces;
   } catch (err) {
     _convLog.warn('reload sidebar spaces failed', err);
@@ -6639,7 +6639,7 @@ function _ensureSidebarSpaces() {
   if (_sidebarSpacesLoaded || _sidebarSpacesLoading) return _sidebarSpacesLoading || Promise.resolve();
   _sidebarSpacesLoading = (async () => {
     try {
-      const res = await (window.cogseed || window.orkas).invoke('spaces.list', {});
+      const res = await window.cogseed.invoke('spaces.list', {});
       _sidebarSpaces = Array.isArray(res && res.spaces) ? res.spaces : [];
     } catch (err) {
       _convLog.warn('load spaces for sidebar failed', err);
@@ -9395,7 +9395,7 @@ function _injectUserTaskRefFeedback(userMsgEl, cid) {
   if (!userMsgEl || !cid || userMsgEl.dataset.taskRefFeedback === '1') return;
   userMsgEl.dataset.taskRefFeedback = '1';
   try {
-    (window.cogseed || window.orkas).invoke('conversations.taskRefs.list', { cid }).then((res) => {
+    window.cogseed.invoke('conversations.taskRefs.list', { cid }).then((res) => {
       try {
         if (!res || userMsgEl.isConnected === false) return;
         const refs = Array.isArray(res.references) ? res.references : [];
@@ -11259,19 +11259,19 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
     // so re-apply the fallback below instead of failing with "configure API" —
     // this keeps a connected CLI usable after any recipient change.
   }
-  if (!window.orkas || typeof window.orkas.invoke !== 'function') return false;
+  if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return false;
 
   if (!force) {
     let modelRes;
     try {
-      modelRes = await window.orkas.invoke('model.hasConfigured');
+      modelRes = await window.cogseed.invoke('model.hasConfigured');
     } catch (_) { return false; }
     if (modelRes && modelRes.configured) return false;
   }
 
   let cli = '';
   try {
-    const fb = await window.orkas.invoke('prefs.getCliFallback');
+    const fb = await window.cogseed.invoke('prefs.getCliFallback');
     cli = (fb && fb.cli) || '';
   } catch (_) { /* fall through to auto-pick */ }
 
@@ -11282,7 +11282,7 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   // is treated as usable so we never block a CLI off an unknown endpoint.
   let proxyUnreachable = {};
   try {
-    const epRes = await window.orkas.invoke('localAgents.cliEndpointInfo');
+    const epRes = await window.cogseed.invoke('localAgents.cliEndpointInfo');
     const eps = (epRes && epRes.endpoints) || {};
     for (const [type, ep] of Object.entries(eps)) {
       if (ep && ep.isLocalProxy && ep.reachable === false) proxyUnreachable[type] = true;
@@ -11301,7 +11301,7 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   // backstops a runtime failure).
   if (cli && !excluded(cli)) {
     try {
-      const listRes = await window.orkas.invoke('localAgents.list', { force: false });
+      const listRes = await window.cogseed.invoke('localAgents.list', { force: false });
       const entries = (listRes && listRes.entries) || [];
       const FALLBACK_CLIS = ['claude', 'codex', 'opencode', 'workbuddy'];
       const prefEntry = entries.find((e) => e && e.type === cli);
@@ -11333,7 +11333,7 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
     // 无显式偏好，或偏好 CLI 已被排除（运行失败 / 代理不可达）→ 自动挑选下一个可用 CLI。
     // 显式偏好被排除时不悄悄回退到偏好——它已被证明不可用，直接换。
     try {
-      const listRes = await window.orkas.invoke('localAgents.list', { force: false });
+      const listRes = await window.cogseed.invoke('localAgents.list', { force: false });
       const entries = (listRes && listRes.entries) || [];
       // Prefer a SIGNED-IN CLI (official account); fall back to the first
       // available one — the credential check is file-based and can miss
@@ -11361,7 +11361,7 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
 
   let agent = null;
   try {
-    const listRes = await window.orkas.invoke('agents.list', {});
+    const listRes = await window.cogseed.invoke('agents.list', {});
     agent = (listRes && listRes.agents || []).find(
       (a) => a && a.runtime && a.runtime.kind === 'cli' && a.runtime.cli === cli,
     );
@@ -11372,7 +11372,7 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   if (!agent) {
     try {
       const name = cli === 'claude' ? 'Claude' : (cli === 'codex' ? 'Codex' : (cli === 'opencode' ? 'OpenCode' : 'WorkBuddy'));
-      const res = await window.orkas.invoke('agents.create', {
+      const res = await window.cogseed.invoke('agents.create', {
         name,
         description: `本机 ${name} 命令行，作为 AI 团队成员执行任务`,
         icon: 'code',
@@ -11449,7 +11449,7 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
   // 找出当前 recipient 对应的 CLI 类型。
   let failedCli = '';
   try {
-    const listRes = await window.orkas.invoke('agents.list', {});
+    const listRes = await window.cogseed.invoke('agents.list', {});
     const a = (listRes && listRes.agents || []).find((x) => x && String(x.agent_id) === String(recipient.id));
     if (a && a.runtime && a.runtime.kind === 'cli') failedCli = a.runtime.cli;
   } catch (_) { /* agents list unavailable */ }
@@ -11486,15 +11486,15 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
   // same long hang + failure). Best-effort — never blocks the switch, and a
   // deliberate settings choice is only overwritten when it proved unusable.
   try {
-    const listRes = await window.orkas.invoke('agents.list', {});
+    const listRes = await window.cogseed.invoke('agents.list', {});
     const newRecipient = _recipientByCid[cid] || null;
     const a = newRecipient && (listRes && listRes.agents || []).find(
       (x) => x && String(x.agent_id) === String(newRecipient.id),
     );
     if (a && a.runtime && a.runtime.kind === 'cli') {
-      const cur = await window.orkas.invoke('prefs.getCliFallback');
+      const cur = await window.cogseed.invoke('prefs.getCliFallback');
       if (cur && typeof cur.cli === 'string' && cur.cli && String(cur.cli) !== String(a.runtime.cli)) {
-        await window.orkas.invoke('prefs.setCliFallback', { cli: String(a.runtime.cli) });
+        await window.cogseed.invoke('prefs.setCliFallback', { cli: String(a.runtime.cli) });
         _convLog.info('[cli-fallback] persisted auto-switch as new fallback preference', { from: failedCli, to: String(a.runtime.cli) });
       }
     }
@@ -11531,7 +11531,7 @@ async function _cliFallbackGuideUser() {
   if (typeof uiToast !== 'function') return;
   let desktopApps = [];
   try {
-    const res = await window.orkas.invoke('localAgents.detectDesktopApps');
+    const res = await window.cogseed.invoke('localAgents.detectDesktopApps');
     desktopApps = (res && Array.isArray(res.apps)) ? res.apps : [];
   } catch (_) { /* detection is best-effort */ }
 

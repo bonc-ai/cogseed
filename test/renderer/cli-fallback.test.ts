@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
 // Extract the CLI-fallback logic from conversation.js and run it in a sandbox
-// with a mocked window.orkas, so we can verify the real branching behaviour:
+// with a mocked window.cogseed, so we can verify the real branching behaviour:
 // when no API-key model is configured but a CLI account is signed in, the
 // conversation is routed to that CLI agent — the user is never prompted for a
 // key.
@@ -48,7 +48,7 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     uiToast: (message: string, opts: unknown) => { toasts.push({ message, opts }); },
     _convLog: { info: () => {}, warn: () => {}, error: () => {} },
     window: {
-      orkas: {
+      cogseed: {
         invoke: async (channel: string, payload: unknown) => {
           invokeLog.push({ channel, payload });
           const route = routes[channel];

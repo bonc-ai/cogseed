@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { types as utilTypes } from 'node:util';
 import * as vm from 'node:vm';
 
 
@@ -236,13 +235,12 @@ describe('preload bridge', () => {
     expect(invalid.exposed.__cogseedI18nBoot).toBeNull();
   });
 
-  it('exposes the legacy bridge alias as a contextBridge-cloneable plain object', () => {
-    const { api, exposed } = loadPreload();
-    const legacyApi = exposed.orkas as Record<string, unknown>;
-
-    expect(utilTypes.isProxy(legacyApi)).toBe(false);
-    expect(Object.keys(legacyApi).sort()).toEqual(Object.keys(api).sort());
-    expect(legacyApi.invoke).toBe(api.invoke);
+  it('no longer exposes the legacy orkas bridge alias', () => {
+    // 兼容别名已删除（2026-08-17）：window.orkas 不再暴露，渲染层唯一桥
+    // 是 window.cogseed。
+    const { exposed } = loadPreload();
+    expect(exposed.orkas).toBeUndefined();
+    expect(exposed.cogseed).toBeDefined();
   });
 
   it('routes invokes through one envelope', async () => {

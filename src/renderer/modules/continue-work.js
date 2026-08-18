@@ -286,7 +286,7 @@ async function _cwLoadSources() {
   const grid = _cw.backdrop.querySelector('[data-cw-sources]');
   if (!grid) return;
   try {
-    const res = await window.orkas.invoke('localAgents.list');
+    const res = await window.cogseed.invoke('localAgents.list');
     const entries = Array.isArray(res && res.entries) ? res.entries : [];
     // 显示所有已连接/可用的 CLI Agent（Claude Code / Codex / OpenCode /
     // WorkBuddy 等）——用户连接的 agent 都应在此展示。
@@ -297,7 +297,7 @@ async function _cwLoadSources() {
     // keeping a permission error distinct from "none found".
     _cw.desktopDenied = false;
     try {
-      const dres = await window.orkas.invoke('localAgents.listClaudeDesktopSessions');
+      const dres = await window.cogseed.invoke('localAgents.listClaudeDesktopSessions');
       if (dres && dres.error === 'permission_denied') _cw.desktopDenied = true;
       else if (dres && Array.isArray(dres.sessions) && dres.sessions.length) {
         available.push({ type: 'claude-desktop', count: dres.sessions.length });
@@ -385,7 +385,7 @@ async function _cwLoadSessions() {
   for (const type of wanted) {
     try {
       if (type === 'claude-desktop') {
-        const res = await window.orkas.invoke('localAgents.listClaudeDesktopSessions');
+        const res = await window.cogseed.invoke('localAgents.listClaudeDesktopSessions');
         if (res && res.error === 'permission_denied') {
           _cw.denied = true;
           continue;
@@ -402,7 +402,7 @@ async function _cwLoadSessions() {
           });
         }
       } else if (type === 'claude') {
-        const res = await window.orkas.invoke('localAgents.listClaudeSessions');
+        const res = await window.cogseed.invoke('localAgents.listClaudeSessions');
         for (const s of (res && res.sessions) || []) {
           sessions.push({
             id: `claude::${s.filePath}`,
@@ -414,7 +414,7 @@ async function _cwLoadSessions() {
           });
         }
       } else if (type === 'codex') {
-        const res = await window.orkas.invoke('sessionImport.listCodexSessions');
+        const res = await window.cogseed.invoke('sessionImport.listCodexSessions');
         for (const s of (res && res.sessions) || []) {
           sessions.push({
             id: `codex::${s.filePath}`,
@@ -426,7 +426,7 @@ async function _cwLoadSessions() {
           });
         }
       } else if (type === 'workbuddy') {
-        const res = await window.orkas.invoke('sessionImport.listWorkbuddySessions');
+        const res = await window.cogseed.invoke('sessionImport.listWorkbuddySessions');
         for (const s of (res && res.sessions) || []) {
           sessions.push({
             id: `workbuddy::${s.filePath}`,
@@ -438,7 +438,7 @@ async function _cwLoadSessions() {
           });
         }
       } else if (type === 'opencode') {
-        const res = await window.orkas.invoke('sessionImport.listOpencodeSessions');
+        const res = await window.cogseed.invoke('sessionImport.listOpencodeSessions');
         for (const s of (res && res.sessions) || []) {
           sessions.push({
             id: `opencode::${s.id}`,
@@ -634,23 +634,23 @@ async function _cwRunImport() {
     try {
       let res;
       if (item.source === 'claude') {
-        res = await window.orkas.invoke('sessionImport.importClaudeSession', { filePath: item.filePath });
+        res = await window.cogseed.invoke('sessionImport.importClaudeSession', { filePath: item.filePath });
       } else if (item.source === 'claude-desktop') {
-        res = await window.orkas.invoke('sessionImport.importClaudeDesktopSession', {
+        res = await window.cogseed.invoke('sessionImport.importClaudeDesktopSession', {
           sessionId: item.sessionId,
         });
       } else if (item.source === 'workbuddy') {
-        res = await window.orkas.invoke('sessionImport.importWorkbuddySession', {
+        res = await window.cogseed.invoke('sessionImport.importWorkbuddySession', {
           filePath: item.filePath,
           titleHint: item.title,
         });
       } else if (item.source === 'opencode') {
-        res = await window.orkas.invoke('sessionImport.importOpencodeSession', {
+        res = await window.cogseed.invoke('sessionImport.importOpencodeSession', {
           sessionId: item.sessionId,
           titleHint: item.title,
         });
       } else {
-        res = await window.orkas.invoke('sessionImport.importCodexSession', {
+        res = await window.cogseed.invoke('sessionImport.importCodexSession', {
           filePath: item.filePath,
           titleHint: item.title,
         });

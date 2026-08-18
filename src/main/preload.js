@@ -3,10 +3,10 @@
  * via contextBridge. No other Node capabilities leak into window.
  *
  * Contract (renderer-visible surface):
- *   window.orkas.ping()                            → { ok, pong, ts }
- *   window.orkas.diagnostics()                     → boot-time summary
- *   window.orkas.invoke(channel, payload)          → { ok, ...result } | { ok:false, error }
- *   window.orkas.stream(channel, payload, onEvent) → { promise, cancel }
+ *   window.cogseed.ping()                          → { ok, pong, ts }
+ *   window.cogseed.diagnostics()                   → boot-time summary
+ *   window.cogseed.invoke(channel, payload)        → { ok, ...result } | { ok:false, error }
+ *   window.cogseed.stream(channel, payload, onEvent) → { promise, cancel }
  *       - promise resolves when the stream ends (normally or cancelled)
  *       - cancel() aborts the stream
  *       - onEvent(ev) called with each SSE-shape event
@@ -424,7 +424,6 @@ const recycleBin = {
 // Expose the sync-fetched i18n bundle on its own bridge key so the renderer
 // can pick it up at module load. Read-only — the renderer never mutates it.
 contextBridge.exposeInMainWorld('__cogseedI18nBoot', _i18nBoot);
-contextBridge.exposeInMainWorld('__orkasI18nBoot', _i18nBoot);
 
 const cogseedApi = {
   ping: () => ipcRenderer.invoke('cogseed.ping'),
@@ -447,15 +446,12 @@ const cogseedApi = {
   log: logRecord,
 };
 contextBridge.exposeInMainWorld('cogseed', cogseedApi);
-// contextBridge cannot clone Proxy objects in sandboxed renderers. Keep the
-// one-cycle compatibility alias as a plain object with the same allow-list.
-contextBridge.exposeInMainWorld('orkas', { ...cogseedApi });
 
 // Final-package launch smoke. The main process adds this private renderer
 // argument only when the release validator starts an isolated hidden window.
 // A successful ping proves the preload bridge and main IPC handler both ran;
 // DOMContentLoaded proves the packaged renderer was read and initialized.
-if (process.argv.includes('--orkas-packaged-launch-smoke')) {
+if (process.argv.includes('--cogseed-packaged-launch-smoke')) {
   window.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke('cogseed.ping')
       .then((ping) => ipcRenderer.invoke('cogseed.packagedLaunchSmokeReady', {
