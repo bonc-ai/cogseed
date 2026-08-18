@@ -4662,5 +4662,7 @@
   "cognition.activity_untitled": "Registo sem título",
   "cognition.teaching_untitled": "Sem resumo registado",
   "recall.projection.asset_untitled": "Ativo sem título",
-  "recall.projection.asset_stale": "Ainda a executar a v{confirmed} confirmada; o ativo está agora na v{current}. Aplica-se depois de o selecionar novamente."
+  "recall.projection.asset_stale": "Ainda a executar a v{confirmed} confirmada; o ativo está agora na v{current}. Aplica-se depois de o selecionar novamente.",
+  "cognition.asset_edit_load_failed": "Não foi possível carregar o conteúdo completo deste ativo, por isso a edição não está disponível. Tente novamente.",
+  "cognition.proof_task_used": "Trazido para uma tarefa"
 }

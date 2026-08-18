@@ -4662,5 +4662,7 @@
   "cognition.activity_untitled": "無題の記録",
   "cognition.teaching_untitled": "要約は記録されていません",
   "recall.projection.asset_untitled": "無題の資産",
-  "recall.projection.asset_stale": "現在は確認済みの v{confirmed} で動作しています。資産は v{current} に更新済みで、選び直すと反映されます。"
+  "recall.projection.asset_stale": "現在は確認済みの v{confirmed} で動作しています。資産は v{current} に更新済みで、選び直すと反映されます。",
+  "cognition.asset_edit_load_failed": "この資産の全内容を読み込めなかったため、編集できません。再試行してください。",
+  "cognition.proof_task_used": "あるタスクに取り込まれました"
 }

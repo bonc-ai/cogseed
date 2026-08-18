@@ -4988,5 +4988,7 @@
   "cognition.activity_untitled": "Untitled record",
   "cognition.teaching_untitled": "No summary recorded",
   "recall.projection.asset_untitled": "Untitled asset",
-  "recall.projection.asset_stale": "Still running the confirmed v{confirmed}; the asset is now v{current}. It takes effect after you select it again."
+  "recall.projection.asset_stale": "Still running the confirmed v{confirmed}; the asset is now v{current}. It takes effect after you select it again.",
+  "cognition.asset_edit_load_failed": "Could not load this asset's full content, so editing is unavailable. Please retry.",
+  "cognition.proof_task_used": "Brought into a task"
 }

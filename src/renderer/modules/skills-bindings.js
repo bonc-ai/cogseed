@@ -1227,13 +1227,31 @@ function _initSkillsCognitionBindings() {
     // recall.assets.update，由后端生成新版本；这里不自己拼版本号。
     const assetEditOpen = event.target.closest('[data-recall-asset-edit-open]');
     if (assetEditOpen) {
-      _skillsCognitionState.editingAssetId = assetEditOpen.dataset.recallAssetEditOpen || '';
-      renderSkillsCognitionGovernance();
+      const assetId = assetEditOpen.dataset.recallAssetEditOpen || '';
+      if (!assetId || assetEditOpen.dataset.busy === '1') return;
+      // 列表里的 assets 是精简视图（没有 statement / applicableWhen /
+      // forbiddenWhen），拿它填表单会让三个框空着——用户一保存就把资产已有的
+      // 边界写成空数组。编辑必须基于权威记录，读不到就不开编辑器。
+      assetEditOpen.dataset.busy = '1'; assetEditOpen.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.assets.read', { assetId });
+        if (!result?.ok || !result.asset) throw new Error(result?.error || 'recall asset read failed');
+        _skillsCognitionState.editingAssetRecord = result.asset;
+        _skillsCognitionState.editingAssetId = assetId;
+        renderSkillsCognitionGovernance();
+      } catch (error) {
+        _skillsCognitionState.editingAssetId = '';
+        _skillsCognitionState.editingAssetRecord = null;
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        assetEditOpen.dataset.busy = '0'; assetEditOpen.disabled = false;
+      }
       return;
     }
     const assetEditCancel = event.target.closest('[data-recall-asset-edit-cancel]');
     if (assetEditCancel) {
       _skillsCognitionState.editingAssetId = '';
+      _skillsCognitionState.editingAssetRecord = null;
       renderSkillsCognitionGovernance();
       return;
     }
@@ -1265,6 +1283,7 @@ function _initSkillsCognitionBindings() {
         });
         if (!result?.ok) throw new Error(result?.error || 'recall asset update failed');
         _skillsCognitionState.editingAssetId = '';
+        _skillsCognitionState.editingAssetRecord = null;
         // 版本历史已经变了：清掉缓存的历史，让治理页重新读到新版本与本次改动。
         if (_skillsCognitionState.assetHistoryById) delete _skillsCognitionState.assetHistoryById[assetId];
         _cognitionNotifyDone('cognition.asset_edit_done', '已保存为新版本');
@@ -1410,14 +1429,22 @@ function _initSkillsCognitionBindings() {
           const card = recallAction.parentElement?.closest('[data-recall-candidate-id]');
           if (!card || !candidate) throw new Error('recall candidate unavailable');
           channel = 'recall.candidates.update';
-          const evidenceText = card.querySelector('[data-recall-edit-evidence]')?.value || '';
-          const sourceRefs = evidenceText.split(/[\n,]/).map((value) => value.trim()).filter(Boolean).map((value) => {
-            const divider = value.indexOf(':');
-            return divider > 0 ? { kind: value.slice(0, divider), id: value.slice(divider + 1) } : { kind: 'memory', id: value };
-          });
-          const conditionLines = (selector) => String(card.querySelector(selector)?.value || '')
-            .split('\n').map((value) => value.trim()).filter(Boolean);
-          payload = { candidateId, judgment: card.querySelector('[data-recall-edit-judgment]')?.value || '', value: candidate.value || '', summary: card.querySelector('[data-recall-edit-summary]')?.value || '', suggestedScope: card.querySelector('[data-recall-edit-scope]')?.value || '', suggestedType: card.querySelector('[data-recall-edit-type]')?.value || '', suggestedAction: candidate.suggestedAction || 'create', risk: candidate.risk || 'low', sourceRefs, evidenceRefs: sourceRefs, applicableWhen: conditionLines('[data-recall-edit-applicable]'), forbiddenWhen: conditionLines('[data-recall-edit-forbidden]'), expiresAt: candidate.expiresAt, taskRunId: candidate.taskRunId, targetAssetId: candidate.targetAssetId };
+          // 只有页面上**真的渲染了**的字段才参与提交。候选详情页没有适用/禁止
+          // 范围输入框，早先无条件读取会把它们提交成空数组——一次「确认并限域」
+          // 就把候选原有的边界抹掉，晋升出来的规则也就没了边界。
+          const evidenceEl = card.querySelector('[data-recall-edit-evidence]');
+          const sourceRefs = evidenceEl
+            ? String(evidenceEl.value || '').split(/[\n,]/).map((value) => value.trim()).filter(Boolean).map((value) => {
+              const divider = value.indexOf(':');
+              return divider > 0 ? { kind: value.slice(0, divider), id: value.slice(divider + 1) } : { kind: 'memory', id: value };
+            })
+            : (candidate.sourceRefs || []);
+          const conditionLines = (selector, current) => {
+            const el = card.querySelector(selector);
+            if (!el) return Array.isArray(current) ? current : [];
+            return String(el.value || '').split('\n').map((value) => value.trim()).filter(Boolean);
+          };
+          payload = { candidateId, judgment: card.querySelector('[data-recall-edit-judgment]')?.value || '', value: candidate.value || '', summary: card.querySelector('[data-recall-edit-summary]')?.value || '', suggestedScope: card.querySelector('[data-recall-edit-scope]')?.value || '', suggestedType: card.querySelector('[data-recall-edit-type]')?.value || '', suggestedAction: candidate.suggestedAction || 'create', risk: candidate.risk || 'low', sourceRefs, evidenceRefs: evidenceEl ? sourceRefs : (candidate.evidenceRefs || sourceRefs), applicableWhen: conditionLines('[data-recall-edit-applicable]', candidate.applicableWhen), forbiddenWhen: conditionLines('[data-recall-edit-forbidden]', candidate.forbiddenWhen), expiresAt: candidate.expiresAt, taskRunId: candidate.taskRunId, targetAssetId: candidate.targetAssetId };
         }
         if (!channel) return;
         if (actionName === 'promote' || actionName === 'save-and-promote') {

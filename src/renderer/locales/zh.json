@@ -4988,5 +4988,7 @@
   "cognition.activity_untitled": "未命名记录",
   "cognition.teaching_untitled": "未记录摘要",
   "recall.projection.asset_untitled": "未命名资产",
-  "recall.projection.asset_stale": "当前运行仍使用已确认的 v{confirmed}；资产已更新至 v{current}，重新选择后生效。"
+  "recall.projection.asset_stale": "当前运行仍使用已确认的 v{confirmed}；资产已更新至 v{current}，重新选择后生效。",
+  "cognition.asset_edit_load_failed": "没能读到这条资产的完整内容，暂时无法编辑。请重试。",
+  "cognition.proof_task_used": "在一次任务中被带入"
 }

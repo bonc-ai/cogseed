@@ -20,7 +20,9 @@ const _GLOBAL_SKILL_GROUP_MIN = 2;
 
 
 const _skillsCognitionState = {
-  page: 'inbox',
+  // 落地页是旅程第一步「我的认知树」（原型 v0.9.1）：先回答"我拥有什么"，
+  // 再由第二步「待我处理」回答"还有什么要我决定"。
+  page: 'tree',
   /** 「待我处理」的服务端读模型（cognition.inbox.list）。渲染层不自己判断
    *  什么算待办——判断在 formal-assets/inbox.ts，与 gate 同源。 */
   inboxItems: [],
@@ -307,14 +309,15 @@ function switchSkillsCognitionPage(page) {
     ontology: 'assets',
   };
   const requested = aliases[page] || page;
-  // 四个任务视图 + 两个页头辅助入口 + 四个从它们进入的详情页。详情页不进
-  // tab 条：它们都是"从某一条记录点进去"的下一层，占了 tab 位反而会让用户
-  // 以为那是第五、第六个并列的任务。
+  // 四个任务视图（tree / inbox / proofs / governance）+ 两个页头辅助入口 +
+  // 五个从它们进入的详情页。详情页不进 tab 条：它们都是"从某一条记录点进去"
+  // 的下一层，占了 tab 位反而会让用户以为那是第五、第六个并列的任务。
+  // 「我的资产」自 v0.9.1 起也在这一层：四类分类卡是认知树页的下钻入口。
   const allowed = new Set([
-    'inbox', 'captures', 'assets', 'sources', 'proofs', 'governance',
-    'candidate', 'tree', 'nonasset', 'skillupdate',
+    'tree', 'inbox', 'proofs', 'governance', 'captures', 'sources',
+    'assets', 'candidate', 'nonasset', 'skillupdate',
   ]);
-  const next = allowed.has(requested) ? requested : 'inbox';
+  const next = allowed.has(requested) ? requested : 'tree';
   _skillsCognitionState.page = next;
   if (next === 'assets' && !_skillsCognitionState.assetCategoryFilter && !_skillsCognitionState.selectedAssetId) {
     _skillsCognitionState.assetCategoryFilter = 'personal';
@@ -2838,7 +2841,8 @@ function renderSkillsCognitionProofs() {
         ? _cognitionProofUserObservation(item)
         : (item.summary || item.title || '');
       const meta = [
-        refs.taskRunId ? `${escapeHtml(_cognitionText('cognition.proof_task', '任务'))} ${escapeHtml(refs.taskRunId)}` : '',
+        // 任务 id 是定位键：只作为 tooltip，不进主文案（§7）。
+        refs.taskRunId ? `<span title="${escapeHtml(refs.taskRunId)}">${escapeHtml(_cognitionText('cognition.proof_task_used', '在一次任务中被带入'))}</span>` : '',
         refs.version ? `v${escapeHtml(refs.version)}` : '',
         hasReceipt ? escapeHtml(_cognitionText('cognition.proof_receipt', '有回执')) : '',
       ].filter(Boolean).join(' · ');
@@ -3470,6 +3474,18 @@ function _recallAssetContentEditable(status) {
 function _renderRecallAssetEditor(asset) {
   if (!_recallAssetContentEditable(asset.status)) return '';
   const open = _skillsCognitionState.editingAssetId === asset.id;
+  // 表单必须基于**权威记录**：列表里的 assets 是精简视图，没有 statement /
+  // applicableWhen / forbiddenWhen。用它填表会让三个框空着，用户一保存就把
+  // 已有边界写成空数组。记录没到手就不开表单（fail closed），不给假界面。
+  const record = _skillsCognitionState.editingAssetRecord;
+  const editable = open && record && record.id === asset.id ? record : null;
+  if (open && !editable) {
+    return `<section class="cognition-governance-action-group cognition-asset-editor">
+      <h3>${escapeHtml(_cognitionText('cognition.asset_edit_title', '修改这条资产'))}</h3>
+      <p>${escapeHtml(_cognitionText('cognition.asset_edit_load_failed', '没能读到这条资产的完整内容，暂时无法编辑。请重试。'))}</p>
+      <div><button type="button" class="btn btn-sm" data-recall-asset-edit-open="${escapeHtml(asset.id)}">${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>
+    </section>`;
+  }
   if (!open) {
     return `<section class="cognition-governance-action-group cognition-asset-editor">
       <h3>${escapeHtml(_cognitionText('cognition.asset_edit_title', '修改这条资产'))}</h3>
@@ -3478,14 +3494,15 @@ function _renderRecallAssetEditor(asset) {
     </section>`;
   }
   const lines = (value) => escapeHtml((Array.isArray(value) ? value : []).join('\n'));
+  const source = editable;
   return `<section class="cognition-governance-action-group cognition-asset-editor is-open" data-recall-asset-editor="${escapeHtml(asset.id)}">
     <h3>${escapeHtml(_cognitionText('cognition.asset_edit_title', '修改这条资产'))}</h3>
     <p>${escapeHtml(_cognitionText('cognition.asset_edit_version_hint', '保存后会生成 v{next}，当前 v{current} 仍保留在版本历史里。')
-      .replace('{next}', String(Number(asset.version || 0) + 1)).replace('{current}', String(asset.version || '1')))}</p>
-    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.asset_statement', '内容'))}</span><textarea data-recall-asset-edit-statement>${escapeHtml(asset.statement || '')}</textarea></label>
-    <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.asset_scope', '作用范围'))}</span><input data-recall-asset-edit-scope value="${escapeHtml(asset.scope || '')}"></label>
-    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.applicable_when', '适用场景（一行一条）'))}</span><textarea data-recall-asset-edit-applicable>${lines(asset.applicableWhen)}</textarea></label>
-    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.forbidden_when', '禁止场景（一行一条）'))}</span><textarea data-recall-asset-edit-forbidden>${lines(asset.forbiddenWhen)}</textarea></label>
+      .replace('{next}', String(Number(source.version || asset.version || 0) + 1)).replace('{current}', String(source.version || asset.version || '1')))}</p>
+    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.asset_statement', '内容'))}</span><textarea data-recall-asset-edit-statement>${escapeHtml(source.statement || '')}</textarea></label>
+    <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.asset_scope', '作用范围'))}</span><input data-recall-asset-edit-scope value="${escapeHtml(source.scope || '')}"></label>
+    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.applicable_when', '适用场景（一行一条）'))}</span><textarea data-recall-asset-edit-applicable>${lines(source.applicableWhen)}</textarea></label>
+    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.forbidden_when', '禁止场景（一行一条）'))}</span><textarea data-recall-asset-edit-forbidden>${lines(source.forbiddenWhen)}</textarea></label>
     <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.asset_edit_reason', '改动原因（会记进治理历史）'))}</span><input data-recall-asset-edit-reason placeholder="${escapeHtml(_cognitionText('cognition.asset_edit_reason_placeholder', '例如：把适用范围收窄到产品评审'))}"></label>
     <div class="skills-cognition-actions">
       <button type="button" class="btn btn-sm btn-primary" data-recall-asset-edit-save="${escapeHtml(asset.id)}">${escapeHtml(_cognitionText('cognition.asset_edit_save', '保存为新版本'))}</button>
@@ -4116,18 +4133,23 @@ function initSkillsCognitionConsole() {
   // 置真；所以先调用它拿到 promise，再渲染，首屏拿到的就已经是 loading 态。
   const snapshotLoad = loadSkillsCognitionSnapshot();
   _cognitionRenderCurrentPage();
+  // 落地页是「我的认知树」，树本体来自另一条通道（recall.tree.read），不在
+  // 快照里：不在这里起一次，首屏就永远停在树的 loading 上。等快照回来再拉是
+  // 错的——两条读互不依赖，串起来只是让首屏白得更久。
+  if (_skillsCognitionState.page === 'tree') void loadCognitionTree({ rebuild: true });
   snapshotLoad
     .then(() => {
-      if (_skillsCognitionState.page !== 'inbox') return;
-      // G-9 产品决策：**默认永远停在「待我处理」，不自动跳页。**
+      if (_skillsCognitionState.page !== 'tree') return;
+      // G-9 产品决策（v0.9.1 顺延到新落地页）：**默认永远停在旅程第一步，
+      // 不自动跳页。**
       //
-      // 认知资产首页要先回答"现在有什么需要我判断"。此前待办为空会静默切到
-      // 「我的资产」、一件东西都没有会静默切到空种子——用户点进来看到的不是
-      // 自己点的那一页，也不知道是被跳走了还是本来就在这儿。
+      // 认知资产首页先回答"我拥有什么"。此前落地页会因为"待办为空"或"一件
+      // 东西都没有"被静默切走——用户看到的不是自己点的那一页，也不知道是被
+      // 跳走了还是本来就在这儿。
       //
-      // 现在两种空都由「待我处理」自己的空态承担并给出显式入口（首启引导 /
-      // 去我的资产），跳不跳由用户点。历史带在这里自己拉：留在本页不会走
-      // switchSkillsCognitionPage，不拉它就永远停在 loading。
+      // 现在「一件东西都没有」由本页自己的空种子承担、「有资产但没待办」由
+      // 「待我处理」的空态承担，跳不跳由用户点。历史带在这里自己拉：落地页
+      // 不是待我处理，不拉它切过去就永远停在 loading。
       void loadCognitionReviewHistory();
     })
     .catch(() => {});
