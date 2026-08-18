@@ -8,6 +8,27 @@ vi.mock('../../../src/main/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
+// 测试环境无真实模型配置：buildRunner 的 auth gate 会抛
+// no_model_configured。这里给一个假 chat entry + 标记已配置，让
+// buildRunner 走到 prompt 组装（本测试只验证 space 注入，不跑模型）。
+const fakeChatEntry = {
+  entryId: 'test-entry',
+  profileId: 'test-profile',
+  provider: 'test-provider',
+  model: 'test-model',
+  apiKey: 'test-key',
+};
+vi.mock('../../../src/main/features/auth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/features/auth')>();
+  return {
+    ...actual,
+    hasConfiguredModel: () => ({ configured: true }),
+    getConfiguredModelCooldown: () => null,
+    getConfiguredModelOAuthExpiredMessage: () => null,
+    pickChatEntryGroup: async () => [fakeChatEntry],
+  };
+});
+
 // 捕获 bus → streamChatWithModel 的 ChatOptions（验证 spaceId 从会话透传）。
 let capturedChatOptions: Array<Record<string, unknown>> = [];
 vi.mock('../../../src/main/model/client', () => ({
