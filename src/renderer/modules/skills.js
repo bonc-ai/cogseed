@@ -54,6 +54,11 @@ const _skillsCognitionState = {
   captureModel: null,
   /** 已安装个人角色模板的字段清单，供 Personal 候选确认时选择直接落点。 */
   personalTemplates: [],
+  /** 个人本体分组，供资产编辑时选择本体绑定（ontologyRefs）。
+   *  **按需加载**：只在打开资产编辑器时随权威记录一起取，不进四页快照
+   *  （`skills-cognition-layout` 有不变量钉住：快照不得加载本体数据）。
+   *  读失败退化为空数组 = 不给绑定控件，而不是给一个空下拉。 */
+  ontologyGroups: [],
   captureSettingsExpanded: false,
   selectedCaptureId: '',
   // Candidate review is a cross-capture work queue. Keep selection in the
@@ -2878,7 +2883,8 @@ function renderSkillsCognitionProofs() {
         ? _cognitionProofUserObservation(item)
         : (item.summary || item.title || '');
       const meta = [
-        refs.taskRunId ? `${escapeHtml(_cognitionText('cognition.proof_task', '任务'))} ${escapeHtml(refs.taskRunId)}` : '',
+        // 任务 id 是定位键：只作为 tooltip，不进主文案（§7）。
+        refs.taskRunId ? `<span title="${escapeHtml(refs.taskRunId)}">${escapeHtml(_cognitionText('cognition.proof_task_used', '在一次任务中被带入'))}</span>` : '',
         refs.version ? `v${escapeHtml(refs.version)}` : '',
         hasReceipt ? escapeHtml(_cognitionText('cognition.proof_receipt', '有回执')) : '',
       ].filter(Boolean).join(' · ');
@@ -3091,9 +3097,10 @@ function renderSkillsCognitionCandidateDetail() {
 /**
  * 「认知树」：正式资产的成长投影，数据来自 `recall.tree.read`。
  *
- * 树只呈现资产节点——任务接续快照、Session、运行记录属于支撑对象，不长叶片。
- * 这条契约在 tree-service 就成立（节点类型只有 asset），渲染层不再另作判断，
- * 也不按会话量或 Token 数造出"成长"。
+ * 树只呈现两类节点：正式资产（叶）与可晋升候选（芽）。任务接续快照、Session、
+ * 运行记录属于支撑对象，不长叶也不长芽。这条契约在 tree-service 就成立
+ * （节点类型只有 asset / candidate），渲染层不再另作判断，也不按会话量或
+ * Token 数造出"成长"。
  *
  * 叶片深浅直接映射 `maturity`，不自己发明分级：
  *   seed / bud                → 已确认，效果尚未验证（浅）
@@ -3204,7 +3211,13 @@ function _cognitionTreeStats() {
     (budsByType[type] = budsByType[type] || []).push(candidate);
   }
   const tree = _skillsCognitionState.tree;
-  const nodes = Array.isArray(tree && tree.nodes) ? tree.nodes : [];
+  // 树契约 v2（G-8）起，后端也把候选投影成 `candidate:` 节点，且它们同样带
+  // `assetType`（用来挂枝）。**正式资产的每一条统计与渲染都必须先把它们摘掉**：
+  // 候选没有 maturity/status/version，混进来会让叶片数虚高、已验证占比被稀释，
+  // 而且同一条候选会既画成叶又画成芽。芽自有通道（recallCandidates → budsByType），
+  // 不从这里走。
+  const allNodes = Array.isArray(tree && tree.nodes) ? tree.nodes : [];
+  const nodes = allNodes.filter((node) => node.type !== 'candidate');
   const edges = Array.isArray(tree && tree.edges) ? tree.edges : [];
   const deepCount = nodes.filter((node) => node.maturity === 'effectiveness_validated').length;
   const lightCount = nodes.length - deepCount;
@@ -3596,6 +3609,18 @@ function _recallAssetContentEditable(status) {
 function _renderRecallAssetEditor(asset) {
   if (!_recallAssetContentEditable(asset.status)) return '';
   const open = _skillsCognitionState.editingAssetId === asset.id;
+  // 表单必须基于**权威记录**：列表里的 assets 是精简视图，没有 statement /
+  // applicableWhen / forbiddenWhen。用它填表会让三个框空着，用户一保存就把
+  // 已有边界写成空数组。记录没到手就不开表单（fail closed），不给假界面。
+  const record = _skillsCognitionState.editingAssetRecord;
+  const editable = open && record && record.id === asset.id ? record : null;
+  if (open && !editable) {
+    return `<section class="cognition-governance-action-group cognition-asset-editor">
+      <h3>${escapeHtml(_cognitionText('cognition.asset_edit_title', '修改这条资产'))}</h3>
+      <p>${escapeHtml(_cognitionText('cognition.asset_edit_load_failed', '没能读到这条资产的完整内容，暂时无法编辑。请重试。'))}</p>
+      <div><button type="button" class="btn btn-sm" data-recall-asset-edit-open="${escapeHtml(asset.id)}">${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>
+    </section>`;
+  }
   if (!open) {
     return `<section class="cognition-governance-action-group cognition-asset-editor">
       <h3>${escapeHtml(_cognitionText('cognition.asset_edit_title', '修改这条资产'))}</h3>
@@ -3604,20 +3629,56 @@ function _renderRecallAssetEditor(asset) {
     </section>`;
   }
   const lines = (value) => escapeHtml((Array.isArray(value) ? value : []).join('\n'));
+  const source = editable;
   return `<section class="cognition-governance-action-group cognition-asset-editor is-open" data-recall-asset-editor="${escapeHtml(asset.id)}">
     <h3>${escapeHtml(_cognitionText('cognition.asset_edit_title', '修改这条资产'))}</h3>
     <p>${escapeHtml(_cognitionText('cognition.asset_edit_version_hint', '保存后会生成 v{next}，当前 v{current} 仍保留在版本历史里。')
-      .replace('{next}', String(Number(asset.version || 0) + 1)).replace('{current}', String(asset.version || '1')))}</p>
-    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.asset_statement', '内容'))}</span><textarea data-recall-asset-edit-statement>${escapeHtml(asset.statement || '')}</textarea></label>
-    <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.asset_scope', '作用范围'))}</span><input data-recall-asset-edit-scope value="${escapeHtml(asset.scope || '')}"></label>
-    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.applicable_when', '适用场景（一行一条）'))}</span><textarea data-recall-asset-edit-applicable>${lines(asset.applicableWhen)}</textarea></label>
-    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.forbidden_when', '禁止场景（一行一条）'))}</span><textarea data-recall-asset-edit-forbidden>${lines(asset.forbiddenWhen)}</textarea></label>
+      .replace('{next}', String(Number(source.version || asset.version || 0) + 1)).replace('{current}', String(source.version || asset.version || '1')))}</p>
+    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.asset_statement', '内容'))}</span><textarea data-recall-asset-edit-statement>${escapeHtml(source.statement || '')}</textarea></label>
+    <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.asset_scope', '作用范围'))}</span><input data-recall-asset-edit-scope value="${escapeHtml(source.scope || '')}"></label>
+    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.applicable_when', '适用场景（一行一条）'))}</span><textarea data-recall-asset-edit-applicable>${lines(source.applicableWhen)}</textarea></label>
+    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.forbidden_when', '禁止场景（一行一条）'))}</span><textarea data-recall-asset-edit-forbidden>${lines(source.forbiddenWhen)}</textarea></label>
+    ${_renderRecallAssetOntologyBinding(source)}
     <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.asset_edit_reason', '改动原因（会记进治理历史）'))}</span><input data-recall-asset-edit-reason placeholder="${escapeHtml(_cognitionText('cognition.asset_edit_reason_placeholder', '例如：把适用范围收窄到产品评审'))}"></label>
     <div class="skills-cognition-actions">
       <button type="button" class="btn btn-sm btn-primary" data-recall-asset-edit-save="${escapeHtml(asset.id)}">${escapeHtml(_cognitionText('cognition.asset_edit_save', '保存为新版本'))}</button>
       <button type="button" class="btn btn-sm" data-recall-asset-edit-cancel="${escapeHtml(asset.id)}">${escapeHtml(_cognitionText('common.cancel', '取消'))}</button>
     </div>
   </section>`;
+}
+
+/**
+ * 资产 → 个人本体绑定（`ontologyRefs`）的编辑控件。
+ *
+ * 这个字段此前**有读无写**：`recall.assets.update` 的 IPC 槽是开的、
+ * `projection-knowledge` 与 `skill-draft-service` 都在消费它，但全链没有任何
+ * 生产者——渲染层不传、晋升路径也不传，于是每条资产的绑定恒为空，模型拿得到
+ * 本体、也拿得到资产，唯独拿不到两者的对应关系。
+ *
+ * 两条纪律：
+ *  1. **绑定只由用户显式选择**。不按标题/关键词相似度替他猜一个 groupId——
+ *     那是在数据库里造事实（与认知树不画"芽"是同一条纪律）。
+ *  2. **没有分组就不渲染控件**，而不是渲染一个空下拉。空下拉会让用户以为
+ *     自己没建过本体分组，而实际可能只是这次没读到。
+ *
+ * 粒度停在 group 级：`section` / `field` 需要先读某个分组的字段清单，
+ * 属于另一次请求与另一套交互，本轮不做（缺省不写 = 没记录过，语义安全）。
+ */
+function _renderRecallAssetOntologyBinding(source) {
+  const groups = Array.isArray(_skillsCognitionState.ontologyGroups) ? _skillsCognitionState.ontologyGroups : [];
+  if (!groups.length) return '';
+  const bound = new Set((Array.isArray(source.ontologyRefs) ? source.ontologyRefs : [])
+    .map((ref) => String(ref && ref.groupId || '')).filter(Boolean));
+  const options = groups.map((group) => {
+    const id = String(group && (group.group_id || group.id) || '');
+    if (!id) return '';
+    const title = String(group.title || group.template_name || id);
+    return `<option value="${escapeHtml(id)}"${bound.has(id) ? ' selected' : ''}>${escapeHtml(title)}</option>`;
+  }).join('');
+  if (!options) return '';
+  return `<label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.asset_ontology_binding', '关联的本体分组（可多选，按住 Cmd/Ctrl）'))}</span>`
+    + `<select data-recall-asset-edit-ontology multiple size="${Math.min(groups.length, 5)}">${options}</select>`
+    + `<small>${escapeHtml(_cognitionText('cognition.asset_ontology_binding_hint', '绑定后，这条资产被带入任务时会一并说明它属于哪个本体概念。不选表示没记录过，不等于"不属于任何分组"。'))}</small></label>`;
 }
 
 function _recallAssetActionLabel(action) {

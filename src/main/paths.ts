@@ -134,11 +134,8 @@ export const cogseedAgentLocalRoot    = (uid: string) => path.join(userLocalRoot
 export const cogseedAgentWorkerStateDir = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'worker-state');
 export const cogseedAgentRecoveryStateFile = (uid: string) => path.join(cogseedAgentWorkerStateDir(uid), 'last-recovery.json');
 export const cogseedAgentCoordinationsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'coordinations');
-export const cogseedAgentAssetEventsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'asset-events');
-export const cogseedAgentAuditReceiptsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'audit-receipts');
 export const cogseedAgentReviewDecisionsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'review-decisions');
 export const cogseedAgentCostTelemetryDir = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'cost-telemetry');
-export const cogseedAgentCapabilityPacksDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'capability-packs');
 export const cogseedAgentSkillLifecycleDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'skill-lifecycle');
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
 export const userSkillChatDir       = (uid: string, sid: string) => path.join(userChatsDir(uid), 'skill', sid);

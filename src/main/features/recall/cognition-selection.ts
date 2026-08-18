@@ -21,6 +21,7 @@
  */
 
 import type { CapabilityPackAssetRef } from '../p3394/capability-pack';
+import type { AgentGlossaryEntry } from '../agent_inheritance';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import type { RecallAbilityAssetScopePolicy } from './scope-policy';
 import {
@@ -159,6 +160,17 @@ export interface WithheldCognition {
 export interface CognitionSelectionResult {
   selected: SelectedCognition[];
   withheld: WithheldCognition[];
+  /**
+   * 出生时冻结的术语表（N-3）。
+   *
+   * 它此前采集了却没有任何路径把它送进提示词——`collectAgentBirthContext`
+   * 落盘、`inherited-cognition-prompt` 只渲染资产，于是「出生就该知道 KSTAR
+   * 在这里指什么」实际没发生。这里把它从快照透传出去。
+   *
+   * **只透传 glossary，不透传 `memoryRefs`**：后者是裸 id，模型拿到解析不了，
+   * 塞进提示词只是噪音。要让记忆参与，得走 recall 投影那条有内容的路径。
+   */
+  glossary: AgentGlossaryEntry[];
 }
 
 const SENSITIVITY_RANK: Record<AbilityAssetSensitivity, number> = { L0: 0, L1: 1, L2: 2 };
@@ -310,5 +322,5 @@ export async function selectInheritedCognition(
     selected.push(toSelected(ref, asset!, resolved));
   }
 
-  return { selected, withheld };
+  return { selected, withheld, glossary: snapshot.glossary || [] };
 }

@@ -435,6 +435,27 @@ describe('Recall cognition workspace layout', () => {
     expect(skills).not.toContain("getElementById('skills-cognition-overview-body')");
   });
 
+  it('本体绑定控件只在有分组时渲染，且不替用户猜绑定', () => {
+    const fn = sliceFunction(skillsSource, '_renderRecallAssetOntologyBinding');
+    // 没有分组 → 不渲染控件（而不是渲染一个空下拉，那会让用户以为自己没建过分组）
+    expect(fn).toContain("if (!groups.length) return '';");
+    // 选中态只来自资产已有的 ontologyRefs.groupId，不做任何相似度推断
+    expect(fn).toContain('source.ontologyRefs');
+    expect(fn).not.toMatch(/similar|match|guess|infer/i);
+    // 绑定入口挂在资产编辑器里
+    const editor = sliceFunction(skillsSource, '_renderRecallAssetEditor');
+    expect(editor).toContain('_renderRecallAssetOntologyBinding(source)');
+  });
+
+  it('资产更新在无绑定控件时不传 ontologyRefs（不清空既有绑定）', () => {
+    const bindings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8');
+    // 控件不存在 = undefined = 不改动；传空数组会把用户已有的绑定抹掉。
+    expect(bindings).toContain('const ontologyRefs = ontologySelect');
+    expect(bindings).toContain("...(ontologyRefs !== undefined ? { ontologyRefs } : {})");
+    // 分组按需取，且读失败不阻断编辑
+    expect(bindings).toContain("window.cogseed.invoke('personalOntology.groups.list').catch(() => null)");
+  });
+
   it('does not load internal Brain, Context Pack, or Ontology data for the four-page snapshot', () => {
     const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
     expect(skills).not.toContain("window.cogseed.invoke('recall.projections.list'");

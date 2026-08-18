@@ -54,15 +54,16 @@ const _IPC_ROUTES = [
   ['GET',    /^\/api\/workbench\/projects\/([^/]+)\/action-plan$/, 'workbench.actionPlan.read', ['projectId']],
   ['GET',    /^\/api\/workbench\/projects\/([^/]+)\/tasks\/([^/]+)\/runs$/, 'workbench.taskRuns.list', ['projectId', 'taskId']],
   ['POST',   /^\/api\/workbench\/projects\/([^/]+)\/tasks\/([^/]+)\/runs$/, 'workbench.taskRun.start', ['projectId', 'taskId']],
-  ['GET',    '/api/cognition/assets/page',    'cognition.assets.page'],
-  ['GET',    '/api/cognition/assets',         'cognition.assets.list'],
-  ['POST',   '/api/cognition/assets',         'cognition.assets.create'],
-  ['POST',   '/api/cognition/assets/capture', 'cognition.assets.capture'],
-  ['GET',    /^\/api\/cognition\/assets\/([^/]+)$/, 'cognition.assets.get', ['assetId']],
-  ['POST',   /^\/api\/cognition\/assets\/([^/]+)\/evidence$/, 'cognition.assets.evidence.add', ['assetId']],
-  ['POST',   /^\/api\/cognition\/assets\/([^/]+)\/confirm$/, 'cognition.assets.confirm', ['assetId']],
-  ['POST',   /^\/api\/cognition\/assets\/([^/]+)\/defer$/, 'cognition.assets.defer', ['assetId']],
-  ['POST',   /^\/api\/cognition\/assets\/([^/]+)\/reuse$/, 'cognition.assets.reuse', ['assetId']],
+  // 遗留 CognitionAsset store（`cloud/cognition/`）的全部 REST 入口已删除。
+  //
+  // 那个 store 只剩**读**用途：`memory.ts::formatForSystemPrompt` 用
+  // `listActiveCognitionSourceIds` 门控历史 MEMORY 记录的可见性（老用户在
+  // legacy 资产被作废后，对应记忆行不该继续进提示词）。它**不再有任何写入
+  // 入口**，也从不参与正式认知资产 / 认知树 / runtime 注入。
+  //
+  // 正式认知资产的 canonical 读口是 `cognition.assets.list`（ipc/index.ts，
+  // 走 recall/formal-assets），治理与编辑走 `recall.assets.*`，沉淀走
+  // `recall.candidates.save`。不要在这里恢复任何 `/api/cognition/assets*` 路由。
   ['POST',   '/api/skills/pick-import-dir',   'skills.pickImportDir'],
   ['POST',   '/api/skills/create-from-url',   'skills.createFromUrl'],
   ['POST',   '/api/skills/create-from-dir',   'skills.createFromDir'],

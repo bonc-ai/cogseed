@@ -156,7 +156,9 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       kind: 'usage_recorded',
       occurredAt: usage.createdAt,
       title: itemTitle('usage_recorded'),
-      summary: `Task ${usage.taskRunId}${usage.projectionId ? ` · projection ${usage.projectionId}` : ''}`,
+      // taskRunId / projectionId 是定位键，已经在 refs 里；摘要不再把它们拼成
+      // 展示文案（§7：内部 id 不作主文案）。版本是用户看得懂的信息，留下。
+      summary: usage.assetVersion ? `v${usage.assetVersion}` : '',
       refs: {
         assetId: asset.id,
         version: usage.assetVersion,

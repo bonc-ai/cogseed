@@ -2601,7 +2601,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'cognition.assets.list': async ({ type, limit } = {}, ctx) => {
-    if (type !== undefined && type !== 'skill' && type !== 'knowledge' && type !== 'ontology' && type !== 'evaluation') throw new Error('invalid cognition asset type');
+    // N-6: 类型枚举必须与 `CognitionAssetType`（= 四类正式资产）一致。
+    // 此前这里收的是上一代分类 skill/knowledge/ontology/evaluation，与适配器
+    // 过滤用的 personal/rule/template/skill_method **完全不相交**——传合法类型
+    // 抛错、传能通过校验的类型恒返回空列表。渲染层当时不传该参数，所以一直潜伏。
+    // 判据走 `formal-assets` 的 canonical 边界，不在这里再抄一份四类字面量。
+    if (type !== undefined && !formalAssets.isFormalAssetType(type)) throw new Error('invalid cognition asset type');
     const n = limit === undefined ? undefined : Number(limit);
     // 不传 limit 拿全量再自己截：适配器本来就是先建完整数组、最后一步才 slice
     // （assets-adapter.ts 末尾），所以 total 不额外付读盘代价。此前渲染层按
