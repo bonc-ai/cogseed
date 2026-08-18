@@ -200,6 +200,7 @@
   // 基础 Agent 候选 = 本机真实安装的 CLI agent（localAgents.list 探测，非硬编码）
   let _baseAgentCatalog = [];     // [{ id: cliType, name: 显示名 }]
   let _baseAgentProbeError = '';  // 探测失败时的提示文案
+  let _cliProbeDone = false;      // 本次会话只探测一次本地 CLI（保存后不重探）
 
   /** CLI type → 显示名（与 onboarding 的 _csAgentNameForCli 同风格；未知原样返回）。 */
   function _baseAgentDisplayName(cli) {
@@ -275,10 +276,18 @@
     // 详情默认指向第一个空间
     if (_detailSpaceId === null && _spaces.length) _detailSpaceId = _spaces[0].space_id;
     // ── 后台探测本机 CLI，完成后并入基础 Agent 候选并刷新视图 ──
+    // 只探测一次：保存空间/改名等后续 _loadData 不重探（CLI 安装状态
+    // 在会话内不变，主进程也有 5min 缓存），避免候选列表闪动。
+    if (_cliProbeDone) return;
+    _cliProbeDone = true;
     _mergeCliProbeResult({});
     void _invoke('localAgents.list').then((cliRes) => {
       _mergeCliProbeResult(cliRes);
       _reRender();
+    }).catch(() => {
+      // 探测 IPC 抛错：本次不标记完成，下次 _loadData 再试（避免
+      // 一次性失败导致整个会话都拿不到 CLI 候选）。
+      _cliProbeDone = false;
     });
   }
 

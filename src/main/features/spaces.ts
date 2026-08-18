@@ -424,10 +424,11 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
     skills: new Set(skills.map((s) => s.id)),
     agents: new Set(agents.map((a) => a.agent_id)),
   };
-  const out: SpaceWithMeta[] = [];
-  for (const sid of ids) {
+  // 空间元数据 + 最近会话都是独立磁盘读取；串行会让 N 个空间的工作空间
+  // 打开耗时随空间数线性增长，改成并行一轮收敛。
+  const metas = await Promise.all(ids.map(async (sid) => {
     const s = await _readSpace(uid, sid);
-    if (!s) continue;
+    if (!s) return null;
     const res = resolveSpaceResources(s, valid, {
       baseAgentAgentIds: (s.base_agents ?? []).map((t) => baseAgentToAgentId(agents, t)).filter((x): x is string => !!x),
     });
@@ -437,7 +438,7 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
       const convs = await import('./chats').then((m) => m.listSpaceConversations(uid, sid));
       lastConv = convs[0];
     } catch (_) { /* 会话索引异常不阻断列表 */ }
-    out.push({
+    return {
       ...s,
       template_name: res.template?.name,
       template_names: [res.template?.name, ...res.secondary_templates.map((t) => t.name)]
@@ -447,8 +448,9 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
       invalid_count: res.invalid_refs.skills.length + res.invalid_refs.agents.length,
       last_conversation_title: lastConv?.title || undefined,
       last_conversation_at: lastConv?.updated_at || lastConv?.created_at || undefined,
-    });
-  }
+    };
+  }));
+  const out: SpaceWithMeta[] = metas.filter((m): m is NonNullable<typeof m> => Boolean(m));
   const collator = new Intl.Collator('zh', { sensitivity: 'base', numeric: true });
   out.sort((a, b) => collator.compare(a.name, b.name) || a.space_id.localeCompare(b.space_id));
   return out;
