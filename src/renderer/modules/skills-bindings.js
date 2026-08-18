@@ -1346,7 +1346,12 @@ function _initSkillsCognitionBindings() {
           }
         }
         if (actionName === 'save-and-promote') {
-          const card = recallAction.closest('[data-recall-candidate-id]');
+          // **从父节点起找容器**：`closest()` 是从元素自身开始匹配的，而这些
+          // 动作按钮上同样带 `data-recall-candidate-id`（列表页与详情页都一样），
+          // 直接 `recallAction.closest(...)` 会取到按钮本身——按钮里没有任何
+          // 编辑字段，于是 judgment/suggestedType 全是空串，后端直接以
+          // `invalid recall candidate update` 打回。实机在「确认并限域」上复现。
+          const card = recallAction.parentElement?.closest('[data-recall-candidate-id]');
           if (!card || !candidate) throw new Error('recall candidate unavailable');
           channel = 'recall.candidates.update';
           const evidenceText = card.querySelector('[data-recall-edit-evidence]')?.value || '';

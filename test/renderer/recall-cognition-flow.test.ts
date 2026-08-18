@@ -4122,3 +4122,81 @@ describe('认知资产首屏加载不死锁', () => {
     expect(context._cognitionSnapshotPending()).toBe(false);
   });
 });
+
+/**
+ * 回归：「确认并限域」必须真的把编辑字段读出来。
+ *
+ * 实机报错 `invalid recall candidate update`。根因是 `closest()` **从元素自身
+ * 开始匹配**，而动作按钮上同样带 `data-recall-candidate-id`（列表页与详情页
+ * 结构一致），于是 `recallAction.closest('[data-recall-candidate-id]')` 取到的
+ * 是按钮本身——按钮里没有任何 `data-recall-edit-*` 字段，judgment 与
+ * suggestedType 全成空串，后端校验直接打回。
+ *
+ * 这条按真实 DOM 关系搭桩：按钮带 id、外层容器也带 id，两者都要能被正确区分。
+ */
+describe('候选「确认并限域」读取编辑字段', () => {
+  it('从容器而不是按钮自身读取编辑字段', async () => {
+    const sent: Array<{ channel: string; payload: any }> = [];
+    let clickHandler: ((event: unknown) => Promise<void>) | null = null;
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: unknown) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    // 真实结构：container[data-recall-candidate-id] > actions > button[data-recall-candidate-id]
+    const fields: Record<string, { value: string }> = {
+      '[data-recall-edit-judgment]': { value: '状态不确定时标记待确认' },
+      '[data-recall-edit-summary]': { value: '不确定就别下结论' },
+      '[data-recall-edit-scope]': { value: '仅产品工作空间' },
+      '[data-recall-edit-type]': { value: 'rule' },
+      '[data-recall-edit-evidence]': { value: 'conversation:conv-1' },
+    };
+    const container: any = {
+      dataset: { recallCandidateId: 'cand-1' },
+      querySelector: (sel: string) => fields[sel] ?? null,
+    };
+    const actions: any = { parentElement: container, closest: (sel: string) => (sel === '[data-recall-candidate-id]' ? container : null) };
+    const button: any = {
+      dataset: { recallCandidateAction: 'save-and-promote', recallCandidateId: 'cand-1' },
+      disabled: false,
+      parentElement: actions,
+      // closest 从自身开始匹配——按钮自己就带这个属性
+      closest: (sel: string) => (sel === '[data-recall-candidate-id]' ? button : null),
+    };
+
+    const context: any = {
+      document: { getElementById: (id: string) => (id === 'panel-recall' ? panel : null), querySelectorAll: () => [] },
+      window: {
+        addEventListener() {},
+        cogseed: { invoke: async (channel: string, payload: any) => { sent.push({ channel, payload }); return { ok: true }; } },
+      },
+      _skillsCognitionState: {
+        recallCandidates: [{ id: 'cand-1', suggestedType: 'rule', value: '', risk: 'low', suggestedAction: 'create' }],
+        editingRecallCandidateId: 'cand-1', writingRecallCandidateId: '',
+      },
+      _cognitionText: (_k: string, f: string) => f,
+      uiToast() {}, uiAlert: async () => {},
+      loadSkillsCognitionSnapshot: async () => {},
+      loadCognitionReviewHistory: async () => {},
+      renderSkillsCognitionCandidates() {}, renderSkillsCognitionCaptures() {},
+      renderSkillsCognitionAssets() {}, switchSkillsCognitionPage() {},
+      initSkillsCognitionConsole() {}, setTimeout,
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target: { closest: (s: string) => (s === '[data-recall-candidate-action]' ? button : null) } });
+
+    const update = sent.find((call) => call.channel === 'recall.candidates.update');
+    expect(update, '必须发出 update').toBeTruthy();
+    // 关键：字段来自容器，不是空串。空串会被后端以 invalid recall candidate update 打回。
+    expect(update!.payload.judgment).toBe('状态不确定时标记待确认');
+    expect(update!.payload.suggestedType).toBe('rule');
+    expect(update!.payload.suggestedScope).toBe('仅产品工作空间');
+    expect(Array.isArray(update!.payload.sourceRefs)).toBe(true);
+    expect(update!.payload.sourceRefs).toEqual([{ kind: 'conversation', id: 'conv-1' }]);
+    // 限域保存后要接着晋升
+    expect(sent.some((call) => call.channel === 'recall.candidates.promote')).toBe(true);
+  });
+});
