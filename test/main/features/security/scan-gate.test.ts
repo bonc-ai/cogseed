@@ -49,11 +49,24 @@ function mkSkill(files: Record<string, string>): string {
   return dir;
 }
 
+// W6: exercise the gate the same way the production adapter does — vendored
+// PyYAML on PYTHONPATH (skill-sentry/vendor). A bare interpreter falls back to
+// the thin builtin rules and lets amplicable payloads score `pass`, which is
+// NOT the behaviour the verdicts below are pinning down. Sharing the injection
+// also keeps this test aligned with bin/orkas-pkg.cjs's guardrailScan.
+const GATE_ENV = {
+  ...process.env,
+  PYTHONIOENCODING: 'utf-8',
+  PYTHONDONTWRITEBYTECODE: '1',
+  PYTHONPATH: [path.join(ENGINE, 'vendor'), process.env.PYTHONPATH || ''].filter(Boolean).join(path.delimiter),
+};
+
 function evaluate(target: string): Verdict {
   const r = spawnSync(PYTHON, [GATE, ENGINE, target], {
     encoding: 'utf8',
     timeout: 180_000,
     maxBuffer: 16 * 1024 * 1024,
+    env: GATE_ENV,
   });
   // Always exit 0: the caller reads `outcome`, and a non-zero exit would be
   // ambiguous with "scanner crashed".
