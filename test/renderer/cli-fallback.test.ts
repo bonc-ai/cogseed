@@ -39,6 +39,8 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     _recipientByCid: recipientByCid,
     _newChatRecipient: newChatRecipient,
     _COMMANDER: { kind: 'commander', id: '', name: '' },
+    _LEADING_MENTION_RE: /^@([A-Za-z0-9_一-鿿-]+)\s?/u,
+    ensureModelConfigured: () => false,
     DRAFT_CID: 'main_chat',
     _activeRecipient: (target: string) => {
       if (target === 'new-chat') return newChatRecipient;
@@ -64,6 +66,15 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
 }
 
 describe('commander CLI fallback', () => {
+  it('does not replace a manually typed Agent mention with automatic fallback', async () => {
+    const { sandbox, invokeLog } = buildSandbox({});
+
+    const allowed = await sandbox._ensureModelOrCliFallback('cid-manual', 'conversation', '@Codex hello');
+
+    expect(allowed).toBe(true);
+    expect(invokeLog).toEqual([]);
+  });
+
   it('does NOT prompt for API key when a CLI account is signed in — routes to it instead', async () => {
     const { sandbox, toasts, recipientByCid } = buildSandbox({
       'model.hasConfigured': { configured: false },
@@ -88,6 +99,7 @@ describe('commander CLI fallback', () => {
       kind: 'agent',
       id: 'agent-claude-1',
       name: 'Claude',
+      origin: 'cli_fallback',
     });
     // The user saw an informational toast, not an API-key prompt.
     expect(toasts).toHaveLength(1);
@@ -406,9 +418,8 @@ describe('commander CLI fallback', () => {
 
   it('syncs the fallback into _newChatRecipient when applied on the draft cid (new-chat)', async () => {
     // new-chat 发送路径：降级 applied 到 DRAFT_CID 时，必须同时更新
-    // `_newChatRecipient`——handleNewChatSubmit 的 mention 注入和 recipient
-    // 快照都读它。只写 `_recipientByCid[DRAFT_CID]` 会导致消息不带
-    // `@Codex` 前缀、后端仍按 to=commander 路由 → 「未配置模型」。
+    // `_newChatRecipient`——handleNewChatSubmit 的结构化 recipient 快照读它。
+    // 只写 `_recipientByCid[DRAFT_CID]` 会导致消息仍按 commander 路由。
     const { sandbox, recipientByCid } = buildSandbox({
       'model.hasConfigured': { configured: false },
       'prefs.getCliFallback': { cli: '' },
@@ -429,9 +440,10 @@ describe('commander CLI fallback', () => {
 
     expect(applied).toBe(true);
     expect(recipientByCid['main_chat']).toMatchObject({ kind: 'agent', id: 'agent-codex-1' });
-    // The new-chat recipient must also flip to the CLI agent so the
-    // `applyRecipientPrefix` path injects `@Codex` into the outbound message.
-    expect(sandbox._newChatRecipient).toMatchObject({ kind: 'agent', id: 'agent-codex-1' });
+    // The new-chat recipient must also carry the trusted fallback origin.
+    expect(sandbox._newChatRecipient).toMatchObject({
+      kind: 'agent', id: 'agent-codex-1', origin: 'cli_fallback',
+    });
   });
 
   it('auto-switches to the next usable CLI when the current one fails at runtime', async () => {

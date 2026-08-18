@@ -19,6 +19,8 @@ describe('P3394 wake approval placement', () => {
 
     expect(hostSource).toContain("#panel-conversation .chat-input-wrapper");
     expect(hostSource).toContain("wrap.querySelector('.chat-wake-pending-host')");
+    expect(hostSource).toContain('host.dataset.cid = cid');
+    expect(hostSource).toContain('host.dataset.cid !== cid');
     expect(hostSource).toContain("wrap.querySelector('.chat-input-area')");
     expect(hostSource).toContain('wrap.insertBefore(host, anchor || wrap.firstChild)');
     expect(styleSource).toContain('.chat-wake-pending-host');
@@ -77,6 +79,7 @@ describe('P3394 wake approval placement', () => {
     expect(mountSource).toContain('const requestsByKey = new Map()');
     expect(mountSource).toContain('requestsByKey.has(key)');
     expect(mountSource).toContain('data-wake-request-key');
+    expect(mountSource).not.toContain('document.querySelector(selector)');
   });
 
   it('removes composer wake cards after an approval decision instead of leaving stale completed cards', () => {

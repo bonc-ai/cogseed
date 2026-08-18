@@ -98,8 +98,13 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   const envelope = buildP3394OutboundEnvelope(nodeId, prompt, input.cid + ':turn:' + Date.now().toString(36), {
     scopeKey: input.cid,
   });
+  let streamed = false;
   const send = async (): Promise<{ text: string }> => {
-    const reply = await hub.sendAndWait(nodeId, envelope);
+    const reply = await hub.sendAndWait(nodeId, envelope, (event) => {
+      if (input.signal?.aborted) return;
+      streamed = true;
+      input.onProcess?.({ type: 'delta', text: event.text });
+    });
     return { text: reply.text.trim() };
   };
   try {
@@ -114,7 +119,10 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       if (recoveryError) return recoveryError;
       result = await send();
     }
-    input.onProcess?.({ type: 'delta', text: result.text });
+    // Legacy/oneshot gateways have no stream frames; preserve their original
+    // one-shot rendering. A streaming gateway already emitted every chunk,
+    // so sending the full body as another delta would duplicate the reply.
+    if (!streamed) input.onProcess?.({ type: 'delta', text: result.text });
     input.onProcess?.({ type: 'final', text: result.text });
     return result;
   } catch (error) {

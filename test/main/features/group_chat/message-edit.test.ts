@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   evictSession: vi.fn(),
   deleteSessionFileForUser: vi.fn(),
   clearForConversation: vi.fn(async () => undefined),
+  getAgentForChatDispatch: vi.fn(async (_userId: string, agentId: string) => ({ agent_id: agentId })),
 }));
 
 vi.mock('../../../../src/main/features/group_chat/bus', () => ({
@@ -35,6 +36,14 @@ vi.mock('../../../../src/main/features/local_agents/sessions', () => ({
   clearForConversation: mocks.clearForConversation,
 }));
 
+vi.mock('../../../../src/main/features/agents', () => ({
+  getAgentForChatDispatch: mocks.getAgentForChatDispatch,
+}));
+
+vi.mock('../../../../src/main/features/component_enabled', () => ({
+  isAgentEnabled: vi.fn(() => true),
+}));
+
 let tmpDir: string;
 let previousWorkspace: string | undefined;
 const UID = 'edit-user';
@@ -50,6 +59,7 @@ beforeEach(async () => {
   mocks.evictSession.mockClear();
   mocks.deleteSessionFileForUser.mockClear();
   mocks.clearForConversation.mockClear();
+  mocks.getAgentForChatDispatch.mockClear();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
 });
@@ -81,7 +91,7 @@ describe('group_chat user message replacement', () => {
         id: 'edit-msg',
         ts: '2026-08-06T11:01:00.000Z',
         from: 'user',
-        to: ['commander'],
+        to: ['agent-codex-1'],
         text: 'old text',
         attachments: ['brief.md'],
         use_selections: [{ token: 'use:research' }],
@@ -106,6 +116,8 @@ describe('group_chat user message replacement', () => {
       attachments: ['brief.md'],
       use_selections: [{ token: 'use:research' }],
       references: [{ source_cid: 'source-cid', source_msg_id: 'source-msg' }],
+      forceTo: ['agent-codex-1'],
+      userRoute: { agentId: 'agent-codex-1', origin: 'message_edit' },
     }));
 
     const mainRows = fs.readFileSync(layout.messageFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));

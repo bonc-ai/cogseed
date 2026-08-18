@@ -123,7 +123,7 @@ const MANIFEST = {
     runtime_kind: 'cogseed-native',
     capabilities: ['handle_message', 'artifact.transfer'],
     supported_performatives: ['request', 'response', 'inform', 'cancel'],
-    supports_streaming: AGENT_MODE === 'sscli',
+    supports_streaming: AGENT_MODE === 'sscli' || PRESET_NAME === 'codex',
     supports_artifacts: true,
   },
   conformance: {
@@ -134,7 +134,7 @@ const MANIFEST = {
     capabilities: {
       sessions: true,
       artifacts: true,
-      streaming: AGENT_MODE === 'sscli',
+      streaming: AGENT_MODE === 'sscli' || PRESET_NAME === 'codex',
       cancellation: true,
       restart_recovery: true,
       multi_party_sessions: true,
@@ -423,7 +423,11 @@ class CodexAppServerRuntime {
     }
     if (msg.method === 'item/agentMessage/delta' && msg.params) {
       const entry = this.pending.get('turn:' + msg.params.threadId);
-      if (entry) entry.deltas.push(msg.params.delta || '');
+      if (entry) {
+        const delta = msg.params.delta || '';
+        entry.deltas.push(delta);
+        entry.onDelta?.(delta);
+      }
     }
     if (msg.method === 'turn/completed' && msg.params) {
       const key = 'turn:' + msg.params.threadId; const entry = this.pending.get(key);
@@ -442,7 +446,7 @@ class CodexAppServerRuntime {
     await this._request('initialize', { clientInfo: { name: 'p3394-gateway', version: '1.0' }, capabilities: { experimentalApi: true } });
     this._send({ jsonrpc: '2.0', method: 'initialized', params: {} });
   }
-  async deliver(sessionId, text, cwd) {
+  async deliver(sessionId, text, cwd, onDelta) {
     await this.start();
     let threadId = this.threads.get(sessionId);
     if (!threadId) {
@@ -454,7 +458,7 @@ class CodexAppServerRuntime {
     const id = ++this.seq;
     const promise = new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete('turn:' + threadId); reject(new Error('p3394_codex_turn_timeout')); }, TIMEOUT_MS);
-      this.pending.set('turn:' + threadId, { resolve, reject, timer, deltas: [] });
+      this.pending.set('turn:' + threadId, { resolve, reject, timer, deltas: [], onDelta });
     });
     this._send({ jsonrpc: '2.0', id, method: 'turn/start', params: { threadId, input: [{ type: 'text', text, text_elements: [] }] } });
     return promise;
@@ -480,13 +484,14 @@ class SscliRuntime {
   }
   _nextReq() { this.reqSeq += 1; return 'req-' + this.reqSeq; }
   _send(op) { if (this.child && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(op) + '\n'); }
-  _request(op, timeoutMs) {
+  _request(op, timeoutMs, onDelta) {
     return new Promise((resolve, reject) => {
       const requestId = op.request_id || this._nextReq();
       op.request_id = requestId;
       const entry = {
         resolve, reject,
         deltas: [],
+        onDelta,
         timer: setTimeout(() => {
           this.pending.delete(requestId);
           reject(new Error('p3394_sscli_timeout'));
@@ -502,7 +507,10 @@ class SscliRuntime {
     if (parsed.event && parsed.request_id) {
       const entry = this.pending.get(parsed.request_id);
       if (!entry) return;
-      if (parsed.event === 'delta' && typeof parsed.text === 'string') entry.deltas.push(parsed.text);
+      if (parsed.event === 'delta' && typeof parsed.text === 'string') {
+        entry.deltas.push(parsed.text);
+        entry.onDelta?.(parsed.text);
+      }
       if (parsed.event === 'completed') {
         this.pending.delete(parsed.request_id);
         clearTimeout(entry.timer);
@@ -569,13 +577,13 @@ class SscliRuntime {
     }, SSCLI_HANDSHAKE_MS);
     this.sessions.add(sessionId);
   }
-  async deliver(sessionId, messageId, text) {
+  async deliver(sessionId, messageId, text, onDelta) {
     await this.start();
     return this._request({
       op: 'deliver',
       session_id: sessionId,
       message: { message_id: messageId, payload: { parts: [{ type: 'text', text }] } },
-    }, TIMEOUT_MS);
+    }, TIMEOUT_MS, onDelta);
   }
   cancel(taskId) {
     if (!this.child) return;
@@ -608,6 +616,7 @@ function postReply(envelope, replyText, resourceParts) {
       role: 'responder',
       sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
       recipients: [{ agent_id: (envelope.sender && envelope.sender.agent_id) || 'cogseed' }],
+      reply_to: envelope.message_id,
       payload: { parts },
       idempotency_key: 'idem-reply-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
     },
@@ -632,6 +641,88 @@ function postReply(envelope, replyText, resourceParts) {
     req.end(body);
   };
   deliver();
+}
+
+/** Sends a best-effort incremental reply. Stream frames are deliberately
+ * separate event envelopes so the terminal reply remains the only frame that
+ * resolves the outbound request. */
+function postStreamEvent(envelope, text, sequence) {
+  const ext = (envelope && envelope.extensions) || {};
+  const replyEndpoint = (typeof ext.reply_endpoint === 'string' && ext.reply_endpoint) || COGSEED_ENDPOINT;
+  const replyToken = typeof ext.reply_token === 'string' ? ext.reply_token : COGSEED_TOKEN;
+  const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const body = JSON.stringify({
+    envelope: {
+      spec_version: 'p3394/1.0',
+      message_id: 'msg-stream-' + nonce,
+      session_id: envelope.session_id,
+      task_id: envelope.task_id,
+      kind: 'event',
+      performative: 'inform',
+      role: 'responder',
+      sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
+      recipients: [{ agent_id: (envelope.sender && envelope.sender.agent_id) || 'cogseed' }],
+      reply_to: envelope.message_id,
+      payload: {
+        parts: [{ type: 'text', text }],
+        metadata: { stream_event: 'delta', stream_seq: sequence, stream_source_message_id: envelope.message_id },
+      },
+      idempotency_key: 'idem-stream-' + nonce,
+    },
+  });
+  const url = new URL(replyEndpoint.replace(/\/$/, '') + '/p3394/envelope');
+  const headers = { 'Content-Type': 'application/json' };
+  if (replyToken) headers.Authorization = 'Bearer ' + replyToken;
+  return new Promise((resolve) => {
+    const req = http.request(url, { method: 'POST', headers }, (res) => {
+      res.resume();
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          console.error('[p3394-gateway] stream event rejected ' + res.statusCode);
+        }
+        resolve();
+      });
+    });
+    req.on('error', (error) => {
+      console.error('[p3394-gateway] stream event failed: ' + error.message);
+      resolve();
+    });
+    req.end(body);
+  });
+}
+
+/** Coalesces token deltas to avoid one HTTP request per token while keeping
+ * the visible response live (roughly 12 updates/second at most). */
+function createStreamEmitter(envelope) {
+  let buffer = '';
+  let sequence = 0;
+  let timer = null;
+  let chain = Promise.resolve();
+  const flush = () => {
+    if (!buffer) return;
+    const text = buffer;
+    buffer = '';
+    sequence += 1;
+    chain = chain.then(() => postStreamEvent(envelope, text, sequence));
+  };
+  return {
+    push(text) {
+      if (typeof text !== 'string' || !text) return;
+      buffer += text;
+      if (buffer.length >= 512) {
+        if (timer) { clearTimeout(timer); timer = null; }
+        flush();
+      } else if (!timer) {
+        timer = setTimeout(() => { timer = null; flush(); }, 80);
+        timer.unref();
+      }
+    },
+    async finish() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      flush();
+      await chain;
+    },
+  };
 }
 
 // 串行队列：同一时刻只处理一条消息，避免并发锁/限流问题。
@@ -687,19 +778,21 @@ async function handleEnvelope(envelope) {
 
   try {
     let rawReply;
+    const stream = createStreamEmitter(envelope);
     if (PRESET_NAME === 'codex') {
-      rawReply = await codexAppServerRuntime.deliver(sessionId, text + artifactNote, dir);
+      rawReply = await codexAppServerRuntime.deliver(sessionId, text + artifactNote, dir, (delta) => stream.push(delta));
     } else if (AGENT_MODE === 'sscli') {
       const goal = envelope.payload && envelope.payload.metadata && typeof envelope.payload.metadata.goal === 'string'
         ? envelope.payload.metadata.goal
         : '';
       await sscliRuntime.openSession(sessionId, goal, dir);
-      rawReply = await sscliRuntime.deliver(sessionId, envelope.message_id, text + artifactNote);
+      rawReply = await sscliRuntime.deliver(sessionId, envelope.message_id, text + artifactNote, (delta) => stream.push(delta));
     } else {
       const transcript = readTranscriptTail(sessionId);
       const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + artifactNote;
       rawReply = await runAgent(prompt, envelope.task_id);
     }
+    await stream.finish();
     const reply = rawReply.length > MAX_REPLY_BYTES ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : rawReply;
     // 会话连续性：落盘 transcript
     if (AGENT_MODE !== 'sscli' || PRESET_NAME === 'codex') {

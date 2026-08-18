@@ -102,6 +102,7 @@ import * as avatars from '../features/avatars';
 import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
+import * as chatExecutionCapability from '../features/chat_execution_capability';
 import * as mateAgentBackend from '../features/cogseed_backend';
 import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
@@ -1747,18 +1748,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // 任务级引用合并（@ 产物/资产 → task_references）已下沉到 groupChat.send() 核心——
   // conversations.sendStream（标准 composer 实际走的流式路径）与 groupChat.send 都汇聚
   // 到那里，引用才能随消息发出。这里只做参数透传。
-  'groupChat.send': async ({ cid, content, attachments, use_selections, references }, ctx) => {
+  'groupChat.send': async ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     const text = (content || '').trim();
     if (!text) throw new Error('empty message');
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string') : [];
     const useSelections = Array.isArray(use_selections) ? use_selections : [];
     const refs = Array.isArray(references) ? references : [];
+    if ((recipient_agent_id !== undefined || recipient_origin !== undefined)
+      && (typeof recipient_agent_id !== 'string' || !safeId(recipient_agent_id)
+        || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
+      throw new Error('invalid recipient route');
+    }
     return groupChat.send({
       userId: ctx.userId, cid, text,
       ...(atts.length ? { attachments: atts } : {}),
       ...(useSelections.length ? { use_selections: useSelections } : {}),
       ...(refs.length ? { references: refs } : {}),
+      ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
     });
   },
 
@@ -3674,6 +3681,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // renderer uses this before every commander send to decide whether to
   // fall back to the signed-in CLI agent.
   'model.hasConfigured': async () => auth.hasConfiguredModel(),
+  'chat.executionCapability': async () => chatExecutionCapability.getChatExecutionCapability(),
 
   // ── Cognition extraction from sessions (onboarding) ──
   // Runs through a locally-detected CLI Agent (already authenticated on
@@ -4757,7 +4765,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     yield* mateAgentBackend.mateIpcService.streamEvents(ctx.userId, payload, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id, edit_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -4770,6 +4778,12 @@ const streamHandlers: Record<string, StreamHandler> = {
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string') : [];
     const useSelections = Array.isArray(use_selections) ? use_selections : [];
     const refs = Array.isArray(references) ? references : [];
+    if ((recipient_agent_id !== undefined || recipient_origin !== undefined)
+      && (typeof recipient_agent_id !== 'string' || !safeId(recipient_agent_id)
+        || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
+      yield { type: 'error', text: 'invalid recipient route' };
+      return;
+    }
     // Legacy `conversations.stream` is now a thin wrapper around the
     // group_chat bus. Subscribe to the bus directly BEFORE calling
     // `groupChat.send` — `send` internally wakes the recipient worker
@@ -4832,6 +4846,7 @@ const streamHandlers: Record<string, StreamHandler> = {
                 ...(atts.length ? { attachments: atts } : {}),
                 ...(useSelections.length ? { use_selections: useSelections } : {}),
                 ...(refs.length ? { references: refs } : {}),
+                ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
               });
       } catch (err) {
         sendErr = err;
