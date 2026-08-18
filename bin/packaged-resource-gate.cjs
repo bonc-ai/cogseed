@@ -40,19 +40,19 @@ const MAC_LOCALIZED_METADATA_CONTRACT = Object.freeze([
   Object.freeze({
     directory: 'en.lproj',
     values: Object.freeze({
-      NSMicrophoneUsageDescription: 'Orkas uses the microphone for voice input.',
+      NSMicrophoneUsageDescription: 'CogSeed uses the microphone for voice input.',
     }),
   }),
   Object.freeze({
     directory: 'ja.lproj',
     values: Object.freeze({
-      NSMicrophoneUsageDescription: 'Orkas は音声入力にマイクを使用します。',
+      NSMicrophoneUsageDescription: 'CogSeed は音声入力にマイクを使用します。',
     }),
   }),
   Object.freeze({
     directory: 'zh-Hans.lproj',
     values: Object.freeze({
-      NSMicrophoneUsageDescription: 'Orkas 需要使用麦克风进行语音输入。',
+      NSMicrophoneUsageDescription: 'CogSeed 需要使用麦克风进行语音输入。',
     }),
   }),
 ]);

@@ -8,7 +8,7 @@
  *   - `localAgents.readToolResult`   → read a spilled CLI tool_result file
  *                                       (renderer click-to-expand)
  *   - `bridge.permission_response`   → renderer answer to a `bridge:permission`
- *                                       push event (orkas-bridge connector-call gate)
+ *                                       push event (cogseed-bridge connector-call gate)
  *
  * No `run` channel here — the renderer doesn't spawn CLIs directly;
  * dispatch goes through the existing `groupChat` channel and `bus.ts`
@@ -100,7 +100,7 @@ function maskUnsupported(entries: LocalCliEntry[]): LocalCliEntry[] {
       ...e,
       available: false,
       error: e.error ?? 'version_unknown',
-      errorDetail: 'backend not yet implemented in Orkas',
+      errorDetail: 'backend not yet implemented in CogSeed',
     };
   });
 }
@@ -175,7 +175,7 @@ export const invokeHandlers = {
    * Re-probe a single CLI without the cache. Used at execute-time by
    * the runner to make sure a recently-uninstalled binary doesn't slip
    * through, and by the create-modal to refresh after the user changes
-   * the relevant `ORKAS_<TYPE>_PATH` env var.
+   * the relevant `COGSEED_<TYPE>_PATH` env var.
    */
   'localAgents.detect': async ({ type }: { type?: unknown }) => {
     if (!isLocalCliType(type)) throw new Error('invalid CLI type');

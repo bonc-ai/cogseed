@@ -8,7 +8,7 @@
  *     UND_ERR_SOCKET, ECONNRESET, ENOTFOUND, …) is on `err.cause` / `err
  *     .cause.cause`.
  *   - pi-ai catches those errors internally, keeps only `error.message`,
- *     and retries up to 3 times. By the time the error reaches Orkas, the
+ *     and retries up to 3 times. By the time the error reaches CogSeed, the
  *     cause chain is long gone — so the `fetch failed` the user sees has
  *     no actionable signal.
  *
@@ -32,7 +32,7 @@ const PROVIDER_HOST_RE = /\b(openai\.com|anthropic\.com|chatgpt\.com|googleapis\
 
 export function installFetchDiag(): void {
   const original = globalThis.fetch;
-  if (!original || (original as any).__orkasFetchDiag) return;
+  if (!original || (original as any).__cogseedFetchDiag) return;
 
   const wrapped: typeof fetch = async (input: any, init?: any) => {
     const url =
@@ -71,7 +71,7 @@ export function installFetchDiag(): void {
       throw err;
     }
   };
-  (wrapped as any).__orkasFetchDiag = true;
+  (wrapped as any).__cogseedFetchDiag = true;
   globalThis.fetch = wrapped;
   log.info('installed');
 }

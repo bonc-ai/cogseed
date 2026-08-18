@@ -3,24 +3,24 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import type { MateAgentRuntimeFacade } from '../../../../src/main/features/cogseed_runtime';
+import type { CogSeedAgentRuntimeFacade } from '../../../../src/main/features/cogseed_runtime';
 import type { RuntimeEventEnvelope } from '../../../../src/main/features/cogseed_runtime/protocol';
 
-const USER = 'mate-controller-user';
+const USER = 'cogseed-controller-user';
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-runtime-controller-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-controller-'));
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 
 });
 
 afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -38,7 +38,7 @@ async function eventually(assertion: () => Promise<void> | void): Promise<void> 
   throw lastError;
 }
 
-function runtimeFrom(events: RuntimeEventEnvelope[]): MateAgentRuntimeFacade & { inputs: unknown[] } {
+function runtimeFrom(events: RuntimeEventEnvelope[]): CogSeedAgentRuntimeFacade & { inputs: unknown[] } {
   const inputs: unknown[] = [];
   return {
     inputs,
@@ -47,7 +47,7 @@ function runtimeFrom(events: RuntimeEventEnvelope[]): MateAgentRuntimeFacade & {
       for (const event of events) yield event;
     },
     async shutdown() {},
-  } as MateAgentRuntimeFacade & { inputs: unknown[] };
+  } as CogSeedAgentRuntimeFacade & { inputs: unknown[] };
 }
 
 describe('CogSeed Runtime controller', () => {
@@ -59,13 +59,13 @@ describe('CogSeed Runtime controller', () => {
       { type: 'result', request_id: 'req-projection', runtime_session_id: 'mruntime-projection', status: 'completed', text: 'projected answer' },
     ]);
     const projected: any[] = [];
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-    const controller = createMateRuntimeController({
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = createCogSeedRuntimeController({
       runtime,
       projectTaskEvent: vi.fn(async (input) => { projected.push(input); }),
     } as any);
 
-    await controller.startMateTask(USER, {
+    await controller.startCogSeedTask(USER, {
       requestId: 'req-projection',
       task: 'Project this run.',
       conversationId: 'cid-projection',
@@ -96,11 +96,11 @@ describe('CogSeed Runtime controller', () => {
         yield { type: 'result', request_id: input.requestId, runtime_session_id: input.runtimeSessionId, status: 'completed', text: 'cli done' };
       },
     };
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createMateRuntimeController({ runtime, localCliAdapter } as any);
+    const controller = createCogSeedRuntimeController({ runtime, localCliAdapter } as any);
 
-    const task = await controller.startMateTask(USER, {
+    const task = await controller.startCogSeedTask(USER, {
       requestId: 'req-cli-controller',
       task: 'Run the CLI Agent.',
       conversationId: 'cid-cli-controller',
@@ -110,7 +110,7 @@ describe('CogSeed Runtime controller', () => {
     } as any);
 
     await eventually(async () => {
-      await expect(tasks.readMateTask(USER, task.taskId)).resolves.toMatchObject({ status: 'completed' });
+      await expect(tasks.readCogSeedTask(USER, task.taskId)).resolves.toMatchObject({ status: 'completed' });
     });
     expect(runtime.inputs).toEqual([]);
   });
@@ -119,10 +119,10 @@ describe('CogSeed Runtime controller', () => {
     const runtime = runtimeFrom([
       { type: 'result', request_id: 'req-agent-identity', runtime_session_id: 'mruntime-agent-identity', status: 'completed', text: 'done' },
     ]);
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-    const controller = createMateRuntimeController({ runtime });
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = createCogSeedRuntimeController({ runtime });
 
-    await controller.startMateTask(USER, {
+    await controller.startCogSeedTask(USER, {
       requestId: 'req-agent-identity',
       task: 'Use the formal Agent identity.',
       agentId: 'agent-identity',
@@ -142,18 +142,18 @@ describe('CogSeed Runtime controller', () => {
       { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'running', metadata: { kernel_event: 'artifact', uri: 'p3394-object:sha256:abc', digest: 'abc', name: 'report.md', media_type: 'text/markdown', secret: 'must-not-cross' } },
       { type: 'result', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'completed', text: 'final answer' },
     ]);
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const events = await import('../../../../src/main/features/cogseed_backend/event-store');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createMateRuntimeController({ runtime });
+    const controller = createCogSeedRuntimeController({ runtime });
 
-    const first = await controller.startMateTask(USER, {
+    const first = await controller.startCogSeedTask(USER, {
       requestId: 'req-controller',
       task: 'Read the file.',
       agentId: 'agent-controller',
-      profileId: 'openai-compatible:mate',
+      profileId: 'openai-compatible:cogseed',
     });
-    const duplicate = await controller.startMateTask(USER, {
+    const duplicate = await controller.startCogSeedTask(USER, {
       requestId: 'req-controller',
       task: 'This must not execute again.',
     });
@@ -163,13 +163,13 @@ describe('CogSeed Runtime controller', () => {
     expect(runtime.inputs).toEqual([expect.objectContaining({
       task: 'Read the file.',
       agent_id: 'agent-controller',
-      model_profile: 'openai-compatible:mate',
+      model_profile: 'openai-compatible:cogseed',
     })]);
 
     await eventually(async () => {
-      await expect(tasks.readMateTask(USER, first.taskId)).resolves.toMatchObject({ status: 'completed' });
+      await expect(tasks.readCogSeedTask(USER, first.taskId)).resolves.toMatchObject({ status: 'completed' });
     });
-    await expect(events.readMateTaskEvents(USER, first.taskId, 0, 20)).resolves.toEqual([
+    await expect(events.readCogSeedTaskEvents(USER, first.taskId, 0, 20)).resolves.toEqual([
       expect.objectContaining({ type: 'task.created' }),
       expect.objectContaining({ type: 'task.queued' }),
       expect.objectContaining({ type: 'task.started' }),
@@ -182,7 +182,7 @@ describe('CogSeed Runtime controller', () => {
 
   it('cancels a background task through its own AbortController without fallback or retry', async () => {
     let signalSeen: AbortSignal | null = null;
-    const runtime: MateAgentRuntimeFacade = {
+    const runtime: CogSeedAgentRuntimeFacade = {
       async *run(_userId, _input, opts) {
         signalSeen = opts?.signal ?? null;
         await new Promise<void>((resolve) => signalSeen?.addEventListener('abort', () => resolve(), { once: true }));
@@ -190,18 +190,18 @@ describe('CogSeed Runtime controller', () => {
       },
       async shutdown() {},
     };
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const events = await import('../../../../src/main/features/cogseed_backend/event-store');
-    const controller = createMateRuntimeController({ runtime });
+    const controller = createCogSeedRuntimeController({ runtime });
 
-    const task = await controller.startMateTask(USER, { requestId: 'req-cancel', task: 'Wait until cancelled.' });
+    const task = await controller.startCogSeedTask(USER, { requestId: 'req-cancel', task: 'Wait until cancelled.' });
     await eventually(() => expect(signalSeen).not.toBeNull());
-    const cancelled = await controller.cancelMateTask(USER, task.taskId);
+    const cancelled = await controller.cancelCogSeedTask(USER, task.taskId);
 
     expect(cancelled.status).toBe('cancelled');
     expect(signalSeen?.aborted).toBe(true);
     await eventually(async () => {
-      await expect(events.readMateTaskEvents(USER, task.taskId, 0, 20)).resolves.toEqual(expect.arrayContaining([
+      await expect(events.readCogSeedTaskEvents(USER, task.taskId, 0, 20)).resolves.toEqual(expect.arrayContaining([
         expect.objectContaining({ type: 'task.cancelled' }),
       ]));
     });
@@ -209,7 +209,7 @@ describe('CogSeed Runtime controller', () => {
 
   it('cancels every non-terminal Backend task for a conversation without touching other conversations', async () => {
     const signals = new Map<string, AbortSignal>();
-    const runtime: MateAgentRuntimeFacade = {
+    const runtime: CogSeedAgentRuntimeFacade = {
       async *run(_userId, input, opts) {
         signals.set(String((input as any).request_id), opts?.signal as AbortSignal);
         await new Promise<void>((resolve) => opts?.signal?.addEventListener('abort', () => resolve(), { once: true }));
@@ -217,27 +217,27 @@ describe('CogSeed Runtime controller', () => {
       },
       async shutdown() {},
     };
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createMateRuntimeController({ runtime, projectTaskEvent: vi.fn(async () => {}) });
-    const first = await controller.startMateTask(USER, { requestId: 'req-cancel-cid-a', task: 'A', conversationId: 'cid-cancel-all', agentId: 'agent-a' });
-    const second = await controller.startMateTask(USER, { requestId: 'req-cancel-cid-b', task: 'B', conversationId: 'cid-cancel-all', agentId: 'agent-b' });
-    const other = await controller.startMateTask(USER, { requestId: 'req-cancel-other', task: 'Other', conversationId: 'cid-other', agentId: 'agent-c' });
+    const controller = createCogSeedRuntimeController({ runtime, projectTaskEvent: vi.fn(async () => {}) });
+    const first = await controller.startCogSeedTask(USER, { requestId: 'req-cancel-cid-a', task: 'A', conversationId: 'cid-cancel-all', agentId: 'agent-a' });
+    const second = await controller.startCogSeedTask(USER, { requestId: 'req-cancel-cid-b', task: 'B', conversationId: 'cid-cancel-all', agentId: 'agent-b' });
+    const other = await controller.startCogSeedTask(USER, { requestId: 'req-cancel-other', task: 'Other', conversationId: 'cid-other', agentId: 'agent-c' });
 
     const cancelled = await controller.cancelConversationTasks(USER, 'cid-cancel-all');
 
     expect(cancelled.map((task) => task.taskId).sort()).toEqual([first.taskId, second.taskId].sort());
-    await expect(tasks.readMateTask(USER, first.taskId)).resolves.toMatchObject({ status: 'cancelled' });
-    await expect(tasks.readMateTask(USER, second.taskId)).resolves.toMatchObject({ status: 'cancelled' });
-    await expect(tasks.readMateTask(USER, other.taskId)).resolves.toMatchObject({ status: 'running' });
+    await expect(tasks.readCogSeedTask(USER, first.taskId)).resolves.toMatchObject({ status: 'cancelled' });
+    await expect(tasks.readCogSeedTask(USER, second.taskId)).resolves.toMatchObject({ status: 'cancelled' });
+    await expect(tasks.readCogSeedTask(USER, other.taskId)).resolves.toMatchObject({ status: 'running' });
     expect(signals.get('req-cancel-cid-a')?.aborted).toBe(true);
     expect(signals.get('req-cancel-cid-b')?.aborted).toBe(true);
     expect(signals.get('req-cancel-other')?.aborted).toBe(false);
-    await controller.cancelMateTask(USER, other.taskId);
+    await controller.cancelCogSeedTask(USER, other.taskId);
   });
   it('schedules an explicit retry as a new CogSeed task after a worker failure', async () => {
     let runs = 0;
-    const runtime: MateAgentRuntimeFacade & { inputs: unknown[] } = {
+    const runtime: CogSeedAgentRuntimeFacade & { inputs: unknown[] } = {
       inputs: [],
       async *run(_userId, input) {
         this.inputs.push(input);
@@ -247,23 +247,23 @@ describe('CogSeed Runtime controller', () => {
       },
       async shutdown() {},
     };
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createMateRuntimeController({ runtime });
+    const controller = createCogSeedRuntimeController({ runtime });
 
-    const original = await controller.startMateTask(USER, { requestId: 'req-original', task: 'Run once.' });
-    await eventually(async () => expect(await tasks.readMateTask(USER, original.taskId)).toMatchObject({ status: 'recoverable' }));
+    const original = await controller.startCogSeedTask(USER, { requestId: 'req-original', task: 'Run once.' });
+    await eventually(async () => expect(await tasks.readCogSeedTask(USER, original.taskId)).toMatchObject({ status: 'recoverable' }));
 
-    const retried = await controller.retryMateTask(USER, original.taskId, 'req-retry');
+    const retried = await controller.retryCogSeedTask(USER, original.taskId, 'req-retry');
     expect(retried).toMatchObject({ status: 'running', retryOfTaskId: original.taskId, requestId: 'req-retry' });
-    await eventually(async () => expect(await tasks.readMateTask(USER, retried.taskId)).toMatchObject({ status: 'completed' }));
+    await eventually(async () => expect(await tasks.readCogSeedTask(USER, retried.taskId)).toMatchObject({ status: 'completed' }));
     expect(runtime.inputs).toHaveLength(2);
     expect(runtime.inputs[1]).toMatchObject({ task: 'Run once.' });
   });
 
   it('resumes a recoverable task only with an explicit continuation and keeps the CogSeed runtime session', async () => {
     let runs = 0;
-    const runtime: MateAgentRuntimeFacade & { inputs: unknown[] } = {
+    const runtime: CogSeedAgentRuntimeFacade & { inputs: unknown[] } = {
       inputs: [],
       async *run(_userId, input) {
         this.inputs.push(input);
@@ -273,19 +273,19 @@ describe('CogSeed Runtime controller', () => {
       },
       async shutdown() {},
     };
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createMateRuntimeController({ runtime });
+    const controller = createCogSeedRuntimeController({ runtime });
 
-    const original = await controller.startMateTask(USER, { requestId: 'req-resume-original', task: 'Original prompt must not be replayed.' });
-    await eventually(async () => expect(await tasks.readMateTask(USER, original.taskId)).toMatchObject({ status: 'recoverable' }));
+    const original = await controller.startCogSeedTask(USER, { requestId: 'req-resume-original', task: 'Original prompt must not be replayed.' });
+    await eventually(async () => expect(await tasks.readCogSeedTask(USER, original.taskId)).toMatchObject({ status: 'recoverable' }));
 
-    const resumed = await controller.resumeMateTask(USER, original.taskId, {
+    const resumed = await controller.resumeCogSeedTask(USER, original.taskId, {
       requestId: 'req-resume',
       continuation: 'Continue from the persisted runtime state.',
     });
     expect(resumed).toMatchObject({ taskId: original.taskId, status: 'running' });
-    await eventually(async () => expect(await tasks.readMateTask(USER, original.taskId)).toMatchObject({ status: 'completed' }));
+    await eventually(async () => expect(await tasks.readCogSeedTask(USER, original.taskId)).toMatchObject({ status: 'completed' }));
     expect(runtime.inputs[1]).toMatchObject({
       task: 'Continue from the persisted runtime state.',
       request_id: 'req-resume',
@@ -298,10 +298,10 @@ describe('CogSeed Runtime controller', () => {
     const shutdown = vi.fn(async () => undefined);
     const runtime = runtimeFrom([]);
     runtime.shutdown = shutdown;
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-    const controller = createMateRuntimeController({ runtime });
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = createCogSeedRuntimeController({ runtime });
 
-    await expect(controller.runtimeStatus()).resolves.toMatchObject({ activeTaskCount: 0, backend: 'mate' });
+    await expect(controller.runtimeStatus()).resolves.toMatchObject({ activeTaskCount: 0, backend: 'cogseed' });
     await expect(controller.restartRuntime()).resolves.toEqual({ restarted: true });
     expect(shutdown).toHaveBeenCalledTimes(1);
   });
@@ -339,10 +339,10 @@ describe('CogSeed Runtime controller', () => {
     const runtime = runtimeFrom([
       { type: 'result', request_id: 'req-asset', runtime_session_id: 'mruntime-asset', status: 'completed', text: 'done' },
     ]);
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-    const controller = createMateRuntimeController({ runtime });
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = createCogSeedRuntimeController({ runtime });
 
-    await controller.startMateTask(USER, {
+    await controller.startCogSeedTask(USER, {
       requestId: 'req-asset',
       task: 'Apply the remembered rule.',
       conversationId: 'cid-m1',
@@ -361,10 +361,10 @@ describe('CogSeed Runtime controller', () => {
     const runtime = runtimeFrom([
       { type: 'result', request_id: 'req-noasset', runtime_session_id: 'mruntime-noasset', status: 'completed', text: 'done' },
     ]);
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-    const controller = createMateRuntimeController({ runtime });
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = createCogSeedRuntimeController({ runtime });
 
-    await controller.startMateTask(USER, {
+    await controller.startCogSeedTask(USER, {
       requestId: 'req-noasset',
       task: 'Run without conversation context.',
     });

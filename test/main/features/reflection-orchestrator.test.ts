@@ -8,16 +8,16 @@ let prevWs: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-orchestrator-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-orchestrator-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -208,7 +208,7 @@ describe('reflection-orchestrator › runOneCycle', () => {
   });
 
   it('skips with debug log when feature flag is off', async () => {
-    process.env.ORKAS_METACOGNITION = '0';
+    process.env.COGSEED_METACOGNITION = '0';
     try {
       const mod = await loadModule();
       const reflect = vi.fn();
@@ -216,7 +216,7 @@ describe('reflection-orchestrator › runOneCycle', () => {
       expect(completed).toBe(0);
       expect(reflect).not.toHaveBeenCalled();
     } finally {
-      delete process.env.ORKAS_METACOGNITION;
+      delete process.env.COGSEED_METACOGNITION;
     }
   });
 

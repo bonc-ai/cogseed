@@ -250,7 +250,7 @@ export interface Agent {
    *  via the dedicated `chat_agent_setup_cli.md` prompt; the LLM
    *  doesn't author it directly. */
   runtime?: AgentRuntime;
-  /** Normalized Orkas agent protocol contract. Derived at load time and
+  /** Normalized CogSeed agent protocol contract. Derived at load time and
    *  optionally persisted so runtime callers have one stable governance shape
    *  for in-process agents and external CLI expert agents. */
   interface_contract?: AgentInterfaceContract;
@@ -404,7 +404,7 @@ export type AgentRuntime =
 
 export interface AgentInterfaceContract {
   version: 1;
-  role: 'orkas_core' | 'external_expert';
+  role: 'cogseed_core' | 'external_expert';
   runtime: { kind: 'in_process' } | { kind: 'cli'; cli: string } | { kind: 'p3394-gateway'; cli: string };
   io: {
     input: 'task_message';
@@ -1094,7 +1094,7 @@ function deriveAgentInterfaceContract(
   }
   return {
     version: 1,
-    role: 'orkas_core',
+    role: 'cogseed_core',
     runtime: { kind: 'in_process' },
     io: { input: 'task_message', output: _agentContractOutput(outputFormat) },
     governance: {
@@ -2925,7 +2925,7 @@ export async function sendToAgentEditChat(
   // the `<agent>` container parser post-stream.
   const result = await chatWithModel({
     userId, message: attachmentCtx.message, sessionId, systemPrompt,
-    agentName: 'orkas_chat', timeout: 300,
+    agentName: 'cogseed_chat', timeout: 300,
     readOnlyExtraRoots: readOnlyRoots,
     extraTools: agentEditExtraTools(userId),
     attachmentMetadata: attachmentCtx.attachmentMetadata,
@@ -3010,7 +3010,7 @@ export async function* streamSendToAgentEditChat(
   try {
     for await (let event of streamChatWithModel({
       userId, message: attachmentCtx.message, sessionId, systemPrompt,
-      agentName: 'orkas_chat',
+      agentName: 'cogseed_chat',
       cacheRetention: 'short',
       readOnlyExtraRoots: readOnlyRoots,
       extraTools: agentEditExtraTools(userId),

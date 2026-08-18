@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 
 import {
-  MATE_AGENT_RUNTIME_PROTOCOL_VERSION,
+  COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
   type RuntimeEventEnvelope,
   type RuntimeRunRequest,
 } from '../../../../src/main/features/cogseed_runtime/protocol';
@@ -76,7 +76,7 @@ function write(child: FakeChild, msg: unknown): void {
 
 function request(id = 'req-A'): RuntimeRunRequest {
   return {
-    protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION,
+    protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
     type: 'run',
     request_id: id,
     runtime_session_id: `mruntime-${id}`,
@@ -99,7 +99,7 @@ describe('CogSeed Runtime worker process service', () => {
       handshakeTimeoutMs: 500,
       spawnWorker: () => makeChild((msg, child) => {
         if (msg.type === 'hello') {
-          write(child, { type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run', 'cancel'] });
+          write(child, { type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run', 'cancel'] });
         }
         if (msg.type === 'run') {
           write(child, { type: 'event', request_id: msg.request_id, runtime_session_id: msg.runtime_session_id, status: 'started', text: 'started' });
@@ -112,7 +112,7 @@ describe('CogSeed Runtime worker process service', () => {
 
     expect(events.map((e) => e.type)).toEqual(['event', 'result']);
     expect(events.every((e) => e.request_id === 'req-A')).toBe(true);
-    expect(children[0].sent[0]).toEqual({ type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION });
+    expect(children[0].sent[0]).toEqual({ type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION });
     await service.shutdown();
   });
 
@@ -120,7 +120,7 @@ describe('CogSeed Runtime worker process service', () => {
     const service = createRuntimeWorkerService({
       handshakeTimeoutMs: 500,
       spawnWorker: () => makeChild((msg, child) => {
-        if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION + 1, capabilities: [] });
+        if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION + 1, capabilities: [] });
       }),
     });
 
@@ -134,7 +134,7 @@ describe('CogSeed Runtime worker process service', () => {
     const service = createRuntimeWorkerService({
       handshakeTimeoutMs: 500,
       spawnWorker: () => makeChild((msg, child) => {
-        if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run', 'cancel'] });
+        if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run', 'cancel'] });
         if (msg.type === 'run') write(child, { type: 'event', request_id: msg.request_id, runtime_session_id: msg.runtime_session_id, status: 'running', text: 'running' });
         if (msg.type === 'cancel') {
           sawCancel = true;
@@ -164,7 +164,7 @@ describe('CogSeed Runtime worker process service', () => {
       spawnWorker: () => {
         spawnCount += 1;
         return makeChild((msg, child) => {
-          if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run'] });
+          if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run'] });
           if (msg.type === 'run' && spawnCount === 1) child.exitNow(1);
           if (msg.type === 'run' && spawnCount === 2) write(child, { type: 'result', request_id: msg.request_id, runtime_session_id: msg.runtime_session_id, status: 'completed', text: 'after restart' });
         });
@@ -183,7 +183,7 @@ describe('CogSeed Runtime worker process service', () => {
     const service = createRuntimeWorkerService({
       handshakeTimeoutMs: 500,
       spawnWorker: () => makeChild((msg, child) => {
-        if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run', 'cancel'] });
+        if (msg.type === 'hello') write(child, { type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run', 'cancel'] });
         if (msg.type === 'run') write(child, { type: 'result', request_id: msg.request_id, runtime_session_id: msg.runtime_session_id, status: 'completed', text: 'should not run' });
       }),
     });

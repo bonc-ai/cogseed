@@ -8,7 +8,7 @@ category: creation
 
 # stage-generate
 
-How to produce a video whose **primary visuals are AI-generated footage** — as opposed to designed HTML graphics (composition skill) or cutting the user's real footage (editing skill). Host-neutral: describe the outcome; use generic built-in generation/speech capabilities — in Orkas `generate_image` (stills), `generate_video` (clips; supports image-to-video and built-in audio), `generate_speech` (narration) — and assemble through the VideoStudio `stage-edit edit_video` skill script. VideoStudio's billable image/video calls are host-controlled: every call belongs to a signed `project/plan.json` generate segment and carries `production_plan_path` plus `production_segment_id`.
+How to produce a video whose **primary visuals are AI-generated footage** — as opposed to designed HTML graphics (composition skill) or cutting the user's real footage (editing skill). Host-neutral: describe the outcome; use generic built-in generation/speech capabilities — in CogSeed `generate_image` (stills), `generate_video` (clips; supports image-to-video and built-in audio), `generate_speech` (narration) — and assemble through the VideoStudio `stage-edit edit_video` skill script. VideoStudio's billable image/video calls are host-controlled: every call belongs to a signed `project/plan.json` generate segment and carries `production_plan_path` plus `production_segment_id`.
 
 ## Pattern A — talking-head / spokesperson (口播 / 数字人)
 

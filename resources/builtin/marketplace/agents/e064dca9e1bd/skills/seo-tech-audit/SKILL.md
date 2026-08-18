@@ -29,7 +29,7 @@ Judge the technical SEO facts produced by `seo-crawl` and return falsifiable fin
 ## How to call
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" seo-tech-audit audit -- --input <crawl.json> [--out <audit.json>]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" seo-tech-audit audit -- --input <crawl.json> [--out <audit.json>]
 ```
 
 - `--input` path to the `seo-crawl` JSON (omit or `-` to read stdin).

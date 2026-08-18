@@ -107,13 +107,13 @@ describe('P3394 bridge identity, capability profile, and manifest', () => {
     expect(result.profile.capabilities).toEqual(expect.arrayContaining(['handle_message', 'local-cli']));
   });
 
-  it('deduplicates skill_list and creates mate-skill-scope capability', () => {
+  it('deduplicates skill_list and creates cogseed-skill-scope capability', () => {
     const result = buildP3394CapabilityProfile(agent({ skill_list: [' research ', 'write', 'research', '', 'write'] }));
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected capability profile success');
     expect(result.profile.skill_scope).toEqual(['research', 'write']);
-    expect(result.profile.capabilities).toEqual(expect.arrayContaining(['handle_message', 'mate-skill-scope']));
+    expect(result.profile.capabilities).toEqual(expect.arrayContaining(['handle_message', 'cogseed-skill-scope']));
   });
 
   it('builds manifest with identity, runtime, capability profile, channel declaration, session/security/conformance', () => {

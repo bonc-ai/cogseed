@@ -2,19 +2,19 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 
 import * as paths from '../../../../src/main/paths';
-import { MATE_RUNTIME_TOOL_POLICY } from '../../../../src/main/features/cogseed_runtime/kernel/config';
+import { COGSEED_RUNTIME_TOOL_POLICY } from '../../../../src/main/features/cogseed_runtime/kernel/config';
 import {
   kernelEventToRuntimeEnvelope,
   runtimeKernelRequestFromProtocol,
   type RuntimeExecutor,
 } from '../../../../src/main/features/cogseed_runtime/runtime-executor';
-import { MATE_AGENT_RUNTIME_PROTOCOL_VERSION, type RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
+import { COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, type RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
 
 const UID = 'runtime-executor-user';
 
 function request(overrides: Partial<RuntimeRunRequest> = {}): RuntimeRunRequest {
   return {
-    protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION,
+    protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
     type: 'run',
     request_id: 'req-executor',
     runtime_session_id: 'mruntime-executor',
@@ -67,7 +67,7 @@ describe('CogSeed Runtime native executor', () => {
       writableRoots: [],
       executionKind: 'cogseed-native',
       allowedSkillIds: ['skill-alpha'],
-      toolPolicy: { ...MATE_RUNTIME_TOOL_POLICY, skillRun: 'allowlisted_skills' },
+      toolPolicy: { ...COGSEED_RUNTIME_TOOL_POLICY, skillRun: 'allowlisted_skills' },
     }));
     expect(JSON.stringify(kernelRequest)).not.toContain('cid');
   });

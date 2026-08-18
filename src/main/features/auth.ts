@@ -15,7 +15,7 @@
  *       imageProfiles:  [ { id, provider, apiKey, label, createdAt } ],             // v4+
  *       videoProfiles:  [ { id, provider, model, apiKey, label, createdAt } ]       // v4+
  *     }
- *     The file body is encrypted through `util/local-secret-store`: Hosted Orkas writes
+ *     The file body is encrypted through `util/local-secret-store`: Hosted CogSeed writes
  *     `ORKLSEC1:`, while the open-source build falls back to the open backend. The read path accepts
  *     the previous whole-file `crypto-vault` payload and plaintext JSON as one-shot migration
  *     inputs, then rewrites with the preferred backend.
@@ -594,7 +594,7 @@ function parseTtsProfilesArray(arr: unknown): TtsProfile[] {
     const p = raw as any;
     if (!p || typeof p !== 'object' || !p.id || !p.provider || !p.apiKey) continue;
     const provider = String(p.provider || 'custom');
-    if (provider === 'orkas-voice') continue;
+    if (provider === 'cogseed-voice') continue;
     if (provider !== 'doubao' && !p.baseUrl) continue;
     if (provider !== 'doubao' && !p.model) continue;
     out.push({
@@ -1136,7 +1136,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
   // Provider-is-known-to-pi-ai check so we don't advertise API-key support
   // for an id that pi-ai can't build a client for. When core-agent is
   // unavailable, fall back to the visible set so the catalog still renders.
-  // EXTERNAL_API_PROVIDERS are Orkas-side adapters (see `external-providers.ts`)
+  // EXTERNAL_API_PROVIDERS are CogSeed-side adapters (see `external-providers.ts`)
   // that pi-ai doesn't know about — manually mark them api-capable.
   const apiCapable = mod
     ? new Set<string>([...mod.listPiProviders(), ...EXTERNAL_API_PROVIDERS])
@@ -2786,7 +2786,7 @@ export async function testConnection(
 
   if (!apiKey) return { ok: false, error: 'no credential stored for this provider', profileId: chosenProfileId };
 
-  // Orkas-side external providers bypass pi-ai's catalog — route directly
+  // CogSeed-side external providers bypass pi-ai's catalog — route directly
   // to their factory so we don't hit the "provider has no models registered"
   // guard below (which relies on pi-ai's listPiModels).
   if (EXTERNAL_API_PROVIDERS.includes(pid)) {

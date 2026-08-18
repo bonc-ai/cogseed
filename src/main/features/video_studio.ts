@@ -62,11 +62,11 @@ import { killProcessTree } from '../../core-agent/src/sandbox/executor';
 
 const log = createLogger('video-studio');
 
-const COMPOSITION_LOAD_TIMEOUT_MS = Number(process.env.ORKAS_VIDEO_STUDIO_LOAD_TIMEOUT_MS) || 30_000;
-const COMPOSITION_READY_TIMEOUT_MS = Number(process.env.ORKAS_VIDEO_STUDIO_READY_TIMEOUT_MS) || 20_000;
-const COMPOSITION_SCRIPT_TIMEOUT_MS = Number(process.env.ORKAS_VIDEO_STUDIO_SCRIPT_TIMEOUT_MS) || 15_000;
-const COMPOSITION_CAPTURE_TIMEOUT_MS = Number(process.env.ORKAS_VIDEO_STUDIO_CAPTURE_TIMEOUT_MS) || 15_000;
-const COMPOSITION_RENDER_FRAME_TIMEOUT_MS = Number(process.env.ORKAS_VIDEO_STUDIO_RENDER_FRAME_TIMEOUT_MS) || 20_000;
+const COMPOSITION_LOAD_TIMEOUT_MS = Number(process.env.COGSEED_VIDEO_STUDIO_LOAD_TIMEOUT_MS) || 30_000;
+const COMPOSITION_READY_TIMEOUT_MS = Number(process.env.COGSEED_VIDEO_STUDIO_READY_TIMEOUT_MS) || 20_000;
+const COMPOSITION_SCRIPT_TIMEOUT_MS = Number(process.env.COGSEED_VIDEO_STUDIO_SCRIPT_TIMEOUT_MS) || 15_000;
+const COMPOSITION_CAPTURE_TIMEOUT_MS = Number(process.env.COGSEED_VIDEO_STUDIO_CAPTURE_TIMEOUT_MS) || 15_000;
+const COMPOSITION_RENDER_FRAME_TIMEOUT_MS = Number(process.env.COGSEED_VIDEO_STUDIO_RENDER_FRAME_TIMEOUT_MS) || 20_000;
 
 export type VideoStudioOp =
   | 'production.status'
@@ -307,7 +307,7 @@ function builtinGsapVendorCandidates(): string[] {
   );
   const sourceRel = path.join('resources', 'builtin', agentRel);
   const roots = [
-    process.env.ORKAS_PC_DIR,
+    process.env.COGSEED_PC_DIR,
     process.cwd(),
     path.join(process.cwd(), 'PC'),
     path.resolve(__dirname, '..', '..', '..'),
@@ -315,7 +315,7 @@ function builtinGsapVendorCandidates(): string[] {
     path.resolve(__dirname, '..', '..', '..', '..', 'PC'),
   ].filter((v): v is string => !!v);
   const resourceRoots = [
-    process.env.ORKAS_BUILTIN_ROOT,
+    process.env.COGSEED_BUILTIN_ROOT,
     (process as unknown as { resourcesPath?: string }).resourcesPath
       ? path.join((process as unknown as { resourcesPath: string }).resourcesPath, 'builtin')
       : undefined,
@@ -359,7 +359,7 @@ async function validateKnownBundledVendor(ref: string, targetAbsPath: string): P
     selector: `[src="${ref}"]`,
     message: `Existing GSAP vendor is missing required timeline APIs: ${issue.missing.join(', ')}. Remove or replace assets/vendor/gsap.min.js; do not patch it manually inside the composition.`,
     fixHint: 'Delete the incompatible local vendor file so VideoStudio can prepare the built-in GSAP vendor, or replace it with a compatible full GSAP build.',
-    source: 'orkas-native-vendor-assets',
+    source: 'cogseed-native-vendor-assets',
   };
 }
 
@@ -384,7 +384,7 @@ function qualityFps(quality: RenderQuality | undefined, fps: number | undefined)
 }
 
 function machineRamGB(): number {
-  const mocked = Number(process.env.ORKAS_MOCK_RAM_GB);
+  const mocked = Number(process.env.COGSEED_MOCK_RAM_GB);
   if (Number.isFinite(mocked) && mocked > 0) return Math.round(mocked * 10) / 10;
   return Math.round((os.totalmem() / 1024 ** 3) * 10) / 10;
 }
@@ -402,7 +402,7 @@ type PersistedRenderProfile = {
 };
 
 async function readObservedRenderProfile(compositionDirAbs: string): Promise<PersistedRenderProfile> {
-  const mocked = process.env.ORKAS_MOCK_OBSERVED_GPU_MODE;
+  const mocked = process.env.COGSEED_MOCK_OBSERVED_GPU_MODE;
   if (mocked === 'hardware' || mocked === 'software') return { gpuMode: mocked };
   try {
     const parsed = JSON.parse(await fs.readFile(renderProfilePath(compositionDirAbs), 'utf8')) as PersistedRenderProfile;
@@ -457,7 +457,7 @@ function isConstrainedMachine(totalRamGB: number, observedGpuMode?: 'hardware' |
   return totalRamGB <= LOW_RAM_GB || observedGpuMode === 'software';
 }
 
-function estimateRenderCost(width: number, height: number, durationSec: number, fps: number): number {
+function esticogseedRenderCost(width: number, height: number, durationSec: number, fps: number): number {
   const frames = Math.max(1, durationSec) * Math.max(1, fps);
   const megapixels = Math.max(1, (Math.max(1, width) * Math.max(1, height)) / 1e6);
   return Math.round(frames * megapixels);
@@ -482,7 +482,7 @@ export function selectSafeFinalRenderFps(input: {
   const candidates = [...new Set([requestedFps, 30, 24, 20, 15])]
     .filter((fps) => fps <= requestedFps)
     .sort((a, b) => b - a);
-  return candidates.find((fps) => estimateRenderCost(
+  return candidates.find((fps) => esticogseedRenderCost(
     input.width,
     input.height,
     input.durationSec,
@@ -501,7 +501,7 @@ async function resolveNativeRenderProfile(
   const observed = await readObservedRenderProfile(compositionDirAbs);
   const observedGpuMode = await observeElectronGpuMode() || observed.gpuMode;
   const constrained = isConstrainedMachine(ramGB, observedGpuMode);
-  const costUnits = estimateRenderCost(meta.width, meta.height, meta.durationSec, requestedFps);
+  const costUnits = esticogseedRenderCost(meta.width, meta.height, meta.durationSec, requestedFps);
   let decision = renderCostDecision({ constrained, costUnits, isFinal: quality === 'high' });
   let renderFps = decision === 'degrade' ? degradedFps(requestedFps) : requestedFps;
   let automaticFinalFallback = false;
@@ -969,8 +969,8 @@ export async function prepareComposition(p: CompositionOptions): Promise<VideoSt
 export async function lintComposition(p: CompositionOptions): Promise<VideoStudioResult> {
   const preflight = await preflightComposition(p);
   const findings = findingsJson(preflight.issues, {
-    engine: 'orkas-native',
-    profile: 'orkas-html-composition',
+    engine: 'cogseed-native',
+    profile: 'cogseed-html-composition',
     canvas: preflight.meta ? { width: preflight.meta.width, height: preflight.meta.height, durationSec: preflight.meta.durationSec } : null,
     preflight: preflight.report,
   });
@@ -1229,7 +1229,7 @@ function buildTimelineAdapterScript(meta: CompositionMeta, variables?: Record<st
   const root = document.querySelector('[data-composition-id]') || document.body;
   const compositionId = root && root.getAttribute ? (root.getAttribute('data-composition-id') || ${JSON.stringify(meta.id)}) : ${JSON.stringify(meta.id)};
   const variables = ${vars};
-  window.__ORKAS_VIDEO_VARIABLES__ = variables;
+  window.__COGSEED_VIDEO_VARIABLES__ = variables;
   function num(v, fallback) {
     const n = Number(v);
     return Number.isFinite(n) ? n : fallback;
@@ -1298,9 +1298,9 @@ function buildTimelineAdapterScript(meta: CompositionMeta, variables?: Record<st
       }
     }
   }
-  window.__ORKAS_VIDEO__ = window.__ORKAS_VIDEO__ || {};
-  window.__ORKAS_VIDEO__.duration = ${meta.durationSec};
-  window.__ORKAS_VIDEO__.seek = async (t) => {
+  window.__COGSEED_VIDEO__ = window.__COGSEED_VIDEO__ || {};
+  window.__COGSEED_VIDEO__.duration = ${meta.durationSec};
+  window.__COGSEED_VIDEO__.seek = async (t) => {
     pauseMedia();
     const usedTimeline = seekTimelines(t);
     seekWebAnimations(t);
@@ -1342,8 +1342,8 @@ async function waitForReady(win: ElectronBrowserWindow): Promise<void> {
 async function seek(win: ElectronBrowserWindow, tSec: number): Promise<void> {
   await withVideoStudioTimeout(win.webContents.executeJavaScript(`
 (async () => {
-  if (window.__ORKAS_VIDEO__ && typeof window.__ORKAS_VIDEO__.seek === 'function') {
-    await window.__ORKAS_VIDEO__.seek(${JSON.stringify(tSec)});
+  if (window.__COGSEED_VIDEO__ && typeof window.__COGSEED_VIDEO__.seek === 'function') {
+    await window.__COGSEED_VIDEO__.seek(${JSON.stringify(tSec)});
   }
 })()
 `, true), COMPOSITION_SCRIPT_TIMEOUT_MS, 'E_COMPOSITION_SEEK_TIMEOUT', `composition seek timed out at ${round2(tSec)}s.`, () => {
@@ -1478,12 +1478,12 @@ export async function inspectComposition(p: CompositionOptions): Promise<VideoSt
       severity: 'error',
       selector: 'document',
       message: (err as Error).message,
-      source: 'orkas-native',
+      source: 'cogseed-native',
     });
   }
   const normalizedIssues = dedupeInspectIssues(normalizeDraftInspectIssueSeverities(issues));
   const findings = findingsJson(normalizedIssues, {
-    engine: 'orkas-native',
+    engine: 'cogseed-native',
     inspector_version: VIDEO_STUDIO_INSPECTOR_VERSION,
     samples,
     sample_plan: samplePlans,
@@ -1593,7 +1593,7 @@ export function buildInspectScript(meta: CompositionMeta, tSec: number, expected
       confidence,
       selector: selectorFor(el),
       message: '[' + tSec.toFixed(2) + 's] ' + message,
-      source: 'orkas-native-inspect',
+      source: 'cogseed-native-inspect',
       sampleTimeSec: tSec,
       activeScene: !expectedSceneId || !scene || String(scene.getAttribute('data-scene-id') || '') === expectedSceneId,
       evidence: evidence || {},
@@ -2188,7 +2188,7 @@ export async function renderComposition(p: CompositionOptions): Promise<VideoStu
       bytes: st.size,
       media: versionedChatMediaLocalUrl(p.outputAbsPath),
       probe,
-      engine: 'orkas-native',
+      engine: 'cogseed-native',
       fps,
       frames: totalFrames,
       canvas: { width: loaded.meta.width, height: loaded.meta.height, durationSec: loaded.meta.durationSec },
@@ -2577,7 +2577,7 @@ async function buildMediaQa(
       code: 'MEDIA_PROBE_MISSING',
       severity: 'error',
       message: 'Final media could not be probed with ffprobe.',
-      source: 'orkas-native-media-qa',
+      source: 'cogseed-native-media-qa',
     });
   } else {
     if (!mediaProbe.video) {
@@ -2585,7 +2585,7 @@ async function buildMediaQa(
         code: 'VIDEO_STREAM_MISSING',
         severity: 'error',
         message: 'Final media does not contain a video stream.',
-        source: 'orkas-native-media-qa',
+        source: 'cogseed-native-media-qa',
       });
     }
     if (mediaProbe.duration_seconds !== null && Math.abs(mediaProbe.duration_seconds - meta.durationSec) > MEDIA_DURATION_TOLERANCE_SEC) {
@@ -2593,7 +2593,7 @@ async function buildMediaQa(
         code: 'MEDIA_DURATION_MISMATCH',
         severity: 'error',
         message: `Final media duration ${round2(mediaProbe.duration_seconds)}s does not match composition duration ${round2(meta.durationSec)}s.`,
-        source: 'orkas-native-media-qa',
+        source: 'cogseed-native-media-qa',
       });
     }
     const videoDuration = mediaProbe.video?.duration_seconds;
@@ -2602,7 +2602,7 @@ async function buildMediaQa(
         code: 'VIDEO_DURATION_MISMATCH',
         severity: 'error',
         message: `Final video stream duration ${round2(videoDuration)}s does not match composition duration ${round2(meta.durationSec)}s.`,
-        source: 'orkas-native-media-qa',
+        source: 'cogseed-native-media-qa',
       });
     }
   }
@@ -2637,7 +2637,7 @@ async function buildMediaQa(
         code: 'AUDIO_STREAM_MISSING',
         severity: 'error',
         message: 'Composition declares audio tracks, but final media has no audio stream.',
-        source: 'orkas-native-media-qa',
+        source: 'cogseed-native-media-qa',
       });
     } else {
       const actualAudioDurationSec = mediaProbe.audio.duration_seconds ?? mediaProbe.duration_seconds;
@@ -2647,7 +2647,7 @@ async function buildMediaQa(
           code: 'AUDIO_STREAM_TOO_SHORT',
           severity: 'error',
           message: `Final audio stream duration ${round2(actualAudioDurationSec)}s is shorter than expected narration coverage ${round2(expectedAudioEndSec)}s.`,
-          source: 'orkas-native-media-qa',
+          source: 'cogseed-native-media-qa',
         });
       }
     }
@@ -2710,7 +2710,7 @@ export async function draftComposition(p: CompositionOptions): Promise<VideoStud
   const report: Record<string, unknown> = {
     ok: false,
     op: 'composition.draft',
-    engine: 'orkas-native',
+    engine: 'cogseed-native',
     composition_dir: p.compositionDirAbs,
     path: p.outputAbsPath || '',
     steps: {},
@@ -2941,8 +2941,8 @@ function filePathIfExists(value: string | undefined): string {
 }
 
 function resolveWhisperBackend(modelHint?: string): { cli: string; model: string; source: 'env' | 'bundled' } | null {
-  const cli = filePathIfExists(process.env.ORKAS_WHISPER_CPP || process.env.ORKAS_WHISPER_CLI);
-  const model = filePathIfExists(modelHint) || filePathIfExists(process.env.ORKAS_WHISPER_MODEL);
+  const cli = filePathIfExists(process.env.COGSEED_WHISPER_CPP || process.env.COGSEED_WHISPER_CLI);
+  const model = filePathIfExists(modelHint) || filePathIfExists(process.env.COGSEED_WHISPER_MODEL);
   if (!cli || !model) return null;
   return { cli, model, source: 'env' };
 }
@@ -2951,9 +2951,9 @@ export function resolveSpeechTranscribeBackend(modelHint?: string): { cli: strin
   const envBackend = resolveWhisperBackend(modelHint);
   if (envBackend) return envBackend;
   const bundled = bundledWhisperPaths(modelHint);
-  const envCli = filePathIfExists(process.env.ORKAS_WHISPER_CPP || process.env.ORKAS_WHISPER_CLI);
+  const envCli = filePathIfExists(process.env.COGSEED_WHISPER_CPP || process.env.COGSEED_WHISPER_CLI);
   if (envCli && bundled.model) return { cli: envCli, model: bundled.model, source: 'bundled' };
-  const envModel = filePathIfExists(modelHint) || filePathIfExists(process.env.ORKAS_WHISPER_MODEL);
+  const envModel = filePathIfExists(modelHint) || filePathIfExists(process.env.COGSEED_WHISPER_MODEL);
   if (bundled.cli && envModel) return { cli: bundled.cli, model: envModel, source: 'bundled' };
   if (bundled.cli && bundled.model) return { cli: bundled.cli, model: bundled.model, source: 'bundled' };
   return null;
@@ -3086,9 +3086,9 @@ export async function transcribeSpeech(p: SpeechTranscribeOptions): Promise<Vide
       ok: false,
       op: 'speech.transcribe',
       errorCode: 'E_TRANSCRIBE_BACKEND_MISSING',
-      message: 'Speech transcription needs a bundled whisper.cpp runtime under resources/runtime/whisper or explicit ORKAS_WHISPER_CPP/ORKAS_WHISPER_MODEL paths.',
+      message: 'Speech transcription needs a bundled whisper.cpp runtime under resources/runtime/whisper or explicit COGSEED_WHISPER_CPP/COGSEED_WHISPER_MODEL paths.',
       backend_resolution: {
-        checked: ['ORKAS_WHISPER_CPP', 'ORKAS_WHISPER_CLI', 'ORKAS_WHISPER_MODEL', 'resources/runtime/whisper/current', `resources/runtime/whisper/${process.platform}-${process.arch}`],
+        checked: ['COGSEED_WHISPER_CPP', 'COGSEED_WHISPER_CLI', 'COGSEED_WHISPER_MODEL', 'resources/runtime/whisper/current', `resources/runtime/whisper/${process.platform}-${process.arch}`],
         model_hint: p.model || '',
       },
     };
@@ -3101,7 +3101,7 @@ export async function transcribeSpeech(p: SpeechTranscribeOptions): Promise<Vide
   if (!st || !st.isFile()) {
     return { ok: false, op: 'speech.transcribe', errorCode: 'E_TRANSCRIBE_NO_INPUT', message: 'input is not a file' };
   }
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'orkas-transcribe-'));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'cogseed-transcribe-'));
   const wav = path.join(tmp, 'audio.wav');
   const outBase = path.join(tmp, 'transcript');
   try {
@@ -3110,7 +3110,7 @@ export async function transcribeSpeech(p: SpeechTranscribeOptions): Promise<Vide
     if (ex.code !== 0) {
       return { ok: false, op: 'speech.transcribe', errorCode: 'E_TRANSCRIBE_AUDIO_EXTRACT_FAILED', message: redactPaths(ex.stderr.slice(-1200)) || 'audio extraction failed' };
     }
-    p.onProgress?.({ phase: 'speech.transcribe.asr', message: 'Running Orkas-native whisper.cpp transcription.' });
+    p.onProgress?.({ phase: 'speech.transcribe.asr', message: 'Running CogSeed-native whisper.cpp transcription.' });
     const timestampDetail = p.timestamps === 'word' ? 'word' : 'segment';
     const args = buildSpeechTranscribeArgs(backend.model, wav, outBase, {
       language: p.language,
@@ -3147,7 +3147,7 @@ export async function transcribeSpeech(p: SpeechTranscribeOptions): Promise<Vide
       op: 'speech.transcribe',
       summary: normalized,
       transcript_path: p.transcriptAbsPath || '',
-      backend: 'orkas-native:whisper.cpp',
+      backend: 'cogseed-native:whisper.cpp',
       backend_source: backend.source,
     };
   } finally {

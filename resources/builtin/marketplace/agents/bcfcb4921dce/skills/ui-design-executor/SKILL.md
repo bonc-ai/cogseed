@@ -94,7 +94,7 @@ For interactive standalone HTML:
 For a standalone HTML artifact, run the bundled validator when Node and shell execution are available:
 
 ```text
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" \
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" \
   ui-design-executor validate-html-artifact -- \
   <artifact-directory>
 ```

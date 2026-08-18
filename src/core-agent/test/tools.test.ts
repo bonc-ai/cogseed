@@ -8,7 +8,7 @@ import { DEFAULT_BASH_TIMEOUT_MS, normalizeBashTimeoutMs } from "../src/tools/bu
 import { MAX_WEB_FETCH_RESPONSE_BYTES } from "../src/tools/web-fetch.js";
 import type { ToolContext } from "../src/tools/index.js";
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 function shellQuote(value: string): string {
   return process.platform === "win32"
@@ -523,19 +523,19 @@ describe("Tools", () => {
     it("forwards ctx.state.sandboxEnv to the child process", async () => {
       // Locks in the contract that skill scripts rely on:
       // `ctx.state.sandboxEnv` must reach the spawned shell as real env vars.
-      // Without this, `$ORKAS_NODE` / `$ORKAS_PC_DIR` in SKILL.md commands
+      // Without this, `$COGSEED_NODE` / `$COGSEED_PC_DIR` in SKILL.md commands
       // expand to empty and skills silently no-op.
       const tools = getBuiltinTools();
       const bash = tools.find((t) => t.name === "bash")!;
 
       const ctx: ToolContext = {
-        state: { sandboxEnv: { ORKAS_TEST_TOKEN: "propagated-abc123" } },
+        state: { sandboxEnv: { COGSEED_TEST_TOKEN: "propagated-abc123" } },
       };
       const result = await bash.execute(
         {
           command: shellInvoke(TEST_NODE, [
             "-e",
-            "process.stdout.write(process.env.ORKAS_TEST_TOKEN || '')",
+            "process.stdout.write(process.env.COGSEED_TEST_TOKEN || '')",
           ]),
         },
         ctx,

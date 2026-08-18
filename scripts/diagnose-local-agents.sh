@@ -11,7 +11,7 @@
 # registry.ts / version.ts / auth-state.ts / active_config.ts / which.ts）：
 #
 #   1. 二进制查找   → PATH + 常见安装目录（homebrew / ~/.local/bin / ~/.codex/bin /
-#                     nvm / WorkBuddy App 内置 等），支持 ORKAS_<TYPE>_PATH 覆盖
+#                     nvm / WorkBuddy App 内置 等），支持 COGSEED_<TYPE>_PATH 覆盖
 #   2. 版本探测     → 跑 `<bin> --version`（5s 超时），解析 semver，
 #                     低于 claude 2.0.0 / codex 0.100.0 判为版本过低
 #   3. 凭据配置检查 → settings.json / auth.json / sessions.json 存在性 + 形状，
@@ -55,12 +55,12 @@ bin_name() {
 
 env_key() {
   case "$1" in
-    claude)    printf 'ORKAS_CLAUDE_PATH' ;;
-    codex)     printf 'ORKAS_CODEX_PATH' ;;
-    openclaw)  printf 'ORKAS_OPENCLAW_PATH' ;;
-    opencode)  printf 'ORKAS_OPENCODE_PATH' ;;
-    hermes)    printf 'ORKAS_HERMES_PATH' ;;
-    workbuddy) printf 'ORKAS_WORKBUDDY_PATH' ;;
+    claude)    printf 'COGSEED_CLAUDE_PATH' ;;
+    codex)     printf 'COGSEED_CODEX_PATH' ;;
+    openclaw)  printf 'COGSEED_OPENCLAW_PATH' ;;
+    opencode)  printf 'COGSEED_OPENCODE_PATH' ;;
+    hermes)    printf 'COGSEED_HERMES_PATH' ;;
+    workbuddy) printf 'COGSEED_WORKBUDDY_PATH' ;;
     *)         printf '' ;;
   esac
 }
@@ -515,9 +515,9 @@ EOF
 
 candidate_data_roots() {
   local home="$1" variant_root entry
-  [ -n "${ORKAS_WORKSPACE_ROOT:-}" ] && printf '%s\n' "$ORKAS_WORKSPACE_ROOT"
-  printf '%s\n' "$home/.cogseed/data" "$home/.orkas/data"
-  for variant_root in "$home/.cogseed/runtime-variants" "$home/.orkas/runtime-variants"; do
+  [ -n "${COGSEED_WORKSPACE_ROOT:-}" ] && printf '%s\n' "$COGSEED_WORKSPACE_ROOT"
+  printf '%s\n' "$home/.cogseed/data" "$home/.cogseed/data"
+  for variant_root in "$home/.cogseed/runtime-variants" "$home/.cogseed/runtime-variants"; do
     for entry in "$variant_root"/*/data; do
       [ -d "$entry" ] && printf '%s\n' "$entry"
     done

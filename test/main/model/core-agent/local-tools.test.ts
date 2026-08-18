@@ -53,11 +53,11 @@ describe('local-tools › Windows PowerShell compatibility preflight', () => {
     fs.mkdirSync(cwd, { recursive: true });
 
     const result = await bash.execute({
-      command: 'Write-Output $env:ORKAS_NATIVE_SMOKE',
+      command: 'Write-Output $env:COGSEED_NATIVE_SMOKE',
       timeoutMs: 10_000,
     }, {
       workingDir: cwd,
-      state: { sandboxEnv: { ORKAS_NATIVE_SMOKE: 'Windows-你好' } },
+      state: { sandboxEnv: { COGSEED_NATIVE_SMOKE: 'Windows-你好' } },
     } as any);
 
     expect(result.isError).toBeUndefined();
@@ -72,11 +72,11 @@ describe('local-tools › Windows PowerShell compatibility preflight', () => {
     fs.mkdirSync(cwd, { recursive: true });
 
     const result = await bash.execute({
-      command: 'cmd /c echo %ORKAS_NATIVE_SMOKE%',
+      command: 'cmd /c echo %COGSEED_NATIVE_SMOKE%',
       timeoutMs: 10_000,
     }, {
       workingDir: cwd,
-      state: { sandboxEnv: { ORKAS_NATIVE_SMOKE: 'cmd-ok' } },
+      state: { sandboxEnv: { COGSEED_NATIVE_SMOKE: 'cmd-ok' } },
     } as any);
 
     expect(result.isError).toBeUndefined();
@@ -91,11 +91,11 @@ describe('local-tools › Windows PowerShell compatibility preflight', () => {
     fs.mkdirSync(cwd, { recursive: true });
 
     const result = await bash.execute({
-      command: 'printf \'%s\' "$ORKAS_NATIVE_SMOKE"',
+      command: 'printf \'%s\' "$COGSEED_NATIVE_SMOKE"',
       timeoutMs: 10_000,
     }, {
       workingDir: cwd,
-      state: { sandboxEnv: { ORKAS_NATIVE_SMOKE: 'macOS-你好' } },
+      state: { sandboxEnv: { COGSEED_NATIVE_SMOKE: 'macOS-你好' } },
     } as any);
 
     expect(result.isError).toBeUndefined();
@@ -104,16 +104,16 @@ describe('local-tools › Windows PowerShell compatibility preflight', () => {
 });
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-localtools-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-localtools-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -213,7 +213,7 @@ describe('local-tools › bash › disabled skills', () => {
 
     const bash = await buildBashTool();
     const r = await run(bash, {
-      command: '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" disabled-skill search -- query',
+      command: '"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" disabled-skill search -- query',
     });
 
     expect(r.isError).toBe(true);
@@ -274,7 +274,7 @@ describe('local-tools › bash › withheld (tampered) skills', () => {
 
     const bash = await buildBashTool();
     const r = await run(bash, {
-      command: '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" tampered-skill go -- x',
+      command: '"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" tampered-skill go -- x',
     });
 
     expect(r.isError).toBe(true);
@@ -308,7 +308,7 @@ describe('local-tools › bash › withheld (tampered) skills', () => {
 
     const bash = await buildBashTool();
     const r = await run(bash, {
-      command: '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" friendly-name go',
+      command: '"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" friendly-name go',
     });
 
     expect(r.isError).toBe(true);
@@ -344,7 +344,7 @@ describe('local-tools › bash › withheld (tampered) skills', () => {
 
     const bash = await buildBashTool();
     const r = await run(bash, {
-      command: '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" clean-skill go',
+      command: '"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" clean-skill go',
     });
 
     expect(r.content).not.toContain('E_SKILL_WITHHELD');
@@ -410,7 +410,7 @@ describe('local-tools › edit_file › sandbox', () => {
 
   it('does not allow delete_file under readOnlyExtraRoots, even in all-files mode', async () => {
     await allFilesApproval();
-    const readOnlyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-ro-delete-'));
+    const readOnlyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ro-delete-'));
     const p = path.join(readOnlyDir, 'keep.md');
     fs.writeFileSync(p, 'do not delete');
     try {

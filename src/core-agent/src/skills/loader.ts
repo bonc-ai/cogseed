@@ -7,7 +7,7 @@ import { pickDescription } from "./types.js";
 
 const log = createLogger("skill-loader");
 
-interface SkillOrkasMeta {
+interface SkillCogSeedMeta {
   descriptions?: { zh?: string; en?: string; [lang: string]: string | undefined };
   description_zh?: string;
   description_en?: string;
@@ -33,7 +33,7 @@ function normalizeDescription(value: string | undefined): string {
  *
  * De-duplication: when the same skill id appears in multiple dirs, the
  * FIRST occurrence wins. Put higher-priority roots earlier — for example,
- * Orkas passes `[marketplaceDir, customDir]` so builtin/platform installs
+ * CogSeed passes `[marketplaceDir, customDir]` so builtin/platform installs
  * beat custom skills on id conflicts.
  *
  * No skill bodies are loaded here — only frontmatter. Callers that need the
@@ -100,7 +100,7 @@ export class SkillLoader {
    * `pickDescription`. Defaults to `'en'` for safety in non-UI callers.
    */
   // Default convenience renderer for hosts without their own block builder.
-  // **Orkas does NOT use this in production** — it ships its own renderer
+  // **CogSeed does NOT use this in production** — it ships its own renderer
   // at `src/main/model/core-agent/skill-registry.ts::renderSkillLines` that
   // (a) decides Source label by the resolved root path (basename collides
   // when both roots end in `/skills`) and (b) inlines `<ROOT>/<id>/SKILL.md`
@@ -132,7 +132,7 @@ export class SkillLoader {
       return null;
     }
     const { data } = parseFrontmatter(raw);
-    const sidecar = this.readOrkasMeta(dir);
+    const sidecar = this.readCogSeedMeta(dir);
     // `id` = dir basename (always unique within the loader's roots, used as the read_file
     // path component). `name` = frontmatter human-readable display label; falls back to
     // the id when frontmatter is missing one. Decoupled because marketplace installs land
@@ -166,11 +166,11 @@ export class SkillLoader {
     };
   }
 
-  private readOrkasMeta(dir: string): SkillOrkasMeta {
+  private readCogSeedMeta(dir: string): SkillCogSeedMeta {
     const file = path.join(dir, "_meta.json");
     try {
       const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
-      return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as SkillOrkasMeta : {};
+      return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as SkillCogSeedMeta : {};
     } catch {
       return {};
     }

@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const channelArg = process.argv.find((arg) => arg.startsWith('--channel='));
-const channel = (channelArg ? channelArg.slice('--channel='.length) : process.env.ORKAS_BUILD_CHANNEL) || 'packaged-dev';
+const channel = (channelArg ? channelArg.slice('--channel='.length) : process.env.COGSEED_BUILD_CHANNEL) || 'packaged-dev';
 function git(args) {
   const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
   return r.status === 0 ? String(r.stdout || '').trim() : '';

@@ -62,9 +62,9 @@ let previousRoot: string | undefined;
 beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
-  temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'orkas-closed-loop-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = temporaryRoot;
+  temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cogseed-closed-loop-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = temporaryRoot;
 
   mocks.configured = true;
   mocks.oauthExpired = null;
@@ -101,8 +101,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   await fs.rm(temporaryRoot, { recursive: true, force: true });
 });
 

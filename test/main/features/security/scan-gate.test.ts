@@ -3,7 +3,7 @@
  *
  * Exercised directly (as a subprocess) rather than through either caller,
  * because it is the one place the install/reject threshold is defined and both
- * `sentry-adapter.ts` and `bin/orkas-pkg.cjs` inherit whatever it decides. A bug
+ * `sentry-adapter.ts` and `bin/cogseed-pkg.cjs` inherit whatever it decides. A bug
  * here is a bug in every install path at once.
  *
  * Runs the real Python engine — a mocked scanner would only test our plumbing and
@@ -53,7 +53,7 @@ function mkSkill(files: Record<string, string>): string {
 // PyYAML on PYTHONPATH (skill-sentry/vendor). A bare interpreter falls back to
 // the thin builtin rules and lets amplicable payloads score `pass`, which is
 // NOT the behaviour the verdicts below are pinning down. Sharing the injection
-// also keeps this test aligned with bin/orkas-pkg.cjs's guardrailScan.
+// also keeps this test aligned with bin/cogseed-pkg.cjs's guardrailScan.
 const GATE_ENV = {
   ...process.env,
   PYTHONIOENCODING: 'utf-8',

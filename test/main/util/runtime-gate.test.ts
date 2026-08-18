@@ -36,7 +36,7 @@ const {
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-runtime-gate-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-gate-'));
 });
 
 afterEach(() => {
@@ -121,7 +121,7 @@ function writeRuntime(root: string, kind: 'python' | 'uv' | 'node', key: string,
     fs.writeFileSync(path.join(path.dirname(exe), 'npm.cmd'), '');
     fs.writeFileSync(path.join(path.dirname(exe), 'npx.cmd'), '');
   }
-  fs.writeFileSync(path.join(dir, '.orkas-runtime.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, '.cogseed-runtime.json'), JSON.stringify({
     schema: 1,
     kind,
     platformKey: key,
@@ -208,7 +208,7 @@ function writeFfmpegRuntime(root: string, key: string): void {
     fs.writeFileSync(path.join(dir, `${name}.exe`), bytes);
   }
   fs.writeFileSync(path.join(dir, 'NOTICE.txt'), 'test notice\n');
-  fs.writeFileSync(path.join(dir, '.orkas-ffmpeg-ready.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, '.cogseed-ffmpeg-ready.json'), JSON.stringify({
     schema: 1,
     platformKey: key,
     verification: 'pinned-sha256',
@@ -233,7 +233,7 @@ function writeDarwinFfmpegRuntime(root: string, key: string): Record<'ffmpeg' | 
     fs.writeFileSync(files[name], bytes);
   }
   fs.writeFileSync(path.join(dir, 'NOTICE.txt'), 'test notice\n');
-  fs.writeFileSync(path.join(dir, '.orkas-ffmpeg-ready.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, '.cogseed-ffmpeg-ready.json'), JSON.stringify({
     schema: 1,
     platformKey: key,
     verification: 'pinned-sha256',
@@ -297,7 +297,7 @@ function writeVcRuntime(root: string, key: string, contract: any): void {
     files[name] = { bytes: spec.bytes, sha256: spec.sha256 };
   }
   fs.writeFileSync(path.join(dir, 'NOTICE.txt'), 'test notice');
-  fs.writeFileSync(path.join(dir, '.orkas-vc-runtime.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, '.cogseed-vc-runtime.json'), JSON.stringify({
     schema: contract.schema,
     platformKey: key,
     version: contract.version,
@@ -476,7 +476,7 @@ describe('runtime-gate', () => {
       fs.writeFileSync(path.join(path.dirname(executable), name), '');
     }
     fs.writeFileSync(archive, PYTHON_ARCHIVE);
-    fs.writeFileSync(path.join(directory, '.orkas-runtime.json'), JSON.stringify({
+    fs.writeFileSync(path.join(directory, '.cogseed-runtime.json'), JSON.stringify({
       schema: 1,
       kind: 'python',
       platformKey: key,
@@ -645,7 +645,7 @@ describe('runtime-gate', () => {
   it('verifies that every imported VC symbol resolves from the packaged application-local DLL', () => {
     const app = path.join(tmpDir, 'app');
     fs.mkdirSync(app, { recursive: true });
-    fs.writeFileSync(path.join(app, 'Orkas.exe'), peImport('VCRUNTIME140.dll', '__CxxFrameHandler3'));
+    fs.writeFileSync(path.join(app, 'CogSeed.exe'), peImport('VCRUNTIME140.dll', '__CxxFrameHandler3'));
     fs.writeFileSync(path.join(app, 'vcruntime140.dll'), peExport('__CxxFrameHandler3'));
 
     expect(verifyWindowsVcImportClosure(app, 'x64')).toBe('runtime:vc-import-closure:win32-x64');
@@ -654,7 +654,7 @@ describe('runtime-gate', () => {
   it('fails the Windows package when a VC DLL or required symbol is absent', () => {
     const app = path.join(tmpDir, 'app');
     fs.mkdirSync(app, { recursive: true });
-    fs.writeFileSync(path.join(app, 'Orkas.exe'), peImport('VCRUNTIME140.dll', '__CxxFrameHandler3'));
+    fs.writeFileSync(path.join(app, 'CogSeed.exe'), peImport('VCRUNTIME140.dll', '__CxxFrameHandler3'));
 
     expect(() => verifyWindowsVcImportClosure(app, 'x64')).toThrow(/unresolved application-local VC dependency/);
     fs.writeFileSync(path.join(app, 'vcruntime140.dll'), peExport('__different_symbol'));

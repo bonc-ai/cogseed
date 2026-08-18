@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * Orkas skill runner.
+ * CogSeed skill runner.
  *
  * Invoked by LLM bash tool as:
- *   "$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" <skill-id-or-name> <script-basename> [-- args...]
+ *   "$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" <skill-id-or-name> <script-basename> [-- args...]
  *
  * Dispatches by file extension so the LLM uses one invocation form regardless
  * of skill language:
  *   .ts / .mjs / .js — require() with tsx/cjs hook, call default export as
  *                       `async (args) => result`, JSON.stringify result to stdout.
  *   .py              — spawn shared data/venv package Python, else nearest
- *                       package `.venv`, else `ORKAS_PYTHON`, else system
+ *                       package `.venv`, else `COGSEED_PYTHON`, else system
  *                       Python (`python3`; Windows: `py -3` then `python`),
  *                       inherit stdio, exit with child code.
  *   .ps1             — spawn PowerShell (Windows-native script).
@@ -22,7 +22,7 @@
  * Resolution order (matches SkillRegistry — see model/core-agent/skill-registry.ts):
  *   1. <uid>/cloud/skills/<id>/scripts/<basename>.<ext>            (custom)
  *   2. <uid>/local/marketplace/skills/<id>/scripts/<basename>.<ext> (installed)
- *   3. Current-agent private installed roots when ORKAS_AGENT_ID is set:
+ *   3. Current-agent private installed roots when COGSEED_AGENT_ID is set:
  *      <uid>/local/marketplace/agents/<agent-id>/skills/<id>/scripts/<basename>.<ext>
  *      <uid>/cloud/agents/<agent-id>/private_skills/<id>/scripts/<basename>.<ext>
  *   4. External-package skill roots from <uid>/local/packages/_registry.json
@@ -39,23 +39,23 @@
  * fallback. The package tree itself is never modified.
  *
  * Env inputs:
- *   ORKAS_PC_DIR          — points at PC root (or asar.unpacked equivalent).
- *   ORKAS_UID             — active user id. When present, only that user's
+ *   COGSEED_PC_DIR          — points at PC root (or asar.unpacked equivalent).
+ *   COGSEED_UID             — active user id. When present, only that user's
  *                           cloud / marketplace / package skill dirs are
  *                           scanned.
- *   ORKAS_AGENT_ID        — current acting agent id. When present, only this
+ *   COGSEED_AGENT_ID        — current acting agent id. When present, only this
  *                           agent's private installed skill roots are scanned.
- *   ORKAS_WORKSPACE_ROOT  — canonical workspace-data root (set by main process
- *                           in install-data-root.ts). ORKAS_WS_ROOT is honoured
+ *   COGSEED_WORKSPACE_ROOT  — canonical workspace-data root (set by main process
+ *                           in install-data-root.ts). COGSEED_WS_ROOT is honoured
  *                           as a back-compat alias. When neither is set the
- *                           platform default ~/.orkas/data is used.
- *   ORKAS_RUN_SKILL_DIR   — optional trusted caller allow-list override:
+ *                           platform default ~/.cogseed/data is used.
+ *   COGSEED_RUN_SKILL_DIR   — optional trusted caller allow-list override:
  *                           resolve only inside this concrete skill dir.
- *   ORKAS_PYTHON          — optional bundled Python executable injected by
+ *   COGSEED_PYTHON          — optional bundled Python executable injected by
  *                           the main process when resources/runtime is
  *                           available.
- *   ORKAS_VENV_ROOT       — optional shared venv root. Defaults to
- *                           `<ORKAS_WORKSPACE_ROOT>/venv`.
+ *   COGSEED_VENV_ROOT       — optional shared venv root. Defaults to
+ *                           `<COGSEED_WORKSPACE_ROOT>/venv`.
  *   ELECTRON_RUN_AS_NODE  — set to 1 when running through Electron binary.
  *
  * This file is CommonJS so it can be required directly without import-hook
@@ -110,13 +110,13 @@ function isDir(p) {
 }
 
 function workspaceRoot() {
-  return process.env.ORKAS_WORKSPACE_ROOT
-    || process.env.ORKAS_WS_ROOT
-    || path.join(require('os').homedir(), '.orkas', 'data');
+  return process.env.COGSEED_WORKSPACE_ROOT
+    || process.env.COGSEED_WS_ROOT
+    || path.join(require('os').homedir(), '.cogseed', 'data');
 }
 
 function sharedVenvRoot() {
-  return process.env.ORKAS_VENV_ROOT || path.join(workspaceRoot(), 'venv');
+  return process.env.COGSEED_VENV_ROOT || path.join(workspaceRoot(), 'venv');
 }
 
 function shortHash(input) {
@@ -203,7 +203,7 @@ function readSkillDisplayName(skillDir) {
 }
 
 function collectSkillDirs(skillRef) {
-  const forcedDir = process.env.ORKAS_RUN_SKILL_DIR;
+  const forcedDir = process.env.COGSEED_RUN_SKILL_DIR;
   if (forcedDir) {
     const resolved = path.resolve(forcedDir);
     if (!isDir(resolved)) {
@@ -214,8 +214,8 @@ function collectSkillDirs(skillRef) {
 
   const wsRoot = workspaceRoot();
   // Candidate skill dirs — mirror SkillRegistry's trusted + current-agent
-  // private resolution. Agent-private dirs are included only when ORKAS_UID
-  // scopes the user and ORKAS_AGENT_ID names the acting agent; otherwise
+  // private resolution. Agent-private dirs are included only when COGSEED_UID
+  // scopes the user and COGSEED_AGENT_ID names the acting agent; otherwise
   // commander/other agents cannot execute another agent's bundled skills.
   //
   // Per-user skills live under <ws>/<uid>/cloud/skills/<id> and
@@ -260,7 +260,7 @@ function collectSkillDirs(skillRef) {
     return roots;
   }
 
-  const envAgentId = safePathSegment(process.env.ORKAS_AGENT_ID);
+  const envAgentId = safePathSegment(process.env.COGSEED_AGENT_ID);
 
   function addUidDir(uidDir, includeAgentPrivate = false) {
     const cloudRoot = path.join(uidDir, 'cloud', 'skills');
@@ -283,7 +283,7 @@ function collectSkillDirs(skillRef) {
     }
   }
 
-  const envUid = (process.env.ORKAS_UID || '').trim();
+  const envUid = (process.env.COGSEED_UID || '').trim();
   if (envUid && !/[\\/]/.test(envUid) && envUid !== '.' && envUid !== '..') {
     addUidDir(path.join(wsRoot, envUid), true);
   } else {
@@ -347,7 +347,7 @@ function locateSkillScript(skillId, scriptBase) {
   }
   die(66, `skill script not found: ${skillId}/${scriptBase}.{${scriptExts.join(',')}}`, {
     searched: candidates,
-    hint: 'check skill id/display name and script name; ORKAS_PC_DIR / ORKAS_WORKSPACE_ROOT env',
+    hint: 'check skill id/display name and script name; COGSEED_PC_DIR / COGSEED_WORKSPACE_ROOT env',
   });
 }
 
@@ -435,7 +435,7 @@ function findOnPath(names, env = process.env) {
 
 function findGitBash() {
   const envCandidates = [
-    process.env.ORKAS_GIT_BASH_PATH,
+    process.env.COGSEED_GIT_BASH_PATH,
     process.env.CLAUDE_CODE_GIT_BASH_PATH,
   ].filter(Boolean);
   for (const p of envCandidates) {
@@ -463,7 +463,7 @@ function findGitBash() {
 }
 
 function findPowerShell() {
-  for (const p of [process.env.ORKAS_POWERSHELL_PATH, process.env.POWERSHELL_PATH].filter(Boolean)) {
+  for (const p of [process.env.COGSEED_POWERSHELL_PATH, process.env.POWERSHELL_PATH].filter(Boolean)) {
     if (existingFile(p)) return p;
   }
   return process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
@@ -478,7 +478,7 @@ function commandFromEnv(value) {
 }
 
 function findPython(isWin) {
-  const configured = commandFromEnv(process.env.ORKAS_PYTHON);
+  const configured = commandFromEnv(process.env.COGSEED_PYTHON);
   if (configured) return { cmd: configured, args: [] };
   if (isWin) {
     const pyLauncher = findOnPath(['py.exe', 'py']);
@@ -489,13 +489,13 @@ function findPython(isWin) {
 }
 
 function registerTsxLoader() {
-  if (!process.env.ORKAS_PC_DIR) {
-    die(69, 'ORKAS_PC_DIR env not set — cannot locate tsx for .ts transpile');
+  if (!process.env.COGSEED_PC_DIR) {
+    die(69, 'COGSEED_PC_DIR env not set — cannot locate tsx for .ts transpile');
   }
   // Resolve tsx from PC/node_modules explicitly (subprocess cwd may be
-  // anywhere). ORKAS_PC_DIR already points at asar.unpacked in packaged
+  // anywhere). COGSEED_PC_DIR already points at asar.unpacked in packaged
   // mode, so plain filesystem resolution works.
-  const tsxEntry = path.join(process.env.ORKAS_PC_DIR, 'node_modules', 'tsx', 'dist', 'cjs', 'index.cjs');
+  const tsxEntry = path.join(process.env.COGSEED_PC_DIR, 'node_modules', 'tsx', 'dist', 'cjs', 'index.cjs');
   try {
     require(tsxEntry);
   } catch (e) {
@@ -540,7 +540,7 @@ function runViaSubprocess(scriptPath, scriptArgs, skillId) {
       if (!cmd) {
         die(
           76,
-          'Git Bash is required to run .sh skill scripts on native Windows. Install Git for Windows, set ORKAS_GIT_BASH_PATH, or provide a .ps1/.cmd/.py/.js script for this skill.',
+          'Git Bash is required to run .sh skill scripts on native Windows. Install Git for Windows, set COGSEED_GIT_BASH_PATH, or provide a .ps1/.cmd/.py/.js script for this skill.',
           { scriptPath },
         );
       }
@@ -574,7 +574,7 @@ function trySpawn(cmd, argv, skillDir, skillId, fatalOnEnoent = false) {
   try {
     child = spawn(cmd, argv, {
       stdio: 'inherit',
-      env: { ...process.env, ORKAS_SKILL_ID: skillId, ORKAS_SKILL_DIR: skillDir },
+      env: { ...process.env, COGSEED_SKILL_ID: skillId, COGSEED_SKILL_DIR: skillDir },
       windowsHide: true,
     });
   } catch (e) {
@@ -608,7 +608,7 @@ async function runAsModule(scriptPath, scriptArgs, skillId) {
   // same-name modules in PC/node_modules. PC/node_modules stays as fallback.
   const skillDir = path.dirname(path.dirname(scriptPath));
   const ownNodeModules = findUpwards(skillDir, 'node_modules', 3);
-  const pcNodeModules = path.join(process.env.ORKAS_PC_DIR, 'node_modules');
+  const pcNodeModules = path.join(process.env.COGSEED_PC_DIR, 'node_modules');
   const nodePathParts = [];
   if (ownNodeModules && path.resolve(ownNodeModules) !== path.resolve(pcNodeModules)) {
     nodePathParts.push(ownNodeModules);

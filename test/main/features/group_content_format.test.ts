@@ -28,14 +28,14 @@ vi.mock('../../../src/main/features/search', () => ({
 }));
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-onto-format-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-onto-format-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -77,7 +77,7 @@ describe('group_content_format › parseGroupContent', () => {
       '',
       '## 流水区',
       '',
-      'KSTAR 核心实现在 mate-agent 项目',
+      'KSTAR 核心实现在 cogseed-agent 项目',
       '§',
       'KSTAR 源码分布在多个位置',
     ].join('\n');
@@ -88,7 +88,7 @@ describe('group_content_format › parseGroupContent', () => {
       { value: '工具偏好：功能互补工具倾向探索整合', source: '候选' },
     ]);
     expect(c.fields['课程']).toEqual([{ value: '《知识工程》', source: '手动' }]);
-    expect(c.entries).toEqual(['KSTAR 核心实现在 mate-agent 项目', 'KSTAR 源码分布在多个位置']);
+    expect(c.entries).toEqual(['KSTAR 核心实现在 cogseed-agent 项目', 'KSTAR 源码分布在多个位置']);
   });
 
   it('old plain-text file (no zone headers) → fields empty, entries intact', async () => {

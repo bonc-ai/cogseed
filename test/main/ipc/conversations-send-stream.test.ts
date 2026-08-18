@@ -33,8 +33,8 @@ vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn(),
     on: (channel: string, fn: StreamStartFn | StreamCancelFn) => {
-      if (channel === 'orkas.streamStart') streamStartHandler = fn as StreamStartFn;
-      if (channel === 'orkas.streamCancel') streamCancelHandler = fn as StreamCancelFn;
+      if (channel === 'cogseed.streamStart') streamStartHandler = fn as StreamStartFn;
+      if (channel === 'cogseed.streamCancel') streamCancelHandler = fn as StreamCancelFn;
     },
   },
   shell: { openExternal: vi.fn(async () => undefined), showItemInFolder: vi.fn() },
@@ -77,9 +77,9 @@ let prevWs: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-send-stream-ipc-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-send-stream-ipc-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   streamStartHandler = null;
   streamCancelHandler = null;
   groupChatMock.subscribers.clear();
@@ -99,7 +99,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

@@ -19,7 +19,7 @@ const AUTH_STORE_VERSION = 1;
  *
  * Precedence:
  *   1. `CORE_AGENT_AUTH_DIR` env var (absolute path) — lets embedders pin
- *      the store to their own workspace (e.g. Orkas points this at
+ *      the store to their own workspace (e.g. CogSeed points this at
  *      `<workspace>/auth` so credentials live with the app data, not the
  *      user's home).
  *   2. `~/.core-agent` — standalone default.

@@ -1,5 +1,5 @@
 /**
- * Filesystem layout for Orkas.
+ * Filesystem layout for CogSeed.
  *
  * All path constants live here — never hardcode paths elsewhere.
  *
@@ -12,7 +12,7 @@
  *       main/                     ← index.ts + preload.js + features/...
  *       renderer/ resources/ core-agent/
  *
- *   <container>/                  ← ~/.orkas (mac/linux) or <drive>:\.orkas (Windows, pinned)
+ *   <container>/                  ← ~/.cogseed (mac/linux) or <drive>:\.cogseed (Windows, pinned)
  *     data/                       ← WS_ROOT
  *       users.json                ← Local uid registry + current_user_id / dev_current_user_id
  *       window-state.json         ← Last desktop window bounds (machine-local)
@@ -33,7 +33,7 @@
  *     userWorkSpace/              ← DEFAULT_USER_WORKSPACE (sibling of data/)
  *
  * Runtime overrides:
- *   ORKAS_WORKSPACE_ROOT   point data root elsewhere (set by index.ts to
+ *   COGSEED_WORKSPACE_ROOT   point data root elsewhere (set by index.ts to
  *                          `<container>/data`; tests / power users may
  *                          pre-set it to a tmp dir to bypass container
  *                          resolution)
@@ -61,7 +61,7 @@ function looksLikePcRoot(dir: string): boolean {
 }
 
 function resolvePcRoot(): string {
-  if (process.env.ORKAS_PC_DIR) return path.resolve(process.env.ORKAS_PC_DIR);
+  if (process.env.COGSEED_PC_DIR) return path.resolve(process.env.COGSEED_PC_DIR);
   if (looksLikePcRoot(process.cwd())) return process.cwd();
   const cwdPc = path.join(process.cwd(), 'PC');
   if (looksLikePcRoot(cwdPc)) return cwdPc;
@@ -80,11 +80,11 @@ function resolvePcRoot(): string {
 export const PC_ROOT       = resolvePcRoot();                          // PC
 export const SRC_ROOT      = path.join(PC_ROOT, 'src');                 // PC/src
 export const APP_ROOT      = PC_ROOT;
-export const PROJECT_ROOT  = path.resolve(PC_ROOT, '..');              // Orkas
+export const PROJECT_ROOT  = path.resolve(PC_ROOT, '..');              // CogSeed
 
 function packagedResourceDir(name: string): string {
-  if (name === 'builtin' && process.env.ORKAS_BUILTIN_ROOT) {
-    return path.resolve(process.env.ORKAS_BUILTIN_ROOT);
+  if (name === 'builtin' && process.env.COGSEED_BUILTIN_ROOT) {
+    return path.resolve(process.env.COGSEED_BUILTIN_ROOT);
   }
   const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
   const looksPackaged = rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`);
@@ -92,17 +92,17 @@ function packagedResourceDir(name: string): string {
 }
 
 // ── Data root ────────────────────────────────────────────────────────────
-// `index.ts` always sets `ORKAS_WORKSPACE_ROOT` before this module loads
+// `index.ts` always sets `COGSEED_WORKSPACE_ROOT` before this module loads
 // (resolveInstallContainer + one-shot migration runs first). The constant
 // is still named WS_ROOT (historical abbreviation of "workspace root" —
 // internal TS symbol, not user-facing); the env var likewise keeps its
 // old name for stability.
-if (!process.env.ORKAS_WORKSPACE_ROOT) {
+if (!process.env.COGSEED_WORKSPACE_ROOT) {
   throw new Error(
-    'paths.ts: ORKAS_WORKSPACE_ROOT not set. index.ts must run resolveInstallContainer + set the env var before importing paths.',
+    'paths.ts: COGSEED_WORKSPACE_ROOT not set. index.ts must run resolveInstallContainer + set the env var before importing paths.',
   );
 }
-export const WS_ROOT = path.resolve(process.env.ORKAS_WORKSPACE_ROOT);
+export const WS_ROOT = path.resolve(process.env.COGSEED_WORKSPACE_ROOT);
 
 // ── Top-level (machine-global, shared across uids) ───────────────────────
 // Machine-local profile registry. Persisted keys remain
@@ -114,7 +114,7 @@ export const USERS_FILE        = path.join(WS_ROOT, 'users.json');
 export const WINDOW_STATE_FILE = path.join(WS_ROOT, 'window-state.json');
 // Machine-local logs (daily rolling, single global file shared across uids).
 export const LOGS_DIR          = path.join(WS_ROOT, 'logs');
-// Machine-local dependency environments shared across Orkas accounts on this
+// Machine-local dependency environments shared across CogSeed accounts on this
 // device. Lives directly under data/ so app updates never overwrite it and
 // multiple uids do not redownload the same package wheels.
 export const VENV_ROOT         = path.join(WS_ROOT, 'venv');
@@ -160,7 +160,7 @@ export const userChatAttachmentsDir = (uid: string) => path.join(userCloudRoot(u
 export const chatAttachmentDir      = (uid: string, cid: string) => path.join(userChatAttachmentsDir(uid), cid);
 
 // LLM-generated interactive web-app bundles (artifacts). Layout:
-// `<uid>/cloud/chat_artifacts/<cid>/<artifactId>/{index.html, ...assets, __orkas-meta.json}`.
+// `<uid>/cloud/chat_artifacts/<cid>/<artifactId>/{index.html, ...assets, __cogseed-meta.json}`.
 // Served read-only via the `chat-app://` protocol (see index.ts). Cloud-synced
 // with the conversation; purged by cid on conversation delete. Kept as a
 // separate pool from chat_attachments/ on purpose — attachments are user
@@ -172,7 +172,7 @@ export const artifactDir          = (uid: string, cid: string, artifactId: strin
   path.join(chatArtifactCidDir(uid, cid), artifactId);
 
 // User-kept copies of `create_artifact` apps ("My Apps"). Layout:
-// `<uid>/cloud/saved_apps/<appId>/{index.html, ...siblings, __orkas-meta.json}`.
+// `<uid>/cloud/saved_apps/<appId>/{index.html, ...siblings, __cogseed-meta.json}`.
 // Cloud-synced; never auto-purged (conversation-independent — only the user's
 // explicit delete from the My Apps tab removes one). Served read-only via the
 // `chat-app://saved` protocol for the in-app viewer; external open still uses
@@ -338,10 +338,10 @@ export const autoTaskDir = (uid: string, taskId: string) => path.join(userAutoTa
 export const autoTaskConfigFile = (uid: string, taskId: string) => path.join(autoTaskDir(uid, taskId), 'config.json');
 export const autoTaskAttachmentsDir = (uid: string, taskId: string) => path.join(autoTaskDir(uid, taskId), 'attachments');
 // Connector registry: installed MCP server instances + cached tool schemas + OAuth grants
-// (local-secret encrypted with the active Orkas account's OAuth user_id as owner — see
+// (local-secret encrypted with the active CogSeed account's OAuth user_id as owner — see
 // `features/connectors/registry.ts`). Cloud-synced as of 2026-05-15 so a user authorizing on
 // one device sees the same connectors on another. **Secret owner:** OAuth user_id (not local uid)
-// so any device logged into the same Orkas account can decrypt; OrkasOpen / not-logged-in
+// so any device logged into the same CogSeed account can decrypt; CogSeedOpen / not-logged-in
 // users fall back to local uid (the file then sits in cloud/config/ but doesn't actually
 // sync — sync engine is inactive without an account).
 export const userConnectorsConfigFile = (uid: string) => path.join(userCloudConfigDir(uid), 'connectors.json');
@@ -492,10 +492,10 @@ export const localCliSessionsFile = (uid: string, cid: string) =>
 // ── External packages (machine-private, verbatim third-party repos) ─────
 // `<uid>/local/packages/<name>/` hosts a cloned open-source repo UNMODIFIED
 // (including node_modules when consented — Python venvs live under top-level
-// data/venv so they can be reused across Orkas accounts on this device).
+// data/venv so they can be reused across CogSeed accounts on this device).
 // Package metadata lives OUTSIDE the package dirs in the
-// sidecar `_registry.json` so `git pull` updates never conflict with Orkas
-// bookkeeping. The registry is written only by `bin/orkas-pkg.cjs` (the
+// sidecar `_registry.json` so `git pull` updates never conflict with CogSeed
+// bookkeeping. The registry is written only by `bin/cogseed-pkg.cjs` (the
 // bash-driven installer CLI); main-process code reads it via
 // `features/packages.ts`. Marketplace reconcile must never touch this tree.
 // `.bin/` holds generated shims for CLI-shaped packages; it is injected into
@@ -509,10 +509,10 @@ export const userPackagesBinDir       = (uid: string) => path.join(userPackagesD
 // ── CLI-package companion skills (machine-private, main+CLI-owned) ──────
 // `<uid>/local/package_skills/<pkg>/SKILL.md` is an auto-authored usage skill
 // that teaches the commander how to drive a CLI-only external package. It is
-// kept OUTSIDE the verbatim `local/packages/<pkg>/` tree (which orkas-pkg.cjs
-// never writes Orkas files into) and OUTSIDE cloud/ (so a machine-specific CLI
+// kept OUTSIDE the verbatim `local/packages/<pkg>/` tree (which cogseed-pkg.cjs
+// never writes CogSeed files into) and OUTSIDE cloud/ (so a machine-specific CLI
 // wrapper never syncs to a device where the package is not installed). Written
-// out-of-process by `bin/orkas-pkg.cjs skill-write`; read in main via
+// out-of-process by `bin/cogseed-pkg.cjs skill-write`; read in main via
 // `features/package_skills.ts`. Lifecycle is keyed to the package by dir name.
 export const userPackageSkillsDir = (uid: string) => path.join(userLocalRoot(uid), 'package_skills');
 export const userPackageSkillDir  = (uid: string, name: string) => path.join(userPackageSkillsDir(uid), name);
@@ -522,13 +522,13 @@ export const userPackageSkillDir  = (uid: string, name: string) => path.join(use
 // purely for interop: `~/.claude/skills` (claude-code) and `~/.codex/skills`
 // (codex). Both CLIs use the same `<id>/SKILL.md` layout, and each ships its
 // system skills under a dot dir (`.system` etc.) which SkillLoader skips.
-// There is intentionally NO Orkas-native `~/.orkas/skills` root: it was unused
+// There is intentionally NO CogSeed-native `~/.cogseed/skills` root: it was unused
 // (no installer ever populated it) and only widened the untrusted-content
-// attack surface, so it was dropped — Orkas skills live under the data root
+// attack surface, so it was dropped — CogSeed skills live under the data root
 // (custom / marketplace) or in tracked external packages instead. All roots
-// here are READ-ONLY to Orkas: never write, normalize, or reconcile them.
+// here are READ-ONLY to CogSeed: never write, normalize, or reconcile them.
 // Gated by the `global_skill_roots_enabled` preference and injected only into
-// in-app task/authoring sessions — never through the orkas-bridge, because
+// in-app task/authoring sessions — never through the cogseed-bridge, because
 // each CLI reads its own global dir natively (see skill-registry.ts::listSkillsForBridge).
 export const globalSkillRoots = (): string[] => [
   path.join(os.homedir(), '.claude', 'skills'),

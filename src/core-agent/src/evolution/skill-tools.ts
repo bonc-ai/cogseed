@@ -9,7 +9,7 @@ const log = createLogger("skill-manage");
  * patch, list, and delete learned skills.
  *
  * `onCreated` fires after a successful `create` action with the new skill
- * id — Orkas uses this to append the new skill to the current agent's
+ * id — CogSeed uses this to append the new skill to the current agent's
  * `skill_list` so the runtime allowlist filter can see it on the next turn.
  * The callback is fire-and-forget; exceptions are logged but don't fail
  * the tool call.

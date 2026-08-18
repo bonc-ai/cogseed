@@ -1,10 +1,10 @@
 import type { RuntimeHostToolName } from '../cogseed_runtime/protocol';
-import type { MateHostToolResult, MateHostToolScope } from './office-adapter';
-import { mateBrowserManager, type MateBrowserManager } from './browser-manager';
+import type { CogSeedHostToolResult, CogSeedHostToolScope } from './office-adapter';
+import { cogseedBrowserManager, type CogSeedBrowserManager } from './browser-manager';
 
-export function createMateBrowserAdapter(manager: MateBrowserManager = mateBrowserManager) {
+export function createCogSeedBrowserAdapter(manager: CogSeedBrowserManager = cogseedBrowserManager) {
   return {
-    async run(name: Extract<RuntimeHostToolName, `browser_${string}`>, input: Record<string, unknown>, scope: MateHostToolScope, opts: { signal?: AbortSignal | null } = {}): Promise<MateHostToolResult> {
+    async run(name: Extract<RuntimeHostToolName, `browser_${string}`>, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts: { signal?: AbortSignal | null } = {}): Promise<CogSeedHostToolResult> {
       if (name === 'browser_open') return manager.open(scope, typeof input.url === 'string' ? input.url : '', opts);
       if (name === 'browser_snapshot') return manager.snapshot(scope, typeof input.maxChars === 'number' ? input.maxChars : undefined);
       if (name === 'browser_click') return manager.click(scope, Number(input.ref));
@@ -13,4 +13,4 @@ export function createMateBrowserAdapter(manager: MateBrowserManager = mateBrows
     },
   };
 }
-export const mateBrowserAdapter = createMateBrowserAdapter();
+export const cogseedBrowserAdapter = createCogSeedBrowserAdapter();

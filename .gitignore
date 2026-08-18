@@ -49,6 +49,14 @@ package.json.new
 # deliberately; this file is local state and would churn per developer.
 /.claude/settings.local.json
 
+# Closed-source security engines (vendored from internal desktop, not published).
+# Kept in the developer working tree for local scan/dev, but NOT tracked by the
+# open-source repository — stripped at release time by
+# scripts/strip-closed-source-scanner.mjs.
+/resources/guardrail/skill-sentry/
+/resources/guardrail/skill-declaration-core/
+/resources/guardrail/nseap-security-core/
+
 # Generated at release time by scripts/pin-scanner-integrity.mjs. Describes the
 # scanner tree it sits beside, so it is not source and must not be committed —
 # a stale pin would report a clean tree as tampered.

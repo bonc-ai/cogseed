@@ -8,14 +8,14 @@ let prevWs: string | undefined;
 const TEST_UID = 'u-persist';
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-local-agent-persist-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-local-agent-persist-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

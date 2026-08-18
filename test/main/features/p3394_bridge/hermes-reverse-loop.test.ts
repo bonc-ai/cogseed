@@ -28,8 +28,8 @@ const openChannels: P3394HttpChannel[] = [];
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-reverse-loop-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
 });
 
 afterEach(async () => {
@@ -37,8 +37,8 @@ afterEach(async () => {
     if (child.exitCode === null) child.kill('SIGKILL');
   }
   for (const channel of openChannels.splice(0)) await channel.close().catch(() => {});
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

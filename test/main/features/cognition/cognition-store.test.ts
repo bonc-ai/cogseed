@@ -44,7 +44,7 @@ import {
 import { userMemoryFile } from '../../../../src/main/paths';
 
 const uid = 'cognition-store-user';
-const workspaceRoot = process.env.ORKAS_WORKSPACE_ROOT as string;
+const workspaceRoot = process.env.COGSEED_WORKSPACE_ROOT as string;
 const cognitionFile = path.join(workspaceRoot, uid, 'cloud', 'cognition', 'assets.json');
 
 const evidence: CognitionEvidenceInput = {
@@ -1048,7 +1048,7 @@ describe('cognition store', () => {
     expect(invalidated.reviewState).toBe('invalidated');
     expect(invalidated.invalidation?.reason).toBe('metadata_missing');
     const memory = await import('../../../../src/main/features/memory');
-    expect(memory.formatForSystemPrompt(uid)).not.toContain('mate-agent-memory:v1');
+    expect(memory.formatForSystemPrompt(uid)).not.toContain('cogseed-agent-memory:v1');
   });
 
   it('机器来源记忆只在对应认知仍有效时进入模型上下文', async () => {

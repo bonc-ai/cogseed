@@ -40,9 +40,9 @@ function writeOrdinaryAgent(agentId: string): void {
 }
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-runner-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runner-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(TEST_UID);
@@ -53,7 +53,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -422,13 +422,13 @@ describe('local_agents/runner', () => {
 
   it('emits idle events when the backend goes quiet beyond the threshold', async () => {
     // Use real timers but shrink the threshold via env vars. The
-    // ORKAS_LOCAL_AGENT_IDLE_MIN_MS escape hatch exists exactly so
+    // COGSEED_LOCAL_AGENT_IDLE_MIN_MS escape hatch exists exactly so
     // unit tests can exercise the heartbeat at ~100ms rather than
     // the 30s production floor.
-    const prevIdleMs = process.env.ORKAS_LOCAL_AGENT_IDLE_MS;
-    const prevIdleMin = process.env.ORKAS_LOCAL_AGENT_IDLE_MIN_MS;
-    process.env.ORKAS_LOCAL_AGENT_IDLE_MIN_MS = '50';
-    process.env.ORKAS_LOCAL_AGENT_IDLE_MS = '120';   // threshold 120ms
+    const prevIdleMs = process.env.COGSEED_LOCAL_AGENT_IDLE_MS;
+    const prevIdleMin = process.env.COGSEED_LOCAL_AGENT_IDLE_MIN_MS;
+    process.env.COGSEED_LOCAL_AGENT_IDLE_MIN_MS = '50';
+    process.env.COGSEED_LOCAL_AGENT_IDLE_MS = '120';   // threshold 120ms
     vi.useFakeTimers();
     try {
       mockDetect.mockResolvedValue({ type: 'claude', available: true, path: '/fake/claude', version: '2.0.0' });
@@ -487,10 +487,10 @@ describe('local_agents/runner', () => {
       await promise;
     } finally {
       vi.useRealTimers();
-      if (prevIdleMs === undefined) delete process.env.ORKAS_LOCAL_AGENT_IDLE_MS;
-      else process.env.ORKAS_LOCAL_AGENT_IDLE_MS = prevIdleMs;
-      if (prevIdleMin === undefined) delete process.env.ORKAS_LOCAL_AGENT_IDLE_MIN_MS;
-      else process.env.ORKAS_LOCAL_AGENT_IDLE_MIN_MS = prevIdleMin;
+      if (prevIdleMs === undefined) delete process.env.COGSEED_LOCAL_AGENT_IDLE_MS;
+      else process.env.COGSEED_LOCAL_AGENT_IDLE_MS = prevIdleMs;
+      if (prevIdleMin === undefined) delete process.env.COGSEED_LOCAL_AGENT_IDLE_MIN_MS;
+      else process.env.COGSEED_LOCAL_AGENT_IDLE_MIN_MS = prevIdleMin;
     }
   });
 

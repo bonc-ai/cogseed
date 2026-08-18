@@ -8,7 +8,7 @@
  * pass `--apply` to write.
  *
  * Usage:
- *   ORKAS_WORKSPACE_ROOT="$HOME/.cogseed/runtime-variants/cogseed/data" \
+ *   COGSEED_WORKSPACE_ROOT="$HOME/.cogseed/runtime-variants/cogseed/data" \
  *     DEEPSEEK_API_KEY="sk-..." \
  *     npx tsx scripts/configure-deepseek-provider.ts [--apply]
  */
@@ -18,9 +18,9 @@ import { activateUser } from '../src/main/features/users';
 import { addCustomProvider, listCustomProviders } from '../src/main/features/custom_providers';
 
 const APPLY = process.argv.includes('--apply');
-const wsRoot = process.env.ORKAS_WORKSPACE_ROOT;
+const wsRoot = process.env.COGSEED_WORKSPACE_ROOT;
 if (!wsRoot) {
-  console.error('ORKAS_WORKSPACE_ROOT not set. Run with ORKAS_WORKSPACE_ROOT=<data dir>.');
+  console.error('COGSEED_WORKSPACE_ROOT not set. Run with COGSEED_WORKSPACE_ROOT=<data dir>.');
   process.exit(2);
 }
 if (!BASE_URL) {

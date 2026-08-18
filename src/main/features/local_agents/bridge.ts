@@ -86,9 +86,9 @@ export interface StartBridgeOpts {
   runId: string;
   /** Where to write the per-run mcp-config file (the persist run dir). */
   configDir: string;
-  /** Static skill-sandbox env (ORKAS_NODE / ORKAS_PC_DIR /
-   *  ORKAS_WORKSPACE_ROOT / ELECTRON_RUN_AS_NODE plus optional bundled
-   *  ORKAS_PYTHON / ORKAS_UV) — reused so the bridge server resolves the
+  /** Static skill-sandbox env (COGSEED_NODE / COGSEED_PC_DIR /
+   *  COGSEED_WORKSPACE_ROOT / ELECTRON_RUN_AS_NODE plus optional bundled
+   *  COGSEED_PYTHON / COGSEED_UV) — reused so the bridge server resolves the
    *  SDK and run-skill.cjs exactly like command execution does. */
   sandboxEnv: Record<string, string>;
   /** Optional host orchestration surface for Commander-capable CLI backends. */
@@ -310,26 +310,26 @@ export async function startBridge(opts: StartBridgeOpts): Promise<BridgeHandle> 
   // overrides and process-info events never need to serialize it.
   const secretServerEnv: Record<string, string> = {
     ...opts.sandboxEnv,
-    ORKAS_UID: opts.uid,
-    ORKAS_AGENT_ID: opts.agentId,
-    ORKAS_BRIDGE_SOCKET: socketPath,
-    ORKAS_BRIDGE_TOKEN: token,
+    COGSEED_UID: opts.uid,
+    COGSEED_AGENT_ID: opts.agentId,
+    COGSEED_BRIDGE_SOCKET: socketPath,
+    COGSEED_BRIDGE_TOKEN: token,
   };
   const serverEnvFilePath = path.join(opts.configDir, 'cogseed-bridge-env.json');
   const serverEnv: Record<string, string> = {
-    ORKAS_BRIDGE_ENV_FILE: serverEnvFilePath,
+    COGSEED_BRIDGE_ENV_FILE: serverEnvFilePath,
   };
-  for (const key of ['ELECTRON_RUN_AS_NODE', 'ORKAS_NODE', 'ORKAS_PC_DIR']) {
+  for (const key of ['ELECTRON_RUN_AS_NODE', 'COGSEED_NODE', 'COGSEED_PC_DIR']) {
     const value = opts.sandboxEnv[key];
     if (value) serverEnv[key] = value;
   }
 
   // MCP config file the CLI agent consumes (claude `--mcp-config <path>`).
-  const bridgeEntry = path.join(opts.sandboxEnv.ORKAS_PC_DIR || '', 'bin', 'cogseed-bridge.cjs');
+  const bridgeEntry = path.join(opts.sandboxEnv.COGSEED_PC_DIR || '', 'bin', 'cogseed-bridge.cjs');
   const mcpConfig = {
     mcpServers: {
       cogseed: {
-        command: opts.sandboxEnv.ORKAS_NODE || process.execPath,
+        command: opts.sandboxEnv.COGSEED_NODE || process.execPath,
         args: [bridgeEntry],
         env: serverEnv,
       },

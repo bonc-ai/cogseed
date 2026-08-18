@@ -1,8 +1,8 @@
 /**
- * Registry of local CLI coding agents Orkas can spawn.
+ * Registry of local CLI coding agents CogSeed can spawn.
  *
  * Discovery rules per CLI:
- *   1. ORKAS_<TYPE>_PATH env var, if set → use as-is (still validated).
+ *   1. COGSEED_<TYPE>_PATH env var, if set → use as-is (still validated).
  *   2. Else `whichBin(defaultBin)` scans PATH plus standard GUI-app
  *      fallback dirs (`~/.local/bin`, Homebrew locations, etc.).
  *   3. If found, run the CLI's documented version probe and `checkMinVersion`.
@@ -47,14 +47,14 @@ const BIN_NAMES: Record<LocalCliType, string> = {
 
 /** Env var to override default binary path per CLI. */
 const ENV_KEYS: Record<LocalCliType, string> = {
-  claude: 'ORKAS_CLAUDE_PATH',
-  codex: 'ORKAS_CODEX_PATH',
-  openclaw: 'ORKAS_OPENCLAW_PATH',
-  opencode: 'ORKAS_OPENCODE_PATH',
-  hermes: 'ORKAS_HERMES_PATH',
-  workbuddy: 'ORKAS_WORKBUDDY_PATH',
-  gemini: 'ORKAS_GEMINI_PATH',
-  aider: 'ORKAS_AIDER_PATH',
+  claude: 'COGSEED_CLAUDE_PATH',
+  codex: 'COGSEED_CODEX_PATH',
+  openclaw: 'COGSEED_OPENCLAW_PATH',
+  opencode: 'COGSEED_OPENCODE_PATH',
+  hermes: 'COGSEED_HERMES_PATH',
+  workbuddy: 'COGSEED_WORKBUDDY_PATH',
+  gemini: 'COGSEED_GEMINI_PATH',
+  aider: 'COGSEED_AIDER_PATH',
 };
 
 /** Documented version probes for each CLI, in compatibility order. */

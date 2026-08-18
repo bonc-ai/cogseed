@@ -14,7 +14,7 @@ const venvPython = process.platform === 'win32'
   : path.resolve(venvDir, 'bin', 'python');
 
 const setupCandidates = [
-  process.env.ORKAS_TEST_SETUP_PYTHON,
+  process.env.COGSEED_TEST_SETUP_PYTHON,
   ...buildPythonCandidates({ appRoot }).filter((candidate) => path.resolve(candidate) !== venvPython),
 ].filter((value, index, all) => value && all.indexOf(value) === index);
 const basePython = setupCandidates.find((candidate) => {

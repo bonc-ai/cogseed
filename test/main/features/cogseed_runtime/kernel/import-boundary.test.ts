@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { createMateAgentKernel } from '../../../../../src/main/features/cogseed_runtime/kernel';
+import { createCogSeedAgentKernel } from '../../../../../src/main/features/cogseed_runtime/kernel';
 import { createNativeRuntimeSession, appendNativeSessionRecord } from '../../../../../src/main/features/cogseed_runtime/kernel/session-store';
 import * as paths from '../../../../../src/main/paths';
 import type { RuntimeModelAdapter } from '../../../../../src/main/features/cogseed_runtime/kernel/model-adapter';
@@ -45,14 +45,14 @@ afterEach(() => {
 
 describe('native Runtime kernel import boundary', () => {
   it('exposes a single factory entrypoint', () => {
-    const kernel = createMateAgentKernel();
+    const kernel = createCogSeedAgentKernel();
     expect(typeof kernel.run).toBe('function');
     expect(typeof kernel.cancel).toBe('function');
     expect(typeof kernel.getSession).toBe('function');
   });
 
   it('returns a stable not-ready event for Phase 1 run calls', async () => {
-    const kernel = createMateAgentKernel();
+    const kernel = createCogSeedAgentKernel();
     const events = [];
     for await (const event of kernel.run({
       userId: UID,
@@ -86,7 +86,7 @@ describe('native Runtime kernel import boundary', () => {
         yield { type: 'done' };
       },
     };
-    const kernel = createMateAgentKernel({
+    const kernel = createCogSeedAgentKernel({
       modelAdapter,
       toolRunner: { catalog: [], async run(): Promise<RuntimeToolResult> { return { content: 'unused' }; } },
     });
@@ -120,10 +120,10 @@ describe('native Runtime kernel import boundary', () => {
       created_at: '2026-08-04T00:00:01',
     });
 
-    await expect(createMateAgentKernel().getSession(UID, 'mruntime-summary')).resolves.toEqual({
+    await expect(createCogSeedAgentKernel().getSession(UID, 'mruntime-summary')).resolves.toEqual({
       runtimeSessionId: 'mruntime-summary',
       version: 1,
-      kernel: 'mate-agent-native',
+      kernel: 'cogseed-agent-native',
       recordCount: 2,
       lastRequestId: 'req-summary',
     });

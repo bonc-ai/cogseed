@@ -48,7 +48,7 @@ describe('OfficeCLI engine', () => {
   let tmpDir = '';
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-office-engine-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-office-engine-'));
     mocks.bin = path.join(tmpDir, process.platform === 'win32' ? 'officecli.exe' : 'officecli');
     mocks.spawn.mockReset();
     mocks.spawnSync.mockReset();
@@ -140,7 +140,7 @@ describe('OfficeCLI engine', () => {
   it('uses a hidden absolute taskkill tree command for the Windows resident sweep', () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
     vi.stubEnv('SystemRoot', 'D:\\Windows');
-    mocks.bin = 'D:\\Orkas\\resources\\officecli\\officecli-win-x64.exe';
+    mocks.bin = 'D:\\CogSeed\\resources\\officecli\\officecli-win-x64.exe';
 
     closeAllOfficeResidents();
 

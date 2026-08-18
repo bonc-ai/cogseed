@@ -56,7 +56,7 @@ type BackendBridgeConfig = NonNullable<BackendRunOptions['bridge']>;
 export function buildAcpMcpServersForSession(bridge?: BackendBridgeConfig): Array<Record<string, unknown>> {
   if (!bridge) return [];
   return [{
-    name: 'orkas',
+    name: 'cogseed',
     command: bridge.server.command,
     args: bridge.server.args,
     env: Object.entries(bridge.server.env || {}).map(([name, value]) => ({ name, value: String(value) })),

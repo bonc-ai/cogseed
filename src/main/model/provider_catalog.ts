@@ -404,7 +404,7 @@ export function providerRecommended(id: string): boolean {
 }
 
 /**
- * Providers Orkas supports via a custom adapter in
+ * Providers CogSeed supports via a custom adapter in
  * `model/core-agent/external-providers.ts`, NOT via pi-ai's built-in
  * provider registry. `listProviders()` treats these as API-key-capable
  * even though `listPiProviders()` doesn't list them.

@@ -2,7 +2,7 @@
  * 能力包（Ability Pack）线已按决策一删除；本文件只保留资产引用类型。
  *
  * **删除理由**：`buildCapabilityPack` / `loadCapabilityPackToTarget` 从来没有
- * 生产调用方——没有 IPC、没有 feature 调用，`cloud/mate_agent/capability-packs/`
+ * 生产调用方——没有 IPC、没有 feature 调用，`cloud/cogseed/capability-packs/`
  * 恒为空目录，测试验证的是"自己造包再自己读包"。「Asset → Pack → Reuse 已打通」
  * 是假的。真实复用由两条**有回执与证明**的路径承担：
  *   - Context Projection（每回合自动投影 → prompt 注入 → ContextReuseReceipt）

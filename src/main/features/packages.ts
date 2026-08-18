@@ -3,7 +3,7 @@
  * domain (verbatim third-party repos; Python envs live under data/venv; see paths.ts and
  * docs/plans/open-ecosystem-architecture.md §A).
  *
- * Write-side lives in `bin/orkas-pkg.cjs` (the bash-driven installer CLI,
+ * Write-side lives in `bin/cogseed-pkg.cjs` (the bash-driven installer CLI,
  * standalone CJS like run-skill.cjs). The contract between the two is the
  * `_registry.json` schema below. Main-process code must treat the whole
  * packages tree as read-only: never normalize package contents, never
@@ -207,7 +207,7 @@ export function buildEnvSummaryLine(uid: string): string {
 }
 
 /**
- * Run an orkas-pkg.cjs subcommand from the main process (UI-initiated
+ * Run an cogseed-pkg.cjs subcommand from the main process (UI-initiated
  * enable/disable/update/remove). The CLI is the SINGLE writer of
  * `_registry.json` (CLAUDE.md invariant) — the UI must never edit the
  * registry directly, so management actions funnel through here. Install is
@@ -312,10 +312,10 @@ function buildPackageCommandEnv(uid: string, pcDir: string): NodeJS.ProcessEnv {
     ...process.env,
     ...bundledRuntimeEnv(),
     ELECTRON_RUN_AS_NODE: '1',
-    ORKAS_UID: uid,
-    ORKAS_PC_DIR: pcDir,
-    ORKAS_WORKSPACE_ROOT: WS_ROOT,
-    ORKAS_VENV_ROOT: VENV_ROOT,
+    COGSEED_UID: uid,
+    COGSEED_PC_DIR: pcDir,
+    COGSEED_WORKSPACE_ROOT: WS_ROOT,
+    COGSEED_VENV_ROOT: VENV_ROOT,
     NPM_CONFIG_CACHE: NODE_NPM_CACHE_DIR,
     NPM_CONFIG_PREFIX: NODE_NPM_PREFIX_DIR,
     NPM_CONFIG_FUND: 'false',
@@ -383,9 +383,9 @@ export function runPackageCommand(uid: string, command: string, name: string): P
     } catch { /* not in electron (tests) */ }
     // Vitest itself runs under Electron-as-Node for native ABI parity, but
     // standalone JS helpers should use the outer Node executable so tests do
-    // not create extra Orkas-named Electron processes.
-    const node = process.env.ORKAS_TEST_NODE || process.execPath;
-    const script = path.join(pcDir, 'bin', 'orkas-pkg.cjs');
+    // not create extra CogSeed-named Electron processes.
+    const node = process.env.COGSEED_TEST_NODE || process.execPath;
+    const script = path.join(pcDir, 'bin', 'cogseed-pkg.cjs');
     void runPackageProcessForTest(node, [script, command, name], {
       env: buildPackageCommandEnv(uid, pcDir),
     }).then((result) => {
@@ -396,7 +396,7 @@ export function runPackageCommand(uid: string, command: string, name: string): P
       if (result.code === 0) { finish({ ok: true, stdout: result.stdout }); return; }
       let error = result.stderr.trim();
       try { const j = JSON.parse(error.slice(error.indexOf('{'))); if (j && j.error) error = j.error; } catch { /* keep raw */ }
-      finish({ ok: false, stdout: result.stdout, error: error || `orkas-pkg exited ${result.code}` });
+      finish({ ok: false, stdout: result.stdout, error: error || `cogseed-pkg exited ${result.code}` });
     });
   });
 }

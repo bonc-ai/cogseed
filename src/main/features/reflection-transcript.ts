@@ -38,7 +38,7 @@ const SYSTEM_EVENT_TYPES: SignalType[] = ['retry', 'skip', 'form_left_blank', 's
 /** Estimate token count. CJK chars count as ~0.7 token each; other chars
  *  as ~0.25 token (≈4 chars/token English heuristic). Empirically within
  *  ~10% of model tokenizers for mixed Chinese / English text. */
-export function estimateTokens(text: string): number {
+export function esticogseedTokens(text: string): number {
   // CJK Unified Ideographs (U+4E00–U+9FFF) + Hiragana (U+3040–U+309F)
   // + Katakana (U+30A0–U+30FF) + Hangul Syllables (U+AC00–U+D7AF).
   const cjkChars = (text.match(/[一-鿿぀-ヿ가-힯]/g) || []).length;
@@ -351,7 +351,7 @@ export async function buildTranscript(
 
   while (kept.length > 1) {
     const full = `${header}\n\n${kept.map(formatConvSection).join('\n\n')}`;
-    if (estimateTokens(full) <= MAX_TOKENS) {
+    if (esticogseedTokens(full) <= MAX_TOKENS) {
       return _result(full, convsConsidered, kept.length, convsTruncated);
     }
     kept.shift();
@@ -360,7 +360,7 @@ export async function buildTranscript(
 
   // Single section remaining — emit even if it exceeds budget (logged).
   const full = `${header}\n\n${formatConvSection(kept[0])}`;
-  const tokens = estimateTokens(full);
+  const tokens = esticogseedTokens(full);
   if (tokens > MAX_TOKENS) {
     log.warn(`transcript exceeds token cap: ${tokens} > ${MAX_TOKENS} (single conv ${kept[0].conv.conversation_id} kept)`);
   }
@@ -382,7 +382,7 @@ function _empty(): TranscriptResult {
 }
 
 function _result(text: string, considered: number, included: number, truncated: number): TranscriptResult {
-  const estimatedTokens = estimateTokens(text);
+  const estimatedTokens = esticogseedTokens(text);
   if (truncated > 0) {
     log.info(`transcript: ${included}/${considered} convs included, ${truncated} dropped (caps), ~${estimatedTokens} tokens`);
   }

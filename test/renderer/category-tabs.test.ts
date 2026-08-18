@@ -265,19 +265,19 @@ describe('agent and skill category tabs', () => {
       _skillsCache = [];
       _openSkillsCache = [];
       _packagesCache = [{
-        name: 'orkas-cli-smoke',
+        name: 'cogseed-cli-smoke',
         kind: 'cli',
         enabled: true,
         skill_count: 0,
-        bin_names: ['orkas-cli-smoke']
+        bin_names: ['cogseed-cli-smoke']
       }];
       renderSkillsGrid([]);
     `, context);
 
     const html = el('skills-grid').innerHTML;
     expect(html).toContain('外部包');
-    expect(html).toContain('orkas-cli-smoke');
-    expect(html).toContain('命令行 · `orkas-cli-smoke`');
+    expect(html).toContain('cogseed-cli-smoke');
+    expect(html).toContain('命令行 · `cogseed-cli-smoke`');
     expect(html).toContain('skill-card is-readonly');
     expect(html).toContain('data-open-package-card');
     expect(html).toContain('data-open-package-more');

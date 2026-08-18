@@ -6,7 +6,6 @@
   "main": "bootstrap.cjs",
   "type": "commonjs",
   "packageManager": "npm@11.11.0",
-  "orkasSourceRuntimeVariant": "cogseed",
   "imports": {
     "#core-agent": "./src/core-agent/src/index.ts"
   },
@@ -49,7 +48,8 @@
     "p3394:doctor": "tsx scripts/p3394-doctor.ts",
     "p3394:demo": "tsx scripts/p3394-demo.ts",
     "p3394:hermes-server": "tsx scripts/p3394-hermes-server.ts",
-    "p3394:call": "tsx scripts/p3394-call.ts"
+    "p3394:call": "tsx scripts/p3394-call.ts",
+    "audit:identity": "node scripts/check-cogseed-only-identifiers.mjs"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
@@ -77,7 +77,7 @@
     "jimp": "^1.6.1",
     "mammoth": "^1.12.0",
     "node-pty": "^1.0.0",
-    "pdfjs-dist": "^5.6.205",
+    "pdfjs-dist": "^6.2.108",
     "socks-proxy-agent": "^8.0.5",
     "sqlite-vec": "^0.1.9",
     "tar": "7.5.20",
@@ -97,9 +97,7 @@
       {
         "name": "CogSeed Connector Callback",
         "schemes": [
-          "cogseed",
-          "mateagent",
-          "orkas"
+          "cogseed"
         ],
         "role": "Viewer"
       }
@@ -272,5 +270,6 @@
     },
     "artifactName": "CogSeed-${version}-${os}-${arch}.${ext}"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "cogseedSourceRuntimeVariant": "cogseed"
 }

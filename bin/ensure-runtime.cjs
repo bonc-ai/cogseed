@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Ensure Orkas' pinned Python/uv/Node runtime exists.
+ * Ensure CogSeed' pinned Python/uv/Node runtime exists.
  *
  * Build-time use:
  *   node bin/ensure-runtime.cjs --root resources/runtime --platform darwin --arch arm64
@@ -23,7 +23,7 @@ const {
   verifyRuntimeDir,
 } = require('./runtime-gate.cjs');
 
-const MARKER = '.orkas-runtime.json';
+const MARKER = '.cogseed-runtime.json';
 const KINDS = MANIFEST_RUNTIME_KINDS;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -84,7 +84,7 @@ function pcRoot() {
 }
 
 function defaultResourceRoot() {
-  if (process.env.ORKAS_RUNTIME_DIR) return path.resolve(process.env.ORKAS_RUNTIME_DIR);
+  if (process.env.COGSEED_RUNTIME_DIR) return path.resolve(process.env.COGSEED_RUNTIME_DIR);
   const rp = process.resourcesPath;
   if (rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)) {
     return path.join(rp, 'runtime');
@@ -192,7 +192,7 @@ function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const started = Date.now();
     const request = (currentUrl, redirectsLeft) => {
-      const req = https.get(currentUrl, { headers: { 'User-Agent': 'OrkasRuntime/1.0' } }, (res) => {
+      const req = https.get(currentUrl, { headers: { 'User-Agent': 'CogSeedRuntime/1.0' } }, (res) => {
         const code = res.statusCode || 0;
         if (code >= 300 && code < 400 && res.headers.location) {
           res.resume();

@@ -2,14 +2,14 @@
  * Server-bridge stubs for connector OAuth in the open-source build.
  *
  * PC's `features/connectors/oauth*.ts` reaches into `features/account/{server,token_store}` for:
- *   - `accountApiBase()` — the Orkas global prod Server base URL
+ *   - `accountApiBase()` — the CogSeed global prod Server base URL
  *   - `tokenStore.getDeviceId()` — stable per-machine UUID
  *   - `tokenStore.authHeaders()` — `{user_id, session_id}` for the logged-in user
  *
  * `features/account/` is stripped from the public build (no account backend). Connectors still
  * need the first two pieces for the pinned global HTTPS callback/bridge. Server-bridge exchange
  * and refresh accept `channel=open` plus this stable device id; the third piece is always empty
- * because this build never has an Orkas account session.
+ * because this build never has an CogSeed account session.
  *
  * Where each piece comes from:
  *   - `accountApiBase` aliases `features/marketplace.apiBase()` (global prod only — single

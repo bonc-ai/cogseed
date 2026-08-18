@@ -1,6 +1,6 @@
 {
-  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
-  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only E-runtime-restart-v1",
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only E-runtime-restart-v1",
   "inputs": {
     "completed_before_restart": true,
     "run_id": "run-recovery-1",

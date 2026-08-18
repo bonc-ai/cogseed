@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sig-storage-'));
-process.env.ORKAS_WORKSPACE_ROOT = TMP;
+process.env.COGSEED_WORKSPACE_ROOT = TMP;
 // Seed users.json so activateUser doesn't have to invent one
 fs.writeFileSync(path.join(TMP, 'users.json'),
   JSON.stringify({ current_user_id: '99999999', users: [{ user_id: '99999999', created_at: new Date().toISOString() }] }));

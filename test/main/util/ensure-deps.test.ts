@@ -32,7 +32,7 @@ function writeManifest(nodeModulesDir: string, name: string, contents: unknown =
 
 describe('ensure-deps package-tree health', () => {
   it('detects missing and corrupt required package manifests while ignoring optional packages', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-dependency-health-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-dependency-health-'));
     tempDirs.push(root);
     const packageFile = path.join(root, 'package.json');
     const nodeModulesDir = path.join(root, 'node_modules');

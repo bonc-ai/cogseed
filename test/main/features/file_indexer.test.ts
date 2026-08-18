@@ -14,23 +14,23 @@ let prevHome: string | undefined;
 let prevGuard: string | undefined;
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-file-indexer-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-file-indexer-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevHome = process.env.HOME;
-  prevGuard = process.env.ORKAS_TCC_GUARD_FORCE;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-  delete process.env.ORKAS_TCC_GUARD_FORCE;
+  prevGuard = process.env.COGSEED_TCC_GUARD_FORCE;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  delete process.env.COGSEED_TCC_GUARD_FORCE;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(UID);
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
-  if (prevGuard === undefined) delete process.env.ORKAS_TCC_GUARD_FORCE;
-  else process.env.ORKAS_TCC_GUARD_FORCE = prevGuard;
+  if (prevGuard === undefined) delete process.env.COGSEED_TCC_GUARD_FORCE;
+  else process.env.COGSEED_TCC_GUARD_FORCE = prevGuard;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -300,7 +300,7 @@ describe('file_indexer › invalidate + purge + prune', () => {
   });
 
   it('pruneOrphans drops protected-source cache entries without statting the source', async () => {
-    process.env.ORKAS_TCC_GUARD_FORCE = '1';
+    process.env.COGSEED_TCC_GUARD_FORCE = '1';
     const home = path.join(tmpDir, 'fake-home');
     const downloads = path.join(home, 'Downloads');
     fs.mkdirSync(downloads, { recursive: true });

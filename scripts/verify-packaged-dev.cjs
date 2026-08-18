@@ -104,16 +104,16 @@ async function launchSmoke(appPath) {
   if (!fs.existsSync(executable)) throw new Error(`missing packaged executable: ${executable}`);
   const launchEnv = { ...process.env };
   delete launchEnv.COGSEED_WORKSPACE_ROOT;
-  delete launchEnv.ORKAS_WORKSPACE_ROOT;
+  delete launchEnv.COGSEED_WORKSPACE_ROOT;
   delete launchEnv.COGSEED_RUNTIME_CONTAINER;
-  delete launchEnv.ORKAS_RUNTIME_CONTAINER;
+  delete launchEnv.COGSEED_RUNTIME_CONTAINER;
   const child = spawn(executable, [], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...launchEnv,
       HOME: tempRoot,
-      ORKAS_PACKAGED_LAUNCH_SMOKE_FILE: markerPath,
+      COGSEED_PACKAGED_LAUNCH_SMOKE_FILE: markerPath,
     },
   });
   let stderr = '';

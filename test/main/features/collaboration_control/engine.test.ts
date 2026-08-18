@@ -22,7 +22,7 @@ function harness(observer = vi.fn()) {
   return { engine, dispatcher, events, read: () => ({ run, context }) };
 }
 
-const scope = { ownerId: 'u1', domain: 'mate' as const, scopeId: 'scope-1' };
+const scope = { ownerId: 'u1', domain: 'cogseed' as const, scopeId: 'scope-1' };
 
 describe('Collaboration engine', () => {
   it('persists retry before publishing an event', async () => {
@@ -47,13 +47,13 @@ describe('Collaboration engine', () => {
 it('creates, plans, dispatches, and completes a workflow step through ports', async () => {
   let run: WorkflowRun | null = null; let context: SharedTaskContext | null = null; const events: CollaborationEvent[] = [];
   const store: any = { withLock: async (_s: any, fn: any) => fn(), readRun: async () => run, writeRun: async (_s: any, value: WorkflowRun) => { run = value; }, readContext: async () => context, writeContext: async (_s: any, value: SharedTaskContext) => { context = value; }, appendEvent: async (_s: any, value: CollaborationEvent) => { events.push(value); }, readEvents: async () => events };
-  const dispatcher = { dispatchStep: vi.fn(async () => ({ executionId: 'mate-task-child', status: 'running' as const })), cancelStep: vi.fn() };
+  const dispatcher = { dispatchStep: vi.fn(async () => ({ executionId: 'cogseed-task-child', status: 'running' as const })), cancelStep: vi.fn() };
   let ids = 0; const engine = createCollaborationEngine({ store, dispatcher, now: () => 't1', id: (prefix?: string) => `${prefix || 'id'}-${++ids}` });
   const created = await engine.createRun(scope, { objective: 'Ship it', kind: 'implementation', createdBy: 'commander' });
   const planned = await engine.planStep(scope, created.id, { title: 'Research', actorId: 'researcher', type: 'dispatch', resumeToken: 'req-child' });
   expect(planned.status).toBe('pending');
   const started = await engine.startStep(scope, created.id, planned.id);
-  expect(started).toMatchObject({ status: 'running', result_ref: 'mate-task-child' });
+  expect(started).toMatchObject({ status: 'running', result_ref: 'cogseed-task-child' });
   const completed = await engine.completeStep(scope, created.id, planned.id, { status: 'completed', resultSummary: 'done' });
   expect(completed).toMatchObject({ status: 'completed', result_summary: 'done' });
   expect(events.map((event) => event.type)).toEqual(['workflow_created', 'workflow_planned', 'step_started', 'step_completed']);

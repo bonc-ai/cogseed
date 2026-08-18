@@ -16,7 +16,7 @@ vi.mock('../../../src/main/logger', () => ({
 }));
 
 // kb_vector opens a per-uid sqlite database under <uid>/cloud/contexts/.kb/.
-// Each test resets ORKAS_WORKSPACE_ROOT + the module graph so the per-uid
+// Each test resets COGSEED_WORKSPACE_ROOT + the module graph so the per-uid
 // cache map doesn't leak handles across runs.
 
 let tmpDir: string;
@@ -24,9 +24,9 @@ let prevWs: string | undefined;
 const TEST_UID = 'kbtest';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-kb-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-kb-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);
@@ -37,7 +37,7 @@ afterEach(async () => {
     const kb = await import('../../../src/main/features/kb_vector');
     kb.closeAllKb();
   } catch { /* ignore */ }
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

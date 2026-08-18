@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 const { verifyPackagedDevBundle, verifySmokeMarker } = require('../../scripts/verify-packaged-dev.cjs');
 const roots: string[] = [];
 function fakeBundle() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-agent-dev-bundle-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-agent-dev-bundle-'));
   roots.push(root);
   const appPath = path.join(root, 'CogSeed Dev.app');
   const resources = path.join(appPath, 'Contents', 'Resources');

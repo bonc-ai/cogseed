@@ -33,13 +33,13 @@ const openChannels: P3394HttpChannel[] = [];
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-dual-bridge-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-  // p3394StateFile 走 ORKAS_RUNTIME_VARIANT（非 ORKAS_WORKSPACE_ROOT）：
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  // p3394StateFile 走 COGSEED_RUNTIME_VARIANT（非 COGSEED_WORKSPACE_ROOT）：
   // 用一次性 variant 隔离 outbox/cursor 等状态文件，避免污染真实 cogseed variant。
   variantName = 'p3394-dual-' + Math.random().toString(36).slice(2, 8);
-  previousRuntimeVariant = process.env.ORKAS_RUNTIME_VARIANT;
-  process.env.ORKAS_RUNTIME_VARIANT = variantName;
+  previousRuntimeVariant = process.env.COGSEED_RUNTIME_VARIANT;
+  process.env.COGSEED_RUNTIME_VARIANT = variantName;
 });
 
 afterEach(async () => {
@@ -47,10 +47,10 @@ afterEach(async () => {
     if (child.exitCode === null) child.kill('SIGKILL');
   }
   for (const channel of openChannels.splice(0)) await channel.close().catch(() => {});
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
-  if (previousRuntimeVariant === undefined) delete process.env.ORKAS_RUNTIME_VARIANT;
-  else process.env.ORKAS_RUNTIME_VARIANT = previousRuntimeVariant;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousRuntimeVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
+  else process.env.COGSEED_RUNTIME_VARIANT = previousRuntimeVariant;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true });
 });
@@ -128,7 +128,7 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
         P3394_CHILD_RESULT: resultFile,
         P3394_CHILD_USER_ID: 'p3394-child-node-user',
         // 真实 Runtime Adapter 需要会话/任务/事件存储根。
-        ORKAS_WORKSPACE_ROOT: tmpDir,
+        COGSEED_WORKSPACE_ROOT: tmpDir,
         // R-09：adapter 映射持久化，供进程重启恢复。
         P3394_CHILD_STATE: path.join(childHome, 'p3394-adapter-state.json'),
         // C-09 反向任务：B 完成后主动向 A 发起任务。
@@ -300,7 +300,7 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
         P3394_CHILD_RESULT: resultFile2,
         P3394_CHILD_USER_ID: 'p3394-child-node-user',
         P3394_CHILD_STATE: stateFile,
-        ORKAS_WORKSPACE_ROOT: tmpDir,
+        COGSEED_WORKSPACE_ROOT: tmpDir,
         // R-08 跨进程恢复注入：前 1 次事件外发失败 → recoverable → sweep 恢复。
         P3394_CHILD_FAIL_DELIVERY: '1',
         // S-05 三方同框：重启后重放 outbox 遗留的 submitted 信封。

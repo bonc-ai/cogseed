@@ -2,7 +2,7 @@
 /**
  * Opt-in real local-agent verification.
  *
- * It detects every requested CLI using Orkas' production registry, binds a
+ * It detects every requested CLI using CogSeed' production registry, binds a
  * cached test-managed install when present, installs missing CLIs, then sends
  * one harmless fixed-output request through the production runner.
  */
@@ -24,9 +24,9 @@ import {
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const pcRoot = path.resolve(scriptDir, '..');
-const installRoot = process.env.ORKAS_LOCAL_AGENT_TEST_INSTALL_ROOT
-  ? path.resolve(process.env.ORKAS_LOCAL_AGENT_TEST_INSTALL_ROOT)
-  : path.join(pcRoot, 'node_modules', '.orkas-local-agent-live');
+const installRoot = process.env.COGSEED_LOCAL_AGENT_TEST_INSTALL_ROOT
+  ? path.resolve(process.env.COGSEED_LOCAL_AGENT_TEST_INSTALL_ROOT)
+  : path.join(pcRoot, 'node_modules', '.cogseed-local-agent-live');
 
 function usage(): string {
   return [
@@ -58,7 +58,7 @@ async function runProcess(
       windowsHide: true,
       shell: false,
     });
-    const timeoutMs = options.timeoutMs ?? Number(process.env.ORKAS_LOCAL_AGENT_INSTALL_TIMEOUT_MS || 15 * 60_000);
+    const timeoutMs = options.timeoutMs ?? Number(process.env.COGSEED_LOCAL_AGENT_INSTALL_TIMEOUT_MS || 15 * 60_000);
     const timer = setTimeout(() => {
       try { child.kill('SIGTERM'); } catch { /* already gone */ }
       reject(new Error(`${command} timed out after ${timeoutMs}ms`));
@@ -108,7 +108,7 @@ function applyManagedRuntimeEnv(entry: { type: string; path?: string | null }): 
 
 async function installAgent(type: string): Promise<void> {
   fs.mkdirSync(installRoot, { recursive: true });
-  const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), `orkas-${type}-installer-`));
+  const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), `cogseed-${type}-installer-`));
   try {
     const plan = installerPlan(type, {
       platform: process.platform,
@@ -133,10 +133,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  const testDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-local-agent-live-data-'));
-  process.env.ORKAS_WORKSPACE_ROOT = testDataRoot;
-  process.env.ORKAS_LOCAL_AGENT_TIMEOUT_MS ||= '180000';
-  process.env.ORKAS_LOCAL_AGENT_IDLE_KILL_MS ||= '60000';
+  const testDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-local-agent-live-data-'));
+  process.env.COGSEED_WORKSPACE_ROOT = testDataRoot;
+  process.env.COGSEED_LOCAL_AGENT_TIMEOUT_MS ||= '180000';
+  process.env.COGSEED_LOCAL_AGENT_IDLE_KILL_MS ||= '60000';
 
   try {
     const registry = await import('../src/main/features/local_agents/registry.js');
@@ -184,7 +184,7 @@ async function main(): Promise<void> {
         agentId,
         agentName: `Live ${entry.type} probe`,
         cli: entry.type,
-        prompt: 'Do not call tools or access or modify files. Reply with exactly ORKAS_AGENT_OK and nothing else.',
+        prompt: 'Do not call tools or access or modify files. Reply with exactly COGSEED_AGENT_OK and nothing else.',
         cwd,
         signal: new AbortController().signal,
         onEvent: (event: any) => {
@@ -194,7 +194,7 @@ async function main(): Promise<void> {
         },
       });
       const output = String(result.output || '').trim();
-      if (result.status === 'completed' && output === 'ORKAS_AGENT_OK') {
+      if (result.status === 'completed' && output === 'COGSEED_AGENT_OK') {
         process.stdout.write(`  ✓ ${entry.type}: round-trip passed ${JSON.stringify(eventCounts)}\n`);
       } else {
         const failure = {

@@ -1,7 +1,7 @@
 /**
  * Text-to-speech provider management for user-owned keys.
  *
- * Open-source builds do not ship a hosted Orkas speech API. Users configure
+ * Open-source builds do not ship a hosted CogSeed speech API. Users configure
  * their own provider credentials here, and downstream speech tools read the
  * ordered `ttsProfiles` list from auth.ts.
  */
@@ -43,7 +43,7 @@ function normalizeTtsProfile(p: TtsProfile): TtsProfile {
 export function listTtsProfiles(): TtsProfile[] {
   const list = loadTtsProfiles();
   const normalized = list
-    .filter((p) => p.provider !== 'orkas-voice')
+    .filter((p) => p.provider !== 'cogseed-voice')
     .map(normalizeTtsProfile);
   if (JSON.stringify(normalized) !== JSON.stringify(list)) saveTtsProfiles(normalized);
   return normalized;
@@ -66,7 +66,7 @@ export function addTtsProfile(input: AddTtsProfileInput): { ok: true; id: string
   const voice = String(input.voice || '').trim();
   const format = String(input.format || '').trim();
 
-  if (provider === 'orkas-voice') return { ok: false, error: 'provider unavailable in open-source build' };
+  if (provider === 'cogseed-voice') return { ok: false, error: 'provider unavailable in open-source build' };
   if (provider === 'doubao') return addDoubaoProfile({ apiKey, voice, format, input });
 
   const baseUrl = normalizeBaseUrl(input.baseUrl || '');

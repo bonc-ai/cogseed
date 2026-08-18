@@ -328,9 +328,9 @@ export interface ToolDefSnapshot {
   description: string;
   inputSchema: Record<string, unknown>;
   /** `'core-agent'` = pi-ai builtin (read_file / write_file / bash / web_search / web_fetch / list_files);
-   *  `'orkas'` = injected by buildRunner (overrides + extras like memory, kb, image_gen, web_search override);
+   *  `'cogseed'` = injected by buildRunner (overrides + extras like memory, kb, image_gen, web_search override);
    *  `'extra'` = passed by caller via `extraTools` (group_chat commander uses this for dispatch + marketplace / skill / automation tools). */
-  source: 'core-agent' | 'orkas' | 'extra';
+  source: 'core-agent' | 'cogseed' | 'extra';
 }
 
 function splitVolatilePromptTail(prompt: string | undefined): { stable: string; volatileTail: string } {
@@ -502,7 +502,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // no tool, no injection). See memoryScopeForSession for the per-kind rule.
   const memoryAgentScope = memoryScopeForSession(params.sessionId, agentId);
   // The commander (the project's orchestrator conversation, `gconv`) owns the
-  // two project-wide stores: it may WRITE project instructions (ORKAS.md, via
+  // two project-wide stores: it may WRITE project instructions (COGSEED.md, via
   // the `project_instructions` tool) and project memory. Dispatched sub-agents
   // (gmember / gworker / cli) get read-only access to both. Derived from the
   // immutable session id, so it can't drift mid-session.
@@ -996,7 +996,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       t.name,
       snapshotTool(
         t,
-        extraToolNameSet.has(t.name) ? 'extra' : visibleToolNameSet.has(t.name) ? 'orkas' : 'core-agent',
+        extraToolNameSet.has(t.name) ? 'extra' : visibleToolNameSet.has(t.name) ? 'cogseed' : 'core-agent',
       ),
     );
   }
@@ -1026,7 +1026,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   if (skillsBlock) parts.push(skillsBlock.trim());
   if (agentsBlock) parts.push(agentsBlock);
   // Static rules for resolving conflicts among the user-managed project
-  // layers. Always present in real project work sessions, even when ORKAS.md,
+  // layers. Always present in real project work sessions, even when COGSEED.md,
   // memory, or the task backlog is empty.
   const projectContextPolicyBlock = (uid && memoryAgentScope && params.spaceId)
     ? formatSpaceContextPolicyForSystemPrompt()
@@ -1269,7 +1269,7 @@ export function openSkillSourcesExposureFromSessionId(sessionId: string): boolea
 }
 
 /**
- * Factory dispatcher for Orkas's external (pi-ai-unaware) providers.
+ * Factory dispatcher for CogSeed's external (pi-ai-unaware) providers.
  * Extend the switch when a new id is added to `EXTERNAL_API_PROVIDERS`.
  * Async because the underlying factories await core-agent dynamic import.
  */
@@ -1386,7 +1386,7 @@ async function buildRotatingProvider(
 /** Check if metacognition feature is enabled.
  *
  *  Single source of truth lives in `features/metacognition.isFeatureEnabled`
- *  (combines env `ORKAS_METACOGNITION='0'` kill switch + per-user preference
+ *  (combines env `COGSEED_METACOGNITION='0'` kill switch + per-user preference
  *  written from settings UI). This thin wrapper exists to avoid changing
  *  every existing call site at once. */
 /** Check if metacognition feature is enabled (env var toggle). */

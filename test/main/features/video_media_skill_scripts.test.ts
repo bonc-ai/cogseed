@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 
 import { describe, expect, it } from 'vitest';
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 function pcDir() {
   return fs.existsSync(path.join(process.cwd(), 'bin', 'run-skill.cjs'))
@@ -33,7 +33,7 @@ function runSkill(
   extraEnv: Record<string, string> = {},
 ) {
   const dir = pcDir();
-  const workspaceRoot = path.join(os.tmpdir(), 'orkas-video-skill-workspace');
+  const workspaceRoot = path.join(os.tmpdir(), 'cogseed-video-skill-workspace');
   return spawnSync(
     TEST_NODE,
     [path.join(dir, 'bin', 'run-skill.cjs'), skillId, script, '--', ...args],
@@ -42,9 +42,9 @@ function runSkill(
       encoding: 'utf8',
       env: {
         ...process.env,
-        ORKAS_PC_DIR: dir,
-        ORKAS_RUN_SKILL_DIR: skillDir(skillId),
-        ORKAS_WORKSPACE_ROOT: workspaceRoot,
+        COGSEED_PC_DIR: dir,
+        COGSEED_RUN_SKILL_DIR: skillDir(skillId),
+        COGSEED_WORKSPACE_ROOT: workspaceRoot,
         ...extraEnv,
       },
     },
@@ -68,8 +68,8 @@ function makeFakeFfmpegEnv(tmp: string) {
     ], { encoding: 'utf8' });
     if (generated.status !== 0) throw new Error(generated.stderr || 'failed to generate Windows media fixture');
     return {
-      ORKAS_BUNDLED_FFMPEG: ffmpegPath,
-      ORKAS_BUNDLED_FFPROBE: ffprobePath,
+      COGSEED_BUNDLED_FFMPEG: ffmpegPath,
+      COGSEED_BUNDLED_FFPROBE: ffprobePath,
     };
   }
 
@@ -97,8 +97,8 @@ function makeFakeFfmpegEnv(tmp: string) {
   fs.chmodSync(ffmpegPath, 0o755);
 
   return {
-    ORKAS_BUNDLED_FFMPEG: ffmpegPath,
-    ORKAS_BUNDLED_FFPROBE: ffprobePath,
+    COGSEED_BUNDLED_FFMPEG: ffmpegPath,
+    COGSEED_BUNDLED_FFPROBE: ffprobePath,
   };
 }
 
@@ -159,7 +159,7 @@ describe('video media skill scripts', () => {
   });
 
   it('keeps edit_video stdout parseable while streaming progress JSONL on stderr', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-video-progress-'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-video-progress-'));
     const input = path.join(tmp, 'input.mp4');
     const output = path.join(tmp, 'trimmed.mp4');
     fs.writeFileSync(input, 'fake input', 'utf8');

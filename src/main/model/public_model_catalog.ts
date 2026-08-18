@@ -1,6 +1,6 @@
 /**
- * Public, provider-neutral model catalog shared by Orkas and the open-source
- * build. Keep provider execution, authentication, routing, and managed Orkas
+ * Public, provider-neutral model catalog shared by CogSeed and the open-source
+ * build. Keep provider execution, authentication, routing, and managed CogSeed
  * entries out of this file so it can be mirrored byte-for-byte.
  */
 

@@ -1,7 +1,7 @@
 /**
  * Generic vector store over sqlite-vec + fastembed. Key the store by its
  * `dbDir` (directory containing `vector.db` + `config.json`) — zero knowledge
- * of users, knowledge bases, or the Orkas domain. Callers provide a dbDir
+ * of users, knowledge bases, or the CogSeed domain. Callers provide a dbDir
  * and strings; the store handles chunking, embedding, persistence, search.
  *
  * Two usage tiers:

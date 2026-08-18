@@ -42,8 +42,8 @@ const TEXT_EXTS: ReadonlySet<string> = new Set([
 ]);
 const IMAGE_EXTS: ReadonlySet<string> = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
 const MAX_PATH_SEGMENT_LEN = 200;
-const EXTRACT_TIMEOUT_MS = envTimeoutMs('ORKAS_LIBRARY_EXTRACT_TIMEOUT_MS', 5 * 60 * 1000);
-const EMBED_TIMEOUT_MS = envTimeoutMs('ORKAS_LIBRARY_EMBED_TIMEOUT_MS', 5 * 60 * 1000);
+const EXTRACT_TIMEOUT_MS = envTimeoutMs('COGSEED_LIBRARY_EXTRACT_TIMEOUT_MS', 5 * 60 * 1000);
+const EMBED_TIMEOUT_MS = envTimeoutMs('COGSEED_LIBRARY_EMBED_TIMEOUT_MS', 5 * 60 * 1000);
 
 type LibraryVectorizeBatch = Record<string, never>;
 interface LibraryVectorizeSummary {

@@ -3,7 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import * as path from 'node:path';
 
-import { MATE_AGENT_RUNTIME_PROTOCOL_VERSION, type RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
+import { COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, type RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
 
 const children: ChildProcessWithoutNullStreams[] = [];
 
@@ -19,8 +19,8 @@ function startEchoWorker(): { child: ChildProcessWithoutNullStreams; nextLine: (
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
-      ORKAS_PC_DIR: process.cwd(),
-      ORKAS_MATE_RUNTIME_TEST_ECHO: '1',
+      COGSEED_PC_DIR: process.cwd(),
+      COGSEED_COGSEED_RUNTIME_TEST_ECHO: '1',
     },
   });
   children.push(child);
@@ -46,15 +46,15 @@ function startEchoWorker(): { child: ChildProcessWithoutNullStreams; nextLine: (
 describe('cogseed-runtime-worker.cjs', () => {
   it('speaks protocol JSONL on stdout and keeps task output correlated', async () => {
     const { child, nextLine } = startEchoWorker();
-    child.stdin.write(`${JSON.stringify({ type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION })}\n`);
+    child.stdin.write(`${JSON.stringify({ type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION })}\n`);
     expect(await nextLine()).toEqual({
       type: 'hello',
-      protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION,
-      capabilities: ['run', 'cancel', 'health', 'shutdown', 'mate-host-tools-v1'],
+      protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
+      capabilities: ['run', 'cancel', 'health', 'shutdown', 'cogseed-host-tools-v1'],
     });
 
     const req: RuntimeRunRequest = {
-      protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION,
+      protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
       type: 'run',
       request_id: 'req-entry',
       runtime_session_id: 'mruntime-entry',

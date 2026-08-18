@@ -27,7 +27,7 @@ Score how citable/ready a page is for AI answer engines, from crawl facts. Pure 
 ## How to call
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" geo-score geo_score -- --input <crawl.json> [--out <geo.json>]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" geo-score geo_score -- --input <crawl.json> [--out <geo.json>]
 ```
 
 ## Expected output

@@ -19,7 +19,7 @@ vi.mock('electron', () => ({
   app: { getName: vi.fn(() => 'CogSeed'), getPath: vi.fn(() => os.tmpdir()), isPackaged: false },
   ipcMain: {
     handle: (channel: string, handler: InvokeFn) => {
-      if (channel === 'orkas.invoke') invokeHandler = handler;
+      if (channel === 'cogseed.invoke') invokeHandler = handler;
     },
     on: vi.fn(),
   },
@@ -35,8 +35,8 @@ vi.mock('../../../src/main/logger', () => ({
 
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'custom-provider-ipc-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   invokeHandler = null;
   vi.resetModules();
   vi.clearAllMocks();
@@ -49,8 +49,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(root, { recursive: true, force: true });
   vi.resetModules();
 });

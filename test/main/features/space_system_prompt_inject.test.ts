@@ -52,10 +52,10 @@ const UID = 'u1';
 
 beforeEach(async () => {
   capturedChatOptions = [];
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-space-inject-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-space-inject-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevAnthropicKey = process.env.ANTHROPIC_API_KEY;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   // buildRunner's prompt assembly is intentionally behind the model-auth
   // gate. These tests inspect the assembled prompt without making a request,
   // so supply the supported development fallback explicitly.
@@ -67,7 +67,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await drainMainRuntimeForTest();
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (prevAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
   else process.env.ANTHROPIC_API_KEY = prevAnthropicKey;
   fs.rmSync(tmpDir, { recursive: true, force: true });

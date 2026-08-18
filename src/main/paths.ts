@@ -1,5 +1,5 @@
 /**
- * Filesystem layout for Orkas.
+ * Filesystem layout for CogSeed.
  *
  * All path constants live here — never hardcode paths elsewhere.
  *
@@ -12,7 +12,7 @@
  *       main/                     ← index.ts + preload.js + features/...
  *       renderer/ resources/ core-agent/
  *
- *   <container>/                  ← ~/.orkas (mac/linux) or <drive>:\.orkas (Windows, pinned)
+ *   <container>/                  ← ~/.cogseed (mac/linux) or <drive>:\.cogseed (Windows, pinned)
  *     data/                       ← WS_ROOT
  *       users.json                ← Local uid registry + current_user_id / dev_current_user_id
  *       window-state.json         ← Last desktop window bounds (machine-local)
@@ -33,7 +33,7 @@
  *     userWorkSpace/              ← DEFAULT_USER_WORKSPACE (sibling of data/)
  *
  * Runtime overrides:
- *   ORKAS_WORKSPACE_ROOT   point data root elsewhere (set by index.ts to
+ *   COGSEED_WORKSPACE_ROOT   point data root elsewhere (set by index.ts to
  *                          `<container>/data`; tests / power users may
  *                          pre-set it to a tmp dir to bypass container
  *                          resolution)
@@ -49,7 +49,7 @@ import * as os from 'node:os';
 export const SRC_ROOT      = path.resolve(__dirname, '..');            // PC/src
 export const PC_ROOT       = path.resolve(__dirname, '..', '..');      // PC
 export const APP_ROOT      = PC_ROOT;
-export const PROJECT_ROOT  = path.resolve(PC_ROOT, '..');              // Orkas
+export const PROJECT_ROOT  = path.resolve(PC_ROOT, '..');              // CogSeed
 
 export function packagedResourcesRoot(): string | null {
   const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
@@ -59,25 +59,25 @@ export function packagedResourcesRoot(): string | null {
 }
 
 function packagedResourceDir(name: string): string {
-  if (name === 'builtin' && process.env.ORKAS_BUILTIN_ROOT && !packagedResourcesRoot()) {
-    return path.resolve(process.env.ORKAS_BUILTIN_ROOT);
+  if (name === 'builtin' && process.env.COGSEED_BUILTIN_ROOT && !packagedResourcesRoot()) {
+    return path.resolve(process.env.COGSEED_BUILTIN_ROOT);
   }
   const resourcesRoot = packagedResourcesRoot();
   return resourcesRoot ? path.join(resourcesRoot, name) : path.join(PC_ROOT, 'resources', name);
 }
 
 // ── Data root ────────────────────────────────────────────────────────────
-// `index.ts` always sets `ORKAS_WORKSPACE_ROOT` before this module loads
+// `index.ts` always sets `COGSEED_WORKSPACE_ROOT` before this module loads
 // (resolveInstallContainer + one-shot migration runs first). The constant
 // is still named WS_ROOT (historical abbreviation of "workspace root" —
 // internal TS symbol, not user-facing); the env var likewise keeps its
 // old name for stability.
-if (!process.env.ORKAS_WORKSPACE_ROOT) {
+if (!process.env.COGSEED_WORKSPACE_ROOT) {
   throw new Error(
-    'paths.ts: ORKAS_WORKSPACE_ROOT not set. index.ts must run resolveInstallContainer + set the env var before importing paths.',
+    'paths.ts: COGSEED_WORKSPACE_ROOT not set. index.ts must run resolveInstallContainer + set the env var before importing paths.',
   );
 }
-export const WS_ROOT = path.resolve(process.env.ORKAS_WORKSPACE_ROOT);
+export const WS_ROOT = path.resolve(process.env.COGSEED_WORKSPACE_ROOT);
 
 // ── Top-level (machine-global, shared across uids) ───────────────────────
 // Machine-local profile registry. Persisted keys remain
@@ -94,7 +94,7 @@ export const WINDOW_STATE_FILE = path.join(WS_ROOT, 'window-state.json');
 export const ONBOARDING_STATE_FILE = path.join(WS_ROOT, 'onboarding-state.json');
 // Machine-local logs (daily rolling, single global file shared across uids).
 export const LOGS_DIR          = path.join(WS_ROOT, 'logs');
-// Machine-local dependency environments shared across Orkas accounts on this
+// Machine-local dependency environments shared across CogSeed accounts on this
 // device. Lives directly under data/ so app updates never overwrite it and
 // multiple uids do not redownload the same package wheels.
 export const VENV_ROOT         = path.join(WS_ROOT, 'venv');
@@ -120,23 +120,23 @@ export const userCloudRoot  = (uid: string) => path.join(userRoot(uid), 'cloud')
 export const userLocalRoot  = (uid: string) => path.join(userRoot(uid), 'local');
 
 // ── Cloud-synced per-user ────────────────────────────────────────────────
-export const mateAgentCloudRoot    = (uid: string) => path.join(userCloudRoot(uid), 'mate_agent');
-export const mateAgentTasksDir     = (uid: string) => path.join(mateAgentCloudRoot(uid), 'tasks');
-export const mateAgentTaskEventsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'task-events');
-export const mateAgentSessionsDir  = (uid: string) => path.join(mateAgentCloudRoot(uid), 'sessions');
-export const mateAgentRequestClaimsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'requests');
-export const mateAgentExecutionRecordsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'execution-records');
-export const mateAgentConnectorsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'connectors');
-export const mateAgentConnectorSecretsDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'connectors');
-export const mateAgentKbSourcesDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'kb', 'sources');
-export const mateAgentKbVectorDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'kb', 'vector');
-export const mateAgentLocalRoot    = (uid: string) => path.join(userLocalRoot(uid), 'mate_agent');
-export const mateAgentWorkerStateDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'worker-state');
-export const mateAgentRecoveryStateFile = (uid: string) => path.join(mateAgentWorkerStateDir(uid), 'last-recovery.json');
-export const mateAgentCoordinationsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'coordinations');
-export const mateAgentReviewDecisionsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'review-decisions');
-export const mateAgentCostTelemetryDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'cost-telemetry');
-export const mateAgentSkillLifecycleDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'skill-lifecycle');
+export const cogseedAgentCloudRoot    = (uid: string) => path.join(userCloudRoot(uid), 'cogseed');
+export const cogseedAgentTasksDir     = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'tasks');
+export const cogseedAgentTaskEventsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'task-events');
+export const cogseedAgentSessionsDir  = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'sessions');
+export const cogseedAgentRequestClaimsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'requests');
+export const cogseedAgentExecutionRecordsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'execution-records');
+export const cogseedAgentConnectorsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'connectors');
+export const cogseedAgentConnectorSecretsDir = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'connectors');
+export const cogseedAgentKbSourcesDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'kb', 'sources');
+export const cogseedAgentKbVectorDir = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'kb', 'vector');
+export const cogseedAgentLocalRoot    = (uid: string) => path.join(userLocalRoot(uid), 'cogseed');
+export const cogseedAgentWorkerStateDir = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'worker-state');
+export const cogseedAgentRecoveryStateFile = (uid: string) => path.join(cogseedAgentWorkerStateDir(uid), 'last-recovery.json');
+export const cogseedAgentCoordinationsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'coordinations');
+export const cogseedAgentReviewDecisionsDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'review-decisions');
+export const cogseedAgentCostTelemetryDir = (uid: string) => path.join(cogseedAgentLocalRoot(uid), 'cost-telemetry');
+export const cogseedAgentSkillLifecycleDir = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'skill-lifecycle');
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
 export const userSkillChatDir       = (uid: string, sid: string) => path.join(userChatsDir(uid), 'skill', sid);
 export const userAgentChatDir       = (uid: string, aid: string) => path.join(userChatsDir(uid), 'agent', aid);
@@ -157,7 +157,7 @@ export const userChatAttachmentsDir = (uid: string) => path.join(userCloudRoot(u
 export const chatAttachmentDir      = (uid: string, cid: string) => path.join(userChatAttachmentsDir(uid), cid);
 
 // LLM-generated interactive web-app bundles (artifacts). Layout:
-// `<uid>/cloud/chat_artifacts/<cid>/<artifactId>/{index.html, ...assets, __orkas-meta.json}`.
+// `<uid>/cloud/chat_artifacts/<cid>/<artifactId>/{index.html, ...assets, __cogseed-meta.json}`.
 // Served read-only via the `chat-app://` protocol (see index.ts). Cloud-synced
 // with the conversation; purged by cid on conversation delete. Kept as a
 // separate pool from chat_attachments/ on purpose — attachments are user
@@ -186,21 +186,21 @@ export const userLocalSessionsDir   = (uid: string) => path.join(userLocalRoot(u
 export const userLocalSessionFile   = (uid: string, sessionId: string) => path.join(userLocalSessionsDir(uid), `${sessionId}.jsonl`);
 
 // CogSeed Runtime — machine-private execution boundary. Runtime sessions,
-// context mirrors, memory, and run logs stay under local/mate_runtime so they
+// context mirrors, memory, and run logs stay under local/cogseed_runtime so they
 // never sync with CogSeed cloud chats/sessions and cannot be mistaken for
 // UI-facing group-chat state.
-export const mateRuntimeRoot             = (uid: string) => path.join(userLocalRoot(uid), 'mate_runtime');
-export const mateRuntimeSessionsDir      = (uid: string) => path.join(mateRuntimeRoot(uid), 'sessions');
-export const mateRuntimeSessionFile      = (uid: string, sessionId: string) => path.join(mateRuntimeSessionsDir(uid), `${sessionId}.jsonl`);
-export const mateRuntimeSessionToolResultsDir = (uid: string, sessionId: string) =>
-  path.join(mateRuntimeSessionsDir(uid), `${sessionId}.tool-results`);
-export const mateRuntimeConversationsDir = (uid: string) => path.join(mateRuntimeRoot(uid), 'conversations');
-export const mateRuntimeMemoryDir        = (uid: string) => path.join(mateRuntimeRoot(uid), 'memory');
-export const mateRuntimeContextsDir      = (uid: string) => path.join(mateRuntimeRoot(uid), 'contexts');
-export const mateRuntimeRunsDir          = (uid: string) => path.join(mateRuntimeRoot(uid), 'runs');
-export const mateRuntimeRunDir           = (uid: string, runId: string) => path.join(mateRuntimeRunsDir(uid), runId);
-export const mateRuntimeRunMetaFile      = (uid: string, runId: string) => path.join(mateRuntimeRunDir(uid, runId), 'meta.json');
-export const mateRuntimeRunEventsFile    = (uid: string, runId: string) => path.join(mateRuntimeRunDir(uid, runId), 'events.jsonl');
+export const cogseedRuntimeRoot             = (uid: string) => path.join(userLocalRoot(uid), 'cogseed_runtime');
+export const cogseedRuntimeSessionsDir      = (uid: string) => path.join(cogseedRuntimeRoot(uid), 'sessions');
+export const cogseedRuntimeSessionFile      = (uid: string, sessionId: string) => path.join(cogseedRuntimeSessionsDir(uid), `${sessionId}.jsonl`);
+export const cogseedRuntimeSessionToolResultsDir = (uid: string, sessionId: string) =>
+  path.join(cogseedRuntimeSessionsDir(uid), `${sessionId}.tool-results`);
+export const cogseedRuntimeConversationsDir = (uid: string) => path.join(cogseedRuntimeRoot(uid), 'conversations');
+export const cogseedRuntimeMemoryDir        = (uid: string) => path.join(cogseedRuntimeRoot(uid), 'memory');
+export const cogseedRuntimeContextsDir      = (uid: string) => path.join(cogseedRuntimeRoot(uid), 'contexts');
+export const cogseedRuntimeRunsDir          = (uid: string) => path.join(cogseedRuntimeRoot(uid), 'runs');
+export const cogseedRuntimeRunDir           = (uid: string, runId: string) => path.join(cogseedRuntimeRunsDir(uid), runId);
+export const cogseedRuntimeRunMetaFile      = (uid: string, runId: string) => path.join(cogseedRuntimeRunDir(uid, runId), 'meta.json');
+export const cogseedRuntimeRunEventsFile    = (uid: string, runId: string) => path.join(cogseedRuntimeRunDir(uid, runId), 'events.jsonl');
 
 // Curated knowledge base (the "organized" region of the historical
 // two-region contexts design).
@@ -360,7 +360,7 @@ function assertProjectSegment(pid: string): string {
 // User-authored per-project instructions (agent-readonly; edited in the
 // project settings UI, injected into every session of the project).
 // Read/write goes through features/projects.ts.
-export const projectInstructionsFile = (uid: string, pid: string) => path.join(projectDir(uid, assertProjectSegment(pid)), 'ORKAS.md');
+export const projectInstructionsFile = (uid: string, pid: string) => path.join(projectDir(uid, assertProjectSegment(pid)), 'COGSEED.md');
 // Project-scoped cross-session memory (`project` tier of cross_session_memory).
 // Inside the project dir so it lives/dies/syncs with the project.
 export const projectMemoryFile       = (uid: string, pid: string) => path.join(projectDir(uid, assertProjectSegment(pid)), 'MEMORY.md');
@@ -483,10 +483,10 @@ export const projectAutoTaskConfigFile = (uid: string, pid: string, taskId: stri
 export const projectAutoTaskAttachmentsDir = (uid: string, pid: string, taskId: string) =>
   path.join(projectAutoTaskDir(uid, pid, taskId), 'attachments');
 // Connector registry: installed MCP server instances + cached tool schemas + OAuth grants
-// (local-secret encrypted with the active Orkas account's OAuth user_id as owner — see
+// (local-secret encrypted with the active CogSeed account's OAuth user_id as owner — see
 // `features/connectors/registry.ts`). Cloud-synced as of 2026-05-15 so a user authorizing on
 // one device sees the same connectors on another. **Secret owner:** OAuth user_id (not local uid)
-// so any device logged into the same Orkas account can decrypt; the open-source build / not-logged-in
+// so any device logged into the same CogSeed account can decrypt; the open-source build / not-logged-in
 // users fall back to local uid (the file then sits in cloud/config/ but doesn't actually
 // sync — sync engine is inactive without an account).
 export const userConnectorsConfigFile = (uid: string) => path.join(userCloudConfigDir(uid), 'connectors.json');
@@ -668,10 +668,10 @@ export const localCliSessionsFile = (uid: string, cid: string) =>
 // ── External packages (machine-private, verbatim third-party repos) ─────
 // `<uid>/local/packages/<name>/` hosts a cloned open-source repo UNMODIFIED
 // (including node_modules when consented — Python venvs live under top-level
-// data/venv so they can be reused across Orkas accounts on this device).
+// data/venv so they can be reused across CogSeed accounts on this device).
 // Package metadata lives OUTSIDE the package dirs in the
-// sidecar `_registry.json` so `git pull` updates never conflict with Orkas
-// bookkeeping. The registry is written only by `bin/orkas-pkg.cjs` (the
+// sidecar `_registry.json` so `git pull` updates never conflict with CogSeed
+// bookkeeping. The registry is written only by `bin/cogseed-pkg.cjs` (the
 // bash-driven installer CLI); main-process code reads it via
 // `features/packages.ts`. Marketplace reconcile must never touch this tree.
 // `.bin/` holds generated shims for CLI-shaped packages; it is injected into
@@ -685,10 +685,10 @@ export const userPackagesBinDir       = (uid: string) => path.join(userPackagesD
 // ── CLI-package companion skills (machine-private, main+CLI-owned) ──────
 // `<uid>/local/package_skills/<pkg>/SKILL.md` is an auto-authored usage skill
 // that teaches the commander how to drive a CLI-only external package. It is
-// kept OUTSIDE the verbatim `local/packages/<pkg>/` tree (which orkas-pkg.cjs
-// never writes Orkas files into) and OUTSIDE cloud/ (so a machine-specific CLI
+// kept OUTSIDE the verbatim `local/packages/<pkg>/` tree (which cogseed-pkg.cjs
+// never writes CogSeed files into) and OUTSIDE cloud/ (so a machine-specific CLI
 // wrapper never syncs to a device where the package is not installed). Written
-// out-of-process by `bin/orkas-pkg.cjs skill-write`; read in main via
+// out-of-process by `bin/cogseed-pkg.cjs skill-write`; read in main via
 // `features/package_skills.ts`. Lifecycle is keyed to the package by dir name.
 export const userPackageSkillsDir = (uid: string) => path.join(userLocalRoot(uid), 'package_skills');
 export const userPackageSkillDir  = (uid: string, name: string) => path.join(userPackageSkillsDir(uid), name);
@@ -698,13 +698,13 @@ export const userPackageSkillDir  = (uid: string, name: string) => path.join(use
 // purely for interop: `~/.claude/skills` (claude-code) and `~/.codex/skills`
 // (codex). Both CLIs use the same `<id>/SKILL.md` layout, and each ships its
 // system skills under a dot dir (`.system` etc.) which SkillLoader skips.
-// There is intentionally NO Orkas-native `~/.orkas/skills` root: it was unused
+// There is intentionally NO CogSeed-native `~/.cogseed/skills` root: it was unused
 // (no installer ever populated it) and only widened the untrusted-content
-// attack surface, so it was dropped — Orkas skills live under the data root
+// attack surface, so it was dropped — CogSeed skills live under the data root
 // (custom / marketplace) or in tracked external packages instead. All roots
-// here are READ-ONLY to Orkas: never write, normalize, or reconcile them.
+// here are READ-ONLY to CogSeed: never write, normalize, or reconcile them.
 // Gated by the `global_skill_roots_enabled` preference and injected only into
-// in-app task/authoring sessions — never through the orkas-bridge, because
+// in-app task/authoring sessions — never through the cogseed-bridge, because
 // each CLI reads its own global dir natively (see skill-registry.ts::listSkillsForBridge).
 export const globalSkillRoots = (): string[] => [
   path.join(os.homedir(), '.claude', 'skills'),
@@ -723,7 +723,7 @@ export const userRecycleDir = (uid: string) => path.join(userLocalRoot(uid), 're
 export const userWorkspaceConfigFile = (uid: string) => path.join(userLocalRoot(uid), 'workspace.json');
 
 // Legacy one-time marker kept only so old installs/tests that reference the
-// path do not break. Native pickers now always provide a safe Orkas-owned
+// path do not break. Native pickers now always provide a safe CogSeed-owned
 // defaultPath and never intentionally hand off to the OS last-used directory.
 export const pickerFirstOpenMarkerFile = (uid: string) => path.join(userLocalRoot(uid), '.picker-first-open-seeded');
 

@@ -63,7 +63,7 @@ function scriptHashes(files) {
 }
 
 function markerFile(pcDir, platform, arch) {
-  return path.join(pcDir, '.orkas-native-prepared', `${platform}-${arch}.json`);
+  return path.join(pcDir, '.cogseed-native-prepared', `${platform}-${arch}.json`);
 }
 
 function comparableState(value) {

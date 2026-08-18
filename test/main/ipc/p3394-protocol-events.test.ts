@@ -14,7 +14,7 @@ let invokeHandler: InvokeFn | null = null;
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: InvokeFn) => {
-      if (channel === 'orkas.invoke') invokeHandler = fn;
+      if (channel === 'cogseed.invoke') invokeHandler = fn;
     },
     on: vi.fn(),
   },
@@ -34,9 +34,9 @@ let prevWs: string | undefined;
 const TEST_UID = 'uP3394ProtocolEvents';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-p3394-protocol-ipc-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-p3394-protocol-ipc-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   invokeHandler = null;
   vi.resetModules();
   vi.clearAllMocks();
@@ -49,7 +49,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.resetModules();
 });

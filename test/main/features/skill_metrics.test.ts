@@ -6,7 +6,7 @@ import * as path from 'node:path';
 // Same setup shape as other expert_signals tests — WS_ROOT swap +
 // activateUser BEFORE importing the aggregator (storage caches active uid).
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-metrics-'));
-process.env.ORKAS_WORKSPACE_ROOT = TMP;
+process.env.COGSEED_WORKSPACE_ROOT = TMP;
 fs.writeFileSync(path.join(TMP, 'users.json'),
   JSON.stringify({ current_user_id: '99999994', users: [{ user_id: '99999994', created_at: new Date().toISOString() }] }));
 const UID = '99999994';

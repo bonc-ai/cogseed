@@ -191,8 +191,8 @@ async function ensureRuntimeUncached(onProgress?: ProgressFn): Promise<RuntimeRe
   }
 
   const env = runtimeEnv();
-  const uv = env.ORKAS_UV;
-  const bundledPython = env.ORKAS_PYTHON;
+  const uv = env.COGSEED_UV;
+  const bundledPython = env.COGSEED_PYTHON;
   if (!uv || !bundledPython) {
     onProgress?.({ phase: 'ocr_runtime_missing', message: 'Bundled Python/uv runtime is unavailable' });
     return {
@@ -690,7 +690,7 @@ def main():
         pdf = pdfium.PdfDocument(src)
         page_nums = parse_pages(args.get("pages") or "", len(pdf))
         scale = float(args.get("scale") or 2)
-        with tempfile.TemporaryDirectory(prefix="orkas-ocr-") as td:
+        with tempfile.TemporaryDirectory(prefix="cogseed-ocr-") as td:
             for pno in page_nums:
                 page = pdf.get_page(pno - 1)
                 try:

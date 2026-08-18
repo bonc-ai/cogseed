@@ -5,12 +5,12 @@
  * phase 1/2) to the environment variables the external CLI agents read to
  * pick their upstream endpoint + credential. This is what "打通 external CLI"
  * means concretely: instead of the CLI silently reading its own on-disk config
- * (e.g. CC Switch's ~/.claude), Orkas injects the selected provider's endpoint
+ * (e.g. CC Switch's ~/.claude), CogSeed injects the selected provider's endpoint
  * and key at spawn time.
  *
  * Precedence: the resolved vars are applied by `spawnCli` AFTER the inherited
  * process env, so they deterministically override the CLI's own config. This
- * is the "Orkas selection wins over CC Switch" behaviour the user approved.
+ * is the "CogSeed selection wins over CC Switch" behaviour the user approved.
  *
  * Per-CLI env conventions:
  *   - claude (Claude Code): ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN

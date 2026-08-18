@@ -30,7 +30,7 @@ export interface WakeDispatchPayload {
   references?: Array<{ source_cid: string; source_msg_id: string }>;
 }
 
-export type WakeExecutionDomain = 'group_chat' | 'mate';
+export type WakeExecutionDomain = 'group_chat' | 'cogseed';
 
 export interface AgentWakeRequest {
   execution_domain?: WakeExecutionDomain;

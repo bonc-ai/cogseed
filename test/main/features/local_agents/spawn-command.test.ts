@@ -11,7 +11,7 @@ import {
   resolveCliCommand,
 } from '../../../../src/main/features/local_agents/spawn-command';
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 describe('local_agents/spawn-command', () => {
   it('leaves native executables unchanged', () => {
@@ -50,7 +50,7 @@ describe('local_agents/spawn-command', () => {
   });
 
   it.runIf(process.platform === 'win32')('round-trips hostile arguments through a real npm-style .cmd shim', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-cmd-shim-'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-cmd-shim-'));
     try {
       const capture = path.join(tmpDir, 'capture.cjs');
       const shim = path.join(tmpDir, 'node_modules', '.bin', 'capture.cmd');
@@ -58,13 +58,13 @@ describe('local_agents/spawn-command', () => {
       fs.writeFileSync(capture, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
       fs.writeFileSync(shim, [
         '@echo off',
-        `"%ORKAS_TEST_NODE%" "${capture}" %*`,
+        `"%COGSEED_TEST_NODE%" "${capture}" %*`,
         '',
       ].join('\r\n'));
       const args = ['plain', 'space value', 'value & echo unsafe', '100%', 'quote"value', 'C:\\tail\\'];
       const env = {
         ...process.env,
-        ORKAS_TEST_NODE: TEST_NODE,
+        COGSEED_TEST_NODE: TEST_NODE,
         ComSpec: process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
       };
       const resolved = resolveCliCommand(shim, args, 'win32', env);

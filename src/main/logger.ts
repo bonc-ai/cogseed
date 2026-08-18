@@ -22,7 +22,7 @@
  * The console transport stays on too: in dev you see the same events in
  * the DevTools / terminal, with a lighter format.
  *
- * Renderer-side callers talk to us through the `orkas.log` IPC channel
+ * Renderer-side callers talk to us through the `cogseed.log` IPC channel
  * (wired in `main/ipc/index.ts`); every renderer record gets a
  * `renderer/<module>` scope so it's distinguishable from main-side work.
  */
@@ -239,10 +239,10 @@ export function initLogger(): void {
 
   try { fs.mkdirSync(LOGS_DIR, { recursive: true }); } catch { /* noop */ }
 
-  // Level config — `ORKAS_LOG_LEVEL` overrides in both environments; dev
+  // Level config — `COGSEED_LOG_LEVEL` overrides in both environments; dev
   // gets verbose console by default so you see activity while coding.
-  const fileLevel = (process.env.ORKAS_LOG_LEVEL as any) || 'info';
-  const consoleLevel = process.env.ORKAS_DEVTOOLS ? 'debug' : (process.env.ORKAS_LOG_LEVEL as any) || 'info';
+  const fileLevel = (process.env.COGSEED_LOG_LEVEL as any) || 'info';
+  const consoleLevel = process.env.COGSEED_DEVTOOLS ? 'debug' : (process.env.COGSEED_LOG_LEVEL as any) || 'info';
 
   log.transports.file.level    = fileLevel;
   log.transports.console.level = consoleLevel;

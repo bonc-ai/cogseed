@@ -4,14 +4,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 let tmpDir: string;
 const tmpDirs: string[] = [];
 const itOnNonWindows = process.platform === 'win32' ? it.skip : it;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-run-skill-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-run-skill-'));
   tmpDirs.push(tmpDir);
 });
 
@@ -45,7 +45,7 @@ function writeAgentMarketplaceSkill(agentId: string, dirId: string, displayName:
   );
   fs.writeFileSync(
     path.join(scriptsDir, `${scriptBase}.js`),
-    'module.exports = async ({ args }) => ({ ok: true, agent: process.env.ORKAS_AGENT_ID, argv: args.join(" ") });\n',
+    'module.exports = async ({ args }) => ({ ok: true, agent: process.env.COGSEED_AGENT_ID, argv: args.join(" ") });\n',
   );
 }
 
@@ -63,8 +63,8 @@ function runSkill(skillRef: string, scriptBase: string, args: string[] = [], ext
     env: {
       ...process.env,
       ...extraEnv,
-      ORKAS_WORKSPACE_ROOT: tmpDir,
-      ORKAS_PC_DIR: pcRoot,
+      COGSEED_WORKSPACE_ROOT: tmpDir,
+      COGSEED_PC_DIR: pcRoot,
     },
   });
 }
@@ -89,7 +89,7 @@ describe('run-skill.cjs', () => {
       path.resolve(pcRoot, '..', 'Resource', 'skills'),
     ];
     const directScriptCommands: string[] = [];
-    const commandPattern = /(?:\$ORKAS_NODE|\bnode\b|\bpython3?\b|\bbash\b|\bsh\b|\bruby\b|\bpwsh\b|\bpowershell\b|&\s+\$\w+)[^\n]*(?:scripts[\\/]|[\\/]scripts[\\/])/i;
+    const commandPattern = /(?:\$COGSEED_NODE|\bnode\b|\bpython3?\b|\bbash\b|\bsh\b|\bruby\b|\bpwsh\b|\bpowershell\b|&\s+\$\w+)[^\n]*(?:scripts[\\/]|[\\/]scripts[\\/])/i;
 
     for (const file of roots.flatMap(skillMarkdownFiles)) {
       const relative = path.relative(path.resolve(pcRoot, '..'), file);
@@ -146,8 +146,8 @@ describe('run-skill.cjs', () => {
     writeAgentMarketplaceSkill('agent-a', 'stage-compose', 'stage-compose', 'compose_preview');
 
     const r = runSkill('stage-compose', 'compose_preview', ['--op', 'inspect'], {
-      ORKAS_UID: 'u1',
-      ORKAS_AGENT_ID: 'agent-a',
+      COGSEED_UID: 'u1',
+      COGSEED_AGENT_ID: 'agent-a',
     });
 
     expect(r.status).toBe(0);
@@ -159,8 +159,8 @@ describe('run-skill.cjs', () => {
     writeAgentMarketplaceSkill('agent-a', 'stage-compose', 'stage-compose', 'compose_preview');
 
     const r = runSkill('stage-compose', 'compose_preview', [], {
-      ORKAS_UID: 'u1',
-      ORKAS_AGENT_ID: 'agent-b',
+      COGSEED_UID: 'u1',
+      COGSEED_AGENT_ID: 'agent-b',
     });
 
     expect(r.status).toBe(66);
@@ -171,11 +171,11 @@ describe('run-skill.cjs', () => {
     expect(JSON.stringify(err.searched)).not.toContain('agent-a');
   });
 
-  it('requires ORKAS_UID before resolving agent private marketplace skills', () => {
+  it('requires COGSEED_UID before resolving agent private marketplace skills', () => {
     writeAgentMarketplaceSkill('agent-a', 'stage-compose', 'stage-compose', 'compose_preview');
 
     const r = runSkill('stage-compose', 'compose_preview', [], {
-      ORKAS_AGENT_ID: 'agent-a',
+      COGSEED_AGENT_ID: 'agent-a',
     });
 
     expect(r.status).toBe(66);
@@ -220,7 +220,7 @@ describe('run-skill.cjs', () => {
     expect(JSON.parse(r.stdout.trim())).toEqual({ runner: 'ps1' });
   });
 
-  it('uses ORKAS_PYTHON for plain Python skill scripts', () => {
+  it('uses COGSEED_PYTHON for plain Python skill scripts', () => {
     const skillDir = path.join(tmpDir, 'u1', 'local', 'marketplace', 'skills', 'py-skill');
     const scriptsDir = path.join(skillDir, 'scripts');
     fs.mkdirSync(scriptsDir, { recursive: true });
@@ -247,7 +247,7 @@ describe('run-skill.cjs', () => {
       fs.chmodSync(fakePython, 0o755);
     }
 
-    const r = runSkill('py-skill', 'run', ['arg1'], { ORKAS_PYTHON: fakePython });
+    const r = runSkill('py-skill', 'run', ['arg1'], { COGSEED_PYTHON: fakePython });
 
     expect(r.status).toBe(0);
     expect(r.stderr).toBe('');

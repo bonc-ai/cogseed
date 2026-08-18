@@ -28,7 +28,7 @@ Measure whether AI answer engines surface a brand. Split because a skill can't r
 
 1) Generate queries:
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" geo-probe geo_probe -- --op queries --input <crawl.json> [--brand X] [--domain x.com] [--competitors "A,B"]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" geo-probe geo_probe -- --op queries --input <crawl.json> [--brand X] [--domain x.com] [--competitors "A,B"]
 ```
 → `{ ok, data: { brand, domain, competitors, queries:[...] } }`
 
@@ -38,12 +38,12 @@ The `queries` op also returns `context_terms` (distinctive page-vocabulary words
 
 3) Score the answers (pass the payload on stdin or `--input`):
 ```
-echo '{"brand":"Orkas","domain":"orkas.ai","competitors":["Cursor"],"context_terms":["ai","agent","desktop"],"answers":[{"query":"...","model":"...","mode":"retrieval","text":"..."}]}' | "$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" geo-probe geo_probe -- --op score
+echo '{"brand":"CogSeed","domain":"cogseed.ai","competitors":["Cursor"],"context_terms":["ai","agent","desktop"],"answers":[{"query":"...","model":"...","mode":"retrieval","text":"..."}]}' | "$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" geo-probe geo_probe -- --op score
 ```
 → `{ ok, data: { share_of_voice, citation_rate, brand_mentions, domain_citations, ambiguous_mentions, competitor_share, context_terms, per_answer:[...], data_tier, note } }`
 
 ## Honesty
 
-- `share_of_voice` counts only **corroborated product mentions**: the answer cites the domain, OR the brand token appears together with a page-context term. A brand-token hit with no context term and no domain is **`ambiguous`** (likely a homonym, e.g. "Orkas" → orcas/whales) and is excluded from share_of_voice (surfaced as `ambiguous_mentions`). Without `context_terms`, it falls back to counting any brand-token hit.
+- `share_of_voice` counts only **corroborated product mentions**: the answer cites the domain, OR the brand token appears together with a page-context term. A brand-token hit with no context term and no domain is **`ambiguous`** (likely a homonym, e.g. "CogSeed" → orcas/whales) and is excluded from share_of_voice (surfaced as `ambiguous_mentions`). Without `context_terms`, it falls back to counting any brand-token hit.
 - `citation_rate` counts sourced domain citations and is the most reliable signal.
 - `data_tier` is `Measured` only when every answer came from a retrieval-capable model, otherwise `Estimated`. Always report which it is — never present a parametric-memory mention as a real citation.

@@ -212,7 +212,7 @@ export function assessEstimatedNarrationFit(input: {
  *  words drops model names, acronyms, versions, years, and punctuation from the
  *  budget. The rates below intentionally approximate a natural explainer read;
  *  the post-synthesis media probe remains the source of truth. */
-export function estimateNarrationDuration(text: string, speed = 1): NarrationDurationEstimate {
+export function esticogseedNarrationDuration(text: string, speed = 1): NarrationDurationEstimate {
   const measured = measureNarrationUnits(text);
   const cjkCharacters = (text.match(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7a3\uf900-\ufaff]/g) || []).length;
   const latinTokens: string[] = text.match(/[A-Za-z]+(?:['’][A-Za-z]+)*/g) ?? [];
@@ -422,7 +422,7 @@ class DoubaoTtsBackend implements TtsBackend {
     const upstreamFormat = normalizeDoubaoAudioFormat(format);
     const resourceId = this.profile.resourceId?.trim() || deriveDoubaoResourceId(speaker);
     const body = {
-      user: { uid: 'orkas' },
+      user: { uid: 'cogseed' },
       req_params: {
         text: p.text,
         speaker,
@@ -479,14 +479,14 @@ class UnconfiguredTtsBackend implements TtsBackend {
 
 /** Resolve the active TTS backend: env override -> ordered saved profile list -> explicit setup error. */
 function resolveTtsBackend(routeRef?: string): TtsBackend {
-  const envBase = process.env.ORKAS_TTS_BASE_URL;
-  const envKey = process.env.ORKAS_TTS_API_KEY;
-  const envModel = process.env.ORKAS_TTS_MODEL;
+  const envBase = process.env.COGSEED_TTS_BASE_URL;
+  const envKey = process.env.COGSEED_TTS_API_KEY;
+  const envModel = process.env.COGSEED_TTS_MODEL;
   if (envBase && envKey && envModel && (!routeRef || routeRef === 'env:tts')) {
     return new OpenAICompatibleTtsBackend({
       baseUrl: envBase, apiKey: envKey, model: envModel,
-      ...(process.env.ORKAS_TTS_VOICE ? { voice: process.env.ORKAS_TTS_VOICE } : {}),
-      ...(process.env.ORKAS_TTS_FORMAT ? { format: process.env.ORKAS_TTS_FORMAT } : {}),
+      ...(process.env.COGSEED_TTS_VOICE ? { voice: process.env.COGSEED_TTS_VOICE } : {}),
+      ...(process.env.COGSEED_TTS_FORMAT ? { format: process.env.COGSEED_TTS_FORMAT } : {}),
       label: 'env',
     });
   }
@@ -510,7 +510,7 @@ function resolveTtsBackend(routeRef?: string): TtsBackend {
 
 /** True when a BYO TTS provider is configured (env or saved profile). */
 export function hasConfiguredTtsProvider(): boolean {
-  if (process.env.ORKAS_TTS_BASE_URL && process.env.ORKAS_TTS_API_KEY && process.env.ORKAS_TTS_MODEL) return true;
+  if (process.env.COGSEED_TTS_BASE_URL && process.env.COGSEED_TTS_API_KEY && process.env.COGSEED_TTS_MODEL) return true;
   try { return listTtsProfiles().length > 0; } catch { return false; }
 }
 

@@ -40,7 +40,7 @@ export function nativeSearchToolForApi(api: string | undefined): Record<string, 
 
     // Anthropic Messages protocol — **deliberately unsupported**.
     //   The `web_search_20250305` server tool is a real entry in the
-    //   official docs, but in the Orkas catalog the `anthropic` provider
+    //   official docs, but in the CogSeed catalog the `anthropic` provider
     //   is mostly accessed via OAuth (Claude Pro/Max subscription or
     //   Claude Code login, token shaped like `sk-ant-oat...`), and pi-ai
     //   wraps OAuth with the `claude-code-20250219` +

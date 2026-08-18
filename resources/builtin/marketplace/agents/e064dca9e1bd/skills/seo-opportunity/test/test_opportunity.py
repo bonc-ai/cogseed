@@ -14,11 +14,11 @@ from opportunity import (  # noqa: E402
 )
 
 
-CRAWL = {"ok": True, "data": {"site": {"origin": "https://orkas.ai"}, "pages": [{
-    "url": "https://orkas.ai/open-source-ai-assistant/",
-    "title": "Open Source AI Assistant | Orkas",
+CRAWL = {"ok": True, "data": {"site": {"origin": "https://cogseed.ai"}, "pages": [{
+    "url": "https://cogseed.ai/open-source-ai-assistant/",
+    "title": "Open Source AI Assistant | CogSeed",
     "h1s": ["Open source AI assistant"],
-    "first_paragraph": "Orkas is a local-first multi-agent desktop AI assistant for teams.",
+    "first_paragraph": "CogSeed is a local-first multi-agent desktop AI assistant for teams.",
 }]}}
 
 
@@ -41,8 +41,8 @@ class OpportunityTest(unittest.TestCase):
 
     def test_cannibalization_when_same_query_has_multiple_pages(self):
         gsc_pages = {"rows": [
-            {"keys": ["local first ai", "https://orkas.ai/a"], "clicks": 2, "impressions": 80, "position": 12},
-            {"keys": ["local first ai", "https://orkas.ai/b"], "clicks": 1, "impressions": 70, "position": 15},
+            {"keys": ["local first ai", "https://cogseed.ai/a"], "clicks": 2, "impressions": 80, "position": 12},
+            {"keys": ["local first ai", "https://cogseed.ai/b"], "clicks": 1, "impressions": 70, "position": 15},
         ]}
         got = build_opportunities(CRAWL, gsc_pages=gsc_pages)
         self.assertTrue(any(o["type"] == "cannibalization" for o in got["opportunities"]))
@@ -53,7 +53,7 @@ class OpportunityTest(unittest.TestCase):
         # fallback URL must NOT count as a second competing page.
         gsc = {"rows": [{"keys": ["open source ai assistant"], "clicks": 10,
                          "impressions": 800, "position": 11.2}]}
-        gsc_pages = {"rows": [{"keys": ["open source ai assistant", "https://orkas.ai/real-page"],
+        gsc_pages = {"rows": [{"keys": ["open source ai assistant", "https://cogseed.ai/real-page"],
                                "clicks": 2, "impressions": 120, "position": 9}]}
         got = build_opportunities(CRAWL, gsc=gsc, gsc_pages=gsc_pages)
         self.assertFalse(any(o["type"] == "cannibalization" for o in got["opportunities"]))
@@ -66,7 +66,7 @@ class OpportunityTest(unittest.TestCase):
         self.assertFalse(any(o["source"] == "gsc" for o in got["opportunities"]))
 
     def test_geo_gap_from_probe(self):
-        geo = {"data": {"brand": "Orkas", "data_tier": "Estimated",
+        geo = {"data": {"brand": "CogSeed", "data_tier": "Estimated",
                         "competitor_share": {"Cline": 0.5},
                         "per_answer": [{"query": "best AI coding agent for teams",
                                         "result": "absent", "domain_cited": False}]}}
@@ -83,7 +83,7 @@ class OpportunityTest(unittest.TestCase):
     def test_geo_gap_mentioned_uncited_vs_cited(self):
         # mentioned-but-uncited is a gap; mentioned-and-cited is not. The top
         # competitor by share (Cursor 0.7 > Cline 0.5) is surfaced in the signal.
-        geo = {"data": {"brand": "Orkas", "data_tier": "Estimated",
+        geo = {"data": {"brand": "CogSeed", "data_tier": "Estimated",
                         "competitor_share": {"Cline": 0.5, "Cursor": 0.7},
                         "per_answer": [
                             {"query": "best ai pair programmer", "result": "mentioned",
@@ -160,25 +160,25 @@ class OpportunityTest(unittest.TestCase):
         self.assertEqual(matches[0]["query"], "AI Assistant For Teams")
 
     def test_inferred_skips_query_already_present_in_console(self):
-        # "assistant orkas guide" is one of the inferred queries for the CRAWL
+        # "assistant cogseed guide" is one of the inferred queries for the CRAWL
         # page; when it already exists as a measured console row the inferred
         # duplicate is dropped, but the sibling inferred query still appears.
-        gsc = {"rows": [{"keys": ["assistant orkas guide"], "clicks": 1,
+        gsc = {"rows": [{"keys": ["assistant cogseed guide"], "clicks": 1,
                          "impressions": 50, "position": 12}]}
         got = build_opportunities(CRAWL, gsc=gsc)
-        guide = [o for o in got["opportunities"] if o["query"].lower() == "assistant orkas guide"]
+        guide = [o for o in got["opportunities"] if o["query"].lower() == "assistant cogseed guide"]
         self.assertEqual(len(guide), 1)
         self.assertEqual(guide[0]["type"], "quick_win")
-        self.assertTrue(any(o["query"] == "best assistant orkas tools" and o["type"] == "content_gap"
+        self.assertTrue(any(o["query"] == "best assistant cogseed tools" and o["type"] == "content_gap"
                             for o in got["opportunities"]))
 
     def test_capitalized_column_shape_is_parsed(self):
         # Capitalized GSC export columns (Query/Page/Impressions/Position) are
         # read by _key_text/_page_text/_num just like the lowercase shape.
         gsc_pages = {"rows": [
-            {"Query": "ai code helper", "Page": "https://orkas.ai/x",
+            {"Query": "ai code helper", "Page": "https://cogseed.ai/x",
              "Clicks": 2, "Impressions": 80, "Position": 12},
-            {"Query": "ai code helper", "Page": "https://orkas.ai/y",
+            {"Query": "ai code helper", "Page": "https://cogseed.ai/y",
              "Clicks": 1, "Impressions": 70, "Position": 15},
         ]}
         got = build_opportunities(CRAWL, gsc_pages=gsc_pages)

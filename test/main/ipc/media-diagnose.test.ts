@@ -35,9 +35,9 @@ let prevWs: string | undefined;
 const TEST_UID = 'uMediaDiagnose';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-media-diagnose-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-media-diagnose-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   vi.clearAllMocks();
   const users = await import('../../../src/main/features/users');
@@ -45,7 +45,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -53,7 +53,7 @@ async function invoke(payload: Record<string, unknown>): Promise<any> {
   const electron = await import('electron') as any;
   const { register } = await import('../../../src/main/ipc/index');
   register();
-  const call = electron.ipcMain.handle.mock.calls.find(([name]: [string]) => name === 'orkas.invoke');
+  const call = electron.ipcMain.handle.mock.calls.find(([name]: [string]) => name === 'cogseed.invoke');
   expect(call).toBeTruthy();
   return call[1](
     { sender: trustedIpcSender() },

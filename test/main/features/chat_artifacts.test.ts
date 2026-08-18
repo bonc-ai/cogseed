@@ -19,9 +19,9 @@ vi.mock('../../../src/main/features/recall/source-removal', () => ({
 }));
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-chatart-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-chatart-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   sourceRemovalCalls.length = 0;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
@@ -29,7 +29,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -122,14 +122,14 @@ describe('chat_artifacts › createArtifact', () => {
     expect(m.inspectArtifactIndex(UID, CID, r.artifactId)).toEqual({ ok: true, status: 'ok' });
 
     const indexPath = path.join(cidDir(), r.artifactId, 'index.html');
-    fs.writeFileSync(indexPath, '__orkas_compacted_tool_use', 'utf8');
+    fs.writeFileSync(indexPath, '__cogseed_compacted_tool_use', 'utf8');
     const inspected = m.inspectArtifactIndex(UID, CID, r.artifactId);
     expect(inspected).toMatchObject({
       ok: true,
       status: 'unavailable',
-      marker: '__orkas_compacted_tool_use',
+      marker: '__cogseed_compacted_tool_use',
     });
-    expect(fs.readFileSync(indexPath, 'utf8')).toBe('__orkas_compacted_tool_use');
+    expect(fs.readFileSync(indexPath, 'utf8')).toBe('__cogseed_compacted_tool_use');
   });
 
   it('rejects: no index.html', async () => {
@@ -163,7 +163,7 @@ describe('chat_artifacts › createArtifact', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('rejects: reserved __cogseed-meta.json / __orkas/ paths', async () => {
+  it('rejects: reserved __cogseed-meta.json / __cogseed/ paths', async () => {
     const m = await loadMod();
     expect((m.createArtifact(UID, CID, AGENT, { files: [{ path: 'index.html', content: 'x' }, { path: '__cogseed-meta.json', content: '{}' }] }) as { ok: boolean }).ok).toBe(false);
     expect((m.createArtifact(UID, CID, AGENT, { files: [{ path: 'index.html', content: 'x' }, { path: '__cogseed/bridge.js', content: 'x' }] }) as { ok: boolean }).ok).toBe(false);
@@ -320,9 +320,9 @@ describe('chat_artifacts › resolveArtifactFilePath', () => {
     expect((m.resolveArtifactFilePath(UID, CID, '..', 'index.html') as { ok: boolean }).ok).toBe(false);
   });
 
-  it('rejects: anything under the reserved __orkas/ prefix', async () => {
+  it('rejects: anything under the reserved __cogseed/ prefix', async () => {
     const { m, artifactId } = await seed();
-    const got = m.resolveArtifactFilePath(UID, CID, artifactId, '__orkas/secrets.js');
+    const got = m.resolveArtifactFilePath(UID, CID, artifactId, '__cogseed/secrets.js');
     expect(got.ok).toBe(false);
   });
 });

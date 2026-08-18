@@ -1,4 +1,4 @@
-/* Orkas Frontend */
+/* CogSeed Frontend */
 
 let currentUserId = '';
 let accessPassword = '';

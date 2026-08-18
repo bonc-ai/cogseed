@@ -128,7 +128,7 @@ function mergePendingIntent(
 function requestNeedsWorkflowReconciliation(
   request: AgentWakeRequest,
 ): boolean {
-  if (request.execution_domain === 'mate') return false;
+  if (request.execution_domain === 'cogseed') return false;
   return !!(
     request.pending_cleanup_step_ids?.length ||
     request.workflow_transition === "rejecting" ||

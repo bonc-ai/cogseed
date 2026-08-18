@@ -6,20 +6,20 @@ import * as path from 'node:path';
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bundled-runtime-'));
-  process.env.ORKAS_RUNTIME_DIR = path.join(tmpDir, 'runtime');
-  process.env.ORKAS_WORKSPACE_ROOT ||= path.join(tmpDir, 'data');
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bundled-runtime-'));
+  process.env.COGSEED_RUNTIME_DIR = path.join(tmpDir, 'runtime');
+  process.env.COGSEED_WORKSPACE_ROOT ||= path.join(tmpDir, 'data');
 });
 
 afterEach(() => {
-  delete process.env.ORKAS_RUNTIME_DIR;
+  delete process.env.COGSEED_RUNTIME_DIR;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe('bundled-runtime', () => {
   it('exposes bundled runtime executable directories for sandbox PATH precedence', async () => {
     const key = `${process.platform}-${process.arch}`;
-    const runtimeRoot = process.env.ORKAS_RUNTIME_DIR!;
+    const runtimeRoot = process.env.COGSEED_RUNTIME_DIR!;
     const pythonRel = process.platform === 'win32'
       ? path.join('python', key, 'python', 'python.exe')
       : path.join('python', key, 'python', 'bin', 'python3');
@@ -46,14 +46,14 @@ describe('bundled-runtime', () => {
 
     const runtime = await import('../../../src/main/util/bundled-runtime');
 
-    expect(runtime.bundledRuntimeEnv().ORKAS_PYTHON).toBe(pythonExe);
-    expect(runtime.bundledRuntimeEnv().ORKAS_UV).toBe(uvExe);
-    expect(runtime.bundledRuntimeEnv().ORKAS_BUNDLED_NODE).toBe(nodeExe);
+    expect(runtime.bundledRuntimeEnv().COGSEED_PYTHON).toBe(pythonExe);
+    expect(runtime.bundledRuntimeEnv().COGSEED_UV).toBe(uvExe);
+    expect(runtime.bundledRuntimeEnv().COGSEED_BUNDLED_NODE).toBe(nodeExe);
     const entries = runtime.bundledRuntimePathEntries();
     expect(entries[0]).toBe(path.dirname(pythonExe));
     expect(entries).toContain(path.dirname(uvExe));
     // Node's bin (mac/linux) / install root (win) must be on PATH so the bash
-    // tool and orkas-pkg resolve bundled node/npm/npx without a user toolchain.
+    // tool and cogseed-pkg resolve bundled node/npm/npx without a user toolchain.
     expect(entries).toContain(path.dirname(nodeExe));
     if (process.platform === 'win32') {
       expect(entries).toContain(path.join(path.dirname(pythonExe), 'Scripts'));
@@ -64,7 +64,7 @@ describe('bundled-runtime', () => {
 describe('bundled-runtime › media binaries (ffmpeg / whisper)', () => {
   const exe = process.platform === 'win32' ? '.exe' : '';
   const key = `${process.platform}-${process.arch}`;
-  const MEDIA_ENV = ['ORKAS_BUNDLED_FFMPEG', 'ORKAS_BUNDLED_FFPROBE', 'ORKAS_WHISPER_CPP', 'ORKAS_WHISPER_CLI', 'ORKAS_WHISPER_MODEL'];
+  const MEDIA_ENV = ['COGSEED_BUNDLED_FFMPEG', 'COGSEED_BUNDLED_FFPROBE', 'COGSEED_WHISPER_CPP', 'COGSEED_WHISPER_CLI', 'COGSEED_WHISPER_MODEL'];
   let savedEnv: Record<string, string | undefined>;
   let savedResourcesPath: PropertyDescriptor | undefined;
 
@@ -83,7 +83,7 @@ describe('bundled-runtime › media binaries (ffmpeg / whisper)', () => {
   });
 
   function vendorFfmpeg(): { ffmpeg: string; ffprobe: string } {
-    const dir = path.join(process.env.ORKAS_RUNTIME_DIR!, 'ffmpeg', key);
+    const dir = path.join(process.env.COGSEED_RUNTIME_DIR!, 'ffmpeg', key);
     fs.mkdirSync(dir, { recursive: true });
     const ffmpeg = path.join(dir, `ffmpeg${exe}`);
     const ffprobe = path.join(dir, `ffprobe${exe}`);
@@ -100,18 +100,18 @@ describe('bundled-runtime › media binaries (ffmpeg / whisper)', () => {
     // Skill subprocesses inherit the resolved binaries via env (their resolver
     // checks these first) — the gap that let a stray shell `ffprobe` fail.
     const env = runtime.bundledRuntimeEnv();
-    expect(env.ORKAS_BUNDLED_FFMPEG).toBe(ffmpeg);
-    expect(env.ORKAS_BUNDLED_FFPROBE).toBe(ffprobe);
+    expect(env.COGSEED_BUNDLED_FFMPEG).toBe(ffmpeg);
+    expect(env.COGSEED_BUNDLED_FFPROBE).toBe(ffprobe);
     expect(runtime.bundledRuntimePathEntries()).toContain(path.dirname(ffmpeg));
   });
 
-  it('honors ORKAS_BUNDLED_FFMPEG / ORKAS_BUNDLED_FFPROBE overrides', async () => {
+  it('honors COGSEED_BUNDLED_FFMPEG / COGSEED_BUNDLED_FFPROBE overrides', async () => {
     const ffmpeg = path.join(tmpDir, `custom-ffmpeg${exe}`);
     const ffprobe = path.join(tmpDir, `custom-ffprobe${exe}`);
     fs.writeFileSync(ffmpeg, '');
     fs.writeFileSync(ffprobe, '');
-    process.env.ORKAS_BUNDLED_FFMPEG = ffmpeg;
-    process.env.ORKAS_BUNDLED_FFPROBE = ffprobe;
+    process.env.COGSEED_BUNDLED_FFMPEG = ffmpeg;
+    process.env.COGSEED_BUNDLED_FFPROBE = ffprobe;
     const runtime = await import('../../../src/main/util/bundled-runtime');
     expect(runtime.bundledFfmpegPaths()).toEqual({ ffmpeg, ffprobe });
   });
@@ -153,7 +153,7 @@ describe('bundled-runtime › media binaries (ffmpeg / whisper)', () => {
   });
 
   it('resolves the packaged multilingual q5 Whisper CLI and model', async () => {
-    const dir = path.join(process.env.ORKAS_RUNTIME_DIR!, 'whisper', key);
+    const dir = path.join(process.env.COGSEED_RUNTIME_DIR!, 'whisper', key);
     const cli = path.join(dir, 'bin', `whisper-cli${exe}`);
     const model = path.join(dir, 'models', 'ggml-base-q5_1.bin');
     fs.mkdirSync(path.dirname(cli), { recursive: true });
@@ -164,8 +164,8 @@ describe('bundled-runtime › media binaries (ffmpeg / whisper)', () => {
     const runtime = await import('../../../src/main/util/bundled-runtime');
     expect(runtime.bundledWhisperPaths()).toEqual({ cli, model });
     const env = runtime.bundledRuntimeEnv();
-    expect(env.ORKAS_WHISPER_CPP).toBe(cli);
-    expect(env.ORKAS_WHISPER_MODEL).toBe(model);
+    expect(env.COGSEED_WHISPER_CPP).toBe(cli);
+    expect(env.COGSEED_WHISPER_MODEL).toBe(model);
     expect(runtime.bundledRuntimePathEntries()).toContain(path.dirname(cli));
   });
 
@@ -173,7 +173,7 @@ describe('bundled-runtime › media binaries (ffmpeg / whisper)', () => {
     Object.defineProperty(process, 'resourcesPath', {
       value: path.join(tmpDir, 'no-resources'), configurable: true, writable: true,
     });
-    const dir = path.join(process.env.ORKAS_RUNTIME_DIR!, 'whisper', key);
+    const dir = path.join(process.env.COGSEED_RUNTIME_DIR!, 'whisper', key);
     const cli = path.join(dir, 'bin', `whisper-cli${exe}`);
     const model = path.join(dir, 'models', 'ggml-base-q5_1.bin');
     fs.mkdirSync(path.dirname(cli), { recursive: true });
@@ -194,12 +194,12 @@ describe('bundled-runtime › media binaries (ffmpeg / whisper)', () => {
     const model = path.join(tmpDir, 'ggml-base.bin');
     fs.writeFileSync(cli, '');
     fs.writeFileSync(model, '');
-    process.env.ORKAS_WHISPER_CPP = cli;
-    process.env.ORKAS_WHISPER_MODEL = model;
+    process.env.COGSEED_WHISPER_CPP = cli;
+    process.env.COGSEED_WHISPER_MODEL = model;
     const runtime = await import('../../../src/main/util/bundled-runtime');
     expect(runtime.bundledWhisperPaths()).toEqual({ cli, model });
     const env = runtime.bundledRuntimeEnv();
-    expect(env.ORKAS_WHISPER_CPP).toBe(cli);
-    expect(env.ORKAS_WHISPER_MODEL).toBe(model);
+    expect(env.COGSEED_WHISPER_CPP).toBe(cli);
+    expect(env.COGSEED_WHISPER_MODEL).toBe(model);
   });
 });

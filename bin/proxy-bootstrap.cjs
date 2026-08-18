@@ -8,16 +8,16 @@
  */
 
 function installChildProxy() {
-  const mode = String(process.env.ORKAS_PROXY_MODE || '').trim();
+  const mode = String(process.env.COGSEED_PROXY_MODE || '').trim();
   if (!mode || mode === 'direct') return false;
   if (mode === 'unsupported') {
-    const route = String(process.env.ORKAS_PROXY_UNSUPPORTED || 'unknown').slice(0, 80);
+    const route = String(process.env.COGSEED_PROXY_UNSUPPORTED || 'unknown').slice(0, 80);
     throw new Error(`system proxy route is unsupported for this child process: ${route}`);
   }
 
   if (mode === 'system-fetch') {
-    const bridgeUrl = process.env.ORKAS_PROXY_BRIDGE_URL;
-    const bridgeToken = process.env.ORKAS_PROXY_BRIDGE_TOKEN;
+    const bridgeUrl = process.env.COGSEED_PROXY_BRIDGE_URL;
+    const bridgeToken = process.env.COGSEED_PROXY_BRIDGE_TOKEN;
     if (!bridgeUrl || !bridgeToken) throw new Error('system fetch bridge configuration is incomplete');
     globalThis.fetch = createBridgeFetch(globalThis.fetch.bind(globalThis), bridgeUrl, bridgeToken);
     return true;
@@ -34,13 +34,13 @@ function installChildProxy() {
   };
 
   if (mode === 'env') {
-    const httpProxy = process.env.ORKAS_PROXY_HTTP_URL || undefined;
-    const httpsProxy = process.env.ORKAS_PROXY_HTTPS_URL || undefined;
+    const httpProxy = process.env.COGSEED_PROXY_HTTP_URL || undefined;
+    const httpsProxy = process.env.COGSEED_PROXY_HTTPS_URL || undefined;
     if (!httpProxy && !httpsProxy) return false;
     setGlobalDispatcher(new EnvHttpProxyAgent({
       ...(httpProxy ? { httpProxy } : {}),
       ...(httpsProxy ? { httpsProxy } : {}),
-      noProxy: process.env.ORKAS_PROXY_NO_PROXY || 'localhost,127.0.0.1,::1,*.local',
+      noProxy: process.env.COGSEED_PROXY_NO_PROXY || 'localhost,127.0.0.1,::1,*.local',
       ...dispatcherOpts,
     }));
     return true;
@@ -78,18 +78,18 @@ function createBridgeFetch(nativeFetch, bridgeUrl, bridgeToken) {
     const response = await nativeFetch(bridgeUrl, {
       method: 'POST',
       headers: {
-        'x-orkas-proxy-token': bridgeToken,
-        'x-orkas-fetch-meta': meta,
+        'x-cogseed-proxy-token': bridgeToken,
+        'x-cogseed-fetch-meta': meta,
       },
       signal: request.signal,
       ...(request.body ? { body: request.body, duplex: 'half' } : {}),
     });
     if (!response.ok) {
-      const detail = String(response.headers.get('x-orkas-bridge-error') || `HTTP ${response.status}`)
+      const detail = String(response.headers.get('x-cogseed-bridge-error') || `HTTP ${response.status}`)
         .slice(0, 200);
       throw new Error(`system fetch bridge failed: ${detail}`);
     }
-    const responseMeta = decodeMeta(response.headers.get('x-orkas-fetch-meta'));
+    const responseMeta = decodeMeta(response.headers.get('x-cogseed-fetch-meta'));
     return new Response(response.body, {
       status: responseMeta.status,
       statusText: responseMeta.statusText,

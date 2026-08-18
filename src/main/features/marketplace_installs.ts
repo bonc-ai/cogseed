@@ -13,14 +13,14 @@
  *     "agents": [
  *       { "id": "abc123def456", "version": "1.0.0", "published_at": 1747066800000,
  *         "updated_at": 1747067800000,
- *         "agent_json_url": "https://orkas-1367889399.cos.../agent.json",
- *         "agent_skills_bundle_url": "https://orkas-1367889399.cos.../skills.zip",
+ *         "agent_json_url": "https://cogseed-1367889399.cos.../agent.json",
+ *         "agent_skills_bundle_url": "https://cogseed-1367889399.cos.../skills.zip",
  *         "installed_at": 1747066800100 }
  *     ],
  *     "skills": [
  *       { "id": "xyz789...", "version": "1.0.0", "published_at": 1747066800000,
  *         "updated_at": 1747067800000,
- *         "bundle_url": "https://orkas-1367889399.cos.../xyz789.zip",
+ *         "bundle_url": "https://cogseed-1367889399.cos.../xyz789.zip",
  *         "installed_at": 1747066800100 }
  *     ]
  *   }
@@ -106,7 +106,7 @@ export interface AgentInstall {
    *  These rows may start without server URLs; online resolution patches them
    *  into ordinary marketplace rows. */
   seed_source?: 'builtin' | string;
-  /** Minimum Orkas app version required to materialize/run this marketplace agent. */
+  /** Minimum CogSeed app version required to materialize/run this marketplace agent. */
   min_app_version?: string;
 }
 
@@ -128,7 +128,7 @@ export interface SkillInstall {
   state?: string;
   /** Same as `AgentInstall.seed_source`. */
   seed_source?: 'builtin' | string;
-  /** Minimum Orkas app version required to materialize/run this marketplace skill. */
+  /** Minimum CogSeed app version required to materialize/run this marketplace skill. */
   min_app_version?: string;
 }
 

@@ -206,7 +206,7 @@ const chatCommand: CLICommand = {
         if (trimmed === "/status") {
           const session = runner.getSession();
           console.log(`Messages: ${session.length}`);
-          console.log(`Estimated tokens: ${session.estimateTokens()}\n`);
+          console.log(`Estimated tokens: ${session.esticogseedTokens()}\n`);
           continue;
         }
 

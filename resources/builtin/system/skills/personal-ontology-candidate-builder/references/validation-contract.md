@@ -36,7 +36,7 @@ Skill: `personal-ontology-candidate-builder`  ·  Level: `L3`  ·  Owner: `Mate 
 - 所有候选带 `source_memory_refs`。
 - 所有候选 `sync_policy=local_only`。
 - 输出为**人读 markdown**（candidates.md / blocked_items.md），非 JSON。
-- 路径用 `$ORKAS_WORKSPACE_ROOT/$ORKAS_UID` 环境变量拼，不写死具体用户路径。
+- 路径用 `$COGSEED_WORKSPACE_ROOT/$COGSEED_UID` 环境变量拼，不写死具体用户路径。
 
 ## 结果指标（Outcome Metrics）
 

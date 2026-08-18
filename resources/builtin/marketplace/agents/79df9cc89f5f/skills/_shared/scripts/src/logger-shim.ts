@@ -8,7 +8,7 @@ export interface Logger {
 export function createLogger(moduleName: string): Logger {
   const scope = String(moduleName || 'video-script').trim() || 'video-script';
   const write = (level: 'error' | 'warn' | 'info' | 'debug', message: string, args: unknown[]) => {
-    if (process.env.ORKAS_VIDEO_SCRIPT_DEBUG !== '1') return;
+    if (process.env.COGSEED_VIDEO_SCRIPT_DEBUG !== '1') return;
     const line = `[${scope}] ${message}`;
     if (level === 'error') console.error(line, ...args);
     else if (level === 'warn') console.warn(line, ...args);

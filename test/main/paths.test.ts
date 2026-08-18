@@ -11,14 +11,14 @@ let tmpDir: string;
 let prevWs: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-paths-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-paths-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -35,7 +35,7 @@ describe('paths › roots', () => {
     expect(p.PROJECT_ROOT).toBe(path.resolve(p.PC_ROOT, '..'));
   });
 
-  it('WS_ROOT honors ORKAS_WORKSPACE_ROOT env var', async () => {
+  it('WS_ROOT honors COGSEED_WORKSPACE_ROOT env var', async () => {
     const p = await import('../../src/main/paths');
     expect(p.WS_ROOT).toBe(tmpDir);
   });

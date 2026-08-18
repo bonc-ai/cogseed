@@ -14,7 +14,7 @@ describe('isolated mac development packaging', () => {
     const base = {
       appId: 'com.cogseed.desktop',
       productName: 'CogSeed',
-      protocols: [{ schemes: ['cogseed', 'mateagent', 'orkas'] }],
+      protocols: [{ schemes: ['cogseed'] }],
       directories: { output: 'dist' },
       files: ['bootstrap.cjs'],
       extraMetadata: { retained: true },
@@ -29,7 +29,7 @@ describe('isolated mac development packaging', () => {
       productName: 'CogSeed Dev',
       electronDist: '/cache/electron.zip',
       directories: { output: 'dist-dev' },
-      extraMetadata: { retained: true, orkasBuildChannel: 'packaged-dev' },
+      extraMetadata: { retained: true, cogseedBuildChannel: 'packaged-dev' },
       mac: {
         category: 'public.app-category.productivity',
         forceCodeSigning: false,

@@ -706,7 +706,7 @@ export class Session {
   }
 
   /** Estimate the token count for the same provider-facing view sent to providers. */
-  estimateModelTokens(): number {
+  esticogseedModelTokens(): number {
     return sumMessageTokens(this.getMessagesForModel());
   }
 
@@ -771,11 +771,11 @@ export class Session {
     const tokenById = new Map<number, number>();
     let rawTokens = 0;
     for (const turn of rawTurns) {
-      const tokens = this.estimateRawTurnTokens(turn);
+      const tokens = this.esticogseedRawTurnTokens(turn);
       tokenById.set(turn.id, tokens);
       rawTokens += tokens;
     }
-    const summaryTokens = estimateTextTokens(state.historySummary);
+    const summaryTokens = esticogseedTextTokens(state.historySummary);
     if (rawTokens + summaryTokens < HISTORY_RAW_TRIGGER_TOKENS) {
       return null;
     }
@@ -826,7 +826,7 @@ export class Session {
    *  the session. Used to reject summaries that do not actually free context. */
   previewHistorySummaryTokens(summary: string, turnIds: readonly number[]): number {
     const state = this.turnState;
-    if (!state) return this.estimateModelTokens();
+    if (!state) return this.esticogseedModelTokens();
     const previous = {
       historySummary: state.historySummary,
       summaryVersion: state.summaryVersion,
@@ -841,7 +841,7 @@ export class Session {
       state.historySummary = summary;
       state.summaryVersion += 1;
       state.summaryThroughTurnId = Math.max(state.summaryThroughTurnId ?? 0, ...turnIds);
-      return this.estimateModelTokens();
+      return this.esticogseedModelTokens();
     } finally {
       state.historySummary = previous.historySummary;
       state.summaryVersion = previous.summaryVersion;
@@ -850,7 +850,7 @@ export class Session {
     }
   }
 
-  estimateActiveProcessTokens(): number {
+  esticogseedActiveProcessTokens(): number {
     const active = this.turnState?.activeTurn;
     if (!active) return 0;
     // Mirror the model-facing view (getMessagesForModel): messages already folded
@@ -864,7 +864,7 @@ export class Session {
     // message so the trigger tracks the live tail that a checkpoint can actually
     // shrink.
     const checkpointThrough = active.checkpointThroughMessageIndex ?? active.userMessageIndex;
-    let total = estimateTextTokens(active.checkpointSummary || "");
+    let total = esticogseedTextTokens(active.checkpointSummary || "");
     for (let i = checkpointThrough + 1; i < this.messages.length; i++) {
       total += sumMessageTokens([this.messages[i]]);
     }
@@ -876,7 +876,7 @@ export class Session {
     const active = state?.activeTurn;
     if (!state || !active) return null;
 
-    const tokensBefore = this.estimateActiveProcessTokens();
+    const tokensBefore = this.esticogseedActiveProcessTokens();
     if (tokensBefore < ACTIVE_PROCESS_TRIGGER_TOKENS) return null;
 
     const checkpointThrough = active.checkpointThroughMessageIndex ?? active.userMessageIndex;
@@ -933,7 +933,7 @@ export class Session {
    *  pruning raw tool results or changing checkpoint metadata. */
   previewActiveCheckpointTokens(summary: string, checkpointThroughMessageIndex: number): number {
     const active = this.turnState?.activeTurn;
-    if (!active) return this.estimateModelTokens();
+    if (!active) return this.esticogseedModelTokens();
     const previousSummary = active.checkpointSummary;
     const previousThrough = active.checkpointThroughMessageIndex;
     try {
@@ -942,7 +942,7 @@ export class Session {
         previousThrough ?? active.userMessageIndex,
         checkpointThroughMessageIndex,
       );
-      return this.estimateModelTokens();
+      return this.esticogseedModelTokens();
     } finally {
       active.checkpointSummary = previousSummary;
       active.checkpointThroughMessageIndex = previousThrough;
@@ -1087,8 +1087,8 @@ export class Session {
    * Estimated tokens of the tail compact() keeps verbatim. If this alone already
    * exceeds the window threshold, the runner skips a no-progress legacy pass.
    */
-  estimateKeptTailTokens(): number {
-    if (this.messages.length <= 2) return this.estimateTokens();
+  esticogseedKeptTailTokens(): number {
+    if (this.messages.length <= 2) return this.esticogseedTokens();
     return sumMessageTokens(this.computeKeptTail());
   }
 
@@ -1098,7 +1098,7 @@ export class Session {
    * CJK symbols/punctuation, fullwidth forms) count ~1.5 token each; everything
    * else (ASCII/latin/whitespace/punct) follows the classic ~4 char/token ratio.
    */
-  estimateTokens(): number {
+  esticogseedTokens(): number {
     return sumMessageTokens(this.messages);
   }
 
@@ -1527,14 +1527,14 @@ export class Session {
     return result;
   }
 
-  private estimateRawTurnTokens(turn: CompletedTurnRecord): number {
+  private esticogseedRawTurnTokens(turn: CompletedTurnRecord): number {
     // The previous text-only sum made many short messages look almost free even
     // though providers also encode every role, content block, and field name.
     // Estimate the structured payload so one 12K high-water mark works without
     // a separate turn-count proxy. Binary media is replaced by a small marker.
     const messages = this.rawIOMessagesForTurn(turn).map(stripBinaryContent);
     try {
-      return estimateTextTokens(JSON.stringify(messages));
+      return esticogseedTextTokens(JSON.stringify(messages));
     } catch {
       return sumMessageTokens(messages);
     }
@@ -2303,22 +2303,22 @@ function truncateMiddle(text: string, maxChars: number): string {
 }
 
 /** Sum the heuristic token estimate across a set of messages. Shared by
- *  Session.estimateTokens() (whole history) and estimateKeptTailTokens() (the
+ *  Session.esticogseedTokens() (whole history) and esticogseedKeptTailTokens() (the
  *  tail a compaction would preserve). */
 function sumMessageTokens(messages: Message[]): number {
   let total = 0;
   for (const msg of messages) {
     for (const c of msg.content) {
-      if (c.type === "text") total += estimateTextTokens(c.text);
-      else if (c.type === "tool_result") total += estimateTextTokens(c.content);
-      else if (c.type === "tool_use") total += estimateTextTokens(JSON.stringify(c.input));
+      if (c.type === "text") total += esticogseedTextTokens(c.text);
+      else if (c.type === "tool_result") total += esticogseedTextTokens(c.content);
+      else if (c.type === "tool_use") total += esticogseedTextTokens(JSON.stringify(c.input));
     }
   }
   return total;
 }
 
 /** CJK-aware token estimator. CJK chars count as 1.5 tokens, other chars as 0.25. */
-export function estimateTextTokens(s: string): number {
+export function esticogseedTextTokens(s: string): number {
   let cjk = 0;
   let other = 0;
   for (let i = 0; i < s.length; i++) {

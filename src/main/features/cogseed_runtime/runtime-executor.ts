@@ -1,9 +1,9 @@
 import { PC_ROOT } from '../../paths';
-import { createMateRuntimeProvider } from '../cogseed_backend/model-provider';
-import { mateConnectorManager } from '../cogseed_backend/connector-manager';
-import { mateKbManager } from '../cogseed_backend/mate-kb-store';
-import { DEFAULT_RUNTIME_KERNEL_CONFIG, MATE_RUNTIME_TOOL_POLICY } from './kernel/config';
-import { createMateAgentKernel, type MateAgentKernel, type MateAgentKernelDeps } from './kernel';
+import { createCogSeedRuntimeProvider } from '../cogseed_backend/model-provider';
+import { cogseedConnectorManager } from '../cogseed_backend/connector-manager';
+import { cogseedKbManager } from '../cogseed_backend/cogseed-kb-store';
+import { DEFAULT_RUNTIME_KERNEL_CONFIG, COGSEED_RUNTIME_TOOL_POLICY } from './kernel/config';
+import { createCogSeedAgentKernel, type CogSeedAgentKernel, type CogSeedAgentKernelDeps } from './kernel';
 import type { RuntimeKernelEvent, RuntimeKernelRequest } from './kernel/types';
 import {
   createRuntimeModelAdapter,
@@ -20,7 +20,7 @@ export interface NativeRuntimeExecutorDeps {
   modelAdapter?: RuntimeModelAdapter;
   provider?: RuntimeModelProvider;
   toolRunnerFactory?: (request: RuntimeKernelRequest) => RuntimeToolRunner;
-  kernelFactory?: (deps: MateAgentKernelDeps) => MateAgentKernel;
+  kernelFactory?: (deps: CogSeedAgentKernelDeps) => CogSeedAgentKernel;
   maxToolRounds?: number;
   hostToolClient?: RuntimeHostToolClient;
 }
@@ -37,8 +37,8 @@ export function runtimeKernelRequestFromProtocol(request: RuntimeRunRequest): Ru
     readOnlyRoots: request.read_only_roots ?? [],
     writableRoots: request.writable_roots ?? [],
     toolPolicy: allowedSkillIds.length
-      ? { ...MATE_RUNTIME_TOOL_POLICY, skillRun: 'allowlisted_skills' }
-      : MATE_RUNTIME_TOOL_POLICY,
+      ? { ...COGSEED_RUNTIME_TOOL_POLICY, skillRun: 'allowlisted_skills' }
+      : COGSEED_RUNTIME_TOOL_POLICY,
     capabilities: request.capabilities ?? [],
     executionKind: 'cogseed-native',
     allowedSkillIds,
@@ -79,7 +79,7 @@ export function kernelEventToRuntimeEnvelope(event: RuntimeKernelEvent): Runtime
 }
 
 export function createNativeRuntimeExecutor(deps: NativeRuntimeExecutorDeps = {}): RuntimeExecutor {
-  const kernelFactory = deps.kernelFactory ?? createMateAgentKernel;
+  const kernelFactory = deps.kernelFactory ?? createCogSeedAgentKernel;
   return async function* runNativeRuntimeRequest(request: RuntimeRunRequest, opts: { signal?: AbortSignal | null } = {}) {
     const kernelRequest = runtimeKernelRequestFromProtocol(request);
     const toolRunner = deps.toolRunnerFactory?.(kernelRequest);
@@ -98,7 +98,7 @@ export function createDefaultNativeRuntimeExecutor(
   deps: Pick<NativeRuntimeExecutorDeps, 'modelAdapter' | 'provider' | 'kernelFactory' | 'hostToolClient'> = {},
 ): RuntimeExecutor {
   const modelAdapter = deps.modelAdapter ?? createRuntimeModelAdapter({
-    provider: deps.provider ?? createMateRuntimeProvider(),
+    provider: deps.provider ?? createCogSeedRuntimeProvider(),
   });
   return createNativeRuntimeExecutor({
     modelAdapter,
@@ -114,8 +114,8 @@ export function createDefaultNativeRuntimeExecutor(
       capabilities: request.capabilities,
       allowedSkillIds: request.allowedSkillIds,
       skillVersionPins: request.skillVersionPins,
-      connectorManager: mateConnectorManager,
-      kbManager: mateKbManager,
+      connectorManager: cogseedConnectorManager,
+      kbManager: cogseedKbManager,
       ...(deps.hostToolClient ? { hostToolClient: deps.hostToolClient } : {}),
       maxInlineToolResultTokens: DEFAULT_RUNTIME_KERNEL_CONFIG.maxInlineToolResultChars,
     }),

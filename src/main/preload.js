@@ -186,7 +186,7 @@ const expenseWorkbench = Object.freeze({
     }
     consumeExpenseWorkbenchGesture(agentId, gesture);
     await closeExpenseWorkbenchCapability();
-    const response = await ipcRenderer.invoke('orkas.expenseWorkbenchHost.prepareOpen', {
+    const response = await ipcRenderer.invoke('cogseed.expenseWorkbenchHost.prepareOpen', {
       agent_id: agentId,
       gesture,
     });
@@ -214,7 +214,7 @@ const expenseWorkbench = Object.freeze({
     if (!prepared || prepared.agentId !== normalizedAgentId) {
       throw new Error('expense workbench open authorization is missing or belongs to another Agent');
     }
-    const response = await ipcRenderer.invoke('orkas.expenseWorkbenchHost.open', {
+    const response = await ipcRenderer.invoke('cogseed.expenseWorkbenchHost.open', {
       open_ticket: prepared.openTicket,
       page_instance: prepared.pageInstance,
     });

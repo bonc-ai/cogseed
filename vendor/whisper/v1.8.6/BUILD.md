@@ -1,7 +1,7 @@
 # Vendored whisper.cpp macOS CLI
 
 The two Mach-O files in this directory are the target-native `whisper-cli`
-executables used by Orkas on macOS. They were built from the immutable
+executables used by CogSeed on macOS. They were built from the immutable
 whisper.cpp `v1.8.6` source archive:
 
 - source: `https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.8.6.tar.gz`

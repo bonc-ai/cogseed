@@ -84,7 +84,7 @@ napi_value getPermissionState(napi_env env, napi_callback_info) {
   napi_value resourceName;
   napi_create_string_utf8(
     env,
-    "orkas.notificationPermission",
+    "cogseed.notificationPermission",
     NAPI_AUTO_LENGTH,
     &resourceName
   );

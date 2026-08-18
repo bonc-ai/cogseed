@@ -34,9 +34,9 @@ let tmpDir: string;
 let previousWorkspace: string | undefined;
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-copy-merge-'));
-  previousWorkspace = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-copy-merge-'));
+  previousWorkspace = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   modelCalls.length = 0;
   const users = await import('../../../src/main/features/users');
@@ -45,7 +45,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await drainMainRuntimeForTest();
-  process.env.ORKAS_WORKSPACE_ROOT = previousWorkspace;
+  process.env.COGSEED_WORKSPACE_ROOT = previousWorkspace;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

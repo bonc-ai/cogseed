@@ -8,14 +8,14 @@ let previous: string | undefined;
 
 beforeEach(async () => {
   vi.resetModules();
-  tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'orkas-recall-projection-confirm-wake-'));
-  previous = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmp;
+  tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'cogseed-recall-projection-confirm-wake-'));
+  previous = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmp;
 });
 
 afterEach(async () => {
-  if (previous === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previous;
+  if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previous;
   await fs.rm(tmp, { recursive: true, force: true });
 });
 

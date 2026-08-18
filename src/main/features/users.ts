@@ -7,7 +7,7 @@
  * `dev_current_user_id` so local dev account switches do not overwrite the
  * packaged/prod active profile pointer.
  *
- * Hosted Orkas uses:
+ * Hosted CogSeed uses:
  *   - `anonymous` while logged out.
  *   - the server account uid while logged in.
  *
@@ -66,7 +66,7 @@ interface UsersRegistry {
 }
 
 export interface InitActiveUserOptions {
-  /** Hosted Orkas passes `anonymous`; the open-source build omits this and gets a generated 8-digit uid. */
+  /** Hosted CogSeed passes `anonymous`; the open-source build omits this and gets a generated 8-digit uid. */
   defaultLocalId?: string;
 }
 
@@ -302,7 +302,7 @@ export function activateUser(uid: string): void {
   try { sweepToolResults(userToolResultsDir(uid), 7); }
   catch (err) { log.warn('sweepToolResults failed', { uid: maskId(uid), error: (err as Error).message }); }
 
-  // Strip legacy session_id prefixes (aiteam- / orkas-) once.
+  // Strip legacy session_id prefixes (aiteam- / cogseed-) once.
   // Idempotent: after the stamp lands, subsequent startups are no-ops.
   // See util/migrate-session-ids.ts for details.
   try { migrateLegacySessionIds(uid); }

@@ -18,7 +18,7 @@ export default defineConfig({
     // mkdir on load). Without isolation, test order would leak state.
     isolate: true,
     // Runs before any test module (or its transitive imports) is loaded.
-    // Critical safety net: pins `ORKAS_WORKSPACE_ROOT` to a throwaway tmp
+    // Critical safety net: pins `COGSEED_WORKSPACE_ROOT` to a throwaway tmp
     // dir so `paths.ts`'s module-level `WS_ROOT` constant never freezes to
     // the developer's real `PC/data/`. See ./test/setup-env.ts for the
     // full rationale.

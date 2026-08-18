@@ -25,7 +25,7 @@
     {
       "id": "pos_instance_project",
       "type": "positive_trigger",
-      "prompt": "我在做 Mate Agent 项目，代码在 ~/mate-agent。",
+      "prompt": "我在做 Mate Agent 项目，代码在 ~/cogseed-agent。",
       "expected_behavior": "Emit instance candidate (project entity), suggest memory_scope=shared."
     },
     {

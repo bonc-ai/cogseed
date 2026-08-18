@@ -50,11 +50,11 @@ function writePackage(
 }
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-skillreg-open-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-skillreg-open-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevHome = process.env.HOME;
   prevUserProfile = process.env.USERPROFILE;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   // Redirect homedir so global roots (~/.claude/skills, ~/.codex/skills)
   // resolve inside the sandbox, never the developer machine.
   process.env.HOME = homeDir();
@@ -66,7 +66,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
   if (prevUserProfile === undefined) delete process.env.USERPROFILE;

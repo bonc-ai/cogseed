@@ -26,12 +26,13 @@ ls /Applications/CogSeed*.app/Contents/Resources/app.asar.unpacked/p3394-gateway
 #    找到后直接启动（等同于装了包）:
 #    node <上面找到的路径>
 
-# c) 以上都没有才从 NPM 装（包发布中；失败回退 b 用 CogSeed 自带副本）
-npm install -g @cogseed/p3394-gateway
+# c) 需要全局命令时，从当前仓库源码安装：
+cd <仓库根>/p3394-gateway
+npm install -g .
 ```
 
-> 包尚未正式发布时，本地副本（b）是首选方式：拿到 `gateway.cjs` 后直接
-> `node gateway.cjs`（配置环境变量同上）。发布进度见 `PUBLISH.md`。
+直接运行 `gateway.cjs` 不会写入系统配置；只有需要全局
+`p3394-gateway` 命令时才需要执行 `npm install -g .`。
 
 ## 启动
 
@@ -150,4 +151,3 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
 - 仅监听 127.0.0.1，不暴露到网络
 - 消息文本以参数数组传给 CLI（不经 shell，无注入）
 - 同一 idempotency_key 只处理一次（模型不重复跑）
-

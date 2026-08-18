@@ -1,7 +1,7 @@
 /**
  * A connector that cannot reach its backend must never render as "已连接".
  *
- * The production failure this pins: Orkas Server's session store went away, so every
+ * The production failure this pins: CogSeed Server's session store went away, so every
  * `/connectors/oauth/refresh` answered `503 系统繁忙`. The refresh error was (correctly) classified
  * transient, and the old code responded by rewriting the row's status back to `connected` — on
  * write, and again as a side effect of merely listing. So the Connectors panel showed a green

@@ -2,7 +2,7 @@
  * A single skill discovered on disk.
  *
  * `id` is the subdirectory name (matches openclaw conventions);
- * descriptions come from Orkas `_meta.json` when present, falling back to
+ * descriptions come from CogSeed `_meta.json` when present, falling back to
  * SKILL.md frontmatter for portable skills. `dir` is the absolute path to
  * the skill's root — callers read SKILL.md or other files relative to this.
  */

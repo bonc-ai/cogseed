@@ -13,14 +13,14 @@
 # 1 on FAIL (timeout / mismatch). Designed for manual run: print every
 # matched signal as it lands so the operator can see the wire is alive.
 #
-# Requires: jq. macOS / Linux. Reads $ORKAS_DATA_ROOT or defaults to
-# ~/.orkas/data.
+# Requires: jq. macOS / Linux. Reads $COGSEED_DATA_ROOT or defaults to
+# ~/.cogseed/data.
 
 set -u
 
 EXPECTED_SKILL="${1:-e2e-test-skill}"
 TIMEOUT_SEC="${2:-180}"
-DATA="${ORKAS_DATA_ROOT:-$HOME/.orkas/data}"
+DATA="${COGSEED_DATA_ROOT:-$HOME/.cogseed/data}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "❌ jq not on PATH — install jq first." >&2

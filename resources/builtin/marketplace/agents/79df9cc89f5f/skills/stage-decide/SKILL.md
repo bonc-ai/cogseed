@@ -14,7 +14,7 @@ The hard, valuable part of editing real footage is not executing a cut you alrea
 (dead air, fillers, weak takes), and reducing it without losing the point. This skill is the
 "understand → decide" layer; `stage-edit` executes the cuts you land on.
 
-Host-neutral: describe what to produce; the host provides the operations. In Orkas, use skill scripts:
+Host-neutral: describe what to produce; the host provides the operations. In CogSeed, use skill scripts:
 `stage-edit edit_video --op trim_silence` / `--op remove_fillers` (deterministic auto-cuts that return evidence),
 `stage-edit analyze_media --op scenes` (cut candidates), `--op quality` (blur/exposure/black/freeze flags),
 `video_studio` `op: "speech.transcribe"` for transcription, and `stage-edit analyze_media --op silence`.
@@ -45,7 +45,7 @@ skip this — that is plain `stage-edit`.
      do not desync the lips.
    - **Best take among repeats** — when the same line was recorded several times, do NOT guess: write a
      `takes.json` (`[{id, text=the take's transcript, quality_score from "quality", duration_sec}]`) and
-     call `"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op rank_takes --takes project/takes.json`. It groups the repeats and tells you which to KEEP (best quality)
+     call `"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op rank_takes --takes project/takes.json`. It groups the repeats and tells you which to KEEP (best quality)
      and which to drop. Choosing what to keep across DIFFERENT moments is still your judgment; this only
      resolves "which of these identical takes".
    - **Quality triage** — `quality` flags bad shots (blurry / too dark / over-exposed / black / frozen).

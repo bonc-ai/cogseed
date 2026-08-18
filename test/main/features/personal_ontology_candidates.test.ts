@@ -21,14 +21,14 @@ let prevWs: string | undefined;
 const UID = 'test-user-001';
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-poc-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-poc-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -206,7 +206,7 @@ describe('personal_ontology_candidates › confirmCandidate writes to real memor
     // 正文零污染：文本照常出现
     expect(userMd).toContain('喜欢阅读研究方法论文献');
     // 元数据头带 role_template 来源标记
-    expect(userMd).toMatch(/mate-agent-memory:v1.*role_template.*student/);
+    expect(userMd).toMatch(/cogseed-agent-memory:v1.*role_template.*student/);
     // 不带标签的裸条目不出现（这条是带标签写入的）
     expect(userMd).toContain('"kind":"role_template"');
     expect(userMd).toContain('"sourceId":"student"');

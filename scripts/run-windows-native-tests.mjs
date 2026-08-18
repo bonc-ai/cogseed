@@ -20,7 +20,7 @@ const result = spawnSync(process.execPath, [
   'test/main/features/video_studio_native_qa.test.ts',
 ], {
   cwd: resolve(here, '..'),
-  env: { ...process.env, ORKAS_REAL_WHISPER_TEST: '1' },
+  env: { ...process.env, COGSEED_REAL_WHISPER_TEST: '1' },
   stdio: 'inherit',
   windowsHide: true,
 });

@@ -271,7 +271,7 @@ describe('native Runtime prompt assembler', () => {
 
   it('redacts transcript-shaped path hints from all prompt text inputs', () => {
     const prompt = assembleRuntimePrompt({
-      request: request({ task: 'Read cloud/chats/gconv-secret.jsonl and local/mate_runtime/sessions/mruntime-secret.jsonl' }),
+      request: request({ task: 'Read cloud/chats/gconv-secret.jsonl and local/cogseed_runtime/sessions/mruntime-secret.jsonl' }),
       context: {
         textSections: [{ id: 'ctx-1', text: 'Also see cloud/sessions/gmember-secret.jsonl' }],
         fileRefs: [{ id: 'file-1', label: 'safe.md', kind: 'attachment', preview: 'Project path cloud/projects/p1/chats/c1/visibility/a.jsonl' }],

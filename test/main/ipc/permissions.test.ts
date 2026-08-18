@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { trustedIpcSender } from '../../helpers/trusted-ipc-sender';
 
-// Capture the `orkas.invoke` handler that register() attaches to ipcMain,
+// Capture the `cogseed.invoke` handler that register() attaches to ipcMain,
 // so we can drive it the same way renderer → preload → ipcMain would.
 type InvokeFn = (event: unknown, req: { channel: string; payload?: unknown }) => Promise<{ ok: boolean; error?: string } & Record<string, unknown>>;
 
@@ -13,7 +13,7 @@ let invokeHandler: InvokeFn | null = null;
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: InvokeFn) => {
-      if (channel === 'orkas.invoke') invokeHandler = fn;
+      if (channel === 'cogseed.invoke') invokeHandler = fn;
     },
     on: vi.fn(),
   },
@@ -27,9 +27,9 @@ let prevWs: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-perm-ipc-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-perm-ipc-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   invokeHandler = null;
   vi.resetModules();
   vi.doMock('../../../src/main/ipc/local_agents', () => ({
@@ -49,7 +49,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

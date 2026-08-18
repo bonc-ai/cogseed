@@ -9,7 +9,7 @@ import {
 export type { TaskTerminalEvent, TaskTerminalListener, TaskTerminalStatus };
 
 const log = createLogger('task-notification-terminal-source');
-const LISTENERS_KEY = Symbol.for('orkas.task_notification_terminal_source.listeners');
+const LISTENERS_KEY = Symbol.for('cogseed.task_notification_terminal_source.listeners');
 const listeners: Set<TaskTerminalListener> = ((globalThis as any)[LISTENERS_KEY] ??= new Set<TaskTerminalListener>());
 
 export function subscribeTaskNotificationTerminals(listener: TaskTerminalListener): () => void {

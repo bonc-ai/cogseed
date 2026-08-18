@@ -30,7 +30,7 @@ function pushUnique(out: string[], seen: Set<string>, value: string | undefined)
 function runtimeRoots(): string[] {
   const roots: string[] = [];
   const seen = new Set<string>();
-  pushUnique(roots, seen, process.env.ORKAS_RUNTIME_DIR);
+  pushUnique(roots, seen, process.env.COGSEED_RUNTIME_DIR);
   pushUnique(roots, seen, runtimeResourcesDir());
   return roots;
 }
@@ -47,7 +47,7 @@ function runtimeVariantDirs(kind: 'python' | 'uv' | 'node' | 'ffmpeg' | 'whisper
 }
 
 function readWhisperMarker(dir: string): { capability?: { status?: string } } | undefined {
-  for (const name of ['.cogseed-whisper-ready.json', '.orkas-whisper-ready.json']) {
+  for (const name of ['.cogseed-whisper-ready.json', '.cogseed-whisper-ready.json']) {
     try {
       return JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')) as { capability?: { status?: string } };
     } catch {
@@ -67,7 +67,7 @@ function whisperRuntimeEnabled(dir: string): boolean {
 }
 
 function resolvePythonExecutable(): string | undefined {
-  const configured = process.env.ORKAS_BUNDLED_PYTHON || process.env.ORKAS_PYTHON;
+  const configured = process.env.COGSEED_BUNDLED_PYTHON || process.env.COGSEED_PYTHON;
   if (isFile(configured)) return configured;
 
   const names = process.platform === 'win32'
@@ -89,7 +89,7 @@ function resolvePythonExecutable(): string | undefined {
 }
 
 function resolveUvExecutable(): string | undefined {
-  const configured = process.env.ORKAS_BUNDLED_UV || process.env.ORKAS_UV;
+  const configured = process.env.COGSEED_BUNDLED_UV || process.env.COGSEED_UV;
   if (isFile(configured)) return configured;
 
   const name = process.platform === 'win32' ? 'uv.exe' : 'uv';
@@ -101,7 +101,7 @@ function resolveUvExecutable(): string | undefined {
 }
 
 function resolveNodeExecutable(): string | undefined {
-  const configured = process.env.ORKAS_BUNDLED_NODE;
+  const configured = process.env.COGSEED_BUNDLED_NODE;
   if (isFile(configured)) return configured;
 
   // ensure-runtime flattens the official Node archive so the payload root holds
@@ -133,7 +133,7 @@ function resolveOnSystemPath(name: string): string | undefined {
 }
 
 function resolveFfmpegBinary(kind: 'ffmpeg' | 'ffprobe'): string | undefined {
-  const envName = kind === 'ffmpeg' ? 'ORKAS_BUNDLED_FFMPEG' : 'ORKAS_BUNDLED_FFPROBE';
+  const envName = kind === 'ffmpeg' ? 'COGSEED_BUNDLED_FFMPEG' : 'COGSEED_BUNDLED_FFPROBE';
   const configured = process.env[envName];
   if (isFile(configured)) return configured;
 
@@ -153,7 +153,7 @@ function resolveFfmpegBinary(kind: 'ffmpeg' | 'ffprobe'): string | undefined {
 }
 
 function resolveWhisperBinary(): string | undefined {
-  const configured = process.env.ORKAS_WHISPER_CPP || process.env.ORKAS_WHISPER_CLI;
+  const configured = process.env.COGSEED_WHISPER_CPP || process.env.COGSEED_WHISPER_CLI;
   if (isFile(configured)) return configured;
 
   const names = process.platform === 'win32'
@@ -180,7 +180,7 @@ function resolveWhisperBinary(): string | undefined {
 }
 
 function resolveWhisperModel(modelHint?: string): string | undefined {
-  const hinted = modelHint || process.env.ORKAS_WHISPER_MODEL;
+  const hinted = modelHint || process.env.COGSEED_WHISPER_MODEL;
   if (isFile(hinted)) return path.resolve(hinted);
 
   const normalizedHint = modelHint
@@ -230,7 +230,7 @@ export function bundledFfmpegPaths(): { ffmpeg?: string; ffprobe?: string } {
 /**
  * Bundled whisper.cpp paths. The app treats speech transcription as a native
  * VideoStudio capability, so default installs can vendor `resources/runtime/whisper`
- * without requiring users to hand-set ORKAS_WHISPER_*.
+ * without requiring users to hand-set COGSEED_WHISPER_*.
  */
 export function bundledWhisperPaths(modelHint?: string): { cli?: string; model?: string } {
   const result: { cli?: string; model?: string } = {};
@@ -263,7 +263,7 @@ export function bundledRuntimePathEntries(): string[] {
   const uv = resolveUvExecutable();
   if (uv) pushPathDir(entries, seen, path.dirname(uv));
   // Node's `bin` (mac/linux) or install root (win) holds `node`, `npm`, `npx`.
-  // Injecting it lets the bash tool AND orkas-pkg's `npm install` resolve a
+  // Injecting it lets the bash tool AND cogseed-pkg's `npm install` resolve a
   // bundled Node on machines without a user-installed toolchain.
   const node = resolveNodeExecutable();
   if (node) pushPathDir(entries, seen, path.dirname(node));
@@ -350,17 +350,17 @@ export function bundledRuntimeEnv(): Record<string, string> {
   const python = resolvePythonExecutable();
   const uv = resolveUvExecutable();
   const node = resolveNodeExecutable();
-  if (python) env.ORKAS_PYTHON = python;
-  if (uv) env.ORKAS_UV = uv;
-  if (node) env.ORKAS_BUNDLED_NODE = node;
+  if (python) env.COGSEED_PYTHON = python;
+  if (uv) env.COGSEED_UV = uv;
+  if (node) env.COGSEED_BUNDLED_NODE = node;
   // Export the resolved media binaries so skill subprocesses inherit them via
   // env (their own resolver checks these first) instead of independently
   // re-resolving and hard-failing when process.resourcesPath is unavailable.
   const { ffmpeg, ffprobe } = bundledFfmpegPaths();
-  if (ffmpeg) env.ORKAS_BUNDLED_FFMPEG = ffmpeg;
-  if (ffprobe) env.ORKAS_BUNDLED_FFPROBE = ffprobe;
+  if (ffmpeg) env.COGSEED_BUNDLED_FFMPEG = ffmpeg;
+  if (ffprobe) env.COGSEED_BUNDLED_FFPROBE = ffprobe;
   const { cli: whisperCli, model: whisperModel } = bundledWhisperPaths();
-  if (whisperCli) env.ORKAS_WHISPER_CPP = whisperCli;
-  if (whisperModel) env.ORKAS_WHISPER_MODEL = whisperModel;
+  if (whisperCli) env.COGSEED_WHISPER_CPP = whisperCli;
+  if (whisperModel) env.COGSEED_WHISPER_MODEL = whisperModel;
   return env;
 }

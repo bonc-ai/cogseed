@@ -9,14 +9,14 @@ const UID = 'formal-assets-user';
 
 beforeEach(() => {
   vi.resetModules();
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-formal-assets-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmp;
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-formal-assets-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmp;
 });
 
 afterEach(() => {
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 

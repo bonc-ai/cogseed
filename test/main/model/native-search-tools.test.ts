@@ -16,7 +16,7 @@ describe('nativeSearchToolForApi', () => {
   });
 
   it('does NOT inject for Anthropic Messages (OAuth path rejects server tools)', () => {
-    // 官方 docs 有 `web_search_20250305`，但 Orkas 的 `anthropic` provider 多数
+    // 官方 docs 有 `web_search_20250305`，但 CogSeed 的 `anthropic` provider 多数
     // 用户走 OAuth（Claude Pro/Max），后端按 `claude-code-20250219` beta header
     // 限权，server tool 会被拒→对话整挂。保守剔出，走内置 web_search 兜底。
     expect(nativeSearchToolForApi('anthropic-messages')).toBeUndefined();

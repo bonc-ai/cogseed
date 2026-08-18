@@ -28,7 +28,7 @@ import { P3394HttpChannel } from '../../../../../src/main/features/p3394_bridge/
 import { P3394CogseedRuntimeAdapter } from '../../../../../src/main/features/p3394_bridge/cogseed-runtime-adapter';
 import { P3394RecoveryController } from '../../../../../src/main/features/p3394_bridge/recovery-controller';
 import { P3394OutboundHub, p3394EnvelopeReplyText } from '../../../../../src/main/features/p3394_bridge/outbound-hub';
-import { createMateRuntimeController } from '../../../../../src/main/features/cogseed_backend/runtime-controller';
+import { createCogSeedRuntimeController } from '../../../../../src/main/features/cogseed_backend/runtime-controller';
 
 function manifestOf(id: string) {
   const result = buildP3394BridgeManifest({
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
   // 由 fake runtime run 生成多轮 delta 文本（长任务，R-05 跨进程事件流证据）。
   const childUserId = process.env.P3394_CHILD_USER_ID || 'p3394-child-node-user';
   const stateFile = process.env.P3394_CHILD_STATE || '';
-  const controller = createMateRuntimeController({
+  const controller = createCogSeedRuntimeController({
     runtime: {
       shutdown: async () => {},
       run: async function* () {

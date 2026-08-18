@@ -61,7 +61,7 @@ const result = spawnSync(process.execPath, [
   ...platformSuites,
 ], {
   cwd: pcRoot,
-  env: { ...process.env, ORKAS_PLATFORM_NATIVE_TEST: '1' },
+  env: { ...process.env, COGSEED_PLATFORM_NATIVE_TEST: '1' },
   stdio: 'inherit',
   windowsHide: true,
 });

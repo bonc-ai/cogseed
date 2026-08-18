@@ -37,7 +37,7 @@ Windows OpenBLAS acceleration:
   return `Bundled whisper.cpp runtime
 ===========================
 
-Orkas invokes whisper.cpp as a separate process for local VideoStudio speech
+CogSeed invokes whisper.cpp as a separate process for local VideoStudio speech
 transcription. The runtime version is ${version}.
 
 whisper.cpp source and license:
@@ -50,7 +50,7 @@ Multilingual Whisper base-q5_1 model:
 
 The Windows CLI is the official whisper.cpp x64 release. Its required Microsoft
 Visual C++ runtime DLLs are deployed application-locally beside whisper-cli;
-Orkas does not install or modify the machine-wide Visual C++ Redistributable.
+CogSeed does not install or modify the machine-wide Visual C++ Redistributable.
 Microsoft redistributable terms apply:
   https://visualstudio.microsoft.com/license-terms/
 
@@ -232,8 +232,8 @@ async function downloadBuffer(url) {
 }
 
 function cacheRoot() {
-  if (process.env.ORKAS_RUNTIME_CACHE_DIR) return path.resolve(process.env.ORKAS_RUNTIME_CACHE_DIR);
-  return path.join(os.homedir(), '.cache', 'orkas-runtime', 'whisper');
+  if (process.env.COGSEED_RUNTIME_CACHE_DIR) return path.resolve(process.env.COGSEED_RUNTIME_CACHE_DIR);
+  return path.join(os.homedir(), '.cache', 'cogseed-runtime', 'whisper');
 }
 
 async function cachedDownload(name, spec) {

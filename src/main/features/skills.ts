@@ -302,7 +302,7 @@ function _normalizeDisplayDescription(value: string): string {
     .trim();
 }
 
-function _sidecarBilingualDescriptions(sidecar: SkillOrkasMeta): { description_zh: string; description_en: string } {
+function _sidecarBilingualDescriptions(sidecar: SkillCogSeedMeta): { description_zh: string; description_en: string } {
   const descriptions = sidecar.descriptions && typeof sidecar.descriptions === 'object'
     ? sidecar.descriptions
     : {};
@@ -311,7 +311,7 @@ function _sidecarBilingualDescriptions(sidecar: SkillOrkasMeta): { description_z
   return zh && en ? { description_zh: zh, description_en: en } : { description_zh: '', description_en: '' };
 }
 
-function _resolveSkillDescriptions(meta: SkillFrontmatter, sidecar: SkillOrkasMeta): { description_zh: string; description_en: string } {
+function _resolveSkillDescriptions(meta: SkillFrontmatter, sidecar: SkillCogSeedMeta): { description_zh: string; description_en: string } {
   const pair = migrateDescriptionPair(meta as any);
   const sidecarPair = _sidecarBilingualDescriptions(sidecar);
   return {
@@ -324,14 +324,14 @@ function _resolveSkillDescriptions(meta: SkillFrontmatter, sidecar: SkillOrkasMe
   };
 }
 
-function _resolveSkillCategory(meta: SkillFrontmatter, sidecar: SkillOrkasMeta): string {
+function _resolveSkillCategory(meta: SkillFrontmatter, sidecar: SkillCogSeedMeta): string {
   const fromSidecar = typeof sidecar.category === 'string' ? sidecar.category.trim() : '';
   if (fromSidecar) return normalizeMarketplaceCategoryCode(fromSidecar);
   const fromFrontmatter = typeof meta.category === 'string' ? meta.category.trim() : '';
   return fromFrontmatter ? normalizeMarketplaceCategoryCode(fromFrontmatter) : '';
 }
 
-function _resolveSkillStatus(meta: SkillFrontmatter, sidecar: SkillOrkasMeta): string {
+function _resolveSkillStatus(meta: SkillFrontmatter, sidecar: SkillCogSeedMeta): string {
   const status = typeof sidecar.status === 'string' ? sidecar.status : (
     typeof sidecar.state === 'string' ? sidecar.state : (
       typeof meta.status === 'string' ? meta.status : (
@@ -342,8 +342,8 @@ function _resolveSkillStatus(meta: SkillFrontmatter, sidecar: SkillOrkasMeta): s
   return status.trim();
 }
 
-function _skillSidecarPatchFromFrontmatter(meta: SkillFrontmatter): SkillOrkasMeta {
-  const patch: SkillOrkasMeta = {};
+function _skillSidecarPatchFromFrontmatter(meta: SkillFrontmatter): SkillCogSeedMeta {
+  const patch: SkillCogSeedMeta = {};
   const desc: { zh?: string; en?: string } = {};
   if (typeof meta.description_zh === 'string' && meta.description_zh.trim()) desc.zh = meta.description_zh;
   if (typeof meta.description_en === 'string' && meta.description_en.trim()) desc.en = meta.description_en;
@@ -354,7 +354,7 @@ function _skillSidecarPatchFromFrontmatter(meta: SkillFrontmatter): SkillOrkasMe
   return patch;
 }
 
-function _hasSkillSidecarPatch(patch: SkillOrkasMeta): boolean {
+function _hasSkillSidecarPatch(patch: SkillCogSeedMeta): boolean {
   return !!(
     patch.category
     || patch.status
@@ -389,7 +389,7 @@ export interface SkillFrontmatter {
 
 export interface SkillChatMeta { session_id?: string; [k: string]: unknown }
 
-export interface SkillOrkasMeta {
+export interface SkillCogSeedMeta {
   category?: string;
   descriptions?: { zh?: string; en?: string; [lang: string]: string | undefined };
   description_zh?: string;
@@ -511,19 +511,19 @@ function hasSkillMd(dir: string): boolean {
   catch { return false; }
 }
 
-function readSkillOrkasMetaSync(dir: string): SkillOrkasMeta {
+function readSkillCogSeedMetaSync(dir: string): SkillCogSeedMeta {
   const file = skillMetaFile(dir);
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as SkillOrkasMeta : {};
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as SkillCogSeedMeta : {};
   } catch {
     return {};
   }
 }
 
-function writeSkillOrkasMetaSync(dir: string, patch: SkillOrkasMeta): void {
-  const current = readSkillOrkasMetaSync(dir);
-  const next: SkillOrkasMeta = { ...current };
+function writeSkillCogSeedMetaSync(dir: string, patch: SkillCogSeedMeta): void {
+  const current = readSkillCogSeedMetaSync(dir);
+  const next: SkillCogSeedMeta = { ...current };
   if (Object.prototype.hasOwnProperty.call(patch, 'category')) {
     const raw = typeof patch.category === 'string' ? patch.category.trim() : '';
     if (raw) next.category = normalizeMarketplaceCategoryCode(raw);
@@ -565,20 +565,20 @@ function writeSkillOrkasMetaSync(dir: string, patch: SkillOrkasMeta): void {
   writeJsonSync(skillMetaFile(dir), next);
 }
 
-function _stripSkillSidecarDescriptions(meta: SkillOrkasMeta): SkillOrkasMeta {
-  const next: SkillOrkasMeta = { ...meta };
+function _stripSkillSidecarDescriptions(meta: SkillCogSeedMeta): SkillCogSeedMeta {
+  const next: SkillCogSeedMeta = { ...meta };
   delete next.descriptions;
   delete next.description_zh;
   delete next.description_en;
   return next;
 }
 
-function writeSkillOrkasMetaFullSync(dir: string, meta: SkillOrkasMeta): void {
+function writeSkillCogSeedMetaFullSync(dir: string, meta: SkillCogSeedMeta): void {
   writeJsonSync(skillMetaFile(dir), _stripSkillSidecarDescriptions(meta));
 }
 
 function markSkillImportDraftSync(dir: string, source: 'url' | 'dir'): void {
-  const current = readSkillOrkasMetaSync(dir);
+  const current = readSkillCogSeedMetaSync(dir);
   writeJsonSync(skillMetaFile(dir), {
     ...current,
     _import: {
@@ -590,7 +590,7 @@ function markSkillImportDraftSync(dir: string, source: 'url' | 'dir'): void {
 }
 
 function isMarkedImportDraftDirSync(dir: string): boolean {
-  const marker = readSkillOrkasMetaSync(dir)._import;
+  const marker = readSkillCogSeedMetaSync(dir)._import;
   return !!marker
     && typeof marker === 'object'
     && !Array.isArray(marker)
@@ -599,7 +599,7 @@ function isMarkedImportDraftDirSync(dir: string): boolean {
 
 function clearSkillImportDraftMarkerSync(skillId: string): void {
   const dir = customSkillDir(skillId);
-  const current = readSkillOrkasMetaSync(dir);
+  const current = readSkillCogSeedMetaSync(dir);
   if (!current._import) return;
   const next = { ...current };
   delete next._import;
@@ -607,7 +607,7 @@ function clearSkillImportDraftMarkerSync(skillId: string): void {
 }
 
 function removeSkillSidecarDescriptionsSync(dir: string): void {
-  const current = readSkillOrkasMetaSync(dir);
+  const current = readSkillCogSeedMetaSync(dir);
   if (!current.descriptions && !current.description_zh && !current.description_en) return;
   writeJsonSync(skillMetaFile(dir), _stripSkillSidecarDescriptions(current));
 }
@@ -725,7 +725,7 @@ export async function getSkillForEdit(skillId: string): Promise<SkillForEdit | n
       try {
         const { meta } = splitSkillMd(fs.readFileSync(md, 'utf8'));
         name = meta.name || skillId;
-        const sidecar = readSkillOrkasMetaSync(d);
+        const sidecar = readSkillCogSeedMetaSync(d);
         descPair = _resolveSkillDescriptions(meta, sidecar);
         category = _resolveSkillCategory(meta, sidecar);
         status = _resolveSkillStatus(meta, sidecar);
@@ -829,7 +829,7 @@ async function _allSkillListingsCached(): Promise<SkillListing[]> {
         if (fs.existsSync(skillMd)) {
           try {
             const meta = parseSkillFrontmatter(fs.readFileSync(skillMd, 'utf8'));
-            const sidecar = readSkillOrkasMetaSync(skillDir);
+            const sidecar = readSkillCogSeedMetaSync(skillDir);
             descPair = _resolveSkillDescriptions(meta, sidecar);
             displayName = meta.name as string || name;
             category = _resolveSkillCategory(meta, sidecar);
@@ -1224,7 +1224,7 @@ export function skillMdContent(
   const cleanName = (name || '').replace(/\n/g, ' ').replace(/"/g, '\\"');
   const sanitize = (s: string) => _normalizeDisplayDescription(s).replace(/\n/g, ' ').replace(/"/g, '\\"');
   // SKILL.md stays host-generic: only `name` + a single dispatch
-  // `description`. Orkas-only metadata (category / localized descriptions /
+  // `description`. CogSeed-only metadata (category / localized descriptions /
   // routing hints) lives in _meta.json next to the file.
   let desc = '';
   if (typeof description === 'string') {
@@ -1295,7 +1295,7 @@ export async function getCustomSkill(skillId: string): Promise<CustomSkill | nul
     try {
       const { meta } = splitSkillMd(fs.readFileSync(md, 'utf8'));
       name = meta.name || skillId;
-      const sidecar = readSkillOrkasMetaSync(d);
+      const sidecar = readSkillCogSeedMetaSync(d);
       descPair = _resolveSkillDescriptions(meta, sidecar);
       category = _resolveSkillCategory(meta, sidecar);
       status = _resolveSkillStatus(meta, sidecar);
@@ -1352,11 +1352,11 @@ export async function createCustomSkill(
   fs.mkdirSync(d, { recursive: true });
   const skillMdPath = path.join(d, 'SKILL.md');
   writeTextAtomicSync(skillMdPath, skillMdContent(name, description, '', category, 'approved'));
-  const metaPatch: SkillOrkasMeta = {
+  const metaPatch: SkillCogSeedMeta = {
     ...(category && String(category).trim() ? { category } : {}),
     status: 'approved',
   };
-  if (_hasSkillSidecarPatch(metaPatch)) writeSkillOrkasMetaSync(d, metaPatch);
+  if (_hasSkillSidecarPatch(metaPatch)) writeSkillCogSeedMetaSync(d, metaPatch);
   // Force-stamp mtime to "now" so the sync engine's tombstone resurrection
   // guard (`engine.ts` step 3 — `df.mtime_ms > tombMs`) treats this file as
   // unambiguously fresh. Without this, atomic rename can leave the final
@@ -1471,9 +1471,9 @@ export async function updateCustomSkill(
   }
 
   writeTextAtomicSync(md, skillMdContent(newName, { zh: newZh, en: newEn }, body));
-  writeSkillOrkasMetaSync(d, {
+  writeSkillCogSeedMetaSync(d, {
     ...(newCategory ? { category: newCategory } : { category: '' }),
-    status: String(meta.status || meta.state || readSkillOrkasMetaSync(d).status || 'approved'),
+    status: String(meta.status || meta.state || readSkillCogSeedMetaSync(d).status || 'approved'),
   });
   removeSkillSidecarDescriptionsSync(d);
   clearSkillImportDraftMarkerSync(currentId);
@@ -1535,8 +1535,8 @@ const IMPORT_FILTER_NAMES: ReadonlySet<string> = new Set([
   // Foreign skill-platform metadata (clawhub/etc. publish manifests with
   // ownerId/slug/version/publishedAt — irrelevant to this app and shows
   // up as "header noise" in the UI).
-  // Orkas `_meta.json` is intentionally kept: source-backed imports should
-  // restore an existing Orkas skill as faithfully as possible.
+  // CogSeed `_meta.json` is intentionally kept: source-backed imports should
+  // restore an existing CogSeed skill as faithfully as possible.
   // Marketplace sidecars: `_install.json` (version pin written by install / reconcile),
   // `_cache.json` (detail-page cache), and `_resource_manifest.json` (Resource dev-sync
   // ownership map). These are tooling internal — must never propagate when a user imports
@@ -1587,7 +1587,7 @@ export function _isBlacklistedImportSourceForTest(
   const home = options.homeDir ?? os.homedir();
   const contains = (root: string): boolean => _pathPolicyContains(realDir, root, platform);
 
-  // Orkas's own trees — pulling these in would recursion-bomb and/or leak
+  // CogSeed's own trees — pulling these in would recursion-bomb and/or leak
   // the source/data.
   for (const root of [sourceRoot, workspaceRoot]) {
     if (root && contains(root)) {
@@ -1934,7 +1934,7 @@ function _dropSourceMetaFiles(files: { src: string; rel: string; size: number }[
 function _sourceSkillImportDescription(sourceSkillMd: string, fallback: string): string {
   try {
     const meta = parseSkillFrontmatter(fs.readFileSync(sourceSkillMd, 'utf8'));
-    const sidecar = readSkillOrkasMetaSync(path.dirname(sourceSkillMd));
+    const sidecar = readSkillCogSeedMetaSync(path.dirname(sourceSkillMd));
     const desc = _resolveSkillDescriptions(meta, sidecar);
     const lang = descriptionLang(getLanguage());
     return lang === 'zh'
@@ -1945,12 +1945,12 @@ function _sourceSkillImportDescription(sourceSkillMd: string, fallback: string):
   }
 }
 
-function _sourceSkillInstallMeta(sourceRoot: string, sourceSkillMd: string): SkillOrkasMeta {
-  let filePatch: SkillOrkasMeta = {};
+function _sourceSkillInstallMeta(sourceRoot: string, sourceSkillMd: string): SkillCogSeedMeta {
+  let filePatch: SkillCogSeedMeta = {};
   try {
     filePatch = _skillSidecarPatchFromFrontmatter(splitSkillMd(fs.readFileSync(sourceSkillMd, 'utf8')).meta);
   } catch { /* best effort */ }
-  const sourceMeta = readSkillOrkasMetaSync(sourceRoot);
+  const sourceMeta = readSkillCogSeedMetaSync(sourceRoot);
   const category = normalizeMarketplaceCategoryCode(
     typeof filePatch.category === 'string' ? filePatch.category : (
       typeof sourceMeta.category === 'string' ? sourceMeta.category : ''
@@ -2056,7 +2056,7 @@ async function _installSourceSkillRoots(
       // to `pass` purely because clean files outnumbered the suspicious ones.
       // The scan must judge what the user actually supplied.
       pendingSkeletons.push({ skillDir, skillId: created.id, name: effectiveName });
-      writeSkillOrkasMetaFullSync(skillDir, _sourceSkillInstallMeta(sourceRoot, sourceSkillMd));
+      writeSkillCogSeedMetaFullSync(skillDir, _sourceSkillInstallMeta(sourceRoot, sourceSkillMd));
 
       const fresh = await getCustomSkill(created.id);
       if (fresh) createdSkills.push(fresh);
@@ -2304,7 +2304,7 @@ function _isPristineImportDraftSkillSync(skillId: string): boolean {
   const dir = customSkillDir(skillId);
   try { if (!fs.statSync(dir).isDirectory()) return false; }
   catch { return false; }
-  // Pristine = nothing but SKILL.md plus the generated Orkas sidecar on disk...
+  // Pristine = nothing but SKILL.md plus the generated CogSeed sidecar on disk...
   let entries: string[];
   try { entries = fs.readdirSync(dir); }
   catch { return false; }
@@ -2431,7 +2431,7 @@ async function writeBoundRecallSkillFile(
   skillId: string,
   relpath: string,
   content: string,
-  sidecarPatch: SkillOrkasMeta,
+  sidecarPatch: SkillCogSeedMeta,
 ): Promise<WriteSkillFileResult | undefined> {
   const userId = getActiveUserId();
   const bindings = await import('./recall/skill-binding-service');
@@ -2474,7 +2474,7 @@ async function writeBoundRecallSkillFile(
     },
   });
   if (normalizedPath === 'SKILL.md' && _hasSkillSidecarPatch(sidecarPatch)) {
-    writeSkillOrkasMetaSync(skill.dir, sidecarPatch);
+    writeSkillCogSeedMetaSync(skill.dir, sidecarPatch);
   }
   clearSkillImportDraftMarkerSync(skillId);
   return { ok: true, report };
@@ -2504,7 +2504,7 @@ export function writeCustomSkillFileChecked(
     return { ok: false, reason: 'missing_dir' };
   }
   const isSkillMdWrite = relpath.toUpperCase() === 'SKILL.MD';
-  let sidecarPatch: SkillOrkasMeta = {};
+  let sidecarPatch: SkillCogSeedMeta = {};
   if (isSkillMdWrite) {
     sidecarPatch = _skillSidecarPatchFromFrontmatter(splitSkillMd(content).meta);
   }
@@ -2523,7 +2523,7 @@ export function writeCustomSkillFileChecked(
   const written = _writeSkillFileAt(d, relpath, contentForWrite, /* invalidateOnSkillMd */ true);
   if (!written) return { ok: false, report, reason: 'invalid_path' };
   if (isSkillMdWrite && _hasSkillSidecarPatch(sidecarPatch)) {
-    writeSkillOrkasMetaSync(d, sidecarPatch);
+    writeSkillCogSeedMetaSync(d, sidecarPatch);
   }
   clearSkillImportDraftMarkerSync(skillId);
   return { ok: true, report };
@@ -2623,7 +2623,7 @@ export async function writeSkillFilesForEditChecked(
   if (!binding) return undefined;
   const skill = await getCustomSkill(skillId);
   if (!skill?.dir) return files.map(() => ({ ok: false, reason: 'missing_dir' as const }));
-  const normalized: Array<{ path: string; content: string; sidecarPatch: SkillOrkasMeta }> = [];
+  const normalized: Array<{ path: string; content: string; sidecarPatch: SkillCogSeedMeta }> = [];
   const results: WriteSkillFileResult[] = [];
   for (const file of files) {
     const isSkillMd = file.path.toUpperCase() === 'SKILL.MD';
@@ -2662,7 +2662,7 @@ export async function writeSkillFilesForEditChecked(
     },
   });
   const skillMd = normalized.find((file) => file.path === 'SKILL.md');
-  if (skillMd && _hasSkillSidecarPatch(skillMd.sidecarPatch)) writeSkillOrkasMetaSync(skill.dir, skillMd.sidecarPatch);
+  if (skillMd && _hasSkillSidecarPatch(skillMd.sidecarPatch)) writeSkillCogSeedMetaSync(skill.dir, skillMd.sidecarPatch);
   clearSkillImportDraftMarkerSync(skillId);
   return results;
 }
@@ -2701,12 +2701,12 @@ export async function applySkillMetadataForEdit(
   const sidecarPatch = _skillSidecarPatchFromMetadataUpdate(updates);
   if (_hasSkillSidecarPatch(sidecarPatch)) {
     if (opts.replaceSidecar) {
-      writeSkillOrkasMetaFullSync(
+      writeSkillCogSeedMetaFullSync(
         skill.dir,
-        _skillSidecarReplacementFromMetadataUpdate(updates, readSkillOrkasMetaSync(skill.dir)),
+        _skillSidecarReplacementFromMetadataUpdate(updates, readSkillCogSeedMetaSync(skill.dir)),
       );
     } else {
-      writeSkillOrkasMetaSync(skill.dir, sidecarPatch);
+      writeSkillCogSeedMetaSync(skill.dir, sidecarPatch);
     }
     wrote = true;
     _invalidateSkillListCache();
@@ -2944,8 +2944,8 @@ function _applyMetadataToSkillMdContent(
   return skillMdContent(name, legacyDescription || { zh: descriptionZh, en: descriptionEn }, body);
 }
 
-function _skillSidecarPatchFromMetadataUpdate(updates: SkillMetadataUpdate): SkillOrkasMeta {
-  const patch: SkillOrkasMeta = {};
+function _skillSidecarPatchFromMetadataUpdate(updates: SkillMetadataUpdate): SkillCogSeedMeta {
+  const patch: SkillCogSeedMeta = {};
   if (Object.prototype.hasOwnProperty.call(updates, 'category')) {
     patch.category = String(updates.category || '');
   }
@@ -2974,9 +2974,9 @@ function _cleanSkillMetaList(values: unknown): string[] {
   return out;
 }
 
-function _sanitizedRoutingForSidecar(routing: SkillMetadataUpdate['routing']): SkillOrkasMeta['routing'] | undefined {
+function _sanitizedRoutingForSidecar(routing: SkillMetadataUpdate['routing']): SkillCogSeedMeta['routing'] | undefined {
   if (!routing || typeof routing !== 'object') return undefined;
-  const next: NonNullable<SkillOrkasMeta['routing']> = {};
+  const next: NonNullable<SkillCogSeedMeta['routing']> = {};
   const negative = _cleanSkillMetaList(routing.negative_examples);
   const prereq = _cleanSkillMetaList(routing.prerequisites);
   const domain = Array.isArray(routing.applicable_domain)
@@ -2995,13 +2995,13 @@ function _sanitizedRoutingForSidecar(routing: SkillMetadataUpdate['routing']): S
 
 function _skillSidecarReplacementFromMetadataUpdate(
   updates: SkillMetadataUpdate,
-  current: SkillOrkasMeta,
-): SkillOrkasMeta {
+  current: SkillCogSeedMeta,
+): SkillCogSeedMeta {
   const category = normalizeMarketplaceCategoryCode(
     typeof updates.category === 'string' ? updates.category : '',
     DEFAULT_MARKETPLACE_CATEGORY_CODE,
   );
-  const next: SkillOrkasMeta = { category };
+  const next: SkillCogSeedMeta = { category };
   const routing = _sanitizedRoutingForSidecar(updates.routing);
   if (routing) next.routing = routing;
   const status = typeof current.status === 'string' ? current.status.trim() : '';
@@ -3054,7 +3054,7 @@ export function extractSkillFileBlocks(text: string): { cleanText: string; files
 }
 
 /** Self-closing marker the URL-import edit chat emits AFTER it has already
- *  installed the source as an external package (via `orkas-pkg` over bash).
+ *  installed the source as an external package (via `cogseed-pkg` over bash).
  *  It is a finalize signal — drop the placeholder skill, switch the view —
  *  not an install instruction; install itself stays on the bash/CLI path. */
 // Require an actual self-closing marker (`.../>`) or a paired close tag —
@@ -3415,7 +3415,7 @@ async function _applySkillContainerCreate(
     catch { /* best effort */ }
   }
   if (_hasSkillSidecarPatch(metadataSidecar)) {
-    writeSkillOrkasMetaSync(customSkillDir(name), metadataSidecar);
+    writeSkillCogSeedMetaSync(customSkillDir(name), metadataSidecar);
   }
   if (written.length) log.info(`commander created skill=${name} files=${written.length}`);
 
@@ -3715,7 +3715,7 @@ export async function sendToSkillChat(
   const { chatWithModel } = require('../model/client');
   const result = await chatWithModel({
     userId, message: attachmentCtx.message, sessionId, systemPrompt,
-    agentName: 'orkas_chat', timeout: 300,
+    agentName: 'cogseed_chat', timeout: 300,
     // Read-only: the LLM in per-skill edit chat sees the skill dir for
     // inspection (read_file / search_files / grep_files / stat_file), but
     // every mutation goes through `<<<skill-file>>>` blocks parsed
@@ -3728,7 +3728,7 @@ export async function sendToSkillChat(
       userMarketplaceSkillsDir(getActiveUserId()),
       userSkillsDir(userId),
       // System skills root so a URL-import chat can read `package-installer`
-      // before driving `orkas-pkg`; ordinary SkillRegistry no longer loads
+      // before driving `cogseed-pkg`; ordinary SkillRegistry no longer loads
       // repo-shipped builtin skills.
       userSystemSkillsDir(userId),
       ...(attachmentCtx.attachmentNames.length ? [chatAttachmentDirForConversation(userId, attachmentCtx.attachmentCid)] : []),
@@ -3869,14 +3869,14 @@ export async function* streamSendToSkillChat(
   try {
     for await (let event of streamChatWithModel({
       userId, message: attachmentCtx.message, sessionId, systemPrompt,
-      agentName: 'orkas_chat',
+      agentName: 'cogseed_chat',
       cacheRetention: 'short',
       readOnlyExtraRoots: [
       ...(skill.dir ? [skill.dir] : []),
       userMarketplaceSkillsDir(getActiveUserId()),
       userSkillsDir(userId),
       // System skills root so a URL-import chat can read `package-installer`
-      // before driving `orkas-pkg`; ordinary SkillRegistry no longer loads
+      // before driving `cogseed-pkg`; ordinary SkillRegistry no longer loads
       // repo-shipped builtin skills.
       userSystemSkillsDir(userId),
       ...(attachmentCtx.attachmentNames.length ? [chatAttachmentDirForConversation(userId, attachmentCtx.attachmentCid)] : []),
@@ -3901,7 +3901,7 @@ export async function* streamSendToSkillChat(
       if (etype === 'final') {
         const raw = event.text || '';
         // External-package import: the LLM already cloned/installed the source
-        // via `orkas-pkg` (bash) this turn and emitted the finalize marker.
+        // via `cogseed-pkg` (bash) this turn and emitted the finalize marker.
         // Drop the placeholder custom skill opened for this URL and tell the
         // renderer to switch to the installed package. Install itself never
         // runs here — only this bookkeeping does.

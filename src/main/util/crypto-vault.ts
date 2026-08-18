@@ -2,7 +2,7 @@
  * Open-source fallback / legacy local-file encryption.
  *
  * Design intent — **obfuscation, not security**: the key is derived deterministically from a
- * compiled-in app salt + a caller-provided seed, so anyone who runs Orkas can decrypt their own
+ * compiled-in app salt + a caller-provided seed, so anyone who runs CogSeed can decrypt their own
  * files when they know the seed context. It is NOT keychain-protected, deliberately — see
  * PC/CLAUDE.md §6.5 OAuth section for the reasoning (portability + no OS-keystore dependency
  * trade-off the product owner accepted).
@@ -14,11 +14,11 @@
  *   - Random other apps reading `<uid>/local/config/` via filesystem permission slip-ups.
  *
  * What this does NOT protect against:
- *   - An attacker who has both the disk contents AND the Orkas binary (the derivation function
+ *   - An attacker who has both the disk contents AND the CogSeed binary (the derivation function
  *     is in source code → key is recoverable from `uid` alone).
  *   - Targeted forensic recovery from a stolen device.
  *
- * Hosted Orkas should normally go through `util/local-secret-store.ts`, which uses the private
+ * Hosted CogSeed should normally go through `util/local-secret-store.ts`, which uses the private
  * `ORKLSEC1:` backend when available and calls this module only as an the open-source build fallback or for
  * one-shot migration of older files.
  *
@@ -37,14 +37,14 @@ const IV_LEN = 12;
 const TAG_LEN = 16;
 
 // Hardcoded compile-time salt. NOT a secret in any meaningful sense (it's in source) — just a
-// per-app constant so a leaked encrypted file from one Orkas-derivative app can't be decrypted
-// by another Orkas-derivative re-using uid alone.
-const APP_SALT = Buffer.from('orkas/connectors/v1', 'utf8');
+// per-app constant so a leaked encrypted file from one CogSeed-derivative app can't be decrypted
+// by another CogSeed-derivative re-using uid alone.
+const APP_SALT = Buffer.from('cogseed/connectors/v1', 'utf8');
 
 const _keyCache = new Map<string, Buffer>();
 
 // The seed is any opaque string the caller controls — historically the local uid (machine-
-// private encryption), now also the Orkas-account OAuth user_id when the file is meant to be
+// private encryption), now also the CogSeed-account OAuth user_id when the file is meant to be
 // decrypted cross-device after cloud sync (see `features/connectors/registry.ts` for that
 // case). The function doesn't care which it is; the caller picks.
 function _deriveKey(seed: string): Buffer {

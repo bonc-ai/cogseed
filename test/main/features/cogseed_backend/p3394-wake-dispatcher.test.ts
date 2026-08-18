@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const startMateTask = vi.fn(async () => ({ status: 'running' }));
-const cancelMateTask = vi.fn();
+const startCogSeedTask = vi.fn(async () => ({ status: 'running' }));
+const cancelCogSeedTask = vi.fn();
 const resolveCogSeedAgentExecutionContext = vi.fn(async () => ({
   agentId: 'agent-1',
   agentName: 'Formal Agent',
@@ -12,11 +12,11 @@ const resolveCogSeedAgentExecutionContext = vi.fn(async () => ({
 }));
 
 vi.mock('../../../../src/main/features/cogseed_backend/runtime-controller', () => ({
-  mateRuntimeController: { startMateTask, cancelMateTask },
+  cogseedRuntimeController: { startCogSeedTask, cancelCogSeedTask },
 }));
 
 vi.mock('../../../../src/main/features/cogseed_backend/coordinator', () => ({
-  readMateCoordination: vi.fn(),
+  readCogSeedCoordination: vi.fn(),
 }));
 
 vi.mock('../../../../src/main/features/cogseed_backend/agent-execution-context', () => ({
@@ -28,8 +28,8 @@ vi.mock('../../../../src/main/features/cogseed_backend/agent-execution-context',
 
 describe('CogSeed P3394 wake dispatcher', () => {
   beforeEach(() => {
-    startMateTask.mockClear();
-    cancelMateTask.mockClear();
+    startCogSeedTask.mockClear();
+    cancelCogSeedTask.mockClear();
     resolveCogSeedAgentExecutionContext.mockReset();
     resolveCogSeedAgentExecutionContext.mockResolvedValue({
       agentId: 'agent-1',
@@ -44,9 +44,9 @@ describe('CogSeed P3394 wake dispatcher', () => {
   });
 
   it('falls back to a direct CogSeed task for legacy interactive handoffs with a conversation scope', async () => {
-    const { mateWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
+    const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
 
-    await mateWakeDispatcher.dispatch('user-1', {
+    await cogseedWakeDispatcher.dispatch('user-1', {
       id: 'wake-1',
       conversation_id: 'cid-1',
       execution_domain: 'group_chat',
@@ -64,7 +64,7 @@ describe('CogSeed P3394 wake dispatcher', () => {
       updated_at: '2026-08-11T00:00:00.000Z',
     });
 
-    expect(startMateTask).toHaveBeenCalledWith('user-1', expect.objectContaining({
+    expect(startCogSeedTask).toHaveBeenCalledWith('user-1', expect.objectContaining({
       requestId: 'req-wake-wake-1',
       sessionId: 'gconv-cid-1',
       agentId: 'agent-1',
@@ -74,7 +74,7 @@ describe('CogSeed P3394 wake dispatcher', () => {
       allowedSkillIds: ['skill-one'],
       context: [{ type: 'text', label: 'Formal Agent execution context', content: 'Follow the formal workflow.' }],
     }));
-    expect(startMateTask.mock.calls[0]?.[1]).not.toHaveProperty('profileId');
+    expect(startCogSeedTask.mock.calls[0]?.[1]).not.toHaveProperty('profileId');
   });
 
   it('runs a P3394 gateway Agent through the real local CLI adapter', async () => {
@@ -93,9 +93,9 @@ describe('CogSeed P3394 wake dispatcher', () => {
       knowhow: [],
       standards: [],
     } as any);
-    const { mateWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
+    const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
 
-    await mateWakeDispatcher.dispatch('user-1', {
+    await cogseedWakeDispatcher.dispatch('user-1', {
       id: 'wake-external-1',
       conversation_id: 'cid-1',
       execution_domain: 'group_chat',
@@ -112,7 +112,7 @@ describe('CogSeed P3394 wake dispatcher', () => {
       updated_at: '2026-08-17T00:00:00.000Z',
     });
 
-    expect(startMateTask).toHaveBeenCalledWith('user-1', expect.objectContaining({
+    expect(startCogSeedTask).toHaveBeenCalledWith('user-1', expect.objectContaining({
       agentId: 'external-1',
       executionKind: 'local-cli',
       localCli: {

@@ -10,7 +10,7 @@ import {
 
 describe('platform foundations', () => {
   afterEach(() => {
-    delete process.env.ORKAS_TCC_GUARD_FORCE;
+    delete process.env.COGSEED_TCC_GUARD_FORCE;
   });
 
   it('serializes identical marketplace operations but isolates scope and item keys', async () => {
@@ -36,7 +36,7 @@ describe('platform foundations', () => {
   });
 
   it.runIf(process.platform === 'darwin')('blocks protected macOS roots and recursive ancestors without prefix false positives', () => {
-    process.env.ORKAS_TCC_GUARD_FORCE = '1';
+    process.env.COGSEED_TCC_GUARD_FORCE = '1';
     const home = process.env.HOME || '';
     expect(macosTccSensitivePath(`${home}/Documents/project`)?.reason).toBe('documents');
     expect(macosTccSensitivePath(`${home}/Doc`)?.reason).toBeUndefined();

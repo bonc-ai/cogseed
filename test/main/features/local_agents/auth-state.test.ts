@@ -12,7 +12,7 @@ describe('local_agents/auth-state › claude', () => {
   let tmp: string;
 
   beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-auth-state-'));
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-auth-state-'));
   });
 
   afterEach(() => {
@@ -79,7 +79,7 @@ describe('local_agents/auth-state › other CLIs stay file-existence based', () 
   let tmp: string;
 
   beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-auth-state-'));
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-auth-state-'));
   });
 
   afterEach(() => {

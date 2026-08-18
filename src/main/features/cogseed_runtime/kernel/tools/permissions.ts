@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { isPathAllowed } from '../../../../util/path-sandbox';
 
-const RUNTIME_TRANSCRIPT_PATH_PATTERN = /(?:^|[\/])(?:cloud[\/](?:projects[\/][^\/]+[\/])?(?:chats|sessions)|local[\/](?:mate_runtime[\/])?sessions)[\/].*\.jsonl$/i;
+const RUNTIME_TRANSCRIPT_PATH_PATTERN = /(?:^|[\/])(?:cloud[\/](?:projects[\/][^\/]+[\/])?(?:chats|sessions)|local[\/](?:cogseed_runtime[\/])?sessions)[\/].*\.jsonl$/i;
 
 function realOrResolve(candidate: string): string {
   try {

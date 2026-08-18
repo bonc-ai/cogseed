@@ -26,7 +26,7 @@ $nodeRoot = Join-Path (Join-Path $runtimeRoot 'node') $platformKey
 $nodeExe = Join-Path $nodeRoot 'node.exe'
 $npmCmd = Join-Path $nodeRoot 'npm.cmd'
 $npxCmd = Join-Path $nodeRoot 'npx.cmd'
-$markerPath = Join-Path $nodeRoot '.orkas-runtime.json'
+$markerPath = Join-Path $nodeRoot '.cogseed-runtime.json'
 
 function Test-InstalledNode {
     if (-not (Test-Path -LiteralPath $nodeExe -PathType Leaf) -or
@@ -116,7 +116,7 @@ try {
     $markerJson = $marker | ConvertTo-Json
     $markerEncoding = [System.Text.UTF8Encoding]::new($false)
     [System.IO.File]::WriteAllText(
-        (Join-Path $payloadRoot '.orkas-runtime.json'),
+        (Join-Path $payloadRoot '.cogseed-runtime.json'),
         $markerJson,
         $markerEncoding
     )

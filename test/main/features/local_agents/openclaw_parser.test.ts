@@ -114,7 +114,7 @@ describe('local_agents/backends/openclaw › parseOpenclawReply', () => {
 });
 
 describe('local_agents/backends/openclaw › buildOpenclawArgs', () => {
-  it('passes Orkas watchdog timeout through to the CLI timeout', () => {
+  it('passes CogSeed watchdog timeout through to the CLI timeout', () => {
     const args = buildOpenclawArgs({
       prompt: 'do work',
       timeoutMs: 60 * 60 * 1000,

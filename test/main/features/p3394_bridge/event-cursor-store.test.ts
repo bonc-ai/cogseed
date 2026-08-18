@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 // 游标文件落在 per-variant 数据根（runtime-paths），测试用独立 scratch
 // variant，绝不触碰真实 cogseed 变体的状态。
 const SCRATCH_VARIANT = 'p3394-cursor-test-' + Math.random().toString(36).slice(2, 8);
-process.env.ORKAS_RUNTIME_VARIANT = SCRATCH_VARIANT;
+process.env.COGSEED_RUNTIME_VARIANT = SCRATCH_VARIANT;
 
 afterEach(() => {
   const root = path.join(os.homedir(), '.cogseed', 'runtime-variants', SCRATCH_VARIANT);

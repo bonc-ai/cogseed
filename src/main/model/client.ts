@@ -108,7 +108,7 @@ export interface ChatOptions {
    * description of uploaded images in the knowledge base staging area. */
   images?: Array<{ data: string; mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' }>;
   /** Current-turn attachment metadata forwarded only as provider request
-   * metadata. Orkas-managed LLM uses it server-side to route model families;
+   * metadata. CogSeed-managed LLM uses it server-side to route model families;
    * third-party providers do not receive it. */
   attachmentMetadata?: ChatAttachmentMetadata;
   /** Durable, host-verified resources that should survive history summaries. */

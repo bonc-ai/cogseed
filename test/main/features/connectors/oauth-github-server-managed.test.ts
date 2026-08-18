@@ -13,7 +13,7 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../../../../src/main/features/connectors/_server_bridge', () => ({
-  accountApiBase: () => 'http://account.example/api',
+  accountApiBase: () => 'https://account.example/api',
   tokenStore: {
     getDeviceId: () => 'dev-1',
     authHeaders: () => ({ user_id: 'uid-1', session_id: 'sid-1' }),
@@ -30,18 +30,18 @@ let prevApi: string | undefined;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-github-oauth-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  prevApi = process.env.ORKAS_API_BASE_URL;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-  process.env.ORKAS_API_BASE_URL = 'http://account.example/api';
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-github-oauth-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  prevApi = process.env.COGSEED_API_BASE_URL;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_API_BASE_URL = 'https://account.example/api';
   vi.resetModules();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
-  process.env.ORKAS_API_BASE_URL = prevApi;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_API_BASE_URL = prevApi;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

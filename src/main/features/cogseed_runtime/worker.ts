@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline';
 
 import {
-  MATE_AGENT_RUNTIME_PROTOCOL_VERSION,
+  COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
   type RuntimeEventEnvelope,
   type RuntimeHostToolResult,
   type RuntimeRunRequest,
@@ -52,13 +52,13 @@ export function selectRuntimeExecutor(deps: {
   echo?: RuntimeExecutor;
 } = {}): RuntimeExecutor {
   const env = deps.env ?? process.env;
-  if (env.ORKAS_MATE_RUNTIME_TEST_ECHO === '1') return deps.echo ?? echoExecutor;
+  if (env.COGSEED_COGSEED_RUNTIME_TEST_ECHO === '1') return deps.echo ?? echoExecutor;
   return deps.nativeExecutor ?? createDefaultNativeRuntimeExecutor();
 }
 
 export async function runRuntimeWorker(executor?: RuntimeExecutor): Promise<void> {
   const hostToolClient = createRuntimeHostToolClient(write);
-  const selectedExecutor = executor ?? (process.env.ORKAS_MATE_RUNTIME_TEST_HOST_ECHO === '1'
+  const selectedExecutor = executor ?? (process.env.COGSEED_COGSEED_RUNTIME_TEST_HOST_ECHO === '1'
     ? createHostSmokeExecutor(hostToolClient)
     : selectRuntimeExecutor({ nativeExecutor: createDefaultNativeRuntimeExecutor({ hostToolClient }) }));
   const rl = createInterface({ input: process.stdin });
@@ -73,7 +73,7 @@ export async function runRuntimeWorker(executor?: RuntimeExecutor): Promise<void
       continue;
     }
     if (msg.type === 'hello') {
-      write({ type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run', 'cancel', 'health', 'shutdown', 'mate-host-tools-v1'] });
+      write({ type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, capabilities: ['run', 'cancel', 'health', 'shutdown', 'cogseed-host-tools-v1'] });
       continue;
     }
     if (msg.type === 'health') {
@@ -87,7 +87,7 @@ export async function runRuntimeWorker(executor?: RuntimeExecutor): Promise<void
     }
     if (msg.type !== 'run') continue;
     const req = msg as RuntimeRunRequest;
-    if (req.protocol_version !== MATE_AGENT_RUNTIME_PROTOCOL_VERSION) {
+    if (req.protocol_version !== COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION) {
       write({ type: 'error', request_id: req.request_id, runtime_session_id: req.runtime_session_id, status: 'failed', error: 'protocol version mismatch' });
       continue;
     }

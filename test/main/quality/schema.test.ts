@@ -81,7 +81,7 @@ describe('quality › schema › validateSkillFrontmatter', () => {
 });
 
 describe('quality › schema › validateSkillMeta', () => {
-  it('passes complete Orkas sidecar metadata', () => {
+  it('passes complete CogSeed sidecar metadata', () => {
     const v = validateSkillMeta({
       category: 'data',
       routing: {

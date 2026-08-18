@@ -37,12 +37,12 @@ let prevHome: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-simport-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-simport-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   // Isolate HOME so os.homedir() (used by the Claude session + skill readers)
   // points at a clean per-test dir — never the real ~/.claude.
-  homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-home-'));
+  homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-home-'));
   prevHome = process.env.HOME;
   process.env.HOME = homeDir;
   __nextChat = () => ({ ok: true, text: '' });
@@ -53,7 +53,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await drainMainRuntimeForTest();
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   process.env.HOME = prevHome;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   fs.rmSync(homeDir, { recursive: true, force: true });
