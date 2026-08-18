@@ -1,8 +1,8 @@
 /**
- * Main-process assembly of confirmed recall ability assets for Mate Runtime
+ * Main-process assembly of confirmed recall ability assets for CogSeed Runtime
  * tasks (M-1 closure after Decision 2 = connect).
  *
- * The Mate Runtime worker is an isolated process and must never read the
+ * The CogSeed Runtime worker is an isolated process and must never read the
  * recall store itself. The main process reads confirmed projections here and
  * ships the assembled text block through the existing `context` slot of the
  * Runtime JSONL protocol — the same path `resolveRuntimeCapabilities` uses
@@ -16,7 +16,7 @@ import { createLogger } from '../../logger';
 import type { RuntimeContextItem } from '../cogseed_runtime/protocol';
 import { buildConfirmedProjectionPromptBlock } from '../recall/prompt-injection';
 
-const log = createLogger('mate-backend:runtime-asset-context');
+const log = createLogger('cogseed-backend:runtime-asset-context');
 
 /** Bounded size for the assembled asset block shipped to the Runtime worker.
  *  Recall's own `buildConfirmedProjectionPromptBlock` caps at 14k; keep the
@@ -25,7 +25,7 @@ const log = createLogger('mate-backend:runtime-asset-context');
 export const MAX_RUNTIME_ASSET_CONTEXT_CHARS = 16_000;
 
 /**
- * Assemble confirmed reusable ability assets for a Mate Runtime task.
+ * Assemble confirmed reusable ability assets for a CogSeed Runtime task.
  *
  * Returns an empty array when the conversation has no confirmed projection,
  * when no asset is active, or on any recall read failure (soft failure: the

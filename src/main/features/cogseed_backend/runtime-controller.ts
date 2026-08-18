@@ -18,7 +18,7 @@ import type { MateGroupChatProjectionInput, MateProjectionEvent } from './group-
 import type { MateLocalCliExecutionAdapter } from './local-cli-execution-adapter';
 import type { MateLocalCliConfig } from './types';
 
-const log = createLogger('mate-backend:runtime-controller');
+const log = createLogger('cogseed-backend:runtime-controller');
 
 export interface StartMateTaskInput {
   requestId: string;
@@ -101,8 +101,8 @@ function terminal(task: MateTaskRecord): boolean {
 }
 
 /**
- * Resolve the conversation binding for a Mate task, preferring the explicit
- * input field and falling back to the persisted Mate session record. Returns
+ * Resolve the conversation binding for a CogSeed task, preferring the explicit
+ * input field and falling back to the persisted CogSeed session record. Returns
  * undefined when neither source carries a conversation — in that case the
  * runtime task runs without recall asset injection (soft degradation).
  */
