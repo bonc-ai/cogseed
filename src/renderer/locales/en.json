@@ -4854,6 +4854,7 @@
   "cognition.review_decision_ignore": "Ignored",
   "cognition.review_decision_keep_current": "Kept current version",
   "cognition.review_decision_trial": "Trial",
+  "cognition.inbox_empty_go_assets": "View my assets",
   "cognition.nonasset_empty": "No continuation snapshots yet",
   "cognition.nonasset_empty_hint": "After you import a past session, its goal, stage, and next step appear here and can be resumed by a new session.",
   "cognition.nonasset_truncated": "{total} in total, showing the most recent {shown}.",

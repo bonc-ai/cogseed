@@ -4542,6 +4542,7 @@
   "cognition.review_decision_ignore": "無視",
   "cognition.review_decision_keep_current": "現在のバージョンを維持",
   "cognition.review_decision_trial": "試用",
+  "cognition.inbox_empty_go_assets": "マイ資産を見る",
   "cognition.nonasset_empty": "継続スナップショットはまだありません",
   "cognition.nonasset_empty_hint": "過去のセッションを取り込むと、その目標・段階・次のステップがここに表示され、新しいセッションで再開できます。",
   "cognition.nonasset_truncated": "全 {total} 件中、最新の {shown} 件を表示しています。",

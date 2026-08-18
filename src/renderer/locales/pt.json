@@ -4542,6 +4542,7 @@
   "cognition.review_decision_ignore": "Ignorado",
   "cognition.review_decision_keep_current": "Versão atual mantida",
   "cognition.review_decision_trial": "Teste",
+  "cognition.inbox_empty_go_assets": "Ver meus ativos",
   "cognition.nonasset_empty": "Ainda não há snapshots de continuação",
   "cognition.nonasset_empty_hint": "Depois de importar uma sessão anterior, o objetivo, o estágio e o próximo passo aparecem aqui e podem ser retomados por uma nova sessão.",
   "cognition.nonasset_truncated": "{total} no total, mostrando os {shown} mais recentes.",

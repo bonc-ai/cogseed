@@ -4856,6 +4856,7 @@
   "cognition.review_decision_ignore": "已忽略",
   "cognition.review_decision_keep_current": "保持当前版本",
   "cognition.review_decision_trial": "试用",
+  "cognition.inbox_empty_go_assets": "去看我的资产",
   "cognition.nonasset_empty": "还没有任务接续快照",
   "cognition.nonasset_empty_hint": "导入一次历史会话后，它的目标、阶段与下一步会在这里出现，并可被新会话接续。",
   "cognition.nonasset_truncated": "共 {total} 条，显示最近 {shown} 条。",
