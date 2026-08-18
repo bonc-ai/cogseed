@@ -3,9 +3,5 @@
   "zhName": "CogSeed",
   "appId": "com.cogseed.desktop",
   "protocolScheme": "cogseed",
-  "taglineZh": "跨 Agent 的个人能力资产层",
-  "legacyConnectorSchemes": [
-    "mateagent",
-    "orkas"
-  ]
+  "taglineZh": "跨 Agent 的个人能力资产层"
 }

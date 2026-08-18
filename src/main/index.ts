@@ -6,7 +6,7 @@
  *      container (`~/.orkas` on macOS/Linux; on Windows a drive recorded
  *      in `%LOCALAPPDATA%\Orkas\install-pin.json`), runs the one-shot
  *      `PC/data` → `<container>/data` migration, and sets
- *      `ORKAS_WORKSPACE_ROOT` before tsx loads this module. Source variants
+ *      `COGSEED_WORKSPACE_ROOT` before tsx loads this module. Source variants
  *      use separate containers; packaged builds use the stable main path.
  *      See install-data-root.cjs for the pre-TypeScript boot contract.
  *   2. Pin CORE_AGENT_AUTH_DIR to <WS_ROOT>/config/ so core-agent's
@@ -44,7 +44,7 @@ import { resolveContainedProtocolFile } from './util/protocol-path';
 
 const WINDOWS_TASK_BADGE_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAPklEQVR4nGNgoAX4jwNQpJkoQ2CK3ru4YMV4DSGkGa8hxGrGacioAVQwgOJopEpCQjcEF8CrmZAhRGkmFQAAcdLnkJb3ml4AAAAASUVORK5CYII=';
 const PACKAGED_LAUNCH_SMOKE_FILE = app.isPackaged
-  ? String(process.env.ORKAS_PACKAGED_LAUNCH_SMOKE_FILE || '').trim()
+  ? String(process.env.COGSEED_PACKAGED_LAUNCH_SMOKE_FILE || '').trim()
   : '';
 const IS_PACKAGED_LAUNCH_SMOKE = !!PACKAGED_LAUNCH_SMOKE_FILE;
 const MARKETPLACE_DEFAULTS_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
@@ -56,8 +56,8 @@ app.setName(RUNTIME_IDENTITY.appName);
 if (IS_PACKAGED_LAUNCH_SMOKE) {
   app.setPath('userData', path.join(path.dirname(PACKAGED_LAUNCH_SMOKE_FILE), 'user-data'));
 } else if (!app.isPackaged) {
-  const container = String(process.env.ORKAS_RUNTIME_CONTAINER || '').trim();
-  if (!container) throw new Error('ORKAS_RUNTIME_CONTAINER was not initialized');
+  const container = String(process.env.COGSEED_RUNTIME_CONTAINER || '').trim();
+  if (!container) throw new Error('COGSEED_RUNTIME_CONTAINER was not initialized');
   app.setPath('userData', path.join(container, 'electron-user-data'));
 }
 
@@ -114,7 +114,7 @@ import { getBootDeviceProfile } from './util/boot-device-profile';
 // (runs inside `runBootSelfCheck` below). `resolveAuthDir()` in core-agent
 // re-reads the env on every call so switching at runtime is safe.
 
-// Skill runner env vars (ORKAS_NODE / ORKAS_PC_DIR / ELECTRON_RUN_AS_NODE)
+// Skill runner env vars (COGSEED_NODE / COGSEED_PC_DIR / ELECTRON_RUN_AS_NODE)
 // are injected per-call into the bash-tool sandbox by
 // `model/core-agent/client.ts::buildSkillSandboxEnv()`. Do NOT set them on
 // `process.env` here: the sandbox strips parent env anyway, and
@@ -210,7 +210,7 @@ function setTaskNotificationBadgeCount(count: number): void {
 }
 
 function createWindow(): BrowserWindow {
-  const dev = !app.isPackaged || !!process.env.ORKAS_ONBOARDING_ALWAYS; // Force dev mode when testing onboarding
+  const dev = !app.isPackaged || !!process.env.COGSEED_ONBOARDING_ALWAYS; // Force dev mode when testing onboarding
   const restored = windowState.restoreWindowState();
   // This is deliberately not a `persist:` partition. The official remote
   // creator gets a memory-only browser session, separate from the app UI.
@@ -436,8 +436,8 @@ function registerIpc(): void {
       // Do not pass the current instance's resolved paths back into the
       // launcher, otherwise the new process would either be rejected as an
       // inherited-root launch or attach to the old runtime's data.
-      delete relaunchEnv.ORKAS_WORKSPACE_ROOT;
-      delete relaunchEnv.ORKAS_RUNTIME_CONTAINER;
+      delete relaunchEnv.COGSEED_WORKSPACE_ROOT;
+      delete relaunchEnv.COGSEED_RUNTIME_CONTAINER;
       delete relaunchEnv.CORE_AGENT_AUTH_DIR;
       const child = spawn(cmd, args, {
         cwd: paths.PC_ROOT,

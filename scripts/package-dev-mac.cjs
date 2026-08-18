@@ -24,7 +24,7 @@ function createDevBuilderConfig(baseConfig = {}, identity = {}, options = {}) {
   config.files = files;
   config.extraMetadata = {
     ...(config.extraMetadata || {}),
-    orkasBuildChannel: identity.channel || 'packaged-dev',
+    cogseedBuildChannel: identity.channel || 'packaged-dev',
   };
   config.mac = {
     ...(config.mac || {}),

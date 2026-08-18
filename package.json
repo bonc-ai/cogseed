@@ -6,7 +6,6 @@
   "main": "bootstrap.cjs",
   "type": "commonjs",
   "packageManager": "npm@11.11.0",
-  "orkasSourceRuntimeVariant": "cogseed",
   "imports": {
     "#core-agent": "./src/core-agent/src/index.ts"
   },
@@ -98,9 +97,7 @@
       {
         "name": "CogSeed Connector Callback",
         "schemes": [
-          "cogseed",
-          "mateagent",
-          "orkas"
+          "cogseed"
         ],
         "role": "Viewer"
       }
@@ -273,5 +270,6 @@
     },
     "artifactName": "CogSeed-${version}-${os}-${arch}.${ext}"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "cogseedSourceRuntimeVariant": "cogseed"
 }

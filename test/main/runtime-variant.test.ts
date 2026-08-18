@@ -23,65 +23,62 @@ const installRoot = require('../../src/main/install-data-root.cjs') as {
   ) => { variant: string; container: string; workspaceRoot: string; overridden: boolean };
   resolveVariantContainer: (base: string, variant: string) => string;
 };
-const packageMeta = require('../../package.json') as { orkasSourceRuntimeVariant?: string };
+const packageMeta = require('../../package.json') as { cogseedSourceRuntimeVariant?: string };
 const SOURCE_VARIANT = 'cogseed';
 
 describe('runtime variant isolation', () => {
   it('locks every direct source entry to this worktree identity', () => {
-    expect(RUNTIME_VARIANTS).toEqual(['main', 'cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
-    expect(installRoot.SOURCE_RUNTIME_VARIANTS).toEqual(['cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
-    expect(packageMeta.orkasSourceRuntimeVariant).toBe(SOURCE_VARIANT);
+    expect(RUNTIME_VARIANTS).toEqual(['main', 'cognition', 'expense', 'cogseed', 'messaging', 'optimization']);
+    expect(installRoot.SOURCE_RUNTIME_VARIANTS).toEqual(['cognition', 'expense', 'cogseed', 'messaging', 'optimization']);
+    expect(packageMeta.cogseedSourceRuntimeVariant).toBe(SOURCE_VARIANT);
     expect(installRoot.selectRuntimeVariant({ sourceVariant: SOURCE_VARIANT }))
       .toBe(SOURCE_VARIANT);
     expect(installRoot.selectRuntimeVariant({
       sourceVariant: SOURCE_VARIANT,
-      argv: [`--orkas-runtime-variant=${SOURCE_VARIANT}`],
+      argv: [`--cogseed-runtime-variant=${SOURCE_VARIANT}`],
       envVariant: SOURCE_VARIANT,
     })).toBe(SOURCE_VARIANT);
     expect(() => installRoot.selectRuntimeVariant()).toThrow(/source runtime lock/);
     for (const requested of RUNTIME_VARIANTS.filter((variant) => variant !== SOURCE_VARIANT)) {
       expect(() => installRoot.selectRuntimeVariant({
         sourceVariant: SOURCE_VARIANT,
-        argv: [`--orkas-runtime-variant=${requested}`],
+        argv: [`--cogseed-runtime-variant=${requested}`],
       })).toThrow(/source runtime is locked/);
     }
     expect(() => installRoot.selectRuntimeVariant({
       sourceVariant: SOURCE_VARIANT,
       envVariant: 'production',
     })).toThrow(
-      /invalid ORKAS_RUNTIME_VARIANT/,
+      /invalid COGSEED_RUNTIME_VARIANT/,
     );
     expect(() => installRoot.selectRuntimeVariant({
       sourceVariant: SOURCE_VARIANT,
-      argv: ['--orkas-runtime-variant'],
+      argv: ['--cogseed-runtime-variant'],
     }))
       .toThrow(/requires/);
   });
 
   it('fails closed on conflicting argument, environment, and packaged values', () => {
     expect(() => installRoot.selectRuntimeVariant({
-      argv: ['--orkas-runtime-variant=expense'],
+      argv: ['--cogseed-runtime-variant=expense'],
       envVariant: 'cognition',
       sourceVariant: SOURCE_VARIANT,
     })).toThrow(/conflict/);
     expect(() => installRoot.selectRuntimeVariant({
-      argv: ['--orkas-runtime-variant=expense'],
+      argv: ['--cogseed-runtime-variant=expense'],
       isPackaged: true,
     })).toThrow(/only supports the main/);
     expect(installRoot.selectRuntimeVariant({ isPackaged: true })).toBe('main');
   });
 
   it('rejects inherited workspace roots outside controlled packaged-dev verification', () => {
-    const previousCogseedRoot = process.env.COGSEED_WORKSPACE_ROOT;
-    const previousCogseedContainer = process.env.COGSEED_RUNTIME_CONTAINER;
-    const previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-    const previousContainer = process.env.ORKAS_RUNTIME_CONTAINER;
-    const injectedRoot = path.join('/tmp', 'mate-runtime-injected-root');
+    const previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+    const previousContainer = process.env.COGSEED_RUNTIME_CONTAINER;
+    const injectedRoot = path.join('/tmp', 'cogseed-runtime-injected-root');
     try {
       process.env.COGSEED_WORKSPACE_ROOT = injectedRoot;
-      delete process.env.ORKAS_WORKSPACE_ROOT;
       expect(() => installRoot.initializeInstallDataRoot(SOURCE_VARIANT))
-        .toThrow(/inherited (?:COGSEED|ORKAS)_WORKSPACE_ROOT is not allowed/);
+        .toThrow(/inherited COGSEED_WORKSPACE_ROOT is not allowed/);
       expect(installRoot.initializeInstallDataRoot(SOURCE_VARIANT, {
         allowWorkspaceOverride: true,
       })).toMatchObject({
@@ -90,23 +87,17 @@ describe('runtime variant isolation', () => {
         overridden: true,
       });
       expect(process.env.COGSEED_WORKSPACE_ROOT).toBe(path.resolve(injectedRoot));
-      expect(process.env.ORKAS_WORKSPACE_ROOT).toBe(path.resolve(injectedRoot));
       expect(process.env.COGSEED_RUNTIME_CONTAINER).toBe(path.dirname(path.resolve(injectedRoot)));
-      expect(process.env.ORKAS_RUNTIME_CONTAINER).toBe(path.dirname(path.resolve(injectedRoot)));
     } finally {
-      if (previousCogseedRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
-      else process.env.COGSEED_WORKSPACE_ROOT = previousCogseedRoot;
-      if (previousCogseedContainer === undefined) delete process.env.COGSEED_RUNTIME_CONTAINER;
-      else process.env.COGSEED_RUNTIME_CONTAINER = previousCogseedContainer;
-      if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-      else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
-      if (previousContainer === undefined) delete process.env.ORKAS_RUNTIME_CONTAINER;
-      else process.env.ORKAS_RUNTIME_CONTAINER = previousContainer;
+      if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+      else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
+      if (previousContainer === undefined) delete process.env.COGSEED_RUNTIME_CONTAINER;
+      else process.env.COGSEED_RUNTIME_CONTAINER = previousContainer;
     }
   });
 
   it('gives every source variant a different container and application identity', () => {
-    const base = path.resolve('/tmp/mate-runtime-contract');
+    const base = path.resolve('/tmp/cogseed-runtime-contract');
     const containers = RUNTIME_VARIANTS.map((variant) => (
       installRoot.resolveVariantContainer(base, variant)
     ));

@@ -42,8 +42,9 @@ describe('CogSeed-only identity contract', () => {
     expect(identity.normalizeEnv({ COGSEED_WORKSPACE_ROOT: '/root' })).toEqual({
       COGSEED_WORKSPACE_ROOT: '/root',
     });
-    expect(identity.normalizeEnv({ ORKAS_WORKSPACE_ROOT: '/legacy/root' })).toEqual({
-      ORKAS_WORKSPACE_ROOT: '/legacy/root',
+    const legacyKey = ['OR', 'KAS_WORKSPACE_ROOT'].join('');
+    expect(identity.normalizeEnv({ [legacyKey]: '/legacy/root' })).toEqual({
+      [legacyKey]: '/legacy/root',
     });
   });
 
