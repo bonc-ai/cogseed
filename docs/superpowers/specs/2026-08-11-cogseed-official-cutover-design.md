@@ -12,7 +12,7 @@ Complete the public and repository-level cutover from Mate Agent / Orkas naming 
 The cutover has four externally visible outcomes:
 
 1. CogSeed is the only current product and repository name.
-2. The canonical GitLab project path becomes `team-02/cogseed`.
+2. The canonical project path becomes `<org>/cogseed`.
 3. Root documentation describes the actual CogSeed product and architecture rather than inherited Orkas marketing copy.
 4. Remote `main` points to the exact same commit as the final remote `develop`.
 
@@ -206,7 +206,7 @@ Repository rename is performed only after the cutover MR is merged and verified 
 4. Update the local remote URL:
 
 ```bash
-git remote set-url origin http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/cogseed.git
+git remote set-url origin https://github.com/YOUR-ORG/cogseed.git
 ```
 
 5. Run `git fetch origin develop main` using the new URL.

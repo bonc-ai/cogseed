@@ -152,7 +152,7 @@ Add or extend a renderer-independent test that reads the README files and assert
 
 ```ts
 expect(read('README.md')).toContain('CogSeed');
-expect(read('README.md')).toContain('/team-02/cogseed.git');
+expect(read('README.md')).toContain('/YOUR-ORG/cogseed.git');
 expect(read('README.md')).toContain('window.cogseed');
 expect(read('README.md')).toContain('npm test');
 expect(read('README.md')).toContain('CC Switch');
@@ -165,7 +165,7 @@ expect(read('README.md')).toContain('mateagent'); // compatibility section only
 Use the approved sections from the design spec: overview, capabilities, architecture, quick start, data/privacy, development workflow, migration compatibility, license/attribution. The clone command must use:
 
 ```bash
-git clone http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/cogseed.git
+git clone https://github.com/YOUR-ORG/cogseed.git
 cd cogseed
 ./run.sh
 ```
@@ -374,7 +374,7 @@ If the API/permissions are unavailable, stop after the protected-ref operation a
 - [ ] **Step 6: Verify the renamed remote and exact main mirror**
 
 ```bash
-git remote set-url origin http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/cogseed.git
+git remote set-url origin https://github.com/YOUR-ORG/cogseed.git
 git fetch origin develop main
 test "$(git rev-parse origin/develop)" = "$(git rev-parse origin/main)"
 git diff --exit-code origin/develop origin/main
