@@ -1,6 +1,6 @@
 /**
  * IPC handlers for the cross-session memory UI. Renderer reaches these via
- * `window.orkas.invoke('memory.*', …)` (see preload's generic invoke).
+ * `window.cogseed.invoke('memory.*', …)` (see preload's generic invoke).
  *
  *   memory.list        → { entries, usage:{current,limit}, path }     (one scope)
  *   memory.add         → MemoryOpResult                               (scanned + deduped + truncated by features/memory.ts)

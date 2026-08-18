@@ -46,6 +46,8 @@ export interface RecallAssetTimelineItem {
     taskRunId?: string;
     transferProofId?: string;
     usageReceiptId?: string;
+    /** 使用记录自身 id（N-5: 不是回执 id，仅展示用，不参与回执索引）。 */
+    usage_id?: string;
   };
 }
 
@@ -160,7 +162,11 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
         version: usage.assetVersion,
         projectionId: usage.projectionId,
         taskRunId: usage.taskRunId,
-        usageReceiptId: usage.id,
+        // N-5: usage 行不再伪装 usageReceiptId。前端按 receiptId 索引回执，
+        // usage 记录 id 不是回执 id——放了会让「详情/回执」在 usage 行恒查
+        // 不到（口径漂移：transfer_completed 行的 usageReceiptId 才是真回执
+        // id）。usage 行保留 usage_id 供展示，不参与回执索引。
+        usage_id: usage.id,
       },
     });
   }

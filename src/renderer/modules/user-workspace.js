@@ -35,7 +35,7 @@ async function _loadSpaces() {
   if (_spacesLoading) return _spacesLoading;
   _spacesLoading = (async () => {
     try {
-      const res = await (window.cogseed || window.orkas).invoke('spaces.list', {});
+      const res = await window.cogseed.invoke('spaces.list', {});
       _spacesCache = Array.isArray(res && res.spaces) ? res.spaces : [];
       // new-chat 记忆的空间若已被删除 → 清掉（避免 chip 显示失效 sid）
       if (_newChatSpaceId && !_spacesCache.some((s) => s.space_id === _newChatSpaceId)) {
@@ -106,7 +106,7 @@ async function _pickSpace(target, sid) {
   const cid = (typeof currentCid === 'string') ? currentCid : '';
   if (!cid) return;
   try {
-    const res = await (window.cogseed || window.orkas).invoke('conversations.setSpace', { cid, spaceId: sid });
+    const res = await window.cogseed.invoke('conversations.setSpace', { cid, spaceId: sid });
     if (!res || res.error || !res.conversation) {
       _showSpaceSetFailure((res && res.error) || t('workspace.set_failed', '无法切换工作空间。'));
       return;

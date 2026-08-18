@@ -15,7 +15,7 @@ CogSeed desktop companion agent (Electron). Main is TypeScript under `src/main`,
 Single-process Electron app. Main is a Node backend, renderer is vanilla HTML/CSS/JS, and IPC is the only app communication path.
 
 - No HTTP server, no occupied port, and no local auth layer in main.
-- Renderer access goes through the canonical `contextBridge` allow-list API `window.cogseed.{invoke, stream}`; `window.orkas` is a deprecated one-cycle compatibility alias.
+- Renderer access goes through the canonical `contextBridge` allow-list API `window.cogseed.{invoke, stream}`.
 - No TypeScript/JSX/bundler in the renderer; classic scripts only.
 - `src/main/preload.js` must remain `.js`; preload does not run the tsx hook.
 - LLM calls use the in-process `core-agent` loaded dynamically through `import('#core-agent')`.
@@ -125,7 +125,7 @@ Attachments:
 ## Artifacts And Saved Apps
 
 - `create_artifact` writes only to `<uid>/cloud/chat_artifacts/<cid>/<artifactId>/`.
-- `chat-app://` serves only validated artifact files through `features/chat_artifacts.ts`; never expose `window.cogseed`, the legacy `window.orkas` alias, or IPC to the iframe.
+- `chat-app://` serves only validated artifact files through `features/chat_artifacts.ts`; never expose `window.cogseed` or IPC to the iframe.
 - Artifact-to-app communication is the validated `postMessage` contract and routes back as a normal user message.
 - Saved apps live only under `<uid>/cloud/saved_apps/<appId>/` and open through the saved-app resolver.
 - Editing a saved app is fork-and-modify via a new conversation and attachment bundle; it is not in-place mutation.
@@ -173,7 +173,7 @@ Dev-mode marketplace editing/upload/delete is hosted/private tooling. Runtime ga
 ## Renderer
 
 - Classic scripts only. Add new script files to `index.html`.
-- New `window.cogseed.*` APIs require a main IPC handler; renderer shim routes are centralized. Do not add new APIs only to the legacy `window.orkas` alias.
+- New `window.cogseed.*` APIs require a main IPC handler; renderer shim routes are centralized.
 - Markdown rendering uses `renderMarkdown`; dashboard directives and schema references change together.
 - Do not append cache-busting query strings to renderer resources.
 - Renderer icons are centralized in `modules/icons.js`; do not hard-code SVG paths or use emoji icons.

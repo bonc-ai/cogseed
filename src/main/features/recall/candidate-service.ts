@@ -938,6 +938,51 @@ export async function autoApplyRecallCandidate(
   if (candidate.risk === 'high') {
     throw new Error('high-risk candidate requires an independent user risk gate');
   }
+  // N-2: 语义复核（模型级，SEMANTIC_RULES 闭集）。自动晋升是无人审阅的
+  // 路径，语义发现（越权改写/敏感个人信息/疑似凭据/越界声称）应把候选
+  // 留给用户决定，而不是静默晋升。复核失败（模型不可用）不阻断——退化
+  // 为纯确定性闸（现状），只记一条警告。这里复用 review-decision 的
+  // defer 语义，候选以 deferred 状态留在池里等用户。
+  try {
+    const { reviewCandidateSemantically } = await import('../cognition/semantic-review');
+    const reviewed = await reviewCandidateSemantically(userId, {
+      title: candidate.summary,
+      summary: candidate.value,
+      body: candidate.judgment,
+    });
+    if (reviewed.ok && reviewed.findings.some((finding) => finding.level !== 'LOW')) {
+      const { writeReviewDecision } = await import('../cognition/review-decision');
+      await writeReviewDecision(userId, {
+        targetRef: `recall_candidate:${candidate.id}`,
+        decisionType: 'defer',
+        decision: 'semantic review flag',
+        antecedentRef: candidate.id,
+        scope: candidate.suggestedScope,
+        reason: `Semantic review flagged ${reviewed.findings.map((finding) => finding.rule).join(', ')}; kept for user decision.`,
+        actor: 'system',
+      }).catch(() => undefined);
+      await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => {
+        if (!current) return undefined;
+        return {
+          ...current,
+          status: 'deferred',
+          failureCode: 'semantic_review_flagged',
+          failureMessage: `Semantic review flagged: ${reviewed.findings.map((finding) => finding.rule).join(', ')}`,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      log.info('recall candidate deferred by semantic review', {
+        candidateId: candidate.id,
+        rules: reviewed.findings.map((finding) => finding.rule),
+      });
+      return { candidate: await readRecallCandidate(userId, candidate.id) };
+    }
+  } catch (error) {
+    log.warn('recall candidate semantic review degraded; proceeding with deterministic gate', {
+      candidateId: candidate.id,
+      error: (error as Error).message,
+    });
+  }
   // 晋升前资产语义查重 + 质量融合（设计 §4.7/§4.9）。默认开启；查重不可用时
   // semanticDedupBeforePromote 抛 SemanticDedupUnavailableError，自动晋升中止。
   if (opts.semanticDedup !== false) {

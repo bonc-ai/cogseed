@@ -91,7 +91,6 @@ describe('Hub account IPC release gate', () => {
 
   it.each([
     ['hub-account.start_login', {}],
-    ['hub-account.logout', {}],
     ['hub-account.me', {}],
     ['hub-account.devices', {}],
     ['hub-account.revoke_device', { device_id: 'd1' }],
@@ -102,7 +101,15 @@ describe('Hub account IPC release gate', () => {
   ] as const)('blocks %s before calling feature code', async (channel, payload) => {
     await expect(invokeHandlers[channel](payload, { userId: 'u1' })).rejects.toMatchObject({ code: 'HUB_RELEASE_GATE_CLOSED' });
     expect(mocks.startLogin).not.toHaveBeenCalled();
-    expect(mocks.logout).not.toHaveBeenCalled();
     expect(mocks.getAccountMe).not.toHaveBeenCalled();
+  });
+
+  it('lets logout through even while the release Gate is closed (user right to sign out)', async () => {
+    // hub-account.logout 故意不设 release gate：gate 关闭时拦截 logout 会把
+    // 已登录用户困住（无法退出、也无法再登录）——本地清理是用户正当权利。
+    mocks.logout.mockResolvedValueOnce(undefined);
+    const result = await invokeHandlers['hub-account.logout']({}, { userId: 'u1' });
+    expect(result).toEqual({ signed_out: true });
+    expect(mocks.logout).toHaveBeenCalledWith('u1');
   });
 });

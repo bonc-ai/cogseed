@@ -87,8 +87,10 @@ describe('CogSeed brand contract', () => {
     }
   });
 
-  it('keeps approved internal compatibility symbols', () => {
-    expect(read('src/main/preload.js')).toContain("contextBridge.exposeInMainWorld('orkas'");
+  it('no longer exposes the legacy orkas bridge alias', () => {
+    // 兼容别名已删除（2026-08-17）：渲染层唯一桥是 window.cogseed。
+    expect(read('src/main/preload.js')).not.toContain("exposeInMainWorld('orkas'");
+    expect(read('src/main/preload.js')).not.toContain("__orkasI18nBoot");
     expect(read('src/renderer/modules/ipc-shim.js')).toContain('window.cogseed');
     expect(read('src/renderer/modules/artifact-security.js')).toContain('CogSeedArtifactSecurity');
   });

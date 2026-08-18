@@ -196,7 +196,7 @@ export function buildP3394Level2Manifest(agent: Agent): P3394LiteManifest {
   const contract = agentContract(agent);
   const channels: P3394LiteManifest['channels'] = [{
     id: agent.agent_id,
-    scope: 'mate-agent://group_chat/',
+    scope: 'cogseed://group_chat/',
     channel: 'group_chat',
     principal_source: 'mate_user',
     security: { inbound: { mode: 'implicit' } },
@@ -359,7 +359,7 @@ export function normalizeP3394AgentMessage(input: NormalizeP3394AgentMessageInpu
   const messageId = `p3394-${input.conversationId}-${input.turnId}`;
   const sessionOwner = input.agent.interface_contract?.governance.session_role === 'participant_only'
     ? input.senderPrincipal
-    : { person: input.agent.agent_id, org: 'mate-agent', role: 'session_owner' };
+    : { person: input.agent.agent_id, org: 'cogseed', role: 'session_owner' };
   const message: P3394LiteMessage = {
     message_id: messageId,
     sender: input.sender,

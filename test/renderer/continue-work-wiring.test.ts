@@ -12,11 +12,11 @@ describe('renderer continue-work wizard wiring', () => {
       path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
 
     expect(wizard).toContain('window.continueWork = { open }');
-    expect(wizard).toContain("window.orkas.invoke('localAgents.list')");
-    expect(wizard).toContain("window.orkas.invoke('localAgents.listClaudeSessions')");
-    expect(wizard).toContain("window.orkas.invoke('sessionImport.listCodexSessions')");
-    expect(wizard).toContain("window.orkas.invoke('sessionImport.importClaudeSession'");
-    expect(wizard).toContain("window.orkas.invoke('sessionImport.importCodexSession'");
+    expect(wizard).toContain("window.cogseed.invoke('localAgents.list')");
+    expect(wizard).toContain("window.cogseed.invoke('localAgents.listClaudeSessions')");
+    expect(wizard).toContain("window.cogseed.invoke('sessionImport.listCodexSessions')");
+    expect(wizard).toContain("window.cogseed.invoke('sessionImport.importClaudeSession'");
+    expect(wizard).toContain("window.cogseed.invoke('sessionImport.importCodexSession'");
     expect(wizard).toContain('window._markConversationListLocallyChanged');
     expect(wizard).toContain('loadConversations()');
     expect(wizard).toContain("setView('conversation'");
