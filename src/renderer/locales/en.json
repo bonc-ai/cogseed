@@ -4987,5 +4987,14 @@
   "cognition.asset_edit_save": "Save as a new version",
   "cognition.asset_edit_statement_required": "Asset content cannot be empty",
   "cognition.asset_edit_default_reason": "User edited the asset content",
-  "cognition.asset_edit_done": "Saved as a new version"
+  "cognition.asset_edit_done": "Saved as a new version",
+  "cognition.source_unsynced": "Source not synced yet",
+  "cognition.source_unavailable_label": "Source record unavailable",
+  "cognition.source_deleted": "Source conversation deleted",
+  "cognition.review_target_unavailable": "The processed record is no longer available",
+  "cognition.candidate_untitled": "Untitled candidate",
+  "cognition.conversation_untitled": "Untitled conversation",
+  "cognition.inbox_subject_unavailable": "Related record unavailable",
+  "cognition.activity_untitled": "Untitled record",
+  "cognition.teaching_untitled": "No summary recorded"
 }

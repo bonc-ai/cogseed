@@ -4661,5 +4661,14 @@
   "cognition.asset_edit_save": "新しい版として保存",
   "cognition.asset_edit_statement_required": "資産の内容は空にできません",
   "cognition.asset_edit_default_reason": "ユーザーが資産の内容を変更しました",
-  "cognition.asset_edit_done": "新しい版として保存しました"
+  "cognition.asset_edit_done": "新しい版として保存しました",
+  "cognition.source_unsynced": "ソースは未同期です",
+  "cognition.source_unavailable_label": "ソース記録を利用できません",
+  "cognition.source_deleted": "ソースの会話は削除されました",
+  "cognition.review_target_unavailable": "処理対象の記録は利用できません",
+  "cognition.candidate_untitled": "無題の候補",
+  "cognition.conversation_untitled": "無題の会話",
+  "cognition.inbox_subject_unavailable": "関連記録を利用できません",
+  "cognition.activity_untitled": "無題の記録",
+  "cognition.teaching_untitled": "要約は記録されていません"
 }

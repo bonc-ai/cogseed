@@ -4661,5 +4661,14 @@
   "cognition.asset_edit_save": "Guardar como nova versão",
   "cognition.asset_edit_statement_required": "O conteúdo do ativo não pode estar vazio",
   "cognition.asset_edit_default_reason": "O utilizador editou o conteúdo do ativo",
-  "cognition.asset_edit_done": "Guardado como nova versão"
+  "cognition.asset_edit_done": "Guardado como nova versão",
+  "cognition.source_unsynced": "Origem ainda não sincronizada",
+  "cognition.source_unavailable_label": "Registo de origem indisponível",
+  "cognition.source_deleted": "A conversa de origem foi eliminada",
+  "cognition.review_target_unavailable": "O registo processado já não está disponível",
+  "cognition.candidate_untitled": "Candidato sem título",
+  "cognition.conversation_untitled": "Conversa sem título",
+  "cognition.inbox_subject_unavailable": "Registo relacionado indisponível",
+  "cognition.activity_untitled": "Registo sem título",
+  "cognition.teaching_untitled": "Sem resumo registado"
 }

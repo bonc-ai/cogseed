@@ -4987,5 +4987,14 @@
   "cognition.asset_edit_save": "保存为新版本",
   "cognition.asset_edit_statement_required": "资产内容不能为空",
   "cognition.asset_edit_default_reason": "用户修改了资产内容",
-  "cognition.asset_edit_done": "已保存为新版本"
+  "cognition.asset_edit_done": "已保存为新版本",
+  "cognition.source_unsynced": "来源暂未同步",
+  "cognition.source_unavailable_label": "来源记录不可用",
+  "cognition.source_deleted": "来源对话已删除",
+  "cognition.review_target_unavailable": "处理对象记录已不可用",
+  "cognition.candidate_untitled": "未命名候选",
+  "cognition.conversation_untitled": "未命名对话",
+  "cognition.inbox_subject_unavailable": "相关记录已不可用",
+  "cognition.activity_untitled": "未命名记录",
+  "cognition.teaching_untitled": "未记录摘要"
 }
