@@ -11,6 +11,22 @@ import * as path from 'node:path';
 import * as vm from 'node:vm';
 
 const skillsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf8');
+const bindingsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf8');
+
+function extractFunction(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}`);
+  if (start < 0) throw new Error(`missing ${name}`);
+  const braceStart = source.indexOf('{', start);
+  let depth = 0;
+  for (let index = braceStart; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    else if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  throw new Error(`unterminated ${name}`);
+}
 // 用真实 zh 词条驱动渲染：断言落在用户真正看到的文案上，同时证明新键确实存在。
 const zh: Record<string, string> = JSON.parse(
   fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/zh.json'), 'utf8'),
@@ -183,5 +199,153 @@ describe('recall candidate detail renders from capability', () => {
     expect(html).toContain('证据不足，补充证据后才能确认');
     // 补证据是唯一出路，所以编辑区必须留着。
     expect(html).toContain('data-recall-edit-evidence');
+  });
+});
+
+describe('confirmed candidate exits into the formal asset version chain', () => {
+  function renderDetail(target: Record<string, unknown>) {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-candidate-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      recallCandidates: [target], selectedCandidateId: target.id,
+    })})`, context);
+    context.renderSkillsCognitionCandidateDetail();
+    return host.innerHTML;
+  }
+
+  it('sends a confirmed candidate to its asset instead of reopening the candidate', () => {
+    const html = renderDetail(candidate('c-done', 'confirmed', {
+      ...READ_ONLY, displayState: 'confirmed', disabledReason: 'candidate_confirmed',
+    }, { promotedAssetId: 'aa-1' }));
+    // 出口指向正式资产的治理页（版本在那里），不是再开一次候选编辑。
+    expect(html).toContain('data-ability-asset-id="aa-1"');
+    expect(html).toContain('data-cognition-page-link="governance"');
+    expect(html).toContain('查看正式资产');
+    expect(html).not.toContain('data-recall-candidate-action="save-and-promote"');
+  });
+
+  it('offers no asset entry when the candidate never produced one', () => {
+    const html = renderDetail(candidate('c-rejected', 'rejected', {
+      ...READ_ONLY, displayState: 'rejected', disabledReason: 'candidate_rejected',
+    }));
+    expect(html).not.toContain('data-cognition-page-link="governance"');
+  });
+});
+
+describe('governance page carries the asset revision entry', () => {
+  function renderGovernance(asset: Record<string, unknown>, editingAssetId = '') {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-governance-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      assets: [asset], selectedAssetId: asset.id, inboxItems: [], editingAssetId,
+      sources: [], recallCandidates: [], captures: [], recentCaptures: [],
+    })})`, context);
+    context.renderSkillsCognitionGovernance();
+    return host.innerHTML;
+  }
+
+  const ASSET = {
+    id: 'aa-1', type: 'rule', category: 'rule', title: '架构决策要留可追溯记录',
+    statement: '架构决策要留可追溯记录', scope: 'product', status: 'active',
+    maturity: 'bud', lifecycleStatus: 'user_confirmed_unverified', version: '2',
+    applicableWhen: ['正式评审时'], forbiddenWhen: ['内部快速对齐'],
+    workspaceRefs: [], receiptRefs: [], candidateRefs: [], relationRefs: [],
+  };
+
+  it('shows the edit entry for an asset whose content can still change', () => {
+    const html = renderGovernance(ASSET);
+    expect(html).toContain('data-recall-asset-edit-open="aa-1"');
+    expect(html).toContain('编辑资产');
+  });
+
+  it('edits statement, scope and boundaries and says a new version will be created', () => {
+    const html = renderGovernance(ASSET, 'aa-1');
+    expect(html).toContain('data-recall-asset-edit-statement');
+    expect(html).toContain('data-recall-asset-edit-scope');
+    expect(html).toContain('data-recall-asset-edit-applicable');
+    expect(html).toContain('data-recall-asset-edit-forbidden');
+    expect(html).toContain('data-recall-asset-edit-reason');
+    expect(html).toContain('data-recall-asset-edit-save="aa-1"');
+    // 用户点保存前就知道会发生什么：当前 v2 保留，新的是 v3。
+    expect(html).toContain('保存后会生成 v3，当前 v2 仍保留在版本历史里。');
+  });
+
+  it('offers no content editing for a revoked asset', () => {
+    expect(renderGovernance({ ...ASSET, status: 'revoked' })).not.toContain('data-recall-asset-edit-open');
+  });
+});
+
+describe('asset revision binding actually reads the edit fields', () => {
+  /** 历史 bug：确认路径渲染了输入框却从不读它们，用户的修改静默丢失。 */
+  it('sends statement, scope and boundaries to recall.assets.update', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const calls: Array<[string, unknown]> = [];
+    let refreshes = 0;
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    const fields: Record<string, { value: string }> = {
+      '[data-recall-asset-edit-statement]': { value: ' 架构决策必须写明取舍 ' },
+      '[data-recall-asset-edit-scope]': { value: ' workspace-a ' },
+      '[data-recall-asset-edit-applicable]': { value: '正式评审时\n  跨团队接口变更时  \n\n' },
+      '[data-recall-asset-edit-forbidden]': { value: '内部快速对齐' },
+      '[data-recall-asset-edit-reason]': { value: '把范围收窄到单个工作空间' },
+    };
+    const editor: any = { querySelector: (selector: string) => fields[selector] || null };
+    const button: any = { dataset: { recallAssetEditSave: 'aa-1' }, disabled: false, closest: () => editor };
+    const target = {
+      closest: (selector: string) => (selector === '[data-recall-asset-edit-save]' ? button : null),
+    };
+    const state: any = { editingAssetId: 'aa-1', assetHistoryById: { 'aa-1': { versions: [] } } };
+    const context: any = {
+      document: {
+        getElementById: (id: string) => (id === 'panel-recall' ? panel : null),
+        querySelectorAll: () => [],
+      },
+      window: {
+        addEventListener() {},
+        cogseed: {
+          invoke: async (channel: string, payload: unknown) => {
+            calls.push([channel, payload]);
+            return { ok: true, asset: { id: 'aa-1', version: '3' } };
+          },
+        },
+      },
+      _skillsCognitionState: state,
+      _cognitionText: (_key: string, fallback: string) => fallback,
+      _cognitionNotifyDone() {},
+      renderSkillsCognitionGovernance() {},
+      loadSkillsCognitionSnapshot: async () => { refreshes += 1; },
+      initSkillsCognitionConsole() {},
+      switchSkillsCognitionPage() {},
+      setTimeout,
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target });
+
+    expect(calls).toEqual([['recall.assets.update', {
+      assetId: 'aa-1',
+      statement: '架构决策必须写明取舍',
+      scope: 'workspace-a',
+      applicableWhen: ['正式评审时', '跨团队接口变更时'],
+      forbiddenWhen: ['内部快速对齐'],
+      reason: '把范围收窄到单个工作空间',
+    }]]);
+    // 保存后退出编辑态、清掉过期的版本历史缓存，并重新读快照拿到新版本。
+    expect(state.editingAssetId).toBe('');
+    expect(state.assetHistoryById['aa-1']).toBeUndefined();
+    expect(refreshes).toBe(1);
+    expect(button.disabled).toBe(false);
   });
 });

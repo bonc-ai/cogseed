@@ -4648,5 +4648,18 @@
   "cognition.candidate_blocked_superseded": "新しい版に置き換えられています",
   "cognition.candidate_blocked_evidence": "根拠が不足しています。根拠を追加してから確認してください",
   "cognition.candidate_blocked_high_risk": "高リスク候補は個別確認が必要で、一括登録できません",
-  "cognition.candidate_blocked_unknown": "状態が不明なため、現在は処理できません"
+  "cognition.candidate_blocked_unknown": "状態が不明なため、現在は処理できません",
+  "cognition.candidate_open_formal_asset": "正式資産を開く",
+  "cognition.asset_edit_title": "この資産を修正",
+  "cognition.asset_edit_hint": "内容や適用範囲を変更すると新しい版が作成され、旧版はロールバック可能なまま残ります。",
+  "cognition.asset_edit_open": "資産を編集",
+  "cognition.asset_edit_version_hint": "保存すると v{next} が作成され、現在の v{current} は版履歴に残ります。",
+  "cognition.asset_statement": "内容",
+  "cognition.asset_scope": "適用範囲",
+  "cognition.asset_edit_reason": "変更理由（ガバナンス履歴に記録されます）",
+  "cognition.asset_edit_reason_placeholder": "例：適用範囲をプロダクトレビューに絞る",
+  "cognition.asset_edit_save": "新しい版として保存",
+  "cognition.asset_edit_statement_required": "資産の内容は空にできません",
+  "cognition.asset_edit_default_reason": "ユーザーが資産の内容を変更しました",
+  "cognition.asset_edit_done": "新しい版として保存しました"
 }

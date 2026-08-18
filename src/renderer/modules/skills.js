@@ -63,6 +63,8 @@ const _skillsCognitionState = {
   writingRecallCandidateId: '',
   assets: [],
   selectedAssetId: '',
+  /** 正在编辑内容的正式资产 id（confirmed 候选之后的唯一修改出口）。 */
+  editingAssetId: '',
   assetCategoryFilter: '',
   assetSearchQuery: '',
   assetHistoryById: {},
@@ -2959,6 +2961,7 @@ function renderSkillsCognitionCandidateDetail() {
         ${detailCapability.canPromote ? `<button type="button" class="btn btn-sm btn-primary" data-recall-candidate-action="save-and-promote" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_confirm_scoped', '确认并限域'))}</button>` : ''}
         ${detailCapability.canDefer ? `<button type="button" class="btn btn-sm" data-recall-candidate-action="defer" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.status_deferred', '稍后'))}</button>` : ''}
         ${detailCapability.canReject ? `<button type="button" class="btn btn-sm btn-danger" data-recall-candidate-action="reject" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_reject', '拒绝'))}</button>` : ''}
+        ${detailCapability.isTerminal && candidate.promotedAssetId ? `<button type="button" class="btn btn-sm btn-primary" data-ability-asset-id="${escapeHtml(candidate.promotedAssetId)}" data-cognition-page-link="governance">${escapeHtml(_cognitionText('cognition.candidate_open_formal_asset', '查看正式资产'))}</button>` : ''}
         <button type="button" class="btn btn-sm btn-subtle" data-cognition-locate-candidate-capture="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_locate_capture', '这条是哪次沉淀产生的'))}</button>
       </div>
     </article>
@@ -3378,6 +3381,48 @@ function _recallAssetActions(status) {
   if (status !== 'revoked') actions.push('revoke');
   actions.push('purge', 'versions', 'chain');
   return actions;
+}
+
+/**
+ * 正式资产内容是否可改。confirmed Candidate 的后续修改走这条链——改的是
+ * 资产并生成新版本，而不是回头改那条已经终结的候选。
+ * 已撤回/删除/清除的资产没有可改的本体；归档的先恢复再改。
+ */
+function _recallAssetContentEditable(status) {
+  return status === 'active' || status === 'paused';
+}
+
+/**
+ * 正式资产内容编辑区。这是 confirmed Candidate 之后**唯一**的修改出口：
+ * 提交走 recall.assets.update → updateAbilityAsset 生成新版本，治理页的版本
+ * 历史与"本次改动"随之更新。不要为了"确认后还能改"回头开放候选编辑——
+ * 那样改的是一条已经终结的候选，不会产生任何资产版本。
+ */
+function _renderRecallAssetEditor(asset) {
+  if (!_recallAssetContentEditable(asset.status)) return '';
+  const open = _skillsCognitionState.editingAssetId === asset.id;
+  if (!open) {
+    return `<section class="cognition-governance-action-group cognition-asset-editor">
+      <h3>${escapeHtml(_cognitionText('cognition.asset_edit_title', '修改这条资产'))}</h3>
+      <p>${escapeHtml(_cognitionText('cognition.asset_edit_hint', '修改内容或适用范围会生成新版本，旧版本仍可回滚。'))}</p>
+      <div><button type="button" class="btn btn-sm" data-recall-asset-edit-open="${escapeHtml(asset.id)}">${escapeHtml(_cognitionText('cognition.asset_edit_open', '编辑资产'))}</button></div>
+    </section>`;
+  }
+  const lines = (value) => escapeHtml((Array.isArray(value) ? value : []).join('\n'));
+  return `<section class="cognition-governance-action-group cognition-asset-editor is-open" data-recall-asset-editor="${escapeHtml(asset.id)}">
+    <h3>${escapeHtml(_cognitionText('cognition.asset_edit_title', '修改这条资产'))}</h3>
+    <p>${escapeHtml(_cognitionText('cognition.asset_edit_version_hint', '保存后会生成 v{next}，当前 v{current} 仍保留在版本历史里。')
+      .replace('{next}', String(Number(asset.version || 0) + 1)).replace('{current}', String(asset.version || '1')))}</p>
+    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.asset_statement', '内容'))}</span><textarea data-recall-asset-edit-statement>${escapeHtml(asset.statement || '')}</textarea></label>
+    <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.asset_scope', '作用范围'))}</span><input data-recall-asset-edit-scope value="${escapeHtml(asset.scope || '')}"></label>
+    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.applicable_when', '适用场景（一行一条）'))}</span><textarea data-recall-asset-edit-applicable>${lines(asset.applicableWhen)}</textarea></label>
+    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.forbidden_when', '禁止场景（一行一条）'))}</span><textarea data-recall-asset-edit-forbidden>${lines(asset.forbiddenWhen)}</textarea></label>
+    <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.asset_edit_reason', '改动原因（会记进治理历史）'))}</span><input data-recall-asset-edit-reason placeholder="${escapeHtml(_cognitionText('cognition.asset_edit_reason_placeholder', '例如：把适用范围收窄到产品评审'))}"></label>
+    <div class="skills-cognition-actions">
+      <button type="button" class="btn btn-sm btn-primary" data-recall-asset-edit-save="${escapeHtml(asset.id)}">${escapeHtml(_cognitionText('cognition.asset_edit_save', '保存为新版本'))}</button>
+      <button type="button" class="btn btn-sm" data-recall-asset-edit-cancel="${escapeHtml(asset.id)}">${escapeHtml(_cognitionText('common.cancel', '取消'))}</button>
+    </div>
+  </section>`;
 }
 
 function _recallAssetActionLabel(action) {
@@ -3885,6 +3930,7 @@ function renderSkillsCognitionGovernance() {
       ${usageActions ? `<section class="cognition-governance-action-group"><h3>${escapeHtml(_cognitionText('cognition.governance_impact_preview', '影响预览'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_impact_preview_hint', '暂停后，新任务不再默认带入；已完成任务、版本和 Evidence 均保留。归档后仍可检索，但不出现在常用资产中。'))}</p><div>${usageActions}</div></section>` : ''}
       ${recordActions ? `<section class="cognition-governance-action-group"><h3>${escapeHtml(_cognitionText('cognition.governance_history_control', '版本与证明'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_history_control_hint', '查看历史版本、回滚入口，以及这条资产的使用履历。'))}</p><div>${recordActions}${upgradeEntry}</div></section>` : ''}
       ${destructiveActions ? `<section class="cognition-governance-action-group is-danger"><h3>${escapeHtml(_cognitionText('cognition.governance_asset_body', '资产本体'))}</h3><p>${escapeHtml(_cognitionText('cognition.governance_asset_body_hint', '删除、撤回使用与彻底清除影响不同，执行前会再次确认。'))}</p><div>${destructiveActions}</div></section>` : ''}
+      ${_renderRecallAssetEditor(selected)}
       ${_renderRecallAssetHistory(selected.id)}
       ${_renderRecallAssetChain(selected.id)}
     </section>

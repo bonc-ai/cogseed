@@ -4974,5 +4974,18 @@
   "cognition.candidate_blocked_superseded": "已被更新版本替代",
   "cognition.candidate_blocked_evidence": "证据不足，补充证据后才能确认",
   "cognition.candidate_blocked_high_risk": "高风险候选需要单独确认，不能批量入库",
-  "cognition.candidate_blocked_unknown": "状态未知，暂时无法处理"
+  "cognition.candidate_blocked_unknown": "状态未知，暂时无法处理",
+  "cognition.candidate_open_formal_asset": "查看正式资产",
+  "cognition.asset_edit_title": "修改这条资产",
+  "cognition.asset_edit_hint": "修改内容或适用范围会生成新版本，旧版本仍可回滚。",
+  "cognition.asset_edit_open": "编辑资产",
+  "cognition.asset_edit_version_hint": "保存后会生成 v{next}，当前 v{current} 仍保留在版本历史里。",
+  "cognition.asset_statement": "内容",
+  "cognition.asset_scope": "作用范围",
+  "cognition.asset_edit_reason": "改动原因（会记进治理历史）",
+  "cognition.asset_edit_reason_placeholder": "例如：把适用范围收窄到产品评审",
+  "cognition.asset_edit_save": "保存为新版本",
+  "cognition.asset_edit_statement_required": "资产内容不能为空",
+  "cognition.asset_edit_default_reason": "用户修改了资产内容",
+  "cognition.asset_edit_done": "已保存为新版本"
 }

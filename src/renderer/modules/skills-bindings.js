@@ -1223,6 +1223,60 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    // 正式资产内容编辑：confirmed Candidate 之后的唯一修改出口。保存走
+    // recall.assets.update，由后端生成新版本；这里不自己拼版本号。
+    const assetEditOpen = event.target.closest('[data-recall-asset-edit-open]');
+    if (assetEditOpen) {
+      _skillsCognitionState.editingAssetId = assetEditOpen.dataset.recallAssetEditOpen || '';
+      renderSkillsCognitionGovernance();
+      return;
+    }
+    const assetEditCancel = event.target.closest('[data-recall-asset-edit-cancel]');
+    if (assetEditCancel) {
+      _skillsCognitionState.editingAssetId = '';
+      renderSkillsCognitionGovernance();
+      return;
+    }
+    const assetEditSave = event.target.closest('[data-recall-asset-edit-save]');
+    if (assetEditSave) {
+      const assetId = assetEditSave.dataset.recallAssetEditSave || '';
+      if (!assetId || assetEditSave.dataset.busy === '1') return;
+      const editor = assetEditSave.closest('[data-recall-asset-editor]');
+      if (!editor) return;
+      const readValue = (selector) => (editor.querySelector(selector)?.value ?? '').trim();
+      const readLines = (selector) => (editor.querySelector(selector)?.value ?? '')
+        .split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 32);
+      const statement = readValue('[data-recall-asset-edit-statement]');
+      if (!statement) {
+        if (typeof uiAlert === 'function') await uiAlert(_cognitionText('cognition.asset_edit_statement_required', '资产内容不能为空'));
+        return;
+      }
+      const reason = readValue('[data-recall-asset-edit-reason]')
+        || _cognitionText('cognition.asset_edit_default_reason', '用户修改了资产内容');
+      assetEditSave.dataset.busy = '1'; assetEditSave.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.assets.update', {
+          assetId,
+          statement,
+          scope: readValue('[data-recall-asset-edit-scope]'),
+          applicableWhen: readLines('[data-recall-asset-edit-applicable]'),
+          forbiddenWhen: readLines('[data-recall-asset-edit-forbidden]'),
+          reason,
+        });
+        if (!result?.ok) throw new Error(result?.error || 'recall asset update failed');
+        _skillsCognitionState.editingAssetId = '';
+        // 版本历史已经变了：清掉缓存的历史，让治理页重新读到新版本与本次改动。
+        if (_skillsCognitionState.assetHistoryById) delete _skillsCognitionState.assetHistoryById[assetId];
+        _cognitionNotifyDone('cognition.asset_edit_done', '已保存为新版本');
+        await loadSkillsCognitionSnapshot();
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        assetEditSave.dataset.busy = '0'; assetEditSave.disabled = false;
+      }
+      return;
+    }
+
     const abilityAsset = event.target.closest('[data-ability-asset-id]');
     if (abilityAsset) {
       _skillsCognitionState.selectedAssetId = abilityAsset.dataset.abilityAssetId || '';

@@ -4974,5 +4974,18 @@
   "cognition.candidate_blocked_superseded": "Superseded by a newer version",
   "cognition.candidate_blocked_evidence": "Evidence is too thin; add evidence before confirming",
   "cognition.candidate_blocked_high_risk": "High-risk candidates need individual confirmation and cannot be bulk-stored",
-  "cognition.candidate_blocked_unknown": "Unknown state; cannot be processed right now"
+  "cognition.candidate_blocked_unknown": "Unknown state; cannot be processed right now",
+  "cognition.candidate_open_formal_asset": "Open the formal asset",
+  "cognition.asset_edit_title": "Edit this asset",
+  "cognition.asset_edit_hint": "Changing the content or scope creates a new version; older versions stay rollbackable.",
+  "cognition.asset_edit_open": "Edit asset",
+  "cognition.asset_edit_version_hint": "Saving creates v{next}; the current v{current} stays in version history.",
+  "cognition.asset_statement": "Content",
+  "cognition.asset_scope": "Scope",
+  "cognition.asset_edit_reason": "Reason for the change (recorded in governance history)",
+  "cognition.asset_edit_reason_placeholder": "e.g. narrow the scope to product reviews",
+  "cognition.asset_edit_save": "Save as a new version",
+  "cognition.asset_edit_statement_required": "Asset content cannot be empty",
+  "cognition.asset_edit_default_reason": "User edited the asset content",
+  "cognition.asset_edit_done": "Saved as a new version"
 }

@@ -4648,5 +4648,18 @@
   "cognition.candidate_blocked_superseded": "Substituído por uma versão mais recente",
   "cognition.candidate_blocked_evidence": "Evidência insuficiente; adicione evidência antes de confirmar",
   "cognition.candidate_blocked_high_risk": "Candidatos de alto risco precisam de confirmação individual e não podem ser guardados em lote",
-  "cognition.candidate_blocked_unknown": "Estado desconhecido; não é possível processar agora"
+  "cognition.candidate_blocked_unknown": "Estado desconhecido; não é possível processar agora",
+  "cognition.candidate_open_formal_asset": "Abrir o ativo formal",
+  "cognition.asset_edit_title": "Editar este ativo",
+  "cognition.asset_edit_hint": "Alterar o conteúdo ou o âmbito cria uma nova versão; as anteriores continuam reversíveis.",
+  "cognition.asset_edit_open": "Editar ativo",
+  "cognition.asset_edit_version_hint": "Guardar cria a v{next}; a v{current} atual permanece no histórico de versões.",
+  "cognition.asset_statement": "Conteúdo",
+  "cognition.asset_scope": "Âmbito",
+  "cognition.asset_edit_reason": "Motivo da alteração (registado no histórico de governação)",
+  "cognition.asset_edit_reason_placeholder": "ex.: restringir o âmbito a revisões de produto",
+  "cognition.asset_edit_save": "Guardar como nova versão",
+  "cognition.asset_edit_statement_required": "O conteúdo do ativo não pode estar vazio",
+  "cognition.asset_edit_default_reason": "O utilizador editou o conteúdo do ativo",
+  "cognition.asset_edit_done": "Guardado como nova versão"
 }
