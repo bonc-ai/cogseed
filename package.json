@@ -77,7 +77,7 @@
     "jimp": "^1.6.1",
     "mammoth": "^1.12.0",
     "node-pty": "^1.0.0",
-    "pdfjs-dist": "^5.6.205",
+    "pdfjs-dist": "^6.2.108",
     "socks-proxy-agent": "^8.0.5",
     "sqlite-vec": "^0.1.9",
     "tar": "7.5.20",

@@ -24,7 +24,7 @@ const DEFAULT_MAX_CHARS = 8_000;
  *  in a way that invalidates on-disk caches (chat_attachments /
  *  contexts_extract / file_indexer). Each cache layer records this
  *  version and wipes the directory on mismatch. */
-export const EXTRACT_CACHE_VERSION = 3;
+export const EXTRACT_CACHE_VERSION = 4;
 
 /** Lazy module handle so we only pay the import cost once per process. */
 let _pdfjsPromise: Promise<any> | null = null;
@@ -82,7 +82,12 @@ export async function pdfBufferToPages(buf: Buffer): Promise<string[]> {
     pageTexts.push(stitchTextItems(content.items));
     page.cleanup();
   }
-  await doc.destroy();
+  // pdfjs ≥6 removed PDFDocumentProxy.destroy(); the loading task owns teardown.
+  if (typeof doc.destroy === 'function') {
+    await doc.destroy();
+  } else {
+    await loadingTask.destroy();
+  }
 
   return pageTexts;
 }
