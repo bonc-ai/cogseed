@@ -25,7 +25,7 @@
 - `docs/P3394_Local_Bridge_SDK_Design(1).md` —— P3394 本地桥 SDK 设计（协议模型：UMF
   Envelope / Identity / Manifest / Session / Task / Channel / Audit / Recovery）。
 - `test/` —— 网关的协议测试（可与本机实现对照审查）。
-- `BOOTSTRAP.md` / `README.md` / `PUBLISH.md` —— 接入方式与发布状态。
+- `BOOTSTRAP.md` / `README.md` —— 接入方式与运行说明。
 
 ## 2. 安全边界（代码里可逐条核对）
 
@@ -63,8 +63,8 @@ ls test/
 
 ## 4. 接入选项（审查后三选一）
 
-1. **本机 CLI 智能体**：`node gateway.cjs`（或 `npm install -g @cogseed/p3394-gateway`，
-   包发布中）；预设 `P3394_AGENT=hermes/claude/codex/opencode/gemini/aider`，
+1. **本机 CLI 智能体**：`node gateway.cjs`（或在本目录执行 `npm install -g .`）；
+   预设 `P3394_AGENT=hermes/claude/codex/opencode/gemini/aider`，
    自研 CLI 用 `P3394_AGENT_CLI` / `P3394_AGENT_CLI_ARGS` 自定义；
    `P3394_AGENT_ALIAS` 自报显示名；启动后自动向 CogSeed hello 注册。
 2. **云端/网页智能体**：无需安装，HTTP 直接 POST UMF 信封到
