@@ -394,12 +394,18 @@ export type AgentRuntime =
       kind: 'p3394-gateway';
       /** Canonical CLI type the gateway wraps (matches LOCAL_CLI_TYPES). */
       cli: string;
+      /** Optional model id forwarded to the wrapped CLI runtime. */
+      model?: string;
+      /** Extra CLI flags forwarded without shell parsing. */
+      custom_args?: string[];
+      /** Optional synthetic custom-provider id (`cp:<id>`). */
+      cli_provider_id?: string;
     };
 
 export interface AgentInterfaceContract {
   version: 1;
   role: 'orkas_core' | 'external_expert';
-  runtime: { kind: 'in_process' } | { kind: 'cli'; cli: string };
+  runtime: { kind: 'in_process' } | { kind: 'cli'; cli: string } | { kind: 'p3394-gateway'; cli: string };
   io: {
     input: 'task_message';
     output: 'final_message' | 'final_message_with_artifacts';
@@ -1021,15 +1027,12 @@ function _normalizeRuntime(raw: unknown): AgentRuntime | null {
   const r = raw as Record<string, unknown>;
   const kind = r.kind;
   if (kind === 'in_process') return { kind: 'in_process' };
-  if (kind === 'p3394-gateway') {
-    const cli = typeof r.cli === 'string' ? r.cli.trim() : '';
-    if (!cli) return null;
-    return { kind: 'p3394-gateway', cli };
-  }
-  if (kind !== 'cli') return null;
+  if (kind !== 'cli' && kind !== 'p3394-gateway') return null;
   const cli = typeof r.cli === 'string' ? r.cli.trim() : '';
   if (!cli) return null;
-  const out: AgentRuntime = { kind: 'cli', cli };
+  const out: AgentRuntime = kind === 'p3394-gateway'
+    ? { kind: 'p3394-gateway', cli }
+    : { kind: 'cli', cli };
   if (typeof r.model === 'string' && r.model.trim()) out.model = r.model.trim();
   if (Array.isArray(r.custom_args)) {
     const args = r.custom_args.filter((s): s is string => typeof s === 'string');
@@ -1072,11 +1075,13 @@ function deriveAgentInterfaceContract(
   runtime: AgentRuntime | null | undefined,
   outputFormat: ReturnType<typeof _canonicalOutputFormat>,
 ): AgentInterfaceContract {
-  if (runtime?.kind === 'cli') {
+  if (runtime?.kind === 'cli' || runtime?.kind === 'p3394-gateway') {
     return {
       version: 1,
       role: 'external_expert',
-      runtime: { kind: 'cli', cli: runtime.cli },
+      runtime: runtime.kind === 'p3394-gateway'
+        ? { kind: 'p3394-gateway', cli: runtime.cli }
+        : { kind: 'cli', cli: runtime.cli },
       io: { input: 'task_message', output: _agentContractOutput(outputFormat) },
       governance: {
         session_role: 'participant_only',
@@ -1510,6 +1515,26 @@ export async function listAgents(): Promise<Agent[]> {
     ...agent,
     enabled: !disabledAgentIds.has(agent.agent_id),
   }));
+}
+
+/** Count AI 团队 agents whose P3394 runtime binds a local CLI. Optional
+ *  `excludeAgentId` excludes one agent (the one being deleted). Used to
+ *  decide whether a shared gateway process may be stopped:同 CLI 允许多个
+ * 外接 agent 共享同一个受管网关，删除/停用其中一个时，只有该 CLI 不再
+ *  被任何剩余 agent 引用才允许停进程（否则删一个连累另一个）。 */
+export async function countP3394GatewayAgentsByCli(
+  cli: string | null | undefined,
+  options: { excludeAgentId?: string } = {},
+): Promise<number> {
+  if (!cli) return 0;
+  const all = await listAgents();
+  let count = 0;
+  for (const agent of all) {
+    if (options.excludeAgentId && agent.agent_id === options.excludeAgentId) continue;
+    const rt = agent.runtime as { kind?: string; cli?: string } | undefined;
+    if (rt && rt.kind === 'p3394-gateway' && rt.cli === cli) count += 1;
+  }
+  return count;
 }
 
 /**

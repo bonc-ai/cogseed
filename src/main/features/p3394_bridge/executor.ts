@@ -186,7 +186,22 @@ export class P3394BridgeExecutor {
     }
     // A peer's reply may resolve a waiting outbound call; it still flows
     // into the conversation below so the exchange stays visible in the UI.
-    this.outboundHub?.tryResolveReply(envelope);
+    const consumedReply = this.outboundHub?.tryResolveReply(envelope) ?? false;
+    // S-03：对端回复只需解决出站等待方（tryResolveReply 已消费），不再作为
+    // 新入站任务继续执行——否则同一回复既回给转发等待者、又被 executor 当
+    // 新任务注入对话并触发额外一轮执行（A→B peer-forward 的重复副作用），
+    // 无模型配置时还可能错误唤醒 Commander（镜像会话）。未匹配的信封仍
+    // 继续走正常入站路径。对话展示由调用方负责。
+    if (consumedReply) {
+      this.bridge.audit.append({
+        event: 'inbound.reply.consumed',
+        actor_id: envelope.sender.agent_id,
+        status: 'accepted',
+        metadata: { reply_to: envelope.reply_to, session_id: envelope.session_id },
+      });
+
+      return { ok: true, receipt: sent.receipt, executed: false };
+    }
 
     if (!EXECUTABLE_KINDS.has(envelope.kind)) {
       return { ok: true, receipt: sent.receipt, executed: false };

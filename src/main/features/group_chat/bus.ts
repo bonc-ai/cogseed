@@ -1934,6 +1934,13 @@ export interface EnqueueParams {
   /** Override resolved recipients (commander emitting plan announcement
    *  uses this to force `to=[user]`). Otherwise router decides. */
   forceTo?: string[];
+  /** Trusted user route. The IPC/group facade validates composer selections;
+   * retry and edit flows derive their target from persisted history. It stays
+   * off the persisted message schema and bypasses raw-mention Wake approval. */
+  userRoute?: {
+    agentId: string;
+    origin: 'user_selection' | 'cli_fallback' | 'failed_turn_retry' | 'message_edit';
+  };
   /** Trusted external-channel inbound (P3394 bridge): keeps the
    * user-message abort-reset and task-run lifecycle semantics for a message
    * that persists under the peer agent's own actor identity. Only the
@@ -2101,7 +2108,15 @@ async function _enqueueBody(
   let to: string[] = [];
   let unknown: string[] = [];
   let userHasExplicitMention = false;
-  if (params.forceTo && params.forceTo.length) {
+  const structuredUserRoute = fromKind === 'user' && params.userRoute?.agentId
+    ? params.userRoute
+    : null;
+  if (structuredUserRoute) {
+    // The facade has already checked the Agent id and origin. Resolve this
+    // before parsing prose so the visible message remains exactly what the
+    // user wrote and can never be replaced by a default Commander route.
+    to = [structuredUserRoute.agentId];
+  } else if (params.forceTo && params.forceTo.length) {
     to = params.forceTo.slice();
   } else {
     // Build a global name → id map from the enabled agent registry so the
@@ -2236,6 +2251,7 @@ async function _enqueueBody(
     && !allowLegacyGroupChatFormalAgentExecutorForTest()
     && !userHasExplicitMention
     && !(params.forceTo?.length)
+    && !structuredUserRoute
     && to.length === 1
     && to[0] === floorRecipient
     && !RESERVED_IDS.has(floorRecipient)) {
@@ -2265,7 +2281,7 @@ async function _enqueueBody(
         admitted.push(recipientId);
         continue;
       }
-      if (recipientId === backendFollowupAgentId) {
+      if (recipientId === backendFollowupAgentId || (structuredUserRoute && recipientId === structuredUserRoute.agentId)) {
         admitted.push(recipientId);
         continue;
       }
@@ -3936,6 +3952,12 @@ async function runActorTurnBody(
   // Commander-granted assets actually injected into a delegated turn, kept for
   // the same usage ledger the Commander injection uses (outcome 'dispatched').
   let dispatchedUsage: Array<{ assetId: string; assetVersion: string }> = [];
+  // 本回合是否落过 ContextReuseReceipt。三条注入路径（Commander 投影 / 派发
+  // 授权 / 出生继承）共用 `turn-<turnId>` 这一个回执键，谁先落谁建，后来的
+  // 拿到 'already exists' 就跳过——所以一个回合最多一张。回合收尾时按这个标记
+  // 把回执 complete 掉：只 prepare 不 complete 的话，回执永远停在 prepared，
+  // 「这次复用真的执行完了」这件事就从来没有被记下来过。
+  let turnReuseReceiptPrepared = false;
   if (!cliAgent) {
     if (isCommander) {
       try {
@@ -3987,7 +4009,7 @@ async function runActorTurnBody(
           const receiptRefs = recallCitations.map((c) => c.assetId);
           try {
             const { prepareReceipt } = await import('../p3394/context-reuse-receipt');
-            await prepareReceipt(
+            const prepared = await prepareReceipt(
               uid,
               {
                 executionId: `turn-${item.turnId}`,
@@ -4000,6 +4022,7 @@ async function runActorTurnBody(
               },
               { sessionId: `gconv-${cid}` },
             ).catch(() => undefined);
+            if (prepared) turnReuseReceiptPrepared = true;
             const turns = state.taskRun.reuseTurnIds || [];
             if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
           } catch {
@@ -4047,7 +4070,7 @@ async function runActorTurnBody(
           if (state.taskRun) {
             try {
               const { prepareReceipt } = await import('../p3394/context-reuse-receipt');
-              await prepareReceipt(
+              const prepared = await prepareReceipt(
                 uid,
                 {
                   executionId: `turn-${item.turnId}`,
@@ -4062,6 +4085,7 @@ async function runActorTurnBody(
                 },
                 { sessionId: `gmember-${cid}-${actor.id}` },
               ).catch(() => undefined);
+              if (prepared) turnReuseReceiptPrepared = true;
               const turns = state.taskRun.reuseTurnIds || [];
               if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
             } catch {
@@ -4107,7 +4131,7 @@ async function runActorTurnBody(
               state.taskRun.reuseTurnIds = [...turns, item.turnId];
             }
           }
-          await recordInheritedCognitionReuse(
+          const inheritedReceipt = await recordInheritedCognitionReuse(
             uid,
             cid,
             actor.id,
@@ -4118,6 +4142,7 @@ async function runActorTurnBody(
               truncatedByBudget(selection.selected, rendered),
             ),
           );
+          if (inheritedReceipt) turnReuseReceiptPrepared = true;
         }
       } catch (error) {
         // 继承注入失败不该让这一轮对话起不来——降级成这次不带继承认知。
@@ -5585,6 +5610,35 @@ async function runActorTurnBody(
     }
   }
 
+  // 回合收尾：把本回合的 ContextReuseReceipt 从 prepared 收成终态。
+  //
+  // **为什么必须做**：注入处只 prepare，从来没有人 complete，于是所有群聊回执
+  // 永远停在 prepared——「资产被带进去了」有记录，「这次复用真的执行完了」没有。
+  // 成熟度之所以还能升，只是因为升档判定放宽到「非 rejected 即可」；那层宽容
+  // 一旦收紧，整条证明链会静默断掉。
+  //
+  // **状态取值**：注入发生在回合开始，所以只要回合跑起来了，"加载"这件事就是
+  // 真的。回合本身失败/被中断，改变的是这次运行的质量，不是"有没有加载过"——
+  // 所以取 degraded 而不是 rejected。rejected 的语义是"这次复用被拒绝/无效"，
+  // 用在这里会让终态证明把本来算数的加载证据丢掉（collectLoadedAssetsFromReceipts
+  // 按 status==='rejected' 过滤）。任务级别的成败由 terminal-proof 另行判定。
+  if (turnReuseReceiptPrepared) {
+    try {
+      const { completeReceipt } = await import("../p3394/context-reuse-receipt");
+      await completeReceipt(uid, `turn-${item.turnId}`, {
+        status: aborted || errText ? "degraded" : "completed",
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      // 重试/并发把同一张回执收过一次是正常路径，不该刷 warn。
+      if (!message.includes("already finalized")) {
+        log.warn(
+          `reuse receipt not finalized cid=${cid} turn=${item.turnId}: ${message}`,
+        );
+      }
+    }
+  }
+
   // Expert-signals: drain skill_advertised / skill_invoked using the
   // persisted msg id as turn_id (per turn_id convention — see
   // PC/CLAUDE.md §4 constraint 9 + expert-signals plan §3.4). Silent
@@ -5802,14 +5856,17 @@ export async function _buildActiveSharedTaskContextBlockForTest(
  * 用上了、更不表示用了有帮助。DELIVERED / LOADED / USED / PROVED_USEFUL 是四件
  * 不同的事，这里只落得起第二件。
  */
+/** @returns 是否真的落下了一张 prepared 回执——回合收尾要据此决定是否 complete。
+ *  同一回合 Commander 投影可能已经建过 `turn-<turnId>`，这里拿到 'already
+ *  exists' 属正常路径，那张回执由建它的那一侧登记。 */
 async function recordInheritedCognitionReuse(
   uid: string,
   cid: string,
   agentId: string,
   turnId: string,
   facts: { reusedRefs: string[]; omittedRefs: string[] },
-): Promise<void> {
-  if (!facts.reusedRefs.length && !facts.omittedRefs.length) return;
+): Promise<boolean> {
+  if (!facts.reusedRefs.length && !facts.omittedRefs.length) return false;
   try {
     const [{ prepareReceipt }, { buildGmemberSessionId }] = await Promise.all([
       import("../p3394/context-reuse-receipt"),
@@ -5830,13 +5887,15 @@ async function recordInheritedCognitionReuse(
       },
       { sessionId: targetSessionId },
     );
+    return true;
   } catch (err) {
     const message = (err as Error).message;
     // 同一轮重试必然走到这里，属正常路径，不该刷 warn。
-    if (message.includes("already exists")) return;
+    if (message.includes("already exists")) return false;
     log.warn(
       `inherited cognition receipt not recorded agent=${agentId} cid=${cid}: ${message}`,
     );
+    return false;
   }
 }
 

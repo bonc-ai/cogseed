@@ -565,8 +565,19 @@ function securityScanStaging(stagingDir) {
   // Deliberately spawnSync directly rather than run(): run() escalates a missing
   // interpreter into die(76), which would abort the install with a confusing
   // "command not found" instead of reporting that the check could not run.
+  // W6 (vendor PyYAML): the same injection sentry-adapter.ts uses — the bundled
+  // interpreter ships without PyYAML, so without vendor on PYTHONPATH the gate
+  // silently falls back to the thin builtin rules and lets payloads pass. That
+  // drift (this CLI vs the main-process adapter) is the exact security gap the
+  // shared-script design exists to close, so the env must match it exactly.
   const res = spawnSync(py.cmd, [...py.args, gate, engine, stagingDir], {
     encoding: 'utf8',
+    env: {
+      ...process.env,
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONDONTWRITEBYTECODE: '1',
+      PYTHONPATH: [path.join(engine, 'vendor'), process.env.PYTHONPATH || ''].filter(Boolean).join(path.delimiter),
+    },
     timeout: 5 * 60 * 1000,
     maxBuffer: 16 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],

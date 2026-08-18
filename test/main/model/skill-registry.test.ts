@@ -104,40 +104,58 @@ describe('skill-registry › getSystemPromptBlock(allowlist)', () => {
     expect(text).toBe('');
   });
 
-  it('does not deep-verify the installed skill catalog for an explicit empty allowlist', async () => {
+  it('runs no trust verification for an explicit empty allowlist', async () => {
     writeSkill(builtinDir(), 'translate', 'Translate', 'T');
+    const partitionSkillsByTrust = vi.fn((_uid: string, skillIds: readonly string[]) => ({
+      loadable: [...skillIds],
+      withheld: [],
+    }));
     const partitionSkillsByTrustDeep = vi.fn(async (_uid: string, skillIds: readonly string[]) => ({
       loadable: [...skillIds],
       withheld: [],
     }));
     vi.doMock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
       ...await importOriginal<typeof import('../../../src/main/features/skill_reverify')>(),
+      partitionSkillsByTrust,
       partitionSkillsByTrustDeep,
     }));
 
-    const { getSystemPromptBlock } = await loadRegistry();
+    const { getSystemPromptBlock, drainTrustRefreshForTest } = await loadRegistry();
     expect(await getSystemPromptBlock({ allowlist: [] })).toBe('');
+    expect(partitionSkillsByTrust).not.toHaveBeenCalled();
     expect(partitionSkillsByTrustDeep).not.toHaveBeenCalled();
+    await drainTrustRefreshForTest();
   });
 
-  it('deep-verifies only skills that can satisfy a restricted allowlist', async () => {
+  it('gates a restricted allowlist with the synchronous tier only, deep pass deferred', async () => {
     writeSkill(builtinDir(), 'translate', 'Translate', 'T');
     writeSkill(builtinDir(), 'summarize', 'Summarize', 'S');
     writeSkill(builtinDir(), 'search', 'Search', 'X');
+    const partitionSkillsByTrust = vi.fn((_uid: string, skillIds: readonly string[]) => ({
+      loadable: [...skillIds],
+      withheld: [],
+    }));
     const partitionSkillsByTrustDeep = vi.fn(async (_uid: string, skillIds: readonly string[]) => ({
       loadable: [...skillIds],
       withheld: [],
     }));
     vi.doMock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
       ...await importOriginal<typeof import('../../../src/main/features/skill_reverify')>(),
+      partitionSkillsByTrust,
       partitionSkillsByTrustDeep,
     }));
 
-    const { getSystemPromptBlock } = await loadRegistry();
+    const { getSystemPromptBlock, drainTrustRefreshForTest } = await loadRegistry();
     const text = await getSystemPromptBlock({ allowlist: ['Translate'] });
     expect(text).toContain('translate');
     expect(text).not.toContain('summarize');
     expect(text).not.toContain('search');
+    // The conversation path runs the free synchronous tier; the deep pass is
+    // handed to the background refresh (its non-blocking start is pinned by
+    // the dedicated test below).
+    expect(partitionSkillsByTrust).toHaveBeenCalledTimes(1);
+    expect(partitionSkillsByTrust.mock.calls[0]?.[1]).toEqual(['translate']);
+    await drainTrustRefreshForTest();
     expect(partitionSkillsByTrustDeep).toHaveBeenCalledTimes(1);
     expect(partitionSkillsByTrustDeep.mock.calls[0]?.[1]).toEqual(['translate']);
   });
@@ -599,5 +617,56 @@ describe('skill-registry › trust withholding', () => {
     writeSkill(builtinDir(), 'never-scanned', 'never-scanned', 'N');
     const { getSystemPromptBlock } = await loadRegistry();
     expect(await getSystemPromptBlock()).toContain('never-scanned');
+  });
+
+  // The conversation path must never wait on the deep scanner: a listing that
+  // blocked here is exactly the multi-second-per-skill first-turn stall the
+  // background refresh exists to remove.
+  it('does not wait for the deep pass on the prompt path', async () => {
+    writeSkill(builtinDir(), 'fresh', 'fresh', 'F');
+    let resolveDeep: (v: { loadable: string[]; withheld: string[] }) => void = () => {};
+    const gate = new Promise<{ loadable: string[]; withheld: string[] }>((res) => { resolveDeep = res; });
+    const partitionSkillsByTrustDeep = vi.fn(() => gate);
+    vi.doMock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../../../src/main/features/skill_reverify')>(),
+      partitionSkillsByTrustDeep,
+    }));
+
+    const { getSystemPromptBlock, drainTrustRefreshForTest } = await loadRegistry();
+    const text = await Promise.race([
+      getSystemPromptBlock(),
+      new Promise<string>((_, reject) => setTimeout(
+        () => reject(new Error('prompt path blocked on the deep scan')), 300,
+      )),
+    ]);
+    expect(text).toContain('fresh');
+
+    // The deep pass was scheduled, not awaited — settle it and drain.
+    resolveDeep({ loadable: ['fresh'], withheld: [] });
+    await drainTrustRefreshForTest();
+    expect(partitionSkillsByTrustDeep).toHaveBeenCalledTimes(1);
+    expect(partitionSkillsByTrustDeep.mock.calls[0]?.[1]).toEqual(['fresh']);
+  });
+
+  // A deep verdict that lands after the first listing must still bite: the
+  // background pass writes it into the live cache generation, so the skill
+  // disappears from listings on subsequent turns without a rescan.
+  it('applies a background blocked verdict to later listings', async () => {
+    writeSkill(builtinDir(), 'fresh', 'fresh', 'F');
+    const partitionSkillsByTrustDeep = vi.fn(async (_uid: string, skillIds: readonly string[]) => ({
+      loadable: [],
+      withheld: skillIds.map((skillId) => ({ skillId, reason: null })),
+    }));
+    vi.doMock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../../../src/main/features/skill_reverify')>(),
+      partitionSkillsByTrustDeep,
+    }));
+
+    const { getSystemPromptBlock, drainTrustRefreshForTest } = await loadRegistry();
+    // First listing: no verdict yet, sync tier serves it (fail-open).
+    expect(await getSystemPromptBlock()).toContain('fresh');
+    await drainTrustRefreshForTest();
+    // Same cache generation: the background verdict now withholds it.
+    expect(await getSystemPromptBlock()).not.toContain('fresh');
   });
 });

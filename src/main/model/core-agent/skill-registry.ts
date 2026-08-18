@@ -56,6 +56,7 @@ import { companionSkillsRootIfPopulated, companionPackageForDir } from '../../fe
 import { getActiveUserId } from '../../features/users';
 import {
   partitionAgentPrivateSkillsByTrustDeep,
+  partitionSkillsByTrust,
   partitionSkillsByTrustDeep,
 } from '../../features/skill_reverify';
 import { getLanguage, getGlobalSkillRootsEnabled } from '../../features/config';
@@ -820,6 +821,26 @@ export interface SystemPromptBlockOptions {
  * user's working skills. A control that removes functionality unpredictably
  * gets switched off by the people it is meant to protect.
  *
+ * TWO-TIER VERIFICATION (sync gate + background deep pass)
+ *
+ * This listing is built on every conversation, so it must never block on a
+ * scan. The synchronous tier runs only what is free: the receipt hash compare
+ * and, when a receipt is missing or stale, the local structural rules
+ * (`validateSkillDir` — pure regex, no subprocess, no model). A verified deep
+ * receipt answers from its cached verdict; a local EXTREME withholds; anything
+ * else loads (the fail-open direction this file already commits to).
+ *
+ * The deep tier (full ruleset engine + instruction audit) runs in the
+ * background via `scheduleTrustRefresh`, never awaited by this path. It writes
+ * the `deep` receipts that make every later listing a cheap hash compare, and
+ * its verdicts are applied to this cache generation when it lands — so a skill
+ * the deep pass blocks disappears from listings on subsequent turns. The
+ * exposure window this opens is deliberate and narrow: content that passes the
+ * local rules but fails the deep ruleset loads until the background pass lands
+ * (seconds), and such content has already passed the install-time deep gate
+ * unless it was tampered with after install — the payload-changed case the
+ * sync tier still catches at local-rule level.
+ *
  * Results are cached against the marketplace directory mtime. Hashing the whole
  * builtin corpus measures ~5 ms (47 skills / 134 files / 1.2 MB), and the cache
  * keeps that off the common path entirely.
@@ -832,6 +853,53 @@ export interface SystemPromptBlockOptions {
  * for every id the first list happened not to contain.
  */
 let _trustFilterCache: { uid: string; stamp: string; verdicts: Map<string, boolean> } | null = null;
+
+/**
+ * Background deep-verification state. Deep scans (Python engine + instruction
+ * audit) must never block a conversation, so the prompt path only runs the
+ * synchronous tier above and schedules the expensive pass here. One pass is in
+ * flight at most; ids scheduled while it runs are picked up by its loop.
+ */
+let _trustRefreshPending = new Set<string>();
+let _trustRefreshInFlight: Promise<void> | null = null;
+
+function scheduleTrustRefresh(uid: string, skillIds: readonly string[]): void {
+  if (!skillIds.length) return;
+  for (const id of skillIds) _trustRefreshPending.add(id);
+  if (_trustRefreshInFlight) return;
+
+  const stamp = _trustFilterCache?.stamp ?? '';
+  _trustRefreshInFlight = (async () => {
+    try {
+      while (_trustRefreshPending.size > 0) {
+        const batch = [..._trustRefreshPending];
+        _trustRefreshPending = new Set();
+        try {
+          const { withheld } = await partitionSkillsByTrustDeep(uid, batch);
+          const blockedNow = new Set(withheld.map((w) => w.skillId));
+          // Apply only when the cache generation this pass started under is
+          // still current — a marketplace edit mid-pass must not let verdicts
+          // for old bytes into the new generation.
+          if (_trustFilterCache && _trustFilterCache.uid === uid && _trustFilterCache.stamp === stamp) {
+            for (const id of batch) _trustFilterCache.verdicts.set(id, !blockedNow.has(id));
+          }
+        } catch {
+          // Deep pass failed open (it logs internally). Ids are dropped: the
+          // next cache invalidation re-verifies them, and until then the
+          // synchronous tier keeps gating every listing.
+        }
+      }
+    } finally {
+      _trustRefreshInFlight = null;
+    }
+  })().catch(() => { _trustRefreshInFlight = null; });
+}
+
+/** Test-only: await the in-flight background trust refresh so assertions on
+ * deep receipts / background verdicts are deterministic. */
+export async function drainTrustRefreshForTest(): Promise<void> {
+  while (_trustRefreshInFlight) await _trustRefreshInFlight;
+}
 
 function _marketplaceStamp(uid: string): string {
   const dir = userMarketplaceSkillsDir(uid);
@@ -863,14 +931,15 @@ async function _withholdUntrustedSpecs<T extends { id: string }>(specs: T[]): Pr
   const verdicts = _trustFilterCache.verdicts;
 
   // Only verify ids this cache generation has not seen. A hit costs nothing; a
-  // miss costs one tree hash. Both are far cheaper than re-verifying the whole
-  // corpus on every listing call.
+  // miss costs at most the synchronous tier (receipt hash + local structural
+  // rules — no subprocess, no model). The deep pass runs in the background.
   const unknown = specs.map((s) => s.id).filter((id) => !verdicts.has(id));
   if (unknown.length) {
     try {
-      const { withheld } = await partitionSkillsByTrustDeep(uid, unknown);
+      const { withheld } = partitionSkillsByTrust(uid, unknown);
       const blockedNow = new Set(withheld.map((w) => w.skillId));
       for (const id of unknown) verdicts.set(id, !blockedNow.has(id));
+      scheduleTrustRefresh(uid, unknown);
     } catch {
       // Verification failure is not evidence of tampering; the install-time
       // gate already vetted this content. Fail open rather than stripping a

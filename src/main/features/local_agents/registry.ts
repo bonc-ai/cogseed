@@ -27,7 +27,7 @@ import * as path from 'node:path';
 const log = createLogger('local-agents');
 
 /** Canonical CLI type names. New backends add an entry here + in BIN_NAMES + ENV_KEYS. */
-export const LOCAL_CLI_TYPES = ['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy'] as const;
+export const LOCAL_CLI_TYPES = ['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy', 'gemini', 'aider'] as const;
 
 export type LocalCliType = (typeof LOCAL_CLI_TYPES)[number];
 
@@ -41,6 +41,8 @@ const BIN_NAMES: Record<LocalCliType, string> = {
   // WorkBuddy (Tencent) ships the CLI as `codebuddy` inside the app bundle;
   // it is not placed on PATH, so discovery relies on localCliSearchDirs below.
   workbuddy: 'codebuddy',
+  gemini: 'gemini',
+  aider: 'aider',
 };
 
 /** Env var to override default binary path per CLI. */
@@ -51,6 +53,8 @@ const ENV_KEYS: Record<LocalCliType, string> = {
   opencode: 'ORKAS_OPENCODE_PATH',
   hermes: 'ORKAS_HERMES_PATH',
   workbuddy: 'ORKAS_WORKBUDDY_PATH',
+  gemini: 'ORKAS_GEMINI_PATH',
+  aider: 'ORKAS_AIDER_PATH',
 };
 
 /** Documented version probes for each CLI, in compatibility order. */
@@ -68,6 +72,8 @@ const VERSION_PROBES: Record<LocalCliType, readonly (readonly string[])[]> = {
   hermes: [['--version'], ['version']],
   // codebuddy prints a bare semver on `--version` (verified 2.115.0).
   workbuddy: [['--version']],
+  gemini: [['--version']],
+  aider: [['--version']],
 };
 
 export function localCliSearchDirs(

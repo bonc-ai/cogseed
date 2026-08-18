@@ -23,7 +23,7 @@ import { t } from '../../i18n';
 import { logErrorRef } from '../../util/log-redact';
 
 import {
-  COMMANDER_ID, USER_ID, readMembers, readState, seedReservedActors, purgeGroupDir,
+  COMMANDER_ID, USER_ID, RESERVED_IDS, readMembers, readState, seedReservedActors, purgeGroupDir,
   setCodingProjectDir, setStatus, actorSessionId, resetConversationRoutingState,
 } from './state';
 import { isPlaceholderTitle } from './conv_title';
@@ -447,6 +447,43 @@ export interface SendInput {
   references?: Array<{ source_cid: string; source_msg_id: string }>;
   recall_projection_card?: { projectionId: string };
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
+  recipient_agent_id?: string;
+  recipient_origin?: 'user_selection' | 'cli_fallback';
+}
+
+type ValidatedUserRoute = NonNullable<Parameters<typeof enqueue>[0]['userRoute']>;
+
+/** Validate the structured composer route at the business boundary. Renderer
+ * state is advisory: Agent availability, enabled state, and CLI capability are
+ * all re-read here before a route can bypass Wake Gate. */
+async function _validateUserRoute(
+  userId: string,
+  agentId: unknown,
+  origin: unknown,
+): Promise<ValidatedUserRoute | null> {
+  if (agentId === undefined && origin === undefined) return null;
+  if (typeof agentId !== 'string' || !safeId(agentId) || (origin !== 'user_selection' && origin !== 'cli_fallback')) {
+    throw new Error('invalid recipient route');
+  }
+  const agents = await import('../agents');
+  const { isAgentEnabled } = await import('../component_enabled');
+  if (!isAgentEnabled(userId, agentId)) throw new Error('selected Agent is disabled');
+  const agent = await agents.getAgentForChatDispatch(userId, agentId);
+  if (!agent) throw new Error('selected Agent is unavailable');
+  if (origin === 'cli_fallback') {
+    // A fallback route is only valid for a local CLI Agent and only while the
+    // API model is unavailable. This prevents a forged renderer payload from
+    // silently bypassing normal model selection or Wake approval.
+    if (agent.runtime?.kind !== 'cli') throw new Error('invalid CLI fallback recipient');
+    const cli = agent.runtime.cli;
+    const { hasConfiguredModel } = await import('../auth');
+    if (hasConfiguredModel().configured) throw new Error('CLI fallback is not active');
+    const { detectAll } = await import('../local_agents/registry');
+    const entries = await detectAll();
+    const entry = entries.find((item) => item.type === cli);
+    if (!entry?.available) throw new Error('selected local Agent is unavailable');
+  }
+  return { agentId, origin };
 }
 
 /** 任务引用（@ 产物）源消息定位：在源会话消息里找持有该文件（附件或 produced）的最新一条。 */
@@ -692,6 +729,12 @@ export async function send(
   const { userId, cid, text, model_text, attachments, use_selections, references, recall_projection_card, kstar_review_card } = input;
   if (!safeId(cid)) return { ok: false, error: 'invalid cid' };
   if (!text || !text.trim()) return { ok: false, error: 'empty message' };
+  let userRoute: ValidatedUserRoute | null = null;
+  try {
+    userRoute = await _validateUserRoute(userId, input.recipient_agent_id, input.recipient_origin);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message || 'invalid recipient route' };
+  }
   await seedReservedActors(userId, cid);
   // Auto-title: the first real user message in a fresh / unnamed
   // conversation overwrites the placeholder title so the sidebar item
@@ -726,6 +769,7 @@ export async function send(
       ...(resolvedReferences.length ? { references: resolvedReferences } : {}),
       ...(recall_projection_card ? { recall_projection_card } : {}),
       ...(kstar_review_card ? { kstar_review_card } : {}),
+      ...(userRoute ? { userRoute, forceTo: [userRoute.agentId] } : {}),
     });
     // 一次性引用语义：持久化 task_references 随本条消息消费后即从会话移除，
     // 下一条消息不再自动携带（本消息的引用已在 enqueue 时快照，不受影响）。
@@ -787,6 +831,24 @@ export async function replaceUserMessage(
     return { ok: false, error: t('errors.message_edit_invalid_target') };
   }
 
+  const originalRecipients = Array.isArray(target.to) ? target.to : [];
+  const originalAgentCandidate = originalRecipients.find((recipientId) =>
+    safeId(recipientId) && !RESERVED_IDS.has(recipientId),
+  );
+  let originalAgentRecipient = '';
+  if (originalAgentCandidate) {
+    try {
+      const agents = await import('../agents');
+      const { isAgentEnabled } = await import('../component_enabled');
+      if (isAgentEnabled(userId, originalAgentCandidate)
+        && await agents.getAgentForChatDispatch(userId, originalAgentCandidate)) {
+        originalAgentRecipient = originalAgentCandidate;
+      }
+    } catch (err) {
+      log.warn('message edit original Agent lookup failed', { cid, error: logErrorRef(err) });
+    }
+  }
+
   const tailIds = new Set(rows.slice(targetIndex)
     .filter((row) => !row.deleted_at && safeId(row.id))
     .map((row) => row.id));
@@ -827,6 +889,14 @@ export async function replaceUserMessage(
       ...(target.attachments?.length ? { attachments: target.attachments.slice() } : {}),
       ...(target.use_selections?.length ? { use_selections: target.use_selections.slice() } : {}),
       ...(target.references?.length ? { references: target.references.slice() } : {}),
+      ...(originalAgentRecipient
+        ? {
+            forceTo: [originalAgentRecipient],
+            userRoute: { agentId: originalAgentRecipient, origin: 'message_edit' as const },
+          }
+        : originalRecipients.includes(COMMANDER_ID) || !!originalAgentCandidate
+          ? { forceTo: [COMMANDER_ID] }
+          : {}),
     });
     await _retitleAfterFirstUserMessageEdit(userId, cid, rows, targetIndex, text);
     log.info(`message-edited cid=${cid} invalidated=${tailIds.size} rewritten=${tombstoned.changed}`);
@@ -905,6 +975,19 @@ export async function resolveFailedTurnRetry(
   if (!actor || actor.kind === 'user' || actor.kind === 'worker') {
     return { ok: false, error: 'retry actor is unavailable' };
   }
+  if (actor.kind === 'agent') {
+    try {
+      const agents = await import('../agents');
+      const { isAgentEnabled } = await import('../component_enabled');
+      if (!isAgentEnabled(userId, actor.id)
+        || !await agents.getAgentForChatDispatch(userId, actor.id)) {
+        return { ok: false, error: 'retry actor is unavailable' };
+      }
+    } catch (err) {
+      log.warn('retry actor lookup failed', { cid, error: logErrorRef(err) });
+      return { ok: false, error: 'retry actor is unavailable' };
+    }
+  }
 
   let context: {
     activeTurn?: { id: number };
@@ -981,6 +1064,7 @@ export async function resolveFailedTurnRetry(
             })
           : originalModelText,
         forceTo: [actor.id],
+        userRoute: { agentId: actor.id, origin: 'failed_turn_retry' },
         ...(mode === 'resume' ? { resumeActiveTurn: true } : {}),
         ...(source.use_selections?.length ? { use_selections: source.use_selections.slice() } : {}),
         ...(mode === 'restart' && source.attachments?.length ? { attachments: source.attachments.slice() } : {}),

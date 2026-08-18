@@ -37,6 +37,8 @@ describe('conversation user-message editing', () => {
     expect(submit).toContain("_messageEditDatasetArray(state.msgDiv, 'references')");
     expect(submit).toContain('_removeRenderedHistoryFrom(state.msgDiv);');
     expect(submit).toContain('loadConversationHistory(state.cid, { preserveScroll: true })');
+    expect(extractFunction('createChatController')).toContain('!isFailedTurnRetry && !isMessageEdit');
+    expect(source).toContain('if (!statAgentId && !isInternalReplay)');
   });
 
   it('guards Cmd/Ctrl+Enter and IME composition in the inline editor', () => {

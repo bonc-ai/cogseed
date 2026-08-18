@@ -83,20 +83,26 @@ describe('sessions_sweep', () => {
     expect(fs.existsSync(orphan)).toBe(true);
   });
 
-  it('collects throwaway skill-instr-audit-* sessions from cloud/sessions', async () => {
-    listActiveConversationIds.mockResolvedValue(['livecid']);
-    const globalDir = path.join(tmpDir, TEST_UID, 'cloud', 'sessions');
-    const audit = writeSession(globalDir, 'skill-instr-audit-586330fa');
-    fs.writeFileSync(path.join(globalDir, 'skill-instr-audit-586330fa.jsonl.context.json'), '{}');
-    // A real resumable skill session must survive the sweep.
-    const skillSession = writeSession(globalDir, 'skill-my_skill_id');
+  // Pre-fix audits wrote `<id>.jsonl` + `<id>.jsonl.context.json` per call and
+  // nothing ever cleaned them (measured: 37k files on one machine). The kind
+  // also STARTS with `skill`, so classifying it as a real skill-edit session
+  // would leak it forever — the multi-segment match must win.
+  it('drops skill-instr-audit leftovers and keeps real skill sessions', async () => {
+    listActiveConversationIds.mockResolvedValue([]);
+    const dir = path.join(tmpDir, TEST_UID, 'cloud', 'sessions');
+    const audit = writeSession(dir, 'skill-instr-audit-aa11bb22');
+    fs.writeFileSync(`${audit}.context.json`, '{}');
+    fs.mkdirSync(path.join(dir, 'skill-instr-audit-aa11bb22.tool-results'));
+    const realSkill = writeSession(dir, 'skill-realsid1234');
 
     const sweep = await import('../../../src/main/features/sessions_sweep');
     const result = await sweep.sweepSessions(TEST_UID);
 
     expect(fs.existsSync(audit)).toBe(false);
-    expect(fs.existsSync(path.join(globalDir, 'skill-instr-audit-586330fa.jsonl.context.json'))).toBe(false);
-    expect(fs.existsSync(skillSession)).toBe(true);
-    expect(result.skill_audit).toBe(1);
+    expect(fs.existsSync(`${audit}.context.json`)).toBe(false);
+    expect(fs.existsSync(path.join(dir, 'skill-instr-audit-aa11bb22.tool-results'))).toBe(false);
+    expect(fs.existsSync(realSkill)).toBe(true);
+    expect(result.instr_audit).toBe(1);
+    expect(result.legacy).toBe(0);
   });
 });

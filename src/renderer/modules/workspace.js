@@ -194,7 +194,10 @@
   // 空间详情/任务页的三 tab 数据（阶段 2 起接真实 IPC：spaces.conversations/artifacts/assets.list）
   let _sessions = [];        // 任务 = 空间下会话（listSpaceConversations）
   let _artifacts = [];       // 产物 = 附件 + artifact（listSpaceArtifacts）
-  let _assets = [];          // 资产 tab = 本空间沉淀资产（recall.assets.listForSpace）
+  // 资产 = recall 按 spaceId 过滤出的认知资产（recall.assets.listForSpace，见 _loadData）。
+  // 注意**不是** space.json 里的 asset_reference_bindings——那条通道渲染层没有调用方。
+  // 这行注释此前写的是 bindings，导致「绑定后不生效」被误判成用户可见缺陷。
+  let _assets = [];
   let _detailLoadedFor = null;  // 已加载详情的 space_id（切空间才重载）
   const _assetTypes = ['全部', '个人身份与偏好', '决策规则与方法', '文档模板及项目事实', '可复用的技能'];
   // 基础 Agent 候选 = 本机真实安装的 CLI agent（localAgents.list 探测，非硬编码）

@@ -48,6 +48,11 @@ BINARY_EXTENSIONS = {
     ".apk", ".jar", ".class", ".wasm", ".node", ".pyd",
 }
 
+# Keep generated/runtime content out of the scan. These directories are already
+# excluded when locating Skill roots; applying the same boundary here prevents
+# ignored bytecode or dependency artifacts from becoming false security hits.
+IGNORED_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache"}
+
 
 def detect_binary_format(path: Path) -> str | None:
     """返回二进制格式名；若判断为文本文件则返回 None。"""
@@ -163,7 +168,10 @@ def scan_binaries(skill_dir: Path) -> dict[str, Any]:
         if not path.is_file():
             continue
         try:
-            rel = path.name if skill_dir.is_file() else path.relative_to(skill_dir).as_posix()
+            relative_path = None if skill_dir.is_file() else path.relative_to(skill_dir)
+            if relative_path is not None and IGNORED_DIRS.intersection(relative_path.parts):
+                continue
+            rel = path.name if relative_path is None else relative_path.as_posix()
         except ValueError:
             rel = path.name
         result = scan_binary_file(path, rel)

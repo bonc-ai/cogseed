@@ -153,4 +153,31 @@ describe('CogSeed task and session store', () => {
     expect(partial.task.skillVersionPins).toHaveLength(1);
   });
 
+  it('round-trips the viaP3394Gateway flag so P3394 external agents execute via the gateway, not the raw CLI runner', async () => {
+    const store = await backend();
+
+    const result = await store.createMateTask(USER_A, {
+      requestId: 'req-p3394-gateway-flag',
+      task: 'Cooperate over P3394.',
+      executionKind: 'local-cli',
+      localCli: { cli: 'codex', agentName: 'Codex', viaP3394Gateway: true },
+    });
+
+    // 关键不变量：外接智能体（runtime.kind='p3394-gateway'）的 viaP3394Gateway
+    // 标记必须落盘并原样读回，否则 consumeRuntime 退化为 local_agents runner
+    // 直连（绕过托管 gateway），P3394 协作失效。
+    expect(result.task.localCli).toMatchObject({ cli: 'codex', agentName: 'Codex', viaP3394Gateway: true });
+    const reread = await store.readMateTask(USER_A, result.task.taskId);
+    expect(reread?.localCli?.viaP3394Gateway).toBe(true);
+    // 未设置时既不落盘也不读回 true（默认为本地直连语义）。
+    const plain = await store.createMateTask(USER_A, {
+      requestId: 'req-plain-cli-flag',
+      task: 'Run locally.',
+      executionKind: 'local-cli',
+      localCli: { cli: 'claude' },
+    });
+    expect(plain.task.localCli?.viaP3394Gateway).not.toBe(true);
+  });
+
+
 });

@@ -1236,7 +1236,15 @@ const _quotesByCid = new Map();   // cid → Array<{ fromActor, fromName, msgId,
 function _normRecipient(next) {
   if (!next || (next.kind !== 'commander' && next.kind !== 'agent')) return null;
   if (next.kind === 'commander') return { ..._COMMANDER };
-  return { kind: 'agent', id: String(next.id || ''), name: String(next.name || next.id || '') };
+  const origin = next.origin === 'cli_fallback' || next.origin === 'active_floor'
+    ? next.origin
+    : undefined;
+  return {
+    kind: 'agent',
+    id: String(next.id || ''),
+    name: String(next.name || next.id || ''),
+    ...(origin ? { origin } : {}),
+  };
 }
 
 function _activeRecipient(target) {
@@ -1271,7 +1279,7 @@ function setChatRecipient(target, next, _opts = {}) {
     _projectChatRecipient = r;
   } else if (currentCid) {
     if (_opts.auto === true) {
-      if (r.kind === 'agent') _autoRecipientByCid.set(currentCid, r);
+      if (r.kind === 'agent') _autoRecipientByCid.set(currentCid, { ...r, origin: 'active_floor' });
       else _autoRecipientByCid.delete(currentCid);
     } else {
       _autoRecipientByCid.delete(currentCid);
@@ -1556,7 +1564,7 @@ function _refreshChatHeader() {
         if (s.kind === 'commander') {
           const av = (typeof _commanderAvatar === 'function') ? _commanderAvatar() : { icon: '', color: '' };
           return renderAvatarHtml(av.icon, av.color, {
-            size: 18,
+            size: 16,
             seed: 'commander',
             extraClass: 'chat-header-meta-member',
           });
@@ -1567,7 +1575,7 @@ function _refreshChatHeader() {
           if (ag) { icon = ag.icon; color = ag.color; }
         }
         return renderAvatarHtml(icon, color, {
-          size: 18,
+          size: 16,
           seed: s.id || 'agent',
           extraClass: 'chat-header-meta-member',
         });
@@ -2908,7 +2916,20 @@ function _normaliseRecipientSnapshot(snapshot) {
   if (!r) return null;
   return {
     ...r,
+    ...(r.kind === 'agent'
+      ? { origin: r.origin === 'cli_fallback' || r.origin === 'active_floor' ? r.origin : 'user_selection' }
+      : {}),
     resetFloor: snapshot && snapshot.resetFloor === true,
+  };
+}
+
+function _recipientRoutingFields(snapshot) {
+  const snap = _normaliseRecipientSnapshot(snapshot);
+  if (!snap || snap.kind !== 'agent' || !snap.id) return {};
+  if (snap.origin !== 'user_selection' && snap.origin !== 'cli_fallback') return {};
+  return {
+    recipient_agent_id: snap.id,
+    recipient_origin: snap.origin,
   };
 }
 
@@ -2950,12 +2971,11 @@ function _applyRecipientPrefixWithSnapshot(raw, snapshot) {
     const sep = /^>/.test(text) ? '\n' : ' ';
     return '@commander' + sep + text;
   }
-  if (snap.kind !== 'agent' || !snap.id) return raw;
-  if (_LEADING_MENTION_RE.exec(text)) return text;
-  const display = _recipientPrefixName(snap);
-  if (!display) return raw;
-  const sep = /^>/.test(text) ? '\n' : ' ';
-  return '@' + String(display) + sep + text;
+  // Composer selections are sent as structured routing fields. Keep the
+  // user's visible text untouched; raw, manually typed @mentions still flow
+  // through the legacy mention parser and Wake Gate.
+  if (snap.kind === 'agent' && snap.id) return raw;
+  return raw;
 }
 
 function applyRecipientPrefix(raw, target, opts = {}) {
@@ -7574,6 +7594,9 @@ function _appendWelcomeThinkingPlaceholder(cid) {
 async function loadConversationHistory(cid, opts = {}) {
   const perfStartedAt = performance.now();
   const container = document.getElementById('chat-history');
+  // The composer is shared across conversations. Drop approval cards owned by
+  // the previous cid before the new transcript starts loading.
+  _wakeRequestHost(cid, { create: false });
   _cancelActiveUserMessageEdit({ focus: false });
   // 9.1 会话区域统一框架：切换会话时复位顶部执行计划轨道（plan-rail.js）。
   // 无该会话的 plan 时轨道自隐藏；历史恢复由 _renderPersistedProcess 喂入。
@@ -9121,9 +9144,15 @@ function _wakeRequestHost(cid, options = {}) {
   const wrap = document.querySelector('#panel-conversation .chat-input-wrapper');
   if (!wrap) return null;
   let host = wrap.querySelector('.chat-wake-pending-host');
+  if (host && host.dataset.cid !== cid) {
+    host.remove();
+    host = null;
+    try { _updateChatInputReserve(); } catch (_) {}
+  }
   if (!host && options.create !== false) {
     host = document.createElement('div');
     host.className = 'chat-wake-pending-host';
+    host.dataset.cid = cid;
     host.setAttribute('role', 'region');
     host.setAttribute('aria-live', 'polite');
     const anchor = wrap.querySelector('.chat-input-area');
@@ -9216,6 +9245,7 @@ function _mountWakeRequestCards(host, message, opts = {}) {
     if (opts.replace) _pruneWakeRequestHost(_wakeRequestHost(cid, { create: false }));
     return;
   }
+  if (host.dataset.cid !== cid) return;
   const requestsByKey = new Map();
   for (const request of message.wake_requests || []) {
     if (!request?.id || String(request.status || 'pending') !== 'pending') continue;
@@ -9243,8 +9273,7 @@ function _mountWakeRequestCards(host, message, opts = {}) {
     const key = _wakeRequestSemanticKey(request);
     const selector = `.chat-wake-request[data-wake-request-id="${CSS.escape(String(request.id))}"]`;
     const existing = host.querySelector(selector)
-      || host.querySelector(`.chat-wake-request[data-wake-request-key="${CSS.escape(key)}"]`)
-      || document.querySelector(selector);
+      || host.querySelector(`.chat-wake-request[data-wake-request-key="${CSS.escape(key)}"]`);
     if (existing) {
       _renderWakeRequestCard(existing, request, cid);
       continue;
@@ -9282,6 +9311,233 @@ async function _resolveWakeRequest(card, request, cid, decision) {
     try { await uiAlert(t('p3394.wake.failed')); } catch (_) {}
   }
 }
+
+// ── 外接智能体「慢响应/不可用」切换卡 ─────────────────────────────────
+// _EXT_SLOW_SWITCH_MS（2 分钟）无首条输出时出现（_armSlowSwitch →
+// setTimeout → _showSlowSwitchCard）。复用批准唤醒卡的宿主位置与视觉；
+// 按钮逻辑独立，避免与 wake 审批混用。
+function _slowSwitchHost(cid, opts = {}) {
+  if (!cid || cid !== currentCid) return null;
+  const wrap = document.querySelector('#panel-conversation .chat-input-wrapper');
+  if (!wrap) return null;
+  let host = wrap.querySelector('.chat-slow-switch-host');
+  if (!host && opts.create !== false) {
+    host = document.createElement('div');
+    host.className = 'chat-slow-switch-host';
+    const anchor = wrap.querySelector('.chat-input-area');
+    wrap.insertBefore(host, anchor || wrap.firstChild);
+    try { _updateChatInputReserve(); } catch (_) {}
+  }
+  return host;
+}
+
+function _pruneSlowSwitchHost(host) {
+  if (!host) return;
+  if (!host.querySelector('.chat-slow-switch')) {
+    host.remove();
+    try { _updateChatInputReserve(); } catch (_) {}
+  }
+}
+
+function _renderSlowSwitchCard(host, cid, actorId, name, opts = {}) {
+  const candidates = _externalSwitchCandidates(actorId);
+  host.innerHTML = '';
+  const card = document.createElement('div');
+  card.className = 'chat-slow-switch';
+  card.dataset.actorId = String(actorId || '');
+  const displayName = name || _knownGroupActorLabel(cid, actorId) || actorId;
+  const reason = opts.reason === 'failed' ? 'failed' : 'slow';
+  const detail = String(opts.detail || '').trim();
+  const titleKey = reason === 'failed' ? 'p3394.slow.title_failed' : 'p3394.slow.title';
+  const bodyKey = reason === 'failed' ? 'p3394.slow.body_failed' : 'p3394.slow.body';
+  const optionsHtml = candidates.length
+    ? `<select class="chat-slow-switch-select" data-role="target">
+         ${candidates.map((c) => `<option value="${escapeHtml(c.agentId)}">${escapeHtml(c.name)}</option>`).join('')}
+       </select>`
+    : '';
+  const detailHtml = (reason === 'failed' && detail)
+    ? `<div class="chat-slow-switch-detail">${escapeHtml(detail.length > 160 ? detail.slice(0, 160) + '…' : detail)}</div>`
+    : '';
+  card.innerHTML = `
+    <div class="chat-slow-switch-row">
+      <div class="chat-slow-switch-main">
+        <div class="chat-slow-switch-title">${escapeHtml(t(titleKey))}</div>
+        <div class="chat-slow-switch-body">${escapeHtml(t(bodyKey, { name: displayName }))}</div>
+        ${detailHtml}
+        ${candidates.length ? `<div class="chat-slow-switch-pick"><span class="chat-slow-switch-pick-label">${escapeHtml(t('p3394.slow.dropdown_label'))}</span>${optionsHtml}</div>` : ''}
+      </div>
+      <div class="chat-slow-switch-actions">
+        ${candidates.length ? `<button type="button" class="btn btn-primary btn-sm" data-slow-decision="switch">${escapeHtml(t('p3394.slow.switch'))}</button>` : ''}
+        <button type="button" class="btn btn-sm" data-slow-decision="wait">${escapeHtml(t('p3394.slow.wait'))}</button>
+      </div>
+    </div>`;
+  for (const button of card.querySelectorAll('[data-slow-decision]')) {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const targetAgentId = button.dataset.slowDecision === 'switch'
+        ? String(card.querySelector('[data-role="target"]')?.value || '')
+        : '';
+      void _resolveSlowSwitchDecision(card, cid, actorId, button.dataset.slowDecision, targetAgentId);
+    });
+  }
+  host.appendChild(card);
+  _pruneSlowSwitchHost(host);
+}
+
+async function _showSlowSwitchCard(cid, actorId, turnId, name, opts = {}) {
+  if (!cid || cid !== currentCid) return;
+  const host = _slowSwitchHost(cid);
+  if (!host) return;
+  // 已有此 actor 的提示卡 → 不重复叠加。
+  if (host.querySelector(`.chat-slow-switch[data-actor-id="${CSS.escape(String(actorId || ''))}"]`)) return;
+  _renderSlowSwitchCard(host, cid, actorId, name, opts);
+  _convLog.info('external agent slow switch card shown', { cid, actorId, name, reason: opts.reason || 'slow' });
+}
+
+/** 切换决策：switch → 中止旧 turn + 用目标外部智能体重建并重发同一任务；
+ *  wait → 仅关闭提示卡（保留旧 turn 等待）。 */
+async function _resolveSlowSwitchDecision(card, cid, actorId, decision, targetAgentId) {
+  if (!card || card.dataset.busy === '1') return;
+  card.dataset.busy = '1';
+  for (const button of card.querySelectorAll('button')) button.disabled = true;
+  _clearSlowSwitch(cid, actorId);
+  if (decision === 'wait') {
+    card.remove();
+    _pruneSlowSwitchHost(_slowSwitchHost(cid, { create: false }));
+    _convLog.info('external agent slow switch — keep waiting', { cid, actorId });
+    return;
+  }
+  // switch：先 abort 旧 turn（bus 会清队列 + 停 worker），再重发。
+  const abortedOk = (() => {
+    try {
+      abortConvStream(cid);
+      return true;
+    } catch (err) {
+      _convLog.warn('slow switch abort failed', err && err.message ? err.message : String(err));
+      return false;
+    }
+  })();
+  if (!targetAgentId) {
+    card.remove();
+    _pruneSlowSwitchHost(_slowSwitchHost(cid, { create: false }));
+    return;
+  }
+  // abort 是异步的（POST /abort fire-and-forget），而 handleChatSubmit 在
+  // `isConvPending` 为真时会走 enqueue 排队而非立即发送——切换要求「马上
+  // 用新 agent 继续」，所以等该 cid 真正空闲再重发，避免新任务被排进队列
+  // 造成「点了切换没反应」。
+  const idle = await _waitForConversationIdle(cid, 2500);
+  if (!idle) {
+    _convLog.warn('slow switch: conversation still busy after abort, resending anyway', { cid, actorId, targetAgentId });
+  }
+  // 原始任务文本：优先取当前 turn 的用户消息（_taskTurnRuns），其次 composer
+  // 草稿，最后从会话历史里取最近一条用户消息（快速失败时 turn 已结束、
+  // 两项都为空——用上次真正发给原 agent 的那条消息继续）。
+  let task = '';
+  const run = typeof _taskTurnRuns !== 'undefined' ? _taskTurnRuns.get(cid) : null;
+  const raw = (run && run.userText) ? String(run.userText) : '';
+  if (raw) {
+    task = raw.replace(/^@[A-Za-z0-9_一-鿿-]+\s?/u, '').trim();
+  }
+  if (!task) {
+    const input = document.getElementById('chat-input');
+    task = (input && input.value) ? String(input.value).trim() : '';
+  }
+  if (!task) {
+    task = await _fetchLatestUserTaskText(cid);
+  }
+  const targetName = _knownGroupActorLabel(cid, targetAgentId) || targetAgentId;
+  card.remove();
+  _pruneSlowSwitchHost(_slowSwitchHost(cid, { create: false }));
+  if (!task) {
+    _convLog.warn('slow switch: no task text to resend', { cid, actorId, targetAgentId });
+    if (typeof uiToast === 'function') {
+      try { uiToast(t('p3394.slow.no_task')) } catch (_) {}
+    }
+    return;
+  }
+  // 无论 task 来自 _taskTurnRuns / composer / 历史兜底，都可能残留旧 @ 前缀
+  // （历史兜底特意保留完整原文）。统一用 _rebuildSwitchMessage 剥旧前缀再
+  // 以目标名重建——否则「提示切到 Codex，实际还是 @ClaudeCode」。
+  const rebuilt = _rebuildSwitchMessage(task, targetName);
+  if (!rebuilt) {
+    _convLog.warn('slow switch: no task text to resend', { cid, actorId, targetAgentId });
+    if (typeof uiToast === 'function') {
+      try { uiToast(t('p3394.slow.no_task')) } catch (_) {}
+    }
+    return;
+  }
+  if (typeof uiToast === 'function') {
+    try { uiToast(t('p3394.slow.switching', { from: (name || actorId), to: targetName })) } catch (_) {}
+  }
+  if (typeof handleChatSubmit === 'function' && cid === currentCid) {
+    const input = document.getElementById('chat-input');
+    if (input) {
+      input.value = rebuilt;
+      autoGrow(input, 200);
+      try { await handleChatSubmit(); } catch (err) {
+        _convLog.warn('slow switch resend failed', err && err.message ? err.message : String(err));
+      }
+    }
+  } else {
+    try {
+      await sendInCurrentConversation(rebuilt);
+    } catch (err) {
+      _convLog.warn('slow switch resend failed (background)', err && err.message ? err.message : String(err));
+    }
+  }
+}
+
+/** 等待会话发送状态空闲（abort 后的 pendingConvs / busy 清空），
+ *  让切换重发能立即走「发送」而非「排队」。返回是否及时空闲。 */
+function _waitForConversationIdle(cid, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = () => {
+      try {
+        if (!isConvPending(cid) && !(messageQueues.get(cid) || []).length) return resolve(true);
+      } catch (_) { /* state helpers may be unmapped in tests */ }
+      if (Date.now() >= deadline) return resolve(false);
+      setTimeout(check, 80);
+    };
+    check();
+  });
+}
+
+/** 从会话历史里取最近一条用户消息的原始文本（快速失败切换时兜底）：
+ *  turn 已结束 / composer 已清空，原任务只能从历史回捞。返回原始文本
+ *  （保留 @ 前缀，由调用方统一剥前缀再重建）。失败返回空串。 */
+async function _fetchLatestUserTaskText(cid) {
+  if (!cid) return '';
+  try {
+    const res = await apiFetch(_historyRequestUrl(cid, null, 100));
+    const data = await res.json();
+    const rawHistory = (data && data.ok && Array.isArray(data.history)) ? data.history : [];
+    const userMsg = [...rawHistory].reverse().find((gm) => gm
+      && gm.from === 'user'
+      && gm.dispatch !== true
+      && String(gm.text || '').trim());
+    const text = userMsg ? String(userMsg.text || '').trim() : '';
+    if (text) _convLog.info('slow switch: recovered task from history', { cid, chars: text.length });
+    return text;
+  } catch (err) {
+    _convLog.warn('slow switch: history task recovery failed', err && err.message ? err.message : String(err));
+    return '';
+  }
+}
+
+// abort / 刷新时清理慢切换 watch，避免悬空定时器与残留卡。
+function _cleanupSlowSwitchForCid(cid) {
+  _pruneAllSlowSwitches(cid);
+  const host = _slowSwitchHost(cid);
+  if (host) {
+    host.innerHTML = '';
+    _pruneSlowSwitchHost(host);
+  }
+}
+
+
 
 // 9.1 统一框架 · 中间区紧凑结果块（恢复自 e88275e1）：
 // 静态版结果块 HTML（用于 appendChatMessage 的字符串组合路径），供 Evidence /
@@ -10649,9 +10905,22 @@ async function handleNewChatSubmit() {
     await uiAlert(t('oss.task_required'));
     return;
   }
-  if (!(await _ensureModelOrCliFallback(DRAFT_CID))) return;
+  if (!(await _ensureModelOrCliFallback(DRAFT_CID, 'new-chat', raw))) return;
+
   const references = _referenceSnapshotsForQuotes(quotes);
-  const requestText = raw || t('chat.reference_default_prompt');
+  // 无模型降级到 fallback CLI agent 时，若消息以旧 @ 前缀开头，换成
+  // fallback agent 的名字（避免后端按旧 @ 解析失败回退 commander）。
+  let effectiveRaw = raw;
+  const fbRecipient = _activeRecipient('new-chat');
+  const fallbackAgentId = (fbRecipient && fbRecipient.kind === 'agent' && fbRecipient.id) ? fbRecipient.id : '';
+  if (fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw)) {
+    const fbName = _recipientPrefixName({ kind: 'agent', id: fallbackAgentId });
+    if (fbName) {
+      effectiveRaw = '@' + fbName + ' ' + effectiveRaw.replace(/^@[A-Za-z0-9_一-鿿-]+\s?/u, '');
+      _convLog.info('[cli-fallback] rewrote mention prefix to fallback agent', { cid: DRAFT_CID, fb: fbName });
+    }
+  }
+  const requestText = effectiveRaw || t('chat.reference_default_prompt');
   const useSelections = (typeof consumeChatUseSelections === 'function')
     ? consumeChatUseSelections('new-chat')
     : [];
@@ -10789,6 +11058,7 @@ async function handleNewChatSubmit() {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
+    ..._recipientRoutingFields(recipientSnapshot),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -10837,11 +11107,25 @@ async function handleChatSubmit() {
     _clearDraft(currentCid);
     return;
   }
-  if (!(await _ensureModelOrCliFallback(currentCid))) return;
+  if (!(await _ensureModelOrCliFallback(currentCid, 'conversation', raw))) return;
+
   const cid = currentCid;
   const quotes = _getQuotes(cid).slice();
   const references = _referenceSnapshotsForQuotes(quotes);
-  const requestText = raw || t('chat.reference_default_prompt');
+  // 无模型降级到 fallback CLI agent 时，若消息以旧 @ 前缀开头（用户 @ 的
+  // 智能体当前没有 agent 记录），必须把前缀换成 fallback agent 的名字——
+  // 否则后端 router 按旧 @ 解析失败回退 commander → 弹「未配置模型」。
+  let effectiveRaw = raw;
+  const fbRecipient = _activeRecipient('conversation');
+  const fallbackAgentId = (fbRecipient && fbRecipient.kind === 'agent' && fbRecipient.id) ? fbRecipient.id : '';
+  if (fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw)) {
+    const fbName = _recipientPrefixName({ kind: 'agent', id: fallbackAgentId });
+    if (fbName) {
+      effectiveRaw = '@' + fbName + ' ' + effectiveRaw.replace(/^@[A-Za-z0-9_一-鿿-]+\s?/u, '');
+      _convLog.info('[cli-fallback] rewrote mention prefix to fallback agent', { cid, fb: fbName });
+    }
+  }
+  const requestText = effectiveRaw || t('chat.reference_default_prompt');
   const useSelections = (typeof getChatUseSelections === 'function')
     ? getChatUseSelections('conversation')
     : [];
@@ -10907,6 +11191,7 @@ async function handleChatSubmit() {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
+    ..._recipientRoutingFields(recipientSnapshot),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -11195,6 +11480,7 @@ function _taskTurnFinish(cid, opts = {}) {
   const run = _taskTurnRun(cid);
   if (!run) return;
   _taskTurnRuns.delete(cid);
+  _pruneAllSlowSwitches(cid);
   void opts;
 }
 
@@ -11332,6 +11618,114 @@ function _makeConvChatController(cid, options = {}) {
 // Honest, idempotent, never fabricates a model.
 let _cliFallbackApplied = null; // cid → cli (per conversation, once)
 
+/** 重建切换消息：把（可能带旧 @ 前缀的）原任务文本换成 `@新名 任务`。
+ *  纯函数——统一剥掉旧 @ 前缀再以目标名重建，避免「提示已切换、实际
+ *  仍是 @旧名」。任务为空时原样返回空。测试可直接验证。 */
+function _rebuildSwitchMessage(task, targetName) {
+  const bare = String(task || '').replace(/^@[A-Za-z0-9_一-鿿-]+\s?/u, '').trim();
+  if (!bare) return '';
+  return `@${targetName} ${bare}`;
+}
+
+// ── 外接智能体「慢响应/不可用」切换 ────────────────────────────────────
+// 用户 @ 一个外接智能体（CLI / P3394 网关）后，如果长时间没有首条输出
+// （该 agent 自身 API / 服务 / 登录等原因无法正常工作），2 分钟后给出提示卡
+// （复用批准唤醒卡的视觉），并提供「切换其他智能体继续」的自动路由下拉。
+// 只作用于外接智能体：有本地 CLI 可执行，不依赖 CogSeed 模型。
+// 阈值定 2 分钟：Codex 等真实后端单个 turn 可能耗时数十秒（模型推理 +
+// 插件 / MCP 初始化），不能把「慢但能完成」误判成「不可用」。快速失败
+// （[p3394_gateway_error] 等）仍即时提示，绝不等待这个阈值。
+const _EXT_SLOW_SWITCH_MS = 120_000;
+// cid → { timer, actorId, turnId, name, handled }
+const _extSlowWatch = new Map();
+
+/** True when the text is a gateway error reply (`[p3394_gateway_error] …`),
+ *  common when the external CLI's own API/account/service is unavailable.
+ *  Pure predicate — shared by the message branch and tests. */
+function _isP3394GatewayErrorText(text) {
+  return /^\[p3394_gateway_error\]/i.test(String(text || '').trim());
+}
+
+/** 从已加载的 agent 目录挑出所有外接智能体（CLI / P3394 网关），按
+ *  FALLBACK_CLIS 路由优先序排序；`excludeActorId` 排除当前卡住的那个。
+ *  返回 [{ agentId, name, cli }]（纯函数，测试可抽取）。 */
+function _externalSwitchCandidates(excludeActorId) {
+  const FALLBACK_CLIS = ['claude', 'codex', 'opencode', 'workbuddy', 'openclaw', 'hermes'];
+  const order = new Map(FALLBACK_CLIS.map((cli, i) => [cli, i]));
+  const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache))
+    ? _agentsCache
+    : [];
+  const out = [];
+  for (const agent of list) {
+    if (!agent || !agent.agent_id) continue;
+    if (excludeActorId && agent.agent_id === excludeActorId) continue;
+    const rt = agent.runtime;
+    if (!rt) continue;
+    if (rt.kind !== 'cli' && rt.kind !== 'p3394-gateway') continue;
+    const cli = String(rt.cli || '');
+    out.push({ agentId: String(agent.agent_id), name: String(agent.name || cli), cli });
+  }
+  out.sort((a, b) => {
+    const ao = order.has(a.cli) ? order.get(a.cli) : 99;
+    const bo = order.has(b.cli) ? order.get(b.cli) : 99;
+    if (ao !== bo) return ao - bo;
+    return a.name.localeCompare(b.name);
+  });
+  return out;
+}
+
+/** 判断 actor 是否外接智能体（runtime kli / p3394-gateway）。 */
+function _isExternalGroupActor(actorId) {
+  if (!actorId || actorId === 'commander') return false;
+  const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache))
+    ? _agentsCache
+    : [];
+  const agent = list.find((a) => a && a.agent_id === actorId);
+  const rt = agent && agent.runtime;
+  return !!rt && (rt.kind === 'cli' || rt.kind === 'p3394-gateway');
+}
+
+/** 外接智能体首个 process 事件出现时启动慢检测（阈值 _EXT_SLOW_SWITCH_MS，幂等）。 */
+function _armSlowSwitch(cid, actorId, turnId, name) {
+  if (!cid || !actorId || !_isExternalGroupActor(actorId)) return;
+  const key = String(cid) + '::' + String(actorId);
+  const existing = _extSlowWatch.get(key);
+  if (existing && existing.timer) {
+    // 同 turn 复用；turnId 变化则重挂
+    if (!turnId || !existing.turnId || existing.turnId === turnId) return;
+  }
+  _clearSlowSwitch(cid, actorId);
+  const timer = setTimeout(() => {
+    _extSlowWatch.delete(key);
+    try {
+      void _showSlowSwitchCard(cid, actorId, turnId, name || actorId);
+    } catch (err) {
+      _convLog.warn('slow switch card render failed', err && err.message ? err.message : String(err));
+    }
+  }, _EXT_SLOW_SWITCH_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+  _extSlowWatch.set(key, { timer, actorId, turnId, name: name || actorId });
+}
+
+/** 收到首条 delta/final（有输出）→ 取消慢检测。 */
+function _clearSlowSwitch(cid, actorId) {
+  const key = String(cid) + '::' + String(actorId);
+  const existing = _extSlowWatch.get(key);
+  if (existing && existing.timer) {
+    clearTimeout(existing.timer);
+  }
+  _extSlowWatch.delete(key);
+}
+
+function _pruneAllSlowSwitches(cid) {
+  for (const [key, watch] of _extSlowWatch) {
+    if (key.startsWith(String(cid) + '::')) {
+      if (watch.timer) clearTimeout(watch.timer);
+      _extSlowWatch.delete(key);
+    }
+  }
+}
+
 async function _maybeApplyCliFallback(cid, opts = {}) {
   // `force` skips the `model.hasConfigured` gate: used when the configured API
   // exists but just FAILED at call time (bad key / network / quota) — we still
@@ -11433,10 +11827,11 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
       // keychain-stored sessions, so an available CLI is still a valid
       // fallback backend (it will surface its own login error if not logged in).
       // CLI whitelist mirrors onboarding's connectable list (claude / codex /
-      // opencode / workbuddy) so a CLI connected in the walkthrough is
-      // selectable here. CLIs whose local proxy is confirmed down, or that were
-      // explicitly excluded (failed at runtime), are skipped.
-      const FALLBACK_CLIS = ['claude', 'codex', 'opencode', 'workbuddy'];
+      // opencode / workbuddy) plus the P3394-managed external CLIs (openclaw /
+      // hermes) so a CLI connected in the walkthrough — or via the 外接 tab —
+      // is selectable here. CLIs whose local proxy is confirmed down, or that
+      // were explicitly excluded (failed at runtime), are skipped.
+      const FALLBACK_CLIS = ['claude', 'codex', 'opencode', 'workbuddy', 'openclaw', 'hermes'];
       const usable = (e) => e && e.available
         && FALLBACK_CLIS.includes(e.type)
         && !excluded(e.type)
@@ -11455,8 +11850,11 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   let agent = null;
   try {
     const listRes = await window.cogseed.invoke('agents.list', {});
+
     agent = (listRes && listRes.agents || []).find(
-      (a) => a && a.runtime && a.runtime.kind === 'cli' && a.runtime.cli === cli,
+      (a) => a && a.runtime
+        && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway')
+        && a.runtime.cli === cli,
     );
   } catch (_) { /* agents list unavailable */ }
 
@@ -11466,11 +11864,12 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
     try {
       const name = cli === 'claude' ? 'Claude' : (cli === 'codex' ? 'Codex' : (cli === 'opencode' ? 'OpenCode' : 'WorkBuddy'));
       const res = await window.cogseed.invoke('agents.create', {
+
         name,
         description: `本机 ${name} 命令行，作为 AI 团队成员执行任务`,
         icon: 'code',
         color: 'sage',
-        runtime: { kind: 'cli', cli },
+        runtime: { kind: 'p3394-gateway', cli },
         category: 'general',
       });
       if (res && res.agent) agent = res.agent;
@@ -11480,14 +11879,23 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   }
   if (!agent) return false;
 
-  _recipientByCid[cid] = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
+  _recipientByCid[cid] = {
+    kind: 'agent',
+    id: String(agent.agent_id || ''),
+    name: String(agent.name || cli),
+    origin: 'cli_fallback',
+  };
   // new-chat（DRAFT_CID）场景：降级必须同步到 `_newChatRecipient` ——
-  // handleNewChatSubmit 的发送快照与 mention 注入都读 `_activeRecipient('new-chat')`
-  // （即 `_newChatRecipient`），只写 `_recipientByCid[DRAFT_CID]` 的话，后续
-  // `applyRecipientPrefix` 拿到的仍是 commander，消息不会带 `@Agent` 前缀，
-  // 后端仍按 to=commander 路由 → 又报「未配置模型」。
+  // handleNewChatSubmit 的结构化发送快照读 `_activeRecipient('new-chat')`
+  // （即 `_newChatRecipient`）。只写 `_recipientByCid[DRAFT_CID]` 的话，
+  // 后续请求不会携带 recipient_agent_id，仍会按 commander 路由。
   if (cid === DRAFT_CID && typeof _newChatRecipient !== 'undefined') {
-    _newChatRecipient = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
+    _newChatRecipient = {
+      kind: 'agent',
+      id: String(agent.agent_id || ''),
+      name: String(agent.name || cli),
+      origin: 'cli_fallback',
+    };
   }
   _cliFallbackApplied = cid;
   try { _renderRecipientChip('conversation'); } catch (_) {}
@@ -11601,20 +12009,60 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
 
 /**
  * 发送前的模型守卫 + 无模型降级：
- * - 有已配置模型 → true（正常发送）。
- * - 无模型 → 尝试把 recipient 自动切换到本机已登录 CLI agent（_maybeApplyCliFallback），
- *   成功则放行（后端按 CLI agent 路由执行）；无可用 CLI 才返回 false（引导用户配置）。
+ * - 有已配置模型 → { ok: true }（正常发送）。
+ * - 无模型 → 若当前 recipient 已经是外部智能体（CLI / P3394 外接网关）
+ *   则直接放行；若消息文本以 `@<token>` 开头且该 token 命中本机外部
+ *   智能体（手动输入 @ 智能体名 的场景），同样放行——外部智能体经本机
+ *   CLI 执行，不依赖 CogSeed 模型配置，首次启动不配置模型也能直接调用。
+ *   仅当目标确实需要模型（commander 且无 @ 外部智能体）时才走
+ *   _maybeApplyCliFallback 自动切换（返回 fallbackAgentId 供调用方重建
+ *   消息前缀，避免旧 @ 前缀与 fallback 目标不一致导致后端解析失败）。
+ *   无可用 CLI 才返回 { ok: false }（引导配置）。
  * 仅用于主对话（new-chat / conversation）的 Commander 场景；技能/agent 编辑聊天
  * 等仍走 ensureModelConfigured 原逻辑。
  */
-async function _ensureModelOrCliFallback(cid) {
+async function _ensureModelOrCliFallback(cid, target = 'conversation', rawContent = '') {
+  const selected = _activeRecipient(target);
+  if (selected && selected.kind === 'agent' && selected.id) return true;
+  // A raw mention is an explicit dispatch request of its own. Let main parse
+  // and Wake-gate it; automatic CLI fallback must not replace its target.
+  if (_LEADING_MENTION_RE.test(String(rawContent || '').trim())) return true;
   if (ensureModelConfigured({ silent: true })) return true;
+
   const ok = await _maybeApplyCliFallback(cid);
-  _convLog.info('[cli-fallback] ensureModelOrCliFallback', { cid, ok, recipient: _activeRecipient('conversation') });
+  const after = _activeRecipient(cid === DRAFT_CID ? 'new-chat' : 'conversation');
+  const fallbackAgentId = (after && after.kind === 'agent' && after.id) ? after.id : '';
+  _convLog.info('[cli-fallback] ensureModelOrCliFallback', { cid, ok, recipient: _activeRecipient('conversation'), fallbackAgentId });
   if (ok) return true;
   // 无模型也无可用 CLI：走原提示（弹框 + 跳设置）。
   ensureModelConfigured();
   return false;
+}
+
+/** True when the leading `@<token>` in the raw text resolves to a local
+ *  external agent (CLI or P3394-gateway). Matches by display name /
+ *  agent_id (case + whitespace insensitive), mirroring the backend
+ *  router's name-key normalization. Unknown tokens → false. */
+async function _mentionTargetsExternalAgent(rawText) {
+  const text = String(rawText || '').trim();
+  if (!text) return false;
+  const m = _LEADING_MENTION_RE.exec(text);
+  if (!m) return false;
+  const key = String(m[1] || '').toLowerCase().replace(/\s+/g, '');
+  if (!key) return false;
+  let agents = [];
+  try {
+    const res = await window.cogseed.invoke('agents.list', {});
+    agents = (res && res.agents) || [];
+  } catch (_) { return false; }
+  return agents.some((a) => {
+    if (!a || !a.runtime) return false;
+    const kind = a.runtime.kind;
+    if (kind !== 'cli' && kind !== 'p3394-gateway') return false;
+    const nameKey = String(a.name || '').toLowerCase().replace(/\s+/g, '');
+    const idKey = String(a.agent_id || '').toLowerCase();
+    return nameKey === key || idKey === key;
+  });
 }
 
 // No usable local CLI backend: guide the user instead of failing with a bare
@@ -11645,37 +12093,31 @@ async function sendInConversation(cid, content, extra, options = {}) {
   if (!cid) return { started: false, aborted: false, errored: false, result: 'failure' };
   const startedAt = performance.now();
   const sendOptions = options && typeof options === 'object' ? options : {};
-  let statAgentId = String(sendOptions.agent_id || '');
+  const isInternalReplay = !!String(extra?.retry_message_id || extra?.edit_message_id || '').trim();
+  let statAgentId = String(sendOptions.agent_id || extra?.recipient_agent_id || '');
 
   // Commander CLI fallback: when no API-key model is configured and the
   // message targets the commander (no explicit agent), route this
   // conversation to the user's signed-in CLI agent so chat still works.
   // Cheap IPC checks; any failure falls through to the normal send path.
-  if (!statAgentId) {
+  if (!statAgentId && !isInternalReplay) {
     try {
       const recipient = _activeRecipient('conversation');
       const toCommander = !recipient || recipient.kind === 'commander';
       _convLog.info('[cli-fallback] sendInConversation check', { cid, statAgentId, recipientKind: recipient && recipient.kind, toCommander });
-      if (toCommander) {
+      if (toCommander && !_LEADING_MENTION_RE.test(String(content || '').trim())) {
         await _maybeApplyCliFallback(cid);
       }
-      // A successful fallback updates _recipientByCid but NOT sendOptions
-      // (it was snapshot before this helper ran). Mirror it back so the
-      // actual send is routed to the CLI agent, not the commander.
+      // A successful fallback updates the recipient. Mirror the validated
+      // snapshot into the request body so main can route without parsing a
+      // synthetic @mention from visible text.
       const after = _activeRecipient('conversation');
       if (after && after.kind === 'agent' && after.id) {
         sendOptions.agent_id = after.id;
         statAgentId = after.id;
-        // The server floor is set by parsing `@name` mentions, not by any
-        // agent_id field. When this send did not already carry a recipient
-        // prefix (direct sendInConversation callers bypass applyRecipientPrefix),
-        // inject the mention so the CLI agent actually holds the floor.
-        if (!_LEADING_MENTION_RE.exec(String(content || ''))) {
-          const display = _recipientPrefixName(after);
-          if (display) {
-            const sep = /^>/.test(String(content || '')) ? '\n' : ' ';
-            content = '@' + display + sep + content;
-          }
+        if (!extra?.recipient_agent_id) {
+          const routing = _recipientRoutingFields(after);
+          if (routing.recipient_agent_id) extra = { ...(extra || {}), ...routing };
         }
       }
     } catch (err) {
@@ -13288,15 +13730,23 @@ function createChatController(config) {
     _qSave(id, q);
     renderQueue();
   }
-  function _qDispatchNext() {
+  async function _qDispatchNext() {
     if (!features.queue) return;
     const id = config.getCurrentId(); if (!id) return;
     if (pending) return;
     const q = _qGet(id);
     if (!q.length) return;
     // Preserve edit-chat queue entries when credentials/configuration become
-    // unavailable while another response is running.
-    if (!ensureModelConfigured()) return;
+    // unavailable while another response is running. Silent probe first：
+    // @ 外部智能体的队列项不触发非 silent 弹窗/跳转（外部智能体不经模型）。
+    if (!ensureModelConfigured({ silent: true })) {
+      const next0 = q[0];
+      const text0 = (next0 && next0.content) || '';
+      if (!await _mentionTargetsExternalAgent(text0)) {
+        ensureModelConfigured();
+        return;
+      }
+    }
     const next = q.shift();
     _qSave(id, q);
     renderQueue();
@@ -13489,8 +13939,14 @@ function createChatController(config) {
     // drains and auto-seed sends (e.g. skills.js 'autoSeed').
     // 无模型自动降级：若该会话已降级到本机 CLI agent（_cliFallbackApplied === id），
     // CLI 用自己的凭据执行，不需要 CogSeed 的 API 模型 → 放行。
-    if (!(_cliFallbackApplied === id) && !ensureModelConfigured()) {
+    const hasStructuredAgent = !!String(extraBody?.recipient_agent_id || '').trim();
+    const isFailedTurnRetry = !!String(extraBody?.retry_message_id || '').trim();
+    const isMessageEdit = !!String(extraBody?.edit_message_id || '').trim();
+    const hasManualRecipientMention = _LEADING_MENTION_RE.test(content);
+    if (!hasStructuredAgent && !hasManualRecipientMention && !isFailedTurnRetry && !isMessageEdit
+      && !(_cliFallbackApplied === id) && !ensureModelConfigured()) {
       return { started: false, aborted: false, errored: false, reason: 'model_not_configured' };
+
     }
     if (hooks.beforeSend) {
       const transformed = await hooks.beforeSend(content, id);
@@ -14304,6 +14760,17 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
   if (evData.type === 'message') {
     const gm = evData.msg;
     if (!gm) return;
+    // 外接智能体快速失败（网关回信 `[p3394_gateway_error]`，常见于该 CLI
+    // 自身 API/账号/服务不可用）→ 立即给切换提示，不等慢检测阈值。这条
+    // 错误是网关 postReply 的普通文本，无 failure_kind，只能按前缀识别。
+    if (gm.from && gm.from !== 'user' && gm.from !== 'commander') {
+      const text = String(gm.text || gm.content || '');
+      if (_isP3394GatewayErrorText(text)) {
+        _clearSlowSwitch(cid, gm.from);
+        _showSlowSwitchCard(cid, gm.from, _eventTurnId(evData),
+          _knownGroupActorLabel(cid, gm.from) || gm.from, { reason: 'failed', detail: text });
+      }
+    }
     // Host-internal KStar review replies (self-evolution signal) are never
     // rendered as bubbles. Consume the actor placeholder so the turn still
     // settles cleanly, then skip the visible message entirely.
@@ -14444,11 +14911,16 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
     }
     try {
       if (data.type === 'delta' && typeof data.text === 'string') {
+        // 首条输出已到达 → 取消该外接智能体的「慢响应」检测。
+        _clearSlowSwitch(cid, actor);
         // Token-by-token streaming → write into the placeholder's final
         // body so the user sees the reply form character-by-character.
         _streamingAppendFinalDelta(target, data.text);
         _streamingUpdateActivity(target, t('chat.activity_writing'));
       } else if (data.type === 'progress' && data.text) {
+        // 外接智能体有 process 活动但尚无首条输出 → 开始慢检测（阈值见
+        // _EXT_SLOW_SWITCH_MS）；有实际文本输出后由 delta 分支取消。
+        _armSlowSwitch(cid, actor, turnId, _knownGroupActorLabel(cid, actor) || actor);
         const evt = data.event && data.event.stream ? data.event : null;
         const line = evt ? (_formatEventLine(evt) || String(data.text)) : String(data.text);
         if (evt) _setProcessSummaryRuntimeFromEvent(target, evt);
@@ -14456,6 +14928,8 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
         if (evt) _streamingUpdateActivityFromEvent(target, evt);
         else _streamingUpdateActivity(target, t('chat.activity_working'));
       } else if (data.type === 'event') {
+        // 事件型 process（工具调用、状态等）同样证明活动但未输出文本。
+        _armSlowSwitch(cid, actor, turnId, _knownGroupActorLabel(cid, actor) || actor);
         const before = _processLineCount(target);
         _renderAgentEvent(target, data.event);
         const evt = data.event || {};
@@ -15458,6 +15932,7 @@ function _refreshTaskSurfacesAfterAbort(cid) {
 }
 
 function abortConvStream(cid) {
+  _cleanupSlowSwitchForCid(cid);
   const state = pendingConvs.get(cid);
   _stopRuntimeActorRecovery(cid);
   _stopGroupEventObserver(cid);

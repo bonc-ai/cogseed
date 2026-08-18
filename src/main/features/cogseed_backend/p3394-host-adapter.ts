@@ -43,6 +43,9 @@ export function buildP3394OutboundEnvelope(
 ): P3394Envelope {
   // Goal 自动隔离（指南 §5.3）：同 (scope, peer) 同 Goal 复用会话，不同 Goal 开新会话。
   const sessionId = sessionForGoal(opts.scopeKey ?? peer, peer, opts.goal);
+  // 约定（S-04 关联 id 脱敏前提）：P3394 的 message/session/task id 一律由
+  // 无信息量随机值生成（genId12 / 前缀拼接），**禁止把任何 secret/token 编进
+  // 这些 id**——审计/KSTAR 会"先掩码后还原"关联 id，id 内含秘密会绕过脱敏。
   const messageId = `msg-${genId12()}`;
   const bridgeInfo = getP3394BridgeInfo();
   return {

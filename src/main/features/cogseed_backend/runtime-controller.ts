@@ -11,12 +11,14 @@ import { appendMateTaskEvent } from './event-store';
 import { markMateTaskRecoverable, retryMateTask as retryStoredMateTask, transitionMateTask } from './lifecycle';
 import { createMateTask, listMateTasks, readMateTask, updateMateTask } from './task-store';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
+import { buildRuntimeAssetContext } from './runtime-asset-context';
+import { readMateSession } from './session-store';
 import type { MateTaskRecord } from './types';
 import type { MateGroupChatProjectionInput, MateProjectionEvent } from './group-chat-projection';
 import type { MateLocalCliExecutionAdapter } from './local-cli-execution-adapter';
 import type { MateLocalCliConfig } from './types';
 
-const log = createLogger('mate-backend:runtime-controller');
+const log = createLogger('cogseed-backend:runtime-controller');
 
 export interface StartMateTaskInput {
   requestId: string;
@@ -96,6 +98,26 @@ function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string;
 
 function terminal(task: MateTaskRecord): boolean {
   return task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
+}
+
+/**
+ * Resolve the conversation binding for a CogSeed task, preferring the explicit
+ * input field and falling back to the persisted CogSeed session record. Returns
+ * undefined when neither source carries a conversation — in that case the
+ * runtime task runs without recall asset injection (soft degradation).
+ */
+async function resolveConversationIdForTask(
+  userId: string,
+  task: MateTaskRecord,
+  input: StartMateTaskInput,
+): Promise<string | undefined> {
+  if (input.conversationId) return input.conversationId;
+  try {
+    const session = await readMateSession(userId, task.sessionId);
+    return session?.conversationId || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function projectTaskEventBestEffort(
@@ -285,14 +307,22 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
       const created = await createMateTask(userId, input);
       if (!created.created) return created.task;
       const capabilities = await resolveRuntimeCapabilities(userId, created.task.requestId, created.task.runtimeSessionId);
-      return launchTask(userId, created.task, { ...input, capabilities });
+      const launchInput: StartMateTaskInput & { runtimeSessionId?: string } = { ...input, capabilities };
+      const conversationId = await resolveConversationIdForTask(userId, created.task, input);
+      if (conversationId) {
+        const assetContext = await buildRuntimeAssetContext(userId, conversationId);
+        if (assetContext.length) {
+          launchInput.context = [...(input.context ?? []), ...assetContext];
+        }
+      }
+      return launchTask(userId, created.task, launchInput);
     },
 
     async retryMateTask(userId, taskId, requestId) {
       const retried = await retryStoredMateTask(userId, taskId, requestId);
       if (retried.status !== 'created') return retried;
       const capabilities = await resolveRuntimeCapabilities(userId, retried.requestId, retried.runtimeSessionId);
-      return launchTask(userId, retried, {
+      const retryInput: StartMateTaskInput & { runtimeSessionId?: string } = {
         requestId,
         task: retried.task,
         ...(retried.agentId ? { agentId: retried.agentId } : {}),
@@ -303,7 +333,17 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
         ...(retried.localCli ? { localCli: retried.localCli } : {}),
         ...(retried.profileId ? { profileId: retried.profileId } : {}),
         capabilities,
-      });
+      };
+      // 重试和首次执行必须拿到同一批已确认资产。漏了这一段，同一个任务第一次
+      // 带认知资产、重试后反而没有——用户会以为资产失效了。start/resume 都注入。
+      const retryConversationId = await resolveConversationIdForTask(userId, retried, retryInput);
+      if (retryConversationId) {
+        const assetContext = await buildRuntimeAssetContext(userId, retryConversationId);
+        if (assetContext.length) {
+          retryInput.context = [...(retryInput.context ?? []), ...assetContext];
+        }
+      }
+      return launchTask(userId, retried, retryInput);
     },
 
     async resumeMateTask(userId, taskId, input) {
@@ -321,7 +361,7 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
           if (task.lastResumeRequestId === input.requestId) return task;
           return { ...task, lastResumeRequestId: input.requestId };
         });
-        return launchTask(userId, reserved, {
+        const resumeInput: StartMateTaskInput & { runtimeSessionId?: string } = {
           requestId: input.requestId,
           task: continuation,
           runtimeSessionId: reserved.runtimeSessionId,
@@ -336,7 +376,15 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
           ...(input.attachments ? { attachments: input.attachments } : {}),
           ...(input.workingDir ? { workingDir: input.workingDir } : {}),
           capabilities: await resolveRuntimeCapabilities(userId, input.requestId, reserved.runtimeSessionId),
-        });
+        };
+        const conversationId = await resolveConversationIdForTask(userId, reserved, resumeInput);
+        if (conversationId) {
+          const assetContext = await buildRuntimeAssetContext(userId, conversationId);
+          if (assetContext.length) {
+            resumeInput.context = [...(resumeInput.context ?? []), ...assetContext];
+          }
+        }
+        return launchTask(userId, reserved, resumeInput);
       } catch (error) {
         resumeClaims.delete(taskId);
         throw error;

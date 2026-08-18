@@ -109,6 +109,18 @@ function materialize(files: Record<string, string>, prefix = 'mx-'): string {
   return dir;
 }
 
+// W6: exercise the gate the way production does — vendored PyYAML on
+// PYTHONPATH (skill-sentry/vendor). A bare interpreter falls back to the thin
+// builtin rules, which both weakens verdicts (payloads scoring `pass`) and drifts
+// away from what sentry-adapter / orkas-pkg actually run. Keep the injection
+// identical to those callers so this matrix stays a true regression spine.
+const GATE_ENV = {
+  ...process.env,
+  PYTHONIOENCODING: 'utf-8',
+  PYTHONDONTWRITEBYTECODE: '1',
+  PYTHONPATH: [path.join(GUARDRAIL, 'skill-sentry', 'vendor'), process.env.PYTHONPATH || ''].filter(Boolean).join(path.delimiter),
+};
+
 /**
  * The shared decision script, run directly.
  *
@@ -121,6 +133,7 @@ function gate(target: string): { outcome: string; blocking_rules: string[]; reco
     encoding: 'utf8',
     timeout: 180_000,
     maxBuffer: 16 * 1024 * 1024,
+    env: GATE_ENV,
   });
   expect(r.status, `stderr: ${r.stderr}`).toBe(0);
   return JSON.parse(r.stdout);

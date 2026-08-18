@@ -1072,6 +1072,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     nested = false,
     drainSteer,
     toolAccess,
+    ephemeralSession,
   } = opts;
 
   const diagnostics = createModelRunLogDiagnostics();
@@ -1297,6 +1298,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       ...(maxToolLoops ? { maxToolLoops } : {}),
       ...(disableTools ? { disableTools: true } : {}),
       ...(toolAccess === 'read-only' ? { toolAccess: 'read-only' } : {}),
+      ...(ephemeralSession ? { ephemeralSession: true } : {}),
       providerFirstEventTimeoutMs: Math.max(1, streamIdleTimeout * 1000),
       ...(cid ? { cid } : {}),
       ...(turnId ? { turnId } : {}),

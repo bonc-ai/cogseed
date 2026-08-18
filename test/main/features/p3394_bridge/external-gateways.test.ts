@@ -1,12 +1,29 @@
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { P3394HttpChannel } from '../../../../src/main/features/p3394_bridge/http-channel';
 import { P3394PeerRegistry } from '../../../../src/main/features/p3394_bridge/registry';
-import { listExternalGateways, p3394ExternalGatewayIdFor, startExternalGateway, stopExternalGateway } from '../../../../src/main/features/p3394_bridge/external-gateways';
+import { listExternalGateways, p3394ExternalGatewayIdFor, respawnManagedGateways, startExternalGateway, stopExternalGateway } from '../../../../src/main/features/p3394_bridge/external-gateways';
 import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runtime-paths';
 import * as fs from 'node:fs';
+
+let previousVariant: string | undefined;
+let variantName: string;
+
+// 测试隔离：p3394StateFile 走 ORKAS_RUNTIME_VARIANT，必须用一次性 variant，
+// 否则这些测试会把真实 cogseed variant 的 p3394-peers.json /
+// p3394-external-gateways.json 清空重建（污染用户运行状态）。
+beforeEach(() => {
+  previousVariant = process.env.ORKAS_RUNTIME_VARIANT;
+  variantName = 'p3394-gw-' + Math.random().toString(36).slice(2, 8);
+  process.env.ORKAS_RUNTIME_VARIANT = variantName;
+});
+afterEach(() => {
+  if (previousVariant === undefined) delete process.env.ORKAS_RUNTIME_VARIANT;
+  else process.env.ORKAS_RUNTIME_VARIANT = previousVariant;
+  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
+});
 
 describe('P3394 external-agent gateway host', () => {
   it('maps every supported CLI to a gateway preset node id', () => {
@@ -49,7 +66,7 @@ describe('P3394 external-agent gateway host', () => {
     try {
       await stopExternalGateway('hermes');
       const started = await startExternalGateway({ cli: 'hermes', binPath: '/bin/echo', alias: '任务 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
-      expect(started.ok).toBe(true);
+      expect(started.ok, 'start failed: ' + (started.ok === false ? started.error : '')).toBe(true);
       if (!started.ok) throw new Error(started.error);
       const dialer = new P3394HttpChannel('ext-task-dialer', { dial: { endpoints: [`http://127.0.0.1:${started.value.port}`] } });
       await dialer.dial('hermes');
@@ -135,8 +152,7 @@ describe('P3394 external-agent gateway host', () => {
     }
   }, 60_000);
 
-  it('V-03：真实 CLI 执行失败 → gateway 显式错误回信 → CogSeed 感知失败（不静默）', async () => {
-    const token = 'ext-fail-token';
+  it('V-03：真实 CLI 执行失败 → gateway 显式错误回信 → CogSeed 感知失败（不静默）', async () => {    const token = 'ext-fail-token';
     const registryFile = p3394StateFile('p3394-peers.json');
     try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
     const registry = new P3394PeerRegistry({ filePath: registryFile });
@@ -192,6 +208,148 @@ describe('P3394 external-agent gateway host', () => {
       await stopExternalGateway('hermes');
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+    }
+  }, 60_000);
+
+  it('fails fast with p3394_gateway_script_missing when the gateway script is absent', async () => {
+    const previousPcDir = process.env.ORKAS_PC_DIR;
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-no-gateway-'));
+    process.env.ORKAS_PC_DIR = emptyDir;
+    try {
+      const started = await startExternalGateway({
+        cli: 'hermes',
+        bridgeInfo: { endpoint: 'http://127.0.0.1:1', token: 'x' },
+      });
+      expect(started.ok).toBe(false);
+      if (started.ok === false) expect(started.error).toContain('p3394_gateway_script_missing');
+    } finally {
+      if (previousPcDir === undefined) delete process.env.ORKAS_PC_DIR;
+      else process.env.ORKAS_PC_DIR = previousPcDir;
+      try { fs.rmSync(emptyDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  }, 30_000);
+
+  it('times out with p3394_gateway_registration_timeout when the gateway never registers', async () => {
+    const previousPcDir = process.env.ORKAS_PC_DIR;
+    // Point ORKAS_PC_DIR at the real repo root so the real gateway.cjs exists…
+    const repoGateway = path.resolve(__dirname, '..', '..', '..', '..', 'p3394-gateway');
+    if (fs.existsSync(path.join(repoGateway, 'gateway.cjs'))) process.env.ORKAS_PC_DIR = path.dirname(repoGateway);
+    try {
+      const started = await startExternalGateway({
+        cli: 'hermes',
+        binPath: '/bin/echo',
+        // …but the bridge endpoint is unreachable, so the hello registration
+        // can never complete and the 15s registration deadline fires.
+        bridgeInfo: { endpoint: 'http://127.0.0.1:1', token: 'x' },
+      });
+      expect(started.ok).toBe(false);
+      if (started.ok === false) expect(started.error).toContain('p3394_gateway_registration_timeout');
+    } finally {
+      if (previousPcDir === undefined) delete process.env.ORKAS_PC_DIR;
+      else process.env.ORKAS_PC_DIR = previousPcDir;
+    }
+  }, 60_000);
+
+  it('respawns managed gateways recorded in the state file (boot recovery)', async () => {
+    // Fake CogSeed bridge：收 hello → 注册节点（与 app-wiring 同构）。
+    const token = 'respawn-token';
+    const registryFile = p3394StateFile('p3394-peers.json');
+    const gatewayStateFile = p3394StateFile('p3394-external-gateways.json');
+    try { fs.rmSync(registryFile, { force: true }); fs.rmSync(gatewayStateFile, { force: true }); } catch { /* test isolation */ }
+    const registry = new P3394PeerRegistry({ filePath: registryFile });
+    const channel = new P3394HttpChannel('respawn-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
+    await channel.listen();
+    channel.subscribe((envelope) => {
+      const senderId = envelope.sender.agent_id;
+      const endpoints = (envelope.extensions?.endpoints ?? []).filter((v): v is string => typeof v === 'string');
+      if (registry.resolve(senderId).ok === false) {
+        registry.register({
+          identity: { agent_id: senderId, display_name: senderId },
+          manifest: { spec_version: 'p3394/1.0', identity: { agent_id: senderId, display_name: senderId }, runtime: { kind: 'in_process' }, capability_profile: { agent_id: senderId, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request'], supports_streaming: false, supports_artifacts: false }, channels: [{ id: 'x', kind: 'local', direction: 'inbound-outbound' }], session: { scope: 'per-conversation', requires_session_id: true }, security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true }, conformance: { level: 'level-2-session-aware', registry: true, agent_home: true, runtime_adapter: true } } as never,
+          ...(endpoints.length ? { endpoints } : {}),
+        });
+      }
+    });
+    const server = (channel as unknown as { server: http.Server }).server;
+    const port = (server.address() as { port: number }).port;
+    // 模拟上次运行遗留的托管网关记录（应用重启后 state 文件仍在）。
+    // 先清掉任何旧托管状态，再写入模拟的"上次运行遗留记录"（顺序不能反：
+    // stopExternalGateway 会重写 state 文件）。
+    await stopExternalGateway('hermes');
+    fs.mkdirSync(path.dirname(gatewayStateFile), { recursive: true });
+    fs.writeFileSync(gatewayStateFile, JSON.stringify({
+      schema_version: 1,
+      gateways: [{ cli: 'hermes', agent_id: 'hermes', alias: '重启Hermes', bin: '/bin/echo', port: 59999, pid: 1, started_at: new Date().toISOString() }],
+    }));
+    try {
+      const outcome = await respawnManagedGateways({ bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(outcome.restarted).toContain('hermes');
+      expect(outcome.failed).toHaveLength(0);
+      const listed = listExternalGateways().filter((g) => g.cli === 'hermes');
+      expect(listed.length).toBe(1);
+      expect(listed[0].running).toBe(true);
+      expect(listed[0].alias).toBe('重启Hermes');
+      // 幂等：再次 respawn 复用存活实例，不重复拉起。
+      const second = await respawnManagedGateways({ bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(second.restarted).toContain('hermes');
+      expect(listExternalGateways().filter((g) => g.cli === 'hermes')).toHaveLength(1);
+    } finally {
+      await stopExternalGateway('hermes');
+      await channel.close();
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(gatewayStateFile, { force: true }); } catch { /* best effort */ }
+    }
+  }, 60_000);
+
+  it('S-04: concurrent starts of the same CLI share one in-flight gateway (no double spawn)', async () => {
+    const token = 'dedup-token';
+    const registryFile = p3394StateFile('p3394-peers.json');
+    const gatewayStateFile = p3394StateFile('p3394-external-gateways.json');
+    try { fs.rmSync(registryFile, { force: true }); fs.rmSync(gatewayStateFile, { force: true }); } catch { /* isolate */ }
+    const registry = new P3394PeerRegistry({ filePath: registryFile });
+    const channel = new P3394HttpChannel('dedup-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
+    await channel.listen();
+    let registrations = 0;
+    channel.subscribe((envelope) => {
+      const senderId = envelope.sender.agent_id;
+      const endpoints = (envelope.extensions?.endpoints ?? []).filter((v): v is string => typeof v === 'string');
+      if (registry.resolve(senderId).ok === false) {
+        registrations += 1;
+        registry.register({
+          identity: { agent_id: senderId, display_name: senderId },
+          manifest: {
+            spec_version: 'p3394/1.0',
+            identity: { agent_id: senderId, display_name: senderId },
+            runtime: { kind: 'in_process' },
+            capability_profile: { agent_id: senderId, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request'], supports_streaming: false, supports_artifacts: false },
+            channels: [{ id: 'x', kind: 'local', direction: 'inbound-outbound' }],
+            session: { scope: 'per-conversation', requires_session_id: true },
+            security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true },
+            conformance: { level: 'level-2-session-aware', registry: true, agent_home: true, runtime_adapter: true },
+          } as never,
+          ...(endpoints.length ? { endpoints } : {}),
+        });
+      }
+    });
+    const server = (channel as unknown as { server: http.Server }).server;
+    const port = (server.address() as { port: number }).port;
+    const bridgeInfo = { endpoint: `http://127.0.0.1:${port}`, token };
+    try {
+      await stopExternalGateway('hermes');
+      const [a, b] = await Promise.all([
+        startExternalGateway({ cli: 'hermes', binPath: '/bin/echo', alias: '并发A', bridgeInfo }),
+        startExternalGateway({ cli: 'hermes', binPath: '/bin/echo', alias: '并发B', bridgeInfo }),
+      ]);
+      expect(a.ok).toBe(true);
+      expect(b.ok).toBe(true);
+      // 同 cli 只应有一个托管进程 + 一次 hello 注册。
+      expect(listExternalGateways().filter((g) => g.cli === 'hermes')).toHaveLength(1);
+      expect(registrations).toBe(1);
+    } finally {
+      await stopExternalGateway('hermes');
+      await channel.close();
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(gatewayStateFile, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
 });

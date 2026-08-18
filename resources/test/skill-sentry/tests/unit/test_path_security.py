@@ -9,6 +9,7 @@ from engine.scanner_core.path_security import (
     locate_skill_roots,
     safe_extract,
 )
+from engine.scanner_core.binary_rules import scan_binaries
 
 
 class TestSafeExtract:
@@ -109,3 +110,20 @@ class TestCollectEvidence:
         files, docs = collect_evidence(tmp_path)
         assert "big.txt" in files
         assert len(docs) == 0
+
+    def test_generated_directories_are_excluded(self, tmp_path):
+        cache = tmp_path / "__pycache__"
+        cache.mkdir()
+        (cache / "compiled.pyc").write_bytes(b"\x00https://example.test")
+        (cache / "copied.md").write_text("credential text")
+        files, docs = collect_evidence(tmp_path)
+        assert files == set()
+        assert docs == []
+
+    def test_binary_scan_excludes_generated_directories(self, tmp_path):
+        cache = tmp_path / "__pycache__"
+        cache.mkdir()
+        (cache / "compiled.pyc").write_bytes(b"\x00https://example.test")
+        result = scan_binaries(tmp_path)
+        assert result["binary_count"] == 0
+        assert result["findings"] == []

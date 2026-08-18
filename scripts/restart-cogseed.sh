@@ -23,6 +23,12 @@ worktree_pids() {
       *"$APP_DIR/node_modules/.bin/electron ."|*"$APP_DIR/node_modules/.bin/electron . --orkas-runtime-variant=${VARIANT}"*|"$ELECTRON_APP"|"$ELECTRON_APP ."|"$ELECTRON_APP $APP_DIR --orkas-runtime-variant=${VARIANT}"*)
         printf '%s\n' "$pid"
         ;;
+      # 托管网关子进程（gateway.cjs）也是本工作区运行时的一部分：主进程
+      # 停止后它们若存活会成为孤儿，持续向 bridge hello → 删除的智能体
+      # 被投影自动重建（同名撞名）。重启必须一并清掉。
+      *"$APP_DIR/p3394-gateway/gateway.cjs"*)
+        printf '%s\n' "$pid"
+        ;;
     esac
   done < <(ps -ax -o pid= -o command=)
 }

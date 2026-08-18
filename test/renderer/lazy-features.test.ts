@@ -223,7 +223,22 @@ describe('renderer lazy feature loader', () => {
 
     expect(source).not.toContain('setTimeout(() => { loadLocalCliEntries');
     expect(source).toContain('async function mountExternalCliSelect');
-    expect(source).toContain('const entries = await loadLocalCliEntries({ force: true })');
+    // 探测只在选择器打开时发生（loadExternalPanelData 封装了
+    // detectAll + 托管网关状态 + 已绑定 CLI 标记，force: true 在打开时重扫）。
+    expect(source).toContain('await loadExternalPanelData({ force: true });');
+    expect(source).toContain('loadExternalPanelData');
+  });
+
+  it('keeps the scanning state visible by a minimum floor time', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/local-agents.js'), 'utf8');
+
+    // 探测很快（本机 ~200ms）时「正在扫描本机 CLI…」会被 modal 动画吞掉，
+    // 用户误以为没扫描：结果切换必须让出 EXT_CLI_SCAN_MIN_VISIBLE_MS 保底。
+    expect(source).toContain('const EXT_CLI_SCAN_MIN_VISIBLE_MS = 300;');
+    expect(source).toContain('const scanStartedAt = Date.now();');
+    expect(source).toContain("if (scanElapsed < EXT_CLI_SCAN_MIN_VISIBLE_MS) {");
+    expect(source).toContain('EXT_CLI_SCAN_MIN_VISIBLE_MS - scanElapsed');
   });
 
   it('re-probes local CLI runtimes when an Agent detail selector is rendered', () => {
@@ -237,6 +252,19 @@ describe('renderer lazy feature loader', () => {
     expect(runtimeSelector).toContain('const currentEntry = entries.find');
     expect(runtimeSelector).toContain('window.getLocalCliUnavailableHint(currentEntry)');
     expect(runtimeSelector).not.toContain("hint: t('agent.cli_missing')");
+  });
+
+  it('recovers the original task text from conversation history on slow-switch resend', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8');
+
+    // 快速失败切换：turn 已结束 / composer 已清空时，从历史回捞最近一条
+    // 用户消息（含 @ 前缀），再重建为 `@新名 任务` 重新发送。
+    expect(source).toContain('async function _fetchLatestUserTaskText(cid)');
+    expect(source).toContain("gm.from === 'user'");
+    expect(source).toContain('gm.dispatch !== true');
+    expect(source).toContain('_historyRequestUrl(cid, null, 100)');
+    expect(source).toContain('task = await _fetchLatestUserTaskText(cid)');
   });
 
 });

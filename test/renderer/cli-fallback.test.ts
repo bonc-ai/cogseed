@@ -22,11 +22,14 @@ interface InvokeLog {
   payload: unknown;
 }
 
-function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => unknown)>, opts: { recipient?: unknown; newChatRecipient?: unknown } = {}) {
+function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => unknown)>, opts: { recipient?: unknown; newChatRecipient?: unknown; hasConfiguredModel?: boolean } = {}) {
   const invokeLog: InvokeLog[] = [];
   const toasts: Array<{ message: string; opts: unknown }> = [];
   const recipientByCid: Record<string, unknown> = {};
   const newChatRecipient = opts.newChatRecipient ?? { kind: 'commander' };
+  // 非 silent 的 ensureModelConfigured 调用次数：无模型时若被非 silent 调用，
+  // 意味着会弹窗 + 跳转设置页——@ 外部智能体的发送路径必须为 0。
+  const nonSilentModelGuardCalls: string[] = [];
   const sandbox: any = {
     Array,
     Math,
@@ -39,7 +42,13 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     _recipientByCid: recipientByCid,
     _newChatRecipient: newChatRecipient,
     _COMMANDER: { kind: 'commander', id: '', name: '' },
+    _LEADING_MENTION_RE: /^@([A-Za-z0-9_一-鿿-]+)\s?/u,
+    ensureModelConfigured: () => false,
     DRAFT_CID: 'main_chat',
+    ensureModelConfigured: (o?: unknown) => {
+      if (!(o && (o as any).silent === true)) nonSilentModelGuardCalls.push('non-silent');
+      return opts.hasConfiguredModel !== false;
+    },
     _activeRecipient: (target: string) => {
       if (target === 'new-chat') return newChatRecipient;
       return opts.recipient === undefined ? { kind: 'commander' } : opts.recipient;
@@ -47,6 +56,15 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     _renderRecipientChip: () => {},
     uiToast: (message: string, opts: unknown) => { toasts.push({ message, opts }); },
     _convLog: { info: () => {}, warn: () => {}, error: () => {} },
+    // conversation.js 中该正则定义在抽取段起点之前，这里按源码镜像补上。
+    _LEADING_MENTION_RE: /^@([A-Za-z0-9_一-鿿-]+)\s?/u,
+    // 慢切换检测在 vm 里不会真的发射定时器；注入一个记数桩，供
+    // 验证「外部智能体 → arm，收到输出 → clear」的时序分支。
+    setTimeout: (fn: unknown, ms: number) => {
+      (sandbox as any)._slowTimers.push({ fn, ms });
+      return { unref: () => {} };
+    },
+    clearTimeout: () => {},
     window: {
       cogseed: {
         invoke: async (channel: string, payload: unknown) => {
@@ -59,11 +77,22 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
       },
     },
   };
+  (sandbox as any)._slowTimers = [];
+  sandbox._agentsCache = null; // 慢切换候选（外部 CLI agent 目录）
   vm.runInNewContext(fallbackSource, sandbox, { filename: 'cli-fallback.js' });
-  return { sandbox, invokeLog, toasts, recipientByCid, newChatRecipient };
+  return { sandbox, invokeLog, toasts, recipientByCid, newChatRecipient, nonSilentModelGuardCalls };
 }
 
 describe('commander CLI fallback', () => {
+  it('does not replace a manually typed Agent mention with automatic fallback', async () => {
+    const { sandbox, invokeLog } = buildSandbox({});
+
+    const allowed = await sandbox._ensureModelOrCliFallback('cid-manual', 'conversation', '@Codex hello');
+
+    expect(allowed).toBe(true);
+    expect(invokeLog).toEqual([]);
+  });
+
   it('does NOT prompt for API key when a CLI account is signed in — routes to it instead', async () => {
     const { sandbox, toasts, recipientByCid } = buildSandbox({
       'model.hasConfigured': { configured: false },
@@ -88,6 +117,7 @@ describe('commander CLI fallback', () => {
       kind: 'agent',
       id: 'agent-claude-1',
       name: 'Claude',
+      origin: 'cli_fallback',
     });
     // The user saw an informational toast, not an API-key prompt.
     expect(toasts).toHaveLength(1);
@@ -116,7 +146,8 @@ describe('commander CLI fallback', () => {
 
     expect(applied).toBe(true);
     expect(created).toHaveLength(1);
-    expect((created[0] as any).runtime).toEqual({ kind: 'cli', cli: 'codex' });
+    // 无模型直调走 P3394 外接网关类型（与「外接」tab 一致，不经 CogSeed 模型）。
+    expect((created[0] as any).runtime).toEqual({ kind: 'p3394-gateway', cli: 'codex' });
     expect(recipientByCid['cid-2']).toMatchObject({ kind: 'agent', id: 'agent-codex-new' });
   });
 
@@ -141,9 +172,148 @@ describe('commander CLI fallback', () => {
     expect(created).toHaveLength(1);
     // The on-the-fly agent is created with the WorkBuddy brand, not mislabeled OpenCode.
     expect((created[0] as any).name).toBe('WorkBuddy');
-    expect((created[0] as any).runtime).toEqual({ kind: 'cli', cli: 'workbuddy' });
+    expect((created[0] as any).runtime).toEqual({ kind: 'p3394-gateway', cli: 'workbuddy' });
     expect(recipientByCid['cid-wb']).toMatchObject({ kind: 'agent', id: 'agent-wb-new' });
     expect(toasts[0].message).toContain('WorkBuddy');
+  });
+
+  it('reuses an existing P3394-gateway external agent instead of creating one', async () => {
+    const created: unknown[] = [];
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: '' },
+      'localAgents.list': {
+        entries: [{ type: 'openclaw', available: true, auth: { loggedIn: true } }],
+      },
+      'agents.list': {
+        agents: [
+          // 用户已通过「外接」tab 接入的 p3394-gateway 类型 agent → 直接复用。
+          { agent_id: 'agent-openclaw-ext', name: 'OpenClaw', runtime: { kind: 'p3394-gateway', cli: 'openclaw' } },
+        ],
+      },
+      'agents.create': (payload: unknown) => { created.push(payload); return { agent: null }; },
+    });
+
+    const applied = await sandbox._maybeApplyCliFallback('cid-ext');
+
+    expect(applied).toBe(true);
+    expect(created).toHaveLength(0);
+    expect(recipientByCid['cid-ext']).toMatchObject({ kind: 'agent', id: 'agent-openclaw-ext' });
+  });
+
+  it('auto-picks openclaw when it is the only usable CLI (no model configured)', async () => {
+    const created: unknown[] = [];
+    const { sandbox, recipientByCid } = buildSandbox({
+      'model.hasConfigured': { configured: false },
+      'prefs.getCliFallback': { cli: '' },
+      'localAgents.list': {
+        entries: [{ type: 'openclaw', available: true, auth: { loggedIn: true } }],
+      },
+      'agents.list': { agents: [] },
+      'agents.create': (payload: unknown) => {
+        created.push(payload);
+        return { agent: { agent_id: 'agent-openclaw-new', name: 'OpenClaw', runtime: { kind: 'p3394-gateway', cli: 'openclaw' } } };
+      },
+    });
+
+    const applied = await sandbox._maybeApplyCliFallback('cid-ocl');
+
+    expect(applied).toBe(true);
+    expect(created).toHaveLength(1);
+    expect((created[0] as any).runtime).toEqual({ kind: 'p3394-gateway', cli: 'openclaw' });
+    expect(recipientByCid['cid-ocl']).toMatchObject({ kind: 'agent', id: 'agent-openclaw-new' });
+  });
+
+  it('does NOT fall back (no model) when the recipient is already an external agent', async () => {
+    // 无模型 + recipient 已手动选中 p3394-gateway 外接智能体 → 直接放行，
+    // 不覆盖 recipient、不引导配置。这是「首次启动不配模型直调外接」的核心。
+    const invokeLog: { channel: string }[] = [];
+    const { sandbox, recipientByCid } = buildSandbox(
+      {
+        'model.hasConfigured': { configured: false },
+      },
+      {
+        recipient: { kind: 'agent', id: 'agent-ext-1', name: 'Codex' },
+      },
+    );
+    // 记录 invoke 以便断言没有走 prefs.getCliFallback / localAgents.list。
+    const origInvoke = sandbox.window.cogseed.invoke;
+    sandbox.window.cogseed.invoke = async (channel: string, payload: unknown) => {
+      invokeLog.push({ channel });
+      return origInvoke(channel, payload);
+    };
+
+    const ok = await sandbox._ensureModelOrCliFallback('cid-ext-1', 'conversation', '');
+
+    expect(ok).toBe(true);
+    const fallbackChannels = invokeLog.filter((c) => (
+      c.channel === 'prefs.getCliFallback'
+      || c.channel === 'localAgents.list'
+      || c.channel === 'agents.list'
+      || c.channel === 'agents.create'
+    ));
+    expect(fallbackChannels).toHaveLength(0);
+    expect(recipientByCid['cid-ext-1']).toBeUndefined();
+  });
+
+  it('lets a manual @external-agent mention through with no model configured', async () => {
+    // 手动输入 `@Codex 消息`（recipient 仍是 commander）：leading mention
+    // 命中本机 p3394-gateway 外部智能体 → 无模型也放行，不弹 API Key。
+    const { sandbox } = buildSandbox({
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+        ],
+      },
+    });
+
+    expect(await sandbox._mentionTargetsExternalAgent('@Codex 帮我写个测试')).toBe(true);
+    // 大小写/空白不敏感，匹配 agent_id 也行。
+    expect(await sandbox._mentionTargetsExternalAgent('@agent-codex-1 hi')).toBe(true);
+    // 未知 token / 无 mention → false。
+    expect(await sandbox._mentionTargetsExternalAgent('@nobody hi')).toBe(false);
+    expect(await sandbox._mentionTargetsExternalAgent('随便聊聊')).toBe(false);
+  });
+
+  it('does NOT let a manual @commander mention through with no model configured', async () => {
+    const { sandbox } = buildSandbox({
+      'agents.list': {
+        agents: [
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+        ],
+      },
+    });
+    expect(await sandbox._mentionTargetsExternalAgent('@commander 你好')).toBe(false);
+    expect(await sandbox._mentionTargetsExternalAgent('@指挥官 你好')).toBe(false);
+  });
+
+  it('never triggers the non-silent model guard (no popup/navigation) when sending to an external agent without a model', async () => {
+    // 回归：消息发出后「瞬间跳转 API 配置页」= 非 silent 的 ensureModelConfigured
+    // 被调用。@ 外部智能体的发送必须只走 silent 探测，非 silent 调用次数为 0。
+    const { sandbox, nonSilentModelGuardCalls } = buildSandbox(
+      {
+        'agents.list': {
+          agents: [
+            { agent_id: 'agent-claude-1', name: 'ClaudeCode', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+          ],
+        },
+      },
+      { hasConfiguredModel: false },
+    );
+
+    // 直接测 send 门使用的判定路径（_ensureModelOrCliFallback 的 @mention 分支）。
+    const ok = await sandbox._ensureModelOrCliFallback('cid-send', 'conversation', '@ClaudeCode 帮我写个测试');
+    expect(ok).toBe(true);
+    expect(nonSilentModelGuardCalls).toHaveLength(0);
+
+    // recipient 已是外部 agent 的路径同样零非 silent 调用。
+    const { sandbox: sb2, nonSilentModelGuardCalls: calls2 } = buildSandbox(
+      { 'agents.list': { agents: [] } },
+      { hasConfiguredModel: false, recipient: { kind: 'agent', id: 'agent-claude-1', name: 'ClaudeCode' } },
+    );
+    const ok2 = await sb2._ensureModelOrCliFallback('cid-recipient', 'conversation', '帮我写个测试');
+    expect(ok2).toBe(true);
+    expect(calls2).toHaveLength(0);
   });
 
   it('honours an explicit fallback preference over auto-pick', async () => {
@@ -406,9 +576,8 @@ describe('commander CLI fallback', () => {
 
   it('syncs the fallback into _newChatRecipient when applied on the draft cid (new-chat)', async () => {
     // new-chat 发送路径：降级 applied 到 DRAFT_CID 时，必须同时更新
-    // `_newChatRecipient`——handleNewChatSubmit 的 mention 注入和 recipient
-    // 快照都读它。只写 `_recipientByCid[DRAFT_CID]` 会导致消息不带
-    // `@Codex` 前缀、后端仍按 to=commander 路由 → 「未配置模型」。
+    // `_newChatRecipient`——handleNewChatSubmit 的结构化 recipient 快照读它。
+    // 只写 `_recipientByCid[DRAFT_CID]` 会导致消息仍按 commander 路由。
     const { sandbox, recipientByCid } = buildSandbox({
       'model.hasConfigured': { configured: false },
       'prefs.getCliFallback': { cli: '' },
@@ -429,9 +598,10 @@ describe('commander CLI fallback', () => {
 
     expect(applied).toBe(true);
     expect(recipientByCid['main_chat']).toMatchObject({ kind: 'agent', id: 'agent-codex-1' });
-    // The new-chat recipient must also flip to the CLI agent so the
-    // `applyRecipientPrefix` path injects `@Codex` into the outbound message.
-    expect(sandbox._newChatRecipient).toMatchObject({ kind: 'agent', id: 'agent-codex-1' });
+    // The new-chat recipient must also carry the trusted fallback origin.
+    expect(sandbox._newChatRecipient).toMatchObject({
+      kind: 'agent', id: 'agent-codex-1', origin: 'cli_fallback',
+    });
   });
 
   it('auto-switches to the next usable CLI when the current one fails at runtime', async () => {
@@ -540,5 +710,97 @@ describe('commander CLI fallback', () => {
     expect(recipientByCid['cid-persist']).toMatchObject({ kind: 'agent', id: 'agent-claude-1' });
     // 偏好从 codex 更新为 claude（只写一次，且只在确实切换成功时）。
     expect(saved).toEqual(['claude']);
+  });
+});
+
+describe('external-agent slow-response switch', () => {
+  function sandboxWithAgents(agents: Array<Record<string, any>>, routes: Record<string, unknown> = {}) {
+    const { sandbox } = buildSandbox(routes);
+    (sandbox as any)._agentsCache = agents;
+    return sandbox as any;
+  }
+
+  it('lists external-agent switch candidates in route order, excluding the stuck one', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-hermes', name: 'Hermes', runtime: { kind: 'p3394-gateway', cli: 'hermes' } },
+      { agent_id: 'a-openclaw', name: 'OpenClaw', runtime: { kind: 'p3394-gateway', cli: 'openclaw' } },
+      { agent_id: 'a-codex', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+      { agent_id: 'a-inproc', name: 'Commander', runtime: { kind: 'in_process' } },
+    ]);
+
+    const candidates = sandbox._externalSwitchCandidates('a-hermes');
+    // in_process 被排除；hermes（卡住者）被排除；codex 在路由序里先于 openclaw。
+    expect(candidates.map((c: any) => c.cli)).toEqual(['codex', 'openclaw']);
+    expect(candidates[0].name).toBe('Codex');
+  });
+
+  it('only recognizes cli / p3394-gateway runtimes as external agents', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-claude', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+      { agent_id: 'a-cli', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+      { agent_id: 'a-inproc', name: 'Commander', runtime: { kind: 'in_process' } },
+    ]);
+    expect(sandbox._isExternalGroupActor('a-claude')).toBe(true);
+    expect(sandbox._isExternalGroupActor('a-cli')).toBe(true);
+    expect(sandbox._isExternalGroupActor('a-inproc')).toBe(false);
+    expect(sandbox._isExternalGroupActor('commander')).toBe(false);
+    expect(sandbox._isExternalGroupActor('')).toBe(false);
+  });
+
+  it('arms a 2min slow timer for an external agent but not for commander', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-hermes', name: 'Hermes', runtime: { kind: 'p3394-gateway', cli: 'hermes' } },
+    ]);
+    sandbox._armSlowSwitch('cid-x', 'a-hermes', 'turn-1', 'Hermes');
+    expect((sandbox as any)._slowTimers).toHaveLength(1);
+    expect((sandbox as any)._slowTimers[0].ms).toBe(120000);
+    (sandbox as any)._slowTimers = [];
+    sandbox._armSlowSwitch('cid-x', 'commander', 'turn-2', 'Commander');
+    expect((sandbox as any)._slowTimers).toHaveLength(0);
+  });
+
+  it('clears the slow timer once a first output arrives', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-hermes', name: 'Hermes', runtime: { kind: 'p3394-gateway', cli: 'hermes' } },
+    ]);
+    sandbox._armSlowSwitch('cid-x', 'a-hermes', 'turn-1', 'Hermes');
+    expect((sandbox as any)._slowTimers).toHaveLength(1);
+    // 首条 delta → clear：map 中该项被清掉，后续再 arm 会重新计时。
+    sandbox._clearSlowSwitch('cid-x', 'a-hermes');
+    (sandbox as any)._slowTimers = [];
+    sandbox._armSlowSwitch('cid-x', 'a-hermes', 'turn-1', 'Hermes');
+    expect((sandbox as any)._slowTimers).toHaveLength(1);
+  });
+
+  it('does not arm the slow switch for non-external actors even with a process event', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-cli', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+    ]);
+    sandbox._armSlowSwitch('cid-x', 'commander', 'turn-1', '');
+    expect((sandbox as any)._slowTimers).toHaveLength(0);
+  });
+
+  it('recognizes gateway error replies so fast failures also offer a switch', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-claude', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+    ]);
+    expect(sandbox._isP3394GatewayErrorText('[p3394_gateway_error] agent exited 1')).toBe(true);
+    expect(sandbox._isP3394GatewayErrorText('[p3394_gateway_error] spawn ENOENT')).toBe(true);
+    expect(sandbox._isP3394GatewayErrorText('正常回复内容')).toBe(false);
+    expect(sandbox._isP3394GatewayErrorText('')).toBe(false);
+    expect(sandbox._isP3394GatewayErrorText(null)).toBe(false);
+  });
+
+  it('rebuilds the resend message with the NEW agent name, never the stuck old @ prefix', () => {
+    const sandbox = sandboxWithAgents([]);
+    const rebuild = sandbox._rebuildSwitchMessage as (task: string, targetName: string) => string;
+    // 历史兜底带旧 @ 前缀 → 切换后必须是新 agent 名。
+    expect(rebuild('@ClaudeCode 帮我整理这个项目', 'Codex')).toBe('@Codex 帮我整理这个项目');
+    expect(rebuild('@ClaudeCode 1', 'Codex')).toBe('@Codex 1');
+    // 无前缀的普通任务 → 直接加新 agent 前缀。
+    expect(rebuild('帮我整理这个项目', 'Hermes')).toBe('@Hermes 帮我整理这个项目');
+    // 空任务 → 空（提示手动输入）。
+    expect(rebuild('', 'Codex')).toBe('');
+    expect(rebuild('@ClaudeCode', 'Codex')).toBe('');
   });
 });

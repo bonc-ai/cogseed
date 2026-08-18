@@ -75,15 +75,17 @@ function readProjections(): Map<string, string> {
   return out;
 }
 
-function writeProjection(nodeId: string, agentId: string): void {
-  const map = readProjections();
-  map.set(nodeId, agentId);
+export function projectedTeamAgentId(nodeId: string): string | undefined {
+  return readProjections().get(String(nodeId || '').trim());
+}
+
+function persistProjections(map: Map<string, string>): void {
   try {
     const file = projectionFile();
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const payload: ProjectionFile = {
       schema_version: PROJECTION_SCHEMA_VERSION,
-      projections: Object.fromEntries([...map.entries()].map(([id, agentId2]) => [id, { agent_id: agentId2, at: new Date().toISOString() }])),
+      projections: Object.fromEntries([...map.entries()].map(([id, agentId]) => [id, { agent_id: agentId, at: new Date().toISOString() }])),
     };
     const tmp = file + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
@@ -91,6 +93,119 @@ function writeProjection(nodeId: string, agentId: string): void {
   } catch (error) {
     log.warn('P3394 team projection persist failed', { error: error instanceof Error ? error.message : String(error) });
   }
+}
+
+function writeProjection(nodeId: string, agentId: string): void {
+  const map = readProjections();
+  map.set(nodeId, agentId);
+  persistProjections(map);
+}
+
+/** Removes a node's team-projection mapping (agent deletion cleanup).
+ *  Idempotent: a missing mapping or file is a no-op. */
+export function removeProjection(nodeId: string): void {
+  const key = String(nodeId || '').trim();
+  if (!key) return;
+  const map = readProjections();
+  if (!map.delete(key)) return;
+  persistProjections(map);
+  log.info('P3394 team projection removed', { nodeId: key });
+}
+
+/** Removes every projection mapping that points at the given agent id.
+ *  Projection keys are node ids, which may differ from the CLI type the
+ *  agent was created with (self-reported gateway ids like
+ *  "workbuddy-final"), so `removeProjection(cli)` alone can leave stale
+ *  mappings that re-project the deleted agent on the next hello. Returns
+ *  the number of removed mappings. Idempotent. */
+export function removeProjectionsForAgent(agentId: string): number {
+  const key = String(agentId || '').trim();
+  if (!key) return 0;
+  const map = readProjections();
+  let removed = 0;
+  for (const [nodeId, mappedAgentId] of [...map.entries()]) {
+    if (mappedAgentId === key) {
+      map.delete(nodeId);
+      removed += 1;
+    }
+  }
+  if (removed > 0) {
+    persistProjections(map);
+    log.info('P3394 team projections removed for agent', { agent_id: key, removed });
+  }
+  return removed;
+}
+
+// ── 投影抑制（suppressed nodes）───────────────────────────────────────
+// 用户显式删除某个外接智能体后，其网关进程可能仍在运行（孤儿进程 /
+// 未停干净的托管网关），持续 hello 会触发投影**自动重建同名 agent**，
+// 让「删除 → 重建同名」永远撞名。删除时把该节点的 nodeId 记入抑制表；
+// 被抑制的节点 hello 只注册为 peer，不再自动投影进 AI 团队。用户显式
+// 重新外接（p3394.external.start 创建 agent）时解除抑制。
+
+interface SuppressedFile { schema_version: number; nodes: string[] }
+
+const SUPPRESSED_SCHEMA_VERSION = 1;
+
+function suppressedFile(): string {
+  return p3394StateFile('p3394-suppressed-nodes.json');
+}
+
+function readSuppressed(): Set<string> {
+  const out = new Set<string>();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(suppressedFile(), 'utf8')) as Partial<SuppressedFile>;
+    if (parsed.schema_version === SUPPRESSED_SCHEMA_VERSION && Array.isArray(parsed.nodes)) {
+      for (const nodeId of parsed.nodes) {
+        if (typeof nodeId === 'string' && nodeId.trim()) out.add(nodeId.trim());
+      }
+    }
+  } catch { /* first run */ }
+  return out;
+}
+
+function persistSuppressed(nodes: Set<string>): void {
+  try {
+    const file = suppressedFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const payload: SuppressedFile = {
+      schema_version: SUPPRESSED_SCHEMA_VERSION,
+      nodes: [...nodes].sort(),
+    };
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    log.warn('P3394 suppressed nodes persist failed', { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/** True when the node must not auto-project into the AI team (deleted by
+ *  the user; gateway may still be alive). Idempotent lookup. */
+export function isNodeProjectionSuppressed(nodeId: string): boolean {
+  return readSuppressed().has(String(nodeId || '').trim());
+}
+
+/** Suppresses auto-projection for a node id (agent deletion cleanup). */
+export function suppressNodeProjection(nodeId: string): void {
+  const key = String(nodeId || '').trim();
+  if (!key) return;
+  const nodes = readSuppressed();
+  if (nodes.has(key)) return;
+  nodes.add(key);
+  persistSuppressed(nodes);
+  log.info('P3394 node projection suppressed', { nodeId: key });
+}
+
+/** Removes the suppression for a node id (user explicitly re-connects the
+ *  CLI — auto-projection is allowed again). Idempotent. */
+export function unsuppressNodeProjection(nodeId: string): void {
+  const key = String(nodeId || '').trim();
+  if (!key) return;
+  const nodes = readSuppressed();
+  if (!nodes.delete(key)) return;
+  persistSuppressed(nodes);
+  log.info('P3394 node projection unsuppressed', { nodeId: key });
 }
 
 /**
@@ -115,12 +230,18 @@ export async function projectP3394NodeToTeam(input: {
   });
   if (!allLoopback) return { projected: false, reason: 'skip_non_local' };
 
-  // 已投影过 → 幂等返回。
+  // 已投影过 → 只有目标 Agent 仍存在时才幂等返回。Agent 被删除后，
+  // 必须允许当前在线 P3394 节点重新进入 AI 团队目录，不能被陈旧映射卡死。
+  const agents = await import('../agents');
   const already = readProjections().get(nodeId);
-  if (already) return { projected: false, agent_id: already, reason: 'already_projected' };
+  if (already) {
+    const existingProjected = await agents.getAgent(already);
+    if (existingProjected && existingProjected.runtime?.kind === 'p3394-gateway') {
+      return { projected: false, agent_id: already, reason: 'already_projected' };
+    }
+  }
 
   // 已存在同 cli 的 p3394-gateway agent（用户外接流程创建的）→ 记录映射，不重复创建。
-  const agents = await import('../agents');
   const existingAgents = await agents.listAgents();
   const cli = Object.prototype.hasOwnProperty.call(KNOWN_CLIS, nodeId) ? nodeId : null;
   const match = existingAgents.find((agent) => {
@@ -130,6 +251,13 @@ export async function projectP3394NodeToTeam(input: {
   if (match) {
     writeProjection(nodeId, match.agent_id);
     return { projected: false, agent_id: match.agent_id, reason: 'existing_agent' };
+  }
+
+  // 用户显式删除过该节点（网关进程可能仍在 hello）→ 不自动重建，等用户
+  // 显式重新外接（p3394.external.start 会 unsuppress）。否则「删除后立即
+  // 被同名投影重建、再次创建同名撞名」。
+  if (isNodeProjectionSuppressed(nodeId)) {
+    return { projected: false, reason: 'suppressed' };
   }
 
   const known = cli ? KNOWN_CLIS[cli] : null;

@@ -141,6 +141,15 @@ export interface ChatOptions {
   disableTools?: boolean;
   /** Restrict tools to a read-only allowlist (anonymous worker helper use only). */
   toolAccess?: 'read-only';
+  /**
+   * Run this call on an in-memory session that never writes a session file
+   * (no `<sessionId>.jsonl` / `.context.json` under cloud/sessions). Used by
+   * internal one-shot calls whose content must not persist — notably the
+   * skill instruction audit (attacker-authored text must not reach disk or
+   * a resumable context). Defaults to false: every other caller keeps its
+   * existing persistent-session behavior byte-for-byte.
+   */
+  ephemeralSession?: boolean;
   abortSignal?: AbortSignal | null;
   /** Legacy openclaw CLI timeout — ignored, retained for signature parity. */
   timeout?: number;

@@ -581,7 +581,16 @@ async function _withInstructionRisk(
     // `unavailable`, not `clean`: passages were recalled and nobody read them.
     const { report, reason } = uid
       ? await auditInstructionsWithModel(uid, segments, {
-        chat: (opts) => chatWithModel(opts as never) as never,
+        // Tool-less and file-less: the analysed text is attacker-authored, so
+        // the turn gets no tools AND an in-memory session (no jsonl/context
+        // files under cloud/sessions). `disableTools` is what actually strips
+        // the built-in tool set — `skillList: []` alone only clears the skill
+        // block, so both are required for the "no tools" contract.
+        chat: (opts) => chatWithModel({
+          ...opts,
+          disableTools: true,
+          ephemeralSession: true,
+        } as never) as never,
         loadPrompt: (name, args) => prompts.load(name, args),
       })
       : { report: null, reason: 'no_active_user' };

@@ -33,6 +33,7 @@ import * as executionLog from '../features/execution_log';
 import * as workbench from '../features/workbench';
 import * as cognition from '../features/cognition';
 import * as recallCandidates from '../features/recall/candidate-service';
+import { withRecallCandidateCapabilities } from '../features/recall/candidate-capabilities';
 import * as recallAssets from '../features/recall/asset-service';
 import * as recallProfileSync from '../features/recall/personal-profile-sync';
 import * as recallSkillDrafts from '../features/recall/skill-draft-service';
@@ -102,6 +103,7 @@ import * as avatars from '../features/avatars';
 import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
+import * as chatExecutionCapability from '../features/chat_execution_capability';
 import * as mateAgentBackend from '../features/cogseed_backend';
 import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
@@ -1743,18 +1745,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // 任务级引用合并（@ 产物/资产 → task_references）已下沉到 groupChat.send() 核心——
   // conversations.sendStream（标准 composer 实际走的流式路径）与 groupChat.send 都汇聚
   // 到那里，引用才能随消息发出。这里只做参数透传。
-  'groupChat.send': async ({ cid, content, attachments, use_selections, references }, ctx) => {
+  'groupChat.send': async ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     const text = (content || '').trim();
     if (!text) throw new Error('empty message');
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string') : [];
     const useSelections = Array.isArray(use_selections) ? use_selections : [];
     const refs = Array.isArray(references) ? references : [];
+    if ((recipient_agent_id !== undefined || recipient_origin !== undefined)
+      && (typeof recipient_agent_id !== 'string' || !safeId(recipient_agent_id)
+        || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
+      throw new Error('invalid recipient route');
+    }
     return groupChat.send({
       userId: ctx.userId, cid, text,
       ...(atts.length ? { attachments: atts } : {}),
       ...(useSelections.length ? { use_selections: useSelections } : {}),
       ...(refs.length ? { references: refs } : {}),
+      ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
     });
   },
 
@@ -1975,7 +1983,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
 
-  'recall.candidates.list': async (_args, ctx) => ({ ok: true, candidates: await recallCandidates.listRecallCandidates(ctx.userId) }),
+  // 候选出 IPC 一律带 capability：渲染层不再自己解释 raw status。能力是 DTO
+  // 投影，不写回存储（落盘记录仍是纯候选记录）。
+  'recall.candidates.list': async (_args, ctx) => ({
+    ok: true,
+    candidates: (await recallCandidates.listRecallCandidates(ctx.userId)).map(withRecallCandidateCapabilities),
+  }),
 
   'recall.sources.list': async ({ kinds, conversationId, limit } = {}, ctx) => {
     if (kinds !== undefined && (
@@ -2067,14 +2080,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
     if (status !== undefined && status !== 'active' && status !== 'revoked') throw new Error('invalid teaching status');
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid teaching limit');
-    return {
-      ok: true,
-      signals: await recallTeaching.listUserTeachingSignals(ctx.userId, {
-        ...(conversationId !== undefined ? { conversationId } : {}),
-        ...(status !== undefined ? { status } : {}),
-        ...(limit !== undefined ? { limit } : {}),
-      }),
-    };
+    // `signals` 保留原字段名（既有调用方按它读），另给 `total`——它是满足查询
+    // 条件的真实条数，不受 limit 影响。「待我处理」的「教学回执」指标此前取
+    // `signals.length`，超过 limit 就是个错数字，且错得不可见。
+    const page = await recallTeaching.listUserTeachingSignalPage(ctx.userId, {
+      ...(conversationId !== undefined ? { conversationId } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    });
+    return { ok: true, signals: page.items, total: page.total };
   },
 
   'recall.teaching.revoke': async ({ signalId } = {}, ctx) => {
@@ -2177,12 +2191,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.candidates.importPersonalOntology': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid personal ontology candidate id');
-    return { ok: true, candidate: await recallCandidates.importPersonalOntologyCandidate(ctx.userId, candidateId) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.importPersonalOntologyCandidate(ctx.userId, candidateId)) };
   },
 
   'recall.candidates.read': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
-    return { ok: true, candidate: await recallCandidates.readRecallCandidate(ctx.userId, candidateId) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.readRecallCandidate(ctx.userId, candidateId)) };
   },
 
   'recall.candidates.save': async ({ judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, spaceId, applicableWhen, forbiddenWhen } = {}, ctx) => {
@@ -2202,7 +2216,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (targetAssetId !== undefined && !safeId(targetAssetId)) throw new Error('invalid recall candidate target asset id');
     if (applicableWhen !== undefined && (!Array.isArray(applicableWhen) || applicableWhen.length > 32)) throw new Error('invalid recall candidate applicable range');
     if (forbiddenWhen !== undefined && (!Array.isArray(forbiddenWhen) || forbiddenWhen.length > 32)) throw new Error('invalid recall candidate forbidden range');
-    return { ok: true, candidate: await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(spaceId ? { spaceId } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}) }) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(spaceId ? { spaceId } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}) })) };
   },
 
   'recall.candidates.update': async ({ candidateId, judgment, value, summary, uncertainty, suggestedType, suggestedScope, suggestedAction, risk, sourceRefs, evidenceRefs, expiresAt, taskRunId, targetAssetId, applicableWhen, forbiddenWhen } = {}, ctx) => {
@@ -2215,36 +2229,36 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (targetAssetId !== undefined && !safeId(targetAssetId)) throw new Error('invalid recall candidate target asset id');
     if (applicableWhen !== undefined && (!Array.isArray(applicableWhen) || applicableWhen.length > 32)) throw new Error('invalid recall candidate applicable range');
     if (forbiddenWhen !== undefined && (!Array.isArray(forbiddenWhen) || forbiddenWhen.length > 32)) throw new Error('invalid recall candidate forbidden range');
-    return { ok: true, candidate: await recallCandidates.updateRecallCandidate(ctx.userId, candidateId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}) }) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.updateRecallCandidate(ctx.userId, candidateId, { judgment, ...(value !== undefined ? { value } : {}), ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, ...(suggestedAction !== undefined ? { suggestedAction } : {}), ...(risk !== undefined ? { risk } : {}), sourceRefs, ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(taskRunId !== undefined ? { taskRunId } : {}), ...(targetAssetId !== undefined ? { targetAssetId } : {}), ...(applicableWhen !== undefined ? { applicableWhen } : {}), ...(forbiddenWhen !== undefined ? { forbiddenWhen } : {}) })) };
   },
 
   'recall.candidates.defer': async ({ candidateId, note } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
-    return { ok: true, candidate: await recallCandidates.deferRecallCandidate(ctx.userId, candidateId, note) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.deferRecallCandidate(ctx.userId, candidateId, note)) };
   },
 
   'recall.candidates.resume': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
-    return { ok: true, candidate: await recallCandidates.resumeRecallCandidate(ctx.userId, candidateId) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.resumeRecallCandidate(ctx.userId, candidateId)) };
   },
 
   'recall.candidates.reject': async ({ candidateId, note } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
-    return { ok: true, candidate: await recallCandidates.rejectRecallCandidate(ctx.userId, candidateId, note) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.rejectRecallCandidate(ctx.userId, candidateId, note)) };
   },
 
   'recall.candidates.ignore': async ({ candidateId, note } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
-    return { ok: true, candidate: await recallCandidates.ignoreRecallCandidate(ctx.userId, candidateId, note) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.ignoreRecallCandidate(ctx.userId, candidateId, note)) };
   },
 
   'recall.candidates.keepCurrent': async ({ candidateId, note } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
-    return { ok: true, candidate: await recallCandidates.keepCurrentRecallCandidate(ctx.userId, candidateId, note) };
+    return { ok: true, candidate: withRecallCandidateCapabilities(await recallCandidates.keepCurrentRecallCandidate(ctx.userId, candidateId, note)) };
   },
 
   'recall.candidates.promoteBatch': async ({ candidateIds } = {}, ctx) => {
@@ -2255,7 +2269,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.candidates.promote': async ({ candidateId, riskAcknowledged } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
-    return { ok: true, ...(await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, { riskAcknowledged: riskAcknowledged === true })) };
+    const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, { riskAcknowledged: riskAcknowledged === true });
+    // 晋升后候选进 confirmed（终态）。回包必须带上新的 capability，否则渲染层
+    // 拿旧能力继续画"确认/晋升"按钮 —— 那正是 confirmed 假可操作的来源。
+    return { ok: true, ...promoted, ...(promoted.candidate ? { candidate: withRecallCandidateCapabilities(promoted.candidate) } : {}) };
   },
 
   // 资产读口统一走 canonical layer：出去的每一条必然是四类正式资产，
@@ -2423,6 +2440,28 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.tree.rebuild': async (_args, ctx) => ({ ok: true, tree: await recallTree.rebuildCognitionTree(ctx.userId) }),
   'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
 
+  // 「非资产分流」的读通道。接续快照是**非资产**对象（v0.2 §7.3）：任务状态被
+  // 带到新会话，但不进四类资产、不长认知树叶片。此前只有按会话单读的
+  // `readContinuationSnapshot`，没有面向界面的列表口，那一页只能摆空壳。
+  //
+  // `total` 与 `items.length` 分开返回：limit 截断的是显示条数，不是事实条数。
+  'recall.continuation.list': async ({ limit } = {}, ctx) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
+      throw new Error('invalid continuation limit');
+    }
+    const { listContinuationSnapshots } = await import('../features/task_continuation');
+    return { ok: true, ...(await listContinuationSnapshots(ctx.userId, { ...(limit !== undefined ? { limit } : {}) })) };
+  },
+  'recall.continuation.read': async ({ conversationId, projectId } = {}, ctx) => {
+    if (!safeId(conversationId)) throw new Error('invalid conversation id');
+    if (projectId !== undefined && projectId !== null && !safeId(projectId)) throw new Error('invalid project id');
+    const { readContinuationSnapshot } = await import('../features/task_continuation');
+    return {
+      ok: true,
+      snapshot: await readContinuationSnapshot(ctx.userId, conversationId, projectId ?? null),
+    };
+  },
+
   // 「使用与证明」视图：timeline-service 已按资产把使用、迁移证明、效果证明和
   // 治理事件聚合成一条事实链，但此前没有 IPC 暴露，渲染层拿不到。
   'recall.timeline.forAsset': async ({ assetId } = {}, ctx) => {
@@ -2505,18 +2544,43 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cognition.assets.list': async ({ type, limit } = {}, ctx) => {
     if (type !== undefined && type !== 'skill' && type !== 'knowledge' && type !== 'ontology' && type !== 'evaluation') throw new Error('invalid cognition asset type');
     const n = limit === undefined ? undefined : Number(limit);
-    return { ok: true, assets: await cognition.listCognitionAssets(ctx.userId, {
+    // 不传 limit 拿全量再自己截：适配器本来就是先建完整数组、最后一步才 slice
+    // （assets-adapter.ts 末尾），所以 total 不额外付读盘代价。此前渲染层按
+    // `limit:500` 取回后拿 `.length` 当资产总数，超过 500 就静默错。
+    const all = await cognition.listCognitionAssets(ctx.userId, {
       ...(type !== undefined ? { type } : {}),
-      ...(Number.isFinite(n) && n > 0 ? { limit: Math.min(n, 500) } : {}),
-    }) };
+    });
+    const bounded = Number.isFinite(n) && (n as number) > 0 ? Math.min(n as number, 500) : undefined;
+    return { ok: true, assets: bounded ? all.slice(0, bounded) : all, total: all.length };
   },
 
   // 「待我处理」的唯一读口。判断规则在 formal-assets/inbox.ts，与晋升 gate、
   // Runtime gate 复用同一批函数——渲染层不再自己判断什么算待办。
-  'cognition.inbox.list': async (_args, ctx) => ({
-    ok: true,
-    items: await cognition.listCognitionInbox(ctx.userId),
-  }),
+  'cognition.inbox.list': async (_args, ctx) => {
+    // 待办读口本身不截断，所以 total 恒等于 items.length；仍显式返回，
+    // 让「items + total」在认知资产各读口上是同一个契约，渲染层不必按页
+    // 记住哪个口有 total、哪个没有。
+    const items = await cognition.listCognitionInbox(ctx.userId);
+    return { ok: true, items, total: items.length };
+  },
+
+  // 「已处理历史」：跨全部候选列出真实落账的审查决定，按处理时间倒序。
+  // 决定账本此前只有按 targetRef 的单读口（存储就是一个 targetRef 一个 jsonl），
+  // 回答不了"我一共处理过什么"，那一段历史在界面上完全看不到。
+  //
+  // 只读既有权威存储，不新增模型、不改候选状态机；`items + total` 与认知资产
+  // 其余读口同一契约。
+  'cognition.reviewDecisions.list': async ({ limit } = {}, ctx) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
+      throw new Error('invalid review decision limit');
+    }
+    return {
+      ok: true,
+      ...(await cognition.listRecentReviewDecisions(ctx.userId, {
+        ...(limit !== undefined ? { limit } : {}),
+      })),
+    };
+  },
 
   // 「版本与治理」问的是"这一版改了什么"。版本快照本来就存着全量内容，这里
   // 只做比对，不新增持久化。没有 diff 的话，"回滚到此版本"对用户就是盲赌。
@@ -2812,6 +2876,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
   // ── Agents ──
   'agents.list': async ({ summary } = {}) => {
+    // P3394 local peers and AI team Agents share one directory. Reconcile
+    // online peers before every directory read so a live external node cannot
+    // remain invisible merely because its projection callback was missed.
+    try {
+      const { syncP3394TeamDirectory } = await import('../features/p3394_bridge/app-wiring');
+      await syncP3394TeamDirectory();
+    } catch {
+      // Directory reads remain available if the bridge is not active yet.
+    }
     // `force` is a renderer-cache concern: callers may need a fresh payload,
     // but ordinary navigation must not delete the validated on-disk Agent
     // catalog and reopen every agent.json. Actual definition mutations,
@@ -2853,19 +2926,36 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'agents.delete': async ({ agent_id }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
-    // P3394 外接智能体删除联动：先停掉其受管网关（否则节点会因心跳复活）。
+    // P3394 外接智能体删除联动：先停掉其受管网关（否则节点会因心跳复活），
+    // 再清掉团队投影映射（按 agent_id 清，覆盖 nodeId ≠ cli 的自报节点，
+    // 避免残留映射让下次 hello 复用已删除的记录 / 重建同名 agent），最后
+    // 抑制该节点的自动投影——孤儿网关进程的 hello 不得自动重建同名 agent。
+    // 同 CLI 允许多个外接 agent 共享同一个受管网关：只有该 CLI 不再被任何
+    // 剩余 agent 引用时才允许停进程与投影抑制，否则删一个会连累另一个。
     try {
       const target = await agents.getAgent(agent_id);
       const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
       if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
-        const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
-        await stopExternalGateway(rt.cli);
+        const remaining = await agents.countP3394GatewayAgentsByCli(rt.cli, { excludeAgentId: agent_id });
+        if (remaining === 0) {
+          const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
+          await stopExternalGateway(rt.cli);
+          const { removeProjectionsForAgent, suppressNodeProjection } = await import('../features/p3394_bridge/team-projection');
+          removeProjectionsForAgent(agent_id);
+          suppressNodeProjection(rt.cli);
+        } else {
+          // 同 CLI 还有其他外接 agent：只清自己这条投影映射，不碰共享网关，
+          // 也不抑制该节点的自动投影（剩余 agent 仍需靠 hello 复用映射）。
+          const { removeProjectionsForAgent } = await import('../features/p3394_bridge/team-projection');
+          removeProjectionsForAgent(agent_id);
+        }
       }
     } catch (error) {
       log.warn('P3394 gateway stop on agent delete failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
     }
     await recycleBin.createAppRecycleBatchForAgent(ctx.userId, agent_id);
-    return { deleted: await agents.deleteCustomAgent(agent_id) };
+    const deleted = await agents.deleteCustomAgent(agent_id);
+    return { ok: true, deleted };
   },
 
   // Per-user enable/disable toggle. enabled=true clears the override; both
@@ -2875,6 +2965,27 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'agents.setEnabled': async ({ agent_id, enabled }) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
     if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean');
+    // P3394 外接智能体停用联动：禁用即停托管网关（否则网关心跳继续、
+    // peer 保持 online，与"已停用"的 UI 状态矛盾）；重新启用按需自愈
+    // （下一次 turn 的 runP3394GatewayTurn 会自动拉起）。
+    if (!enabled) {
+      try {
+        const target = await agents.getAgent(agent_id);
+        const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
+        if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
+          // 同 CLI 允许多个外接 agent 共享网关：停用其中一个时，只有该
+          // CLI 不再被任何剩余 agent 引用才停进程（否则禁用一个会把仍在
+          // 使用的共享网关一并关掉）。
+          const remaining = await agents.countP3394GatewayAgentsByCli(rt.cli, { excludeAgentId: agent_id });
+          if (remaining === 0) {
+            const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
+            await stopExternalGateway(rt.cli);
+          }
+        }
+      } catch (error) {
+        log.warn('P3394 gateway stop on agent disable failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     agents.setAgentEnabledForActiveUser(agent_id, enabled);
     return { ok: true, enabled };
   },
@@ -3670,6 +3781,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // renderer uses this before every commander send to decide whether to
   // fall back to the signed-in CLI agent.
   'model.hasConfigured': async () => auth.hasConfiguredModel(),
+  'chat.executionCapability': async () => chatExecutionCapability.getChatExecutionCapability(),
 
   // ── Cognition extraction from sessions (onboarding) ──
   // Runs through a locally-detected CLI Agent (already authenticated on
@@ -4753,7 +4865,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     yield* mateAgentBackend.mateIpcService.streamEvents(ctx.userId, payload, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id, edit_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -4766,6 +4878,12 @@ const streamHandlers: Record<string, StreamHandler> = {
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string') : [];
     const useSelections = Array.isArray(use_selections) ? use_selections : [];
     const refs = Array.isArray(references) ? references : [];
+    if ((recipient_agent_id !== undefined || recipient_origin !== undefined)
+      && (typeof recipient_agent_id !== 'string' || !safeId(recipient_agent_id)
+        || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
+      yield { type: 'error', text: 'invalid recipient route' };
+      return;
+    }
     // Legacy `conversations.stream` is now a thin wrapper around the
     // group_chat bus. Subscribe to the bus directly BEFORE calling
     // `groupChat.send` — `send` internally wakes the recipient worker
@@ -4828,6 +4946,7 @@ const streamHandlers: Record<string, StreamHandler> = {
                 ...(atts.length ? { attachments: atts } : {}),
                 ...(useSelections.length ? { use_selections: useSelections } : {}),
                 ...(refs.length ? { references: refs } : {}),
+                ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
               });
       } catch (err) {
         sendErr = err;

@@ -38,7 +38,7 @@ vi.mock('../../../../src/main/features/recall/candidate-service', () => ({
   readRecallAssetHandoffReceipt: mocks.readHandoffReceipt,
   promoteRecallCandidate: mocks.promoteCandidate,
   autoApplyRecallCandidate: mocks.autoApplyCandidate,
-  isRecallCandidateReviewable: (candidate: { status?: string }) => (
+  isAutoCaptureEligible: (candidate: { status?: string }) => (
     candidate.status === 'pending_review' || candidate.status === 'failed'
   ),
 }));

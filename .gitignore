@@ -14,6 +14,7 @@
 /resources/runtime/vc
 /src/main/native/build/
 /userWorkSpace
+/venv
 
 # Local multi-agent shared-file collaboration POC state
 task.md
