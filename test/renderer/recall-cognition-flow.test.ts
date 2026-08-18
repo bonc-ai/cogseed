@@ -3826,6 +3826,76 @@ describe('认知树 SVG 可视化', () => {
     expect(svg).toContain('待确认：新增规则：状态不确定时使用待确认');
   });
 
+  /**
+   * 树契约 v2（G-8）起，后端也把候选投影成 `candidate:` 节点，且它们**同样带
+   * `assetType`**（用来挂枝）。渲染层的正式资产统计按 `assetType` 分枝，若不先
+   * 摘掉候选，一条候选就会被当成已确认资产：叶片数虚高、成熟度分档被稀释。
+   * 芽自有通道（recallCandidates → budsByType），不从树节点走。
+   */
+  it('树契约里的 candidate 节点不进正式叶片统计', () => {
+    const { context, host } = treeContext([
+      NODES[0],
+      { id: 'candidate:cand-1', type: 'candidate', assetType: 'rule', label: '待确认的一条', displayState: 'needs_review', risk: 'low' },
+    ]);
+
+    context.renderSkillsCognitionTree();
+
+    // 一条已验证资产、零条待验证——芽不进这两个数。
+    expect(host.innerHTML).toContain('1 项能力已在真实任务中复用并留下有效证据；0 项已确认但仍待验证。');
+    // 候选没有 maturity/status/version，绝不能作为可点资产出现。
+    expect(host.innerHTML).not.toContain('data-cognition-open-asset="cand-1"');
+    expect(host.innerHTML).not.toContain('待确认的一条');
+  });
+
+  /**
+   * 两条数据源同时在场时的完整语义（正式资产 2 条 + 候选 3 条）：
+   *
+   *   - 正式叶片只数资产节点 = 2
+   *   - 芽只数 recallCandidates = 3
+   *   - 两者**不相加、不互相冒充**：树上不会出现 5 片叶，也不会有一条候选
+   *     既是叶又是芽
+   *
+   * 这一条同时钉住后端 v2 契约与刘婷婷新版渲染器的接合面——两边都在真实数据
+   * 上跑，任何一侧回退都会让它红。
+   */
+  it('2 正式资产 + 3 候选：叶=2、芽=3，候选不冒充资产也不重复展示', () => {
+    const candidateNodes = [
+      { id: 'candidate:cand-1', type: 'candidate', assetType: 'rule', label: '芽节点甲', displayState: 'needs_review', risk: 'low' },
+      { id: 'candidate:cand-2', type: 'candidate', assetType: 'rule', label: '芽节点乙', displayState: 'needs_review', risk: 'low' },
+      { id: 'candidate:cand-3', type: 'candidate', assetType: 'personal', label: '芽节点丙', displayState: 'weak_evidence', risk: 'medium' },
+    ];
+    const { context, host } = treeContext([NODES[0], NODES[1], ...candidateNodes], {
+      recallCandidates: [
+        { id: 'cand-1', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'rule', summary: '候选摘要甲' },
+        { id: 'cand-2', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'rule', summary: '候选摘要乙' },
+        { id: 'cand-3', status: 'pending_review', capabilities: CAPS('pending_review'), suggestedType: 'personal', summary: '候选摘要丙' },
+      ],
+    });
+
+    context.renderSkillsCognitionTree();
+
+    // 正式叶片 = 2：分类卡里只有两个可点资产按钮。
+    const leafButtons = host.innerHTML.match(/data-cognition-open-asset="/g) || [];
+    expect(leafButtons.length).toBe(2);
+    // rule 这一枝是 2 条资产，不是 2 + 2 条候选。
+    expect(host.innerHTML).toContain('规则与偏好</strong><b>2</b>');
+    // 成熟度分档只看资产：a-1 已验证、a-2 待验证。候选进来会把 light 顶到 3。
+    expect(host.innerHTML).toContain('1 项能力已在真实任务中复用并留下有效证据；1 项已确认但仍待验证。');
+    // 芽 = 3，全部来自 recallCandidates。
+    expect(host.innerHTML).toContain('待确认的芽</strong><b>3</b>');
+    const svg = host.innerHTML.slice(host.innerHTML.indexOf('<svg'), host.innerHTML.indexOf('</svg>'));
+    expect(svg).toContain('cognition-tree-svg-bud');
+    expect(svg).toContain('待确认：候选摘要甲');
+    // 候选节点的 label 一次都不该露面——露面就说明树节点被当成了渲染源，
+    // 同一条候选会既画成叶又画成芽。
+    expect(host.innerHTML).not.toContain('芽节点甲');
+    expect(host.innerHTML).not.toContain('芽节点乙');
+    expect(host.innerHTML).not.toContain('芽节点丙');
+    // 候选绝不走资产通道。
+    expect(host.innerHTML).not.toContain('data-cognition-open-asset="cand-1"');
+    expect(host.innerHTML).not.toContain('data-cognition-open-asset="candidate:cand-1"');
+  });
+
   /** 版本是每个资产各自的，不存在"这棵树的版本"。 */
   it('树干不画聚合版本号，版本只落在分类卡里', () => {
     const { context, host } = treeContext(NODES);
@@ -4266,9 +4336,25 @@ describe('G-9 认知资产一级信息架构', () => {
     expect(visited).toEqual(['inbox', 'assets', 'assets', 'assets', 'assets', 'captures']);
   });
 
-  /** 未知路由兜底到默认页，不能停在一个空白面板上。 */
-  it('未知路由回落到待我处理', () => {
+  /**
+   * 页面架构契约（以 90331a2c 刘婷婷版为准）：
+   *
+   *   - 初始落地页 = `'assets'`（「我的认知树」tab，tab 内 assetSubview 再分
+   *     种子/树 与 四类资产二级页）
+   *   - `switchSkillsCognitionPage` 收到未知路由时兜底到 `'inbox'`
+   *
+   * ⚠️ 两者**不是同一页**。本分支合并前的旧架构里落地页与兜底页都是 `'tree'`，
+   * 天然一致；新版把它们分开了，意味着"刷新"与"点到坏链接"会落在不同页。
+   *
+   * **产品决策已拍板（2026-08-18）：保留这个 split，不做统一。** 两者语义不同——
+   * 落地页回答"我平时来看什么"（我的认知树），兜底页回答"你点到了坏链接，
+   * 去处理待办"（待我处理）。旧架构两者一致是巧合，不是设计。
+   * 因此本用例钉的是**已定案的契约**，不是待决现状：改动实现会让它红，这是有意的。
+   */
+  it('页面架构：落地页 assets、未知路由兜底 inbox', () => {
     const context = loadSkillsRenderer();
+    const initial = vm.runInContext('_skillsCognitionState.page', context);
+    expect(initial).toBe('assets');
     context.document = { getElementById: () => null, querySelectorAll: () => [] };
     vm.runInContext('Object.assign(_skillsCognitionState, { loadedAt: 1, loading: false })', context);
     context.switchSkillsCognitionPage('definitely-not-a-page');

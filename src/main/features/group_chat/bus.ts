@@ -4122,7 +4122,9 @@ async function runActorTurnBody(
         // null = 这个 Agent 生成时还没有继承机制，和「继承了空」不是一回事，
         // 但对提示词而言都是没有可注入的内容。
         if (selection) {
-          const rendered = buildInheritedCognitionPrompt(selection.selected);
+          // N-3：出生时冻结的术语表随继承一起注入。它此前采集了却没有任何
+          // 路径送进提示词，「出生就该知道 KSTAR 在这里指什么」实际没发生。
+          const rendered = buildInheritedCognitionPrompt(selection.selected, selection.glossary);
           if (rendered.promptBlock) {
             systemPrompt = `${systemPrompt}\n\n${rendered.promptBlock}`;
           }

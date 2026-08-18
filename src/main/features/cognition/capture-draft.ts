@@ -28,10 +28,25 @@ export interface CognitionCaptureRequest {
   messageId: string;
 }
 
+/** 四类正式资产类型。与 `AbilityAssetType` 同一套词汇——气泡沉淀产出的是
+ *  recall 候选，必须和其它五个候选生产者走同一套分类，不另立一套。 */
+export type CognitionCaptureAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
+
+const COGNITION_CAPTURE_ASSET_TYPES: readonly CognitionCaptureAssetType[] = [
+  'personal', 'rule', 'template', 'skill_method',
+];
+
+export function isCognitionCaptureAssetType(value: unknown): value is CognitionCaptureAssetType {
+  return typeof value === 'string'
+    && (COGNITION_CAPTURE_ASSET_TYPES as readonly string[]).includes(value);
+}
+
 export interface CognitionCaptureDraft {
   title: string;
   summary: string;
   evidenceSummary: string;
+  /** 模型给出的四类预判。给不出合法值时缺省，由用户在面板上选。 */
+  suggestedType?: CognitionCaptureAssetType;
   sourceLabel: string;
   conversationId: string;
   messageId: string;
@@ -194,15 +209,24 @@ function parseModelOutput(raw: unknown, context: SourceContext): CognitionCaptur
       reason: assertSafeGeneratedText(parsed.reason, 'reason', COGNITION_CAPTURE_MAX_REASON_CHARS),
     };
   }
-  if (parsed.status !== 'ready' || !exactKeys(parsed, ['status', 'title', 'summary', 'evidence_summary'])
+  // `suggested_type` 是**可选**键：模型漏了它不该让整条草稿作废——面板上的
+  // 分类选择器是必填的，缺省时用户自己选，链路照样走得通。多余的其它键仍然拒收。
+  const readyKeys: readonly string[] = ['status', 'title', 'summary', 'evidence_summary'];
+  const shapeOk = exactKeys(parsed, readyKeys)
+    || exactKeys(parsed, [...readyKeys, 'suggested_type']);
+  if (parsed.status !== 'ready' || !shapeOk
       || typeof parsed.title !== 'string' || typeof parsed.summary !== 'string'
       || typeof parsed.evidence_summary !== 'string') {
     throw new CognitionCaptureError('invalid_model_output', 'generated cognition draft has an invalid shape');
   }
+  // 四类分类走和主抽取管线同一套词汇（AbilityAssetType）。模型给不出合法值时
+  // **不猜**——退回 skill_method 只会把分类错误藏进资产库，而面板上的分类选择器
+  // 是必填的，用户会看到并可以改。这里只负责"预填一个可信的默认"。
   const draft: CognitionCaptureDraft = {
     title: assertSafeGeneratedText(parsed.title, 'title', MAX_TITLE_LENGTH),
     summary: assertSafeGeneratedText(parsed.summary, 'summary', MAX_SUMMARY_LENGTH),
     evidenceSummary: assertSafeGeneratedText(parsed.evidence_summary, 'evidence summary', MAX_SUMMARY_LENGTH),
+    ...(isCognitionCaptureAssetType(parsed.suggested_type) ? { suggestedType: parsed.suggested_type } : {}),
     sourceLabel: context.conversationTitle,
     conversationId: context.conversationId,
     messageId: context.messageId,

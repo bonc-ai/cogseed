@@ -24,28 +24,25 @@ function loadShim(invoke: (...args: unknown[]) => Promise<unknown>) {
 }
 
 describe('cognition ipc shim routes', () => {
-  it('分页摘要、旧列表与从对话捕获都通过受控 IPC', async () => {
-    const invoke = vi.fn(async () => ({ ok: true, assets: [] }));
-    const apiFetch = loadShim(invoke);
-    await apiFetch('/api/cognition/assets/page?page=2&pageSize=50');
-    await apiFetch('/api/cognition/assets');
-    await apiFetch('/api/cognition/assets/capture', {
-      method: 'POST',
-      body: JSON.stringify({ title: 'x', summary: 'y', evidence: { kind: 'conversation', summary: 'z', sourceLabel: 's' } }),
-    });
-    expect(invoke).toHaveBeenNthCalledWith(1, 'cognition.assets.page', { page: '2', pageSize: '50' });
-    expect(invoke).toHaveBeenNthCalledWith(2, 'cognition.assets.list', {});
-    expect(invoke).toHaveBeenNthCalledWith(3, 'cognition.assets.capture', expect.objectContaining({ title: 'x' }));
-  });
-
-  it('动态资产 id 被解码后传入详情、确认和复用路由', async () => {
+  it('遗留 CognitionAsset store 的 REST 入口已全部删除', async () => {
+    // 那个 store 只剩读用途（memory.ts 用 listActiveCognitionSourceIds 门控历史
+    // MEMORY 记录的可见性），**不再有任何写入入口**，也从不参与正式认知资产 /
+    // 认知树 / runtime 注入。正式资产的 canonical 读口在 ipc/index.ts。
     const invoke = vi.fn(async () => ({ ok: true }));
     const apiFetch = loadShim(invoke);
-    await apiFetch('/api/cognition/assets/cog%20one');
-    await apiFetch('/api/cognition/assets/cog_1/confirm', { method: 'POST', body: '{}' });
-    await apiFetch('/api/cognition/assets/cog_1/reuse', { method: 'POST', body: JSON.stringify({ sourceLabel: 'task' }) });
-    expect(invoke).toHaveBeenNthCalledWith(1, 'cognition.assets.get', { assetId: 'cog one' });
-    expect(invoke).toHaveBeenNthCalledWith(2, 'cognition.assets.confirm', { assetId: 'cog_1' });
-    expect(invoke).toHaveBeenNthCalledWith(3, 'cognition.assets.reuse', { sourceLabel: 'task', assetId: 'cog_1' });
+    for (const [url, options] of [
+      ['/api/cognition/assets', undefined],
+      ['/api/cognition/assets/page?page=2&pageSize=50', undefined],
+      ['/api/cognition/assets/capture', { method: 'POST', body: '{}' }],
+      ['/api/cognition/assets/cog_1', undefined],
+      ['/api/cognition/assets/cog_1/confirm', { method: 'POST', body: '{}' }],
+      ['/api/cognition/assets/cog_1/defer', { method: 'POST', body: '{}' }],
+      ['/api/cognition/assets/cog_1/reuse', { method: 'POST', body: '{}' }],
+      ['/api/cognition/assets/cog_1/evidence', { method: 'POST', body: '{}' }],
+    ] as [string, Record<string, unknown> | undefined][]) {
+      const response = await apiFetch(url, options);
+      await expect(response.json()).resolves.toMatchObject({ ok: false });
+    }
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

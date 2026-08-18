@@ -249,6 +249,13 @@
     const evidence = String(input?.evidence || '').trim();
     const sourceLabel = String(input?.sourceLabel || '').trim();
     const conversationId = String(input?.conversationId || '').trim();
+    const messageId = String(input?.messageId || '').trim();
+    // 四类分类是候选的最低必填项（saveRecallCandidate 会 requireAssetType）。
+    // 模型预判只作默认值；给不出合法值时留空，强制用户自己选——不替他猜。
+    const assetTypes = ['personal', 'rule', 'template', 'skill_method'];
+    const suggestedType = assetTypes.indexOf(String(input?.suggestedType || '')) >= 0
+      ? String(input.suggestedType)
+      : '';
     const disabled = state !== 'ready' ? ' disabled' : '';
     const status = loading
       ? `<p class="cognition-capture-status" data-cognition-capture-status aria-live="polite">${escapeHtml(text('cognition.capture.generating', '正在从会话中提炼可复用认知…'))}</p>`
@@ -277,8 +284,18 @@
       + escapeHtml(evidence) + '</textarea></label>'
       + '<label>' + escapeHtml(text('cognition.capture.source', '来源')) + '<input data-cognition-capture-source maxlength="160" required value="'
       + escapeHtml(sourceLabel) + `"${disabled} /></label>`
+      + '<label>' + escapeHtml(text('cognition.capture.type', '归入哪一类'))
+      + `<select data-cognition-capture-type required${disabled}>`
+      + `<option value=""${suggestedType ? '' : ' selected'}>`
+      + escapeHtml(text('cognition.capture.type_placeholder', '请选择…')) + '</option>'
+      + assetTypes.map((value) => `<option value="${value}"${suggestedType === value ? ' selected' : ''}>`
+        + escapeHtml(text(`cognition.asset_category_${value}`, {
+          personal: '关于我', rule: '规则与偏好', template: '模板与范例', skill_method: '技能与方法',
+        }[value])) + '</option>').join('')
+      + '</select></label>'
       + '<input type="hidden" data-cognition-capture-conversation value="' + escapeHtml(conversationId) + '" />'
-      + '<p class="cognition-capture-note">' + escapeHtml(text('cognition.capture.note', '保存后会进入待确认列表；确认会将它写入长期记忆。')) + '</p>'
+      + '<input type="hidden" data-cognition-capture-message value="' + escapeHtml(messageId) + '" />'
+      + '<p class="cognition-capture-note">' + escapeHtml(text('cognition.capture.note', '保存后会进入「待我处理」；确认后成为正式认知资产，可在后续任务中被复用。')) + '</p>'
       + '</div>'
       + `<div class="cognition-capture-actions">${actions}</div>`
       + '</form>'

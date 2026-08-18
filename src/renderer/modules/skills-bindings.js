@@ -1283,8 +1283,15 @@ function _initSkillsCognitionBindings() {
       // 边界写成空数组。编辑必须基于权威记录，读不到就不开编辑器。
       assetEditOpen.dataset.busy = '1'; assetEditOpen.disabled = true;
       try {
-        const result = await window.cogseed.invoke('recall.assets.read', { assetId });
+        // 本体分组随编辑器**按需**取，不进四页快照——`skills-cognition-layout`
+        // 有不变量钉住「快照不得加载 Brain / Context Pack / Ontology 数据」。
+        // 分组读失败不阻断编辑：绑定控件不渲染，其余字段照常可改。
+        const [result, groups] = await Promise.all([
+          window.cogseed.invoke('recall.assets.read', { assetId }),
+          window.cogseed.invoke('personalOntology.groups.list').catch(() => null),
+        ]);
         if (!result?.ok || !result.asset) throw new Error(result?.error || 'recall asset read failed');
+        _skillsCognitionState.ontologyGroups = Array.isArray(groups?.groups) ? groups.groups : [];
         _skillsCognitionState.editingAssetRecord = result.asset;
         _skillsCognitionState.editingAssetId = assetId;
         renderSkillsCognitionGovernance();
@@ -1322,12 +1329,23 @@ function _initSkillsCognitionBindings() {
         || _cognitionText('cognition.asset_edit_default_reason', '用户修改了资产内容');
       assetEditSave.dataset.busy = '1'; assetEditSave.disabled = true;
       try {
+        // 本体绑定：控件不存在时**不传** `ontologyRefs`（undefined = 不改动），
+        // 而不是传空数组——空数组会把用户已有的绑定清掉。控件存在时才以选中项
+        // 为准（此时空数组是用户真的取消了全部绑定，属于有效意图）。
+        const ontologySelect = editor.querySelector('[data-recall-asset-edit-ontology]');
+        const ontologyRefs = ontologySelect
+          ? Array.from(ontologySelect.selectedOptions || [])
+            .map((option) => String(option.value || '').trim())
+            .filter(Boolean)
+            .map((groupId) => ({ groupId }))
+          : undefined;
         const result = await window.cogseed.invoke('recall.assets.update', {
           assetId,
           statement,
           scope: readValue('[data-recall-asset-edit-scope]'),
           applicableWhen: readLines('[data-recall-asset-edit-applicable]'),
           forbiddenWhen: readLines('[data-recall-asset-edit-forbidden]'),
+          ...(ontologyRefs !== undefined ? { ontologyRefs } : {}),
           reason,
         });
         if (!result?.ok) throw new Error(result?.error || 'recall asset update failed');

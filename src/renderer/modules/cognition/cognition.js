@@ -408,7 +408,9 @@
         summary: values.summary || '',
         evidence: values.evidence || '',
         sourceLabel: values.sourceLabel || '',
+        suggestedType: values.suggestedType || '',
         conversationId,
+        messageId,
         error: values.error || '',
       });
     };
@@ -458,33 +460,48 @@
         const captureSummary = String(form.querySelector('[data-cognition-capture-summary]')?.value || '').trim();
         const evidenceSummary = String(form.querySelector('[data-cognition-capture-evidence]')?.value || '').trim();
         const sourceLabel = String(form.querySelector('[data-cognition-capture-source]')?.value || '').trim();
-        if (!title || !captureSummary || !evidenceSummary || !sourceLabel) return;
+        const suggestedType = String(form.querySelector('[data-cognition-capture-type]')?.value || '').trim();
+        if (!title || !captureSummary || !evidenceSummary || !sourceLabel || !suggestedType) return;
         const submit = form.querySelector('[data-cognition-capture-submit]');
         if (submit?.disabled) return;
         if (submit) submit.disabled = true;
         try {
-          const response = await window.apiFetch('/api/cognition/assets/capture', {
-            method: 'POST',
-            body: JSON.stringify({
-              title,
-              summary: captureSummary,
-              evidence: {
-                kind: 'conversation',
-                summary: evidenceSummary,
-                sourceLabel,
-                conversationId,
-              },
-            }),
+          // 气泡沉淀走**主链**：产出一条 recall 候选，与其它五个候选生产者
+          // （capture-service / kstar / session_import / teaching / IPC 直入）
+          // 同一个入口、同一套晋升闸门。
+          //
+          // 此前这里 POST 到 `/api/cognition/assets/capture`，落点是
+          // `cloud/cognition/assets.json` —— 一个没有任何下游消费者的遗留
+          // store：不进候选池、不晋升、认知树看不到、runtime 不注入、无回执，
+          // 而且它唯一的确认界面在当前包里没有宿主 DOM。用户看到「已保存」，
+          // 数据确实落了盘，但永远不会再出现。那条路由已一并删除。
+          //
+          // evidenceRefs 必须是**系统真握有 id 的东西**：锚点消息 + 来源会话。
+          // 不拿用户手填的 sourceLabel 字符串冒充证据引用——那正是晋升时
+          // `unavailableCandidateSources` 要挡下来的形态。
+          const evidenceRefs = [
+            ...(messageId ? [{ kind: 'conversation', subtype: 'message', id: messageId, title: title }] : []),
+            ...(conversationId ? [{ kind: 'conversation', subtype: 'session', id: conversationId, title: sourceLabel }] : []),
+          ];
+          if (!evidenceRefs.length) {
+            throw new Error(translate('cognition.capture.no_evidence', '这条沉淀缺少可追溯的来源，无法保存。'));
+          }
+          const result = await window.cogseed.invoke('recall.candidates.save', {
+            judgment: captureSummary,
+            summary: title,
+            value: evidenceSummary,
+            suggestedType,
+            suggestedScope: '',
+            suggestedAction: 'create',
+            sourceRefs: evidenceRefs,
+            evidenceRefs,
           });
-          const result = await parseResponse(response, translate('cognition.error.action_failed', '认知操作失败'));
-          const asset = assertFullAsset(result?.asset, translate('cognition.error.invalid_response', '认知操作返回无效'));
-          updateAsset(asset, { moveToFirstPage: true, isNew: true });
+          if (!result?.ok) throw new Error(result?.error || translate('cognition.error.action_failed', '认知操作失败'));
           clearError();
-          if (!document.querySelector('[data-personal-onto-workspace-pane="growth"]')?.hidden) render();
           void reloadAfterMutation();
           closed = true;
           closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
-          if (typeof uiToast === 'function') uiToast(translate('cognition.capture.saved', '已保存到待确认认知'), { variant: 'success' });
+          if (typeof uiToast === 'function') uiToast(translate('cognition.capture.saved', '已存为待确认候选，可在「待我处理」里确认'), { variant: 'success' });
         } catch (error) {
           if (submit) submit.disabled = false;
           let errorNode = form.querySelector('[data-cognition-capture-error]');
@@ -523,6 +540,8 @@
           summary: draft.summary,
           evidence: draft.evidenceSummary,
           sourceLabel: draft.sourceLabel,
+          // 模型给不出合法四类时留空，面板强制用户自己选（见 pages.js）。
+          suggestedType: draft.suggestedType || '',
         });
         bindControls();
         rendered.querySelector('[data-cognition-capture-title]')?.focus();

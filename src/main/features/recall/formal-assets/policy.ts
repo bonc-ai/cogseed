@@ -4,7 +4,7 @@
  * 收口理由：此前三个概念散在各处、还互相串。`candidate-service` 决定写哪个
  * lifecycleStatus，`proof-service` 决定何时推进 maturity，`asset-semantics`
  * 决定能不能默认带入，`p3394/asset-events` 又自立了第三套状态词汇
- * （asset_user_confirmed / asset_transfer_verified / ...），
+ * （asset_user_confirmed / asset_transfer_verified / ...；该账本已随 N-1 删除），
  * `context-projection` 干脆一个都不查。
  *
  * 这里把三条轴钉死，并且**只在这里**解释它们：

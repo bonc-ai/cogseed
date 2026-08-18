@@ -134,11 +134,8 @@ export const mateAgentLocalRoot    = (uid: string) => path.join(userLocalRoot(ui
 export const mateAgentWorkerStateDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'worker-state');
 export const mateAgentRecoveryStateFile = (uid: string) => path.join(mateAgentWorkerStateDir(uid), 'last-recovery.json');
 export const mateAgentCoordinationsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'coordinations');
-export const mateAgentAssetEventsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'asset-events');
-export const mateAgentAuditReceiptsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'audit-receipts');
 export const mateAgentReviewDecisionsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'review-decisions');
 export const mateAgentCostTelemetryDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'cost-telemetry');
-export const mateAgentCapabilityPacksDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'capability-packs');
 export const mateAgentSkillLifecycleDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'skill-lifecycle');
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
 export const userSkillChatDir       = (uid: string, sid: string) => path.join(userChatsDir(uid), 'skill', sid);

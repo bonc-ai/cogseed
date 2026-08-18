@@ -66,13 +66,14 @@ function loadShim(invoke: any) {
 
 describe('personal ontology renderer integration', () => {
   it('preserves the formal Recall asset route while removing the legacy candidate UI', async () => {
-    expect(routeSource).toContain("['GET',    '/api/cognition/assets',         'cognition.assets.list']");
-    expect(routeSource).toContain("['POST',   '/api/cognition/assets',         'cognition.assets.create']");
-    expect(routeSource).toContain("['POST',   '/api/cognition/assets/capture', 'cognition.assets.capture']");
+    // 遗留 CognitionAsset store 的 REST 入口已全部删除；正式资产读口在 ipc/index.ts。
+    expect(routeSource).not.toContain("'cognition.assets.list'");
+    expect(routeSource).not.toContain("'cognition.assets.create'");
+    expect(routeSource).not.toContain("'cognition.assets.capture'");
     const invoke = vi.fn(async () => ({ ok: true, assets: [] }));
     const response = await loadShim(invoke)('/api/cognition/assets');
-    await expect(response.json()).resolves.toMatchObject({ ok: true });
-    expect(invoke).toHaveBeenCalledWith('cognition.assets.list', {});
+    await expect(response.json()).resolves.toMatchObject({ ok: false });
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it('contains the embedded panel inside My assets, rejection modal, and lazy view wiring', () => {
