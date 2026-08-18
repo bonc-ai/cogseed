@@ -368,6 +368,12 @@ Windows 原生运行时请使用 `run.cmd`。在 WSL 和所需 Windows bridge co
 
 打开 **Connections → Models & Quota**，重新测试授权，然后选择配置的 provider 返回的模型。不要把 API Key 写入仓库文件或 README 示例。
 
+## 上游署名
+
+CogSeed 基于 [Orkas](https://github.com/Orkas-AI/Orkas) 二次开发，延续并改造了其本地优先的多 Agent 协作与工具链实现。桌面端 `core-agent` 组件源自 [OpenClaw](https://github.com/openclaw/openclaw)。CogSeed 同时参考了 [Hermes-Agent](https://github.com/NousResearch/hermes-agent) 的规划与运行时适配模式。
+
+上游版权和许可证信息见 [`NOTICE`](./NOTICE)，第三方组件声明见 [`THIRD-PARTY-NOTICES`](./THIRD-PARTY-NOTICES)。
+
 ## 相关文档
 
 | 主题 | 链接 |
