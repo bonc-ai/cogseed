@@ -471,7 +471,6 @@ function registerIpc(): void {
     }
   };
   ipcMain.on('cogseed:bootI18n', handleBootI18n);
-  ipcMain.on('cogseed:bootI18n', handleBootI18n);
 
   // Renderer reports throttled keyboard/pointer/wheel activity. Background
   // boot work uses this only as an admission hint; no interaction payload is

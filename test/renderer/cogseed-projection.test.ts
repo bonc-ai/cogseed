@@ -14,7 +14,7 @@ function loadProjection(invokeImpl: (...args: any[]) => Promise<any>) {
   vm.createContext(sandbox);
   const source = readFileSync(resolve(__dirname, '../../src/renderer/modules/ipc-shim.js'), 'utf8');
   vm.runInContext(source, sandbox, { filename: 'ipc-shim.js' });
-  return sandbox.window.cogseedAgentProjection;
+  return sandbox.window.cogseedProjection;
 }
 
 describe('Mate renderer projection cache', () => {

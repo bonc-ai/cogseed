@@ -263,7 +263,7 @@ function _cogseedProjectionSession(sessionId, options) {
   }, options && options.onUpdate);
 }
 
-window.cogseedAgentProjection = window.cogseedAgentProjection || {
+window.cogseedProjection = window.cogseedProjection || {
   setInvoker(fn) { _cogseedProjectionInvokeOverride = typeof fn === 'function' ? fn : null; },
   sessions(options) { return _cogseedProjectionSessionList(options || {}); },
   session(sessionId, options) { return _cogseedProjectionSession(sessionId, options || {}); },

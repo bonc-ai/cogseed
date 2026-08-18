@@ -103,7 +103,7 @@ import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
 import * as chatExecutionCapability from '../features/chat_execution_capability';
-import * as cogseedAgentBackend from '../features/cogseed_backend';
+import * as cogseedBackend from '../features/cogseed_backend';
 import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
@@ -900,25 +900,25 @@ async function ensureKstarWakeProjectionConfirmed(
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
-  'cogseed.task.start': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.start(ctx.userId, payload),
-  'cogseed.task.read': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.read(ctx.userId, payload),
-  'cogseed.task.cancel': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.cancel(ctx.userId, payload),
-  'cogseed.task.abort': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.abort(ctx.userId, payload),
-  'cogseed.task.retry': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.retry(ctx.userId, payload),
-  'cogseed.task.resume': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.resume(ctx.userId, payload),
-  'cogseed.task.action': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.action(ctx.userId, payload),
-  'cogseed.task.events': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.events(ctx.userId, payload),
-  'cogseed.connector.list': async (_payload, ctx) => cogseedAgentBackend.cogseedIpcService.connectors(ctx.userId),
-  'cogseed.kb.index': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.kbIndex(ctx.userId, payload),
-  'cogseed.kb.search': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.kbSearch(ctx.userId, payload),
-  'cogseed.kb.read': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.kbRead(ctx.userId, payload),
-  'cogseed.kb.sources': async (_payload, ctx) => cogseedAgentBackend.cogseedIpcService.kbSources(ctx.userId),
-  'cogseed.connector.tools': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.connectorTools(ctx.userId, payload),
-  'cogseed.session.list': async (_payload, ctx) => ({ sessions: await cogseedAgentBackend.cogseedIpcService.sessions(ctx.userId) }),
-  'cogseed.session.read': async (payload, ctx) => cogseedAgentBackend.cogseedIpcService.session(ctx.userId, payload),
-  'cogseed.runtime.status': async (_payload, ctx) => cogseedAgentBackend.cogseedIpcService.runtimeStatus(ctx.userId),
-  'cogseed.runtime.restart': async (_payload, ctx) => cogseedAgentBackend.cogseedIpcService.restartRuntime(ctx.userId),
-  'cogseed.runtime.recover': async (_payload, ctx) => cogseedAgentBackend.cogseedIpcService.recover(ctx.userId),
+  'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
+  'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
+  'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
+  'cogseed.task.abort': async (payload, ctx) => cogseedBackend.cogseedIpcService.abort(ctx.userId, payload),
+  'cogseed.task.retry': async (payload, ctx) => cogseedBackend.cogseedIpcService.retry(ctx.userId, payload),
+  'cogseed.task.resume': async (payload, ctx) => cogseedBackend.cogseedIpcService.resume(ctx.userId, payload),
+  'cogseed.task.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.action(ctx.userId, payload),
+  'cogseed.task.events': async (payload, ctx) => cogseedBackend.cogseedIpcService.events(ctx.userId, payload),
+  'cogseed.connector.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.connectors(ctx.userId),
+  'cogseed.kb.index': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbIndex(ctx.userId, payload),
+  'cogseed.kb.search': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbSearch(ctx.userId, payload),
+  'cogseed.kb.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbRead(ctx.userId, payload),
+  'cogseed.kb.sources': async (_payload, ctx) => cogseedBackend.cogseedIpcService.kbSources(ctx.userId),
+  'cogseed.connector.tools': async (payload, ctx) => cogseedBackend.cogseedIpcService.connectorTools(ctx.userId, payload),
+  'cogseed.session.list': async (_payload, ctx) => ({ sessions: await cogseedBackend.cogseedIpcService.sessions(ctx.userId) }),
+  'cogseed.session.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.session(ctx.userId, payload),
+  'cogseed.runtime.status': async (_payload, ctx) => cogseedBackend.cogseedIpcService.runtimeStatus(ctx.userId),
+  'cogseed.runtime.restart': async (_payload, ctx) => cogseedBackend.cogseedIpcService.restartRuntime(ctx.userId),
+  'cogseed.runtime.recover': async (_payload, ctx) => cogseedBackend.cogseedIpcService.recover(ctx.userId),
 
   // Execution log handlers
   'executionLog.readAll': async () => {
@@ -4809,7 +4809,7 @@ const streamHandlers: Record<string, StreamHandler> = {
   },
 
   'cogseed.task.events': async function* (payload, ctx, signal) {
-    yield* cogseedAgentBackend.cogseedIpcService.streamEvents(ctx.userId, payload, signal);
+    yield* cogseedBackend.cogseedIpcService.streamEvents(ctx.userId, payload, signal);
   },
 
   'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, edit_message_id }, ctx, signal) {
@@ -5347,7 +5347,6 @@ export function register(): void {
     }
   };
   ipcMain.handle('cogseed.invoke', handleInvoke);
-  ipcMain.handle('cogseed.invoke', handleInvoke);
 
   const handleStreamStart = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) return;
@@ -5392,7 +5391,6 @@ export function register(): void {
     }
   };
   ipcMain.on('cogseed.streamStart', handleStreamStart);
-  ipcMain.on('cogseed.streamStart', handleStreamStart);
 
   const handleStreamCancel = (event, rawRequestId: unknown) => {
     if (!isTrustedIpcSender(event.sender)) return;
@@ -5416,6 +5414,5 @@ export function register(): void {
     // `processing` flag stays pinned until the generator's finally runs.
     try { state.controller.abort(); } catch (_) { /* already aborted */ }
   };
-  ipcMain.on('cogseed.streamCancel', handleStreamCancel);
   ipcMain.on('cogseed.streamCancel', handleStreamCancel);
 }

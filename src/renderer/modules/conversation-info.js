@@ -394,9 +394,9 @@ const ConversationInfo = (() => {
   }
 
   async function _primeCogSeedProjection(cid, opts = {}) {
-    if (!cid || !window.cogseedAgentProjection || typeof window.cogseedAgentProjection.session !== 'function') return null;
+    if (!cid || !window.cogseedProjection || typeof window.cogseedProjection.session !== 'function') return null;
     const seq = ++_cogseedProjectionSeq;
-    const entry = window.cogseedAgentProjection.session(cid, {
+    const entry = window.cogseedProjection.session(cid, {
       onUpdate: (value) => {
         if (seq !== _cogseedProjectionSeq || cid !== _cid) return;
         const next = value || null;
