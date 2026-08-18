@@ -1,3 +1,4 @@
+import { getRecallCandidateCapabilities } from './candidate-capabilities';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -181,15 +182,32 @@ export async function readUserTeachingSignal(userId: string, signalId: string): 
   return asTeachingSignal(record);
 }
 
-export async function listUserTeachingSignals(
+export interface ListUserTeachingSignalsQuery {
+  conversationId?: string;
+  status?: UserTeachingStatus;
+  limit?: number;
+}
+
+export interface UserTeachingSignalPage {
+  items: UserTeachingSignalRecord[];
+  /** 满足查询条件的**真实**条数，不受 limit 影响。
+   *
+   *  「待我处理」的「教学回执」指标此前取的是 `list(...).length`，而 list 的
+   *  limit 默认 20、上限 100——超过 20 条时那个数字就是错的，且错得不可见。
+   *  计数必须来自截断之前。 */
+  total: number;
+}
+
+/** 读 + 过滤 + 排序，**不截断**。两个出口共用，避免 total 与 items 走两套过滤
+ *  条件——那样 total 会和列表对不上，比没有 total 更难查。 */
+async function readSortedTeachingSignals(
   userId: string,
-  query: { conversationId?: string; status?: UserTeachingStatus; limit?: number } = {},
+  query: ListUserTeachingSignalsQuery,
 ): Promise<UserTeachingSignalRecord[]> {
   const conversationId = query.conversationId === undefined
     ? undefined
     : requireSafeId(query.conversationId, 'conversation id');
   const status = query.status === undefined ? undefined : requireStatus(query.status);
-  const limit = Math.max(1, Math.min(100, Math.floor(Number(query.limit) || 20)));
   let names: string[];
   try {
     names = await fs.readdir(teachingDirectory(userId));
@@ -205,8 +223,25 @@ export async function listUserTeachingSignals(
     .map(asTeachingSignal)
     .filter((signal) => !conversationId || signal.conversationId === conversationId)
     .filter((signal) => !status || signal.status === status)
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-    .slice(0, limit);
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export async function listUserTeachingSignals(
+  userId: string,
+  query: ListUserTeachingSignalsQuery = {},
+): Promise<UserTeachingSignalRecord[]> {
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(query.limit) || 20)));
+  return (await readSortedTeachingSignals(userId, query)).slice(0, limit);
+}
+
+/** 同一批数据的分页读口：`items` 受 limit 截断，`total` 不受。 */
+export async function listUserTeachingSignalPage(
+  userId: string,
+  query: ListUserTeachingSignalsQuery = {},
+): Promise<UserTeachingSignalPage> {
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(query.limit) || 20)));
+  const all = await readSortedTeachingSignals(userId, query);
+  return { items: all.slice(0, limit), total: all.length };
 }
 
 export async function revokeUserTeachingSignal(userId: string, signalId: string): Promise<UserTeachingSignalRecord> {
@@ -224,7 +259,9 @@ export async function revokeUserTeachingSignal(userId: string, signalId: string)
   await Promise.all(updated.candidateIds.map(async (candidateId) => {
     try {
       const candidate = await readRecallCandidate(userId, candidateId);
-      if (candidate.status === 'pending_review' || candidate.status === 'deferred' || candidate.status === 'failed') {
+      // 教学信号被撤回时，凡是用户还能拒绝的候选都一并拒绝——判据取 capability，
+      // 否则 weak_observation 候选会被留在池子里，来源却已经没了。
+      if (getRecallCandidateCapabilities(candidate).canReject) {
         await rejectRecallCandidate(userId, candidateId, 'teaching_signal_revoked');
       }
     } catch {

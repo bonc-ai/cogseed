@@ -100,8 +100,24 @@ describe('Recall personal profile projection', () => {
       routeAsset,
     });
 
-    expect(first).toMatchObject({ eligible: 1, written: 1, unmatched: 0, failed: [] });
-    expect(second).toMatchObject({ eligible: 1, written: 0, skipped: 1, failed: [] });
+    expect(first).toMatchObject({
+      eligible: 1,
+      written: 1,
+      unmatched: 0,
+      failed: [],
+      profileWritten: 1,
+      profileSkipped: 0,
+      profileFailed: [],
+    });
+    expect(second).toMatchObject({
+      eligible: 1,
+      written: 0,
+      skipped: 1,
+      failed: [],
+      profileWritten: 0,
+      profileSkipped: 1,
+      profileFailed: [],
+    });
     expect(routeAsset).toHaveBeenCalledTimes(1);
     expect(routeAsset).toHaveBeenCalledWith(UID, assets[0].statement, expect.any(Array));
 
@@ -112,17 +128,96 @@ describe('Recall personal profile projection', () => {
     expect(file).not.toContain(assets[1].statement);
     expect(file).not.toContain(assets[2].statement);
     expect(file).not.toContain(assets[3].statement);
+    const memory = await import('../../../../src/main/features/memory');
+    expect(memory.listEntries(UID, 'user').entries).toEqual([assets[0].statement]);
     expect(assets).toEqual(originalAssets);
   });
 
-  it('does not route PersonalOntology assets that are paused, unreviewed, or already linked to ontology', async () => {
+  it('writes USER.md even when no role template is installed', async () => {
+    const sync = await loadSync();
+    const personal = asset('aa-personal-no-template', 'personal', '我偏好先看结论，再看实现细节。');
+    const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
+
+    const first = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      listAssets: async () => [personal],
+      listCatalog: async () => [],
+      routeAsset,
+    });
+    const second = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      listAssets: async () => [personal],
+      listCatalog: async () => [],
+      routeAsset,
+    });
+
+    expect(first).toMatchObject({
+      eligible: 1,
+      written: 0,
+      skipped: 1,
+      failed: [],
+      profileWritten: 1,
+      profileSkipped: 0,
+    });
+    expect(second).toMatchObject({
+      profileWritten: 0,
+      profileSkipped: 1,
+      failed: [],
+    });
+    expect(routeAsset).not.toHaveBeenCalled();
+    const memory = await import('../../../../src/main/features/memory');
+    expect(memory.listEntries(UID, 'user').entries).toEqual([personal.statement]);
+  });
+
+  it('keeps a failed USER.md projection retryable', async () => {
+    const sync = await loadSync();
+    const personal = asset('aa-personal-profile-retry', 'personal', '我的沟通偏好是直接、简洁。');
+    const writeProfileEntry = vi.fn()
+      .mockReturnValueOnce({ ok: false, error: 'profile store unavailable' })
+      .mockReturnValueOnce({
+        ok: true,
+        record: { recordId: 'mem_1234567890abcdef', text: personal.statement, contentSha256: 'a'.repeat(64) },
+      });
+
+    const first = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      listAssets: async () => [personal],
+      listCatalog: async () => [],
+      writeProfileEntry,
+    });
+    const second = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      listAssets: async () => [personal],
+      listCatalog: async () => [],
+      writeProfileEntry,
+    });
+
+    expect(first.profileFailed).toEqual([{ assetId: personal.id, error: 'profile store unavailable' }]);
+    expect(first.failed).toContainEqual({ assetId: personal.id, error: 'profile store unavailable' });
+    expect(second).toMatchObject({ profileWritten: 1, profileFailed: [], failed: [] });
+    expect(writeProfileEntry).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps USER.md projection independent when the role-template catalog is unavailable', async () => {
+    const sync = await loadSync();
+    const personal = asset('aa-personal-catalog-retry', 'personal', '我偏好先看结论。');
+
+    const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      listAssets: async () => [personal],
+      listCatalog: async () => { throw new Error('template catalog offline'); },
+    });
+
+    expect(result).toMatchObject({
+      eligible: 1,
+      profileWritten: 1,
+      profileFailed: [],
+      failed: [],
+    });
+    const memory = await import('../../../../src/main/features/memory');
+    expect(memory.listEntries(UID, 'user').entries).toEqual([personal.statement]);
+  });
+
+  it('does not route PersonalOntology assets that are paused or unreviewed', async () => {
     await installStudentTemplate();
     const sync = await loadSync();
     const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
     const assets = [
-      asset('aa-personal-linked', 'personal', '已经有明确本体落点。', {
-        ontologyRefs: [{ ontologyId: 'existing-ontology-node' }],
-      }),
       asset('aa-personal-unreviewed', 'personal', '这条没有合法的审核决策。', {
         reviewDecisionId: 'legacy-untracked',
       }),
@@ -136,8 +231,106 @@ describe('Recall personal profile projection', () => {
       routeAsset,
     });
 
-    expect(result).toEqual({ eligible: 0, written: 0, skipped: 0, unmatched: 0, failed: [] });
+    expect(result).toEqual({
+      eligible: 0,
+      written: 0,
+      skipped: 0,
+      unmatched: 0,
+      failed: [],
+      profileWritten: 0,
+      profileSkipped: 0,
+      profileFailed: [],
+    });
     expect(routeAsset).not.toHaveBeenCalled();
+  });
+
+  it('shows an ontology-linked Personal asset in USER.md without re-routing it to a role template', async () => {
+    await installStudentTemplate();
+    const sync = await loadSync();
+    const linked = asset('aa-personal-linked', 'personal', '我在软件研发领域工作。', {
+      ontologyRefs: [{ ontologyId: 'existing-ontology-node' }],
+    });
+    const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
+
+    const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      listAssets: async () => [linked],
+      routeAsset,
+    });
+
+    expect(result).toMatchObject({
+      eligible: 1,
+      written: 0,
+      skipped: 1,
+      profileWritten: 1,
+      failed: [],
+    });
+    expect(routeAsset).not.toHaveBeenCalled();
+    const memory = await import('../../../../src/main/features/memory');
+    expect(memory.listEntries(UID, 'user').entries).toEqual([linked.statement]);
+  });
+
+  it('projects automatic conversation Personal assets but excludes system-precipitated identity claims', async () => {
+    const sync = await loadSync();
+    const automatic = asset('aa-personal-automatic', 'personal', '我习惯使用 TypeScript。', {
+      lifecycleStatus: 'automatically_extracted_unverified',
+      maturity: 'seed',
+    });
+    const system = asset('aa-personal-system', 'personal', '系统推断出的身份不应自动进入画像。', {
+      lifecycleStatus: 'system_precipitated_unverified',
+      maturity: 'seed',
+    });
+
+    const result = await sync.syncPersonalProfileFromRecallAssets(UID, {
+      listAssets: async () => [automatic, system],
+      listCatalog: async () => [],
+    });
+
+    expect(result).toMatchObject({ eligible: 1, profileWritten: 1, failed: [] });
+    const memory = await import('../../../../src/main/features/memory');
+    expect(memory.listEntries(UID, 'user').entries).toEqual([automatic.statement]);
+  });
+
+  it('writes a user-selected template field during the same projection pass', async () => {
+    const { templates, row } = await installStudentTemplate();
+    const sync = await loadSync();
+    const personal = asset('aa-personal-explicit-target', 'personal', '我是一名程序员，有十年经验。');
+    const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
+
+    const result = await sync.syncPersonalProfileFromRecallAssets(
+      UID,
+      { listAssets: async () => [personal], routeAsset },
+      {
+        assetId: personal.id,
+        target: {
+          groupId: row.group_id,
+          section: '学习背景',
+          fieldName: '专业与学习方向',
+          templateId: 'student',
+        },
+      },
+    );
+
+    expect(result).toMatchObject({ eligible: 1, written: 1, failed: [] });
+    expect(routeAsset).not.toHaveBeenCalled();
+    const fields = await templates.listFieldsByRef(UID, templates.buildContentRef(row.group_id, '学习背景'));
+    expect(fields.fields?.find((field) => field.name === '专业与学习方向')?.values).toEqual([
+      { value: personal.statement, source: '智能' },
+    ]);
+  });
+
+  it('rejects an explicit target that is not part of the installed template catalog', async () => {
+    await installStudentTemplate();
+    const sync = await loadSync();
+    const personal = asset('aa-personal-invalid-target', 'personal', '不应写入不存在的字段。');
+
+    const result = await sync.syncPersonalProfileFromRecallAssets(
+      UID,
+      { listAssets: async () => [personal] },
+      { assetId: personal.id, target: { groupId: 'missing-group', section: '学习背景', fieldName: '职业' } },
+    );
+
+    expect(result).toMatchObject({ eligible: 1, written: 0, unmatched: 0 });
+    expect(result.failed).toEqual([{ assetId: personal.id, error: 'profile target field not found' }]);
   });
 
   it('does not overwrite a manually maintained profile value', async () => {
@@ -376,6 +569,32 @@ describe('Recall personal profile projection', () => {
 // 投影过去只有渲染层在打开「关于我」时触发（personal-ontology.js），用户不进
 // 那个页面就永远不同步。主进程在 personal 资产晋升成功后要自己发起一次。
 describe('personal profile projection is driven from the main process', () => {
+  it('writes a confirmed Personal asset into USER.md during promotion', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(UID);
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const candidate = await candidates.saveRecallCandidate(UID, {
+      judgment: '我偏好先看结论，再看实现细节。',
+      value: '后续回答应优先给出明确结论。',
+      suggestedType: 'personal',
+      suggestedScope: 'personal',
+      suggestedAction: 'create',
+      sourceRefs: [{ kind: 'execution', id: 'exec-profile-memory' }],
+      evidenceRefs: [{ kind: 'execution', id: 'exec-profile-memory' }],
+    });
+
+    const promoted = await candidates.promoteRecallCandidate(UID, candidate.id, { actor: 'user' });
+
+    expect(promoted.profileProjection).toMatchObject({
+      eligible: 1,
+      profileWritten: 1,
+      profileFailed: [],
+    });
+    const memory = await import('../../../../src/main/features/memory');
+    expect(memory.listEntries(UID, 'user').entries).toEqual([promoted.asset.statement]);
+    expect(memory.findPersonalProfileEntry(UID, promoted.asset.id)?.text).toBe(promoted.asset.statement);
+  });
+
   it('schedules a projection after a personal asset is promoted', async () => {
     const users = await import('../../../../src/main/features/users');
     users.activateUser(UID);
@@ -429,6 +648,52 @@ describe('personal profile projection is driven from the main process', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(scheduled).toEqual([]);
+    spy.mockRestore();
+  });
+
+  it('passes an explicit personal-template destination into the projection scheduler', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(UID);
+    const sync = await import('../../../../src/main/features/recall/personal-profile-sync');
+    const scheduled: Array<{ userId: string; options: unknown }> = [];
+    const spy = vi.spyOn(sync, 'schedulePersonalProfileSync').mockImplementation(async (userId: string, options: any) => {
+      scheduled.push({ userId, options });
+      return { eligible: 1, written: 1, skipped: 0, unmatched: 0, failed: [] };
+    });
+
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const candidate = await candidates.saveRecallCandidate(UID, {
+      judgment: '我长期从事程序开发。',
+      value: '后续可按技术工作者的背景理解我的需求。',
+      suggestedType: 'personal',
+      suggestedScope: 'personal',
+      suggestedAction: 'create',
+      sourceRefs: [{ kind: 'execution', id: 'exec-profile-target' }],
+      evidenceRefs: [{ kind: 'execution', id: 'exec-profile-target' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate(UID, candidate.id, {
+      actor: 'user',
+      profileTarget: {
+        groupId: 'group-student',
+        templateId: 'student',
+        section: '学习背景',
+        fieldName: '专业与学习方向',
+      },
+    });
+
+    expect(asset.type).toBe('personal');
+    expect(scheduled).toEqual([{
+      userId: UID,
+      options: {
+        assetId: asset.id,
+        target: {
+          groupId: 'group-student',
+          templateId: 'student',
+          section: '学习背景',
+          fieldName: '专业与学习方向',
+        },
+      },
+    }]);
     spy.mockRestore();
   });
 });
