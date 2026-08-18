@@ -4548,7 +4548,7 @@ function _skillSecurityPanelText(s) {
     L.push(`  ${t('skills.secpanel_instruction_note')}`);
   }
 
-  // NSEAP declaration check: what the skill's security manifest claims versus
+  // Declaration check: what the skill's security manifest claims versus
   // what its tree contains. Last in the panel, and deliberately quieter than the
   // blocks above: those report what the skill might DO, this reports whether its
   // paperwork is complete. A mismatch is an authoring defect, so it must not be
@@ -4559,33 +4559,33 @@ function _skillSecurityPanelText(s) {
   // line to every skill in the library that reads as a defect while describing
   // one that does not exist. `pass` is silent because a panel that says "nothing
   // wrong" for each check that passed buries the one line that matters.
-  const nseap = sec.nseapDeclaration;
-  if (nseap && nseap.status !== 'absent' && nseap.status !== 'pass') {
+  const declaration = sec.declarationCheck;
+  if (declaration && declaration.status !== 'absent' && declaration.status !== 'pass') {
     L.push('');
-    L.push(t('skills.secpanel_nseap'));
-    if (nseap.status === 'unavailable') {
+    L.push(t('skills.secpanel_declaration'));
+    if (declaration.status === 'unavailable') {
       // The engine could not run. Distinct from "checked and found nothing":
       // reporting infrastructure failure as a clean result is the same error as
       // rendering "not checked" as safe.
-      L.push(`  ${t('skills.secpanel_nseap_unavailable')}`);
-    } else if (nseap.status === 'mismatch') {
-      L.push(`  ${t('skills.secpanel_nseap_mismatch')}`);
-    } else if (nseap.status === 'needs_input') {
-      L.push(`  ${t('skills.secpanel_nseap_needs_input')}`);
+      L.push(`  ${t('skills.secpanel_declaration_unavailable')}`);
+    } else if (declaration.status === 'mismatch') {
+      L.push(`  ${t('skills.secpanel_declaration_mismatch')}`);
+    } else if (declaration.status === 'needs_input') {
+      L.push(`  ${t('skills.secpanel_declaration_needs_input')}`);
     } else {
-      L.push(`  ${t('skills.secpanel_nseap_warnings')}`);
+      L.push(`  ${t('skills.secpanel_declaration_warnings')}`);
     }
     // Rule id plus message, capped. The id is what makes a gap actionable — the
     // author can look it up — while the message alone often is not.
-    for (const f of (nseap.findings || []).slice(0, 3)) {
+    for (const f of (declaration.findings || []).slice(0, 3)) {
       const msg = String(f.message || '').replace(/\s+/g, ' ').slice(0, 160);
       L.push(`  · ${f.ruleId}${msg ? ` — ${msg}` : ''}`);
     }
-    if ((nseap.findings || []).length > 3) {
-      L.push(`  ${t('skills.secpanel_nseap_more')
-        .replace('{n}', String(nseap.findings.length - 3))}`);
+    if ((declaration.findings || []).length > 3) {
+      L.push(`  ${t('skills.secpanel_declaration_more')
+        .replace('{n}', String(declaration.findings.length - 3))}`);
     }
-    L.push(`  ${t('skills.secpanel_nseap_note')}`);
+    L.push(`  ${t('skills.secpanel_declaration_note')}`);
   }
 
   if (!sec.status || sec.status === 'unchecked') {
@@ -6614,7 +6614,7 @@ let _skillEditSkillId = null;
 // import produces real content or finalizes as a package.
 let _importDraftId = null;
 // W5: 刚展示过统一导入检查弹窗的技能 id——其编辑会话的 Done 预检跳过一次，
-// 避免"导入弹窗确认后，Done 又弹一次 NSEAP 预检"的双弹窗。
+// 避免"导入弹窗确认后，Done 又弹一次声明预检"的双弹窗。
 let _importCheckPopupShownFor = null;
 
 function _updateEditButtonLabel() {
@@ -6647,14 +6647,14 @@ function _skillAutoSeedHasModelText(autoSeed) {
   return !!(autoSeed && typeof autoSeed === 'object' && typeof autoSeed.modelText === 'string' && autoSeed.modelText.trim());
 }
 
-function _nseapDeclarationLines(nseap) {
-  if (!nseap) return [];
+function _declarationCheckLines(decl) {
+  if (!decl) return [];
   const out = [];
-  if (nseap.status === 'unavailable') out.push(`• ${t('skills.secpanel_nseap_unavailable')}`);
-  else if (nseap.status === 'mismatch') out.push(`• ${t('skills.secpanel_nseap_mismatch')}`);
-  else if (nseap.status === 'needs_input') out.push(`• ${t('skills.secpanel_nseap_needs_input')}`);
-  else if (nseap.status === 'pass_with_warnings') out.push(`• ${t('skills.secpanel_nseap_warnings')}`);
-  for (const f of (nseap.findings || []).slice(0, 6)) {
+  if (decl.status === 'unavailable') out.push(`• ${t('skills.secpanel_declaration_unavailable')}`);
+  else if (decl.status === 'mismatch') out.push(`• ${t('skills.secpanel_declaration_mismatch')}`);
+  else if (decl.status === 'needs_input') out.push(`• ${t('skills.secpanel_declaration_needs_input')}`);
+  else if (decl.status === 'pass_with_warnings') out.push(`• ${t('skills.secpanel_declaration_warnings')}`);
+  for (const f of (decl.findings || []).slice(0, 6)) {
     out.push(`• ${f.ruleId}${f.message ? ` — ${f.message}` : ''}`);
   }
   return out;
@@ -6688,21 +6688,21 @@ async function toggleSkillEditMode(opts = {}) {
     if (committed === false) return;
 
     try {
-      const precheck = await window.cogseed.invoke('skills.checkNseapDeclaration', {
+      const precheck = await window.cogseed.invoke('skills.checkDeclaration', {
         id: _skillEditSkillId,
       });
       const lines = _importCheckPopupShownFor === _skillEditSkillId
         ? [] // 刚在统一导入弹窗里展示过——不再重复弹预检
-        : _nseapDeclarationLines(precheck?.nseapDeclaration);
+        : _declarationCheckLines(precheck?.declarationCheck);
       _importCheckPopupShownFor = null;
       if (lines.length) {
         const choice = typeof uiChoice === 'function'
           ? await uiChoice({
-            title: t('skills.edit_nseap_precheck_title'),
-            message: `${t('skills.edit_nseap_precheck_body')}\n\n${lines.join('\n')}`,
+            title: t('skills.edit_declaration_precheck_title'),
+            message: `${t('skills.edit_declaration_precheck_body')}\n\n${lines.join('\n')}`,
             choices: [
-              { id: 'continue', label: t('skills.edit_nseap_precheck_continue'), style: 'primary' },
-              { id: 'back', label: t('skills.edit_nseap_precheck_back'), style: '' },
+              { id: 'continue', label: t('skills.edit_declaration_precheck_continue'), style: 'primary' },
+              { id: 'back', label: t('skills.edit_declaration_precheck_back'), style: '' },
             ],
           })
           : 'continue';
@@ -7538,11 +7538,11 @@ function _importCheckStateFrom(scan, unavailable) {
 async function _showImportCheckModal({ skillName, source, skillId, scan, unavailable }) {
   if (typeof window.showImportCheckResult !== 'function') return 'close';
   const findings = await _importCheckQualityFindings(skillId);
-  // NSEAP 声明预检并入统一弹窗（low 级发现行），编辑会话的 Done 预检随后跳过一次。
+  // 声明预检并入统一弹窗（low 级发现行），编辑会话的 Done 预检随后跳过一次。
   try {
-    const precheck = await window.cogseed.invoke('skills.checkNseapDeclaration', { id: skillId });
-    for (const line of _nseapDeclarationLines(precheck?.nseapDeclaration)) {
-      findings.push({ level: 'LOW', text: line.replace(/^•\s*/, ''), loc: 'NSEAP' });
+    const precheck = await window.cogseed.invoke('skills.checkDeclaration', { id: skillId });
+    for (const line of _declarationCheckLines(precheck?.declarationCheck)) {
+      findings.push({ level: 'LOW', text: line.replace(/^•\s*/, ''), loc: 'DECL' });
     }
   } catch (_) { /* advisory only */ }
   _importCheckPopupShownFor = skillId;
@@ -7630,9 +7630,9 @@ async function _afterImportedSkill(data) {
     }
   }
 
-  const nseapWarnings = ids.flatMap((id) => {
+  const declarationWarnings = ids.flatMap((id) => {
     const cached = (_skillsCache || []).find((s) => String(s?.id || '') === id);
-    return _nseapDeclarationLines(cached?.security?.nseapDeclaration);
+    return _declarationCheckLines(cached?.security?.declarationCheck);
   });
 
   const seen = new Set();
@@ -7643,11 +7643,11 @@ async function _afterImportedSkill(data) {
       return true;
     })
     .slice(0, 8);
-  const seenNseap = new Set();
-  const uniqueNseapWarnings = nseapWarnings
+  const seenDeclaration = new Set();
+  const uniqueDeclarationWarnings = declarationWarnings
     .filter((w) => {
-      if (seenNseap.has(w)) return false;
-      seenNseap.add(w);
+      if (seenDeclaration.has(w)) return false;
+      seenDeclaration.add(w);
       return true;
     })
     .slice(0, 8);
@@ -7666,10 +7666,10 @@ async function _afterImportedSkill(data) {
   if (uniqueWarnings.length) {
     lines.push(`\n${t('skills.import_review_issues')}\n${uniqueWarnings.join('\n')}`);
   }
-  if (uniqueNseapWarnings.length) {
-    lines.push(`\n${t('skills.import_review_nseap_issues')}\n${uniqueNseapWarnings.join('\n')}`);
+  if (uniqueDeclarationWarnings.length) {
+    lines.push(`\n${t('skills.import_review_declaration_issues')}\n${uniqueDeclarationWarnings.join('\n')}`);
   }
-  if (!uniqueWarnings.length && !uniqueNseapWarnings.length) {
+  if (!uniqueWarnings.length && !uniqueDeclarationWarnings.length) {
     lines.push(`\n${t('skills.import_review_no_issues')}`);
   }
 

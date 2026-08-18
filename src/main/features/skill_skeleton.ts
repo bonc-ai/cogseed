@@ -1,26 +1,25 @@
 /**
- * NSEAP skill skeleton conversion — used on the import-dir path so an
- * imported external skill gets the missing NSEAP artifacts auto-generated
- * as templates (standard appendix A: "defaults are compliant; the author
- * only writes the 5 ★ business files").
+ * Skill skeleton conversion — used on the import-dir path so an
+ * imported external skill gets the missing contract artifacts auto-generated
+ * as templates. Defaults are compliant; the author only fills the business
+ * files.
  *
  * Pure-ish: reads the target skill dir, writes only the missing files, never
  * overwrites existing content. Templates are inlined here on purpose —
  * platform runtime code must not read `resources/builtin` (AGENTS.md), so
- * the import-time templates live in this module, mirroring the marketplace
- * nseap-skill-creator templates.
+ * the import-time templates live in this module.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-export interface NseapSkeletonResult {
+export interface SkillSkeletonResult {
   created: string[];
   alreadyPresent: string[];
 }
 
-/** Rel paths that must exist for Level B shape (references + evals). */
-const NSEAP_ARTIFACTS: Array<{ rel: string; generate: (name: string) => string }> = [
+/** Rel paths that must exist for the full package shape (references + evals). */
+const SKILL_ARTIFACTS: Array<{ rel: string; generate: (name: string) => string }> = [
   {
     rel: 'references/input-contract.md',
     generate: (name) => `# Input contract — ${name}\n\n` +
@@ -56,10 +55,9 @@ const NSEAP_ARTIFACTS: Array<{ rel: string; generate: (name: string) => string }
     rel: 'references/skill-spec.yaml',
     generate: () => `# Identity / level / route. Confirm defaults; only change with reason.\n` +
       `skill_spec:\n` +
-      `  standard_id: nseap-skill-creator\n` +
       `  skill_class: execution            # execution | meta_skill (if it makes skills)\n` +
       `  is_skill_of_skill: false\n` +
-      `  level: L5                         # Skill-L: L0..L5 (L5 = governed skill system)\n` +
+      `  level: L5                         # capability grade: L0..L5 (L5 = governed skill system)\n` +
       `  risk_route: Full                  # Lite | Full\n` +
       `  promotion_ceiling: staged         # HARD CAP — never higher than staged\n` +
       `  production_release_allowed: false # HARD LOCK — never true\n` +
@@ -107,7 +105,7 @@ const NSEAP_ARTIFACTS: Array<{ rel: string; generate: (name: string) => string }
   },
   {
     rel: 'references/kstar-evolution.md',
-    generate: (name) => `# KSTAR evolution hook — ${name}\n\n` +
+    generate: (name) => `# Evolution hooks — ${name}\n\n` +
       `## Loop (declared; real run needs the metaskill engine)\n` +
       `K/S/T → Â/R̂ → A/R → ΔA/ΔR → learning_hypothesis → candidate → bounded patch →\n` +
       `three gates (Validation → Governance → Canary) → K update.\n\n` +
@@ -142,14 +140,14 @@ function _hasFile(dir: string, rel: string): boolean {
 }
 
 /**
- * Ensure the missing NSEAP skeleton artifacts exist under `skillDir`.
+ * Ensure the missing skill skeleton artifacts exist under `skillDir`.
  * Only creates missing files — existing content is never touched.
  * Returns the created rel paths.
  */
-export function ensureNseapSkillSkeleton(skillDir: string, skillName: string): NseapSkeletonResult {
+export function ensureSkillSkeleton(skillDir: string, skillName: string): SkillSkeletonResult {
   const created: string[] = [];
   const alreadyPresent: string[] = [];
-  for (const artifact of NSEAP_ARTIFACTS) {
+  for (const artifact of SKILL_ARTIFACTS) {
     if (_hasFile(skillDir, artifact.rel)) {
       alreadyPresent.push(artifact.rel);
       continue;
@@ -163,11 +161,11 @@ export function ensureNseapSkillSkeleton(skillDir: string, skillName: string): N
 }
 
 /**
- * Which NSEAP artifacts are missing from an existing skill dir (no writes).
+ * Which skill artifacts are missing from an existing skill dir (no writes).
  * Used by the quality report / import summary to show the gap.
  */
-export function listMissingNseapArtifacts(skillDir: string): string[] {
-  return NSEAP_ARTIFACTS
+export function listMissingSkillArtifacts(skillDir: string): string[] {
+  return SKILL_ARTIFACTS
     .map((a) => a.rel)
     .filter((rel) => !_hasFile(skillDir, rel));
 }

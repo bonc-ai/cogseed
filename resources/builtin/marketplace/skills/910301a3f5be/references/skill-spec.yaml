@@ -81,7 +81,7 @@
     "delta_r_is_not_release": true
   },
   "name": "qualify-ai-product",
-  "nseap_category": "EndUseSkill",
+  "skill_category": "EndUseSkill",
   "schema_version": "1.0",
   "status": "candidate",
   "suite_role": "stage",

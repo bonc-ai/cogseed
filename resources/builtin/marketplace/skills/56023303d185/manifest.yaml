@@ -12,7 +12,7 @@
     "references/input-contract.md": "schemas/input.schema.json",
     "references/output-contract.md": "schemas/output.schema.json"
   },
-  "nseap_standard_assets": [
+  "standard_assets": [
     "SKILL.md",
     "agents/openai.yaml",
     "evals/evals.json",

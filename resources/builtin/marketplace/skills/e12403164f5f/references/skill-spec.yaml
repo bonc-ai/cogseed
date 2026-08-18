@@ -1,5 +1,4 @@
 skill_spec:
-  standard_id: "NSEAP-Skill-v1.0"
   skill_id: "skill.cogseed.fde.delivery-risk"
   name: "delivery-risk"
   version: "0.2.0-review.3"
@@ -16,7 +15,6 @@ skill_spec:
   self_assessment: level_b_candidate
   independent_review: pending
   level_c_status: not_eligible_not_run
-  validator_ref: ../../../../nseap/scripts/check_all_skills.py
 mutation_surface_policy:
   mutable_surface: [配置键, 评测夹具, 阈值候选, 提示措辞]
   protected_surface: [形式化规则结构, HITL要求, 审计机制, staged封顶, 生产发布硬锁]

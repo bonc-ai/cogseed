@@ -24,7 +24,7 @@ The design intentionally reuses existing Mate Agent foundations:
 - `src/main/features/mate_agent_runtime/` for runtime execution events, tool activity, context, memory, and final results.
 - `src/main/features/group_chat/` for conversation/group-agent orchestration.
 - `src/main/features/recall/` for candidates, ability assets, projections, usage, proofs, and cognition tree records.
-- Archived line `src/main/features/evolution/` and `packages/nseap-meta-skill-engine/` is preserved on `dev/archive-meta-skill-evolution-console`; active worktree uses lightweight skills version/rollback services only.
+- Archived line `src/main/features/evolution/` and `packages/meta-skill-engine/` is preserved on `dev/archive-meta-skill-evolution-console`; active worktree uses lightweight skills version/rollback services only.
 
 ## Goals
 

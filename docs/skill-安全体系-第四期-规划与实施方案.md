@@ -1,6 +1,6 @@
 # Skill 安全体系 第四期 — 规划与实施方案
 
-> 承接：一期（安装门+回执+加载门扣留）、二期（接入面补齐）、三期（skill-sentry 深扫 + NSEAP advisory 对账）。
+> 承接：一期（安装门+回执+加载门扣留）、二期（接入面补齐）、三期（skill-sentry 深扫 + 声明 advisory 对账）。
 > 写作时间：2026-08-16。分支 `wujy`，工作区干净。
 > 本文所有「已证实」条目都有第一手证据（代码行号 / 实测输出 / git 历史），未证实的标注「待核实」。
 
@@ -13,14 +13,14 @@
 | 层 | 资产 |
 |---|---|
 | 扫描 | skill-sentry 2.1.0 引擎（`resources/guardrail/skill-sentry`，30 文件 git 跟踪）+ 共享判决脚本 `scan_gate.py`（恒 exit 0，stdout JSON；BLOCKING_CATEGORIES 三类；只读 pre-demotion critical） |
-| 声明 | nseap-security-core 1.3.0 引擎（74 文件，含 vendored PyYAML）+ `check_all_skills.py` 全库机检（64/64 通过） |
-| 适配 | `security/sentry-adapter.ts`（五态 verdict + 本地 25 条红线并集 + 指令审计叠加）、`nseap-core-adapter.ts`（退出码→裁决映射）、`scan-orchestrator.ts`（外部扫描器解析）、`instruction-audit.ts`（确定性召回 + 无工具模型复核，只加码） |
+| 声明 | skill-declaration-core 1.3.0 引擎（74 文件，含 vendored PyYAML）+ `check_all_skills.py` 全库机检（64/64 通过） |
+| 适配 | `security/sentry-adapter.ts`（五态 verdict + 本地 25 条红线并集 + 指令审计叠加）、`skill-declaration-adapter.ts`（退出码→裁决映射）、`scan-orchestrator.ts`（外部扫描器解析）、`instruction-audit.ts`（确定性召回 + 无工具模型复核，只加码） |
 | 账本 | `skill_trust.ts` 回执（payloadHash+validatorVersion+ruleProfile 绑定，`<uid>/local/`）、`skill_reverify.ts` 复验、`scanner_trust.ts` pin 信任 |
 | 门 | 市场安装门（最完整）、import-dir 门（质量+深扫+回执）、加载门 6 出口扣留（仅 blocked）、bash/Runtime worker 执行守卫 |
-| UI | 安检四态徽章 + 安全面板（score/规则集/隔离/攻击面/指令风险/NSEAP 声明/用户覆盖） |
-| 规范 | 内置 skill-creator（`## NSEAP compliance` 强制段 + 9 份参考资料）、`quality/rules/nseap.ts`（9 类 MEDIUM 检查 + 四条守卫机检）、p3394 模块（asset-events 账本、skill-validation-run、skill-invocability 语法验证） |
+| UI | 安检四态徽章 + 安全面板（score/规则集/隔离/攻击面/指令风险/安全声明/用户覆盖） |
+| 规范 | 内置 skill-creator（`## Skill package contract` 强制段 + 9 份参考资料）、`quality/rules/skill-shape.ts`（9 类 MEDIUM 检查 + 四条守卫机检）、p3394 模块（asset-events 账本、skill-validation-run、skill-invocability 语法验证） |
 
-**本机实测基线（2026-08-16）**：系统 python3 3.9.6 + PyYAML 6.0.3 → 完整规则集；打包解释器 3.12.13 无 PyYAML（nseap 走 vendored，sentry 依赖系统 python）；Docker daemon 未运行且 `scan_gate.py` 进程内直扫——**沙箱层在判决路径上是死代码**；单次扫描 ~0.1s；扫描器自扫 = blocked/score 0（pin 信任的设计依据成立）；nseap fixture PASS；64 平台技能机检全通过。
+**本机实测基线（2026-08-16）**：系统 python3 3.9.6 + PyYAML 6.0.3 → 完整规则集；打包解释器 3.12.13 无 PyYAML（声明引擎走 vendored，sentry 依赖系统 python）；Docker daemon 未运行且 `scan_gate.py` 进程内直扫——**沙箱层在判决路径上是死代码**；单次扫描 ~0.1s；扫描器自扫 = blocked/score 0（pin 信任的设计依据成立）；声明引擎 fixture PASS；64 平台技能机检全通过。
 
 ---
 
@@ -30,7 +30,7 @@
 
 - **G1 覆盖（override）IPC 转发断裂**。渲染层 `marketplace.js:2062` 在用户确认后发 `acceptSecurityRisk: true`，但 `ipc/index.ts:3161` 的 `marketplace.installSkill` handler 不解构该字段，主进程 `resolveInstallDecision(scan, consented)` 恒为 `false` →「我了解风险，仍要安装」重试必再失败；回执 `userOverride` 分支不可达。**引入点：`9ae11042`（recall governance 重构）删除了该参数**。
 - **G2 两个 IPC 通道被删除**。`skills.trust.reverify` / `skills.trust.list` 在 `ipc/index.ts` 零注册；渲染层 `skills.js:2845`「重新检查」按钮调死通道（结果被 try/catch 吞掉）。同一提交 `9ae11042` 删除。
-- **G3 19 个 locale key 缺失**。`skills.secpanel_nseap`+6 子键、`skills.edit_nseap_precheck_*`、`skills.import_review_*` 在 zh/en/ja/pt 四语言包均无 → UI 回显裸 key（zh.json 缺失已证实）。
+- **G3 19 个 locale key 缺失**。`skills.secpanel_declaration`+6 子键、`skills.edit_declaration_precheck_*`、`skills.import_review_*` 在 zh/en/ja/pt 四语言包均无 → UI 回显裸 key（zh.json 缺失已证实）。
 - **G4 agent 安装无深度扫描**。`marketplace.installAgent` 只过 quality 门，无 `scanSkillDir`——agent 包内的私有 skill 与脚本不受深扫。
 - **G5 文档数字漂移**。`sentry-adapter.ts:287`、`skill_reverify.ts:233` 注释写"21 条规则"，实际 `RED_FLAGS` 25 条（22 EXTREME + 3 MEDIUM）。
 
@@ -64,13 +64,13 @@
 
 ### W1 生成门统一（G9 + 部分 G13）——本期核心
 
-目标：五条生成路径（自建 / onboarding 导入 / recall 草稿 / URL 导入 / 目录导入）与外部导入同标准：**NSEAP 骨架 + deep scan + 回执，`approved` 之前完成**。
+目标：五条生成路径（自建 / onboarding 导入 / recall 草稿 / URL 导入 / 目录导入）与外部导入同标准：**契约骨架 + deep scan + 回执，`approved` 之前完成**。
 
-1. `ensureNseapSkillSkeleton` 推广到 `createCustomSkill`（新增可选参数 `generateNseapSkeleton: boolean`，模型生成/onboarding/recall 路径传 true；纯 UI 空壳创建可不生成，但首次写入内容时补齐）。
+1. `ensureSkillSkeleton` 推广到 `createCustomSkill`（新增可选参数 `generateSkillSkeleton: boolean`，模型生成/onboarding/recall 路径传 true；纯 UI 空壳创建可不生成，但首次写入内容时补齐）。
 2. 新增共享函数 `finalizeCustomSkillAdmission(uid, skillDir)`：`validateSkillDir` → `scanSkillDir(dir, 'community')` → `writeInstallReceipt`；`blocked` → 状态改 `draft`（新增状态，或复用候选态）+ 返回拒绝原因；`restricted/unknown` → 记回执并标 `pending` 徽章。
 3. recall 草稿落地（`skill-draft-service.confirmRecallSkillDraft`）与 onboarding 导入（`session_import/skill-import.ts`）在写入完成后调 `finalizeCustomSkillAdmission`；失败 → 草稿保留 + UI 提示，不写 `installed`。
 4. URL 导入占位草稿：进入编辑会话首次落内容时同样触发。
-5. NSEAP 形状检查升级：**生成路径上 `nseap_*` 规则从 MEDIUM 升为阻断级**（`finalizeCustomSkillAdmission` 传 `escalateNseap: true`）；marketplace 安装保持 MEDIUM 不阻断（存量兼容）。
+5. 形状检查升级：**生成路径上 `shape_*` 规则从 MEDIUM 升为阻断级**（`finalizeCustomSkillAdmission` 传 `escalateSkillShape: true`）；marketplace 安装保持 MEDIUM 不阻断（存量兼容）。
 6. `matrix.test.ts` 补两行：onboarding 导入、recall 草稿。
 
 验收：五条路径的 E2E 测试各 1 条（clean skill → approved+回执；恶意 payload → 拒绝且不 approved）；SEC-AC-02 落地。UI 侧消费现成的 `skills.security_import_*` 文案（scanning/passed/restricted/degraded/blocked_body，目前死文案无消费点）呈现"检查中→结果"。
@@ -100,13 +100,13 @@
 1. 沙箱路径决策（与产品确认后二选一）：
    - 方案 A：`scan_gate.py` 恢复经 `agent_gate.evaluate_skill`（有 Docker 镜像走隔离，无镜像 degraded-local）——恢复上游完整语义；
    - 方案 B：明确接受进程内直扫，理由 = 引擎只读文件不执行被测代码，残余风险（zip 炸弹/解析器漏洞）用现有 60s 超时 + 子进程级内存/输出上限兜底——需补子进程资源限制实现。
-2. PyYAML 固化：把 vendored PyYAML 复制进 bundled runtime 的 site-packages 路径或 sentry 引擎侧建 `vendor/yaml`（与 nseap 同法），`sentry-adapter.resolvePython` 探测时把该目录加进 `PYTHONPATH` → 消灭"装了什么 python 才有什么规则"的机器差异。
+2. PyYAML 固化：把 vendored PyYAML 复制进 bundled runtime 的 site-packages 路径或 sentry 引擎侧建 `vendor/yaml`（与声明引擎同法），`sentry-adapter.resolvePython` 探测时把该目录加进 `PYTHONPATH` → 消灭"装了什么 python 才有什么规则"的机器差异。
 
 ### W7 上游同步与测试纪律（G16）
 
 1. 把 skill-sentry 上游 `tests/`（20 文件：conformance 回归向量 + 对抗/上下文 fixtures + 145 单元用例源）与 `runtime_trust/tests/`（2 文件）带入 vendored 树，`run-python-tests.mjs` 增加 guardrail 扫描（或独立 `npm run test:guardrail`）；`docs/` 8 文件一并带入（可读性/溯源）。
 2. pin 重生成入 CI：改 `resources/guardrail/*` 后 `pin-scanner-integrity.mjs --check` 失败即红。
-3. 建立"上游→仓库"同步清单（skill-sentry 与 nseap 各一份 SYNC.md）：源路径、排除项（nseap 的 `.gitignore`/`__pycache__`）、**仓库自有超集**（nseap 的 `vendor/` + `SKILL.md` 必须 merge 保留、禁止 replace 覆盖——引擎硬依赖 vendor/yaml，SKILL.md 含"派生已停用/冻结无触发点"平台约定）、同步后必跑命令（conformance + pin 重生成 + `matrix.test.ts`）。
+3. 建立"上游→仓库"同步清单（skill-sentry 与声明引擎各一份 SYNC.md）：源路径、排除项（声明引擎的 `.gitignore`/`__pycache__`）、**仓库自有超集**（声明引擎的 `vendor/` + `SKILL.md` 必须 merge 保留、禁止 replace 覆盖——引擎硬依赖 vendor/yaml，SKILL.md 含"派生已停用/冻结无触发点"平台约定）、同步后必跑命令（conformance + pin 重生成 + `matrix.test.ts`）。
 4. 双裁决语义复核：`scan_gate.py`（平台策略层：BLOCKING_CATEGORIES + original_severity==critical）与上游 `agent_gate.py`（RECOMMENDATION_TO_VERDICT）并存，上游改 recommendation 语义时需同步复核 `restricted` 分支——列入同步清单检查项。
 5. 打包契约保持：`package.json` extraResources `guardrail` + `bin/packaged-resource-gate.cjs` 的 `guardrail-scanner-contract` + `matrix.test.ts`（已锁 extraResources 必须含 guardrail）不得随开源剥离脚本改动。
 
@@ -167,7 +167,7 @@ python3 resources/guardrail/scan_gate.py resources/guardrail/skill-sentry <任�
 
 ## 六、明确不做
 
-- 不移植 skill-sentry 规则进 TS；不改写 nseap 引擎；不新增自建规则库（语料缺失，Go/Rust/Java 规则仍不验证）。
+- 不移植 skill-sentry 规则进 TS；不改写声明引擎；不新增自建规则库（语料缺失，Go/Rust/Java 规则仍不验证）。
 - 不在客户端启用 freeze/FORMAL_TEST 正式门（等 D2）；不恢复风险五维派生（等 D3）。
 - 不引入 Trust Graph 内核（威胁模型错位，见探索结论）。
 - 不把「安全通过」渲染成「已验证有效」；不承诺检出率数字（漏报率仍无真实恶意语料标定）。
@@ -183,10 +183,10 @@ python3 resources/guardrail/scan_gate.py resources/guardrail/skill-sentry <任�
 - 自生成无门：`skills.ts:1337-1372`（createCustomSkill 直写 approved）、`session_import/skill-import.ts`、`recall/skill-draft-service.ts:960-1027`。
 - 沙箱死代码：`scan_gate.py:126-137`（直接 import engine 扫描）。
 - PyYAML 实测：打包 python 3.12.13 `import yaml` → ModuleNotFoundError；系统 python 3.9.6 → 6.0.3。
-- 上游对比（`diff -rq` 实测）：两引擎共享文件字节一致、无规则漂移；skill-sentry vendored 为严格子集（缺 tests/ 20 文件、runtime_trust/tests/ 2、docs/ 8）；nseap vendored 多 `vendor/`+`SKILL.md`（仓库自有加固，同步须 merge 非 replace）。
+- 上游对比（`diff -rq` 实测）：两引擎共享文件字节一致、无规则漂移；skill-sentry vendored 为严格子集（缺 tests/ 20 文件、runtime_trust/tests/ 2、docs/ 8）；声明引擎 vendored 多 `vendor/`+`SKILL.md`（仓库自有加固，同步须 merge 非 replace）。
 - 打包：guardrail 不进 `_manifest.json`，走 `package.json` extraResources；`bin/packaged-resource-gate.cjs` 有 `guardrail-scanner-contract`；`matrix.test.ts` 锁 extraResources。
 - `run-python-tests.mjs` 覆盖 resources/builtin + resources/test，不扫 guardrail；`bundledPythonExecutable` 支持 `ORKAS_BUNDLED_PYTHON/ORKAS_PYTHON` 环境覆盖。
-- `check_all_skills.py` 只做 NSEAP 结构合规（6 项机检），不检恶意代码——与 skill-sentry 两套门不可互相替代。
+- `check_all_skills.py` 只做 契约结构合规（6 项机检），不检恶意代码——与 skill-sentry 两套门不可互相替代。
 - 守卫 64/64：实测脚本输出（HANDOFF §8.0 的 stash 问题已随 `e56749d0` 解决，无遗留）。
 
 ---
@@ -195,7 +195,7 @@ python3 resources/guardrail/scan_gate.py resources/guardrail/skill-sentry <任�
 
 - **G1** ✅ 恢复 `marketplace.installSkill/installAgent` 的 `acceptSecurityRisk` 转发；并修复同一断裂链的下一环：`securityBlocked/securityUnavailable/securityOverridable/securityScan/securityRuleIds` 五个字段此前在 `_wrapMarketplaceInstallError` → `getMarketplaceInstallErrorInfo` → IPC 响应三层全部被丢弃，渲染层风险卡永远无法触发——三层全部补齐。
 - **G2** ✅ 重新注册 `skills.trust.reverify`（→`reverifySkillDeep`，isValidSkillId 校验）与 `skills.trust.list`（→`listReceipts`）。
-- **G3** ✅ 补齐 18 个缺失 key（secpanel_nseap×7、edit_nseap_precheck×4、import_review×7）到 zh/en/ja/pt 四语言包（比子任务报告的 19 少 1，以实测 diff 为准）。
+- **G3** ✅ 补齐 18 个缺失 key（secpanel_declaration×7、edit_declaration_precheck×4、import_review×7）到 zh/en/ja/pt 四语言包（比子任务报告的 19 少 1，以实测 diff 为准）。
 - **G4** ✅ agent 安装门：私有 skill bundle 解压后逐个 `scanSkillDir`（来源分级 create_uid==='0'→official），blocked/unknown → 回滚整个 agent 安装 + 抛带 security 字段的错误；私有 skill 回执刻意不写（key 需 (agentId,skillId)，属 W3）。
 - **G5** ✅ 修正 sentry-adapter "21 条"注释 → 25 条。
 - **契约测试**：新增 `test/main/ipc/security-trust-ipc.test.ts`（9 用例：转发/死通道/错误字段传播/无效 id 拒绝），修复前 8 失败、修复后 9/9。
@@ -203,9 +203,9 @@ python3 resources/guardrail/scan_gate.py resources/guardrail/skill-sentry <任�
 
 ### 执行日志（W1 完成，2026-08-16）
 
-- **新模块** `src/main/features/security/custom-skill-admission.ts`：生成路径共享准入（本地红线 → deep scan 只判作者内容 → NSEAP skeleton 补缺 → 升级的 NSEAP 形状复检 → 最终树回执）。关键取舍：
+- **新模块** `src/main/features/security/custom-skill-admission.ts`：生成路径共享准入（本地红线 → deep scan 只判作者内容 → 契约 skeleton 补缺 → 升级的形状复检 → 最终树回执）。关键取舍：
   - skeleton 在扫描**之后**生成（防模板稀释裁决，沿用导入路径实测结论）；
-  - NSEAP 升级白名单 8 条可行动规则；`staged_ceiling`/`production_lock`/`compliance_tier` 排除（声明在 skill-spec.yaml，TS 形状检查不读该文件——升级会全库误伤）；
+  - 形状升级白名单 8 条可行动规则；`staged_ceiling`/`production_lock`/`compliance_tier` 排除（声明在 skill-spec.yaml，TS 形状检查不读该文件——升级会全库误伤）；
   - blocked/unknown 不写回执，加载门在首次使用时重试。
 - **三条路径接入**：commander `<skill>` 容器创建（blocked → 删半成品 + 结构化拒绝；unknown → 保留 + securityUnavailable 标记）、onboarding Claude/Codex 导入（blocked/unknown → 回滚 + reason）、recall 草稿落地（blocked/unknown → 抛错走既有回滚；新增 admit 测试缝，单测注入 stub 不 spawn Python）。
 - **URL 导入**：占位草稿为空壳，内容经编辑会话逐文件落盘，无显式收尾点——由加载门（已验证覆盖 custom）在首次使用时 deep 复验兜底；显式准入待后续定收尾点。
@@ -213,7 +213,7 @@ python3 resources/guardrail/scan_gate.py resources/guardrail/skill-sentry <任�
 
 ### 执行日志（W1 修订 + W2 完成，2026-08-16）
 
-- **W1 修订（回答"会不会限制生成能力"）**：NSEAP 形状升级改为 **opt-in**（`admitCustomSkill(uid, skillId, { escalateNseap })`）。只有 commander 路径（skill-creator 契约承诺 trigger 语义）开启；Claude/Codex onboarding、recall 蒸馏方法等源保真导入默认 advisory——否则每个外来技能都会被打 risk 徽章（徽章通胀 = 无徽章）。新增测试锁"默认不升级"。能力守恒原则：回执从不剥夺能力，加载门只扣 blocked，最坏情况是多一个徽章而非生成不出来。
+- **W1 修订（回答"会不会限制生成能力"）**：形状升级改为 **opt-in**（`admitCustomSkill(uid, skillId, { escalateSkillShape })`）。只有 commander 路径（skill-creator 契约承诺 trigger 语义）开启；Claude/Codex onboarding、recall 蒸馏方法等源保真导入默认 advisory——否则每个外来技能都会被打 risk 徽章（徽章通胀 = 无徽章）。新增测试锁"默认不升级"。能力守恒原则：回执从不剥夺能力，加载门只扣 blocked，最坏情况是多一个徽章而非生成不出来。
 - **W2 Quarantine 完成**：`_installMarketplaceSkillLocked` 改为 staging→gate→promote：
   - 解压/复制到 `.staging-<hex>`（同文件系统、点前缀全枚举路径不可见、命名避开降权词——`quarantineStagingName` 导出 + 测试锁 hex 域）；
   - 两道门全过 → 旧安装先 rename 到 `.trash-<hex>` → staging rename 到最终位置 → 删 trash；
@@ -249,16 +249,16 @@ python3 resources/guardrail/scan_gate.py resources/guardrail/skill-sentry <任�
 - **W5② 导入复核安检行**：自定义导入的复核对话框现在消费 `skills.security_import_restricted/degraded`（此前是死文案），restricted/degraded 各加一行静默说明。
 - **W5③ 安全与信任设置页**：新页签（index.html + settings_tabs 兼容），懒加载模块 `settings-security.js`：
   - 扫描器可用性（present/absent_by_build/broken）+ 树哈希完整性（verified/tampered/unpinned/unreadable，含"未通过时怎么办"的说明）；
-  - sentry 引擎/规则包版本、NSEAP 引擎版本与完整性；
+  - sentry 引擎/规则包版本、契约 引擎版本与完整性；
   - 最近 20 条检查回执（结论/评分/时间）+ **脱敏回执导出**（只导 id/结论/时间/分数/攻击面计数/哈希——回执本就不含匹配原文）；
   - "系统保护不可关闭"说明 + 刷新按钮。
-  - 新 IPC `skills.security.status`（组合 scanner_trust/nseap-core-adapter/sentry-adapter 的现有完整性源，`guardrail-status.ts` 无自有逻辑）。
+  - 新 IPC `skills.security.status`（组合 scanner_trust/skill-declaration-adapter/sentry-adapter 的现有完整性源，`guardrail-status.ts` 无自有逻辑）。
 - 四语言 locale 新增 37 key（settings.security.*）。
 - 测试：security-trust-ipc 契约 +1（status 快照形状）。回归：typecheck 干净，W5 相关 19 文件 434/434。
 
 ### 执行日志（W6/W7 完成，2026-08-16）
 
-- **W6 PyYAML 固化**：`resources/guardrail/skill-sentry/vendor/yaml/`（从 nseap 同源复制 PyYAML 6.0.3 纯 Python 版 + LICENSE，252K）。sentry-adapter 探测与运行均注入 `PYTHONPATH=vendor`。实测：打包 CPython 3.12.13（原本无 yaml）现在直接加载完整规则集（`rules_source: ruleset v1.0.0: ...`）——**机器间规则覆盖差异清零**。pin 已用 `node --import tsx scripts/pin-scanner-integrity.mjs` 重生成（gitignored，发布时打包流程再生成）。沙箱路径（D4）维持现状并在方案文档记录为决策项，不投机加固。
+- **W6 PyYAML 固化**：`resources/guardrail/skill-sentry/vendor/yaml/`（从 声明引擎 同源复制 PyYAML 6.0.3 纯 Python 版 + LICENSE，252K）。sentry-adapter 探测与运行均注入 `PYTHONPATH=vendor`。实测：打包 CPython 3.12.13（原本无 yaml）现在直接加载完整规则集（`rules_source: ruleset v1.0.0: ...`）——**机器间规则覆盖差异清零**。pin 已用 `node --import tsx scripts/pin-scanner-integrity.mjs` 重生成（gitignored，发布时打包流程再生成）。沙箱路径（D4）维持现状并在方案文档记录为决策项，不投机加固。
 - **W7 上游测试进仓**：上游 skill-sentry `tests/`（20 文件）+ `runtime_trust/tests/`（2 文件）复制到 `resources/test/skill-sentry/`（不进发布树），三处 repo shim（conftest sys.path + collect_ignore fixtures + RUNTIME_TRUST_DIR 路径），**153/153 全绿**（`python3 -m pytest` 与 `run-python-tests.mjs` 双路径）。`npm run test:resources` 默认覆盖 resources/test，自动纳入。
 - **SYNC.md**：`resources/guardrail/SYNC.md` 同步清单——merge 不 replace、两引擎的仓库自有加固件清单、repo shim 说明、同步后必跑命令、打包契约与有意不接清单。
 - 回归：typecheck 干净；W6/W7 相关 16 文件 244/244；全量 test/main 后台跑通（结果见会话记录，预存在 11 失败与 HEAD 一致）。
@@ -267,7 +267,7 @@ python3 resources/guardrail/scan_gate.py resources/guardrail/skill-sentry <任�
 
 ## 总体状态（四期全部工作包完成）
 
-W0-W7 全部落地，决策项 D1-D6 留待产品/安全拍板（文档 §四）。四期执行原则沉淀：**安全是兜底的网不是筛子——拒绝绝不删用户内容（W3 reconcile 保内容写 blocked 回执、W2 毒更新不毁旧装）、基础设施故障不惩罚用户（unknown 保留+重试）、提醒只加必要信息（W5 restricted 单条 toast、W4 零新增提醒）、生成能力不受限（W1 NSEAP 升级 opt-in 仅 commander、回执从不剥夺能力）。**
+W0-W7 全部落地，决策项 D1-D6 留待产品/安全拍板（文档 §四）。四期执行原则沉淀：**安全是兜底的网不是筛子——拒绝绝不删用户内容（W3 reconcile 保内容写 blocked 回执、W2 毒更新不毁旧装）、基础设施故障不惩罚用户（unknown 保留+重试）、提醒只加必要信息（W5 restricted 单条 toast、W4 零新增提醒）、生成能力不受限（W1 契约 升级 opt-in 仅 commander、回执从不剥夺能力）。**
 
 ### 执行日志（D6 + D4 落地，2026-08-16）
 

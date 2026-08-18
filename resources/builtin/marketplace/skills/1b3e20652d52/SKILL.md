@@ -49,8 +49,8 @@ HITL gate 在 `confirm`：任何"定制出稿/定稿"动作前必须人工终审
 - **口径受治理**：所有输出以冻结表为唯一口径源，触及口径变更走回流纪律；符号层裁决对错（选哪版/哪档颗粒度/合不合规），神经层只起草措辞与候选，绝不写 `formal`/`config_key`/`value`。
 - 不宣称：生产就绪、已投产、已在真实业务中"学会"、或可被生产运行时直接加载。这是一个 staged、合标准的脚手架。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：售前/商务在为某个具体客户交流做准备，需要“这一场怎么打”的定制打法：选版本、钩子、场景、差异化、异议、红线；基于客户画像（行业、层级、关系、痛点）输出作战草案，对客定稿由人确认。
 - `do_not_use_when`：通用产品答疑、报价或撰写冻结口径（那是治理不是按场次作战方案）；对客直接发送/定稿（那是人签字的下游动作）；R4 承诺分级中 B 在建场景写入 Step1/验收承诺；对客点名友商；未定价却报硬数字。
@@ -58,4 +58,4 @@ HITL gate 在 `confirm`：任何"定制出稿/定稿"动作前必须人工终审
 - `negative_examples`：`这个功能多少钱？`；`把 slogan 改一版对外发布。`
 
 本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

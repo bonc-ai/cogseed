@@ -22,8 +22,8 @@ description: "电商比价调研：多平台比价（淘宝/京东/拼多多/抖
 ## 输出
 比价表（平台×价格×销量）+ 价格带结论 + 定价建议
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要新品定价、大促前调价或竞品价格监测：对目标商品做多平台比价（淘宝/京东/拼多多/抖音），输出价格带分布、促销节奏与定价建议，且已确认商品关键词与平台清单。
 - `do_not_use_when`：任务不是比价调研（如直接决定定价并发布）；商品关键词或平台未确认却要求直接出建议；要求编造价格、销量数据或访问未授权渠道。
@@ -31,4 +31,4 @@ description: "电商比价调研：多平台比价（淘宝/京东/拼多多/抖
 - `negative_examples`：`没有平台数据，你凭经验给个价格。`；`把竞品旗舰店的内部销量数据编出来。`
 
 本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

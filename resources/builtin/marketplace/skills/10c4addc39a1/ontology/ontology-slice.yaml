@@ -33,4 +33,4 @@ rbox:
   - rule_id: R10
     formal: automatic promotion stops at staged
 abox: {}
-source_refs: [materials::19-domain-framework, benchmarks::volumes-11-14, standard::NSEAP-Skill-v1.0]
+source_refs: [materials::19-domain-framework, benchmarks::volumes-11-14, standard::skill-contract-v1.0]

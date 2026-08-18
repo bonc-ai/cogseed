@@ -1,5 +1,5 @@
 {
-  "eval_suite_id": "eval.skill.cogseed.pm.feature-prioritization.nseap.v1",
+  "eval_suite_id": "eval.skill.cogseed.pm.feature-prioritization.v1",
   "skill_id": "skill.cogseed.pm.feature-prioritization",
   "status": "synthetic_structure_cases_not_run",
   "evidence_policy": {

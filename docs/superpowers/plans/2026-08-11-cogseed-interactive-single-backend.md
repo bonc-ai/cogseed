@@ -23,7 +23,7 @@
   - `src/main/features/group_chat/p3394-wake-dispatcher.ts`
   - `src/main/features/p3394/kstar-adapter.ts`
   - `src/main/features/p3394/kstar-factory.ts`
-  - `packages/nseap-meta-skill-engine`
+  - `packages/meta-skill-engine`
 - `group_chat` is a historical wake domain only. It must never select a Group Chat execution backend.
 - `agent_id` is an Agent identity and must never be passed as a model/API profile id.
 - Formal visible Agents are interactive by default. Anonymous `run_worker` is the only explicitly headless helper path.

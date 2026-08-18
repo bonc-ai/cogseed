@@ -3232,12 +3232,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return skills.readSkillFile(source, id, file);
   },
 
-  'skills.checkNseapDeclaration': async ({ id }, ctx) => {
+  'skills.checkDeclaration': async ({ id }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     const found = await skills.getSkillForEdit(id);
     if (!found || found.source !== 'custom') throw new Error('only custom skills can be pre-checked');
-    const nseapDeclaration = await skillReverify.checkNseapDeclaration(found.dir, id);
-    return { nseapDeclaration };
+    const declarationCheck = await skillReverify.checkDeclaration(found.dir, id);
+    return { declarationCheck };
   },
 
   /** Deep re-verify one installed skill and persist the verdict. Backs the
@@ -3254,7 +3254,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   /** W5/W6: run the generation admission gate on one custom skill and return
    *  a renderer-safe verdict for the unified import-check popup. Source-
-   *  preserving: no NSEAP escalation, no refusal receipt — the caller decides
+   *  preserving: no shape escalation, no refusal receipt — the caller decides
    *  what to do with the verdict (the import paths already rolled back or
    *  kept content in main). */
   'skills.admit': async ({ skillId }, ctx) => {
@@ -3265,7 +3265,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       admission: {
         outcome: admission.outcome,
         reason: admission.reason ?? null,
-        escalatedNseap: admission.escalatedNseap,
+        escalatedSkillShape: admission.escalatedSkillShape,
         ...(admission.scan ? { scan: admission.scan } : {}),
       },
     };

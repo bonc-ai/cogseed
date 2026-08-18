@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  validateNseapSkillShape,
-  validateNseapRuntimeGuards,
-} from '../../../src/main/quality/rules/nseap';
+  validateSkillShape,
+  validateSkillRuntimeGuards,
+} from '../../../src/main/quality/rules/skill-shape';
 
-// ── fixture: a fully NSEAP-conformant skill (Level B shape) ──────────────
+// ── fixture: a fully contract-conformant skill (Level B shape) ──────────────
 
 const CONFORMANT_SKILL_MD = `---
 name: invoice-dunning
@@ -104,9 +104,9 @@ const CONFORMANT_SCHEMA = {
   },
 };
 
-describe('quality › nseap › validateNseapSkillShape', () => {
+describe('quality › skill-shape › validateSkillShape', () => {
   it('passes a fully conformant skill at Level B', () => {
-    const r = validateNseapSkillShape({
+    const r = validateSkillShape({
       skillMd: CONFORMANT_SKILL_MD,
       meta: {},
       files: CONFORMANT_FILES,
@@ -120,12 +120,12 @@ describe('quality › nseap › validateNseapSkillShape', () => {
     const md = CONFORMANT_SKILL_MD
       .replace('- **do_not_use_when**: the customer asks a billing-detail question.\n', '')
       .replace('- **negative_examples**: ["why was I charged a late fee"]\n', '');
-    const r = validateNseapSkillShape({
+    const r = validateSkillShape({
       skillMd: md,
       meta: {},
       files: CONFORMANT_FILES,
     });
-    expect(r.violations.map((v) => v.rule)).toContain('nseap_antitrigger_missing');
+    expect(r.violations.map((v) => v.rule)).toContain('shape_antitrigger_missing');
     // Level A still reachable without anti-trigger in body IF meta supplies it — here it does not
     expect(r.level).toBeNull();
   });
@@ -134,33 +134,33 @@ describe('quality › nseap › validateNseapSkillShape', () => {
     const md = CONFORMANT_SKILL_MD
       .replace('- **do_not_use_when**: the customer asks a billing-detail question.\n', '')
       .replace('- **negative_examples**: ["why was I charged a late fee"]\n', '');
-    const r = validateNseapSkillShape({
+    const r = validateSkillShape({
       skillMd: md,
       meta: { routing: { negative_examples: ['billing lookup'] } },
       files: CONFORMANT_FILES,
     });
-    expect(r.violations.map((v) => v.rule)).not.toContain('nseap_antitrigger_missing');
+    expect(r.violations.map((v) => v.rule)).not.toContain('shape_antitrigger_missing');
     expect(r.level).toBe('B');
   });
 
   it('flags missing input/output contracts', () => {
     const files = CONFORMANT_FILES.filter((f) =>
       !/input-contract|output-contract|schemas\.json/.test(f));
-    const r = validateNseapSkillShape({
+    const r = validateSkillShape({
       skillMd: CONFORMANT_SKILL_MD,
       meta: {},
       files,
     });
-    expect(r.violations.map((v) => v.rule)).toContain('nseap_input_contract_missing');
-    expect(r.violations.map((v) => v.rule)).toContain('nseap_output_contract_missing');
+    expect(r.violations.map((v) => v.rule)).toContain('shape_input_contract_missing');
+    expect(r.violations.map((v) => v.rule)).toContain('shape_output_contract_missing');
     expect(r.level).toBe('A'); // A does not require contracts
   });
 
   it('flags missing ontology slice (Level A gate)', () => {
     const md = CONFORMANT_SKILL_MD.replace(/tbox:[\s\S]*?abox: \{\}\n/, '');
     const files = CONFORMANT_FILES.filter((f) => !/ontology-mapping/.test(f));
-    const r = validateNseapSkillShape({ skillMd: md, meta: {}, files });
-    expect(r.violations.map((v) => v.rule)).toContain('nseap_ontology_slice_missing');
+    const r = validateSkillShape({ skillMd: md, meta: {}, files });
+    expect(r.violations.map((v) => v.rule)).toContain('shape_ontology_slice_missing');
     expect(r.level).toBeNull();
   });
 
@@ -168,51 +168,51 @@ describe('quality › nseap › validateNseapSkillShape', () => {
     const md = CONFORMANT_SKILL_MD
       .replace('promotion_ceiling: staged\n', '')
       .replace('production_release_allowed: false\n', '');
-    const r = validateNseapSkillShape({ skillMd: md, meta: {}, files: CONFORMANT_FILES });
-    expect(r.violations.map((v) => v.rule)).toContain('nseap_staged_ceiling_missing');
-    expect(r.violations.map((v) => v.rule)).toContain('nseap_production_lock_missing');
+    const r = validateSkillShape({ skillMd: md, meta: {}, files: CONFORMANT_FILES });
+    expect(r.violations.map((v) => v.rule)).toContain('shape_staged_ceiling_missing');
+    expect(r.violations.map((v) => v.rule)).toContain('shape_production_lock_missing');
   });
 
   it('flags missing frontmatter fields', () => {
     const md = CONFORMANT_SKILL_MD.replace('description: Decide the dunning action for an overdue invoice.\n', '');
-    const r = validateNseapSkillShape({ skillMd: md, meta: {}, files: CONFORMANT_FILES });
-    expect(r.violations.map((v) => v.rule)).toContain('nseap_frontmatter_incomplete');
+    const r = validateSkillShape({ skillMd: md, meta: {}, files: CONFORMANT_FILES });
+    expect(r.violations.map((v) => v.rule)).toContain('shape_frontmatter_incomplete');
   });
 
   it('all violations are MEDIUM or LOW (never gate writes)', () => {
-    const r = validateNseapSkillShape({ skillMd: 'no frontmatter at all', meta: {}, files: [] });
+    const r = validateSkillShape({ skillMd: 'no frontmatter at all', meta: {}, files: [] });
     for (const v of r.violations) {
       expect(['MEDIUM', 'LOW']).toContain(v.level);
     }
   });
 });
 
-describe('quality › nseap › validateNseapRuntimeGuards', () => {
+describe('quality › skill-shape › validateSkillRuntimeGuards', () => {
   it('passes a conformant runtime_contracts block', () => {
-    expect(validateNseapRuntimeGuards(CONFORMANT_SCHEMA)).toEqual([]);
+    expect(validateSkillRuntimeGuards(CONFORMANT_SCHEMA)).toEqual([]);
   });
 
   it('flags a broken direct_resource_access guard', () => {
     const bad = JSON.parse(JSON.stringify(CONFORMANT_SCHEMA));
     bad.runtime_contracts.resource.direct_resource_access = true;
-    const v = validateNseapRuntimeGuards(bad);
-    expect(v.map((x) => x.rule)).toContain('nseap_runtime_guard_violation');
+    const v = validateSkillRuntimeGuards(bad);
+    expect(v.map((x) => x.rule)).toContain('shape_runtime_guard_violation');
     expect(v.some((x) => x.snippet.includes('direct_resource_access'))).toBe(true);
   });
 
   it('flags a broken binding_resolved_by guard', () => {
     const bad = JSON.parse(JSON.stringify(CONFORMANT_SCHEMA));
     bad.runtime_contracts.owner_binding.binding_resolved_by = 'skill';
-    const v = validateNseapRuntimeGuards(bad);
+    const v = validateSkillRuntimeGuards(bad);
     expect(v.some((x) => x.snippet.includes('binding_resolved_by'))).toBe(true);
   });
 
   it('flags missing runtime_contracts block', () => {
-    const v = validateNseapRuntimeGuards({ input_schema: {}, output_schema: {} });
-    expect(v.map((x) => x.rule)).toContain('nseap_runtime_contracts_missing');
+    const v = validateSkillRuntimeGuards({ input_schema: {}, output_schema: {} });
+    expect(v.map((x) => x.rule)).toContain('shape_runtime_contracts_missing');
   });
 
   it('returns nothing for non-object input (advisory handled by caller)', () => {
-    expect(validateNseapRuntimeGuards(null)).toEqual([]);
+    expect(validateSkillRuntimeGuards(null)).toEqual([]);
   });
 });

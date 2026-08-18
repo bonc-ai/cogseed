@@ -1,5 +1,5 @@
 /**
- * Security-panel rendering for the NSEAP declaration check.
+ * Security-panel rendering for the declaration check.
  *
  * `_skillSecurityPanelText` is not exported and calls `t()`, so per project
  * convention it gets no CommonJS test bridge (that is reserved for pure
@@ -30,15 +30,15 @@ function loadLocale(name: string): Record<string, string> {
 }
 
 /** The declaration block, isolated so assertions cannot match neighbouring code. */
-function nseapBlock(): string {
-  const start = PANEL_SRC.indexOf('const nseap = sec.nseapDeclaration');
+function declarationBlock(): string {
+  const start = PANEL_SRC.indexOf('const declaration = sec.declarationCheck');
   expect(start).toBeGreaterThan(-1);
   const end = PANEL_SRC.indexOf('if (!sec.status ||', start);
   expect(end).toBeGreaterThan(start);
   return PANEL_SRC.slice(start, end);
 }
 
-describe('skills panel › nseap declaration', () => {
+describe('skills panel › declaration check', () => {
   /**
    * The one rendering decision with a real cost if reversed.
    *
@@ -49,9 +49,9 @@ describe('skills panel › nseap declaration', () => {
    * this a correctness issue rather than a matter of taste.
    */
   it('renders nothing for `absent` or `pass`', () => {
-    const block = nseapBlock();
-    expect(block).toContain("nseap.status !== 'absent'");
-    expect(block).toContain("nseap.status !== 'pass'");
+    const block = declarationBlock();
+    expect(block).toContain("declaration.status !== 'absent'");
+    expect(block).toContain("declaration.status !== 'pass'");
   });
 
   /**
@@ -60,9 +60,9 @@ describe('skills panel › nseap declaration', () => {
    * skill is the same class of error as rendering "not checked" as clean.
    */
   it('gives engine unavailability its own wording', () => {
-    const block = nseapBlock();
-    expect(block).toContain("nseap.status === 'unavailable'");
-    expect(block).toContain('secpanel_nseap_unavailable');
+    const block = declarationBlock();
+    expect(block).toContain("declaration.status === 'unavailable'");
+    expect(block).toContain('secpanel_declaration_unavailable');
   });
 
   /**
@@ -71,29 +71,29 @@ describe('skills panel › nseap declaration', () => {
    * asserts the renderer does not reintroduce threat vocabulary on the way out.
    */
   it('does not describe a declaration gap in threat terms', () => {
-    const block = nseapBlock();
+    const block = declarationBlock();
     expect(block).not.toMatch(/blocked|malicious|threat|dangerous/i);
     // And the user-facing note says which kind of problem this is.
-    expect(block).toContain('secpanel_nseap_note');
+    expect(block).toContain('secpanel_declaration_note');
   });
 
   it('caps the findings list and says how many were hidden', () => {
-    const block = nseapBlock();
+    const block = declarationBlock();
     // An engine run on a pathological tree can produce a long list; a panel that
     // printed all of them would bury everything above it.
     expect(block).toContain('.slice(0, 3)');
-    expect(block).toContain('secpanel_nseap_more');
+    expect(block).toContain('secpanel_declaration_more');
   });
 
   /**
    * Every key the block references must exist in all four languages. A key present
-   * in only some shows its raw name — `skills.secpanel_nseap_mismatch` — to the
+   * in only some shows its raw name — `skills.secpanel_declaration_mismatch` — to the
    * others, in the one panel where the user is trying to judge whether to trust
    * something.
    */
   it('defines every referenced key in all four locales', () => {
     const keys = [...new Set(
-      Array.from(nseapBlock().matchAll(/t\('(skills\.secpanel_nseap[^']*)'\)/g))
+      Array.from(declarationBlock().matchAll(/t\('(skills\.secpanel_declaration[^']*)'\)/g))
         .map((m) => m[1]),
     )];
     expect(keys.length).toBeGreaterThan(0);
@@ -114,7 +114,7 @@ describe('skills panel › nseap declaration', () => {
   it('keeps the {n} placeholder in every translation of the overflow line', () => {
     for (const name of LOCALES) {
       const loc = loadLocale(name);
-      expect(loc['skills.secpanel_nseap_more'], `${name}.json`).toContain('{n}');
+      expect(loc['skills.secpanel_declaration_more'], `${name}.json`).toContain('{n}');
     }
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Tests for the NSEAP security-core adapter.
+ * Tests for the skill declaration engine adapter.
  *
  * The exit-code mapping gets direct coverage because it *is* the security
  * decision this module owns: the engine reports, the platform decides. A test
@@ -13,42 +13,42 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
-  verdictFromExitCode,
-  engineDir,
-  validateSkillWithEngine,
+  declarationVerdictFromExitCode,
+  declarationEngineDir,
+  validateSkillDeclaration,
   _resetPythonChoiceForTest,
-  verifyNseapCoreIntegrity,
-  parseNseapReport,
-  resultFromExitCodeAndReport,
-} from '../../../../src/main/features/security/nseap-core-adapter';
+  verifyDeclarationCoreIntegrity,
+  parseDeclarationReport,
+  declarationResultFromExitCodeAndReport,
+} from '../../../../src/main/features/security/skill-declaration-adapter';
 import { marketplaceContentTreeHash } from '../../../../src/main/util/marketplace-tree-hash';
 
-const ENGINE = 'resources/guardrail/nseap-security-core';
-const PIN = 'resources/guardrail/nseap-security-core.INTEGRITY';
+const ENGINE = 'resources/guardrail/skill-declaration-core';
+const PIN = 'resources/guardrail/skill-declaration-core.INTEGRITY';
 
-describe('nseap-core-adapter › verdictFromExitCode', () => {
+describe('skill-declaration-adapter › declarationVerdictFromExitCode', () => {
   it('maps success codes', () => {
-    expect(verdictFromExitCode(0)).toBe('pass');
-    expect(verdictFromExitCode(10)).toBe('pass_with_warnings');
+    expect(declarationVerdictFromExitCode(0)).toBe('pass');
+    expect(declarationVerdictFromExitCode(10)).toBe('pass_with_warnings');
   });
 
   it('maps actionable codes to needs_input rather than blocked', () => {
     // NOT_READY / NEEDS_INPUT mean "the author has something to fill in", not
     // "this content is dangerous". Collapsing them into `blocked` would report a
     // missing field as a threat.
-    expect(verdictFromExitCode(11)).toBe('needs_input');
-    expect(verdictFromExitCode(12)).toBe('needs_input');
+    expect(declarationVerdictFromExitCode(11)).toBe('needs_input');
+    expect(declarationVerdictFromExitCode(12)).toBe('needs_input');
   });
 
   it('maps validation and security failures to blocked', () => {
     for (const code of [20, 21, 22, 23, 31, 32, 33, 34]) {
-      expect(verdictFromExitCode(code), `exit ${code}`).toBe('blocked');
+      expect(declarationVerdictFromExitCode(code), `exit ${code}`).toBe('blocked');
     }
   });
 
   it('maps execution error to unknown, never blocked', () => {
     // An infrastructure failure is "we could not check", not "it is unsafe".
-    expect(verdictFromExitCode(40)).toBe('unknown');
+    expect(declarationVerdictFromExitCode(40)).toBe('unknown');
   });
 
   it('maps the phase-2 range to unknown rather than silently admitting it', () => {
@@ -56,35 +56,35 @@ describe('nseap-core-adapter › verdictFromExitCode', () => {
     // KEY_STATUS_INVALID / GATE_DENIED. Today's engine cannot emit them; a future
     // one that does must not read as `pass` by failing to match a case.
     for (const code of [35, 36, 37, 38, 39]) {
-      expect(verdictFromExitCode(code), `exit ${code}`).toBe('unknown');
+      expect(declarationVerdictFromExitCode(code), `exit ${code}`).toBe('unknown');
     }
   });
 
   it('maps unrecognised and null codes to unknown', () => {
-    expect(verdictFromExitCode(99)).toBe('unknown');
-    expect(verdictFromExitCode(null)).toBe('unknown');
-    expect(verdictFromExitCode(-1)).toBe('unknown');
+    expect(declarationVerdictFromExitCode(99)).toBe('unknown');
+    expect(declarationVerdictFromExitCode(null)).toBe('unknown');
+    expect(declarationVerdictFromExitCode(-1)).toBe('unknown');
   });
 
   it('never returns pass for any code other than 0', () => {
     // The property that matters: admitting content must require an explicit 0.
     for (let code = 1; code <= 60; code++) {
-      expect(verdictFromExitCode(code), `exit ${code}`).not.toBe('pass');
+      expect(declarationVerdictFromExitCode(code), `exit ${code}`).not.toBe('pass');
     }
   });
 });
 
-describe('nseap-core-adapter › report parsing', () => {
+describe('skill-declaration-adapter › report parsing', () => {
   it('parses a JSON report and rejects empty or malformed output', () => {
-    expect(parseNseapReport('')).toBeNull();
-    expect(parseNseapReport('   ')).toBeNull();
-    expect(parseNseapReport('not-json')).toBeNull();
-    expect(parseNseapReport('{"subject":{"worktree_digest":"sha256:abc"}}'))
+    expect(parseDeclarationReport('')).toBeNull();
+    expect(parseDeclarationReport('   ')).toBeNull();
+    expect(parseDeclarationReport('not-json')).toBeNull();
+    expect(parseDeclarationReport('{"subject":{"worktree_digest":"sha256:abc"}}'))
       .toEqual({ subject: { worktree_digest: 'sha256:abc' } });
   });
 
   it('never turns a missing report into pass, even when the exit code is 0', () => {
-    const result = resultFromExitCodeAndReport(0, null);
+    const result = declarationResultFromExitCodeAndReport(0, null);
     expect(result.verdict).toBe('unknown');
     expect(result.unavailableReason).toBe('unparseable_report');
     expect(result.exitCode).toBe(0);
@@ -95,7 +95,7 @@ describe('nseap-core-adapter › report parsing', () => {
       subject: { worktree_digest: 'sha256:abc', subject_digest: null },
       validation: { result: 'PASS', findings: [] },
     };
-    const result = resultFromExitCodeAndReport(0, report);
+    const result = declarationResultFromExitCodeAndReport(0, report);
     expect(result.verdict).toBe('pass');
     expect(result.engineResult).toBe('PASS');
     expect(result.worktreeDigest).toBe('sha256:abc');
@@ -103,9 +103,9 @@ describe('nseap-core-adapter › report parsing', () => {
   });
 });
 
-describe('nseap-core-adapter › packaged engine', () => {
+describe('skill-declaration-adapter › packaged engine', () => {
   it('resolves the engine directory from packaged resources', () => {
-    expect(engineDir()).toBeTruthy();
+    expect(declarationEngineDir()).toBeTruthy();
   });
 
   it('vendors PyYAML as pure Python with no compiled extension', () => {
@@ -134,7 +134,7 @@ describe('nseap-core-adapter › packaged engine', () => {
   });
 });
 
-describe('nseap-core-adapter › integrity pin', () => {
+describe('skill-declaration-adapter › integrity pin', () => {
   it('stores the pin beside the tree, not inside it', () => {
     // Inside would be self-defeating: the tree hash covers every file in the
     // directory, so writing the pin would change the value it records and the
@@ -162,40 +162,40 @@ describe('nseap-core-adapter › integrity pin', () => {
   });
 
   it('reports the packaged engine as verified at runtime', () => {
-    const dir = engineDir();
+    const dir = declarationEngineDir();
     expect(dir).toBeTruthy();
-    expect(verifyNseapCoreIntegrity(dir!).status).toBe('verified');
+    expect(verifyDeclarationCoreIntegrity(dir!).status).toBe('verified');
   });
 
   it('reports tampered when a file inside the engine changes', () => {
-    const dir = engineDir()!;
+    const dir = declarationEngineDir()!;
     const probe = path.join(dir, 'security_core', '_integrity_probe.py');
     fs.writeFileSync(probe, '# probe\n');
     try {
-      expect(verifyNseapCoreIntegrity(dir).status).toBe('tampered');
+      expect(verifyDeclarationCoreIntegrity(dir).status).toBe('tampered');
     } finally {
       fs.unlinkSync(probe);
     }
-    expect(verifyNseapCoreIntegrity(dir).status).toBe('verified');
+    expect(verifyDeclarationCoreIntegrity(dir).status).toBe('verified');
   });
 
   it('reports unpinned when the pin file is missing', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nseap-integrity-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'declaration-integrity-'));
     fs.writeFileSync(path.join(dir, 'probe.txt'), 'probe');
     try {
-      expect(verifyNseapCoreIntegrity(dir).status).toBe('unpinned');
+      expect(verifyDeclarationCoreIntegrity(dir).status).toBe('unpinned');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });
 
-describe('nseap-core-adapter › engine run', () => {
+describe('skill-declaration-adapter › engine run', () => {
   beforeEach(() => { _resetPythonChoiceForTest(); });
 
   /** Skip when no interpreter on this machine can load the vendored payload. */
   function pythonUsable(): boolean {
-    const dir = engineDir();
+    const dir = declarationEngineDir();
     if (!dir) return false;
     for (const p of [process.platform === 'win32' ? 'python' : 'python3']) {
       try {
@@ -215,8 +215,8 @@ describe('nseap-core-adapter › engine run', () => {
 
   it('returns unknown with a reason for a nonexistent skill root', async () => {
     if (!pythonUsable()) return;
-    const missing = path.join(os.tmpdir(), `nseap-absent-${Date.now()}`);
-    const r = await validateSkillWithEngine(missing, 'PREVALIDATION');
+    const missing = path.join(os.tmpdir(), `declaration-absent-${Date.now()}`);
+    const r = await validateSkillDeclaration(missing, 'PREVALIDATION');
     // Cannot load the manifest → EXECUTION_ERROR → unknown. Never `blocked`:
     // a missing directory is not evidence that content is dangerous.
     expect(r.verdict).toBe('unknown');
@@ -226,7 +226,7 @@ describe('nseap-core-adapter › engine run', () => {
     if (!pythonUsable()) return;
     const fixture = path.resolve(ENGINE, 'fixtures', 'sample-skill');
     if (!fs.existsSync(fixture)) return; // fixtures are optional in packaged builds
-    const r = await validateSkillWithEngine(fixture, 'PREVALIDATION');
+    const r = await validateSkillDeclaration(fixture, 'PREVALIDATION');
     expect(['pass', 'pass_with_warnings']).toContain(r.verdict);
     // PREVALIDATION must never claim an authoritative subject digest.
     expect(r.subjectDigest).toBeNull();
@@ -238,7 +238,7 @@ describe('nseap-core-adapter › engine run', () => {
     const fixture = path.resolve(ENGINE, 'fixtures', 'sample-skill');
     if (!fs.existsSync(fixture)) return;
     const pinned = fs.readFileSync(PIN, 'utf8').trim();
-    await validateSkillWithEngine(fixture, 'PREVALIDATION');
+    await validateSkillDeclaration(fixture, 'PREVALIDATION');
     // Running the engine must not change its own tree hash: Python would
     // otherwise write __pycache__ into it and the integrity pin would report
     // `tampered` from the second run onward.

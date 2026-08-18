@@ -54,8 +54,8 @@ description: "为问题、功能或方案选择合适的优先级框架，基于
 - 数据互相冲突：并列冲突及适用条件，不自行裁决为单一事实。
 - 预算耗尽：返回当前证据、未完成步骤和可安全续跑点。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要“把优先级从单一分数升级为可解释、可复核、能暴露不确定性的决策。”，并已提供或授权“产品目标、成功指标和时间范围”与“候选问题/方案及证据”等最小业务输入。
 - `do_not_use_when`：缺少或未授权“产品目标、成功指标和时间范围”；“候选问题/方案及证据”的对象、范围或版本无法确认；任务不属于“feature-prioritization”职责；或请求违反专属判断规则“优先排序问题，再评估解决方案。”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
@@ -69,7 +69,7 @@ description: "为问题、功能或方案选择合适的优先级框架，基于
 - 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
 - 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
 - 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->
 
 ## 详细方法
 

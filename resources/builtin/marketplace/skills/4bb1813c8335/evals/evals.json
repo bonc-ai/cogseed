@@ -1,5 +1,5 @@
 {
-  "eval_suite_id": "eval.skill.cogseed.student.term-map.nseap.v1",
+  "eval_suite_id": "eval.skill.cogseed.student.term-map.v1",
   "skill_id": "skill.cogseed.student.term-map",
   "status": "synthetic_structure_cases_not_run",
   "evidence_policy": {

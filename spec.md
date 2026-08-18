@@ -213,7 +213,7 @@ B 类两条都不需要决策就能让 UI 诚实（§5 第 0 层 0-3 / 0-4），
 
 | ID | 问题 | 事实 | 位置 |
 |---|---|---|---|
-| **N-13** | `nseap-meta-skill-engine` 整包孤立 | 92 个文件、只有 `dist/` 没有 `src/`、不在 workspaces 里、全仓零 import。删除计划早已执行完，只剩目录没清 | `packages/nseap-meta-skill-engine/`<br>计划见 `docs/superpowers/plans/2026-08-10-remove-meta-skill-evolution-line-b-prime.md` |
+| **N-13** | `meta-skill-engine` 整包孤立 | 92 个文件、只有 `dist/` 没有 `src/`、不在 workspaces 里、全仓零 import。删除计划早已执行完，只剩目录没清 | `packages/meta-skill-engine/`<br>计划见 `docs/superpowers/plans/2026-08-10-remove-meta-skill-evolution-line-b-prime.md` |
 | **N-14** | P3394 特性开关 10 去其 9 无消费者 | 只有 `skilllifecycle` 被读。`gateb`（KSTAR 隔离复用验证）、`snapshot`、`rolecomposition` 等 9 个无任何读取点——**包括看起来正是为 M-1/M-2 准备的那个 `gateb`** | `p3394/flags.ts` · 唯一消费者 `skills/skill-lifecycle.ts:93` |
 | **N-15** | 孤儿 i18n 文案键 | `cognition.minimum_capability_pack`「最小能力包」四语齐全，渲染层零引用。是 Pack 那条线被弃用后的遗留物 | `src/renderer/locales/{zh,en,ja,pt}.json` |
 | **N-16** | 技能版本库仍优先读环境变量 | chen 已把 `userLocalRoot` 引进来（原来完全自造），但仍是 `process.env.ORKAS_WORKSPACE_ROOT \|\| path.dirname(path.dirname(userLocalRoot(uid)))` 再重新拼一遍 `uid/local/...`。绕了一圈回到 paths 已经能直接给的东西 | `skills/version-store.ts:67-76` |

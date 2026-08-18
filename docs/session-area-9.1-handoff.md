@@ -109,7 +109,7 @@ conversation-info.js（右侧五段面板）
 1. **未合入主线的独立改进**（在本地 worktree `dev/niubaokang-session-area` 分支，未推送）：plan-rail 纯函数测试桥 + 10 个单测（`test/renderer/plan-rail.test.ts`）、侧边栏拉伸手柄增强（命中区 10px + 悬停指示条）。如需可 cherry-pick：`9493f9a0`（测试桥）、`fcf725ff`（手柄增强，含右侧用户语言重构——**该重构大部分已被主线吸收，只需 cherry-pick 手柄部分**）。
 2. **「本次最小 Context 内容摘要」未做**：右侧 ① 段显示真实执行记录与引用，但"携带了哪项能力/角色切片"的内容级摘要需要主进程 ContextProjection 数据链路（recall/p3394 投影），尚未接入。
 3. **实机验证**：五段面板、继续/重试、拖拽手柄建议在真实运行环境过一遍（本机 `./run.sh` 启动）。
-4. **存量测试失败（与本次改动无关，基线同样失败）**：`test/main/features/security/` 约 27 项（sentry 适配器环境依赖）；`test/renderer/lazy-features.test.ts`、`skills-nseap-declaration.test.ts` 3 项（develop 合并漂移）。
+4. **存量测试失败（与本次改动无关，基线同样失败）**：`test/main/features/security/` 约 27 项（sentry 适配器环境依赖）；`test/renderer/lazy-features.test.ts`、`skills-declaration-check.test.ts` 3 项（develop 合并漂移）。
 5. **规范未冻结事项**：doc-v0.2 是 Review 候选；初始额度数值、Token 平台、Hub 首发范围等（§13）**未冻结，不得硬编码为 UI 承诺**（如"剩余 2 次短任务"等原型数字）。
 
 ## 7. 红线（评审与后续开发必须遵守）
