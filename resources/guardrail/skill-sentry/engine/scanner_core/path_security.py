@@ -52,7 +52,14 @@ def collect_evidence(skill_dir: Path) -> tuple[set[str], list[tuple[str, str]]]:
     for path in sorted(skill_dir.rglob("*")):
         if not path.is_file():
             continue
-        rel = path.relative_to(skill_dir).as_posix()
+        relative_path = path.relative_to(skill_dir)
+        # Generated/runtime directories are not part of a Skill's source. In
+        # particular, Python bytecode in __pycache__ can contain copied URLs or
+        # command strings and would otherwise create environment-dependent
+        # findings after a local test run.
+        if IGNORED_DIRS.intersection(relative_path.parts):
+            continue
+        rel = relative_path.as_posix()
         files.add(rel.lower())
         if path.suffix.lower() in TEXT_EXT and path.stat().st_size <= 1_000_000:
             try:

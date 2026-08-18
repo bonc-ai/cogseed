@@ -1164,7 +1164,15 @@ const _quotesByCid = new Map();   // cid → Array<{ fromActor, fromName, msgId,
 function _normRecipient(next) {
   if (!next || (next.kind !== 'commander' && next.kind !== 'agent')) return null;
   if (next.kind === 'commander') return { ..._COMMANDER };
-  return { kind: 'agent', id: String(next.id || ''), name: String(next.name || next.id || '') };
+  const origin = next.origin === 'cli_fallback' || next.origin === 'active_floor'
+    ? next.origin
+    : undefined;
+  return {
+    kind: 'agent',
+    id: String(next.id || ''),
+    name: String(next.name || next.id || ''),
+    ...(origin ? { origin } : {}),
+  };
 }
 
 function _activeRecipient(target) {
@@ -1199,7 +1207,7 @@ function setChatRecipient(target, next, _opts = {}) {
     _projectChatRecipient = r;
   } else if (currentCid) {
     if (_opts.auto === true) {
-      if (r.kind === 'agent') _autoRecipientByCid.set(currentCid, r);
+      if (r.kind === 'agent') _autoRecipientByCid.set(currentCid, { ...r, origin: 'active_floor' });
       else _autoRecipientByCid.delete(currentCid);
     } else {
       _autoRecipientByCid.delete(currentCid);
@@ -2815,7 +2823,20 @@ function _normaliseRecipientSnapshot(snapshot) {
   if (!r) return null;
   return {
     ...r,
+    ...(r.kind === 'agent'
+      ? { origin: r.origin === 'cli_fallback' || r.origin === 'active_floor' ? r.origin : 'user_selection' }
+      : {}),
     resetFloor: snapshot && snapshot.resetFloor === true,
+  };
+}
+
+function _recipientRoutingFields(snapshot) {
+  const snap = _normaliseRecipientSnapshot(snapshot);
+  if (!snap || snap.kind !== 'agent' || !snap.id) return {};
+  if (snap.origin !== 'user_selection' && snap.origin !== 'cli_fallback') return {};
+  return {
+    recipient_agent_id: snap.id,
+    recipient_origin: snap.origin,
   };
 }
 
@@ -2857,12 +2878,11 @@ function _applyRecipientPrefixWithSnapshot(raw, snapshot) {
     const sep = /^>/.test(text) ? '\n' : ' ';
     return '@commander' + sep + text;
   }
-  if (snap.kind !== 'agent' || !snap.id) return raw;
-  if (_LEADING_MENTION_RE.exec(text)) return text;
-  const display = _recipientPrefixName(snap);
-  if (!display) return raw;
-  const sep = /^>/.test(text) ? '\n' : ' ';
-  return '@' + String(display) + sep + text;
+  // Composer selections are sent as structured routing fields. Keep the
+  // user's visible text untouched; raw, manually typed @mentions still flow
+  // through the legacy mention parser and Wake Gate.
+  if (snap.kind === 'agent' && snap.id) return raw;
+  return raw;
 }
 
 function applyRecipientPrefix(raw, target, opts = {}) {
@@ -7481,6 +7501,9 @@ function _appendWelcomeThinkingPlaceholder(cid) {
 async function loadConversationHistory(cid, opts = {}) {
   const perfStartedAt = performance.now();
   const container = document.getElementById('chat-history');
+  // The composer is shared across conversations. Drop approval cards owned by
+  // the previous cid before the new transcript starts loading.
+  _wakeRequestHost(cid, { create: false });
   _cancelActiveUserMessageEdit({ focus: false });
   // 9.1 会话区域统一框架：切换会话时复位顶部执行计划轨道（plan-rail.js）。
   // 无该会话的 plan 时轨道自隐藏；历史恢复由 _renderPersistedProcess 喂入。
@@ -9028,9 +9051,15 @@ function _wakeRequestHost(cid, options = {}) {
   const wrap = document.querySelector('#panel-conversation .chat-input-wrapper');
   if (!wrap) return null;
   let host = wrap.querySelector('.chat-wake-pending-host');
+  if (host && host.dataset.cid !== cid) {
+    host.remove();
+    host = null;
+    try { _updateChatInputReserve(); } catch (_) {}
+  }
   if (!host && options.create !== false) {
     host = document.createElement('div');
     host.className = 'chat-wake-pending-host';
+    host.dataset.cid = cid;
     host.setAttribute('role', 'region');
     host.setAttribute('aria-live', 'polite');
     const anchor = wrap.querySelector('.chat-input-area');
@@ -9123,6 +9152,7 @@ function _mountWakeRequestCards(host, message, opts = {}) {
     if (opts.replace) _pruneWakeRequestHost(_wakeRequestHost(cid, { create: false }));
     return;
   }
+  if (host.dataset.cid !== cid) return;
   const requestsByKey = new Map();
   for (const request of message.wake_requests || []) {
     if (!request?.id || String(request.status || 'pending') !== 'pending') continue;
@@ -9150,8 +9180,7 @@ function _mountWakeRequestCards(host, message, opts = {}) {
     const key = _wakeRequestSemanticKey(request);
     const selector = `.chat-wake-request[data-wake-request-id="${CSS.escape(String(request.id))}"]`;
     const existing = host.querySelector(selector)
-      || host.querySelector(`.chat-wake-request[data-wake-request-key="${CSS.escape(key)}"]`)
-      || document.querySelector(selector);
+      || host.querySelector(`.chat-wake-request[data-wake-request-key="${CSS.escape(key)}"]`);
     if (existing) {
       _renderWakeRequestCard(existing, request, cid);
       continue;
@@ -10556,7 +10585,7 @@ async function handleNewChatSubmit() {
     await uiAlert(t('oss.task_required'));
     return;
   }
-  if (!(await _ensureModelOrCliFallback(DRAFT_CID))) return;
+  if (!(await _ensureModelOrCliFallback(DRAFT_CID, 'new-chat', raw))) return;
   const references = _referenceSnapshotsForQuotes(quotes);
   const requestText = raw || t('chat.reference_default_prompt');
   const useSelections = (typeof consumeChatUseSelections === 'function')
@@ -10696,6 +10725,7 @@ async function handleNewChatSubmit() {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
+    ..._recipientRoutingFields(recipientSnapshot),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -10744,7 +10774,7 @@ async function handleChatSubmit() {
     _clearDraft(currentCid);
     return;
   }
-  if (!(await _ensureModelOrCliFallback(currentCid))) return;
+  if (!(await _ensureModelOrCliFallback(currentCid, 'conversation', raw))) return;
   const cid = currentCid;
   const quotes = _getQuotes(cid).slice();
   const references = _referenceSnapshotsForQuotes(quotes);
@@ -10814,6 +10844,7 @@ async function handleChatSubmit() {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
+    ..._recipientRoutingFields(recipientSnapshot),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -11387,14 +11418,23 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   }
   if (!agent) return false;
 
-  _recipientByCid[cid] = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
+  _recipientByCid[cid] = {
+    kind: 'agent',
+    id: String(agent.agent_id || ''),
+    name: String(agent.name || cli),
+    origin: 'cli_fallback',
+  };
   // new-chat（DRAFT_CID）场景：降级必须同步到 `_newChatRecipient` ——
-  // handleNewChatSubmit 的发送快照与 mention 注入都读 `_activeRecipient('new-chat')`
-  // （即 `_newChatRecipient`），只写 `_recipientByCid[DRAFT_CID]` 的话，后续
-  // `applyRecipientPrefix` 拿到的仍是 commander，消息不会带 `@Agent` 前缀，
-  // 后端仍按 to=commander 路由 → 又报「未配置模型」。
+  // handleNewChatSubmit 的结构化发送快照读 `_activeRecipient('new-chat')`
+  // （即 `_newChatRecipient`）。只写 `_recipientByCid[DRAFT_CID]` 的话，
+  // 后续请求不会携带 recipient_agent_id，仍会按 commander 路由。
   if (cid === DRAFT_CID && typeof _newChatRecipient !== 'undefined') {
-    _newChatRecipient = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
+    _newChatRecipient = {
+      kind: 'agent',
+      id: String(agent.agent_id || ''),
+      name: String(agent.name || cli),
+      origin: 'cli_fallback',
+    };
   }
   _cliFallbackApplied = cid;
   try { _renderRecipientChip('conversation'); } catch (_) {}
@@ -11514,7 +11554,12 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
  * 仅用于主对话（new-chat / conversation）的 Commander 场景；技能/agent 编辑聊天
  * 等仍走 ensureModelConfigured 原逻辑。
  */
-async function _ensureModelOrCliFallback(cid) {
+async function _ensureModelOrCliFallback(cid, target = 'conversation', rawContent = '') {
+  const selected = _activeRecipient(target);
+  if (selected && selected.kind === 'agent' && selected.id) return true;
+  // A raw mention is an explicit dispatch request of its own. Let main parse
+  // and Wake-gate it; automatic CLI fallback must not replace its target.
+  if (_LEADING_MENTION_RE.test(String(rawContent || '').trim())) return true;
   if (ensureModelConfigured({ silent: true })) return true;
   const ok = await _maybeApplyCliFallback(cid);
   _convLog.info('[cli-fallback] ensureModelOrCliFallback', { cid, ok, recipient: _activeRecipient('conversation') });
@@ -11552,37 +11597,31 @@ async function sendInConversation(cid, content, extra, options = {}) {
   if (!cid) return { started: false, aborted: false, errored: false, result: 'failure' };
   const startedAt = performance.now();
   const sendOptions = options && typeof options === 'object' ? options : {};
-  let statAgentId = String(sendOptions.agent_id || '');
+  const isInternalReplay = !!String(extra?.retry_message_id || extra?.edit_message_id || '').trim();
+  let statAgentId = String(sendOptions.agent_id || extra?.recipient_agent_id || '');
 
   // Commander CLI fallback: when no API-key model is configured and the
   // message targets the commander (no explicit agent), route this
   // conversation to the user's signed-in CLI agent so chat still works.
   // Cheap IPC checks; any failure falls through to the normal send path.
-  if (!statAgentId) {
+  if (!statAgentId && !isInternalReplay) {
     try {
       const recipient = _activeRecipient('conversation');
       const toCommander = !recipient || recipient.kind === 'commander';
       _convLog.info('[cli-fallback] sendInConversation check', { cid, statAgentId, recipientKind: recipient && recipient.kind, toCommander });
-      if (toCommander) {
+      if (toCommander && !_LEADING_MENTION_RE.test(String(content || '').trim())) {
         await _maybeApplyCliFallback(cid);
       }
-      // A successful fallback updates _recipientByCid but NOT sendOptions
-      // (it was snapshot before this helper ran). Mirror it back so the
-      // actual send is routed to the CLI agent, not the commander.
+      // A successful fallback updates the recipient. Mirror the validated
+      // snapshot into the request body so main can route without parsing a
+      // synthetic @mention from visible text.
       const after = _activeRecipient('conversation');
       if (after && after.kind === 'agent' && after.id) {
         sendOptions.agent_id = after.id;
         statAgentId = after.id;
-        // The server floor is set by parsing `@name` mentions, not by any
-        // agent_id field. When this send did not already carry a recipient
-        // prefix (direct sendInConversation callers bypass applyRecipientPrefix),
-        // inject the mention so the CLI agent actually holds the floor.
-        if (!_LEADING_MENTION_RE.exec(String(content || ''))) {
-          const display = _recipientPrefixName(after);
-          if (display) {
-            const sep = /^>/.test(String(content || '')) ? '\n' : ' ';
-            content = '@' + display + sep + content;
-          }
+        if (!extra?.recipient_agent_id) {
+          const routing = _recipientRoutingFields(after);
+          if (routing.recipient_agent_id) extra = { ...(extra || {}), ...routing };
         }
       }
     } catch (err) {
@@ -13396,7 +13435,12 @@ function createChatController(config) {
     // drains and auto-seed sends (e.g. skills.js 'autoSeed').
     // 无模型自动降级：若该会话已降级到本机 CLI agent（_cliFallbackApplied === id），
     // CLI 用自己的凭据执行，不需要 CogSeed 的 API 模型 → 放行。
-    if (!(_cliFallbackApplied === id) && !ensureModelConfigured()) {
+    const hasStructuredAgent = !!String(extraBody?.recipient_agent_id || '').trim();
+    const isFailedTurnRetry = !!String(extraBody?.retry_message_id || '').trim();
+    const isMessageEdit = !!String(extraBody?.edit_message_id || '').trim();
+    const hasManualRecipientMention = _LEADING_MENTION_RE.test(content);
+    if (!hasStructuredAgent && !hasManualRecipientMention && !isFailedTurnRetry && !isMessageEdit
+      && !(_cliFallbackApplied === id) && !ensureModelConfigured()) {
       return { started: false, aborted: false, errored: false, reason: 'model_not_configured' };
     }
     if (hooks.beforeSend) {

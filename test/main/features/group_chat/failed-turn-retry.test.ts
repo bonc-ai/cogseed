@@ -150,6 +150,7 @@ describe('group_chat failed-turn smart retry', () => {
       fromActorId: 'user',
       text: 'Continue',
       forceTo: ['commander'],
+      userRoute: { agentId: 'commander', origin: 'failed_turn_retry' },
     });
     expect(resolved.value.enqueue.model_text).toContain('<task-retry mode="resume">');
     expect(resolved.value.enqueue.model_text).toContain('Do not repeat work already verified as successful');
