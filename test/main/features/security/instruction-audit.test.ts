@@ -285,6 +285,25 @@ describe('instruction audit › model call failure modes', () => {
     expect(sawSkillList).toEqual([]);
   });
 
+  it('runs the audit in an ephemeral aside session (never cloud/sessions/)', async () => {
+    // Regression guard: this used to be `skill-instr-audit-*`, which the
+    // session-store treats as a resumable `skill` kind and routes to
+    // `cloud/sessions/` where nothing ever collects it — a bulk audit batch
+    // once leaked ~74k files there. `aside-*` is ephemeral: it lands in
+    // `local/sessions/` and the startup sweep ages it out by mtime.
+    let sawSessionId = '';
+    await auditInstructionsWithModel('u1', SEGMENTS, {
+      loadPrompt,
+      chat: async (opts) => {
+        sawSessionId = opts.sessionId;
+        return { ok: true, text: '{"verdict":"reviewed_clean","findings":[]}' };
+      },
+    });
+
+    expect(sawSessionId.startsWith('aside-instr-audit-')).toBe(true);
+    expect(sawSessionId).not.toMatch(/^skill-instr-audit-/);
+  });
+
   it('passes the passages through to the prompt', async () => {
     let seen = '';
     await auditInstructionsWithModel('u1', SEGMENTS, {

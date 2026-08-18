@@ -1245,8 +1245,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { skills: skillRows, agents: agentRows };
   },
 
-  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, asset_reference_bindings });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1270,13 +1270,28 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'spaces.update': async (args, ctx) => {
-    const { spaceId, name, icon, template_id, base_agent, base_agents, main_skill_ref } = args || {};
+    // 全字段透传：后端 updateSpace 支持 name/icon/template_id/primary_template_id/
+    // secondary_template_ids/space_type/sustained_outcome/instructions/base_agent/
+    // base_agents/main_skill_ref/gate_status/pinned_at。除 name/icon/template_id
+    // 外均按「调用方是否显式传入」转发（undefined 视为不改），避免静默丢字段——
+    // 旧版只收 name/icon/template_id，导致空间目标（sustained_outcome）等更新被丢弃。
+    const {
+      spaceId, name, icon, template_id, primary_template_id, secondary_template_ids,
+      space_type, sustained_outcome, instructions, base_agent, base_agents,
+      main_skill_ref, gate_status,
+    } = args || {};
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const result = await spaces.updateSpace(ctx.userId, spaceId, {
       name, icon, template_id,
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'primary_template_id') ? { primary_template_id } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'secondary_template_ids') ? { secondary_template_ids } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'space_type') ? { space_type } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'sustained_outcome') ? { sustained_outcome } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'instructions') ? { instructions } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'base_agent') ? { base_agent } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'base_agents') ? { base_agents } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'main_skill_ref') ? { main_skill_ref } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'gate_status') ? { gate_status } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'pinned_at') ? { pinned_at: args.pinned_at } : {}),
     });
     if (!result.ok) throw new Error((result as { error: string }).error);
@@ -1382,18 +1397,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { rejected: result.rejected };
   },
 
-  'spaces.assets.list': async ({ spaceId } = {}, ctx) => {
-    if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    return { bindings: await spaces.listSpaceAssetBindings(ctx.userId, spaceId) };
-  },
-
-  'spaces.assets.bind': async ({ spaceId, ref } = {}, ctx) => {
-    if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await spaces.bindSpaceAsset(ctx.userId, spaceId, ref || {});
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { bindings: result.bindings };
-  },
-
   // ── 空间作用域（@ 选择器按空间能力过滤：agents ∪ skills = 模板 bundle ∪ extra）──
   // 语义与 runner 一致（S1）：空间缺失/空配置/全失效 → scope=null（全局可见不过滤）。
   'spaces.scope.resolve': async ({ spaceId } = {}, ctx) => {
@@ -1401,13 +1404,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('invalid spaceId');
     const scope = await spaces.resolveSpaceScope(ctx.userId, spaceId);
     return { scope }; // null = 全局；否则 { skills: string[]; agents: string[] }
-  },
-
-  'spaces.assets.unbind': async ({ spaceId, assetId } = {}, ctx) => {
-    if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await spaces.unbindSpaceAsset(ctx.userId, spaceId, assetId || '');
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { bindings: result.bindings };
   },
 
   // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
@@ -2270,13 +2266,34 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await recallCandidates.batchPromoteRecallCandidates(ctx.userId, candidateIds)) };
   },
 
-  'recall.candidates.promote': async ({ candidateId, riskAcknowledged } = {}, ctx) => {
+  'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
-    const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, { riskAcknowledged: riskAcknowledged === true });
-    // 晋升后候选进 confirmed（终态）。回包必须带上新的 capability，否则渲染层
-    // 拿旧能力继续画"确认/晋升"按钮 —— 那正是 confirmed 假可操作的来源。
-    return { ok: true, ...promoted, ...(promoted.candidate ? { candidate: withRecallCandidateCapabilities(promoted.candidate) } : {}) };
+    if (profileTarget !== undefined) {
+      if (!profileTarget || typeof profileTarget !== 'object' || Array.isArray(profileTarget)
+        || !safeId(profileTarget.groupId)
+        || typeof profileTarget.section !== 'string' || !profileTarget.section.trim() || profileTarget.section.length > 200
+        || typeof profileTarget.fieldName !== 'string' || !profileTarget.fieldName.trim() || profileTarget.fieldName.length > 200
+        || (profileTarget.templateId !== undefined && !safeId(profileTarget.templateId))) {
+        throw new Error('invalid personal profile target');
+      }
+    }
+    const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, {
+      riskAcknowledged: riskAcknowledged === true,
+      ...(profileTarget ? {
+        profileTarget: {
+          groupId: profileTarget.groupId,
+          section: profileTarget.section.trim(),
+          fieldName: profileTarget.fieldName.trim(),
+          ...(profileTarget.templateId ? { templateId: profileTarget.templateId } : {}),
+        },
+      } : {}),
+    });
+    return {
+      ok: true,
+      ...promoted,
+      ...(promoted.candidate ? { candidate: withRecallCandidateCapabilities(promoted.candidate) } : {}),
+    };
   },
 
   // 资产读口统一走 canonical layer：出去的每一条必然是四类正式资产，

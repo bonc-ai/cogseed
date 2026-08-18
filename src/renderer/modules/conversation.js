@@ -341,16 +341,88 @@ function _renderMessageMarkdown(text) {
   const displayText = (skills.length && typeof _simplifyKnownSkillFollowPhrasesForDisplay === 'function')
     ? _simplifyKnownSkillFollowPhrasesForDisplay(raw, skills)
     : raw;
-  const html = renderMarkdownFull(displayText);
+  // search_ability_assets 的引用标记 [asset:<id>]：先保护为占位符（避免被
+  // markdown/autolink 处理成链接或转义），渲染后替换为可点击引用卡。
+  const assetRefIds = [];
+  const protectedText = String(displayText).replace(/\[asset:([A-Za-z0-9_-]{1,64})\]/g, (m, id) => {
+    const idx = assetRefIds.length;
+    assetRefIds.push(id);
+    return `\x00ASSETREF${idx}\x00`;
+  });
+  const html = renderMarkdownFull(protectedText);
   const needsSkillRewrite = _htmlMayContainKnownSkillIdForDisplay(html, skills);
   // Mention highlighting requires DOM walking — do it on a detached
   // container, then return its innerHTML for the bubble to embed.
-  if (!html || (html.indexOf('@') < 0 && !needsSkillRewrite)) return html;
+  if (!html || (html.indexOf('@') < 0 && !needsSkillRewrite && !assetRefIds.length)) return html;
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
   if (needsSkillRewrite) _replaceKnownSkillIdsIn(tmp, skills);
   _highlightMentionsIn(tmp);
+  if (assetRefIds.length) _replaceAssetCitationsIn(tmp, assetRefIds);
   return tmp.innerHTML;
+}
+
+// ── [asset:<id>] 引用卡：占位符 → 可点击 span（跳过 pre/code，避免污染代码块）──
+
+let _abilityAssetTitleCache = null; // Map<id, title> | null；null = 未加载
+let _abilityAssetTitleLoading = false;
+
+/** 加载全局资产名映射（recall.assets.list 全量只读；失败退化为空映射，不阻断渲染）。 */
+async function _ensureAbilityAssetTitles() {
+  if (_abilityAssetTitleCache || _abilityAssetTitleLoading) return;
+  _abilityAssetTitleLoading = true;
+  try {
+    const res = await window.cogseed.invoke('recall.assets.list', {});
+    _abilityAssetTitleCache = new Map((res && Array.isArray(res.assets) ? res.assets : [])
+      .map((a) => [a.id, (a && (a.title || a.id)) || a.id]));
+  } catch (_) {
+    _abilityAssetTitleCache = new Map();
+  } finally {
+    _abilityAssetTitleLoading = false;
+  }
+}
+
+function _abilityAssetTitleById(id) {
+  if (!_abilityAssetTitleCache) void _ensureAbilityAssetTitles();
+  return (_abilityAssetTitleCache && _abilityAssetTitleCache.get(id)) || '';
+}
+
+/** 在渲染结果里把 \x00ASSETREFn\x00 占位符替换为引用卡；代码块（pre/code）内不替换。 */
+function _replaceAssetCitationsIn(container, ids) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const p = node.parentElement;
+      return p && p.closest('pre, code') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+  for (const node of textNodes) {
+    const pattern = /\x00ASSETREF(\d+)\x00/g;
+    if (!pattern.test(node.nodeValue)) continue;
+    pattern.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    let m;
+    while ((m = pattern.exec(node.nodeValue))) {
+      if (m.index > last) frag.appendChild(document.createTextNode(node.nodeValue.slice(last, m.index)));
+      const id = ids[Number(m[1])];
+      if (id) {
+        const span = document.createElement('span');
+        span.className = 'chat-asset-citation';
+        span.dataset.assetCitation = id;
+        span.title = t('chat.asset_citation_tip', '查看资产详情');
+        const name = _abilityAssetTitleById(id) || id;
+        span.textContent = `📎 ${name}`;
+        frag.appendChild(span);
+      } else {
+        frag.appendChild(document.createTextNode(`[asset:?]`));
+      }
+      last = m.index + m[0].length;
+    }
+    if (last < node.nodeValue.length) frag.appendChild(document.createTextNode(node.nodeValue.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
 }
 
 // Build the mention-highlight portion of the textarea mirror. Escapes
@@ -1994,6 +2066,27 @@ document.addEventListener('click', async (e) => {
     uiToast(correctionsText ? `${createdText}${correctionsText}` : createdText, { variant: 'success', timeoutMs: corrections.length ? 6000 : 3000 });
   }
   card.innerHTML = `<div class="space-draft-done">${escapeHtml(createdText)} ${escapeHtml(t('new_chat.space_draft_go'))}</div>`;
+});
+
+// [asset:<id>] 引用卡点击 → 懒加载认知资产页并打开资产详情。
+document.addEventListener('click', (e) => {
+  const el = e.target && e.target.closest ? e.target.closest('[data-asset-citation]') : null;
+  if (!el) return;
+  const assetId = el.dataset.assetCitation;
+  if (!assetId) return;
+  const open = () => {
+    if (typeof window.openCognitionAssetById !== 'function') return;
+    window.openCognitionAssetById(assetId);
+  };
+  if (typeof window.openCognitionAssetById === 'function') {
+    open();
+    return;
+  }
+  // skills feature（含 skills-bindings.js）未加载：先懒加载再跳转
+  const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+  if (typeof loader === 'function') {
+    loader('skills').then(open).catch(() => {});
+  }
 });
 
 async function _startSpaceBuilderConversation() {

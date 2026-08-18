@@ -10112,6 +10112,36 @@ body.model-not-configured .main-content { flex-direction: column; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* [asset:<id>] 引用卡：search_ability_assets 工具引用的经验资产，可点击跳认知资产详情 */
+.chat-asset-citation {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 240px;
+  margin: 0 2px;
+  padding: 1px 9px;
+  border: 1px solid rgba(14, 159, 110, 0.32);
+  border-radius: 99px;
+  background: rgba(14, 159, 110, 0.08);
+  color: #0b7a4f;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: baseline;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.chat-asset-citation:hover {
+  background: rgba(14, 159, 110, 0.14);
+  border-color: rgba(14, 159, 110, 0.55);
+}
+.chat-asset-citation:active {
+  transform: translateY(0.5px);
+}
 .chat-reference-title {
   margin-bottom: 4px;
   overflow: hidden;
@@ -22070,6 +22100,11 @@ body.model-not-configured .main-content { flex-direction: column; }
  display: flex; flex-direction: column; 
 }
 
+.personal-onto-profile-nav-section {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--personal-onto-border);
+}
+
 .personal-onto-nav-section-head {
 
   display: flex;
@@ -22430,6 +22465,193 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 }
 
+.personal-onto-profile-view {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.personal-onto-main-subtitle {
+  margin-top: 2px;
+  color: var(--personal-onto-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.personal-onto-ontology-view {
+  gap: 14px;
+}
+
+.personal-onto-ontology-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--personal-onto-border);
+}
+
+.personal-onto-ontology-heading {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.personal-onto-ontology-hint {
+  max-width: 560px;
+  margin-top: 3px;
+  color: var(--personal-onto-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.personal-onto-ontology-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.personal-onto-ontology-section {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--personal-onto-border);
+  border-radius: 8px;
+  background: var(--personal-onto-card);
+}
+
+.personal-onto-ontology-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  background: var(--personal-onto-bg);
+}
+
+.personal-onto-ontology-section-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.personal-onto-ontology-section-title {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.personal-onto-ontology-section-description {
+  margin-top: 2px;
+  color: var(--personal-onto-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.personal-onto-ontology-section-count {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary, #0e9f6e) 10%, transparent);
+  color: var(--primary-text, #047857);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.personal-onto-ontology-section .personal-onto-profile-list {
+  padding: 0 12px;
+}
+
+.personal-onto-ontology-section .personal-onto-profile-entry {
+  padding: 11px 0;
+}
+
+.personal-onto-ontology-section .personal-onto-profile-entry:last-child {
+  border-bottom: 0;
+}
+
+.personal-onto-profile-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--personal-onto-border);
+  font-size: 12px;
+}
+
+.personal-onto-profile-count {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary, #0e9f6e) 10%, transparent);
+  color: var(--primary-text, #047857);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.personal-onto-profile-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.personal-onto-profile-entry {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--personal-onto-border);
+}
+
+.personal-onto-profile-entry-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--personal-onto-card);
+  color: var(--personal-onto-muted);
+}
+
+.personal-onto-profile-entry-icon .ui-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.personal-onto-profile-entry-text {
+  min-width: 0;
+  padding-top: 2px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.personal-onto-profile-error {
+  display: flex;
+  min-height: 96px;
+  align-items: center;
+  justify-content: center;
+  color: var(--personal-onto-red);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .personal-onto-ontology-intro { flex-direction: column; gap: 8px; }
+  .personal-onto-ontology-sections { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* 角色模板编辑器（复用 memory-* 字段、流水与页签控件） */
 .personal-onto-group-editor {
   display: flex;
@@ -22457,6 +22679,79 @@ body.model-not-configured .main-content { flex-direction: column; }
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Confirmed Personal assets stay visible in a role template even when the
+ * field router cannot make a high-confidence match. This is a lightweight
+ * hand-off section, not a second editable template or a new data store. */
+.personal-onto-template-profile-bridge {
+  padding: 12px 0 2px;
+  border-top: 1px solid var(--personal-onto-border);
+}
+
+.personal-onto-template-profile-bridge-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.personal-onto-template-profile-bridge-title {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.personal-onto-template-profile-bridge-hint {
+  max-width: 640px;
+  margin-top: 3px;
+  color: var(--personal-onto-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.personal-onto-template-profile-bridge-count {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary, #0e9f6e) 10%, transparent);
+  color: var(--primary-text, #047857);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.personal-onto-template-profile-bridge-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.personal-onto-template-profile-bridge-entry {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 9px 0;
+  border-top: 1px solid color-mix(in srgb, var(--personal-onto-border) 72%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.personal-onto-template-profile-bridge-entry .personal-onto-profile-entry-icon {
+  background: var(--personal-onto-bg);
+}
+
+@media (max-width: 560px) {
+  .personal-onto-template-profile-bridge-head { gap: 8px; }
+  .personal-onto-template-profile-bridge-hint { font-size: 10.5px; }
 }
 
 .personal-onto-editor-loading,

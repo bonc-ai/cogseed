@@ -11,6 +11,7 @@ import { getConfiguredModelOAuthExpiredMessage, hasConfiguredModel } from '../au
 import * as chats from '../chats';
 import type { ReviewDecision } from '../cognition/review-decision';
 import { getRecallCandidateCapabilities } from './candidate-capabilities';
+import type { PersonalProfileSyncResult, PersonalProfileTarget } from './personal-profile-sync';
 import {
   run as runCliAgent,
 } from '../local_agents/runner';
@@ -249,6 +250,7 @@ export interface RecallCaptureCandidatePromotion {
   asset: RecallAbilityAssetRecord;
   decision: ReviewDecision;
   receipt: RecallAssetHandoffReceipt;
+  profileProjection?: PersonalProfileSyncResult;
 }
 
 export type RecallCaptureQueryStatus = RecallCaptureStatus | RecallCaptureDisplayStatus | 'completed';
@@ -2568,13 +2570,13 @@ export function startHistoricalRecallCapture(
 export async function promoteRecallCaptureCandidate(
   userId: string,
   candidateId: string,
-  options: { riskAcknowledged?: boolean } = {},
+  options: { riskAcknowledged?: boolean; profileTarget?: PersonalProfileTarget } = {},
 ): Promise<RecallCaptureCandidatePromotion> {
   if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
   const capture = (await listAllRecallCaptures(userId)).find((item) => item.candidateIds.includes(candidateId));
   if (!capture) {
     // 用户确认提升 → actor 必须为 user（promoteRecallCandidate 强制校验；此前漏传导致 IPC 提升一直失败）
-    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged });
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     return promoted;
   }
@@ -2594,7 +2596,7 @@ export async function promoteRecallCaptureCandidate(
   });
 
   try {
-    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged });
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged, ...(options.profileTarget ? { profileTarget: options.profileTarget } : {}) });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     await updateCapture(userId, capture.id, (current) => (
       current.status === 'writing' && current.writingCandidateId === candidateId

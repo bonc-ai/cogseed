@@ -374,15 +374,14 @@ describe('spaces › CRUD', () => {
     expect(r.resources.extra_skills).toEqual([]);
   });
 
-  it('deleteSpace 删除带资产绑定的空间（路线 A 引用不阻碍删除）', async () => {
+  it('deleteSpace 删除带 main_skill_ref 引用的空间（引用不阻碍删除）', async () => {
     const spaces = await loadSpaces();
-    const space = await spaces.createSpace(TEST_UID, { name: 'S' });
-    if (!space.ok) throw new Error('create failed');
-    const bind = await spaces.bindSpaceAsset(TEST_UID, space.space.space_id, {
-      asset_id: 'asset-a',
-      version: '1.0.0',
+    const space = await spaces.createSpace(TEST_UID, {
+      name: 'S',
+      main_skill_ref: { asset_id: 'asset-a', version: '1.0.0' },
     });
-    expect(bind.ok).toBe(true);
+    if (!space.ok) throw new Error('create failed');
+    expect(space.space.main_skill_ref?.asset_id).toBe('asset-a');
 
     const del = await spaces.deleteSpace(TEST_UID, space.space.space_id);
     expect(del.ok).toBe(true);

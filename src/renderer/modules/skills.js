@@ -54,6 +54,8 @@ const _skillsCognitionState = {
   captureFilter: 'all',
   captureSettings: null,
   captureModel: null,
+  /** 已安装个人角色模板的字段清单，供 Personal 候选确认时选择直接落点。 */
+  personalTemplates: [],
   captureSettingsExpanded: false,
   selectedCaptureId: '',
   // Candidate review is a cross-capture work queue. Keep selection in the
@@ -268,6 +270,30 @@ function _captureLinkedAssetIds(capture) {
     ...(Array.isArray(capture?.linkedAssetIds) ? capture.linkedAssetIds : []),
   ].map((id) => String(id || '').trim()).filter(Boolean);
   return [...new Set(ids)];
+}
+
+function _renderPersonalProfileTarget(candidate) {
+  if (candidate?.suggestedType !== 'personal') return '';
+  const templates = (Array.isArray(_skillsCognitionState.personalTemplates)
+    ? _skillsCognitionState.personalTemplates : [])
+    .filter((template) => template && template.installed && template.group_id && Array.isArray(template.sections));
+  const options = ['<option value="">自动匹配模板字段</option>'];
+  for (const template of templates) {
+    for (const section of template.sections) {
+      for (const field of (Array.isArray(section.fields) ? section.fields : [])) {
+        const name = typeof field === 'string' ? field : field?.name;
+        if (!name) continue;
+        const value = encodeURIComponent(JSON.stringify({
+          groupId: template.group_id,
+          templateId: template.template_id,
+          section: section.title,
+          fieldName: name,
+        }));
+        options.push(`<option value="${escapeHtml(value)}">${escapeHtml(`${template.name} · ${section.title} · ${name}`)}</option>`);
+      }
+    }
+  }
+  return `<label class="cognition-candidate-field cognition-candidate-profile-target"><span>${escapeHtml(_cognitionText('cognition.personal_profile_target', '个人模板落点'))}</span><select data-recall-profile-target>${options.join('')}</select><small class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.personal_profile_target_hint', '不选择时由系统自动匹配；只写入已安装模板字段。'))}</small></label>`;
 }
 
 function _cognitionDate(value) {
@@ -2951,6 +2977,7 @@ function renderSkillsCognitionCandidates() {
       <label>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}<input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label>
       <label>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}<input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}"></label>
       <label>${escapeHtml(_cognitionText('cognition.type', '类型'))}<select data-recall-edit-type>${['personal','rule','template','skill_method'].map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('')}</select></label>
+      ${_renderPersonalProfileTarget(candidate)}
       <label>${escapeHtml(_cognitionText('cognition.applicable_when', '适用场景（一行一条）'))}<textarea data-recall-edit-applicable>${escapeHtml((candidate.applicableWhen || []).join('\n'))}</textarea></label>
       <label>${escapeHtml(_cognitionText('cognition.forbidden_when', '禁止场景（一行一条）'))}<textarea data-recall-edit-forbidden>${escapeHtml((candidate.forbiddenWhen || []).join('\n'))}</textarea></label>
       <label class="recall-candidate-editor-wide">${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}<textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label>
@@ -3024,6 +3051,7 @@ function renderSkillsCognitionCandidateDetail() {
       <blockquote class="cognition-candidate-quote">${escapeHtml(candidate.judgment || '')}</blockquote>
       ${candidate.value ? `<p class="skills-cognition-meta">${escapeHtml(candidate.value)}</p>` : ''}
       ${detailCapability.canEdit ? `<label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.type', '类型'))}</span><select data-recall-edit-type>${typeOptions}</select></label>
+      ${_renderPersonalProfileTarget(candidate)}
       <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.candidate_scope_label', '作用范围'))}</span><input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}" placeholder="${escapeHtml(_cognitionText('cognition.candidate_scope_placeholder', '例如：仅产品工作空间'))}"></label>
       <label class="cognition-candidate-field"><span>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}</span><input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label>
       <label class="cognition-candidate-field is-wide"><span>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}</span><textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label>
@@ -3785,7 +3813,7 @@ function renderSkillsCognitionAssets() {
       ? window.refreshPersonalOntology
       : window.renderPersonalOntology;
     if (typeof renderOntology === 'function') {
-      Promise.resolve(renderOntology()).catch((error) => {
+      Promise.resolve(renderOntology({ selectProfile: true })).catch((error) => {
         _skillsLog.warn('personal ontology render failed', { error: (error && error.message) || String(error) });
       });
     }
@@ -4040,7 +4068,7 @@ async function loadSkillsCognitionSnapshot() {
   const capturePayload = { limit: 25 };
   const captureStatuses = _captureStatusesForFilter(snapshotCaptureFilter);
   if (captureStatuses.length) capturePayload.statuses = captureStatuses;
-  const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings, inbox] = await Promise.allSettled([
+  const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings, inbox, personalTemplates] = await Promise.allSettled([
     Promise.resolve().then(() => window.cogseed.invoke('cognition.dashboard.read')),
     Promise.resolve().then(() => window.cogseed.invoke('recall.candidates.list')),
     Promise.resolve().then(() => window.cogseed.invoke('cognition.assets.list', { limit: 500 })),
@@ -4050,6 +4078,7 @@ async function loadSkillsCognitionSnapshot() {
     Promise.resolve().then(() => window.cogseed.invoke('recall.teaching.list', { limit: 20 })),
     Promise.resolve().then(() => window.cogseed.invoke('recall.captures.settings.get')),
     Promise.resolve().then(() => window.cogseed.invoke('cognition.inbox.list')),
+    Promise.resolve().then(() => window.cogseed.invoke('personalOntology.templates.list')),
   ]);
   const captureResultIsCurrent = !captureRequestWasInFlight
     && snapshotCaptureRequestId === _skillsCognitionCaptureRequestId
@@ -4086,6 +4115,10 @@ async function loadSkillsCognitionSnapshot() {
   if (recentCaptures.status === 'fulfilled' && recentCaptures.value?.ok) _skillsCognitionState.recentCaptures = recentCaptures.value.captures || [];
   if (teachingSignals.status === 'fulfilled' && teachingSignals.value?.ok) _skillsCognitionState.teachingSignals = teachingSignals.value.signals || [];
   if (inbox.status === 'fulfilled' && inbox.value?.ok) _skillsCognitionState.inboxItems = inbox.value.items || [];
+  if (personalTemplates.status === 'fulfilled' && personalTemplates.value && personalTemplates.value.ok !== false) {
+    _skillsCognitionState.personalTemplates = Array.isArray(personalTemplates.value.templates)
+      ? personalTemplates.value.templates : [];
+  }
   _skillsCognitionState.captureSettings = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.settings : _skillsCognitionState.captureSettings;
   _skillsCognitionState.captureModel = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.model : _skillsCognitionState.captureModel;
   _skillsCognitionState.loadErrors = [

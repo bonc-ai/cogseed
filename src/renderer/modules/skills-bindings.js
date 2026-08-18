@@ -1407,7 +1407,33 @@ function _initSkillsCognitionBindings() {
         let channel = actionName === 'promote' ? 'recall.candidates.promote' : actionName === 'reject' ? 'recall.candidates.reject' : actionName === 'ignore' ? 'recall.candidates.ignore' : actionName === 'keep-current' ? 'recall.candidates.keepCurrent' : actionName === 'defer' ? 'recall.candidates.defer' : actionName === 'resume' ? 'recall.candidates.resume' : '';
         let payload = { candidateId };
         const candidate = (_skillsCognitionState.recallCandidates || []).find((item) => item.id === candidateId);
+        // Buttons also carry the candidate id; start at the parent so the
+        // container is selected. Resolve the card only for actions that read
+        // card fields, keeping lightweight DOM adapters safe for simple actions.
+        const card = (candidate?.suggestedType === 'personal' || actionName === 'save-and-promote')
+          ? (() => {
+            const parent = recallAction.parentElement;
+            const fromParent = typeof parent?.closest === 'function'
+              ? parent.closest('[data-recall-candidate-id]') : null;
+            return fromParent || (typeof recallAction.closest === 'function'
+              ? recallAction.closest('[data-recall-candidate-id]') : null);
+          })()
+          : null;
+        const readProfileTarget = () => {
+          if (candidate?.suggestedType !== 'personal' || !card) return undefined;
+          const encoded = card.querySelector('[data-recall-profile-target]')?.value || '';
+          if (!encoded) return undefined;
+          try {
+            const target = JSON.parse(decodeURIComponent(encoded));
+            if (!target || !target.groupId || !target.section || !target.fieldName) return undefined;
+            return target;
+          } catch (_) {
+            return undefined;
+          }
+        };
+        const profileTarget = readProfileTarget();
         let riskAcknowledged = false;
+        if (actionName === 'promote' && profileTarget) payload = { candidateId, profileTarget };
         if (actionName === 'promote' || actionName === 'save-and-promote') {
           if (candidate?.risk === 'high') {
             const confirmed = typeof uiConfirm === 'function' && await uiConfirm({
@@ -1417,16 +1443,10 @@ function _initSkillsCognitionBindings() {
             });
             if (!confirmed) return;
             riskAcknowledged = true;
-            if (actionName === 'promote') payload = { candidateId, riskAcknowledged: true };
+            if (actionName === 'promote') payload = { candidateId, riskAcknowledged: true, ...(profileTarget ? { profileTarget } : {}) };
           }
         }
         if (actionName === 'save-and-promote') {
-          // **从父节点起找容器**：`closest()` 是从元素自身开始匹配的，而这些
-          // 动作按钮上同样带 `data-recall-candidate-id`（列表页与详情页都一样），
-          // 直接 `recallAction.closest(...)` 会取到按钮本身——按钮里没有任何
-          // 编辑字段，于是 judgment/suggestedType 全是空串，后端直接以
-          // `invalid recall candidate update` 打回。实机在「确认并限域」上复现。
-          const card = recallAction.parentElement?.closest('[data-recall-candidate-id]');
           if (!card || !candidate) throw new Error('recall candidate unavailable');
           channel = 'recall.candidates.update';
           // 只有页面上**真的渲染了**的字段才参与提交。候选详情页没有适用/禁止
@@ -1455,7 +1475,11 @@ function _initSkillsCognitionBindings() {
         const result = await window.cogseed.invoke(channel, payload);
         if (!result?.ok) throw new Error(result?.error || 'recall candidate action failed');
         if (actionName === 'save-and-promote') {
-          const promoted = await window.cogseed.invoke('recall.candidates.promote', { candidateId, ...(riskAcknowledged ? { riskAcknowledged: true } : {}) });
+          const promoted = await window.cogseed.invoke('recall.candidates.promote', {
+            candidateId,
+            ...(riskAcknowledged ? { riskAcknowledged: true } : {}),
+            ...(profileTarget ? { profileTarget } : {}),
+          });
           if (!promoted?.ok) throw new Error(promoted?.error || 'recall candidate action failed');
         }
         _skillsCognitionState.editingRecallCandidateId = '';
@@ -1558,3 +1582,15 @@ function _initSkillsCognitionBindings() {
 }
 
 _initSkillsCognitionBindings();
+
+// ─── 外部入口：从会话消息的 [asset:<id>] 引用卡跳转到认知资产详情页 ──────
+// conversation.js 懒加载 skills feature 后调用；不依赖调用方已在认知资产页。
+window.openCognitionAssetById = function openCognitionAssetById(assetId) {
+  if (!assetId) return false;
+  _skillsCognitionState.selectedAssetId = String(assetId);
+  _skillsCognitionState.assetCategoryFilter = '';
+  switchSkillsCognitionPage('assets');
+  if (typeof _setViewFromSidebar === 'function') _setViewFromSidebar('recall');
+  else if (typeof setView === 'function') setView('recall');
+  return true;
+};
