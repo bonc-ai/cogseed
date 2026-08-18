@@ -251,7 +251,6 @@ export class P3394OutboundHub {
       // the terminal message arrives, and never feed them to the executor.
       return true;
     }
-    }
     clearTimeout(waiter.timer);
     this.pending.delete(envelope.session_id);
     const text = envelopeText(envelope);
