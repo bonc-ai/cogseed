@@ -60,7 +60,6 @@ package.json.new
 # scanner tree it sits beside, so it is not source and must not be committed —
 # a stale pin would report a clean tree as tampered.
 /resources/guardrail/skill-sentry.INTEGRITY
-/resources/guardrail/nseap-security-core.INTEGRITY
 
 # Written by scripts/strip-closed-source-scanner.mjs when building an
 # open-source distribution. Not source: its presence in a normal checkout would
