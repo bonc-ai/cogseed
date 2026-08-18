@@ -176,3 +176,48 @@ describe('cognition asset chain reaches the CogSeed Runtime', () => {
     expect(await runtimeContext.buildRuntimeAssetContext(USER, CID)).toEqual([]);
   });
 });
+
+describe('the projection card tells the user their confirmed version drifted', () => {
+  it('marks the asset stale and keeps the confirmed version visible', async () => {
+    const { assets, projection } = await mods();
+    const cardModule = await import('../../../../src/main/features/recall/projection-card');
+    const promoted = await weakCandidateToAsset();
+    const confirmed = await confirmedProjectionFor(promoted.asset.id, 'task-1', 'msg-1');
+
+    const before = await cardModule.buildProjectionCard(USER, confirmed.id);
+    expect(before.staleAssetIds).toEqual([]);
+    expect(before.assetSummaries[0]).toMatchObject({ version: '1', confirmedVersion: '1' });
+    expect(before.assetSummaries[0].stale).toBeUndefined();
+
+    await assets.updateAbilityAsset(USER, promoted.asset.id, {
+      statement: '架构决策必须写明取舍与被否决的方案', reason: '补上被否决方案', actor: 'user',
+    });
+
+    const after = await cardModule.buildProjectionCard(USER, confirmed.id);
+    // 告知，但不改注入：确认的还是 v1，卡片同时给出 live 的 v2。
+    expect(after.staleAssetIds).toEqual([promoted.asset.id]);
+    expect(after.assetSummaries[0]).toMatchObject({ version: '2', confirmedVersion: '1', stale: true });
+
+    // 投影本身不被改写——注入内容仍然锁在 v1。
+    const stored = await projection.readContextProjection(USER, confirmed.id);
+    expect(stored.assetVersions?.[promoted.asset.id]).toBe('1');
+    expect(stored.status).toBe('confirmed');
+  });
+
+  it('does not mark a preview projection stale (it pins versions only on confirmation)', async () => {
+    const { assets, refs, projection } = await mods();
+    const cardModule = await import('../../../../src/main/features/recall/projection-card');
+    const promoted = await weakCandidateToAsset();
+    await refs.addWorkspaceAssetReference(USER, { assetId: promoted.asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    const preview = await projection.previewContextProjection(USER, {
+      taskRunId: 'task-preview', workspaceId: 'workspace-a', purpose: 'review',
+    });
+    await assets.updateAbilityAsset(USER, promoted.asset.id, {
+      statement: '改内容', reason: 'preview 阶段的改动', actor: 'user',
+    });
+
+    const card = await cardModule.buildProjectionCard(USER, preview.id);
+    expect(card.staleAssetIds).toEqual([]);
+    expect(card.assetSummaries[0].stale).toBeUndefined();
+  });
+});

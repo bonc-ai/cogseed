@@ -4660,5 +4660,7 @@
   "cognition.conversation_untitled": "無題の会話",
   "cognition.inbox_subject_unavailable": "関連記録を利用できません",
   "cognition.activity_untitled": "無題の記録",
-  "cognition.teaching_untitled": "要約は記録されていません"
+  "cognition.teaching_untitled": "要約は記録されていません",
+  "recall.projection.asset_untitled": "無題の資産",
+  "recall.projection.asset_stale": "現在は確認済みの v{confirmed} で動作しています。資産は v{current} に更新済みで、選び直すと反映されます。"
 }

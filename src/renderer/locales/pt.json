@@ -4660,5 +4660,7 @@
   "cognition.conversation_untitled": "Conversa sem título",
   "cognition.inbox_subject_unavailable": "Registo relacionado indisponível",
   "cognition.activity_untitled": "Registo sem título",
-  "cognition.teaching_untitled": "Sem resumo registado"
+  "cognition.teaching_untitled": "Sem resumo registado",
+  "recall.projection.asset_untitled": "Ativo sem título",
+  "recall.projection.asset_stale": "Ainda a executar a v{confirmed} confirmada; o ativo está agora na v{current}. Aplica-se depois de o selecionar novamente."
 }
