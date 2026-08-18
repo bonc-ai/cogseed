@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>左下角入口「点击展开 / 点击收起」设计稿 v2</title>
+<style>
+  :root {
+    --bg: #FBFDFC;
+    --surface: #ffffff;
+    --surface-2: #EDF3EF;
+    --surface-3: #DCE5DF;
+    --text: #14281E;
+    --text-2: #3E5A4C;
+    --muted: #6E8578;
+    --border: rgba(24, 84, 60, 0.09);
+    --border-strong: rgba(24, 84, 60, 0.18);
+    --primary: #0E9F6E;
+    --primary-hover: #0A7A55;
+    --primary-soft: #E2F5EC;
+    --primary-text: #0A7A55;
+    --success: #16a34a;
+    --success-soft: rgba(22, 163, 74, 0.14);
+    --warn: #d97706;
+    --danger: #dc2626;
+    --danger-soft: #fef2f2;
+    --radius-lg: 20px;
+    --radius-md: 14px;
+    --radius-sm: 10px;
+    --shadow-pop: 0 12px 32px rgba(20, 40, 30, 0.16), 0 2px 8px rgba(20, 40, 30, 0.08);
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  body.dark {
+    --bg: #101613;
+    --surface: #161f1a;
+    --surface-2: #1d2a24;
+    --surface-3: #26352e;
+    --text: #e8f0eb;
+    --text-2: #b9c9c0;
+    --muted: #8ba195;
+    --primary-soft: rgba(14, 159, 110, 0.16);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #EDF0EE;
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    transition: background .2s;
+  }
+  body.dark { background: #0b100d; }
+  svg.icon { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* ── 原型控制条（仅设计稿用，不是产品 UI 的一部分）──────────────── */
+  .proto-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-2);
+    z-index: 5;
+    position: relative;
+  }
+  .proto-controls .group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    padding: 3px;
+  }
+  .proto-controls button {
+    border: none;
+    background: transparent;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text-2);
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .proto-controls button.on { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+  .proto-controls .sep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 4px; }
+  .proto-controls .hint { color: var(--muted); }
+
+  /* ── 舞台布局：模拟主窗口 ───────────────────────────────────────── */
+  .stage {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    padding: 14px;
+    gap: 14px;
+  }
+  .sidebar {
+    width: 258px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: 0 6px 24px rgba(20, 40, 30, 0.06);
+  }
+  .main {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 13px;
+    box-shadow: 0 6px 24px rgba(20, 40, 30, 0.06);
+    padding: 20px;
+    text-align: center;
+    line-height: 1.7;
+  }
+
+  /* ── 侧栏内容（近似产品样式，仅用于衬托左下角）────────────────── */
+  .sidebar-logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px 8px;
+    font-weight: 700;
+    font-size: 15px;
+  }
+  .logo-dot { width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(135deg, var(--primary), #34d399); }
+  .side-actions { display: flex; flex-direction: column; gap: 2px; padding: 0 12px 8px; }
+  .side-btn {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text-2);
+    cursor: default;
+    font-family: inherit;
+  }
+  .side-btn.primary { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+  .conv-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 12px 12px;
+    border-top: 1px solid var(--border);
+    min-height: 0;
+  }
+  .conv-tabs { display: flex; gap: 4px; padding: 8px 12px 4px; border-top: 1px solid var(--border); }
+  .conv-tab {
+    border: none;
+    background: transparent;
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: default;
+    font-family: inherit;
+  }
+  .conv-tab.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
+  .conv-item {
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-item.on { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+  .conv-item.sm { font-size: 11.5px; color: var(--muted); }
+
+  /* ══ 核心：左下角入口（与 style.css 中 .sidebar-footer-account 同款）══ */
+  .footer-zone {
+    position: relative;          /* 面板绝对定位基准 */
+    flex: none;
+    padding: 6px 12px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  /* 入口 = .hub-chip（产品同款）。hover 只做视觉高亮，不再展开面板。 */
+  .hub-chip {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-height: 40px;
+    padding: 5px 8px;
+    border: none;
+    background: transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    color: var(--text-2);
+    transition: background 0.15s ease;
+  }
+  .hub-chip:hover { background: var(--primary-soft); }
+  .hub-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+  .hub-chip:disabled { cursor: default; opacity: 0.85; }
+  .hub-chip-avatar {
+    width: 32px;
+    height: 32px;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--surface-2);
+    border: 1px dashed var(--border-strong);
+    color: var(--muted);
+  }
+  .hub-chip-avatar-icon { width: 16px; height: 16px; }
+  .hub-chip-avatar.is-signed { border: none; background: var(--primary-soft); color: var(--primary-text); }
+  .hub-chip-avatar.is-gradient {
+    border: none;
+    background: linear-gradient(135deg, #0E9F6E, #3EC6A0);
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .hub-chip-meta { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+  .hub-chip-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hub-chip-sub {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: var(--font-mono, inherit);
+  }
+  .hub-chip-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .hub-chip-dot.on { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+  .hub-chip-dot.off { background: var(--surface-3); }
+  .hub-chip-dot.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.16); }
+  .hub-chip-chev {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+  }
+  /* 展开时入口的状态反馈（产品同款：浅绿底 + chevron 翻转朝上） */
+  .footer-zone.is-open .hub-chip { background: var(--primary-soft); color: var(--primary-text); }
+  .footer-zone.is-open .hub-chip-chev { transform: rotate(180deg); }
+
+  /* 面板 = .hub-chip-menu（产品同款，向上展开、与入口重叠 6px 无缝衔接） */
+  .panel {
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    bottom: calc(100% - 6px);
+    z-index: 120;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-pop);
+    padding: 6px 6px 14px;
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+    pointer-events: none;
+    transition: opacity .15s ease, transform .15s ease;
+    transform-origin: bottom left;
+  }
+  .footer-zone.is-open .panel { opacity: 1; transform: none; pointer-events: auto; }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 9px 11px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: default;
+  }
+  .panel-head.is-clickable { cursor: pointer; }
+  .panel-head.is-clickable:hover { background: var(--surface-2); }
+  .panel-head-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-3);
+    color: var(--muted);
+  }
+  .panel-head-avatar.is-gradient {
+    background: linear-gradient(135deg, #0E9F6E, #34d399);
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .panel-head-id { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .panel-head-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel-head-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
+
+  .panel-note {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 9px;
+    font-size: 11.5px;
+    color: var(--warn);
+    background: rgba(217, 119, 6, 0.08);
+    border-radius: 8px;
+    margin: 2px 3px 8px;
+  }
+  .panel-note svg.icon { width: 13px; height: 13px; }
+
+  .panel-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 7px 9px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    color: var(--text-2);
+    font-size: 12.5px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .13s;
+  }
+  .panel-item:hover, .panel-item:focus-visible { background: var(--surface-2); }
+  .panel-item:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+  .panel-item.is-active { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+  .panel-item.is-danger { color: var(--danger); }
+  .panel-item.is-danger:hover { background: var(--danger-soft); }
+  .panel-item .kbd { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+  .panel-sep { height: 1px; background: var(--border); margin: 5px 9px; }
+
+  /* ══ 收起按钮（沿用上一版设计：面板底部整条，点击 = 收起）═══════ */
+  .panel-collapse {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    margin-top: 6px;
+    padding: 7px 9px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    color: var(--primary-text);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background .13s, color .13s;
+  }
+  .panel-collapse:hover, .panel-collapse:focus-visible { background: var(--primary-soft); color: var(--primary-hover); }
+  .panel-collapse:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+  .panel-collapse svg.icon { width: 14px; height: 14px; }
+
+  /* ── 说明卡片 ───────────────────────────────────────────────────── */
+  .specs {
+    width: 300px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+  }
+  .spec-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--text-2);
+    line-height: 1.6;
+  }
+  .spec-card h3 {
+    margin: 0 0 6px;
+    font-size: 12.5px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .spec-card h3 .tag {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 99px;
+    background: var(--primary-soft);
+    color: var(--primary-text);
+  }
+  .spec-card ul { margin: 0; padding-left: 16px; }
+  .spec-card li { margin: 3px 0; }
+  .spec-card code { font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  .spec-card .ok { color: var(--success); font-weight: 600; }
+  .spec-card .risk { color: var(--danger); font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="proto-controls">
+    <span style="font-weight:600;color:var(--text)">设计稿控制</span>
+    <span class="sep"></span>
+    <span class="hint">账号状态</span>
+    <div class="group" id="modeGroup">
+      <button data-mode="signedIn" class="on">已登录</button>
+      <button data-mode="signedOut">未登录</button>
+      <button data-mode="degraded">服务不可用</button>
+    </div>
+    <span class="sep"></span>
+    <button id="collapseBtn" class="on">显示「收起面板」按钮</button>
+    <button id="darkBtn">暗色模式</button>
+    <span class="sep"></span>
+    <span class="hint">单击入口 = 展开 / 收起（hover 不再展开）</span>
+  </div>
+
+  <div class="stage">
+    <aside class="sidebar">
+      <div class="sidebar-logo"><span class="logo-dot"></span>CogSeed</div>
+      <div class="side-actions">
+        <button class="side-btn"><svg class="icon" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新建任务</button>
+        <button class="side-btn primary"><svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>首页</button>
+        <button class="side-btn"><svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>工作空间</button>
+      </div>
+      <div class="conv-tabs">
+        <button class="conv-tab">空间</button>
+        <button class="conv-tab on">最近任务</button>
+      </div>
+      <div class="conv-list" id="convList">
+        <div class="conv-item on">关于侧边栏信息架构的讨论</div>
+        <div class="conv-item sm">今天 14:02</div>
+        <div class="conv-item">整理本周学习笔记</div>
+        <div class="conv-item sm">昨天 21:37</div>
+        <div class="conv-item">Python 爬虫脚本调试</div>
+        <div class="conv-item sm">昨天 10:15</div>
+        <div class="conv-item">竞品调研：桌面 Agent 交互</div>
+        <div class="conv-item sm">周一</div>
+      </div>
+
+      <!-- ══ 左下角：融合入口（点击展开 / 点击收起）══ -->
+      <div class="footer-zone" id="footerZone">
+        <button type="button" class="hub-chip" id="statusBar" aria-haspopup="menu" aria-expanded="false"></button>
+        <div class="panel" id="panel" role="menu" hidden></div>
+      </div>
+    </aside>
+
+    <main class="main" id="mainHint">主内容区（占位）<br>操作提示会显示在这里</main>
+
+    <aside class="specs">
+      <div class="spec-card">
+        <h3>交互模型 <span class="tag">v2 点击切换</span></h3>
+        <ul>
+          <li><span class="risk">去掉</span>：hover 展开（150ms 延迟）、hover 收起（220ms 延迟）、以及随之而来的「钉住」概念（不再需要 pin 图标）。</li>
+          <li><span class="ok">改为</span>：<b>单击入口 = 展开，再单击 = 收起</b>。展开后保持打开，直到显式关闭——不会被鼠标移动影响。</li>
+          <li>hover 只保留入口的视觉高亮（浅绿底），不再触发任何开合。</li>
+        </ul>
+      </div>
+      <div class="spec-card">
+        <h3>关闭面板的四种方式</h3>
+        <ul>
+          <li>① 再次单击入口（最常用，与打开对称）。</li>
+          <li>② 面板底部「收起面板」按钮（可在控制条开关，看效果）。</li>
+          <li>③ 点击面板之外的区域。</li>
+          <li>④ 按 <code>Esc</code>（关闭后焦点回到入口）。</li>
+        </ul>
+      </div>
+      <div class="spec-card">
+        <h3>「收起面板」按钮定位</h3>
+        <ul>
+          <li>不再承担「取消钉住」职责（钉住概念已移除），只等于「再次点击入口」，是纯辅助提示。</li>
+          <li>保留在面板底部整条、品牌绿高亮，为不熟悉「再点一下收起」的用户留一条显式路径。</li>
+          <li>若嫌冗余可整体去掉——用控制条「显示收起按钮」开关对比感受。</li>
+        </ul>
+      </div>
+      <div class="spec-card">
+        <h3>其它规格</h3>
+        <ul>
+          <li>三种账号状态（已登录 / 未登录 / 服务不可用）行为一致。</li>
+          <li>点击面板内菜单项（设置 / 账号概览…）= 执行动作并关闭面板。</li>
+          <li>键盘：<code>Enter/Space</code> 在入口上切换展开；<code>Tab</code> 在面板项间移动。</li>
+          <li>无障碍：沿用 <code>aria-haspopup</code> + <code>aria-expanded</code>，展开时 chevron 翻转朝上。</li>
+          <li>登录中（signing-in）入口禁用，行为不变。</li>
+        </ul>
+      </div>
+      <div class="spec-card">
+        <h3>实现改动范围（确认后）</h3>
+        <ul>
+          <li><code>account-chip.js</code>：<b>删掉</b> hover/focus 自动开合、150/220ms 定时器、pin 相关逻辑；点击改为开合切换。</li>
+          <li><code>style.css</code>：删 pin 样式；收起按钮样式沿用上一版草稿。</li>
+          <li>locales：新增 <code>hub.chip.menu.collapse</code>（zh「收起面板」/ en / ja / pt）。</li>
+          <li><span class="risk">无需</span>改主进程 / IPC / 其它模块。</li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+  var mode = 'signedIn';        // signedIn | signedOut | degraded
+  var showCollapse = true;      // 设计稿控制：是否显示「收起面板」按钮
+  var isOpen = false;
+
+  var zone = document.getElementById('footerZone');
+  var bar = document.getElementById('statusBar');
+  var panel = document.getElementById('panel');
+  var mainHint = document.getElementById('mainHint');
+
+  var ICONS = {
+    settings: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    user: '<svg class="icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+    chevDown: '<svg class="icon" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
+    info: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+    monitor: '<svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+    logout: '<svg class="icon" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
+    warn: '<svg class="icon" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+  };
+
+  function toast(msg) {
+    mainHint.innerHTML = msg.replace(/\n/g, '<br>');
+  }
+
+  /* ── 按状态渲染入口（无 pin 图标；展开态样式由 .is-open 控制）── */
+  function renderBar() {
+    var inner;
+    if (mode === 'signedIn') {
+      inner =
+        '<span class="hub-chip-avatar is-gradient">N</span>' +
+        '<span class="hub-chip-meta"><span class="hub-chip-name">niubaokang</span>' +
+        '<span class="hub-chip-sub">cogseed_acc_***3f2k</span></span>' +
+        '<span class="hub-chip-dot on" aria-hidden="true"></span>' +
+        '<span class="hub-chip-chev">' + ICONS.chevDown + '</span>';
+    } else if (mode === 'signedOut') {
+      inner =
+        '<span class="hub-chip-avatar">' + ICONS.user + '</span>' +
+        '<span class="hub-chip-meta"><span class="hub-chip-name">登录 Hub</span></span>' +
+        '<span class="hub-chip-dot off" aria-hidden="true"></span>' +
+        '<span class="hub-chip-chev">' + ICONS.chevDown + '</span>';
+    } else {
+      inner =
+        '<span class="hub-chip-avatar is-signed">' + ICONS.settings + '</span>' +
+        '<span class="hub-chip-meta"><span class="hub-chip-name">设置</span>' +
+        '<span class="hub-chip-sub">Hub 暂不可用 · 本地功能正常</span></span>' +
+        '<span class="hub-chip-dot warn" aria-hidden="true"></span>' +
+        '<span class="hub-chip-chev">' + ICONS.chevDown + '</span>';
+    }
+    bar.innerHTML = inner;
+  }
+
+  /* ── 按状态渲染面板；底部「收起面板」按钮按控制开关显示 ── */
+  function renderPanel() {
+    var settingsItem =
+      '<button type="button" class="panel-item" data-action="settings">' +
+      ICONS.settings + '设置<span class="kbd">⌘,</span></button>';
+
+    var html = '';
+    if (mode === 'signedIn') {
+      html =
+        '<div class="panel-head is-clickable" data-action="account">' +
+        '<span class="panel-head-avatar is-gradient">N</span>' +
+        '<div class="panel-head-id"><span class="panel-head-name">niubaokang</span>' +
+        '<span class="panel-head-sub">cogseed_acc_***3f2k · 已绑定本机身份</span></div>' +
+        '</div>' +
+        settingsItem +
+        '<button type="button" class="panel-item" data-action="overview">' + ICONS.info + '账号概览</button>' +
+        '<button type="button" class="panel-item" data-action="devices">' + ICONS.monitor + '登录设备</button>' +
+        '<div class="panel-sep"></div>' +
+        '<button type="button" class="panel-item is-danger" data-action="signout">' + ICONS.logout + '退出登录</button>';
+    } else if (mode === 'signedOut') {
+      html =
+        '<div class="panel-head is-clickable" data-action="signin">' +
+        '<span class="panel-head-avatar">' + ICONS.user + '</span>' +
+        '<div class="panel-head-id"><span class="panel-head-name">登录 Hub</span>' +
+        '<span class="panel-head-sub">浏览器授权登录 · 多端同步</span></div>' +
+        '</div>' +
+        settingsItem;
+    } else {
+      html =
+        '<div class="panel-note">' + ICONS.warn + 'Hub 服务暂不可达，账号功能已隐藏</div>' +
+        settingsItem;
+    }
+
+    if (showCollapse) {
+      html +=
+        '<div class="panel-sep"></div>' +
+        '<button type="button" class="panel-collapse" data-action="collapse" role="menuitem">' +
+        ICONS.chevDown + '收起面板</button>';
+    }
+    panel.innerHTML = html;
+
+    panel.querySelectorAll('[data-action]').forEach(function (el) {
+      el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        onPanelAction(el.dataset.action);
+      });
+    });
+  }
+
+  function onPanelAction(action) {
+    if (action === 'collapse') {
+      closePanel();
+      toast('✓ 点击「收起面板」：面板收起（与再次点击入口等效）');
+      return;
+    }
+    var map = {
+      settings: '原型：切换到「设置」视图',
+      overview: '原型：打开 设置 › 账号（概览）',
+      devices: '原型：打开 设置 › 账号（登录设备）',
+      account: '原型：打开 设置 › 账号',
+      signout: '原型：确认后退出登录',
+      signin: '原型：打开浏览器授权页登录'
+    };
+    toast(map[action] || action);
+    closePanel();
+  }
+
+  /* ── 点击开合（无任何 hover / 延迟逻辑）── */
+  function openPanel() {
+    isOpen = true;
+    renderPanel();
+    panel.hidden = false;
+    zone.classList.add('is-open');
+    bar.setAttribute('aria-expanded', 'true');
+  }
+  function closePanel() {
+    isOpen = false;
+    zone.classList.remove('is-open');
+    bar.setAttribute('aria-expanded', 'false');
+    panel.hidden = true;
+  }
+  function togglePanel() {
+    if (isOpen) {
+      closePanel();
+      toast('✓ 收起：面板关闭');
+    } else {
+      openPanel();
+      toast('✓ 展开：面板打开（移开鼠标不会收起，再点入口 / 点外部 / Esc / 「收起面板」关闭）');
+    }
+  }
+
+  /* ── 单击入口：展开 / 收起切换（三态统一）── */
+  bar.addEventListener('click', togglePanel);
+
+  /* ── 点击入口外区域：关闭面板 ── */
+  document.addEventListener('click', function (e) {
+    if (zone.contains(e.target)) return;
+    if (isOpen) closePanel();
+  });
+
+  /* ── Esc：关闭并把焦点还给入口 ── */
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && isOpen) {
+      closePanel();
+      bar.focus();
+      toast('✓ Esc：面板关闭，焦点回到入口');
+    }
+  });
+
+  /* ── 原型控制 ── */
+  document.getElementById('modeGroup').addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-mode]');
+    if (!btn) return;
+    mode = btn.dataset.mode;
+    document.querySelectorAll('#modeGroup button').forEach(function (b) { b.classList.toggle('on', b === btn); });
+    closePanel();
+    renderBar();
+    toast('三态一致：单击入口展开，再单击收起');
+  });
+  document.getElementById('collapseBtn').addEventListener('click', function () {
+    showCollapse = !showCollapse;
+    this.classList.toggle('on', showCollapse);
+    if (isOpen) renderPanel();
+  });
+  document.getElementById('darkBtn').addEventListener('click', function () {
+    document.body.classList.toggle('dark');
+    this.classList.toggle('on', document.body.classList.contains('dark'));
+  });
+
+  /* ── 初始化 ── */
+  renderBar();
+  toast('① 单击左下角入口 → 面板展开（hover 不展开）\n② 再单击入口 → 收起；也可点外部 / Esc / 面板底部「收起面板」');
+})();
+</script>
+</body>
+</html>

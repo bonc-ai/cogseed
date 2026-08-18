@@ -1,4 +1,4 @@
-// ─── 左下角融合入口（用户状态 + 设置，hover 向上展开面板）─────────────────
+// ─── 左下角融合入口（用户状态 + 设置，单击展开 / 再击收起）─────────────────
 // Sidebar footer 唯一常驻入口。与 Settings › 账号 tab 共享同一套 Hub 交互后端：
 //   - 只消费既有 IPC 通道（hub-account.status / start_login / logout / me），
 //     不新增、不修改主进程或 Hub 服务交互；
@@ -6,13 +6,16 @@
 //     允许同一 channel 多个监听，与本模块并存的 hub-account.js 互不影响）；
 //   - token 永不过 IPC 边界，本模块只读 renderer-safe 的 status DTO。
 //
-// 交互模型（docs/design/sidebar-user-menu-merged-prototype.html v2）：
-//   - 三态一致：未登录 / 已登录 / Hub 不可用，hover 进入入口 150ms 后
-//     均向上展开面板；面板与入口无缝衔接（重叠 6px），指针移动不闪断；
-//   - 离开「入口 + 面板」整体 220ms 后收起，期间回移取消；已钉住不收起；
-//   - 单击入口 = 钉住 / 取消钉住（三态一致）；未登录时登录动作放在
-//     面板头卡（点击头卡 → 浏览器授权登录），避免 hover 与点击登录冲突；
-//   - 键盘 focus/Enter 同样展开，Esc 关闭并取消钉住；
+// 交互模型（docs/design/sidebar-click-toggle-draft.html v2）：
+//   - 单击入口 = 展开面板，再单击 = 收起；展开后保持打开，直到显式关闭
+//     （再点入口 / 面板底部「收起面板」按钮 / 点击面板外 / Esc）；
+//   - hover 只做入口视觉高亮，不触发任何开合——原 hover 延迟开合与「钉住」
+//     概念已移除，入口不再出现 pin 图标；
+//   - 三态一致：未登录 / 已登录 / Hub 不可用，面板均向上展开并与入口
+//     无缝衔接（重叠 6px）；未登录时登录动作放在面板头卡（点击头卡 →
+//     浏览器授权登录）；
+//   - 键盘 Enter/Space 在入口上切换展开，Tab 可在面板项间移动，
+//     Esc 关闭并把焦点还给入口；
 //   - 原独立「设置」按钮并入面板（各态均保留），设置视图的 active 高亮由
 //     boot.js 通过 window.setChipSettingsActive 同步到面板设置项；
 //   - Hub status 拿不到/不可达时降级为「设置」形态，面板仅含本地功能，
@@ -30,9 +33,6 @@ const _SIGN_IN_TIMEOUT_MS = 3 * 60 * 1000;
 const _FOCUS_REFRESH_MIN_MS = 15 * 1000;
 // display_name 缓存时长（hub-account.me 是额外网络请求，仅菜单打开时用）。
 const _ME_CACHE_MS = 60 * 1000;
-// 面板展开 / 收起的 hover 延迟（防路过误触；回移取消收起）。
-const _PANEL_OPEN_MS = 150;
-const _PANEL_CLOSE_MS = 220;
 
 const _chipState = {
   status: null,          // HubStatusView | null（null = 拿不到，降级形态）
@@ -41,13 +41,8 @@ const _chipState = {
   signInTimeout: null,
   lastFocusRefresh: 0,
   meCache: { at: 0, displayName: null },
-  // ── 融合面板交互 ──
+  // ── 融合面板交互（点击开合，无 hover / 钉住状态）──
   isOpen: false,
-  isPinned: false,
-  isHovering: false,
-  isFocusing: false,
-  openTimer: null,
-  closeTimer: null,
   settingsActive: false, // 当前视图是否为 settings（boot.js 同步）
 };
 
@@ -135,9 +130,6 @@ function _renderChip() {
   const mode = _chipState.mode;
   const signedIn = mode === 'signed-in' && status && status.signed_in;
   const degraded = _chipDegraded();
-  const pinIcon = _chipState.isPinned
-    ? `<span class="hub-chip-pin" data-chip-role="pin">${_chipIcon('pin')}</span>`
-    : '';
 
   let inner = '';
   if (mode === 'signing-in') {
@@ -158,7 +150,6 @@ function _renderChip() {
         <span class="hub-chip-sub">${maskedId}</span>
       </span>
       <span class="hub-chip-dot ${_chipStatusDotClass()}" aria-hidden="true"></span>
-      ${pinIcon}
       <span class="hub-chip-chev">${_chipIcon('chevron-down')}</span>`;
   } else if (degraded) {
     inner = `
@@ -168,7 +159,6 @@ function _renderChip() {
         <span class="hub-chip-sub">${_chipEscapeHtml(t('hub.chip.degraded_sub'))}</span>
       </span>
       <span class="hub-chip-dot warn" aria-hidden="true"></span>
-      ${pinIcon}
       <span class="hub-chip-chev">${_chipIcon('chevron-down')}</span>`;
   } else {
     // 未登录：单行「登录 Hub」（副标题已按设计删除，hover 面板头卡保留引导文案）。
@@ -183,8 +173,8 @@ function _renderChip() {
 
   root.innerHTML = `
     <button type="button" class="hub-chip${signedIn ? ' is-signed-row' : ''}" id="hub-account-chip"
-            aria-haspopup="menu" aria-expanded="false"${mode === 'signing-in' ? ' disabled' : ''}>${inner}</button>
-    <div class="hub-chip-menu" id="hub-account-chip-menu" role="menu" hidden></div>`;
+            aria-haspopup="menu" aria-expanded="${_chipState.isOpen ? 'true' : 'false'}"${mode === 'signing-in' ? ' disabled' : ''}>${inner}</button>
+    <div class="hub-chip-menu" id="hub-account-chip-menu" role="menu"${_chipState.isOpen && _chipState.mode !== 'signing-in' ? '' : ' hidden'}></div>`;
 
   const chip = root.querySelector('#hub-account-chip');
   chip.addEventListener('click', () => _onChipClick(chip));
@@ -208,8 +198,8 @@ function _renderChip() {
     });
   }
 
-  // 重建入口会清掉已展开的面板：若仍应展开（钉住/悬停/焦点），立即恢复。
-  if (_shouldPanelBeOpen()) _openMenu();
+  // 重建入口会清掉已展开的面板：若仍处于展开态（点击展开后保持），立即恢复。
+  if (_chipState.isOpen && _chipState.mode !== 'signing-in') _openMenu();
 }
 
 async function _renderMenu() {
@@ -223,13 +213,20 @@ async function _renderMenu() {
     <button type="button" class="hub-chip-menu-item${_chipState.settingsActive ? ' is-active' : ''}" data-chip-action="settings" role="menuitem">
       ${_chipIcon('settings', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.chip.menu.settings'))}
     </button>`;
+  // 面板底部「收起面板」按钮：等价于再次点击入口（各态均保留）。
+  const collapseItem = `
+    <div class="hub-chip-menu-sep" role="separator"></div>
+    <button type="button" class="hub-chip-menu-collapse" data-chip-action="collapse" role="menuitem">
+      ${_chipIcon('chevron-down', 'hub-chip-menu-collapse-icon')}${_chipEscapeHtml(t('hub.chip.menu.collapse'))}
+    </button>`;
 
   if (degraded) {
     menu.innerHTML = `
       <div class="hub-chip-menu-note">
         ${_chipIcon('warning', 'hub-chip-menu-note-icon')}${_chipEscapeHtml(t('hub.chip.menu.hub_unavailable'))}
       </div>
-      ${settingsItem}`;
+      ${settingsItem}
+      ${collapseItem}`;
     _bindMenuActions(menu);
     return;
   }
@@ -243,12 +240,13 @@ async function _renderMenu() {
           <span class="hub-chip-menu-sub">${_chipEscapeHtml(t('hub.chip.menu.sign_in_sub'))}</span>
         </div>
       </div>
-      ${settingsItem}`;
+      ${settingsItem}
+      ${collapseItem}`;
     _bindMenuActions(menu);
     return;
   }
 
-  // 已登录：账号头部 + 设置 + 账号管理 + 退出。
+  // 已登录：账号头部 + 设置 + 账号管理 + 退出 + 收起。
   const maskedId = _chipMaskId((status && status.account_id) || '');
   const displayName = await _chipDisplayName();
   const name = displayName || maskedId;
@@ -274,7 +272,8 @@ async function _renderMenu() {
     <div class="hub-chip-menu-sep" role="separator"></div>
     <button type="button" class="hub-chip-menu-item is-danger" data-chip-action="sign-out" role="menuitem">
       ${_chipIcon('log-out', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.account.sign_out'))}
-    </button>`;
+    </button>
+    ${collapseItem}`;
   _bindMenuActions(menu);
 }
 
@@ -284,58 +283,16 @@ function _bindMenuActions(menu) {
   });
 }
 
-// ── 展开 / 收起调度（hover 延迟 + 无缝衔接 + 钉住）──────────────────────
-
-function _shouldPanelBeOpen() {
-  if (_chipState.mode === 'signing-in') return false;
-  return _chipState.isHovering || _chipState.isFocusing || _chipState.isPinned;
-}
-
-function _scheduleOpen() {
-  if (_chipState.closeTimer) { clearTimeout(_chipState.closeTimer); _chipState.closeTimer = null; }
-  if (_chipState.isOpen || _chipState.openTimer) return;
-  _chipState.openTimer = setTimeout(() => {
-    _chipState.openTimer = null;
-    _openMenu();
-  }, _PANEL_OPEN_MS);
-}
-
-function _scheduleClose() {
-  if (_chipState.openTimer) { clearTimeout(_chipState.openTimer); _chipState.openTimer = null; }
-  if (!_chipState.isOpen || _chipState.closeTimer) return;
-  _chipState.closeTimer = setTimeout(() => {
-    _chipState.closeTimer = null;
-    _closeMenu();
-  }, _PANEL_CLOSE_MS);
-}
-
-/** 依据 hover / focus / 钉住任一成立来开合面板。 */
-function _recompute() {
-  if (_shouldPanelBeOpen()) _scheduleOpen();
-  else _scheduleClose();
-}
+// ── 展开 / 收起（点击切换，无 hover / 延迟 / 钉住逻辑）──────────────────
 
 function _closeMenu() {
-  if (_chipState.openTimer) { clearTimeout(_chipState.openTimer); _chipState.openTimer = null; }
-  if (_chipState.closeTimer) { clearTimeout(_chipState.closeTimer); _chipState.closeTimer = null; }
   _chipState.isOpen = false;
   const root = _chipRoot();
+  if (root) root.classList.remove('is-open');
   const menu = root && root.querySelector('#hub-account-chip-menu');
   const chip = root && root.querySelector('#hub-account-chip');
   if (menu) menu.hidden = true;
   if (chip) chip.setAttribute('aria-expanded', 'false');
-}
-
-/** 立即收起面板；alsoUnpin 时同时取消钉住（Esc / 点击外部 / 面板项动作）。 */
-function _closePanel(alsoUnpin) {
-  if (alsoUnpin && _chipState.isPinned) {
-    _chipState.isPinned = false;
-    const root = _chipRoot();
-    if (root) root.classList.remove('is-pinned');
-    const pinEl = root && root.querySelector('[data-chip-role="pin"]');
-    if (pinEl) pinEl.remove();
-  }
-  _closeMenu();
 }
 
 function _openMenu() {
@@ -345,6 +302,7 @@ function _openMenu() {
   if (!menu || !chip) return;
   if (_chipState.mode === 'signing-in') return;
   _chipState.isOpen = true;
+  if (root) root.classList.add('is-open');
   menu.hidden = false;
   chip.setAttribute('aria-expanded', 'true');
   void _renderMenu();
@@ -352,24 +310,16 @@ function _openMenu() {
 
 // ── 交互 ─────────────────────────────────────────────────────────────────
 
-/** 单击入口：三态统一 = 钉住 / 取消钉住（signing-in 期间忽略）。 */
+/** 单击入口：展开 / 收起切换（三态统一；signing-in 期间忽略）。 */
 function _onChipClick(_chip) {
   if (_chipState.mode === 'signing-in') return;
-  _togglePin();
-}
-
-function _togglePin() {
-  _chipState.isPinned = !_chipState.isPinned;
-  const root = _chipRoot();
-  if (root) root.classList.toggle('is-pinned', _chipState.isPinned);
-  // 重建入口以更新钉住图标（_renderChip 末尾会按需恢复面板）。
-  _renderChip();
-  _recompute();
+  if (_chipState.isOpen) _closeMenu();
+  else _openMenu();
 }
 
 async function _startLogin() {
   if (_chipState.mode === 'signing-in') return;
-  _closePanel(true);
+  _closeMenu();
   _setSigningIn();
   try {
     // 与设置页完全相同的调用：打开浏览器授权页即返回，真正完成靠
@@ -422,12 +372,13 @@ async function _refresh() {
     // 同时清掉可能残留的登录中兜底计时器。
     _setSignedOut();
   }
-  _closeMenu();
+  // 展开中的面板不因刷新关闭：_renderChip 会按 isOpen 恢复并重渲染内容。
   _renderChip();
 }
 
 async function _onMenuAction(action) {
-  _closePanel(true);
+  _closeMenu();
+  if (action === 'collapse') return; // 收起按钮：仅关闭面板
   if (action === 'sign-out') {
     if (!window.confirm(t('hub.account.sign_out_confirm'))) return;
     try {
@@ -507,37 +458,21 @@ function _initChip() {
     void _refresh();
   });
 
-  // 语言切换后重渲染（文案与设置页同步更新；面板展开中也会重建）。
+  // 语言切换后重渲染（文案与设置页同步更新；面板展开中也会重建并恢复）。
   window.addEventListener('i18n-change', () => _renderChip());
 
-  // ── 面板开合：hover 热区 = 整个入口容器（入口 + 面板无缝衔接）──
-  root.addEventListener('mouseenter', () => { _chipState.isHovering = true; _recompute(); });
-  root.addEventListener('mouseleave', () => { _chipState.isHovering = false; _recompute(); });
-  root.addEventListener('focusin', () => { _chipState.isFocusing = true; _recompute(); });
-  root.addEventListener('focusout', (e) => {
-    if (!root.contains(e.relatedTarget)) { _chipState.isFocusing = false; _recompute(); }
-  });
-
-  // 点击入口外区域或 Esc 关闭面板并取消钉住。
+  // 点击入口外区域或 Esc 关闭面板。
   document.addEventListener('click', (e) => {
     if (!root || root.contains(e.target)) return;
-    _closePanel(true);
+    _closeMenu();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && (_chipState.isOpen || _chipState.isPinned)) {
-      _closePanel(true);
+    if (e.key === 'Escape' && _chipState.isOpen) {
+      _closeMenu();
       const chip = root && root.querySelector('#hub-account-chip');
       if (chip) chip.focus();
     }
   });
-
-  // 会话列表滚动时收起未钉住的面板，避免面板悬在内容上方遮挡。
-  const convList = document.getElementById('conversation-list');
-  if (convList) {
-    convList.addEventListener('scroll', () => {
-      if (_chipState.isOpen && !_chipState.isPinned) _closePanel(false);
-    });
-  }
 }
 
 // boot.js 在视图切换时同步 settings 高亮到面板设置项（DOM 级更新，不重建面板）。
