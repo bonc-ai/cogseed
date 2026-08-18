@@ -368,6 +368,12 @@ Use `run.cmd` for the Windows-native runtime. The shell launcher delegates to it
 
 Open **Connections → Models & Quota**, test the authorization again, and select a model returned by the configured provider. Do not place API keys in repository files or README examples.
 
+## Attribution
+
+CogSeed is a secondary development of [Orkas](https://github.com/Orkas-AI/Orkas), extending its local-first multi-agent collaboration and tooling. The desktop `core-agent` component originates from [OpenClaw](https://github.com/openclaw/openclaw). CogSeed also incorporates planning and runtime adaptation patterns informed by [Hermes-Agent](https://github.com/NousResearch/hermes-agent).
+
+Upstream copyright and license information is recorded in [`NOTICE`](./NOTICE). Third-party component notices are recorded in [`THIRD-PARTY-NOTICES`](./THIRD-PARTY-NOTICES).
+
 ## Documentation
 
 | Topic | Link |
