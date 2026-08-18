@@ -4389,6 +4389,7 @@
   "new_chat.space_draft_secondary": "副模板",
   "agent_picker.input_placeholder_space": "输入 @ 选择智能体、技能、产物、资产",
   "chat.space_asset_refs_label": "引用资产",
+  "chat.asset_citation_tip": "查看资产详情",
   "chat.taskref_inline_label": "引用",
   "settings.custom_providers.api_format_openai_responses": "OpenAI Responses (/responses)",
   "settings.custom_providers.protocol_openai_responses": "OpenAI Responses",

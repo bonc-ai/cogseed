@@ -4080,6 +4080,7 @@
   "new_chat.space_draft_secondary": "Modelos secundários",
   "agent_picker.input_placeholder_space": "Digite @ para escolher agentes, habilidades, artefatos, ativos",
   "chat.space_asset_refs_label": "Ativos referenciados",
+  "chat.asset_citation_tip": "Ver detalhes do ativo",
   "chat.taskref_inline_label": "Referenciado",
   "settings.custom_providers.api_format_openai_responses": "OpenAI Responses (/responses)",
   "settings.custom_providers.protocol_openai_responses": "OpenAI Responses",

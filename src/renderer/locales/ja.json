@@ -4080,6 +4080,7 @@
   "new_chat.space_draft_secondary": "サブテンプレート",
   "agent_picker.input_placeholder_space": "@ でエージェント・スキル・成果物・アセットを選択",
   "chat.space_asset_refs_label": "参照アセット",
+  "chat.asset_citation_tip": "資産の詳細を表示",
   "chat.taskref_inline_label": "参照",
   "settings.custom_providers.api_format_openai_responses": "OpenAI Responses (/responses)",
   "settings.custom_providers.protocol_openai_responses": "OpenAI Responses",

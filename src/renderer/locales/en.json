@@ -4387,6 +4387,7 @@
   "new_chat.space_draft_secondary": "Secondary templates",
   "agent_picker.input_placeholder_space": "Type @ to choose agents, skills, artifacts, assets",
   "chat.space_asset_refs_label": "Referenced assets",
+  "chat.asset_citation_tip": "View asset details",
   "chat.taskref_inline_label": "Referenced",
   "settings.custom_providers.api_format_openai_responses": "OpenAI Responses (/responses)",
   "settings.custom_providers.protocol_openai_responses": "OpenAI Responses",

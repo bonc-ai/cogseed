@@ -1299,3 +1299,15 @@ function _initSkillsCognitionBindings() {
 }
 
 _initSkillsCognitionBindings();
+
+// ─── 外部入口：从会话消息的 [asset:<id>] 引用卡跳转到认知资产详情页 ──────
+// conversation.js 懒加载 skills feature 后调用；不依赖调用方已在认知资产页。
+window.openCognitionAssetById = function openCognitionAssetById(assetId) {
+  if (!assetId) return false;
+  _skillsCognitionState.selectedAssetId = String(assetId);
+  _skillsCognitionState.assetCategoryFilter = '';
+  switchSkillsCognitionPage('assets');
+  if (typeof _setViewFromSidebar === 'function') _setViewFromSidebar('recall');
+  else if (typeof setView === 'function') setView('recall');
+  return true;
+};
