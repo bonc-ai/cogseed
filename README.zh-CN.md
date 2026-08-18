@@ -377,8 +377,6 @@ Windows 原生运行时请使用 `run.cmd`。在 WSL 和所需 Windows bridge co
 | Bundled runtime 布局和版本策略 | [Runtime 文档](./resources/runtime/README.md) |
 | P3394 gateway 概览 | [Gateway README](./p3394-gateway/README.md) |
 | Gateway 启动配置 | [Gateway bootstrap 指南](./p3394-gateway/BOOTSTRAP.md) |
-| Gateway 发布 | [Gateway publication 指南](./p3394-gateway/PUBLISH.md) |
-| Cognition asset 规范 | [Cognition assets](./specs/cognition-assets/spec.md) |
 
 ## 许可证
 

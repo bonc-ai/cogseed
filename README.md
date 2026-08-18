@@ -377,8 +377,6 @@ Open **Connections → Models & Quota**, test the authorization again, and selec
 | Bundled runtime layout and version policy | [Runtime documentation](./resources/runtime/README.md) |
 | P3394 gateway overview | [Gateway README](./p3394-gateway/README.md) |
 | Gateway bootstrap | [Gateway bootstrap guide](./p3394-gateway/BOOTSTRAP.md) |
-| Gateway publication | [Gateway publication guide](./p3394-gateway/PUBLISH.md) |
-| Cognition asset specification | [Cognition assets](./specs/cognition-assets/spec.md) |
 
 ## License
 
