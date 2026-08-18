@@ -1,0 +1,102 @@
+{
+  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only G-ipc-wake-v1",
+  "inputs": {
+    "cid": "c-parity-g",
+    "execution_domain": "mate",
+    "source": "dispatch_to"
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "evaluated": {
+      "approved": false,
+      "request": {
+        "agent_id": "agent-a",
+        "agent_name": "Agent A",
+        "behavior_scope": [
+          "dispatch_to"
+        ],
+        "context_scope": [
+          "conversation:c-parity-g"
+        ],
+        "conversation_id": "c-parity-g",
+        "created_at": "__TIMESTAMP__",
+        "dispatch_payload": {
+          "text": "Update the panel projection."
+        },
+        "execution_domain": "mate",
+        "execution_scope_id": "c-parity-g",
+        "id": "undefined-1",
+        "objective": "Wake for panel update",
+        "source": "dispatch_to",
+        "source_actor_id": "commander",
+        "status": "pending",
+        "updated_at": "__TIMESTAMP__"
+      }
+    },
+    "listed": [
+      {
+        "agent_id": "agent-a",
+        "agent_name": "Agent A",
+        "behavior_scope": [
+          "dispatch_to"
+        ],
+        "context_scope": [
+          "conversation:c-parity-g"
+        ],
+        "conversation_id": "c-parity-g",
+        "created_at": "__TIMESTAMP__",
+        "decided_at": "__TIMESTAMP__",
+        "decision_reason": "fixture rejection",
+        "dispatch_payload": {
+          "text": "Update the panel projection."
+        },
+        "execution_domain": "mate",
+        "execution_scope_id": "c-parity-g",
+        "id": "undefined-1",
+        "objective": "Wake for panel update",
+        "source": "dispatch_to",
+        "source_actor_id": "commander",
+        "status": "rejected",
+        "updated_at": "__TIMESTAMP__"
+      }
+    ],
+    "rejected": {
+      "dispatched": false,
+      "ok": true,
+      "request": {
+        "agent_id": "agent-a",
+        "agent_name": "Agent A",
+        "behavior_scope": [
+          "dispatch_to"
+        ],
+        "context_scope": [
+          "conversation:c-parity-g"
+        ],
+        "conversation_id": "c-parity-g",
+        "created_at": "__TIMESTAMP__",
+        "decided_at": "__TIMESTAMP__",
+        "decision_reason": "fixture rejection",
+        "dispatch_payload": {
+          "text": "Update the panel projection."
+        },
+        "execution_domain": "mate",
+        "execution_scope_id": "c-parity-g",
+        "id": "undefined-1",
+        "objective": "Wake for panel update",
+        "source": "dispatch_to",
+        "source_actor_id": "commander",
+        "status": "rejected",
+        "updated_at": "__TIMESTAMP__"
+      }
+    }
+  },
+  "notes": [
+    "Approval state transitions are captured with a synthetic rejected decision and no external dispatch."
+  ]
+}

@@ -85,7 +85,7 @@ async function waitHealth(port, timeoutMs) {
 }
 
 async function main() {
-  const gatewayScript = '/Users/an/东方国信项目/开源companion agent/cogseed-agent/p3394-gateway/gateway.cjs';
+  const gatewayScript = path.resolve(__dirname, '..', 'p3394-gateway', 'gateway.cjs');
   record('gateway.cjs 存在', fs.existsSync(gatewayScript), gatewayScript);
   const claudeBin = '/opt/homebrew/bin/claude';
   record('真实 claude CLI 存在', fs.existsSync(claudeBin), claudeBin);

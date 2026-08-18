@@ -15,7 +15,7 @@ const crypto = require('node:crypto');
 const COGSEED_ENDPOINT = 'http://127.0.0.1:8444';
 const COGSEED_TOKEN = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', 'cogseed', 'p3394-bridge.json'), 'utf8')).token;
 const CODEKEX = '/Applications/ChatGPT.app/Contents/Resources/codex';
-const GATEWAY_SCRIPT = '/Users/an/东方国信项目/开源companion agent/cogseed-agent/p3394-gateway/gateway.cjs';
+const GATEWAY_SCRIPT = path.resolve(__dirname, '..', 'p3394-gateway', 'gateway.cjs');
 
 function freePort() { return new Promise((res) => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); }); }
 function getJson(url, t = 3000) { return new Promise((res) => { const r = http.get(url, { timeout: t }, (x) => { let d = ''; x.on('data', (c) => d += c); x.on('end', () => res({ s: x.statusCode, d })); }); r.on('error', () => res({ s: 0, d: '' })); r.on('timeout', () => { r.destroy(); res({ s: 0, d: '' }); }); }); }

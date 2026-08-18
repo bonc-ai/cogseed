@@ -1,15 +1,31 @@
 #!/usr/bin/env node
 /**
- * Strip the closed-source security scanner from a checkout, for open-source
- * distribution.
+ * Strip the closed-source security components from a checkout, for
+ * open-source distribution.
  *
- * The scanner (`resources/guardrail/skill-sentry`) carries rules and scoring
- * weights that are not published. Removing it is not enough on its own: a missing
- * scanner is indistinguishable from a broken install, and the code treats a broken
- * install as a failure that refuses every skill install. So this also writes the
- * `SCANNER_ABSENT` marker that declares the omission intentional, which is what
- * makes the build report `scanner_absent` (installs allowed, local red lines still
- * enforced) instead of `unknown` (everything refused).
+ * Stripped components:
+ *   - `resources/guardrail/skill-sentry` — scanner rules and scoring weights
+ *     that are not published.
+ *   - `resources/guardrail/nseap-security-core` — the declaration engine under
+ *     its pre-rename identity (still used by earlier checkouts).
+ *   - `resources/guardrail/skill-declaration-core` — the declaration engine's
+ *     current name (implementation + ontologies), also closed-source.
+ *   - `resources/guardrail/SYNC.md` — internal sync provenance (upstream
+ *     workstation paths and vendor records) must not ship.
+ *   - `resources/test/skill-sentry` — scanner test assets, which carry the
+ *     same provenance.
+ *
+ * Removing the scanner alone is not enough: a missing scanner is
+ * indistinguishable from a broken install, and the code treats a broken
+ * install as a failure that refuses every skill install. So this also writes
+ * the `SCANNER_ABSENT` marker that declares the omission intentional, which is
+ * what makes the build report `scanner_absent` (installs allowed, local red
+ * lines still enforced) instead of `unknown` (everything refused).
+ *
+ * The declaration engine has no equivalent marker: when it is absent the
+ * status pipeline degrades to `unreadable`/`unavailable` (advisory paths
+ * only — a missing engine never blocks a skill and never breaks the settings
+ * page), which is the designed behaviour for stripped builds.
  *
  * What remains in the open-source tree:
  *   - `scan_gate.py` — the driver. Reads an engine's report and applies the
@@ -68,14 +84,18 @@ if (args.help) {
 }
 
 const guardrail = path.join(args.root, 'resources', 'guardrail');
-// 闭源引擎树：skill-sentry（深度扫描器）+ nseap-security-core / 其品牌分支
-// 重命名后的 skill-declaration-core（NSEAP 核心）。沿用旧名是为了兼容
-// 不同 checkout 阶段的名字——任一存在即剥离。
-const CLOSED_SOURCE_TREES = [
-  'skill-sentry',
-  'nseap-security-core',
-  'skill-declaration-core',
-];
+const scanner = path.join(guardrail, 'skill-sentry');
+// The declaration engine appears under either its current name
+// (skill-declaration-core) or its pre-rename identity (nseap-security-core);
+// cover both so earlier checkouts strip the same way.
+const declarationNames = ['skill-declaration-core', 'nseap-security-core']
+  .map((name) => path.join(guardrail, name));
+const declarationCores = declarationNames.filter((dir) => fs.existsSync(dir));
+const scannerPin = path.join(guardrail, 'skill-sentry.INTEGRITY');
+const declarationPins = declarationNames.map((dir) => `${dir}.INTEGRITY`)
+  .filter((pinPath) => fs.existsSync(pinPath));
+const syncDoc = path.join(guardrail, 'SYNC.md');
+const testTree = path.join(args.root, 'resources', 'test', 'skill-sentry');
 const marker = path.join(guardrail, 'SCANNER_ABSENT');
 
 if (!fs.existsSync(guardrail)) {
@@ -83,18 +103,25 @@ if (!fs.existsSync(guardrail)) {
   process.exit(2);
 }
 
-const presentTrees = CLOSED_SOURCE_TREES.filter((tree) => fs.existsSync(path.join(guardrail, tree)));
+const hasScanner = fs.existsSync(scanner);
+const hasDeclarationCore = declarationCores.length > 0;
+const hasSyncDoc = fs.existsSync(syncDoc);
+const hasTestTree = fs.existsSync(testTree);
 const hasMarker = fs.existsSync(marker);
 
 if (args.check) {
   process.stdout.write(
-    `closed-source trees present: ${presentTrees.length ? presentTrees.join(', ') : '(none)'}\nmarker present:  ${hasMarker}\n`,
+    `scanner present:            ${hasScanner}\n`
+    + `declaration engine present: ${hasDeclarationCore} (${declarationCores.map((d) => path.relative(guardrail, d)).join(', ') || 'none'})\n`
+    + `sync doc present:           ${hasSyncDoc}\n`
+    + `test assets present:        ${hasTestTree}\n`
+    + `marker present:             ${hasMarker}\n`,
   );
-  if (presentTrees.length || !hasMarker) {
+  if (hasScanner || hasDeclarationCore || hasSyncDoc || hasTestTree || !hasMarker) {
     process.stderr.write('not stripped for open-source distribution\n');
     process.exit(1);
   }
-  process.stdout.write('stripped: closed-source engines absent, omission declared\n');
+  process.stdout.write('stripped: closed-source components absent, omission declared\n');
   process.exit(0);
 }
 
@@ -109,20 +136,25 @@ if (path.resolve(args.root) === REPO && !args.force) {
   process.exit(2);
 }
 
-const removedTrees = [];
-for (const tree of CLOSED_SOURCE_TREES) {
-  const dir = path.join(guardrail, tree);
-  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
-  // The integrity pin describes a tree that is no longer here; leaving it would
-  // invite a mismatch against whatever engine gets installed later.
-  const treePin = path.join(guardrail, `${tree}.INTEGRITY`);
-  if (fs.existsSync(treePin)) fs.rmSync(treePin, { force: true });
-  if (!fs.existsSync(dir) && !fs.existsSync(treePin)) {
-    removedTrees.push(`${tree}/ + ${path.basename(treePin)}`);
-  }
-}
+if (hasScanner) fs.rmSync(scanner, { recursive: true, force: true });
+// The pin describes a tree that is no longer here; leaving it would invite a
+// mismatch against whatever scanner gets installed later.
+if (fs.existsSync(scannerPin)) fs.rmSync(scannerPin, { force: true });
+for (const core of declarationCores) fs.rmSync(core, { recursive: true, force: true });
+for (const pinPath of declarationPins) fs.rmSync(pinPath, { force: true });
+if (hasSyncDoc) fs.rmSync(syncDoc, { force: true });
+if (hasTestTree) fs.rmSync(testTree, { recursive: true, force: true });
 fs.writeFileSync(marker, MARKER_BODY);
 
+const removed = [
+  'scanner', ...declarationCores.map((d) => path.relative(guardrail, d)),
+  'syncDoc', 'testTree',
+].filter(Boolean);
 process.stdout.write(
-  `stripped closed-source engines\n  removed: ${removedTrees.join(', ') || '(none)'}\n  marker:  ${marker}\n`,
+  'stripped closed-source security components\n'
+  + `  removed: ${scanner}\n`
+  + `  removed: ${declarationCores.join(', ') || '(none)'}\n`
+  + `  removed: ${syncDoc}\n`
+  + `  removed: ${testTree}\n`
+  + `  marker:  ${marker}\n`,
 );

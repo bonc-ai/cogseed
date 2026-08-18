@@ -1,0 +1,26 @@
+{
+  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only C-bus-retry-abort-v1",
+  "inputs": {
+    "aborted": true,
+    "logical_turn": "turn-1",
+    "retry_attempts": [
+      1,
+      2
+    ]
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "duplicate_terminal_events": 0,
+    "new_execution_attempt": true,
+    "same_logical_turn": true
+  },
+  "notes": [
+    "This fixture records the bus contract without starting an LLM worker or external service."
+  ]
+}

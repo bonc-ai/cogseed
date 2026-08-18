@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Provision the internal DeepSeek (OpenAI-protocol) custom provider into the
+ * Provision a DeepSeek (OpenAI-protocol) custom provider into the
  * active user's encrypted auth-profiles.json.
  *
  * Uses the app's own `addCustomProvider` so the stored schema (ProfilesFile v6)
@@ -23,8 +23,12 @@ if (!wsRoot) {
   console.error('COGSEED_WORKSPACE_ROOT not set. Run with COGSEED_WORKSPACE_ROOT=<data dir>.');
   process.exit(2);
 }
+if (!BASE_URL) {
+  console.error('DEEPSEEK_BASE_URL not set. Run with DEEPSEEK_BASE_URL=<gateway>/v1.');
+  process.exit(2);
+}
 
-const BASE_URL = 'http://10.1.12.1:3103/v1';
+const BASE_URL = (process.env.DEEPSEEK_BASE_URL || '').trim();
 const API_KEY = (process.env.DEEPSEEK_API_KEY || '').trim();
 
 const registry = JSON.parse(fs.readFileSync(path.join(wsRoot, 'users.json'), 'utf8'));
@@ -54,7 +58,7 @@ const draft = {
   protocol: 'openai',
   baseUrl: BASE_URL,
   apiKey: API_KEY || '<DEEPSEEK_API_KEY>',
-  notes: '内部 DeepSeek 网关 (10.1.12.1:3103)',
+  notes: 'DeepSeek 网关（经 DEEPSEEK_BASE_URL 指定）',
   models: [
     { id: 'deepseek-v4-pro', contextWindow: 1024000, maxTokens: 8192 },
     { id: 'deepseek-v4-flash', contextWindow: 1024000, maxTokens: 8192 },

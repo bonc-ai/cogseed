@@ -128,7 +128,6 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     '910301a3f5be',
     'a79d235e416b',
     'd1e0d20f4b28',
-    'd470761b0a07',
     'f45f8fe237c9',
     'f51578fae310',
   ]),

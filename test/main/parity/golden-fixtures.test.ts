@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-const fixtureRoot = path.resolve(process.cwd(), 'docs/superpowers/parity/fixtures');
+const fixtureRoot = path.resolve(process.cwd(), 'test/fixtures/parity');
 const requiredKeys = [
   'source_revision',
   'capture_command',

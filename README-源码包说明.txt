@@ -2,7 +2,7 @@ CogSeed 源码包
 =================
 
 项目名称: CogSeed
-仓库地址: https://github.com/cogseed/cogseed.git
+仓库地址: https://github.com/YOUR-ORG/cogseed.git
 
 内容
 ----

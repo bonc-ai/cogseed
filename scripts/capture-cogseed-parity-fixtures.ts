@@ -91,7 +91,7 @@ function fixture(name: string, inputs: unknown, expected: unknown, notes: string
 }
 
 async function writeFixture(family: string, filename: string, content: Record<string, unknown>): Promise<void> {
-  const dir = path.join(repoRoot, 'docs/superpowers/parity/fixtures', family);
+  const dir = path.join(repoRoot, 'test/fixtures/parity', family);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, filename), `${JSON.stringify(content, null, 2)}\n`, 'utf8');
 }
@@ -271,7 +271,7 @@ if (!only || only.startsWith('E-')) await captureFamilyE();
 if (!only || only.startsWith('F-')) await captureFamilyF();
 if (!only || only.startsWith('G-')) await captureFamilyG();
 if (!only || only.startsWith('H-')) await captureFamilyH();
-console.log(JSON.stringify({ ok: true, source_revision: sourceRevision, output: path.join(repoRoot, 'docs/superpowers/parity/fixtures') }));
+console.log(JSON.stringify({ ok: true, source_revision: sourceRevision, output: path.join(repoRoot, 'test/fixtures/parity') }));
 }
 
 main().catch((error) => {
