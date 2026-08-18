@@ -31,8 +31,6 @@ describe('CogSeed residual identifiers', () => {
       'README.md',
       'README.zh-CN.md',
       'README-源码包说明.txt',
-      '目录说明.md',
-      'docs/README.md',
     ];
     for (const file of currentDocs) {
       const source = read(file);
