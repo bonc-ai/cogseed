@@ -17,7 +17,7 @@ function loadModule(invoke: (channel: string, payload?: unknown) => Promise<unkn
     addEventListener(type: string, handler: unknown) { this.handler = handler; this.handlerType = type; },
   };
   const context: any = {
-    window: { orkas: { invoke } },
+    window: { cogseed: { invoke } },
     document: {},
     escapeHtml: (value: unknown) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
     t: (_key: string, varsOrFallback?: unknown) => typeof varsOrFallback === 'string' ? varsOrFallback : _key,
@@ -64,6 +64,32 @@ describe('recall projection card renderer', () => {
       ['recall.projections.card', { projectionId: 'proj-a' }],
       ['recall.projections.availableAssets', { projectionId: 'proj-a' }],
     ]);
+  });
+
+  it('shows a retryable Forecast failure without claiming execution started', async () => {
+    const calls: Array<[string, unknown]> = [];
+    let failConfirm = true;
+    const { context, host } = loadModule(async (channel, payload) => {
+      calls.push([channel, payload]);
+      if (channel === 'recall.projections.card') return { ok: true, card: { ...previewCard, status: 'preview' } };
+      if (channel === 'recall.projections.availableAssets') return { ok: true, assets: [] };
+      if (channel === 'recall.projections.confirm' && failConfirm) {
+        failConfirm = false;
+        throw Object.assign(new Error('model configuration is required'), { code: 'model_not_configured' });
+      }
+      if (channel === 'recall.projections.retryForecast') return { ok: true, forecast: { id: 'wf-a' }, resumed: true };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
+    await host.handler({ target: { closest: (selector: string) => selector === '[data-recall-projection-confirm]' ? { disabled: false } : null } });
+
+    expect(host.textContent || host.innerHTML).toContain('Forecast failed; task has not started.');
+    expect(host.innerHTML).toContain('Retry forecast');
+    expect(calls.some(([channel]) => channel === 'group_chat.resume')).toBe(false);
+
+    await host.handler({ target: { closest: (selector: string) => selector === '[data-recall-projection-retry]' ? { disabled: false } : null } });
+    expect(calls).toContainEqual(['recall.projections.retryForecast', { projectionId: 'proj-a', cid: 'cid-a' }]);
   });
 
   it('sends add and remove edits only to projection revision IPC', async () => {
@@ -135,7 +161,7 @@ describe('recall projection card renderer', () => {
     expect(host.innerHTML).toContain('Confirm candidates');
     await host.handler({ target: { closest: (selector: string) => selector === '[data-recall-projection-confirm]' ? { dataset: { recallProjectionConfirm: '1' }, disabled: false } : null } });
 
-    expect(calls).toContainEqual(['recall.projections.confirm', { projectionId: 'proj-a' }]);
+    expect(calls).toContainEqual(['recall.projections.confirm', { projectionId: 'proj-a', cid: 'cid-a' }]);
     expect(calls.some(([channel]) => channel.includes('prediction'))).toBe(false);
   });
 
@@ -153,10 +179,55 @@ describe('recall projection card renderer', () => {
     expect(host.innerHTML).not.toContain('Add asset to this task');
   });
 
-  it('conversation renderer mounts Recall projection cards carried by assistant messages', () => {
+  it('preserves Recall projection metadata while adapting Group Chat history messages', () => {
     const source = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/conversation.js'), 'utf8');
-    expect(source).toContain('message.recall_projection_card');
-    expect(source).toContain('window.mountRecallProjectionCard');
+    const start = source.indexOf('function _groupMsgToLegacy');
+    const end = source.indexOf('\nfunction _hashRenderText', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const adapterSource = source.slice(start, end);
+    const sandbox = {
+      _groupActorLabel: () => '',
+      _normalizeCreatedAgents: () => null,
+      _normalizeCreatedSkills: () => null,
+      _groupMessageSystemKind: () => '',
+      Date,
+    };
+    const adapt = vm.runInNewContext(`${adapterSource}; _groupMsgToLegacy`, sandbox);
+
+    expect(adapt({
+      id: 'msg-projection',
+      ts: '2026-08-12T14:03:29',
+      from: 'commander',
+      text: 'Preload candidates: 0; add or remove as needed.',
+      recall_projection_card: { projectionId: 'proj-a' },
+    })).toMatchObject({
+      role: 'assistant',
+      recall_projection_card: { projectionId: 'proj-a' },
+    });
+  });
+
+  it('uses localized candidate counts instead of the backend English summary text', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: previewCard };
+      if (channel === 'recall.projections.availableAssets') return { ok: true, assets: [] };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
+
+    expect(host.innerHTML).not.toContain('Found 1 asset');
+    expect(host.innerHTML).toContain('1 preload candidates.');
+  });
+
+  it('conversation renderer mounts Recall projection cards carried by assistant messages', () => {
+    // 9.1 重构：挂载函数在独立模块 recall-projection-card.js（window.
+    // mountRecallProjectionCard），conversation.js 负责透传 recall_
+    // projection_card 字段（gm. 前缀的群消息归一化对象）。
+    const source = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/conversation.js'), 'utf8');
+    expect(source).toContain('gm.recall_projection_card');
+    const cardSource = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/recall-projection-card.js'), 'utf8');
+    expect(cardSource).toContain('window.mountRecallProjectionCard');
   });
 
 });

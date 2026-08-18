@@ -1,0 +1,31 @@
+{
+  "skill_name": "skill-invoice-dunning",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Invoice INV-882 is 45 days overdue, amount 2300, not a VIP. What do we do?",
+      "expected_output": "R1 fires (amount>1000 & days>30) → route=human_review; drafts a firm reminder as a STAGED draft; no auto-send.",
+      "assertions": [
+        {"text": "routes to human_review (HITL), not auto-send", "kind": "qualitative"},
+        {"text": "output is a staged draft; production_release_allowed stays false", "kind": "invariant"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Small overdue balance of 180, only 8 days late, standard customer.",
+      "expected_output": "No R1 → route=auto_remind; gentle reminder drafted as staged; still gated by confirm before any execute.",
+      "assertions": [
+        {"text": "route=auto_remind (below thresholds)", "kind": "qualitative"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "VIP account, 60 days overdue, 5000 outstanding.",
+      "expected_output": "R2 (VIP) → relationship_first before dunning; R1 also fires → human_review. Relationship-first framing in the drafted message.",
+      "assertions": [
+        {"text": "R2 relationship_first applied before dunning tone", "kind": "qualitative"},
+        {"text": "R1 human_review also enforced (large + aged)", "kind": "qualitative"}
+      ]
+    }
+  ]
+}

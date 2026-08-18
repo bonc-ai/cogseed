@@ -1,0 +1,17 @@
+mutation_surface_policy:
+  mutable_surface: [wording_templates, approved_count_targets, table_widths, diagram_labels, warning_thresholds, research_minimum_counts]
+  protected_surface: [shared_upper_ontology, four_layer_separation, evidence_honesty, mandatory_web_research, search_snippet_prohibition, primary_sources, source_opening, research_gate, HITL, audit, render_visual_gate, staged_ceiling]
+recursive_guard:
+  max_self_patch_ops: 2
+  max_self_patch_depth: 1
+  self_patch_must_pass_gates: [research, validation, governance, canary]
+release_policy:
+  promotion_ceiling: staged
+  production_release_allowed: false
+research_policy:
+  web_research_required_before_modeling: true
+  search_snippets_are_evidence: false
+  selected_sources_must_be_opened: true
+  current_facts_require_primary_sources: true
+  secondary_sources_discovery_only: true
+  computed_gate_controls_progression: true

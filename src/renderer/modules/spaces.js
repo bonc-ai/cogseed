@@ -1,7 +1,7 @@
-// 工作空间面板 — classic script (window.renderSpaces)
+// 情境空间面板 — classic script (window.renderSpaces)
 // 空间 = 主界面 + 资源作用域限制（本体/skill/task agent）。
 // 广场视图：标题 + 新建按钮 + 分类 chips + 卡片网格（照 AI 团队页骨架）。
-// 详情视图：项目列表 tab（+ 新建项目自动绑定）+ 资源 tab（空间级扩充/失效清理）+ 本体 tab（模板字段静态展示）。
+// 详情视图：资源 tab（空间级扩充/失效清理）+ 本体 tab（模板字段静态展示）。
 (function () {
   function escapeHtml(s) {
     return String(s == null ? '' : s)
@@ -27,9 +27,19 @@
     } catch (_) {}
   }
 
+  /** SVG 图标（AGENTS.md：图标走 icons.js，不用 emoji）。 */
+  function _icon(name, className) {
+    try {
+      if (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function') {
+        return window.uiIconHtml(name, className || 'ui-icon');
+      }
+    } catch (_) {}
+    return '';
+  }
+
   async function _invoke(channel, payload) {
     try {
-      const res = await window.orkas.invoke(channel, payload || {});
+      const res = await window.cogseed.invoke(channel, payload || {});
       return res || {};
     } catch (err) {
       return { error: (err && err.message) || String(err) };
@@ -39,111 +49,98 @@
   // ── state ────────────────────────────────────────────────────────────────
   let _spaces = [];            // SpaceWithMeta[]
   let _templates = [];         // RoleTemplate[]（含 bundle）
-  let _skillNames = new Map(); // skill id → name
-  let _agentNames = new Map(); // agent id → name
-  let _filter = 'all';         // chips 筛选：'all' | 'mine' | template_id | 'custom'
+  let _scenarios = [];         // Scenario[]（M2 情境入口）
+  let _skillNames = new Map(); // skill id → { name, desc }
+  let _agentNames = new Map(); // agent id → { name, desc }
+  let _filter = 'scenarios';   // chips 筛选：'scenarios' | 'mine' | scenario_id
   let _detail = null;          // 当前详情 space_id | null（null = 广场）
-  let _detailTab = 'projects'; // 'projects' | 'resources' | 'ontology'
-  let _projects = [];          // 项目列表（详情页用）
+  let _detailRenderSeq = 0;    // 详情页异步渲染并发防护
   let _loaded = false;
 
   // ── data ─────────────────────────────────────────────────────────────────
   async function _loadData() {
-    const [spacesRes, templatesRes, skillsRes, agentsRes] = await Promise.all([
+    const [spacesRes, templatesRes, scenariosRes, resourcesRes] = await Promise.all([
       _invoke('spaces.list'),
       _invoke('spaces.templates.list'),
-      _invoke('skills.list'),
-      _invoke('agents.list', { summary: true }),
+      _invoke('spaces.scenarios.list'),
+      _invoke('spaces.resources.catalog'),
     ]);
     _spaces = Array.isArray(spacesRes.spaces) ? spacesRes.spaces : [];
     _templates = Array.isArray(templatesRes.templates) ? templatesRes.templates : [];
-    _skillNames = new Map((skillsRes.skills || []).map((s) => [s.id, s.name || s.id]));
-    _agentNames = new Map((agentsRes.agents || []).map((a) => [a.agent_id, a.name || a.agent_id]));
+    _scenarios = Array.isArray(scenariosRes.scenarios) ? scenariosRes.scenarios : [];
+    _skillNames = new Map((resourcesRes.skills || []).map((s) => [s.id, { name: s.name || s.id, desc: (s.description_zh || s.description_en || '').trim(), version: s.version }]));
+    _agentNames = new Map((resourcesRes.agents || []).map((a) => [a.agent_id, { name: a.name || a.agent_id, desc: (a.description_zh || a.description_en || '').trim() }]));
     _loaded = true;
   }
 
-  async function _loadProjects() {
-    const res = await _invoke('projects.list');
-    _projects = Array.isArray(res.projects) ? res.projects : [];
-  }
-
   // ── render: 广场 ─────────────────────────────────────────────────────────
-  function _templateName(templateId) {
-    const tpl = _templates.find((t) => t.template_id === templateId);
-    return tpl ? tpl.name : null;
-  }
 
+  /** 场景卡（M2 情境入口）：图标 + 名称 + 描述 + 建议角色标签 + 按钮。 */
   function _chipLabel(key) {
-    if (key === 'all') return _t('spaces.chip_all', '全部');
+    if (key === 'scenarios') return _t('spaces.chip_scenarios', '场景');
     if (key === 'mine') return _t('spaces.chip_mine', '我的空间');
+    if (key === 'templates') return _t('spaces.chip_templates', '角色模板');
     if (key === 'custom') return _t('spaces.chip_custom', '自定义');
-    return _templateName(key) || key;
+    // 按 scenario_id 找场景名
+    const sc = _scenarios.find((s) => s.scenario_id === key);
+    if (sc) return sc.name;
+    return key;
   }
 
-  /** 模板 → 已创建的空间（无则 null）。 */
-  function _spaceForTemplate(tpl) {
-    return _spaces.find((s) => s.template_id === tpl.template_id) || null;
+  /** 场景模板组合标签（如「学生+学者」）。 */
+  function _scenarioTplLabel(scenario) {
+    const names = [];
+    if (scenario.suggested_primary_template_id) {
+      const tpl = _templates.find((t) => t.template_id === scenario.suggested_primary_template_id);
+      if (tpl) names.push(tpl.name);
+    }
+    for (const sid of scenario.suggested_secondary_template_ids) {
+      const tpl = _templates.find((t) => t.template_id === sid);
+      if (tpl) names.push(tpl.name);
+    }
+    return names.length ? names.join(' + ') : '';
   }
 
-  /** 模板 emoji 图标。 */
-  function _templateIcon(tpl) {
-    const map = {
-      student: '🎓', scholar: '📚', fde: '🛠️',
-      product_manager: '📱', project_manager: '📋',
-      technical_writer: '📝', recruiter: '👥', software_engineer: '💻',
-    };
-    return map[tpl.template_id] || '🧩';
-  }
-
-  /** 模板卡（复用 AI 团队 agent-card 结构）：图标 + 名称 + 描述 + 技能/智能体 chips + 按钮。 */
-  function _templateCardHtml(tpl) {
-    const existing = _spaceForTemplate(tpl);
-    const icon = _templateIcon(tpl);
-    const desc = tpl.description || '';
-    const skillIds = (tpl.bundle?.skill_ids || []).slice(0, 4);
-    const agentIds = (tpl.bundle?.agent_ids || []).slice(0, 3);
-    const nSkills = (tpl.bundle?.skill_ids || []).length;
-    const nAgents = (tpl.bundle?.agent_ids || []).length;
-    const skillTags = skillIds.map((id) => `<span class="agent-card-chip">${escapeHtml(_skillNames.get(id) || id)}</span>`).join('');
-    const agentTags = agentIds.map((id) => `<span class="agent-card-chip">${escapeHtml(_agentNames.get(id) || id)}</span>`).join('');
-    const badge = existing
-      ? `<span class="agent-card-source is-builtin">${_t('spaces.created_badge', '已创建')}</span>`
-      : '';
-    const btnLabel = existing ? _t('spaces.enter_btn', '进入空间') : _t('spaces.create_btn2', '创建空间');
-    const btnClass = 'agent-card-use';
+  /** 场景卡（复用 agent-card 骨架）：图标 + 名称 + 描述 + 建议角色标签 + 按钮。 */
+  function _scenarioCardHtml(scenario) {
+    const icon = scenario.icon ? escapeHtml(scenario.icon) : _icon('layout-grid', 'ui-icon spaces-tpl-icon');
+    const desc = scenario.description || '';
+    const tplLabel = _scenarioTplLabel(scenario);
+    const tplTag = tplLabel ? `<span class="agent-card-chip">${escapeHtml(tplLabel)}</span>` : '';
+    const btnLabel = _t('spaces.create_btn2', '创建空间');
     return `
-      <div class="agent-card spaces-tpl-card" data-template-id="${escapeHtml(tpl.template_id)}" data-space-id="${existing ? escapeHtml(existing.space_id) : ''}">
+      <div class="agent-card spaces-scenario-card" data-scenario-id="${escapeHtml(scenario.scenario_id)}">
         <div class="agent-card-header">
           <span class="agent-card-avatar spaces-tpl-icon">${icon}</span>
           <div class="agent-card-title">
-            <span class="agent-card-name">${escapeHtml(tpl.name)}</span>
-            <span class="agent-card-meta">${_t('spaces.role_template', '角色模板')} · v${escapeHtml(tpl.version || '')}</span>
+            <span class="agent-card-name">${escapeHtml(scenario.name)}</span>
+            <span class="agent-card-meta">${_t('spaces.scenario_tag', '场景')}</span>
           </div>
-          ${badge}
         </div>
         <div class="agent-card-desc">${escapeHtml(desc)}</div>
         <div class="agent-card-actions">
-          ${skillTags}
-          ${agentTags}
-          <button type="button" class="${btnClass}" data-template-enter>${btnLabel}</button>
+          ${tplTag}
+          <button type="button" class="agent-card-use" data-scenario-create>${btnLabel}</button>
         </div>
       </div>`;
   }
 
-  /** 已创建空间卡（我的空间 / 自定义筛选用）。 */
+  /** 已创建空间卡（我的空间筛选用）。 */
   function _spaceCardHtml(s) {
     const tplName = s.template_name || _t('spaces.no_template', '未选模板');
-    const icon = escapeHtml(s.icon || '🧩');
+    const icon = s.icon ? escapeHtml(s.icon) : _icon('box', 'ui-icon spaces-tpl-icon');
+    const typeLabel = _spaceTypeLabel(s.space_type);
     return `<div class="agent-card spaces-space-card" data-space-id="${escapeHtml(s.space_id)}">
       <div class="agent-card-header">
         <span class="agent-card-avatar spaces-tpl-icon">${icon}</span>
         <div class="agent-card-title">
           <span class="agent-card-name">${escapeHtml(s.name)}</span>
-          <span class="agent-card-meta">${escapeHtml(tplName)}</span>
+          <span class="agent-card-meta">${escapeHtml(tplName)}${typeLabel ? ` · ${escapeHtml(typeLabel)}` : ''}</span>
         </div>
       </div>
       <div class="agent-card-desc">${_t('spaces.card_desc', '{n} 技能 · {m} 智能体', { n: s.skill_count || 0, m: s.agent_count || 0 })}</div>
       <div class="agent-card-actions">
+        ${_gateChip(s.gate_status)}
         <span class="agent-card-chip">${s.skill_count || 0} ${_t('spaces.skills_unit', '技能')}</span>
         <span class="agent-card-chip">${s.agent_count || 0} ${_t('spaces.agents_unit', '智能体')}</span>
         <button type="button" class="agent-card-use" data-space-enter>${_t('spaces.enter_btn', '进入空间')}</button>
@@ -151,55 +148,116 @@
     </div>`;
   }
 
+  /** 空间类型标签（i18n key: spaces.type_<space_type>）；未知类型返回空。 */
+  function _spaceTypeLabel(spaceType) {
+    if (!spaceType) return '';
+    const label = _t(`spaces.type_${spaceType}`, '');
+    return label && label !== `spaces.type_${spaceType}` ? label : '';
+  }
+
+  /** 上架 Gate 状态徽标：passed=已就绪(绿) / failed=未就绪(红) / not_checked=待评估(灰)。 */
+  function _gateChip(gateStatus) {
+    if (gateStatus === 'passed') return `<span class="agent-card-chip spaces-gate is-gate-passed">${_t('spaces.gate_passed', '已就绪')}</span>`;
+    if (gateStatus === 'failed') return `<span class="agent-card-chip spaces-gate is-gate-failed">${_t('spaces.gate_failed', '未就绪')}</span>`;
+    return `<span class="agent-card-chip spaces-gate is-gate-not-checked">${_t('spaces.gate_not_checked', '待评估')}</span>`;
+  }
+
   function _filteredCards() {
-    if (_filter === 'mine') return _spaces;                       // 我的空间：所有已创建
-    if (_filter === 'custom') return _spaces.filter((s) => !s.template_id);
-    if (_filter === 'all') return _templates;                     // 全部：8 个角色模板
-    return _templates.filter((t) => t.template_id === _filter);   // 单个模板
+    if (_filter === 'mine') return _spaces;  // 我的空间：所有已创建
+    if (_filter === 'scenarios') return _scenarios; // 场景入口
+    if (_filter === 'templates') return _templates; // 角色模板入口
+    return _scenarios.filter((s) => s.scenario_id === _filter);
   }
 
   function _renderGrid(container) {
     const items = _filteredCards();
-    const isTemplateView = _filter === 'all' || _templates.some((t) => t.template_id === _filter);
+    const isScenarioView = _filter === 'scenarios' || _scenarios.some((s) => s.scenario_id === _filter);
+    const isTemplateView = _filter === 'templates';
     if (!items.length) {
-      container.innerHTML = `<div class="agents-empty">${_t('spaces.empty', '还没有工作空间，点右上角「新建空间」开始')}</div>`;
+      container.innerHTML = `<div class="agents-empty">${_t('spaces.empty', '还没有情境空间，点右上角「新建空间」开始')}</div>`;
       return;
     }
-    container.innerHTML = items.map(isTemplateView ? _templateCardHtml : _spaceCardHtml).join('');
-    container.querySelectorAll('[data-template-id]').forEach((el) => {
+    container.innerHTML = items.map(isTemplateView ? _templateCardHtml : (isScenarioView ? _scenarioCardHtml : _spaceCardHtml)).join('');
+    container.querySelectorAll('.spaces-scenario-card[data-scenario-id]').forEach((el) => {
       el.addEventListener('click', () => {
-        const tpl = _templates.find((t) => t.template_id === el.dataset.templateId);
-        if (!tpl) return;
-        const existing = _spaceForTemplate(tpl);
-        if (existing) _openDetail(existing.space_id);
-        else _createFromTemplate(tpl);
+        const scenarioId = el.dataset.scenarioId;
+        const scenario = _scenarios.find((s) => s.scenario_id === scenarioId);
+        if (scenario) _createFromScenario(scenario);
       });
     });
     container.querySelectorAll('.spaces-space-card[data-space-id]').forEach((el) => {
       el.addEventListener('click', () => _openDetail(el.dataset.spaceId));
     });
+    container.querySelectorAll('.spaces-tpl-entry-card[data-tpl-id]').forEach((el) => {
+      // 旧入口：点击模板卡原为 _openCreateModal（已废弃）；现由 workspace.js 模板卡接管。
+      void el;
+    });
   }
 
-  /** 从模板卡一键创建空间（名称 = 模板名，绑定模板）。 */
-  async function _createFromTemplate(tpl) {
-    const res = await _invoke('spaces.create', { name: tpl.name, template_id: tpl.template_id });
-    if (res.error) { _notifyFail(_t('spaces.create_fail', '创建失败'), res.error); return; }
-    await _loadData();
-    _openDetail(res.space.space_id);
+  /** 角色模板入口卡（"角色模板" tab）：点卡 → 创建弹窗预选该模板。 */
+  function _templateCardHtml(tpl) {
+    const nSkills = (tpl.bundle?.skill_ids || []).length;
+    const nAgents = (tpl.bundle?.agent_ids || []).length;
+    return `<div class="agent-card spaces-tpl-entry-card" data-tpl-id="${escapeHtml(tpl.template_id)}">
+      <div class="agent-card-header">
+        <span class="agent-card-avatar spaces-tpl-icon">${_icon('users', 'ui-icon')}</span>
+        <div class="agent-card-title">
+          <span class="agent-card-name">${escapeHtml(tpl.name)}</span>
+          <span class="agent-card-meta">${_t('spaces.tpl_role_label', '角色模板')}</span>
+        </div>
+      </div>
+      <div class="agent-card-desc">${escapeHtml(tpl.description || '')}</div>
+      <div class="agent-card-actions">
+        <span class="agent-card-chip">${nSkills} ${_t('spaces.skills_unit', '技能')}</span>
+        <span class="agent-card-chip">${nAgents} ${_t('spaces.agents_unit', '智能体')}</span>
+        <button type="button" class="agent-card-use">${_t('spaces.create_from_tpl', '用此模板创建')}</button>
+      </div>
+    </div>`;
   }
+
+  /** 从场景入口一键创建空间（名称 = 场景名，模板预填）。 */
+  async function _createFromScenario(scenario) {
+    // 如果场景已有建议主模板 → 直接创建（名称 = 场景名 + 数字后缀防重名）
+    // 自定义场景/无主模板场景 → 无法走一键创建（旧逻辑打开 _openCreateModal，已废弃）
+    if (scenario.scenario_id === 'custom' || !scenario.suggested_primary_template_id) { return; }
+    let name = scenario.name;
+    for (let i = 1; i <= 50; i++) {
+      const res = await _invoke('spaces.create', {
+        name,
+        primary_template_id: scenario.suggested_primary_template_id,
+        secondary_template_ids: scenario.suggested_secondary_template_ids,
+        icon: scenario.icon,
+      });
+      if (!res.error && res.space) {
+        await _loadData();
+        _openDetail(res.space.space_id);
+        return;
+      }
+      if (res.error === 'name_dup') { name = `${scenario.name} ${i + 1}`; continue; }
+      _notifyFail(_t('spaces.create_fail', '创建失败'), res.error);
+      return;
+    }
+  }
+
+  // ── 死代码说明 ─────────────────────────────────────────────────────────────
+  // 本模块（renderSpaces / spaces-view）已被 workspace.js（空间中心）整体取代：
+  // index.html 无 spaces-view 容器、boot.js 的 view 分支只加载 workspace.js，
+  // 因此 renderSpaces 从未被调用，以下「新建空间」旧弹窗相关代码一并废弃。
+  // （lazy-features.test.ts 仍按旧映射断言加载本文件，属已知滞后测试。）
 
   function _renderGallery() {
     const view = document.getElementById('spaces-view');
     if (!view) return;
-    const chips = ['all', 'mine', ..._templates.map((t) => t.template_id)]
+    const hasCustom = _scenarios.some((s) => s.scenario_id === 'custom');
+    const chips = ['scenarios', 'mine', 'templates', ...(hasCustom ? ['custom'] : [])]
       .map((key) => `<button class="marketplace-chip${_filter === key ? ' is-active' : ''}" data-chip="${key}">${escapeHtml(_chipLabel(key))}</button>`)
       .join('');
     view.innerHTML = `
       <div class="agents-grid-view">
         <div class="agents-grid-header">
           <div class="agents-grid-header-titles">
-            <span class="agents-grid-title">${_t('sidebar.spaces', '工作空间')}</span>
-            <span class="agents-grid-subtitle">${_t('spaces.subtitle', '每个空间 = 一套受限的干活环境：限定本体 / 技能 / 智能体')}</span>
+            <span class="agents-grid-title">${_t('sidebar.spaces', '情境空间')}</span>
+            <span class="agents-grid-subtitle">${_t('spaces.subtitle', '选择一个场景开始，情境空间会自动装配角色模板与配套资源')}</span>
           </div>
           <div class="header-actions">
             <button class="btn btn-sm btn-primary" id="spaces-new-btn">+ ${_t('spaces.new_btn', '新建空间')}</button>
@@ -214,7 +272,7 @@
     view.querySelectorAll('.marketplace-chip').forEach((el) => {
       el.addEventListener('click', () => { _filter = el.dataset.chip; _renderGallery(); });
     });
-    document.getElementById('spaces-new-btn').addEventListener('click', () => _openCreateModal());
+    // 「新建空间」按钮原打开 _openCreateModal（已废弃）；现由 workspace.js 新建弹窗接管。
     _renderGrid(document.getElementById('spaces-grid'));
   }
 
@@ -232,29 +290,83 @@
 
   function _renderDetailIntro(space, tpl) {
     const mission = tpl ? (tpl.description || '') : '';
-    const icon = escapeHtml(space.icon || '🧩');
-    const nSkills = tpl ? (tpl.bundle?.skill_ids || []).length : (space.skill_count || 0);
-    const nAgents = tpl ? (tpl.bundle?.agent_ids || []).length : (space.agent_count || 0);
+    const icon = space.icon ? escapeHtml(space.icon) : _icon('box', 'ui-icon spaces-tpl-icon');
+    const nSkills = space.skill_count || 0; // 全量口径：模板 bundle + 空间扩充（与卡片一致）
+    const nAgents = space.agent_count || 0;
+    const typeLabel = _spaceTypeLabel(space.space_type);
     const stats = `
       <div class="agents-detail-stats">
+        ${typeLabel ? `<span class="agent-card-chip">${escapeHtml(typeLabel)}</span>` : ''}
+        ${_gateChip(space.gate_status)}
         <span class="agent-card-chip">${nSkills} ${_t('spaces.skills_unit', '技能')}</span>
         <span class="agent-card-chip">${nAgents} ${_t('spaces.agents_unit', '智能体')}</span>
-        <span class="agent-card-chip">${space.invalid_count || 0} ${_t('spaces.invalid_label', '失效')}</span>
+        <span class="agent-card-chip">${space.invalid_count || 0} ${_t('spaces.invalid_label', '不可用')}</span>
       </div>`;
-    const desc = mission || _t('spaces.space_no_desc', '本空间未套模板，自由使用全部资源。');
+    const desc = mission || _t('spaces.space_no_desc', '未选择角色模板，全部技能与智能体可用。');
+    const goal = space.sustained_outcome || '';
+    const goalBlock = `
+      <div class="spaces-goal-block${goal ? '' : ' is-empty'}">
+        <div class="spaces-goal-head">
+          <span class="spaces-goal-label">${_icon('zap', 'ui-icon spaces-goal-icon')} ${_t('spaces.goal_label', '空间目标')}</span>
+          <button type="button" class="btn btn-sm" id="spaces-goal-edit-btn">${goal ? _t('spaces.goal_edit', '编辑') : _t('spaces.goal_set', '设置')}</button>
+        </div>
+        <div class="spaces-goal-body" id="spaces-goal-body">
+          ${goal
+            ? `<p class="spaces-goal-text">${escapeHtml(goal)}</p>`
+            : `<p class="agents-detail-desc is-empty">${_t('spaces.goal_empty', '未设置：写下这个空间长期要达成什么，AI 干活时会参考。')}</p>`}
+        </div>
+      </div>`;
     return _detailSection(
       `${icon} ${_t('spaces.detail_intro', '空间简介')}`,
-      `<div class="agents-detail-desc">${escapeHtml(desc)}</div>${stats}`,
+      `<div class="agents-detail-desc">${escapeHtml(desc)}</div>${stats}${goalBlock}`,
     );
+  }
+
+  /** 空间目标行内编辑：切换 textarea + 保存/取消，保存走 spaces.update。 */
+  function _bindGoalEditor(space) {
+    const editBtn = document.getElementById('spaces-goal-edit-btn');
+    const body = document.getElementById('spaces-goal-body');
+    if (!editBtn || !body) return;
+    editBtn.addEventListener('click', async () => {
+      const editing = body.querySelector('textarea');
+      if (editing) return; // 已在编辑态
+      const current = space.sustained_outcome || '';
+      body.innerHTML = `
+        <textarea class="spaces-goal-input" maxlength="200" rows="3" placeholder="${_t('spaces.goal_placeholder', '例如：这个空间长期服务于 XX 交付，目标是……')}">${escapeHtml(current)}</textarea>
+        <div class="spaces-goal-actions">
+          <button type="button" class="btn btn-sm btn-primary" id="spaces-goal-save-btn">${_t('common.save', '保存')}</button>
+          <button type="button" class="btn btn-sm" id="spaces-goal-cancel-btn">${_t('common.cancel', '取消')}</button>
+        </div>`;
+      const saveBtn = body.querySelector('#spaces-goal-save-btn');
+      const cancelBtn = body.querySelector('#spaces-goal-cancel-btn');
+      const input = body.querySelector('textarea');
+      cancelBtn.addEventListener('click', () => _renderDetail());
+      saveBtn.addEventListener('click', async () => {
+        const value = input.value.trim();
+        const res = await _invoke('spaces.update', {
+          spaceId: space.space_id,
+          ...(value ? { sustained_outcome: value } : { sustained_outcome: null }),
+        });
+        if (res.error) { _notifyFail(_t('spaces.update_fail', '保存失败'), res.error); return; }
+        await _loadData();
+        _renderDetail();
+      });
+    });
   }
 
   function _renderDetailSkills(tpl) {
     const skillIds = tpl?.bundle?.skill_ids || [];
-    const rows = skillIds.map((id) => `
+    const rows = skillIds.map((id) => {
+      const info = _skillNames.get(id) || {};
+      return `
       <div class="agents-detail-list-item">
-        <span class="agents-detail-list-text">${escapeHtml(_skillNames.get(id) || id)}</span>
+        <div class="agents-detail-list-main">
+          <span class="agents-detail-list-text">${escapeHtml(info.name || id)}</span>
+          ${info.desc ? `<span class="agents-detail-list-desc">${escapeHtml(info.desc)}</span>` : ''}
+        </div>
         <span class="agent-card-source is-builtin">${_t('spaces.skills_unit', '技能')}</span>
-      </div>`).join('');
+      </div>`;
+    }).join('');
     return _detailSection(
       _t('spaces.detail_skills', '自带技能'),
       rows || `<div class="agents-detail-desc is-empty">${_t('spaces.none', '无')}</div>`,
@@ -263,84 +375,120 @@
 
   function _renderDetailAgents(tpl) {
     const agentIds = tpl?.bundle?.agent_ids || [];
-    const rows = agentIds.map((id) => `
+    const rows = agentIds.map((id) => {
+      const info = _agentNames.get(id) || {};
+      return `
       <div class="agents-detail-list-item">
-        <span class="agents-detail-list-text">${escapeHtml(_agentNames.get(id) || id)}</span>
+        <div class="agents-detail-list-main">
+          <span class="agents-detail-list-text">${escapeHtml(info.name || id)}</span>
+          ${info.desc ? `<span class="agents-detail-list-desc">${escapeHtml(info.desc)}</span>` : ''}
+        </div>
         <span class="agent-card-source is-custom">${_t('spaces.agents_unit', '智能体')}</span>
-      </div>`).join('');
+      </div>`;
+    }).join('');
     return _detailSection(
       _t('spaces.detail_agents', '自带智能体'),
       rows || `<div class="agents-detail-desc is-empty">${_t('spaces.none', '无')}</div>`,
     );
   }
 
-  function _renderDetailProjects(space) {
-    const owned = _projects.filter((p) => p.space_id === space.space_id);
-    const rows = owned.map((p) => `<div class="agents-detail-list-item spaces-proj-row" data-pid="${escapeHtml(p.project_id)}">
-      <span class="agents-detail-list-text">${escapeHtml(p.name)}</span>
-      <span class="agents-detail-list-meta">${p.conv_count || 0} ${_t('spaces.convs_unit', '会话')}</span>
-    </div>`).join('');
-    return _detailSection(
-      `${_t('spaces.projects_label', '空间内项目')} <button class="btn btn-sm" id="spaces-proj-new">+ ${_t('spaces.new_project_btn', '新建项目')}</button>`,
-      rows || `<div class="agents-detail-desc is-empty">${_t('spaces.projects_empty', '还没有项目，新建一个开始干活')}</div>`,
-    );
-  }
-
-  function _renderDetailOntology(tpl) {
-    if (!tpl) {
-      return _detailSection(_t('spaces.tab_ontology', '本体'), `<div class="agents-detail-desc is-empty">${_t('spaces.ontology_none', '未套模板：本空间记忆为自由文本，不受字段限制')}</div>`);
-    }
-    const groups = (tpl.preset_groups || []).map((g) => `
-      <div class="spaces-onto-group">
-        <div class="spaces-onto-group-title">${escapeHtml(g.title)}</div>
-        <div class="spaces-onto-fields">${(g.fields || []).map((f) => `<span class="spaces-res-chip static">${escapeHtml(f.name)}${f.isRelation ? ' →' : ''}</span>`).join('') || '<span class="muted">—</span>'}</div>
-      </div>`).join('');
-    return _detailSection(
-      _t('spaces.ontology_label', '本空间按角色模板记录（一期静态展示，候选路由二期接入）'),
-      `<div class="spaces-onto-groups">${groups}</div>`,
-    );
-  }
-
   function _renderDetailResources(space) {
-    const extraSkills = (space.extra_skills || []).map((id) => `<span class="spaces-res-chip" data-kind="skill" data-id="${escapeHtml(id)}">${escapeHtml(_skillNames.get(id) || id)} <b title="${_t('spaces.remove_tip', '移除')}">×</b></span>`).join('');
-    const extraAgents = (space.extra_agents || []).map((id) => `<span class="spaces-res-chip" data-kind="agent" data-id="${escapeHtml(id)}">${escapeHtml(_agentNames.get(id) || id)} <b title="${_t('spaces.remove_tip', '移除')}">×</b></span>`).join('');
+    const extraSkills = (space.extra_skills || []).map((id) => { const info = _skillNames.get(id) || {}; return `<span class="spaces-res-chip" data-kind="skill" data-id="${escapeHtml(id)}">${escapeHtml(info.name || id)} <b title="${_t('spaces.remove_tip', '移除')}">${_icon('x', 'ui-icon spaces-res-chip-x')}</b></span>`; }).join('');
+    const extraAgents = (space.extra_agents || []).map((id) => { const info = _agentNames.get(id) || {}; return `<span class="spaces-res-chip" data-kind="agent" data-id="${escapeHtml(id)}">${escapeHtml(info.name || id)} <b title="${_t('spaces.remove_tip', '移除')}">${_icon('x', 'ui-icon spaces-res-chip-x')}</b></span>`; }).join('');
     const invalid = space.invalid_count > 0
       ? `<button class="btn btn-sm" id="spaces-prune-btn">${_t('spaces.prune_btn', '清理失效引用（{n}）', { n: space.invalid_count })}</button>` : '';
     const addRow = `
-      <div class="spaces-detail-row">
+      <div class="spaces-res-add-row">
+        <span class="spaces-res-add-label">${_t('spaces.res_add_label', '添加资源')}</span>
         <select id="spaces-add-kind"><option value="skill">${_t('spaces.skills_unit', '技能')}</option><option value="agent">${_t('spaces.agents_unit', '智能体')}</option></select>
         <select id="spaces-add-id"></select>
-        <button class="btn btn-sm" id="spaces-add-btn">${_t('spaces.add_btn', '添加')}</button>
+        <button class="btn btn-sm btn-primary" id="spaces-add-btn">${_t('spaces.add_btn', '添加')}</button>
         ${invalid}
       </div>`;
     const extras = `
-      <div class="agents-detail-list-item">
-        <span class="agents-detail-list-text">${_t('spaces.extra_skills', '空间级扩充 · 技能')}</span>
+      <div class="spaces-res-group">
+        <div class="spaces-res-group-label">${_t('spaces.extra_skills', '空间级扩充 · 技能')}</div>
+        <div class="spaces-res-chips">${extraSkills || `<span class="muted">${_t('spaces.none', '无')}</span>`}</div>
       </div>
-      <div class="spaces-res-chips" style="margin:4px 0 10px">${extraSkills || `<span class="muted">${_t('spaces.none', '无')}</span>`}</div>
-      <div class="agents-detail-list-item">
-        <span class="agents-detail-list-text">${_t('spaces.extra_agents', '空间级扩充 · 智能体')}</span>
-      </div>
-      <div class="spaces-res-chips" style="margin:4px 0 10px">${extraAgents || `<span class="muted">${_t('spaces.none', '无')}</span>`}</div>`;
+      <div class="spaces-res-group">
+        <div class="spaces-res-group-label">${_t('spaces.extra_agents', '空间级扩充 · 智能体')}</div>
+        <div class="spaces-res-chips">${extraAgents || `<span class="muted">${_t('spaces.none', '无')}</span>`}</div>
+      </div>`;
     return _detailSection(
       _t('spaces.detail_extra', '空间级扩充'),
       `${extras}${addRow}`,
     );
   }
 
-  function _renderDetail() {
+  /** 主技能（Main Skill）区块：显示绑定状态，可绑定/解除。 */
+  function _renderDetailMainSkill(space) {
+    const ref = space.main_skill_ref;
+    const body = ref
+      ? (() => {
+        const info = _skillNames.get(ref.asset_id) || {};
+        return `<div class="agents-detail-list-item">
+          <span class="agents-detail-list-text">${escapeHtml(info.name || ref.asset_id)}</span>
+          <span class="agent-card-chip is-version">v${escapeHtml(ref.version || '?')}</span>
+          <button type="button" class="btn btn-sm" data-space-unbind-main>${_t('spaces.main_skill_unbind', '解除')}</button>
+        </div>`;
+      })()
+      : `<div class="agents-detail-desc is-empty">${_t('spaces.main_skill_empty', '未绑定主技能：绑定后 Gate 评估与能力包组装会以此技能为基准。')}</div>`;
+    return _detailSection(
+      _t('spaces.main_skill_label', '主技能（Main Skill）'),
+      `${body}<button type="button" class="btn btn-sm" id="spaces-main-skill-bind-btn">${_t('spaces.main_skill_bind', '绑定主技能')}</button>`,
+    );
+  }
+
+  /** 主技能选择弹窗：列技能库（名字+版本+描述），点行即绑定。 */
+  function _openMainSkillPicker(space) {
+    const overlay = document.getElementById('spaces-main-skill-modal');
+    if (!overlay) return;
+    const list = document.getElementById('spaces-main-skill-list');
+    const skills = Array.from(_skillNames.entries())
+      .map(([id, info]) => ({ id, name: info.name || id, desc: info.desc || '', version: info.version || '1.0' }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+    list.innerHTML = skills.length
+      ? skills.map((s) => `
+        <button type="button" class="spaces-skill-pick-row" data-skill-id="${escapeHtml(s.id)}" data-skill-version="${escapeHtml(s.version)}">
+          <span class="spaces-skill-pick-name">${escapeHtml(s.name)}</span>
+          <span class="agent-card-chip is-version">v${escapeHtml(s.version)}</span>
+          <span class="spaces-skill-pick-desc">${escapeHtml(s.desc || '')}</span>
+        </button>`).join('')
+      : `<div class="agents-detail-desc is-empty">${_t('spaces.skills_empty', '暂无可用技能')}</div>`;
+    const close = () => { overlay.style.display = 'none'; };
+    overlay.style.display = 'flex';
+    document.getElementById('spaces-main-skill-cancel').onclick = close;
+    list.querySelectorAll('.spaces-skill-pick-row').forEach((row) => {
+      row.addEventListener('click', async () => {
+        const assetId = row.dataset.skillId;
+        const version = row.dataset.skillVersion || '1.0';
+        const res = await _invoke('spaces.update', {
+          spaceId: space.space_id,
+          main_skill_ref: { asset_id: assetId, version },
+        });
+        close();
+        if (res.error) { _notifyFail(_t('spaces.update_fail', '保存失败'), res.error); return; }
+        await _loadData();
+        _renderDetail();
+      });
+    });
+  }
+
+  async function _renderDetail() {
+    const seq = ++_detailRenderSeq;
     const view = document.getElementById('spaces-view');
     const space = _space();
     if (!space) { _detail = null; _renderGallery(); return; }
     const tpl = _templates.find((t) => t.template_id === space.template_id) || null;
     const tplName = tpl ? tpl.name : (space.template_name || _t('spaces.no_template', '未选模板'));
-    const icon = escapeHtml(space.icon || '🧩');
+    const icon = space.icon ? escapeHtml(space.icon) : _icon('box', 'ui-icon');
+    if (seq !== _detailRenderSeq) return; // 过期渲染丢弃（chips 快速切换时旧 fetch 不覆盖）
 
     view.innerHTML = `
       <div class="agents-grid-view">
         <div class="agents-detail-header">
           <div class="agents-detail-title-row">
-            <button type="button" class="btn btn-sm" id="spaces-back-btn">← ${_t('spaces.back', '返回')}</button>
+            <button type="button" class="btn btn-sm" id="spaces-back-btn">${_icon('chevron-left', 'ui-icon')} ${_t('spaces.back', '返回')}</button>
             <span class="agents-detail-avatar-slot">${icon}</span>
             <div class="agents-detail-name" id="spaces-detail-name">${escapeHtml(space.name)}</div>
             <span class="agents-detail-source is-builtin">${escapeHtml(tplName)}</span>
@@ -352,11 +500,10 @@
         </div>
         <div class="agents-detail-body">
           ${_renderDetailIntro(space, tpl)}
+          ${_renderDetailMainSkill(space)}
           ${_renderDetailSkills(tpl)}
           ${_renderDetailAgents(tpl)}
           ${_renderDetailResources(space)}
-          ${_renderDetailProjects(space)}
-          ${_renderDetailOntology(tpl)}
         </div>
       </div>`;
 
@@ -367,12 +514,15 @@
   }
 
   async function _bindDetailBody(space) {
-    // 项目区块
-    document.getElementById('spaces-proj-new')?.addEventListener('click', () => _createProjectInSpace(space));
-    document.querySelectorAll('.spaces-proj-row').forEach((el) => {
-      el.addEventListener('click', () => {
-        try { if (typeof setView === 'function') setView('project', el.dataset.pid); } catch (_) {}
-      });
+    // 空间目标行内编辑
+    _bindGoalEditor(space);
+    // 主技能绑定/解除
+    document.getElementById('spaces-main-skill-bind-btn')?.addEventListener('click', () => _openMainSkillPicker(space));
+    document.querySelector('[data-space-unbind-main]')?.addEventListener('click', async () => {
+      const res = await _invoke('spaces.update', { spaceId: space.space_id, main_skill_ref: null });
+      if (res.error) { _notifyFail(_t('spaces.update_fail', '保存失败'), res.error); return; }
+      await _loadData();
+      _renderDetail();
     });
     // 资源扩充区块
     const kindSel = document.getElementById('spaces-add-kind');
@@ -390,13 +540,9 @@
     const sel = document.getElementById('spaces-add-id');
     if (!sel) return;
     const kind = document.getElementById('spaces-add-kind')?.value || 'skill';
-    const [skillsRes, agentsRes] = await Promise.all([
-      kind === 'skill' ? _invoke('skills.list') : Promise.resolve({}),
-      kind === 'agent' ? _invoke('agents.list') : Promise.resolve({}),
-    ]);
     const items = kind === 'skill'
-      ? ((skillsRes.skills || skillsRes.list || [])).map((s) => ({ id: s.id, name: s.name }))
-      : ((agentsRes.agents || agentsRes.list || [])).map((a) => ({ id: a.agent_id, name: a.name || a.agent_id }));
+      ? Array.from(_skillNames.entries()).map(([id, info]) => ({ id, name: info.name || id }))
+      : Array.from(_agentNames.entries()).map(([id, info]) => ({ id, name: info.name || id }));
     const existing = new Set(kind === 'skill' ? space.extra_skills : space.extra_agents);
     const opts = items.filter((i) => !existing.has(i.id))
       .map((i) => `<option value="${escapeHtml(i.id)}">${escapeHtml(i.name || i.id)}</option>`).join('');
@@ -426,34 +572,16 @@
 
   async function _refreshDetail() {
     await _loadData();
-    await _loadProjects();
-    _renderDetail();
-  }
-
-  async function _createProjectInSpace(space) {
-    let name = `${space.name} ${_t('spaces.project_suffix', '项目')}`;
-    for (let i = 2; i <= 50; i++) {
-      const res = await _invoke('projects.create', { name });
-      if (!res.error && res.project) {
-        const bind = await _invoke('projects.bindSpace', { projectId: res.project.project_id, spaceId: space.space_id });
-        if (bind.error) _notifyFail(_t('spaces.bind_fail', '绑定空间失败'), bind.error);
-        try { if (typeof setView === 'function') setView('project', res.project.project_id); } catch (_) {}
-        return;
-      }
-      if (res.error === 'name_dup') { name = `${space.name} ${_t('spaces.project_suffix', '项目')} ${i}`; continue; }
-      _notifyFail(_t('spaces.create_project_fail', '新建项目失败'), res.error);
-      return;
-    }
+    await _renderDetail();
   }
 
   function _openDetail(spaceId) {
     _detail = spaceId;
-    _detailTab = 'projects';
-    _loadProjects().then(() => _renderDetail());
+    _renderDetail();
   }
 
   async function _deleteSpace(space) {
-    const msg = `${_t('spaces.delete_confirm', '删除工作空间？')}\n${_t('spaces.delete_confirm2', '将解绑引用它的项目（项目退回全资源），空间内会话不受影响（会话属于项目）。')}`;
+    const msg = `${_t('spaces.delete_confirm', '删除情境空间？')}\n${_t('spaces.delete_confirm2', '空间配置将被删除，空间内会话不受影响。')}`;
     let ok = false;
     try { ok = typeof confirm === 'function' && confirm(msg); } catch (_) { ok = false; }
     if (!ok) return;
@@ -473,65 +601,21 @@
     await _refreshDetail();
   }
 
-  // ── create modal ─────────────────────────────────────────────────────────
-  function _openCreateModal() {
-    const overlay = document.getElementById('spaces-modal');
-    if (!overlay) return;
-    const tplGrid = document.getElementById('spaces-modal-templates');
-    const cards = ['', ..._templates].map((t) => {
-      if (!t) {
-        return `<label class="spaces-tpl-card${'' ? ' is-selected' : ''}" data-template="">
-          <span class="spaces-tpl-name">${_t('spaces.blank_tpl', '空白空间')}</span>
-          <span class="spaces-tpl-desc">${_t('spaces.blank_tpl_desc', '不套模板：全资源可用，手动拼装')}</span>
-        </label>`;
-      }
-      const nSkills = (t.bundle?.skill_ids || []).length;
-      const nAgents = (t.bundle?.agent_ids || []).length;
-      return `<label class="spaces-tpl-card" data-template="${escapeHtml(t.template_id)}">
-        <span class="spaces-tpl-name">${escapeHtml(t.name)}</span>
-        <span class="spaces-tpl-desc">${escapeHtml(t.description || '')}</span>
-        <span class="spaces-tpl-bundle">${_t('spaces.tpl_bundle', '自带')} ${nSkills} ${_t('spaces.skills_unit', '技能')} · ${nAgents} ${_t('spaces.agents_unit', '智能体')}</span>
-      </label>`;
-    }).join('');
-    tplGrid.innerHTML = cards;
-    let selectedTemplate = '';
-    const cardEls = tplGrid.querySelectorAll('.spaces-tpl-card');
-    cardEls.forEach((el) => {
-      el.addEventListener('click', () => {
-        cardEls.forEach((c) => c.classList.remove('is-selected'));
-        el.classList.add('is-selected');
-        selectedTemplate = el.dataset.template || '';
-      });
-    });
-    const nameInput = document.getElementById('spaces-modal-name');
-    nameInput.value = '';
-    nameInput.focus();
-    overlay.style.display = 'flex';
-
-    const close = () => { overlay.style.display = 'none'; };
-    document.getElementById('spaces-modal-cancel').onclick = close;
-    document.getElementById('spaces-modal-create').onclick = async () => {
-      const name = nameInput.value.trim();
-      if (!name) { nameInput.focus(); return; }
-      const res = await _invoke('spaces.create', { name, template_id: selectedTemplate || undefined });
-      if (res.error) { _notifyFail(_t('spaces.create_fail', '创建失败'), res.error); return; }
-      close();
-      await _loadData();
-      _filter = 'all';
-      _openDetail(res.space.space_id);
-    };
-  }
-
   // ── entry ────────────────────────────────────────────────────────────────
   async function renderSpaces() {
     const view = document.getElementById('spaces-view');
     if (!view) return;
+    view.innerHTML = `<div class="spaces-empty">${escapeHtml(_t('common.loading', '加载中…'))}</div>`;
     try {
       await _loadData();
       _renderGallery();
     } catch (err) {
       console.error('[spaces] render failed', err);
-      view.innerHTML = `<div class="spaces-empty">${_t('spaces.load_error', '加载失败')}: ${escapeHtml((err && err.message) || String(err))}</div>`;
+      view.innerHTML = `<div class="spaces-empty">
+        <div>${escapeHtml(_t('spaces.load_error', '加载失败'))}: ${escapeHtml((err && err.message) || String(err))}</div>
+        <button type="button" class="btn btn-sm" data-spaces-retry>${escapeHtml(_t('common.retry', '重试'))}</button>
+      </div>`;
+      view.querySelector('[data-spaces-retry]')?.addEventListener('click', () => renderSpaces());
     }
   }
 

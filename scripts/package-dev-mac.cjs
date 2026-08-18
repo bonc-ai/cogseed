@@ -14,8 +14,8 @@ function clone(value) {
 
 function createDevBuilderConfig(baseConfig = {}, identity = {}, options = {}) {
   const config = clone(baseConfig) || {};
-  config.appId = 'com.mateagent.desktop.dev';
-  config.productName = 'Mate Agent Dev';
+  config.appId = 'com.cogseed.desktop.dev';
+  config.productName = 'CogSeed Dev';
   if (options.electronDist) config.electronDist = options.electronDist;
   delete config.protocols;
   config.directories = { ...(config.directories || {}), output: 'dist-dev' };
@@ -52,7 +52,7 @@ function resolveLocalElectronDist({
 }
 
 function expectedDevAppPath(root = ROOT, arch = 'arm64') {
-  return path.join(root, 'dist-dev', `mac-${arch}`, 'Mate Agent Dev.app');
+  return path.join(root, 'dist-dev', `mac-${arch}`, 'CogSeed Dev.app');
 }
 
 function run(command, args) {

@@ -9,12 +9,14 @@ const SETTINGS_ID = 'settings';
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 export type RecallCaptureExecutionPolicy = 'smart' | 'nightly' | 'manual';
+export type RecallCaptureReviewPolicy = 'auto' | 'manual';
 type StoredRecallCaptureExecutionPolicy = RecallCaptureExecutionPolicy | 'immediate';
 
 export interface RecallCaptureSettingsRecord extends RecallJsonRecord {
   id: typeof SETTINGS_ID;
   enabled: boolean;
   executionPolicy: RecallCaptureExecutionPolicy;
+  reviewPolicy: RecallCaptureReviewPolicy;
   quietMinutes: number;
   nightlyStart: string;
   nightlyEnd: string;
@@ -25,6 +27,7 @@ export interface RecallCaptureSettingsRecord extends RecallJsonRecord {
 export interface UpdateRecallCaptureSettingsInput {
   enabled?: boolean;
   executionPolicy?: StoredRecallCaptureExecutionPolicy;
+  reviewPolicy?: RecallCaptureReviewPolicy;
   quietMinutes?: number;
   nightlyStart?: string;
   nightlyEnd?: string;
@@ -34,6 +37,7 @@ export interface UpdateRecallCaptureSettingsInput {
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   executionPolicy: 'smart' as const,
+  reviewPolicy: 'auto' as const,
   quietMinutes: 10,
   nightlyStart: '02:00',
   nightlyEnd: '06:00',
@@ -46,6 +50,10 @@ function isStoredExecutionPolicy(value: unknown): value is StoredRecallCaptureEx
 
 function canonicalExecutionPolicy(value: StoredRecallCaptureExecutionPolicy): RecallCaptureExecutionPolicy {
   return value === 'immediate' ? 'smart' : value;
+}
+
+function isReviewPolicy(value: unknown): value is RecallCaptureReviewPolicy {
+  return value === 'auto' || value === 'manual';
 }
 
 function isQuietMinutes(value: unknown): value is number {
@@ -64,6 +72,7 @@ function asSettings(value: RecallJsonRecord): RecallCaptureSettingsRecord {
     value.id !== SETTINGS_ID
     || typeof value.enabled !== 'boolean'
     || !isStoredExecutionPolicy(value.executionPolicy)
+    || (value.reviewPolicy !== undefined && !isReviewPolicy(value.reviewPolicy))
     || (value.quietMinutes !== undefined && !isQuietMinutes(value.quietMinutes))
     || typeof value.nightlyStart !== 'string'
     || !TIME_PATTERN.test(value.nightlyStart)
@@ -77,6 +86,7 @@ function asSettings(value: RecallJsonRecord): RecallCaptureSettingsRecord {
   return {
     ...value,
     executionPolicy: canonicalExecutionPolicy(value.executionPolicy),
+    reviewPolicy: isReviewPolicy(value.reviewPolicy) ? value.reviewPolicy : DEFAULT_SETTINGS.reviewPolicy,
     quietMinutes: isQuietMinutes(value.quietMinutes) ? value.quietMinutes : DEFAULT_SETTINGS.quietMinutes,
   } as RecallCaptureSettingsRecord;
 }
@@ -103,7 +113,7 @@ export async function updateRecallCaptureSettings(
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new Error('invalid recall capture settings');
   }
-  const allowed = new Set(['enabled', 'executionPolicy', 'quietMinutes', 'nightlyStart', 'nightlyEnd', 'catchUpMissed']);
+  const allowed = new Set(['enabled', 'executionPolicy', 'reviewPolicy', 'quietMinutes', 'nightlyStart', 'nightlyEnd', 'catchUpMissed']);
   for (const key of Object.keys(input)) {
     if (!allowed.has(key)) throw new Error('invalid recall capture settings field');
   }
@@ -112,6 +122,9 @@ export async function updateRecallCaptureSettings(
   }
   if (input.executionPolicy !== undefined && !isStoredExecutionPolicy(input.executionPolicy)) {
     throw new Error('invalid recall capture execution policy');
+  }
+  if (input.reviewPolicy !== undefined && !isReviewPolicy(input.reviewPolicy)) {
+    throw new Error('invalid recall capture review policy');
   }
   if (input.quietMinutes !== undefined && !isQuietMinutes(input.quietMinutes)) {
     throw new Error('invalid recall capture quiet minutes');
@@ -134,6 +147,7 @@ export async function updateRecallCaptureSettings(
         ...base,
         ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
         ...(input.executionPolicy === undefined ? {} : { executionPolicy: canonicalExecutionPolicy(input.executionPolicy) }),
+        ...(input.reviewPolicy === undefined ? {} : { reviewPolicy: input.reviewPolicy }),
         ...(input.quietMinutes === undefined ? {} : { quietMinutes: input.quietMinutes }),
         ...(nightlyStart === undefined ? {} : { nightlyStart }),
         ...(nightlyEnd === undefined ? {} : { nightlyEnd }),

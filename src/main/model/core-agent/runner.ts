@@ -44,11 +44,11 @@ import {
 } from '../../features/memory';
 import { listActiveCognitionSourceIds } from '../../features/cognition';
 import {
-  formatProjectContextPolicyForSystemPrompt,
-  formatProjectInstructionsForSystemPrompt,
-  writeProjectInstructions,
-} from '../../features/projects';
-import * as projectTasks from '../../features/project_tasks';
+  formatSpaceContextPolicyForSystemPrompt,
+  formatSpaceInstructionsForSystemPrompt,
+  writeSpaceInstructions,
+} from '../../features/spaces';
+import { formatRoleProfileForSystemPrompt } from '../../features/spaces';
 import * as metacognition from '../../features/metacognition';
 import { assertAgentChatDispatchable } from '../../features/agent-dispatch-policy';
 import { appendAgentSkill, listAgentSummaries } from '../../features/agents';
@@ -57,8 +57,11 @@ import { createLocalTools, createFileTools } from './local-tools';
 import { createOfficeTools } from './office-tools';
 import { officeCliAvailable } from '../../features/office/office_engine';
 import { createKbTools } from './kb-tools';
+import { createRecallTools } from './recall-tools';
 import { createChatHistoryTools } from './chat-history-tools';
 import { createMessagingTools } from './messaging-tools';
+import { createP3394Tools } from './p3394-tools';
+import { createFeishuTools } from './feishu-tools';
 import { createImageGenTool } from './image-gen-tool';
 import { createVideoStudioTool } from './video-studio-tool';
 import { createResearchRerankTool } from './research-rerank-tool';
@@ -117,7 +120,7 @@ function isNativeSearchEnabled(): boolean {
 function buildExternalProviderModel(userId: string | null, providerId: string, modelId: string, maxOutputTokens?: number): { contextWindow?: number; maxTokens?: number } | null {
   if (isCustomProviderId(providerId)) {
     const provider = userId ? findCustomProvider(userId, providerId) : undefined;
-    return provider ? buildCustomProviderModelMeta(provider) : null;
+    return provider ? buildCustomProviderModelMeta(provider, modelId) : null;
   }
   switch (providerId) {
     case 'moonshot':
@@ -211,6 +214,9 @@ export interface BuildRunnerParams {
    *  resolution picks up the project-scoped selection. Resolved once at
    *  the top of group_chat::runTurn from `conv.project_id`. */
   projectId?: string;
+  /** Space id of the conversation, when it belongs to one. Threaded to
+   *  kb-tools so Library retrieval resolves the space-scoped index. */
+  spaceId?: string;
   /** Agent id bound to the conversation. Empty/undefined = default scope. */
   agentId?: string;
   /** Human-readable actor name used in user-facing local permission prompts. */
@@ -229,6 +235,8 @@ export interface BuildRunnerParams {
    * loop budget and the full tool set.
    */
   disableTools?: boolean;
+  /** Restrict tools to a read/search allowlist only. */
+  toolAccess?: 'read-only';
   /** Provider stream deadline before its first usable text/tool event. This
    * boundary is safe for fallback because no visible output has committed. */
   providerFirstEventTimeoutMs?: number;
@@ -301,7 +309,7 @@ export interface BuildRunnerParams {
    *  row reflects the candidate that actually owned the visible outcome,
    *  not the rotating-provider's primary label. Fires at most once per
    *  call; not invoked when rotation rolls past a candidate. */
-  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string }) => void;
+  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string; entryId?: string }) => void;
 }
 
 export interface NativeSearchInjectedInfo {
@@ -549,21 +557,22 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
 
   if (uid && memoryAgentScope) {
     // Cross-session memory. `agent` tier binds to THIS caller's scope and
-    // `project` to THIS conversation's project, so the model can never reach
-    // another agent's or project's store; `shared`/`user` are global. The
-    // `project` tier exists only in project sessions — outside a project it is
+    // `space` to THIS conversation's space, so the model can never reach
+    // another agent's or space's store; `shared`/`user` are global. The
+    // `space` tier exists only in space sessions — outside a space it is
     // absent from the tool schema entirely (see memory-tool.ts).
     const scopeId = memoryAgentScope; // narrowed to string
-    const projectScopeId = params.projectId || '';
-    const toScope = (tier: 'agent' | 'project' | 'shared' | 'user'): MemoryScope =>
+    const spaceScopeId = params.spaceId || '';
+    const legacyProjectScopeId = params.projectId || '';
+    const toScope = (tier: 'agent' | 'space' | 'shared' | 'user'): MemoryScope =>
       tier === 'agent' ? { agent: scopeId }
-      : tier === 'project' ? { project: projectScopeId }
+      : tier === 'space' ? { space: spaceScopeId }
       : tier === 'shared' ? 'memory' : 'user';
-    const teachingScope = (tier: 'agent' | 'project' | 'shared' | 'user'): UserTeachingScope => (
-      tier === 'agent' ? 'agent' : tier === 'project' ? 'project' : 'personal'
+    const teachingScope = (tier: 'agent' | 'space' | 'shared' | 'user'): UserTeachingScope => (
+      tier === 'agent' ? 'agent' : tier === 'space' ? 'project' : 'personal'
     );
     const recordTeaching = async (
-      tier: 'agent' | 'project' | 'shared' | 'user',
+      tier: 'agent' | 'space' | 'shared' | 'user',
       content: string,
       result: Awaited<ReturnType<typeof addEntryTransactional>>,
     ) => {
@@ -608,65 +617,24 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       remove: async (tier, oldText) => removeEntryTransactional(uid, toScope(tier), oldText),      list: (tier) => listEntries(uid, toScope(tier)),
     };
     const { createCrossSessionMemoryTool } = await import('../../../core-agent/src/tools/memory-tool');
-    // Project memory: commander read+write, sub-agents read-only (list only).
+    // Space memory: commander read+write, sub-agents read-only (list only).
     injectedTools.push(createCrossSessionMemoryTool(memoryHandler, {
-      includeProjectTier: !!projectScopeId,
-      projectTierReadOnly: !!projectScopeId && !isCommander,
+      includeProjectTier: !!spaceScopeId,
+      projectTierReadOnly: !!spaceScopeId && !isCommander,
     }));
   }
 
-  // Project tasks: the project's shared, structured work backlog. Real work
-  // sessions in a project only (commander + agents) — gated like the memory
-  // project tier (`memoryAgentScope`), so edit / one-shot / reflection sessions
-  // never get it. Owner is a display NAME here (best-effort — the store
-  // validates a resolved id when the UI supplies one; the name is kept for
-  // display).
-  if (uid && memoryAgentScope && params.projectId) {
-    const pid = params.projectId;
-    const cid = params.cid || '';
-    const toView = (task: import('../../features/project_tasks').ProjectTask) => projectTasks.taskView(task);
-    const projectTasksHandler = {
-      list: async () => {
-        const tasks = await projectTasks.listTasks(uid, pid);
-        return { ok: true, tasks: tasks.map(toView), progress: projectTasks.computeProgress(tasks) };
-      },
-      create: async (input: { title: string; detail?: string; owner?: string; status?: projectTasks.TaskStatus }) => {
-        const r = await projectTasks.createTask(uid, pid, {
-          title: input.title,
-          ...(input.detail !== undefined ? { detail: input.detail } : {}),
-          ...(input.status !== undefined ? { status: input.status } : {}),
-          ...(input.owner ? { owner_agent: input.owner } : {}),
-          created_by: 'agent',
-          ...(cid ? { origin_cid: cid } : {}),
-        });
-        return r.ok ? { ok: true, task: toView(r.task) } : { ok: false, error: (r as { error: string }).error };
-      },
-      update: async (taskId: string, patch: { title?: string; detail?: string; status?: projectTasks.TaskStatus; owner?: string; result_ref?: string }) => {
-        const r = await projectTasks.updateTask(uid, pid, taskId, {
-          ...(patch.title !== undefined ? { title: patch.title } : {}),
-          ...(patch.detail !== undefined ? { detail: patch.detail } : {}),
-          ...(patch.status !== undefined ? { status: patch.status } : {}),
-          ...(patch.owner !== undefined ? { owner_agent: patch.owner } : {}),
-          ...(patch.result_ref !== undefined ? { result_ref: patch.result_ref } : {}),
-        });
-        return r.ok ? { ok: true, task: toView(r.task) } : { ok: false, error: (r as { error: string }).error };
-      },
-      complete: async (taskId: string, resultRef?: string) => {
-        const r = await projectTasks.completeTask(uid, pid, taskId, resultRef);
-        return r.ok ? { ok: true, task: toView(r.task) } : { ok: false, error: (r as { error: string }).error };
-      },
-    };
-    const { createProjectTasksTool } = await import('../../../core-agent/src/tools/project-tasks-tool');
-    injectedTools.push(createProjectTasksTool(projectTasksHandler));
+  if (uid && memoryAgentScope && params.spaceId) {
+    const sid = params.spaceId;
 
-    // Project instructions (ORKAS.md): the project's goal + rules. Commander
-    // writes; sub-agents read it from their system prompt but don't get this
+    // Space instructions: the space's goal + rules. Commander writes;
+    // sub-agents read it from their system prompt but don't get this
     // tool. Injected for the commander only, so there is no other write path.
     if (isCommander) {
       const { createProjectInstructionsTool } = await import('../../../core-agent/src/tools/project-instructions-tool');
       injectedTools.push(createProjectInstructionsTool({
         set: async (instructions: string) => {
-          const r = await writeProjectInstructions(uid, pid, instructions);
+          const r = await writeSpaceInstructions(uid, sid, instructions);
           return r.ok ? { ok: true } : { ok: false, error: (r as { error: string }).error };
         },
       }));
@@ -765,7 +733,15 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // (matches file-tools).
   const kbTools = uid && !params.disableTools ? createKbTools({
     userId: uid,
-    ...(params.projectId ? { projectId: params.projectId } : {}),
+    ...(params.spaceId ? { spaceId: params.spaceId } : {}),
+  }) : [];
+
+  // Recall ability-asset search tool (search_ability_assets). Read-only, no
+  // localExec required. Injected for every main conv + group_chat actor so
+  // the LLM can actively consult the GLOBAL asset pool (product design
+  // 2026-08-17: 注入只显示本空间资产，全局池的使用交给主动检索).
+  const recallTools = uid && !params.disableTools ? createRecallTools({
+    userId: uid,
   }) : [];
 
   // Conversation-history tools (chat_search + chat_read). Commander-only:
@@ -776,7 +752,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const chatHistoryTools = uid && isCommander ? createChatHistoryTools({
     userId: uid,
     ...(params.cid ? { currentCid: params.cid } : {}),
-    ...(params.projectId ? { projectId: params.projectId } : {}),
+    ...(params.spaceId ? { spaceId: params.spaceId } : {}),
   }) : [];
 
   // Proactive Feishu/Lark messaging (Commander-only). The tools resolve the
@@ -788,6 +764,30 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ? createMessagingTools({
         userId: uid,
         cid: params.cid,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+      })
+    : [];
+
+  // P3394 agent interop (Commander-only): the CogSeed agent itself calls
+  // registered peers through the built-in bridge.
+  const p3394Tools: AgentTool[] = uid && !params.disableTools && isCommander && params.cid
+    ? createP3394Tools({
+        userId: uid,
+        cid: params.cid,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+      })
+    : [];
+
+  // Feishu touchpoint tools (status/briefing/touchpoint records + file send).
+  // Same Commander-only gate as messaging tools: workers, edit sessions, CLI
+  // and reflection never get them, so they cannot read or mutate user Feishu
+  // configuration from a narrower session.
+  const feishuTools: AgentTool[] = uid && !params.disableTools && isCommander
+    ? createFeishuTools({
+        userId: uid,
+        ...(params.cid ? { cid: params.cid } : {}),
+        ...(params.projectId ? { projectId: params.projectId } : {}),
+        ...(params.extraRoots?.length ? { extraRoots: params.extraRoots } : {}),
         ...(params.turnId ? { turnId: params.turnId } : {}),
       })
     : [];
@@ -899,13 +899,16 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     : [];
 
   // Merge injected tools with extra tools from caller
-  const allTools = [
+  const allTools = params.disableTools ? [] : [
     ...injectedTools,
     ...localTools,
     ...fileTools,
     ...kbTools,
+    ...recallTools,
     ...chatHistoryTools,
     ...messagingTools,
+    ...p3394Tools,
+    ...feishuTools,
     ...imageGenTools,
     ...videoStudioTools,
     ...deepResearchTools,
@@ -922,11 +925,25 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // never reach another actor's tools[] regardless of which injection path
   // produced it. Caller-supplied extraTools / core-agent builtins aren't in the
   // catalog, so `isToolVisibleToAgent` returns true for them (unaffected).
-  const visibleTools = params.disableTools
+  let visibleTools = params.disableTools
     ? []
     : allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
+  if (!params.disableTools && params.toolAccess === 'read-only') {
+    const readOnlyAllowlist = new Set([
+      'read_file', 'stat_file', 'search_files', 'grep_files', 'list_files',
+      'web_search', 'web_fetch', 'kb_list', 'kb_search', 'kb_read',
+      'tool_result_search', 'tool_result_read_chunk',
+    ]);
+    visibleTools = visibleTools.filter((tool) => readOnlyAllowlist.has(tool.name));
+  }
   const visibleToolNameSet = new Set(visibleTools.map((tool) => tool.name));
-  const builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
+  let builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
+  if (!params.disableTools && params.toolAccess === 'read-only') {
+    const readOnlyBuiltinAllowlist = new Set([
+      'read_file', 'list_files', 'web_fetch', 'web_search',
+    ]);
+    builtinTools = builtinTools.filter((t) => readOnlyBuiltinAllowlist.has(t.name));
+  }
 
   // Apply one simple 8K per-result policy at AgentRunner's FINAL result
   // boundary. Keeping this as a result transformer (instead of pre-wrapping
@@ -1011,15 +1028,15 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // Static rules for resolving conflicts among the user-managed project
   // layers. Always present in real project work sessions, even when ORKAS.md,
   // memory, or the task backlog is empty.
-  const projectContextPolicyBlock = (uid && memoryAgentScope && params.projectId)
-    ? formatProjectContextPolicyForSystemPrompt()
+  const projectContextPolicyBlock = (uid && memoryAgentScope && params.spaceId)
+    ? formatSpaceContextPolicyForSystemPrompt()
     : '';
   if (projectContextPolicyBlock) parts.push(projectContextPolicyBlock);
-  // User-authored project instructions (read side): low-churn configuration,
+  // User-authored space instructions (read side): low-churn configuration,
   // so it stays in the stable cache prefix (before the runtime injection).
   // Gated on memoryAgentScope like memory: edit/one-shot sessions get neither.
-  const projectInstructionsBlock = (uid && memoryAgentScope && params.projectId)
-    ? formatProjectInstructionsForSystemPrompt(uid, params.projectId)
+  const projectInstructionsBlock = (uid && memoryAgentScope && params.spaceId)
+    ? formatSpaceInstructionsForSystemPrompt(uid, params.spaceId)
     : '';
   if (projectInstructionsBlock) parts.push(projectInstructionsBlock);
   if (runtimeInjectionBlock) parts.push(runtimeInjectionBlock);
@@ -1043,9 +1060,15 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     }
   }
   const memoryBlock = (uid && memoryAgentScope)
-    ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId, activeCognitionSourceIds)
+    ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.spaceId, params.projectId, activeCognitionSourceIds)
     : '';
   if (memoryBlock) parts.push(memoryBlock);
+  // 二期「空间 = 角色」：会话挂空间 → 注入该角色模板画像（个人本体角色模板文件，
+  // 与 memoryBlock 同层级的读侧背景上下文；异步读文件，失败静默降级为空串）。
+  const roleProfileBlock = (uid && memoryAgentScope && params.spaceId)
+    ? await formatRoleProfileForSystemPrompt(uid, params.spaceId)
+    : '';
+  if (roleProfileBlock) parts.push(roleProfileBlock);
   const resolvedSystemPrompt = parts.join('\n\n');
   // P2: the truly per-turn-volatile blocks — the orchestration ledger (~7-9K
   // JSON that changes every commander turn) and the datetime tail — do NOT go
@@ -1055,14 +1078,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // (core-agent AgentRunParams.turnEphemeral → getMessagesForModel), the
   // uncached tail after all history, so the system + history cache prefix stays
   // byte-stable across turns. See Common/docs/plans/context-cost-optimization.md.
-  // Live project task board (project sessions only). Rides the turn — NOT the
-  // cached system prefix — because it changes as tasks update. The goal/rules
-  // stay in ORKAS.md (prefix) and decisions in the memory block; this is the
-  // task layer. See features/project_tasks.ts::formatProjectStatusForTurn.
-  const projectStatusBlock = (uid && memoryAgentScope && params.projectId)
-    ? await projectTasks.formatProjectStatusForTurn(uid, params.projectId)
-    : '';
-  const turnEphemeral = [orchestrationBlock, volatileTail, projectStatusBlock]
+  const turnEphemeral = [orchestrationBlock, volatileTail]
     .filter((b) => b && b.trim())
     .join('\n\n');
 
@@ -1302,22 +1318,32 @@ async function buildRotatingProvider(
   providerId: string,
   group: ChatEntryChoice[],
   onNativeSearchInjected?: (info: NativeSearchInjectedInfo) => void,
-  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string }) => void,
+  onCandidateChosen?: (info: { profileId: string; providerId: string; modelId: string; entryId?: string }) => void,
   firstEventTimeoutMs?: number,
 ): Promise<LLMProvider> {
   const candidates: RotatingCandidate[] = group.map((choice) => {
     const candProviderId = choice.provider;
     const candModelId = choice.model;
     const isExternal = EXTERNAL_API_PROVIDERS.includes(candProviderId) || isCustomProviderId(candProviderId);
+    // Resolve each candidate's OWN output cap once up front so the rotating
+    // wrapper can override `params.maxTokens` per candidate. core-agent only
+    // knows the primary's cap; carrying it to a fallback with a lower cap
+    // makes that provider reject or truncate the request.
+    const resolvedModel = isExternal ? null : resolveConfiguredPiModel(mod, candProviderId, candModelId);
+    const candMaxOutputTokens = isExternal
+      ? buildExternalProviderModel(userId, candProviderId, candModelId, choice.maxOutputTokens)?.maxTokens
+      : resolvedModel?.model.maxTokens;
     return {
       profileId: choice.profileId,
       providerId: candProviderId,
       modelId: candModelId,
+      ...(typeof candMaxOutputTokens === 'number' && candMaxOutputTokens > 0
+        ? { maxOutputTokens: candMaxOutputTokens }
+        : {}),
       build: async () => {
         if (isExternal) {
           return buildExternalProvider(userId, candProviderId, choice.apiKey, candModelId, choice.baseUrl, choice.maxOutputTokens);
         }
-        const resolvedModel = resolveConfiguredPiModel(mod, candProviderId, candModelId);
         if (resolvedModel?.isConfiguredFallback) {
           log.info('using configured model fallback', {
             provider: candProviderId,
@@ -1344,7 +1370,15 @@ async function buildRotatingProvider(
       if (winner) bumpEntryLastUsed(winner.entryId);
       clearCooldown(profileId);
     },
-    ...(onCandidateChosen ? { onCandidateChosen } : {}),
+    ...(onCandidateChosen ? {
+      onCandidateChosen: (info) => {
+        const winner = group.find((choice) => choice.profileId === info.profileId);
+        onCandidateChosen({
+          ...info,
+          ...(winner?.entryId ? { entryId: winner.entryId } : {}),
+        });
+      },
+    } : {}),
     ...(Number.isFinite(firstEventTimeoutMs) ? { firstEventTimeoutMs } : {}),
   });
 }

@@ -67,7 +67,7 @@ function loadHarness(
         windowListeners.set(type, listener);
       },
       Monitor: true,
-      orkas: { invoke },
+      cogseed: { invoke },
     },
     setTimeout(callback: () => unknown) {
       scheduled.push(callback);

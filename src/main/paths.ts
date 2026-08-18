@@ -92,10 +92,6 @@ export const WINDOW_STATE_FILE = path.join(WS_ROOT, 'window-state.json');
 // walkthrough fires once per device and never re-appears — switching
 // account or machine restarts the flow, by product decision.
 export const ONBOARDING_STATE_FILE = path.join(WS_ROOT, 'onboarding-state.json');
-// Machine-local 60-second journey marker (shared across uids, NOT
-// cloud-synced). Lives next to onboarding-state.json so the post-onboarding
-// journey fires once per device after onboarding completes.
-export const JOURNEY_STATE_FILE = path.join(WS_ROOT, 'journey-state.json');
 // Machine-local logs (daily rolling, single global file shared across uids).
 export const LOGS_DIR          = path.join(WS_ROOT, 'logs');
 // Machine-local dependency environments shared across Orkas accounts on this
@@ -138,6 +134,12 @@ export const mateAgentLocalRoot    = (uid: string) => path.join(userLocalRoot(ui
 export const mateAgentWorkerStateDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'worker-state');
 export const mateAgentRecoveryStateFile = (uid: string) => path.join(mateAgentWorkerStateDir(uid), 'last-recovery.json');
 export const mateAgentCoordinationsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'coordinations');
+export const mateAgentAssetEventsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'asset-events');
+export const mateAgentAuditReceiptsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'audit-receipts');
+export const mateAgentReviewDecisionsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'review-decisions');
+export const mateAgentCostTelemetryDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'cost-telemetry');
+export const mateAgentCapabilityPacksDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'capability-packs');
+export const mateAgentSkillLifecycleDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'skill-lifecycle');
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
 export const userSkillChatDir       = (uid: string, sid: string) => path.join(userChatsDir(uid), 'skill', sid);
 export const userAgentChatDir       = (uid: string, aid: string) => path.join(userChatsDir(uid), 'agent', aid);
@@ -186,9 +188,9 @@ export const sessionCloudToolResultsDir = (uid: string, sessionId: string) =>
 export const userLocalSessionsDir   = (uid: string) => path.join(userLocalRoot(uid), 'sessions');
 export const userLocalSessionFile   = (uid: string, sessionId: string) => path.join(userLocalSessionsDir(uid), `${sessionId}.jsonl`);
 
-// Mate Agent Runtime — machine-private execution boundary. Runtime sessions,
+// CogSeed Runtime — machine-private execution boundary. Runtime sessions,
 // context mirrors, memory, and run logs stay under local/mate_runtime so they
-// never sync with Mate Agent cloud chats/sessions and cannot be mistaken for
+// never sync with CogSeed cloud chats/sessions and cannot be mistaken for
 // UI-facing group-chat state.
 export const mateRuntimeRoot             = (uid: string) => path.join(userLocalRoot(uid), 'mate_runtime');
 export const mateRuntimeSessionsDir      = (uid: string) => path.join(mateRuntimeRoot(uid), 'sessions');
@@ -293,11 +295,61 @@ export const userProjectsDir       = (uid: string) => path.join(userCloudRoot(ui
 export const projectDir            = (uid: string, pid: string) => path.join(userProjectsDir(uid), pid);
 export const projectMetaFile       = (uid: string, pid: string) => path.join(projectDir(uid, pid), 'project.json');
 export const projectBindingsFile   = (uid: string, pid: string) => path.join(projectDir(uid, pid), 'bindings.json');
-// Workspaces (工作空间一期): per-space JSON under `<uid>/cloud/spaces/`.
+// 情境空间（原"工作空间"）：per-space JSON under `<uid>/cloud/spaces/`.
 // No aggregate `_index.json` — listing scans `spaces/*.json` (same
 // no-aggregate rationale as projects).
 export const userSpacesDir         = (uid: string) => path.join(userCloudRoot(uid), 'spaces');
 export const spaceMetaFile         = (uid: string, sid: string) => path.join(userSpacesDir(uid), `${sid}.json`);
+/** 空间内容目录段防护——与 assertProjectSegment 同姿势：空间 id 用作单路径段
+ *  前防御性拒绝遍历/分隔符。sid 来自 conv index / IPC（非模型供给），但这些
+ *  路径会被写盘。 */
+function assertSpaceSegment(sid: string): string {
+  if (!sid || sid.includes('/') || sid.includes('\\') || sid.includes('..') || sid.includes('\0')) {
+    throw new Error(`invalid space id for space path: ${JSON.stringify(sid)}`);
+  }
+  return sid;
+}
+// 空间化重构（删项目层）：空间内容目录。空间 meta 仍是单文件
+// `cloud/spaces/<sid>.json`；空间承载的会话/附件/产物/会话状态放在同名目录
+// `cloud/spaces/<sid>/` 下（`<sid>` 目录与 `<sid>.json` 文件同层共存，互不冲突）。
+// 列目录扫描（spaces._listSpaceIds）只认 `.json` 文件，故内容目录不会被误判为空间实体。
+export const spaceContentDir            = (uid: string, sid: string) => path.join(userSpacesDir(uid), assertSpaceSegment(sid));
+export const spaceChatsDir              = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'chats');
+export const spaceChatIndexFile         = (uid: string, sid: string) => path.join(spaceChatsDir(uid, sid), '_index.json');
+export const spaceChatJsonlFile         = (uid: string, sid: string, cid: string) => path.join(spaceChatsDir(uid, sid), `${cid}.jsonl`);
+export const spaceGroupChatDir          = (uid: string, sid: string, cid: string) => path.join(spaceChatsDir(uid, sid), cid);
+export const spaceGroupChatMembersFile  = (uid: string, sid: string, cid: string) => path.join(spaceGroupChatDir(uid, sid, cid), 'members.json');
+export const spaceGroupChatStateFile    = (uid: string, sid: string, cid: string) => path.join(spaceGroupChatDir(uid, sid, cid), 'state.json');
+export const spaceGroupChatPlanFile     = (uid: string, sid: string, cid: string) => path.join(spaceGroupChatDir(uid, sid, cid), 'plan.json');
+export const spaceGroupChatVisibilityDir = (uid: string, sid: string, cid: string) =>
+  path.join(spaceGroupChatDir(uid, sid, cid), 'visibility');
+// 空间级跨会话记忆（cross_session_memory 的 `space` tier）——原项目级
+// `projects/<pid>/MEMORY.md` 挂空间后的新落点。放在空间内容目录下，随空间
+// 数据同生共死；旧项目文件仅作读侧兼容回退（见 features/memory.ts）。
+export const spaceMemoryFile            = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'MEMORY.md');
+export const spaceGroupChatVisibilityFile = (uid: string, sid: string, cid: string, actorId: string) =>
+  path.join(spaceGroupChatVisibilityDir(uid, sid, cid), `${actorId}.jsonl`);
+export const spaceSessionsDir           = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'sessions');
+export const spaceSessionFile           = (uid: string, sid: string, sessionId: string) => path.join(spaceSessionsDir(uid, sid), `${sessionId}.jsonl`);
+export const spaceSessionCloudToolResultsDir = (uid: string, sid: string, sessionId: string) =>
+  path.join(spaceSessionsDir(uid, sid), `${sessionId}.tool-results`);
+export const spaceChatAttachmentsDir    = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'chat_attachments');
+export const spaceChatAttachmentDir     = (uid: string, sid: string, cid: string) => path.join(spaceChatAttachmentsDir(uid, sid), cid);
+export const spaceChatArtifactsDir      = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'chat_artifacts');
+export const spaceChatArtifactCidDir    = (uid: string, sid: string, cid: string) => path.join(spaceChatArtifactsDir(uid, sid), cid);
+export const spaceArtifactDir           = (uid: string, sid: string, cid: string, artifactId: string) =>
+  path.join(spaceChatArtifactCidDir(uid, sid, cid), artifactId);
+/** 空间工作区（会话 AI 产出文件按空间分开存放）：`<spaces>/<sid>/workspace/<slug>`。
+ *  空间化重构：空间会话的工作目录进各自空间目录，不再全堆在 userWorkSpace。 */
+export const spaceWorkspaceDir          = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'workspace');
+// 空间文件树（原项目文件树 project_files.ts 挂空间）。源文件属空间而非单会话，
+// 空间内每个会话都能拿到文件列表 + 只读访问。路径 `spaces/<sid>/contexts/`。
+export const spaceContextsDir           = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'contexts');
+export const spaceFilesDir              = (uid: string, sid: string) => spaceContextsDir(uid, sid);
+// 空间库索引（原项目库索引挂空间）：源文件 `spaces/<sid>/contexts/`，派生向量库
+// 机器本地 `local/spaces/<sid>/contexts/.kb/`，与全局 Library/KB 设计对齐。
+export const spaceLocalDir              = (uid: string, sid: string) => path.join(userLocalRoot(uid), 'spaces', sid);
+export const spaceLibraryVectorDbPath   = (uid: string, sid: string) => path.join(spaceLocalDir(uid, sid), 'contexts', '.kb', 'vector.db');
 /** Guard a project id used as a single path segment for project-scoped
  *  instructions/memory. The pid comes from the conv index / IPC (never
  *  model-supplied), but these paths are written to, so reject traversal /
@@ -346,11 +398,6 @@ export const projectFilesDir           = (uid: string, pid: string) => projectCo
 // Legacy project Library source from v3 and earlier. Only migration/fallback
 // paths should read this; new writes use projectFilesDir()/contexts/.
 export const projectLegacyFilesDir     = (uid: string, pid: string) => path.join(projectDir(uid, assertProjectSegment(pid)), 'files');
-// Structured task backlog (the project work-state's task layer). One file per
-// task, cloud-synced with the project (directory-is-truth, no aggregate index —
-// mirrors the project listing). See Common/docs/plans/project-work-state.md.
-export const projectTasksDir        = (uid: string, pid: string) => path.join(projectDir(uid, assertProjectSegment(pid)), 'tasks');
-export const projectTaskFile        = (uid: string, pid: string, tid: string) => path.join(projectTasksDir(uid, pid), `${assertProjectSegment(tid)}.json`);
 export const projectLocalDir        = (uid: string, pid: string) => path.join(userLocalRoot(uid), 'projects', pid);
 export const projectLibraryVectorDbPath = (uid: string, pid: string) => path.join(projectLocalDir(uid, pid), 'contexts', '.kb', 'vector.db');
 export const agentDir            = (uid: string, agentId: string) => path.join(userAgentsDir(uid), agentId || '_default');
@@ -390,6 +437,17 @@ export const userPermissionsFile = (uid: string) => path.join(userCloudConfigDir
 // `resources/builtin/` (extraResources in packaged builds); startup/login
 // mirrors the relevant pieces into per-user runtime roots.
 export const packagedBuiltinDir = () => packagedResourceDir('builtin');
+
+/**
+ * Root of the packaged security guardrail components (`resources/guardrail`).
+ *
+ * Kept separate from `packagedBuiltinDir` because guardrail content is a system
+ * component, not a user-facing asset: per the security spec it must never appear
+ * in the skill catalog, the capability market, or the cognition tree, and users
+ * cannot disable it. Housing it under `builtin/` would put it one directory
+ * scan away from being enumerated as an installable skill.
+ */
+export const packagedGuardrailDir = () => packagedResourceDir('guardrail');
 export const packagedBuiltinMarketplaceDir = () => path.join(packagedBuiltinDir(), 'marketplace');
 export const packagedBuiltinMarketplaceAgentsDir = () => path.join(packagedBuiltinMarketplaceDir(), 'agents');
 export const packagedBuiltinMarketplaceSkillsDir = () => path.join(packagedBuiltinMarketplaceDir(), 'skills');
@@ -477,6 +535,7 @@ export const userMessagingConfigFile = (uid: string) => path.join(userLocalConfi
 export const userMessagingBindingsFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-bindings.json');
 export const userMessagingInboundLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-inbound.json');
 export const userMessagingDeliveryLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-delivery.json');
+export const userTouchpointLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'touchpoints-ledger.json');
 // Wechat iLink dynamic state (cursor + context tokens) is machine-private
 // and encrypted in place; never synced.
 export const userMessagingWeChatStateFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-wechat-state.json');
@@ -765,20 +824,6 @@ export function runtimeResourcesDir(): string {
     return path.join(rp, 'runtime');
   }
   return path.join(PC_ROOT, 'resources', 'runtime');
-}
-
-/** Repository-owned Meta Skill Engine package shipped with the desktop app.
- *
- *   dev:    PC/packages/nseap-meta-skill-engine/
- *   packed: <app>/Contents/Resources/packages/nseap-meta-skill-engine/      (darwin)
- *           <app>/resources/packages/nseap-meta-skill-engine/               (win/linux)
- */
-export function metaSkillEnginePackageDir(): string {
-  const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
-  if (rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)) {
-    return path.join(rp, 'packages', 'nseap-meta-skill-engine');
-  }
-  return path.join(PC_ROOT, 'packages', 'nseap-meta-skill-engine');
 }
 
 /** `${process.platform}-${process.arch}` → vendored OfficeCLI asset name.

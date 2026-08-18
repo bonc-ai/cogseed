@@ -30,6 +30,7 @@ describe('Recall capture settings', () => {
     await expect(readRecallCaptureSettings('capture-user')).resolves.toMatchObject({
       enabled: true,
       executionPolicy: 'smart',
+      reviewPolicy: 'auto',
       quietMinutes: 10,
       nightlyStart: '02:00',
       nightlyEnd: '06:00',
@@ -38,12 +39,14 @@ describe('Recall capture settings', () => {
 
     await expect(updateRecallCaptureSettings('capture-user', {
       executionPolicy: 'nightly',
+      reviewPolicy: 'manual',
       quietMinutes: 30,
       nightlyStart: '23:30',
       nightlyEnd: '05:15',
       catchUpMissed: false,
     })).resolves.toMatchObject({
       executionPolicy: 'nightly',
+      reviewPolicy: 'manual',
       quietMinutes: 30,
       nightlyStart: '23:30',
       nightlyEnd: '05:15',
@@ -52,6 +55,7 @@ describe('Recall capture settings', () => {
 
     await expect(readRecallCaptureSettings('capture-user')).resolves.toMatchObject({
       executionPolicy: 'nightly',
+      reviewPolicy: 'manual',
       nightlyStart: '23:30',
       nightlyEnd: '05:15',
     });
@@ -65,6 +69,7 @@ describe('Recall capture settings', () => {
     await expect(updateRecallCaptureSettings('capture-user', { quietMinutes: 0 })).rejects.toThrow(/quiet minutes/i);
     await expect(updateRecallCaptureSettings('capture-user', { quietMinutes: 121 })).rejects.toThrow(/quiet minutes/i);
     await expect(updateRecallCaptureSettings('capture-user', { quietMinutes: 2.5 })).rejects.toThrow(/quiet minutes/i);
+    await expect(updateRecallCaptureSettings('capture-user', { reviewPolicy: 'sometimes' as never })).rejects.toThrow(/review policy/i);
   });
 
   it('migrates legacy immediate settings to smart capture without rewriting the source record', async () => {
@@ -83,6 +88,7 @@ describe('Recall capture settings', () => {
 
     await expect(readRecallCaptureSettings('capture-user')).resolves.toMatchObject({
       executionPolicy: 'smart',
+      reviewPolicy: 'auto',
       quietMinutes: 10,
     });
   });

@@ -48,6 +48,8 @@ function loadConversationRenderer() {
       'chat.conv_unpin_title': 'Unpin',
       'chat.conv_rename_title': 'Rename',
       'chat.conv_copy_title': 'Copy',
+      'chat.conv_set_space_title': 'Move to space',
+      'chat.conv_move_space_title': 'Move to another space',
       'chat.conv_del_title': 'Delete',
       'project.menu.more_actions': 'More actions',
       'auto.title': 'Automation',
@@ -64,6 +66,13 @@ function loadConversationRenderer() {
       'chat.stream.duration_hms': `${params?.h}h ${params?.m}m ${params?.s}s`,
       'sidebar.bucket.today': 'Today',
       'sidebar.bucket.last30': 'Last 30 days',
+      'sidebar.recent_tasks': 'Recent tasks',
+      'sidebar.spaces_section': 'Spaces',
+      'sidebar.time_just_now': 'Just now',
+      'sidebar.time_minutes': `${params?.n || ''}m ago`,
+      'sidebar.time_hours': `${params?.n || ''}h ago`,
+      'sidebar.time_days': `${params?.n || ''}d ago`,
+      'sidebar.time_old': 'Earlier',
     }[key] || key),
     _BUCKET_ORDER: ['today', 'last30'],
     timeBucket: () => 'today',
@@ -262,6 +271,10 @@ describe('conversation sidebar task row actions', () => {
     };
     context._projectsCache = [{ project_id: 'p1', name: 'Project One' }];
     context._projectsExpanded = { p1: true };
+    // 9.1 框架：backfill 后由 renderConversationList 刷新主列表（projects-list
+    // 独立容器已随侧边栏重构移除），记录调用以验证渲染入口被触发。
+    context.renderConversationListCalled = false;
+    context.renderConversationList = () => { context.renderConversationListCalled = true; };
     context.renderProjectsSection = function renderProjectsSection() {
       const rows = context.conversations
         .filter((c: any) => c && c.project_id === 'p1')
@@ -325,7 +338,7 @@ describe('conversation sidebar task row actions', () => {
       '/api/conversations/list?mode=project&project_id=p1&offset=10',
     ]);
     expect(context.conversations.map((c: any) => c.conversation_id)).toContain('p1-11');
-    expect(projectsContainer.innerHTML).toContain('Project task 11');
+    expect(context.renderConversationListCalled).toBe(true);
   });
 
   it('does not append a stale project page after a local sidebar change', async () => {
@@ -514,11 +527,11 @@ describe('conversation sidebar task row actions', () => {
     ];
 
     expect(context._conversationActionItems('c1').map((it: any) => it.label))
-      .toEqual(['Pin', 'Rename', 'Copy', 'Delete']);
+      .toEqual(['Pin', 'Rename', 'Copy', 'Move to space', 'chat.merge.select_action', 'Delete']);
     expect(context._conversationActionItems('c2').map((it: any) => it.label))
-      .toEqual(['Unpin', 'Rename', 'Copy', 'Delete']);
+      .toEqual(['Unpin', 'Rename', 'Copy', 'Move to space', 'chat.merge.select_action', 'Delete']);
     expect(context._conversationActionItems('c1', { hidePin: true }).map((it: any) => it.label))
-      .toEqual(['Rename', 'Copy', 'Delete']);
+      .toEqual(['Rename', 'Copy', 'Move to space', 'chat.merge.select_action', 'Delete']);
   });
 });
 
@@ -1283,6 +1296,14 @@ describe('conversation process metadata formatting', () => {
       stream: 'runtime',
       data: { duration_ms: 65_000 },
     });
+    const runtimeStarted = context._formatEventLine({
+      stream: 'runtime',
+      data: { kind: 'task.started' },
+    });
+    const runtimeRetrying = context._formatEventLine({
+      stream: 'runtime',
+      data: { phase: 'retrying', attempt: 2 },
+    });
     const runtimeWithBreakdown = context._formatEventLine({
       stream: 'runtime',
       data: {
@@ -1299,6 +1320,8 @@ describe('conversation process metadata formatting', () => {
     });
 
     expect(compaction).toBe('Context compressed: 20000 -> 3000 tokens');
+    expect(runtimeStarted).toBeNull();
+    expect(runtimeRetrying).toBeNull();
     expect(runtime).toBe('Total time 1m 5s');
     expect(runtimeWithBreakdown)
       .toBe('Total time 1m 5s · model 40s · tools 5s · context 15s · retry wait 5s');
@@ -1313,6 +1336,10 @@ describe('conversation process metadata formatting', () => {
     ])).toBe('1s');
     expect(context._processSummaryRuntimeFromItems([
       { type: 'progress', text: 'Context compressed', event: { stream: 'compaction', data: {} } },
+    ])).toBe('');
+    expect(context._processSummaryRuntimeFromItems([
+      { type: 'event', event: { stream: 'runtime', data: { kind: 'task.started' } } },
+      { type: 'event', event: { stream: 'runtime', data: { duration_ms: -1 } } },
     ])).toBe('');
     expect(context._eventProcessKind({ stream: 'context', data: {} }, 'Context prepared')).toBe('context');
     expect(context._eventProcessKind({ stream: 'compaction', data: {} }, compaction)).toBe('context');

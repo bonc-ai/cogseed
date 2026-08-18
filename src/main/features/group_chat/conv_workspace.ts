@@ -141,11 +141,60 @@ function uniquifySlug(workspaceRoot: string, slug: string): string {
  * footprint on disk — which is what users expect when the conversation
  * never produced anything.
  */
+/** 会话工作区随空间归属迁移（方案 Y：解绑/换空间/删空间都不丢文件）。
+ *  fromSpaceId/toSpaceId：null = userWorkSpace 根；非空 = 空间工作区目录。
+ *  依据 state.workspace_dir（相对 slug）计算新旧落点；同盘 rename，跨设备 copy+rm。
+ *  幂等：源不存在 / 目标已存在（slug 冲突，别的会话占了）→ 跳过不搬，避免覆盖/串目录。
+ *  失败只告警（文件留旧位置，由惰性迁移兜底）。 */
+export async function migrateConversationWorkspace(
+  uid: string,
+  cid: string,
+  fromSpaceId: string | null,
+  toSpaceId: string | null,
+): Promise<{ moved: boolean }> {
+  let workspaceDir: string | undefined;
+  try {
+    const st = await readState(uid, cid);
+    workspaceDir = st.workspace_dir;
+  } catch { /* no state */ }
+  if (!workspaceDir) return { moved: false };
+
+  const { spaceWorkspaceDir } = await import('../../paths');
+  const from = fromSpaceId
+    ? path.join(spaceWorkspaceDir(uid, fromSpaceId), workspaceDir)
+    : path.join(getWorkspacePath(uid), workspaceDir);
+  const to = toSpaceId
+    ? path.join(spaceWorkspaceDir(uid, toSpaceId), workspaceDir)
+    : path.join(getWorkspacePath(uid), workspaceDir);
+  if (path.resolve(from) === path.resolve(to)) return { moved: false };
+  if (!fs.existsSync(from)) return { moved: false };
+  if (fs.existsSync(to)) return { moved: false }; // 目标被别的会话占用 → 不覆盖
+
+  try {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(from, to);
+    log.info(`migrated conv workspace uid=${uid} cid=${cid} ${fromSpaceId ?? 'user'}->${toSpaceId ?? 'user'} dir=${workspaceDir}`);
+    return { moved: true };
+  } catch (err) {
+    try {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.cpSync(from, to, { recursive: true });
+      fs.rmSync(from, { recursive: true, force: true });
+      log.info(`migrated conv workspace (copy) uid=${uid} cid=${cid} dir=${workspaceDir}`);
+      return { moved: true };
+    } catch (err2) {
+      log.warn(`migrate conv workspace failed cid=${cid}: ${(err2 as Error).message}`);
+      return { moved: false };
+    }
+  }
+}
+
 export async function getConversationWorkspacePath(uid: string, cid: string): Promise<string> {
-  // Resolve the conv's project membership ONCE so workspace resolution
-  // picks up the project-scoped selection (per CLAUDE.md projects feature).
-  // For convs without a project this is a no-op (projectId stays undefined).
+  // Resolve the conv's project/space membership ONCE so workspace resolution
+  // picks up the scoped selection. 空间化重构：空间会话（space_id 有值）的工作目录
+  // 进各自空间目录（spaces/<sid>/workspace/），未绑空间会话保持 userWorkSpace 根。
   let projectId: string | undefined;
+  let spaceId: string | undefined;
   let title = '';
   try {
     const conv = await getConversation(uid, cid);
@@ -153,6 +202,8 @@ export async function getConversationWorkspacePath(uid: string, cid: string): Pr
       title = conv.title || '';
       const pid = (conv as any).project_id;
       if (typeof pid === 'string' && pid) projectId = pid;
+      const sid = (conv as any).space_id;
+      if (typeof sid === 'string' && sid) spaceId = sid;
     } else {
       // Legacy convs (created before this feature shipped) keep using the root
       // workspace verbatim — we detect them by absence of a conversation record:
@@ -167,12 +218,75 @@ export async function getConversationWorkspacePath(uid: string, cid: string): Pr
     return getWorkspacePath(uid);
   }
 
-  const root = getWorkspacePath(uid, projectId);
+  // 空间会话 → 空间工作区根（产物按空间分开存放）
+  let root: string;
+  if (spaceId) {
+    const { spaceWorkspaceDir } = await import('../../paths');
+    root = spaceWorkspaceDir(uid, spaceId);
+  } else {
+    root = getWorkspacePath(uid, projectId);
+  }
 
   // Fast path: state already has a workspace_dir baked in.
   const cur = await readState(uid, cid);
   if (cur.workspace_dir) {
-    return path.join(root, cur.workspace_dir);
+    const target = path.join(root, cur.workspace_dir);
+    // 惰性迁移：空间会话旧工作区在 userWorkSpace/<dir>（迁移前根），搬到空间目录。
+    // 幂等：新路径存在即跳过；同盘 rename，跨设备 copy+rm；失败只告警不阻断。
+    // 防串保护：历史目录可能被多个会话共用（旧 slug 冲突，如两会话同标题共用「你好」）——
+    // 若 legacy 目录含「非本会话 produced 记录」的文件，说明是共享目录，只搬本会话
+    // produced 文件（不搬整个目录，避免把别的会话产物搬错空间）。
+    if (spaceId && !fs.existsSync(target)) {
+      const legacy = path.join(getWorkspacePath(uid), cur.workspace_dir);
+      if (fs.existsSync(legacy)) {
+        const moveEntry = (from: string, to: string): void => {
+          try {
+            fs.mkdirSync(path.dirname(to), { recursive: true });
+            fs.renameSync(from, to);
+          } catch {
+            try { fs.cpSync(from, to, { recursive: true }); fs.rmSync(from, { recursive: true, force: true }); } catch { /* best effort */ }
+          }
+        };
+        // 收集本会话 produced 记录的文件名（确定归属）
+        const producedNames = new Set<string>();
+        try {
+          const { getMessages } = await import('../chats');
+          const messages = await getMessages(uid, cid, 1000);
+          for (const m of messages) {
+            for (const p of m.produced || []) {
+              if (typeof p === 'string' && p) producedNames.add(path.basename(p));
+            }
+          }
+        } catch { /* 读消息失败 → 走整目录迁移 */ }
+        const isShared = producedNames.size > 0
+          && fs.readdirSync(legacy).some((name) => !name.startsWith('.') && !producedNames.has(name));
+        if (isShared) {
+          // 共享目录：只搬本会话 produced 文件
+          let moved = 0;
+          for (const name of producedNames) {
+            const from = path.join(legacy, name);
+            if (fs.existsSync(from)) { moveEntry(from, path.join(target, name)); moved += 1; }
+          }
+          log.info(`migrated shared space conv workspace (produced-only) uid=${uid} sid=${spaceId} cid=${cid} dir=${cur.workspace_dir} moved=${moved}`);
+        } else {
+          try {
+            fs.mkdirSync(path.dirname(target), { recursive: true });
+            fs.renameSync(legacy, target);
+            log.info(`migrated space conv workspace uid=${uid} sid=${spaceId} cid=${cid} dir=${cur.workspace_dir} -> space root`);
+          } catch (err) {
+            try {
+              fs.mkdirSync(path.dirname(target), { recursive: true });
+              fs.cpSync(legacy, target, { recursive: true });
+              fs.rmSync(legacy, { recursive: true, force: true });
+              log.info(`migrated space conv workspace (copy) uid=${uid} sid=${spaceId} cid=${cid} dir=${cur.workspace_dir}`);
+            } catch (err2) {
+              log.warn(`migrate space conv workspace failed cid=${cid}: ${(err2 as Error).message}`);
+            }
+          }
+        }
+      }
+    }
+    return target;
   }
 
   let slug = slugifyConvTitle(title);

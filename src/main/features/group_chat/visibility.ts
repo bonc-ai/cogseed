@@ -21,6 +21,7 @@ import { conversationLayout } from "../../util/project-layout";
 import { appendJsonlAtomic, readJsonl } from "../../storage";
 import { COMMANDER_ID, USER_ID } from "./state";
 import { createLogger } from "../../logger";
+import type { ProducedFileValidation } from "../produced_files";
 
 const log = createLogger("group_chat.visibility");
 
@@ -28,6 +29,18 @@ export interface ChatUseSelection {
   kind: "skill" | "connector";
   id: string;
   name?: string;
+}
+
+export interface RecallMessageCitation {
+  asset_id: string;
+  title: string;
+  type: 'personal' | 'rule' | 'template' | 'skill_method';
+  version: string;
+  scope: string;
+  projection_id: string;
+  forecast_id?: string;
+  match_score?: number;
+  match_method: 'semantic' | 'manual';
 }
 
 /** Immutable snapshot of one visible message referenced from another task.
@@ -46,6 +59,8 @@ export interface ChatMessageReference {
    * active model turn and never persists that machine-specific path. */
   attachments?: Array<{ name: string; kind?: string }>;
   produced?: string[];
+  /** Host-verified result snapshot captured when the message is persisted. */
+  produced_results?: ProducedFileValidation[];
 }
 
 /** Stable source taxonomy for a user-visible failed assistant bubble. UI
@@ -72,13 +87,6 @@ export interface WakeRequestSummary {
   workflow_resume_token?: string;
 }
 
-export interface KStarReviewSummary {
-  run_id: string;
-  status: "needs_review" | "completed" | "failed";
-  agent_id: string;
-  turn_id: string;
-}
-
 export interface GroupMessage {
   /** Stable per-message id (not jsonl line index). Used by visibility +
    * dedupe. */
@@ -93,10 +101,10 @@ export interface GroupMessage {
   unknown_mentions?: string[];
   /** P3394 approval gates created instead of immediately waking an Agent. */
   wake_requests?: WakeRequestSummary[];
-  /** Legacy/per-message P3394 review metadata. New collaboration validation is Commander-owned and stored in KSTAR runtime state. */
-  kstar_review?: KStarReviewSummary;
   /** Recall projection card metadata used to recover confirmed assets for prompt injection. */
   recall_projection_card?: { projectionId: string };
+  /** Host-verified Recall assets supplied to the model for this persisted reply. */
+  recall_citations?: RecallMessageCitation[];
   /** KSTAR lightweight review confirmation card; raw evidence stays in main storage. */
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   /** Plain `@token` list (raw text mentions). */
@@ -111,7 +119,7 @@ export interface GroupMessage {
   /** Host-generated status records are not model replies. Kept explicit so
    * recovery/reconciliation never claims a live actor placeholder merely
    * because the status row has the same sender. */
-  system_kind?: "reply_interrupted";
+  system_kind?: "reply_interrupted" | "kstar_review";
   /** Markdown text body. */
   text: string;
   /** Structured failure origin. Older records omit this field and must not be
@@ -123,6 +131,24 @@ export interface GroupMessage {
    * present so system-created messages can stay terse for humans while
    * preserving full instructions for the model. */
   model_text?: string;
+  /** Structured carry metadata for an imported-session resume welcome
+   *  (「准备携带」 items + sources). JSON-stringified array; renderer
+   *  parses it to power the「查看依据」expand. */
+  welcome_carry?: string;
+  /** Full resume bundle for the imported-session welcome reply:
+   *  `{ restatement, carry, boundary, plan }` (JSON string). Renders the
+   *  right-rail「查看依据」evidence and the「带着这些继续」Action Plan
+   *  without re-fetching. */
+  welcome_resume?: string;
+  /** True on the seed message of an imported session. The seed carries the
+   *  session summary for the model (model_text) but is hidden from the user
+   *  UI — the resume welcome panel replaces its display. */
+  imported_seed?: boolean;
+  /** True on the commander welcome reply when the session's background
+   *  extraction is still running (B+ fast import). The renderer shows a
+   *  "正在提炼" placeholder panel and swaps in the real carry details when
+   *  the `sessionImport.events` stream reports `extraction_done`. */
+  welcome_pending?: boolean;
   /** Attachment filenames (only meaningful for user messages). */
   attachments?: string[];
   /** Structured composer selections captured at send time. The text still
@@ -132,6 +158,8 @@ export interface GroupMessage {
   /** Structured snapshots quoted from this or another conversation. Kept
    * outside `text` so mentions in historical content never affect routing. */
   references?: ChatMessageReference[];
+  /** 空间任务引用（@ 资产）落可见字段：UI 在 user 气泡里显示「引用资产」chips。 */
+  space_asset_refs?: Array<{ name: string; asset_type?: string }>;
   /** Absolute paths produced by local-exec tools during this turn (only on
    * commander/agent messages). */
   produced?: string[];
@@ -256,8 +284,10 @@ function isVisibleTo(actorId: string, msg: GroupMessage): boolean {
   return false;
 }
 
-/** Append the message to every actor's slice that should see it. */
-export async function appendVisible(
+/** Append the message to every actor's slice that should see it. Throws on
+ * a write failure so callers that own a durable projection can retry without
+ * marking their terminal state complete. */
+export async function appendVisibleStrict(
   uid: string,
   cid: string,
   msg: GroupMessage,
@@ -269,9 +299,27 @@ export async function appendVisible(
   for (const actorId of actorIds) {
     if (actorId === USER_ID) continue; // user reads main jsonl
     if (!isVisibleTo(actorId, msg)) continue;
-    const file = layout.visibilityFile(actorId);
+    await appendJsonlAtomic<GroupMessage>(layout.visibilityFile(actorId), msg);
+  }
+}
+
+/** Best-effort compatibility path for ordinary Group Chat writes. Durable
+ * Backend projections use appendVisibleStrict so a missing slice remains
+ * retryable instead of being silently accepted. */
+export async function appendVisible(
+  uid: string,
+  cid: string,
+  msg: GroupMessage,
+  actorIds: string[],
+  projectIdHint?: string | null,
+): Promise<void> {
+  const layout = conversationLayout(uid, cid, projectIdHint);
+  fs.mkdirSync(layout.visibilityDir, { recursive: true });
+  for (const actorId of actorIds) {
+    if (actorId === USER_ID) continue;
+    if (!isVisibleTo(actorId, msg)) continue;
     try {
-      await appendJsonlAtomic<GroupMessage>(file, msg);
+      await appendJsonlAtomic<GroupMessage>(layout.visibilityFile(actorId), msg);
     } catch (err) {
       log.warn(
         `append visible failed user=${uid} cid=${cid} actor=${actorId}: ${(err as Error).message}`,

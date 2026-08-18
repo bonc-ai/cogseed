@@ -112,7 +112,7 @@ async function _tveLoadAndRender(state) {
     const payload = { path: state.source.absPath };
     if (state.source.cid) payload.cid = state.source.cid;
     if (state.source.projectId) payload.projectId = state.source.projectId;
-    const res = await window.orkas.invoke('produced.readText', payload);
+    const res = await window.cogseed.invoke('produced.readText', payload);
     if (state.destroyed) return;
     if (!res || !res.ok) {
       _tveRenderError(state, (res && res.error) || 'read_failed');
@@ -220,7 +220,7 @@ async function _tveSave(state) {
     const payload = { path: state.source.absPath, content: next };
     if (state.source.cid) payload.cid = state.source.cid;
     if (state.source.projectId) payload.projectId = state.source.projectId;
-    const res = await window.orkas.invoke('produced.writeText', payload);
+    const res = await window.cogseed.invoke('produced.writeText', payload);
     if (!res || !res.ok) {
       await uiAlert(_tveLabel('contexts.save_failed', 'Save failed. Please try again.'));
       return;

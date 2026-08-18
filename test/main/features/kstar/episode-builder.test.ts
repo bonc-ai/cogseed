@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../../../../src/main/features/mate_agent_runtime/protocol';
+import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
 
 function runtimeRequest(): RuntimeRunRequest {
   return {
@@ -89,18 +89,40 @@ describe('KSTAR episode builders', () => {
       messages: [
         { id: 'msg-old', ts: '2026-08-04T23:59:00.000Z', from: 'user', to: [], text: 'old' },
         { id: 'msg-user', ts: '2026-08-05T00:00:01.000Z', from: 'user', to: [], text: 'Make a concise plan.' },
-        { id: 'msg-agent', ts: '2026-08-05T00:00:30.000Z', from: 'commander', to: [], text: 'Plan completed.', produced: ['/tmp/plan.md'] },
+        {
+          id: 'msg-agent', ts: '2026-08-05T00:00:30.000Z', from: 'commander', to: [],
+          text: 'Plan completed.', produced: ['/tmp/plan.md'],
+          recall_citations: [{
+            asset_id: 'asset-a', title: 'Plan rule', type: 'rule', version: '2', scope: 'review',
+            projection_id: 'proj-a', forecast_id: 'wf-a', match_method: 'manual',
+          }],
+          process: [
+            { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: 'call-read', name: 'read_file', arguments: { path: '/tmp/spec.md' } } } },
+            { type: 'event', event: { stream: 'tool', data: { phase: 'end', id: 'call-read', name: 'read_file', isError: false } } },
+            { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: 'call-write', name: 'write_file', arguments: { path: '/tmp/plan.md' } } } },
+            { type: 'event', event: { stream: 'tool', data: { phase: 'end', id: 'call-write', name: 'write_file', isError: true } } },
+          ],
+        },
       ],
+      projectionId: 'proj-a',
+      forecastId: 'wf-a',
     });
 
     expect(episode).toMatchObject({
       id: 'kse-run-group',
       sessionId: 'gconv-cid-a',
       sessionKind: 'group_chat',
+      projectionId: 'proj-a',
+      forecastId: 'wf-a',
+      k: { abilityAssetRefs: ['asset-a'] },
       r: { status: 'completed', finalText: 'Plan completed.', producedFiles: ['plan.md'] },
       t: { userGoal: 'Make a concise plan.' },
     });
-    expect(episode.a.agentActions).toEqual([expect.objectContaining({ actor: 'commander', action: 'Plan completed.' })]);
+    expect(episode.a.toolCalls).toEqual([
+      expect.objectContaining({ sequence: 0, actor: 'commander', id: 'call-read', name: 'read_file', argumentsSummary: 'path', status: 'ok' }),
+      expect.objectContaining({ sequence: 1, actor: 'commander', id: 'call-write', name: 'write_file', argumentsSummary: 'path', status: 'error' }),
+    ]);
+    expect(episode.a.agentActions).toEqual([expect.objectContaining({ sequence: 0, actor: 'commander', action: 'Plan completed.', status: 'ok' })]);
     expect(episode.evidenceRefs).toContainEqual(expect.objectContaining({ kind: 'conversation', id: 'msg-user' }));
     expect(episode.evidenceRefs).not.toContainEqual(expect.objectContaining({ id: 'msg-old' }));
   });

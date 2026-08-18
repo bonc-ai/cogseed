@@ -30,6 +30,14 @@ export interface RouteDecision {
   group_title?: string;
   /** 目标字段名（如「课程名称」），action=field 时有效。 */
   field_name?: string;
+  /** 命中置信度：仅 high 允许自动填坑；medium/low 一律回退流水区（防误填污染画像）。 */
+  confidence?: 'high' | 'medium' | 'low';
+  /**
+   * `flow` may be a valid model decision or a recoverable routing failure.
+   * Callers that only need a fallback can ignore this field; background profile
+   * projection uses it to retry provider/response failures instead of caching them.
+   */
+  failure?: 'model_unavailable' | 'invalid_response';
 }
 
 type BuildRunnerFn = typeof buildRunner;
@@ -47,7 +55,8 @@ export function parseRouteDecision(text: string): RouteDecision | null {
   try {
     const obj = JSON.parse(m[0]);
     if (obj && obj.action === 'field' && typeof obj.group_title === 'string' && typeof obj.field_name === 'string') {
-      return { action: 'field', group_title: obj.group_title, field_name: obj.field_name };
+      const confidence = ['high', 'medium', 'low'].includes(obj.confidence) ? obj.confidence : 'low';
+      return { action: 'field', group_title: obj.group_title, field_name: obj.field_name, confidence };
     }
     if (obj && obj.action === 'flow') return { action: 'flow' };
     return null;
@@ -74,6 +83,7 @@ ${list}
 
 规则：
 - 判断候选文本能填入哪个模板分节的哪个字段：值语义与字段名匹配才算命中（如"喜欢大白话"→ 偏好.沟通风格；"《知识工程》"→ 课程.课程名称）。
+- 命中时给出置信度：非常明确、无歧义 → high；大致匹配但可能二义 → medium；勉强沾边 → low。
 - 候选是通用事实/偏好/规则，没有明显对应字段 → 流水区（action: flow）。
 - 拿不准一律 flow，不要硬填。
 - 只输出一个 JSON 对象，不要任何其他文字或解释。
@@ -81,8 +91,9 @@ ${list}
 候选文本：
 ${String(candidateText || '').slice(0, 500)}
 
-输出格式（二选一）：
-{"action":"field","group_title":"课程","field_name":"课程名称"}
+输出格式（三选一）：
+{"action":"field","group_title":"课程","field_name":"课程名称","confidence":"high"}
+{"action":"field","group_title":"课程","field_name":"课程名称","confidence":"medium"}
 {"action":"flow"}`;
 }
 
@@ -102,25 +113,30 @@ export async function routeCandidateToField(
   try {
     const build = opts.buildRunnerFn ?? buildRunner;
     const tail = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    const { runner } = await build({ sessionId: `ontology-route-${tail}`, userId: uid });
+    const { runner } = await build({ sessionId: `reflect-ontology-route-${tail}`, userId: uid });
     const text = await runner.runReflection(prompt);
-    if (!text || !text.trim()) return { action: 'flow' };
+    if (!text || !text.trim()) return { action: 'flow', failure: 'invalid_response' };
 
     const decision = parseRouteDecision(text);
-    if (!decision) return { action: 'flow' };
+    if (!decision) return { action: 'flow', failure: 'invalid_response' };
     if (decision.action === 'field') {
+      // 置信度门禁：仅 high 允许自动填坑；medium/low 回退流水区（防误填污染画像）
+      if (decision.confidence !== 'high') {
+        log.info('llm route low confidence, falling back to flow', { uid, decision });
+        return { action: 'flow' };
+      }
       // 校验目标分节/字段确实在已安装模板文件清单内（防 LLM 幻觉）
       const hit = catalog.some((t) =>
         t.sections.some((s) => s.title === decision.group_title && s.fields.includes(decision.field_name)),
       );
       if (!hit) {
         log.warn('llm route returned unknown field, falling back to flow', { uid, decision });
-        return { action: 'flow' };
+        return { action: 'flow', failure: 'invalid_response' };
       }
     }
     return decision;
   } catch (err) {
     log.warn('llm route failed, falling back to flow', { uid, error: (err as Error).message });
-    return { action: 'flow' };
+    return { action: 'flow', failure: 'model_unavailable' };
   }
 }

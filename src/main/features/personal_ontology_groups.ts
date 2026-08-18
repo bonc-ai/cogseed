@@ -37,7 +37,7 @@ import * as path from 'node:path';
 import { userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, genId12 } from '../storage';
 import { ENTRY_SEPARATOR } from './memory';
-import { getRoleTemplate, listRoleTemplates, type RoleTemplate, type PresetGroup } from './role_templates';
+import { getRoleTemplate, type PresetGroup } from './role_templates';
 import * as search from './search';
 import * as kbIndexer from './kb_indexer';
 import { createLogger } from '../logger';
@@ -66,7 +66,7 @@ export interface GroupMeta {
   rel_path: string;
   created_at: string;
   updated_at: string;
-  /** 可选：来源角色模板（installRoleTemplate 写入，`- 模板:` 台账行）。 */
+  /** 可选：来源角色模板（模板文件服务写入，`- 模板:` 台账行）。 */
   template_id?: string;
   template_version?: string;
   /** 运行时附加（IPC 层填充，不落盘）：模板显示名（如「学生」），供渲染层做层级展示。 */
@@ -90,10 +90,12 @@ export interface GroupContentResult {
   error?: string;
 }
 
-/** 单条字段值：`- <值> [<来源>]`。 */
+/** 单条字段值：`- <值> [<来源>]`，可选来源项目标记 `@proj:<pid>`（二期 D5）。 */
 export interface FieldValue {
   value: string;
   source: string;
+  /** 可选：来源项目 id（落盘 `@proj:<pid>`，展示层映射项目名）。缺省 = 全局/手动。 */
+  project?: string;
 }
 
 /** 组内容文件的结构化视图：字段区（多值）+ 流水区（条目数组）。 */
@@ -156,20 +158,30 @@ export function splitFlowEntries(text: string): string[] {
     .filter(Boolean);
 }
 
-/** 匹配 `- <值> [<来源>]`；值内的 `\[` 转义在此还原为 `[`。
- *  无 `[来源]` 后缀的裸值行也解析（来源默认 `手动`，任务书 §2.1）。 */
-export function parseFieldValueLine(line: string): { value: string; source: string } | null {
+/** 匹配 `- <值> [<来源>]`（可选 `@proj:<pid>` 来源项目标记）；值内的 `\\[` 转义在此还原为 `[`。
+ *  无 `[来源]` 后缀的裸值行也解析（来源默认 `手动`，任务书 §2.1）。
+ *  `@` 标记以 `proj:` 前缀剥离存 pid；其他形态（理论无）宽容保留原样。 */
+export function parseFieldValueLine(line: string): { value: string; source: string; project?: string } | null {
   if (typeof line !== 'string') return null;
-  const withSource = line.match(/^- (.+) \[(\S+)\]$/);
-  if (withSource) return { value: withSource[1].replace(/\\\[/g, '['), source: withSource[2] };
+  const withSource = line.match(/^- (.+) \[(\S+)\](?: @([^\s]+))?$/);
+  if (withSource) {
+    const out: { value: string; source: string; project?: string } = {
+      value: withSource[1].replace(/\\\[/g, '['),
+      source: withSource[2],
+    };
+    const marker = withSource[3];
+    if (marker) out.project = marker.startsWith('proj:') ? marker.slice('proj:'.length) : marker;
+    return out;
+  }
   const bare = line.match(/^- (.+)$/);
   if (!bare) return null;
   return { value: bare[1].replace(/\\\[/g, '['), source: '手动' };
 }
 
-/** 序列化单条值行：值内 `[` 转义为 `\[`，避免与来源标记冲突。 */
+/** 序列化单条值行：值内 `[` 转义为 `\\[`，避免与来源标记冲突；带项目则追加 `@proj:<pid>`。 */
 export function serializeFieldValueLine(fv: FieldValue): string {
-  return `- ${String(fv.value).replace(/\[/g, '\\[')} [${fv.source}]`;
+  const base = `- ${String(fv.value).replace(/\[/g, '\\[')} [${fv.source}]`;
+  return fv.project ? `${base} @proj:${fv.project}` : base;
 }
 
 /** 解析字段区文本（`## 字段区` 与 `## 流水区` 之间的部分）为字段表。 */
@@ -263,9 +275,9 @@ const GROUP_FIELD_LABELS: Record<string, string> = {
   '模板': 'template_ref',
 };
 
-/** 模板行合法格式：`<template_id>@<semver>`（id 只允许小写字母数字连字符；
+/** 模板行合法格式：`<template_id>@<semver>`（id 只允许小写字母数字连字符下划线；
  *  版本支持标准 semver 预发布后缀，如 `1.1.0` / `0.2.0-review.1`）。 */
-const TEMPLATE_REF_RE = /^([a-z0-9-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
+const TEMPLATE_REF_RE = /^([a-z0-9_-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 
 export function parseGroupsMarkdown(text: string): GroupMeta[] {
   const blocks = text.split(/\n(?=###\s+\S)/).map((b) => b.trim()).filter((b) => b.startsWith('### '));
@@ -526,8 +538,8 @@ export async function appendToGroup(uid: string, groupId: string, text: string):
 }
 
 /**
- * 字段区：往 `### <fieldName>` 小节追加一条 `- <值> [<来源>]`。
- * 完全匹配（同值同来源）去重跳过；多值追加不覆盖。字段小节不存在则创建；
+ * 字段区：往 `### <fieldName>` 小节追加一条 `- <值> [<来源>]`（可选 `@proj:<pid>`）。
+ * 完全匹配（同值同源同项目）去重跳过；多值追加不覆盖。字段小节不存在则创建；
  * 首次写字段会把旧纯文本文件升级为双区格式（内容无损）。
  */
 export async function appendFieldValue(
@@ -536,6 +548,7 @@ export async function appendFieldValue(
   fieldName: string,
   value: string,
   source: string,
+  project?: string,
 ): Promise<SimpleResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const name = String(fieldName || '').trim();
@@ -543,13 +556,14 @@ export async function appendFieldValue(
   if (!name) return { ok: false, error: 'field name required' };
   if (!val) return { ok: false, error: 'empty value' };
   const src = normalizeSource(source);
+  const proj = project ? String(project).trim() : undefined;
 
   return mutateGroupContent(uid, groupId, (content) => {
     const values = content.fields[name] || (content.fields[name] = []);
-    if (values.some((fv) => fv.value === val && fv.source === src)) {
+    if (values.some((fv) => fv.value === val && fv.source === src && (fv.project ?? undefined) === proj)) {
       return { changed: false }; // 完全匹配去重
     }
-    values.push({ value: val, source: src });
+    values.push({ value: val, source: src, ...(proj ? { project: proj } : {}) });
     return { changed: true };
   });
 }
@@ -670,7 +684,7 @@ export interface ListGroupFieldsResult {
 
 /** 模板文件元信息行：`> 模板: <template_id>@<semver>`（与 template_files.ts 同源，
  *  这里做轻量识别，避免 groups ↔ template_files 循环依赖）。 */
-const TEMPLATE_FILE_META_RE = /^>\s*模板:\s*([a-z0-9-]+)@(\d+\.\d+\.\d+)/m;
+const TEMPLATE_FILE_META_RE = /^>\s*模板:\s*([a-z0-9_-]+)@(\d+\.\d+\.\d+)/m;
 
 /** 模板文件（`## 分节` / `### 字段` 分节式）的轻量字段汇总：跨分节合并所有
  *  `### <字段名>` 小节为字段清单（含空坑与值，文件顺序）。仅提取字段名+值；
@@ -765,116 +779,6 @@ export async function listGroupFields(uid: string, groupId: string): Promise<Lis
     }
   }
   return { ok: true, fields: merged };
-}
-
-export interface InstallRoleTemplateResult {
-  ok: boolean;
-  already_installed?: boolean;
-  created?: GroupMeta[];
-  /** 与模板名/预设组名同名的现有普通分组（无 template_id）——用户已有同名组，
-   *  安装后会出现"模板 vs 普通组"两个同名字样，UI 应提示用户处理。 */
-  conflict_groups?: Array<{ group_id: string; title: string }>;
-  error?: string;
-}
-
-/**
- * 安装角色模板：对每个 preset_group 创建分组，并给这些组写 template_id/
- * template_version 到台账。幂等：已存在同 template_id 的分组 → already_installed。
- * 同名冲突检测：模板名 / 预设组名与现有普通分组（无 template_id）撞名时，
- * 在返回体带 `conflict_groups` 警告（不阻断安装）。
- */
-export async function installRoleTemplate(uid: string, templateId: string): Promise<InstallRoleTemplateResult> {
-  if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
-  const template = getRoleTemplate(templateId);
-  if (!template) return { ok: false, error: 'template not found' };
-
-  const groups = readGroups(uid);
-  // 与模板名 / 预设组名同名的普通组（早期手工建的同名组，无模板归属）
-  const reservedTitles = new Set([template.name, ...template.preset_groups.map((p) => p.title)]);
-  const conflictGroups = groups
-    .filter((g) => !g.template_id && reservedTitles.has(g.title))
-    .map((g) => ({ group_id: g.group_id, title: g.title }));
-
-  if (groups.some((g) => g.template_id === templateId)) {
-    return { ok: true, already_installed: true, conflict_groups: conflictGroups };
-  }
-
-  const created: GroupMeta[] = [];
-  for (const preset of template.preset_groups) {
-    const res = await createGroup(uid, preset.title);
-    if (!res.ok || !res.group) {
-      return { ok: false, error: `create preset group "${preset.title}" failed: ${res.error || ''}` };
-    }
-    created.push(res.group);
-  }
-
-  // 给新建组补模板标记（重写台账）
-  const all = readGroups(uid);
-  for (const meta of created) {
-    const idx = all.findIndex((g) => g.group_id === meta.group_id);
-    if (idx !== -1) {
-      all[idx] = { ...all[idx], template_id: templateId, template_version: template.version };
-    }
-  }
-  writeGroups(uid, all);
-
-  log.info('ontology role template installed', { uid, templateId, created: created.length, conflicts: conflictGroups.length });
-  return { ok: true, created, conflict_groups: conflictGroups };
-}
-
-export interface TemplateGap {
-  group_id: string;
-  title: string;
-  empty_fields: string[];
-}
-
-export interface RoleTemplateStatus extends RoleTemplate {
-  installed: boolean;
-  installed_version?: string;
-  gaps: TemplateGap[];
-  /** 该模板已安装的分组（group_id + title 映射），渲染层模板卡片展开用。 */
-  installed_groups?: Array<{ group_id: string; title: string }>;
-}
-
-/**
- * 每个模板的安装状态 + 缺口（模板声明字段在该组无值的字段名列表，读内容判空）。
- * 供渲染层“角色模板”区块展示：未安装 → 安装按钮；已安装 → 缺口清单。
- */
-export async function listRoleTemplateStatus(uid: string): Promise<RoleTemplateStatus[]> {
-  if (!safeId(uid)) throw new Error('invalid uid');
-  const groups = readGroups(uid);
-
-  const out: RoleTemplateStatus[] = [];
-  for (const template of listRoleTemplates()) {
-    const installedGroups = groups.filter((g) => g.template_id === template.template_id);
-    const installed = installedGroups.length > 0;
-    const gaps: TemplateGap[] = [];
-
-    if (installed) {
-      for (const g of installedGroups) {
-        const preset = template.preset_groups.find((p) => p.title === g.title);
-        if (!preset) continue;
-        let abs: string;
-        try { abs = resolveGroupFileAbsPath(uid, g.group_id); } catch { continue; }
-        const content = parseGroupContent(readTextSafe(abs));
-        const emptyFields = preset.fields
-          .filter((f) => !(content.fields[f.name] && content.fields[f.name].length))
-          .map((f) => f.name);
-        if (emptyFields.length) {
-          gaps.push({ group_id: g.group_id, title: g.title, empty_fields: emptyFields });
-        }
-      }
-    }
-
-    out.push({
-      ...template,
-      installed,
-      installed_version: installed ? installedGroups[0].template_version : undefined,
-      gaps,
-      installed_groups: installed ? installedGroups.map((g) => ({ group_id: g.group_id, title: g.title })) : [],
-    });
-  }
-  return out;
 }
 
 // Exposed for the IPC layer / tests that need to resolve a group's absolute

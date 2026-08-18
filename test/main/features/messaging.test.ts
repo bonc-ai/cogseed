@@ -204,6 +204,39 @@ describe('messaging registry and ledgers', () => {
     expect(await registry.getInstance('user-1', created.id)).not.toHaveProperty('ownerExternalUserId');
   });
 
+  it('masks the owner open id in the client DTO when no name is set', async () => {
+    const { _registryTestHooks } = await import('../../../src/main/features/messaging/registry');
+    const instance = {
+      id: 'bot-1',
+      platform: 'feishu_lark' as const,
+      feishuTenantBrand: 'feishu' as const,
+      displayName: 'Feishu bot',
+      enabled: true,
+      workspace: { type: 'default' as const },
+      policy: {
+        replyMode: 'every_message' as const,
+        allowUserIds: ['ou_abcd1234efgh5678ijkl'],
+        allowGroupIds: [],
+        requireMentionInGroups: true,
+      },
+      status: { kind: 'disconnected' as const, checkedAt: new Date().toISOString() },
+      ownerExternalUserId: 'ou_abcd1234efgh5678ijkl',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const client = _registryTestHooks.toClient(instance, true);
+    expect(client.ownerConfigured).toBe(true);
+    expect(client.ownerMaskedId).toBe('ou_abcd…ijkl');
+    // No dedicated owner field leaks into the renderer-facing DTO (the full id
+    // only legitimately appears in policy.allowUserIds, the authorization list).
+    expect(client).not.toHaveProperty('ownerExternalUserId');
+    expect(JSON.stringify(client)).not.toContain('ownerExternalUserId');
+    // A named owner keeps the label and gets no masked id.
+    const named = _registryTestHooks.toClient({ ...instance, ownerExternalUserName: 'Owner One' }, true);
+    expect(named.ownerMaskedId).toBeUndefined();
+    expect(named.ownerLabel).toBe('Owner One');
+  });
+
   it('does not infer legacy owners from allowlists and removes QR owner during draft compensation', async () => {
     const registry = await import('../../../src/main/features/messaging/registry');
     const draft = await registry.createFeishuDraft('user-1', {
@@ -274,6 +307,39 @@ describe('messaging registry and ledgers', () => {
     expect(begun.entry.externalChatId).toBeUndefined();
     const read = await ledger.getDelivery('user-1', begun.entry.key);
     expect(read).toMatchObject({ recipientId: 'ou_self_1', recipientIdType: 'open_id' });
+  });
+
+  it('persists a file delivery payload across write and reload', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const begun = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'file-1'),
+      instanceId: 'bot-1',
+      recipientId: 'ou_self_1',
+      recipientIdType: 'open_id',
+      sourceMessageId: 'file-1',
+      textHash: ledger.textHash('[文件] report.pdf'),
+      text: '[文件] report.pdf',
+      file: { path: '/workspace/report.pdf', name: 'report.pdf' },
+    });
+    expect(begun.duplicate).toBe(false);
+    expect(begun.entry.file).toEqual({ path: '/workspace/report.pdf', name: 'report.pdf' });
+
+    const read = await ledger.getDelivery('user-1', begun.entry.key);
+    expect(read?.file).toEqual({ path: '/workspace/report.pdf', name: 'report.pdf' });
+  });
+
+  it('rejects malformed file delivery payloads', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    await expect(ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'file-bad'),
+      instanceId: 'bot-1',
+      recipientId: 'ou_self_1',
+      recipientIdType: 'open_id',
+      sourceMessageId: 'file-bad',
+      textHash: ledger.textHash('x'),
+      text: 'x',
+      file: { path: '', name: 'x' },
+    })).rejects.toThrow('delivery file payload invalid');
   });
 
   it('deduplicates inbound and delivery records without re-sending sent output', async () => {
@@ -1162,40 +1228,423 @@ describe('messaging manager adapter flow', () => {
       });
       expect(busListener).toBeTypeOf('function');
 
-      busListener?.({
-        type: 'wake_request',
-        cid: 'cid-any',
-        request: {
-          id: 'wake-bridge-1',
-          agent_id: 'agent-1',
-          agent_name: '研究员',
-          source: 'dispatch_to',
-          objective: '对比三种传感器方案',
-          status: 'pending',
-        },
+      const { setCurrentLang } = await import('../../../src/main/i18n');
+      setCurrentLang('zh');
+      try {
+        busListener?.({
+          type: 'wake_request',
+          cid: 'cid-any',
+          request: {
+            id: 'wake-bridge-1',
+            agent_id: 'agent-1',
+            agent_name: '研究员',
+            source: 'dispatch_to',
+            objective: '对比三种传感器方案',
+            status: 'pending',
+          },
+        });
+        await vi.waitFor(() => expect(sendApprovalCard).toHaveBeenCalledTimes(1));
+        expect(sendApprovalCard.mock.calls[0]?.[0]).toBe('oc_wake');
+        expect(sendApprovalCard.mock.calls[0]?.[1]).toMatchObject({
+          wakeId: 'wake-bridge-1',
+          title: '需要你的审批：研究员',
+          description: '对比三种传感器方案',
+        });
+
+        // Non-pending requests must not produce cards.
+        busListener?.({
+          type: 'wake_request',
+          cid: 'cid-any',
+          request: {
+            id: 'wake-bridge-2',
+            agent_id: 'agent-1',
+            source: 'dispatch_to',
+            objective: 'x',
+            status: 'approved',
+          },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(sendApprovalCard).toHaveBeenCalledTimes(1);
+      } finally {
+        setCurrentLang('en');
+      }
+      await manager.stopForUser('user-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
+
+  it('resolves a personal-ontology candidate card through card action', async () => {
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage: vi.fn(async () => ({})),
+      sendCard: vi.fn(async () => ({})),
+      updateCard: vi.fn(async () => ({})),
+      sendApprovalCard: vi.fn(async () => ({})),
+    };
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: vi.fn(async () => ({ ok: true })) }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe: vi.fn(() => () => undefined) }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const ontology = await import('../../../src/main/features/personal_ontology_candidates');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Candidate bot',
+        policy: { allowUserIds: ['user-1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
       });
-      await vi.waitFor(() => expect(sendApprovalCard).toHaveBeenCalledTimes(1));
-      expect(sendApprovalCard.mock.calls[0]?.[0]).toBe('oc_wake');
-      expect(sendApprovalCard.mock.calls[0]?.[1]).toMatchObject({
-        wakeId: 'wake-bridge-1',
-        title: '需要你的审批：研究员',
-        description: '对比三种传感器方案',
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
       });
 
-      // Non-pending requests must not produce cards.
-      busListener?.({
-        type: 'wake_request',
-        cid: 'cid-any',
-        request: {
-          id: 'wake-bridge-2',
-          agent_id: 'agent-1',
-          source: 'dispatch_to',
-          objective: 'x',
-          status: 'approved',
-        },
+      // 批准路径：候选离开池、卡片更新为终态。
+      const { candidate_ids } = await ontology.addCandidates('user-1', [
+        { judgment: '日程：测试课', suggestedType: 'template' },
+      ]);
+      expect(candidate_ids).toHaveLength(1);
+      const candidateId = candidate_ids[0];
+      await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'candidate-card-1',
+        externalChatId: 'oc_candidate',
+        externalUserId: 'user-1',
+        action: 'candidate_approve',
+        payload: { candidate_id: candidateId },
+        receivedAt: new Date().toISOString(),
       });
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(sendApprovalCard).toHaveBeenCalledTimes(1);
+      const pool = await ontology.listCandidates('user-1');
+      expect(pool.candidate_updates.find((c) => c.candidate_id === candidateId)).toBeUndefined();
+      await vi.waitFor(() => expect(adapter.updateCard).toHaveBeenCalledTimes(1));
+
+      // 拒绝路径：候选直接移除。
+      const { candidate_ids: ids2 } = await ontology.addCandidates('user-1', [
+        { judgment: '日程：另一课', suggestedType: 'template' },
+      ]);
+      await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'candidate-card-2',
+        externalChatId: 'oc_candidate',
+        externalUserId: 'user-1',
+        action: 'candidate_reject',
+        payload: { candidate_id: ids2[0] },
+        receivedAt: new Date().toISOString(),
+      });
+      const pool2 = await ontology.listCandidates('user-1');
+      expect(pool2.candidate_updates.find((c) => c.candidate_id === ids2[0])).toBeUndefined();
+
+      // 缺 candidate_id 的卡片动作被拒绝。
+      const rejected = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'candidate-card-3',
+        externalChatId: 'oc_candidate',
+        externalUserId: 'user-1',
+        action: 'candidate_approve',
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
+      expect(rejected).toMatchObject({ accepted: false, reason: 'invalid_card_action' });
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+    }
+  });
+
+  it('consumes a touchpoint intent action through a signed card click', async () => {
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage: vi.fn(async () => ({})),
+      sendCard: vi.fn(async () => ({})),
+      updateCard: vi.fn(async () => ({})),
+      sendApprovalCard: vi.fn(async () => ({})),
+    };
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: vi.fn(async () => ({ ok: true })) }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe: vi.fn(() => () => undefined) }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const touchpointLedger = await import('../../../src/main/features/touchpoints/ledger');
+      const { createTouchpointDomainEvent } = await import('../../../src/main/features/touchpoints/events');
+      const { createTouchpointIntent } = await import('../../../src/main/features/touchpoints/intents');
+      const { signTouchpointAction } = await import('../../../src/main/features/touchpoints/sign');
+
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Touchpoint bot',
+        policy: { allowUserIds: ['user-1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+
+      // 构造一条已送达的审批意图（planned → ready → sending → sent）。
+      const event = createTouchpointDomainEvent('user-1', {
+        eventId: 'event-1',
+        kind: 'task.approval_required',
+        subject: { type: 'task', id: 'task-1' },
+        occurredAt: '2026-08-10T13:00:00.000Z',
+        summary: { title: '审批：张明请假', body: '下周三请一天假。' },
+      });
+      const intent = createTouchpointIntent('user-1', event, {
+        intentId: 'intent-1',
+        channel: 'feishu',
+        template: 'task_approval',
+        priority: 'high',
+        availableFrom: '2026-08-10T13:00:00.000Z',
+        expiresAt: '2026-09-01T13:00:00.000Z',
+        dedupeKey: 'task:task-1:approval:event-1',
+        actionContract: { version: 1, allowedActions: ['approve', 'reject'] },
+      });
+      await touchpointLedger.reserveTouchpointIntent('user-1', intent);
+      await touchpointLedger.transitionTouchpointIntent('user-1', 'intent-1', ['planned'], { status: 'ready' });
+      await touchpointLedger.transitionTouchpointIntent('user-1', 'intent-1', ['ready'], { status: 'sending' });
+      await touchpointLedger.transitionTouchpointIntent('user-1', 'intent-1', ['sending'], { status: 'sent' });
+
+      const occurredAt = new Date().toISOString();
+      const envelope = {
+        intent_id: 'intent-1',
+        action_id: 'action-1',
+        user_id: 'user-1',
+        kind: 'approve',
+        occurred_at: occurredAt,
+        signature: signTouchpointAction('intent-1', 'user-1', 'approve', occurredAt),
+      };
+
+      // 批准路径：动作消费进 ledger，卡片更新为终态。
+      const accepted = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-1',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: envelope,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(accepted).toMatchObject({ accepted: true, duplicate: false });
+      await vi.waitFor(() => expect(adapter.updateCard).toHaveBeenCalledTimes(1));
+      const ledgerState = await touchpointLedger.readTouchpointLedgerForTest('user-1');
+      expect(ledgerState.actions['action-1']).toMatchObject({ intentId: 'intent-1', action: 'approve', userId: 'user-1' });
+
+      // 重复点击同一信封：幂等 accepted，不再二次更新卡片。
+      const duplicate = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-1',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: envelope,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(duplicate).toMatchObject({ accepted: true, duplicate: true });
+      expect(adapter.updateCard).toHaveBeenCalledTimes(1);
+
+      // 带填写内容的动作：content 落 ledger，终态卡片回显提交内容。
+      const withContent = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-1',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: {
+          ...envelope,
+          action_id: 'action-2',
+          kind: 'reject',
+          occurred_at: occurredAt,
+          signature: signTouchpointAction('intent-1', 'user-1', 'reject', occurredAt),
+          tp_content: '不同意，请重新提交预算',
+        },
+        receivedAt: new Date().toISOString(),
+      });
+      expect(withContent).toMatchObject({ accepted: true, duplicate: false });
+      await vi.waitFor(() => expect(adapter.updateCard).toHaveBeenCalledTimes(2));
+      const ledgerAfter = await touchpointLedger.readTouchpointLedgerForTest('user-1');
+      expect(ledgerAfter.actions['action-2']).toMatchObject({
+        intentId: 'intent-1',
+        action: 'reject',
+        content: '不同意，请重新提交预算',
+      });
+      const resolvedCard = (adapter.updateCard as ReturnType<typeof vi.fn>).mock.calls[1][1] as Record<string, unknown>;
+      expect(JSON.stringify(resolvedCard)).toContain('不同意，请重新提交预算');
+
+      // 缺信封字段的卡片动作被拒绝。
+      const rejected = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-2',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
+      expect(rejected).toMatchObject({ accepted: false, reason: 'invalid_card_action' });
+
+      // 未送达（非 sent）的意图不可消费。
+      const pendingEvent = createTouchpointDomainEvent('user-1', {
+        eventId: 'event-2',
+        kind: 'task.approval_required',
+        subject: { type: 'task', id: 'task-2' },
+        occurredAt: '2026-08-10T13:00:00.000Z',
+        summary: { title: '审批：李四加班' },
+      });
+      const pendingIntent = createTouchpointIntent('user-1', pendingEvent, {
+        intentId: 'intent-2',
+        channel: 'feishu',
+        template: 'task_approval',
+        priority: 'normal',
+        availableFrom: '2026-08-10T13:00:00.000Z',
+        expiresAt: '2026-09-01T13:00:00.000Z',
+        dedupeKey: 'task:task-2:approval:event-2',
+        actionContract: { version: 1, allowedActions: ['approve'] },
+      });
+      await touchpointLedger.reserveTouchpointIntent('user-1', pendingIntent);
+      const notActionable = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-3',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: {
+          ...envelope,
+          intent_id: 'intent-2',
+          action_id: 'action-2',
+          occurred_at: occurredAt,
+          signature: signTouchpointAction('intent-2', 'user-1', 'approve', occurredAt),
+        },
+        receivedAt: new Date().toISOString(),
+      });
+      expect(notActionable).toMatchObject({ accepted: false, reason: 'touchpoint_action_rejected' });
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+    }
+  });
+
+  it('drops an outbound reply without a message id before any delivery attempt', async () => {
+    let busListener: ((event: unknown) => void) | undefined;
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+      busListener = listener;
+      return () => { busListener = undefined; };
+    });
+    const sendMessage = vi.fn(async () => ({ deliveryId: 'remote-reply-1' }));
+    const adapter: MessagingAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage,
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const ledger = await import('../../../src/main/features/messaging/ledger');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Test Feishu',
+        policy: { allowUserIds: ['user-1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      await manager.ingestInbound('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'incoming-1',
+        externalChatId: 'chat-1',
+        externalUserId: 'user-1',
+        text: 'hello agent',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(busListener).toBeTypeOf('function');
+
+      // A reply event without a stable message id must never reach the
+      // adapter: the delivery idempotency key would silently stringify to
+      // "undefined" and corrupt dedupe.
+      busListener?.({
+        type: 'message',
+        turn_end: true,
+        msg: { from: 'commander', text: 'reply without id' },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(await ledger.getDelivery('user-1', ledger.deliveryKey(created.id, 'undefined'))).toBeNull();
       await manager.stopForUser('user-1');
     } finally {
       vi.doUnmock('../../../src/main/features/messaging/adapters');
@@ -1435,6 +1884,38 @@ describe('feishu card action normalization', () => {
     expect(action?.action).toBe('button');
     expect(action?.payload).toEqual({ wake_id: 'wake-2' });
   });
+
+  it('merges input form values into the payload keyed by field id', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const action = _adapterTestHooks.normalizeFeishuCardAction(instance, {
+      context: { open_message_id: 'om_1', open_chat_id: 'oc_1' },
+      operator: { open_id: 'ou_admin' },
+      action: {
+        tag: 'button',
+        value: { action: 'touchpoint', intent_id: 'intent-1', kind: 'approve' },
+        form_value: { tp_content: '同意，但需补材料', tp_other: 3, tp_bad: { nested: true } },
+      },
+    });
+    expect(action?.payload).toMatchObject({
+      intent_id: 'intent-1',
+      kind: 'approve',
+      tp_content: '同意，但需补材料',
+      tp_other: 3,
+    });
+    // Non-primitive form entries are dropped like button values.
+    expect(action?.payload).not.toHaveProperty('tp_bad');
+
+    const legacyAction = _adapterTestHooks.normalizeFeishuCardAction(instance, {
+      context: { open_message_id: 'om_2', open_chat_id: 'oc_1' },
+      operator: { open_id: 'ou_admin' },
+      action: {
+        tag: 'button',
+        value: { action: 'touchpoint' },
+        form: { tp_content: '旧版回调仍可兼容' },
+      },
+    });
+    expect(legacyAction?.payload.tp_content).toBe('旧版回调仍可兼容');
+  });
 });
 
 describe('messaging card action dispatch', () => {
@@ -1464,11 +1945,13 @@ describe('messaging card action dispatch', () => {
   });
 
   it('routes approve/deny card actions to the wake approval gate', async () => {
-    const approveWakeRequest = vi.fn(async () => ({ request: { id: 'wake-1' }, approval: {} }));
-    const rejectWakeRequest = vi.fn(async () => ({}));
-    vi.doMock('../../../src/main/features/p3394/wake-service', () => ({
-      approveWakeRequest,
-      rejectWakeRequest,
+    const decideWakeRequest = vi.fn(async (_uid: string, input: { requestId: string; decision: string }) => ({
+      ok: true,
+      request: { id: input.requestId },
+      dispatched: input.decision === 'approve',
+    }));
+    vi.doMock('../../../src/main/features/p3394/wake-controller', () => ({
+      decideWakeRequest,
     }));
     try {
       const registry = await import('../../../src/main/features/messaging/registry');
@@ -1492,14 +1975,14 @@ describe('messaging card action dispatch', () => {
       };
       const approved = await manager.ingestCardAction('user-1', { ...base, action: 'approve', payload: { wake_id: 'wake-1' } });
       expect(approved.accepted).toBe(true);
-      expect(approveWakeRequest).toHaveBeenCalledWith('user-1', 'wake-1');
+      expect(decideWakeRequest).toHaveBeenCalledWith('user-1', { requestId: 'wake-1', decision: 'approve' });
       const denied = await manager.ingestCardAction('user-1', { ...base, action: 'deny', payload: { wake_id: 'wake-2' } });
       expect(denied.accepted).toBe(true);
-      expect(rejectWakeRequest).toHaveBeenCalledWith('user-1', 'wake-2');
+      expect(decideWakeRequest).toHaveBeenCalledWith('user-1', { requestId: 'wake-2', decision: 'reject' });
       const unsupported = await manager.ingestCardAction('user-1', { ...base, action: 'jump', payload: { wake_id: 'wake-3' } });
       expect(unsupported).toMatchObject({ accepted: false, reason: 'unsupported_card_action' });
     } finally {
-      vi.doUnmock('../../../src/main/features/p3394/wake-service');
+      vi.doUnmock('../../../src/main/features/p3394/wake-controller');
       vi.resetModules();
     }
   });
@@ -1546,14 +2029,36 @@ describe('feishu approval cards', () => {
   });
 
   it('builds a terminal resolved card for approved and denied choices', async () => {
-    const manager = await import('../../../src/main/features/messaging/manager');
-    const approved = manager._managerTestHooks.buildResolvedApprovalCard('approve', 'Admin');
-    expect(approved.header.template).toBe('green');
-    expect(JSON.stringify(approved)).toContain('已允许');
-    expect(JSON.stringify(approved)).toContain('Admin');
-    const denied = manager._managerTestHooks.buildResolvedApprovalCard('deny');
-    expect(denied.header.template).toBe('red');
-    expect(JSON.stringify(denied)).toContain('已拒绝');
+    const { setCurrentLang } = await import('../../../src/main/i18n');
+    setCurrentLang('zh');
+    try {
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const approved = manager._managerTestHooks.buildResolvedApprovalCard('approve', 'Admin');
+      expect(approved.header.template).toBe('green');
+      expect(JSON.stringify(approved)).toContain('已允许');
+      expect(JSON.stringify(approved)).toContain('Admin');
+      const denied = manager._managerTestHooks.buildResolvedApprovalCard('deny');
+      expect(denied.header.template).toBe('red');
+      expect(JSON.stringify(denied)).toContain('已拒绝');
+    } finally {
+      setCurrentLang('en');
+    }
+  });
+});
+
+describe('feishu file_type mapping', () => {
+  it('maps known document extensions and falls back to stream', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    expect(_adapterTestHooks.feishuFileTypeForName('report.pdf')).toBe('pdf');
+    expect(_adapterTestHooks.feishuFileTypeForName('report.PDF')).toBe('pdf');
+    expect(_adapterTestHooks.feishuFileTypeForName('doc.docx')).toBe('doc');
+    expect(_adapterTestHooks.feishuFileTypeForName('doc.doc')).toBe('doc');
+    expect(_adapterTestHooks.feishuFileTypeForName('sheet.xlsx')).toBe('xls');
+    expect(_adapterTestHooks.feishuFileTypeForName('deck.pptx')).toBe('ppt');
+    expect(_adapterTestHooks.feishuFileTypeForName('video.mp4')).toBe('mp4');
+    expect(_adapterTestHooks.feishuFileTypeForName('notes.md')).toBe('stream');
+    expect(_adapterTestHooks.feishuFileTypeForName('archive.zip')).toBe('stream');
+    expect(_adapterTestHooks.feishuFileTypeForName('noext')).toBe('stream');
   });
 });
 
@@ -1834,21 +2339,21 @@ describe('messaging streaming card concurrency', () => {
 
 describe('messaging tool chrome', () => {
   it('renders Hermes-style tool lines with emoji, name and truncated preview', async () => {
-    const { _managerTestHooks } = await import('../../../src/main/features/messaging/manager');
-    expect(_managerTestHooks.renderToolLine('web_search', { query: 'site:openai.com Codex 2026' }))
+    const { renderToolLine } = await import('../../../src/main/features/messaging/tool-chrome');
+    expect(renderToolLine('web_search', { query: 'site:openai.com Codex 2026' }))
       .toBe('🔍 web_search: "site:openai.com Codex 2026"');
-    expect(_managerTestHooks.renderToolLine('terminal', { command: 'ollama run qwen3-vl:8b hello' }))
+    expect(renderToolLine('terminal', { command: 'ollama run qwen3-vl:8b hello' }))
       .toBe('🖥️ terminal: "ollama run qwen3-vl:8b hello"');
     // Unknown tools fall back to the default emoji; long previews truncate.
-    const long = _managerTestHooks.renderToolLine('write_file', { path: '/a/very/long/path/that/exceeds/the/forty/character/preview/cap/definitely' });
+    const long = renderToolLine('write_file', { path: '/a/very/long/path/that/exceeds/the/forty/character/preview/cap/definitely' });
     expect(long.startsWith('✍️ write_file: "')).toBe(true);
     expect(long.length).toBeLessThanOrEqual(60);
     expect(long.endsWith('…"')).toBe(true);
   });
 
   it('extracts tool lines from bus process events', async () => {
-    const { _managerTestHooks } = await import('../../../src/main/features/messaging/manager');
-    const lines = _managerTestHooks.toolLinesFromProcessEvent({
+    const { toolLinesFromProcessEvent } = await import('../../../src/main/features/messaging/tool-chrome');
+    const lines = toolLinesFromProcessEvent({
       type: 'process',
       cid: 'c',
       turn_id: 't1',
@@ -1861,10 +2366,10 @@ describe('messaging tool chrome', () => {
       },
     } as never);
     expect(lines).toEqual(['🔍 web_search: "hello"']);
-    expect(_managerTestHooks.toolLinesFromProcessEvent({
+    expect(toolLinesFromProcessEvent({
       type: 'process', cid: 'c', turn_id: 't1', data: { type: 'delta', text: 'x' },
     } as never)).toEqual([]);
-    expect(_managerTestHooks.toolLinesFromProcessEvent({
+    expect(toolLinesFromProcessEvent({
       type: 'process', cid: 'c', turn_id: 't1',
       data: { type: 'event', event: { stream: 'tool', data: { phase: 'end', id: 'call_1', name: 'web_search' } } },
     } as never)).toEqual([]);
@@ -1965,6 +2470,95 @@ describe('messaging tool chrome', () => {
       const finalCard = updateCard.mock.calls[0]?.[1];
       expect(finalCard.elements[0].content).toContain('🔍 web_search: "Codex 2026"');
       expect(finalCard.elements[2].content).toBe('最终回答');
+      await manager.stopForUser('user-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
+
+  it('falls back to plain-text delivery when turn-end beats the first card flush', async () => {
+    let busListener: ((event: unknown) => void) | undefined;
+    const sendCard = vi.fn(async () => ({ deliveryId: 'om_card_race' }));
+    const updateCard = vi.fn(async () => ({}));
+    const sendMessage = vi.fn(async () => ({ deliveryId: 'om_text_race' }));
+    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+      busListener = listener;
+      return () => { busListener = undefined; };
+    });
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage,
+      sendCard,
+      updateCard,
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Feishu bot',
+        responseMode: 'streaming_card',
+        policy: { allowUserIds: ['ou_sender_1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'app-secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      const inbound = await manager.ingestInbound('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'om_race_1',
+        externalChatId: 'oc_race',
+        externalUserId: 'ou_sender_1',
+        text: 'quick one',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(inbound.accepted).toBe(true);
+
+      // A delta creates card state and schedules the 400ms debounce flush.
+      busListener?.({
+        type: 'process', cid: inbound.cid, actor: 'agent', turn_id: 'turn-race',
+        data: { type: 'delta', text: '流式内容' },
+      });
+      // Turn-end arrives before the debounce fires: the draft card must be
+      // dropped and the final answer still delivered as plain text.
+      busListener?.({
+        type: 'message', cid: inbound.cid, turn_end: true, turn_id: 'turn-race',
+        msg: { id: 'reply-race', from: 'agent', text: '最终回答' },
+      });
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      expect(sendMessage.mock.calls[0]?.[1]).toContain('最终回答');
+      expect(sendCard).not.toHaveBeenCalled();
+      expect(updateCard).not.toHaveBeenCalled();
       await manager.stopForUser('user-1');
     } finally {
       vi.doUnmock('../../../src/main/features/messaging/adapters');
@@ -2126,13 +2720,20 @@ describe('messaging session reset (/new)', () => {
 
       // /new rotates to a fresh conversation and sends the confirmation
       // without consuming a Meta Agent turn.
-      const reset = await manager.ingestInbound('user-1', envelope('om_reset_2', '/new'));
-      expect(reset.accepted).toBe(true);
-      expect(reset.cid).toBeTruthy();
-      expect(reset.cid).not.toBe(cidA);
-      expect(groupSend).toHaveBeenCalledTimes(1); // no commander turn for /new
-      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
-      expect(sendMessage.mock.calls[0]?.[1]).toContain('已开始新的对话');
+      const { setCurrentLang } = await import('../../../src/main/i18n');
+      setCurrentLang('zh');
+      let reset: Awaited<ReturnType<typeof manager.ingestInbound>>;
+      try {
+        reset = await manager.ingestInbound('user-1', envelope('om_reset_2', '/new'));
+        expect(reset.accepted).toBe(true);
+        expect(reset.cid).toBeTruthy();
+        expect(reset.cid).not.toBe(cidA);
+        expect(groupSend).toHaveBeenCalledTimes(1); // no commander turn for /new
+        await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+        expect(sendMessage.mock.calls[0]?.[1]).toContain('已开始新的对话');
+      } finally {
+        setCurrentLang('en');
+      }
 
       // The next message continues in the fresh conversation B.
       const next = await manager.ingestInbound('user-1', envelope('om_reset_3', '继续'));
@@ -2267,6 +2868,48 @@ describe('messaging burst merge on inbound', () => {
     expect(groupSend).toHaveBeenCalledTimes(1);
     await manager.stopForUser(uid);
     vi.useRealTimers();
+  });
+
+  it('releases trailing ids for redelivery when the merged dispatch fails', async () => {
+    const uid = 'user-1';
+    const { manager, groupSend } = await seededInstance(uid);
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const instanceId = (await (await import('../../../src/main/features/messaging/registry')).listInstances(uid))[0].id;
+    const base = async (id: string, text: string) => ({
+      platform: 'feishu_lark' as const,
+      instanceId,
+      externalMessageId: id,
+      externalChatId: 'oc_1',
+      externalUserId: uid,
+      text,
+      isGroup: true,
+      mentionPresent: true,
+      receivedAt: new Date().toISOString(),
+    });
+    // The merged dispatch fails: every enqueued promise must settle as a
+    // burst_merge_failed result, and the trailing id mark must be released.
+    groupSend.mockRejectedValueOnce(new Error('group chat enqueue failed'));
+    try {
+      const first = manager.enqueueInbound(uid, await base('m-1', 'part one'));
+      const second = manager.enqueueInbound(uid, await base('m-2', 'part two'));
+      await vi.advanceTimersByTimeAsync(600);
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1));
+      await expect(first).resolves.toEqual({ accepted: false, duplicate: false, reason: 'burst_merge_failed' });
+      await expect(second).resolves.toEqual({ accepted: false, duplicate: false, reason: 'burst_merge_failed' });
+      // The trailing id is recoverable (failed), not terminally consumed.
+      const trailing = await ledger.readInbound(uid, ledger.inboundKey(instanceId, 'm-2'));
+      expect(trailing?.status).toBe('failed');
+
+      // A redelivery of the trailing id dispatches again instead of being
+      // rejected forever as a duplicate.
+      const redelivered = manager.enqueueInbound(uid, await base('m-2', 'part two'));
+      await vi.advanceTimersByTimeAsync(600);
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(2));
+      await expect(redelivered).resolves.toMatchObject({ accepted: true, duplicate: false });
+    } finally {
+      await manager.stopForUser(uid);
+      vi.useRealTimers();
+    }
   });
 });
 

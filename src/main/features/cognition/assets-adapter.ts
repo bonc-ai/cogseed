@@ -1,10 +1,8 @@
-import * as personalOntologyGroups from '../personal_ontology_groups';
-import { listAbilityAssets } from '../recall/asset-service';
-import * as p3394 from '../p3394';
+import { listFormalAssets } from '../recall/formal-assets';
+import { readInstalledSkillForAsset, readRecallSkillDraft } from '../recall/skill-draft-service';
 import { refMatchesAsset, relationRef, titleFromText } from './normalize';
 import { listCognitionCandidates } from './candidates-adapter';
 import { listCognitionReuseReceipts } from './receipts-adapter';
-import type { CompatExperienceCandidate } from '../p3394';
 import type { CognitionAssetSummary, CognitionAssetType } from './types';
 
 export interface ListCognitionAssetsFilter {
@@ -26,42 +24,81 @@ function baseAsset(input: Omit<CognitionAssetSummary, 'relationRefs' | 'candidat
   };
 }
 
-function mapExperienceCandidate(row: CompatExperienceCandidate): CognitionAssetSummary {
-  return baseAsset({
-    id: `candidate:${row.id}`,
-    type: 'rule',
-    category: 'rule',
-    title: titleFromText(row.summary, row.id),
-    source: 'p3394_experience_candidate',
-    status: row.status === 'approved' ? 'active' : row.status === 'rejected' ? 'revoked' : 'candidate',
-    maturity: row.status === 'approved' ? 'transfer_validated' : 'bud',
-    owner: 'local_user',
-    scope: row.conversation_id || 'current_project',
-    candidateRefs: [`p3394_experience:${row.id}`],
-    relationRefs: [relationRef('execution', row.source_run_id, row.summary)],
-  });
-}
-
 export async function listCognitionAssets(
   userId: string,
   filter: ListCognitionAssetsFilter = {},
 ): Promise<CognitionAssetSummary[]> {
   const category = filter.category || filter.type;
   const items: CognitionAssetSummary[] = [];
-  const formalAssets = await listAbilityAssets(userId);
+  // 唯一读口：canonical 层已经保证出来的每一条都是四类正式资产，
+  // 这里只做形状转换，不再自己判断"哪些算资产"。
+  const formalAssets = (await listFormalAssets(userId)).map((asset) => asset.record);
+  const generatedSkillIds = new Map(await Promise.all(formalAssets
+    .filter((asset) => asset.type === 'skill_method')
+    .map(async (asset) => {
+      try { return [asset.id, await readInstalledSkillForAsset(userId, asset.id)] as const; }
+      catch { return [asset.id, undefined] as const; }
+    })));
+  const skillDrafts = new Map(await Promise.all(formalAssets
+    .filter((asset) => asset.type === 'skill_method')
+    .map(async (asset) => {
+      try { return [asset.id, await readRecallSkillDraft(userId, asset.id)] as const; }
+      catch { return [asset.id, undefined] as const; }
+    })));
   for (const asset of formalAssets) {
     if (category && asset.type !== category) continue;
+    const skillDraft = skillDrafts.get(asset.id);
+    const currentSkillDraft = skillDraft?.sourceAssetVersion === asset.version ? skillDraft : undefined;
     items.push(baseAsset({
       id: asset.id,
       type: asset.type,
       category: asset.type,
       title: asset.title,
+      summary: asset.statement,
       source: 'recall_ability_asset',
+      lifecycleStatus: asset.lifecycleStatus,
       version: asset.version,
       status: asset.status,
       maturity: asset.maturity,
       owner: asset.ownerId,
       scope: asset.scope,
+      ...(asset.scopePolicy ? { scopePolicy: asset.scopePolicy } : {}),
+      ...(asset.recommendedAction ? { recommendedAction: asset.recommendedAction } : {}),
+      ...(asset.recommendationReason ? { recommendationReason: asset.recommendationReason } : {}),
+      ...(asset.recommendationAt ? { recommendationAt: asset.recommendationAt } : {}),
+      ...(generatedSkillIds.get(asset.id) ? { generatedSkillId: generatedSkillIds.get(asset.id) } : {}),
+      ...(currentSkillDraft?.status === 'draft' ? { recallSkillDraftStatus: 'draft' as const } : {}),
+      ...(currentSkillDraft?.status === 'draft' ? {
+        recallSkillDraft: {
+          draftHash: currentSkillDraft.draftHash,
+          fileCount: currentSkillDraft.files.length,
+          workflowSteps: currentSkillDraft.proposal?.workflowSteps || [],
+          validationOk: currentSkillDraft.validation.ok,
+          mode: currentSkillDraft.mode,
+          ...(currentSkillDraft.reviewDecision ? { reviewDecision: currentSkillDraft.reviewDecision } : {}),
+          targetSkillId: currentSkillDraft.targetSkillId,
+          ...(currentSkillDraft.baseRevisionId ? { baseRevisionId: currentSkillDraft.baseRevisionId } : {}),
+          ...(currentSkillDraft.baseManifestHash ? { baseManifestHash: currentSkillDraft.baseManifestHash } : {}),
+          ...(currentSkillDraft.diff ? {
+            diffSummary: {
+              added: currentSkillDraft.diff.added,
+              modified: currentSkillDraft.diff.modified,
+              deleted: currentSkillDraft.diff.deleted,
+              unchanged: currentSkillDraft.diff.unchanged,
+            },
+          } : {}),
+          ...(currentSkillDraft.recallContext ? {
+            recallContext: {
+              assetCount: currentSkillDraft.recallContext.assetIds.length,
+              sourceCount: currentSkillDraft.recallContext.sourceRefs.length,
+            },
+          } : {}),
+        },
+      } : {}),
+      ...(currentSkillDraft?.status === 'failed' ? {
+        recallSkillDraftStatus: 'failed' as const,
+        recallSkillDraftErrorCode: currentSkillDraft.errorCode,
+      } : {}),
       candidateRefs: [asset.candidateId],
       relationRefs: asset.evidenceRefs.map((ref) => relationRef(
         ref.kind === 'artifact_file'
@@ -73,8 +110,6 @@ export async function listCognitionAssets(
             ? ref.subtype === 'evaluation' ? 'evaluation' : 'execution'
             : ref.kind === 'execution'
               ? 'execution'
-              : ref.kind === 'p3394_experience'
-                ? 'evaluation'
                 : ref.kind === 'conversation' || ref.kind === 'message'
               ? 'conversation'
                   : ref.kind === 'ontology'
@@ -86,28 +121,13 @@ export async function listCognitionAssets(
     }));
   }
 
-  if (!category || category === 'personal') {
-    const groups = await personalOntologyGroups.listGroups(userId);
-    for (const group of groups) {
-      items.push(baseAsset({
-        id: `CA-PERSONAL-${group.group_id}`,
-        type: 'personal',
-        category: 'personal',
-        title: group.title,
-        source: 'personal_ontology',
-        status: 'active',
-        maturity: 'transfer_validated',
-        owner: 'local_user',
-        scope: group.rel_path || 'personal',
-        relationRefs: [relationRef('ontology', group.group_id, group.title)],
-      }));
-    }
-  }
-
-  if (!category || category === 'rule') {
-    const experiences = await p3394.listExperienceCandidates(userId);
-    items.push(...experiences.map(mapExperienceCandidate));
-  }
+  // 个人本体「分组」不是正式能力资产。按 PRD 3.3 它属于非资产支撑对象，
+  // 不占用四类一级分类，也不参与成熟度与认知树成长；曾经在这里合成
+  // `CA-PERSONAL-*` 条目并硬编码 maturity: 'transfer_validated'，既污染了
+  // 资产边界，又在没有 TransferProof / Receipt 的情况下伪造了成熟度
+  // （PRD 3.6 Transfer Verified 要求真实加载 + 生成 Receipt）。
+  // 分组的入口在「我的资产」的 personal 分类里（personal-ontology.js 展开），
+  // 不需要在资产列表里重复出现一条。
 
   await enrichAssetCounts(userId, items);
 

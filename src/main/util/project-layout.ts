@@ -27,6 +27,8 @@ import {
   artifactDir,
   projectChatArtifactCidDir,
   projectArtifactDir,
+  spaceChatArtifactCidDir,
+  spaceArtifactDir,
   userAutoTasksDir,
   autoTaskDir,
   autoTaskConfigFile,
@@ -268,29 +270,39 @@ export function projectSessionRoots(uid: string, cid: string): string[] {
   return pid ? [projectSessionsDir(uid, pid), userSessionsDir(uid)] : [userSessionsDir(uid)];
 }
 
-export function chatAttachmentDirForConversation(uid: string, cid: string, projectHint?: string | null): string {
+export function chatAttachmentDirForConversation(uid: string, cid: string, projectHint?: string | null, spaceHint?: string | null): string {
+  // 与主流 coding agent 保持一致：聊天上传的附件不进空间文件夹（空间文件夹
+  // 只放 AI 产物），统一落全局 cloud/chat_attachments/<cid>/（项目作用域保留）。
+  // spaceHint 保留在签名中供调用方透传，但不再影响落位。
+  void spaceHint;
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid ? projectChatAttachmentDir(uid, pid, cid) : chatAttachmentDir(uid, cid);
 }
 
-export function chatAttachmentRelPath(uid: string, cid: string, name: string, projectHint?: string | null): string {
+export function chatAttachmentRelPath(uid: string, cid: string, name: string, projectHint?: string | null, spaceHint?: string | null): string {
+  void spaceHint;
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid
     ? `cloud/projects/${pid}/chat_attachments/${cid}/${name}`
     : `cloud/chat_attachments/${cid}/${name}`;
 }
 
-export function chatArtifactCidDirForConversation(uid: string, cid: string, projectHint?: string | null): string {
+export function chatArtifactCidDirForConversation(uid: string, cid: string, projectHint?: string | null, spaceHint?: string | null): string {
+  if (spaceHint && safeId(spaceHint)) return spaceChatArtifactCidDir(uid, spaceHint, cid);
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid ? projectChatArtifactCidDir(uid, pid, cid) : chatArtifactCidDir(uid, cid);
 }
 
-export function artifactDirForConversation(uid: string, cid: string, artifactId: string, projectHint?: string | null): string {
+export function artifactDirForConversation(uid: string, cid: string, artifactId: string, projectHint?: string | null, spaceHint?: string | null): string {
+  if (spaceHint && safeId(spaceHint)) return spaceArtifactDir(uid, spaceHint, cid, artifactId);
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid ? projectArtifactDir(uid, pid, cid, artifactId) : artifactDir(uid, cid, artifactId);
 }
 
-export function chatArtifactRelPath(uid: string, cid: string, artifactId: string, rel = '', projectHint?: string | null): string {
+export function chatArtifactRelPath(uid: string, cid: string, artifactId: string, rel = '', projectHint?: string | null, spaceHint?: string | null): string {
+  if (spaceHint && safeId(spaceHint)) {
+    return ['cloud/spaces', spaceHint, 'chat_artifacts', cid, artifactId, rel].filter(Boolean).join('/');
+  }
   const pid = projectIdForConversationHint(uid, cid, projectHint);
   return pid
     ? ['cloud/projects', pid, 'chat_artifacts', cid, artifactId, rel].filter(Boolean).join('/')

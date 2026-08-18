@@ -44,9 +44,69 @@ import { app } from 'electron';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 import { sha256OfFile } from '../util/sha256';
 import { marketplaceContentTreeHash } from '../util/marketplace-tree-hash';
+import { writeInstallReceipt } from './skill_trust';
+import { topViolationOf } from './skill_reverify';
+import {
+  scanSkillDir, scanVerdictBlocksInstall, scanVerdictAllowsOverride,
+  resolveInstallDecision, type SentryScanResult, type SkillSource,
+} from './security/sentry-adapter';
+
+/**
+ * One-line, machine-readable reason for a security block.
+ *
+ * Reports attack-surface counts and rule ids only — never the matched source
+ * text. The spec requires a high-risk message to state the risk type and impact
+ * "without exposing the sensitive original text", since that text may itself be
+ * a leaked credential.
+ */
+function _securityBlockReason(scan: SentryScanResult): string {
+  if (scan.localRedLines?.length) return `red lines: ${scan.localRedLines.join(', ')}`;
+  if (scan.hardBlocked) return 'hard-block red line (suspected data exfiltration)';
+  const parts: string[] = [];
+  // Absent when nothing was measured (`unknown` / `scanner_absent`), so this is
+  // guarded rather than zero-filled upstream: a zeroed surface would read as
+  // "scanned, nothing found" and explain a rejection with counts of zero.
+  const s = scan.attackSurface;
+  if (s && s.egressPoints > 0) parts.push(`${s.egressPoints} network egress point(s)`);
+  if (s && s.dynamicExecPoints > 0) parts.push(`${s.dynamicExecPoints} dynamic execution point(s)`);
+  if (s && s.persistencePoints > 0) parts.push(`${s.persistencePoints} persistence point(s)`);
+  if (parts.length) return parts.join('; ');
+  return scan.riskClassification || scan.recommendation || 'security scan rejected';
+}
+
+/**
+ * Build the error thrown when the deep scan rejects an install.
+ *
+ * Carries the structured verdict on the error so the IPC layer and renderer can
+ * render the spec's risk card (§5.2) instead of only a message string. Mirrors
+ * `_qualityInstallError`'s shape so both gates surface the same way.
+ */
+function _securityInstallError(
+  skillId: string, name: string, scan: SentryScanResult, kindLabel: 'skill' | 'agent' = 'skill',
+): Error {
+  const unavailable = scan.outcome === 'unknown';
+  const e = new Error(unavailable
+    ? `Security check unavailable for ${kindLabel} ${name || skillId} (${scan.unavailableReason || 'unknown'})`
+    : `Security scan rejected ${kindLabel} ${name || skillId} (${_securityBlockReason(scan)})`);
+  (e as { securityBlocked?: boolean }).securityBlocked = !unavailable;
+  (e as { securityUnavailable?: boolean }).securityUnavailable = unavailable;
+  (e as { securitySkillId?: string }).securitySkillId = skillId;
+  (e as { securityScan?: SentryScanResult }).securityScan = scan;
+  // Whether the renderer may offer "install anyway". Computed here, next to the
+  // verdict, rather than re-derived in the UI: a second copy of the
+  // non-overridable rule set is how an exfiltration finding eventually becomes
+  // waivable in one place and not the other.
+  (e as { securityOverridable?: boolean }).securityOverridable =
+    scanVerdictAllowsOverride(scan);
+  // Rule ids drive the plain-language explanation, so the dialog can say what was
+  // found instead of only that something was.
+  (e as { securityRuleIds?: string[] }).securityRuleIds = [...(scan.localRedLines || [])];
+  return e;
+}
 import { logPathRef } from '../util/log-redact';
 import { fetchWithRetry } from '../util/retry';
 import {
@@ -65,6 +125,46 @@ import {
   userMarketplaceDirCloud,
 } from '../paths';
 import { getActiveUserId, isAnonymousLocalId } from './users';
+
+import { registerDeferred } from '../util/boot_init';
+
+/**
+ * Remove orphaned quarantine staging/trash dirs left by an install killed
+ * between materialize and promote. Registered as boot-phase work (W2): only
+ * dot-prefixed staging/trash names under the marketplace skills root are
+ * touched, so a crash can never strand content where the loader would see it.
+ */
+/** Staging dir name for the quarantine flow. Exported so a test can pin that
+ *  the name never collides with the context-demotion words (`test`, `vendor`,
+ *  ...): a future absolute-path classifier would otherwise silently demote the
+ *  whole scan, laundering a payload parked in the staging dir name. */
+export function quarantineStagingName(hex: string): string {
+  return `.staging-${hex}`;
+}
+
+export function cleanupOrphanedStagingDirs(uid: string): void {
+  const root = userMarketplaceSkillsDir(uid);
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    if (!e.name.startsWith('.staging-') && !e.name.startsWith('.trash-')) continue;
+    try {
+      fs.rmSync(path.join(root, e.name), { recursive: true, force: true });
+      log.info('cleaned orphaned staging dir', { dir: e.name });
+    } catch (err) {
+      log.warn('failed to clean orphaned staging dir', { dir: e.name, error: String(err) });
+    }
+  }
+}
+
+registerDeferred('marketplace:cleanup-staging', () => {
+  try {
+    cleanupOrphanedStagingDirs(getActiveUserId());
+  } catch {
+    // No active user yet — nothing to clean.
+  }
+});
 import { withCommonHeaders } from './api_common';
 import { getLanguage } from './config';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
@@ -433,7 +533,22 @@ type MarketplaceFreshness = {
   updated_at?: number;
 } & MinAppVersionSource;
 type MarketplaceInstallKind = 'agent' | 'skill';
-type MarketplaceInstallOpts = { force?: boolean; name?: string };
+type MarketplaceInstallOpts = {
+  force?: boolean;
+  name?: string;
+  /**
+   * The user was shown the risk and chose to install anyway.
+   *
+   * Distinct from `force`, which predates this and gates unrelated things
+   * (dependency propagation, advisories that never blocked). Reusing it would
+   * have made every existing `force: true` caller silently accept security
+   * risk — and `force` is set by ordinary retry paths.
+   *
+   * Honoured only where `scanVerdictAllowsOverride` agrees, so a caller passing
+   * this cannot buy past a red line by asserting consent.
+   */
+  acceptSecurityRisk?: boolean;
+};
 
 function _currentAppVersion(): string {
   try { return app.getVersion(); } catch { return ''; }
@@ -505,8 +620,21 @@ export function getMarketplaceInstallErrorInfo(err: unknown): {
   appUpdateRequired?: boolean;
   minAppVersion?: string;
   currentAppVersion?: string;
+  securityBlocked?: boolean;
+  securityUnavailable?: boolean;
+  securityOverridable?: boolean;
+  securityScan?: unknown;
+  securityRuleIds?: string[];
 } {
-  const e = err as Partial<MarketplaceInstallError> & { message?: string; qualityReport?: QualityReport };
+  const e = err as Partial<MarketplaceInstallError> & {
+    message?: string;
+    qualityReport?: QualityReport;
+    securityBlocked?: boolean;
+    securityUnavailable?: boolean;
+    securityOverridable?: boolean;
+    securityScan?: unknown;
+    securityRuleIds?: string[];
+  };
   return {
     kind: e.marketplaceKind,
     id: e.marketplaceId,
@@ -518,6 +646,18 @@ export function getMarketplaceInstallErrorInfo(err: unknown): {
       minAppVersion: e.minAppVersion || '',
       currentAppVersion: e.currentAppVersion || '',
     } : {}),
+    // The scan verdict is part of the install-failure contract, not a separate
+    // channel: the renderer's risk card reads these fields off the invoke
+    // response. Dropped here once before by a refactor, which silently reduced
+    // every security refusal to a generic failure alert — the card existed but
+    // could never fire.
+    ...(e.securityBlocked === true ? { securityBlocked: true } : {}),
+    ...(e.securityUnavailable === true ? { securityUnavailable: true } : {}),
+    ...(e.securityOverridable === true ? { securityOverridable: true } : {}),
+    ...(e.securityScan ? { securityScan: e.securityScan } : {}),
+    ...(Array.isArray(e.securityRuleIds) && e.securityRuleIds.length
+      ? { securityRuleIds: e.securityRuleIds }
+      : {}),
   };
 }
 
@@ -532,6 +672,32 @@ function _wrapMarketplaceInstallError(
   const wrapped = new MarketplaceInstallError(kind, id, name, reason);
   const qualityReport = (err as { qualityReport?: QualityReport })?.qualityReport;
   if (qualityReport) (wrapped as { qualityReport?: QualityReport }).qualityReport = qualityReport;
+  // The security verdict fields ride on the same error as the quality report:
+  // the IPC layer reads them via `getMarketplaceInstallErrorInfo`, and the
+  // renderer's risk card keys off them. Wrapping without copying is how the
+  // card silently became unreachable — `_securityInstallError` sets them, and
+  // this wrapper is the next hop on every install path.
+  const sec = err as {
+    securityBlocked?: boolean;
+    securityUnavailable?: boolean;
+    securityOverridable?: boolean;
+    securityScan?: unknown;
+    securityRuleIds?: string[];
+  };
+  const target = wrapped as typeof wrapped & {
+    securityBlocked?: boolean;
+    securityUnavailable?: boolean;
+    securityOverridable?: boolean;
+    securityScan?: unknown;
+    securityRuleIds?: string[];
+  };
+  if (sec.securityBlocked === true) target.securityBlocked = true;
+  if (sec.securityUnavailable === true) target.securityUnavailable = true;
+  if (sec.securityOverridable === true) target.securityOverridable = true;
+  if (sec.securityScan) target.securityScan = sec.securityScan;
+  if (Array.isArray(sec.securityRuleIds) && sec.securityRuleIds.length) {
+    target.securityRuleIds = sec.securityRuleIds;
+  }
   return wrapped;
 }
 
@@ -814,7 +980,7 @@ async function _installMarketplaceAgentLocked(
     // `report.ok === false` means an EXTREME violation, and EXTREME is not
     // user-overridable (see `quality/README.md`) — `force` must not reach it.
     // See `_assertQualityGatePassed` for why force is deliberately ignored here.
-    _assertQualityGatePassed('agent', agentId, preReport);
+    _assertQualityGatePassed('agent', agentId, preReport, opts.acceptSecurityRisk === true);
     // 4. Now materialize the agent: cache content → `<uid>/local/marketplace/agents/<id>/`.
     //    `_install.json` is a version pin read by `marketplace_reconcile.ts::_agentNeedsPull`
     //    on other devices to skip a re-pull when their local copy already matches the manifest's
@@ -828,6 +994,57 @@ async function _installMarketplaceAgentLocked(
       const privateSkillsDir = userMarketplaceAgentSkillsDir(getActiveUserId(), agentId);
       await fsp.mkdir(privateSkillsDir, { recursive: true });
       extractBundleSafely(privateSkillsZip, privateSkillsDir);
+    }
+    // 4b. Deep security scan for the agent's private skill bundle. Private
+    //     skills bypass the standalone skill install path (and its deep scan),
+    //     so they are scanned here, before the success marker (`_install.json`)
+    //     is written. Same contract as the skill path: `blocked` / `unknown`
+    //     roll the whole agent install back, and the refusal is reported as the
+    //     worst verdict seen. `restricted` / `pass` admit.
+    //
+    //     Receipts for private skills are deliberately NOT written here: their
+    //     trust keys need `(agentId, skillId)` disambiguation (a private skill
+    //     id can shadow a standalone install), which lands with the private
+    //     load-gate work — writing standard-keyed receipts now would verify the
+    //     wrong bytes later.
+    if (privateSkillsZip) {
+      const privateSkillsDir = userMarketplaceAgentSkillsDir(getActiveUserId(), agentId);
+      const sourceTier: SkillSource = String(detail.create_uid || '') === '0'
+        ? 'official'
+        : 'community';
+      const entries = await fsp.readdir(privateSkillsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const skillDir = path.join(privateSkillsDir, entry.name);
+        const scan = await scanSkillDir(skillDir, sourceTier);
+        if (scanVerdictBlocksInstall(scan.outcome)) {
+          // Roll back before throwing: a rejected agent leaves nothing on disk,
+          // the same rule as the skill path ("formal assets unchanged").
+          await fsp.rm(target, { recursive: true, force: true });
+          await fsp.rm(privateSkillsDir, { recursive: true, force: true });
+          throw _securityInstallError(agentId, agentName || agentId, scan, 'agent');
+        }
+        // W3: receipt keyed by (agentId, skillId) so the private load gate
+        // verifies THIS tree, never a same-named standalone install.
+        const privateTreeHash = marketplaceContentTreeHash(skillDir);
+        if (privateTreeHash) {
+          const privateReport = validateSkillDir(skillDir, { enforceSkillRunner: false });
+          const top = topViolationOf(privateReport.violations);
+          writeInstallReceipt(
+            getActiveUserId(), entry.name, privateTreeHash, scan,
+            {
+              violationCount: privateReport.violations.length,
+              ...(top?.rule ? { topRule: top.rule } : {}),
+              ...(top?.level ? { topLevel: top.level } : {}),
+            },
+            agentId,
+            skillDir,
+          );
+        }
+        log.info('agent private skill scanned', {
+          agentId, skill: entry.name, outcome: scan.outcome, score: scan.score ?? null,
+        });
+      }
     }
     // `_install.json` stores everything the in-app UI needs without re-hitting the network:
     // version/freshness timestamp for reconcile; create_uid for the author badge on the
@@ -888,7 +1105,7 @@ export async function installMarketplaceSkill(
 
 async function _installMarketplaceSkillLocked(
   skillId: string, expect: MarketplaceFreshness, opts: MarketplaceInstallOpts = {},
-): Promise<{ ok: true; id: string }> {
+): Promise<{ ok: true; id: string; securityScan?: SentryScanResult }> {
   if (!skillId) throw new Error('skillId required');
   let skillName = opts.name || '';
   try {
@@ -918,49 +1135,147 @@ async function _installMarketplaceSkillLocked(
     const cacheDir = getSkillCacheDir(skillId);
     const uid = getActiveUserId();
     const target = userMarketplaceSkillDir(uid, skillId);
-    await fsp.rm(target, { recursive: true, force: true });
-    await fsp.mkdir(target, { recursive: true });
-    await withMarketplaceCacheLock(uid, 'skill', skillId, async () => {
-      await _copyDirSkippingCacheMeta(cacheDir, target);
-    });
-
-    // Quality gate on the materialized dir (rule scope = SKILL.md +
-    // scripts/*). EXTREME violations → roll back the install dir + persist
-    // the failed report + throw. MEDIUM passes through but the report is
-    // persisted so the UI advisory chip shows.
-    const skillReport = validateSkillDir(target, {
-      // Installation restores published bytes verbatim. Runner compatibility
-      // is enforced while authoring/publishing, not retroactively on install.
-      enforceSkillRunner: false,
-    });
-    await persistQualityReport({
-      uid: getActiveUserId(), kind: 'skill', id: skillId, report: skillReport,
-    });
-    if (!skillReport.ok) {
-      await fsp.rm(target, { recursive: true, force: true });
-      _assertQualityGatePassed('skill', skillId, skillReport);
-    }
-
-    const skillContentSha = sha256OfFile(path.join(target, 'SKILL.md'));
-    const skillTreeHash = marketplaceContentTreeHash(target);
+    // Quarantine (W2): materialize into a dot-prefixed staging dir beside the
+    // final location, gate it there, and only `rename` it into place on pass.
+    // The previous flow wrote to the final path and `rm -rf`'d on refusal — a
+    // process killed in that window left the unverified content installed.
+    //
+    // Staging sits under the same marketplace skills root so `rename` never
+    // crosses filesystems. The dot prefix keeps every enumeration path
+    // (loader, listings, tree hash) from seeing a half-installed skill, and
+    // the name deliberately avoids the context-demotion words (`test`,
+    // `vendor`, ...) so a future absolute-path classifier cannot silently
+    // demote the whole scan — locked by a test in marketplace.test.ts.
+    const skillsRoot = userMarketplaceSkillsDir(uid);
+    const staging = path.join(skillsRoot, quarantineStagingName(randomBytes(6).toString('hex')));
     const installedAt = Date.now();
-    await fsp.writeFile(path.join(target, '_install.json'),
-      JSON.stringify({
-        version: detail.version,
-        published_at: detail.published_at,
-        ...(typeof detail.updated_at === 'number' ? { updated_at: detail.updated_at } : {}),
-        bundle_url: detail.bundle_url,
-        installed_at: installedAt,
-        create_uid: detail.create_uid || '',
-        ...(typeof detail.default_install === 'boolean' ? { default_install: detail.default_install } : {}),
-        ...(typeof detail.is_open_source === 'boolean' ? { is_open_source: detail.is_open_source } : {}),
-        ...(detail.status ? { status: detail.status } : {}),
-        ...(detail.min_app_version ? { min_app_version: detail.min_app_version } : {}),
-        ...(skillContentSha ? { content_sha: skillContentSha } : {}),
-        ...(skillTreeHash ? { content_tree_hash: skillTreeHash } : {}),
-      }, null, 2), 'utf8');
-    await touchCacheEntry('skill', skillId);
-    invalidateCoreAgentSkills();
+    await fsp.mkdir(staging, { recursive: true });
+    let admittedScan: SentryScanResult | undefined;
+    try {
+      await withMarketplaceCacheLock(uid, 'skill', skillId, async () => {
+        await _copyDirSkippingCacheMeta(cacheDir, staging);
+      });
+
+      // Quality gate on the staged tree (rule scope = SKILL.md + scripts/*).
+      // EXTREME violations → remove staging + persist the failed report +
+      // throw. MEDIUM passes through but the report is persisted so the UI
+      // advisory chip shows. The final location is never touched.
+      const skillReport = validateSkillDir(staging, {
+        // Installation restores published bytes verbatim. Runner compatibility
+        // is enforced while authoring/publishing, not retroactively on install.
+        enforceSkillRunner: false,
+      });
+      await persistQualityReport({
+        uid: getActiveUserId(), kind: 'skill', id: skillId, report: skillReport,
+      });
+      if (!skillReport.ok) {
+        await fsp.rm(staging, { recursive: true, force: true });
+        _assertQualityGatePassed('skill', skillId, skillReport, opts.acceptSecurityRisk === true);
+      }
+
+      const skillContentSha = sha256OfFile(path.join(staging, 'SKILL.md'));
+      const skillTreeHash = marketplaceContentTreeHash(staging);
+
+      // Deep security scan (skill-sentry + our EXTREME red lines). Runs after the
+      // structural gate above because a skill that fails structurally is already
+      // rolled back; this one decides whether structurally-valid content is safe.
+      //
+      // Source tier drives the threshold: platform-published skills
+      // (`create_uid === '0'`) are only rejected on an outright DO_NOT_INSTALL,
+      // while community uploads are also held back at CAUTION. Unknown
+      // provenance falls to the stricter tier, never the looser one.
+      const sourceTier: SkillSource = String(detail.create_uid || '') === '0'
+        ? 'official'
+        : 'community';
+      const scan = await scanSkillDir(staging, sourceTier);
+      // An informed user may accept a refusal the gate is willing to have waived —
+      // currently only a scanner outage, never a red line. Checked through
+      // `scanVerdictAllowsOverride` rather than trusting the flag, so consent
+      // cannot be asserted for something that was never overridable.
+      const decision = resolveInstallDecision(scan, opts.acceptSecurityRisk === true);
+      const overridden = decision.overridden;
+      if (overridden) {
+        log.warn('install proceeding on user security override', {
+          skillId, outcome: scan.outcome,
+        });
+      }
+      if (!decision.allowed) {
+        // Remove staging before throwing so a rejected skill leaves nothing on
+        // disk — the spec requires "formal assets unchanged" after a
+        // high-risk block. The final location was never touched.
+        //
+        // `unknown` rolls back too (fail closed, spec §6.2: a new executable
+        // asset whose check could not run is not installed), but is flagged
+        // separately on the error so the UI can say "check unavailable" rather
+        // than "malicious" — conflating the two would train users to dismiss
+        // real blocks.
+        await fsp.rm(staging, { recursive: true, force: true });
+        throw _securityInstallError(skillId, skillName, scan);
+      }
+
+      admittedScan = scan;
+      // Promote: swap the verified tree into the final location. An existing
+      // install moves to a dot-prefixed trash first, so `rename` onto a
+      // non-empty directory cannot silently nest the new tree inside the old.
+      const trash = path.join(skillsRoot, `.trash-${randomBytes(6).toString('hex')}`);
+      if (fs.existsSync(target)) await fsp.rename(target, trash);
+      await fsp.rename(staging, target);
+      await fsp.rm(trash, { recursive: true, force: true });
+
+      // Bind this verdict to the exact bytes and ruleset that produced it, so a
+      // later edit or a ruleset upgrade makes the verdict provably stale instead
+      // of silently standing forever. Reuses the report above rather than
+      // rescanning: the receipt must record the verdict that actually gated the
+      // install, not a second opinion.
+      if (skillTreeHash) {
+        // Top finding computed by severity, not by position: the validator
+        // returns violations in scan order, so `violations[0]` is only
+        // incidentally the most severe one.
+        const top = topViolationOf(skillReport.violations);
+        // Shared with the custom-import path so the two cannot drift; it swallows
+        // its own failures, since a receipt is an audit aid and not part of the
+        // gate the install already passed.
+        writeInstallReceipt(
+          getActiveUserId(), skillId, skillTreeHash,
+          // The override rides on the scan so the receipt records what was waived,
+          // not merely that something was.
+          overridden
+            ? { ...scan, userOverride: { outcome: scan.outcome, at: Date.now() } }
+            : scan,
+          {
+            violationCount: skillReport.violations.length,
+            ...(top?.rule ? { topRule: top.rule } : {}),
+            ...(top?.level ? { topLevel: top.level } : {}),
+          },
+          undefined,
+          target,
+        );
+      }
+      await fsp.writeFile(path.join(target, '_install.json'),
+        JSON.stringify({
+          version: detail.version,
+          published_at: detail.published_at,
+          ...(typeof detail.updated_at === 'number' ? { updated_at: detail.updated_at } : {}),
+          bundle_url: detail.bundle_url,
+          installed_at: installedAt,
+          create_uid: detail.create_uid || '',
+          ...(typeof detail.default_install === 'boolean' ? { default_install: detail.default_install } : {}),
+          ...(typeof detail.is_open_source === 'boolean' ? { is_open_source: detail.is_open_source } : {}),
+          ...(detail.status ? { status: detail.status } : {}),
+          ...(detail.min_app_version ? { min_app_version: detail.min_app_version } : {}),
+          ...(skillContentSha ? { content_sha: skillContentSha } : {}),
+          ...(skillTreeHash ? { content_tree_hash: skillTreeHash } : {}),
+        }, null, 2), 'utf8');
+      await touchCacheEntry('skill', skillId);
+      invalidateCoreAgentSkills();
+    } catch (err) {
+      // Safety net: a refusal, an engine crash, or a killed process between
+      // materialize and promote must never leave the unverified tree on disk.
+      // Idempotent — the refusal paths above may already have removed it, and
+      // after promotion the staging path no longer exists.
+      await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
+      throw err;
+    }
 
     await addSkillInstall(getActiveUserId(), {
       id: skillId, version: detail.version, published_at: detail.published_at,
@@ -972,7 +1287,10 @@ async function _installMarketplaceSkillLocked(
       min_app_version: detail.min_app_version || '',
     });
     log.info('installed marketplace skill', { skillId, version: detail.version, target: logPathRef(target) });
-    return { ok: true, id: skillId };
+    // W5: a restricted (Medium) verdict rides on the success response so the
+    // renderer can show ONE quiet notice. No new dialog — the install succeeded,
+    // and the risk card already lives on the skill's security panel.
+    return { ok: true, id: skillId, ...(admittedScan?.outcome === 'restricted' ? { securityScan: admittedScan } : {}) };
   } catch (err) {
     throw _wrapMarketplaceInstallError('skill', skillId, skillName, err);
   }
@@ -1004,6 +1322,11 @@ function _qualityInstallError(
   const e = new Error(`Quality validation rejected ${kind} ${id} (${reason})`);
   (e as { qualityKind?: string }).qualityKind = kind;
   (e as { qualityId?: string }).qualityId = id;
+  // Rule ids drive the plain-language risk list in the confirm dialog, so the
+  // user is told what was found rather than only that something was.
+  (e as { qualityRuleIds?: string[] }).qualityRuleIds =
+    [...new Set(blockingViolations.map((v) => v.rule).filter(Boolean))];
+  (e as { qualityOverridable?: boolean }).qualityOverridable = true;
   (e as { qualityReport?: QualityReport }).qualityReport = {
     ...report,
     ok: false,
@@ -1032,8 +1355,19 @@ function _qualityInstallError(
  */
 function _assertQualityGatePassed(
   kind: 'agent' | 'skill', id: string, report: QualityReport,
+  acceptRedFlagRisk = false,
 ): void {
   if (report.ok) return;
+  // An informed user may proceed. This reverses the previous absolute rule; see
+  // `quality/README.md` for why, and for what the earlier rule was protecting
+  // against. The consent must be explicit and per-install — it is never implied
+  // by `force`, which ordinary retry paths set for unrelated reasons.
+  if (acceptRedFlagRisk) {
+    log.warn('install proceeding on user red-flag override', {
+      kind, id, rules: report.violations.filter((v) => v.level === 'EXTREME').map((v) => v.rule),
+    });
+    return;
+  }
   throw _qualityInstallError(kind, id, report);
 }
 

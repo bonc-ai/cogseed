@@ -7,36 +7,40 @@ const source = fs.readFileSync(
   path.join(__dirname, '../../src/renderer/modules/conversation.js'),
   'utf8',
 );
+const utilsSource = fs.readFileSync(
+  path.join(__dirname, '../../src/renderer/modules/utils.js'),
+  'utf8',
+);
 const artifactSource = fs.readFileSync(
   path.join(__dirname, '../../src/renderer/modules/chat-artifact.js'),
   'utf8',
 );
 
-function extractFunction(name: string): string {
+function extractFunction(name: string, functionSource = source): string {
   const marker = `function ${name}`;
-  let start = source.indexOf(marker);
+  let start = functionSource.indexOf(marker);
   if (start < 0) throw new Error(`missing function: ${name}`);
-  if (source.slice(Math.max(0, start - 6), start) === 'async ') start -= 6;
-  const paramsStart = source.indexOf('(', start);
+  if (functionSource.slice(Math.max(0, start - 6), start) === 'async ') start -= 6;
+  const paramsStart = functionSource.indexOf('(', start);
   let parenDepth = 0;
   let bodyStart = -1;
-  for (let i = paramsStart; i < source.length; i += 1) {
-    if (source[i] === '(') parenDepth += 1;
-    else if (source[i] === ')') {
+  for (let i = paramsStart; i < functionSource.length; i += 1) {
+    if (functionSource[i] === '(') parenDepth += 1;
+    else if (functionSource[i] === ')') {
       parenDepth -= 1;
       if (parenDepth === 0) {
-        bodyStart = source.indexOf('{', i);
+        bodyStart = functionSource.indexOf('{', i);
         break;
       }
     }
   }
   if (bodyStart < 0) throw new Error(`missing body: ${name}`);
   let depth = 0;
-  for (let i = bodyStart; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1;
-    else if (source[i] === '}') {
+  for (let i = bodyStart; i < functionSource.length; i += 1) {
+    if (functionSource[i] === '{') depth += 1;
+    else if (functionSource[i] === '}') {
       depth -= 1;
-      if (depth === 0) return source.slice(start, i + 1);
+      if (depth === 0) return functionSource.slice(start, i + 1);
     }
   }
   throw new Error(`unterminated function: ${name}`);
@@ -45,8 +49,8 @@ function extractFunction(name: string): string {
 function loadHelpers(): any {
   const names = [
     '_conversationActionItems',
-    '_renderConversationMergeActionBar',
-    '_ensureConversationMergeActionBar',
+    '_conversationMergePickerMeta',
+    '_renderConversationMergePickerRows',
     '_copyNoticeBodyHtml',
     '_mergeSummarySectionLabel',
     '_renderMergeSummaryDetails',
@@ -54,7 +58,7 @@ function loadHelpers(): any {
   ];
   const sandbox = {
     conversations: [{ conversation_id: 'c1', title: 'Source task' }],
-    t(key: string, vars?: Record<string, number>) {
+    t(key: string, vars?: Record<string, any>) {
       const strings = {
         'chat.conv_copy_title': '复制会话',
         'chat.conv_pin_title': 'Pin',
@@ -63,30 +67,41 @@ function loadHelpers(): any {
         'chat.conv_del_title': 'Delete',
         'chat.merge.selected_count': `已选择 ${vars?.count || 0} 个会话`,
         'chat.merge.action': '合并为新会话',
+        'chat.merge.select_action': '选择并合并',
+        'chat.merge.picker_empty': '没有匹配的会话',
         'chat.merge.summary_title': `已合并 ${vars?.count || 0} 个会话`,
         'chat.merge.summary_subtitle': `${vars?.agentCount || 0} 个 Agent 的私有上下文已归并`,
         'chat.merge.expand': '查看合并摘要',
         'chat.merge.collapse': '收起合并摘要',
         'chat.merge.section.source_conversations': 'Source Conversations',
+        'chat.merge.section.context_scope': 'Context Scope',
         'chat.merge.section.confirmed_decisions': 'Confirmed Decisions',
         'chat.merge.section.current_state': 'Current State',
         'chat.merge.section.agent_private_context': 'Agent Private Context Index',
         'chat.merge.section.source_references': 'Source References',
         'chat.merge.section.open_questions': 'Open Questions',
         'chat.merge.section.conflicts_risks': 'Conflicts / Risks',
+        'chat.merge.scope_selected': 'Explicitly selected tasks only',
+        'chat.merge.scope_selected_result': `Selected ${vars?.count || 0} · ${vars?.range || ''}`,
+        'chat.merge.scope_actual_result': `Injected ${vars?.count || 0} · ${vars?.range || ''}`,
+        'chat.merge.scope_none': 'No matching messages',
       };
       return strings[key] || key;
     },
     escapeHtml: (value: unknown) => String(value),
+    _uiIconHtml: (name: string) => `<svg data-icon="${name}"></svg>`,
+    _conversationMergeSelection: new Set(['c2']),
+    _conversationActivityIso: (conversation: any) => conversation.last_active_at || '',
     _renderMessageMarkdown: (value: unknown) => String(value),
     _toggleConversationPinned() {},
     _startConversationHeaderRename() {},
     _renameConversation() {},
+    _enterConversationMergeSelection() {},
     _deleteConversationWithConfirm() {},
     _cloneConversationWithConfirm() {},
     document: { createElement() { return {}; }, getElementById() { return null; } },
   };
-  vm.runInNewContext(`${names.map(extractFunction).join('\n')}\nthis.helpers = { ${names.join(',')} };`, sandbox);
+  vm.runInNewContext(`${extractFunction('formatTime', utilsSource)}\n${names.map((name) => extractFunction(name)).join('\n')}\nthis.helpers = { ${names.join(',')} };`, sandbox);
   return sandbox.helpers;
 }
 
@@ -97,11 +112,23 @@ describe('conversation copy and merge renderer', () => {
     expect(labels).toContain('复制会话');
   });
 
-  it('renders the merge action bar for selected conversations', () => {
-    const { _renderConversationMergeActionBar } = loadHelpers();
-    const html = _renderConversationMergeActionBar(2);
-    expect(html).toContain('已选择 2 个会话');
-    expect(html).toContain('合并为新会话');
+  it('adds merge to the single-conversation menu', () => {
+    const { _conversationActionItems } = loadHelpers();
+    const items = _conversationActionItems('c1');
+    expect(items.map((item: any) => item.label)).toContain('选择并合并');
+    expect(items.find((item: any) => item.label === '选择并合并')?.action).toBe('merge');
+  });
+
+  it('renders selected conversations inside the merge picker', () => {
+    const { _renderConversationMergePickerRows } = loadHelpers();
+    const html = _renderConversationMergePickerRows([
+      { conversation_id: 'c1', title: 'First task' },
+      { conversation_id: 'c2', title: 'Second task' },
+    ]);
+    expect(html).toContain('data-merge-picker-cid="c1"');
+    expect(html).toContain('data-merge-picker-cid="c2"');
+    expect(html).toContain('conversation-merge-picker-row is-selected');
+    expect(html).toContain('data-icon="check"');
   });
 
   it('renders the merged summary card title and detail sections', () => {
@@ -110,13 +137,13 @@ describe('conversation copy and merge renderer', () => {
       kind: 'merge',
       sourceCount: 2,
       agentCount: 1,
-      summary: '## Source Conversations\n- A\n\n## Confirmed Decisions\n- Keep the API',
+      summary: '## Source Conversations\n- Source task\n\n## Confirmed Decisions\n- Keep the API',
     });
     expect(html).toContain('已合并 2 个会话');
     expect(html).toContain('Source Conversations');
     expect(html).toContain('Confirmed Decisions');
+    expect(html).toContain('Source task');
   });
-
 
   it('exits merge selection mode after a successful merge render', async () => {
     const sandbox: any = {

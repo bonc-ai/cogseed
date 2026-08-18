@@ -35,6 +35,7 @@ export type ToolGroup =
   | 'pdf'        // PDF rendering
   | 'office'     // Word / Excel / PowerPoint documents
   | 'kb'         // Library
+  | 'recall'     // ability assets (沉淀的认知资产)
   | 'chat'       // conversation history
   | 'image'      // image generation
   | 'video'      // video generation
@@ -42,6 +43,7 @@ export type ToolGroup =
   | 'connector'  // third-party services via MCP umbrella tools
   | 'expense'    // reimbursement flow, scoped to the canonical expense agent
   | 'messaging'  // proactive Feishu/Lark sends (Commander-only)
+  | 'p3394'      // P3394 agent-interop outbound (Commander-only)
   | 'meta';      // cross-session state
 
 export interface ToolCatalogEntry {
@@ -128,6 +130,9 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: 'kb_read',       group: 'kb', summary: 'Read source-text chunks from a Library file that kb_search has hit.' },
   { name: 'research_rerank', group: 'kb', ownerAgent: DEEP_RESEARCH_AGENT_IDS, summary: 'Semantically rerank candidate research passages against a sub-question by local embedding similarity — the second stage after the deep-research compress skill\'s lexical filter, surfacing on-topic passages that share no keywords. Read-only, local, no Tool Execution Access. Owned by the deep-research + data-research agents (hidden from the commander).' },
 
+  // Recall ability assets
+  { name: 'search_ability_assets', group: 'recall', summary: 'Semantic search over the user\'s ability asset pool (沉淀的可复用经验/规则/模板/方法；全量只读，含所有空间与全局资产).' },
+
   // Conversation history
   { name: 'chat_search',   group: 'chat', summary: 'Search prior messages for missing continuity context; project conversations default to same-project history.' },
   { name: 'chat_read',     group: 'chat', summary: 'Read nearby messages from a chat_search hit, or the latest messages from a known conversation.' },
@@ -157,12 +162,22 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   // recipients, credentials, chat ids, or open ids)
   { name: 'messaging_list_targets', group: 'messaging', summary: 'List configured Feishu/Lark bots and which can proactively message the configured owner (self); read-only diagnostics.' },
   { name: 'messaging_send', group: 'messaging', summary: 'Send a text message to the configured owner (self) through one Feishu/Lark bot, after the user approves a confirmation dialog.' },
+  { name: 'p3394_send', group: 'p3394', summary: 'Send a P3394 task to a registered peer Agent (e.g. hermes) and wait for its reply — agent-to-agent collaboration.' },
+  { name: 'p3394_peers', group: 'p3394', summary: 'List registered P3394 peer Agents: id, name, capabilities, locality, endpoints.' },
+  { name: 'p3394_sessions', group: 'p3394', summary: 'List the P3394 sessions opened from this conversation: session id, peer, goal, last used.' },
+
+  // Feishu companion surface (Commander-only — injected by runner.ts for
+  // gconv sessions with a resolved uid; read-only status + briefing write)
+  { name: 'feishu_dashboard', group: 'messaging', summary: 'Read the Feishu companion status: bot connection, authorization/sync state, and briefing configuration (sanitized).' },
+  { name: 'briefing_get', group: 'messaging', summary: 'Read the daily-briefing configuration: scheduled time, enabled state, recent delivery.' },
+  { name: 'briefing_schedule', group: 'messaging', summary: 'Set or change the daily briefing time (hour/minute); mutates user configuration.' },
+  { name: 'touchpoint_list', group: 'messaging', summary: 'List recent touchpoint notifications (intents) and the card actions the owner recorded.' },
+  { name: 'messaging_send_file', group: 'messaging', summary: 'Send a local file (md/doc/pdf/…) to the configured owner (self) through one Feishu/Lark bot, after confirmation; workspace/attachment-scoped paths only.' },
 
   // Task-local and cross-session state
   { name: 'manage_execution_plan', group: 'meta', summary: 'Manage the durable current-task objective and milestone statuses for long/tool-heavy work; session-local and independent of context summaries.' },
   { name: 'cross_session_memory', group: 'meta', summary: 'Read/write user profile, shared facts, and agent memory that persist across sessions.' },
   { name: 'project_instructions', group: 'meta', summary: "Replace the project's standing goal + rules (ORKAS.md, the Project instructions block); commander-only, project sessions." },
-  { name: 'project_tasks',        group: 'meta', summary: "Read/update the project's shared structured task backlog; project sessions only." },
   { name: 'metacognition',        group: 'meta', summary: 'Read/write metacognition (COMPETENCE / LEARNING_STRATEGIES); env-flag gated.' },
 
   // NB: the commander's group-dispatch tools (dispatch_to / run_worker) and other

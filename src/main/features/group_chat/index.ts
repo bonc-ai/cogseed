@@ -55,6 +55,11 @@ export interface GroupChatRuntimeStatus {
   in_flight: string[];
   active_turns: Array<{ actor: string; turn_id: string; msg_id?: string; started_at_ms: number }>;
   active_recipient?: string;
+  /** True while a CogSeed Backend (Mate / local-CLI) task for this
+   *  conversation is still executing. Backend tasks run OUTSIDE the
+   *  group-chat bus, so without this the renderer's liveness model would
+   *  treat a bus-quiescent conversation as idle and finalize the run early. */
+  backend_active?: boolean;
   collaboration?: CollaborationSnapshot;
   kstarLifecycle?: KstarTaskLifecycleSnapshot;
 }
@@ -137,13 +142,55 @@ export async function runtimeStatus(
   cid: string,
   projectIdHint?: string | null,
 ): Promise<GroupChatRuntimeStatus> {
-  if (!safeId(cid)) return { processing: false, processing_since: null, in_flight: [], active_turns: [] };
+  if (!safeId(cid)) return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false };
   try {
     const state = await readState(userId, cid, projectIdHint);
+    // Commander-centric KStar: recover legacy pending projection dispatch
+    // states (forecasting / world_model_failed / ready_to_dispatch) exactly
+    // once into the same Commander session. waiting_confirmation is left for
+    // the user card; the service is idempotent and never launches a runner.
+    if (state.pending_projection_dispatch) {
+      void import('../kstar/projection-decision-service')
+        .then((module) => module.recoverLegacyPendingProjectionDispatch(userId, cid))
+        .catch((err) => log.warn(`kstar legacy pending recovery failed user=${userId} cid=${cid}: ${(err as Error).message}`));
+    }
     const runtime = runtimeSnapshot(userId, cid);
     const diskInFlight = Array.isArray(state.in_flight)
       ? state.in_flight.filter(Boolean)
       : [];
+    // CogSeed Backend (Mate / local-CLI) tasks run OUTSIDE the group-chat
+    // bus: while one is active for this conversation the bus can be quiescent
+    // even though the turn is still executing (imported-session continuation
+    // dispatches long work there). This endpoint feeds the renderer's
+    // liveness model (`/runtime` polling + history `processing`), so surface
+    // backend tasks here or the UI finalizes the run prematurely, drops the
+    // running indicator, and never rediscovers the in-flight turn.
+    let backendActive = false;
+    let backendAgents: string[] = [];
+    let backendTurns: Array<{ actor: string; turn_id: string; started_at_ms: number }> = [];
+    try {
+      const { listMateTasks } = await import('../cogseed_backend/task-store');
+      const tasks = await listMateTasks(userId);
+      const active = (Array.isArray(tasks) ? tasks : []).filter((t) => (
+        t && t.conversationId === cid
+        && t.status !== 'completed' && t.status !== 'failed'
+        && t.status !== 'cancelled' && t.status !== 'recoverable'
+      ));
+      backendActive = active.length > 0;
+      backendAgents = Array.from(new Set(
+        active.map((t) => t.agentId).filter((a): a is string => !!a),
+      ));
+      backendTurns = active.map((t) => {
+        const startedMs = Date.parse(String(t.createdAt || ''));
+        return {
+          actor: String(t.agentId || ''),
+          turn_id: t.taskId,
+          started_at_ms: Number.isFinite(startedMs) ? startedMs : 0,
+        };
+      }).filter((t) => t.actor && t.turn_id);
+    } catch (err) {
+      log.warn(`backend task status unavailable user=${userId} cid=${cid}: ${(err as Error).message}`);
+    }
     const collaboration = await readCollaborationSnapshot(userId, cid).catch((err) => {
       log.warn(`collaboration snapshot unavailable user=${userId} cid=${cid}: ${(err as Error).message}`);
       return null;
@@ -160,27 +207,29 @@ export async function runtimeStatus(
     // restores the composer target (the agent the commander handed off to)
     // instead of dropping back to the commander until the next state_changed.
     const floor = state.active_recipient ? { active_recipient: state.active_recipient } : {};
-    if ((state.status === 'running' || diskInFlight.length > 0) && !runtime.processing) {
+    if ((state.status === 'running' || diskInFlight.length > 0) && !runtime.processing && !backendActive) {
       log.warn(`healing orphan running state user=${userId} cid=${cid} status=${state.status} in_flight=${diskInFlight.join(',')}`);
       await setStatus(userId, cid, 'idle');
-      return { processing: false, processing_since: null, in_flight: [], active_turns: [], ...collaborationPart, ...kstarLifecyclePart, ...floor };
+      return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false, ...collaborationPart, ...kstarLifecyclePart, ...floor };
     }
     const inFlight = Array.from(new Set([
       ...diskInFlight,
       ...runtime.inFlight,
+      ...backendAgents,
     ].filter(Boolean)));
-    const processing = state.status === 'running' || inFlight.length > 0 || runtime.processing;
+    const processing = state.status === 'running' || inFlight.length > 0 || runtime.processing || backendActive;
     return {
       processing,
       processing_since: processing ? (state.last_active_at || null) : null,
       in_flight: inFlight,
-      active_turns: runtime.activeTurns,
+      active_turns: [...runtime.activeTurns, ...backendTurns],
+      backend_active: backendActive,
       ...collaborationPart,
       ...kstarLifecyclePart,
       ...floor,
     };
   } catch {
-    return { processing: false, processing_since: null, in_flight: [], active_turns: [] };
+    return { processing: false, processing_since: null, in_flight: [], active_turns: [], backend_active: false };
   }
 }
 
@@ -400,6 +449,122 @@ export interface SendInput {
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
 }
 
+/** 任务引用（@ 产物）源消息定位：在源会话消息里找持有该文件（附件或 produced）的最新一条。 */
+async function _resolveTaskArtifactSourceMessage(
+  userId: string,
+  sourceCid: string,
+  fileName: string,
+): Promise<{ source_msg_id: string; source_ts: string; source_text: string } | null> {
+  if (!safeId(sourceCid) || !fileName) return null;
+  try {
+    const rows = await readJsonl<{ id?: string; ts?: string; text?: string; attachments?: unknown; produced?: unknown }>(
+      conversationMessageReadFile(userId, sourceCid),
+      100_000,
+    );
+    const base = fileName.toLowerCase();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const m = rows[i];
+      if (!m || typeof m.id !== 'string' || !m.id) continue;
+      const attNames: string[] = Array.isArray(m.attachments)
+        ? m.attachments.map((a: any) => (typeof a === 'string' ? a : (a && a.name) || ''))
+        : [];
+      const producedNames: string[] = Array.isArray(m.produced)
+        ? m.produced.map((p: any) => {
+            // produced 可能是字符串全路径（AI 产出文件落盘时写入）或 {path} 对象
+            if (typeof p === 'string') return path.basename(p);
+            if (p && typeof p.path === 'string') return path.basename(p.path);
+            return '';
+          })
+        : [];
+      if ([...attNames, ...producedNames].some((n) => n && n.toLowerCase() === base)) {
+        return {
+          source_msg_id: m.id,
+          source_ts: typeof m.ts === 'string' ? m.ts : '',
+          source_text: typeof m.text === 'string' ? m.text : '',
+        };
+      }
+    }
+  } catch (err) {
+    log.warn('resolve task artifact source message failed', { sourceCid, error: logErrorRef(err) });
+  }
+  return null;
+}
+
+/**
+ * 空间任务引用合并（标准 composer @ 产物/资产 → task_references）：
+ *   - 产物 → references（LLM 可读文件，经跨任务引用解析走源消息）；
+ *   - 资产 → 模型上下文块（不污染用户可见文本）。
+ * 所有发送路径（conversations.sendStream / groupChat.send IPC）都汇聚到
+ * groupChat.send()，合并必须放在这里才能让 @ 引用真正随消息发给模型。
+ */
+async function _mergeTaskReferences(
+  userId: string,
+  cid: string,
+  text: string,
+  refs: SendInput['references'],
+  incomingModelText: string | undefined,
+): Promise<{ refs: SendInput['references']; modelText: string | undefined; assetRefs: Array<{ name: string; asset_type?: string }> }> {
+  let modelText = incomingModelText;
+  let mergedRefs = Array.isArray(refs) ? refs : [];
+  let spaceAssetRefs: Array<{ name: string; asset_type?: string }> = [];
+  try {
+    const chats = await import('../chats');
+    const conv = await chats.getConversation(userId, cid);
+    const taskRefs = conv?.task_references || [];
+    const artifactRefs = taskRefs.filter((r) => r.kind === 'artifact');
+    const assetRefs = taskRefs.filter((r) => r.kind === 'asset');
+    if (artifactRefs.length) {
+      // 产物引用需指向「持有该附件的源消息」才能过跨任务引用解析（_resolveMessageReferences
+      // 要求合法 source_msg_id + 非空源文本）。逐条在源会话里定位持有该文件的最新消息。
+      const resolved: Array<{
+        source_cid: string; source_title: string; source_msg_id: string; source_ts: string;
+        text: string; file_name: string;
+      }> = [];
+      for (const r of artifactRefs.slice(0, 20)) {
+        const src = await _resolveTaskArtifactSourceMessage(userId, r.source_cid, r.file_name);
+        if (!src) continue;
+        resolved.push({
+          source_cid: r.source_cid || '',
+          source_title: r.source_title || r.name || '空间任务引用',
+          source_msg_id: src.source_msg_id,
+          source_ts: r.source_ts || src.source_ts || (conv && (conv.updated_at || conv.created_at)) || new Date().toISOString(),
+          text: src.source_text,
+          file_name: r.file_name || '',
+        });
+      }
+      if (resolved.length) {
+        mergedRefs = [
+          ...mergedRefs,
+          ...resolved.map((r) => ({
+            source_cid: r.source_cid,
+            source_title: r.source_title,
+            source_msg_id: r.source_msg_id,
+            from_actor: 'space_task',
+            from_name: '空间任务引用',
+            source_ts: r.source_ts,
+            text: r.text,
+            ...(r.file_name ? { attachments: [{ name: r.file_name }] } : {}),
+          })),
+        ];
+      }
+    }
+    if (assetRefs.length) {
+      const block = assetRefs
+        .map((r) => `- ${r.name}（${r.asset_type || '空间资产'}）${r.summary ? `：${r.summary}` : ''}`)
+        .join('\n');
+      if (block) {
+        const suffix = `\n\n【本任务引用的空间资产】\n${block}`;
+        modelText = modelText && modelText.trim() ? `${modelText}${suffix}` : `${text}${suffix}`;
+      }
+      // 资产引用可见反馈：随 user 消息落 space_asset_refs，UI 气泡显示 chips
+      spaceAssetRefs = assetRefs.map((r) => ({ name: r.name, ...(r.asset_type ? { asset_type: r.asset_type } : {}) }));
+    }
+  } catch (err) {
+    log.warn('task references merge failed', { cid, error: logErrorRef(err) });
+  }
+  return { refs: mergedRefs, modelText, assetRefs: spaceAssetRefs };
+}
+
 async function _resolveMessageReferences(
   userId: string,
   requested: SendInput['references'],
@@ -545,19 +710,31 @@ export async function send(
   } catch (err) {
     log.warn(`auto-title failed user=${userId} cid=${cid}: ${(err as Error).message}`);
   }
+  // 空间任务引用合并（标准 composer @ 产物/资产 → task_references）：所有发送路径
+  // （conversations.sendStream / groupChat.send IPC）都汇聚到这里，引用才能真正随消息发出。
+  const merged = await _mergeTaskReferences(userId, cid, text, references, model_text);
   try {
-    const resolvedReferences = await _resolveMessageReferences(userId, references);
+    const resolvedReferences = await _resolveMessageReferences(userId, merged.refs);
     const msg = await enqueue({
       uid: userId, cid,
       fromActorId: USER_ID,
       text,
-      ...(model_text && model_text.trim() ? { model_text } : {}),
+      ...(merged.modelText && merged.modelText.trim() ? { model_text: merged.modelText } : {}),
+      ...(merged.assetRefs.length ? { space_asset_refs: merged.assetRefs } : {}),
       ...(attachments && attachments.length ? { attachments: [...attachments] } : {}),
       ...(use_selections && use_selections.length ? { use_selections } : {}),
       ...(resolvedReferences.length ? { references: resolvedReferences } : {}),
       ...(recall_projection_card ? { recall_projection_card } : {}),
       ...(kstar_review_card ? { kstar_review_card } : {}),
     });
+    // 一次性引用语义：持久化 task_references 随本条消息消费后即从会话移除，
+    // 下一条消息不再自动携带（本消息的引用已在 enqueue 时快照，不受影响）。
+    try {
+      const chats = await import('../chats');
+      await chats.updateConversation(userId, cid, { task_references: [] });
+    } catch (clearErr) {
+      log.warn(`clear task_references failed user=${userId} cid=${cid}: ${(clearErr as Error).message}`);
+    }
     return { ok: true, msg };
   } catch (err) {
     log.error(`send failed user=${userId} cid=${cid}: ${(err as Error).message}`);
@@ -1196,17 +1373,17 @@ async function _autoBindInstalledMarketplaceResource(
   try {
     const chats = await import('../chats');
     const conv = await chats.getConversation(userId, cid);
-    const projectId = (conv as any)?.project_id;
-    if (typeof projectId !== 'string' || !projectId) return;
-    const projectsFeat = await import('../projects');
+    const spaceId = (conv as any)?.space_id;
+    if (typeof spaceId !== 'string' || !spaceId) return;
+    const spacesFeat = await import('../spaces');
     if (req.kind === 'agent') {
-      await projectsFeat.addAgentBinding(userId, projectId, req.id);
+      await spacesFeat.addSpaceResource(userId, spaceId, 'agent', req.id);
     } else {
-      await projectsFeat.addSkillBinding(userId, projectId, req.id);
+      await spacesFeat.addSpaceResource(userId, spaceId, 'skill', req.id);
     }
-    log.info(`auto-bound marketplace ${req.kind} ${req.id} to project ${projectId} after install`);
+    log.info(`auto-added marketplace ${req.kind} ${req.id} to space ${spaceId} after install`);
   } catch (err) {
-    log.warn(`marketplace install auto-bind failed user=${userId} cid=${cid} id=${req.id}: ${(err as Error).message}`);
+    log.warn(`marketplace install auto-add failed user=${userId} cid=${cid} id=${req.id}: ${(err as Error).message}`);
   }
 }
 

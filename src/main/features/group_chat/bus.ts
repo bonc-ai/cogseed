@@ -21,6 +21,7 @@
  */
 
 import type { AgentTool, HistoryResource } from "#core-agent";
+import type { ChatResolvedRuntime } from "../../model/client";
 
 import { createLogger } from "../../logger";
 import { logErrorRef, logPathRef, maskId } from "../../util/log-redact";
@@ -30,7 +31,7 @@ import {
   isFileSystemCaseSensitive,
   isPathAllowed,
 } from "../../util/path-sandbox";
-import { appendJsonlAtomic, genId12, nowIso, safeId } from "../../storage";
+import { appendJsonlAtomic, genId12, nowIso, readJsonl, safeId } from "../../storage";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -59,6 +60,7 @@ import {
   takeOrchestrationLedgerForAgent,
   takeOrchestrationLedgerForForm,
   clearOrchestrationLedger,
+  abortConversationRoutingState,
 } from "./state";
 import type {
   HandoffStateRollbackToken,
@@ -69,12 +71,14 @@ import { maxToolLoopsForActorKind } from "./actor-budgets";
 import {
   GroupMessage,
   appendVisible,
+  appendVisibleStrict,
   readSlice,
   buildReplayPrefix,
   type ChatUseSelection,
   type ChatMessageReference,
   type GroupMessageFailureKind,
   type MarketplaceInstallRequest,
+  type RecallMessageCitation,
   type WakeRequestSummary,
 } from "./visibility";
 import {
@@ -130,8 +134,15 @@ import {
   chatAttachmentDirForConversation,
   conversationLayout,
 } from "../../util/project-layout";
+import { cachedConversationSpace } from "../chat_attachments";
 import * as agentsFeat from "../agents";
 import * as commanderRuntimeStats from "../commander_runtime_stats";
+import { getThinkingLevel } from "../config";
+
+// Narrowed once so TS can see the excluded 'auto' branch.
+function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
+  return getThinkingLevel();
+}
 import type { AgentRunStatus } from "../agent_runtime_stats";
 import {
   activityFromLocalEvent,
@@ -178,17 +189,11 @@ import {
 } from "../../model/core-agent/skill-registry";
 import { buildRuntimeDatetimeBlock } from "../../prompts/runtime_context";
 import { evaluateWake, listWakeRequests } from "../p3394/wake-service";
+import { allowLegacyGroupChatFormalAgentExecutorForTest, allowLegacyRunWorkerTestRoutes } from "../p3394/execution-boundary";
 import {
   type KStarDecisionRecord,
   type KStarExpectation,
-} from "../p3394/kstar-compat";
-import {
-  recordToolCycleEvidence,
-  recordAgentRunStartEvidence,
-  recordAgentContributionEvidence,
-  closeCollaborationEvidence,
-} from "../p3394/kstar-bus-integration";
-import { promoteExperienceCandidateToKnowledgeBase } from "../p3394/kstar-kb";
+} from "../kstar/dispatch-decision";
 import {
   buildP3394Level2Manifest,
   normalizeP3394AgentMessage,
@@ -197,13 +202,21 @@ import { P3394Controller } from "../p3394/controller";
 import { authoritativeSessionSource } from "../p3394/session-source";
 import { EpochStore } from "../p3394/epoch-store";
 import { SenderEpochStore } from "../p3394/sender-epoch-store";
-import { buildConfirmedProjectionPromptBlock } from "../recall/prompt-injection";
+import {
+  buildDispatchedAssetsPromptBlock,
+  buildRecallTurnPromptContext,
+  evaluateRecallAssetRuntimeEligibility,
+  type RecallPromptCitation,
+} from "../recall/prompt-injection";
+import { readAbilityAsset } from "../recall/asset-service";
+import type { AssetRuntimeContext } from "../recall/formal-assets/runtime";
+import { recordRecallUsage } from "../recall/usage-service";
 
 const log = createLogger("group_chat.bus");
 
 // Process-wide P3394 admission controller: wraps the stateless normalize kernel
 // with real session resolution, epoch watermarking, and context-scope checks.
-// The EpochStore persists receiver watermarks under <uid>/local/kstar/.
+// Generic P3394 receiver/sender watermarks live under <uid>/local/p3394/.
 const _p3394EpochStore = new EpochStore();
 const _p3394SenderEpochStore = new SenderEpochStore();
 const _defaultP3394Controller = new P3394Controller({
@@ -316,71 +329,6 @@ function kstarDecisionRecord(
     source: "commander",
     commander_mode: input.mode,
   };
-}
-
-const KSTAR_GUARD_KEYWORDS =
-  /论文|报告|长文|代码|最终|交付|保存|文件|评审|审核|review|report|paper|essay|code|deliverable|final|file/i;
-
-function applyKStarGuard(
-  input: KStarDecisionRecord | undefined,
-  cid: string,
-  actualResult: string,
-  produced: string[] | undefined,
-): KStarDecisionRecord | undefined {
-  if (input?.required)
-    return {
-      ...input,
-      source: input.source || "commander",
-      commander_mode: input.commander_mode || "required",
-    };
-  const matched: string[] = [];
-  if (Array.isArray(produced) && produced.length > 0)
-    matched.push("produced_files");
-  if (actualResult.length >= 3000) matched.push("long_output");
-  const expectedTask = input?.expectation?.task || "";
-  if (
-    KSTAR_GUARD_KEYWORDS.test(expectedTask) ||
-    KSTAR_GUARD_KEYWORDS.test(actualResult.slice(0, 1200))
-  )
-    matched.push("deliverable_keywords");
-  if (!matched.length) return undefined;
-  return {
-    required: true,
-    reason: `Bus KSTAR guard upgraded this delegated task to required (${matched.join(", ")}).`,
-    expectation: {
-      k_snapshot_ref:
-        input?.expectation?.k_snapshot_ref || `conversation:${cid}`,
-      situation:
-        input?.expectation?.situation ||
-        "Bus guard inferred this turn may contain a durable or decision-impacting deliverable.",
-      task:
-        input?.expectation?.task || "Review the delegated agent deliverable.",
-      action_hat:
-        input?.expectation?.action_hat ||
-        "Agent should complete the delegated task and produce a reviewable result.",
-      result_hat:
-        input?.expectation?.result_hat ||
-        "A durable deliverable or long-form result should be reviewed before final acceptance.",
-    },
-    source: "bus_guard",
-    commander_mode: input?.commander_mode || (input ? "skip" : undefined),
-    guard: { upgraded: true, matched_rules: matched, confidence: "hard" },
-  };
-}
-
-function buildKStarActualActionSummary(
-  actorId: string,
-  produced: string[] | undefined,
-  toolSummaries: string[] = [],
-): string {
-  const files =
-    Array.isArray(produced) && produced.length
-      ? ` Produced files: ${produced.join(", ")}`
-      : "";
-  const tools = toolSummaries.length
-    ? ` Tool evidence: ${toolSummaries.slice(0, 8).join("; ")}.`
-    : "";
-  return `${actorId} completed the delegated agent turn.${tools}${files}`;
 }
 
 function isExistingProducedFile(absPath: string): boolean {
@@ -850,122 +798,6 @@ function shapeValue(value: unknown, depth = 0): unknown {
   return typeof value;
 }
 
-function argumentShape(value: unknown): Record<string, unknown> | undefined {
-  const obj = objectRecord(value);
-  const entries = Object.entries(obj).slice(0, 20);
-  if (!entries.length) return undefined;
-  return Object.fromEntries(
-    entries.map(([key, child]) => [key, shapeValue(child)]),
-  );
-}
-
-function numericField(value: unknown): number | undefined {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : undefined;
-}
-
-function kstarToolCallId(rawId: unknown, toolName: string): string {
-  const id = typeof rawId === "string" ? rawId.trim() : "";
-  if (safeId(id)) return id;
-  return `tool-${toolName.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 48) || "call"}-${genId12()}`;
-}
-
-function isToolEndEvent(
-  event: ProcessEvent | null,
-): event is ProcessEvent & { data: Record<string, unknown> } {
-  if (event?.stream !== "tool") return false;
-  const data = objectRecord(event.data);
-  const phase = String(data.phase || data.status || "").toLowerCase();
-  return (
-    phase === "end" ||
-    phase === "result" ||
-    phase === "completed" ||
-    phase === "failed"
-  );
-}
-
-function toolEventId(data: Record<string, unknown>, toolName: string): string {
-  return kstarToolCallId(
-    data.id || data.tool_call_id || data.call_id,
-    toolName,
-  );
-}
-
-function rememberKStarToolStart(
-  event: ProcessEvent | null,
-  argumentShapes: Map<string, Record<string, unknown>>,
-): void {
-  if (event?.stream !== "tool") return;
-  const data = objectRecord(event.data);
-  const phase = String(data.phase || data.status || "").toLowerCase();
-  if (phase !== "start") return;
-  const toolName = String(data.name || data.toolName || data.tool || "")
-    .trim()
-    .slice(0, 120);
-  if (!toolName) return;
-  const shape = argumentShape(data.arguments || data.input || data.args);
-  if (shape) argumentShapes.set(toolEventId(data, toolName), shape);
-}
-
-async function maybeRecordKStarToolCycle(input: {
-  uid: string;
-  cid: string;
-  actor: Actor;
-  turnId: string;
-  event: ProcessEvent | null;
-  kstarRequired: boolean;
-  argumentShapes: Map<string, Record<string, unknown>>;
-  toolSummaries: string[];
-}): Promise<void> {
-  if (
-    !input.kstarRequired ||
-    input.actor.kind !== "agent" ||
-    !isToolEndEvent(input.event)
-  )
-    return;
-  const data = objectRecord(input.event.data);
-  const toolName = String(data.name || data.toolName || data.tool || "")
-    .trim()
-    .slice(0, 120);
-  if (!toolName) return;
-  const toolCallId = toolEventId(data, toolName);
-  const resultPreview = boundedString(
-    data.result_preview || data.output || data.message || data.error || "",
-    1000,
-  );
-
-  // Route through adapter integration layer
-  const result = await recordToolCycleEvidence({
-    userId: input.uid,
-    conversationId: input.cid,
-    agentId: input.actor.id,
-    turnId: input.turnId,
-    toolCallId,
-    toolName,
-    argumentsShape:
-      argumentShape(data.arguments || data.input || data.args) ||
-      input.argumentShapes.get(toolCallId),
-    resultPreview,
-    resultSize: numericField(data.result_size || data.size),
-    isError:
-      data.isError === true ||
-      data.is_error === true ||
-      String(data.status || "").toLowerCase() === "failed",
-    durationMs: numericField(data.duration_ms || data.durationMs),
-  });
-
-  input.argumentShapes.delete(toolCallId);
-
-  // Build tool summary for actualAction (used in contribution evidence)
-  const toolFailed = data.isError === true ||
-    data.is_error === true ||
-    String(data.status || "").toLowerCase() === "failed";
-  const status = toolFailed ? "failed" : "succeeded";
-  input.toolSummaries.push(
-    `${toolName} ${status}`,
-  );
-}
-
 /** True when a commander turn's process trail ONLY routed: it carries at least
  *  one delegation tool and every other item is that delegation, a read used to
  *  decide it, or a non-tool line (progress / runtime / context). Such a trail is
@@ -1060,7 +892,7 @@ async function p3394ProtocolProcessItem(input: {
     ? { person: "mate-user", org: "local", role: "owner" }
     : {
         person: input.item.fromActorId,
-        org: "mate-agent",
+        org: "cogseed",
         role: fromCommander ? "commander" : "agent",
       };
   // sessionId 必须是真实 <kind>-<tail>(gconv/gmember/gworker),不是裸 cid。
@@ -1280,6 +1112,11 @@ interface QueueItem {
   turnId: string;
   msgId: string;
   fromActorId: string;
+  /** Host-internal control turn (review request etc.): routed with
+   * `fromActorId: USER_ID` but must NOT behave like a user message — no
+   * auto-close cancellation, no KStar host routing (see the commander turn
+   * gate). */
+  internalControl?: boolean;
   /** Exact visible user text, kept separate from the LLM payload so teaching
    * intent cannot be inferred from injected references or attachment metadata. */
   sourceMessageText?: string;
@@ -1298,6 +1135,8 @@ interface QueueItem {
    * Used to grant read-only access to source attachment directories. */
   references?: ChatMessageReference[];
   useSelections?: ChatUseSelection[];
+  committedProjectionId?: string;
+  forecastId?: string;
   /** Preserve the target persistent session's active durable turn. */
   resumeActiveTurn?: boolean;
   /** Shadow-tap marker: this turn was triggered NOT because the actor was
@@ -1319,6 +1158,10 @@ interface QueueItem {
   outputDelivery?: "final" | "process";
   /** Commander-selected first-stage KSTAR gate for this delegated turn. */
   kstarDecision?: KStarDecisionRecord;
+  /** Ability assets the Commander explicitly granted to this delegated
+   *  Agent/Worker turn via the dispatch tools' `ability_assets` field. The
+   *  host renders them as the ONLY asset context for non-commander turns. */
+  dispatchedAssetIds?: string[];
   workflow_step_id?: string;
   /** Sender-assigned epoch persisted on the source GroupMessage. */
   incomingEpoch?: number;
@@ -1398,6 +1241,10 @@ interface CidState {
    *  between the commander's narration and the agent's first token. Anonymous
    *  workers (kind:'worker') are NOT mirrored: their stream is suppressed. */
   nestedTurns: Map<string, ActiveTurn & { order: number }>;
+  /** Formal Agent turns executed by CogSeed Backend. Unlike nested Group Chat
+   * dispatches these are authoritative for quiescence because no Group Chat
+   * worker remains running while Runtime produces the projected reply. */
+  backendTurns: Map<string, ActiveTurn & { order: number }>;
   /** Abortable, timeout-free logical read/write admission for this cid. */
   accessAdmission: CoordinatorAccessAdmission;
   /** Absolute paths written by any actor in THIS conversation since the
@@ -1422,7 +1269,13 @@ interface CidState {
     logicalRunId?: string;
     executionId?: string;
     projectionId?: string;
+    forecastId?: string;
     wakeRequestId?: string;
+    /** 本次运行里真正落过 ContextReuseReceipt 的轮次 id。
+     *  回执按 `turn-<turnId>` 存（与 execution-records 同名），终态事件带上这份
+     *  清单，迁移证明就能显式关联到"哪一次真实加载"——不靠时间窗反查，也不靠
+     *  execution id 推断粘合。 */
+    reuseTurnIds?: string[];
   };
 }
 
@@ -1444,6 +1297,10 @@ export interface TaskTerminalEvent {
   logical_run_id?: string;
   execution_id?: string;
   projection_id?: string;
+  forecast_id?: string;
+  /** 本次运行里落过 ContextReuseReceipt 的轮次 id（回执键为 `turn-<id>`）。
+   *  迁移证明凭这份清单找到真实加载凭证，一一对应，不做推断。 */
+  reuse_turn_ids?: string[];
   wake_request_id?: string;
 }
 
@@ -1485,16 +1342,37 @@ function cidKey(uid: string, cid: string): string {
   return `${uid}:${cid}`;
 }
 let _enqueueAdmissionGateForTest: (() => Promise<void>) | null = null;
+let _hostRoutingJudgeForTest:
+  ((message: string, openRequirement?: { requirementId: string; goalText: string }) => Promise<ModelRoutingVerdict | null>) | null =
+  null;
 let _actorTurnPreBodyHookForTest:
   ((state: CidState, actor: Actor, item: QueueItem) => Promise<void>) | null =
   null;
 let _finishNestedDispatchStepForTest: typeof finishNestedDispatchStep | null =
   null;
+type InteractiveFollowupStarter = (input: {
+  userId: string;
+  conversationId: string;
+  agentId: string;
+  requestId: string;
+  task: string;
+  visibleContext?: string;
+  attachments?: unknown[];
+}) => Promise<{ taskId: string; status: string }>;
+let _interactiveFollowupStarterForTest: InteractiveFollowupStarter | null = null;
+type BackendConversationCanceller = (userId: string, conversationId: string) => Promise<unknown>;
+let _backendConversationCancellerForTest: BackendConversationCanceller | null = null;
 
 export function _setEnqueueAdmissionGateForTest(
   gate: (() => Promise<void>) | null,
 ): void {
   _enqueueAdmissionGateForTest = gate;
+}
+
+export function _setHostRoutingJudgeForTest(
+  judge: ((message: string, openRequirement?: { requirementId: string; goalText: string }) => Promise<ModelRoutingVerdict | null>) | null,
+): void {
+  _hostRoutingJudgeForTest = judge;
 }
 
 export function _setActorTurnPreBodyHookForTest(
@@ -1508,6 +1386,18 @@ export function _setFinishNestedDispatchStepForTest(
   finish: typeof finishNestedDispatchStep | null,
 ): void {
   _finishNestedDispatchStepForTest = finish;
+}
+
+export function _setInteractiveFollowupStarterForTest(
+  starter: InteractiveFollowupStarter | null,
+): void {
+  _interactiveFollowupStarterForTest = starter;
+}
+
+export function _setBackendConversationCancellerForTest(
+  canceller: BackendConversationCanceller | null,
+): void {
+  _backendConversationCancellerForTest = canceller;
 }
 
 function getOrInitCid(uid: string, cid: string): CidState {
@@ -1525,6 +1415,7 @@ function getOrInitCid(uid: string, cid: string): CidState {
       backgroundWrites: new Set(),
       nextTurnOrder: 0,
       nestedTurns: new Map(),
+      backendTurns: new Map(),
       accessAdmission: new CoordinatorAccessAdmission(),
       producedPaths: new Set(),
     };
@@ -1607,6 +1498,26 @@ function _emitTaskRunTerminalIfQuiescent(
         : run.status || "failed";
   const listeners = [..._taskTerminalListeners];
   void (async () => {
+    // M-6: reuseTurnIds 只在内存。进程重启/崩溃后清单丢失，终态退回无回执
+    // 分支，该次运行的资产永不升档（回执文件本身已落盘 local/kstar/
+    // executions/turn-<turnId>/）。恢复：扫描本会话（targetSessionId=
+    // gconv-<cid>）且在本 run 开始之后落过的回执，按 turn- 前缀还原清单。
+    if (!run.reuseTurnIds?.length) {
+      try {
+        const { listReceipts } = await import('../p3394/context-reuse-receipt');
+        const receipts = await listReceipts(state.uid).catch(() => [] as Array<{ targetSessionId: string; executionId: string; createdAt: string }>);
+        const restored = receipts
+          .filter((receipt) => receipt.targetSessionId === `gconv-${state.cid}`
+            && Date.parse(receipt.createdAt) >= run.startedAtMs)
+          .map((receipt) => receipt.executionId)
+          .filter((executionId) => executionId.startsWith('turn-'))
+          .map((executionId) => executionId.slice('turn-'.length))
+          .filter(Boolean);
+        if (restored.length) run.reuseTurnIds = [...new Set(restored)];
+      } catch (err) {
+        log.warn(`task terminal receipt restore degraded cid=${state.cid}: ${(err as Error).message}`);
+      }
+    }
     const event: TaskTerminalEvent = {
       run_id: run.runId,
       user_id: state.uid,
@@ -1619,7 +1530,9 @@ function _emitTaskRunTerminalIfQuiescent(
       ...(run.logicalRunId ? { logical_run_id: run.logicalRunId } : {}),
       ...(run.executionId ? { execution_id: run.executionId } : {}),
       ...(run.projectionId ? { projection_id: run.projectionId } : {}),
+      ...(run.forecastId ? { forecast_id: run.forecastId } : {}),
       ...(run.wakeRequestId ? { wake_request_id: run.wakeRequestId } : {}),
+      ...(run.reuseTurnIds?.length ? { reuse_turn_ids: [...run.reuseTurnIds] } : {}),
     };
     if (!event.projection_id || !event.logical_run_id || !event.wake_request_id) {
       try {
@@ -1627,6 +1540,7 @@ function _emitTaskRunTerminalIfQuiescent(
         const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
         if (!event.logical_run_id && lifecycle.task?.id) event.logical_run_id = lifecycle.task.id;
         if (!event.projection_id && lifecycle.projection?.id) event.projection_id = lifecycle.projection.id;
+        if (!event.forecast_id && lifecycle.requirement?.forecastId) event.forecast_id = lifecycle.requirement.forecastId;
         if (!event.wake_request_id && lifecycle.wakeRequest?.id) event.wake_request_id = lifecycle.wakeRequest.id;
       } catch (err) {
         log.warn(`task terminal provenance lookup failed cid=${state.cid}: ${(err as Error).message}`);
@@ -1642,45 +1556,6 @@ function _emitTaskRunTerminalIfQuiescent(
       }
     }
   })();
-}
-
-function scheduleCommanderKStarValidation(
-  state: CidState,
-  stateFile: StateFile,
-  taskStatus: TaskTerminalStatus | null,
-): void {
-  const waitingOnLedger =
-    stateFile.orchestration_ledger?.status === "waiting_for_form" ||
-    stateFile.orchestration_ledger?.status === "waiting_for_agent";
-  if (waitingOnLedger || taskStatus === "waiting_input") return;
-  const outcomeStatus: "completed" | "failed" | "cancelled" =
-    stateFile.status === "aborted" || taskStatus === "cancelled"
-      ? "cancelled"
-      : taskStatus === "failed"
-        ? "failed"
-        : "completed";
-  trackBackgroundWrite(
-    state,
-    (async () => {
-      const wakeRequests = await listWakeRequests(state.uid, state.cid);
-      if (
-        wakeRequests.some(
-          (request) => request.status === "pending" || request.status === "approved",
-        )
-      ) {
-        return;
-      }
-      const result = await closeCollaborationEvidence(state.uid, {
-        conversationId: state.cid,
-        commanderId: COMMANDER_ID,
-        outcomeStatus,
-      });
-      if (result.success && result.runId) {
-        log.info(`Commander collaboration closed cid=${state.cid} runId=${result.runId}`);
-      }
-    })(),
-    "Commander KSTAR collaboration validation",
-  );
 }
 
 function emit(state: CidState, ev: GroupEvent): void {
@@ -1723,6 +1598,9 @@ function activeTurnsForState(state: CidState): ActiveTurn[] {
       order: nt.order,
     });
   }
+  for (const [, turn] of state.backendTurns) {
+    turns.push({ ...turn });
+  }
   turns.sort((a, b) => a.order - b.order);
   return turns.map(({ actor, turn_id, msg_id, started_at_ms }) => ({
     actor,
@@ -1757,6 +1635,7 @@ export function isQuiescent(uid: string, cid: string): boolean {
   const s = _cids.get(cidKey(uid, cid));
   if (!s) return true;
   if (s.pendingEnqueues > 0) return false;
+  if (s.backendTurns.size > 0) return false;
   for (const [, w] of s.workers) {
     if (w.running) return false;
     if (w.queue.length > 0) return false;
@@ -1820,7 +1699,6 @@ async function _syncStateStatus(
   if (want === "idle") {
     const taskStatus = state.taskRun?.status || null;
     _emitTaskRunTerminalIfQuiescent(state, result.state);
-    scheduleCommanderKStarValidation(state, result.state, taskStatus);
   }
 }
 
@@ -1858,6 +1736,147 @@ async function appendMain(
   }
 }
 
+export interface ProjectedGroupProcessInput {
+  uid: string;
+  cid: string;
+  agentId: string;
+  turnId: string;
+  kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
+    | 'tool.started' | 'tool.finished' | 'artifact' | 'task.completed' | 'task.failed'
+    | 'task.cancelled' | 'task.recoverable';
+  data: Record<string, unknown>;
+}
+
+/** Projection-only live event. It deliberately emits without enqueueing or
+ * starting a Group Chat worker; CogSeed Backend remains the executor. */
+export async function appendProjectedProcessEvent(input: ProjectedGroupProcessInput): Promise<void> {
+  if (!safeId(input.cid) || !safeId(input.agentId) || !safeId(input.turnId)) {
+    throw new Error('invalid CogSeed Group Chat process projection');
+  }
+  const state = getOrInitCid(input.uid, input.cid);
+  const kind = input.kind;
+  if (kind === 'task.started' && !state.backendTurns.has(input.turnId)) {
+    state.nextTurnOrder += 1;
+    state.backendTurns.set(input.turnId, {
+      actor: input.agentId,
+      turn_id: input.turnId,
+      started_at_ms: Date.now(),
+      order: state.nextTurnOrder,
+    });
+    await _syncStateStatus(state, true);
+  }
+  emit(state, {
+    type: 'process',
+    cid: input.cid,
+    actor: input.agentId,
+    turn_id: input.turnId,
+    data: input.data,
+  });
+  if (kind === 'task.cancelled' || kind === 'task.recoverable') {
+    state.backendTurns.delete(input.turnId);
+    _recordTaskRunOutcome(state, kind === 'task.cancelled' ? 'cancelled' : 'waiting_input');
+    await _syncStateStatus(state);
+  }
+}
+
+export interface ProjectedAgentMessageInput {
+  uid: string;
+  cid: string;
+  agentId: string;
+  turnId: string;
+  text: string;
+  process?: GroupMessage['process'];
+  failureKind?: GroupMessageFailureKind;
+  failureCode?: string;
+  terminalStatus?: 'completed' | 'failed';
+}
+
+/** Persist and publish one Backend-produced Agent reply without routing it
+ * back through the Group Chat executor. */
+export async function appendProjectedAgentMessage(input: ProjectedAgentMessageInput): Promise<GroupMessage | null> {
+  if (!safeId(input.cid) || !safeId(input.agentId) || !safeId(input.turnId)) {
+    throw new Error('invalid CogSeed Group Chat message projection');
+  }
+  const text = String(input.text || '').trim();
+  const chats = await import('../chats');
+  const conversation = await chats.getConversation(input.uid, input.cid);
+  if (!conversation) return null;
+  const state = getOrInitCid(input.uid, input.cid);
+  if (!text) {
+    // A successful Runtime may legitimately produce no visible text. The
+    // terminal projection still owns lifecycle cleanup, but must not create an
+    // empty Agent bubble or leave the IPC stream waiting forever.
+    state.backendTurns.delete(input.turnId);
+    _recordTaskRunOutcome(state, input.terminalStatus ?? (input.failureKind ? 'failed' : 'completed'));
+    await _syncStateStatus(state);
+    return null;
+  }
+  await seedReservedActors(input.uid, input.cid, conversation.project_id || null);
+  await ensureAgentMember(input.uid, input.cid, input.agentId);
+  const members = await readMembers(input.uid, input.cid, conversation.project_id || null);
+  const messageFile = conversationLayout(input.uid, input.cid, conversation.project_id || null).messageFile;
+  const existingRows = await readJsonl<GroupMessage>(messageFile, 10_000);
+  let existing: GroupMessage | undefined;
+  for (let index = existingRows.length - 1; index >= 0; index -= 1) {
+    const row = existingRows[index];
+    if (!row.deleted_at && row.from === input.agentId && row.turn_id === input.turnId) {
+      existing = row;
+      break;
+    }
+  }
+  const msg: GroupMessage = existing ?? {
+    id: genId12(),
+    ts: nowIso(),
+    from: input.agentId,
+    to: [USER_ID],
+    text,
+    turn_id: input.turnId,
+    ...(input.process?.length ? { process: input.process } : {}),
+    ...(input.failureKind ? { failure_kind: input.failureKind } : {}),
+    ...(input.failureCode ? { failure_code: input.failureCode } : {}),
+  };
+  if (!existing) {
+    await appendMain(input.uid, input.cid, msg, {
+      senderKind: 'agent',
+      senderId: input.agentId,
+      agentIds: [input.agentId],
+    });
+  }
+  const allActorIds = Array.from(new Set([
+    input.agentId,
+    USER_ID,
+    COMMANDER_ID,
+    ...members.actors.map((actor) => actor.id),
+  ]));
+  const { process: _process, ...sliceRow } = msg;
+  for (const actorId of allActorIds) {
+    if (actorId === USER_ID) continue;
+    const slice = await readSlice(input.uid, input.cid, actorId, 10_000, conversation.project_id || null);
+    if (slice.some((row) => row.id === msg.id)) continue;
+    await appendVisibleStrict(
+      input.uid,
+      input.cid,
+      sliceRow as GroupMessage,
+      [actorId],
+      conversation.project_id || null,
+    );
+  }
+  if (!existing || state.backendTurns.has(input.turnId)) {
+    emit(state, {
+      type: 'message',
+      cid: input.cid,
+      msg,
+      turn_end: true,
+      turn_id: input.turnId,
+    });
+  }
+  state.backendTurns.delete(input.turnId);
+  _recordTaskRunOutcome(state, input.terminalStatus ?? (input.failureKind ? 'failed' : 'completed'));
+  if (state.taskRun) state.taskRun.lastMessageId = msg.id;
+  await _syncStateStatus(state);
+  return msg;
+}
+
 // ── enqueue ──────────────────────────────────────────────────────────────
 
 export interface EnqueueParams {
@@ -1865,6 +1884,11 @@ export interface EnqueueParams {
   cid: string;
   fromActorId: string;
   text: string;
+  /** Host-internal control message (Commander-only, e.g. review request /
+   *  continuation judge): must NOT open a new taskRun (fromActorId is USER_ID
+   *  for routing but this is not a user action) — otherwise each control
+   *  message creates a run, terminal event, and closure loop. */
+  internalControl?: boolean;
   /** Structured source for a user-visible failure. This controls analytics
    * taxonomy only; the rendered text still controls failure actions/UI. */
   failure_kind?: GroupMessageFailureKind;
@@ -1873,10 +1897,20 @@ export interface EnqueueParams {
   /** Host-verified failed-turn continuation. Kept off the persisted message
    * schema; it only controls how the recipient worker opens its session. */
   resumeActiveTurn?: boolean;
+  /** Skip KSTAR requirement routing + Recall projection gating for this
+   *  enqueue. Used by the resume path so confirming a projection does not
+   *  create a second projection and re-gate the same user message. */
+  /** Exact committed Recall projection used by the pre-execution Forecast. */
+  committedProjectionId?: string;
+  /** Forecast frozen before this Commander turn was admitted. */
+  forecastId?: string;
   attachments?: string[];
   use_selections?: ChatUseSelection[];
   references?: ChatMessageReference[];
+  /** 空间任务引用（@ 资产）可见反馈：随 user 消息落 space_asset_refs，UI 气泡显示 chips。 */
+  space_asset_refs?: Array<{ name: string; asset_type?: string }>;
   recall_projection_card?: { projectionId: string };
+  recall_citations?: RecallMessageCitation[];
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   produced?: string[];
   form?: ChatFormPayload;
@@ -1900,6 +1934,11 @@ export interface EnqueueParams {
   /** Override resolved recipients (commander emitting plan announcement
    *  uses this to force `to=[user]`). Otherwise router decides. */
   forceTo?: string[];
+  /** Trusted external-channel inbound (P3394 bridge): keeps the
+   * user-message abort-reset and task-run lifecycle semantics for a message
+   * that persists under the peer agent's own actor identity. Only the
+   * bridge wiring sets this; user IPC paths never do. */
+  externalInbound?: boolean;
   /** True when this enqueue IS the actor's own end-of-turn message (called
    * from runTurn after the LLM stream completed). False / absent for any
    * tool-side-effect or plan-executor mid-turn enqueues. Renderer routes
@@ -1945,12 +1984,11 @@ export interface EnqueueParams {
     logicalRunId?: string;
     executionId?: string;
     projectionId?: string;
+    forecastId?: string;
     wakeRequestId?: string;
   };
   /** Marker for the Commander-visible task/plan/expected-result declaration. */
   kstar_dispatch_narration?: { target_agent_id: string; workflow_step_id?: string };
-  /** Compact tool-cycle summaries captured during this agent turn for KSTAR attribution. */
-  kstarToolSummaries?: string[];
   /** Terminal outcome recorded with an Agent contribution for Commander validation. */
   kstarOutcomeStatus?: AgentRunStatus;
 }
@@ -1977,7 +2015,7 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       code: "E_CONVERSATION_TERMINATING",
     });
   }
-  if (!state.taskRun && (fromActorId === USER_ID || params.kstarTerminalProvenance)) {
+  if (!params.internalControl && !state.taskRun && (fromActorId === USER_ID || params.externalInbound === true || params.kstarTerminalProvenance)) {
     const provenance = params.kstarTerminalProvenance;
     state.taskRun = {
       runId: genId12(),
@@ -1986,6 +2024,7 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       ...(provenance?.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
       ...(provenance?.executionId ? { executionId: provenance.executionId } : {}),
       ...(provenance?.projectionId ? { projectionId: provenance.projectionId } : {}),
+      ...(provenance?.forecastId ? { forecastId: provenance.forecastId } : {}),
       ...(provenance?.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
     };
   }
@@ -2021,12 +2060,13 @@ async function _enqueueBody(
   const { uid, cid, fromActorId, text } = params;
 
   // Reset the sticky `aborted` flag ONLY when the human (user) sends
-  // a fresh message. Worker-emitted enqueues (commander/agent post-turn
-  // replies, including the abort-cleanup "(stopped)" message) must NOT clear
-  // the abort — otherwise a worker's own post-abort message would silently
-  // un-stick the conversation and the next state_changed would flip back
-  // to 'idle'/'running'.
-  if (params.fromActorId === USER_ID) {
+  // a fresh message — or when a trusted external channel (P3394 peer)
+  // delivers a fresh inbound, which resumes the conversation the same way.
+  // Worker-emitted enqueues (commander/agent post-turn replies, including
+  // the abort-cleanup "(stopped)" message) must NOT clear the abort —
+  // otherwise a worker's own post-abort message would silently un-stick the
+  // conversation and the next state_changed would flip back to 'idle'/'running'.
+  if (params.fromActorId === USER_ID || params.externalInbound === true) {
     const cur = await readState(uid, cid);
     if (cur.status === "aborted") {
       await setStatus(uid, cid, "idle");
@@ -2060,6 +2100,7 @@ async function _enqueueBody(
 
   let to: string[] = [];
   let unknown: string[] = [];
+  let userHasExplicitMention = false;
   if (params.forceTo && params.forceTo.length) {
     to = params.forceTo.slice();
   } else {
@@ -2074,6 +2115,7 @@ async function _enqueueBody(
     // English and Chinese forms resolve to the same id. Lowercase keys
     // match router's `_normalizeNameKey`.
     agentNameToId.set("commander", COMMANDER_ID);
+    agentNameToId.set("cogseed", COMMANDER_ID);
     agentNameToId.set("指挥官", COMMANDER_ID);
     agentNameToId.set("user", USER_ID);
     agentNameToId.set("用户", USER_ID);
@@ -2097,6 +2139,12 @@ async function _enqueueBody(
       log.warn(
         `build agent name map failed cid=${cid}: ${(err as Error).message}`,
       );
+    }
+    if (fromKind === 'user') {
+      userHasExplicitMention = parseMentions(text, {
+        fromKind,
+        names: agentDisplayNames,
+      }).length > 0;
     }
     const r = resolveRecipients({
       fromKind,
@@ -2134,37 +2182,69 @@ async function _enqueueBody(
   }
   to = Array.from(new Set(to));
 
-  // Project scope at dispatch time: if the conversation belongs to a
-  // project, drop any recipient agent_id that isn't bound to the project
-  // (CLAUDE.md §6 — "if recipient unavailable, hand off to commander").
-  // Reserved ids (user / commander) always pass through. After filtering,
-  // an empty `to` falls through to the sender-default rule below — for
-  // user-initiated text that means "go to commander", which is the
-  // explicit hand-off the requirement asks for. Cheap: one project.json
-  // + bindings.json read,
-  // resolveProjectScope already memoises file existence checks. Skipped
-  // when the conv has no project_id (orphan = unrestricted).
+  // 空间作用域 at dispatch time: 会话挂空间 → 丢弃未绑定空间的 recipient
+  // （CLAUDE.md §6 — "recipient 不可用则转交 commander"）。reserved ids
+  // （user/commander）恒放行。过滤后空 `to` 落入下方 sender-default 规则。
+  // 廉价：一次 space.json 读 + 空间派生集解析，resolveSpaceScope 已 memoise
+  // 文件存在性。会话无 space_id（orphan）→ 跳过（不受限）。
   try {
     const { getConversation } = await import("../chats");
     const conv = await getConversation(uid, cid);
-    const projectId = (conv as any)?.project_id;
-    if (typeof projectId === "string" && projectId) {
-      const projectsFeat = await import("../projects");
-      const scope = await projectsFeat.resolveProjectScope(uid, projectId);
+    const spaceId = (conv as any)?.space_id;
+    if (typeof spaceId === "string" && spaceId) {
+      const spacesFeat = await import("../spaces");
+      const scope = await spacesFeat.resolveSpaceScope(uid, spaceId);
       if (scope) {
         const bound = new Set(scope.agents);
         const before = to;
-        to = to.filter((id) => RESERVED_IDS.has(id) || bound.has(id));
+        // CLI-backed agents are exempt from project-scope filtering: they run
+        // on the local machine with their own credentials (no project API
+        // budget consumed), and the user picks them explicitly (composer chip,
+        // `@name` mention, or the no-model → CLI fallback). Dropping them here
+        // would route every CLI message back to the commander, which defeats
+        // the fallback and `@Codex`/`@Claude` mentions in a project-scoped chat.
+        const kept: string[] = [];
+        for (const id of to) {
+          if (RESERVED_IDS.has(id) || bound.has(id)) {
+            kept.push(id);
+            continue;
+          }
+          try {
+            const ag = await agentsFeat.getAgent(id);
+            if (ag && ag.runtime && ag.runtime.kind === 'cli') {
+              kept.push(id);
+              continue;
+            }
+          } catch { /* fall through to drop */ }
+        }
+        to = kept;
         if (to.length !== before.length) {
           const dropped = before.filter((id) => !to.includes(id));
           log.info(
-            `dispatch project-scope drop cid=${cid} pid=${projectId} from=${fromActorId} dropped=${dropped.join(",")}`,
+            `dispatch space-scope drop cid=${cid} sid=${spaceId} from=${fromActorId} dropped=${dropped.join(",")}`,
           );
         }
       }
     }
   } catch (err) {
-    log.warn(`project-scope filter cid=${cid}: ${(err as Error).message}`);
+    log.warn(`space-scope filter cid=${cid}: ${(err as Error).message}`);
+  }
+
+  let backendFollowupAgentId = '';
+  if (fromKind === 'user'
+    && floorRecipient
+    && !allowLegacyGroupChatFormalAgentExecutorForTest()
+    && !userHasExplicitMention
+    && !(params.forceTo?.length)
+    && to.length === 1
+    && to[0] === floorRecipient
+    && !RESERVED_IDS.has(floorRecipient)) {
+    try {
+      const formalAgent = await agentsFeat.getAgentForChatDispatch(uid, floorRecipient);
+      if (formalAgent && isAgentEnabled(uid, floorRecipient)) backendFollowupAgentId = floorRecipient;
+    } catch (err) {
+      log.warn(`interactive Backend follow-up target failed cid=${cid}: ${(err as Error).message}`);
+    }
   }
 
   // P3394 Wake Gate: a human mention is a dispatch intent, not implicit
@@ -2178,10 +2258,14 @@ async function _enqueueBody(
       : fromKind === "commander" && params.dispatch
         ? ("plan_step" as const)
         : null;
-  if (enqueueWakeSource && process.env.ORKAS_P3394_WAKE_GATE !== "0") {
+  if (enqueueWakeSource && !allowLegacyGroupChatFormalAgentExecutorForTest()) {
     const admitted: string[] = [];
     for (const recipientId of to) {
       if (RESERVED_IDS.has(recipientId)) {
+        admitted.push(recipientId);
+        continue;
+      }
+      if (recipientId === backendFollowupAgentId) {
         admitted.push(recipientId);
         continue;
       }
@@ -2402,6 +2486,13 @@ async function _enqueueBody(
       ? { p3394: { recipient_epochs: recipientEpochs } }
       : {}),
     text: rewrittenText,
+    // The Commander's in-context KStar review (<kstar-review>…</kstar-review>)
+    // is a host-internal self-evolution signal, not user-facing content. Tag
+    // it so the renderer never shows it as a chat bubble while the record
+    // stays in the message stream for closure parsing.
+    ...(rewrittenText.includes('<kstar-review>')
+      ? { system_kind: 'kstar_review' as const }
+      : {}),
     ...(params.failure_kind ? { failure_kind: params.failure_kind } : {}),
     ...(params.failure_code ? { failure_code: params.failure_code } : {}),
     ...(params.model_text && params.model_text.trim()
@@ -2414,7 +2505,13 @@ async function _enqueueBody(
     ...(params.references && params.references.length
       ? { references: params.references }
       : {}),
+    ...(params.space_asset_refs && params.space_asset_refs.length
+      ? { space_asset_refs: params.space_asset_refs }
+      : {}),
     ...(params.recall_projection_card ? { recall_projection_card: params.recall_projection_card } : {}),
+    ...(params.recall_citations && params.recall_citations.length
+      ? { recall_citations: params.recall_citations }
+      : {}),
     ...(params.kstar_review_card ? { kstar_review_card: params.kstar_review_card } : {}),
     ...(params.produced && params.produced.length
       ? { produced: params.produced }
@@ -2447,38 +2544,6 @@ async function _enqueueBody(
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
   };
 
-  if (fromActorId === USER_ID) {
-    void (async () => {
-      try {
-        const { routeKstarUserMessage } = await import('../kstar/requirement-state');
-        const routed = await routeKstarUserMessage(uid, { conversationId: cid, messageId: msg.id, text: String(text || '') });
-        if (routed.projectionPreviewCreated?.projectionId) {
-          const { postProjectionCardMessage } = await import('../recall/projection-message');
-          await postProjectionCardMessage(uid, {
-            cid,
-            projectionId: routed.projectionPreviewCreated.projectionId,
-          }, {
-            send: async (payload) => {
-              const posted = await enqueue({
-                uid,
-                cid: payload.cid,
-                fromActorId: COMMANDER_ID,
-                forceTo: [USER_ID],
-                text: String(payload.text || ''),
-                recall_projection_card: { projectionId: payload.card.projectionId },
-              });
-              return { id: posted.id };
-            },
-          });
-        }
-        const { drainKstarTaskState } = await import('../kstar/task-aggregate');
-        await drainKstarTaskState(uid, cid);
-      } catch (err) {
-        log.warn(`KSTAR requirement routing failed cid=${cid}: ${(err as Error).message}`);
-      }
-    })();
-  }
-
   if (state.taskRun && params.kstarTerminalProvenance) {
     const provenance = params.kstarTerminalProvenance;
     state.taskRun = {
@@ -2486,41 +2551,9 @@ async function _enqueueBody(
       ...(provenance.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
       ...(provenance.executionId ? { executionId: provenance.executionId } : {}),
       ...(provenance.projectionId ? { projectionId: provenance.projectionId } : {}),
+      ...(provenance.forecastId ? { forecastId: provenance.forecastId } : {}),
       ...(provenance.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
     };
-  }
-
-  const guardedKStarDecision =
-    fromKind === "agent" && params.turn_end && params.turn_id
-      ? applyKStarGuard(
-          params.kstarDecision,
-          cid,
-          rewrittenText,
-          params.produced,
-        )
-      : undefined;
-  if (fromKind === "agent" && params.turn_end && params.turn_id && guardedKStarDecision?.required) {
-    try {
-      await recordAgentContributionEvidence({
-        userId: uid,
-        conversationId: cid,
-        agentId: fromActorId,
-        turnId: params.turn_id,
-        messageId: msgId,
-        actualResult: rewrittenText,
-        kstarDecision: guardedKStarDecision,
-        outcomeStatus: params.kstarOutcomeStatus || "success",
-        actualAction: buildKStarActualActionSummary(
-          fromActorId,
-          params.produced,
-          params.kstarToolSummaries,
-        ),
-      });
-    } catch (err) {
-      log.warn(
-        `P3394 KSTAR contribution record failed cid=${cid} actor=${fromActorId}: ${(err as Error).message}`,
-      );
-    }
   }
 
   // Persist: main jsonl + each recipient + sender (so sender sees own history
@@ -2567,10 +2600,68 @@ async function _enqueueBody(
     `enqueue user=${uid} cid=${cid} msg=${msgId} from=${fromActorId} to=${to.join(",")} len=${rewrittenText.length}${params.turn_end ? " turn_end=1" : ""}${unknown.length ? ` unknown=${unknown.join(",")}` : ""}`,
   );
 
+  // Dispatch to non-user recipients. User routing remains the ordinary
+  // group-chat rule (user -> Commander unless an explicit floor/mention
+  // chooses another actor). KStar bookkeeping is host-governed (routing /
+  // projection / forecast / closure all host-side) and cannot gate this turn.
+
+  let backendFollowupHandled = false;
+  if (backendFollowupAgentId) {
+    backendFollowupHandled = true;
+    const priorSlice = (await readSlice(uid, cid, backendFollowupAgentId))
+      .filter((row) => row.id !== msg.id && !row.deleted_at && !row.dispatch)
+      .slice(-12);
+    const visibleContext = priorSlice
+      .map((row) => `${row.from}: ${String(row.model_text || row.text || '').trim()}`)
+      .filter((row) => row.length > 2)
+      .join('\n\n')
+      .slice(0, 12_000);
+    const attachments = (msg.attachments || []).map((name) => ({
+      type: 'file',
+      path: path.join(chatAttachmentDirForConversation(uid, cid, null, cachedConversationSpace(uid, cid) || null), name),
+      name,
+    }));
+    const starter: InteractiveFollowupStarter = _interactiveFollowupStarterForTest ?? (async (input) => {
+      const { startMateInteractiveFollowup } = await import('../cogseed_backend/interactive-turn');
+      return startMateInteractiveFollowup(input.userId, {
+        conversationId: input.conversationId,
+        agentId: input.agentId,
+        requestId: input.requestId,
+        task: input.task,
+        ...(input.visibleContext ? { visibleContext: input.visibleContext } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      });
+    });
+    try {
+      await starter({
+        userId: uid,
+        conversationId: cid,
+        agentId: backendFollowupAgentId,
+        requestId: `req-followup-${msg.id}`,
+        task: String(msg.model_text || msg.text || '').trim(),
+        ...(visibleContext ? { visibleContext } : {}),
+        ...(attachments.length ? { attachments } : {}),
+      });
+    } catch (err) {
+      log.warn(`interactive Backend follow-up admission failed cid=${cid}: ${(err as Error).message}`);
+      await appendProjectedAgentMessage({
+        uid,
+        cid,
+        agentId: backendFollowupAgentId,
+        turnId: `turn-followup-${msg.id}`,
+        text: t('cogseed.runtime_failed'),
+        failureKind: 'runtime',
+        failureCode: 'runtime_admission_failed',
+        terminalStatus: 'failed',
+      });
+    }
+  }
+
   // Dispatch to non-user recipients.
   const refreshed = dispatchMembers;
   for (const recipientId of to) {
     if (recipientId === USER_ID) continue;
+    if (backendFollowupHandled && recipientId === backendFollowupAgentId) continue;
     const actor = refreshed.actors.find((a) => a.id === recipientId);
     if (!actor) {
       log.warn(`recipient ${recipientId} not in roster (cid=${cid})`);
@@ -2586,6 +2677,7 @@ async function _enqueueBody(
       turnId: genId12(),
       msgId,
       fromActorId,
+      ...(params.internalControl ? { internalControl: true } : {}),
       ...(fromActorId === USER_ID ? { sourceMessageText: msg.text } : {}),
       llmPayload: composeLlmTurnPayload(uid, fromActorId, msg),
       ...(msg.p3394?.recipient_epochs[recipientId] !== undefined
@@ -2600,6 +2692,8 @@ async function _enqueueBody(
       ...(msg.use_selections && msg.use_selections.length
         ? { useSelections: msg.use_selections.slice() }
         : {}),
+      ...(params.committedProjectionId ? { committedProjectionId: params.committedProjectionId } : {}),
+      ...(params.forecastId ? { forecastId: params.forecastId } : {}),
       ...(params.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
       ...(params.workflow_step_id
         ? { workflow_step_id: params.workflow_step_id }
@@ -2663,7 +2757,7 @@ function _resolvedReferenceAttachments(
   if (!safeId(ref.source_cid) || !ref.attachments?.length) return [];
   let root: string;
   try {
-    root = path.resolve(chatAttachmentDirForConversation(uid, ref.source_cid));
+    root = path.resolve(chatAttachmentDirForConversation(uid, ref.source_cid, null, cachedConversationSpace(uid, ref.source_cid) || null));
   } catch {
     return ref.attachments.map((item) => ({
       name: item.name,
@@ -3422,32 +3516,33 @@ async function runActorTurnBody(
   // consumer below (CLI cwd fallback, streamChatWithModel, etc.) without
   // re-reading the conv index per tool call.
   let turnProjectId: string | undefined;
+  let turnSpaceId: string | undefined;
+  let turnConversationKind: string | undefined;
   try {
     const { getConversation } = await import("../chats");
     const _conv = await getConversation(uid, cid);
     const _pid = (_conv as any)?.project_id;
     if (typeof _pid === "string" && _pid) turnProjectId = _pid;
+    const _sid = (_conv as any)?.space_id;
+    if (typeof _sid === "string" && _sid) turnSpaceId = _sid;
+    const _kind = (_conv as any)?.kind;
+    if (typeof _kind === "string" && _kind) turnConversationKind = _kind;
   } catch {
     /* default scope */
   }
 
-  // Project bindings (strict scope of agents visible to the commander LLM).
-  // `null` = orphan conversation OR stale projectId — falls back to legacy
-  // global visibility. Resolved once per turn alongside the workspace
-  // resolver and threaded into the commander prompt. See
-  // CLAUDE.md §6: project scope is the outer intersection BEFORE the 4
-  // enable-filter sites; do not add a 5th.
-  let turnProjectScope: import("../projects").ProjectBindings | null = null;
-  if (turnProjectId) {
+  // 空间作用域（删项目层后：会话直接挂空间，严格作用域 = 空间派生集 agents）。
+  // `null` = orphan 会话（无 space_id）或空间缺失 → 回退全局可见。每 turn 解析一次，
+  // 与 workspace resolver 并列，注入 commander prompt。见 CLAUDE.md §6（外层交集，
+  // 4 个 enable-filter 站点之前，勿加第 5 个）。
+  let turnSpaceScope: import("../spaces").SpaceScope | null = null;
+  if (turnSpaceId) {
     try {
-      const projectsFeat = await import("../projects");
-      turnProjectScope = await projectsFeat.resolveProjectScope(
-        uid,
-        turnProjectId,
-      );
+      const spacesFeat = await import("../spaces");
+      turnSpaceScope = await spacesFeat.resolveSpaceScope(uid, turnSpaceId);
     } catch (err) {
       log.warn(
-        `resolve project scope cid=${cid} pid=${turnProjectId}: ${(err as Error).message}`,
+        `resolve space scope cid=${cid} sid=${turnSpaceId}: ${(err as Error).message}`,
       );
     }
   }
@@ -3521,8 +3616,6 @@ async function runActorTurnBody(
   // history reload can rerender the rail (renderer accumulates it live, but
   // without persistence it vanishes on refresh). Cap the array so a runaway
   // tool storm can't bloat the jsonl. Skip `delta` and `assistant` events.
-  const kstarToolArgumentShapes = new Map<string, Record<string, unknown>>();
-  const kstarToolSummaries: string[] = [];
   if (item.attachments && item.attachments.length) {
     try {
       const attachmentsMod = await import("../chat_attachments");
@@ -3634,6 +3727,7 @@ async function runActorTurnBody(
   let systemPrompt: string;
   let extraTools: AgentTool[] = [];
   let skillList: string[] | undefined;
+  let commanderResolvedRuntime: ChatResolvedRuntime | null = null;
   const selectedSkillRefs = _selectedSkillRefs(item.useSelections);
   const forceOpenSkillRefs: string[] = selectedSkillRefs;
   // CLI-backed agents fetch the spec but skip systemPrompt / skillList /
@@ -3661,25 +3755,74 @@ async function runActorTurnBody(
   // process trail: prep/control-plane tools may precede hand_off_to, and that
   // brittle classification is what repeatedly recreated empty tail bubbles.
   let terminalHandoffCompleted = false;
+  // True only when the host's model-judged routing ACTUALLY opened a KStar
+  // task + projection for this turn's user message. The Commander hint must
+  // not claim tracked state that doesn't exist (see call site below).
+  let hostOpenedTaskThisTurn = false;
   if (isCommander) {
-    systemPrompt = await buildCommanderSystemPrompt(
-      uid,
-      cid,
-      turnProjectScope?.agents ?? null,
-    );
-    extraTools = await buildCommanderExtraTools(
-      state,
-      w,
-      item.llmPayload,
-      item.fromActorId,
-      item.attachments,
-      turnProjectId,
-      () => segState.flush(),
-      () => {
-        terminalHandoffCompleted = true;
-        _terminalHandoffObserverForTest?.();
-      },
-    );
+    // 空间模式会话（kind=space_builder）：用户↔构建师的一对一引导对话。
+    // 构建师不派活不写文件——零额外工具，数据全部走 Runtime injection 快照。
+    const convKind = turnConversationKind || await getConversationKindSafe(uid, cid);
+    turnConversationKind = convKind;
+    // Deterministic host routing: a task-shaped USER message opens the
+    // governed KStar task + auto-confirmed projection HERE, before the model
+    // turn — the Commander no longer has to emit kstar_control correctly
+    // (live runs failed that twice). Space-builder and non-task turns are
+    // untouched (zero KStar writes).
+    if (
+      convKind !== "space_builder"
+      && item.fromActorId === USER_ID
+      && !item.internalControl
+      && process.env.ORKAS_KSTAR_HOST_ROUTING !== '0'
+    ) {
+      // 用户新消息到达：清除该会话的 pending 自动闭环（设计 §5）。
+      // 之后 hostRouteTaskTurn 的 judge 判定 continuation 决定任务去留。
+      const { cancelAutoClose } = await import('../kstar/task-closure');
+      await cancelAutoClose(uid, cid);
+      const routing = await hostRouteTaskTurn(uid, cid, item.sourceMessageText, item.msgId, turnSpaceId ?? turnProjectId);
+      // The hint must reflect what the host ACTUALLY did. The old hint
+      // unconditionally claimed "the host has already tracked this task"
+      // while the routing judgement could silently no-op (parser/prompt
+      // contract mismatch) — so the Commander was told to skip
+      // upsert_state on a task that never existed, then its commit_forecast
+      // failed with "forecast proposal is required". Only advertise the
+      // tracked state when it is true.
+      hostOpenedTaskThisTurn = routing.openedTask;
+    }
+    if (convKind === "space_builder") {
+      systemPrompt = await buildSpaceBuilderSystemPrompt(uid);
+      extraTools = [];
+    } else {
+      systemPrompt = await buildCommanderSystemPrompt(
+        uid,
+        cid,
+        turnSpaceScope?.agents ?? null,
+      );
+      extraTools = await buildCommanderExtraTools(
+        state,
+        w,
+        item.llmPayload,
+        item.fromActorId,
+        item.attachments,
+        turnSpaceId ?? turnProjectId,
+        item.msgId,
+        () => commanderResolvedRuntime,
+        item.sourceMessageText,
+        {
+          ...(turnProjectId ? { projectId: turnProjectId } : {}),
+          ...(turnSpaceId ? { workspaceId: turnSpaceId } : {}),
+          ...(convKind ? { conversationKind: convKind } : {}),
+          ...(turnAttachmentMetadata.attachmentTypes.length
+            ? { fileKinds: turnAttachmentMetadata.attachmentTypes }
+            : {}),
+        },
+        () => segState.flush(),
+        () => {
+          terminalHandoffCompleted = true;
+          _terminalHandoffObserverForTest?.();
+        },
+      );
+    }
     // skillList stays undefined for commander — every skill is globally
     // visible (skills are NOT project-scoped this round; see CLAUDE.md §6).
   } else if (actor.kind === "worker") {
@@ -3763,9 +3906,9 @@ async function runActorTurnBody(
       });
       return { kind: "early" };
     }
-    if (agentsFeat.isCliAgent(agent)) {
+    if (agentsFeat.isCliAgent(agent) || agentsFeat.isP3394GatewayAgent(agent)) {
       cliAgent = agent;
-      systemPrompt = ""; // unused on CLI path
+      systemPrompt = ""; // unused on CLI / P3394-gateway path
     } else {
       systemPrompt = await buildAgentInGroupSystemPrompt(
         uid,
@@ -3784,14 +3927,203 @@ async function runActorTurnBody(
     }
   }
 
-  // Confirmed Recall ability assets are host-owned context. They are read
-  // after the role prompt is assembled so user-confirmed projections enter the
-  // real model call without becoming editable task prose.
-  try {
-    const confirmedAbilityAssets = await buildConfirmedProjectionPromptBlock(uid, cid);
-    if (confirmedAbilityAssets) systemPrompt = `${systemPrompt}\n\n${confirmedAbilityAssets}`;
-  } catch (error) {
-    log.warn(`confirmed ability asset prompt injection failed cid=${cid}: ${(error as Error).message}`);
+  // Recall is host-owned model context. The Commander is the cognitive-asset
+  // center: ONLY the Commander receives automatic Recall injection. Delegated
+  // Agent/Worker turns receive NO automatic asset context — the Commander
+  // explicitly grants assets per dispatch via the tools' `ability_assets`
+  // field, and only those render here. CLI agents never consume this path.
+  let recallCitations: RecallPromptCitation[] = [];
+  // Commander-granted assets actually injected into a delegated turn, kept for
+  // the same usage ledger the Commander injection uses (outcome 'dispatched').
+  let dispatchedUsage: Array<{ assetId: string; assetVersion: string }> = [];
+  if (!cliAgent) {
+    if (isCommander) {
+      try {
+        // KSTAR × 能力资产复用收敛（2026-08-17 spec）：一个任务只产生一次
+        // 权威能力资产选择。requirement 的 confirmed projection 是权威选择
+        // 结果——若本回合未显式携带 committedProjectionId（宿主自动路径在
+        // 任务开启时即 confirm 投影，不经过 projection-decision 控制消息），
+        // 则从当前 requirement 的 lifecycle 兜底读取，让投影真正进入
+        // Commander prompt（此前 requirement.projectionId 从未被消费，
+        // 同一任务会跑两遍 listAbilityAssets + ranking）。无投影/无效时
+        // buildRecallTurnPromptContext 自然回退 automatic projection。
+        let committedProjectionId = item.committedProjectionId;
+        if (!committedProjectionId && !item.internalControl) {
+          try {
+            const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+            const lifecycle = await readKstarTaskLifecycle(uid, cid);
+            if (lifecycle.projection?.status === 'confirmed') {
+              committedProjectionId = lifecycle.projection.id;
+            }
+          } catch {
+            // 生命周期读取失败不阻断回合——回退 automatic projection。
+          }
+        }
+        const recallContext = await buildRecallTurnPromptContext(uid, {
+          cid,
+          taskRunId: item.turnId,
+          taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
+          agentId: actor.id,
+          ...(turnProjectId ? { projectId: turnProjectId } : {}),
+          ...(turnSpaceId ? { workspaceId: turnSpaceId } : {}),
+          ...(turnConversationKind ? { conversationKind: turnConversationKind } : {}),
+          ...(turnAttachmentMetadata.attachmentTypes.length
+            ? { fileKinds: turnAttachmentMetadata.attachmentTypes }
+            : {}),
+          ...(committedProjectionId ? { committedProjectionId } : {}),
+          ...(item.forecastId ? { forecastId: item.forecastId } : {}),
+        });
+        if (recallContext.promptBlock) {
+          systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
+          recallCitations = recallContext.citations;
+        }
+        // PRD 3.6 Transfer Verified 闭环：投影资产真实注入时在同一处落
+        // ContextReuseReceipt（key=turn-<turnId>），并登记到本次运行的
+        // reuseTurnIds——终态事件据此把迁移证明关联到真实加载凭证，资产
+        // 才升 transfer_validated（下次同类任务可自动注入）。缺失这一环，
+        // terminal-proof 永远找不到 receipt → 成熟度永不升档（已观测
+        // 'transfer proof completed without a reuse receipt'）。
+        if (recallCitations.length && state.taskRun) {
+          const receiptRefs = recallCitations.map((c) => c.assetId);
+          try {
+            const { prepareReceipt } = await import('../p3394/context-reuse-receipt');
+            await prepareReceipt(
+              uid,
+              {
+                executionId: `turn-${item.turnId}`,
+                targetSessionId: `gconv-${cid}`,
+                reusedRefs: receiptRefs,
+                omittedRefs: [],
+                permissionMode: 'read-only',
+                allowedScopes: ['cognition:projection'],
+                boundary: 'real',
+              },
+              { sessionId: `gconv-${cid}` },
+            ).catch(() => undefined);
+            const turns = state.taskRun.reuseTurnIds || [];
+            if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
+          } catch {
+            // receipt 落库失败不阻断回合——只是这次不产生迁移凭证。
+          }
+        }
+      } catch (error) {
+        log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
+      }
+      // Layer 1 routing uplift: deterministic task-intent detection adds an
+      // advisory hint so an ordinary user request is not silently skipped.
+      // Advisory only — no state writes. The world model owns governance
+      // (task/projection/forecast all host-side), so the hint only informs
+      // the Commander that the task is tracked; it never instructs a
+      // kstar_control call (that tool no longer exists for the Commander).
+      if (item.fromActorId === USER_ID) {
+        const { taskIntentHint } = await import('../kstar/task-intent');
+        const hint = taskIntentHint(item.sourceMessageText, { hostOpenedTask: hostOpenedTaskThisTurn });
+        if (hint) systemPrompt = `${systemPrompt}\n\n${hint}`;
+      }
+    } else if (item.dispatchedAssetIds?.length) {
+      // Commander-granted assets only — no host-side Recall selection.
+      try {
+        const dispatched = await buildDispatchedAssetsPromptBlock(uid, item.dispatchedAssetIds, {
+          ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
+          taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
+          purpose: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
+          ...(turnProjectId ? { projectId: turnProjectId } : {}),
+          ...(turnSpaceId ? { workspaceId: turnSpaceId } : {}),
+          ...(turnConversationKind ? { conversationKind: turnConversationKind } : {}),
+          ...(turnAttachmentMetadata.attachmentTypes.length
+            ? { fileKinds: turnAttachmentMetadata.attachmentTypes }
+            : {}),
+        });
+        if (dispatched.promptBlock) {
+          systemPrompt = `${systemPrompt}\n\n${dispatched.promptBlock}`;
+        }
+        if (dispatched.assets.length) {
+          dispatchedUsage = dispatched.assets.map((asset) => ({
+            assetId: asset.id,
+            assetVersion: asset.version,
+          }));
+          // 派发授权资产同样落 receipt + 登记 reuseTurnIds（PRD 3.6 闭环）：
+          // worker 真实加载了 Commander 授权的资产，终态时应能据此升档。
+          if (state.taskRun) {
+            try {
+              const { prepareReceipt } = await import('../p3394/context-reuse-receipt');
+              await prepareReceipt(
+                uid,
+                {
+                  executionId: `turn-${item.turnId}`,
+                  targetSessionId: actor.kind === 'agent'
+                    ? `gmember-${cid}-${actor.id}`
+                    : `gconv-${cid}`,
+                  reusedRefs: dispatched.assets.map((asset) => asset.id),
+                  omittedRefs: [],
+                  permissionMode: 'read-only',
+                  allowedScopes: ['cognition:projection'],
+                  boundary: 'real',
+                },
+                { sessionId: `gmember-${cid}-${actor.id}` },
+              ).catch(() => undefined);
+              const turns = state.taskRun.reuseTurnIds || [];
+              if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
+            } catch {
+              // receipt 落库失败不阻断回合。
+            }
+          }
+        }
+      } catch (error) {
+        log.warn(`Commander-dispatched asset injection failed cid=${cid}: ${(error as Error).message}`);
+      }
+    }
+
+    // 出生继承的认知。和上面的 Recall 投影是两条来源：投影是这次会话里确认过的
+    // 上下文，继承是这个 Agent 出生时就带着的。两者都只走宿主拼的 system prompt，
+    // CLI Agent 不消费这条路径，所以也不能拿到（否则它事后会声称用过）。
+    // actor.id 就是 agent id（上面 getAgent(actor.id) 用的同一个）。G8b 临时 worker
+    // 没有 agent.json，读出来是 null，走同一条降级路径。
+    if (agentsFeat.isValidAgentId(actor.id)) {
+      try {
+        const [{ selectInheritedCognition }, { buildInheritedCognitionPrompt }] = await Promise.all([
+          import("../recall/cognition-selection"),
+          import("../recall/inherited-cognition-prompt"),
+        ]);
+        const selection = await selectInheritedCognition(uid, actor.id, {
+          ...(turnProjectId ? { projectId: turnProjectId } : {}),
+        });
+        // null = 这个 Agent 生成时还没有继承机制，和「继承了空」不是一回事，
+        // 但对提示词而言都是没有可注入的内容。
+        if (selection) {
+          const rendered = buildInheritedCognitionPrompt(selection.selected);
+          if (rendered.promptBlock) {
+            systemPrompt = `${systemPrompt}\n\n${rendered.promptBlock}`;
+          }
+          // 回执要在注入的同一处落，用同一份事实——分开算两次早晚会对不上。
+          const { reuseRefsForTurn, truncatedByBudget } = await import(
+            "../recall/inherited-cognition-prompt"
+          );
+          // 回执落成即登记到本次运行：终态事件靠这份清单把迁移证明关联到
+          // 真实加载凭证。登记发生在注入的同一处，与回执用同一份事实。
+          if (state.taskRun) {
+            const turns = state.taskRun.reuseTurnIds || [];
+            if (!turns.includes(item.turnId)) {
+              state.taskRun.reuseTurnIds = [...turns, item.turnId];
+            }
+          }
+          await recordInheritedCognitionReuse(
+            uid,
+            cid,
+            actor.id,
+            item.turnId,
+            reuseRefsForTurn(
+              rendered,
+              selection.withheld,
+              truncatedByBudget(selection.selected, rendered),
+            ),
+          );
+        }
+      } catch (error) {
+        // 继承注入失败不该让这一轮对话起不来——降级成这次不带继承认知。
+        log.warn(`Inherited cognition injection failed cid=${cid}: ${(error as Error).message}`);
+      }
+    }
   }
 
   // Streaming.
@@ -4011,24 +4343,31 @@ async function runActorTurnBody(
     // renders. The output text becomes finalText; failures populate
     // errText so the existing post-stream logic surfaces a ⚠️ bubble.
     //
-    // **CLI cwd = root workspace** (NOT the per-conv subdir used by the
-    // in-process branch). CLI session stores are cwd-hashed —
-    // `claude code` keeps sessions under `~/.claude/projects/<encoded-cwd>/`
-    // — so changing cwd between dispatches breaks `--resume <id>` with
-    // "No conversation found with session ID …". The per-conv subdir
-    // exists to group repeat-run artefacts from the in-process LLM's
-    // `write_file` tool; CLI agents have their own product-side
-    // conventions and don't need that scoping. Override here:
+    // **CLI cwd**：非空间会话保持根工作区（历史行为）。CLI session
+    // stores are cwd-hashed — `claude code` keeps sessions under
+    // `~/.claude/projects/<encoded-cwd>/` — so a cwd that changes between
+    // dispatches breaks `--resume <id>` with "No conversation found with
+    // session ID …"。空间会话则与内置智能体分支一致，cwd 进空间工作区
+    // （`spaces/<sid>/workspace/<slug>`）；slug 冻结在
+    // `state.workspace_dir`（conv_workspace 惰性派生一次后不再变），因此
+    // cwd 跨轮稳定，CLI resume 不受影响，同时保证空间隔离 + 空间产物扫描
+    // （spaces_artifacts 只扫空间会话工作区）能收到 CLI 产出。
     const userWorkspace = await import("../user_workspace");
-    const wsRoot = userWorkspace.getWorkspacePath(uid, turnProjectId);
-    // Coding agents (claude / codex) initialise the per-conversation
-    // `coding_project_dir` from the agent detail page's project-dir
-    // setting. Missing setting = effective workspace. Once a
-    // conversation has a dir, later turns keep using it; the agent can
-    // still ask the user to switch through the standard directory form.
-    // Non-coding CLIs always use the workspace. We defensively check
-    // the directory exists — if it vanished we fall back rather than
-    // failing the run.
+    let wsRoot: string;
+    if (turnSpaceId) {
+      const convWs = await import("./conv_workspace");
+      wsRoot = await convWs.getConversationWorkspacePath(uid, cid);
+    } else {
+      wsRoot = userWorkspace.getWorkspacePath(uid, turnProjectId);
+    }
+    // Coding agents (claude / codex / workbuddy) initialise the
+    // per-conversation `coding_project_dir` from the agent detail page's
+    // project-dir setting. Missing setting = effective workspace（空间会话
+    // 则为空间工作区目录）。Once a conversation has a dir, later turns
+    // keep using it; the agent can still ask the user to switch through
+    // the standard directory form. Non-coding CLIs always use the
+    // workspace. We defensively check the directory exists — if it
+    // vanished we fall back rather than failing the run.
     let cliWorkingDir = wsRoot;
     if (
       agentsFeat.cliIsCodingAgent(
@@ -4040,11 +4379,42 @@ async function runActorTurnBody(
         cliAgent,
         turnProjectId,
       );
-      cliWorkingDir = dirInfo.effective_path;
-      await _initializeCodingProjectDir(uid, cid, dirInfo);
+      // 空间会话：agent 详情页显式自定义目录（custom_path）仍优先；否则
+      // cwd = 空间工作区目录。
+      cliWorkingDir =
+        turnSpaceId && !dirInfo.custom_path ? wsRoot : dirInfo.effective_path;
+      await _initializeCodingProjectDir(uid, cid, {
+        ...dirInfo,
+        effective_path: cliWorkingDir,
+      });
       const st = await import("./state");
       const stateFile = await st.readState(uid, cid);
-      const projDir = stateFile.coding_project_dir;
+      let projDir = stateFile.coding_project_dir;
+      // 存量修复：空间会话的 coding_project_dir 若落在空间工作区之外
+      // （旧版固化的 userWorkSpace 根 / 换空间后的旧空间目录），且不是
+      // 用户显式选择 → 惰性重指空间工作区目录（与 conv_workspace 的惰性
+      // 迁移同思路，幂等）。空间工作区根 = wsRoot 的父目录
+      // （spaces/<sid>/workspace），避免在 bus 里动态 import paths。
+      if (
+        turnSpaceId &&
+        projDir &&
+        stateFile.coding_project_dir_explicit !== true
+      ) {
+        const spaceRoot = path.dirname(wsRoot);
+        const resolvedProj = path.resolve(projDir);
+        const inSpace =
+          resolvedProj === spaceRoot ||
+          resolvedProj.startsWith(spaceRoot + path.sep);
+        if (!inSpace) {
+          log.info(
+            `space conv coding_project_dir outside space root — re-pointing cid=${cid} sid=${turnSpaceId} ${projDir} -> ${cliWorkingDir}`,
+          );
+          await st.setCodingProjectDir(uid, cid, cliWorkingDir, {
+            explicit: false,
+          });
+          projDir = cliWorkingDir;
+        }
+      }
       if (projDir) {
         try {
           if (fs.statSync(projDir).isDirectory()) cliWorkingDir = projDir;
@@ -4053,21 +4423,23 @@ async function runActorTurnBody(
         }
       }
     }
+    // CLI spawn 要求 cwd 已存在：child_process.spawn 遇到不存在的 cwd 会直接
+    // ENOENT（报错文案只显示命令路径，极易误判为 CLI 未安装）。conv_workspace
+    // 刻意不 mkdir（目录由产出工具惰性创建，聊天气泡轮零磁盘足迹）——但 CLI
+    // 智能体从第一轮起就真实运行在该目录里，空间会话（cwd 进
+    // spaces/<sid>/workspace/<slug>）若此前只有对话、从未产出过文件，目录就不
+    // 存在，导致空间里外接 CLI agent 每轮必败（普通对话 cwd=userWorkSpace 根
+    // 常驻存在，所以表现正常）。与 wrapped bash 工具的防御性 mkdir 同思路。
+    try {
+      fs.mkdirSync(cliWorkingDir, { recursive: true });
+    } catch (err) {
+      log.warn(`cli workspace mkdir failed cid=${cid} dir=${cliWorkingDir}: ${(err as Error).message}`);
+    }
     try {
       const slice = await readSlice(uid, cid, actor.id);
-      const cliOut = await _runCliAgentTurn({
-        uid,
-        cid,
-        actor,
-        agent: cliAgent,
-        item,
-        slice,
-        workingDir: cliWorkingDir,
-        ...(turnProjectId ? { projectId: turnProjectId } : {}),
-        signal: w.abortController.signal,
-        onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
-        onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
-        onProcess: (data) => {
+      // 共享 process 事件管道：CLI 直接派发与 P3394 网关派发共用同一套
+      // 事件形态（progress/delta/final/error），渲染端与 process rail 无感知。
+      const forwardProcess = (data: Record<string, unknown>): void => {
           // Mirror the LLM path: count every event for activity, but
           // persist only `progress` and `event` shapes into processItems
           // — `delta` text streams into the live bubble and is recovered
@@ -4104,8 +4476,46 @@ async function runActorTurnBody(
             turn_id: item.turnId,
             data: data as unknown as Record<string, unknown>,
           });
-        },
-      });
+      };
+      // P3394 外接智能体：每一轮都通过桥的出站 hub 与受管网关节点协作
+      // （同一协议覆盖 Hermes/Claude Code/Codex/OpenClaw/WorkBuddy 等）。
+      const isP3394Gateway = agentsFeat.isP3394GatewayAgent(cliAgent);
+      const cliOut = isP3394Gateway
+        ? await (
+            await import("../p3394_bridge/p3394-gateway-turn")
+          ).runP3394GatewayTurn({
+            uid,
+            cid,
+            agent: {
+              agent_id: cliAgent.agent_id,
+              name: cliAgent.name || cliAgent.agent_id,
+            },
+            cli:
+              cliAgent.runtime?.kind === "p3394-gateway"
+                ? cliAgent.runtime.cli
+                : "",
+            prompt: (item as { sourceMessageText?: string }).sourceMessageText || "",
+            signal: w.abortController.signal,
+            onCoordinatorActivity: (event) => {
+              coordinatorLease?.observe(event as never);
+            },
+            onProcess: forwardProcess,
+          })
+        : await _runCliAgentTurn({
+            uid,
+            cid,
+            actor,
+            agent: cliAgent,
+            item,
+            slice,
+            workingDir: cliWorkingDir,
+            ...(turnProjectId ? { projectId: turnProjectId } : {}),
+            ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
+            signal: w.abortController.signal,
+            onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
+            onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
+            onProcess: forwardProcess,
+          });
       for (const p of cliOut.produced || []) await onFileWritten(p);
       finalText = cliOut.text;
       streamingText = cliOut.text;
@@ -4113,7 +4523,7 @@ async function runActorTurnBody(
         errText = cliOut.error;
         turnInfrastructureFailure ||= !!cliOut.infrastructureFailure;
         markTurnFailure(
-          cliOut.failureKind || "runtime",
+          (cliOut.failureKind || "runtime") as import("./visibility").GroupMessageFailureKind,
           cliOut.failureCode || "cli_failed",
         );
       }
@@ -4151,10 +4561,15 @@ async function runActorTurnBody(
         kind: "core-agent",
         sessionId,
         conversationId: cid,
-        ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
+        // 执行方是谁就记谁：commander 驱动的 turn 也写入 agentId=commander，
+        // 否则右侧「本次运行」的执行方全部落到兜底名。
+        ...(actor.id ? { agentId: actor.id } : {}),
         boundary: "real",
         permissionMode: getLocalExecMode(),
       });
+      // User-selected thinking strength ('auto' = no override; let the
+      // provider default / model decide).
+      const turnThinkingLevel = thinkingLevelForRun();
       for await (const ev of streamChatWithModel({
         userId: uid,
         message: messageText,
@@ -4162,6 +4577,9 @@ async function runActorTurnBody(
         systemPrompt,
         workingDir,
         agentName: actor.name || actor.id,
+        // User-selected thinking strength ('auto' = no override; let the
+        // provider default / model decide).
+        ...(turnThinkingLevel !== "auto" ? { thinkingLevel: turnThinkingLevel } : {}),
         ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
         cid,
         turnId: item.turnId,
@@ -4178,8 +4596,14 @@ async function runActorTurnBody(
             candidate_ids: receipt.candidateIds,
           });
         },
+        ...(isCommander ? {
+          onResolvedRuntime: (runtime: ChatResolvedRuntime) => {
+            commanderResolvedRuntime = runtime;
+          },
+        } : {}),
         ...(item.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
+        ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
         onFileWritten,
         onOutputsPublished,
         hasProducedPath,
@@ -4295,24 +4719,6 @@ async function runActorTurnBody(
               ? (inner as Record<string, unknown>)
               : undefined;
           if (actor.kind !== "worker") {
-            if (actor.kind === "agent" && item.kstarDecision?.required) {
-              try {
-                await recordAgentRunStartEvidence({
-                  userId: uid,
-                  conversationId: cid,
-                  agentId: actor.id,
-                  turnId: item.turnId,
-                  data:
-                    inner && typeof inner === "object"
-                      ? (inner as Record<string, unknown>)
-                      : {},
-                });
-              } catch (err) {
-                log.warn(
-                  `P3394 evidence adapter failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
-                );
-              }
-            }
             emit(state, {
               type: "agent_run_result",
               cid,
@@ -4341,23 +4747,6 @@ async function runActorTurnBody(
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            rememberKStarToolStart(event, kstarToolArgumentShapes);
-            try {
-              await maybeRecordKStarToolCycle({
-                uid,
-                cid,
-                actor,
-                turnId: item.turnId,
-                event,
-                kstarRequired: !!item.kstarDecision?.required,
-                argumentShapes: kstarToolArgumentShapes,
-                toolSummaries: kstarToolSummaries,
-              });
-            } catch (err) {
-              log.warn(
-                `P3394 tool evidence adapter failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
-              );
-            }
             if (text)
               appendProcessItem(processItems, {
                 type: "progress",
@@ -4368,23 +4757,6 @@ async function runActorTurnBody(
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            rememberKStarToolStart(event, kstarToolArgumentShapes);
-            try {
-              await maybeRecordKStarToolCycle({
-                uid,
-                cid,
-                actor,
-                turnId: item.turnId,
-                event,
-                kstarRequired: !!item.kstarDecision?.required,
-                argumentShapes: kstarToolArgumentShapes,
-                toolSummaries: kstarToolSummaries,
-              });
-            } catch (err) {
-              log.warn(
-                `P3394 tool evidence adapter failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
-              );
-            }
             if (event && event.stream !== "assistant") {
               appendProcessItem(processItems, { type: "event", event });
             }
@@ -4520,15 +4892,18 @@ async function runActorTurnBody(
       );
     }
     if (extracted.patches.length) {
+      // Strip the patch blocks from the surfaced text regardless of whether
+      // the workflow context is present — a `<context-patch>` is machine
+      // metadata, never user-facing. Applying it to shared context is a
+      // bonus; leaving it in the reply text is a leak (users see raw JSON).
+      workingText = extracted.cleanText || workingText;
       try {
         const activeContext = await applyActiveContextPatches(
           uid,
           cid,
           extracted.patches,
         );
-        if (activeContext) {
-          workingText = extracted.cleanText;
-        } else {
+        if (!activeContext) {
           log.warn(
             `context_patch ignored because no active shared context cid=${cid} actor=${actor.id}`,
           );
@@ -4664,34 +5039,41 @@ async function runActorTurnBody(
               }
             }
           } else {
-            const ag = await agentsFeat.createAgentFromBlocks(fields);
+            // 带上出生上下文，新 Agent 才能承接前序项目的认知资产与会话来源；
+            // 没有这一步生成出来的只有角色提示，被问到前序项目的术语只能瞎猜。
+            const ag = await agentsFeat.createAgentFromBlocks(fields, {
+              userId: uid,
+              ...(cid ? { conversationId: cid } : {}),
+              ...(turnProjectId ? { projectId: turnProjectId } : {}),
+            });
             if (ag) {
               createdAgents.push({
                 agent_id: ag.agent_id,
                 name: ag.name,
                 kind: "created",
               });
-              // Project-scoped conv: auto-bind the new agent into the project's
-              // bindings.json so it's actually reachable from this conversation
-              // (commander picker filters by `_pickerBoundAgentIds`; LLM
-              // dispatch is gated by the same project scope per CLAUDE.md §5).
+              // Space-scoped conv: auto-add the new agent to the space's
+              // extra_agents so it's actually reachable from this conversation
+              // (commander picker filters by the space scope; LLM dispatch is
+              // gated by the same space scope per CLAUDE.md §6).
               // Without this hop the user creates an agent and immediately
               // can't @-mention it from the same conv — observed bug shape
-              // when the project's bindings predate the new agent.
-              if (turnProjectId) {
+              // when the space predates the new agent.
+              if (turnSpaceId) {
                 try {
-                  const projectsFeatBind = await import("../projects");
-                  await projectsFeatBind.addAgentBinding(
+                  const spacesFeatBind = await import("../spaces");
+                  await spacesFeatBind.addSpaceResource(
                     uid,
-                    turnProjectId,
+                    turnSpaceId,
+                    "agent",
                     ag.agent_id,
                   );
                   log.info(
-                    `auto-bound agent ${ag.agent_id} to project ${turnProjectId} after commander creation`,
+                    `auto-added agent ${ag.agent_id} to space ${turnSpaceId} after commander creation`,
                   );
                 } catch (err) {
                   log.warn(
-                    `auto-bind agent failed cid=${cid} pid=${turnProjectId} aid=${ag.agent_id}: ${(err as Error).message}`,
+                    `auto-add agent failed cid=${cid} sid=${turnSpaceId} aid=${ag.agent_id}: ${(err as Error).message}`,
                   );
                 }
               }
@@ -4755,25 +5137,26 @@ async function runActorTurnBody(
             ) {
               workingText = `${workingText}\n\n${_formatValidationWarnings(result.validation_warnings)}`;
             }
-            // Project-scoped conv: auto-bind the new skill so the LLM in this
+            // Space-scoped conv: auto-add the new skill so the LLM in this
             // conv actually sees it via getSystemPromptBlock allowlist. Same
-            // bug shape as the agent auto-bind above — without this the user
+            // bug shape as the agent auto-add above — without this the user
             // creates a skill, the file lands on disk, but the LLM in this
-            // project conv can never invoke it (allowlist excludes it).
-            if (turnProjectId && result.kind === "created") {
+            // space conv can never invoke it (allowlist excludes it).
+            if (turnSpaceId && result.kind === "created") {
               try {
-                const projectsFeatBind = await import("../projects");
-                await projectsFeatBind.addSkillBinding(
+                const spacesFeatBind = await import("../spaces");
+                await spacesFeatBind.addSpaceResource(
                   uid,
-                  turnProjectId,
+                  turnSpaceId,
+                  "skill",
                   result.skillId,
                 );
                 log.info(
-                  `auto-bound skill ${result.skillId} to project ${turnProjectId} after commander creation`,
+                  `auto-added skill ${result.skillId} to space ${turnSpaceId} after commander creation`,
                 );
               } catch (err) {
                 log.warn(
-                  `auto-bind skill failed cid=${cid} pid=${turnProjectId} sid=${result.skillId}: ${(err as Error).message}`,
+                  `auto-add skill failed cid=${cid} sid=${turnSpaceId} sid=${result.skillId}: ${(err as Error).message}`,
                 );
               }
             }
@@ -5056,6 +5439,21 @@ async function runActorTurnBody(
   let persistedMsg: GroupMessage | null = null;
   if (outcome.kind === "persist") {
     const tailProcessItems = processItems.slice(segState.processStart);
+    const persistedRecallCitations: RecallMessageCitation[] = (
+      !outcome.failureKind && !errText && !aborted
+        ? recallCitations
+        : []
+    ).map((citation) => ({
+      asset_id: citation.assetId,
+      title: citation.title,
+      type: citation.type,
+      version: citation.version,
+      scope: citation.scope,
+      projection_id: citation.projectionId,
+      ...(citation.forecastId ? { forecast_id: citation.forecastId } : {}),
+      ...(citation.matchScore !== undefined ? { match_score: citation.matchScore } : {}),
+      match_method: citation.matchMethod,
+    }));
     persistedMsg = await enqueue({
       uid,
       cid,
@@ -5093,6 +5491,9 @@ async function runActorTurnBody(
       ...(turnMarketplaceRequests.length
         ? { marketplace_requests: turnMarketplaceRequests }
         : {}),
+      ...(persistedRecallCitations.length
+        ? { recall_citations: persistedRecallCitations }
+        : {}),
       ...(tailProcessItems.length ? { process: tailProcessItems } : {}),
       // Final segment index when this turn was split at visible-dispatch
       // boundaries; lets the renderer finalize the last per-segment placeholder.
@@ -5106,13 +5507,46 @@ async function runActorTurnBody(
       ...(item.kstarDecision?.required
         ? { kstarDecision: item.kstarDecision }
         : {}),
-      ...(item.kstarDecision?.required && kstarToolSummaries.length
-        ? { kstarToolSummaries }
-        : {}),
       ...(actor.kind === "agent" && item.kstarDecision?.required
         ? { kstarOutcomeStatus: actorRunStatus }
         : {}),
     });
+    if (persistedRecallCitations.length) {
+      const usageWrites = await Promise.allSettled(persistedRecallCitations.map((citation) => recordRecallUsage(uid, {
+        assetId: citation.asset_id,
+        assetVersion: citation.version,
+        taskRunId: item.turnId,
+        projectionId: citation.projection_id,
+        messageId: persistedMsg.id,
+        ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+        boundary: 'real',
+        outcome: 'injected',
+        ...(typeof citation.match_score === 'number' && Number.isFinite(citation.match_score)
+          ? { matchScore: citation.match_score }
+          : {}),
+      })));
+      const failedUsageWrites = usageWrites.filter((result) => result.status === 'rejected');
+      if (failedUsageWrites.length) {
+        log.warn(`Recall usage persistence partially failed cid=${cid} failed=${failedUsageWrites.length}`);
+      }
+    }
+    if (dispatchedUsage.length) {
+      // Commander-dispatched grants ride the same usage ledger so the asset
+      // line stays complete: injected (Commander) vs dispatched (Agent).
+      const dispatchedWrites = await Promise.allSettled(dispatchedUsage.map((grant) => recordRecallUsage(uid, {
+        assetId: grant.assetId,
+        assetVersion: grant.assetVersion,
+        taskRunId: item.turnId,
+        messageId: persistedMsg.id,
+        ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+        boundary: 'real',
+        outcome: 'dispatched',
+      })));
+      const failedDispatchedWrites = dispatchedWrites.filter((result) => result.status === 'rejected');
+      if (failedDispatchedWrites.length) {
+        log.warn(`Recall dispatched usage persistence partially failed cid=${cid} failed=${failedDispatchedWrites.length}`);
+      }
+    }
     await registerFinalOutputResources(outcome.produced || []);
   } else if (outcome.kind === "silent" && actor.kind !== "worker") {
     // outcome=silent → bus is NOT going to enqueue a message for this turn.
@@ -5351,6 +5785,133 @@ export async function _buildActiveSharedTaskContextBlockForTest(
   return buildActiveSharedTaskContextBlock(uid, cid);
 }
 
+/**
+ * 记一张 ContextReuseReceipt：这个 Agent 出生时继承的认知，本轮被真实注入了哪几条、
+ * 哪几条没带上、各是什么原因。这是 `资产 → 出生继承 → 复用` 的最后一跳，也是
+ * 履历页 use 段与 evidence 段唯一的数据来源。
+ *
+ * **execution id 用本轮真实的 `turn-<turnId>`**，与 `execution-records` 写的执行
+ * 记录同名、落在同一个目录里。早先版本自造过 `exec-inherit-<hash>` 合成 id 来做
+ * 幂等，真机重启后暴露出问题：回执落在一个没有 `record.json` 的目录里，执行记录
+ * 扫描器每次启动都反复 warn，而且语义上回执挂在了一次并不存在的执行上——回执
+ * 本该是某次真实执行的凭证。噪音该在展示层处理，不该靠编造 id。
+ *
+ * 同一轮重试会撞上「已存在」，那是预期结果，不是错误。
+ *
+ * 状态停在 `prepared`：它如实表示「这一轮把这些认知带进去了」，不表示模型真的
+ * 用上了、更不表示用了有帮助。DELIVERED / LOADED / USED / PROVED_USEFUL 是四件
+ * 不同的事，这里只落得起第二件。
+ */
+async function recordInheritedCognitionReuse(
+  uid: string,
+  cid: string,
+  agentId: string,
+  turnId: string,
+  facts: { reusedRefs: string[]; omittedRefs: string[] },
+): Promise<void> {
+  if (!facts.reusedRefs.length && !facts.omittedRefs.length) return;
+  try {
+    const [{ prepareReceipt }, { buildGmemberSessionId }] = await Promise.all([
+      import("../p3394/context-reuse-receipt"),
+      import("./state"),
+    ]);
+    const targetSessionId = buildGmemberSessionId(cid, agentId);
+    await prepareReceipt(
+      uid,
+      {
+        executionId: `turn-${turnId}`,
+        targetSessionId,
+        reusedRefs: facts.reusedRefs,
+        omittedRefs: facts.omittedRefs,
+        // 继承注入是只读的：Agent 拿到判断，但不能改写认知资产。
+        permissionMode: "read-only",
+        allowedScopes: ["cognition:inherited"],
+        boundary: "real",
+      },
+      { sessionId: targetSessionId },
+    );
+  } catch (err) {
+    const message = (err as Error).message;
+    // 同一轮重试必然走到这里，属正常路径，不该刷 warn。
+    if (message.includes("already exists")) return;
+    log.warn(
+      `inherited cognition receipt not recorded agent=${agentId} cid=${cid}: ${message}`,
+    );
+  }
+}
+
+async function buildSpaceBuilderSystemPrompt(uid: string): Promise<string> {
+  const { prompts } = await import("../../prompts/loader");
+  const [skillsFeat, agentsFeat, templatesFeat] = await Promise.all([
+    import("../skills"),
+    import("../agents"),
+    import("../role_templates"),
+  ]);
+  const [skills, agents, templates, scenarios] = await Promise.all([
+    skillsFeat.listSkills(),
+    agentsFeat.listAgents().catch(() => []),
+    templatesFeat.listRoleTemplates(),
+    templatesFeat.listScenarios(),
+  ]);
+  const clip = (s: string, n = 90) => {
+    const t = String(s || "").replace(/\s+/g, " ").trim();
+    return t.length > n ? `${t.slice(0, n)}…` : t;
+  };
+  const skillsBlock = skills.length
+    ? skills
+        .filter((s) => s.enabled !== false)
+        .map((s) => {
+          const desc = s.description_zh || s.description_en || "";
+          return `- ${s.name || s.id}（id: ${s.id}${s.version ? `, v${s.version}` : ""}）— ${clip(desc)}`;
+        })
+        .join("\n")
+    : "（暂无可用技能）";
+  const agentsBlock = agents.length
+    ? agents.map((a) => {
+        const desc = (a as { description_zh?: string; description_en?: string }).description_zh
+          || (a as { description_zh?: string; description_en?: string }).description_en
+          || (a as { description?: string }).description
+          || "";
+        return `- ${a.name || a.agent_id}（id: ${a.agent_id}）— ${clip(desc)}`;
+      }).join("\n")
+    : "（暂无可用智能体）";
+  const templatesBlock = templates.length
+    ? templates.map((t) => `- ${t.name}（id: ${t.template_id}）— ${clip(t.description)}`).join("\n")
+    : "（暂无角色模板）";
+  const scenariosBlock = scenarios.length
+    ? scenarios.map((s) => {
+        const extra = (s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids?.length
+          ? `，可配模板: ${(s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids!.join("/")}`
+          : "";
+        return `- ${s.name}（id: ${s.scenario_id}）— ${clip(s.description || "")}${extra}`;
+      }).join("\n")
+    : "（暂无场景）";
+  const main = renderPromptWithSharedRules(
+    prompts,
+    "space_builder",
+    {
+      skills_block: skillsBlock,
+      agents_block: agentsBlock,
+      templates_block: templatesBlock,
+      scenarios_block: scenariosBlock,
+    },
+    false,
+  );
+  return appendLanguageDirective(main);
+}
+
+/** 会话 kind 快速读取（动态 import 避免 chats ↔ group_chat 循环依赖）。
+ *  读不到/异常一律视为 normal，绝不改变既有行为。 */
+async function getConversationKindSafe(uid: string, cid: string): Promise<string> {
+  try {
+    const chats = await import("../chats");
+    const conv = await chats.getConversation(uid, cid);
+    return conv?.kind || "normal";
+  } catch {
+    return "normal";
+  }
+}
+
 async function buildCommanderSystemPrompt(
   uid: string,
   cid: string,
@@ -5421,11 +5982,17 @@ async function buildCommanderSystemPrompt(
     },
     true,
   );
-  return appendLanguageDirective(main);
+  const { readCommanderKstarContext, renderCommanderKstarContextBlock } = await import('../kstar/commander-context');
+  const kstarContext = await readCommanderKstarContext(uid, cid);
+  return appendLanguageDirective(`${main}
+
+---
+
+${renderCommanderKstarContextBlock(kstarContext)}`);
 }
 
 type SharedPromptTemplate =
-  "chat_commander" | "chat_agent_in_group" | "chat_cli_agent";
+  "chat_commander" | "chat_agent_in_group" | "chat_cli_agent" | "space_builder";
 type PromptTemplateArgs = Record<string, string | number | boolean>;
 type PromptLoader = {
   load(template: string, args?: PromptTemplateArgs): string;
@@ -5810,7 +6377,7 @@ async function resolveDispatchTarget(
   toRaw: string,
 ): Promise<string | null> {
   const key = toRaw.toLowerCase().replace(/\s+/g, "");
-  if (key === "commander" || key === "指挥官") return COMMANDER_ID;
+  if (key === "commander" || key === "cogseed" || key === "指挥官") return COMMANDER_ID;
   if (key === "user" || key === "用户") return USER_ID;
   try {
     const all = await agentsFeat.listAgents();
@@ -5934,7 +6501,7 @@ function coordinatorDispatchContract(
     "required_capabilities",
   );
   const writeScopes = normalizeDeclaredWriteScopes(input?.write_scopes);
-  const accessMode = input?.access_mode === "read" ? "read" : "write";
+  const accessMode = input?.access_mode === "read" ? "read" : (allowLegacyRunWorkerTestRoutes() || typeof input?.to === 'string' ? "write" : "read");
   return {
     dependsOn,
     requiredCapabilities,
@@ -5946,6 +6513,59 @@ function coordinatorDispatchContract(
       writeScopes,
     ),
   };
+}
+
+
+function kstarApprovalBlockedToolResult(code: string, message: string): { content: string; isError: true } {
+  return {
+    content: JSON.stringify({ ok: false, error_code: code, error: message }),
+    isError: true as const,
+  };
+}
+
+/** Host-side approval guard for privileged agent dispatch. When the active
+ *  KStar requirement carries a Projection (the host auto-confirms it at task
+ *  open), execution is paused until the Projection is confirmed AND a
+ *  Forecast is committed. Returns verified provenance IDs — never model
+ *  claims — and stamps them onto the current taskRun so the terminal event
+ *  carries them. Ordinary chat and tools without an active Projection are
+ *  unaffected. */
+async function guardKstarPrivilegedDispatch(
+  state: CidState,
+  options: { allowHostAutoTracked?: boolean } = {},
+): Promise<{ content: string; isError: true } | { provenance: { logicalRunId?: string; projectionId?: string; forecastId?: string } }> {
+  const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+  const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
+  if (!lifecycle.requirement?.projectionId) return { provenance: {} };
+  if (lifecycle.projection?.status !== 'confirmed') {
+    return kstarApprovalBlockedToolResult(
+      'kstar_projection_not_confirmed',
+      'KStar Projection is not confirmed.',
+    );
+  }
+  if (!lifecycle.requirement.forecastId) {
+    // The world model owns prediction: forecast is generated by the host
+    // (auto-forecast over the committed projection knowledge). It is
+    // advisory for execution gating — if generation failed (model
+    // unavailable, no candidates), the dispatch still proceeds rather than
+    // demanding a kstar_control call the Commander no longer has.
+    log.warn('kstar execution without forecast record (auto-forecast unavailable)', {
+      cid: maskId(state.cid),
+      requirementId: lifecycle.requirement.id,
+    });
+    return { provenance: {} };
+  }
+  const provenance = {
+    ...(lifecycle.task?.id ? { logicalRunId: lifecycle.task.id } : {}),
+    projectionId: lifecycle.projection.id,
+    forecastId: lifecycle.requirement.forecastId,
+  };
+  if (state.taskRun) {
+    if (provenance.logicalRunId) state.taskRun.logicalRunId = provenance.logicalRunId;
+    state.taskRun.projectionId = provenance.projectionId;
+    state.taskRun.forecastId = provenance.forecastId;
+  }
+  return { provenance };
 }
 
 async function prepareNestedDispatchForTool(
@@ -6155,7 +6775,7 @@ async function gateNestedAgentWake(
   workflowResumeToken?: string,
   kstarDecision?: KStarDecisionRecord,
 ): Promise<WakeRequestSummary | null> {
-  if (actor.kind !== "agent" || process.env.ORKAS_P3394_WAKE_GATE === "0")
+  if (actor.kind !== "agent" || allowLegacyGroupChatFormalAgentExecutorForTest())
     return null;
   const decision = await evaluateWake(state.uid, {
     conversationId: state.cid,
@@ -6595,6 +7215,7 @@ async function runNestedDispatch(
   outputDelivery: "final" | "process" = "process",
   kstarDecision?: KStarDecisionRecord,
   workflowStepId?: string,
+  dispatchedAssetIds?: string[],
 ): Promise<NestedDispatchOutcome> {
   // A named agent must be a roster member so its handed-back bubble renders with
   // proper attribution. The old async dispatch path seeded this via enqueue's
@@ -6695,6 +7316,7 @@ async function runNestedDispatch(
     ...(kstarDecision?.required ? { kstarDecision } : {}),
     ...(workflowStepId ? { workflow_step_id: workflowStepId } : {}),
     ...(attachments && attachments.length ? { attachments } : {}),
+    ...(dispatchedAssetIds && dispatchedAssetIds.length ? { dispatchedAssetIds } : {}),
   };
   // Bound concurrent nested dispatches: when the commander fans out several
   // run_worker/dispatch_to calls in one turn (G4 runs them concurrently),
@@ -7347,6 +7969,7 @@ interface CoordinatedNestedDispatchInput {
   kstarDecision?: KStarDecisionRecord;
   prepared: PreparedNestedDispatchStep;
   requiredCapabilities: string[];
+  dispatchedAssetIds?: string[];
 }
 
 async function runCoordinatedNestedDispatch(
@@ -7500,6 +8123,7 @@ async function runCoordinatedNestedDispatchAdmitted(
           input.outputDelivery,
           input.kstarDecision,
           input.prepared.step.id,
+          input.dispatchedAssetIds,
         ),
     });
     const { outcome, finishedStep } = lifecycle;
@@ -7641,6 +8265,437 @@ const WORKER_WORKFLOW = [
 
 function _toolError(error: string): { content: string; isError: true } {
   return { content: JSON.stringify({ ok: false, error }), isError: true };
+}
+
+
+
+/**
+ * Deterministic host routing (the fix for model-dependent routing): when a
+ * USER message is detected as a task, the HOST opens the governed KStar task
+ * and auto-confirms the projection BEFORE the Commander even starts — no
+ * reliance on the model emitting kstar_control with correct args (which
+ * failed live twice with empty payloads). The Commander's only remaining
+ * KStar responsibility is commit_forecast (the prediction itself), enforced
+ * by the guard + next_step contract.
+ *
+ * Zero-write guarantee preserved: greetings/status/trivia are not tasks, and
+ * an already-open task is never duplicated.
+ */
+/** Parse the Commander's routing judgement:
+ *  `<kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge>`.
+ *  Returns null when absent/malformed. Tolerant of bare JSON output too —
+ *  the historical prompt said "no markdown / plain JSON" while the parser
+ *  only accepted the tagged form, so EVERY live routing judgement silently
+ *  failed and no task was ever opened. Accept both shapes, plus the wrapped
+ *  `{"kstar-judge":{"is_task":...,"continuation":...}}` shape some models
+ *  produce when they read the tag name as a JSON key. */
+export function parseContinuationJudgement(text: string | undefined): { isTask: boolean; continuation: boolean } | null {
+  const raw = String(text || '').trim();
+  const tagged = raw.match(/<kstar-judge>\s*([\s\S]*?)\s*<\/kstar-judge>/);
+  const payload = (tagged ? tagged[1] : raw).trim();
+  const jsonStart = payload.search(/[{[]/);
+  if (jsonStart < 0) return null;
+  const candidate = payload.slice(jsonStart);
+  // Trim trailing prose (e.g. "Sure: {...} here.") by progressively cutting
+  // the suffix until the prefix parses as JSON; the first successful parse
+  // is authoritative.
+  for (let end = candidate.length; end > 0; end -= 1) {
+    try {
+      const parsed = JSON.parse(candidate.slice(0, end)) as Record<string, unknown>;
+      const value = unwrapRoutingJudgement(parsed);
+      if (!value || typeof value.is_task !== 'boolean') continue;
+      return {
+        isTask: value.is_task,
+        continuation: value.continuation === true,
+      };
+    } catch {
+      /* keep trimming */
+    }
+  }
+  return null;
+}
+
+/** Peel model-output wrappers off a routing judgement object. Accepts the
+ *  canonical flat `{is_task, continuation}` and the wrapped
+ *  `{"kstar-judge": {...}}` / `{"kstar_judge": {...}}` shapes. */
+function unwrapRoutingJudgement(parsed: Record<string, unknown>): { is_task?: unknown; continuation?: unknown } | null {
+  if (typeof parsed.is_task === 'boolean') return parsed;
+  for (const key of ['kstar-judge', 'kstar_judge', 'judge', 'routing']) {
+    const nested = parsed[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const candidate = nested as Record<string, unknown>;
+      if (typeof candidate.is_task === 'boolean') return candidate;
+    }
+  }
+  return null;
+}
+
+/** Default ceiling for the model-judged routing question. */
+export const CONTINUATION_JUDGE_TIMEOUT_MS = 20_000;
+
+export interface ModelRoutingVerdict {
+  isTask: boolean;
+  continuation: boolean;
+}
+
+const ROUTING_JUDGE_PROMPT = [
+  'You are the routing judge for a single user message.',
+  'Decide whether the message is a real task, and (when a tracked task is open) whether it CONTINUES that task or starts a NEW one.',
+  'Reply with EXACTLY one <kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge> block and nothing else around it.',
+  'is_task=false for greetings, thanks, acknowledgements, status questions, and small talk.',
+  'continuation=true when the message refines/follows-up/corrects the open task ("这个报告再加一节"); continuation=false when it is a different request while an older task exists ("帮我写个 Python 脚本" while a report task is open).',
+  'A task does not need a strong verb: "帮我看看这个文件哪里不对" is a task.',
+].join('\n');
+
+/**
+ * Model-judged routing (mixed deterministic + model): for any non-trivial
+ * user message, a dedicated runner (NOT the busy commander turn — a bus
+ * enqueue would deadlock because the current turn holds the queue) judges
+ * whether the message is a task and, when one is open, whether it continues
+ * it. Returns the verdict, or null on model failure (caller applies the safe
+ * default). Bounded by CONTINUATION_JUDGE_TIMEOUT_MS.
+ */
+async function judgeModelRouting(
+  uid: string,
+  cid: string,
+  newMessage: string,
+  openRequirement?: { requirementId: string; goalText: string },
+): Promise<ModelRoutingVerdict | null> {
+  if (_hostRoutingJudgeForTest) {
+    return _hostRoutingJudgeForTest(newMessage, openRequirement);
+  }
+  try {
+    const { hasConfiguredModel } = await import('../auth');
+    if (!hasConfiguredModel().configured) {
+      log.warn('kstar model routing skipped: no configured model', { cid: maskId(cid) });
+      return null;
+    }
+    const { buildRunner } = await import('../../model/core-agent/runner');
+    const { runner } = await buildRunner({
+      sessionId: `kstar-routing-${cid}`,
+      userId: uid,
+      systemPrompt: ROUTING_JUDGE_PROMPT,
+      disableTools: true,
+      ephemeralSession: true,
+      skillList: [],
+    });
+    const task = await Promise.race([
+      runner.run({
+        message: JSON.stringify({
+          newMessage: String(newMessage || '').slice(0, 2_000),
+          ...(openRequirement ? { openTaskGoal: String(openRequirement.goalText).slice(0, 1_000) } : {}),
+        }),
+        thinkingLevel: 'off',
+        cacheRetention: 'none',
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), CONTINUATION_JUDGE_TIMEOUT_MS)),
+    ]);
+    if (!task || task.meta.aborted || task.meta.error) {
+      log.warn('kstar model routing runner failed', { cid: maskId(cid), aborted: task?.meta.aborted, error: task?.meta.error });
+      return null;
+    }
+    const verdict = parseContinuationJudgement(task.text);
+    if (!verdict) {
+      log.warn('kstar model routing judge output unparsable', { cid: maskId(cid), text: String(task.text || '').slice(0, 200) });
+      return null;
+    }
+    log.info('kstar model routing verdict', {
+      cid: maskId(cid),
+      isTask: verdict.isTask,
+      continuation: verdict.continuation,
+      hasOpenRequirement: !!openRequirement,
+      messagePreview: String(newMessage || '').replace(/\s+/g, ' ').slice(0, 80),
+    });
+    return verdict;
+  } catch (error) {
+    log.warn(`kstar model routing degraded cid=${cid}: ${(error as Error).message}`);
+    return null;
+  }
+}
+
+async function hostRouteTaskTurn(
+  uid: string,
+  cid: string,
+  messageText: string | undefined,
+  sourceMessageId: string | undefined,
+  workspaceId?: string,
+): Promise<{ openedTask: boolean }> {
+  // Mixed routing: fast deterministic filter skips OBVIOUS trivial messages
+  // (greetings/status/emoji) with zero model calls and zero KStar writes;
+  // everything else goes to the model judgement which decides is_task AND
+  // continuation in one call with full conversation context.
+  const { isObviouslyTrivial, isClosingIntent } = await import('../kstar/task-intent');
+  if (isClosingIntent(messageText)) {
+    // Deterministic closing intent ("完成/搞定/结束"): close the open task
+    // via the finish path (requirement precipitation runs) and NEVER open a
+    // new task from it. Checked before the trivial filter so it cannot be
+    // swallowed as small talk, and before the model judgement so a misjudged
+    // "new task" cannot be created for a closing message.
+    try {
+      const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+      const lifecycle = await readKstarTaskLifecycle(uid, cid);
+      const openRequirement = lifecycle.requirement && lifecycle.requirement.status === 'open'
+        ? { requirementId: lifecycle.requirement.id, goalText: lifecycle.requirement.goalText }
+        : undefined;
+      if (openRequirement) {
+        const { executeKstarControl } = await import('../kstar/control-service');
+        await executeKstarControl(
+          {
+            userId: uid,
+            conversationId: cid,
+            ...(sourceMessageId ? { sourceMessageId } : {}),
+            ...(workspaceId ? { workspaceId } : {}),
+            allowedToolNames: new Set(['kstar_control']),
+          },
+          {
+            operation: 'finish',
+            idempotencyKey: `host-close-${cid}-${sourceMessageId || Date.now()}`,
+            result: {
+              finalStatus: 'completed',
+              finalText: String(messageText || '').slice(0, 4_000),
+              producedFiles: [],
+              acceptanceEvidence: [],
+              closeReason: 'user_complete',
+            },
+          },
+        );
+        log.info('kstar closing intent closed open task', {
+          cid: maskId(cid),
+          requirementId: openRequirement.requirementId,
+        });
+      }
+    } catch (error) {
+      log.warn(`kstar closing intent degraded cid=${cid}: ${(error as Error).message}`);
+    }
+    return { openedTask: false };
+  }
+  if (isObviouslyTrivial(messageText)) return { openedTask: false };
+  try {
+    const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+    const lifecycle = await readKstarTaskLifecycle(uid, cid);
+    const openRequirement = lifecycle.requirement && lifecycle.requirement.status === 'open'
+      ? { requirementId: lifecycle.requirement.id, goalText: lifecycle.requirement.goalText }
+      : undefined;
+    const verdict = await judgeModelRouting(uid, cid, messageText, openRequirement);
+    if (!verdict) return { openedTask: false }; // timeout/enqueue failure → no routing decision (safe no-op)
+    if (!verdict.isTask) return { openedTask: false }; // model says not a task → zero KStar writes
+
+    if (openRequirement && verdict.continuation === false) {
+      // Model judged: user moved to a NEW task while one was open. Close the
+      // old task via the finish path (requirement precipitation runs) and
+      // let this message open a fresh task below.
+      const { executeKstarControl } = await import('../kstar/control-service');
+      await executeKstarControl(
+        {
+          userId: uid,
+          conversationId: cid,
+          ...(sourceMessageId ? { sourceMessageId } : {}),
+          ...(workspaceId ? { workspaceId } : {}),
+          allowedToolNames: new Set(['kstar_control']),
+        },
+        {
+          operation: 'finish',
+          idempotencyKey: `host-continuation-${cid}-${sourceMessageId || Date.now()}`,
+          result: {
+            finalStatus: 'completed',
+            finalText: String(messageText || '').slice(0, 4_000),
+            producedFiles: [],
+            acceptanceEvidence: [],
+            closeReason: 'user moved to a new task',
+          },
+        },
+      );
+      log.info('kstar model routing judged NEW task; old task closed', {
+        cid: maskId(cid),
+        requirementId: openRequirement.requirementId,
+      });
+    } else if (openRequirement && verdict.continuation === true) {
+      return { openedTask: false }; // continues the open task → keep it
+    }
+    const { executeKstarControl } = await import('../kstar/control-service');
+    const goal = String(messageText || '').replace(/\s+/g, ' ').trim().slice(0, 4_000);
+    if (!goal) return { openedTask: false };
+    const created = await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['kstar_control']),
+      },
+      {
+        operation: 'upsert_state',
+        idempotencyKey: `host-route-${cid}-${sourceMessageId || Date.now()}`,
+        task: { operation: 'create', title: goal.slice(0, 200) },
+        requirement: { operation: 'create', goalText: goal },
+      },
+    );
+    if (!created.ok || created.status !== 'state_committed') return { openedTask: false };
+    await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['kstar_control']),
+      },
+      {
+        operation: 'request_projection',
+        idempotencyKey: `host-route-proj-${cid}-${sourceMessageId || Date.now()}`,
+        projection: {
+          requirementId: created.requirementId,
+          purpose: 'review',
+          taskText: goal,
+        },
+      },
+    );
+    // World-model prediction: the host owns forecast generation (dedicated
+    // runner over the committed projection knowledge). Run it ASYNC so the
+    // Commander turn starts immediately — a 10-30s forecast generation must
+    // never gate the user's reply. Errors are logged inside auto-forecast
+    // and execution proceeds without a forecast record if it fails.
+    const { autoForecastForRequirement } = await import('../kstar/auto-forecast');
+    void autoForecastForRequirement(uid, cid, created.requirementId).catch((error) => {
+      log.warn('kstar auto-forecast async degraded', {
+        cid: maskId(cid),
+        requirementId: created.requirementId,
+        error: (error as Error).message,
+      });
+    });
+    log.info('kstar host routing opened task', {
+      cid: maskId(cid),
+      requirementId: created.requirementId,
+      sourceMessageId: sourceMessageId ? maskId(sourceMessageId) : undefined,
+    });
+    return { openedTask: true };
+  } catch (error) {
+    log.warn(`kstar host routing degraded cid=${cid}: ${(error as Error).message}`);
+    return { openedTask: false };
+  }
+}
+
+/**
+ * Layer 2 routing uplift: dispatch IS a task. When the Commander dispatches a
+ * NAMED agent (dispatch_to / hand_off_to / named run_worker) and no KStar
+ * task is open, the host auto-creates the task + auto-confirmed projection
+ * (workspace_policy line, no user confirmation) so the dispatch is governed
+ * like the formal task it is. The Commander is then expected to commit a
+ * forecast; the guard still enforces it before execution continues.
+ *
+ * Advisory shaping, never a rejection: if auto-creation fails the dispatch
+ * still proceeds ungoverned (same as today) and the failure is logged.
+ */
+async function ensureKstarTaskForDispatch(
+  uid: string,
+  cid: string,
+  taskText: string,
+  sourceMessageId?: string,
+  workspaceId?: string,
+): Promise<{ created: boolean; hint?: string }> {
+  try {
+    const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+    const lifecycle = await readKstarTaskLifecycle(uid, cid);
+    if (lifecycle.task || lifecycle.requirement) return { created: false };
+    const { executeKstarControl } = await import('../kstar/control-service');
+    const result = await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['dispatch_to', 'hand_off_to', 'run_worker']),
+      },
+      {
+        operation: 'upsert_state',
+        idempotencyKey: `host-dispatch-${cid}-${Date.now()}`,
+        task: { operation: 'create', title: taskText.slice(0, 200) },
+        requirement: { operation: 'create', goalText: taskText },
+      },
+    );
+    if (!result.ok || result.status !== 'state_committed') return { created: false };
+    // Auto-confirm a projection for the newly created task (workspace_policy
+    // line — no user confirmation card).
+    const state2 = await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['dispatch_to', 'hand_off_to', 'run_worker']),
+      },
+      {
+        operation: 'request_projection',
+        idempotencyKey: `host-dispatch-proj-${cid}-${Date.now()}`,
+        projection: {
+          requirementId: result.requirementId,
+          purpose: 'review',
+          taskText,
+        },
+      },
+    );
+    if (!state2.ok || state2.status !== 'projection_confirmed') return { created: true };
+    // World-model prediction: forecast is generated by the host (dedicated
+    // runner), ASYNC so the dispatch turn is not gated by the 10-30s
+    // generation call.
+    const { autoForecastForRequirement } = await import('../kstar/auto-forecast');
+    void autoForecastForRequirement(uid, cid, result.requirementId).catch((error) => {
+      log.warn('kstar auto-forecast async degraded', {
+        cid: maskId(cid),
+        requirementId: result.requirementId,
+        error: (error as Error).message,
+      });
+    });
+    return {
+      created: true,
+      hint: `The host auto-tracked this dispatch as a KStar task (projection confirmed) and generated the world-model forecast automatically.`,
+    };
+  } catch (error) {
+    log.warn(`kstar auto-task for dispatch degraded cid=${cid}: ${(error as Error).message}`);
+    return { created: false };
+  }
+}
+
+/**
+ * Host-side validation of Commander-granted ability assets. The Commander
+ * picks assets by id; the host verifies each is a real, active asset so a
+ * hallucinated or stale id can never leak into a delegated turn. Returns
+ * the granted ids (deduped, order-preserving) or a tool-error result.
+ */
+async function resolveDispatchedAbilityAssets(
+  uid: string,
+  value: unknown,
+  context: AssetRuntimeContext,
+): Promise<{ ok: true; assetIds: string[] } | { ok: false; error: string }> {
+  if (value === undefined) return { ok: true, assetIds: [] };
+  if (!Array.isArray(value)) {
+    return { ok: false, error: "`ability_assets` must be an array of asset ids" };
+  }
+  const rawIds = value.map((entry) => String(entry || "").trim()).filter(Boolean);
+  if (rawIds.length > 24) {
+    return { ok: false, error: "`ability_assets` supports at most 24 assets per dispatch" };
+  }
+  const granted: string[] = [];
+  const seen = new Set<string>();
+  for (const rawId of rawIds) {
+    if (seen.has(rawId)) continue;
+    seen.add(rawId);
+    let asset: Awaited<ReturnType<typeof readAbilityAsset>> | null = null;
+    try {
+      asset = await readAbilityAsset(uid, rawId);
+    } catch {
+      return { ok: false, error: `unknown ability asset: ${rawId}` };
+    }
+    if (!asset) return { ok: false, error: `unknown ability asset: ${rawId}` };
+    const gate = await evaluateRecallAssetRuntimeEligibility(uid, asset, context);
+    if (!gate.eligible) {
+      return {
+        ok: false,
+        error: `ability asset is not allowed for this dispatch: ${rawId} (${gate.reasons.join(", ")})`,
+      };
+    }
+    granted.push(asset.id);
+  }
+  return { ok: true, assetIds: granted };
 }
 
 const HANDOFF_FINAL_ACTOR_ERROR =
@@ -7912,6 +8967,10 @@ async function buildCommanderExtraTools(
   // but persisted because plan steps live across worker turn boundaries.
   currentTurnAttachments?: string[],
   currentProjectId?: string,
+  currentSourceMessageId?: string,
+  resolvedRuntime: () => ChatResolvedRuntime | null = () => null,
+  currentSourceMessageText?: string,
+  currentRecallScope: Pick<AssetRuntimeContext, 'projectId' | 'workspaceId' | 'conversationKind' | 'fileKinds'> = {},
   // Called right before a VISIBLE agent dispatch runs (dispatch_to / named
   // run_worker), so the commander's accumulated reasoning so far is flushed as
   // its own bubble and the post-handback synthesis starts a fresh one. Not
@@ -7926,6 +8985,13 @@ async function buildCommanderExtraTools(
   const { getConversationWorkspacePath } = await import("./conv_workspace");
   const coordinatorWorkingDir = await getConversationWorkspacePath(uid, cid);
   const tools: AgentTool[] = [];
+  // NOTE: kstar_control is intentionally NOT in the Commander's tool surface.
+  // The world model owns the whole governed lifecycle: host routing opens
+  // task + projection, and auto-forecast generates the prediction over the
+  // committed projection knowledge. The Commander's only duty is executing
+  // the work; asking it to emit nested JSON lifecycle payloads is what
+  // produced the repeated live failures (stringified forecast, flattened
+  // candidates, guessed runtime ids).
   tools.push({
     name: "auto_tasks_list",
     description: [
@@ -8365,7 +9431,7 @@ async function buildCommanderExtraTools(
         to: {
           type: "string",
           description:
-            "Target actor — agent name or agent_id; the aliases `commander` / `user` / 指挥官 / 用户 are also accepted.",
+            "Target actor — agent name or agent_id; the aliases `commander` / `cogseed` / `user` / 指挥官 / 用户 are also accepted.",
         },
         message: {
           type: "string",
@@ -8383,6 +9449,12 @@ async function buildCommanderExtraTools(
         write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
+        ability_assets: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Ability asset ids (from the confirmed projection / your injected asset list) you explicitly grant to the target for THIS task. The target sees ONLY these assets — never a host-side selection. Omit to send no asset context.",
+        },
         kstar: {
           type: "string",
           enum: ["required", "skip"],
@@ -8476,6 +9548,16 @@ async function buildCommanderExtraTools(
         name: dispatchAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+        ...currentRecallScope,
+        agentId: dispatchActor.id,
+        purpose: message,
+        taskText: message,
+      });
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
+      // Layer 2 routing uplift: dispatch IS a task — auto-track + auto-project
+      // when no KStar task is open (advisory; never blocks the dispatch).
+      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(
         state,
         dispatchActor,
@@ -8491,6 +9573,8 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
+      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: autoTask.created });
+      if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
         dispatchActor,
@@ -8521,6 +9605,7 @@ async function buildCommanderExtraTools(
             kstarDecision: kstarDecisionRecord(kstar),
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
+            dispatchedAssetIds: grantedAssets.assetIds,
           });
         },
       });
@@ -8595,6 +9680,12 @@ async function buildCommanderExtraTools(
         write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
+        ability_assets: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Ability asset ids (from the confirmed projection / your injected asset list) you explicitly grant to the target for THIS task. The target sees ONLY these assets — never a host-side selection. Omit to send no asset context.",
+        },
         kstar: {
           type: "string",
           enum: ["required", "skip"],
@@ -8664,6 +9755,17 @@ async function buildCommanderExtraTools(
         name: handoffAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+        ...currentRecallScope,
+        agentId: handoffActor.id,
+        purpose: message,
+        taskText: message,
+      });
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
+      // Layer 2 routing uplift: named hand-off is a formal task. The
+      // auto-track flag is captured so the forecast gate is waived ONLY for
+      // the dispatch that actually created the task (ONCE semantics).
+      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(
         state,
         handoffActor,
@@ -8679,6 +9781,8 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
+      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: autoTask.created });
+      if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
         handoffActor,
@@ -8708,6 +9812,7 @@ async function buildCommanderExtraTools(
             kstarDecision: kstarDecisionRecord(kstar),
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
+            dispatchedAssetIds: grantedAssets.assetIds,
           });
           if (!outcome.ok) return { content: outcome.payload };
 
@@ -8926,6 +10031,12 @@ async function buildCommanderExtraTools(
         write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
+        ability_assets: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Ability asset ids (from the confirmed projection / your injected asset list) you explicitly grant to the worker for THIS sub-task. The worker sees ONLY these assets — never a host-side selection. Omit to send no asset context.",
+        },
         kstar: {
           type: "string",
           enum: ["required", "skip"],
@@ -8979,7 +10090,13 @@ async function buildCommanderExtraTools(
       if (!task) return _toolError("`task` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
       if (blocked) return blocked;
+      const contract = dispatchContract;
+      const legacy = allowLegacyRunWorkerTestRoutes();
       if (!toRaw) {
+        const inputWantsWrite = input?.access_mode === 'write' || (Array.isArray(input?.write_scopes) && input.write_scopes.length > 0);
+        if (!legacy && inputWantsWrite) {
+          return _toolError("Anonymous run_worker is read-only. Formal Agent work must use dispatch_to.");
+        }
         // Anonymous ephemeral worker — the commander's private isolated helper. G8d step 3:
         // run it in-process, synchronously, and hand its FULL result straight
         // back as this tool's result (single-layer dispatch — no staging, no
@@ -8990,6 +10107,12 @@ async function buildCommanderExtraTools(
           name: "Worker",
           joined_at: nowIso(),
         };
+        const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+          ...currentRecallScope,
+          purpose: task,
+          taskText: task,
+        });
+        if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
         const prepared = await prepareNestedDispatchForTool(
           state,
           workerActor,
@@ -9002,6 +10125,8 @@ async function buildCommanderExtraTools(
           resumeToken,
         );
         if (prepared.blocked) return blockedNestedDispatchToolResult(prepared);
+        const kstarGuard = await guardKstarPrivilegedDispatch(state);
+        if ('content' in kstarGuard) return kstarGuard;
         const workerExecution = await withPreparedNestedDispatchAccess({
           state,
           prepared,
@@ -9023,6 +10148,7 @@ async function buildCommanderExtraTools(
                   "process",
                   kstarDecisionRecord(kstar),
                   prepared.step.id,
+                  grantedAssets.assetIds,
                 ),
             }),
         });
@@ -9031,6 +10157,9 @@ async function buildCommanderExtraTools(
         return { content: workerExecution.value!.outcome.payload };
       }
       const resolvedId = await resolveDispatchTarget(cid, toRaw);
+      if (!legacy) {
+        return _toolError("Named run_worker is forbidden. Use dispatch_to for formal Agent work. Anonymous run_worker is read-only only.");
+      }
       if (!resolvedId) {
         return _toolError(t("errors.unknown_actor", { name: toRaw }));
       }
@@ -9050,6 +10179,15 @@ async function buildCommanderExtraTools(
         name: namedAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+        ...currentRecallScope,
+        agentId: namedActor.id,
+        purpose: task,
+        taskText: task,
+      });
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
+      // Layer 2 routing uplift: named worker is a formal task.
+      const autoTask = await ensureKstarTaskForDispatch(uid, cid, task, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(
         state,
         namedActor,
@@ -9065,6 +10203,8 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
+      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: autoTask.created });
+      if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
         namedActor,
@@ -9094,6 +10234,7 @@ async function buildCommanderExtraTools(
             kstarDecision: kstarDecisionRecord(kstar),
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
+            dispatchedAssetIds: grantedAssets.assetIds,
           });
         },
       });
@@ -9244,6 +10385,7 @@ export async function abort(uid: string, cid: string): Promise<void> {
   let abortedModelSessions = 0;
   if (state) {
     _recordTaskRunOutcome(state, "cancelled");
+    state.backendTurns.clear();
     for (const [, w] of state.workers) {
       cleared += w.queue.length;
       if (w.abortController) aborted += 1;
@@ -9255,6 +10397,15 @@ export async function abort(uid: string, cid: string): Promise<void> {
         /* ignore */
       }
     }
+  }
+  try {
+    const cancelBackend = _backendConversationCancellerForTest ?? (async (userId: string, conversationId: string) => {
+      const { mateRuntimeController } = await import('../cogseed_backend/runtime-controller');
+      return mateRuntimeController.cancelConversationTasks(userId, conversationId);
+    });
+    await cancelBackend(uid, cid);
+  } catch (err) {
+    log.warn(`abort CogSeed Backend tasks failed cid=${cid}: ${(err as Error).message}`);
   }
   // Belt-and-suspenders abort for model turns. In production traces we saw
   // user stop requests reach this function while the bus worker map no longer
@@ -9293,7 +10444,7 @@ export async function abort(uid: string, cid: string): Promise<void> {
   } catch {
     /* not loaded */
   }
-  await setStatus(uid, cid, "aborted");
+  await abortConversationRoutingState(uid, cid);
   if (state) {
     emit(state, { type: "aborted", cid });
     await emitStateChanged(state);
@@ -9464,6 +10615,7 @@ async function _runCliAgentTurn(opts: {
   item: QueueItem;
   slice: GroupMessage[];
   projectId?: string;
+  spaceId?: string;
   workingDir: string;
   signal: AbortSignal;
   onCoordinatorActivity?: (event: CoordinatorActivityEvent) => void;
@@ -9523,7 +10675,7 @@ async function _runCliAgentTurn(opts: {
     opts.item,
     opts.slice,
     bridgeHistory,
-    opts.projectId,
+    opts.spaceId,
   );
   // When `_buildCliPrompt` took the slash-command fast-path, promptText is
   // the raw `/cmd …` we forwarded. Remember the command name so the
@@ -9774,11 +10926,29 @@ async function _runCliAgentTurn(opts: {
     // Backend errors remain available to runner diagnostics, but they are
     // internal implementation details and may contain paths, stderr, or
     // protocol prose. User copy is derived from structured terminal state.
-    const detail = resumeRejected
+    let detail = resumeRejected
       ? t("cli_agent.session_expired_detail", vars)
       : result.status === "timeout"
         ? t("cli_agent.timeout_detail", vars)
         : t("cli_agent.run_failed_detail", vars);
+    // 本地代理未运行 → 给出明确的根因提示。很多用户把 CLI（Codex / Claude 等）
+    // 配成走本地代理（CC Switch 等），代理没开时 CLI 必然失败。探测本地代理
+    // 端口不可达时，报错直接说明，而不是笼统的「未能完成任务」。
+    try {
+      const { readCliModelEndpoint, probeModelEndpointReachable } = await import("../local_agents/active_config.js");
+      const cli = runtime.cli as string;
+      const ep = readCliModelEndpoint(cli as never);
+      if (ep && ep.isLocalProxy) {
+        const reachable = await probeModelEndpointReachable(cli as never);
+        if (reachable === false) {
+          detail = t("cli_agent.local_proxy_unreachable", {
+            name: opts.agent.name || runtime.cli,
+            cli: runtime.cli,
+            url: ep.baseUrl,
+          });
+        }
+      }
+    } catch { /* probe is best-effort — fall through to the generic detail */ }
     return {
       text: resultText || accText,
       error: detail,
@@ -9852,7 +11022,7 @@ async function _buildCliPrompt(
   item: QueueItem,
   slice: GroupMessage[],
   bridgeHistory: boolean,
-  projectId?: string,
+  spaceId?: string,
 ): Promise<string> {
   // Slash-command fast-path: when the user sends `/foo …` to a CLI agent,
   // forward the raw text so the CLI's own slash dispatcher (built-ins +
@@ -9906,27 +11076,28 @@ async function _buildCliPrompt(
       .trim();
   }
 
-  // ── Project instructions (ORKAS.md) — the conversation's project scope.
+  // ── Space instructions — the conversation's space scope.
   // Mirrors `core-agent/runner.ts`, which injects the same block for
   // in-process agents: low-churn user configuration, so it sits ahead of
   // the runtime region and stays byte-identical across turns. Without it a
   // CLI agent is told its name, the protocol, and the task — but nothing
-  // about the project it was summoned into, so standing rules like a repo
+  // about the space it was summoned into, so standing rules like a repo
   // path never reach it and it guesses from cwd instead.
-  // Instructions only: the in-process context policy arbitrates project
+  // Instructions only: the in-process context policy arbitrates space
   // status / memory layers that this frame does not carry.
   let projectBlock = "";
-  if (projectId) {
-    const projectsFeat = await import("../projects");
-    projectBlock = projectsFeat.formatProjectInstructionsForSystemPrompt(
+  if (spaceId) {
+    const spacesFeat = await import("../spaces");
+    projectBlock = spacesFeat.formatSpaceInstructionsForSystemPrompt(
       uid,
-      projectId,
+      spaceId,
     );
   }
 
   // ── Attachments — collected across the whole slice + this dispatch
   // De-duplicate by absolute path; preserve oldest-first order.
-  const attDir = chatAttachmentDirForConversation(uid, cid);
+  // 空间会话附件在空间目录（spaces/<sid>/chat_attachments/<cid>/）
+  const attDir = chatAttachmentDirForConversation(uid, cid, null, spaceId || null);
   const allAtts: string[] = [];
   const seenAtts = new Set<string>();
   const collect = (names: string[] | undefined) => {
@@ -10018,6 +11189,26 @@ async function _buildCliPrompt(
     if (!text) continue;
     sliceLines.push(`[${m.from} → ${to}] ${text}`);
   }
+
+  // Imported-conversation context: when a prior commander message carries a
+  // distilled model_text summary (session import), surface it to the CLI so
+  // it doesn't have to re-derive "what was done / what can't be dropped"
+  // from a cold start. This is the compressed CogSeed-side context the user
+  // expects to travel with the handoff — without it a cold CLI re-scans the
+  // whole workspace (slow first turn). Reads the conversation file directly
+  // (not the actor-scoped slice) because the seed's model_text is exactly
+  // what the CLI must not have to re-discover.
+  const importedSummary = await _extractImportedCliContext(uid, cid);
+  if (importedSummary) {
+    sliceLines.unshift(
+      `[commander → user] (导入会话接续上下文) ${importedSummary}`,
+    );
+    sliceLines.push(
+      `[系统] 接续上下文已在上方完整提供（目标、约束、已完成工作、下一步）。直接执行用户的当前任务即可，不要重新扫描工作区、不要重读历史日志、不要运行完整测试套件来“恢复上下文”——只为当前任务做最小必要的检查。`,
+    );
+    log.info(`cli prompt: injected imported context cid=${cid} agent=${agent.agent_id} chars=${importedSummary.length}`);
+  }
+
   if (!sliceLines.length) return render("");
 
   const baseBytes = Buffer.byteLength(render(""), "utf8");
@@ -10055,7 +11246,7 @@ export async function _buildCliPromptForTest(
   item: QueueItem,
   slice: GroupMessage[],
   bridgeHistory: boolean,
-  projectId?: string,
+  spaceId?: string,
 ): Promise<string> {
   return _buildCliPrompt(
     uid,
@@ -10064,7 +11255,7 @@ export async function _buildCliPromptForTest(
     item,
     slice,
     bridgeHistory,
-    projectId,
+    spaceId,
   );
 }
 
@@ -10076,6 +11267,35 @@ function _priorVisibleCliHistory(
   return idx >= 0 ? slice.slice(0, idx) : slice;
 }
 
+/** Distilled summary from an imported conversation's commander seed message
+ *  (materialize writes `model_text` = "以下是用户从...提炼简报...<summary>").
+  *  Returns the trimmed summary, or '' when there is none. */
+async function _extractImportedCliContext(uid: string, cid: string): Promise<string> {
+  const re = /以下是用户从[^\n]*提炼简报[^\n]*\n*\s*([\s\S]+)/;
+  try {
+    const chats = await import("../chats");
+    // Resolve the conversation's project so the correct jsonl (root vs
+    // project-scoped) is read for the seed's model_text.
+    let projectId: string | null = null;
+    try {
+      const conv = await chats.getConversation(uid, cid);
+      projectId = (conv as any)?.project_id ?? null;
+    } catch { /* fall through — root path read below */ }
+    const page = await chats.getMessagesPage(uid, cid, 2000, null, projectId || null);
+    const messages = page.history;
+    for (const m of messages) {
+      const modelText = (m as any)?.model_text;
+      if (m.from !== "commander" || typeof modelText !== "string") continue;
+      const match = re.exec(modelText);
+      const summary = (match && match[1]) ? match[1].trim() : "";
+      if (summary) return summary;
+    }
+  } catch {
+    // Fall back to '' — no context block is better than failing the dispatch.
+  }
+  return "";
+}
+
 function _hasPriorVisibleCliHistory(
   item: QueueItem,
   slice: GroupMessage[],
@@ -10083,4 +11303,63 @@ function _hasPriorVisibleCliHistory(
   return _priorVisibleCliHistory(item, slice).some((m) =>
     (m.text || "").trim(),
   );
+}
+
+export interface EnqueueCommanderControlInput {
+  userId: string;
+  cid: string;
+  displayText: string;
+  control: {
+    type: 'kstar_projection_decision';
+    projectionId: string;
+    decision: 'approved' | 'rejected';
+    confirmedSnapshot?: { assetIds: string[]; ruleRefs: string[] };
+    legacy?: { requirementId?: string; taskRunId?: string; forecastId?: string; originalText?: string };
+  } | {
+    /** Commander-in-context review (self-evolution): the closure loop asks the
+     *  Commander — with its FULL conversation context — to produce the
+     *  expected-vs-actual review for a finished episode, instead of a
+     *  context-free host-side inference call. The reply must contain a
+     *  <kstar-review>{...}</kstar-review> JSON block. */
+    type: 'kstar_review_request';
+    episodeId: string;
+    evidence: Record<string, unknown>;
+  } | {
+    /** Model-judged routing (mixed deterministic+model): for any non-trivial
+     *  user message, the host asks the Commander to judge BOTH whether the
+     *  message is a task AND (when a task is open) whether it continues it.
+     *  Reply: <kstar-judge>{"is_task":true|false,"continuation":true|false}</kstar-judge>.
+     *  is_task=false → zero KStar writes (trivial/boundary chat);
+     *  continuation=false closes the old task (precipitation) and the
+     *  message opens a fresh task. */
+    type: 'kstar_continuation_judge';
+    requirementId?: string;
+    currentGoal?: string;
+    newMessage: string;
+  };
+}
+
+/** Resume the SAME Commander session with a bounded internal control message
+ *  after a Projection decision (approved/rejected) or a legacy pending-state
+ *  recovery. The control JSON contains no paths, prompts, credentials, or raw
+ *  errors; the Commander decides the next lifecycle step, and the host still
+ *  gates privileged execution. */
+export async function enqueueCommanderControlMessage(input: EnqueueCommanderControlInput): Promise<void> {
+  await enqueue({
+    uid: input.userId,
+    cid: input.cid,
+    fromActorId: USER_ID,
+    // Internal control: never opens a taskRun (fixes the closure deadloop
+    // where each review request created a new run → terminal → review …).
+    internalControl: true,
+    text: input.displayText,
+    model_text: [
+      '<kstar-control>',
+      JSON.stringify(input.control),
+      'Continue in this same Commander session. Do not reclassify the original message. Do not perform privileged execution unless decision is approved.',
+      '</kstar-control>',
+    ].join('\n'),
+    forceTo: [COMMANDER_ID],
+    dispatch: true,
+  });
 }

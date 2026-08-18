@@ -30,7 +30,7 @@ import { logErrorRef, logErrorSummary, logPathRef, maskId } from '../../util/log
 
 const log = createLogger('model');
 import { genConversationId } from '../../storage';
-import type { ChatOptions, ChatResult, StreamEvent } from '../client';
+import type { ChatOptions, ChatResolvedRuntime, ChatResult, StreamEvent } from '../client';
 
 import { buildRunner, type ToolDefSnapshot } from './runner';
 import { mapCoreAgentEvents } from './event-mapper';
@@ -55,6 +55,28 @@ function startRecording(_input: unknown): NoopRecorder {
   };
 }
 
+export function createResolvedRuntimePublisher(
+  callback?: (runtime: ChatResolvedRuntime) => void,
+): {
+  setToolNames(names: readonly string[]): void;
+  publish(runtime: Omit<ChatResolvedRuntime, 'toolNames'>): void;
+} {
+  let toolNames: string[] = [];
+  return {
+    setToolNames(names) {
+      toolNames = [...new Set(names.filter(Boolean))];
+    },
+    publish(runtime) {
+      if (!callback) return;
+      try {
+        callback({ ...runtime, toolNames: [...toolNames] });
+      } catch (error) {
+        log.warn('resolved runtime callback failed', { error: logErrorSummary(error) });
+      }
+    },
+  };
+}
+
 export async function* stopStreamOnAbort<T>(
   events: AsyncIterable<T>,
   signal: AbortSignal,
@@ -69,6 +91,7 @@ export async function* stopStreamOnAbort<T>(
     else signal.addEventListener('abort', abortListener, { once: true });
   });
 
+  let completed = false;
   try {
     while (true) {
       const next = iterator.next();
@@ -77,12 +100,22 @@ export async function* stopStreamOnAbort<T>(
         const ret = iterator.return?.();
         if (ret) {
           void Promise.resolve(ret).catch((err) => {
-            log.warn('abortable stream return failed', { label, error: logErrorSummary(err) });
+            // Expected cleanup failures: the stream already ended, the abort
+            // signal was already active, or the underlying iterator rejects
+            // with AbortError when closed. Only unexpected failures while the
+            // stream is still active are worth a warning.
+            const expected = completed || (err as Error)?.name === 'AbortError';
+            if (!expected) {
+              log.warn('abortable stream return failed', { label, error: logErrorSummary(err) });
+            }
           });
         }
         return;
       }
-      if (result.done) return;
+      if (result.done) {
+        completed = true;
+        return;
+      }
       yield result.value;
     }
   } finally {
@@ -906,6 +939,7 @@ export function modelTurnContextForLog(input: {
   cid?: string;
   agentId?: string;
   projectId?: string;
+  spaceId?: string;
   workingDir?: string;
   message?: string;
   systemPrompt?: string;
@@ -949,6 +983,7 @@ export function modelTurnContextForLog(input: {
     cid: maskId(input.cid),
     agent_id: maskId(input.agentId),
     project_id: maskId(input.projectId),
+    space_id: input.spaceId ? maskId(input.spaceId) : undefined,
     provider: input.providerId || undefined,
     model: input.modelId || undefined,
     profile_id: maskId(input.profileId),
@@ -1022,7 +1057,9 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     sourceMessageFromUser,
     sourceMessageText,
     onTeachingReceipt,
+    onResolvedRuntime,
     projectId,
+    spaceId,
     onFileWritten,
     onOutputsPublished,
     hasProducedPath,
@@ -1034,6 +1071,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     thinkingLevel,
     nested = false,
     drainSteer,
+    toolAccess,
   } = opts;
 
   const diagnostics = createModelRunLogDiagnostics();
@@ -1044,6 +1082,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     cid,
     agentId,
     projectId,
+    spaceId,
     workingDir,
     message,
     systemPrompt,
@@ -1222,6 +1261,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
   }
 
   const recorder: ReturnType<typeof startRecording> = startRecording(null);
+  const resolvedRuntimePublisher = createResolvedRuntimePublisher(onResolvedRuntime);
   let agentRunResult: import('#core-agent').AgentRunResult | null = null;
   let finalText = '';
   let errText: string | null = null;
@@ -1251,10 +1291,12 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       systemPrompt,
       userId,
       ...(disableTools ? { disableTools: true } : {}),
+      ...(toolAccess === 'read-only' ? { toolAccess: 'read-only' } : {}),
       agentId,
       ...(agentName ? { agentName } : {}),
       ...(maxToolLoops ? { maxToolLoops } : {}),
       ...(disableTools ? { disableTools: true } : {}),
+      ...(toolAccess === 'read-only' ? { toolAccess: 'read-only' } : {}),
       providerFirstEventTimeoutMs: Math.max(1, streamIdleTimeout * 1000),
       ...(cid ? { cid } : {}),
       ...(turnId ? { turnId } : {}),
@@ -1263,6 +1305,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       ...(onTeachingReceipt ? { onTeachingReceipt } : {}),
       ...(sourceMessageText ? { userMessage: sourceMessageText } : message ? { userMessage: message } : {}),
       ...(projectId ? { projectId } : {}),
+      ...(spaceId ? { spaceId } : {}),
       ...(skillList !== undefined ? { skillList } : {}),
       ...(forceOpenSkillRefs && forceOpenSkillRefs.length ? { forceOpenSkillRefs } : {}),
       ...(projectAllowedSkillIds !== undefined ? { projectAllowedSkillIds } : {}),
@@ -1300,9 +1343,17 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       // is always live by then.
       onCandidateChosen: (info) => {
         recorder.setActiveCandidate(info);
+        resolvedRuntimePublisher.publish(info);
       },
     });
     const { runner, providerId, modelId, resolvedSystemPrompt, turnEphemeral, profileId, entryId, toolDefs, skillDisplayNameById, agentDisplayNameById } = built;
+    resolvedRuntimePublisher.setToolNames(toolDefs.map((tool) => tool.name));
+    resolvedRuntimePublisher.publish({
+      providerId,
+      modelId,
+      ...(profileId ? { profileId } : {}),
+      ...(entryId ? { entryId } : {}),
+    });
     activeProviderId = providerId || '';
     activeModelId = modelId || '';
     activeToolCount = toolDefs.length;
@@ -1313,6 +1364,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       cid,
       agentId,
       projectId,
+      spaceId,
       workingDir,
       message,
       systemPrompt,

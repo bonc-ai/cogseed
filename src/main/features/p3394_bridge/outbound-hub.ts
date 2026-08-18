@@ -1,0 +1,202 @@
+/**
+ * P3394 outbound hub — CogSeed's active calls to registered peers.
+ *
+ * Agent collaboration goes through the CogSeed agent itself: a host tool
+ * (p3394_send) builds an envelope here, delivers it to a registered peer
+ * endpoint, and waits for the peer's reply. Replies come back through the
+ * inbound pipeline and are matched by session id (see tryResolveReply).
+ */
+
+import { createLogger } from '../../logger';
+import { P3394HttpChannel } from './http-channel';
+import { P3394A2AChannel } from './a2a-channel';
+import { P3394ModelRuntimeAdapter } from './model-runtime-adapter';
+import type { P3394ChannelAdapter } from './channel-adapter';
+import { P3394OutboundClient } from './outbound';
+import { outboxListForReplay, outboxMarkCompleted, outboxMarkFailed, outboxMarkSent, outboxRecordSubmitted } from './outbound-outbox';
+import type { P3394Envelope } from './envelope';
+import type { P3394PeerRecord } from './registry';
+
+const log = createLogger('p3394-bridge:outbound-hub');
+
+export interface P3394OutboundReply {
+  text: string;
+  envelope: P3394Envelope;
+}
+
+interface PendingReply {
+  resolve: (reply: P3394OutboundReply) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+  /** 出站信封的 message_id —— 回复到达时据此把 outbox 记录标为 completed。 */
+  outboundMessageId: string;
+}
+
+export interface P3394OutboundHubDeps {
+  /** Live peer lookup — the app bridge registry. */
+  listPeers: () => P3394PeerRecord[];
+  /** Upper bound waiting for the peer's reply. */
+  replyTimeoutMs?: number;
+}
+
+export class P3394OutboundHub {
+  private readonly listPeers: () => P3394PeerRecord[];
+  private readonly replyTimeoutMs: number;
+  private readonly channels = new Map<string, { signature: string; channel: P3394ChannelAdapter }>();
+  private readonly pending = new Map<string, PendingReply>();
+
+  constructor(deps: P3394OutboundHubDeps) {
+    this.listPeers = deps.listPeers;
+    this.replyTimeoutMs = deps.replyTimeoutMs ?? 5 * 60 * 1000;
+  }
+
+  /** Builds the right outbound binding for a peer (guide §12 reduced-profile
+   *  table): native P3394 HTTP by default, A2A for p3394+a2a endpoints, and a
+   *  reduced model-runtime binding for model_runtime nodes / openai+ endpoints.
+   *  Non-native bindings loop their reply envelopes back into the inbound
+   *  matcher so sendAndWait waiters resolve normally. */
+  private buildChannelFor(peer: P3394PeerRecord): P3394ChannelAdapter {
+    const endpoint = peer.endpoints?.[0] ?? '';
+    if (endpoint.startsWith('p3394+a2a')) {
+      const channel = new P3394A2AChannel('cogseed-outbound-a2a', { endpoint: endpoint.slice('p3394+a2a:'.length) });
+      channel.subscribe((envelope) => { this.tryResolveReply(envelope); });
+      return channel;
+    }
+    if (endpoint.startsWith('openai+') || peer.node_kind === 'model_runtime') {
+      const channel = new P3394ModelRuntimeAdapter('cogseed-outbound-model', {
+        endpoint,
+        model: process.env.COGSEED_P3394_MODEL_MODEL || 'auto',
+      });
+      channel.subscribe((envelope) => { this.tryResolveReply(envelope); });
+      return channel;
+    }
+    return new P3394HttpChannel('cogseed-outbound', {
+      dial: {
+        endpoints: [...(peer.endpoints ?? [])],
+        // Registry expected_identity → dial-time identity verification.
+        ...(peer.expected_identity ? { expected_identity: peer.expected_identity } : {}),
+        // Per-peer outbound credential (dial_token, optional) — the outbound
+        // hub must be able to reach authenticated peers.
+        ...(peer.dial_token ? { bearerToken: peer.dial_token } : {}),
+      },
+    });
+  }
+
+  private channelFor(peer: P3394PeerRecord): P3394ChannelAdapter {
+    if (!peer.endpoints || peer.endpoints.length === 0) {
+      throw new Error('p3394_peer_has_no_endpoint');
+    }
+    const signature = [...peer.endpoints].sort().join('|');
+    const existing = this.channels.get(peer.identity.agent_id);
+    if (existing && existing.signature === signature) return existing.channel;
+    // Endpoint set changed → rebuild the channel so the new endpoints are used.
+    if (existing) void existing.channel.close().catch(() => {});
+    const channel = this.buildChannelFor(peer);
+    this.channels.set(peer.identity.agent_id, { signature, channel });
+    return channel;
+  }
+
+  /** Sends an envelope to a registered peer and waits for its reply.
+   *  Transactional outbox（指南 §12）：信封先落盘（submitted），送达后 sent，
+   *  收到回复 completed，投递失败 failed——重启后 submitted/sent 可重放。 */
+  async sendAndWait(agentId: string, envelope: P3394Envelope): Promise<P3394OutboundReply> {
+    const peer = this.listPeers().find((candidate) => candidate.identity.agent_id === agentId && !candidate.disabled);
+    if (!peer) throw new Error('p3394_peer_not_registered');
+    if (this.pending.has(envelope.session_id)) {
+      throw new Error('p3394_session_conflict');
+    }
+    outboxRecordSubmitted(envelope, agentId);
+    const channel = this.channelFor(peer);
+    const reply = new Promise<P3394OutboundReply>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(envelope.session_id);
+        // sent 但未收到回复：保持 sent（可重放），不标 failed。
+        reject(new Error('p3394_reply_timeout'));
+      }, this.replyTimeoutMs);
+      this.pending.set(envelope.session_id, { resolve, reject, timer, outboundMessageId: envelope.message_id });
+    });
+    try {
+      await channel.dial(agentId);
+      await new P3394OutboundClient(channel).send(envelope);
+      outboxMarkSent(envelope.message_id);
+    } catch (error) {
+      // Delivery failed: drop the waiter so it cannot leak past this call.
+      const waiter = this.pending.get(envelope.session_id);
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        this.pending.delete(envelope.session_id);
+      }
+      outboxMarkFailed(envelope.message_id, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    log.info('P3394 outbound send', { peer: agentId, session_id: envelope.session_id, message_id: envelope.message_id });
+    return reply;
+  }
+
+  /** 桥启动重放：把 outbox 里 submitted/sent 的信封重发给对应 peer
+   *  （at-least-once；对端按 idempotency_key 幂等）。不等待回复——
+   *  回复到达时若没有 waiter，会照常进入会话流程。 */
+  async replayOutbox(): Promise<{ replayed: number; failed: number }> {
+    let replayed = 0;
+    let failed = 0;
+    for (const record of outboxListForReplay()) {
+      try {
+        const peer = this.listPeers().find((candidate) => candidate.identity.agent_id === record.peer && !candidate.disabled);
+        if (!peer) throw new Error('p3394_peer_not_registered');
+        const channel = this.channelFor(peer);
+        await channel.dial(record.peer);
+        await new P3394OutboundClient(channel).send(record.envelope);
+        outboxMarkSent(record.message_id);
+        replayed += 1;
+        log.info('P3394 outbox replayed', { peer: record.peer, message_id: record.message_id });
+      } catch (error) {
+        // Replay is a recovery attempt, not a terminal delivery decision. Keep
+        // submitted/sent in the replay set so a temporarily unavailable peer
+        // can be retried on the next bridge recovery cycle.
+        failed += 1;
+        log.warn('P3394 outbox replay deferred', { peer: record.peer, message_id: record.message_id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { replayed, failed };
+  }
+
+  /** Inbound-pipeline hook: resolves the waiting call when the reply arrives. */
+  tryResolveReply(envelope: P3394Envelope): boolean {
+    const waiter = this.pending.get(envelope.session_id);
+    if (!waiter) return false;
+    clearTimeout(waiter.timer);
+    this.pending.delete(envelope.session_id);
+    const text = envelopeText(envelope);
+    log.info('P3394 outbound reply matched', { session_id: envelope.session_id, from: envelope.sender.agent_id });
+    waiter.resolve({ text, envelope });
+    // 回复到达：该出站信封在 outbox 里完成闭环。
+    outboxMarkCompleted(waiter.outboundMessageId);
+    return true;
+  }
+
+  /** Best-effort cleanup on app quit. */
+  async close(): Promise<void> {
+    for (const waiter of this.pending.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error('p3394_bridge_closing'));
+    }
+    this.pending.clear();
+    await Promise.all([...this.channels.values()].map((entry) => entry.channel.close().catch(() => {})));
+    this.channels.clear();
+  }
+}
+
+/** Joins the text parts of an envelope into a plain reply string. */
+export function p3394EnvelopeReplyText(envelope: P3394Envelope): string {
+  const texts: string[] = [];
+  for (const part of envelope.payload.parts) {
+    if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
+      texts.push(part.text);
+    }
+  }
+  return texts.join('\n').trim();
+}
+
+function envelopeText(envelope: P3394Envelope): string {
+  return p3394EnvelopeReplyText(envelope);
+}

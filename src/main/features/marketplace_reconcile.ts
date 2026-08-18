@@ -38,6 +38,13 @@ import {
 } from './marketplace_installs';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
 import { extractBundleSafely, postJson } from './marketplace';
+import { validateSkillDir } from '../quality';
+import { persistReport as persistQualityReport } from '../quality/report';
+import {
+  scanSkillDir, scanVerdictBlocksInstall, type SentryScanResult, type SkillSource,
+} from './security/sentry-adapter';
+import { topViolationOf } from './skill_reverify';
+import { writeInstallReceipt, writeReceipt } from './skill_trust';
 import { withMarketplaceInstallLock } from './marketplace_locks';
 import { agentPrivateSkillIdsFromBundle } from './marketplace_private_skills';
 import { downloadMarketplaceBundle, parseMarketplaceBundle } from './marketplace_bundle';
@@ -48,6 +55,7 @@ import {
   satisfiesMinAppVersion,
   type MinAppVersionSource,
 } from '../util/app-version-compat';
+import { decideMarketplaceContentUpdate } from './marketplace-update-policy';
 
 const log = createLogger('marketplace_reconcile');
 const MARKETPLACE_AGENT_JSON_DOWNLOAD_TIMEOUT_MS = 60_000;
@@ -249,7 +257,8 @@ export async function checkServerUpdatesForInstalls(
     if (!_isInstallRowAppCompatible({ id: a.id, min_app_version: server.min_app_version }, 'agent')) {
       continue;
     }
-    const contentChanged = server.version !== a.version || _freshnessAt(server) !== _freshnessAt(a);
+    const contentDecision = decideMarketplaceContentUpdate(a, server);
+    const contentChanged = contentDecision.action === 'replace_content';
     const defaultInstallChanged = typeof server.default_install === 'boolean'
       && a.default_install !== server.default_install;
     const currentStatus = a.status || a.state;
@@ -258,15 +267,25 @@ export async function checkServerUpdatesForInstalls(
       && a.agent_skills_bundle_url !== server.agent_skills_bundle_url;
     const minAppVersionChanged = typeof server.min_app_version === 'string'
       && a.min_app_version !== server.min_app_version;
+    if (!contentChanged && (contentDecision.reason === 'older_version' || contentDecision.reason === 'unparsable_version')) {
+      log.info('marketplace content update skipped', { kind: 'agent', id: a.id, reason: contentDecision.reason });
+    }
     if (contentChanged || defaultInstallChanged || statusChanged || privateSkillsUrlChanged || minAppVersionChanged) {
-      log.info(`server-update agent ${a.id}: v${a.version} → v${server.version} (freshness ${_freshnessAt(a)} → ${_freshnessAt(server)})`);
+      if (contentChanged) {
+        log.info(`server-update agent ${a.id}: v${a.version} → v${server.version} (freshness ${_freshnessAt(a)} → ${_freshnessAt(server)})`);
+      }
       try { _assertContinue(opts); } catch { return { updated_agents, updated_skills }; }
       // Replace the row in the manifest; reconcile will detect the version/freshness
-      // mismatch against `_install.json` and re-pull. agent_json_url is reused (server
-      // overwrites the same COS key on republish — see Server `api/marketplace.py::upload_agent`).
+      // mismatch against `_install.json` and re-pull. On preserve decisions the local
+      // version/freshness is kept — the server version never downgrades content.
+      // agent_json_url is reused (server overwrites the same COS key on republish —
+      // see Server `api/marketplace.py::upload_agent`).
       await addAgentInstall(uid, {
-        id: a.id, version: server.version, published_at: server.published_at,
-        updated_at: server.updated_at, agent_json_url: a.agent_json_url, create_uid: a.create_uid,
+        id: a.id,
+        version: contentChanged ? server.version : a.version,
+        published_at: contentChanged ? server.published_at : a.published_at,
+        updated_at: contentChanged ? server.updated_at : a.updated_at,
+        agent_json_url: a.agent_json_url, create_uid: a.create_uid,
         ...(typeof server.agent_skills_bundle_url === 'string'
           ? { agent_skills_bundle_url: server.agent_skills_bundle_url }
           : (typeof a.agent_skills_bundle_url === 'string' ? { agent_skills_bundle_url: a.agent_skills_bundle_url } : {})),
@@ -298,19 +317,28 @@ export async function checkServerUpdatesForInstalls(
     if (!_isInstallRowAppCompatible({ id: s.id, min_app_version: server.min_app_version }, 'skill')) {
       continue;
     }
-    const contentChanged = server.version !== s.version || _freshnessAt(server) !== _freshnessAt(s);
+    const contentDecision = decideMarketplaceContentUpdate(s, server);
+    const contentChanged = contentDecision.action === 'replace_content';
     const defaultInstallChanged = typeof server.default_install === 'boolean'
       && s.default_install !== server.default_install;
     const currentStatus = s.status || s.state;
     const statusChanged = typeof server.status === 'string' && currentStatus !== server.status;
     const minAppVersionChanged = typeof server.min_app_version === 'string'
       && s.min_app_version !== server.min_app_version;
+    if (!contentChanged && (contentDecision.reason === 'older_version' || contentDecision.reason === 'unparsable_version')) {
+      log.info('marketplace content update skipped', { kind: 'skill', id: s.id, reason: contentDecision.reason });
+    }
     if (contentChanged || defaultInstallChanged || statusChanged || minAppVersionChanged) {
-      log.info(`server-update skill ${s.id}: v${s.version} → v${server.version} (freshness ${_freshnessAt(s)} → ${_freshnessAt(server)})`);
+      if (contentChanged) {
+        log.info(`server-update skill ${s.id}: v${s.version} → v${server.version} (freshness ${_freshnessAt(s)} → ${_freshnessAt(server)})`);
+      }
       try { _assertContinue(opts); } catch { return { updated_agents, updated_skills }; }
       await addSkillInstall(uid, {
-        id: s.id, version: server.version, published_at: server.published_at,
-        updated_at: server.updated_at, bundle_url: s.bundle_url, create_uid: s.create_uid,
+        id: s.id,
+        version: contentChanged ? server.version : s.version,
+        published_at: contentChanged ? server.published_at : s.published_at,
+        updated_at: contentChanged ? server.updated_at : s.updated_at,
+        bundle_url: s.bundle_url, create_uid: s.create_uid,
         ...(typeof server.default_install === 'boolean' ? { default_install: server.default_install } : {}),
         ...(typeof server.status === 'string' ? { status: server.status } : {}),
         ...(typeof server.min_app_version === 'string' ? { min_app_version: server.min_app_version } : {}),
@@ -768,7 +796,7 @@ function _agentNeedsPull(uid: string, row: AgentInstall): boolean {
       return false;
     }
   }
-  return meta.version !== row.version || _freshnessAt(meta) !== _freshnessAt(row);
+  return decideMarketplaceContentUpdate(meta, row).action === 'replace_content';
 }
 
 function _agentPrivateSkillsExist(uid: string, id: string): boolean {
@@ -801,7 +829,7 @@ function _skillNeedsPull(uid: string, row: SkillInstall): boolean {
       return false;
     }
   }
-  return meta.version !== row.version || _freshnessAt(meta) !== _freshnessAt(row);
+  return decideMarketplaceContentUpdate(meta, row).action === 'replace_content';
 }
 
 function _agentContentExists(uid: string, id: string): boolean {
@@ -1084,6 +1112,69 @@ function _readInstallMeta(dir: string): InstallMeta | null {
   } catch { return null; }
 }
 
+/** W3: quality + deep-scan gate for a skill pulled by reconcile. Never throws
+ *  for the security verdict — it receipts it. See the call site for why the
+ *  content is kept on refusal (UX-first: reconciliation must not destroy the
+ *  user's synced library). */
+async function _gateReconciledSkill(
+  uid: string,
+  skillId: string,
+  dir: string,
+  current: { create_uid?: string },
+): Promise<void> {
+  try {
+    const report = validateSkillDir(dir, { enforceSkillRunner: false });
+    try {
+      await persistQualityReport({ uid, kind: 'skill', id: skillId, report });
+    } catch (err) {
+      log.warn('reconcile quality report persist failed', { skillId, error: String(err) });
+    }
+    const sourceTier: SkillSource = String(current.create_uid || '') === '0'
+      ? 'official'
+      : 'community';
+    const scan = await scanSkillDir(dir, sourceTier);
+    const treeHash = marketplaceContentTreeHash(dir);
+    if (scanVerdictBlocksInstall(scan.outcome)) {
+      if (scan.outcome === 'blocked' && treeHash) {
+        // Receipt the refusal so nothing runs it and the panel explains it.
+        const rule = scan.blockingRules?.[0] || scan.localRedLines?.[0];
+        writeReceipt(uid, skillId, {
+          payloadHash: treeHash,
+          decision: 'blocked',
+          violationCount: report.violations.length,
+          scanner: 'deep',
+          ...(typeof scan.score === 'number' ? { securityScore: scan.score } : {}),
+          ...(scan.scannerVersion ? { scannerVersion: scan.scannerVersion } : {}),
+          ...(scan.rulesetVersion ? { rulesetVersion: scan.rulesetVersion } : {}),
+          ...(typeof scan.isolated === 'boolean' ? { isolated: scan.isolated } : {}),
+          ...(scan.rulesDegraded ? { rulesDegraded: true } : {}),
+          ...(scan.attackSurface ? { attackSurface: { ...scan.attackSurface } } : {}),
+          ...(scan.instructionRisk ? { instructionRisk: scan.instructionRisk } : {}),
+          ...(rule ? { topRule: rule, topLevel: 'EXTREME' } : {}),
+        });
+      }
+      log.warn('reconciled skill refused by security gate; kept but withheld', {
+        skillId, outcome: scan.outcome, rules: [...(scan.blockingRules || []), ...(scan.localRedLines || [])],
+      });
+      return;
+    }
+    if (treeHash) {
+      const top = topViolationOf(report.violations);
+      writeInstallReceipt(uid, skillId, treeHash, scan, {
+        violationCount: report.violations.length,
+        ...(top?.rule ? { topRule: top.rule } : {}),
+        ...(top?.level ? { topLevel: top.level } : {}),
+      }, undefined, dir);
+    }
+  } catch (err) {
+    // The pull itself must not fail on a scanner infrastructure error: the
+    // content stays, unreceipted, and the load gate retries at first use.
+    log.warn('reconcile security gate errored; content kept unreceipted', {
+      skillId, error: (err as Error).message,
+    });
+  }
+}
+
 async function _writeInstallMeta(dir: string, meta: InstallMeta): Promise<void> {
   await fsp.writeFile(path.join(dir, '_install.json'), JSON.stringify(meta, null, 2), 'utf8');
 }
@@ -1273,6 +1364,14 @@ async function _pullSkillLocked(uid: string, row: SkillInstall, opts: Marketplac
   const skillMdFile = path.join(dir, 'SKILL.md');
   if (!fs.existsSync(skillMdFile)) throw new Error('bundle missing SKILL.md');
   _assertContinue(opts);
+  // W3 install gate for the reconcile path. UX-first, by product decision:
+  // a refusal NEVER deletes the pulled content — the user installed this skill
+  // on another device through the same gated flow, and silently removing it
+  // here would punish them for a scanner disagreement. Instead the verdict is
+  // receipted: a `blocked` receipt makes the load gate withhold the skill (the
+  // card stays visible, explained, and re-checkable), and `unknown` writes
+  // nothing so the load gate retries the deep scan at first use.
+  await _gateReconciledSkill(uid, row.id, dir, current);
   await _writeInstallMeta(dir, {
     version: current.version, published_at: current.published_at,
     ...(typeof current.updated_at === 'number' ? { updated_at: current.updated_at } : {}),

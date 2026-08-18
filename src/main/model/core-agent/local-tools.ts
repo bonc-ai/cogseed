@@ -83,6 +83,7 @@ import {
 } from '../../paths';
 import { chatAttachmentDirForConversation } from '../../util/project-layout';
 import * as chatArtifacts from '../../features/chat_artifacts';
+import { warmConversationSpace } from '../../features/chat_attachments';
 import { finalizeProducedArtifact, producedDocumentFooterText } from '../../features/produced_output_hooks';
 import { readDisabledSets } from '../../features/component_enabled';
 import {
@@ -96,6 +97,8 @@ import { checkEditFreshness, recordRead } from './read-tracker';
 import { createLogger } from '../../logger';
 import { logErrorRef, logPathRef, maskId } from '../../util/log-redact';
 import { t } from '../../i18n';
+import * as executionLog from '../../features/execution_log';
+import * as commandIntent from '../../features/command_intent';
 import {
   closeInteractiveCliSession,
   readInteractiveCliSession,
@@ -450,7 +453,7 @@ function protectedRootMentionedByCommand(opts: LocalToolsOpts, command: string):
 function protectedWriteError(abs: string, root: string): string {
   return errText(
     'E_PROTECTED_PATH_READ_ONLY',
-    `path is inside a protected read-only Orkas resource root and cannot be modified by local tools: ${abs} (root: ${root}). Use the agent/skill edit or fork flow instead.`,
+    `path is inside a protected read-only application resource root and cannot be modified by local tools: ${abs} (root: ${root}). Use the agent/skill edit or fork flow instead.`,
   );
 }
 
@@ -1085,6 +1088,30 @@ async function executeCoreBashWithOutputTracking(
   const before = opts.onFileWritten ? collectBashFileSnapshot(outputDir) : new Map<string, BashFileSnapshotEntry>();
   const restoreEnv = withBashOutputEnv(ctx, outputDir, manifestPath);
   const restoreWritableRoots = withBashWritableRoots(ctx, bashWritableRootsFor(opts, workingDir));
+
+  // Create execution record
+  const intent = commandIntent.extractIntent(command);
+  const executionId = executionLog.generateExecutionId();
+  const record: executionLog.ExecutionRecord = {
+    id: executionId,
+    intent: intent.intent,
+    why: intent.why,
+    resources: intent.resources,
+    risk: intent.risk,
+    status: 'running',
+    startTime: Date.now(),
+    rawCommand: command,
+  };
+  executionLog.appendRecord(record);
+
+  // Broadcast execution started event to renderer
+  try {
+    const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+    if (ipc.broadcastToRenderer) {
+      ipc.broadcastToRenderer('execution:started', record);
+    }
+  } catch { /* IPC not available */ }
+
   try {
     const direct = parseOrkasCliInvocation(input, ctx);
     const macWriteSandboxActive = process.platform === 'darwin'
@@ -1094,11 +1121,53 @@ async function executeCoreBashWithOutputTracking(
     const result = direct && !macWriteSandboxActive
       ? await executeDirectOrkasCli(direct, input, ctx, workingDir)
       : await coreBashTool.execute(input, ctx);
+
+    // Update execution record with result
+    const updates: Partial<executionLog.ExecutionRecord> = {
+      status: result.isError ? 'failed' : 'success',
+      endTime: Date.now(),
+      output: String(result.content || '').slice(0, 10000), // Cap output size
+    };
+    if (result.isError) {
+      updates.errorMessage = String(result.content || '');
+    }
+    executionLog.updateRecord(executionId, updates);
+
+    // Broadcast execution completed event
+    try {
+      const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+      if (ipc.broadcastToRenderer) {
+        ipc.broadcastToRenderer('execution:completed', { id: executionId, ...updates });
+      }
+    } catch { /* IPC not available */ }
+
     if (!result.isError) {
       const manifestedPaths = readBashOutputManifest(manifestPath, outputDir);
       await emitBashProducedFiles(opts, before, outputDir, command, manifestedPaths);
     }
     return translateFixedBashError(result);
+  } catch (err) {
+    // Update execution record with error
+    executionLog.updateRecord(executionId, {
+      status: 'failed',
+      endTime: Date.now(),
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+
+    // Broadcast execution failed event
+    try {
+      const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+      if (ipc.broadcastToRenderer) {
+        ipc.broadcastToRenderer('execution:completed', {
+          id: executionId,
+          status: 'failed',
+          endTime: Date.now(),
+          errorMessage: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } catch { /* IPC not available */ }
+
+    throw err;
   } finally {
     try { fs.rmSync(manifestPath, { force: true }); } catch { /* best-effort */ }
     restoreWritableRoots();
@@ -1738,7 +1807,7 @@ async function guardBashPathCandidates(
         result: {
           content: errText(
             'E_BASH_DYNAMIC_PATH_UNSUPPORTED',
-            `bash ${c.reason} target "${c.raw}" uses an unresolved variable, command substitution, or glob that Orkas cannot verify. `
+            `bash ${c.reason} target "${c.raw}" uses an unresolved variable, command substitution, or glob that the application cannot verify. `
             + (access === 'write'
               ? 'Use an explicit path inside the workspace, or use write_file/edit_file/delete_file for file changes.'
               : 'Use an explicit path inside the workspace, or ask the user to switch to an all-files access mode.'),
@@ -1897,6 +1966,80 @@ function guardDisabledSkillBash(opts: LocalToolsOpts, command: string): string |
   return null;
 }
 
+/**
+ * Reject a command that would execute a skill withheld by the security-receipt
+ * check (post-install tampering, or a verdict reached under an older ruleset).
+ *
+ * Needed because the prompt-side withhold only controls what the model is
+ * *told* about. `bin/run-skill.cjs` resolves and executes on its own, so a
+ * blocked skill invoked from a remembered id, a stale transcript, or a listing
+ * that predates the tamper would still run. This is the execution-side half of
+ * the same control; the runner itself stays free of trust logic (it is CJS and
+ * would need a second copy of the cross-language tree hash).
+ *
+ * Matched by id AND by display name, because the runner resolves either
+ * (`readSkillDisplayName` in run-skill.cjs) — an id-only check would be
+ * bypassable by invoking the skill under its frontmatter `name`.
+ *
+ * Fails open on any error, matching the load path: a scanner hiccup must not
+ * make a working skill unrunnable.
+ */
+async function guardUntrustedSkillBash(opts: LocalToolsOpts, command: string): Promise<string | null> {
+  const uid = opts.userId;
+  if (!uid || !command) return null;
+
+  const refs = extractRunSkillRefs(command);
+  // A path mention only matters if the command could EXECUTE the skill.
+  // Reading a withheld skill's bytes is how a user inspects what changed, and
+  // the whole point of withholding is to stop the model acting on the content,
+  // not to make it unreadable. Reuse the same audited read-only classifier the
+  // protected-root guard uses rather than a second notion of "safe".
+  const pathMentionCouldExecute = !bashProtectedRootMentionIsProvablyReadOnly(command);
+  if (!refs.length && !pathMentionCouldExecute) return null;
+
+  let specs: Array<{ id: string; name?: string }>;
+  let blocked: Set<string>;
+  try {
+    const registry = await import('./skill-registry');
+    specs = await registry.listSkillSpecsForAgentMetadata(uid);
+    // `listSkillSpecsForAgentMetadata` is deliberately not trust-filtered (it
+    // backs spec writes), which makes it the right source here: we need the
+    // full id/name map to resolve what the command names, then ask about trust.
+    blocked = await registry.blockedSkillIds(specs.map((s) => s.id));
+  } catch {
+    return null;
+  }
+  if (!blocked.size) return null;
+
+  const nameToId = new Map<string, string>();
+  for (const s of specs) {
+    if (s.name) nameToId.set(s.name, s.id);
+  }
+
+  const deny = (skillId: string): string => errText(
+    'E_SKILL_WITHHELD',
+    // Localized because this string is surfaced to the USER: the renderer shows
+    // a failed tool call's content as `result_preview` in the conversation
+    // stream. Same reasoning as `bash.error.*` above — the model reads the
+    // stable `E_*` code, the human reads the sentence after it.
+    bashMsg('skill_withheld', { skill: skillId }),
+  );
+
+  for (const ref of refs) {
+    if (blocked.has(ref)) return deny(ref);
+    const byName = nameToId.get(ref);
+    if (byName && blocked.has(byName)) return deny(byName);
+  }
+
+  for (const skillId of blocked) {
+    if (pathMentionCouldExecute && commandMentionsSkillRoot(command, uid, skillId)) {
+      return deny(skillId);
+    }
+  }
+
+  return null;
+}
+
 function commandStartsNoBrowserAuthLogin(command: string): boolean {
   const normalized = String(command || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return false;
@@ -1916,7 +2059,7 @@ function guardUnsupportedAuthCodeFlow(command: string): string | null {
     'this command starts a one-time browser verification-code flow that cannot be completed reliably through chat. '
     + 'Do not ask the user to paste verification codes into the conversation or keep a background process waiting. '
     + 'Use interactive_cli_start for commands that need live user input, use a browser/callback OAuth flow that completes on its own, '
-    + 'use an Orkas connector OAuth flow, or stop and give the user a one-time terminal command to run.',
+    + 'use the application-managed connector OAuth flow, or stop and give the user a one-time terminal command to run.',
   );
 }
 
@@ -1953,7 +2096,7 @@ function googleWorkspaceOauthClientScopeMismatchErr(): string {
   return errText(
     'E_GOOGLE_OAUTH_CLIENT_SCOPE_MISMATCH',
     'Google Cloud SDK OAuth client IDs cannot be reused with Gmail, Drive, Docs, Sheets, Calendar, Contacts, or Tasks scopes. '
-    + 'Do not synthesize Google OAuth URLs or scripts with Cloud SDK client IDs. Use an Orkas connector OAuth flow or stop and explain that Google Workspace access needs a product-managed Google connector.',
+    + 'Do not synthesize Google OAuth URLs or scripts with Cloud SDK client IDs. Use the application-managed connector OAuth flow or stop and explain that Google Workspace access needs a product-managed Google connector.',
   );
 }
 
@@ -2229,6 +2372,14 @@ function createBashTool(opts: LocalToolsOpts): AgentTool {
         });
         return { content: disabledSkillErr, isError: true };
       }
+      const untrustedSkillErr = await guardUntrustedSkillBash(opts, command);
+      if (untrustedSkillErr) {
+        log.warn('bash withheld skill reject', {
+          user_id: maskId(opts.userId),
+          command_chars: command.length,
+        });
+        return { content: untrustedSkillErr, isError: true };
+      }
       const unsupportedAuthErr = guardUnsupportedAuthCodeFlow(command);
       if (unsupportedAuthErr) {
         log.warn('bash unsupported auth-code flow reject', {
@@ -2372,6 +2523,14 @@ async function gateInteractiveCliStart(
     });
     return { content: disabledSkillErr, isError: true };
   }
+  const untrustedSkillErr = await guardUntrustedSkillBash(opts, command);
+  if (untrustedSkillErr) {
+    log.warn('interactive_cli_start withheld skill reject', {
+      user_id: maskId(opts.userId),
+      command_chars: command.length,
+    });
+    return { content: untrustedSkillErr, isError: true };
+  }
   if (localAccessRequiresSensitiveApproval(mode) && command.trim()) {
     const base = classifyBashCommand(command);
     const reasons = classifyConfiguredBashCommand(command, base.reasons);
@@ -2444,7 +2603,7 @@ function interactiveCliUserActionState(view: InteractiveCliSessionView): {
       userActionRequired: true,
       reason: view.prompt_kind,
       nextStep:
-        'The CLI is waiting for user input. Stop tool use now and ask the user to enter the requested value in the Orkas interactive CLI panel, not in chat. Do not close this command, retry with another auth method, or install alternate auth libraries while it is waiting. Continue only after the user replies, cancels, or the session output changes.',
+        'The CLI is waiting for user input. Stop tool use now and ask the user to enter the requested value in the interactive CLI panel, not in chat. Do not close this command, retry with another auth method, or install alternate auth libraries while it is waiting. Continue only after the user replies, cancels, or the session output changes.',
     };
   }
   return {
@@ -2567,7 +2726,7 @@ function createInteractiveCliSendTool(opts: LocalToolsOpts): AgentTool {
     description:
       'Send non-secret input to an interactive CLI session stdin. ' +
       'Use for agent-known responses such as y/n, menu choices, or pressing Enter. ' +
-      'Do not use this for OAuth authorization codes, passwords, tokens, API keys, or other user secrets; ask the user to type those in the Orkas interactive CLI panel instead.',
+      'Do not use this for OAuth authorization codes, passwords, tokens, API keys, or other user secrets; ask the user to type those in the interactive CLI panel instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3085,6 +3244,8 @@ function createCreateArtifactTool(opts: LocalToolsOpts): AgentTool {
       if (!uid || !cid) {
         return { content: errText('E_NO_CONVERSATION', 'create_artifact is only available inside a conversation.'), isError: true };
       }
+      // 空间化落盘：预热会话空间缓存，网页产物进入空间目录
+      await warmConversationSpace(uid, cid);
       const r = chatArtifacts.createArtifact(uid, cid, opts.agentId || '', {
         title: (input as { title?: unknown }).title,
         files: (input as { files?: unknown }).files,
@@ -3136,8 +3297,8 @@ function createCreateArtifactTool(opts: LocalToolsOpts): AgentTool {
         content:
           `Artifact "${r.title}" created (id ${r.artifactId}) — it is now shown to the user inside this reply, so do NOT paste its HTML in your message. ` +
           `To receive what the user does in it, the app calls ` +
-          `parent.postMessage({ __orkasArtifact: true, type: "submit", payload: <json-serialisable value> }, "*") ` +
-          `(or, with <script src="__orkas/bridge.js"></script>, window.orkasArtifact.send(payload)); ` +
+          `parent.postMessage({ __cogseedArtifact: true, type: "submit", payload: <json-serialisable value> }, "*") ` +
+          `(or, with <script src="__cogseed/bridge.js"></script>, window.cogseedArtifact.send(payload)); ` +
           `that becomes the user's next message to you.`,
       };
     },

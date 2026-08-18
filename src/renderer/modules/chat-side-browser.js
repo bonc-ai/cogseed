@@ -137,7 +137,7 @@ async function _revealSideBrowserFile() {
     if (_sbFile.projectId) payload.projectId = _sbFile.projectId;
     // Main re-validates the path against the workspace / attachment / project
     // scope; the renderer never gets to reveal an arbitrary location.
-    await window.orkas.invoke('workspace.revealPath', payload);
+    await window.cogseed.invoke('workspace.revealPath', payload);
   } catch (err) {
     if (typeof uiAlert === 'function') uiAlert(String(err && err.message || err));
   }

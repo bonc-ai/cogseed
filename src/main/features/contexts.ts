@@ -620,7 +620,10 @@ export async function importContextFileFromPath(
 }
 
 /** User-facing delete — files or dirs (recursive), refuses to touch the root index. */
-export function deleteContextTarget(relpath: string): Result {
+export function deleteContextTarget(relpath: string): Result<{ deletedPaths: string[] }> {
+  if (!relpath.trim()) {
+    return { ok: false, error: 'contexts root cannot be deleted', code: 'E_CONTEXTS_ROOT' };
+  }
   let p: string;
   try { p = resolvePath(relpath, { mustExist: true }); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
@@ -640,7 +643,7 @@ export function deleteContextTarget(relpath: string): Result {
     kbIndexer.enqueue(uid, r, 'delete');
     notifyDeletedContext(r);
   }
-  return { ok: true };
+  return { ok: true, deletedPaths: droppedRels };
 }
 
 /** Walk a path that's about to be deleted; collect every KB-supported doc-id we hold. */

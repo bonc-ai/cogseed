@@ -34,10 +34,10 @@ async function eventually(fn, label, timeoutMs = 5_000) {
 }
 
 try {
-  const { createMateRuntimeController } = require('../src/main/features/mate_agent_backend/runtime-controller.ts');
-  const { readMateTask } = require('../src/main/features/mate_agent_backend/task-store.ts');
-  const { readMateTaskEvents } = require('../src/main/features/mate_agent_backend/event-store.ts');
-  const { mateAgentRuntime } = require('../src/main/features/mate_agent_runtime/index.ts');
+  const { createMateRuntimeController } = require('../src/main/features/cogseed_backend/runtime-controller.ts');
+  const { readMateTask } = require('../src/main/features/cogseed_backend/task-store.ts');
+  const { readMateTaskEvents } = require('../src/main/features/cogseed_backend/event-store.ts');
+  const { mateAgentRuntime } = require('../src/main/features/cogseed_runtime/index.ts');
 
   const userId = 'mate-smoke-user';
   const controller = createMateRuntimeController();
@@ -75,7 +75,7 @@ try {
   process.stdout.write(JSON.stringify({ ok: true, completedTaskId: first.taskId, cancelledTaskId: second.taskId }) + '\n');
 } catch (error) {
   try {
-    const { mateAgentRuntime } = require('../src/main/features/mate_agent_runtime/index.ts');
+    const { mateAgentRuntime } = require('../src/main/features/cogseed_runtime/index.ts');
     await mateAgentRuntime.shutdown();
   } catch {}
   fs.rmSync(root, { recursive: true, force: true });

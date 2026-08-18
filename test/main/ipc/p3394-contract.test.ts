@@ -52,25 +52,15 @@ beforeEach(async () => {
 
 afterEach(() => { vi.resetModules(); });
 
-describe('p3394 contract unchanged after evolution overlay', () => {
-  it('p3394 关键通道仍注册（invoke 不返回 unknown channel）', async () => {
-    for (const ch of [
-      'p3394.listKstarCompatProjections',
-      'p3394.reviewKstarCompatProjection',
+describe('p3394 contract after legacy KSTAR removal', () => {
+  it('keeps the generic wake and protocol channels registered', async () => {
+    for (const channel of [
+      'p3394.listWakeRequests',
+      'p3394.decideWakeRequest',
       'p3394.listProtocolEvents',
-      'p3394.decideExperienceCandidate',
     ]) {
-      const r = await probe(ch);
-      // 通道存在时错误来自参数校验（如 invalid cid），绝不会是 "unknown channel"。
-      expect(r.error ?? '').not.toContain('unknown channel');
+      const result = await probe(channel);
+      expect(result.error ?? '').not.toContain('unknown channel');
     }
-  });
-
-  it('evolution 通道也已注册且与 p3394 无碰撞', async () => {
-    const evo = await probe('evolution.dashboard');
-    expect(evo.error ?? '').not.toContain('unknown channel');
-    // 一个真正不存在的通道应报 unknown channel（反向验证探测方法有效）。
-    const bogus = await probe('evolution.__nonexistent__');
-    expect(bogus.error ?? '').toContain('unknown channel');
   });
 });

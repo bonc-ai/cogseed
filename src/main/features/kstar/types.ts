@@ -1,5 +1,6 @@
 import type { AbilityAssetType } from '../recall/candidate-service';
 import type { CognitionSourceRef } from '../recall/source-service';
+import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model-types';
 
 export const KSTAR_SCHEMA_VERSION = 1;
 
@@ -16,15 +17,19 @@ export interface KstarJsonRecord {
 
 export interface KstarToolCall {
   id?: string;
+  sequence?: number;
+  actor?: string;
   name: string;
   argumentsSummary?: string;
   status?: 'ok' | 'error' | 'cancelled' | 'unknown';
 }
 
 export interface KstarAgentAction {
+  sequence?: number;
   actor?: string;
   action: string;
   summary?: string;
+  status?: 'ok' | 'error' | 'cancelled' | 'unknown';
 }
 
 export interface KstarEpisodeRecord extends KstarJsonRecord {
@@ -38,6 +43,7 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
   logicalRunId?: string;
   executionId?: string;
   projectionId?: string;
+  forecastId?: string;
   wakeRequestId?: string;
   k: {
     memoryRefs: string[];
@@ -76,7 +82,7 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
 }
 
 export type KstarReviewState = 'inferred' | 'needs_confirmation' | 'confirmed' | 'unknown';
-export type KstarReviewInferenceMethod = 'deterministic' | 'model' | 'user' | 'unknown';
+export type KstarReviewInferenceMethod = 'deterministic' | 'model' | 'commander' | 'user' | 'unknown';
 
 export interface KstarReviewRecord extends KstarJsonRecord {
   schemaVersion: 1;
@@ -89,10 +95,16 @@ export interface KstarReviewRecord extends KstarJsonRecord {
   attribution: KstarAttribution;
   reason: string;
   confidence: number;
+  actionDelta?: ActionDeltaDetail;
+  resultDelta?: ResultDeltaDetail;
   reviewState?: KstarReviewState;
   inferenceMethod?: KstarReviewInferenceMethod;
   needsConfirmation?: boolean;
   confirmedAt?: string;
+  /** Model-reasoned reusable lesson ("why the gap happened + what is worth
+   *  reusing"). When present it becomes the precipitation judgment instead
+   *  of a fixed template sentence. */
+  lesson?: string;
   evidenceRefs: CognitionSourceRef[];
   createdAt: string;
   updatedAt: string;
@@ -108,14 +120,31 @@ export interface KstarLearningSignal {
   source: 'review';
 }
 
+export interface KstarLearningProvenance {
+  projectionId: string;
+  forecastId: string;
+  episodeId: string;
+  ruleRefs: string[];
+  attribution: KstarAttribution;
+  actionDelta?: ActionDeltaDetail;
+  resultDelta?: ResultDeltaDetail;
+}
+
 export interface KstarCandidateProposal {
   judgment: string;
   summary?: string;
   uncertainty?: string;
+  suggestedAction?: 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
   suggestedType: AbilityAssetType;
   suggestedScope: string;
+  /** 适用范围。规则类候选必须带（PRD 3.1 的 RuleAsset 最低门槛）。
+   *  只能写 Episode 真实支撑得起的范围——这条教训是在哪类任务上学到的，
+   *  就只声明适用于哪类任务；不编造禁止范围。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
   sourceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
+  learningProvenance?: KstarLearningProvenance;
 }
 
 export interface KstarExtractionRunRecord extends KstarJsonRecord {

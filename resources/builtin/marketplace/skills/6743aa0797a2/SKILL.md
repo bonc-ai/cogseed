@@ -95,3 +95,14 @@ Do not use for:
 - Competitor identification may be low confidence in new or ambiguous categories.
 - The skill does not replace legal, financial, investment, or compliance diligence.
 - The skill does not publish, edit, or modify the user's website.
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：用户提供公司 URL、产品 URL、品牌名或公司/产品上下文，需要品牌研究、Brand DNA、定位、目标客户、竞品、品牌语气、定价、在线存在或内容缺口，且目标是产出可溯源证据的简报。
+- `do_not_use_when`：任务是写落地页/广告/文章/完整内容计划；完整 SEO 审计、网站审计或社媒表现分析；投资、法律、财务或尽职调查结论；更新或发布用户网站；无来源证据就下结论。
+- `positive_examples`：`Research this brand website and produce a sourced Brand DNA brief.`；`Compare our positioning with this competitor and list content gaps from public evidence.`
+- `negative_examples`：`Write a landing page from this research.`；`Claim the competitor is losing market share without any source.`
+
+本 Skill 是 `execution · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+<!-- NSEAP-GATE:END -->

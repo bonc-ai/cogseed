@@ -178,12 +178,29 @@ export function spawnCli(
   env?: NodeJS.ProcessEnv,
   providerEnv?: Record<string, string>,
 ): ChildProcessWithoutNullStreams {
+  // The CLI needs a real cwd to start in — child_process.spawn does NOT
+  // create it, and a missing cwd surfaces as `spawn <bin> ENOENT` (same
+  // code as a missing binary, easy to misread). Conversation workspaces
+  // are created lazily (see group_chat/conv_workspace.ts: the subdir is
+  // only materialised on first activity), so a space-bound conversation's
+  // first CLI turn can point at a directory that does not exist yet.
+  // Creating it here is idempotent and matches the existing defensive
+  // `mkdirSync(cwd)` pattern the wrapped bash tool already uses.
+  try {
+    fs.mkdirSync(cwd, { recursive: true });
+  } catch {
+    // Best effort — if the parent is genuinely unwritable the spawn below
+    // will fail with its own ENOENT/EACCES and the runner reports it.
+  }
   const childEnv = buildCliSpawnEnv(binPath, env ?? process.env);
   for (const [key, value] of Object.entries(providerEnv || {})) {
     if (key === 'PATH' || key === 'Path') continue;
     childEnv[key] = value;
   }
   const launch = resolveCliCommand(binPath, args, process.platform, childEnv);
+  for (const [key, value] of Object.entries(launch.envPatch || {})) {
+    childEnv[key] = value;
+  }
   const child = spawn(launch.command, launch.args, {
     cwd,
     env: childEnv,

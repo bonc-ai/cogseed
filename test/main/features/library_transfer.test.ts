@@ -14,7 +14,9 @@ vi.mock('../../../src/main/features/contexts', () => ({
   },
   deleteContextTarget: (rel: string) => {
     state.calls.push({ op: 'delete-global', args: [rel] });
-    return state.failDelete === `global:${rel}` ? { ok: false, error: 'delete_failed' } : { ok: true };
+    return state.failDelete === `global:${rel}`
+      ? { ok: false, error: 'delete_failed' }
+      : { ok: true, deletedPaths: [rel] };
   },
   renameContextEntry: (source: string, target: string) => {
     state.calls.push({ op: 'move-global', args: [source, target] });
@@ -22,23 +24,30 @@ vi.mock('../../../src/main/features/contexts', () => ({
   },
 }));
 
+vi.mock('../../../src/main/features/recall/source-removal', () => ({
+  recordRemovedContextFiles: async (userId: string, paths: string[]) => {
+    state.calls.push({ op: 'record-removed-contexts', args: [userId, paths] });
+    return { removedSourceIds: paths, failedSourceIds: [] };
+  },
+}));
+
 vi.mock('../../../src/main/features/project_files', () => ({
-  resolveProjectEntryAbsPath: async (_uid: string, pid: string, rel: string) => ({
+  resolveSpaceEntryAbsPath: async (_uid: string, pid: string, rel: string) => ({
     ok: true,
-    absPath: `/projects/${pid}/${rel}`,
+    absPath: `/spaces/${pid}/${rel}`,
     type: rel.includes('.') ? 'file' : 'dir',
   }),
-  copyProjectEntryFromPath: async (_uid: string, pid: string, source: string, target: string) => {
-    state.calls.push({ op: 'copy-project', args: [pid, source, target] });
+  copySpaceEntryFromPath: async (_uid: string, pid: string, source: string, target: string) => {
+    state.calls.push({ op: 'copy-space', args: [pid, source, target] });
     if (target.includes('unsupported')) return { ok: false, error: 'unsupported_destination' };
     return { ok: true, name: target, fileCount: 1, bytes: 10 };
   },
-  deleteProjectEntry: async (_uid: string, pid: string, rel: string) => {
-    state.calls.push({ op: 'delete-project', args: [pid, rel] });
-    return state.failDelete === `project:${pid}:${rel}` ? { ok: false, error: 'delete_failed' } : { ok: true };
+  deleteSpaceEntry: async (_uid: string, pid: string, rel: string) => {
+    state.calls.push({ op: 'delete-space', args: [pid, rel] });
+    return state.failDelete === `space:${pid}:${rel}` ? { ok: false, error: 'delete_failed' } : { ok: true };
   },
-  renameProjectFile: async (_uid: string, pid: string, source: string, target: string) => {
-    state.calls.push({ op: 'move-project', args: [pid, source, target] });
+  renameSpaceFile: async (_uid: string, pid: string, source: string, target: string) => {
+    state.calls.push({ op: 'move-space', args: [pid, source, target] });
     return { ok: true, oldName: source, name: target, type: 'file' };
   },
 }));
@@ -58,7 +67,7 @@ describe('library_transfer', () => {
   it('copies project entries into the global Library', async () => {
     const result = await transfer({
       mode: 'copy',
-      source: { scope: 'project', projectId: 'p1' },
+      source: { scope: 'space', spaceId: 'p1' },
       paths: ['notes/report.md'],
       destination: { scope: 'global', dir: 'imports' },
     });
@@ -66,32 +75,32 @@ describe('library_transfer', () => {
     expect(result).toMatchObject({ ok: true, succeeded: 1, failed: 0 });
     expect(state.calls).toContainEqual({
       op: 'copy-global',
-      args: ['/projects/p1/notes/report.md', 'imports/report.md'],
+      args: ['/spaces/p1/notes/report.md', 'imports/report.md'],
     });
   });
 
   it('moves across projects by copying before deleting the source', async () => {
     const result = await transfer({
       mode: 'move',
-      source: { scope: 'project', projectId: 'p1' },
+      source: { scope: 'space', spaceId: 'p1' },
       paths: ['folder'],
-      destination: { scope: 'project', projectId: 'p2', dir: 'archive' },
+      destination: { scope: 'space', spaceId: 'p2', dir: 'archive' },
     });
 
     expect(result).toMatchObject({ ok: true, succeeded: 1, failed: 0 });
-    expect(state.calls.map((row) => row.op)).toEqual(['copy-project', 'delete-project']);
+    expect(state.calls.map((row) => row.op)).toEqual(['copy-space', 'delete-space']);
   });
 
   it('uses an in-place rename for a move within one Library', async () => {
     const result = await transfer({
       mode: 'move',
-      source: { scope: 'project', projectId: 'p1' },
+      source: { scope: 'space', spaceId: 'p1' },
       paths: ['note.md'],
-      destination: { scope: 'project', projectId: 'p1', dir: 'archive' },
+      destination: { scope: 'space', spaceId: 'p1', dir: 'archive' },
     });
 
     expect(result).toMatchObject({ ok: true, succeeded: 1, failed: 0 });
-    expect(state.calls).toEqual([{ op: 'move-project', args: ['p1', 'note.md', 'archive/note.md'] }]);
+    expect(state.calls).toEqual([{ op: 'move-space', args: ['p1', 'note.md', 'archive/note.md'] }]);
   });
 
   it('copies within one Library without deleting the source', async () => {
@@ -111,7 +120,7 @@ describe('library_transfer', () => {
       mode: 'copy',
       source: { scope: 'global' },
       paths: ['conflict.md', 'unsupported.mov'],
-      destination: { scope: 'project', projectId: 'p1', dir: '' },
+      destination: { scope: 'space', spaceId: 'p1', dir: '' },
     });
 
     expect(result).toMatchObject({ ok: true, succeeded: 1, failed: 1 });
@@ -123,7 +132,7 @@ describe('library_transfer', () => {
   it('does not overwrite a conflicting destination', async () => {
     const result = await transfer({
       mode: 'copy',
-      source: { scope: 'project', projectId: 'p1' },
+      source: { scope: 'space', spaceId: 'p1' },
       paths: ['conflict.md'],
       destination: { scope: 'global', dir: '' },
     });
@@ -134,7 +143,7 @@ describe('library_transfer', () => {
       failed: 1,
       results: [{ source: 'conflict.md', ok: false, error: 'target_exists' }],
     });
-    expect(state.calls).toEqual([{ op: 'copy-global', args: ['/projects/p1/conflict.md', 'conflict.md'] }]);
+    expect(state.calls).toEqual([{ op: 'copy-global', args: ['/spaces/p1/conflict.md', 'conflict.md'] }]);
   });
 
   it('deduplicates children when their selected parent is transferred', async () => {
@@ -142,11 +151,11 @@ describe('library_transfer', () => {
       mode: 'copy',
       source: { scope: 'global' },
       paths: ['folder/file.md', 'folder', 'other.md'],
-      destination: { scope: 'project', projectId: 'p1', dir: '' },
+      destination: { scope: 'space', spaceId: 'p1', dir: '' },
     });
 
     expect(result).toMatchObject({ ok: true, succeeded: 2, failed: 0, skippedNested: 1 });
-    expect(state.calls.filter((row) => row.op === 'copy-project')).toHaveLength(2);
+    expect(state.calls.filter((row) => row.op === 'copy-space')).toHaveLength(2);
   });
 
   it('keeps the source and rolls back the destination when source deletion fails', async () => {
@@ -155,7 +164,7 @@ describe('library_transfer', () => {
       mode: 'move',
       source: { scope: 'global' },
       paths: ['note.md'],
-      destination: { scope: 'project', projectId: 'p1', dir: '' },
+      destination: { scope: 'space', spaceId: 'p1', dir: '' },
     });
 
     expect(result).toMatchObject({
@@ -164,7 +173,23 @@ describe('library_transfer', () => {
       failed: 1,
       results: [{ error: 'source_delete_failed' }],
     });
-    expect(state.calls.map((row) => row.op)).toEqual(['copy-project', 'delete-global', 'delete-project']);
+    expect(state.calls.map((row) => row.op)).toEqual(['copy-space', 'delete-global', 'delete-space']);
+  });
+
+  it('records a global source removal only after a cross-Library move succeeds', async () => {
+    const result = await transfer({
+      mode: 'move',
+      source: { scope: 'global' },
+      paths: ['note.md'],
+      destination: { scope: 'space', spaceId: 'p1', dir: '' },
+    });
+
+    expect(result).toMatchObject({ ok: true, succeeded: 1, failed: 0 });
+    expect(state.calls).toEqual([
+      { op: 'copy-space', args: ['p1', '/global/note.md', 'note.md'] },
+      { op: 'delete-global', args: ['note.md'] },
+      { op: 'record-removed-contexts', args: ['u1', ['note.md']] },
+    ]);
   });
 
   it('rejects copying a folder into its own descendant', async () => {

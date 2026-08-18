@@ -41,7 +41,7 @@ function _agentUiIconHtml(name, className) {
 
 // Mirror of `agents.ts::RESERVED_AGENT_NAMES` so the renderer can fail fast
 // without a round-trip. Server is still authoritative — this is just UX.
-const _RESERVED_AGENT_NAMES = new Set(['指挥官', '总指挥', 'コマンダー', '司令官', 'commander']);
+const _RESERVED_AGENT_NAMES = new Set(['指挥官', '总指挥', 'コマンダー', '司令官', 'commander', 'cogseed']);
 /** Look up the localized "External · <Brand>" label for an agent runtime
  *  type. The external badge (formerly "CLI · X") is the single
  *  user-facing tag for cli-runtime agents — name surfaces consistently
@@ -109,7 +109,7 @@ let _externalCliProviders = [];
 let _externalCliProviderSelect = null;
 
 async function _loadExternalCliProviders() {
-  const res = await window.orkas.invoke('customProviders.list');
+  const res = await window.cogseed.invoke('customProviders.list');
   _externalCliProviders = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
   return _externalCliProviders;
 }
@@ -159,7 +159,7 @@ function _isAgentPlatformSource(source) {
 }
 
 function _isExternalCliAgent(agent) {
-  return !!(agent && agent.runtime && agent.runtime.kind === 'cli');
+  return !!(agent && agent.runtime && (agent.runtime.kind === 'cli' || agent.runtime.kind === 'p3394-gateway'));
 }
 
 function _agentCardMetaHtml(a, lang) {
@@ -238,12 +238,12 @@ function _commanderAvatarFallback() {
 async function _refreshCommanderAgentState() {
   if (_commanderAgentStateInFlight) return _commanderAgentStateInFlight;
   _commanderAgentStateInFlight = (async () => {
-    if (typeof window === 'undefined' || !window.orkas?.invoke) return;
+    if (typeof window === 'undefined' || !window.cogseed?.invoke) return;
     const [memoryRes, avatarRes, profileRes, statsRes] = await Promise.allSettled([
-      window.orkas.invoke('memory.list', { target: 'agent', agentId: _COMMANDER_AGENT_ID }),
-      window.orkas.invoke('prefs.getCommanderAvatar'),
-      window.orkas.invoke('commander.getProfile'),
-      window.orkas.invoke('commander.runtimeStats.get'),
+      window.cogseed.invoke('memory.list', { target: 'agent', agentId: _COMMANDER_AGENT_ID }),
+      window.cogseed.invoke('prefs.getCommanderAvatar'),
+      window.cogseed.invoke('commander.getProfile'),
+      window.cogseed.invoke('commander.runtimeStats.get'),
     ]);
     if (memoryRes.status === 'fulfilled') {
       _commanderAgentMemoryEntries = Array.isArray(memoryRes.value?.entries)
@@ -380,12 +380,12 @@ function _maybeLoadAgentSkillNames(ids, agentId, opts = {}) {
   if (!ids.length || _agentSkillNameRows) return Promise.resolve();
   if (_agentSkillNameLoadInFlight) return _agentSkillNameLoadInFlight;
   const hasUnresolved = ids.some((id) => _agentSkillNameForId(id) === id);
-  if (!hasUnresolved || typeof window === 'undefined' || !window.orkas?.invoke) return Promise.resolve();
+  if (!hasUnresolved || typeof window === 'undefined' || !window.cogseed?.invoke) return Promise.resolve();
   _agentSkillNameLoadInFlight = (async () => {
     try {
       const [trustedRes, openRes] = await Promise.allSettled([
-        window.orkas.invoke('skills.list'),
-        window.orkas.invoke('skills.listOpen'),
+        window.cogseed.invoke('skills.list'),
+        window.cogseed.invoke('skills.listOpen'),
       ]);
       const trusted = trustedRes.status === 'fulfilled' && Array.isArray(trustedRes.value?.skills)
         ? trustedRes.value.skills
@@ -439,7 +439,7 @@ function _agentRuntimeStats(agent) {
 
 async function _refreshAgentRuntimeStatsAfterRun(agentId) {
   const id = String(agentId || '');
-  if (!id || _isCommanderAgent(id) || _isAgentProfileMock(id) || !window.orkas?.invoke) return;
+  if (!id || _isCommanderAgent(id) || _isAgentProfileMock(id) || !window.cogseed?.invoke) return;
   try {
     await loadAgents(true);
     if (_selectedAgent?.id === id && !_agentEditing) await selectAgent(id);
@@ -629,9 +629,8 @@ async function loadAgents(forceRefresh, opts = {}) {
         // → loadAgents, so the first sidebar render lands before the cache
         // is populated and the badges fall back to seed-derived avatars —
         // re-render once the cache exists so they pick up the authored
-        // icon. Projects section subscribes to the same render call.
+        // icon. Conversation list subscribes to the same render call.
         if (typeof renderConversationList === 'function') renderConversationList();
-        if (typeof renderProjectsSection === 'function') renderProjectsSection();
         if (summary) return;
         await _refreshCommanderAgentState();
         renderAgentsList(_agentsCache);
@@ -668,7 +667,7 @@ async function _backfillMissingAvatars(agents) {
     if (!a.icon) updates.icon = seedAvatar.icon;
     if (!a.color) updates.color = seedAvatar.color;
     try {
-      const res = await window.orkas.invoke('agents.update', {
+      const res = await window.cogseed.invoke('agents.update', {
         agent_id: a.agent_id, updates,
       });
       if (res?.ok && res.agent) {
@@ -716,6 +715,10 @@ function renderAgentsGrid(agents) {
   const moreTitle = escapeHtml(t('agents.more_actions'));
   const lang = getLang();
   const customChipLabel = t('agents.custom_group');
+  const baseGroupLabel = (() => {
+    const raw = t('agents.base_group');
+    return (raw && raw !== 'agents.base_group') ? raw : t('agents.external_group');
+  })();
   const marketplaceGroupLabel = (() => {
     const raw = t('agents.builtin_group');
     return (raw && raw !== 'agents.builtin_group') ? raw : t('agents.source_marketplace');
@@ -799,9 +802,15 @@ function renderAgentsGrid(agents) {
     const descClass = desc ? 'agent-card-desc' : 'agent-card-desc is-empty';
     const descText = desc || t('agents.placeholder_unset');
     const moreBtn = (isMock || isCommander) ? '' : `<button type="button" class="agent-card-more" data-agent-more title="${moreTitle}" aria-label="${moreTitle}">⋯</button>`;
-    const avatarHtml = renderAvatarHtml(a.icon, a.color, { size: 32, seed: a.agent_id, extraClass: 'agent-card-avatar' });
+    const avatarHtml = renderAvatarHtml(a.icon, a.color, {
+      size: 32,
+      seed: a.agent_id,
+      extraClass: 'agent-card-avatar',
+      // 外接 CLI agent：头像内容换成该 agent 名称前两个字母（如 Claude → "Cl"）
+      letter: _isExternalCliAgent(a) ? (a.name || '') : '',
+    });
     // CLI brand chip on the bottom row, shared with the play button.
-    const cliChip = (a.runtime && a.runtime.kind === 'cli')
+    const cliChip = (a.runtime && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'))
       ? `<span class="agent-card-chip is-cli is-cli-${escapeHtml(a.runtime.cli)}">${escapeHtml(_cliBadgeLabel(a.runtime.cli))}</span>`
       : '';
     // Source provenance chips on the bottom row. Version/category now live
@@ -832,11 +841,14 @@ function renderAgentsGrid(agents) {
     `;
   };
 
-  const groups = { commander: [], custom: [], marketplace: [] };
+  const groups = { commander: [], base: [], custom: [], marketplace: [] };
   for (const a of filtered) {
     const source = _agentSource(a?.source);
     if (_isCommanderAgent(a)) groups.commander.push(a);
     else if (source === 'marketplace') groups.marketplace.push(a);
+    // 外接 CLI agent（ClaudeCode / Codex / WorkBuddy…）是「基础 Agent」：
+    // 与指挥官同层（谁来承接空间任务），与自定义团队成员分开。
+    else if (_isExternalCliAgent(a)) groups.base.push(a);
     else groups.custom.push(a);
   }
   const sectionHtml = (label, list, opts = {}) => {
@@ -857,6 +869,7 @@ function renderAgentsGrid(agents) {
   };
   gridEl.classList.add('is-sectioned');
   gridEl.innerHTML = sectionHtml('', groups.commander, { hideHead: true })
+    + sectionHtml(baseGroupLabel, groups.base)
     + sectionHtml(customChipLabel, groups.custom)
     + sectionHtml(marketplaceGroupLabel, groups.marketplace);
 
@@ -885,7 +898,7 @@ function renderAgentsGrid(agents) {
 async function _flipAgentEnabled(agentId, nextEnabled) {
   if (_isCommanderAgent(agentId)) return false;
   try {
-    const res = await window.orkas.invoke('agents.setEnabled', { agent_id: agentId, enabled: nextEnabled });
+    const res = await window.cogseed.invoke('agents.setEnabled', { agent_id: agentId, enabled: nextEnabled });
     if (!res || !res.ok) {
       await uiAlert(t('component.toggle_failed'));
       return false;
@@ -1171,9 +1184,9 @@ async function _detailCategoryOptions(currentValue = '') {
   const stateCats = (typeof _mpState !== 'undefined' && Array.isArray(_mpState?.categories)) ? _mpState.categories : [];
   const cacheCats = (typeof _mpCategoriesCache !== 'undefined' && Array.isArray(_mpCategoriesCache)) ? _mpCategoriesCache : [];
   let categories = stateCats.length ? stateCats : cacheCats;
-  if (!categories.length && typeof window !== 'undefined' && window.orkas?.invoke) {
+  if (!categories.length && typeof window !== 'undefined' && window.cogseed?.invoke) {
     try {
-      const res = await window.orkas.invoke('marketplace.categories', { local_only: true });
+      const res = await window.cogseed.invoke('marketplace.categories', { local_only: true });
       const list = Array.isArray(res?.list) ? res.list : [];
       if (list.length) {
         categories = list;
@@ -1252,7 +1265,7 @@ function _renderAgentHeaderCategory(agent) {
     readonly: isMock,
     onChange: async (category, api) => {
       try {
-        const res = await window.orkas.invoke('agents.update', {
+        const res = await window.cogseed.invoke('agents.update', {
           agent_id: agentId,
           updates: { category: category || 'general' },
         });
@@ -1378,7 +1391,7 @@ async function _saveAgentTextList(agent, key, values) {
     if (clean.length >= 20) break;
   }
   try {
-    const res = await window.orkas.invoke('agents.update', {
+    const res = await window.cogseed.invoke('agents.update', {
       agent_id: agent.agent_id,
       updates: { [key]: clean },
     });
@@ -1562,23 +1575,23 @@ function _renderAgentDetailMemory(agent, editing = false) {
 
 async function _agentMemoryAdd(agent, text) {
   if (_isCommanderAgent(agent)) {
-    return window.orkas.invoke('memory.add', { target: 'agent', agentId: _COMMANDER_AGENT_ID, content: text });
+    return window.cogseed.invoke('memory.add', { target: 'agent', agentId: _COMMANDER_AGENT_ID, content: text });
   }
-  return window.orkas.invoke('agents.memory.add', { agent_id: agent.agent_id, content: text });
+  return window.cogseed.invoke('agents.memory.add', { agent_id: agent.agent_id, content: text });
 }
 
 async function _agentMemoryUpdate(agent, oldText, text) {
   if (_isCommanderAgent(agent)) {
-    return window.orkas.invoke('memory.replace', { target: 'agent', agentId: _COMMANDER_AGENT_ID, oldText, content: text });
+    return window.cogseed.invoke('memory.replace', { target: 'agent', agentId: _COMMANDER_AGENT_ID, oldText, content: text });
   }
-  return window.orkas.invoke('agents.memory.update', { agent_id: agent.agent_id, old_text: oldText, content: text });
+  return window.cogseed.invoke('agents.memory.update', { agent_id: agent.agent_id, old_text: oldText, content: text });
 }
 
 async function _agentMemoryRemove(agent, text) {
   if (_isCommanderAgent(agent)) {
-    return window.orkas.invoke('memory.remove', { target: 'agent', agentId: _COMMANDER_AGENT_ID, oldText: text });
+    return window.cogseed.invoke('memory.remove', { target: 'agent', agentId: _COMMANDER_AGENT_ID, oldText: text });
   }
-  return window.orkas.invoke('agents.memory.remove', { agent_id: agent.agent_id, old_text: text });
+  return window.cogseed.invoke('agents.memory.remove', { agent_id: agent.agent_id, old_text: text });
 }
 
 function _wireAgentMemoryControls(host, agent) {
@@ -1674,6 +1687,123 @@ function _renderAgentDetailKnowhow(agent, editing = false) {
   _renderEditableTagList(host, agent, 'knowhow', tags, editing);
 }
 
+/** 一条资产没被继承的原因，翻成用户能懂的话。
+ *
+ *  `user_excluded` 单独一档：那是人做的决定，其余五档是系统按资产状态判的。
+ *  两者混在一起显示，用户就没法回答「是我当初勾掉的，还是它自己失效了」。 */
+function _inheritanceExclusionLabel(reason) {
+  switch (reason) {
+    case 'user_excluded':
+      return _agentLabel('agents.inheritance_excluded_user', '你在创建时勾掉了', 'You unchecked it at creation', '作成時にあなたが外しました');
+    case 'paused':
+      return _agentLabel('agents.inheritance_excluded_paused', '当时已暂停', 'Paused at the time', '当時は一時停止中');
+    case 'archived':
+      return _agentLabel('agents.inheritance_excluded_archived', '当时已归档', 'Archived at the time', '当時はアーカイブ済み');
+    case 'revoked':
+      return _agentLabel('agents.inheritance_excluded_revoked', '当时已撤销', 'Revoked at the time', '当時は取り消し済み');
+    case 'deleted':
+      return _agentLabel('agents.inheritance_excluded_deleted', '当时已删除', 'Deleted at the time', '当時は削除済み');
+    case 'purged':
+      return _agentLabel('agents.inheritance_excluded_purged', '当时已彻底清除', 'Purged at the time', '当時は完全消去済み');
+    default:
+      return reason;
+  }
+}
+
+function _inheritanceItemHtml(title, meta, { excludedByUser = false } = {}) {
+  return `
+    <div class="agents-detail-list-item">
+      <div class="agents-detail-list-main">
+        <span class="agents-detail-list-text">${escapeHtml(title)}</span>
+        <span class="agents-detail-list-meta${excludedByUser ? ' is-user-choice' : ''}">${escapeHtml(meta)}</span>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * 「出生时继承了什么」。
+ *
+ * **两种空必须分开说。** `inheritance === null` 表示这个 Agent 生成的时候还没有
+ * 继承机制——它不是「没继承到东西」，是这个问题当时根本不存在。把两者都渲染成
+ * 一句「没有继承任何认知」，用户会以为自己教过的东西丢了。
+ */
+async function _renderAgentDetailInheritance(agent) {
+  const section = document.getElementById('agents-detail-inheritance-section');
+  const host = document.getElementById('agents-detail-inheritance');
+  if (!section || !host) return;
+  const agentId = String(agent?.agent_id || '');
+  if (!agentId || _isCommanderAgent(agent)) {
+    section.style.display = 'none';
+    host.innerHTML = '';
+    return;
+  }
+
+  let inheritance = null;
+  let assetTitles = new Map();
+  try {
+    const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/inheritance`);
+    const data = await res.json();
+    if (!data.ok) throw new Error('inheritance unavailable');
+    inheritance = data.inheritance;
+    if (inheritance) {
+      // 继承记录只存引用，标题要另取——取不到就退回显示 id，而不是空着。
+      // recall 频道在渲染层一律直接 invoke（与 skills.js 一致），不走 apiFetch。
+      const list = await window.cogseed.invoke('recall.assets.list').catch(() => null);
+      assetTitles = new Map((list?.assets || []).map((a) => [a.id, a.title]));
+    }
+  } catch {
+    section.style.display = 'none';
+    host.innerHTML = '';
+    return;
+  }
+
+  // 异步返回期间用户可能已经切走了，别把结果画到别人的详情页上。
+  if (!_selectedAgent || _selectedAgent.id !== agentId) return;
+
+  section.style.display = '';
+
+  if (!inheritance) {
+    host.innerHTML = `<p class="agents-detail-placeholder">${escapeHtml(_agentLabel(
+      'agents.inheritance_none_recorded',
+      '这个智能体创建时还没有继承机制，所以没有出生记录——不是它没继承到东西。',
+      'This agent was created before inheritance was recorded, so there is no record of its creation — that is not the same as inheriting nothing.',
+      'このエージェントは継承の記録が始まる前に作成されたため、作成時の記録がありません（何も継承しなかったという意味ではありません）。',
+    ))}</p>`;
+    return;
+  }
+
+  const inherited = Array.isArray(inheritance.inheritedAssets) ? inheritance.inheritedAssets : [];
+  const excluded = Array.isArray(inheritance.excludedAssets) ? inheritance.excludedAssets : [];
+
+  const inheritedHtml = inherited.map((ref) => _inheritanceItemHtml(
+    assetTitles.get(ref.asset_id) || ref.asset_id,
+    `v${ref.version}`,
+  )).join('');
+
+  const excludedHtml = excluded.map((entry) => _inheritanceItemHtml(
+    assetTitles.get(entry.assetId) || entry.assetId,
+    _inheritanceExclusionLabel(entry.reason),
+    { excludedByUser: entry.reason === 'user_excluded' },
+  )).join('');
+
+  const emptyHtml = inherited.length ? '' : `<p class="agents-detail-placeholder">${escapeHtml(_agentLabel(
+    'agents.inheritance_empty',
+    '创建时没有可继承的认知资产。',
+    'There was no cognition available to inherit when this agent was created.',
+    '作成時に継承できる認知資産がありませんでした。',
+  ))}</p>`;
+
+  const excludedTitle = excluded.length ? `<div class="agents-detail-label is-sub">${escapeHtml(_agentLabel(
+    'agents.inheritance_excluded_label',
+    '没有带走的',
+    'Not carried over',
+    '引き継がなかったもの',
+  ))}</div>` : '';
+
+  host.innerHTML = `${emptyHtml}${inheritedHtml}${excludedTitle}${excludedHtml}`;
+}
+
 function _renderAgentDetail(agent, editing) {
   agent = { ...agent, source: _agentSource(agent.source) };
   const isCommander = _isCommanderAgent(agent);
@@ -1708,12 +1838,14 @@ function _renderAgentDetail(agent, editing) {
   _renderAgentDetailStats(agent, editing);
   _renderAgentDetailMemory(agent, editing);
   _renderAgentDetailKnowhow(agent, editing);
+  // 异步：要读出生快照与资产标题。失败就把整段藏起来，不占位。
+  void _renderAgentDetailInheritance(agent);
 
   // CLI-backed agents have no authored workflow / skill_list — the
   // external CLI brings its own behavior. Hide the entire workflow
   // section so the detail page doesn't show an empty editor block.
   const workflowSection = document.querySelector('.agents-detail-section-workflow');
-  const isCliRuntime = !!(agent.runtime && agent.runtime.kind === 'cli');
+  const isCliRuntime = !!(agent.runtime && (agent.runtime.kind === 'cli' || agent.runtime.kind === 'p3394-gateway'));
   const structuredWorkflow = _agentWorkflowSteps(agent);
   const hasWorkflowToShow = structuredWorkflow.length || !!String(agent.workflow || '').trim();
   if (workflowSection) workflowSection.style.display = (isCliRuntime && !hasWorkflowToShow) ? 'none' : '';
@@ -1869,7 +2001,7 @@ function _renderAgentOutputFormatSection(agent, editing = false) {
     value: current,
     onChange: async (val) => {
       try {
-        const res = await window.orkas.invoke('agents.update', {
+        const res = await window.cogseed.invoke('agents.update', {
           agent_id: agent.agent_id,
           updates: { output_format: val },
         });
@@ -1994,7 +2126,7 @@ async function _renderAgentDetailRuntime(agent) {
         }
       }
       try {
-        const res = await window.orkas.invoke('agents.update', {
+        const res = await window.cogseed.invoke('agents.update', {
           agent_id: agent.agent_id, updates,
         });
         if (res?.ok && res.agent) {
@@ -2008,7 +2140,7 @@ async function _renderAgentDetailRuntime(agent) {
           // the runtime swap still goes through.
           const safeUpdates = { ...updates };
           delete safeUpdates.name;
-          await window.orkas.invoke('agents.update', {
+          await window.cogseed.invoke('agents.update', {
             agent_id: agent.agent_id, updates: safeUpdates,
           });
           _agentsCache = null;
@@ -2030,7 +2162,7 @@ async function _renderAgentDetailProjectDir(agent) {
   const section = document.getElementById('agents-detail-project-dir-section');
   const slot = document.getElementById('agents-detail-project-dir');
   if (!section || !slot) return;
-  const cli = agent.runtime?.kind === 'cli' ? agent.runtime.cli : '';
+  const cli = (agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway') ? agent.runtime.cli : '';
   const supportsProjectDir = typeof cliIsCodingAgent === 'function' && cliIsCodingAgent(cli);
   if (!supportsProjectDir) {
     section.style.display = 'none';
@@ -2074,11 +2206,11 @@ async function _renderAgentDetailProjectDir(agent) {
     const pick = async () => {
       if (!canEdit) return;
       try {
-        const picked = await window.orkas.invoke('common.pickDirectory', {
+        const picked = await window.cogseed.invoke('common.pickDirectory', {
           title: t('agents.label_project_dir'),
         });
         if (!picked || picked.cancelled || !picked.path) return;
-        const saved = await window.orkas.invoke('agents.cliProjectDir.set', {
+        const saved = await window.cogseed.invoke('agents.cliProjectDir.set', {
           agent_id: agent.agent_id,
           path: picked.path,
         });
@@ -2096,7 +2228,7 @@ async function _renderAgentDetailProjectDir(agent) {
       e.stopPropagation();
       if (!canEdit) return;
       try {
-        const saved = await window.orkas.invoke('agents.cliProjectDir.set', {
+        const saved = await window.cogseed.invoke('agents.cliProjectDir.set', {
           agent_id: agent.agent_id,
           path: '',
         });
@@ -2113,7 +2245,7 @@ async function _renderAgentDetailProjectDir(agent) {
 
   slot.innerHTML = `<div class="agent-project-dir-card is-loading">${_agentUiIconHtml('folder-open', 'agent-project-dir-icon')}<div class="agent-project-dir-main"><div class="agent-project-dir-path">${escapeHtml(t('common.loading'))}</div></div></div>`;
   try {
-    const res = await window.orkas.invoke('agents.cliProjectDir.get', { agent_id: agent.agent_id });
+    const res = await window.cogseed.invoke('agents.cliProjectDir.get', { agent_id: agent.agent_id });
     if (!res || !res.ok || !res.info) throw new Error(res?.error || 'failed');
     renderInfo(res.info);
   } catch (err) {
@@ -2164,7 +2296,7 @@ function _renderAgentDetailAvatar(agent) {
       applyAvatarToElement(trigger, nextIcon, next.color, agent.agent_id);
       try {
         if (isCommander) {
-          const res = await window.orkas.invoke('prefs.setCommanderAvatar', { icon: nextIcon, color: next.color });
+          const res = await window.cogseed.invoke('prefs.setCommanderAvatar', { icon: nextIcon, color: next.color });
           if (res?.ok && res.avatar) {
             _commanderAgentAvatar = { icon: nextIcon, color: res.avatar.color };
             if (typeof setCommanderAvatarCache === 'function') setCommanderAvatarCache({ icon: nextIcon, color: res.avatar.color });
@@ -2173,7 +2305,7 @@ function _renderAgentDetailAvatar(agent) {
             if (typeof renderProjectsSection === 'function') renderProjectsSection();
           }
         } else {
-          const res = await window.orkas.invoke('agents.update', {
+          const res = await window.cogseed.invoke('agents.update', {
             agent_id: agent.agent_id,
             updates: { icon: next.icon, color: next.color },
           });
@@ -2267,7 +2399,7 @@ async function _enterAgentEditMode() {
   _renderAgentDetail(agent, true);
   // External agents have no LLM-driven authoring. Marketplace installs in
   // the open-source build are memory-only edits. Both hide the edit chat.
-  const isExternal = !!(agent.runtime?.kind === 'cli');
+  const isExternal = !!(agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway');
   const isMemoryOnly = !_canEditAgentDefinition(agent) && _canEditAgentMemory(agent);
   const chatCol = document.getElementById('agents-chat-col');
   if (chatCol) chatCol.style.display = (isExternal || isMemoryOnly) ? 'none' : '';
@@ -2705,15 +2837,39 @@ async function _saveExternalAgent({ msgEl }) {
   }
 
   const startedAt = performance.now();
-  if (window.Monitor) (() => {})('agent_create_submit', { agent_type: 'cli', cli });
+  if (window.Monitor) (() => {})('agent_create_submit', { agent_type: 'p3394', cli });
   try {
+    // P3394 方式外接：先拉起该 CLI 的受管 P3394 网关（自注册进桥），
+    // 再创建智能体记录——之后对话里每一轮都走 P3394 协议协作。
+    const entries = await window.loadLocalCliEntries({ force: true });
+    const detected = entries.find((e) => e && e.type === cli);
+    const started = await window.cogseed.invoke('p3394.external.start', {
+      cli,
+      alias: name,
+      ...(detected && detected.path ? { binPath: detected.path } : {}),
+    });
+    if (!started || !started.ok) {
+      msgEl.textContent = t('agents.p3394_gateway_start_failed', {
+        reason: (started && started.error) || 'unknown',
+      });
+      msgEl.className = 'form-msg err';
+      if (window.Monitor) {
+        (() => {})('agent_create_result', {
+          result: 'failure',
+          agent_type: 'p3394',
+          cli,
+          duration_ms: Math.round(performance.now() - startedAt),
+          error_code: (started && started.error) || '',
+        });
+      }
+      return;
+    }
     const body = {
       name,
       description: desc,
-      // CLI-backed agents do not run the LLM authoring pass, so use the
-      // stable role-specific coding avatar instead of a random pair.
+      // P3394 外接智能体：每一轮对话都通过桥与受管网关节点协作。
       icon: 'code', color: 'sage',
-      runtime: withCliProviderSelection({ kind: 'cli', cli }, _getExternalCliProviderValue(cli)),
+      runtime: { kind: 'p3394-gateway', cli },
       category: 'general',
     };
     const res = await apiFetch('/api/agents/create', {
@@ -2746,7 +2902,7 @@ async function _saveExternalAgent({ msgEl }) {
     if (window.Monitor) (() => {})('agent_create_result', {
       result: 'success',
       agent_id: data.agent.agent_id,
-      agent_type: 'cli',
+      agent_type: 'p3394',
       cli,
       duration_ms: Math.round(performance.now() - startedAt),
     });
@@ -2763,12 +2919,12 @@ async function _saveExternalAgent({ msgEl }) {
     if (window.Monitor) {
       (() => {})('agent_create_result', {
         result: 'failure',
-        agent_type: 'cli',
+        agent_type: 'p3394',
         cli,
         duration_ms: Math.round(performance.now() - startedAt),
       });
       (() => {})('agent_create', {
-        agent_type: 'cli',
+        agent_type: 'p3394',
         cli,
         error_type: 'network',
         error_message: e.message || String(e),
@@ -2813,7 +2969,7 @@ async function deleteSelectedAgent() {
   if (window.Monitor) (() => {})('agent_delete', { agent_id: agentId });
   try {
     const data = isMarketplace
-      ? await window.orkas.invoke('agents.builtin.delete', { agent_id: agentId })
+      ? await window.cogseed.invoke('agents.builtin.delete', { agent_id: agentId })
       : await (await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' })).json();
     if (!data.ok) throw new Error(data.error || t('agents.delete_failed'));
     _selectedAgent = null; _agentEditing = false;
@@ -3001,8 +3157,8 @@ async function useAgent(agentId, managementOpenGesture) {
     && cachedAgent.reimbursement_entry_role === 'canonical';
   const preparedManagementOpen = cachedCanonicalExpenseAgent
     && managementOpenGesture === 'agent_card'
-    && window.orkas?.expenseWorkbench?.prepareOpen
-    ? window.orkas.expenseWorkbench.prepareOpen(agentId, managementOpenGesture).then(
+    && window.cogseed?.expenseWorkbench?.prepareOpen
+    ? window.cogseed.expenseWorkbench.prepareOpen(agentId, managementOpenGesture).then(
       () => ({ ok: true }),
       (error) => ({
         ok: false,
@@ -3061,7 +3217,7 @@ async function useAgent(agentId, managementOpenGesture) {
   } finally {
     if (preparedManagementOpen && !preparedManagementOpenConsumed) {
       await preparedManagementOpen;
-      await window.orkas.expenseWorkbench.close().catch(() => {});
+      await window.cogseed.expenseWorkbench.close().catch(() => {});
     }
   }
 }
@@ -3165,7 +3321,9 @@ if (typeof window !== 'undefined') {
 // Set on every `_openAgentPicker`; consumed by `_renderAgentPickerList` and
 // the search-input change handler so live filtering stays scoped.
 let _pickerBoundAgentIds = null;
+let _pickerBoundSkillIds = null; // 情境空间一期：同 scope.resolve 的 skills 作用域
 let _pickerProjectId = '';
+let _pickerScopeSpace = null; // 情境空间一期：当前项目绑定空间摘要
 let _pickerLibraryRows = null;
 let _pickerLibraryLoading = null;
 let _pickerLibraryRenderSeq = 0;
@@ -3186,44 +3344,79 @@ let _agentPickerLoadedTabs = new Set();
 const _agentPickerTabLoads = new Map();
 let _pickerProjectContextLoading = false;
 let _pickerProjectContextSeq = 0;
-const _AGENT_PICKER_TAB_ORDER = ['agents', 'skills', 'connectors', 'library', 'ontology'];
+// 产物/资产 tab（空间会话 @ 引用）：懒加载缓存（每 picker 会话重置一次）
+let _pickerArtifactRows = null;        // 空间产物（spaces.artifacts.list）
+let _pickerArtifactTitles = new Map(); // cid → 会话标题（引用 source_title）
+let _pickerArtifactLoading = null;
+let _pickerArtifactRenderSeq = 0;
+let _pickerAssetRows = null;           // 全局沉淀资产（recall.assets.list）
+let _pickerAssetLoading = null;
+let _pickerAssetRenderSeq = 0;
+// 任务引用 chips（composer 引用条）：conversation = 已持久化 task_references；
+// new-chat = 待提交 pending（会话创建后写入 task_references）
+let _pendingNewChatRefs = [];          // TaskReference[]
+const _AGENT_PICKER_TAB_ORDER = ['agents', 'skills', 'artifacts', 'assets'];
 const _AGENT_PICKER_TABS = new Set(_AGENT_PICKER_TAB_ORDER);
 
 function _normalizeAgentPickerTab(tab) {
   return _AGENT_PICKER_TABS.has(tab) ? tab : 'agents';
 }
 
-function _agentPickerAllowsLibrary(anchorId) {
-  return anchorId === 'chat-recipient-chip'
-    || anchorId === 'new-chat-recipient-chip'
-    || anchorId === 'project-chat-recipient-chip'
-    || anchorId === 'auto-recipient-chip';
-}
-
-// "本体" tab reuses the exact same anchor gate as library — see requirements
-// doc §3.7: no independent anchor scenario identified for ontology groups
-// yet, so default to matching library's visibility rather than showing it
-// everywhere.
-function _agentPickerAllowsOntology(anchorId) {
-  return _agentPickerAllowsLibrary(anchorId);
+/**
+ * @ 选择器作用域：锚点所在会话是否绑空间。
+ *   - chat-recipient-chip：当前会话（currentCid → conversations 缓存）space_id；
+ *   - new-chat-recipient-chip：工作空间 chip 选中的空间（getNewChatSpaceId）；
+ *   - auto-recipient-chip / 其余：无空间。
+ */
+function _agentPickerSpaceId(anchorId) {
+  if (anchorId === 'chat-recipient-chip') {
+    const cid = (typeof currentCid === 'string') ? currentCid : '';
+    if (cid && typeof conversations !== 'undefined' && Array.isArray(conversations)) {
+      const conv = conversations.find((c) => c && c.conversation_id === cid);
+      return (conv && conv.space_id) || '';
+    }
+    return '';
+  }
+  if (anchorId === 'new-chat-recipient-chip' && typeof window.getNewChatSpaceId === 'function') {
+    return window.getNewChatSpaceId() || '';
+  }
+  return '';
 }
 
 function _agentPickerVisibleTabs(anchorId) {
-  // Skills and connectors use the same visible picker surface for commander
-  // and agent recipients; runtime capability gates live in the main process.
-  return _AGENT_PICKER_TAB_ORDER.filter((tab) => {
-    if (tab === 'library') return _agentPickerAllowsLibrary(anchorId);
-    if (tab === 'ontology') return _agentPickerAllowsOntology(anchorId);
-    return true;
-  });
+  // 空间会话（聊天绑空间 / new-chat 选中空间）→ 智能体/技能/产物/资产；
+  // 无空间（主对话默认工作区 / Auto）→ 仅智能体/技能。
+  // 连接器/资料库/本体 tab 已删（两处都不再出现）。
+  const spaceId = _agentPickerSpaceId(anchorId);
+  return spaceId ? _AGENT_PICKER_TAB_ORDER : ['agents', 'skills'];
 }
 
 function _agentPickerSearchPlaceholder() {
   if (_agentPickerTab === 'skills') return t('agent_picker.search_skills_placeholder');
-  if (_agentPickerTab === 'connectors') return t('agent_picker.search_connectors_placeholder');
-  if (_agentPickerTab === 'library') return t('agent_picker.search_library_placeholder');
-  if (_agentPickerTab === 'ontology') return t('agent_picker.search_ontology_placeholder');
+  if (_agentPickerTab === 'artifacts') return t('agent_picker.search_artifacts_placeholder');
+  if (_agentPickerTab === 'assets') return t('agent_picker.search_assets_placeholder');
   return t('agent_picker.search_placeholder');
+}
+
+/** composer 占位符随会话空间状态更新：空间会话提示「产物/资产」可选，非空间只说智能体/技能。
+ *  同时同步富文本编辑器（contenteditable 镜像 data-placeholder，见 _initMentionMirror）与
+ *  attribute（i18n 重应用/镜像 sync 读的是 getAttribute）。 */
+function updateAgentPickerPlaceholders() {
+  const spacePh = t('agent_picker.input_placeholder_space', '输入 @ 选择智能体、技能、产物、资产');
+  const plainPh = t('chat.input_placeholder', '输入 @ 选择智能体、技能');
+  const apply = (input, ph) => {
+    if (!input) return;
+    input.placeholder = ph;
+    input.setAttribute('placeholder', ph);
+    try {
+      if (typeof getChatRichComposerEditor === 'function') {
+        const ed = getChatRichComposerEditor(input.id);
+        if (ed) ed.dataset.placeholder = ph;
+      }
+    } catch (_) {}
+  };
+  apply(document.getElementById('chat-input'), _agentPickerSpaceId('chat-recipient-chip') ? spacePh : plainPh);
+  apply(document.getElementById('new-chat-input'), _agentPickerSpaceId('new-chat-recipient-chip') ? spacePh : plainPh);
 }
 
 function _updateAgentPickerChrome() {
@@ -3259,10 +3452,10 @@ function _setAgentPickerTab(tab, opts = {}) {
 
 function _ensureAgentPickerTabData(tab, openSeq) {
   const normalized = _normalizeAgentPickerTab(tab);
-  // library and ontology own their own lazy-load + cache inside their render
-  // functions (_renderLibraryPickerList / _renderOntologyPickerList) — same
-  // pattern, skip the generic loadedTabs bookkeeping here.
-  if (normalized === 'library' || normalized === 'ontology' || _agentPickerLoadedTabs.has(normalized)) {
+  // artifacts/assets own their own lazy-load + cache inside their render
+  // functions (_renderArtifactsPickerList / _renderAssetsPickerList) — same
+  // pattern as the removed library/ontology tabs, skip generic bookkeeping.
+  if (normalized === 'artifacts' || normalized === 'assets' || _agentPickerLoadedTabs.has(normalized)) {
     return Promise.resolve();
   }
   const existing = _agentPickerTabLoads.get(normalized);
@@ -3287,8 +3480,6 @@ function _ensureAgentPickerTabData(tab, openSeq) {
         await loader('skills');
       }
       if (typeof loadSkills === 'function') await loadSkills(false);
-    } else if (normalized === 'connectors') {
-      if (typeof loadConnectors === 'function') await loadConnectors();
     } else {
       // A summary catalog is enough for the first frame. `loadAgents(false)`
       // upgrades it once and then reuses the validated full cache.
@@ -3325,76 +3516,70 @@ function _moveAgentPickerTab(delta) {
   _setAgentPickerTab(tabs[next]);
 }
 
-function _agentPickerProjectExists(projectId) {
-  const pid = String(projectId || '');
-  if (!pid) return false;
-  try {
-    if (typeof _projectsCache !== 'undefined' && Array.isArray(_projectsCache)) {
-      return _projectsCache.some((p) => p && p.project_id === pid);
-    }
-  } catch (_) { /* no project cache in this renderer/test context */ }
-  return true;
-}
-
-function _agentPickerValidProjectId(projectId) {
-  const pid = String(projectId || '');
-  return pid && _agentPickerProjectExists(pid) ? pid : '';
-}
-
-function _resolveActiveProjectId(anchorId) {
-  if (anchorId === 'new-chat-recipient-chip') {
-    // Empty-state composer creates orphan conversations; no project scope.
-    return '';
-  }
-  if (anchorId === 'project-chat-recipient-chip') {
-    return _agentPickerValidProjectId(
-      (typeof _projectDetailPid !== 'undefined') ? (_projectDetailPid || '') : '',
-    );
-  }
-  if (anchorId === 'chat-recipient-chip') {
-    if (typeof currentCid !== 'undefined' && currentCid
-        && typeof conversations !== 'undefined' && Array.isArray(conversations)) {
-      const conv = conversations.find((c) => c && c.conversation_id === currentCid);
-      return _agentPickerValidProjectId((conv && conv.project_id) || '');
-    }
-  }
-  if (anchorId === 'auto-recipient-chip') {
-    // The auto modal sets this when it opens so picker results scope
-    // to the task's project (if any). See modules/auto.js.
-    const pid = (typeof window !== 'undefined' && typeof window._autoGetProjectId === 'function')
-      ? (window._autoGetProjectId() || '')
-      : '';
-    return _agentPickerValidProjectId(pid);
-  }
-  return '';
-}
-
 async function _refreshAgentPickerProjectContext(anchorId) {
-  const refreshSeq = ++_pickerProjectContextSeq;
-  _pickerBoundAgentIds = null;
-  _pickerProjectId = _resolveActiveProjectId(anchorId) || '';
-  _pickerProjectContextLoading = !!_pickerProjectId;
+  // 空间化重构：picker 作用域 = 当前会话所属空间的「能力配置」。
+  //   - 会话绑空间（conv.space_id 非空）→ 折叠到该空间 agents ∪ skills
+  //     （模板 bundle ∪ extra，与 runner 执行作用域同源 spaces.scope.resolve）；
+  //   - 未绑空间 / 空间空配置（S1：resolve 返回 null）→ 全局不过滤。
+  // 旧项目作用域已删（不再按 project 过滤）。
+  // 主对话：当前会话 → 空间；新聊天：chip 选中的空间（创建后对话归该空间，@ 同步过滤）
+  // （同步判定，无空间直接走全局路径，不闪 loading）
+  const spaceId = _agentPickerSpaceId(anchorId);
+  if (!spaceId) {
+    _pickerBoundAgentIds = null;
+    _pickerBoundSkillIds = null;
+    _pickerScopeSpace = null;
+    _pickerProjectId = '';
+    _pickerProjectContextLoading = false;
+    _pickerLibraryRows = null;
+    _pickerLibraryLoading = null;
+    _pickerLibraryRenderSeq += 1;
+    _pickerOntologyGroups = null;
+    _pickerOntologyTemplates = null;
+    _pickerOntologyLoading = null;
+    _pickerOntologyRenderSeq += 1;
+    _pickerArtifactRows = null;
+    _pickerArtifactTitles = new Map();
+    _pickerArtifactLoading = null;
+    _pickerAssetRows = null;
+    _pickerAssetLoading = null;
+    return;
+  }
+  // 有空间 → 异步解析作用域（loading 壳防旧列表可点）
+  _pickerProjectContextLoading = true;
+  let boundAgentIds = null;
+  let boundSkillIds = null;
+  let scopeSpace = null;
+  try {
+    const res = await window.cogseed.invoke('spaces.scope.resolve', { spaceId });
+    const scope = res && res.scope;
+    if (scope && Array.isArray(scope.agents) && Array.isArray(scope.skills)) {
+      boundAgentIds = new Set(scope.agents);
+      boundSkillIds = new Set(scope.skills);
+      scopeSpace = { space_id: spaceId };
+    }
+    // scope === null（空间缺失/空配置/全失效）→ 保持 null = 全局可见
+  } catch (err) {
+    _agentsLog.warn('resolve space scope for picker failed', err);
+  } finally {
+    _pickerProjectContextLoading = false;
+  }
+  _pickerBoundAgentIds = boundAgentIds;
+  _pickerBoundSkillIds = boundSkillIds;
+  _pickerScopeSpace = scopeSpace;
+  _pickerProjectId = '';
   _pickerLibraryRows = null;
   _pickerLibraryLoading = null;
   _pickerLibraryRenderSeq += 1;
-  // Ontology groups aren't project-scoped, but re-fetch every picker open so
-  // a group created/deleted via the management page since the last open is
-  // reflected without requiring a manual refresh.
   _pickerOntologyGroups = null;
   _pickerOntologyTemplates = null;
   _pickerOntologyLoading = null;
   _pickerOntologyRenderSeq += 1;
-  if (_pickerProjectId) {
-    try {
-      const res = await window.orkas.invoke('projects.bindings.list', { projectId: _pickerProjectId });
-      if (refreshSeq === _pickerProjectContextSeq && res?.ok) {
-        _pickerBoundAgentIds = new Set((res.bindings && res.bindings.agents) || []);
-      }
-    } catch (_) { /* keep Library project scope; backend/file-tree handles stale ids */ }
-    finally {
-      if (refreshSeq === _pickerProjectContextSeq) _pickerProjectContextLoading = false;
-    }
-  }
+  _pickerArtifactRows = null;
+  _pickerArtifactTitles = new Map();
+  _pickerArtifactLoading = null;
+  _pickerAssetRows = null;
+  _pickerAssetLoading = null;
 }
 
 async function refreshAgentPickerContext(anchorId) {
@@ -3413,6 +3598,12 @@ async function _openAgentPicker(anchorBtn) {
   picker.dataset.anchorId = anchorBtn.id;
   const openSeq = ++_agentPickerOpenSeq;
   _agentPickerLoadedTabs = new Set();
+  // 产物/资产目录按 picker 会话重置（防上次会话残留旧空间行可点）
+  _pickerArtifactRows = null;
+  _pickerArtifactTitles = new Map();
+  _pickerArtifactLoading = null;
+  _pickerAssetRows = null;
+  _pickerAssetLoading = null;
   // Reset project scope synchronously before painting. For project-bound
   // composers this flips the list to a loading shell immediately, so stale
   // unrestricted rows from the previous picker session are never clickable
@@ -3459,16 +3650,12 @@ function _renderAgentPickerList(filterText) {
     _renderSkillPickerList(listEl, filterText, anchorId);
     return;
   }
-  if (_agentPickerTab === 'connectors') {
-    _renderConnectorPickerList(listEl, filterText, anchorId);
+  if (_agentPickerTab === 'artifacts') {
+    _renderArtifactsPickerList(listEl, filterText, anchorId);
     return;
   }
-  if (_agentPickerTab === 'library') {
-    _renderLibraryPickerList(listEl, filterText, anchorId);
-    return;
-  }
-  if (_agentPickerTab === 'ontology') {
-    _renderOntologyPickerList(listEl, filterText, anchorId);
+  if (_agentPickerTab === 'assets') {
+    _renderAssetsPickerList(listEl, filterText, anchorId);
     return;
   }
   // Disabled agents are filtered out — picker is a "what can I dispatch right
@@ -3511,7 +3698,6 @@ function _renderAgentPickerList(filterText) {
   // switch back without an empty-state. Other anchors keep agent-only listing.
   const isRecipientPicker = anchorId === 'chat-recipient-chip'
     || anchorId === 'new-chat-recipient-chip'
-    || anchorId === 'project-chat-recipient-chip'
     || anchorId === 'auto-recipient-chip';
   const commanderName = t('chat.recipient_commander');
   const commanderMatchesFilter = !q || commanderName.toLowerCase().includes(q);
@@ -3580,12 +3766,17 @@ function _renderSkillPickerList(listEl, filterText, anchorId) {
         .sort((a, b) => _pickerMatchScore(q, a.name || a.id) - _pickerMatchScore(q, b.name || b.id))
     : list;
 
-  const trusted = applyFilter((_skillsCache || []).filter((s) => s.enabled !== false), trustedDesc);
+  const trusted = applyFilter((_skillsCache || [])
+    .filter((s) => s.enabled !== false)
+    // 情境空间一期：项目/空间作用域下只显示作用域内技能（null = 全局不过滤）
+    .filter((s) => !_pickerBoundSkillIds || _pickerBoundSkillIds.has(s.id)), trustedDesc);
   // Global open-tier skills share the same picker surface as trusted skills.
   // External package internals stay package-scoped in user UI; the agent layer
   // can still see package-provided SKILL.md files when composing a task.
+  // 情境空间一期：global 技能同样受作用域过滤（否则空间外技能漏网显示）。
   const openRows = (typeof _openSkillsCache !== 'undefined' && Array.isArray(_openSkillsCache))
-    ? applyFilter(_openSkillsCache.filter((s) => s.source === 'global' && s.enabled !== false), openDesc)
+    ? applyFilter(_openSkillsCache.filter((s) => s.source === 'global' && s.enabled !== false
+      && (!_pickerBoundSkillIds || _pickerBoundSkillIds.has(s.id))), openDesc)
     : [];
 
   if (!trusted.length && !openRows.length) {
@@ -3703,25 +3894,16 @@ function _flattenLibraryPickerTree(nodes, scope, projectId) {
   return rows;
 }
 
-async function _loadLibraryPickerRows(projectId) {
-  const validProjectId = _agentPickerValidProjectId(projectId);
-  const projectPromise = validProjectId
-    ? window.orkas.invoke('projects.files.tree', { projectId: validProjectId }).catch((err) => {
-        _agentsLog.warn('project library picker load failed', err);
-        return null;
-      })
-    : Promise.resolve(null);
+async function _loadLibraryPickerRows() {
+  // 空间化后仅全局上下文库（contexts）可选；项目文件树已删。
   const globalPromise = apiFetch('/api/contexts/tree')
     .then((res) => res.json())
     .catch((err) => {
       _agentsLog.warn('global library picker load failed', err);
       return null;
     });
-  const [projectData, globalData] = await Promise.all([projectPromise, globalPromise]);
+  const globalData = await globalPromise;
   const rows = [];
-  if (validProjectId && projectData && projectData.ok !== false) {
-    rows.push(..._flattenLibraryPickerTree(projectData.tree || [], 'project', validProjectId));
-  }
   if (globalData && globalData.ok !== false) {
     rows.push(..._flattenLibraryPickerTree(globalData.tree || [], 'global', ''));
   }
@@ -3752,7 +3934,7 @@ function _renderLibraryPickerList(listEl, filterText, anchorId) {
   if (!_pickerLibraryRows) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
     if (!_pickerLibraryLoading) {
-      _pickerLibraryLoading = _loadLibraryPickerRows(_pickerProjectId)
+      _pickerLibraryLoading = _loadLibraryPickerRows()
         .then((rows) => {
           _pickerLibraryRows = rows || [];
           _pickerLibraryLoading = null;
@@ -3800,8 +3982,8 @@ function _renderLibraryPickerList(listEl, filterText, anchorId) {
 async function _loadOntologyPickerGroups() {
   try {
     const [gRes, tRes] = await Promise.all([
-      window.orkas.invoke('personalOntology.groups.list', {}),
-      window.orkas.invoke('personalOntology.templates.list', {}),
+      window.cogseed.invoke('personalOntology.groups.list', {}),
+      window.cogseed.invoke('personalOntology.templates.list', {}),
     ]);
     const groups = (gRes && gRes.ok !== false && Array.isArray(gRes.groups)) ? gRes.groups : [];
     const templates = (tRes && tRes.ok !== false && Array.isArray(tRes.templates)) ? tRes.templates : [];
@@ -3975,9 +4157,305 @@ function _moveAgentPickerActive(delta) {
 
 function _targetFromPickerAnchor(anchorId) {
   if (anchorId === 'new-chat-recipient-chip') return 'new-chat';
-  if (anchorId === 'project-chat-recipient-chip') return 'project';
   if (anchorId === 'auto-recipient-chip') return 'auto';
   return 'conversation';
+}
+
+// ── 产物 / 资产 tab（空间会话 @ 引用：复用任务引用 task_references）─────────────
+
+function _sameTaskRefKey(r) {
+  return r && r.kind === 'asset'
+    ? `asset:${r.asset_id || ''}`
+    : `artifact:${r.source_cid || ''}:${r.file_name || ''}`;
+}
+
+async function _loadArtifactPickerRows(spaceId) {
+  const [artRes, convRes] = await Promise.all([
+    window.cogseed.invoke('spaces.artifacts.list', { spaceId }).catch(() => ({})),
+    window.cogseed.invoke('spaces.conversations.list', { spaceId }).catch(() => ({})),
+  ]);
+  const titles = new Map();
+  for (const c of (convRes && convRes.conversations) || []) {
+    if (c && c.conversation_id) titles.set(c.conversation_id, c.title || '');
+  }
+  _pickerArtifactTitles = titles;
+  return Array.isArray(artRes && artRes.artifacts) ? artRes.artifacts : [];
+}
+
+async function _loadAssetPickerRows(spaceId) {
+  // @ 资产 = 本空间沉淀资产（recall.assets.listForSpace，与空间资产 tab 同源；
+  // 不再用全局 recall.assets.list——用户明确要求空间资产）。
+  if (!spaceId) return [];
+  try {
+    const res = await window.cogseed.invoke('recall.assets.listForSpace', { spaceId });
+    return Array.isArray(res && res.assets)
+      ? res.assets.map((a) => ({ asset_id: a.id, title: a.title, asset_type: a.type }))
+      : [];
+  } catch (err) {
+    _agentsLog.warn('asset picker load failed', err);
+    return [];
+  }
+}
+
+function _renderArtifactsPickerList(listEl, filterText, anchorId) {
+  const q = (filterText || '').toLowerCase();
+  const renderSeq = ++_pickerArtifactRenderSeq;
+  const spaceId = _agentPickerSpaceId(anchorId);
+  if (!spaceId) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('agent_picker.artifacts_empty'))}</div>`;
+    return;
+  }
+  if (!_pickerArtifactRows) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
+    const openSeq = _agentPickerOpenSeq;
+    if (!_pickerArtifactLoading) {
+      _pickerArtifactLoading = _loadArtifactPickerRows(spaceId)
+        .then((rows) => {
+          // 会话守卫：picker 已关闭/重开则丢弃过期结果
+          if (openSeq !== _agentPickerOpenSeq) return;
+          _pickerArtifactRows = rows || [];
+          _pickerArtifactLoading = null;
+        })
+        .catch((err) => {
+          if (openSeq !== _agentPickerOpenSeq) return;
+          _agentsLog.warn('artifact picker load failed', err);
+          _pickerArtifactRows = [];
+          _pickerArtifactLoading = null;
+        });
+    }
+    _pickerArtifactLoading.then(() => {
+      if (openSeq !== _agentPickerOpenSeq) return;
+      if (renderSeq !== _pickerArtifactRenderSeq) return;
+      const picker = document.getElementById('agent-picker');
+      if (!picker || picker.style.display === 'none' || _agentPickerTab !== 'artifacts') return;
+      const search = document.getElementById('agent-picker-search');
+      _renderArtifactsPickerList(listEl, search ? search.value : filterText, anchorId);
+    });
+    return;
+  }
+  const rows = _pickerArtifactRows || [];
+  const filtered = q ? rows.filter((a) => _matchPickerItem(q, a.name, a.sourceSessionId || '', a.ext || '')) : rows;
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(q ? t('agent_picker.artifacts_no_match') : t('agent_picker.artifacts_empty'))}</div>`;
+    return;
+  }
+  listEl.innerHTML = `<div class="skill-picker-group-label">${escapeHtml(t('agent_picker.artifacts_group'))}</div>` +
+    filtered.map((a) => {
+      const sub = `${a.type === 'artifact' ? escapeHtml(t('agent_picker.artifact_confirmed')) : escapeHtml(t('agent_picker.artifact_attachment'))}${a.ext ? ` · ${escapeHtml(a.ext)}` : ''}`;
+      return `
+      <div class="skill-picker-item" data-kind="artifact"
+           data-id="${escapeHtml(a.name)}" data-name="${escapeHtml(a.name)}"
+           data-source-cid="${escapeHtml(a.sourceSessionId || '')}"
+           data-source-title="${escapeHtml(_pickerArtifactTitles.get(a.sourceSessionId) || '')}"
+           data-file-name="${escapeHtml(a.name)}">
+        <div class="skill-picker-item-name">${escapeHtml(a.name)}</div>
+        <div class="skill-picker-item-desc">${sub}</div>
+      </div>`;
+    }).join('');
+  _bindAgentPickerListItems(listEl, anchorId);
+}
+
+function _renderAssetsPickerList(listEl, filterText, anchorId) {
+  const q = (filterText || '').toLowerCase();
+  const renderSeq = ++_pickerAssetRenderSeq;
+  const spaceId = _agentPickerSpaceId(anchorId);
+  if (!spaceId) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('agent_picker.assets_empty'))}</div>`;
+    return;
+  }
+  if (!_pickerAssetRows) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
+    const openSeq = _agentPickerOpenSeq;
+    if (!_pickerAssetLoading) {
+      _pickerAssetLoading = _loadAssetPickerRows(spaceId)
+        .then((rows) => {
+          // 会话守卫：picker 已关闭/重开则丢弃过期结果
+          if (openSeq !== _agentPickerOpenSeq) return;
+          _pickerAssetRows = rows || [];
+          _pickerAssetLoading = null;
+        })
+        .catch(() => {
+          if (openSeq !== _agentPickerOpenSeq) return;
+          _pickerAssetRows = [];
+          _pickerAssetLoading = null;
+        });
+    }
+    _pickerAssetLoading.then(() => {
+      if (openSeq !== _agentPickerOpenSeq) return;
+      if (renderSeq !== _pickerAssetRenderSeq) return;
+      const picker = document.getElementById('agent-picker');
+      if (!picker || picker.style.display === 'none' || _agentPickerTab !== 'assets') return;
+      const search = document.getElementById('agent-picker-search');
+      _renderAssetsPickerList(listEl, search ? search.value : filterText, anchorId);
+    });
+    return;
+  }
+  const rows = _pickerAssetRows || [];
+  const filtered = q ? rows.filter((a) => _matchPickerItem(q, a.title || '', a.asset_id || '', a.asset_type || '')) : rows;
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(q ? t('agent_picker.assets_no_match') : t('agent_picker.assets_empty'))}</div>`;
+    return;
+  }
+  listEl.innerHTML = `<div class="skill-picker-group-label">${escapeHtml(t('agent_picker.assets_group'))}</div>` +
+    filtered.map((a) => {
+      const typeLabel = a.asset_type ? ` · ${escapeHtml(a.asset_type)}` : '';
+      return `
+      <div class="skill-picker-item" data-kind="asset"
+           data-id="${escapeHtml(a.asset_id)}" data-name="${escapeHtml(a.title || a.asset_id)}"
+           data-asset-id="${escapeHtml(a.asset_id)}" data-asset-type="${escapeHtml(a.asset_type || '')}">
+        <div class="skill-picker-item-name">${escapeHtml(a.title || a.asset_id)}</div>
+        <div class="skill-picker-item-desc">${escapeHtml(t('agent_picker.asset_type'))}${typeLabel}</div>
+      </div>`;
+    }).join('');
+  _bindAgentPickerListItems(listEl, anchorId);
+}
+
+// ── 任务引用 chips（composer 引用条）───────────────────────────────────────
+
+function _renderTaskRefChips(el, refs, cid) {
+  if (!el) return;
+  if (!refs || !refs.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  el.innerHTML = refs.map((r, i) => `
+    <span class="chat-taskref-chip ${r.kind === 'asset' ? 'is-asset' : 'is-artifact'}">
+      <em>${r.kind === 'asset' ? escapeHtml(t('agent_picker.ref_asset')) : escapeHtml(t('agent_picker.ref_artifact'))}</em>
+      <span title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</span>
+      <button type="button" class="chat-taskref-remove" data-cid="${escapeHtml(cid || '')}" data-index="${i}"
+        data-kind="${escapeHtml(r.kind || '')}" data-key="${escapeHtml(_sameTaskRefKey(r))}" aria-label="${escapeHtml(t('agent_picker.ref_remove'))}">×</button>
+    </span>`).join('');
+  el.querySelectorAll('.chat-taskref-remove').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const c = btn.dataset.cid;
+      const idx = Number(btn.dataset.index);
+      try {
+        if (c) {
+          await window.cogseed.invoke('conversations.taskRefs.remove', { cid: c, index: idx });
+        } else {
+          _pendingNewChatRefs = (_pendingNewChatRefs || []).filter((_, i) => i !== idx);
+        }
+      } catch (err) {
+        _agentsLog.warn('task ref remove failed', err);
+      }
+      renderChatTaskRefChips();
+    });
+  });
+}
+
+/** 渲染两个 composer 的引用条：conversation = 当前会话 task_references；new-chat = pending。 */
+function renderChatTaskRefChips() {
+  const cid = (typeof currentCid === 'string') ? currentCid : '';
+  const convEl = document.getElementById('chat-taskrefs');
+  if (convEl) {
+    if (!cid) { convEl.style.display = 'none'; convEl.innerHTML = ''; }
+    else {
+      (async () => {
+        try {
+          const res = await window.cogseed.invoke('conversations.taskRefs.list', { cid });
+          const refs = Array.isArray(res && res.references) ? res.references : [];
+          _renderTaskRefChips(convEl, refs, cid);
+        } catch (_) { convEl.style.display = 'none'; }
+      })();
+    }
+  }
+  const ncEl = document.getElementById('new-chat-taskrefs');
+  if (ncEl) _renderTaskRefChips(ncEl, _pendingNewChatRefs || [], '');
+}
+
+/** 发送后清空 composer 引用条（视觉反馈：引用已随消息发出；服务端 task_references 保留）。 */
+function clearChatTaskRefChips() {
+  const convEl = document.getElementById('chat-taskrefs');
+  if (convEl) { convEl.style.display = 'none'; convEl.innerHTML = ''; }
+  const ncEl = document.getElementById('new-chat-taskrefs');
+  if (ncEl) { ncEl.style.display = 'none'; ncEl.innerHTML = ''; }
+}
+
+/** new-chat 提交：把 @ 选的 pending 引用写入新建会话的 task_references（发送前调用）。 */
+async function commitNewChatTaskRefs(convId) {
+  const refs = _pendingNewChatRefs || [];
+  _pendingNewChatRefs = [];
+  renderChatTaskRefChips();
+  if (!convId || !refs.length) return;
+  for (const r of refs.slice(0, 20)) {
+    try {
+      await window.cogseed.invoke('conversations.taskRefs.add', { cid: convId, reference: r });
+    } catch (err) {
+      _agentsLog.warn('taskRefs.add for new chat failed', err);
+    }
+  }
+}
+
+async function _commitTaskRef(reference, anchorId) {
+  const target = _targetFromPickerAnchor(anchorId);
+  if (target === 'conversation') {
+    const cid = (typeof currentCid === 'string') ? currentCid : '';
+    if (!cid) return false;
+    try {
+      const res = await window.cogseed.invoke('conversations.taskRefs.add', { cid, reference });
+      if (res && res.error) throw new Error(res.error);
+    } catch (err) {
+      _agentsLog.warn('taskRefs.add failed', err);
+      if (typeof uiToast === 'function') uiToast(t('agent_picker.ref_add_failed', '添加引用失败'), { variant: 'warning' });
+      return false;
+    }
+    renderChatTaskRefChips();
+    return true;
+  }
+  if (target === 'new-chat') {
+    const pending = _pendingNewChatRefs || [];
+    const dup = pending.some((r) => _sameTaskRefKey(r) === _sameTaskRefKey(reference));
+    if (!dup) {
+      if (pending.length >= 20) {
+        if (typeof uiToast === 'function') uiToast(t('agent_picker.ref_too_many', '引用数量已达上限'), { variant: 'warning' });
+        return false;
+      }
+      pending.push(reference);
+      _pendingNewChatRefs = pending;
+    }
+    renderChatTaskRefChips();
+    return true;
+  }
+  return false;
+}
+
+async function _triggerArtifactRef(itemName, dataset, anchorId) {
+  const target = _targetFromPickerAnchor(anchorId);
+  const name = dataset.fileName || dataset.name || itemName || '';
+  if (!name) return;
+  _agentsTrackClick(target === 'auto' ? 'auto_artifact_select' : 'chat_artifact_select', { target, name });
+  _consumeAtKeyChar();
+  const reference = {
+    kind: 'artifact',
+    name,
+    ...(dataset.sourceCid ? { source_cid: dataset.sourceCid } : {}),
+    ...(dataset.sourceTitle ? { source_title: dataset.sourceTitle } : {}),
+    file_name: dataset.fileName || name,
+  };
+  const ok = await _commitTaskRef(reference, anchorId);
+  const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
+  _focusInput(document.getElementById(inputId));
+  if (ok && typeof uiToast === 'function') {
+    uiToast(t('agent_picker.ref_added', '已添加引用'), { variant: 'success', timeoutMs: 1500 });
+  }
+}
+
+async function _triggerAssetRef(itemName, dataset, anchorId) {
+  const target = _targetFromPickerAnchor(anchorId);
+  const name = dataset.name || itemName || '';
+  if (!name) return;
+  _consumeAtKeyChar();
+  const reference = {
+    kind: 'asset',
+    name,
+    ...(dataset.assetId ? { asset_id: dataset.assetId } : {}),
+    ...(dataset.assetType ? { asset_type: dataset.assetType } : {}),
+  };
+  const ok = await _commitTaskRef(reference, anchorId);
+  const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
+  _focusInput(document.getElementById(inputId));
+  if (ok && typeof uiToast === 'function') {
+    uiToast(t('agent_picker.ref_added', '已添加引用'), { variant: 'success', timeoutMs: 1500 });
+  }
 }
 
 async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
@@ -3992,7 +4470,7 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
     setChatSkill(target, itemId, itemName || itemId);
     const inputId = target === 'new-chat'
       ? 'new-chat-input'
-      : (target === 'project' ? 'project-chat-input' : (target === 'auto' ? 'auto-task-input' : 'chat-input'));
+      : (target === 'auto' ? 'auto-task-input' : 'chat-input');
     _focusInput(document.getElementById(inputId));
     return;
   }
@@ -4001,7 +4479,7 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
     setChatConnector(target, itemId, itemName || itemId);
     const inputId = target === 'new-chat'
       ? 'new-chat-input'
-      : (target === 'project' ? 'project-chat-input' : (target === 'auto' ? 'auto-task-input' : 'chat-input'));
+      : (target === 'auto' ? 'auto-task-input' : 'chat-input');
     _focusInput(document.getElementById(inputId));
     return;
   }
@@ -4011,6 +4489,14 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
   }
   if (kind === 'ontology_group') {
     _triggerOntologyGroup(itemId, itemName, anchorId);
+    return;
+  }
+  if (kind === 'artifact') {
+    await _triggerArtifactRef(itemName, dataset || {}, anchorId);
+    return;
+  }
+  if (kind === 'asset') {
+    await _triggerAssetRef(itemName, dataset || {}, anchorId);
     return;
   }
   await _triggerAgent(itemId, itemName, anchorId);
@@ -4043,17 +4529,12 @@ function _triggerOntologyGroup(groupId, groupTitle, anchorId) {
 
 function _libraryPickerInputIdForTarget(target) {
   if (target === 'new-chat') return 'new-chat-input';
-  if (target === 'project') return 'project-chat-input';
   if (target === 'auto') return 'auto-task-input';
   return 'chat-input';
 }
 
-function _libraryPickerDraftCidFor(anchorId, target, projectId) {
+function _libraryPickerDraftCidFor(anchorId, target) {
   if (target === 'new-chat') return window.COMMANDER_DRAFT_CID;
-  if (target === 'project') {
-    if (typeof _projectChatDraftCid === 'function') return _projectChatDraftCid(projectId);
-    return projectId ? `projchat-${projectId}` : '';
-  }
   if (target === 'conversation') {
     return (typeof currentCid !== 'undefined') ? (currentCid || '') : '';
   }
@@ -4062,14 +4543,14 @@ function _libraryPickerDraftCidFor(anchorId, target, projectId) {
 
 async function _triggerLibraryFile(dataset, anchorId) {
   const target = _targetFromPickerAnchor(anchorId);
-  const scope = dataset.libraryScope || 'global';
+  // 空间化后仅全局上下文库（contexts）可挂草稿；project scope 已删。
+  const scope = 'global';
   const rel = dataset.libraryRel || '';
-  const projectId = dataset.projectId || _resolveActiveProjectId(anchorId);
   if (!rel) return;
   if (target === 'auto') {
     try {
       if (typeof window._autoAttachLibraryFile !== 'function') throw new Error('auto_attach_unavailable');
-      await window._autoAttachLibraryFile({ scope, rel, projectId });
+      await window._autoAttachLibraryFile({ scope, rel });
       _consumeAtKeyChar();
       _focusInput(document.getElementById('auto-task-input'));
     } catch (err) {
@@ -4078,18 +4559,16 @@ async function _triggerLibraryFile(dataset, anchorId) {
     }
     return;
   }
-  const cid = _libraryPickerDraftCidFor(anchorId, target, projectId);
+  const cid = _libraryPickerDraftCidFor(anchorId, target);
   if (!cid) return;
 
-  const channel = scope === 'project' ? 'projects.files.attachToDraft' : 'contexts.attachToDraft';
-  const payload = scope === 'project'
-    ? { projectId, name: rel }
-    : { relPath: rel };
+  const channel = 'contexts.attachToDraft';
+  const payload = { relPath: rel };
   const inputId = _libraryPickerInputIdForTarget(target);
   const telemetry = {
     target,
     scope,
-    has_project: scope === 'project' && !!projectId,
+    has_project: false,
   };
   try {
     await window.attachKbFileToDraft(
@@ -4098,7 +4577,6 @@ async function _triggerLibraryFile(dataset, anchorId) {
       cid,
       () => {
         if (target === 'new-chat' && typeof setView === 'function') setView('new-chat');
-        else if (target === 'project' && projectId && typeof setView === 'function') setView('project', projectId);
       },
     );
     _agentsTrackEvent('chat_library_attach_result', { ...telemetry, result: 'success' });
@@ -4142,8 +4620,7 @@ async function _triggerAgent(agentId, agentName, anchorId) {
     return;
   }
   const isRecipientAnchor = anchorId === 'chat-recipient-chip'
-    || anchorId === 'new-chat-recipient-chip'
-    || anchorId === 'project-chat-recipient-chip';
+    || anchorId === 'new-chat-recipient-chip';
   if (isRecipientAnchor) {
     const target = _targetFromPickerAnchor(anchorId);
     const resourceAgentId = agentId === '__commander__' ? _COMMANDER_AGENT_ID : String(agentId || '');
@@ -4161,7 +4638,7 @@ async function _triggerAgent(agentId, agentName, anchorId) {
     // `@` is now redundant (the chip carries the recipient) and would also
     // leak into the sent text — strip it.
     _consumeAtKeyChar();
-    const inputId = target === 'new-chat' ? 'new-chat-input' : (target === 'project' ? 'project-chat-input' : 'chat-input');
+    const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
     _focusInput(document.getElementById(inputId));
     return;
   }
@@ -4206,7 +4683,6 @@ function _focusInput(input) {
 const _RECIPIENT_ANCHOR_PAIRS = [
   { chip: 'chat-recipient-chip',         input: 'chat-input' },
   { chip: 'new-chat-recipient-chip',     input: 'new-chat-input' },
-  { chip: 'project-chat-recipient-chip', input: 'project-chat-input' },
 ];
 
 // Backspace right after a `@<name>` token (with or without the trailing
@@ -4303,6 +4779,10 @@ function bindRecipientAnchor(chipId, inputId) {
 if (typeof window !== 'undefined') {
   window.bindRecipientAnchor = bindRecipientAnchor;
   window.refreshAgentPickerContext = refreshAgentPickerContext;
+  window.renderChatTaskRefChips = renderChatTaskRefChips;
+  window.commitNewChatTaskRefs = commitNewChatTaskRefs;
+  window.clearChatTaskRefChips = clearChatTaskRefChips;
+  window.updateAgentPickerPlaceholders = updateAgentPickerPlaceholders;
 }
 
 function bindAgentPickers() {

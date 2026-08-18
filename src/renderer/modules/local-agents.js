@@ -54,6 +54,12 @@ const CLI_DEFAULTS = {
     description_en: "General-purpose multi-step agent over the ACP protocol with tool use and session-scoped resume, good at walking a defined process step by step; For: 'walk through this process step by step', 'continue from the last session', 'coordinate a few tools to finish this'; Triggers: multi-step, process, task, tool use, resume session, ACP, coordinate",
     isCoding: false,
   },
+  workbuddy: {
+    name: 'WorkBuddy',
+    description_zh: '代码研发智能体——腾讯 WorkBuddy 内置 CodeBuddy 命令行,在本地项目里端到端做软件开发：实现新功能、修复 bug、跨多文件重构、写测试、调试,可长时间自主迭代、直接改文件跑命令；适合"实现一下这个功能"、"把这个 bug 修了"、"重构这个模块"、"给这段代码加测试"；触发词：写代码、开发、实现、修 bug、重构、加功能、写测试、改代码、调试',
+    description_en: "Coding agent — Tencent WorkBuddy's built-in CodeBuddy CLI for end-to-end software development in your local project: builds features, fixes bugs, refactors across files, writes tests, and debugs autonomously, editing files and running commands directly over long sessions; For: 'implement this feature', 'fix this bug', 'refactor this module', 'add tests for this code'; Triggers: code, develop, implement, fix bug, refactor, add feature, write tests, edit code, debug",
+    isCoding: true,
+  },
 };
 
 /** Defaults for a given CLI type, or null when the type is unknown. */
@@ -89,7 +95,7 @@ let _localCliEntries = null;
 async function loadLocalCliEntries({ force = false } = {}) {
   if (_localCliEntries && !force) return _localCliEntries;
   try {
-    const res = await window.orkas.invoke('localAgents.list', { force });
+    const res = await window.cogseed.invoke('localAgents.list', { force });
     _localCliEntries = Array.isArray(res?.entries) ? res.entries : [];
   } catch (e) {
     _localAgentsLog.warn('localAgents.list failed', e);
@@ -116,6 +122,21 @@ let _extCliSelectApi = null;
  * Idempotent: re-mounting just resets options + value so a re-open of
  * the modal picks up newly-installed CLIs.
  */
+let _externalGateways = [];
+
+/** Load managed P3394 gateway status for the External tab. */
+async function loadExternalGateways({ force = false } = {}) {
+  if (_externalGateways.length && !force) return _externalGateways;
+  try {
+    const res = await window.cogseed.invoke('p3394.external.list', { force });
+    _externalGateways = Array.isArray(res?.gateways) ? res.gateways : [];
+  } catch (e) {
+    _localAgentsLog.warn('p3394.external.list failed', e);
+    _externalGateways = [];
+  }
+  return _externalGateways;
+}
+
 async function mountExternalCliSelect(onChange) {
   const mount = document.getElementById('agent-modal-ext-cli-select');
   if (!mount) return null;
@@ -123,14 +144,20 @@ async function mountExternalCliSelect(onChange) {
   // on every open so the renderer's longer-lived cache cannot preserve a
   // stale "not installed" result for the rest of the app session.
   const entries = await loadLocalCliEntries({ force: true });
+  const gateways = await loadExternalGateways({ force: true });
   const available = entries.filter(e => e.available);
   const noneLabel = t('agent_modal.ext_cli_none');
+  const runningLabel = t('agent_modal.ext_cli_running');
   const options = [
     { value: EXT_CLI_NONE, label: noneLabel },
-    ...available.map(e => ({
-      value: e.type,
-      label: `${(getCliDefaults(e.type)?.name) || e.type}${e.version ? ` (${e.version})` : ''}`,
-    })),
+    ...available.map(e => {
+      const gw = gateways.find(g => g && g.cli === e.type);
+      const status = gw && gw.running ? runningLabel : '';
+      return {
+        value: e.type,
+        label: `${(getCliDefaults(e.type)?.name) || e.type}${e.version ? ` (${e.version})` : ''}${status ? ' ' + status : ''}`,
+      };
+    }),
   ];
   const handleChange = (v) => {
     const cli = (!v || v === EXT_CLI_NONE) ? null : v;
@@ -165,6 +192,7 @@ function setExternalCliValue(cliType) {
 }
 
 window.loadLocalCliEntries = loadLocalCliEntries;
+window.loadExternalGateways = loadExternalGateways;
 window.getCliDefaults = getCliDefaults;
 window.cliIsCodingAgent = cliIsCodingAgent;
 window.getLocalCliUnavailableHint = getLocalCliUnavailableHint;

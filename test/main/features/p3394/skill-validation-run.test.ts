@@ -35,17 +35,39 @@ describe('P3394 skill validation run', () => {
     await fs.writeFile(path.join(skillDir, 'SKILL.md'), '---\nname: clean-skill\ndescription: clean\n---\nSafe body.\n');
 
     const run = await mod.runSkillValidation(uid, {
-      skillId: 'clean-skill', target: 'working-tree', skillDir, allowedRoots: [skillDir], boundary: 'real',
+      skillId: 'clean-skill', target: 'working-tree', skillDir, allowedRoots: [skillDir], boundary: 'static',
     });
-    expect(run).toMatchObject({ skillId: 'clean-skill', status: 'risk', scannedFiles: 1, boundary: 'real' });
+    expect(run).toMatchObject({ skillId: 'clean-skill', status: 'risk', scannedFiles: 1, boundary: 'static' });
     expect(await mod.readSkillValidation(uid, run.validationId)).toEqual(run);
     expect((await mod.findLatestSkillValidation(uid, 'clean-skill'))?.validationId).toBe(run.validationId);
+  });
+
+  // PRD §8.2 admits a formal Baseline only after "Skill Validator, Security
+  // Scanner, and a minimal real run". This function is the first of those three:
+  // it reads files and never executes the skill. Callers used to pass
+  // `boundary: 'real'` anyway, producing records that read as run evidence for a
+  // run that never happened — and `workbench/gate` is built to trust a `real`
+  // boundary. Refusing beats silently downgrading: a caller asking for `real`
+  // believes it holds run evidence and would carry that into an admission
+  // decision. Remove this only alongside an implementation that truly runs it.
+  it('refuses to label a static scan as real run evidence', async () => {
+    const mod = await import('../../../../src/main/features/p3394/skill-validation-run');
+    const skillDir = path.join((await import('../../../../src/main/paths')).userLocalRoot(uid), 'claims-real');
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, 'SKILL.md'), '---\nname: claims-real\ndescription: d\n---\nBody.\n');
+
+    await expect(mod.runSkillValidation(uid, {
+      skillId: 'claims-real', target: 'working-tree', skillDir, allowedRoots: [skillDir], boundary: 'real',
+    })).rejects.toThrow(/cannot produce `real` run evidence/);
+
+    // And nothing was written: a rejected claim must not leave a record behind.
+    expect(await mod.findLatestSkillValidation(uid, 'claims-real')).toBeNull();
   });
 
   it('marks an unavailable scanner as degraded instead of pretending pass', async () => {
     const mod = await import('../../../../src/main/features/p3394/skill-validation-run');
     const run = await mod.runSkillValidation(uid, {
-      skillId: 'sk1', target: 'installed-skill', skillDir: '/missing/skill', allowedRoots: ['/missing'], boundary: 'real',
+      skillId: 'sk1', target: 'installed-skill', skillDir: '/missing/skill', allowedRoots: ['/missing'], boundary: 'static',
       validateFn: () => { throw new Error('scanner unavailable'); },
     });
     expect(run).toMatchObject({ status: 'degraded', boundary: 'degraded', scannedFiles: 0 });

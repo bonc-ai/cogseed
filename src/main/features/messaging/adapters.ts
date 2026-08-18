@@ -1,5 +1,7 @@
 import { createLogger } from '../../logger';
 import { logErrorSummary } from '../../util/log-redact';
+import { t } from '../../i18n';
+import * as fs from 'node:fs/promises';
 import * as lark from '@larksuiteoapi/node-sdk';
 import * as wecom from '@wecom/aibot-node-sdk';
 import type { TextMessage, WsFrame } from '@wecom/aibot-node-sdk';
@@ -125,9 +127,25 @@ const FEISHU_REACTION_IN_PROGRESS = 'Typing';
 const FEISHU_REACTION_FAILURE = 'CrossMark';
 const PROCESSING_REACTIONS_MAX = 1024;
 
+/** Feishu upload cap for im/v1/file/create (30 MB). */
+const FEISHU_FILE_UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
+
 /** Feishu API rejects an outbound `post` payload with this message text;
  * the adapter then degrades the chunk to plain text (mirrors Hermes). */
 const FEISHU_POST_CONTENT_INVALID_RE = /content format of the post type is incorrect/i;
+/** Feishu upload file_type by extension; unknown types fall back to
+ * `stream` (covers md/txt/zip/…). */
+export function feishuFileTypeForName(fileName: string): 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream' {
+  const ext = fileName.toLowerCase().split('.').pop() || '';
+  if (ext === 'pdf') return 'pdf';
+  if (ext === 'doc' || ext === 'docx') return 'doc';
+  if (ext === 'xls' || ext === 'xlsx') return 'xls';
+  if (ext === 'ppt' || ext === 'pptx') return 'ppt';
+  if (ext === 'mp4') return 'mp4';
+  if (ext === 'opus') return 'opus';
+  return 'stream';
+}
+
 /** Reply target no longer exists (message recalled / chat gone). The adapter
  * falls back to a fresh message in the same chat (mirrors Hermes
  * _FEISHU_REPLY_FALLBACK_CODES). */
@@ -341,7 +359,15 @@ interface FeishuCardActionEvent {
   open_message_id?: string;
   open_chat_id?: string;
   operator?: { open_id?: string; user_id?: string; name?: string };
-  action?: { tag?: string; value?: Record<string, unknown> };
+  action?: {
+    tag?: string;
+    value?: Record<string, unknown>;
+    /** Input values of the card's input fields, keyed by input `name`
+     * (Feishu attaches this whenever the card contains an input element). */
+    form?: Record<string, unknown>;
+    /** Form values returned by Feishu for input/select elements. */
+    form_value?: Record<string, unknown>;
+  };
 }
 
 function normalizeFeishuCardAction(
@@ -362,6 +388,18 @@ function normalizeFeishuCardAction(
     if (key === 'action') continue;
     if (entry === null || typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean') {
       payload[key] = entry as JsonCompatibleValue;
+    }
+  }
+  // Input values ride alongside the button value, keyed by the input `name`.
+  // Same primitive-only filter; card-defined fields (e.g. `tp_content`) are
+  // forwarded to the action handler verbatim.
+  const forms = [event.action?.form_value, event.action?.form];
+  for (const form of forms) {
+    if (!form || typeof form !== 'object') continue;
+    for (const [key, entry] of Object.entries(form)) {
+    if (entry === null || typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean') {
+      payload[key] = entry as JsonCompatibleValue;
+    }
     }
   }
   return {
@@ -1121,7 +1159,10 @@ export class FeishuAdapter implements MessagingCardAdapter {
         },
       })
       : await this.client.im.v1.message.create({
-        params: { receive_id_type: 'chat_id' },
+        // Same recipient-type routing as the text path: proactive sends to
+        // the owner use open_id; ordinary replies default to chat_id. The
+        // type is trusted — it can only come from manager-provided context.
+        params: { receive_id_type: context?.recipientIdType === 'open_id' ? 'open_id' : 'chat_id' },
         data: {
           receive_id: chatId,
           msg_type: 'interactive',
@@ -1173,11 +1214,11 @@ export class FeishuAdapter implements MessagingCardAdapter {
       value: { action, wake_id: approval.wakeId },
     });
     const actions: Record<string, JsonCompatibleValue>[] = [
-      button('✅ 允许一次', 'approve', 'primary'),
+      button(t('messaging.approval.button.approve_once'), 'approve', 'primary'),
     ];
-    if (approval.allowSession !== false) actions.push(button('✅ 本次会话', 'approve_session'));
-    if (approval.allowPermanent !== false) actions.push(button('✅ 总是允许', 'approve_always'));
-    actions.push(button('❌ 拒绝', 'deny', 'danger'));
+    if (approval.allowSession !== false) actions.push(button(t('messaging.approval.button.approve_session'), 'approve_session'));
+    if (approval.allowPermanent !== false) actions.push(button(t('messaging.approval.button.approve_always'), 'approve_always'));
+    actions.push(button(t('messaging.approval.button.deny'), 'deny', 'danger'));
     const card: Record<string, JsonCompatibleValue> = {
       config: { wide_screen_mode: true },
       header: {
@@ -1201,6 +1242,66 @@ export class FeishuAdapter implements MessagingCardAdapter {
         data: { receive_id: chatId, msg_type: 'interactive', content },
       });
     if (response.code !== undefined && response.code !== 0) throw new Error(response.msg || 'Feishu approval card send failed');
+    const messageId = response.data?.message_id;
+    return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
+  }
+
+  /** Feishu upload file_type for a file name (see `feishuFileTypeForName`). */
+  private fileTypeForName(fileName: string): 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream' {
+    return feishuFileTypeForName(fileName);
+  }
+
+  /** Upload a local file and send it as a file message (md/doc/pdf/…).
+   * Feishu caps uploads at 30 MB and rejects empty files. */
+  async sendFile(
+    chatId: string,
+    filePath: string,
+    fileName = '',
+    lifecycleSignal?: AbortSignal,
+    context?: import('./types').MessagingSendContext,
+  ): Promise<{ deliveryId?: string }> {
+    if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
+    const name = fileName.trim() || filePath.split('/').pop() || 'file';
+    const stats = await fs.stat(filePath);
+    if (!stats.isFile()) throw new Error('Feishu file send failed: not a regular file');
+    if (stats.size <= 0) throw new Error('Feishu file send failed: empty file');
+    if (stats.size > FEISHU_FILE_UPLOAD_MAX_BYTES) {
+      throw new Error(`Feishu file send failed: file exceeds ${Math.round(FEISHU_FILE_UPLOAD_MAX_BYTES / 1024 / 1024)} MB limit`);
+    }
+    const file = await fs.readFile(filePath);
+    if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
+    const uploaded = await this.client.im.v1.file.create({
+      data: {
+        file_type: this.fileTypeForName(name),
+        file_name: name.slice(0, 240),
+        file,
+      },
+    });
+    const fileKey = uploaded?.file_key;
+    if (typeof fileKey !== 'string' || !fileKey) throw new Error('Feishu file upload failed: no file_key');
+    const replyToMessageId = typeof context?.replyToMessageId === 'string' ? context.replyToMessageId.trim() : '';
+    const idempotencyKey = typeof context?.idempotencyKey === 'string' ? context.idempotencyKey.trim() : '';
+    const content = JSON.stringify({ file_key: fileKey });
+    const response = replyToMessageId
+      ? await this.client.im.v1.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          msg_type: 'file',
+          content,
+          ...(context?.replyInThread ? { reply_in_thread: true } : {}),
+          ...(idempotencyKey ? { uuid: idempotencyKey } : {}),
+        },
+      })
+      : await this.client.im.v1.message.create({
+        params: { receive_id_type: context?.recipientIdType === 'open_id' ? 'open_id' : 'chat_id' },
+        data: {
+          receive_id: chatId,
+          msg_type: 'file',
+          content,
+          ...(idempotencyKey ? { uuid: idempotencyKey } : {}),
+        },
+      });
+    if (response.code !== undefined && response.code !== 0) throw new Error(response.msg || 'Feishu file send failed');
     const messageId = response.data?.message_id;
     return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
   }
@@ -1468,4 +1569,4 @@ export function createAdapter(instance: MessagingInstance, secret: MessagingSecr
   return new FeishuAdapter(instance, secret);
 }
 
-export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId, feishuMessageToText, normalizeFeishuCardAction, normalizeFeishuReaction, feishuMentionIsAll };
+export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId, feishuMessageToText, normalizeFeishuCardAction, normalizeFeishuReaction, feishuMentionIsAll, feishuFileTypeForName };

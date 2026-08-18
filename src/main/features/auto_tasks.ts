@@ -49,6 +49,7 @@ import {
   globalAutoTaskLocation,
   listAutoTaskLocations,
 } from '../util/project-layout';
+import { cachedConversationSpace, warmConversationSpace } from './chat_attachments';
 import { readJson, writeJson, nowIso, safeId } from '../storage';
 import { createLogger } from '../logger';
 import { t as translate } from '../i18n';
@@ -60,6 +61,7 @@ import { getActiveUserId, hasActiveUser } from './users';
 import * as chats from './chats';
 import * as groupChat from './group_chat';
 import { getAgentForChatDispatch, getAgentDispatchPolicy, isAgentChatDispatchable } from './agents';
+import { assembleBriefingText, dispatchBriefingTouchpoint, dispatchToFeishuHome } from './personal_context/feishu-dispatch';
 
 const log = createLogger('auto-tasks');
 
@@ -79,7 +81,11 @@ export type Schedule = ScheduleOneTime | ScheduleDaily | ScheduleWeekly | Schedu
 
 export type TaskRecipient =
   | { kind: 'commander' }
-  | { kind: 'agent'; id: string; name: string };
+  | { kind: 'agent'; id: string; name: string }
+  /** 外部通道目标（方案 A）：推送到指定消息实例的归属人主页会话。
+   *  recipient 固定为 'owner'（主页会话 = 归属人），不放开任意会话，
+   *  收窄攻击面。fire 时不建 PC 会话，走 messaging 幂等投递。 */
+  | { kind: 'messaging'; instanceId: string; recipient: 'owner' };
 
 export type TaskSkillRef = { id: string; name: string };
 export type TaskConnectorRef = { id: string; name: string };
@@ -93,6 +99,10 @@ export interface AutoTask {
   title?: string;
   content: string;                       // clean text, NO @ tokens
   recipient?: TaskRecipient;
+  /** 每日简报任务标记：fire 时用 personal_context/briefing 组装
+   *  「本体已确认事实 + 授权日历」生成简报文本，而非 content 原文。
+   *  幂等键前缀 briefing:${taskId}:${日期}。仅 messaging recipient 有效。 */
+  briefing?: boolean;
   /** Ordered composer content for tasks created by inline-chip aware clients.
    *  Legacy `skill` / `connector` remain as first-ref fallbacks for old clients. */
   message_parts?: TaskMessagePart[];
@@ -159,6 +169,10 @@ function _isValidRecipient(r: any): r is TaskRecipient {
   // (the bus router matches `@<name>`, not `@<id>`).
   if (r.kind === 'agent' && typeof r.id === 'string' && r.id
       && typeof r.name === 'string' && r.name) return true;
+  // Messaging recipients: fixed owner home-chat target; instanceId required
+  // and recipient must be exactly 'owner'（不放开任意会话，收窄攻击面）。
+  if (r.kind === 'messaging' && typeof r.instanceId === 'string' && r.instanceId
+      && r.recipient === 'owner') return true;
   return false;
 }
 
@@ -366,6 +380,8 @@ export type TaskDraft = {
   title?: string;
   enabled?: boolean;
   recipient?: TaskRecipient;
+  /** 每日简报任务标记（见 AutoTask.briefing） */
+  briefing?: boolean;
   message_parts?: TaskMessagePart[] | null;
   skill?: TaskSkillRef;
   connector?: TaskConnectorRef;
@@ -412,6 +428,7 @@ function _normaliseDraft(d: TaskDraft): { ok: true; fields: NormalisedFields } |
   let title = typeof d.title === 'string' ? d.title.trim() : '';
   title = limitNameDisplayText(title);
   const enabled = d.enabled === false ? false : true;
+  const briefing = d.briefing === true;
   let recipient: TaskRecipient | undefined;
   if (d.recipient !== undefined) {
     if (!_isValidRecipient(d.recipient)) return { ok: false, error: 'invalid_recipient' };
@@ -441,6 +458,7 @@ function _normaliseDraft(d: TaskDraft): { ok: true; fields: NormalisedFields } |
       ...(messageParts ? { message_parts: messageParts } : {}),
       ...(title ? { title } : {}),
       ...(recipient ? { recipient } : {}),
+      ...(briefing ? { briefing: true } : {}),
       ...(skill ? { skill } : {}),
       ...(connector ? { connector } : {}),
       ...(projectId ? { project_id: projectId } : {}),
@@ -543,6 +561,7 @@ export async function updateTask(
       title: typeof patch.title === 'string' ? patch.title : cur.title,
       enabled: typeof patch.enabled === 'boolean' ? patch.enabled : cur.enabled,
       recipient: patch.recipient !== undefined ? patch.recipient : cur.recipient,
+      briefing: typeof patch.briefing === 'boolean' ? patch.briefing : cur.briefing,
       message_parts: messageParts,
       // Explicit `null` in the patch clears the field; `undefined` keeps
       // the current value. Mirrors the chip close-button on the renderer.
@@ -836,7 +855,8 @@ async function _stageContainerAttachments(
     ? container.updates.attachments.map((name) => _sanitiseFilename(name)).filter((name) => !!name)
     : [];
   if (!names.length || !opts.sourceAttachmentCid) return;
-  const srcDir = chatAttachmentDirForConversation(uid, opts.sourceAttachmentCid);
+  await warmConversationSpace(uid, opts.sourceAttachmentCid);
+  const srcDir = chatAttachmentDirForConversation(uid, opts.sourceAttachmentCid, null, cachedConversationSpace(uid, opts.sourceAttachmentCid) || null);
   const loc = findAutoTaskLocation(uid, taskId) || globalAutoTaskLocation(uid, taskId);
   const destDir = loc.attachmentsDir;
   if (!fs.existsSync(srcDir)) return;
@@ -1118,6 +1138,13 @@ async function _fireTask(uid: string, task: AutoTask): Promise<void> {
       return;
     }
   }
+  // 外部通道目标（messaging）：不建 PC 会话，直接投递归属人主页会话。
+  // 与 commander/agent 路径完全隔离，互不影响（向后兼容）。
+  const messagingRecipient = task.recipient;
+  if (messagingRecipient?.kind === 'messaging') {
+    await _fireMessagingTask(uid, task, messagingRecipient, emitFailure);
+    return;
+  }
   try {
     const conv = await chats.createConversation(uid, {
       kind: 'normal',
@@ -1165,13 +1192,75 @@ async function _fireTask(uid: string, task: AutoTask): Promise<void> {
   }
 }
 
+/** 本地时区 YYYY-MM-DD（幂等键按触发日，与 isDue 的日边界语义一致）。 */
+function _localDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Fire 外部通道（messaging）任务：组装文本（简报任务走 briefing 组装，
+ *  数据缺失自然降级为通用简报；普通任务用种子文本）→ 幂等投递到主页会话。
+ *  失败不重试调度（次日再推），只发 fire_failed 事件；不做 PC 会话回执。 */
+async function _fireMessagingTask(
+  uid: string,
+  task: AutoTask,
+  recipient: Extract<TaskRecipient, { kind: 'messaging' }>,
+  emitFailure: (errorCode: string) => void,
+): Promise<void> {
+  const startedAt = Date.now();
+  let text: string;
+  try {
+    text = task.briefing ? await assembleBriefingText(uid) : _buildSeedText(task);
+  } catch (err) {
+    log.error(`fire messaging compose failed uid=${uid} id=${task.id}: ${(err as Error).message}`);
+    emitFailure('compose_failed');
+    return;
+  }
+  if (!text.trim()) {
+    log.warn(`fire messaging empty text uid=${uid} id=${task.id}`);
+    emitFailure('empty_text');
+    return;
+  }
+  // 幂等键：简报任务 briefing:${taskId}:${触发日}；普通 messaging 任务
+  // auto-task:${taskId}:${触发日}。同一触发日重入不会重复投递（ledger 去重）。
+  const sourceKey = `${task.briefing ? 'briefing' : 'auto-task'}:${task.id}:${_localDateKey(new Date())}`;
+  // 简报走触达点管线（可交互卡片 + 动作回执）；普通 messaging 任务保持文本直发。
+  const res = task.briefing
+    ? await dispatchBriefingTouchpoint(uid, {
+      instanceId: recipient.instanceId,
+      text,
+      sourceKey,
+    })
+    : await dispatchToFeishuHome(uid, {
+      instanceId: recipient.instanceId,
+      text,
+      sourceKey,
+    });
+  // 注：项目 tsconfig 为 strict:false，`if (!res.ok)` 的判别收窄失效，
+  // 必须用字面量比较 `res.ok === false` 才能收窄到失败分支。
+  if (res.ok === false) {
+    log.warn(`fire messaging send failed uid=${uid} id=${task.id} code=${res.code}: ${res.error}`);
+    emitFailure(res.code);
+    return;
+  }
+  log.info(`fired messaging uid=${uid} id=${task.id} instance=${recipient.instanceId} briefing=${task.briefing ? 1 : 0} sourceKey=${sourceKey}`);
+  _emitFire({
+    type: 'delivered',
+    task_id: task.id,
+    duration_ms: Math.max(0, Date.now() - startedAt),
+  });
+}
+
 async function _copyAttachmentsForFire(uid: string, task: AutoTask, cid: string): Promise<string[]> {
   const want = Array.isArray(task.attachments) ? task.attachments.filter((n) => typeof n === 'string' && n) : [];
   if (!want.length) return [];
   if (!_isValidTaskId(task.id)) return [];
   const srcDir = autoTaskLocationForTask(uid, task.id, task.project_id).attachmentsDir;
   if (!fs.existsSync(srcDir)) return [];
-  const destDir = chatAttachmentDirForConversation(uid, cid, task.project_id);
+  await warmConversationSpace(uid, cid);
+  const destDir = chatAttachmentDirForConversation(uid, cid, task.project_id, cachedConversationSpace(uid, cid) || null);
   try { fs.mkdirSync(destDir, { recursive: true }); } catch (_) { /* ignore */ }
   const copied: string[] = [];
   for (const name of want) {
@@ -1195,6 +1284,12 @@ export type AutoFireEvent =
   | {
       type: 'conv_created';
       cid: string;
+      task_id: string;
+      duration_ms?: number;
+    }
+  | {
+      /** 外部通道（messaging）投递成功；无 PC 会话，故无 cid。 */
+      type: 'delivered';
       task_id: string;
       duration_ms?: number;
     }

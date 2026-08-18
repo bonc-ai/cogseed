@@ -121,7 +121,7 @@ function loadPreload(bootResponse: unknown = null) {
     clearTimeout,
   };
   vm.runInNewContext(source, sandbox, { filename: 'preload.js' });
-  const api = exposed.orkas as {
+  const api = exposed.cogseed as {
     invoke: (channel: string, payload?: unknown) => Promise<unknown>;
     stream: (channel: string, payload: unknown, onEvent?: (event: unknown) => void) => {
       promise: Promise<void>;
@@ -227,12 +227,20 @@ describe('preload bridge', () => {
 
   it('exposes a validated synchronous i18n bundle and rejects incomplete boot data', () => {
     const valid = loadPreload({ ok: true, lang: 'zh-CN', tables: { 'zh-CN': { hello: '你好' } } });
-    expect(valid.exposed.__orkasI18nBoot).toEqual({
+    expect(valid.exposed.__cogseedI18nBoot).toEqual({
       lang: 'zh-CN', tables: { 'zh-CN': { hello: '你好' } },
     });
 
     const invalid = loadPreload({ ok: true, lang: 'en', tables: { 'zh-CN': {} } });
-    expect(invalid.exposed.__orkasI18nBoot).toBeNull();
+    expect(invalid.exposed.__cogseedI18nBoot).toBeNull();
+  });
+
+  it('no longer exposes the legacy orkas bridge alias', () => {
+    // 兼容别名已删除（2026-08-17）：window.orkas 不再暴露，渲染层唯一桥
+    // 是 window.cogseed。
+    const { exposed } = loadPreload();
+    expect(exposed.orkas).toBeUndefined();
+    expect(exposed.cogseed).toBeDefined();
   });
 
   it('routes invokes through one envelope', async () => {
@@ -241,10 +249,10 @@ describe('preload bridge', () => {
     await api.invoke('feature.read');
     await api.invoke('feature.write', { enabled: true, purge: true });
 
-    expect(ipcRenderer.invoke).toHaveBeenNthCalledWith(1, 'orkas.invoke', {
+    expect(ipcRenderer.invoke).toHaveBeenNthCalledWith(1, 'cogseed.invoke', {
       channel: 'feature.read', payload: {},
     });
-    expect(ipcRenderer.invoke).toHaveBeenNthCalledWith(2, 'orkas.invoke', {
+    expect(ipcRenderer.invoke).toHaveBeenNthCalledWith(2, 'cogseed.invoke', {
       channel: 'feature.write', payload: { enabled: true, purge: true },
     });
   });
@@ -310,7 +318,7 @@ describe('preload bridge', () => {
     const status = await preload.api.expenseWorkbench.status();
     expect(JSON.stringify(status)).not.toContain(HOST_CAPABILITY);
     const statusCall = preload.ipcRenderer.invoke.mock.calls.find(([channel, request]) => (
-      channel === 'orkas.invoke'
+      channel === 'cogseed.invoke'
       && (request as { channel?: string }).channel === 'expenseWorkbench.status'
     ));
     expect(statusCall?.[1]).toEqual({
@@ -338,7 +346,7 @@ describe('preload bridge', () => {
     );
 
     const approvalCall = preload.ipcRenderer.invoke.mock.calls.find(([channel, request]) => (
-      channel === 'orkas.invoke'
+      channel === 'cogseed.invoke'
       && (request as { channel?: string }).channel === 'expenseWorkbench.approveApplication'
     ));
     expect(approvalCall?.[1]).toEqual({
@@ -378,7 +386,7 @@ describe('preload bridge', () => {
     preload.triggerMutations();
     await vi.waitFor(() => {
       const closeCall = preload.ipcRenderer.invoke.mock.calls.find(([channel, request]) => (
-        channel === 'orkas.invoke'
+        channel === 'cogseed.invoke'
         && (request as { channel?: string }).channel === 'expenseWorkbench.close'
       ));
       expect(closeCall?.[1]).toEqual({
@@ -418,7 +426,7 @@ describe('preload bridge', () => {
     const request = start[1] as { requestId: string };
     const eventChannel = `stream:${request.requestId}`;
 
-    expect(start[0]).toBe('orkas.streamStart');
+    expect(start[0]).toBe('cogseed.streamStart');
     emit(eventChannel, { type: 'delta', text: 'hello' });
     emit(eventChannel, null);
     emit(eventChannel, { type: 'done' });
@@ -438,7 +446,7 @@ describe('preload bridge', () => {
     emit(eventChannel, { type: 'delta' });
 
     await rejected;
-    expect(ipcRenderer.send).toHaveBeenCalledWith('orkas.streamCancel', request.requestId);
+    expect(ipcRenderer.send).toHaveBeenCalledWith('cogseed.streamCancel', request.requestId);
     expect(listeners.get(eventChannel)?.size || 0).toBe(0);
   });
 
@@ -455,7 +463,7 @@ describe('preload bridge', () => {
     emit(`stream:${request.requestId}`, { type: 'done' });
 
     await rejected;
-    expect(ipcRenderer.send.mock.calls.filter(([channel]) => channel === 'orkas.streamCancel')).toHaveLength(1);
+    expect(ipcRenderer.send.mock.calls.filter(([channel]) => channel === 'cogseed.streamCancel')).toHaveLength(1);
   });
 
   it('keeps renderer logging failures from escaping to UI code', async () => {

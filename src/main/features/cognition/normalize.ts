@@ -26,7 +26,10 @@ export function relationRef(type: CognitionRelationRef['type'], id: string, titl
 
 export function actionsForCandidate(source: string, status: string): CognitionCandidateAction[] {
   if (source === 'personal_ontology') return ['open_personal_ontology', 'import_to_recall'];
-  if (status === 'pending') return ['source', 'accept', 'reject'];
+  // 四操作（PRD §5.6 候选卡：保存/修改后保存/暂缓/拒绝）+ deep_review。
+  // deep_review 保留自本分支的沉淀候选准入门：它是查看安全审核结果的入口，
+  // 去掉它等于让审核结论无处可看。
+  if (status === 'pending') return ['source', 'deep_review', 'accept', 'modify', 'defer', 'reject'];
   return ['source'];
 }
 

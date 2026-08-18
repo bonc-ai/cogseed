@@ -112,7 +112,9 @@ describe('settings tabs module', () => {
 
     expect(fs.existsSync(modulePath)).toBe(true);
     expect(indexHtml).toContain('data-i18n="settings.tab.credentials">Model Providers</button>');
-    expect(indexHtml).toContain('data-i18n="settings.tab.messaging">消息平台</button>');
+    // 触点已从设置迁至「连接 > 触点」，设置不再保留消息平台 tab。
+    expect(indexHtml).not.toContain('data-i18n="settings.tab.messaging"');
+    expect(indexHtml).toContain('data-connections-pane="touchpoints"');
     expect(lazyFeatures).toContain("{ src: './modules/messaging-settings.js' }");
     expect(indexHtml).toContain('id="messaging-page"');
     expect(indexHtml).not.toContain('id="messaging-catalog"');
@@ -143,15 +145,15 @@ describe('settings tabs module', () => {
     expect(lazyFeatures).toContain("{ src: './modules/settings.js' }");
   });
 
-  it('keeps the messaging layout card-based with a narrower menu and theme background', () => {
+  it('keeps the messaging layout as a compact two-column workbench', () => {
     const style = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8');
 
-    expect(style).toMatch(/\.messaging-layout\s*\{[^{}]*grid-template-columns:\s*232px\s+minmax\(0,\s*1fr\);/);
-    expect(style).toMatch(/\.messaging-panel-body\s*\{[^{}]*display:\s*flex;[^{}]*flex-direction:\s*column;[^{}]*gap:\s*8px;/);
-    expect(style).toMatch(/\.messaging-settings-shell\s*\{[^{}]*background:\s*var\(--bg\);/);
-    expect(style).toMatch(/\.messaging-page\s*\{[^{}]*background:\s*var\(--bg\);/);
+    expect(style).toMatch(/\.messaging-layout\s*\{[^{}]*grid-template-columns:\s*210px\s+minmax\(0,\s*1fr\);/);
+    expect(style).toMatch(/\.messaging-panel-body\s*\{[^{}]*display:\s*flex;[^{}]*flex-direction:\s*column;/);
+    expect(style).toMatch(/\.messaging-settings-shell\s*\{[^{}]*background:\s*var\(--surface\);/);
+    expect(style).toMatch(/\.messaging-page\s*\{[^{}]*background:\s*var\(--surface\);/);
     expect(style).toMatch(/\.messaging-page\s*\{[^{}]*overflow:\s*auto;/);
-    expect(style).toMatch(/\.messaging-config-card\s*\{[^{}]*background:\s*var\(--surface\);/);
+    expect(style).toContain('.messaging-settings-section,');
   });
 
   it('cancels an in-flight feishu QR flow when switching channels', () => {
@@ -301,9 +303,16 @@ describe('settings tabs module', () => {
         await cancelWecomFlow({ silent: true, render: false });`);
   });
 
+  it('turns an unbound Feishu/Lark switch into a binding action instead of a dead disabled control', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
+    expect(hooks.__test.switchActionForInstance({ platform: 'feishu_lark', hasCredentials: false })).toBe('bind');
+    expect(hooks.__test.switchActionForInstance({ platform: 'feishu_lark', hasCredentials: true })).toBe('toggle');
+    expect(hooks.__test.switchActionForInstance({ platform: 'telegram', hasCredentials: false })).toBe('unavailable');
+  });
+
   it('keeps an add-binding entry for open channels after the first instance', () => {
     const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
-    expect(source).toContain("labelFor('messaging.instance.add', '')");
+    expect(source).toContain("labelFor('messaging.instance.add_another', '')");
     expect(source).toContain('state.telegramCreatingNew = true;');
     expect(source).toContain('void startQrForChannel(channel)');
   });

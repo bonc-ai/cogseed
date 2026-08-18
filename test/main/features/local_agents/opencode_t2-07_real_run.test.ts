@@ -4,7 +4,8 @@
  * NOT a CI/regression test — one-off Evidence-collection run for the
  * "跨Agent Spike: 验证OpenClaw或本地Task Agent的Context注入、结果回收、权限和
  * 可复现性" backlog item, chosen backend = OpenCode. Requires a real,
- * logged-in `opencode` CLI + provider credentials on the host. Skip in CI.
+ * logged-in `opencode` CLI + provider credentials on the host. Skip in CI and
+ * during ordinary `npm test`; set RUN_REAL_OPENCODE_EVIDENCE=1 to opt in.
  *
  * Produces on disk (not committed, Evidence collection only):
  *   /tmp/t2-07-opencode-verify/workdir/probe.txt        — Context-injection probe file
@@ -21,7 +22,7 @@ import { describe, it, expect } from 'vitest';
 import { opencodeBackend } from '../../../../src/main/features/local_agents/backends/opencode';
 import type { LocalEvent } from '../../../../src/main/features/local_agents/backends/base';
 
-const describeIfLocal = process.env.CI ? describe.skip : describe;
+const describeIfLocal = process.env.CI || process.env.RUN_REAL_OPENCODE_EVIDENCE !== '1' ? describe.skip : describe;
 const MODEL = 'deepseek/deepseek-chat';
 const EVIDENCE_DIR = '/tmp/t2-07-opencode-verify';
 const WORK_DIR = path.join(EVIDENCE_DIR, 'workdir');

@@ -1,7 +1,10 @@
 // ─── Boot ─────────────────────────────────────────────────────────────────
 const _bootLog = createLogger('boot');
 async function initAuth() {
-  bootApp();
+  bootApp().catch((err) => {
+    console.error('[BOOT FATAL] bootApp failed:', err);
+    _bootLog.error('bootApp failed', { error: (err && err.message) || String(err), stack: err && err.stack });
+  });
 }
 
 // ─── Boot performance guardrails ────────────────────────────────────────────
@@ -39,7 +42,7 @@ function _reportBootUserActivity() {
   const now = Date.now();
   if (now - _lastBootActivityReportAt < 1000) return;
   _lastBootActivityReportAt = now;
-  try { window.orkas?.reportUserActivity?.(); } catch (_) {}
+  try { window.cogseed?.reportUserActivity?.(); } catch (_) {}
 }
 for (const eventName of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
   window.addEventListener(eventName, _reportBootUserActivity, { capture: true, passive: true });
@@ -95,6 +98,20 @@ async function bootApp() {
   // i18n must be ready before any other UI module renders labels.
   await _bootStage('initI18n', initI18n);
 
+  // First-run walkthrough FIRST: check the machine-local onboarding marker
+  // right after i18n, BEFORE Stage A/B. The walkthrough is a full-screen
+  // overlay — the user should land on it immediately, never on a half-loaded
+  // main UI that swaps to the walkthrough seconds later. It is fire-and-
+  // forget so it never blocks first paint; Stage A/B keep warming the main
+  // UI underneath the overlay. `maybeStart` is idempotent (skips when the
+  // marker says completed), so the original post-Stage-B call below stays
+  // as a safety net for edge cases where the early check raced boot.
+  if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
+    Promise.resolve(window.csOnboarding.maybeStart()).catch((err) => {
+      _bootLog.warn('onboarding maybeStart (early) failed', { error: (err && err.message) || String(err) });
+    });
+  }
+
   // ── Stage A (parallel, no inter-dependencies) ──────────────────────
   // All four are independent IPC calls. Three downstream constraints,
   // all honored by staging:
@@ -108,9 +125,8 @@ async function bootApp() {
   // to Stage C with the other warmup-only work.
   await _bootStage('stageA', () => Promise.all([
     _stampSettingsVersion(),
-    (async () => { await initUser(); await initUserWorkspace(); })(),
+    (async () => { await initUser(); await initUserWorkspace(); if (typeof initModelChip === 'function') initModelChip(); })(),
     initAvatarCatalog(),
-    loadProjects(),
   ]));
 
   // ── Stage B (parallel, depends on Stage A) ─────────────────────────
@@ -137,6 +153,9 @@ async function bootApp() {
       _bootLog.warn('onboarding maybeStart failed', { error: (err && err.message) || String(err) });
     });
   }
+
+  // Interactive tour is started by onboarding.js after completion
+  // (removed duplicate auto-start to avoid "tour already running" conflict)
   if (typeof _consumePendingTaskNotificationConversation === 'function') {
     _consumePendingTaskNotificationConversation();
   }
@@ -178,9 +197,9 @@ async function bootApp() {
 // grids to expose builtin ⋯ menu (edit / delete) and the "promote to builtin"
 // item on custom cards.
 async function _stampSettingsVersion() {
-  if (!window.orkas || typeof window.orkas.env !== 'function') return;
+  if (!window.cogseed || typeof window.cogseed.env !== 'function') return;
   try {
-    const env = await window.orkas.env();
+    const env = await window.cogseed.env();
     if (env && env.isDev) document.body.classList.add('is-dev');
   } catch (_) { /* ignore — non-critical */ }
 }
@@ -262,14 +281,11 @@ function _loadViewFeature(feature, view, run) {
 
 function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
-    : view === 'skills' ? 'panel-skills'
-    : view === 'evolution' ? 'panel-evolution'
+    : view === 'skills' ? 'panel-connections'
     : view === 'recall' ? 'panel-recall'
-    : view === 'personal-ontology' ? 'panel-personal-ontology'
-    : view === 'spaces' ? 'panel-spaces'
+    : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
-    : view === 'project' ? 'panel-project'
     : view === 'auto' ? 'panel-auto'
     : view === 'marketplace' ? 'panel-marketplace'
     : view === 'devtools' ? 'panel-devtools'
@@ -340,6 +356,9 @@ async function initUser() {
 // ─── View routing ───
 
 function setView(view, cid, opts = {}) {
+  const openPersonalOntology = view === 'personal-ontology';
+  if (openPersonalOntology) view = 'recall';
+  if (view === 'evolution') view = 'skills';
   if (currentView !== view || (view === 'conversation' && currentCid !== cid)) {
     _bootLog.info('view change', { view, cid: cid || undefined });
   }
@@ -351,33 +370,29 @@ function setView(view, cid, opts = {}) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panelId = view === 'new-chat' ? 'panel-new-chat'
                 : view === 'auto' ? 'panel-auto'
-                : view === 'agents' ? 'panel-agents'
-                : view === 'skills' ? 'panel-skills'
+                : view === 'agents' || view === 'contexts' ? 'panel-connections'
+                : view === 'skills' ? 'panel-connections'
+                : view === 'personal-ontology' ? 'panel-recall'
                 : view === 'recall' ? 'panel-recall'
-                : view === 'connectors' ? 'panel-connectors'
-                : view === 'contexts' ? 'panel-contexts'
-                : view === 'evolution' ? 'panel-evolution'
-                : view === 'personal-ontology' ? 'panel-personal-ontology'
-                : view === 'spaces' ? 'panel-spaces'
+                : view === 'connections' || view === 'connectors' ? 'panel-connections'
+                : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
-                : view === 'project' ? 'panel-project'
                 : view === 'marketplace' ? 'panel-marketplace'
                 : 'panel-conversation';
   document.getElementById(panelId).classList.add('active');
 
   document.getElementById('new-chat-btn').classList.toggle('active', view === 'new-chat');
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
-  document.getElementById('agents-btn').classList.toggle('active', view === 'agents');
-  document.getElementById('skills-btn').classList.toggle('active', view === 'skills');
-  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall');
-  document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
-  document.getElementById('contexts-btn')?.classList.toggle('active', view === 'contexts');
-  document.getElementById('evolution-btn')?.classList.toggle('active', view === 'evolution');
-  document.getElementById('personal-ontology-btn')?.classList.toggle('active', view === 'personal-ontology');
+  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'personal-ontology');
+  document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('spaces-btn')?.classList.toggle('active', view === 'spaces');
-  document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
+  document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
+  // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。
+  if (typeof window.setChipSettingsActive === 'function') {
+    window.setChipSettingsActive(view === 'settings');
+  }
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
   document.querySelectorAll('.conv-item').forEach(it => {
     it.classList.toggle('active', view === 'conversation' && it.dataset.cid === cid);
@@ -453,29 +468,38 @@ function setView(view, cid, opts = {}) {
     setTimeout(() => document.getElementById('new-chat-input')?.focus(), 50);
   } else if (view === 'agents') {
     currentCid = null;
-    _loadViewFeature('agents', 'agents', () => {
-      if (typeof _agentsCache !== 'undefined' && _agentsCache && !_agentsCacheIsSummary) renderAgentsList(_agentsCache);
-      // Boot owns a summary-only list. Upgrade it once when the grid first needs
-      // descriptions/counts; subsequent visits reuse the full renderer cache.
-      const needsFullListing = !(typeof _agentsCache !== 'undefined' && _agentsCache && !_agentsCacheIsSummary);
-      if (needsFullListing) {
-        _deferSidebarNavWork('agents-tab-refresh', () => {
-          if (currentView !== 'agents') return;
-          Promise.resolve(loadAgents(false))
-            .then(() => {
-              if (currentView === 'agents' && typeof refreshSelectedAgentDetail === 'function') {
-                return refreshSelectedAgentDetail();
-              }
-              return null;
-            })
-            .catch((e) => _bootLog.warn('agents refresh on tab entry failed', { error: (e && e.message) || String(e) }));
-        }, 0);
-      }
+    _deferSidebarNavWork('agents-tab-load', () => {
+      // AI 团队已内嵌进「连接」：深链先切到 Agent tab。
+      if (typeof initConnections === 'function') initConnections();
+      else if (typeof window.initConnections === 'function') window.initConnections();
+      if (typeof activateConnectionsTab === 'function') activateConnectionsTab('agents');
+      _loadViewFeature('agents', 'agents', () => {
+        if (typeof _agentsCache !== 'undefined' && _agentsCache && !_agentsCacheIsSummary) renderAgentsList(_agentsCache);
+        // Boot owns a summary-only list. Upgrade it once when the grid first needs
+        // descriptions/counts; subsequent visits reuse the full renderer cache.
+        const needsFullListing = !(typeof _agentsCache !== 'undefined' && _agentsCache && !_agentsCacheIsSummary);
+        if (needsFullListing) {
+          _deferSidebarNavWork('agents-tab-refresh', () => {
+            if (currentView !== 'agents') return;
+            Promise.resolve(loadAgents(false))
+              .then(() => {
+                if (currentView === 'agents' && typeof refreshSelectedAgentDetail === 'function') {
+                  return refreshSelectedAgentDetail();
+                }
+                return null;
+              })
+              .catch((e) => _bootLog.warn('agents refresh on tab entry failed', { error: (e && e.message) || String(e) }));
+          }, 0);
+        }
+      });
     });
   } else if (view === 'skills') {
     currentCid = null;
     _deferSidebarNavWork('skills-tab-refresh', () => {
       _loadViewFeature('skills', 'skills', () => {
+        // 技能库已移到连接页「技能」tab（技能市场/外部库属于可用资源，不是
+        // 个人认知资产）。深链先切过去，再渲染技能网格。
+        if (typeof activateConnectionsTab === 'function') activateConnectionsTab('skills');
         if (typeof _skillsCache !== 'undefined' && _skillsCache) renderSkillsList(_skillsCache);
         const forceRefresh = !!(typeof _skillsCache !== 'undefined' && _skillsCache);
         Promise.resolve(loadSkills(forceRefresh))
@@ -493,28 +517,41 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('recall-tab-refresh', () => {
       _loadViewFeature('recall', 'recall', () => {
         if (typeof initSkillsCognitionConsole === 'function') initSkillsCognitionConsole();
+        // 深链 setView('personal-ontology') 在 setView 顶部被归一化为 recall；
+        // 「关于我」已不是独立 tab，而是「我的资产」里的 personal 分类：切到
+        // 该页并选中该分类，个人本体就在页内展开。
+        if (openPersonalOntology && typeof switchSkillsCognitionPage === 'function') {
+          if (typeof _skillsCognitionState !== 'undefined' && _skillsCognitionState) {
+            _skillsCognitionState.assetCategoryFilter = 'personal';
+          }
+          switchSkillsCognitionPage('assets');
+        }
         if (typeof loadSkillsCognitionSnapshot === 'function') {
           Promise.resolve(loadSkillsCognitionSnapshot())
             .catch((e) => _bootLog.warn('Recall refresh on tab entry failed', { error: (e && e.message) || String(e) }));
         }
       });
     });
-  } else if (view === 'connectors') {
+  } else if (view === 'connections' || view === 'connectors') {
     currentCid = null;
-    if (typeof loadConnectors === 'function') {
-      _deferSidebarNavWork('connectors-tab-load', () => {
-        if (currentView !== 'connectors') return;
-        Promise.resolve(loadConnectors())
-          .then(() => {
-            if (currentView === 'connectors' && typeof verifyConnectors === 'function') return verifyConnectors();
-            return undefined;
-          })
-          .catch((e) => _bootLog.warn('connectors tab load failed', { error: (e && e.message) || String(e) }));
-      });
-    }
+    _deferSidebarNavWork('connections-tab-load', () => {
+      // The connections panel is eager-bundled with connectors.js; just make
+      // sure tab chrome + entry cards are initialized, then open the MCP pane
+      // when arriving via the legacy 'connectors' view.
+      if (currentView !== 'connections' && currentView !== 'connectors') return;
+      if (typeof initConnections === 'function') initConnections();
+      else if (typeof window.initConnections === 'function') window.initConnections();
+      if (view === 'connectors' && typeof activateConnectionsTab === 'function') {
+        activateConnectionsTab('mcp');
+      }
+    });
   } else if (view === 'contexts') {
     currentCid = null;
     _deferSidebarNavWork('contexts-tab-load', () => {
+      // 资料库已内嵌进「连接」：深链先切到数据源 tab。
+      if (typeof initConnections === 'function') initConnections();
+      else if (typeof window.initConnections === 'function') window.initConnections();
+      if (typeof activateConnectionsTab === 'function') activateConnectionsTab('sources');
       _loadViewFeature('contexts', 'contexts', () => {
         if (typeof loadContexts === 'function') loadContexts();
       });
@@ -528,25 +565,11 @@ function setView(view, cid, opts = {}) {
         if (typeof loadAutoList === 'function') loadAutoList(true);
       });
     });
-  } else if (view === 'evolution') {
+  } else if (view === 'spaces' || view === 'workspace') {
     currentCid = null;
-    _deferSidebarNavWork('evolution-tab-load', () => {
-      _loadViewFeature('evolution', 'evolution', () => {
-        if (typeof renderEvolutionConsole === 'function') renderEvolutionConsole();
-      });
-    });
-  } else if (view === 'personal-ontology') {
-    currentCid = null;
-    _deferSidebarNavWork('personal-ontology-tab-load', () => {
-      _loadViewFeature('personal-ontology', 'personal-ontology', () => {
-        if (typeof renderPersonalOntology === 'function') renderPersonalOntology();
-      });
-    });
-  } else if (view === 'spaces') {
-    currentCid = null;
-    _deferSidebarNavWork('spaces-tab-load', () => {
-      _loadViewFeature('spaces', 'spaces', () => {
-        if (typeof renderSpaces === 'function') renderSpaces();
+    _deferSidebarNavWork('workspace-tab-load', () => {
+      _loadViewFeature('workspace', 'workspace', () => {
+        if (typeof renderWorkspace === 'function') renderWorkspace();
       });
     });
   } else if (view === 'settings') {
@@ -559,18 +582,10 @@ function setView(view, cid, opts = {}) {
         }
       });
     });
-  } else if (view === 'project') {
-    // `cid` arg is repurposed as `pid` for this view (single second-arg
-    // slot kept; the function only inspects it for 'conversation' above).
-    currentCid = null;
-    if (typeof primeProjectDetailShell === 'function') primeProjectDetailShell(cid || '');
-    _deferSidebarNavWork('project-tab-load', () => {
-      _loadViewFeature('project', 'project', () => {
-        if (typeof loadProjectDetail === 'function') loadProjectDetail(cid || '');
-      });
-    });
   } else {
     currentCid = null;
   }
-  if (typeof renderProjectsSection === 'function') renderProjectsSection();
 }
+
+// Expose setView to window for interactive tour
+window.setView = setView;

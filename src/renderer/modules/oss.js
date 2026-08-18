@@ -24,6 +24,7 @@ const _OSS_CAT_ICON = {
   browser: 'globe',
   office: 'file-text',
   slides: 'presentation',
+  interop: 'users',
 };
 function ossIconFor(cat) { return _OSS_CAT_ICON[cat] || 'sparkles'; }
 
@@ -89,7 +90,7 @@ async function _ossHydrateCatalogCache() {
   if (_ossCatalogHydratePromise) return _ossCatalogHydratePromise;
   _ossCatalogHydratePromise = (async () => {
     try {
-      const data = await window.orkas.invoke('marketplace.getListingsCache');
+      const data = await window.cogseed.invoke('marketplace.getListingsCache');
       const entries = data && data.entries && typeof data.entries === 'object' ? data.entries : {};
       for (const [key, value] of Object.entries(entries)) {
         if (!String(key).startsWith('project|')) continue;
@@ -104,7 +105,7 @@ async function _ossHydrateCatalogCache() {
 
 function _ossPersistCatalogCache(key, entry) {
   try {
-    window.orkas.invoke('marketplace.mergeListingsCache', {
+    window.cogseed.invoke('marketplace.mergeListingsCache', {
       entries: {
         [key]: {
           items: entry.projects || [],
@@ -155,7 +156,7 @@ function _ossDispatchCatalogUpdated(key, opts, entry) {
 async function _ossFetchCatalog(key, opts, notify) {
   if (_ossCatalogInflight.has(key)) return _ossCatalogInflight.get(key);
   _ossCatalogNextRefreshAt.set(key, Date.now() + OSS_CATALOG_REVALIDATE_MS);
-  const p = window.orkas.invoke('marketplace.listProjects', _ossCatalogPayload(opts))
+  const p = window.cogseed.invoke('marketplace.listProjects', _ossCatalogPayload(opts))
     .then((res) => {
       const bundledFallback = !!(res && (res.source === 'bundled' || res.stale === true));
       const existing = _ossCatalogCache.get(key);
@@ -172,7 +173,7 @@ async function _ossFetchCatalog(key, opts, notify) {
 }
 
 async function _ossLoadLocalCatalog(key, opts) {
-  const res = await window.orkas.invoke('marketplace.listProjects', {
+  const res = await window.cogseed.invoke('marketplace.listProjects', {
     ..._ossCatalogPayload(opts),
     local_only: true,
   });
@@ -271,6 +272,8 @@ function ossRepoInstallKey(repoOrUrl) {
 // Office engine, so point the model at built-in Office tools instead of install.
 function ossPromptFor(p) {
   const isOfficeCli = p && (p.id === 'OfficeCLI' || p.name === 'OfficeCLI');
+  const isP3394 = p && p.id === 'P3394';
+  if (isP3394) return (typeof t === 'function') ? t('oss.p3394_prompt') : '';
   const tmpl = (typeof t === 'function') ? t(isOfficeCli ? 'oss.office_prompt' : 'oss.prompt') : '';
   return tmpl
     .replace(/\{id\}/g, (p && p.id) || '')
@@ -298,7 +301,7 @@ let _ossInstalledPromise = null;
 function loadOssInstalled(force) {
   if (force) _ossInstalledPromise = null;
   if (!_ossInstalledPromise) {
-    _ossInstalledPromise = window.orkas.invoke('packages.list')
+    _ossInstalledPromise = window.cogseed.invoke('packages.list')
       .then((res) => {
         const keys = new Set();
         for (const p of (res && res.ok && Array.isArray(res.packages) ? res.packages : [])) {
@@ -321,7 +324,7 @@ function isOssProjectInstalled(p, installed) {
 // Open the project's GitHub page in the system browser.
 function ossOpenRepo(p) {
   const url = ossGithubUrl(p);
-  if (url && window.orkas) window.orkas.invoke('auth.openExternal', { url }).catch(() => {});
+  if (url && window.cogseed) window.cogseed.invoke('auth.openExternal', { url }).catch(() => {});
 }
 
 // ③ behavior — prefill the Commander composer, focus, NO send. The caret lands
@@ -397,15 +400,26 @@ async function initOssEntry(opts = {}) {
 
   // ① receives the curated home subset from the Server. The Server config
   // controls how many rows are returned; the client renders whatever it gets.
-  const projects = data.projects || [];
-  if (!projects.length) { entry.style.display = 'none'; return; }
+  const catalogProjects = data.projects || [];
+  // P3394 是 CogSeed 内建协议能力（非 marketplace 项目）：作为内置卡插在最前。
+  // 注意：绝不能 mutate 缓存的 catalog 数组（initOssEntry 会被 i18n-change /
+  // catalog-updated 等事件反复调用，mutate 会导致卡片重复累积）。
+  const projects = [
+    {
+      id: 'P3394', name: 'P3394', category: 'interop', color: '#7C3AED',
+      task_zh: '与其他智能体对话协作', task_en: 'Talk & collaborate with another Agent',
+    },
+    ...catalogProjects,
+  ];
   entry.style.display = '';
 
   grid.innerHTML = projects.map((p) => {
     const task = escapeHtml(ossTaskFor(p));
     const by = escapeHtml(p.by || p.name || '');
     const icon = uiIconHtml(ossIconFor(p.category), 'oss-card-icon');
-    const byLine = (typeof t === 'function') ? t('oss.driven_by').replace('{name}', by) : by;
+    const byLine = p.id === 'P3394'
+      ? (typeof t === 'function' ? t('oss.p3394_by') : 'P3394')
+      : (typeof t === 'function') ? t('oss.driven_by').replace('{name}', by) : by;
     return `
       <button type="button" class="oss-card" data-oss-id="${escapeHtml(p.id)}">
         <span class="oss-card-top">
@@ -428,7 +442,6 @@ window.addEventListener('i18n-change', () => {
 window.addEventListener('oss-catalog-updated', (e) => {
   const d = (e && e.detail) || {};
   if (!d.homeOnly) return;
-  if (document.getElementById('oss-entry-grid')) initOssEntry({ revalidate: false });
 });
 
 // Exposed for marketplace.js (② rendering) + conversation.js (① init).
@@ -448,4 +461,3 @@ window.ossInstallPromptFor = ossInstallPromptFor;
 window.ossOpenRepo = ossOpenRepo;
 window.prefillCommander = prefillCommander;
 window.unresolvedOssTemplatePlaceholder = unresolvedOssTemplatePlaceholder;
-window.initOssEntry = initOssEntry;

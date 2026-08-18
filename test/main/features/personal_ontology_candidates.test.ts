@@ -44,6 +44,10 @@ async function loadGroups() {
   return import('../../../src/main/features/personal_ontology_groups');
 }
 
+async function loadTemplateMod() {
+  return import('../../../src/main/features/personal_ontology_template_files');
+}
+
 function candidatesMdPath(): string {
   return path.join(tmpDir, UID, 'local', 'ontology_candidates', 'candidates.md');
 }
@@ -175,6 +179,59 @@ describe('personal_ontology_candidates › confirmCandidate writes to real memor
     expect(fs.existsSync(sharedMemoryPath())).toBe(true);
     expect(fs.readFileSync(sharedMemoryPath(), 'utf8')).toContain('规则：API 返回空结果时显示空状态');
     expect(fs.existsSync(userProfilePath())).toBe(false);
+  });
+
+  it('confirming with a role template destination tags the global-memory entry with the template id', async () => {
+    const poc = await loadModule();
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([{
+      candidate_id: 'cand-role-1',
+      kind: 'preference',
+      confidence: 'high',
+      summary: '喜欢研究',
+      memory_scope: 'user',
+      memory_text: '喜欢阅读研究方法论文献',
+      source_memory_refs: [],
+    }]));
+    // 安装一个模板并拿到其模板组 group_id
+    const tf = await loadTemplateMod();
+    const inst = await tf.installTemplateFile(UID, 'student');
+    const groupId = inst.created![0].group_id;
+
+    const res = await poc.confirmCandidate(UID, 'cand-role-1', { toGroupIds: [groupId] });
+    expect(res.ok).toBe(true);
+
+    const userMd = fs.readFileSync(userProfilePath(), 'utf8');
+    // 正文零污染：文本照常出现
+    expect(userMd).toContain('喜欢阅读研究方法论文献');
+    // 元数据头带 role_template 来源标记
+    expect(userMd).toMatch(/mate-agent-memory:v1.*role_template.*student/);
+    // 不带标签的裸条目不出现（这条是带标签写入的）
+    expect(userMd).toContain('"kind":"role_template"');
+    expect(userMd).toContain('"sourceId":"student"');
+  });
+
+  it('confirming without a role destination writes a plain (untagged) global-memory entry', async () => {
+    const poc = await loadModule();
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([{
+      candidate_id: 'cand-plain-1',
+      kind: 'preference',
+      confidence: 'high',
+      summary: '喜欢打篮球',
+      memory_scope: 'user',
+      memory_text: '平时喜欢打篮球',
+      source_memory_refs: [],
+    }]));
+
+    const res = await poc.confirmCandidate(UID, 'cand-plain-1');
+    expect(res.ok).toBe(true);
+
+    const userMd = fs.readFileSync(userProfilePath(), 'utf8');
+    expect(userMd).toContain('平时喜欢打篮球');
+    expect(userMd).not.toContain('role_template');
   });
 
   it('returns ok:false and keeps the candidate when candidate_id is unknown', async () => {
@@ -329,26 +386,7 @@ describe('personal_ontology_candidates › rejectCandidate', () => {
 
 // ── batch operations ─────────────────────────────────────────────────────
 
-describe('personal_ontology_candidates › batch confirm/reject', () => {
-  it('confirmCandidates writes multiple entries and empties the pool', async () => {
-    const poc = await loadModule();
-    const file = candidatesMdPath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([
-      { candidate_id: 'c1', kind: 'preference', confidence: 'high', summary: 'a', memory_scope: 'user', memory_text: 'memory A', source_memory_refs: [] },
-      { candidate_id: 'c2', kind: 'rule', confidence: 'medium', summary: 'b', memory_scope: 'shared', memory_text: 'memory B', source_memory_refs: [] },
-    ]));
-
-    const res = await poc.confirmCandidates(UID, ['c1', 'c2']);
-    expect(res.confirmedCount).toBe(2);
-    expect(res.failedIds).toEqual([]);
-
-    const after = await poc.listCandidates(UID);
-    expect(after.candidate_updates).toHaveLength(0);
-    expect(fs.readFileSync(userProfilePath(), 'utf8')).toContain('memory A');
-    expect(fs.readFileSync(sharedMemoryPath(), 'utf8')).toContain('memory B');
-  });
-
+describe('personal_ontology_candidates › batch reject', () => {
   it('rejectCandidates removes only the targeted ids', async () => {
     const poc = await loadModule();
     const file = candidatesMdPath();
@@ -366,32 +404,6 @@ describe('personal_ontology_candidates › batch confirm/reject', () => {
     expect(after.candidate_updates[0].candidate_id).toBe('c2');
   });
 
-  it('confirmCandidates applies the same dest to every candidate in the batch and reports per-candidate results', async () => {
-    const poc = await loadModule();
-    const groups = await loadGroups();
-    const groupId = (await groups.createGroup(UID, 'batch group')).group!.group_id;
-
-    const file = candidatesMdPath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([
-      { candidate_id: 'c1', kind: 'preference', confidence: 'high', summary: 'a', memory_scope: 'user', memory_text: 'memory A', source_memory_refs: [] },
-      { candidate_id: 'c2', kind: 'rule', confidence: 'medium', summary: 'b', memory_scope: 'shared', memory_text: 'memory B', source_memory_refs: [] },
-    ]));
-
-    const res = await poc.confirmCandidates(UID, ['c1', 'c2'], { toGlobalMemory: false, toGroupIds: [groupId] });
-    expect(res.confirmedCount).toBe(2);
-    expect(res.failedIds).toEqual([]);
-    expect(res.results.c1.groups).toEqual([{ groupId, ok: true }]);
-    expect(res.results.c2.groups).toEqual([{ groupId, ok: true }]);
-
-    // Not written to global memory (toGlobalMemory:false).
-    expect(fs.existsSync(userProfilePath())).toBe(false);
-    expect(fs.existsSync(sharedMemoryPath())).toBe(false);
-
-    const content = (await groups.readGroupContent(UID, groupId)).content || '';
-    expect(content).toContain('memory A');
-    expect(content).toContain('memory B');
-  });
 });
 
 // ── legacy candidates.json migration ─────────────────────────────────────
@@ -510,36 +522,37 @@ describe('personal_ontology_candidates › confirm with targetField routing', ()
     return poc;
   }
 
-  it('hits an existing template field → writes field zone with [候选] source', async () => {
-    const groups = await loadGroups();
-    await groups.installRoleTemplate(UID, 'student');
-    const prefs = await groups.listGroups(UID);
-    const prefGroup = prefs.find((g) => g.title === '协作关系')!.group_id;
+  it('hits an existing template section field → writes it with [候选] source', async () => {
+    const tmpl = await loadTemplateMod();
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const sectionRef = tmpl.buildContentRef(row.group_id, '协作关系');
 
     const poc = await seedCandidate('cand-hit', '协作项目');
-    const res = await poc.confirmCandidate(UID, 'cand-hit', { toGlobalMemory: false, toGroupIds: [prefGroup], targetField: '协作项目' });
+    const res = await poc.confirmCandidate(UID, 'cand-hit', { toGlobalMemory: false, toGroupIds: [sectionRef], targetField: '协作项目' });
     expect(res.ok).toBe(true);
-    expect(res.fieldWrites).toEqual([{ groupId: prefGroup, fieldName: '协作项目', ok: true }]);
+    expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '协作项目', ok: true }]);
     expect(res.groups).toBeUndefined(); // 填坑成功，不走流水区
 
-    const content = (await groups.readGroupContent(UID, prefGroup)).content || '';
-    expect(content).toContain('## 字段区');
+    const content = tmpl.readTemplateFileText(UID, 'student');
     expect(content).toContain('- 这条候选的值 [候选]');
   });
 
   it('missing field on the group → falls back to 流水区', async () => {
-    const groups = await loadGroups();
-    await groups.installRoleTemplate(UID, 'student');
-    const courseGroup = (await groups.listGroups(UID)).find((g) => g.title === '学习背景')!.group_id;
+    const tmpl = await loadTemplateMod();
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const sectionRef = tmpl.buildContentRef(row.group_id, '学习背景');
 
     const poc = await seedCandidate('cand-miss', '协作项目'); // 学习背景组没有 协作项目 字段
-    const res = await poc.confirmCandidate(UID, 'cand-miss', { toGlobalMemory: false, toGroupIds: [courseGroup], targetField: '协作项目' });
+    const res = await poc.confirmCandidate(UID, 'cand-miss', { toGlobalMemory: false, toGroupIds: [sectionRef], targetField: '协作项目' });
     expect(res.ok).toBe(true);
-    expect(res.fieldWrites).toEqual([{ groupId: courseGroup, fieldName: '协作项目', ok: false, error: 'field not found' }]);
-    expect(res.groups).toEqual([{ groupId: courseGroup, ok: true }]);
+    expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '协作项目', ok: false, error: 'field not found' }]);
+    expect(res.groups).toEqual([{ groupId: sectionRef, ok: true }]);
 
-    const content = (await groups.readGroupContent(UID, courseGroup)).content || '';
-    expect(content).toBe('这条候选的值'); // 流水区，纯文本
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toContain('## 学习背景');
+    expect(content).toContain('这条候选的值');
   });
 
   it('no targetField → 流水区 as before, no fieldWrites reported', async () => {
@@ -550,40 +563,6 @@ describe('personal_ontology_candidates › confirm with targetField routing', ()
     expect(res.ok).toBe(true);
     expect(res.fieldWrites).toBeUndefined();
     expect(res.groups).toEqual([{ groupId: g, ok: true }]);
-  });
-});
-
-describe('personal_ontology_candidates › confirmBatch summary', () => {
-  it('aggregates toFields counts and toEntries across per-candidate routing', async () => {
-    const groups = await loadGroups();
-    await groups.installRoleTemplate(UID, 'student');
-    const prefs = (await groups.listGroups(UID)).find((g) => g.title === '协作关系')!.group_id;
-    const courses = (await groups.listGroups(UID)).find((g) => g.title === '学习背景')!.group_id;
-
-    const poc = await loadModule();
-    const file = candidatesMdPath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([
-      { candidate_id: 'b1', kind: 'preference', confidence: 'high', summary: 'a', memory_scope: 'user', memory_text: '值1', target_field: '协作项目', source_memory_refs: [] },
-      { candidate_id: 'b2', kind: 'preference', confidence: 'high', summary: 'b', memory_scope: 'user', memory_text: '值2', target_field: '协作项目', source_memory_refs: [] },
-      { candidate_id: 'b3', kind: 'instance', confidence: 'medium', summary: 'c', memory_scope: 'user', memory_text: '值3', target_field: '教育阶段', source_memory_refs: [] },
-      { candidate_id: 'b4', kind: 'instance', confidence: 'medium', summary: 'd', memory_scope: 'user', memory_text: '值4', target_field: '不存在的字段', source_memory_refs: [] },
-    ]));
-
-    const res = await poc.confirmCandidates(UID, ['b1', 'b2', 'b3', 'b4'], {
-      toGlobalMemory: false,
-      toGroupIds: [prefs, courses],
-      targetField: '协作项目', // 批量场景 dest 统一；逐条 target_field 来自候选数据时走单条 confirm
-    });
-
-    // b1/b2 填进 协作关系组.协作项目（dest.targetField）；b3 的候选 target_field=教育阶段 但批量统一走 dest，
-    // 这里验证 summary 结构存在且与 results 一致
-    expect(res.summary).toBeTruthy();
-    expect(Array.isArray(res.summary.toFields)).toBe(true);
-    const totalFieldWrites = Object.values(res.results).reduce((n, r) => n + (r.fieldWrites || []).filter((fw) => fw.ok).length, 0);
-    expect(res.summary.toFields.reduce((n, f) => n + f.count, 0)).toBe(totalFieldWrites);
-    expect(res.summary.toEntries).toBeGreaterThanOrEqual(0);
-    expect(typeof res.summary.toEntries).toBe('number');
   });
 });
 
@@ -643,5 +622,293 @@ describe('personal_ontology_candidates › routeWithLlm integration (router mock
     expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '教师与同伴', ok: true }]);
     const content = tmpl.readTemplateFileText(UID, 'student');
     expect(content).toContain('### 教师与同伴\n- 喜欢用大白话解释 [候选]');
+  });
+
+  it('LLM route keeps projectId on the effective dest (D5: @proj:<pid> on routed field)', async () => {
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    await tmpl.installTemplateFile(UID, 'student');
+
+    const poc = await seedCandidate('cand-llm-3');
+    const res = await poc.confirmCandidate(UID, 'cand-llm-3', { toGlobalMemory: false, projectId: 'p_llm' }, { routeWithLlm: true });
+    expect(res.ok).toBe(true);
+    // router mock 命中 协作关系.协作项目 → LLM 自动 push 复合 id；projectId 随 dest 展开保留
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toMatch(/### 协作项目\n- 喜欢用大白话解释 \[智能\] @proj:p_llm/);
+  });
+
+  it('A-4: LLM auto-routed template destination does NOT tag the global-memory entry (user never picked the role)', async () => {
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    const mem = await import('../../../src/main/features/memory');
+    await tmpl.installTemplateFile(UID, 'student');
+    // 用户未选任何角色（toGroupIds 空），LLM 分支 3 自动加入学生模板
+    const poc = await seedCandidate('cand-llm-4');
+    const res = await poc.confirmCandidate(UID, 'cand-llm-4', {}, { routeWithLlm: true });
+    expect(res.ok).toBe(true);
+    // 模板字段写入了（LLM 自动归位）
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toContain('### 协作项目');
+    // 全局记忆条目存在但不带角色标签
+    const userMd = fs.readFileSync(userProfilePath(), 'utf8');
+    expect(userMd).toContain('喜欢用大白话解释');
+    expect(userMd).not.toContain('role_template');
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(0);
+  });
+
+  it('user-picked role still tags the global-memory entry (explicit choice)', async () => {
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    const mem = await import('../../../src/main/features/memory');
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const poc = await seedCandidate('cand-llm-5');
+    // 用户显式选角色（纯 group_id，无分节）→ LLM 2b 分支收窄到分节
+    const res = await poc.confirmCandidate(UID, 'cand-llm-5', { toGroupIds: [row.group_id] }, { routeWithLlm: true });
+    expect(res.ok).toBe(true);
+    const userMd = fs.readFileSync(userProfilePath(), 'utf8');
+    expect(userMd).toContain('role_template');
+    expect(userMd).toContain('"sourceId":"student"');
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(1);
+  });
+});
+
+// ── M3：治理元数据字段（sensitivity / write_actor / recorded_time）─────────────
+
+describe('personal_ontology_candidates › M3 governance metadata round-trip', () => {
+  it('round-trips all three new fields through serialize → parse', async () => {
+    const poc = await loadModule();
+    const candidates = [{
+      candidate_id: 'cand-m3-1',
+      kind: 'preference' as const,
+      confidence: 'high' as const,
+      summary: '喜欢大白话',
+      memory_scope: 'user' as const,
+      memory_text: '沟通风格：喜欢直接说人话',
+      source_memory_refs: ['conv-1'],
+      sensitivity: 'restricted' as const,
+      write_actor: 'user' as const,
+      recorded_time: '2026-08-09T10:30:00.000Z',
+    }];
+    const md = poc.serializeCandidatesMarkdown(candidates);
+    // 非默认值才会序列化
+    expect(md).toContain('- 敏感度: restricted');
+    expect(md).toContain('- 写入者: user');
+    expect(md).toContain('- 记录时间: 2026-08-09T10:30:00.000Z');
+
+    const parsed = poc.parseCandidatesMarkdown(md);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].sensitivity).toBe('restricted');
+    expect(parsed[0].write_actor).toBe('user');
+    expect(parsed[0].recorded_time).toBe('2026-08-09T10:30:00.000Z');
+  });
+
+  it('omits sensitivity/write_actor when they are default values (standard/llm)', async () => {
+    const poc = await loadModule();
+    const candidates = [{
+      candidate_id: 'cand-m3-2',
+      kind: 'preference' as const,
+      confidence: 'medium' as const,
+      summary: '摘要',
+      memory_scope: 'user' as const,
+      memory_text: '文本',
+      source_memory_refs: [],
+      sensitivity: 'standard' as const,
+      write_actor: 'llm' as const,
+    }];
+    const md = poc.serializeCandidatesMarkdown(candidates);
+    // 默认值不入 markdown（保持文件清爽）
+    expect(md).not.toContain('敏感度');
+    expect(md).not.toContain('写入者');
+
+    const parsed = poc.parseCandidatesMarkdown(md);
+    expect(parsed[0].sensitivity).toBe('standard');
+    expect(parsed[0].write_actor).toBe('llm');
+  });
+
+  it('old format without M3 fields parses with safe defaults', async () => {
+    const poc = await loadModule();
+    // 模拟 M2 版本的 candidates.md（无敏感度/写入者/记录时间行）
+    const oldMd = '### cand-old\n- 类型: preference\n- 置信度: high\n- 摘要: 旧候选\n- 记忆去向: user\n- 记忆文本: 旧文本\n- 来源: conv-1\n';
+    const parsed = poc.parseCandidatesMarkdown(oldMd);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].sensitivity).toBe('standard');
+    expect(parsed[0].write_actor).toBe('llm');
+    expect(parsed[0].recorded_time).toBe('');
+  });
+
+  it('coerces invalid sensitivity/write_actor values to safe defaults', async () => {
+    const poc = await loadModule();
+    const badMd = '### cand-bad\n- 类型: preference\n- 置信度: high\n- 摘要: x\n- 记忆去向: user\n- 敏感度: top-secret\n- 写入者: hacker\n- 记录时间: not-a-date\n- 来源: conv-1\n';
+    const parsed = poc.parseCandidatesMarkdown(badMd);
+    expect(parsed[0].sensitivity).toBe('standard'); // 非法值 → standard
+    expect(parsed[0].write_actor).toBe('llm');       // 非法值 → llm
+    expect(parsed[0].recorded_time).toBe('not-a-date'); // 字符串照收（parser 不校验 ISO）
+  });
+
+  it('sensitivity=standard and write_actor=llm re-serialize without those lines (no noise)', async () => {
+    const poc = await loadModule();
+    // parse → serialize 往返：默认值不产生额外行
+    const oldMd = '### cand-clean\n- 类型: preference\n- 置信度: high\n- 摘要: x\n- 记忆去向: user\n- 来源: conv-1\n';
+    const parsed = poc.parseCandidatesMarkdown(oldMd);
+    const reSerialized = poc.serializeCandidatesMarkdown(parsed);
+    expect(reSerialized).not.toContain('敏感度');
+    expect(reSerialized).not.toContain('写入者');
+    expect(reSerialized).not.toContain('记录时间');
+  });
+});
+
+// ── 二期 D5：确认链路来源项目标记（dest.projectId → @proj:<pid>）───────────
+
+describe('personal_ontology_candidates › project source marker via confirm', () => {
+  /** 写候选池（独立 tmpDir，id 可复用）。 */
+  async function seedCandidates(poc: Awaited<ReturnType<typeof loadModule>>, items: Array<{ id: string; text: string }>) {
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown(items.map((it) => ({
+      candidate_id: it.id,
+      kind: 'preference',
+      confidence: 'high',
+      summary: 's',
+      memory_scope: 'user',
+      memory_text: it.text,
+      source_memory_refs: [],
+    }))));
+  }
+
+  it('confirmCandidate with projectId marks the field value (plain group)', async () => {
+    const poc = await loadModule();
+    const groups = await loadGroups();
+    const created = await groups.createGroup(UID, '偏好');
+    const groupId = created.group!.group_id;
+    // 先建字段坑（有坑填坑路径），再确认候选
+    await groups.appendFieldValue(UID, groupId, '沟通风格', '种子值', '手动');
+    await seedCandidates(poc, [{ id: 'cand-pref-1', text: '喜欢用大白话解释' }]);
+
+    const res = await poc.confirmCandidate(UID, 'cand-pref-1', {
+      toGlobalMemory: false,
+      toGroupIds: [groupId],
+      targetField: '沟通风格',
+      projectId: 'p_abc',
+    });
+    expect(res.ok).toBe(true);
+
+    const file = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', `${groupId}.md`);
+    const content = fs.readFileSync(file, 'utf8');
+    expect(content).toContain('- 喜欢用大白话解释 [候选] @proj:p_abc');
+  });
+
+  it('confirmCandidate with projectId marks template-section field values', async () => {
+    const poc = await loadModule();
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const sectionRef = tmpl.buildContentRef(row.group_id, '协作关系');
+    await seedCandidates(poc, [{ id: 'cand-pref-1', text: '喜欢用大白话解释' }]);
+
+    const res = await poc.confirmCandidate(UID, 'cand-pref-1', {
+      toGlobalMemory: false,
+      toGroupIds: [sectionRef],
+      targetField: '教师与同伴',
+      projectId: 'p_def',
+    });
+    expect(res.ok).toBe(true);
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toContain('### 教师与同伴\n- 喜欢用大白话解释 [候选] @proj:p_def');
+  });
+
+  it('no projectId → legacy output without @ marker', async () => {
+    const poc = await loadModule();
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const sectionRef = tmpl.buildContentRef(row.group_id, '协作关系');
+    await seedCandidates(poc, [{ id: 'cand-pref-1', text: '喜欢用大白话解释' }]);
+
+    await poc.confirmCandidate(UID, 'cand-pref-1', {
+      toGlobalMemory: false,
+      toGroupIds: [sectionRef],
+      targetField: '教师与同伴',
+    });
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toContain('### 教师与同伴\n- 喜欢用大白话解释 [候选]');
+    expect(content).not.toContain('@proj:');
+  });
+
+  it('candidate pool format round-trips a `来源项目` line (D5 进池标记地基)', async () => {
+    const poc = await loadModule();
+    const cands = [{
+      candidate_id: 'cand-pj-1',
+      kind: 'preference' as const,
+      confidence: 'high' as const,
+      summary: '摘要',
+      memory_scope: 'user' as const,
+      memory_text: '记忆文本',
+      source_memory_refs: [] as string[],
+      project_id: 'p_from_pool',
+    }];
+    const text = poc.serializeCandidatesMarkdown(cands);
+    expect(text).toContain('- 来源项目: p_from_pool');
+    const parsed = poc.parseCandidatesMarkdown(text);
+    expect(parsed[0].project_id).toBe('p_from_pool');
+  });
+
+  it('candidate自带 project_id（dest 不传）→ 落盘 @proj:<pid>', async () => {
+    const poc = await loadModule();
+    const groups = await loadGroups();
+    const created = await groups.createGroup(UID, '偏好');
+    const groupId = created.group!.group_id;
+    await groups.appendFieldValue(UID, groupId, '沟通风格', '种子值', '手动');
+
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([{
+      candidate_id: 'cand-pj-2',
+      kind: 'preference',
+      confidence: 'high',
+      summary: 's',
+      memory_scope: 'user',
+      memory_text: '自带项目标记的候选',
+      source_memory_refs: [],
+      project_id: 'p_pool_abc',
+    }]));
+
+    const res = await poc.confirmCandidate(UID, 'cand-pj-2', {
+      toGlobalMemory: false,
+      toGroupIds: [groupId],
+      targetField: '沟通风格',
+    });
+    expect(res.ok).toBe(true);
+    const groupFile = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', `${groupId}.md`);
+    expect(fs.readFileSync(groupFile, 'utf8')).toContain('- 自带项目标记的候选 [候选] @proj:p_pool_abc');
+  });
+
+  it('dest.projectId 显式传 → 覆盖候选自带 project_id（用户/UI 意图优先）', async () => {
+    const poc = await loadModule();
+    const groups = await loadGroups();
+    const created = await groups.createGroup(UID, '偏好');
+    const groupId = created.group!.group_id;
+    await groups.appendFieldValue(UID, groupId, '沟通风格', '种子值', '手动');
+
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([{
+      candidate_id: 'cand-pj-3',
+      kind: 'preference',
+      confidence: 'high',
+      summary: 's',
+      memory_scope: 'user',
+      memory_text: '覆盖标记测试',
+      source_memory_refs: [],
+      project_id: 'p_pool_old',
+    }]));
+
+    const res = await poc.confirmCandidate(UID, 'cand-pj-3', {
+      toGlobalMemory: false,
+      toGroupIds: [groupId],
+      targetField: '沟通风格',
+      projectId: 'p_override',
+    });
+    expect(res.ok).toBe(true);
+    const groupFile = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', `${groupId}.md`);
+    expect(fs.readFileSync(groupFile, 'utf8')).toContain('- 覆盖标记测试 [候选] @proj:p_override');
+    expect(fs.readFileSync(groupFile, 'utf8')).not.toContain('p_pool_old');
   });
 });

@@ -205,19 +205,19 @@ describe('search › searchChats', () => {
     s.__searchTestHooks.cancelChatRepair(TEST_UID);
   });
 
-  it('caches display metadata and invalidates it on conversation/project rename', async () => {
-    const projects = await import('../../../../src/main/features/projects');
+  it('caches display metadata and invalidates it on conversation/space rename', async () => {
+    const spaces = await import('../../../../src/main/features/spaces');
     const chats = await import('../../../../src/main/features/chats');
-    const createdProject = await projects.createProject(TEST_UID, 'Original project');
-    expect(createdProject.ok).toBe(true);
-    if (!createdProject.ok) return;
-    const projectId = createdProject.project.project_id;
+    const created = await spaces.createSpace(TEST_UID, { name: 'Original space' });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const spaceId = created.space.space_id;
     const conversation = await chats.createConversation(TEST_UID, {
       title: 'Original conversation',
-      projectId,
+      spaceId,
     });
     const jsonl = path.join(
-      tmpDir, TEST_UID, 'cloud', 'projects', projectId, 'chats',
+      tmpDir, TEST_UID, 'cloud', 'chats',
       `${conversation.conversation_id}.jsonl`,
     );
     fs.writeFileSync(jsonl, `${JSON.stringify({
@@ -230,23 +230,23 @@ describe('search › searchChats', () => {
     let results = await s.searchChats(TEST_UID, 'catalog keyword');
     expect(results[0]).toMatchObject({
       conv_title: 'Original conversation',
-      project_name: 'Original project',
+      space_name: 'Original space',
     });
 
     await chats.renameConversation(
-      TEST_UID, conversation.conversation_id, 'Renamed conversation', projectId);
-    await projects.renameProject(TEST_UID, projectId, 'Renamed project');
+      TEST_UID, conversation.conversation_id, 'Renamed conversation', spaceId);
+    await spaces.updateSpace(TEST_UID, spaceId, { name: 'Renamed space' });
     results = await s.searchChats(TEST_UID, 'catalog keyword');
     expect(results[0]).toMatchObject({
       conv_title: 'Renamed conversation',
-      project_name: 'Renamed project',
+      space_name: 'Renamed space',
     });
 
     const readSpy = vi.spyOn(fs.promises, 'readFile');
     try {
       await s.searchChats(TEST_UID, 'catalog keyword');
       const metadataReads = readSpy.mock.calls.filter(([file]) => (
-        String(file).endsWith('_index.json') || String(file).endsWith('project.json')
+        String(file).endsWith('_index.json') || String(file).endsWith('.json')
       ));
       expect(metadataReads).toEqual([]);
     } finally {

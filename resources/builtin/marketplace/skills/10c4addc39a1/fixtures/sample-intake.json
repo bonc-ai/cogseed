@@ -1,0 +1,28 @@
+{
+  "task_id": "TASK-DEMO-001",
+  "owner_context": {
+    "owner_id": "owner-demo",
+    "role": "ontology_analyst",
+    "authorization_scope": [
+      "read_materials",
+      "web_research",
+      "write_sandbox_artifacts"
+    ]
+  },
+  "domain_payload": {
+    "volume_number": "X",
+    "domain_name_cn": "合成验证领域",
+    "domain_name_en": "Synthetic Validation Domain",
+    "research_date": "2026-08-08",
+    "policy_urls": [],
+    "materials": [
+      {
+        "title": "合成政策样例",
+        "kind": "policy",
+        "authority": "synthetic"
+      }
+    ],
+    "output_basename": "X_合成验证领域_Ontology分析与对标_v0.1",
+    "research_bundle_dir": "fixtures/research"
+  }
+}

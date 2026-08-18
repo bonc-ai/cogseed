@@ -1,0 +1,48 @@
+{
+  "gate_id": "RG-TASK-001",
+  "skill_id": "ontology-analysis-skill",
+  "skill_version": "0.1.0",
+  "plan_id": "RP-TASK-001",
+  "ledger_id": "WRL-TASK-001",
+  "research_date": "YYYY-MM-DD",
+  "generated_at": "generated-by-validator",
+  "gate_status": "failed",
+  "conditions": {
+    "web_research_executed": false,
+    "official_policy_source_found": false,
+    "policy_scope_verified": false,
+    "selected_sources_opened": false,
+    "search_snippets_not_used_as_evidence": true,
+    "all_current_facts_have_primary_sources": false,
+    "all_standard_versions_verified": false,
+    "all_source_refs_resolvable": false,
+    "all_critical_questions_resolved": false,
+    "unresolved_date_conflicts": 0,
+    "unresolved_standard_version_conflicts": 0,
+    "unresolved_scope_conflicts": 0
+  },
+  "metrics": {
+    "queries_executed": 0,
+    "opened_sources": 0,
+    "verified_primary_sources": 0,
+    "official_policy_sources": 0,
+    "official_standard_sources": 0,
+    "critical_claims": 0,
+    "verified_critical_claims": 0,
+    "report_external_sources": 0,
+    "resolved_conflicts": 0,
+    "unresolved_conflicts": 0
+  },
+  "checks": [],
+  "blockers": [
+    "This file is a template. Generate it with scripts/validate_research_bundle.py."
+  ],
+  "warnings": [],
+  "hashes": {
+    "plan_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "ledger_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "report_data_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "promotion_ceiling": "staged",
+  "production_release_allowed": false
+}

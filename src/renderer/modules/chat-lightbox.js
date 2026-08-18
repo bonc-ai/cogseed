@@ -248,7 +248,7 @@ async function _onLightboxReveal(e) {
     const payload = { path: file.absPath };
     if (file.cid) payload.cid = file.cid;
     if (file.projectId) payload.projectId = file.projectId;
-    const res = await window.orkas.invoke('workspace.revealPath', payload);
+    const res = await window.cogseed.invoke('workspace.revealPath', payload);
     if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
   } catch (err) {
     try {
@@ -272,7 +272,7 @@ async function _onLightboxAddLibrary(e) {
     const payload = { path: file.absPath };
     if (file.cid) payload.cid = file.cid;
     if (file.projectId) payload.projectId = file.projectId;
-    const res = await window.orkas.invoke('library.importProduced', payload);
+    const res = await window.cogseed.invoke('library.importProduced', payload);
     if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
     const checkIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
       ? window.uiIconHtml('check', 'chat-lightbox-library-icon')

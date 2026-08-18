@@ -2,7 +2,7 @@ const _shimLog = typeof createLogger === 'function' ? createLogger('ipc-shim') :
 // ─── HTTP → IPC shim ─────────────────────────────────────────────────
 // The original app was served over HTTP; every network call went through
 // `apiFetch(url, options)` which wrapped `fetch`. In Electron we route the
-// same calls through `window.orkas.invoke` (for request/response) or
+// same calls through `window.cogseed.invoke` (for request/response) or
 // `.stream` (for SSE). The shim translates URL + method into an IPC channel
 // + payload and returns a Response-like object so the rest of the file's
 // 3000+ lines can stay unchanged.
@@ -38,28 +38,6 @@ const _IPC_ROUTES = [
   ['PUT',    '/api/skills/write',             'skills.writeFile'],
   ['GET',    '/api/skills/tree',              'skills.tree'],
   ['POST',   '/api/skills/create',            'skills.create'],
-  ['POST',   '/api/evolution/dashboard',      'evolution.dashboard'],
-  ['POST',   '/api/evolution/evolve/start',   'evolution.evolve.start'],
-  ['POST',   '/api/evolution/evolve/step',    'evolution.evolve.step'],
-  ['POST',   '/api/evolution/evolve/abort',   'evolution.evolve.abort'],
-  ['GET',    /^\/api\/evolution\/evolve\/([^/]+)$/, 'evolution.evolve.get', ['runId']],
-  ['GET',    '/api/evolution/evolve',         'evolution.evolve.list'],
-  ['GET',    /^\/api\/evolution\/skills\/([^/]+)\/recommend$/, 'evolution.evolve.recommend', ['skillId']],
-  ['GET',    /^\/api\/evolution\/evals\/([^/]+)$/, 'evolution.evals.get', ['skillId']],
-  ['POST',   '/api/evolution/evals/save-case', 'evolution.evals.saveCase'],
-  ['GET',    /^\/api\/evolution\/evals\/([^/]+)\/standard$/, 'evolution.evals.standard.get', ['skillId']],
-  ['POST',   /^\/api\/evolution\/evals\/([^/]+)\/standard$/, 'evolution.evals.standard.save', ['skillId']],
-  ['POST',   '/api/evolution/evals/run',      'evolution.evals.run', null, { stream: true }],
-  ['GET',    /^\/api\/evolution\/skills\/([^/]+)\/versions$/, 'evolution.skills.versions', ['skillId']],
-  ['POST',   /^\/api\/evolution\/skills\/([^/]+)\/export$/, 'evolution.skills.export', ['skillId']],
-  ['POST',   '/api/evolution/skills/capture-intent', 'evolution.skills.captureIntent'],
-  ['POST',   '/api/evolution/skills/create-draft', 'evolution.skills.createDraft'],
-  ['GET',    /^\/api\/evolution\/ontology\/([^/]+)$/, 'evolution.ontology.list', ['skillId']],
-  ['POST',   '/api/evolution/ontology/extract', 'evolution.ontology.extract'],
-  ['GET',    /^\/api\/evolution\/ontology\/([^/]+)\/bindings$/, 'evolution.ontology.bindings', ['skillId']],
-  ['POST',   /^\/api\/evolution\/ontology\/([^/]+)\/bind$/, 'evolution.ontology.bind', ['skillId']],
-  ['POST',   /^\/api\/evolution\/ontology\/([^/]+)\/unbind$/, 'evolution.ontology.unbind', ['skillId']],
-  ['POST',   '/api/evolution/patches/apply',  'evolution.patches.apply'],
   ['POST',   '/api/p3394/validations/scan', 'p3394.validation.scan'],
   ['GET',    /^\/api\/p3394\/validations\/([^/]+)$/, 'p3394.validation.read', ['validationId']],
   ['GET',    '/api/p3394/executions', 'p3394.execution.list'],
@@ -76,11 +54,6 @@ const _IPC_ROUTES = [
   ['GET',    /^\/api\/workbench\/projects\/([^/]+)\/action-plan$/, 'workbench.actionPlan.read', ['projectId']],
   ['GET',    /^\/api\/workbench\/projects\/([^/]+)\/tasks\/([^/]+)\/runs$/, 'workbench.taskRuns.list', ['projectId', 'taskId']],
   ['POST',   /^\/api\/workbench\/projects\/([^/]+)\/tasks\/([^/]+)\/runs$/, 'workbench.taskRun.start', ['projectId', 'taskId']],
-  ['GET',    '/api/personalOntology/candidates',              'personalOntology.candidates.list'],
-  ['POST',   '/api/personalOntology/candidates/confirm',      'personalOntology.candidates.confirm'],
-  ['POST',   '/api/personalOntology/candidates/reject',       'personalOntology.candidates.reject'],
-  ['POST',   '/api/personalOntology/candidates/confirmBatch', 'personalOntology.candidates.confirmBatch'],
-  ['POST',   '/api/personalOntology/candidates/rejectBatch',  'personalOntology.candidates.rejectBatch'],
   ['GET',    '/api/cognition/assets/page',    'cognition.assets.page'],
   ['GET',    '/api/cognition/assets',         'cognition.assets.list'],
   ['POST',   '/api/cognition/assets',         'cognition.assets.create'],
@@ -143,11 +116,7 @@ const _IPC_ROUTES = [
   ['POST',   /^\/api\/conversations\/([^/]+)\/abort$/,     'groupChat.abort',            ['cid']],
   ['GET',    /^\/api\/conversations\/([^/]+)\/wake-requests$/, 'p3394.listWakeRequests', ['cid']],
   ['POST',   /^\/api\/conversations\/([^/]+)\/wake-requests\/([^/]+)\/decision$/, 'p3394.decideWakeRequest', ['cid', 'requestId']],
-  ['GET',    /^\/api\/conversations\/([^/]+)\/kstar$/, 'p3394.listKstarCompatProjections', ['cid']],
   ['GET',    /^\/api\/conversations\/([^/]+)\/protocol-events$/, 'p3394.listProtocolEvents', ['cid']],
-  ['POST',   /^\/api\/conversations\/([^/]+)\/kstar\/([^/]+)\/review$/, 'p3394.reviewKstarCompatProjection', ['cid', 'runId']],
-  ['POST',   /^\/api\/conversations\/([^/]+)\/experience\/([^/]+)\/decision$/, 'p3394.decideExperienceCandidate', ['cid', 'candidateId']],
-  ['POST',   /^\/api\/conversations\/([^/]+)\/experience\/([^/]+)\/notion-sync$/, 'p3394.syncExperienceCandidateToNotion', ['cid', 'candidateId']],
   ['GET',    /^\/api\/conversations\/([^/]+)\/members$/,   'groupChat.listMembers',      ['cid']],
   ['GET',    /^\/api\/conversations\/([^/]+)\/runtime$/,   'groupChat.runtimeStatus',    ['cid']],
   ['GET',    /^\/api\/conversations\/([^/]+)\/collaboration\/conflicts$/, 'groupChat.listCollaborationConflicts', ['cid']],
@@ -163,6 +132,7 @@ const _IPC_ROUTES = [
   ['GET',    /^\/api\/agents\/([^/]+)$/,                   'agents.get',                 ['agent_id']],
   ['DELETE', /^\/api\/agents\/([^/]+)$/,                   'agents.delete',              ['agent_id']],
   ['PUT',    /^\/api\/agents\/([^/]+)\/update$/,           'agents.update',              ['agent_id'], { wrapAsUpdates: true }],
+  ['GET',    /^\/api\/agents\/([^/]+)\/inheritance$/,      'agents.inheritance',         ['agent_id']],
   ['GET',    /^\/api\/agents\/([^/]+)\/chat$/,             'agents.chat.history',        ['agent_id']],
   ['DELETE', /^\/api\/agents\/([^/]+)\/chat$/,             'agents.chat.clear',          ['agent_id']],
   ['POST',   /^\/api\/agents\/([^/]+)\/chat\/send$/,       'agents.chat.send',           ['agent_id']],
@@ -232,11 +202,11 @@ function _monitorIpcError(kind, channel, data) {
 }
 
 function _hasOrkasInvoke() {
-  return !!(window.orkas && typeof window.orkas.invoke === 'function');
+  return !!(window.cogseed && typeof window.cogseed.invoke === 'function');
 }
 
 function _hasOrkasStream() {
-  return !!(window.orkas && typeof window.orkas.stream === 'function');
+  return !!(window.cogseed && typeof window.cogseed.stream === 'function');
 }
 
 const _mateProjectionCache = new Map();
@@ -246,7 +216,7 @@ let _mateProjectionInvokeOverride = null;
 function _mateProjectionInvoke(channel, payload) {
   if (_mateProjectionInvokeOverride) return _mateProjectionInvokeOverride(channel, payload);
   if (!_hasOrkasInvoke()) return Promise.reject(new Error('ipc bridge unavailable'));
-  return window.orkas.invoke(channel, payload);
+  return window.cogseed.invoke(channel, payload);
 }
 
 function _mateProjectionEntry(key, loader, onUpdate) {
@@ -306,7 +276,7 @@ function _isStreamCancel(err) {
 }
 
 /**
- * Convert a window.orkas.stream call into a Response whose body is a
+ * Convert a window.cogseed.stream call into a Response whose body is a
  * ReadableStream of SSE-formatted bytes. The existing app.js SSE reader
  * (`res.body.getReader()` + 'data: …\\n\\n' parse) works unchanged.
  */
@@ -316,7 +286,7 @@ function _streamResponse(channel, payload, signal) {
 
   const readable = new ReadableStream({
     start(controller) {
-      streamHandle = window.orkas.stream(channel, payload, (ev) => {
+      streamHandle = window.cogseed.stream(channel, payload, (ev) => {
         const chunk = encoder.encode('data: ' + JSON.stringify(ev) + '\n\n');
         try { controller.enqueue(chunk); } catch (_) { /* already closed */ }
       });
@@ -385,7 +355,7 @@ async function _uploadBinary(channel, options, extraParams) {
   }
   const data = btoa(binary);
   try {
-    const result = await window.orkas.invoke(channel, { ...(extraParams || {}), name, data });
+    const result = await window.cogseed.invoke(channel, { ...(extraParams || {}), name, data });
     return _mockJsonResponse(result);
   } catch (err) {
     _monitorIpcError('ipc_upload', channel, { msg: err && err.message ? err.message : String(err) });
@@ -444,7 +414,7 @@ function apiFetch(url, options) {
     return _uploadBinary(uploadChannel, options, params).catch((err) => _mockErrorResponse((err && err.message) || String(err), 500));
   }
 
-  // Streaming: go through window.orkas.stream + ReadableStream body.
+  // Streaming: go through window.cogseed.stream + ReadableStream body.
   if (opts.stream) {
     if (!_hasOrkasStream()) {
       return Promise.resolve(_mockJsonResponse({ ok: false, error: 'ipc stream bridge unavailable' }));
@@ -462,7 +432,7 @@ function apiFetch(url, options) {
     return Promise.resolve(_mockJsonResponse({ ok: false, error: 'ipc bridge unavailable' }));
   }
 
-  return window.orkas.invoke(channel, payload)
+  return window.cogseed.invoke(channel, payload)
     .then((result) => {
       return _mockJsonResponse(result);
     })

@@ -78,6 +78,18 @@ vi.mock('../../../src/main/features/agents', () => ({
   isAgentChatDispatchable: autoRuntime.isAgentChatDispatchable,
 }));
 
+const dispatchRuntime = vi.hoisted(() => ({
+  assembleBriefingText: vi.fn(),
+  dispatchToFeishuHome: vi.fn(),
+  dispatchBriefingTouchpoint: vi.fn(),
+}));
+
+vi.mock('../../../src/main/features/personal_context/feishu-dispatch', () => ({
+  assembleBriefingText: dispatchRuntime.assembleBriefingText,
+  dispatchToFeishuHome: dispatchRuntime.dispatchToFeishuHome,
+  dispatchBriefingTouchpoint: dispatchRuntime.dispatchBriefingTouchpoint,
+}));
+
 const TEST_UID = 'auto-unit-user';
 
 function makeTask(schedule: Schedule, overrides: Partial<AutoTask> = {}): AutoTask {
@@ -961,5 +973,151 @@ describe('isDue: monthly', () => {
     const now = new Date(2026, 4, 15, 12, 30, 0);
     const lastRun = new Date(2026, 4, 15, 12, 0, 30);
     expect(isDue(task, now, lastRun)).toBe(false);
+  });
+});
+
+describe('auto_tasks › messaging recipient（方案 A：主页会话投递）', () => {
+  beforeEach(() => {
+    dispatchRuntime.dispatchToFeishuHome.mockReset();
+    dispatchRuntime.assembleBriefingText.mockReset();
+    dispatchRuntime.dispatchBriefingTouchpoint.mockReset();
+    dispatchRuntime.dispatchToFeishuHome.mockResolvedValue({ ok: true });
+    dispatchRuntime.dispatchBriefingTouchpoint.mockResolvedValue({ ok: true });
+    dispatchRuntime.assembleBriefingText.mockResolvedValue('【今日简报】降级：暂无已接入数据');
+  });
+
+  it('普通 messaging 任务 fire：走主页会话投递、不建 PC 会话、发 delivered 事件', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T09:00:00.000Z'));
+    const events: any[] = [];
+    const unsubscribe = subscribeFires((ev) => events.push(ev));
+    const taskId = 'at_a1b2c3d1';
+    const created = await createTask(TEST_UID, {
+      id: taskId,
+      title: 'Push to owner',
+      content: 'hello from auto task',
+      recipient: { kind: 'messaging', instanceId: 'inst_feishu_1', recipient: 'owner' },
+      schedule: { type: 'one_time', at: '2026-05-22T08:59:00.000Z' },
+    });
+    expect(created.ok).toBe(true);
+
+    await _onTimerFireForTest(TEST_UID, taskId);
+    unsubscribe();
+
+    expect(dispatchRuntime.dispatchToFeishuHome).toHaveBeenCalledWith(TEST_UID, {
+      instanceId: 'inst_feishu_1',
+      text: 'hello from auto task',
+      sourceKey: 'auto-task:at_a1b2c3d1:2026-05-22',
+    });
+    expect(dispatchRuntime.assembleBriefingText).not.toHaveBeenCalled();
+    expect(autoRuntime.createConversation).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'delivered', task_id: taskId });
+    const task = await getTask(TEST_UID, taskId);
+    expect(task?.enabled).toBe(false);
+  });
+
+  it('简报任务 fire：assembleBriefingText 组装文本后投递，幂等键 briefing 前缀', async () => {
+    vi.useFakeTimers();
+    // daily 任务无 last_run_at 时 baseline=created_at：创建须在 08:00 边界前
+    // （本地时区），触发须在边界后，否则 _crossedTodayBoundary 不判定到期。
+    vi.setSystemTime(new Date('2026-05-21T09:00:00.000Z'));
+    const events: any[] = [];
+    const unsubscribe = subscribeFires((ev) => events.push(ev));
+    const taskId = 'at_a1b2c3d2';
+    const created = await createTask(TEST_UID, {
+      id: taskId,
+      title: 'Daily briefing',
+      content: 'unused content',
+      briefing: true,
+      recipient: { kind: 'messaging', instanceId: 'inst_feishu_1', recipient: 'owner' },
+      schedule: { type: 'daily', hour: 8, minute: 0 },
+    });
+    expect(created.ok).toBe(true);
+    vi.setSystemTime(new Date('2026-05-22T09:00:00.000Z'));
+
+    await _onTimerFireForTest(TEST_UID, taskId);
+    unsubscribe();
+
+    expect(dispatchRuntime.assembleBriefingText).toHaveBeenCalledWith(TEST_UID);
+    // 简报走触达点管线（可交互卡片），不再走文本直发。
+    expect(dispatchRuntime.dispatchBriefingTouchpoint).toHaveBeenCalledWith(TEST_UID, {
+      instanceId: 'inst_feishu_1',
+      text: '【今日简报】降级：暂无已接入数据',
+      sourceKey: 'briefing:at_a1b2c3d2:2026-05-22',
+    });
+    expect(dispatchRuntime.dispatchToFeishuHome).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'delivered', task_id: taskId });
+  });
+
+  it('投递失败：发 fire_failed 事件并透传错误码，不建 PC 会话', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T09:00:00.000Z'));
+    dispatchRuntime.dispatchToFeishuHome.mockResolvedValue({
+      ok: false, code: 'owner_missing', error: '该实例未配置归属人',
+    });
+    const events: any[] = [];
+    const unsubscribe = subscribeFires((ev) => events.push(ev));
+    const taskId = 'at_a1b2c3d3';
+    const created = await createTask(TEST_UID, {
+      id: taskId,
+      content: 'hello',
+      recipient: { kind: 'messaging', instanceId: 'inst_feishu_1', recipient: 'owner' },
+      schedule: { type: 'one_time', at: '2026-05-22T08:59:00.000Z' },
+    });
+    expect(created.ok).toBe(true);
+
+    await _onTimerFireForTest(TEST_UID, taskId);
+    unsubscribe();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'fire_failed',
+      task_id: taskId,
+      error_code: 'owner_missing',
+    });
+    expect(events[0].cid).toBeUndefined();
+    expect(autoRuntime.createConversation).not.toHaveBeenCalled();
+    expect(autoRuntime.deleteConversation).not.toHaveBeenCalled();
+  });
+
+  it('recipient 必须为 owner（拒绝任意会话目标，收窄攻击面）', async () => {
+    const created = await createTask(TEST_UID, {
+      id: 'at_a1b2c3d4',
+      content: 'hello',
+      recipient: { kind: 'messaging', instanceId: 'inst_1', recipient: 'some_chat_id' },
+      schedule: { type: 'one_time', at: '2026-05-22T08:59:00.000Z' },
+    });
+    expect(created).toEqual({ ok: false, error: 'invalid_recipient' });
+  });
+
+  it('向后兼容：commander 任务仍走既有 PC 会话路径', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T09:00:00.000Z'));
+    autoRuntime.createConversation.mockResolvedValue({ conversation_id: 'cid_compat' });
+    autoRuntime.send.mockResolvedValue({ ok: true });
+    const events: any[] = [];
+    const unsubscribe = subscribeFires((ev) => events.push(ev));
+    const taskId = 'at_a1b2c3d5';
+    const created = await createTask(TEST_UID, {
+      id: taskId,
+      content: 'legacy commander task',
+      recipient: { kind: 'commander' },
+      schedule: { type: 'one_time', at: '2026-05-22T08:59:00.000Z' },
+    });
+    expect(created.ok).toBe(true);
+
+    await _onTimerFireForTest(TEST_UID, taskId);
+    unsubscribe();
+
+    expect(autoRuntime.createConversation).toHaveBeenCalledTimes(1);
+    expect(autoRuntime.send).toHaveBeenCalledWith({
+      userId: TEST_UID,
+      cid: 'cid_compat',
+      text: 'legacy commander task',
+    });
+    expect(dispatchRuntime.dispatchToFeishuHome).not.toHaveBeenCalled();
+    expect(events[0]).toMatchObject({ type: 'conv_created', task_id: taskId });
   });
 });

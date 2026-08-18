@@ -6,6 +6,7 @@ import log from 'electron-log/main';
 import {
   detectAll,
   detectOne,
+  expandSearchDirs,
   invalidateCache,
   localCliSearchDirs,
   LOCAL_CLI_TYPES,
@@ -212,7 +213,7 @@ describe('local_agents/registry', () => {
     expect(r.path).toBe(fake);
   });
 
-  it('uses the documented version subcommand for Hermes', async () => {
+  it('prefers the --version flag for Hermes (subcommand hangs without TTY)', async () => {
     const fake = writeArgAwareMockCli(path.join(tmpDir, 'hermes'), {
       version: 'Hermes Agent v0.18.2',
       '--version': 'Hermes Agent v9.9.9',
@@ -222,7 +223,11 @@ describe('local_agents/registry', () => {
 
     const r = await detectOne('hermes');
     expect(isWindows ? r.path?.toLowerCase() : r.path).toBe(isWindows ? fake.toLowerCase() : fake);
-    expect(r.version).toBe('0.18.2');
+    // `--version` MUST be probed first: `hermes version` (subcommand) hangs
+    // with no output/no exit when spawned without a TTY on arm64 macOS,
+    // which previously made localAgents.list wait out the 5s detectVersion
+    // timeout on every cold probe. The flag form returns in <100ms.
+    expect(r.version).toBe('9.9.9');
     expect(r.available).toBe(true);
     expect(r.error).toBeUndefined();
   });
@@ -328,5 +333,135 @@ describe('local_agents/registry › macOS GUI search paths', () => {
       '/Applications/Codex.app/Contents/Resources',
       '/Applications/ChatGPT.app/Contents/Resources',
     ]));
+  });
+
+  it('covers version-manager dirs and Codex standalone default (~/.codex/bin)', () => {
+    const dirs = localCliSearchDirs('codex', 'darwin', {}, '/Users/alice');
+
+    expect(dirs).toEqual(expect.arrayContaining([
+      '/Users/alice/.cargo/bin',
+      '/Users/alice/.nvm/versions/node/*/bin',
+      '/Users/alice/.local/share/fnm/node-versions/*/installation/bin',
+      '/Users/alice/.asdf/installs/nodejs/*/bin',
+      '/Users/alice/.asdf/shims',
+      '/Users/alice/.codex/bin',
+    ]));
+  });
+
+  it('covers WorkBuddy bundle scanning (fixed /Applications + *.app wildcards)', () => {
+    const dirs = localCliSearchDirs('workbuddy', 'darwin', {}, '/Users/alice');
+
+    expect(dirs).toEqual(expect.arrayContaining([
+      '/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin',
+      '/Users/alice/Applications/*.app/Contents/Resources/app.asar.unpacked/cli/bin',
+      '/Applications/*.app/Contents/Resources/app.asar.unpacked/cli/bin',
+    ]));
+  });
+});
+
+describe('local_agents/registry › expandSearchDirs', () => {
+  let tmpDir: string;
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-expand-'));
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    invalidateCache();
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    invalidateCache();
+  });
+
+  it('expands a single wildcard segment by listing the parent', async () => {
+    const v20 = path.join(tmpDir, '.nvm', 'versions', 'node', 'v20.0.0', 'bin');
+    const v22 = path.join(tmpDir, '.nvm', 'versions', 'node', 'v22.0.0', 'bin');
+    fs.mkdirSync(v20, { recursive: true });
+    fs.mkdirSync(v22, { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.nvm', 'versions', 'node', 'v21.0.0', 'lib'), { recursive: true });
+
+    const expanded = await expandSearchDirs([path.join(tmpDir, '.nvm', 'versions', 'node', '*', 'bin')]);
+    expect(expanded).toEqual(expect.arrayContaining([v20, v22]));
+    // Only dirs whose name matched the segment AND had the tail exist.
+    expect(expanded).not.toContain(path.join(tmpDir, '.nvm', 'versions', 'node', 'v21.0.0', 'bin'));
+  });
+
+  it('expands *.app bundle patterns', async () => {
+    const appBin = path.join(tmpDir, 'Applications', 'WorkBuddy.app', 'Contents', 'Resources', 'app.asar.unpacked', 'cli', 'bin');
+    fs.mkdirSync(appBin, { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'Applications', 'Other.app'), { recursive: true });
+
+    const expanded = await expandSearchDirs([
+      path.join(tmpDir, 'Applications', '*.app', 'Contents', 'Resources', 'app.asar.unpacked', 'cli', 'bin'),
+    ]);
+    expect(expanded).toEqual([appBin]);
+  });
+
+  it('passes non-wildcard dirs through unchanged and skips unreadable parents', async () => {
+    const expanded = await expandSearchDirs([
+      path.join(tmpDir, 'plain', 'bin'),
+      path.join(tmpDir, 'missing', '*', 'bin'),
+    ]);
+    expect(expanded).toContain(path.join(tmpDir, 'plain', 'bin'));
+    expect(expanded).not.toContain(path.join(tmpDir, 'missing', '*', 'bin'));
+  });
+});
+
+describe('local_agents/registry › version-manager + standalone discovery (real detectOne)', () => {
+  let tmpDir: string;
+  let savedPath: string | undefined;
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-vm-'));
+    savedPath = process.env.PATH;
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    process.env.PATH = '';
+    invalidateCache();
+  });
+
+  afterEach(() => {
+    process.env.PATH = savedPath;
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    invalidateCache();
+  });
+
+  it('finds Codex installed under nvm when PATH omits it entirely', async () => {
+    if (isWindows) return; // nvm search dirs are POSIX-only
+    const binDir = path.join(tmpDir, '.nvm', 'versions', 'node', 'v22.11.0', 'bin');
+    const fake = writeMockCli(path.join(binDir, 'codex'), 'codex-cli 0.140.0');
+
+    const r = await detectOne('codex');
+    expect(isWindows ? r.path?.toLowerCase() : r.path).toBe(isWindows ? fake.toLowerCase() : fake);
+    expect(r.version).toBe('0.140.0');
+    expect(r.available).toBe(true);
+  });
+
+  it('finds Codex in its official standalone default ~/.codex/bin', async () => {
+    if (isWindows) return; // ~/.codex/bin is added on the darwin branch
+    const binDir = path.join(tmpDir, '.codex', 'bin');
+    const fake = writeMockCli(path.join(binDir, 'codex'), 'codex-cli 0.139.0');
+
+    const r = await detectOne('codex');
+    expect(isWindows ? r.path?.toLowerCase() : r.path).toBe(isWindows ? fake.toLowerCase() : fake);
+    expect(r.available).toBe(true);
+  });
+
+  it('gives actionable guidance when a codex version probe produces nothing', async () => {
+    const fake = writeMockCli(path.join(tmpDir, 'mute-codex'), 'no version here');
+    process.env.ORKAS_CODEX_PATH = fake;
+
+    const r = await detectOne('codex');
+    expect(r.available).toBe(false);
+    expect(r.error).toBe('version_unknown');
+    expect(r.errorDetail).toMatch(/codex --version/);
+    expect(r.errorDetail).toMatch(/0\.100\.0/);
   });
 });

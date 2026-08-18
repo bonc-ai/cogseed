@@ -50,47 +50,16 @@ describe('cognition feature aggregate layer', () => {
     });
     const { asset: recallAsset } = await recallCandidates.promoteRecallCandidate(UID, recallCandidate.id, { actor: 'user' });
 
-    const statePath = path.join(userLocalRoot(UID), 'p3394', 'kstar-state.json');
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify({
-      version: 1,
-      runs: [],
-      experience_candidates: [{
-        id: 'exp-a',
-        source_run_id: 'run-a',
-        conversation_id: 'gconv-a',
-        agent_id: 'agent-a',
-        summary: 'PRD decisions must preserve source and open questions',
-        status: 'pending',
-        created_at: '2026-08-04T00:00:00.000Z',
-        updated_at: '2026-08-04T00:00:00.000Z',
-      }],
-      updated_at: '2026-08-04T00:00:00.000Z',
-    }, null, 2));
-
     const assets = await cognition.listCognitionAssets(UID);
     expect(assets.some((asset) => asset.id === 'memory:user')).toBe(false);
     expect(assets.some((asset) => asset.category === 'skill' || asset.type === 'skill')).toBe(false);
+    // 个人本体「分组」是 PRD 3.3 的非资产支撑对象，不占四类一级分类。它曾被
+    // 合成为 `CA-PERSONAL-*` 条目并硬编码 maturity: 'transfer_validated' —— 在
+    // 没有 TransferProof / Receipt 的情况下伪造成熟度（PRD 3.6）。分组的入口在
+    // 「关于我」tab，不该在资产列表里重复出现。
+    expect(assets.some((asset) => asset.id === `CA-PERSONAL-${created.group?.group_id}`)).toBe(false);
+    expect(assets.some((asset) => asset.source === 'personal_ontology')).toBe(false);
     expect(assets).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: `CA-PERSONAL-${created.group?.group_id}`,
-        category: 'personal',
-        type: 'personal',
-        title: 'Research ontology',
-        maturity: 'transfer_validated',
-        status: 'active',
-        owner: expect.any(String),
-        scope: expect.any(String),
-        workspaceRefs: expect.any(Array),
-        receiptRefs: expect.any(Array),
-        candidateRefs: expect.any(Array),
-      }),
-      expect.objectContaining({
-        id: 'candidate:exp-a',
-        category: 'rule',
-        maturity: 'bud',
-        status: 'candidate',
-      }),
       expect.objectContaining({
         id: recallAsset.id,
         source: 'recall_ability_asset',
@@ -107,7 +76,7 @@ describe('cognition feature aggregate layer', () => {
     expect(dashboard.counts.assets).toBe(assets.length);
   });
 
-  it('normalizes and filters candidates from personal ontology and KSTAR experiences', async () => {
+  it('normalizes and filters personal ontology candidates without reading legacy KSTAR state', async () => {
     const users = await import('../../../src/main/features/users');
     users.activateUser(UID);
     const { userLocalRoot } = await import('../../../src/main/paths');
@@ -126,24 +95,6 @@ describe('cognition feature aggregate layer', () => {
       source_memory_refs: ['mem-a'],
     }]));
 
-    const statePath = path.join(userLocalRoot(UID), 'p3394', 'kstar-state.json');
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify({
-      version: 1,
-      runs: [],
-      experience_candidates: [{
-        id: 'exp-b',
-        source_run_id: 'run-b',
-        conversation_id: 'gconv-b',
-        agent_id: 'agent-b',
-        summary: 'Keep concise summaries',
-        status: 'pending',
-        created_at: '2026-08-04T00:00:00.000Z',
-        updated_at: '2026-08-04T00:00:00.000Z',
-      }],
-      updated_at: '2026-08-04T00:00:00.000Z',
-    }, null, 2));
-
     const pending = await cognition.listCognitionCandidates(UID, { status: 'pending' });
     expect(pending).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -159,15 +110,13 @@ describe('cognition feature aggregate layer', () => {
       }),
     ]));
 
-    await expect(cognition.listCognitionCandidates(UID, { conversationId: 'gconv-b' })).resolves.toEqual([
-      expect.objectContaining({ source: 'p3394_experience', sourceId: 'exp-b', type: 'experience' }),
-    ]);
+    await expect(cognition.listCognitionCandidates(UID, { conversationId: 'gconv-b' })).resolves.toEqual([]);
   });
 
   it('skill summary exposes version history rollback availability', async () => {
     const users = await import('../../../src/main/features/users');
     users.activateUser(UID);
-    const { appendSkillVersion } = await import('../../../src/main/features/evolution/versions-store');
+    const { appendSkillVersion } = await import('../../../src/main/features/skills/version-store');
     const cognition = await import('../../../src/main/features/cognition');
 
     await appendSkillVersion(UID, 'skill-a', { version: '0.1.0', note: 'legacy' });
@@ -178,6 +127,52 @@ describe('cognition feature aggregate layer', () => {
       expect.objectContaining({ version: '0.1.1', canRollback: true }),
       expect.objectContaining({ version: '0.1.0', canRollback: false }),
     ]);
+  });
+
+  it('exposes complete version metadata, file diffs, and rollback previews', async () => {
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(UID);
+    const versions = await import('../../../src/main/features/skills/version-store');
+    const cognition = await import('../../../src/main/features/cognition');
+    const first = await versions.appendFullSkillVersion(UID, 'skill-versioned', {
+      operation: 'install',
+      files: [
+        { path: 'SKILL.md', content: '---\nname: skill-versioned\ndescription: first\n---\n' },
+        { path: 'references/contract.md', content: 'first\n' },
+      ],
+      source: { kind: 'recall_asset', assetId: 'asset-a', assetVersion: '1' },
+      security: { outcome: 'pass', findingCount: 0 },
+    });
+    const second = await versions.appendFullSkillVersion(UID, 'skill-versioned', {
+      operation: 'upgrade',
+      files: [
+        { path: 'SKILL.md', content: '---\nname: skill-versioned\ndescription: second\n---\n' },
+        { path: 'references/contract.md', content: 'first\n' },
+        { path: 'references/example.md', content: 'new\n' },
+      ],
+      source: { kind: 'recall_asset', assetId: 'asset-a', assetVersion: '2' },
+      security: { outcome: 'pass', findingCount: 0 },
+      expectedCurrentRevisionId: first.revisionId,
+    });
+
+    await expect(cognition.getSkillCognitionSummary(UID, 'skill-versioned')).resolves.toMatchObject({
+      version: '2',
+      versions: [
+        { version: '2', revisionId: second.revisionId, operation: 'upgrade', rollbackScope: 'full_tree', canRollback: true },
+        { version: '1', revisionId: first.revisionId, operation: 'install', rollbackScope: 'full_tree', canRollback: true },
+      ],
+    });
+    await expect(cognition.diffSkillCognitionVersions(UID, 'skill-versioned', '1', '2')).resolves.toMatchObject({
+      added: 1, modified: 1, deleted: 0, unchanged: 1,
+    });
+    await expect(cognition.previewSkillCognitionRollback(UID, 'skill-versioned', '1')).resolves.toMatchObject({
+      currentVersion: '2',
+      currentRevisionId: second.revisionId,
+      targetVersion: '1',
+      targetRevisionId: first.revisionId,
+      rollbackScope: 'full_tree',
+      diff: { added: 0, modified: 1, deleted: 1, unchanged: 1 },
+    });
   });
 
 });

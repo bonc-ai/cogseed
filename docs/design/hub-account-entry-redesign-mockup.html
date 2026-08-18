@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hub 登录入口重设计 · 方案示意（左下角账号区 + OAuth 弹窗多阶段）</title>
+<style>
+  :root {
+    --bg: #FBFDFC;
+    --surface: #ffffff;
+    --surface-2: #EDF3EF;
+    --surface-3: #DCE5DF;
+    --text: #14281E;
+    --text-2: #3E5A4C;
+    --muted: #6E8578;
+    --border: rgba(24, 84, 60, 0.09);
+    --border-strong: rgba(24, 84, 60, 0.18);
+    --primary: #0E9F6E;
+    --primary-hover: #0A7A55;
+    --primary-soft: #E2F5EC;
+    --primary-text: #0A7A55;
+    --success: #16a34a;
+    --success-soft: #dcfce7;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --danger-soft: #fef2f2;
+    --radius-lg: 20px;
+    --radius-md: 14px;
+    --radius-sm: 10px;
+    --shadow-pop: 0 12px 32px rgba(20, 40, 30, 0.16), 0 2px 8px rgba(20, 40, 30, 0.08);
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  body.dark {
+    --bg: #101613;
+    --surface: #161f1a;
+    --surface-2: #1d2a24;
+    --surface-3: #26352e;
+    --text: #e8f0eb;
+    --text-2: #b9c9c0;
+    --muted: #8ba195;
+    --border: rgba(226, 245, 236, 0.08);
+    --border-strong: rgba(226, 245, 236, 0.16);
+    --primary: #17b880;
+    --primary-hover: #0e9f6e;
+    --primary-soft: #123126;
+    --primary-text: #4ade80;
+    --success: #4ade80;
+    --success-soft: #123126;
+    --danger-soft: #3a1717;
+    --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .page-head {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 28px;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  .page-head h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  .page-head .sub { font-size: 12px; color: var(--muted); margin: 2px 0 0; }
+  .page-head .spacer { flex: 1; }
+  .theme-btn {
+    border: 1px solid var(--border-strong); background: var(--surface);
+    color: var(--text-2); border-radius: 999px; padding: 6px 14px;
+    font-size: 12px; cursor: pointer;
+  }
+  .theme-btn:hover { border-color: var(--primary); color: var(--primary-text); }
+
+  .stage {
+    max-width: 1180px; margin: 24px auto; padding: 0 24px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+  }
+  .panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 22px 24px;
+  }
+  .panel.full { grid-column: 1 / -1; }
+  .panel h2 { font-size: 15px; margin: 0 0 4px; }
+  .panel .desc { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .kbd-switch { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .kbd-switch button {
+    border: 1px solid var(--border-strong); background: var(--surface);
+    color: var(--text-2); border-radius: 8px; padding: 5px 12px;
+    font-size: 12px; cursor: pointer;
+  }
+  .kbd-switch button.active { background: var(--primary-soft); border-color: var(--primary); color: var(--primary-text); font-weight: 600; }
+
+  /* ── 侧边栏样机 ─────────────────────────────── */
+  .mockup {
+    position: relative;
+    display: flex; gap: 0;
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    overflow: hidden; min-height: 460px; background: var(--surface-2);
+  }
+  .sidebar {
+    width: 236px; flex: none; display: flex; flex-direction: column;
+    background: var(--surface); border-right: 1px solid var(--border); padding: 14px 10px 12px;
+  }
+  .sidebar .logo { display: flex; align-items: center; gap: 8px; padding: 2px 8px 14px; font-weight: 700; font-size: 14px; }
+  .sidebar .logo .dot { width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(135deg, var(--primary), #16c98d); display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; }
+  .sb-search {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--surface-2); color: var(--muted);
+    padding: 7px 10px; font-size: 12.5px; margin-bottom: 10px;
+  }
+  .sb-search kbd { margin-left: auto; font-size: 10px; border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5px; background: var(--surface); }
+  .sb-btn {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    border: none; background: transparent; color: var(--text-2);
+    border-radius: var(--radius-sm); padding: 8px 10px; font-size: 13px;
+    text-align: left; cursor: pointer;
+  }
+  .sb-btn:hover { background: var(--surface-2); }
+  .sb-btn.primary { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+  .sb-btn svg { width: 16px; height: 16px; flex: none; }
+  .sb-section { font-size: 11px; color: var(--muted); padding: 14px 10px 6px; letter-spacing: .03em; }
+  .sb-conv { padding: 6px 10px; font-size: 12.5px; color: var(--muted); border-radius: 8px; }
+  .sb-conv:hover { background: var(--surface-2); }
+  .sidebar .grow { flex: 1; }
+
+  /* 底部账号区（本次重设计的核心） */
+  .sb-footer { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .account-chip {
+    position: relative;
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    border: none; background: transparent; text-align: left; cursor: pointer;
+    border-radius: var(--radius-sm); padding: 7px 8px; font: inherit;
+    transition: background .15s ease;
+  }
+  .account-chip:hover { background: var(--primary-soft); }
+  .account-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+  .account-avatar {
+    width: 32px; height: 32px; border-radius: 50%; flex: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--surface-2); border: 1px dashed var(--border-strong);
+    color: var(--muted);
+  }
+  .account-avatar svg { width: 16px; height: 16px; }
+  .account-avatar.signed {
+    border: none; background: linear-gradient(135deg, #0E9F6E, #3EC6A0);
+    color: #fff; font-weight: 700; font-size: 13px;
+  }
+  .account-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .account-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .account-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
+  .account-status-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .account-status-dot.on { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+  .account-status-dot.off { background: var(--surface-3); }
+  .account-status-dot.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(217, 119, 6, .18); }
+  .account-chip .chev { width: 14px; height: 14px; color: var(--muted); flex: none; }
+
+  .sb-footer-btn {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    border: none; background: transparent; color: var(--text-2);
+    border-radius: var(--radius-sm); padding: 7px 10px; font-size: 13px;
+    text-align: left; cursor: pointer;
+  }
+  .sb-footer-btn:hover { background: var(--surface-2); }
+  .sb-footer-btn svg { width: 16px; height: 16px; }
+
+  /* 账号菜单弹层 */
+  .account-menu {
+    position: absolute; left: 14px; bottom: 84px; width: 216px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+    padding: 8px; z-index: 6;
+    transform-origin: bottom left;
+    animation: pop .16s ease;
+  }
+  @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
+  .account-menu-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 12px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .account-menu-head .name { font-size: 13px; font-weight: 600; }
+  .account-menu-head .id { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
+  .account-menu-item {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    border: none; background: transparent; color: var(--text-2);
+    border-radius: 8px; padding: 8px 10px; font-size: 12.5px; text-align: left; cursor: pointer;
+  }
+  .account-menu-item:hover { background: var(--surface-2); }
+  .account-menu-item svg { width: 15px; height: 15px; flex: none; }
+  .account-menu-item.danger { color: var(--danger); }
+  .account-menu-item.danger:hover { background: var(--danger-soft); }
+
+  /* ── OAuth 弹窗样机 ──────────────────────────── */
+  .modal-scene { display: flex; align-items: center; justify-content: center; min-height: 380px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); position: relative; }
+  .modal {
+    width: 380px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden;
+  }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px 0; }
+  .modal-head h3 { margin: 0; font-size: 14px; }
+  .modal-close { border: none; background: transparent; color: var(--muted); cursor: pointer; padding: 4px; border-radius: 6px; }
+  .modal-close:hover { background: var(--surface-2); }
+  .modal-body { padding: 14px 20px 22px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .provider-tile {
+    width: 52px; height: 52px; border-radius: 16px; margin-bottom: 12px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .provider-tile svg { width: 26px; height: 26px; }
+  .modal-body .t1 { font-size: 14px; font-weight: 600; margin: 2px 0 4px; }
+  .modal-body .t2 { font-size: 12px; color: var(--muted); margin: 0 0 14px; max-width: 300px; }
+  .btn {
+    border: none; border-radius: 9px; padding: 8px 18px; font-size: 12.5px;
+    font-weight: 600; cursor: pointer; transition: background .15s;
+  }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text-2); }
+  .btn-ghost:hover { background: var(--surface-2); }
+  .spinner {
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 3px solid var(--primary-soft); border-top-color: var(--primary);
+    animation: spin .8s linear infinite; margin: 4px 0 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .check-ring {
+    width: 44px; height: 44px; border-radius: 50%; background: var(--success-soft);
+    display: flex; align-items: center; justify-content: center; margin-bottom: 10px;
+    color: var(--success);
+  }
+  .check-ring svg { width: 22px; height: 22px; }
+  .fail-box {
+    width: 100%; background: var(--danger-soft); border: 1px solid rgba(220, 38, 38, .25);
+    color: var(--danger); border-radius: var(--radius-sm); padding: 10px 12px;
+    font-size: 12px; margin-bottom: 12px; text-align: left;
+  }
+  .modal-actions { display: flex; gap: 8px; }
+  .stage-tag {
+    position: absolute; top: 10px; left: 10px; font-size: 10.5px; color: var(--muted);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px;
+  }
+
+  /* ── 对比表 ─────────────────────────────────── */
+  table.cmp { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.cmp th, table.cmp td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.cmp th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
+  table.cmp tr:last-child td { border-bottom: none; }
+  .pill { display: inline-block; border-radius: 999px; padding: 2px 10px; font-size: 11px; font-weight: 600; }
+  .pill.p1 { background: var(--primary-soft); color: var(--primary-text); }
+  .pill.p2 { background: var(--success-soft); color: var(--success); }
+  .pill.p3 { background: var(--surface-2); color: var(--text-2); }
+  .bad { color: var(--danger); }
+  .good { color: var(--success); }
+  .note { font-size: 11.5px; color: var(--muted); margin-top: 12px; }
+  code { font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <div class="page-head">
+    <div>
+      <h1>Hub 登录入口重设计 · 方案示意</h1>
+      <p class="sub">左下角侧边栏账号区（方案 A）＋ OAuth 登录弹窗多阶段重设计（方案 B）· 可交互视觉稿</p>
+    </div>
+    <div class="spacer"></div>
+    <button class="theme-btn" id="theme-btn">切换 深色/浅色</button>
+  </div>
+
+  <div class="stage">
+    <!-- ── 方案 A ── -->
+    <section class="panel full">
+      <h2>方案 A · 左下角常驻账号入口（sidebar footer 改造）</h2>
+      <p class="desc">入口从「设置 → 账号」提级到侧边栏底部，登录状态一眼可见；点击弹出账号菜单。状态切换按钮模拟四种状态。</p>
+      <div class="kbd-switch">
+        <button class="active" data-state="signedout">① 未登录</button>
+        <button data-state="signingin">② 登录中</button>
+        <button data-state="signedin">③ 已登录（点账号可开菜单）</button>
+        <button data-state="unreachable">④ 服务不可达</button>
+      </div>
+
+      <div class="mockup">
+        <aside class="sidebar">
+          <div class="logo"><span class="dot">C</span>CogSeed</div>
+          <div class="sb-search">搜索<kbd>⌘K</kbd></div>
+          <button class="sb-btn primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            首页
+          </button>
+          <button class="sb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Auto</button>
+          <button class="sb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>认知资产</button>
+          <button class="sb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h4"/></svg>连接</button>
+          <button class="sb-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>空间中心</button>
+          <div class="sb-section">CONVERSATIONS</div>
+          <div class="sb-conv">KStar 候选池设计讨论</div>
+          <div class="sb-conv">Hub 账号验收清单</div>
+          <div class="grow"></div>
+
+          <div class="sb-footer" id="sb-footer">
+            <button class="account-chip" id="account-chip" aria-haspopup="menu" aria-expanded="false">
+              <span class="account-avatar" id="chip-avatar"><svg id="chip-icon-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span id="chip-initial" style="display:none"></span></span>
+              <span class="account-meta">
+                <span class="account-name" id="chip-name">登录 Hub</span>
+                <span class="account-sub" id="chip-sub">云端同步 · 额度 · 社区</span>
+              </span>
+              <span class="account-status-dot off" id="chip-dot"></span>
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <button class="sb-footer-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>设置</button>
+          </div>
+
+          <div class="account-menu" id="account-menu" style="display:none">
+            <div class="account-menu-head">
+              <span class="account-avatar signed" style="width:36px;height:36px">W</span>
+              <div><div class="name">wujiayu</div><div class="id">cogsee***wuk9</div></div>
+            </div>
+            <button class="account-menu-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>账号概览 · GitHub 已绑定</button>
+            <button class="account-menu-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>我的设备 · 2 台</button>
+            <button class="account-menu-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>授权与同意</button>
+            <button class="account-menu-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>打开完整设置</button>
+            <button class="account-menu-item danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>退出登录</button>
+          </div>
+        </aside>
+
+        <div style="flex:1; display:flex; align-items:center; justify-content:center; padding:20px;">
+          <div style="max-width:420px; color:var(--muted); font-size:12.5px; line-height:1.8;">
+            <div style="font-size:14px; font-weight:600; color:var(--text); margin-bottom:6px;">设计要点</div>
+            <div>· 账号区与「设置」并列在侧边栏底部，<b>登录状态一眼可见</b>（绿点=已登录）</div>
+            <div>· 未登录：虚线头像占位 + 「登录 Hub」+ 副标题价值点（云端同步 · 额度 · 社区）</div>
+            <div>· 登录中：头像转圈 + 「正在登录…」，与 OAuth 弹窗联动</div>
+            <div>· 已登录：头像显示首字母/头像，副标题为脱敏账号 ID，点击弹菜单</div>
+            <div>· 服务不可达：橙点警示 + tooltip「Hub 服务不可达」，点击仍可打开诊断</div>
+            <div>· 沿用现有 token：<code>--primary-soft</code> hover、<code>--radius-sm</code> 圆角、150ms 过渡、深色模式自动适配</div>
+            <div>· 无障碍：<code>aria-haspopup</code> / <code>aria-expanded</code>、Esc 关闭、focus-visible 焦点环</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 方案 B ── -->
+    <section class="panel">
+      <h2>方案 B · OAuth 登录弹窗：从单行文案到五阶段状态机</h2>
+      <p class="desc">现状只有一行「Preparing authorization…」，用户不知道发生什么、失败无引导。重设计为带品牌、可恢复的五阶段。</p>
+      <div class="kbd-switch">
+        <button data-mstage="prepare" class="active">阶段1 准备</button>
+        <button data-mstage="browser">阶段2 浏览器已打开</button>
+        <button data-mstage="wait">阶段3 等待回调</button>
+        <button data-mstage="done">阶段4 成功</button>
+        <button data-mstage="fail">阶段5 失败</button>
+      </div>
+      <div class="modal-scene">
+        <span class="stage-tag" id="stage-tag">阶段 1 · 准备授权</span>
+        <div class="modal">
+          <div class="modal-head">
+            <h3 id="m-title">登录 Hub 账号</h3>
+            <button class="modal-close" aria-label="关闭"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          </div>
+          <div class="modal-body" id="m-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 对比与分期 ── -->
+    <section class="panel">
+      <h2>现状 vs 方案</h2>
+      <p class="desc">左侧为当前实现，右侧为提案改动。</p>
+      <table class="cmp">
+        <tr><th style="width:22%">维度</th><th style="width:39%">现状</th><th>方案</th></tr>
+        <tr><td>入口位置</td><td class="bad">深埋在 设置 → 账号 tab，共 3 层</td><td class="good">侧边栏左下角常驻账号区，0 层直达；设置内保留完整管理页</td></tr>
+        <tr><td>状态可见性</td><td class="bad">不打开设置看不到登录态</td><td class="good">绿点/灰点/橙点 + 头像区分四态，一眼可见</td></tr>
+        <tr><td>登录弹窗</td><td class="bad">单行 "Preparing authorization…"，无品牌无步骤</td><td class="good">五阶段状态机：品牌图标、进度、可重试、可取消、失败原因</td></tr>
+        <tr><td>失败恢复</td><td class="bad">失败只写日志，用户无感知</td><td class="good">弹窗内提示原因（如「无法连接 GitHub」）+ 重新打开登录页 / 重试</td></tr>
+        <tr><td>安全</td><td>token 不过 IPC（保持不变）</td><td>不变：chip 只消费 status DTO；菜单操作走既有 IPC 通道</td></tr>
+        <tr><td>多语言</td><td>已有 i18n key</td><td>复用 <code>account.gate_*</code> 等既有 key，新增少量 key 补齐</td></tr>
+      </table>
+    </section>
+
+    <!-- ── 实施分期 ── -->
+    <section class="panel">
+      <h2>实施分期（每期可独立验收）</h2>
+      <table class="cmp">
+        <tr><th>期</th><th>内容</th><th>涉及文件</th></tr>
+        <tr><td><span class="pill p1">P1</span></td><td>左下角账号区 + 状态点 + 账号菜单弹层（未登录/已登录两态先行）</td><td><code>index.html</code>、<code>style.css</code>、新增 <code>modules/account-chip.js</code>、<code>state.js</code></td></tr>
+        <tr><td><span class="pill p2">P2</span></td><td>OAuth 弹窗五阶段重设计 + 失败重试/重新打开 + 登录中联动</td><td><code>index.html</code>（#oauth-flow-modal）、<code>hub-account.js</code>、<code>locales/*.json</code></td></tr>
+        <tr><td><span class="pill p3">P3</span></td><td>设置-账号 tab 与左下角共享渲染逻辑；清理过期 <code>account.gate_*</code> 文案；深色模式与无障碍细节</td><td><code>hub-account.js</code>、<code>settings.js</code>、<code>locales/*.json</code></td></tr>
+      </table>
+      <p class="note">注：本文档为纯视觉稿（独立 HTML，不依赖应用运行时），双击即可在浏览器查看，按钮均可点击交互。</p>
+    </section>
+  </div>
+
+<script>
+  // ── 主题切换 ──
+  document.getElementById('theme-btn').addEventListener('click', () => {
+    document.body.classList.toggle('dark');
+  });
+
+  const USER_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+  const SPINNER = '<svg class="spinner-inline" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><style>.spinner-inline{animation:spin .8s linear infinite}</style><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>';
+
+  const chip = document.getElementById('account-chip');
+  const menu = document.getElementById('account-menu');
+  const avatar = document.getElementById('chip-avatar');
+  const iconUser = document.getElementById('chip-icon-user');
+  const initial = document.getElementById('chip-initial');
+  const nameEl = document.getElementById('chip-name');
+  const subEl = document.getElementById('chip-sub');
+  const dot = document.getElementById('chip-dot');
+
+  function setChipState(state) {
+    menu.style.display = 'none';
+    chip.setAttribute('aria-expanded', 'false');
+    avatar.className = 'account-avatar';
+    iconUser.style.display = '';
+    initial.style.display = 'none';
+    avatar.style.animation = 'none';
+    switch (state) {
+      case 'signedout':
+        nameEl.textContent = '登录 Hub';
+        subEl.textContent = '云端同步 · 额度 · 社区';
+        dot.className = 'account-status-dot off';
+        avatar.style.borderStyle = 'dashed';
+        break;
+      case 'signingin':
+        avatar.innerHTML = SPINNER;
+        nameEl.textContent = '正在登录…';
+        subEl.textContent = '等待 GitHub 授权回调';
+        dot.className = 'account-status-dot warn';
+        avatar.style.background = 'var(--primary-soft)';
+        avatar.style.color = 'var(--primary-text)';
+        break;
+      case 'signedin':
+        avatar.className = 'account-avatar signed';
+        avatar.innerHTML = '<span>W</span>';
+        avatar.style.borderStyle = 'solid';
+        nameEl.textContent = 'wujiayu';
+        subEl.textContent = 'cogsee***wuk9';
+        dot.className = 'account-status-dot on';
+        break;
+      case 'unreachable':
+        iconUser.style.display = '';
+        initial.style.display = 'none';
+        avatar.className = 'account-avatar';
+        nameEl.textContent = '登录 Hub';
+        subEl.textContent = 'Hub 服务不可达';
+        dot.className = 'account-status-dot warn';
+        avatar.style.borderStyle = 'dashed';
+        break;
+    }
+  }
+
+  document.querySelectorAll('[data-state]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-state]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      setChipState(btn.dataset.state);
+    });
+  });
+
+  chip.addEventListener('click', () => {
+    if (nameEl.textContent.includes('wujiayu')) {
+      const open = menu.style.display !== 'none';
+      menu.style.display = open ? 'none' : 'block';
+      chip.setAttribute('aria-expanded', open ? 'false' : 'true');
+    } else {
+      setChipState('signingin');
+      setTimeout(() => setChipState('signedin'), 900);
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target) && e.target !== chip && !chip.contains(e.target)) {
+      menu.style.display = 'none';
+      chip.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  // ── OAuth 弹窗五阶段 ──
+  const body = document.getElementById('m-body');
+  const title = document.getElementById('m-title');
+  const tag = document.getElementById('stage-tag');
+
+  const GITHUB = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55v-1.94c-3.2.7-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.25 3.34.95.1-.74.4-1.25.72-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.74.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12v3.14c0 .3.21.66.8.55A10.94 10.94 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>';
+
+  function renderStage(s) {
+    const stages = {
+      prepare: {
+        tag: '阶段 1 · 准备授权',
+        title: '登录 Hub 账号',
+        html: `<div class="provider-tile">${GITHUB}</div>
+               <div class="t1">即将打开浏览器</div>
+               <div class="t2">将通过 GitHub 完成授权登录，浏览器会在默认浏览器中打开。</div>
+               <div class="modal-actions"><button class="btn btn-primary" onclick="renderStage('browser')">继续</button><button class="btn btn-ghost" onclick="renderStage('prepare')">取消</button></div>`
+      },
+      browser: {
+        tag: '阶段 2 · 浏览器已打开',
+        title: '登录 Hub 账号',
+        html: `<div class="provider-tile">${GITHUB}</div>
+               <div class="t1">已在浏览器中打开登录页</div>
+               <div class="t2">在浏览器中完成 GitHub 授权，完成后会自动返回应用（通过 cogseed:// 深链回调）。</div>
+               <div class="modal-actions"><button class="btn btn-ghost" onclick="renderStage('browser')">重新打开登录页</button></div>`
+      },
+      wait: {
+        tag: '阶段 3 · 等待回调',
+        title: '登录 Hub 账号',
+        html: `<div class="spinner"></div>
+               <div class="t1">等待完成授权…</div>
+               <div class="t2">授权完成后此窗口会自动关闭。若长时间无响应可点击「重新打开登录页」。</div>
+               <div class="modal-actions"><button class="btn btn-ghost" onclick="renderStage('fail')">取消</button></div>`
+      },
+      done: {
+        tag: '阶段 4 · 登录成功',
+        title: '登录 Hub 账号',
+        html: `<div class="check-ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+               <div class="t1">登录成功</div>
+               <div class="t2">欢迎回来，wujiayu · cogsee***wuk9。此窗口即将自动关闭。</div>`
+      },
+      fail: {
+        tag: '阶段 5 · 登录失败',
+        title: '登录 Hub 账号',
+        html: `<div class="provider-tile">${GITHUB}</div>
+               <div class="t1">登录没有完成</div>
+               <div class="fail-box"><b>无法连接 GitHub</b><br/>可能是网络或代理问题导致授权码交换失败，请检查网络后重试。</div>
+               <div class="modal-actions"><button class="btn btn-primary" onclick="renderStage('prepare')">重试</button><button class="btn btn-ghost" onclick="renderStage('browser')">重新打开登录页</button></div>`
+      }
+    };
+    const st = stages[s];
+    tag.textContent = st.tag;
+    title.textContent = st.title;
+    body.innerHTML = st.html;
+  }
+  window.renderStage = renderStage;
+
+  document.querySelectorAll('[data-mstage]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-mstage]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderStage(btn.dataset.mstage);
+    });
+  });
+  renderStage('prepare');
+</script>
+</body>
+</html>

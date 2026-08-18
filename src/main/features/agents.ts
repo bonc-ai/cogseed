@@ -37,6 +37,7 @@ import { getLanguage } from './config';
 import { getWorkspacePath } from './user_workspace';
 import { buildAttachmentManifest } from './chat_attachments';
 import { addAgentEntry, listAgentEntries, removeAgentEntry, replaceAgentEntry } from './memory';
+import type { AgentGlossaryEntry } from './agent_inheritance';
 import {
   normalizeAgentRuntimeStatsFile,
   recordAgentRuntimeStatsForDevice,
@@ -385,6 +386,14 @@ export type AgentRuntime =
       custom_args?: string[];
       /** Optional synthetic custom-provider id (`cp:<id>`). */
       cli_provider_id?: string;
+    }
+  | {
+      /** P3394-managed external agent: every turn goes through the bridge's
+       *  outbound hub to the agent's p3394-gateway node — one protocol for
+       *  any external agent (agent-modal 「外接」tab, P3394 way). */
+      kind: 'p3394-gateway';
+      /** Canonical CLI type the gateway wraps (matches LOCAL_CLI_TYPES). */
+      cli: string;
     };
 
 export interface AgentInterfaceContract {
@@ -487,7 +496,7 @@ const ALLOWED_INPUT_TYPES: readonly AgentInputType[] = ['text', 'textarea', 'sel
 // "commander" as a member id, so we guard localized display names and the
 // English form. Comparison is case-insensitive after stripping all whitespace;
 // whitespace itself is rejected by the charset guard below.
-const RESERVED_AGENT_NAMES = new Set(['指挥官', '总指挥', 'コマンダー', '司令官', 'commander']);
+const RESERVED_AGENT_NAMES = new Set(['指挥官', '总指挥', 'コマンダー', '司令官', 'commander', 'cogseed']);
 function _agentNameKey(name: string): string {
   return String(name || '').replace(/\s+/g, '').toLowerCase();
 }
@@ -1012,6 +1021,11 @@ function _normalizeRuntime(raw: unknown): AgentRuntime | null {
   const r = raw as Record<string, unknown>;
   const kind = r.kind;
   if (kind === 'in_process') return { kind: 'in_process' };
+  if (kind === 'p3394-gateway') {
+    const cli = typeof r.cli === 'string' ? r.cli.trim() : '';
+    if (!cli) return null;
+    return { kind: 'p3394-gateway', cli };
+  }
   if (kind !== 'cli') return null;
   const cli = typeof r.cli === 'string' ? r.cli.trim() : '';
   if (!cli) return null;
@@ -1032,7 +1046,7 @@ function _normalizeRuntime(raw: unknown): AgentRuntime | null {
  *  cwd instead of the user workspace; the chip in the conversation
  *  surface lets the user set it. Single source of truth for both UI
  *  visibility and dispatch routing. */
-export const CODING_CLIS = new Set<string>(['claude', 'codex']);
+export const CODING_CLIS = new Set<string>(['claude', 'codex', 'workbuddy']);
 export function cliIsCodingAgent(cli: string | undefined): boolean {
   return !!cli && CODING_CLIS.has(cli);
 }
@@ -1042,6 +1056,12 @@ export function cliIsCodingAgent(cli: string | undefined): boolean {
  *  all import this rather than re-checking `runtime?.kind` directly. */
 export function isCliAgent(agent: Pick<Agent, 'runtime'> | null | undefined): boolean {
   return !!agent && agent.runtime?.kind === 'cli';
+}
+
+/** True when this agent is a P3394-managed external agent (dispatch goes
+ *  through the bridge outbound hub instead of a direct CLI spawn). */
+export function isP3394GatewayAgent(agent: Pick<Agent, 'runtime'> | null | undefined): boolean {
+  return !!agent && agent.runtime?.kind === 'p3394-gateway';
 }
 
 function _agentContractOutput(outputFormat: ReturnType<typeof _canonicalOutputFormat>): AgentInterfaceContract['io']['output'] {
@@ -1753,7 +1773,7 @@ export async function createCustomAgent(
   // selection is the implicit default and not written to disk so old
   // tooling diffs cleanly.
   const rt = _normalizeRuntime(runtime);
-  if (rt && rt.kind === 'cli') {
+  if (rt && (rt.kind === 'cli' || rt.kind === 'p3394-gateway')) {
     data.runtime = rt;
     // Coding CLIs (claude / codex) need a working directory. We inject
     // a `project_dir` input dependency so the standard agent-input-form
@@ -2306,6 +2326,24 @@ export async function recordAgentRuntimeStats(
 
 export async function deleteCustomAgent(agentId: string): Promise<boolean> {
   if (!agentId) return false;
+  // Custom-only, matching `updateCustomAgent` / `clearAgentChat` /
+  // `sendToAgentEditChat`. Delete was the one mutator missing this guard.
+  //
+  // The damage without it is not "the platform agent's spec gets wiped" — the
+  // spec lives under `local/marketplace/agents/<id>/` and `agentDir` points at
+  // `cloud/agents/<id>/`, so the rm misses it. It is the SIDE state that a
+  // platform agent legitimately accumulates in the cloud dir:
+  // `recordAgentRuntimeStats` (called from bus.ts for every agent actor,
+  // platform included) writes `cloud/agents/<id>/runtime_stats.json` and
+  // `writeJson` creates the parent. So `existsSync(dir)` turns true for a
+  // platform agent that has merely *run*, and this function then wipes its
+  // stats plus every user's agent-edit chat dir and session jsonl — while
+  // `createAppRecycleBatchForAgent` only snapshots `cloud/agents/<id>`, and
+  // never the marketplace dir. Returning false here keeps the marketplace
+  // uninstall path (`uninstallMarketplaceAgent`) the only way to remove a
+  // platform agent.
+  const existing = await getAgent(agentId);
+  if (existing && existing.source !== 'custom') return false;
   const dir = agentDir(getActiveUserId(), agentId);
   if (!fs.existsSync(dir)) return false;
   // Wipe the whole `agents/<aid>/` directory in one shot — agent.json,
@@ -3084,7 +3122,58 @@ export function isValidAgentId(id: unknown): boolean {
  * (`extractAgentFieldBlocks`), only the outcome differs: agent-edit
  * updates an existing agent, this one creates a fresh one.
  */
-export async function createAgentFromBlocks(fields: ExtractedFields): Promise<Agent | null> {
+/** 生成 Agent 时的出生上下文。缺省表示调用方拿不到——这时不落继承记录，
+ *  而不是落一份 origin 全空的假记录。 */
+export interface CreateAgentInheritanceContext {
+  userId: string;
+  conversationId?: string;
+  projectId?: string;
+  workspaceId?: string;
+  /** 不给就现采（个人本体分组）。给了就用给的，方便调用方先预览再生成。 */
+  glossary?: AgentGlossaryEntry[];
+  memoryRefs?: string[];
+}
+
+/** 把出生快照落盘。失败只 warn 不抛：Agent 已经建好了，
+ *  继承记录写不进去不该让整个创建回滚——但缺失必须在读取侧显式可见
+ *  （`readAgentInheritance` 返回 null，渲染层要和「继承为空」分开说）。 */
+async function recordBirthInheritance(
+  agent: Agent,
+  workflow: string,
+  context: CreateAgentInheritanceContext,
+): Promise<void> {
+  try {
+    const [inheritance, { listAbilityAssets }] = await Promise.all([
+      import('./agent_inheritance'),
+      import('./recall/asset-service'),
+    ]);
+    const collected = context.glossary === undefined || context.memoryRefs === undefined
+      ? await inheritance.collectAgentBirthContext(context.userId)
+      : { glossary: [], memoryRefs: [] };
+    const glossary = context.glossary ?? collected.glossary;
+    const memoryRefs = context.memoryRefs ?? collected.memoryRefs;
+    await inheritance.recordAgentInheritance(context.userId, {
+      agentId: agent.agent_id,
+      rolePrompt: workflow,
+      assets: await listAbilityAssets(context.userId),
+      origin: {
+        ...(context.conversationId ? { conversationId: context.conversationId } : {}),
+        ...(context.projectId ? { projectId: context.projectId } : {}),
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+      },
+      ...(glossary.length ? { glossary } : {}),
+      ...(memoryRefs.length ? { memoryRefs } : {}),
+      createdAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    log.warn(`agent inheritance not recorded for ${agent.agent_id}: ${(err as Error).message}`);
+  }
+}
+
+export async function createAgentFromBlocks(
+  fields: ExtractedFields,
+  inheritance?: CreateAgentInheritanceContext,
+): Promise<Agent | null> {
   const name = (fields.name || '').trim();
   const workflow = (fields.workflow || '').trim();
   const category = fields.category
@@ -3110,9 +3199,11 @@ export async function createAgentFromBlocks(fields: ExtractedFields): Promise<Ag
   if (Array.isArray(fields.inputs)) updates.inputs = fields.inputs;
   if (Array.isArray(fields.knowhow)) updates.knowhow = fields.knowhow;
   if (Array.isArray(fields.standards)) updates.standards = fields.standards;
-  if (Object.keys(updates).length) {
-    const updated = await updateCustomAgent(created.agent_id, updates);
-    return updated || created;
-  }
-  return created;
+  const agent = Object.keys(updates).length
+    ? (await updateCustomAgent(created.agent_id, updates)) || created
+    : created;
+  // 出生快照在 skill_list/inputs 折叠之后才记，这样 rolePrompt 与最终落盘的
+  // workflow 一致；没有上下文就不记，读取侧会把「没有记录」和「继承为空」分开展示。
+  if (inheritance) await recordBirthInheritance(agent, workflow, inheritance);
+  return agent;
 }

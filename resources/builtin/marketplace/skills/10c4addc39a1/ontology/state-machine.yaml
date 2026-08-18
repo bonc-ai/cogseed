@@ -1,0 +1,24 @@
+state_machine:
+  initial: intake
+  states:
+    intake: {next: material_discovery}
+    material_discovery: {next: research_plan}
+    research_plan: {next: web_research}
+    web_research: {next: source_verification, on_tool_unavailable: blocked}
+    source_verification: {next: research_gate}
+    research_gate: {next: scope_lock, on_failure: blocked}
+    scope_lock: {next: evidence_ledger, on_ambiguity: owner_decision_required}
+    owner_decision_required: {next: scope_lock, hitl: true}
+    evidence_ledger: {next: domain_model}
+    domain_model: {next: standards_alignment}
+    standards_alignment: {next: agent_governance}
+    agent_governance: {next: bundle_validation}
+    bundle_validation: {next: docx_build, on_failure: domain_model}
+    docx_build: {next: structural_verification}
+    structural_verification: {next: render}
+    render: {next: visual_review}
+    visual_review: {next: accessibility_audit, hitl: true}
+    accessibility_audit: {next: governance_review}
+    governance_review: {next: staged, hitl: true}
+    blocked: {production_release_allowed: false}
+    staged: {production_release_allowed: false}

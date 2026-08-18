@@ -34,6 +34,7 @@ async function createAsset(input: { userId?: string; judgment: string; summary: 
   const { candidates } = await modules();
   const userId = input.userId || 'user-a';
   const candidate = await candidates.saveRecallCandidate(userId, {
+      spaceId: 'workspace-a',
     judgment: input.judgment,
     summary: input.summary,
     suggestedType: 'rule',
@@ -44,7 +45,12 @@ async function createAsset(input: { userId?: string; judgment: string; summary: 
 }
 
 const fakeSemanticOptions = {
-  embedTexts: async (texts: string[]) => texts.map((text) => text.toLowerCase().includes('oauth') ? [1, 0] : [0, 1]),
+  embedTexts: async (texts: string[]) => texts.map((text) => {
+    const lower = text.toLowerCase();
+    if (lower.includes('oauth')) return [1, 0];
+    if (lower.includes('database')) return [0.9, 0.1];
+    return [0, 1];
+  }),
 };
 
 describe('Recall projection chat card', () => {
@@ -84,7 +90,7 @@ describe('Recall projection chat card', () => {
         title: 'Use decision logs for architecture changes',
         type: 'rule',
         status: 'active',
-        maturity: 'seed',
+        maturity: 'bud',
         scope: 'review,project',
       }),
     ]);

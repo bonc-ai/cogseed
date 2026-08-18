@@ -104,7 +104,7 @@ let _autoCurrentDevice = null; // { id, name } | null
 async function _ensureAutoCurrentDevice() {
   if (_autoCurrentDevice) return _autoCurrentDevice;
   try {
-    const res = await window.orkas.invoke('autoTasks.currentDevice');
+    const res = await window.cogseed.invoke('autoTasks.currentDevice');
     _autoCurrentDevice = (res && res.device) ? res.device : { id: '', name: '' };
   } catch (_) { _autoCurrentDevice = { id: '', name: '' }; }
   return _autoCurrentDevice;
@@ -463,7 +463,7 @@ async function _autoLoadTaskConversationCounts(taskIds) {
     .filter(Boolean)));
   if (!ids.length) return;
   try {
-    const res = await window.orkas.invoke('conversations.autoTaskCounts', { task_ids: ids });
+    const res = await window.cogseed.invoke('conversations.autoTaskCounts', { task_ids: ids });
     if (!res || res.ok === false) throw new Error(res?.error || 'auto task conversation count failed');
     const counts = (res.counts && typeof res.counts === 'object') ? res.counts : {};
     for (const taskId of ids) {
@@ -525,7 +525,7 @@ async function _autoLoadTaskConversationPage(taskId, append = false) {
   if (append && (!page.initialized || page.nextOffset === null)) return page;
   const offset = append ? page.nextOffset : 0;
   const run = (async () => {
-    const res = await window.orkas.invoke('conversations.list', {
+    const res = await window.cogseed.invoke('conversations.list', {
       mode: 'auto_task',
       task_id: taskId,
       offset,
@@ -713,7 +713,7 @@ function _openAutoRowMenu(anchorBtn, task, opts) {
       if (action === 'toggle-enabled') {
         const next = !task.enabled;
         try {
-          const res = await window.orkas.invoke('autoTasks.setEnabled', { taskId: task.id, enabled: next });
+          const res = await window.cogseed.invoke('autoTasks.setEnabled', { taskId: task.id, enabled: next });
           if (res && res.ok && res.task) {
             Object.assign(task, res.task);
             const row = document.querySelector(`.auto-row[data-task-id="${task.id}"]`);
@@ -726,7 +726,7 @@ function _openAutoRowMenu(anchorBtn, task, opts) {
       } else if (action === 'delete') {
         if (!(await uiConfirm(t('auto.delete_confirm')))) return;
         try {
-          const res = await window.orkas.invoke('autoTasks.delete', { taskId: task.id });
+          const res = await window.cogseed.invoke('autoTasks.delete', { taskId: task.id });
           if (res && res.deleted && opts && typeof opts.afterChange === 'function') opts.afterChange();
         } catch (err) {
           await uiAlert(t('auto.delete_failed', { reason: (err && err.message) || err }));
@@ -844,7 +844,7 @@ async function loadAutoList(force) {
   // chip can paint on the first render.
   await _ensureAutoCurrentDevice();
   try {
-    const res = await window.orkas.invoke('autoTasks.list', {});
+    const res = await window.cogseed.invoke('autoTasks.list', {});
     _autoTasks = (res && Array.isArray(res.tasks)) ? res.tasks : [];
     await _autoLoadTaskConversationCounts(_autoTasks.map((task) => task && task.id));
   } catch (err) {
@@ -900,7 +900,7 @@ async function loadProjectAutoList(projectId) {
   }
   let tasks = [];
   try {
-    const res = await window.orkas.invoke('autoTasks.list', { projectId });
+    const res = await window.cogseed.invoke('autoTasks.list', { projectId });
     tasks = (res && Array.isArray(res.tasks)) ? res.tasks : [];
     await _autoLoadTaskConversationCounts(tasks.map((task) => task && task.id));
   } catch (err) {
@@ -1026,21 +1026,6 @@ function _autoRefreshProjectOptions(removedProjectId = '') {
     }
   }
   _autoRefreshProjectScopedPicker();
-}
-
-async function _autoClearRecipientIfOutsideProject() {
-  const rec = _autoCurrentRecipient;
-  if (!rec || rec.kind !== 'agent' || !rec.id) return;
-  const pid = _autoSelectedProjectId();
-  if (!pid) return;
-  try {
-    const res = await window.orkas.invoke('projects.bindings.list', { projectId: pid });
-    const allowed = new Set((res && res.bindings && res.bindings.agents) || []);
-    if (!allowed.has(rec.id)) {
-      _autoCurrentRecipient = { kind: 'commander' };
-      _repaintAutoRecipientChip();
-    }
-  } catch (_) { /* backend validation still guards save */ }
 }
 
 function _autoHourOptions() {
@@ -1193,7 +1178,6 @@ function _mountAutoForm() {
       value: '',
       onChange: () => {
         _autoRefreshProjectScopedPicker();
-        _autoClearRecipientIfOutsideProject().catch(() => {});
       },
     });
     const runDeviceMount = document.getElementById('auto-run-device-select');
@@ -1250,7 +1234,7 @@ function _mountAutoForm() {
 async function _ensureAutoDraftId() {
   if (_autoCurrentTaskId) return _autoCurrentTaskId;
   try {
-    const res = await window.orkas.invoke('autoTasks.allocateDraftId');
+    const res = await window.cogseed.invoke('autoTasks.allocateDraftId');
     if (res && typeof res.id === 'string' && res.id) {
       _autoCurrentTaskId = res.id;
     }
@@ -1371,7 +1355,7 @@ async function _autoUploadFiles(files, source = 'drop') {
   await Promise.all(placeholders.map(async (ph) => {
     try {
       const dataBase64 = _arrayBufferToBase64(ph.buf);
-      const res = await window.orkas.invoke('autoTasks.attachments.upload', {
+      const res = await window.cogseed.invoke('autoTasks.attachments.upload', {
         taskId,
         name: ph.file.name,
         dataBase64,
@@ -1488,7 +1472,7 @@ async function _autoImportPaths(entries, source = 'internal_drop') {
   let uploadFailed = 0;
   await Promise.all(placeholders.map(async (ph) => {
     try {
-      const data = await window.orkas.invoke('autoTasks.attachments.import', {
+      const data = await window.cogseed.invoke('autoTasks.attachments.import', {
         taskId,
         path: ph.path,
         name: ph.name,
@@ -1560,7 +1544,7 @@ async function _autoAttachLibraryFile(ref) {
     },
   ]);
   try {
-    const data = await window.orkas.invoke(channel, payload);
+    const data = await window.cogseed.invoke(channel, payload);
     const name = data && data.name;
     if (!name) throw new Error((data && data.error) || 'attach_failed');
     _autoReplaceAttachmentByTempId(tempId, {
@@ -1594,7 +1578,7 @@ async function _autoPickAndUploadFiles() {
   _autoTrackClick('auto_attachment_upload', payload);
   let data;
   try {
-    data = await window.orkas.invoke('autoTasks.attachments.pickAndUpload', { taskId });
+    data = await window.cogseed.invoke('autoTasks.attachments.pickAndUpload', { taskId });
   } catch (err) {
     _autoLog.warn('native picker upload failed', err);
     _autoTrackEvent('auto_attachment_upload_result', {
@@ -1677,7 +1661,7 @@ function _renderAutoAttachmentChips() {
       const name = item && item.name;
       if (!name || !_autoCurrentTaskId) return;
       try {
-        await window.orkas.invoke('autoTasks.attachments.delete', {
+        await window.cogseed.invoke('autoTasks.attachments.delete', {
           taskId: _autoCurrentTaskId, name,
         });
       } catch (err) {
@@ -1992,12 +1976,12 @@ async function _autoSubmitForm() {
     };
     let res;
     if (_autoEditingTaskId) {
-      res = await window.orkas.invoke('autoTasks.update', {
+      res = await window.cogseed.invoke('autoTasks.update', {
         taskId: _autoEditingTaskId,
         updates: payload,
       });
     } else {
-      res = await window.orkas.invoke('autoTasks.create', payload);
+      res = await window.cogseed.invoke('autoTasks.create', payload);
     }
     if (!res || !res.task) {
       _autoTrackEvent(isUpdate ? 'auto_task_update_result' : 'auto_task_create_result', {
@@ -2080,9 +2064,9 @@ if (typeof window !== 'undefined') {
 
 function startAutoEventsSubscription() {
   if (_autoEventsHandle) return;
-  if (!window.orkas || typeof window.orkas.stream !== 'function') return;
+  if (!window.cogseed || typeof window.cogseed.stream !== 'function') return;
   try {
-    _autoEventsHandle = window.orkas.stream('autoTasks.events', {}, (ev) => {
+    _autoEventsHandle = window.cogseed.stream('autoTasks.events', {}, (ev) => {
       const inner = ev && ev.event;
       if (!inner) return;
       if (inner.type === 'fire_failed') {
@@ -2127,6 +2111,158 @@ function startAutoEventsSubscription() {
 
 if (typeof window !== 'undefined') {
   window.startAutoEventsSubscription = startAutoEventsSubscription;
+}
+
+// ---- Auto-task time-adjust suggestion ----
+
+/** 15-minute threshold for suggesting schedule adjustment. */
+var _AUTO_TIME_ADJUST_THRESHOLD_MIN = 1;
+
+/** Track which cids have already shown a suggestion card (avoid spamming). */
+var _autoTimeAdjustSuggestions = new Set();
+
+/**
+ * Format hour/minute as HH:MM string.
+ */
+function _formatAutoTaskTime(h, m) {
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
+
+/**
+ * Entry point: check whether opening a conversation from a daily auto-task
+ * should trigger a time-adjust suggestion card.
+ *
+ * Called from conversation.js `loadConversationHistory` after conv metadata
+ * arrives.
+ *
+ * @param {string} cid - conversation id
+ * @param {string} originAutoTaskId - origin_auto_task_id from conversation metadata
+ */
+async function checkAndSuggestAutoTaskTimeAdjustment(cid, originAutoTaskId) {
+  if (!cid || !originAutoTaskId) return;
+  if (_autoTimeAdjustSuggestions.has(cid)) return;
+
+  try {
+    var res = await window.cogseed.invoke('autoTasks.list', {});
+    if (!res || !res.ok) return;
+
+    var tasks = res.tasks || [];
+    var task = null;
+    for (var i = 0; i < tasks.length; i++) {
+      if (tasks[i].id === originAutoTaskId) { task = tasks[i]; break; }
+    }
+    if (!task) return; // task may have been deleted
+    if (!task.enabled) return;
+    if (!task.schedule || task.schedule.type !== 'daily') return;
+
+    // Compute time diff
+    var now = new Date();
+    var curH = now.getHours();
+    var curM = now.getMinutes();
+    var schH = task.schedule.hour;
+    var schM = task.schedule.minute;
+
+    var diffMin = Math.abs((curH * 60 + curM) - (schH * 60 + schM));
+    if (diffMin < _AUTO_TIME_ADJUST_THRESHOLD_MIN) return;
+
+    // Mark shown so we don't spam
+    _autoTimeAdjustSuggestions.add(cid);
+
+    _renderAutoTimeAdjustCard(cid, task, { hour: curH, minute: curM });
+  } catch (err) {
+    _autoLog.warn('time-adjust suggestion failed', err);
+  }
+}
+
+/**
+ * Render the inline confirmation card at the bottom of the active chat panel.
+ */
+function _renderAutoTimeAdjustCard(cid, task, newTime) {
+  // Find the active chat container
+  var container = document.getElementById('chat-history');
+  if (!container || container.offsetParent === null) {
+    container = document.getElementById('chat-history'); // fallback — panel swap may hide
+  }
+  if (!container) return;
+
+  var oldH = task.schedule.hour;
+  var oldM = task.schedule.minute;
+  var oldTime = _formatAutoTaskTime(oldH, oldM);
+  var newTimeStr = _formatAutoTaskTime(newTime.hour, newTime.minute);
+
+  var card = document.createElement('div');
+  card.className = 'auto-time-adjust-card';
+
+  card.innerHTML =
+    '<div class="auto-time-adjust-header">' +
+      '<svg class="auto-time-adjust-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<circle cx="12" cy="12" r="10"></circle>' +
+        '<polyline points="12 6 12 12 16 14"></polyline>' +
+      '</svg>' +
+      '<span class="auto-time-adjust-title">' + escapeHtml(t('auto.time_adjust_title')) + '</span>' +
+    '</div>' +
+    '<div class="auto-time-adjust-body">' +
+      t('auto.time_adjust_message', { oldTime: '<span class="time-highlight">' + escapeHtml(oldTime) + '</span>', newTime: '<span class="time-highlight">' + escapeHtml(newTimeStr) + '</span>' }) +
+    '</div>' +
+    '<div class="auto-time-adjust-actions">' +
+      '<button class="btn" data-act="dismiss">' + escapeHtml(t('auto.time_adjust_keep', { oldTime: oldTime })) + '</button>' +
+      '<button class="btn btn-primary" data-act="confirm">' + escapeHtml(t('auto.time_adjust_confirm', { newTime: newTimeStr })) + '</button>' +
+    '</div>' +
+    '<div class="auto-time-adjust-result"></div>';
+
+  var resultEl = card.querySelector('.auto-time-adjust-result');
+  var allBtns = card.querySelectorAll('button');
+
+  card.querySelector('[data-act="confirm"]').addEventListener('click', function () {
+    _confirmAutoTimeAdjust(cid, task, newTime, card, resultEl, allBtns);
+  });
+
+  card.querySelector('[data-act="dismiss"]').addEventListener('click', function () {
+    _dismissAutoTimeAdjustCard(card, resultEl, allBtns, oldTime);
+  });
+
+  container.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+/**
+ * User clicked confirm: update the task schedule and show settled state.
+ */
+async function _confirmAutoTimeAdjust(cid, task, newTime, card, resultEl, allBtns) {
+  var newTimeStr = _formatAutoTaskTime(newTime.hour, newTime.minute);
+  try {
+    var res = await window.cogseed.invoke('autoTasks.update', {
+      taskId: task.id,
+      updates: {
+        schedule: { type: 'daily', hour: newTime.hour, minute: newTime.minute }
+      }
+    });
+    if (res && res.ok) {
+      card.classList.add('is-confirmed');
+      resultEl.textContent = t('auto.time_adjust_confirmed', { newTime: newTimeStr });
+    } else {
+      uiToast(t('auto.time_adjust_failed', { error: (res && res.error) || 'unknown' }), { variant: 'error' });
+      return;
+    }
+  } catch (err) {
+    uiToast(t('auto.time_adjust_failed', { error: err.message || 'unknown' }), { variant: 'error' });
+    return;
+  }
+  // Disable buttons after settling
+  for (var i = 0; i < allBtns.length; i++) allBtns[i].disabled = true;
+  // Refresh the auto task list in background if open
+  if (_autoLoadedOnce && typeof loadAutoList === 'function') {
+    loadAutoList(true).catch(function () {});
+  }
+}
+
+/**
+ * User clicked keep/dismiss: show settled state without updating.
+ */
+function _dismissAutoTimeAdjustCard(card, resultEl, allBtns, oldTime) {
+  card.classList.add('is-dismissed');
+  resultEl.textContent = t('auto.time_adjust_kept', { oldTime: oldTime });
+  for (var i = 0; i < allBtns.length; i++) allBtns[i].disabled = true;
 }
 
 if (typeof module !== 'undefined' && typeof module.exports === 'object') {

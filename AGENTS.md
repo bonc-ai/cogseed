@@ -2,17 +2,25 @@
 
 Prompt context only: keep hard constraints, short rationale, and traps already hit. Implementation details belong in source headers and tests.
 
+## Repo
+
+CogSeed desktop companion agent (Electron). Main is TypeScript under `src/main`, renderer is vanilla HTML/CSS/JS under `src/renderer`.
+
+- Quick gates: `npm run typecheck` (tsc --noEmit), `npm test` (js + resources), `./run.sh` to start.
+- This repo has sibling worktrees (`mate-agent-parallel-1/2` next to the main checkout, each on its own `dev/niubaokang*` branch). Align all of them after mainline merges; parallel sessions may edit the same files.
+- Repo docs: `README.md` / `README.zh-CN.md`; feature planning and handoff docs live under `docs/` (runtime-variants, touchpoint-v2, skill 安全体系, etc.).
+
 ## Boundary
 
 Single-process Electron app. Main is a Node backend, renderer is vanilla HTML/CSS/JS, and IPC is the only app communication path.
 
 - No HTTP server, no occupied port, and no local auth layer in main.
-- Renderer access goes through the `contextBridge` allow-list API `window.orkas.{invoke, stream}`.
+- Renderer access goes through the canonical `contextBridge` allow-list API `window.cogseed.{invoke, stream}`.
 - No TypeScript/JSX/bundler in the renderer; classic scripts only.
 - `src/main/preload.js` must remain `.js`; preload does not run the tsx hook.
 - LLM calls use the in-process `core-agent` loaded dynamically through `import('#core-agent')`.
 - Local CLI agents are the explicit child-process exception. `features/local_agents/runner.ts` is the only CLI dispatch spawn path.
-- Mate Agent Runtime worker is the backend-isolation child-process exception. The worker process itself is spawned only through `features/mate_agent_runtime/worker-process.ts` and speaks the Runtime JSONL protocol; no IPC handler/renderer code may spawn it directly. Inside that isolated worker, Runtime tool execution is limited to the dedicated `features/mate_agent_runtime/kernel/tools/` choke points: shell commands through `shell-tools.ts`, and skill scripts through `skill-tools.ts` → `bin/run-skill.cjs`.
+- CogSeed Runtime worker is the backend-isolation child-process exception. The worker process itself is spawned only through `features/cogseed_runtime/worker-process.ts` and speaks the Runtime JSONL protocol; no IPC handler/renderer code may spawn it directly. Inside that isolated worker, Runtime tool execution is limited to the dedicated `features/cogseed_runtime/kernel/tools/` choke points: shell commands through `shell-tools.ts`, and skill scripts through `skill-tools.ts` → `bin/run-skill.cjs`.
 - MCP stdio connectors spawn only through `features/connectors/mcp-client.ts`.
 - User data is mostly JSON/JSONL for readability and sync friendliness; sqlite is reserved for the KB vector store.
 - macOS and Windows are primary. Platform branches need platform-specific verification.
@@ -117,7 +125,7 @@ Attachments:
 ## Artifacts And Saved Apps
 
 - `create_artifact` writes only to `<uid>/cloud/chat_artifacts/<cid>/<artifactId>/`.
-- `chat-app://` serves only validated artifact files through `features/chat_artifacts.ts`; never expose `window.orkas` or IPC to the iframe.
+- `chat-app://` serves only validated artifact files through `features/chat_artifacts.ts`; never expose `window.cogseed` or IPC to the iframe.
 - Artifact-to-app communication is the validated `postMessage` contract and routes back as a normal user message.
 - Saved apps live only under `<uid>/cloud/saved_apps/<appId>/` and open through the saved-app resolver.
 - Editing a saved app is fork-and-modify via a new conversation and attachment bundle; it is not in-place mutation.
@@ -165,7 +173,7 @@ Dev-mode marketplace editing/upload/delete is hosted/private tooling. Runtime ga
 ## Renderer
 
 - Classic scripts only. Add new script files to `index.html`.
-- New `window.orkas.*` APIs require a main IPC handler; renderer shim routes are centralized.
+- New `window.cogseed.*` APIs require a main IPC handler; renderer shim routes are centralized.
 - Markdown rendering uses `renderMarkdown`; dashboard directives and schema references change together.
 - Do not append cache-busting query strings to renderer resources.
 - Renderer icons are centralized in `modules/icons.js`; do not hard-code SVG paths or use emoji icons.
@@ -196,17 +204,19 @@ Dev-mode marketplace editing/upload/delete is hosted/private tooling. Runtime ga
 - Start PC with `./run.sh`.
 - Run tests with `npm test`, not `npx vitest`; the test script manages sqlite ABI swapping and rollback.
 - If sqlite ABI is broken, run `npm run rebuild:sqlite:electron`.
+- After merging develop into a feature branch, re-verify renderer↔main IPC contracts and run `npm run typecheck` — merges have silently dropped IPC channels before.
 - Tests should cover business invariants, recovery paths, concurrency, cross-layer contracts, and text-processing traps.
 - Do not test typing-only wrappers, trivial getters, happy-path-only cases, or implementation internals.
 - LLM-output parsers/sanitizers need fixture sets for both accepted real shapes and rejected look-alikes.
 - Pure renderer functions may expose a guarded CommonJS bridge for tests; DOM/i18n/IPC code should not.
-- After completing changes to this messaging worktree, restart the running app for verification instead of asking the user to do it manually: run `scripts/restart-mate.sh` (stops only this worktree's `messaging` runtime and relaunches via `./run.sh` in the background; other variants are untouched). Confirm startup via `~/.orkas/runtime-variants/messaging/data/logs/<date>.log` and the launcher log `/tmp/mate-agent-messaging-run.log`, then run the real-environment verification.
+- After completing changes to this worktree, restart the running app for verification instead of asking the user to do it manually: run `scripts/restart-cogseed.sh` (stops only this worktree's `cogseed` runtime and relaunches via `./run.sh` in the background; other variants are untouched). Confirm startup via `~/.cogseed/runtime-variants/cogseed/data/logs/<date>.log` and the launcher log `/tmp/cogseed-agent-cogseed-run.log`, then run the real-environment verification.
 
 ## Git Collaboration Flow
 
-- All work lands in `develop` via GitLab MR from a `dev/*` branch; `develop` is protected — never push it directly (overwrite accidents happened before).
-- Keep your branch fresh with the mainline before merging: `git pull origin develop` (or fetch + merge).
-- Push explicitly to your own branch: `git push origin dev/<branch>` — avoid bare `git push` when your branch tracks `origin/develop`.
+- GitLab branch discipline (since 2026-08-14): **never create a new remote branch**. Our own dev-side work lives on `dev/niubaokang` only (already existing); colleagues' branches (`dev/fengjw`, `dev/shiyuxuan`, ...) are outside our scope — do not touch, delete, or push to them. Mainlines `develop`/`master`/`main` stay as-is.
+- Parallel worktree branches (`dev/niubaokang-<topic>`) are **local-only — never pushed**; after verification they merge into `dev/niubaokang`, and only that branch gets pushed.
+- `develop` is protected; merge via MR (`dev/niubaokang` → `develop`) — never push it directly (overwrite accidents happened before). Sync baseline is `origin/develop` (fetch + merge, no rebase).
+- Avoid bare `git push`; run `git fetch --prune origin` first to confirm the target branch is still on the whitelist.
 
 ## Do Not
 

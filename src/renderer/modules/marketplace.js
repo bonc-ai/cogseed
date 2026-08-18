@@ -31,7 +31,7 @@ let _mpReturnView = 'agents';
 // Categories are read on every panel open. Caching at three levels (renderer in-mem ↑↑↑
 // localStorage ↑↑ main biz file ↑) so the first openMarketplace after PC launch finds the
 // chip strip painted *synchronously* — no IPC roundtrip latency. localStorage is sync and
-// available before window.orkas IPC is ready; the in-memory variable is the hot path; the
+// available before window.cogseed IPC is ready; the in-memory variable is the hot path; the
 // async preload below refreshes localStorage in the background.
 const MP_CATEGORIES_LS_KEY = 'orkas:mp:categories';
 let _mpCategoriesCache = (() => {
@@ -88,7 +88,162 @@ function _mpErrorFromResponse(res, fallbackMessage) {
     err.marketplaceCurrentAppVersion = res.marketplaceCurrentAppVersion || '';
   }
   if (res && res.qualityReport) err.qualityReport = res.qualityReport;
+  if (res && res.securityBlocked) err.securityBlocked = true;
+  if (res && res.securityUnavailable) err.securityUnavailable = true;
+  if (res && res.securityScan) err.securityScan = res.securityScan;
+  if (res && res.securityOverridable) err.securityOverridable = true;
+  if (res && Array.isArray(res.securityRuleIds)) err.securityRuleIds = res.securityRuleIds;
   return err;
+}
+
+/**
+ * Human-readable summary of why a security scan rejected an install.
+ *
+ * Reports counts and rule ids only. The spec requires a high-risk message to
+ * name the risk type and impact "without exposing the sensitive original text"
+ * — that text may itself be the credential that got leaked.
+ */
+function _mpSecurityReasonLines(scan) {
+  const lines = [];
+  if (!scan) return lines;
+  if (Array.isArray(scan.localRedLines) && scan.localRedLines.length) {
+    lines.push(t('marketplace.security_reason_red_line'));
+  }
+  if (scan.hardBlocked) lines.push(t('marketplace.security_reason_hard_block'));
+  const s = scan.attackSurface || {};
+  if (s.egressPoints > 0) {
+    lines.push(t('marketplace.security_reason_egress').replace('{n}', String(s.egressPoints)));
+  }
+  if (s.dynamicExecPoints > 0) {
+    lines.push(t('marketplace.security_reason_dynamic_exec').replace('{n}', String(s.dynamicExecPoints)));
+  }
+  if (s.persistencePoints > 0) {
+    lines.push(t('marketplace.security_reason_persistence').replace('{n}', String(s.persistencePoints)));
+  }
+  return lines;
+}
+
+/**
+ * Show the spec's risk card for a security-gate rejection.
+ *
+ * Deliberately offers no "install anyway": a high-risk verdict is not
+ * user-overridable, and rendering an escape hatch here would undo the gate that
+ * just ran in the main process.
+ *
+ * `unavailable` is a separate message, not a softer wording of the same one. The
+ * user needs to know whether their skill looked dangerous or whether we simply
+ * could not check — conflating the two teaches them to dismiss real blocks.
+ */
+/**
+ * Plain-language lines for the red lines that fired.
+ *
+ * Keyed by rule id so each says what was actually found. Terminology is kept —
+ * `curl | sh`, `~/.ssh` — because a user who can act on this needs the specific
+ * thing, with one clause of explanation after it rather than instead of it.
+ * Unknown ids fall back to the generic reason list rather than being dropped.
+ */
+function _mpRiskRuleLines(ruleIds) {
+  const out = [];
+  for (const id of (Array.isArray(ruleIds) ? ruleIds : [])) {
+    const key = `marketplace.risk_rule_${id}`;
+    const text = t(key);
+    // `t` echoes the key back when there is no translation.
+    if (text && text !== key) out.push(text);
+  }
+  return out;
+}
+
+/**
+ * Confirm a red-flag override by making the user type the skill name.
+ *
+ * Deliberately more friction than the danger-button dialog used for a scanner
+ * outage, because the two are not equally serious. A red flag is a specific
+ * malicious pattern, and the attack this has to withstand is a skill whose own
+ * text asks the user to click through — so the gesture cannot be a single click
+ * on a button whose position the user has already learned.
+ *
+ * Returns true only on an exact name match. Case and surrounding whitespace are
+ * forgiven; nothing else is.
+ */
+async function _mpConfirmRedFlagOverride(name, ruleIds) {
+  const lines = _mpRiskRuleLines(ruleIds);
+  const detail = lines.length ? `\n\n${lines.map((r) => `• ${r}`).join('\n')}` : '';
+  // `uiPrompt` renders no title, so the heading goes into the message body —
+  // passing a `title` option would silently drop it.
+  const typed = await uiPrompt(
+    `${t('marketplace.redflag_title').replace('{name}', name)}\n\n${
+      t('marketplace.redflag_intro').replace('{name}', name)
+    }${detail}\n\n${
+      t('marketplace.redflag_type_name').replace('{name}', name)
+    }\n\n${t('marketplace.override_note')}`,
+  );
+  if (typed === null) return false;
+  return String(typed).trim().toLowerCase() === String(name).trim().toLowerCase();
+}
+
+/**
+ * Show why an install was refused, and offer "install anyway" when the refusal
+ * is waivable.
+ *
+ * Returns true when the user chose to proceed. Only reachable when the main
+ * process marked the rejection overridable — currently a scanner outage, never a
+ * red line. The renderer does not decide this: it would be a second copy of the
+ * rule, and the copy that drifts is the one that admits something it shouldn't.
+ */
+async function _mpShowSecurityCard(name, err) {
+  const scan = err && err.securityScan;
+  const unavailable = !!(err && err.securityUnavailable);
+  const overridable = !!(err && err.securityOverridable);
+  if (unavailable) {
+    if (!overridable) {
+      await uiAlert(
+        t('marketplace.security_unavailable_body').replace('{name}', name),
+        t('marketplace.security_unavailable_title'),
+      );
+      return false;
+    }
+    // Nothing was verified — said plainly, because "could not check" and "looks
+    // dangerous" call for different decisions from the user.
+    const proceed = await uiConfirmDanger({
+      title: t('marketplace.override_title').replace('{name}', name),
+      message: `${t('marketplace.override_unavailable_intro')}\n\n• ${
+        t('marketplace.security_unavailable_body').replace('{name}', name)
+      }\n\n${t('marketplace.override_note')}`,
+      dangerLabel: t('marketplace.override_confirm'),
+      cancelLabel: t('marketplace.override_cancel'),
+    });
+    return proceed === true;
+  }
+  const reasons = _mpSecurityReasonLines(scan);
+  const detail = reasons.length ? `\n\n${reasons.map((r) => `• ${r}`).join('\n')}` : '';
+  // Degraded-rules disclosure rides along on the block too: if coverage was
+  // weaker than normal the user should know the verdict came from fallback rules.
+  const degraded = scan && scan.rulesDegraded
+    ? `\n\n${t('marketplace.security_rules_degraded')}`
+    : '';
+  // Rule-specific wording first; the count-based summary is the fallback for
+  // findings that carry no rule id.
+  const ruleLines = _mpRiskRuleLines(err && err.securityRuleIds);
+  const body = ruleLines.length
+    ? `${t('marketplace.override_intro')}\n\n${ruleLines.map((r) => `• ${r}`).join('\n')}`
+    : `${t('marketplace.security_blocked_body').replace('{name}', name)}${detail}`;
+
+  if (!overridable) {
+    // Final. Says so rather than leaving the user looking for the button that
+    // would let them through — there isn't one, by design.
+    await uiAlert(
+      `${body}${degraded}\n\n${t('marketplace.override_final').replace('{name}', name)}`,
+      t('marketplace.security_blocked_title'),
+    );
+    return false;
+  }
+  const proceed = await uiConfirmDanger({
+    title: t('marketplace.override_title').replace('{name}', name),
+    message: `${body}${degraded}\n\n${t('marketplace.override_note')}`,
+    dangerLabel: t('marketplace.override_confirm'),
+    cancelLabel: t('marketplace.override_cancel'),
+  });
+  return proceed === true;
 }
 
 function _mpShowReviewStatusUi() {
@@ -111,7 +266,7 @@ function _mpMaybeRefreshCategoriesForCodes(codes) {
   if (now - _mpUnknownCategoryRefreshAt < MP_UNKNOWN_CATEGORY_REFRESH_MIN_MS) return;
   _mpUnknownCategoryRefreshAt = now;
   try {
-    _mpUnknownCategoryRefreshInFlight = window.orkas.invoke('marketplace.categories', { force_refresh: true })
+    _mpUnknownCategoryRefreshInFlight = window.cogseed.invoke('marketplace.categories', { force_refresh: true })
       .then((r) => {
         const list = (r && r.list) || [];
         if (!list.length) return;
@@ -285,7 +440,7 @@ async function _mpHydrateListingsCache() {
   if (_mpListingsHydrated) return;
   _mpListingsHydrated = true;
   try {
-    const data = await window.orkas.invoke('marketplace.getListingsCache');
+    const data = await window.cogseed.invoke('marketplace.getListingsCache');
     const entries = data?.entries || {};
     for (const [k, v] of Object.entries(entries)) {
       if (v && Array.isArray(v.items) && typeof v.ts === 'number') {
@@ -299,7 +454,7 @@ function _mpPersistListingsCache() {
   // Fire-and-forget: serialization happens in main. Renderer just snapshots the Map.
   const entries = {};
   for (const [k, v] of _mpListingsCache.entries()) entries[k] = v;
-  window.orkas.invoke('marketplace.setListingsCache', { entries }).catch(() => { /* ignore */ });
+  window.cogseed.invoke('marketplace.setListingsCache', { entries }).catch(() => { /* ignore */ });
 }
 
 
@@ -391,10 +546,10 @@ function openMarketplace(initialTab = 'agent', opts = {}) {
   _mpRender();
 
   // Best-effort cache sweep — never blocks the UI.
-  window.orkas.invoke('marketplace.sweepCache').catch(() => { /* ignore */ });
+  window.cogseed.invoke('marketplace.sweepCache').catch(() => { /* ignore */ });
 
-  if (!_mpState.appVersion && window.orkas && typeof window.orkas.env === 'function') {
-    window.orkas.env().then((env) => {
+  if (!_mpState.appVersion && window.cogseed && typeof window.cogseed.env === 'function') {
+    window.cogseed.env().then((env) => {
       const v = env && env.version;
       if (typeof v === 'string' && v && _mpState) {
         _mpState.appVersion = v;
@@ -486,15 +641,15 @@ function _mpShowResourceSyncSkippedToast(payload) {
 
 async function _mpInitReconcileWatch() {
   if (_mpReconcileWatchStarted || _mpReconcileWatchStarting) return;
-  if (!window.orkas || typeof window.orkas.invoke !== 'function' || typeof window.orkas.onPushEvent !== 'function') {
+  if (!window.cogseed || typeof window.cogseed.invoke !== 'function' || typeof window.cogseed.onPushEvent !== 'function') {
     return;
   }
   _mpReconcileWatchStarting = true;
   try {
-    window.orkas.onPushEvent('marketplace:reconcile-status', (status) => {
+    window.cogseed.onPushEvent('marketplace:reconcile-status', (status) => {
       _mpApplyReconcileStatus(status);
     });
-    window.orkas.onPushEvent('marketplace:resource-sync-skipped', (payload) => {
+    window.cogseed.onPushEvent('marketplace:resource-sync-skipped', (payload) => {
       _mpShowResourceSyncSkippedToast(payload);
     });
     _mpReconcileWatchStarted = true;
@@ -503,7 +658,7 @@ async function _mpInitReconcileWatch() {
     return;
   }
   try {
-    const initial = await window.orkas.invoke('marketplace.reconcileStatus');
+    const initial = await window.cogseed.invoke('marketplace.reconcileStatus');
     _mpApplyReconcileStatus(initial);
   } catch { /* main not ready yet — push event will fill us in */ }
   _mpReconcileWatchStarting = false;
@@ -717,8 +872,8 @@ async function _mpLoadAll() {
 async function _mpRefreshInstalledState() {
   try {
     const [instAgents, instSkills] = await Promise.all([
-      window.orkas.invoke('agents.list'),
-      window.orkas.invoke('skills.list'),
+      window.cogseed.invoke('agents.list'),
+      window.cogseed.invoke('skills.list'),
     ]);
     if (!_mpState) return;
     const agentRows = ((instAgents && instAgents.agents) || [])
@@ -758,7 +913,7 @@ function _mpInstalledSource(source) {
 async function _mpRefreshCategoriesIfMissing() {
   if (_mpCategoriesCache) return;
   try {
-    const r = await window.orkas.invoke('marketplace.categories', {});
+    const r = await window.cogseed.invoke('marketplace.categories', {});
     const list = (r && r.list) || [];
     if (!list.length || !_mpState) return;
     _mpCategoriesCache = list;
@@ -852,7 +1007,7 @@ document.addEventListener('visibilitychange', () => {
 // without ever blocking the UI — fire-and-forget; failures keep the localStorage copy.
 (function _mpPreloadCategories() {
   try {
-    window.orkas.invoke('marketplace.categories', {}).then((r) => {
+    window.cogseed.invoke('marketplace.categories', {}).then((r) => {
       const list = (r && r.list) || [];
       if (list.length) {
         _mpCategoriesCache = list;
@@ -863,12 +1018,12 @@ document.addEventListener('visibilitychange', () => {
         }
       }
     }).catch(() => { /* ignore */ });
-  } catch { /* preload happens at script load; window.orkas not ready is OK */ }
+  } catch { /* preload happens at script load; window.cogseed not ready is OK */ }
 })();
 
 (function _mpBindDeepLinkOpen() {
   try {
-    window.orkas.onPushEvent('marketplace:open-detail', (payload) => {
+    window.cogseed.onPushEvent('marketplace:open-detail', (payload) => {
       const normalized = _mpNormalizeDeepLinkPayload(payload);
       if (!normalized) return;
       openMarketplace(normalized.kind, {
@@ -1032,7 +1187,7 @@ async function _mpLoadListingsPage(kind, { append, page }) {
   const key = _mpListingsKey(kind, cat, status, q);
   const channel = kind === 'agent' ? 'marketplace.listAgents' : 'marketplace.listSkills';
   try {
-    const r = await window.orkas.invoke(channel, {
+    const r = await window.cogseed.invoke(channel, {
       category: cat || null, status: status || null, q: q || null, page, size: MP_LISTINGS_PAGE_SIZE,
     });
     if (_mpState._loadGen[kind] !== myGen) return;
@@ -1436,7 +1591,7 @@ async function _mpOpenDetail(kind, item, opts = {}) {
 
   try {
     if (kind === 'agent') {
-      const detail = await window.orkas.invoke('marketplace.detailAgent', {
+      const detail = await window.cogseed.invoke('marketplace.detailAgent', {
         id: item.id, version: item.version,
         published_at: item.published_at, updated_at: item.updated_at,
         min_app_version: _mpMinAppVersion(item),
@@ -1445,20 +1600,20 @@ async function _mpOpenDetail(kind, item, opts = {}) {
       _mpState.detailAgentJson = detail.agent_json;
     } else {
       try {
-        const detail = await window.orkas.invoke('marketplace.detailSkill', {
+        const detail = await window.cogseed.invoke('marketplace.detailSkill', {
           id: item.id, version: item.version,
           published_at: item.published_at, updated_at: item.updated_at,
           min_app_version: _mpMinAppVersion(item),
         });
         if (!detail || detail.ok === false) throw _mpErrorFromResponse(detail, 'detail failed');
-        const files = await window.orkas.invoke('marketplace.cacheSkillFiles', { id: item.id });
+        const files = await window.cogseed.invoke('marketplace.cacheSkillFiles', { id: item.id });
         _mpState.detailSkillFiles = (files && files.list) || [];
         const selected = _mpState.detailSkillFiles.find((f) => f.path === _mpState.detailSkillSelected)
           ? _mpState.detailSkillSelected
           : 'SKILL.md';
         _mpState.detailSkillSelected = selected;
         if (_mpState.detailSkillFiles.find((f) => f.path === selected)) {
-          const r = await window.orkas.invoke('marketplace.cacheSkillRead', { id: item.id, file: selected });
+          const r = await window.cogseed.invoke('marketplace.cacheSkillRead', { id: item.id, file: selected });
           _mpState.detailSkillFileText = (r && r.content) || '';
         }
       } catch (err) {
@@ -1588,7 +1743,7 @@ function _mpRenderDetail() {
         if (!file) return;
         _mpState.detailSkillSelected = file;
         try {
-          const r = await window.orkas.invoke('marketplace.cacheSkillRead', { id: item.id, file });
+          const r = await window.cogseed.invoke('marketplace.cacheSkillRead', { id: item.id, file });
           _mpState.detailSkillFileText = (r && r.content) || '';
         } catch (err) {
           _mpState.detailSkillFileText = `// load failed: ${_mpUserErrorMessage(err, 'marketplace.action_failed_retry_later')}`;
@@ -1894,15 +2049,20 @@ async function _mpInstall(kind, id, itemOverride = null) {
   if (_mpState.installing.has(key)) return;
   _mpState.installing.add(key);
   _mpRender();
-  const invokeInstall = async () => {
+  const invokeInstall = async (acceptSecurityRisk = false) => {
     const channel = kind === 'agent' ? 'marketplace.installAgent' : 'marketplace.installSkill';
-    const r = await window.orkas.invoke(channel, {
+    const r = await window.cogseed.invoke(channel, {
       id, name: item.name || '',
       version: item.version,
       published_at: item.published_at, updated_at: item.updated_at,
       min_app_version: _mpMinAppVersion(item),
+      // Sent only after the user confirmed in the danger dialog. The main
+      // process re-checks that the verdict was overridable at all, so this flag
+      // cannot buy past a red line on its own.
+      ...(acceptSecurityRisk ? { acceptSecurityRisk: true } : {}),
     });
     if (!r || r.ok === false) throw _mpInstallErrorFromResponse(r);
+    return r;
   };
   const markInstalled = async () => {
     _mpMarkInstalled(kind, item);
@@ -1911,13 +2071,42 @@ async function _mpInstall(kind, id, itemOverride = null) {
     if (typeof loadSkills === 'function' && kind === 'skill') await loadSkills(true);
   };
   try {
-    await invokeInstall();
+    const r = await invokeInstall();
     await markInstalled();
+    // W5: one quiet notice when the install succeeded with a restricted
+    // (Medium) verdict. Non-blocking toast only — the full risk card lives on
+    // the skill's security panel, and adding a dialog here would train users
+    // to click through it.
+    if (typeof uiToast === 'function' && r && r.securityScan && r.securityScan.outcome === 'restricted') {
+      uiToast(
+        r.securityScan.rulesDegraded
+          ? t('skills.security_import_degraded')
+          : t('skills.security_import_restricted'),
+        { variant: 'warning', timeoutMs: 8000 },
+      );
+    }
     // Success: no toast — the button flips to "Installed" + state set above is the signal.
     // (Failure still alerts because the user otherwise has no way to know why nothing happened.)
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _mpTrackInstallFailure(kind, item, err);
+    // Security gate first: a scan rejection and a structural rejection are
+    // different verdicts with different remedies, and the security one carries
+    // its own structured payload rather than a QualityReport.
+    if (err && (err.securityBlocked || err.securityUnavailable)) {
+      const accepted = await _mpShowSecurityCard(err.marketplaceName || item.name || id, err);
+      if (!accepted) return;
+      // Retry once, carrying the user's decision. A second refusal is final: it
+      // means the verdict changed or was never waivable, and looping the dialog
+      // would train the user to click through it.
+      try {
+        await invokeInstall(true);
+        await markInstalled();
+      } catch (retryErr) {
+        uiAlert(_mpInstallFailedText(kind, item, retryErr));
+      }
+      return;
+    }
     // Quality validator rejection → show the structured violation list
     // instead of the generic install-failed alert. Falls back to alert if
     // the report can't be loaded.
@@ -1928,11 +2117,24 @@ async function _mpInstall(kind, id, itemOverride = null) {
       const report = err?.qualityReport || await readQualityReport(rejectedKind, rejectedId);
       if (report) {
         const title = t('quality.install_rejected_title').replace('{name}', rejectedName);
-        // Report-only: an EXTREME violation is not user-overridable, so no
-        // force action is offered. Passing a forceLabel here previously let
-        // the user re-invoke install with `force: true`, which bypassed the
-        // main-process red-flag gate entirely.
-        await showValidationReport({ title, report });
+        // The report offers an override; confirming it requires typing the skill
+        // name, and the main process re-checks consent regardless of what the
+        // renderer claims.
+        const action = await showValidationReport({
+          title, report, forceLabel: t('marketplace.override_confirm'),
+        });
+        if (action === 'force') {
+          const ruleIds = (err && err.qualityRuleIds)
+            || report.violations.filter((v) => v.level === 'EXTREME').map((v) => v.rule);
+          if (await _mpConfirmRedFlagOverride(rejectedName, ruleIds)) {
+            try {
+              await invokeInstall(true);
+              await markInstalled();
+            } catch (retryErr) {
+              uiAlert(_mpInstallFailedText(kind, item, retryErr));
+            }
+          }
+        }
       } else {
         uiAlert(_mpInstallFailedText(kind, item, err));
       }
@@ -1964,7 +2166,7 @@ async function _mpUninstall(kind, id) {
   _mpRender();
   try {
     const channel = kind === 'agent' ? 'marketplace.uninstallAgent' : 'marketplace.uninstallSkill';
-    const r = await window.orkas.invoke(channel, { id });
+    const r = await window.cogseed.invoke(channel, { id });
     if (!r || r.ok === false) throw new Error((r && r.error) || 'uninstall failed');
     if (kind === 'agent') _mpState.installedAgentIds.delete(id);
     else _mpState.installedSkillIds.delete(id);
@@ -2067,7 +2269,7 @@ async function mountMarketplaceCategorySelect(elId, initialValue = '') {
   if (!el) return;
   let categories = [];
   try {
-    const r = await window.orkas.invoke('marketplace.categories', { local_only: true });
+    const r = await window.cogseed.invoke('marketplace.categories', { local_only: true });
     categories = (r && r.list) || [];
   } catch { /* swallowed — main's fallback handles it */ }
   const lang = (typeof getLang === 'function') ? getLang() : 'en';

@@ -1,6 +1,6 @@
 /**
  * IPC handlers for the connectors feature. Renderer reaches these via
- * `window.orkas.invoke('connectors.*', payload)`.
+ * `window.cogseed.invoke('connectors.*', payload)`.
  *
  *   connectors.catalog       → { catalog }
  *   connectors.list          → { instances }
@@ -167,8 +167,12 @@ export const invokeHandlers = {
 
   'connectors.remove': async (payload: { id?: unknown }, ctx: { userId: string }) => {
     if (typeof payload?.id !== 'string' || !connectors.isValidInstanceId(payload.id)) throw new Error('invalid id');
+    const instance = connectors.getInstance(ctx.userId, payload.id);
     const removed = await connectors.removeInstance(ctx.userId, payload.id);
-    return { removed };
+    if (!removed || !instance) return { removed };
+    const { recordRemovedConnector } = await import('../features/recall/source-removal');
+    const sourceRemoval = await recordRemovedConnector(ctx.userId, instance);
+    return { removed, sourceRemoval };
   },
 
   'connectors.refresh': async (payload: { id?: unknown }, ctx: { userId: string }) => {

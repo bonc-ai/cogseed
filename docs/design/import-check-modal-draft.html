@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>导入检查结果弹窗 — 设计稿 v1</title>
+<style>
+  :root {
+    --bg: #E9F0EC;
+    --text: #14281E;
+    --text-2: #3E5A4C;
+    --text-3: #7A9185;
+    --border: rgba(24, 84, 60, 0.09);
+    --border-strong: rgba(24, 84, 60, 0.18);
+    --primary: #0E9F6E;
+    --primary-soft: #E2F5EC;
+    --primary-text: #0A7A55;
+    --success: #16a34a;
+    --success-soft: #dcfce7;
+    --danger: #dc2626;
+    --danger-soft: #fee2e2;
+    --amber: #d97706;
+    --amber-soft: #fef3c7;
+    --radius-lg: 20px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(1200px 600px at 30% 10%, rgba(14,159,110,.10), transparent),
+      var(--bg);
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    color: var(--text); line-height: 1.55; padding: 24px;
+  }
+
+  /* 模拟应用背景里的技能页（弱化，仅示意） */
+  .backdrop-note {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  }
+  .backdrop-grid {
+    position: absolute; inset: 0; display: grid; grid-template-columns: repeat(4, 200px);
+    gap: 14px; padding: 48px; align-content: start; opacity: .35; filter: blur(1px);
+  }
+  .bg-card { height: 96px; background: #fff; border-radius: 14px; border: 1px solid var(--border); }
+
+  /* ── 弹窗壳（对齐应用 .modal-overlay / .modal） ── */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(20, 71, 55, 0.5);
+    backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal {
+    position: relative; background: #fff; border-radius: var(--radius-lg);
+    padding: 24px 26px 20px; width: min(500px, 100%);
+    max-height: 86vh; overflow-y: auto;
+    box-shadow: 0 20px 40px rgba(0,0,0,.14);
+    animation: pop .18s ease-out;
+  }
+  @keyframes pop { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  .modal-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+  .modal-title { flex: 1; font-size: 16px; font-weight: 650; line-height: 1.4; letter-spacing: -.01em; }
+  .modal-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; display: flex; gap: 8px; align-items: center; }
+  .src-badge {
+    font-size: 11px; padding: 1px 8px; border-radius: 999px; background: #F1F5F3; color: var(--text-3);
+  }
+  .modal-close {
+    flex: none; width: 26px; height: 26px; border-radius: 8px; border: none; background: none;
+    cursor: pointer; color: var(--text-3); font-size: 16px; line-height: 1;
+  }
+  .modal-close:hover { background: #F1F5F3; }
+
+  /* ── 状态区 ── */
+  .status {
+    display: flex; gap: 12px; align-items: flex-start; border-radius: 14px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .status.ok { background: var(--success-soft); }
+  .status.warn { background: var(--amber-soft); }
+  .status.bad { background: var(--danger-soft); }
+  .status.muted { background: #F1F5F3; }
+  .status-icon { width: 34px; height: 34px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; flex: none; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .status.ok .status-icon { color: var(--success); }
+  .status.warn .status-icon { color: var(--amber); }
+  .status.bad .status-icon { color: var(--danger); }
+  .status.muted .status-icon { color: var(--text-3); }
+  .status-icon svg { width: 17px; height: 17px; }
+  .status-main { flex: 1; min-width: 0; }
+  .status-title { font-size: 14px; font-weight: 650; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .score-chip { font-size: 12px; font-weight: 600; padding: 1px 9px; border-radius: 999px; background: #fff; }
+  .status.ok .score-chip { color: var(--success); }
+  .status.warn .score-chip { color: var(--amber); }
+  .status.bad .score-chip { color: var(--danger); }
+  .status-desc { font-size: 12.5px; margin-top: 4px; }
+  .status.ok .status-desc { color: #14532d; }
+  .status.warn .status-desc { color: #92400e; }
+  .status.bad .status-desc { color: #7f1d1d; }
+  .status.muted .status-desc { color: var(--text-2); }
+
+  /* ── 发现列表 ── */
+  .findings-title { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin: 0 0 8px; }
+  .findings { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 12px; }
+  .finding { display: flex; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .finding:last-child { border-bottom: none; }
+  .finding-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 6px; flex: none; }
+  .finding-dot.extreme { background: var(--danger); }
+  .finding-dot.medium { background: var(--amber); }
+  .finding-dot.low { background: var(--text-3); }
+  .finding-text { flex: 1; color: var(--text-2); }
+  .finding-loc { color: var(--text-3); font-size: 11.5px; flex: none; font-variant-numeric: tabular-nums; }
+  .findings-more { padding: 8px 12px; font-size: 12px; color: var(--text-3); background: #FAFCFB; }
+
+  /* ── 攻击面摘要 ── */
+  .surface { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .surface-chip {
+    font-size: 11.5px; color: var(--text-2); background: #F7FAF8; border: 1px solid var(--border);
+    border-radius: 8px; padding: 3px 10px;
+  }
+  .surface-chip b { font-weight: 650; color: var(--text); }
+
+  /* ── footer ── */
+  .modal-foot { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .modal-foot .spacer { flex: 1; }
+  .btn {
+    font-size: 13px; font-weight: 500; padding: 8px 16px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--border-strong); background: #fff; color: var(--text); font-family: inherit;
+  }
+  .btn:hover { border-color: var(--primary); color: var(--primary-text); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn.primary:hover { background: #0A7A55; color: #fff; }
+  .btn.danger { color: var(--danger); border-color: rgba(220,38,38,.25); }
+  .btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+  .btn.ghost { border-color: transparent; background: none; color: var(--text-3); }
+  .btn.ghost:hover { color: var(--text-2); }
+  .modal-note { font-size: 11.5px; color: var(--text-3); margin-top: 12px; text-align: center; }
+
+  /* 状态切换 */
+  .demo-switch {
+    position: fixed; right: 22px; top: 22px; background: #fff; border: 1px solid var(--border-strong);
+    border-radius: 12px; padding: 12px 14px; box-shadow: 0 4px 16px rgba(20,40,30,.08); z-index: 200;
+  }
+  .demo-switch .t { font-size: 12px; color: var(--text-3); margin-bottom: 8px; }
+  .demo-switch button {
+    display: block; width: 100%; text-align: left; font-size: 12.5px; padding: 6px 10px;
+    margin-top: 4px; border-radius: 8px; cursor: pointer; border: 1px solid transparent;
+    background: transparent; color: var(--text-2); font-family: inherit;
+  }
+  .demo-switch button.on { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="backdrop-grid" id="bg-grid"></div>
+
+<div class="demo-switch">
+  <div class="t">弹窗状态预览</div>
+  <button id="sw-pass" class="on">✓ 通过</button>
+  <button id="sw-risk">⚠ 有提示（已导入）</button>
+  <button id="sw-block">✕ 已拦截（未安装）</button>
+  <button id="sw-miss">？ 检查不可用（草稿）</button>
+  <button id="sw-scan">◌ 检查中</button>
+</div>
+
+<div class="overlay">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script>
+  const ICONS = {
+    ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
+    warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
+    bad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>',
+    miss: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>',
+    scan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="42 14"/></svg>',
+  };
+
+  const STATES = {
+    pass: {
+      cls: 'ok', icon: 'ok', title: '安全检查通过', score: '评分 100',
+      desc: '已检查代码与指令内容：未发现危险模式、密钥或未声明的外发。技能已安装。',
+      findings: null,
+      surface: null,
+      foot: '<button class="btn primary">完成</button><button class="btn ghost">查看技能</button>',
+    },
+    risk: {
+      cls: 'warn', icon: 'warn', title: '已导入 · 有 3 项提示', score: '评分 60',
+      desc: '技能已安装，但发现以下内容值得留意。建议查看权限范围，或修改后重新检查。',
+      findings: `
+        <div class="findings">
+          <div class="finding"><span class="finding-dot medium"></span><span class="finding-text">向外部地址发送数据（数据会离开你的电脑）</span><span class="finding-loc">scripts/report.py</span></div>
+          <div class="finding"><span class="finding-dot medium"></span><span class="finding-text">以可写权限创建输出目录（chmod 777）</span><span class="finding-loc">scripts/prep.sh</span></div>
+          <div class="finding"><span class="finding-dot low"></span><span class="finding-text">缺少"何时不该触发"的说明</span><span class="finding-loc">SKILL.md</span></div>
+          <div class="findings-more">另有 2 项未显示</div>
+        </div>`,
+      surface: '<div class="surface"><span class="surface-chip">外发点 <b>2</b></span><span class="surface-chip">动态执行 <b>0</b></span><span class="surface-chip">持久化 <b>0</b></span></div>',
+      foot: '<button class="btn primary">保留</button><button class="btn">重新检查</button><div class="spacer"></div><button class="btn danger">删除</button>',
+    },
+    block: {
+      cls: 'bad', icon: 'bad', title: '未安装 · 已拦截', score: '评分 20',
+      desc: '发现高风险内容，导入已取消，你的现有技能未发生任何变化。此类问题不可强制安装。',
+      findings: `
+        <div class="findings">
+          <div class="finding"><span class="finding-dot extreme"></span><span class="finding-text">读取本地凭证文件（~/.ssh、~/.aws/credentials 等）</span><span class="finding-loc">scripts/run.sh</span></div>
+          <div class="finding"><span class="finding-dot extreme"></span><span class="finding-text">把本地文件内容发送到外部地址</span><span class="finding-loc">scripts/run.sh</span></div>
+        </div>`,
+      surface: '<div class="surface"><span class="surface-chip">外发点 <b>3</b></span><span class="surface-chip">动态执行 <b>0</b></span><span class="surface-chip">持久化 <b>0</b></span></div>',
+      foot: '<button class="btn primary">知道了</button><div class="spacer"></div><button class="btn ghost">导出脱敏报告</button>',
+    },
+    miss: {
+      cls: 'muted', icon: 'miss', title: '未能完成检查', score: '',
+      desc: '安全检查暂时不可用。内容已保留为草稿，不会安装、执行或加入正式技能。稍后可以重试。',
+      findings: null, surface: null,
+      foot: '<button class="btn primary">保留为草稿</button><button class="btn">重试检查</button>',
+    },
+    scan: {
+      cls: 'muted', icon: 'scan', title: '正在检查…', score: '',
+      desc: '正在扫描代码与指令内容（危险模式 · 密钥 · 外发）。通常几秒内完成。',
+      findings: null, surface: null,
+      foot: '<button class="btn ghost" disabled style="opacity:.5">请稍候…</button>',
+    },
+  };
+
+  const SOURCE = {
+    folder: '文件夹导入',
+    url: 'URL 导入',
+  };
+
+  function render(stateKey) {
+    const s = STATES[stateKey];
+    const srcLabel = document.getElementById('src-tag').dataset.src === 'url' ? SOURCE.url : SOURCE.folder;
+    document.getElementById('modal').innerHTML = `
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">导入检查结果</div>
+          <div class="modal-sub"><span>my-imported-skill</span><span class="src-badge">${srcLabel}</span></div>
+        </div>
+        <button class="modal-close" title="关闭">✕</button>
+      </div>
+      <div class="status ${s.cls}">
+        <div class="status-icon">${ICONS[s.icon]}</div>
+        <div class="status-main">
+          <div class="status-title">${s.title}${s.score ? `<span class="score-chip">${s.score}</span>` : ''}</div>
+          <div class="status-desc">${s.desc}</div>
+        </div>
+      </div>
+      ${s.surface || ''}
+      ${s.findings ? `<div class="findings-title">检查发现（不展示匹配到的原文）</div>${s.findings}` : ''}
+      <div class="modal-foot">${s.foot}</div>
+      <div class="modal-note">安全通过 ≠ 已验证有效。检查只说明内容与安全结论的对应关系。</div>`;
+    ['sw-pass','sw-risk','sw-block','sw-miss','sw-scan'].forEach((id) => {
+      document.getElementById(id).classList.toggle('on', id === 'sw-' + stateKey);
+    });
+  }
+
+  document.getElementById('sw-pass').onclick = () => render('pass');
+  document.getElementById('sw-risk').onclick = () => render('risk');
+  document.getElementById('sw-block').onclick = () => render('block');
+  document.getElementById('sw-miss').onclick = () => render('miss');
+  document.getElementById('sw-scan').onclick = () => render('scan');
+
+  // 背景网格 + 来源切换
+  const grid = document.getElementById('bg-grid');
+  for (let i = 0; i < 12; i += 1) {
+    const c = document.createElement('div');
+    c.className = 'bg-card';
+    grid.appendChild(c);
+  }
+  const srcTag = document.createElement('span');
+  srcTag.id = 'src-tag';
+  srcTag.dataset.src = 'folder';
+  document.body.appendChild(srcTag);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'u' || e.key === 'U') {
+      srcTag.dataset.src = srcTag.dataset.src === 'url' ? 'folder' : 'url';
+      render(document.querySelector('.demo-switch button.on').id.replace('sw-', ''));
+    }
+  });
+
+  render('pass');
+</script>
+</body>
+</html>

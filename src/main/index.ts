@@ -105,6 +105,7 @@ import {
   configureBootAdmission,
   noteBootUserActivity,
   registerDeferred,
+  registerImmediate,
   runBootPhases,
 } from './util/boot_init';
 import { getBootDeviceProfile } from './util/boot-device-profile';
@@ -155,6 +156,9 @@ setFetchImplementation((input, init) => net.fetch(input as Parameters<typeof net
 import { prompts } from './prompts/loader';
 import * as ipc from './ipc';
 import * as users from './features/users';
+import { maybeStartP3394Bridge, stopP3394Bridge, type P3394AppBridgeHandle } from './features/p3394_bridge/app-wiring';
+
+let p3394AppBridge: P3394AppBridgeHandle | null = null;
 import * as skillsFeature from './features/skills';
 import * as agentsFeature from './features/agents';
 import * as contextsFeature from './features/contexts';
@@ -175,7 +179,7 @@ import * as connectorsFeature from './features/connectors';
 import * as messagingFeature from './features/messaging';
 import * as taskNotifications from './features/task_notifications';
 import { recoverRecallCaptures, startRecallCaptureOrchestrator } from './features/recall/capture-service';
-import { startGroupKstarClosure } from './features/kstar/task-closure';
+import { startAutoCloseRecovery, startGroupKstarClosure } from './features/kstar/task-closure';
 import { startGroupChatRecallTerminalProofs } from './features/group_chat/recall-terminal-proof';
 import * as notificationPermissions from './features/notification_permissions';
 import {
@@ -224,7 +228,7 @@ function createWindow(): BrowserWindow {
       // preload sits next to index.ts in PC/src/main/ — just __dirname + 'preload.js'.
       preload: path.join(__dirname, 'preload.js'),
       devTools: dev,
-      additionalArguments: IS_PACKAGED_LAUNCH_SMOKE ? ['--orkas-packaged-launch-smoke'] : [],
+      additionalArguments: IS_PACKAGED_LAUNCH_SMOKE ? ['--cogseed-packaged-launch-smoke'] : [],
       // Enables Chromium's built-in PDF viewer (PDFium) inside iframes.
       // Required for `<iframe src="kb-file:///.../report.pdf">` in the KB
       // viewer. Has no effect on other plugin types since Electron strips
@@ -334,13 +338,13 @@ function openConversationFromTaskNotification(
 function registerIpc(): void {
   ipc.register();
 
-  ipcMain.handle('orkas.ping', () => {
+  ipcMain.handle('cogseed.ping', () => {
     return { ok: true, pong: 'pong', ts: storage.nowIso() };
   });
 
   if (IS_PACKAGED_LAUNCH_SMOKE) {
     let recorded = false;
-    ipcMain.handle('orkas.packagedLaunchSmokeReady', (event, payload) => {
+    ipcMain.handle('cogseed.packagedLaunchSmokeReady', (event, payload) => {
       if (recorded) return { ok: true };
       const owner = BrowserWindow.fromWebContents(event.sender);
       const readyState = String(payload?.rendererReadyState || '');
@@ -384,7 +388,7 @@ function registerIpc(): void {
     });
   }
 
-  ipcMain.handle('orkas.env', () => {
+  ipcMain.handle('cogseed.env', () => {
     const systemVersion = osVersion();
     const platform = desktopPlatform();
     const buildIdentity = resolveBuildIdentity({
@@ -415,7 +419,7 @@ function registerIpc(): void {
     // crashes immediately due to missing packages. The worktree-locked
     // launcher owns runtime selection and bundle preparation; here we only
     // detach-spawn it and exit so the instance lock can be released.
-    ipcMain.handle('orkas.relaunch', () => {
+    ipcMain.handle('cogseed.relaunch', () => {
       const isWin = process.platform === 'win32';
       const script = path.join(paths.PC_ROOT, isWin ? 'run.cmd' : 'run.sh');
       const [cmd, args] = isWin
@@ -451,7 +455,7 @@ function registerIpc(): void {
   // an async round-trip schedules a microtask, paint slips through. Only
   // the active language + fallback cross this synchronous boundary;
   // other locale tables load asynchronously if the user switches language.
-  ipcMain.on('orkas:bootI18n', (event) => {
+  const handleBootI18n = (event) => {
     try {
       const lang = appConfig.getLanguage();
       event.returnValue = { ok: true, lang, tables: getRendererBootTables(lang) };
@@ -459,14 +463,16 @@ function registerIpc(): void {
       log.warn('bootI18n failed', { error: (err as Error)?.message });
       event.returnValue = { ok: false };
     }
-  });
+  };
+  ipcMain.on('cogseed:bootI18n', handleBootI18n);
+  ipcMain.on('orkas:bootI18n', handleBootI18n);
 
   // Renderer reports throttled keyboard/pointer/wheel activity. Background
   // boot work uses this only as an admission hint; no interaction payload is
   // collected or persisted.
-  ipcMain.on('orkas.userActivity', () => noteBootUserActivity());
+  ipcMain.on('cogseed.userActivity', () => noteBootUserActivity());
 
-  ipcMain.handle('orkas.diagnostics', async () => {
+  ipcMain.handle('cogseed.diagnostics', async () => {
     const sample = {
       nowIso: storage.nowIso(),
       uid: storage.genUserId(),
@@ -1140,8 +1146,15 @@ if (!gotLock) {
     app.once('before-quit', stopRecallCapture);
     const stopGroupKstarClosure = startGroupKstarClosure();
     app.once('before-quit', stopGroupKstarClosure);
+    const stopAutoCloseRecovery = startAutoCloseRecovery();
+    app.once('before-quit', stopAutoCloseRecovery);
     const stopGroupChatRecallTerminalProofs = startGroupChatRecallTerminalProofs();
     app.once('before-quit', stopGroupChatRecallTerminalProofs);
+    app.once('before-quit', () => {
+      void stopP3394Bridge().catch(() => {});
+      // 受管 P3394 外接网关：应用退出时一并停止（桥下线后它们已无回发目标）。
+      void import('./features/p3394_bridge/external-gateways').then((m) => m.stopAllExternalGateways()).catch(() => {});
+    });
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
       ipc.broadcastToRenderer('client-config:changed', { keys });
     });
@@ -1173,6 +1186,18 @@ if (!gotLock) {
       preferIdle: true,
       maxSliceMs: 20_000,
     });
+    // P3394 bridge (opt-in): starts a loopback HTTP channel bound to the real
+    // runtime controller when COGSEED_P3394_PORT is set; no-op otherwise.
+    registerImmediate('p3394:bridge', () => {
+      void maybeStartP3394Bridge().then((handle) => { p3394AppBridge = handle; });
+    }, 'serial');
+    registerImmediate('skills:version-recovery', async () => {
+      const { recoverSkillVersionMutations } = await import('./features/skills/version-mutation-service');
+      const result = await recoverSkillVersionMutations(users.getActiveUserId());
+      if (result.finalized || result.restored || result.removed) {
+        log.info('skill version mutation recovery complete', result);
+      }
+    }, 'serial');
     createWindow();
     await consumeColdLaunchConnectorCallback();
 
@@ -1222,6 +1247,31 @@ if (!gotLock) {
     });
     registerDeferred('marketplace:reconcile', () => runMarketplaceInstallReconcile('startup'));
 
+    // Heal cc-switch providers synced before the auto-bind fix: bind the first
+    // declared model of each synced provider to an entry so chat dispatch can
+    // actually use it (pickChatEntry walks entries only). Cheap and idempotent.
+    registerDeferred('auth:ccswitch-bind-entries', async () => {
+      const uid = users.getActiveUserId();
+      // CC Switch providers are user-controlled: never auto-bind them back on
+      // boot. Doing so resurrects deleted model entries and defeats the
+      // no-model → CLI fallback. The user enables CC Switch providers
+      // explicitly in settings; entries are bound at that point.
+      void uid;
+    });
+
+    // 修正 33a16ad 之前 promote 出来的资产：lifecycleStatus 说「用户已确认」，
+    // maturity 却归在 seed（候选档）。那个矛盾会让它们永远进不了任何 Agent，
+    // 而 seed→bud 没有别的路径。幂等，修完就空转。
+    registerDeferred('recall:correct-seed-maturity', async () => {
+      const { correctMisfiledSeedMaturity } = await import('./features/recall/asset-service');
+      await correctMisfiledSeedMaturity(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // 2026-08-15 UI 优化：旧 KStar 线资产带英文技术标题（'Reusable experience
+    // lesson (requirement-level)' 等），迁移为中文可读。幂等，修完空转。
+    registerDeferred('recall:migrate-legacy-titles', async () => {
+      const { migrateLegacyUserFacingTitles } = await import('./features/recall/asset-service');
+      await migrateLegacyUserFacingTitles(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('kb:reconcile', async (signal) => {
@@ -1259,22 +1309,7 @@ if (!gotLock) {
       if (uid) await recoverRecallCaptures(uid);
     }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
 
-    // p3394 KSTAR boot health check: degraded-schema detection + pending
-    // evidence replay. Runs after the heavy-disk cohort so the KB and
-    // marketplace walks get priority; Engine adapter acquisition here is a
-    // best-effort attempt — any failure is swallowed and the log stays
-    // intact for the next successful boot.
-    registerDeferred('p3394:kstar-health', async () => {
-      const uid = users.getActiveUserId();
-      if (!uid) return;
-      const { runKstarBootRecovery } = await import('./features/p3394/kstar-recovery');
-      const { getKstarAdapter } = await import('./features/p3394/kstar-factory');
-      await runKstarBootRecovery(uid, async () => {
-        const adapter = await getKstarAdapter(uid);
-        if (!adapter?.isAvailable()) return null;
-        return (evidence) => adapter.recordEvidence(evidence as Parameters<typeof adapter.recordEvidence>[0]);
-      });
-    }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
+
 
     // Drive the immediate batch + schedule the deferred one.
     void runBootPhases(BOOT_BACKGROUND_DEFER_MS);

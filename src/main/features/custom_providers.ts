@@ -19,10 +19,17 @@
  */
 
 import {
+  createCustomProviderEntry,
+  DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+  DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
   loadCustomProviders,
-  removeEntriesForProvider,
-  saveCustomProviders,
+  MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+  MAX_CUSTOM_PROVIDER_MAX_TOKENS,
+  MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH,
+  MAX_CUSTOM_PROVIDER_MODELS,
+  mutateCustomProviders,
   type CustomProvider,
+  type CustomProviderModel,
 } from './auth';
 import { createLogger } from '../logger';
 
@@ -30,12 +37,17 @@ const log = createLogger('custom-providers');
 
 export type CustomProviderProtocol = CustomProvider['protocol'];
 
-const PROTOCOLS: readonly CustomProviderProtocol[] = ['anthropic', 'openai', 'gemini'];
+const PROTOCOLS: readonly CustomProviderProtocol[] = ['anthropic', 'openai', 'openai-responses', 'gemini'];
 
 let _idCounter = 0;
-function nextCustomProviderId(): string {
-  _idCounter = (_idCounter + 1) % 100000;
-  return `cp-${Date.now().toString(36)}-${_idCounter}`;
+function nextCustomProviderId(existing: readonly CustomProvider[]): string {
+  const used = new Set(existing.map((provider) => provider.id));
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    _idCounter = (_idCounter + 1) % 100000;
+    const id = `cp-${Date.now().toString(36)}-${_idCounter}`;
+    if (!used.has(id)) return id;
+  }
+  throw new Error('could not allocate custom provider id');
 }
 
 function sanitizeName(input: string): string {
@@ -63,9 +75,8 @@ function normalizeBaseUrl(raw: string): string | null {
 }
 
 function normalizeProtocol(raw: unknown): CustomProviderProtocol {
-  return PROTOCOLS.includes(raw as CustomProviderProtocol)
-    ? (raw as CustomProviderProtocol)
-    : 'anthropic';
+  if (!PROTOCOLS.includes(raw as CustomProviderProtocol)) throw new Error('invalid protocol');
+  return raw as CustomProviderProtocol;
 }
 
 function normalizeWebsiteUrl(raw: string | undefined): string | undefined {
@@ -80,13 +91,81 @@ function normalizeWebsiteUrl(raw: string | undefined): string | undefined {
   }
 }
 
-function normalizeModels(models: unknown): string[] | undefined {
-  if (!Array.isArray(models)) return undefined;
-  const out = models
-    .map((m) => String(m || '').trim())
-    .filter(Boolean)
-    .slice(0, 100);
-  return out.length ? out : undefined;
+function normalizePositiveSafeInteger(
+  value: unknown,
+  field: 'contextWindow' | 'maxTokens',
+  fallback: number,
+  max: number,
+): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > max) {
+    throw new Error(`${field} must be a positive safe integer at most ${max}`);
+  }
+  return value as number;
+}
+
+function normalizeModel(
+  raw: unknown,
+  fallback?: CustomProviderModel,
+): CustomProviderModel {
+  const value = typeof raw === 'string' ? { id: raw } : raw;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('model must be an object or string id');
+  const candidate = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown };
+  if (typeof candidate.id !== 'string') throw new Error('model id required');
+  const id = candidate.id.trim();
+  if (!id) throw new Error('model id required');
+  if (id.length > MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH) {
+    throw new Error(`model id must be at most ${MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH} characters`);
+  }
+  const contextWindow = normalizePositiveSafeInteger(
+    candidate.contextWindow,
+    'contextWindow',
+    fallback?.contextWindow ?? DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+    MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+  );
+  const maxTokens = normalizePositiveSafeInteger(
+    candidate.maxTokens,
+    'maxTokens',
+    fallback?.maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+    MAX_CUSTOM_PROVIDER_MAX_TOKENS,
+  );
+  if (maxTokens > contextWindow) throw new Error('maxTokens must not exceed contextWindow');
+  return { id, contextWindow, maxTokens };
+}
+
+function normalizeModels(models: unknown): CustomProviderModel[] {
+  if (models === undefined) return [];
+  if (!Array.isArray(models)) throw new Error('models must be an array');
+  if (models.length > MAX_CUSTOM_PROVIDER_MODELS) {
+    throw new Error(`models must contain at most ${MAX_CUSTOM_PROVIDER_MODELS} items`);
+  }
+  const out: CustomProviderModel[] = [];
+  const seen = new Set<string>();
+  for (const raw of models) {
+    const model = normalizeModel(raw);
+    if (seen.has(model.id)) continue;
+    seen.add(model.id);
+    out.push(model);
+  }
+  return out;
+}
+
+function normalizeProviderId(raw: unknown): string {
+  const id = typeof raw === 'string' ? raw.trim() : '';
+  if (!id || id.length > 120) throw new Error('invalid provider id');
+  return id;
+}
+
+function removeProviderModelEntries(
+  entries: import('./auth').CustomProviderEntry[],
+  syntheticProviderId: string,
+  modelId?: string,
+): void {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    const belongs = entry.provider === syntheticProviderId || entry.profileId === syntheticProviderId;
+    if (belongs && (modelId === undefined || entry.model === modelId)) entries.splice(index, 1);
+  }
 }
 
 export function listCustomProviders(userId: string): CustomProvider[] {
@@ -109,36 +188,55 @@ export interface AddCustomProviderInput {
 export function addCustomProvider(
   userId: string,
   input: AddCustomProviderInput,
+  position: 'front' | 'back' = 'front',
 ): { ok: true; id: string } | { ok: false; error: string } {
-  const name = sanitizeName(input.name || '');
-  const baseUrl = normalizeBaseUrl(input.baseUrl || '');
-  const apiKey = String(input.apiKey || '').trim();
+  const name = sanitizeName(input?.name || '');
+  const baseUrl = normalizeBaseUrl(input?.baseUrl || '');
+  const apiKey = String(input?.apiKey || '').trim();
 
   if (!name) return { ok: false, error: 'name required' };
   if (!baseUrl) return { ok: false, error: 'baseUrl required (http(s)://...)' };
   if (!apiKey) return { ok: false, error: 'apiKey required' };
 
-  const models = normalizeModels(input.models);
-  const provider: CustomProvider = {
-    id: nextCustomProviderId(),
-    name,
-    protocol: normalizeProtocol(input.protocol),
-    baseUrl,
-    apiKey,
-    ...(sanitizeNote(input.notes) ? { notes: sanitizeNote(input.notes) } : {}),
-    ...(normalizeWebsiteUrl(input.websiteUrl) ? { websiteUrl: normalizeWebsiteUrl(input.websiteUrl) } : {}),
-    ...(input.needsModelMapping ? { needsModelMapping: true } : {}),
-    ...(models ? { models } : {}),
-    source: input.source === 'ccswitch' ? 'ccswitch' : 'manual',
-    ...(input.externalId ? { externalId: String(input.externalId) } : {}),
-    createdAt: Date.now(),
-  };
-
-  const list = listCustomProviders(userId);
-  list.unshift(provider);
-  saveCustomProviders(userId, list);
-  log.info('custom provider added', { id: provider.id, protocol: provider.protocol, source: provider.source });
-  return { ok: true, id: provider.id };
+  let protocol: CustomProviderProtocol;
+  let models: CustomProviderModel[];
+  try {
+    protocol = normalizeProtocol(input.protocol);
+    models = normalizeModels(input.models);
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  const id = mutateCustomProviders(userId, ({ customProviders, entries }) => {
+    const provider: CustomProvider = {
+      id: nextCustomProviderId(customProviders),
+      name,
+      protocol,
+      baseUrl,
+      apiKey,
+      enabled: true,
+      ...(sanitizeNote(input.notes) ? { notes: sanitizeNote(input.notes) } : {}),
+      ...(normalizeWebsiteUrl(input.websiteUrl) ? { websiteUrl: normalizeWebsiteUrl(input.websiteUrl) } : {}),
+      ...(input.needsModelMapping ? { needsModelMapping: true } : {}),
+      models,
+      source: input.source === 'ccswitch' ? 'ccswitch' : 'manual',
+      ...(input.externalId ? { externalId: String(input.externalId).trim().slice(0, 160) } : {}),
+      createdAt: Date.now(),
+    };
+    // `front` keeps the existing "newest provider becomes the primary chat
+    // entry" behaviour; `back` appends so a later "connect & store" CLI does
+    // not steal the primary slot from the first connected one (it becomes a
+    // fallback instead — chat dispatch walks entries in order).
+    if (position === 'back') {
+      customProviders.push(provider);
+      if (models[0]) entries.push(createCustomProviderEntry(provider.id, models[0].id));
+    } else {
+      customProviders.unshift(provider);
+      if (models[0]) entries.unshift(createCustomProviderEntry(provider.id, models[0].id));
+    }
+    return provider.id;
+  });
+  log.info('custom provider added', { id, protocol, source: input.source === 'ccswitch' ? 'ccswitch' : 'manual' });
+  return { ok: true, id };
 }
 
 export interface UpdateCustomProviderInput {
@@ -157,8 +255,11 @@ export function updateCustomProvider(
   id: string,
   input: UpdateCustomProviderInput,
 ): { ok: true } | { ok: false; error: string } {
+  let providerId: string;
+  try { providerId = normalizeProviderId(id); }
+  catch (error) { return { ok: false, error: (error as Error).message }; }
   const list = listCustomProviders(userId);
-  const idx = list.findIndex((p) => p.id === id);
+  const idx = list.findIndex((p) => p.id === providerId);
   if (idx < 0) return { ok: false, error: 'not found' };
   const prev = list[idx];
 
@@ -175,35 +276,204 @@ export function updateCustomProvider(
   const apiKey = String(input.apiKey || '').trim() || prev.apiKey;
   if (!apiKey) return { ok: false, error: 'apiKey required' };
 
-  const models = input.models !== undefined ? normalizeModels(input.models) : prev.models;
+  let protocol = prev.protocol;
+  let models = prev.models;
+  try {
+    if (input.protocol !== undefined) protocol = normalizeProtocol(input.protocol);
+    if (input.models !== undefined) models = normalizeModels(input.models);
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
 
-  list[idx] = {
-    ...prev,
-    name,
-    protocol: input.protocol !== undefined ? normalizeProtocol(input.protocol) : prev.protocol,
-    baseUrl,
-    apiKey,
-    notes: input.notes !== undefined ? sanitizeNote(input.notes) : prev.notes,
-    websiteUrl: input.websiteUrl !== undefined ? normalizeWebsiteUrl(input.websiteUrl) : prev.websiteUrl,
-    needsModelMapping: input.needsModelMapping !== undefined ? !!input.needsModelMapping : prev.needsModelMapping,
-    models,
-    // A real key was supplied → the row is no longer "needs key".
-    ...(apiKey ? { needsKey: false } : {}),
-    updatedAt: Date.now(),
-  };
-  saveCustomProviders(userId, list);
-  log.info('custom provider updated', { id });
+  mutateCustomProviders(userId, ({ customProviders, entries }) => {
+    const target = customProviders.find((provider) => provider.id === providerId);
+    if (!target) throw new Error('custom provider not found during update');
+    Object.assign(target, {
+      name,
+      protocol,
+      baseUrl,
+      apiKey,
+      notes: input.notes !== undefined ? sanitizeNote(input.notes) : target.notes,
+      websiteUrl: input.websiteUrl !== undefined ? normalizeWebsiteUrl(input.websiteUrl) : target.websiteUrl,
+      needsModelMapping: input.needsModelMapping !== undefined ? !!input.needsModelMapping : target.needsModelMapping,
+      models,
+      needsKey: false,
+      updatedAt: Date.now(),
+    });
+    if (input.models !== undefined) {
+      const retained = new Set(models.map((model) => model.id));
+      const synthetic = `cp:${providerId}`;
+      for (let entryIndex = entries.length - 1; entryIndex >= 0; entryIndex--) {
+        const entry = entries[entryIndex];
+        if ((entry.provider === synthetic || entry.profileId === synthetic) && !retained.has(entry.model)) {
+          entries.splice(entryIndex, 1);
+        }
+      }
+    }
+  });
+  log.info('custom provider updated', { id: providerId });
   return { ok: true };
 }
 
 export function removeCustomProvider(userId: string, id: string): { ok: boolean } {
-  const list = listCustomProviders(userId);
-  const next = list.filter((p) => p.id !== id);
-  if (next.length === list.length) return { ok: false };
-  saveCustomProviders(userId, next);
-  removeEntriesForProvider(userId, `cp:${id}`);
-  log.info('custom provider removed', { id });
+  let providerId: string;
+  try { providerId = normalizeProviderId(id); }
+  catch { return { ok: false }; }
+  const exists = listCustomProviders(userId).some((provider) => provider.id === providerId);
+  if (!exists) return { ok: false };
+  mutateCustomProviders(userId, ({ customProviders, entries }) => {
+    const index = customProviders.findIndex((provider) => provider.id === providerId);
+    if (index < 0) throw new Error('custom provider not found during remove');
+    customProviders.splice(index, 1);
+    removeProviderModelEntries(entries, `cp:${providerId}`);
+  });
+  log.info('custom provider removed', { id: providerId });
   return { ok: true };
+}
+
+export function setCustomProviderEnabled(
+  userId: string,
+  id: string,
+  enabled: boolean,
+): { ok: true; enabled: boolean } | { ok: false; error: string } {
+  let providerId: string;
+  try { providerId = normalizeProviderId(id); }
+  catch (error) { return { ok: false, error: (error as Error).message }; }
+  if (typeof enabled !== 'boolean') return { ok: false, error: 'enabled must be boolean' };
+  if (!listCustomProviders(userId).some((provider) => provider.id === providerId)) {
+    return { ok: false, error: 'not found' };
+  }
+  mutateCustomProviders(userId, ({ customProviders }) => {
+    const provider = customProviders.find((candidate) => candidate.id === providerId);
+    if (!provider) throw new Error('custom provider not found during enable update');
+    provider.enabled = enabled;
+    provider.updatedAt = Date.now();
+  });
+  log.info('custom provider enabled state changed', { id: providerId, enabled });
+  return { ok: true, enabled };
+}
+
+export function addCustomProviderModel(
+  userId: string,
+  id: string,
+  input: unknown,
+): { ok: true; model: CustomProviderModel } | { ok: false; error: string } {
+  let providerId: string;
+  let model: CustomProviderModel;
+  try {
+    providerId = normalizeProviderId(id);
+    model = normalizeModel(input);
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  const provider = listCustomProviders(userId).find((candidate) => candidate.id === providerId);
+  if (!provider) return { ok: false, error: 'not found' };
+  if (provider.models.some((candidate) => candidate.id === model.id)) return { ok: false, error: 'model already exists' };
+  if (provider.models.length >= MAX_CUSTOM_PROVIDER_MODELS) {
+    return { ok: false, error: `models must contain at most ${MAX_CUSTOM_PROVIDER_MODELS} items` };
+  }
+  mutateCustomProviders(userId, ({ customProviders }) => {
+    const target = customProviders.find((candidate) => candidate.id === providerId);
+    if (!target) throw new Error('custom provider not found during model add');
+    target.models.push(model);
+    target.updatedAt = Date.now();
+  });
+  return { ok: true, model };
+}
+
+export function updateCustomProviderModel(
+  userId: string,
+  id: string,
+  modelId: string,
+  input: unknown,
+): { ok: true; model: CustomProviderModel } | { ok: false; error: string } {
+  let providerId: string;
+  let previousId: string;
+  try {
+    providerId = normalizeProviderId(id);
+    previousId = normalizeModel({ id: modelId }).id;
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  const provider = listCustomProviders(userId).find((candidate) => candidate.id === providerId);
+  if (!provider) return { ok: false, error: 'not found' };
+  const previous = provider.models.find((candidate) => candidate.id === previousId);
+  if (!previous) return { ok: false, error: 'model not found' };
+  let model: CustomProviderModel;
+  try { model = normalizeModel(input, previous); }
+  catch (error) { return { ok: false, error: (error as Error).message }; }
+  if (model.id !== previousId && provider.models.some((candidate) => candidate.id === model.id)) {
+    return { ok: false, error: 'model already exists' };
+  }
+  mutateCustomProviders(userId, ({ customProviders, entries }) => {
+    const target = customProviders.find((candidate) => candidate.id === providerId);
+    const modelIndex = target?.models.findIndex((candidate) => candidate.id === previousId) ?? -1;
+    if (!target || modelIndex < 0) throw new Error('custom provider model not found during update');
+    target.models[modelIndex] = model;
+    target.updatedAt = Date.now();
+    if (model.id !== previousId) {
+      const synthetic = `cp:${providerId}`;
+      for (const entry of entries) {
+        if ((entry.provider === synthetic || entry.profileId === synthetic) && entry.model === previousId) {
+          entry.model = model.id;
+        }
+      }
+    }
+  });
+  return { ok: true, model };
+}
+
+export function removeCustomProviderModel(
+  userId: string,
+  id: string,
+  modelId: string,
+): { ok: true; removed: true } | { ok: false; error: string } {
+  let providerId: string;
+  let targetModelId: string;
+  try {
+    providerId = normalizeProviderId(id);
+    targetModelId = normalizeModel({ id: modelId }).id;
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  const provider = listCustomProviders(userId).find((candidate) => candidate.id === providerId);
+  if (!provider) return { ok: false, error: 'not found' };
+  if (!provider.models.some((candidate) => candidate.id === targetModelId)) return { ok: false, error: 'model not found' };
+  mutateCustomProviders(userId, ({ customProviders, entries }) => {
+    const target = customProviders.find((candidate) => candidate.id === providerId);
+    const modelIndex = target?.models.findIndex((candidate) => candidate.id === targetModelId) ?? -1;
+    if (!target || modelIndex < 0) throw new Error('custom provider model not found during remove');
+    target.models.splice(modelIndex, 1);
+    target.updatedAt = Date.now();
+    removeProviderModelEntries(entries, `cp:${providerId}`, targetModelId);
+  });
+  return { ok: true, removed: true };
+}
+
+export async function testCustomProviderModel(
+  userId: string,
+  id: string,
+  modelId: string,
+): Promise<import('./auth').TestConnectionResult> {
+  let providerId: string;
+  let targetModelId: string;
+  try {
+    providerId = normalizeProviderId(id);
+    targetModelId = normalizeModel({ id: modelId }).id;
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  const provider = listCustomProviders(userId).find((candidate) => candidate.id === providerId);
+  if (!provider) return { ok: false, error: 'not found' };
+  if (!provider.models.some((candidate) => candidate.id === targetModelId)) return { ok: false, error: 'model not found' };
+  const auth = await import('./auth');
+  return auth.testAuthorizationDraft(userId, {
+    kind: 'custom_api_key',
+    protocol: provider.protocol,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    model: targetModelId,
+  });
 }
 
 /** Preset protocol choices for the add form's dialect selector. */
@@ -222,6 +492,7 @@ export interface CcSwitchSyncResult {
   reason?: string;
   added: number;
   updated: number;
+  bound: number;
   total: number;
 }
 
@@ -235,80 +506,167 @@ export interface CcSwitchSyncResult {
  * (the user-confirmed subset from the preview). When omitted, all importable
  * CC Switch providers are synced — used by the "re-sync" action.
  */
-export function syncFromCcSwitch(userId: string, selectedExternalIds?: string[], home?: string): CcSwitchSyncResult {
+export async function syncFromCcSwitch(
+  userId: string,
+  selectedExternalIds?: string[],
+  home?: string,
+  modelsByExternalId?: Record<string, string[]>,
+  baseUrlsByExternalId?: Record<string, string>,
+): Promise<CcSwitchSyncResult> {
   // Lazy require to keep better-sqlite3 out of the module load path for
   // callers that never import from CC Switch.
   const { readCcSwitchImportItems } = require('./ccswitch_import') as typeof import('./ccswitch_import');
   const res = readCcSwitchImportItems(home);
-  if (!res.ok) return { ok: false, reason: (res as { reason: string }).reason, added: 0, updated: 0, total: 0 };
+  if (!res.ok) return { ok: false, reason: (res as { reason: string }).reason, added: 0, updated: 0, bound: 0, total: 0 };
 
-  const wanted = selectedExternalIds && selectedExternalIds.length
-    ? new Set(selectedExternalIds)
-    : null;
+  const wanted = selectedExternalIds === undefined ? null : new Set(selectedExternalIds);
   const items = res.items.filter((it) => !wanted || wanted.has(it.externalId));
 
-  const list = listCustomProviders(userId);
   let added = 0;
   let updated = 0;
-
-  for (const it of items) {
-    // Validate base URL through the same http(s) gate as manual adds.
-    const baseUrl = normalizeBaseUrl(it.baseUrl);
-    if (!baseUrl) continue;
-    const apiKey = it.apiKey || '';
-    const needsKey = !apiKey || !!it.needsKey;
-
-    const existingIdx = list.findIndex((p) => p.source === 'ccswitch' && p.externalId === it.externalId);
-    if (existingIdx >= 0) {
-      const prev = list[existingIdx];
-      list[existingIdx] = {
-        ...prev,
-        name: it.name || prev.name,
-        protocol: it.protocol,
-        baseUrl,
-        // Never overwrite a user-supplied key with an empty import. If CC
-        // Switch still has no key but the user already filled one in, keep it.
-        apiKey: apiKey || prev.apiKey,
-        notes: it.notes ?? prev.notes,
-        websiteUrl: it.websiteUrl ?? prev.websiteUrl,
-        models: it.models?.length ? it.models : prev.models,
-        ...(apiKey || prev.apiKey ? { needsKey: false } : { needsKey: true }),
-        updatedAt: Date.now(),
-      };
-      updated++;
-    } else {
-      list.unshift({
-        id: nextCustomProviderId(),
-        name: it.name,
-        protocol: it.protocol,
-        baseUrl,
-        apiKey,
-        ...(it.notes ? { notes: it.notes } : {}),
-        ...(it.websiteUrl ? { websiteUrl: it.websiteUrl } : {}),
-        ...(it.models?.length ? { models: it.models } : {}),
-        source: 'ccswitch',
-        externalId: it.externalId,
-        ...(needsKey ? { needsKey: true } : {}),
-        createdAt: Date.now(),
-      });
-      added++;
-    }
+  let bound = 0;
+  if (items.length) {
+    mutateCustomProviders(userId, ({ customProviders, entries }) => {
+      for (const it of items) {
+        // Prefer the live-probed api base (fixes bare-host base_urls).
+        const baseUrl = normalizeBaseUrl(baseUrlsByExternalId?.[it.externalId] || it.baseUrl);
+        if (!baseUrl) continue;
+        const apiKey = String(it.apiKey || '').trim();
+        const needsKey = !apiKey || !!it.needsKey;
+        // Prefer the live-probed model list (passed from the preview step);
+        // fall back to the config hints when probing wasn't possible.
+        const importedModels = normalizeModels(modelsByExternalId?.[it.externalId] || it.models || []);
+        const existing = customProviders.find((provider) => provider.source === 'ccswitch' && provider.externalId === it.externalId);
+        let provider: CustomProvider;
+        if (existing) {
+          const existingMetadata = new Map(existing.models.map((model) => [model.id, model]));
+          const mergedModels = importedModels.length
+            ? importedModels.map((model) => existingMetadata.get(model.id) || model)
+            : existing.models;
+          Object.assign(existing, {
+            name: it.name || existing.name,
+            protocol: it.protocol,
+            baseUrl,
+            apiKey: apiKey || existing.apiKey,
+            notes: it.notes ?? existing.notes,
+            websiteUrl: it.websiteUrl ?? existing.websiteUrl,
+            models: mergedModels,
+            needsKey: !(apiKey || existing.apiKey),
+            updatedAt: Date.now(),
+          });
+          provider = existing;
+          updated++;
+        } else {
+          provider = {
+            id: nextCustomProviderId(customProviders),
+            name: it.name,
+            protocol: it.protocol,
+            baseUrl,
+            apiKey,
+            enabled: true,
+            ...(it.notes ? { notes: it.notes } : {}),
+            ...(it.websiteUrl ? { websiteUrl: it.websiteUrl } : {}),
+            models: importedModels,
+            source: 'ccswitch',
+            externalId: it.externalId,
+            ...(needsKey ? { needsKey: true } : {}),
+            createdAt: Date.now(),
+          };
+          // Append, never unshift: a later connect & store (or re-sync) must
+          // not move CC Switch models ahead of the primary `cli:active`
+          // provider that the first connect & store established.
+          customProviders.push(provider);
+          added++;
+        }
+        if (!provider.apiKey || !provider.models[0]) continue;
+        const synthetic = `cp:${provider.id}`;
+        const exists = entries.some((entry) => entry.provider === synthetic
+          && entry.profileId === synthetic
+          && entry.model === provider.models[0].id);
+        if (!exists) {
+          // Append (see the provider insertion above): keep primary order stable.
+          entries.push(createCustomProviderEntry(provider.id, provider.models[0].id));
+          bound++;
+        }
+      }
+    });
   }
 
-  if (added || updated) saveCustomProviders(userId, list);
-  log.info('cc-switch sync done', { added, updated, total: items.length });
-  return { ok: true, added, updated, total: items.length };
+  log.info('cc-switch sync done', { added, updated, bound, total: items.length });
+  return { ok: true, added, updated, bound, total: items.length };
+}
+
+/**
+ * Bind the first declared model of every synced CC Switch provider to an
+ * entry, so chat dispatch (pickChatEntry — which walks `store.entries` only)
+ * can actually use it. A synced provider without a bound entry is invisible
+ * to chat even though the UI said "connected". Idempotent via addEntry's
+ * dedupe; providers without a declared model list are left unbound (we never
+ * guess a model name). Runs on every sync AND at boot (via boot_init) so
+ * providers synced before this fix heal themselves without a manual re-sync.
+ */
+export async function ensureCcSwitchBoundEntries(userId: string): Promise<number> {
+  let bound = 0;
+  const needsRepair = listCustomProviders(userId).some((provider) => provider.source === 'ccswitch'
+    && !!provider.apiKey
+    && !!provider.models[0]);
+  if (!needsRepair) return 0;
+  mutateCustomProviders(userId, ({ customProviders, entries }) => {
+    for (const provider of customProviders) {
+      if (provider.source !== 'ccswitch' || !provider.apiKey || !provider.models[0]) continue;
+      const synthetic = `cp:${provider.id}`;
+      const exists = entries.some((entry) => entry.provider === synthetic
+        && entry.profileId === synthetic
+        && entry.model === provider.models[0].id);
+      if (exists) continue;
+      // Append (see syncFromCcSwitch): boot-time repair must not reorder
+      // existing primary/fallback slots established by connect & store.
+      entries.push(createCustomProviderEntry(provider.id, provider.models[0].id));
+      bound++;
+    }
+  });
+  return bound;
 }
 
 /** Preview importable CC Switch providers (no write). apiKey is masked by the
  *  IPC layer before reaching the renderer. */
-export function previewCcSwitchImport(userId: string):
+export async function previewCcSwitchImport(userId: string): Promise<
   | { ok: true; items: import('./ccswitch_import').CcSwitchImportItem[]; skipped: import('./ccswitch_import').CcSwitchSkippedItem[] }
-  | { ok: false; reason: string } {
-  const { readCcSwitchImportItems } = require('./ccswitch_import') as typeof import('./ccswitch_import');
+  | { ok: false; reason: string }
+> {
+  const { readCcSwitchImportItems, probeProviderModels } = require('./ccswitch_import') as typeof import('./ccswitch_import');
   void userId;
   const res = readCcSwitchImportItems();
   if (!res.ok) return { ok: false, reason: (res as { reason: string }).reason };
+  // Group rows by (protocol, baseUrl, apiKey): endpoints that share the same
+  // URL + key point at the same backend, so one real probe covers all of
+  // them (config model hints can be wrong/stale and are only a fallback).
+  const groups = new Map<string, import('./ccswitch_import').CcSwitchImportItem[]>();
+  for (const item of res.items) {
+    const key = item.protocol + '\u0000' + item.baseUrl + '\u0000' + (item.apiKey || '');
+    const list = groups.get(key);
+    if (list) list.push(item);
+    else groups.set(key, [item]);
+  }
+  const groupResults = await Promise.all([...groups.values()].map(async (group) => {
+    const first = group[0];
+    return { group, probe: await probeProviderModels(first.protocol, first.baseUrl, first.apiKey) };
+  }));
+  for (const { group, probe } of groupResults) {
+    for (const item of group) {
+      if (probe.ok) {
+        item.models = probe.models;
+        item.modelsProbe = true;
+        // Pin the real API base discovered by the probe (CC Switch configs
+        // often store a bare host without the /v1 segment).
+        if (probe.baseUrl) item.baseUrl = probe.baseUrl;
+      } else {
+        // Probe failed (offline / unsupported endpoint / bad key): keep the
+        // config hints and mark them as unverified in the UI.
+        item.modelsProbe = false;
+      }
+    }
+  }
   return { ok: true, items: res.items, skipped: res.skipped };
 }
 

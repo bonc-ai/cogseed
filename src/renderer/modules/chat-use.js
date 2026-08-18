@@ -5,7 +5,7 @@
 // the source of truth, so native selection / IME / undo keep working while the
 // send path can expand tokens into localized plain text.
 
-const _chatUse = { 'new-chat': null, 'conversation': null, project: null, auto: null };
+const _chatUse = { 'new-chat': null, 'conversation': null, auto: null };
 const _CHAT_USE_TOKEN_OPEN = '@{';
 const _CHAT_USE_TOKEN_KINDS = new Set(['skill', 'connector']);
 const _CHAT_USE_TOKEN_START = '\u2063';
@@ -24,7 +24,7 @@ function bindSkillPicker() {
       if (chip) setChatUseSelection(chip.dataset.target, null);
     });
   });
-  ['new-chat-input', 'chat-input', 'project-chat-input', 'auto-task-input'].forEach((id) => {
+  ['new-chat-input', 'chat-input', 'auto-task-input'].forEach((id) => {
     const input = document.getElementById(id);
     if (!input || input.dataset.chatUseTokenBound === '1') return;
     input.dataset.chatUseTokenBound = '1';
@@ -67,13 +67,13 @@ function _normalizeChatUseSelections(value) {
 function _chatUseInputForTarget(target) {
   const id = target === 'new-chat'
     ? 'new-chat-input'
-    : (target === 'project' ? 'project-chat-input' : (target === 'auto' ? 'auto-task-input' : 'chat-input'));
+    : (target === 'auto' ? 'auto-task-input' : 'chat-input');
   return document.getElementById(id);
 }
 
 function _chatUseAutoGrowMax(target) {
   if (target === 'auto') return 220;
-  return target === 'new-chat' ? 260 : (target === 'project' ? 180 : 200);
+  return target === 'new-chat' ? 260 : 200;
 }
 
 function _escapeChatUseTokenValue(value) {
@@ -350,9 +350,7 @@ function _renderChatUseChipLabel(labelEl, selection) {
 function _renderChatUseChip(target) {
   if (target === 'auto') return;
   const next = _normalizeChatUseSelection(_chatUse[target]);
-  const chipId = target === 'new-chat'
-    ? 'new-chat-skill-chip'
-    : (target === 'project' ? 'project-chat-skill-chip' : 'chat-skill-chip');
+  const chipId = target === 'new-chat' ? 'new-chat-skill-chip' : 'chat-skill-chip';
   const chip = document.getElementById(chipId);
   if (!chip) return;
   if (!next) {
@@ -376,7 +374,6 @@ function _renderChatUseChip(target) {
 function refreshChatUseChips() {
   _renderChatUseChip('new-chat');
   _renderChatUseChip('conversation');
-  _renderChatUseChip('project');
 }
 
 function isChatUseAllowedForTarget(target, kind) {
@@ -507,7 +504,7 @@ function setChatUseSelection(target, selection, opts = {}) {
   if (opts && opts.focus === false) return;
   const input = target === 'new-chat'
     ? document.getElementById('new-chat-input')
-    : (target === 'project' ? document.getElementById('project-chat-input') : (target === 'auto' ? document.getElementById('auto-task-input') : document.getElementById('chat-input')));
+    : (target === 'auto' ? document.getElementById('auto-task-input') : document.getElementById('chat-input'));
   if (typeof focusChatRichComposer === 'function' && focusChatRichComposer(input)) return;
   input?.focus();
 }
@@ -590,8 +587,8 @@ function transformChatUseTokens(content) {
  *  一句提示文本，避免拼出一个空洞的"请参考：''"。 */
 async function _fetchOntologyGroupContent(groupId) {
   try {
-    if (!window.orkas || typeof window.orkas.invoke !== 'function') return '';
-    const res = await window.orkas.invoke('personalOntology.groups.read', { groupId });
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return '';
+    const res = await window.cogseed.invoke('personalOntology.groups.read', { groupId });
     return (res && res.ok !== false && typeof res.content === 'string') ? res.content : '';
   } catch (err) {
     console.warn('[chat-use] failed to read ontology group content', groupId, err);
@@ -646,9 +643,9 @@ async function transformChatUseTokensAsync(content) {
 
 /**
  * 异步版 transformWithChatUse——发送前的转换入口，供 conversation.js/
- * queue-draft.js/project-detail.js 的三处发送调用点用。旧的同步
+ * queue-draft.js 的发送调用点用。旧的同步
  * `transformWithChatUse` 继续保留给不涉及本体分组的调用点（display/mirror/
- * title-seed），三处真正发送的入口需要改成 await 这个异步版本。
+ * title-seed），发送入口需要改成 await 这个异步版本。
  */
 async function transformWithChatUseAsync(content, selection) {
   let out = await transformChatUseTokensAsync(content);
@@ -751,7 +748,7 @@ function _deleteChatUseTokenAtCaret(input, direction) {
   try { input.setSelectionRange(start, start); } catch (_) {}
   const target = input.id === 'new-chat-input'
     ? 'new-chat'
-    : (input.id === 'project-chat-input' ? 'project' : (input.id === 'auto-task-input' ? 'auto' : 'conversation'));
+    : (input.id === 'auto-task-input' ? 'auto' : 'conversation');
   _chatUseDispatchInput(input, target);
   return true;
 }

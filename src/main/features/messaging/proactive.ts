@@ -11,9 +11,12 @@
  */
 
 import { createLogger } from '../../logger';
+import { t } from '../../i18n';
 import * as manager from './manager';
 import * as registry from './registry';
 import type { MessagingInstanceClient } from './types';
+import type { TouchpointRouteScene } from '../touchpoints/types';
+import { resolveTouchpointInstanceId } from '../touchpoints/config';
 import {
   requestSendConfirm,
 } from './proactive-confirm';
@@ -135,11 +138,61 @@ function error(code: ProactiveErrorCode, message: string, candidates?: string[])
   return { status: 'error', code, message, ...(candidates ? { candidates } : {}) };
 }
 
+/** Resolve the send target for a proactive self-send: pick the instance
+ * (explicit id or the single available one), validate availability, and
+ * resolve the owner open id. Shared by text and file sends. */
+async function resolveSelfTarget(
+  uid: string,
+  instanceId: string | undefined,
+  scene: TouchpointRouteScene,
+): Promise<
+  | { ok: true; chosen: ProactiveTargetView; ownerExternalUserId: string }
+  | { ok: false; result: ProactiveSendResult }
+> {
+  const { targets, available_instance_ids: availableIds } = await listTargets(uid);
+  const configuredInstanceId = await resolveTouchpointInstanceId(uid, scene, instanceId);
+  let chosen = targets.find((target) => target.instance_id === configuredInstanceId);
+  if (configuredInstanceId !== undefined) {
+    if (!chosen) {
+      return { ok: false, result: error('E_MESSAGING_INSTANCE_UNAVAILABLE', 'unknown messaging instance') };
+    }
+    if (chosen.status !== 'available') {
+      if (chosen.status === 'owner_missing') {
+        return { ok: false, result: error('E_MESSAGING_OWNER_MISSING', 'this bot has no owner identity configured') };
+      }
+      return { ok: false, result: error('E_MESSAGING_INSTANCE_UNAVAILABLE', `this bot is not available (${chosen.status})`) };
+    }
+  } else {
+    if (!availableIds.length) {
+      if (!targets.length) {
+        return { ok: false, result: error('E_MESSAGING_TARGET_UNAVAILABLE', 'no Feishu/Lark or WeChat bot is configured') };
+      }
+      if (targets.some((target) => target.status === 'owner_missing')) {
+        return { ok: false, result: error('E_MESSAGING_OWNER_MISSING', 'no configured bot has an owner identity') };
+      }
+      return { ok: false, result: error('E_MESSAGING_INSTANCE_UNAVAILABLE', 'no configured bot is connected') };
+    }
+    if (availableIds.length > 1) {
+      return { ok: false, result: error('E_MESSAGING_TARGET_AMBIGUOUS', 'multiple bots are available; choose instance_id', availableIds) };
+    }
+    chosen = targets.find((target) => target.instance_id === availableIds[0]);
+  }
+  if (!chosen) {
+    return { ok: false, result: error('E_MESSAGING_INSTANCE_UNAVAILABLE', 'selected bot disappeared') };
+  }
+
+  const instance = await registry.getInstance(uid, chosen.instance_id);
+  if (!instance?.ownerExternalUserId) {
+    return { ok: false, result: error('E_MESSAGING_OWNER_MISSING', 'this bot has no owner identity configured') };
+  }
+  return { ok: true, chosen, ownerExternalUserId: instance.ownerExternalUserId };
+}
+
 /** Confirm and send `text` to the configured owner of one Feishu or WeChat
  * instance. */
 export async function sendToSelf(
   uid: string,
-  input: { instance_id?: string; target: string; text: string },
+  input: { instance_id?: string; target: string; text: string; scene?: TouchpointRouteScene },
   opts: { cid: string; sourceKey: string; signal?: AbortSignal | null },
 ): Promise<ProactiveSendResult> {
   if (input.target !== 'self') {
@@ -150,46 +203,14 @@ export async function sendToSelf(
     return error('E_MESSAGING_INVALID_INPUT', `text is required and at most ${MAX_PROACTIVE_TEXT_LENGTH} characters`);
   }
 
-  const { targets, available_instance_ids: availableIds } = await listTargets(uid);
-  let chosen = targets.find((target) => target.instance_id === input.instance_id);
-  if (input.instance_id !== undefined) {
-    if (!chosen) {
-      return error('E_MESSAGING_INSTANCE_UNAVAILABLE', 'unknown messaging instance');
-    }
-    if (chosen.status !== 'available') {
-      if (chosen.status === 'owner_missing') {
-        return error('E_MESSAGING_OWNER_MISSING', 'this bot has no owner identity configured');
-      }
-      return error('E_MESSAGING_INSTANCE_UNAVAILABLE', `this bot is not available (${chosen.status})`);
-    }
-  } else {
-    if (!availableIds.length) {
-      if (!targets.length) {
-        return error('E_MESSAGING_TARGET_UNAVAILABLE', 'no Feishu/Lark or WeChat bot is configured');
-      }
-      if (targets.some((target) => target.status === 'owner_missing')) {
-        return error('E_MESSAGING_OWNER_MISSING', 'no configured bot has an owner identity');
-      }
-      return error('E_MESSAGING_INSTANCE_UNAVAILABLE', 'no configured bot is connected');
-    }
-    if (availableIds.length > 1) {
-      return error('E_MESSAGING_TARGET_AMBIGUOUS', 'multiple bots are available; choose instance_id', availableIds);
-    }
-    chosen = targets.find((target) => target.instance_id === availableIds[0]);
-  }
-  if (!chosen) {
-    return error('E_MESSAGING_INSTANCE_UNAVAILABLE', 'selected bot disappeared');
-  }
-
-  const instance = await registry.getInstance(uid, chosen.instance_id);
-  if (!instance?.ownerExternalUserId) {
-    return error('E_MESSAGING_OWNER_MISSING', 'this bot has no owner identity configured');
-  }
+  const resolved = await resolveSelfTarget(uid, input.instance_id, input.scene || 'external_send');
+  if (resolved.ok === false) return resolved.result;
+  const { chosen, ownerExternalUserId } = resolved;
 
   const verdict = await requestSendConfirm({
     cid: opts.cid,
     instanceName: chosen.display_name,
-    ownerLabel: chosen.owner_label || '本人',
+    ownerLabel: chosen.owner_label || t('messaging.owner_label_self'),
     text,
     signal: opts.signal ?? null,
   });
@@ -205,7 +226,7 @@ export async function sendToSelf(
   try {
     const { entry } = await manager.sendProactive(uid, {
       instanceId: chosen.instance_id,
-      recipientId: instance.ownerExternalUserId,
+      recipientId: ownerExternalUserId,
       text,
       sourceKey: opts.sourceKey,
       signal: opts.signal ?? null,
@@ -227,6 +248,71 @@ export async function sendToSelf(
     }
     const message = err instanceof Error ? err.message : String(err);
     log.warn('proactive send failed after approval', { instanceId: chosen.instance_id, error: message });
+    return error('E_MESSAGING_DELIVERY_FAILED', message);
+  }
+}
+
+/** Confirm and send a local file to the configured owner of one Feishu or
+ * WeChat instance. The confirmation dialog shows the file name as the
+ * message text. */
+export async function sendFileToSelf(
+  uid: string,
+  input: { instance_id?: string; file_path: string; file_name?: string; scene?: TouchpointRouteScene },
+  opts: { cid: string; sourceKey: string; signal?: AbortSignal | null },
+): Promise<ProactiveSendResult> {
+  const filePath = typeof input.file_path === 'string' && input.file_path.trim() ? input.file_path.trim() : '';
+  if (!filePath) {
+    return error('E_MESSAGING_INVALID_INPUT', 'file_path is required');
+  }
+  const fileName = typeof input.file_name === 'string' && input.file_name.trim()
+    ? input.file_name.trim().slice(0, 240)
+    : filePath.split('/').pop() || 'file';
+
+  const resolved = await resolveSelfTarget(uid, input.instance_id, input.scene || 'external_send');
+  if (resolved.ok === false) return resolved.result;
+  const { chosen, ownerExternalUserId } = resolved;
+
+  const text = `[文件] ${fileName}`;
+  const verdict = await requestSendConfirm({
+    cid: opts.cid,
+    instanceName: chosen.display_name,
+    ownerLabel: chosen.owner_label || t('messaging.owner_label_self'),
+    text,
+    signal: opts.signal ?? null,
+  });
+  if (verdict !== 'approved') {
+    const reason = verdict === 'aborted' ? 'aborted'
+      : verdict === 'denied' ? 'denied'
+        : verdict === 'timed_out' ? 'timed_out'
+          : 'no_renderer';
+    log.info('proactive file send declined before delivery', { reason, instanceId: chosen.instance_id });
+    return { status: 'not_sent', reason };
+  }
+
+  try {
+    const { entry } = await manager.sendProactiveFile(uid, {
+      instanceId: chosen.instance_id,
+      recipientId: ownerExternalUserId,
+      filePath,
+      fileName,
+      sourceKey: opts.sourceKey,
+      signal: opts.signal ?? null,
+    });
+    return {
+      status: 'sent',
+      instance_id: chosen.instance_id,
+      ...(chosen.owner_label ? { owner_label: chosen.owner_label } : {}),
+      text_length: text.length,
+      attempts: entry.attempts,
+      ...(entry.externalDeliveryId ? { delivery_id: entry.externalDeliveryId } : {}),
+    };
+  } catch (err) {
+    if (opts.signal?.aborted || (err instanceof Error && err.name === 'AbortError')) {
+      log.info('proactive file send aborted mid-delivery', { instanceId: chosen.instance_id });
+      return { status: 'not_sent', reason: 'aborted' };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn('proactive file send failed after approval', { instanceId: chosen.instance_id, error: message });
     return error('E_MESSAGING_DELIVERY_FAILED', message);
   }
 }

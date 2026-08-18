@@ -24,12 +24,12 @@ const installRoot = require('../../src/main/install-data-root.cjs') as {
   resolveVariantContainer: (base: string, variant: string) => string;
 };
 const packageMeta = require('../../package.json') as { orkasSourceRuntimeVariant?: string };
-const SOURCE_VARIANT = 'mate';
+const SOURCE_VARIANT = 'cogseed';
 
 describe('runtime variant isolation', () => {
   it('locks every direct source entry to this worktree identity', () => {
-    expect(RUNTIME_VARIANTS).toEqual(['main', 'cognition', 'expense', 'mate', 'messaging', 'optimization']);
-    expect(installRoot.SOURCE_RUNTIME_VARIANTS).toEqual(['cognition', 'expense', 'mate', 'messaging', 'optimization']);
+    expect(RUNTIME_VARIANTS).toEqual(['main', 'cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
+    expect(installRoot.SOURCE_RUNTIME_VARIANTS).toEqual(['cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
     expect(packageMeta.orkasSourceRuntimeVariant).toBe(SOURCE_VARIANT);
     expect(installRoot.selectRuntimeVariant({ sourceVariant: SOURCE_VARIANT }))
       .toBe(SOURCE_VARIANT);
@@ -72,13 +72,16 @@ describe('runtime variant isolation', () => {
   });
 
   it('rejects inherited workspace roots outside controlled packaged-dev verification', () => {
+    const previousCogseedRoot = process.env.COGSEED_WORKSPACE_ROOT;
+    const previousCogseedContainer = process.env.COGSEED_RUNTIME_CONTAINER;
     const previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
     const previousContainer = process.env.ORKAS_RUNTIME_CONTAINER;
     const injectedRoot = path.join('/tmp', 'mate-runtime-injected-root');
     try {
-      process.env.ORKAS_WORKSPACE_ROOT = injectedRoot;
+      process.env.COGSEED_WORKSPACE_ROOT = injectedRoot;
+      delete process.env.ORKAS_WORKSPACE_ROOT;
       expect(() => installRoot.initializeInstallDataRoot(SOURCE_VARIANT))
-        .toThrow(/inherited ORKAS_WORKSPACE_ROOT is not allowed/);
+        .toThrow(/inherited (?:COGSEED|ORKAS)_WORKSPACE_ROOT is not allowed/);
       expect(installRoot.initializeInstallDataRoot(SOURCE_VARIANT, {
         allowWorkspaceOverride: true,
       })).toMatchObject({
@@ -86,7 +89,15 @@ describe('runtime variant isolation', () => {
         workspaceRoot: path.resolve(injectedRoot),
         overridden: true,
       });
+      expect(process.env.COGSEED_WORKSPACE_ROOT).toBe(path.resolve(injectedRoot));
+      expect(process.env.ORKAS_WORKSPACE_ROOT).toBe(path.resolve(injectedRoot));
+      expect(process.env.COGSEED_RUNTIME_CONTAINER).toBe(path.dirname(path.resolve(injectedRoot)));
+      expect(process.env.ORKAS_RUNTIME_CONTAINER).toBe(path.dirname(path.resolve(injectedRoot)));
     } finally {
+      if (previousCogseedRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+      else process.env.COGSEED_WORKSPACE_ROOT = previousCogseedRoot;
+      if (previousCogseedContainer === undefined) delete process.env.COGSEED_RUNTIME_CONTAINER;
+      else process.env.COGSEED_RUNTIME_CONTAINER = previousCogseedContainer;
       if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
       else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
       if (previousContainer === undefined) delete process.env.ORKAS_RUNTIME_CONTAINER;
@@ -105,7 +116,7 @@ describe('runtime variant isolation', () => {
     expect(new Set(identities.map((identity) => identity.appName)).size).toBe(RUNTIME_VARIANTS.length);
     expect(new Set(identities.map((identity) => identity.appId)).size).toBe(RUNTIME_VARIANTS.length);
     expect(identities.filter((identity) => identity.protocolOwner).map((identity) => identity.variant))
-      .toEqual(['mate']);
+      .toEqual(['cogseed']);
   });
 
   it('keeps the packaged identity stable and grants it protocol ownership', () => {
@@ -115,6 +126,6 @@ describe('runtime variant isolation', () => {
       appId: APP_BRAND.appId,
       protocolOwner: true,
     });
-    expect(() => resolveRuntimeIdentity(true, 'mate')).toThrow(/only supports the main/);
+    expect(() => resolveRuntimeIdentity(true, 'cogseed')).toThrow(/only supports the main/);
   });
 });

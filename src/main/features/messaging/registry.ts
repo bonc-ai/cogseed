@@ -256,10 +256,10 @@ function normalizePolicy(input?: Partial<MessagingPolicy>, strict = false): Mess
 function normalizeWorkspace(input?: WorkspaceScope): WorkspaceScope {
   if (!input || input.type === 'default') return { type: 'default' };
   if (input.type === 'all') return { type: 'all' };
-  if (input.type !== 'project' || !input.projectId || !safeId(input.projectId)) {
+  if (input.type !== 'space' || !input.spaceId || !safeId(input.spaceId)) {
     throw new Error('invalid workspace scope');
   }
-  return { type: 'project', projectId: input.projectId };
+  return { type: 'space', spaceId: input.spaceId };
 }
 
 function normalizeResponseMode(
@@ -439,11 +439,18 @@ function toClient(instance: MessagingInstanceDisk, hasCredentials: boolean): Mes
     ...metadata
   } = instance;
   const ownerConfigured = Boolean(ownerExternalUserId);
+  // Without a friendly name the client DTO gets a masked id (ou_ab12…cd34)
+  // instead of nothing, so the renderer can confirm who is bound without
+  // ever exposing the full open id.
+  const ownerMaskedId = ownerConfigured && ownerExternalUserId.length > 11
+    ? `${ownerExternalUserId.slice(0, 7)}…${ownerExternalUserId.slice(-4)}`
+    : undefined;
   return {
     ...metadata,
     hasCredentials,
     ownerConfigured,
     ...(ownerConfigured && ownerExternalUserName ? { ownerLabel: ownerExternalUserName } : {}),
+    ...(ownerConfigured && !ownerExternalUserName && ownerMaskedId ? { ownerMaskedId } : {}),
     ...(ownerConfigured && ownerIdentitySource ? { ownerIdentitySource } : {}),
   };
 }

@@ -9,11 +9,20 @@ const AGENT = 'helper';
 
 let tmpDir: string;
 let prevWs: string | undefined;
+const sourceRemovalCalls: Array<{ userId: string; conversationId: string; artifactIds: string[] }> = [];
+
+vi.mock('../../../src/main/features/recall/source-removal', () => ({
+  recordRemovedArtifacts: async (userId: string, conversationId: string, artifactIds: string[]) => {
+    sourceRemovalCalls.push({ userId, conversationId, artifactIds });
+    return { removedSourceIds: artifactIds, failedSourceIds: [] };
+  },
+}));
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-chatart-'));
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  sourceRemovalCalls.length = 0;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(UID);
@@ -44,7 +53,7 @@ describe('chat_artifacts › createArtifact', () => {
     expect(r.title).toBe('Tip calc');
     const dir = path.join(cidDir(), r.artifactId);
     expect(fs.readFileSync(path.join(dir, 'index.html'), 'utf8')).toContain('<h1>hi</h1>');
-    const meta = JSON.parse(fs.readFileSync(path.join(dir, '__orkas-meta.json'), 'utf8'));
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, '__cogseed-meta.json'), 'utf8'));
     expect(meta.title).toBe('Tip calc');
     expect(meta.agentId).toBe(AGENT);
     expect(typeof meta.createdAt).toBe('string');
@@ -154,10 +163,10 @@ describe('chat_artifacts › createArtifact', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('rejects: reserved __orkas-meta.json / __orkas/ paths', async () => {
+  it('rejects: reserved __cogseed-meta.json / __orkas/ paths', async () => {
     const m = await loadMod();
-    expect((m.createArtifact(UID, CID, AGENT, { files: [{ path: 'index.html', content: 'x' }, { path: '__orkas-meta.json', content: '{}' }] }) as { ok: boolean }).ok).toBe(false);
-    expect((m.createArtifact(UID, CID, AGENT, { files: [{ path: 'index.html', content: 'x' }, { path: '__orkas/bridge.js', content: 'x' }] }) as { ok: boolean }).ok).toBe(false);
+    expect((m.createArtifact(UID, CID, AGENT, { files: [{ path: 'index.html', content: 'x' }, { path: '__cogseed-meta.json', content: '{}' }] }) as { ok: boolean }).ok).toBe(false);
+    expect((m.createArtifact(UID, CID, AGENT, { files: [{ path: 'index.html', content: 'x' }, { path: '__cogseed/bridge.js', content: 'x' }] }) as { ok: boolean }).ok).toBe(false);
   });
 
   it('rejects: disallowed extension', async () => {
@@ -321,13 +330,50 @@ describe('chat_artifacts › resolveArtifactFilePath', () => {
 describe('chat_artifacts › purgeByCid', () => {
   it('removes the whole chat_artifacts/<cid>/ tree', async () => {
     const m = await loadMod();
-    expect(m.createArtifact(UID, CID, AGENT, { files: MIN_FILES }).ok).toBe(true);
-    expect(m.createArtifact(UID, CID, AGENT, { files: MIN_FILES }).ok).toBe(true);
+    const first = m.createArtifact(UID, CID, AGENT, { files: MIN_FILES });
+    const second = m.createArtifact(UID, CID, AGENT, { files: MIN_FILES });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
     expect(fs.existsSync(cidDir())).toBe(true);
     const n = await m.purgeByCid(UID, CID);
     expect(n).toBe(2);
     expect(fs.existsSync(cidDir())).toBe(false);
+    expect(sourceRemovalCalls).toEqual([{
+      userId: UID,
+      conversationId: CID,
+      artifactIds: expect.arrayContaining([
+        first.ok ? first.artifactId : '',
+        second.ok ? second.artifactId : '',
+      ]),
+    }]);
     // Idempotent.
     expect(await m.purgeByCid(UID, CID)).toBe(0);
+    expect(sourceRemovalCalls).toHaveLength(1);
+  });
+
+  it('does not record artifact source removal when filesystem deletion fails', async () => {
+    vi.doMock('node:fs', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('node:fs')>();
+      return {
+        ...actual,
+        rmSync: (target: fs.PathLike, options?: fs.RmDirOptions) => {
+          if (path.resolve(String(target)) === path.resolve(cidDir())) {
+            throw new Error('delete failed');
+          }
+          return actual.rmSync(target, options);
+        },
+      };
+    });
+
+    try {
+      const m = await loadMod();
+      expect(m.createArtifact(UID, CID, AGENT, { files: MIN_FILES }).ok).toBe(true);
+      await expect(m.purgeByCid(UID, CID)).resolves.toBe(0);
+      expect(sourceRemovalCalls).toEqual([]);
+      expect(fs.existsSync(cidDir())).toBe(true);
+    } finally {
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
   });
 });

@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "skill_id": "skill.cogseed.generic.social-data",
+  "schema_version": "nseap.skill-contract/1.0",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "task_id",
+      "owner_context",
+      "task_payload"
+    ],
+    "properties": {
+      "task_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "owner_context": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "owner_id",
+          "role",
+          "authorization_scope"
+        ],
+        "properties": {
+          "owner_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "authorization_scope": {
+            "type": "string"
+          }
+        }
+      },
+      "task_payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "actions",
+      "result",
+      "trace",
+      "audit_refs"
+    ],
+    "properties": {
+      "actions": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "result": {
+        "type": [
+          "string",
+          "object",
+          "null"
+        ]
+      },
+      "trace": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "audit_refs": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "runtime_contracts": {
+    "resource": {
+      "resource_requirements": [
+        {
+          "resource_type": "social-data-task-material",
+          "operation": "read",
+          "purpose": "ontology_grounded_read",
+          "min_scope": true
+        }
+      ],
+      "access_via_gateway_only": true,
+      "direct_resource_access": false
+    },
+    "permission": {
+      "permissions": [
+        {
+          "action": "assess",
+          "permission_level": "read",
+          "hitl_required": false
+        },
+        {
+          "action": "propose_candidate",
+          "permission_level": "write",
+          "hitl_required": true
+        }
+      ],
+      "explicit_user_approval_required": [
+        "propose_candidate"
+      ]
+    },
+    "owner_binding": {
+      "required_owner_sections": [
+        "role",
+        "authorization_scope"
+      ],
+      "owner_context_ref": "input_schema.owner_context",
+      "binding_resolved_by": "agent_layer"
+    },
+    "audit": {
+      "audit_refs_field": "output_schema.audit_refs",
+      "emitted_by": "runtime",
+      "append_only": true
+    },
+    "boundary": {
+      "staged_ceiling": true,
+      "production_release_allowed": false
+    }
+  }
+}

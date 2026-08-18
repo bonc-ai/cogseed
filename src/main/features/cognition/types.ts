@@ -1,8 +1,45 @@
-export type CognitionCandidateSource = 'personal_ontology' | 'p3394_experience';
+import type { RecallAbilityAssetScopePolicy } from '../recall/scope-policy';
+
+export type CognitionCandidateSource = 'personal_ontology';
 export type CognitionCandidateType = 'preference' | 'ontology' | 'rule' | 'experience' | 'skill_evolution';
 export type CognitionCandidateStatus = 'pending' | 'accepted' | 'deferred' | 'rejected';
 
-export type CognitionCandidateAction = 'source' | 'accept' | 'reject' | 'open_personal_ontology' | 'import_to_recall';
+// Union merged across both sides: develop added `modify`/`defer`, this branch
+// added `deep_review`. Dropping either would silently disable an action the
+// renderer already emits.
+export type CognitionCandidateAction = 'source' | 'accept' | 'modify' | 'defer'
+  | 'reject' | 'deep_review' | 'open_personal_ontology' | 'import_to_recall';
+
+/**
+ * Security / admission status — the axis that answers "is this safe to admit".
+ *
+ * Deliberately separate from `CognitionAssetMaturity`, which answers "has this
+ * proven useful". The security spec requires the two never be collapsed into a
+ * single "已通过": a candidate can be safe but useless, or desirable but
+ * malicious. UI must render them as distinct fields.
+ *
+ * `unknown` is a first-class state, not a synonym for `pass`: it means no scan
+ * is on record (or the scanner was unavailable). Reporting it as `pass` would
+ * tell the user content was checked when it wasn't.
+ */
+export type CognitionSecurityStatus = 'pass' | 'risk' | 'blocked' | 'unknown';
+
+/** Compact projection of a gate decision, sized for list rendering. */
+export interface CognitionSecurityView {
+  status: CognitionSecurityStatus;
+  /** Total findings across both layers. */
+  findingCount: number;
+  /** Highest-severity rule id, for a one-line explanation. */
+  topRule?: string;
+  /** Whether the semantic (agent) layer contributed to this verdict. */
+  semanticReviewed: boolean;
+  /**
+   * Set when the semantic layer was expected but unavailable. The status is
+   * still authoritative (the deterministic layer ran), but callers should
+   * surface "deep review unavailable" rather than implying a full pass.
+   */
+  degradedReason?: string;
+}
 
 export interface CognitionRelationRef {
   type: 'skill' | 'knowledge' | 'ontology' | 'evaluation' | 'conversation' | 'execution' | 'memory' | 'receipt';
@@ -30,6 +67,13 @@ export interface CognitionCandidateView {
   skillId?: string;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * Deterministic admission status, computed at list time for display.
+   *
+   * Display only — it is recomputed at accept time. A renderer must never be
+   * able to admit a candidate by claiming it already passed.
+   */
+  security?: CognitionSecurityView;
   raw?: unknown;
 }
 
@@ -57,25 +101,70 @@ export interface CognitionReuseReceiptView {
 }
 
 export type CognitionAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
+// 与 RecallAbilityAssetRecord 的治理状态保持同步，另加展示层特有的 `candidate`
+// ——候选还没 promote 成资产，在资产侧没有对应状态。
+// PRD 3.6 的成熟度阶梯顶到 effectiveness_validated。曾经多出的 'stable' 档
+// 从未被任何代码写入（setAbilityAssetMaturity 只写 transfer_validated 与
+// effectiveness_validated），是个到不了的状态，已移除。
 export type CognitionAssetMaturity = 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
-export type CognitionAssetStatus = 'active' | 'paused' | 'revoked' | 'candidate';
+export type CognitionAssetStatus =
+  | 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked' | 'candidate';
+
+export interface CognitionRecallSkillDraftSummary {
+  draftHash: string;
+  fileCount: number;
+  workflowSteps: string[];
+  validationOk: boolean;
+  mode?: 'install' | 'upgrade';
+  reviewDecision?: 'deferred' | 'rejected' | 'accepted';
+  targetSkillId?: string;
+  baseRevisionId?: string;
+  baseManifestHash?: string;
+  diffSummary?: {
+    added: number;
+    modified: number;
+    deleted: number;
+    unchanged: number;
+  };
+  recallContext?: {
+    assetCount: number;
+    sourceCount: number;
+  };
+}
 
 export interface CognitionAssetSummary {
   id: string;
   type: CognitionAssetType;
   title: string;
+  summary?: string;
   source: string;
+  lifecycleStatus?: 'user_confirmed_unverified' | 'automatically_extracted_unverified' | 'system_precipitated_unverified';
   version?: string;
   status?: CognitionAssetStatus | string;
   enabled?: boolean;
   category: CognitionAssetType;
+  /** Maturity axis: has this proven useful. Never conflate with `security`. */
   maturity: CognitionAssetMaturity;
+  /**
+   * Security axis: is this safe to use. Independent of `maturity` — an asset
+   * can be `effectiveness_validated` and later become `blocked` when the
+   * ruleset is updated, without losing its maturity history.
+   */
+  security?: CognitionSecurityView;
   owner: string;
   scope: string;
+  scopePolicy?: RecallAbilityAssetScopePolicy;
+  recommendedAction?: 'pause' | 'rework';
+  recommendationReason?: string;
+  recommendationAt?: string;
   workspaceRefs: string[];
   receiptRefs: string[];
   candidateRefs: string[];
   baselineSkillRef?: string;
+  generatedSkillId?: string;
+  recallSkillDraftStatus?: 'failed' | 'draft';
+  recallSkillDraftErrorCode?: string;
+  recallSkillDraft?: CognitionRecallSkillDraftSummary;
   relationRefs: CognitionRelationRef[];
   candidateCount: number;
   reuseCount: number;
@@ -84,19 +173,53 @@ export interface CognitionAssetSummary {
 
 export interface CognitionSkillVersionSummary {
   version: string;
+  revisionId?: string;
+  parentRevisionId?: string;
   at: string;
   note?: string;
   runId?: string;
+  operation?: 'install' | 'upgrade' | 'manual_edit' | 'rollback' | 'migration';
+  manifestHash?: string;
+  rollbackScope?: 'full_tree' | 'skill_md_only';
+  restoredFromVersion?: string;
+  sourceAssetId?: string;
+  sourceAssetVersion?: string;
+  securityOutcome?: 'pass' | 'restricted' | 'unknown';
   canRollback: boolean;
+}
+
+export interface CognitionSkillRollbackPreview {
+  skillId: string;
+  currentVersion?: string;
+  currentRevisionId?: string;
+  currentManifestHash?: string;
+  targetVersion: string;
+  targetRevisionId?: string;
+  targetManifestHash?: string;
+  nextVersion?: string;
+  rollbackScope: 'full_tree' | 'skill_md_only';
+  diff?: import('../skills/version-diff').SkillTreeDiff;
 }
 
 export interface SkillCognitionSummary {
   skillId: string;
   version?: string;
+  currentRevisionId?: string;
+  currentManifestHash?: string;
+  installedAssetVersion?: string;
+  sourceAssetId?: string;
   baselineStatus: 'available' | 'unversioned';
   pendingCandidateCount: number;
   recentReceipts: CognitionReuseReceiptView[];
   versions: CognitionSkillVersionSummary[];
+}
+
+export interface CognitionSkillMigrationAudit {
+  boundSkillCount: number;
+  fullTreeVersionCount: number;
+  legacyVersionCount: number;
+  legacyOrphanSkillCount: number;
+  unversionedBoundSkillCount: number;
 }
 
 export interface CognitionDashboard {

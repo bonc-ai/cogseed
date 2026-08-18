@@ -14,6 +14,8 @@
     noticeKind: '',
     loading: false,
     updating: false,
+    touchpointConfig: null,
+    routingLoadError: '',
     bound: false,
     initialized: false,
     operation: 0,
@@ -31,6 +33,10 @@
       error: '',
       timer: null,
     },
+    // 扫码绑定成功后的回调地址引导卡（一次性配置，飞书平台不允许程序化
+    // 修改重定向 URL，只能引导用户在开发者后台手动完成）。
+    setupGuide: null,
+    setupGuideDismissed: false,
     wecom: {
       flowId: '',
       state: '',
@@ -40,6 +46,9 @@
       cancelling: false,
       revision: 0,
       timer: null,
+      // 连续轮询网络错误计数：超过阈值即停止轮询并报错，
+      // 而不是弹窗关闭后仍无限重试（旧行为）。
+      pollErrorCount: 0,
     },
     wechat: {
       flowId: '',
@@ -51,6 +60,7 @@
       cancelling: false,
       revision: 0,
       timer: null,
+      pollErrorCount: 0,
     },
   };
 
@@ -67,6 +77,10 @@
     { key: 'dingtalk', platform: 'dingtalk', icon: 'dingtalk', group: 'soon' },
     { key: 'discord', platform: 'discord', icon: 'discord', group: 'soon' },
   ]);
+  const ROUTING_SCENES = Object.freeze(['external_send', 'task_approval', 'daily_briefing']);
+
+  // 轮询连续网络错误上限：超过后停止轮询并提示，避免弹窗已关闭还无限重试。
+  const MAX_POLL_ERRORS = 5;
 
   const QR_TERMINAL_STATES = new Set(['completed', 'cancelled', 'expired', 'denied', 'failed']);
   const WECHAT_TERMINAL_STATES = new Set(['completed', 'cancelled', 'expired', 'blocked', 'failed']);
@@ -84,11 +98,22 @@
     failed: 'messaging.feishu_qr.status_failed',
   });
 
+  /** Plain-language hints per main-process registration error code. */
+  const FEISHU_QR_ERROR_HINTS = Object.freeze({
+    network_error: 'messaging.feishu_qr.error_network_error',
+    network_unreachable: 'messaging.feishu_qr.error_network_unreachable',
+    network_timeout: 'messaging.feishu_qr.error_network_timeout',
+    network_tls: 'messaging.feishu_qr.error_network_tls',
+    registration_failed: 'messaging.feishu_qr.error_registration_failed',
+    invalid_response: 'messaging.feishu_qr.error_invalid_response',
+    activation_failed: 'messaging.feishu_qr.error_activation_failed',
+  });
+
   function invoke(channel, payload) {
-    if (!window.orkas || typeof window.orkas.invoke !== 'function') {
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
       return Promise.reject(new Error('IPC unavailable'));
     }
-    return window.orkas.invoke(channel, payload || {});
+    return window.cogseed.invoke(channel, payload || {});
   }
 
   // Commander-driven proactive send: main pushes a `messaging:send-confirm`
@@ -128,9 +153,9 @@
     })();
   }
 
-  if (window.orkas && typeof window.orkas.onPushEvent === 'function') {
+  if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
     try {
-      window.orkas.onPushEvent('messaging:send-confirm', (info) => {
+      window.cogseed.onPushEvent('messaging:send-confirm', (info) => {
         if (!info || typeof info.request_id !== 'string') return;
         _sendConfirmQueue.push(info);
         _drainSendConfirmQueue();
@@ -187,7 +212,9 @@
   }
 
   function currentInstance() {
-    return state.instances.find((instance) => instance.id === state.selectedInstanceId) || null;
+    const selected = state.instances.find((instance) => instance.id === state.selectedInstanceId);
+    if (selected) return selected;
+    return primaryInstance(channelForKey(state.selectedChannel));
   }
 
   function instancesForChannel(channel) {
@@ -195,6 +222,33 @@
     return state.instances
       .filter((instance) => channelForInstance(instance) === channel.key)
       .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+  }
+
+  function primaryInstance(channel) {
+    const instances = instancesForChannel(channel);
+    return instances.find((instance) => instance.id === state.selectedInstanceId)
+      || instances.find((instance) => instance.id === state.touchpointConfig?.defaultInstanceId)
+      || instances.find((instance) => instance.enabled)
+      || instances[0]
+      || null;
+  }
+
+  function routeableInstances() {
+    return state.instances
+      .filter((instance) => instance.platform === 'feishu_lark')
+      .sort((left, right) => String(left.displayName || left.id).localeCompare(String(right.displayName || right.id)));
+  }
+
+  function defaultDeliveryInstances() {
+    return state.instances
+      .filter((instance) => instance.platform === 'feishu_lark' || instance.platform === 'wechat_personal')
+      .sort((left, right) => String(left.displayName || left.id).localeCompare(String(right.displayName || right.id)));
+  }
+
+  function proactiveTargetCount() {
+    return state.instances.filter((instance) => (
+      instance.platform === 'feishu_lark' || instance.platform === 'wechat_personal'
+    ) && instance.enabled && instance.ownerConfigured && instance.status?.kind === 'connected').length;
   }
 
   function setNotice(message, kind) {
@@ -244,6 +298,7 @@
         ? { intervalSeconds: value.intervalSeconds }
         : {}),
       ...(typeof value.error === 'string' && value.error.trim() ? { error: value.error.trim() } : {}),
+      ...(typeof value.errorCode === 'string' && value.errorCode.trim() ? { errorCode: value.errorCode.trim() } : {}),
       ...(value.instance && typeof value.instance === 'object' ? { instance: value.instance } : {}),
     };
   }
@@ -260,7 +315,16 @@
       if (next.expiresAt !== undefined) state.qr.expiresAt = next.expiresAt;
       if (next.intervalSeconds !== undefined) state.qr.intervalSeconds = next.intervalSeconds;
     }
-    if (next.error) state.qr.error = next.error;
+    if (next.errorCode) {
+      // Map the main-process error code to a plain-language hint so a network
+      // hiccup is not mistaken for a product failure.
+      const hintKey = FEISHU_QR_ERROR_HINTS[next.errorCode];
+      state.qr.error = hintKey
+        ? labelFor(hintKey, qrStateLabel('failed'))
+        : next.error || '';
+    } else if (next.error) {
+      state.qr.error = next.error;
+    }
     return next;
   }
 
@@ -354,6 +418,83 @@
     resetQrState();
     setNotice(labelFor('messaging.feishu_qr.completed', ''), 'success');
     renderCurrent();
+    // 绑定成功 → 拉起回调地址引导卡（一次性）：飞书要求重定向 URL 与
+    // 开发者后台精确一致，不配置则授权时必报 20029。扫码后直接引导，
+    // 用户只需复制 → 打开后台 → 粘贴 → 添加 → 发布。
+    const bound = instance && typeof instance.id === 'string' ? instance.id : state.selectedInstanceId;
+    void loadSetupGuide(bound, instance && instance.feishuTenantBrand);
+  }
+
+  async function loadSetupGuide(instanceId, brand) {
+    if (!instanceId) return;
+    try {
+      const result = await invoke('personal_context.setup_guide', { instanceId });
+      const guide = result && result.guide;
+      if (!guide || !guide.credentialReady || !guide.appId || !guide.redirectUri) return;
+      state.setupGuide = {
+        appId: guide.appId,
+        redirectUri: guide.redirectUri,
+        brand: brand === 'lark' ? 'lark' : 'feishu',
+      };
+      state.setupGuideDismissed = false;
+      renderCurrent();
+    } catch (_error) {
+      // 引导卡是尽力而为：主进程不可用时不影响绑定成功状态
+    }
+  }
+
+  function renderSetupGuideCard() {
+    if (!state.setupGuide || state.setupGuideDismissed) return null;
+    const guide = state.setupGuide;
+    const consoleUrl = guide.brand === 'lark'
+      ? `https://open.larksuite.com/app/${guide.appId}/safe`
+      : `https://open.feishu.cn/app/${guide.appId}/safe`;
+    const section = el('section', 'messaging-config-card messaging-setup-guide-card');
+    const heading = el('div', 'messaging-config-card-heading');
+    heading.appendChild(el('h3', '', labelFor('messaging.setup_guide.title', '')));
+    heading.appendChild(el('p', '', labelFor('messaging.setup_guide.desc', '')));
+    section.appendChild(heading);
+
+    const urlRow = el('div', 'messaging-setup-guide-url');
+    const url = el('code', '', guide.redirectUri);
+    urlRow.appendChild(url);
+    const copy = el('button', 'btn messaging-secondary-button', labelFor('messaging.setup_guide.copy', ''));
+    copy.type = 'button';
+    copy.appendChild(icon('copy', 'messaging-action-icon'));
+    copy.addEventListener('click', () => {
+      navigator.clipboard.writeText(guide.redirectUri).then(() => {
+        copy.textContent = labelFor('messaging.setup_guide.copied', '');
+        setTimeout(() => {
+          copy.textContent = labelFor('messaging.setup_guide.copy', '');
+        }, 1800);
+      }).catch(() => { /* clipboard unavailable; user can select the url manually */ });
+    });
+    urlRow.appendChild(copy);
+    section.appendChild(urlRow);
+
+    section.appendChild(el('p', 'messaging-setup-guide-steps', labelFor('messaging.setup_guide.steps', '')));
+
+    const actions = el('div', 'messaging-setup-guide-actions');
+    const open = el('button', 'btn messaging-scan-button', labelFor('messaging.setup_guide.open_console', ''));
+    open.type = 'button';
+    open.appendChild(icon('external-link', 'messaging-action-icon'));
+    open.addEventListener('click', () => {
+      void invoke('auth.openExternal', { url: consoleUrl }).catch(() => {
+        setNotice(labelFor('messaging.setup_guide.open_failed', ''), 'error');
+        renderCurrent();
+      });
+    });
+    const done = el('button', 'btn messaging-secondary-button', labelFor('messaging.setup_guide.done', ''));
+    done.type = 'button';
+    done.addEventListener('click', () => {
+      // 用户确认已配置：记录本机标记，触点页授权时不再拦截
+      void invoke('personal_context.setup_guide.confirm', {}).catch(() => { /* best effort */ });
+      state.setupGuideDismissed = true;
+      renderCurrent();
+    });
+    actions.append(open, done);
+    section.appendChild(actions);
+    return section;
   }
 
   async function pollQr(flowId, revision) {
@@ -453,6 +594,15 @@
     return section;
   }
 
+  function settingsSection(titleKey, subtitleKey, className) {
+    const section = el('section', `messaging-settings-section ${className || ''}`.trim());
+    const heading = el('div', 'messaging-section-heading');
+    heading.appendChild(el('h3', '', labelFor(titleKey, '')));
+    if (subtitleKey) heading.appendChild(el('p', '', labelFor(subtitleKey, '')));
+    section.appendChild(heading);
+    return section;
+  }
+
   function selectControl(options, value, disabled) {
     const select = document.createElement('select');
     select.className = 'messaging-detail-select';
@@ -486,19 +636,44 @@
     return labelFor(keys[status] || keys.disconnected, status);
   }
 
+  function switchActionForInstance(instance) {
+    if (instance && instance.hasCredentials === true) return 'toggle';
+    if (instance && instance.platform === 'feishu_lark') return 'bind';
+    return 'unavailable';
+  }
+
   function switchControl(instance) {
+    const action = switchActionForInstance(instance);
     const label = el('label', 'messaging-switch');
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.checked = instance.enabled === true;
-    input.disabled = state.updating || instance.hasCredentials !== true;
-    input.setAttribute('aria-label', labelFor('messaging.enabled', ''));
+    input.disabled = state.updating || action === 'unavailable' || (action === 'bind' && qrIsPending());
+    input.setAttribute('aria-label', labelFor(action === 'bind' ? 'messaging.scan' : 'messaging.enabled', ''));
     input.addEventListener('change', () => {
+      if (action === 'bind') {
+        // An unbound Feishu/Lark draft cannot be enabled yet. Treat the switch
+        // as the missing association affordance: start QR binding and keep the
+        // persisted enabled state off until activation succeeds atomically.
+        input.checked = false;
+        void startQr(instance);
+        return;
+      }
       const enabled = input.checked;
       void updateInstance({ enabled }, input);
     });
     const track = el('span', 'messaging-switch-track');
     track.setAttribute('aria-hidden', 'true');
+    track.addEventListener('click', (event) => {
+      if (action !== 'bind' || input.disabled) return;
+      // The visual track is the actual hit target; invoke the binding flow
+      // explicitly instead of relying on implicit label activation for the
+      // hidden checkbox, which is not reliable in Electron accessibility/UI
+      // automation and custom chrome combinations.
+      event.preventDefault();
+      input.checked = false;
+      void startQr(instance);
+    });
     label.append(input, track);
     return label;
   }
@@ -520,6 +695,9 @@
       statusRow.appendChild(el('span', 'messaging-qr-expiry', labelFor('messaging.feishu_qr.expires_at', '').replace('{time}', expiry)));
     }
     info.appendChild(statusRow);
+    if (instance.feishuTenantBrand === 'lark') {
+      info.appendChild(el('p', 'messaging-qr-lark-hint', labelFor('messaging.feishu_qr.lark_sign_in_hint', '')));
+    }
     const actions = el('div', 'messaging-qr-actions');
     if (state.qr.flowId && !QR_TERMINAL_STATES.has(state.qr.state)) {
       const cancel = el('button', 'btn messaging-secondary-button', labelFor('messaging.feishu_qr.cancel', ''));
@@ -569,17 +747,44 @@
   }
 
   function renderInstanceList(channel) {
-    const section = el('section', 'messaging-config-card messaging-instance-card');
-    const heading = el('div', 'messaging-config-card-heading');
-    heading.appendChild(el('h3', '', labelFor('messaging.instance.title', '')));
-    section.appendChild(heading);
     const instances = instancesForChannel(channel);
+    const section = el('section', 'messaging-settings-section messaging-instance-card');
+    const toolbar = el('div', 'messaging-instance-toolbar');
+    const heading = el('div', 'messaging-section-heading');
+    heading.appendChild(el('h3', '', labelFor('messaging.instance.account_title', '')));
+    heading.appendChild(el('p', '', labelFor(
+      instances.length > 1 ? 'messaging.instance.multiple_summary' : 'messaging.instance.single_summary', '',
+    ).replace('{count}', String(instances.length))));
+    toolbar.appendChild(heading);
+    section.appendChild(toolbar);
+
     if (!instances.length) {
       section.appendChild(el('p', 'messaging-instance-empty', labelFor('messaging.instance.empty', '')));
       return section;
     }
+
+    const activeInstance = primaryInstance(channel);
+    const primary = el('div', `messaging-primary-account is-${statusForInstance(activeInstance)}`);
+    const primaryCopy = el('div', 'messaging-instance-copy');
+    primaryCopy.appendChild(el('strong', '', activeInstance.displayName || activeInstance.id));
+    primaryCopy.appendChild(el('span', 'messaging-instance-state', statusLabel(statusForInstance(activeInstance))));
+    primary.append(icon('bot', 'messaging-primary-account-icon'), primaryCopy);
+    section.appendChild(primary);
+
+    const supportsMultipleBots = channel.platform !== 'wechat_personal';
+    if (!supportsMultipleBots) {
+      section.appendChild(el('p', 'messaging-single-active-note', labelFor('messaging.instance.wechat_single_active', '')));
+      return section;
+    }
+
+    const advanced = el('details', 'messaging-instance-advanced');
+    const summary = el('summary', '', labelFor('messaging.instance.advanced_summary', ''));
+    summary.prepend(icon('settings', 'messaging-action-icon'));
+    advanced.appendChild(summary);
+    const advancedBody = el('div', 'messaging-instance-advanced-body');
+    if (instances.length > 1) advancedBody.appendChild(el('p', 'messaging-instance-routing-hint', labelFor('messaging.instance.routing_required', '')));
     const list = el('div', 'messaging-instance-list');
-    for (const instance of instances) {
+    for (const instance of instances.filter((candidate) => candidate.id !== activeInstance.id)) {
       const row = el('div', `messaging-instance-row is-${statusForInstance(instance)}`);
       const active = state.selectedInstanceId === instance.id;
       if (active) row.classList.add('is-selected');
@@ -587,11 +792,13 @@
       copy.appendChild(el('strong', '', instance.displayName || instance.id));
       copy.appendChild(el('span', 'messaging-instance-state', statusLabel(statusForInstance(instance))));
       row.appendChild(copy);
-      row.appendChild(switchControl(instance));
       const unbind = el('button', 'btn messaging-secondary-button', labelFor('messaging.unbind', ''));
       unbind.type = 'button';
       unbind.disabled = state.updating;
-      unbind.addEventListener('click', () => void unbindInstance(instance, unbind));
+      unbind.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void unbindInstance(instance, unbind);
+      });
       row.appendChild(unbind);
       row.addEventListener('click', () => {
         state.selectedInstanceId = instance.id;
@@ -600,35 +807,145 @@
       });
       list.appendChild(row);
     }
-    if (channel.group === 'open' && channel.platform !== 'wecom') {
-      const add = el('button', 'btn messaging-secondary-button messaging-instance-add', labelFor('messaging.instance.add', ''));
-      add.type = 'button';
-      add.disabled = state.updating || qrIsPending();
-      add.appendChild(icon('plus', 'messaging-action-icon'));
-      add.addEventListener('click', () => {
-        if (channel.platform === 'telegram') {
-          state.telegramCreatingNew = true;
-          state.selectedInstanceId = '';
-          renderCurrent();
-        } else if (channel.platform === 'wechat_personal') {
-          void startWechatFlow();
-        } else {
-          void startQrForChannel(channel);
-        }
-      });
-      list.appendChild(add);
-    }
-    section.appendChild(list);
+    if (list.childElementCount) advancedBody.appendChild(list);
+
+    const add = el('button', 'btn messaging-secondary-button messaging-instance-add', labelFor('messaging.instance.add_another', ''));
+    add.type = 'button';
+    add.disabled = state.updating || qrIsPending();
+    add.prepend(icon('plus', 'messaging-action-icon'));
+    add.addEventListener('click', () => {
+      if (channel.platform === 'telegram') {
+        state.telegramCreatingNew = true;
+        state.selectedInstanceId = '';
+        renderCurrent();
+      } else if (channel.platform === 'wecom') {
+        void startWecomFlow();
+      } else {
+        void startQrForChannel(channel);
+      }
+    });
+    advancedBody.appendChild(add);
+    advanced.appendChild(advancedBody);
+    section.appendChild(advanced);
     return section;
+  }
+
+  function routingSelect(instances, value, emptyLabel) {
+    const options = [{ value: '', label: emptyLabel }];
+    for (const instance of instances) {
+      options.push({ value: instance.id, label: `${instance.displayName || instance.id} · ${statusLabel(statusForInstance(instance))}` });
+    }
+    if (value && !instances.some((instance) => instance.id === value)) {
+      options.push({ value, label: `${labelFor('messaging.routing.invalid_instance', '')} · ${value}` });
+    }
+    return selectControl(options, value || '', state.updating);
+  }
+
+  function renderRoutingSettings() {
+    const routeInstances = routeableInstances();
+    const defaultInstances = defaultDeliveryInstances();
+    if (!routeInstances.length || (routeInstances.length < 2 && proactiveTargetCount() < 2)) return null;
+    const config = state.touchpointConfig || { version: 1, defaultInstanceId: null, templates: {}, routes: {} };
+    const section = settingsSection('messaging.routing.title', 'messaging.routing.subtitle', 'messaging-routing-settings');
+    if (state.routingLoadError) {
+      const loadError = el('div', 'messaging-routing-warning is-error', state.routingLoadError);
+      loadError.setAttribute('role', 'alert');
+      section.appendChild(loadError);
+    }
+    const defaultIsInvalid = Boolean(config.defaultInstanceId
+      && !defaultInstances.some((instance) => instance.id === config.defaultInstanceId));
+    const defaultInstance = defaultInstances.find((instance) => instance.id === config.defaultInstanceId);
+    const missingFeishuSceneRoute = Boolean(defaultInstance?.platform === 'wechat_personal'
+      && ROUTING_SCENES.some((scene) => scene !== 'external_send' && !config.routes?.[scene]));
+    const hasInvalidRoute = defaultIsInvalid || Object.entries(config.routes || {}).some(([scene, instanceId]) => {
+      if (!instanceId) return false;
+      const candidates = scene === 'external_send' ? defaultInstances : routeInstances;
+      return !candidates.some((instance) => instance.id === instanceId);
+    });
+    if (!config.defaultInstanceId || hasInvalidRoute || missingFeishuSceneRoute) {
+      const warningIsError = hasInvalidRoute || missingFeishuSceneRoute;
+      const warning = el('div', `messaging-routing-warning${warningIsError ? ' is-error' : ''}`, labelFor(
+        hasInvalidRoute
+          ? 'messaging.routing.invalid_warning'
+          : missingFeishuSceneRoute
+            ? 'messaging.routing.feishu_scene_required'
+            : 'messaging.routing.unresolved', '',
+      ));
+      warning.setAttribute('role', warningIsError ? 'alert' : 'status');
+      section.appendChild(warning);
+    }
+
+    const fields = el('div', 'messaging-routing-fields');
+    const defaultRow = el('label', 'messaging-routing-row');
+    defaultRow.appendChild(el('span', '', labelFor('messaging.routing.default', '')));
+    const defaultSelect = routingSelect(defaultInstances, config.defaultInstanceId, labelFor('messaging.routing.not_selected', ''));
+    defaultSelect.dataset.messagingRoute = 'default';
+    defaultRow.appendChild(defaultSelect);
+    fields.appendChild(defaultRow);
+
+    for (const scene of ROUTING_SCENES) {
+      const row = el('label', 'messaging-routing-row');
+      row.appendChild(el('span', '', labelFor(`messaging.routing.scene.${scene}`, scene)));
+      const candidates = scene === 'external_send' ? defaultInstances : routeInstances;
+      const select = routingSelect(candidates, config.routes?.[scene], labelFor('messaging.routing.follow_default', ''));
+      select.dataset.messagingRoute = scene;
+      row.appendChild(select);
+      fields.appendChild(row);
+    }
+    section.appendChild(fields);
+
+    const save = el('button', 'btn messaging-secondary-button messaging-routing-save', labelFor('messaging.routing.save', ''));
+    save.type = 'button';
+    save.disabled = state.updating;
+    save.appendChild(icon('save', 'messaging-action-icon'));
+    save.addEventListener('click', () => void saveRoutingSettings(section, save));
+    section.appendChild(save);
+    return section;
+  }
+
+  async function saveRoutingSettings(section, button) {
+    if (!section || button.disabled || state.updating) return;
+    const current = state.touchpointConfig || { version: 1, defaultInstanceId: null, templates: {}, routes: {} };
+    const defaultSelect = section.querySelector('[data-messaging-route="default"]');
+    const routes = { ...(current.routes || {}) };
+    for (const scene of ROUTING_SCENES) {
+      const select = section.querySelector(`[data-messaging-route="${scene}"]`);
+      routes[scene] = select && select.value ? select.value : null;
+    }
+    state.updating = true;
+    renderCurrent();
+    try {
+      const result = await invoke('touchpoints.config.save', {
+        config: {
+          version: 1,
+          defaultInstanceId: defaultSelect && defaultSelect.value ? defaultSelect.value : null,
+          templates: current.templates || {},
+          routes,
+        },
+      });
+      state.touchpointConfig = result.config || current;
+      setNotice(labelFor('messaging.routing.saved', ''), 'success');
+    } catch (error) {
+      setNotice(errorMessage(error, labelFor('messaging.routing.save_failed', '')), 'error');
+    } finally {
+      state.updating = false;
+      renderCurrent();
+    }
   }
 
   function renderFeishuPanel(channel) {
     const wrapper = el('div', 'messaging-panel-body');
     wrapper.appendChild(renderInstanceList(channel));
+    const routing = renderRoutingSettings();
+    if (routing) wrapper.appendChild(routing);
+    // 扫码绑定成功后弹出的回调地址引导卡（一次性）：位于实例列表下方，
+    // 绑定新的飞书机器人时自动出现，配置完成后可关闭。
+    const guideCard = renderSetupGuideCard();
+    if (guideCard) wrapper.appendChild(guideCard);
     const instances = instancesForChannel(channel);
-    const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
+    const instance = primaryInstance(channel);
     if (instance) {
-      wrapper.appendChild(associationCard(instance));
+      if (!instance.hasCredentials) wrapper.appendChild(associationCard(instance));
       wrapper.appendChild(ownerIdentityCard(instance));
       const responseSelect = selectControl([
         { value: 'text', label: labelFor('messaging.response_text', '') },
@@ -648,7 +965,7 @@
         void updateInstance({ workspace: { type: 'all' } }, workspaceSelect);
       });
       wrapper.appendChild(preferencesCard(responseSelect, workspaceSelect));
-      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
+      const deletion = settingsSection('messaging.section.danger', 'messaging.delete_subtitle', 'messaging-delete-card');
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
@@ -677,7 +994,8 @@
   }
 
   async function startQrForChannel(channel) {
-    if (!channel || state.openingChannel) return;
+    // QR 流程进行中（含轮询）时忽略重复触发，避免连点"连接"反复创建新实例
+    if (!channel || state.openingChannel || qrIsPending()) return;
     const operation = ++state.operation;
     state.openingChannel = channel.key;
     setNotice('', '');
@@ -699,11 +1017,9 @@
       state.selectedInstanceId = instance.id;
       state.openingChannel = '';
       renderCurrent();
-      // No-owner Feishu bot: guide the user to claim it by sending the first
-      // direct message — no manual open id needed (main opens a binding window).
-      if (instance.ownerConfigured === false && typeof uiAlert === 'function') {
-        uiAlert(labelFor('messaging.owner_bind_hint', ''));
-      }
+      // No-owner Feishu bot: QR 面板内有常驻的 owner 绑定引导区
+      // （messaging-owner-guide），不再弹全屏提示窗——弹窗遮罩会拦截页面
+      // 点击，打断"点按钮→扫码→完事"流程（触点页曾因此表现为"卡死"）。
       await startQr(instance);
     } catch (error) {
       if (state.operation !== operation) return;
@@ -798,7 +1114,7 @@
     const instances = instancesForChannel(channel);
     const instance = state.telegramCreatingNew
       ? null
-      : instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
+      : primaryInstance(channel);
     const config = card('messaging.telegram.token_label', '', 'messaging-telegram-card');
     const tokenInput = document.createElement('input');
     tokenInput.type = 'password';
@@ -875,6 +1191,7 @@
         state.wecom.authUrl = '';
         state.wecom.starting = false;
         state.wecom.cancelling = false;
+        state.wecom.pollErrorCount = 0;
         if (opts.render !== false) renderCurrent();
       }
     }
@@ -906,6 +1223,7 @@
     try {
       const result = await invoke('messaging.wecom_qr.status', { flowId });
       if (state.wecom.revision !== revision) return;
+      state.wecom.pollErrorCount = 0;
       const registration = result && result.registration ? result.registration : result;
       const nextState = typeof registration.state === 'string' ? registration.state : 'failed';
       if (nextState === 'completed' && registration.instance && registration.instance.id) {
@@ -926,7 +1244,17 @@
         return;
       }
       scheduleWecomPoll(flowId);
-    } catch (_) {
+    } catch (error) {
+      if (state.wecom.revision !== revision) return;
+      state.wecom.pollErrorCount += 1;
+      // 连续网络错误超过阈值才放弃：偶发抖动不应打断绑定流程，
+      // 但弹窗已关闭/网络长期不可用时也不能无限轮询下去。
+      if (state.wecom.pollErrorCount >= MAX_POLL_ERRORS) {
+        setNotice(errorMessage(error, labelFor('messaging.wecom_qr.invalid_message', '')), 'error');
+        await cancelWecomFlow({ silent: true, render: false });
+        renderCurrent();
+        return;
+      }
       scheduleWecomPoll(flowId);
     }
   }
@@ -1017,6 +1345,7 @@
     state.wechat.errorCode = '';
     state.wechat.starting = false;
     state.wechat.cancelling = false;
+    state.wechat.pollErrorCount = 0;
   }
 
   async function cancelWechatFlow(options) {
@@ -1097,7 +1426,18 @@
       }
       renderCurrent();
       scheduleWechatPoll(flowId);
-    } catch (_) {
+    } catch (error) {
+      if (state.wechat.revision !== revision) return;
+      state.wechat.pollErrorCount += 1;
+      // 连续网络错误超过阈值才放弃：偶发抖动不打断绑定流程，
+      // 但长期不可用时也不能无限轮询。
+      if (state.wechat.pollErrorCount >= MAX_POLL_ERRORS) {
+        state.wechat.error = errorMessage(error, labelFor('messaging.wechat_qr.start_failed', ''));
+        setNotice(state.wechat.error, 'error');
+        await cancelWechatFlow({ silent: true, render: false });
+        renderCurrent();
+        return;
+      }
       scheduleWechatPoll(flowId);
     }
   }
@@ -1202,6 +1542,7 @@
     });
     row.appendChild(scan);
     section.appendChild(row);
+    section.appendChild(el('p', 'messaging-single-active-note', labelFor('messaging.instance.wechat_single_active', '')));
     renderWechatQrPanel(section);
     return section;
   }
@@ -1213,7 +1554,7 @@
     const instances = instancesForChannel(channel);
     if (instances.length) {
       const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
-      const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0];
+      const instance = primaryInstance(channel);
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
@@ -1228,24 +1569,26 @@
   function renderWecomPanel(channel) {
     const wrapper = el('div', 'messaging-panel-body');
     wrapper.appendChild(renderInstanceList(channel));
-    const config = card('messaging.association_title', 'messaging.association_sub', 'messaging-wecom-card');
-    const flowActive = Boolean(state.wecom.flowId && !['completed', 'cancelled', 'expired', 'failed'].includes(state.wecom.state));
-    const scan = el('button', 'btn messaging-scan-button', labelFor(
-      flowActive ? 'messaging.wecom_qr.cancel' : 'messaging.wecom_qr.start', '',
-    ));
-    scan.type = 'button';
-    scan.disabled = state.updating || state.wecom.starting || state.wecom.cancelling;
-    scan.appendChild(icon(flowActive ? 'x' : 'qr-code', 'messaging-action-icon'));
-    scan.addEventListener('click', () => {
-      if (flowActive) void cancelWecomFlow();
-      else void startWecomFlow();
-    });
-    config.appendChild(scan);
-    wrapper.appendChild(config);
     const instances = instancesForChannel(channel);
+    if (!instances.length) {
+      const config = card('messaging.association_title', 'messaging.association_sub', 'messaging-wecom-card');
+      const flowActive = Boolean(state.wecom.flowId && !['completed', 'cancelled', 'expired', 'failed'].includes(state.wecom.state));
+      const scan = el('button', 'btn messaging-scan-button', labelFor(
+        flowActive ? 'messaging.wecom_qr.cancel' : 'messaging.wecom_qr.start', '',
+      ));
+      scan.type = 'button';
+      scan.disabled = state.updating || state.wecom.starting || state.wecom.cancelling;
+      scan.appendChild(icon(flowActive ? 'x' : 'qr-code', 'messaging-action-icon'));
+      scan.addEventListener('click', () => {
+        if (flowActive) void cancelWecomFlow();
+        else void startWecomFlow();
+      });
+      config.appendChild(scan);
+      wrapper.appendChild(config);
+    }
     if (instances.length) {
       const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
-      const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0];
+      const instance = primaryInstance(channel);
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
@@ -1287,7 +1630,7 @@
   }
 
   function ownerIdentityCard(instance) {
-    const section = card('messaging.owner_title', 'messaging.owner_subtitle', 'messaging-owner-card');
+    const section = settingsSection('messaging.section.identity', 'messaging.owner_subtitle', 'messaging-owner-card');
     if (instance.ownerConfigured === true) {
       // Owner already bound: show who it is and offer clearing only. The
       // manual id entry reappears in the unbound state for rebinding.
@@ -1295,7 +1638,7 @@
       const status = el('div', 'messaging-manual-bound');
       status.append(
         icon('check-circle', 'messaging-status-icon'),
-        el('span', '', instance.ownerLabel || labelFor('messaging.owner_configured', '')),
+        el('span', '', instance.ownerLabel || instance.ownerMaskedId || labelFor('messaging.owner_configured', '')),
       );
       row.appendChild(status);
       const clear = el('button', 'btn messaging-secondary-button', labelFor('messaging.owner_clear', ''));
@@ -1321,6 +1664,11 @@
         }
       }).catch(() => { /* window may have expired; leave the hint hidden */ });
     }
+
+    // Standing guide for the unbound state: the auto-bind path is primary,
+    // manual id entry is the fallback (persists even after the window closes).
+    const guide = el('p', 'messaging-owner-guide', labelFor('messaging.owner_bind_guide', ''));
+    section.appendChild(guide);
 
     const ownerIdInput = document.createElement('input');
     ownerIdInput.type = 'text';
@@ -1359,10 +1707,14 @@
   }
 
   function preferencesCard(responseControl, workspaceControl) {
-    const section = el('section', 'messaging-config-card messaging-preferences-card');
-    section.append(
+    const section = settingsSection('messaging.section.behavior', 'messaging.section.behavior_subtitle', 'messaging-preferences-card');
+    const rows = el('div', 'messaging-preference-list');
+    rows.append(
       preferenceRow('messaging.response_title', 'messaging.response_subtitle', responseControl),
       preferenceRow('messaging.workspace_title', 'messaging.workspace_subtitle', workspaceControl),
+    );
+    section.append(
+      rows,
     );
     return section;
   }
@@ -1435,10 +1787,10 @@
   }
 
   function renderPanelHeader(channel) {
-    const header = el('header', 'messaging-detail-header');
+    const header = el('header', 'messaging-channel-overview');
     const brand = el('div', `messaging-brand-icon is-${channel.key}`);
     brand.appendChild(icon(channel.icon, 'messaging-brand-glyph'));
-    const titleWrap = el('div', 'messaging-detail-title-wrap');
+    const titleWrap = el('div', 'messaging-channel-summary');
     const titleRow = el('div', 'messaging-detail-title-row');
     titleRow.appendChild(el('h2', '', labelFor(`messaging.channel.${channel.key}.title`, channel.key)));
     if (channel.feishuTenantBrand) {
@@ -1446,13 +1798,19 @@
     }
     titleWrap.appendChild(titleRow);
     const instances = instancesForChannel(channel);
-    const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
+    const instance = primaryInstance(channel);
     const status = instance ? statusForInstance(instance) : 'unbound';
     const stateRow = el('div', `messaging-detail-state is-${status}`);
     stateRow.append(icon(status === 'connected' ? 'check-circle' : 'clock', 'messaging-status-icon'));
     stateRow.appendChild(el('span', '', statusLabel(status)));
     titleWrap.appendChild(stateRow);
-    header.append(brand, titleWrap, instance ? switchControl(instance) : el('span', 'messaging-detail-switch-placeholder', ''));
+    titleWrap.appendChild(el('p', 'messaging-channel-description', labelFor(`messaging.channel.${channel.key}.description`, '')));
+    const toggle = el('div', 'messaging-channel-toggle');
+    if (instance) {
+      toggle.appendChild(el('span', '', labelFor('messaging.channel.enabled_label', '')));
+      toggle.appendChild(switchControl(instance));
+    }
+    header.append(brand, titleWrap, toggle);
     return header;
   }
 
@@ -1465,11 +1823,24 @@
     }
   }
 
+  async function loadRoutingConfig() {
+    try {
+      const result = await invoke('touchpoints.config.get');
+      if (!result || !result.config || typeof result.config !== 'object') {
+        throw new Error(result?.error || labelFor('messaging.routing.load_failed', ''));
+      }
+      state.touchpointConfig = result.config;
+      state.routingLoadError = '';
+    } catch (error) {
+      state.routingLoadError = errorMessage(error, labelFor('messaging.routing.load_failed', ''));
+    }
+  }
+
   async function refresh() {
     if (state.loading) return;
     state.loading = true;
     try {
-      await loadInstances();
+      await Promise.all([loadInstances(), loadRoutingConfig()]);
       if (state.selectedInstanceId && !state.instances.some((instance) => instance.id === state.selectedInstanceId)) {
         state.selectedInstanceId = '';
       }
@@ -1491,7 +1862,10 @@
 
   function renderMenuPage() {
     const aside = el('aside', 'messaging-menu');
-    aside.appendChild(el('h1', 'messaging-menu-title', labelFor('messaging.catalog.page_title', '')));
+    const intro = el('div', 'messaging-menu-intro');
+    intro.appendChild(el('h1', 'messaging-menu-title', labelFor('messaging.catalog.page_title', '')));
+    intro.appendChild(el('p', 'messaging-menu-subtitle', labelFor('messaging.catalog.page_subtitle', '')));
+    aside.appendChild(intro);
     for (const group of ['open', 'soon']) {
       const section = el('div', `messaging-menu-group is-${group}`);
       section.appendChild(el('div', 'messaging-menu-group-label', labelFor(
@@ -1534,11 +1908,14 @@
     if (state.bound) return;
     state.bound = true;
     window.addEventListener('i18n-change', () => {
-      if (document.getElementById('panel-settings')?.classList.contains('is-active')) renderCurrent();
+      // 触点界面已迁至「连接」面板的 touchpoints tab。
+      const connectionsPanel = document.getElementById('panel-connections');
+      const touchpointsPane = document.getElementById('connections-pane-touchpoints');
+      if (connectionsPanel?.classList.contains('active') && touchpointsPane && !touchpointsPane.hidden) renderCurrent();
     });
     // 实例状态实时推送：主进程在状态 kind 变化时广播（心跳重复 connected
     // 不推送）。收到后更新本地实例并重渲染，让"连接中→已连接"即时可见。
-    window.orkas.onPushEvent('messaging:instance-status', (payload) => {
+    window.cogseed.onPushEvent('messaging:instance-status', (payload) => {
       if (!payload || typeof payload.instanceId !== 'string' || !payload.status) return;
       const instance = state.instances.find((item) => item.id === payload.instanceId);
       if (!instance) return;
@@ -1555,6 +1932,18 @@
     await refresh();
   };
 
+  // Public entry point for the desktop-first touchpoint flow. It creates a
+  // fresh Feishu draft and starts the real QR binding flow, instead of merely
+  // opening the legacy settings panel.
+  window.openFeishuConnection = async function openFeishuConnection() {
+    bind();
+    if (!state.initialized) state.initialized = true;
+    await refresh();
+    state.selectedChannel = 'feishu';
+    state.selectedInstanceId = '';
+    await startQrForChannel(channelForKey('feishu'));
+  };
+
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       CHANNELS,
@@ -1569,6 +1958,7 @@
         instancesForChannel,
         validateBotToken,
         parseWecomAuthMessage,
+        switchActionForInstance,
         wechatFlowActive,
         resetWechatFlow,
       },

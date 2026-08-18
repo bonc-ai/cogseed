@@ -228,6 +228,56 @@ Research category rule: choose `data` for deep-research / evidence collection / 
 
 Category sanity pass before final reply: if the chosen code is `general`, write one private sentence of evidence to yourself: "no single domain dominates because ...". If you cannot complete that sentence, change to the more specific category.
 
+## NSEAP compliance — MANDATORY for every new skill
+
+The platform's skill standard is **NSEAP Skill Standard v1.0** (fully aligned). Every
+NEW skill you create (Mode A) must ship as a compliant SkillPackage, not just a bare
+SKILL.md. Templates are in `<SYSTEM_SKILLS_ROOT>/skill-creator/references/nseap/` — read
+them before authoring and copy the shapes.
+
+Detailed references live in that same directory; read the one matching what you are
+unsure about rather than guessing: `nine-elements.md` (the nine required elements),
+`schemas.md` (dual-schema shapes), `artifact-tree.md` (the file layout to produce),
+`compliance-tiers.md` (what Level A vs B actually requires), `non-claims.md` (the
+non-claims block wording), and `templates/ontology-slice.yaml.template`.
+
+**Non-negotiable requirements (missing any → the skill is not created):**
+
+1. **Trigger + anti-trigger semantics** in SKILL.md body (§5.3, hard requirement):
+   - `use_when` — when to fire.
+   - `do_not_use_when` / `negative_examples` — when it must NOT fire. A skill that
+     cannot say when not to fire is a governance risk and is rejected at registration.
+   - positive + negative examples.
+2. **Dual contracts** (§5.4, hard requirement): `references/input-contract.md` +
+   `references/output-contract.md`. Input is three-layer: `task_id` + `owner_context`
+   (values injected by the Agent layer) + `<primary>_payload`. Output always includes
+   `audit_refs`. `owner_context` is a field-position the skill exposes, never fills.
+3. **`references/skill-spec.yaml`** — identity/level/route. `promotion_ceiling: staged`
+   and `production_release_allowed: false` are ALWAYS the values (axiom 5 / §8.2).
+   Level is decided by risk: personal/low-risk → L2-L3; shared/private-data/external
+   actions/decisions → **L5**; meta-skills → **L5 always**.
+4. **`references/ontology-mapping.md`** — TBox (concepts) / RBox (rules, structured
+   field/op/value) / ABox (instances) + `source_refs`. No ontology slice → script, not
+   a skill (axiom 2).
+5. **`references/governance-boundaries.md`** — non-claims block + staged cap.
+6. **`references/validation-contract.md`** — boundary tests + HITL policy (preview →
+   confirm → execute; write actions require HITL).
+7. **`references/eval-cases.yaml`** — positive/negative examples.
+8. **`references/kstar-evolution.md`** — evolution hook declaration (bounded patch,
+   symbolic decides right/wrong, neural only proposes DRAFT wording).
+9. **`evals/evals.json`** — machine-readable eval set (can start as honest stub).
+
+**Level A/B shape**: Level A = five well-formed sections + ontology slice (auto via
+templates). Level B = A + trigger/anti-trigger + dual contracts + staged caps + the
+artifact set above. The created skill is a **staged candidate**, never a production
+release. Do not claim Level C (release) — that is governance work, out of scope.
+
+**Editing / importing existing skills (Modes B/C)**: source-preserving (see import
+rules below) — do NOT force the 9-file skeleton onto imported skills, but DO fill
+`references/` from the NSEAP templates when the source already carries the equivalent
+content, and always emit `_meta.json.nseap` grading via metadata tags when the platform
+supports it.
+
 ## Quality bar — SKILL.md body
 
 API-doc style, not a product brochure. Short sentences, lists, code blocks. For brand-new skills, keep these human/model-readable sections:
@@ -419,3 +469,22 @@ Right: "I've written `SKILL.md`: this skill is invoked when the user asks 'scrap
 - **On failure, state the cause clearly + suggest a remedy** ("download failed: timeout; suggest switching mirror"); do not power through.
 - Output is **concise**; don't dump giant code blocks at once; advance step by step.
 - **Also handle ordinary conversation**: if the user asks something unrelated, just answer normally; afterwards you may ask whether to continue refining.
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：用户明确要求创建、编辑或导入自定义技能（"make a skill that does X"、"tweak the X skill"、"import this SKILL.md as a custom skill"、"造一个做 X 的技能"），且产出物是技能包草稿/候选资产。
+- `do_not_use_when`：用户只是普通对话或要求执行某个业务任务而非生产技能；要求把候选技能自动晋升为生产发布/直接写入共享注册表并绕过治理；要求修改保护面（形式化规则结构、HITL 要求、审计机制）；要求无界递归自我补丁；要求删除技能本体切片或强制九要素之外的伪制品。
+- `positive_examples`：`帮我创建一个把发票催款流程固化的技能，带触发/反触发和输入输出契约。`；`把这份已有 SKILL.md 导入为自定义技能。`
+- `negative_examples`：`直接把这个技能发布到生产环境。`；`把我这个技能的审计要求去掉。`；`不管什么情况都自己改自己直到完美。`
+
+本 Skill 是 `meta_skill · L5 · Full · production_process · interpreted` 的共享候选能力：`is_skill_of_skill: true`，`operates_on: [Skill, OntologySlice, EvalCase, Workflow, Policy, MetaSkill]`，`promotion_ceiling: staged`，`production_release_allowed: false`。它只产出技能包草稿与候选资产，从不自动发布任何最终技能。
+
+### 元技能附加契约（§6.2 同构原则）
+
+- **可变面（mutable_surface）**：配置键、阈值权重、策略开关、提示措辞、模板占位文本——补丁只允许触碰这些。
+- **保护面（protected_surface）**：形式化规则结构（九要素契约、三级合规档、三门顺序）、HITL 要求（预览→确认→执行）、审计机制（append-only 账本）、staged 封顶与生产发布硬锁——永不可被任何补丁修改。
+- **递归护栏（recursive_guard）**：自我演进补丁预算 `max_self_patch_ops ≤ 2`，`max_self_patch_depth: 1`（一次自审至多一层补丁）；任何自改必须依次通过验证门、治理门、金丝雀门；被拒补丁进入拒绝缓冲永久留痕，防止同一变更反复提交。
+- **无热更新路径**：本技能不存在对生产资产（技能/本体/元技能）的运行时热更新；所有产出物止步于候选/staged。
+- **每个一等子技能独立适用本标准**：由本技能产出的每个技能自身必须满足第 13 章合规评定；尚未独立成包的过渡形态必须记录合规差距与成包计划。
+<!-- NSEAP-GATE:END -->

@@ -1,6 +1,6 @@
 # KSTAR × Recall Governance Integration
 
-Date: 2026-08-11
+Date: 2026-08-12
 
 ## Summary
 
@@ -51,11 +51,13 @@ Removed:
 
 The generic Skill evolution patch workflow remains. Its validator is named `validateSkillPatchContent` and is not coupled to KSTAR Patch Candidates.
 
+Generic P3394 message replay watermarks also remain, but they no longer create new files under the retired `local/kstar/` namespace. Receiver and sender watermark files now live under `local/p3394/`, with a one-time atomic move when an existing watermark is found at the old location.
+
 ## Main implementation areas
 
 - `src/main/features/recall/`
 - `src/main/features/kstar/`
-- `src/main/features/mate_agent_backend/recall-bridge.ts`
+- `src/main/features/cogseed_backend/recall-bridge.ts`
 - `src/main/features/cognition/`
 - `src/main/features/p3394/`
 - `src/main/ipc/index.ts`
@@ -63,18 +65,19 @@ The generic Skill evolution patch workflow remains. Its validator is named `vali
 - `src/renderer/modules/skills.js`
 - `src/renderer/modules/skills-bindings.js`
 
-## Verification
+## Verification checklist
 
-Verified before landing:
+Fresh final-cleanup verification on `dev/remove-p3394-kstar`:
 
 - `npm run typecheck`
-- Targeted Recall, KSTAR, Mate, Cognition, P3394 migration/store, IPC, and renderer tests.
-- `npm test`
-  - JavaScript: 634 files passed, 3 skipped; 7123 tests passed, 14 skipped.
-  - Resource tests: 308 passed.
-- `npm run smoke`
-- Source/test reference scan found no remaining KSTAR Patch Candidate identifiers or UI routes.
+- Targeted canonical KSTAR, Recall, Cognition, generic P3394 wake/epoch, IPC, renderer, and static deletion tests:
+  - 20 files passed.
+  - 266 tests passed.
+- `git diff --check`
+- Production and test reference scans confirming no remaining Patch Candidate routes, fixtures, locale keys, or UI symbols, and no active P3394 Engine/Compat/Experience/Migration/Archive paths.
+
+The full `npm test` and `npm run smoke` commands were previously green before this final cleanup, but have not been rerun for the final uncommitted branch state. They remain part of Task 6 before integration.
 
 ## Integration note
 
-This change is intended for local `develop`. Remote protected `develop` is not pushed directly; normal remote delivery should still use a `dev/*` branch and GitLab merge request.
+The deletion is currently implemented in the local `dev/remove-p3394-kstar` worktree and is not yet committed or merged into local `develop`. Protected `develop` must not be pushed directly; normal remote delivery remains a `dev/*` branch and GitLab merge request.

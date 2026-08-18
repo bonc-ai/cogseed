@@ -54,7 +54,7 @@ function loadRendererNavigation() {
   const elements = new Map<string, FakeElement>();
   const panelIds = [
     'panel-new-chat', 'panel-auto', 'panel-agents', 'panel-skills',
-    'panel-connectors', 'panel-contexts', 'panel-settings',
+    'panel-connections', 'panel-contexts', 'panel-settings',
     'panel-memory', 'panel-devtools', 'panel-project', 'panel-marketplace',
     'panel-conversation',
   ];
@@ -85,7 +85,7 @@ function loadRendererNavigation() {
   const noop = () => undefined;
   const window = {
     addEventListener: noop,
-    orkas: { onPushEvent: noop },
+    cogseed: { onPushEvent: noop },
     loadRendererFeature,
   } as any;
   window.window = window;
@@ -102,6 +102,7 @@ function loadRendererNavigation() {
     createLogger: () => ({ info: noop, warn: noop, error: noop, debug: noop }),
     loadRendererFeature,
     loadSettings,
+    renderMessageQueue: noop,
     _bindGlobalSearch: noop,
     handleNewChatSubmit: noop,
     handleChatSubmit: noop,
@@ -119,18 +120,27 @@ function loadRendererNavigation() {
   return { context, elements, loadRendererFeature, loadSettings };
 }
 
-describe('settings sidebar navigation', () => {
-  it('opens the settings panel and starts its lazy feature from a real click binding', async () => {
+describe('settings sidebar navigation (merged footer panel)', () => {
+  it('opens the settings panel, lazy-loads its feature, and syncs the chip highlight', async () => {
     const { context, elements, loadRendererFeature, loadSettings } = loadRendererNavigation();
+    const setChipSettingsActive = vi.fn();
+    // account-chip.js 提供的钩子（真实 index.html 中它晚于 boot.js 加载，
+    // boot.js 在视图切换时按需调用，测试里直接预置）。
+    context.window.setChipSettingsActive = setChipSettingsActive;
 
     context.bindStaticHandlers();
-    elements.get('settings-btn')!.click();
+    // 融合面板「设置」项的路径：window.setView('settings')。
+    context.window.setView('settings');
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(elements.get('panel-settings')!.classList.contains('active')).toBe(true);
     expect(elements.get('panel-new-chat')!.classList.contains('active')).toBe(false);
-    expect(elements.get('settings-btn')!.classList.contains('active')).toBe(true);
+    expect(setChipSettingsActive).toHaveBeenCalledWith(true);
     expect(loadRendererFeature).toHaveBeenCalledWith('settings');
     expect(loadSettings).toHaveBeenCalledOnce();
+
+    // 离开设置视图时取消高亮。
+    context.window.setView('new-chat');
+    expect(setChipSettingsActive).toHaveBeenLastCalledWith(false);
   });
 });

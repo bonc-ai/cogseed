@@ -47,12 +47,13 @@ export type InstanceStatusKind = (typeof INSTANCE_STATUS_KINDS)[number];
 export interface WorkspaceScope {
   /**
    * `all` is the explicit UI choice for every workspace. It intentionally
-   * routes to a normal, project-free conversation rather than granting a
-   * connector access to arbitrary project paths. `default` is retained for
-   * existing persisted configuration and has the same project-free routing.
+   * routes to a normal, space-free conversation rather than granting a
+   * connector access to arbitrary space paths. `default` is retained for
+   * existing persisted configuration and has the same space-free routing.
+   * `space` scopes inbound routing to a specific space's conversations.
    */
-  type: 'default' | 'all' | 'project';
-  projectId?: string;
+  type: 'default' | 'all' | 'space';
+  spaceId?: string;
 }
 
 export interface MessagingPolicy {
@@ -119,13 +120,15 @@ export interface MessagingBinding {
   /**
    * Legacy bindings were keyed only by chat and are never reused for group
    * traffic. New group bindings include the external sender so distinct
-   * people in one group cannot share a Mate Agent conversation.
+   * people in one group cannot share a CogSeed conversation.
    */
   conversationScope: 'direct' | 'group_sender' | 'legacy';
   externalChatId: string;
   externalUserId?: string;
   externalChatTitle?: string;
   cid: string;
+  /** 空间化后 workspace 绑定写 spaceId；旧记录保留 projectId 兼容读。 */
+  spaceId?: string;
   projectId?: string;
   /** Latest inbound platform context for the isolated conversation. */
   replyToMessageId?: string;
@@ -220,6 +223,17 @@ export interface DeliveryLedgerEntry {
   /** Outbound text is kept in the machine-private ledger so a process restart
    * can recover a failed send without reading mutable conversation history. */
   text?: string;
+  /** Interactive card payload (Feishu `interactive`) for proactive sends.
+   * Text-only sends omit it; restart recovery replays the card JSON verbatim
+   * through the adapter's `sendCard` path. */
+  card?: Record<string, JsonCompatibleValue>;
+  /** Local file to upload and send as a file message (md/doc/pdf/…). Kept as
+   * a path reference so restart recovery re-reads the file; adapters without
+   * `sendFile` fall back to a text delivery. */
+  file?: {
+    path: string;
+    name: string;
+  };
   replyToMessageId?: string;
   threadId?: string;
   replyInThread?: boolean;
@@ -287,6 +301,16 @@ export interface MessagingAdapter {
     signal?: AbortSignal,
     context?: MessagingSendContext,
   ): Promise<{ deliveryId?: string }>;
+  /** Upload and send a local file as a file message (md/doc/pdf/…).
+   * Optional: adapters without file support leave it unset, and the delivery
+   * ledger falls back to text for file entries. */
+  sendFile?(
+    chatId: string,
+    filePath: string,
+    fileName?: string,
+    signal?: AbortSignal,
+    context?: MessagingSendContext,
+  ): Promise<{ deliveryId?: string }>;
 }
 
 export interface MessagingCardAdapter extends MessagingAdapter {
@@ -349,6 +373,9 @@ export interface MessagingInstanceClient extends MessagingInstance {
   hasCredentials: boolean;
   ownerConfigured: boolean;
   ownerLabel?: string;
+  /** Masked owner open id (e.g. `ou_ab12…cd34`) shown when no name is set;
+   * the full id never leaves the main process. */
+  ownerMaskedId?: string;
   ownerIdentitySource?: MessagingOwnerIdentitySource;
 }
 

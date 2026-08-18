@@ -55,6 +55,14 @@ export interface ChatAttachmentMetadata {
   attachmentTypes: string[];
 }
 
+export interface ChatResolvedRuntime {
+  providerId: string;
+  modelId: string;
+  profileId?: string;
+  entryId?: string;
+  toolNames: string[];
+}
+
 /** Optional host-owned lifecycle sink for shared execution records. The model
  * layer emits only bounded callback data and never imports execution storage. */
 export interface ChatExecutionLifecycle {
@@ -131,6 +139,8 @@ export interface ChatOptions {
    * budget and the full tool set.
    */
   disableTools?: boolean;
+  /** Restrict tools to a read-only allowlist (anonymous worker helper use only). */
+  toolAccess?: 'read-only';
   abortSignal?: AbortSignal | null;
   /** Legacy openclaw CLI timeout — ignored, retained for signature parity. */
   timeout?: number;
@@ -182,11 +192,18 @@ export interface ChatOptions {
     status: 'active' | 'revoked';
     candidateIds: string[];
   }) => void | Promise<void>;
+  /** Host observation of the actual runtime candidate and final tool catalog. */
+  onResolvedRuntime?: (runtime: ChatResolvedRuntime) => void;
   /** Project id of the conversation, when it belongs to one. Threaded
    *  through to local-tools / file-tools / image-gen-tool so workspace
    *  resolution picks up the project-scoped selection. Caller (group_chat
    *  or skill/agent edit) resolves it once before invoking. */
   projectId?: string;
+  /** 空间化重构：会话绑定的空间 id（会话直接挂空间）。Threaded through to
+   *  the core-agent runner（params.spaceId），gate 空间指令 / 角色画像 /
+   *  context-policy 系统提示词块注入 + 空间 memory 层级与 instructions 工具。
+   *  由 group_chat 每 turn 从 conversation.space_id 解析一次传入。 */
+  spaceId?: string;
   /** Extra absolute directory roots whitelisted for file-tools on top of
    *  workspace + attachment. Read AND write are permitted under these roots.
    *  Per-skill edit chats pass the skill dir so the LLM can read / search /

@@ -27,7 +27,10 @@ function extractFunction(name: string): string {
   throw new Error(`unterminated ${name}`);
 }
 
-function loadOrderProducedPaths(): (paths: string[]) => Array<{ path: string; base: string; i: number }> {
+function loadOrderProducedPaths(): (
+  paths: string[],
+  results?: Array<{ path: string; status: string }>,
+) => Array<{ path: string; base: string; i: number }> {
   const rank = extractFunction('_producedDeliverableRank');
   const specificity = extractFunction('_producedPathSpecificity');
   const order = extractFunction('_orderProducedPaths');
@@ -57,13 +60,18 @@ describe('conversation produced chips', () => {
 
   it('mounts compact file rows with a separate trailing menu at the bottom of the bubble', () => {
     expect(source).toContain('function _mountMessageProducedFooter');
-    expect(source).toContain('bubble.appendChild(node)');
-    expect(source).toContain('<div class="chat-msg-produced-item"');
+    // 9.1 统一框架：产物回执挂进 chat-result-block（_mountCompactResultBlock
+    // 的 details/body），bubble 兜底（(body || bubble).appendChild(node)）。
+    expect(source).toContain('(body || bubble).appendChild(node)');
+    expect(source).toContain('<div class="chat-msg-produced-item${invalid ?');
     expect(source).toContain('class="chat-msg-produced-main"');
     expect(source).toContain('class="chat-msg-produced-open-btn btn btn-sm"');
     expect(source).toContain('chat-msg-produced-path');
     expect(source).toContain('chat-msg-produced-badge');
     expect(source).toContain('data-produced-status');
+    expect(source).toContain('data-result-status');
+    expect(source).toContain('chat-msg-produced-validation');
+    expect(source).toContain('results: message.produced_results');
     expect(source).toContain('class="chat-msg-produced-menu-btn"');
     expect(styleSource).toContain('.chat-msg-produced {');
     expect(styleSource).toContain('.chat-msg-produced-open-btn {');
@@ -76,18 +84,32 @@ describe('conversation produced chips', () => {
 
 
 
-  it('folds intermediate process logs by default while keeping the activity strip visible', () => {
-    expect(source).toContain('<details class="stream-process" data-role="process-container" style="display:none">');
-    expect(source).not.toContain('<details class="stream-process" data-role="process-container" open style="display:none">');
+  it('shows intermediate process logs inline by default while keeping the activity strip visible', () => {
+    // 9.1 统一框架：运行中的真实工具事件/状态/检查点内联可见——process
+    // 容器由 document.createElement('details') 动态创建（className 设
+    // stream-process，expanded 时 open=true），activity 条继续显示状态。
+    expect(source).toContain("details.className = 'stream-process'");
     expect(source).toContain('stream-activity');
   });
 
   it('reuses the task-detail Files menu for produced-file actions', () => {
     expect(source).toContain('window.ConversationInfo.openFileMenu(menuBtn, p, base');
+    expect(source).toContain("allowedActions: fallbacks.includes('reveal') ? ['reveal'] : []");
+    expect(source).toContain("window.cogseed.invoke('workspace.openFileExternal'");
     expect(conversationInfoSource).toContain('function openFileMenu(anchorBtn, absPath, displayName, options = {})');
+    expect(conversationInfoSource).toContain('const allowedActions = Array.isArray(options.allowedActions)');
     expect(conversationInfoSource).toContain("data-action=\"add-to-chat\"");
     expect(conversationInfoSource).toContain("data-action=\"add-to-library\"");
     expect(conversationInfoSource).toContain("data-action=\"delete\"");
+  });
+
+  it('limits invalid output controls to validation-approved fallbacks', () => {
+    expect(source).toContain('data-result-fallbacks=');
+    expect(source).toContain("const canOpen = !invalid || fallbacks.includes('open')");
+    expect(source).toContain("const canReveal = !invalid || fallbacks.includes('reveal')");
+    expect(source).toContain("validation.preview !== 'available'");
+    expect(source).toContain("data-open-external=\"1\"");
+    expect(source).toContain("${canReveal ? `<button type=\"button\" class=\"chat-msg-produced-menu-btn\"");
   });
 
   it('dedupes same-basename chips to the more specific final path', () => {
@@ -112,6 +134,19 @@ describe('conversation produced chips', () => {
 
     expect(ordered).toHaveLength(1);
     expect(ordered[0].path).toBe('/workspace/b/report.md');
+  });
+
+  it('keeps a failed same-basename result beside the usable final file', () => {
+    const orderProducedPaths = loadOrderProducedPaths();
+    const stale = '/workspace/report.md';
+    const final = '/workspace/final/report.md';
+
+    const ordered = orderProducedPaths([stale, final], [
+      { path: stale, status: 'invalid' },
+      { path: final, status: 'ready' },
+    ]);
+
+    expect(ordered.map((item) => item.path)).toEqual([stale, final]);
   });
 });
 

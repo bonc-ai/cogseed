@@ -1,14 +1,7 @@
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
-
-import { safeId } from '../../storage';
 import { listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, readAbilityAsset } from './asset-service';
 import { listContextProjections, readContextProjection } from './context-projection';
-import { listTransferProofs, type TransferProofRecord } from './proof-service';
+import { listEffectivenessProofs, listTransferProofs, type TransferProofRecord } from './proof-service';
 import { listRecallUsage } from './usage-service';
-import { readRecallJsonRecord } from './store';
-import { recallJsonRecordPath } from './paths';
-import type { RecallJsonRecord } from './types';
 
 export type RecallAssetTimelineKind =
   | 'asset_created'
@@ -16,6 +9,12 @@ export type RecallAssetTimelineKind =
   | 'asset_paused'
   | 'asset_resumed'
   | 'asset_revoked'
+  | 'asset_archived'
+  | 'asset_deleted'
+  | 'asset_purged'
+  | 'asset_restored'
+  | 'asset_rolled_back'
+  | 'asset_maturity_downgraded'
   | 'asset_version'
   | 'projection_confirmed'
   | 'usage_recorded'
@@ -30,6 +29,16 @@ export interface RecallAssetTimelineItem {
   title: string;
   summary?: string;
   status?: string;
+  /**
+   * 效果评价的**结论**（better / no_improvement / worse / rework /
+   * insufficient_evidence / invalid）。
+   *
+   * 必须和 `status` 分开带：效果证明记录里 `status` 只回答"这次评价本身可不可
+   * 归因"（valid / invalid），结论在 `outcome` 上。此前只带 status，渲染层拿
+   * 'valid' 去匹配结论词表永远落空，于是退回英文原文，页面上显示成
+   * "Effectiveness recorded / User feedback: rework"。
+   */
+  outcome?: string;
   refs?: {
     assetId?: string;
     version?: string;
@@ -37,49 +46,9 @@ export interface RecallAssetTimelineItem {
     taskRunId?: string;
     transferProofId?: string;
     usageReceiptId?: string;
+    /** 使用记录自身 id（N-5: 不是回执 id，仅展示用，不参与回执索引）。 */
+    usage_id?: string;
   };
-}
-
-interface RecallEffectivenessProofRecord extends RecallJsonRecord {
-  transferProofId: string;
-  outcome: string;
-  status: string;
-  observedResult: string;
-  evidenceRefs: unknown[];
-  recommendedAction?: string;
-  createdAt: string;
-}
-
-function asEffectiveness(value: RecallJsonRecord): RecallEffectivenessProofRecord {
-  if (
-    typeof value.transferProofId !== 'string' ||
-    typeof value.outcome !== 'string' ||
-    typeof value.status !== 'string' ||
-    typeof value.observedResult !== 'string' ||
-    !Array.isArray(value.evidenceRefs) ||
-    typeof value.createdAt !== 'string'
-  ) throw new Error('malformed effectiveness proof');
-  return value as RecallEffectivenessProofRecord;
-}
-
-async function listEffectivenessProofs(userId: string): Promise<RecallEffectivenessProofRecord[]> {
-  const directory = path.dirname(recallJsonRecordPath(userId, 'effectiveness-proofs', 'placeholder'));
-  let names: string[];
-  try {
-    names = await fs.readdir(directory);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
-  }
-
-  const records = await Promise.all(
-    names
-      .filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5)))
-      .map(async (name) => readRecallJsonRecord(userId, 'effectiveness-proofs', name.slice(0, -5))),
-  );
-
-  return records.filter((record): record is RecallJsonRecord => Boolean(record)).map(asEffectiveness)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
@@ -89,12 +58,49 @@ function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
     case 'asset_paused': return 'Asset paused';
     case 'asset_resumed': return 'Asset resumed';
     case 'asset_revoked': return 'Asset revoked';
+    case 'asset_archived': return 'Asset archived';
+    case 'asset_deleted': return 'Asset deleted';
+    case 'asset_purged': return 'Asset purged';
+    case 'asset_restored': return 'Asset restored';
+    case 'asset_rolled_back': return 'Asset rolled back';
+    case 'asset_maturity_downgraded': return 'Asset maturity downgraded';
     case 'asset_version': return 'Asset version saved';
     case 'projection_confirmed': return 'Projection confirmed';
     case 'usage_recorded': return 'Usage recorded';
     case 'transfer_prepared': return 'Transfer prepared';
     case 'transfer_completed': return extra ? `Transfer ${extra}` : 'Transfer completed';
     case 'effectiveness_recorded': return 'Effectiveness recorded';
+  }
+}
+
+/**
+ * Audit actions are append-only data and can outlive the renderer's original
+ * vocabulary. Keep the timeline readable when a newer governance action is
+ * present, and ignore genuinely malformed legacy rows instead of producing an
+ * item with an undefined kind that crashes the final sort.
+ */
+function auditTimelineKind(action: unknown): RecallAssetTimelineKind | undefined {
+  switch (action) {
+    case 'created': return 'asset_created';
+    case 'updated': return 'asset_updated';
+    case 'paused': return 'asset_paused';
+    case 'resumed': return 'asset_resumed';
+    case 'revoked': return 'asset_revoked';
+    case 'archived': return 'asset_archived';
+    case 'deleted': return 'asset_deleted';
+    case 'purged': return 'asset_purged';
+    case 'restored': return 'asset_restored';
+    case 'rolled_back': return 'asset_rolled_back';
+    case 'maturity_downgraded': return 'asset_maturity_downgraded';
+    case 'pause_recommended':
+    case 'rework_recommended':
+    case 'recommendation_cleared':
+    case 'cross_scope_confirmed':
+    case 'cross_scope_withdrawn':
+    case 'maturity_advanced':
+    case 'maturity_corrected':
+      return 'asset_updated';
+    default: return undefined;
   }
 }
 
@@ -107,15 +113,9 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
   const items: RecallAssetTimelineItem[] = [];
 
   for (const audit of await listAbilityAssetAudit(userId, assetId)) {
-    const kind: RecallAssetTimelineKind = audit.action === 'created'
-      ? 'asset_created'
-      : audit.action === 'updated'
-        ? 'asset_updated'
-        : audit.action === 'paused'
-          ? 'asset_paused'
-          : audit.action === 'resumed'
-            ? 'asset_resumed'
-            : 'asset_revoked';
+    const kind = auditTimelineKind(audit.action);
+    if (!kind || typeof audit.id !== 'string' || !audit.id
+      || typeof audit.at !== 'string' || Number.isNaN(Date.parse(audit.at))) continue;
     pushSorted(items, {
       id: audit.id,
       kind,
@@ -162,7 +162,11 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
         version: usage.assetVersion,
         projectionId: usage.projectionId,
         taskRunId: usage.taskRunId,
-        usageReceiptId: usage.id,
+        // N-5: usage 行不再伪装 usageReceiptId。前端按 receiptId 索引回执，
+        // usage 记录 id 不是回执 id——放了会让「详情/回执」在 usage 行恒查
+        // 不到（口径漂移：transfer_completed 行的 usageReceiptId 才是真回执
+        // id）。usage 行保留 usage_id 供展示，不参与回执索引。
+        usage_id: usage.id,
       },
     });
   }
@@ -214,8 +218,13 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       title: itemTitle('effectiveness_recorded'),
       summary: proof.observedResult,
       status: proof.status,
+      outcome: proof.outcome,
       refs: {
         assetId: asset.id,
+        // 只带自己这条记录真正持有的引用。回执号属于**迁移证明**，效果证明是
+        // 通过 transferProofId 指向它的——在这里顺手把 receiptId 抄过来，等于
+        // 断言"效果证明直接持有一张回执"，把 Receipt → Transfer → Effectiveness
+        // 三段关系拍成一段。要核对回执，消费方顺着 transferProofId 走一跳。
         transferProofId: proof.transferProofId,
         projectionId: transfer.projectionId,
       },

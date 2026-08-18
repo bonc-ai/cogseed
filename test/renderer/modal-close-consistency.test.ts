@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 const root = path.join(__dirname, '../..');
 const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 
-const indexSource = read('src/renderer/index.html');
 const styleSource = read('src/renderer/style.css');
 const backdropDismissSources = [
   read('src/renderer/modules/library-transfer.js'),
@@ -15,7 +14,6 @@ const backdropDismissSources = [
 const dialogSources = [
   read('src/renderer/modules/library-transfer.js'),
   read('src/renderer/modules/memory.js'),
-  read('src/renderer/modules/project-detail.js'),
   read('src/renderer/modules/conversation.js'),
   read('src/renderer/modules/chat-file-viewer.js'),
   read('src/renderer/modules/chat-lightbox.js'),
@@ -25,6 +23,17 @@ const dialogSources = [
 describe('modal close control consistency', () => {
   it('does not dismiss the audited dialogs from a backdrop click', () => {
     for (const source of backdropDismissSources) {
+      // 危险弹窗（删除/确认类）不得 backdrop 关闭。conversation.js 的 merge
+      // picker（合并会话选择器）是轻量非危险交互，允许 backdrop 关闭——
+      // 排除该片段后再断言。
+      if (source === backdropDismissSources[1]) {
+        const withoutMergePicker = source.replace(
+          /overlay\.addEventListener\('click', \(event\) => \{ if \(event\.target === overlay\) close\(\); \}\);/g,
+          '',
+        );
+        expect(withoutMergePicker).not.toMatch(/event\.target\s*===\s*overlay|e\.target\s*===\s*overlay/);
+        continue;
+      }
       expect(source).not.toMatch(/event\.target\s*===\s*overlay|e\.target\s*===\s*overlay/);
     }
   });
@@ -37,7 +46,6 @@ describe('modal close control consistency', () => {
   });
 
   it('uses the shared control in static and dynamically mounted dialogs', () => {
-    expect(indexSource).toContain('class="modal-close-btn project-library-modal-close"');
     for (const source of dialogSources) {
       expect(source).toContain('modal-close-btn');
       expect(source).toContain('modal-close-icon');

@@ -19,6 +19,7 @@ let _settingsState = {
   pickerModelSel: null,
   pickerProviderEl: null,
   pickerModelEl: null,
+  pickerProviderValueBeforeAction: '',
   addBtnEl: null,
   ttsPresets: [],
   ttsProfiles: [],
@@ -39,9 +40,16 @@ let _settingsState = {
   authProfilesRecoveryBound: false,
   customProviders: [],
   customProvidersBound: false,
+  customProviderModalGeneration: 0,
+  customProviderModalView: null,
+  pickerModelRequestGeneration: 0,
   ccswitchStatus: null,
   ccswitchPreviewRows: [],
+  ccswitchPreviewUnsupported: [],
   ccswitchPreviewSelectedIds: [],
+  ccswitchPreviewSelectedProvider: null,
+  ccswitchPreviewSelectedModels: [],
+  ccswitchPreviewGeneration: 0,
   ccswitchPreviewBound: false,
 };
 
@@ -70,9 +78,12 @@ async function loadSettings() {
   // 4-tab structure (batch 6). Initialize switching + activate default tab
   // (通用 by default — matches the is-active class on the markup).
   if (typeof initSettingsTabs === 'function') initSettingsTabs();
+  _settingsBindConfiguredToggle();
   _settingsBindLanguageOnce();
   _settingsBindTaskNotificationsOnce();
   _settingsBindClientConfigOnce();
+  _settingsBindContextsEntryOnce();
+  _settingsBindUsageConnectionsOnce();
   _settingsSyncLanguageRadio();
   await Promise.all([
     _settingsSafeCall('settings providers refresh', _settingsRefreshProviders),
@@ -89,9 +100,11 @@ async function loadSettings() {
     _settingsSafeCall('settings auth profiles status refresh', _settingsRefreshAuthProfilesStatus),
     _settingsSafeCall('settings custom providers refresh', _settingsRefreshCustomProviders),
     _settingsSafeCall('settings ccswitch status refresh', _settingsRefreshCcswitchStatus),
-    _settingsSafeCall('settings messaging refresh', () => window.initMessagingSettings && window.initMessagingSettings()),
+    _settingsSafeCall('settings touchpoint refresh', () => window.initTouchpointSettings && window.initTouchpointSettings()),
+    _settingsSafeCall('settings hub account refresh', () => window.initHubAccountSettings && window.initHubAccountSettings()),
   ]);
-  await _settingsSafeCall('settings model authorization init', () => window.initModelAuthorizationSettings && window.initModelAuthorizationSettings());
+  await _settingsSafeCall('settings model picker render', _settingsRenderPicker);
+  await _settingsSafeCall('settings model entries render', _settingsRenderEntries);
   await _settingsSafeCall('settings local execution render', _settingsRenderLocalExec);
   await _settingsSafeCall('settings search render', _settingsRenderSearchSection);
   await _settingsSafeCall('settings image render', _settingsRenderImageSection);
@@ -122,7 +135,7 @@ function _settingsTaskNotificationPermissionState(state) {
 
 async function _settingsRefreshTaskNotifications() {
   try {
-    const res = await window.orkas.invoke('prefs.getTaskNotifications');
+    const res = await window.cogseed.invoke('prefs.getTaskNotifications');
     _settingsState.taskNotifications = (res && res.ok)
       ? {
           enabled: !!res.enabled,
@@ -185,7 +198,7 @@ function _settingsRenderTaskNotifications() {
       openBtn.addEventListener('click', async () => {
         openBtn.disabled = true;
         try {
-          await window.orkas.invoke('prefs.openTaskNotificationSettings');
+          await window.cogseed.invoke('prefs.openTaskNotificationSettings');
         } catch (err) {
           _settingsLog.warn('open task notification settings failed', err);
         } finally {
@@ -207,7 +220,7 @@ function _settingsRenderTaskNotifications() {
       const permissionState = _settingsTaskNotificationPermissionState(currentState);
       cb.disabled = true;
       try {
-        const res = await window.orkas.invoke('prefs.setTaskNotifications', { enabled: next });
+        const res = await window.cogseed.invoke('prefs.setTaskNotifications', { enabled: next });
         if (res && res.ok) {
           _settingsState.taskNotifications = {
             ...currentState,
@@ -250,7 +263,7 @@ function _settingsBindClientConfigOnce() {}
 const _LOCALEXEC_MODES = ['workspace_approval', 'all_files_approval', 'all_files_auto'];
 
 async function _settingsRefreshLocalExec() {
-  const res = await window.orkas.invoke('permissions.getLocalExec');
+  const res = await window.cogseed.invoke('permissions.getLocalExec');
   const mode = (res && res.ok && _LOCALEXEC_MODES.includes(res.mode)) ? res.mode : 'all_files_approval';
   _settingsState.localExec = { mode };
 }
@@ -268,7 +281,7 @@ function _settingsRenderLocalExec() {
         const next = radio.value;
         const prev = (_settingsState.localExec && _settingsState.localExec.mode) || 'all_files_approval';
         try {
-          const res = await window.orkas.invoke('permissions.setLocalExecMode', { mode: next });
+          const res = await window.cogseed.invoke('permissions.setLocalExecMode', { mode: next });
           if (res && res.ok && res.mode) {
             _settingsState.localExec = { mode: res.mode };
             _settingsRenderLocalExec();
@@ -295,7 +308,7 @@ function _settingsRenderLocalExec() {
 
 async function _settingsRefreshMetacognition() {
   try {
-    const res = await window.orkas.invoke('prefs.getMetacognition');
+    const res = await window.cogseed.invoke('prefs.getMetacognition');
     _settingsState.metacognition = (res && res.ok)
       ? { enabled: !!res.enabled, envForcedOff: !!res.envForcedOff }
       : { enabled: true, envForcedOff: false };
@@ -319,7 +332,7 @@ function _settingsRenderMetacognition() {
       if (cb.disabled) return;
       const next = !!cb.checked;
       try {
-        const res = await window.orkas.invoke('prefs.setMetacognition', { enabled: next });
+        const res = await window.cogseed.invoke('prefs.setMetacognition', { enabled: next });
         if (res && res.ok) {
           _settingsState.metacognition = { ..._settingsState.metacognition, enabled: !!res.enabled };
         } else {
@@ -352,11 +365,30 @@ function _settingsRenderMetacognition() {
 
 async function _settingsRefreshDataRoot() {
   try {
-    const res = await window.orkas.invoke('app.dataRootPath');
+    const res = await window.cogseed.invoke('app.dataRootPath');
     _settingsState.dataRoot = (res && res.ok && res.path) ? String(res.path) : '';
   } catch (_) {
     _settingsState.dataRoot = '';
   }
+}
+
+function _settingsBindContextsEntryOnce() {
+  const btn = document.getElementById('settings-contexts-open-btn');
+  if (!btn || btn.dataset.bound) return;
+  btn.addEventListener('click', () => {
+    if (typeof setView === 'function') setView('contexts');
+  });
+  btn.dataset.bound = '1';
+}
+
+// Settings › 账号与用量 › 前往连接：模型与触点配置已收敛到「连接」一级入口。
+function _settingsBindUsageConnectionsOnce() {
+  const btn = document.getElementById('settings-usage-open-connections');
+  if (!btn || btn.dataset.bound) return;
+  btn.addEventListener('click', () => {
+    if (typeof setView === 'function') setView('connections');
+  });
+  btn.dataset.bound = '1';
 }
 
 function _settingsRenderDataRoot() {
@@ -367,7 +399,7 @@ function _settingsRenderDataRoot() {
   if (!btn.dataset.bound) {
     btn.addEventListener('click', async () => {
       try {
-        await window.orkas.invoke('app.openDataRoot');
+        await window.cogseed.invoke('app.openDataRoot');
       } catch (err) {
         _settingsLog.warn('open data root failed', { error: (err && err.message) || String(err) });
         _settingsTrackEvent('settings_open_data_root_result', { result: 'failure' });
@@ -400,6 +432,27 @@ const _SETTINGS_LANG_OPTIONS = [
       ]),
 ];
 
+// Configured-models list toggle: collapse/expand the priority entry list so
+// a long model list stays scannable. Preference is remembered per machine.
+function _settingsBindConfiguredToggle() {
+  const toggle = document.getElementById('settings-configured-toggle');
+  const section = document.getElementById('settings-configured-models');
+  if (!toggle || !section || toggle.dataset.bound) return;
+  toggle.dataset.bound = '1';
+  const apply = (collapsed) => {
+    section.classList.toggle('is-collapsed', collapsed);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    try {
+      if (collapsed) localStorage.setItem('settings.configuredModelsCollapsed', '1');
+      else localStorage.removeItem('settings.configuredModelsCollapsed');
+    } catch { /* storage unavailable — in-memory only */ }
+  };
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('settings.configuredModelsCollapsed') === '1'; } catch { /* ignore */ }
+  apply(collapsed);
+  toggle.addEventListener('click', () => apply(!section.classList.contains('is-collapsed')));
+}
+
 function _settingsBindLanguageOnce() {
   if (_settingsLanguageSel) return;
   const el = document.getElementById('settings-language-select');
@@ -431,7 +484,8 @@ function _settingsSyncLanguageRadio() {
 window.addEventListener('i18n-change', () => {
   _settingsSyncLanguageRadio();
   _settingsRenderLocalExec();
-  if (window.refreshModelAuthorizationSettings) window.refreshModelAuthorizationSettings();
+  _settingsRenderPicker();
+  _settingsRenderEntries();
   _settingsRenderSearchSection();
   _settingsRenderImageSection();
   _settingsRenderVideoSection();
@@ -439,22 +493,89 @@ window.addEventListener('i18n-change', () => {
   _settingsRenderCommanderBackend();
   _settingsRenderCustomProviders();
   _settingsRenderCcswitchStatus();
+  _settingsRenderCliFallback();
+  _settingsRerenderCustomProviderModalForI18n();
   if (_settingsState.ccswitchPreviewRows.length) _settingsRenderCcswitchPreviewDialog();
 });
 
+// ── Commander CLI fallback (no API-key model) ─────────────────────────────
+// Friendly label for a fallback CLI value ('' → auto). Mirrors the
+// conversation.js fallback labels; must cover every cli-fallback whitelist
+// entry (claude / codex / opencode / workbuddy).
+function _settingsCliFallbackLabel(cli) {
+  if (cli === 'claude') return 'Claude Code';
+  if (cli === 'codex') return 'Codex';
+  if (cli === 'opencode') return 'OpenCode';
+  if (cli === 'workbuddy') return 'WorkBuddy';
+  return '';
+}
+
+async function _settingsRenderCliFallback() {
+  const select = document.getElementById('settings-cli-fallback-select');
+  const stateEl = document.getElementById('settings-cli-fallback-state');
+  if (!select) return;
+
+  let prefs = { cli: '', noticeShown: false };
+  try {
+    const res = await window.cogseed.invoke('prefs.getCliFallback');
+    if (res) prefs = { cli: res.cli || '', noticeShown: !!res.noticeShown };
+  } catch (_) { /* prefs unavailable */ }
+
+  select.value = prefs.cli || '';
+  if (stateEl) {
+    stateEl.textContent = prefs.cli
+      ? t('settings.cli_fallback.state_chosen').replace('{cli}', _settingsCliFallbackLabel(prefs.cli))
+      : t('settings.cli_fallback.state_auto');
+  }
+
+  if (select.dataset.bound === '1') return;
+  select.dataset.bound = '1';
+  select.addEventListener('change', async () => {
+    try {
+      await window.cogseed.invoke('prefs.setCliFallback', { cli: select.value });
+      const res = await window.cogseed.invoke('model.hasConfigured');
+      const noApi = !(res && res.configured);
+      if (stateEl) {
+        stateEl.textContent = select.value
+          ? t('settings.cli_fallback.state_chosen').replace('{cli}', _settingsCliFallbackLabel(select.value))
+          : t('settings.cli_fallback.state_auto');
+      }
+      if (noApi && typeof uiToast === 'function') {
+        uiToast(t('settings.cli_fallback.saved_no_api'), { variant: 'warning', timeoutMs: 5000 });
+      }
+    } catch (err) {
+      _settingsLog.warn('cli fallback save failed', err);
+    }
+  });
+
+  // One-time honest notice when the user is in the no-API state.
+  try {
+    const modelRes = await window.cogseed.invoke('model.hasConfigured');
+    if (!(modelRes && modelRes.configured) && !prefs.noticeShown) {
+      await window.cogseed.invoke('prefs.markCliFallbackNoticeShown');
+      if (typeof uiToast === 'function') {
+        uiToast(t('settings.cli_fallback.notice_no_api'), { variant: 'warning', timeoutMs: 8000 });
+      }
+    }
+  } catch (_) { /* notice is best-effort */ }
+}
+
 async function _settingsRefreshProviders() {
-  const res = await window.orkas.invoke('auth.listProviders');
+  const res = await window.cogseed.invoke('auth.listProviders');
   _settingsState.providers = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
+  // Shared cache for the model-authorization modal so it never re-triggers
+  // auth.listProviders (core-agent cold start) just to paint preset cards.
+  if (_settingsState.providers.length) window.__settingsProvidersCache = _settingsState.providers;
 }
 
 async function _settingsRefreshEntries() {
-  const res = await window.orkas.invoke('auth.listEntries', { includeUnavailable: true });
+  const res = await window.cogseed.invoke('auth.listEntries', { includeUnavailable: true });
   _settingsState.entries = (res && res.ok && Array.isArray(res.entries)) ? res.entries : [];
   if (typeof trackModelConfigSnapshot === 'function') trackModelConfigSnapshot(_settingsState.entries);
 }
 
 async function _settingsRefreshAuthProfilesStatus() {
-  const res = await window.orkas.invoke('auth.getProfilesStoreStatus');
+  const res = await window.cogseed.invoke('auth.getProfilesStoreStatus');
   _settingsState.authProfilesStatus = (res && res.ok !== undefined) ? res : null;
 }
 
@@ -479,7 +600,7 @@ function _settingsRenderAuthProfilesRecovery() {
 
 async function _settingsResetAuthProfilesStore() {
   _settingsSetStatus('settings-auth-profiles-reset-status', '', t('settings.auth_recovery.resetting'));
-  const res = await window.orkas.invoke('auth.resetProfilesStoreAfterDecryptFailure');
+  const res = await window.cogseed.invoke('auth.resetProfilesStoreAfterDecryptFailure');
   if (!res || !res.ok) {
     _settingsSetStatus('settings-auth-profiles-reset-status', 'error', (res && res.error) || t('settings.auth_recovery.reset_failed'));
     return;
@@ -491,7 +612,7 @@ async function _settingsResetAuthProfilesStore() {
 }
 
 async function _settingsRefreshCommanderBackend() {
-  const res = await window.orkas.invoke('settings.getCommanderBackend');
+  const res = await window.cogseed.invoke('settings.getCommanderBackend');
   if (res && res.ok) {
     _settingsState.commanderBackendView = {
       settings: res.settings || { backend: 'orkas-core-agent', authEntryId: null, localCli: null },
@@ -553,7 +674,7 @@ function _settingsRenderCommanderBackend() {
 async function _settingsSaveCommanderBackend() {
   const settings = { backend: 'orkas-core-agent', authEntryId: null, localCli: null };
   _settingsSetStatus('settings-commander-backend-status', '', t('settings.save_loading'));
-  const res = await window.orkas.invoke('settings.setCommanderBackend', { settings });
+  const res = await window.cogseed.invoke('settings.setCommanderBackend', { settings });
   if (!res || !res.ok) {
     _settingsSetStatus('settings-commander-backend-status', 'error', (res && res.error) || t('settings.save_failed'));
     return;
@@ -568,17 +689,280 @@ function _settingsCustomProviderProtocolLabel(protocol) {
   const key = String(protocol || '').toLowerCase();
   if (key === 'anthropic') return t('settings.custom_providers.protocol_anthropic');
   if (key === 'openai') return t('settings.custom_providers.protocol_openai');
+  if (key === 'openai-responses') return t('settings.custom_providers.protocol_openai_responses');
   if (key === 'gemini') return t('settings.custom_providers.protocol_gemini');
   return key || t('settings.custom_providers.protocol_unknown');
 }
 
+const _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW = 131072;
+const _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS = 8192;
+const _CUSTOM_PROVIDER_MAX_MODELS = 100;
+const _CUSTOM_PROVIDER_MAX_CONTEXT_WINDOW = 16777216;
+const _CUSTOM_PROVIDER_MAX_OUTPUT_TOKENS = 1048576;
+const _settingsCustomProviderPendingActions = new Set();
+let _settingsCustomProviderModelFieldId = 0;
+
+function _settingsSetCustomProviderModalView(kind, provider = null, model = null, preserveSession = false) {
+  const current = _settingsState.customProviderModalView;
+  const generation = preserveSession && current
+    ? current.generation
+    : ++_settingsState.customProviderModalGeneration;
+  _settingsState.customProviderModalView = {
+    kind,
+    generation,
+    provider: provider || null,
+    providerId: provider?.id || null,
+    model: model || null,
+    busyActionKey: preserveSession ? (current?.busyActionKey || null) : null,
+  };
+  return generation;
+}
+
+function _settingsIsCustomProviderModalViewActive(generation, providerId = null) {
+  const overlay = document.getElementById('settings-custom-provider-modal');
+  const view = _settingsState.customProviderModalView;
+  return !!(
+    overlay?.classList.contains('open')
+    && view
+    && view.generation === generation
+    && (!providerId || view.providerId === providerId)
+  );
+}
+
+function _settingsCurrentCustomProvider(providerId) {
+  return (_settingsState.customProviders || []).find((provider) => provider.id === providerId) || null;
+}
+
+function _settingsCustomProviderForCatalogProvider(provider) {
+  if (!provider || provider.providerKind !== 'custom') return null;
+  const id = String(provider.id || '').startsWith('cp:')
+    ? String(provider.id).slice(3)
+    : String(provider.id || '');
+  return _settingsCurrentCustomProvider(id);
+}
+
+function _settingsIsCatalogProviderEnabled(provider) {
+  if (!provider || provider.providerKind !== 'custom') return true;
+  if (provider.enabled === false) return false;
+  const customProvider = _settingsCustomProviderForCatalogProvider(provider);
+  return customProvider ? customProvider.enabled !== false : true;
+}
+
+function _settingsCustomProviderApiFormatLabel(protocol) {
+  const key = String(protocol || '').toLowerCase();
+  if (key === 'anthropic') return t('settings.custom_providers.api_format_anthropic');
+  if (key === 'openai') return t('settings.custom_providers.api_format_openai');
+  if (key === 'openai-responses') return t('settings.custom_providers.api_format_openai_responses');
+  if (key === 'gemini') return t('settings.custom_providers.api_format_gemini');
+  return _settingsCustomProviderProtocolLabel(key);
+}
+
+function _settingsCustomProviderModels(provider) {
+  if (!Array.isArray(provider?.models)) return [];
+  const seen = new Set();
+  const models = [];
+  for (const raw of provider.models) {
+    const id = String(typeof raw === 'string' ? raw : raw?.id || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const contextWindow = Number.isSafeInteger(raw?.contextWindow) && raw.contextWindow > 0
+      ? raw.contextWindow
+      : _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW;
+    const maxTokens = Number.isSafeInteger(raw?.maxTokens) && raw.maxTokens > 0
+      ? raw.maxTokens
+      : _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS;
+    models.push({ id, contextWindow, maxTokens });
+  }
+  return models;
+}
+
+function _settingsFormatTokenLimit(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  if (amount >= 1000000 && amount % 1000000 === 0) return `${amount / 1000000}M`;
+  if (amount >= 1000 && amount % 1000 === 0) return `${amount / 1000}K`;
+  return new Intl.NumberFormat().format(amount);
+}
+
+function _settingsIconHtml(name, className = 'ui-icon') {
+  return (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+    ? window.uiIconHtml(name, className)
+    : '';
+}
+
+function _settingsCustomProviderActionButton(icon, label, className, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = className;
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  const iconOnly = String(className || '').split(/\s+/).includes('icon-btn');
+  button.innerHTML = `${_settingsIconHtml(icon, 'ui-icon settings-custom-provider-action-icon')}${iconOnly ? '' : `<span>${escapeHtml(label)}</span>`}`;
+  button.addEventListener('click', async (event) => {
+    if (button.disabled) return;
+    _settingsSetCustomProviderButtonBusy(button, true);
+    try {
+      await onClick(event);
+    } finally {
+      _settingsSetCustomProviderButtonBusy(button, false);
+    }
+  });
+  return button;
+}
+
+function _settingsSetCustomProviderButtonBusy(button, busy) {
+  if (!button) return;
+  button.disabled = !!busy;
+  button.classList.toggle('is-busy', !!busy);
+  if (busy) button.setAttribute('aria-busy', 'true');
+  else button.removeAttribute('aria-busy');
+}
+
+function _settingsSetCustomProviderModalActionBusy(generation, actionKey, busy, sourceButton = null) {
+  const view = _settingsState.customProviderModalView;
+  const activeGeneration = view?.generation === generation;
+  if (activeGeneration) {
+    view.busyActionKey = busy ? actionKey : (view.busyActionKey === actionKey ? null : view.busyActionKey);
+    const actions = document.getElementById('settings-custom-provider-modal-actions');
+    for (const button of actions?.children || []) {
+      if (button.dataset?.customProviderActionKey === actionKey) {
+        _settingsSetCustomProviderButtonBusy(button, busy);
+      }
+    }
+  }
+  if (sourceButton) _settingsSetCustomProviderButtonBusy(sourceButton, busy);
+}
+
+async function _settingsCallCustomProvider(channel, payload) {
+  try {
+    return await window.cogseed.invoke(channel, payload);
+  } catch (err) {
+    const error = (err && err.message) || String(err);
+    _settingsLog.warn('custom provider action failed', { channel, error });
+    return { ok: false, error };
+  }
+}
+
+async function _settingsWithCustomProviderAction(key, action) {
+  if (_settingsCustomProviderPendingActions.has(key)) return false;
+  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
+  _settingsCustomProviderPendingActions.add(key);
+  try {
+    return await action();
+  } catch (err) {
+    _settingsLog.warn('custom provider UI action failed', {
+      action: key,
+      error: (err && err.message) || String(err),
+    });
+    if (_settingsIsCustomProviderModalViewActive(viewGeneration)) {
+      _settingsCustomProviderModalStatus('error', t('settings.custom_providers.action_failed'));
+    }
+    return false;
+  } finally {
+    _settingsCustomProviderPendingActions.delete(key);
+  }
+}
+
+function _settingsCustomProviderModalStatus(kind, text) {
+  const status = document.getElementById('settings-custom-provider-modal-status');
+  if (!status) return;
+  status.textContent = text || '';
+  status.className = 'form-msg' + (kind ? ` ${kind}` : '');
+}
+
+function _settingsNormalizeCustomProviderModel(input) {
+  const id = String(input?.id || '').trim();
+  const contextWindow = Number(input?.contextWindow);
+  const maxTokens = Number(input?.maxTokens);
+  if (!id) return { ok: false, error: t('settings.custom_providers.error_model_id') };
+  if (id.length > 200) return { ok: false, error: t('settings.custom_providers.error_model_id_long') };
+  if (!Number.isSafeInteger(contextWindow) || contextWindow < 1 || contextWindow > _CUSTOM_PROVIDER_MAX_CONTEXT_WINDOW) {
+    return { ok: false, error: t('settings.custom_providers.error_context_window') };
+  }
+  if (!Number.isSafeInteger(maxTokens) || maxTokens < 1 || maxTokens > _CUSTOM_PROVIDER_MAX_OUTPUT_TOKENS || maxTokens > contextWindow) {
+    return { ok: false, error: t('settings.custom_providers.error_max_tokens') };
+  }
+  return { ok: true, model: { id, contextWindow, maxTokens } };
+}
+
+function _settingsIsValidCustomProviderUrl(value) {
+  try {
+    const parsed = new URL(String(value || '').trim());
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+}
+
+function _settingsAppendCustomProviderModelDraft(container, model = null) {
+  if (!container || container.children.length >= _CUSTOM_PROVIDER_MAX_MODELS) return null;
+  const normalized = model || {
+    id: '',
+    contextWindow: _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS,
+  };
+  const row = document.createElement('div');
+  row.className = 'settings-custom-provider-model-draft';
+
+  // Minimal editing: one model name per row. Context window / max output
+  // fall back to the provider defaults when not supplied.
+  const idInput = document.createElement('input');
+  idInput.type = 'text';
+  idInput.className = 'form-input settings-custom-provider-model-id';
+  idInput.value = normalized.id || '';
+  idInput.placeholder = t('settings.custom_providers.model_id_placeholder');
+  idInput.setAttribute('aria-label', t('settings.custom_providers.model_id'));
+  idInput.autocomplete = 'off';
+  idInput.spellcheck = false;
+  row.appendChild(idInput);
+
+  const removeButton = document.createElement('button');
+  removeButton.type = 'button';
+  removeButton.className = 'settings-custom-provider-model-draft-remove';
+  removeButton.title = t('settings.custom_providers.remove_model');
+  removeButton.setAttribute('aria-label', removeButton.title);
+  removeButton.innerHTML = _settingsIconHtml('x', 'ui-icon');
+  removeButton.addEventListener('click', () => {
+    if (container.children.length === 1) {
+      idInput.value = '';
+      idInput.focus();
+      return;
+    }
+    row.remove();
+  });
+  row.appendChild(removeButton);
+
+  container.appendChild(row);
+  return row;
+}
+
+function _settingsReadCustomProviderModelDrafts(container) {
+  const models = [];
+  const seen = new Set();
+  for (const row of container?.querySelectorAll('.settings-custom-provider-model-draft') || []) {
+    const result = _settingsNormalizeCustomProviderModel({
+      id: row.querySelector('.settings-custom-provider-model-id')?.value,
+      // Context / max-output inputs no longer exist in the minimal UI; fall
+      // back to the provider defaults when absent.
+      contextWindow: Number(row.querySelector('.settings-custom-provider-model-context')?.value) || _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: Number(row.querySelector('.settings-custom-provider-model-output')?.value) || _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS,
+    });
+    if (!result.ok) return result;
+    if (seen.has(result.model.id)) return { ok: false, error: t('settings.custom_providers.error_duplicate_model') };
+    seen.add(result.model.id);
+    models.push(result.model);
+  }
+  if (!models.length) return { ok: false, error: t('settings.custom_providers.error_models_required') };
+  return { ok: true, models };
+}
+
 async function _settingsRefreshCustomProviders() {
-  const res = await window.orkas.invoke('customProviders.list');
+  const res = await window.cogseed.invoke('customProviders.list');
   _settingsState.customProviders = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
 }
 
 async function _settingsRefreshCcswitchStatus() {
-  const res = await window.orkas.invoke('customProviders.ccswitch.probe');
+  const res = await window.cogseed.invoke('customProviders.ccswitch.probe');
   _settingsState.ccswitchStatus = (res && res.ok !== false) ? res : { ok: false, available: false, error: (res && res.error) || t('settings.ccswitch.probe_failed') };
 }
 
@@ -620,58 +1004,42 @@ function _settingsRenderCustomProviders() {
     const row = document.createElement('div');
     row.className = 'entry-row settings-custom-provider-row';
     row.dataset.providerId = provider.id;
+    row.setAttribute('draggable', 'false');
 
     const main = document.createElement('div');
     main.className = 'entry-main';
     const primary = document.createElement('div');
     primary.className = 'entry-primary';
-    primary.innerHTML = `
-      <span class="entry-provider">${escapeHtml(provider.name || provider.id)}</span>
-      <span class="entry-sep">·</span>
-      <span class="entry-model">${escapeHtml(_settingsCustomProviderProtocolLabel(provider.protocol))}</span>
-      ${provider.apiKeyMasked ? `<span class="account-mask">${escapeHtml(provider.apiKeyMasked)}</span>` : ''}
-    `;
+    primary.textContent = provider.name || provider.id;
     main.appendChild(primary);
-    row.textContent = provider.name || provider.id;
 
     const meta = document.createElement('div');
     meta.className = 'entry-meta';
-    const metaBits = [provider.baseUrl, Array.isArray(provider.models) ? `${provider.models.length}` : '', provider.source ? t(`settings.custom_providers.source_${provider.source}`) : ''].filter(Boolean);
+    const modelCount = _settingsCustomProviderModels(provider).length;
+    const metaBits = [
+      _settingsCustomProviderApiFormatLabel(provider.protocol),
+      provider.baseUrl,
+      t('settings.custom_providers.model_count', { count: String(modelCount) }),
+      provider.enabled === false ? t('common.disabled') : t('common.enabled'),
+    ].filter(Boolean);
     meta.textContent = metaBits.join(' · ');
     main.appendChild(meta);
     row.appendChild(main);
 
     const actions = document.createElement('div');
     actions.className = 'entry-actions';
-    const editBtn = document.createElement('button');
-    editBtn.className = 'btn btn-sm';
-    editBtn.textContent = t('settings.edit');
-    editBtn.addEventListener('click', () => _settingsOpenCustomProviderModal(provider));
-    actions.appendChild(editBtn);
-
-    const delBtn = document.createElement('button');
-    delBtn.className = 'btn btn-sm btn-danger';
-    delBtn.textContent = t('settings.delete');
-    delBtn.addEventListener('click', async () => {
-      const ok = typeof uiConfirm === 'function' ? await uiConfirm(t('settings.custom_providers.confirm_delete', { name: provider.name || provider.id })) : true;
-      if (!ok) return;
-      _settingsSetStatus('settings-custom-providers-status', 'busy', t('settings.custom_providers.deleting'));
-      const res = await window.orkas.invoke('customProviders.remove', { id: provider.id });
-      if (!res || !res.ok) {
-        _settingsSetStatus('settings-custom-providers-status', 'error', (res && res.error) || t('settings.custom_providers.delete_failed'));
-        return;
-      }
-      await _settingsRefreshCustomProviders();
-      _settingsRenderCustomProviders();
-      _settingsSetStatus('settings-custom-providers-status', 'ok', t('settings.custom_providers.delete_ok'));
-    });
-    actions.appendChild(delBtn);
+    actions.appendChild(_settingsCustomProviderActionButton(
+      'settings',
+      t('settings.custom_providers.manage'),
+      'btn btn-sm settings-custom-provider-manage',
+      () => _settingsOpenCustomProviderDetails(provider),
+    ));
     row.appendChild(actions);
     container.appendChild(row);
   });
 }
 
-function _settingsOpenCustomProviderModal(provider = null) {
+function _settingsOpenCustomProviderModal(provider = null, options = {}) {
   const overlay = document.getElementById('settings-custom-provider-modal');
   const title = document.getElementById('settings-custom-provider-modal-title');
   const body = document.getElementById('settings-custom-provider-modal-body');
@@ -679,25 +1047,51 @@ function _settingsOpenCustomProviderModal(provider = null) {
   const status = document.getElementById('settings-custom-provider-modal-status');
   if (!overlay || !title || !body || !actions || !status) return;
   const editing = !!provider?.id;
+  const viewGeneration = _settingsSetCustomProviderModalView('provider-form', provider, null, options.preserveSession === true);
   title.textContent = editing ? t('settings.custom_providers.edit_title') : t('settings.custom_providers.add_title');
   body.innerHTML = `
+    <p class="settings-custom-provider-modal-subtitle">${escapeHtml(editing ? t('settings.custom_providers.edit_subtitle') : t('settings.custom_providers.add_subtitle'))}</p>
     <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.name'))}</label><input id="settings-custom-provider-name" type="text" class="form-input" autocomplete="off" spellcheck="false" /></div>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.protocol'))}</label><select id="settings-custom-provider-protocol" class="form-input"><option value="anthropic">${escapeHtml(t('settings.custom_providers.protocol_anthropic'))}</option><option value="openai">${escapeHtml(t('settings.custom_providers.protocol_openai'))}</option><option value="gemini">${escapeHtml(t('settings.custom_providers.protocol_gemini'))}</option></select></div>
     <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.base_url'))}</label><input id="settings-custom-provider-base-url" type="text" class="form-input" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1" /></div>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.api_key'))}</label><input id="settings-custom-provider-api-key" type="text" class="form-input" autocomplete="off" spellcheck="false" placeholder="sk-…" /></div>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.models'))}</label><input id="settings-custom-provider-models" type="text" class="form-input" autocomplete="off" spellcheck="false" placeholder="gpt-4.1-mini, claude-3-5-sonnet" /></div>
+    <div class="form-row settings-custom-provider-secret-row"><label>${escapeHtml(t('settings.custom_providers.api_key'))}</label><div class="settings-custom-provider-secret-input"><input id="settings-custom-provider-api-key" type="password" class="form-input" autocomplete="new-password" spellcheck="false" placeholder="sk-..." /><button type="button" id="settings-custom-provider-api-key-toggle" class="icon-btn" title="${escapeHtml(t('settings.custom_providers.toggle_key_visibility'))}" aria-label="${escapeHtml(t('settings.custom_providers.toggle_key_visibility'))}">${_settingsIconHtml('eye', 'ui-icon')}</button></div></div>
+    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.api_format'))}</label><div class="ai-select" id="settings-custom-provider-protocol"></div></div>
+    ${editing ? '' : `<div class="form-row settings-custom-provider-model-editor"><label>${escapeHtml(t('settings.custom_providers.models'))}</label><div id="settings-custom-provider-model-list" class="settings-custom-provider-model-list"></div><button type="button" class="btn settings-custom-provider-add-model" id="settings-custom-provider-add-model">${_settingsIconHtml('plus', 'ui-icon')}<span>${escapeHtml(t('settings.custom_providers.add_model'))}</span></button></div>`}
   `;
   const nameInput = body.querySelector('#settings-custom-provider-name') || document.getElementById('settings-custom-provider-name');
-  const protocolInput = body.querySelector('#settings-custom-provider-protocol') || document.getElementById('settings-custom-provider-protocol');
+  const protocolEl = body.querySelector('#settings-custom-provider-protocol') || document.getElementById('settings-custom-provider-protocol');
+  // Custom-styled select (ai-select) instead of the native macOS picker.
+  let protocolSel = null;
+  if (protocolEl) {
+    protocolSel = _aiSelectMount(protocolEl, { placeholder: t('settings.custom_providers.api_format') });
+    protocolSel.setOptions([
+      { value: 'anthropic', label: t('settings.custom_providers.api_format_anthropic') },
+      { value: 'openai', label: t('settings.custom_providers.api_format_openai') },
+      { value: 'openai-responses', label: t('settings.custom_providers.api_format_openai_responses') },
+      { value: 'gemini', label: t('settings.custom_providers.api_format_gemini') },
+    ], { value: provider?.protocol || 'anthropic' });
+  }
   const baseUrlInput = body.querySelector('#settings-custom-provider-base-url') || document.getElementById('settings-custom-provider-base-url');
   const apiKeyInput = body.querySelector('#settings-custom-provider-api-key') || document.getElementById('settings-custom-provider-api-key');
-  const modelsInput = body.querySelector('#settings-custom-provider-models') || document.getElementById('settings-custom-provider-models');
+  const apiKeyToggle = body.querySelector('#settings-custom-provider-api-key-toggle') || document.getElementById('settings-custom-provider-api-key-toggle');
+  const modelList = body.querySelector('#settings-custom-provider-model-list') || document.getElementById('settings-custom-provider-model-list');
+  const addModelButton = body.querySelector('#settings-custom-provider-add-model') || document.getElementById('settings-custom-provider-add-model');
   if (nameInput) nameInput.value = provider?.name || '';
-  if (protocolInput) protocolInput.value = provider?.protocol || 'anthropic';
   if (baseUrlInput) baseUrlInput.value = provider?.baseUrl || '';
   if (apiKeyInput) apiKeyInput.value = '';
   if (apiKeyInput && provider?.apiKeyMasked) apiKeyInput.placeholder = t('settings.custom_providers.api_key_placeholder_masked');
-  if (modelsInput) modelsInput.value = Array.isArray(provider?.models) ? provider.models.join(', ') : '';
+  if (apiKeyToggle && apiKeyInput) {
+    apiKeyToggle.addEventListener('click', () => {
+      apiKeyInput.type = apiKeyInput.type === 'password' ? 'text' : 'password';
+    });
+  }
+  if (!editing && modelList) {
+    modelList.innerHTML = '';
+    _settingsAppendCustomProviderModelDraft(modelList);
+    addModelButton?.addEventListener('click', () => {
+      const row = _settingsAppendCustomProviderModelDraft(modelList);
+      row?.querySelector('.settings-custom-provider-model-id')?.focus();
+    });
+  }
   actions.innerHTML = '';
   const cancelBtn = document.createElement('button');
   cancelBtn.className = 'btn';
@@ -706,113 +1100,654 @@ function _settingsOpenCustomProviderModal(provider = null) {
   const saveBtn = document.createElement('button');
   saveBtn.className = 'btn btn-primary';
   saveBtn.textContent = t('settings.save');
+  saveBtn.dataset.customProviderActionKey = 'provider-save';
+  _settingsSetCustomProviderButtonBusy(saveBtn, _settingsState.customProviderModalView?.busyActionKey === 'provider-save');
   saveBtn.addEventListener('click', async () => {
+    if (saveBtn.disabled) return;
     const name = String(nameInput?.value || '').trim();
-    const protocol = String(protocolInput?.value || 'anthropic').trim();
+    const protocol = String(protocolSel?.getValue() || 'anthropic').trim();
     const baseUrl = String(baseUrlInput?.value || '').trim();
     const apiKey = String(apiKeyInput?.value || '').trim();
-    const models = String(modelsInput?.value || '').split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
-    if (!baseUrl) { status.textContent = t('settings.custom_providers.error_base_url'); status.className = 'form-msg error'; return; }
-    const payload = { name, protocol, baseUrl, models, source: provider?.source || 'manual' };
+    if (!name) { _settingsCustomProviderModalStatus('error', t('settings.custom_providers.error_name')); return; }
+    if (!_settingsIsValidCustomProviderUrl(baseUrl)) { _settingsCustomProviderModalStatus('error', t('settings.custom_providers.error_base_url')); return; }
+    if (!editing && !apiKey) { _settingsCustomProviderModalStatus('error', t('settings.custom_providers.error_api_key')); return; }
+    const payload = { name, protocol, baseUrl, source: provider?.source || 'manual' };
+    if (!editing) {
+      const modelResult = _settingsReadCustomProviderModelDrafts(modelList);
+      if (!modelResult.ok) { _settingsCustomProviderModalStatus('error', modelResult.error); return; }
+      payload.models = modelResult.models;
+    }
     if (apiKey) payload.apiKey = apiKey;
     if (provider?.id) payload.id = provider.id;
-    status.textContent = t('settings.custom_providers.saving');
-    status.className = 'form-msg';
-    saveBtn.disabled = true;
+    if (!_settingsIsCustomProviderModalViewActive(viewGeneration, provider?.id || null)) return;
+    _settingsCustomProviderModalStatus('', t('settings.custom_providers.saving'));
+    _settingsSetCustomProviderModalActionBusy(viewGeneration, 'provider-save', true, saveBtn);
     const channel = provider?.id ? 'customProviders.update' : 'customProviders.add';
-    const res = await window.orkas.invoke(channel, payload);
-    saveBtn.disabled = false;
+    const res = await _settingsCallCustomProvider(channel, payload);
+    _settingsSetCustomProviderModalActionBusy(viewGeneration, 'provider-save', false, saveBtn);
     if (!res || !res.ok) {
-      status.textContent = (res && res.error) || t('settings.custom_providers.save_failed');
-      status.className = 'form-msg error';
+      if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider?.id || null)) {
+        _settingsCustomProviderModalStatus('error', (res && res.error) || t('settings.custom_providers.save_failed'));
+      }
       return;
     }
-    await _settingsRefreshCustomProviders();
-    _settingsRenderCustomProviders();
-    _settingsCloseModal(overlay);
-    _settingsSetStatus('settings-custom-providers-status', 'ok', editing ? t('settings.custom_providers.update_ok') : t('settings.custom_providers.add_ok'));
+    if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider?.id || null)) {
+      _settingsCloseModal(overlay);
+    }
+    await _settingsReload();
+    _settingsSetStatus('settings-picker-status', 'ok', editing ? t('settings.custom_providers.update_ok') : t('settings.custom_providers.add_ok'));
   });
   actions.appendChild(cancelBtn);
   actions.appendChild(saveBtn);
+  status.textContent = '';
+  status.className = 'form-msg';
   _settingsOpenModal(overlay);
+  setTimeout(() => nameInput?.focus(), 0);
+}
+
+function _settingsRerenderCustomProviderModalForI18n() {
+  const overlay = document.getElementById('settings-custom-provider-modal');
+  const view = _settingsState.customProviderModalView;
+  if (!overlay?.classList.contains('open') || !view) return;
+
+  const provider = view.providerId
+    ? (_settingsCurrentCustomProvider(view.providerId) || view.provider)
+    : view.provider;
+  if (view.kind === 'details') {
+    if (provider) _settingsOpenCustomProviderDetails(provider, { preserveSession: true });
+    return;
+  }
+
+  if (view.kind === 'provider-form') {
+    const body = document.getElementById('settings-custom-provider-modal-body');
+    const name = body?.querySelector('#settings-custom-provider-name')?.value || '';
+    const protocol = body?.querySelector('#settings-custom-provider-protocol')?.dataset.value || 'anthropic';
+    const baseUrl = body?.querySelector('#settings-custom-provider-base-url')?.value || '';
+    const apiKey = body?.querySelector('#settings-custom-provider-api-key')?.value || '';
+    const draftList = body?.querySelector('#settings-custom-provider-model-list');
+    const drafts = [];
+    for (const row of draftList?.querySelectorAll('.settings-custom-provider-model-draft') || []) {
+      drafts.push({
+        id: row.querySelector('.settings-custom-provider-model-id')?.value || '',
+        contextWindow: Number(row.querySelector('.settings-custom-provider-model-context')?.value) || _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: Number(row.querySelector('.settings-custom-provider-model-output')?.value) || _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS,
+      });
+    }
+    _settingsOpenCustomProviderModal(provider, { preserveSession: true });
+    const nextBody = document.getElementById('settings-custom-provider-modal-body');
+    const nextName = nextBody?.querySelector('#settings-custom-provider-name');
+    const nextBaseUrl = nextBody?.querySelector('#settings-custom-provider-base-url');
+    const nextApiKey = nextBody?.querySelector('#settings-custom-provider-api-key');
+    if (nextName) nextName.value = name;
+    if (nextBaseUrl) nextBaseUrl.value = baseUrl;
+    if (nextApiKey) nextApiKey.value = apiKey;
+    const nextDraftList = nextBody?.querySelector('#settings-custom-provider-model-list');
+    if (nextDraftList && drafts.length) {
+      nextDraftList.innerHTML = '';
+      for (const draft of drafts) _settingsAppendCustomProviderModelDraft(nextDraftList, draft);
+    }
+    return;
+  }
+
+  if (view.kind === 'model-form' && provider) {
+    const body = document.getElementById('settings-custom-provider-modal-body');
+    const id = body?.querySelector('#settings-custom-provider-model-edit-id')?.value || '';
+    const contextWindow = body?.querySelector('#settings-custom-provider-model-edit-context')?.value || '';
+    const maxTokens = body?.querySelector('#settings-custom-provider-model-edit-output')?.value || '';
+    _settingsOpenCustomProviderModelEditor(provider, view.model, { preserveSession: true });
+    const nextBody = document.getElementById('settings-custom-provider-modal-body');
+    const nextId = nextBody?.querySelector('#settings-custom-provider-model-edit-id');
+    const nextContext = nextBody?.querySelector('#settings-custom-provider-model-edit-context');
+    const nextOutput = nextBody?.querySelector('#settings-custom-provider-model-edit-output');
+    if (nextId) nextId.value = id;
+    if (nextContext) nextContext.value = contextWindow;
+    if (nextOutput) nextOutput.value = maxTokens;
+  }
+}
+
+function _settingsOpenCustomProviderDetails(provider, options = {}) {
+  const overlay = document.getElementById('settings-custom-provider-modal');
+  const title = document.getElementById('settings-custom-provider-modal-title');
+  const body = document.getElementById('settings-custom-provider-modal-body');
+  const actions = document.getElementById('settings-custom-provider-modal-actions');
+  if (!overlay || !title || !body || !actions || !provider?.id) return;
+  _settingsSetCustomProviderModalView('details', provider, null, options.preserveSession === true);
+  const models = _settingsCustomProviderModels(provider);
+  const enabled = provider.enabled !== false;
+  title.textContent = provider.name || provider.id;
+  body.innerHTML = `
+    <div class="settings-custom-provider-detail-toolbar">
+      <span class="settings-custom-provider-state ${enabled ? 'is-enabled' : 'is-disabled'}">${escapeHtml(enabled ? t('common.enabled') : t('common.disabled'))}</span>
+      <div class="settings-custom-provider-detail-actions" id="settings-custom-provider-detail-actions"></div>
+    </div>
+    <dl class="settings-custom-provider-facts">
+      <div><dt>${escapeHtml(t('settings.custom_providers.base_url'))}</dt><dd>${escapeHtml(provider.baseUrl || '')}</dd></div>
+      <div><dt>${escapeHtml(t('settings.custom_providers.api_format'))}</dt><dd>${escapeHtml(_settingsCustomProviderApiFormatLabel(provider.protocol))}</dd></div>
+      <div><dt>${escapeHtml(t('settings.custom_providers.api_key'))}</dt><dd class="account-mask">${escapeHtml(provider.apiKeyMasked || t('settings.custom_providers.api_key_missing'))}</dd></div>
+    </dl>
+    <div class="settings-custom-provider-detail-models">
+      <div class="settings-custom-provider-detail-models-head"><h4>${escapeHtml(t('settings.custom_providers.models'))}</h4><button type="button" class="btn" id="settings-custom-provider-detail-add-model">${_settingsIconHtml('plus', 'ui-icon')}<span>${escapeHtml(t('settings.custom_providers.add_model'))}</span></button></div>
+      <div id="settings-custom-provider-detail-model-list" class="settings-custom-provider-detail-model-list"></div>
+    </div>
+  `;
+  const detailActions = body.querySelector('#settings-custom-provider-detail-actions') || document.getElementById('settings-custom-provider-detail-actions');
+  detailActions?.appendChild(_settingsCustomProviderActionButton(
+    'edit-pencil', t('settings.custom_providers.edit_provider'), 'btn btn-sm',
+    () => _settingsOpenCustomProviderModal(provider),
+  ));
+  detailActions?.appendChild(_settingsCustomProviderActionButton(
+    enabled ? 'x' : 'check',
+    enabled ? t('settings.custom_providers.disable') : t('settings.custom_providers.enable'),
+    'btn btn-sm',
+    () => _settingsSetCustomProviderEnabled(provider, !enabled),
+  ));
+  detailActions?.appendChild(_settingsCustomProviderActionButton(
+    'trash', t('settings.custom_providers.delete_provider'), 'icon-btn danger',
+    () => _settingsRemoveCustomProvider(provider),
+  ));
+
+  const modelList = body.querySelector('#settings-custom-provider-detail-model-list') || document.getElementById('settings-custom-provider-detail-model-list');
+  if (modelList) {
+    if (!models.length) {
+      modelList.innerHTML = `<div class="settings-empty">${escapeHtml(t('settings.custom_providers.empty_models'))}</div>`;
+    } else {
+      for (const model of models) {
+        const row = document.createElement('div');
+        row.className = 'settings-custom-provider-detail-model-row';
+        const info = document.createElement('div');
+        info.className = 'settings-custom-provider-detail-model-info';
+        info.innerHTML = `<strong>${escapeHtml(model.id)}</strong><span>${escapeHtml(t('settings.custom_providers.context_badge', { value: _settingsFormatTokenLimit(model.contextWindow) }))}</span><span>${escapeHtml(t('settings.custom_providers.output_badge', { value: _settingsFormatTokenLimit(model.maxTokens) }))}</span>`;
+        const rowActions = document.createElement('div');
+        rowActions.className = 'settings-custom-provider-detail-model-actions';
+        rowActions.appendChild(_settingsCustomProviderActionButton('zap', t('settings.custom_providers.test_model'), 'icon-btn', () => _settingsTestCustomProviderModel(provider, model)));
+        rowActions.appendChild(_settingsCustomProviderActionButton('edit-pencil', t('settings.custom_providers.edit_model'), 'icon-btn', () => _settingsOpenCustomProviderModelEditor(provider, model)));
+        rowActions.appendChild(_settingsCustomProviderActionButton('trash', t('settings.custom_providers.remove_model'), 'icon-btn danger', () => _settingsRemoveCustomProviderModel(provider, model.id)));
+        row.appendChild(info);
+        row.appendChild(rowActions);
+        modelList.appendChild(row);
+      }
+    }
+  }
+  const addModelButton = body.querySelector('#settings-custom-provider-detail-add-model') || document.getElementById('settings-custom-provider-detail-add-model');
+  addModelButton?.addEventListener('click', () => _settingsOpenCustomProviderModelEditor(provider));
+
+  actions.innerHTML = '';
+  const closeButton = document.createElement('button');
+  closeButton.className = 'btn';
+  closeButton.textContent = t('common.close');
+  closeButton.addEventListener('click', () => _settingsCloseModal(overlay));
+  actions.appendChild(closeButton);
+  _settingsCustomProviderModalStatus('', '');
+  if (!overlay.classList.contains('open')) _settingsOpenModal(overlay);
+}
+
+async function _settingsSetCustomProviderEnabled(provider, enabled) {
+  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
+  return _settingsWithCustomProviderAction(`provider:enabled:${provider.id}`, async () => {
+    if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+      _settingsCustomProviderModalStatus('', t(enabled ? 'settings.custom_providers.enabling' : 'settings.custom_providers.disabling'));
+    }
+    const res = await _settingsCallCustomProvider('customProviders.setEnabled', { id: provider.id, enabled: !!enabled });
+    if (!res || !res.ok) {
+      if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+        _settingsCustomProviderModalStatus('error', (res && res.error) || t('settings.custom_providers.enable_failed'));
+      }
+      return false;
+    }
+    await _settingsReload();
+    const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id);
+    if (refreshed && _settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+      _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
+    }
+    return true;
+  });
+}
+
+async function _settingsRemoveCustomProvider(provider) {
+  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
+  return _settingsWithCustomProviderAction(`provider:remove:${provider.id}`, async () => {
+    const confirmed = typeof uiConfirm === 'function'
+      ? await uiConfirm(t('settings.custom_providers.confirm_delete', { name: provider.name || provider.id }))
+      : true;
+    if (!confirmed) return false;
+    if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+      _settingsCustomProviderModalStatus('', t('settings.custom_providers.deleting'));
+    }
+    const res = await _settingsCallCustomProvider('customProviders.remove', { id: provider.id });
+    if (!res || !res.ok) {
+      if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+        _settingsCustomProviderModalStatus('error', (res && res.error) || t('settings.custom_providers.delete_failed'));
+      }
+      return false;
+    }
+    const overlay = document.getElementById('settings-custom-provider-modal');
+    if (overlay && _settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+      _settingsCloseModal(overlay);
+    }
+    await _settingsReload();
+    _settingsSetStatus('settings-custom-providers-status', 'ok', t('settings.custom_providers.delete_ok'));
+    return true;
+  });
+}
+
+function _settingsOpenCustomProviderModelEditor(provider, model = null, options = {}) {
+  const overlay = document.getElementById('settings-custom-provider-modal');
+  const title = document.getElementById('settings-custom-provider-modal-title');
+  const body = document.getElementById('settings-custom-provider-modal-body');
+  const actions = document.getElementById('settings-custom-provider-modal-actions');
+  if (!overlay || !title || !body || !actions || !provider?.id) return;
+  const editing = !!model?.id;
+  _settingsSetCustomProviderModalView('model-form', provider, model, options.preserveSession === true);
+  const current = model || {
+    id: '', contextWindow: _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW, maxTokens: _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS,
+  };
+  title.textContent = editing ? t('settings.custom_providers.edit_model') : t('settings.custom_providers.add_model');
+  body.innerHTML = `
+    <p class="settings-custom-provider-modal-subtitle">${escapeHtml(provider.name || provider.id)}</p>
+    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.model_id'))}</label><input id="settings-custom-provider-model-edit-id" type="text" class="form-input" autocomplete="off" spellcheck="false" value="${escapeHtml(current.id)}" /></div>
+    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.context_window'))}</label><input id="settings-custom-provider-model-edit-context" type="number" min="1" max="${_CUSTOM_PROVIDER_MAX_CONTEXT_WINDOW}" step="1" class="form-input" value="${escapeHtml(String(current.contextWindow))}" /></div>
+    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.max_tokens'))}</label><input id="settings-custom-provider-model-edit-output" type="number" min="1" max="${_CUSTOM_PROVIDER_MAX_OUTPUT_TOKENS}" step="1" class="form-input" value="${escapeHtml(String(current.maxTokens))}" /></div>
+  `;
+  actions.innerHTML = '';
+  const cancelButton = document.createElement('button');
+  cancelButton.className = 'btn';
+  cancelButton.textContent = t('common.cancel');
+  cancelButton.addEventListener('click', () => _settingsOpenCustomProviderDetails(provider));
+  const saveButton = document.createElement('button');
+  saveButton.className = 'btn btn-primary';
+  saveButton.textContent = t('common.save');
+  saveButton.dataset.customProviderActionKey = 'model-save';
+  _settingsSetCustomProviderButtonBusy(saveButton, _settingsState.customProviderModalView?.busyActionKey === 'model-save');
+  saveButton.addEventListener('click', async () => {
+    if (saveButton.disabled) return;
+    const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
+    _settingsSetCustomProviderModalActionBusy(viewGeneration, 'model-save', true, saveButton);
+    const saved = await _settingsSaveCustomProviderModel(provider, editing ? model.id : null, {
+      id: body.querySelector('#settings-custom-provider-model-edit-id')?.value,
+      contextWindow: Number(body.querySelector('#settings-custom-provider-model-edit-context')?.value),
+      maxTokens: Number(body.querySelector('#settings-custom-provider-model-edit-output')?.value),
+    });
+    _settingsSetCustomProviderModalActionBusy(viewGeneration, 'model-save', false, saveButton);
+    if (!saved) return;
+  });
+  actions.appendChild(cancelButton);
+  actions.appendChild(saveButton);
+  _settingsCustomProviderModalStatus('', '');
+  if (!overlay.classList.contains('open')) _settingsOpenModal(overlay);
+  setTimeout(() => body.querySelector('#settings-custom-provider-model-edit-id')?.focus(), 0);
+}
+
+async function _settingsSaveCustomProviderModel(provider, previousModelId, input) {
+  const normalized = _settingsNormalizeCustomProviderModel(input);
+  if (!normalized.ok) {
+    _settingsCustomProviderModalStatus('error', normalized.error);
+    return false;
+  }
+  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
+  return _settingsWithCustomProviderAction(`model:save:${provider.id}:${previousModelId || normalized.model.id}`, async () => {
+    if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+      _settingsCustomProviderModalStatus('', t('settings.custom_providers.saving_model'));
+    }
+    const updating = !!previousModelId;
+    const channel = updating ? 'customProviders.model.update' : 'customProviders.model.add';
+    const payload = {
+      providerId: provider.id,
+      ...(updating ? { modelId: previousModelId } : {}),
+      model: normalized.model,
+    };
+    const res = await _settingsCallCustomProvider(channel, payload);
+    if (!res || !res.ok) {
+      if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+        _settingsCustomProviderModalStatus('error', (res && res.error) || t('settings.custom_providers.save_model_failed'));
+      }
+      return false;
+    }
+    await _settingsReload();
+    const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id);
+    if (refreshed && _settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+      _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
+    }
+    return true;
+  });
+}
+
+async function _settingsRemoveCustomProviderModel(provider, modelId) {
+  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
+  return _settingsWithCustomProviderAction(`model:remove:${provider.id}:${modelId}`, async () => {
+    const confirmed = typeof uiConfirm === 'function'
+      ? await uiConfirm(t('settings.custom_providers.confirm_remove_model', { model: modelId }))
+      : true;
+    if (!confirmed) return false;
+    if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+      _settingsCustomProviderModalStatus('', t('settings.custom_providers.removing_model'));
+    }
+    const res = await _settingsCallCustomProvider('customProviders.model.remove', { providerId: provider.id, modelId });
+    if (!res || !res.ok) {
+      if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+        _settingsCustomProviderModalStatus('error', (res && res.error) || t('settings.custom_providers.remove_model_failed'));
+      }
+      return false;
+    }
+    await _settingsReload();
+    const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id);
+    if (refreshed && _settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+      _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
+    }
+    return true;
+  });
+}
+
+async function _settingsTestCustomProviderModel(provider, model) {
+  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
+  return _settingsWithCustomProviderAction(`model:test:${provider.id}:${model.id}`, async () => {
+    if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+      _settingsCustomProviderModalStatus('', t('settings.custom_providers.testing_model', { model: model.id }));
+    }
+    const res = await _settingsCallCustomProvider('customProviders.model.test', { providerId: provider.id, modelId: model.id });
+    if (!res || !res.ok) {
+      if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+        _settingsCustomProviderModalStatus('error', (res && res.error) || t('settings.custom_providers.test_model_failed'));
+      }
+      return false;
+    }
+    const duration = Number.isFinite(res.durationMs) ? ` ${res.durationMs} ms` : '';
+    if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
+      _settingsCustomProviderModalStatus('ok', `${t('settings.custom_providers.test_model_ok')}${duration}`);
+    }
+    return true;
+  });
 }
 
 async function _settingsOpenCcswitchPreviewDialog() {
   const overlay = document.getElementById('settings-ccswitch-preview-modal');
+  if (!overlay) return;
   const title = document.getElementById('settings-ccswitch-preview-modal-title');
-  const body = document.getElementById('settings-ccswitch-preview-modal-body');
-  const actions = document.getElementById('settings-ccswitch-preview-modal-actions');
-  const status = document.getElementById('settings-ccswitch-preview-modal-status');
-  if (!overlay || !title || !body || !actions || !status) return;
-  title.textContent = t('settings.ccswitch.preview_title');
-  status.textContent = t('settings.ccswitch.loading');
-  status.className = 'form-msg';
-  const res = await window.orkas.invoke('customProviders.ccswitch.preview');
-  _settingsState.ccswitchPreviewRows = (res && res.ok && Array.isArray(res.rows)) ? res.rows : (res && res.ok && Array.isArray(res.items) ? res.items : []);
-  _settingsState.ccswitchPreviewSelectedIds = _settingsState.ccswitchPreviewRows.filter((row) => row.selected !== false).map((row) => row.externalId);
-  _settingsRenderCcswitchPreviewDialog();
+  if (title) title.textContent = t('settings.ccswitch.preview_title');
+  const closeBtn = document.getElementById('settings-ccswitch-preview-close-btn');
+  if (closeBtn && !closeBtn.dataset.bound) {
+    closeBtn.dataset.bound = '1';
+    closeBtn.addEventListener('click', () => _settingsCloseModal(overlay));
+  }
+  // Fresh dialog: start at the provider list, forget any in-progress detail view.
+  _settingsState.ccswitchPreviewSelectedProvider = null;
+  _settingsState.ccswitchPreviewSelectedModels = [];
+  const gen = ++_settingsState.ccswitchPreviewGeneration;
+  _settingsRenderCcswitchPreviewDialog('loading');
   _settingsOpenModal(overlay);
+  const res = await window.cogseed.invoke('customProviders.ccswitch.preview');
+  if (gen !== _settingsState.ccswitchPreviewGeneration || !overlay.classList.contains('open')) return;
+  _settingsState.ccswitchPreviewRows = (res && res.ok && Array.isArray(res.items)) ? res.items : [];
+  _settingsState.ccswitchPreviewUnsupported = (res && res.ok && Array.isArray(res.unsupported)) ? res.unsupported : [];
+  _settingsRenderCcswitchPreviewDialog('providers');
 }
 
-function _settingsRenderCcswitchPreviewDialog() {
+// ── Step 1: provider list. Clicking a row drills into its model scan. ──
+function _settingsCcswitchRenderProviderList() {
   const overlay = document.getElementById('settings-ccswitch-preview-modal');
   const body = document.getElementById('settings-ccswitch-preview-modal-body');
   const actions = document.getElementById('settings-ccswitch-preview-modal-actions');
   const status = document.getElementById('settings-ccswitch-preview-modal-status');
   if (!overlay || !body || !actions || !status) return;
   body.innerHTML = '';
+  status.textContent = '';
+  status.className = 'form-msg';
   const rows = _settingsState.ccswitchPreviewRows || [];
+
   if (!rows.length) {
-    body.innerHTML = `<div class="settings-empty">${escapeHtml(t('settings.ccswitch.preview_empty'))}</div>`;
+    const plugIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+      ? window.uiIconHtml('plug', 'ui-icon settings-ccswitch-empty-icon')
+      : '';
+    body.innerHTML = `
+      <div class="settings-ccswitch-empty">
+        ${plugIcon}
+        <span>${escapeHtml(t('settings.ccswitch.preview_empty'))}</span>
+      </div>`;
   } else {
+    const sub = document.createElement('div');
+    sub.className = 'settings-ccswitch-sub';
+    sub.textContent = t('settings.ccswitch.provider_step_sub', { count: String(rows.length) });
+    body.appendChild(sub);
+
+    const list = document.createElement('div');
+    list.className = 'settings-ccswitch-list';
+    const arrowIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+      ? window.uiIconHtml('chevron-right', 'ui-icon settings-ccswitch-row-chevron')
+      : '›';
     rows.forEach((row) => {
-      const item = document.createElement('label');
-      item.className = 'settings-ccswitch-row';
-      item.textContent = `${row.name || row.externalId} ${(row.missingKey || row.needsKey) ? t('settings.ccswitch.missing_key') : ''}`.trim();
+      const item = document.createElement('div');
+      item.className = 'settings-ccswitch-row settings-ccswitch-provider-row';
+      item.setAttribute('role', 'button');
+      item.tabIndex = 0;
+      const metaBits = [];
+      if (row.baseUrl) metaBits.push(String(row.baseUrl));
+      const masked = row.apiKeyMasked || row.maskedKey;
+      if (masked) metaBits.push(String(masked));
+      const modelCount = Array.isArray(row.models) ? row.models.length : 0;
       item.innerHTML = `
-        <input type="checkbox" ${_settingsState.ccswitchPreviewSelectedIds.includes(row.externalId) ? 'checked' : ''} />
-        <span class="settings-ccswitch-row-main">${escapeHtml(row.name || row.externalId)}</span>
-        <span class="settings-ccswitch-row-meta">${escapeHtml(_settingsCustomProviderProtocolLabel(row.protocol))}${(row.missingKey || row.needsKey) ? ` · ${escapeHtml(t('settings.ccswitch.missing_key'))}` : ''}${row.maskedKey || row.apiKeyMasked ? ` · ${escapeHtml(row.maskedKey || row.apiKeyMasked)}` : ''}</span>
+        <span class="settings-ccswitch-row-main">
+          <span class="settings-ccswitch-row-top">
+            <span class="settings-ccswitch-row-name">${escapeHtml(row.name || row.externalId)}</span>
+            <span class="account-type-badge">${escapeHtml(_settingsCustomProviderProtocolLabel(row.protocol))}</span>
+            ${modelCount > 0 ? `<span class="settings-ccswitch-row-count">${escapeHtml(t('settings.custom_providers.model_count', { count: String(modelCount) }))}</span>` : ''}
+          </span>
+          <span class="settings-ccswitch-row-meta">${escapeHtml(metaBits.join(' · '))}</span>
+        </span>
+        ${row.needsKey || row.missingKey ? `<span class="settings-ccswitch-row-warn">${escapeHtml(t('settings.ccswitch.missing_key'))}</span>` : ''}
+        ${arrowIcon}
       `;
-      const cb = item.querySelector('input');
-      cb?.addEventListener('change', () => {
-        if (cb.checked) {
-          if (!_settingsState.ccswitchPreviewSelectedIds.includes(row.externalId)) _settingsState.ccswitchPreviewSelectedIds.push(row.externalId);
-        } else {
-          _settingsState.ccswitchPreviewSelectedIds = _settingsState.ccswitchPreviewSelectedIds.filter((id) => id !== row.externalId);
-        }
+      const enter = () => {
+        _settingsState.ccswitchPreviewSelectedProvider = row;
+        _settingsState.ccswitchPreviewSelectedModels = [];
+        _settingsRenderCcswitchPreviewDialog('provider-detail');
+      };
+      item.addEventListener('click', enter);
+      item.addEventListener('keydown', (e) => {
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); enter(); }
       });
-      body.appendChild(item);
+      list.appendChild(item);
     });
+    body.appendChild(list);
+
+    const unsupported = _settingsState.ccswitchPreviewUnsupported || [];
+    if (unsupported.length) {
+      const hint = document.createElement('div');
+      hint.className = 'settings-ccswitch-unsupported';
+      hint.title = unsupported.map((u) => `${u.name || u.externalId}: ${u.reason || ''}`).join('\n');
+      hint.textContent = t('settings.ccswitch.unsupported_hint', { count: String(unsupported.length) });
+      body.appendChild(hint);
+    }
   }
+
   actions.innerHTML = '';
   const cancelBtn = document.createElement('button');
   cancelBtn.className = 'btn';
   cancelBtn.textContent = t('common.close');
   cancelBtn.addEventListener('click', () => _settingsCloseModal(overlay));
-  const syncBtn = document.createElement('button');
-  syncBtn.className = 'btn btn-primary';
-  syncBtn.id = 'settings-ccswitch-preview-sync-btn';
-  syncBtn.textContent = t('settings.ccswitch.sync');
-  syncBtn.addEventListener('click', async () => {
-    status.textContent = t('settings.ccswitch.syncing');
-    status.className = 'form-msg';
-    const res = await window.orkas.invoke('customProviders.ccswitch.sync', { externalIds: _settingsState.ccswitchPreviewSelectedIds });
-    if (!res || !res.ok) {
-      status.textContent = (res && res.error) || t('settings.ccswitch.sync_failed');
-      status.className = 'form-msg error';
-      return;
-    }
-    await _settingsRefreshCustomProviders();
-    await _settingsRefreshCcswitchStatus();
-    _settingsRenderCustomProviders();
-    _settingsRenderCcswitchStatus();
-    _settingsCloseModal(overlay);
-    _settingsSetStatus('settings-ccswitch-status', 'ok', t('settings.ccswitch.sync_ok'));
-  });
   actions.appendChild(cancelBtn);
-  actions.appendChild(syncBtn);
-  if (overlay.classList.contains('open')) overlay.classList.add('open');
+}
+
+// ── Step 2: one provider's detected models; check the ones to add. ──
+function _settingsCcswitchRenderProviderDetail(provider) {
+  const overlay = document.getElementById('settings-ccswitch-preview-modal');
+  const body = document.getElementById('settings-ccswitch-preview-modal-body');
+  const actions = document.getElementById('settings-ccswitch-preview-modal-actions');
+  const status = document.getElementById('settings-ccswitch-preview-modal-status');
+  if (!overlay || !body || !actions || !status) return;
+  body.innerHTML = '';
+  status.textContent = '';
+  status.className = 'form-msg';
+
+  const backBtn = document.createElement('button');
+  backBtn.className = 'settings-ccswitch-back-btn';
+  backBtn.type = 'button';
+  backBtn.innerHTML = `${(typeof window !== 'undefined' && typeof window.uiIconHtml === 'function') ? window.uiIconHtml('chevron-left', 'ui-icon settings-ccswitch-back-icon') : '‹ '}<span>${escapeHtml(t('settings.ccswitch.back'))}</span>`;
+  backBtn.addEventListener('click', () => {
+    _settingsState.ccswitchPreviewSelectedProvider = null;
+    _settingsState.ccswitchPreviewSelectedModels = [];
+    _settingsRenderCcswitchPreviewDialog('providers');
+  });
+  body.appendChild(backBtn);
+
+  const head = document.createElement('div');
+  head.className = 'settings-ccswitch-provider-head';
+  const metaBits = [];
+  if (provider.baseUrl) metaBits.push(String(provider.baseUrl));
+  const masked = provider.apiKeyMasked || provider.maskedKey;
+  if (masked) metaBits.push(String(masked));
+  head.innerHTML = `
+    <div class="settings-ccswitch-provider-title-row">
+      <span class="settings-ccswitch-provider-name">${escapeHtml(provider.name || provider.externalId)}</span>
+      <span class="account-type-badge">${escapeHtml(_settingsCustomProviderProtocolLabel(provider.protocol))}</span>
+      ${provider.needsKey || provider.missingKey ? `<span class="settings-ccswitch-row-warn">${escapeHtml(t('settings.ccswitch.missing_key'))}</span>` : ''}
+    </div>
+    <div class="settings-ccswitch-provider-meta">${escapeHtml(metaBits.join(' · '))}</div>
+  `;
+  body.appendChild(head);
+
+  const models = Array.isArray(provider.models) ? provider.models : [];
+  if (!models.length) {
+    const empty = document.createElement('div');
+    empty.className = 'settings-ccswitch-no-models';
+    empty.textContent = t('settings.ccswitch.no_models');
+    body.appendChild(empty);
+  } else {
+    const sub = document.createElement('div');
+    sub.className = 'settings-ccswitch-sub';
+    // Probe succeeded → live model list; failed → config hints (unverified).
+    sub.textContent = provider.modelsProbe === false
+      ? t('settings.ccswitch.models_step_sub_fallback', { count: String(models.length) })
+      : t('settings.ccswitch.models_step_sub', { count: String(models.length) });
+    body.appendChild(sub);
+
+    const list = document.createElement('div');
+    list.className = 'settings-ccswitch-list';
+    models.forEach((model) => {
+      const id = String(model && typeof model === 'object' ? (model.id || model.name || '') : model || '');
+      if (!id) return;
+      const selected = _settingsState.ccswitchPreviewSelectedModels.includes(id);
+      const item = document.createElement('label');
+      item.className = 'settings-ccswitch-model-row' + (selected ? ' is-selected' : '');
+      item.innerHTML = `
+        <input type="checkbox" class="settings-ccswitch-model-check" ${selected ? 'checked' : ''} />
+        <span class="settings-ccswitch-model-id">${escapeHtml(id)}</span>
+      `;
+      const cb = item.querySelector('.settings-ccswitch-model-check');
+      cb?.addEventListener('change', () => {
+        if (cb.checked) {
+          if (!_settingsState.ccswitchPreviewSelectedModels.includes(id)) _settingsState.ccswitchPreviewSelectedModels.push(id);
+          item.classList.add('is-selected');
+        } else {
+          _settingsState.ccswitchPreviewSelectedModels = _settingsState.ccswitchPreviewSelectedModels.filter((m) => m !== id);
+          item.classList.remove('is-selected');
+        }
+        _settingsSyncCcswitchPreviewUi();
+      });
+      list.appendChild(item);
+    });
+    body.appendChild(list);
+  }
+
+  actions.innerHTML = '';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn';
+  cancelBtn.textContent = t('common.close');
+  cancelBtn.addEventListener('click', () => _settingsCloseModal(overlay));
+  actions.appendChild(cancelBtn);
+  if (models.length) {
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-primary';
+    addBtn.id = 'settings-ccswitch-preview-sync-btn';
+    addBtn.addEventListener('click', async () => {
+      if (addBtn.disabled) return;
+      const modelIds = _settingsState.ccswitchPreviewSelectedModels;
+      if (!modelIds.length) return;
+      addBtn.disabled = true;
+      addBtn.classList.add('is-loading');
+      status.textContent = t('settings.ccswitch.syncing');
+      status.className = 'form-msg';
+      // ONE provider instance per import: the provider carries exactly the
+      // user-selected models (not the full probed list), and the configured
+      // list gets a single default entry whose model picker offers those
+      // models to switch between.
+      const syncRes = await window.cogseed.invoke('customProviders.ccswitch.sync', {
+        externalIds: [provider.externalId],
+        modelsByExternalId: { [provider.externalId]: modelIds },
+        // The probe pins the real API base (CC Switch bare-host URLs lack /v1).
+        baseUrlsByExternalId: { [provider.externalId]: provider.baseUrl },
+      });
+      if (!syncRes || !syncRes.ok) {
+        addBtn.classList.remove('is-loading');
+        status.textContent = (syncRes && syncRes.error) || t('settings.ccswitch.sync_failed');
+        status.className = 'form-msg error';
+        _settingsSyncCcswitchPreviewUi();
+        return;
+      }
+      await _settingsRefreshCustomProviders();
+      await _settingsRefreshEntries();
+      const cp = _settingsState.customProviders.find((p) => p.source === 'ccswitch' && p.externalId === provider.externalId);
+      if (!cp) {
+        addBtn.classList.remove('is-loading');
+        status.textContent = t('settings.ccswitch.sync_failed');
+        status.className = 'form-msg error';
+        _settingsSyncCcswitchPreviewUi();
+        return;
+      }
+      const providerId = `cp:${cp.id}`;
+      const defaultModel = modelIds[0];
+      // Drop every other entry of this provider (including leftovers from
+      // earlier imports), keep exactly one default entry.
+      for (const entry of _settingsState.entries) {
+        if (entry.provider === providerId && entry.model !== defaultModel) {
+          await window.cogseed.invoke('auth.removeEntry', { entryId: entry.entryId });
+        }
+      }
+      // Idempotent: sync already auto-bound the first model; this is a no-op
+      // when it exists.
+      await window.cogseed.invoke('auth.addEntry', { provider: providerId, model: defaultModel, profileId: providerId });
+      await _settingsReload();
+      _settingsCloseModal(overlay);
+      _settingsSetStatus('settings-picker-status', 'ok', t('settings.ccswitch.sync_ok'));
+    });
+    actions.appendChild(addBtn);
+  }
+  _settingsSyncCcswitchPreviewUi();
+}
+
+// Refresh count + import button from the current detail-view selection.
+function _settingsSyncCcswitchPreviewUi() {
+  const body = document.getElementById('settings-ccswitch-preview-modal-body');
+  const actions = document.getElementById('settings-ccswitch-preview-modal-actions');
+  if (!body || !actions) return;
+  const selected = _settingsState.ccswitchPreviewSelectedModels.length;
+  const addBtn = actions.querySelector('#settings-ccswitch-preview-sync-btn');
+  if (addBtn) {
+    addBtn.disabled = selected === 0;
+    addBtn.textContent = t('settings.ccswitch.add_models_with_count', { count: String(selected) });
+  }
+}
+
+function _settingsRenderCcswitchPreviewDialog(mode) {
+  const overlay = document.getElementById('settings-ccswitch-preview-modal');
+  const body = document.getElementById('settings-ccswitch-preview-modal-body');
+  const actions = document.getElementById('settings-ccswitch-preview-modal-actions');
+  const status = document.getElementById('settings-ccswitch-preview-modal-status');
+  if (!overlay || !body || !actions || !status) return;
+
+  if (mode === 'loading') {
+    body.innerHTML = `<div class="settings-ccswitch-loading">${escapeHtml(t('settings.ccswitch.loading'))}</div>`;
+    actions.innerHTML = '';
+    status.textContent = '';
+    status.className = 'form-msg';
+    return;
+  }
+
+  const provider = _settingsState.ccswitchPreviewSelectedProvider;
+  if (provider) {
+    _settingsCcswitchRenderProviderDetail(provider);
+  } else {
+    _settingsCcswitchRenderProviderList();
+  }
 }
 
 function _settingsSyncCustomModelFields(providerId) {
@@ -825,20 +1760,48 @@ function _settingsSyncCustomModelFields(providerId) {
 async function _settingsGetModels(providerId) {
   if (!providerId) return [];
   if (_settingsState.modelsCache[providerId]) return _settingsState.modelsCache[providerId];
-  const res = await window.orkas.invoke('auth.listModels', { provider: providerId });
+  const res = await window.cogseed.invoke('auth.listModels', { provider: providerId });
   const list = (res && res.ok && Array.isArray(res.models)) ? res.models : [];
   _settingsState.modelsCache[providerId] = list;
   return list;
 }
 
 // ── Picker (provider + model + add button) ──
+// The provider dropdown ends with two action rows (instead of a separate
+// "custom endpoints" card): "Custom providers" opens the add-provider
+// dialog, "CC Switch import" opens the CC Switch preview/import dialog.
+// These are pseudo-options — picking one restores the previously selected
+// provider and runs the action.
+const _PICKER_ACTION_CUSTOM_PROVIDERS = '__picker-action-custom-providers__';
+const _PICKER_ACTION_CCSWITCH_IMPORT  = '__picker-action-ccswitch-import__';
+
+function _settingsPickerActionForValue(val) {
+  if (val === _PICKER_ACTION_CUSTOM_PROVIDERS) return 'custom-providers';
+  if (val === _PICKER_ACTION_CCSWITCH_IMPORT) return 'ccswitch-import';
+  return null;
+}
+
+async function _settingsHandlePickerProviderAction(action) {
+  const sel = _settingsState.pickerProviderSel;
+  const restore = _settingsState.pickerProviderValueBeforeAction || '';
+  // Always restore the trigger (back to placeholder when nothing was selected
+  // yet) so the pseudo-action rows never stick as the visible value.
+  if (sel) sel.setValue(restore);
+  _settingsState.pickerProviderValueBeforeAction = restore || '';
+  _settingsSyncCustomModelFields(restore);
+  if (action === 'custom-providers') {
+    _settingsOpenCustomProviderModal();
+  } else if (action === 'ccswitch-import') {
+    _settingsOpenCcswitchPreviewDialog();
+  }
+}
 
 async function _settingsRenderPicker() {
   const providerEl = document.getElementById('settings-picker-provider');
   const modelEl    = document.getElementById('settings-picker-model');
   if (!providerEl || !modelEl) return;
 
-  const providerOptions = _settingsState.providers.map((p) => {
+  const providerOptions = _settingsState.providers.filter(_settingsIsCatalogProviderEnabled).map((p) => {
     const baseLabel = p.label || p.id;
     const label = p.recommended ? `${baseLabel} ${t('settings.picker.recommended_suffix')}` : baseLabel;
     let authHint = '';
@@ -854,6 +1817,10 @@ async function _settingsRenderPicker() {
     const hint = [subNote, authHint].filter(Boolean).join(' · ');
     return { value: p.id, label, hint };
   });
+  providerOptions.push(
+    { value: _PICKER_ACTION_CUSTOM_PROVIDERS, label: t('settings.picker.custom_providers'), hint: t('settings.picker.custom_providers_hint') },
+    { value: _PICKER_ACTION_CCSWITCH_IMPORT, label: t('settings.picker.ccswitch_import'), hint: t('settings.picker.ccswitch_import_hint') },
+  );
 
   const prevProvider = _settingsState.pickerProviderSel?.getValue()
     || providerEl.dataset.value
@@ -864,6 +1831,12 @@ async function _settingsRenderPicker() {
       placeholder: t('settings.picker.select_provider'),
     });
     _settingsState.pickerProviderSel.onChange(async (val) => {
+      const action = _settingsPickerActionForValue(val);
+      if (action) {
+        await _settingsHandlePickerProviderAction(action);
+        return;
+      }
+      _settingsState.pickerProviderValueBeforeAction = val;
       _settingsSyncCustomModelFields(val);
       await _settingsPopulatePickerModel(val, '');
       _settingsSetStatus('settings-picker-status', '', '');
@@ -873,7 +1846,12 @@ async function _settingsRenderPicker() {
     value: prevProvider,
     placeholder: t('settings.picker.select_provider'),
   });
-  _settingsSyncCustomModelFields(_settingsState.pickerProviderSel.getValue());
+  // Track the current real provider so picking an action row can restore it.
+  const currentValue = _settingsState.pickerProviderSel.getValue();
+  if (currentValue && !_settingsPickerActionForValue(currentValue)) {
+    _settingsState.pickerProviderValueBeforeAction = currentValue;
+  }
+  _settingsSyncCustomModelFields(currentValue);
 
   const prevModel = _settingsState.pickerModelSel?.getValue()
     || modelEl.dataset.value
@@ -911,12 +1889,23 @@ async function _settingsRenderPicker() {
 async function _settingsPopulatePickerModel(providerId, selected) {
   const sel = _settingsState.pickerModelSel;
   if (!sel) return;
+  const requestGeneration = ++_settingsState.pickerModelRequestGeneration;
   const provider = _settingsState.providers.find((p) => p.id === providerId);
-  if (provider && provider.manualModel) {
+  if (provider && provider.id === 'openai-compatible') {
+    sel.setOptions([], { value: '', placeholder: t('settings.picker.manual_model_in_form') });
+    return;
+  }
+  if (provider && provider.manualModel && provider.providerKind !== 'custom') {
     sel.setOptions([], { value: '', placeholder: t('settings.picker.manual_model_in_form') });
     return;
   }
   const models = await _settingsGetModels(providerId);
+  const activeProviderId = _settingsState.pickerProviderSel?.getValue() || '';
+  if (
+    requestGeneration !== _settingsState.pickerModelRequestGeneration
+    || activeProviderId !== providerId
+    || sel !== _settingsState.pickerModelSel
+  ) return;
   sel.setOptions(
     models.map((m) => ({ value: m.id, label: m.name || m.id })),
     { value: selected || '', placeholder: providerId ? t('settings.picker.select_model') : t('settings.picker.pick_provider_first') },
@@ -937,7 +1926,7 @@ async function _settingsAddManualModelEntry(provider) {
   if (!apiKey) { _settingsSetStatus('settings-picker-status', 'error', t('settings.paste_key_first')); return; }
 
   _settingsSetStatus('settings-picker-status', '', t('settings.save_loading'));
-  const addRes = await window.orkas.invoke('auth.addApiKey', {
+  const addRes = await window.cogseed.invoke('auth.addApiKey', {
     provider: provider.id,
     apiKey,
     label: label || undefined,
@@ -947,7 +1936,7 @@ async function _settingsAddManualModelEntry(provider) {
     _settingsSetStatus('settings-picker-status', 'error', (addRes && addRes.error) || t('settings.save_failed'));
     return;
   }
-  const entryRes = await window.orkas.invoke('auth.addEntry', {
+  const entryRes = await window.cogseed.invoke('auth.addEntry', {
     provider: provider.id,
     model,
     profileId: addRes.profileId,
@@ -968,6 +1957,29 @@ async function _settingsClickAddEntry() {
 
   const provider = _settingsState.providers.find((p) => p.id === providerId);
   if (!provider) { _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_provider_missing')); return; }
+  if (!_settingsIsCatalogProviderEnabled(provider)) {
+    _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_provider_disabled'));
+    return;
+  }
+  if (provider.id === 'openai-compatible') {
+    if (typeof window.openCustomProviderEditor === 'function') window.openCustomProviderEditor({ protocol: 'openai' });
+    else _settingsOpenCustomProviderModal({ protocol: 'openai' });
+    return;
+  }
+  if (provider.providerKind === 'custom') {
+    if (!modelId) { _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_model_needed')); return; }
+    const profileId = provider.profiles && provider.profiles[0] && provider.profiles[0].profileId;
+    if (!profileId) { _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_provider_missing')); return; }
+    _settingsSetStatus('settings-picker-status', 'busy', t('settings.save_loading'));
+    const entryRes = await window.cogseed.invoke('auth.addEntry', { provider: provider.id, model: modelId, profileId });
+    if (!entryRes || !entryRes.ok) {
+      _settingsSetStatus('settings-picker-status', 'error', (entryRes && entryRes.error) || t('settings.add_entry_failed'));
+      return;
+    }
+    _settingsSetStatus('settings-picker-status', 'ok', t('settings.save_ok'));
+    await _settingsReload();
+    return;
+  }
   if (provider.manualModel) {
     await _settingsAddManualModelEntry(provider);
     return;
@@ -1099,7 +2111,7 @@ function _settingsShowApiKeyForm(provider, modelId) {
     saveBtn.disabled = true;
     msg.textContent = t('settings.save_loading'); msg.className = 'form-msg';
     _settingsLog.info('add api key', { provider: provider.id, model: customModelId, has_label: !!label, has_base_url: !!customBaseUrl });
-    const addRes = await window.orkas.invoke('auth.addApiKey', {
+    const addRes = await window.cogseed.invoke('auth.addApiKey', {
       provider: provider.id,
       apiKey,
       label: label || undefined,
@@ -1112,7 +2124,7 @@ function _settingsShowApiKeyForm(provider, modelId) {
       _settingsLog.warn('add api key failed', { provider: provider.id, error: addRes && addRes.error });
       return;
     }
-    const entryRes = await window.orkas.invoke('auth.addEntry', {
+    const entryRes = await window.cogseed.invoke('auth.addEntry', {
       provider: provider.id,
       model: customModelId,
       profileId: addRes.profileId,
@@ -1153,6 +2165,7 @@ function _settingsShowApiKeyForm(provider, modelId) {
 }
 
 function _settingsOpenModal(overlay) {
+  if (overlay.classList.contains('open')) return;
   overlay.classList.add('open');
   const onKey = (e) => { if (e.key === 'Escape') _settingsCloseModal(overlay, onKey); };
   overlay._onKey = onKey;
@@ -1164,6 +2177,24 @@ function _settingsCloseModal(overlay) {
   if (overlay._onKey) {
     document.removeEventListener('keydown', overlay._onKey, true);
     delete overlay._onKey;
+  }
+  if (overlay.id === 'settings-custom-provider-modal') {
+    const secret = document.getElementById('settings-custom-provider-api-key');
+    if (secret) {
+      secret.value = '';
+      secret.type = 'password';
+    }
+    const body = document.getElementById('settings-custom-provider-modal-body');
+    const actions = document.getElementById('settings-custom-provider-modal-actions');
+    const status = document.getElementById('settings-custom-provider-modal-status');
+    if (body) body.innerHTML = '';
+    if (actions) actions.innerHTML = '';
+    if (status) {
+      status.textContent = '';
+      status.className = 'form-msg';
+    }
+    ++_settingsState.customProviderModalGeneration;
+    _settingsState.customProviderModalView = null;
   }
 }
 
@@ -1196,7 +2227,7 @@ async function _settingsStartOAuthFlow(provider, modelId) {
   const closeFlow = () => {
     if (_oauthFlowPollTimer) { clearInterval(_oauthFlowPollTimer); _oauthFlowPollTimer = null; }
     if (_oauthFlowId) {
-      window.orkas.invoke('auth.cancelOAuthFlow', { flowId: _oauthFlowId }).catch(() => {});
+      window.cogseed.invoke('auth.cancelOAuthFlow', { flowId: _oauthFlowId }).catch(() => {});
     }
     _oauthFlowId = null;
     _oauthFlowTarget = null;
@@ -1208,7 +2239,7 @@ async function _settingsStartOAuthFlow(provider, modelId) {
   document.addEventListener('keydown', onKey, true);
 
   _settingsLog.info('oauth start', { provider: oauthProviderId });
-  const startRes = await window.orkas.invoke('auth.startOAuth', { provider: oauthProviderId });
+  const startRes = await window.cogseed.invoke('auth.startOAuth', { provider: oauthProviderId });
   if (!startRes || !startRes.ok) {
     body.innerHTML = `<div class="oauth-flow-stage error">${escapeHtml((startRes && startRes.error) || t('settings.oauth.start_failed'))}</div>`;
     _settingsLog.warn('oauth start failed', { provider: oauthProviderId, error: startRes && startRes.error });
@@ -1219,7 +2250,7 @@ async function _settingsStartOAuthFlow(provider, modelId) {
   let lastKind = '';
   _oauthFlowPollTimer = setInterval(async () => {
     if (!_oauthFlowId) return;
-    const res = await window.orkas.invoke('auth.pollOAuthFlow', { flowId: _oauthFlowId });
+    const res = await window.cogseed.invoke('auth.pollOAuthFlow', { flowId: _oauthFlowId });
     if (!res || !res.ok) return;
     const status = res.status || {};
     if (status.kind === lastKind && status.kind !== 'done' && status.kind !== 'error') return;
@@ -1265,7 +2296,7 @@ function _oauthFlowRender(provider, status, closeFlow) {
       </div>` : ''}
     `;
     body.querySelector('.oauth-open-btn').onclick = () => {
-      window.orkas.invoke('auth.openExternal', { url }).catch(() => {});
+      window.cogseed.invoke('auth.openExternal', { url }).catch(() => {});
     };
     body.querySelector('.oauth-copy-btn').onclick = async () => {
       try { await navigator.clipboard.writeText(url); } catch (_) {}
@@ -1276,7 +2307,7 @@ function _oauthFlowRender(provider, status, closeFlow) {
         const val = (input.value || '').trim();
         if (!val) return;
         body.innerHTML = `<div class="oauth-flow-stage">${escapeHtml(t('settings.oauth.submitting'))}</div>`;
-        await window.orkas.invoke('auth.submitOAuthInput', { flowId: _oauthFlowId, value: val });
+        await window.cogseed.invoke('auth.submitOAuthInput', { flowId: _oauthFlowId, value: val });
       };
       body.querySelector('.oauth-manual-submit-btn').onclick = submit;
       input.addEventListener('keydown', (e) => {
@@ -1305,7 +2336,7 @@ function _oauthFlowRender(provider, status, closeFlow) {
       const val = input.value || '';
       if (!val && !prompt.allowEmpty) return;
       body.innerHTML = `<div class="oauth-flow-stage">${escapeHtml(t('settings.oauth.submitting'))}</div>`;
-      await window.orkas.invoke('auth.submitOAuthInput', { flowId: _oauthFlowId, value: val });
+      await window.cogseed.invoke('auth.submitOAuthInput', { flowId: _oauthFlowId, value: val });
     };
     body.querySelector('.oauth-submit-btn').onclick = submit;
     input.addEventListener('keydown', (e) => {
@@ -1333,12 +2364,12 @@ function _oauthFlowRender(provider, status, closeFlow) {
         // the chat-time call will throw "model not found".
         let model = target.modelId;
         if (entryProvider !== target.provider.id) {
-          const modelsRes = await window.orkas.invoke('auth.listModels', { provider: entryProvider });
+          const modelsRes = await window.cogseed.invoke('auth.listModels', { provider: entryProvider });
           const supported = (modelsRes && modelsRes.ok && Array.isArray(modelsRes.models)) ? modelsRes.models : [];
           const hit = supported.find(m => m.id === model);
           if (!hit && supported.length) model = supported[0].id;
         }
-        await window.orkas.invoke('auth.addEntry', {
+        await window.cogseed.invoke('auth.addEntry', {
           provider: entryProvider,
           model,
           profileId,
@@ -1403,9 +2434,6 @@ function _settingsRenderEntryRow(entry, idx) {
   primary.className = 'entry-primary';
   primary.innerHTML = `
     <span class="entry-provider">${escapeHtml(entry.providerLabel || entry.provider)}</span>
-    <span class="entry-sep">·</span>
-    <div class="ai-select ai-select-compact entry-model-select"></div>
-    <span class="entry-account-chip" title="${escapeHtml(t('settings.entries.account_title'))}">@ ${escapeHtml(entry.profileLabel || '')}</span>
   `;
   main.appendChild(primary);
 
@@ -1413,7 +2441,8 @@ function _settingsRenderEntryRow(entry, idx) {
   // deleting + re-adding. auth.listModels is the complete whitelist; a saved
   // model that left the catalog remains visible only as a remediation row and
   // is never injected back into these options.
-  const modelEl = primary.querySelector('.entry-model-select');
+  const modelEl = document.createElement('div');
+  modelEl.className = 'ai-select ai-select-compact entry-model-select';
   const initialModelState = _settingsEntryModelState(entry, []);
   const modelUnavailable = initialModelState.unavailable;
   const modelSel = _aiSelectMount(modelEl, {
@@ -1423,7 +2452,7 @@ function _settingsRenderEntryRow(entry, idx) {
   modelEl.addEventListener('mousedown', (e) => e.stopPropagation());
   modelEl.setAttribute('draggable', 'false');
   (async () => {
-    const res = await window.orkas.invoke('auth.listModels', { provider: entry.provider });
+    const res = await window.cogseed.invoke('auth.listModels', { provider: entry.provider });
     const list = (res && res.ok && Array.isArray(res.models)) ? res.models : [];
     const modelState = _settingsEntryModelState(entry, list);
     modelSel.setOptions(modelState.options, {
@@ -1432,7 +2461,7 @@ function _settingsRenderEntryRow(entry, idx) {
     });
     modelSel.onChange(async (val) => {
       if (!val || val === entry.model) return;
-      const up = await window.orkas.invoke('auth.updateEntryModel', { entryId: entry.entryId, model: val });
+      const up = await window.cogseed.invoke('auth.updateEntryModel', { entryId: entry.entryId, model: val });
       if (!up || !up.ok) {
         await uiAlert((up && up.error) || t('settings.entries.switch_model_failed'));
         modelSel.setValue(entry.model);
@@ -1450,18 +2479,87 @@ function _settingsRenderEntryRow(entry, idx) {
     badge.textContent = entry.oauthExpired ? t('settings.entries.oauth_expired') : t('settings.entries.oauth_badge');
   } else if (entry.profileType === 'managed') {
     badge.className = 'account-type-badge';
-    badge.textContent = 'Mate Agent';
+    badge.textContent = 'CogSeed';
   } else {
     badge.className = 'account-type-badge';
     badge.textContent = 'API Key';
   }
   meta.appendChild(badge);
 
-  if (entry.profileMasked) {
-    const mask = document.createElement('span');
-    mask.className = 'account-mask';
-    mask.textContent = entry.profileMasked;
-    meta.appendChild(mask);
+  // API-key profiles get an editable capsule: masked with dots by default,
+  // the eye button reveals the real key, typing + blur/Enter saves it.
+  if (entry.profileType !== 'oauth' && entry.profileType !== 'managed') {
+    // Dot mask is long enough to fill at least a third of the capsule.
+    const STAR_MASK = '••••••••••••••••••••••••••••••••';
+    const capsule = document.createElement('div');
+    capsule.className = 'entry-api-key-capsule';
+    capsule.setAttribute('draggable', 'false');
+    capsule.innerHTML = `
+      <input class="entry-api-key-input" type="password" value="${STAR_MASK}" autocomplete="off" spellcheck="false" />
+      <button type="button" class="entry-api-key-toggle" title="${escapeHtml(t('settings.entries.api_key_show'))}" aria-label="${escapeHtml(t('settings.entries.api_key_show'))}">${_settingsIconHtml('eye', 'ui-icon')}</button>
+    `;
+    meta.appendChild(capsule);
+
+    const input = capsule.querySelector('.entry-api-key-input');
+    const toggle = capsule.querySelector('.entry-api-key-toggle');
+    let revealed = false;
+    let revealedKey = '';
+
+    const hideKey = () => {
+      revealed = false;
+      revealedKey = '';
+      input.type = 'password';
+      input.value = STAR_MASK;
+      const label = t('settings.entries.api_key_show');
+      toggle.title = label;
+      toggle.setAttribute('aria-label', label);
+    };
+
+    toggle.addEventListener('click', async () => {
+      if (revealed) { hideKey(); return; }
+      const res = await window.cogseed.invoke('auth.revealApiKey', { profileId: entry.profileId });
+      const key = res && res.ok ? String(res.apiKey || '') : '';
+      if (!key) {
+        await uiAlert((res && res.error) || t('settings.entries.api_key_reveal_failed'));
+        return;
+      }
+      revealed = true;
+      revealedKey = key;
+      input.type = 'text';
+      input.value = key;
+      const label = t('settings.entries.api_key_hide');
+      toggle.title = label;
+      toggle.setAttribute('aria-label', label);
+    });
+
+    // Interacting with the capsule must not start the row's drag-reorder.
+    capsule.addEventListener('mousedown', (e) => e.stopPropagation());
+
+    const commitKey = async () => {
+      const value = String(input.value || '').trim();
+      if (value === STAR_MASK) { hideKey(); return; }
+      if (!value) { hideKey(); return; }
+      if (revealed && value === revealedKey) { hideKey(); return; }
+      const up = await window.cogseed.invoke('auth.updateApiKey', { profileId: entry.profileId, apiKey: value });
+      if (!up || !up.ok) {
+        await uiAlert((up && up.error) || t('settings.entries.api_key_update_failed'));
+        hideKey();
+        return;
+      }
+      hideKey();
+      await _settingsReload();
+    };
+
+    input.addEventListener('focus', () => {
+      // Typing replaces the dot mask instead of appending to it.
+      if (!revealed && input.value === STAR_MASK) input.value = '';
+    });
+    input.addEventListener('blur', () => { void commitKey(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Enter') input.blur();
+      if (e.key === 'Escape') { hideKey(); input.blur(); }
+    });
   }
   main.appendChild(meta);
 
@@ -1477,6 +2575,21 @@ function _settingsRenderEntryRow(entry, idx) {
   const actions = document.createElement('div');
   actions.className = 'entry-actions';
 
+  if (entry.providerKind === 'custom' || String(entry.provider || '').startsWith('cp:')) {
+    const customProviderId = String(entry.provider || '').startsWith('cp:')
+      ? String(entry.provider).slice(3)
+      : String(entry.provider || '');
+    const customProvider = _settingsCurrentCustomProvider(customProviderId);
+    if (customProvider) {
+      actions.appendChild(_settingsCustomProviderActionButton(
+        'settings',
+        t('settings.custom_providers.manage'),
+        'icon-btn settings-entry-custom-provider-manage',
+        () => _settingsOpenCustomProviderDetails(customProvider),
+      ));
+    }
+  }
+
   const testBtn = document.createElement('button');
   testBtn.className = 'icon-btn';
   testBtn.textContent = t('settings.entries.test');
@@ -1489,6 +2602,9 @@ function _settingsRenderEntryRow(entry, idx) {
   delBtn.onclick = () => _settingsRemoveEntry(entry);
   actions.appendChild(delBtn);
 
+  // Model picker sits to the left of the settings (gear) button.
+  actions.prepend(modelEl);
+
   row.appendChild(actions);
 
   _settingsAttachReorderDnd(row, {
@@ -1496,10 +2612,7 @@ function _settingsRenderEntryRow(entry, idx) {
     id: entry.entryId,
     getIds: () => _settingsState.entries.map((e) => e.entryId),
     ipcName: 'auth.reorderEntries',
-    onSuccess: (res) => {
-      _settingsState.entries = Array.isArray(res.entries) ? res.entries : _settingsState.entries;
-      _settingsRenderEntries();
-    },
+    onSuccess: () => _settingsReload(),
   });
 
   return row;
@@ -1559,7 +2672,7 @@ async function _settingsAttachReorderDnd(row, opts) {
     let refIdx = ids.indexOf(id);
     if (refIdx < 0) refIdx = ids.length;
     ids.splice(before ? refIdx : refIdx + 1, 0, srcId);
-    const res = await window.orkas.invoke(ipcName, { orderedIds: ids });
+    const res = await window.cogseed.invoke(ipcName, { orderedIds: ids });
     if (res && res.ok) {
       await onSuccess(res);
     } else {
@@ -1570,11 +2683,20 @@ async function _settingsAttachReorderDnd(row, opts) {
 
 async function _settingsTestEntry(entry, statusEl) {
   _settingsSetRowStatus(statusEl, 'busy', t('settings.entries.testing'), 'entry-status');
-  const res = await window.orkas.invoke('auth.testConnection', {
-    provider: entry.provider,
-    model: entry.model,
-    profileId: entry.profileId,
-  });
+  // Custom providers use a synthetic `cp:<id>` profile that has no entry in
+  // the profile store — route their tests through the custom-provider
+  // channel instead of auth.testConnection (which would say "profile not found").
+  const isCustom = String(entry.provider || '').startsWith('cp:');
+  const res = isCustom
+    ? await window.cogseed.invoke('customProviders.model.test', {
+        providerId: String(entry.provider).slice(3),
+        modelId: entry.model,
+      })
+    : await window.cogseed.invoke('auth.testConnection', {
+        provider: entry.provider,
+        model: entry.model,
+        profileId: entry.profileId,
+      });
   if (res && res.ok) {
     const ms = typeof res.durationMs === 'number' ? `${res.durationMs}ms` : '';
     _settingsSetRowStatus(statusEl, 'ok', t('settings.entries.conn_ok', { ms }).trim(), 'entry-status');
@@ -1592,7 +2714,7 @@ async function _settingsRemoveEntry(entry) {
     provider: entry.provider,
     model: entry.model,
   });
-  const res = await window.orkas.invoke('auth.removeEntry', { entryId: entry.entryId });
+  const res = await window.cogseed.invoke('auth.removeEntry', { entryId: entry.entryId });
   if (!res || !res.ok) {
     _settingsLog.warn('remove entry failed', { entry_id: entry.entryId, error: res && res.error });
     await uiAlert((res && res.error) || t('settings.entries.delete_failed'));
@@ -1604,10 +2726,13 @@ async function _settingsRemoveEntry(entry) {
 // ── Helpers ──
 
 async function _settingsReload() {
-  await Promise.all([_settingsRefreshProviders(), _settingsRefreshEntries(), _settingsRefreshCommanderBackend(), _settingsRefreshAuthProfilesStatus()]);
-  if (window.refreshModelAuthorizationSettings) window.refreshModelAuthorizationSettings();
+  _settingsState.modelsCache = {};
+  await Promise.all([_settingsRefreshProviders(), _settingsRefreshEntries(), _settingsRefreshCommanderBackend(), _settingsRefreshAuthProfilesStatus(), _settingsRefreshCustomProviders()]);
+  await _settingsRenderPicker();
+  _settingsRenderEntries();
   _settingsRenderCommanderBackend();
   _settingsRenderAuthProfilesRecovery();
+  _settingsRenderCustomProviders();
   // The priority list just changed — re-check the model-guard flag so the
   // top banner and gated actions unlock (or re-lock, after removing the
   // last entry) without waiting for a reload.
@@ -1650,7 +2775,7 @@ function _searchProviderLabel(id) {
 }
 
 async function _settingsRefreshSearchProfiles() {
-  const res = await window.orkas.invoke('searchAuth.list');
+  const res = await window.cogseed.invoke('searchAuth.list');
   _settingsState.searchProfiles = (res && res.ok && Array.isArray(res.profiles)) ? res.profiles : [];
 }
 
@@ -1689,7 +2814,7 @@ async function _settingsClickAddSearchKey() {
   if (!apiKey)   { _settingsSetStatus('settings-search-status', 'error', t('settings.search.error_key_needed')); return; }
   _settingsSetStatus('settings-search-status', 'busy', t('settings.search.adding'));
   try {
-    const res = await window.orkas.invoke('searchAuth.add', { provider, apiKey, label: 'default' });
+    const res = await window.cogseed.invoke('searchAuth.add', { provider, apiKey, label: 'default' });
     if (!res || !res.ok) {
       _settingsSetStatus('settings-search-status', 'error', (res && res.error) || t('settings.search.add_failed'));
       return;
@@ -1743,7 +2868,7 @@ function _settingsRenderSearchEntries() {
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.search.confirm_delete', { provider: _searchProviderLabel(p.provider) }));
       if (!ok) return;
-      const res = await window.orkas.invoke('searchAuth.remove', { id: p.id });
+      const res = await window.cogseed.invoke('searchAuth.remove', { id: p.id });
       if (res && res.ok) {
         await _settingsRefreshSearchProfiles();
         _settingsRenderSearchEntries();
@@ -1785,7 +2910,7 @@ function _imageProviderLabel(id) {
 }
 
 async function _settingsRefreshImageProfiles() {
-  const res = await window.orkas.invoke('imageAuth.list');
+  const res = await window.cogseed.invoke('imageAuth.list');
   _settingsState.imageProfiles = (res && res.ok && Array.isArray(res.profiles)) ? res.profiles : [];
 }
 
@@ -1822,7 +2947,7 @@ async function _settingsClickAddImageKey() {
   if (!apiKey)   { _settingsSetStatus('settings-image-status', 'error', t('settings.image.error_key_needed')); return; }
   _settingsSetStatus('settings-image-status', 'busy', t('settings.image.adding'));
   try {
-    const res = await window.orkas.invoke('imageAuth.add', { provider, model, apiKey, label: 'default' });
+    const res = await window.cogseed.invoke('imageAuth.add', { provider, model, apiKey, label: 'default' });
     if (!res || !res.ok) {
       _settingsSetStatus('settings-image-status', 'error', (res && res.error) || t('settings.image.add_failed'));
       return;
@@ -1876,7 +3001,7 @@ function _settingsRenderImageEntries() {
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.image.confirm_delete', { provider: _imageProviderLabel(p.provider, p.model) }));
       if (!ok) return;
-      const res = await window.orkas.invoke('imageAuth.remove', { id: p.id });
+      const res = await window.cogseed.invoke('imageAuth.remove', { id: p.id });
       if (res && res.ok) {
         await _settingsRefreshImageProfiles();
         _settingsRenderImageEntries();
@@ -1927,7 +3052,7 @@ function _settingsSelectedVideoProvider() {
 }
 
 async function _settingsRefreshVideoProfiles() {
-  const res = await window.orkas.invoke('videoAuth.list');
+  const res = await window.cogseed.invoke('videoAuth.list');
   _settingsState.videoProfiles = (res && res.ok && Array.isArray(res.profiles)) ? res.profiles : [];
   _settingsState.videoAuthProviderOptions = (res && res.ok && Array.isArray(res.providers) && res.providers.length)
     ? res.providers
@@ -1975,7 +3100,7 @@ async function _settingsClickAddVideoKey() {
   if (!apiKey) { _settingsSetStatus('settings-video-status', 'error', t('settings.video.error_key_needed')); return; }
   _settingsSetStatus('settings-video-status', 'busy', t('settings.video.adding'));
   try {
-    const res = await window.orkas.invoke('videoAuth.add', { provider, apiKey, label: 'default' });
+    const res = await window.cogseed.invoke('videoAuth.add', { provider, apiKey, label: 'default' });
     if (!res || !res.ok) {
       _settingsSetStatus('settings-video-status', 'error', (res && res.error) || t('settings.video.add_failed'));
       return;
@@ -2029,7 +3154,7 @@ function _settingsRenderVideoEntries() {
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.video.confirm_delete', { provider: _videoProviderLabel(p.provider, p.model) }));
       if (!ok) return;
-      const res = await window.orkas.invoke('videoAuth.remove', { id: p.id });
+      const res = await window.cogseed.invoke('videoAuth.remove', { id: p.id });
       if (res && res.ok) {
         await _settingsRefreshVideoProfiles();
         _settingsRenderVideoEntries();
@@ -2056,7 +3181,7 @@ function _settingsRenderVideoEntries() {
 // ── Text-to-speech API key section ─────────────────────────────────────────
 
 async function _settingsRefreshTtsProfiles() {
-  const res = await window.orkas.invoke('ttsAuth.list');
+  const res = await window.cogseed.invoke('ttsAuth.list');
   if (!res || !res.ok) return;
   _settingsState.ttsPresets = Array.isArray(res.presets) ? res.presets : [];
   _settingsState.ttsProfiles = Array.isArray(res.profiles) ? res.profiles : [];
@@ -2151,7 +3276,7 @@ async function _settingsClickAddTts() {
 
   _settingsSetStatus('settings-tts-status', 'busy', t('settings.tts.adding'));
   try {
-    const res = await window.orkas.invoke('ttsAuth.add', payload);
+    const res = await window.cogseed.invoke('ttsAuth.add', payload);
     if (!res || !res.ok) {
       _settingsSetStatus('settings-tts-status', 'error', (res && res.error) || t('settings.tts.add_failed'));
       return;
@@ -2208,7 +3333,7 @@ function _settingsRenderTtsEntries() {
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.tts.confirm_delete', { provider: _ttsProviderLabel(p.provider) }));
       if (!ok) return;
-      const res = await window.orkas.invoke('ttsAuth.remove', { id: p.id });
+      const res = await window.cogseed.invoke('ttsAuth.remove', { id: p.id });
       if (res && res.ok) await _settingsRefreshTtsProfiles();
     });
     actions.appendChild(delBtn);

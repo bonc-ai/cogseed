@@ -488,12 +488,26 @@ describe('agents › normalizeAgent', () => {
       { kind: 'wat' },
       { kind: 'cli' },          // missing cli name
       { kind: 'cli', cli: '' }, // empty cli name
+      { kind: 'p3394-gateway' },
+      { kind: 'p3394-gateway', cli: '' },
     ]) {
       const norm = a.normalizeAgent({ agent_id: 'x', name: 'N', runtime: bad } as any, 'custom');
       expect(norm).toBeTruthy();
       expect('runtime' in (norm as any)).toBe(false);
       expect(a.isCliAgent(norm)).toBe(false);
+      expect(a.isP3394GatewayAgent(norm)).toBe(false);
     }
+  });
+
+  it('normalizes a p3394-gateway runtime (P3394 external agent)', async () => {
+    const a = await loadAgents();
+    const norm = a.normalizeAgent({
+      agent_id: 'x', name: 'N',
+      runtime: { kind: 'p3394-gateway', cli: 'hermes' },
+    } as any, 'custom');
+    expect(norm?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'hermes' });
+    expect(a.isP3394GatewayAgent(norm)).toBe(true);
+    expect(a.isCliAgent(norm)).toBe(false);
   });
 
   it('normalizes in_process runtime but does not flag as CLI', async () => {
@@ -749,8 +763,11 @@ describe('agents › extractAgentFieldBlocks', () => {
       .blocks[0].icon).toBe('spreadsheet');
     expect('icon' in a.extractAgentFieldBlocks('<agent><icon>not-a-real-icon</icon></agent>')
       .blocks[0]).toBe(false);
-    expect('icon' in a.extractAgentFieldBlocks('<agent><icon>crown</icon></agent>')
+    // 指挥官默认图标(cogseed)不允许被 agent 占用；crown 已回归可选
+    expect('icon' in a.extractAgentFieldBlocks('<agent><icon>cogseed</icon></agent>')
       .blocks[0]).toBe(false);
+    expect(a.extractAgentFieldBlocks('<agent><icon>crown</icon></agent>')
+      .blocks[0].icon).toBe('crown');
   });
 
   it('parses each block independently — a malformed sub-tag in one does not affect the other', async () => {
@@ -2052,6 +2069,54 @@ describe('agents › deleteCustomAgent', () => {
   it('returns false for missing agent', async () => {
     const a = await loadAgents();
     expect(await a.deleteCustomAgent('ghost')).toBe(false);
+  });
+
+  // A platform agent's spec lives under local/marketplace/agents/<id>/, which
+  // `agentDir` does not point at — so the danger is not the spec but the side
+  // state a platform agent accumulates in cloud/agents/<id>/. `bus.ts` calls
+  // `recordAgentRuntimeStats` for every agent actor, platform included, and
+  // that write creates the cloud dir. Once it exists, an unguarded delete
+  // wipes stats + chat dirs + session jsonl for content the recycle bin never
+  // snapshots (createAppRecycleBatchForAgent covers cloud/agents/<id> only).
+  it('refuses to delete a platform agent that has accumulated cloud-side state', async () => {
+    writePlatformAgent('platform-victim');
+    const cloudDir = path.join(customAgentsDir(), 'platform-victim');
+    fs.mkdirSync(cloudDir, { recursive: true });
+    const statsFile = path.join(cloudDir, 'runtime_stats.json');
+    fs.writeFileSync(statsFile, JSON.stringify({ devices: {} }));
+
+    const a = await loadAgents();
+    expect(await a.deleteCustomAgent('platform-victim')).toBe(false);
+    // The run history survives, and so does the marketplace spec.
+    expect(fs.existsSync(statsFile)).toBe(true);
+    expect(fs.existsSync(path.join(builtinAgentsDir(), 'platform-victim', 'agent.json'))).toBe(true);
+  });
+
+  it('does not purge a platform agent per-user chat dir or session jsonl', async () => {
+    writePlatformAgent('platform-keep');
+    fs.mkdirSync(path.join(customAgentsDir(), 'platform-keep'), { recursive: true });
+    const chatDir = path.join(tmpDir, TEST_UID, 'cloud', 'chats', 'agent', 'platform-keep');
+    fs.mkdirSync(chatDir, { recursive: true });
+    fs.writeFileSync(path.join(chatDir, 'chat.jsonl'), '{"role":"user","content":"hi"}\n');
+    const sessionDir = path.join(tmpDir, TEST_UID, 'cloud', 'sessions');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const sessionFile = path.join(sessionDir, 'agent-platform-keep.jsonl');
+    fs.writeFileSync(sessionFile, '{"role":"user","content":"old"}\n');
+
+    const a = await loadAgents();
+    expect(await a.deleteCustomAgent('platform-keep')).toBe(false);
+    expect(fs.existsSync(chatDir)).toBe(true);
+    expect(fs.existsSync(sessionFile)).toBe(true);
+  });
+
+  // The guard keys on the resolved agent's source, not on directory presence,
+  // so a custom agent that shadows nothing still deletes normally. Guarding on
+  // "cloud dir exists" instead would have been a no-op.
+  it('still deletes a custom agent whose id resolves to source=custom', async () => {
+    writeCustomAgent('custom-still-deletable');
+    const a = await loadAgents();
+    expect(await a.deleteCustomAgent('custom-still-deletable')).toBe(true);
+    expect(fs.existsSync(path.join(customAgentsDir(), 'custom-still-deletable'))).toBe(false);
   });
 
   it('drops per-user agent chat dirs on delete', async () => {

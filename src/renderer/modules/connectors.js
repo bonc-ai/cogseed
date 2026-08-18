@@ -150,8 +150,8 @@ async function loadConnectors() {
   _renderConnectorsGrid();
   try {
     const [catRes, listRes] = await Promise.all([
-      window.orkas.invoke('connectors.catalog', {}).catch((err) => ({ ok: false, error: err })),
-      window.orkas.invoke('connectors.list', {}).catch((err) => ({ ok: false, error: err })),
+      window.cogseed.invoke('connectors.catalog', {}).catch((err) => ({ ok: false, error: err })),
+      window.cogseed.invoke('connectors.list', {}).catch((err) => ({ ok: false, error: err })),
     ]);
     if (seq !== _connectorsLoadSeq) return;
     if (catRes && catRes.ok && Array.isArray(catRes.catalog)) {
@@ -188,7 +188,7 @@ async function loadConnectors() {
 async function verifyConnectors() {
   const seq = _connectorsLoadSeq;
   try {
-    const res = await window.orkas.invoke('connectors.verify', {});
+    const res = await window.cogseed.invoke('connectors.verify', {});
     // A newer load superseded us — its own verify pass owns the screen now.
     if (seq !== _connectorsLoadSeq) return;
     if (res && res.ok && Array.isArray(res.instances)) {
@@ -697,7 +697,7 @@ async function _toggleConnectorEnabled(entry, instance, nextEnabled) {
   _connectorsTrackClick('connector_enable_toggle', payload);
   try {
     for (const id of ids) {
-      const res = await window.orkas.invoke('connectors.set_enabled', { id, enabled: nextEnabled });
+      const res = await window.cogseed.invoke('connectors.set_enabled', { id, enabled: nextEnabled });
       if (!res || !res.ok) {
         _connectorsTrackEvent('connector_enable_result', {
           ...payload,
@@ -768,7 +768,7 @@ async function _quickDisconnect(entry, instance) {
   _connectorsTrackClick('connector_disconnect', payload);
   try {
     for (const id of ids) {
-      const res = await window.orkas.invoke('connectors.remove', { id });
+      const res = await window.cogseed.invoke('connectors.remove', { id });
       if (!res || (!res.ok && !/not found/i.test(res.error || ''))) {
         _connectorsTrackEvent('connector_disconnect_result', {
           ...payload,
@@ -812,7 +812,7 @@ async function _runConnect(entry) {
   _connectorsState.connecting.add(entry.id);
   _renderConnectorsGrid();
   try {
-    const res = await window.orkas.invoke('connectors.start_oauth', { catalog_id: entry.id });
+    const res = await window.cogseed.invoke('connectors.start_oauth', { catalog_id: entry.id });
     if (res && res.ok && res.started && typeof res.attempt_id === 'string' && res.attempt_id) {
       _pendingConnectAttempts.set(res.attempt_id, { payload, startedAt });
     } else if (res && !res.ok) {
@@ -851,7 +851,7 @@ function _handleOAuthConnectResult(info) {
     // failures need an explicit alert now that the initiating IPC has already returned.
     if (!cancelled && errLike.code !== 'mcp_connect_failed') uiAlert(_formatConnectError(errLike));
   }
-  if (currentView === 'connectors') loadConnectors();
+  if (_connectorsViewActive()) loadConnectors();
 }
 
 /** Re-run connect + token refresh for an installed instance (`connectors.refresh`), never OAuth.
@@ -870,7 +870,7 @@ async function _retryConnect(entry, event) {
   try {
     const results = await Promise.all(ids.map(async (id) => {
       try {
-        const res = await window.orkas.invoke('connectors.refresh', { id });
+        const res = await window.cogseed.invoke('connectors.refresh', { id });
         const status = res && res.instance && res.instance.status;
         if (res && res.ok && status && status.kind === 'connected') return null;
         return (res && (res.error || (status && status.message))) || t('connectors.errors.connect_failed');
@@ -1034,7 +1034,7 @@ function _openAddCustomDialog() {
     const startedAt = performance.now();
     _connectorsTrackClick('connector_custom_add', payload);
     try {
-      const res = await window.orkas.invoke('connectors.add_custom', {
+      const res = await window.cogseed.invoke('connectors.add_custom', {
         display_name: f('name').value.trim(),
         transport,
       });
@@ -1104,27 +1104,31 @@ function escapeHtml(s) {
   })[c]);
 }
 
+function _connectorsViewActive() {
+  return currentView === 'connectors' || currentView === 'connections';
+}
+
 window.addEventListener('i18n-change', () => {
-  if (currentView === 'connectors') _renderConnectorsGrid();
+  if (_connectorsViewActive()) _renderConnectorsGrid();
 });
 
 // Refresh the grid when a connector or client-config push arrives. Right now the
 // only consumer is the connectors panel itself, but registering at module load lets future
 // background events (token expiry notifications etc.) refresh the panel automatically.
-if (window.orkas && typeof window.orkas.onPushEvent === 'function') {
+if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
   try {
-    window.orkas.onPushEvent('connectors:changed', () => {
-      if (currentView === 'connectors') loadConnectors();
+    window.cogseed.onPushEvent('connectors:changed', () => {
+      if (_connectorsViewActive()) loadConnectors();
     });
-    window.orkas.onPushEvent('connectors:oauth-result', _handleOAuthConnectResult);
-    window.orkas.onPushEvent('client-config:changed', () => {
-      if (currentView === 'connectors') loadConnectors();
+    window.cogseed.onPushEvent('connectors:oauth-result', _handleOAuthConnectResult);
+    window.cogseed.onPushEvent('client-config:changed', () => {
+      if (_connectorsViewActive()) loadConnectors();
     });
     // Commander-driven custom MCP install: the agent calls add_custom_connector,
     // main pushes the confirm request, the user must approve here before it
     // installs (the stdio command / http url is shown verbatim — the consent
     // surface). Queue FIFO so concurrent installs don't stack dialogs.
-    window.orkas.onPushEvent('connectors:install-confirm', (info) => {
+    window.cogseed.onPushEvent('connectors:install-confirm', (info) => {
       if (!info || typeof info.request_id !== 'string') return;
       _connectorInstallQueue.push(info);
       _drainConnectorInstallQueue();
@@ -1152,11 +1156,11 @@ async function _drainConnectorInstallQueue() {
           approved: !!ok,
           transport_kind: info.kind || '',
         });
-        await window.orkas.invoke('connectors.install_confirm_response', {
+        await window.cogseed.invoke('connectors.install_confirm_response', {
           request_id: info.request_id,
           approved: !!ok,
         });
-        if (ok && currentView === 'connectors') loadConnectors();
+        if (ok && _connectorsViewActive()) loadConnectors();
       } catch (err) {
         _connectorsLog.warn('install confirm response failed', { error: err && err.message });
       }

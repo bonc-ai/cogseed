@@ -24,12 +24,20 @@ const ConversationInfo = (() => {
   let _loadingSeq = 0;
   let _error = '';
   let _fileMenuScrollHost = null;
+  // 接续准备依据归属的会话（showResumeEvidence 写入）；refresh 覆盖 snapshot
+  // 时据此判断依据是否仍属于当前会话，避免跨会话残留。
+  let _resumeEvidenceCid = '';
+  // 「本次运行」默认只展示最近 10 条，展开后显示全部（运行证明真实全量保留）。
+  let _carriedRunsExpanded = false;
   let _snapshot = {
     conversation: null,
     history: [],
     files: [],
     fileRoot: '',
     fileRootExists: false,
+    // 接续准备依据（导入会话欢迎面板「查看依据」）：复述 / 准备携带明细 / 边界。
+    // 由 showResumeEvidence 设置，carried tab 顶部渲染。
+    resumeEvidence: null,
     filesTruncated: false,
     filesCount: 0,
     filesScanSkipped: false,
@@ -40,11 +48,8 @@ const ConversationInfo = (() => {
     collaboration: null,
     mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' },
     wakeRequests: [],
-    kstarRuns: [],
     protocolEvents: [],
     protocolError: '',
-    migrationStatus: null,
-    archives: [],
   };
   const _protocolFilters = { agent: '', role: '', result: '' };
   const _CI_TEXT_EXTS = new Set([
@@ -244,8 +249,8 @@ const ConversationInfo = (() => {
   }
 
   async function _invokeOrDefault(channel, payload, fallback) {
-    const invoke = window && window.orkas && typeof window.orkas.invoke === 'function'
-      ? window.orkas.invoke.bind(window.orkas)
+    const invoke = window && window.cogseed && typeof window.cogseed.invoke === 'function'
+      ? window.cogseed.invoke.bind(window.cogseed)
       : null;
     if (!invoke) return fallback;
     try {
@@ -258,7 +263,7 @@ const ConversationInfo = (() => {
 
   async function _load(cid) {
     const enc = encodeURIComponent(cid);
-    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, kstarData, protocolData, migrationData, archivesData] = await Promise.all([
+    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, protocolData, executionsData] = await Promise.all([
       _fetchJson(typeof _historyRequestUrl === 'function'
         ? _historyRequestUrl(cid)
         : `/api/conversations/${enc}/history?limit=10`),
@@ -273,10 +278,14 @@ const ConversationInfo = (() => {
       _loadSyncEnabled(),
       _loadAgentActivitySnapshot(cid),
       _fetchJson(`/api/conversations/${enc}/wake-requests`).catch(() => ({ requests: [] })),
-      _fetchJson(`/api/conversations/${enc}/kstar`).catch(() => ({ runs: [] })),
       _fetchJson(`/api/conversations/${enc}/protocol-events`).catch((err) => ({ events: [], error: (err && err.message) || String(err) })),
-      _invokeOrDefault('p3394.checkMigrationStatus', {}, { migrated: false }),
-      _invokeOrDefault('p3394.listArchives', {}, { archives: [] }),
+      // 9.1 右侧「本次携带」：真实执行记录（状态 / 权限 / 边界 / 回执关联）。
+      // IPC 已存在；加载失败或环境无 IPC 时静默降级为空列表。
+      _invokeOrDefault('p3394.execution.list', {}, { ok: false }).then((data) => (
+        data && Array.isArray(data.executions)
+          ? data.executions.filter((item) => item && item.conversationId === cid)
+          : []
+      )).catch(() => []),
     ]);
     return {
       conversation: historyData.conversation || null,
@@ -293,11 +302,9 @@ const ConversationInfo = (() => {
       actors: Array.isArray(activity.actors) ? activity.actors : [],
       collaboration: activity.runtime && activity.runtime.collaboration ? activity.runtime.collaboration : null,
       wakeRequests: Array.isArray(wakeData.requests) ? wakeData.requests : [],
-      kstarRuns: Array.isArray(kstarData.runs) ? kstarData.runs : [],
       protocolEvents: Array.isArray(protocolData.events) ? protocolData.events : (Array.isArray(protocolData.protocol_events) ? protocolData.protocol_events : []),
       protocolError: protocolData.error ? String(protocolData.error) : '',
-      migrationStatus: migrationData || null,
-      archives: Array.isArray(archivesData.archives) ? archivesData.archives : [],
+      executions: Array.isArray(executionsData) ? executionsData : [],
     };
   }
 
@@ -486,6 +493,14 @@ const ConversationInfo = (() => {
     return c && c.title ? c.title : _label('chat.new_conv_title', 'New conversation');
   }
 
+  /** 掩码来源名里的内部 session id（oc_/sess_/conv_ 长 id）——来源展示给
+   *  用户看的是可读标题，内部 id 不直接暴露（隐私/安全）。仅掩码独立成段的
+   *  内部 id token，保留可读前缀（如 "Lark · oc_xxx" → "Lark · oc_xxxx…"）。 */
+  function _maskedSourceName(title) {
+    const text = String(title || '');
+    return text.replace(/(^|[^A-Za-z0-9])(oc_|sess_|conv_|gconv-|cid-)[A-Za-z0-9_-]{8,}/g, '$1$2' + _label('common.id_masked', '…'));
+  }
+
   function _collectHistoryProducedFiles() {
     const byPath = new Map();
     for (const m of _snapshot.history || []) {
@@ -617,17 +632,29 @@ const ConversationInfo = (() => {
   }
 
   function _renderFiles() {
-    const files = _collectVisibleFiles();
-    if (!files.length) {
-      if (_snapshot.filesScanSkipped) {
-        return `<div class="conversation-info-empty">${escapeHtml(_label(
-          'conversation_info.files_scan_skipped',
-          'File listing is paused for this privacy-protected workspace. Files created or attached in chat still appear.'
-        ))}</div>`;
-      }
-      return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.empty_files', 'No files yet'))}</div>`;
+    // 复用 _collectVisibleFiles（含工作区权威过滤 + produced/工作区去重），
+    // 按 source 拆「产出 / 工作区」两个区块。区块框架始终存在——内容可以为
+    // 空，但不能没有（Codex 风格）。
+    const merged = _collectVisibleFiles();
+    const produced = merged.filter((f) => f.source === 'produced');
+    const workspace = merged.filter((f) => f.source === 'workspace');
+
+    const producedHtml = produced.length
+      ? `<div class="conversation-info-tree">${_renderTreeNode(_buildFileTree(produced), 0)}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_no_produced', '暂无产出文件'))}</div>`;
+
+    let workspaceHtml;
+    if (_snapshot.filesScanSkipped) {
+      workspaceHtml = `<div class="conversation-info-empty is-small">${escapeHtml(_label(
+        'conversation_info.files_scan_skipped',
+        'File listing is paused for this privacy-protected workspace. Files created or attached in chat still appear.'
+      ))}</div>`;
+    } else if (workspace.length) {
+      workspaceHtml = `<div class="conversation-info-tree">${_renderTreeNode(_buildFileTree(workspace), 0)}</div>`;
+    } else {
+      workspaceHtml = `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_no_workspace', '暂无工作区文件'))}</div>`;
     }
-    const tree = _buildFileTree(files);
+
     const syncNotice = _snapshot.syncEnabled
       ? `<div class="ci-files-sync-note">
           <span class="ci-files-sync-note-icon">${_uiIcon('info', 'ui-icon ci-files-sync-note-svg')}</span>
@@ -638,9 +665,20 @@ const ConversationInfo = (() => {
         </div>`
       : '';
     const trunc = _snapshot.filesTruncated
-      ? `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_truncated', 'Showing first {count} files', { count: _snapshot.filesCount || files.length }))}</div>`
+      ? `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.files_truncated', 'Showing first {count} files', { count: _snapshot.filesCount || workspace.length }))}</div>`
       : '';
-    return `<div class="ci-files">${syncNotice}${trunc}<div class="conversation-info-tree">${_renderTreeNode(tree, 0)}</div></div>`;
+
+    return `<div class="ci-files">
+      <section class="ci-files-section">
+        <div class="ci-files-section-title">${_uiIcon('file-text', '')}${escapeHtml(_label('conversation_info.files_produced', '产出'))}</div>
+        ${producedHtml}
+      </section>
+      <section class="ci-files-section">
+        <div class="ci-files-section-title">${_uiIcon('folder-open', '')}${escapeHtml(_label('conversation_info.files_workspace', '工作区'))}</div>
+        ${workspaceHtml}
+      </section>
+      ${syncNotice}${trunc}
+    </div>`;
   }
 
   function _collectConversationAttachments() {
@@ -748,8 +786,8 @@ const ConversationInfo = (() => {
   function _agentActivityActorName(actor) {
     if (!actor) return '';
     const id = String(actor.id || '');
-    if (actor.name) return String(actor.name);
     if (id === 'commander') return _label('chat.agent_status.commander', 'Commander');
+    if (actor.name) return String(actor.name);
     return id || _label('chat.from_agent_unknown', 'Agent');
   }
 
@@ -931,11 +969,6 @@ const ConversationInfo = (() => {
         });
       }
     }
-    for (const run of Array.isArray(_snapshot.kstarRuns) ? _snapshot.kstarRuns : []) {
-      if (run && run.status === 'needs_review') {
-        items.push({ kind: 'kstar', label: _label('conversation_info.collaboration.attention.kstar', 'KSTAR review required'), target: { type: 'review_center', ref: String(run.id || '') } });
-      }
-    }
     const collaboration = _snapshot.collaboration || {};
     const conflictStatus = (status) => {
       const normalized = String(status || 'detected');
@@ -969,54 +1002,6 @@ const ConversationInfo = (() => {
     return `<section class="conversation-info-collaboration-section"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_attention', 'Attention Needed'))}</div><div class="conversation-info-collaboration-attention-list">${body}</div></section>`;
   }
 
-  function _renderKStarHistorySection() {
-    const migrationStatus = _snapshot.migrationStatus || null;
-    const archives = Array.isArray(_snapshot.archives) ? _snapshot.archives : [];
-
-    if (!migrationStatus && archives.length === 0) return '';
-
-    let statusHtml = '';
-    if (migrationStatus && migrationStatus.migrated) {
-      const stamp = migrationStatus.stamp || {};
-      const migratedAt = stamp.migrated_at ? new Date(stamp.migrated_at).toLocaleString() : '';
-      statusHtml = `<div class="conversation-info-kstar-migration-status is-migrated">
-        <div class="conversation-info-kstar-migration-label">${escapeHtml(_label('conversation_info.kstar.migration_completed', 'KSTAR Engine migration completed'))}</div>
-        ${migratedAt ? `<div class="conversation-info-kstar-migration-time">${escapeHtml(migratedAt)}</div>` : ''}
-      </div>`;
-    } else if (migrationStatus && migrationStatus.degraded) {
-      statusHtml = `<div class="conversation-info-kstar-migration-status is-degraded">
-        <div class="conversation-info-kstar-migration-label">${escapeHtml(_label('conversation_info.kstar.migration_degraded', 'KSTAR Engine running in degraded mode'))}</div>
-        <div class="conversation-info-kstar-migration-note">${escapeHtml(_label('conversation_info.kstar.migration_degraded_note', 'Newer schema detected'))}</div>
-      </div>`;
-    }
-
-    let archivesHtml = '';
-    if (archives.length > 0) {
-      const archiveRows = archives.slice(0, 5).map((timestamp) => {
-        const displayTime = timestamp.replace(/T/, ' ').replace(/-/g, ':');
-        return `<div class="conversation-info-kstar-archive-item" data-archive-timestamp="${escapeHtml(timestamp)}">
-          <div class="conversation-info-kstar-archive-time">${escapeHtml(displayTime)}</div>
-        </div>`;
-      }).join('');
-      const truncatedNote = archives.length > 5
-        ? `<div class="conversation-info-kstar-archive-truncated">${escapeHtml(_label('conversation_info.kstar.archives_truncated', 'Showing {shown} of {total}', { shown: 5, total: archives.length }))}</div>`
-        : '';
-      archivesHtml = `<div class="conversation-info-kstar-archives">
-        <div class="conversation-info-kstar-archives-label">${escapeHtml(_label('conversation_info.kstar.archives', 'Archived snapshots'))}</div>
-        <div class="conversation-info-kstar-archives-list">${archiveRows}</div>
-        ${truncatedNote}
-      </div>`;
-    }
-
-    if (!statusHtml && !archivesHtml) return '';
-
-    return `<section class="conversation-info-collaboration-section">
-      <div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.kstar.section_history', 'KSTAR History'))}</div>
-      ${statusHtml}
-      ${archivesHtml}
-    </section>`;
-  }
-
   function _renderCollaborationOverview() {
     const mateState = _snapshot.mate || {};
     if (!_snapshot.collaboration && !mateState.session && !mateState.loading && !mateState.error && !_deriveAgentActivityRows(_snapshot).length && !_collectCollaborationAttentionItems().length) {
@@ -1028,7 +1013,7 @@ const ConversationInfo = (() => {
     const mateHtml = (mateState.session || mateState.loading || mateState.error)
       ? _safeSection(() => _renderMateOverview(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)
       : '';
-    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${mateHtml}${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderKStarHistorySection(), '')}</div>`;
+    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${mateHtml}${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}</div>`;
   }
 
   function _protocolEventData(event) {
@@ -1171,6 +1156,248 @@ const ConversationInfo = (() => {
     return `<div class="conversation-info-protocol">${header}${_renderProtocolSummary(events)}${_renderProtocolFilters(events)}${list}</div>`;
   }
 
+  // 9.1 会话区域统一框架 · 右侧「本次携带」：
+  // 本次运行（真实执行记录）、运行证明（ContextReuseReceipt）、
+  // 本次 Context 引用、来源与边界。数据全部来自既有 IPC
+  // （p3394.execution.list / p3394.contextReuseReceipt.read）与 snapshot；
+  // 无执行记录时如实显示空态，不造数据、不显示技术噪声。
+  function _latestCollaborationRef(events) {
+    if (!Array.isArray(events)) return null;
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const data = _protocolEventData(events[i]);
+      const collab = data && data.collaboration && typeof data.collaboration === 'object'
+        ? data.collaboration
+        : null;
+      if (collab) return collab;
+    }
+    return null;
+  }
+
+  function _carriedStatusLabel(status) {
+    const key = {
+      running: 'conversation_info.carried.status.running',
+      completed: 'conversation_info.carried.status.completed',
+      failed: 'conversation_info.carried.status.failed',
+      cancelled: 'conversation_info.carried.status.cancelled',
+      timed_out: 'conversation_info.carried.status.timed_out',
+      queued: 'conversation_info.carried.status.queued',
+    }[String(status || '')];
+    const fallback = {
+      running: '运行中',
+      completed: '已完成',
+      failed: '失败',
+      cancelled: '已取消',
+      timed_out: '超时',
+      queued: '排队',
+    }[String(status || '')] || String(status || '');
+    return key ? _label(key, fallback) : fallback;
+  }
+
+  function _carriedBoundaryLabel(boundary) {
+    if (boundary === 'real') return _label('conversation_info.carried.boundary.real', '真实');
+    if (boundary === 'degraded') return _label('conversation_info.carried.boundary.degraded', '降级');
+    if (boundary === 'test-double') return _label('conversation_info.carried.boundary.test_double', '测试替身');
+    return String(boundary || '');
+  }
+
+  function _carriedPermissionLabel(mode) {
+    const s = String(mode || '').toLowerCase();
+    if (s === 'read-only' || s === 'readonly') return _label('conversation_info.carried.permission.read_only', '只读');
+    if (s === 'read_write' || s === 'readwrite') return _label('conversation_info.carried.permission.read_write', '可写');
+    if (s === 'ask') return _label('conversation_info.carried.permission.ask', '逐次询问');
+    // 审批类权限模式：all_files_approval 等属于「常规」逐项审批，显示可读名
+    // 而不是原文（测试断言：all_files_approval → 常规，不显示原文）。
+    if (s === 'all_files_approval' || s === 'approval' || s === 'default') {
+      return _label('conversation_info.carried.permission.default', '常规');
+    }
+    return String(mode || '');
+  }
+
+  function _carriedTime(iso) {
+    if (!iso) return '';
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /** 执行方显示名：优先 agentId / cli；缺失时按执行类型给真实名称
+   *  （core-agent 由 commander 驱动 → Commander；codex → Codex；local-agent
+   *   → 本地智能体），而不是一律兜底成产品名。 */
+  function _carriedExecutorLabel(execution) {
+    const explicit = String(execution && (execution.agentId || execution.cli) || '');
+    const kind = String(execution && execution.kind || '');
+    if (explicit && explicit !== 'commander') return explicit;
+    if (kind === 'core-agent' || explicit === 'commander') return _label('conversation_info.carried.executor_core', 'Commander');
+    if (kind === 'codex') return _label('conversation_info.carried.executor_codex', 'Codex');
+    if (kind === 'local-agent') return _label('conversation_info.carried.executor_local_agent', 'Local agent');
+    return _label('conversation_info.carried.executor_unknown', 'CogSeed');
+  }
+
+  function _carriedRunHtml(execution) {
+    const statusRaw = String(execution && execution.status || '');
+    const status = _carriedStatusLabel(statusRaw);
+    const agent = _carriedExecutorLabel(execution);
+    const boundary = _carriedBoundaryLabel(execution && execution.boundary);
+    const permission = _carriedPermissionLabel(execution && execution.permissionMode);
+    const artifacts = Array.isArray(execution && execution.artifactIds) ? execution.artifactIds.length : 0;
+    const time = _carriedTime(execution && execution.startedAt);
+    const executionId = String(execution && execution.executionId || '');
+    // 原型「真实状态」：运行中的执行明确提示"仍在运行，不伪装完成"。
+    const truthNote = statusRaw === 'running'
+      ? `<div class="conversation-info-carried-run-truth">${escapeHtml(_label('conversation_info.carried.truth_running', '任务仍在运行；不会用动画或预设文本冒充已完成。'))}</div>`
+      : '';
+    const receiptBtn = execution && execution.receiptId
+      ? `<button type="button" class="conversation-info-carried-receipt-toggle" data-receipt-execution-id="${escapeHtml(executionId)}">${escapeHtml(_label('conversation_info.carried.receipt_view', '查看回执'))}</button>`
+      : '';
+    return `<div class="conversation-info-carried-run is-${escapeHtml(statusRaw) || 'unknown'}">
+      <div class="conversation-info-carried-run-head">
+        <span class="conversation-info-carried-run-agent">
+          <span class="conversation-info-carried-run-avatar">${_uiIcon('code-block', '')}</span>
+          <span class="conversation-info-carried-run-agent-name">${escapeHtml(agent)}</span>
+        </span>
+        <span class="conversation-info-carried-run-status is-${escapeHtml(statusRaw) || 'unknown'}">${escapeHtml(status)}</span>
+      </div>
+      <div class="conversation-info-carried-run-meta">
+        ${permission ? `<span>${_uiIcon('shield-check', '')}${escapeHtml(_label('conversation_info.carried.permission_label', '权限'))} · ${escapeHtml(permission)}</span>` : ''}
+        ${boundary ? `<span>${_uiIcon('git-branch', '')}${escapeHtml(boundary)}</span>` : ''}
+        ${artifacts ? `<span>${_uiIcon('file-text', '')}${artifacts} ${escapeHtml(_label('conversation_info.carried.artifacts', '个产物'))}</span>` : ''}
+        ${time ? `<span>${escapeHtml(time)}</span>` : ''}
+      </div>
+      ${truthNote}
+      <div class="conversation-info-carried-run-receipt" data-receipt-container="${escapeHtml(executionId)}" hidden></div>
+      ${receiptBtn}
+    </div>`;
+  }
+
+  function _renderReceiptDetailHtml(receipt) {
+    const rows = [];
+    if (receipt && receipt.sourceSessionId) rows.push([_label('conversation_info.carried.receipt_source', '来源'), String(receipt.sourceSessionId)]);
+    if (receipt && receipt.targetSessionId) rows.push([_label('conversation_info.carried.receipt_target', '目标'), String(receipt.targetSessionId)]);
+    if (Array.isArray(receipt && receipt.reusedRefs) && receipt.reusedRefs.length) {
+      rows.push([_label('conversation_info.carried.receipt_reused', '复用引用'), receipt.reusedRefs.join(' · ')]);
+    }
+    if (Array.isArray(receipt && receipt.omittedRefs) && receipt.omittedRefs.length) {
+      rows.push([_label('conversation_info.carried.receipt_omitted', '未复用'), receipt.omittedRefs.join(' · ')]);
+    }
+    if (receipt && receipt.permissionMode) rows.push([_label('conversation_info.carried.receipt_permission', '权限'), _carriedPermissionLabel(receipt.permissionMode)]);
+    if (receipt && receipt.boundary) rows.push([_label('conversation_info.carried.receipt_boundary', '边界'), _carriedBoundaryLabel(receipt.boundary)]);
+    if (receipt && receipt.status) rows.push([_label('conversation_info.carried.receipt_status', '状态'), String(receipt.status)]);
+    if (!rows.length) return `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.receipt_empty', '回执内容为空。'))}</div>`;
+    return `<dl class="conversation-info-carried-rows">${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`;
+  }
+
+  function _renderCarried() {
+    // 接续准备依据（导入会话接续欢迎面板的「查看依据」）：顶部区块，展示
+    // 复述 / 准备携带明细（各自来源）/ 边界。由 showResumeEvidence 设置。
+    const resumeEvidence = _snapshot.resumeEvidence;
+    const resumeHtml = resumeEvidence
+      ? `<section class="conversation-info-resume">
+          <div class="conversation-info-carried-section-label">${_uiIcon('clipboard-list', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.resume_title', '接续准备'))}</div>
+          ${resumeEvidence.restatement ? `<div class="conversation-info-resume-restatement">${escapeHtml(resumeEvidence.restatement)}</div>` : ''}
+          ${_renderResumeCarry(resumeEvidence.carry)}
+        </section>`
+      : '';
+    const events = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents : [];
+    const executions = Array.isArray(_snapshot.executions) ? _snapshot.executions : [];
+    const collab = _latestCollaborationRef(events);
+    const title = _maskedSourceName(_currentConversationTitle());
+
+    // 本次运行：真实执行记录，按开始时间倒序。默认只列最近 10 条，
+    // 顶部汇总总数，超出部分一键展开（展开后全量展示，不删数据）。
+    const sorted = executions.slice().sort((a, b) => {
+      const at = a && a.startedAt ? String(a.startedAt) : '';
+      const bt = b && b.startedAt ? String(b.startedAt) : '';
+      return bt.localeCompare(at);
+    });
+    const RUNS_VISIBLE_LIMIT = 10;
+    const totalRuns = sorted.length;
+    const visibleRuns = _carriedRunsExpanded ? sorted : sorted.slice(0, RUNS_VISIBLE_LIMIT);
+    const runsList = visibleRuns.length
+      ? `<div class="conversation-info-carried-runs">${visibleRuns.map(_carriedRunHtml).join('')}</div>`
+      : '';
+    const runsSummary = totalRuns
+      ? `<div class="conversation-info-carried-runs-summary">${escapeHtml(_label('conversation_info.carried.runs_total', '共 {count} 次运行', { count: totalRuns }))}</div>`
+      : '';
+    const runsToggle = totalRuns > RUNS_VISIBLE_LIMIT
+      ? `<button type="button" class="conversation-info-carried-runs-toggle" data-carried-runs-toggle>${escapeHtml(_label(_carriedRunsExpanded ? 'conversation_info.carried.runs_collapse' : 'conversation_info.carried.runs_expand', _carriedRunsExpanded ? '收起' : '展开全部'))}</button>`
+      : '';
+    const runsHtml = totalRuns
+      ? `${runsSummary}${runsList}${runsToggle}`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.runs_empty', '本会话暂无执行记录。'))}</div>`;
+
+    // 本次 Context：执行记录携带的 contextId + 协议协作引用（workflow / step）。
+    const contextIds = [];
+    sorted.forEach((execution) => {
+      if (execution && execution.contextId && !contextIds.includes(execution.contextId)) {
+        contextIds.push(String(execution.contextId));
+      }
+    });
+    const contextRows = [];
+    if (collab && collab.workflow_run_id) contextRows.push([_label('conversation_info.carried.run', '运行'), String(collab.workflow_run_id)]);
+    if (collab && collab.step_id) contextRows.push([_label('conversation_info.carried.step', '步骤'), String(collab.step_id)]);
+    if (contextIds.length) contextRows.push([_label('conversation_info.carried.context_id', 'Context ID'), contextIds.join(' · ')]);
+    const contextHtml = contextRows.length
+      ? `<dl class="conversation-info-carried-rows">${contextRows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.carried.context_empty', '本会话暂无 Context 投影记录；接续不会凭空生成正式资产。'))}</div>`;
+
+    // 来源与边界：会话来源 + 最近一次执行的执行方 / 边界 / 真实权限模式。
+    const latestRun = sorted[0] || null;
+    const boundaryRows = [[_label('conversation_info.carried.source', '来源'), title]];
+    if (latestRun && (latestRun.agentId || latestRun.cli)) {
+      boundaryRows.push([_label('conversation_info.carried.executor', '执行方'), String(latestRun.agentId || latestRun.cli)]);
+    }
+    if (latestRun && latestRun.boundary) {
+      boundaryRows.push([_label('conversation_info.carried.boundary_label', '边界'), _carriedBoundaryLabel(latestRun.boundary)]);
+    }
+    const boundaryHtml = `<dl class="conversation-info-carried-rows">${boundaryRows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`;
+    const permissionNote = latestRun && latestRun.permissionMode
+      ? _label('conversation_info.carried.permission_note', '本会话最近一次执行的权限模式：{mode}', { mode: _carriedPermissionLabel(latestRun.permissionMode) })
+      : _label('conversation_info.carried.permission', '只读 · 仅本次任务；外发、删除、扩权或正式资产变更会单独确认。');
+
+    return `<div class="conversation-info-carried">
+      ${resumeHtml}
+      <div class="conversation-info-carried-header">
+        <div class="conversation-info-carried-heading">${escapeHtml(_label('conversation_info.carried.title', '本次携带'))}</div>
+      </div>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${_uiIcon('play-triangle', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.runs', '本次运行'))}</div>${runsHtml}</section>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${_uiIcon('panel-list', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.context', '本次 Context'))}</div>${contextHtml}</section>
+      <section class="conversation-info-carried-section"><div class="conversation-info-carried-section-label">${_uiIcon('git-branch', 'conversation-info-carried-sec-icon')}${escapeHtml(_label('conversation_info.carried.boundary', '来源与边界'))}</div>${boundaryHtml}<div class="conversation-info-carried-permission">${_uiIcon('shield-check', 'conversation-info-carried-permission-icon')}<span>${escapeHtml(permissionNote)}</span></div></section>
+    </div>`;
+  }
+
+  /** 接续准备「准备携带」明细：每类能力的数量 + 真实明细（资产/技能名 + 版本）
+   *  + 来源。明细来自主进程 buildCarry 的 items 字段。 */
+  function _renderResumeCarry(carry) {
+    const items = Array.isArray(carry) ? carry : [];
+    if (!items.length) return '';
+    // kind → 图标（icons.js 集中图标，禁止硬编码 SVG / emoji）。
+    const kindIcon = { personal: 'book-open', ability: 'brain-circuit', snapshot: 'database' };
+    const rows = items.map((c) => {
+      const icon = kindIcon[c && c.kind] || 'list-ordered';
+      const sources = (Array.isArray(c.sources) ? c.sources : [])
+        .map((s) => `<li>${escapeHtml(String(s))}</li>`).join('');
+      const details = (Array.isArray(c.items) ? c.items : [])
+        .map((it) => {
+          const name = String((it && it.name) || '');
+          if (!name) return '';
+          const version = (it && it.version) ? ` <span class="conversation-info-resume-version">v${escapeHtml(String(it.version))}</span>` : '';
+          return `<li class="conversation-info-resume-item">${escapeHtml(name)}${version}</li>`;
+        }).join('');
+      return `<div class="conversation-info-resume-carry-row">
+        <div class="conversation-info-resume-carry-row-head">
+          <span class="conversation-info-resume-carry-ico">${_uiIcon(icon, '')}</span>
+          <b>${escapeHtml(c.label || '')}</b>
+          <span class="conversation-info-resume-carry-count">${Number(c.count) || 0} 项</span>
+        </div>
+        ${details ? `<ul class="conversation-info-resume-carry-items">${details}</ul>` : ''}
+        ${sources ? `<ul class="conversation-info-resume-carry-sources">${sources}</ul>` : ''}
+      </div>`;
+    }).join('');
+    return `<div class="conversation-info-resume-carry">${rows}</div>`;
+  }
+
   function _renderBody() {
     _closeFileMenu();
     const body = document.getElementById('conversation-info-body');
@@ -1193,6 +1420,7 @@ const ConversationInfo = (() => {
     if (_activeTab === 'attachments') body.innerHTML = _renderAttachments();
     else if (_activeTab === 'collaboration') body.innerHTML = _renderCollaborationOverview();
     else if (_activeTab === 'protocol') body.innerHTML = _renderProtocolInspector();
+    else if (_activeTab === 'carried') body.innerHTML = _renderCarried();
     else body.innerHTML = _renderFiles();
     // Hydrate any data-ui-icon placeholders that the renderers emitted.
     if (typeof window !== 'undefined' && typeof window.hydrateUiIcons === 'function') {
@@ -1260,7 +1488,15 @@ const ConversationInfo = (() => {
     try {
       const snapshot = await _load(target);
       if (seq !== _seq || target !== _cid) return;
-      _snapshot = { ...snapshot, mate: _snapshot.mate || { session: null, collaboration: null, sessions: [], loading: false, error: '' } };
+      // 保留「查看依据」的接续准备依据（_load 返回里没有该字段，整体覆盖会
+      // 把它清掉）；仅当依据仍属于当前会话时才保留，切换会话即丢弃。
+      const keepResume = !!(_snapshot.resumeEvidence && _resumeEvidenceCid === target);
+      _snapshot = {
+        ...snapshot,
+        mate: _snapshot.mate || { session: null, collaboration: null, sessions: [], loading: false, error: '' },
+        resumeEvidence: keepResume ? _snapshot.resumeEvidence : null,
+      };
+      if (!keepResume) _resumeEvidenceCid = '';
       _error = '';
       void _primeMateProjection(target, { render: silent }).catch(() => {});
     } catch (err) {
@@ -1335,7 +1571,9 @@ const ConversationInfo = (() => {
   function bind(cid) {
     _cid = cid || null;
     _open = false;
-    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], kstarRuns: [], protocolEvents: [], protocolError: '', migrationStatus: null, archives: [] };
+    _resumeEvidenceCid = '';
+    _carriedRunsExpanded = false;
+    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '' };
     _protocolFilters.agent = '';
     _protocolFilters.role = '';
     _protocolFilters.result = '';
@@ -1496,17 +1734,27 @@ const ConversationInfo = (() => {
     const addLabel = _label('conversation_info.file_add_to_chat_action', 'Add to chat');
     const addLibraryLabel = _label('conversation_info.file_add_to_library_action', 'Add to Library');
     const deleteLabel = _label('common.delete', 'Delete');
-    const addItem = entryKind === 'file' && _canAddEntryToChat(name || absPath)
+    const allowedActions = Array.isArray(options.allowedActions)
+      ? new Set(options.allowedActions.map((action) => String(action)))
+      : null;
+    const actionAllowed = (action) => !allowedActions || allowedActions.has(action);
+    const revealItem = actionAllowed('reveal')
+      ? `<div class="ctx-row-menu-item" data-action="reveal">${escapeHtml(revealLabel)}</div>`
+      : '';
+    const addItem = actionAllowed('add-to-chat') && entryKind === 'file' && _canAddEntryToChat(name || absPath)
       ? `<div class="ctx-row-menu-item" data-action="add-to-chat">${escapeHtml(addLabel)}</div>`
       : '';
-    const addLibraryItem = entryKind === 'file' && _canAddEntryToLibrary(name || absPath, projectScoped)
+    const addLibraryItem = actionAllowed('add-to-library') && entryKind === 'file' && _canAddEntryToLibrary(name || absPath, projectScoped)
       ? `<div class="ctx-row-menu-item" data-action="add-to-library">${escapeHtml(addLibraryLabel)}</div>`
       : '';
+    const deleteItem = actionAllowed('delete')
+      ? `<div class="ctx-row-menu-item is-danger" data-action="delete">${escapeHtml(deleteLabel)}</div>`
+      : '';
     menu.innerHTML = `
-      <div class="ctx-row-menu-item" data-action="reveal">${escapeHtml(revealLabel)}</div>
+      ${revealItem}
       ${addLibraryItem}
       ${addItem}
-      <div class="ctx-row-menu-item is-danger" data-action="delete">${escapeHtml(deleteLabel)}</div>
+      ${deleteItem}
     `;
     menu.dataset.filePath = absPath;
     menu.dataset.fileName = name;
@@ -1537,7 +1785,7 @@ const ConversationInfo = (() => {
 
   async function _revealEntry(absPath, cidOverride) {
     try {
-      const res = await window.orkas.invoke('workspace.revealPath', _fileActionPayload(absPath, cidOverride));
+      const res = await window.cogseed.invoke('workspace.revealPath', _fileActionPayload(absPath, cidOverride));
       if (!res || !res.ok) {
         await uiAlert(_label('conversation_info.file_reveal_failed', 'Could not show in folder: {reason}', {
           reason: (res && res.error) || 'failed',
@@ -1568,13 +1816,10 @@ const ConversationInfo = (() => {
   async function _addEntryToLibrary(absPath, cidOverride) {
     if (!_canAddEntryToLibrary(absPath)) return;
     try {
-      const res = await window.orkas.invoke('library.importProduced', _fileActionPayload(absPath, cidOverride));
+      const res = await window.cogseed.invoke('library.importProduced', _fileActionPayload(absPath, cidOverride));
       if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
       if (res.scope === 'global' && typeof currentView !== 'undefined' && currentView === 'contexts' && typeof loadContexts === 'function') {
         loadContexts();
-      }
-      if (res.scope === 'project' && res.projectId && typeof currentView !== 'undefined' && currentView === 'project' && typeof loadProjectDetail === 'function') {
-        loadProjectDetail(res.projectId).catch(() => {});
       }
     } catch (err) {
       await uiAlert(_label('conversation_info.file_add_to_library_failed', 'Add to Library failed: {reason}', {
@@ -1599,7 +1844,7 @@ const ConversationInfo = (() => {
     if (!ok) return;
 
     try {
-      const res = await window.orkas.invoke('workspace.deletePath', _fileActionPayload(absPath, options.cid));
+      const res = await window.cogseed.invoke('workspace.deletePath', _fileActionPayload(absPath, options.cid));
       if (!res || !res.ok) {
         await uiAlert(_label(isDir ? 'conversation_info.dir_delete_failed' : 'conversation_info.file_delete_failed', 'Could not delete: {reason}', {
           reason: (res && res.error) || 'failed',
@@ -1632,7 +1877,7 @@ const ConversationInfo = (() => {
   async function _openAttachment(name) {
     if (!_cid || !name || typeof openChatFileViewer !== 'function') return;
     try {
-      const res = await window.orkas.invoke('attachments.absPath', { cid: _cid, name });
+      const res = await window.cogseed.invoke('attachments.absPath', { cid: _cid, name });
       if (!res || !res.ok || !res.path) {
         _infoLog.warn('attachment preview resolve failed', { cid: _cid, name, error: res && res.error });
         const message = _label('chat.file_missing_toast', 'The file no longer exists.', { name });
@@ -1702,6 +1947,51 @@ const ConversationInfo = (() => {
           void refresh(_cid);
           return;
         }
+        // 「本次运行」展开/收起（默认显示最近 10 条，展开后全量展示）。
+        const runsToggle = ev.target.closest('[data-carried-runs-toggle]');
+        if (runsToggle) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          _carriedRunsExpanded = !_carriedRunsExpanded;
+          _renderBody();
+          return;
+        }
+        // 9.1 右侧「本次携带」：点击「查看回执」→ 读取该执行的
+        // ContextReuseReceipt（IPC 已存在）并展开明细。
+        const receiptToggle = ev.target.closest('[data-receipt-execution-id]');
+        if (receiptToggle) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const executionId = receiptToggle.dataset.receiptExecutionId || '';
+          const runEl = receiptToggle.closest('.conversation-info-carried-run');
+          const container = runEl && runEl.querySelector('[data-receipt-container]');
+          if (!executionId || !container) return;
+          if (container.dataset.loaded === '1') {
+            container.hidden = !container.hidden;
+            return;
+          }
+          receiptToggle.disabled = true;
+          const invoke = window && window.cogseed && typeof window.cogseed.invoke === 'function'
+            ? window.cogseed.invoke.bind(window.cogseed)
+            : null;
+          if (!invoke) return;
+          invoke('p3394.contextReuseReceipt.read', { executionId })
+            .then((res) => {
+              const receipt = res && res.receipt ? res.receipt : null;
+              if (!receipt) return;
+              container.innerHTML = _renderReceiptDetailHtml(receipt);
+              container.dataset.loaded = '1';
+              container.hidden = false;
+              receiptToggle.textContent = _label('conversation_info.carried.receipt_hide', '收起回执');
+            })
+            .catch((err) => {
+              _infoLog.warn('carried receipt read failed', { executionId, error: err && err.message });
+              container.innerHTML = `<div class="conversation-info-empty is-small is-error">${escapeHtml(_label('conversation_info.carried.receipt_failed', '回执读取失败。'))}</div>`;
+              container.hidden = false;
+              receiptToggle.disabled = false;
+            });
+          return;
+        }
         const mateAction = ev.target.closest('[data-mate-action]');
         if (mateAction && _snapshot.mate && _snapshot.mate.session) {
           ev.preventDefault();
@@ -1710,11 +2000,11 @@ const ConversationInfo = (() => {
           const taskId = mateAction.dataset.mateTaskId || '';
           const requestId = mateAction.dataset.mateRequestId || '';
           if (action === 'abort' && taskId) {
-            void window.orkas.invoke('mate_agent.task.abort', { taskId }).then(() => refresh(_cid));
+            void window.cogseed.invoke('mate_agent.task.abort', { taskId }).then(() => refresh(_cid));
           } else if (action === 'retry' && taskId && requestId) {
-            void window.orkas.invoke('mate_agent.task.retry', { taskId, requestId }).then(() => refresh(_cid));
+            void window.cogseed.invoke('mate_agent.task.retry', { taskId, requestId }).then(() => refresh(_cid));
           } else if (action === 'resume' && taskId && requestId) {
-            void window.orkas.invoke('mate_agent.task.resume', { taskId, requestId, continuation: (_snapshot.mate.session && _snapshot.mate.session.collaboration && _snapshot.mate.session.collaboration.task && _snapshot.mate.session.collaboration.task.title) || 'Resume task.' }).then(() => refresh(_cid));
+            void window.cogseed.invoke('mate_agent.task.resume', { taskId, requestId, continuation: (_snapshot.mate.session && _snapshot.mate.session.collaboration && _snapshot.mate.session.collaboration.task && _snapshot.mate.session.collaboration.task.title) || 'Resume task.' }).then(() => refresh(_cid));
           }
           return;
         }
@@ -1823,6 +2113,50 @@ const ConversationInfo = (() => {
     _syncChrome();
     _renderBody();
   }
+  /** 展示导入会话接续准备的依据（「查看依据」）：立即切到 carried tab 并渲染
+   *  依据（resumeEvidence 已就绪，不依赖网络），随后静默刷新执行记录等数据；
+   *  刷新结果合并时保留 resumeEvidence（见 refresh），依据不会消失。 */
+  function showResumeEvidence(data, cid) {
+    if (cid) _cid = cid;
+    _resumeEvidenceCid = cid || _cid || '';
+    _snapshot = { ..._snapshot, resumeEvidence: data || null };
+    _activeTab = 'carried';
+    _open = true;
+    _resetLoading(); // 依据已就绪，先渲染，避免旧 loading 状态遮挡
+    _syncChrome();
+    _renderBody();
+    void refresh(_cid, { silent: true }).catch(() => {});
+  }
+
+  // 右栏实时刷新执行记录（原型「运行与证明」rail 的真实状态）：由
+  // conversation.js 在执行事件时调用。仅 carried tab 激活且 cid 匹配时生效，
+  // 带 2s 节流与状态签名去抖，避免 process 事件洪峰导致右栏抖动。
+  let _executionsSig = '';
+  let _executionsRefreshAt = 0;
+  async function refreshExecutions(cid) {
+    if (!cid || cid !== _cid) return;
+    if (_activeTab !== 'carried') return;
+    const now = Date.now();
+    if (now - _executionsRefreshAt < 2000) return;
+    _executionsRefreshAt = now;
+    try {
+      const res = await window.cogseed.invoke('p3394.execution.list', {});
+      const list = (res && Array.isArray(res.executions))
+        ? res.executions.filter((item) => item && item.conversationId === cid)
+        : [];
+      const sig = list.map((e) => `${e.executionId || ''}:${e.status || ''}`).join('|');
+      if (sig === _executionsSig) return;
+      _executionsSig = sig;
+      _snapshot = { ..._snapshot, executions: list };
+      if (_activeTab === 'carried') {
+        const body = document.getElementById('conversation-info-body');
+        if (body) {
+          body.innerHTML = _renderCarried();
+          if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(body);
+        }
+      }
+    } catch (_) { /* 刷新失败保持现状 */ }
+  }
   function openFileMenu(anchorBtn, absPath, displayName, options = {}) {
     return _openFileMenu(anchorBtn, absPath, displayName, 'file', options);
   }
@@ -1842,6 +2176,8 @@ const ConversationInfo = (() => {
     openProtocol,
     openAndSetTab,
     setProtocolFilters,
+    showResumeEvidence,
+    refreshExecutions,
     openFileMenu,
   };
 })();

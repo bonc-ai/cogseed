@@ -1,7 +1,5 @@
 import * as personalOntologyCandidates from '../personal_ontology_candidates';
-import * as p3394 from '../p3394';
 import type { CandidateUpdate } from '../personal_ontology_candidates';
-import type { CompatExperienceCandidate } from '../p3394';
 import { cognitionSourceRefKeys } from '../recall/source-service';
 import { actionsForCandidate, titleFromText } from './normalize';
 import type { CognitionCandidateSource, CognitionCandidateType, CognitionCandidateView } from './types';
@@ -42,31 +40,6 @@ function mapPersonal(row: CandidateUpdate): CognitionCandidateView {
   };
 }
 
-function mapExperience(row: CompatExperienceCandidate): CognitionCandidateView {
-  const status = row.status === 'approved' ? 'accepted' : row.status === 'rejected' ? 'rejected' : 'pending';
-  const refs = cognitionSourceRefKeys([
-    row.source_run_id ? { kind: 'execution', id: row.source_run_id } : undefined,
-    row.conversation_id ? { kind: 'conversation', id: row.conversation_id } : undefined,
-  ].filter(Boolean), 'execution');
-  return {
-    id: `p3394_experience:${row.id}`,
-    source: 'p3394_experience',
-    sourceId: row.id,
-    type: 'experience',
-    status,
-    title: titleFromText(row.summary, row.id),
-    summary: row.summary || '',
-    conversationId: row.conversation_id,
-    sourceRefs: refs,
-    evidenceRefs: refs,
-    diffAvailable: false,
-    actions: actionsForCandidate('p3394_experience', status),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    raw: row,
-  };
-}
-
 function applyFilter(items: CognitionCandidateView[], filter: ListCognitionCandidatesFilter = {}): CognitionCandidateView[] {
   let out = items;
   if (filter.status) out = out.filter((item) => item.status === filter.status);
@@ -82,14 +55,8 @@ export async function listCognitionCandidates(
   userId: string,
   filter: ListCognitionCandidatesFilter = {},
 ): Promise<CognitionCandidateView[]> {
-  const [personal, experiences] = await Promise.all([
-    personalOntologyCandidates.listCandidates(userId),
-    p3394.listExperienceCandidates(userId, filter.conversationId),
-  ]);
-  return applyFilter([
-    ...(personal.candidate_updates || []).map(mapPersonal),
-    ...experiences.map(mapExperience),
-  ], filter);
+  const personal = await personalOntologyCandidates.listCandidates(userId);
+  return applyFilter((personal.candidate_updates || []).map(mapPersonal), filter);
 }
 
 export async function decideCognitionCandidate(
@@ -112,9 +79,6 @@ export async function decideCognitionCandidate(
       });
     }
     return personalOntologyCandidates.rejectCandidate(userId, input.candidateId, input.reason);
-  }
-  if (input.source === 'p3394_experience') {
-    return p3394.decideExperienceCandidate(userId, input.candidateId, input.decision === 'accept' ? 'approve' : 'reject');
   }
   throw new Error('unsupported cognition candidate source');
 }

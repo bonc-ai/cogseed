@@ -6,12 +6,11 @@ type InvokeFn = (event: unknown, req: { channel: string; payload?: unknown }) =>
 let invokeHandler: InvokeFn | null = null;
 const TEST_UID = 'uOntologyIpc';
 
-const feature = {
-  listCandidates: vi.fn(async (uid: string) => ({ candidate_updates: [], blocked_items: [], uid })),
-  confirmCandidate: vi.fn(async (uid: string, candidateId: string) => ({ ok: true, uid, candidateId })),
-  rejectCandidate: vi.fn(async (uid: string, candidateId: string, reason?: string) => ({ ok: true, uid, candidateId, reason })),
-  confirmCandidates: vi.fn(async (uid: string, candidateIds: string[], dest?: unknown) => ({ ok: true, uid, candidateIds, dest })),
-  rejectCandidates: vi.fn(async (uid: string, candidateIds: string[], reason?: string) => ({ ok: true, uid, candidateIds, reason })),
+const templateFiles = {
+  installTemplateFile: vi.fn(async (uid: string, templateId: string, restoreData: boolean) => ({ ok: true, uid, templateId, restoreData })),
+  templateHasArchive: vi.fn(() => true),
+  templateHasMemoryArchive: vi.fn(() => false),
+  uninstallTemplateFile: vi.fn(async (uid: string, templateId: string, archiveMemory: boolean) => ({ ok: true, uid, templateId, archiveMemory })),
 };
 
 vi.mock('electron', () => ({
@@ -25,7 +24,7 @@ vi.mock('../../../src/main/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
   logFromRenderer: vi.fn(),
 }));
-vi.mock('../../../src/main/features/personal_ontology_candidates', () => feature);
+vi.mock('../../../src/main/features/personal_ontology_template_files', () => templateFiles);
 
 beforeEach(async () => {
   process.env.ORKAS_WORKSPACE_ROOT = os.tmpdir();
@@ -44,27 +43,42 @@ function call(channel: string, payload: unknown = {}) {
   return invokeHandler({ sender: trustedIpcSender() }, { channel, payload });
 }
 
-describe('ipc › personal ontology candidate channels', () => {
-  it('uses the authenticated context user for list and ignores renderer uid', async () => {
-    const result = await call('personalOntology.candidates.list', { uid: 'attacker' });
-    expect(result.ok).toBe(true);
-    expect(feature.listCandidates).toHaveBeenCalledWith(TEST_UID);
-    expect(feature.listCandidates).not.toHaveBeenCalledWith('attacker');
+describe('ipc › personal ontology templates', () => {
+  it('does not register the retired personal ontology candidate channels', async () => {
+    const retiredChannels = [
+      'personalOntology.candidates.list',
+      'personalOntology.candidates.confirm',
+      'personalOntology.candidates.reject',
+      'personalOntology.candidates.confirmBatch',
+      'personalOntology.candidates.rejectBatch',
+      'personalOntology.candidates.addFromOnboarding',
+    ];
+
+    for (const channel of retiredChannels) {
+      await expect(call(channel)).resolves.toEqual({
+        ok: false,
+        error: `unknown channel: ${channel}`,
+      });
+    }
   });
 
-  it('validates single candidate ids', async () => {
-    expect((await call('personalOntology.candidates.confirm', {})).ok).toBe(false);
-    expect((await call('personalOntology.candidates.reject', { candidateId: 7 })).ok).toBe(false);
-    expect(feature.confirmCandidate).not.toHaveBeenCalled();
-    expect(feature.rejectCandidate).not.toHaveBeenCalled();
+  it('preserves template restore and archive options across IPC', async () => {
+    await call('personalOntology.templates.install', { templateId: 'student', restoreData: true, uid: 'attacker' });
+    await call('personalOntology.templates.hasArchive', { templateId: 'student', uid: 'attacker' });
+    await call('personalOntology.templates.uninstall', { templateId: 'student', archiveMemory: true, uid: 'attacker' });
+
+    expect(templateFiles.installTemplateFile).toHaveBeenCalledWith(TEST_UID, 'student', true);
+    expect(templateFiles.templateHasArchive).toHaveBeenCalledWith(TEST_UID, 'student');
+    expect(templateFiles.templateHasMemoryArchive).toHaveBeenCalledWith(TEST_UID, 'student');
+    expect(templateFiles.uninstallTemplateFile).toHaveBeenCalledWith(TEST_UID, 'student', true);
   });
 
-  it('validates batch candidate ids and forwards user scope', async () => {
-    expect((await call('personalOntology.candidates.confirmBatch', { candidateIds: 'bad' })).ok).toBe(false);
-    expect((await call('personalOntology.candidates.rejectBatch', { candidateIds: {} })).ok).toBe(false);
-    await call('personalOntology.candidates.confirmBatch', { candidateIds: ['a', 'b'], toGlobalMemory: false, toGroupIds: ['g1'], uid: 'attacker' });
-    await call('personalOntology.candidates.rejectBatch', { candidateIds: ['c'], reason: 'no', uid: 'attacker' });
-    expect(feature.confirmCandidates).toHaveBeenCalledWith(TEST_UID, ['a', 'b'], { toGlobalMemory: false, toGroupIds: ['g1'] }, { routeWithLlm: false });
-    expect(feature.rejectCandidates).toHaveBeenCalledWith(TEST_UID, ['c'], 'no');
+  it('rejects template actions without a valid template id', async () => {
+    expect((await call('personalOntology.templates.install', { restoreData: true })).ok).toBe(false);
+    expect((await call('personalOntology.templates.hasArchive', { templateId: 7 })).ok).toBe(false);
+    expect((await call('personalOntology.templates.uninstall', {})).ok).toBe(false);
+    expect(templateFiles.installTemplateFile).not.toHaveBeenCalled();
+    expect(templateFiles.templateHasArchive).not.toHaveBeenCalled();
+    expect(templateFiles.uninstallTemplateFile).not.toHaveBeenCalled();
   });
 });

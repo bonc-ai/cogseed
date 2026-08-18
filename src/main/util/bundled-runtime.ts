@@ -46,16 +46,24 @@ function runtimeVariantDirs(kind: 'python' | 'uv' | 'node' | 'ffmpeg' | 'whisper
   ];
 }
 
+function readWhisperMarker(dir: string): { capability?: { status?: string } } | undefined {
+  for (const name of ['.cogseed-whisper-ready.json', '.orkas-whisper-ready.json']) {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')) as { capability?: { status?: string } };
+    } catch {
+      // try next marker
+    }
+  }
+  return undefined;
+}
+
 function whisperRuntimeEnabled(dir: string): boolean {
-  try {
-    const marker = JSON.parse(fs.readFileSync(path.join(dir, '.orkas-whisper-ready.json'), 'utf8')) as {
-      capability?: { status?: string };
-    };
-    return marker.capability?.status !== 'disabled';
-  } catch {
+  const marker = readWhisperMarker(dir);
+  if (!marker) {
     // Development payloads created before capability markers remain usable.
     return true;
   }
+  return marker.capability?.status !== 'disabled';
 }
 
 function resolvePythonExecutable(): string | undefined {
@@ -305,6 +313,19 @@ export function mediaRuntimeStatus(modelHint?: string): MediaRuntimeStatus {
 /** Absolute path to the bundled Node executable, or undefined when not present. */
 export function bundledNodeExecutable(): string | undefined {
   return resolveNodeExecutable();
+}
+
+/**
+ * Absolute path to the bundled Python interpreter, or undefined when no bundled
+ * payload is present (callers then fall back to a system `python3`).
+ *
+ * Exposed for the security scanner adapter, which runs skill-sentry as a child
+ * process. Prefer this over hardcoding `python3`: the bundled payload is the
+ * interpreter the app ships with, so it is version-stable across user machines,
+ * whereas a system `python3` may be absent or too old.
+ */
+export function bundledPythonExecutable(): string | undefined {
+  return resolvePythonExecutable();
 }
 
 /**

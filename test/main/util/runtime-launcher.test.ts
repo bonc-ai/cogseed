@@ -7,29 +7,42 @@ const root = path.join(__dirname, '../../..');
 const read = (name: string) => fs.readFileSync(path.join(root, name), 'utf8');
 
 describe('source runtime launchers', () => {
-  it('locks this worktree to mate and passes that identity to Electron', () => {
+  it('locks this worktree to cogseed and passes that identity to Electron', () => {
     const shell = read('run.sh');
     const windows = read('run.cmd');
     const bootstrap = read('bootstrap.cjs');
+    const restart = read('scripts/restart-cogseed.sh');
+    const legacyRestart = read('scripts/restart-mate.sh');
     const packageMeta = JSON.parse(read('package.json')) as { orkasSourceRuntimeVariant?: string };
 
-    expect(shell).toContain('VARIANT="mate"');
-    expect(windows).toContain('set "VARIANT=mate"');
+    expect(shell).toContain('VARIANT="cogseed"');
+    expect(windows).toContain('set "VARIANT=cogseed"');
     expect(shell).toContain('--orkas-runtime-variant=$VARIANT');
     expect(windows).toContain('--orkas-runtime-variant=!VARIANT!');
     expect(shell).toContain('prepare-source-runtime.cjs" --variant="$VARIANT"');
     expect(windows).toContain('prepare-source-runtime.cjs" --variant=!VARIANT!');
-    expect(shell).toContain('locked to the mate runtime');
-    expect(windows).toContain('locked to the mate runtime');
-    expect(shell).toContain('Mate Agent.app');
+    expect(shell).toContain('locked to the cogseed runtime');
+    expect(windows).toContain('locked to the cogseed runtime');
+    expect(shell).toContain('CogSeed.app');
     expect(shell).not.toContain('Usage: ./run.sh [--variant');
     expect(windows).not.toContain('Usage: run.cmd [--variant');
-    expect(packageMeta.orkasSourceRuntimeVariant).toBe('mate');
+    expect(packageMeta.orkasSourceRuntimeVariant).toBe('cogseed');
+    expect(restart).toContain('DATA_LOGS="$HOME/.cogseed/runtime-variants/${VARIANT}/data/logs"');
+    expect(restart).toContain('ELECTRON_APP="$APP_DIR/node_modules/electron/dist/CogSeed.app/Contents/MacOS/Electron"');
+    expect(restart).toContain('worktree_pids()');
+    expect(restart).toContain('*"$APP_DIR/node_modules/.bin/electron ."');
+    expect(restart).toContain('*"$APP_DIR/node_modules/.bin/electron . --orkas-runtime-variant=${VARIANT}"*');
+    expect(restart).toContain('|"$ELECTRON_APP"|"$ELECTRON_APP ."|');
+    expect(restart).toContain('"$ELECTRON_APP $APP_DIR --orkas-runtime-variant=${VARIANT}"*');
+    expect(restart).toContain('if [ -n "$(worktree_pids)" ]; then');
+    expect(restart).toContain('if [ -z "$(worktree_pids)" ]; then');
+    expect(legacyRestart).toContain('exec "$APP_DIR/scripts/restart-cogseed.sh" "$@"');
+    expect(legacyRestart).not.toContain('VARIANT="mate"');
     expect(bootstrap).toContain('sourceVariant: packageMeta.orkasSourceRuntimeVariant');
     expect(bootstrap).toContain('allowWorkspaceOverride: isPackagedDev');
   });
 
-  it('rejects every shell argument or environment attempt to override mate', () => {
+  it('rejects every shell argument or environment attempt to override cogseed', () => {
     for (const variant of ['main', 'cognition', 'expense', 'mate', 'optimization']) {
       const result = spawnSync('bash', [path.join(root, 'run.sh'), `--variant=${variant}`], {
         encoding: 'utf8',
@@ -52,7 +65,7 @@ describe('source runtime launchers', () => {
       encoding: 'utf8',
       env: {
         ...process.env,
-        ORKAS_RUNTIME_VARIANT: 'mate',
+        ORKAS_RUNTIME_VARIANT: '',
         ORKAS_WORKSPACE_ROOT: path.join(root, 'shared-data-that-must-not-be-used'),
       },
     });
@@ -80,15 +93,15 @@ describe('source runtime launchers', () => {
     expect(main).toContain('env: relaunchEnv');
   });
 
-  it('keeps protocol ownership in the prepared mate bundle, not launcher code', () => {
+  it('keeps protocol ownership in the prepared cogseed bundle, not launcher code', () => {
     const sources = `${read('run.sh')}\n${read('run.cmd')}`;
     expect(sources).not.toContain('prepare-source-protocol.cjs');
     expect(sources).not.toContain('setAsDefaultProtocolClient');
   });
 
-  it('locks the case-sensitive Windows environment value to mate', () => {
+  it('locks the case-sensitive Windows environment value to cogseed', () => {
     const windows = read('run.cmd');
-    expect(windows).toContain('if not "%ORKAS_RUNTIME_VARIANT%"=="mate"');
+    expect(windows).toContain('if not "%ORKAS_RUNTIME_VARIANT%"=="cogseed"');
     expect(windows).not.toMatch(/if \/I not "%ORKAS_RUNTIME_VARIANT%"/);
     expect(windows).toContain('if defined ORKAS_WORKSPACE_ROOT');
   });

@@ -305,23 +305,27 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function bindStaticHandlers() {
-  window.orkas.onPushEvent('conversations:open-from-notification', (payload) => {
+  window.cogseed.onPushEvent('conversations:open-from-notification', (payload) => {
     _openTaskNotificationConversation(payload);
   });
 
   // Sidebar nav
+  // 首页保持进入新建会话页（panel-new-chat）；「新任务」独立按钮已移除。
   document.getElementById('new-chat-btn').addEventListener('click', () => _setViewFromSidebar('new-chat'));
   document.getElementById('auto-btn')?.addEventListener('click', () => _setViewFromSidebar('auto'));
-  document.getElementById('agents-btn').addEventListener('click', () => _setViewFromSidebar('agents'));
-  document.getElementById('skills-btn').addEventListener('click', () => _setViewFromSidebar('skills'));
   document.getElementById('recall-btn')?.addEventListener('click', () => _setViewFromSidebar('recall'));
-  document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connectors'));
-  document.getElementById('evolution-btn')?.addEventListener('click', () => _setViewFromSidebar('evolution'));
-  document.getElementById('personal-ontology-btn')?.addEventListener('click', () => _setViewFromSidebar('personal-ontology'));
+  document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connections'));
   document.getElementById('spaces-btn')?.addEventListener('click', () => _setViewFromSidebar('spaces'));
-  document.getElementById('topbar-evolution-toggle')?.addEventListener('click', () => _setViewFromSidebar('evolution'));
-  document.getElementById('contexts-btn').addEventListener('click', () => _setViewFromSidebar('contexts'));
-  document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
+  document.getElementById('workspace-btn')?.addEventListener('click', () => _setViewFromSidebar('workspace'));
+  // 设置入口已并入左下角融合面板（account-chip.js 的「设置」菜单项，
+  // 通过 window.setView('settings') 切换视图，任何登录态都可达）。
+
+  // Sidebar conv tabs（ZCode 式「空间 | 最近任务」）
+  document.querySelectorAll('#sidebar-conv-tabs [data-conv-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (typeof _setSidebarConvTab === 'function') _setSidebarConvTab(btn.dataset.convTab);
+    });
+  });
 
   // Global search trigger + Cmd+K
   _bindGlobalSearch();
@@ -430,8 +434,9 @@ function bindStaticHandlers() {
   // Esc returns to grid when detail view is open
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    const agentsPanel = document.getElementById('panel-agents');
-    if (!agentsPanel || !agentsPanel.classList.contains('active')) return;
+    // 面板已内嵌进「连接」：仅当 Agent pane 可见时处理 Esc 返回。
+    const agentsPane = document.getElementById('connections-pane-agents');
+    if (!agentsPane || agentsPane.hidden) return;
     const detail = document.getElementById('agents-detail-view');
     if (detail && detail.style.display !== 'none') {
       _showAgentsGridView();

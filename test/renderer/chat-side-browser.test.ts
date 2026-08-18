@@ -134,7 +134,7 @@ function load() {
     },
     openChatFileViewer: (...args: any[]) => { invoked.push({ channel: 'fullscreen', payload: args }); },
     window: {} as any,
-    orkas: { invoke: async (channel: string, payload: any) => { invoked.push({ channel, payload }); return { ok: true }; } },
+    cogseed: { invoke: async (channel: string, payload: any) => { invoked.push({ channel, payload }); return { ok: true }; } },
   };
   sandbox.window = sandbox;
   sandbox.addEventListener = (type: string, fn: (e: any) => void) => {

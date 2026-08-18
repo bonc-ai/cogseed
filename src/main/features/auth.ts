@@ -67,6 +67,7 @@ import * as localSecrets from '../util/local-secret-store';
 import { safeExternalUserActionUrl } from '../util/window-security';
 import { getActiveUserId } from './users';
 import {
+  CATALOG,
   FEATURED_API_PROVIDERS,
   OAUTH_PROVIDERS,
   OAUTH_ALIAS_FOR,
@@ -201,7 +202,7 @@ interface OAuthProfile {
 }
 type StoredProfile = ApiKeyProfile | OAuthProfile;
 
-interface Entry {
+export interface CustomProviderEntry {
   entryId: string;
   provider: string;
   model: string;
@@ -209,6 +210,8 @@ interface Entry {
   lastUsed: number;
   createdAt: number;
 }
+
+type Entry = CustomProviderEntry;
 
 /**
  * Search-tool API key (one row per stored credential, in priority order).
@@ -269,17 +272,31 @@ export interface TtsProfile {
   createdAt: number;
 }
 
+export const DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW = 131072;
+export const DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS = 8192;
+export const MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW = 16_777_216;
+export const MAX_CUSTOM_PROVIDER_MAX_TOKENS = 1_048_576;
+export const MAX_CUSTOM_PROVIDER_MODELS = 100;
+export const MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH = 200;
+
+export interface CustomProviderModel {
+  id: string;
+  contextWindow: number;
+  maxTokens: number;
+}
+
 export interface CustomProvider {
   id: string;
   name: string;
-  protocol: 'anthropic' | 'openai' | 'gemini';
+  protocol: 'anthropic' | 'openai' | 'openai-responses' | 'gemini';
   baseUrl: string;
   apiKey: string;
+  enabled: boolean;
   notes?: string;
   websiteUrl?: string;
   needsKey?: boolean;
   needsModelMapping?: boolean;
-  models?: string[];
+  models: CustomProviderModel[];
   source: 'manual' | 'ccswitch';
   externalId?: string;
   createdAt: number;
@@ -433,7 +450,7 @@ export function loadProfilesForUser(userId: string): ProfilesFile {
       const imageProfiles = parseImageProfilesArray((data as any).imageProfiles);
       const videoProfiles = parseVideoProfilesArray((data as any).videoProfiles);
       const ttsProfiles = parseTtsProfilesArray((data as any).ttsProfiles);
-      const customProviders = parseCustomProvidersArray((data as any).customProviders);
+      const customProviders = parseCustomProvidersArray((data as any).customProviders, entries);
       const authorizationRequests = parseAuthorizationRequestReceipts((data as any).authorizationRequests);
       const store = { version: PROFILES_FILE_VERSION, profiles, entries, searchProfiles, imageProfiles, videoProfiles, ttsProfiles, customProviders, authorizationRequests };
       if (needsRewrite) saveProfilesForUser(uid, store);
@@ -596,25 +613,93 @@ function parseTtsProfilesArray(arr: unknown): TtsProfile[] {
   return out;
 }
 
-function parseCustomProvidersArray(arr: unknown): CustomProvider[] {
+function normalizedLegacyCustomProviderNumber(
+  value: unknown,
+  fallback: number,
+  max: number,
+): number {
+  return Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= max
+    ? value as number
+    : fallback;
+}
+
+function parseCustomProviderModels(value: unknown): CustomProviderModel[] {
+  if (!Array.isArray(value)) return [];
+  const models: CustomProviderModel[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const rawId = typeof raw === 'string'
+      ? raw
+      : (raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : '');
+    const id = String(rawId || '').trim();
+    if (!id || id.length > MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH || seen.has(id)) continue;
+    seen.add(id);
+    const metadata = raw && typeof raw === 'object'
+      ? raw as { contextWindow?: unknown; maxTokens?: unknown }
+      : {};
+    const contextWindow = normalizedLegacyCustomProviderNumber(
+      metadata.contextWindow,
+      DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+      MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+    );
+    const maxTokens = Math.min(
+      normalizedLegacyCustomProviderNumber(
+        metadata.maxTokens,
+        DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+        MAX_CUSTOM_PROVIDER_MAX_TOKENS,
+      ),
+      contextWindow,
+    );
+    models.push({ id, contextWindow, maxTokens });
+    if (models.length >= MAX_CUSTOM_PROVIDER_MODELS) break;
+  }
+  return models;
+}
+
+function migrateCustomProviderModelsFromEntries(
+  providerId: string,
+  entries: readonly Entry[],
+): CustomProviderModel[] {
+  const syntheticId = `cp:${providerId}`;
+  const models: CustomProviderModel[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (entry.provider !== syntheticId || entry.profileId !== syntheticId) continue;
+    const id = String(entry.model || '').trim();
+    if (!id || id.length > MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH || seen.has(id)) continue;
+    seen.add(id);
+    models.push({
+      id,
+      contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+      maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+    });
+    if (models.length >= MAX_CUSTOM_PROVIDER_MODELS) break;
+  }
+  return models;
+}
+
+function parseCustomProvidersArray(arr: unknown, entries: readonly Entry[] = []): CustomProvider[] {
   if (!Array.isArray(arr)) return [];
-  const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'gemini']);
+  const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'openai-responses', 'gemini']);
   const out: CustomProvider[] = [];
   for (const raw of arr) {
     const p = raw as any;
     if (!p || typeof p !== 'object' || !p.id || !p.name || !p.baseUrl) continue;
+    const id = String(p.id);
     const protocol = protocols.has(p.protocol) ? p.protocol as CustomProvider['protocol'] : 'anthropic';
+    const parsedModels = parseCustomProviderModels(p.models);
     out.push({
-      id: String(p.id),
+      id,
       name: String(p.name),
       protocol,
       baseUrl: String(p.baseUrl),
       apiKey: typeof p.apiKey === 'string' ? p.apiKey : '',
+      enabled: p.enabled !== false,
       ...(p.notes ? { notes: String(p.notes) } : {}),
       ...(p.websiteUrl ? { websiteUrl: String(p.websiteUrl) } : {}),
       ...(p.needsKey ? { needsKey: true } : {}),
       ...(p.needsModelMapping ? { needsModelMapping: true } : {}),
-      ...(Array.isArray(p.models) ? { models: p.models.map(String).filter(Boolean).slice(0, 100) } : {}),
+      models: parsedModels.length ? parsedModels : migrateCustomProviderModelsFromEntries(id, entries),
       source: p.source === 'ccswitch' ? 'ccswitch' : 'manual',
       ...(p.externalId ? { externalId: String(p.externalId) } : {}),
       createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
@@ -702,6 +787,21 @@ export function saveCustomProviders(userId: string, list: CustomProvider[]): voi
   invalidateCoreAgentRunner();
 }
 
+export function mutateCustomProviders<T>(
+  userId: string,
+  mutate: (state: { customProviders: CustomProvider[]; entries: CustomProviderEntry[] }) => T,
+): T {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  const result = mutate({
+    customProviders: store.customProviders || (store.customProviders = []),
+    entries: store.entries,
+  });
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return result;
+}
+
 export function removeEntriesForProvider(userId: string, providerId: string): number {
   assertActiveUser(userId);
   const store = loadProfiles();
@@ -768,15 +868,22 @@ function customProviderForId(store: ProfilesFile, providerId: string): CustomPro
 function isCustomProviderModelAllowed(provider: CustomProvider, model: string): boolean {
   const normalized = String(model || '').trim();
   if (!normalized) return false;
-  return !provider.models?.length || provider.models.includes(normalized);
+  return provider.models.some((candidate) => candidate.id === normalized);
 }
 
 function isEntryAllowed(store: ProfilesFile, entry: Entry): boolean {
-  const custom = customProviderForId(store, entry.provider);
-  if (custom) return !!custom.apiKey && isCustomProviderModelAllowed(custom, entry.model);
+  if (isCustomProviderId(entry.provider) || isCustomProviderId(entry.profileId)) {
+    const custom = customProviderForId(store, entry.provider);
+    return !!custom
+      && entry.profileId === entry.provider
+      && custom.enabled
+      && !!custom.apiKey
+      && isCustomProviderModelAllowed(custom, entry.model);
+  }
   const prof = store.profiles[entry.profileId];
   return isModelProviderAllowed(entry.provider, entry.model)
-    && !isStoredProfileBlocked(prof);
+    && isStoredProfileAllowed(prof)
+    && prof.provider === entry.provider;
 }
 
 function makeProfileId(provider: string, label: string): string {
@@ -804,6 +911,21 @@ let _entryCounter = 0;
 function nextEntryId(): string {
   _entryCounter = (_entryCounter + 1) % 100000;
   return `e-${Date.now().toString(36)}-${_entryCounter}`;
+}
+
+export function createCustomProviderEntry(customProviderId: string, modelId: string): CustomProviderEntry {
+  const id = String(customProviderId || '').trim();
+  const model = String(modelId || '').trim();
+  if (!id || !model) throw new Error('custom provider id and model required');
+  const now = Date.now();
+  return {
+    entryId: nextEntryId(),
+    provider: `cp:${id}`,
+    model,
+    profileId: `cp:${id}`,
+    lastUsed: 0,
+    createdAt: now,
+  };
 }
 
 // ── Configured-model probe ───────────────────────────────────────────────
@@ -841,7 +963,23 @@ export function getConfiguredModelCooldown(): {
   return best;
 }
 
+/**
+ * Return a user-facing message when the configured chat model is backed by an
+ * OAuth profile whose access token has expired. Synchronous on purpose:
+ * token refresh (with its side effects) already happened inside
+ * pickChatEntryGroup / resolveEntryApiKey; by the time this is consulted the
+ * refresh either succeeded (profile no longer counts as expired) or failed
+ * (the expired profile is skipped and the user needs to reauthorize).
+ */
 export function getConfiguredModelOAuthExpiredMessage(): string | null {
+  const store = loadProfilesForActiveUserOrEmpty();
+  for (const entry of store.entries) {
+    if (!isEntryAllowed(store, entry)) continue;
+    const profile = store.profiles[entry.profileId];
+    if (profile?.type === 'oauth' && Date.now() >= profile.expires) {
+      return t('errors.model_oauth_expired', { provider: providerLabel(profile.provider) });
+    }
+  }
   return null;
 }
 
@@ -881,9 +1019,12 @@ export interface ProfileView {
   lastUsed: number;
 }
 
+export type ProviderKind = 'builtin' | 'custom';
+
 export interface ProviderEntry {
   id: string;
   label: string;
+  providerKind: ProviderKind;
   featured: boolean;
   supportsApiKey: boolean;
   supportsOAuth: boolean;
@@ -1001,10 +1142,15 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     ? new Set<string>([...mod.listPiProviders(), ...EXTERNAL_API_PROVIDERS])
     : new Set<string>([...visible, ...EXTERNAL_API_PROVIDERS]);
 
-  // OAuth-only providers (ChatGPT Codex, Gemini Code Assist, GitHub Copilot,
-  // Google Antigravity) can't be authenticated with a raw API key — their
+  // OAuth-only providers can't be authenticated with a raw API key — their
   // endpoints only accept OAuth access tokens. Force the API-key tile off.
-  const oauthOnlyIds = new Set(['openai-codex', 'google-gemini-cli', 'google-antigravity', 'github-copilot']);
+  // Single source of truth: oauthOnly marks on CATALOG entries, plus the
+  // OAuth back-ends that only exist outside the catalog (Gemini CLI,
+  // Antigravity, GitHub Copilot) and surface once a saved profile exists.
+  const oauthOnlyIds = new Set([
+    ...CATALOG.filter((entry) => entry.oauthOnly).map((entry) => entry.id),
+    ...OAUTH_PROVIDERS.filter((entry) => !isVisibleProvider(entry.id)).map((entry) => entry.id),
+  ]);
 
   const providers: ProviderEntry[] = sorted.map((id) => {
     const directOAuth = oauthIds.has(id);
@@ -1014,6 +1160,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     return {
       id,
       label: providerLabel(id),
+      providerKind: 'builtin',
       featured: featuredIds.has(id),
       supportsApiKey,
       supportsOAuth,
@@ -1030,6 +1177,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     providers.push({
       id: `cp:${custom.id}`,
       label: custom.name,
+      providerKind: 'custom',
       featured: false,
       supportsApiKey: true,
       supportsOAuth: false,
@@ -1065,7 +1213,7 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   if (!id) return { models: [] };
   if (isCustomProviderId(id)) {
     const custom = customProviderForId(loadProfiles(), id);
-    return { models: (custom?.models || []).map((model) => ({ id: model, name: model })) };
+    return { models: (custom?.models || []).map((model) => ({ id: model.id, name: model.id })) };
   }
   if (!isModelProviderAllowed(id)) return { models: [] };
   const allowed = (models: { id: string; name: string }[]) =>
@@ -1193,6 +1341,51 @@ export async function renameProfile(
   return { profileId: newId };
 }
 
+// Full API key is returned only on explicit reveal. Every other path keeps
+// renderer-facing payloads masked (`profileMasked` / `apiKeyMasked`).
+export async function revealApiKey(profileId: string): Promise<{ apiKey: string }> {
+  const id = String(profileId || '').trim();
+  if (!id) throw new Error('profileId required');
+  const store = loadProfiles();
+  if (isCustomProviderId(id)) {
+    const custom = customProviderForId(store, id);
+    return { apiKey: custom?.apiKey || '' };
+  }
+  const prof = store.profiles[id];
+  if (!prof || prof.type !== 'api_key') return { apiKey: '' };
+  return { apiKey: prof.key || '' };
+}
+
+export async function updateApiKey(
+  profileId: string,
+  apiKey: string,
+): Promise<{ profileId: string }> {
+  const id = String(profileId || '').trim();
+  const key = String(apiKey || '').trim();
+  if (!id) throw new Error('profileId required');
+  if (!key) throw new Error('api key required');
+  const store = loadProfiles();
+  if (isCustomProviderId(id)) {
+    const custom = customProviderForId(store, id);
+    if (!custom) throw new Error('custom provider not found');
+    custom.apiKey = key;
+    custom.updatedAt = Date.now();
+    saveProfiles(store);
+    invalidateCoreAgentRunner();
+    return { profileId: id };
+  }
+  const prof = store.profiles[id];
+  if (!prof) throw new Error('profile not found');
+  if (prof.type !== 'api_key') throw new Error('profile is not an api key profile');
+  store.profiles[id] = { ...prof, key };
+  saveProfiles(store);
+  // User updated the key — mirror addApiKey: drop any failure cooldown so the
+  // next request actually tries this profile again.
+  clearCooldown(id);
+  invalidateCoreAgentRunner();
+  return { profileId: id };
+}
+
 // ── Entries (priority list) ──────────────────────────────────────────────
 
 export interface EntryView {
@@ -1206,6 +1399,7 @@ export interface EntryView {
   profileType: 'api_key' | 'oauth';
   profileMasked?: string;
   oauthExpired?: boolean;
+  modelAvailable?: false;
   createdAt: number;
   lastUsed: number;
 }
@@ -1268,13 +1462,24 @@ async function buildModelNameLookup(): Promise<(p: string, m: string) => string>
   };
 }
 
-export async function listEntries(): Promise<{ entries: EntryView[] }> {
+export interface ListEntriesOptions {
+  includeUnavailable?: boolean;
+}
+
+export async function listEntries(
+  options: ListEntriesOptions = {},
+): Promise<{ entries: EntryView[] }> {
   const store = loadProfiles();
   const lookup = await buildModelNameLookup();
+  const includeUnavailable = options.includeUnavailable === true;
   return {
     entries: store.entries
-      .filter((e) => isEntryAllowed(store, e))
-      .map((e) => entryToView(e, store, lookup)),
+      .flatMap((entry) => {
+        const available = isEntryAllowed(store, entry);
+        if (!available && !includeUnavailable) return [];
+        const view = entryToView(entry, store, lookup);
+        return [available ? view : { ...view, modelAvailable: false as const }];
+      }),
   };
 }
 
@@ -1282,7 +1487,13 @@ export async function addEntry({
   provider,
   model,
   profileId,
-}: { provider: string; model: string; profileId: string }): Promise<{ entryId: string }> {
+  position = 'front',
+}: {
+  provider: string; model: string; profileId: string;
+  /** Where to insert: 'front' makes this entry the primary chat choice;
+   *  'back' appends it as a fallback (chat dispatch walks entries in order). */
+  position?: 'front' | 'back';
+}): Promise<{ entryId: string }> {
   const p = String(provider || '').trim();
   const m = String(model || '').trim();
   const pid = String(profileId || '').trim();
@@ -1292,6 +1503,7 @@ export async function addEntry({
   if (custom) {
     if (pid !== p) throw new Error('custom provider profile mismatch');
     if (!isCustomProviderModelAllowed(custom, m)) throw new Error('custom provider model not found');
+    if (!custom.enabled) throw new Error(`custom provider ${p} is disabled; cannot add model ${m}`);
   } else {
     assertModelProviderAllowed(p, m);
     if (!store.profiles[pid]) throw new Error('profile not found');
@@ -1306,14 +1518,16 @@ export async function addEntry({
 
   const entryId = nextEntryId();
   const now = Date.now();
-  store.entries.unshift({
+  const entry = {
     entryId,
     provider: p,
     model: m,
     profileId: pid,
     lastUsed: 0,
     createdAt: now,
-  });
+  };
+  if (position === 'back') store.entries.push(entry);
+  else store.entries.unshift(entry);
   saveProfiles(store);
   invalidateCoreAgentRunner();
   return { entryId };
@@ -1710,7 +1924,7 @@ export async function completeAuthorization(
       const protocol = draft?.protocol;
       if (!name) throw new Error('custom provider name required');
       if (!apiKey) throw new Error('apiKey required');
-      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') {
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') {
         throw new Error('unsupported custom provider protocol');
       }
       const baseUrl = normalizeAuthorizationBaseUrl(draft.baseUrl);
@@ -1721,8 +1935,15 @@ export async function completeAuthorization(
         provider = list.find((row) => row.source === 'ccswitch' && row.externalId === draft.externalId);
       }
       if (provider) {
+        const existingModelMetadata = new Map(provider.models.map((model) => [model.id, model]));
         Object.assign(provider, {
-          name, protocol, baseUrl, apiKey, models: orderedModels, source: input.source,
+          name, protocol, baseUrl, apiKey,
+          models: orderedModels.map((id) => existingModelMetadata.get(id) || ({
+            id,
+            contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+          })),
+          source: input.source,
           ...(draft.externalId ? { externalId: String(draft.externalId).slice(0, 160) } : {}),
           ...(draft.notes ? { notes: String(draft.notes).trim().slice(0, 200) } : {}),
           ...(draft.websiteUrl ? { websiteUrl: String(draft.websiteUrl).trim().slice(0, 500) } : {}),
@@ -1732,7 +1953,13 @@ export async function completeAuthorization(
       } else {
         provider = {
           id: nextAuthorizationCustomProviderId(store), name, protocol, baseUrl, apiKey,
-          models: orderedModels, source: input.source,
+          models: orderedModels.map((id) => ({
+            id,
+            contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+          })),
+          enabled: true,
+          source: input.source,
           ...(draft.externalId ? { externalId: String(draft.externalId).slice(0, 160) } : {}),
           ...(draft.notes ? { notes: String(draft.notes).trim().slice(0, 200) } : {}),
           ...(draft.websiteUrl ? { websiteUrl: String(draft.websiteUrl).trim().slice(0, 500) } : {}),
@@ -2064,6 +2291,9 @@ export function cancelOAuthFlow(flowId: string): { ok: boolean } {
 
 // ── Chat entry picker (runner integration) ───────────────────────────────
 
+/** Wire protocols the CogSeed runtime model providers can speak natively. */
+export type RuntimeChatProtocol = 'openai-completions' | 'openai-responses' | 'anthropic' | 'gemini';
+
 export interface ChatEntryChoice {
   entryId: string;
   profileId: string;
@@ -2072,14 +2302,68 @@ export interface ChatEntryChoice {
   apiKey: string;
   baseUrl?: string;
   maxOutputTokens?: number;
+  /** Wire protocol this entry speaks; undefined = native pi-ai surface the
+   *  CogSeed runtime cannot reach (OpenAI Responses, OpenRouter, zai, ...). */
+  protocol?: RuntimeChatProtocol;
 }
 
-/** Resolve one API-key chat entry for an explicit user. This is intentionally
- * independent from active-user state, OAuth refresh, and Core Agent rotation. */
-export function pickApiKeyChatEntryForUser(
+/**
+ * Map an entry to the wire protocol the CogSeed runtime can speak, or null
+ * when the entry only exists on a native pi-ai surface (OpenAI Responses,
+ * OpenRouter aggregates, zai, minimax portal, Codex/Copilot OAuth, ...).
+ */
+function runtimeProtocolForEntry(store: ProfilesFile, entry: Entry): RuntimeChatProtocol | null {
+  const custom = customProviderForId(store, entry.provider);
+  if (custom) {
+    if (custom.protocol === 'openai') return 'openai-completions';
+    if (custom.protocol === 'openai-responses') return 'openai-responses';
+    if (custom.protocol === 'anthropic') return 'anthropic';
+    if (custom.protocol === 'gemini') return 'gemini';
+    return null;
+  }
+  const profile = store.profiles[entry.profileId];
+  if (!profile) return null;
+  if (profile.type === 'api_key') {
+    switch (profile.provider) {
+      case 'openai-compatible':
+      case 'moonshot':
+      case 'deepseek':
+      case 'doubao':
+        return 'openai-completions';
+      case 'openai':
+        return 'openai-responses';
+      case 'anthropic':
+      case 'kimi-coding':
+        return 'anthropic';
+      case 'google':
+        return 'gemini';
+      default:
+        // zai, minimax-cn, openrouter, ... are native pi-ai surfaces the
+        // runtime cannot reach.
+        return null;
+    }
+  }
+  // OAuth-backed entries: only the Anthropic surface is reachable with a raw
+  // Messages-API request (Claude Pro/Max access tokens). Codex / Gemini CLI /
+  // Copilot / MiniMax portal tokens are native-protocol only.
+  return profile.provider === 'anthropic' ? 'anthropic' : null;
+}
+
+/**
+ * Resolve one usable chat entry for an explicit user that the CogSeed runtime
+ * can actually call, walking the priority list like pickChatEntryGroup does.
+ * Accepts entries backed by api_key profiles, OAuth profiles (with refresh)
+ * and custom providers, as long as the entry maps to one of the wire
+ * protocols the runtime implements (openai-completions / anthropic / gemini).
+ * Native-only surfaces (OpenAI Responses, OpenRouter, zai, minimax portal,
+ * Codex / Copilot OAuth) are skipped so the runtime never gets a candidate it
+ * cannot talk to. OAuth refresh runs inside resolveEntryApiKey; when it fails
+ * the expired entry is skipped and the user gets the OAuth-expired hint.
+ */
+export async function pickRuntimeChatEntryForUser(
   userId: string,
   profileId?: string,
-): ChatEntryChoice | null {
+): Promise<ChatEntryChoice | null> {
   const uid = assertAuthUserId(userId);
   const wantedProfileId = profileId === undefined ? undefined : String(profileId).trim();
   if (profileId !== undefined && !wantedProfileId) throw new Error('invalid profile id');
@@ -2088,17 +2372,24 @@ export function pickApiKeyChatEntryForUser(
   for (const entry of store.entries) {
     if (wantedProfileId && entry.profileId !== wantedProfileId) continue;
     if (!isEntryAllowed(store, entry)) continue;
+    const protocol = runtimeProtocolForEntry(store, entry);
+    if (!protocol) continue;
+    const apiKey = await resolveEntryApiKey(store, entry);
+    if (!apiKey) continue;
     const profile = store.profiles[entry.profileId];
-    if (!profile || profile.type !== 'api_key') continue;
+    const apiProfile = profile?.type === 'api_key' ? profile as ApiKeyProfile : undefined;
+    const custom = customProviderForId(store, entry.provider);
     return {
       entryId: entry.entryId,
       profileId: entry.profileId,
       provider: entry.provider,
       model: entry.model,
-      apiKey: profile.key,
-      ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
-      ...(isOpenAICompatibleProvider(entry.provider)
-        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, profile.maxOutputTokens) }
+      apiKey,
+      protocol,
+      ...(custom?.baseUrl ? { baseUrl: custom.baseUrl } : {}),
+      ...(apiProfile?.baseUrl ? { baseUrl: apiProfile.baseUrl } : {}),
+      ...(apiProfile && isOpenAICompatibleProvider(entry.provider)
+        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, apiProfile.maxOutputTokens) }
         : {}),
     };
   }
@@ -2412,7 +2703,12 @@ export async function testAuthorizationDraft(
         protocol: input.protocol,
         baseUrl,
         apiKey,
-        models: [model],
+        enabled: true,
+        models: [{
+          id: model,
+          contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+          maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+        }],
         source: 'manual',
         createdAt: Date.now(),
       };

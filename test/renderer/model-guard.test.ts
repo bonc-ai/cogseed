@@ -39,7 +39,7 @@ function makeSandbox() {
       },
     },
     window: {
-      orkas: {
+      cogseed: {
         invoke: async (channel: string) => {
           if (channel === 'auth.hasConfiguredModel') return { ok: true, configured };
           if (channel === 'auth.listEntries') return { ok: true, entries: configured ? [{ provider: 'p', model: 'm' }] : [] };

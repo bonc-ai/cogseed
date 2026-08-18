@@ -1,0 +1,8 @@
+# Eval cases — social-data (positive / negative examples)
+
+positive:
+  - "<real user phrasing 1>"
+  - "<real user phrasing 2>"
+negative:
+  - "<near-miss 1 — must NOT fire>"
+  - "<near-miss 2 — must NOT fire>"

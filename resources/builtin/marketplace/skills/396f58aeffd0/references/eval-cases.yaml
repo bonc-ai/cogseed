@@ -1,0 +1,23 @@
+{
+  "evaluation_refs": [
+    "EVAL-DERISK-001",
+    "EVAL-DERISK-002",
+    "EVAL-DERISK-003",
+    "EVAL-DERISK-004",
+    "EVAL-DERISK-005",
+    "EVAL-DERISK-006",
+    "EVAL-DERISK-007",
+    "EVAL-DERISK-008",
+    "EVAL-DERISK-009",
+    "EVAL-DERISK-010"
+  ],
+  "id": "EVAL-SET-DERISK-001",
+  "negative_refs": [
+    "EVAL-DERISK-007",
+    "EVAL-DERISK-008",
+    "EVAL-DERISK-009",
+    "EVAL-DERISK-010"
+  ],
+  "schema_version": "1.0",
+  "source_type": "synthetic"
+}

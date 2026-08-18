@@ -38,7 +38,38 @@ import { getActiveUserId } from '../features/users.js';
 import { userToolResultsDir } from '../paths.js';
 import { createLogger } from '../logger.js';
 import { listClaudeSessions } from '../features/local_agents/claude_sessions.js';
+import { listWorkbuddySessions } from '../features/local_agents/workbuddy_sessions.js';
+import { importClaudeSessions } from '../features/local_agents/import_sessions.js';
+import { listClaudeDesktopSessions } from '../features/local_agents/claude_desktop_sessions.js';
 import { listAgentTypes, listSessions as listAcpSessions } from '../features/local_agents/acp_sessions.js';
+import { importClaudeSession, importClaudeDesktopSession, importWorkbuddySession, prefetchImportSession } from '../features/session_import/asset-router.js';
+import { recommendStartingPoint } from '../features/session_import/recommend-start.js';
+import { listClaudeSkills, importClaudeSkills, listCodexSkills, importCodexSkills } from '../features/session_import/skill-import.js';
+import {
+  readClaudeMemory,
+  importClaudeMemory,
+  readClaudeMemories,
+  importClaudeMemories,
+  type MemorySourceKey,
+} from '../features/session_import/memory-import.js';
+import {
+  listCodexSessions,
+  readCodexMemory,
+  importCodexMemory,
+  listCodexTasks,
+  importCodexTasks,
+  importCodexSession,
+} from '../features/session_import/codex-import.js';
+import { listOpencodeSessions } from '../features/local_agents/opencode_sessions.js';
+import { importOpencodeSession } from '../features/session_import/opencode-import.js';
+import {
+  readOpencodeMemory,
+  importOpencodeMemory,
+} from '../features/local_agents/opencode_memory.js';
+import {
+  listOpencodeTodos,
+  importOpencodeTodos,
+} from '../features/local_agents/opencode_tasks.js';
 
 const log = createLogger('ipc:local_agents');
 
@@ -59,7 +90,7 @@ function isLocalCliType(v: unknown): v is LocalCliType {
 // CLI has a backend — left as a guard for future additions where the
 // dispatch path lags detection.
 const DISPATCHABLE: ReadonlySet<LocalCliType> = new Set<LocalCliType>(
-  ['claude', 'codex', 'openclaw', 'opencode', 'hermes'],
+  ['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy'],
 );
 
 function maskUnsupported(entries: LocalCliEntry[]): LocalCliEntry[] {
@@ -83,6 +114,61 @@ export const invokeHandlers = {
   'localAgents.list': async ({ force = false }: { force?: boolean } = {}) => {
     const entries = await detectAll({ force: !!force });
     return { entries: maskUnsupported(entries) };
+  },
+
+  /**
+   * Probe each CLI's OWN model endpoint (from its config files) so the
+   * onboarding UI can honestly tell the user "this CLI routes through a
+   * local proxy (e.g. CC Switch) — keep it running, or switch to a direct
+   * endpoint". The app never depends on the proxy; this is informational.
+   * Also reports `reachable` (TCP probe against local proxy host:port) so
+   * the UI and the CLI-fallback picker can skip CLIs whose local proxy is
+   * not currently running. Probes run in parallel with a short per-CLI
+   * timeout so this never stalls onboarding rendering.
+   */
+  'localAgents.cliEndpointInfo': async () => {
+    const { readCliModelEndpoint, probeModelEndpointReachable } = await import('../features/local_agents/active_config.js');
+    const clis = ['claude', 'codex', 'opencode', 'workbuddy'] as const;
+    const [reachableMap] = await Promise.all([
+      (async () => {
+        const out: Record<string, boolean | null> = {};
+        await Promise.all(clis.map(async (cli) => {
+          out[cli] = await probeModelEndpointReachable(cli);
+        }));
+        return out;
+      })(),
+    ]);
+    const endpoints: Record<string, { baseUrl: string; isLocalProxy: boolean; reachable: boolean | null; configAvailable: boolean; authMode: 'api' | 'oauth' | null } | null> = {};
+    for (const cli of clis) {
+      const ep = readCliModelEndpoint(cli);
+      endpoints[cli] = ep
+        ? {
+            baseUrl: ep.baseUrl,
+            isLocalProxy: ep.isLocalProxy,
+            reachable: reachableMap[cli],
+            configAvailable: ep.configAvailable,
+            authMode: ep.authMode,
+          }
+        : null;
+    }
+    return { ok: true, endpoints };
+  },
+
+  /**
+   * Detect installed DESKTOP apps (not CLIs) that the commander fallback
+   * cannot drive: Claude Desktop, Codex desktop, Cursor. Purely a file
+   * existence check under /Applications — honest "installed but no local
+   * execution interface" signal for the fallback guidance UI.
+   */
+  'localAgents.detectDesktopApps': async () => {
+    const apps = new Set<string>();
+    for (const name of ['Claude.app', 'Codex.app', 'Cursor.app']) {
+      try {
+        const p = path.join('/Applications', name);
+        if (fs.existsSync(p) && fs.statSync(p).isDirectory()) apps.add(name.replace('.app', ''));
+      } catch { /* skip */ }
+    }
+    return { apps: Array.from(apps) };
   },
 
   /**
@@ -119,6 +205,33 @@ export const invokeHandlers = {
   },
 
   /**
+   * Import picked Claude Code sessions as read-only conversations in the
+   * user's chat list (cid = claude sessionId → idempotent re-import).
+   * Returns per-session outcome; a single failure doesn't abort the batch.
+   */
+  'localAgents.importClaudeSessions': async ({ sessions }: { sessions?: Array<{ sessionId: string; filePath: string; firstMessage?: string; projectPath?: string }> } = {}, ctx) => {
+    const list = Array.isArray(sessions) ? sessions.filter((s) => s && s.sessionId && s.filePath) : [];
+    if (!list.length) return { ok: false, error: 'no sessions provided', imported: 0, skipped: 0, errors: [] };
+    const result = await importClaudeSessions(ctx.userId, list);
+    return result;
+  },
+
+  /**
+   * List Claude **Desktop** local-agent-mode sessions. Distinct from
+   * `listClaudeSessions`, which reads the CLI's jsonl history: this reads the
+   * desktop app's per-workspace metadata, so entries carry only the opening
+   * message (see `claude_desktop_sessions.ts`). `error: 'permission_denied'`
+   * is passed through so the UI can prompt for access instead of showing an
+   * empty list.
+   */
+  'localAgents.listClaudeDesktopSessions': async () => {
+    const res = await listClaudeDesktopSessions();
+    return res.ok
+      ? { ok: true, sessions: res.sessions }
+      : { ok: false, error: res.error, sessions: [] };
+  },
+
+  /**
    * List ACP transcript sessions from `~/.cogseed/acp-transcripts/`.
    * Returns agent types and sessions for each type. Used in onboarding
    * to detect sessions from ACP-speaking agents (Hermes, Claude Desktop, etc).
@@ -135,6 +248,452 @@ export const invokeHandlers = {
       log.warn('failed to list ACP sessions', { error: String(err) });
       return { ok: false, agentTypes: [], sessionsByType: {} };
     }
+  },
+
+  /**
+   * Import one Claude Code session for the active user: read the transcript,
+   * compress it into a summary seed, materialize a continuable conversation
+   * (appears in the sidebar), and route extracted cognitions into the Recall
+   * candidate pool. `filePath` must be one returned by `listClaudeSessions`;
+   * the reader re-validates containment under `~/.claude/projects`.
+   *
+   * Returns `{ ok, conversationId, cognitions, degraded, reason }`. `degraded`
+   * means the model couldn't produce usable structured output — the session
+   * is still materialized (honestly labeled), just with no cognitions routed.
+   */
+  'sessionImport.importClaudeSession': async (
+    { filePath, titleHint }: { filePath?: unknown; titleHint?: unknown } = {},
+  ) => {
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importClaudeSession({
+      userId,
+      filePath,
+      titleHint: typeof titleHint === 'string' ? titleHint : undefined,
+    });
+  },
+
+  // B+ fast import: background extraction phase for one conversation.
+  // `null` status = extraction already completed inline (or never started).
+  'sessionImport.extractionStatus': async (
+    { cid }: { cid?: unknown } = {},
+  ) => {
+    if (typeof cid !== 'string' || !cid) throw new Error('cid required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getExtractionState } = await import('../features/session_import/extraction-background');
+    return { ok: true, status: await getExtractionState(userId, cid) };
+  },
+
+  /**
+   * Warm the read+extract cache for the recommended session so a later
+   * "继续项目" click skips the slow distillation model call. Fire-and-forget
+   * from the renderer the moment the recommendation card resolves — read-only,
+   * best-effort, and creates nothing user-visible. Only `claude`/`workbuddy`
+   * have a slow extract worth prefetching; other sources are a no-op here.
+   *
+   * A failed/degraded prefetch never blocks the eventual import — it just
+   * won't be sped up, so this returns `{ ok:false, reason }` rather than throwing.
+   */
+  'sessionImport.prefetchRecommended': async (
+    { source, filePath }: { source?: unknown; filePath?: unknown } = {},
+  ) => {
+    if (source !== 'claude' && source !== 'workbuddy') {
+      return { ok: false, reason: 'source_not_prefetchable' };
+    }
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return prefetchImportSession({ userId, source, filePath });
+  },
+
+  /**
+   * Import one Claude **Desktop** session by `sessionId` (from
+   * `localAgents.listClaudeDesktopSessions`). Desktop sessions carry only the
+   * opening message, so the materialized conversation is seeded from that one
+   * turn rather than a full transcript.
+   */
+  'sessionImport.importClaudeDesktopSession': async (
+    { sessionId }: { sessionId?: unknown } = {},
+  ) => {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importClaudeDesktopSession({ userId, sessionId });
+  },
+
+  /**
+   * List importable Claude Code skills from `~/.claude/skills/` (metadata
+   * only). Empty array = Claude unused or no skills. Read-only.
+   */
+  'sessionImport.listClaudeSkills': async () => {
+    const skills = await listClaudeSkills();
+    return { skills };
+  },
+
+  /**
+   * Import a batch of Claude Code skills (by directory name) into the user's
+   * skill library. Each `dirName` must be one returned by
+   * `listClaudeSkills`. Best-effort per skill; already-present skills report
+   * `already_exists` rather than duplicating. Returns per-skill results plus
+   * ok/fail counts.
+   */
+  'sessionImport.importClaudeSkills': async ({ dirNames }: { dirNames?: unknown } = {}) => {
+    if (!Array.isArray(dirNames) || dirNames.some((d) => typeof d !== 'string')) {
+      throw new Error('dirNames must be a string array');
+    }
+    return importClaudeSkills(dirNames as string[]);
+  },
+
+  /**
+   * List Codex skills (READ-ONLY).
+   * Returns [] when `~/.codex/skills/.system` is absent.
+   */
+  'sessionImport.listCodexSkills': async () => {
+    const skills = await listCodexSkills();
+    return { skills };
+  },
+
+  /**
+   * Import a batch of Codex skills (by directory name) into the user's
+   * skill library. Each `dirName` must be one returned by
+   * `listCodexSkills`. Best-effort per skill; already-present skills report
+   * `already_exists` rather than duplicating. Returns per-skill results plus
+   * ok/fail counts.
+   */
+  'sessionImport.importCodexSkills': async ({ dirNames }: { dirNames?: unknown } = {}) => {
+    if (!Array.isArray(dirNames) || dirNames.some((d) => typeof d !== 'string')) {
+      throw new Error('dirNames must be a string array');
+    }
+    return importCodexSkills(dirNames as string[]);
+  },
+
+  /**
+   * Preview the user-level Claude memory (`~/.claude/CLAUDE.md`), READ-ONLY.
+   * Returns an honest `present:false` state when there is no CLAUDE.md.
+   */
+  'sessionImport.readClaudeMemory': async () => {
+    return readClaudeMemory();
+  },
+
+  /**
+   * Import the user-level CLAUDE.md into the shared memory tier (MEMORY.md).
+   * Per-entry idempotent; every write goes through the memory injection scan
+   * and char-limit guard.
+   */
+  'sessionImport.importClaudeMemory': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importClaudeMemory(userId);
+  },
+
+  /**
+   * Preview ALL Claude Code memory sources (READ-ONLY):
+   *   - instructions (`~/.claude/CLAUDE.md`)
+   *   - rules        (`~/.claude/rules/*.md`)
+   *   - automem      (`~/.claude/MEMORY.md`)
+   *   - project-mem  (`~/.claude/projects/<project>/memory/*.md`)
+   *   - history      (`~/.claude/history.jsonl`, best-effort personal facts)
+   *   - workspace-project (`<workspace>/CLAUDE.md` or `<workspace>/.claude/CLAUDE.md`)
+   *   - workspace-local   (`<workspace>/CLAUDE.local.md`)
+   * Absent sources come back with present:false + a reason, never omitted.
+   */
+  'sessionImport.readClaudeMemories': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getWorkspacePath } = await import('../features/user_workspace');
+    const workspaceDir = getWorkspacePath(userId);
+    return readClaudeMemories(undefined, workspaceDir);
+  },
+
+  /**
+   * Import selected Claude Code memory sources into the shared memory tier
+   * (MEMORY.md). Per-entry idempotent; every write runs the injection scan and
+   * char-limit guard. `sourceKeys` defaults to all seven when omitted.
+   */
+  'sessionImport.importClaudeMemories': async (
+    { sourceKeys }: { sourceKeys?: MemorySourceKey[] } = {},
+  ) => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getWorkspacePath } = await import('../features/user_workspace');
+    const workspaceDir = getWorkspacePath(userId);
+    return importClaudeMemories(userId, sourceKeys, undefined, workspaceDir);
+  },
+
+  /**
+   * List Codex sessions from `~/.codex/sessions/`. Returns metadata only
+   * (first message, timestamp, cwd). Best-effort: missing dir returns [].
+   */
+  'sessionImport.listCodexSessions': async () => {
+    const sessions = await listCodexSessions();
+    return { sessions };
+  },
+
+  /**
+   * Preview Codex config.toml for importable preferences (READ-ONLY).
+   * Returns structured facts about model provider, default model, reasoning
+   * effort, and trusted projects.
+   */
+  'sessionImport.readCodexMemory': async () => {
+    return readCodexMemory();
+  },
+
+  /**
+   * List Codex scheduled tasks from the `automations` table (READ-ONLY).
+   * Empty array = no tasks defined yet (a valid state, not an error).
+   */
+  'sessionImport.listCodexTasks': async () => {
+    const tasks = await listCodexTasks();
+    return { tasks };
+  },
+
+  /**
+   * Import selected Codex scheduled tasks into the in-app auto-task module.
+   * `taskIds` omitted = import all listed tasks. Idempotent (existing
+   * title+content pairs are skipped); unmappable recurrences are reported,
+   * never silently coerced. Returns per-task results with counts.
+   */
+  'sessionImport.importCodexTasks': async ({ taskIds }: { taskIds?: unknown } = {}) => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const ids = Array.isArray(taskIds)
+      ? taskIds.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    return importCodexTasks(userId, ids);
+  },
+
+  /**
+   * Import Codex config.toml preferences into the shared memory tier
+   * (MEMORY.md). Per-entry idempotent; every write goes through the memory
+   * injection scan and char-limit guard.
+   */
+  'sessionImport.importCodexMemory': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importCodexMemory(userId);
+  },
+
+  /**
+   * Import a single Codex session into a CogSeed conversation.
+   * Simpler than Claude import: no extraction/cognition routing, just
+   * materialize the conversation. `filePath` must be a valid JSONL path
+   * from `listCodexSessions`. Returns `{ ok, conversationId, reason }`.
+   */
+  'sessionImport.importCodexSession': async (
+    { filePath, titleHint }: { filePath?: unknown; titleHint?: unknown } = {},
+  ) => {
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importCodexSession(
+      userId,
+      filePath,
+      typeof titleHint === 'string' ? titleHint : undefined,
+    );
+  },
+
+  /**
+   * List WorkBuddy (Tencent) sessions from `~/.workbuddy/projects/`. Returns
+   * metadata only (first user query, timestamp, project path). READ-ONLY,
+   * best-effort: missing dir returns []. The real prompt is extracted from
+   * the `<user_query>` wrapper so the picker shows the question, not the
+   * system-reminder blob.
+   */
+  'sessionImport.listWorkbuddySessions': async () => {
+    const sessions = await listWorkbuddySessions();
+    return { sessions };
+  },
+
+  /**
+   * Onboarding "从哪里开始" recommendation. Ranks the user's REAL prior
+   * sessions across every detected agent and, for the best one, suggests a
+   * matching role template via local keyword match. Read-only; never
+   * fabricates — returns `{ top: null }` when nothing readable exists so the
+   * UI can honestly fall back to "选择其他 session" / "从空白开始".
+   */
+  'sessionImport.recommendStartingPoint': async () => {
+    const userId = getActiveUserId();
+    return recommendStartingPoint(undefined, userId || undefined);
+  },
+
+  /**
+   * Import one WorkBuddy session into a CogSeed conversation: read the
+   * transcript, normalize WorkBuddy's top-level role/content jsonl, extract
+   * cognitions, materialize a continuable conversation, and route the
+   * extracted assets into the Recall candidate pool. Same pipeline as the
+   * Claude import — this is how a WorkBuddy session becomes owned cognitive
+   * assets. `filePath` must be one returned by `listWorkbuddySessions`; the
+   * reader re-validates containment under `~/.workbuddy/projects`.
+   */
+  'sessionImport.importWorkbuddySession': async (
+    { filePath, titleHint, projectPath }: { filePath?: unknown; titleHint?: unknown; projectPath?: unknown } = {},
+  ) => {
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importWorkbuddySession({
+      userId,
+      filePath,
+      titleHint: typeof titleHint === 'string' ? titleHint : undefined,
+      projectPath: typeof projectPath === 'string' ? projectPath : undefined,
+    });
+  },
+
+  /**
+   * List OpenCode sessions from `~/.local/share/opencode/opencode.db`.
+   * Returns session metadata (title, timestamps, message count, model, tokens).
+   * READ-ONLY. Best-effort: missing DB returns empty result.
+   */
+  'sessionImport.listOpencodeSessions': async () => {
+    const result = listOpencodeSessions();
+    if ('error' in result) {
+      return { ok: false, sessions: [], error: result.error };
+    }
+    return { ok: true, sessions: result.sessions, totalCount: result.totalCount };
+  },
+
+  /**
+   * Import an OpenCode session into a continuable conversation. Reads the
+   * session's text parts from the OpenCode SQLite DB (READ-ONLY) and
+   * materializes it like the other CLI sources.
+   */
+  'sessionImport.importOpencodeSession': async (
+    { sessionId, titleHint }: { sessionId?: unknown; titleHint?: unknown } = {},
+  ) => {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importOpencodeSession(
+      userId,
+      sessionId,
+      typeof titleHint === 'string' ? titleHint : undefined,
+    );
+  },
+
+  /**
+   * Preview OpenCode config preferences (opencode.json/.jsonc) — READ-ONLY.
+   * Empty config is an honest `present:false` + `reason:'empty'` state.
+   */
+  'sessionImport.readOpencodeMemory': async () => {
+    return readOpencodeMemory();
+  },
+
+  /**
+   * Import OpenCode config preferences into the shared memory tier.
+   * Per-entry idempotent via the memory guard.
+   */
+  'sessionImport.importOpencodeMemory': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importOpencodeMemory(userId);
+  },
+
+  /**
+   * List OpenCode todos (in-session task checklist) — READ-ONLY.
+   * OpenCode has no scheduled-task store; todo is a checklist, and imports
+   * are one-time tasks. Empty array = no todos.
+   */
+  'sessionImport.listOpencodeTodos': async () => {
+    const todos = await listOpencodeTodos();
+    return { todos };
+  },
+
+  /**
+   * Import selected OpenCode todos as one-time tasks in the auto-task module.
+   * `todoIds` omitted = import all. Idempotent per (title, content).
+   */
+  'sessionImport.importOpencodeTodos': async ({ todoIds }: { todoIds?: unknown } = {}) => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const ids = Array.isArray(todoIds)
+      ? todoIds.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    return importOpencodeTodos(userId, ids);
+  },
+
+  /**
+   * Insert a welcome message into an imported conversation. Called by the
+   * renderer when the user opens an imported conversation for the first time.
+   * Returns `{ ok, error? }`.
+   */
+  'chats.insertWelcomeMessage': async (
+    { conversationId }: { conversationId?: unknown } = {},
+  ) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { insertWelcomeMessage } = await import('../features/chats');
+    return insertWelcomeMessage(userId, conversationId);
+  },
+
+  /**
+   * Read the resume welcome panel for an imported conversation (v1.6 three-part
+   * template). Does not append a message and does not consume `needs_welcome`;
+   * the renderer shows the panel and only sends the guide sentence on confirm.
+   */
+  'chats.getWelcomePanel': async (
+    { conversationId }: { conversationId?: unknown } = {},
+  ) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getWelcomePanel } = await import('../features/chats');
+    return getWelcomePanel(userId, conversationId);
+  },
+
+  /**
+   * Mark an imported conversation's welcome as seen (clears `needs_welcome`)
+   * without appending any message. Called after「带着这些继续」is confirmed.
+   */
+  'chats.markWelcomeSeen': async (
+    { conversationId }: { conversationId?: unknown } = {},
+  ) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { markWelcomeSeen } = await import('../features/chats');
+    return markWelcomeSeen(userId, conversationId);
+  },
+
+  /**
+   * Template-based handoff reply for an imported conversation. When the user
+   * sends a handoff/continue prompt ("继续这项工作", "现在做到哪里…"), we answer
+   * directly from real CogSeed data — instant, no CLI turn. Appends the
+   * three-part template as a commander reply and returns the text.
+   */
+  'chats.handoffWelcomeReply': async (
+    { conversationId, text }: { conversationId?: unknown; text?: unknown } = {},
+  ) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { handoffWelcomeReply } = await import('../features/chats');
+    return handoffWelcomeReply(userId, conversationId, typeof text === 'string' ? text : undefined);
+  },
+
+  /**
+   * 打开导入会话时自动开始接续（真实消息流）：系统替用户发送第一条引导句
+   * 「继续这项工作。先告诉我现在做到哪里…」，随后 commander 回复三段式
+   * （项目介绍 / 工作空间能力 / Action Plan）。两条消息落盘并清除 needs_welcome。
+   */
+  'chats.beginWelcome': async ({ conversationId }: { conversationId?: unknown } = {}) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { beginWelcome } = await import('../features/chats');
+    return beginWelcome(userId, conversationId);
   },
 
   /**

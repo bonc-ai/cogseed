@@ -18,7 +18,7 @@ import { readJsonSync, writeJsonSync } from '../storage';
 
 export interface OnboardingState {
   /** Set to true once the user finishes (or explicitly completes) the
-   *  four-step first-run walkthrough. Missing / any non-true value is
+   *  three-step first-run walkthrough. Missing / any non-true value is
    *  treated as "not yet done" so a fresh install always shows it. */
   completed?: boolean;
   /** Epoch ms of completion — diagnostic only, never gates anything. */
@@ -35,8 +35,12 @@ export interface OnboardingState {
  * testing aid — it is off by default, so shipped behavior stays "show once".
  */
 export function getOnboardingCompleted(): boolean {
-  if (process.env.ORKAS_ONBOARDING_ALWAYS === '1') return false;
-  return readJsonSync<OnboardingState>(ONBOARDING_STATE_FILE).completed === true;
+  if (process.env.ORKAS_ONBOARDING_ALWAYS === '1') {
+    return false;
+  }
+
+  const state = readJsonSync<OnboardingState>(ONBOARDING_STATE_FILE);
+  return state.completed === true;
 }
 
 /** Persist the completion flag. Idempotent — writing true twice is a no-op

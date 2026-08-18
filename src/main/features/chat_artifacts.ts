@@ -12,7 +12,7 @@
  * Layout: `<uid>/cloud/chat_artifacts/<cid>/<artifactId>/`
  *   index.html               required entry point
  *   <other files...>         siblings (css / js / json / svg / inline assets)
- *   __orkas-meta.json        { title, agentId, createdAt } — written by us;
+ *   __cogseed-meta.json        { title, agentId, createdAt } — written by us;
  *                            `create_artifact` may not supply this name
  * Cloud-synced with the conversation; purged by cid on conversation delete.
  * A *separate* pool from `chat_attachments/` on purpose — attachments are user
@@ -45,6 +45,8 @@ import {
 } from '../util/project-layout';
 import { createLogger } from '../logger';
 import { isPathAllowed } from '../util/path-sandbox';
+// 空间化落盘：复用 chat_attachments 的会话→空间归属缓存（warm 由 IPC/调用方触发）
+import { cachedConversationSpace, warmConversationSpace } from './chat_attachments';
 
 const log = createLogger('chat_artifacts');
 
@@ -69,12 +71,12 @@ const TEXT_EXTS: ReadonlySet<string> = new Set([
   '.html', '.htm', '.js', '.mjs', '.css', '.json', '.map', '.svg', '.xml', '.txt', '.csv',
 ]);
 
-const META_FILENAME = '__orkas-meta.json';
+const META_FILENAME = '__cogseed-meta.json';
 // Reserved virtual path prefix served by the protocol handler (the runtime
 // bridge script), never read from disk; `create_artifact` rejects files under
 // it so an artifact can't shadow the real bridge.
-export const RESERVED_PREFIX = '__orkas/';
-export const BRIDGE_RELPATH = '__orkas/bridge.js';
+export const RESERVED_PREFIXES = Object.freeze(['__orkas/', '__cogseed/']);
+export const BRIDGE_RELPATH = '__cogseed/bridge.js';
 
 const COMPACTED_HISTORY_MARKERS = [
   '[old tool input string compacted:',
@@ -202,12 +204,12 @@ export function mimeFor(name: string): string {
 // ── Runtime bridge (served at the reserved virtual path) ─────────────────
 //
 // Opt-in: an artifact that wants auto-sizing + a tidy send() helper does
-// `<script src="__orkas/bridge.js"></script>`. Everything still works without
-// it — the app may also `parent.postMessage({__orkasArtifact:true, ...}, '*')`
+// `<script src="__cogseed/bridge.js"></script>`. Everything still works without
+// it — the app may also `parent.postMessage({__cogseedArtifact:true, ...}, '*')`
 // directly.
 export const BRIDGE_JS = `(function(){
   function post(type, extra){
-    try { parent.postMessage(Object.assign({ __orkasArtifact: true, type: type }, extra || {}), '*'); }
+    try { parent.postMessage(Object.assign({ __cogseedArtifact: true, type: type }, extra || {}), '*'); }
     catch (e) {}
   }
   function reportHeight(){
@@ -234,7 +236,7 @@ export const BRIDGE_JS = `(function(){
       setInterval(reportHeight, 1000);
     }
   } catch (e) {}
-  window.orkasArtifact = api;
+  window.cogseedArtifact = api;
 })();
 `;
 
@@ -244,8 +246,8 @@ export const BRIDGE_JS = `(function(){
  * Write a new artifact bundle for (uid, cid, agentId). Validates the file set
  * (must include exactly one top-level `index.html`; per-file + total + count
  * caps; extension allowlist; UTF-8 for utf8-encoded text files; relpath
- * safety; no `__orkas/` or `__orkas-meta.json` clobber), writes atomically
- * (temp dir → rename), and stamps `__orkas-meta.json`.
+ * safety; no `__orkas/` or `__cogseed-meta.json` clobber), writes atomically
+ * (temp dir → rename), and stamps `__cogseed-meta.json`.
  */
 export function createArtifact(
   userId: string,
@@ -280,7 +282,7 @@ export function createArtifact(
     let rel: string;
     try { rel = safeRelPath(f.path); }
     catch (err) { return { ok: false, error: `file path ${JSON.stringify((raw as { path?: unknown }).path)}: ${(err as Error).message}` }; }
-    if (rel === META_FILENAME || rel.startsWith(RESERVED_PREFIX)) {
+    if (rel === META_FILENAME || RESERVED_PREFIXES.some((prefix) => rel.startsWith(prefix))) {
       return { ok: false, error: `file path "${rel}" is reserved` };
     }
     const lc = rel.toLowerCase();
@@ -339,7 +341,7 @@ export function createArtifact(
   let finalDir = '';
   for (let attempt = 0; attempt < 5; attempt++) {
     const candidate = crypto.randomBytes(9).toString('base64url'); // 12 url-safe chars
-    const dir = artifactDirForConversation(userId, safeConvId, candidate);
+    const dir = artifactDirForConversation(userId, safeConvId, candidate, null, cachedConversationSpace(userId, safeConvId));
     if (!fs.existsSync(dir)) { artifactId = candidate; finalDir = dir; break; }
   }
   if (!artifactId) return { ok: false, error: 'could not allocate an artifact id' };
@@ -410,7 +412,7 @@ export function resolveArtifactDir(
   let safeId: string;
   try { safeConvId = safeCid(cid); safeId = safeArtifactId(artifactId); }
   catch (err) { return { ok: false, code: 'bad_input', error: (err as Error).message }; }
-  const dir = artifactDirForConversation(userId, safeConvId, safeId);
+  const dir = artifactDirForConversation(userId, safeConvId, safeId, null, cachedConversationSpace(userId, safeConvId));
   let st: fs.Stats;
   try {
     const lst = fs.lstatSync(dir);
@@ -419,7 +421,7 @@ export function resolveArtifactDir(
   }
   catch { return { ok: false, code: 'not_found', error: 'artifact not found' }; }
   if (!st.isDirectory()) return { ok: false, code: 'not_found', error: 'artifact not found' };
-  if (!isPathAllowed(dir, [chatArtifactCidDirForConversation(userId, safeConvId)])) {
+  if (!isPathAllowed(dir, [chatArtifactCidDirForConversation(userId, safeConvId, null, cachedConversationSpace(userId, safeConvId))])) {
     return { ok: false, code: 'not_found', error: 'artifact not found' };
   }
   return { ok: true, dirPath: dir };
@@ -433,7 +435,7 @@ export function readArtifactMeta(userId: string, cid: string, artifactId: string
   try { safeConvId = safeCid(cid); safeId = safeArtifactId(artifactId); }
   catch { return undefined; }
   try {
-    const raw = fs.readFileSync(path.join(artifactDirForConversation(userId, safeConvId, safeId), META_FILENAME), 'utf8');
+    const raw = fs.readFileSync(path.join(artifactDirForConversation(userId, safeConvId, safeId, null, cachedConversationSpace(userId, safeConvId)), META_FILENAME), 'utf8');
     const obj = JSON.parse(raw) as Partial<ArtifactMeta>;
     if (obj && typeof obj === 'object') {
       return {
@@ -449,9 +451,9 @@ export function readArtifactMeta(userId: string, cid: string, artifactId: string
 /**
  * Resolve (uid, cid, artifactId, relPath) → an on-disk file to stream, with
  * every guard rail the `chat-app://` protocol handler needs. Empty `relPath`
- * defaults to `index.html`. The reserved virtual path `__orkas/bridge.js` is
+ * defaults to `index.html`. The reserved virtual path `__cogseed/bridge.js` is
  * NOT a disk file — the handler must check for it before calling this and
- * serve `BRIDGE_JS` instead; this function rejects any `__orkas/...` request.
+ * serve `BRIDGE_JS` instead; this function rejects any reserved request.
  *
  * Error codes map to HTTP: 'bad_input'→400, 'forbidden'→403, 'not_found'→404.
  */
@@ -474,8 +476,8 @@ export function resolveArtifactFilePath(
     try { rel = safeRelPath(trimmed); }
     catch (err) { return { ok: false, code: 'bad_input', error: (err as Error).message }; }
   }
-  if (rel.startsWith(RESERVED_PREFIX)) {
-    // Only `__orkas/bridge.js` exists, and the handler serves it before
+  if (RESERVED_PREFIXES.some((prefix) => rel.startsWith(prefix))) {
+    // Only `__cogseed/bridge.js` exists, and the handler serves it before
     // reaching here; anything else under `__orkas/` is nothing.
     return { ok: false, code: 'not_found', error: 'not found' };
   }
@@ -484,7 +486,7 @@ export function resolveArtifactFilePath(
     return { ok: false, code: 'forbidden', error: `extension not served: ${ext || '(none)'}` };
   }
 
-  const root = path.resolve(artifactDirForConversation(userId, safeConvId, safeId));
+  const root = path.resolve(artifactDirForConversation(userId, safeConvId, safeId, null, cachedConversationSpace(userId, safeConvId)));
   const abs = path.resolve(root, rel);
   const relCheck = path.relative(root, abs);
   if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
@@ -515,23 +517,42 @@ export async function purgeByCid(userId: string, cid: string): Promise<number> {
   let safeConvId: string;
   try { safeConvId = safeCid(cid); }
   catch { return 0; }
-  const dir = chatArtifactCidDirForConversation(userId, safeConvId);
+  await warmConversationSpace(userId, safeConvId);
+  // 双目录清理：空间目录（迁移后落点）+ 全局目录（迁移前/未迁移兜底）
+  const dirs = new Set<string>([
+    chatArtifactCidDirForConversation(userId, safeConvId, null, cachedConversationSpace(userId, safeConvId) || null),
+    chatArtifactCidDirForConversation(userId, safeConvId), // 全局根
+  ]);
   let count = 0;
+  const deletedArtifactIds = new Set<string>();
   const deleted: Array<{ artifactId: string; rel: string }> = [];
-  try {
-    if (fs.existsSync(dir)) {
-      try {
-        const artifactIds = fs.readdirSync(dir).filter((n) => !n.startsWith('.'));
-        count = artifactIds.length;
-        for (const artifactId of artifactIds) {
-          const artifactRoot = path.join(dir, artifactId);
-          for (const rel of listArtifactFilesRel(artifactRoot)) deleted.push({ artifactId, rel });
+  for (const dir of dirs) {
+    try {
+      if (fs.existsSync(dir)) {
+        const dirDeletedArtifactIds = new Set<string>();
+        const dirDeleted: Array<{ artifactId: string; rel: string }> = [];
+        let dirCount = 0;
+        try {
+          const artifactIds = fs.readdirSync(dir).filter((n) => !n.startsWith('.'));
+          dirCount = artifactIds.length;
+          for (const artifactId of artifactIds) {
+            if (/^[A-Za-z0-9_-]{1,64}$/.test(artifactId)) dirDeletedArtifactIds.add(artifactId);
+            const artifactRoot = path.join(dir, artifactId);
+            for (const rel of listArtifactFilesRel(artifactRoot)) dirDeleted.push({ artifactId, rel });
+          }
         }
+        catch { /* ignore */ }
+        fs.rmSync(dir, { recursive: true, force: true });
+        count += dirCount;
+        for (const artifactId of dirDeletedArtifactIds) deletedArtifactIds.add(artifactId);
+        deleted.push(...dirDeleted);
       }
-      catch { /* ignore */ }
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  } catch (err) { log.warn(`purgeByCid(${cid}): ${(err as Error).message}`); }
+    } catch (err) { log.warn(`purgeByCid(${cid}): ${(err as Error).message}`); }
+  }
+  if (deletedArtifactIds.size) {
+    const { recordRemovedArtifacts } = await import('./recall/source-removal');
+    await recordRemovedArtifacts(userId, safeConvId, [...deletedArtifactIds]);
+  }
   for (const item of deleted) notifyArtifactDeleted(userId, safeConvId, item.artifactId, item.rel);
   return count;
 }
