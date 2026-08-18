@@ -34,7 +34,7 @@ export interface ExtractionState {
   startedAt: string;
   finishedAt?: string;
   reason?: string;
-  cognitions?: { personal: number; rule: number; template: number };
+  cognitions?: { personal: number; rule: number; template: number; skill_method: number };
   degraded?: boolean;
 }
 
@@ -44,6 +44,10 @@ export interface ExtractionEvent {
   /** Present on `extraction_done`: the full welcome data for the conversation
    *  panel (restatement / carry / plan / boundary). */
   welcome?: WelcomeMessageData;
+  /** Present on `extraction_done`: how many cognition candidates were routed
+   *  to the Recall candidate pool (per type). Lets the renderer tell the user
+   *  "提炼完成，N 条候选可到认知沉淀确认". */
+  cognitions?: { personal: number; rule: number; template: number; skill_method: number };
   reason?: string;
 }
 
@@ -248,7 +252,7 @@ async function commitExtraction(input: BackgroundExtractionInput, extraction: Ex
 
   // ③ Route cognitions to Recall (the asset side of the extraction).
   // Dynamic import to avoid a cycle (asset-router imports this module).
-  let cognitions = { personal: 0, rule: 0, template: 0 };
+  let cognitions = { personal: 0, rule: 0, template: 0, skill_method: 0 };
   try {
     const { routeCognitions } = await import('./asset-router');
     cognitions = await routeCognitions(
@@ -256,7 +260,7 @@ async function commitExtraction(input: BackgroundExtractionInput, extraction: Ex
       input.source,
       input.sourceId,
       cid,
-      { personal: extraction.personal, rules: extraction.rules, templates: extraction.templates },
+      extraction.candidates,
     );
   } catch (routeErr) {
     log.warn('background extraction: cognition routing failed', {
@@ -291,6 +295,6 @@ async function commitExtraction(input: BackgroundExtractionInput, extraction: Ex
     },
   });
 
-  log.info(`background extraction done cid=${cid} cog=${cognitions.personal}/${cognitions.rule}/${cognitions.template}`);
-  emit({ type: 'extraction_done', cid, welcome });
+  log.info(`background extraction done cid=${cid} cog=${cognitions.personal}/${cognitions.rule}/${cognitions.template}/${cognitions.skill_method}`);
+  emit({ type: 'extraction_done', cid, welcome, cognitions });
 }

@@ -75,8 +75,9 @@ describe('CogSeed brand assets', () => {
   it('ships transparent page and light-background app logos with the approved visual signature', async () => {
     const icon = await Jimp.read(asset('icon.png'));
     const logo = await Jimp.read(asset('logo.png'));
-    const darkGreen = [20, 100, 65] as const;
-    const orange = [213, 137, 38] as const;
+    // 当前批准的品牌图色板（cogseed-icon.png 生成）：绿色环/叶、橙色角色/种子。
+    const darkGreen = [32, 160, 112] as const;
+    const orange = [192, 112, 32] as const;
 
     expect(readPngHeader(asset('logo.png'))).toEqual({ bitDepth: 8, colorType: 6 });
     expect(readPngHeader(asset('icon.png'))).toEqual({ bitDepth: 8, colorType: 6 });

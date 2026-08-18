@@ -26,12 +26,14 @@
  */
 
 import { createHash } from 'node:crypto';
+import * as path from 'node:path';
 
 import { createConversation, updateConversation } from '../chats';
 import { COMMANDER_ID, USER_ID } from '../group_chat/state';
 import type { GroupMessage } from '../group_chat/visibility';
 import { conversationMessageFile } from '../../util/project-layout';
 import { appendJsonlAtomic, genId12, nowIso, safeId } from '../../storage';
+import { canonicalizePath, isSystemTmpDir } from '../../util/path-sandbox';
 import { createLogger } from '../../logger';
 import type { ExtractionResult } from './extractor';
 
@@ -92,6 +94,47 @@ function sourceDisplayName(source: MaterializeInput['source']): string {
   if (source === 'workbuddy') return 'WorkBuddy';
   if (source === 'opencode') return 'OpenCode';
   return source;
+}
+
+/**
+ * 绑定导入会话的原始 Agent 工作区目录（coding_project_dir）。
+ * 安全边界：绝对路径 + 目录存在 + realpath 规范化（防符号链接越权）。
+ * 排除系统/临时目录（Claude 在无项目目录时 cwd 可能落在 $TMPDIR，绑进去
+ * 会让工作区变成一堆系统临时文件）；此类目录不绑定，走默认工作区，由
+ * UI 引导用户手动重选真实项目目录。
+ * 幂等：coding_project_dir 已设置（之前绑定过或用户手动选过）→ 不覆盖。
+ * explicit:true —— 导入绑定视为确定选择，不会被空间化/存量修复逻辑自动
+ * 重指（那是针对旧版错误固化的目录，而导入绑定是用户项目的真实目录）。
+ */
+async function bindImportedProjectDir(
+  userId: string,
+  conversationId: string,
+  projectPath?: string,
+): Promise<void> {
+  if (!projectPath) return;
+  try {
+    const { setCodingProjectDir } = await import('../group_chat/state');
+    const candidate = String(projectPath).trim();
+    const abs = path.isAbsolute(candidate) ? candidate : path.resolve(candidate);
+    let real = '';
+    try {
+      const st = (await import('node:fs/promises')).stat(abs);
+      if ((await st).isDirectory()) real = canonicalizePath(abs);
+    } catch {
+      real = '';
+    }
+    if (real && !isSystemTmpDir(real)) {
+      await setCodingProjectDir(userId, conversationId, real, { explicit: true });
+      log.info(`import bound coding project_dir cid=${conversationId} dir=${real}`);
+    } else if (real) {
+      log.info(`import skipped system/tmp project_dir cid=${conversationId} dir=${real}`);
+    }
+  } catch (dirErr) {
+    log.warn('import coding project_dir bind failed', {
+      conversationId,
+      error: (dirErr as Error)?.message || String(dirErr),
+    });
+  }
 }
 
 function buildTitle(input: MaterializeInput): string {
@@ -169,6 +212,9 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
 
   if (alreadySeeded) {
     log.info(`skip re-seed cid=${conv.conversation_id} source=${input.source}:${input.sourceId}`);
+    // 重复导入：不重新播种，但若此前从未绑定过原始工作区（旧版导入会话），
+    // 仍补绑定——用户重新导入旧会话即可自动挂上原始项目目录。
+    await bindImportedProjectDir(input.userId, conv.conversation_id, input.projectPath);
     return {
       conversationId: conv.conversation_id,
       created: false,
@@ -220,6 +266,12 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
 
   // Touch updated_at so the conversation sorts to the top of the sidebar list.
   await updateConversation(input.userId, conv.conversation_id, { updated_at: nowIso() }, conv.project_id ?? null);
+
+  // 绑定原始 Agent 工作区目录：导入会话的 projectPath（原始 cwd）若在本机
+  // 真实存在（目录），固化为会话的 coding_project_dir——此后 Agent 工具与
+  // 文件列表都以此目录为准（真实显示原项目文件，Agent 在原目录里干活）。
+  // 不存在/非目录 → 不绑定，会话走默认 slug 工作区，由 UI 引导重新选择。
+  await bindImportedProjectDir(input.userId, conv.conversation_id, input.projectPath);
 
   log.info(
     `materialized cid=${conv.conversation_id} source=${input.source}:${input.sourceId} degraded=${!!input.extraction.degraded}`,
