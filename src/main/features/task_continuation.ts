@@ -302,3 +302,81 @@ export async function ensureProjectBrief(
     return snapshot;
   }
 }
+
+/** 一条接续快照 + 它挂在哪个会话上。
+ *
+ *  快照本身只记 `conversationId`，但「非资产分流」页要回答的是"这条任务状态
+ *  属于哪次工作"——只给一个 cid 用户认不出来，所以列表口把会话标题和归属
+ *  一起带出来。 */
+export interface TaskContinuationSnapshotRef {
+  conversationId: string;
+  conversationTitle: string;
+  projectId: string | null;
+  spaceId: string | null;
+  snapshot: TaskContinuationSnapshot;
+  /**
+   * 快照是否可用。`false` 表示 goal 还是导入样板噪音、或 nextStep 还是占位符
+   * ——`ensureProjectBrief` 还没把它蒸馏成真正的任务理解。
+   *
+   * 不过滤掉而是打标：一条没蒸馏成功的快照仍然是既成事实，藏掉它会让用户以为
+   * 这次导入压根没生成接续状态。
+   */
+  usable: boolean;
+}
+
+export interface ListContinuationSnapshotsResult {
+  items: TaskContinuationSnapshotRef[];
+  /** 全量条数。`items` 可能被 `limit` 截断，这个数字永远是真值——
+   *  界面要能说清"还有多少条没显示"，而不是把截断后的长度当成总数。 */
+  total: number;
+}
+
+/**
+ * 列出当前用户全部接续快照，按快照生成时间倒序。
+ *
+ * **为什么要扫会话列表**：快照落在每个会话自己的 groupDir 下
+ * （`continuation-snapshot.json`），没有聚合索引。刻意不建索引——快照是非资产
+ * 对象，生命周期跟着会话走，多一份索引就多一处会和会话删除失步的状态。
+ *
+ * 会话列表本身带 TTL 缓存（`chats.listConversations`），快照文件都是几百字节的
+ * JSON，绝大多数会话直接 ENOENT，所以全扫的代价可以接受。`chats` 反向动态
+ * import 了本模块，这里也用动态 import 避免静态循环。
+ */
+export async function listContinuationSnapshots(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<ListContinuationSnapshotsResult> {
+  const { listConversations } = await import('./chats');
+  let conversations: Array<{ conversation_id: string; title?: string; project_id?: string; space_id?: string }>;
+  try {
+    conversations = await listConversations(userId);
+  } catch (err) {
+    log.warn('continuation snapshot listing could not read conversations', {
+      error: (err as Error)?.message || String(err),
+    });
+    return { items: [], total: 0 };
+  }
+  const refs = await Promise.all(conversations.map(async (conversation) => {
+    const snapshot = await readContinuationSnapshot(
+      userId,
+      conversation.conversation_id,
+      conversation.project_id ?? null,
+    );
+    if (!snapshot) return null;
+    return {
+      conversationId: conversation.conversation_id,
+      conversationTitle: String(conversation.title || conversation.conversation_id),
+      projectId: conversation.project_id || null,
+      spaceId: conversation.space_id || null,
+      snapshot,
+      usable: !snapshotHasNoiseGoal(snapshot),
+    } satisfies TaskContinuationSnapshotRef;
+  }));
+  const items = refs
+    .filter((ref): ref is TaskContinuationSnapshotRef => ref !== null)
+    .sort((left, right) => String(right.snapshot.createdAt || '').localeCompare(String(left.snapshot.createdAt || '')));
+  const limit = Number.isInteger(options.limit) && (options.limit as number) > 0
+    ? Math.min(options.limit as number, 200)
+    : undefined;
+  return { items: limit ? items.slice(0, limit) : items, total: items.length };
+}

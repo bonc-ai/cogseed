@@ -1053,6 +1053,33 @@ function _initSkillsCognitionBindings() {
       switchSkillsCognitionPage('skillupdate');
       void loadCognitionSkillUpdate(assetId, skillId);
       return;
+    // 「非资产分流」：展开一条接续快照 / 读取失败后重试。两个入口都落在真实
+    // 通道上（recall.continuation.read / .list），页面上没有点了不动的按钮。
+    const reviewHistoryReload = event.target.closest('[data-cognition-review-history-reload]');
+    if (reviewHistoryReload) {
+      void loadCognitionReviewHistory();
+      return;
+    }
+
+    // 空种子页的「去开始一次任务」：复用侧栏既有的新建任务入口，不另起一条
+    // 建会话路径——那会绕开 new-chat 已有的空间/草稿处理。
+    const seedNewTask = event.target.closest('[data-cognition-seed-new-task]');
+    if (seedNewTask) {
+      document.getElementById('new-chat-btn')?.click();
+      return;
+    }
+
+    const continuationOpen = event.target.closest('[data-cognition-continuation-open]');
+    if (continuationOpen) {
+      void openCognitionContinuation(continuationOpen.dataset.cognitionContinuationOpen);
+      return;
+    }
+    const continuationReload = event.target.closest('[data-cognition-continuation-reload]');
+    if (continuationReload) {
+      void loadCognitionContinuation();
+      return;
+    }
+
     }
 
     // develop 侧的候选溯源能力：从一条候选找回它所属的沉淀任务，必要时翻页

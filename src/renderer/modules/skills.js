@@ -78,6 +78,18 @@ const _skillsCognitionState = {
   loadedAt: 0,
   loading: false,
 };
+  /** 三个读口返回的**真实**总数（items + total 契约）。与 `assets.length` /
+   *  `teachingSignals.length` 分开存：后者是本次取回了几条，前者是一共有几条，
+   *  把截断后的长度当总数正是 G-2/G-3 的病根。 */
+  totals: { assets: null, teachingSignals: null, inboxItems: null },
+  /** 「已处理历史」（cognition.reviewDecisions.list）。按需加载。 */
+  reviewHistory: null,
+  /** 「非资产分流」的接续快照（recall.continuation.list）。同样按需加载：
+   *  它只服务一个入口，扫全部会话找快照文件的代价不该摊到每次刷新上。 */
+  continuation: null,
+  /** 「非资产分流」当前展开的那一条会话 id。展开时用 `recall.continuation.read`
+   *  取一次完整快照回填——列表口和单读口取的是同一份文件，展开不是二次编造。 */
+  selectedContinuationId: '',
 
 function _cognitionText(key, fallback) {
   const value = typeof t === 'function' ? t(key) : key;
@@ -257,16 +269,34 @@ function switchSkillsCognitionPage(page) {
   // 视口上方，用户以为这一页就是从中间开始的。
   const cognitionMain = document.getElementById('skills-cognition-main');
   if (cognitionMain) cognitionMain.scrollTop = 0;
-  if (next === 'inbox') renderSkillsCognitionInbox();
-  if (next === 'sources') renderSkillsCognitionSources();
-  if (next === 'proofs') void loadCognitionProofs();
-  if (next === 'captures') renderSkillsCognitionCaptures();
-  if (next === 'assets') renderSkillsCognitionAssets();
-  if (next === 'governance') renderSkillsCognitionGovernance();
-  if (next === 'candidate') renderSkillsCognitionCandidateDetail();
-  if (next === 'nonasset') renderSkillsCognitionNonAsset();
-  if (next === 'skillupdate') renderSkillsCognitionSkillUpdate();
-  if (next === 'tree') {
+  _cognitionRenderCurrentPage({ enter: true });
+}
+
+/**
+ * 画当前页。`enter` 表示这是一次"进入这一页"，只有这时才触发该页的按需加载
+ * （树重投、接续快照、证明链）——否则首屏预渲染也会顺手打三个请求。
+ */
+function _cognitionRenderCurrentPage(options = {}) {
+  const page = _skillsCognitionState.page;
+  if (page === 'inbox') {
+    renderSkillsCognitionInbox();
+    if (options.enter) void loadCognitionReviewHistory();
+  }
+  if (page === 'sources') renderSkillsCognitionSources();
+  if (page === 'proofs') {
+    if (options.enter) void loadCognitionProofs();
+    else renderSkillsCognitionProofs();
+  }
+  if (page === 'captures') renderSkillsCognitionCaptures();
+  if (page === 'assets') renderSkillsCognitionAssets();
+  if (page === 'governance') renderSkillsCognitionGovernance();
+  if (page === 'candidate') renderSkillsCognitionCandidateDetail();
+  if (page === 'nonasset') {
+    renderSkillsCognitionNonAsset();
+    if (options.enter) void loadCognitionContinuation();
+  }
+  if (page === 'skillupdate') renderSkillsCognitionSkillUpdate();
+  if (page === 'tree') {
     // 每次进树都重投一次：树是资产关系的投影，资产在别的页改过之后不重投就是
     // 一棵停在上次的树，而用户正是带着"我刚确认的那条长出来没有"进来的。
     renderSkillsCognitionTree();
@@ -1642,6 +1672,63 @@ async function loadCognitionSkillUpdate(assetId, skillId) {
       }
     }
     let workspaceRefs = [];
+/**
+ * 「非资产分流」按需加载。
+ *
+ * `total` 与 `items.length` 分开存：limit 截断的是显示条数，不是事实条数。
+ * 页面要能说清"还有多少条没显示"，把截断后的长度当总数正是这一页最不该犯的
+ * 错——它整页的意义就是"任务状态确实被记下来了"。
+ */
+async function loadCognitionContinuation() {
+  _skillsCognitionState.continuation = { loading: true };
+  if (_skillsCognitionState.page === 'nonasset') renderSkillsCognitionNonAsset();
+  try {
+    const result = await window.cogseed.invoke('recall.continuation.list', { limit: 50 });
+    if (!result?.ok) throw new Error(result?.error || 'continuation snapshot read failed');
+    _skillsCognitionState.continuation = {
+      items: Array.isArray(result.items) ? result.items : [],
+      total: Number.isFinite(result.total) ? result.total : (Array.isArray(result.items) ? result.items.length : 0),
+    };
+  } catch (error) {
+    _skillsCognitionState.continuation = { error: (error && error.message) || String(error) };
+  }
+  if (_skillsCognitionState.page === 'nonasset') renderSkillsCognitionNonAsset();
+}
+
+/**
+ * 展开一条接续快照：用 `recall.continuation.read` 取权威版本回填列表项。
+ *
+ * 列表口已经带了完整 snapshot，单独再读一次是为了展开时拿到的是磁盘当前值而
+ * 不是进页那一刻的缓存——快照会被 `ensureProjectBrief` 在后台蒸馏改写。读失败
+ * 时保留列表里那份并照常展开：有一份旧的真数据，好过把这一条变成错误态。
+ */
+async function openCognitionContinuation(conversationId) {
+  const state = _skillsCognitionState.continuation;
+  if (!state || !Array.isArray(state.items)) return;
+  if (_skillsCognitionState.selectedContinuationId === conversationId) {
+    _skillsCognitionState.selectedContinuationId = '';
+    renderSkillsCognitionNonAsset();
+    return;
+  }
+  _skillsCognitionState.selectedContinuationId = conversationId;
+  renderSkillsCognitionNonAsset();
+  const ref = state.items.find((item) => item.conversationId === conversationId);
+  if (!ref) return;
+  try {
+    const result = await window.cogseed.invoke('recall.continuation.read', {
+      conversationId,
+      ...(ref.projectId ? { projectId: ref.projectId } : {}),
+    });
+    if (!result?.ok || !result.snapshot) return;
+    state.items = state.items.map((item) => item.conversationId === conversationId
+      ? { ...item, snapshot: result.snapshot }
+      : item);
+  } catch {
+    // 保留列表里那份快照——见上。
+  }
+  if (_skillsCognitionState.page === 'nonasset') renderSkillsCognitionNonAsset();
+}
+
     if (assetId) {
       try {
         const refs = await window.cogseed.invoke('recall.workspaceRefs.list', { assetId });
@@ -2782,13 +2869,11 @@ function renderSkillsCognitionTree() {
 /**
  * 「非资产分流」：任务状态被带走，但不会被误当成长期能力。
  *
- * 分流链路是产品契约，说明可以直接给；但快照本体（goal / stage / nextStep /
- * refs / 有效期）目前**没有面向渲染层的读通道**——`features/task_continuation.ts`
- * 有完整模型和 `readContinuationSnapshot`，却没有对应 IPC。
+ * 分流链路是产品契约；快照本体（goal / stage / constraints / latestArtifact /
+ * nextStep）来自 `recall.continuation.list`，一条不编。
  *
- * TODO(P5): 增加 `recall.continuation.list/read` 通道后，把下面的空态换成真实
- * 快照卡。在此之前这里显示"通道尚未接入"，不用示例数据冒充——一份看起来像
- * 真的假快照会让用户以为接续已经生效。
+ * `usable=false` 的快照照样列出来并标注：那是导入摘要还没被蒸馏成真正的任务
+ * 理解，属于既成事实。藏掉它会让用户以为这次导入压根没生成接续状态。
  */
 function renderSkillsCognitionNonAsset() {
   const host = document.getElementById('skills-cognition-nonasset-body');
@@ -2816,8 +2901,8 @@ function renderSkillsCognitionNonAsset() {
     <section class="skills-cognition-flow-band cognition-nonasset-route"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.nonasset_route', '分流链路'))}</h2><span>${escapeHtml(_cognitionText('cognition.nonasset_route_hint', '这条链路不经过四类资产，也不写认知树'))}</span></div><div class="cognition-nonasset-steps">${steps}</div></section>
     <div class="cognition-nonasset-layout">
       <article class="skills-cognition-card">
-        <div class="cognition-tree-branch-head"><strong>${escapeHtml(_cognitionText('cognition.nonasset_snapshots', '任务接续快照'))}</strong></div>
-        <div class="skills-cognition-empty"><strong>${escapeHtml(_cognitionText('cognition.nonasset_pending_channel', '快照读取通道尚未接入'))}</strong><span>${escapeHtml(_cognitionText('cognition.nonasset_pending_channel_hint', '接续快照已经在后台生成并被新会话使用；这一页要显示它的目标、阶段与关联引用，还需要一个面向界面的读取通道。'))}</span></div>
+        <div class="cognition-tree-branch-head"><strong>${escapeHtml(_cognitionText('cognition.nonasset_snapshots', '任务接续快照'))}</strong>${state && !state.loading && !state.error ? `<b>${escapeHtml(String(state.total))}</b>` : ''}</div>
+        ${snapshotBody}
       </article>
       <aside class="skills-cognition-card cognition-candidate-side">
         <h3>${escapeHtml(_cognitionText('cognition.nonasset_outcomes', '分流结果'))}</h3>
@@ -3067,6 +3152,54 @@ function _renderRecallAssetChain(assetId) {
         : _cognitionText('cognition.cross_scope_waiting', '这条认知被带到了它作用域之外，需要你确认才会带入。'))}</p></div><button type="button" class="btn btn-sm${crossScopeConfirmed ? '' : ' btn-primary'}" data-recall-cross-scope="${escapeHtml(assetId)}" data-recall-cross-scope-next="${crossScopeConfirmed ? '0' : '1'}">${escapeHtml(crossScopeConfirmed
         ? _cognitionText('cognition.cross_scope_withdraw', '撤回许可')
         : _cognitionText('cognition.cross_scope_confirm', '允许跨作用域使用'))}</button></div>`
+  const state = _skillsCognitionState.continuation;
+  const selectedId = _skillsCognitionState.selectedContinuationId || '';
+  let snapshotBody;
+  if (!state || state.loading) {
+    snapshotBody = `<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`;
+  } else if (state.error) {
+    snapshotBody = `<div class="skills-cognition-warning"><span>${escapeHtml(state.error)}</span><button type="button" class="btn btn-sm" data-cognition-continuation-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`;
+  } else if (!state.items.length) {
+    snapshotBody = `<div class="skills-cognition-empty"><strong>${escapeHtml(_cognitionText('cognition.nonasset_empty', '还没有任务接续快照'))}</strong><span>${escapeHtml(_cognitionText('cognition.nonasset_empty_hint', '导入一次历史会话后，它的目标、阶段与下一步会在这里出现，并可被新会话接续。'))}</span></div>`;
+  } else {
+    // 截断说明单独一行：`total` 是事实条数，`items.length` 只是这次显示了几条。
+    const truncated = state.total > state.items.length
+      ? `<p class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.nonasset_truncated', '共 {total} 条，显示最近 {shown} 条。')
+        .replace('{total}', String(state.total)).replace('{shown}', String(state.items.length)))}</p>`
+      : '';
+    snapshotBody = state.items.map((ref) => {
+      const snapshot = ref.snapshot || {};
+      const open = ref.conversationId === selectedId;
+      // 只渲染快照真实握有的字段。没有 updatedAt 就说"生成于"，不拿 createdAt
+      // 冒充更新时间。
+      const facts = [
+        ['cognition.nonasset_field_stage', '当前阶段', snapshot.stage],
+        ['cognition.nonasset_field_next', '下一步', snapshot.nextStep],
+        ['cognition.nonasset_field_artifact', '最新产物', snapshot.latestArtifact],
+      ].filter(([, , value]) => value)
+        .map(([key, fallback, value]) => `<div><dt>${escapeHtml(_cognitionText(key, fallback))}</dt><dd>${escapeHtml(String(value))}</dd></div>`).join('');
+      const constraints = Array.isArray(snapshot.constraints) && snapshot.constraints.length
+        ? `<div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.nonasset_field_constraints', '临时约束'))}</strong><ul>${snapshot.constraints.map((item) => `<li>${escapeHtml(String(item))}</li>`).join('')}</ul></div>`
+        : '';
+      const scope = [
+        ref.projectId ? _cognitionText('cognition.nonasset_scope_project', '项目 {id}').replace('{id}', ref.projectId) : '',
+        ref.spaceId ? _cognitionText('cognition.nonasset_scope_space', '空间 {id}').replace('{id}', ref.spaceId) : '',
+      ].filter(Boolean).join(' · ');
+      return `<article class="skills-cognition-card cognition-nonasset-snapshot${open ? ' is-open' : ''}">
+        <button type="button" class="cognition-tree-branch-head" data-cognition-continuation-open="${escapeHtml(ref.conversationId)}" aria-expanded="${open ? 'true' : 'false'}">
+          <strong>${escapeHtml(ref.conversationTitle || ref.conversationId)}</strong>
+          <span class="skills-cognition-status is-pending">${escapeHtml(_cognitionText('cognition.nonasset_badge', '非资产'))}</span>
+        </button>
+        <p class="skills-cognition-meta">${escapeHtml([
+        _cognitionText('cognition.nonasset_created_at', '生成于 {at}').replace('{at}', _cognitionDate(snapshot.createdAt)),
+        scope,
+        ref.usable ? '' : _cognitionText('cognition.nonasset_not_distilled', '目标尚未蒸馏，接续时会退回原始摘要'),
+      ].filter(Boolean).join(' · '))}</p>
+        ${snapshot.goal ? `<p>${escapeHtml(String(snapshot.goal))}</p>` : ''}
+        ${open ? `<dl class="cognition-governance-facts">${facts}</dl>${constraints}` : ''}
+      </article>`;
+    }).join('') + truncated;
+  }
       : '';
 
     const usageHtml = usage.length

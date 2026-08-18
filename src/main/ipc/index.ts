@@ -2428,6 +2428,28 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
 
   // 「使用与证明」视图：timeline-service 已按资产把使用、迁移证明、效果证明和
+  // 「非资产分流」的读通道。接续快照是**非资产**对象（v0.2 §7.3）：任务状态被
+  // 带到新会话，但不进四类资产、不长认知树叶片。此前只有按会话单读的
+  // `readContinuationSnapshot`，没有面向界面的列表口，那一页只能摆空壳。
+  //
+  // `total` 与 `items.length` 分开返回：limit 截断的是显示条数，不是事实条数。
+  'recall.continuation.list': async ({ limit } = {}, ctx) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
+      throw new Error('invalid continuation limit');
+    }
+    const { listContinuationSnapshots } = await import('../features/task_continuation');
+    return { ok: true, ...(await listContinuationSnapshots(ctx.userId, { ...(limit !== undefined ? { limit } : {}) })) };
+  },
+  'recall.continuation.read': async ({ conversationId, projectId } = {}, ctx) => {
+    if (!safeId(conversationId)) throw new Error('invalid conversation id');
+    if (projectId !== undefined && projectId !== null && !safeId(projectId)) throw new Error('invalid project id');
+    const { readContinuationSnapshot } = await import('../features/task_continuation');
+    return {
+      ok: true,
+      snapshot: await readContinuationSnapshot(ctx.userId, conversationId, projectId ?? null),
+    };
+  },
+
   // 治理事件聚合成一条事实链，但此前没有 IPC 暴露，渲染层拿不到。
   'recall.timeline.forAsset': async ({ assetId } = {}, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid recall asset id');
