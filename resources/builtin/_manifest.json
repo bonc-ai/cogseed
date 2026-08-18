@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "da9a5f287a4a3223dbd017856767b657dbdd9f6335e170c0fe03b49fc02d1d41",
+  "content_tree_sha256": "ce385b9cc69b6000d1a7a68b5e571cfaece4ec373e5b4930850240204a2abc35",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -7448,54 +7448,14 @@
       "sha256": "b1b7fe0154854da2a048e38acd8eebb02b50cb3787bb59d31533c0a89d6a8486"
     },
     {
-      "path": "system/skills/skill-creator/references/nseap/artifact-tree.md",
-      "bytes": 1989,
-      "sha256": "ac8a7858f71fe1d1b5511a9915aff1e5f6b56a2e62de38b5dfdff162cb47f959"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/compliance-tiers.md",
-      "bytes": 2629,
-      "sha256": "9c563663a9cbee7206c5558e83a2bba6ba5fa82a2275e36ec3035a6e89908ec7"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/contracts.md",
-      "bytes": 2178,
-      "sha256": "ccb54aea86ac4e95c7ee01f07f0a40b1c830a27f476543efb696a6245a897411"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/governance-ontology-eval.md",
-      "bytes": 2760,
-      "sha256": "5787b02728cc336f60365485cabc7664573019e1d3601d03053fd82bdb6a1d9b"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/nine-elements.md",
-      "bytes": 2210,
-      "sha256": "b044a27d9c0d0a28e8f2a00f9a82413aabff9679a5a74c8f7827c5f38a019b33"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/non-claims.md",
-      "bytes": 2526,
-      "sha256": "5759621bec96e5980eed7a8956e3f6b96612c39a48d6590619181bb9bd37a622"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/schemas.md",
-      "bytes": 3968,
-      "sha256": "af4f7a554afc024e5dfa97b92e124f4e06bf84aadb7084608c048abb0401b1c0"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/skill-spec.yaml.template",
-      "bytes": 1744,
-      "sha256": "b47240306f6215266a6960ef6385957f1dec6ba8617e5044841e7cb9cd80182e"
-    },
-    {
-      "path": "system/skills/skill-creator/references/nseap/templates/ontology-slice.yaml.template",
-      "bytes": 1063,
-      "sha256": "fd45573b432bf6f11580a67abf119e63e7a3c9265417f97531d30bce54625ebe"
+      "path": "system/skills/skill-creator/references/skill-contract.md",
+      "bytes": 3260,
+      "sha256": "d44d56cc0622db1a0d34db934e62380bd25bf29d644d389ff43517f48e2b5d39"
     },
     {
       "path": "system/skills/skill-creator/SKILL.md",
-      "bytes": 50108,
-      "sha256": "97fa7a4e7425381f584cc62d3377f43d7fb7ce4e5c5e37bfe65726d200cb427a"
+      "bytes": 49492,
+      "sha256": "042a8885100868475c714e2f0b676b9a3c75394324969b75c9c59e536b092e77"
     }
   ],
   "inventory": {
