@@ -98,6 +98,13 @@ function persistForwardIdempotency(set: Set<string>): void {
 }
 
 const forwardedIdempotency = loadForwardIdempotency();
+/**
+ * In-flight (pending) forwards (P1-2). Kept in-memory only: pending is a
+ * per-process reservation to dedupe concurrent duplicate forwards; it must NOT
+ * survive a restart (a failed/unknown in-flight becomes retryable on boot,
+ * which is correct for at-least-once — the target idempots the retry anyway).
+ */
+const forwardedPending = new Set<string>();
 
 
 function generatedToken(): string {
@@ -417,9 +424,17 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
         const outcome = await forwardEnvelopeToPeer(envelope, rawForwardTo, {
           resolveAgent: (id) => bridge.registry.resolve(id),
           sendAndWait: (agentId, env) => outboundHub.sendAndWait(agentId, env),
+          // P1-3: relay legs are terminal — delivery receipt only, no reply
+          // waiter, no lingering outbox replay.
+          sendOnce: (agentId, env) => outboundHub.sendOnce(agentId, env),
           audit: (record) => { bridge.audit.append(record); },
-          isDuplicate: (key) => forwardedIdempotency.has(key),
-          markDuplicate: (key) => {
+          // P1-2: pending/completed/failed 状态机——isDuplicate 只在 key 处于
+          // in-flight 或已成功完成时返回 true；失败后 markFailed 释放 pending，
+          // 同 key 可重试，不会被永久当作重复而丢弃。
+          isDuplicate: (key) => forwardedIdempotency.has(key) || forwardedPending.has(key),
+          markPending: (key) => { forwardedPending.add(key); },
+          markCompleted: (key) => {
+            forwardedPending.delete(key);
             forwardedIdempotency.add(key);
             if (forwardedIdempotency.size > 4096) {
               const first = forwardedIdempotency.values().next().value;
@@ -428,6 +443,7 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
             // 持久化幂等账本（H-05）：重启后不重转发已处理过的信封。
             persistForwardIdempotency(forwardedIdempotency);
           },
+          markFailed: (key) => { forwardedPending.delete(key); },
           bridgeInfo: { endpoint: `http://${listenHost}:${port}`, token },
         });
         if (outcome.ok === false) {
@@ -451,7 +467,10 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
               reply_to: envelope.message_id,
               idempotency_key: 'forward-error:' + envelope.idempotency_key,
             };
-            await outboundHub.sendAndWait(senderId, errReply);
+            // P1-3: 错误信封同样是终端消息——sender 不会对它再回复，用
+            // delivery-only 的 sendOnce（送达即 completed），避免登记回复
+            // waiter 与 outbox 残留重放。
+            await outboundHub.sendOnce(senderId, errReply);
           } catch (relayError) {
             log.warn('P3394 forward error relay failed', { from: senderId, to: rawForwardTo, error: relayError instanceof Error ? relayError.message : String(relayError) });
           }
@@ -522,9 +541,13 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
   // 托管网关恢复：应用重启会清掉所有托管网关（quit/boot 清理），这里按
   // state 文件逐 CLI respawn，否则「外接」agent 依赖手动起的网关进程，
   // 重启后必然"接入失败"。startExternalGateway 幂等（存活实例直接复用）。
+  // P1-1：bridgeInfo 必须显式传入——此处仍在 buildBridge 内部，activeHandle
+  // 要等 maybeStartP3394Bridge 拿到 handle 之后才赋值，getP3394BridgeInfo()
+  // 此刻一定返回 null；若让 respawn 回退到全局 bridgeInfo，重启恢复会全部
+  // 以 p3394_bridge_unavailable 失败。显式带上本桥自己的 endpoint/token。
   try {
     const { respawnManagedGateways } = await import('./external-gateways');
-    const outcome = await respawnManagedGateways();
+    const outcome = await respawnManagedGateways({ bridgeInfo: { endpoint: `http://${listenHost}:${port}`, token } });
     if (outcome.restarted.length > 0 || outcome.failed.length > 0) {
       log.info('P3394 managed gateways recovered at boot', outcome);
     }

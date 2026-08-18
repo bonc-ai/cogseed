@@ -20082,6 +20082,121 @@ body.model-not-configured .main-content { flex-direction: column; }
 .chat-wake-request.is-rejected { opacity: .72; }
 .chat-wake-request[data-busy="1"] { opacity: .72; }
 
+/* 外接智能体「慢响应/不可用」切换卡 —— 复用批准卡宿主与视觉语义。 */
+.chat-slow-switch-host {
+  pointer-events: auto;
+  display: grid;
+  gap: 6px;
+  margin: 0 auto 8px;
+  width: min(80%, 820px);
+}
+.chat-slow-switch {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
+  border-radius: 12px;
+  background: var(--surface);
+  display: grid;
+  gap: 8px;
+  box-shadow: 0 4px 14px rgba(15, 18, 24, 0.05);
+}
+.chat-slow-switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+.chat-slow-switch-main {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.chat-slow-switch-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  color: var(--text-2);
+}
+.chat-slow-switch-title::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+  flex: 0 0 auto;
+}
+.chat-slow-switch-body {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.chat-slow-switch-detail {
+  margin-top: 6px;
+  display: inline-block;
+  max-width: 100%;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 16%, var(--border));
+  border-radius: 6px;
+  word-break: break-word;
+}
+.chat-slow-switch-pick {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.chat-slow-switch-pick-label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.chat-slow-switch-select {
+  min-width: 150px;
+  max-width: 260px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-2);
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 26px;
+}
+.chat-slow-switch-select:hover { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+.chat-slow-switch-select:focus {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+.chat-slow-switch-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-top: 2px;
+}
+.chat-slow-switch-actions .btn {
+  white-space: nowrap;
+  border-radius: 8px;
+}
+.chat-slow-switch[data-busy="1"] { opacity: .72; }
+
 .chat-kstar-review {
   margin-top: 12px;
   padding: 12px;

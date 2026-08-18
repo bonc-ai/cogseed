@@ -162,6 +162,7 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
       || (localCli.agentName !== undefined && typeof localCli.agentName !== 'string')
       || (localCli.model !== undefined && typeof localCli.model !== 'string')
       || (localCli.cliProviderId !== undefined && typeof localCli.cliProviderId !== 'string')
+      || (localCli.viaP3394Gateway !== undefined && typeof localCli.viaP3394Gateway !== 'boolean')
       || (localCli.customArgs !== undefined && (!Array.isArray(localCli.customArgs)
         || localCli.customArgs.some((item) => typeof item !== 'string')))) {
       throw new Error('malformed CogSeed task');
@@ -337,6 +338,10 @@ export async function createMateTask(userId: string, input: CreateMateTaskInput)
           ...(input.localCli.model ? { model: String(input.localCli.model) } : {}),
           ...(input.localCli.customArgs?.length ? { customArgs: input.localCli.customArgs.map(String) } : {}),
           ...(input.localCli.cliProviderId ? { cliProviderId: String(input.localCli.cliProviderId) } : {}),
+          // 关键：外接智能体（runtime.kind='p3394-gateway'）执行必须保留
+          // viaP3394Gateway 标记，否则 consumeRuntime 读回时退化成本机
+          // CLI 直连（runCli），绕过 P3394 网关协作路径。
+          ...(input.localCli.viaP3394Gateway ? { viaP3394Gateway: true } : {}),
         },
       } : {}),
       ...(input.profileId ? { profileId: String(input.profileId) } : {}),

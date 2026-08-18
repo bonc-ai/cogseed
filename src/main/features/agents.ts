@@ -1517,6 +1517,26 @@ export async function listAgents(): Promise<Agent[]> {
   }));
 }
 
+/** Count AI 团队 agents whose P3394 runtime binds a local CLI. Optional
+ *  `excludeAgentId` excludes one agent (the one being deleted). Used to
+ *  decide whether a shared gateway process may be stopped:同 CLI 允许多个
+ * 外接 agent 共享同一个受管网关，删除/停用其中一个时，只有该 CLI 不再
+ *  被任何剩余 agent 引用才允许停进程（否则删一个连累另一个）。 */
+export async function countP3394GatewayAgentsByCli(
+  cli: string | null | undefined,
+  options: { excludeAgentId?: string } = {},
+): Promise<number> {
+  if (!cli) return 0;
+  const all = await listAgents();
+  let count = 0;
+  for (const agent of all) {
+    if (options.excludeAgentId && agent.agent_id === options.excludeAgentId) continue;
+    const rt = agent.runtime as { kind?: string; cli?: string } | undefined;
+    if (rt && rt.kind === 'p3394-gateway' && rt.cli === cli) count += 1;
+  }
+  return count;
+}
+
 /**
  * Look up an agent by id. Marketplace/builtin wins on id collision.
  * Returns normalized agent or null.

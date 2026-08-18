@@ -1281,6 +1281,44 @@ describe('agents › createCustomAgent', () => {
   });
 });
 
+describe('agents › countP3394GatewayAgentsByCli (shared-gateway refcount)', () => {
+  it('counts p3394-gateway agents bound to a CLI', async () => {
+    const a = await loadAgents();
+
+    await a.createCustomAgent({ name: 'Hermes', description: 'desc', category: 'general', runtime: { kind: 'p3394-gateway', cli: 'hermes' } });
+    await a.createCustomAgent({ name: 'Hermes1', description: 'desc', category: 'general', runtime: { kind: 'p3394-gateway', cli: 'hermes' } });
+    await a.createCustomAgent({ name: 'ClaudeCode', description: 'desc', category: 'general', runtime: { kind: 'p3394-gateway', cli: 'claude' } });
+
+    expect(await a.countP3394GatewayAgentsByCli('hermes')).toBe(2);
+    expect(await a.countP3394GatewayAgentsByCli('claude')).toBe(1);
+  });
+
+  it('ignores non-p3394 runtime kinds and unknown CLI keys', async () => {
+    const a = await loadAgents();
+
+    await a.createCustomAgent({ name: 'N', description: 'desc', category: 'general' });
+    // in_process runtime is the default and not persisted as runtime.kind
+    await a.createCustomAgent({ name: 'CliLike', description: 'desc', category: 'general', runtime: { kind: 'cli', cli: 'codex' } });
+
+    expect(await a.countP3394GatewayAgentsByCli('codex')).toBe(0);
+    expect(await a.countP3394GatewayAgentsByCli('hermes')).toBe(0);
+    expect(await a.countP3394GatewayAgentsByCli('')).toBe(0);
+    expect(await a.countP3394GatewayAgentsByCli(null)).toBe(0);
+  });
+
+  it('supports excludeAgentId (deleting one of two shared-CLI agents)', async () => {
+    const a = await loadAgents();
+
+    const hermesA = await a.createCustomAgent({ name: 'Hermes', description: 'desc', category: 'general', runtime: { kind: 'p3394-gateway', cli: 'hermes' } });
+    await a.createCustomAgent({ name: 'Hermes1', description: 'desc', category: 'general', runtime: { kind: 'p3394-gateway', cli: 'hermes' } });
+
+    // 删除 hermes 前：排除被删者后还有 1 个剩余 → 共享网关不能停。
+    expect(await a.countP3394GatewayAgentsByCli('hermes', { excludeAgentId: hermesA?.agent_id })).toBe(1);
+    // 排除她者不存在（删除最后一个）→ 0 剩余才允许停进程。
+    expect(await a.countP3394GatewayAgentsByCli('hermes', { excludeAgentId: 'no-such-agent' })).toBe(2);
+  });
+});
+
 describe('agents › createAgentFromBlocks', () => {
   it('backfills the default category when model-authored creates omit it', async () => {
     const a = await loadAgents();

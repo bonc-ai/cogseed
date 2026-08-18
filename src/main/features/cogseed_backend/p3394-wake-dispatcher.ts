@@ -4,6 +4,7 @@ import { createMateCollaborationDispatcher } from './collaboration-dispatcher';
 import { readMateCoordination } from './coordinator';
 import type { WakeDispatcher } from '../p3394/wake-dispatcher';
 import type { AgentWakeRequest } from '../p3394/types';
+import type { MateLocalCliConfig } from './types';
 import {
   buildCogSeedAgentRuntimeContext,
   resolveCogSeedAgentExecutionContext,
@@ -33,7 +34,7 @@ export const mateWakeDispatcher: WakeDispatcher = {
         request.conversation_id,
       );
       const agentRuntime = executionContext.runtime;
-      const localCli = agentRuntime.kind === 'cli'
+      const localCli: MateLocalCliConfig | undefined = agentRuntime.kind === 'cli'
         ? {
             cli: agentRuntime.cli,
             agentName: executionContext.agentName,
@@ -53,6 +54,21 @@ export const mateWakeDispatcher: WakeDispatcher = {
               viaP3394Gateway: true,
             }
           : undefined;
+      // 网关预热：外接智能体（p3394-gateway）在任务真正 sendAndWait 之前就
+      // 提前拉起托管 gateway 并开始注册（prewarmExternalGateway 幂等，已运行
+      // 则复用）。这会把「spawn + hello 注册等待」前移到用户批准唤醒的时刻，
+      // 避免等 runP3394GatewayTurn 的 recoverGateway 在首次 send 失败后才拉起
+      // ——无模型直调外接智能体时感知更快。fire-and-forget，失败由后续
+      // recoverGateway 兜底，不影响派发。
+      if (localCli?.viaP3394Gateway && localCli.cli) {
+        try {
+          const { prewarmExternalGateway } = await import('../p3394_bridge/external-gateways');
+          prewarmExternalGateway({
+            cli: localCli.cli,
+            ...(executionContext.agentName ? { alias: executionContext.agentName } : {}),
+          });
+        } catch { /* 预热失败不阻塞——发送时 recoverGateway 会兜底 */ }
+      }
       const task = await runtime.startMateTask(userId, {
         requestId: `req-wake-${request.id}`,
         task: taskText(request),

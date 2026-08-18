@@ -39,9 +39,26 @@ export interface P3394ForwardReply {
 export interface P3394PeerForwardDeps {
   resolveAgent(id: string): { ok: true; value: { identity: { agent_id: string }; endpoints?: string[] } } | { ok: false; error: unknown };
   sendAndWait(agentId: string, envelope: P3394Envelope): Promise<P3394ForwardReply>;
+  /** Delivery-only send: relay legs back to the original sender are terminal —
+   *  no reply is expected, so they must NOT register a pending reply waiter or
+   *  linger in the outbox replay set (P1-3). Required: using sendAndWait for a
+   *  terminal relay would leak a waiter and replay forever. */
+  sendOnce(agentId: string, envelope: P3394Envelope): Promise<void>;
   audit(record: { event: string; actor_id: string; status: 'accepted' | 'rejected'; metadata?: Record<string, unknown> }): void;
+  /** Idempotency ledger for (target, idempotency_key) — a pending/completed
+   *  state machine (P1-2). isDuplicate must only be true once the same key is
+   *  genuinely in-flight or already completed; a FAILED attempt must be
+   *  cleared (markFailed) so the sender can retry the same key instead of
+   *  being silently acked as a duplicate forever. */
   isDuplicate(key: string): boolean;
-  markDuplicate(key: string): void;
+  /** Reserve an in-flight (target, idempotency_key) — concurrent duplicate
+   *  forwards are not double-sent; while pending, isDuplicate is true. */
+  markPending(key: string): void;
+  /** Record a completed forward — later attempts with the same key are acked. */
+  markCompleted(key: string): void;
+  /** Clear an in-flight/pending reservation after a failed attempt is returned
+   *  to the sender, so the same key can be retried. */
+  markFailed(key: string): void;
   /** H-03: explicit sign-off for forwarding to a target with non-loopback
    *  endpoints (cross-host). Default (absent) = reject. Loopback targets
    *  are always allowed. */
@@ -49,6 +66,10 @@ export interface P3394PeerForwardDeps {
   /** Local bridge endpoint/token injected into the forwarded envelope so
    *  the target's auto-reply lands back on this bridge. */
   bridgeInfo: { endpoint: string; token: string } | null;
+  /** Upper bound on forward hops (A→B→C…). A forwarded leg may itself carry
+   *  forward_to; without a budget two peers could ping-pong a task forever
+   *  (A→B→A→B…). Defaults to MAX_FORWARD_HOPS. */
+  maxForwardHops?: number;
 }
 
 export type P3394PeerForwardResult =
@@ -57,6 +78,10 @@ export type P3394PeerForwardResult =
 
 /** Node ids that address this bridge itself and must never be forward targets. */
 const SELF_NODE_IDS = new Set(['cogseed', 'mate', 'orkas']);
+
+/** Default forward-hop budget (a forwarded envelope carries extensions.hop_count,
+ *  incremented each leg). Guards against A↔B ping-pong loops. */
+export const MAX_FORWARD_HOPS = 4;
 
 /**
  * Forwards one inbound envelope to another registered peer and relays the
@@ -75,6 +100,16 @@ export async function forwardEnvelopeToPeer(
   if (!targetId || senderId === targetId || SELF_NODE_IDS.has(targetId)) {
     deps.audit({ event: 'peer.forward.reject', actor_id: senderId, status: 'rejected', metadata: { target: targetId, reason: 'invalid_target' } });
     return { ok: false, error: 'p3394_forward_invalid_target' };
+  }
+
+  // Loop budget: a forwarded leg may itself carry forward_to, so A↔B could
+  // ping-pong a task forever. Each hop increments extensions.hop_count; past
+  // the budget the forward is rejected (the sender gets an error reply).
+  const incomingHops = Number((envelope.extensions as Record<string, unknown> | undefined)?.hop_count ?? 0);
+  const maxHops = deps.maxForwardHops ?? MAX_FORWARD_HOPS;
+  if (!Number.isInteger(incomingHops) || incomingHops < 0 || incomingHops >= maxHops) {
+    deps.audit({ event: 'peer.forward.reject', actor_id: senderId, status: 'rejected', metadata: { target: targetId, reason: 'too_many_hops', hops: incomingHops } });
+    return { ok: false, error: 'p3394_forward_too_many_hops' };
   }
 
   if (deps.isDuplicate(idemKey)) {
@@ -106,7 +141,11 @@ export async function forwardEnvelopeToPeer(
     return { ok: false, error: 'p3394_forward_target_remote_not_authorized' };
   }
 
-  deps.markDuplicate(idemKey);
+  // P1-2: reserve the (target, idempotency_key) as in-flight BEFORE the wire
+  // write, but do NOT treat the key as completed here. A delivery failure /
+  // timeout later must release the reservation (markFailed) so the sender can
+  // retry the same key instead of being acked as a duplicate forever.
+  deps.markPending(idemKey);
 
   // Forwarded envelope: same identity/task semantics, recipient rewritten to
   // the target, and the bridge's own reply endpoint injected so the target's
@@ -122,6 +161,7 @@ export async function forwardEnvelopeToPeer(
       ...(envelope.extensions ?? {}),
       ...(deps.bridgeInfo ? { reply_endpoint: deps.bridgeInfo.endpoint, reply_token: deps.bridgeInfo.token } : {}),
       forward_from: senderId,
+      hop_count: incomingHops + 1,
     },
   };
 
@@ -151,7 +191,16 @@ export async function forwardEnvelopeToPeer(
       reply_to: envelope.message_id,
       idempotency_key: `forward-reply:${envelope.idempotency_key}`,
     };
-    await deps.sendAndWait(senderId, relay);
+    // P1-3: the relay is terminal — the original sender already has its result
+    // and will NOT reply to the relay. A sendAndWait here would register a
+    // pending reply waiter for the full replyTimeoutMs AND leave the relay in
+    // the outbox replay set (re-sent on every bridge restart). Use the
+    // delivery-only send: it completes the outbox record on the delivery
+    // receipt, so nothing lingers and nothing replays.
+    await deps.sendOnce(senderId, relay);
+    // P1-2: only now is the forward genuinely completed — from here on a
+    // retry with the same (target, idempotency_key) is acked as a duplicate.
+    deps.markCompleted(idemKey);
     deps.audit({
       event: 'peer.forward.reply',
       actor_id: senderId,
@@ -161,6 +210,9 @@ export async function forwardEnvelopeToPeer(
     log.info('P3394 peer forward completed', { from: senderId, to: targetId, session_id: envelope.session_id });
     return { ok: true };
   } catch (error) {
+    // P1-2: a failed attempt must NOT poison the idempotency key — release the
+    // pending reservation so the sender can retry with the same key.
+    deps.markFailed(idemKey);
     deps.audit({
       event: 'peer.forward.failed',
       actor_id: senderId,

@@ -2870,15 +2870,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // 再清掉团队投影映射（按 agent_id 清，覆盖 nodeId ≠ cli 的自报节点，
     // 避免残留映射让下次 hello 复用已删除的记录 / 重建同名 agent），最后
     // 抑制该节点的自动投影——孤儿网关进程的 hello 不得自动重建同名 agent。
+    // 同 CLI 允许多个外接 agent 共享同一个受管网关：只有该 CLI 不再被任何
+    // 剩余 agent 引用时才允许停进程与投影抑制，否则删一个会连累另一个。
     try {
       const target = await agents.getAgent(agent_id);
       const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
       if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
-        const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
-        await stopExternalGateway(rt.cli);
-        const { removeProjectionsForAgent, suppressNodeProjection } = await import('../features/p3394_bridge/team-projection');
-        removeProjectionsForAgent(agent_id);
-        suppressNodeProjection(rt.cli);
+        const remaining = await agents.countP3394GatewayAgentsByCli(rt.cli, { excludeAgentId: agent_id });
+        if (remaining === 0) {
+          const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
+          await stopExternalGateway(rt.cli);
+          const { removeProjectionsForAgent, suppressNodeProjection } = await import('../features/p3394_bridge/team-projection');
+          removeProjectionsForAgent(agent_id);
+          suppressNodeProjection(rt.cli);
+        } else {
+          // 同 CLI 还有其他外接 agent：只清自己这条投影映射，不碰共享网关，
+          // 也不抑制该节点的自动投影（剩余 agent 仍需靠 hello 复用映射）。
+          const { removeProjectionsForAgent } = await import('../features/p3394_bridge/team-projection');
+          removeProjectionsForAgent(agent_id);
+        }
       }
     } catch (error) {
       log.warn('P3394 gateway stop on agent delete failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
@@ -2903,8 +2913,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         const target = await agents.getAgent(agent_id);
         const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
         if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
-          const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
-          await stopExternalGateway(rt.cli);
+          // 同 CLI 允许多个外接 agent 共享网关：停用其中一个时，只有该
+          // CLI 不再被任何剩余 agent 引用才停进程（否则禁用一个会把仍在
+          // 使用的共享网关一并关掉）。
+          const remaining = await agents.countP3394GatewayAgentsByCli(rt.cli, { excludeAgentId: agent_id });
+          if (remaining === 0) {
+            const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
+            await stopExternalGateway(rt.cli);
+          }
         }
       } catch (error) {
         log.warn('P3394 gateway stop on agent disable failed', { agent_id, error: error instanceof Error ? error.message : String(error) });

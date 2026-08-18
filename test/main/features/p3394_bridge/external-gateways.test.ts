@@ -12,7 +12,7 @@ let previousVariant: string | undefined;
 let variantName: string;
 
 // 测试隔离：p3394StateFile 走 ORKAS_RUNTIME_VARIANT，必须用一次性 variant，
-// 否则这些测试会把真实 cogseed variant 的 p3394-peers.json / 
+// 否则这些测试会把真实 cogseed variant 的 p3394-peers.json /
 // p3394-external-gateways.json 清空重建（污染用户运行状态）。
 beforeEach(() => {
   previousVariant = process.env.ORKAS_RUNTIME_VARIANT;

@@ -211,4 +211,41 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     const hub = hubFor([peer], 120);
     await expect(hub.sendAndWait('hermes', envelope())).rejects.toThrow('p3394_reply_timeout');
   });
+
+  it('P1-3: sendOnce delivers and completes the outbox record — no pending waiter, no replay residue', async () => {
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer], 5000);
+
+    await hub.sendOnce('hermes', envelope({ message_id: 'msg-fire-1', session_id: 'ses-fire-1', task_id: 'tsk-fire-1', idempotency_key: 'idem-fire-1' }));
+
+    // 送达回执即终态：记录 completed → 离开重放集，重启后不会被再次发送。
+    expect(outboxListForReplay()).not.toContainEqual(expect.objectContaining({ message_id: 'msg-fire-1' }));
+    // 没有登记回复 waiter：收到同 session 的「回复」不会命中任何 pending
+    // （清理断言——旧的 sendAndWait 中继会遗留一个完整超时周期的 waiter）。
+    expect(hub.tryResolveReply(replyEnvelope({ message_id: 'msg-fire-reply-1', session_id: 'ses-fire-1', reply_to: 'msg-fire-1' }))).toBe(false);
+  });
+
+  it('P1-3: sendOnce fails closed — a delivery error is surfaced, not swallowed', async () => {
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      // 拒绝连接的端点：dial 立即失败（ECONNREFUSED）。
+      endpoints: ['http://127.0.0.1:1'],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer], 2000);
+
+    await expect(hub.sendOnce('hermes', envelope({ message_id: 'msg-fire-fail-1', session_id: 'ses-fire-fail-1', task_id: 'tsk-fire-fail-1', idempotency_key: 'idem-fire-fail-1' })))
+      .rejects.toThrow();
+    // 失败后记录被标记 failed → 同样离开重放集（不会在重启后无限重发）。
+    expect(outboxListForReplay()).not.toContainEqual(expect.objectContaining({ message_id: 'msg-fire-fail-1' }));
+  });
 });

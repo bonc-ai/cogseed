@@ -2634,6 +2634,13 @@ function _switchAgentTab(tab) {
   panels.forEach((el) => el.classList.toggle('is-active', el.dataset.agentPanel === tab));
   const msgEl = document.getElementById('agent-form-msg');
   if (msgEl) { msgEl.textContent = ''; msgEl.className = 'form-msg'; }
+  // 每次切到「外接」tab 都重新扫描并展示「正在扫描本机 CLI…」。之前
+  // 扫描只发生在打开弹窗时一次，用户切换 tab 看到的总是早已就绪的
+  // 结果 → 感知上像「没有扫描」。移到这里后，进入外接面板必然先短暂
+  // 显示扫描态，再呈现真实探测结果。
+  if (tab === 'external') {
+    _refreshExternalCliSelector();
+  }
   setTimeout(() => {
     const focusId = tab === 'external' ? 'agent-modal-ext-cli-select' : 'agent-name-input';
     const el = document.getElementById(focusId);
@@ -2642,6 +2649,21 @@ function _switchAgentTab(tab) {
   }, 30);
 }
 window._switchAgentTab = _switchAgentTab;
+
+/** 挂载 / 刷新「外接」tab 的 CLI 选择器：先清空 provider 选择，再以
+ *  force 重扫（mountExternalCliSelect 内部会短暂显示「正在扫描本机
+ *  CLI…」再替换为最终列表）。每次进入外接面板都会执行，让用户能亲
+ *  眼看到本机探测正在发生，而不是直接拿到上次的缓存结果。 */
+function _refreshExternalCliSelector() {
+  _externalCliProviderSelect?.setValue('');
+  const providerLoad = _loadExternalCliProviders().catch(() => []);
+  if (typeof mountExternalCliSelect === 'function') {
+    mountExternalCliSelect((cli) => {
+      _applyExternalCliDefaults(cli);
+      providerLoad.then(() => _renderExternalCliProviderSelect(cli, _getExternalCliProviderValue(cli)));
+    }).catch(() => {});
+  }
+}
 
 // Track which CLI defaults are currently reflected in the External-tab
 // inputs. When a user types over a default, the field key drops out of
@@ -2733,17 +2755,6 @@ function openAgentModal(options = {}) {
     tabBar.dataset.wired = '1';
   }
   _switchAgentTab(initialTab);
-
-  // Refresh the External-tab CLI selector. Re-mount each open so newly-
-  // installed CLIs surface without an app restart.
-  _externalCliProviderSelect?.setValue('');
-  const providerLoad = _loadExternalCliProviders().catch(() => []);
-  if (typeof mountExternalCliSelect === 'function') {
-    mountExternalCliSelect((cli) => {
-      _applyExternalCliDefaults(cli);
-      providerLoad.then(() => _renderExternalCliProviderSelect(cli, _getExternalCliProviderValue(cli)));
-    }).catch(() => {});
-  }
 
   modal.classList.add('open');
   const focusId = initialTab === 'external' ? 'agent-ext-name-input' : 'agent-name-input';

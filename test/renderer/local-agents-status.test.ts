@@ -50,6 +50,15 @@ describe('external-agent unavailable status copy', () => {
       expect(table['agent.cli_version_unknown']).toBeTruthy();
       expect(table['agent.cli_version_too_old']).toContain('{version}');
       expect(table['agent_modal.ext_cli_scanning']).toBeTruthy();
+      // 已连接标记（同 CLI 允许多实例，只打标不禁用）
+      expect(table['agent_modal.ext_cli_connected']).toBeTruthy();
     }
+  });
+
+  it('loads the bound-CLI marker with the external panel data', () => {
+    const source = fs.readFileSync(path.join(rendererRoot, 'modules/local-agents.js'), 'utf8');
+    expect(source).toContain('bound:');
+    expect(source).toContain('res.bound');
+    expect(source).toMatch(/agent_modal\.ext_cli_connected/);
   });
 });

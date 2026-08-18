@@ -19,6 +19,7 @@ import { createLogger } from '../../logger';
 import { p3394StateFile, variantRoot } from './runtime-paths';
 import { P3394PeerRegistry } from './registry';
 import { getP3394BridgeInfo } from './app-wiring';
+import { detectOne } from '../local_agents/registry';
 // GUI-launched apps inherit a minimal PATH; the managed gateway's children
 // (e.g. `codebuddy` via a bare preset name) need the same conventional
 // install roots local CLI discovery already knows about.
@@ -351,6 +352,30 @@ async function doStartExternalGateway(input: {
     if (child && child.exitCode === null) child.kill('SIGTERM');
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** 预热一个外接智能体的托管网关（fire-and-forget，幂等）。把「spawn +
+ *  hello 注册等待」前移到 wake 批准的时刻，无模型直调外接智能体时
+ *  sendAndWait 能更快命中已注册节点，避免等 turn 阶段 recoverGateway
+ *  首次 send 失败后才拉起。失败静默（发送时 recoverGateway 兜底）。 */
+export function prewarmExternalGateway(input: {
+  cli: string;
+  alias?: string;
+}): void {
+  const cli = String(input.cli || '').trim();
+  if (!cli) return;
+  // 已 running → 无需预热。
+  if (listExternalGateways().some((g) => g.cli === cli && g.running)) return;
+  void (async () => {
+    try {
+      const detected = await detectOne(cli as never);
+      await startExternalGateway({
+        cli,
+        ...(detected && detected.path ? { binPath: detected.path } : {}),
+        ...(input.alias ? { alias: input.alias } : {}),
+      });
+    } catch { /* 预热失败不阻塞——发送时 recoverGateway 会兜底 */ }
+  })();
 }
 
 /** Stops a managed gateway (SIGTERM, graceful). Keeps the registry entry

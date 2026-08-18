@@ -56,6 +56,13 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     _convLog: { info: () => {}, warn: () => {}, error: () => {} },
     // conversation.js 中该正则定义在抽取段起点之前，这里按源码镜像补上。
     _LEADING_MENTION_RE: /^@([A-Za-z0-9_一-鿿-]+)\s?/u,
+    // 慢切换检测在 vm 里不会真的发射定时器；注入一个记数桩，供
+    // 验证「外部智能体 → arm，收到输出 → clear」的时序分支。
+    setTimeout: (fn: unknown, ms: number) => {
+      (sandbox as any)._slowTimers.push({ fn, ms });
+      return { unref: () => {} };
+    },
+    clearTimeout: () => {},
     window: {
       orkas: {
         invoke: async (channel: string, payload: unknown) => {
@@ -68,6 +75,8 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
       },
     },
   };
+  (sandbox as any)._slowTimers = [];
+  sandbox._agentsCache = null; // 慢切换候选（外部 CLI agent 目录）
   vm.runInNewContext(fallbackSource, sandbox, { filename: 'cli-fallback.js' });
   return { sandbox, invokeLog, toasts, recipientByCid, newChatRecipient, nonSilentModelGuardCalls };
 }
@@ -689,5 +698,97 @@ describe('commander CLI fallback', () => {
     expect(recipientByCid['cid-persist']).toMatchObject({ kind: 'agent', id: 'agent-claude-1' });
     // 偏好从 codex 更新为 claude（只写一次，且只在确实切换成功时）。
     expect(saved).toEqual(['claude']);
+  });
+});
+
+describe('external-agent slow-response switch', () => {
+  function sandboxWithAgents(agents: Array<Record<string, any>>, routes: Record<string, unknown> = {}) {
+    const { sandbox } = buildSandbox(routes);
+    (sandbox as any)._agentsCache = agents;
+    return sandbox as any;
+  }
+
+  it('lists external-agent switch candidates in route order, excluding the stuck one', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-hermes', name: 'Hermes', runtime: { kind: 'p3394-gateway', cli: 'hermes' } },
+      { agent_id: 'a-openclaw', name: 'OpenClaw', runtime: { kind: 'p3394-gateway', cli: 'openclaw' } },
+      { agent_id: 'a-codex', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+      { agent_id: 'a-inproc', name: 'Commander', runtime: { kind: 'in_process' } },
+    ]);
+
+    const candidates = sandbox._externalSwitchCandidates('a-hermes');
+    // in_process 被排除；hermes（卡住者）被排除；codex 在路由序里先于 openclaw。
+    expect(candidates.map((c: any) => c.cli)).toEqual(['codex', 'openclaw']);
+    expect(candidates[0].name).toBe('Codex');
+  });
+
+  it('only recognizes cli / p3394-gateway runtimes as external agents', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-claude', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+      { agent_id: 'a-cli', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+      { agent_id: 'a-inproc', name: 'Commander', runtime: { kind: 'in_process' } },
+    ]);
+    expect(sandbox._isExternalGroupActor('a-claude')).toBe(true);
+    expect(sandbox._isExternalGroupActor('a-cli')).toBe(true);
+    expect(sandbox._isExternalGroupActor('a-inproc')).toBe(false);
+    expect(sandbox._isExternalGroupActor('commander')).toBe(false);
+    expect(sandbox._isExternalGroupActor('')).toBe(false);
+  });
+
+  it('arms a 2min slow timer for an external agent but not for commander', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-hermes', name: 'Hermes', runtime: { kind: 'p3394-gateway', cli: 'hermes' } },
+    ]);
+    sandbox._armSlowSwitch('cid-x', 'a-hermes', 'turn-1', 'Hermes');
+    expect((sandbox as any)._slowTimers).toHaveLength(1);
+    expect((sandbox as any)._slowTimers[0].ms).toBe(120000);
+    (sandbox as any)._slowTimers = [];
+    sandbox._armSlowSwitch('cid-x', 'commander', 'turn-2', 'Commander');
+    expect((sandbox as any)._slowTimers).toHaveLength(0);
+  });
+
+  it('clears the slow timer once a first output arrives', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-hermes', name: 'Hermes', runtime: { kind: 'p3394-gateway', cli: 'hermes' } },
+    ]);
+    sandbox._armSlowSwitch('cid-x', 'a-hermes', 'turn-1', 'Hermes');
+    expect((sandbox as any)._slowTimers).toHaveLength(1);
+    // 首条 delta → clear：map 中该项被清掉，后续再 arm 会重新计时。
+    sandbox._clearSlowSwitch('cid-x', 'a-hermes');
+    (sandbox as any)._slowTimers = [];
+    sandbox._armSlowSwitch('cid-x', 'a-hermes', 'turn-1', 'Hermes');
+    expect((sandbox as any)._slowTimers).toHaveLength(1);
+  });
+
+  it('does not arm the slow switch for non-external actors even with a process event', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-cli', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+    ]);
+    sandbox._armSlowSwitch('cid-x', 'commander', 'turn-1', '');
+    expect((sandbox as any)._slowTimers).toHaveLength(0);
+  });
+
+  it('recognizes gateway error replies so fast failures also offer a switch', () => {
+    const sandbox = sandboxWithAgents([
+      { agent_id: 'a-claude', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+    ]);
+    expect(sandbox._isP3394GatewayErrorText('[p3394_gateway_error] agent exited 1')).toBe(true);
+    expect(sandbox._isP3394GatewayErrorText('[p3394_gateway_error] spawn ENOENT')).toBe(true);
+    expect(sandbox._isP3394GatewayErrorText('正常回复内容')).toBe(false);
+    expect(sandbox._isP3394GatewayErrorText('')).toBe(false);
+    expect(sandbox._isP3394GatewayErrorText(null)).toBe(false);
+  });
+
+  it('rebuilds the resend message with the NEW agent name, never the stuck old @ prefix', () => {
+    const sandbox = sandboxWithAgents([]);
+    const rebuild = sandbox._rebuildSwitchMessage as (task: string, targetName: string) => string;
+    // 历史兜底带旧 @ 前缀 → 切换后必须是新 agent 名。
+    expect(rebuild('@ClaudeCode 帮我整理这个项目', 'Codex')).toBe('@Codex 帮我整理这个项目');
+    expect(rebuild('@ClaudeCode 1', 'Codex')).toBe('@Codex 1');
+    // 无前缀的普通任务 → 直接加新 agent 前缀。
+    expect(rebuild('帮我整理这个项目', 'Hermes')).toBe('@Hermes 帮我整理这个项目');
+    // 空任务 → 空（提示手动输入）。
+    expect(rebuild('', 'Codex')).toBe('');
+    expect(rebuild('@ClaudeCode', 'Codex')).toBe('');
   });
 });

@@ -134,6 +134,14 @@ const EXT_CLI_NONE = '__none__';
 
 let _extCliSelectApi = null;
 
+// 「正在扫描本机 CLI…」的最小可见时长：本机探测很快（实测约 200ms），
+// 若探测一返回就立刻切到最终列表，扫描态会被 modal 打开动画吞掉，用户
+// 会误以为没有真正扫描。探测本身不变，只在拿到结果后把切换延迟到至少
+// 展示这么久，纯展示保底，不影响探测时序与结果。
+const EXT_CLI_SCAN_MIN_VISIBLE_MS = 300;
+
+const _sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Mount the External-tab CLI selector. Default option is "not
  * selected"; detected CLIs follow. `onChange` fires with the chosen
@@ -171,10 +179,13 @@ async function loadExternalPanelData({ force = false } = {}) {
     _externalPanelData = {
       entries: Array.isArray(res?.entries) ? res.entries : [],
       gateways: Array.isArray(res?.gateways) ? res.gateways : [],
+      // cli → 已绑定 agent 名字列表（同 CLI 允许多个外接 agent）。渲染端用
+      // 它给「外接」tab 打「已连接」标记，提示当前实例已有该本地 CLI 的成员。
+      bound: (res && typeof res.bound === 'object' && res.bound !== null) ? res.bound : {},
     };
   } catch (e) {
     _localAgentsLog.warn('p3394.external.list failed', e);
-    _externalPanelData = { entries: [], gateways: [] };
+    _externalPanelData = { entries: [], gateways: [], bound: {} };
   }
   return _externalPanelData;
 }
@@ -202,7 +213,15 @@ async function mountExternalCliSelect(onChange) {
   // The modal may have been opened before the user installed a CLI. Re-probe
   // on every open so the renderer's longer-lived cache cannot preserve a
   // stale "not installed" result for the rest of the app session.
-  const { entries, gateways } = await loadExternalPanelData({ force: true });
+  const scanStartedAt = Date.now();
+  const { entries, gateways, bound } = await loadExternalPanelData({ force: true });
+  // 保证「正在扫描本机 CLI…」至少可见 EXT_CLI_SCAN_MIN_VISIBLE_MS：
+  // 探测跑得过快（本机 ~200ms）时把结果显示平移到保底时长之后，让扫描
+  // 状态真实可见；探测本身无变化，超时时段的余量被静默等待。
+  const scanElapsed = Date.now() - scanStartedAt;
+  if (scanElapsed < EXT_CLI_SCAN_MIN_VISIBLE_MS) {
+    await _sleep(EXT_CLI_SCAN_MIN_VISIBLE_MS - scanElapsed);
+  }
   const entryByType = new Map(entries.map((entry) => [entry.type, entry]));
 
   // 不可用预设的可见引导（不静默消失）：用户能知道"为什么没有这一项、
@@ -237,14 +256,22 @@ async function mountExternalCliSelect(onChange) {
     .map((type) => entryByType.get(type))
     .filter((entry) => entry && entry.available);
   const runningLabel = t('agent_modal.ext_cli_running');
+  const connectedLabel = t('agent_modal.ext_cli_connected');
   const options = [
     { value: EXT_CLI_NONE, label: noneLabel },
     ...available.map(e => {
       const gw = gateways.find(g => g && g.cli === e.type);
       const status = gw && gw.running ? runningLabel : '';
+      // 同 CLI 允许多个外接 agent；已绑定只打标不禁用，让用户看到当前
+      // 实例已有该 CLI 的成员（含名字，方便识别是哪个在占用）。
+      const boundNames = (bound && Array.isArray(bound[e.type])) ? bound[e.type] : [];
+      // label 最终经 textContent 渲染（不解析 HTML），直接以原文拼接名字即可。
+      const boundMark = boundNames.length
+        ? ` ${connectedLabel}(${boundNames.join('/')})`
+        : '';
       return {
         value: e.type,
-        label: `${(getCliDefaults(e.type)?.name) || e.type}${e.version ? ` (${e.version})` : ''}${status ? ' ' + status : ''}`,
+        label: `${(getCliDefaults(e.type)?.name) || e.type}${e.version ? ` (${e.version})` : ''}${status ? ' ' + status : ''}${boundMark}`,
       };
     }),
   ];
