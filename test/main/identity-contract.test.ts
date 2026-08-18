@@ -10,48 +10,45 @@ async function loadIdentity() {
   return import('../../../src/main/identity-contract.cjs');
 }
 
-describe('CogSeed canonical identity contract', () => {
-  it('defines canonical identity and one-version legacy aliases', async () => {
+describe('CogSeed-only identity contract', () => {
+  it('defines only canonical CogSeed identity fields', async () => {
     const identity = await loadIdentity();
     expect(identity.IDENTITY).toMatchObject({
       appName: 'CogSeed',
       appId: 'com.cogseed.desktop',
       protocolScheme: 'cogseed',
-      legacyProtocolSchemes: ['mateagent', 'orkas'],
       dataRootName: '.cogseed',
-      legacyDataRootNames: ['.orkas'],
       devDataRootName: '.cogseed-dev',
-      legacyDevDataRootNames: ['.orkas-dev'],
       runtimeVariant: 'cogseed',
-      legacyRuntimeVariants: ['mate'],
       envPrefix: 'COGSEED',
-      legacyEnvPrefix: 'ORKAS',
     });
+    expect(identity.IDENTITY).not.toHaveProperty('legacyProtocolSchemes');
+    expect(identity.IDENTITY).not.toHaveProperty('legacyDataRootNames');
+    expect(identity.IDENTITY).not.toHaveProperty('legacyDevDataRootNames');
+    expect(identity.IDENTITY).not.toHaveProperty('legacyRuntimeVariants');
+    expect(identity.IDENTITY).not.toHaveProperty('legacyEnvPrefix');
     expect(fs.existsSync(path.join(root, 'src/resources/identity.json'))).toBe(true);
   });
 
-  it.each([
-    ['cogseed', 'cogseed'],
-    ['mate', 'cogseed'],
-    [undefined, 'cogseed'],
-  ])('normalizes runtime variant %s to %s', async (input, expected) => {
+  it('accepts only the CogSeed runtime variant', async () => {
     const identity = await loadIdentity();
-    expect(identity.normalizeRuntimeVariant(input)).toBe(expected);
+    expect(identity.normalizeRuntimeVariant('cogseed')).toBe('cogseed');
+    expect(identity.normalizeRuntimeVariant(undefined)).toBe('cogseed');
+    expect(() => identity.normalizeRuntimeVariant('mate')).toThrow(/cogseed/i);
   });
 
-  it('normalizes legacy environment variables without accepting conflicting values', async () => {
+  it('does not normalize legacy environment variables', async () => {
     const identity = await loadIdentity();
-    expect(identity.normalizeEnv({ ORKAS_WORKSPACE_ROOT: '/legacy/root' })).toMatchObject({
-      COGSEED_WORKSPACE_ROOT: '/legacy/root',
+    expect(identity.normalizeEnv({ COGSEED_WORKSPACE_ROOT: '/root' })).toEqual({
+      COGSEED_WORKSPACE_ROOT: '/root',
     });
-    expect(() => identity.normalizeEnv({
-      COGSEED_WORKSPACE_ROOT: '/new/root',
+    expect(identity.normalizeEnv({ ORKAS_WORKSPACE_ROOT: '/legacy/root' })).toEqual({
       ORKAS_WORKSPACE_ROOT: '/legacy/root',
-    })).toThrow(/conflict/i);
+    });
   });
 
-  it('returns canonical first protocol registration order', async () => {
+  it('registers only the CogSeed connector protocol', async () => {
     const identity = await loadIdentity();
-    expect(identity.protocolSchemes()).toEqual(['cogseed', 'mateagent', 'orkas']);
+    expect(identity.protocolSchemes()).toEqual(['cogseed']);
   });
 });
