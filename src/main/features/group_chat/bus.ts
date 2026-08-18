@@ -1934,6 +1934,13 @@ export interface EnqueueParams {
   /** Override resolved recipients (commander emitting plan announcement
    *  uses this to force `to=[user]`). Otherwise router decides. */
   forceTo?: string[];
+  /** Trusted user route. The IPC/group facade validates composer selections;
+   * retry and edit flows derive their target from persisted history. It stays
+   * off the persisted message schema and bypasses raw-mention Wake approval. */
+  userRoute?: {
+    agentId: string;
+    origin: 'user_selection' | 'cli_fallback' | 'failed_turn_retry' | 'message_edit';
+  };
   /** Trusted external-channel inbound (P3394 bridge): keeps the
    * user-message abort-reset and task-run lifecycle semantics for a message
    * that persists under the peer agent's own actor identity. Only the
@@ -2101,7 +2108,15 @@ async function _enqueueBody(
   let to: string[] = [];
   let unknown: string[] = [];
   let userHasExplicitMention = false;
-  if (params.forceTo && params.forceTo.length) {
+  const structuredUserRoute = fromKind === 'user' && params.userRoute?.agentId
+    ? params.userRoute
+    : null;
+  if (structuredUserRoute) {
+    // The facade has already checked the Agent id and origin. Resolve this
+    // before parsing prose so the visible message remains exactly what the
+    // user wrote and can never be replaced by a default Commander route.
+    to = [structuredUserRoute.agentId];
+  } else if (params.forceTo && params.forceTo.length) {
     to = params.forceTo.slice();
   } else {
     // Build a global name → id map from the enabled agent registry so the
@@ -2236,6 +2251,7 @@ async function _enqueueBody(
     && !allowLegacyGroupChatFormalAgentExecutorForTest()
     && !userHasExplicitMention
     && !(params.forceTo?.length)
+    && !structuredUserRoute
     && to.length === 1
     && to[0] === floorRecipient
     && !RESERVED_IDS.has(floorRecipient)) {
@@ -2265,7 +2281,7 @@ async function _enqueueBody(
         admitted.push(recipientId);
         continue;
       }
-      if (recipientId === backendFollowupAgentId) {
+      if (recipientId === backendFollowupAgentId || (structuredUserRoute && recipientId === structuredUserRoute.agentId)) {
         admitted.push(recipientId);
         continue;
       }

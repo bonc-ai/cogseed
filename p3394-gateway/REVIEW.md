@@ -34,6 +34,8 @@
 | 默认只监听 `127.0.0.1`，不回环外开放 | `GATEWAY_HOST` 默认值 |
 | 入站需要 Bearer 令牌（`P3394_GATEWAY_TOKEN`），无令牌默认拒绝 | `/p3394/envelope` 处理段 |
 | 收到的任务只做一件事：按你的 CLI 模板 spawn 子进程 | `runAgent()` / `sscli` 段 |
+| 本端转调路由 `/p3394/call`：同样要求 Bearer 令牌，仅把请求转给 CogSeed 桥（`extensions.forward_to`），由桥解析并转发到目标节点；本网关不保存也不暴露其他节点端点 | `/p3394/call` 处理段 |
+| 运行中 CLI 收到的提示里带有本端转调用法（仅当配置了 `COGSEED_ENDPOINT`） | `PEER_CALL_HINT` |
 | 不会执行"隐藏命令"，CLI 与参数模板完全由你自定义 | `P3394_AGENT_CLI` / `P3394_AGENT_CLI_ARGS` |
 | 无提权、无系统级操作、无自我更新 | 全文件 |
 | 会话 transcript 与附件工作区落盘在本机会话目录，可审计 | `sessionDir()` / transcript 段 |

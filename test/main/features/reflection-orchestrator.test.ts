@@ -146,6 +146,18 @@ describe('reflection-orchestrator › runOneCycle', () => {
     expect(reflect).not.toHaveBeenCalled();
   });
 
+  it('skips production reflection when no API model is configured', async () => {
+    const mod = await loadModule();
+    const reflect = vi.fn(async () => { /* never called */ });
+    const completed = await mod.runOneCycle(TEST_UID, {
+      reflect,
+      modelAvailable: () => false,
+      isDirty: async () => true,
+    });
+    expect(completed).toBe(0);
+    expect(reflect).not.toHaveBeenCalled();
+  });
+
   it('failed reflection does not stamp lastReflectedAt (retry next cycle)', async () => {
     const mod = await loadModule();
     const reflect = vi.fn(async () => { throw new Error('provider down'); });

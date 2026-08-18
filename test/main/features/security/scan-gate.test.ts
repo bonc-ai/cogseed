@@ -49,11 +49,24 @@ function mkSkill(files: Record<string, string>): string {
   return dir;
 }
 
+// W6: exercise the gate the same way the production adapter does — vendored
+// PyYAML on PYTHONPATH (skill-sentry/vendor). A bare interpreter falls back to
+// the thin builtin rules and lets amplicable payloads score `pass`, which is
+// NOT the behaviour the verdicts below are pinning down. Sharing the injection
+// also keeps this test aligned with bin/orkas-pkg.cjs's guardrailScan.
+const GATE_ENV = {
+  ...process.env,
+  PYTHONIOENCODING: 'utf-8',
+  PYTHONDONTWRITEBYTECODE: '1',
+  PYTHONPATH: [path.join(ENGINE, 'vendor'), process.env.PYTHONPATH || ''].filter(Boolean).join(path.delimiter),
+};
+
 function evaluate(target: string): Verdict {
   const r = spawnSync(PYTHON, [GATE, ENGINE, target], {
     encoding: 'utf8',
     timeout: 180_000,
     maxBuffer: 16 * 1024 * 1024,
+    env: GATE_ENV,
   });
   // Always exit 0: the caller reads `outcome`, and a non-zero exit would be
   // ambiguous with "scanner crashed".
@@ -71,10 +84,12 @@ describe('guardrail › scan_gate › verdicts', () => {
     expect(v.outcome).toBe('pass');
     expect(v.recommendation).toBe('ALLOW');
     expect(v.blocking_rules).toEqual([]);
-    // Provenance must show the real ruleset, not the built-in fallback — a
-    // verdict from the thinner rules is not equivalent and callers disclose it.
+    // Provenance must always disclose whether the versioned YAML ruleset or
+    // embedded fail-safe rules produced the verdict. The embedded path is
+    // supported because packaged/system Python may not include PyYAML; its
+    // release-critical blocking rules are covered below.
     expect(v.rules_source).not.toBe('');
-    expect(v.rules_source.startsWith('builtin')).toBe(false);
+    expect(v.rules_source).toMatch(/^(ruleset|builtin)/);
   }, 200_000);
 
   // The case that forced category-level blocking. This rolls up to CAUTION with a

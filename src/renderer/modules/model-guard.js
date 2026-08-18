@@ -13,6 +13,7 @@
 const _guardLog = createLogger('model-guard');
 
 let _hasConfiguredModel = true;   // optimistic — flipped to false after refresh if empty
+let _hasChatExecutionBackend = true;
 let _guardBannerEl = null;
 let _guardChecked = false;
 let _modelConfigSnapshotSignature = '';
@@ -58,15 +59,18 @@ function _ensureGuardBanner() {
 
 function _applyGuardVisuals() {
   const banner = _ensureGuardBanner();
-  if (banner) banner.style.display = _hasConfiguredModel ? 'none' : '';
-  document.body.classList.toggle('model-not-configured', !_hasConfiguredModel);
+  if (banner) banner.style.display = _hasChatExecutionBackend ? 'none' : '';
+  document.body.classList.toggle('model-not-configured', !_hasChatExecutionBackend);
 }
 
 async function refreshModelGuard() {
   if (_guardRefreshInFlight) return _guardRefreshInFlight;
   _guardRefreshInFlight = (async () => {
   try {
-    const res = await window.cogseed.invoke('auth.hasConfiguredModel');
+    const [res, capability] = await Promise.all([
+      window.cogseed.invoke('auth.hasConfiguredModel'),
+      window.cogseed.invoke('chat.executionCapability').catch(() => null),
+    ]);
     // Only flip the flag when the IPC returned a definitive answer. A
     // failed call (unknown channel on an old main process, transient
     // error) should leave the UI optimistic rather than lock the user
@@ -75,9 +79,17 @@ async function refreshModelGuard() {
     if (res && res.ok) {
       _hasConfiguredModel = !!res.configured;
       _guardChecked = true;
-      await refreshModelConfigSnapshot();
+      void refreshModelConfigSnapshot();
     } else {
       _guardLog.warn('refresh ipc not-ok', { error: res && res.error });
+    }
+    if (capability && typeof capability === 'object') {
+      _hasChatExecutionBackend = _hasConfiguredModel || capability.chatAvailable !== false;
+    } else {
+      // Old main processes do not know the capability channel. Preserve the
+      // historical API-only display in that case rather than hiding a real
+      // configuration warning indefinitely.
+      _hasChatExecutionBackend = _hasConfiguredModel;
     }
   } catch (e) {
     _guardLog.warn('refresh failed', { error: (e && e.message) || String(e) });

@@ -9,6 +9,7 @@ const source = readFileSync(resolve(root, 'src/renderer/modules/model-guard.js')
 function makeSandbox() {
   const listeners: Record<string, Function[]> = {};
   let configured = false;
+  let localAgentAvailable = false;
   let now = 1_000_000;
   const bodyClasses = new Set<string>();
   const calls: string[] = [];
@@ -42,6 +43,12 @@ function makeSandbox() {
       cogseed: {
         invoke: async (channel: string) => {
           if (channel === 'auth.hasConfiguredModel') return { ok: true, configured };
+          if (channel === 'chat.executionCapability') return {
+            ok: true,
+            apiConfigured: configured,
+            localAgentAvailable,
+            chatAvailable: configured || localAgentAvailable,
+          };
           if (channel === 'auth.listEntries') return { ok: true, entries: configured ? [{ provider: 'p', model: 'm' }] : [] };
           throw new Error(`unexpected channel ${channel}`);
         },
@@ -60,6 +67,7 @@ function makeSandbox() {
     calls,
     bodyClasses,
     setConfigured(value: boolean) { configured = value; },
+    setLocalAgentAvailable(value: boolean) { localAgentAvailable = value; },
     advance(ms: number) { now += ms; },
     async tick() { for (let i = 0; i < 6; i += 1) await Promise.resolve(); },
   };
@@ -95,5 +103,15 @@ describe('model-guard stale state recovery', () => {
 
     expect(ctx.sandbox.isModelConfigured()).toBe(true);
     expect(ctx.sandbox.ensureModelConfigured({ silent: true })).toBe(true);
+  });
+
+  it('does not show the global model warning when local Agent chat is available', async () => {
+    const ctx = makeSandbox();
+    ctx.setLocalAgentAvailable(true);
+    vm.runInNewContext(source, ctx.sandbox, { filename: 'model-guard.js' });
+
+    expect(await ctx.sandbox.refreshModelGuard()).toBe(false);
+    expect(ctx.sandbox.isModelConfigured()).toBe(false);
+    expect(ctx.bodyClasses.has('model-not-configured')).toBe(false);
   });
 });

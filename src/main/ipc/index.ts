@@ -103,6 +103,7 @@ import * as avatars from '../features/avatars';
 import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
+import * as chatExecutionCapability from '../features/chat_execution_capability';
 import * as mateAgentBackend from '../features/cogseed_backend';
 import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
@@ -1748,18 +1749,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // 任务级引用合并（@ 产物/资产 → task_references）已下沉到 groupChat.send() 核心——
   // conversations.sendStream（标准 composer 实际走的流式路径）与 groupChat.send 都汇聚
   // 到那里，引用才能随消息发出。这里只做参数透传。
-  'groupChat.send': async ({ cid, content, attachments, use_selections, references }, ctx) => {
+  'groupChat.send': async ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     const text = (content || '').trim();
     if (!text) throw new Error('empty message');
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string') : [];
     const useSelections = Array.isArray(use_selections) ? use_selections : [];
     const refs = Array.isArray(references) ? references : [];
+    if ((recipient_agent_id !== undefined || recipient_origin !== undefined)
+      && (typeof recipient_agent_id !== 'string' || !safeId(recipient_agent_id)
+        || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
+      throw new Error('invalid recipient route');
+    }
     return groupChat.send({
       userId: ctx.userId, cid, text,
       ...(atts.length ? { attachments: atts } : {}),
       ...(useSelections.length ? { use_selections: useSelections } : {}),
       ...(refs.length ? { references: refs } : {}),
+      ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
     });
   },
 
@@ -2873,6 +2880,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
   // ── Agents ──
   'agents.list': async ({ summary } = {}) => {
+    // P3394 local peers and AI team Agents share one directory. Reconcile
+    // online peers before every directory read so a live external node cannot
+    // remain invisible merely because its projection callback was missed.
+    try {
+      const { syncP3394TeamDirectory } = await import('../features/p3394_bridge/app-wiring');
+      await syncP3394TeamDirectory();
+    } catch {
+      // Directory reads remain available if the bridge is not active yet.
+    }
     // `force` is a renderer-cache concern: callers may need a fresh payload,
     // but ordinary navigation must not delete the validated on-disk Agent
     // catalog and reopen every agent.json. Actual definition mutations,
@@ -2914,19 +2930,36 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'agents.delete': async ({ agent_id }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
-    // P3394 外接智能体删除联动：先停掉其受管网关（否则节点会因心跳复活）。
+    // P3394 外接智能体删除联动：先停掉其受管网关（否则节点会因心跳复活），
+    // 再清掉团队投影映射（按 agent_id 清，覆盖 nodeId ≠ cli 的自报节点，
+    // 避免残留映射让下次 hello 复用已删除的记录 / 重建同名 agent），最后
+    // 抑制该节点的自动投影——孤儿网关进程的 hello 不得自动重建同名 agent。
+    // 同 CLI 允许多个外接 agent 共享同一个受管网关：只有该 CLI 不再被任何
+    // 剩余 agent 引用时才允许停进程与投影抑制，否则删一个会连累另一个。
     try {
       const target = await agents.getAgent(agent_id);
       const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
       if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
-        const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
-        await stopExternalGateway(rt.cli);
+        const remaining = await agents.countP3394GatewayAgentsByCli(rt.cli, { excludeAgentId: agent_id });
+        if (remaining === 0) {
+          const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
+          await stopExternalGateway(rt.cli);
+          const { removeProjectionsForAgent, suppressNodeProjection } = await import('../features/p3394_bridge/team-projection');
+          removeProjectionsForAgent(agent_id);
+          suppressNodeProjection(rt.cli);
+        } else {
+          // 同 CLI 还有其他外接 agent：只清自己这条投影映射，不碰共享网关，
+          // 也不抑制该节点的自动投影（剩余 agent 仍需靠 hello 复用映射）。
+          const { removeProjectionsForAgent } = await import('../features/p3394_bridge/team-projection');
+          removeProjectionsForAgent(agent_id);
+        }
       }
     } catch (error) {
       log.warn('P3394 gateway stop on agent delete failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
     }
     await recycleBin.createAppRecycleBatchForAgent(ctx.userId, agent_id);
-    return { deleted: await agents.deleteCustomAgent(agent_id) };
+    const deleted = await agents.deleteCustomAgent(agent_id);
+    return { ok: true, deleted };
   },
 
   // Per-user enable/disable toggle. enabled=true clears the override; both
@@ -2936,6 +2969,27 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'agents.setEnabled': async ({ agent_id, enabled }) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
     if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean');
+    // P3394 外接智能体停用联动：禁用即停托管网关（否则网关心跳继续、
+    // peer 保持 online，与"已停用"的 UI 状态矛盾）；重新启用按需自愈
+    // （下一次 turn 的 runP3394GatewayTurn 会自动拉起）。
+    if (!enabled) {
+      try {
+        const target = await agents.getAgent(agent_id);
+        const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
+        if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
+          // 同 CLI 允许多个外接 agent 共享网关：停用其中一个时，只有该
+          // CLI 不再被任何剩余 agent 引用才停进程（否则禁用一个会把仍在
+          // 使用的共享网关一并关掉）。
+          const remaining = await agents.countP3394GatewayAgentsByCli(rt.cli, { excludeAgentId: agent_id });
+          if (remaining === 0) {
+            const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
+            await stopExternalGateway(rt.cli);
+          }
+        }
+      } catch (error) {
+        log.warn('P3394 gateway stop on agent disable failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     agents.setAgentEnabledForActiveUser(agent_id, enabled);
     return { ok: true, enabled };
   },
@@ -3731,6 +3785,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // renderer uses this before every commander send to decide whether to
   // fall back to the signed-in CLI agent.
   'model.hasConfigured': async () => auth.hasConfiguredModel(),
+  'chat.executionCapability': async () => chatExecutionCapability.getChatExecutionCapability(),
 
   // ── Cognition extraction from sessions (onboarding) ──
   // Runs through a locally-detected CLI Agent (already authenticated on
@@ -4814,7 +4869,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     yield* mateAgentBackend.mateIpcService.streamEvents(ctx.userId, payload, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id, edit_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -4827,6 +4882,12 @@ const streamHandlers: Record<string, StreamHandler> = {
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string') : [];
     const useSelections = Array.isArray(use_selections) ? use_selections : [];
     const refs = Array.isArray(references) ? references : [];
+    if ((recipient_agent_id !== undefined || recipient_origin !== undefined)
+      && (typeof recipient_agent_id !== 'string' || !safeId(recipient_agent_id)
+        || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
+      yield { type: 'error', text: 'invalid recipient route' };
+      return;
+    }
     // Legacy `conversations.stream` is now a thin wrapper around the
     // group_chat bus. Subscribe to the bus directly BEFORE calling
     // `groupChat.send` — `send` internally wakes the recipient worker
@@ -4889,6 +4950,7 @@ const streamHandlers: Record<string, StreamHandler> = {
                 ...(atts.length ? { attachments: atts } : {}),
                 ...(useSelections.length ? { use_selections: useSelections } : {}),
                 ...(refs.length ? { references: refs } : {}),
+                ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
               });
       } catch (err) {
         sendErr = err;

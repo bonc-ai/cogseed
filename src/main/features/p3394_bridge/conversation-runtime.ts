@@ -83,6 +83,9 @@ export interface P3394ConversationRuntimeDeps {
    *  the conversation title and the peer's roster entry. Falls back to the
    *  agent id when unknown. */
   displayNameFor?: (agentId: string) => string | undefined;
+  /** Resolves the stable P3394 peer id to the projected AI-team Agent id.
+   *  Unknown peers fall back to a temporary p3394_<peer> actor. */
+  teamAgentIdForPeer?: (peerAgentId: string) => string | undefined;
   /** Registers the peer as a real conversation actor (agent kind) so its
    *  messages render under the peer's own identity, not the user's. Defaults
    *  to the group-chat roster writer. */
@@ -156,6 +159,7 @@ export class P3394ConversationRuntimeAdapter implements P3394RuntimeAdapter {
   private readonly conversationForSession: (sessionId: string) => string;
   private readonly ensureConversation: (uid: string, cid: string, title: string) => Promise<unknown>;
   private readonly displayNameFor: (agentId: string) => string | undefined;
+  private readonly teamAgentIdForPeer: (peerAgentId: string) => string | undefined;
   private readonly ensurePeerActor: (uid: string, cid: string, actor: { kind: 'agent'; id: string; name: string }) => Promise<unknown>;
   private readonly fetchObject: ((senderAgentId: string, digest: string) => Promise<Buffer | null>) | undefined;
   private readonly now: () => string;
@@ -184,6 +188,7 @@ export class P3394ConversationRuntimeAdapter implements P3394RuntimeAdapter {
         await chats.createConversation(uid, { conversationId: cid, title });
       });
     this.displayNameFor = deps.displayNameFor ?? (() => undefined);
+    this.teamAgentIdForPeer = deps.teamAgentIdForPeer ?? (() => undefined);
     this.ensurePeerActor =
       deps.ensurePeerActor ??
       (async (uid, cid, actor) => {
@@ -292,7 +297,11 @@ export class P3394ConversationRuntimeAdapter implements P3394RuntimeAdapter {
     if (!uid) throw new Error('p3394_user_not_active');
     const cid = this.cidFor(envelope.session_id);
     const agentId = envelope.sender.agent_id || 'external-agent';
-    const actorId = p3394PeerActorId(agentId);
+    // Protocol identity remains stable on the wire (`claude`, `hermes`, …),
+    // while CogSeed's team/chat identity reuses the projected Agent id. This
+    // keeps cards, permissions, avatars, mentions and message authorship on one
+    // identity instead of creating a second `p3394_<peer>` actor.
+    const actorId = this.teamAgentIdForPeer(agentId) || p3394PeerActorId(agentId);
     // Display-name precedence: the sender's self-declared alias (P3394's
     // human-readable participant name), then the registry display name,
     // then the agent id itself. User-built agents name themselves via alias.

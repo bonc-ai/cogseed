@@ -1,12 +1,29 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as http from 'node:http';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { AddressInfo } from 'node:net';
 import { P3394OutboundHub, p3394EnvelopeReplyText } from '../../../../src/main/features/p3394_bridge/outbound-hub';
 import { outboxListForReplay, outboxRecordSubmitted } from '../../../../src/main/features/p3394_bridge/outbound-outbox';
 import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runtime-paths';
 import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
 import type { P3394PeerRecord } from '../../../../src/main/features/p3394_bridge/registry';
+
+// 测试隔离：sendAndWait 会把 outbox 写到 p3394StateFile，必须走一次性
+// variant，避免污染真实 cogseed variant 的 outbox（含转发 token 字段）。
+let previousVariant: string | undefined;
+let variantName: string;
+beforeEach(() => {
+  previousVariant = process.env.ORKAS_RUNTIME_VARIANT;
+  variantName = 'p3394-out-' + Math.random().toString(36).slice(2, 8);
+  process.env.ORKAS_RUNTIME_VARIANT = variantName;
+});
+afterEach(() => {
+  if (previousVariant === undefined) delete process.env.ORKAS_RUNTIME_VARIANT;
+  else process.env.ORKAS_RUNTIME_VARIANT = previousVariant;
+  try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
+});
 
 function envelope(overrides: Record<string, unknown> = {}): P3394Envelope {
   return {
@@ -31,6 +48,21 @@ function replyEnvelope(): P3394Envelope {
     recipients: [{ agent_id: 'cogseed' }],
     payload: { parts: [{ type: 'text', text: 'hello cogseed, reply here' }] },
     idempotency_key: 'idem-out-reply-1',
+  } as never);
+}
+
+function streamEnvelope(text: string, sequence: number): P3394Envelope {
+  return envelope({
+    message_id: 'msg-out-stream-' + sequence,
+    kind: 'event',
+    performative: 'inform',
+    sender: { agent_id: 'hermes' },
+    recipients: [{ agent_id: 'cogseed' }],
+    payload: {
+      parts: [{ type: 'text', text }],
+      metadata: { stream_event: 'delta', stream_seq: sequence },
+    },
+    idempotency_key: 'idem-out-stream-' + sequence,
   } as never);
 }
 
@@ -109,6 +141,58 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     expect(p3394EnvelopeReplyText(replyEnvelope())).toBe('hello cogseed, reply here');
   });
 
+  it('S-04: does not consume a same-session inbound when reply_to points elsewhere (no swallowed new task)', async () => {
+
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer]);
+    const sendPromise = hub.sendAndWait('hermes', envelope());
+    // 同 session、但 reply_to 指向其它消息 → 不被当回复消费（防误吞新 task）。
+    const newTask = envelope({
+      message_id: 'msg-new-task-1',
+      session_id: 'ses-out-1',
+      task_id: 'tsk-new-task-1',
+      reply_to: 'msg-still-elsewhere',
+      performative: 'request',
+      sender: { agent_id: 'hermes' },
+      recipients: [{ agent_id: 'cogseed' }],
+    } as never);
+    expect(await hub.tryResolveReply(newTask)).toBe(false);
+    // waiter 仍在：与 outboundMessageId 匹配的 reply_to 才被消费。
+    const matching = replyEnvelope({ reply_to: 'msg-out-1' } as never);
+    expect(await hub.tryResolveReply(matching)).toBe(true);
+    const result = await sendPromise;
+    expect(result.text).toBe('hello cogseed, reply here');
+  });
+
+  it('forwards stream events without resolving or executing the terminal waiter', async () => {
+
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer]);
+    const chunks: string[] = [];
+    const sendPromise = hub.sendAndWait('hermes', envelope(), (event) => chunks.push(event.text));
+    expect(hub.tryResolveReply(streamEnvelope('hello ', 1))).toBe(true);
+    expect(hub.tryResolveReply(streamEnvelope('hello ', 1))).toBe(true);
+    expect(hub.tryResolveReply(streamEnvelope('world', 2))).toBe(true);
+    expect(hub.tryResolveReply(replyEnvelope())).toBe(true);
+    const result = await sendPromise;
+    expect(chunks).toEqual(['hello ', 'world']);
+    expect(result.text).toBe('hello cogseed, reply here');
+  });
+
   it('replays a submitted envelope after the peer becomes available', async () => {
     const pending = envelope({ message_id: 'msg-recover-1', session_id: 'ses-recover-1', task_id: 'tsk-recover-1', idempotency_key: 'idem-recover-1' });
     outboxRecordSubmitted(pending, 'hermes');
@@ -163,5 +247,42 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     };
     const hub = hubFor([peer], 120);
     await expect(hub.sendAndWait('hermes', envelope())).rejects.toThrow('p3394_reply_timeout');
+  });
+
+  it('P1-3: sendOnce delivers and completes the outbox record — no pending waiter, no replay residue', async () => {
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer], 5000);
+
+    await hub.sendOnce('hermes', envelope({ message_id: 'msg-fire-1', session_id: 'ses-fire-1', task_id: 'tsk-fire-1', idempotency_key: 'idem-fire-1' }));
+
+    // 送达回执即终态：记录 completed → 离开重放集，重启后不会被再次发送。
+    expect(outboxListForReplay()).not.toContainEqual(expect.objectContaining({ message_id: 'msg-fire-1' }));
+    // 没有登记回复 waiter：收到同 session 的「回复」不会命中任何 pending
+    // （清理断言——旧的 sendAndWait 中继会遗留一个完整超时周期的 waiter）。
+    expect(hub.tryResolveReply(replyEnvelope({ message_id: 'msg-fire-reply-1', session_id: 'ses-fire-1', reply_to: 'msg-fire-1' }))).toBe(false);
+  });
+
+  it('P1-3: sendOnce fails closed — a delivery error is surfaced, not swallowed', async () => {
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      // 拒绝连接的端点：dial 立即失败（ECONNREFUSED）。
+      endpoints: ['http://127.0.0.1:1'],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer], 2000);
+
+    await expect(hub.sendOnce('hermes', envelope({ message_id: 'msg-fire-fail-1', session_id: 'ses-fire-fail-1', task_id: 'tsk-fire-fail-1', idempotency_key: 'idem-fire-fail-1' })))
+      .rejects.toThrow();
+    // 失败后记录被标记 failed → 同样离开重放集（不会在重启后无限重发）。
+    expect(outboxListForReplay()).not.toContainEqual(expect.objectContaining({ message_id: 'msg-fire-fail-1' }));
   });
 });

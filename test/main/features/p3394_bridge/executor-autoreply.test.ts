@@ -71,6 +71,33 @@ function events(): Array<Partial<P3394RuntimeEvent> & { kind: P3394RuntimeEvent[
 }
 
 describe('P3394 executor §11 result auto-reply', () => {
+  it('consumes a matched outbound reply without opening a duplicate inbound task', () => {
+    const b = bridge();
+    let delivered = 0;
+    const runtime = fakeRuntime('tsk-matched-reply', events());
+    runtime.deliver = async () => {
+      delivered += 1;
+      return { task_id: 'tsk-matched-reply' };
+    };
+    const executor = new P3394BridgeExecutor({
+      bridge: b,
+      runtime,
+      outboundHub: { tryResolveReply: () => true },
+    });
+
+    const result = executor.execute(envelope({
+      message_id: 'msg-matched-reply',
+      task_id: 'tsk-matched-reply',
+      idempotency_key: 'idem-matched-reply',
+      kind: 'message',
+      performative: 'inform',
+      reply_to: 'msg-outbound-request',
+    }));
+
+    expect(result).toMatchObject({ ok: true, executed: false });
+    expect(delivered).toBe(0);
+  });
+
   it('derives stable reply message ids without colliding by performative', () => {
     expect(deriveAutoReplyMessageId('msg-ar-1', 'inform')).toBe(deriveAutoReplyMessageId('msg-ar-1', 'inform'));
     expect(deriveAutoReplyMessageId('msg-ar-1', 'inform')).not.toBe(deriveAutoReplyMessageId('msg-ar-1', 'error'));
@@ -311,5 +338,56 @@ describe('P3394 executor §11 result auto-reply', () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it('S-03: a reply consumed by the outbound matcher is NOT executed as a new inbound task', async () => {
+    const b = bridge();
+    let deliverCalls = 0;
+    const runtime = fakeRuntime('tsk-reply-consumed', events());
+    const spyRuntime: P3394RuntimeAdapter = {
+      ...runtime,
+      deliver: async () => { deliverCalls += 1; return { task_id: 'tsk-reply-consumed' }; },
+    };
+    const executor = new P3394BridgeExecutor({
+      bridge: b,
+      runtime: spyRuntime,
+      // 模拟"该回复已被 outbound 等待方消费"。
+      outboundHub: { tryResolveReply: () => true },
+    });
+    const reply = envelope({
+      message_id: 'msg-reply-consumed',
+      task_id: 'tsk-reply-consumed',
+      kind: 'message',
+      performative: 'inform',
+      reply_to: 'msg-out-1',
+      sender: { agent_id: 'hermes' },
+      recipients: [{ agent_id: 'cogseed' }],
+      payload: { parts: [{ type: 'text', text: 'reply' }] },
+    } as never);
+    const result = executor.execute(reply);
+    expect(result.ok).toBe(true);
+    expect(result.executed).toBe(false); // 短路：不再二次执行
+    expect(deliverCalls).toBe(0);         // runtime 未被当作新任务调用
+  });
+
+  it('S-03: a first-party task with NO waiter is still executed (not falsely short-circuited)', async () => {
+    const b = bridge();
+    let deliverCalls = 0;
+    const runtime = fakeRuntime('tsk-first-task', events());
+    const spyRuntime: P3394RuntimeAdapter = {
+      ...runtime,
+      deliver: async () => { deliverCalls += 1; return { task_id: 'tsk-first-task' }; },
+    };
+    const executor = new P3394BridgeExecutor({
+      bridge: b,
+      runtime: spyRuntime,
+      // 无 pending waiter：tryResolveReply 返回 false → 正常执行。
+      outboundHub: { tryResolveReply: () => false },
+    });
+    const result = executor.execute(envelope({ task_id: 'tsk-first-task', message_id: 'msg-first-task' }));
+    expect(result.ok).toBe(true);
+    // fire-and-forward 是异步流，先等其完成再断言 deliver 确实被调用。
+    if (result.ok) await executor.awaitForward(result.task_id as string);
+    expect(deliverCalls).toBe(1); // 首发 task 不会被短路吞掉
   });
 });

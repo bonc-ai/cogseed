@@ -18,6 +18,12 @@ const agentsMock = vi.hoisted(() => ({
 const userWsMock = vi.hoisted(() => ({
   getWorkspacePath: vi.fn(() => '/tmp/root-ws'),
 }));
+const gatewayTurnMock = vi.hoisted(() => ({
+  runP3394GatewayTurn: vi.fn(),
+}));
+vi.mock('../../../../src/main/features/p3394_bridge/p3394-gateway-turn', () => ({
+  runP3394GatewayTurn: gatewayTurnMock.runP3394GatewayTurn,
+}));
 vi.mock('../../../../src/main/features/chats', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/features/chats')>()),
   getConversation: chatsMock.getConversation,
@@ -213,5 +219,61 @@ describe('CogSeed Backend local CLI execution adapter', () => {
 
     expect(convWsMock.getConversationWorkspacePath).not.toHaveBeenCalled();
     expect(runCli).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/tmp/custom-repo' }));
+  });
+
+  it('routes a viaP3394Gateway config through the managed gateway and maps the reply', async () => {
+    gatewayTurnMock.runP3394GatewayTurn.mockResolvedValueOnce({ text: 'gateway reply text' });
+    const { createMateLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createMateLocalCliExecutionAdapter({ runCli: vi.fn() } as any);
+
+    const events = await collect(adapter.run({
+      userId: 'cli-adapter-user',
+      conversationId: 'cid-cli-adapter',
+      agentId: 'agent-cli-adapter',
+      agentName: 'ClaudeCode',
+      requestId: 'req-cli-gateway',
+      taskId: 'mate-task-cli-gateway',
+      sessionId: 'mate-session-cli-gateway',
+      runtimeSessionId: 'mruntime-cli-gateway',
+      task: 'Review this via gateway.',
+      context: [],
+      localCli: { cli: 'claude', agentName: 'ClaudeCode', viaP3394Gateway: true },
+    }));
+
+    expect(gatewayTurnMock.runP3394GatewayTurn).toHaveBeenCalledWith(expect.objectContaining({
+      uid: 'cli-adapter-user',
+      cid: 'cid-cli-adapter',
+      cli: 'claude',
+      prompt: expect.stringContaining('Review this via gateway.'),
+    }));
+    expect(events.at(-1)).toMatchObject({ type: 'result', status: 'completed', text: 'gateway reply text' });
+  });
+
+  it('maps a gateway failure to a failed runtime envelope with the failure code', async () => {
+    gatewayTurnMock.runP3394GatewayTurn.mockResolvedValueOnce({
+      text: '', failureCode: 'p3394_reply_timeout', error: 'timed out waiting for reply',
+    });
+    const { createMateLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createMateLocalCliExecutionAdapter({ runCli: vi.fn() } as any);
+
+    const events = await collect(adapter.run({
+      userId: 'cli-adapter-user',
+      conversationId: 'cid-cli-adapter',
+      agentId: 'agent-cli-adapter',
+      agentName: 'ClaudeCode',
+      requestId: 'req-cli-gw-fail',
+      taskId: 'mate-task-cli-gw-fail',
+      sessionId: 'mate-session-cli-gw-fail',
+      runtimeSessionId: 'mruntime-cli-gw-fail',
+      task: 'Fail via gateway.',
+      context: [],
+      localCli: { cli: 'claude', viaP3394Gateway: true },
+    }));
+
+    expect(events.at(-1)).toMatchObject({
+      type: 'error',
+      status: 'failed',
+      metadata: { code: 'p3394_reply_timeout', p3394: true },
+    });
   });
 });
