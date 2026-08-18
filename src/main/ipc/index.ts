@@ -1268,13 +1268,28 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'spaces.update': async (args, ctx) => {
-    const { spaceId, name, icon, template_id, base_agent, base_agents, main_skill_ref } = args || {};
+    // 全字段透传：后端 updateSpace 支持 name/icon/template_id/primary_template_id/
+    // secondary_template_ids/space_type/sustained_outcome/instructions/base_agent/
+    // base_agents/main_skill_ref/gate_status/pinned_at。除 name/icon/template_id
+    // 外均按「调用方是否显式传入」转发（undefined 视为不改），避免静默丢字段——
+    // 旧版只收 name/icon/template_id，导致空间目标（sustained_outcome）等更新被丢弃。
+    const {
+      spaceId, name, icon, template_id, primary_template_id, secondary_template_ids,
+      space_type, sustained_outcome, instructions, base_agent, base_agents,
+      main_skill_ref, gate_status,
+    } = args || {};
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const result = await spaces.updateSpace(ctx.userId, spaceId, {
       name, icon, template_id,
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'primary_template_id') ? { primary_template_id } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'secondary_template_ids') ? { secondary_template_ids } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'space_type') ? { space_type } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'sustained_outcome') ? { sustained_outcome } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'instructions') ? { instructions } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'base_agent') ? { base_agent } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'base_agents') ? { base_agents } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'main_skill_ref') ? { main_skill_ref } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'gate_status') ? { gate_status } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'pinned_at') ? { pinned_at: args.pinned_at } : {}),
     });
     if (!result.ok) throw new Error((result as { error: string }).error);

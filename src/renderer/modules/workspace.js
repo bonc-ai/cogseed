@@ -8,7 +8,7 @@
 //   ✅ 创建空间 = spaces.create + spaces.resources.add（额外勾选写入 extra_*）
 //   ⏳ 空间详情「任务/产物/资产」数据源 = 后端尚无「空间→任务→产物/资产」聚合模型，暂用空态
 //   ⏳ 任务页发送/保存 = _stub() 留空，待后端接入
-// 与现有 spaces.js（项目/资源/本体布局）并存，互不影响。
+// 旧「情境空间」面板 spaces.js 已整体删除；本模块是工作空间唯一实现。
 (function () {
   function escapeHtml(s) {
     return String(s == null ? '' : s)

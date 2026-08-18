@@ -8,7 +8,6 @@ import * as path from 'node:path';
 // 按仓库既有风格（lazy-features.test.ts 的源码契约断言）做静态回归保护。
 
 const wsSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/workspace.js'), 'utf8');
-const spacesSource = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/spaces.js'), 'utf8');
 
 describe('workspace role picks (1 primary + up to 2 secondary)', () => {
   it('puts the create-from-template role into the primary slot of role picks', () => {
@@ -53,10 +52,11 @@ describe('workspace role picks (1 primary + up to 2 secondary)', () => {
     expect(wsSource.slice(mpStart, mpStart + 300)).toContain('[id, ...picks.filter((x) => x !== id)].slice(0, 3)');
   });
 
-  it('drops the dead legacy create modal from spaces.js', () => {
-    // spaces.js 已被 workspace.js 取代；死代码 _openCreateModal/_templateName 已删除
-    expect(spacesSource).not.toContain('function _openCreateModal');
-    expect(spacesSource).not.toContain('function _templateName');
+  it('removes the dead legacy spaces module entirely', () => {
+    // 旧「情境空间」面板 spaces.js 已被 workspace.js 取代并整体删除。
+    // 断言文件不存在 = 契约护栏：死代码一旦复活（恢复旧弹窗/旧渲染入口）
+    // 即违反"单一入口"约定，测试立即失败。
+    expect(fs.existsSync(path.join(__dirname, '../../src/renderer/modules/spaces.js'))).toBe(false);
   });
 
   it('unions role-template bundles into the create-modal task/skill display', () => {

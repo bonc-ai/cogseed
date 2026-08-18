@@ -387,7 +387,6 @@ function setView(view, cid, opts = {}) {
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
   document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'personal-ontology');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
-  document.getElementById('spaces-btn')?.classList.toggle('active', view === 'spaces');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
   // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。
   if (typeof window.setChipSettingsActive === 'function') {
