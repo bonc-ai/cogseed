@@ -70,7 +70,7 @@ const _LEVEL_RANK: Record<string, number> = { EXTREME: 3, MEDIUM: 2, LOW: 1 };
  * twice is how they would drift apart.
  */
 export function isConventionRule(rule: string): boolean {
-  return String(rule || '').startsWith('nseap_');
+  return String(rule || '').startsWith('shape_');
 }
 
 /**
@@ -88,15 +88,15 @@ export function topViolationOf(
   let best: { rule: string; level?: 'EXTREME' | 'MEDIUM' | 'LOW' } | null = null;
   let bestRank = -1;
   for (const v of violations) {
-    // Convention rules lose ties to substantive ones. NSEAP findings ("declare
+    // Convention rules lose ties to substantive ones. Shape findings ("declare
     // use_when", "add an output contract") fire at MEDIUM on most of the library,
     // so on a first-seen tie-break they would occupy `topRule` and hide a real
     // MEDIUM security finding behind an authoring nit — measured with
-    // `nseap_trigger_missing` masking `no_raw_ip_or_suspicious_tld_endpoint`.
+    // `shape_trigger_missing` masking `no_raw_ip_or_suspicious_tld_endpoint`.
     // Ranked below the same level rather than dropped: with nothing else present
     // they are still the top finding, which is accurate.
     // Convention rules lose ties to substantive ones, so a real MEDIUM finding is
-    // never hidden behind an authoring nit. Measured: `nseap_trigger_missing`
+    // never hidden behind an authoring nit. Measured: `shape_trigger_missing`
     // masking `no_raw_ip_or_suspicious_tld_endpoint` at the same level.
     // Scaled rather than penalised past zero so a convention-only report still
     // reports its finding instead of looking empty.

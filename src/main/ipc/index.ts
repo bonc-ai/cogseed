@@ -3206,7 +3206,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       admission: {
         outcome: admission.outcome,
         reason: admission.reason ?? null,
-        escalatedNseap: admission.escalatedNseap,
+        escalatedSkillShape: admission.escalatedSkillShape,
         ...(admission.scan ? { scan: admission.scan } : {}),
       },
     };

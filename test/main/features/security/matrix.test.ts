@@ -461,7 +461,7 @@ describe('security matrix › generation admission (commander container)', () =>
 
   need(pythonOk)('clean → created with a deep receipt', async () => {
     const name = `gen-clean-${(seq += 1)}`;
-    // NSEAP-shaped clean: the generation gate escalates missing trigger /
+    // Contract-shaped clean: the generation gate escalates missing trigger /
     // anti-trigger semantics to a `risk` receipt (authoring defect, not a
     // security verdict). This row pins the SECURITY agreement with the shared
     // gate, so the fixture carries the trigger semantics that make it clean on

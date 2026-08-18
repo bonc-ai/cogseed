@@ -39,9 +39,9 @@ import {
   scanSkillRunnerContract,
 } from './rules/skill-runner';
 import {
-  validateNseapSkillShape,
-  validateNseapRuntimeGuards,
-} from './rules/nseap';
+  validateSkillShape,
+  validateSkillRuntimeGuards,
+} from './rules/skill-shape';
 
 // Re-export the types so callers only need one import path.
 export type { Violation, ValidationReport, Level } from './types';
@@ -118,7 +118,7 @@ export function validateSkillDir(
         options.enforceSkillRunner !== false,
       ));
       violations.push(...validateSkillMeta(meta));
-      violations.push(..._scanNseapShape(skillDir, content, meta));
+      violations.push(..._scanSkillShape(skillDir, content, meta));
     } catch (err) {
       violations.push(parseFailureViolation({
         kind: 'frontmatter',
@@ -287,26 +287,26 @@ function _scanSkillMeta(content: string): Violation[] {
 }
 
 /**
- * NSEAP skill shape scan — MEDIUM-level advisory (does not gate writes) so
- * existing marketplace skills without NSEAP fields keep importing. Combines
+ * Skill shape scan — MEDIUM-level advisory (does not gate writes) so
+ * existing marketplace skills without these fields keep importing. Combines
  * the pure shape checks with the runtime_contracts guard check when a
  * schemas.json carrying `runtime_contracts` is present.
  */
-function _scanNseapShape(
+function _scanSkillShape(
   skillDir: string,
   skillMd: string,
   meta: Record<string, unknown>,
 ): Violation[] {
   const files: string[] = [..._walkFiles(skillDir, '')];
   const out: Violation[] = [];
-  const { violations, level } = validateNseapSkillShape({ skillMd, meta, files });
+  const { violations, level } = validateSkillShape({ skillMd, meta, files });
   out.push(...violations);
 
   const schemaRel = files.find((f) => /schemas\.json$/.test(f.replace(/\\/g, '/')));
   if (schemaRel) {
     try {
       const parsed = JSON.parse(fs.readFileSync(path.join(skillDir, schemaRel), 'utf8'));
-      out.push(...validateNseapRuntimeGuards(parsed, schemaRel));
+      out.push(...validateSkillRuntimeGuards(parsed, schemaRel));
     } catch {
       // unreadable / non-JSON schemas.json → skip guard check silently
     }
@@ -317,7 +317,7 @@ function _scanNseapShape(
   if (level) {
     out.push({
       level: 'LOW',
-      rule: 'nseap_compliance_tier',
+      rule: 'shape_tier',
       field: 'SKILL.md',
       snippet: `Level ${level}`,
       suggested_fix: `Skill shape reaches Level ${level}. Fill the author-owned files to reach Level B; C (release) is governance work.`,

@@ -61,7 +61,7 @@ import {
   ValidationReport as QualityReport,
 } from '../quality';
 import { persistReport as persistQualityReport } from '../quality/report';
-import { ensureNseapSkillSkeleton } from './nseap_skill_skeleton';
+import { ensureSkillSkeleton } from './skill_skeleton';
 import {
   DEFAULT_MARKETPLACE_CATEGORY_CODE,
   normalizeMarketplaceCategoryCode,
@@ -2049,7 +2049,7 @@ async function _installSourceSkillRoots(
       const rootFiles = _dropSourceMetaFiles(_filesForSourceSkillRoot(sourceRoot, files, sourceRoots));
       fs.rmSync(skillMetaFile(skillDir), { force: true });
       _copyImportedSkillFilesPreservingSource(skillDir, rootFiles);
-      // NSEAP skeleton generation is deferred until after the security scan —
+      // Skill skeleton generation is deferred until after the security scan —
       // see the loop below. Doing it here diluted the verdict: the skeleton adds
       // eight `references/*.md` templates, and measured on a fixture with
       // `chmod 777` plus an env-driven POST the outcome moved from `restricted`
@@ -2138,9 +2138,9 @@ async function _installSourceSkillRoots(
   //    verification.
   for (const pending of pendingSkeletons) {
     try {
-      ensureNseapSkillSkeleton(pending.skillDir, pending.name);
+      ensureSkillSkeleton(pending.skillDir, pending.name);
     } catch (err) {
-      log.warn('import-dir nseap skeleton generation failed', {
+      log.warn('import-dir skill skeleton generation failed', {
         skill_id: pending.skillId,
         error_message: (err as Error).message,
       });
@@ -3428,10 +3428,10 @@ async function _applySkillContainerCreate(
   try {
     const admissionMod = await import('./security/custom-skill-admission');
     // The commander path authors through skill-creator, whose contract promises
-    // NSEAP trigger/anti-trigger semantics on every new skill — so shape
+    // trigger/anti-trigger semantics on every new skill — so shape
     // findings escalate to a `risk` receipt here. Foreign-format imports keep
     // the advisory reading (see the module docs).
-    admission = await admissionMod.admitCustomSkill(getActiveUserId(), name, { escalateNseap: true });
+    admission = await admissionMod.admitCustomSkill(getActiveUserId(), name, { escalateSkillShape: true });
   } catch (err) {
     log.warn('commander skill admission failed', { skill: name, error: (err as Error).message });
   }
