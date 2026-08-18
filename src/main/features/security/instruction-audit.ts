@@ -332,7 +332,14 @@ export async function auditInstructionsWithModel(
     result = await Promise.race([
       deps.chat({
         userId,
-        sessionId: `skill-instr-audit-${crypto.randomBytes(4).toString('hex')}`,
+        // `aside-` (not `skill-instr-audit-`): the session-store router sends
+        // aside kinds to `local/sessions/` and the startup sweep ages them out
+        // by mtime (EPHEMERAL_AGE_MS), while `skill-*` ids are "resumable" and
+        // land in `cloud/sessions/` where nothing ever collects them — a
+        // bulk-install audit batch once leaked ~74k files there. Same
+        // isolation property either way: a fresh random tail, no cid, and the
+        // transcript stays out of cloud sync.
+        sessionId: `aside-instr-audit-${crypto.randomBytes(4).toString('hex')}`,
         message,
         // No tools. The analysed text is attacker-authored.
         skillList: [],
