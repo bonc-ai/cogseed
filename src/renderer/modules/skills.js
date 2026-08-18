@@ -2122,9 +2122,14 @@ function _renderProofChainStrip(asset, event, receipt) {
     ['cognition.proof_chain_session', '目标 Session', receipt?.targetSessionId || refs.taskRunId || ''],
     ['cognition.proof_chain_injected', '实际注入', injected],
     ['cognition.proof_chain_result', '结果', _cognitionProofOutcomeLabel(event || {})],
-    ['cognition.proof_chain_rating', '评价', refs.transferProofId || refs.taskRunId
-      ? _cognitionText('cognition.proof_chain_rating_open', '可评价')
-      : ''],
+    // 「可评价」必须和评价控件用同一个闸门。两处各判各的，就会出现链条上写着
+    // 可评价、底下却没有按钮（或有按钮但点了报错）。
+    ['cognition.proof_chain_rating', '评价', (() => {
+      const eligibility = _proofRatingEligibility(event || {}, receipt);
+      if (eligibility.ok) return _cognitionText('cognition.proof_chain_rating_open', '可评价');
+      if (eligibility.reason === 'rated') return _cognitionProofOutcomeLabel(event || {});
+      return '';
+    })()],
   ];
   return `<div class="recall-proof-chain" role="group" aria-label="${escapeHtml(_cognitionText('cognition.proof_chain', '这次复用的链条'))}">${stages.map(([key, fallback, value], index) => `
     <div class="recall-proof-chain-stage${value ? '' : ' is-empty'}">
@@ -2154,20 +2159,12 @@ function _renderProofEventDetail(asset, event, receipt) {
   // 首次评价只从 transfer_completed（以及尚未评价的使用记录）进入。
   // 将来要支持改评价，另做「修改评价」语义，而不是复用这套首次评价控件。
   const alreadyRated = event.kind === 'effectiveness_recorded';
-  const feedbackTarget = alreadyRated
-    ? ''
-    : refs.transferProofId
-      ? `data-recall-proof-feedback-proof="${escapeHtml(refs.transferProofId)}"`
-      : refs.taskRunId ? `data-recall-proof-feedback-task="${escapeHtml(refs.taskRunId)}"` : '';
-  // 没有可归属的证明或任务时不显示评价按钮：评价必须落到一条具体的证明上，
-  // 否则这次点击不知道该写给谁。
-  const rating = feedbackTarget
-    ? `<div class="recall-proof-rating"><strong>${escapeHtml(_cognitionText('cognition.proof_rating_question', '这次复用是否有用？'))}</strong><div class="recall-proof-rating-actions">${[
-      ['positive', 'cognition.proof_carried_in', '带入正确'],
-      ['rework', 'cognition.proof_rework', '需要修正'],
-      ['neutral', 'cognition.proof_no_diff', '未产生明显差异'],
-      ['invalid', 'cognition.proof_degraded', 'Evidence 不足'],
-    ].map(([value, key, fallback]) => `<button type="button" class="btn btn-sm" ${feedbackTarget} data-recall-proof-feedback="${value}">${escapeHtml(_cognitionText(key, fallback))}</button>`).join('')}</div></div>`
+  // 闸门与后端一致（见 _proofRatingEligibility）：只有 transfer_completed +
+  // succeeded + 已绑回执这一格能真的写进去。其余情况**照样渲染这一区**，但
+  // 换成一句说明为什么现在不能评价——不是把控件藏掉。
+  const ratingEligibility = _proofRatingEligibility(event, receipt);
+  const feedbackTarget = ratingEligibility.ok
+    ? `data-recall-proof-feedback-proof="${escapeHtml(ratingEligibility.proofId)}"`
     : '';
   // 已评价的那一行改为**只陈述已形成的结论**：结论词 + 用户当时写下的观察。
   // 这一段替代原来的评价控件，让"这条已经有结论了"本身成为可读信息，而不是
@@ -2316,6 +2313,114 @@ function renderSkillsCognitionProofs() {
       { value: allProofEvents.filter((item) => item.kind === 'effectiveness_recorded').length, key: 'cognition.proofs_effect_count', label: '效果评价' },
     ],
   });
+/**
+ * 这一行到底能不能评价，以及不能的话是卡在哪一步。
+ *
+ * **为什么要有这个函数**：评价按钮原来的显示条件是
+ * `refs.transferProofId || refs.taskRunId`，四种行都会命中；而后端两条通道
+ * （`recall.proofs.effectiveness.feedback` / `feedbackForTask`）都要求存在
+ * **status='succeeded' 且已绑定回执**的迁移证明。于是用户在「已带入本次任务」
+ * 底下点评价，直接吃到 `no successful transfer proof for task run`（实机复现）。
+ * 控件渲染在 4 种行上，实际只有 1 种行的 1 种状态能成功。
+ *
+ * 这里把闸门收到与后端一致的那一格，并且**说清为什么**——不是把按钮藏掉。
+ * 藏掉最省事，但同时藏掉了「这条证明链现在走到哪一步」这个信息：用户会以为
+ * 功能坏了，我们也看不出「几乎没有一行能评价」背后的回执覆盖率问题。
+ *
+ * 判定与后端一一对应：
+ *   kind !== transfer_completed        → 还没走到产生结论的那一步
+ *   status !== succeeded               → 这次带入失败或降级，没有可评价的复用
+ *   缺 usageReceiptId(=proof.receiptId) → 证明没绑回执，后端 findValidTransferReceipt 会拒
+ *   回执已读到但边界不是 real / 已 rejected → 同上，拿降级回执当证据比没证据更危险
+ */
+function _proofRatingEligibility(event, receipt) {
+  const refs = (event && event.refs) || {};
+  const kind = String((event && event.kind) || '');
+  if (kind === 'effectiveness_recorded') return { ok: false, reason: 'rated' };
+  if (kind === 'projection_confirmed' || kind === 'usage_recorded') {
+    return { ok: false, reason: 'no_transfer_yet' };
+  }
+  if (kind === 'transfer_prepared') return { ok: false, reason: 'transfer_pending' };
+  if (kind !== 'transfer_completed') return { ok: false, reason: 'not_a_use' };
+  const status = String((event && event.status) || '');
+  if (status === 'degraded') return { ok: false, reason: 'transfer_degraded' };
+  if (status !== 'succeeded') return { ok: false, reason: 'transfer_rejected' };
+  if (!refs.transferProofId) return { ok: false, reason: 'no_transfer_yet' };
+  // 回执号取自证明记录本身，恒准；回执**正文**受列表窗口限制可能没取到，
+  // 所以只在真取到、且明确不合格时才据此否决，取不到不算否决。
+  if (!refs.usageReceiptId) return { ok: false, reason: 'no_receipt' };
+  if (receipt && (receipt.boundary && receipt.boundary !== 'real')) {
+    return { ok: false, reason: 'receipt_not_real', boundary: String(receipt.boundary) };
+  }
+  if (receipt && receipt.status === 'rejected') return { ok: false, reason: 'receipt_not_real', boundary: 'rejected' };
+  return { ok: true, proofId: String(refs.transferProofId) };
+}
+
+/**
+ * 「更好了」这条结论可以引用哪些**可追溯**的东西。
+ *
+ * PRD 3.6 给 Effectiveness Validated 的成立条件是「存在可比 Baseline/Treatment、
+ * Behavior Diff、Evaluation」——一个赞不算证明。后端据此把无引用的 `better`
+ * 降级成 `insufficient_evidence`（proof-service.ts），所以正向评价必须让用户
+ * 指出**凭什么**。这里给出这一格能提供的引用项。
+ *
+ * 只给系统真的握有 id 的东西，不编造：回执背后的那次执行、以及资产被带进去的
+ * 那个目标会话。回执正文没取到时返回空——那种情况下如实告诉用户这条评价会被
+ * 记成 Evidence 不足，而不是替他凑一条引用。
+ */
+function _proofEvidenceOptions(receipt) {
+  const options = [];
+  if (receipt && receipt.executionId) {
+    options.push({
+      kind: 'execution_evaluation',
+      subtype: 'evaluation',
+      id: String(receipt.executionId),
+      label: _cognitionText('cognition.proof_evidence_execution', '这次执行的结果'),
+    });
+  }
+  if (receipt && receipt.targetSessionId) {
+    options.push({
+      kind: 'conversation',
+      subtype: 'session',
+      id: String(receipt.targetSessionId),
+      label: _cognitionText('cognition.proof_evidence_session', '资产被带入的那个会话'),
+    });
+  }
+  return options;
+}
+
+/** 不能评价时给用户的那句话。每一条都要说清**卡在哪**和**接下来会怎样**，
+ *  否则用户只知道点不了，不知道是等一等还是这次就没戏了。 */
+function _proofRatingBlockedText(eligibility) {
+  const reason = (eligibility && eligibility.reason) || '';
+  if (reason === 'no_transfer_yet') {
+    return _cognitionText('cognition.proof_rating_blocked_no_transfer',
+      '这次复用还没有形成迁移证明，暂时不能评价。任务结束并留下复用回执后，这里会出现评价入口。');
+  }
+  if (reason === 'transfer_pending') {
+    return _cognitionText('cognition.proof_rating_blocked_pending',
+      '迁移证明还没完成。任务结束后才会给出「是否正确带入」的结论，那时才能评价效果。');
+  }
+  if (reason === 'transfer_degraded') {
+    return _cognitionText('cognition.proof_rating_blocked_degraded',
+      '这次带入被判定为 Evidence 不足，不能作为效果评价的依据。');
+  }
+  if (reason === 'transfer_rejected') {
+    return _cognitionText('cognition.proof_rating_blocked_rejected',
+      '这次没能把资产带入目标会话，没有可评价的复用。');
+  }
+  if (reason === 'no_receipt') {
+    return _cognitionText('cognition.proof_rating_blocked_no_receipt',
+      '这次迁移证明没有绑定复用回执，无法核对究竟带入了什么，因此不开放效果评价。');
+  }
+  if (reason === 'receipt_not_real') {
+    return _cognitionText('cognition.proof_rating_blocked_receipt_not_real',
+      '这次的回执不是真实边界（{b}），不能作为效果评价的依据。')
+      .replace('{b}', String((eligibility && eligibility.boundary) || ''));
+  }
+  return '';
+}
+
   if (!allProofEvents.length) {
     host.innerHTML = `${hero}<div class="skills-cognition-empty cognition-task-empty">${escapeHtml(_cognitionText('cognition.proofs_empty', '还没有资产被真正带入过任务。资产被使用后，这里会显示它在哪里用过、结果如何。'))}</div>`;
     return;
@@ -2383,6 +2488,43 @@ function renderSkillsCognitionProofs() {
       <div class="skills-cognition-card-head">
         <div><h2>${escapeHtml(title)}</h2><span class="recall-proof-count">${escapeHtml(_cognitionText('cognition.proofs_asset_events', '{n} 条记录').replace('{n}', String(entries.length)))}</span></div>
         <button type="button" class="btn btn-sm" data-ability-asset-id="${escapeHtml(assetId)}" data-cognition-page-link="assets">${escapeHtml(_cognitionText('cognition.proof_open_asset', '查看资产'))}</button>
+  const blockedText = ratingEligibility.ok ? '' : _proofRatingBlockedText(ratingEligibility);
+  const ratingQuestion = escapeHtml(_cognitionText('cognition.proof_rating_question', '这次复用是否有用？'));
+  // 「更好了」要走取证步骤，其余三档直接落账——只有正向结论会推动成熟度升到
+  // effectiveness_validated，后端也只对它要求可追溯引用。
+  const evidenceDraftOpen = ratingEligibility.ok
+    && _skillsCognitionState.proofRatingDraft
+    && _skillsCognitionState.proofRatingDraft.eventId === event.id;
+  let rating = '';
+  if (feedbackTarget && evidenceDraftOpen) {
+    const options = _proofEvidenceOptions(receipt);
+    const optionsHtml = options.length
+      ? options.map((option, index) => `<label class="recall-proof-evidence-option"><input type="checkbox" data-recall-proof-evidence="${index}" data-evidence-kind="${escapeHtml(option.kind)}" data-evidence-subtype="${escapeHtml(option.subtype)}" data-evidence-id="${escapeHtml(option.id)}" checked><span>${escapeHtml(option.label)}</span><code>${escapeHtml(option.id)}</code></label>`).join('')
+      : `<p class="recall-proof-evidence-none">${escapeHtml(_cognitionText('cognition.proof_evidence_none', '这次没有可引用的执行记录，评价会如实记成「Evidence 不足」——结论保留，但不会把成熟度推到「效果已验证」。'))}</p>`;
+    rating = `<div class="recall-proof-rating is-evidence">
+      <strong>${escapeHtml(_cognitionText('cognition.proof_evidence_title', '凭什么说它让结果更好了？'))}</strong>
+      <p class="recall-proof-evidence-hint">${escapeHtml(_cognitionText('cognition.proof_evidence_hint', '写下你观察到的变化，并勾选能回查的依据。没有可追溯的依据时，系统不会把「更好」当成已验证。'))}</p>
+      <textarea class="recall-proof-evidence-note" data-recall-proof-evidence-note rows="3" placeholder="${escapeHtml(_cognitionText('cognition.proof_evidence_placeholder', '例如：这次直接按资产里的结构出了初稿，没有再返工。'))}"></textarea>
+      <div class="recall-proof-evidence-options">${optionsHtml}</div>
+      <div class="recall-proof-rating-actions">
+        <button type="button" class="btn btn-sm btn-primary" data-recall-proof-evidence-submit="${escapeHtml(ratingEligibility.proofId)}">${escapeHtml(_cognitionText('cognition.proof_evidence_submit', '记下这次评价'))}</button>
+        <button type="button" class="btn btn-sm" data-recall-proof-evidence-cancel>${escapeHtml(_cognitionText('cognition.action.cancel', '取消'))}</button>
+      </div>
+    </div>`;
+  } else if (feedbackTarget) {
+    rating = `<div class="recall-proof-rating"><strong>${ratingQuestion}</strong><div class="recall-proof-rating-actions">${[
+      // 正向这一档不直接提交：它是唯一能推动 effectiveness_validated 的结论，
+      // 必须先问「凭什么」。
+      ['positive', 'cognition.proof_carried_in', '带入正确', true],
+      ['rework', 'cognition.proof_rework', '需要修正', false],
+      ['neutral', 'cognition.proof_no_diff', '未产生明显差异', false],
+      ['invalid', 'cognition.proof_degraded', 'Evidence 不足', false],
+    ].map(([value, key, fallback, needsEvidence]) => (needsEvidence
+      ? `<button type="button" class="btn btn-sm" data-recall-proof-evidence-open="${escapeHtml(event.id)}">${escapeHtml(_cognitionText(key, fallback))}</button>`
+      : `<button type="button" class="btn btn-sm" ${feedbackTarget} data-recall-proof-feedback="${value}">${escapeHtml(_cognitionText(key, fallback))}</button>`)).join('')}</div></div>`;
+  } else if (blockedText) {
+    rating = `<div class="recall-proof-rating is-blocked"><strong>${ratingQuestion}</strong><p class="recall-proof-rating-blocked">${escapeHtml(blockedText)}</p></div>`;
+  }
       </div>
       <div class="recall-proof-timeline">${rows}</div>
     </section>`;

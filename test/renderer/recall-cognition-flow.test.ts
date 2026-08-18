@@ -1454,11 +1454,160 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('没有留下复用回执');
     expect(host.innerHTML).not.toContain('CRR-018');
     expect(host.innerHTML).not.toContain('完整旧会话');
-    // 这条只有 taskRunId，仍然可归属，所以评价按钮走 task 通道。
-    expect(host.innerHTML).toContain('data-recall-proof-feedback-task="task-9"');
+    // 这条是 usage_recorded，只有 taskRunId：后端两条通道都要求存在
+    // status='succeeded' 且已绑回执的迁移证明，所以它**不可评价**。
+    // 过去这里挂了 task 通道的评价按钮，用户一点就吃到
+    // `no successful transfer proof for task run`（实机复现）。
+    expect(host.innerHTML).not.toContain('data-recall-proof-feedback-task');
+    expect(host.innerHTML).not.toContain('data-recall-proof-feedback=');
+    // 但不能就这么把按钮藏掉——要说清为什么现在不能评价。
+    expect(host.innerHTML).toContain('还没有形成迁移证明');
   });
 
-  it('offers no rating when the use cannot be attributed to a proof or a task', async () => {
+  /**
+   * 评价闸门必须与后端前置条件一一对应。渲染层只要比后端宽一点，用户就会
+   * 点到一条注定失败的通道；只要比后端窄一点，能评的复用会被无声吞掉。
+   */
+  it('opens the rating only on a succeeded transfer that is bound to a receipt', async () => {
+    const rows = [
+      // kind / status / refs / 期望：能否评价 / 不能时的说明关键词
+      { id: 'r-projected', kind: 'projection_confirmed', refs: { assetId: 'aa-x', projectionId: 'pj-1', taskRunId: 'task-1' }, ok: false, why: '还没有形成迁移证明' },
+      { id: 'r-used', kind: 'usage_recorded', refs: { assetId: 'aa-x', taskRunId: 'task-1' }, ok: false, why: '还没有形成迁移证明' },
+      { id: 'r-prepared', kind: 'transfer_prepared', refs: { assetId: 'aa-x', transferProofId: 'tp-9', taskRunId: 'task-1' }, ok: false, why: '迁移证明还没完成' },
+      { id: 'r-degraded', kind: 'transfer_completed', status: 'degraded', refs: { assetId: 'aa-x', transferProofId: 'tp-2', usageReceiptId: 'CRR-2' }, ok: false, why: 'Evidence 不足' },
+      { id: 'r-rejected', kind: 'transfer_completed', status: 'rejected', refs: { assetId: 'aa-x', transferProofId: 'tp-3', usageReceiptId: 'CRR-3' }, ok: false, why: '没能把资产带入目标会话' },
+      { id: 'r-noreceipt', kind: 'transfer_completed', status: 'succeeded', refs: { assetId: 'aa-x', transferProofId: 'tp-4' }, ok: false, why: '没有绑定复用回执' },
+      { id: 'r-good', kind: 'transfer_completed', status: 'succeeded', refs: { assetId: 'aa-x', transferProofId: 'tp-5', usageReceiptId: 'CRR-5' }, ok: true, why: '' },
+    ];
+
+    for (const row of rows) {
+      const context = loadSkillsRenderer();
+      const host = { innerHTML: '' };
+      context.document = {
+        getElementById: (id: string) => (id === 'skills-cognition-proofs-body' ? host : null),
+      };
+      vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+        assets: [{ id: 'aa-x', title: '资产', category: 'rule', type: 'rule', status: 'active', version: '1.0.0' }],
+        selectedProofEventId: row.id,
+      })})`, context);
+      context.window.cogseed = {
+        invoke: async (channel: string) => {
+          if (channel === 'recall.timeline.list') {
+            return { ok: true, items: [{ ...row, occurredAt: '2026-08-17T10:00:00.000Z' }] };
+          }
+          if (channel === 'cognition.receipts.list') return { ok: true, receipts: [] };
+          return { ok: true };
+        },
+      };
+      await context.loadCognitionProofs();
+
+      if (row.ok) {
+        expect(host.innerHTML, row.id).toContain('data-recall-proof-feedback-proof="tp-5"');
+      } else {
+        expect(host.innerHTML, row.id).not.toContain('data-recall-proof-feedback=');
+        expect(host.innerHTML, row.id).toContain(row.why);
+      }
+      // 无论哪一格，都不再走 task 通道——它的后端前置条件与 proof 通道相同，
+      // 单独留着只会制造第二条注定失败的路径。
+      expect(host.innerHTML, row.id).not.toContain('data-recall-proof-feedback-task');
+    }
+  });
+
+  /**
+   * 「更好了」是唯一能把成熟度推到 effectiveness_validated 的结论，PRD 3.6
+   * 要求它有可比依据。所以它不能像其它三档那样一点就落账——必须先取证。
+   */
+  it('routes the positive rating through an evidence step, not a one-click submit', async () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-proofs-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      assets: [{ id: 'aa-x', title: '资产', category: 'rule', type: 'rule', status: 'active', version: '1.0.0' }],
+      selectedProofEventId: 'ev-ok',
+      proofRatingDraft: null,
+    })})`, context);
+    context.window.cogseed = {
+      invoke: async (channel: string) => {
+        if (channel === 'recall.timeline.list') {
+          return { ok: true, items: [{
+            id: 'ev-ok', kind: 'transfer_completed', status: 'succeeded',
+            occurredAt: '2026-08-17T10:00:00.000Z',
+            refs: { assetId: 'aa-x', transferProofId: 'tp-7', usageReceiptId: 'CRR-7' },
+          }] };
+        }
+        if (channel === 'cognition.receipts.list') {
+          return { ok: true, receipts: [{
+            receiptId: 'CRR-7', executionId: 'turn-42', targetSessionId: 'gconv-abc',
+            reusedRefs: ['aa-x'], omittedRefs: [], permissionMode: 'read-only',
+            allowedScopes: ['cognition:projection'], boundary: 'real', status: 'completed',
+            createdAt: '2026-08-17T10:00:00.000Z',
+          }] };
+        }
+        return { ok: true };
+      },
+    };
+    await context.loadCognitionProofs();
+
+    // 三档直接落账的仍走 feedback；「带入正确」改成打开取证面板。
+    expect(host.innerHTML).toContain('data-recall-proof-feedback="rework"');
+    expect(host.innerHTML).toContain('data-recall-proof-feedback="neutral"');
+    expect(host.innerHTML).not.toContain('data-recall-proof-feedback="positive"');
+    expect(host.innerHTML).toContain('data-recall-proof-evidence-open="ev-ok"');
+
+    // 打开取证面板后：要观察、要可回查的依据，依据用回执里真实握有的 id。
+    vm.runInContext("_skillsCognitionState.proofRatingDraft = { eventId: 'ev-ok' };", context);
+    await context.renderSkillsCognitionProofs();
+    expect(host.innerHTML).toContain('凭什么说它让结果更好了？');
+    expect(host.innerHTML).toContain('data-recall-proof-evidence-note');
+    expect(host.innerHTML).toContain('data-evidence-id="turn-42"');
+    expect(host.innerHTML).toContain('data-evidence-id="gconv-abc"');
+    expect(host.innerHTML).toContain('data-recall-proof-evidence-submit="tp-7"');
+  });
+
+  /**
+   * 回执正文取不到时不替用户凑依据：如实说明这条评价会被记成 Evidence 不足。
+   */
+  it('says the rating will be recorded as insufficient evidence when nothing traceable exists', async () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => (id === 'skills-cognition-proofs-body' ? host : null),
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      assets: [], selectedProofEventId: 'ev-ok', proofRatingDraft: { eventId: 'ev-ok' },
+    })})`, context);
+    context.window.cogseed = {
+      invoke: async (channel: string) => {
+        if (channel === 'recall.timeline.list') {
+          return { ok: true, items: [{
+            id: 'ev-ok', kind: 'transfer_completed', status: 'succeeded',
+            occurredAt: '2026-08-17T10:00:00.000Z',
+            refs: { assetId: 'aa-x', transferProofId: 'tp-8', usageReceiptId: 'CRR-8' },
+          }] };
+        }
+        if (channel === 'cognition.receipts.list') return { ok: true, receipts: [] };
+        return { ok: true };
+      },
+    };
+    await context.loadCognitionProofs();
+
+    expect(host.innerHTML).toContain('Evidence 不足');
+    expect(host.innerHTML).not.toContain('data-evidence-id=');
+    // 面板照样能提交——结论保留，只是不会推动成熟度。
+    expect(host.innerHTML).toContain('data-recall-proof-evidence-submit="tp-8"');
+  });
+
+  /**
+   * 无法归属时**不给按钮**，但要说清为什么——不是整块消失。
+   *
+   * 原来这里断言连「这次复用是否有用？」都不出现。把控件连同问题一起藏掉最
+   * 省事，代价是用户以为详情没渲染出来，我们也看不出「几乎没有一行能评价」
+   * 背后的回执覆盖率问题。不变的那条invariant 仍然钉死：不产生一次无法归属
+   * 的评价（没有按钮、没有 task 通道）。
+   */
+  it('offers no rating button when the use cannot be attributed, but says why', async () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };
     context.document = {

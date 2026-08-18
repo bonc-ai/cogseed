@@ -1,6 +1,33 @@
 // Skill-only DOM bindings. Loaded immediately after skills.js when either the
 // Skills tab or the chat Agent/Skill picker first needs that surface.
 
+/**
+ * 效果评价失败时给用户看的话。
+ *
+ * 后端抛的 message 是内部契约语言（`no successful transfer proof for task run`
+ * / `effectiveness proof requires a successful transfer` / `... verified
+ * transfer receipt`），过去被原样 `uiAlert` 出去。按 `err.code` 翻译——码由
+ * `recall/proof-service.ts::recallProofError` 打上，IPC 分发器已透传到返回体。
+ * 取不到已知码时退回原始 error，宁可露出英文也不吞掉失败。
+ */
+function _recallProofErrorText(result) {
+  const code = String((result && result.code) || '');
+  const text = (key, fallback) => (typeof t === 'function' && t(key) !== key ? t(key) : fallback);
+  if (code === 'E_RECALL_NO_SUCCESSFUL_TRANSFER') {
+    return text('cognition.proof_rating_blocked_no_transfer',
+      '这次复用还没有形成迁移证明，暂时不能评价。任务结束并留下复用回执后，这里会出现评价入口。');
+  }
+  if (code === 'E_RECALL_TRANSFER_NOT_SUCCEEDED') {
+    return text('cognition.proof_rating_blocked_rejected',
+      '这次没能把资产带入目标会话，没有可评价的复用。');
+  }
+  if (code === 'E_RECALL_TRANSFER_RECEIPT_MISSING') {
+    return text('cognition.proof_rating_blocked_no_receipt',
+      '这次迁移证明没有绑定复用回执，无法核对究竟带入了什么，因此不开放效果评价。');
+  }
+  return (result && result.error) || 'effectiveness feedback failed';
+}
+
 function _initSkillsStaticBindings() {
   const panel = document.getElementById('panel-skills');
   if (panel && panel.dataset.skillBindings === '1') return;
@@ -392,16 +419,20 @@ function _initSkillsCognitionBindings() {
       if (proofFeedback.dataset.busy === '1') return;
       const feedback = proofFeedback.dataset.recallProofFeedback;
       const proofId = proofFeedback.dataset.recallProofFeedbackProof;
-      const taskRunId = proofFeedback.dataset.recallProofFeedbackTask;
-      // 评价必须落到一条具体的证明或任务上。两者都没有时不该发请求——
-      // 一次无法归属的评价写进去，之后没人能说清它评的是哪次复用。
-      if (!feedback || (!proofId && !taskRunId)) return;
+      // 评价必须落到一条具体的迁移证明上。**只走 proof 通道**：
+      // `feedbackForTask` 的后端前置条件与它完全相同（都要求 status='succeeded'
+      // 且已绑回执的迁移证明），按 taskRunId 再走一遍只是第二条注定失败的路径
+      // ——用户在「已带入本次任务」下点评价吃到的
+      // `no successful transfer proof for task run` 就是从那条路来的。
+      // 渲染侧的闸门在 skills.js::_proofRatingEligibility。
+      if (!feedback || !proofId) return;
       proofFeedback.dataset.busy = '1'; proofFeedback.disabled = true;
       try {
-        const result = proofId
-          ? await window.cogseed.invoke('recall.proofs.effectiveness.feedback', { transferProofId: proofId, feedback })
-          : await window.cogseed.invoke('recall.proofs.effectiveness.feedbackForTask', { taskRunId, feedback });
-        if (!result?.ok) throw new Error(result?.error || 'effectiveness feedback failed');
+        const result = await window.cogseed.invoke('recall.proofs.effectiveness.feedback', { transferProofId: proofId, feedback });
+        // 后端这几种失败是内部契约语言，直接 alert 出去用户读不懂。按稳定 code
+        // 翻成人话；渲染闸门正常时走不到这里，这是数据在渲染与点击之间发生
+        // 变化的兜底。
+        if (!result?.ok) throw new Error(_recallProofErrorText(result));
         // 评价会推进成熟度，所以整份快照都要重取，不能只重画本页。
         await loadSkillsCognitionSnapshot();
         // 评价推进了成熟度，事实链变了，这里必须重取而不是重画。
@@ -418,6 +449,62 @@ function _initSkillsCognitionBindings() {
     if (reload) {
       if (reload.dataset.busy === '1') return;
       reload.dataset.busy = '1'; reload.disabled = true;
+    // 「更好了」先开取证面板，不直接落账：这是唯一能把成熟度推到
+    // effectiveness_validated 的结论，PRD 3.6 要求它有可比依据。
+    const evidenceOpen = event.target.closest('[data-recall-proof-evidence-open]');
+    if (evidenceOpen) {
+      _skillsCognitionState.proofRatingDraft = { eventId: evidenceOpen.dataset.recallProofEvidenceOpen };
+      renderSkillsCognitionProofs();
+      return;
+    }
+    const evidenceCancel = event.target.closest('[data-recall-proof-evidence-cancel]');
+    if (evidenceCancel) {
+      _skillsCognitionState.proofRatingDraft = null;
+      renderSkillsCognitionProofs();
+      return;
+    }
+    const evidenceSubmit = event.target.closest('[data-recall-proof-evidence-submit]');
+    if (evidenceSubmit) {
+      if (evidenceSubmit.dataset.busy === '1') return;
+      const proofId = evidenceSubmit.dataset.recallProofEvidenceSubmit;
+      if (!proofId) return;
+      const panel = evidenceSubmit.closest('.recall-proof-rating');
+      const note = String(panel?.querySelector('[data-recall-proof-evidence-note]')?.value || '').trim();
+      // 勾选项就是用户认下的依据。没勾任何一条时照样提交——后端会如实把它
+      // 记成 Evidence 不足，这比替用户凑一条引用诚实。
+      const evidenceRefs = Array.from(panel?.querySelectorAll('[data-recall-proof-evidence]:checked') || [])
+        .map((box) => ({
+          kind: box.dataset.evidenceKind,
+          subtype: box.dataset.evidenceSubtype,
+          id: box.dataset.evidenceId,
+        }))
+        .filter((ref) => ref.kind && ref.id);
+      if (!note) {
+        if (typeof uiAlert === 'function') {
+          await uiAlert(t('cognition.proof_evidence_note_required') !== 'cognition.proof_evidence_note_required'
+            ? t('cognition.proof_evidence_note_required')
+            : '先写一句你观察到的变化——这句话就是这次评价的依据。');
+        }
+        return;
+      }
+      evidenceSubmit.dataset.busy = '1'; evidenceSubmit.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.proofs.effectiveness.feedback', {
+          transferProofId: proofId, feedback: 'positive', note, evidenceRefs,
+        });
+        if (!result?.ok) throw new Error(_recallProofErrorText(result));
+        _skillsCognitionState.proofRatingDraft = null;
+        // 不说"已验证有效"——能不能推动成熟度由后端按有无可追溯引用判定，这里
+        // 只回执"记下了"，免得没有引用时用户以为已经升档。
+        await loadSkillsCognitionSnapshot();
+        await loadCognitionProofs();
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        evidenceSubmit.dataset.busy = '0'; evidenceSubmit.disabled = false;
+      }
+      return;
+    }
       try {
         await loadSkillsCognitionSnapshot();
         if (_skillsCognitionState.assetCategoryFilter === 'personal'

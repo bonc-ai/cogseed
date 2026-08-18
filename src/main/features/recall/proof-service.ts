@@ -27,6 +27,24 @@ function asEffectiveness(value: RecallJsonRecord): EffectivenessProofRecord {
   return { ...value, evidenceRefs: normalizeCognitionSourceRefs(value.evidenceRefs) } as EffectivenessProofRecord;
 }
 
+/** 效果证明的前置条件失败码。
+ *
+ *  这三种失败对用户是三件不同的事（任务还没成功 / 没留下可核对的回执 /
+ *  这次运行压根没产生成功的迁移证明），但 message 是内部契约语言，直接
+ *  `uiAlert` 出去用户读不懂。带上稳定 code，渲染层按 code 翻译成人话——
+ *  IPC 分发器（ipc/index.ts::handleInvoke）已经把 `err.code` 透传到
+ *  返回体，不需要额外管道。message 保持原样：日志与既有测试按它断言。 */
+export type RecallProofErrorCode =
+  | 'E_RECALL_TRANSFER_NOT_SUCCEEDED'
+  | 'E_RECALL_TRANSFER_RECEIPT_MISSING'
+  | 'E_RECALL_NO_SUCCESSFUL_TRANSFER';
+
+export function recallProofError(code: RecallProofErrorCode, message: string): Error & { code: RecallProofErrorCode } {
+  const error = new Error(message) as Error & { code: RecallProofErrorCode };
+  error.code = code;
+  return error;
+}
+
 function receiptProvesTransfer(
   receipt: ContextReuseReceipt,
   assetVersions: readonly { assetId: string; version: string }[],
@@ -167,8 +185,8 @@ export async function completeTransferProofWithReceipt(
   });
 }
 export async function evaluateEffectivenessProof(userId: string, input: { transferProofId: string; outcome: EffectivenessOutcome; observedResult: string; evidenceRefs: unknown[] }): Promise<EffectivenessProofRecord> {
-  const raw = await readRecallJsonRecord(userId, 'transfer-proofs', input.transferProofId); if (!raw) throw new Error('transfer proof not found'); const transfer = asTransfer(raw); if (transfer.status !== 'succeeded') throw new Error('effectiveness proof requires a successful transfer');
-  if (!await findValidTransferReceipt(userId, transfer.receiptExecutionId, transfer.receiptId, transfer.assetVersions)) throw new Error('effectiveness proof requires a verified transfer receipt');
+  const raw = await readRecallJsonRecord(userId, 'transfer-proofs', input.transferProofId); if (!raw) throw new Error('transfer proof not found'); const transfer = asTransfer(raw); if (transfer.status !== 'succeeded') throw recallProofError('E_RECALL_TRANSFER_NOT_SUCCEEDED', 'effectiveness proof requires a successful transfer');
+  if (!await findValidTransferReceipt(userId, transfer.receiptExecutionId, transfer.receiptId, transfer.assetVersions)) throw recallProofError('E_RECALL_TRANSFER_RECEIPT_MISSING', 'effectiveness proof requires a verified transfer receipt');
   if (!['better','no_improvement','worse','insufficient_evidence','invalid','rework'].includes(input.outcome)) throw new Error('invalid effectiveness outcome');
   const refs = normalizeCognitionSourceRefs(input.evidenceRefs);
   // A positive click is useful feedback, but without a traceable comparison it

@@ -1208,6 +1208,18 @@
 .recall-proof-rating { padding: 11px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
 .recall-proof-rating > strong { display: block; margin-bottom: 8px; color: var(--fg, #111827); font-size: 12px; }
 .recall-proof-rating-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 不能评价时这一区照样在，只是把按钮换成「为什么现在不能评」。样式刻意与
+   已评价态（.is-rated）一致而非做成告警——它不是错误，是链条还没走到那一步。 */
+.recall-proof-rating.is-blocked .recall-proof-rating-blocked { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+/* 「更好了」的取证步骤。它是唯一能把成熟度推到 effectiveness_validated 的
+   路径，所以给它一块能写字、能勾选依据的地方，而不是一个赞。 */
+.recall-proof-rating.is-evidence { display: grid; gap: 9px; }
+.recall-proof-evidence-hint { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+.recall-proof-evidence-note { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--bg, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; line-height: 1.6; resize: vertical; }
+.recall-proof-evidence-options { display: grid; gap: 6px; }
+.recall-proof-evidence-option { display: flex; align-items: baseline; gap: 7px; color: var(--fg, #111827); font-size: 12px; cursor: pointer; }
+.recall-proof-evidence-option code { color: var(--muted-fg, #6b7280); font-size: 10px; overflow-wrap: anywhere; }
+.recall-proof-evidence-none { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
 @media (max-width: 760px) {
   .recall-proof-detail { padding-left: 12px; }
 }
