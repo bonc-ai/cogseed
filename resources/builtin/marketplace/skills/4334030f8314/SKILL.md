@@ -37,8 +37,8 @@ description: "基于基线与证据生成面向决策的状态、预测、阻塞
 - 权限不足或出现敏感数据：停止对应读取/动作并请求授权。
 - 预算耗尽：保留中间证据、未完成步骤和恢复指针。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要“基于基线与证据生成面向决策的状态、预测、阻塞与改进闭环。”，并具备完成“比较范围、进度、成本、质量、收益的基线/实际/预测”与“用预定义阈值计算RAG并列出证据，不凭主观调色”所需的授权材料、环境和范围。
 - `do_not_use_when`：无法完成前置检查“比较范围、进度、成本、质量、收益的基线/实际/预测”；执行“用预定义阈值计算RAG并列出证据，不凭主观调色”所需的材料、环境或授权不可用；任务不属于“status-review”职责；或请求违反专属判断规则“状态必须含预测，不能只复述已发生事项”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
@@ -52,7 +52,7 @@ description: "基于基线与证据生成面向决策的状态、预测、阻塞
 - 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
 - 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
 - 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->
 
 ## 详细方法
 

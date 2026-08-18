@@ -1,5 +1,5 @@
 {
-  "eval_suite_id": "eval.skill.cogseed.collab.meeting-actions.nseap.v1",
+  "eval_suite_id": "eval.skill.cogseed.collab.meeting-actions.v1",
   "skill_id": "skill.cogseed.collab.meeting-actions",
   "status": "synthetic_structure_cases_not_run",
   "evidence_policy": {

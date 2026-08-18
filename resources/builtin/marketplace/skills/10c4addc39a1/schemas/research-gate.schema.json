@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nseap.example/schemas/ontology-analysis-research-gate/v0.1",
+  "$id": "https://cogseed.example/schemas/ontology-analysis-research-gate/v0.1",
   "title": "Computed Research Gate",
   "type": "object",
   "additionalProperties": false,

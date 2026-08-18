@@ -2212,12 +2212,11 @@ async function _enqueueBody(
       if (scope) {
         const bound = new Set(scope.agents);
         const before = to;
-        // CLI-backed agents are exempt from project-scope filtering: they run
-        // on the local machine with their own credentials (no project API
-        // budget consumed), and the user picks them explicitly (composer chip,
-        // `@name` mention, or the no-model → CLI fallback). Dropping them here
-        // would route every CLI message back to the commander, which defeats
-        // the fallback and `@Codex`/`@Claude` mentions in a project-scoped chat.
+        // Externally executed CLI agents are exempt from project-scope
+        // filtering: direct CLIs and P3394-managed gateways both run with
+        // their own credentials, and the user picks them explicitly (composer
+        // chip, `@name` mention, or the no-model → CLI fallback). Dropping
+        // either runtime here would route the message back to the commander.
         const kept: string[] = [];
         for (const id of to) {
           if (RESERVED_IDS.has(id) || bound.has(id)) {
@@ -2226,7 +2225,7 @@ async function _enqueueBody(
           }
           try {
             const ag = await agentsFeat.getAgent(id);
-            if (ag && ag.runtime && ag.runtime.kind === 'cli') {
+            if (agentsFeat.isCliAgent(ag) || agentsFeat.isP3394GatewayAgent(ag)) {
               kept.push(id);
               continue;
             }
@@ -3573,6 +3572,14 @@ async function runActorTurnBody(
           (r) => typeof r === "string" && path.isAbsolute(r),
         )
       : [];
+    // 导入会话 / 详情页自定义：coding_project_dir（原始 Agent 项目目录）作为
+    // 工作区后，文件工具与 bash 的沙盒根必须包含它（extraRoots 可读可写），
+    // 否则 workingDir 指向原始目录但 read_file/write_file/bash 会被拒。
+    if (stateFile.coding_project_dir && path.isAbsolute(stateFile.coding_project_dir)) {
+      if (!turnToolExtraRoots.includes(stateFile.coding_project_dir)) {
+        turnToolExtraRoots.push(stateFile.coding_project_dir);
+      }
+    }
     turnSyncConflictResolution = Array.isArray(
       stateFile.sync_conflict_resolution?.conflicts,
     )

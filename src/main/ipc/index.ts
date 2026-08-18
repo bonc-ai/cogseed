@@ -1038,10 +1038,48 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const projectId = await userWorkspace.resolveProjectIdForCid(ctx.userId, cid);
     const workspaceRoot = userWorkspace.getWorkspacePath(ctx.userId, projectId);
     const state = await readGroupChatState(ctx.userId, cid);
-    const root = state.workspace_dir
-      ? path.join(workspaceRoot, state.workspace_dir)
-      : workspaceRoot;
+    // 导入会话 / 详情页自定义：coding_project_dir（绝对路径，原始 Agent 项目
+    // 目录）优先。即使目录已不存在也返回该路径——listWorkspaceFiles 报
+    // rootExists:false，renderer 据此显示「已被移动或删除」并引导重新选择。
+    // 系统/临时目录（旧版误绑定 $TMPDIR）不作为工作区根（会扫出一堆系统文件）。
+    const codingDir = (state.coding_project_dir && path.isAbsolute(state.coding_project_dir))
+      ? state.coding_project_dir
+      : '';
+    let root: string;
+    if (codingDir) {
+      const { isSystemTmpDir } = await import('../util/path-sandbox');
+      root = isSystemTmpDir(codingDir)
+        ? (state.workspace_dir ? path.join(workspaceRoot, state.workspace_dir) : workspaceRoot)
+        : codingDir;
+    } else {
+      root = state.workspace_dir
+        ? path.join(workspaceRoot, state.workspace_dir)
+        : workspaceRoot;
+    }
     return conversationFiles.listWorkspaceFiles(root);
+  },
+
+  // 引导「工作区目录已被移动或删除」→ 用户重新选择目录后固化到本会话。
+  // 安全边界：必须是本机真实存在的目录（绝对路径 + stat + realpath 规范化，
+  // 防符号链接越权）；用户显式选择（explicit:true），之后不再被自动重指。
+  'workspace.setCodingProjectDir': async ({ cid, dir }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (typeof dir !== 'string' || !dir.trim()) throw new Error('dir required');
+    const abs = path.isAbsolute(dir) ? dir : path.resolve(dir);
+    let real = '';
+    try {
+      const st = await (await import('node:fs/promises')).stat(abs);
+      if (!st.isDirectory()) throw new Error('not a directory');
+      const { canonicalizePath, isSystemTmpDir } = await import('../util/path-sandbox');
+      real = canonicalizePath(abs);
+      // 拒绝系统/临时目录（选 /tmp 当工作区会扫出一堆系统文件）。
+      if (isSystemTmpDir(real)) throw new Error('system/temp directory is not a valid workspace');
+    } catch (err) {
+      throw new Error(`workspace directory not found: ${(err as Error)?.message || String(err)}`);
+    }
+    const { setCodingProjectDir } = await import('../features/group_chat/state');
+    await setCodingProjectDir(ctx.userId, cid, real, { explicit: true });
+    return { ok: true, dir: real };
   },
 
   'conversations.clone': async (args, ctx) => {
@@ -3194,12 +3232,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return skills.readSkillFile(source, id, file);
   },
 
-  'skills.checkNseapDeclaration': async ({ id }, ctx) => {
+  'skills.checkDeclaration': async ({ id }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     const found = await skills.getSkillForEdit(id);
     if (!found || found.source !== 'custom') throw new Error('only custom skills can be pre-checked');
-    const nseapDeclaration = await skillReverify.checkNseapDeclaration(found.dir, id);
-    return { nseapDeclaration };
+    const declarationCheck = await skillReverify.checkDeclaration(found.dir, id);
+    return { declarationCheck };
   },
 
   /** Deep re-verify one installed skill and persist the verdict. Backs the
@@ -3216,7 +3254,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   /** W5/W6: run the generation admission gate on one custom skill and return
    *  a renderer-safe verdict for the unified import-check popup. Source-
-   *  preserving: no NSEAP escalation, no refusal receipt — the caller decides
+   *  preserving: no shape escalation, no refusal receipt — the caller decides
    *  what to do with the verdict (the import paths already rolled back or
    *  kept content in main). */
   'skills.admit': async ({ skillId }, ctx) => {
@@ -3227,7 +3265,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       admission: {
         outcome: admission.outcome,
         reason: admission.reason ?? null,
-        escalatedNseap: admission.escalatedNseap,
+        escalatedSkillShape: admission.escalatedSkillShape,
         ...(admission.scan ? { scan: admission.scan } : {}),
       },
     };

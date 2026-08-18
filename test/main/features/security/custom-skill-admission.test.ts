@@ -66,7 +66,7 @@ describe('custom skill admission (generation gate)', () => {
     expect(r.outcome).toBe('pass');
     expect(r.receipt?.decision).toBe('pass');
     expect(r.receipt?.scanner).toBe('deep');
-    // Skeleton fills the missing NSEAP artifacts on the final tree.
+    // Skeleton fills the missing skill artifacts on the final tree.
     const dir = path.join(root, UID, 'cloud', 'skills', 'clean-skill');
     expect(fs.existsSync(path.join(dir, 'references', 'input-contract.md'))).toBe(true);
     expect(fs.existsSync(path.join(dir, 'evals', 'evals.json'))).toBe(true);
@@ -120,18 +120,18 @@ describe('custom skill admission (generation gate)', () => {
     expect(r.receipt?.decision).toBe('risk');
   });
 
-  it('escalates NSEAP shape findings to restricted when opted in (commander path)', async () => {
-    // No use_when / do_not_use_when in the body → nseap_trigger_missing +
-    // nseap_antitrigger_missing fire after the skeleton fills the file set.
+  it('escalates shape findings to restricted when opted in (commander path)', async () => {
+    // No use_when / do_not_use_when in the body → shape_trigger_missing +
+    // shape_antitrigger_missing fire after the skeleton fills the file set.
     writeSkill('no-trigger-skill', 'Some prose without trigger semantics.\n');
-    const r = await admitCustomSkill(UID, 'no-trigger-skill', { escalateNseap: true });
+    const r = await admitCustomSkill(UID, 'no-trigger-skill', { escalateSkillShape: true });
     expect(r.outcome).toBe('restricted');
-    expect(r.escalatedNseap).toContain('nseap_trigger_missing');
+    expect(r.escalatedSkillShape).toContain('shape_trigger_missing');
     expect(r.receipt?.decision).toBe('risk');
-    expect(r.receipt?.topRule).toMatch(/^nseap_/);
+    expect(r.receipt?.topRule).toMatch(/^shape_/);
   });
 
-  it('keeps NSEAP shape findings advisory by default (source-preserving imports)', async () => {
+  it('keeps shape findings advisory by default (source-preserving imports)', async () => {
     // Same skill, no escalation opt-in: the trigger/anti-trigger gap stays a
     // MEDIUM advisory, the receipt records the scan verdict, not a shape badge.
     // This is what keeps foreign-format imports (Claude/Codex onboarding,
@@ -139,7 +139,7 @@ describe('custom skill admission (generation gate)', () => {
     writeSkill('imported-style-skill', 'Some prose without trigger semantics.\n');
     const r = await admitCustomSkill(UID, 'imported-style-skill');
     expect(r.outcome).toBe('pass');
-    expect(r.escalatedNseap).toEqual([]);
+    expect(r.escalatedSkillShape).toEqual([]);
     expect(r.receipt?.decision).toBe('pass');
   });
 

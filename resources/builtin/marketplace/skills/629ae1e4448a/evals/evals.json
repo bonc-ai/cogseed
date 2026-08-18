@@ -19,7 +19,7 @@
    "id": "EVAL-DEFINE-001",
    "input": {
     "product_version_id": "PV-001",
-    "request": "为依赖 NSEAP 的开源产品编写 PRD",
+    "request": "为依赖技能契约的开源产品编写 PRD",
     "task_id": "TASK-DEFINE-001"
    },
    "kind": "evaluation-case",

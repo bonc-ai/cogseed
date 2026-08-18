@@ -53,7 +53,7 @@ ABox 仅使用标明来源类型的项目事实或 synthetic 示例；示例不�
 
 ## Validation Contract
 
-输入输出必须通过本包 JSON Schema；包根 16 个 NSEAP 资产和 4 个机器增强资产
+输入输出必须通过本包 JSON Schema；包根 16 个标准资产和 4 个机器增强资产
 必须完整。状态、摘要、artifact refs、approval required、claims allowed/prohibited
 为必填。保护面失败容忍度为 0，未知失败保持 `pending`。
 
@@ -81,8 +81,8 @@ schema、governance、evidence。证据不足不得强行归因；unknown 必须
 
 真实学习必须绑定 real source/run。ΔR 是分析信号，不是发布、晋级或自修改指令。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：在独立发布决定后观察真实结果，用 KSTAR 与 Change Candidate 驱动可审计演进，停在人工 Gate。，并具备完成该任务所需的授权材料、环境和范围。
 - `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「AI产品上线学习」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
@@ -90,4 +90,4 @@ schema、governance、evidence。证据不足不得强行归因；unknown 必须
 - `negative_examples`：`缺少执行AI产品上线学习所需证据，仍请直接定稿。`
 
 本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->

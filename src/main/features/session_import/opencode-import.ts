@@ -49,11 +49,15 @@ export async function importOpencodeSession(
   if (!sessionId) return { ok: false, reason: 'sessionId required' };
 
   let title = titleHint || '';
+  let projectPath = '';
   try {
     const list = listOpencodeSessions();
     if (!('error' in list)) {
       const hit = list.sessions.find((s) => s.id === sessionId);
       if (hit && hit.title) title = hit.title;
+      // 原始项目目录（OpenCode project.worktree）：有项目（非 global）时
+      // 随导入绑定到会话工作区（materialize 校验真实目录后固化）。
+      if (hit && hit.projectPath) projectPath = hit.projectPath;
     }
   } catch (err) {
     log.warn('opencode session title lookup failed', { sessionId, error: String(err) });
@@ -63,9 +67,7 @@ export async function importOpencodeSession(
   const extraction = {
     ok: true,
     sessionSummary,
-    personal: [],
-    rules: [],
-    templates: [],
+    candidates: [],
     degraded: false,
   };
 
@@ -75,6 +77,7 @@ export async function importOpencodeSession(
     source: 'opencode',
     sourceId: sessionId,
     titleHint: title,
+    projectPath: projectPath || undefined,
     extraction,
   });
 

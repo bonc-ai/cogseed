@@ -60,3 +60,12 @@ package.json.new
 /resources/guardrail/SCANNER_ABSENT
 # Hermes desktop attachments (PRD/转写等敏感文件，勿入库)
 /.hermes/
+
+# ── 闭源引擎（公开仓库导出清单必须排除；内部仓库保留跟踪）──
+# gitignore 对已跟踪文件无效，这里只作导出意图标记；实际排除依赖
+# "新建干净仓库"导出清单：resources/guardrail/{skill-sentry,skill-declaration-core,
+# skill-*.INTEGRITY,SYNC.md} + resources/test/skill-sentry/
+/resources/guardrail/skill-sentry
+/resources/guardrail/skill-declaration-core
+/resources/guardrail/skill-declaration-core.INTEGRITY
+/resources/test/skill-sentry

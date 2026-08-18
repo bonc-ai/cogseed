@@ -1,5 +1,4 @@
 skill_spec:
-  standard_id: nseap-skill-creator
   skill_class: execution            # EndUseSkill（业务产出），非 meta_skill
   is_skill_of_skill: false
   level: L5                         # Skill-L5：进共享注册表的受治理技能系统

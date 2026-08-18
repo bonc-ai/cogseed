@@ -3,7 +3,7 @@
 """CogSeed review.3 整改包 → 平台 marketplace skill 内容升级导入。
 策略：41 个 skill 已存在（id 由 sha256(cogseed:{role}:{name})[:12] 确定性生成），
 本次只覆盖内容制品（SKILL.md + references/ + evals/ + agents/ + schemas.json），
-保留并合并 _meta.json（nseap 分级标注不动，version 升为 0.2.0-review.3）。
+保留并合并 _meta.json（契约分级标注不动，version 升为 0.2.0-review.3）。
 用法: python3 scripts/dev-import-cogseed-review3.py [--apply]  (默认 dry-run)
 """
 import json, os, shutil, sys, hashlib, glob
@@ -94,7 +94,7 @@ for role, sk in pkg_skills:
                 shutil.rmtree(ddir)
             shutil.copytree(sdir, ddir)
             copied += sum(len(fs) for _, _, fs in os.walk(sdir))
-    # _meta.json：保留 nseap 分级，version 升 review.3
+    # _meta.json：保留 契约分级，version 升 review.3
     meta_path = os.path.join(dst, '_meta.json')
     meta = json.load(open(meta_path, encoding='utf-8')) if os.path.exists(meta_path) else {}
     meta['version'] = '0.2.0-review.3'

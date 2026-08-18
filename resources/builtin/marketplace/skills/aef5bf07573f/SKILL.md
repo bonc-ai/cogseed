@@ -37,8 +37,8 @@ description: "把阅读转成可追溯的论点—证据—问题—综合笔记
 - 权限不足或出现敏感数据：停止对应读取/动作并请求授权。
 - 预算耗尽：保留中间证据、未完成步骤和恢复指针。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要“把阅读转成可追溯的论点—证据—问题—综合笔记，而非摘要堆积。”，并具备完成“记录完整来源、版本、阅读目的和引用定位方式”与“提取研究问题/主旨、关键论点、证据、概念和限定条件”所需的授权材料、环境和范围。
 - `do_not_use_when`：无法完成前置检查“记录完整来源、版本、阅读目的和引用定位方式”；执行“提取研究问题/主旨、关键论点、证据、概念和限定条件”所需的材料、环境或授权不可用；任务不属于“reading-notes”职责；或请求违反专属判断规则“直接引文保持最少并精确定位”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
@@ -52,7 +52,7 @@ description: "把阅读转成可追溯的论点—证据—问题—综合笔记
 - 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
 - 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
 - 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->
 
 ## 详细方法
 

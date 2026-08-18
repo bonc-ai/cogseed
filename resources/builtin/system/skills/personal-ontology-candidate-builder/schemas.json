@@ -1,6 +1,5 @@
 {
   "schema_contract": {
-    "standard_id": "nseap-skill-creator",
     "language": "zh-CN",
     "skill_category": "ProductionProcessSkill",
     "principle": "Every candidate requires explicit user confirmation before it becomes durable memory. No auto-adopt.",

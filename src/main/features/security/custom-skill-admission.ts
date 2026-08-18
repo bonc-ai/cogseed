@@ -10,16 +10,16 @@
  * formal-asset action must be disabled until the check passes).
  *
  * Order is load-bearing, mirroring the import path:
- *  1. Local red lines + deep scan judge ONLY the authored content. The NSEAP
+ *  1. Local red lines + deep scan judge ONLY the authored content. The skill
  *     skeleton (8 template files) is generated afterwards precisely because
  *     padding a suspicious skill with clean templates dilutes the verdict —
  *     measured on the import path (`chmod 777` + env-driven POST moved from
  *     `restricted` to `pass` once templates were present).
- *  2. The skeleton fills missing NSEAP artifacts (never overwrites), making
+ *  2. The skeleton fills missing skill artifacts (never overwrites), making
  *     "defaults are compliant" true for generated skills.
- *  3. A post-skeleton re-validation can escalate `nseap_*` findings — opt-in
- *     via `opts.escalateNseap`, and only the commander authoring path opts in,
- *     because that is the path whose creator contract promises NSEAP
+ *  3. A post-skeleton re-validation can escalate `shape_*` findings — opt-in
+ *     via `opts.escalateSkillShape`, and only the commander authoring path opts in,
+ *     because that is the path whose creator contract promises skill
  *     trigger/anti-trigger semantics. Foreign-format imports (Claude/Codex
  *     onboarding, recall-distilled methods) are source-preserving: escalating
  *     there would mark essentially every import `restricted`, and a badge that
@@ -43,7 +43,7 @@ import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import { userSkillsDir } from '../../paths';
 import { validateSkillDir, type ValidationReport } from '../../quality';
-import { ensureNseapSkillSkeleton } from '../nseap_skill_skeleton';
+import { ensureSkillSkeleton } from '../skill_skeleton';
 import { skillPayloadHash, writeInstallReceipt, writeReceipt, type SecurityReceipt } from '../skill_trust';
 import { scanSkillDir, scanVerdictBlocksInstall, type SentryScanResult } from './sentry-adapter';
 
@@ -60,23 +60,23 @@ export interface CustomAdmissionResult {
   scan: SentryScanResult | null;
   /** Receipt over the final tree. Absent for `blocked` / `unknown`. */
   receipt: SecurityReceipt | null;
-  /** `nseap_*` rule ids that escalated the verdict to `restricted`. */
-  escalatedNseap: string[];
+  /** `shape_*` rule ids that escalated the verdict to `restricted`. */
+  escalatedSkillShape: string[];
   /** Machine reason for `blocked` / `unknown`, for callers and logs. */
   reason?: string;
 }
 
 function _blocked(skillId: string, reason: string, extra: Partial<CustomAdmissionResult>): CustomAdmissionResult {
-  return { outcome: 'blocked', skillId, report: null, scan: null, receipt: null, escalatedNseap: [], reason, ...extra };
+  return { outcome: 'blocked', skillId, report: null, scan: null, receipt: null, escalatedSkillShape: [], reason, ...extra };
 }
 
 function _unknown(skillId: string, reason: string, extra: Partial<CustomAdmissionResult>): CustomAdmissionResult {
-  return { outcome: 'unknown', skillId, report: null, scan: null, receipt: null, escalatedNseap: [], reason, ...extra };
+  return { outcome: 'unknown', skillId, report: null, scan: null, receipt: null, escalatedSkillShape: [], reason, ...extra };
 }
 
 /**
- * Admit one generated custom skill: scan the authored tree, generate the NSEAP
- * skeleton, re-validate with escalated NSEAP rules, and record the receipt.
+ * Admit one generated custom skill: scan the authored tree, generate the skill
+ * skeleton, re-validate with escalated skill-shape rules, and record the receipt.
  *
  * Never throws: every failure surfaces as `unknown`, so an infrastructure
  * problem cannot break a creation flow with an unhandled rejection.
@@ -125,7 +125,7 @@ function _recordBlockedReceipt(
 export async function admitCustomSkill(
   uid: string,
   skillId: string,
-  opts: { escalateNseap?: boolean; recordBlockedReceipt?: boolean } = {},
+  opts: { escalateSkillShape?: boolean; recordBlockedReceipt?: boolean } = {},
 ): Promise<CustomAdmissionResult> {
   if (!safeId(skillId)) return _unknown(skillId, 'invalid_skill_id', {});
   const dir = path.join(userSkillsDir(uid), skillId);
@@ -163,25 +163,25 @@ export async function admitCustomSkill(
     });
   }
 
-  // 3. NSEAP skeleton — fills the missing artifacts only, never overwrites.
+  // 3. Skill skeleton — fills the missing artifacts only, never overwrites.
   try {
-    ensureNseapSkillSkeleton(dir, skillId);
+    ensureSkillSkeleton(dir, skillId);
   } catch (err) {
-    // A skeleton gap downgrades the NSEAP escalation, it must not fail the
+    // A skeleton gap downgrades the skill-shape escalation, it must not fail the
     // admission: the security verdict above already stands.
     log.warn('custom skill admission skeleton generation failed', {
       skillId, error: (err as Error).message,
     });
   }
 
-  // 4. Post-skeleton re-validation: NSEAP shape findings escalate here,
-  //    ONLY when the caller opted in (`escalateNseap`).
+  // 4. Post-skeleton re-validation: skill-shape findings escalate here,
+  //    ONLY when the caller opted in (`escalateSkillShape`).
   //
   //    Why opt-in rather than universal: escalation exists to backstop the
-  //    commander authoring contract, which promises NSEAP trigger/anti-trigger
+  //    commander authoring contract, which promises skill trigger/anti-trigger
   //    semantics on every new skill. Foreign-format imports (Claude/Codex
   //    onboarding, recall-distilled methods) are source-preserving by the
-  //    creator's own contract — forcing NSEAP shape on them would mark
+  //    creator's own contract — forcing skill shape on them would mark
   //    essentially every import `restricted`, and a badge that fires on
   //    everything fires on nothing (the exact MEDIUM-noise failure fixed in
   //    二期第 4 步). Those paths still get the skeleton files filled and the
@@ -189,50 +189,50 @@ export async function admitCustomSkill(
   //    move the verdict.
   //
   //    Excluded even under escalation:
-  //    `nseap_staged_ceiling_missing` / `nseap_production_lock_missing` — the
+  //    `shape_staged_ceiling_missing` / `shape_production_lock_missing` — the
   //    TS shape check only reads SKILL.md + `_meta.json`, while the skeleton
-  //    declares both hard caps in `references/skill-spec.yaml` (enforced by
-  //    the platform check_all_skills.py); escalating them would mark every
+  //    declares both hard caps in `references/skill-spec.yaml` (checked by
+  //    the registry gate); escalating them would mark every
   //    generated skill restricted for a declaration already made.
-  //    `nseap_compliance_tier` — informational tier label (Level A/B), not a
+  //    `shape_tier` — informational tier label (Level A/B), not a
   //    finding.
-  const ESCALATED_NSEAP_RULES: ReadonlySet<string> = new Set([
-    'nseap_frontmatter_incomplete',
-    'nseap_trigger_missing',
-    'nseap_antitrigger_missing',
-    'nseap_input_contract_missing',
-    'nseap_output_contract_missing',
-    'nseap_ontology_slice_missing',
-    'nseap_runtime_contracts_missing',
-    'nseap_runtime_guard_violation',
+  const ESCALATED_SKILL_SHAPE_RULES: ReadonlySet<string> = new Set([
+    'shape_frontmatter_incomplete',
+    'shape_trigger_missing',
+    'shape_antitrigger_missing',
+    'shape_input_contract_missing',
+    'shape_output_contract_missing',
+    'shape_ontology_slice_missing',
+    'shape_runtime_contracts_missing',
+    'shape_runtime_guard_violation',
   ]);
   const post = validateSkillDir(dir, { enforceSkillRunner: false });
-  const escalatedNseap = opts.escalateNseap === true
+  const escalatedSkillShape = opts.escalateSkillShape === true
     ? post.violations
-      .filter((v) => ESCALATED_NSEAP_RULES.has(v.rule))
+      .filter((v) => ESCALATED_SKILL_SHAPE_RULES.has(v.rule))
       .map((v) => v.rule)
     : [];
-  if (escalatedNseap.length) {
-    log.warn('custom skill admission escalated NSEAP shape findings', { skillId, rules: escalatedNseap });
+  if (escalatedSkillShape.length) {
+    log.warn('custom skill admission escalated skill-shape findings', { skillId, rules: escalatedSkillShape });
   }
 
   // 5. Receipt over the final tree. The effective scan outcome is `restricted`
-  //    when NSEAP escalation fired, so `writeInstallReceipt` records `risk`
+  //    when skill-shape escalation fired, so `writeInstallReceipt` records `risk`
   //    rather than `pass` — the panel explains the shape gap instead of
   //    showing a clean badge.
   const payloadHash = skillPayloadHash(dir);
-  const topNseap = escalatedNseap.length
-    ? post.violations.find((v) => v.rule.startsWith('nseap_'))
+  const topSkillShape = escalatedSkillShape.length
+    ? post.violations.find((v) => v.rule.startsWith('shape_'))
     : undefined;
-  const effectiveScan: SentryScanResult = escalatedNseap.length
+  const effectiveScan: SentryScanResult = escalatedSkillShape.length
     ? { ...scan, outcome: 'restricted' }
     : scan;
   const receipt = writeInstallReceipt(uid, skillId, payloadHash, effectiveScan, {
     violationCount: post.violations.length,
-    ...(topNseap ? { topRule: topNseap.rule, topLevel: topNseap.level as 'MEDIUM' | 'LOW' } : {}),
+    ...(topSkillShape ? { topRule: topSkillShape.rule, topLevel: topSkillShape.level as 'MEDIUM' | 'LOW' } : {}),
   }, undefined, dir);
 
   const outcome: CustomAdmissionOutcome =
-    (escalatedNseap.length || scan.outcome === 'restricted') ? 'restricted' : 'pass';
-  return { outcome, skillId, report: post, scan, receipt, escalatedNseap };
+    (escalatedSkillShape.length || scan.outcome === 'restricted') ? 'restricted' : 'pass';
+  return { outcome, skillId, report: post, scan, receipt, escalatedSkillShape };
 }

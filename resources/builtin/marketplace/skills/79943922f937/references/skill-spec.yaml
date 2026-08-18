@@ -1,6 +1,5 @@
 # Identity / level / route. Confirm defaults; only change with reason.
 skill_spec:
-  standard_id: nseap-skill-creator
   skill_class: execution            # execution | meta_skill (if it makes skills)
   is_skill_of_skill: false
   level: L5                         # Skill-L: L0..L5 (L5 = governed skill system)

@@ -29,7 +29,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'src' / 'resources' / 'icons'
 
-DEFAULT_SOURCE = Path('/Users/sudai/Desktop/微信图片_20260813194423_1297_537.png')
+# 无内置默认源：源图是设计交付资产，路径随机器变化，必须由调用方显式传入。
 
 # App icon background: opaque light warm-white (r,g,b all >= 239 so the asset
 # contract can distinguish it from the transparent page logo).
@@ -95,8 +95,10 @@ def _rounded_tile(logo: Image.Image, size: int, background: tuple[int, int, int]
     Measured on this machine (Finder/Music/Photos/Chrome/VSCode): the opaque
     tile occupies ~84-87.5% of the canvas with a ~21-26% corner radius. We
     target the Apple system-app values: tile 87.5% of the canvas (6.25% margin
-    per side), corner radius 21% of the canvas, and the mark centered at ~66%
-    of the tile so the Dock renders it at the same visual size as other apps.
+    per side), corner radius 21% of the canvas, and the mark scaled to ~72%
+    of the canvas (the passed `logo` already carries ~12% padding, so the
+    visible mark lands at ~72% — previously 0.66×tile shrunk it to ~51%,
+    leaving the Dock tile mostly background).
     """
     margin = round(size * 0.0625)
     tile_side = size - margin * 2
@@ -111,7 +113,7 @@ def _rounded_tile(logo: Image.Image, size: int, background: tuple[int, int, int]
     )
     tile.paste(Image.new('RGBA', (size, size), (*background, 255)), (0, 0), mask)
 
-    content = round(tile_side * 0.66)
+    content = round(size * 0.82)
     scaled = logo.resize((content, content), Image.Resampling.LANCZOS)
     tile.paste(scaled, ((size - content) // 2, (size - content) // 2), scaled)
     return tile
@@ -152,7 +154,7 @@ def write_svg(path: Path) -> None:
 
 
 def main() -> None:
-    source = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SOURCE
+    source = Path(sys.argv[1]) if len(sys.argv) > 1 else None
     if not source.is_file():
         raise SystemExit(
             f'brand icon source not found: {source}\n'

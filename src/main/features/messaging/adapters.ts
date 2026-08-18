@@ -735,7 +735,8 @@ export class FeishuAdapter implements MessagingCardAdapter {
           const delivery = await this.callbacks.resolveDelivery(reaction.messageId);
           if (!delivery) return {};
           const envelope = reactionEnvelope(this.instance, reaction, delivery);
-          const enriched = await this.enrichSenderInfo(envelope);
+          // 与消息入站同规则：身份查询带 deadline，卡死也不阻塞 reaction 入站。
+          const enriched = await this.boundByDeadline(this.enrichSenderInfo(envelope), envelope);
           void this.callbacks.onInbound(enriched).catch((error) => {
             log.warn('Feishu reaction dispatch failed', {
               instanceId: this.instance.id,
@@ -755,6 +756,25 @@ export class FeishuAdapter implements MessagingCardAdapter {
 
   private readonly IDENTITY_CACHE_TTL_MS = 10 * 60 * 1000;
   private readonly IDENTITY_CACHE_MAX = 512;
+  /** 入站业务调度前的前置 API 门控（processing 反应 + 身份名字/群名查询）的
+   *  deadline。lark SDK 默认 HTTP 客户端（axios）不设请求超时（timeout=0），
+   *  身份查询一旦挂起就可能无限阻塞消息进入业务调度；到点即放行、丢弃迟到
+   *  结果。测试可直接改小以驱动超时路径。 */
+  private preDispatchDeadlineMs = 5000;
+
+  /** Race a pre-dispatch Feishu API call against the deadline so a wedged
+   *  request (the SDK's axios client has no timeout by default) can never hold
+   *  an inbound message out of business dispatch. On deadline the fallback is
+   *  used; a late settle is dropped. */
+  private boundByDeadline<T>(promise: Promise<T>, fallback: T): Promise<T> {
+    return new Promise<T>((resolve) => {
+      const timer = setTimeout(() => resolve(fallback), this.preDispatchDeadlineMs);
+      promise.then(
+        (value) => { clearTimeout(timer); resolve(value); },
+        () => { clearTimeout(timer); resolve(fallback); },
+      );
+    });
+  }
 
   /** LRU-ish identity cache with a 10-minute TTL (mirrors Hermes'
    * `_resolve_sender_name_from_api`). Failures are never cached. */
@@ -843,8 +863,11 @@ export class FeishuAdapter implements MessagingCardAdapter {
     const callbacks = this.callbacks;
     if (!callbacks) return;
     const messageId = envelope.externalMessageId;
-    await this.addProcessingReaction(messageId);
-    const enriched = await this.enrichSenderInfo(envelope);
+    // 前置 API 门控全部带 deadline：身份查询（发送者名字/群名）或 processing
+    // 反应调用卡死都不能把消息挡在业务调度之外（身份查询超时 → 退化为
+    // id-only envelope 继续入站）。
+    await this.boundByDeadline(this.addProcessingReaction(messageId), undefined);
+    const enriched = await this.boundByDeadline(this.enrichSenderInfo(envelope), envelope);
     try {
       const result = await callbacks.onInbound(enriched);
       if (!result.accepted) {

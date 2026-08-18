@@ -37,8 +37,8 @@ description: "从简历中只抽取候选人明确陈述且可定位的经历证
 - 权限不足或出现敏感数据：停止对应读取/动作并请求授权。
 - 预算耗尽：保留中间证据、未完成步骤和恢复指针。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：需要“从简历中只抽取候选人明确陈述且可定位的经历证据，未知保持未知。”，并具备完成“记录文件版本与解析质量，必要时先OCR”与“抽取职位、时间、成果、技能及原文定位，不推断未写事实”所需的授权材料、环境和范围。
 - `do_not_use_when`：无法完成前置检查“记录文件版本与解析质量，必要时先OCR”；执行“抽取职位、时间、成果、技能及原文定位，不推断未写事实”所需的材料、环境或授权不可用；任务不属于“resume-evidence”职责；或请求违反专属判断规则“缺失不等于不具备”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
@@ -52,7 +52,7 @@ description: "从简历中只抽取候选人明确陈述且可定位的经历证
 - 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
 - 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
 - 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->
 
 ## 详细方法
 

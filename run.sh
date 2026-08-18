@@ -38,11 +38,21 @@ if [ -n "${ORKAS_WORKSPACE_ROOT:-}" ]; then
   echo "[CogSeed] This worktree manages its own cogseed data root; inherited ORKAS_WORKSPACE_ROOT is not allowed." >&2
   exit 2
 fi
+
+# Dev shells commonly export Anthropic gateway credentials for Claude Code
+# (ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / ANTHROPIC_DEFAULT_MODEL). The
+# app's model layer treats an env key as "model configured" and would call
+# api.anthropic.com directly with a gateway-only key → every turn 403
+# "Request not allowed". Strip them here so a shell-launched dev instance
+# can never inherit them; configure the model in the app's Settings instead.
+# Claude Code is unaffected — it reads the shell environment directly and
+# never goes through this launcher.
+unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_MODEL
+
 export ORKAS_RUNTIME_VARIANT="cogseed"
 
-# Hub 联调默认值：默认连接测试 Hub 账号服务（https://cogseed-open.bonc.com.cn）。
-# 3000 端口已对公网关闭，请勿再直连 http://101.36.66.129:3000。
-# 需要连本地服务时，显式导出同名变量即可覆盖：
+# Hub 联调默认值：默认连接 Hub 账号服务。需要连本地服务时，
+# 显式导出同名变量即可覆盖：
 #   COGSEED_HUB_API_BASE=http://localhost:3000 ./run.sh
 export COGSEED_HUB_API_BASE="${COGSEED_HUB_API_BASE:-https://cogseed-open.bonc.com.cn}"
 

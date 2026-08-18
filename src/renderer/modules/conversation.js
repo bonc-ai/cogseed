@@ -1149,10 +1149,21 @@ function _initSessionImportEvents() {
 }
 
 function _handleExtractionDone(event) {
-  const { cid, welcome } = event;
+  const { cid, welcome, cognitions } = event;
   if (cid === currentCid) _upgradeWelcomePanel(cid, welcome);
+  // 提炼完成 → 刷新右侧「运行上下文」：四类资产段的「正在提炼」状态结束，
+  // 计数随最新资产更新（候选确认后进入正式资产才会变化，刷新保持数据新鲜）。
+  if (cid === currentCid && window.ConversationInfo && typeof window.ConversationInfo.refresh === 'function') {
+    try { window.ConversationInfo.refresh(cid, { silent: true }); } catch (_) {}
+  }
   if (typeof uiToast === 'function') {
-    uiToast(t('chat.welcome_extraction_done', '导入会话已完成提炼，可查看携带明细'), { variant: 'success', timeoutMs: 5000 });
+    const total = cognitions
+      ? (cognitions.personal || 0) + (cognitions.rule || 0) + (cognitions.template || 0) + (cognitions.skill_method || 0)
+      : 0;
+    const msg = total > 0
+      ? t('chat.welcome_extraction_done_with_count', '导入会话已完成提炼：{count} 条认知候选可到认知沉淀确认', { count: total })
+      : t('chat.welcome_extraction_done', '导入会话已完成提炼，可查看携带明细');
+    uiToast(msg, { variant: 'success', timeoutMs: 5000 });
   }
 }
 
@@ -1164,6 +1175,10 @@ function _handleExtractionFailed(event) {
       panel.classList.remove('is-pending');
       const badge = panel.querySelector('.welcome-carry-pending-badge');
       if (badge) badge.textContent = t('chat.welcome_extraction_failed', '提炼失败');
+    }
+    // 失败同样结束「正在提炼」状态：刷新四类资产段。
+    if (window.ConversationInfo && typeof window.ConversationInfo.refresh === 'function') {
+      try { window.ConversationInfo.refresh(cid, { silent: true }); } catch (_) {}
     }
   }
   if (typeof uiToast === 'function') {
@@ -9423,6 +9438,14 @@ async function _resolveSlowSwitchDecision(card, cid, actorId, decision, targetAg
     _pruneSlowSwitchHost(_slowSwitchHost(cid, { create: false }));
     return;
   }
+  // 用户已在切换卡里显式选定新目标（重建的 @新智能体）。旧接收者——失败的
+  // 那个外接智能体（可能是此前 CLI fallback / 自动切换写入 _recipientByCid，
+  // 或 active_floor 镜像到 _autoRecipientByCid）——此时已过期。不清掉的话，
+  // handleChatSubmit 会把 @新目标 前缀改写成旧接收者的名字，且结构化
+  // recipient_agent_id 仍指向旧接收者（后端优先按结构化字段路由）→ 出现
+  // 「无论选哪个智能体，切换后仍路由回失败的那个」。这里先清掉旧接收者，
+  // 让重发消息的 @新目标 成为唯一路由依据。
+  _dropStaleSwitchRecipient(cid, actorId);
   // abort 是异步的（POST /abort fire-and-forget），而 handleChatSubmit 在
   // `isConvPending` 为真时会走 enqueue 排队而非立即发送——切换要求「马上
   // 用新 agent 继续」，所以等该 cid 真正空闲再重发，避免新任务被排进队列
@@ -10910,10 +10933,12 @@ async function handleNewChatSubmit() {
   const references = _referenceSnapshotsForQuotes(quotes);
   // 无模型降级到 fallback CLI agent 时，若消息以旧 @ 前缀开头，换成
   // fallback agent 的名字（避免后端按旧 @ 解析失败回退 commander）。
+  // 仅当 @令牌 解析不到已注册智能体（确实是旧 @ 前缀）时才改写；有效的
+  // 显式提及必须原样保留，否则会被当前接收者覆盖。
   let effectiveRaw = raw;
   const fbRecipient = _activeRecipient('new-chat');
   const fallbackAgentId = (fbRecipient && fbRecipient.kind === 'agent' && fbRecipient.id) ? fbRecipient.id : '';
-  if (fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw)) {
+  if (fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw) && !_leadingMentionResolvesAgent(effectiveRaw)) {
     const fbName = _recipientPrefixName({ kind: 'agent', id: fallbackAgentId });
     if (fbName) {
       effectiveRaw = '@' + fbName + ' ' + effectiveRaw.replace(/^@[A-Za-z0-9_一-鿿-]+\s?/u, '');
@@ -11115,10 +11140,14 @@ async function handleChatSubmit() {
   // 无模型降级到 fallback CLI agent 时，若消息以旧 @ 前缀开头（用户 @ 的
   // 智能体当前没有 agent 记录），必须把前缀换成 fallback agent 的名字——
   // 否则后端 router 按旧 @ 解析失败回退 commander → 弹「未配置模型」。
+  // 注意：仅当 @令牌 在已注册智能体目录里解析不到（确实是旧 @ 前缀）时才改写。
+  // 若 @令牌 是有效的显式提及（如「切换并继续」重建的 @新目标），必须原样
+  // 保留——否则显式切换的目标会被当前接收者（失败的那个）覆盖，「选哪个都
+  // 仍路由回失败的那个」。
   let effectiveRaw = raw;
   const fbRecipient = _activeRecipient('conversation');
   const fallbackAgentId = (fbRecipient && fbRecipient.kind === 'agent' && fbRecipient.id) ? fbRecipient.id : '';
-  if (fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw)) {
+  if (fallbackAgentId && _LEADING_MENTION_RE.test(effectiveRaw) && !_leadingMentionResolvesAgent(effectiveRaw)) {
     const fbName = _recipientPrefixName({ kind: 'agent', id: fallbackAgentId });
     if (fbName) {
       effectiveRaw = '@' + fbName + ' ' + effectiveRaw.replace(/^@[A-Za-z0-9_一-鿿-]+\s?/u, '');
@@ -11187,11 +11216,16 @@ async function handleChatSubmit() {
   // is aborted, the files remain on disk but the user can re-attach via the
   // "+" button (listAttachments shows what's still there).
   if (attachments.length) _chatAttachClear(cid);
+  // 显式 @提及（如「切换并继续」重建的 @新目标）本身就是路由目标。此时若再
+  // 附带结构化 recipient_agent_id（可能仍指向失败的旧接收者），后端会优先按
+  // 结构化字段路由而覆盖显式提及 → 仍路由回旧智能体。仅当正文没有前导 @提及
+  // 时才附加快照路由字段（普通 chip 选中 / CLI fallback 场景）。
+  const hasExplicitMention = _LEADING_MENTION_RE.test(content);
   const extra = {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
-    ..._recipientRoutingFields(recipientSnapshot),
+    ...(hasExplicitMention ? {} : _recipientRoutingFields(recipientSnapshot)),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -11618,6 +11652,27 @@ function _makeConvChatController(cid, options = {}) {
 // Honest, idempotent, never fabricates a model.
 let _cliFallbackApplied = null; // cid → cli (per conversation, once)
 
+/** 判断前导 @令牌 能否解析到当前已注册的智能体（按 display name / agent_id，
+ *  大小写与空白不敏感，与后端 router 的 name-key 归一化一致）。能解析 → 是
+ *  有效的显式提及（如「切换并继续」重建的 @新目标），不得被 fallback 改写
+ *  覆盖；解析不到 → 旧 @ 前缀（目标智能体已删除），允许改写为 fallback 接收者。
+ *  纯函数，测试可直接验证。 */
+function _leadingMentionResolvesAgent(text) {
+  const m = _LEADING_MENTION_RE.exec(String(text || '').trim());
+  if (!m) return false;
+  const key = String(m[1] || '').toLowerCase().replace(/\s+/g, '');
+  if (!key) return false;
+  const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache))
+    ? _agentsCache
+    : [];
+  // enabled===false 的智能体不进后端 agentNameToId（bus.ts 构建时同样跳过），
+  // 这里保持同一判定，避免「能解析却路由不到」导致后端回退 commander。
+  return list.some((a) => a && a.agent_id && a.enabled !== false && (
+    String(a.name || '').toLowerCase().replace(/\s+/g, '') === key
+    || String(a.agent_id).toLowerCase() === key
+  ));
+}
+
 /** 重建切换消息：把（可能带旧 @ 前缀的）原任务文本换成 `@新名 任务`。
  *  纯函数——统一剥掉旧 @ 前缀再以目标名重建，避免「提示已切换、实际
  *  仍是 @旧名」。任务为空时原样返回空。测试可直接验证。 */
@@ -11723,6 +11778,37 @@ function _pruneAllSlowSwitches(cid) {
       if (watch.timer) clearTimeout(watch.timer);
       _extSlowWatch.delete(key);
     }
+  }
+}
+
+/** 切换重发前清除该会话的旧接收者上下文：仅当当前接收者就是失败/卡住的
+ *  那个智能体（staleActorId）时，清掉 _recipientByCid / _autoRecipientByCid
+ *  镜像与降级标记，让显式 @新目标 成为唯一路由依据——否则 handleChatSubmit
+ *  会把 @新目标 改写成旧接收者名字，且结构化 recipient_agent_id 仍指向旧
+ *  接收者（后端优先按结构化字段路由）→「无论选哪个智能体，切换后仍路由回
+ *  失败的那个」。用户其它手动选定的接收者不受影响。 */
+function _dropStaleSwitchRecipient(cid, staleActorId) {
+  if (!cid || !staleActorId) return;
+  let dropped = false;
+  if (typeof _recipientByCid !== 'undefined' && _recipientByCid[cid]
+      && _recipientByCid[cid].id === staleActorId) {
+    delete _recipientByCid[cid];
+    dropped = true;
+  }
+  if (typeof _autoRecipientByCid !== 'undefined') {
+    const auto = _autoRecipientByCid.get(cid);
+    if (auto && auto.id === staleActorId) {
+      _autoRecipientByCid.delete(cid);
+      dropped = true;
+    }
+  }
+  if (!dropped) return;
+  if (_cliFallbackApplied === cid) _cliFallbackApplied = null;
+  if (typeof _saveRecipientMap === 'function') {
+    try { _saveRecipientMap(); } catch (_) {}
+  }
+  if (cid === currentCid) {
+    try { _renderRecipientChip('conversation'); } catch (_) {}
   }
 }
 
@@ -11947,12 +12033,20 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
   // 后台会话失败时 currentCid 可能指向别的会话）。
   let recipient = _recipientByCid[cid] || null;
   if (!recipient || recipient.kind !== 'agent' || !recipient.id) return;
+  // 只对"无 API Key 降级链"选中的 agent 自动切换（origin: cli_fallback）。
+  // 用户手动选择的外接智能体（外接 tab / 显式 @，无 origin）失败时不做自动
+  // 切换：p3394 网关失败通常是网关/节点侧瞬时故障（gateway-turn 的
+  // recoverGateway 自愈已重试过），自动切走会破坏"同一外接智能体自我恢复"，
+  // 且用户刚切走网关又恢复，产生抖动。
+  if (recipient.origin !== 'cli_fallback') return;
   // 找出当前 recipient 对应的 CLI 类型。
   let failedCli = '';
   try {
     const listRes = await window.cogseed.invoke('agents.list', {});
     const a = (listRes && listRes.agents || []).find((x) => x && String(x.agent_id) === String(recipient.id));
-    if (a && a.runtime && a.runtime.kind === 'cli') failedCli = a.runtime.cli;
+    if (a && a.runtime && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway')) {
+      failedCli = a.runtime.cli;
+    }
   } catch (_) { /* agents list unavailable */ }
   if (!failedCli) return;
 

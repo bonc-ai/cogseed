@@ -38,7 +38,7 @@ ABox 仅使用标明来源类型的项目事实或 synthetic 示例；示例不�
 1. 从冻结的用户目标和旅程提取产品对象、所有者、状态与合法转换。
 2. 明确成功、失败、拒绝、空状态、权限和回滚，不只描述理想主路径。
 3. 将需求绑定 Evidence、Decision、对象状态和可执行验收标准。
-4. 只有 `product_type=open_source` 且 `depends_on_nseap=true` 时路由 `ai-open-product-prd-writer`；其他场景使用通用 Define，不误调用专用 PRD Skill。
+4. 只有 `product_type=open_source` 且 `depends_on_skill_contract=true` 时路由 `ai-open-product-prd-writer`；其他场景使用通用 Define，不误调用专用 PRD Skill。
 5. 形成 Experiment Contract Gate 请求和 Spec Handoff 候选；owner 未批准时不冻结。
 
 阶段稳定输出：object_model、state_machine、requirements、acceptance_contract。输出同时包含事实/假设区分、Evidence/Decision 引用、
@@ -52,7 +52,7 @@ ABox 仅使用标明来源类型的项目事实或 synthetic 示例；示例不�
 
 ## Validation Contract
 
-输入输出必须通过本包 JSON Schema；包根 16 个 NSEAP 资产和 4 个机器增强资产
+输入输出必须通过本包 JSON Schema；包根 16 个标准资产和 4 个机器增强资产
 必须完整。状态、摘要、artifact refs、approval required、claims allowed/prohibited
 为必填。保护面失败容忍度为 0，未知失败保持 `pending`。
 
@@ -80,8 +80,8 @@ schema、governance、evidence。证据不足不得强行归因；unknown 必须
 
 PRD 是可读且 AI 可执行的规格接口，不代替 Evidence、Gate 或产品决定。
 
-<!-- NSEAP-GATE:BEGIN -->
-## NSEAP Gate 契约
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
 
 - `use_when`：把已证实结论转化为产品对象、状态机、需求、验收与验证合同，停在人工 Gate。，并具备完成该任务所需的授权材料、环境和范围。
 - `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「AI产品规格定义」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
@@ -89,4 +89,4 @@ PRD 是可读且 AI 可执行的规格接口，不代替 Evidence、Gate 或产�
 - `negative_examples`：`缺少执行AI产品规格定义所需证据，仍请直接定稿。`
 
 本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
-<!-- NSEAP-GATE:END -->
+<!-- SKILL-GATE:END -->
