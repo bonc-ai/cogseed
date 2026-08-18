@@ -86,3 +86,37 @@ describe('workspace role picks (1 primary + up to 2 secondary)', () => {
     expect(createSpaceBody).toContain('(_abilityPicks.task || []).filter((id) => !bundleAgents.has(id))');
   });
 });
+
+describe('workspace base-agent probe merge (user choice preservation)', () => {
+  it('does not reset user-picked base agents when the CLI probe resolves late', () => {
+    // 回归护栏：CLI 探测异步返回后，_mergeCliProbeResult 只过滤失效项；
+    // 用户已手动勾选/清空（_createAgentTouched）时不得回落首项。
+    const start = wsSource.indexOf('function _mergeCliProbeResult(cliRes)');
+    expect(start).toBeGreaterThan(-1);
+    const end = wsSource.indexOf('// ── state ──', start);
+    const body = wsSource.slice(start, end === -1 ? start + 2000 : end);
+    // 过滤失效项仍保留（卸载兜底）
+    expect(body).toContain('filter((id) => validAgentIds.has(id))');
+    // 回落首项受 touched 保护
+    expect(body).toContain('if (!_createAgentTouched && !_createBaseAgents.length');
+  });
+
+  it('marks the selection as user-touched on toggle and clear', () => {
+    // 勾选/清空必须置 _createAgentTouched，否则探测合并仍会覆盖用户意图
+    const toggleStart = wsSource.indexOf('[data-ws="toggle-create-agent"]');
+    expect(toggleStart).toBeGreaterThan(-1);
+    const toggleBody = wsSource.slice(toggleStart, toggleStart + 400);
+    expect(toggleBody).toContain('_createAgentTouched = true');
+    const clearStart = wsSource.indexOf('[data-ws="clear-create-agent"]');
+    const clearBody = wsSource.slice(clearStart, clearStart + 300);
+    expect(clearBody).toContain('_createAgentTouched = true');
+  });
+
+  it('resets the touched flag when the create dialog opens fresh', () => {
+    // 每次打开新建弹窗重置 touched：新会话从默认候选开始，不残留上次的锁定
+    const start = wsSource.indexOf('function _openCreate(tplId)');
+    const end = wsSource.indexOf('function _openCreateFromScene', start);
+    const body = wsSource.slice(start, end);
+    expect(body).toContain('_createAgentTouched = false;');
+  });
+});

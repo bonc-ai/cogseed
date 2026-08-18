@@ -325,10 +325,14 @@
       if (rx !== ry) return rx - ry;
       return x.name < y.name ? -1 : x.name > y.name ? 1 : 0;
     });
-    // 已选值不在候选里（如装了新 CLI 或选了被卸载的）→ 过滤掉；空选时回落首项
+    // 已选值不在候选里（如装了新 CLI 或选了被卸载的）→ 过滤掉；
+    // 空选且用户未手动选过 → 回落首项。用户手动改过选择时（含清空）
+    // 尊重用户意图，探测合并/后续刷新不再重置。
     const validAgentIds = new Set(_baseAgentCatalog.map((a) => a.id));
     _createBaseAgents = (_createBaseAgents || []).filter((id) => validAgentIds.has(id));
-    if (!_createBaseAgents.length && _baseAgentCatalog.length) _createBaseAgents = [_baseAgentCatalog[0].id];
+    if (!_createAgentTouched && !_createBaseAgents.length && _baseAgentCatalog.length) {
+      _createBaseAgents = [_baseAgentCatalog[0].id];
+    }
   }
 
   // ── state ─────────────────────────────────────────────────────────────────
@@ -346,6 +350,7 @@
   let _createInstruction = '';     // 弹窗内已填默认目标/指令（_reRender 时保留）
   let _createTemplate = null;      // 弹窗套用的模板 template_id
   let _createBaseAgents = [];     // 弹窗选中的基础 Agent 列表（cli type；多选，探测结果首项为默认）
+  let _createAgentTouched = false; // 用户是否手动改过基础 Agent 选择（探测合并时尊重，不回落首项）
   let _createAgentOpen = false;   // 新建空间弹窗内的基础 Agent 多选弹窗
   let _abilityKind = 'role';       // 能力弹窗当前 tab：role | task | skill
   let _abilityOpen = false;
@@ -1632,10 +1637,11 @@
       const id = el.dataset.id;
       const picks = _createBaseAgents || [];
       _createBaseAgents = picks.includes(id) ? picks.filter((x) => x !== id) : [...picks, id];
+      _createAgentTouched = true;
       _reRender();
     }));
     root.querySelectorAll('[data-ws="save-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createAgentOpen = false; _reRender(); }));
-    root.querySelectorAll('[data-ws="clear-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createBaseAgents = []; _reRender(); }));
+    root.querySelectorAll('[data-ws="clear-create-agent"]').forEach((el) => el.addEventListener('click', () => { _createBaseAgents = []; _createAgentTouched = true; _reRender(); }));
 
     // 所有「功能待接入」桩（创建/能力选择已接真，走 confirm-create/toggle-ability/save-ability）
     root.querySelectorAll('[data-ws^="stub-"]').forEach((el) => el.addEventListener('click', () => _stub(_stubLabel(el))));
@@ -1743,6 +1749,9 @@
     _createOpen = true;
     _abilityOpen = false;
     _createAgentOpen = false;
+    // 新建弹窗每次打开重置"已触碰"标记：探测合并的回落首项仅对
+    // 用户尚未手动选择时生效；已选的 _createBaseAgents 保留为默认候选。
+    _createAgentTouched = false;
     _reRender();
   }
 
