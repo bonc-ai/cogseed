@@ -81,8 +81,8 @@ export const mateControlService = {
 
   async startCommanderTask(userId: string, input: StartMateCommanderTaskInput) {
     const session = await getOrCreateMateCommanderSession(userId, input.conversationId);
-    const { conversationId: _conversationId, ...taskInput } = input;
-    return mateRuntimeController.startMateTask(userId, { ...taskInput, sessionId: session.sessionId });
+    const { conversationId, ...taskInput } = input;
+    return mateRuntimeController.startMateTask(userId, { ...taskInput, sessionId: session.sessionId, conversationId });
   },
 
   async startMemberTask(userId: string, input: StartMateMemberTaskInput) {
@@ -93,8 +93,8 @@ export const mateControlService = {
       input.displayName,
       input.actorRole,
     );
-    const { conversationId: _conversationId, actorId: _actorId, displayName: _displayName, actorRole: _actorRole, ...taskInput } = input;
-    return mateRuntimeController.startMateTask(userId, { ...taskInput, sessionId: session.sessionId });
+    const { conversationId, actorId: _actorId, displayName: _displayName, actorRole: _actorRole, ...taskInput } = input;
+    return mateRuntimeController.startMateTask(userId, { ...taskInput, sessionId: session.sessionId, conversationId });
   },
 
   async resumeTask(userId: string, taskId: string, input: ResumeMateTaskInput) {

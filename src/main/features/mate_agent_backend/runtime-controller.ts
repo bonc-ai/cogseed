@@ -11,6 +11,8 @@ import { appendMateTaskEvent } from './event-store';
 import { markMateTaskRecoverable, retryMateTask as retryStoredMateTask, transitionMateTask } from './lifecycle';
 import { createMateTask, readMateTask, updateMateTask } from './task-store';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
+import { buildRuntimeAssetContext } from './runtime-asset-context';
+import { readMateSession } from './session-store';
 import type { MateTaskRecord } from './types';
 
 const log = createLogger('mate-backend:runtime-controller');
@@ -30,6 +32,10 @@ export interface StartMateTaskInput {
    * `messaging.proactive`). Set by the controller from
    * `resolveRuntimeCapabilities`; never accepted from external callers. */
   capabilities?: string[];
+  /** Optional conversation binding. When present, the main process assembles
+   * confirmed recall ability assets into the runtime context before dispatch
+   * (Decision 2 = connect). The worker never reads the recall store. */
+  conversationId?: string;
 }
 
 export interface ResumeMateTaskInput {
@@ -79,6 +85,26 @@ function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string;
 
 function terminal(task: MateTaskRecord): boolean {
   return task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
+}
+
+/**
+ * Resolve the conversation binding for a Mate task, preferring the explicit
+ * input field and falling back to the persisted Mate session record. Returns
+ * undefined when neither source carries a conversation — in that case the
+ * runtime task runs without recall asset injection (soft degradation).
+ */
+async function resolveConversationIdForTask(
+  userId: string,
+  task: MateTaskRecord,
+  input: StartMateTaskInput,
+): Promise<string | undefined> {
+  if (input.conversationId) return input.conversationId;
+  try {
+    const session = await readMateSession(userId, task.sessionId);
+    return session?.conversationId || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function mapRuntimeEvent(userId: string, task: MateTaskRecord, event: RuntimeEventEnvelope): Promise<MateTaskRecord> {
@@ -157,7 +183,15 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
       const created = await createMateTask(userId, input);
       if (!created.created) return created.task;
       const capabilities = await resolveRuntimeCapabilities(userId, created.task.requestId, created.task.runtimeSessionId);
-      return launchTask(userId, created.task, { ...input, capabilities });
+      const launchInput: StartMateTaskInput & { runtimeSessionId?: string } = { ...input, capabilities };
+      const conversationId = await resolveConversationIdForTask(userId, created.task, input);
+      if (conversationId) {
+        const assetContext = await buildRuntimeAssetContext(userId, conversationId);
+        if (assetContext.length) {
+          launchInput.context = [...(input.context ?? []), ...assetContext];
+        }
+      }
+      return launchTask(userId, created.task, launchInput);
     },
 
     async retryMateTask(userId, taskId, requestId) {
@@ -187,7 +221,7 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
           if (task.lastResumeRequestId === input.requestId) return task;
           return { ...task, lastResumeRequestId: input.requestId };
         });
-        return launchTask(userId, reserved, {
+        const resumeInput: StartMateTaskInput & { runtimeSessionId?: string } = {
           requestId: input.requestId,
           task: continuation,
           runtimeSessionId: reserved.runtimeSessionId,
@@ -196,7 +230,15 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
           ...(input.attachments ? { attachments: input.attachments } : {}),
           ...(input.workingDir ? { workingDir: input.workingDir } : {}),
           capabilities: await resolveRuntimeCapabilities(userId, input.requestId, reserved.runtimeSessionId),
-        });
+        };
+        const conversationId = await resolveConversationIdForTask(userId, reserved, resumeInput);
+        if (conversationId) {
+          const assetContext = await buildRuntimeAssetContext(userId, conversationId);
+          if (assetContext.length) {
+            resumeInput.context = [...(resumeInput.context ?? []), ...assetContext];
+          }
+        }
+        return launchTask(userId, reserved, resumeInput);
       } catch (error) {
         resumeClaims.delete(taskId);
         throw error;

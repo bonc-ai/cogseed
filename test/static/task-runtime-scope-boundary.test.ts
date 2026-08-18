@@ -85,4 +85,42 @@ describe('task runtime scope boundary', () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it('keeps the Mate Runtime worker free of recall imports (Decision 2 red line)', () => {
+    // The worker is an isolated process; only the main-process assembler
+    // (mate_agent_backend/runtime-asset-context.ts) may read the recall store
+    // and ship the assembled block through the runtime context slot.
+    const workerFiles = resolveRuntimeFiles('mate_agent_runtime');
+    expect(workerFiles.length).toBeGreaterThan(0);
+    const offenders: string[] = [];
+    for (const file of workerFiles) {
+      const content = fs.readFileSync(file, 'utf8');
+      for (const token of forbiddenImports) {
+        if (content.includes(token)) {
+          offenders.push(`${path.relative(root, file)} imports ${token}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('requires the main-process asset assembler to be the only new recall-facing bridge in mate_agent_backend', () => {
+    // runtime-asset-context.ts is the M-1 sanctioned bridge (Decision 2 red
+    // line: assemble in main, ship through context, never let the worker read
+    // recall). The pre-existing recall-bridge.ts predates M-1 and is out of
+    // scope for this guard.
+    const backendDir = path.join(srcDir, 'mate_agent_backend');
+    const offenders: string[] = [];
+    for (const entry of fs.readdirSync(backendDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) continue;
+      if (entry.name === 'runtime-asset-context.ts' || entry.name === 'recall-bridge.ts') continue;
+      const content = fs.readFileSync(path.join(backendDir, entry.name), 'utf8');
+      for (const token of forbiddenImports) {
+        if (content.includes(token)) {
+          offenders.push(`${entry.name} imports ${token}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 });
