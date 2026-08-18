@@ -155,6 +155,9 @@ export class P3394PeerRegistry {
         saved_at: this.now(),
       };
       writeJsonSync(this.filePath, payload);
+      // R-01/0600：peer 注册表可能含 per-peer dial_token 出站凭据，落盘必须
+      // 私有（storage.writeJsonSync 默认 0644）。
+      try { fs.chmodSync(this.filePath, 0o600); } catch { /* best effort */ }
     } catch (error) {
       log.warn('P3394 peer registry persistence failed', {
         error: error instanceof Error ? error.message : String(error),

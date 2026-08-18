@@ -110,6 +110,10 @@ const viewMock = vi.hoisted(() => ({
 }));
 const teachingMock = vi.hoisted(() => ({
   listUserTeachingSignals: vi.fn(async () => []),
+  // G-2：读口改走分页出口（items + total）。total 必须是截断前的真实条数，
+  // 所以这里刻意让 total 与 items.length 不相等——否则用例分不出实现是真的
+  // 读了 total，还是又拿 items.length 顶替。
+  listUserTeachingSignalPage: vi.fn(async () => ({ items: [], total: 42 })),
   revokeUserTeachingSignal: vi.fn(async (_uid: string, id: string) => ({ id, status: 'revoked' })),
 }));
 const projectionMock = vi.hoisted(() => ({
@@ -164,6 +168,11 @@ const skillDraftMock = vi.hoisted(() => ({
   confirmRecallSkillDraft: vi.fn(async (_uid: string, assetId: string) => ({
     draft: { assetId, status: 'installed' },
     skill: { id: 'apply-recall-method', name: 'apply-recall-method' },
+  })),
+  decideRecallSkillDraft: vi.fn(async (_uid: string, assetId: string, _draftHash: string, decision: string) => ({
+    assetId,
+    status: 'draft',
+    reviewDecision: decision === 'defer' ? 'deferred' : 'rejected',
   })),
 }));
 
@@ -326,6 +335,17 @@ describe('ipc › recall candidate governance', () => {
     expect(skillDraftMock.prepareRecallSkillDraft).toHaveBeenCalledWith(UID, 'aa-method');
   });
 
+  it('routes explicit Recall Skill defer and reject decisions', async () => {
+    const draftHash = 'b'.repeat(64);
+    await expect(call('recall.skills.decide', { assetId: 'aa-method', draftHash, decision: 'defer' }))
+      .resolves.toMatchObject({ ok: true, draft: { reviewDecision: 'deferred' } });
+    await expect(call('recall.skills.decide', { assetId: 'aa-method', draftHash, decision: 'reject' }))
+      .resolves.toMatchObject({ ok: true, draft: { reviewDecision: 'rejected' } });
+    expect(skillDraftMock.decideRecallSkillDraft).toHaveBeenCalledWith(UID, 'aa-method', draftHash, 'reject');
+    await expect(call('recall.skills.decide', { assetId: 'aa-method', draftHash: 'bad', decision: 'defer' }))
+      .resolves.toMatchObject({ ok: false });
+  });
+
   it('rejects invalid ids, enums, oversized text, and missing source refs before feature calls', async () => {
     await expect(call('recall.candidates.save', { judgment: 'x', suggestedType: 'unknown', suggestedScope: 'a', sourceRefs: [] })).resolves.toMatchObject({ ok: false });
     await expect(call('recall.candidates.promote', { candidateId: '../bad' })).resolves.toMatchObject({ ok: false });
@@ -407,7 +427,10 @@ describe('ipc › recall candidate governance', () => {
     });
 
     await expect(call('recall.teaching.list', { conversationId: 'conv-a', status: 'active', limit: 5 }))
-      .resolves.toMatchObject({ ok: true, signals: [] });
+      .resolves.toMatchObject({ ok: true, signals: [], total: 42 });
+    expect(teachingMock.listUserTeachingSignalPage).toHaveBeenCalledWith(UID, {
+      conversationId: 'conv-a', status: 'active', limit: 5,
+    });
     await expect(call('recall.teaching.revoke', { signalId: 'teach-a' }))
       .resolves.toMatchObject({ ok: true, signal: { status: 'revoked' } });
     expect(teachingMock.revokeUserTeachingSignal).toHaveBeenCalledWith(UID, 'teach-a');

@@ -8,6 +8,14 @@ const BUILTIN_MANIFEST_NAME = '_manifest.json';
 const BUILTIN_MANIFEST_SCHEMA = 1;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
+/**
+ * Manifest 路径排序的固定 locale。`localeCompare` 无参时使用进程 locale，
+ * 不同环境（生成时 zh-CN / 测试时 en）对中文路径的排序结果不同，导致
+ * manifest 生成与验证判定不一致（2026-08-17 观测：3 处中文路径在
+ * zh-CN 下有序、en 下无序）。显式固定 'en'（按 UTF-16 code unit 比较，
+ * 纯字节序、跨环境确定性）让生成与验证永远一致。
+ */
+const MANIFEST_SORT_LOCALE = 'en';
 
 /**
  * @typedef {{ path: string, bytes: number, sha256: string }} BuiltinManifestFile
@@ -140,7 +148,7 @@ function validateManifestFiles(files) {
         || row.path === BUILTIN_MANIFEST_NAME) {
       throw new Error(`[builtin-content-manifest] invalid builtin manifest path at index ${index}`);
     }
-    if (index > 0 && previousPath.localeCompare(row.path) >= 0) {
+    if (index > 0 && previousPath.localeCompare(row.path, MANIFEST_SORT_LOCALE) >= 0) {
       throw new Error('[builtin-content-manifest] builtin manifest paths must be unique and sorted');
     }
     if (!Number.isSafeInteger(row.bytes) || /** @type {number} */ (row.bytes) < 0) {
@@ -180,7 +188,7 @@ function collectBuiltinFiles(root, options = {}) {
     let entries;
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true })
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .sort((a, b) => a.name.localeCompare(b.name, MANIFEST_SORT_LOCALE));
     } catch (error) {
       throw new Error(
         `[builtin-content-manifest] cannot enumerate builtin directory: ${dir}: ${/** @type {Error} */ (error).message}`,
@@ -216,7 +224,7 @@ function collectBuiltinFiles(root, options = {}) {
   }
 
   visit(resolvedRoot);
-  return records.sort((a, b) => a.path.localeCompare(b.path));
+  return records.sort((a, b) => a.path.localeCompare(b.path, MANIFEST_SORT_LOCALE));
 }
 
 /**

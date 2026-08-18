@@ -511,8 +511,11 @@ describe('Recall candidate governance', () => {
       sourceRefs: [],
     });
     expect(weak).toMatchObject({ status: 'weak_observation', value: '' });
+    // 用户线的证据门禁按 actor 放开了，但 refs 为空的候选仍然不可晋升：
+    // capability 认定它不可操作（迁出 weak_observation 会写出读不回的记录）。
     await expect(candidates.promoteRecallCandidate('user-a', weak.id, { actor: 'user' }))
       .rejects.toThrow(/insufficient/i);
+    expect(await candidates.readRecallCandidate('user-a', weak.id)).toMatchObject({ status: 'weak_observation' });
     expect((await (await import('../../../../src/main/features/recall/asset-service')).listAbilityAssets('user-a'))).toEqual([]);
   });
 
@@ -549,8 +552,11 @@ describe('Recall candidate governance', () => {
 
     expect(weak).toMatchObject({ status: 'weak_observation', suggestedAction: 'limit_scope' });
     expect(weak.targetAssetId).toBeUndefined();
+    // limit_scope 必须指明改哪条资产。缺 target 时晋升被专门的 gate 拦下，
+    // 而不再靠"弱观察不可处理"这条粗判据顺带挡住。
     await expect(candidates.promoteRecallCandidate('user-a', weak.id, { actor: 'user' }))
-      .rejects.toThrow(/insufficient/i);
+      .rejects.toThrow(/candidate target asset is required/i);
+    expect(await candidates.readRecallCandidate('user-a', weak.id)).toMatchObject({ status: 'failed' });
   });
 
   it('keeps deferred candidates quiet until their cooldown expires', async () => {
@@ -710,7 +716,9 @@ describe('Recall candidate governance', () => {
     });
 
     await expect(candidates.resumeRecallCandidate('user-a', weak.id)).rejects.toThrow(/deferred/i);
-    await expect(candidates.deferRecallCandidate('user-a', weak.id, 'collect evidence')).rejects.toThrow(/insufficient/i);
+    // 带证据的弱候选现在允许用户推迟/拒绝；这条没有 refs，仍然出不去。
+    await expect(candidates.deferRecallCandidate('user-a', weak.id, 'collect evidence'))
+      .rejects.toThrow(/insufficient/i);
     expect(await candidates.readRecallCandidate('user-a', weak.id)).toMatchObject({ status: 'weak_observation', value: '' });
   });
 

@@ -10,6 +10,7 @@ import { scheduleBootBackground, type ScheduledBootBackgroundTask } from '../../
 import { getConfiguredModelOAuthExpiredMessage, hasConfiguredModel } from '../auth';
 import * as chats from '../chats';
 import type { ReviewDecision } from '../cognition/review-decision';
+import { getRecallCandidateCapabilities } from './candidate-capabilities';
 import {
   run as runCliAgent,
 } from '../local_agents/runner';
@@ -23,7 +24,7 @@ import {
 import type { GroupMessage } from '../group_chat/visibility';
 import { readAbilityAsset } from './asset-service';
 import {
-  isRecallCandidateReviewable,
+  isAutoCaptureEligible,
   autoApplyRecallCandidate,
   promoteRecallCandidate,
   readRecallAssetHandoffReceipt,
@@ -1110,9 +1111,15 @@ async function summarizeRecallCaptures(
         reviewSummary.missing += 1;
         continue;
       }
-      if (candidate.status === 'observed' || candidate.status === 'weak_observation' || candidate.status === 'deferred') continue;
+      // 复核摘要按 capability 计数，不按 raw status 列举：实机上多数候选是
+      // weak_observation，旧写法把它们整条排除，用户看到的 pending 恒为 0。
+      // 既不需要用户处理、又还没走完的（证据不足的弱观察）仍然不进摘要。
+      const capability = getRecallCandidateCapabilities(candidate);
+      // 稍后处理是用户自己按下的静音，这份摘要里继续保持安静（既有行为）。
+      if (capability.isSnoozed) continue;
+      if (!capability.countsAsPending && !capability.isTerminal) continue;
       reviewSummary.total += 1;
-      if (candidate.status === 'pending_review' || candidate.status === 'failed') reviewSummary.pending += 1;
+      if (capability.countsAsPending) reviewSummary.pending += 1;
       else if (candidate.status === 'confirmed') {
         if (!candidate.promotedAssetId || !candidate.reviewDecisionId) {
           reviewSummary.missing += 1;
@@ -1485,7 +1492,7 @@ async function automaticallyApplyReviewableCandidates(
         });
         continue;
       }
-      if (!isRecallCandidateReviewable(candidate)) continue;
+      if (!isAutoCaptureEligible(candidate)) continue;
       if (candidate.risk === 'high') continue;
 
       const applied = await autoApplyRecallCandidate(userId, candidate.id);
@@ -1805,13 +1812,13 @@ export async function runRecallCapture(
         if (matching) {
           const retainMatching = quality.reviewable
             && retainForReview
-            && isRecallCandidateReviewable(matching);
+            && isAutoCaptureEligible(matching);
           if (retainMatching) {
             candidates.push(matching);
             if (quality.automaticEligible) automaticallyEligibleCandidateIds.add(matching.id);
             else automaticallyEligibleCandidateIds.delete(matching.id);
           }
-          if (isRecallCandidateReviewable(matching) || matching.status === 'confirmed') continue;
+          if (isAutoCaptureEligible(matching) || matching.status === 'confirmed') continue;
         }
       }
       const artifactRefs = evidenceMessages.flatMap((message) => message.artifacts.map((artifact) => ({
@@ -1856,7 +1863,7 @@ export async function runRecallCapture(
         if (quality.reviewable
           && retainForReview
           && (
-            isRecallCandidateReviewable(storedCandidate) || isSettledAutomaticCandidate(storedCandidate)
+            isAutoCaptureEligible(storedCandidate) || isSettledAutomaticCandidate(storedCandidate)
           )) {
           candidates.push(storedCandidate);
           if (quality.automaticEligible) automaticallyEligibleCandidateIds.add(storedCandidate.id);
@@ -1920,7 +1927,7 @@ export async function runRecallCapture(
     const modelUsage = extractionModelUsage;
     const hasQualifiedCandidates = candidateIds.length > 0;
     const hasReviewableCandidates = candidates.some((candidate) => (
-      isRecallCandidateReviewable(resolvedCandidates.get(candidate.id) || candidate)
+      isAutoCaptureEligible(resolvedCandidates.get(candidate.id) || candidate)
     ));
     capture = await updateCapture(userId, id, (current) => (automaticWrite
       ? current.status !== 'writing'

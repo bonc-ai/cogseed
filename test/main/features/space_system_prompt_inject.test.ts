@@ -8,6 +8,27 @@ vi.mock('../../../src/main/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
+// 测试环境无真实模型配置：buildRunner 的 auth gate 会抛
+// no_model_configured。这里给一个假 chat entry + 标记已配置，让
+// buildRunner 走到 prompt 组装（本测试只验证 space 注入，不跑模型）。
+const fakeChatEntry = {
+  entryId: 'test-entry',
+  profileId: 'test-profile',
+  provider: 'test-provider',
+  model: 'test-model',
+  apiKey: 'test-key',
+};
+vi.mock('../../../src/main/features/auth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/features/auth')>();
+  return {
+    ...actual,
+    hasConfiguredModel: () => ({ configured: true }),
+    getConfiguredModelCooldown: () => null,
+    getConfiguredModelOAuthExpiredMessage: () => null,
+    pickChatEntryGroup: async () => [fakeChatEntry],
+  };
+});
+
 // 捕获 bus → streamChatWithModel 的 ChatOptions（验证 spaceId 从会话透传）。
 let capturedChatOptions: Array<Record<string, unknown>> = [];
 vi.mock('../../../src/main/model/client', () => ({
@@ -26,13 +47,19 @@ vi.mock('../../../src/main/model/client', () => ({
 
 let tmpDir: string;
 let prevWs: string | undefined;
+let prevAnthropicKey: string | undefined;
 const UID = 'u1';
 
 beforeEach(async () => {
   capturedChatOptions = [];
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-space-inject-'));
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  prevAnthropicKey = process.env.ANTHROPIC_API_KEY;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  // buildRunner's prompt assembly is intentionally behind the model-auth
+  // gate. These tests inspect the assembled prompt without making a request,
+  // so supply the supported development fallback explicitly.
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-test-placeholder';
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(UID);
@@ -41,6 +68,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await drainMainRuntimeForTest();
   process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  if (prevAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+  else process.env.ANTHROPIC_API_KEY = prevAnthropicKey;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

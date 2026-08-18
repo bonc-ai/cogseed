@@ -1296,6 +1296,14 @@ describe('conversation process metadata formatting', () => {
       stream: 'runtime',
       data: { duration_ms: 65_000 },
     });
+    const runtimeStarted = context._formatEventLine({
+      stream: 'runtime',
+      data: { kind: 'task.started' },
+    });
+    const runtimeRetrying = context._formatEventLine({
+      stream: 'runtime',
+      data: { phase: 'retrying', attempt: 2 },
+    });
     const runtimeWithBreakdown = context._formatEventLine({
       stream: 'runtime',
       data: {
@@ -1312,6 +1320,8 @@ describe('conversation process metadata formatting', () => {
     });
 
     expect(compaction).toBe('Context compressed: 20000 -> 3000 tokens');
+    expect(runtimeStarted).toBeNull();
+    expect(runtimeRetrying).toBeNull();
     expect(runtime).toBe('Total time 1m 5s');
     expect(runtimeWithBreakdown)
       .toBe('Total time 1m 5s · model 40s · tools 5s · context 15s · retry wait 5s');
@@ -1326,6 +1336,10 @@ describe('conversation process metadata formatting', () => {
     ])).toBe('1s');
     expect(context._processSummaryRuntimeFromItems([
       { type: 'progress', text: 'Context compressed', event: { stream: 'compaction', data: {} } },
+    ])).toBe('');
+    expect(context._processSummaryRuntimeFromItems([
+      { type: 'event', event: { stream: 'runtime', data: { kind: 'task.started' } } },
+      { type: 'event', event: { stream: 'runtime', data: { duration_ms: -1 } } },
     ])).toBe('');
     expect(context._eventProcessKind({ stream: 'context', data: {} }, 'Context prepared')).toBe('context');
     expect(context._eventProcessKind({ stream: 'compaction', data: {} }, compaction)).toBe('context');
@@ -1409,7 +1423,7 @@ describe('conversation auto recipient', () => {
       .toBe('@commander 先回到你这里');
   });
 
-  it('prefixes from a send-time recipient snapshot instead of a later chip state', () => {
+  it('keeps visible text unchanged and routes from the send-time recipient snapshot', () => {
     const context = loadConversationRenderer();
     context._agentsCache = [
       { agent_id: 'a1', name: 'FamilyTutor' },
@@ -1423,7 +1437,11 @@ describe('conversation auto recipient', () => {
     `, context);
 
     expect(context.applyRecipientPrefix('继续', 'conversation', { recipientSnapshot: context.__snap }))
-      .toBe('@FamilyTutor 继续');
+      .toBe('继续');
+    expect(context._recipientRoutingFields(context.__snap)).toMatchObject({
+      recipient_agent_id: 'a1',
+      recipient_origin: 'user_selection',
+    });
   });
 
   it('stores the commander floor reset in the send-time snapshot', () => {
@@ -1456,7 +1474,7 @@ describe('conversation auto recipient', () => {
     vm.runInContext(`
       currentCid = "c1";
       __sent = [];
-      sendInCurrentConversation = (content) => { __sent.push(content); };
+      sendInCurrentConversation = (content, extra) => { __sent.push({ content, extra }); };
       setChatRecipient("conversation", { kind: "agent", id: "a1", name: "FamilyTutor" });
       enqueueMessage("c1", "还有吗？", null, {
         recipient: _takeRecipientSnapshotForSend("conversation"),
@@ -1465,7 +1483,13 @@ describe('conversation auto recipient', () => {
       _dispatchNextQueued("c1");
     `, context);
 
-    expect(context.__sent).toEqual(['@FamilyTutor 还有吗？']);
+    expect(context.__sent).toEqual([{
+      content: '还有吗？',
+      extra: {
+        recipient_agent_id: 'a1',
+        recipient_origin: 'user_selection',
+      },
+    }]);
   });
 
   it('keeps a queued message until its controller reports that sending started', async () => {

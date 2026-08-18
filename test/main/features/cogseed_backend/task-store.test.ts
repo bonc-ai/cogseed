@@ -117,4 +117,67 @@ describe('CogSeed task and session store', () => {
     expect(await store.listMateSessions(USER_B)).toEqual([]);
   });
 
+  it('freezes the current complete Skill versions when a task is created', async () => {
+    const versions = await import('../../../../src/main/features/skills/version-store');
+    const record = await versions.appendFullSkillVersion(USER_A, 'skill-versioned', {
+      operation: 'install',
+      files: [{ path: 'SKILL.md', content: '---\nname: skill-versioned\ndescription: test\n---\n' }],
+      source: { kind: 'manual_edit' },
+      security: { outcome: 'pass', findingCount: 0 },
+    });
+    const store = await backend();
+    const pinned = await store.createMateTask(USER_A, {
+      requestId: 'req-pinned-skill',
+      task: 'Use the versioned Skill.',
+      allowedSkillIds: ['skill-versioned'],
+    });
+    expect(pinned.task).toMatchObject({
+      skillVersionPinStatus: 'pinned',
+      skillVersionPins: [{
+        skillId: 'skill-versioned',
+        version: record.version,
+        revisionId: record.revisionId,
+        manifestHash: record.manifestHash,
+      }],
+    });
+    const runtimeSnapshots = await import('../../../../src/main/features/skills/runtime-snapshot-service');
+    const snapshotDir = runtimeSnapshots.skillRuntimeSnapshotDir(USER_A, 'skill-versioned', record.revisionId);
+    expect(fs.readFileSync(path.join(snapshotDir, 'SKILL.md'), 'utf8')).toContain('name: skill-versioned');
+
+    const partial = await store.createMateTask(USER_A, {
+      requestId: 'req-partial-skill-pins',
+      task: 'Use one versioned and one legacy Skill.',
+      allowedSkillIds: ['skill-versioned', 'skill-unversioned'],
+    });
+    expect(partial.task.skillVersionPinStatus).toBe('unpinned');
+    expect(partial.task.skillVersionPins).toHaveLength(1);
+  });
+
+  it('round-trips the viaP3394Gateway flag so P3394 external agents execute via the gateway, not the raw CLI runner', async () => {
+    const store = await backend();
+
+    const result = await store.createMateTask(USER_A, {
+      requestId: 'req-p3394-gateway-flag',
+      task: 'Cooperate over P3394.',
+      executionKind: 'local-cli',
+      localCli: { cli: 'codex', agentName: 'Codex', viaP3394Gateway: true },
+    });
+
+    // 关键不变量：外接智能体（runtime.kind='p3394-gateway'）的 viaP3394Gateway
+    // 标记必须落盘并原样读回，否则 consumeRuntime 退化为 local_agents runner
+    // 直连（绕过托管 gateway），P3394 协作失效。
+    expect(result.task.localCli).toMatchObject({ cli: 'codex', agentName: 'Codex', viaP3394Gateway: true });
+    const reread = await store.readMateTask(USER_A, result.task.taskId);
+    expect(reread?.localCli?.viaP3394Gateway).toBe(true);
+    // 未设置时既不落盘也不读回 true（默认为本地直连语义）。
+    const plain = await store.createMateTask(USER_A, {
+      requestId: 'req-plain-cli-flag',
+      task: 'Run locally.',
+      executionKind: 'local-cli',
+      localCli: { cli: 'claude' },
+    });
+    expect(plain.task.localCli?.viaP3394Gateway).not.toBe(true);
+  });
+
+
 });

@@ -1,6 +1,33 @@
 // Skill-only DOM bindings. Loaded immediately after skills.js when either the
 // Skills tab or the chat Agent/Skill picker first needs that surface.
 
+/**
+ * 效果评价失败时给用户看的话。
+ *
+ * 后端抛的 message 是内部契约语言（`no successful transfer proof for task run`
+ * / `effectiveness proof requires a successful transfer` / `... verified
+ * transfer receipt`），过去被原样 `uiAlert` 出去。按 `err.code` 翻译——码由
+ * `recall/proof-service.ts::recallProofError` 打上，IPC 分发器已透传到返回体。
+ * 取不到已知码时退回原始 error，宁可露出英文也不吞掉失败。
+ */
+function _recallProofErrorText(result) {
+  const code = String((result && result.code) || '');
+  const text = (key, fallback) => (typeof t === 'function' && t(key) !== key ? t(key) : fallback);
+  if (code === 'E_RECALL_NO_SUCCESSFUL_TRANSFER') {
+    return text('cognition.proof_rating_blocked_no_transfer',
+      '这次复用还没有形成迁移证明，暂时不能评价。任务结束并留下复用回执后，这里会出现评价入口。');
+  }
+  if (code === 'E_RECALL_TRANSFER_NOT_SUCCEEDED') {
+    return text('cognition.proof_rating_blocked_rejected',
+      '这次没能把资产带入目标会话，没有可评价的复用。');
+  }
+  if (code === 'E_RECALL_TRANSFER_RECEIPT_MISSING') {
+    return text('cognition.proof_rating_blocked_no_receipt',
+      '这次迁移证明没有绑定复用回执，无法核对究竟带入了什么，因此不开放效果评价。');
+  }
+  return (result && result.error) || 'effectiveness feedback failed';
+}
+
 function _initSkillsStaticBindings() {
   const panel = document.getElementById('panel-skills');
   if (panel && panel.dataset.skillBindings === '1') return;
@@ -204,6 +231,32 @@ function _initSkillsCognitionBindings() {
     switchSkillsCognitionPage(tabs[nextIndex].dataset.cognitionPage || 'inbox');
   });
 
+  /**
+   * 认知资产页的成功回执。
+   *
+   * 失败一直有 `uiAlert`，成功却只靠"列表变了"来暗示——治理/回滚/升级这几条早就
+   * 有 toast，但候选决定、效果评价、来源开关、教学撤销这些**更高频**的动作没有。
+   * 用户点完只看到列表刷新一下，无法确认系统究竟做了哪件事（尤其"稍后"和"忽略"
+   * 在列表上的表现几乎一样）。
+   *
+   * 只在**动作成功**后调用；失败路径仍走 `uiAlert`，两者不要合并——toast 会自动
+   * 消失，失败必须留在屏幕上等用户确认。
+   *
+   * **绝不能抛**：调用点全部在动作的 try 块里，回执之后才是
+   * `loadSkillsCognitionSnapshot()`。这个函数一旦抛，异常会被动作自己的 catch 接住
+   * ——动作其实成功了，界面却既不刷新又弹一句报错。一个纯装饰的提示不该有能力
+   * 打断关键路径，所以整体包 try/catch，取不到译文就用兜底原文。
+   */
+  const _cognitionNotifyDone = (key, fallback) => {
+    try {
+      if (typeof uiToast !== 'function') return;
+      const text = typeof _cognitionText === 'function' ? _cognitionText(key, fallback) : fallback;
+      uiToast(text, { variant: 'success' });
+    } catch {
+      /* 提示失败不影响动作本身 */
+    }
+  };
+
   const runSourceAction = async (control, actionName, kind, sourceId) => {
     if (!actionName || !kind || !sourceId || control.dataset.busy === '1') return;
     control.dataset.busy = '1'; control.disabled = true;
@@ -247,6 +300,10 @@ function _initSkillsCognitionBindings() {
         if (!channel) return;
         const result = await window.cogseed.invoke(channel, { kind, sourceId });
         if (!result?.ok) throw new Error(result?.error || 'recall source action failed');
+        _cognitionNotifyDone(`cognition.source_action_${actionName}_done`, {
+          pause: '已暂停这个来源', resume: '已恢复这个来源',
+          retry: '已重新读取', reconnect: '已重新连接',
+        }[actionName] || '已完成');
       }
       await loadSkillsCognitionSnapshot();
     } catch (error) {
@@ -387,21 +444,89 @@ function _initSkillsCognitionBindings() {
       renderSkillsCognitionProofs();
       return;
     }
+    // 「更好了」先开取证面板，不直接落账：这是唯一能把成熟度推到
+    // effectiveness_validated 的结论，PRD 3.6 要求它有可比依据。
+    const evidenceOpen = event.target.closest('[data-recall-proof-evidence-open]');
+    if (evidenceOpen) {
+      _skillsCognitionState.proofRatingDraft = { eventId: evidenceOpen.dataset.recallProofEvidenceOpen };
+      renderSkillsCognitionProofs();
+      return;
+    }
+    const evidenceCancel = event.target.closest('[data-recall-proof-evidence-cancel]');
+    if (evidenceCancel) {
+      _skillsCognitionState.proofRatingDraft = null;
+      renderSkillsCognitionProofs();
+      return;
+    }
+    const evidenceSubmit = event.target.closest('[data-recall-proof-evidence-submit]');
+    if (evidenceSubmit) {
+      if (evidenceSubmit.dataset.busy === '1') return;
+      const proofId = evidenceSubmit.dataset.recallProofEvidenceSubmit;
+      if (!proofId) return;
+      const panel = evidenceSubmit.closest('.recall-proof-rating');
+      const note = String(panel?.querySelector('[data-recall-proof-evidence-note]')?.value || '').trim();
+      // 勾选项就是用户认下的依据。没勾任何一条时照样提交——后端会如实把它
+      // 记成 Evidence 不足，这比替用户凑一条引用诚实。
+      const evidenceRefs = Array.from(panel?.querySelectorAll('[data-recall-proof-evidence]:checked') || [])
+        .map((box) => ({
+          kind: box.dataset.evidenceKind,
+          subtype: box.dataset.evidenceSubtype,
+          id: box.dataset.evidenceId,
+        }))
+        .filter((ref) => ref.kind && ref.id);
+      if (!note) {
+        if (typeof uiAlert === 'function') {
+          await uiAlert(t('cognition.proof_evidence_note_required') !== 'cognition.proof_evidence_note_required'
+            ? t('cognition.proof_evidence_note_required')
+            : '先写一句你观察到的变化——这句话就是这次评价的依据。');
+        }
+        return;
+      }
+      evidenceSubmit.dataset.busy = '1'; evidenceSubmit.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.proofs.effectiveness.feedback', {
+          transferProofId: proofId, feedback: 'positive', note, evidenceRefs,
+        });
+        if (!result?.ok) throw new Error(_recallProofErrorText(result));
+        _skillsCognitionState.proofRatingDraft = null;
+        // 不说"已验证有效"——能不能推动成熟度由后端按有无可追溯引用判定，这里
+        // 只回执"记下了"，免得没有引用时用户以为已经升档。
+        _cognitionNotifyDone('cognition.proof_rating_done', '已记下这次评价');
+        await loadSkillsCognitionSnapshot();
+        await loadCognitionProofs();
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        evidenceSubmit.dataset.busy = '0'; evidenceSubmit.disabled = false;
+      }
+      return;
+    }
     const proofFeedback = event.target.closest('[data-recall-proof-feedback]');
     if (proofFeedback) {
       if (proofFeedback.dataset.busy === '1') return;
       const feedback = proofFeedback.dataset.recallProofFeedback;
       const proofId = proofFeedback.dataset.recallProofFeedbackProof;
-      const taskRunId = proofFeedback.dataset.recallProofFeedbackTask;
-      // 评价必须落到一条具体的证明或任务上。两者都没有时不该发请求——
-      // 一次无法归属的评价写进去，之后没人能说清它评的是哪次复用。
-      if (!feedback || (!proofId && !taskRunId)) return;
+      // 评价必须落到一条具体的迁移证明上。**只走 proof 通道**：
+      // `feedbackForTask` 的后端前置条件与它完全相同（都要求 status='succeeded'
+      // 且已绑回执的迁移证明），按 taskRunId 再走一遍只是第二条注定失败的路径
+      // ——用户在「已带入本次任务」下点评价吃到的
+      // `no successful transfer proof for task run` 就是从那条路来的。
+      // 渲染侧的闸门在 skills.js::_proofRatingEligibility。
+      if (!feedback || !proofId) return;
       proofFeedback.dataset.busy = '1'; proofFeedback.disabled = true;
       try {
-        const result = proofId
-          ? await window.cogseed.invoke('recall.proofs.effectiveness.feedback', { transferProofId: proofId, feedback })
-          : await window.cogseed.invoke('recall.proofs.effectiveness.feedbackForTask', { taskRunId, feedback });
-        if (!result?.ok) throw new Error(result?.error || 'effectiveness feedback failed');
+        // 只走 proof 通道（M-10）：`feedbackForTask` 的后端前置条件与它完全相同，
+        // 第二条路只会让用户吃到 `no successful transfer proof for task run`。
+        // origin/develop 的 M-4 曾在这里自动附一条指向本次证明自身的
+        // execution_evaluation 证据；本分支改为「带入正确」走取证面板，由用户写下
+        // 观察并勾选可回查的依据——自引用能让成熟度升上去，但升上去的
+        // effectiveness_validated 不再代表有可比依据。两者取后者。
+        const result = await window.cogseed.invoke('recall.proofs.effectiveness.feedback', { transferProofId: proofId, feedback });
+        // 后端这几种失败是内部契约语言，直接 alert 出去用户读不懂。按稳定 code
+        // 翻成人话；渲染闸门正常时走不到这里，这是数据在渲染与点击之间发生
+        // 变化的兜底。
+        if (!result?.ok) throw new Error(_recallProofErrorText(result));
+        _cognitionNotifyDone('cognition.proof_rating_done', '已记下这次评价');
         // 评价会推进成熟度，所以整份快照都要重取，不能只重画本页。
         await loadSkillsCognitionSnapshot();
         // 评价推进了成熟度，事实链变了，这里必须重取而不是重画。
@@ -747,6 +872,11 @@ function _initSkillsCognitionBindings() {
       try {
         const result = await window.cogseed.invoke(channel, { captureId });
         if (!result?.ok) throw new Error(result?.error || 'recall capture action failed');
+        _cognitionNotifyDone(`cognition.capture_action_${actionName}_done`, {
+          pause: '已暂停这个沉淀任务', resume: '已继续这个沉淀任务',
+          cancel: '已取消这个沉淀任务', retry: '已重新排入沉淀队列',
+          'run-now': '已开始执行',
+        }[actionName] || '已完成');
         await loadRecallCaptureTasks();
       } catch (error) {
         if (typeof uiAlert === 'function') await uiAlert(_recallCaptureErrorMessage(error));
@@ -781,6 +911,7 @@ function _initSkillsCognitionBindings() {
       try {
         const result = await window.cogseed.invoke('recall.teaching.revoke', { signalId });
         if (!result?.ok) throw new Error(result?.error || 'teaching signal revoke failed');
+        _cognitionNotifyDone('cognition.teaching_revoke_done', '已撤销这条教学回执');
         await loadSkillsCognitionSnapshot();
       } catch (error) {
         if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
@@ -824,6 +955,32 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const skillDecision = event.target.closest('[data-cognition-skill-decision]');
+    if (skillDecision) {
+      const decision = skillDecision.dataset.cognitionSkillDecision || '';
+      const assetId = skillDecision.dataset.cognitionSkillAsset || '';
+      const draftHash = skillDecision.dataset.cognitionSkillDraftHash || '';
+      if (!assetId || !draftHash || !['accept', 'defer', 'reject'].includes(decision) || skillDecision.dataset.busy === '1') return;
+      const messageKey = decision === 'accept' ? 'cognition.skillupdate_accept_confirm'
+        : decision === 'defer' ? 'cognition.skillupdate_defer_confirm' : 'cognition.skillupdate_reject_confirm';
+      const fallback = decision === 'accept' ? '确认接受这次 Skill 升级？'
+        : decision === 'defer' ? '暂缓这次升级，保留当前版本？' : '拒绝这次升级？';
+      if (typeof uiConfirm === 'function' && !(await uiConfirm(_cognitionText(messageKey, fallback)))) return;
+      skillDecision.dataset.busy = '1'; skillDecision.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.skills.decide', { assetId, draftHash, decision });
+        if (!result?.ok) throw new Error(result?.error || 'skill decision failed');
+        if (typeof uiToast === 'function') uiToast(_cognitionText(`cognition.skillupdate_${decision}_done`, decision === 'accept' ? 'Skill 已升级' : decision === 'defer' ? '已暂缓升级' : '已拒绝本次升级'), { variant: 'success' });
+        const current = _skillsCognitionState.skillUpdate || {};
+        await loadCognitionSkillUpdate(assetId, current.skillId || '');
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        skillDecision.dataset.busy = '0'; skillDecision.disabled = false;
+      }
+      return;
+    }
+
     // Skill 版本回滚走真实通道（cognition.skills.rollback）。回滚会改变下一次
     // 匹配任务实际使用的版本，所以先确认——这一步不可由一次误点完成。
     const skillRollback = event.target.closest('[data-cognition-skill-rollback]');
@@ -831,14 +988,41 @@ function _initSkillsCognitionBindings() {
       const skillId = skillRollback.dataset.cognitionSkillRollback || '';
       const version = skillRollback.dataset.cognitionSkillVersion || '';
       if (!skillId || !version || skillRollback.dataset.busy === '1') return;
+      let rollbackPreview;
+      try {
+        const previewResult = await window.cogseed.invoke('cognition.skills.rollback.preview', { skillId, version });
+        if (!previewResult?.ok) throw new Error(previewResult?.error || 'skill rollback preview failed');
+        rollbackPreview = previewResult.preview;
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+        return;
+      }
       const message = _cognitionText(
         'cognition.skillupdate_rollback_confirm',
         '回滚后，下一次匹配任务将使用 v{v}；更高版本仍然保留，历史结果不会被修改。确认回滚？',
-      ).replace('{v}', version);
+      ).replace('{v}', version)
+        + `\n\n${rollbackPreview?.rollbackScope === 'skill_md_only'
+          ? _cognitionText('cognition.skillupdate_rollback_legacy_scope', '这是旧版本记录，只会恢复 SKILL.md，不会恢复其他文件；本次会生成新的兼容版本。')
+          : _cognitionText('cognition.skillupdate_rollback_full_scope', '将恢复完整 Skill 文件树，新增、删除和脚本变化都会纳入新版本。')}`
+        + (rollbackPreview?.diff
+          ? `\n${_cognitionText('cognition.skillupdate_rollback_diff_summary', '文件变化：新增 {a}，修改 {m}，删除 {d}。')
+            .replace('{a}', String(rollbackPreview.diff.added || 0))
+            .replace('{m}', String(rollbackPreview.diff.modified || 0))
+            .replace('{d}', String(rollbackPreview.diff.deleted || 0))}`
+          : '')
+        + (rollbackPreview?.nextVersion
+          ? `\n${_cognitionText('cognition.skillupdate_rollback_new_version', '确认后生成新版本 v{v}。').replace('{v}', rollbackPreview.nextVersion)}`
+          : '');
       if (typeof uiConfirm !== 'function' || !(await uiConfirm(message))) return;
       skillRollback.dataset.busy = '1'; skillRollback.disabled = true;
       try {
-        const result = await window.cogseed.invoke('cognition.skills.rollback', { skillId, version });
+        const result = await window.cogseed.invoke('cognition.skills.rollback', {
+          skillId,
+          version,
+          ...(rollbackPreview?.currentManifestHash ? { expectedManifestHash: rollbackPreview.currentManifestHash } : {}),
+          ...(rollbackPreview?.currentRevisionId ? { expectedRevisionId: rollbackPreview.currentRevisionId } : {}),
+          ...(rollbackPreview?.rollbackScope === 'skill_md_only' ? { allowPartialLegacy: true } : {}),
+        });
         if (!result?.ok) throw new Error(result?.error || 'skill rollback failed');
         if (typeof uiToast === 'function') {
           uiToast(_cognitionText('cognition.skillupdate_rollback_done', '已回滚到 v{v}').replace('{v}', version), { variant: 'success' });
@@ -872,6 +1056,33 @@ function _initSkillsCognitionBindings() {
     const treeReload = event.target.closest('[data-cognition-tree-reload]');
     if (treeReload) {
       void loadCognitionTree({ rebuild: true });
+      return;
+    }
+
+    // 「非资产分流」：展开一条接续快照 / 读取失败后重试。两个入口都落在真实
+    // 通道上（recall.continuation.read / .list），页面上没有点了不动的按钮。
+    const reviewHistoryReload = event.target.closest('[data-cognition-review-history-reload]');
+    if (reviewHistoryReload) {
+      void loadCognitionReviewHistory();
+      return;
+    }
+
+    // 空种子页的「去开始一次任务」：复用侧栏既有的新建任务入口，不另起一条
+    // 建会话路径——那会绕开 new-chat 已有的空间/草稿处理。
+    const seedNewTask = event.target.closest('[data-cognition-seed-new-task]');
+    if (seedNewTask) {
+      document.getElementById('new-chat-btn')?.click();
+      return;
+    }
+
+    const continuationOpen = event.target.closest('[data-cognition-continuation-open]');
+    if (continuationOpen) {
+      void openCognitionContinuation(continuationOpen.dataset.cognitionContinuationOpen);
+      return;
+    }
+    const continuationReload = event.target.closest('[data-cognition-continuation-reload]');
+    if (continuationReload) {
+      void loadCognitionContinuation();
       return;
     }
 
@@ -999,11 +1210,69 @@ function _initSkillsCognitionBindings() {
           : { assetId, note: trimmed };
         const result = await window.cogseed.invoke(channel, payload);
         if (!result?.ok) throw new Error(result?.error || 'recall asset governance action failed');
+        _cognitionNotifyDone(`cognition.asset_action_${action}_done`, {
+          pause: '已暂停使用', resume: '已恢复使用', revoke: '已移除',
+          'acknowledge-recommendation': '已确认这条建议',
+        }[action] || '已完成');
         await loadSkillsCognitionSnapshot();
       } catch (error) {
         if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
       } finally {
         abilityAssetAction.dataset.busy = '0'; abilityAssetAction.disabled = false;
+      }
+      return;
+    }
+
+    // 正式资产内容编辑：confirmed Candidate 之后的唯一修改出口。保存走
+    // recall.assets.update，由后端生成新版本；这里不自己拼版本号。
+    const assetEditOpen = event.target.closest('[data-recall-asset-edit-open]');
+    if (assetEditOpen) {
+      _skillsCognitionState.editingAssetId = assetEditOpen.dataset.recallAssetEditOpen || '';
+      renderSkillsCognitionGovernance();
+      return;
+    }
+    const assetEditCancel = event.target.closest('[data-recall-asset-edit-cancel]');
+    if (assetEditCancel) {
+      _skillsCognitionState.editingAssetId = '';
+      renderSkillsCognitionGovernance();
+      return;
+    }
+    const assetEditSave = event.target.closest('[data-recall-asset-edit-save]');
+    if (assetEditSave) {
+      const assetId = assetEditSave.dataset.recallAssetEditSave || '';
+      if (!assetId || assetEditSave.dataset.busy === '1') return;
+      const editor = assetEditSave.closest('[data-recall-asset-editor]');
+      if (!editor) return;
+      const readValue = (selector) => (editor.querySelector(selector)?.value ?? '').trim();
+      const readLines = (selector) => (editor.querySelector(selector)?.value ?? '')
+        .split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 32);
+      const statement = readValue('[data-recall-asset-edit-statement]');
+      if (!statement) {
+        if (typeof uiAlert === 'function') await uiAlert(_cognitionText('cognition.asset_edit_statement_required', '资产内容不能为空'));
+        return;
+      }
+      const reason = readValue('[data-recall-asset-edit-reason]')
+        || _cognitionText('cognition.asset_edit_default_reason', '用户修改了资产内容');
+      assetEditSave.dataset.busy = '1'; assetEditSave.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.assets.update', {
+          assetId,
+          statement,
+          scope: readValue('[data-recall-asset-edit-scope]'),
+          applicableWhen: readLines('[data-recall-asset-edit-applicable]'),
+          forbiddenWhen: readLines('[data-recall-asset-edit-forbidden]'),
+          reason,
+        });
+        if (!result?.ok) throw new Error(result?.error || 'recall asset update failed');
+        _skillsCognitionState.editingAssetId = '';
+        // 版本历史已经变了：清掉缓存的历史，让治理页重新读到新版本与本次改动。
+        if (_skillsCognitionState.assetHistoryById) delete _skillsCognitionState.assetHistoryById[assetId];
+        _cognitionNotifyDone('cognition.asset_edit_done', '已保存为新版本');
+        await loadSkillsCognitionSnapshot();
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        assetEditSave.dataset.busy = '0'; assetEditSave.disabled = false;
       }
       return;
     }
@@ -1067,7 +1336,9 @@ function _initSkillsCognitionBindings() {
         ? new Set(Array.isArray(_skillsCognitionState.selectedRecallCandidateIds) ? _skillsCognitionState.selectedRecallCandidateIds : [])
         : null;
       const candidateIds = (_skillsCognitionState.recallCandidates || [])
-        .filter((candidate) => candidate.status === 'pending_review' && candidate.risk !== 'high'
+        // 批量入库池取 capability，不取 raw status：否则 weak_observation 候选
+        // 全被过滤掉，selectedCount 恒为 0，按钮永远是灰的。
+        .filter((candidate) => _recallCandidateCapabilities(candidate).canBatchSelect
           && (!selectedIds || selectedIds.has(candidate.id)))
         .map((candidate) => candidate.id);
       const includesPersonal = (_skillsCognitionState.recallCandidates || []).some((candidate) =>
@@ -1131,7 +1402,12 @@ function _initSkillsCognitionBindings() {
           }
         }
         if (actionName === 'save-and-promote') {
-          const card = recallAction.closest('[data-recall-candidate-id]');
+          // **从父节点起找容器**：`closest()` 是从元素自身开始匹配的，而这些
+          // 动作按钮上同样带 `data-recall-candidate-id`（列表页与详情页都一样），
+          // 直接 `recallAction.closest(...)` 会取到按钮本身——按钮里没有任何
+          // 编辑字段，于是 judgment/suggestedType 全是空串，后端直接以
+          // `invalid recall candidate update` 打回。实机在「确认并限域」上复现。
+          const card = recallAction.parentElement?.closest('[data-recall-candidate-id]');
           if (!card || !candidate) throw new Error('recall candidate unavailable');
           channel = 'recall.candidates.update';
           const evidenceText = card.querySelector('[data-recall-edit-evidence]')?.value || '';
@@ -1159,9 +1435,27 @@ function _initSkillsCognitionBindings() {
         _skillsCognitionState.writingRecallCandidateId = '';
         await loadSkillsCognitionSnapshot();
         const promotedType = actionName === 'save-and-promote' ? payload.suggestedType : candidate?.suggestedType;
-        if ((actionName === 'promote' || actionName === 'save-and-promote')
-          && promotedType === 'personal') {
-          await refreshPersonalOntologyAfterPromotion();
+        // 个人本体的晋升多一步画像刷新，那一步失败时会自己弹一句
+        // 「资产已保存，个人画像自动更新未完成」——那句话已经包含了"保存成功"。
+        // 所以回执放在它之后、且只在它没说话时才发：一次点击只该有一条 toast，
+        // 叠两条（成功 + 警告）既吵又自相矛盾。
+        const profileSynced = (actionName === 'promote' || actionName === 'save-and-promote')
+          && promotedType === 'personal'
+          ? await refreshPersonalOntologyAfterPromotion()
+          : true;
+        // 六种决定在列表上的表现很接近（都是这一条消失），不给回执用户分不清
+        // 自己刚才是"拒绝"还是"稍后"。晋升单独说"已成为正式资产"——那是唯一
+        // 会长出叶片的一种，和其余五种不是一回事。
+        // 决定刚落账，历史带必须重取——E2E 上用户期望"从待办消失、同时出现在
+        // 已处理"是一次动作的两面。不重取的话要等下次进页才看得到。
+        if (typeof loadCognitionReviewHistory === 'function') await loadCognitionReviewHistory();
+        if (profileSynced) {
+          _cognitionNotifyDone(`cognition.candidate_${actionName}_done`, {
+            promote: '已确认，成为正式资产', 'save-and-promote': '已保存并确认为正式资产',
+            reject: '已拒绝这条候选', ignore: '已忽略这条候选',
+            defer: '已放到「可以稍后」', resume: '已重新放回待处理',
+            'keep-current': '保持当前版本不变',
+          }[actionName] || '已完成');
         }
       } catch (error) {
         if (actionName === 'promote' || actionName === 'save-and-promote') await loadSkillsCognitionSnapshot().catch(() => {});
@@ -1192,7 +1486,7 @@ function _initSkillsCognitionBindings() {
     const candidateSelectAll = event.target.closest?.('[data-recall-candidate-select-all]');
     if (candidateSelectAll) {
       const ids = (_skillsCognitionState.recallCandidates || [])
-        .filter((candidate) => candidate.status === 'pending_review' && candidate.risk !== 'high')
+        .filter((candidate) => _recallCandidateCapabilities(candidate).canBatchSelect)
         .map((candidate) => candidate.id);
       _skillsCognitionState.selectedRecallCandidateIds = candidateSelectAll.checked ? ids : [];
       _skillsCognitionState.candidatePoolSelectionInitialized = true;
@@ -1237,3 +1531,15 @@ function _initSkillsCognitionBindings() {
 }
 
 _initSkillsCognitionBindings();
+
+// ─── 外部入口：从会话消息的 [asset:<id>] 引用卡跳转到认知资产详情页 ──────
+// conversation.js 懒加载 skills feature 后调用；不依赖调用方已在认知资产页。
+window.openCognitionAssetById = function openCognitionAssetById(assetId) {
+  if (!assetId) return false;
+  _skillsCognitionState.selectedAssetId = String(assetId);
+  _skillsCognitionState.assetCategoryFilter = '';
+  switchSkillsCognitionPage('assets');
+  if (typeof _setViewFromSidebar === 'function') _setViewFromSidebar('recall');
+  else if (typeof setView === 'function') setView('recall');
+  return true;
+};

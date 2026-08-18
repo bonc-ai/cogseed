@@ -6,10 +6,21 @@ describe('skills rollback-service', () => {
     const writeFn = vi.fn(async () => true);
     const appendVersionFn = vi.fn(async () => []);
     const listVersionsFn = vi.fn(async () => [{ version: '0.1.0', at: '2026-01-01T00:00:00.000Z', content: 'old skill', canRollback: true }]);
-    const result = await mod.rollbackSkillToVersion('u1', { skillId: 'skill-a', version: '0.1.0', writeFn, appendVersionFn, listVersionsFn });
-    expect(result).toEqual({ ok: true, skillId: 'skill-a', version: '0.1.0' });
+    const result = await mod.rollbackSkillToVersion('u1', { skillId: 'skill-a', version: '0.1.0', writeFn, appendVersionFn, listVersionsFn, allowPartialLegacy: true });
+    expect(result).toEqual({ ok: true, skillId: 'skill-a', version: '0.1.0', rollbackScope: 'skill_md_only' });
     expect(writeFn).toHaveBeenCalledWith('skill-a', 'SKILL.md', 'old skill');
     expect(appendVersionFn).toHaveBeenCalledWith('u1', 'skill-a', expect.objectContaining({ version: '0.1.0', note: 'Rollback to 0.1.0', content: 'old skill' }));
+  });
+
+  it('requires explicit confirmation for a legacy SKILL.md-only rollback', async () => {
+    const mod = await import('../../../../src/main/features/skills/rollback-service');
+    await expect(mod.rollbackSkillToVersion('u1', {
+      skillId: 'skill-a',
+      version: '0.1.0',
+      writeFn: vi.fn(async () => true),
+      appendVersionFn: vi.fn(async () => []),
+      listVersionsFn: vi.fn(async () => [{ version: '0.1.0', at: '2026-01-01T00:00:00.000Z', content: 'old skill', canRollback: true }]),
+    })).rejects.toThrow(/SKILL\.md/);
   });
 
   it('rejects rollback when the target record has no content snapshot', async () => {

@@ -97,7 +97,7 @@ function isWindowOrkas(node: ts.Node): node is ts.PropertyAccessExpression | ts.
   if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return false;
   return ts.isIdentifier(node.expression)
     && node.expression.text === 'window'
-    && propertyName(node) === 'orkas';
+    && propertyName(node) === 'cogseed';
 }
 
 function rendererViolations(file: string, module: 'expense' | 'cognition'): string[] {
@@ -114,7 +114,7 @@ function rendererViolations(file: string, module: 'expense' | 'cognition'): stri
       const entersSharedInvoke = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent))
         && parent.expression === node
         && propertyName(parent) === 'invoke';
-      if (!entersExpenseApi && !entersSharedInvoke) violations.push(`${repoPath(file)}: window.orkas outside expenseWorkbench`);
+      if (!entersExpenseApi && !entersSharedInvoke) violations.push(`${repoPath(file)}: window.cogseed outside expenseWorkbench`);
     }
     if (module === 'expense' && ts.isIdentifier(node)
         && new Set(['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'sendBeacon']).has(node.text)) {

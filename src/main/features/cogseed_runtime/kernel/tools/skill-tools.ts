@@ -3,12 +3,15 @@ import { spawn } from 'node:child_process';
 
 import { capToolResult, DEFAULT_INLINE_RESULT_TOKENS, type WrapOpts } from '../../../../util/tool-result-cap';
 import { mateRuntimeSessionToolResultsDir, userRoot } from '../../../../paths';
+import { userSkillsDir } from '../../../../paths';
 // Imported from the feature module rather than `model/core-agent/skill-registry`
 // on purpose: this runs inside the isolated Runtime worker, and the registry's
 // module graph reaches `#core-agent`, which must stay dynamic-import-only
 // (PC/CLAUDE.md §Boundary). `skill_reverify` depends only on quality + paths.
 import { isSkillTrustedForLoadDeep } from '../../../skill_reverify';
 import { normalizeRuntimePath } from './permissions';
+import { captureSkillTree } from '../../../skills/snapshot-service';
+import { verifySkillRuntimeSnapshot } from '../../../skills/runtime-snapshot-service';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
 
 function formatError(code: string, message: string): RuntimeToolResult {
@@ -84,6 +87,33 @@ export async function runRuntimeSkillTool(
     if (!(ctx.allowedSkillIds ?? []).includes(skillId)) {
       return formatError('E_RUNTIME_PERMISSION_DENIED', 'runtime skill is outside the persisted Agent allowlist');
     }
+    const pin = ctx.skillVersionPins?.find((item) => item.skillId === skillId);
+    let pinnedSkillDir: string | undefined;
+    if (pin) {
+      if (pin.revisionId) {
+        pinnedSkillDir = await verifySkillRuntimeSnapshot(
+          ctx.userId,
+          skillId,
+          pin.revisionId,
+          pin.manifestHash,
+        );
+        if (!pinnedSkillDir) {
+          return formatError('E_RUNTIME_SKILL_VERSION_UNAVAILABLE', `frozen skill "${skillId}" version ${pin.version} is unavailable`);
+        }
+      } else {
+        // Compatibility for task records created during the short manifest-only
+        // pin window: they remain safe (never switch silently), but cannot run
+        // after the live tree changes because no immutable revision was named.
+        try {
+          const current = await captureSkillTree(path.join(userSkillsDir(ctx.userId), skillId));
+          if (current.manifestHash !== pin.manifestHash) {
+            return formatError('E_RUNTIME_SKILL_VERSION_CHANGED', `skill "${skillId}" no longer matches frozen version ${pin.version}`);
+          }
+        } catch {
+          return formatError('E_RUNTIME_SKILL_VERSION_CHANGED', `frozen skill "${skillId}" is unavailable`);
+        }
+      }
+    }
     const script = validateSkillToken(input.script, 'script');
     // Security-receipt check before spawning. The Runtime worker reaches
     // `run-skill.cjs` directly, so without this a skill withheld from the
@@ -95,15 +125,19 @@ export async function runRuntimeSkillTool(
     // Takes `skill_id` verbatim: this tool's contract is an id, not a display
     // name, so there is no name-resolution hole to close as there is for the
     // free-form bash command path.
-    try {
-      const trust = await isSkillTrustedForLoadDeep(ctx.userId, skillId);
-      if (!trust.trusted) {
-        return formatError(
-          'E_RUNTIME_SKILL_WITHHELD',
-          `skill "${skillId}" failed security verification (its files changed since it was checked, or the rules were updated) and cannot run`,
-        );
+    if (!pinnedSkillDir) {
+      try {
+        const trust = await isSkillTrustedForLoadDeep(ctx.userId, skillId);
+        if (!trust.trusted) {
+          return formatError(
+            'E_RUNTIME_SKILL_WITHHELD',
+            `skill "${skillId}" failed security verification (its files changed since it was checked, or the rules were updated) and cannot run`,
+          );
+        }
+      } catch {
+        // Verification infrastructure failure is not evidence of tampering.
       }
-    } catch { /* verification error is not evidence of tampering — fail open */ }
+    }
     const cwd = typeof input.cwd === 'string' && input.cwd.trim()
       ? normalizeRuntimePath(input.cwd, ctx.allowedRoots)
       : (ctx.allowedRoots[0] || process.cwd());
@@ -114,6 +148,7 @@ export async function runRuntimeSkillTool(
       ORKAS_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
       ORKAS_UID: ctx.userId,
       ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || '1',
+      ...(pinnedSkillDir ? { ORKAS_RUN_SKILL_DIR: pinnedSkillDir } : {}),
       ...(input.agent_id ? { ORKAS_AGENT_ID: String(input.agent_id) } : {}),
     };
     const runSkillPath = path.join(ctx.pcDir, 'bin', 'run-skill.cjs');

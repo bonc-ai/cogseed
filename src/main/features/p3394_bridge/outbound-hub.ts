@@ -24,12 +24,21 @@ export interface P3394OutboundReply {
   envelope: P3394Envelope;
 }
 
+export interface P3394OutboundStreamEvent {
+  text: string;
+  envelope: P3394Envelope;
+  sequence?: number;
+  sourceMessageId?: string;
+}
+
 interface PendingReply {
   resolve: (reply: P3394OutboundReply) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
   /** 出站信封的 message_id —— 回复到达时据此把 outbox 记录标为 completed。 */
   outboundMessageId: string;
+  onStream?: (event: P3394OutboundStreamEvent) => void;
+  lastStreamSequence?: number;
 }
 
 export interface P3394OutboundHubDeps {
@@ -99,7 +108,11 @@ export class P3394OutboundHub {
   /** Sends an envelope to a registered peer and waits for its reply.
    *  Transactional outbox（指南 §12）：信封先落盘（submitted），送达后 sent，
    *  收到回复 completed，投递失败 failed——重启后 submitted/sent 可重放。 */
-  async sendAndWait(agentId: string, envelope: P3394Envelope): Promise<P3394OutboundReply> {
+  async sendAndWait(
+    agentId: string,
+    envelope: P3394Envelope,
+    onStream?: (event: P3394OutboundStreamEvent) => void,
+  ): Promise<P3394OutboundReply> {
     const peer = this.listPeers().find((candidate) => candidate.identity.agent_id === agentId && !candidate.disabled);
     if (!peer) throw new Error('p3394_peer_not_registered');
     if (this.pending.has(envelope.session_id)) {
@@ -113,7 +126,13 @@ export class P3394OutboundHub {
         // sent 但未收到回复：保持 sent（可重放），不标 failed。
         reject(new Error('p3394_reply_timeout'));
       }, this.replyTimeoutMs);
-      this.pending.set(envelope.session_id, { resolve, reject, timer, outboundMessageId: envelope.message_id });
+      this.pending.set(envelope.session_id, {
+        resolve,
+        reject,
+        timer,
+        outboundMessageId: envelope.message_id,
+        ...(onStream ? { onStream } : {}),
+      });
     });
     try {
       await channel.dial(agentId);
@@ -131,6 +150,44 @@ export class P3394OutboundHub {
     }
     log.info('P3394 outbound send', { peer: agentId, session_id: envelope.session_id, message_id: envelope.message_id });
     return reply;
+  }
+
+  /**
+   * Delivery-only send: delivers an envelope to a registered peer and
+   * resolves on the delivery receipt — no reply is expected and no pending
+   * reply waiter is registered (P1-3).
+   *
+   * Why this exists: some outbound envelopes are terminal confirmations
+   * (the peer-forward relay carries the final result back to the original
+   * sender, an error relay, …). Older code routed those through sendAndWait,
+   * which registered a reply waiter keyed on session_id and held a `sent`
+   * outbox record until a reply arrived. The sender never replies to a
+   * terminal confirmation, so every such relay leaked a waiter for the full
+   * replyTimeoutMs AND stayed in the outbox replay set — the bridge re-sent
+   * it on every restart. sendOnce completes the outbox record as soon as the
+   * delivery receipt is observed, so nothing lingers and nothing replays.
+   */
+  async sendOnce(agentId: string, envelope: P3394Envelope): Promise<void> {
+    const peer = this.listPeers().find((candidate) => candidate.identity.agent_id === agentId && !candidate.disabled);
+    if (!peer) throw new Error('p3394_peer_not_registered');
+    // Same transactional outbox discipline as sendAndWait: persist the
+    // envelope before the wire write so a crash before delivery can replay it.
+    outboxRecordSubmitted(envelope, agentId);
+    try {
+      const channel = this.channelFor(peer);
+      await channel.dial(agentId);
+      await new P3394OutboundClient(channel).send(envelope);
+      outboxMarkSent(envelope.message_id);
+      // Delivery receipt IS the terminal confirmation for this envelope (no
+      // reply is expected). Complete the record so it leaves the replay set.
+      outboxMarkCompleted(envelope.message_id);
+    } catch (error) {
+      // Delivery failed: fail-closed. The record stays submitted/sent-in-progress
+      // (outboxMarkFailed) so recovery can retry; the caller sees the error.
+      outboxMarkFailed(envelope.message_id, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    log.info('P3394 outbound sendOnce (delivery receipt)', { peer: agentId, session_id: envelope.session_id, message_id: envelope.message_id });
   }
 
   /** 桥启动重放：把 outbox 里 submitted/sent 的信封重发给对应 peer
@@ -164,6 +221,36 @@ export class P3394OutboundHub {
   tryResolveReply(envelope: P3394Envelope): boolean {
     const waiter = this.pending.get(envelope.session_id);
     if (!waiter) return false;
+    // 匹配粒度细化（S-03/S-04）：入站若带 reply_to，必须回指向本 waiter 期待
+    // 的出站消息才算"回复"；否则它是同 session 上的新 task/另一条消息，不应
+    // 被当回复消费（否则会被 executor 短路吞掉、不进 UI）。Older gateways
+    // omit reply_to, so the check is only strict when the field is present.
+    if (typeof envelope.reply_to === 'string' && envelope.reply_to && waiter.outboundMessageId !== envelope.reply_to) {
+      return false;
+    }
+    const streamEvent = p3394EnvelopeStreamEvent(envelope);
+    if (streamEvent) {
+      if (streamEvent.sourceMessageId && streamEvent.sourceMessageId !== waiter.outboundMessageId) return false;
+      if (
+        streamEvent.sequence !== undefined
+        && waiter.lastStreamSequence !== undefined
+        && streamEvent.sequence <= waiter.lastStreamSequence
+      ) {
+        return true;
+      }
+      if (streamEvent.sequence !== undefined) waiter.lastStreamSequence = streamEvent.sequence;
+      try {
+        waiter.onStream?.(streamEvent);
+      } catch (error) {
+        log.warn('P3394 outbound stream listener failed', {
+          session_id: envelope.session_id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      // Stream frames are intermediate events. Keep the waiter alive until
+      // the terminal message arrives, and never feed them to the executor.
+      return true;
+    }
     clearTimeout(waiter.timer);
     this.pending.delete(envelope.session_id);
     const text = envelopeText(envelope);
@@ -199,4 +286,27 @@ export function p3394EnvelopeReplyText(envelope: P3394Envelope): string {
 
 function envelopeText(envelope: P3394Envelope): string {
   return p3394EnvelopeReplyText(envelope);
+}
+
+function p3394EnvelopeStreamEvent(envelope: P3394Envelope): P3394OutboundStreamEvent | null {
+  if (envelope.kind !== 'event') return null;
+  const metadata = envelope.payload.metadata;
+  if (!metadata || metadata.stream_event !== 'delta') return null;
+  // Do not trim deltas: a chunk can intentionally end with a space or a
+  // newline, and the renderer appends it directly to the visible bubble.
+  const text = envelope.payload.parts
+    .filter((part) => part.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text as string)
+    .join('\n');
+  if (!text) return null;
+  const sequence = typeof metadata.stream_seq === 'number' ? metadata.stream_seq : undefined;
+  const sourceMessageId = typeof metadata.stream_source_message_id === 'string'
+    ? metadata.stream_source_message_id
+    : undefined;
+  return {
+    text,
+    envelope,
+    ...(sequence !== undefined ? { sequence } : {}),
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+  };
 }

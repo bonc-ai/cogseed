@@ -197,7 +197,7 @@
         entry_count: paths.length,
       }, 'click');
       try {
-        const result = await root.orkas.invoke('library.transfer', {
+        const result = await root.cogseed.invoke('library.transfer', {
           mode,
           source,
           paths,

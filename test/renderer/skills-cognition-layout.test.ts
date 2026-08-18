@@ -170,6 +170,8 @@ describe('Recall cognition workspace layout', () => {
     expect(governance).toContain('_recallAssetActions(selected.status)');
     expect(governance).toContain('_renderRecallAssetHistory(selected.id)');
     expect(governance).toContain('_renderRecallAssetChain(selected.id)');
+    expect(governance).toContain('selected.generatedSkillId');
+    expect(governance).toContain('cognition.governance_open_skill_versions');
     expect(bindings).toContain("window.cogseed.invoke('recall.assets.versions'");
     expect(bindings).toContain("window.cogseed.invoke('recall.assets.rollback'");
     expect(bindings).toContain('[data-cognition-governance-action]');
@@ -398,15 +400,25 @@ describe('Recall cognition workspace layout', () => {
   });
 
   /**
-   * 落地规则只准作用一次、且只在初始化里：用户主动点「待我处理」时不得被
-   * 弹到别处，否则空状态永远见不到，用户也无从区分"真的没事"和"页面坏了"。
+   * G-9（2026-08-17）：**落地不再跳页，一次也不跳。**
+   *
+   * 旧规则是"待办为空时首次落地自动切到我的资产"。产品决策把它取消了——认知
+   * 资产首页要先回答"现在有什么需要我判断"，用户点进来看到的必须是自己点的
+   * 那一页。空的时候由「待我处理」自己的空态给显式入口，跳不跳由用户决定。
+   *
+   * 这条用例因此从"只跳一次"翻转为"一次都不跳"。原断言编码的是被取消的行为，
+   * 不是回归。
    */
-  it('only redirects away from an empty inbox on first landing, never on an explicit tab click', () => {
+  it('never redirects away from the inbox, on landing or on an explicit tab click', () => {
     const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
     const init = sliceFunction(skills, 'initSkillsCognitionConsole');
-    expect(init).toContain('_cognitionInboxIsEmpty()');
-    expect(init).toContain("switchSkillsCognitionPage('assets')");
+    expect(init).not.toContain("switchSkillsCognitionPage('assets')");
+    expect(init).not.toContain("switchSkillsCognitionPage('seed')");
     expect(sliceFunction(skills, 'switchSkillsCognitionPage')).not.toContain('_cognitionInboxIsEmpty');
+    // 引导改由空态承担，入口是显式按钮而不是一次跳转。
+    const inbox = sliceFunction(skills, 'renderSkillsCognitionInbox');
+    expect(inbox).toContain('data-cognition-page-link="assets"');
+    expect(inbox).toContain('_cognitionSeedMarkup()');
   });
 
   it('routes the retired overview and about-me deep links into the new views', () => {

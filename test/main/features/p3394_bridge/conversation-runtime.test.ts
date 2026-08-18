@@ -68,6 +68,7 @@ describe('P3394ConversationRuntimeAdapter (path B: daily conversation flow)', ()
       bus,
       conversationForSession: () => 'ses-conv-1',
       displayNameFor: (id) => (id === 'hermes' ? 'Hermes' : undefined),
+      teamAgentIdForPeer: (id) => (id === 'hermes' ? 'team-hermes-1' : undefined),
       ensurePeerActor: async (uid, cid, actor) => { peerActors.push({ uid, cid, actor }); },
     });
     await adapter.openSession({ session_id: 'ses-conv-1', agent_id: 'cogseed' });
@@ -76,7 +77,7 @@ describe('P3394ConversationRuntimeAdapter (path B: daily conversation flow)', ()
     expect(bus.calls).toHaveLength(1);
     expect(bus.calls[0]).toMatchObject({
       uid: UID,
-      fromActorId: 'p3394_hermes',
+      fromActorId: 'team-hermes-1',
       forceTo: ['commander'],
       externalInbound: true,
     });
@@ -84,7 +85,7 @@ describe('P3394ConversationRuntimeAdapter (path B: daily conversation flow)', ()
     expect(bus.calls[0].skipWakeGate).toBeUndefined();
     expect(bus.calls[0].text).toBe('hello cogseed');
     expect(peerActors).toEqual([
-      { uid: UID, cid: 'ses-conv-1', actor: { kind: 'agent', id: 'p3394_hermes', name: 'Hermes' } },
+      { uid: UID, cid: 'ses-conv-1', actor: { kind: 'agent', id: 'team-hermes-1', name: 'Hermes' } },
     ]);
   });
 

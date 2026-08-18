@@ -182,6 +182,10 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(result.promptBlock).toContain('<confirmed-ability-assets>');
     expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.');
     expect(result.promptBlock).not.toContain('Plan database migrations with rollback windows.');
+    // M-3: 适用/禁用条件随注入带进 prompt，模型拿得到硬约束。
+    expect(result.promptBlock).toContain('applicable_when');
+    expect(result.promptBlock).toContain('forbidden_when');
+    expect(result.promptBlock).toContain('Unrelated casual conversation');
     expect(result.citations).toEqual([
       expect.objectContaining({
         assetId: oauth.asset.id,
@@ -281,6 +285,10 @@ describe('confirmed Recall projection prompt injection', () => {
     // unrelated asset must never leak in.
     expect(result.promptBlock).toContain('Review OAuth callback and token exchange security.\\nOAuth review workflow');
     expect(result.promptBlock).not.toContain(unrelated.asset.statement);
+    // M-3: committed 投影同样带边界条件。
+    expect(result.promptBlock).toContain('applicable_when');
+    expect(result.promptBlock).toContain('forbidden_when');
+    expect(result.promptBlock).toContain('Unrelated casual conversation');
   });
 
   it('rejects committed injection when a frozen asset version changed', async () => {
@@ -383,6 +391,11 @@ describe('confirmed Recall projection prompt injection', () => {
       expect(result.promptBlock).toContain(asset.title);
       expect(result.promptBlock).not.toContain('Blocked asset');
       expect(result.assetIds).toEqual([asset.id]);
+      // M-3: 派发授权注入同样带边界条件（createAsset 带
+      // applicableWhen/forbiddenWhen）。
+      expect(result.promptBlock).toContain('applicable_when');
+      expect(result.promptBlock).toContain('forbidden_when');
+      expect(result.promptBlock).toContain('Informal brainstorming without a decision');
     });
 
     it('returns an empty block when nothing is granted', async () => {
@@ -390,5 +403,106 @@ describe('confirmed Recall projection prompt injection', () => {
       const result = await promptInjection.buildDispatchedAssetsPromptBlock('user-a', ['aa-unknown']);
       expect(result).toEqual({ promptBlock: '', assetIds: [], assets: [] });
     });
+  });
+});
+
+/**
+ * M-3 契约：适用/禁用条件必须随资产进入**每一条**注入路径。
+ *
+ * `forbidden_when` 是硬安全约束。晋升 gate 校验它、「我的资产」详情页显示它，
+ * 但在此之前三条注入路径的 record 里都没有——唯独模型拿不到。用户看到
+ * 「禁止：…」以为约束在生效，实际上模型从来没读到过。
+ *
+ * 这组用例按**路径**而不是按函数组织：三条路径各自独立构造 record，任何一条
+ * 漏掉都是一个真实的安全缺口，所以必须逐条钉死，不能只测其中一条。
+ */
+describe('M-3 · 适用/禁用条件注入契约', () => {
+  it('carries forbidden_when into the confirmed-projection path', async () => {
+    const asset = await createAsset();
+    const { refs, projection, storage, layout, promptInjection } = await modules();
+    await refs.addWorkspaceAssetReference('user-a', { assetId: asset.asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-cond', workspaceId: 'workspace-a', purpose: 'review',
+    });
+    const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+    const messageFile = layout.conversationMessageFile('user-a', 'cid-cond');
+    await fs.mkdir(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: 'msg-cond', ts: new Date().toISOString(), from: 'commander', to: ['user'], text: 'card',
+      recall_projection_card: { projectionId: confirmed.id },
+    });
+
+    const block = await promptInjection.buildConfirmedProjectionPromptBlock('user-a', 'cid-cond');
+
+    expect(block).toContain('forbidden_when');
+    expect(block).toContain('Informal brainstorming without a decision');
+    expect(block).toContain('applicable_when');
+    expect(block).toContain('Architecture review and runtime-boundary changes');
+  });
+
+  it('carries forbidden_when into the committed-projection path', async () => {
+    const selected = await createAssetWith({
+      judgment: 'Review OAuth callback and token exchange security.',
+      summary: 'OAuth review workflow',
+      sourceId: 'conversation-cond-committed',
+    });
+    const { projection, promptInjection } = await modules();
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-cond-committed',
+      purpose: 'global',
+      taskText: 'Audit OAuth login callback handling',
+    }, fakeSemanticOptions);
+    const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+
+    const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-cond-committed',
+      taskRunId: 'turn-cond-committed',
+      taskText: 'Audit OAuth login callback handling',
+      committedProjectionId: confirmed.id,
+    });
+
+    expect(result.promptBlock).toContain(selected.asset.id);
+    expect(result.promptBlock).toContain('forbidden_when');
+    expect(result.promptBlock).toContain('Unrelated casual conversation');
+  });
+
+  it('carries forbidden_when into the Commander-dispatch path', async () => {
+    const asset = await createAsset();
+    const { promptInjection } = await modules();
+
+    const result = await promptInjection.buildDispatchedAssetsPromptBlock('user-a', [asset.asset.id]);
+
+    expect(result.assetIds).toEqual([asset.asset.id]);
+    expect(result.promptBlock).toContain('forbidden_when');
+    expect(result.promptBlock).toContain('Informal brainstorming without a decision');
+  });
+
+  /**
+   * 缺失 = 「没提出过」，**不是**「无限制」。
+   *
+   * 所以空条件不写字段，而不是写一个空数组——写空值会让模型把「没说」读成
+   * 「已确认无限制」，那比不带更危险：它把一个未知伪装成一个结论。
+   */
+  it('omits the fields entirely when an asset carries no conditions', async () => {
+    const { candidates, promptInjection } = await modules();
+    // 用 personal：适用/禁用条件是 RuleAsset 的准入门槛（PRD 3.1），rule 类候选
+    // 缺边界会被 `rule_boundary_required` 直接挡下，构造不出「无条件的规则」。
+    // personal 天然没有这两个字段，正是要测的那种资产。
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Works as a product owner defining release scope.',
+      summary: 'Product owner role slice',
+      suggestedType: 'personal',
+      suggestedScope: 'global',
+      spaceId: 'workspace-a',
+      sourceRefs: [{ kind: 'execution', id: 'exec-no-cond' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    await elevateToTransferVerified(promoted.asset.id);
+
+    const result = await promptInjection.buildDispatchedAssetsPromptBlock('user-a', [promoted.asset.id]);
+
+    expect(result.promptBlock).toContain(promoted.asset.id);
+    expect(result.promptBlock).not.toContain('forbidden_when');
+    expect(result.promptBlock).not.toContain('applicable_when');
   });
 });

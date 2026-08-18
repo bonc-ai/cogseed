@@ -129,3 +129,60 @@ describe('User teaching signals', () => {
     expect(asset.status).toBe('paused');
   });
 });
+
+/**
+ * G-2 教学回执的真实总数。
+ *
+ * `listUserTeachingSignals` 的 limit 默认 20、上限 100，「待我处理」的指标此前
+ * 取 `list(...).length`——超过 20 条那个数字就是错的，而且错得不可见。
+ */
+describe('User teaching signals › items + total', () => {
+  async function seed(count: number) {
+    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+    for (let i = 0; i < count; i += 1) {
+      await teaching.recordTeachingSignalAfterMemoryWrite('user-a', {
+        conversationId: 'conv-total',
+        messageId: `message-${i}`,
+        userMessage: '请记住：以后都要这样做。',
+        memoryContent: `长期约定第 ${i} 条。`,
+        memoryScope: 'project' as const,
+      });
+    }
+    return teaching;
+  }
+
+  /** Contract：items 受 limit 约束，total 是满足条件的真实条数。 */
+  it('limit 只截断 items，total 给出真实条数', async () => {
+    const teaching = await seed(25);
+
+    const page = await teaching.listUserTeachingSignalPage('user-a', { limit: 10 });
+
+    expect(page.items.length).toBeLessThanOrEqual(10);
+    expect(page.items).toHaveLength(10);
+    expect(page.total).toBe(25);
+    // 这正是修复前的错法：拿截断后的长度当总数。
+    expect(page.total).not.toBe(page.items.length);
+  });
+
+  /** total 与 items 必须走同一套过滤条件，否则两个数字互相对不上。 */
+  it('total 与 items 使用同一过滤条件', async () => {
+    const teaching = await seed(6);
+    const all = await teaching.listUserTeachingSignalPage('user-a', { limit: 100 });
+    const revoked = await teaching.revokeUserTeachingSignal('user-a', all.items[0].id);
+    expect(revoked.status).toBe('revoked');
+
+    const activeOnly = await teaching.listUserTeachingSignalPage('user-a', { status: 'active', limit: 2 });
+
+    expect(activeOnly.total).toBe(5);
+    expect(activeOnly.items).toHaveLength(2);
+    expect(activeOnly.items.every((signal) => signal.status === 'active')).toBe(true);
+  });
+
+  /** 旧出口的行为不能变——它仍是很多调用方的读口。 */
+  it('保留原列表出口的行为不变', async () => {
+    const teaching = await seed(3);
+    const list = await teaching.listUserTeachingSignals('user-a', { limit: 2 });
+    expect(Array.isArray(list)).toBe(true);
+    expect(list).toHaveLength(2);
+  });
+});

@@ -316,17 +316,35 @@ describe('P3394 dual full-bridge process acceptance (C-06)', () => {
     child2.stderr.setEncoding('utf8');
     child2.stderr.on('data', (chunk: string) => { child2Err += chunk; });
     let ready2 = false;
+    let child2Stdout = '';
     let outboxReplayLine = '';
+    let stdoutBuf = '';
+
     child2.stdout.setEncoding('utf8');
     child2.stdout.on('data', (chunk: string) => {
+      child2Stdout += chunk;
       if (chunk.includes('CHILD_READY')) ready2 = true;
-      if (chunk.includes('CHILD_OUTBOX_REPLAY')) outboxReplayLine += chunk;
+      // stdout chunk 边界不保证整行：按行缓冲，只取 CHILD_OUTBOX_REPLAY
+      // 前缀的那一行（fixture 输出 'CHILD_OUTBOX_REPLAY <json>\n'）。此前
+      // 直接 += 会把相邻行拼进同一变量，JSON.parse 偶发失败（flaky）。
+      stdoutBuf += chunk;
+      let nl = stdoutBuf.indexOf('\n');
+      while (nl >= 0) {
+        const line = stdoutBuf.slice(0, nl).trim();
+        stdoutBuf = stdoutBuf.slice(nl + 1);
+        if (line.startsWith('CHILD_OUTBOX_REPLAY ')) outboxReplayLine = line;
+        nl = stdoutBuf.indexOf('\n');
+      }
     });
     await waitFor(() => ready2 || child2.exitCode !== null, 15_000);
     expect(ready2, 'child2 stderr: ' + child2Err).toBe(true);
     // 重启后 outbox 遗留重放完成：遗留信封送达 parent。
-    await waitFor(() => outboxReplayLine.includes('CHILD_OUTBOX_REPLAY'), 15_000);
-    const replayOutcome = JSON.parse(outboxReplayLine.replace('CHILD_OUTBOX_REPLAY ', '').trim()) as { replayed: number };
+    await waitFor(() => child2Stdout.includes('CHILD_OUTBOX_REPLAY'), 15_000);
+    const replayRecord = outboxReplayLine || child2Stdout
+      .split(/\r?\n/)
+      .find((line) => line.startsWith('CHILD_OUTBOX_REPLAY '));
+    expect(replayRecord, 'child2 stdout: ' + child2Stdout).toBeTruthy();
+    const replayOutcome = JSON.parse(replayRecord!.slice('CHILD_OUTBOX_REPLAY '.length)) as { replayed: number };
     expect(replayOutcome.replayed).toBe(1);
 
     // 同 session 的第二任务：重启后的节点恢复会话/任务映射并正常执行。

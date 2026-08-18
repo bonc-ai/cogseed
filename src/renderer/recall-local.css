@@ -528,6 +528,19 @@
   padding-left: 18px;
 }
 
+.skill-diff-summary { margin-top: 7px; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.skill-diff-files { display: grid; gap: 6px; margin-top: 8px; }
+.skill-diff-file { overflow: hidden; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--card, #fff); }
+.skill-diff-file > summary { display: flex; justify-content: space-between; gap: 8px; padding: 7px 9px; cursor: pointer; list-style: none; }
+.skill-diff-file > summary::-webkit-details-marker { display: none; }
+.skill-diff-file > summary span { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.skill-diff-line { display: grid; grid-template-columns: 18px minmax(0, 1fr); padding: 1px 8px; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.skill-diff-line > span { color: var(--muted-fg, #9ca3af); text-align: center; }
+.skill-diff-line.is-added { background: color-mix(in srgb, #22c55e 10%, transparent); }
+.skill-diff-line.is-added > span { color: #15803d; }
+.skill-diff-line.is-deleted { background: color-mix(in srgb, #ef4444 10%, transparent); }
+.skill-diff-line.is-deleted > span { color: #b91c1c; }
+
 .recall-candidate-editor {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1195,6 +1208,63 @@
 .recall-proof-rating { padding: 11px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
 .recall-proof-rating > strong { display: block; margin-bottom: 8px; color: var(--fg, #111827); font-size: 12px; }
 .recall-proof-rating-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 不能评价时这一区照样在，只是把按钮换成「为什么现在不能评」。样式刻意与
+   已评价态（.is-rated）一致而非做成告警——它不是错误，是链条还没走到那一步。 */
+.recall-proof-rating.is-blocked .recall-proof-rating-blocked { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+/* 「更好了」的取证步骤。它是唯一能把成熟度推到 effectiveness_validated 的
+   路径，所以给它一块能写字、能勾选依据的地方，而不是一个赞。 */
+.recall-proof-rating.is-evidence { display: grid; gap: 9px; }
+.recall-proof-evidence-hint { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+.recall-proof-evidence-note { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--bg, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; line-height: 1.6; resize: vertical; }
+.recall-proof-evidence-options { display: grid; gap: 6px; }
+.recall-proof-evidence-option { display: flex; align-items: baseline; gap: 7px; color: var(--fg, #111827); font-size: 12px; cursor: pointer; }
+.recall-proof-evidence-option code { color: var(--muted-fg, #6b7280); font-size: 10px; overflow-wrap: anywhere; }
+.recall-proof-evidence-none { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
 @media (max-width: 760px) {
   .recall-proof-detail { padding-left: 12px; }
 }
+
+/* 「空种子」首启页。整页一件东西都没有时才出现——它不是第五个任务视图，
+   而是一种状态。居中单栏：这一页只有一个问题要回答（我该从哪儿开始），
+   多栏排版会把两个入口读成两类并列功能。 */
+.cognition-seed-wrap { display: grid; justify-items: center; gap: 10px; max-width: 520px; margin: 0 auto; padding: 48px 20px; text-align: center; }
+.cognition-seed-wrap h2 { margin: 0; color: var(--fg, #111827); font-size: 20px; font-weight: 700; }
+.cognition-seed-wrap p { margin: 0; color: var(--muted-fg, #6b7280); font-size: 13px; line-height: 1.75; }
+.cognition-seed-actions { justify-content: center; margin-top: 8px; }
+/* 种子图形：土壤 + 种子 + 一片刚探头的芽。纯 CSS，不引图片资源。
+   它对应认知树的"还没有叶片"那一端，颜色沿用树的浅叶色。 */
+.cognition-seed-art { position: relative; width: 96px; height: 72px; margin-bottom: 6px; }
+.cognition-seed-soil { position: absolute; left: 0; right: 0; bottom: 0; height: 12px; border-radius: 999px; background: var(--border, #e5e7eb); }
+.cognition-seed-core { position: absolute; left: 50%; bottom: 8px; width: 16px; height: 20px; margin-left: -8px; border-radius: 50% 50% 46% 46%; background: #b98a5e; }
+.cognition-seed-sprout { position: absolute; left: 50%; bottom: 24px; width: 26px; height: 16px; margin-left: -4px; border-radius: 0 999px 999px 999px; background: color-mix(in srgb, var(--primary, #0E9F6E) 38%, var(--card, #fff)); transform: rotate(-16deg); transform-origin: left bottom; }
+@media (max-width: 760px) {
+  .cognition-seed-wrap { padding: 32px 16px; }
+}
+
+/* 认知树的有机可视化。叶色只表达**成熟度**这一个真实字段：浅色 = 已确认但
+   使用效果尚未验证，深色 = 已在真实任务中复用并留下有效 Evidence。
+   非 active 状态（暂停/归档）降透明度，不换色——它是另一个维度，换色会让
+   人读成第三档成熟度。 */
+.cognition-tree-figure { padding: 6px 10px 10px; }
+.cognition-tree-svg { display: block; width: 100%; height: auto; max-height: 380px; }
+.cognition-tree-svg-ground { fill: var(--border, #e5e7eb); opacity: .7; }
+.cognition-tree-svg-label { fill: var(--muted-fg, #6b7280); font-size: 12px; font-weight: 600; }
+.cognition-tree-svg-overflow { fill: var(--muted-fg, #6b7280); font-size: 11px; }
+.cognition-tree-svg-leaf { cursor: pointer; }
+.cognition-tree-svg-leaf ellipse { transition: opacity .12s ease; }
+/* 与图例圆点用**同一个**颜色表达式（见 .cognition-tree-dot.is-light/.is-deep）。
+   图例和叶子对不上颜色，图例就等于没有。 */
+.cognition-tree-svg-leaf.is-light ellipse { fill: color-mix(in srgb, var(--primary, #0E9F6E) 38%, var(--card, #fff)); }
+.cognition-tree-svg-leaf.is-deep ellipse { fill: var(--primary, #0E9F6E); }
+.cognition-tree-svg-leaf.is-dimmed ellipse { opacity: .38; }
+.cognition-tree-svg-leaf:hover ellipse { opacity: .78; }
+@media (max-width: 760px) {
+  .cognition-tree-svg { max-height: 260px; }
+}
+
+/* 「已处理」历史带。与上面两条待办带同构，但状态徽章用完成色——它记录的是
+   已经落账的事实，不是还要做的事。 */
+.cognition-review-history { display: grid; gap: 6px; }
+.cognition-review-history-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 9px; border: 1px solid var(--border, #e5e7eb); border-radius: 7px; background: var(--card, #fff); }
+.cognition-review-history-row > div { display: grid; gap: 2px; min-width: 0; }
+.cognition-review-history-row strong { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }

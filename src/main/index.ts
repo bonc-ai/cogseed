@@ -221,6 +221,12 @@ function createWindow(): BrowserWindow {
     height: 800,
     ...restored.bounds,
     title: '',
+    // macOS: hiddenInset title bar — the traffic lights float over the app
+    // content so the conversation header can occupy the strip the native
+    // title bar would otherwise waste. The renderer keys its clearance and
+    // drag regions off the `.is-macos` class (index.html head). Windows
+    // keeps the native frame.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     show: !IS_PACKAGED_LAUNCH_SMOKE,
     backgroundColor: '#ffffff',
     icon: path.join(paths.SRC_ROOT, 'resources', 'icons', 'icon.png'),
@@ -228,7 +234,7 @@ function createWindow(): BrowserWindow {
       // preload sits next to index.ts in PC/src/main/ — just __dirname + 'preload.js'.
       preload: path.join(__dirname, 'preload.js'),
       devTools: dev,
-      additionalArguments: IS_PACKAGED_LAUNCH_SMOKE ? ['--orkas-packaged-launch-smoke'] : [],
+      additionalArguments: IS_PACKAGED_LAUNCH_SMOKE ? ['--cogseed-packaged-launch-smoke'] : [],
       // Enables Chromium's built-in PDF viewer (PDFium) inside iframes.
       // Required for `<iframe src="kb-file:///.../report.pdf">` in the KB
       // viewer. Has no effect on other plugin types since Electron strips
@@ -1190,6 +1196,13 @@ if (!gotLock) {
     // runtime controller when COGSEED_P3394_PORT is set; no-op otherwise.
     registerImmediate('p3394:bridge', () => {
       void maybeStartP3394Bridge().then((handle) => { p3394AppBridge = handle; });
+    }, 'serial');
+    registerImmediate('skills:version-recovery', async () => {
+      const { recoverSkillVersionMutations } = await import('./features/skills/version-mutation-service');
+      const result = await recoverSkillVersionMutations(users.getActiveUserId());
+      if (result.finalized || result.restored || result.removed) {
+        log.info('skill version mutation recovery complete', result);
+      }
     }, 'serial');
     createWindow();
     await consumeColdLaunchConnectorCallback();

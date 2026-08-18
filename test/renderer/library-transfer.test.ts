@@ -65,7 +65,7 @@ describe('shared Library transfer dialog', () => {
     expect(contextFileMenu.indexOf("action: 'open_in_system'")).toBeGreaterThan(contextFileMenu.indexOf("action: 'organize'"));
     expect(dialog).toContain("data-transfer-mode=\"move\"");
     expect(dialog).toContain("data-transfer-mode=\"copy\"");
-    expect(dialog).toContain("root.orkas.invoke('library.transfer'");
+    expect(dialog).toContain("root.cogseed.invoke('library.transfer'");
     expect(dialog).toContain("apiFetch('/api/contexts/tree')");
     expect(dialog).toContain('32 + row.depth * 18');
     expect(archivePicker).toContain('32 + depth * 18');

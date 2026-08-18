@@ -53,6 +53,12 @@ import {
   type CognitionSourceRef,
   type CognitionSourceType,
 } from './source-service';
+import {
+  getRecallCandidateCapabilities,
+  RECALL_CANDIDATE_NOT_PROMOTABLE_ERROR_CODE,
+  RECALL_CANDIDATE_TERMINAL_ERROR_CODE,
+  RecallCandidateStateError,
+} from './candidate-capabilities';
 
 export type RecallCandidateStatus =
   | 'observed'
@@ -313,17 +319,15 @@ function requireAssetLifecycleStatus(value: unknown): RecallAbilityAssetLifecycl
 function normalizeCandidateStatus(value: unknown): RecallCandidateStatus {
   if (value === 'pending') return 'pending_review';
   if (value === 'promoted') return 'confirmed';
-  // A short-lived implementation wrote an undeclared `superseded` state for
-  // semantic duplicates. Migrate it on read so one legacy record cannot make
-  // the whole candidate list fail to load.
+  // 历史兼容：早期实现给语义重复候选写过未声明的 `superseded`。现在
+  // semanticDedupBeforePromote 走的是 mergedInto + decideWithoutAsset('ignored')，
+  // 全仓已无写入方，所以这里只做旧数据迁移——迁成 ignored 后它本来就是终态，
+  // isTerminalCandidate 无需改动。落到下面的白名单里再放行一次 superseded
+  // 是不可达分支，删掉，免得读回行为看起来有两套。
   if (value === 'superseded') return 'ignored';
   if (value === 'observed' || value === 'weak_observation' || value === 'pending_review'
     || value === 'deferred' || value === 'confirmed' || value === 'rejected'
-    || value === 'ignored' || value === 'expired' || value === 'failed'
-    // 语义去重候选合并路径（semanticDedupBeforePromote）写入的运行时状态；
-    // 缺了它，池遍历（listRecallCandidates → asCandidate）遇到 superseded
-    // 候选就抛 malformed——整个沉淀 degraded（已观测 19:37）。
-    || value === 'superseded') return value;
+    || value === 'ignored' || value === 'expired' || value === 'failed') return value;
   throw new Error('malformed recall candidate');
 }
 
@@ -335,7 +339,15 @@ function isSuppressedTerminalCandidate(status: RecallCandidateStatus): boolean {
   return status === 'rejected' || status === 'ignored' || status === 'expired';
 }
 
-export function isRecallCandidateReviewable(candidate: Pick<RecallCandidateRecord, 'status'>): boolean {
+/**
+ * **系统自动沉淀**的准入门禁——不是"用户能不能处理"。
+ *
+ * 消费方全是自动路径（capture-service 的自动捕获、autoApplyRecallCandidate）。
+ * 用户侧可操作面在 candidate-capabilities.ts；那边把 weak_observation 放开是
+ * 产品要的，这里放开则等于让系统跳过用户确认自动晋升弱证据候选。两条线
+ * 必须分开，不要因为 UI 收敛顺手合并。
+ */
+export function isAutoCaptureEligible(candidate: Pick<RecallCandidateRecord, 'status'>): boolean {
   return candidate.status === 'pending_review' || candidate.status === 'failed';
 }
 
@@ -796,7 +808,9 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
   const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, (raw) => {
     if (!raw) throw new Error('recall candidate not found');
     const current = asCandidate(raw);
-    if (isTerminalCandidate(current.status)) throw new Error('recall candidate is terminal');
+    if (isTerminalCandidate(current.status)) {
+      throw new RecallCandidateStateError(RECALL_CANDIDATE_TERMINAL_ERROR_CODE, 'recall candidate is terminal', current.status);
+    }
     const reviewReady = Boolean(resolvedValue) && sourceRefs.length > 0 && evidenceRefs.length > 0
       && Boolean(suggestedScope) && (!candidateActionNeedsTarget(suggestedAction) || Boolean(targetAssetId));
     const now = new Date().toISOString();
@@ -843,7 +857,9 @@ export async function resumeRecallCandidate(userId: string, candidateId: string)
     if (!current) throw new Error('recall candidate not found');
     const storedStatus = normalizeCandidateStatus(current.status);
     const candidate = asCandidate(current);
-    if (isTerminalCandidate(storedStatus)) throw new Error('recall candidate is terminal');
+    if (isTerminalCandidate(storedStatus)) {
+      throw new RecallCandidateStateError(RECALL_CANDIDATE_TERMINAL_ERROR_CODE, 'recall candidate is terminal', storedStatus);
+    }
     if (storedStatus !== 'deferred') throw new Error('only a deferred recall candidate can be resumed');
     if (!isCandidateContentReviewReady(candidate)) throw new Error('candidate evidence is insufficient for review');
     return {
@@ -881,7 +897,11 @@ async function decideWithoutAsset(
     if (!current) throw new Error('recall candidate not found');
     const candidate = asCandidate(current);
     if (isTerminalCandidate(candidate.status)) return candidate;
-    if (candidate.status === 'observed' || candidate.status === 'weak_observation') {
+    // 同上：拒绝 / 稍后 / 忽略 是用户对一条弱候选最基本的处置权，不能因为
+    // 证据弱就把它锁死在待办里。系统 actor 仍然不许替用户下这个决定，
+    // refs 为空的候选也仍然出不去（否则写出的记录读不回来）。
+    if ((candidate.status === 'observed' || candidate.status === 'weak_observation')
+      && (actor !== 'user' || !getRecallCandidateCapabilities(candidate).canReject)) {
       throw new Error('candidate evidence is insufficient for review');
     }
     await writeReviewDecision(userId, {
@@ -934,9 +954,54 @@ export async function autoApplyRecallCandidate(
       return { candidate: recovered.candidate, asset: recovered.asset };
     }
   }
-  if (!isRecallCandidateReviewable(candidate)) throw new Error('candidate is not ready for automatic capture');
+  if (!isAutoCaptureEligible(candidate)) throw new Error('candidate is not ready for automatic capture');
   if (candidate.risk === 'high') {
     throw new Error('high-risk candidate requires an independent user risk gate');
+  }
+  // N-2: 语义复核（模型级，SEMANTIC_RULES 闭集）。自动晋升是无人审阅的
+  // 路径，语义发现（越权改写/敏感个人信息/疑似凭据/越界声称）应把候选
+  // 留给用户决定，而不是静默晋升。复核失败（模型不可用）不阻断——退化
+  // 为纯确定性闸（现状），只记一条警告。这里复用 review-decision 的
+  // defer 语义，候选以 deferred 状态留在池里等用户。
+  try {
+    const { reviewCandidateSemantically } = await import('../cognition/semantic-review');
+    const reviewed = await reviewCandidateSemantically(userId, {
+      title: candidate.summary,
+      summary: candidate.value,
+      body: candidate.judgment,
+    });
+    if (reviewed.ok && reviewed.findings.some((finding) => finding.level !== 'LOW')) {
+      const { writeReviewDecision } = await import('../cognition/review-decision');
+      await writeReviewDecision(userId, {
+        targetRef: `recall_candidate:${candidate.id}`,
+        decisionType: 'defer',
+        decision: 'semantic review flag',
+        antecedentRef: candidate.id,
+        scope: candidate.suggestedScope,
+        reason: `Semantic review flagged ${reviewed.findings.map((finding) => finding.rule).join(', ')}; kept for user decision.`,
+        actor: 'system',
+      }).catch(() => undefined);
+      await updateRecallJsonRecord(userId, 'candidates', candidate.id, (current) => {
+        if (!current) return undefined;
+        return {
+          ...current,
+          status: 'deferred',
+          failureCode: 'semantic_review_flagged',
+          failureMessage: `Semantic review flagged: ${reviewed.findings.map((finding) => finding.rule).join(', ')}`,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      log.info('recall candidate deferred by semantic review', {
+        candidateId: candidate.id,
+        rules: reviewed.findings.map((finding) => finding.rule),
+      });
+      return { candidate: await readRecallCandidate(userId, candidate.id) };
+    }
+  } catch (error) {
+    log.warn('recall candidate semantic review degraded; proceeding with deterministic gate', {
+      candidateId: candidate.id,
+      error: (error as Error).message,
+    });
   }
   // 晋升前资产语义查重 + 质量融合（设计 §4.7/§4.9）。默认开启；查重不可用时
   // semanticDedupBeforePromote 抛 SemanticDedupUnavailableError，自动晋升中止。
@@ -971,9 +1036,10 @@ async function loadDedupPools(userId: string): Promise<{
     import('./asset-service').then((m) => m.listAbilityAssets(userId)).catch(() => [] as RecallAbilityAssetRecord[]),
   ]);
   return {
+    // 查重池 = 非终态候选。和用户侧 capability 是两个问题，但共用同一份
+    // terminal policy，免得再长出第三套状态清单。
     candidateTexts: candidates
-      .filter((c) => c.status === 'observed' || c.status === 'weak_observation'
-        || c.status === 'pending_review' || c.status === 'deferred' || c.status === 'failed')
+      .filter((c) => !isTerminalCandidate(c.status))
       .map((c) => ({ id: c.id, text: String(c.judgment || '') })),
     assetTexts: assets
       .filter((a) => a.status !== 'deleted' && a.status !== 'purged' && a.status !== 'revoked')
@@ -1108,8 +1174,10 @@ export async function batchPromoteRecallCandidates(
   for (const candidateId of [...new Set(candidateIds)]) {
     try {
       const candidate = await readRecallCandidate(userId, candidateId);
-      if (candidate.status !== 'pending_review') {
-        failed.push({ candidateId, error: 'candidate is not pending review' });
+      // 用户批量晋升的准入 = 用户侧 capability，不是 pending_review 单点。
+      // 只认 pending_review 会让实机上占多数的 weak_observation 全部落空。
+      if (!getRecallCandidateCapabilities(candidate).canPromote) {
+        failed.push({ candidateId, error: RECALL_CANDIDATE_NOT_PROMOTABLE_ERROR_CODE });
         continue;
       }
       const result = await promoteRecallCandidate(userId, candidateId, { actor: 'user' });
@@ -1411,8 +1479,16 @@ export async function promoteRecallCandidate(
     if (!current) throw new Error('recall candidate not found');
     const candidate = asCandidate(current);
     if (candidate.status === 'confirmed') return candidate;
-    if (isTerminalCandidate(candidate.status)) throw new Error('recall candidate is terminal');
-    if (candidate.status === 'weak_observation' || candidate.status === 'observed') {
+    if (isTerminalCandidate(candidate.status)) {
+      throw new RecallCandidateStateError(RECALL_CANDIDATE_TERMINAL_ERROR_CODE, 'recall candidate is terminal', candidate.status);
+    }
+    // 证据不足只拦**系统**自动晋升——弱证据不该在没人看过的情况下变成资产。
+    // 用户显式确认是另一回事：他看到了"证据较弱"的提示仍然决定沉淀，那是
+    // 一次有效决策。与紧邻的高风险门禁同一套 actor 判据。
+    // 但"用户可操作"仍以 capability 为准：refs 为空的候选连状态都迁不出去
+    // （asCandidate 不变量），放它进来只会写出一条读不回的 failed 记录。
+    if ((candidate.status === 'weak_observation' || candidate.status === 'observed')
+      && (options.actor !== 'user' || !getRecallCandidateCapabilities(candidate).canPromote)) {
       throw new Error('candidate evidence is insufficient for review');
     }
     if (candidate.risk === 'high' && (options.actor !== 'user' || options.riskAcknowledged !== true)) {

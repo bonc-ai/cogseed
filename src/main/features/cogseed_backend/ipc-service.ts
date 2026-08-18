@@ -78,6 +78,7 @@ export interface MateRendererTaskSummary {
   title: string;
   createdAt: string;
   updatedAt: string;
+  skillVersionPinStatus?: 'pinned' | 'unpinned';
   actions: MateRendererActionSet;
 }
 
@@ -183,6 +184,7 @@ function normalizeStartInput(payload: unknown): StartMateTaskInput {
   const context = boundedArray(raw.context, 'context', MAX_CONTEXT_ITEMS);
   const attachments = boundedArray(raw.attachments, 'attachments', MAX_ATTACHMENT_ITEMS);
   const workingDir = boundedString(raw.workingDir, 'workingDir', 2_000, false);
+  const conversationId = boundedString(raw.conversationId, 'conversationId', 160, false);
   return {
     requestId,
     task,
@@ -191,6 +193,7 @@ function normalizeStartInput(payload: unknown): StartMateTaskInput {
     ...(context ? { context } : {}),
     ...(attachments ? { attachments } : {}),
     ...(workingDir ? { workingDir } : {}),
+    ...(conversationId ? { conversationId } : {}),
   };
 }
 
@@ -251,6 +254,7 @@ function taskSummary(task: MateTaskRecord, hasWorkflowStep = false): MateRendere
     title: redactRendererText(task.task),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+    ...(task.skillVersionPinStatus ? { skillVersionPinStatus: task.skillVersionPinStatus } : {}),
     actions: taskActions(task.status, hasWorkflowStep),
   };
 }

@@ -340,6 +340,15 @@ function _agentProfileEntries(value) {
 
 function _agentSummary(agent, lang) {
   if (_isCommanderAgent(agent)) return normalizeDisplayText(agent && agent.description);
+  // P3394 external Agents use the product preset description as the live
+  // contract. This also repairs older persisted records that were created
+  // before the external preset descriptions were corrected (for example,
+  // Hermes records that still say ACP despite runtime.kind=p3394-gateway).
+  const runtime = agent && agent.runtime;
+  if (runtime && runtime.kind === 'p3394-gateway' && runtime.cli && typeof getCliDefaults === 'function') {
+    const defaults = getCliDefaults(runtime.cli);
+    if (defaults) return (pickDesc(defaults, lang) || '').trim();
+  }
   return (pickDesc(agent, lang) || '').trim();
 }
 
@@ -1830,6 +1839,7 @@ function _renderAgentDetail(agent, editing) {
   // it duplicated information the dropdown already exposes.
   _renderAgentDetailRuntime(agent);
   _renderAgentDetailProjectDir(agent);
+  void _renderAgentDetailGateway(agent);
   const localizedDesc = _agentSummary(agent, lang);
   descEl.textContent = localizedDesc;
   descEl.classList.toggle('is-empty', !localizedDesc);
@@ -2155,11 +2165,69 @@ async function _renderAgentDetailRuntime(agent) {
   });
 }
 
+/** P3394 外接智能体详情：托管网关运行状态 + 停止/启动按钮。
+ *  复用现成 IPC p3394.external.list（返回 running/pid/port）与
+ *  p3394.external.start/stop；仅对 runtime.kind==='p3394-gateway' 显示。 */
+async function _renderAgentDetailGateway(agent) {
+  const section = document.getElementById('agents-detail-gateway-section');
+  const slot = document.getElementById('agents-detail-gateway');
+  if (!section || !slot) return;
+  const cli = (agent.runtime?.kind === 'p3394-gateway' && agent.runtime.cli) ? agent.runtime.cli : '';
+  if (!cli) {
+    section.style.display = 'none';
+    slot.innerHTML = '';
+    return;
+  }
+  section.style.display = '';
+  const gateways = (typeof loadExternalGateways === 'function')
+    ? await loadExternalGateways({ force: true })
+    : [];
+  const gw = gateways.find((g) => g && g.cli === cli);
+  const running = !!(gw && gw.running);
+  const statusText = running
+    ? t('agents.gateway_running')
+      + (gw.pid ? ` · pid ${gw.pid}` : '')
+      + (gw.port ? ` · :${gw.port}` : '')
+    : t('agents.gateway_offline');
+  const action = running ? 'stop' : 'start';
+  const btnLabel = running ? t('agents.gateway_stop') : t('agents.gateway_start');
+  slot.innerHTML = `
+    <div class="agents-detail-gateway-status">
+      <span class="agents-detail-gateway-dot ${running ? 'is-on' : 'is-off'}"></span>
+      <span class="agents-detail-gateway-text">${escapeHtml(statusText)}</span>
+      <button type="button" class="btn btn-sm" data-gateway-action="${action}" data-gateway-cli="${escapeHtml(cli)}">${escapeHtml(btnLabel)}</button>
+    </div>`;
+  const btn = slot.querySelector('[data-gateway-action]');
+  if (!btn) return;
+  btn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    try {
+      if (action === 'stop') {
+        await window.cogseed.invoke('p3394.external.stop', { cli });
+      } else {
+        const entries = (typeof loadLocalCliEntries === 'function')
+          ? await loadLocalCliEntries({ force: true })
+          : [];
+        const detected = entries.find((entry) => entry && entry.type === cli);
+        await window.cogseed.invoke('p3394.external.start', {
+          cli,
+          alias: agent.name || cli,
+          ...(detected && detected.path ? { binPath: detected.path } : {}),
+        });
+      }
+    } catch (err) {
+      _agentsLog.warn('p3394 gateway toggle failed', { cli, action, error: err && (err.message || err) });
+    }
+    btn.disabled = false;
+    void _renderAgentDetailGateway(agent);
+  });
+}
+
 /** Project directory setting for external coding agents (claude / codex).
  *  Stored in a local-only main-process config; each conversation copies
  *  the effective value on its first coding-agent dispatch. */
-async function _renderAgentDetailProjectDir(agent) {
-  const section = document.getElementById('agents-detail-project-dir-section');
+async function _renderAgentDetailProjectDir(agent) {  const section = document.getElementById('agents-detail-project-dir-section');
   const slot = document.getElementById('agents-detail-project-dir');
   if (!section || !slot) return;
   const cli = (agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway') ? agent.runtime.cli : '';
@@ -2566,6 +2634,13 @@ function _switchAgentTab(tab) {
   panels.forEach((el) => el.classList.toggle('is-active', el.dataset.agentPanel === tab));
   const msgEl = document.getElementById('agent-form-msg');
   if (msgEl) { msgEl.textContent = ''; msgEl.className = 'form-msg'; }
+  // 每次切到「外接」tab 都重新扫描并展示「正在扫描本机 CLI…」。之前
+  // 扫描只发生在打开弹窗时一次，用户切换 tab 看到的总是早已就绪的
+  // 结果 → 感知上像「没有扫描」。移到这里后，进入外接面板必然先短暂
+  // 显示扫描态，再呈现真实探测结果。
+  if (tab === 'external') {
+    _refreshExternalCliSelector();
+  }
   setTimeout(() => {
     const focusId = tab === 'external' ? 'agent-modal-ext-cli-select' : 'agent-name-input';
     const el = document.getElementById(focusId);
@@ -2574,6 +2649,21 @@ function _switchAgentTab(tab) {
   }, 30);
 }
 window._switchAgentTab = _switchAgentTab;
+
+/** 挂载 / 刷新「外接」tab 的 CLI 选择器：先清空 provider 选择，再以
+ *  force 重扫（mountExternalCliSelect 内部会短暂显示「正在扫描本机
+ *  CLI…」再替换为最终列表）。每次进入外接面板都会执行，让用户能亲
+ *  眼看到本机探测正在发生，而不是直接拿到上次的缓存结果。 */
+function _refreshExternalCliSelector() {
+  _externalCliProviderSelect?.setValue('');
+  const providerLoad = _loadExternalCliProviders().catch(() => []);
+  if (typeof mountExternalCliSelect === 'function') {
+    mountExternalCliSelect((cli) => {
+      _applyExternalCliDefaults(cli);
+      providerLoad.then(() => _renderExternalCliProviderSelect(cli, _getExternalCliProviderValue(cli)));
+    }).catch(() => {});
+  }
+}
 
 // Track which CLI defaults are currently reflected in the External-tab
 // inputs. When a user types over a default, the field key drops out of
@@ -2665,17 +2755,6 @@ function openAgentModal(options = {}) {
     tabBar.dataset.wired = '1';
   }
   _switchAgentTab(initialTab);
-
-  // Refresh the External-tab CLI selector. Re-mount each open so newly-
-  // installed CLIs surface without an app restart.
-  _externalCliProviderSelect?.setValue('');
-  const providerLoad = _loadExternalCliProviders().catch(() => []);
-  if (typeof mountExternalCliSelect === 'function') {
-    mountExternalCliSelect((cli) => {
-      _applyExternalCliDefaults(cli);
-      providerLoad.then(() => _renderExternalCliProviderSelect(cli, _getExternalCliProviderValue(cli)));
-    }).catch(() => {});
-  }
 
   modal.classList.add('open');
   const focusId = initialTab === 'external' ? 'agent-ext-name-input' : 'agent-name-input';
@@ -2838,32 +2917,13 @@ async function _saveExternalAgent({ msgEl }) {
 
   const startedAt = performance.now();
   if (window.Monitor) (() => {})('agent_create_submit', { agent_type: 'p3394', cli });
+  // P3394 方式外接：先创建智能体记录，再拉起该 CLI 的受管 P3394 网关。
+  // 顺序不能反：先起网关会立即收到 hello → 自动投影用默认名抢先创建，
+  // 用户命名的同名智能体反而被 "已占用" 拒绝（时序竞态，曾产生双卡）。
+  // 先建记录后，投影的 existing_agent 分支会复用本记录，不再重复创建。
   try {
-    // P3394 方式外接：先拉起该 CLI 的受管 P3394 网关（自注册进桥），
-    // 再创建智能体记录——之后对话里每一轮都走 P3394 协议协作。
     const entries = await window.loadLocalCliEntries({ force: true });
     const detected = entries.find((e) => e && e.type === cli);
-    const started = await window.cogseed.invoke('p3394.external.start', {
-      cli,
-      alias: name,
-      ...(detected && detected.path ? { binPath: detected.path } : {}),
-    });
-    if (!started || !started.ok) {
-      msgEl.textContent = t('agents.p3394_gateway_start_failed', {
-        reason: (started && started.error) || 'unknown',
-      });
-      msgEl.className = 'form-msg err';
-      if (window.Monitor) {
-        (() => {})('agent_create_result', {
-          result: 'failure',
-          agent_type: 'p3394',
-          cli,
-          duration_ms: Math.round(performance.now() - startedAt),
-          error_code: (started && started.error) || '',
-        });
-      }
-      return;
-    }
     const body = {
       name,
       description: desc,
@@ -2899,9 +2959,54 @@ async function _saveExternalAgent({ msgEl }) {
       }
       return;
     }
+    const agentId = data.agent.agent_id;
+    // 记录已创建，再启动网关。网关 hello 触发自动投影时会复用上面的
+    // 记录（team-projection 的 existing_agent 分支），不会重复创建默认名。
+    let started;
+    try {
+      started = await window.cogseed.invoke('p3394.external.start', {
+        cli,
+        alias: name,
+        ...(detected && detected.path ? { binPath: detected.path } : {}),
+      });
+    } catch (startErr) {
+      // 网关启动调用本身抛异常：回滚刚创建的记录，避免留下半成品。
+      try { await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' }); } catch { /* best effort */ }
+      msgEl.textContent = t('agents.network_error', { reason: startErr.message || startErr });
+      msgEl.className = 'form-msg err';
+      if (window.Monitor) {
+        (() => {})('agent_create_result', {
+          result: 'failure',
+          agent_type: 'p3394',
+          cli,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+      }
+      return;
+    }
+    if (!started || !started.ok) {
+      // 网关启动失败（脚本缺失 / 注册超时等）：回滚刚创建的记录。投影
+      // 映射可能残留指向已删除记录（已有投射记录时节点 hello 不再重建
+      // 卡片），属低频边界，后续可清理投影文件恢复。
+      try { await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' }); } catch { /* best effort */ }
+      msgEl.textContent = t('agents.p3394_gateway_start_failed', {
+        reason: (started && started.error) || 'unknown',
+      });
+      msgEl.className = 'form-msg err';
+      if (window.Monitor) {
+        (() => {})('agent_create_result', {
+          result: 'failure',
+          agent_type: 'p3394',
+          cli,
+          duration_ms: Math.round(performance.now() - startedAt),
+          error_code: (started && started.error) || '',
+        });
+      }
+      return;
+    }
     if (window.Monitor) (() => {})('agent_create_result', {
       result: 'success',
-      agent_id: data.agent.agent_id,
+      agent_id: agentId,
       agent_type: 'p3394',
       cli,
       duration_ms: Math.round(performance.now() - startedAt),
@@ -2912,7 +3017,7 @@ async function _saveExternalAgent({ msgEl }) {
     // External agents go straight to the detail view but skip the LLM
     // edit-chat — there's nothing to author. The user can still rename
     // or reword the description through the inline name/desc editors.
-    await _showAgentsDetailView(data.agent.agent_id);
+    await _showAgentsDetailView(agentId);
   } catch (e) {
     msgEl.textContent = t('agents.network_error', { reason: e.message || e });
     msgEl.className = 'form-msg err';
@@ -3551,7 +3656,7 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   let boundSkillIds = null;
   let scopeSpace = null;
   try {
-    const res = await (window.cogseed || window.orkas).invoke('spaces.scope.resolve', { spaceId });
+    const res = await window.cogseed.invoke('spaces.scope.resolve', { spaceId });
     const scope = res && res.scope;
     if (scope && Array.isArray(scope.agents) && Array.isArray(scope.skills)) {
       boundAgentIds = new Set(scope.agents);
@@ -4171,8 +4276,8 @@ function _sameTaskRefKey(r) {
 
 async function _loadArtifactPickerRows(spaceId) {
   const [artRes, convRes] = await Promise.all([
-    (window.cogseed || window.orkas).invoke('spaces.artifacts.list', { spaceId }).catch(() => ({})),
-    (window.cogseed || window.orkas).invoke('spaces.conversations.list', { spaceId }).catch(() => ({})),
+    window.cogseed.invoke('spaces.artifacts.list', { spaceId }).catch(() => ({})),
+    window.cogseed.invoke('spaces.conversations.list', { spaceId }).catch(() => ({})),
   ]);
   const titles = new Map();
   for (const c of (convRes && convRes.conversations) || []) {
@@ -4187,7 +4292,7 @@ async function _loadAssetPickerRows(spaceId) {
   // 不再用全局 recall.assets.list——用户明确要求空间资产）。
   if (!spaceId) return [];
   try {
-    const res = await (window.cogseed || window.orkas).invoke('recall.assets.listForSpace', { spaceId });
+    const res = await window.cogseed.invoke('recall.assets.listForSpace', { spaceId });
     return Array.isArray(res && res.assets)
       ? res.assets.map((a) => ({ asset_id: a.id, title: a.title, asset_type: a.type }))
       : [];
@@ -4330,7 +4435,7 @@ function _renderTaskRefChips(el, refs, cid) {
       const idx = Number(btn.dataset.index);
       try {
         if (c) {
-          await (window.cogseed || window.orkas).invoke('conversations.taskRefs.remove', { cid: c, index: idx });
+          await window.cogseed.invoke('conversations.taskRefs.remove', { cid: c, index: idx });
         } else {
           _pendingNewChatRefs = (_pendingNewChatRefs || []).filter((_, i) => i !== idx);
         }
@@ -4351,7 +4456,7 @@ function renderChatTaskRefChips() {
     else {
       (async () => {
         try {
-          const res = await (window.cogseed || window.orkas).invoke('conversations.taskRefs.list', { cid });
+          const res = await window.cogseed.invoke('conversations.taskRefs.list', { cid });
           const refs = Array.isArray(res && res.references) ? res.references : [];
           _renderTaskRefChips(convEl, refs, cid);
         } catch (_) { convEl.style.display = 'none'; }
@@ -4378,7 +4483,7 @@ async function commitNewChatTaskRefs(convId) {
   if (!convId || !refs.length) return;
   for (const r of refs.slice(0, 20)) {
     try {
-      await (window.cogseed || window.orkas).invoke('conversations.taskRefs.add', { cid: convId, reference: r });
+      await window.cogseed.invoke('conversations.taskRefs.add', { cid: convId, reference: r });
     } catch (err) {
       _agentsLog.warn('taskRefs.add for new chat failed', err);
     }
@@ -4391,7 +4496,7 @@ async function _commitTaskRef(reference, anchorId) {
     const cid = (typeof currentCid === 'string') ? currentCid : '';
     if (!cid) return false;
     try {
-      const res = await (window.cogseed || window.orkas).invoke('conversations.taskRefs.add', { cid, reference });
+      const res = await window.cogseed.invoke('conversations.taskRefs.add', { cid, reference });
       if (res && res.error) throw new Error(res.error);
     } catch (err) {
       _agentsLog.warn('taskRefs.add failed', err);

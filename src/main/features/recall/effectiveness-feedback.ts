@@ -1,6 +1,7 @@
 import {
   evaluateEffectivenessProof,
   listTransferProofs,
+  recallProofError,
   type EffectivenessOutcome,
   type EffectivenessProofRecord,
 } from './proof-service';
@@ -96,7 +97,10 @@ export async function recordTaskEffectivenessFeedback(
       // A malformed/unavailable unrelated projection does not block feedback for other proofs.
     }
   }
-  if (!transfers.length) throw new Error('no successful transfer proof for task run');
+  // 这一条是「这次运行压根没产生成功的迁移证明」，和「有证明但没成功」
+  // （E_RECALL_TRANSFER_NOT_SUCCEEDED）不是同一件事——前者用户该做的是等任务
+  // 跑完，后者是这次带入已经失败了。分开给码，渲染层才能说清下一步。
+  if (!transfers.length) throw recallProofError('E_RECALL_NO_SUCCESSFUL_TRANSFER', 'no successful transfer proof for task run');
   const proofs: EffectivenessProofRecord[] = [];
   for (const transfer of transfers) {
     const proof = await evaluateFeedbackProof(userId, transfer.id, input);
