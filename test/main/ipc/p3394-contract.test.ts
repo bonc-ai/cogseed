@@ -15,7 +15,7 @@ vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, _fn: InvokeFn) => {
       registered.add(channel);
-      if (channel === 'orkas.invoke') invokeHandler = _fn;
+      if (channel === 'cogseed.invoke') invokeHandler = _fn;
     },
     on: vi.fn(),
   },
@@ -30,13 +30,13 @@ vi.mock('../../../src/main/logger', () => ({
   logFromRenderer: vi.fn(),
 }));
 
-// probeHandlers 收集 invokeHandlers 的键：把 orkas.invoke 换成对 unknown channel
+// probeHandlers 收集 invokeHandlers 的键：把 cogseed.invoke 换成对 unknown channel
 // 的探测——所有已注册 channel 名可通过对每个候选发一次 invoke 判断 error 是否为
 // "unknown channel"。更直接：用一个已知会被验证拒绝的 payload 断言 handler 存在。
 let probe: (channel: string) => Promise<{ ok: boolean; error?: string }>;
 
 beforeEach(async () => {
-  process.env.ORKAS_WORKSPACE_ROOT = os.tmpdir();
+  process.env.COGSEED_WORKSPACE_ROOT = os.tmpdir();
   invokeHandler = null;
   registered.clear();
   vi.resetModules();

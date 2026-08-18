@@ -18,7 +18,7 @@ vi.mock('../../../src/main/paths', () => ({
   userFileCacheDir: () => path.join(mocks.root, 'cache'),
 }));
 vi.mock('../../../src/main/util/bundled-runtime', () => ({
-  bundledRuntimeEnv: () => ({ ORKAS_UV: mocks.uv, ORKAS_PYTHON: mocks.python }),
+  bundledRuntimeEnv: () => ({ COGSEED_UV: mocks.uv, COGSEED_PYTHON: mocks.python }),
 }));
 vi.mock('../../../src/main/logger', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -50,7 +50,7 @@ function installSuccessfulExecMock(delayMs = 0): void {
 
 describe('OCR runtime provisioning', () => {
   beforeEach(() => {
-    mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-ocr-runtime-'));
+    mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ocr-runtime-'));
     mocks.execFile.mockReset();
     _resetOcrRuntimeForTest();
   });

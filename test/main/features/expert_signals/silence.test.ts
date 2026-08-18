@@ -3,9 +3,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-// Pre-set ORKAS_WORKSPACE_ROOT before importing anything that loads paths.ts.
+// Pre-set COGSEED_WORKSPACE_ROOT before importing anything that loads paths.ts.
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sig-silence-'));
-process.env.ORKAS_WORKSPACE_ROOT = TMP;
+process.env.COGSEED_WORKSPACE_ROOT = TMP;
 fs.writeFileSync(path.join(TMP, 'users.json'),
   JSON.stringify({ current_user_id: '12345678', users: [{ user_id: '12345678', created_at: new Date().toISOString() }] }));
 

@@ -308,19 +308,19 @@
 
   function _clearArtifactUnavailable(frame) {
     if (!frame) return;
-    const panel = frame._orkasUnavailablePanel;
+    const panel = frame._cogseedUnavailablePanel;
     if (panel && panel.remove) panel.remove();
-    frame._orkasUnavailablePanel = null;
+    frame._cogseedUnavailablePanel = null;
     frame.style.display = 'block';
   }
 
   function _showArtifactUnavailable(frame, reason) {
     if (!frame || !frame.parentNode) return;
-    let panel = frame._orkasUnavailablePanel;
+    let panel = frame._cogseedUnavailablePanel;
     if (!panel) {
       panel = document.createElement('div');
       panel.className = 'chat-artifact-unavailable';
-      frame._orkasUnavailablePanel = panel;
+      frame._cogseedUnavailablePanel = panel;
       frame.parentNode.insertBefore(panel, frame.nextSibling);
     }
     panel.innerHTML = '';

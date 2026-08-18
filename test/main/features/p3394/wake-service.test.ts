@@ -18,14 +18,14 @@ const cid = "conversation-1";
 const agentId = "agent-1";
 
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "orkas-p3394-wake-"));
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "cogseed-p3394-wake-"));
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   vi.resetModules();
 });
 
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
-  delete process.env.ORKAS_WORKSPACE_ROOT;
+  delete process.env.COGSEED_WORKSPACE_ROOT;
   vi.resetModules();
 });
 

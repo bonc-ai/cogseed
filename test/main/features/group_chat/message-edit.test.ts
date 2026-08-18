@@ -50,9 +50,9 @@ const UID = 'edit-user';
 const CID = 'edit-cid';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-message-edit-'));
-  previousWorkspace = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-message-edit-'));
+  previousWorkspace = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   mocks.enqueue.mockClear();
   mocks.runtimeSnapshot.mockClear();
@@ -65,7 +65,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = previousWorkspace;
+  process.env.COGSEED_WORKSPACE_ROOT = previousWorkspace;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

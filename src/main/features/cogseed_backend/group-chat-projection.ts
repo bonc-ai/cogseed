@@ -9,8 +9,8 @@ import {
   appendProjectedAgentMessage,
   appendProjectedProcessEvent,
 } from '../group_chat/bus';
-import { assertMateAgentId, assertMateConversationId, assertMateSessionId, assertMateTaskId, assertMateUserId, mateTaskProjectionFile } from './paths';
-import { MATE_AGENT_BACKEND_SCHEMA_VERSION, type MateTaskEventType } from './types';
+import { assertCogSeedAgentId, assertCogSeedConversationId, assertCogSeedSessionId, assertCogSeedTaskId, assertCogSeedUserId, cogseedTaskProjectionFile } from './paths';
+import { COGSEED_AGENT_BACKEND_SCHEMA_VERSION, type CogSeedTaskEventType } from './types';
 import { extractHandbackFromFinal } from '../group_chat/router';
 import {
   COMMANDER_ID,
@@ -19,31 +19,31 @@ import {
   takeOrchestrationLedgerForAgent,
 } from '../group_chat/state';
 
-const log = createLogger('mate-backend:group-chat-projection');
+const log = createLogger('cogseed-backend:group-chat-projection');
 
-export interface MateProjectionEvent {
+export interface CogSeedProjectionEvent {
   eventId: string;
-  type: MateTaskEventType;
+  type: CogSeedTaskEventType;
   payload: Record<string, unknown>;
 }
 
-export interface MateGroupChatProjectionInput {
+export interface CogSeedGroupChatProjectionInput {
   userId: string;
   conversationId: string;
   agentId: string;
   taskId: string;
   sessionId: string;
-  event: MateProjectionEvent;
+  event: CogSeedProjectionEvent;
 }
 
-export interface MateGroupChatProjectionDeps {
+export interface CogSeedGroupChatProjectionDeps {
   conversationExists(input: { userId: string; conversationId: string }): Promise<boolean>;
   appendProcessEvent(input: {
     userId: string;
     conversationId: string;
     agentId: string;
     turnId: string;
-    kind: MateTaskEventType;
+    kind: CogSeedTaskEventType;
     data: Record<string, unknown>;
   }): Promise<void>;
   appendTerminalMessage(input: {
@@ -64,7 +64,7 @@ type ProjectionProcessItem =
   | { type: 'event'; event: { stream: string; data?: unknown } };
 
 interface ProjectionState {
-  schemaVersion: typeof MATE_AGENT_BACKEND_SCHEMA_VERSION;
+  schemaVersion: typeof COGSEED_AGENT_BACKEND_SCHEMA_VERSION;
   ownerId: string;
   taskId: string;
   processedEventIds: string[];
@@ -80,7 +80,7 @@ function isEnoent(error: unknown): boolean {
 
 function freshState(userId: string, taskId: string): ProjectionState {
   return {
-    schemaVersion: MATE_AGENT_BACKEND_SCHEMA_VERSION,
+    schemaVersion: COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
     ownerId: userId,
     taskId,
     processedEventIds: [],
@@ -94,7 +94,7 @@ function freshState(userId: string, taskId: string): ProjectionState {
 function validateState(userId: string, taskId: string, value: unknown): ProjectionState {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed CogSeed projection state');
   const row = value as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_AGENT_BACKEND_SCHEMA_VERSION || row.ownerId !== userId || row.taskId !== taskId
+  if (row.schemaVersion !== COGSEED_AGENT_BACKEND_SCHEMA_VERSION || row.ownerId !== userId || row.taskId !== taskId
     || !Array.isArray(row.processedEventIds) || !Array.isArray(row.process)
     || typeof row.terminalProjected !== 'boolean' || typeof row.stopped !== 'boolean'
     || typeof row.updatedAt !== 'string') {
@@ -105,7 +105,7 @@ function validateState(userId: string, taskId: string, value: unknown): Projecti
 
 async function readState(userId: string, taskId: string): Promise<ProjectionState> {
   try {
-    return validateState(userId, taskId, JSON.parse(await fs.readFile(mateTaskProjectionFile(userId, taskId), 'utf8')));
+    return validateState(userId, taskId, JSON.parse(await fs.readFile(cogseedTaskProjectionFile(userId, taskId), 'utf8')));
   } catch (error) {
     if (isEnoent(error)) return freshState(userId, taskId);
     if (error instanceof SyntaxError) throw new Error('malformed CogSeed projection state');
@@ -113,7 +113,7 @@ async function readState(userId: string, taskId: string): Promise<ProjectionStat
   }
 }
 
-function processItem(event: MateProjectionEvent): ProjectionProcessItem | null {
+function processItem(event: CogSeedProjectionEvent): ProjectionProcessItem | null {
   if (event.type === 'model.delta') {
     const text = typeof event.payload.text === 'string' ? event.payload.text : '';
     return text ? { type: 'progress', text } : null;
@@ -128,7 +128,7 @@ function processItem(event: MateProjectionEvent): ProjectionProcessItem | null {
 }
 
 export function groupChatProcessDataForProjection(
-  kind: MateTaskEventType,
+  kind: CogSeedTaskEventType,
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
   if (kind === 'model.delta') {
@@ -156,11 +156,11 @@ export function groupChatProcessDataForProjection(
   };
 }
 
-function isTerminal(type: MateTaskEventType): boolean {
+function isTerminal(type: CogSeedTaskEventType): boolean {
   return type === 'task.completed' || type === 'task.failed' || type === 'task.cancelled';
 }
 
-function terminalText(event: MateProjectionEvent): { text: string; failureKind?: 'runtime'; failureCode?: string } | null {
+function terminalText(event: CogSeedProjectionEvent): { text: string; failureKind?: 'runtime'; failureCode?: string } | null {
   if (event.type === 'task.completed') {
     const text = typeof event.payload.text === 'string' ? event.payload.text.trim() : '';
     return text ? { text } : null;
@@ -171,7 +171,7 @@ function terminalText(event: MateProjectionEvent): { text: string; failureKind?:
   return null;
 }
 
-export async function applyMateProjectedHandback(
+export async function applyCogSeedProjectedHandback(
   userId: string,
   conversationId: string,
   agentId: string,
@@ -191,7 +191,7 @@ async function defaultConversationExists(input: { userId: string; conversationId
   return Boolean(await chats.getConversation(input.userId, input.conversationId));
 }
 
-const defaultDeps: MateGroupChatProjectionDeps = {
+const defaultDeps: CogSeedGroupChatProjectionDeps = {
   conversationExists: defaultConversationExists,
   async appendProcessEvent(input) {
     await appendProjectedProcessEvent({
@@ -204,7 +204,7 @@ const defaultDeps: MateGroupChatProjectionDeps = {
     });
   },
   async appendTerminalMessage(input) {
-    const handback = await applyMateProjectedHandback(
+    const handback = await applyCogSeedProjectedHandback(
       input.userId,
       input.conversationId,
       input.agentId,
@@ -224,22 +224,22 @@ const defaultDeps: MateGroupChatProjectionDeps = {
   },
 };
 
-export function createMateGroupChatProjection(
-  overrides: Partial<MateGroupChatProjectionDeps> = {},
-): { project(input: MateGroupChatProjectionInput): Promise<'projected' | 'duplicate' | 'dropped'> } {
+export function createCogSeedGroupChatProjection(
+  overrides: Partial<CogSeedGroupChatProjectionDeps> = {},
+): { project(input: CogSeedGroupChatProjectionInput): Promise<'projected' | 'duplicate' | 'dropped'> } {
   const deps = { ...defaultDeps, ...overrides };
   return {
     async project(input) {
-      assertMateUserId(input.userId);
-      assertMateConversationId(input.conversationId);
-      assertMateAgentId(input.agentId);
-      assertMateTaskId(input.taskId);
-      assertMateSessionId(input.sessionId);
+      assertCogSeedUserId(input.userId);
+      assertCogSeedConversationId(input.conversationId);
+      assertCogSeedAgentId(input.agentId);
+      assertCogSeedTaskId(input.taskId);
+      assertCogSeedSessionId(input.sessionId);
       if (!safeId(input.event.eventId)) throw new Error('invalid CogSeed projection event id');
       if (!(await deps.conversationExists({ userId: input.userId, conversationId: input.conversationId }))) {
         return 'dropped';
       }
-      const stateFile = mateTaskProjectionFile(input.userId, input.taskId);
+      const stateFile = cogseedTaskProjectionFile(input.userId, input.taskId);
       return fileEditLock(stateFile).runExclusive(async () => {
         const state = await readState(input.userId, input.taskId);
         if (state.processedEventIds.includes(input.event.eventId)) return 'duplicate';
@@ -294,4 +294,4 @@ export function createMateGroupChatProjection(
   };
 }
 
-export const mateGroupChatProjection = createMateGroupChatProjection();
+export const cogseedGroupChatProjection = createCogSeedGroupChatProjection();

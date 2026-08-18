@@ -1,4 +1,4 @@
-export const MATE_MIGRATION_JOURNAL_SCHEMA_VERSION = 1 as const;
+export const COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION = 1 as const;
 
 export type MigrationPhase = 'preview' | 'validate' | 'transform' | 'write' | 'verify' | 'finalize' | 'rollback' | 'resume';
 
@@ -22,7 +22,7 @@ export interface MigrationRollbackWindow {
 }
 
 export interface MigrationPhaseEntry {
-  schemaVersion: typeof MATE_MIGRATION_JOURNAL_SCHEMA_VERSION;
+  schemaVersion: typeof COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION;
   entryId: string;
   kind: 'phase';
   scope: MigrationScope;
@@ -41,7 +41,7 @@ export interface MigrationMapping {
 }
 
 export interface MigrationMappingEntry {
-  schemaVersion: typeof MATE_MIGRATION_JOURNAL_SCHEMA_VERSION;
+  schemaVersion: typeof COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION;
   entryId: string;
   kind: 'mapping';
   scope: MigrationScope;
@@ -58,7 +58,7 @@ export interface MigrationWarning {
 }
 
 export interface MigrationWarningEntry {
-  schemaVersion: typeof MATE_MIGRATION_JOURNAL_SCHEMA_VERSION;
+  schemaVersion: typeof COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION;
   entryId: string;
   kind: 'warning';
   scope: MigrationScope;
@@ -78,7 +78,7 @@ export interface MigrationDecision {
 }
 
 export interface MigrationDecisionEntry {
-  schemaVersion: typeof MATE_MIGRATION_JOURNAL_SCHEMA_VERSION;
+  schemaVersion: typeof COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION;
   entryId: string;
   kind: 'decision';
   scope: MigrationScope;
@@ -87,7 +87,7 @@ export interface MigrationDecisionEntry {
 }
 
 export interface MigrationCheckpointEntry {
-  schemaVersion: typeof MATE_MIGRATION_JOURNAL_SCHEMA_VERSION;
+  schemaVersion: typeof COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION;
   entryId: string;
   kind: 'checkpoint';
   scope: MigrationScope;
@@ -124,7 +124,7 @@ export interface MigrationJournalState {
 }
 
 export interface MigrationJournalDocument {
-  schemaVersion: typeof MATE_MIGRATION_JOURNAL_SCHEMA_VERSION;
+  schemaVersion: typeof COGSEED_MIGRATION_JOURNAL_SCHEMA_VERSION;
   journalId: string;
   scope: MigrationScope;
   createdAt: string;

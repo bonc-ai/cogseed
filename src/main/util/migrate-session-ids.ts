@@ -11,7 +11,7 @@
  *
  * Handles every legacy shape we've ever shipped:
  *   - `aiteam-gconv-cv1` (brand prefix from the v0 codename)
- *   - `orkas-gconv-cv1`  (brand prefix from the rename)
+ *   - `cogseed-gconv-cv1`  (brand prefix from the rename)
  *   - `99999999-gconv-cv1` (8-digit numeric uid prefix)
  *   - `D69594E0-CF31-…-E3A9-gconv-cv1` (UUID uid prefix; OAuth user_id form)
  *   - `aiteam-99999999-gconv-cv1` (double prefix — brand + uid)

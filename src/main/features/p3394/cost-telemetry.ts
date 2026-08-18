@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../../logger';
 import { appendJsonlAtomic, readJsonl, nowIso } from '../../storage';
-import { mateAgentCostTelemetryDir } from '../../paths';
+import { cogseedAgentCostTelemetryDir } from '../../paths';
 import { maskId } from '../../util/log-redact';
 
 const log = createLogger('cost-telemetry');
@@ -60,7 +60,7 @@ function assertOperation(v: unknown): asserts v is CostOperation {
 }
 
 export function costTelemetryPath(uid: string, month: string): string {
-  return path.join(mateAgentCostTelemetryDir(uid), `${month}.jsonl`);
+  return path.join(cogseedAgentCostTelemetryDir(uid), `${month}.jsonl`);
 }
 
 export function currentMonth(now = new Date()): string {

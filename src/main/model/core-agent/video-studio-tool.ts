@@ -68,7 +68,7 @@ import {
 import {
   assessEstimatedNarrationFit,
   configuredTtsBackendId,
-  estimateNarrationDuration,
+  esticogseedNarrationDuration,
   generateSpeech,
   hasConfiguredTtsProvider,
   narrationDurationCalibrationScale,
@@ -1234,7 +1234,7 @@ function videoProductionNarrationAlignmentIssues(input: {
 
 function narrationRepairTokens(text: string): string[] {
   const normalized = text.normalize('NFKC').toLocaleLowerCase();
-  const estimate = estimateNarrationDuration(text);
+  const estimate = esticogseedNarrationDuration(text);
   const tokens = estimate.unit === 'characters'
     ? Array.from(normalized).filter((character) => /[\p{L}\p{N}]/u.test(character))
     : normalized.match(/[\p{L}\p{N}]+(?:[-'][\p{L}\p{N}]+)*/gu) || [];
@@ -1311,7 +1311,7 @@ async function videoProductionNarrationRepairIdentity(
       && normalizedRepairText(projection.text) !== normalizedRepairText(narration))) return undefined;
     const scriptIndex = scriptStructure.indexOf(narration);
     if (scriptIndex < 0) return undefined;
-    const marker = `{{ORKAS_NARRATION:${scene.id}}}`;
+    const marker = `{{COGSEED_NARRATION:${scene.id}}}`;
     scriptStructure = `${scriptStructure.slice(0, scriptIndex)}${marker}${scriptStructure.slice(scriptIndex + narration.length)}`;
     const sanitizedShot = { ...shot };
     delete sanitizedShot.narration;
@@ -1498,7 +1498,7 @@ function compositionNarrationFit(input: {
     language: input.language,
     speed: input.speed,
   });
-  const estimate = estimateNarrationDuration(input.text, profile.speed);
+  const estimate = esticogseedNarrationDuration(input.text, profile.speed);
   const calibration = narrationCalibrationMatches(input.state, {
     ...profile,
     backend: input.routeRef || configuredTtsBackendId(),
@@ -2365,7 +2365,7 @@ async function reconcileVideoProduction(input: {
   ]);
   const visualAuthored = (!!currentState.artifacts.scaffold_html_sha256
       && originalHtmlSha !== currentState.artifacts.scaffold_html_sha256)
-    || !originalHtml.includes('ORKAS-GENERATED-SCAFFOLD');
+    || !originalHtml.includes('COGSEED-GENERATED-SCAFFOLD');
   const narrationProvenanceMatches = (!!currentState.narration
     && currentState.narration.text_sha256 === narrationIdentity.textSha
     && currentState.narration.audio_sha256 === narrationIdentity.audioSha)
@@ -2602,7 +2602,7 @@ async function materializeCompositionNarration(input: {
     }
     const metadataRecovered = !existingIdentity.narrationMapMatches || !existingIdentity.htmlTrackMatches;
     const authoredVisualsRecovered = narrationInvariantRecovery
-      && ((!existingHtml.includes('ORKAS-GENERATED-SCAFFOLD'))
+      && ((!existingHtml.includes('COGSEED-GENERATED-SCAFFOLD'))
         || (!!state.artifacts.scaffold_html_sha256
           && state.artifacts.html_sha256 !== state.artifacts.scaffold_html_sha256));
     const finalArtifacts = await videoProductionArtifacts(input.compositionDirAbs);
@@ -2672,7 +2672,7 @@ async function materializeCompositionNarration(input: {
   const htmlPath = path.join(input.compositionDirAbs, 'index.html');
   const html = await fs.readFile(htmlPath, 'utf8').catch(() => '');
   const authoredVisualsPresent = narrationInvariantRecovery
-    && ((!html.includes('ORKAS-GENERATED-SCAFFOLD'))
+    && ((!html.includes('COGSEED-GENERATED-SCAFFOLD'))
       || (!!state.artifacts.scaffold_html_sha256
         && currentArtifacts.html_sha256 !== state.artifacts.scaffold_html_sha256));
   if (!transactionMatches && (!state.artifacts.manifest_sha256
@@ -2686,7 +2686,7 @@ async function materializeCompositionNarration(input: {
       message: 'The manifest changed after composition.prepare, or the HTML cannot be proven to be a prepared scaffold or an authored-visual recovery. Reconcile the current files before narration materialization.',
     };
   }
-  if (!html.includes('ORKAS-GENERATED-SCAFFOLD') && !transactionMatches && !narrationInvariantRecovery) {
+  if (!html.includes('COGSEED-GENERATED-SCAFFOLD') && !transactionMatches && !narrationInvariantRecovery) {
     return {
       ok: false,
       op: 'composition.materialize_narration',
@@ -2699,7 +2699,7 @@ async function materializeCompositionNarration(input: {
       ok: false,
       op: 'composition.materialize_narration',
       errorCode: 'E_TTS_NO_PROVIDER',
-      message: 'No TTS provider is configured. Configure Orkas Voice or a speech provider, then retry narration materialization.',
+      message: 'No TTS provider is configured. Configure CogSeed Voice or a speech provider, then retry narration materialization.',
     };
   }
 
@@ -2707,7 +2707,7 @@ async function materializeCompositionNarration(input: {
     approvedTargetDurationSec(input.compositionDirAbs, manifest),
     videoProductionPlanIdentity(input.compositionDirAbs),
   ]);
-  const estimate = estimateNarrationDuration(text, effectiveSpeed);
+  const estimate = esticogseedNarrationDuration(text, effectiveSpeed);
   const fit = compositionNarrationFit({
     text,
     targetDurationSec,
@@ -2737,7 +2737,7 @@ async function materializeCompositionNarration(input: {
   }
   const plannedSceneWeights = manifest.scenes.map((scene) => {
     const sceneText = scene.narration_text?.trim() || '';
-    if (sceneText) return Math.max(0.05, estimateNarrationDuration(sceneText, effectiveSpeed).estimatedSec);
+    if (sceneText) return Math.max(0.05, esticogseedNarrationDuration(sceneText, effectiveSpeed).estimatedSec);
     return Math.max(0.05, scene.duration * 0.03);
   });
 
@@ -2993,7 +2993,7 @@ async function materializeCompositionNarration(input: {
     method: 'scene_estimate_scaled',
   }));
   const authoredVisualsRecovered = narrationInvariantRecovery
-    && ((!html.includes('ORKAS-GENERATED-SCAFFOLD'))
+    && ((!html.includes('COGSEED-GENERATED-SCAFFOLD'))
       || (!!state.artifacts.scaffold_html_sha256
         && state.artifacts.html_sha256 !== state.artifacts.scaffold_html_sha256));
   if (authoredVisualsRecovered) {
@@ -3106,7 +3106,7 @@ export function createVideoStudioTool(opts: VideoStudioToolOpts): AgentTool {
         fps: { type: 'number', description: 'Frames per second, capped at 60.' },
         strict_render_settings: { type: 'boolean', description: 'Set true only when the user explicitly requires exact fps/render settings. Default false lets final export choose the highest safe fps without another confirmation.' },
         format: { type: 'string', enum: ['mp4', 'webm'], description: 'Output video format. Default mp4.' },
-        variables: { type: 'object', description: 'Optional composition variables exposed as window.__ORKAS_VIDEO_VARIABLES__.' },
+        variables: { type: 'object', description: 'Optional composition variables exposed as window.__COGSEED_VIDEO_VARIABLES__.' },
         visual_baseline_path: { type: 'string', description: 'Optional visual baseline JSON path for advisory preview/draft regression checks.' },
         update_visual_baseline: { type: 'boolean', description: 'Explicitly promote current sampled preview/draft frames to the visual baseline. Never enabled automatically.' },
         voice: { type: 'string', description: 'Legacy schema_version 1 compatibility only. New manifests must use the production-plan-confirmed audio.narration_intent from speech.capabilities.' },

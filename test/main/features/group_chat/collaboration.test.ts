@@ -28,9 +28,9 @@ const TEST_UID = "u1";
 const TEST_CID = "cid-collab";
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "orkas-collab-"));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = path.join(tmpDir, "data");
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cogseed-collab-"));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = path.join(tmpDir, "data");
   vi.resetModules();
   storageMocks.readJson.mockReset();
   storageMocks.writeJson.mockReset();
@@ -53,7 +53,7 @@ afterEach(async () => {
   } catch {
     /* ignore */
   }
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

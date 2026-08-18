@@ -8,16 +8,16 @@ let prevWs: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-transcript-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-transcript-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -102,30 +102,30 @@ function sig(overrides: any): any {
   };
 }
 
-// ── estimateTokens ──────────────────────────────────────────────────────
+// ── esticogseedTokens ──────────────────────────────────────────────────────
 
-describe('reflection-transcript › estimateTokens', () => {
+describe('reflection-transcript › esticogseedTokens', () => {
   it('uses ~4 chars/token for English text', async () => {
     const mod = await loadModule();
     // "hello world" = 11 chars / 4 ≈ 3 tokens
-    expect(mod.estimateTokens('hello world')).toBe(3);
+    expect(mod.esticogseedTokens('hello world')).toBe(3);
   });
 
   it('uses ~0.7 token/char for CJK text', async () => {
     const mod = await loadModule();
     // "你好世界" 4 chars * 0.7 = 2.8 → 3
-    expect(mod.estimateTokens('你好世界')).toBe(3);
+    expect(mod.esticogseedTokens('你好世界')).toBe(3);
   });
 
   it('handles mixed Chinese / English correctly', async () => {
     const mod = await loadModule();
     // "hello 世界" = 6 ASCII chars / 4 + 2 CJK * 0.7 = 1.5 + 1.4 = 2.9 → 3
-    expect(mod.estimateTokens('hello 世界')).toBe(3);
+    expect(mod.esticogseedTokens('hello 世界')).toBe(3);
   });
 
   it('returns 0 for empty string', async () => {
     const mod = await loadModule();
-    expect(mod.estimateTokens('')).toBe(0);
+    expect(mod.esticogseedTokens('')).toBe(0);
   });
 });
 

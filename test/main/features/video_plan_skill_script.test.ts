@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 
 import { describe, expect, it } from 'vitest';
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 function pcDir() {
   return path.basename(process.cwd()) === 'PC'
@@ -34,7 +34,7 @@ function validPlan() {
 }
 
 function makeProject(plan: unknown) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-video-plan-script-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-video-plan-script-'));
   fs.mkdirSync(path.join(dir, 'project'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'project', 'plan.json'), `${JSON.stringify(plan)}\n`, 'utf8');
   return dir;
@@ -55,8 +55,8 @@ function makeFakeProbeEnv(cwd: string, durations: Record<string, number>) {
       if (generated.status !== 0) throw new Error(generated.stderr || `failed to generate ${name}`);
     }
     return {
-      ORKAS_BUNDLED_FFMPEG: ffmpegPath,
-      ORKAS_BUNDLED_FFPROBE: ffprobePath,
+      COGSEED_BUNDLED_FFMPEG: ffmpegPath,
+      COGSEED_BUNDLED_FFPROBE: ffprobePath,
     };
   }
 
@@ -84,8 +84,8 @@ function makeFakeProbeEnv(cwd: string, durations: Record<string, number>) {
   fs.chmodSync(ffmpegPath, 0o755);
 
   return {
-    ORKAS_BUNDLED_FFMPEG: ffmpegPath,
-    ORKAS_BUNDLED_FFPROBE: ffprobePath,
+    COGSEED_BUNDLED_FFMPEG: ffmpegPath,
+    COGSEED_BUNDLED_FFPROBE: ffprobePath,
     FAKE_FFPROBE_DURATIONS: durationsPath,
   };
 }
@@ -103,9 +103,9 @@ function runVideoPlan(cwd: string, args: string[], extraEnv: Record<string, stri
       encoding: 'utf8',
       env: {
         ...process.env,
-        ORKAS_PC_DIR: appDir,
-        ORKAS_RUN_SKILL_DIR: skillDir,
-        ORKAS_WORKSPACE_ROOT: cwd,
+        COGSEED_PC_DIR: appDir,
+        COGSEED_RUN_SKILL_DIR: skillDir,
+        COGSEED_WORKSPACE_ROOT: cwd,
         ...extraEnv,
       },
     },

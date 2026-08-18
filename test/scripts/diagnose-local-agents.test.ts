@@ -107,7 +107,7 @@ describe('diagnose-local-agents: binary lookup mirrors which.ts', () => {
     expect(notFound).toBeNull();
   });
 
-  it('honors an absolute override path exactly like ORKAS_<TYPE>_PATH', async () => {
+  it('honors an absolute override path exactly like COGSEED_<TYPE>_PATH', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diag-which-abs-'));
     const abs = path.join(tmp, 'my-claude');
     fs.writeFileSync(abs, '#!/bin/sh\n');
@@ -184,7 +184,7 @@ describe('diagnose-local-agents: expected-config snapshot comparison', () => {
     return {
       type: 'claude',
       binName: 'claude',
-      envKey: 'ORKAS_CLAUDE_PATH',
+      envKey: 'COGSEED_CLAUDE_PATH',
       binary: { found: true, path: '/bin/claude', realPath: null, source: 'path' },
       version: { value: '2.1.0', minRequired: '2.0.0', probeError: null },
       available: true,
@@ -228,7 +228,7 @@ describe('diagnose-local-agents: constant registry stays in sync with the app', 
     expect(Object.keys(BIN_NAMES)).toEqual(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
     expect(BIN_NAMES.claude).toBe('claude');
     expect(BIN_NAMES.workbuddy).toBe('codebuddy');
-    expect(ENV_KEYS.claude).toBe('ORKAS_CLAUDE_PATH');
-    expect(ENV_KEYS.workbuddy).toBe('ORKAS_WORKBUDDY_PATH');
+    expect(ENV_KEYS.claude).toBe('COGSEED_CLAUDE_PATH');
+    expect(ENV_KEYS.workbuddy).toBe('COGSEED_WORKBUDDY_PATH');
   });
 });

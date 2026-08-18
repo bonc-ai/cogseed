@@ -6,7 +6,7 @@
  * EXTREME = spec is unusable; MEDIUM = spec works but should be cleaned up.
  *
  * Portable SKILL.md frontmatter stays host-generic: `name / description`.
- * Orkas extensions such as category, localized descriptions, and routing
+ * CogSeed extensions such as category, localized descriptions, and routing
  * hints live in `_meta.json`. Legacy frontmatter extension fields are
  * tolerated as advisory findings so existing skills remain importable.
  */
@@ -90,7 +90,7 @@ export function validateSkillFrontmatter(
       rule: 'frontmatter_extension_field',
       field: `frontmatter:${key}`,
       snippet: String(frontmatter[key] || '').slice(0, 120),
-      suggested_fix: 'Keep SKILL.md frontmatter portable (`name` and `description` only); store Orkas metadata in `_meta.json`.',
+      suggested_fix: 'Keep SKILL.md frontmatter portable (`name` and `description` only); store CogSeed metadata in `_meta.json`.',
     });
   }
 
@@ -189,7 +189,7 @@ export function skillMetaParseViolation(message: string): Violation {
     rule: 'skill_meta_unparseable',
     field: '_meta.json',
     snippet: message.slice(0, 200),
-    suggested_fix: 'Make `_meta.json` valid JSON so Orkas can read category, localized descriptions, and routing hints.',
+    suggested_fix: 'Make `_meta.json` valid JSON so CogSeed can read category, localized descriptions, and routing hints.',
   };
 }
 

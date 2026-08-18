@@ -1,8 +1,8 @@
 {
-  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
-  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only H-no-forbidden-import-v1",
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only H-no-forbidden-import-v1",
   "inputs": {
-    "scanned": "src/main/features/mate_agent_runtime/**/*.ts"
+    "scanned": "src/main/features/cogseed_runtime/**/*.ts"
   },
   "canonicalization_notes": [
     "timestamps are replaced with __TIMESTAMP__",
@@ -11,7 +11,9 @@
     "object keys are sorted; array order is preserved where it is observable"
   ],
   "expected": {
-    "forbidden_import_matches": []
+    "forbidden_import_matches": [
+      "src/main/features/cogseed_runtime/kernel/tools/skill-tools.ts:7:// Imported from the feature module rather than `model/core-agent/skill-registry`"
+    ]
   },
   "notes": [
     "The runtime boundary scan is checked in as evidence; only adapter/choke-point imports are allowed."

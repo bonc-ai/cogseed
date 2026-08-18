@@ -1,6 +1,6 @@
 import type { Agent, AgentRuntime } from '../agents';
 import { isAgentEnabled } from '../component_enabled';
-import { assertMateAgentId, assertMateConversationId, assertMateUserId } from './paths';
+import { assertCogSeedAgentId, assertCogSeedConversationId, assertCogSeedUserId } from './paths';
 import type { RuntimeTextContext } from '../cogseed_runtime/protocol';
 
 const MAX_AGENT_CONTEXT_CHARS = 24_000;
@@ -42,9 +42,9 @@ export async function resolveCogSeedAgentExecutionContext(
   conversationId: string,
   deps: ResolveCogSeedAgentExecutionContextDeps = {},
 ): Promise<CogSeedAgentExecutionContext> {
-  assertMateUserId(userId);
-  const safeAgentId = assertMateAgentId(agentId);
-  assertMateConversationId(conversationId);
+  assertCogSeedUserId(userId);
+  const safeAgentId = assertCogSeedAgentId(agentId);
+  assertCogSeedConversationId(conversationId);
   const enabled = deps.isAgentEnabled ?? isAgentEnabled;
   if (!enabled(userId, safeAgentId)) throw new Error('CogSeed Agent is unavailable');
   const load = deps.getAgentForChatDispatch ?? (await import('../agents')).getAgentForChatDispatch;

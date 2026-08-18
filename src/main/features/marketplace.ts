@@ -1,5 +1,5 @@
 /**
- * Marketplace — browse + install official agents / skills from the Orkas Server.
+ * Marketplace — browse + install official agents / skills from the CogSeed Server.
  *
  * Three-layer storage model:
  *
@@ -166,6 +166,7 @@ registerDeferred('marketplace:cleanup-staging', () => {
   }
 });
 import { withCommonHeaders } from './api_common';
+import { requireCogSeedApiBase } from './api_base';
 import { getLanguage } from './config';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
 import {
@@ -196,12 +197,9 @@ const MARKETPLACE_JSON_TIMEOUT_MS = 60_000;
 export { extractBundleSafely, safeRelPath };
 
 // ── server URL ────────────────────────────────────────────────────────────
-// The open-source build has exactly one server environment: global prod. Use the apex host
-// directly so marketplace POST calls do not first hit a www -> apex 301 redirect.
-const GLOBAL_PROD_API_BASE = 'https://orkas.ai' + '/api';
-
+// Server access is explicit in CogSeed-only builds; no legacy or guessed domain is embedded.
 export function apiBase(): string {
-  return GLOBAL_PROD_API_BASE;
+  return requireCogSeedApiBase();
 }
 
 // ── envelope ──────────────────────────────────────────────────────────────
@@ -567,7 +565,7 @@ function _assertMarketplaceAppCompatible(kind: MarketplaceInstallKind, id: strin
     kind,
     id,
     name,
-    `requires Orkas >= ${min}; current ${current || 'unknown'}`,
+    `requires CogSeed >= ${min}; current ${current || 'unknown'}`,
     { appUpdateRequired: true, minAppVersion: min, currentAppVersion: current || '' },
   );
 }
@@ -584,7 +582,7 @@ export class MarketplaceInstallError extends Error {
   marketplaceReason: string;
   /** Set when the install was blocked because the client app version is missing
    *  or older than the item's min_app_version. Lets the renderer show a localized
-   *  "update Orkas" prompt with the versions instead of a raw English string. */
+   *  "update CogSeed" prompt with the versions instead of a raw English string. */
   appUpdateRequired = false;
   minAppVersion = '';
   currentAppVersion = '';
@@ -1427,7 +1425,7 @@ async function _seedAgentSkillDependencies(
       _assertApprovedDependencySkill(sid, meta.name || sid, meta);
       const minAppVersion = _normalizeMarketplaceMinAppVersion(meta);
       if (!_isMarketplaceAppCompatible(minAppVersion)) {
-        throw new Error(`requires Orkas >= ${minAppVersion}; current ${_currentAppVersion() || 'unknown'}`);
+        throw new Error(`requires CogSeed >= ${minAppVersion}; current ${_currentAppVersion() || 'unknown'}`);
       }
       if (!shouldContinue()) return { seeded, blocked: true };
       await addSkillInstall(uid, {
@@ -1596,7 +1594,7 @@ export async function ensureDefaultInstalls(
       try {
         const minAppVersion = _normalizeMarketplaceMinAppVersion(a);
         if (!_isMarketplaceAppCompatible(minAppVersion)) {
-          log.info(`skip default agent ${a.id}; requires Orkas >= ${minAppVersion}`);
+          log.info(`skip default agent ${a.id}; requires CogSeed >= ${minAppVersion}`);
           continue;
         }
         const depSeed = await _seedAgentSkillDependencies(uid, a.id, installedSkills, deletedSkills, canContinue);
@@ -1627,7 +1625,7 @@ export async function ensureDefaultInstalls(
       try {
         const minAppVersion = _normalizeMarketplaceMinAppVersion(s);
         if (!_isMarketplaceAppCompatible(minAppVersion)) {
-          log.info(`skip default skill ${s.id}; requires Orkas >= ${minAppVersion}`);
+          log.info(`skip default skill ${s.id}; requires CogSeed >= ${minAppVersion}`);
           continue;
         }
         await addSkillInstall(uid, {

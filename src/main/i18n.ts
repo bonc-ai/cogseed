@@ -201,7 +201,7 @@ let _current: Lang = 'en';
 
 export function setCurrentLang(lang: Lang): void {
   _current = lang;
-  try { process.env.ORKAS_ACCEPT_LANGUAGE = acceptLanguageHeader(lang); } catch { /* non-node test harness */ }
+  try { process.env.COGSEED_ACCEPT_LANGUAGE = acceptLanguageHeader(lang); } catch { /* non-node test harness */ }
 }
 
 export function getCurrentLang(): Lang {

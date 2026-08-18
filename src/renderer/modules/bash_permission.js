@@ -59,7 +59,7 @@ function _bashAgentLabel(info) {
   const id = String((info && (info.agent_id || info.agentId)) || '').trim();
   const name = String((info && (info.agent_name || info.agentName)) || '').trim();
   const loweredName = name.toLowerCase();
-  if (id === 'commander' || loweredName === 'commander' || loweredName === 'orkas_chat') {
+  if (id === 'commander' || loweredName === 'commander' || loweredName === 'cogseed_chat') {
     return _bashT('chat.from_commander', 'Commander');
   }
   return name || id || t('bash.permission.agent_fallback');
@@ -95,7 +95,7 @@ function _showBashPermissionModeDialog({ title, message, currentMode }) {
 
   // Test harness hook: production always uses the DOM dialog below.
   try {
-    const hook = window && window.__orkasBashPermissionDialogForTest;
+    const hook = window && window.__cogseedBashPermissionDialogForTest;
     if (typeof hook === 'function') {
       return Promise.resolve(hook({ title, message, currentMode: safeCurrentMode, modeTitle, modeHint, modes }));
     }

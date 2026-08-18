@@ -11,17 +11,17 @@ import * as fs from 'node:fs';
 let previousVariant: string | undefined;
 let variantName: string;
 
-// 测试隔离：p3394StateFile 走 ORKAS_RUNTIME_VARIANT，必须用一次性 variant，
+// 测试隔离：p3394StateFile 走 COGSEED_RUNTIME_VARIANT，必须用一次性 variant，
 // 否则这些测试会把真实 cogseed variant 的 p3394-peers.json /
 // p3394-external-gateways.json 清空重建（污染用户运行状态）。
 beforeEach(() => {
-  previousVariant = process.env.ORKAS_RUNTIME_VARIANT;
+  previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
   variantName = 'p3394-gw-' + Math.random().toString(36).slice(2, 8);
-  process.env.ORKAS_RUNTIME_VARIANT = variantName;
+  process.env.COGSEED_RUNTIME_VARIANT = variantName;
 });
 afterEach(() => {
-  if (previousVariant === undefined) delete process.env.ORKAS_RUNTIME_VARIANT;
-  else process.env.ORKAS_RUNTIME_VARIANT = previousVariant;
+  if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
+  else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
   try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
@@ -212,9 +212,9 @@ describe('P3394 external-agent gateway host', () => {
   }, 60_000);
 
   it('fails fast with p3394_gateway_script_missing when the gateway script is absent', async () => {
-    const previousPcDir = process.env.ORKAS_PC_DIR;
+    const previousPcDir = process.env.COGSEED_PC_DIR;
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-no-gateway-'));
-    process.env.ORKAS_PC_DIR = emptyDir;
+    process.env.COGSEED_PC_DIR = emptyDir;
     try {
       const started = await startExternalGateway({
         cli: 'hermes',
@@ -223,17 +223,17 @@ describe('P3394 external-agent gateway host', () => {
       expect(started.ok).toBe(false);
       if (started.ok === false) expect(started.error).toContain('p3394_gateway_script_missing');
     } finally {
-      if (previousPcDir === undefined) delete process.env.ORKAS_PC_DIR;
-      else process.env.ORKAS_PC_DIR = previousPcDir;
+      if (previousPcDir === undefined) delete process.env.COGSEED_PC_DIR;
+      else process.env.COGSEED_PC_DIR = previousPcDir;
       try { fs.rmSync(emptyDir, { recursive: true, force: true }); } catch { /* best effort */ }
     }
   }, 30_000);
 
   it('times out with p3394_gateway_registration_timeout when the gateway never registers', async () => {
-    const previousPcDir = process.env.ORKAS_PC_DIR;
-    // Point ORKAS_PC_DIR at the real repo root so the real gateway.cjs exists…
+    const previousPcDir = process.env.COGSEED_PC_DIR;
+    // Point COGSEED_PC_DIR at the real repo root so the real gateway.cjs exists…
     const repoGateway = path.resolve(__dirname, '..', '..', '..', '..', 'p3394-gateway');
-    if (fs.existsSync(path.join(repoGateway, 'gateway.cjs'))) process.env.ORKAS_PC_DIR = path.dirname(repoGateway);
+    if (fs.existsSync(path.join(repoGateway, 'gateway.cjs'))) process.env.COGSEED_PC_DIR = path.dirname(repoGateway);
     try {
       const started = await startExternalGateway({
         cli: 'hermes',
@@ -245,8 +245,8 @@ describe('P3394 external-agent gateway host', () => {
       expect(started.ok).toBe(false);
       if (started.ok === false) expect(started.error).toContain('p3394_gateway_registration_timeout');
     } finally {
-      if (previousPcDir === undefined) delete process.env.ORKAS_PC_DIR;
-      else process.env.ORKAS_PC_DIR = previousPcDir;
+      if (previousPcDir === undefined) delete process.env.COGSEED_PC_DIR;
+      else process.env.COGSEED_PC_DIR = previousPcDir;
     }
   }, 60_000);
 

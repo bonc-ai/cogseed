@@ -16,14 +16,14 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-process.env.ORKAS_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-mcp-serve-'));
+process.env.COGSEED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-mcp-serve-'));
 
 function readJson<T>(file: string): T | null {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')) as T; } catch { return null; }
 }
 
 async function main(): Promise<void> {
-  // 动态 import：必须在 ORKAS_WORKSPACE_ROOT 设置之后加载 src/main 模块。
+  // 动态 import：必须在 COGSEED_WORKSPACE_ROOT 设置之后加载 src/main 模块。
   const { P3394HttpChannel } = await import('../src/main/features/p3394_bridge/http-channel');
   const { P3394OutboundHub } = await import('../src/main/features/p3394_bridge/outbound-hub');
   const { P3394PeerRegistry } = await import('../src/main/features/p3394_bridge/registry');

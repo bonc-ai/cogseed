@@ -46,9 +46,9 @@ function listen(handler: http.RequestListener): Promise<string> {
 }
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-marketplace-reconcile-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-marketplace-reconcile-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   postJsonMock.mockReset();
   extractBundleSafelyMock.mockReset();
@@ -74,7 +74,7 @@ afterEach(async () => {
     await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = null;
   }
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

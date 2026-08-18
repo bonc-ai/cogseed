@@ -7,7 +7,7 @@ import { PC_ROOT, WS_ROOT } from '../../paths';
 import { createLogger } from '../../logger';
 import { logErrorRef } from '../../util/log-redact';
 import {
-  MATE_AGENT_RUNTIME_PROTOCOL_VERSION,
+  COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
   isRuntimeTerminalEvent,
   type RuntimeEventEnvelope,
   type RuntimeHostToolCall,
@@ -70,8 +70,8 @@ function defaultSpawnWorker(): RuntimeWorkerChild {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
-      ORKAS_PC_DIR: pcDir,
-      ORKAS_WORKSPACE_ROOT: WS_ROOT,
+      COGSEED_PC_DIR: pcDir,
+      COGSEED_WORKSPACE_ROOT: WS_ROOT,
     },
   });
 }
@@ -110,7 +110,7 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
       const waiters = helloWaiters.splice(0);
       for (const waiter of waiters) {
         clearTimeout(waiter.timer);
-        if (parsed.protocol_version !== MATE_AGENT_RUNTIME_PROTOCOL_VERSION) {
+        if (parsed.protocol_version !== COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION) {
           waiter.reject(new Error(`CogSeed Runtime protocol version mismatch: ${parsed.protocol_version}`));
         } else {
           waiter.resolve();
@@ -176,7 +176,7 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
     handshake = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('CogSeed Runtime worker handshake timed out')), handshakeTimeoutMs);
       helloWaiters.push({ resolve, reject, timer });
-      writeJsonl(next, { type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION });
+      writeJsonl(next, { type: 'hello', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION });
     });
     try { await handshake; }
     catch (err) {
@@ -205,7 +205,7 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
     const onAbort = () => {
       if (!child || pendingRun.done) return;
       pendingRun.hostAbort.abort();
-      writeJsonl(child, { type: 'cancel', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION, request_id: request.request_id });
+      writeJsonl(child, { type: 'cancel', protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION, request_id: request.request_id });
     };
     if (opts.signal) {
       opts.signal.addEventListener('abort', onAbort, { once: true });
@@ -246,15 +246,15 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
 
 export const defaultRuntimeWorkerService = createRuntimeWorkerService({
   hostToolHandler: async (call, context) => {
-    const { mateHostToolRouter } = await import('../cogseed_backend/host-tool-router');
-    return mateHostToolRouter.handle(call, context);
+    const { cogseedHostToolRouter } = await import('../cogseed_backend/host-tool-router');
+    return cogseedHostToolRouter.handle(call, context);
   },
   onRunSettled: async (request) => {
-    const { mateBrowserManager } = await import('../cogseed_backend/browser-manager');
-    await mateBrowserManager.dispose(request.user_id, request.runtime_session_id);
+    const { cogseedBrowserManager } = await import('../cogseed_backend/browser-manager');
+    await cogseedBrowserManager.dispose(request.user_id, request.runtime_session_id);
   },
   onShutdown: async () => {
-    const { mateBrowserManager } = await import('../cogseed_backend/browser-manager');
-    await mateBrowserManager.disposeAll();
+    const { cogseedBrowserManager } = await import('../cogseed_backend/browser-manager');
+    await cogseedBrowserManager.disposeAll();
   },
 });

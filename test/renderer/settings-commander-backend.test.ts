@@ -95,7 +95,7 @@ describe('settings commander backend', () => {
     expect(indexHtml).not.toContain('id="settings-commander-backend-detect"');
   });
 
-  it('saves only the Orkas Core Agent commander backend', async () => {
+  it('saves only the CogSeed Core Agent commander backend', async () => {
     const { context, elements, invoke } = loadHarness();
     vm.runInContext(`
       _settingsState.commanderBackendView = {
@@ -107,7 +107,7 @@ describe('settings commander backend', () => {
     await elements.get('settings-commander-backend-save')!.click();
     expect(invoke).toHaveBeenCalledWith('settings.setCommanderBackend', {
       settings: {
-        backend: 'orkas-core-agent',
+        backend: 'cogseed-core-agent',
         authEntryId: null,
         localCli: null,
       },

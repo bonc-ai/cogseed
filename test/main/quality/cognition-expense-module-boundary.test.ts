@@ -93,7 +93,7 @@ function propertyName(node: ts.Expression): string | null {
   return null;
 }
 
-function isWindowOrkas(node: ts.Node): node is ts.PropertyAccessExpression | ts.ElementAccessExpression {
+function isWindowCogSeed(node: ts.Node): node is ts.PropertyAccessExpression | ts.ElementAccessExpression {
   if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return false;
   return ts.isIdentifier(node.expression)
     && node.expression.text === 'window'
@@ -103,7 +103,7 @@ function isWindowOrkas(node: ts.Node): node is ts.PropertyAccessExpression | ts.
 function rendererViolations(file: string, module: 'expense' | 'cognition'): string[] {
   const violations: string[] = [];
   const visit = (node: ts.Node): void => {
-    if (module === 'expense' && isWindowOrkas(node)) {
+    if (module === 'expense' && isWindowCogSeed(node)) {
       const parent = node.parent;
       const entersExpenseApi = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent))
         && parent.expression === node

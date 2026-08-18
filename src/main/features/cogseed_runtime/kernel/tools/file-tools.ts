@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { capToolResult, DEFAULT_INLINE_RESULT_TOKENS, type WrapOpts } from '../../../../util/tool-result-cap';
 import { getCachedMeta, getExtractedText, kindOf, readRange, statFile } from '../../../file_indexer';
-import { mateRuntimeSessionToolResultsDir } from '../../../../paths';
+import { cogseedRuntimeSessionToolResultsDir } from '../../../../paths';
 import { normalizeRuntimePath, ensureRuntimeAllowedRoots, isRuntimeTranscriptPath } from './permissions';
 import type { RuntimeToolName } from './catalog';
 import type { RuntimeToolPolicy } from '../types';
@@ -136,7 +136,7 @@ async function capRuntimeResult(
 ): Promise<RuntimeToolResult> {
   const capped = capToolResult(name, result as any, { state: {} } as any, {
     maxInlineTokens: ctx.maxInlineTokens ?? DEFAULT_INLINE_RESULT_TOKENS,
-    toolResultsDir: mateRuntimeSessionToolResultsDir(ctx.userId, ctx.runtimeSessionId),
+    toolResultsDir: cogseedRuntimeSessionToolResultsDir(ctx.userId, ctx.runtimeSessionId),
   } satisfies WrapOpts);
   return toRuntimeResult(capped as RuntimeToolResult);
 }

@@ -11,7 +11,7 @@ category: creation
 
 For the VideoStudio EDIT line, the edit decision list lives in `project/plan.json` and `gate-control` owns its Gate B authorization transition. Start/resume execution with `production.status`; do not run trims, assembly, or localization against a changed or unsigned EDL. Runtime `status`/`produced_path` updates do not invalidate the signed creative plan, but changing cuts, copy, source allocation, or delivery settings does.
 
-How to edit **real user-supplied footage** deterministically (cut / join / burn subtitles / overlay), as opposed to composing designed HTML (that is the composition skill). In Orkas, media inspection and editing run through skill scripts, not direct tool calls.
+How to edit **real user-supplied footage** deterministically (cut / join / burn subtitles / overlay), as opposed to composing designed HTML (that is the composition skill). In CogSeed, media inspection and editing run through skill scripts, not direct tool calls.
 
 **Where the footage comes from.** A user-uploaded clip arrives as a chat attachment marked `model_readable="false"` with a `path` (see the attachment list). That flag means "not vision input", NOT "unusable" — the file is exactly what these media scripts operate on. Copy it into the project's `raw/` (or pass its attachment path directly as `--input`) before probing; never treat a `model_readable="false"` clip as something to skip.
 
@@ -20,9 +20,9 @@ How to edit **real user-supplied footage** deterministically (cut / join / burn 
 Use these `run-skill` entry points whenever this document says `stage-edit edit_video --op ...` or `stage-edit analyze_media --op ...`. Exception: transcription runs through the required built-in `video_studio` tool with `op: "speech.transcribe"`. Compatibility is handled by the marketplace `min_app_version` field before install.
 
 ```bash
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op probe --input raw/clip.mp4
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op trim --input raw/clip.mp4 --start 12 --duration 8 --output project/cuts/seg-1.mp4
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-edit analyze_media -- --op ocr --input raw/screen-recording.mp4
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op probe --input raw/clip.mp4
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op trim --input raw/clip.mp4 --start 12 --duration 8 --output project/cuts/seg-1.mp4
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-edit analyze_media -- --op ocr --input raw/screen-recording.mp4
 ```
 
 The scripts return JSON. A non-zero exit means the operation failed; fix the input/plan before proceeding.
@@ -38,7 +38,7 @@ The scripts return JSON. A non-zero exit means the operation failed; fix the inp
 
 ## The deterministic editing loop
 
-1. **Ingest — always probe first.** For every input clip, read its metadata (duration, resolution, fps, codecs). Never plan a cut blind; a `trim` past the real duration produces an empty or broken clip. (Orkas: `stage-edit edit_video --op probe`.)
+1. **Ingest — always probe first.** For every input clip, read its metadata (duration, resolution, fps, codecs). Never plan a cut blind; a `trim` past the real duration produces an empty or broken clip. (CogSeed: `stage-edit edit_video --op probe`.)
 2. **Plan — write an `edit_decisions` timeline.** From the user's intent + the probe results, decide the exact segments and order, and write them to `project/edit_plan.json` so the plan is inspectable and re-runnable. Shape:
    ```json
    {
@@ -80,7 +80,7 @@ When the user wants highlights / clips "about X" or a localized version, transcr
    - Save each line under `project/assets/narration/line-XX.mp3` (or another `project/...` path) so the audio stays in the workspace and can be mixed later. Do not leave generated line audio under `cloud/chat_attachments/...`.
    - Do not use repeated TTS calls as a duration search loop. Estimate words/characters from the target window first, generate once, and if the tool reports a poor fit, shorten that line and retry once. Small residual timing differences should be handled in deterministic assembly, not by synthesizing many alternatives.
 4. **Assemble with `stage-edit edit_video` — keep the picture untouched.** Pass the source video through (`-c:v copy`) and place the narration lines at their `start_sec` in ONE `stage-edit edit_video --op mix` call via `--audio-segments` (one entry per line — that is HOW per-line `start_sec` alignment happens), then run `--op normalize_loudness` to write the deliverable and return measured loudness in the same step; burn captions from `tracks.captions.lines` (.srt → `burnsubs`) if present. The source footage usually already HAS audio, so `mix` rejects by default — choose `--on-existing-audio mix` to keep the original sound under the voiceover, or `replace` to drop it. Write each line's `produced_path` + `status` and the top-level `draft` / `video` paths back to plan.json so the record matches the result. Never pre-bake one big narration file — that destroys per-line separability.
-5. **Self-check before presenting:** `project/plan.json` validates (`"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op validate --plan project/plan.json`); every narration line has a `produced_path` and a window matching its OCR/transcript text; total coverage ≈ full clip length; `project/render/video.mp4` exists. Then tell the user the draft is ready and they can ask for follow-up tweaks (re-voice a line, fix a caption) and you'll change only that.
+5. **Self-check before presenting:** `project/plan.json` validates (`"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op validate --plan project/plan.json`); every narration line has a `produced_path` and a window matching its OCR/transcript text; total coverage ≈ full clip length; `project/render/video.mp4` exists. Then tell the user the draft is ready and they can ask for follow-up tweaks (re-voice a line, fix a caption) and you'll change only that.
 
 When the clip has NO spoken audio, or its meaning lives in ON-SCREEN TEXT (a screen-recording, a slideshow, a captioned montage), transcription returns nothing — the content is in the pixels, not the audio. An empty audio track does NOT mean an empty screen. Read what is on screen instead of guessing, in this strict order (cost-first):
 
@@ -108,7 +108,7 @@ Per repurpose/montage line:
 - **Screen-demo** — zoom only for legibility/orientation, steady while the viewer reads; reset to wide context between phases; ≤ 2 attention cues at once; label sped-up sections; keep UI text sharp (higher bitrate), don't force an unreadable vertical crop.
 - **Localization** — treat each language as its own deliverable; dubbed audio won't match source timing, so plan holds to flex; re-render or cover any baked-in text per language; subtitle line lengths differ by language; lip-sync only where a close-up mouth mismatch would distract.
 - **Documentary-montage** — concrete sensory shot descriptions, not abstract themes; one grade/LUT across all clips is what unifies mixed sources; budget 2–3 hero slots longer holds; a music bed + an end-tag.
-- Before publishing, normalize the mix against the targets in video-craft §7 (~−14 LUFS integrated, true-peak ≤ ~−1 dBTP). (Orkas: `stage-edit edit_video --op normalize_loudness`; use `--op loudness` only for diagnosis without writing an output.)
+- Before publishing, normalize the mix against the targets in video-craft §7 (~−14 LUFS integrated, true-peak ≤ ~−1 dBTP). (CogSeed: `stage-edit edit_video --op normalize_loudness`; use `--op loudness` only for diagnosis without writing an output.)
 
 ## Rules
 

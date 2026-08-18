@@ -9,8 +9,8 @@ let previousRoot: string | undefined;
 
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'custom-providers-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(UID);
@@ -19,8 +19,8 @@ beforeEach(async () => {
 afterEach(() => {
   vi.doUnmock('#core-agent');
   vi.resetModules();
-  if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(root, { recursive: true, force: true });
 });
 

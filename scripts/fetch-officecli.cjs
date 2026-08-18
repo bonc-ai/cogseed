@@ -134,7 +134,7 @@ function downloadOnce(url, outPath, redirects = 0) {
     let file = null;
     let stallTimer = null;
     const resumeFrom = partialSize(outPath);
-    const headers = { 'User-Agent': 'orkas-fetch-officecli' };
+    const headers = { 'User-Agent': 'cogseed-fetch-officecli' };
     if (resumeFrom > 0) headers.Range = `bytes=${resumeFrom}-`;
 
     const cleanup = () => {

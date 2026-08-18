@@ -11,12 +11,12 @@
 import { Violation } from '../types';
 
 const STANDARD_RUNNER_RE = /\brun-skill\.cjs\b/i;
-const SKILL_ROOT_SCRIPT_RE = /(?:<(?:(?:this[-_])?skill(?:[-_](?:dir|directory))?)>|\$(?:\{)?(?:ORKAS_)?SKILL_DIR(?:\})?)[\\/]scripts[\\/]/i;
-const MARKETPLACE_INSTALL_SCRIPT_RE = /\.orkas[\\/]data[\\/][^\s"'`]+[\\/]local[\\/]marketplace[\\/][^\s"'`]*[\\/]scripts[\\/]/i;
-const INTERPRETER_SCRIPT_RE = /(?:^|[;&|]\s*|\s)(?:["']?\$(?:\{)?(?:ORKAS_NODE|ORKAS_PYTHON)(?:\})?["']?|node(?:\.exe)?|python(?:3(?:\.\d+)?)?|py(?:\.exe)?(?:\s+-3)?|bash|sh|zsh|ruby|pwsh(?:\.exe)?|powershell(?:\.exe)?|cmd(?:\.exe)?)(?:\s+-[^\s]+)*\s+["']?(?:\.{0,2}[\\/])?scripts[\\/]/i;
+const SKILL_ROOT_SCRIPT_RE = /(?:<(?:(?:this[-_])?skill(?:[-_](?:dir|directory))?)>|\$(?:\{)?(?:COGSEED_)?SKILL_DIR(?:\})?)[\\/]scripts[\\/]/i;
+const MARKETPLACE_INSTALL_SCRIPT_RE = /\.cogseed[\\/]data[\\/][^\s"'`]+[\\/]local[\\/]marketplace[\\/][^\s"'`]*[\\/]scripts[\\/]/i;
+const INTERPRETER_SCRIPT_RE = /(?:^|[;&|]\s*|\s)(?:["']?\$(?:\{)?(?:COGSEED_NODE|COGSEED_PYTHON)(?:\})?["']?|node(?:\.exe)?|python(?:3(?:\.\d+)?)?|py(?:\.exe)?(?:\s+-3)?|bash|sh|zsh|ruby|pwsh(?:\.exe)?|powershell(?:\.exe)?|cmd(?:\.exe)?)(?:\s+-[^\s]+)*\s+["']?(?:\.{0,2}[\\/])?scripts[\\/]/i;
 const DIRECT_EXECUTABLE_RE = /(?:^|[;&|]\s*)(?:\.{0,2}[\\/])?scripts[\\/][^\s"'`]+\.(?:py|js|mjs|ts|sh|bash|zsh|rb|ps1|cmd|bat)\b/i;
 
-const SUGGESTED_FIX = 'Invoke bundled scripts through `"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" <skill-id-or-name> <script-basename> -- <args...>`; never resolve or mention the skill installation path.';
+const SUGGESTED_FIX = 'Invoke bundled scripts through `"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" <skill-id-or-name> <script-basename> -- <args...>`; never resolve or mention the skill installation path.';
 
 function _isDirectSkillScriptCommand(command: string): boolean {
   if (STANDARD_RUNNER_RE.test(command)) return false;

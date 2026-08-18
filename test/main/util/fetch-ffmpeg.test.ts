@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 function fixture() {
-  const packageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-ffmpeg-static-'));
+  const packageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ffmpeg-static-'));
   tempDirs.push(packageDir);
   const packageJsonPath = path.join(packageDir, 'package.json');
   const installScript = path.join(packageDir, 'install.js');
@@ -76,7 +76,7 @@ describe('fetch-ffmpeg host dependency repair', () => {
   });
 
   it('restores a missing ffprobe package only after lockfile integrity verification', async () => {
-    const packageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-ffprobe-installer-'));
+    const packageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ffprobe-installer-'));
     tempDirs.push(packageDir);
     const binaryPath = path.join(packageDir, 'ffprobe');
     const tarball = Buffer.from('lockfile-pinned-ffprobe-package');
@@ -116,7 +116,7 @@ describe('fetch-ffmpeg host dependency repair', () => {
   });
 
   it('rejects an ffprobe package that does not match package-lock.json', async () => {
-    const packageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-ffprobe-integrity-'));
+    const packageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ffprobe-integrity-'));
     tempDirs.push(packageDir);
     const installPackage = vi.fn();
 
@@ -144,7 +144,7 @@ describe('fetch-ffmpeg host dependency repair', () => {
   });
 
   it('atomically replaces an incomplete ffprobe package after extracting the verified archive', () => {
-    const packageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-ffprobe-package-'));
+    const packageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ffprobe-package-'));
     tempDirs.push(packageDir);
     fs.writeFileSync(path.join(packageDir, 'stale'), 'stale');
     const spawnSync = vi.fn((_command: string, args: string[]) => {

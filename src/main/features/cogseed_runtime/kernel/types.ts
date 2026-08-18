@@ -54,7 +54,7 @@ export interface RuntimeKernelRunOptions {
 export interface RuntimeKernelSessionSummary {
   runtimeSessionId: string;
   version: number;
-  kernel: 'mate-agent-native';
+  kernel: 'cogseed-agent-native';
   recordCount: number;
   lastRequestId?: string;
 }

@@ -235,7 +235,9 @@ export async function getConversationWorkspacePath(uid: string, cid: string): Pr
   // coding_project_dir 向用户如实显示「已被移动或删除」并引导重新选择。
   try {
     const st0 = await readState(uid, cid);
-    if (st0.coding_project_dir && path.isAbsolute(st0.coding_project_dir)) {
+    if (st0.coding_project_dir_explicit === true
+      && st0.coding_project_dir
+      && path.isAbsolute(st0.coding_project_dir)) {
       try {
         if (fs.statSync(st0.coding_project_dir).isDirectory()
           && !isSystemTmpDir(st0.coding_project_dir)) {

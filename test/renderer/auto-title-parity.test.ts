@@ -83,12 +83,12 @@ describe('auto-title parity › functional equivalence on representative inputs'
     'Please review this PR',
     'I want to refactor the auth flow',
     '帮我写一段 TypeScript 来解析 csv，谢谢',
-    '你根据 https://orkas.ai',
+    '你根据 https://cogseed.ai',
     '分析 https://x.co/a?q=one,two',
-    '查看 www.orkas.ai 的内容',
-    '根据 https://orkas.ai，分析首页内容',
-    'Review https://orkas.ai, then summarize',
-    '检查 httpsx://orkas.ai 的内容',
+    '查看 www.cogseed.ai 的内容',
+    '根据 https://cogseed.ai，分析首页内容',
+    'Review https://cogseed.ai, then summarize',
+    '检查 httpsx://cogseed.ai 的内容',
     '这是一个很长的对话标题，应该会被三十字符的上限截断到刚好显示',
     'AI，怎么样', // < 4-char clause floor; first clause not used
   ];

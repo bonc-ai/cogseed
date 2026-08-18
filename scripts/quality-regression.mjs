@@ -4,8 +4,8 @@
  * agent and report findings. Used during a Validator phase 0 / phase 1 PR
  * to confirm the rule set doesn't false-positive on official content.
  *
- * Usage: node scripts/quality-regression.mjs [--orkas-data <path>]
- *   default --orkas-data: ~/.orkas/data
+ * Usage: node scripts/quality-regression.mjs [--cogseed-data <path>]
+ *   default --cogseed-data: ~/.cogseed/data
  *
  * Exits 0 if every spec passes, 1 if any EXTREME violation is found.
  */
@@ -15,9 +15,9 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const DATA_ROOT = (() => {
-  const idx = process.argv.indexOf('--orkas-data');
+  const idx = process.argv.indexOf('--cogseed-data');
   if (idx > 0 && process.argv[idx + 1]) return process.argv[idx + 1];
-  return path.join(os.homedir(), '.orkas', 'data');
+  return path.join(os.homedir(), '.cogseed', 'data');
 })();
 
 if (!fs.existsSync(DATA_ROOT)) {
@@ -26,7 +26,7 @@ if (!fs.existsSync(DATA_ROOT)) {
 }
 
 // The validator is plain TS; import via tsx (the same loader the app uses).
-process.env.ORKAS_WORKSPACE_ROOT = DATA_ROOT;
+process.env.COGSEED_WORKSPACE_ROOT = DATA_ROOT;
 // We don't actually need the full module — just the validator entries.
 // Use the tsx loader hook to import .ts source directly.
 const tsxRegister = await import('tsx/esm/api');

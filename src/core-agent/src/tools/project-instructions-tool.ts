@@ -1,6 +1,6 @@
 /**
  * Project instructions tool — writes the project's standing goal + rules
- * (the "Project instructions" block in the system prompt, backed by ORKAS.md).
+ * (the "Project instructions" block in the system prompt, backed by COGSEED.md).
  *
  * This is one focused project-state layer (see plan project-work-state.md):
  *   - project_instructions (here)    = the project's goal + rules

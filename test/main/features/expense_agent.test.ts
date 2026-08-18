@@ -55,9 +55,9 @@ function installSuccessfulFeishuMock(): void {
 }
 
 beforeEach(() => {
-  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-expense-agent-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = workspaceRoot;
+  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-expense-agent-'));
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = workspaceRoot;
   vi.resetModules();
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
@@ -66,8 +66,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(workspaceRoot, { recursive: true, force: true });
 });
 

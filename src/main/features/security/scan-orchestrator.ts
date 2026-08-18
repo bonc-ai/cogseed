@@ -49,7 +49,7 @@ export const SENTRY_SKILL_ID = 'skill-sentry';
  * refused install, for a reason that has nothing to do with the skill.
  */
 function candidateRoots(uid: string | null): string[] {
-  const override = (process.env.ORKAS_SENTRY_SKILL_DIR || '').trim();
+  const override = (process.env.COGSEED_SENTRY_SKILL_DIR || '').trim();
   return [
     // Explicit operator override wins: a private deployment points this at
     // wherever it keeps the closed-source component.
@@ -61,7 +61,7 @@ function candidateRoots(uid: string | null): string[] {
 /**
  * Per-user skill roots, resolved lazily.
  *
- * `paths` throws at import time when `ORKAS_WORKSPACE_ROOT` is unset, so a
+ * `paths` throws at import time when `COGSEED_WORKSPACE_ROOT` is unset, so a
  * top-level import here would fail whenever this module is loaded before the
  * install container is resolved — and the failure surfaces as "no external
  * scanner found", i.e. a security check silently downgrading itself for an

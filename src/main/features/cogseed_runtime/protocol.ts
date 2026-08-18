@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
-  mateRuntimeSessionsDir,
+  cogseedRuntimeSessionsDir,
   userChatsDir,
   userCloudRoot,
   userLocalSessionsDir,
@@ -11,7 +11,7 @@ import {
 import { genId12, safeId } from '../../storage';
 import { isPathAllowed } from '../../util/path-sandbox';
 
-export const MATE_AGENT_RUNTIME_PROTOCOL_VERSION = 2;
+export const COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION = 2;
 
 export type RuntimeStatus = 'started' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -96,7 +96,7 @@ export function isRuntimeCapability(value: string): value is RuntimeCapability {
 export const RUNTIME_HOST_TOOL_NAMES = Object.freeze([
   'office_read', 'office_create', 'office_edit', 'office_render',
   'browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot',
-  'mate_delegate', 'mate_tasks', 'mate_cancel', 'mate_retry_step', 'mate_skip_step', 'mate_resume_workflow', 'mate_workflow',
+  'cogseed_delegate', 'cogseed_tasks', 'cogseed_cancel', 'cogseed_retry_step', 'cogseed_skip_step', 'cogseed_resume_workflow', 'cogseed_workflow',
   'messaging_list_targets', 'messaging_send',
   'p3394_send',
 ] as const);
@@ -231,7 +231,7 @@ function isTranscriptPath(uid: string, candidate: string): boolean {
     userChatsDir(uid),
     userSessionsDir(uid),
     userLocalSessionsDir(uid),
-    mateRuntimeSessionsDir(uid),
+    cogseedRuntimeSessionsDir(uid),
   ];
   return isPathAllowed(realCandidate, transcriptRoots) || isProjectTranscriptPath(uid, realCandidate);
 }
@@ -374,7 +374,7 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
 
   const readOnlyRoots = Array.from(new Set([...context.roots, ...attachments.roots]));
   const request: RuntimeRunRequest = {
-    protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION,
+    protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
     type: 'run',
     request_id,
     runtime_session_id,

@@ -13,21 +13,21 @@ let prevHome: string | undefined;
 let prevGuard: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-ws-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ws-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevHome = process.env.HOME;
-  prevGuard = process.env.ORKAS_TCC_GUARD_FORCE;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-  delete process.env.ORKAS_TCC_GUARD_FORCE;
+  prevGuard = process.env.COGSEED_TCC_GUARD_FORCE;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  delete process.env.COGSEED_TCC_GUARD_FORCE;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
-  if (prevGuard === undefined) delete process.env.ORKAS_TCC_GUARD_FORCE;
-  else process.env.ORKAS_TCC_GUARD_FORCE = prevGuard;
+  if (prevGuard === undefined) delete process.env.COGSEED_TCC_GUARD_FORCE;
+  else process.env.COGSEED_TCC_GUARD_FORCE = prevGuard;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -121,7 +121,7 @@ describe('user_workspace › setWorkspacePath', () => {
 
   it.runIf(process.platform === 'darwin')('rejects macOS privacy-protected workspace roots selected by the user', async () => {
     await _pinZh();
-    process.env.ORKAS_TCC_GUARD_FORCE = '1';
+    process.env.COGSEED_TCC_GUARD_FORCE = '1';
     const home = path.join(tmpDir, 'fake-home');
     const protectedRoots = [
       path.join(home, 'Downloads'),
@@ -148,7 +148,7 @@ describe('user_workspace › setWorkspacePath', () => {
   });
 
   it('allows ordinary project directories under the home folder', async () => {
-    process.env.ORKAS_TCC_GUARD_FORCE = '1';
+    process.env.COGSEED_TCC_GUARD_FORCE = '1';
     const home = path.join(tmpDir, 'fake-home');
     const projectDir = path.join(home, 'Projects', 'app');
     fs.mkdirSync(projectDir, { recursive: true });
@@ -330,7 +330,7 @@ describe('user_workspace › scoped (projects)', () => {
   });
 
   it.runIf(process.platform === 'darwin')('falls back from a legacy protected selectedPath without statting it', async () => {
-    process.env.ORKAS_TCC_GUARD_FORCE = '1';
+    process.env.COGSEED_TCC_GUARD_FORCE = '1';
     const home = path.join(tmpDir, 'fake-home');
     const desktop = path.join(home, 'Desktop');
     fs.mkdirSync(desktop, { recursive: true });

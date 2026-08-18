@@ -47,22 +47,22 @@ describe('client_config', () => {
     electronMock.app.off.mockClear();
     electronMock.powerMonitor.on.mockClear();
     electronMock.powerMonitor.off.mockClear();
-    delete process.env.ORKAS_ACCOUNT_API_BASE;
-    delete process.env.ORKAS_API_BASE_URL;
-    delete process.env.ORKAS_PROFILE;
-    delete process.env.ORKAS_CLIENT_CHANNEL;
-    delete process.env.ORKAS_CHANNEL;
+    delete process.env.COGSEED_ACCOUNT_API_BASE;
+    process.env.COGSEED_API_BASE_URL = 'https://config.example/api';
+    delete process.env.COGSEED_PROFILE;
+    delete process.env.COGSEED_CLIENT_CHANNEL;
+    delete process.env.COGSEED_CHANNEL;
   });
 
   afterEach(() => {
     stop();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    delete process.env.ORKAS_ACCOUNT_API_BASE;
-    delete process.env.ORKAS_API_BASE_URL;
-    delete process.env.ORKAS_PROFILE;
-    delete process.env.ORKAS_CLIENT_CHANNEL;
-    delete process.env.ORKAS_CHANNEL;
+    delete process.env.COGSEED_ACCOUNT_API_BASE;
+    delete process.env.COGSEED_API_BASE_URL;
+    delete process.env.COGSEED_PROFILE;
+    delete process.env.COGSEED_CLIENT_CHANNEL;
+    delete process.env.COGSEED_CHANNEL;
   });
 
   it('returns registered local defaults before any Server config is available', () => {
@@ -270,7 +270,7 @@ describe('client_config', () => {
 
     const now = 1_234_567;
     vi.spyOn(Date, 'now').mockReturnValue(now);
-    process.env.ORKAS_API_BASE_URL = 'https://config.example/api/';
+    process.env.COGSEED_API_BASE_URL = 'https://config.example/api/';
     let requestedUrl = '';
     let requestedInit: RequestInit | undefined;
     vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
@@ -292,7 +292,7 @@ describe('client_config', () => {
       expect(result).toEqual({ updated: true });
 
       const url = new URL(requestedUrl);
-      expect(url.origin + url.pathname).toBe('https://orkas.ai/api/config/client');
+      expect(url.origin + url.pathname).toBe('https://config.example/api/config/client');
       expect(url.searchParams.get('region')).toBe('global');
       expect(url.searchParams.has('platform')).toBe(false);
       expect(url.searchParams.has('version')).toBe(false);
@@ -303,12 +303,12 @@ describe('client_config', () => {
       expect(url.searchParams.has('build')).toBe(false);
       expect(requestedInit?.headers).toMatchObject({
         'If-None-Match': '"old-etag"',
-        'Orkas-App-Version': '9.8.7',
-        'Orkas-Platform': clientConfigPlatform(),
-        'Orkas-Arch': process.arch,
-        'Orkas-Channel': 'open',
+        'CogSeed-App-Version': '9.8.7',
+        'CogSeed-Platform': clientConfigPlatform(),
+        'CogSeed-Arch': process.arch,
+        'CogSeed-Channel': 'open',
       });
-      expect(requestedInit?.headers).not.toHaveProperty('Orkas-Device-Id');
+      expect(requestedInit?.headers).not.toHaveProperty('CogSeed-Device-Id');
 
       const manager = new ClientConfigManager();
       expect(manager.get('feature.remote')).toBe('enabled');
@@ -352,7 +352,7 @@ describe('client_config', () => {
     try {
       await refresh('manual', { force: true });
       expect(new URL(requestedUrl).searchParams.has('channel')).toBe(false);
-      expect(requestedInit?.headers).toMatchObject({ 'Orkas-Channel': 'open' });
+      expect(requestedInit?.headers).toMatchObject({ 'CogSeed-Channel': 'open' });
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });
     }

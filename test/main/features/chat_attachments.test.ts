@@ -14,16 +14,16 @@ let tmpDir: string;
 let prevWs: string | undefined;
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-chatattach-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-chatattach-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(UID);
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -547,7 +547,7 @@ describe('chat_attachments › resolveLocalMediaPath', () => {
   // is no directory whitelist.
   async function setup() {
     const mod = await loadMod();
-    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-localmedia-'));
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-localmedia-'));
     return { mod, sandbox };
   }
 
@@ -711,7 +711,7 @@ describe('chat_attachments › resolveLocalPreviewPath', () => {
   // inline. No size cap (Chromium streams through serveFileRange).
   async function setup() {
     const mod = await loadMod();
-    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-localpreview-'));
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-localpreview-'));
     return { mod, sandbox };
   }
 
@@ -974,15 +974,15 @@ describe('chat_attachments › buildAttachmentManifest', () => {
 describe('chat_attachments › buildConversationAttachmentIndex', () => {
   it('lists persisted conversation attachments without leaking file bodies', async () => {
     const m = await loadMod();
-    const body = '# Orkas 1.0.5\nRelease note: local attachment index stays lightweight.';
-    await m.uploadAttachment(UID, CID, 'orkas-1.0.5-update.md', Buffer.from(body, 'utf8'));
+    const body = '# CogSeed 1.0.5\nRelease note: local attachment index stays lightweight.';
+    await m.uploadAttachment(UID, CID, 'cogseed-1.0.5-update.md', Buffer.from(body, 'utf8'));
     await m.uploadAttachment(UID, CID, 'intro.mp4', Buffer.from('fake-video'));
     await m.uploadAttachment(UID, CID, 'logo.png', Buffer.from('fake-image'));
 
     const index = await m.buildConversationAttachmentIndex(UID, CID);
 
     expect(index).toContain('<conversation-attachments');
-    expect(index).toContain('name="orkas-1.0.5-update.md"');
+    expect(index).toContain('name="cogseed-1.0.5-update.md"');
     expect(index).toContain('kind="text"');
     expect(index).toContain(`total_chars="${body.length}"`);
     expect(index).toContain('name="intro.mp4"');

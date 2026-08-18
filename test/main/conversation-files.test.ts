@@ -6,18 +6,18 @@ import * as path from 'node:path';
 import { listWorkspaceFiles } from '../../src/main/features/conversation_files';
 
 const prevHome = process.env.HOME;
-const prevGuard = process.env.ORKAS_TCC_GUARD_FORCE;
+const prevGuard = process.env.COGSEED_TCC_GUARD_FORCE;
 
 afterEach(() => {
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
-  if (prevGuard === undefined) delete process.env.ORKAS_TCC_GUARD_FORCE;
-  else process.env.ORKAS_TCC_GUARD_FORCE = prevGuard;
+  if (prevGuard === undefined) delete process.env.COGSEED_TCC_GUARD_FORCE;
+  else process.env.COGSEED_TCC_GUARD_FORCE = prevGuard;
 });
 
 describe('conversation workspace file listing', () => {
   it('returns a relative tree snapshot from the current workspace on disk', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-conv-files-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-conv-files-'));
     try {
       fs.mkdirSync(path.join(dir, 'agent_skill_review'), { recursive: true });
       fs.writeFileSync(path.join(dir, '处理索引.md'), 'index');
@@ -45,7 +45,7 @@ describe('conversation workspace file listing', () => {
   });
 
   it('reports truncation instead of walking forever on huge workspaces', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-conv-files-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-conv-files-'));
     try {
       fs.writeFileSync(path.join(dir, 'a.md'), 'a');
       fs.writeFileSync(path.join(dir, 'b.md'), 'b');
@@ -61,14 +61,14 @@ describe('conversation workspace file listing', () => {
   });
 
   it.runIf(process.platform === 'darwin')('reports a skipped scan for macOS privacy-protected workspace roots', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-conv-files-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-conv-files-'));
     try {
       const home = path.join(dir, 'home');
       const downloads = path.join(home, 'Downloads');
       fs.mkdirSync(downloads, { recursive: true });
       fs.writeFileSync(path.join(downloads, 'private.txt'), 'do not scan');
       process.env.HOME = home;
-      process.env.ORKAS_TCC_GUARD_FORCE = '1';
+      process.env.COGSEED_TCC_GUARD_FORCE = '1';
 
       const result = listWorkspaceFiles(downloads);
 

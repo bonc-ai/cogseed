@@ -7,44 +7,44 @@
  * place to prove that a Runtime tool is either mapped or explicitly CogSeed-native.
  */
 
-export type CoreToMateToolCategory =
+export type CoreToCogSeedToolCategory =
   | 'parity'
-  | 'mate-native-replacement'
+  | 'cogseed-native-replacement'
   | 'deferred';
 
-export interface CoreToMateToolMapping {
+export interface CoreToCogSeedToolMapping {
   /** Exact Core Agent catalog name. */
   coreName: string;
   /** Compatibility decision for the Core name. */
-  category: CoreToMateToolCategory;
+  category: CoreToCogSeedToolCategory;
   /** Executable CogSeed Runtime names, empty for deferred tools. */
-  mateNames: readonly string[];
+  cogseedNames: readonly string[];
   /** Short rationale, including the safety boundary for deferred tools. */
   reason: string;
 }
 
-const parity = (coreName: string, reason: string): CoreToMateToolMapping => ({
+const parity = (coreName: string, reason: string): CoreToCogSeedToolMapping => ({
   coreName,
   category: 'parity',
-  mateNames: [coreName],
+  cogseedNames: [coreName],
   reason,
 });
 
-const replacement = (coreName: string, mateNames: readonly string[], reason: string): CoreToMateToolMapping => ({
+const replacement = (coreName: string, cogseedNames: readonly string[], reason: string): CoreToCogSeedToolMapping => ({
   coreName,
-  category: 'mate-native-replacement',
-  mateNames,
+  category: 'cogseed-native-replacement',
+  cogseedNames,
   reason,
 });
 
-const deferred = (coreName: string, reason: string): CoreToMateToolMapping => ({
+const deferred = (coreName: string, reason: string): CoreToCogSeedToolMapping => ({
   coreName,
   category: 'deferred',
-  mateNames: [],
+  cogseedNames: [],
   reason,
 });
 
-export const CORE_TO_MATE_TOOL_MAPPINGS: readonly CoreToMateToolMapping[] = Object.freeze([
+export const CORE_TO_MATE_TOOL_MAPPINGS: readonly CoreToCogSeedToolMapping[] = Object.freeze([
   parity('read_file', 'Same explicit-root file read semantics, with transcript exclusion and capped Runtime results.'),
   parity('write_file', 'Same explicit writable-root write semantics, with path sandboxing and capped Runtime results.'),
   parity('edit_file', 'Same explicit writable-root exact replacement semantics, with stale/ambiguous replacement errors.'),
@@ -84,33 +84,33 @@ export const CORE_TO_MATE_TOOL_MAPPINGS: readonly CoreToMateToolMapping[] = Obje
   parity('list_connector_tools', 'Preserved as the fixed connector discovery umbrella; discovered MCP actions are never flattened into Runtime tools.'),
   parity('call_connector_tool', 'Preserved as the fixed connector invocation umbrella; discovered MCP actions are never flattened into Runtime tools.'),
   deferred('add_custom_connector', 'Deferred because connector authoring/install requires the hosted confirmation and secret lifecycle.'),
-  replacement('manage_execution_plan', ['mate_workflow', 'mate_retry_step', 'mate_skip_step', 'mate_resume_workflow'], 'CogSeed workflow inspection and auditable step controls replace the Core plan tool without importing the legacy state machine.'),
+  replacement('manage_execution_plan', ['cogseed_workflow', 'cogseed_retry_step', 'cogseed_skip_step', 'cogseed_resume_workflow'], 'CogSeed workflow inspection and auditable step controls replace the Core plan tool without importing the legacy state machine.'),
   deferred('cross_session_memory', 'Deferred because Runtime has no approved user-memory adapter and must not read business data directly.'),
   deferred('project_instructions', 'Deferred because project instruction mutation belongs to the project/session owner boundary.'),
   deferred('metacognition', 'Deferred because the Runtime worker has no approved metacognition storage or visibility adapter.'),
 ]);
 
 /** Runtime tools that are intentionally CogSeed-native additions, not Core aliases. */
-export const MATE_NATIVE_RUNTIME_TOOL_NAMES = Object.freeze([
+export const COGSEED_NATIVE_RUNTIME_TOOL_NAMES = Object.freeze([
   'run_skill',
   'browser_open',
   'browser_snapshot',
   'browser_click',
   'browser_type',
   'browser_screenshot',
-  'mate_delegate',
-  'mate_tasks',
-  'mate_cancel',
+  'cogseed_delegate',
+  'cogseed_tasks',
+  'cogseed_cancel',
 ] as const);
 
-export function getExecutableMateToolNames(): readonly string[] {
+export function getExecutableCogSeedToolNames(): readonly string[] {
   return Object.freeze([
     ...new Set(
-      CORE_TO_MATE_TOOL_MAPPINGS.flatMap((entry) => entry.mateNames),
+      CORE_TO_MATE_TOOL_MAPPINGS.flatMap((entry) => entry.cogseedNames),
     ),
   ]);
 }
 
-export function getCoreToMateToolMapping(coreName: string): CoreToMateToolMapping | undefined {
+export function getCoreToCogSeedToolMapping(coreName: string): CoreToCogSeedToolMapping | undefined {
   return CORE_TO_MATE_TOOL_MAPPINGS.find((entry) => entry.coreName === coreName);
 }

@@ -56,7 +56,7 @@ describe('features/connectors/oauth', () => {
     expect(entry).toBeTruthy();
 
     const pending = oauth.startOAuth('u1', entry!);
-    await oauth.handleCallbackUrl('orkas://connectors/oauth/callback?exchange_code=exchange-1');
+    await oauth.handleCallbackUrl('cogseed://connectors/oauth/callback?exchange_code=exchange-1');
 
     await expect(pending).rejects.toMatchObject({
       message: 'missing_required_scopes',
@@ -85,7 +85,7 @@ describe('features/connectors/oauth', () => {
     expect(entry).toBeTruthy();
 
     const pending = oauth.startOAuth('u1', entry!);
-    await oauth.handleCallbackUrl('orkas://connectors/oauth/callback?exchange_code=exchange-1');
+    await oauth.handleCallbackUrl('cogseed://connectors/oauth/callback?exchange_code=exchange-1');
 
     await expect(pending).resolves.toMatchObject({
       access_token: 'access-1',
@@ -101,7 +101,7 @@ describe('features/connectors/oauth', () => {
 
     const pending = oauth.startOAuth('u1', entry!);
     await oauth.handleCallbackUrl(
-      'orkas://connectors/oauth/callback?status=error&reason=github_app_not_installed',
+      'cogseed://connectors/oauth/callback?status=error&reason=github_app_not_installed',
     );
 
     await expect(pending).rejects.toThrow(/server error: github_app_not_installed/);
@@ -138,7 +138,7 @@ describe('features/connectors/oauth', () => {
     expect(entry).toBeTruthy();
 
     const pending = oauth.startOAuth('u1', entry!);
-    await oauth.handleCallbackUrl('orkas://connectors/oauth/callback?exchange_code=exchange-1');
+    await oauth.handleCallbackUrl('cogseed://connectors/oauth/callback?exchange_code=exchange-1');
 
     await expect(pending).resolves.toMatchObject({ access_token: 'access-1' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -159,7 +159,7 @@ describe('features/connectors/oauth', () => {
     expect(entry).toBeTruthy();
 
     const pending = oauth.startOAuth('u1', entry!);
-    await oauth.handleCallbackUrl('orkas://connectors/oauth/callback?exchange_code=exchange-1');
+    await oauth.handleCallbackUrl('cogseed://connectors/oauth/callback?exchange_code=exchange-1');
 
     await expect(pending).rejects.toMatchObject({ code: 'exchange_http_5xx' });
     expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -188,7 +188,7 @@ describe('features/connectors/oauth', () => {
     expect(entry).toBeTruthy();
 
     const pending = oauth.startOAuth('u1', entry!);
-    await oauth.handleCallbackUrl('orkas://connectors/oauth/callback?exchange_code=exchange-1');
+    await oauth.handleCallbackUrl('cogseed://connectors/oauth/callback?exchange_code=exchange-1');
 
     await expect(pending).resolves.toMatchObject({ access_token: 'access-after-retry' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -210,7 +210,7 @@ describe('features/connectors/oauth', () => {
     expect(entry).toBeTruthy();
 
     const pending = oauth.startOAuth('u1', entry!);
-    await oauth.handleCallbackUrl('orkas://connectors/oauth/callback?exchange_code=exchange-1');
+    await oauth.handleCallbackUrl('cogseed://connectors/oauth/callback?exchange_code=exchange-1');
 
     await expect(pending).rejects.toMatchObject({ code: 'exchange_http_4xx' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -224,7 +224,7 @@ describe('features/connectors/oauth', () => {
     expect(entry).toBeTruthy();
 
     const pending = oauth.startOAuth('u1', entry!);
-    await oauth.handleCallbackUrl('orkas://connectors/oauth/callback?status=cancelled');
+    await oauth.handleCallbackUrl('cogseed://connectors/oauth/callback?status=cancelled');
 
     await expect(pending).rejects.toMatchObject({ code: 'user_cancelled' });
   });
@@ -236,7 +236,7 @@ describe('features/connectors/oauth', () => {
     expect(entry).toBeTruthy();
 
     const pending = oauth.startOAuth('u1', entry!);
-    await oauth.handleCallbackUrl('orkas://connectors/oauth/callback');
+    await oauth.handleCallbackUrl('cogseed://connectors/oauth/callback');
 
     await expect(pending).rejects.toMatchObject({ code: 'missing_exchange_code' });
   });
@@ -251,7 +251,7 @@ describe('features/connectors/oauth', () => {
     const second = oauth.startOAuth('u1', entry!);
 
     await expect(first).rejects.toMatchObject({ code: 'superseded' });
-    await oauth.handleCallbackUrl('orkas://connectors/oauth/callback?status=cancelled');
+    await oauth.handleCallbackUrl('cogseed://connectors/oauth/callback?status=cancelled');
     await expect(second).rejects.toMatchObject({ code: 'user_cancelled' });
   });
 

@@ -13,7 +13,7 @@ echo "   状态文件已删除"
 echo "2. 设置 COGSEED_ONBOARDING_ALWAYS=1"
 export COGSEED_ONBOARDING_ALWAYS=1
 # One-cycle compatibility bridge: current runtime still accepts the legacy override.
-export ORKAS_ONBOARDING_ALWAYS="$COGSEED_ONBOARDING_ALWAYS"
+export COGSEED_ONBOARDING_ALWAYS="$COGSEED_ONBOARDING_ALWAYS"
 
 # 3. 显示当前环境变量
 echo "3. 环境变量确认:"

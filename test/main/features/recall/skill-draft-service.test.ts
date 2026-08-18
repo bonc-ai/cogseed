@@ -122,9 +122,9 @@ function deferred<T = void>() {
 }
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-recall-skill-'));
-  previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-recall-skill-'));
+  previousRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   modelMocks.configured = true;
   modelMocks.oauthExpired = null;
   modelMocks.output = VALID_PROPOSAL;
@@ -144,8 +144,8 @@ afterEach(async () => {
     const reports = await import('../../../../src/main/quality/report');
     await reports.drainReportWrites();
   } finally {
-    if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-    else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
+    if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

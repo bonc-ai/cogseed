@@ -2,7 +2,7 @@
  * Custom LLM provider management (CC Switch–style generic endpoints).
  *
  * A "custom provider" is a free-form, user-supplied endpoint that speaks one
- * of the three API dialects Orkas already routes (anthropic / openai /
+ * of the three API dialects CogSeed already routes (anthropic / openai /
  * gemini). Unlike the curated catalog providers, it carries its own base URL
  * and bearer key — think of the DeepSeek/Moonshot adapters, but declared at
  * runtime by the user instead of hard-coded.

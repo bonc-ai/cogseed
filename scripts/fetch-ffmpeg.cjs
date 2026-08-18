@@ -35,7 +35,7 @@
  * License: ffmpeg/ffprobe are invoked as a separate process (not linked). The
  * `ffmpeg-static` binaries are GPL builds — the in-repo NOTICE lists their
  * source. This is "mere aggregation" of a separate program, not a derivative
- * link, so it does not impose copyleft on Orkas itself.
+ * link, so it does not impose copyleft on CogSeed itself.
  *
  * Idempotent: skips work when a ready copy already matches (source bytes for the
  * host path, the pinned sha256 for the cross path), unless `--force`.
@@ -67,7 +67,7 @@ const IS_HOST_TARGET = TARGET_PLATFORM === process.platform && TARGET_ARCH === p
 const platformKey = `${TARGET_PLATFORM}-${TARGET_ARCH}`;
 const destDir = path.join(pcRoot, 'resources', 'runtime', 'ffmpeg', platformKey);
 const exe = TARGET_PLATFORM === 'win32' ? '.exe' : '';
-const READY_FILE = path.join(destDir, '.orkas-ffmpeg-ready.json');
+const READY_FILE = path.join(destDir, '.cogseed-ffmpeg-ready.json');
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const PACKAGE_REPAIR_TIMEOUT_MS = 10 * 60 * 1000;
 const REQUIRED_CAPABILITIES = FFMPEG_CAPABILITIES;
@@ -158,8 +158,8 @@ function verifyPackageIntegrity(buffer, integrity, label) {
 
 function installLockedPackageTarball(tgz, packageDir, options = {}) {
   const run = options.spawnSync || spawnSync;
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-npm-package-repair-'));
-  const stagedDir = `${packageDir}.orkas-repair-${process.pid}-${Date.now()}`;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-npm-package-repair-'));
+  const stagedDir = `${packageDir}.cogseed-repair-${process.pid}-${Date.now()}`;
   try {
     const tgzPath = path.join(tmp, 'package.tgz');
     fs.writeFileSync(tgzPath, tgz);
@@ -277,9 +277,9 @@ function copyBinary(src, destName, force) {
 const NOTICE = `Bundled FFmpeg binaries
 =======================
 
-This directory contains prebuilt ffmpeg and ffprobe binaries that Orkas invokes
+This directory contains prebuilt ffmpeg and ffprobe binaries that CogSeed invokes
 as separate processes for local video rendering and deterministic media editing.
-They are NOT linked into Orkas; Orkas merely aggregates and runs them.
+They are NOT linked into CogSeed; CogSeed merely aggregates and runs them.
 
 ffmpeg
   Source binary: the npm package "ffmpeg-static"
@@ -428,7 +428,7 @@ async function downloadCrossFfprobe(expectedSha) {
   if (!version) throw new Error(`@ffprobe-installer has no pinned version for ${platformKey}`);
   const url = `https://registry.npmjs.org/@ffprobe-installer/${platformKey}/-/${platformKey}-${version}.tgz`;
   const tgz = await httpGetBuffer(url);
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-ffprobe-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ffprobe-'));
   try {
     const tgzPath = path.join(tmp, 'pkg.tgz');
     fs.writeFileSync(tgzPath, tgz);

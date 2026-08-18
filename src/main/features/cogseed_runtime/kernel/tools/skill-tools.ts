@@ -2,7 +2,7 @@ import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 
 import { capToolResult, DEFAULT_INLINE_RESULT_TOKENS, type WrapOpts } from '../../../../util/tool-result-cap';
-import { mateRuntimeSessionToolResultsDir, userRoot } from '../../../../paths';
+import { cogseedRuntimeSessionToolResultsDir, userRoot } from '../../../../paths';
 import { userSkillsDir } from '../../../../paths';
 // Imported from the feature module rather than `model/core-agent/skill-registry`
 // on purpose: this runs inside the isolated Runtime worker, and the registry's
@@ -25,7 +25,7 @@ async function capRuntimeResult(
 ): Promise<RuntimeToolResult> {
   const capped = capToolResult(name, result as any, { state: {} } as any, {
     maxInlineTokens: opts.maxInlineTokens ?? DEFAULT_INLINE_RESULT_TOKENS,
-    toolResultsDir: mateRuntimeSessionToolResultsDir(opts.userId, opts.runtimeSessionId),
+    toolResultsDir: cogseedRuntimeSessionToolResultsDir(opts.userId, opts.runtimeSessionId),
   } satisfies WrapOpts);
   return capped as RuntimeToolResult;
 }
@@ -144,12 +144,12 @@ export async function runRuntimeSkillTool(
     const args = Array.isArray(input.args) ? input.args.map((arg) => String(arg)) : [];
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      ORKAS_PC_DIR: ctx.pcDir,
-      ORKAS_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
-      ORKAS_UID: ctx.userId,
+      COGSEED_PC_DIR: ctx.pcDir,
+      COGSEED_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
+      COGSEED_UID: ctx.userId,
       ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || '1',
-      ...(pinnedSkillDir ? { ORKAS_RUN_SKILL_DIR: pinnedSkillDir } : {}),
-      ...(input.agent_id ? { ORKAS_AGENT_ID: String(input.agent_id) } : {}),
+      ...(pinnedSkillDir ? { COGSEED_RUN_SKILL_DIR: pinnedSkillDir } : {}),
+      ...(input.agent_id ? { COGSEED_AGENT_ID: String(input.agent_id) } : {}),
     };
     const runSkillPath = path.join(ctx.pcDir, 'bin', 'run-skill.cjs');
     const result = await runProcess([

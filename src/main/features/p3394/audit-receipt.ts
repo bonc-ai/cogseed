@@ -4,7 +4,7 @@
  * PRD 原则 14：资产状态变化必须"先持久化事件并生成 Receipt，再更新界面"。
  * 事件（asset-events）是提交点；Receipt 记录 before/after 引用，供审计与回滚。
  *
- * 存储：`<uid>/cloud/mate_agent/audit-receipts/<receipt_id>.json`（单文件）。
+ * 存储：`<uid>/cloud/cogseed/audit-receipts/<receipt_id>.json`（单文件）。
  * Receipt 写入失败不阻塞事件已提交——事件是事实源，Receipt 是可重建的证明。
  */
 
@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../../logger';
 import { readJson, writeJson, nowIso } from '../../storage';
-import { mateAgentAuditReceiptsDir } from '../../paths';
+import { cogseedAgentAuditReceiptsDir } from '../../paths';
 import { maskId } from '../../util/log-redact';
 
 const log = createLogger('audit-receipt');
@@ -41,7 +41,7 @@ export interface CreateAuditReceiptInput {
 }
 
 export function auditReceiptPath(uid: string, receiptId: string): string {
-  return path.join(mateAgentAuditReceiptsDir(uid), `${receiptId}.json`);
+  return path.join(cogseedAgentAuditReceiptsDir(uid), `${receiptId}.json`);
 }
 
 export async function createAuditReceipt(uid: string, input: CreateAuditReceiptInput): Promise<AuditReceipt> {

@@ -149,7 +149,7 @@ async function parseCheck(scriptPath: string): Promise<InvocabilityCheck> {
 
   // Mirrors run-skill.cjs's extension dispatch. Kept parse-only.
   const plans: Record<string, { cmd: string; args: string[] }> = {
-    py: { cmd: process.env.ORKAS_PYTHON || 'python3', args: ['-m', 'py_compile', scriptPath] },
+    py: { cmd: process.env.COGSEED_PYTHON || 'python3', args: ['-m', 'py_compile', scriptPath] },
     js: { cmd: process.execPath, args: ['--check', scriptPath] },
     cjs: { cmd: process.execPath, args: ['--check', scriptPath] },
     mjs: { cmd: process.execPath, args: ['--check', scriptPath] },
@@ -172,7 +172,7 @@ async function parseCheck(scriptPath: string): Promise<InvocabilityCheck> {
         // security scanner refuses to echo. The exit code is the verdict.
         stdio: 'ignore',
         windowsHide: true,
-        // ORKAS_* env is deliberately not forwarded: nothing here should be able
+        // COGSEED_* env is deliberately not forwarded: nothing here should be able
         // to reach the user's skill roots or workspace.
         env: { PATH: process.env.PATH || '', HOME: process.env.HOME || '' },
       });

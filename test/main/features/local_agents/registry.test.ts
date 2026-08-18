@@ -77,11 +77,11 @@ describe('local_agents/registry', () => {
   let savedEnvOverrides: Record<string, string | undefined> = {};
 
   const ENV_KEYS = [
-    'ORKAS_CLAUDE_PATH',
-    'ORKAS_CODEX_PATH',
-    'ORKAS_OPENCLAW_PATH',
-    'ORKAS_OPENCODE_PATH',
-    'ORKAS_HERMES_PATH',
+    'COGSEED_CLAUDE_PATH',
+    'COGSEED_CODEX_PATH',
+    'COGSEED_OPENCLAW_PATH',
+    'COGSEED_OPENCODE_PATH',
+    'COGSEED_HERMES_PATH',
     'APPDATA',
     'LOCALAPPDATA',
     'VOLTA_HOME',
@@ -90,7 +90,7 @@ describe('local_agents/registry', () => {
   ];
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-registry-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-registry-'));
     savedPath = process.env.PATH;
     savedHome = process.env.HOME;
     savedUserProfile = process.env.USERPROFILE;
@@ -99,7 +99,7 @@ describe('local_agents/registry', () => {
     process.env.USERPROFILE = process.env.HOME;
     if (isWindows) process.env.PATHEXT = '.CMD;.EXE;.BAT';
     fs.mkdirSync(process.env.HOME, { recursive: true });
-    fs.mkdirSync(path.join(process.env.HOME, 'Library', 'Logs', 'orkas'), { recursive: true });
+    fs.mkdirSync(path.join(process.env.HOME, 'Library', 'Logs', 'cogseed'), { recursive: true });
     savedFileLevel = log.transports.file.level;
     log.transports.file.level = false;
     savedEnvOverrides = {};
@@ -139,18 +139,18 @@ describe('local_agents/registry', () => {
 
   it('marks not_found when the configured binary is missing', async () => {
     process.env.PATH = tmpDir;
-    process.env.ORKAS_OPENCODE_PATH = path.join(tmpDir, 'missing-opencode');
+    process.env.COGSEED_OPENCODE_PATH = path.join(tmpDir, 'missing-opencode');
     const r = await detectOne('opencode');
     expect(r.available).toBe(false);
     expect(r.error).toBe('not_found');
     expect(r.type).toBe('opencode');
   });
 
-  it('honors ORKAS_<TYPE>_PATH override', async () => {
+  it('honors COGSEED_<TYPE>_PATH override', async () => {
     const fake = writeMockCli(path.join(tmpDir, 'my-claude'), '2.0.0');
     // Print a version that satisfies the claude minimum so it ends up "available".
     process.env.PATH = '';
-    process.env.ORKAS_CLAUDE_PATH = fake;
+    process.env.COGSEED_CLAUDE_PATH = fake;
 
     const r = await detectOne('claude');
     expect(isWindows ? r.path?.toLowerCase() : r.path).toBe(isWindows ? fake.toLowerCase() : fake);
@@ -183,7 +183,7 @@ describe('local_agents/registry', () => {
     fs.writeFileSync(fake, '#!/bin/sh\necho ""\n');
     fs.chmodSync(fake, 0o755);
     process.env.PATH = '';
-    process.env.ORKAS_CODEX_PATH = fake;
+    process.env.COGSEED_CODEX_PATH = fake;
 
     const r = await detectOne('codex');
     expect(r.path).toBe(fake);
@@ -194,7 +194,7 @@ describe('local_agents/registry', () => {
   it('marks version_too_old when below minimum', async () => {
     const fake = writeMockCli(path.join(tmpDir, 'old-claude'), '1.5.0');
     process.env.PATH = '';
-    process.env.ORKAS_CLAUDE_PATH = fake;
+    process.env.COGSEED_CLAUDE_PATH = fake;
 
     const r = await detectOne('claude');
     expect(r.available).toBe(false);
@@ -205,7 +205,7 @@ describe('local_agents/registry', () => {
   it('marks version_unknown when --version output has no semver', async () => {
     const fake = writeMockCli(path.join(tmpDir, 'mute-cli'), 'no version');
     process.env.PATH = '';
-    process.env.ORKAS_OPENCODE_PATH = fake;
+    process.env.COGSEED_OPENCODE_PATH = fake;
 
     const r = await detectOne('opencode');
     expect(r.available).toBe(false);
@@ -219,7 +219,7 @@ describe('local_agents/registry', () => {
       '--version': 'Hermes Agent v9.9.9',
     });
     process.env.PATH = '';
-    process.env.ORKAS_HERMES_PATH = fake;
+    process.env.COGSEED_HERMES_PATH = fake;
 
     const r = await detectOne('hermes');
     expect(isWindows ? r.path?.toLowerCase() : r.path).toBe(isWindows ? fake.toLowerCase() : fake);
@@ -237,7 +237,7 @@ describe('local_agents/registry', () => {
       '--version': 'Hermes Agent v0.17.0',
     });
     process.env.PATH = '';
-    process.env.ORKAS_HERMES_PATH = fake;
+    process.env.COGSEED_HERMES_PATH = fake;
 
     const r = await detectOne('hermes');
     expect(isWindows ? r.path?.toLowerCase() : r.path).toBe(isWindows ? fake.toLowerCase() : fake);
@@ -264,7 +264,7 @@ describe('local_agents/registry', () => {
     ].join('\n'));
     fs.chmodSync(fake, 0o755);
     process.env.PATH = '';
-    process.env.ORKAS_HERMES_PATH = fake;
+    process.env.COGSEED_HERMES_PATH = fake;
 
     const r = await detectOne('hermes');
     expect(r.path).toBe(fake);
@@ -276,7 +276,7 @@ describe('local_agents/registry', () => {
   it('detectAll caches results within the TTL window', async () => {
     const fake = writeMockCli(path.join(tmpDir, 'ok-opencode'), '0.10.0');
     process.env.PATH = '';
-    process.env.ORKAS_OPENCODE_PATH = fake;
+    process.env.COGSEED_OPENCODE_PATH = fake;
 
     const first = await detectAll();
     const opencodeFirst = first.find(e => e.type === 'opencode')!;
@@ -364,7 +364,7 @@ describe('local_agents/registry › expandSearchDirs', () => {
   let savedHome: string | undefined;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-expand-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-expand-'));
     savedHome = process.env.HOME;
     process.env.HOME = tmpDir;
     invalidateCache();
@@ -417,7 +417,7 @@ describe('local_agents/registry › version-manager + standalone discovery (real
   let savedHome: string | undefined;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-vm-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-vm-'));
     savedPath = process.env.PATH;
     savedHome = process.env.HOME;
     process.env.HOME = tmpDir;
@@ -456,7 +456,7 @@ describe('local_agents/registry › version-manager + standalone discovery (real
 
   it('gives actionable guidance when a codex version probe produces nothing', async () => {
     const fake = writeMockCli(path.join(tmpDir, 'mute-codex'), 'no version here');
-    process.env.ORKAS_CODEX_PATH = fake;
+    process.env.COGSEED_CODEX_PATH = fake;
 
     const r = await detectOne('codex');
     expect(r.available).toBe(false);

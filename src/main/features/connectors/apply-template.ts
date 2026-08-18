@@ -32,7 +32,7 @@ function _electronAsNodeVars(): { node: string; pcDir: string } {
   return _electronAsNode;
 }
 
-/** Resolve `${ORKAS_NODE}` / `${ORKAS_PC_DIR}` placeholders inside a stdio template's
+/** Resolve `${COGSEED_NODE}` / `${COGSEED_PC_DIR}` placeholders inside a stdio template's
  *  command / args. Lets connector catalog entries reference our adapter scripts by symbolic
  *  path without hard-coding absolute paths at catalog-author time. Unknown placeholders throw
  *  to surface typos at install — silent passthrough would let `${ORKS_NODE}` slip through and
@@ -40,15 +40,15 @@ function _electronAsNodeVars(): { node: string; pcDir: string } {
 function _resolvePlaceholders(s: string): string {
   const vars = _electronAsNodeVars();
   return s.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_m, key) => {
-    if (key === 'ORKAS_NODE') return vars.node;
-    if (key === 'ORKAS_PC_DIR') return vars.pcDir;
+    if (key === 'COGSEED_NODE') return vars.node;
+    if (key === 'COGSEED_PC_DIR') return vars.pcDir;
     throw new Error(`unknown placeholder \${${key}} in transport template`);
   });
 }
 
 function _hasElectronAsNodePlaceholder(tpl: { command: string; args: string[] }): boolean {
-  if (/\$\{ORKAS_NODE\}/.test(tpl.command)) return true;
-  return tpl.args.some((a) => /\$\{ORKAS_NODE\}/.test(a) || /\$\{ORKAS_PC_DIR\}/.test(a));
+  if (/\$\{COGSEED_NODE\}/.test(tpl.command)) return true;
+  return tpl.args.some((a) => /\$\{COGSEED_NODE\}/.test(a) || /\$\{COGSEED_PC_DIR\}/.test(a));
 }
 
 const _SYNTHESIZERS: Record<string, EnvSynth> = {
@@ -84,14 +84,14 @@ export function applyTemplate(entry: CatalogEntry, grant: OAuthGrant): Transport
       throw new Error('OAuth stdio template needs either oauth_env_key or env_synthesizer');
     }
     // Electron-as-Node injection: templates pointing at our own bundled adapter scripts (e.g.
-    // `${ORKAS_NODE}` + `${ORKAS_PC_DIR}/bin/gmail-mcp-server.cjs`) need `ELECTRON_RUN_AS_NODE=1`
+    // `${COGSEED_NODE}` + `${COGSEED_PC_DIR}/bin/gmail-mcp-server.cjs`) need `ELECTRON_RUN_AS_NODE=1`
     // in the child env so Electron boots as plain Node. Same pattern as `client.ts::
     // buildSkillSandboxEnv`. We only inject these when the template actually uses a
     // placeholder — third-party stdio servers like the legacy `npx @modelcontextprotocol/server-X`
     // pattern stay env-clean.
     if (_hasElectronAsNodePlaceholder(tpl)) {
       const vars = _electronAsNodeVars();
-      env = { ...env, ELECTRON_RUN_AS_NODE: '1', ORKAS_NODE: vars.node, ORKAS_PC_DIR: vars.pcDir };
+      env = { ...env, ELECTRON_RUN_AS_NODE: '1', COGSEED_NODE: vars.node, COGSEED_PC_DIR: vars.pcDir };
     }
     return {
       kind: 'stdio',

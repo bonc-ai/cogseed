@@ -153,8 +153,8 @@ CogSeed is local-first. The renderer cannot access Node.js directly, local tools
 Clone the repository and install its dependencies:
 
 ```bash
-git clone http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/cog-seed
-cd cog-seed
+git clone https://github.com/cogseed/cogseed.git
+cd cogseed
 npm install
 ```
 
@@ -211,7 +211,7 @@ Local CLI execution is centralized in `src/main/features/local_agents/runner.ts`
 
 ### Connectors
 
-- Hosted connector authorization starts through the configured account service and returns through the application protocol callback.
+- Hosted connector authorization starts through the configured account service and returns through the application protocol callback (`cogseed://` deep link).
 - Token-bearing grant and transport state is encrypted before local persistence.
 - The model receives only currently connected, enabled, and session-eligible connectors.
 - Connector actions are discovered with `list_connector_tools` and invoked with `call_connector_tool`.

@@ -2,14 +2,14 @@
 ownerAgent: 79df9cc89f5f
 name: stage-compose
 min_app_version: "1.6.0"
-description_zh: Orkas HTML 视频合成的编写知识——如何写一个 composition（index.html）、用时间线驱动动画、声明画幅与时长，再渲染成 mp4；解说/动画/动态图形/字幕叠加的核心技能。
-description_en: Authoring knowledge for Orkas HTML video compositions — how to write an index.html composition, drive animation from a timeline, declare canvas + duration, then render to mp4; core skill for explainer/animation/motion-graphics/caption work.
+description_zh: CogSeed HTML 视频合成的编写知识——如何写一个 composition（index.html）、用时间线驱动动画、声明画幅与时长，再渲染成 mp4；解说/动画/动态图形/字幕叠加的核心技能。
+description_en: Authoring knowledge for CogSeed HTML video compositions — how to write an index.html composition, drive animation from a timeline, declare canvas + duration, then render to mp4; core skill for explainer/animation/motion-graphics/caption work.
 category: creation
 ---
 
 # stage-compose
 
-How to author an Orkas HTML composition and turn it into a video. Host-neutral: this skill describes the artifact you produce and the outcome you want (a rendered mp4). In Orkas, composition lint/inspect/draft/render runs through the built-in `video_studio` tool. Compatibility is enforced before install by the marketplace `min_app_version` field on the agent/skill.
+How to author an CogSeed HTML composition and turn it into a video. Host-neutral: this skill describes the artifact you produce and the outcome you want (a rendered mp4). In CogSeed, composition lint/inspect/draft/render runs through the built-in `video_studio` tool. Compatibility is enforced before install by the marketplace `min_app_version` field on the agent/skill.
 
 For visual direction, apply `frontend-design` before writing `manifest.art_direction`. If the user provides a DESIGN.md, brand guide, reference site, screenshot, Figma notes, or explicit named style, apply `design-system-importer` to convert that source into compact VideoStudio tokens. `composition-design-review` is a bounded pre-preview visual check whenever snapshot evidence exists, with a post-draft fallback only when no reviewed preview was required; it must not replace native draft QA or create an open-ended redesign loop.
 
@@ -54,13 +54,13 @@ The default path is **candidate script/shotlist/manifest -> free calibrated narr
 
 ## How to call the render path
 
-Use the Orkas-native tool call:
+Use the CogSeed-native tool call:
 
 ```json
 {"op":"composition.draft","composition_dir":"project/composition","output_path":"project/render/draft.mp4","quality":"draft","report_path":"project/render/draft-report.json","findings_path":"project/composition/qa/inspect.json"}
 ```
 
-The tool returns JSON. A tool error means a structural/render-safety issue or Orkas runtime issue must be fixed before continuing.
+The tool returns JSON. A tool error means a structural/render-safety issue or CogSeed runtime issue must be fixed before continuing.
 For draft output, the report includes contract/source alignment, lint, inspect, media probe, loudness, audio timing, video-frame QA, real render throughput, optional visual-regression status, and compact `design_review_inputs`. Video QA samples the first frame and scene starts/mids so an empty hook frame, blank scene boundary, or long frozen sampled run blocks Gate D. It also writes a contact sheet and per-sample evidence frames for design review when available.
 Use the draft command's lint and inspect gates before rendering. Lint blocks render-contract errors such as unregistered timelines, missing clip timing, invalid root timing, and imperative media control. Semantic visual defects on readable content—small text, overflow, occlusion, overlap, low contrast, safe-area violations, and primary elements outside canvas—are blockers. Decorative out-of-canvas accents plus palette/layout-variety findings remain advisory design feedback.
 When using `findings_path`, the full QA payload is saved to disk; read the file only when the summary points to a specific issue that needs detail.
@@ -125,7 +125,7 @@ Write `project/composition/composition-manifest.json` before `composition.prepar
       "id": "hook",
       "start": 0,
       "duration": 5,
-      "approved_copy": ["Orkas 1.5.0"],
+      "approved_copy": ["CogSeed 1.5.0"],
       "narration_text": "A concise line for this exact window.",
       "narration_refs": ["n01"],
       "source_shots": ["s01"],
@@ -155,7 +155,7 @@ Every scene needs canonical numeric `start` and `duration`; do not invent `start
 ```json
 {
   "lines": [
-    { "id": "n01", "scene_id": "hook", "start": 0.0, "end": 3.2, "text": "Meet Orkas 1.5.0." }
+    { "id": "n01", "scene_id": "hook", "start": 0.0, "end": 3.2, "text": "Meet CogSeed 1.5.0." }
   ]
 }
 ```
@@ -166,7 +166,7 @@ Then use `"narration_ref": "n01"` or a comma-separated list on the matching scen
 
 `composition.prepare` owns the structural HTML contract. It derives the root canvas/timing, scene clips, semantic scene ids, declarative audio elements, local GSAP vendor reference, paused master timeline, and timeline registration from `composition-manifest.json`. Do not hand-create or replace those fields. After visual authoring, use `composition.reconcile` to update only protected root/clip/audio metadata while preserving authored DOM/CSS/SVG; custom tween timing still must be adjusted deliberately when scene timing changes.
 
-Author visual DOM inside the generated scene roots and add motion to `window.__ORKAS_COMPOSITION_TIMELINE__`. Never call `play`, `pause`, or assign `currentTime` on media; media timing is declarative and renderer-owned. Never create another wall-clock or unregistered timeline.
+Author visual DOM inside the generated scene roots and add motion to `window.__COGSEED_COMPOSITION_TIMELINE__`. Never call `play`, `pause`, or assign `currentTime` on media; media timing is declarative and renderer-owned. Never create another wall-clock or unregistered timeline.
 
 ## Authoring patterns
 
@@ -296,7 +296,7 @@ Craft calls specific to designed/animated explainers, on top of the shared craft
 - **Build to the narration words**, not arbitrary beats; hold a fully-built scene/chart ≥ 2–3 s before moving on.
 - **Vary scene types** — no three near-identical layouts in a row; alternate full-frame / split / diagram / quote.
 - **Spoken/readable captions live in the plan's `tracks.captions.lines` (data), NOT burned into this composition** — the assembler burns them via `burnsubs` at the end, so a later typo fix is a one-line edit, not a re-render of the whole composition. Only a PURELY DECORATIVE caption treatment that IS the visual design (kinetic highlight sweeps, word-by-word reveals) may live inside the composition — and when it does, tell the user that styled caption is part of the picture and not separately editable later. Keep ordinary subtitles as caption-track data, synced to the voice.
-- The host blocks undersized or unreadable semantic text before draft; oversized palette and decorative complexity remain advisories judged against the design thesis, brand, and scene clarity. (Orkas: use `video_studio` `op: "composition.draft"`.)
+- The host blocks undersized or unreadable semantic text before draft; oversized palette and decorative complexity remain advisories judged against the design thesis, brand, and scene clarity. (CogSeed: use `video_studio` `op: "composition.draft"`.)
 
 ## Constraints
 

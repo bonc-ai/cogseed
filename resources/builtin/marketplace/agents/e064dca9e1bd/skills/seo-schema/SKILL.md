@@ -28,12 +28,12 @@ Lint existing JSON-LD and generate templates. Pure analysis/templating — no ne
 
 Validate existing JSON-LD + recommend types:
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" seo-schema schema -- --op validate --input <crawl.json> [--out <schema.json>]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" seo-schema schema -- --op validate --input <crawl.json> [--out <schema.json>]
 ```
 
 Generate a template (for apply/content mode):
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" seo-schema schema -- --op generate --type Organization [--json '{"name":"Orkas","url":"https://orkas.ai"}']
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" seo-schema schema -- --op generate --type Organization [--json '{"name":"CogSeed","url":"https://cogseed.ai"}']
 ```
 
 ## Expected output

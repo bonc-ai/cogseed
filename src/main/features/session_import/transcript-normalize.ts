@@ -191,7 +191,7 @@ export function parseWorkbuddyTranscript(
 
 /** Rough token estimate (chars/4) for the extractor's chunking budget. Kept
  *  local so normalization has no dependency on any tokenizer package. */
-export function estimateTokens(text: string): number {
+export function esticogseedTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 

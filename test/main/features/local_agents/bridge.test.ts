@@ -31,11 +31,11 @@ vi.mock('../../../../src/main/logger', () => ({
   }),
 }));
 
-// orkas-bridge host: socket auth + skills surface + KB scope + permission gate.
+// cogseed-bridge host: socket auth + skills surface + KB scope + permission gate.
 // Connector methods are covered by their own feature tests; here we pin the
 // bridge-specific contracts (token, path discipline, scope plumbing, gating).
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 const TEST_UID = 'u-bridge';
 let tmpDir: string;
@@ -81,10 +81,10 @@ function rpcOnce(socketPath: string, payload: Record<string, unknown>, timeoutMs
 }
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bridge-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bridge-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevHome = process.env.HOME;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   process.env.HOME = path.join(tmpDir, 'home');
   fs.mkdirSync(path.join(tmpDir, 'home'), { recursive: true });
   vi.resetModules();
@@ -95,7 +95,7 @@ beforeEach(async () => {
 afterEach(async () => {
   const kb = await import('../../../../src/main/features/kb_vector');
   kb.closeAllKb();
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
   fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
@@ -116,9 +116,9 @@ async function startTestBridge(opts: {
     runId: `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
     configDir: path.join(tmpDir, 'rundir'),
     sandboxEnv: {
-      ORKAS_NODE: TEST_NODE,
-      ORKAS_PC_DIR: process.cwd(),
-      ORKAS_WORKSPACE_ROOT: tmpDir,
+      COGSEED_NODE: TEST_NODE,
+      COGSEED_PC_DIR: process.cwd(),
+      COGSEED_WORKSPACE_ROOT: tmpDir,
       ELECTRON_RUN_AS_NODE: '1',
     },
   });
@@ -211,18 +211,18 @@ describe('local_agents/bridge › auth + skills', () => {
       expect(server.args[0]).toContain(path.join('bin', 'cogseed-bridge.cjs'));
       expect(JSON.stringify(cfg)).not.toContain(bridge.token);
       expect(JSON.stringify(cfg)).not.toContain(bridge.socketPath);
-      expect(server.env.ORKAS_BRIDGE_TOKEN).toBeUndefined();
-      expect(server.env.ORKAS_BRIDGE_SOCKET).toBeUndefined();
-      expect(server.env.ORKAS_BRIDGE_ENV_FILE).toBe(bridge.serverEnv.ORKAS_BRIDGE_ENV_FILE);
-      envFilePath = server.env.ORKAS_BRIDGE_ENV_FILE;
+      expect(server.env.COGSEED_BRIDGE_TOKEN).toBeUndefined();
+      expect(server.env.COGSEED_BRIDGE_SOCKET).toBeUndefined();
+      expect(server.env.COGSEED_BRIDGE_ENV_FILE).toBe(bridge.serverEnv.COGSEED_BRIDGE_ENV_FILE);
+      envFilePath = server.env.COGSEED_BRIDGE_ENV_FILE;
 
       const secretEnv = JSON.parse(fs.readFileSync(envFilePath, 'utf8'));
-      expect(secretEnv.ORKAS_BRIDGE_TOKEN).toBe(bridge.token);
-      expect(secretEnv.ORKAS_BRIDGE_SOCKET).toBe(bridge.socketPath);
-      expect(secretEnv.ORKAS_UID).toBe(TEST_UID);
-      expect(secretEnv.ORKAS_AGENT_ID).toBe('a1');
-      expect(bridge.serverEnv.ORKAS_BRIDGE_TOKEN).toBeUndefined();
-      expect(bridge.serverEnv.ORKAS_BRIDGE_SOCKET).toBeUndefined();
+      expect(secretEnv.COGSEED_BRIDGE_TOKEN).toBe(bridge.token);
+      expect(secretEnv.COGSEED_BRIDGE_SOCKET).toBe(bridge.socketPath);
+      expect(secretEnv.COGSEED_UID).toBe(TEST_UID);
+      expect(secretEnv.COGSEED_AGENT_ID).toBe('a1');
+      expect(bridge.serverEnv.COGSEED_BRIDGE_TOKEN).toBeUndefined();
+      expect(bridge.serverEnv.COGSEED_BRIDGE_SOCKET).toBeUndefined();
     } finally {
       await bridge.close();
     }

@@ -86,8 +86,8 @@ describe('sanitizeLogTextForUpload › set A (must be masked)', () => {
   });
 
   it('masks email to first-char + domain (Server mask_email parity)', () => {
-    const out = sanitizeLogTextForUpload('user contacted alice.smith+test@orkas.ai today');
-    expect(out).toBe('user contacted a***@orkas.ai today');
+    const out = sanitizeLogTextForUpload('user contacted alice.smith+test@cogseed.ai today');
+    expect(out).toBe('user contacted a***@cogseed.ai today');
   });
 
   it('masks CN mobile to 138****8000 (Server mask_phone parity)', () => {

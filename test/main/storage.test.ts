@@ -12,7 +12,7 @@ import {
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-storage-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-storage-'));
 });
 
 afterEach(() => {

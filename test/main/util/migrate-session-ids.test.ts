@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 // Migration utility strips ANY prefix segments before the kind keyword from session jsonl
-// filenames (brand prefix `aiteam-` / `orkas-`, uid prefix in either 8-digit numeric or
+// filenames (brand prefix `aiteam-` / `cogseed-`, uid prefix in either 8-digit numeric or
 // UUID-with-dashes form, even doubled prefixes), normalising every shape to `<kind>-<tail>.jsonl`
 // (CLAUDE.md §5 — uid no longer in session_id; user scoping comes from path root). Stamps
 // `<uid>/local/.migrations` so subsequent boots no-op. See src/main/util/migrate-session-ids.ts.
@@ -38,22 +38,22 @@ function touch(file: string, content = ''): void {
 }
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-migrate-sid-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-migrate-sid-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe('migrate-session-ids', () => {
-  it('strips brand prefix (aiteam- / orkas-) AND uid prefix to land at `<kind>-<tail>.jsonl`', async () => {
+  it('strips brand prefix (aiteam- / cogseed-) AND uid prefix to land at `<kind>-<tail>.jsonl`', async () => {
     const dir = cloudSessionsDir(TEST_UID);
     touch(path.join(dir, 'aiteam-99999999-agent-a1.jsonl'), 'old1');
-    touch(path.join(dir, 'orkas-99999999-gconv-c1.jsonl'),  'old2');
+    touch(path.join(dir, 'cogseed-99999999-gconv-c1.jsonl'),  'old2');
     touch(path.join(dir, 'gconv-c2.jsonl'),                  'new');
 
     const { migrateLegacySessionIds } = await import('../../../src/main/util/migrate-session-ids');
@@ -65,7 +65,7 @@ describe('migrate-session-ids', () => {
     expect(fs.existsSync(path.join(dir, 'gconv-c2.jsonl'))).toBe(true);
     // Old files gone
     expect(fs.existsSync(path.join(dir, 'aiteam-99999999-agent-a1.jsonl'))).toBe(false);
-    expect(fs.existsSync(path.join(dir, 'orkas-99999999-gconv-c1.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(dir, 'cogseed-99999999-gconv-c1.jsonl'))).toBe(false);
     // Content preserved (rename, not copy+truncate)
     expect(fs.readFileSync(path.join(dir, 'agent-a1.jsonl'), 'utf8')).toBe('old1');
   });
@@ -100,7 +100,7 @@ describe('migrate-session-ids', () => {
   it('preserves legacy kinds (organizer / sub / conv) — strips prefix, keeps body shape', async () => {
     const dir = cloudSessionsDir(TEST_UID);
     touch(path.join(dir, 'aiteam-99999999-conv-old.jsonl'),     'c');
-    touch(path.join(dir, 'orkas-99999999-organizer-x.jsonl'),   'o');
+    touch(path.join(dir, 'cogseed-99999999-organizer-x.jsonl'),   'o');
     touch(path.join(dir, '99999999-sub-y.jsonl'),                's');
 
     const { migrateLegacySessionIds } = await import('../../../src/main/util/migrate-session-ids');

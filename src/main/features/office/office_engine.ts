@@ -93,10 +93,10 @@ export function runOfficeCli(args: string[], opts: RunOfficeCliOpts): Promise<Of
       child = spawn(bin, args, {
         cwd: opts.cwd,
         detached: process.platform !== 'win32',
-        // OfficeCLI enables background self-updates by default. Orkas vendors
+        // OfficeCLI enables background self-updates by default. CogSeed vendors
         // a hash-pinned binary, so letting it replace itself at runtime defeats
         // that pin and can swap versions in the middle of a create/batch flow.
-        // Always prefer the version shipped with Orkas; upgrades belong to the
+        // Always prefer the version shipped with CogSeed; upgrades belong to the
         // dependency/release pipeline, never an end-user document operation.
         env: { ...process.env, OFFICECLI_SKIP_UPDATE: '1' },
         windowsHide: true,

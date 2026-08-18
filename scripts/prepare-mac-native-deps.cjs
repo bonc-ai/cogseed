@@ -71,7 +71,7 @@ function ensurePackageFromRegistry(packageName, requiredFiles = []) {
   }
 
   console.log(`[prepare-mac-native-deps] ensuring ${packageName}@${version}`);
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-mac-native-deps-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-mac-native-deps-'));
   try {
     const tarball = npmPack(tmpDir, `${packageName}@${version}`);
     fs.rmSync(targetDir, { recursive: true, force: true });
@@ -118,7 +118,7 @@ function assertMachArch(label, file, targetArch) {
 }
 
 function main() {
-  const targetArch = process.argv[2] || process.env.ORKAS_TARGET_ARCH || process.arch;
+  const targetArch = process.argv[2] || process.env.COGSEED_TARGET_ARCH || process.arch;
   if (!['arm64', 'x64'].includes(targetArch)) {
     throw new Error(`[prepare-mac-native-deps] unsupported macOS arch: ${targetArch}`);
   }

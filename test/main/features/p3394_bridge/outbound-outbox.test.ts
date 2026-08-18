@@ -14,7 +14,7 @@ import {
 import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
 
 const SCRATCH_VARIANT = 'p3394-outbox-test-' + Math.random().toString(36).slice(2, 8);
-process.env.ORKAS_RUNTIME_VARIANT = SCRATCH_VARIANT;
+process.env.COGSEED_RUNTIME_VARIANT = SCRATCH_VARIANT;
 
 function envelope(id: string): P3394Envelope {
   return {

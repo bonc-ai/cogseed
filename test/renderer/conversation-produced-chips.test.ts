@@ -115,8 +115,8 @@ describe('conversation produced chips', () => {
 
   it('dedupes same-basename chips to the more specific final path', () => {
     const orderProducedPaths = loadOrderProducedPaths();
-    const stale = '/Users/test/.orkas/userWorkSpace/task/projects/business_planning.md';
-    const final = '/Users/test/.orkas/userWorkSpace/task/projects/ppt169_business_planning_ppt169_20260616/sources/business_planning.md';
+    const stale = '/Users/test/.cogseed/userWorkSpace/task/projects/business_planning.md';
+    const final = '/Users/test/.cogseed/userWorkSpace/task/projects/ppt169_business_planning_ppt169_20260616/sources/business_planning.md';
 
     const ordered = orderProducedPaths([stale, final]);
 

@@ -153,8 +153,8 @@ CogSeed 坚持本地优先。Renderer 不能直接访问 Node.js，本地工具�
 克隆仓库并安装依赖：
 
 ```bash
-git clone http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/cog-seed
-cd cog-seed
+git clone https://github.com/cogseed/cogseed.git
+cd cogseed
 npm install
 ```
 
@@ -211,7 +211,7 @@ CogSeed 使用以下 CLI 前，需要在本机安装或配置相应命令行工�
 
 ### Connector
 
-- Hosted Connector 授权通过配置的账户服务发起，并通过应用协议 callback 返回。
+- Hosted Connector 授权通过配置的账户服务发起，并通过应用协议 callback 返回（`cogseed://` deep link）。
 - 包含 token 的授权和 transport 状态会在本地持久化前进行加密。
 - 模型只能获得当前已连接、已启用且符合会话准入条件的 Connector。
 - 通过 `list_connector_tools` 发现 Connector 操作，通过 `call_connector_tool` 调用。

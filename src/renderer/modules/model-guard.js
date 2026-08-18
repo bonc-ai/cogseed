@@ -118,7 +118,7 @@ async function refreshModelConfigSnapshot() {
   try {
     const res = await window.cogseed.invoke('auth.listEntries');
     if (res && res.ok && Array.isArray(res.entries)) {
-      window.dispatchEvent(new CustomEvent('orkas:model-entries-changed', {
+      window.dispatchEvent(new CustomEvent('cogseed:model-entries-changed', {
         detail: { entries: res.entries },
       }));
       trackModelConfigSnapshot(res.entries);

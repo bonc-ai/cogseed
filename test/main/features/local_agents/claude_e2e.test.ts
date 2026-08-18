@@ -14,7 +14,7 @@ import * as os from 'node:os';
 import { claudeBackend } from '../../../../src/main/features/local_agents/backends/claude';
 
 const isWindows = process.platform === 'win32';
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 function writeNodeExecutable(dir: string, name: string, source: string): string {
   const scriptName = `${name}.js`;
@@ -40,7 +40,7 @@ describe('local_agents/backends/claude › end-to-end with fake CLI', () => {
   const tmpDirs: string[] = [];
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-claude-e2e-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-claude-e2e-'));
     tmpDirs.push(tmpDir);
   });
   afterAll(() => {

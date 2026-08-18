@@ -22,7 +22,7 @@ const sourceRuntime = require('../../../scripts/prepare-source-runtime.cjs') as 
   ): boolean;
   copyRuntimeBundle(source: string, destination: string): void;
   parseVariant(argv: readonly string[]): string;
-  parseMateWorktreeVariant(argv: readonly string[]): string;
+  parseCogSeedWorktreeVariant(argv: readonly string[]): string;
 };
 
 const temporaryRoots: string[] = [];
@@ -37,10 +37,10 @@ const REQUIRED_RUNTIME_EXECUTABLES = [
 ] as const;
 
 function createCurrentBundleFixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-bundle-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-source-bundle-'));
   temporaryRoots.push(root);
   const destination = path.join(root, 'CogSeed.app');
-  const identity = sourceRuntime.sourceRuntimeBundleSpec('mate');
+  const identity = sourceRuntime.sourceRuntimeBundleSpec('cogseed');
 
   for (const relative of REQUIRED_RUNTIME_EXECUTABLES) {
     const executable = path.join(destination, relative);
@@ -61,9 +61,9 @@ function createCurrentBundleFixture() {
   <array>
     <dict>
       <key>CFBundleURLName</key>
-      <string>com.mateagent.desktop.connectors</string>
+      <string>com.cogseed.desktop.connectors</string>
       <key>CFBundleURLSchemes</key>
-      <array><string>cogseed</string><string>mateagent</string><string>orkas</string></array>
+      <array><string>cogseed</string></array>
     </dict>
   </array>
 </dict>
@@ -87,7 +87,7 @@ afterEach(() => {
 
 describe('macOS source runtime bundle contract', () => {
   it('assigns unique bundle names and identifiers to every source variant', () => {
-    const variants = ['main', 'cognition', 'expense', 'mate', 'optimization'];
+    const variants = ['main', 'cognition', 'expense', 'cogseed', 'optimization'];
     const specs = variants.map((variant) => sourceRuntime.sourceRuntimeBundleSpec(variant));
 
     expect(new Set(specs.map((spec) => spec.appName)).size).toBe(variants.length);
@@ -96,21 +96,21 @@ describe('macOS source runtime bundle contract', () => {
       'com.cogseed.desktop.source.main',
       'com.cogseed.desktop.source.cognition',
       'com.cogseed.desktop.source.expense',
-      'com.cogseed.desktop.source.mate',
+      'com.cogseed.desktop.source.cogseed',
       'com.cogseed.desktop.source.optimization',
     ]);
   });
 
-  it('declares connector schemes only for mate', () => {
+  it('declares connector schemes only for cogseed', () => {
     for (const variant of ['main', 'cognition', 'expense', 'optimization']) {
       expect(sourceRuntime.sourceRuntimeBundleSpec(variant).protocolSchemes).toEqual([]);
     }
-    expect(sourceRuntime.sourceRuntimeBundleSpec('mate').protocolSchemes)
-      .toEqual(['cogseed', 'mateagent', 'orkas']);
+    expect(sourceRuntime.sourceRuntimeBundleSpec('cogseed').protocolSchemes)
+      .toEqual(['cogseed']);
   });
 
   it('preserves relative framework symlinks when copying the Electron app', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-copy-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-source-copy-'));
     temporaryRoots.push(root);
     const distDir = path.join(root, 'dist');
     const source = path.join(distDir, 'Electron.app');
@@ -151,7 +151,7 @@ describe('macOS source runtime bundle contract', () => {
   });
 
   it('removes a partial destination when runtime copying fails', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-copy-failure-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-source-copy-failure-'));
     temporaryRoots.push(root);
     const source = path.join(root, 'missing.app');
     const destination = path.join(root, 'CogSeed.app');
@@ -163,7 +163,7 @@ describe('macOS source runtime bundle contract', () => {
   });
 
   it('preserves both the copy and cleanup errors when fail-closed cleanup fails', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-copy-cleanup-failure-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-source-copy-cleanup-failure-'));
     temporaryRoots.push(root);
     const source = path.join(root, 'missing.app');
     const destination = path.join(root, 'CogSeed.app');
@@ -192,18 +192,18 @@ describe('macOS source runtime bundle contract', () => {
   });
 
   it('requires exactly one canonical, case-sensitive preparation variant', () => {
-    expect(sourceRuntime.parseVariant(['--variant=mate'])).toBe('mate');
+    expect(sourceRuntime.parseVariant(['--variant=cogseed'])).toBe('cogseed');
     expect(sourceRuntime.parseVariant(['--variant', 'cognition'])).toBe('cognition');
     expect(() => sourceRuntime.parseVariant([])).toThrow('exactly one');
     expect(() => sourceRuntime.parseVariant(['--variant=Mate'])).toThrow('invalid');
-    expect(() => sourceRuntime.parseVariant(['--variant=main', '--variant=mate']))
+    expect(() => sourceRuntime.parseVariant(['--variant=main', '--variant=cogseed']))
       .toThrow('exactly one');
   });
 
   it('locks the executable bundle-preparation entry to cogseed', () => {
-    expect(sourceRuntime.parseMateWorktreeVariant(['--variant=cogseed']))
+    expect(sourceRuntime.parseCogSeedWorktreeVariant(['--variant=cogseed']))
       .toBe('cogseed');
-    expect(() => sourceRuntime.parseMateWorktreeVariant(['--variant=cognition']))
+    expect(() => sourceRuntime.parseCogSeedWorktreeVariant(['--variant=cognition']))
       .toThrow('locked to the cogseed runtime');
   });
 

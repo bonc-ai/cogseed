@@ -185,7 +185,7 @@ describe('Settings → General task notification toggle', () => {
     expect(invoke.mock.calls.filter(([channel]) => channel === 'prefs.getTaskNotifications')).toHaveLength(2);
   });
 
-  it('refreshes permission when Orkas regains focus even if settings were opened externally', async () => {
+  it('refreshes permission when CogSeed regains focus even if settings were opened externally', async () => {
     const permission = { state: 'granted', can_open_settings: true };
     const { sandbox, warning, windowListeners, scheduled, invoke, event } = loadHarness(
       { ok: true },
@@ -206,7 +206,7 @@ describe('Settings → General task notification toggle', () => {
     expect(event).not.toHaveBeenCalled();
   });
 
-  it('does not warn about OS permission while the Orkas notification preference is off', async () => {
+  it('does not warn about OS permission while the CogSeed notification preference is off', async () => {
     const { sandbox, warning } = loadHarness(
       { ok: true },
       { state: 'denied', can_open_settings: true },
@@ -229,7 +229,7 @@ describe('Settings → General task notification toggle', () => {
     expect(warning.hidden).toBe(true);
   });
 
-  it('does not claim system settings disabled Orkas when no per-app settings destination is available', async () => {
+  it('does not claim system settings disabled CogSeed when no per-app settings destination is available', async () => {
     const { sandbox, warning, openButton } = loadHarness(
       { ok: true },
       { state: 'denied', can_open_settings: false },

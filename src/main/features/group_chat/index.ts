@@ -169,8 +169,8 @@ export async function runtimeStatus(
     let backendAgents: string[] = [];
     let backendTurns: Array<{ actor: string; turn_id: string; started_at_ms: number }> = [];
     try {
-      const { listMateTasks } = await import('../cogseed_backend/task-store');
-      const tasks = await listMateTasks(userId);
+      const { listCogSeedTasks } = await import('../cogseed_backend/task-store');
+      const tasks = await listCogSeedTasks(userId);
       const active = (Array.isArray(tasks) ? tasks : []).filter((t) => (
         t && t.conversationId === cid
         && t.status !== 'completed' && t.status !== 'failed'

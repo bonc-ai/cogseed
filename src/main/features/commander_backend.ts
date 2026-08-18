@@ -1,7 +1,7 @@
 /**
  * Commander backend binding and runtime view.
  *
- * The commander is always the in-process Orkas Core Agent. External CLIs such
+ * The commander is always the in-process CogSeed Core Agent. External CLIs such
  * as Hermes can still be configured as specialist local agents, but not as a
  * replacement commander backend.
  */
@@ -38,13 +38,13 @@ export function setCommanderBackendSettings(settings: CommanderBackendSettings):
 
 /**
  * Normalize a caller-provided backend selection into the exact setting shape.
- * Legacy Hermes commander selections are folded back to Orkas Core Agent.
+ * Legacy Hermes commander selections are folded back to CogSeed Core Agent.
  */
 export async function resolveCommanderBackend(input?: CommanderBackendSettings): Promise<CommanderBackendSettings> {
   if (!input) return readCommanderBackendPreference();
   const raw = input as CommanderBackendSettings & { backend?: string };
-  if (raw.backend !== 'orkas-core-agent') {
-    return writeCommanderBackendPreference({ backend: 'orkas-core-agent', authEntryId: null, localCli: null });
+  if (raw.backend !== 'cogseed-core-agent') {
+    return writeCommanderBackendPreference({ backend: 'cogseed-core-agent', authEntryId: null, localCli: null });
   }
   return writeCommanderBackendPreference(input);
 }

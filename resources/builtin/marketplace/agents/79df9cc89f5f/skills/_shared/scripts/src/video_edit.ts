@@ -842,7 +842,7 @@ export async function editVideo(p: EditParams): Promise<EditResult> {
     const inputs = p.inputAbsPaths ?? [];
     if (inputs.length < 2) return fail('E_EDIT_ARG', 'concat requires input_paths with at least 2 entries');
     // concat demuxer with a temp list file, re-encoding so differing codecs join cleanly.
-    const listPath = path.join(os.tmpdir(), `orkas-concat-${randomUUID()}.txt`);
+    const listPath = path.join(os.tmpdir(), `cogseed-concat-${randomUUID()}.txt`);
     const listBody = inputs.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
     await fs.writeFile(listPath, listBody, 'utf8');
     try {

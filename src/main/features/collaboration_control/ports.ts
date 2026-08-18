@@ -2,7 +2,7 @@ import type { CollaborationEvent, SharedTaskContext, WorkflowRun, WorkflowStep }
 
 export interface CollaborationScope {
   ownerId: string;
-  domain: 'group_chat' | 'mate';
+  domain: 'group_chat' | 'cogseed';
   scopeId: string;
 }
 

@@ -9,7 +9,7 @@ let streamRequests: any[] = [];
 
 vi.mock('electron', () => ({
   ipcMain: {
-    handle: (c: string, f: any) => { if (c === 'orkas.invoke') invokeHandler = f; },
+    handle: (c: string, f: any) => { if (c === 'cogseed.invoke') invokeHandler = f; },
     on: vi.fn(),
   },
   shell: { openExternal: vi.fn(), showItemInFolder: vi.fn() },
@@ -27,7 +27,7 @@ const UID = 'asideIpcUser';
 
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aside-ipc-'));
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   invokeHandler = null;
   streamRequests = [];
   vi.resetModules();
@@ -37,7 +37,7 @@ beforeEach(async () => {
   (await import('../../../src/main/ipc/index')).register();
 });
 afterEach(() => {
-  delete process.env.ORKAS_WORKSPACE_ROOT;
+  delete process.env.COGSEED_WORKSPACE_ROOT;
   fs.rmSync(root, { recursive: true, force: true });
   vi.resetModules();
 });

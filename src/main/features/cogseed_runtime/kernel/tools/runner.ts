@@ -5,9 +5,9 @@ import { RUNTIME_FILE_TOOLS, runRuntimeFileTool, type RuntimeToolCallContext, ty
 import { normalizeRuntimeRoots } from './permissions';
 import { runRuntimeBashTool } from './shell-tools';
 import { runRuntimeSkillTool } from './skill-tools';
-import type { MateConnectorManager } from '../../../cogseed_backend/connector-manager';
-import type { MateKbManager } from '../../../cogseed_backend/mate-kb-store';
-import { mateRuntimeSessionToolResultsDir } from '../../../../paths';
+import type { CogSeedConnectorManager } from '../../../cogseed_backend/connector-manager';
+import type { CogSeedKbManager } from '../../../cogseed_backend/cogseed-kb-store';
+import { cogseedRuntimeSessionToolResultsDir } from '../../../../paths';
 import type { RuntimeHostToolName } from '../../protocol';
 import type { RuntimeSkillVersionPin } from '../../protocol';
 import type { RuntimeHostToolClient } from './host-tools';
@@ -25,8 +25,8 @@ export interface RuntimeToolRunnerOptions {
   allowedSkillIds?: readonly string[];
   skillVersionPins?: readonly RuntimeSkillVersionPin[];
   maxInlineToolResultTokens?: number;
-  connectorManager?: MateConnectorManager;
-  kbManager?: MateKbManager;
+  connectorManager?: CogSeedConnectorManager;
+  kbManager?: CogSeedKbManager;
   hostToolClient?: RuntimeHostToolClient;
 }
 
@@ -54,7 +54,7 @@ export function createRuntimeToolRunner(options: RuntimeToolRunnerOptions): Runt
     skillVersionPins: options.skillVersionPins ?? [],
   };
   const capTokens = options.maxInlineToolResultTokens ?? DEFAULT_INLINE_RESULT_TOKENS;
-  const toolResultsDir = mateRuntimeSessionToolResultsDir(options.userId, options.runtimeSessionId);
+  const toolResultsDir = cogseedRuntimeSessionToolResultsDir(options.userId, options.runtimeSessionId);
   const capRuntimeResult = (name: string, result: RuntimeToolResult): RuntimeToolResult => capToolResult(
     name,
     result as any,

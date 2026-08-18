@@ -16,7 +16,7 @@ import * as path from 'node:path';
 
 const UID = 'p3394-hermes-user';
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-hermes-'));
-process.env.ORKAS_WORKSPACE_ROOT = WORK;
+process.env.COGSEED_WORKSPACE_ROOT = WORK;
 const RESULT_FILE = path.join(WORK, 'result.jsonl');
 const STATE_FILE = path.join(WORK, 'adapter-state.json');
 
@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   const { P3394BridgeExecutor } = await import('../src/main/features/p3394_bridge/executor');
   const { buildP3394BridgeManifest } = await import('../src/main/features/p3394_bridge/manifest');
   const { P3394CogseedRuntimeAdapter } = await import('../src/main/features/p3394_bridge/cogseed-runtime-adapter');
-  const { createMateRuntimeController } = await import('../src/main/features/cogseed_backend/runtime-controller');
+  const { createCogSeedRuntimeController } = await import('../src/main/features/cogseed_backend/runtime-controller');
   const { P3394HttpChannel } = await import('../src/main/features/p3394_bridge/http-channel');
 
   const manifestOf = (id: string) => {
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
       yield { type: 'result', status: 'completed', text: 'CogSeed 回复：已收到消息「' + task.slice(0, 200) + '」。P3394 互操作验证成功。', metadata: {} };
     },
   };
-  const controller = createMateRuntimeController({ runtime });
+  const controller = createCogSeedRuntimeController({ runtime });
   const adapter = new P3394CogseedRuntimeAdapter({ userId: () => UID, controller, pollIntervalMs: 50, stateFile: STATE_FILE });
 
   const channel = new P3394HttpChannel('cogseed-http', {

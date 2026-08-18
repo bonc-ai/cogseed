@@ -12,7 +12,7 @@
 //                                         document)
 //
 // Tables ship under `src/renderer/locales/*.json`. The primary delivery
-// is a synchronous `ipcRenderer.sendSync('orkas:bootI18n')` in preload, which
+// is a synchronous `ipcRenderer.sendSync('cogseed:bootI18n')` in preload, which
 // hands the renderer `{lang, tables}` before any DOM script runs — see the
 // `_bootSyncI18n` IIFE below. The async `window.cogseed.getLocales` /
 // `getLanguage` IPC pair remains as a fallback inside `initI18n()` for the
@@ -69,7 +69,7 @@ function _setDocumentLang(lang) {
   document.documentElement.setAttribute('lang', getLocaleMeta(lang).htmlLang);
 }
 
-// Synchronous boot path. preload.js does `ipcRenderer.sendSync('orkas:bootI18n')`
+// Synchronous boot path. preload.js does `ipcRenderer.sendSync('cogseed:bootI18n')`
 // and exposes the result on `window.__cogseedI18nBoot` BEFORE any DOM scripts
 // run. By the time this script tag executes (index.html line 1118 — after all
 // data-i18n elements have been parsed), the table + the user's lang are

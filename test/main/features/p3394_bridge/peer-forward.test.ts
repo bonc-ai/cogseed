@@ -136,7 +136,7 @@ describe('P3394 peer forwarding', () => {
     const { deps, calls } = makeDeps();
     const envelope = makeEnvelope();
 
-    for (const target of ['', 'node-a', 'cogseed', 'mate']) {
+    for (const target of ['', 'node-a', 'cogseed', 'cogseed']) {
       const result = await forwardEnvelopeToPeer(envelope, target, deps);
       expect(result).toEqual({ ok: false, error: 'p3394_forward_invalid_target' });
     }

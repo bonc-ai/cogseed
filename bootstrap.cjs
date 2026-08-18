@@ -18,9 +18,6 @@ const {
   normalizeEnv,
 } = require('./src/main/identity-contract.cjs');
 const {
-  migrateLegacyInstallRoots,
-} = require('./src/main/cogseed-install-migration.cjs');
-const {
   initializeInstallDataRoot,
   selectRuntimeVariant,
 } = require('./src/main/install-data-root.cjs');
@@ -35,23 +32,20 @@ function detectPackagedRuntime() {
 
 try {
   const isPackaged = detectPackagedRuntime();
-  const isPackagedDev = isPackaged && packageMeta.orkasBuildChannel === 'packaged-dev';
+  const isPackagedDev = isPackaged && packageMeta.cogseedBuildChannel === 'packaged-dev';
   const normalizedEnv = normalizeEnv(process.env);
   Object.assign(process.env, normalizedEnv);
-  if (isPackagedDev && !process.env.COGSEED_WORKSPACE_ROOT && !process.env.ORKAS_WORKSPACE_ROOT) {
+  if (isPackagedDev && !process.env.COGSEED_WORKSPACE_ROOT && !process.env.COGSEED_WORKSPACE_ROOT) {
     process.env.COGSEED_WORKSPACE_ROOT = path.join(os.homedir(), '.cogseed-dev', 'data');
   }
   const runtimeVariant = selectRuntimeVariant({
     argv: process.argv.slice(1),
-    envVariant: process.env.ORKAS_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT,
+    envVariant: process.env.COGSEED_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT,
     isPackaged,
-    sourceVariant: packageMeta.orkasSourceRuntimeVariant,
+    sourceVariant: packageMeta.cogseedSourceRuntimeVariant,
   });
   process.env.COGSEED_SOURCE_RUNTIME_VARIANT = runtimeVariant;
-  process.env.ORKAS_RUNTIME_VARIANT = runtimeVariant;
-  migrateLegacyInstallRoots({
-    env: process.env,
-  });
+  process.env.COGSEED_RUNTIME_VARIANT = runtimeVariant;
   initializeInstallDataRoot(process.env.COGSEED_SOURCE_RUNTIME_VARIANT, {
     allowWorkspaceOverride: isPackagedDev,
   });
@@ -63,10 +57,10 @@ try {
 
 for (const arg of process.argv.slice(1)) {
   if (typeof arg !== 'string') continue;
-  if (arg.startsWith('--orkas-api-base-url=')) {
-    process.env.ORKAS_API_BASE_URL = arg.slice('--orkas-api-base-url='.length);
-  } else if (arg.startsWith('--orkas-voice-api-base=')) {
-    process.env.ORKAS_VOICE_API_BASE = arg.slice('--orkas-voice-api-base='.length);
+  if (arg.startsWith('--cogseed-api-base-url=')) {
+    process.env.COGSEED_API_BASE_URL = arg.slice('--cogseed-api-base-url='.length);
+  } else if (arg.startsWith('--cogseed-voice-api-base=')) {
+    process.env.COGSEED_VOICE_API_BASE = arg.slice('--cogseed-voice-api-base='.length);
   }
 }
 

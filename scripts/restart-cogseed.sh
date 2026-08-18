@@ -11,7 +11,7 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VARIANT="cogseed"
-RUN_LOG="/tmp/cogseed-agent-${VARIANT}-run.log"
+RUN_LOG="/tmp/cogseed-${VARIANT}-run.log"
 DATA_LOGS="$HOME/.cogseed/runtime-variants/${VARIANT}/data/logs"
 ELECTRON_APP="$APP_DIR/node_modules/electron/dist/CogSeed.app/Contents/MacOS/Electron"
 
@@ -35,7 +35,7 @@ worktree_pids() {
   while read -r pid command; do
     [ -n "$pid" ] || continue
     case "$command" in
-      *"$APP_DIR/node_modules/.bin/electron ."|*"$APP_DIR/node_modules/.bin/electron . --orkas-runtime-variant=${VARIANT}"*|"$ELECTRON_APP"|"$ELECTRON_APP ."|"$ELECTRON_APP $APP_DIR --orkas-runtime-variant=${VARIANT}"*)
+      *"$APP_DIR/node_modules/.bin/electron ."|*"$APP_DIR/node_modules/.bin/electron . --cogseed-runtime-variant=${VARIANT}"*|"$ELECTRON_APP"|"$ELECTRON_APP ."|"$ELECTRON_APP $APP_DIR --cogseed-runtime-variant=${VARIANT}"*)
         printf '%s\n' "$pid"
         ;;
       # 托管网关子进程（gateway.cjs）也是本工作区运行时的一部分：主进程

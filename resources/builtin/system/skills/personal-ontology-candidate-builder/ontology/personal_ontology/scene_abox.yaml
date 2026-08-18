@@ -68,7 +68,7 @@ abox:
     - id: CAND_EX_03
       type: positive_fewshot
       name: 项目实例
-      user_query: "我在做 Mate Agent 项目，代码在 ~/mate-agent。"
+      user_query: "我在做 Mate Agent 项目，代码在 ~/cogseed-agent。"
       expected_understanding: "值得记住的项目实体（实例）"
       expected_query_plan:
         - 识别为 instance 类候选

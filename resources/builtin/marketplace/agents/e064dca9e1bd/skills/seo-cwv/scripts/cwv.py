@@ -1,6 +1,6 @@
 """seo-cwv — Core Web Vitals via Google PageSpeed Insights (free, no OAuth).
 
-stdlib only. Calls PSI v5 (keyless, or a free key via --key / ORKAS_PAGESPEED_KEY)
+stdlib only. Calls PSI v5 (keyless, or a free key via --key / COGSEED_PAGESPEED_KEY)
 and parses BOTH lab (Lighthouse) and field (CrUX real-user) metrics. Field data
 is Measured (real users); lab data is Estimated (synthetic). Emits
 performance-dimension findings that feed `seo-report --add`.
@@ -31,7 +31,7 @@ def fetch_psi(url: str, strategy: str = "mobile", key: str | None = None,
     if key:
         params.append(("key", key))
     full = PSI_ENDPOINT + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(full, headers={"User-Agent": "OrkasSEOBot/1.0"})
+    req = urllib.request.Request(full, headers={"User-Agent": "CogSeedSEOBot/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # default opener → honors proxy env
         return json.loads(resp.read().decode("utf-8", "replace"))
 
@@ -150,11 +150,11 @@ def main(argv):
     ap = argparse.ArgumentParser(prog="seo-cwv")
     ap.add_argument("url")
     ap.add_argument("--strategy", choices=["mobile", "desktop"], default="mobile")
-    ap.add_argument("--key", default=None, help="PageSpeed API key (else ORKAS_PAGESPEED_KEY env)")
+    ap.add_argument("--key", default=None, help="PageSpeed API key (else COGSEED_PAGESPEED_KEY env)")
     ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
-    key = args.key or os.environ.get("ORKAS_PAGESPEED_KEY")
+    key = args.key or os.environ.get("COGSEED_PAGESPEED_KEY")
     resp = fetch_psi(args.url, args.strategy, key, args.timeout)
     if "error" in resp:
         msg = (resp.get("error") or {}).get("message") or "PageSpeed API error"

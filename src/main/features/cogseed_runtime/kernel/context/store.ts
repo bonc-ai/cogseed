@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { mateRuntimeContextsDir } from '../../../../paths';
+import { cogseedRuntimeContextsDir } from '../../../../paths';
 import { genId12, nowIso, safeId, writeJson } from '../../../../storage';
 import { normalizeRuntimePath } from '../tools/permissions';
 
@@ -24,7 +24,7 @@ function safeFileName(fileName: string): string {
 }
 
 export function runtimeContextImportDir(uid: string, contextId: string): string {
-  return path.join(mateRuntimeContextsDir(uid), 'imports', assertContextId(contextId));
+  return path.join(cogseedRuntimeContextsDir(uid), 'imports', assertContextId(contextId));
 }
 
 export function runtimeContextImportFile(uid: string, contextId: string, fileName: string): string {

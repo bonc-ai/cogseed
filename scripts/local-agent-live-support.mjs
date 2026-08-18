@@ -1,7 +1,7 @@
 /**
  * Pure helpers for the opt-in local-agent live test.
  *
- * Keep this module free of Orkas imports so its install orchestration can be
+ * Keep this module free of CogSeed imports so its install orchestration can be
  * unit-tested without loading paths.ts or touching a real user data root.
  */
 
@@ -16,11 +16,11 @@ export const LOCAL_AGENT_TYPES = Object.freeze([
 ]);
 
 export const LOCAL_AGENT_ENV_KEYS = Object.freeze({
-  claude: 'ORKAS_CLAUDE_PATH',
-  codex: 'ORKAS_CODEX_PATH',
-  openclaw: 'ORKAS_OPENCLAW_PATH',
-  opencode: 'ORKAS_OPENCODE_PATH',
-  hermes: 'ORKAS_HERMES_PATH',
+  claude: 'COGSEED_CLAUDE_PATH',
+  codex: 'COGSEED_CODEX_PATH',
+  openclaw: 'COGSEED_OPENCLAW_PATH',
+  opencode: 'COGSEED_OPENCODE_PATH',
+  hermes: 'COGSEED_HERMES_PATH',
 });
 
 const BIN_NAMES = Object.freeze({

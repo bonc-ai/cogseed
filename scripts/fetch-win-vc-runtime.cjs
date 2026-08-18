@@ -21,8 +21,8 @@ const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const NOTICE = `Bundled Microsoft Visual C++ runtime (application-local)
 =========================================================
 
-Orkas ships the Microsoft Visual C++ runtime DLLs required by its Windows
-ONNX/tokenizer and whisper.cpp binaries beside the application. Orkas does not
+CogSeed ships the Microsoft Visual C++ runtime DLLs required by its Windows
+ONNX/tokenizer and whisper.cpp binaries beside the application. CogSeed does not
 install or modify the machine-wide Visual C++ Redistributable.
 
 Source package:
@@ -33,8 +33,8 @@ Source package:
 Microsoft redistributable terms apply:
   https://visualstudio.microsoft.com/license-terms/
 
-Application-local deployment means Orkas must deliver runtime security and
-servicing updates through normal Orkas application updates.
+Application-local deployment means CogSeed must deliver runtime security and
+servicing updates through normal CogSeed application updates.
 `;
 
 function argValue(flag, argv = process.argv) {
@@ -69,10 +69,10 @@ function matchesFile(file, expected) {
 }
 
 function cacheRoot() {
-  if (process.env.ORKAS_RUNTIME_CACHE_DIR) {
-    return path.join(path.resolve(process.env.ORKAS_RUNTIME_CACHE_DIR), 'vc');
+  if (process.env.COGSEED_RUNTIME_CACHE_DIR) {
+    return path.join(path.resolve(process.env.COGSEED_RUNTIME_CACHE_DIR), 'vc');
   }
-  return path.join(os.homedir(), '.cache', 'orkas-runtime', 'vc');
+  return path.join(os.homedir(), '.cache', 'cogseed-runtime', 'vc');
 }
 
 async function downloadOnce(url) {
@@ -231,7 +231,7 @@ function assertRecord(label, file, expected) {
 
 function extractPackage(archiveFile, destination, contract = WINDOWS_VC_RUNTIME_CONTRACT, options = {}) {
   assertRecord('pinned Microsoft VC Redistributable', archiveFile, contract.source);
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-vc-redist-'));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-vc-redist-'));
   const extract = options.extractArchive || options.sevenZipExtract || defaultArchiveExtract;
   try {
     const attachedFile = path.join(work, 'attached.cab');
@@ -260,7 +260,7 @@ function extractPackage(archiveFile, destination, contract = WINDOWS_VC_RUNTIME_
 
 function ready(destination, contract = WINDOWS_VC_RUNTIME_CONTRACT) {
   try {
-    const marker = JSON.parse(fs.readFileSync(path.join(destination, '.orkas-vc-runtime.json'), 'utf8'));
+    const marker = JSON.parse(fs.readFileSync(path.join(destination, '.cogseed-vc-runtime.json'), 'utf8'));
     if (marker.schema !== contract.schema
       || marker.platformKey !== contract.platformKey
       || marker.version !== contract.version
@@ -302,7 +302,7 @@ async function installWindowsVcRuntime(options = targetOptions()) {
       assertExecutableArch(path.join(temporary, name), 'win32', 'x64');
     }
     fs.writeFileSync(path.join(temporary, 'NOTICE.txt'), NOTICE);
-    fs.writeFileSync(path.join(temporary, '.orkas-vc-runtime.json'), `${JSON.stringify({
+    fs.writeFileSync(path.join(temporary, '.cogseed-vc-runtime.json'), `${JSON.stringify({
       schema: contract.schema,
       platformKey: contract.platformKey,
       version: contract.version,

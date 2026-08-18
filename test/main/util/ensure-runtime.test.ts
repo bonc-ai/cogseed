@@ -5,14 +5,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 const PYTHON_ARCHIVE = Buffer.alloc(123, 0x50);
 const PYTHON_ARCHIVE_SHA256 = crypto.createHash('sha256').update(PYTHON_ARCHIVE).digest('hex');
 
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-runtime-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-'));
 });
 
 afterEach(() => {
@@ -74,7 +74,7 @@ function writeManifest(key: string, executable: string): string {
 }
 
 function writeMarker(dir: string, kind: 'python' | 'uv' | 'node', key: string, asset: string, sha256: string, size: number): void {
-  fs.writeFileSync(path.join(dir, '.orkas-runtime.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, '.cogseed-runtime.json'), JSON.stringify({
     schema: 1,
     kind,
     platformKey: key,

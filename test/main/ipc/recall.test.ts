@@ -177,7 +177,7 @@ const skillDraftMock = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
-  ipcMain: { handle: (channel: string, fn: InvokeFn) => { if (channel === 'orkas.invoke') invokeHandler = fn; }, on: vi.fn() },
+  ipcMain: { handle: (channel: string, fn: InvokeFn) => { if (channel === 'cogseed.invoke') invokeHandler = fn; }, on: vi.fn() },
   shell: { openExternal: vi.fn(async () => undefined), showItemInFolder: vi.fn() },
   BrowserWindow: { getFocusedWindow: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
   dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
@@ -207,7 +207,7 @@ vi.mock('../../../src/main/features/recall/usage-feedback-service', () => usageF
 vi.mock('../../../src/main/features/recall/skill-draft-service', () => skillDraftMock);
 
 beforeEach(async () => {
-  process.env.ORKAS_WORKSPACE_ROOT = os.tmpdir();
+  process.env.COGSEED_WORKSPACE_ROOT = os.tmpdir();
   invokeHandler = null;
   vi.resetModules(); vi.clearAllMocks();
   vi.doMock('../../../src/main/ipc/local_agents', () => ({ invokeHandlers: {} }));

@@ -29,7 +29,7 @@ Render an audit into the deliverable: a dashboard spec the chat can show inline,
 ## How to call
 
 ```
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" seo-report report -- --audit <audit.json> [--crawl <crawl.json>] [--opportunities <opportunities.json>] [--geo-probe <geo-probe.json>] [--plan <ACTION-PLAN.md>] [--out <dashboard.json>]
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" seo-report report -- --audit <audit.json> [--crawl <crawl.json>] [--opportunities <opportunities.json>] [--geo-probe <geo-probe.json>] [--plan <ACTION-PLAN.md>] [--out <dashboard.json>]
 ```
 
 - `--audit` path to the `seo-tech-audit` JSON (omit or `-` to read stdin).

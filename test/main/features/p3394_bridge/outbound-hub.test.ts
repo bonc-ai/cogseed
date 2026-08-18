@@ -15,13 +15,13 @@ import type { P3394PeerRecord } from '../../../../src/main/features/p3394_bridge
 let previousVariant: string | undefined;
 let variantName: string;
 beforeEach(() => {
-  previousVariant = process.env.ORKAS_RUNTIME_VARIANT;
+  previousVariant = process.env.COGSEED_RUNTIME_VARIANT;
   variantName = 'p3394-out-' + Math.random().toString(36).slice(2, 8);
-  process.env.ORKAS_RUNTIME_VARIANT = variantName;
+  process.env.COGSEED_RUNTIME_VARIANT = variantName;
 });
 afterEach(() => {
-  if (previousVariant === undefined) delete process.env.ORKAS_RUNTIME_VARIANT;
-  else process.env.ORKAS_RUNTIME_VARIANT = previousVariant;
+  if (previousVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
+  else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
   try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
 });
 

@@ -18,9 +18,9 @@ How to turn "here is my material + here's the video I want" into a single, inspe
 Use `stage-edit` scripts for factual ingest before writing the plan, except transcription, which runs through the required built-in `video_studio` tool.
 
 ```bash
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op probe --input raw/clip.mp4
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-edit analyze_media -- --op ocr --input raw/screen-recording.mp4
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op extract_frame --input raw/clip.mp4 --start 3 --output project/frames/clip-3s.png
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op probe --input raw/clip.mp4
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-edit analyze_media -- --op ocr --input raw/screen-recording.mp4
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-edit edit_video -- --op extract_frame --input raw/clip.mp4 --start 3 --output project/frames/clip-3s.png
 ```
 
 Call transcription directly as:
@@ -36,15 +36,15 @@ These script/tool calls return JSON. Their output is the evidence for `project/i
 Use the skill script, not a deprecated direct `video_plan` tool:
 
 ```bash
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op validate --plan project/plan.json
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op promise_check --plan project/plan.json
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op summarize --plan project/plan.json
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op validate --plan project/plan.json
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op promise_check --plan project/plan.json
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op summarize --plan project/plan.json
 ```
 
 For repeated takes:
 
 ```bash
-"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op rank_takes --takes project/takes.json
+"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" stage-plan video_plan -- --op rank_takes --takes project/takes.json
 ```
 
 The script returns JSON with a `text` field for the user-facing summary. `validate` exits non-zero when the plan is invalid; `promise_check` exits non-zero when the delivery promise fails.

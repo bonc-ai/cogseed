@@ -186,7 +186,7 @@ function _settingsRenderTaskNotifications() {
   // Only make the definitive "system notifications are off" claim when the
   // platform also exposes an actionable per-app settings destination. A
   // delivery failure on an unsupported/unprobeable desktop can surface as
-  // `denied` without proving that the user disabled Orkas in system settings.
+  // `denied` without proving that the user disabled CogSeed in system settings.
   const permissionDenied = state.enabled
     && state.permission
     && state.permission.state === 'denied'
@@ -302,7 +302,7 @@ function _settingsRenderLocalExec() {
 
 // ── Metacognition (agent self-evolution) ──
 // Stored at preferences.json::metacognition_enabled. The env var
-// `ORKAS_METACOGNITION='0'` is still a higher-priority kill switch
+// `COGSEED_METACOGNITION='0'` is still a higher-priority kill switch
 // (surfaced as `envForcedOff`); when active, the UI greys out the
 // toggle and shows an explanatory hint.
 
@@ -615,13 +615,13 @@ async function _settingsRefreshCommanderBackend() {
   const res = await window.cogseed.invoke('settings.getCommanderBackend');
   if (res && res.ok) {
     _settingsState.commanderBackendView = {
-      settings: res.settings || { backend: 'orkas-core-agent', authEntryId: null, localCli: null },
+      settings: res.settings || { backend: 'cogseed-core-agent', authEntryId: null, localCli: null },
       cloudConfigured: !!res.cloudConfigured,
     };
     return;
   }
   _settingsState.commanderBackendView = {
-    settings: { backend: 'orkas-core-agent', authEntryId: null, localCli: null },
+    settings: { backend: 'cogseed-core-agent', authEntryId: null, localCli: null },
     cloudConfigured: false,
   };
 }
@@ -630,7 +630,7 @@ function _settingsCommanderBackendOptions() {
   const view = _settingsState.commanderBackendView || {};
   return [
     {
-      value: 'orkas-core-agent',
+      value: 'cogseed-core-agent',
       label: t('settings.commander_backend.option_core'),
       hint: view.cloudConfigured
         ? t('settings.commander_backend.core_ready')
@@ -643,10 +643,10 @@ function _settingsRenderCommanderBackend() {
   const el = document.getElementById('settings-commander-backend-select');
   if (!el) return;
   const view = _settingsState.commanderBackendView || {
-    settings: { backend: 'orkas-core-agent', authEntryId: null, localCli: null },
+    settings: { backend: 'cogseed-core-agent', authEntryId: null, localCli: null },
     cloudConfigured: false,
   };
-  const backend = 'orkas-core-agent';
+  const backend = 'cogseed-core-agent';
   if (!_settingsState.commanderBackendSel || _settingsState.commanderBackendEl !== el) {
     _settingsState.commanderBackendEl = el;
     _settingsState.commanderBackendSel = _aiSelectMount(el, {
@@ -672,7 +672,7 @@ function _settingsRenderCommanderBackend() {
 }
 
 async function _settingsSaveCommanderBackend() {
-  const settings = { backend: 'orkas-core-agent', authEntryId: null, localCli: null };
+  const settings = { backend: 'cogseed-core-agent', authEntryId: null, localCli: null };
   _settingsSetStatus('settings-commander-backend-status', '', t('settings.save_loading'));
   const res = await window.cogseed.invoke('settings.setCommanderBackend', { settings });
   if (!res || !res.ok) {
@@ -3028,7 +3028,7 @@ function _settingsRenderImageEntries() {
 // ── Video generation API key section ────────────────────────────────────
 //
 // Dedicated BYO video-generation credentials. The open-source build exposes
-// user-owned provider keys only; managed Orkas video providers stay stripped.
+// user-owned provider keys only; managed CogSeed video providers stay stripped.
 
 const _VIDEO_AUTH_PROVIDER_OPTIONS = [
   { id: 'doubao', label: 'DouBao · Seedance', docs: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey' },

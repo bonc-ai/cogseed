@@ -50,9 +50,9 @@ vi.mock('../../../src/main/model/client', () => ({
 }));
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-kbidx-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-kbidx-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   chatWithModelMock.mockReset();
   chatWithModelMock.mockResolvedValue({
     ok: true,
@@ -72,7 +72,7 @@ afterEach(async () => {
     const kb = await import('../../../src/main/features/kb_vector');
     kb.closeAllKb();
   } catch { /* ignore */ }
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -186,7 +186,7 @@ describe('kb_indexer › enqueue + processJob', () => {
   });
 
   it('times out one stuck embedding and still processes the next queued file', async () => {
-    process.env.ORKAS_LIBRARY_EMBED_TIMEOUT_MS = '1000';
+    process.env.COGSEED_LIBRARY_EMBED_TIMEOUT_MS = '1000';
     try {
       writeCtx('stuck.md', '__HANG_EMBED__');
       writeCtx('after.md', 'this file must still become searchable');
@@ -202,7 +202,7 @@ describe('kb_indexer › enqueue + processJob', () => {
       const reconcile = await idx.reconcile(TEST_UID);
       expect(reconcile.enqueuedUpsert).toBe(0);
     } finally {
-      delete process.env.ORKAS_LIBRARY_EMBED_TIMEOUT_MS;
+      delete process.env.COGSEED_LIBRARY_EMBED_TIMEOUT_MS;
     }
   });
 

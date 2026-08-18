@@ -4,7 +4,7 @@ Two callers, one verdict:
 
   * ``src/main/features/security/sentry-adapter.ts`` — local folder imports and
     marketplace installs, driven from the Electron main process.
-  * ``bin/orkas-pkg.cjs`` — external package installs (``orkas-pkg install
+  * ``bin/cogseed-pkg.cjs`` — external package installs (``cogseed-pkg install
     <git-url>``), driven from a standalone Node CLI that the model invokes
     through bash.
 

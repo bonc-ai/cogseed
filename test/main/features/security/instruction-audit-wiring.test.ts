@@ -22,7 +22,7 @@ let prevWs: string | undefined;
 
 afterEach(() => {
   vi.doUnmock('../../../../src/main/model/client');
-  if (prevWs !== undefined) process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  if (prevWs !== undefined) process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (tmpRoot) fs.rmSync(tmpRoot, { recursive: true, force: true });
   tmpRoot = '';
 });
@@ -30,8 +30,8 @@ afterEach(() => {
 describe('instruction audit wiring › tool-less and file-less turn', () => {
   it('passes disableTools and ephemeralSession through the chat wiring', async () => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'instr-wiring-'));
-    prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-    process.env.ORKAS_WORKSPACE_ROOT = tmpRoot;
+    prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+    process.env.COGSEED_WORKSPACE_ROOT = tmpRoot;
 
     const chatWithModel = vi.fn(async () => ({
       ok: true,

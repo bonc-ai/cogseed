@@ -10,7 +10,7 @@ const TOKEN = process.env.GOOGLE_ACCESS_TOKEN || '';
 const BASE = 'https://sheets.googleapis.com/v4';
 const SPREADSHEET_ID_DESC =
   'The long hash in the URL after /spreadsheets/d/. For existing files, the user must first ' +
-  'select the spreadsheet from the Google Sheets connector menu or use a spreadsheet created by Orkas.';
+  'select the spreadsheet from the Google Sheets connector menu or use a spreadsheet created by CogSeed.';
 
 const TOOLS = [
   {

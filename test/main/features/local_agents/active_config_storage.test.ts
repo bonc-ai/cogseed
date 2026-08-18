@@ -11,7 +11,7 @@ beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'active-storage-test-'));
   tempHome = path.join(root, 'home');
   fs.mkdirSync(tempHome, { recursive: true });
-  process.env.ORKAS_WORKSPACE_ROOT = root;
+  process.env.COGSEED_WORKSPACE_ROOT = root;
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
 });

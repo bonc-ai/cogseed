@@ -12,18 +12,18 @@ describe('P3394 node -> AI team projection', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-proj-'));
-    prevWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-    process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+    prevWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+    process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
     // Agent 目录缓存按用户隔离；每例使用唯一 uid，避免上一个用例的缓存
     // 继续参与下一例的 existing-agent 查重。
     testUid = 'u-projection-' + Math.random().toString(36).slice(2, 10);
     // 每次运行唯一变体：投影状态文件按变体目录隔离，杜绝跨测试/跨运行污染。
     testVariant = 'p3394-proj-test-' + Math.random().toString(36).slice(2, 10);
-    process.env.ORKAS_RUNTIME_VARIANT = testVariant;
+    process.env.COGSEED_RUNTIME_VARIANT = testVariant;
   });
 
   afterEach(() => {
-    if (prevWorkspaceRoot !== undefined) process.env.ORKAS_WORKSPACE_ROOT = prevWorkspaceRoot;
+    if (prevWorkspaceRoot !== undefined) process.env.COGSEED_WORKSPACE_ROOT = prevWorkspaceRoot;
     fs.rmSync(tmpDir, { recursive: true, force: true });
     try {
       const variantDir = path.join(os.homedir(), '.cogseed', 'runtime-variants', testVariant);

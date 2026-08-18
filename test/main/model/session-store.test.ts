@@ -10,7 +10,7 @@ import * as path from 'node:path';
 // / anon → local; gconv / gmember / skill / agent → cloud).
 //
 // CRITICAL: this file previously called `activateUser(uid)` in `beforeAll` WITHOUT setting
-// ORKAS_WORKSPACE_ROOT first, so the real `PC/data/` received a `data/<uid>/` skeleton + a
+// COGSEED_WORKSPACE_ROOT first, so the real `PC/data/` received a `data/<uid>/` skeleton + a
 // rewritten `users.json` every time the test suite ran. Reproduce the fix by keeping the
 // workspace pinned to a per-run tmp dir and resetting the module graph so `paths.ts` picks it
 // up before anything imports `users`.
@@ -20,16 +20,16 @@ let prevWs: string | undefined;
 const uid = '12155733';
 
 beforeAll(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-sstore-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-sstore-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(uid);
 });
 
 afterAll(() => {
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -120,9 +120,9 @@ describe('session-store.sessionFileFor', () => {
       .toThrow(/invalid session id/);
   });
 
-  it('REJECTS legacy brand-prefixed ids (orkas- / aiteam-)', async () => {
+  it('REJECTS legacy brand-prefixed ids (cogseed- / aiteam-)', async () => {
     const { sessionFileFor } = await loadRouting();
-    expect(() => sessionFileFor('orkas-agent-abcdef123456'))
+    expect(() => sessionFileFor('cogseed-agent-abcdef123456'))
       .toThrow(/invalid session id/);
     expect(() => sessionFileFor('aiteam-agent-abcdef123456'))
       .toThrow(/invalid session id/);

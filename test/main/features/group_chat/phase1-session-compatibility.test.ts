@@ -6,22 +6,22 @@ import {
 } from '../../../../src/main/features/group_chat/state';
 import { resolveRecipients } from '../../../../src/main/features/group_chat/router';
 import {
-  resolveMateSessionIdentity,
+  resolveCogSeedSessionIdentity,
 } from '../../../../src/main/features/cogseed_backend/actor-session-facade';
 
 describe('group_chat / Mate Phase 1 session compatibility', () => {
-  it('keeps gconv/gmember public session shapes while resolving Mate-owned storage identities', () => {
+  it('keeps gconv/gmember public session shapes while resolving CogSeed-owned storage identities', () => {
     const gconv = buildGconvSessionId('conversation-compat');
     const gmember = buildGmemberSessionId('conversation-compat', 'writer');
 
     expect(gconv).toBe('gconv-conversation-compat');
     expect(gmember).toBe('gmember-conversation-compat-writer');
-    expect(resolveMateSessionIdentity(gconv)).toMatchObject({
-      canonicalSessionId: 'mate-session-gconv-conversation-compat',
+    expect(resolveCogSeedSessionIdentity(gconv)).toMatchObject({
+      canonicalSessionId: 'cogseed-session-gconv-conversation-compat',
       actorRole: 'commander',
     });
-    expect(resolveMateSessionIdentity(gmember)).toMatchObject({
-      canonicalSessionId: 'mate-session-gmember-conversation-compat-writer',
+    expect(resolveCogSeedSessionIdentity(gmember)).toMatchObject({
+      canonicalSessionId: 'cogseed-session-gmember-conversation-compat-writer',
       actorRole: 'member',
       actorId: 'writer',
     });

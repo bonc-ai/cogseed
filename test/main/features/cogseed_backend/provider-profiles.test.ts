@@ -3,23 +3,23 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const USER_A = 'mate-profile-user-a';
-const USER_B = 'mate-profile-user-b';
-const USER_C = 'mate-profile-user-c';
+const USER_A = 'cogseed-profile-user-a';
+const USER_B = 'cogseed-profile-user-b';
+const USER_C = 'cogseed-profile-user-c';
 
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-provider-profiles-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-provider-profiles-'));
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -28,7 +28,7 @@ async function activateAndAddApiKey(userId: string, provider: string, key: strin
   users.activateUser(userId);
   const auth = await import('../../../../src/main/features/auth');
   const { profileId } = await auth.addApiKey(provider, key, undefined, baseUrl ? { baseUrl } : undefined);
-  await auth.addEntry({ provider, model: 'mate-test-model', profileId });
+  await auth.addEntry({ provider, model: 'cogseed-test-model', profileId });
 }
 
 async function activateAndAddCustomProvider(
@@ -56,9 +56,9 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       profileId: 'openai-compatible:default',
       provider: 'openai-compatible',
       model: expect.any(String),
@@ -68,9 +68,9 @@ describe('CogSeed provider profiles', () => {
   });
 
   it('rejects a missing profile', async () => {
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).rejects.toThrow(/profile/i);
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).rejects.toThrow(/profile/i);
   });
 
   it('resolves an anthropic API-key profile to the anthropic wire protocol with the default endpoint', async () => {
@@ -78,13 +78,13 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       profileId: 'anthropic:default',
       provider: 'anthropic',
       protocol: 'anthropic',
-      model: 'mate-test-model',
+      model: 'cogseed-test-model',
       apiKey: 'sk-ant-api03-anthropic-key',
       baseUrl: 'https://api.anthropic.com',
       maxOutputTokens: 8192,
@@ -96,9 +96,9 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       provider: 'google',
       protocol: 'gemini',
       apiKey: 'google-api-key',
@@ -112,9 +112,9 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       provider: 'moonshot',
       protocol: 'openai-completions',
       apiKey: 'sk-moonshot-key',
@@ -127,9 +127,9 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).rejects.toThrow(/profile/i);
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).rejects.toThrow(/profile/i);
   });
 
   it('reuses an OpenAI-protocol custom provider as the OpenAI-compatible profile', async () => {
@@ -143,9 +143,9 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       profileId: providerId,
       provider: providerId,
       protocol: 'openai-completions',
@@ -166,9 +166,9 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       profileId: providerId,
       provider: providerId,
       protocol: 'anthropic',
@@ -190,9 +190,9 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       profileId: providerId,
       provider: providerId,
       protocol: 'gemini',
@@ -238,8 +238,8 @@ describe('CogSeed provider profiles', () => {
     });
     users.activateUser(USER_B);
 
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       profileId: 'anthropic:default',
       provider: 'anthropic',
       protocol: 'anthropic',
@@ -256,12 +256,12 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       apiKey: 'sk-openai-fallback-key',
       baseUrl: 'https://fallback.test/v1',
-      model: 'mate-test-model',
+      model: 'cogseed-test-model',
       protocol: 'openai-completions',
     });
   });
@@ -271,13 +271,13 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       profileId: 'openai:default',
       provider: 'openai',
       protocol: 'openai-responses',
-      model: 'mate-test-model',
+      model: 'cogseed-test-model',
       apiKey: 'sk-openai-responses-key',
       baseUrl: 'https://api.openai.com/v1',
       maxOutputTokens: 8192,
@@ -295,9 +295,9 @@ describe('CogSeed provider profiles', () => {
 
     const users = await import('../../../../src/main/features/users');
     users.activateUser(USER_B);
-    const { resolveMateApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
+    const { resolveCogSeedApiKeyProfile } = await import('../../../../src/main/features/cogseed_backend/provider-profiles');
 
-    await expect(resolveMateApiKeyProfile(USER_A)).resolves.toMatchObject({
+    await expect(resolveCogSeedApiKeyProfile(USER_A)).resolves.toMatchObject({
       profileId: providerId,
       provider: providerId,
       protocol: 'openai-responses',

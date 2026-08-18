@@ -16,20 +16,20 @@ let prevBuiltin: string | undefined;
 const TEST_AGENT_ID = '222222222222';
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-builtin-marketplace-startup-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  prevBuiltin = process.env.ORKAS_BUILTIN_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
-  process.env.ORKAS_BUILTIN_ROOT = path.join(tmpDir, 'builtin');
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-builtin-marketplace-startup-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  prevBuiltin = process.env.COGSEED_BUILTIN_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_BUILTIN_ROOT = path.join(tmpDir, 'builtin');
   postJsonMock.mockReset();
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
-  if (prevBuiltin === undefined) delete process.env.ORKAS_BUILTIN_ROOT;
-  else process.env.ORKAS_BUILTIN_ROOT = prevBuiltin;
+  if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  if (prevBuiltin === undefined) delete process.env.COGSEED_BUILTIN_ROOT;
+  else process.env.COGSEED_BUILTIN_ROOT = prevBuiltin;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.resetModules();
 });

@@ -12,8 +12,8 @@
  */
 
 import { RUNTIME_CAPABILITIES } from '../cogseed_runtime/protocol';
-import { readMateSession } from './session-store';
-import { readMateTaskByRequestId } from './task-store';
+import { readCogSeedSession } from './session-store';
+import { readCogSeedTaskByRequestId } from './task-store';
 
 /** Resolve the capability grants for one pending runtime request. */
 export async function resolveRuntimeCapabilities(
@@ -21,9 +21,9 @@ export async function resolveRuntimeCapabilities(
   requestId: string,
   runtimeSessionId: string,
 ): Promise<string[]> {
-  const task = await readMateTaskByRequestId(userId, requestId);
+  const task = await readCogSeedTaskByRequestId(userId, requestId);
   if (!task || task.runtimeSessionId !== runtimeSessionId) return [];
-  const session = await readMateSession(userId, task.sessionId);
+  const session = await readCogSeedSession(userId, task.sessionId);
   if (!session
     || session.ownerId !== userId
     || session.lifecycleState !== 'active'

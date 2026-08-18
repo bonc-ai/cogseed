@@ -1,0 +1,122 @@
+CogSeed THIRD-PARTY NOTICES
+============================
+
+CogSeed (c) 2026 BONC.  Portions (c) 2026 Orkas contributors.
+
+This file lists third-party software components that are distributed with,
+or linked into, CogSeed, together with their copyright and license
+information, as required by the applicable license terms.
+
+The full text of the licenses referenced below (MIT, BSD, Apache-2.0, ISC,
+BlueOak-1.0.0, GPL-3.0, LGPL-2.1, MPL-2.0) is available from the respective
+project home pages or from the SPDX license list
+(https://spdx.org/licenses/).
+
+
+--------------------------------------------------------------------
+1. Production npm dependencies
+--------------------------------------------------------------------
+
+The following packages are direct runtime dependencies of CogSeed.  Unless
+otherwise noted, they are used unmodified and are the property of their
+respective copyright holders.
+
+@earendil-works/pi-ai 0.79.10          MIT      https://github.com/earendil-works/pi
+@larksuiteoapi/node-sdk 1.72.0        MIT      https://github.com/larksuite/node-sdk
+@modelcontextprotocol/sdk 1.29.0      MIT      https://modelcontextprotocol.io
+@wecom/aibot-node-sdk 1.0.7           MIT      https://github.com/WecomTeam/aibot-node-sdk
+adm-zip 0.6.0                         MIT      https://github.com/cthackers/adm-zip
+async-mutex 0.5.0                     MIT      https://github.com/DirtyHairy/async-mutex
+better-sqlite3 12.10.0                MIT      https://github.com/WiseLibs/better-sqlite3
+electron-log 5.4.3                    MIT      https://github.com/megahertz/electron-log
+fastembed 2.1.0                       MIT      https://github.com/Anush008/fastembed-js
+jimp 1.6.1                            MIT      https://github.com/jimp-dev/jimp
+mammoth 1.12.0                        BSD-2-Clause  https://github.com/mwilliamson/mammoth.js
+node-pty 1.0.0                        MIT      https://github.com/microsoft/node-pty
+pdfjs-dist 5.7.284                    Apache-2.0  https://mozilla.github.io/pdf.js/
+socks-proxy-agent 8.0.5               MIT      https://github.com/TooTallNate/proxy-agents
+sqlite-vec 0.1.9                      MIT OR Apache-2.0  https://github.com/asg017/sqlite-vec
+tar 7.5.20                            BlueOak-1.0.0  https://github.com/isaacs/node-tar
+tsx 4.21.0                            MIT      https://github.com/privatenumber/tsx
+undici 7.29.0                         MIT      https://github.com/nodejs/undici
+ws 8.21.3                             MIT      https://github.com/websockets/ws
+yaml 2.9.0                            ISC      https://github.com/eemeli/yaml
+zod 3.25.76                           MIT      https://github.com/colinhacks/zod
+
+
+--------------------------------------------------------------------
+2. Components distributed under the GNU GPL / LGPL
+--------------------------------------------------------------------
+
+The following components are distributed or linked under the GNU General
+Public License / GNU Lesser General Public License.  They are used either
+as external command-line tools invoked as separate processes, or as
+libraries whose combined-work license is the GPL.
+
+ffmpeg-static 5.3.0
+    (c) the FFmpeg developers, https://ffmpeg.org/
+    License: GNU General Public License v3.0 or later
+    Binaries of the FFmpeg multimedia framework are distributed as
+    third-party executables and invoked as separate processes.
+
+@ffprobe-installer/ffprobe 2.1.2
+    (c) the FFmpeg developers, https://ffmpeg.org/
+    License: GNU Lesser General Public License v2.1
+    Binaries of ffprobe are distributed as third-party executables and
+    invoked as separate processes.
+
+jszip 3.10.1
+    (c) Stuart Knightley <stuart@stuartk.com>
+    License: MIT OR GPL-3.0-or-later
+    CogSeed uses this library under the MIT option of the dual license.
+    https://github.com/Stuk/jszip
+
+Both programs are free software: you can redistribute them and/or modify
+them under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your
+option) any later version.  Source code for FFmpeg is available from
+https://ffmpeg.org/download.html.  The full license text accompanies each
+binary package; a copy is also provided on request from security@bonc.com.cn.
+
+
+--------------------------------------------------------------------
+3. Vendored renderer libraries
+--------------------------------------------------------------------
+
+The following third-party libraries are vendored under src/renderer/vendor/.
+Each is released under a permissive license that permits redistribution.
+
+DOMPurify 3.2.4
+    (c) Cure53 and other contributors, https://github.com/cure53/DOMPurify
+    License: Apache-2.0 OR MPL-2.0
+    Vendored from: https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js
+
+MathJax 3.2.2 (tex-chtml.js)
+    (c) The MathJax Consortium, https://www.mathjax.org/
+    License: Apache-2.0
+
+qrcode-generator (qrcode.js)
+    (c) 2009 Kazuhiko Arase, https://github.com/kazuhikoarase/qrcode-generator
+    License: MIT
+    'QR Code' is a registered trademark of DENSO WAVE INCORPORATED.
+
+xterm.js (xterm.js, xterm.css, addon-fit.js)
+    (c) the xterm.js authors and Source/contributors, https://xtermjs.org/
+    License: MIT
+
+pinyin-firstletter (data.js)
+    Pinyin first-letter dictionary data sourced from pinyinjs by Xiaoming.
+    License: MIT
+
+
+--------------------------------------------------------------------
+4. Full license texts
+--------------------------------------------------------------------
+
+Copies of the license texts (MIT, BSD-2-Clause, Apache-2.0, ISC,
+BlueOak-1.0.0, MPL-2.0, GPL-3.0, LGPL-2.1) referenced above are available
+from:
+  * the corresponding package directories under node_modules/ in the source
+    distribution,
+  * the project home pages linked above, and
+  * the SPDX license list, https://spdx.org/licenses/.

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assessEstimatedNarrationFit,
   assessNarrationFit,
-  estimateNarrationDuration,
+  esticogseedNarrationDuration,
   measureNarrationUnits,
   narrationDurationCalibrationScale,
 } from '../../../src/main/features/tts';
@@ -66,9 +66,9 @@ describe('assessNarrationFit', () => {
   });
 });
 
-describe('estimateNarrationDuration', () => {
+describe('esticogseedNarrationDuration', () => {
   it('estimates Latin narration at a conservative natural speaking rate', () => {
-    const estimate = estimateNarrationDuration(Array.from({ length: 150 }, () => 'word').join(' '));
+    const estimate = esticogseedNarrationDuration(Array.from({ length: 150 }, () => 'word').join(' '));
 
     expect(estimate).toMatchObject({ unit: 'words', units: 150, unitsPerSec: 2.5 });
     expect(estimate.estimatedSec).toBe(60);
@@ -98,7 +98,7 @@ describe('estimateNarrationDuration', () => {
       + 'Claude Opus 4.8 安全与能力平衡，Grok 4.5 实时社交风格独树一帜。'
       + 'Agent AI 自主编码企业落地。密度法则取代参数竞赛——大模型成为基础设施。';
 
-    const estimate = estimateNarrationDuration(text);
+    const estimate = esticogseedNarrationDuration(text);
 
     expect(estimate.breakdown).toMatchObject({
       cjkCharacters: 375,
@@ -113,10 +113,10 @@ describe('estimateNarrationDuration', () => {
   it('accounts for requested speech speed without allowing invalid values', () => {
     const text = '这是一个用于时长预估的中文旁白文本';
 
-    expect(estimateNarrationDuration(text, 2).estimatedSec)
-      .toBeCloseTo(estimateNarrationDuration(text, 1).estimatedSec / 2, 2);
-    expect(estimateNarrationDuration(text, 0).estimatedSec)
-      .toBe(estimateNarrationDuration(text, 1).estimatedSec);
+    expect(esticogseedNarrationDuration(text, 2).estimatedSec)
+      .toBeCloseTo(esticogseedNarrationDuration(text, 1).estimatedSec / 2, 2);
+    expect(esticogseedNarrationDuration(text, 0).estimatedSec)
+      .toBe(esticogseedNarrationDuration(text, 1).estimatedSec);
   });
 });
 
@@ -163,7 +163,7 @@ describe('calibrated narration duration preflight', () => {
   });
 
   it('uses the same delivery band before and after synthesis', () => {
-    const estimate = estimateNarrationDuration(Array.from({ length: 150 }, () => 'word').join(' '));
+    const estimate = esticogseedNarrationDuration(Array.from({ length: 150 }, () => 'word').join(' '));
     expect(assessEstimatedNarrationFit({ estimate, targetSec: 60 })?.status).toBe('fits');
     expect(assessEstimatedNarrationFit({
       estimate: { ...estimate, estimatedSec: 60.16 },

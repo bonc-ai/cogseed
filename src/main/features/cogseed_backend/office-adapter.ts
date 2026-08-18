@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { mateRuntimeSessionToolResultsDir } from '../../paths';
+import { cogseedRuntimeSessionToolResultsDir } from '../../paths';
 import { isPathAllowed } from '../../util/path-sandbox';
 import {
   closeOfficeFile as defaultCloseOfficeFile,
@@ -11,9 +11,9 @@ import {
   type RunOfficeCliOpts,
 } from '../office/office_engine';
 import type { RuntimeHostToolName } from '../cogseed_runtime/protocol';
-import { mateCapabilityArtifactRegistry, type MateCapabilityArtifactRegistry } from './capability-artifact-lifecycle';
+import { cogseedCapabilityArtifactRegistry, type CogSeedCapabilityArtifactRegistry } from './capability-artifact-lifecycle';
 
-export interface MateHostToolScope {
+export interface CogSeedHostToolScope {
   userId: string;
   requestId: string;
   runtimeSessionId: string;
@@ -22,36 +22,36 @@ export interface MateHostToolScope {
   workingDir?: string;
 }
 
-export interface MateHostToolResult { content: string; isError?: boolean }
+export interface CogSeedHostToolResult { content: string; isError?: boolean }
 
-export interface MateOfficeAdapterDeps {
+export interface CogSeedOfficeAdapterDeps {
   officeCliAvailable?: () => boolean;
   runOfficeCli?: (args: string[], opts: RunOfficeCliOpts) => Promise<OfficeCliResult>;
   closeOfficeFile?: (file: string, cwd: string) => Promise<void>;
-  artifactRegistry?: MateCapabilityArtifactRegistry;
+  artifactRegistry?: CogSeedCapabilityArtifactRegistry;
 }
 
-export interface MateOfficeAdapter {
-  run(name: Extract<RuntimeHostToolName, `office_${string}`>, input: Record<string, unknown>, scope: MateHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<MateHostToolResult>;
-  createDocx(input: Record<string, unknown>, scope: MateHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<MateHostToolResult>;
-  createXlsx(input: Record<string, unknown>, scope: MateHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<MateHostToolResult>;
-  createPptx(input: Record<string, unknown>, scope: MateHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<MateHostToolResult>;
+export interface CogSeedOfficeAdapter {
+  run(name: Extract<RuntimeHostToolName, `office_${string}`>, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult>;
+  createDocx(input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult>;
+  createXlsx(input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult>;
+  createPptx(input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult>;
 }
 
 const OFFICE_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx']);
 const MAX_OPERATIONS = 500;
 const MAX_RESULT_CHARS = 24_000;
 
-function error(code: string, message: string): MateHostToolResult {
+function error(code: string, message: string): CogSeedHostToolResult {
   return { content: `[${code}] ${message}`, isError: true };
 }
 
-function resolvePath(raw: unknown, scope: MateHostToolScope): string | null {
+function resolvePath(raw: unknown, scope: CogSeedHostToolScope): string | null {
   if (typeof raw !== 'string' || !raw.trim() || raw.length > 4_000) return null;
   return path.resolve(scope.workingDir ?? '.', raw);
 }
 
-function pathError(file: string | null, roots: readonly string[], action: string): MateHostToolResult | null {
+function pathError(file: string | null, roots: readonly string[], action: string): CogSeedHostToolResult | null {
   if (!file) return error('E_OFFICE_INPUT', 'path is required');
   if (!OFFICE_EXTENSIONS.has(path.extname(file).toLowerCase())) return error('E_OFFICE_INPUT', 'only .docx, .xlsx, and .pptx are supported');
   if (!roots.length || !isPathAllowed(file, roots)) return error('E_PATH_OUT_OF_SCOPE', `Office ${action} path is outside the Runtime scope`);
@@ -121,13 +121,13 @@ function normalizeOfficeCreateInput(input: Record<string, unknown>, ext: string)
   return { path: file, operations, preview };
 }
 
-export function createMateOfficeAdapter(deps: MateOfficeAdapterDeps = {}): MateOfficeAdapter {
+export function createCogSeedOfficeAdapter(deps: CogSeedOfficeAdapterDeps = {}): CogSeedOfficeAdapter {
   const officeCliAvailable = deps.officeCliAvailable ?? defaultOfficeCliAvailable;
   const runOfficeCli = deps.runOfficeCli ?? defaultRunOfficeCli;
   const closeOfficeFile = deps.closeOfficeFile ?? defaultCloseOfficeFile;
-  const artifactRegistry = deps.artifactRegistry ?? mateCapabilityArtifactRegistry;
+  const artifactRegistry = deps.artifactRegistry ?? cogseedCapabilityArtifactRegistry;
 
-  async function registerOutput(scope: MateHostToolScope, file: string, kind: 'office-output' | 'office-preview', owned = kind === 'office-preview'): Promise<string | undefined> {
+  async function registerOutput(scope: CogSeedHostToolScope, file: string, kind: 'office-output' | 'office-preview', owned = kind === 'office-preview'): Promise<string | undefined> {
     if (!artifactRegistry) return undefined;
     const artifact = await artifactRegistry
       .register({ userId: scope.userId, runtimeSessionId: scope.runtimeSessionId }, { kind, path: file, owned })
@@ -135,8 +135,8 @@ export function createMateOfficeAdapter(deps: MateOfficeAdapterDeps = {}): MateO
     return artifact?.artifactId;
   }
 
-  async function render(file: string, scope: MateHostToolScope, page: number, signal?: AbortSignal | null): Promise<MateHostToolResult> {
-    const outputDir = mateRuntimeSessionToolResultsDir(scope.userId, scope.runtimeSessionId);
+  async function render(file: string, scope: CogSeedHostToolScope, page: number, signal?: AbortSignal | null): Promise<CogSeedHostToolResult> {
+    const outputDir = cogseedRuntimeSessionToolResultsDir(scope.userId, scope.runtimeSessionId);
     fs.mkdirSync(outputDir, { recursive: true });
     const output = path.join(outputDir, `office-preview-${Date.now().toString(36)}.png`);
     const result = await runOfficeCli(['view', file, 'screenshot', '-o', output, '--page', String(page)], { cwd: path.dirname(file), ...(signal ? { signal } : {}) });
@@ -145,7 +145,7 @@ export function createMateOfficeAdapter(deps: MateOfficeAdapterDeps = {}): MateO
     return { content: JSON.stringify({ sourcePath: file, path: output, page, bytes: fs.statSync(output).size, previewArtifactId }) };
   }
 
-  async function executeCreate(file: string, scope: MateHostToolScope, operations: Array<Record<string, unknown>>, preview: boolean, signal?: AbortSignal | null): Promise<MateHostToolResult> {
+  async function executeCreate(file: string, scope: CogSeedHostToolScope, operations: Array<Record<string, unknown>>, preview: boolean, signal?: AbortSignal | null): Promise<CogSeedHostToolResult> {
     const cwd = path.dirname(file);
     fs.mkdirSync(cwd, { recursive: true });
     const created = await runOfficeCli(['create', file, '--force'], { cwd, ...(signal ? { signal } : {}) });
@@ -161,7 +161,7 @@ export function createMateOfficeAdapter(deps: MateOfficeAdapterDeps = {}): MateO
     return { content: JSON.stringify({ path: file, operations: operations.length, ...(artifactId ? { artifactId } : {}) }) };
   }
 
-  async function executeEdit(name: 'office_edit', file: string, scope: MateHostToolScope, operations: Array<Record<string, unknown>>, preview: boolean, signal?: AbortSignal | null): Promise<MateHostToolResult> {
+  async function executeEdit(name: 'office_edit', file: string, scope: CogSeedHostToolScope, operations: Array<Record<string, unknown>>, preview: boolean, signal?: AbortSignal | null): Promise<CogSeedHostToolResult> {
     const cwd = path.dirname(file);
     const batch = await runOfficeCli(['batch', file, '--stop-on-error'], { cwd, stdin: JSON.stringify(operations), ...(signal ? { signal } : {}) });
     if (batch.code !== 0) return error('E_OFFICE_EDIT_FAILED', bounded(batch.stderr || batch.stdout || `exit ${batch.code}`));
@@ -174,7 +174,7 @@ export function createMateOfficeAdapter(deps: MateOfficeAdapterDeps = {}): MateO
     return { content: JSON.stringify({ path: file, operations: operations.length, ...(artifactId ? { artifactId } : {}) }) };
   }
 
-  async function runOffice(name: Extract<RuntimeHostToolName, `office_${string}`>, input: Record<string, unknown>, scope: MateHostToolScope, opts: { signal?: AbortSignal | null } = {}): Promise<MateHostToolResult> {
+  async function runOffice(name: Extract<RuntimeHostToolName, `office_${string}`>, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts: { signal?: AbortSignal | null } = {}): Promise<CogSeedHostToolResult> {
     if (!officeCliAvailable()) return error('E_OFFICE_ENGINE_MISSING', 'the built-in Office engine is unavailable');
     const file = resolvePath(input.path, scope);
     const roots = name === 'office_create' || name === 'office_edit' ? scope.writableRoots : [...scope.readOnlyRoots, ...scope.writableRoots];
@@ -228,4 +228,4 @@ export function createMateOfficeAdapter(deps: MateOfficeAdapterDeps = {}): MateO
   };
 }
 
-export const mateOfficeAdapter = createMateOfficeAdapter();
+export const cogseedOfficeAdapter = createCogSeedOfficeAdapter();

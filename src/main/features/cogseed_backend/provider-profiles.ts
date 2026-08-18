@@ -3,7 +3,7 @@ import {
   type RuntimeChatProtocol,
 } from '../auth';
 
-export interface MateProviderProfile {
+export interface CogSeedProviderProfile {
   profileId: string;
   provider: string;
   /** Wire protocol the runtime provider will speak to reach this profile. */
@@ -57,10 +57,10 @@ const OPENAI_RESPONSES_DEFAULT_MAX_OUTPUT_TOKENS = 8192;
  * (openai-completions / anthropic / gemini wire protocols, any auth type),
  * then pins the concrete endpoint and protocol-dependent defaults.
  */
-export async function resolveMateModelProfile(
+export async function resolveCogSeedModelProfile(
   userId: string,
   profileId?: string,
-): Promise<MateProviderProfile> {
+): Promise<CogSeedProviderProfile> {
   const choice = await pickRuntimeChatEntryForUser(userId, profileId);
   if (!choice?.protocol) throw new Error('CogSeed model profile not found');
   const baseUrl = assertHttpBaseUrl(
@@ -88,10 +88,10 @@ export async function resolveMateModelProfile(
 
 // Retained name for back-compat with existing callers/tests; resolves the
 // full runtime profile (any supported wire protocol), not only OpenAI.
-export async function resolveMateApiKeyProfile(
+export async function resolveCogSeedApiKeyProfile(
   userId: string,
   profileId?: string,
-): Promise<MateProviderProfile> {
-  return resolveMateModelProfile(userId, profileId);
+): Promise<CogSeedProviderProfile> {
+  return resolveCogSeedModelProfile(userId, profileId);
 }
 

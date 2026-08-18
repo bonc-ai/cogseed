@@ -23,7 +23,7 @@ function fixtureFiles(): string[] {
   return files.sort();
 }
 
-describe('Orkas parity golden fixtures', () => {
+describe('CogSeed parity golden fixtures', () => {
   it('contains a complete deterministic record for every fixture', () => {
     const files = fixtureFiles();
     expect(files.length).toBeGreaterThanOrEqual(8);
@@ -35,7 +35,7 @@ describe('Orkas parity golden fixtures', () => {
       const record = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
       expect(requiredKeys.filter((key) => !(key in record)), file).toEqual([]);
       expect(record.source_revision, file).toMatch(/^[0-9a-f]{40}$/);
-      expect(record.capture_command, file).toMatch(/^node_modules\/\.bin\/tsx scripts\/capture-orkas-parity-fixtures\.ts --only /);
+      expect(record.capture_command, file).toMatch(/^node_modules\/\.bin\/tsx scripts\/capture-cogseed-parity-fixtures\.ts --only /);
       expect(record.canonicalization_notes, file).toEqual(expect.arrayContaining([
         'timestamps are replaced with __TIMESTAMP__',
         'generated ids are normalized by semantic prefix and encounter order',

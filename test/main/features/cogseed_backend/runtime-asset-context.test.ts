@@ -8,14 +8,14 @@ let previous: string | undefined;
 
 beforeEach(async () => {
   vi.resetModules();
-  tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'mate-runtime-asset-context-'));
-  previous = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmp;
+  tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'cogseed-runtime-asset-context-'));
+  previous = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmp;
 });
 
 afterEach(async () => {
-  if (previous === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previous;
+  if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previous;
   await fs.rm(tmp, { recursive: true, force: true });
 });
 
@@ -95,7 +95,7 @@ describe('Mate runtime asset context assembly (Decision 2 = connect)', () => {
 
   it('fails soft (empty array) when recall store is unavailable', async () => {
     const { buildRuntimeAssetContext } = await import('../../../../src/main/features/cogseed_backend/runtime-asset-context');
-    // No ORKAS_WORKSPACE_ROOT data seeded for this user; reads yield no projections.
+    // No COGSEED_WORKSPACE_ROOT data seeded for this user; reads yield no projections.
     await expect(buildRuntimeAssetContext('user-missing', 'cid-missing')).resolves.toEqual([]);
   });
 });

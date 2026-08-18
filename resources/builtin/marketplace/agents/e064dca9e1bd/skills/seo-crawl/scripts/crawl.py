@@ -35,7 +35,7 @@ from url_safety import (
     resolve_and_pin, validate_url_strict,
 )
 
-DEFAULT_UA = "OrkasSEOBot/1.0 (+https://orkas.ai; SEO/GEO diagnostics)"
+DEFAULT_UA = "CogSeedSEOBot/1.0 (+https://cogseed.ai; SEO/GEO diagnostics)"
 DEFAULT_TIMEOUT = 20.0
 MAX_REDIRECTS = 5
 MAX_BODY_BYTES = 5 * 1024 * 1024  # 5 MB cap; SEO pages are small, guard runaways.

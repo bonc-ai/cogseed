@@ -37,14 +37,14 @@ describe('autoTitle — set A (produces clean title)', () => {
   });
 
   it('keeps punctuation inside an HTTPS URL', () => {
-    expect(autoTitle('你根据 https://orkas.ai')).toBe('你根据 https://orkas.ai');
+    expect(autoTitle('你根据 https://cogseed.ai')).toBe('你根据 https://cogseed.ai');
     expect(autoTitle('分析 https://x.co/a?q=one,two')).toBe('分析 https://x.co/a?q=one,two');
-    expect(autoTitle('查看 www.orkas.ai 的内容')).toBe('查看 www.orkas.ai 的内容');
+    expect(autoTitle('查看 www.cogseed.ai 的内容')).toBe('查看 www.cogseed.ai 的内容');
   });
 
   it('still cuts at sentence punctuation immediately after a URL', () => {
-    expect(autoTitle('根据 https://orkas.ai，分析首页内容')).toBe('根据 https://orkas.ai');
-    expect(autoTitle('Review https://orkas.ai, then summarize')).toBe('Review https://orkas.ai');
+    expect(autoTitle('根据 https://cogseed.ai，分析首页内容')).toBe('根据 https://cogseed.ai');
+    expect(autoTitle('Review https://cogseed.ai, then summarize')).toBe('Review https://cogseed.ai');
   });
 
   it('keeps full text when input lacks any filler', () => {
@@ -102,6 +102,6 @@ describe('autoTitle — set B (must NOT over-strip / must NOT crash)', () => {
   });
 
   it('does not treat a look-alike scheme as an HTTP URL', () => {
-    expect(autoTitle('检查 httpsx://orkas.ai 的内容')).toBe('检查 httpsx://orkas');
+    expect(autoTitle('检查 httpsx://cogseed.ai 的内容')).toBe('检查 httpsx://cogseed');
   });
 });

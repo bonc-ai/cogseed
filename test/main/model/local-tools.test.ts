@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 const SHELL_SUCCESS_TIMEOUT_MS = process.platform === 'win32' ? 15_000 : 5_000;
 
 // ── Electron mock (for html_to_pdf / markdown_to_pdf paths) ─────────────
@@ -35,9 +35,9 @@ let tmpDir: string;
 let prevWs: string | undefined;
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-localtools-'));
-  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-localtools-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   printToPDF.mockClear();
   insertCSS.mockClear();
   loadURL.mockClear();
@@ -57,7 +57,7 @@ afterEach(async () => {
     // before removing the case workspace.
     if (process.platform === 'win32') await new Promise(resolve => setTimeout(resolve, 150));
   } catch { /* no interactive module in this case */ }
-  process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   try {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   } catch (err) {
@@ -89,8 +89,8 @@ function makeCtx(sandboxEnv: Record<string, string> = {}): any {
     workingDir: tmpDir,
     state: {
       sandboxEnv: {
-        ORKAS_NODE: TEST_NODE,
-        ORKAS_PATH_PREPEND: path.dirname(TEST_NODE),
+        COGSEED_NODE: TEST_NODE,
+        COGSEED_PATH_PREPEND: path.dirname(TEST_NODE),
         ...sandboxEnv,
       },
     },
@@ -142,22 +142,22 @@ describe('local-tools › identity', () => {
 
   it('resolves documented POSIX, PowerShell, and cmd environment path forms', async () => {
     const { lt } = await loadModules();
-    const env = { ORKAS_OUTPUT_DIR: path.join(tmpDir, 'outputs') };
+    const env = { COGSEED_OUTPUT_DIR: path.join(tmpDir, 'outputs') };
     const expected = path.join(tmpDir, 'outputs', 'report.json');
 
-    expect(lt.expandKnownShellPathVars('$ORKAS_OUTPUT_DIR/report.json', env)).toEqual({
+    expect(lt.expandKnownShellPathVars('$COGSEED_OUTPUT_DIR/report.json', env)).toEqual({
       value: expected,
       dynamic: false,
     });
-    expect(lt.expandKnownShellPathVars('$env:orkas_output_dir/report.json', env)).toEqual({
+    expect(lt.expandKnownShellPathVars('$env:cogseed_output_dir/report.json', env)).toEqual({
       value: expected,
       dynamic: false,
     });
-    expect(lt.expandKnownShellPathVars('${env:ORKAS_OUTPUT_DIR}/report.json', env)).toEqual({
+    expect(lt.expandKnownShellPathVars('${env:COGSEED_OUTPUT_DIR}/report.json', env)).toEqual({
       value: expected,
       dynamic: false,
     });
-    expect(lt.expandKnownShellPathVars('%ORKAS_OUTPUT_DIR%/report.json', env)).toEqual({
+    expect(lt.expandKnownShellPathVars('%COGSEED_OUTPUT_DIR%/report.json', env)).toEqual({
       value: expected,
       dynamic: false,
     });
@@ -263,11 +263,11 @@ describe('local-tools › bash permission gate', () => {
     perm.revokeLocalExec();
     const bash = lt.createLocalTools({}).find((t) => t.name === 'bash')!;
     const res = await bash.execute(
-      { command: 'echo orkas-test-sentinel-42', timeoutMs: SHELL_SUCCESS_TIMEOUT_MS },
+      { command: 'echo cogseed-test-sentinel-42', timeoutMs: SHELL_SUCCESS_TIMEOUT_MS },
       makeCtx(),
     );
     expect(res.isError).toBeFalsy();
-    expect(res.content).toContain('orkas-test-sentinel-42');
+    expect(res.content).toContain('cogseed-test-sentinel-42');
   });
 
   it('localizes fixed bash errors with the current UI language', async () => {
@@ -369,7 +369,7 @@ describe('local-tools › bash filesystem mutation scope', () => {
     const { lt, perm } = await loadModules();
     perm.setLocalExecMode('workspace_approval');
     await setTmpWorkspace();
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bash-outside-'));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bash-outside-'));
     const outside = path.join(outsideDir, 'blocked.txt');
     try {
       const bash = lt.createLocalTools({ userId: 'u1', cid: 'c1', agentId: 'a1' }).find((t) => t.name === 'bash')!;
@@ -390,7 +390,7 @@ describe('local-tools › bash filesystem mutation scope', () => {
     const { lt, perm } = await loadModules();
     perm.setLocalExecMode('all_files_approval');
     await setTmpWorkspace();
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bash-allow-'));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bash-allow-'));
     const outside = path.join(outsideDir, 'allowed.txt');
     try {
       const bash = lt.createLocalTools({ userId: 'u1', cid: 'c1', agentId: 'a1' }).find((t) => t.name === 'bash')!;
@@ -409,7 +409,7 @@ describe('local-tools › bash filesystem mutation scope', () => {
     const { lt, perm } = await loadModules();
     perm.setLocalExecMode('workspace_approval');
     await setTmpWorkspace();
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bash-read-outside-'));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bash-read-outside-'));
     const outside = path.join(outsideDir, 'secret.txt');
     fs.writeFileSync(outside, 'OUTSIDE-SECRET');
     try {
@@ -431,7 +431,7 @@ describe('local-tools › bash filesystem mutation scope', () => {
     const { lt, perm } = await loadModules();
     perm.setLocalExecMode('all_files_approval');
     await setTmpWorkspace();
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bash-read-allow-'));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bash-read-allow-'));
     const outside = path.join(outsideDir, 'note.txt');
     fs.writeFileSync(outside, 'outside read ok');
     try {
@@ -452,7 +452,7 @@ describe('local-tools › bash filesystem mutation scope', () => {
     const bashPerms = await import('../../../src/main/model/core-agent/bash-permissions');
     perm.setLocalExecMode('all_files_approval');
     await setTmpWorkspace();
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bash-read-sensitive-'));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bash-read-sensitive-'));
     const outside = path.join(outsideDir, 'id_rsa');
     fs.writeFileSync(outside, 'SENSITIVE-BASH-READ');
     let payload: any = null;
@@ -485,7 +485,7 @@ describe('local-tools › bash filesystem mutation scope', () => {
     const bashPerms = await import('../../../src/main/model/core-agent/bash-permissions');
     perm.setLocalExecMode('all_files_approval');
     await setTmpWorkspace();
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bash-read-sensitive-ok-'));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bash-read-sensitive-ok-'));
     const outside = path.join(outsideDir, 'id_rsa');
     fs.writeFileSync(outside, 'SENSITIVE-BASH-ALLOW');
     let prompts = 0;
@@ -558,7 +558,7 @@ describe('local-tools › bash filesystem mutation scope', () => {
     const { lt, perm } = await loadModules();
     perm.setLocalExecMode('workspace_approval');
     await setTmpWorkspace();
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-bash-internal-outside-'));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bash-internal-outside-'));
     const outside = path.join(outsideDir, 'blocked.txt');
     try {
       const bash = lt.createLocalTools({ userId: 'u1', cid: 'c1', agentId: 'a1' }).find((t) => t.name === 'bash')!;
@@ -743,8 +743,8 @@ describe('local-tools › interactive_cli tools', () => {
   }, 10000);
 });
 
-describe('local-tools › Orkas CLI direct execution', () => {
-  function writeFakePcScript(name: 'run-skill.cjs' | 'orkas-pkg.cjs', source: string): string {
+describe('local-tools › CogSeed CLI direct execution', () => {
+  function writeFakePcScript(name: 'run-skill.cjs' | 'cogseed-pkg.cjs', source: string): string {
     const binDir = path.join(tmpDir, 'fake-pc', 'bin');
     fs.mkdirSync(binDir, { recursive: true });
     const script = path.join(binDir, name);
@@ -752,13 +752,13 @@ describe('local-tools › Orkas CLI direct execution', () => {
     return path.join(tmpDir, 'fake-pc');
   }
 
-  function makeOrkasCtx(pcDir: string): any {
+  function makeCogSeedCtx(pcDir: string): any {
     return {
       workingDir: tmpDir,
       state: {
         sandboxEnv: {
-          ORKAS_NODE: TEST_NODE,
-          ORKAS_PC_DIR: pcDir,
+          COGSEED_NODE: TEST_NODE,
+          COGSEED_PC_DIR: pcDir,
           ELECTRON_RUN_AS_NODE: '1',
         },
       },
@@ -770,14 +770,14 @@ describe('local-tools › Orkas CLI direct execution', () => {
     perm.grantLocalExec();
     const pcDir = writeFakePcScript(
       'run-skill.cjs',
-      "process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), out: process.env.ORKAS_OUTPUT_DIR }));",
+      "process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), out: process.env.COGSEED_OUTPUT_DIR }));",
     );
     const bash = lt.createLocalTools({}).find((t) => t.name === 'bash')!;
 
     const res = await bash.execute({
-      command: '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1',
+      command: '"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1',
       timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
-    }, makeOrkasCtx(pcDir));
+    }, makeCogSeedCtx(pcDir));
 
     expect(res.isError).toBeFalsy();
     const parsed = JSON.parse(String(res.content));
@@ -785,7 +785,7 @@ describe('local-tools › Orkas CLI direct execution', () => {
     expect(parsed.out).toBe(tmpDir);
   });
 
-  it('runs the PowerShell form of a standard Orkas CLI command directly', async () => {
+  it('runs the PowerShell form of a standard CogSeed CLI command directly', async () => {
     const { lt, perm } = await loadModules();
     perm.grantLocalExec();
     const pcDir = writeFakePcScript(
@@ -795,15 +795,15 @@ describe('local-tools › Orkas CLI direct execution', () => {
     const bash = lt.createLocalTools({}).find((t) => t.name === 'bash')!;
 
     const res = await bash.execute({
-      command: '& "$env:ORKAS_NODE" "$env:ORKAS_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1',
+      command: '& "$env:COGSEED_NODE" "$env:COGSEED_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1',
       timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
-    }, makeOrkasCtx(pcDir));
+    }, makeCogSeedCtx(pcDir));
 
     expect(res.isError).toBeFalsy();
     expect(JSON.parse(String(res.content)).argv).toEqual(['calculator', 'eval', '--', '1+1']);
   });
 
-  it('streams large direct Orkas CLI stdout to the Result Store handoff file', async () => {
+  it('streams large direct CogSeed CLI stdout to the Result Store handoff file', async () => {
     const { lt, perm } = await loadModules();
     perm.grantLocalExec();
     const outputBytes = 1024 * 1024 + 257;
@@ -812,11 +812,11 @@ describe('local-tools › Orkas CLI direct execution', () => {
       `process.stdout.write('x'.repeat(${outputBytes}));`,
     );
     const bash = lt.createLocalTools({}).find((t) => t.name === 'bash')!;
-    const context = makeOrkasCtx(pcDir);
+    const context = makeCogSeedCtx(pcDir);
     context.state.toolResultSpoolDir = path.join(tmpDir, 'tool-results');
 
     const res = await bash.execute({
-      command: '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" calculator eval',
+      command: '"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" calculator eval',
       timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
     }, context);
 
@@ -827,20 +827,20 @@ describe('local-tools › Orkas CLI direct execution', () => {
     expect(fs.readFileSync(res.streamedOutput!.path, 'utf8')).toBe('x'.repeat(outputBytes));
   });
 
-  it('pipes heredoc stdin into the standard orkas-pkg.cjs command', async () => {
+  it('pipes heredoc stdin into the standard cogseed-pkg.cjs command', async () => {
     const { lt, perm } = await loadModules();
     perm.grantLocalExec();
     const pcDir = writeFakePcScript(
-      'orkas-pkg.cjs',
+      'cogseed-pkg.cjs',
       "let body=''; process.stdin.on('data', d => body += d); process.stdin.on('end', () => process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), body })));",
     );
     const bash = lt.createLocalTools({}).find((t) => t.name === 'bash')!;
     const body = "---\nname: Demo\n---\n\n# Demo";
 
     const res = await bash.execute({
-      command: `"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/orkas-pkg.cjs" skill-write demo <<'SKILL'\n${body}\nSKILL`,
+      command: `"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/cogseed-pkg.cjs" skill-write demo <<'SKILL'\n${body}\nSKILL`,
       timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
-    }, makeOrkasCtx(pcDir));
+    }, makeCogSeedCtx(pcDir));
 
     expect(res.isError).toBeFalsy();
     const parsed = JSON.parse(String(res.content));
@@ -848,7 +848,7 @@ describe('local-tools › Orkas CLI direct execution', () => {
     expect(parsed.body.replace(/\n$/, '')).toBe(body);
   });
 
-  it('lets the host shell handle redirection for standard Orkas CLI commands', async () => {
+  it('lets the host shell handle redirection for standard CogSeed CLI commands', async () => {
     const { lt, perm } = await loadModules();
     perm.grantLocalExec();
     const pcDir = writeFakePcScript(
@@ -861,10 +861,10 @@ describe('local-tools › Orkas CLI direct execution', () => {
 
     const res = await bash.execute({
       command: process.platform === 'win32'
-        ? `& "$env:ORKAS_NODE" "$env:ORKAS_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1 2> "${errPath}" > "${outPath}"`
-        : `"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1 2> "${errPath}" > "${outPath}"`,
+        ? `& "$env:COGSEED_NODE" "$env:COGSEED_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1 2> "${errPath}" > "${outPath}"`
+        : `"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1 2> "${errPath}" > "${outPath}"`,
       timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
-    }, makeOrkasCtx(pcDir));
+    }, makeCogSeedCtx(pcDir));
 
     expect(res.isError).toBeFalsy();
     expect(String(res.content)).toBe('');
@@ -875,7 +875,7 @@ describe('local-tools › Orkas CLI direct execution', () => {
     expect(fs.readFileSync(errPath, 'utf8')).toBe('');
   });
 
-  it('times out direct Orkas CLI commands whose child keeps stdout open', async () => {
+  it('times out direct CogSeed CLI commands whose child keeps stdout open', async () => {
     const { lt, perm } = await loadModules();
     perm.grantLocalExec();
     const pcDir = writeFakePcScript(
@@ -890,9 +890,9 @@ describe('local-tools › Orkas CLI direct execution', () => {
 
     const started = Date.now();
     const res = await bash.execute({
-      command: '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1',
+      command: '"$COGSEED_NODE" "$COGSEED_PC_DIR/bin/run-skill.cjs" calculator eval -- 1+1',
       timeoutMs: 500,
-    }, makeOrkasCtx(pcDir));
+    }, makeCogSeedCtx(pcDir));
 
     expect(res.isError).toBe(true);
     expect(String(res.content)).toMatch(/timed out|超时/i);
@@ -929,7 +929,7 @@ describe('local-tools › bash sensitive approval modes (e2e)', () => {
     const { lt, perm, bashPerms } = await loadWithBashPerms();
     perm.setLocalExecMode('all_files_approval');
     await setTmpWorkspace();
-    const target = path.join(os.tmpdir(), `orkas-rm-prompt-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const target = path.join(os.tmpdir(), `cogseed-rm-prompt-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     fs.writeFileSync(target, 'keep-me');
     let prompted: any = null;
     bashPerms._setBroadcastForTest((_ch: string, info: any) => {
@@ -1017,9 +1017,9 @@ describe('local-tools › bash produced files', () => {
     const res = await bash.execute({
       command:
         'node -e "const fs=require(\'fs\');' +
-        'fs.mkdirSync(process.env.ORKAS_OUTPUT_DIR, { recursive: true });' +
-        'fs.writeFileSync(process.env.ORKAS_OUTPUT_DIR + \'/report.docx\', \'doc\');' +
-        'fs.writeFileSync(process.env.ORKAS_OUTPUT_DIR + \'/notes.md\', \'notes\');"',
+        'fs.mkdirSync(process.env.COGSEED_OUTPUT_DIR, { recursive: true });' +
+        'fs.writeFileSync(process.env.COGSEED_OUTPUT_DIR + \'/report.docx\', \'doc\');' +
+        'fs.writeFileSync(process.env.COGSEED_OUTPUT_DIR + \'/notes.md\', \'notes\');"',
       timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
     }, makeCtx());
 
@@ -1039,7 +1039,7 @@ describe('local-tools › bash produced files', () => {
     const bash = lt.createLocalTools({ agentId: 'agent-a', onFileWritten }).find((t) => t.name === 'bash')!;
 
     const res = await bash.execute({
-      command: 'node -e "require(\'fs\').writeFileSync(process.env.ORKAS_OUTPUT_DIR + \'/draft.txt\', \'v2\')"',
+      command: 'node -e "require(\'fs\').writeFileSync(process.env.COGSEED_OUTPUT_DIR + \'/draft.txt\', \'v2\')"',
       timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
     }, makeCtx());
 
@@ -1053,7 +1053,7 @@ describe('local-tools › bash produced files', () => {
     perm.grantLocalExec();
     const onFileWritten = vi.fn();
     const bash = lt.createLocalTools({ agentId: 'agent-a', onFileWritten }).find((t) => t.name === 'bash')!;
-    const outsideTarget = path.join(os.tmpdir(), `orkas-localtools-outside-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    const outsideTarget = path.join(os.tmpdir(), `cogseed-localtools-outside-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
     const outsideForSingleQuotedJs = outsideTarget.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
     try {
@@ -1061,7 +1061,7 @@ describe('local-tools › bash produced files', () => {
         command:
           'node -e "const fs=require(\'fs\');' +
           `fs.writeFileSync('${outsideForSingleQuotedJs}', '{}');` +
-          'fs.writeFileSync(process.env.ORKAS_OUTPUT_DIR + \'/visible.json\', \'{}\');"',
+          'fs.writeFileSync(process.env.COGSEED_OUTPUT_DIR + \'/visible.json\', \'{}\');"',
         timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
       }, makeCtx());
 
@@ -1090,7 +1090,7 @@ fs.writeFileSync('vendor/src/index.ts', 'x');
     const res = await bash.execute({
       command:
         'git clone https://example.com/vendor.git\n' +
-        'node -e "require(\'fs\').writeFileSync(process.env.ORKAS_OUTPUT_DIR + \'/summary.csv\', \'ok\')"',
+        'node -e "require(\'fs\').writeFileSync(process.env.COGSEED_OUTPUT_DIR + \'/summary.csv\', \'ok\')"',
       timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
     }, makeCtx({ PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}` }));
 
@@ -1121,7 +1121,7 @@ fs.writeFileSync(args[at + 1], 'downloaded');
       command:
         'curl -o downloaded.txt https://example.com/downloaded.txt\n' +
         'wget -O fetched.json https://example.com/fetched.json\n' +
-        'node -e "require(\'fs\').writeFileSync(process.env.ORKAS_OUTPUT_DIR + \'/generated.md\', \'# ok\')"',
+        'node -e "require(\'fs\').writeFileSync(process.env.COGSEED_OUTPUT_DIR + \'/generated.md\', \'# ok\')"',
       timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
     }, makeCtx({ PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}` }));
 
@@ -1144,13 +1144,13 @@ fs.writeFileSync(args[at + 1], 'downloaded');
         'node -e "const fs=require(\'fs\');' +
         'fs.mkdirSync(\'.cache\',{recursive:true});' +
         'fs.writeFileSync(\'.cache/final.pdf\',\'pdf\');' +
-        'fs.appendFileSync(process.env.ORKAS_OUTPUT_MANIFEST,\'.cache/final.pdf\\n\')"',
+        'fs.appendFileSync(process.env.COGSEED_OUTPUT_MANIFEST,\'.cache/final.pdf\\n\')"',
       timeoutMs: SHELL_SUCCESS_TIMEOUT_MS,
     }, makeCtx());
 
     expect(res.isError, `content=${res.content}`).toBeFalsy();
     expect(onFileWritten).toHaveBeenCalledWith(path.join(tmpDir, '.cache', 'final.pdf'));
-    expect(fs.existsSync(path.join(tmpDir, '.orkas-output-manifest'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, '.cogseed-output-manifest'))).toBe(false);
   });
 });
 
@@ -1345,7 +1345,7 @@ describe('local-tools › markdown_to_pdf', () => {
     const { lt, perm } = await loadModules();
     perm.setLocalExecMode('workspace_approval');
     await setTmpWorkspace();
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-pdf-outside-'));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-pdf-outside-'));
     const outside = path.join(outsideDir, 'outside.pdf');
     try {
       const mdpdf = lt.createLocalTools({ userId: 'u1', cid: 'c1' }).find((t) => t.name === 'markdown_to_pdf')!;
@@ -1387,7 +1387,7 @@ describe('local-tools › html_to_pdf', () => {
     const { lt, perm } = await loadModules();
     perm.setLocalExecMode('workspace_approval');
     await setTmpWorkspace();
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-htmlpdf-outside-'));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-htmlpdf-outside-'));
     const outside = path.join(outsideDir, 'outside.pdf');
     try {
       const hp = lt.createLocalTools({ userId: 'u1', cid: 'c1' }).find((t) => t.name === 'html_to_pdf')!;

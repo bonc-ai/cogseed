@@ -3,11 +3,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const USER_ID = 'mate-migration-user';
+const USER_ID = 'cogseed-migration-user';
 const SOURCE_SESSION_ID = 'legacy-session-001';
-const TARGET_SESSION_ID = 'mate-session-001';
+const TARGET_SESSION_ID = 'cogseed-session-001';
 const SOURCE_ACTOR_ID = 'legacy-actor-001';
-const TARGET_ACTOR_ID = 'mate-actor-001';
+const TARGET_ACTOR_ID = 'cogseed-actor-001';
 const scope = {
   userId: USER_ID,
   sourceSessionId: SOURCE_SESSION_ID,
@@ -15,7 +15,7 @@ const scope = {
   sourceActorId: SOURCE_ACTOR_ID,
   targetActorId: TARGET_ACTOR_ID,
   sourceSchemaVersion: 'legacy-v1',
-  targetSchemaVersion: 'mate-v1',
+  targetSchemaVersion: 'cogseed-v1',
 };
 
 let tmpDir: string;
@@ -23,16 +23,16 @@ let journalFile: string;
 let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-migration-journal-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-migration-journal-'));
   journalFile = path.join(tmpDir, 'migration.json');
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -43,7 +43,7 @@ describe('CogSeed historical migration journal', () => {
     const entries = [
       migration.createMigrationPhaseEntry(scope, 'preview', 'running', '2026-08-05T10:00:00', {
         sourceSchemaVersion: 'legacy-v1',
-        targetSchemaVersion: 'mate-v1',
+        targetSchemaVersion: 'cogseed-v1',
       }),
       migration.createMigrationPhaseEntry(scope, 'validate', 'completed', '2026-08-05T10:00:01'),
       migration.createMigrationPhaseEntry(scope, 'transform', 'completed', '2026-08-05T10:00:02'),
@@ -115,7 +115,7 @@ describe('CogSeed historical migration journal', () => {
 
     expect(firstTarget).toBe(secondTarget);
     expect(firstTarget).not.toBe(differentScopeTarget);
-    expect(firstTarget).toMatch(/^mate-migration-target-/);
+    expect(firstTarget).toMatch(/^cogseed-migration-target-/);
 
     const entry = migration.createMigrationPhaseEntry(scope, 'preview', 'running', '2026-08-05T10:01:00');
     await migration.appendMigrationJournalEntry(journalFile, entry);

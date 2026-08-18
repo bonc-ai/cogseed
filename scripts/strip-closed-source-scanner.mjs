@@ -6,8 +6,10 @@
  * Stripped components:
  *   - `resources/guardrail/skill-sentry` — scanner rules and scoring weights
  *     that are not published.
- *   - `resources/guardrail/skill-declaration-core` — the declaration engine
- *     (implementation + ontologies), also closed-source.
+ *   - `resources/guardrail/nseap-security-core` — the declaration engine under
+ *     its pre-rename identity (still used by earlier checkouts).
+ *   - `resources/guardrail/skill-declaration-core` — the declaration engine's
+ *     current name (implementation + ontologies), also closed-source.
  *   - `resources/guardrail/SYNC.md` — internal sync provenance (upstream
  *     workstation paths and vendor records) must not ship.
  *   - `resources/test/skill-sentry` — scanner test assets, which carry the
@@ -83,12 +85,18 @@ if (args.help) {
 
 const guardrail = path.join(args.root, 'resources', 'guardrail');
 const scanner = path.join(guardrail, 'skill-sentry');
-const declarationCore = path.join(guardrail, 'skill-declaration-core');
-const declarationPin = path.join(guardrail, 'skill-declaration-core.INTEGRITY');
+// The declaration engine appears under either its current name
+// (skill-declaration-core) or its pre-rename identity (nseap-security-core);
+// cover both so earlier checkouts strip the same way.
+const declarationNames = ['skill-declaration-core', 'nseap-security-core']
+  .map((name) => path.join(guardrail, name));
+const declarationCores = declarationNames.filter((dir) => fs.existsSync(dir));
+const scannerPin = path.join(guardrail, 'skill-sentry.INTEGRITY');
+const declarationPins = declarationNames.map((dir) => `${dir}.INTEGRITY`)
+  .filter((pinPath) => fs.existsSync(pinPath));
 const syncDoc = path.join(guardrail, 'SYNC.md');
 const testTree = path.join(args.root, 'resources', 'test', 'skill-sentry');
 const marker = path.join(guardrail, 'SCANNER_ABSENT');
-const pin = path.join(guardrail, 'skill-sentry.INTEGRITY');
 
 if (!fs.existsSync(guardrail)) {
   process.stderr.write(`no guardrail directory at ${guardrail}\n`);
@@ -96,7 +104,7 @@ if (!fs.existsSync(guardrail)) {
 }
 
 const hasScanner = fs.existsSync(scanner);
-const hasDeclarationCore = fs.existsSync(declarationCore);
+const hasDeclarationCore = declarationCores.length > 0;
 const hasSyncDoc = fs.existsSync(syncDoc);
 const hasTestTree = fs.existsSync(testTree);
 const hasMarker = fs.existsSync(marker);
@@ -104,7 +112,7 @@ const hasMarker = fs.existsSync(marker);
 if (args.check) {
   process.stdout.write(
     `scanner present:            ${hasScanner}\n`
-    + `declaration engine present: ${hasDeclarationCore}\n`
+    + `declaration engine present: ${hasDeclarationCore} (${declarationCores.map((d) => path.relative(guardrail, d)).join(', ') || 'none'})\n`
     + `sync doc present:           ${hasSyncDoc}\n`
     + `test assets present:        ${hasTestTree}\n`
     + `marker present:             ${hasMarker}\n`,
@@ -118,11 +126,11 @@ if (args.check) {
 }
 
 // Refuse the primary working tree by default. Running this in place deletes the
-// scanner from a developer's checkout, and the mistake is quiet: everything keeps
+// engines from a developer's checkout, and the mistake is quiet: everything keeps
 // working, just with weaker scanning, which is exactly the state nobody notices.
 if (path.resolve(args.root) === REPO && !args.force) {
   process.stderr.write(
-    'refusing to strip the primary working tree (this would delete your local scanner).\n'
+    'refusing to strip the primary working tree (this would delete your local closed-source engines).\n'
     + 'Run against a distribution copy, or pass --force if that is really intended.\n',
   );
   process.exit(2);
@@ -131,17 +139,21 @@ if (path.resolve(args.root) === REPO && !args.force) {
 if (hasScanner) fs.rmSync(scanner, { recursive: true, force: true });
 // The pin describes a tree that is no longer here; leaving it would invite a
 // mismatch against whatever scanner gets installed later.
-if (fs.existsSync(pin)) fs.rmSync(pin, { force: true });
-if (hasDeclarationCore) fs.rmSync(declarationCore, { recursive: true, force: true });
-if (fs.existsSync(declarationPin)) fs.rmSync(declarationPin, { force: true });
+if (fs.existsSync(scannerPin)) fs.rmSync(scannerPin, { force: true });
+for (const core of declarationCores) fs.rmSync(core, { recursive: true, force: true });
+for (const pinPath of declarationPins) fs.rmSync(pinPath, { force: true });
 if (hasSyncDoc) fs.rmSync(syncDoc, { force: true });
 if (hasTestTree) fs.rmSync(testTree, { recursive: true, force: true });
 fs.writeFileSync(marker, MARKER_BODY);
 
+const removed = [
+  'scanner', ...declarationCores.map((d) => path.relative(guardrail, d)),
+  'syncDoc', 'testTree',
+].filter(Boolean);
 process.stdout.write(
   'stripped closed-source security components\n'
   + `  removed: ${scanner}\n`
-  + `  removed: ${declarationCore}\n`
+  + `  removed: ${declarationCores.join(', ') || '(none)'}\n`
   + `  removed: ${syncDoc}\n`
   + `  removed: ${testTree}\n`
   + `  marker:  ${marker}\n`,

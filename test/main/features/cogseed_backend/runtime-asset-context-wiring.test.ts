@@ -10,7 +10,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import type { MateAgentRuntimeFacade, } from '../../../../src/main/features/cogseed_runtime';
+import type { CogSeedAgentRuntimeFacade, } from '../../../../src/main/features/cogseed_runtime';
 import type { RuntimeEventEnvelope } from '../../../../src/main/features/cogseed_runtime/protocol';
 
 const ASSET_ITEM = { type: 'text', label: 'Confirmed reusable ability assets', content: 'ASSET-BLOCK' };
@@ -20,24 +20,24 @@ vi.mock('../../../../src/main/features/cogseed_backend/runtime-asset-context', (
   buildRuntimeAssetContext: async () => [ASSET_ITEM],
 }));
 
-const USER = 'mate-asset-wiring-user';
+const USER = 'cogseed-asset-wiring-user';
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-asset-wiring-'));
-  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
-  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-asset-wiring-'));
+  previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
-  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function runtimeFrom(events: RuntimeEventEnvelope[]): MateAgentRuntimeFacade & { inputs: any[] } {
+function runtimeFrom(events: RuntimeEventEnvelope[]): CogSeedAgentRuntimeFacade & { inputs: any[] } {
   const inputs: any[] = [];
   return {
     inputs,
@@ -46,13 +46,13 @@ function runtimeFrom(events: RuntimeEventEnvelope[]): MateAgentRuntimeFacade & {
       for (const event of events) yield event;
     },
     async shutdown() {},
-  } as MateAgentRuntimeFacade & { inputs: any[] };
+  } as CogSeedAgentRuntimeFacade & { inputs: any[] };
 }
 
 async function controllerWith(events: RuntimeEventEnvelope[]) {
   const runtime = runtimeFrom(events);
-  const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-  const controller = createMateRuntimeController({ runtime, projectTaskEvent: vi.fn(async () => {}) } as any);
+  const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+  const controller = createCogSeedRuntimeController({ runtime, projectTaskEvent: vi.fn(async () => {}) } as any);
   return { runtime, controller };
 }
 
@@ -72,7 +72,7 @@ describe('confirmed ability assets reach every runtime launch path', () => {
     const { runtime, controller } = await controllerWith([
       { type: 'result', request_id: 'req-first', runtime_session_id: 'ms-first', status: 'completed', text: 'done' },
     ]);
-    await controller.startMateTask(USER, { requestId: 'req-first', task: 'Run once.', conversationId: 'cid-assets' });
+    await controller.startCogSeedTask(USER, { requestId: 'req-first', task: 'Run once.', conversationId: 'cid-assets' });
     await waitForLaunches(runtime, 1);
     expect(assetItems(runtime.inputs[0])).toEqual([ASSET_ITEM]);
   });
@@ -90,22 +90,22 @@ describe('confirmed ability assets reach every runtime launch path', () => {
       },
       async shutdown() {},
     };
-    const { createMateRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createMateRuntimeController({ runtime, projectTaskEvent: vi.fn(async () => {}) } as any);
+    const controller = createCogSeedRuntimeController({ runtime, projectTaskEvent: vi.fn(async () => {}) } as any);
 
-    const original = await controller.startMateTask(USER, {
+    const original = await controller.startCogSeedTask(USER, {
       requestId: 'req-orig', task: 'Run once.', conversationId: 'cid-assets',
     });
     await waitForLaunches(runtime, 1);
     expect(assetItems(runtime.inputs[0])).toEqual([ASSET_ITEM]);
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      const current = await tasks.readMateTask(USER, original.taskId);
+      const current = await tasks.readCogSeedTask(USER, original.taskId);
       if (current?.status === 'recoverable') break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
 
-    await controller.retryMateTask(USER, original.taskId, 'req-retry');
+    await controller.retryCogSeedTask(USER, original.taskId, 'req-retry');
     await waitForLaunches(runtime, 2);
     // 重试拿到同一批资产，且不重复堆叠。
     expect(assetItems(runtime.inputs[1])).toEqual([ASSET_ITEM]);

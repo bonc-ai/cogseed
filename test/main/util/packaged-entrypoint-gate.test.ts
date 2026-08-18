@@ -20,7 +20,7 @@ const gate = require('../../../bin/packaged-entrypoint-gate.cjs') as {
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-entrypoint-gate-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-entrypoint-gate-'));
 });
 
 afterEach(() => {

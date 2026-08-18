@@ -13,7 +13,7 @@ describe('python test runtime resolver', () => {
       appRoot: '/repo',
       platform: 'darwin',
       arch: 'arm64',
-      env: { ORKAS_TEST_PYTHON: '/custom/python' },
+      env: { COGSEED_TEST_PYTHON: '/custom/python' },
     })).toEqual([
       '/custom/python',
       '/repo/venv/bin/python',
@@ -26,7 +26,7 @@ describe('python test runtime resolver', () => {
       appRoot: 'C:\\repo',
       platform: 'win32',
       arch: 'x64',
-      env: { ORKAS_TEST_PYTHON: 'python' },
+      env: { COGSEED_TEST_PYTHON: 'python' },
       pathApi: path.win32,
     })).toEqual([
       'python',

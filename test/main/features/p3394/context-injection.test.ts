@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises'; import * as os from 'node:os'; import * as path from 'node:path';
 let root=''; const UID='contextInjectionUser';
-beforeEach(async()=>{root=await fs.mkdtemp(path.join(os.tmpdir(),'context-injection-'));process.env.ORKAS_WORKSPACE_ROOT=root;});
-afterEach(async()=>{delete process.env.ORKAS_WORKSPACE_ROOT;await fs.rm(root,{recursive:true,force:true});});
+beforeEach(async()=>{root=await fs.mkdtemp(path.join(os.tmpdir(),'context-injection-'));process.env.COGSEED_WORKSPACE_ROOT=root;});
+afterEach(async()=>{delete process.env.COGSEED_WORKSPACE_ROOT;await fs.rm(root,{recursive:true,force:true});});
 
 describe('P3394 prepared execution context',()=>{
   it('binds receipt/session/context and only approved roots',async()=>{

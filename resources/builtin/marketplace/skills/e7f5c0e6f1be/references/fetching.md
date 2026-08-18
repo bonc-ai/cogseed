@@ -15,7 +15,7 @@ Use fetch mode to collect public social discussion samples for a specific platfo
 ## Command
 
 ```bash
-$ORKAS_NODE $ORKAS_PC_DIR/bin/run-skill.cjs social-data fetch -- <platform> <keywords> [options]
+$COGSEED_NODE $COGSEED_PC_DIR/bin/run-skill.cjs social-data fetch -- <platform> <keywords> [options]
 ```
 
 Arguments:

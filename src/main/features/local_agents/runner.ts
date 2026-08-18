@@ -49,7 +49,7 @@ export {
  *  generous: healthy coding dispatches routinely pass 20 minutes
  *  (builds, model downloads, renders). The old 20-min value doubled as
  *  the hang detector and killed an actively-working 20-min claude turn
- *  (run 1dffe7c48d18). Override via ORKAS_LOCAL_AGENT_TIMEOUT_MS. */
+ *  (run 1dffe7c48d18). Override via COGSEED_LOCAL_AGENT_TIMEOUT_MS. */
 const DEFAULT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 /** Backends with no mid-run event stream can't be idle-killed (silence
@@ -61,7 +61,7 @@ const BACKEND_TIMEOUT_MS: Partial<Record<LocalCliType, number>> = {
 
 function resolveTimeoutMs(cli: LocalCliType): number {
   const fallback = BACKEND_TIMEOUT_MS[cli] ?? DEFAULT_TIMEOUT_MS;
-  const raw = process.env.ORKAS_LOCAL_AGENT_TIMEOUT_MS;
+  const raw = process.env.COGSEED_LOCAL_AGENT_TIMEOUT_MS;
   if (!raw) return fallback;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 1000) return fallback;
@@ -72,7 +72,7 @@ function resolveTimeoutMs(cli: LocalCliType): number {
  *  actual hang detector (vs the wall cap above). Long quiet stretches
  *  are real — a single Bash tool call sat silent ~10 min downloading a
  *  whisper model — so the default stays comfortably above them.
- *  Override via ORKAS_LOCAL_AGENT_IDLE_KILL_MS; 0 disables. */
+ *  Override via COGSEED_LOCAL_AGENT_IDLE_KILL_MS; 0 disables. */
 const DEFAULT_IDLE_KILL_MS = 30 * 60 * 1000;
 
 /** Idle-kill is meaningless for backends that emit nothing mid-run
@@ -84,7 +84,7 @@ const BACKEND_IDLE_KILL_DISABLED: Partial<Record<LocalCliType, boolean>> = {
 
 function resolveIdleKillMs(cli: LocalCliType): number | undefined {
   if (BACKEND_IDLE_KILL_DISABLED[cli]) return undefined;
-  const raw = process.env.ORKAS_LOCAL_AGENT_IDLE_KILL_MS;
+  const raw = process.env.COGSEED_LOCAL_AGENT_IDLE_KILL_MS;
   if (raw !== undefined) {
     const n = Number(raw);
     if (Number.isFinite(n)) {
@@ -105,7 +105,7 @@ const DEFAULT_IDLE_MS = 90 * 1000;
 const DEFAULT_IDLE_TICK_MS = 30 * 1000;
 /** Lower bound on user-supplied / backend-supplied idle thresholds so a
  *  misconfigured value can't drum the rail every second. Tests can
- *  shrink this through `ORKAS_LOCAL_AGENT_IDLE_MIN_MS` to exercise the
+ *  shrink this through `COGSEED_LOCAL_AGENT_IDLE_MIN_MS` to exercise the
  *  heartbeat at a manageable speed; production never sets it. */
 const MIN_IDLE_MS_DEFAULT = 30 * 1000;
 
@@ -117,10 +117,10 @@ function envNum(name: string): number | undefined {
 }
 
 function resolveIdleMs(backendHint: number | undefined): number {
-  const minMs = envNum('ORKAS_LOCAL_AGENT_IDLE_MIN_MS') ?? MIN_IDLE_MS_DEFAULT;
+  const minMs = envNum('COGSEED_LOCAL_AGENT_IDLE_MIN_MS') ?? MIN_IDLE_MS_DEFAULT;
   const candidates: Array<number | undefined> = [
     backendHint,
-    envNum('ORKAS_LOCAL_AGENT_IDLE_MS'),
+    envNum('COGSEED_LOCAL_AGENT_IDLE_MS'),
   ];
   for (const c of candidates) {
     if (c !== undefined && c >= minMs) return c;
@@ -188,11 +188,11 @@ function _bridgeSupported(cli: LocalCliType): boolean {
  *  discovery — the tool descriptions carry the details. */
 const BRIDGE_SYSTEM_PROMPT =
   'You are running inside CogSeed, the user\'s agent workspace. An MCP server named "cogseed" is '
-  + 'connected: it lists and reads the user\'s CogSeed skills (orkas_list_skills / orkas_read_skill / '
-  + 'orkas_run_skill), reaches their connected services (orkas_list_connector_tools / '
-  + 'orkas_call_connector_tool — calls may wait for the user to approve a permission prompt in '
-  + 'CogSeed), and browses/searches their knowledge base (orkas_kb_list / orkas_kb_search / '
-  + 'orkas_kb_read). Prefer these '
+  + 'connected: it lists and reads the user\'s CogSeed skills (cogseed_list_skills / cogseed_read_skill / '
+  + 'cogseed_run_skill), reaches their connected services (cogseed_list_connector_tools / '
+  + 'cogseed_call_connector_tool — calls may wait for the user to approve a permission prompt in '
+  + 'CogSeed), and browses/searches their knowledge base (cogseed_kb_list / cogseed_kb_search / '
+  + 'cogseed_kb_read). Prefer these '
   + 'tools when the task involves the user\'s skills, services, or library content.';
 
 type LocalToolRunCounter = {
@@ -840,7 +840,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
   // cogseed-bridge (plan §D): per-run host exposing the user's CogSeed
   // skills / connectors / KB to the CLI agent over a local socket. Bridge
   // failures never fail the dispatch — the CLI just runs without the
-  // `orkas` MCP server, same as before the bridge existed.
+  // `cogseed` MCP server, same as before the bridge existed.
   let bridge: import('./bridge').BridgeHandle | null = null;
   if (_bridgeSupported(opts.cli) && process.env.COGSEED_BRIDGE_DISABLED !== '1') {
     try {
@@ -861,7 +861,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
       });
       log.info('local agent bridge ready', runLogContext);
     } catch (err) {
-      log.warn('bridge start failed — running without orkas MCP server', {
+      log.warn('bridge start failed — running without cogseed MCP server', {
         ...runLogContext,
         error: logErrorRef(err),
       });
@@ -899,8 +899,8 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
         bridge: {
           mcpConfigPath: bridge.mcpConfigPath,
           server: {
-            command: bridge.serverEnv.ORKAS_NODE || process.execPath,
-            args: [`${bridge.serverEnv.ORKAS_PC_DIR}/bin/cogseed-bridge.cjs`],
+            command: bridge.serverEnv.COGSEED_NODE || process.execPath,
+            args: [`${bridge.serverEnv.COGSEED_PC_DIR}/bin/cogseed-bridge.cjs`],
             env: bridge.serverEnv,
           },
           appendSystemPrompt: BRIDGE_SYSTEM_PROMPT,

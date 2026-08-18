@@ -45,12 +45,12 @@ describe('connector callback protocol', () => {
     const { _test } = await import('../../../../src/main/features/connectors/protocol');
 
     expect(_test.connectorCallbackKind('cogseed://connectors/oauth/callback?exchange_code=x')).toBe('server');
-    expect(_test.connectorCallbackKind('mateagent://connectors/oauth/callback?exchange_code=x')).toBe('server');
-    expect(_test.connectorCallbackKind('mateagent://connectors/oauth/dcr-callback?exchange_code=x')).toBe('dcr');
-    expect(_test.connectorCallbackKind('orkas://connectors/oauth/callback?exchange_code=x')).toBe('server');
-    expect(_test.connectorCallbackKind('orkas://connectors/oauth/dcr-callback?exchange_code=x')).toBe('dcr');
-    expect(_test.connectorCallbackKind('orkas://account/login?token=x')).toBeNull();
-    expect(_test.connectorCallbackKind('mateagent://shell/run?command=rm')).toBeNull();
+    expect(_test.connectorCallbackKind('cogseed://connectors/oauth/callback?exchange_code=x')).toBe('server');
+    expect(_test.connectorCallbackKind('cogseed://connectors/oauth/dcr-callback?exchange_code=x')).toBe('dcr');
+    expect(_test.connectorCallbackKind('cogseed://connectors/oauth/callback?exchange_code=x')).toBe('server');
+    expect(_test.connectorCallbackKind('cogseed://connectors/oauth/dcr-callback?exchange_code=x')).toBe('dcr');
+    expect(_test.connectorCallbackKind('cogseed://account/login?token=x')).toBeNull();
+    expect(_test.connectorCallbackKind('cogseed://shell/run?command=rm')).toBeNull();
     expect(_test.connectorCallbackKind('https://connectors/oauth/callback')).toBeNull();
   });
 
@@ -59,16 +59,16 @@ describe('connector callback protocol', () => {
     expect(protocol.registerConnectorProtocol({ owner: true })).toBe(true);
 
     expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('cogseed');
-    expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('mateagent');
-    expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('orkas');
+    expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('cogseed');
+    expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('cogseed');
     const openUrl = electronMock.listeners.get('open-url');
     expect(openUrl).toBeTypeOf('function');
     const preventDefault = vi.fn();
 
-    await openUrl?.({ preventDefault }, 'mateagent://connectors/oauth/callback?exchange_code=one');
+    await openUrl?.({ preventDefault }, 'cogseed://connectors/oauth/callback?exchange_code=one');
     await vi.waitFor(() => expect(connectorMock.handleCallbackUrl).toHaveBeenCalledTimes(1));
     expect(connectorMock.handleCallbackUrl).toHaveBeenLastCalledWith('cogseed://connectors/oauth/callback?exchange_code=one');
-    await openUrl?.({ preventDefault }, 'orkas://connectors/oauth/dcr-callback?exchange_code=two');
+    await openUrl?.({ preventDefault }, 'cogseed://connectors/oauth/dcr-callback?exchange_code=two');
     await vi.waitFor(() => expect(connectorMock.handleDcrCallbackUrl).toHaveBeenCalledTimes(1));
     expect(connectorMock.handleDcrCallbackUrl).toHaveBeenLastCalledWith('cogseed://connectors/oauth/dcr-callback?exchange_code=two');
 
@@ -83,7 +83,7 @@ describe('connector callback protocol', () => {
     const openUrl = electronMock.listeners.get('open-url');
     const preventDefault = vi.fn();
 
-    await openUrl?.({ preventDefault }, 'mateagent://account/login?exchange_code=account');
+    await openUrl?.({ preventDefault }, 'cogseed://account/login?exchange_code=account');
 
     expect(preventDefault).not.toHaveBeenCalled();
     expect(connectorMock.handleCallbackUrl).not.toHaveBeenCalled();
@@ -99,7 +99,7 @@ describe('connector callback protocol', () => {
     const secondInstance = electronMock.listeners.get('second-instance');
     expect(secondInstance).toBeTypeOf('function');
 
-    await secondInstance?.({}, ['mateagent://connectors/oauth/callback?exchange_code=ignored']);
+    await secondInstance?.({}, ['cogseed://connectors/oauth/callback?exchange_code=ignored']);
 
     expect(electronMock.window.restore).toHaveBeenCalledOnce();
     expect(electronMock.window.show).toHaveBeenCalledOnce();

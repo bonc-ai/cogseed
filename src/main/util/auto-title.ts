@@ -26,7 +26,7 @@ export const TITLE_MAX = 30;
 /**
  * Find the first sentence punctuation that is not part of an HTTP(S)/www URL.
  * Trailing punctuation is removed from each URL range first, so both
- * `https://orkas.ai?q=docs` and `https://orkas.ai，继续` behave naturally.
+ * `https://cogseed.ai?q=docs` and `https://cogseed.ai，继续` behave naturally.
  */
 export function findTitleClauseBoundary(text: string): number {
   const urlRanges: Array<{ start: number; end: number }> = [];

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 启动前依赖一致性检查：比较 package.json + package-lock.json 的 SHA256 与
-// node_modules/.orkas-deps-hash 里上次安装的哈希，不一致就自动 npm install。
+// node_modules/.cogseed-deps-hash 里上次安装的哈希，不一致就自动 npm install。
 // 由 run.sh / run.cmd 调用，单点跨平台。
 
 const fs = require('node:fs');
@@ -16,7 +16,7 @@ const PC_DIR = path.resolve(__dirname, '..');
 const PKG = path.join(PC_DIR, 'package.json');
 const LOCK = path.join(PC_DIR, 'package-lock.json');
 const NODE_MODULES = path.join(PC_DIR, 'node_modules');
-const STAMP = path.join(NODE_MODULES, '.orkas-deps-hash');
+const STAMP = path.join(NODE_MODULES, '.cogseed-deps-hash');
 
 function missingDeclaredDependencyPackages(options = {}) {
   const packageFile = options.packageFile || PKG;

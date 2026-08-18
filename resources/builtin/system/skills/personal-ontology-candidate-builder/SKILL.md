@@ -42,15 +42,15 @@ negative_examples:
 1. 判断触发类型：这是一次主动的"帮我整理记忆"请求，还是对话里自然出现的"记住这个"信号。
 2. 扫描最近的对话/记忆材料，识别偏好、实例、属性、关系、规则五类候选。识别偏好时优先看重复出现的模式（同类偏好被提及多次，说明是稳定习惯，不是一次性吐槽）。
 3. **读全本体（强制门禁，不可跳过）**：提炼前必须先完整读取本技能本体 `ontology/personal_ontology/` 下**全部五份 yaml**——`scene_package.yaml`（包元数据/启用项）、`scene_tbox.yaml`（候选类型/来源/去向概念定义）、`scene_rbox.yaml`（确认制/边界/提炼规则）、`scene_abox.yaml`（fewshot 示例）、`scene_mapping.yaml`（候选/确认/分组字段映射）。候选的分类、置信度、去向、字段映射全部以 yaml 为准，**不得跳步、不得凭印象拍脑袋**；本体规则与本文件硬边界一致，冲突时以本文件为准。
-4. 读取已安装角色模板的字段清单，作为 `建议字段` 的候选池：查看 `$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/cloud/contexts/.personal_ontology_groups/groups.md` 中带 `- 模板:` 行的分组（`- 模板: student@0.2.0-review.1` 这种格式），结合内置模板（内置角色模板：学生/学者/FDE/产品经理/项目经理/技术写作/招聘专员/软件工程师）的字段定义，判断这条候选能对号入座到哪个模板字段（如"沟通风格""学习目标"）。拿不准就不填建议字段。
+4. 读取已安装角色模板的字段清单，作为 `建议字段` 的候选池：查看 `$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/cloud/contexts/.personal_ontology_groups/groups.md` 中带 `- 模板:` 行的分组（`- 模板: student@0.2.0-review.1` 这种格式），结合内置模板（内置角色模板：学生/学者/FDE/产品经理/项目经理/技术写作/招聘专员/软件工程师）的字段定义，判断这条候选能对号入座到哪个模板字段（如"沟通风格""学习目标"）。拿不准就不填建议字段。
 5. 对每条候选，先检查是否涉及未脱敏的敏感信息（密钥、密码、他人隐私）——有问题的直接进 `blocked_items`，不要悄悄丢弃、也不要生成候选。
 6. 判断候选该进哪本记忆：跟"这个人本身"强相关的（沟通风格、工具偏好、身份信息）归 `memory_scope: user`；更泛化的事实/规则/项目信息归 `memory_scope: shared`。
 7. 给每条候选写一句**人话摘要**（`summary`），要具体、口语化，让用户一看就懂是什么内容；同时准备好确认后要写进记忆的**精炼文本**（`memory_text`，通常和 summary 一致或更简练）。
-8. **查重门禁（强制，不可跳过）**：写候选池之前，先 read 当前候选池 `candidates.md`，并逐条对照已生效记忆 `$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/cloud/memory/USER.md`（user 去向）和 `$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/cloud/memory/MEMORY.md`（shared 去向）：
+8. **查重门禁（强制，不可跳过）**：写候选池之前，先 read 当前候选池 `candidates.md`，并逐条对照已生效记忆 `$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/cloud/memory/USER.md`（user 去向）和 `$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/cloud/memory/MEMORY.md`（shared 去向）：
    - 与已生效记忆**完全重复**的事实 → **不进候选池**（已生效事实不得再次进池；候选 ID 池内也禁止重复）；
    - 与已生效记忆同源但类型/表述不同（如"事实"vs"推断偏好"）→ 可进池，但必须在第 10 步汇报里向用户说明与已有记忆的重叠关系；
    - 拿不准是否重复时，先查再写，不要默认当成新候选。
-9. **追加 + 三方同步（强制）**：把候选追加进候选池文件（见下方"输出位置"），**不要覆盖已有的待确认候选**，只追加新的；同时核对角色模板文件 `$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/cloud/contexts/.personal_ontology_groups/`（如 `student.md`）里的 `[候选]` 标记：进池的条目同步改为 `[候选池: <candidateId>]`，已在记忆生效的改为 `[已生效]`——候选池、模板标记、生效记忆**三方必须一致**，缺一即状态漂移。
+9. **追加 + 三方同步（强制）**：把候选追加进候选池文件（见下方"输出位置"），**不要覆盖已有的待确认候选**，只追加新的；同时核对角色模板文件 `$COGSEED_WORKSPACE_ROOT/$COGSEED_UID/cloud/contexts/.personal_ontology_groups/`（如 `student.md`）里的 `[候选]` 标记：进池的条目同步改为 `[候选池: <candidateId>]`，已在记忆生效的改为 `[已生效]`——候选池、模板标记、生效记忆**三方必须一致**，缺一即状态漂移。
 10. **落盘核验（强制）**：追加完成后用 cat 核对实际落盘内容（候选条数、候选 ID、字段是否齐全、标记是否同步），再向用户汇报；**禁止凭记忆或上次的汇报复述候选数量**。最后用一两句话跟用户说明本次提炼了几条候选、大致是什么内容，请用户去候选审阅面板确认或驳回；不要在对话里罗列全部候选细节。
 
 ## 输出位置（必须严格遵守）
@@ -58,11 +58,11 @@ negative_examples:
 候选池和阻断项存在用户数据目录下，**不是**普通的工作区文件，也不是写死的某个人的 Documents 路径。执行 bash 时用环境变量拼出真实路径：
 
 ```
-候选池：   $ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/candidates.md
-阻断项：   $ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/blocked_items.md
+候选池：   $COGSEED_WORKSPACE_ROOT/$COGSEED_UID/local/ontology_candidates/candidates.md
+阻断项：   $COGSEED_WORKSPACE_ROOT/$COGSEED_UID/local/ontology_candidates/blocked_items.md
 ```
 
-`ORKAS_WORKSPACE_ROOT` 和 `ORKAS_UID` 已经在执行环境的环境变量里，直接用，不要猜测或写死路径。目录不存在时自动创建。
+`COGSEED_WORKSPACE_ROOT` 和 `COGSEED_UID` 已经在执行环境的环境变量里，直接用，不要猜测或写死路径。目录不存在时自动创建。
 
 两个文件都是**人读 markdown**，不是 JSON。格式和字段定义见 `references/output-contract.md`，写之前务必核对格式；格式不对，App 里的候选审阅面板读不出来。
 

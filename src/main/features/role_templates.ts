@@ -5,7 +5,7 @@
  * 分组，并在 groups.md 台账上记录 template_id/template_version；之后候选确认时
  * “对号入座”：有坑填坑（appendFieldValue）、没坑进流水区。
  *
- * 三层本体落点（详见 mate-agent-development skill 的 T/A/R-box 模式）：
+ * 三层本体落点（详见 cogseed-agent-development skill 的 T/A/R-box 模式）：
  * - T-box = 这里的 fields（“要填哪些空”）
  * - R-box = isRelation: true 的字段（关系值用 `A → B` 格式，App 不校验不拆分）
  * - A-box = 确认后写入组内容文件字段区/流水区的实际值

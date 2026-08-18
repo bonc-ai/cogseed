@@ -44,8 +44,8 @@ function loadMarketplaceRenderer(): any {
       'marketplace.install_failed': 'Install failed: {reason}',
       'marketplace.install_failed_resource': 'Install failed: {kind}: {name}. {reason}',
       'marketplace.action_failed_retry_later': 'Marketplace is temporarily unavailable. Please try again later.',
-      'marketplace.app_update_required': 'Requires Orkas {minimum} or newer (current {current}). Update Orkas, then install.',
-      'marketplace.requires_app': 'Needs Orkas {version}+',
+      'marketplace.app_update_required': 'Requires CogSeed {minimum} or newer (current {current}). Update CogSeed, then install.',
+      'marketplace.requires_app': 'Needs CogSeed {version}+',
       'marketplace_request.kind_agent': 'Agent',
       'marketplace_request.kind_skill': 'Skill',
     } as Record<string, string>)[key] || key,
@@ -103,14 +103,14 @@ describe('marketplace install error display', () => {
         marketplaceAppUpdateRequired: true,
         marketplaceMinAppVersion: '1.6.0',
         marketplaceCurrentAppVersion: '1.5.1',
-        message: 'requires Orkas >= 1.6.0; current 1.5.1',
+        message: 'requires CogSeed >= 1.6.0; current 1.5.1',
       },
     );
 
     expect(text).toBe(
-      'Install failed: Agent: VideoStudio. Requires Orkas 1.6.0 or newer (current 1.5.1). Update Orkas, then install.',
+      'Install failed: Agent: VideoStudio. Requires CogSeed 1.6.0 or newer (current 1.5.1). Update CogSeed, then install.',
     );
-    expect(text).not.toContain('requires Orkas >= 1.6.0');
+    expect(text).not.toContain('requires CogSeed >= 1.6.0');
   });
 
   it('gates the install button by client app version', () => {
