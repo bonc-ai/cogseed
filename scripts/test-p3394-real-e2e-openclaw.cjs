@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /**
- * 真实 codex 端到端验证（无 mock）：真实 gateway.cjs + 真实 codex CLI
- * (ChatGPT.app app-server / exec) + 真实应用 Bridge。
- * 前置：Mate Agent 运行中（8444）+ ChatGPT.app 已装 codex。
+ * 真实 openclaw 端到端验证（无 mock）：真实 gateway.cjs + 真实 openclaw CLI + 真实应用 Bridge。
+ * 前置：Mate Agent 运行中（8444）+ 本机已装 openclaw（可用 P3394_E2E_OPENCLAW_BIN 指定路径）。
  */
 'use strict';
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -14,8 +13,12 @@ const crypto = require('node:crypto');
 
 const COGSEED_ENDPOINT = 'http://127.0.0.1:8444';
 const COGSEED_TOKEN = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', 'cogseed', 'p3394-bridge.json'), 'utf8')).token;
-const OPCLW = '/Users/an/.local/bin/openclaw';
-const GATEWAY_SCRIPT = '/Users/an/东方国信项目/开源companion agent/mate-agent/p3394-gateway/gateway.cjs';
+const OPCLW = process.env.P3394_E2E_OPENCLAW_BIN || 'openclaw';
+function resolveCliBin(candidate) {
+  if (path.isAbsolute(candidate)) return fs.existsSync(candidate) ? candidate : '';
+  try { return spawnSync('which', [candidate], { encoding: 'utf8' }).stdout.trim(); } catch { return ''; }
+}
+const GATEWAY_SCRIPT = path.resolve(__dirname, '..', 'p3394-gateway', 'gateway.cjs');
 
 function freePort() { return new Promise((res) => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); }); }
 function getJson(url, t = 3000) { return new Promise((res) => { const r = http.get(url, { timeout: t }, (x) => { let d = ''; x.on('data', (c) => d += c); x.on('end', () => res({ s: x.statusCode, d })); }); r.on('error', () => res({ s: 0, d: '' })); r.on('timeout', () => { r.destroy(); res({ s: 0, d: '' }); }); }); }
@@ -26,14 +29,15 @@ async function main() {
   const replyPort = await freePort();
   const results = [];
   const mark = (n, ok, d) => { results.push(ok); console.log((ok ? '✓ ' : '✗ ') + n + (d ? ' — ' + d : '')); };
-  mark('openclaw 二进制存在', fs.existsSync(OPCLW), OPCLW);
+  const openclawBin = resolveCliBin(OPCLW);
+  mark('openclaw 二进制存在', !!openclawBin, OPCLW);
 
   const env = { ...process.env,
     P3394_GATEWAY_PORT: String(gwPort), P3394_GATEWAY_HOST: '127.0.0.1',
     P3394_ADVERTISE_ENDPOINT: `http://127.0.0.1:${gwPort}`,
     P3394_GATEWAY_HOME: path.join(os.tmpdir(), 'p3394-openclaw-e2e-' + Date.now()),
     P3394_AGENT: 'openclaw', P3394_AGENT_ID: 'openclaw', P3394_AGENT_ALIAS: 'OpenClaw-RealE2E',
-    P3394_AGENT_CLI: OPCLW,
+    P3394_AGENT_CLI: openclawBin || OPCLW,
     COGSEED_ENDPOINT, COGSEED_TOKEN,
     P3394_HEARTBEAT_MS: '5000', P3394_AGENT_TIMEOUT_MS: '180000', P3394_AGENT_CLI_ARGS: 'agent --local --json --agent oc-claude --message {message}',
     // app-server 是托管的 codex 常驻运行时；加长 heartbeat 防超时

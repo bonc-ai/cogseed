@@ -51,9 +51,8 @@ unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_MODEL
 
 export ORKAS_RUNTIME_VARIANT="cogseed"
 
-# Hub 联调默认值：默认连接测试 Hub 账号服务（https://cogseed-open.bonc.com.cn）。
-# 3000 端口已对公网关闭，请勿再直连 http://101.36.66.129:3000。
-# 需要连本地服务时，显式导出同名变量即可覆盖：
+# Hub 联调默认值：默认连接 Hub 账号服务。需要连本地服务时，
+# 显式导出同名变量即可覆盖：
 #   COGSEED_HUB_API_BASE=http://localhost:3000 ./run.sh
 export COGSEED_HUB_API_BASE="${COGSEED_HUB_API_BASE:-https://cogseed-open.bonc.com.cn}"
 
