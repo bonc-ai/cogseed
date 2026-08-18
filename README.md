@@ -120,7 +120,7 @@ Linux 可用于部分源码开发和测试，但 macOS、Windows 是主要桌面
 ### 获取源码
 
 ```bash
-git clone http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/cogseed.git
+git clone https://github.com/cogseed/cogseed.git
 cd cogseed
 npm install
 ```

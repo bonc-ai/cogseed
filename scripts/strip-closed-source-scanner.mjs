@@ -68,47 +68,58 @@ if (args.help) {
 }
 
 const guardrail = path.join(args.root, 'resources', 'guardrail');
-const scanner = path.join(guardrail, 'skill-sentry');
+// 两棵闭源引擎树：skill-sentry（深度扫描器）+ nseap-security-core（NSEAP 核心）。
+const CLOSED_SOURCE_TREES = [
+  'skill-sentry',
+  'nseap-security-core',
+];
 const marker = path.join(guardrail, 'SCANNER_ABSENT');
-const pin = path.join(guardrail, 'skill-sentry.INTEGRITY');
 
 if (!fs.existsSync(guardrail)) {
   process.stderr.write(`no guardrail directory at ${guardrail}\n`);
   process.exit(2);
 }
 
-const hasScanner = fs.existsSync(scanner);
+const presentTrees = CLOSED_SOURCE_TREES.filter((tree) => fs.existsSync(path.join(guardrail, tree)));
 const hasMarker = fs.existsSync(marker);
 
 if (args.check) {
   process.stdout.write(
-    `scanner present: ${hasScanner}\nmarker present:  ${hasMarker}\n`,
+    `closed-source trees present: ${presentTrees.length ? presentTrees.join(', ') : '(none)'}\nmarker present:  ${hasMarker}\n`,
   );
-  if (hasScanner || !hasMarker) {
+  if (presentTrees.length || !hasMarker) {
     process.stderr.write('not stripped for open-source distribution\n');
     process.exit(1);
   }
-  process.stdout.write('stripped: deep scanner absent, omission declared\n');
+  process.stdout.write('stripped: closed-source engines absent, omission declared\n');
   process.exit(0);
 }
 
 // Refuse the primary working tree by default. Running this in place deletes the
-// scanner from a developer's checkout, and the mistake is quiet: everything keeps
+// engines from a developer's checkout, and the mistake is quiet: everything keeps
 // working, just with weaker scanning, which is exactly the state nobody notices.
 if (path.resolve(args.root) === REPO && !args.force) {
   process.stderr.write(
-    'refusing to strip the primary working tree (this would delete your local scanner).\n'
+    'refusing to strip the primary working tree (this would delete your local closed-source engines).\n'
     + 'Run against a distribution copy, or pass --force if that is really intended.\n',
   );
   process.exit(2);
 }
 
-if (hasScanner) fs.rmSync(scanner, { recursive: true, force: true });
-// The pin describes a tree that is no longer here; leaving it would invite a
-// mismatch against whatever scanner gets installed later.
-if (fs.existsSync(pin)) fs.rmSync(pin, { force: true });
+const removedTrees = [];
+for (const tree of CLOSED_SOURCE_TREES) {
+  const dir = path.join(guardrail, tree);
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  // The integrity pin describes a tree that is no longer here; leaving it would
+  // invite a mismatch against whatever engine gets installed later.
+  const treePin = path.join(guardrail, `${tree}.INTEGRITY`);
+  if (fs.existsSync(treePin)) fs.rmSync(treePin, { force: true });
+  if (!fs.existsSync(dir) && !fs.existsSync(treePin)) {
+    removedTrees.push(`${tree}/ + ${path.basename(treePin)}`);
+  }
+}
 fs.writeFileSync(marker, MARKER_BODY);
 
 process.stdout.write(
-  `stripped closed-source scanner\n  removed: ${scanner}\n  marker:  ${marker}\n`,
+  `stripped closed-source engines\n  removed: ${removedTrees.join(', ') || '(none)'}\n  marker:  ${marker}\n`,
 );

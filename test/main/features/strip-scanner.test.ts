@@ -20,17 +20,20 @@ import { afterEach, describe, expect, it } from 'vitest';
 const REPO = path.resolve(__dirname, '../../..');
 const SCRIPT = path.join(REPO, 'scripts', 'strip-closed-source-scanner.mjs');
 const REAL_SCANNER = path.join(REPO, 'resources', 'guardrail', 'skill-sentry');
+const REAL_NSEAP = path.join(REPO, 'resources', 'guardrail', 'nseap-security-core');
 
 let tmp = '';
 
-/** A minimal checkout copy: guardrail dir with the scanner and the driver. */
+/** A minimal checkout copy: guardrail dir with both engines and the driver. */
 function stageCheckout(): string {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'strip-'));
   const guardrail = path.join(tmp, 'resources', 'guardrail');
   fs.mkdirSync(guardrail, { recursive: true });
   fs.cpSync(REAL_SCANNER, path.join(guardrail, 'skill-sentry'), { recursive: true });
+  fs.cpSync(REAL_NSEAP, path.join(guardrail, 'nseap-security-core'), { recursive: true });
   fs.writeFileSync(path.join(guardrail, 'scan_gate.py'), '# driver, no rules\n');
   fs.writeFileSync(path.join(guardrail, 'skill-sentry.INTEGRITY'), 'deadbeef\n');
+  fs.writeFileSync(path.join(guardrail, 'nseap-security-core.INTEGRITY'), 'deadbeef\n');
   return tmp;
 }
 
@@ -56,6 +59,15 @@ describe('strip closed-source scanner', () => {
     expect(run(['--root', root]).code).toBe(0);
 
     expect(fs.existsSync(path.join(root, 'resources', 'guardrail', 'skill-sentry'))).toBe(false);
+  }, 60_000);
+
+  it('removes the nseap-security-core tree', () => {
+    const root = stageCheckout();
+
+    expect(run(['--root', root]).code).toBe(0);
+
+    expect(fs.existsSync(path.join(root, 'resources', 'guardrail', 'nseap-security-core'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'resources', 'guardrail', 'nseap-security-core.INTEGRITY'))).toBe(false);
   }, 60_000);
 
   // THE load-bearing assertion. Without the marker the app reads the absence as a
