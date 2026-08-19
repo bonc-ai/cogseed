@@ -2,7 +2,7 @@
 /**
  * 真实 codex 端到端验证（无 mock）：真实 gateway.cjs + 真实 codex CLI
  * (ChatGPT.app app-server / exec) + 真实应用 Bridge。
- * 前置：Mate Agent 运行中（8444）+ ChatGPT.app 已装 codex。
+ * 前置：CogSeed 运行中（8444）+ ChatGPT.app 已装 codex。
  */
 'use strict';
 const { spawn } = require('node:child_process');

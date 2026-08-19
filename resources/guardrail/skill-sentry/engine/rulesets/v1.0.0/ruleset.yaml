@@ -18,4 +18,4 @@ compatible_engine_versions: ">=2.0.0"
 changelog:
   - version: "1.0.0"
     date: "2026-07-27"
-    change: "从 wjy-skill 02_rules 迁移，规则内容未变更，仅补充版本化索引"
+    change: "从 cogseed-security-scan 02_rules 迁移，规则内容未变更，仅补充版本化索引"

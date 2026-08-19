@@ -17,7 +17,7 @@ from security_core.validate import run_validation  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="ecs-security-validator")
+    parser = argparse.ArgumentParser(prog="cogseed-security-validator")
     parser.add_argument("--skill-root", required=True)
     parser.add_argument("--mode", required=True, choices=["PREVALIDATION", "FORMAL_TEST"])
     parser.add_argument("--ontology-version", default=None)

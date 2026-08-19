@@ -179,7 +179,7 @@ function createPeersTool(): AgentTool {
     name: 'p3394_peers',
     description:
       'List the P3394 peer Agents currently registered in the CogSeed bridge: agent id, ' +
-      'display name, declared capabilities, locality, endpoints and online status (ECS ' +
+      'display name, declared capabilities, locality, endpoints and online status ' +
       'liveness: a peer is online when it recently sent a hello/heartbeat). Use this to ' +
       'discover who is available for p3394_send (you may pass an id, an alias, or a capability).',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },

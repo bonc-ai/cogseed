@@ -105,7 +105,7 @@ def add_toc(doc):
       '10. 外部标准、政策语义资产与本体对标',
       '11. Shared Upper Ontology 映射',
       '12. 智能体扩展、授权、HITL与审计',
-      '13. 闭环示例与 KSTAR/ECS 映射',
+      '13. 闭环示例与 KSTAR 映射',
       '14. 架构边界、实施建议与待确认问题',
       '附录 A. Master Mapping Workbook',
       '附录 B. 来源、版本与证据',
@@ -393,7 +393,7 @@ def build(data,out_path):
     add_callout(doc,'强治理主链','DomainAgent → Capability → Skill/Tool → Authorization → Candidate Output → Safety/Quality Gate → Human Approval → Action → Audit → Review/Appeal → Episode/Learning',fill=LIGHT_ORANGE,edge=ORANGE)
 
     # 13
-    new_page(doc); add_heading(doc,'13. 闭环示例与 KSTAR/ECS 映射',1)
+    new_page(doc); add_heading(doc,'13. 闭环示例与 KSTAR 映射',1)
     add_figure(doc,loop,'图 13-1  可解释业务闭环与KSTAR学习边界')
     for i,x in enumerate(data['closed_loops'],1):
         if i > 2 and i % 2 == 1:
@@ -401,7 +401,7 @@ def build(data,out_path):
         add_heading(doc,f'13.{i} {x["name"]}',2)
         rows=[('Situation',x['situation']),('Goal',x['goal']),('Process',x['process']),('Task / Decision',x['task_decision']),('Evidence / Event',x['evidence_event']),('Outcome / KPI',x['outcome_kpi']),('Episode / Learning',x['episode_learning'])]
         add_table(doc,['闭环对象','内容'],rows,[4.0,12.8],font_size=8.7,first_col_fill=LIGHT_GREEN)
-    add_heading(doc,'13.x KSTAR/ECS六阶段',2); add_table(doc,['阶段','输入','输出','控制'],[[x['stage'],x['inputs'],x['outputs'],x['controls']] for x in data['kstar_mapping']],[1.6,5.1,5.1,5.0],font_size=8.0,first_col_fill=LIGHT_BLUE)
+    add_heading(doc,'13.x KSTAR六阶段',2); add_table(doc,['阶段','输入','输出','控制'],[[x['stage'],x['inputs'],x['outputs'],x['controls']] for x in data['kstar_mapping']],[1.6,5.1,5.1,5.0],font_size=8.0,first_col_fill=LIGHT_BLUE)
 
     # 14
     new_page(doc); add_heading(doc,'14. 架构边界、实施建议与待确认问题',1)

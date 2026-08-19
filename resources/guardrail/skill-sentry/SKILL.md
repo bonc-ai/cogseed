@@ -2,7 +2,7 @@
 name: skill-sentry
 description: "针对 Skill 的强制安全扫描 + 信任网关：静态检测危险命令、注入、密钥、恶意模式、Prompt Injection 载荷、持久化、数据外传、二进制行为线索，输出 Security Score / 风险分级 / 部署建议，并通过信任根 + 信任台账提供全生命周期防篡改保护。"
 version: 2.1.0
-author: wjy
+author: CogSeed
 license: Apache-2.0
 platforms: [linux, darwin]
 prerequisites:
@@ -16,7 +16,7 @@ metadata:
 # Skill Sentry
 
 针对 **Skill** 的安全扫描 + 信任网关，定位为 Skill Factory / Agent Factory /
-Companion Agent / Task Agent 的**强制安全入口**。前身为 `wjy-skill`（1.0.0），
+Companion Agent / Task Agent 的**强制安全入口**。前身为 `cogseed-security-scan`（1.0.0），
 2.0.0 起完成工程化重构：模块化引擎包、规则版本化、输出契约 schema 化、
 回归测试体系。2.1.0 引入上下文感知层，把裁决层从「对任何目录都告警」
 校准到可用于实际拦截（见下节）。

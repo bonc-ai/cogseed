@@ -119,7 +119,7 @@ children.push(num("动态检测定位：动态行为分析（尤其针对携带�
 children.push(num("对比路线取舍：是否确认暂不采用「独立 Agent 检测」路线？", "conf"));
 
 const doc = new Document({
-  creator: "wjy", title: "外部 Skill 安全检测方案",
+  creator: "CogSeed", title: "外部 Skill 安全检测方案",
   styles: {
     default: { document: { run: { font: "Arial", size: 22 } } },
     paragraphStyles: [

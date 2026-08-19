@@ -39,7 +39,7 @@ RESEARCH_GATE_FAILURE
 - [ ] 外部标准/语义资产不少于 8 项；
 - [ ] 完整闭环示例不少于 3 个；
 - [ ] 21 类 Shared Upper Ontology 均已检查；
-- [ ] Agent、授权、HITL、审计和 KSTAR/ECS 均有独立章节。
+- [ ] Agent、授权、HITL、审计和 KSTAR 均有独立章节。
 
 ---
 
@@ -153,7 +153,7 @@ RESEARCH_GATE_FAILURE
 
 ---
 
-## G. KSTAR/ECS 质量
+## G. KSTAR 质量
 
 - [ ] 至少 3 个完整闭环；
 - [ ] K_C 输入包括 Situation、Party、Role、Goal、State；

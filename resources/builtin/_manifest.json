@@ -68,11 +68,6 @@
       "sha256": "088ee05ac35ad29f9dc2f7bc16d77f32df5c286fefbde12a01ef9356ff6f0835"
     },
     {
-      "path": "marketplace/agents/6a960be83f33/agent.json",
-      "bytes": 1152,
-      "sha256": "31e454d4c5f5a8f413b3fb541e85bb648e86f61e07b9aae26c2d9093bc5dd158"
-    },
-    {
       "path": "marketplace/agents/736cc1ac94b4/agent.json",
       "bytes": 1214,
       "sha256": "196d05f18376a4c7c6aad8845a619311126fefbbf5b062cc93e241e635c92d3d"
@@ -7419,16 +7414,6 @@
           "181e249741e9",
           "9a2bc04da822"
         ],
-        "embedded_skills": []
-      },
-      {
-        "id": "6a960be83f33",
-        "name": "ECS售前Agent",
-        "version": "1.0.0",
-        "icon": "megaphone",
-        "color": "gold",
-        "updated_at": "2026-08-17T00:00:00",
-        "skill_list": [],
         "embedded_skills": []
       },
       {

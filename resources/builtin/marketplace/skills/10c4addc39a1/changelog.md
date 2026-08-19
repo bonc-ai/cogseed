@@ -13,7 +13,7 @@
 - `README.md` for colleagues and reviewers.
 - `input-template.md` for task intake and required inputs.
 - `output-template.md` for the unified 19-domain report architecture.
-- `quality-checklist.md` for facts, sources, Ontology quality, standards alignment, Agent governance, KSTAR/ECS, and Word QA.
+- `quality-checklist.md` for facts, sources, Ontology quality, standards alignment, Agent governance, KSTAR, and Word QA.
 - `examples/education-example.md`.
 - `examples/human-resources-example.md`.
 

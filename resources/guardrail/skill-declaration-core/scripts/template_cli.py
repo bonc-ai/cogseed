@@ -29,7 +29,7 @@ def _print(obj: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="ecs-security-template",
+        prog="cogseed-security-template",
         description="Security 3.1 Template Provider (§6: get-template / describe-field / …)",
     )
     parser.add_argument(

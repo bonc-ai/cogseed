@@ -104,7 +104,7 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
 
 两种模式通用：
 
-- **ECS 注册与心跳**：启动 hello 自注册（身份/显示名/地址/能力/node_kind/
+- **注册与心跳**：启动 hello 自注册（身份/显示名/地址/能力/node_kind/
   profiles），之后按 `P3394_HEARTBEAT_MS` 周期报活——CogSeed 侧可看到本节点
   在线状态；
 - **会话连续性**：同一 `session_id` 的多轮消息共享会话目录与 transcript；
@@ -126,8 +126,8 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `P3394_GATEWAY_PORT` | 9000 | 本端 P3394 端点端口 |
-| `P3394_GATEWAY_HOST` | 127.0.0.1 | 监听地址（ECS 跨机器填局域网 IP；默认回环，安全优先） |
-| `P3394_HEARTBEAT_MS` | 60000 | ECS 心跳间隔（向 CogSeed 报活刷新在线状态；0 关闭） |
+| `P3394_GATEWAY_HOST` | 127.0.0.1 | 监听地址（跨机器填局域网 IP；默认回环，安全优先） |
+| `P3394_HEARTBEAT_MS` | 60000 | 心跳间隔（向 CogSeed 报活刷新在线状态；0 关闭） |
 | `P3394_GATEWAY_HOME` | ~/.p3394-gateway | 会话目录/transcript/工作区根目录 |
 | `P3394_ADVERTISE_ENDPOINT` | http://127.0.0.1:9000 | 启动时向 CogSeed 自报的本端地址（跨机器填对端可达的 IP） |
 | `P3394_GATEWAY_TOKEN` | 空 | 本端入站鉴权（空 = 不鉴权，仅回环监听） |

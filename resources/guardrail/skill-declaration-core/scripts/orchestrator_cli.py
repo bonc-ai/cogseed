@@ -164,7 +164,7 @@ def cmd_run_pipeline(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="ecs-security-orchestrator")
+    parser = argparse.ArgumentParser(prog="cogseed-security-orchestrator")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_fr = sub.add_parser("freeze")

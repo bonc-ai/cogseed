@@ -20,7 +20,7 @@ eval_cases:
         摘要提及 AI 辅助制作课程汇报/期末汇演 PPT。
 
     - id: pos_instance_project
-      prompt: "我在做 Mate Agent 项目，代码在 ~/cogseed-agent。"
+      prompt: "我在做 CogSeed 项目，代码在 ~/cogseed-agent。"
       expected_behavior: >
         输出 instance 候选（项目实体），建议去向 shared。
 

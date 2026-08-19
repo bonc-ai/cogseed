@@ -14,9 +14,9 @@ dependencies = [
 ]
 
 [project.scripts]
-ecs-security-template = "scripts.template_cli:main"
-ecs-security-validator = "scripts.validator_cli:main"
-ecs-security-orchestrator = "scripts.orchestrator_cli:main"
+cogseed-security-template = "scripts.template_cli:main"
+cogseed-security-validator = "scripts.validator_cli:main"
+cogseed-security-orchestrator = "scripts.orchestrator_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["security_core*", "scripts*"]
