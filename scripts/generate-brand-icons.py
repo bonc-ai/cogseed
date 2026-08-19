@@ -7,6 +7,8 @@ orange seed-guardian character). This script:
 - removes the near-white background with a soft alpha transition;
 - writes a transparent page logo (logo.png, 1024x1024);
 - writes a rounded light-background app-icon tile (icon.png, 512x512);
+  - icon.png is also the source-run (dev) Dock icon: after rebuilding icon.icns,
+    re-derive icon.png from the same art so dev matches the packaged app.
 - regenerates the Windows ICO and macOS ICNS containers;
 - writes a maintainable labeled SVG master (cogseed-master.svg).
 
