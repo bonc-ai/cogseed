@@ -20,6 +20,8 @@ regenerating from another location.
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -29,13 +31,48 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'src' / 'resources' / 'icons'
 
-DEFAULT_SOURCE = Path('/Users/sudai/Desktop/微信图片_20260813194423_1297_537.png')
+# 无内置默认源：源图是设计交付资产，路径随机器变化，必须由调用方显式传入。
 
 # App icon background: opaque light warm-white (r,g,b all >= 239 so the asset
 # contract can distinguish it from the transparent page logo).
 ICON_BACKGROUND = (248, 245, 240)
 
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+
+# macOS iconutil iconset layout: name → pixel size. iconutil builds the final
+# ICNS from these; PIL's own ICNS writer has produced alpha-corrupted files
+# (opaque pixels written with alpha=0 → invisible Dock icon), so we never use
+# `Image.save(..., 'ICNS')`.
+ICONSET_LAYOUT = [
+    ('icon_16x16.png', 16),
+    ('icon_16x16@2x.png', 32),
+    ('icon_32x32.png', 32),
+    ('icon_32x32@2x.png', 64),
+    ('icon_128x128.png', 128),
+    ('icon_128x128@2x.png', 256),
+    ('icon_256x256.png', 256),
+    ('icon_256x256@2x.png', 512),
+    ('icon_512x512.png', 512),
+    ('icon_512x512@2x.png', 1024),
+]
+
+
+def _write_icns(icon: Image.Image, target: Path) -> None:
+    """Pack `icon` (square RGBA, >= 1024px) into an ICNS via iconutil.
+
+    Requires macOS (`iconutil` is not shipped on other platforms); the mac
+    package step already runs on macOS only.
+    """
+    with TemporaryDirectory(prefix='cogseed-iconset-') as tmp:
+        iconset = Path(tmp) / 'icon.iconset'
+        iconset.mkdir()
+        for name, px in ICONSET_LAYOUT:
+            scaled = icon.resize((px, px), Image.Resampling.LANCZOS)
+            scaled.save(iconset / name, 'PNG')
+        subprocess.run(
+            ['iconutil', '-c', 'icns', str(iconset), '-o', str(target)],
+            check=True,
+        )
 
 # Whitening-distance soft mask: pixels whose minimum channel is >= BACKGROUND_MIN
 # are fully transparent; pixels below BACKGROUND_MIN - SOFT are fully opaque;
@@ -154,7 +191,7 @@ def write_svg(path: Path) -> None:
 
 
 def main() -> None:
-    source = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SOURCE
+    source = Path(sys.argv[1]) if len(sys.argv) > 1 else None
     if not source.is_file():
         raise SystemExit(
             f'brand icon source not found: {source}\n'
@@ -174,11 +211,11 @@ def main() -> None:
         transparent.alpha_composite(square)
         transparent.save(tmpdir / 'logo.png', 'PNG', optimize=True)
 
-        logo_square = _square_padded(mark, 512, (0, 0, 0, 0))
-        icon = _rounded_tile(logo_square, 512, background=ICON_BACKGROUND)
-        icon.save(tmpdir / 'icon.png', 'PNG', optimize=True)
-        icon.save(tmpdir / 'icon.icns', 'ICNS')
-        icon.save(tmpdir / 'icon.ico', 'ICO', sizes=ICO_SIZES)
+        logo_square = _square_padded(mark, 1024, (0, 0, 0, 0))
+        icon = _rounded_tile(logo_square, 1024, background=ICON_BACKGROUND)
+        icon.resize((512, 512), Image.Resampling.LANCZOS).save(tmpdir / 'icon.png', 'PNG', optimize=True)
+        _write_icns(icon, tmpdir / 'icon.icns')
+        icon.resize((512, 512), Image.Resampling.LANCZOS).save(tmpdir / 'icon.ico', 'ICO', sizes=ICO_SIZES)
         write_svg(tmpdir / 'cogseed-master.svg')
 
         outputs = ['logo.png', 'icon.png', 'icon.icns', 'icon.ico', 'cogseed-master.svg']
