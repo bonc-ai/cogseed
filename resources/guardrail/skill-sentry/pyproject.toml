@@ -5,7 +5,7 @@ description = "Skill 安全静态扫描 + 信任网关引擎——AI Skill 安�
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "wjy" }]
+authors = [{ name = "CogSeed" }]
 dependencies = []
 
 [project.optional-dependencies]

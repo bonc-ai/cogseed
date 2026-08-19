@@ -77,7 +77,7 @@ describe('P3394 peer and alias registry', () => {
     expect(fallback).toMatchObject({ ok: true, value: { identity: { agent_id: 'reviewer-external' } } });
   });
 
-  it('persists peers to the registry file and restores them (ECS restart stability)', async () => {
+  it('persists peers to the registry file and restores them (restart stability)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -101,7 +101,7 @@ describe('P3394 peer and alias registry', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('touches last_seen_at for liveness (ECS online state)', () => {
+  it('touches last_seen_at for liveness (online state)', () => {
     const registry = new P3394PeerRegistry();
     registry.register({ identity: { agent_id: 'cell-b', display_name: 'B' }, manifest: manifest('cell-b') });
     expect(registry.touch('cell-b', '2026-08-15T10:00:00.000Z')).toBe(true);
@@ -112,8 +112,8 @@ describe('P3394 peer and alias registry', () => {
   it('stores node_kind, profiles, channels and policies (guide §7.2 RegisteredNode)', () => {
     const registry = new P3394PeerRegistry();
     const r = registry.register({
-      identity: { agent_id: 'forge-1', display_name: 'Forge' },
-      manifest: manifest('forge-1'),
+      identity: { agent_id: 'test-agent-1', display_name: "TestAgent" },
+      manifest: manifest('test-agent-1'),
       capabilities: ['contract.clause-risk-review'],
       node_kind: 'task_agent',
       supported_profiles: ['p3394-session/1.0', 'p3394-artifact/1.0'],
@@ -130,7 +130,7 @@ describe('P3394 peer and alias registry', () => {
       data_policy: 'internal',
       cost_policy: 'enterprise-quota',
     });
-    expect(registry.resolve('forge-1')).toMatchObject({ ok: true, value: { node_kind: 'task_agent' } });
+    expect(registry.resolve('test-agent-1')).toMatchObject({ ok: true, value: { node_kind: 'task_agent' } });
   });
 
   it('rejects autonomous-agent on reduced node kinds (capability/model_runtime)', () => {

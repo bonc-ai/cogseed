@@ -12,7 +12,7 @@
 - 事件、决策、规则、证据、风险、控制、结果和 KPI 分析；
 - 国内外本体、词汇表、编码体系、交换格式、事件遥测和治理标准对标；
 - Shared Upper Ontology 映射；
-- Agent、Capability、Authorization、HITL、Audit 与 KSTAR/ECS 扩展；
+- Agent、Capability、Authorization、HITL、Audit 与 KSTAR 扩展；
 - 完整 Word 分册生成、结构校验、逐页渲染和质量检查。
 
 本 Skill 的目标是形成 **domain ontology landscape and alignment map（领域本体景观与对齐地图）**，不是一次性构建完整 OWL/RDF 本体、知识图谱或生产规则库。

@@ -51,7 +51,7 @@ export interface P3394PeerRecord {
   /** Outbound dial Bearer token for this peer (per-peer credential, optional).
    *  Stored in the local registry only; never exported to manifests or audit. */
   dial_token?: string;
-  /** 最近一次观察到该节点活动的时间（hello/心跳/任意入站信封刷新）——ECS 在线状态。 */
+  /** 最近一次观察到该节点活动的时间（hello/心跳/任意入站信封刷新）——在线状态。 */
   last_seen_at?: string;
   disabled?: boolean;
   updated_at: string;

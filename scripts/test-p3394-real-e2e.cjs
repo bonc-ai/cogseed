@@ -4,7 +4,7 @@
  * 正在运行的真实 CogSeed 应用 Bridge。
  *
  * 前置条件：
- *  1. Mate Agent 正在运行（Bridge 监听 127.0.0.1:8444，token 从
+ *  1. CogSeed 正在运行（Bridge 监听 127.0.0.1:8444，token 从
  *     ~/.cogseed/runtime-variants/cogseed/p3394-bridge.json 读取）
  *  2. 本机已安装并登录 claude CLI（真实模型调用）
  *

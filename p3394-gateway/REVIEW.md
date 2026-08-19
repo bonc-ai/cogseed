@@ -21,7 +21,7 @@
   它做的事情只有一件：把 P3394 UMF 信封（JSON）翻译成本机 CLI 调用，
   再把 CLI 输出翻译成回复信封。**没有其他任何行为**。
 - `docs/P3394_Raymond_Hermes_Chinese_Implementation_Guide.md` —— P3394 v1.1 中文实施指南
-  （面向 Raymond、Forge、Cogseed、Hermes 及第三方 ADK 的通用 Bridge ADK 实现规范）。
+  （面向 Cogseed、Hermes 及第三方 ADK 的通用 Bridge ADK 实现规范）。
 - `docs/P3394_Local_Bridge_SDK_Design(1).md` —— P3394 本地桥 SDK 设计（协议模型：UMF
   Envelope / Identity / Manifest / Session / Task / Channel / Audit / Recovery）。
 - `test/` —— 网关的协议测试（可与本机实现对照审查）。

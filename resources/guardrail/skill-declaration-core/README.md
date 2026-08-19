@@ -34,11 +34,11 @@ Under `.cursor/skills/`:
 
 | Skill | Role |
 |-------|------|
-| `ecs-security-template-provider` | 3.1 |
-| `ecs-skill-creator-security-guidance` | Creator fill + precheck |
-| `ecs-security-core-usage` | Core API / exit codes |
-| `ecs-security-validator` | 3.2 dual mode |
-| `ecs-formal-test-orchestrator` | Freeze + formal + digest set |
+| `cogseed-security-template-provider` | 3.1 |
+| `cogseed-skill-creator-security-guidance` | Creator fill + precheck |
+| `cogseed-security-core-usage` | Core API / exit codes |
+| `cogseed-security-validator` | 3.2 dual mode |
+| `cogseed-formal-test-orchestrator` | Freeze + formal + digest set |
 
 ## Phase boundary
 

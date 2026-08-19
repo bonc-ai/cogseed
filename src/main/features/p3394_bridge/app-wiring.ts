@@ -177,7 +177,7 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
     return r.manifest;
   };
 
-  // ECS 本地 Cell：peer 注册表持久化到 Agent Home（重启不丢节点）。
+  // 本地 Cell：peer 注册表持久化到 Agent Home（重启不丢节点）。
   const registry = new P3394PeerRegistry({ filePath: p3394StateFile('p3394-peers.json') });
   const bridge = new P3394BridgeKernel({ registry });
   bridge.registry.register({ identity: { agent_id: 'cogseed', display_name: 'CogSeed' }, manifest: manifestOf('cogseed') });
@@ -222,7 +222,7 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
       })
     : new P3394CogseedRuntimeAdapter({ userId: () => userId });
 
-  // ECS 跨机器：COGSEED_P3394_HOST 可绑定局域网地址（默认回环，安全优先）。
+  // 跨机器：COGSEED_P3394_HOST 可绑定局域网地址（默认回环，安全优先）。
   const listenHost = process.env.COGSEED_P3394_HOST || '127.0.0.1';
   const channel = new P3394HttpChannel('cogseed-app', {
     listen: { host: listenHost, port },
@@ -403,7 +403,7 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
       };
       bridge.registry.register(fresh);
     }
-    // ECS 在线状态：hello/心跳/任意入站信封都刷新该节点的 last_seen。
+    // 在线状态：hello/心跳/任意入站信封都刷新该节点的 last_seen。
     bridge.registry.touch(senderId);
     // AI 团队投影（异步、幂等）：本地节点自动获得团队卡片。
     // 心跳只刷新在线状态，不触发投影（避免高频 listAgents）。
@@ -695,7 +695,7 @@ export interface P3394PeerSummary {
   data_policy: string;
   cost_policy: string;
   disabled: boolean;
-  /** ECS 在线状态：最近一次 hello/心跳/入站活动在窗口内视为 online。 */
+  /** 在线状态：最近一次 hello/心跳/入站活动在窗口内视为 online。 */
   online: boolean;
   last_seen_at?: string;
 }

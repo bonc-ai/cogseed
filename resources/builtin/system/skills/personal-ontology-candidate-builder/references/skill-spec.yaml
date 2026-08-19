@@ -9,7 +9,7 @@ skill_spec:
   name: personal-ontology-candidate-builder
   version: "1.0.0"
   level: L3
-  owner: Mate Agent Team
+  owner: CogSeed Team
   status: packaged
   language: zh-CN
   skill_category: ProductionProcessSkill

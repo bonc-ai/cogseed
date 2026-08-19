@@ -133,9 +133,9 @@ async function main() {
   const noAuth = await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: {} }, 'wrong');
   check('错误 token → 401', noAuth.status === 401);
 
-  // ECS 心跳：网关周期性向 CogSeed 报活（control + inform，刷新 last_seen）
+  // 心跳：网关周期性向 CogSeed 报活（control + inform，刷新 last_seen）
   await sleep(900);
-  check('ECS 心跳：定期 heartbeat 信封', received.some((e) => e.kind === 'control' && e.performative === 'inform' && e.sender.agent_id === 'hermes' && e.payload && e.payload.metadata && e.payload.metadata.heartbeat === true));
+  check(心跳：定期 heartbeat 信封', received.some((e) => e.kind === 'control' && e.performative === 'inform' && e.sender.agent_id === 'hermes' && e.payload && e.payload.metadata && e.payload.metadata.heartbeat === true));
 
   // 收件 → 转发模型 → 回发
   const env1 = { message_id: 'm1', session_id: 's1', task_id: 't1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'hello' }] }, idempotency_key: 'idem1' };

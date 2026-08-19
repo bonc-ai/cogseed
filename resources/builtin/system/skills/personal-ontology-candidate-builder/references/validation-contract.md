@@ -1,6 +1,6 @@
 # Validation Contract（校验契约）
 
-Skill: `personal-ontology-candidate-builder`  ·  Level: `L3`  ·  Owner: `Mate Agent Team`
+Skill: `personal-ontology-candidate-builder`  ·  Level: `L3`  ·  Owner: `CogSeed Team`
 
 ## 静态检查（Static Checks）
 

@@ -1,6 +1,6 @@
 # Skill Sentry
 
-Skill 安全静态扫描 + 全生命周期信任网关。前身为个人项目 `wjy-skill`，
+Skill 安全静态扫描 + 全生命周期信任网关。前身为个人项目 `cogseed-security-scan`，
 2.0.0 起完成工程化重构，参照 `security-skills`（技能治理体系）的设计
 支柱做了以下提升：
 
@@ -18,7 +18,7 @@ Skill 安全静态扫描 + 全生命周期信任网关。前身为个人项目 `
   TOCTOU 内容篡改检测等核心防护场景。
 
 详细使用说明见 [SKILL.md](./SKILL.md)。设计过程与原项目对照见
-[docs/与原项目对照.md](./docs/与原项目对照.md)（历史文档，指原 wjy-skill
+[docs/与原项目对照.md](./docs/与原项目对照.md)（历史文档，指原 cogseed-security-scan
 与更早的四维治理套件的对照，本次重构未改变检测能力范围，仅提升工程严谨性）。
 
 ## 快速开始

@@ -41,8 +41,8 @@ assets:
 
 metadata:
   title: 个人本体候选构建
-  description: 面向大众用户的个人本体候选提炼本体，覆盖候选类型（偏好/实例/属性/关系/规则）、角色模板（内置角色模板：学生/学者/FDE/产品经理/项目经理/技术写作/招聘专员/软件工程师）、来源追溯（候选/手动/导入/智能）、去向路由（全局记忆/分组字段区/分组流水区）等核心概念，为 Mate Agent 的个人记忆沉淀提供领域知识支撑
-  creator: Mate Agent Team
+  description: 面向大众用户的个人本体候选提炼本体，覆盖候选类型（偏好/实例/属性/关系/规则）、角色模板（内置角色模板：学生/学者/FDE/产品经理/项目经理/技术写作/招聘专员/软件工程师）、来源追溯（候选/手动/导入/智能）、去向路由（全局记忆/分组字段区/分组流水区）等核心概念，为 CogSeed 的个人记忆沉淀提供领域知识支撑
+  creator: CogSeed Team
   created: 2026-08-05
   modified: 2026-08-05
   license: Apache-2.0
@@ -58,8 +58,8 @@ metadata:
 # ============================================================
 
 dependencies:
-  - id: nseap_kstar_spec
-    name: NSEAP KSTAR 技能架构标准
+  - id: cogseed_kstar_spec
+    name: CogSeed KSTAR 技能架构标准
     version: "1.0.0"
     type: standard
 
@@ -68,7 +68,7 @@ dependencies:
 # ============================================================
 
 runtime_note: |
-  本本体服务于 Mate Agent 的个人本体候选构建技能（personal-ontology-candidate-builder）：
+  本本体服务于 CogSeed 的个人本体候选构建技能（personal-ontology-candidate-builder）：
 
   1. 运行时数据流（Electron 依赖，不可改变）：
      对话/记忆 → 技能提炼候选 → candidates.md（待确认池）→ 用户确认 →
@@ -101,9 +101,9 @@ version_history:
 # ============================================================
 
 governance:
-  owner_team: Mate Agent Team
-  author_team: Mate Agent Team
-  approver_team: Mate Agent Team
+  owner_team: CogSeed Team
+  author_team: CogSeed Team
+  approver_team: CogSeed Team
   source_mode: manual
   authority_level: staged
   data_boundary: internal
