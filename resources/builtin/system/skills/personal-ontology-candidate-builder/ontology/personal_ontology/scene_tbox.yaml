@@ -3,7 +3,7 @@
 # 个人本体候选构建本体 — TBox（概念层）
 # 版本: v1.0.0
 # 描述: 定义个人本体候选提炼领域的核心概念、类和属性
-# 适用: Mate Agent 个人记忆沉淀、候选提炼与确认路由
+# 适用: CogSeed 个人记忆沉淀、候选提炼与确认路由
 # ============================================================
 
 schema_version: "1.0.0"
@@ -12,12 +12,12 @@ serialization_policy: utf-8
 
 ontology:
   id: personal_ontology
-  iri: https://nseap.io/ontologies/personal_ontology
+  iri: cogseed.io/ontologies/personal_ontology
   version: "1.0.0"
   title: 个人本体候选构建
   description: 面向大众用户的个人本体候选提炼概念模型，包含候选类型、角色模板、来源追溯、去向路由等核心概念
   namespaces:
-    base: https://nseap.io/ontologies/personal_ontology#
+    base: cogseed.io/ontologies/personal_ontology#
     rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
     rdfs: http://www.w3.org/2000/01/rdf-schema#
     owl: http://www.w3.org/2002/07/owl#
@@ -26,7 +26,7 @@ ontology:
     dcterms: http://purl.org/dc/terms/
   imports: []
   annotations:
-    creator: Mate Agent Team
+    creator: CogSeed Team
     created: 2026-08-05
     lifecycle_status: staged
 

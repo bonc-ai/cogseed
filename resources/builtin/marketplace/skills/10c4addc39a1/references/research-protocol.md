@@ -12,6 +12,6 @@
 10. Build the P/S/I/E/A/R report evidence ledger.
 11. Model parties, roles, systems, concepts, relations and processes with four-layer separation.
 12. Perform role-based standards alignment.
-13. Model Agent authorization, HITL, audit and KSTAR/ECS.
+13. Model Agent authorization, HITL, audit and KSTAR.
 14. Run the full report pipeline, render, inspect every page and audit accessibility.
 15. Hand off only as a staged candidate.

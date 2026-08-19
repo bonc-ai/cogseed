@@ -165,7 +165,7 @@ If the user changes goal/success criteria/risks, update the TaskContract and ask
 
 ### 7. Execute through the right owner
 
-After confirmation, coordinate execution through the normal Mate Agent path:
+After confirmation, coordinate execution through the normal CogSeed path:
 
 - Commander / Hermes for orchestration.
 - Codex or local coding agents for code and shell work.

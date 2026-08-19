@@ -2,7 +2,7 @@
   "scanner": "skill-security-scanner",
   "scanner_version": "1.0.0",
   "skill": ".",
-  "skill_path": "/tmp/skill-sentry-fixtures/sample-safe-skill",
+  "skill_path": "legacy-samples/04_samples/sample-safe-skill",
   "security_score": 100,
   "risk_classification": "LOW",
   "attack_surface": {

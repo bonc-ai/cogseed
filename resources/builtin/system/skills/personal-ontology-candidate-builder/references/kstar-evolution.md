@@ -1,6 +1,6 @@
 # KSTAR Evolution（进化记录）
 
-Skill: `personal-ontology-candidate-builder`  ·  Level: `L3`  ·  Owner: `Mate Agent Team`
+Skill: `personal-ontology-candidate-builder`  ·  Level: `L3`  ·  Owner: `CogSeed Team`
 
 本技能在重要候选提炼运行前记录预测（A_hat/R_hat），执行后记录实际结果并计算差异（DeltaA/DeltaR），作为学习信号。
 

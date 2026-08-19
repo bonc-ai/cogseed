@@ -330,7 +330,7 @@ Domain Agent
 
 ---
 
-# 13. 完整闭环示例与 KSTAR/ECS 映射
+# 13. 完整闭环示例与 KSTAR 映射
 
 至少 3 个真实业务类型的结构化示例；如为合成情境，必须明确标注，不能进入 A-Box。
 
@@ -346,7 +346,7 @@ Situation
 → Episode / Learning
 ```
 
-KSTAR/ECS：
+KSTAR：
 
 | 阶段 | 本体输入 | 执行/推理 | 本体输出 |
 |---|---|---|---|
@@ -400,7 +400,7 @@ Mapping Relation
 Sensitivity / Authority
 Evidence / Provenance
 Agent Usage
-KSTAR/ECS Usage
+KSTAR Usage
 Owner
 Maturity
 Version

@@ -67,7 +67,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const PORT = Number(process.env.P3394_GATEWAY_PORT || 9000);
-// ECS 跨机器：可绑定局域网地址（默认回环，安全优先）。
+// 跨机器：可绑定局域网地址（默认回环，安全优先）。
 const GATEWAY_HOST = (process.env.P3394_GATEWAY_HOST || '127.0.0.1').trim();
 const AUTH_TOKEN = (process.env.P3394_GATEWAY_TOKEN || '').trim();
 const COGSEED_ENDPOINT = (process.env.COGSEED_ENDPOINT || 'http://127.0.0.1:8444').replace(/\/$/, '');
@@ -75,7 +75,7 @@ const COGSEED_TOKEN = (process.env.COGSEED_TOKEN || '').trim();
 const GATEWAY_HOME = (process.env.P3394_GATEWAY_HOME || path.join(os.homedir(), '.p3394-gateway')).trim();
 const isLoopbackHost = GATEWAY_HOST === '127.0.0.1' || GATEWAY_HOST === 'localhost' || GATEWAY_HOST === '::1';
 const ADVERTISE_ENDPOINT = (process.env.P3394_ADVERTISE_ENDPOINT || 'http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT).replace(/\/$/, '');
-// ECS 心跳：定期向 CogSeed 报告在线（默认 60s；0 关闭）。
+// 心跳：定期向 CogSeed 报告在线（默认 60s；0 关闭）。
 const HEARTBEAT_MS = Number(process.env.P3394_HEARTBEAT_MS ?? 60 * 1000);
 // V-04 反向入口：P3394_SEND_TASK 非空时，启动后向 CogSeed 发起一次任务，
 // 等待自动回发结果、打印后退出（Hermes → CogSeed → Hermes 闭环）。
@@ -1781,7 +1781,7 @@ function sendTaskOneShot(text, attempt = 1) {
   req.end(body);
 }
 
-/** ECS 心跳：轻量 control 信封（inform），刷新 CogSeed 注册表里的 last_seen。 */
+/** 心跳：轻量 control 信封（inform），刷新 CogSeed 注册表里的 last_seen。 */
 function sendHeartbeat() {
   if (!COGSEED_ENDPOINT) return;
   const nonce = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);

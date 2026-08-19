@@ -384,6 +384,14 @@ Upstream copyright and license information is recorded in [`NOTICE`](./NOTICE). 
 | P3394 gateway overview | [Gateway README](./p3394-gateway/README.md) |
 | Gateway bootstrap | [Gateway bootstrap guide](./p3394-gateway/BOOTSTRAP.md) |
 
+## Standards
+
+CogSeed implements the **IEEE P3394** standard for agent interoperability. Protocol
+fields prefixed with `p3394` (for example `p3394-gateway`, `p3394_bridge`, and the
+`P3394_*` environment variables) refer to that standard. CogSeed is a separate
+open-source product; the IEEE P3394 standard remains the property of its
+respective standards body.
+
 ## License
 
 CogSeed is available under the [MIT License](./LICENSE).

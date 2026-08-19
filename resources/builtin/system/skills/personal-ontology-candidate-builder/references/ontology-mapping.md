@@ -1,6 +1,6 @@
 # Ontology Mapping（三层本体入口）
 
-Skill: `personal-ontology-candidate-builder`  ·  Level: `L3`  ·  Owner: `Mate Agent Team`
+Skill: `personal-ontology-candidate-builder`  ·  Level: `L3`  ·  Owner: `CogSeed Team`
 
 本文件是三层本体的总览入口，链接到独立文件：
 

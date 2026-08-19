@@ -1,6 +1,6 @@
 ---
 name: 本体分析对标
-description: 对指定行业/领域做本体景观与标准对标分析：强制官网检索与来源核验门禁、规范概念建模、共享上层本体映射、Agent/HITL 治理与 KSTAR/ECS 闭环，产出经完整校验渲染的 Word 领域本体分册（候选版，staged 封顶）。
+description: 对指定行业/领域做本体景观与标准对标分析：强制官网检索与来源核验门禁、规范概念建模、共享上层本体映射、Agent/HITL 治理与 KSTAR 闭环，产出经完整校验渲染的 Word 领域本体分册（候选版，staged 封顶）。
 ---
 
 
@@ -54,7 +54,7 @@ The Python scripts do **not** browse the internet. The executing Agent performs 
 
 - “按 11–14 的架构继续做第 15/16/19 分册并输出完整版 Word。”
 - “对某行业做 Ontology 分析与标准对标，形成可交给总体架构负责人汇总的独立分册。”
-- “先查政府和标准组织官网，再形成 20–40 个概念、流程、关系、Agent 治理、KSTAR/ECS 和 Word 报告。”
+- “先查政府和标准组织官网，再形成 20–40 个概念、流程、关系、Agent 治理、KSTAR 和 Word 报告。”
 - “已有 report-data.json 和网站检索台账，按统一版式校验并生成完整 DOCX。”
 
 ## 3. do_not_use_when
@@ -407,7 +407,7 @@ Provide an A0–A4 autonomy matrix:
 
 For high-impact actions include owner, evidence, authorization, HITL, audit, rollback/appeal/review, and prohibited silent automation.
 
-## 6.13 Build KSTAR/ECS loops
+## 6.13 Build KSTAR loops
 
 Provide 3–4 complete examples:
 
@@ -484,7 +484,7 @@ The report architecture is fixed:
 10. External Standards / Policy Semantic Assets / Ontology Alignment
 11. Shared Upper Ontology Mapping
 12. Domain Agent Extension, Authorization, HITL, and Audit
-13. Closed-Loop Examples and KSTAR/ECS Mapping
+13. Closed-Loop Examples and KSTAR Mapping
 14. Architecture Boundaries, Implementation Recommendations, and Open Decisions
 Appendix A. Master Mapping Workbook Fields and Sample Rows
 Appendix B. Research Gate, Sources, Versions, and Evidence Ledger
@@ -561,7 +561,7 @@ The skill may report that a staged candidate passed specified checks. It must no
 <!-- SKILL-GATE:BEGIN -->
 ## Skill Gate 契约
 
-- `use_when`：对指定行业/领域做本体景观与标准对标分析：强制官网检索与来源核验门禁、规范概念建模、共享上层本体映射、Agent/HITL 治理与 KSTAR/ECS 闭环，产出经完整校验渲染的 Word 领域本体分册（候选版，staged 封顶）。，并具备完成该任务所需的授权材料、环境和范围。
+- `use_when`：对指定行业/领域做本体景观与标准对标分析：强制官网检索与来源核验门禁、规范概念建模、共享上层本体映射、Agent/HITL 治理与 KSTAR 闭环，产出经完整校验渲染的 Word 领域本体分册（候选版，staged 封顶）。，并具备完成该任务所需的授权材料、环境和范围。
 - `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「本体分析对标」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
 - `positive_examples`：`请基于已授权材料执行本体分析对标，输出结构化的可审计结果并保留证据定位。`
 - `negative_examples`：`缺少执行本体分析对标所需证据，仍请直接定稿。`
