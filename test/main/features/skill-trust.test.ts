@@ -614,7 +614,7 @@ describe('skill_trust › declaration check (advisory only)', () => {
   const MANIFEST_INCOMPLETE = [
     'manifest_version: "1.1.1"',
     'security_ontology:',
-    '  id: ecs.security.skill',
+    '  id: cogseed.security.skill',
     '  version: "1.1.1"',
     'skill:',
     '  id: demo',
@@ -657,7 +657,7 @@ describe('skill_trust › declaration check (advisory only)', () => {
     'references/security-manifest.yaml': [
       'manifest_version: "1.1.1"',
       'security_ontology:',
-      '  id: ecs.security.skill',
+      '  id: cogseed.security.skill',
       '  version: "1.1.1"',
       'skill:',
       '  id: skill.demo.local',
@@ -732,7 +732,7 @@ describe('skill_trust › declaration check (advisory only)', () => {
       '',
     ].join('\n'),
     'artifact.yaml': [
-      'api_version: ecs.nseap/v1alpha1',
+      'api_version: cogseed.security/v1',
       'kind: SkillArtifact',
       'metadata:',
       '  id: skill.demo.local',
@@ -743,7 +743,7 @@ describe('skill_trust › declaration check (advisory only)', () => {
       'spec:',
       '  entrypoint: SKILL.md',
       '  security:',
-      '    ontology: ecs.security.skill@1.1.1',
+      '    ontology: cogseed.security.skill@1.1.1',
       '    manifest_ref: references/security-manifest.yaml',
       '  contracts:',
       '    schemas: schemas.json',
