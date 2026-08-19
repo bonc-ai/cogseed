@@ -253,7 +253,7 @@ body.sidebar-collapsed .is-macos .sidebar-logo {
   padding: 34px 10px 10px;
   justify-content: center;
 }
-body.sidebar-collapsed .is-macos .sidebar-top-tools { -webkit-app-region: no-drag; }
+.is-macos .sidebar-top-tools { -webkit-app-region: no-drag; }
 
 /* 收起侧边栏（窄图标条）：body.sidebar-collapsed 由 sidebar-resize.js 切换。
    只保留主按钮图标，隐藏文字 / 会话列表 / 搜索；logo 行只留 logo + 展开按钮。 */
