@@ -1,0 +1,5 @@
+{
+  "runtime_contracts": {
+    "gateway_only": true
+  }
+}

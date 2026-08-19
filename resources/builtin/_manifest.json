@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "3a9a4054e17975039aa908f352ea23684e0cfe8c7aa6122ad5380b73ea7c3add",
+  "content_tree_sha256": "949efc7df54c78c250140823efb1ce8f135a6b03a2d7cba28b11894260143d05",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -571,11 +571,6 @@
       "path": "marketplace/agents/e064dca9e1bd/skills/seo-tech-audit/test/test_audit.py",
       "bytes": 7733,
       "sha256": "a745ba98d614856ddfa633f2600c65595520bd3e588ccd552b118ea7b0cc78ba"
-    },
-    {
-      "path": "marketplace/agents/e299e8f8ef9b/agent.json",
-      "bytes": 1256,
-      "sha256": "4d718ac9c0e6af117a25d5e1842f364c92aa7a64f8c0aca0aedccdf8a6db781c"
     },
     {
       "path": "marketplace/agents/fb836f8b51ca/agent.json",
@@ -6973,111 +6968,6 @@
       "sha256": "56cf48fa86a5d747e80aa0143b9f7e78c7b0196c792cd577129e9bd527a8fb2c"
     },
     {
-      "path": "marketplace/skills/f51578fae310/_meta.json",
-      "bytes": 70,
-      "sha256": "68082876b9113ac071297d9e3f8f90fa950a5076959632f64465e8bccfad2cc3"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/agents/openai.yaml",
-      "bytes": 996,
-      "sha256": "cf04f6500c993c0f7d7a152dedb627032d59ef8c37e198f86319dd66cfb348b1"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/data/cases.json",
-      "bytes": 7050,
-      "sha256": "27aae5dd148b35065b56aaae85b0319564cb0ceb525b73de39405d4a60feb2ff"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/evals/evals.json",
-      "bytes": 16314,
-      "sha256": "2425df01e53fdb4337b7f653b290f457a6495d1c94ee9c9cd6a79b5ae03750cf"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/evals/forecast_model.md",
-      "bytes": 251,
-      "sha256": "32e9804ecd1e0c32e144cb6dde3d0a056e21943222ed376e56132591a2bcbe7a"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/evals/outcome_evaluation.md",
-      "bytes": 259,
-      "sha256": "5705a49820a75a095536673eaa93532b256cdb89342feb9239d686832252ecef"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/evals/regression_tests.md",
-      "bytes": 444,
-      "sha256": "364cc357b1e9335143e8abe3cce7b6dfdfa3007eb250a5adc09e0483391148c2"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/evals/replay_dataset.md",
-      "bytes": 254,
-      "sha256": "4076c724587c0c912e66274197c30264ccbc00f4e33da3235229772f58908e05"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/references/eval-cases.yaml",
-      "bytes": 231,
-      "sha256": "18de0c49acc411ad4590707a702650c8a158ff263adf6df2ac0ccc859e8ccfaf"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/references/failure-modes.md",
-      "bytes": 1166,
-      "sha256": "418527821a11c24f6220c738c2c991b74ee47558e614423ba16cb770cb84f4b4"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/references/governance-boundaries.md",
-      "bytes": 575,
-      "sha256": "7dfd11be5080be561ae0b0eb794d98223a779bdb2bb3f88abbf1e919eb2cd4f2"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/references/input-contract.md",
-      "bytes": 833,
-      "sha256": "80968bde6a8485b2752a92584487c21013f93207740072146a4e96c117c610cd"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/references/kstar-evolution.md",
-      "bytes": 594,
-      "sha256": "fb120924445328e3d074c37cfbb4cac61d78bb7288cd9ee16642d79efc9ca672"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/references/ontology-mapping.md",
-      "bytes": 312,
-      "sha256": "8dd5bf5df7b39cb8230756d99f43c4e722abf2d113f93b771513719b5fd99181"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/references/output-contract.md",
-      "bytes": 423,
-      "sha256": "8b50e3191c9ce17dc3fb23fc7fa655fbbf53ca1a31590e7867e46f803a1b7d18"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/references/rbox_rules.md",
-      "bytes": 10743,
-      "sha256": "7e6b02da31eb5a9b2047153464c3ef17286cab8e288863c4c6b9b33e87fdeffa"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/references/skill-spec.yaml",
-      "bytes": 615,
-      "sha256": "59dcb56e8a8d4d3e1b10c081ba9b0f017ba408167b38fe42ce5fa850cd1cf1ce"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/references/validation-contract.md",
-      "bytes": 564,
-      "sha256": "0524aef9366dcd2fae825042aa3fb022c3b9a4886806f1699a416b0c2f1994e1"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/schemas.json",
-      "bytes": 2798,
-      "sha256": "90cef2a82253efe28b7d89bd71588637e9ae24bdeed348ab8b6b9420ab31e150"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/SKILL.md",
-      "bytes": 13966,
-      "sha256": "133b29842c0434fffa7b650423dfaf0370f83090bafcb2f0654af242005ac089"
-    },
-    {
-      "path": "marketplace/skills/f51578fae310/本体可视化-运营商数据安全.html",
-      "bytes": 39528,
-      "sha256": "dbb9a7201fb5679c72c894102bf2455116ec280cbb3bcb192159c3b0d9bd0d44"
-    },
-    {
       "path": "marketplace/skills/ffaad9705891/_meta.json",
       "bytes": 73,
       "sha256": "11fd4465787ae222e8f5f3eba2c3a2693d3c006e2a2bf76ed5de4a490bcd9f53"
@@ -7832,18 +7722,6 @@
         ]
       },
       {
-        "id": "e299e8f8ef9b",
-        "name": "运营商数据安全问答Agent",
-        "version": "1.0.0",
-        "icon": "shield",
-        "color": "sky",
-        "updated_at": "2026-08-17T00:00:00",
-        "skill_list": [
-          "f51578fae310"
-        ],
-        "embedded_skills": []
-      },
-      {
         "id": "fb836f8b51ca",
         "name": "候选人对比Agent",
         "version": "0.2.0-review.1",
@@ -8237,12 +8115,6 @@
         "name": "AI产品立项聚焦",
         "version": "0.2.0",
         "updated_at": "2026-08-16T12:30:00+08:00"
-      },
-      {
-        "id": "f51578fae310",
-        "name": "运营商数据安全问答",
-        "version": "1.1.0",
-        "updated_at": "2026-08-16T12:00:00+08:00"
       },
       {
         "id": "ffaad9705891",

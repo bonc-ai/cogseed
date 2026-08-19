@@ -1,0 +1,520 @@
+# Security Manifest template field catalog — cogseed.security.skill@1.1.1
+# Source: design doc §6.1 (0715 baseline) + §6.2 derived risk fields
+# Machine-readable single source for 3.1 describe-field / list-fields
+
+catalog_version: "1.1.1"
+ontology_id: cogseed.security.skill
+ontology_version: "1.1.1"
+source: "ECS_Security_3.1_3.2_Skill集成设计 §6.1 / §6.2"
+
+fields:
+  - path: manifest_version
+    type: string
+    required: true
+    filler: creator
+    meaning: 安全 Manifest 模板版本，应与当前 Core 版本匹配。
+    enum: null
+
+  - path: security_ontology.id
+    type: string
+    required: true
+    filler: creator
+    meaning: 固定为 cogseed.security.skill。
+    enum: [cogseed.security.skill]
+    const: cogseed.security.skill
+
+  - path: security_ontology.version
+    type: string
+    required: true
+    filler: creator
+    meaning: 声明所依据的安全本体版本。
+    enum: null
+
+  - path: skill.id
+    type: string
+    required: true
+    filler: creator
+    meaning: Skill 全局唯一标识。
+    enum: null
+
+  - path: skill.name
+    type: string
+    required: true
+    filler: creator
+    meaning: Skill 名称。
+    enum: null
+
+  - path: skill.version
+    type: string
+    required: true
+    filler: creator
+    meaning: Skill 版本，建议使用语义化版本。
+    enum: null
+
+  - path: skill.description
+    type: string
+    required: true
+    filler: creator
+    meaning: 说明能力、适用场景和不负责的边界。
+    enum: null
+
+  - path: skill.environment
+    type: enum
+    required: true
+    filler: creator
+    meaning: Skill 运行环境。
+    enum: [development, test, staging, production]
+
+  - path: skill.artifact_manifest_ref
+    type: path
+    required: true
+    filler: creator
+    meaning: 指向根目录 artifact.yaml。
+    enum: null
+
+  - path: skill.skill_spec_ref
+    type: path
+    required: true
+    filler: creator
+    meaning: 指向 references/skill-spec.yaml。
+    enum: null
+
+  - path: skill.business_ontology_ref
+    type: path
+    required: true
+    filler: creator
+    meaning: 指向业务本体映射说明。
+    enum: null
+
+  - path: ownership.human_owner
+    type: string
+    required: true
+    filler: creator
+    meaning: 最终责任人；生产环境不得为占位符。
+    enum: null
+
+  - path: ownership.organization
+    type: string
+    required: true
+    filler: creator
+    meaning: 所属组织或团队。
+    enum: null
+
+  - path: ownership.role
+    type: string
+    required: true
+    filler: creator
+    meaning: Owner 在组织中的角色。
+    enum: null
+
+  - path: ownership.technical_owner
+    type: string
+    required: false
+    filler: creator
+    meaning: 技术维护责任人。
+    enum: null
+
+  - path: provenance.source_type
+    type: enum
+    required: true
+    filler: creator
+    meaning: 制品来源类型。
+    enum: [internal, generated, third_party, modified_third_party]
+
+  - path: provenance.source_uri
+    type: string
+    required: true
+    filler: creator
+    meaning: 代码仓库、材料快照或制品来源。
+    enum: null
+
+  - path: provenance.author
+    type: string
+    required: true
+    filler: creator
+    meaning: 作者或生成者。
+    enum: null
+
+  - path: provenance.checksum
+    type: string
+    required: true
+    filler: security_core
+    meaning: 制品摘要，正式打包/冻结时由 Security Core 生成；PREVALIDATION 可为 DEFERRED_UNTIL_FREEZE；冻结后等于 subject_digest。
+    enum: null
+    pattern: "DEFERRED_UNTIL_FREEZE | sha256:<64-hex>"
+    mode:
+      PREVALIDATION: { allow_deferred: true }
+      FREEZE: { allow_deferred: false }
+      FORMAL_TEST: { allow_deferred: false }
+
+  - path: provenance.signature
+    type: string
+    required: false
+    filler: creator
+    meaning: 制品签名，staging/production 建议填写。
+    enum: null
+
+  - path: permissions.required
+    type: object_array
+    required: true
+    filler: creator
+    meaning: 最小权限；每项包含 id、resource、actions、scope、reason。
+    enum: null
+    item_fields: [id, resource, actions, scope, reason]
+
+  - path: permissions.prohibited
+    type: string_array
+    required: true
+    filler: creator
+    meaning: 明确禁止授予的权限。
+    enum: null
+
+  - path: resources.allowed
+    type: object_array
+    required: true
+    filler: creator
+    meaning: 允许访问的资源、类型、访问方式和范围。
+    enum: null
+
+  - path: resources.denied
+    type: string_array
+    required: true
+    filler: creator
+    meaning: 明确禁止访问的资源。
+    enum: null
+
+  - path: actions.allowed
+    type: object_array
+    required: true
+    filler: creator
+    meaning: 允许动作，包含 effect、target、可逆性和预期结果。
+    enum: null
+    item_fields: [id, effect, target, recoverable, expected_result, permission_id]
+
+  - path: actions.prohibited
+    type: string_array
+    required: true
+    filler: creator
+    meaning: 禁止动作，例如未审批删除、直接写生产。
+    enum: null
+
+  - path: data_security.input_classification
+    type: enum_array
+    required: true
+    filler: creator
+    meaning: 输入数据分级。
+    enum: [PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED]
+
+  - path: data_security.output_classification
+    type: enum_array
+    required: true
+    filler: creator
+    meaning: 输出数据分级。
+    enum: [PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED]
+
+  - path: data_security.external_transmission
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否允许数据传出受控环境。
+    enum: null
+
+  - path: data_security.pii_allowed
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否允许处理个人信息。
+    enum: null
+
+  - path: data_security.secrets_allowed
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否允许处理密钥；默认 false。
+    enum: null
+    default: false
+
+  - path: data_security.retention_days
+    type: integer
+    required: true
+    filler: creator
+    meaning: 数据保留天数，0 表示不持久化。
+    enum: null
+
+  - path: network.enabled
+    type: boolean
+    required: true
+    filler: creator
+    meaning: Skill 是否需要网络访问。
+    enum: null
+
+  - path: network.allowlist
+    type: string_array
+    required: true
+    filler: creator
+    meaning: 允许访问的域名或地址列表；network.enabled=true 时必须非空且禁止通配。
+    enum: null
+
+  - path: network.deny_private_network
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否禁止访问未授权私网。
+    enum: null
+
+  - path: network.allow_dynamic_download
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否允许运行时动态下载；默认必须为 false。
+    enum: null
+    default: false
+    const_recommended: false
+
+  - path: runtime_boundary.runtime_contracts_ref
+    type: path_ref
+    required: true
+    filler: creator
+    meaning: 指向 schemas.json#/runtime_contracts。
+    enum: null
+
+  - path: runtime_boundary.direct_resource_access
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 必须为 false，Skill 不直接持有资源绑定。
+    enum: null
+    const: false
+
+  - path: runtime_boundary.access_via_gateway_only
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 必须为 true，资源访问经网关或受控执行器。
+    enum: null
+    const: true
+
+  - path: runtime_boundary.binding_resolved_by
+    type: enum
+    required: true
+    filler: creator
+    meaning: 固定为 agent_layer，由 Agent 层解析绑定。
+    enum: [agent_layer]
+    const: agent_layer
+
+  - path: runtime_boundary.audit_emitted_by
+    type: enum
+    required: true
+    filler: creator
+    meaning: 固定为 runtime，由运行时统一产生审计。
+    enum: [runtime]
+    const: runtime
+
+  - path: risk.risk_level
+    type: enum
+    required: true
+    filler: creator
+    meaning: L0-L5 动作与业务风险等级（声明值 declared_risk）。
+    enum: [L0, L1, L2, L3, L4, L5]
+
+  - path: risk.trust_level
+    type: enum
+    required: true
+    filler: creator
+    meaning: T0-T4 信任等级。
+    enum: [T0, T1, T2, T3, T4]
+
+  - path: risk.risk_reasons
+    type: string_array
+    required: true
+    filler: creator
+    meaning: 风险等级的判定理由。
+    enum: null
+
+  - path: risk.maximum_impact
+    type: string
+    required: true
+    filler: creator
+    meaning: 失败、越权或滥用可能产生的最大影响。
+    enum: null
+
+  - path: risk.calculated_risk_level
+    type: enum
+    required: false
+    filler: security_core
+    meaning: 依据五维规则从动作、数据、环境、访问边界和最大影响中确定性计算；Creator 不得手工填写。
+    enum: [L0, L1, L2, L3, L4, L5]
+    derived: true
+
+  - path: risk.effective_risk_level
+    type: enum
+    required: false
+    filler: security_core
+    meaning: 取 declared_risk 与 calculated_risk 的较高者，作为审批、审计和回滚校验基准。
+    enum: [L0, L1, L2, L3, L4, L5]
+    derived: true
+
+  - path: risk.calculation_rule_version
+    type: string
+    required: false
+    filler: security_core
+    meaning: 记录本次风险计算所使用的规则版本，必须与 Ontology 快照绑定。
+    enum: null
+    derived: true
+
+  - path: risk.calculation_factors
+    type: object
+    required: false
+    filler: security_core
+    meaning: 记录 action、data、environment、access、impact 五个维度的分级及命中的 rule_id，支持复核与重放。
+    enum: null
+    derived: true
+
+  - path: risk.triggered_rule_ids
+    type: string_array
+    required: false
+    filler: security_core
+    meaning: 记录所有触发风险分级或强制升级的规则 ID；不得只输出最终等级而不保留依据。
+    enum: null
+    derived: true
+
+  - path: approval.required
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否要求审批。
+    enum: null
+
+  - path: approval.mode
+    type: enum
+    required: true
+    filler: creator
+    meaning: 审批模式。
+    enum: [none, single, dual, security_review]
+
+  - path: approval.required_for_actions
+    type: string_array
+    required: true
+    filler: creator
+    meaning: 必须审批的动作。
+    enum: null
+
+  - path: approval.approver_roles
+    type: string_array
+    required: true
+    filler: creator
+    meaning: 允许审批的岗位或角色。
+    enum: null
+
+  - path: audit.enabled
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否启用审计；生产环境必须启用。
+    enum: null
+
+  - path: audit.events
+    type: string_array
+    required: true
+    filler: creator
+    meaning: 需要记录的事件类型。
+    enum: null
+
+  - path: audit.include_input
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否记录输入；敏感数据可记录摘要或脱敏值。
+    enum: null
+
+  - path: audit.include_output
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否记录输出。
+    enum: null
+
+  - path: audit.include_tool_calls
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否记录工具调用。
+    enum: null
+
+  - path: audit.include_policy_decision
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否记录策略判定。
+    enum: null
+
+  - path: audit.retention_days
+    type: integer
+    required: true
+    filler: creator
+    meaning: 审计保留天数。
+    enum: null
+
+  - path: rollback.supported
+    type: boolean
+    required: true
+    filler: creator
+    meaning: 是否支持停用或回滚。
+    enum: null
+
+  - path: rollback.type
+    type: enum
+    required: true
+    filler: creator
+    meaning: 回滚类型，例如 disable_skill / revert_version 等。
+    enum: [disable_skill, revert_version]
+
+  - path: rollback.procedure
+    type: string
+    required: true
+    filler: creator
+    meaning: 具体回滚步骤。
+    enum: null
+
+  - path: rollback.maximum_recovery_time_minutes
+    type: integer
+    required: true
+    filler: creator
+    meaning: 最大恢复时间（分钟）。
+    enum: null
+
+  - path: dependencies.packages
+    type: object_array
+    required: true
+    filler: creator
+    meaning: 软件包依赖；无依赖时使用空数组。
+    enum: null
+
+  - path: dependencies.external_tools
+    type: object_array
+    required: true
+    filler: creator
+    meaning: 外部工具依赖；无依赖时使用空数组。
+    enum: null
+
+  - path: tests.evals_ref
+    type: path
+    required: true
+    filler: creator
+    meaning: 指向 evals/evals.json。
+    enum: null
+
+  - path: tests.validation_contract_ref
+    type: path
+    required: true
+    filler: creator
+    meaning: 指向验证契约。
+    enum: null
+
+  - path: tests.minimum_test_cases
+    type: integer
+    required: true
+    filler: creator
+    meaning: 最低测试用例数量，至少 1。
+    enum: null
+    minimum: 1

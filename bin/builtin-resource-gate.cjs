@@ -64,7 +64,6 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     'fce0f5110ab2',
     'c045605cb916',
     '6a960be83f33',
-    'e299e8f8ef9b',
   ]),
   marketplace_skills: Object.freeze([
     '02d958231673',
@@ -129,7 +128,6 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     'a79d235e416b',
     'd1e0d20f4b28',
     'f45f8fe237c9',
-    'f51578fae310',
   ]),
 });
 

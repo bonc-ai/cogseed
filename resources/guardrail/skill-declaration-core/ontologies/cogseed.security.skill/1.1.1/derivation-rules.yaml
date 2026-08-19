@@ -1,0 +1,121 @@
+policy_version: "1.1.1"
+ontology_id: cogseed.security.skill
+ontology_version: "1.1.1"
+
+rank:
+  L0: 0
+  L1: 1
+  L2: 2
+  L3: 3
+  L4: 4
+  L5: 5
+
+control_rank:
+  none: 0
+  single: 1
+  dual: 2
+  security_review: 3
+
+environment_map:
+  development: L0
+  test: L0
+  staging: L1
+  production: L1
+
+action_map:
+  # effect + environment + recoverability keys resolved by engine
+  pure_local: L0
+  READ: L1
+  CREATE_UPDATE_dev_test_recoverable: L2
+  CREATE_UPDATE_staging: L2
+  CREATE_UPDATE_production: L3
+  DELETE_dev_test_recoverable: L2
+  DELETE_staging_recoverable: L3
+  DELETE_production_recoverable: L4
+  DELETE_irrecoverable: L5
+  financial_bounded: L4
+  financial_unbounded: L5
+  physical_bounded: L4
+  physical_unbounded: L5
+
+data_map:
+  PUBLIC: L0
+  INTERNAL: L1
+  CONFIDENTIAL: L2
+  CONFIDENTIAL_production_read: L3
+  PII: L3
+  SECRETS_READ: L3
+  SECRETS_WRITE: L4
+  RESTRICTED: L4
+  RESTRICTED_external: L5
+  SECRETS_EXPORT: L5
+
+access_map:
+  none: L0
+  single_readonly_gateway: L1
+  fixed_allowlist_or_nonprod_write: L2
+  production_write_or_cross_system: L3
+  identity_or_high_priv: L4
+  unrestricted_or_bypass: L5
+
+impact_map:
+  none: L0
+  single_user_revocable: L1
+  limited_internal_recoverable: L2
+  production_recoverable: L3
+  bulk_financial_identity_bounded: L4
+  major_irreversible_unbounded: L5
+  unmapped: null
+
+escalations:
+  - rule_id: SEC-ESCALATION-PROD-WRITE-001
+    when: { environment: production, effect: WRITE }
+    min_risk: L3
+  - rule_id: SEC-ESCALATION-DELETE-DEVTEST-001
+    when: { effect: DELETE, environment: [development, test], recoverable: true, test_data: true }
+    min_risk: L2
+  - rule_id: SEC-ESCALATION-DELETE-STAGING-001
+    when: { effect: DELETE, environment: staging, recoverable: true }
+    min_risk: L3
+  - rule_id: SEC-ESCALATION-DELETE-PROD-001
+    when: { effect: DELETE, environment: production, recoverable: true }
+    min_risk: L4
+  - rule_id: SEC-ACTION-IRREVERSIBLE-001
+    when: { effect: DELETE, recoverable: false }
+    min_risk: L5
+    block: true
+  - rule_id: SEC-ACTION-UNBOUNDED-001
+    when: { category: [financial, privilege, physical], bounded: false }
+    min_risk: L5
+    block: true
+  - rule_id: SEC-ESCALATION-RESTRICTED-EXTERNAL-001
+    when: { data: RESTRICTED, external_transmission: true }
+    min_risk: L5
+    block: true
+  - rule_id: SEC-ESCALATION-SECRETS-EXPORT-001
+    when: { secrets_export: true }
+    min_risk: L5
+    block: true
+  - rule_id: SEC-ESCALATION-WILDCARD-PERM-001
+    when: { wildcard_permission: true }
+    min_risk: L5
+    block: true
+  - rule_id: SEC-NETWORK-001
+    when: { allow_dynamic_download: true }
+    min_risk: L4
+    block: true
+
+control_matrix:
+  L0: { approval: none, audit: environment_default, rollback: optional }
+  L1: { approval: none_or_prod_single, audit: result_and_tool_calls, rollback: recommend_disable }
+  L2: { approval: single, audit: tool_calls_and_policy, rollback: required }
+  L3: { approval: single_or_dual_sensitive, audit: required_redacted, rollback: required_with_rto }
+  L4: { approval: dual, audit: full, rollback: required_executable }
+  L5: { approval: security_review, audit: highest, rollback: kill_switch_required }
+
+derived_fields:
+  - risk.calculated_risk_level
+  - risk.effective_risk_level
+  - risk.calculation_rule_version
+  - risk.calculation_factors
+  - risk.triggered_rule_ids
